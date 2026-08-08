@@ -244,15 +244,24 @@ impl AirportArea {
     }
 }
 
-/// Noise barrier microsegment, reduced to its midpoint for screening.
+/// Noise barrier microsegment — the wall polyline element as stored in
+/// `barriers.arrow`, endpoints and all.
+///
+/// The endpoints are the screening geometry: `path_effects` intersects the
+/// source→receiver ray with THIS segment (exact 2D ray×segment, the same
+/// primitive the vector obstacle index uses for building edges) and turns the
+/// hit into a dominant-edge candidate at its exact chainage. The midpoint is
+/// only a proximity key — [`Self::midpoint`] derives it, so it can never
+/// disagree with the geometry.
 ///
 /// Slice contract (consumed by `path_effects::screening_attenuation[_with_meta]`):
 /// the slice MUST be sorted ascending by `dist_m`, and `dist_m` MUST be a
 /// LOWER BOUND on the true receiver→midpoint distance — the screening loop
-/// early-breaks at the first barrier with `dist_m > path_len + 100` and a
-/// violated bound would silently drop barriers that are actually on the path.
+/// early-breaks at the first barrier with
+/// `dist_m > path_len + BARRIER_PATH_HORIZON_M` and a violated bound would
+/// silently drop barriers that are actually on the path.
 ///
-/// * Popup (`source-reader::lib`): `dist_m` is the exact receiver→midpoint
+/// * Popup (`source-reader::query`): `dist_m` is the exact receiver→midpoint
 ///   distance (one receiver per query), sorted after the per-hex merge.
 /// * Heatmap (`tile-painter::source_loader_barrier::BarrierData::for_tile`):
 ///   one slice serves every receiver pixel of a z13 tile, so
@@ -260,14 +269,47 @@ impl AirportArea {
 ///   triangle inequality a lower bound for EVERY pixel in the tile, keeping
 ///   the early-break conservative (it only ever scans more barriers, never
 ///   fewer, than the popup would for the same receiver).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Barrier {
     pub osm_id: i64,
     /// Height above local ground (m); extract defaults untagged walls to 3.0.
     pub height_m: f32,
-    /// Segment midpoint.
-    pub lat: f64,
-    pub lon: f64,
+    /// Segment endpoints, verbatim from `barriers.arrow`.
+    pub start_lat: f64,
+    pub start_lon: f64,
+    pub end_lat: f64,
+    pub end_lon: f64,
     /// Lower bound on the receiver→midpoint distance (see struct docs).
     pub dist_m: f64,
 }
+
+impl Barrier {
+    /// The segment midpoint — what `dist_m` is measured to, and the point the
+    /// loaders filter and sort on.
+    #[inline]
+    pub fn midpoint(&self) -> (f64, f64) {
+        (
+            (self.start_lat + self.end_lat) * 0.5,
+            (self.start_lon + self.end_lon) * 0.5,
+        )
+    }
+}
+
+/// Half the longest barrier microsegment `osm-extract` can emit: every linear
+/// feature is split at 250 m (`microsegment::split(&coords, 250.0)`), so a wall
+/// that CROSSES a source→receiver path carries its midpoint at most this far
+/// past the crossing point.
+pub const BARRIER_SEGMENT_MAX_HALF_LEN_M: f64 = 125.0;
+
+/// How far past a path's own length the screening loop keeps scanning the
+/// (ascending-`dist_m`) barrier slice before it early-breaks, and the matching
+/// slack in `BarrierData::for_tile`'s reach filter.
+///
+/// A crossing point lies ON the path, hence within `path_len` of the receiver;
+/// the crossing barrier's midpoint is at most
+/// [`BARRIER_SEGMENT_MAX_HALF_LEN_M`] further, plus 50 m for the flat-earth
+/// scale mismatch between the loaders' `geo::flat_dist` (pair mid-latitude) and
+/// the kernel's ray frame (path mid-latitude). Exceeding this bound is what
+/// silently drops a real crossing, so it is a correctness constant, not a tuning
+/// knob — the mirrored CUDA literal in `scatter.cu` must move with it.
+pub const BARRIER_PATH_HORIZON_M: f64 = BARRIER_SEGMENT_MAX_HALF_LEN_M + 50.0;

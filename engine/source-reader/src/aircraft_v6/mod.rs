@@ -291,6 +291,7 @@ pub fn add_v6_aircraft_to_result(
         // "LKPR RWY 06/24" instead of generic "LKPR runway-roll". Synth
         // osm_ids have no `ref` row → fall through to the generic label.
         let osm_ref_lookup = build_osm_ref_lookup(airport_lines_batches);
+        // Borrow of the process-cached map — no per-query rebuild.
         let airport_summary_lookup = airport_summary_accum.as_ref().map(|a| a.lookup());
         let traffic_contribs = compute_airport_traffic::run(
             receiver,
@@ -301,7 +302,7 @@ pub fn add_v6_aircraft_to_result(
             barriers,
             obstacles,
             &osm_ref_lookup,
-            airport_summary_lookup.as_ref(),
+            airport_summary_lookup,
             Some(traces),
         );
         if !traffic_contribs.is_empty() {

@@ -390,6 +390,15 @@ pub fn process_surface_region(
             // One sorted, conservative-distance barrier slice per tile, shared by
             // every layer (contract: types::Barrier docs).
             let tile_barriers = barrier_data.for_tile(&tile.bbox, ctx.halo_m);
+            // Building-interior receiver mask (fix-pack Fix 4): ONE
+            // point-in-footprint pass per tile, shared by every layer (they all
+            // ride the same receiver lattice). Vector regions only — a
+            // raster-fallback region keeps today's behavior.
+            let t_m = Instant::now();
+            let interior_mask = obstacle_data
+                .set()
+                .map(|set| crate::source_loader_obstacle::bake_tile_interior_mask(tile, set));
+            stats.t_raster += t_m.elapsed();
             for (rows, source_id, dir_name) in &layer_rows {
                 let mut accum = TileAccumulator::new();
                 let t_s = Instant::now();
@@ -470,6 +479,11 @@ pub fn process_surface_region(
                 // solid footprint. Line + ground-ops layers are already continuous.
                 if matches!(rows, SurfaceRows::Point(_)) {
                     fill_area_median(&mut cells, AREA_FILL_RADIUS_PX);
+                }
+                // Interiors are not receivers (Fix 4) — stamped LAST so the
+                // area fill can't paint a masked footprint back in.
+                if let Some(mask) = &interior_mask {
+                    crate::source_loader_obstacle::apply_interior_mask(&mut cells, mask);
                 }
                 let out = ctx
                     .output

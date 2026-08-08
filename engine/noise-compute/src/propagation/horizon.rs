@@ -18,9 +18,7 @@
 //! near-endpoint barrier that the hull's LOS-excess ranking systematically
 //! under-weighted (excess favours near-source obstacles, where the LOS sits low).
 
-use super::diffraction::{
-    compute_single_edge, diffraction_attenuation_rayleigh, DiffractionResult,
-};
+use super::diffraction::{compute_single_edge, diffraction_attenuation_mixed, DiffractionResult};
 use crate::types::NUM_BANDS;
 
 /// Index of the obstacle with the largest CNOSSOS path-length difference
@@ -87,7 +85,7 @@ pub(crate) fn single_edge_atten(
             let r = compute_single_edge(
                 t, top, bare, total_dist, idx, src_elev, rcv_elev, dsr, src_height, rcv_height,
             );
-            (diffraction_attenuation_rayleigh(&r), Some(r))
+            (diffraction_attenuation_mixed(&r), Some(r))
         }
         None => ([0.0; NUM_BANDS], None),
     }
@@ -184,24 +182,38 @@ mod tests {
         );
     }
 
-    /// CNOSSOS §2.5.6(c) Rayleigh δ* gate: a shallow bare hill gates the
-    /// long-wavelength low bands while higher bands pass — the gate lives in
-    /// compute_delta_star + maekawa, reached via the terrain edge.
+    /// A shallow bare hill BLOCKS the sight line, so every band diffracts and
+    /// the attenuation rises with frequency — the plain Maekawa shape.
+    ///
+    /// THE EXPECTED VALUE MOVED, AND THE OLD ONE WAS PINNING A DEFECT. This
+    /// test used to assert `atten[0] == 0.0`, "63 Hz must be gated by δ*",
+    /// because `maekawa_bands` applied the 2021/1226 Rayleigh criterion
+    /// `δ ≤ λ/4 − δ*` to blocked rays as well as unblocked ones. The amendment
+    /// scopes that criterion to "*If the direct ray is not blocked*"; this hill
+    /// blocks it (δ > 0), so no λ/4 test applies and 63 Hz reads 2.07 dB — the
+    /// value `10·lg(3 + 20δ/λ)` always gave. The old assertion was holding a
+    /// 7.4–9.0 dB cliff in place: on this hill 63 Hz went 0 → 8.7 dB across
+    /// a millimetre of crest height (`diffraction::attenuation_is_continuous_in_obstacle_height`).
     #[test]
-    fn shallow_hill_rayleigh_gates_low_bands() {
+    fn shallow_hill_diffracts_in_every_band() {
         let n = 61;
         let mut bare = vec![400.0_f64; n];
         bare[n / 2] = 419.0;
         let t: Vec<f64> = (0..n).map(|i| i as f64 / (n - 1) as f64).collect();
         let (atten, _) = single_edge_atten(&t, &bare, &bare, 1850.0, 0.05, 4.0);
-        assert_eq!(atten[0], 0.0, "63 Hz must be gated by δ*");
-        // Re-pinned at the 2026-07-28 FAVOURABLE_MIXING flip: the mixed band
-        // sits at ~2.8 (homogeneous-only was ~5.6) — the gate asymmetry
-        // (63 Hz zeroed, 1 kHz passing) is the invariant, not the magnitude.
         assert!(
-            atten[4] > 2.0,
-            "1 kHz should pass the gate, got {:.3}",
-            atten[4]
+            (atten[0] - 2.074).abs() < 0.01,
+            "63 Hz over a blocking crest is not gated, got {:.3}",
+            atten[0]
         );
+        // Mixed values (FAVOURABLE_MIXING on since 2026-07-28); monotone in
+        // frequency, which is the invariant worth pinning.
+        assert!(atten[4] > 2.0, "1 kHz, got {:.3}", atten[4]);
+        for i in 1..atten.len() {
+            assert!(
+                atten[i] >= atten[i - 1] - 1e-9,
+                "Maekawa is monotone in frequency: {atten:?}"
+            );
+        }
     }
 }

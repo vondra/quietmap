@@ -258,10 +258,12 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
     ],
   ]
 
-  // Rayleigh gate indicator: which bands the engine zeroed by the CNOSSOS
-  // §2.5.6(c) δ ≤ λ/4 − δ* rule. Read from engine's zeroed bands — no
-  // re-derivation.
-  const gatedBands = terrain.delta_m > 0 && terrain.delta_star_m > 0
+  // Rayleigh criterion indicator: which bands the engine zeroed by the
+  // 2021/1226 point (9)(c) δ ≤ λ/4 − δ* rule. Read from the engine's zeroed
+  // bands — no re-derivation. Only a NEAR MISS can be gated: the criterion is
+  // scoped to an unblocked direct ray ("If the direct ray is not blocked"),
+  // so a blocking edge (δ > 0) never has a band zeroed this way.
+  const gatedBands = terrain.delta_m < 0 && terrain.delta_star_m > 0
     ? BAND_LABELS.filter((_, i) => terrain.attenuation_bands[i] === 0)
     : []
 
@@ -272,8 +274,8 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
           title={
             'Baseline corrections: ISO 9613-2 §7 + CNOSSOS-EU §2.5.\n' +
             'Obstructions: ISO 9613-2 §7.4 Maekawa barrier formula +\n' +
-            'CNOSSOS-EU §2.5.6(c) Rayleigh δ* gate. Hover individual rows\n' +
-            'for concept + value breakdown.'
+            'the CNOSSOS-EU 2021/1226 Rayleigh criterion on near misses.\n' +
+            'Hover individual rows for concept + value breakdown.'
           }
         >
           Attenuations
@@ -285,14 +287,16 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
       {gatedBands.length > 0 && (
         <HoverText
           title={
-            `Rayleigh gate — CNOSSOS §2.5.6(c) per-band condition δ ≤ λ/4 − δ*.\n` +
-            `Engine computed δ* = ${terrain.delta_star_m.toFixed(2)} m for the dominant edge\n` +
+            `Rayleigh criterion — CNOSSOS-EU 2021/1226 point (9)(c), per band:\n` +
+            `an edge that does NOT break the sight line diffracts only where\n` +
+            `δ > λ/4 − δ*. Engine computed δ* = ${terrain.delta_star_m.toFixed(2)} m for this edge\n` +
             `(mirror fit over bare-earth OLS planes). Bands that fail the test\n` +
-            `contribute 0 dB of diffraction attenuation in the total.`
+            `contribute 0 dB of diffraction attenuation in the total. A BLOCKING\n` +
+            `edge is never tested — it always diffracts (ISO/TR 17534-4 §5.9).`
           }
         >
           <div className="mt-0.5 text-[10px] text-muted-foreground italic">
-            Rayleigh gate zeroed: {gatedBands.join(', ')}
+            Rayleigh criterion zeroed: {gatedBands.join(', ')}
           </div>
         </HoverText>
       )}

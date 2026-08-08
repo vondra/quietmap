@@ -196,12 +196,65 @@ pub fn below_free_field_threshold_line(
     max_emission_db - geo_approx - atm_approx < threshold_db
 }
 
-/// Finite-line correction using HORIZONTAL distance and end angles.
+/// Perpendicular distance floor (m) for the finite-line geometry.
+///
+/// A receiver sitting on a segment's EXTENDED line has `d_perp = 0`, where the
+/// exact line integral `θ/d_perp` is 0/0. Clamping to half a metre evaluates
+/// the segment as a line half a metre off the receiver — exact for a line at
+/// that distance (`θ(d)/d = ∫dy/(d²+y²)` holds for any `d`), and the same kind
+/// of regularisation the divergence term applies with `d.max(1.0)`.
+pub const FLC_MIN_PERP_M: f64 = 0.5;
+
+/// Finite-line correction paired with the DIVERGENCE distance the propagation
+/// kernel is fed — the form line callers (road, rail) must use.
+///
+/// The kernel's line chain is `−10·log10(2π·d_div) + FLC`, while the exact
+/// free-field energy of a straight finite line is `∝ θ/d_perp`
+/// (`∫dy/(d_perp² + y²)`): θ the angle the segment subtends at the receiver,
+/// `d_perp` the perpendicular distance to its INFINITE line. The correction
+/// that makes that pair exact is therefore
+///
+/// ```text
+/// FLC = 10·log10(θ/π) + 10·log10(d_div / d_perp)
+/// ```
+///
+/// and collapses to plain [`finite_line_correction`] whenever the receiver's
+/// perpendicular foot lies ON the segment (`d_div == d_perp` — the common
+/// case, and the only geometry the plain form is valid for). Passing the
+/// ENDPOINT distance as if it were `d_perp` is what made segments the receiver
+/// sits PAST read loud: a 250 m segment starting 250 m up the road from the
+/// perpendicular foot came out +1.9 dB, ≈ +0.9 dB on the whole line
+/// (screening fix-pack C, 2026-08-03).
+///
+/// `signed_fraction` is [`PointToSegment::fraction`] UNCLAMPED: past an
+/// endpoint `d1 = f·L` goes negative and the subtended angle becomes the
+/// DIFFERENCE of the two end angles instead of their sum — the clamped
+/// fraction would instead claim the whole segment sits on one side of the
+/// perpendicular foot (measured +2.7 dB on the fixture's scene B).
+pub fn finite_line_correction_for_divergence(
+    seg_length_m: f64,
+    d_perp_m: f64,
+    signed_fraction: f64,
+    d_divergence_m: f64,
+) -> f64 {
+    if seg_length_m < 0.1 {
+        return 0.0;
+    }
+    let d_perp = d_perp_m.max(FLC_MIN_PERP_M);
+    // `.max(d_perp)`: the endpoint distance is ≥ the perpendicular one by
+    // construction, except when the floor lifted `d_perp` above it.
+    finite_line_correction(seg_length_m, d_perp, signed_fraction)
+        + 4.342944819032518_f64 * (d_divergence_m.max(d_perp) / d_perp).ln()
+}
+
+/// Finite-line correction using HORIZONTAL distance and end angles, for a
+/// receiver whose perpendicular foot lies ON the segment.
 ///
 /// ISO 9613-2: correction for finite line source vs infinite.
 /// Uses HORIZONTAL distances (not 3D slant — fix from V33/V44).
 ///
-/// Returns correction in dB (always ≤ 0).
+/// Returns correction in dB (always ≤ 0). Line callers whose receiver may sit
+/// past an endpoint want [`finite_line_correction_for_divergence`].
 pub fn finite_line_correction(
     seg_length_m: f64,
     d_perp_horizontal: f64,
@@ -289,6 +342,60 @@ mod tests {
     /// The energy is proportional to θ at a given d, so doubling
     /// the halves equals the parent — provided FLC uses the actual
     /// fraction (not a hardcoded 0.5).
+    /// Received energy of one straight element under the engine's line chain
+    /// (`−10·log10(2π·d_div) + FLC`), in arbitrary but comparable units.
+    fn line_element_energy(seg_len_m: f64, d_perp_m: f64, y0: f64, y1: f64) -> f64 {
+        let fraction = (0.0 - y0) / (y1 - y0); // receiver's foot at y = 0, signed
+        let nearest = if y0 <= 0.0 && y1 >= 0.0 {
+            0.0
+        } else {
+            y0.abs().min(y1.abs())
+        };
+        let d_div = (d_perp_m * d_perp_m + nearest * nearest).sqrt();
+        let flc = finite_line_correction_for_divergence(seg_len_m, d_perp_m, fraction, d_div);
+        10f64.powf(flc / 10.0) / d_div
+    }
+
+    /// With the foot ON the segment the divergence distance IS the
+    /// perpendicular one, so the paired form must reduce to the plain one.
+    #[test]
+    fn flc_for_divergence_reduces_to_plain_on_perpendicular_foot() {
+        let plain = finite_line_correction(200.0, 100.0, 0.35);
+        let paired = finite_line_correction_for_divergence(200.0, 100.0, 0.35, 100.0);
+        assert!((plain - paired).abs() < 1e-12, "{plain} vs {paired}");
+    }
+
+    /// THE invariant the paired form buys (screening fix-pack C): splitting a
+    /// segment the receiver sits PAST conserves received energy exactly, so a
+    /// 250 m microsegment and its 33 sub-elements agree. The endpoint-distance
+    /// form does not — it reads this segment +1.9 dB.
+    #[test]
+    fn off_end_split_conserves_energy() {
+        let (d_perp, y0, y1) = (45.0_f64, 250.0_f64, 500.0_f64);
+        let parent = line_element_energy(y1 - y0, d_perp, y0, y1);
+        let n = 33;
+        let sub = (y1 - y0) / n as f64;
+        let split: f64 = (0..n)
+            .map(|k| {
+                let a = y0 + k as f64 * sub;
+                line_element_energy(sub, d_perp, a, a + sub)
+            })
+            .sum();
+        assert!(
+            (parent / split - 1.0).abs() < 1e-9,
+            "parent {parent:e} != split {split:e}"
+        );
+        // The old form applied to the same segment: endpoint distance in place
+        // of the perpendicular one, fraction clamped to the near end.
+        let d_end = (d_perp * d_perp + y0 * y0).sqrt();
+        let legacy = 10f64.powf(finite_line_correction(y1 - y0, d_end, 0.0) / 10.0) / d_end;
+        assert!(
+            (10.0 * (legacy / parent).log10() - 1.94).abs() < 0.05,
+            "legacy excess {:.2} dB",
+            10.0 * (legacy / parent).log10()
+        );
+    }
+
     #[test]
     fn test_split_microsegment_preserves_subtended_angle() {
         let d: f64 = 500.0;

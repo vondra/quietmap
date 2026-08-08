@@ -543,7 +543,23 @@ pub fn query_roads_from_batches(
                 start_lon: s_lon,
                 end_lat: e_lat,
                 end_lon: e_lon,
-                length_m: len.map(|a| a.value(i)).unwrap_or(0.0),
+                // Derive from the endpoints when the column is missing or
+                // ZERO, exactly as the tile loaders do
+                // (tile-painter/src/source_loader_road.rs). Taking 0.0 here made
+                // the popup and the tiles disagree in ONE DIRECTION: the arc
+                // pre-gate is `length_m > min_span_rad * dist`, which at the
+                // shipped `min_span_rad = 0.0` reads `0.0 > 0.0` = false, so the
+                // popup silently skipped arc screening and fell back to the
+                // closest-point verdict for that segment while the tile
+                // arc-screened it. Same row, same physics, two answers — and the
+                // popup is the lane the owner clicks. (Review 2026-08-04.)
+                length_m: len
+                    .map(|a| a.value(i))
+                    .filter(|l| *l > 0.0)
+                    .unwrap_or_else(|| {
+                        noise_compute::propagation::geo::flat_dist(s_lat, s_lon, e_lat, e_lon)
+                            as f32
+                    }),
                 road_class: raw.road_class,
                 speed_limit: raw.speed_limit,
                 speed_taper: raw.speed_taper,
@@ -697,7 +713,23 @@ pub fn query_railways_from_batches(
                 start_lon: s_lon,
                 end_lat: e_lat,
                 end_lon: e_lon,
-                length_m: len.map(|a| a.value(i)).unwrap_or(0.0),
+                // Derive from the endpoints when the column is missing or
+                // ZERO, exactly as the tile loaders do
+                // (tile-painter/src/source_loader_road.rs). Taking 0.0 here made
+                // the popup and the tiles disagree in ONE DIRECTION: the arc
+                // pre-gate is `length_m > min_span_rad * dist`, which at the
+                // shipped `min_span_rad = 0.0` reads `0.0 > 0.0` = false, so the
+                // popup silently skipped arc screening and fell back to the
+                // closest-point verdict for that segment while the tile
+                // arc-screened it. Same row, same physics, two answers — and the
+                // popup is the lane the owner clicks. (Review 2026-08-04.)
+                length_m: len
+                    .map(|a| a.value(i))
+                    .filter(|l| *l > 0.0)
+                    .unwrap_or_else(|| {
+                        noise_compute::propagation::geo::flat_dist(s_lat, s_lon, e_lat, e_lon)
+                            as f32
+                    }),
                 rail_type: rtype.map(|a| a.value(i)).unwrap_or(0),
                 usage: usage.map(|a| a.value(i)).unwrap_or(0),
                 maxspeed: maxspd.as_ref().map(|a| a.value(i)).unwrap_or(0),
@@ -842,12 +874,20 @@ pub fn query_leisure_from_batches(
     results
 }
 
+/// One `barriers.arrow` row for the popup lane: the wall microsegment's
+/// geometry (both endpoints — what `path_effects` intersects the ray with) plus
+/// its midpoint, which is the point `dist_m` is measured to.
 #[derive(serde::Serialize)]
 pub struct BarrierResult {
     pub osm_id: i64,
     pub height: f32,
+    /// Segment midpoint (`dist_m`'s reference point).
     pub lat: f64,
     pub lon: f64,
+    pub start_lat: f64,
+    pub start_lon: f64,
+    pub end_lat: f64,
+    pub end_lon: f64,
     pub dist_m: f64,
 }
 
@@ -887,6 +927,10 @@ pub fn query_barriers_from_batches(
                 height: height.map(|a| a.value(i)).unwrap_or(3.0),
                 lat: mid_lat,
                 lon: mid_lon,
+                start_lat: slat.value(i),
+                start_lon: slon.value(i),
+                end_lat: elat.value(i),
+                end_lon: elon.value(i),
                 dist_m: dist,
             });
         }

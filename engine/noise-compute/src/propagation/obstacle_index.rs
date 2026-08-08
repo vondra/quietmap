@@ -12,16 +12,36 @@
 
 use crate::constants::{m_per_deg_lon, M_PER_DEG_LAT};
 
+use super::obstacle_index_file::IndexArray;
+
 /// One obstacle edge in the index's local metric frame.
+///
+/// `#[repr(C)]` with only 4-byte POD fields: this struct IS the on-disk edge
+/// record ([`super::obstacle_index_file`]), so a cached index maps straight
+/// into the query walks with no decode step. `kind` is a plain code rather than
+/// the enum because a byte pattern read back from a file must never be able to
+/// forge an invalid discriminant.
 #[derive(Clone, Copy, Debug)]
-struct ObstacleEdge {
+#[repr(C)]
+pub(super) struct ObstacleEdge {
     x0: f32,
     y0: f32,
     x1: f32,
     y1: f32,
     height_m: f32,
-    kind: ObstacleKind,
     id: u32,
+    kind: u32,
+}
+
+/// No padding anywhere: the file layout and the in-memory layout are the same
+/// bytes, and `size_of` is what the section arithmetic assumes.
+const _: () = assert!(std::mem::size_of::<ObstacleEdge>() == 28);
+
+impl ObstacleEdge {
+    #[inline]
+    fn kind(&self) -> ObstacleKind {
+        ObstacleKind::from_code(self.kind)
+    }
 }
 
 /// What produced an edge — popup trace classification ("building" vs
@@ -30,6 +50,29 @@ struct ObstacleEdge {
 pub enum ObstacleKind {
     Building,
     Barrier,
+}
+
+impl ObstacleKind {
+    /// Stored form. Fixed for all time — these codes live in cached index
+    /// files, so renumbering them silently reclassifies every cached edge.
+    #[inline]
+    const fn code(self) -> u32 {
+        match self {
+            ObstacleKind::Building => 0,
+            ObstacleKind::Barrier => 1,
+        }
+    }
+
+    /// Inverse of [`Self::code`]. Anything unknown reads as `Building`, the
+    /// conservative arm: an edge screens either way, only the popup's label
+    /// would differ.
+    #[inline]
+    const fn from_code(code: u32) -> Self {
+        match code {
+            1 => ObstacleKind::Barrier,
+            _ => ObstacleKind::Building,
+        }
+    }
 }
 
 /// One exact ray×edge crossing: chainage `t ∈ (0, 1)` along the ray plus the
@@ -43,30 +86,182 @@ pub struct CrossingCandidate {
     pub id: u32,
 }
 
+/// The directions in which ONE obstacle edge stands, as seen from a query
+/// origin — the unit [`super::arc_screening`] builds a receiver's skyline from.
+///
+/// `lo`/`hi` are absolute azimuths (`atan2(north, east)`, radians) of the SHORT
+/// arc between the edge's endpoints, unwrapped so `lo <= hi` and `hi - lo < π`:
+/// an edge subtends less than a half-turn from any point off it, so the pair is
+/// an ordinary interval on the line, never a wrap-around case. `near_m` is the
+/// nearest range from the origin to the edge — the "does this stand in FRONT of
+/// the source" test, which replaces a second ray query per candidate.
+#[derive(Clone, Copy, Debug)]
+pub struct SkylineArc {
+    pub lo: f64,
+    pub hi: f64,
+    pub near_m: f32,
+    /// Edge height above its own local ground (m).
+    pub height_m: f32,
+}
+
+/// Branch-and-bound context for [`ObstacleIndex::crossings_pruned`]: everything
+/// needed to bound, per grid cell, the best path difference any edge in it could
+/// produce — so a cell that cannot beat the floor is skipped without touching an
+/// edge. In Dobříš 94 % of 50 m rays and 83 % of 400 m rays find nothing at all
+/// (A3 survey); this is what harvests that.
+///
+/// The bound is `terr_win + cell_max_h`, where `terr_win` is the max terrain
+/// over THAT CELL'S OWN CHAINAGE WINDOW — not the profile-wide max, which is the
+/// whole point: in Brdy relief one hilltop anywhere on the ray poisons a global
+/// bound and nothing is ever pruned. Exactness: a candidate's terrain is LERPed
+/// between the two samples bracketing its crossing (`path_effects` §5b), so it
+/// can never exceed the max of the samples bracketing the window.
+pub struct CellPrune<'a> {
+    /// Profile chainages, ascending, `0..=1` — `PathProfile::t`.
+    pub t: &'a [f64],
+    /// Bare-earth elevation at each chainage — `PathProfile::elevation_m`.
+    pub elevation_m: &'a [f32],
+    /// Absolute source / receiver altitudes (ground + height).
+    pub src_e: f64,
+    pub rcv_e: f64,
+    pub dist_m: f64,
+    /// Floor of the LOOP THIS PRUNE ACCELERATES — `path_effects` §5b's
+    /// candidate race, not the physics and not some other lane's loop. See
+    /// [`ObstacleIndex::crossings_pruned`].
+    pub floor_m: f64,
+}
+
+impl<'a> CellPrune<'a> {
+    /// Prune context for a ray whose profile is already built, floored at the
+    /// consumer's own floor. Callers do NOT choose the floor: it belongs to
+    /// `path_effects` §5b, the loop that ranks these candidates, and picking it
+    /// at the call site is how a prune ends up above its loop.
+    pub fn for_profile(profile: &'a super::PathProfile, src_e: f64, rcv_e: f64) -> Self {
+        CellPrune {
+            t: &profile.t,
+            elevation_m: &profile.elevation_m,
+            src_e,
+            rcv_e,
+            dist_m: profile.dist_m,
+            floor_m: cell_prune_floor_m(),
+        }
+    }
+}
+
+/// The prune floor, or `-inf` under `QM_ARC_DISABLE_CELL_PRUNE=1` — the A/B
+/// lever that turns the branch-and-bound off without a rebuild. The prune is
+/// meant to be OUTPUT-NEUTRAL (it only skips cells that provably cannot reach
+/// the consumer's floor), and this is what makes that claim measurable on a real
+/// cell instead of asserted. KEPT deliberately (2026-08-08 review): while the
+/// 17.6 dB CPU↔GPU gap is undiagnosed this is the only way to price the prune's
+/// share of it, and the bug fixed in [`CellPrune::max_delta`] the same day is
+/// the reason "output-neutral" cannot be taken on trust.
+fn cell_prune_floor_m() -> f64 {
+    static V: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        if std::env::var("QM_ARC_DISABLE_CELL_PRUNE").is_ok_and(|v| v == "1") {
+            f64::NEG_INFINITY
+        } else {
+            crate::constants::PENUMBRA_DELTA_FLOOR_M
+        }
+    })
+}
+
+impl CellPrune<'_> {
+    /// Upper bound on the SIGNED δ any edge in `[t_lo, t_hi]` with top at most
+    /// `top` can produce, in `path_effects` §5b's own form
+    /// (`sign·(d_sb + d_br − d_SR)`, negative below the sight line).
+    ///
+    /// δ is monotone increasing in `top`, so the cell's tallest possible top
+    /// bounds every candidate in it. In `t`, `detour` is CONVEX for a fixed
+    /// `top`, so:
+    ///
+    /// * the POSITIVE branch (`top` above the sight line, δ = +detour) takes its
+    ///   max over the window at an ENDPOINT;
+    /// * the NEGATIVE branch (δ = −detour) is concave, so it takes its max at
+    ///   `detour`'s stationary point — the REFLECTION point
+    ///   `t* = |h_s| / (|h_s| + |h_r|)`, clamped to the window.
+    ///
+    /// Evaluating `{t_lo, t_hi, t*}` therefore attains the true max of both
+    /// branches, and the bound is exact rather than merely sound.
+    ///
+    /// This mirrors `scatter.cu`'s `tstar` line for line, and that is the point:
+    /// until 2026-08-08 this used the point where the SIGHT LINE crosses `top`
+    /// instead. Those two agree exactly whenever the crossing is inside the
+    /// window — `h_s` and `h_r` then have opposite signs and
+    /// `h_s/(h_s − h_r) ≡ |h_s|/(|h_s| + |h_r|)` — but when `top` runs BELOW
+    /// both ends of the window (the penumbra case the floor exists for) the
+    /// crossing is outside, the clamp collapses it onto an endpoint, and the
+    /// bound comes out far too low: a 50 m ray with source and receiver at 4 m
+    /// over a 3 m top bounded at −1.010 m against a −0.2698 m floor, pruning a
+    /// cell whose real candidate at `t* = 0.5` scores δ = −0.040 m. Sound-but-
+    /// loose would have been survivable; too LOW is a silent loss of screening.
+    /// `low_top_prune_keeps_penumbra_candidate` pins that geometry.
+    #[inline]
+    fn max_delta(&self, top: f64, t_lo: f64, t_hi: f64) -> f64 {
+        let dz = self.rcv_e - self.src_e;
+        let dsr = (self.dist_m * self.dist_m + dz * dz).sqrt();
+        let at = |tt: f64| {
+            let los = self.src_e + dz * tt;
+            let (d_sg, d_rg) = (tt * self.dist_m, (1.0 - tt) * self.dist_m);
+            let detour = (d_sg * d_sg + (top - self.src_e).powi(2)).sqrt()
+                + (d_rg * d_rg + (top - self.rcv_e).powi(2)).sqrt()
+                - dsr;
+            if top >= los {
+                detour
+            } else {
+                -detour
+            }
+        };
+        // The reflection point — where `detour` is stationary, hence the
+        // negative branch's peak. Same expression as `scatter.cu`'s `tstar`
+        // inside `obstacle_best_candidate`'s below-sight-line branch.
+        let (ahs, ahr) = ((top - self.src_e).abs(), (top - self.rcv_e).abs());
+        let t_star = if ahs + ahr > 0.0 {
+            (ahs / (ahs + ahr)).clamp(t_lo, t_hi)
+        } else {
+            // Sight line runs exactly through `top` at both ends (flat, grazing):
+            // δ ≡ 0 everywhere in the window, so any point attains the max.
+            t_lo
+        };
+        at(t_lo).max(at(t_hi)).max(at(t_star))
+    }
+}
+
 /// Uniform-grid spatial index over obstacle edges. Build once per tile+halo
 /// (or per popup query), then run many rays against it. CSR layout: cell →
 /// slice of edge refs.
+///
+/// The four arrays are [`IndexArray`]s, not `Vec`s: an index built from the
+/// Arrow shards owns its heap, one loaded from the cache
+/// ([`super::obstacle_index_file`]) reads straight out of a mapped file. Both
+/// deref to the same slices, so every query below is written once.
 pub struct ObstacleIndex {
-    origin_lat: f64,
-    origin_lon: f64,
-    m_per_deg_lon: f64,
+    pub(super) origin_lat: f64,
+    pub(super) origin_lon: f64,
+    pub(super) m_per_deg_lon: f64,
     /// Grid cell size (m). ~2× the raster cell keeps cells-per-ray low while
     /// average edges-per-cell stays small in cities.
-    cell_m: f64,
-    min_x: f64,
-    min_y: f64,
-    cols: usize,
-    rows: usize,
-    cell_starts: Vec<u32>,
-    edge_refs: Vec<u32>,
-    edges: Vec<ObstacleEdge>,
+    pub(super) cell_m: f64,
+    pub(super) min_x: f64,
+    pub(super) min_y: f64,
+    pub(super) cols: usize,
+    pub(super) rows: usize,
+    pub(super) cell_starts: IndexArray<u32>,
+    pub(super) edge_refs: IndexArray<u32>,
+    pub(super) edges: IndexArray<ObstacleEdge>,
+    /// Per grid cell: the tallest edge binned into it (0 for empty cells). The
+    /// O(1) input to every branch-and-bound prune over this grid — the CUDA
+    /// ray walk's exact δ bound (`obstacle_best_candidate`) and the skyline
+    /// walk's grazing prune ([`ObstacleIndex::skyline_arcs_within`]).
+    pub(super) cell_max_h: IndexArray<f32>,
     /// Per-footprint (id-indexed) min local x over all its rings — the
     /// containment walk skips footprints whose bbox lies strictly east of the
     /// probe. Requires DENSE ids (the loaders' sequential ordinals).
-    footprint_xmin: Vec<f32>,
+    pub(super) footprint_xmin: IndexArray<f32>,
     /// Max per-footprint bbox width (m) — bounds the containment walk: a
     /// footprint straddling the probe cannot extend further east than this.
-    max_footprint_w: f64,
+    pub(super) max_footprint_w: f64,
 }
 
 /// Default grid pitch (m) — coarse enough that a 10 km ray walks ~160 cells.
@@ -86,6 +281,20 @@ pub struct GpuGridView<'a> {
     pub edge_refs: &'a [u32],
     /// `(x0, y0, x1, y1, height_m)` per edge, stride 5.
     pub edges_xyxyh: Vec<f32>,
+    /// Per grid cell: the tallest edge binned into it (0 = empty). The CUDA
+    /// lane's branch-and-bound prune reads it directly — one source of truth
+    /// with the CPU walks, never recomputed host-side.
+    pub cell_max_h: &'a [f32],
+    /// Owning obstacle id per edge, parallel to `edges_xyxyh` (stride 1).
+    ///
+    /// Identity used to be "a host-only concern" because the kernel kept a
+    /// running max-δ and never needed to know WHICH obstacle it had hit. Arc
+    /// screening broke that: its angular hulls are per FOOTPRINT, so the CUDA
+    /// lane has to group edges by owner. Exposing the ids here replaces a
+    /// reconstruction that re-queried the index and re-joined edges on their
+    /// endpoint BIT PATTERNS — correct but fragile, and silently degrading to a
+    /// private id whenever the join missed.
+    pub edge_ids: Vec<u32>,
 }
 
 impl ObstacleIndex {
@@ -109,20 +318,240 @@ impl ObstacleIndex {
         )
     }
 
+    /// Every edge within `radius_m` of `(lat, lon)` that can still break a line
+    /// of sight there, as a [`SkylineArc`] handed to `visit`.
+    ///
+    /// The AREA sibling of [`Self::crossings`]: a ray query answers "what does
+    /// THIS ray hit", this one answers "what stands around this point, and in
+    /// which directions" — the receiver skyline every segment of that receiver
+    /// then clips its own angular span against, instead of re-running an area
+    /// query per (segment, receiver) pair.
+    ///
+    /// TWO prunes, both O(1) per grid cell and both exact-by-construction:
+    ///
+    /// * empty cells (`cell_max_h == 0`) cost one CSR compare;
+    /// * the ISO 9613-2 §7.3 GRAZING prune — an obstacle rising `h` above the
+    ///   sight line at distance `b` from this end of a path much longer than
+    ///   `b` bends the path by `δ ≈ h²/(2b)`, and `diffraction::maekawa_bands`
+    ///   zeroes every band whose `δ ≤ λ/4 − δ*` (flat ground: `δ ≤ λ/8`). So a
+    ///   cell whose TALLEST edge cannot reach `h ≥ sqrt(2·δ_min·b)` cannot
+    ///   produce a single dB in any band, whatever its geometry — skip it whole.
+    ///   `los_floor_m` is the LOWEST the sight line ever runs above local
+    ///   ground on such a path — the SOURCE height, not the receiver's: the
+    ///   line drops from receiver height to source height as it goes out, so an
+    ///   obstacle only shorter than the receiver can still break it further
+    ///   along. Gating on the receiver's height would silently drop every 3 m
+    ///   noise wall and low building. `delta_min_m` is the caller's δ floor.
+    ///
+    /// An edge listed in several cells is visited several times; the caller's
+    /// merge is idempotent on repeats (identical arcs union to themselves), so
+    /// no dedup pass is needed — the reason this walk emits arcs directly
+    /// instead of materialising an edge list.
+    #[allow(clippy::too_many_arguments)]
+    pub fn skyline_arcs_within(
+        &self,
+        lat: f64,
+        lon: f64,
+        min_radius_m: f64,
+        radius_m: f64,
+        los_floor_m: f64,
+        delta_min_m: f64,
+        wedge: Option<(f64, f64)>,
+        visit: &mut impl FnMut(SkylineArc),
+    ) {
+        if self.edges.is_empty() {
+            return;
+        }
+        let (ox, oy) = self.to_local(lat, lon);
+        let inv_cell = 1.0 / self.cell_m;
+        let cell_range = |lo: f64, hi: f64, base: f64, n: usize| -> Option<(usize, usize)> {
+            let c0 = ((lo - base) * inv_cell).floor();
+            let c1 = ((hi - base) * inv_cell).floor();
+            if c1 < 0.0 || c0 > (n - 1) as f64 {
+                return None; // query box entirely outside the grid slab
+            }
+            Some((c0.max(0.0) as usize, c1.min((n - 1) as f64) as usize))
+        };
+        let Some((cx0, cx1)) = cell_range(ox - radius_m, ox + radius_m, self.min_x, self.cols)
+        else {
+            return;
+        };
+        let Some((cy0, cy1)) = cell_range(oy - radius_m, oy + radius_m, self.min_y, self.rows)
+        else {
+            return;
+        };
+        let r2 = radius_m * radius_m;
+        // Wedge reject. A segment can only be clipped by obstacles inside its
+        // OWN angular span, so gathering the whole disk collects area no query
+        // can read — ~180× for a rail segment 3 km out with a 2° span. The
+        // span is under a half turn, so the wedge is the intersection of two
+        // half-planes and a cell is rejected when all four of its corners sit
+        // strictly outside one of them. Cross products only: no `atan2` in a
+        // loop that runs per cell.
+        let wedge_dirs = wedge.map(|(lo, hi)| ((lo.cos(), lo.sin()), (hi.cos(), hi.sin())));
+
+        for cy in cy0..=cy1 {
+            let row = cy * self.cols;
+            // Nearest point of this cell ROW to the origin, then of the cell —
+            // the largest `b` lower bound the grid can give without touching an
+            // edge, which is what makes the grazing prune tight.
+            let y_lo = self.min_y + cy as f64 * self.cell_m;
+            let dy = (y_lo - oy).max(oy - (y_lo + self.cell_m)).max(0.0);
+            for cx in cx0..=cx1 {
+                let cell = row + cx;
+                let lo = self.cell_starts[cell] as usize;
+                let hi = self.cell_starts[cell + 1] as usize;
+                if lo == hi {
+                    continue;
+                }
+                let x_lo = self.min_x + cx as f64 * self.cell_m;
+                let dx = (x_lo - ox).max(ox - (x_lo + self.cell_m)).max(0.0);
+                let b2 = dx * dx + dy * dy;
+                if b2 > r2 {
+                    continue;
+                }
+                if let Some(((lx, ly), (hx, hy))) = wedge_dirs {
+                    let (cx0, cy0c) = (x_lo - ox, y_lo - oy);
+                    let (cx1, cy1c) = (cx0 + self.cell_m, cy0c + self.cell_m);
+                    let corners = [(cx0, cy0c), (cx1, cy0c), (cx0, cy1c), (cx1, cy1c)];
+                    // Outside the LOW edge: the corner is clockwise of it.
+                    let all_below = corners.iter().all(|&(px, py)| lx * py - ly * px < 0.0);
+                    // Outside the HIGH edge: the corner is anticlockwise of it.
+                    let all_above = corners.iter().all(|&(px, py)| px * hy - py * hx < 0.0);
+                    if all_below || all_above {
+                        continue;
+                    }
+                }
+                // Already covered by an earlier, smaller-radius pass: the cell's
+                // FARTHEST corner is inside it, so every edge it holds was
+                // visited then. Growing a skyline is an annulus walk, never a
+                // re-walk (`ArcSkyline::ensure`).
+                if min_radius_m > 0.0 {
+                    let fx = (x_lo - ox).abs().max((x_lo + self.cell_m - ox).abs());
+                    let fy = (y_lo - oy).abs().max((y_lo + self.cell_m - oy).abs());
+                    if fx * fx + fy * fy <= min_radius_m * min_radius_m {
+                        continue;
+                    }
+                }
+                let h = self.cell_max_h[cell] as f64 - los_floor_m;
+                if h <= 0.0 || h * h < 2.0 * delta_min_m * b2.sqrt() {
+                    continue; // grazing: zero dB in every band, whatever the edge
+                }
+                for &eref in &self.edge_refs[lo..hi] {
+                    let e = self.edges[eref as usize];
+                    let (ex0, ey0) = (e.x0 as f64 - ox, e.y0 as f64 - oy);
+                    let (ex1, ey1) = (e.x1 as f64 - ox, e.y1 as f64 - oy);
+                    let near_m = origin_to_segment_dist(ex0, ey0, ex1, ey1);
+                    if near_m > radius_m || near_m < 1e-6 {
+                        continue; // out of range, or the origin sits ON the edge
+                    }
+                    let a0 = ey0.atan2(ex0);
+                    let a1 = ey1.atan2(ex1);
+                    // The SHORT arc between the endpoints: the set of directions
+                    // that hit this edge. Taking it per EDGE (not a per-footprint
+                    // hull) is exact for concave outlines too — a ray leaving the
+                    // origin hits a closed ring iff it hits one of its edges.
+                    let r1 = a0 + wrap_pi(a1 - a0);
+                    visit(SkylineArc {
+                        lo: a0.min(r1),
+                        hi: a0.max(r1),
+                        near_m: near_m as f32,
+                        height_m: e.height_m,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Can the segment `src→rcv` touch this index's grid at all?
+    ///
+    /// A query set holds the 7 per-cell indexes of a `grid_disk(1)` ring, and
+    /// the CUDA kernel's own comment notes a ray touches only 1-3 of them —
+    /// but the CPU lane walked all 7, clamping each DDA into a grid the ray
+    /// never enters and testing the edges it happens to land on. This is an
+    /// exact REJECT, not an approximation: a segment that misses a grid's
+    /// bounding box cannot cross an edge binned inside it.
+    ///
+    /// Slab test in the index's own local frame (each has its own origin, so
+    /// the two `to_local` calls are the price of admission — four multiplies
+    /// against a whole DDA walk).
+    #[inline]
+    pub fn segment_may_hit(&self, src_lat: f64, src_lon: f64, rcv_lat: f64, rcv_lon: f64) -> bool {
+        if self.edges.is_empty() {
+            return false;
+        }
+        let (sx, sy) = self.to_local(src_lat, src_lon);
+        let (rx, ry) = self.to_local(rcv_lat, rcv_lon);
+        let max_x = self.min_x + self.cols as f64 * self.cell_m;
+        let max_y = self.min_y + self.rows as f64 * self.cell_m;
+        // Cheap AABB-vs-AABB reject first — it catches the common case (a ray
+        // wholly on the far side of a neighbouring cell) without any division.
+        if sx.max(rx) < self.min_x
+            || sx.min(rx) > max_x
+            || sy.max(ry) < self.min_y
+            || sy.min(ry) > max_y
+        {
+            return false;
+        }
+        // Slab test for the diagonal cases the bbox overlap cannot decide.
+        let (dx, dy) = (rx - sx, ry - sy);
+        let mut lo = 0.0f64;
+        let mut hi = 1.0f64;
+        for (s0, d, b0, b1) in [(sx, dx, self.min_x, max_x), (sy, dy, self.min_y, max_y)] {
+            if d.abs() < 1e-12 {
+                if s0 < b0 || s0 > b1 {
+                    return false;
+                }
+                continue;
+            }
+            let (mut a, mut b) = ((b0 - s0) / d, (b1 - s0) / d);
+            if a > b {
+                std::mem::swap(&mut a, &mut b);
+            }
+            lo = lo.max(a);
+            hi = hi.min(b);
+            if lo > hi {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Upper bound, in absolute metres ASL, on the top of anything in `cell` —
+    /// the single seam every branch-and-bound over this grid reads.
+    ///
+    /// Today: the ray's own windowed terrain max plus the cell's tallest edge.
+    /// A3's `bake_top_asl` replaces this with a per-cell bound baked from the
+    /// DEM at load time (per-edge ground × per-edge height, dilated by the
+    /// coarsest cadence gap), which is strictly tighter — the tallest building
+    /// in a cell need not stand on its highest ground — and needs no windowed
+    /// max at all. When that lands, this body becomes
+    /// `self.cell_max_top_asl[cell]` with the windowed value as the fallback
+    /// for an index whose bake was inert (no DEM), and every caller is unchanged.
+    #[inline]
+    fn cell_top_bound(&self, cell: usize, terr_win_m: f64) -> f64 {
+        terr_win_m + self.cell_max_h[cell] as f64
+    }
+
     /// Number of indexed edges (telemetry / memory accounting).
     pub fn edge_count(&self) -> usize {
         self.edges.len()
     }
 
     /// Flat CSR view for the CUDA lane (geodata-v2 1.6): grid frame constants
-    /// plus borrowed CSR arrays and a materialised `(x0,y0,x1,y1,height)`
-    /// edge array (kind/id are host-only concerns — the kernel keeps a
-    /// running max-δ, never an identity). The kernel walk must mirror
-    /// [`Self::crossings`] cell-for-cell; e2-full is the parity gate.
+    /// plus borrowed CSR arrays, a materialised `(x0,y0,x1,y1,height)` edge
+    /// array and the per-edge owner id. `kind` stays host-only; `id` does NOT
+    /// — arc screening groups edges by footprint, so the kernel reads
+    /// [`GpuGridView::edge_ids`] (`obst` slot 6) and the "never an identity"
+    /// rule this doc used to state has not held since TRACK C (2026-08-03).
+    /// The kernel walk must mirror [`Self::crossings`] cell-for-cell; e2-full
+    /// is the parity gate.
     pub fn gpu_view(&self) -> GpuGridView<'_> {
         let mut edges_xyxyh = Vec::with_capacity(self.edges.len() * 5);
-        for e in &self.edges {
+        let mut edge_ids = Vec::with_capacity(self.edges.len());
+        for e in self.edges.iter() {
             edges_xyxyh.extend_from_slice(&[e.x0, e.y0, e.x1, e.y1, e.height_m]);
+            edge_ids.push(e.id);
         }
         GpuGridView {
             origin_lat: self.origin_lat,
@@ -136,6 +565,8 @@ impl ObstacleIndex {
             cell_starts: &self.cell_starts,
             edge_refs: &self.edge_refs,
             edges_xyxyh,
+            cell_max_h: &self.cell_max_h,
+            edge_ids,
         }
     }
 
@@ -155,19 +586,61 @@ impl ObstacleIndex {
         out: &mut Vec<CrossingCandidate>,
     ) {
         out.clear();
-        self.append_crossings(src_lat, src_lon, rcv_lat, rcv_lon, out);
+        self.append_crossings(src_lat, src_lon, rcv_lat, rcv_lon, None, out);
+    }
+
+    /// [`Self::crossings`] with the per-cell branch-and-bound prune.
+    ///
+    /// `prune.floor_m` MUST be the floor of the loop this accelerates — the
+    /// consumer that ranks these candidates. For `path_effects` §5b that floor
+    /// is [`crate::constants::PENUMBRA_DELTA_FLOOR_M`], NOT zero: that loop
+    /// deliberately keeps below-sight-line near misses with a negative δ
+    /// (fix-pack Fix 2), and a prune floored at 0 would delete exactly the
+    /// geometry a noise wall exists to create. A prune whose floor sits above
+    /// its loop's floor is unsound however tight its bound is.
+    ///
+    /// The floor is δ\*-FREE on purpose. The rejection threshold is DECREASING
+    /// in δ\*, so assuming a δ\* larger than the true one rejects paths that
+    /// still carry energy; only a proven LOWER bound on δ\* is admissible, and
+    /// at prune time δ\* is not yet computed. The infimum over all δ\* is
+    /// −λ/20 at the longest wavelength in the model, which is exactly this
+    /// constant.
+    pub fn crossings_pruned(
+        &self,
+        src_lat: f64,
+        src_lon: f64,
+        rcv_lat: f64,
+        rcv_lon: f64,
+        prune: &CellPrune<'_>,
+        out: &mut Vec<CrossingCandidate>,
+    ) {
+        out.clear();
+        self.append_crossings(src_lat, src_lon, rcv_lat, rcv_lon, Some(prune), out);
     }
 
     /// [`Self::crossings`] without the clear: appends this index's hits and
     /// sort+dedups ONLY the appended tail, so [`ObstacleSet`] can chain
     /// per-cell indexes into one buffer with zero per-ray allocation (the
     /// hot scatter loop runs this per receiver ray).
+    /// Test-only view of the unpruned per-index walk (the slab bench's OFF lane).
+    pub fn append_crossings_pub(
+        &self,
+        src_lat: f64,
+        src_lon: f64,
+        rcv_lat: f64,
+        rcv_lon: f64,
+        out: &mut Vec<CrossingCandidate>,
+    ) {
+        self.append_crossings(src_lat, src_lon, rcv_lat, rcv_lon, None, out);
+    }
+
     fn append_crossings(
         &self,
         src_lat: f64,
         src_lon: f64,
         rcv_lat: f64,
         rcv_lon: f64,
+        prune: Option<&CellPrune<'_>>,
         out: &mut Vec<CrossingCandidate>,
     ) {
         let start = out.len();
@@ -221,10 +694,34 @@ impl ObstacleIndex {
         let mut recent_at = 0usize;
 
         let mut guard = (self.cols + self.rows) as i64 + 4;
+        // Chainage the ray entered the current cell at, and a monotone pointer
+        // into the profile samples — both only ever advance, so the windowed
+        // terrain max costs O(samples) over the whole walk.
+        let mut t_enter = 0.0_f64;
+        let mut win_lo = 0usize;
         loop {
             let cell = cy as usize * self.cols + cx as usize;
-            let lo = self.cell_starts[cell] as usize;
+            let mut lo = self.cell_starts[cell] as usize;
             let hi = self.cell_starts[cell + 1] as usize;
+            if hi > lo {
+                if let Some(p) = prune {
+                    let t_exit = t_max_x.min(t_max_y).min(1.0);
+                    let (a, b) = (t_enter.clamp(0.0, 1.0), t_exit.clamp(0.0, 1.0));
+                    while win_lo + 1 < p.t.len() && p.t[win_lo + 1] <= a {
+                        win_lo += 1;
+                    }
+                    let mut terr_win = p.elevation_m[win_lo] as f64;
+                    let mut k = win_lo;
+                    while k + 1 < p.t.len() && p.t[k] < b {
+                        k += 1;
+                        terr_win = terr_win.max(p.elevation_m[k] as f64);
+                    }
+                    let top_bound = self.cell_top_bound(cell, terr_win);
+                    if p.max_delta(top_bound, a, b) < p.floor_m {
+                        lo = hi; // no edge here can reach the consumer's floor
+                    }
+                }
+            }
             'edges: for &eref in &self.edge_refs[lo..hi] {
                 if recent.contains(&eref) {
                     continue 'edges;
@@ -245,7 +742,7 @@ impl ObstacleIndex {
                     out.push(CrossingCandidate {
                         t,
                         height_m: e.height_m,
-                        kind: e.kind,
+                        kind: e.kind(),
                         id: e.id,
                     });
                 }
@@ -254,6 +751,7 @@ impl ObstacleIndex {
                 break;
             }
             guard -= 1;
+            t_enter = t_max_x.min(t_max_y);
             if t_max_x < t_max_y {
                 t_max_x += t_delta_x;
                 cx += step_x;
@@ -308,9 +806,62 @@ impl ObstacleSet {
     ) {
         out.clear();
         for idx in &self.indexes {
-            idx.append_crossings(src_lat, src_lon, rcv_lat, rcv_lon, out);
+            if !idx.segment_may_hit(src_lat, src_lon, rcv_lat, rcv_lon) {
+                continue;
+            }
+            idx.append_crossings(src_lat, src_lon, rcv_lat, rcv_lon, None, out);
         }
         out.sort_unstable_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+    }
+
+    /// [`Self::crossings`] with the per-cell branch-and-bound prune — see
+    /// [`ObstacleIndex::crossings_pruned`] for what `floor_m` must be.
+    pub fn crossings_pruned(
+        &self,
+        src_lat: f64,
+        src_lon: f64,
+        rcv_lat: f64,
+        rcv_lon: f64,
+        prune: &CellPrune<'_>,
+        out: &mut Vec<CrossingCandidate>,
+    ) {
+        out.clear();
+        for idx in &self.indexes {
+            if !idx.segment_may_hit(src_lat, src_lon, rcv_lat, rcv_lon) {
+                continue;
+            }
+            idx.append_crossings(src_lat, src_lon, rcv_lat, rcv_lon, Some(prune), out);
+        }
+        out.sort_unstable_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+    }
+
+    /// [`ObstacleIndex::skyline_arcs_within`] over every member index. Arcs are
+    /// origin-relative angles, so per-index results simply concatenate — the
+    /// consumer's merge is what turns them into one skyline.
+    #[allow(clippy::too_many_arguments)]
+    pub fn skyline_arcs_within(
+        &self,
+        lat: f64,
+        lon: f64,
+        min_radius_m: f64,
+        radius_m: f64,
+        los_floor_m: f64,
+        delta_min_m: f64,
+        wedge: Option<(f64, f64)>,
+        visit: &mut impl FnMut(SkylineArc),
+    ) {
+        for idx in &self.indexes {
+            idx.skyline_arcs_within(
+                lat,
+                lon,
+                min_radius_m,
+                radius_m,
+                los_floor_m,
+                delta_min_m,
+                wedge,
+                visit,
+            );
+        }
     }
 }
 
@@ -494,13 +1045,50 @@ impl crate::types::RasterSampler for VectorReflectionSampler<'_> {
     }
 }
 
+/// Distance from the ORIGIN to the segment `(x0,y0)-(x1,y1)` (both already
+/// origin-relative). The `near_m` of a [`SkylineArc`]: how far away the thing
+/// standing in those directions actually is. Shared with
+/// [`super::arc_screening`], which runs it on noise-wall endpoints — a wall IS
+/// a segment, so its skyline arc is the same primitive as a building edge's.
+#[inline]
+pub(crate) fn origin_to_segment_dist(x0: f64, y0: f64, x1: f64, y1: f64) -> f64 {
+    let (ex, ey) = (x1 - x0, y1 - y0);
+    let len2 = ex * ex + ey * ey;
+    let t = if len2 > 0.0 {
+        (-(x0 * ex + y0 * ey) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let (px, py) = (x0 + t * ex, y0 + t * ey);
+    (px * px + py * py).sqrt()
+}
+
+/// Angle folded into `(−π, π]` — shared by the skyline walk and
+/// [`super::arc_screening`], which must agree on the unwrapping convention.
+#[inline]
+pub fn wrap_pi(a: f64) -> f64 {
+    use std::f64::consts::{PI, TAU};
+    let a = a % TAU;
+    if a > PI {
+        a - TAU
+    } else if a <= -PI {
+        a + TAU
+    } else {
+        a
+    }
+}
+
 /// Chainage of the intersection of ray `(sx,sy)+t·(dx,dy)` with segment
 /// `(x0,y0)–(x1,y1)`, if any, with `t` strictly inside `(0, 1)` and the hit
 /// strictly inside the segment (`u ∈ [0, 1]`). Standard 2D cross-product
 /// parametric form; collinear overlap returns `None` (a ray sliding along a
 /// wall face grazes it, it does not cross it).
+///
+/// Shared with `path_effects`' noise-barrier crossings, which never enter this
+/// index (they arrive per-tile as `types::Barrier` segments) but must solve the
+/// identical geometry — one primitive, one rounding, one set of edge cases.
 #[inline]
-fn segment_intersection_t(
+pub(crate) fn segment_intersection_t(
     sx: f64,
     sy: f64,
     dx: f64,
@@ -572,8 +1160,8 @@ impl Builder {
                 x1: x1 as f32,
                 y1: y1 as f32,
                 height_m,
-                kind,
                 id,
+                kind: kind.code(),
             });
         }
     }
@@ -609,8 +1197,8 @@ impl Builder {
                 x1: x1 as f32,
                 y1: y1 as f32,
                 height_m,
-                kind,
                 id,
+                kind: kind.code(),
             });
         }
     }
@@ -637,10 +1225,11 @@ impl Builder {
                 min_y: 0.0,
                 cols: 1,
                 rows: 1,
-                cell_starts: vec![0, 0],
-                edge_refs: Vec::new(),
-                edges: Vec::new(),
-                footprint_xmin: Vec::new(),
+                cell_starts: vec![0, 0].into(),
+                edge_refs: Vec::new().into(),
+                edges: Vec::new().into(),
+                cell_max_h: vec![0.0].into(),
+                footprint_xmin: Vec::new().into(),
                 max_footprint_w: 0.0,
             };
         }
@@ -693,10 +1282,12 @@ impl Builder {
         let cell_starts = counts.clone();
         let mut cursor: Vec<u32> = cell_starts[..cols * rows].to_vec();
         let mut edge_refs = vec![0u32; total];
+        let mut cell_max_h = vec![0.0f32; cols * rows];
         for (i, e) in self.edges.iter().enumerate() {
             for_each_segment_cell(e, min_x, min_y, cell_m, cols, rows, |c| {
                 edge_refs[cursor[c] as usize] = i as u32;
                 cursor[c] += 1;
+                cell_max_h[c] = cell_max_h[c].max(e.height_m);
             });
         }
 
@@ -709,10 +1300,11 @@ impl Builder {
             min_y,
             cols,
             rows,
-            cell_starts,
-            edge_refs,
-            edges: self.edges,
-            footprint_xmin,
+            cell_starts: cell_starts.into(),
+            edge_refs: edge_refs.into(),
+            edges: self.edges.into(),
+            cell_max_h: cell_max_h.into(),
+            footprint_xmin: footprint_xmin.into(),
             max_footprint_w,
         }
     }
@@ -817,6 +1409,106 @@ mod tests {
         let idx = ObstacleIndex::builder(OLAT, OLON).build();
         assert_eq!(idx.edge_count(), 0);
         assert!(run(&idx, ll(0.0, 0.0), ll(1000.0, 0.0)).is_empty());
+    }
+
+    /// Skyline walk: the box inside the radius reports its four edges (repeats
+    /// from multi-cell binning are allowed — the consumer's merge is idempotent),
+    /// each arc pointing at the box and carrying its true range; the far box is
+    /// out of range entirely.
+    #[test]
+    fn skyline_reports_in_range_edges_with_their_bearing() {
+        let mut b = ObstacleIndex::builder(OLAT, OLON);
+        b.add_ring(&square(200.0, 0.0, 15.0), 8.0, ObstacleKind::Building, 0);
+        b.add_ring(&square(2000.0, 0.0, 15.0), 8.0, ObstacleKind::Building, 1);
+        let idx = b.build();
+        let mut arcs = Vec::new();
+        let o = ll(0.0, 0.0);
+        idx.skyline_arcs_within(o.0, o.1, 0.0, 500.0, 0.0, 0.0, None, &mut |a| arcs.push(a));
+        assert_eq!(arcs.len(), 4, "one ring in range, four edges: {arcs:?}");
+        for a in &arcs {
+            assert!(a.hi - a.lo < std::f64::consts::PI, "short arc: {a:?}");
+            assert!(a.lo.abs() < 0.2 && a.hi.abs() < 0.2, "due east: {a:?}");
+            assert!(
+                (185.0..=216.0).contains(&(a.near_m as f64)),
+                "range to the near face: {a:?}"
+            );
+            assert_eq!(a.height_m, 8.0);
+        }
+        // A radius that reaches neither box.
+        arcs.clear();
+        idx.skyline_arcs_within(o.0, o.1, 0.0, 100.0, 0.0, 0.0, None, &mut |a| arcs.push(a));
+        assert!(arcs.is_empty());
+    }
+
+    /// The grazing prune is a HEIGHT gate, not a distance gate: an 8 m box
+    /// 200 m away bends a long path by δ ≈ (8−4)²/(2·200) = 0.04 m, so a δ floor
+    /// above that skips it whole and one below keeps it.
+    #[test]
+    fn skyline_grazing_prune_follows_the_delta_law() {
+        let mut b = ObstacleIndex::builder(OLAT, OLON);
+        b.add_ring(&square(200.0, 0.0, 15.0), 8.0, ObstacleKind::Building, 0);
+        let idx = b.build();
+        let o = ll(0.0, 0.0);
+        let count = |delta_min: f64| {
+            let mut n = 0;
+            idx.skyline_arcs_within(o.0, o.1, 0.0, 500.0, 4.0, delta_min, None, &mut |_| n += 1);
+            n
+        };
+        assert_eq!(count(0.02), 4, "δ_min below the box's 0.04 m: kept");
+        assert_eq!(count(0.08), 0, "δ_min above it: pruned whole");
+        // A box shorter than the sight line cannot break it at any δ floor.
+        let mut b = ObstacleIndex::builder(OLAT, OLON);
+        b.add_ring(&square(200.0, 0.0, 15.0), 3.0, ObstacleKind::Building, 0);
+        let low = b.build();
+        let mut n = 0;
+        low.skyline_arcs_within(o.0, o.1, 0.0, 500.0, 4.0, 0.0, None, &mut |_| n += 1);
+        assert_eq!(n, 0, "top below the 4 m sight line");
+    }
+
+    /// A wall longer than the grid pitch spans many cells; every visit must
+    /// report the SAME arc, so the consumer's merge collapses them to one.
+    #[test]
+    fn skyline_multicell_wall_repeats_are_identical() {
+        let mut b = ObstacleIndex::builder(OLAT, OLON);
+        b.add_polyline(
+            &[ll(60.0, -400.0), ll(60.0, 400.0)],
+            8.0,
+            ObstacleKind::Barrier,
+            0,
+        );
+        let idx = b.build();
+        let o = ll(0.0, 0.0);
+        let mut arcs = Vec::new();
+        idx.skyline_arcs_within(o.0, o.1, 0.0, 1000.0, 0.0, 0.0, None, &mut |a| arcs.push(a));
+        assert!(!arcs.is_empty());
+        assert!(
+            arcs.iter()
+                .all(|a| a.lo == arcs[0].lo && a.hi == arcs[0].hi),
+            "one wall segment, one arc geometry: {arcs:?}"
+        );
+        // It spans from due south-ish to due north-ish through due east.
+        assert!(arcs[0].lo < -1.0 && arcs[0].hi > 1.0, "{:?}", arcs[0]);
+    }
+
+    /// Set-level walk concatenates its member indexes' arcs.
+    #[test]
+    fn set_skyline_concatenates_indexes() {
+        let mut b0 = ObstacleIndex::builder(OLAT, OLON);
+        b0.add_ring(&square(200.0, -60.0, 10.0), 8.0, ObstacleKind::Building, 0);
+        let mut b1 = ObstacleIndex::builder(OLAT, OLON);
+        b1.add_ring(&square(200.0, 60.0, 10.0), 8.0, ObstacleKind::Building, 0);
+        let set = ObstacleSet {
+            indexes: vec![
+                std::sync::Arc::new(b0.build()),
+                std::sync::Arc::new(b1.build()),
+            ],
+        };
+        let o = ll(0.0, 0.0);
+        let mut arcs = Vec::new();
+        set.skyline_arcs_within(o.0, o.1, 0.0, 500.0, 0.0, 0.0, None, &mut |a| arcs.push(a));
+        assert_eq!(arcs.len(), 8);
+        assert!(arcs.iter().any(|a| a.hi < 0.0), "the southern box");
+        assert!(arcs.iter().any(|a| a.lo > 0.0), "the northern box");
     }
 
     /// A ray straight through a square building enters and exits: exactly two
@@ -1288,5 +1980,218 @@ mod tests {
             w.max_building_along_path(OLAT, OLON, OLAT, OLON, 100.0, 0.0),
             (42.0, 0.5)
         );
+    }
+}
+
+#[cfg(test)]
+mod slab_reject_tests {
+    use super::*;
+
+    const OLAT: f64 = 50.0;
+    const OLON: f64 = 14.0;
+
+    fn ll(x_m: f64, y_m: f64) -> (f64, f64) {
+        (
+            OLAT + y_m / M_PER_DEG_LAT,
+            OLON + x_m / m_per_deg_lon(OLAT.to_radians()),
+        )
+    }
+
+    fn boxes_at(offsets: &[(f64, f64)]) -> ObstacleSet {
+        let mut indexes = Vec::new();
+        for (i, &(cx, cy)) in offsets.iter().enumerate() {
+            let mut b = ObstacleIndex::builder(OLAT, OLON);
+            b.add_ring(
+                &[
+                    ll(cx - 20.0, cy - 20.0),
+                    ll(cx + 20.0, cy - 20.0),
+                    ll(cx + 20.0, cy + 20.0),
+                    ll(cx - 20.0, cy + 20.0),
+                ],
+                9.0,
+                ObstacleKind::Building,
+                i as u32,
+            );
+            indexes.push(std::sync::Arc::new(b.build()));
+        }
+        ObstacleSet { indexes }
+    }
+
+    /// The reject is EXACT: over a dense sweep of rays against a 7-index ring,
+    /// the pruned set's crossings must be identical to the unpruned walk's —
+    /// same count, same chainages, same heights.
+    #[test]
+    fn slab_reject_never_changes_the_crossing_set() {
+        // A grid_disk(1)-shaped ring of seven separated footprints.
+        let set = boxes_at(&[
+            (0.0, 0.0),
+            (300.0, 0.0),
+            (150.0, 260.0),
+            (-150.0, 260.0),
+            (-300.0, 0.0),
+            (-150.0, -260.0),
+            (150.0, -260.0),
+        ]);
+        let mut with = Vec::new();
+        let mut without = Vec::new();
+        let mut checked = 0usize;
+        let mut skipped = 0usize;
+        for i in 0..60 {
+            for j in 0..60 {
+                let src = ll(-500.0 + i as f64 * 17.3, -450.0 + j as f64 * 15.1);
+                let rcv = ll(480.0 - j as f64 * 16.7, 430.0 - i as f64 * 14.9);
+                set.crossings(src.0, src.1, rcv.0, rcv.1, &mut with);
+                // Reference: every index walked, no reject.
+                without.clear();
+                for idx in &set.indexes {
+                    idx.append_crossings(src.0, src.1, rcv.0, rcv.1, None, &mut without);
+                }
+                without.sort_unstable_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+                checked += 1;
+                skipped += set
+                    .indexes
+                    .iter()
+                    .filter(|idx| !idx.segment_may_hit(src.0, src.1, rcv.0, rcv.1))
+                    .count();
+                assert_eq!(with.len(), without.len(), "count differs");
+                for (a, b) in with.iter().zip(&without) {
+                    assert_eq!(a.t, b.t, "chainage differs");
+                    assert_eq!(a.height_m, b.height_m);
+                    assert_eq!(a.id, b.id);
+                }
+            }
+        }
+        // And it must actually reject: the whole point is the walks not taken.
+        let per_ray = skipped as f64 / checked as f64;
+        assert!(
+            per_ray > 2.0,
+            "only {per_ray:.2} of 7 indexes rejected per ray — no win"
+        );
+        println!("slab reject: {per_ray:.2}/7 indexes skipped per ray over {checked} rays");
+    }
+}
+
+#[cfg(test)]
+mod cell_prune_tests {
+    use super::*;
+    use crate::constants::PENUMBRA_DELTA_FLOOR_M;
+
+    const OLAT: f64 = 50.0;
+    const OLON: f64 = 14.0;
+
+    fn ll(x_m: f64, y_m: f64) -> (f64, f64) {
+        (
+            OLAT + y_m / M_PER_DEG_LAT,
+            OLON + x_m / m_per_deg_lon(OLAT.to_radians()),
+        )
+    }
+
+    /// A 50 m ray, source and receiver both 4 m up, over ground at 0 with a 3 m
+    /// top: the penumbra geometry the −0.2698 m floor exists for (a 3 m wall in
+    /// front of a 4 m facade still screens ~0.6 dB).
+    fn flat_penumbra_prune<'a>(t: &'a [f64], elev: &'a [f32]) -> CellPrune<'a> {
+        CellPrune {
+            t,
+            elevation_m: elev,
+            src_e: 4.0,
+            rcv_e: 4.0,
+            dist_m: 50.0,
+            floor_m: PENUMBRA_DELTA_FLOOR_M,
+        }
+    }
+
+    /// REGRESSION (2026-08-08). `max_delta`'s negative branch is `−detour`, which
+    /// is CONCAVE in `t`: its max sits at the reflection point, not at a window
+    /// endpoint. The old code evaluated the point where the SIGHT LINE crosses
+    /// `top` instead — outside the window whenever `top` runs below both ends, so
+    /// the clamp collapsed it onto an endpoint and the bound came out BELOW the
+    /// true max. A bound that is too low prunes cells that hold a real candidate:
+    /// silent loss of screening, and a direct breach of the prune's
+    /// output-neutrality invariant.
+    #[test]
+    fn low_top_prune_keeps_penumbra_candidate() {
+        let (t, elev) = ([0.0, 1.0], [0.0f32, 0.0]);
+        let p = flat_penumbra_prune(&t, &elev);
+
+        // The true max over t ∈ [0,1]: reflection point t* = 1/(1+1) = 0.5.
+        let exact = -(2.0 * (25.0f64 * 25.0 + 1.0).sqrt() - 50.0);
+        let bound = p.max_delta(3.0, 0.0, 1.0);
+        assert!(
+            (bound - exact).abs() < 1e-12,
+            "bound {bound} is not the exact max {exact}"
+        );
+        assert!((bound - -0.039_984_012_8).abs() < 1e-9, "bound {bound}");
+        // …and it clears the floor, so the cell survives the prune.
+        assert!(
+            bound > PENUMBRA_DELTA_FLOOR_M,
+            "{bound} <= {PENUMBRA_DELTA_FLOOR_M}"
+        );
+
+        // What the endpoints alone said — 25× too deep, under the floor, cell
+        // dropped. This is the number the fix moved.
+        let endpoints = -(1.0 + (50.0f64 * 50.0 + 1.0).sqrt() - 50.0);
+        assert!((endpoints - -1.009_999_0).abs() < 1e-6, "{endpoints}");
+        assert!(endpoints < PENUMBRA_DELTA_FLOOR_M, "{endpoints}");
+
+        // Sub-windows: the clamp must still land on the exact max of the window
+        // it is given, on both sides of the reflection point.
+        for &(a, b) in &[(0.0, 0.4), (0.6, 1.0), (0.45, 0.55), (0.0, 1.0)] {
+            let got = p.max_delta(3.0, a, b);
+            let brute = (0..=2000)
+                .map(|k| a + (b - a) * k as f64 / 2000.0)
+                .map(|tt| {
+                    -(((tt * 50.0f64).powi(2) + 1.0).sqrt()
+                        + (((1.0 - tt) * 50.0f64).powi(2) + 1.0).sqrt()
+                        - 50.0)
+                })
+                .fold(f64::NEG_INFINITY, f64::max);
+            assert!(
+                got >= brute - 1e-12,
+                "window [{a},{b}]: bound {got} below sampled max {brute}"
+            );
+            assert!(
+                got <= brute + 1e-6,
+                "window [{a},{b}]: bound {got} far above sampled max {brute}"
+            );
+        }
+    }
+
+    /// End to end: the same 3 m wall at mid-chainage must come out of
+    /// `crossings_pruned` exactly as it comes out of the unpruned walk. This is
+    /// the invariant `crossings_pruned` claims, and what the bug broke.
+    #[test]
+    fn penumbra_wall_survives_the_pruned_walk() {
+        let mut b = ObstacleIndex::builder(OLAT, OLON);
+        b.add_ring(
+            &[
+                ll(24.0, -30.0),
+                ll(26.0, -30.0),
+                ll(26.0, 30.0),
+                ll(24.0, 30.0),
+            ],
+            3.0,
+            ObstacleKind::Barrier,
+            7,
+        );
+        let idx = b.build();
+        let src = ll(0.0, 0.0);
+        let rcv = ll(50.0, 0.0);
+
+        let (t, elev) = ([0.0, 0.5, 1.0], [0.0f32, 0.0, 0.0]);
+        let p = flat_penumbra_prune(&t, &elev);
+        let mut pruned = Vec::new();
+        idx.crossings_pruned(src.0, src.1, rcv.0, rcv.1, &p, &mut pruned);
+        let mut plain = Vec::new();
+        idx.crossings(src.0, src.1, rcv.0, rcv.1, &mut plain);
+
+        assert!(!plain.is_empty(), "the unpruned walk must see the wall");
+        assert_eq!(
+            pruned.len(),
+            plain.len(),
+            "prune dropped a candidate the loop's floor keeps"
+        );
+        for (a, c) in pruned.iter().zip(&plain) {
+            assert_eq!((a.t, a.height_m, a.id), (c.t, c.height_m, c.id));
+        }
     }
 }

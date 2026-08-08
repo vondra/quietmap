@@ -165,6 +165,16 @@ pub fn scatter(
             ground_ops_kind: aircraft::GROUND_OPS_KIND_NONE,
             source_id: row.source_id as u16,
         };
+        // Terrain first cost five DEM probes — each through the tile
+        // cache's per-tile lock — for buckets the kernel then dropped on
+        // distance alone. The kernel's own first gate is purely geometric,
+        // so run it here, before the rasters are touched. Measured at
+        // Dobříš: 7 611 of 9 622 buckets that clear the R7-centre
+        // prefilter die here. Bit-identical arithmetic, so no bucket that
+        // used to contribute stops contributing (see `within_kernel_reach`).
+        if !aircraft::within_kernel_reach(&seg, receiver.lat, receiver.lon, rx_elev) {
+            continue;
+        }
         let terrain = aircraft::SegmentTerrain::sample(&seg, rasters);
         if !aircraft::is_valid_airborne_with_terrain(&seg, &terrain) {
             continue;
@@ -400,7 +410,9 @@ fn round1(v: f64) -> f64 {
 /// plan §4.4 / §9; documented regression.
 pub fn band_stats(cruise_flight_stats: &HashMap<u64, CruiseFlightStats>) -> [BandStats; 3] {
     let mut out = [BandStats::new(), BandStats::new(), BandStats::new()];
-    for stats in cruise_flight_stats.values() {
+    // Ascending fid: `add_event` sums `alt_sum` in f64, so HashMap order
+    // would move the popup's `avg_altitude_m` by ±1 ULP per run.
+    for (_, stats) in crate::compute::key_sorted(cruise_flight_stats) {
         if stats.peak_lmax > 30.0 {
             let cls = stats.class_at_peak;
             out[0].add_event(1.0, stats.alt_at_peak, cls, 1);

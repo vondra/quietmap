@@ -108,6 +108,58 @@ pub fn segment_sel_with_terrain(
     )
 }
 
+/// Purely geometric reach gate: `false` guarantees
+/// [`segment_sel_with_terrain`] returns `None` for this segment and
+/// receiver, **whatever the terrain is**.
+///
+/// It reproduces the kernel's first gate (`slant_sq > reach_sq` at the top
+/// of [`crate::emission::aircraft::doc29::segment_energy_kernel`]) with the
+/// same operations in the same order, so the two agree bit for bit. That
+/// gate reads no raster and no terrain cut — only the segment endpoints,
+/// the receiver, and the class reach table — which is what makes it usable
+/// *before* terrain exists.
+///
+/// Cruise needs this because its `SegmentTerrain` is sampled from the DEM
+/// (five probes, each through the tile cache's per-tile lock) while the
+/// airborne path reads pre-sampled elevations off the arrow. Measured at
+/// Dobříš 2026-08-05: of 9 622 buckets that clear the R7-centre prefilter,
+/// 7 611 are then rejected here — they were paying for terrain first.
+///
+/// The duplicated geometry is deliberate: the kernel's copy works on
+/// hoisted per-row scalars for the heatmap fast path and cannot be called
+/// with a `&AircraftSegment`. Parity is pinned by
+/// `tests::reach_gate_matches_kernel_rejection`.
+pub fn within_kernel_reach(
+    seg: &AircraftSegment,
+    rx_lat: f64,
+    rx_lon: f64,
+    rx_elev_m: f64,
+) -> bool {
+    let class_idx = noise_class_of(seg.profile_idx) as usize;
+    let reach_sq = REACH_SQ_TABLE[class_idx][seg.is_departure as usize];
+    let cos_lat = rx_lat.to_radians().cos().max(0.2);
+    let m_per_deg_lon = M_PER_DEG_LAT * cos_lat;
+    let ax = (seg.start_lon - rx_lon) * m_per_deg_lon;
+    let ay = (seg.start_lat - rx_lat) * M_PER_DEG_LAT;
+    let bx = (seg.end_lon - rx_lon) * m_per_deg_lon;
+    let by = (seg.end_lat - rx_lat) * M_PER_DEG_LAT;
+    let sdx = bx - ax;
+    let sdy = by - ay;
+    let seg_len_sq = sdx * sdx + sdy * sdy;
+    let inv_lsq = if seg_len_sq > 1e-6 {
+        1.0 / seg_len_sq
+    } else {
+        0.0
+    };
+    let start_alt_m = seg.start_alt_m as f64;
+    let sdz = seg.end_alt_m as f64 - start_alt_m;
+    let t = -(ax * sdx + ay * sdy) * inv_lsq;
+    let cpx = ax + t * sdx;
+    let cpy = ay + t * sdy;
+    let rel_alt = start_alt_m + t * sdz - rx_elev_m;
+    cpx * cpx + cpy * cpy + rel_alt * rel_alt <= reach_sq
+}
+
 /// Energy-only `segment_sel_with_terrain` for the CRUISE heatmap (which discards
 /// the CPA). SEL is bit-identical — `WANT_CPA = false` skips the kernel's CPA-only
 /// `lateral_m` sqrt. (Cruise is always the CFFK fast path, so the full-path

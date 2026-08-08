@@ -250,6 +250,32 @@ pub fn wkb_area_grid_points(
 }
 
 /// One parsed WKB sub-polygon: outer ring + inner rings (holes), each `(lat, lon)`.
+/// Outer-ring area (m²) of every polygon in a raw WKB blob, holes IGNORED.
+///
+/// The obstacle loaders' footprint area (tile painter and popup both feed it to
+/// [`crate::low_profile`]'s comparable-area test), so it lives here once —
+/// a second spelling would let the two lanes cap different footprints. Holes are
+/// out because the test compares against OSM's `area_m2`, which is also gross.
+/// Distinct from [`wkb_area_m2`], which takes HEX and subtracts holes.
+pub fn outer_ring_area_m2(wkb: &[u8]) -> f32 {
+    let mut total = 0.0f64;
+    for (outer, _holes) in parse_wkb_polygons_bytes(wkb) {
+        if outer.len() < 4 {
+            continue;
+        }
+        let lat0 = outer[0].0;
+        let m_lon = 111_320.0 * lat0.to_radians().cos().max(0.1);
+        let mut acc = 0.0f64;
+        for w in outer.windows(2) {
+            let (x0, y0) = ((w[0].1) * m_lon, (w[0].0) * 111_320.0);
+            let (x1, y1) = ((w[1].1) * m_lon, (w[1].0) * 111_320.0);
+            acc += x0 * y1 - x1 * y0;
+        }
+        total += (acc * 0.5).abs();
+    }
+    total as f32
+}
+
 pub type WkbPoly = (Vec<(f64, f64)>, Vec<Vec<(f64, f64)>>);
 
 /// Parse a WKB-hex Polygon (type 3) or MultiPolygon (type 6) into ALL its

@@ -490,15 +490,22 @@ pub fn collect_from_hex_data(
         }
 
         // 10 km matches the road source radius — barriers along the full source→receiver
-        // path are needed for screening, not just near the receiver.
-        let barrier_batches = data.barriers.batches_within(lat, lng, 10_000.0);
-        let barriers = query_barriers_from_batches(&barrier_batches, lat, lng, 10_000.0);
+        // path are needed for screening, not just near the receiver. The
+        // half-segment slack keeps a wall that CROSSES a 10 km path near its far
+        // end in the set: the crossing is inside 10 km, its midpoint (what the
+        // radius filters on) can be a half-segment beyond.
+        const BARRIER_RADIUS_M: f64 =
+            10_000.0 + noise_compute::types::BARRIER_SEGMENT_MAX_HALF_LEN_M;
+        let barrier_batches = data.barriers.batches_within(lat, lng, BARRIER_RADIUS_M);
+        let barriers = query_barriers_from_batches(&barrier_batches, lat, lng, BARRIER_RADIUS_M);
         for b in barriers {
             all_barriers.push(noise_compute::types::Barrier {
                 osm_id: b.osm_id,
                 height_m: b.height,
-                lat: b.lat,
-                lon: b.lon,
+                start_lat: b.start_lat,
+                start_lon: b.start_lon,
+                end_lat: b.end_lat,
+                end_lon: b.end_lon,
                 dist_m: b.dist_m,
             });
         }

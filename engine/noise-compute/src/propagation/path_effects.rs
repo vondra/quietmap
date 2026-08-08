@@ -10,12 +10,13 @@
 use super::diffraction;
 use super::diffraction::DiffractionResult;
 use super::horizon::single_edge_atten;
-use super::obstacle_index::{CrossingCandidate, ObstacleKind};
+use super::obstacle_index::{segment_intersection_t, CrossingCandidate, ObstacleKind};
 use super::path_profile::{path_integral_u8, vegetation_run_length, PathProfile};
 use super::vegetation;
 use crate::constants::{M_PER_DEG_LAT, M_PER_DEG_LON_EQ};
 use crate::types::{
-    Barrier, EdgePoint, ObstacleEdge, ScreeningObstacleTrace, TerrainTrace, NUM_BANDS,
+    Barrier, EdgePoint, ObstacleEdge, ScreeningObstacleTrace, TerrainTrace, BARRIER_PATH_HORIZON_M,
+    NUM_BANDS,
 };
 
 /// Terrain diffraction attenuation per band from a `PathProfile`.
@@ -147,14 +148,16 @@ pub fn terrain_attenuation_with_meta(
     (trace, n as u32)
 }
 
-/// Building screening attenuation per band from a `PathProfile`.
+/// Building + barrier screening attenuation per band from a `PathProfile`.
 ///
-/// Scans `building_h_m[]` for the tallest obstacle above line-of-sight.
-/// Also checks explicit noise barriers (not in the profile since they're
-/// sparse point sources, not a raster).
+/// Scans `building_h_m[]` for the tallest raster obstacle above line-of-sight,
+/// and intersects the ray with every explicit noise barrier of `barriers`
+/// (walls are vector polylines, never a raster channel — see §1 of
+/// [`screening_attenuation_with_meta`]).
 ///
 /// `exclusion_radius_m`: skip building samples closer than this distance from
-/// source — the source polygon's own buildings are not real obstacles.
+/// source — the source polygon's own buildings are not real obstacles. Never
+/// applied to barriers: an explicit wall is always a real obstacle.
 pub fn screening_attenuation(
     profile: &mut PathProfile,
     barriers: &[Barrier],
@@ -173,16 +176,16 @@ pub fn screening_attenuation(
     //
     // Barrier arm: `dist_m` is sorted-ascending and a lower bound on the
     // receiver→midpoint distance (`types::Barrier` contract), so when even the
-    // NEAREST barrier is past the `path_len + 100` horizon the projection loop
-    // below would break on its first iteration and map nothing — result-
-    // identical to an empty slice, minus the wasted full screening pass. This
-    // keeps the rural fast path alive for the majority of pixels in a tile
-    // that carries a wall somewhere (heatmap passes one slice per tile).
-    // Vector-obstacle candidates count as obstacles too: a non-empty
+    // NEAREST barrier is past the `path_len + BARRIER_PATH_HORIZON_M` horizon
+    // the crossing loop below would break on its first iteration and find
+    // nothing — result-identical to an empty slice, minus the wasted full
+    // screening pass. This keeps the rural fast path alive for the majority of
+    // pixels in a tile that carries a wall somewhere (heatmap passes one slice
+    // per tile). Vector-obstacle candidates count as obstacles too: a non-empty
     // candidate slice must never take this bypass.
     let barriers_in_reach = barriers
         .first()
-        .is_some_and(|b| b.dist_m <= profile.dist_m + 100.0);
+        .is_some_and(|b| b.dist_m <= profile.dist_m + BARRIER_PATH_HORIZON_M);
     let sample_buildings_active =
         !obstacles.replace_sample_buildings && profile.building_h_m.iter().any(|&b| b > 0);
     if !barriers_in_reach && !sample_buildings_active && obstacles.candidates.is_empty() {
@@ -269,42 +272,49 @@ pub fn screening_attenuation_with_meta(
         return ([0.0; NUM_BANDS], make_empty());
     }
 
-    // 1. Barriers — project each onto path, map to nearest sample index.
-    //    Kept as an independent candidate merged into composite_h below.
-    let dlat = rcv_lat - src_lat;
-    let dlon = rcv_lon - src_lon;
-    let mid_lat_rad = ((src_lat + rcv_lat) * 0.5).to_radians();
-    let meters_per_deg_lon = M_PER_DEG_LON_EQ * mid_lat_rad.cos();
-    let path_dx_m = dlon * meters_per_deg_lon;
-    let path_dy_m = dlat * M_PER_DEG_LAT;
-    let path_len_sq_m = (path_dx_m * path_dx_m + path_dy_m * path_dy_m).max(1e-12);
-    let barrier_hit_radius_sq = 50.0 * 50.0;
-
-    // barrier_at[i] = tallest barrier mapped to sample i (absolute height above
-    // ground at i, or 0 if no barrier near that sample).
-    let mut barrier_at: Vec<f32> = vec![0.0; n];
-    for barrier in barriers {
-        if barrier.dist_m > dist_m + 100.0 {
-            break;
-        }
-        let bx_m = (barrier.lon - src_lon) * meters_per_deg_lon;
-        let by_m = (barrier.lat - src_lat) * M_PER_DEG_LAT;
-        let t_proj = (bx_m * path_dx_m + by_m * path_dy_m) / path_len_sq_m;
-        if !(0.01..=0.99).contains(&t_proj) {
-            continue;
-        }
-        let perp_dx_m = bx_m - t_proj * path_dx_m;
-        let perp_dy_m = by_m - t_proj * path_dy_m;
-        let perp_sq_m = perp_dx_m * perp_dx_m + perp_dy_m * perp_dy_m;
-        if perp_sq_m >= barrier_hit_radius_sq {
-            continue;
-        }
-        let idx = nearest_t_index(&profile.t, t_proj);
-        let bh = barrier.height_m;
-        if bh > barrier_at[idx] {
-            barrier_at[idx] = bh;
-        }
-    }
+    // 1. Barriers — EXACT 2D ray×segment crossings (fix-pack Fix 3).
+    //
+    //    A noise wall is a polyline element with two endpoints, so "does this
+    //    path cross it, and where" is a closed-form intersection — the same
+    //    `segment_intersection_t` primitive the vector obstacle index runs on
+    //    building edges, in a local metric frame with the source at the origin.
+    //    Each hit becomes an ordinary dominant-edge CANDIDATE in §5b: exact
+    //    chainage, terrain LERPed under it, δ-ranked against every other
+    //    obstacle. Barriers never enter the cadence sample arrays (the MAXT
+    //    envelope, the IMD/vegetation integral algebra and the bare-earth δ*
+    //    fit stay untouched) and never enter `ObstacleIndex` — they arrive
+    //    per-tile as this sorted `types::Barrier` slice.
+    //
+    //    Replaces a ±50 m MIDPOINT-PROXIMITY test snapped to the nearest
+    //    profile sample, which missed a real crossing far from a long wall's
+    //    midpoint and falsely screened a near-midpoint pass that never crossed.
+    //
+    //    `take_while` IS the early break of the `types::Barrier` contract: the
+    //    slice is sorted ascending on a lower-bound `dist_m`, so the first
+    //    barrier past the horizon ends the scan (see `BARRIER_PATH_HORIZON_M`
+    //    for why the horizon is the path length plus a wall half-length).
+    let meters_per_deg_lon = M_PER_DEG_LON_EQ * ((src_lat + rcv_lat) * 0.5).to_radians().cos();
+    let path_dx_m = (rcv_lon - src_lon) * meters_per_deg_lon;
+    let path_dy_m = (rcv_lat - src_lat) * M_PER_DEG_LAT;
+    let barrier_horizon_m = dist_m + BARRIER_PATH_HORIZON_M;
+    let barrier_candidates = barriers
+        .iter()
+        .take_while(|b| b.dist_m <= barrier_horizon_m)
+        .filter_map(|b| {
+            let x0 = (b.start_lon - src_lon) * meters_per_deg_lon;
+            let y0 = (b.start_lat - src_lat) * M_PER_DEG_LAT;
+            let x1 = (b.end_lon - src_lon) * meters_per_deg_lon;
+            let y1 = (b.end_lat - src_lat) * M_PER_DEG_LAT;
+            let t = segment_intersection_t(0.0, 0.0, path_dx_m, path_dy_m, x0, y0, x1, y1)?;
+            Some(CrossingCandidate {
+                t,
+                height_m: b.height_m,
+                kind: ObstacleKind::Barrier,
+                // OSM way id, so the popup names the wall it is standing
+                // behind (current world max ≈ 1.4e9, inside u32).
+                id: b.osm_id as u32,
+            })
+        });
 
     // 2. Bare-earth elevation as f64 (reuses amortized scratch buffer).
     //    Split-borrow pattern per terrain_attenuation_with_meta. No copy:
@@ -319,9 +329,10 @@ pub fn screening_attenuation_with_meta(
     } = profile;
     let elevation_f64: &[f64] = PathProfile::elevation_f64_from(elevation_f64_scratch, elevation_m);
 
-    // 3. Composite top profile = elevation + max(building_h, barrier_at), with
-    //    exclusion radius zeroing buildings near the source (not barriers —
-    //    explicit barrier polys are always real obstacles).
+    // 3. Composite top profile = elevation + raster building height, with the
+    //    exclusion radius zeroing buildings near the source. Barriers are NOT
+    //    here: they are exact crossings (§1) competing in the §5b candidate
+    //    race, never a height folded onto the nearest sample.
     composite_h_scratch.clear();
     composite_h_scratch.reserve(n);
     let mut samples_taken: u32 = 0;
@@ -329,7 +340,7 @@ pub fn screening_attenuation_with_meta(
         let ti = t[i];
         let mut above_ground = 0.0_f64;
         if ti > 0.0 && ti < 1.0 {
-            let bh_effective = if obstacles.replace_sample_buildings {
+            above_ground = if obstacles.replace_sample_buildings {
                 // Vector mode: buildings arrive as exact crossings only.
                 0.0
             } else if excl_limit > 0.0 && ti * dist_m < excl_limit {
@@ -338,7 +349,6 @@ pub fn screening_attenuation_with_meta(
                 samples_taken += 1;
                 building_h_m[i] as f64
             };
-            above_ground = bh_effective.max(barrier_at[i] as f64);
         }
         composite_h_scratch.push(elevation_f64[i] + above_ground);
     }
@@ -352,17 +362,23 @@ pub fn screening_attenuation_with_meta(
     let (atten_combined, res_opt) =
         single_edge_atten(t, composite_h_scratch, elevation_f64, dist_m, src_h, rcv_h);
 
-    // 5b. Vector obstacle candidates compete with the cadence composite edge
-    //     on δ — the actual selection criterion (a lower obstacle nearer the
-    //     receiver can carry the larger δ). Terrain under a candidate is
-    //     LERPed between its neighbouring bare samples; the candidate NEVER
-    //     enters the sample arrays (plan v5: MAXT envelope, integral algebra
-    //     and the bare-earth δ* fit stay untouched by construction).
+    // 5b. Exact-crossing candidates — vector building edges AND noise-barrier
+    //     segments, one race — compete with the cadence composite edge on δ,
+    //     the actual selection criterion (a lower obstacle nearer the receiver
+    //     can carry the larger δ). Terrain under a candidate is LERPed between
+    //     its neighbouring bare samples; the candidate NEVER enters the sample
+    //     arrays (plan v5: MAXT envelope, integral algebra and the bare-earth
+    //     δ* fit stay untouched by construction).
     let src_e = elevation_f64[0] + src_h;
     let rcv_e = elevation_f64[n - 1] + rcv_h;
     let dsr = (dist_m * dist_m + (rcv_e - src_e).powi(2)).sqrt();
-    let mut best_cand: Option<(f64, &CrossingCandidate, f64)> = None; // (δ, cand, top)
-    for cand in obstacles.candidates {
+    let mut best_cand: Option<(f64, CrossingCandidate, f64)> = None; // (δ, cand, top)
+    for cand in obstacles
+        .candidates
+        .iter()
+        .copied()
+        .chain(barrier_candidates)
+    {
         if matches!(cand.kind, ObstacleKind::Building)
             && excl_limit > 0.0
             && cand.t * dist_m < excl_limit
@@ -379,14 +395,17 @@ pub fn screening_attenuation_with_meta(
         let terr = elevation_f64[p - 1] + frac * (elevation_f64[p] - elevation_f64[p - 1]);
         let top = terr + cand.height_m as f64;
         let los = src_e + (rcv_e - src_e) * cand.t;
-        if top <= los {
-            continue;
-        }
+        // Below-LOS candidates stay in the race with a NEGATIVE δ (fix-pack
+        // Fix 2 penumbra): a wall that just fails to break the sight line still
+        // attenuates down to δ = −λ/20. Ranking on the signed δ keeps any real
+        // blocker ahead of every near miss.
+        let sign = if top >= los { 1.0 } else { -1.0 };
         let d_sg = cand.t * dist_m;
         let d_rg = (1.0 - cand.t) * dist_m;
-        let delta = (d_sg * d_sg + (top - src_e).powi(2)).sqrt()
-            + (d_rg * d_rg + (top - rcv_e).powi(2)).sqrt()
-            - dsr;
+        let delta = sign
+            * ((d_sg * d_sg + (top - src_e).powi(2)).sqrt()
+                + (d_rg * d_rg + (top - rcv_e).powi(2)).sqrt()
+                - dsr);
         if best_cand.is_none_or(|(bd, _, _)| delta > bd) {
             best_cand = Some((delta, cand, top));
         }
@@ -414,10 +433,17 @@ pub fn screening_attenuation_with_meta(
             rcv_h,
         );
         debug_assert!((cres.delta - cd).abs() < 1e-9);
-        let combined = diffraction::diffraction_attenuation_rayleigh(&cres);
+        let combined = diffraction::diffraction_attenuation_mixed(&cres);
         let mut atten_screen = [0.0_f64; NUM_BANDS];
         for i in 0..NUM_BANDS {
             atten_screen[i] = (combined[i] - terrain_atten[i]).max(0.0);
+        }
+        // A near miss the penumbra branch (or the Rayleigh gate) zeroed is not
+        // an obstacle: reporting it would list a building the path flies over.
+        if cres.delta <= 0.0 && atten_screen.iter().all(|&a| a <= 0.0) {
+            let mut tr = make_empty();
+            tr.samples_taken = samples_taken;
+            return ([0.0; NUM_BANDS], tr);
         }
         // Trace straight from the crossing — exact kind + geometry, no
         // sample-based classification heuristics.
@@ -471,23 +497,10 @@ pub fn screening_attenuation_with_meta(
         tr.samples_taken = samples_taken;
         return (atten_screen, tr);
     }
-    // Classify by the EFFECTIVE building height — mirrors the composite
-    // construction exactly: a source-excluded footprint is 0, and under
-    // replace_sample_buildings the raster channel is dropped entirely, so a
-    // dropped building can never relabel a winning barrier as "building"
-    // (gg review 2026-07-28).
-    let bh_eff = if obstacles.replace_sample_buildings
-        || (excl_limit > 0.0 && t[idx] * dist_m < excl_limit)
-    {
-        0.0
-    } else {
-        building_h_m[idx] as f64
-    };
-    let kind: &'static str = if (barrier_at[idx] as f64) > bh_eff {
-        "barrier"
-    } else {
-        "building"
-    };
+    // The composite carries ONLY raster building heights (§3), so a winning
+    // sample edge is a building by construction — walls are reported from
+    // their exact crossing above, with their OSM id.
+    let kind: &'static str = "building";
     let los_edge = src_elev + (rcv_alt - src_elev) * t[idx];
     let screen_h = composite_h_scratch[idx] - los_edge;
     let height_m = above;
@@ -512,29 +525,6 @@ pub fn screening_attenuation_with_meta(
     };
 
     (atten_screen, trace)
-}
-
-/// Index of the sample in `t` closest to `t_query`. `t` is sorted ascending by
-/// `fill_t_values`, so we binary-search the bracket and pick the closer end.
-#[inline]
-fn nearest_t_index(t: &[f64], t_query: f64) -> usize {
-    if t.is_empty() {
-        return 0;
-    }
-    match t.binary_search_by(|x| x.partial_cmp(&t_query).unwrap_or(std::cmp::Ordering::Equal)) {
-        Ok(i) => i,
-        Err(i) => {
-            if i == 0 {
-                0
-            } else if i >= t.len() {
-                t.len() - 1
-            } else if (t[i] - t_query) < (t_query - t[i - 1]) {
-                i
-            } else {
-                i - 1
-            }
-        }
-    }
 }
 
 /// Vegetation (forest) attenuation per band from a `PathProfile`.
@@ -695,6 +685,33 @@ mod tests {
         );
     }
 
+    /// Scene metres (east, north of the flat profile's source at lat/lon 0)
+    /// → (lat, lon). `build_flat_profile` puts the receiver due east at
+    /// `dist_m / M_PER_DEG_LON_EQ`, so the path is the x axis and a barrier's
+    /// crossing chainage is just `x / dist_m`.
+    fn barrier_ll(x_m: f64, y_m: f64) -> (f64, f64) {
+        (
+            y_m / crate::constants::M_PER_DEG_LAT,
+            x_m / crate::constants::M_PER_DEG_LON_EQ,
+        )
+    }
+
+    /// A wall microsegment from (x0, y0) to (x1, y1) scene metres, with
+    /// `dist_m` given as the (lower-bound) receiver→midpoint distance.
+    fn wall(x0: f64, y0: f64, x1: f64, y1: f64, height_m: f32, dist_m: f64) -> Barrier {
+        let (start_lat, start_lon) = barrier_ll(x0, y0);
+        let (end_lat, end_lon) = barrier_ll(x1, y1);
+        Barrier {
+            osm_id: 1_390_017_809,
+            height_m,
+            start_lat,
+            start_lon,
+            end_lat,
+            end_lon,
+            dist_m,
+        }
+    }
+
     /// Mid-path 3 m barrier on a flat profile must screen, and the band-only
     /// wrapper must agree with `_with_meta` (the heatmap kernels call the
     /// wrapper; popup calls `_with_meta` — parity by construction).
@@ -702,13 +719,8 @@ mod tests {
     fn screening_finds_midpath_barrier() {
         let dist_m = 200.0;
         let terrain_atten = [0.0_f64; NUM_BANDS];
-        let barrier = Barrier {
-            osm_id: 1,
-            height_m: 3.0,
-            lat: 0.0,
-            lon: 0.5 * dist_m / 111_320.0, // t = 0.5 on the src→rcv path
-            dist_m: dist_m / 2.0,
-        };
+        // 60 m of wall straddling the path at t = 0.5.
+        let barrier = wall(100.0, -30.0, 100.0, 30.0, 3.0, dist_m / 2.0);
         let mut p = build_flat_profile(dist_m, 0.0);
         let (atten, trace) = screening_attenuation_with_meta(
             &mut p,
@@ -738,21 +750,22 @@ mod tests {
     }
 
     /// Early-out refinement: with no buildings and every (sorted, lower-bound
-    /// dist) barrier past the `path_len + 100` horizon, the wrapper must return
-    /// exactly the empty-slice result (the projection loop would break on its
-    /// first iteration) — this is what keeps the rural fast path alive on
-    /// heatmap tiles that carry a wall somewhere else in the tile.
+    /// dist) barrier past the `path_len + BARRIER_PATH_HORIZON_M` horizon, the
+    /// wrapper must return exactly the empty-slice result (the crossing scan
+    /// stops on its first item) — this is what keeps the rural fast path alive
+    /// on heatmap tiles that carry a wall somewhere else in the tile.
     #[test]
     fn far_barriers_hit_the_early_out_unchanged() {
         let dist_m = 200.0;
         let terrain_atten = [0.0_f64; NUM_BANDS];
-        let far = Barrier {
-            osm_id: 2,
-            height_m: 3.0,
-            lat: 0.1,
-            lon: 0.1,
-            dist_m: dist_m + 101.0,
-        };
+        let far = wall(
+            0.0,
+            0.0,
+            60.0,
+            0.0,
+            3.0,
+            dist_m + BARRIER_PATH_HORIZON_M + 1.0,
+        );
         let mut p = build_flat_profile(dist_m, 0.0);
         let bands = screening_attenuation(
             &mut p,
@@ -775,6 +788,127 @@ mod tests {
         );
         assert_eq!(bands, empty);
         assert!(bands.iter().all(|&a| a == 0.0));
+    }
+
+    /// FIX 3, the miss: a long wall crossing the path 100 m away from its own
+    /// MIDPOINT. The ±50 m midpoint-proximity heuristic skipped it outright
+    /// (perp(midpoint) = 100 m); the exact ray×segment intersection finds the
+    /// crossing and screens it.
+    #[test]
+    fn crossing_far_from_the_wall_midpoint_screens() {
+        let dist_m = 200.0;
+        let terrain_atten = [0.0_f64; NUM_BANDS];
+        // 243 m wall from (100, −20) to (140, 220): crosses the path at
+        // x = 103.33 (t = 0.5167), midpoint (120, 100) — 100 m off the path.
+        let barrier = wall(100.0, -20.0, 140.0, 220.0, 3.0, 100.0);
+        let mut p = build_flat_profile(dist_m, 0.0);
+        let (atten, trace) = screening_attenuation_with_meta(
+            &mut p,
+            std::slice::from_ref(&barrier),
+            ObstacleInput::CANDIDATES_OFF,
+            0.05,
+            1.5,
+            0.0,
+            &terrain_atten,
+        );
+        assert_eq!(trace.kind, "barrier");
+        assert_eq!(trace.obstacle_id, Some(1_390_017_809));
+        assert!(
+            (trace.t - 103.3333 / dist_m).abs() < 1e-6,
+            "t = {}",
+            trace.t
+        );
+        assert!(
+            atten.iter().any(|&a| a > 0.0),
+            "the wall the ray actually crosses must screen"
+        );
+    }
+
+    /// FIX 3, the false positive: a wall running PARALLEL to the path 10 m to
+    /// the side, its midpoint projecting to mid-path. The ±50 m heuristic
+    /// screened it (perp = 10 m); nothing crosses, so the exact test must
+    /// report no obstacle at all.
+    #[test]
+    fn near_midpoint_pass_without_crossing_does_not_screen() {
+        let dist_m = 200.0;
+        let terrain_atten = [0.0_f64; NUM_BANDS];
+        let barrier = wall(80.0, 10.0, 120.0, 10.0, 3.0, 10.0);
+        let mut p = build_flat_profile(dist_m, 0.0);
+        let (atten, trace) = screening_attenuation_with_meta(
+            &mut p,
+            std::slice::from_ref(&barrier),
+            ObstacleInput::CANDIDATES_OFF,
+            0.05,
+            1.5,
+            0.0,
+            &terrain_atten,
+        );
+        assert_eq!(
+            trace.kind, "none",
+            "a wall the path passes BY is not a screen"
+        );
+        assert!(atten.iter().all(|&a| a == 0.0), "{atten:?}");
+    }
+
+    /// The horizon constant is load-bearing, not slack: a wall crossing the
+    /// path near the SOURCE while running away from the receiver puts its
+    /// midpoint up to a half-segment (125 m) past the path's own length. The
+    /// pre-Fix-3 `+100 m` horizon would break the scan before reaching it.
+    #[test]
+    fn crossing_wall_beyond_the_old_horizon_still_screens() {
+        let dist_m = 200.0;
+        let terrain_atten = [0.0_f64; NUM_BANDS];
+        // 247 m wall (5, 0.5) → (−235, −60): crosses the path at x ≈ 3.0,
+        // midpoint (−115, −29.75) ⇒ 316 m from the receiver at (200, 0).
+        let barrier = wall(5.0, 0.5, -235.0, -60.0, 3.0, 316.4);
+        assert!(
+            barrier.dist_m > dist_m + 100.0,
+            "past the pre-Fix-3 horizon"
+        );
+        assert!(barrier.dist_m < dist_m + BARRIER_PATH_HORIZON_M);
+        let mut p = build_flat_profile(dist_m, 0.0);
+        let (atten, trace) = screening_attenuation_with_meta(
+            &mut p,
+            std::slice::from_ref(&barrier),
+            ObstacleInput::CANDIDATES_OFF,
+            0.05,
+            1.5,
+            0.0,
+            &terrain_atten,
+        );
+        assert_eq!(trace.kind, "barrier");
+        assert!(atten.iter().any(|&a| a > 0.0), "{atten:?}");
+    }
+
+    /// A barrier and a building on one path race on δ, not on kind: the
+    /// exact-crossing wall nearer the receiver wins over a taller raster
+    /// building sample mid-path, and the trace names it.
+    #[test]
+    fn barrier_and_building_race_on_delta() {
+        let dist_m = 400.0;
+        let terrain_atten = [0.0_f64; NUM_BANDS];
+        let mut p = build_flat_profile(dist_m, 0.0);
+        let (idx, _) = p
+            .t
+            .iter()
+            .enumerate()
+            .min_by(|(_, &a), (_, &b)| ((a - 0.5).abs()).partial_cmp(&((b - 0.5).abs())).unwrap())
+            .unwrap();
+        p.building_h_m[idx] = 4; // 4 m building at mid-path
+                                 // 4 m wall at t = 0.95 — nearer the receiver ⇒ larger δ.
+        let barrier = wall(380.0, -20.0, 380.0, 20.0, 4.0, 20.0);
+        let (atten, trace) = screening_attenuation_with_meta(
+            &mut p,
+            std::slice::from_ref(&barrier),
+            ObstacleInput::CANDIDATES_OFF,
+            0.05,
+            1.5,
+            0.0,
+            &terrain_atten,
+        );
+        assert_eq!(trace.kind, "barrier");
+        assert!((trace.t - 0.95).abs() < 1e-9, "t = {}", trace.t);
+        assert!(atten.iter().any(|&a| a > 0.0));
     }
 
     #[test]
@@ -1171,6 +1305,127 @@ mod tests {
                 bands[1][i]
             );
         }
+    }
+
+    /// Penumbra (fix-pack Fix 2): a wall that misses the sight line by
+    /// centimetres still attenuates the short wavelengths — CNOSSOS §2.5.6(c)
+    /// computes diffraction down to δ = −λ/20 — while the Rayleigh δ\* gate
+    /// keeps the long ones out. Before this branch the same wall dropped from
+    /// ~4.8 dB to exactly zero as it sank 1 mm below the line of sight.
+    ///
+    /// THE EXPECTED VALUE MOVED, AND THE OLD ONE WAS PINNING A DEFECT. This
+    /// test used to ask only for `> 3 dB`, which recorded 4.77 dB — the
+    /// HOMOGENEOUS value, reached because the favourable arm was computed on
+    /// STRAIGHT rays below the sight line and so returned the same ≈0 path
+    /// difference. CNOSSOS-EU (2.5.27) puts that arm on its arc like every
+    /// other branch: δ_F = −0.098 m on this geometry, past −λ/20 in every band,
+    /// so the favourable half of the `P_FAV` mix contributes nothing and the
+    /// mixed value is 1.76 dB. 4.77 was exactly the top of the step that made a
+    /// TALLER screen come out LOUDER
+    /// (`arc_screening::taller_screen_never_makes_the_receiver_louder`, 47/108
+    /// wall geometries) — this assertion was holding it in place. Recomputed
+    /// against the standard, the same way the hard-ground −3 dB was.
+    #[test]
+    fn near_miss_candidate_screens_short_wavelengths_only() {
+        // 200 m flat path, source 0.05 m, receiver 4 m → LOS at t=0.5 is
+        // 2.025 m; a 2 m wall there sits 25 mm below it.
+        let mut p = build_flat_profile(200.0, 0.0);
+        let cands = [CrossingCandidate {
+            t: 0.5,
+            height_m: 2.0,
+            kind: ObstacleKind::Building,
+            id: 1,
+        }];
+        let terrain = [0.0_f64; NUM_BANDS];
+        let (atten, trace) = screening_attenuation_with_meta(
+            &mut p,
+            &[],
+            ObstacleInput {
+                candidates: &cands,
+                replace_sample_buildings: true,
+            },
+            0.05,
+            4.0,
+            0.0,
+            &terrain,
+        );
+        // 8 kHz (λ = 4 cm) and 4 kHz diffract around a 2.5 cm clearance; from
+        // 2 kHz down the δ* mean-ground gate (δ* = 4.1 cm here) owns the band.
+        assert!(
+            (atten[7] - 1.760).abs() < 0.01,
+            "8 kHz near miss must mix to 1.76 dB: {atten:?}"
+        );
+        assert!((atten[6] - 1.759).abs() < 0.01, "4 kHz likewise: {atten:?}");
+        for (i, &a) in atten.iter().enumerate().take(6) {
+            assert_eq!(a, 0.0, "band {i} stays gated by δ*: {atten:?}");
+        }
+        assert_eq!(trace.kind, "building");
+        assert!(trace.delta_m < 0.0, "near miss carries a negative δ");
+    }
+
+    /// …and an obstacle well below the sight line stays silent in every band,
+    /// with no obstacle reported: the penumbra must not turn every low fence
+    /// into a barrier.
+    #[test]
+    fn far_below_candidate_stays_silent() {
+        let mut p = build_flat_profile(200.0, 0.0);
+        let cands = [CrossingCandidate {
+            t: 0.5,
+            height_m: 0.5,
+            kind: ObstacleKind::Building,
+            id: 1,
+        }];
+        let terrain = [0.0_f64; NUM_BANDS];
+        let (atten, trace) = screening_attenuation_with_meta(
+            &mut p,
+            &[],
+            ObstacleInput {
+                candidates: &cands,
+                replace_sample_buildings: true,
+            },
+            0.05,
+            4.0,
+            0.0,
+            &terrain,
+        );
+        assert!(atten.iter().all(|&a| a == 0.0), "{atten:?}");
+        assert_eq!(trace.kind, "none", "nothing to report to the popup");
+    }
+
+    /// A real blocker beats a near miss: signed-δ ranking must not let a
+    /// below-LOS candidate hide the wall that actually breaks the path.
+    #[test]
+    fn blocking_candidate_beats_near_miss() {
+        let mut p = build_flat_profile(200.0, 0.0);
+        let cands = [
+            CrossingCandidate {
+                t: 0.5,
+                height_m: 2.0, // near miss
+                kind: ObstacleKind::Building,
+                id: 1,
+            },
+            CrossingCandidate {
+                t: 0.7,
+                height_m: 6.0, // real blocker
+                kind: ObstacleKind::Building,
+                id: 2,
+            },
+        ];
+        let terrain = [0.0_f64; NUM_BANDS];
+        let (_, trace) = screening_attenuation_with_meta(
+            &mut p,
+            &[],
+            ObstacleInput {
+                candidates: &cands,
+                replace_sample_buildings: true,
+            },
+            0.05,
+            4.0,
+            0.0,
+            &terrain,
+        );
+        assert_eq!(trace.obstacle_id, Some(2));
+        assert!(trace.delta_m > 0.0);
     }
 
     /// Multiple candidates: the max-δ one wins; a below-LOS candidate is

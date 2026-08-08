@@ -655,3 +655,93 @@ fn negative_rel_alt_goes_through_full_check() {
     // (Dz − Λ).max(0) ≥ 0 — assert direction, not magnitude.
     assert!(sel_hz <= sel_none, "screening can only reduce SEL");
 }
+
+/// `within_kernel_reach` must never reject a segment the full kernel
+/// would have kept: cruise skips the DEM probes on its `false` verdict,
+/// so a false negative here silently deletes energy from the popup.
+///
+/// Sweeps a grid of cruise-shaped geometries (level 50 km diagonals at
+/// FL250-FL400) across receiver offsets spanning inside, on, and well
+/// beyond the class reach, plus a couple of degenerate short segments.
+#[test]
+fn reach_gate_matches_kernel_rejection() {
+    use crate::compute::aircraft_v6::cruise::cruise_synth_offsets;
+
+    let npd = NpdLuts::shared();
+    let (rx_lat, rx_lon, rx_elev) = (49.8_f64, 14.4_f64, 300.0_f64);
+    let mut checked = 0;
+    let mut gate_false = 0;
+    let mut kernel_some = 0;
+    for &rep_len_m in &[50_000.0_f64, 5_000.0, 10.0] {
+        for &rep_alt_m in &[7_600.0_f32, 10_000.0, 12_200.0] {
+            for &profile_idx in &[0_u8, 3, 7] {
+                // Quadratic sweep: dense inside the class reach (~16 km),
+                // coarse out to ~350 km so the gate is exercised on both
+                // sides of its threshold.
+                for step in 0..40 {
+                    let d_deg = (step * step) as f64 * 0.002;
+                    let (lat_off, lon_off) = cruise_synth_offsets(rx_lat + d_deg, rep_len_m * 0.5);
+                    let seg = AircraftSegment {
+                        flight_id: 1,
+                        profile_idx,
+                        is_departure: true,
+                        on_ground: false,
+                        period: 0,
+                        date_id: 0,
+                        start_lat: rx_lat + d_deg - lat_off,
+                        start_lon: rx_lon + d_deg - lon_off,
+                        start_alt_m: rep_alt_m,
+                        end_lat: rx_lat + d_deg + lat_off,
+                        end_lon: rx_lon + d_deg + lon_off,
+                        end_alt_m: rep_alt_m,
+                        speed_kt: 450.0,
+                        segment_length_m: rep_len_m as f32,
+                        count_weight: 1.0,
+                        surface_model: false,
+                        ground_context: crate::emission::aircraft::GROUND_CONTEXT_NONE,
+                        ground_ops_kind: crate::emission::aircraft::GROUND_OPS_KIND_NONE,
+                        source_id: 0,
+                    };
+                    // Terrain the gate knows nothing about — the guarantee
+                    // must hold for any of these.
+                    for &elev in &[0.0_f64, 2_000.0, 8_000.0] {
+                        let terrain = SegmentTerrain {
+                            start_elev: elev,
+                            q1_elev: elev,
+                            mid_elev: elev,
+                            q3_elev: elev,
+                            end_elev: elev,
+                        };
+                        let kept =
+                            segment_sel_with_terrain(&seg, rx_lat, rx_lon, rx_elev, &terrain, npd)
+                                .is_some();
+                        let gate = within_kernel_reach(&seg, rx_lat, rx_lon, rx_elev);
+                        checked += 1;
+                        if !gate {
+                            gate_false += 1;
+                        }
+                        if kept {
+                            kernel_some += 1;
+                        }
+                        assert!(
+                            gate || !kept,
+                            "reach gate rejected a segment the kernel keeps: \
+                             rep_len={rep_len_m} alt={rep_alt_m} profile={profile_idx} \
+                             d_deg={d_deg} elev={elev}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    // The gate has to actually bite, or the test proves nothing.
+    assert!(checked > 1000, "grid too small: {checked}");
+    assert!(
+        gate_false > 100,
+        "gate never fired ({gate_false}/{checked})"
+    );
+    assert!(
+        kernel_some > 100,
+        "kernel never kept anything ({kernel_some}/{checked})"
+    );
+}

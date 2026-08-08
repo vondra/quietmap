@@ -9,9 +9,15 @@
 //! * ISO 9613-2 CYLINDRICAL line divergence `10·log10(2π·d_slant)` (a point
 //!   source would be `20·log10(d)+11`; the aircraft kernel uses `θ/d_perp` —
 //!   neither applies here).
-//! * Finite-line correction `10·log10(θ/π) ≤ 0` added as a dB term, with the
-//!   CLAMPED foot distance as its perpendicular argument (matches the popup,
-//!   `surface-M1-road-notes.md` trap #3).
+//! * Finite-line correction paired with the divergence distance
+//!   (`geo::finite_line_correction_for_divergence`): `10·log10(θ/π) +
+//!   10·log10(d_div/d_perp)`, on the PERPENDICULAR distance to the segment's
+//!   infinite line and the SIGNED foot fraction (matches the popup — fix-pack C).
+//! * Arc-clipped screening (fix-pack Fix 1, `propagation::arc_screening`): a
+//!   250 m microsegment subtends 136° at 50 m, so the cp ray's single screening
+//!   verdict cannot stand for the whole segment. Vector regions energy-average
+//!   the ground/barrier term over the segment's angular span; raster-fallback
+//!   regions keep the cp verdict.
 //! * CNOSSOS `L_W'/m` emission, pre-baked per period as linear band energy in
 //!   the loader; the hot loop multiplies by a shared per-pixel path factor.
 //! * Source height carried on the row (road 0.05 m, rail 0.5 m); receiver 4 m
@@ -27,7 +33,9 @@
 
 use std::f64::consts::PI;
 
-use noise_compute::propagation::geo::{finite_line_correction, point_to_segment_full};
+use noise_compute::propagation::geo::{
+    finite_line_correction_for_divergence, point_to_segment_full,
+};
 use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_compute::propagation::path_profile::CoarseMid;
 use noise_compute::types::{Barrier, RasterSampler};
@@ -36,7 +44,8 @@ use raster_reader::fused_tile_z13::FusedTileZ13;
 use crate::accumulator::{TileAccumulator, NUM_PERIODS};
 use crate::scatter_band::{
     coarse_mid_cfg, lat_to_py, lon_to_px, scatter_tile_with_cfg as band_scatter_tile_with_cfg,
-    GroundSrc, PixelGeometry, PixelTerms, PreparedSource, ScatterStats, LDEN_WEIGHTS, NUM_BANDS,
+    ArcSegment, GroundSrc, PixelGeometry, PixelTerms, PreparedSource, ScatterStats, LDEN_WEIGHTS,
+    NUM_BANDS,
 };
 use crate::source_line::LineRow;
 
@@ -217,9 +226,14 @@ impl<'a> PixelGeometry for LineGeometry<'a> {
         let d_slant = (dist_m * dist_m + (src_alt - rx_alt).powi(2))
             .sqrt()
             .max(1.0);
-        // FLC: clamp the foot fraction to the segment (popup parity) and pass the
-        // clamped-foot distance as the perpendicular argument.
-        let flc = finite_line_correction(length_m, dist_m, pts.fraction.clamp(0.0, 1.0));
+        // FLC paired with the DIVERGENCE distance (fix-pack C, popup parity):
+        // the finite-line geometry runs on the perpendicular distance to the
+        // segment's INFINITE line and the SIGNED foot position, while
+        // divergence/atmosphere stay on the endpoint distance. Feeding the
+        // endpoint distance as if it were the perpendicular one read a segment
+        // the receiver sits PAST +1.9 dB loud.
+        let flc =
+            finite_line_correction_for_divergence(length_m, pts.d_perp_m, pts.fraction, dist_m);
         let geo_div = 10.0 * (2.0 * PI * d_slant).log10();
         let atm_d_km = d_slant / 1000.0;
         let base_db = refl + flc - geo_div;
@@ -236,6 +250,157 @@ impl<'a> PixelGeometry for LineGeometry<'a> {
             } else {
                 GroundSrc::FromProfile
             },
+            // Arc screening (fix-pack Fix 1): the segment the cp ray stands for.
+            arc: Some(ArcSegment {
+                start_lat: line.start_lat,
+                start_lon: line.start_lon,
+                end_lat: line.end_lat,
+                end_lon: line.end_lon,
+                source_height_m: line.source_height_m,
+                length_m,
+                dist_m,
+            }),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use noise_compute::constants::{m_per_deg_lon, M_PER_DEG_LAT};
+    use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind};
+    use raster_reader::fused_tile_z13::TILE_PX;
+    use raster_reader::RealRasters;
+    use std::path::Path;
+    use std::sync::Arc;
+
+    /// Lden-weighted energy at one pixel (the accumulator's `[pix·3 + period]`
+    /// layout), in dB relative to an arbitrary reference — only RATIOS are read.
+    fn pixel_db(accum: &TileAccumulator, py: usize, px: usize) -> f64 {
+        let i = (py * TILE_PX + px) * NUM_PERIODS;
+        let e: f64 = (0..NUM_PERIODS)
+            .map(|p| accum.energy[i + p] as f64 * LDEN_WEIGHTS[p])
+            .sum();
+        10.0 * e.max(1e-30).log10()
+    }
+
+    /// Ground factor at the tile centre. Both fixtures below are uniform, so
+    /// this is also what the line kernel's path-averaged `G` will be.
+    fn tile_ground_g(tile: &FusedTileZ13) -> f64 {
+        tile.ground_g(
+            (tile.bbox.north_lat + tile.bbox.south_lat) * 0.5,
+            (tile.bbox.west_lon + tile.bbox.east_lon) * 0.5,
+        )
+    }
+
+    /// The scene, run twice on one tile: `(clear_db, screened_db)` at the pixel
+    /// 50 m north of the segment start — a 214 m E-W segment through the tile
+    /// centre and a 30 × 10 × 8 m box straddling the receiver's perpendicular
+    /// foot, 25 m north of the segment. Shared so both ground regimes below
+    /// measure the SAME geometry.
+    fn arc_scene_pixel_db(tile: &FusedTileZ13) -> (f64, f64) {
+        let c_lat = (tile.bbox.north_lat + tile.bbox.south_lat) * 0.5;
+        let c_lon = (tile.bbox.west_lon + tile.bbox.east_lon) * 0.5;
+        let d_lat = |m: f64| m / M_PER_DEG_LAT;
+        let d_lon = |m: f64| m / m_per_deg_lon(c_lat.to_radians());
+
+        let line = LineRow {
+            start_lat: c_lat,
+            start_lon: c_lon,
+            end_lat: c_lat,
+            end_lon: c_lon + d_lon(214.0),
+            length_m: 214.0,
+            max_distance_m: 2_000.0,
+            source_height_m: 0.05,
+            bridge: false,
+            emission_lin: [[1.0e6; NUM_BANDS]; NUM_PERIODS],
+        };
+        let mut b = ObstacleIndex::builder(c_lat, c_lon);
+        b.add_ring(
+            &[
+                (c_lat + d_lat(25.0), c_lon + d_lon(-15.0)),
+                (c_lat + d_lat(25.0), c_lon + d_lon(15.0)),
+                (c_lat + d_lat(35.0), c_lon + d_lon(15.0)),
+                (c_lat + d_lat(35.0), c_lon + d_lon(-15.0)),
+            ],
+            8.0,
+            ObstacleKind::Building,
+            0,
+        );
+        let obstacles = ObstacleSet {
+            indexes: vec![Arc::new(b.build())],
+        };
+
+        let py = lat_to_py(&tile.bbox, c_lat + d_lat(50.0));
+        let px = lon_to_px(&tile.bbox, c_lon);
+        let run = |set: Option<&ObstacleSet>| {
+            let mut accum = TileAccumulator::new();
+            scatter_tile(tile, std::slice::from_ref(&line), &[], set, &mut accum);
+            pixel_db(&accum, py, px)
+        };
+        (run(None), run(Some(&obstacles)))
+    }
+
+    /// Stripe regression (fix-pack Fix 1), the TILE twin of noise-compute's
+    /// `roads::box_on_the_cp_ray_screens_only_its_angular_share`: a 30 m
+    /// building straddling the cp ray must NOT screen the whole 214 m segment.
+    /// Its shadow covers a slice of the fan the receiver sees, so the loss is
+    /// ~2 dB — the cp-ray verdict alone applied the full ~15 dB diffraction to
+    /// every metre of the segment, which IS the constant-width shadow stripe.
+    ///
+    /// Flat synthetic tile from an EMPTY rasters dir, so the only obstacle in
+    /// the scene is the vector footprint. Built through
+    /// `build_receiver_altitude_only`, whose empty halo gives the path profile
+    /// flat AND SOFT ground (IMD 0 ⇒ G = 1) — the same ground its noise-compute
+    /// twin uses (`FlatRasters`). The hard-ground half of the same scene, where
+    /// the arc lane's non-negative handback used to lose the effect entirely, is
+    /// `hard_ground_keeps_its_partial_screening` below.
+    #[test]
+    fn box_on_the_cp_ray_screens_only_its_angular_share() {
+        let rasters = RealRasters::new(Path::new("/nonexistent-quietmap-arc-fixture"));
+        let tile = FusedTileZ13::build_receiver_altitude_only(12, 2211, 1386, &rasters);
+        assert_eq!(tile_ground_g(&tile), 1.0, "fixture must be soft ground");
+        let (clear, screened) = arc_scene_pixel_db(&tile);
+        let loss = clear - screened;
+        assert!(
+            loss > 0.2,
+            "the box must screen the arc it covers, got {loss:.2} dB"
+        );
+        assert!(
+            loss < 3.0,
+            "…but not the whole segment: {loss:.2} dB (the cp-ray verdict was ~15 dB)"
+        );
+    }
+
+    /// The SPEC §3.5c hole, CLOSED on the tile path — and this test is the
+    /// tripwire that was written to fail on the day it was.
+    ///
+    /// The same scene over HARD ground (the missing-IMD default of 100 ⇒ G = 0)
+    /// used to lose its partial screening entirely: the fan is ~20 % blocked, so
+    /// its energy mean sits near −2.6 dB, a net BOOST, below the 0 dB a
+    /// non-negative screening increment can express — and arc screening, which
+    /// has to hand its answer back through that increment, saturated at 0 and
+    /// let the caller fall back to the full −3 dB hard-ground term. The pixel
+    /// read LOUDER than exact by up to 3 dB, exactly where buildings live.
+    ///
+    /// The angular quadrature (`propagation::seg_sampling`) hands back the
+    /// COMPOSITE `max(A_ground, A_terrain + A_screen)` instead of an increment,
+    /// so there is no channel to saturate and the boost survives: the box now
+    /// screens 2.2 dB here. The popup lane still goes through the increment and
+    /// still has the hole — SPEC §3.5c stays open for it — which is why this
+    /// test pins the TILE number specifically.
+    #[test]
+    fn hard_ground_keeps_its_partial_screening() {
+        let rasters = RealRasters::new(Path::new("/nonexistent-quietmap-arc-fixture"));
+        let tile = FusedTileZ13::build(12, 2211, 1386, 2_000.0, &rasters);
+        assert_eq!(tile_ground_g(&tile), 0.0, "fixture must be hard ground");
+        let (clear, screened) = arc_scene_pixel_db(&tile);
+        let loss = clear - screened;
+        assert!(
+            loss > 0.2,
+            "hard ground must keep the arc the box covers, got {loss:.2} dB \
+             (0.00 dB was the increment channel saturating — SPEC §3.5c)"
+        );
+        assert!(loss < 3.0, "…but still not the whole segment: {loss:.2} dB");
     }
 }

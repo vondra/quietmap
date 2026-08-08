@@ -2,7 +2,7 @@
 //! state. Every number returned here must come from values the engine already
 //! holds; this module never re-runs emission or propagation.
 
-use crate::constants::{ALPHA_ATM, GROUND_CF};
+use crate::constants::ALPHA_ATM;
 use crate::propagation::iso9613;
 use crate::propagation::PathProfile;
 use crate::types::{
@@ -81,12 +81,6 @@ pub fn variants_to_received_bands(
 pub fn atmospheric_bands(d_slant_m: f64) -> [f64; NUM_BANDS] {
     let d_over_1000 = d_slant_m / 1000.0;
     std::array::from_fn(|i| ALPHA_ATM[i] * d_over_1000)
-}
-
-/// Per-band ground attenuation `CF[i] * G`. Note: can be negative at low
-/// frequencies over soft ground — standard CNOSSOS behaviour.
-pub fn ground_atten_bands(ground_g: f64) -> [f64; NUM_BANDS] {
-    std::array::from_fn(|i| GROUND_CF[i] * ground_g)
 }
 
 /// Consumes a `PathProfile` into a serializable `PathProfileTrace` (dropping
@@ -204,10 +198,11 @@ pub fn vegetation_trace(
     }
 }
 
-/// Build a `GroundTrace` from path-averaged ground factor G. `CF[i]*G` per
-/// band matches the internal a_gr term used by `iso9613::propagate_variants`.
+/// Build a `GroundTrace` from path-averaged ground factor G. Shares
+/// [`crate::propagation::iso9613::ground_atten_db`] with the kernels, so the
+/// popup's per-band ground row is the term the heatmap actually applied.
 pub fn ground_trace(factor_g: f64) -> GroundTrace {
-    let attenuation_bands = ground_atten_bands(factor_g);
+    let attenuation_bands = iso9613::ground_atten_bands(factor_g);
     GroundTrace {
         factor_g,
         attenuation_bands,

@@ -17,9 +17,11 @@ use super::*;
 /// prefix here — there is no distinct `STW` arm. Synthetic osm_ids
 /// (top bit set) are never in the lookup by construction in the
 /// source-reader builder.
+/// `microsegs_by_id` arrives sorted on `(osm_id, segment_idx)` — see the
+/// call site in [`super::run`]; both passes below depend on that order.
 pub(super) fn emit_segment_traces(
     traces: &mut crate::types::TraceCollector,
-    by_microseg: HashMap<(u64, u16), MicrosegAcc>,
+    microsegs_by_id: Vec<((u64, u16), MicrosegAcc)>,
     microseg_cache: &HashMap<(u64, u16), MicrosegPath>,
     n_days_f: f64,
     // GA-class window (365-day) divisor for the split-union microseg
@@ -127,9 +129,9 @@ pub(super) fn emit_segment_traces(
     // allocations per LKPR popup (≈ 100 ms cascade drop cost
     // previously paid in `apply_segment_top_k_with_cap`).
     const GROUND_TRACE_CAP: usize = 150;
-    let mut by_lden: Vec<((u64, u16), f64)> = Vec::with_capacity(by_microseg.len());
+    let mut by_lden: Vec<((u64, u16), f64)> = Vec::with_capacity(microsegs_by_id.len());
     let mut dominant_lden: HashMap<(String, u8), f64> = HashMap::new();
-    for ((osm_id, segment_idx), acc) in by_microseg.iter() {
+    for ((osm_id, segment_idx), acc) in microsegs_by_id.iter() {
         let lden = periods_from_energy(acc.period_energy_full).lden_db;
         if !lden.is_finite() {
             continue;
@@ -149,7 +151,7 @@ pub(super) fn emit_segment_traces(
     by_lden.truncate(GROUND_TRACE_CAP);
     let keep: std::collections::HashSet<(u64, u16)> = by_lden.into_iter().map(|(k, _)| k).collect();
 
-    for ((osm_id, segment_idx), acc) in by_microseg {
+    for ((osm_id, segment_idx), acc) in microsegs_by_id {
         if !keep.contains(&(osm_id, segment_idx)) {
             continue;
         }
@@ -276,7 +278,7 @@ pub(super) fn emit_segment_traces(
             // matches between road and ground rows.
             for i in 0..NUM_BANDS {
                 atmospheric_bands[i] = ALPHA_ATM[i] * d_km;
-                ground_bands[i] = GROUND_CF[i] * p.ground_g;
+                ground_bands[i] = ground_atten_db(i, p.ground_g);
                 terrain_bands[i] = p.terrain_atten_db[i];
                 screening_bands[i] = p.screening_atten_db[i];
                 vegetation_bands[i] = p.vegetation_atten_db[i];

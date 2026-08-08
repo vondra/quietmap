@@ -24,8 +24,9 @@ use cudarc::driver::sys::CUevent_flags;
 use cudarc::driver::{result, CudaDevice, CudaFunction, CudaSlice, LaunchAsync, LaunchConfig};
 use h3o::CellIndex;
 use noise_compute::admin;
+use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_gpu::{pack_sources, pack_tile, upload_obstacles, ObstDev, TileBuffers, BIN_W, N_BINS};
-use raster_reader::fused_tile_z13::{default_batch_size, TileBatch, TILE_PX};
+use raster_reader::fused_tile_z13::{default_batch_size, TileBatch};
 use raster_reader::RealRasters;
 use rayon::prelude::*;
 use tile_painter::accumulator::TileAccumulator;
@@ -242,8 +243,8 @@ struct Cfg {
     baseline: String,
     output: Option<String>,
     /// `QM_GPU_BARRIERS` — upload each region's `barriers.arrow` walls so the
-    /// kernel screens them on the GPU (the vector projection-and-snap in
-    /// `line_source`; mean 0.002 / max 1.5 dB vs the CPU vector path).
+    /// kernel screens them on the GPU (the exact ray×segment crossings of
+    /// `barrier_best_candidate`, the CUDA twin of `path_effects` §1).
     /// Default ON since 2026-08-02 IN THE ENGINE ITSELF (owner directive
     /// 2026-06-13: every GPU surface build screens its own barriers). It used
     /// to be a wrapper-supplied env (v1 cluster-build-chunk.sh forced =1) and
@@ -276,6 +277,7 @@ fn process_block(
     src_dev: &[LayerSrc],
     barriers: &BarrierData,
     obst_dev: &ObstDev,
+    obstacles: Option<&ObstacleSet>,
     stats: &mut BTreeMap<&'static str, LayerStat>,
     prog: &mut Progress,
 ) -> Result<()> {
@@ -285,7 +287,8 @@ fn process_block(
 
     let elev: Vec<f32> = halo.pixels().iter().map(|p| p.elevation).collect();
     // Noise barriers reach the kernel as the VECTOR per-tile `for_tile` slice
-    // (projection-and-snap inside line_source), never as a raster burn —
+    // (exact ray×segment crossings in `barrier_best_candidate`), never as a
+    // raster burn —
     // `FusedGrid::burn_building_max` was measured acoustically unsound (the ray
     // cadence steps over a one-cell-thin wall on most paths; mean +3.7 / max
     // +13.8 dB under-screening; decision record: tile-painter
@@ -298,8 +301,17 @@ fn process_block(
     }
     let d_elev = dev.htod_copy(elev).expect("elev");
     let d_cover = dev.htod_copy(cover).expect("cover");
-    let n = TILE_PX * TILE_PX;
-    let mut d_out = dev.alloc_zeros::<f32>(n * 3).expect("out");
+    // Energies + the one-f32 ARC FAULT slot (`noise_gpu::OUT_FAULT_SLOT`), and
+    // NOT the 8 MiB PROF_COUNTERS block: `pack_tile` puts this same length in
+    // meta[13] and the kernel enters its optional regions only on that word, so a
+    // `-DPROF_COUNTERS=1` PTX under this binary writes nothing past the fault slot
+    // instead of 8 MiB past the end of the allocation.
+    let mut d_out = dev
+        .alloc_zeros::<f32>(noise_gpu::OUT_SLOTS_PROD)
+        .expect("out");
+    // Arcs the kernel had to drop for ARC_MAX_MERGED overflow, cumulative over
+    // this block (the buffer is allocated once and the kernel only ever adds).
+    let mut arc_drops_seen = 0f32;
     let launch_cfg = LaunchConfig {
         grid_dim: (N_BINS as u32, 1, 1),
         block_dim: ((BIN_W * BIN_W) as u32, 1, 1),
@@ -332,7 +344,15 @@ fn process_block(
             .expect("layer rows")
             .1
             .len();
-        pack_tile(tile, halo_geom, ETA, TW, &tile_barriers, nsrc)
+        pack_tile(
+            tile,
+            halo_geom,
+            ETA,
+            TW,
+            &tile_barriers,
+            nsrc,
+            noise_gpu::OUT_SLOTS_PROD,
+        )
     };
     let prep_timed = |it: (u32, u32, LineLayer), stats: &mut BTreeMap<&'static str, LayerStat>| {
         let t = Instant::now();
@@ -340,6 +360,17 @@ fn process_block(
         stats.entry(it.2.dir()).or_default().t_bins += t.elapsed().as_secs_f64();
         (it, p)
     };
+
+    // Building-interior receiver mask (fix-pack Fix 4), the CPU painter's
+    // `process_surface_region` step mirrored into the GPU lane: receivers inside
+    // a footprint are not receivers (END/CNOSSOS map facades, never interiors),
+    // so their cells become NO_DATA. ONE point-in-footprint pass per TILE, cached
+    // here and shared by every layer of that tile — all ride the same receiver
+    // lattice, so the mask cannot differ between them. Vector regions only; a
+    // raster-fallback region has no footprints and keeps today's output.
+    // Without this the GPU writes physics where a masked CPU baseline writes
+    // NO_DATA, and every such cell reads as a presence flip.
+    let mut interior_masks: BTreeMap<(u32, u32), Vec<bool>> = BTreeMap::new();
 
     let mut iter = items.into_iter();
     let mut pending = iter.next().map(|it| prep_timed(it, stats));
@@ -415,10 +446,39 @@ fn process_block(
             }
         }
 
+        // ARC FAULT: a nonzero delta means THIS tile under-screens somewhere —
+        // blocked arcs the merged list had no room for were dropped, so a
+        // direction that a building genuinely blocks was painted clear. Loud, not
+        // fatal: the tile is still the best this kernel can produce, and a world
+        // build should not die on it — but it must never again be invisible.
+        if gpu[noise_gpu::OUT_FAULT_SLOT] > arc_drops_seen {
+            eprintln!(
+                "!! ARC OVERFLOW {} z{}/{tx}/{ty}: {:.0} blocked arcs DROPPED \
+                 (ARC_MAX_MERGED too small for this geometry) — this tile UNDER-screens; \
+                 re-measure with NOISE_GPU_DEFINES=\"-DARC_MAX_MERGED=<bigger>\"",
+                layer.dir(),
+                cfg.z,
+                gpu[noise_gpu::OUT_FAULT_SLOT] - arc_drops_seen,
+            );
+            arc_drops_seen = gpu[noise_gpu::OUT_FAULT_SLOT];
+        }
         let output_started = Instant::now();
         let mut accum = TileAccumulator::new();
-        accum.energy.copy_from_slice(&gpu);
-        let cells = collapse_lden_surface_u8(&accum);
+        accum
+            .energy
+            .copy_from_slice(&gpu[..noise_gpu::OUT_ENERGY_SLOTS]);
+        let mut cells = collapse_lden_surface_u8(&accum);
+        // Interiors are not receivers (Fix 4) — stamped after the collapse and
+        // BEFORE the baseline diff, so the comparison is like for like. The bake
+        // is charged to whichever layer first touches this tile; the second
+        // layer reuses the cached mask for free.
+        if let Some(set) = obstacles {
+            let mask = interior_masks.entry((tx, ty)).or_insert_with(|| {
+                let tile = &batch.tiles[((ty - by) * cfg.batch_n + (tx - bx)) as usize];
+                tile_painter::source_loader_obstacle::bake_tile_interior_mask(tile, set)
+            });
+            tile_painter::source_loader_obstacle::apply_interior_mask(&mut cells, mask);
+        }
         let encode_done = Instant::now();
         stats.entry(layer.dir()).or_default().t_encode +=
             encode_done.duration_since(output_started).as_secs_f64();
@@ -480,6 +540,14 @@ fn process_block(
         }
         stats.entry(layer.dir()).or_default().n_tiles += 1;
         prog.tick();
+    }
+    if arc_drops_seen > 0.0 {
+        eprintln!(
+            "!! ARC OVERFLOW total for this block: {arc_drops_seen:.0} blocked arcs dropped — \
+             the tiles named above under-screen. ARC_MAX_MERGED is sized from a measured \
+             demand (kernels/scatter.cu); a nonzero count here means production geometry \
+             has outgrown it."
+        );
     }
     Ok(())
 }
@@ -686,6 +754,7 @@ fn process_region(
                     &src_dev,
                     &barrier_data,
                     &obst_dev,
+                    obstacle_data.set(),
                     stats,
                     prog,
                 ) {
@@ -1039,6 +1108,10 @@ fn gpu_barriers_enabled() -> bool {
 }
 
 fn main() -> Result<()> {
+    // The PRODUCTION painter. A CPU-only lever left in a worker's environment
+    // would paint the world with the GPU's shipped rule while every CPU-side
+    // check ran under a different one — silently, for as long as it was set.
+    noise_gpu::ensure_no_cpu_only_arc_levers()?;
     let argv: Vec<String> = std::env::args().skip(1).collect();
     // Index-based parse: each known flag consumes the NEXT token (which must exist
     // and not itself be a flag); everything else is a positional. Tracking by

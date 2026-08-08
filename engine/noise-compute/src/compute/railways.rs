@@ -24,6 +24,18 @@ pub(crate) fn compute_railways(
     mut traces: Option<&mut TraceCollector>,
 ) -> (NoisePeriods, Vec<Contributor>) {
     let mut cand_scratch = Vec::new();
+    // Arc-screening scratch (fix-pack Fix 1): the receiver SKYLINE plus the
+    // interval-ray profile/crossing buffers, amortised across all segments —
+    // one receiver, one skyline, however many segments reach it.
+    let mut arc_skyline = propagation::arc_screening::ArcSkyline::default();
+    let mut arc_scratch = propagation::arc_screening::ArcScreeningScratch::new();
+    // ONE profile buffer for the whole segment list. `build_path_profile`
+    // clears it before every fill, so reusing it is bit-for-bit the same
+    // sampling a fresh `PathProfile` gives — it only stops the five inner
+    // `Vec`s being allocated, grown sample by sample (a doubling memmove
+    // chain per array) and dropped once per segment. A São Paulo popup runs
+    // this loop ~2.3 k times.
+    let mut path_profile = propagation::PathProfile::new();
     use emission::railway::{self, RailType};
     use std::collections::HashMap;
 
@@ -197,10 +209,27 @@ pub(crate) fn compute_railways(
         }
 
         let rcv_alt = receiver.altitude_m();
-        let flc = geo::finite_line_correction(seg.length_m as f64, seg.dist_m, seg.fraction);
+        // Finite-line geometry runs on the perpendicular distance to the
+        // segment's INFINITE line paired with the signed foot position, while
+        // divergence/atmosphere stay on `seg.dist_m` (fix-pack C). `seg.fraction`
+        // is the clamped foot — the signed one comes from the recomputed
+        // decomposition.
+        let pts = geo::point_to_segment_full(
+            receiver.lat,
+            receiver.lon,
+            seg.start_lat,
+            seg.start_lon,
+            seg.end_lat,
+            seg.end_lon,
+        );
+        let flc = geo::finite_line_correction_for_divergence(
+            seg.length_m as f64,
+            pts.d_perp_m,
+            pts.fraction,
+            seg.dist_m,
+        );
 
         // Unified path profile — one sampling, four rasters.
-        let mut path_profile = propagation::PathProfile::new();
         rasters.build_path_profile(
             seg.cp_lat,
             seg.cp_lon,
@@ -228,8 +257,13 @@ pub(crate) fn compute_railways(
             seg.cp_lon,
             receiver.lat,
             receiver.lon,
+            Some(&propagation::obstacle_index::CellPrune::for_profile(
+                &path_profile,
+                src_alt,
+                rcv_alt,
+            )),
         );
-        let (screening_atten, obstacle_trace) =
+        let (cp_screening_atten, obstacle_trace) =
             propagation::path_effects::screening_attenuation_with_meta(
                 &mut path_profile,
                 barriers,
@@ -239,6 +273,42 @@ pub(crate) fn compute_railways(
                 0.0, // railways: no exclusion radius
                 &terrain.attenuation_bands,
             );
+        // Arc screening (fix-pack Fix 1) — see the twin block in roads.rs.
+        // Rail segments are the longest in the extract (p90 182 m vs roads'
+        // 106 m), so this is where the stripe defect was worst.
+        // Arc pre-gate: a segment that cannot subtend the span floor at this
+        // receiver keeps the cp verdict without so much as an atan2.
+        let screening_atten = if !propagation::arc_screening::segment_can_span(
+            seg.length_m as f64,
+            seg.dist_m,
+            propagation::arc_screening::ArcBounds::shipped(),
+        ) {
+            cp_screening_atten
+        } else {
+            crate::arc_screened_line_segment(
+                &crate::LineSegmentScreening {
+                    receiver,
+                    start_lat: seg.start_lat,
+                    start_lon: seg.start_lon,
+                    end_lat: seg.end_lat,
+                    end_lon: seg.end_lon,
+                    cp_lat: seg.cp_lat,
+                    cp_lon: seg.cp_lon,
+                    src_alt_m: src_alt,
+                    cp_screening: &cp_screening_atten,
+                    cp_terrain: &terrain.attenuation_bands,
+                    ground_g,
+                    source_height_m: SOURCE_HEIGHT_RAIL,
+                    length_m: seg.length_m as f64,
+                    dist_m: seg.dist_m,
+                    barriers,
+                    obstacles,
+                },
+                rasters,
+                &mut arc_skyline,
+                &mut arc_scratch,
+            )
+        };
         let veg_atten = propagation::path_effects::vegetation_attenuation_path(&path_profile);
 
         let mut seg_variants = [
@@ -501,7 +571,8 @@ pub(crate) fn compute_railways(
     }
 
     let mut contributors = Vec::new();
-    for ((_key, _rt), acc) in &rails_by_key {
+    // Ascending group key, not HashMap order — see `crate::compute::key_sorted`.
+    for (_, acc) in crate::compute::key_sorted(&rails_by_key) {
         let ld = PropagationVariants::to_db(acc.variants[0].full_energy);
         let le = PropagationVariants::to_db(acc.variants[1].full_energy);
         let ln = PropagationVariants::to_db(acc.variants[2].full_energy);
@@ -613,7 +684,9 @@ pub(crate) fn compute_railways(
     }
 
     let mut total_energy = [0.0f64; 3];
-    for acc in rails_by_key.values() {
+    // f64 addition is not associative: ascending key order, not HashMap
+    // order, or this total moves ±1 ULP per query.
+    for (_, acc) in crate::compute::key_sorted(&rails_by_key) {
         total_energy[0] += acc.variants[0].full_energy;
         total_energy[1] += acc.variants[1].full_energy;
         total_energy[2] += acc.variants[2].full_energy;
@@ -695,8 +768,11 @@ mod tests {
         }
     }
 
+    /// 500 m due north of the segment — the geometry has to AGREE with the
+    /// fixture's `dist_m`/`cp`/`fraction`, since the finite-line correction
+    /// reads the segment's real perpendicular distance (fix-pack C).
     fn receiver() -> Receiver {
-        Receiver::new(50.0, 14.0035, 200.0)
+        Receiver::new(50.004523, 14.0035, 200.0)
     }
 
     fn periods_for(segs: &[RailSegment]) -> NoisePeriods {

@@ -224,6 +224,9 @@ impl<'a> PixelGeometry for PointGeometry<'a> {
             // (`ReceiverSampled`) so the kernel only samples it past the budget
             // skip — matching the original point loop's lazy evaluation.
             ground_src: GroundSrc::ReceiverSampled,
+            // No angular span to clip: a point source IS its characteristic
+            // point, so the cp-ray verdict already covers every direction.
+            arc: None,
         })
     }
 }

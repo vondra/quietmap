@@ -13,7 +13,7 @@
 //!                   + terrain_atten_db[i]                         // DEM-derived
 //!                   + screening_atten_db[i]                       // building diffraction
 //!                   + veg_atten_db[i]                             // forest mask
-//!                   + GROUND_CF[i] · ground_g                     // ground factor
+//!                   + ground_atten_db(i, ground_g)                // ISO/CNOSSOS ground
 //!                  ) / 10)
 //! received_band_lin[i] = row.band_energy_lin[i] × prop_band[i]
 //! aw_band_lin[i]       = received_band_lin[i] × 10^(A_WEIGHTING[i] / 10)
@@ -48,7 +48,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use crate::compute::aircraft_v6::views::AirportTrafficRowView;
-use crate::constants::{ALPHA_ATM, GROUND_CF};
+use crate::constants::ALPHA_ATM;
 use crate::emission::aircraft::{
     self, GROUND_OPS_KIND_APRON_MOVEMENT, GROUND_OPS_KIND_RUNWAY_ROLL, GROUND_OPS_KIND_TAXI,
     GROUND_OPS_REF_OFFSET_M, GROUND_OPS_SOURCE_HEIGHT_M,
@@ -57,6 +57,7 @@ use crate::emission::gse::NUM_GSE_CLASSES;
 use crate::emission::profiles_generated::NUM_CLASSES;
 use crate::periods;
 use crate::propagation::geo::point_to_segment_full;
+use crate::propagation::iso9613::ground_atten_db;
 use crate::propagation::path_effects;
 use crate::propagation::PathProfile;
 use crate::types::{
@@ -190,8 +191,15 @@ fn compute_microseg_path(
     let ground_g = path_effects::ground_g_from_profile(&path_profile);
     let (terrain, _terrain_profile_points) =
         path_effects::terrain_attenuation_with_meta(&mut path_profile, src_alt, rcv_alt);
-    let obstacle_input =
-        crate::obstacle_input_for_ray(obstacles, cand_scratch, src_lat, src_lon, rcv_lat, rcv_lon);
+    let obstacle_input = crate::obstacle_input_for_ray(
+        obstacles,
+        cand_scratch,
+        src_lat,
+        src_lon,
+        rcv_lat,
+        rcv_lon,
+        None,
+    );
     let (screening_atten, _obstacle_trace) = path_effects::screening_attenuation_with_meta(
         &mut path_profile,
         barriers,
@@ -218,8 +226,8 @@ fn compute_microseg_path(
 /// from 78k calls at LKPR to ~3.7k.
 ///
 /// All four arrays hold per-band dB attenuation (negative for losses).
-/// `ground_g` is the scalar ground factor [0, 1] consumed by the
-/// `GROUND_CF · ground_g` term in the per-band propagation.
+/// `ground_g` is the scalar ground factor [0, 1] consumed by the shared
+/// `iso9613::ground_atten_db` term in the per-band propagation.
 #[derive(Clone, Copy)]
 struct MicrosegPath {
     terrain_atten_db: [f64; NUM_BANDS],
@@ -304,12 +312,19 @@ struct AirportAcc {
 }
 
 /// HashMap keyed by `airport_key` → global UNION counts across all
-/// R4s. Source-reader builds this from `airport_summary.arrow` once
-/// per popup query and hands a borrow to [`run`]. **Missing entry**
-/// (or missing summary file) → popup MUST refuse to compute airport
-/// arr/dep counts (returns `None`) — per Codex C4 + Claude W1; no
-/// silent fallback to per-row sum.
-pub type AirportSummaryLookup<'a> = std::collections::HashMap<&'a str, AirportSummaryEntry>;
+/// R4s. Source-reader builds this from `airport_summary.arrow` ONCE per
+/// process (it lives inside the mtime-keyed `AirportSummaryAccum` cache)
+/// and hands a borrow to [`run`]. **Missing entry** (or missing summary
+/// file) → popup MUST refuse to compute airport arr/dep counts (returns
+/// `None`) — per Codex C4 + Claude W1; no silent fallback to per-row sum.
+///
+/// Owned `String` keys rather than `&str` borrowed from a parallel
+/// `Vec<String>`: the borrowed form forced the map to be rebuilt on every
+/// query because it could not outlive a single call, and the global
+/// sidecar carries ~50 k airports — measured at tens of ms per click, for
+/// a table whose contents never change between clicks. Lookups still take
+/// `&str` (`String: Borrow<str>`), so call sites are unchanged.
+pub type AirportSummaryLookup = std::collections::HashMap<String, AirportSummaryEntry>;
 
 /// One row of `airport_summary.arrow`. Mirrors the popup's read-side
 /// view but owned for the duration of the popup query.
@@ -363,7 +378,7 @@ pub fn run(
     // keeps the raster path byte-identical.
     obstacles: Option<&crate::propagation::obstacle_index::ObstacleSet>,
     osm_ref_lookup: &HashMap<u64, String>,
-    airport_summary: Option<&AirportSummaryLookup<'_>>,
+    airport_summary: Option<&AirportSummaryLookup>,
     traces: Option<&mut crate::types::TraceCollector>,
 ) -> Vec<Contributor> {
     if rows.is_empty() {
@@ -499,7 +514,7 @@ pub fn run(
             // distance (here, from the 25 m line-source anchor
             // outward).
             let atm_atten_db = ALPHA_ATM[i] * d_minus_ref_km;
-            let a_gr = GROUND_CF[i] * path.ground_g;
+            let a_gr = ground_atten_db(i, path.ground_g);
             let a_terr = path.terrain_atten_db[i];
             let a_scr = path.screening_atten_db[i];
             let a_veg = path.vegetation_atten_db[i];
@@ -726,8 +741,15 @@ pub fn run(
         }
     }
 
+    // Ascending `(osm_id, segment_idx)` / `airport_key` from here on, not
+    // HashMap order. Both feed order-sensitive f64 work downstream: the
+    // contributor sequence is summed by `periods::sum_periods` into the
+    // popup's aircraft total, and the microsegment sequence decides the
+    // 150-row `GROUND_TRACE_CAP` cut and the MultiLineString byte order.
+    // See `crate::compute::key_sorted` for why sorting rather than a fixed hasher.
+    let microsegs_by_id = crate::compute::into_key_sorted(by_microseg);
     let mut out: Vec<Contributor> = Vec::with_capacity(by_airport.len());
-    for (airport_key, acc) in by_airport {
+    for (airport_key, acc) in crate::compute::into_key_sorted(by_airport) {
         // Stored band energy is raw Σ over n_days (v6); period_leq
         // divides by `n_days × period_seconds` to recover Leq.
         let ld = aircraft::period_leq(acc.period_energy[0], n_days_f, aircraft::PERIOD_SECONDS[0]);
@@ -777,8 +799,9 @@ pub fn run(
                 // exact duplicates. `airport_key` uniqueness per
                 // microseg is guaranteed by Stage 2C's R4Cache key
                 // resolution (airport_traffic_writer.rs:511).
-                let pairs: Vec<LatLonSegment> = by_microseg
-                    .values()
+                let pairs: Vec<LatLonSegment> = microsegs_by_id
+                    .iter()
+                    .map(|(_, m)| m)
                     .filter(|m| m.airport_key.as_str() == airport_key.as_str())
                     .map(|m| {
                         (
@@ -811,7 +834,7 @@ pub fn run(
     if let Some(t) = traces {
         emit_segment_traces(
             t,
-            by_microseg,
+            microsegs_by_id,
             &microseg_cache,
             n_days_f,
             ga_n_days_f,

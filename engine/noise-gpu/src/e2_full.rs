@@ -31,6 +31,29 @@ fn env(k: &str, d: &str) -> String {
 }
 
 fn main() -> Result<()> {
+    // This binary IS the lane-parity gate, so it is the one place a CPU-only
+    // lever must never pass silently — it would compare two different kernels.
+    //
+    // PIN FIRST, then check. Refusing conflicting values is not enough, because
+    // the CPU tile painter's DEFAULTS are themselves a fork as of 2026-08-08:
+    // unset `QM_SEG_SAMPLES` means N=5 angular buckets and unset
+    // `QM_ARC_MIN_SPAN_DEG` lets `seg_arc_bounds()` raise the arc gate to 3°,
+    // while the kernel has no quadrature at all and arc-screens from
+    // `ARC_DEGENERATE_SPAN` (1e-4 rad) up. A bare run therefore PASSED the guard
+    // while comparing two different algorithms — which is the leading suspect
+    // for this gate's 4469-cell / 17.6 dB failure (gg review 2026-08-08 A#1).
+    // Pinning here rather than in the guard because `gpu-surface` shares the
+    // guard and runs no CPU painter, so for it these levers are meaningless.
+    for (k, v) in [("QM_SEG_SAMPLES", "1"), ("QM_ARC_MIN_SPAN_DEG", "0")] {
+        match std::env::var(k) {
+            // An explicit non-pinning value is the operator asking for a rigged
+            // comparison; let the guard below say so rather than overriding it.
+            Ok(prev) if prev.trim() != v => {}
+            // SAFETY: single-threaded, before any work starts.
+            _ => unsafe { std::env::set_var(k, v) },
+        }
+    }
+    noise_gpu::ensure_no_cpu_only_arc_levers()?;
     let a: Vec<String> = std::env::args().collect();
     let (x, y): (u32, u32) = (a[1].parse()?, a[2].parse()?);
     let z = 12u8; // 512@z12 base (the old z13@256 lattice)
@@ -47,6 +70,21 @@ fn main() -> Result<()> {
     // baseline diff. For fast fp32 drift/perf iteration, where byte-exact-vs-CPU
     // is moot anyway.
     let gpu_only = std::env::var("NOISE_GPU_ONLY").is_ok();
+    // NOISE_GPU_PERF_ONLY=1: kernel-timing loop for the GPU optimisation track —
+    // drops the CPU reference EVEN in vector mode, where the parity gate below
+    // normally forbids it (the fix-pack's arc CPU reference costs ~45 min per
+    // tile, which no A/B loop can pay). It is deliberately a SEPARATE variable
+    // from NOISE_GPU_ONLY so the parity gate keeps failing closed for anyone who
+    // just wanted to skip a slow reference; a perf run prints its own banner and
+    // its output is a TIME, never a P4 verdict.
+    let perf_only = std::env::var("NOISE_GPU_PERF_ONLY").is_ok_and(|v| v == "1");
+    let gpu_only = gpu_only || perf_only;
+    if perf_only {
+        eprintln!(
+            "!! NOISE_GPU_PERF_ONLY — CPU reference and the vector parity gate are OFF. \
+             This run measures kernel time ONLY and is NOT a P4 result."
+        );
+    }
     // Swizzle tile width (must divide TILE_PX): the cache-blocking knob. 8×8 measured
     // best on the 4060 (rays overlap most in a ~96 m tile).
     let tw: f64 = env("NOISE_GPU_TW", "8").parse::<f64>().unwrap_or(8.0);
@@ -79,6 +117,86 @@ fn main() -> Result<()> {
         r4,
         &ring,
     )?;
+    // NOISE_GPU_FEATURES=1: print the A-PRIORI cost features for this tile and
+    // exit before any GPU work. Everything here is available from the prepared
+    // tree WITHOUT painting, which is the whole point — the hub has to order a
+    // repaint queue before it knows what a cell costs.
+    if std::env::var("NOISE_GPU_FEATURES").is_ok_and(|v| v == "1") {
+        let bn = default_batch_size();
+        let (bx, by) = ((x / bn) * bn, (y / bn) * bn);
+        let batch = TileBatch::build(z, bx, by, bn, halo_m, &rasters);
+        let tile = &batch.tiles[((y - by) * bn + (x - bx)) as usize];
+        let bb = &tile.bbox;
+        let (mut n_edges, mut n_foot, mut occ, mut cells) = (0usize, 0usize, 0usize, 0usize);
+        if let Some(set) = obstacle_data.set() {
+            let flat = noise_gpu::flatten_obstacles(set);
+            n_edges = flat.edges.len() / 5;
+            n_foot = flat.foot_box.len() / noise_gpu::FOOT_BOX_STRIDE;
+            cells = flat.cell_max_h.len();
+            occ = flat.cell_max_h.iter().filter(|&&h| h > 0.0).count();
+        }
+        // Footprints NEAR this tile — the a-priori proxy for obstacle work per
+        // ray. Ring-level counts cannot discriminate between tiles of the same
+        // R4 cell (they share the ring), so this is deliberately tile-local: the
+        // tile bbox grown by a typical audibility margin, in each index's frame.
+        const NEAR_M: f64 = 2000.0;
+        let mut foot_near = 0usize;
+        if let Some(set) = obstacle_data.set() {
+            for idx in &set.indexes {
+                let v = idx.gpu_view();
+                let x0 = (bb.west_lon - v.origin_lon) * v.m_per_deg_lon - NEAR_M;
+                let x1 = (bb.east_lon - v.origin_lon) * v.m_per_deg_lon + NEAR_M;
+                let y0 = (bb.south_lat - v.origin_lat) * noise_compute::constants::M_PER_DEG_LAT
+                    - NEAR_M;
+                let y1 = (bb.north_lat - v.origin_lat) * noise_compute::constants::M_PER_DEG_LAT
+                    + NEAR_M;
+                let fl = noise_gpu::flatten_obstacles(
+                    &noise_compute::propagation::obstacle_index::ObstacleSet {
+                        indexes: vec![std::sync::Arc::clone(idx)],
+                    },
+                );
+                let st = noise_gpu::FOOT_BOX_STRIDE;
+                for f in 0..fl.foot_box.len() / st {
+                    let b = &fl.foot_box[f * st..f * st + 4];
+                    if (b[0] as f64) <= x1
+                        && (b[2] as f64) >= x0
+                        && (b[1] as f64) <= y1
+                        && (b[3] as f64) >= y0
+                    {
+                        foot_near += 1;
+                    }
+                }
+            }
+        }
+        // Sources whose audibility disk reaches this tile — the a-priori proxy
+        // for the (source × receiver) pair count the kernel actually pays for.
+        let (clat, clon) = (
+            (bb.north_lat + bb.south_lat) * 0.5,
+            (bb.west_lon + bb.east_lon) * 0.5,
+        );
+        let half = noise_compute::constants::M_PER_DEG_LAT * (bb.north_lat - bb.south_lat) * 0.5;
+        let in_reach = rail
+            .iter()
+            .filter(|r| {
+                let d = noise_compute::propagation::geo::flat_dist(
+                    clat,
+                    clon,
+                    r.start_lat,
+                    r.start_lon,
+                );
+                d <= r.max_distance_m + half * 1.5
+            })
+            .count();
+        println!(
+            "FEAT\t{x}/{y}\tedges={n_edges}\tfoot={n_foot}\tcells={cells}\tocc={occ}\t\
+             occ_frac={:.4}\tfoot_per_occ={:.3}\trail_rows={}\tin_reach={in_reach}\tfoot_near={foot_near}\twork={:.0}",
+            if cells > 0 { occ as f64 / cells as f64 } else { 0.0 },
+            if occ > 0 { n_foot as f64 / occ as f64 } else { 0.0 },
+            rail.len(),
+            in_reach as f64 * foot_near as f64 / 1e6
+        );
+        return Ok(());
+    }
     let bn = default_batch_size();
     let (bx, by) = ((x / bn) * bn, (y / bn) * bn);
     let mut batch = TileBatch::build(z, bx, by, bn, halo_m, &rasters);
@@ -117,6 +235,10 @@ fn main() -> Result<()> {
         tw,
         0.0, // nbarr — the e2 CPU reference below is barrier-free (`no_barriers`)
         nsrc as f64,
+        // meta[13] = the `out` length allocated below. This validator takes the
+        // PROF_COUNTERS block, so a counter-instrumented PTX writes it here and
+        // writes nothing of it under the production painter (`OUT_SLOTS_PROD`).
+        noise_gpu::OUT_SLOTS_PROF as f64,
     ];
     // sp = 12/source: length/reach/height/bridge ++ 8 host-precomputed Lden band
     // weights (Σ_p LDEN_W[p]·emission_lin[p][i]) — mirrors pack_sources so the shared
@@ -203,7 +325,7 @@ fn main() -> Result<()> {
     // the same CPU scatter WITHOUT obstacles must differ somewhere, else the
     // tile exercises nothing and the gate is vacuous.
     let vector_mode = noise_compute::propagation::obstacle_index::vector_buildings_enabled();
-    if vector_mode {
+    if vector_mode && !perf_only {
         anyhow::ensure!(
             obstacle_data.set().is_some(),
             "QM_VECTOR_BUILDINGS=1 but the obstacle store did not load for this region \
@@ -270,9 +392,20 @@ fn main() -> Result<()> {
     let d_rxar = dev.htod_copy(rxar).expect("rxar");
     // One zero row — meta nbarr = 0, the kernel never reads it (cuMemAlloc
     // rejects 0-byte buffers).
-    let d_barr = dev.htod_copy(vec![0.0f64; 4]).expect("barr");
+    let d_barr = dev
+        .htod_copy(vec![0.0f64; noise_gpu::BARRIER_STRIDE])
+        .expect("barr");
     let obst = noise_gpu::upload_obstacles(&dev, obstacle_data.set()).expect("obstacles");
-    let mut d_out = dev.alloc_zeros::<f32>(n * 3).expect("out");
+    // Energies + the ARC FAULT slot + EIGHT per-pixel counter slots the kernel
+    // fills only when it is built with -DPROF_COUNTERS=1 (pairs past the budget
+    // skip, pairs taking the arc path, hull lookups/hits, clip survivors,
+    // confirmations, interval overflows — see the ARCSTAT read-back below).
+    // Always allocated, so one host binary serves both PTX builds: 512²·8·4 B =
+    // 8.0 MiB on top of the 3.0 MiB of energies, once per process, in THIS
+    // validator only — and meta[13] above is what tells the kernel it may use it.
+    let mut d_out = dev
+        .alloc_zeros::<f32>(noise_gpu::OUT_SLOTS_PROF)
+        .expect("out");
     let block: u32 = env("NOISE_GPU_BLOCK", "128").parse().unwrap_or(128);
     let cfg = LaunchConfig {
         grid_dim: if binned_launch {
@@ -319,11 +452,52 @@ fn main() -> Result<()> {
     let gpu_ms = t.elapsed().as_secs_f64() * 1e3;
     let gpu = dev.dtoh_sync_copy(&d_out).expect("dtoh");
     eprintln!("GPU kernel {gpu_ms:.1} ms");
+    // Arc-path take-up (only non-zero under -DPROF_COUNTERS=1): the fraction of
+    // budget-surviving pairs that still reach the arc walk. This is the number
+    // that transfers between cells — a span bound is only safe where it is
+    // trimming pairs the geometry says cannot matter.
+    let mut c = [0f64; 8];
+    for px in gpu[noise_gpu::OUT_ARCSTAT_BASE..].chunks_exact(8) {
+        for (acc, v) in c.iter_mut().zip(px.iter()) {
+            *acc += *v as f64;
+        }
+    }
+    // ARC FAULT — filled by EVERY build, counters or not (kernel `arc_drops`).
+    // Every arc counted here was DROPPED, i.e. this run under-screens and is not
+    // the kernel the uncapped CPU reference is being compared against. Fatal:
+    // this bin exists to catch lane forks, and a dropped arc IS one.
+    let arc_drops = gpu[noise_gpu::OUT_FAULT_SLOT] as f64;
+    eprintln!("ARC FAULT dropped_arcs={arc_drops:.0} (ARC_MAX_MERGED overflow)");
+    let (pairs, arced, look, hit, clipped, confirmed) = (c[0], c[1], c[2], c[3], c[4], c[5]);
+    let (ovf, ovf_pairs) = (c[6], c[7]);
+    if pairs > 0.0 {
+        let r = |a: f64, b: f64| if b > 0.0 { a / b } else { 0.0 };
+        eprintln!(
+            "ARCSTAT pairs={pairs:.0} arc_pairs={arced:.0} arc_frac={:.4} \
+             hull_lookups={look:.0} hulls_per_pair={:.1} hull_hit_rate={:.4} \
+             clipped={clipped:.0} clip_rate={:.4} confirmed={confirmed:.0} confirm_rate={:.4} \
+             iv_overflow={ovf:.0} pairs_with_overflow={ovf_pairs:.0} ovf_pair_rate={:.6}",
+            r(arced, pairs),
+            r(look, arced),
+            r(hit, look),
+            r(clipped, look),
+            r(confirmed, look),
+            r(ovf_pairs, arced)
+        );
+    }
 
     // ---- compare vs CPU ref (skipped under NOISE_GPU_ONLY): exact f32 inequality +
     // zero-sided mismatches + both-positive dB.
     if !gpu_only {
         let (mut maxdb, mut nover, mut nbit, mut nzero) = (0f64, 0usize, 0usize, 0usize);
+        // SIGN of each divergence, which is what separates fp32 noise from a lane
+        // FORK. Noise is symmetric; a rule that differs is one-sided. On
+        // 2026-08-04 this tile sat at 87.2 % "CPU louder" while the gate below
+        // called the same numbers benign — three dropped-sign defects in
+        // scatter.cu. After fixing them the split fell to 55.4 %, i.e. a coin
+        // flip, and the cell count dropped 70 %. The asymmetry was the signal;
+        // nothing was measuring it.
+        let (mut n_gpu_louder, mut n_cpu_louder) = (0usize, 0usize);
         for i in 0..n * 3 {
             let (g, c) = (gpu[i], cpu[i]);
             if g != c {
@@ -333,12 +507,18 @@ fn main() -> Result<()> {
                 nzero += 1;
             }
             if g > 0.0 && c > 0.0 {
-                let d = (10.0 * (g as f64 / c as f64).log10()).abs();
+                let signed = 10.0 * (g as f64 / c as f64).log10();
+                let d = signed.abs();
                 if d > maxdb {
                     maxdb = d;
                 }
                 if d > 0.5 {
                     nover += 1;
+                    if signed > 0.0 {
+                        n_gpu_louder += 1;
+                    } else {
+                        n_cpu_louder += 1;
+                    }
                 }
             }
         }
@@ -351,30 +531,86 @@ fn main() -> Result<()> {
         } else if maxdb < 0.5 && nzero == 0 {
             eprintln!("✓ port within 0.5 dB ({nbit} sub-0.5 dB f32 drifts, 0 zero-sided)");
         } else if nzero == 0 {
-            // The 0.5 dB ✓ bar was the sm_89 fp32-vs-f64 level; on consumer fp64-weak
-            // silicon (sm_120) the Maekawa-cliff cells drift more (max ~5 dB) — broad
-            // fp32(GPU)-vs-f64(CPU), scattered, 0 presence-flips, SAME bytes on every card
-            // (cross-arch byte-identical, measured), popup-corrected. NOT a regression:
-            // docs/dev/heatmap-seam-guarantee.md.
+            let share = if nover == 0 {
+                0.0
+            } else {
+                100.0 * n_gpu_louder as f64 / nover as f64
+            };
             eprintln!(
-                "fp32-vs-f64 drift: {nover} cells >0.5 dB (max {maxdb:.2} dB), 0 presence-flips — \
-                 benign (scattered, popup-corrected; docs/dev/heatmap-seam-guarantee.md)"
+                "lane drift: {nover} cells >0.5 dB (max {maxdb:.2} dB), 0 presence-flips, \
+                 {n_gpu_louder} GPU-louder / {n_cpu_louder} CPU-louder ({share:.1}% GPU)"
             );
         }
         // HARD GATE (gg review 2026-07-28 #2: mismatch stats must be able to
-        // FAIL the run, not just print): a zero-sided cell = the lanes
-        // disagree on audibility itself — never fp32 noise.
+        // FAIL the run, not just print). Three independent ways to fail:
+        //
+        // 1. A zero-sided cell — the lanes disagree on audibility itself.
+        // 2. MAGNITUDE. Until 2026-08-04 this branch printed "benign
+        //    (scattered, popup-corrected)" for ANY max, gated on `nzero == 0`
+        //    alone, and its own comment expected "max ~5 dB". It therefore
+        //    reported 14.91 dB as benign and returned success, for three
+        //    successive eras, while three dropped-sign defects sat in
+        //    scatter.cu. A check that explains its own failure away is not a
+        //    check. The bar is the owner's: 1.0 dB anywhere.
+        // 3. ASYMMETRY. fp32-vs-f64 noise has no preferred direction, so a
+        //    lopsided split is a RULE difference however small its dB. This is
+        //    the test that actually identified the defect (87.2 % → 55.4 %
+        //    after the fix), and it catches forks that hide under the dB bar.
+        //    Only applied once the sample is big enough to mean anything.
+        const LANE_MAX_DB: f64 = 1.0;
+        const ASYMMETRY_MIN_CELLS: usize = 200;
+        const ASYMMETRY_MAX_SHARE: f64 = 0.75;
+        // 4. ARC DROPS. The CPU's twin of ARC_MAX_MERGED is `usize::MAX`, so a
+        //    single dropped arc means the kernel answered a question the reference
+        //    was never asked — under-screening by construction, in whatever cells
+        //    it hit. Checked here rather than left to the dB bar because the drops
+        //    are counted exactly while their dB cost is diluted over 262 144 cells.
+        anyhow::ensure!(
+            arc_drops == 0.0,
+            "e2 GATE FAILED: {arc_drops:.0} blocked arcs DROPPED for ARC_MAX_MERGED \
+             overflow — the kernel under-screens those pairs while the uncapped CPU \
+             reference does not, so this comparison is between two different rules. \
+             Raise it: NOISE_GPU_DEFINES=\"-DARC_MAX_MERGED=<bigger>\""
+        );
         anyhow::ensure!(
             nzero == 0,
             "e2 GATE FAILED: {nzero} zero-sided cells (one lane audible, the other silent)"
         );
+        anyhow::ensure!(
+            maxdb <= LANE_MAX_DB,
+            "e2 GATE FAILED: lanes differ by {maxdb:.2} dB (limit {LANE_MAX_DB:.1}) on \
+             {nover} cells — fp32 rounding does not produce that; look for a rule fork"
+        );
+        if nover >= ASYMMETRY_MIN_CELLS {
+            let share = n_gpu_louder.max(n_cpu_louder) as f64 / nover as f64;
+            anyhow::ensure!(
+                share <= ASYMMETRY_MAX_SHARE,
+                "e2 GATE FAILED: {:.1}% of {nover} divergent cells lean one way \
+                 ({n_gpu_louder} GPU-louder / {n_cpu_louder} CPU-louder) — noise is \
+                 symmetric, so this is a rule difference, not precision",
+                100.0 * share
+            );
+        }
     }
 
     // ---- (2) GPU energy → collapse → u8, diff vs the production baseline ----
     // gpu is pix*3+period, the exact TileAccumulator.energy layout.
     let mut accum = TileAccumulator::new();
-    accum.energy.copy_from_slice(&gpu);
+    accum.energy.copy_from_slice(&gpu[..n * 3]);
     let cells = collapse_lden_surface_u8(&accum);
+    // NOISE_GPU_WRITE_TILE=<path>: dump this run's GPU tile in the production
+    // HM3 wire format so two kernel variants can be diffed with the owner's
+    // acceptance instrument (`compare_hm3 exact.bin candidate.bin`) at the cost
+    // of ONE tile instead of a whole cell repaint. Same collapse the production
+    // painter uses, so the bytes are the ones the world would ship.
+    if let Ok(p) = std::env::var("NOISE_GPU_WRITE_TILE") {
+        let path = Path::new(&p);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let n_bytes = tile_painter::wire_hm3::write_tile(path, &cells, 0, false)?;
+        eprintln!("wrote GPU tile {p} ({n_bytes} bytes)");
+    }
     let base_path = Path::new(&baseline)
         .join(format!("rail/{z}"))
         .join(x.to_string())

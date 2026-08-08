@@ -37,9 +37,9 @@ use std::collections::HashMap;
 use std::f64::consts::LN_10;
 
 use noise_compute::compute::aircraft_v6::AirportTrafficRowView;
-use noise_compute::constants::{ground_ops_max_radius, ALPHA_ATM, GROUND_CF};
+use noise_compute::constants::{ground_ops_max_radius, ALPHA_ATM, GROUND_GAIN_UB_DB};
 use noise_compute::propagation::geo::point_to_segment_full;
-use noise_compute::propagation::iso9613::fast_exp_f64;
+use noise_compute::propagation::iso9613::{fast_exp_f64, ground_atten_db};
 use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_compute::propagation::path_effects;
 use noise_compute::types::{Barrier, RasterSampler};
@@ -345,14 +345,16 @@ fn scatter_band(
                 };
                 let geo_gse_lin = GROUND_OPS_REF_OFFSET_M / d_to_recv;
 
-                // Best-case Lden energy upper bound: no terrain/screening/veg, max
-                // ground gain `(-CF).max(0)`, exact geometry — provably ≥ the exact
-                // Lden contribution of ALL the microseg's rows (two dot-products,
-                // one per veh_kind family).
+                // Best-case Lden energy upper bound: no terrain/screening/veg, the
+                // most favourable ground any band can meet (`GROUND_GAIN_UB_DB` =
+                // 3.0 dB — the CNOSSOS hard-ground floor, attained at G = 0 in every
+                // band; see the constant for why it is no longer the per-band
+                // `(-CF).max(0)`), exact geometry — provably ≥ the exact Lden
+                // contribution of ALL the microseg's rows (two dot-products, one per
+                // veh_kind family).
                 let mut ub = 0.0f64;
                 for i in 0..NUM_BANDS {
-                    let ground_gain_ub = (-GROUND_CF[i]).max(0.0);
-                    let path_db_ub = refl_db - ALPHA_ATM[i] * d_minus_ref_km + ground_gain_ub;
+                    let path_db_ub = refl_db - ALPHA_ATM[i] * d_minus_ref_km + GROUND_GAIN_UB_DB;
                     let aw_ub = fast_exp_f64(path_db_ub * LN_10 * 0.1) * A_WEIGHT_LIN[i];
                     ub += aw_ub
                         * (geo_aircraft_lin * pm.emission_lden_aircraft[i]
@@ -407,7 +409,7 @@ fn scatter_band(
                 let mut path_aw_per_band = [0.0f64; NUM_BANDS];
                 for i in 0..NUM_BANDS {
                     let atm_db = ALPHA_ATM[i] * d_minus_ref_km;
-                    let a_gr = GROUND_CF[i] * ground_g;
+                    let a_gr = ground_atten_db(i, ground_g);
                     let a_bar = terrain[i] + screening[i];
                     // ISO 9613-2 §7.3.1: barrier REPLACES ground (max), never adds.
                     let gob = if a_bar > 0.0 { a_gr.max(a_bar) } else { a_gr };

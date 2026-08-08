@@ -195,6 +195,20 @@ pub struct WireResult {
     pub top_contributors: Vec<WireContributor>,
     #[serde(serialize_with = "noise_compute::types::serialize_lden_db_opt")]
     pub other_sources_lden: f64,
+    /// The clicked point sits INSIDE a building footprint (CNOSSOS fix-pack
+    /// Fix 4). END/CNOSSOS strategic mapping puts receivers on facades, never
+    /// indoors, and the heatmap now paints such pixels as no-data — so the
+    /// popup has to be able to say why the map is blank under the cursor.
+    /// Vector-obstacle regions only; `false` wherever the raster path runs.
+    ///
+    /// PURELY a label: every dB number in this response is computed exactly as
+    /// before. What an indoor receiver should REPORT (facade exposure) is a
+    /// separate product decision.
+    pub inside_building: bool,
+    /// Height (m) of the tallest footprint containing the point. Absent when
+    /// [`Self::inside_building`] is false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inside_building_height_m: Option<f64>,
     /// Unique string sentinel — Node route replaces this with the
     /// wall-time `Date.now() - t0` measurement. See
     /// [`COMPUTE_TIME_MS_SENTINEL`].
@@ -207,7 +221,16 @@ pub struct WireResult {
     pub timings: Option<WireTimings>,
 }
 
-pub fn build_wire_result(result: NoiseResult, lat: f64, lng: f64, elevation: f64) -> WireResult {
+/// `inside_building_m`: the containing footprint's height from
+/// `obstacle_store::point_inside_obstacle`, `None` when the receiver is
+/// outdoors (or the query ran on the raster path).
+pub fn build_wire_result(
+    result: NoiseResult,
+    lat: f64,
+    lng: f64,
+    elevation: f64,
+    inside_building_m: Option<f32>,
+) -> WireResult {
     WireResult {
         h3_index: String::new(),
         h3_center: [lat, lng],
@@ -221,6 +244,8 @@ pub fn build_wire_result(result: NoiseResult, lat: f64, lng: f64, elevation: f64
             .map(WireContributor::from)
             .collect(),
         other_sources_lden: result.other_sources_lden,
+        inside_building: inside_building_m.is_some(),
+        inside_building_height_m: inside_building_m.map(|h| round1(h as f64)),
         compute_time_ms: COMPUTE_TIME_MS_SENTINEL,
         segments: result.segments,
         segments_meta: result.segments_meta,

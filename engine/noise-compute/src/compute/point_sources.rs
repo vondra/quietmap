@@ -90,6 +90,7 @@ pub(crate) fn compute_point_sources(
             src.lon,
             receiver.lat,
             receiver.lon,
+            None,
         );
         let (screening_atten, obstacle_trace) =
             propagation::path_effects::screening_attenuation_with_meta(
@@ -216,7 +217,8 @@ pub(crate) fn compute_point_sources(
     }
 
     let mut contributors = Vec::new();
-    for (osm_id, acc) in &pts_by_osm {
+    // Ascending osm_id, not HashMap order — see `crate::compute::key_sorted`.
+    for (osm_id, acc) in crate::compute::key_sorted(&pts_by_osm) {
         let ld = PropagationVariants::to_db(acc.variants[0].full_energy);
         let le = PropagationVariants::to_db(acc.variants[1].full_energy);
         let ln = PropagationVariants::to_db(acc.variants[2].full_energy);
@@ -316,7 +318,9 @@ pub(crate) fn compute_point_sources(
     }
 
     let mut total_energy = [0.0f64; 3];
-    for acc in pts_by_osm.values() {
+    // f64 addition is not associative: ascending key order, not HashMap
+    // order, or this total moves ±1 ULP per query.
+    for (_, acc) in crate::compute::key_sorted(&pts_by_osm) {
         total_energy[0] += acc.variants[0].full_energy;
         total_energy[1] += acc.variants[1].full_energy;
         total_energy[2] += acc.variants[2].full_energy;

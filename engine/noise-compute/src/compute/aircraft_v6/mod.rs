@@ -255,7 +255,8 @@ pub fn compute_aircraft_v6_separable(
 
     let collapse = |accums: &HashMap<u64, FlightAccum>| -> NoisePeriods {
         let mut e = [0.0f64; 3];
-        for acc in accums.values() {
+        // Ascending flight_id, not HashMap order — see `key_sorted`.
+        for (_, acc) in crate::compute::key_sorted(accums) {
             // Period accumulation — `p` indexes both sides; f64 sum order is parity.
             #[allow(clippy::needless_range_loop)]
             for p in 0..3 {
@@ -306,6 +307,206 @@ mod tests {
             compute_aircraft_v6(&receiver, &[], &[], &FlatGround, None, 1, &w, 0, None, None);
         assert!(!periods.lden_db.is_finite());
         assert!(contribs.is_empty());
+    }
+
+    /// The popup is the project's acoustic reference, so one click must
+    /// return bit-identical numbers every time. It did not: `RandomState`
+    /// re-seeds on every `HashMap::new()` — i.e. on every query, not merely
+    /// every process — and the aircraft kernel sums f64 energies across
+    /// whole accumulator maps, so the iteration order moved `total_lden` by
+    /// ±1 ULP (measured 2026-08-05: three distinct values in four runs of
+    /// the same Praha click). This test runs one synthetic click ten times
+    /// in one process and demands identical bytes.
+    ///
+    /// It needs MANY flights to be a real test: with a handful of keys the
+    /// hash order can repeat by luck. 300 airborne flights + 300 cruise
+    /// buckets each land in their own bucket table, so a `.values()` walk
+    /// anywhere in the chain reorders essentially every run.
+    ///
+    /// Layer coverage: this pins the aircraft path, which is where the
+    /// defect was measured. `compute::roads` / `railways` / `point_sources`
+    /// carry the same `crate::compute::key_sorted` contract on their own
+    /// energy totals; `scripts/check-popup-determinism.mjs` covers all of
+    /// them end to end against real prepared data.
+    #[test]
+    fn repeated_identical_clicks_are_bit_identical() {
+        use crate::compute::aircraft_v6::views::{BBox, CruiseTopCandidateView, SubSegmentSlice};
+
+        const N_FLIGHTS: usize = 300;
+        let receiver = Receiver::new(50.0, 14.0, 300.0);
+        let w = crate::emission::aircraft::ClassWeights::uniform();
+
+        // Airborne: one two-sub-segment flight per row. The flights must
+        // land at COMPARABLE energies with differing low bits — a wide
+        // spread would be order-independent for the opposite reason (a
+        // term below `max * 2^-53` is a no-op wherever it is added). So
+        // the tracks are jittered inside a ~1 km box a couple of km from
+        // the receiver rather than fanned across the whole reach.
+        let jitter = |i: usize, salt: u64| -> f32 {
+            ((i as u64).wrapping_mul(2_654_435_761).wrapping_add(salt) % 997) as f32 * 1.0e-5
+        };
+        let mut sub_store = Vec::with_capacity(N_FLIGHTS);
+        for i in 0..N_FLIGHTS {
+            let off = 0.018 + jitter(i, 11);
+            sub_store.push((
+                vec![49.98 + off, 49.99 + off],
+                vec![13.98 + off, 13.99 + off],
+                vec![
+                    900.0 + jitter(i, 23) * 9_000.0,
+                    950.0 + jitter(i, 29) * 9_000.0,
+                ],
+                vec![49.99 + off, 50.01 + off],
+                vec![13.99 + off, 14.01 + off],
+                vec![
+                    950.0 + jitter(i, 31) * 9_000.0,
+                    1000.0 + jitter(i, 37) * 9_000.0,
+                ],
+                vec![220.0f32, 220.0],
+                vec![1500.0f32, 1500.0],
+                vec![(i % 3) as u8, ((i + 1) % 3) as u8],
+                vec![10i16, 10],
+                vec![1u8, 1],
+                vec![300.0f32, 300.0],
+                vec![300.0f32, 300.0],
+            ));
+        }
+        let callsigns: Vec<String> = (0..N_FLIGHTS).map(|i| format!("CSA{i:04}")).collect();
+        let airborne: Vec<AirborneRowView<'_>> = (0..N_FLIGHTS)
+            .map(|i| {
+                let s = &sub_store[i];
+                AirborneRowView {
+                    // Real (non-synthetic) fids carrying a start_unix, so
+                    // `energy_by_day` and `top_flights` both populate.
+                    flight_id: crate::flight_id::pack_real(
+                        0x40_0000 + i as u32,
+                        1_750_000_000 + (i as u32 % 7) * 86_400,
+                    )
+                    .expect("test fid"),
+                    callsign: callsigns[i].as_str(),
+                    aircraft_type: *b"A320",
+                    profile_idx: (i % 8) as u8,
+                    source_id: 0,
+                    origin: 0,
+                    sub_segments: SubSegmentSlice {
+                        start_lat: &s.0,
+                        start_lon: &s.1,
+                        start_alt_m: &s.2,
+                        end_lat: &s.3,
+                        end_lon: &s.4,
+                        end_alt_m: &s.5,
+                        speed_kt: &s.6,
+                        length_m: &s.7,
+                        period: &s.8,
+                        date_id: &s.9,
+                        flags: &s.10,
+                        terrain_start_elev_m: &s.11,
+                        terrain_end_elev_m: &s.12,
+                    },
+                    bbox: BBox {
+                        min_lat: 49.9,
+                        max_lat: 50.1,
+                        min_lon: 13.9,
+                        max_lon: 14.1,
+                    },
+                }
+            })
+            .collect();
+
+        // Cruise: R7 buckets around the receiver, each with its own
+        // top-candidate identity so `cruise_flight_stats` and
+        // `top_flight_candidates` both fill up.
+        let r7_cells: Vec<u64> = {
+            let origin = h3o::LatLng::new(50.0, 14.0)
+                .unwrap()
+                .to_cell(h3o::Resolution::Seven);
+            origin
+                .grid_disk::<Vec<_>>(6)
+                .into_iter()
+                .map(u64::from)
+                .collect()
+        };
+        let cruise_cs: Vec<String> = (0..r7_cells.len()).map(|i| format!("DLH{i:04}")).collect();
+        let cand_store: Vec<Vec<CruiseTopCandidateView<'_>>> = (0..r7_cells.len())
+            .map(|i| {
+                vec![CruiseTopCandidateView {
+                    flight_id: crate::flight_id::pack_real(
+                        0x50_0000 + i as u32,
+                        1_750_000_000 + (i as u32 % 5) * 86_400,
+                    )
+                    .expect("test fid"),
+                    callsign: cruise_cs[i].as_str(),
+                    aircraft_type: b"B738",
+                    peak_lmax_25m_db: 90.0 + (i % 11) as f32,
+                    altitude_m: 10_000.0,
+                }]
+            })
+            .collect();
+        let cruise: Vec<CruiseRowView<'_>> = r7_cells
+            .iter()
+            .enumerate()
+            .map(|(i, &hex)| CruiseRowView {
+                r7_hex: hex,
+                class: 0,
+                rep_profile_idx: (i % 8) as u8,
+                fl_bin: 3,
+                period: (i % 3) as u8,
+                sum_length_m: 3_000.0 + jitter(i, 41) * 40_000.0,
+                rep_len_m: 40_000.0 + jitter(i, 43) * 90_000.0,
+                rep_alt_m: 9_000.0 + jitter(i, 47) * 300_000.0,
+                rep_speed_kt: 450.0,
+                source_id: 0,
+                origin: 0,
+                unique_count: 3,
+                top_candidates: &cand_store[i],
+            })
+            .collect();
+
+        let run = || {
+            let (periods, _contribs, band) = compute_aircraft_v6(
+                &receiver,
+                &airborne,
+                &cruise,
+                &FlatGround,
+                None,
+                7,
+                &w,
+                0,
+                None,
+                None,
+            );
+            // JSON round-trips f64 as shortest-roundtrip decimal, which is
+            // injective on f64 — equal strings mean equal bits.
+            serde_json::to_string(&(&periods, &band.airborne)).unwrap()
+        };
+
+        let first = run();
+        // Guard against a vacuous pass: the click has to actually produce
+        // aircraft energy and a populated top-flights table.
+        assert!(
+            first.contains("\"top_flights\":[{"),
+            "synthetic click produced no top flights — test would be vacuous: {first:.400}"
+        );
+        for i in 1..10 {
+            let again = run();
+            if again != first {
+                // Point at the divergence instead of dumping two 8 kB
+                // JSON blobs — the interesting part is one field's digits.
+                let at = first
+                    .bytes()
+                    .zip(again.bytes())
+                    .position(|(a, b)| a != b)
+                    .unwrap_or(first.len().min(again.len()));
+                let from = at.saturating_sub(70);
+                panic!(
+                    "popup aircraft output changed on repeat {i} of the SAME click — \
+                     something sums f64 (or picks a max) over a HashMap walk again; \
+                     see crate::compute::key_sorted.\n  first byte {at} differs\n  \
+                     run 0: …{}\n  run {i}: …{}",
+                    &first[from..(at + 30).min(first.len())],
+                    &again[from..(at + 30).min(again.len())],
+                );
+            }
+        }
     }
 
     #[test]

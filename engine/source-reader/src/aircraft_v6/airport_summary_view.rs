@@ -12,22 +12,28 @@ use std::path::Path;
 
 use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
-use noise_compute::compute::aircraft_v6::{airport_traffic::AirportSummaryEntry, NUM_GSE_CLASSES};
+use noise_compute::compute::aircraft_v6::{
+    airport_traffic::{AirportSummaryEntry, AirportSummaryLookup},
+    NUM_GSE_CLASSES,
+};
 
 use super::columns::{col_fixed_size_list, col_str, col_u32};
 
-/// Owned per-airport buffers. The lookup HashMap borrows the
-/// `airport_key` slices into this struct's `Vec<String>`.
+/// The parsed sidecar, already in the shape the popup compute consumes.
+///
+/// This used to hold two parallel `Vec`s and build the lookup map from
+/// them on demand; because the map borrowed the key slices it could not
+/// outlive one call, so every click near an airport re-hashed all ~50 k
+/// airports (measured 2026-08-05). The map is now built once, at parse
+/// time, and shared through the same `Arc` as the rest of the sidecar.
 pub struct AirportSummaryAccum {
-    airport_keys: Vec<String>,
-    entries: Vec<AirportSummaryEntry>,
+    lookup: AirportSummaryLookup,
 }
 
 impl AirportSummaryAccum {
     pub fn new(batches: &[RecordBatch]) -> Self {
         let mut accum = AirportSummaryAccum {
-            airport_keys: Vec::new(),
-            entries: Vec::new(),
+            lookup: AirportSummaryLookup::new(),
         };
         for batch in batches {
             accum.absorb(batch);
@@ -76,8 +82,7 @@ impl AirportSummaryAccum {
         else {
             return;
         };
-        self.airport_keys.reserve(n);
-        self.entries.reserve(n);
+        self.lookup.reserve(n);
         for i in 0..n {
             let lo_g = i * NUM_GSE_CLASSES;
             let mut gse = [0u32; NUM_GSE_CLASSES];
@@ -87,28 +92,25 @@ impl AirportSummaryAccum {
             ops.copy_from_slice(&ops_buf[lo_o..lo_o + 3]);
             let mut ga_ops = [0u32; 3];
             ga_ops.copy_from_slice(&ga_ops_buf[lo_o..lo_o + 3]);
-            self.airport_keys.push(airport_key.value(i).to_string());
-            self.entries.push(AirportSummaryEntry {
-                arr_count: arr.value(i),
-                dep_count: dep.value(i),
-                gse_count_per_class: gse,
-                ops_count_per_kind: ops,
-                ga_arr_count: ga_arr.value(i),
-                ga_dep_count: ga_dep.value(i),
-                ga_ops_count_per_kind: ga_ops,
-            });
+            self.lookup.insert(
+                airport_key.value(i).to_string(),
+                AirportSummaryEntry {
+                    arr_count: arr.value(i),
+                    dep_count: dep.value(i),
+                    gse_count_per_class: gse,
+                    ops_count_per_kind: ops,
+                    ga_arr_count: ga_arr.value(i),
+                    ga_dep_count: ga_dep.value(i),
+                    ga_ops_count_per_kind: ga_ops,
+                },
+            );
         }
     }
 
-    /// Build a borrow-keyed lookup the popup compute consumes.
-    pub fn lookup(
-        &self,
-    ) -> noise_compute::compute::aircraft_v6::airport_traffic::AirportSummaryLookup<'_> {
-        self.airport_keys
-            .iter()
-            .zip(self.entries.iter())
-            .map(|(k, e)| (k.as_str(), *e))
-            .collect()
+    /// The lookup the popup compute consumes. Free — the map was built
+    /// when the sidecar was parsed, and the parse is process-cached.
+    pub fn lookup(&self) -> &AirportSummaryLookup {
+        &self.lookup
     }
 }
 

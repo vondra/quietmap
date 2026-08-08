@@ -18,15 +18,100 @@ pub const ALPHA_VEG: [f64; NUM_BANDS] = [0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0
 /// Maximum vegetation attenuation per band [dB] (ISO 9613-2 Table A.1 × 0.5 Central Europe calibration).
 pub const MAX_VEG_ATTEN: [f64; NUM_BANDS] = [2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 9.0, 12.0];
 
-/// Ground correction factors (CNOSSOS-EU §2.5.15).
-/// Applied as: A_ground[i] = CF[i] × G, where G = 1 - IMD/100.
+/// Band-mean ground correction factors (CNOSSOS-EU §2.5.15) — one number per
+/// octave band standing in for the analytic `A_ground,H(G, f, h_s, h_r, d)`.
+/// NEVER used on its own: the term the engine applies is
+/// [`crate::propagation::iso9613::ground_atten_db`], which combines this table
+/// with [`GROUND_HARD_FLOOR_DB`]. `G = 1 − IMD/100`.
 pub const GROUND_CF: [f64; NUM_BANDS] = [-1.5, -0.7, 1.5, 2.5, 2.0, 1.3, 0.7, 0.2];
+
+/// Hard-ground floor of `A_ground` [dB] — CNOSSOS-EU 2015/996 (2.5.15), quoted:
+/// *"if Gpath = 0: Aground,H = −3 dB"*, with (2.5.18) `Aground,H,min =
+/// −3(1 − Ḡm)` supplying the lower bound of the governing max(). ISO 9613-2
+/// Table 3 arrives at the same −3 dB for hard ground (`As + Ar = −1.5 − 1.5`).
+///
+/// The physics: over a reflective surface the direct ray and its mirror image
+/// arrive in phase, so the received level sits ~3 dB ABOVE free field — an
+/// attenuation of −3 dB, not zero. Reading `A_ground = CF[i]·G` alone made it
+/// zero at G = 0 and cost every layer 3.00 dB in every band over hard ground
+/// (verified against the official TC01: 40.81 vs 43.81 dB(A); see
+/// `tests/tc_ground.rs`).
+///
+/// Mirrored into the CUDA kernel by `noise-gpu/build.rs` (`-D` injection), so
+/// this line is the only place the number exists.
+pub const GROUND_HARD_FLOOR_DB: f64 = -3.0;
+
+/// Largest ground GAIN (negative attenuation) any band can reach for any
+/// `G ∈ [0,1]` [dB]. The tile kernels' energy-budget skip needs it: their
+/// per-source upper bound assumes the most favourable ground the path could
+/// possibly have, and if that assumption under-states the real gain the bound
+/// stops being an upper bound and the pipeline silently drops audible sources.
+///
+/// WHY EXACTLY 3.0. With `A_gr(G) = max(CF·G, 0) + FLOOR·(1 − G)` the first
+/// term is ≥ 0 by construction, so `A_gr(G) ≥ FLOOR·(1 − G) ≥ FLOOR` across
+/// `[0,1]`, with equality at `G = 0` in EVERY band — the minimum is the floor
+/// itself. The former per-band `max(−CF[i], 0)` (1.5 dB at 63 Hz, 0.7 at
+/// 125 Hz, 0 above) was the correct bound only while `A_gr = CF·G` bottomed out
+/// at 0 over hard ground; leaving it in place alongside the floor would make
+/// `ub < exact` on every hard-ground path. `tests/tc_ground.rs` pins both the
+/// soundness and the tightness by sweeping G.
+pub const GROUND_GAIN_UB_DB: f64 = -GROUND_HARD_FLOOR_DB;
 
 /// Octave band center frequencies [Hz].
 pub const BAND_FREQ: [f64; NUM_BANDS] = [63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0];
 
 /// Speed of sound [m/s] at 15°C.
 pub const SPEED_OF_SOUND: f64 = 340.0;
+
+/// CNOSSOS-EU §2.5.6(c) penumbra floor: the most NEGATIVE path difference that
+/// still attenuates. `diffraction::maekawa_bands` runs the near-miss branch down
+/// to δ = −λ/20 and returns zero past it, so at the longest wavelength in the
+/// model (63 Hz) this is the deepest near miss that can carry energy in ANY
+/// band — and therefore the floor of every candidate loop that keeps
+/// below-sight-line obstacles, and of any prune accelerating one.
+///
+/// # Why the LOWEST band binds — the trap this constant exists to avoid
+///
+/// The instinct is that the highest band is the permissive one, because its
+/// `λ/4` gate is the smallest. It is the opposite, and getting it backwards
+/// silently mis-prunes the world. Band *i* is silent when `δ ≤ λ_i/4 − δ*`
+/// (the Rayleigh gate) OR when `δ ≤ −λ_i/20` (the penumbra runs out). `δ*` is
+/// FITTED DATA and only ever makes the first condition easier, so the only
+/// δ*-independent floor is the second — and taking it at the SHORTEST
+/// wavelength is not a floor at all:
+///
+/// ```text
+/// maekawa_bands(δ = −λ_8kHz/20 = −0.002125, δ* = 0.1) → 1 kHz band = 4.39 dB
+/// ```
+///
+/// At the LONGEST wavelength (63 Hz) the value is 127× further out, and there
+/// every band is silent for every `δ*`. `diffraction::delta_reject_tests`
+/// pins both directions, including that trap.
+///
+/// # Output-INVISIBLE, not merely "returns zero"
+///
+/// Below this δ the near-miss branch returns exactly zero AND the favourable
+/// arm equals the homogeneous one, so a skip changes nothing anywhere in the
+/// output — not one band, not one propagation variant. That is stronger than
+/// "this term is zero here", and it is what lets a prune written against this
+/// floor be gated byte-identical rather than to a dB tolerance.
+///
+/// Converged on independently three times on 2026-08-04: from the δ*-free
+/// floor (this entry), from the CUDA cell prune, and from the favourable-arm
+/// identity. Three routes, one number.
+///
+/// # THE definition — every other appearance derives from this line
+///
+/// * `propagation::arc_screening::PENUMBRA_FLOOR_M` is its magnitude (`-` of it).
+/// * `scatter.cu`'s `ARC_PENUMBRA_FLOOR_M` and `ARC_DELTA_REJECT` come from
+///   `noise-gpu/build.rs`, which mirrors THIS EXPRESSION (reading
+///   [`SPEED_OF_SOUND`] and dividing) and injects the result via `-D`.
+/// * `obstacle_index::cell_prune_floor_m` reads it directly.
+///
+/// It had five hand copies of `340/63/20` across two languages until 2026-08-08.
+/// Nine copies of the ground-term formula is how that term went missing from
+/// eight of them; do not start a sixth.
+pub const PENUMBRA_DELTA_FLOOR_M: f64 = -SPEED_OF_SOUND / 63.0 / 20.0;
 
 /// Default receiver height [m] — END 2002/49/EC facade standard (4.0m).
 /// Was 1.5m (human ear). Changed to 4.0m to match EU strategic noise mapping
@@ -55,10 +140,6 @@ pub const FAV_RAY_CURVATURE_PER_DSR: f64 = 8.0;
 
 /// Diffraction attenuation cap [dB] (single-edge model).
 pub const SINGLE_DIFF_CAP: f64 = 20.0;
-
-/// Maximum building screening attenuation per band [dB].
-/// ISO 9613-2 allows 20-25 dB for single/double diffraction.
-pub const MAX_SCREENING: f64 = 20.0;
 
 /// Source heights [m].
 pub const SOURCE_HEIGHT_ROAD: f64 = 0.05; // CNOSSOS-EU §2.4.1

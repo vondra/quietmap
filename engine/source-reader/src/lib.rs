@@ -413,6 +413,12 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     } else {
         None
     };
+    // Fix 4 (popup half): does the receiver stand INSIDE a footprint? The
+    // heatmap masks such pixels to no-data, so the popup must be able to say
+    // so. Label only — no dB number below changes because of it.
+    let inside_building_m = obstacle_set
+        .as_ref()
+        .and_then(|set| obstacle_store::point_inside_obstacle(set, lat, lng));
     // 1.4b: with a loaded store, the receiver reflection probe answers from
     // exact footprints too (the popup twin of the pipeline rx_refl pre-bake)
     // — one wrapped sampler serves EVERY popup kernel, raster otherwise.
@@ -479,7 +485,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         t.load_ms = t_load.as_secs_f64() * 1000.0;
         t.collect_ms = t_collect.as_secs_f64() * 1000.0;
     }
-    let wire_result = wire::build_wire_result(result, lat, lng, elevation);
+    let wire_result = wire::build_wire_result(result, lat, lng, elevation, inside_building_m);
     let json = serde_json::to_string(&wire_result).unwrap();
     let t_total = t_start.elapsed();
 

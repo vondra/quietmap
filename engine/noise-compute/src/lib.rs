@@ -16,6 +16,7 @@ pub mod country_speed_defaults_generated;
 pub mod defaults;
 pub mod emission;
 pub mod flight_id;
+pub mod low_profile;
 pub mod normalize;
 pub mod periods;
 pub mod present;
@@ -444,6 +445,7 @@ pub fn compute_path_effects(
         src_lon,
         receiver.lat,
         receiver.lon,
+        None,
     );
     let (_screening_atten, obstacle_trace) =
         propagation::path_effects::screening_attenuation_with_meta(
@@ -493,10 +495,14 @@ fn obstacle_input_for_ray<'a>(
     src_lon: f64,
     rcv_lat: f64,
     rcv_lon: f64,
+    prune: Option<&crate::propagation::obstacle_index::CellPrune<'_>>,
 ) -> propagation::path_effects::ObstacleInput<'a> {
     match obstacles {
         Some(idx) => {
-            idx.crossings(src_lat, src_lon, rcv_lat, rcv_lon, scratch);
+            match prune {
+                Some(p) => idx.crossings_pruned(src_lat, src_lon, rcv_lat, rcv_lon, p, scratch),
+                None => idx.crossings(src_lat, src_lon, rcv_lat, rcv_lon, scratch),
+            }
             propagation::path_effects::ObstacleInput {
                 candidates: scratch,
                 replace_sample_buildings: true,
@@ -504,6 +510,105 @@ fn obstacle_input_for_ray<'a>(
         }
         None => propagation::path_effects::ObstacleInput::CANDIDATES_OFF,
     }
+}
+
+/// One line microsegment's inputs to [`arc_screened_line_segment`].
+pub(crate) struct LineSegmentScreening<'a> {
+    pub receiver: &'a Receiver,
+    pub start_lat: f64,
+    pub start_lon: f64,
+    pub end_lat: f64,
+    pub end_lon: f64,
+    /// The characteristic point the caller already evaluated…
+    pub cp_lat: f64,
+    pub cp_lon: f64,
+    /// …its absolute source altitude (DEM + source height), which fixes the
+    /// sight line the skyline's grazing prune measures obstacles against…
+    pub src_alt_m: f64,
+    /// …its screening and terrain bands, and the path-averaged ground factor
+    /// they were combined with.
+    pub cp_screening: &'a [f64; NUM_BANDS],
+    pub cp_terrain: &'a [f64; NUM_BANDS],
+    pub ground_g: f64,
+    /// Source height above ground at any point of this segment.
+    pub source_height_m: f64,
+    /// Segment length and the receiver's distance to its nearest point.
+    pub length_m: f64,
+    pub dist_m: f64,
+    pub barriers: &'a [Barrier],
+    pub obstacles: Option<&'a ObstacleSet>,
+}
+
+/// Arc-clipped screening for ONE road/rail microsegment (fix-pack Fix 1): the
+/// receiver's obstacle skyline clipped to the segment's angular span, then the
+/// energy average over the blocked fractions (`propagation::arc_screening`).
+///
+/// Both line kernels call THIS — the cp ray's single verdict was the shadow
+/// stripe, and one implementation is what keeps road and rail from drifting
+/// apart. The skyline lives in `scratch` and is rebuilt only when the receiver
+/// moves, so a popup's whole segment list pays for it once.
+///
+/// Without a vector obstacle store the arc rule still runs whenever the segment
+/// has BARRIERS: noise walls reach the skyline through their own slice, so an
+/// absent store becomes an EMPTY set (`NO_VECTOR_OBSTACLES` below) rather than a
+/// bypass. Only "no store AND no barriers" returns the caller's cp-ray bands
+/// unchanged — see the block in the body, which is the fix this docstring
+/// contradicted.
+pub(crate) fn arc_screened_line_segment(
+    q: &LineSegmentScreening<'_>,
+    rasters: &dyn RasterSampler,
+    skyline: &mut propagation::arc_screening::ArcSkyline,
+    scratch: &mut propagation::arc_screening::ArcScreeningScratch,
+) -> [f64; NUM_BANDS] {
+    // NO vector store is not the same as NOTHING TO CLIP AGAINST. Noise WALLS
+    // reach the skyline through their own slice (`barriers`, arc_screening.rs
+    // §"the other half of the skyline"), not through the obstacle index — so
+    // returning the cp bands here silently denied every wall its angular
+    // treatment in exactly the regions the vector store has not been ingested
+    // for. That is the shipped behaviour the owner reported from the D4 wall at
+    // Voznice ("není za nima tišeji"): one closest-point verdict applied to a
+    // whole 250 m microsegment. An absent store is an EMPTY set, and the kernel
+    // already returns `cp_screening` by itself when nothing clips the span.
+    // (Review 2026-08-04; CUDA carries the same bypass at scatter.cu:2093 —
+    // its guard must become `vector obstacles || nbarr > 0`.)
+    static NO_VECTOR_OBSTACLES: propagation::obstacle_index::ObstacleSet =
+        propagation::obstacle_index::ObstacleSet {
+            indexes: Vec::new(),
+        };
+    let set = match q.obstacles {
+        Some(set) => set,
+        None if !q.barriers.is_empty() => &NO_VECTOR_OBSTACLES,
+        None => return *q.cp_screening,
+    };
+    propagation::arc_screening::arc_screened_attenuation(
+        &propagation::arc_screening::ArcScreening {
+            receiver_lat: q.receiver.lat,
+            receiver_lon: q.receiver.lon,
+            receiver_alt_m: q.receiver.altitude_m(),
+            start_lat: q.start_lat,
+            start_lon: q.start_lon,
+            end_lat: q.end_lat,
+            end_lon: q.end_lon,
+            source_height_m: q.source_height_m,
+            cp_lat: q.cp_lat,
+            cp_lon: q.cp_lon,
+            src_alt_m: q.src_alt_m,
+            cp_screening: q.cp_screening,
+            cp_terrain: q.cp_terrain,
+            ground_g: q.ground_g,
+            barriers: q.barriers,
+            obstacles: set,
+            length_m: q.length_m,
+            dist_m: q.dist_m,
+            // Line sources never self-screen: a road has no footprint of its
+            // own to exclude (unlike an industrial area source).
+            exclusion_radius_m: 0.0,
+            bounds: propagation::arc_screening::ArcBounds::shipped(),
+        },
+        rasters,
+        skyline,
+        scratch,
+    )
 }
 
 #[cfg(test)]
@@ -528,16 +633,79 @@ mod tests {
         }
     }
 
+    /// An ABSENT vector obstacle store must behave exactly like an EMPTY one.
+    /// Walls do not live in the obstacle index — they reach the skyline through
+    /// their own slice — so an early return on `obstacles: None` silently denied
+    /// every noise wall its angular treatment wherever the vector store has not
+    /// been ingested, which is most of the world. The wall below covers part of
+    /// the span and must move the bands away from the caller's cp verdict in
+    /// BOTH configurations, identically. (Review 2026-08-04.)
+    #[test]
+    fn a_wall_is_screened_with_or_without_a_vector_store() {
+        let receiver = Receiver::new(50.08, 14.42, 200.0);
+        // Wall 60 m north of the receiver, running east-west across the span.
+        let barriers = [Barrier {
+            osm_id: 1,
+            height_m: 6.0,
+            start_lat: 50.08054,
+            start_lon: 14.4188,
+            end_lat: 50.08054,
+            end_lon: 14.4212,
+            dist_m: 60.0,
+        }];
+        let cp_screening = [0.0f64; NUM_BANDS];
+        let cp_terrain = [0.0f64; NUM_BANDS];
+        let empty = propagation::obstacle_index::ObstacleSet {
+            indexes: Vec::new(),
+        };
+        let mk = |obstacles| LineSegmentScreening {
+            receiver: &receiver,
+            start_lat: 50.0812,
+            start_lon: 14.4180,
+            end_lat: 50.0812,
+            end_lon: 14.4220,
+            cp_lat: 50.0812,
+            cp_lon: 14.42,
+            src_alt_m: 200.05,
+            cp_screening: &cp_screening,
+            cp_terrain: &cp_terrain,
+            ground_g: 0.5,
+            source_height_m: 0.05,
+            length_m: 285.0,
+            dist_m: 133.0,
+            barriers: &barriers,
+            obstacles,
+        };
+        let run = |obstacles| {
+            let mut skyline = propagation::arc_screening::ArcSkyline::default();
+            let mut scratch = propagation::arc_screening::ArcScreeningScratch::default();
+            arc_screened_line_segment(&mk(obstacles), &MockRasters, &mut skyline, &mut scratch)
+        };
+        let without = run(None);
+        let with_empty = run(Some(&empty));
+        assert_eq!(
+            without, with_empty,
+            "absent store must equal empty store: {without:?} vs {with_empty:?}"
+        );
+        assert!(
+            without.iter().any(|&b| b > 0.1),
+            "the wall must screen SOMETHING — got the untouched cp bands {without:?}"
+        );
+    }
+
     #[test]
     fn test_road_end_to_end() {
         let receiver = Receiver::new(50.08, 14.42, 200.0);
         let roads = vec![RoadSegment {
             osm_id: 1,
             segment_idx: 0,
-            start_lat: 50.081,
-            start_lon: 14.42,
-            end_lat: 50.079,
-            end_lon: 14.42,
+            // 500 m due north of the receiver, running east-west: the
+            // declared dist_m/cp/fraction must AGREE with the geometry —
+            // the finite-line correction reads the real perpendicular.
+            start_lat: 50.084523,
+            start_lon: 14.418460,
+            end_lat: 50.084523,
+            end_lon: 14.421540,
             length_m: 220.0,
             road_class: 0, // motorway
             speed_limit: 100,
@@ -551,7 +719,7 @@ mod tests {
             aadt_moto: 0, // defaults
             source_id: 0,
             dist_m: 500.0,
-            cp_lat: 50.08,
+            cp_lat: 50.084523,
             cp_lon: 14.42,
             fraction: 0.5,
             name: String::new(),
@@ -606,10 +774,10 @@ mod tests {
         let roads = vec![RoadSegment {
             osm_id: 1,
             segment_idx: 0,
-            start_lat: 50.081,
-            start_lon: 14.42,
-            end_lat: 50.079,
-            end_lon: 14.42,
+            start_lat: 50.080905,
+            start_lon: 14.418460,
+            end_lat: 50.080905,
+            end_lon: 14.421540,
             length_m: 220.0,
             road_class: 2,
             speed_limit: 50,
@@ -623,7 +791,7 @@ mod tests {
             aadt_moto: 0,
             source_id: 0,
             dist_m: 100.0,
-            cp_lat: 50.08,
+            cp_lat: 50.080905,
             cp_lon: 14.42,
             fraction: 0.5,
             name: String::new(),
@@ -637,10 +805,10 @@ mod tests {
         let railways = vec![RailSegment {
             osm_id: 2,
             segment_idx: 0,
-            start_lat: 50.082,
-            start_lon: 14.42,
-            end_lat: 50.078,
-            end_lon: 14.42,
+            start_lat: 50.081809,
+            start_lon: 14.416920,
+            end_lat: 50.081809,
+            end_lon: 14.423080,
             length_m: 440.0,
             rail_type: 0,
             usage: 0,
@@ -652,7 +820,7 @@ mod tests {
             name: String::new(),
             rail_ref: String::new(),
             dist_m: 200.0,
-            cp_lat: 50.08,
+            cp_lat: 50.081809,
             cp_lon: 14.42,
             fraction: 0.5,
             bridge: false,

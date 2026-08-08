@@ -93,13 +93,42 @@ const BIN_TILES: usize = TILE_PX / BIN_W;
 /// Bins per tile (BIN_TILES², 1024 at 512 px) — `line_binned`'s grid dim.
 pub const N_BINS: usize = BIN_TILES * BIN_TILES;
 
+/// f32 slots of per-pixel energy in the `line`/`line_binned_fused` `out` buffer
+/// (three Lden periods per pixel) — mirrored by `OUT_ENERGY_SLOTS` in
+/// `kernels/scatter.cu`.
+pub const OUT_ENERGY_SLOTS: usize = TILE_PX * TILE_PX * 3;
+/// Index of the ARC FAULT slot: blocked arcs the kernel had to DROP because the
+/// merged-arc list hit `ARC_MAX_MERGED`, summed over the whole launch (and, since
+/// `out` is allocated once per block, over every tile that launch painted).
+///
+/// Nonzero means the tiles it counts UNDER-screen — a genuinely blocked direction
+/// was painted clear. It is one f32, allocated in production too, because for as
+/// long as the only overflow counter lived behind `-DPROF_COUNTERS=1` there was no
+/// way to tell "never happened" from "never measured", and the answer turned out
+/// to be 1.1 M dropped arcs per dense tile. Being an f32 it saturates well past
+/// 2^24, so read it as a fault flag with an order of magnitude; the exact census
+/// is `arcstat[6]` under `-DPROF_COUNTERS=1`.
+pub const OUT_FAULT_SLOT: usize = OUT_ENERGY_SLOTS;
+/// First slot of the per-pixel `-DPROF_COUNTERS=1` block (8 f32 per pixel).
+pub const OUT_ARCSTAT_BASE: usize = OUT_ENERGY_SLOTS + 1;
+/// `out` length the PRODUCTION painter allocates: energies + the fault slot.
+pub const OUT_SLOTS_PROD: usize = OUT_ENERGY_SLOTS + 1;
+/// `out` length a counter-instrumented build needs (+8 MiB at 512 px). The kernel
+/// writes the counter block ONLY when `meta[13]` says the buffer is at least this
+/// long, so a `-DPROF_COUNTERS=1` PTX run under the production painter — which
+/// allocates [`OUT_SLOTS_PROD`] — writes none of it instead of running off the end
+/// of the buffer.
+pub const OUT_SLOTS_PROF: usize = OUT_ARCSTAT_BASE + TILE_PX * TILE_PX * 8;
+
 /// Per-tile non-halo buffers packed for the `line`/`line_binned_fused` kernels (the halo
 /// elev/cover are uploaded once per batch and shared; the line SOURCES are uploaded
 /// once per layer — see [`SourceBuffers`]). `meta` carries the SHARED halo geom +
 /// this tile's bbox + eta + swizzle width + barrier count. `barr` is the tile's
-/// vector noise-wall slice, nbarr×4 `{lat, lon, height_m, dist_m}` in
+/// vector noise-wall slice, nbarr×[`BARRIER_STRIDE`]
+/// `{start_lat, start_lon, end_lat, end_lon, height_m, dist_m}` in
 /// `BarrierData::for_tile` order (dist_m a conservative lower bound, sorted
-/// ascending — the kernel's early-break key).
+/// ascending — the kernel's early-break key). The kernel intersects the
+/// ENDPOINTS with each propagation ray, exactly as `path_effects` §1 does.
 pub struct TileBuffers {
     pub inner: Vec<f32>,
     pub meta: Vec<f64>,
@@ -168,12 +197,18 @@ pub fn pack_tile(
     tw: f64,
     barriers: &[Barrier],
     nsrc: usize,
+    out_slots: usize,
 ) -> TileBuffers {
     let (lat_min, lon_min, inv, rows, cols) = halo_geom;
     let n = TILE_PX * TILE_PX;
     // meta[12] = nsrc: the kernel reads the source count from meta because
     // the freed launch-arg slot carries the obstacle pointer table (cudarc's
     // tuple launch caps at 12 args).
+    // meta[13] = out_slots: the f32 length the CALLER allocated for `out`. The
+    // kernel's optional regions (fault slot, PROF_COUNTERS block) are entered
+    // only when this proves the room exists, so the buffer size and the writes
+    // to it cannot drift apart — the shape of bug that let a counter build write
+    // 8 MiB past the end of the production painter's buffer.
     let meta = vec![
         rows as f64,
         cols as f64,
@@ -188,6 +223,7 @@ pub fn pack_tile(
         tw,
         barriers.len() as f64,
         nsrc as f64,
+        out_slots as f64,
     ];
     let mut rxll = Vec::with_capacity(2 * TILE_PX);
     rxll.extend_from_slice(&tile.rx_lat);
@@ -197,12 +233,19 @@ pub fn pack_tile(
         rxar.push(tile.rx_alt_m[i]);
         rxar.push(tile.rx_refl_db[i]);
     }
-    let mut barr = Vec::with_capacity(barriers.len().max(1) * 4);
+    let mut barr = Vec::with_capacity(barriers.len().max(1) * BARRIER_STRIDE);
     for b in barriers {
-        barr.extend_from_slice(&[b.lat, b.lon, b.height_m as f64, b.dist_m]);
+        barr.extend_from_slice(&[
+            b.start_lat,
+            b.start_lon,
+            b.end_lat,
+            b.end_lon,
+            b.height_m as f64,
+            b.dist_m,
+        ]);
     }
     if barr.is_empty() {
-        barr.extend_from_slice(&[0.0; 4]);
+        barr.extend_from_slice(&[0.0; BARRIER_STRIDE]);
     }
     TileBuffers {
         inner: tile.inner_elev_m.clone(),
@@ -215,15 +258,20 @@ pub fn pack_tile(
 
 /// Host-flat obstacle store for the CUDA lane (geodata-v2 1.6): every
 /// per-cell [`ObstacleIndex`] of a region's [`ObstacleSet`] flattened into
-/// five uploadable arrays. Per index, `metas` carries 13 f64:
+/// uploadable arrays. Per index, `metas` carries [`META_STRIDE`] f64 — the
+/// authoritative slot list is at the `extend_from_slice` in
+/// [`flatten_obstacles`], which is where a new slot gets added:
 /// `[origin_lat, origin_lon, m_per_deg_lon, cell_m, min_x, min_y, cols,
-/// rows, starts_off, refs_off, edges_off, n_starts, maxh_off]` where the
-/// offsets index the SHARED `starts`/`refs`/`edges`/`cell_max_h` arrays
+/// rows, starts_off, refs_off, edges_off, n_starts, maxh_off,
+/// foot_off, cell_foot_starts_off, cell_foot_ids_off, n_foot,
+/// foot_edge_starts_off, foot_edge_refs_off]` where the offsets index the
+/// SHARED `starts`/`refs`/`edges`/`cell_max_h` and footprint-CSR arrays
 /// (edges stride 5: x0,y0,x1,y1,height — `GpuGridView` order). The kernel
 /// DDA mirrors `ObstacleIndex::crossings` per index; e2-full is the parity
 /// gate. `cell_max_h` powers the exact branch-and-bound cell prune (z13
-/// plan E2): δ is convex in t for a fixed top, so the interval bound at the
-/// cell's chainage endpoints is exact.
+/// plan E2): `detour` is convex in t for a fixed top, so the ABOVE-sight-line
+/// branch is bounded at the chainage endpoints — the below-line branch peaks
+/// at the reflection point instead, see `CellPrune::max_delta`.
 pub struct ObstacleFlat {
     pub n_indexes: usize,
     pub metas: Vec<f64>,
@@ -234,6 +282,222 @@ pub struct ObstacleFlat {
     /// the kernel's branch-and-bound prune (a cell whose best possible
     /// candidate cannot beat the running max-δ is skipped whole).
     pub cell_max_h: Vec<f32>,
+    /// Per edge: the owning footprint's id, parallel to `edges` (stride 1).
+    /// Arc screening (fix-pack Fix 1) builds ONE angular hull per footprint, so
+    /// the kernel needs the owner identity and `gpu_view` therefore materialises
+    /// it — see [`GpuGridView::edge_ids`]. It reaches the device as `obst` slot
+    /// 6; only `ObstacleKind` is still host-only.
+    pub edge_ids: Vec<u32>,
+
+    // ---- Footprint-CSR (arc screening, TRACK C 2026-08-03). The edge-CSR
+    // above forces the kernel to discover footprints EDGE BY EDGE: it keeps a
+    // per-(segment, receiver) table of partial hulls, searches it linearly per
+    // edge, and CAPS it (ARC_MAX_IV) because a thread cannot grow a Vec — which
+    // costs local memory and, worse, diverges from the CPU's uncapped grouping
+    // on any dense tile. With the footprint as the unit each one is visited
+    // once, completed in a single pass and retired, so the table and its cap
+    // both disappear.
+    /// Per footprint, the CSR extent of [`Self::foot_edge_refs`]. A CSR rather
+    /// than a `[first, end)` range because a footprint id's edges are USUALLY
+    /// contiguous in build order but not always (287 of them are not on the
+    /// Dobříš store), and a range would silently split those hulls in two —
+    /// under-blocking a real building.
+    pub foot_edge_starts: Vec<u32>,
+    /// Edge indices per footprint, grouped by owner (index-local).
+    pub foot_edge_refs: Vec<u32>,
+    /// Per footprint: `[min_x, min_y, max_x, max_y, max_height_m, convex]` in
+    /// the index's local frame. The first four feed the wedge prune, so a
+    /// footprint that cannot lie inside the segment's angular span is rejected
+    /// by sign tests alone before any `atan2` touches its vertices.
+    ///
+    /// `convex` is 1.0 when the footprint's edges form ONE closed chain whose
+    /// turns never change sign. That is exactly the condition under which the
+    /// angular silhouette seen from outside is a single contiguous arc, i.e.
+    /// the convex angular hull equals the union of the per-edge arcs. For an
+    /// L-shaped or courtyard block it does not, and the hull screens directions
+    /// that pass through the notch without touching material — so those take
+    /// the exact per-edge union instead.
+    pub foot_box: Vec<f32>,
+    /// Per grid cell, the CSR extent of [`Self::cell_foot_ids`].
+    pub cell_foot_starts: Vec<u32>,
+    /// Footprint index per (cell, footprint) pair — the edge lists deduplicated
+    /// by owner, so it names exactly the footprints the edge-CSR would yield.
+    pub cell_foot_ids: Vec<u32>,
+    /// For each entry of [`Self::cell_foot_ids`], the previous ENTRY listing the
+    /// same footprint (`u32::MAX` for the first) — a back-link CHAIN, walked by
+    /// the kernel to decide whether an earlier listing of this footprint falls
+    /// inside the cell set the current query actually visits.
+    ///
+    /// It links entries, not cells, because a single back-link is not enough:
+    /// a footprint listed in cells c1 < c2 < c3 where only c1 and c3 are inside
+    /// the walked set would see `prev(c3) = c2` outside and process itself a
+    /// SECOND time. Idempotent (the interval union absorbs the duplicate, which
+    /// is why the outputs still matched byte-for-byte), but pure wasted work —
+    /// and it got worse, not better, as the walked set shrank to the triangle.
+    pub cell_foot_prev: Vec<u32>,
+    /// The cell each entry of [`Self::cell_foot_ids`] belongs to, so a chain hop
+    /// can test that cell for membership of the walked set.
+    pub cell_foot_cell: Vec<u32>,
+}
+
+/// f32 slots per footprint in [`ObstacleFlat::foot_box`].
+pub const FOOT_BOX_STRIDE: usize = 6;
+
+/// Do these edges form ONE closed chain with consistently signed turns?
+/// Conservative: anything it cannot verify (a broken chain, a multi-ring
+/// footprint with holes, a degenerate edge) is reported non-convex, which only
+/// costs the exact per-edge path — never accuracy.
+fn is_convex_ring(
+    v: &noise_compute::propagation::obstacle_index::GpuGridView<'_>,
+    refs: &[u32],
+) -> bool {
+    let n = refs.len();
+    if n < 3 {
+        return false;
+    }
+    let pt = |e: u32, k: usize| {
+        let g = &v.edges_xyxyh[e as usize * 5..e as usize * 5 + 4];
+        (g[k * 2] as f64, g[k * 2 + 1] as f64)
+    };
+    // closed chain?
+    for i in 0..n {
+        let (_, e1) = (pt(refs[i], 0), pt(refs[i], 1));
+        let s2 = pt(refs[(i + 1) % n], 0);
+        if (e1.0 - s2.0).abs() > 1e-6 || (e1.1 - s2.1).abs() > 1e-6 {
+            return false;
+        }
+    }
+    let mut sign = 0i32;
+    for i in 0..n {
+        let (a0, a1) = (pt(refs[i], 0), pt(refs[i], 1));
+        let (_, b1) = (pt(refs[(i + 1) % n], 0), pt(refs[(i + 1) % n], 1));
+        let (ux, uy) = (a1.0 - a0.0, a1.1 - a0.1);
+        let (wx, wy) = (b1.0 - a1.0, b1.1 - a1.1);
+        let cr = ux * wy - uy * wx;
+        if cr.abs() < 1e-12 {
+            continue;
+        }
+        let s = if cr > 0.0 { 1 } else { -1 };
+        if sign == 0 {
+            sign = s;
+        } else if sign != s {
+            return false;
+        }
+    }
+    sign != 0
+}
+
+/// One index's footprint-CSR, built from the `gpu_view` edge order + `edge_ids`.
+struct FootprintCsr {
+    foot_edge_starts: Vec<u32>,
+    foot_edge_refs: Vec<u32>,
+    foot_box: Vec<f32>,
+    cell_foot_starts: Vec<u32>,
+    cell_foot_ids: Vec<u32>,
+    cell_foot_prev: Vec<u32>,
+    cell_foot_cell: Vec<u32>,
+    n_foot: usize,
+}
+
+/// Group one index's edges by footprint id, then list every footprint once per
+/// grid cell its edges occupy. Footprint indices follow FIRST-APPEARANCE order
+/// in the edge array, so the grouping is deterministic and independent of the
+/// hash iteration order.
+fn footprint_csr_for_index(
+    v: &noise_compute::propagation::obstacle_index::GpuGridView<'_>,
+    edge_ids: &[u32],
+) -> FootprintCsr {
+    let n_edges = edge_ids.len();
+    // 1. id ⇒ footprint index (first appearance), and the per-edge owner.
+    let mut edge_foot = vec![0u32; n_edges];
+    let mut of_id: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    let mut n_foot = 0usize;
+    for (e, &id) in edge_ids.iter().enumerate() {
+        let f = *of_id.entry(id).or_insert_with(|| {
+            let f = n_foot as u32;
+            n_foot += 1;
+            f
+        });
+        edge_foot[e] = f;
+    }
+    // 2. counting sort of the edges by owner ⇒ the per-footprint CSR, plus each
+    //    footprint's local-frame bbox and max height.
+    let mut foot_edge_starts = vec![0u32; n_foot + 1];
+    for &f in &edge_foot {
+        foot_edge_starts[f as usize + 1] += 1;
+    }
+    for f in 0..n_foot {
+        foot_edge_starts[f + 1] += foot_edge_starts[f];
+    }
+    let mut cursor = foot_edge_starts[..n_foot].to_vec();
+    let mut foot_edge_refs = vec![0u32; n_edges];
+    let mut foot_box = vec![0.0f32; n_foot * FOOT_BOX_STRIDE];
+    for f in 0..n_foot {
+        foot_box[f * FOOT_BOX_STRIDE] = f32::INFINITY;
+        foot_box[f * FOOT_BOX_STRIDE + 1] = f32::INFINITY;
+        foot_box[f * FOOT_BOX_STRIDE + 2] = f32::NEG_INFINITY;
+        foot_box[f * FOOT_BOX_STRIDE + 3] = f32::NEG_INFINITY;
+    }
+    for (e, &f) in edge_foot.iter().enumerate() {
+        let f = f as usize;
+        foot_edge_refs[cursor[f] as usize] = e as u32;
+        cursor[f] += 1;
+        let g = &v.edges_xyxyh[e * 5..e * 5 + 5];
+        let b = &mut foot_box[f * FOOT_BOX_STRIDE..f * FOOT_BOX_STRIDE + FOOT_BOX_STRIDE];
+        b[0] = b[0].min(g[0]).min(g[2]);
+        b[1] = b[1].min(g[1]).min(g[3]);
+        b[2] = b[2].max(g[0]).max(g[2]);
+        b[3] = b[3].max(g[1]).max(g[3]);
+        b[4] = b[4].max(g[4]);
+    }
+    // convexity: one closed chain, turns all the same sign.
+    for f in 0..n_foot {
+        let (lo, hi) = (
+            foot_edge_starts[f] as usize,
+            foot_edge_starts[f + 1] as usize,
+        );
+        foot_box[f * FOOT_BOX_STRIDE + 5] = if is_convex_ring(v, &foot_edge_refs[lo..hi]) {
+            1.0
+        } else {
+            0.0
+        };
+    }
+
+    // 2. per cell, the footprints its edge list names — deduplicated, each
+    //    carrying the back-link to that footprint's previous listing.
+    let n_cells = v.cell_starts.len().saturating_sub(1);
+    let mut cell_foot_starts = Vec::with_capacity(n_cells + 1);
+    let mut cell_foot_ids: Vec<u32> = Vec::new();
+    let mut cell_foot_prev: Vec<u32> = Vec::new();
+    let mut last_entry = vec![u32::MAX; n_foot];
+    let mut cell_foot_cell: Vec<u32> = Vec::new();
+    let mut scratch: Vec<u32> = Vec::new();
+    cell_foot_starts.push(0u32);
+    for c in 0..n_cells {
+        let (lo, hi) = (v.cell_starts[c] as usize, v.cell_starts[c + 1] as usize);
+        scratch.clear();
+        scratch.extend(v.edge_refs[lo..hi].iter().map(|&r| edge_foot[r as usize]));
+        scratch.sort_unstable();
+        scratch.dedup();
+        for &f in &scratch {
+            let entry = cell_foot_ids.len() as u32;
+            cell_foot_ids.push(f);
+            cell_foot_prev.push(last_entry[f as usize]);
+            cell_foot_cell.push(c as u32);
+            last_entry[f as usize] = entry;
+        }
+        cell_foot_starts.push(cell_foot_ids.len() as u32);
+    }
+    FootprintCsr {
+        foot_edge_starts,
+        foot_edge_refs,
+        foot_box,
+        cell_foot_starts,
+        cell_foot_ids,
+        cell_foot_prev,
+        cell_foot_cell,
+        n_foot,
+    }
 }
 
 pub fn flatten_obstacles(
@@ -241,14 +505,31 @@ pub fn flatten_obstacles(
 ) -> ObstacleFlat {
     let mut flat = ObstacleFlat {
         n_indexes: set.indexes.len(),
-        metas: Vec::with_capacity(set.indexes.len() * 13),
+        metas: Vec::with_capacity(set.indexes.len() * META_STRIDE),
         starts: Vec::new(),
         refs: Vec::new(),
         edges: Vec::new(),
         cell_max_h: Vec::new(),
+        edge_ids: Vec::new(),
+        foot_edge_starts: Vec::new(),
+        foot_edge_refs: Vec::new(),
+        foot_box: Vec::new(),
+        cell_foot_starts: Vec::new(),
+        cell_foot_ids: Vec::new(),
+        cell_foot_prev: Vec::new(),
+        cell_foot_cell: Vec::new(),
     };
     for idx in &set.indexes {
         let v = idx.gpu_view();
+        let csr = footprint_csr_for_index(&v, &v.edge_ids);
+        flat.edge_ids.extend_from_slice(&v.edge_ids);
+        let (foot_off, cfs_off, cfi_off, fes_off, fer_off) = (
+            flat.foot_box.len() / FOOT_BOX_STRIDE,
+            flat.cell_foot_starts.len(),
+            flat.cell_foot_ids.len(),
+            flat.foot_edge_starts.len(),
+            flat.foot_edge_refs.len(),
+        );
         flat.metas.extend_from_slice(&[
             v.origin_lat,
             v.origin_lon,
@@ -267,21 +548,203 @@ pub fn flatten_obstacles(
             v.cell_starts.len() as f64,
             // slot 12: this index's offset into the shared cell_max_h.
             flat.cell_max_h.len() as f64,
+            // slots 13..=16: the footprint-CSR offsets (foot_range/foot_box
+            // share `foot_off`, both being per-footprint) and the footprint
+            // count. `cell_foot_starts` carries n_cells+1 entries per index,
+            // so its offset is NOT cfi_off.
+            foot_off as f64,
+            cfs_off as f64,
+            cfi_off as f64,
+            csr.n_foot as f64,
+            // slots 17..=18: the per-footprint edge CSR (n_foot+1 starts and
+            // one ref per edge for THIS index).
+            fes_off as f64,
+            fer_off as f64,
         ]);
-        let n_cells = v.cell_starts.len().saturating_sub(1);
-        for c in 0..n_cells {
-            let (lo, hi) = (v.cell_starts[c] as usize, v.cell_starts[c + 1] as usize);
-            let mut mx = 0.0f32;
-            for &eref in &v.edge_refs[lo..hi] {
-                mx = mx.max(v.edges_xyxyh[eref as usize * 5 + 4]);
-            }
-            flat.cell_max_h.push(mx);
-        }
+        flat.foot_edge_starts
+            .extend_from_slice(&csr.foot_edge_starts);
+        flat.foot_edge_refs.extend_from_slice(&csr.foot_edge_refs);
+        flat.foot_box.extend_from_slice(&csr.foot_box);
+        flat.cell_foot_starts
+            .extend_from_slice(&csr.cell_foot_starts);
+        flat.cell_foot_ids.extend_from_slice(&csr.cell_foot_ids);
+        flat.cell_foot_prev.extend_from_slice(&csr.cell_foot_prev);
+        flat.cell_foot_cell.extend_from_slice(&csr.cell_foot_cell);
+        flat.cell_max_h.extend_from_slice(v.cell_max_h);
         flat.starts.extend_from_slice(v.cell_starts);
         flat.refs.extend_from_slice(v.edge_refs);
         flat.edges.extend_from_slice(&v.edges_xyxyh);
     }
     flat
+}
+
+/// f64 slots per barrier in the `barr` buffer — mirrored by `BARR_STRIDE` in
+/// `kernels/scatter.cu`; the two must move together.
+pub const BARRIER_STRIDE: usize = 6;
+
+/// f64 slots per index in [`ObstacleFlat::metas`].
+pub const META_STRIDE: usize = 19;
+
+/// Refuse to run the GPU lane while a CPU-ONLY tuning lever is set.
+///
+/// `noise_compute::propagation::arc_screening` reads these at runtime
+/// (`ArcBounds::from_env`). The kernel CANNOT: its constants are
+/// compiled in — `build.rs` injects them from the Rust source precisely so they
+/// cannot drift — and device code never reads the environment. So setting one of
+/// these moves the CPU rule and leaves the GPU on the shipped value, and any
+/// comparison made in that state is rigged without saying so.
+///
+/// This is not hypothetical. On 2026-08-04 a CPU sweep turned the arc span gate
+/// off (`min_span_rad = 0`) while `scatter.cu` kept `ARC_MIN_SPAN = 0.01` for two
+/// hours, and earlier an ordered A/B measured the DEFAULT build twice because the
+/// `-D` passthrough had been dropped. Both were silent. A knob that reaches one
+/// lane is a divergence generator, so the honest behaviour is to stop.
+///
+/// The kernel's own levers go through `NOISE_GPU_DEFINES="-DNAME=value"`, which
+/// `build.rs` forwards to nvcc and which therefore moves the GPU rule for real.
+/// To sweep the CPU alone, run a CPU-only binary — not this one.
+pub fn ensure_no_cpu_only_arc_levers() -> anyhow::Result<()> {
+    /// Every environment name that moves the CPU's ANSWER and not the kernel's.
+    /// Keep in step with `ArcBounds::from_env` and `scatter_band::seg_samples` —
+    /// a lever added there and missed here is exactly the silent fork this guard
+    /// exists to stop.
+    ///
+    /// Deliberately NOT listed: `QM_ARC_DISABLE_CELL_PRUNE` and
+    /// `QM_OBSTACLE_INDEX_CACHE`. Those gate a prune and a cache that are meant to
+    /// be exact by construction (skip only strictly-worse candidates; re-read the
+    /// same bytes), so a mismatch should cost time and never change a level.
+    /// Listing them would fire on honest cost measurements, and a guard that cries
+    /// wolf gets switched off. NOTE that "meant to be" is doing work here: on
+    /// 2026-08-08 `CellPrune::max_delta` was found underbounding the below-sight-
+    /// line branch, i.e. the prune WAS changing levels, which is why the lever
+    /// stays even though nothing else reads it.
+    /// `(name, value that PINS the CPU to the kernel's rule)`. A lever set to its
+    /// pinning value is the OPPOSITE of a fork — it is how an honest lane
+    /// comparison is made — so only other values are refused. Filtering by name
+    /// alone banned the very procedure `scatter_band::seg_samples` documents as
+    /// mandatory, which made `e2-full` unrunnable as specified (2026-08-08).
+    const CPU_ONLY: [(&str, Option<&str>); 7] = [
+        ("QM_ARC_EXACT", None),
+        // 0 makes the CPU arc-screen from the same floor the kernel does
+        // (`build.rs` injects it as ARC_DEGENERATE_SPAN, 1e-4 rad). NOT the same
+        // as leaving it unset: since 2026-08-08 `seg_arc_bounds()` raises the gate
+        // to 3° when this is absent, so absent is a FORK and only the explicit 0
+        // pins the lanes. `e2-full` sets it for exactly that reason.
+        ("QM_ARC_MIN_SPAN_DEG", Some("0")),
+        ("QM_ARC_RADIUS_M", None),
+        ("QM_ARC_DELTA_MIN_M", None),
+        ("QM_ARC_MAX_ARCS", None),
+        ("QM_ARC_MAX_INTERVALS", None),
+        // The tile painter's angular quadrature. CUDA has no sampling at all, so
+        // the shipped default (N=5) already forks the lanes BY DESIGN — worth up
+        // to 1.5 dB on the CPU painter and exactly 0 on the kernel (SPEC §3.5d).
+        // N=1 is the one value that restores the kernel's single cp ray.
+        ("QM_SEG_SAMPLES", Some("1")),
+    ];
+    let set: Vec<&str> = CPU_ONLY
+        .iter()
+        // Compare the pinning value NUMERICALLY: `0.0` and `0` pin identically,
+        // and rejecting one of them for its spelling is a false alarm.
+        .filter(|(k, pin)| match (std::env::var(k), pin) {
+            (Ok(v), Some(p)) => match (v.trim().parse::<f64>(), p.parse::<f64>()) {
+                (Ok(got), Ok(want)) => got != want,
+                _ => v.trim() != *p,
+            },
+            (Ok(_), None) => true,
+            (Err(_), _) => false,
+        })
+        .map(|(k, _)| *k)
+        .collect();
+    anyhow::ensure!(
+        set.is_empty(),
+        "CPU-ONLY arc lever(s) set while running the GPU lane: {}. \
+         The kernel compiles its constants in and never reads the environment, so this \
+         would run the CPU under one rule and the GPU under another — every number out \
+         of such a run is a comparison of two different kernels. Move the GPU with \
+         NOISE_GPU_DEFINES=\"-DARC_...=value\", unset these, or — to compare the \
+         lanes — set them to the value that pins the CPU to the kernel's rule \
+         (QM_SEG_SAMPLES=1, QM_ARC_MIN_SPAN_DEG=0).",
+        set.join(", ")
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod cpu_only_lever_tests {
+    /// The guard must refuse a fork and ALLOW the pinning value — banning the
+    /// pinning value bans the documented lane-comparison procedure itself, which
+    /// is how this guard made `e2-full` unrunnable as specified (2026-08-08).
+    ///
+    /// One test, run serially inside itself: the environment is process-global and
+    /// the harness is threaded, so splitting these into separate `#[test]` fns
+    /// would let them race each other's `set_var`.
+    #[test]
+    fn pinning_values_pass_and_every_other_value_fails() {
+        let restore = |k: &str| std::env::var(k).ok();
+        let (prev_seg, prev_span) = (restore("QM_SEG_SAMPLES"), restore("QM_ARC_MIN_SPAN_DEG"));
+        // SAFETY: single-threaded within this test; every other test in the crate
+        // is pure arithmetic over local buffers and reads no environment.
+        unsafe {
+            std::env::remove_var("QM_SEG_SAMPLES");
+            std::env::remove_var("QM_ARC_MIN_SPAN_DEG");
+            assert!(
+                super::ensure_no_cpu_only_arc_levers().is_ok(),
+                "unset must pass"
+            );
+
+            std::env::set_var("QM_SEG_SAMPLES", "1");
+            assert!(
+                super::ensure_no_cpu_only_arc_levers().is_ok(),
+                "QM_SEG_SAMPLES=1 pins the CPU to the kernel's single cp ray"
+            );
+            std::env::set_var("QM_SEG_SAMPLES", " 1 ");
+            assert!(
+                super::ensure_no_cpu_only_arc_levers().is_ok(),
+                "whitespace around the pinning value must not fork the lanes"
+            );
+
+            std::env::set_var("QM_SEG_SAMPLES", "5");
+            let err = super::ensure_no_cpu_only_arc_levers()
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("QM_SEG_SAMPLES"), "N=5 forks the lanes: {err}");
+            assert!(
+                err.contains("QM_SEG_SAMPLES=1"),
+                "error must name the way out"
+            );
+
+            std::env::remove_var("QM_SEG_SAMPLES");
+            std::env::set_var("QM_ARC_MIN_SPAN_DEG", "0");
+            assert!(
+                super::ensure_no_cpu_only_arc_levers().is_ok(),
+                "0 is the shipped default and build.rs injects it into the kernel"
+            );
+            std::env::set_var("QM_ARC_MIN_SPAN_DEG", "1000000");
+            assert!(
+                super::ensure_no_cpu_only_arc_levers().is_err(),
+                "arc off on CPU only"
+            );
+
+            std::env::remove_var("QM_ARC_MIN_SPAN_DEG");
+            // A lever with no pinning value is refused whatever it says.
+            std::env::set_var("QM_ARC_EXACT", "0");
+            assert!(
+                super::ensure_no_cpu_only_arc_levers().is_err(),
+                "no pinning value"
+            );
+            std::env::remove_var("QM_ARC_EXACT");
+
+            for (k, v) in [
+                ("QM_SEG_SAMPLES", prev_seg),
+                ("QM_ARC_MIN_SPAN_DEG", prev_span),
+            ] {
+                match v {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -306,14 +769,14 @@ mod obstacle_flat_tests {
         let set = ObstacleSet { indexes: sets };
         let flat = super::flatten_obstacles(&set);
         assert_eq!(flat.n_indexes, 2);
-        assert_eq!(flat.metas.len(), 26);
+        assert_eq!(flat.metas.len(), 2 * super::META_STRIDE);
         // Second index's offsets start exactly where the first index ends,
         // and its extents tile the shared arrays completely.
         let (starts_off2, refs_off2, edges_off2, n_cells2) = (
-            flat.metas[13 + 8] as usize,
-            flat.metas[13 + 9] as usize,
-            flat.metas[13 + 10] as usize,
-            flat.metas[13 + 11] as usize,
+            flat.metas[super::META_STRIDE + 8] as usize,
+            flat.metas[super::META_STRIDE + 9] as usize,
+            flat.metas[super::META_STRIDE + 10] as usize,
+            flat.metas[super::META_STRIDE + 11] as usize,
         );
         assert_eq!(flat.metas[11] as usize, starts_off2, "starts contiguous");
         assert_eq!(starts_off2 + n_cells2, flat.starts.len(), "starts tiled");
@@ -326,11 +789,24 @@ mod obstacle_flat_tests {
             "refs tiled"
         );
         assert!(flat.edges.len().is_multiple_of(5) && !flat.refs.is_empty());
+        // Arc-screening hull grouping (fix-pack Fix 1): every edge carries its
+        // footprint id, recovered from the endpoint bits — one ring per index
+        // here, so id 0 across the board and never the high-bit "unmatched"
+        // sentinel that would silently split a hull.
+        assert_eq!(flat.edge_ids.len(), flat.edges.len() / 5, "one id per edge");
+        assert!(
+            flat.edge_ids.iter().all(|&i| i == 0),
+            "single ring per index ⇒ id 0, got {:?}",
+            flat.edge_ids
+        );
         // E2 per-cell max heights: offsets (slot 12) tile the shared array
         // exactly like starts/refs, and every value equals the true max over
         // that cell's edge heights (here every edge is the same 10 m ring, so
         // occupied cells carry exactly 10.0 and empty cells 0.0).
-        let (maxh_off1, maxh_off2) = (flat.metas[12] as usize, flat.metas[13 + 12] as usize);
+        let (maxh_off1, maxh_off2) = (
+            flat.metas[12] as usize,
+            flat.metas[super::META_STRIDE + 12] as usize,
+        );
         assert_eq!(maxh_off1, 0, "first index's maxh starts the array");
         // metas[11] is n_starts (= cells + 1, CSR); maxh carries one entry
         // per CELL, so the second offset is the first index's cell count.
@@ -348,7 +824,7 @@ mod obstacle_flat_tests {
                 (1, c - n_cells1)
             };
             let (lo, hi) = {
-                let so = flat.metas[idx_off * 13 + 8] as usize;
+                let so = flat.metas[idx_off * super::META_STRIDE + 8] as usize;
                 (
                     flat.starts[so + cell] as usize,
                     flat.starts[so + cell + 1] as usize,
@@ -371,12 +847,15 @@ mod obstacle_upload {
     use cudarc::driver::{CudaDevice, CudaSlice};
     use std::sync::Arc;
 
-    /// The region's vector obstacles resident on the GPU. `table` is the 6-slot
-    /// pointer table the kernel dereferences ({n, metas, starts, refs, edges,
-    /// cell_max_h}); the `_`-prefixed slices only exist to keep those device
-    /// allocations alive for as long as the table can be launched with. Raster
-    /// mode = a 1-element `[0]` table (the kernel reads slots 1..=5 only when
-    /// slot 0 is non-zero).
+    /// The region's vector obstacles resident on the GPU. `table` is the 14-slot
+    /// pointer table the kernel dereferences — `0` n_indexes, `1` metas, `2`
+    /// starts, `3` refs, `4` edges, `5` cell_max_h, `6` edge_ids, then the
+    /// footprint-CSR half: `7` foot_edge_starts, `8` foot_box, `9`
+    /// cell_foot_starts, `10` cell_foot_ids, `11` cell_foot_prev, `12`
+    /// foot_edge_refs, `13` cell_foot_cell; the `_`-prefixed slices (and
+    /// `_keep`) only exist to keep those device allocations alive for as long as
+    /// the table can be launched with. Raster mode = an all-zero 14-slot table
+    /// (the kernel reads slots 1..=13 only when slot 0 is non-zero).
     pub struct ObstDev {
         pub table: CudaSlice<u64>,
         _metas: Option<CudaSlice<f64>>,
@@ -384,6 +863,8 @@ mod obstacle_upload {
         _refs: Option<CudaSlice<u32>>,
         _edges: Option<CudaSlice<f32>>,
         _maxh: Option<CudaSlice<f32>>,
+        _ids: Option<CudaSlice<u32>>,
+        _keep: Vec<Box<dyn std::any::Any + Send + Sync>>,
     }
 
     pub fn upload_obstacles(
@@ -392,13 +873,18 @@ mod obstacle_upload {
     ) -> Result<ObstDev> {
         use cudarc::driver::DevicePtr;
         let Some(set) = set else {
+            // Raster mode: the kernel reads slots 1..=13 only when slot 0 is
+            // non-zero, but the table must still be long enough that a slot
+            // read is never out of bounds.
             return Ok(ObstDev {
-                table: dev.htod_copy(vec![0u64]).context("obst off-table")?,
+                table: dev.htod_copy(vec![0u64; 14]).context("obst off-table")?,
                 _metas: None,
                 _starts: None,
                 _refs: None,
                 _edges: None,
                 _maxh: None,
+                _ids: None,
+                _keep: Vec::new(),
             });
         };
         let flat = crate::flatten_obstacles(set);
@@ -407,11 +893,36 @@ mod obstacle_upload {
         let refs = dev.htod_copy(flat.refs).context("obst refs")?;
         let edges = dev.htod_copy(flat.edges).context("obst edges")?;
         let maxh = dev.htod_copy(flat.cell_max_h).context("obst maxh")?;
+        let ids = dev.htod_copy(flat.edge_ids).context("obst edge ids")?;
         // NOISE_GPU_DISABLE_PRUNE=1: publish a NULL maxh pointer — the kernel
         // then walks every non-empty cell's edge list (pre-E2 behavior), an
         // incident A/B lever that needs no rebuild. Output is identical
         // either way (the prune is exact); only the cost differs.
         let prune_disabled = std::env::var("NOISE_GPU_DISABLE_PRUNE").is_ok_and(|v| v == "1");
+        // Footprint-CSR (slots 7..=13) — the arc-screening walk's own view of
+        // the same edges. Uploaded unconditionally: it costs ~20 MB on the
+        // densest region measured (0.97 M polygon points) and the kernel picks
+        // the walk by `#if ARC_FOOTPRINT_CSR`, not by a null pointer, so both
+        // walks stay A/B-able from one binary set.
+        let fes = dev
+            .htod_copy(flat.foot_edge_starts)
+            .context("obst foot edge starts")?;
+        let fer = dev
+            .htod_copy(flat.foot_edge_refs)
+            .context("obst foot edge refs")?;
+        let foot_box = dev.htod_copy(flat.foot_box).context("obst foot box")?;
+        let cfs = dev
+            .htod_copy(flat.cell_foot_starts)
+            .context("obst cell foot starts")?;
+        let cfi = dev
+            .htod_copy(flat.cell_foot_ids)
+            .context("obst cell foot ids")?;
+        let cfp = dev
+            .htod_copy(flat.cell_foot_prev)
+            .context("obst cell foot prev")?;
+        let cfc = dev
+            .htod_copy(flat.cell_foot_cell)
+            .context("obst cell foot cell")?;
         let table = dev
             .htod_copy(vec![
                 flat.n_indexes as u64,
@@ -424,6 +935,14 @@ mod obstacle_upload {
                 } else {
                     *maxh.device_ptr()
                 },
+                *ids.device_ptr(),
+                *fes.device_ptr(),
+                *foot_box.device_ptr(),
+                *cfs.device_ptr(),
+                *cfi.device_ptr(),
+                *cfp.device_ptr(),
+                *fer.device_ptr(),
+                *cfc.device_ptr(),
             ])
             .context("obst table")?;
         Ok(ObstDev {
@@ -433,6 +952,16 @@ mod obstacle_upload {
             _refs: Some(refs),
             _edges: Some(edges),
             _maxh: Some(maxh),
+            _ids: Some(ids),
+            _keep: vec![
+                Box::new(fes),
+                Box::new(fer),
+                Box::new(foot_box),
+                Box::new(cfs),
+                Box::new(cfi),
+                Box::new(cfp),
+                Box::new(cfc),
+            ],
         })
     }
 }

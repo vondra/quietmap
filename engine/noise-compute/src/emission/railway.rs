@@ -403,8 +403,8 @@ fn free_field_lden_at(
     q_frt: f64,
     d: f64,
 ) -> f64 {
-    use crate::constants::{ALPHA_ATM, GROUND_CF};
-    use crate::propagation::iso9613::a_weighted_total;
+    use crate::constants::ALPHA_ATM;
+    use crate::propagation::iso9613::{a_weighted_total, ground_atten_db};
 
     let d = d.max(1.0);
     let geo = 10.0 * (2.0 * std::f64::consts::PI * d).log10();
@@ -419,10 +419,12 @@ fn free_field_lden_at(
         );
         let mut bands = [0.0f64; NUM_BANDS];
         for i in 0..NUM_BANDS {
-            // G = 0: A_ground = GROUND_CF[i] · 0 = 0, kept explicit for parity
-            // with `propagate_bands` so the boundary matches the kernel's
-            // free-field limit exactly.
-            bands[i] = em[i] - geo - ALPHA_ATM[i] * d_over_1000 - GROUND_CF[i] * 0.0;
+            // G = 0 is the LOUDEST ground the path could have (A_ground is
+            // monotone increasing in G), so the reach this solves stays an
+            // upper bound on audibility; kept explicit, and routed through the
+            // shared term, so the boundary matches the kernel's free-field
+            // limit exactly. Post hard-ground fix that term is −3 dB, not 0.
+            bands[i] = em[i] - geo - ALPHA_ATM[i] * d_over_1000 - ground_atten_db(i, 0.0);
         }
         a_weighted_total(&bands)
     };
@@ -547,41 +549,58 @@ mod tests {
     #[test]
     fn reach_lands_on_25_db_target() {
         let admin = Admin::UNKNOWN;
+        let mut unclamped = 0;
         for (rt, sp, qp, qf) in [
             (RailType::Rail, 80.0, 80.0, 20.0),
             (RailType::Rail, 300.0, 80.0, 0.0),
             (RailType::Tram, 40.0, 120.0, 0.0),
         ] {
             let r = rail_reach_m(admin, rt, sp, qp, qf);
-            // All three crossings fall strictly inside the clamp band.
-            assert!(
-                r > 2_000.0 && r < 10_000.0,
-                "{:?} reach {r} hit a clamp",
-                rt
-            );
             let lden = free_field_lden_at(admin, rt, sp, qp, qf, r);
+            if r >= 10_000.0 {
+                // Clamped: the crossing lies OUTSIDE the band, so the defining
+                // property cannot hold at `r`. What must hold is that the clamp
+                // is the reason — the row is still above target at the ceiling.
+                // (The 300 km/h corridor moved here when the CNOSSOS
+                // hard-ground floor lifted every row's free-field limit 3 dB.)
+                assert!(
+                    lden > 25.0,
+                    "{rt:?} clamped at {r} but Lden there is {lden:.3} ≤ 25 — not a clamp"
+                );
+                continue;
+            }
+            assert!(r > 2_000.0, "{rt:?} reach {r} hit the floor clamp");
             assert!(
                 (lden - 25.0).abs() < 0.05,
                 "{:?} Lden@reach = {lden:.3}, want 25",
                 rt
             );
+            unclamped += 1;
         }
+        assert!(unclamped >= 2, "the 25 dB property was never exercised");
     }
 
     /// POST-C1 ANCHOR: a default mainline (80 pax + 20 freight @ 80 km/h) under
     /// the WORLD split (`Admin::UNKNOWN`, freight 0.50/0.167/0.333) reaches
-    /// ≈7.7 km — slightly PAST the retired blanket `RAILWAY_MAX_RADIUS = 7000`
-    /// because even the uniform world split lifts the freight night share
-    /// 0.15→0.333 vs the old flat split (layer-line.md §A's 25.3 dB @ 7 km was the
-    /// FLAT-split crossing). The dominant mainline class is no longer perfectly
-    /// value-neutral — that is the intended C1 effect (the night-heavy redistribution
-    /// reaches the fringe ring), bounded by the 10 km clamp.
+    /// ≈9.2 km — PAST the retired blanket `RAILWAY_MAX_RADIUS = 7000` because
+    /// even the uniform world split lifts the freight night share 0.15→0.333 vs
+    /// the old flat split (layer-line.md §A's 25.3 dB @ 7 km was the FLAT-split
+    /// crossing). The dominant mainline class is no longer perfectly
+    /// value-neutral — that is the intended C1 effect (the night-heavy
+    /// redistribution reaches the fringe ring), bounded by the 10 km clamp.
+    ///
+    /// WAS ≈7.7 km until the CNOSSOS hard-ground floor landed (2026-08-05).
+    /// `free_field_lden_at` solves at G = 0, the loudest ground a path can
+    /// have, and that limit is `A_ground = −3 dB` (not 0 dB), so every row is
+    /// 3 dB louder at every distance and its 25 dB crossing moves outward. The
+    /// old figure was the missing term, not a calibration; recomputed, not
+    /// re-fitted.
     #[test]
     fn default_mainline_reach_post_c1() {
         let r = rail_reach_m(Admin::UNKNOWN, RailType::Rail, 80.0, 80.0, 20.0);
         assert!(
-            (7_400.0..=8_100.0).contains(&r),
-            "world mainline reach {r:.0} m, want ≈7.7 km"
+            (8_900.0..=9_400.0).contains(&r),
+            "world mainline reach {r:.0} m, want ≈9.2 km"
         );
     }
 
@@ -606,29 +625,51 @@ mod tests {
 
     /// HONESTY FIX: a 300 km/h high-speed PASSENGER corridor is 30.8 dB @ 7 km
     /// (layer-line.md §A) — 5.8 dB louder than the boundary. Pax-only, so the EU
-    /// vs world freight split is irrelevant (pax night 0.10 both); its calibrated
-    /// reach extends to ≈9-9.5 km regardless of admin.
+    /// vs world freight split is irrelevant (pax night 0.10 both).
+    ///
+    /// Its unclamped crossing was ≈9.3 km and is ≈11.9 km since the CNOSSOS
+    /// hard-ground floor put the G = 0 free-field limit at −3 dB, so the class
+    /// now sits ON the 10 km halo ceiling rather than just under it. The
+    /// ceiling — a rendering-budget number, not an acoustic one — is what caps
+    /// this class from here, and that is the assertion worth pinning.
     #[test]
-    fn highspeed_reach_extends_to_9km() {
+    fn highspeed_reach_hits_the_halo_ceiling() {
         let r = rail_reach_m(Admin::UNKNOWN, RailType::Rail, 300.0, 80.0, 0.0);
+        assert_eq!(
+            r,
+            crate::constants::RAILWAY_REACH_CLAMP_MAX,
+            "HS reach {r:.0} m, want the 10 km ceiling"
+        );
+        // …and it is the CEILING that caps it, not a coincidence: the free-field
+        // Lden at the ceiling is still above the 25 dB target.
+        let lden = free_field_lden_at(
+            Admin::UNKNOWN,
+            RailType::Rail,
+            300.0,
+            80.0,
+            0.0,
+            crate::constants::RAILWAY_REACH_CLAMP_MAX,
+        );
         assert!(
-            (9_000.0..=9_700.0).contains(&r),
-            "HS reach {r:.0} m, want ≈9-9.5 km"
+            lden > crate::constants::RAILWAY_REACH_TARGET_LDEN_DB,
+            "HS Lden at the ceiling is {lden:.2} dB, must still exceed the 25 dB target"
         );
     }
 
     /// PERF WIN: tram (120 services/day @ 40 km/h) is only 16.8 dB @ 7 km —
-    /// far below the boundary, so it shrinks. Calibrated reach ≈3.5-4.5 km
+    /// far below the boundary, so it shrinks. Calibrated reach ≈4.3-4.7 km
     /// (continuous form; layer-line.md's 3.5 km bucket was the rounded
     /// light-rail figure — the busier 120-train tram default lands a touch
-    /// higher). Lighter rail classes shrink further still.
+    /// higher). Lighter rail classes shrink further still. Was ≈3.6 km before
+    /// the CNOSSOS hard-ground floor made the G = 0 free-field limit −3 dB
+    /// instead of 0 dB; recomputed, not re-fitted.
     #[test]
     fn tram_reach_shrinks_below_mainline() {
         let admin = Admin::UNKNOWN;
         let tram = rail_reach_m(admin, RailType::Tram, 40.0, 120.0, 0.0);
         assert!(
-            (3_500.0..=4_500.0).contains(&tram),
-            "tram reach {tram:.0} m, want ≈3.5-4.5 km"
+            (4_300.0..=4_700.0).contains(&tram),
+            "tram reach {tram:.0} m, want ≈4.3-4.7 km"
         );
         let light = rail_reach_m(admin, RailType::LightRail, 60.0, 80.0, 0.0);
         assert!(
@@ -797,7 +838,14 @@ mod tests {
             let em = railway_emission(rt, sp, qp * pax_pct, qf * frt_pct, h);
             let mut bands = [0.0f64; NUM_BANDS];
             for i in 0..NUM_BANDS {
-                bands[i] = em[i] - geo - crate::constants::ALPHA_ATM[i] * (d / 1000.0);
+                // Same G = 0 free-field limit the solver takes — through the
+                // shared ground term, so this stays an independent check of
+                // the PERIOD SPLIT and not a second copy of the ground formula
+                // (it silently was one while `A_ground(0)` happened to be 0).
+                bands[i] = em[i]
+                    - geo
+                    - crate::constants::ALPHA_ATM[i] * (d / 1000.0)
+                    - crate::propagation::iso9613::ground_atten_db(i, 0.0);
             }
             a_weighted_total(&bands)
         };

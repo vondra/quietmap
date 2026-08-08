@@ -474,7 +474,10 @@ pub fn build_detail(
     // exposes a single Aircraft Lden, not separate cruise / airborne
     // numbers. Cruise band counters come via `cruise_band_stats`
     // (real-fid dedup) so we don't iterate cruise here for those.
-    for acc in cruise_flights.values() {
+    // Ascending flight_id, not HashMap order: f64 addition is not
+    // associative, so the iteration order is part of the number. See
+    // `crate::compute::key_sorted` for why sorting beats a fixed hasher here.
+    for (_, acc) in crate::compute::key_sorted(cruise_flights) {
         // Period accumulation (day/evening/night) — `p` indexes both sides; the
         // f64 sum order across flights is part of popup byte parity.
         #[allow(clippy::needless_range_loop)]
@@ -489,10 +492,19 @@ pub fn build_detail(
     // Sampling-fragility accumulators (see AircraftAirborneDetail docs):
     // real airborne flights only — cruise buckets are aggregate-stable by
     // construction and synthetic fids carry no date.
-    let mut energy_by_day: HashMap<u32, f64> = HashMap::new();
+    //
+    // BTreeMap, not HashMap: the `max_by` below picks the loudest day and
+    // `max_by` returns the LAST maximum, so a HashMap's iteration order
+    // would decide ties. At most one entry per sampled day (≤ 365).
+    let mut energy_by_day: std::collections::BTreeMap<u32, f64> = std::collections::BTreeMap::new();
     let mut max_flight_energy = 0.0f64;
 
-    for (&flight_id, acc) in flights.iter() {
+    // Sorted once and reused by `build_top_flights` below — the top-20
+    // selection needs the same deterministic order and would otherwise
+    // sort the same map a second time.
+    let flights_by_id = crate::compute::key_sorted(flights);
+
+    for &(&flight_id, acc) in flights_by_id.iter() {
         // Period accumulation — same byte-parity sum order as the cruise loop above.
         #[allow(clippy::needless_range_loop)]
         for p in 0..3 {
@@ -559,8 +571,9 @@ pub fn build_detail(
         NoisePeriods::silence()
     };
 
-    let observed_flights_per_day: f64 = flights
-        .values()
+    let observed_flights_per_day: f64 = flights_by_id
+        .iter()
+        .map(|&(_, f)| f)
         .filter(|f| !f.is_cruise && f.period_energy.iter().sum::<f64>() > 0.0)
         .map(|f| f.flight_weight / n_days_f)
         .sum();
@@ -576,7 +589,8 @@ pub fn build_detail(
     let cruise_transits_per_day = cruise_transit_count as f64 / n_days_f;
 
     let total_airborne_energy: f64 = airborne_energy.iter().sum();
-    let top_flights = build_top_flights(flights, top_flight_candidates, total_airborne_energy);
+    let top_flights =
+        build_top_flights(&flights_by_id, top_flight_candidates, total_airborne_energy);
 
     let (top_day_energy_share, top_day_date) = energy_by_day
         .iter()
@@ -629,25 +643,28 @@ pub fn build_detail(
 /// Cruise rows show `energy_pct = 0` because the bucket aggregates many
 /// real fids and per-fid energy split would be artificial.
 fn build_top_flights(
-    flights: &HashMap<u64, FlightAccum>,
+    flights_by_id: &[(&u64, &FlightAccum)],
     cruise_candidates: &HashMap<u64, TopFlightCandidate>,
     total_airborne_energy: f64,
 ) -> Vec<AircraftTopFlight> {
     use std::cmp::Ordering;
 
-    let mut top: Vec<(f64, u64, AircraftTopFlight)> = Vec::with_capacity(TOP_FLIGHTS_N + 1);
-    let mut try_insert = |peak_lmax: f64, fid: u64, entry: AircraftTopFlight| {
-        let pos = top
-            .iter()
-            .position(|(lm, _, _)| peak_lmax > *lm)
-            .unwrap_or(top.len());
-        if pos < TOP_FLIGHTS_N {
-            top.insert(pos, (peak_lmax, fid, entry));
-            top.truncate(TOP_FLIGHTS_N);
-        }
-    };
-
-    for (&fid, acc) in flights.iter() {
+    // Rank on plain scalars first, build the rows afterwards. The previous
+    // bounded insertion sort built a full `AircraftTopFlight` — five String
+    // allocations (callsign, typecode, profile name, date, ICAO hex) — for
+    // EVERY flight and then dropped all but 20. São Paulo carries ~95 k
+    // airborne flights, so ~475 k allocations were made to be discarded.
+    //
+    // `is_cruise` (0 = airborne, 1 = cruise) is a SELECTION tiebreak, not a
+    // display field: the insertion sort fed airborne candidates first and
+    // kept the first arrival at an equal `peak_lmax`, so airborne won a tie
+    // for the last slot. (lmax desc, is_cruise asc, fid asc) reproduces
+    // that, and since a fid appears in at most one of the two groups it is
+    // a TOTAL order — which is also why the cruise map below can be walked
+    // in hash order without costing reproducibility.
+    let mut cands: Vec<(f64, u8, u64)> =
+        Vec::with_capacity(flights_by_id.len() + cruise_candidates.len());
+    for &(&fid, acc) in flights_by_id.iter() {
         if acc.is_cruise {
             continue;
         }
@@ -655,18 +672,8 @@ fn build_top_flights(
         if flight_energy <= 0.0 || acc.peak_lmax <= -900.0 {
             continue;
         }
-        let energy_pct = if total_airborne_energy > 0.0 {
-            flight_energy / total_airborne_energy * 100.0
-        } else {
-            0.0
-        };
-        try_insert(
-            acc.peak_lmax,
-            fid,
-            airborne_top_flight_entry(fid, acc, energy_pct),
-        );
+        cands.push((acc.peak_lmax, 0, fid));
     }
-
     for (&fid, cand) in cruise_candidates.iter() {
         if cand.peak_lmax <= -900.0 {
             continue;
@@ -675,22 +682,55 @@ fn build_top_flights(
         // airborne sub-segment encounter and a cruise bucket encounter
         // in receiver radius — keep the airborne entry (sub-segment-level
         // granularity, real `energy_pct`) and skip the cruise dup.
-        if flights.contains_key(&fid) {
+        if flights_by_id
+            .binary_search_by_key(&&fid, |&(k, _)| k)
+            .is_ok()
+        {
             continue;
         }
-        try_insert(cand.peak_lmax, fid, cruise_top_flight_entry(fid, cand));
+        cands.push((cand.peak_lmax, 1, fid));
     }
 
-    // Stable total order: descending peak_lmax, ascending fid as final
-    // tiebreak so equal-Lmax + equal-callsign rows don't fall back to
-    // HashMap iteration order.
-    top.sort_by(|a, b| {
+    if cands.len() > TOP_FLIGHTS_N {
+        cands.select_nth_unstable_by(TOP_FLIGHTS_N, |a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(Ordering::Equal)
+                .then(a.1.cmp(&b.1))
+                .then(a.2.cmp(&b.2))
+        });
+        cands.truncate(TOP_FLIGHTS_N);
+    }
+    // Stable total order for DISPLAY: descending peak_lmax, ascending fid
+    // as final tiebreak so equal-Lmax + equal-callsign rows don't fall back
+    // to map iteration order. Provenance deliberately does not enter here —
+    // it only decides which rows survive the cut above.
+    cands.sort_by(|a, b| {
         b.0.partial_cmp(&a.0)
             .unwrap_or(Ordering::Equal)
-            .then(a.1.cmp(&b.1))
+            .then(a.2.cmp(&b.2))
     });
 
-    top.into_iter().map(|(_, _, e)| e).collect()
+    cands
+        .into_iter()
+        .filter_map(|(_, is_cruise, fid)| {
+            if is_cruise == 1 {
+                return cruise_candidates
+                    .get(&fid)
+                    .map(|cand| cruise_top_flight_entry(fid, cand));
+            }
+            let idx = flights_by_id
+                .binary_search_by_key(&&fid, |&(k, _)| k)
+                .ok()?;
+            let acc = flights_by_id[idx].1;
+            let flight_energy: f64 = acc.period_energy.iter().sum();
+            let energy_pct = if total_airborne_energy > 0.0 {
+                flight_energy / total_airborne_energy * 100.0
+            } else {
+                0.0
+            };
+            Some(airborne_top_flight_entry(fid, acc, energy_pct))
+        })
+        .collect()
 }
 
 fn airborne_top_flight_entry(fid: u64, acc: &FlightAccum, energy_pct: f64) -> AircraftTopFlight {

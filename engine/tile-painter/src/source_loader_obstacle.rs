@@ -27,9 +27,11 @@ use anyhow::{bail, Context, Result};
 use arrow::array::{Array, BinaryArray, Float32Array, Float64Array, UInt8Array};
 use arrow::ipc::reader::FileReader;
 use h3o::{CellIndex, LatLng};
+use noise_compute::low_profile::LowProfileLookup;
 use noise_compute::propagation::obstacle_index::{
     vector_buildings_enabled, ObstacleIndex, ObstacleKind, ObstacleSet,
 };
+use noise_compute::wkb;
 
 /// A region's vector obstacles: `None` ⇒ every scatter keeps the raster path.
 pub struct ObstacleData {
@@ -79,7 +81,7 @@ impl ObstacleData {
                 );
                 return Ok(Self::off());
             };
-            let low_profile = LowProfileLookup::load(h3r4_dir, cell)?;
+            let low_profile = load_low_profile(h3r4_dir, cell)?;
             indexes.push(Arc::new(build_cell_index(cell, &dir, &low_profile)?));
         }
         let set = ObstacleSet { indexes };
@@ -118,129 +120,115 @@ pub fn bake_tile_vector_rx_refl(
     }
 }
 
-/// LOW-PROFILE height cap (2026-08-02, Dobříš garage-colony finding): the
-/// Overture obstacle rows carry no building class, so a footprint with no
-/// mapped height defaulted to 8 m (`height_tier == 2`) even when it is a
-/// garage / carport / shed / greenhouse row that really stands ~2.5–3 m —
-/// hundreds of phantom 8 m walls in a 200 m grid over-screen entire
-/// neighbourhoods. OSM (via this cell's `buildings.arrow`) DOES know the
-/// class; a defaulted obstacle whose centroid sits within [`Self::MATCH_M`]
-/// of a low-profile OSM building with a comparable footprint area is capped
-/// at [`Self::LOW_HEIGHT_M`] (= one floor, the same constant family as the
-/// ingest ladder). Applies at LOAD time so the whole world heals without
-/// re-staging the 350 GB obstacle store; deterministic (fixed grid, sorted
-/// candidates), and it changes painted output — the OUTPUT_VER bump rides
-/// the same commit.
-/// (lat, lon, area_m2) rows bucketed by the ~55 m spatial-hash key.
-type LowProfileBuckets = std::collections::HashMap<(i32, i32), Vec<(f64, f64, f32)>>;
+/// Minimum footprint height whose interior masks a receiver. `0.0` means
+/// EVERY indexed footprint counts — the index builder already drops
+/// `height_m <= 0`, so this reads exactly as "inside any obstacle polygon".
+/// Deliberately NOT the enclosure probe's 5 m gate: that one answers a
+/// different question (does this receiver stand in a built-up canyon), while
+/// this one answers "is this point indoors", which a 3 m garage also is.
+const INTERIOR_MASK_MIN_HEIGHT_M: f32 = 0.0;
 
-struct LowProfileLookup {
-    /// ~55 m spatial hash over (lat, lon) → (centroid, area_m2) of low-class
-    /// OSM buildings; empty when the cell has no `buildings.arrow` (ML-only
-    /// coverage) — then nothing is capped, exactly the pre-fix behavior.
-    buckets: LowProfileBuckets,
+/// Receiver pixels whose CENTRE falls INSIDE a vector obstacle footprint —
+/// the building-interior receiver mask (CNOSSOS fix-pack Fix 4). Baked ONCE
+/// per tile and shared by every surface layer of that tile: all five ride the
+/// same receiver lattice, so the mask cannot differ between them.
+///
+/// WHY mask at all: END / CNOSSOS strategic mapping puts receivers on
+/// FACADES, never indoors. A receiver inside a footprint today computes real
+/// physics and paints either a white hole (small building — every wall is
+/// close, everything is screened) or a bogus "indoor" level (a 250 m hall,
+/// where only mild roof diffraction survives → ~68 dB "inside the hall").
+/// Neither is a receiver value, so the output cell becomes
+/// [`crate::wire_hm3::NO_DATA`] via [`apply_interior_mask`].
+///
+/// VECTOR-ONLY by construction: a raster-fallback region has no
+/// [`ObstacleSet`] and keeps today's behavior. The 30 m building raster
+/// cannot answer "inside THIS footprint" — only "some building in this
+/// cell" — so masking off it would blank a 30 m block around every house.
+///
+/// A footprint smaller than one pixel (~12 m at the base zoom) rarely covers
+/// a pixel centre and so rarely masks anything. Accepted, no special
+/// handling: the mask is a display-semantics correction, not physics.
+pub fn bake_tile_interior_mask(
+    tile: &raster_reader::fused_tile_z13::FusedTileZ13,
+    set: &ObstacleSet,
+) -> Vec<bool> {
+    use raster_reader::fused_tile_z13::TILE_PX;
+    let mut mask = vec![false; TILE_PX * TILE_PX];
+    // One scratch vec for the whole tile — `contains_built` clears it per
+    // probe (same reuse the 9-probe `enclosure_db` does).
+    let mut seen: Vec<(u32, u32)> = Vec::new();
+    for py in 0..TILE_PX {
+        let lat = tile.rx_lat[py];
+        for px in 0..TILE_PX {
+            let lon = tile.rx_lon[px];
+            mask[py * TILE_PX + px] = set
+                .indexes
+                .iter()
+                .any(|i| i.contains_built(lat, lon, INTERIOR_MASK_MIN_HEIGHT_M, &mut seen));
+        }
+    }
+    mask
 }
 
-impl LowProfileLookup {
-    const GRID: f64 = 2000.0; // 1/2000° ≈ 55 m bucket edge
-    const MATCH_M: f64 = 15.0;
-    const AREA_RATIO: (f32, f32) = (0.4, 2.5);
-    const LOW_HEIGHT_M: f32 = 3.0; // = ingest FLOOR_HEIGHT (one floor)
-    /// settlement classes that are structurally low: 7 = garage/carport/
-    /// parking, SILENT (10) = shed/roof/hut/greenhouse/container/… (the
-    /// emission §C′ tail — also the structurally-low tail).
-    const LOW_CLASSES: [u8; 2] = [7, noise_compute::emission::settlement::SILENT];
+/// Stamp [`crate::wire_hm3::NO_DATA`] onto every cell [`bake_tile_interior_mask`]
+/// marked as interior.
+///
+/// Runs LAST, after the area median fill: that fill exists to close the
+/// discretisation holes INSIDE a footprint, so masking before it would only
+/// have it paint the interiors straight back in.
+pub fn apply_interior_mask(cells: &mut [u8], interior: &[bool]) {
+    debug_assert_eq!(cells.len(), interior.len());
+    for (cell, &inside) in cells.iter_mut().zip(interior) {
+        if inside {
+            *cell = crate::wire_hm3::NO_DATA;
+        }
+    }
+}
 
-    fn load(h3r4_dir: &Path, cell: CellIndex) -> Result<Self> {
-        let path = h3r4_dir.join(cell.to_string()).join("buildings.arrow");
-        let bytes = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self {
-                    buckets: Default::default(),
-                })
-            }
-            Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+/// Read this cell's `buildings.arrow` into the low-profile cap's lookup — the
+/// Arrow half of [`noise_compute::low_profile`], which carries the rule itself
+/// (shared with the popup's loader, which reads the same file differently).
+/// A missing file, or an older schema without the four columns, means no
+/// capping — never a hard error for a correction layer.
+fn load_low_profile(h3r4_dir: &Path, cell: CellIndex) -> Result<LowProfileLookup> {
+    let path = h3r4_dir.join(cell.to_string()).join("buildings.arrow");
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LowProfileLookup::default())
+        }
+        Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+    };
+    let reader = FileReader::try_new(Cursor::new(bytes), None)
+        .with_context(|| format!("arrow open {}", path.display()))?;
+    let mut lookup = LowProfileLookup::default();
+    for batch in reader {
+        let batch = batch.with_context(|| format!("arrow batch {}", path.display()))?;
+        let (Some(lats), Some(lons), Some(types), Some(areas)) = (
+            batch
+                .column_by_name("centroid_lat")
+                .and_then(|c| c.as_any().downcast_ref::<Float64Array>()),
+            batch
+                .column_by_name("centroid_lon")
+                .and_then(|c| c.as_any().downcast_ref::<Float64Array>()),
+            batch
+                .column_by_name("building_type")
+                .and_then(|c| c.as_any().downcast_ref::<UInt8Array>()),
+            batch
+                .column_by_name("area_m2")
+                .and_then(|c| c.as_any().downcast_ref::<Float32Array>()),
+        ) else {
+            return Ok(LowProfileLookup::default());
         };
-        let reader = FileReader::try_new(Cursor::new(bytes), None)
-            .with_context(|| format!("arrow open {}", path.display()))?;
-        let mut buckets: LowProfileBuckets = Default::default();
-        for batch in reader {
-            let batch = batch.with_context(|| format!("arrow batch {}", path.display()))?;
-            let (Some(lats), Some(lons), Some(types), Some(areas)) = (
-                batch
-                    .column_by_name("centroid_lat")
-                    .and_then(|c| c.as_any().downcast_ref::<Float64Array>()),
-                batch
-                    .column_by_name("centroid_lon")
-                    .and_then(|c| c.as_any().downcast_ref::<Float64Array>()),
-                batch
-                    .column_by_name("building_type")
-                    .and_then(|c| c.as_any().downcast_ref::<UInt8Array>()),
-                batch
-                    .column_by_name("area_m2")
-                    .and_then(|c| c.as_any().downcast_ref::<Float32Array>()),
-            ) else {
-                // An older buildings.arrow schema simply means no capping —
-                // never a hard error for a correction layer.
-                return Ok(Self {
-                    buckets: Default::default(),
-                });
-            };
-            for i in 0..batch.num_rows() {
-                if lats.is_null(i) || lons.is_null(i) || types.is_null(i) || areas.is_null(i) {
-                    continue;
-                }
-                if !Self::LOW_CLASSES.contains(&types.value(i)) {
-                    continue;
-                }
-                let (lat, lon) = (lats.value(i), lons.value(i));
-                let key = (
-                    (lat * Self::GRID).floor() as i32,
-                    (lon * Self::GRID).floor() as i32,
-                );
-                buckets
-                    .entry(key)
-                    .or_default()
-                    .push((lat, lon, areas.value(i)));
+        for i in 0..batch.num_rows() {
+            if lats.is_null(i) || lons.is_null(i) || types.is_null(i) || areas.is_null(i) {
+                continue;
             }
+            lookup.insert_if_low(types.value(i), lats.value(i), lons.value(i), areas.value(i));
         }
-        Ok(Self { buckets })
     }
-
-    /// Cap a DEFAULTED height when a matching low-profile OSM building sits
-    /// at (nearly) the same spot with a comparable footprint.
-    fn capped_height(&self, height_m: f32, tier: u8, lat: f64, lon: f64, area_m2: f32) -> f32 {
-        if tier != 2 || height_m <= Self::LOW_HEIGHT_M || self.buckets.is_empty() {
-            return height_m;
-        }
-        let key_lat = (lat * Self::GRID).floor() as i32;
-        let key_lon = (lon * Self::GRID).floor() as i32;
-        let m_per_deg_lon = 111_320.0 * lat.to_radians().cos().max(0.1);
-        for dy in -1..=1 {
-            for dx in -1..=1 {
-                let Some(rows) = self.buckets.get(&(key_lat + dy, key_lon + dx)) else {
-                    continue;
-                };
-                for &(blat, blon, barea) in rows {
-                    let dm_lat = (blat - lat) * 111_320.0;
-                    let dm_lon = (blon - lon) * m_per_deg_lon;
-                    if dm_lat * dm_lat + dm_lon * dm_lon > Self::MATCH_M * Self::MATCH_M {
-                        continue;
-                    }
-                    let ratio = if barea > 0.0 {
-                        area_m2 / barea
-                    } else {
-                        f32::MAX
-                    };
-                    if ratio >= Self::AREA_RATIO.0 && ratio <= Self::AREA_RATIO.1 {
-                        return Self::LOW_HEIGHT_M;
-                    }
-                }
-            }
-        }
-        height_m
-    }
+    Ok(lookup)
 }
 
 fn staging_root(h3r4_dir: &Path) -> PathBuf {
@@ -295,25 +283,6 @@ fn shard_paths(dir: &Path) -> Result<Vec<PathBuf>> {
 /// Outer-ring area (m², shoelace on a local equirectangular projection) —
 /// the low-profile cap's footprint-comparability check. Uses the SAME parser
 /// the index builder consumes, so the two can never disagree on geometry.
-fn outer_ring_area_m2(wkb: &[u8]) -> f32 {
-    let mut total = 0.0f64;
-    for (outer, _holes) in noise_compute::wkb::parse_wkb_polygons_bytes(wkb) {
-        if outer.len() < 4 {
-            continue;
-        }
-        let lat0 = outer[0].0;
-        let m_lon = 111_320.0 * lat0.to_radians().cos().max(0.1);
-        let mut acc = 0.0f64;
-        for w in outer.windows(2) {
-            let (x0, y0) = ((w[0].1) * m_lon, (w[0].0) * 111_320.0);
-            let (x1, y1) = ((w[1].1) * m_lon, (w[1].0) * 111_320.0);
-            acc += x0 * y1 - x1 * y0;
-        }
-        total += (acc * 0.5).abs();
-    }
-    total as f32
-}
-
 fn build_cell_index(
     cell: CellIndex,
     dir: &Path,
@@ -366,7 +335,7 @@ fn build_cell_index(
                             tiers.value(i),
                             clats.value(i),
                             clons.value(i),
-                            outer_ring_area_m2(wkb.value(i)),
+                            wkb::outer_ring_area_m2(wkb.value(i)),
                         );
                         if capped_h < height {
                             capped += 1;
@@ -429,39 +398,91 @@ mod tests {
     /// full ring loads; a missing halo neighbour → raster-off strict but
     /// loads under partial; a missing REGION cell → raster-off EVEN under
     /// partial (the popup's query-cell rule); a corrupt shard → hard Err.
-    /// The low-profile cap's decision matrix (2026-08-02 garage-colony fix):
-    /// a DEFAULTED (tier 2) height caps to 3 m only when a low-class OSM
-    /// building matches by centroid AND comparable area; mapped heights
-    /// (tier 0/1), far buildings, high classes and wild area ratios all keep
-    /// the original height.
+    /// Fix 4's decision matrix on a REAL base-zoom receiver lattice (z12/512 px
+    /// over Praha, ~12 m/px) with synthetic footprints: a 200 m block with a
+    /// 60 m courtyard, plus a 3 m garage 600 m east.
+    /// * annulus pixel → masked (interiors are not receivers);
+    /// * COURTYARD centre → NOT masked (a hole shares its outer ring's id, so
+    ///   the crossing-parity test reads it as outdoors — an open yard IS a
+    ///   receiver);
+    /// * open ground between the two footprints → not masked;
+    /// * the 3 m garage → masked (the mask's height gate is 0, not the
+    ///   enclosure probe's 5 m — a garage interior is still an interior);
+    /// * masked area ≈ the footprint area in pixels;
+    /// * `apply_interior_mask` stamps NO_DATA on exactly those cells.
     #[test]
-    fn low_profile_cap_matrix() {
-        let mut buckets: LowProfileBuckets = Default::default();
-        let (lat, lon) = (49.7778, 14.1636);
-        let key = (
-            (lat * LowProfileLookup::GRID).floor() as i32,
-            (lon * LowProfileLookup::GRID).floor() as i32,
-        );
-        buckets.insert(key, vec![(lat, lon, 22.0)]); // one 22 m² garage
-        let lookup = LowProfileLookup { buckets };
+    fn interior_mask_matrix() {
+        use crate::scatter_band::{lat_to_py, lon_to_px};
+        use noise_compute::constants::{m_per_deg_lon, M_PER_DEG_LAT};
+        use raster_reader::fused_tile_z13::{FusedTileZ13, TILE_PX};
 
-        // Defaulted 8 m footprint on the garage → capped to 3 m.
-        assert_eq!(lookup.capped_height(8.0, 2, lat, lon, 24.0), 3.0);
-        // Mapped height (tier 0) never caps, even at the same spot.
-        assert_eq!(lookup.capped_height(8.0, 0, lat, lon, 24.0), 8.0);
-        // Floors-derived (tier 1) never caps.
-        assert_eq!(lookup.capped_height(9.0, 1, lat, lon, 24.0), 9.0);
-        // 30 m away — outside MATCH_M — keeps the default.
-        assert_eq!(lookup.capped_height(8.0, 2, lat + 0.0003, lon, 24.0), 8.0);
-        // A big hall (600 m²) over a tiny garage row is NOT comparable.
-        assert_eq!(lookup.capped_height(8.0, 2, lat, lon, 600.0), 8.0);
-        // Already low stays untouched.
-        assert_eq!(lookup.capped_height(2.5, 2, lat, lon, 24.0), 2.5);
-        // Empty lookup (no buildings.arrow) = pre-fix behavior.
-        let empty = LowProfileLookup {
-            buckets: Default::default(),
+        // Stub rasters (missing dir → every sample is the store default); the
+        // mask reads only the tile's receiver lat/lon lattice.
+        let rasters = raster_reader::RealRasters::new(Path::new("/nonexistent-qm-interior-mask"));
+        let (tx, ty) = crate::grid::lat_lon_to_tile(12, 50.08, 14.43);
+        let tile = FusedTileZ13::build(12, tx, ty, 0.0, &rasters);
+
+        let mid = TILE_PX / 2;
+        let (clat, clon) = (tile.rx_lat[mid], tile.rx_lon[mid]);
+        let d_lat = |m: f64| m / M_PER_DEG_LAT;
+        let d_lon = |m: f64| m / m_per_deg_lon(clat.to_radians());
+        // Axis-aligned square `half` metres around a (north, east) offset.
+        let square = |north_m: f64, east_m: f64, half: f64| {
+            vec![
+                (clat + d_lat(north_m - half), clon + d_lon(east_m - half)),
+                (clat + d_lat(north_m - half), clon + d_lon(east_m + half)),
+                (clat + d_lat(north_m + half), clon + d_lon(east_m + half)),
+                (clat + d_lat(north_m + half), clon + d_lon(east_m - half)),
+            ]
         };
-        assert_eq!(empty.capped_height(8.0, 2, lat, lon, 24.0), 8.0);
+        let px_of = |north_m: f64, east_m: f64| {
+            lat_to_py(&tile.bbox, clat + d_lat(north_m)) * TILE_PX
+                + lon_to_px(&tile.bbox, clon + d_lon(east_m))
+        };
+
+        let mut b = ObstacleIndex::builder(clat, clon);
+        b.add_ring(&square(0.0, 0.0, 100.0), 12.0, ObstacleKind::Building, 0);
+        b.add_ring(&square(0.0, 0.0, 30.0), 12.0, ObstacleKind::Building, 0); // courtyard
+        b.add_ring(&square(0.0, 600.0, 20.0), 3.0, ObstacleKind::Building, 1); // garage
+        let set = ObstacleSet {
+            indexes: vec![Arc::new(b.build())],
+        };
+
+        let mask = bake_tile_interior_mask(&tile, &set);
+        assert_eq!(mask.len(), TILE_PX * TILE_PX);
+        assert!(mask[px_of(70.0, 0.0)], "block interior (annulus) is masked");
+        assert!(mask[px_of(0.0, -70.0)], "block interior, other side");
+        assert!(
+            !mask[px_of(0.0, 0.0)],
+            "courtyard is open ground, not indoors"
+        );
+        assert!(!mask[px_of(0.0, 300.0)], "open ground between footprints");
+        assert!(!mask[px_of(400.0, 0.0)], "open ground north of the block");
+        assert!(
+            mask[px_of(0.0, 600.0)],
+            "a 3 m garage interior is an interior"
+        );
+
+        // ~12.26 m/px at this lat ⇒ (200² − 60²) + 20² m² ≈ 245 px.
+        let masked = mask.iter().filter(|&&m| m).count();
+        assert!(
+            (180..=320).contains(&masked),
+            "masked area {masked} px is not the ~245 px the footprints cover"
+        );
+
+        let mut cells = vec![100u8; TILE_PX * TILE_PX];
+        apply_interior_mask(&mut cells, &mask);
+        for (i, &inside) in mask.iter().enumerate() {
+            assert_eq!(
+                cells[i],
+                if inside {
+                    crate::wire_hm3::NO_DATA
+                } else {
+                    100
+                },
+                "cell {i}"
+            );
+        }
     }
 
     #[test]

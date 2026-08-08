@@ -20,30 +20,344 @@
 //! (`…/prepared/{year}/h3r4/<cell>/obstacles*.arrow`, post-Wave-1) and the
 //! ENRICHMENT staging tree the ingest writes today. `QM_OBSTACLES_DIR`
 //! overrides both (tests).
+//!
+//! Built indexes are also kept ON DISK (`noise_compute::propagation::obstacle_index_file`)
+//! and mapped back on the next cold start — a São Paulo popup indexes 40 M
+//! edges from ~1 GB of Arrow, which cost ~6 s of the FIRST click and was then
+//! thrown away with the process. The cached file is the in-memory layout, so a
+//! reload is an `mmap` plus a header check and the kernel faults in only the
+//! grid cells the rays walk.
+//!
+//! **Both caches key on [`cell_data_ver`], the full identity of the index** —
+//! never on the cell. The memo in front of the disk cache once keyed on the
+//! cell alone and so answered a query about one shard root with an index built
+//! from another (2026-08-05); the popup is the project's acoustic reference, and
+//! a cache that returns the answer to a different question is worse than no
+//! cache. The ring and `QM_OBSTACLES_ALLOW_PARTIAL` are deliberately NOT in that
+//! key: they decide which cells are assembled into a set, per query, in
+//! [`load_obstacle_set`] — a cache entry is one cell's index built from that
+//! cell's own shards, so no dev A/B run can leave a file a strict query would
+//! use (`missing_ring_cell_falls_back_unless_partial_allowed` asserts it).
 
 use std::collections::HashMap;
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use arrow::array::{Array, BinaryArray, Float32Array, Float64Array, UInt8Array};
 use arrow::ipc::reader::FileReader;
 use h3o::{CellIndex, LatLng, Resolution};
+use noise_compute::low_profile::LowProfileLookup;
 use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind, ObstacleSet};
+use noise_compute::propagation::obstacle_index_file::{fnv1a64, IndexBlob, BUILDER_CODE_VER};
 
 /// Per-cell index cache capacity. A dense metro cell's index runs to low
 /// hundreds of MB; popups cluster spatially, so a small LRU covers the
 /// active area while bounding worst-case RSS.
 const CELL_CACHE_CAP: usize = 8;
 
+/// Everything that decides a cached index's BYTES: the engine's builder and
+/// grid (`BUILDER_CODE_VER`) folded with THIS file, which owns the loader's own
+/// decisions — the obstacle id ordering, the shard order, and which rows are
+/// offered to the height cap. Editing either side rotates the version and every file written by the
+/// old code is refused, exactly as `scripts/layer-codever.py` re-stales tiles on
+/// a source change. Over-invalidating costs a rebuild; under-invalidating puts a
+/// silently wrong screen in the map.
+///
+/// The low-profile cap needs no fold of its own: the rule lives in
+/// `noise_compute::low_profile`, which [`BUILDER_CODE_VER`] hashes — so a change
+/// to its class list, its match geometry or its cap rotates this version without
+/// anyone naming the constants here.
+const CACHE_CODE_VER: u64 = fnv1a64(BUILDER_CODE_VER, include_bytes!("obstacle_store.rs"));
+
+/// Disk budget for the cached indexes. One dense metro cell is a few hundred
+/// MB, so this holds tens of cities' worth — far more than a popup session
+/// visits — while keeping a nearly-full data volume out of danger. Past it the
+/// least-recently-USED file is dropped and its next cold start pays one rebuild.
+const CACHE_BUDGET_BYTES: u64 = 24 << 30;
+
+const CACHE_FILE_EXT: &str = "qoix";
+
+/// A `.tmp` older than this is an orphan from a killed process, not a write in
+/// flight — [`evict_to_budget`] reaps it. Generous by two orders: writing one
+/// index is a few hundred MB of sequential IO.
+const TMP_ORPHAN_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// Mapped cache file. The mapping's address and contents are fixed for its
+/// life, which is what [`IndexBlob`] requires.
+struct MappedIndexFile(memmap2::Mmap);
+
+// SAFETY: `Mmap` derefs to a fixed address/length for its whole life and this
+// wrapper never exposes a `&mut`, so every `as_bytes` returns the same
+// immutable bytes — the `IndexBlob` contract.
+unsafe impl IndexBlob for MappedIndexFile {
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// `QM_OBSTACLE_INDEX_CACHE=0` turns the disk cache off — the A/B lever for
+/// measuring what it is worth, and the bisection escape hatch, from ONE binary.
+fn index_cache_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| !std::env::var("QM_OBSTACLE_INDEX_CACHE").is_ok_and(|v| v == "0"))
+}
+
+/// Where cached indexes live: beside the other derived, year-independent
+/// prepared artifacts (`prepared/dem`, `prepared/rasters`, `h3r4-admin.bin`).
+/// `QM_OBSTACLE_INDEX_DIR` moves them to another volume.
+fn index_cache_root(data_dir: &Path) -> Option<PathBuf> {
+    if !index_cache_enabled() {
+        return None;
+    }
+    if let Ok(dir) = std::env::var("QM_OBSTACLE_INDEX_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    Some(data_dir.join("obstacle-index"))
+}
+
+/// The FULL identity of one cell's index — everything that decides its bytes,
+/// in one u64. Both caches (the process memo and the file on disk) key on it,
+/// and nothing may be served under a key that does not carry all of:
+///
+/// * [`CACHE_CODE_VER`] — the builder, the grid, this loader's own rules;
+/// * the CELL, whose centre is the index's metric origin (and which is the
+///   only thing the file name would otherwise bind);
+/// * every shard the index is built from, plus the `buildings.arrow` the
+///   low-profile cap reads, as (path, length, mtime) — the path because two
+///   shard ROOTS (a staging A/B, `QM_OBSTACLES_DIR`, a moved mount) hold
+///   different obstacles for the same cell.
+///
+/// That list is closed by construction: `build_cell_index` reads its cell, its
+/// shards and that one arrow, and nothing else — no env, no clock, no map
+/// iteration order (`ObstacleIndex::build` is a Vec walk). Whatever a future
+/// edit adds to it lands in THIS file, and this file's content is already in
+/// `CACHE_CODE_VER`, so an unfingerprinted input cannot be introduced without
+/// also rotating the version.
+///
+/// (length, mtime) rather than a content hash is the shape of
+/// `world-stamps.py`'s `_data_ver`, which decides tile staleness from the same
+/// arrows' mtimes; re-hashing a gigabyte per click would cost more than the
+/// rebuild it guards.
+///
+/// `None` ⇒ some input's metadata is unreadable, so nothing may be cached at
+/// all: an index whose provenance cannot be pinned must never outlive the
+/// query, let alone the process.
+fn cell_data_ver(
+    cell: CellIndex,
+    shards: &[PathBuf],
+    buildings_arrow: Option<&Path>,
+) -> Option<u64> {
+    let mut h = fnv1a64(CACHE_CODE_VER, b"obstacle-index-inputs-v2");
+    h = fnv1a64(h, &u64::from(cell).to_le_bytes());
+    let mut fold = |path: &Path, present_marker: u8| -> Option<()> {
+        h = fnv1a64(h, path.as_os_str().as_encoded_bytes());
+        h = fnv1a64(h, &[present_marker]);
+        if present_marker == 0 {
+            return Some(());
+        }
+        let meta = std::fs::metadata(path).ok()?;
+        h = fnv1a64(h, &meta.len().to_le_bytes());
+        let mtime = meta.modified().ok()?;
+        let since_epoch = mtime
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .ok()?;
+        h = fnv1a64(h, &since_epoch.as_nanos().to_le_bytes());
+        Some(())
+    };
+    for p in shards {
+        fold(p, 1)?;
+    }
+    // A missing buildings.arrow means "no capping" — a DIFFERENT index from the
+    // same shards with one present, so absence has to hash differently.
+    if let Some(p) = buildings_arrow {
+        let marker = u8::from(p.exists());
+        fold(p, marker)?;
+    }
+    Some(h)
+}
+
+/// `<cell>.<code_ver>.qoix`. The builder version is in the NAME, not just the
+/// header, because prod and dev1-3 share one `prepared/` node: two checkouts on
+/// different engine versions would otherwise fight over one path, each deleting
+/// and rebuilding the other's file forever. Superseded versions are ordinary
+/// cache files and age out through the LRU budget.
+fn cache_file_path(root: &Path, cell: CellIndex) -> PathBuf {
+    root.join(format!("{cell}.{CACHE_CODE_VER:016x}.{CACHE_FILE_EXT}"))
+}
+
+/// Map a cached index, or `None` for any reason at all — absent, stale,
+/// truncated, unreadable. Every `None` simply means "rebuild".
+fn load_cached_index(path: &Path, data_ver: u64) -> Option<ObstacleIndex> {
+    let file = std::fs::File::open(path).ok()?;
+    // SAFETY: the store is written atomically (tmp + rename) and never mutated
+    // in place, so no other writer can change these bytes under the mapping.
+    let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
+    let blob: Arc<dyn IndexBlob> = Arc::new(MappedIndexFile(mmap));
+    match ObstacleIndex::from_blob(blob, CACHE_CODE_VER, data_ver) {
+        Ok(idx) => {
+            // LRU by USE, not by write: without this the city visited every day
+            // is evicted before one indexed once and never opened again.
+            let now = std::time::SystemTime::now();
+            let _ = file.set_times(std::fs::FileTimes::new().set_modified(now));
+            Some(idx)
+        }
+        Err(e) => {
+            eprintln!("obstacle_store: ignoring cached {}: {e}", path.display());
+            let _ = std::fs::remove_file(path);
+            None
+        }
+    }
+}
+
+/// Drop least-recently-used cache files until `incoming` more bytes fit in
+/// [`CACHE_BUDGET_BYTES`]. Best effort throughout — a cache that cannot be
+/// pruned must not break a popup.
+///
+/// Safe to run while another process (or another checkout's server) has one of
+/// these files mapped: unlinking keeps the inode alive until the last mapping
+/// drops, and a rebuild lands on a NEW inode through the rename, so no live
+/// query ever sees its index change underneath it.
+///
+/// Also the only reaper of ORPHANED `.tmp` files. [`store_cached_index`] removes
+/// its own on a write error, but a process killed between `create` and `rename`
+/// cannot — and those bytes were invisible to this budget (the filter took
+/// `.qoix` alone), so a crash loop could fill the disk with files nothing would
+/// ever look at again. Anything older than [`TMP_ORPHAN_AGE`] is not a write in
+/// flight: one index is a few hundred MB, seconds of IO.
+fn evict_to_budget(root: &Path, incoming: u64) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            let meta = e.metadata().ok()?;
+            let mtime = meta.modified().ok()?;
+            match path.extension()?.to_str()? {
+                CACHE_FILE_EXT => Some((mtime, meta.len(), path)),
+                "tmp" => {
+                    // Old enough to be a corpse: unlink now and leave it out of
+                    // the budget. A young one stays counted but untouched, so a
+                    // concurrent writer's bytes still push the eviction.
+                    if now.duration_since(mtime).is_ok_and(|d| d > TMP_ORPHAN_AGE) {
+                        let _ = std::fs::remove_file(&path);
+                        None
+                    } else {
+                        Some((mtime, meta.len(), path))
+                    }
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    // Young `.tmp` bytes COUNT (they are about to become cache) but are never
+    // EVICTED: unlinking one would make its writer's rename land on a path this
+    // loop had already reclaimed.
+    let mut total: u64 = files.iter().map(|(_, len, _)| len).sum();
+    if total + incoming <= CACHE_BUDGET_BYTES {
+        return;
+    }
+    files.retain(|(_, _, p)| p.extension().is_some_and(|x| x == CACHE_FILE_EXT));
+    files.sort_by_key(|(mtime, _, _)| *mtime);
+    for (_, len, path) in files {
+        if total + incoming <= CACHE_BUDGET_BYTES {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(len);
+        }
+    }
+}
+
+/// Persist a freshly built index. Failures are reported and swallowed: the
+/// cache is an accelerator, never a dependency.
+fn store_cached_index(root: &Path, cell: CellIndex, index: &ObstacleIndex, data_ver: u64) {
+    let parts = index.file_parts(CACHE_CODE_VER, data_ver);
+    let total = parts.total_len() as u64;
+    if let Err(e) = std::fs::create_dir_all(root) {
+        eprintln!("obstacle_store: no index cache at {}: {e}", root.display());
+        return;
+    }
+    evict_to_budget(root, total);
+    let final_path = cache_file_path(root, cell);
+    // Same-directory tmp + rename: a reader either maps the whole previous
+    // file or the whole new one, never a half-written index. Two NAPI worker
+    // threads can miss the process LRU on the SAME cell at the same time, so
+    // the temp name carries a per-write sequence — sharing one `<pid>.tmp`
+    // would let them interleave into a file that then passes the header check.
+    static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = root.join(format!("{cell}.{}.{seq}.tmp", std::process::id()));
+    let write = || -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(&parts.header)?;
+        for section in &parts.sections {
+            f.write_all(section)?;
+        }
+        f.flush()?;
+        drop(f);
+        std::fs::rename(&tmp, &final_path)
+    };
+    if let Err(e) = write() {
+        eprintln!(
+            "obstacle_store: could not cache index {}: {e}",
+            final_path.display()
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// Process-local memo of built indexes, keyed on the SAME identity the disk
+/// file carries ([`cell_data_ver`]) — not on the cell.
+///
+/// Keying it on the cell alone was a live defect (2026-08-05): the second
+/// query for a cell got the first query's index no matter which shard root it
+/// asked about, so an A/B run against a second staging tree, or a
+/// `QM_OBSTACLES_DIR` switch, screened the popup against obstacles that are not
+/// there. The disk cache never had this hole — its header carries the
+/// fingerprint — which is exactly why the memo in front of it had to grow one.
 struct CellCache {
-    /// cell → (index, LRU stamp). Failed builds are NOT cached — transient
-    /// IO must stay retryable; missing cells stay a per-query decision.
-    map: HashMap<CellIndex, (Arc<ObstacleIndex>, u64)>,
+    /// (cell, identity) → (index, LRU stamp). Failed builds are NOT cached —
+    /// transient IO must stay retryable; missing cells stay a per-query
+    /// decision.
+    map: HashMap<(CellIndex, u64), (Arc<ObstacleIndex>, u64)>,
     stamp: u64,
 }
 
 static CELL_CACHE: OnceLock<Mutex<CellCache>> = OnceLock::new();
+
+fn memo() -> &'static Mutex<CellCache> {
+    CELL_CACHE.get_or_init(|| {
+        Mutex::new(CellCache {
+            map: HashMap::new(),
+            stamp: 0,
+        })
+    })
+}
+
+fn memo_get(cell: CellIndex, ver: u64) -> Option<Arc<ObstacleIndex>> {
+    let mut c = memo().lock().unwrap_or_else(|e| e.into_inner());
+    c.stamp += 1;
+    let stamp = c.stamp;
+    let (idx, touched) = c.map.get_mut(&(cell, ver))?;
+    *touched = stamp;
+    Some(Arc::clone(idx))
+}
+
+fn memo_put(cell: CellIndex, ver: u64, idx: &Arc<ObstacleIndex>) {
+    let mut c = memo().lock().unwrap_or_else(|e| e.into_inner());
+    c.stamp += 1;
+    let stamp = c.stamp;
+    if c.map.len() >= CELL_CACHE_CAP {
+        if let Some((&evict, _)) = c.map.iter().min_by_key(|(_, (_, t))| *t) {
+            c.map.remove(&evict);
+        }
+    }
+    c.map.insert((cell, ver), (Arc::clone(idx), stamp));
+}
 
 fn staging_root(data_dir: &Path) -> PathBuf {
     if let Ok(dir) = std::env::var("QM_OBSTACLES_DIR") {
@@ -137,7 +451,7 @@ pub fn load_obstacle_set(
             }
         };
         let buildings_arrow = h3r4_dir.map(|h| h.join(c.to_string()).join("buildings.arrow"));
-        match cell_index(c, &dir, buildings_arrow.as_deref()) {
+        match cell_index(c, &dir, buildings_arrow.as_deref(), data_dir) {
             Ok(idx) => indexes.push(idx),
             Err(e) => {
                 eprintln!("obstacle_store: {e} — falling back to raster for this query");
@@ -153,187 +467,195 @@ pub fn load_obstacle_set(
     }
 }
 
-/// Cached per-cell index. Build errors are not cached; successful builds are
-/// immutable and shared.
+/// Tallest structure the height probe will report (m) — comfortably above the
+/// tallest building on Earth (828 m), so the bisection's upper bracket is
+/// never the answer in practice.
+const MAX_PROBE_HEIGHT_M: f32 = 1_000.0;
+/// Height-probe resolution (m). Store heights are metre-scale (mapped values,
+/// the 3 m low-profile cap, the 8 m default), so 5 cm is far below anything a
+/// popup would display.
+const HEIGHT_PROBE_RESOLUTION_M: f32 = 0.05;
+
+/// Is the receiver INSIDE a vector obstacle footprint, and how tall is the
+/// tallest footprint containing it? `None` ⇒ outdoors (CNOSSOS fix-pack Fix 4,
+/// popup half — the lockstep twin of tile-painter's
+/// `source_loader_obstacle::bake_tile_interior_mask`, which turns the same
+/// answer into a `NO_DATA` heatmap cell).
+///
+/// DISPLAY ONLY today: the popup keeps computing and reporting the very same
+/// dB numbers it always did, this just labels them. What an indoor receiver
+/// SHOULD report (the fix-pack's "inside building — facade exposure", i.e. the
+/// nearest outside facade value) is a separate product decision.
+///
+/// Runs on the ALREADY-LOADED query set — zero extra IO. The height comes out
+/// of the containment test itself: `ObstacleIndex::contains_built(…, min_h)`
+/// answers "inside a footprint TALLER than `min_h`", which is monotone in
+/// `min_h`, so the tallest containing footprint is the threshold where it
+/// flips — ~15 in-memory probes. That keeps the exact same polygon test (and
+/// its hole/overlap semantics) as the heatmap mask and the enclosure probe;
+/// a height-returning containment query on `ObstacleIndex` itself would be
+/// the cheaper shape, and is the named follow-up for whoever next opens
+/// `propagation::obstacle_index`.
+pub fn point_inside_obstacle(set: &ObstacleSet, lat: f64, lon: f64) -> Option<f32> {
+    let mut seen: Vec<(u32, u32)> = Vec::new();
+    let mut inside = |min_h: f32| {
+        set.indexes
+            .iter()
+            .any(|i| i.contains_built(lat, lon, min_h, &mut seen))
+    };
+    // `min_height_m = 0` admits every indexed footprint (the builder already
+    // drops height ≤ 0) — "inside any obstacle polygon", the mask's rule.
+    if !inside(0.0) {
+        return None;
+    }
+    let (mut lo, mut hi) = (0.0f32, MAX_PROBE_HEIGHT_M);
+    while hi - lo > HEIGHT_PROBE_RESOLUTION_M {
+        let mid = 0.5 * (lo + hi);
+        if inside(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Some(0.5 * (lo + hi))
+}
+
+/// One cell's index, from the nearest source that still holds it: the process
+/// memo, then the on-disk index cache, then a rebuild from the Arrow shards
+/// (which is also written back). Build errors are not cached; successful
+/// builds are immutable and shared.
+///
+/// The inputs are listed and fingerprinted BEFORE either cache is consulted:
+/// both are keyed on that fingerprint, so a hit is only ever the index this
+/// process would have built from these very files. The listing costs one
+/// `read_dir` and a handful of `stat`s per cell per query — three orders below
+/// the rebuild it guards, and the price of a cache that answers the question it
+/// was asked.
 fn cell_index(
     cell: CellIndex,
     dir: &Path,
     buildings_arrow: Option<&Path>,
+    data_dir: &Path,
 ) -> Result<Arc<ObstacleIndex>, String> {
-    let cache = CELL_CACHE.get_or_init(|| {
-        Mutex::new(CellCache {
-            map: HashMap::new(),
-            stamp: 0,
-        })
-    });
-    {
-        let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
-        c.stamp += 1;
-        let stamp = c.stamp;
-        if let Some((idx, touched)) = c.map.get_mut(&cell) {
-            *touched = stamp;
-            return Ok(Arc::clone(idx));
+    let shards = shard_paths(dir)?;
+    if shards.is_empty() {
+        return Err(format!("shard dir emptied under us: {}", dir.display()));
+    }
+    let ver = cell_data_ver(cell, &shards, buildings_arrow);
+    let t0 = std::time::Instant::now();
+    if let Some(ver) = ver {
+        if let Some(idx) = memo_get(cell, ver) {
+            return Ok(idx);
+        }
+        if let Some(root) = index_cache_root(data_dir) {
+            if let Some(idx) = load_cached_index(&cache_file_path(&root, cell), ver) {
+                let idx = Arc::new(idx);
+                log_cell_load(cell, "mapped", idx.edge_count(), t0);
+                memo_put(cell, ver, &idx);
+                return Ok(idx);
+            }
         }
     }
 
-    let built = Arc::new(build_cell_index(cell, dir, buildings_arrow)?);
-    let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
-    c.stamp += 1;
-    let stamp = c.stamp;
-    if c.map.len() >= CELL_CACHE_CAP {
-        if let Some((&evict, _)) = c.map.iter().min_by_key(|(_, (_, t))| *t) {
-            c.map.remove(&evict);
+    let built = Arc::new(build_cell_index(cell, &shards, buildings_arrow)?);
+    // No fingerprint ⇒ no memo and no file. An index whose inputs could not be
+    // pinned is used for THIS query and forgotten.
+    if let Some(ver) = ver {
+        if let Some(root) = index_cache_root(data_dir) {
+            store_cached_index(&root, cell, &built, ver);
         }
+        memo_put(cell, ver, &built);
     }
-    c.map.insert(cell, (Arc::clone(&built), stamp));
+    log_cell_load(cell, "built", built.edge_count(), t0);
     Ok(built)
 }
 
-/// LOW-PROFILE height cap — LOCKSTEP PORT of tile-painter's
-/// `source_loader_obstacle::LowProfileLookup` (2026-08-02 Dobříš garage
-/// colony: Overture rows without a mapped height defaulted to 8 m even for
-/// garage/carport/shed rows that stand ~3 m; OSM buildings.arrow knows the
-/// class, so a defaulted footprint matching a low-class OSM building at the
-/// same centroid is capped at 3 m). The popup MUST apply the identical rule
-/// or popup ≠ tiles at every capped footprint. Keep the constants and the
-/// match rule in lockstep with tile-painter; extracting one shared
-/// obstacle-io crate is the named follow-up (the two crates are deliberately
-/// independent today).
-/// (lat, lon, area_m2) rows bucketed by the ~55 m spatial-hash key.
-type LowProfileBuckets = std::collections::HashMap<(i32, i32), Vec<(f64, f64, f32)>>;
-
-struct LowProfileLookup {
-    buckets: LowProfileBuckets,
-}
-
-impl LowProfileLookup {
-    const GRID: f64 = 2000.0;
-    const MATCH_M: f64 = 15.0;
-    const AREA_RATIO: (f32, f32) = (0.4, 2.5);
-    const LOW_HEIGHT_M: f32 = 3.0;
-    const LOW_CLASSES: [u8; 2] = [7, noise_compute::emission::settlement::SILENT];
-
-    fn load(buildings_arrow: Option<&Path>) -> Self {
-        let empty = Self {
-            buckets: HashMap::new(),
-        };
-        let Some(path) = buildings_arrow else {
-            return empty;
-        };
-        let Ok(bytes) = std::fs::read(path) else {
-            return empty;
-        };
-        let Ok(reader) = FileReader::try_new(Cursor::new(bytes), None) else {
-            return empty;
-        };
-        let mut buckets: LowProfileBuckets = Default::default();
-        for batch in reader {
-            let Ok(batch) = batch else { return empty };
-            let (Some(lats), Some(lons), Some(types), Some(areas)) = (
-                batch
-                    .column_by_name("centroid_lat")
-                    .and_then(|c| c.as_any().downcast_ref::<Float64Array>()),
-                batch
-                    .column_by_name("centroid_lon")
-                    .and_then(|c| c.as_any().downcast_ref::<Float64Array>()),
-                batch
-                    .column_by_name("building_type")
-                    .and_then(|c| c.as_any().downcast_ref::<UInt8Array>()),
-                batch
-                    .column_by_name("area_m2")
-                    .and_then(|c| c.as_any().downcast_ref::<Float32Array>()),
-            ) else {
-                return empty; // older schema → no capping, never an error
-            };
-            for i in 0..batch.num_rows() {
-                if lats.is_null(i) || lons.is_null(i) || types.is_null(i) || areas.is_null(i) {
-                    continue;
-                }
-                if !Self::LOW_CLASSES.contains(&types.value(i)) {
-                    continue;
-                }
-                let (lat, lon) = (lats.value(i), lons.value(i));
-                let key = (
-                    (lat * Self::GRID).floor() as i32,
-                    (lon * Self::GRID).floor() as i32,
-                );
-                buckets
-                    .entry(key)
-                    .or_default()
-                    .push((lat, lon, areas.value(i)));
-            }
-        }
-        Self { buckets }
-    }
-
-    fn capped_height(&self, height_m: f32, tier: u8, lat: f64, lon: f64, area_m2: f32) -> f32 {
-        if tier != 2 || height_m <= Self::LOW_HEIGHT_M || self.buckets.is_empty() {
-            return height_m;
-        }
-        let key_lat = (lat * Self::GRID).floor() as i32;
-        let key_lon = (lon * Self::GRID).floor() as i32;
-        let m_per_deg_lon = 111_320.0 * lat.to_radians().cos().max(0.1);
-        for dy in -1..=1 {
-            for dx in -1..=1 {
-                let Some(rows) = self.buckets.get(&(key_lat + dy, key_lon + dx)) else {
-                    continue;
-                };
-                for &(blat, blon, barea) in rows {
-                    let dm_lat = (blat - lat) * 111_320.0;
-                    let dm_lon = (blon - lon) * m_per_deg_lon;
-                    if dm_lat * dm_lat + dm_lon * dm_lon > Self::MATCH_M * Self::MATCH_M {
-                        continue;
-                    }
-                    let ratio = if barea > 0.0 {
-                        area_m2 / barea
-                    } else {
-                        f32::MAX
-                    };
-                    if ratio >= Self::AREA_RATIO.0 && ratio <= Self::AREA_RATIO.1 {
-                        return Self::LOW_HEIGHT_M;
-                    }
-                }
-            }
-        }
-        height_m
+/// Per-cell provenance under `POPUP_TIMING=1` — the same lever
+/// `query_noise_impl` uses for its stage timings. `mapped` vs `built` is the
+/// entire difference this cache makes, so it belongs in one log line instead of
+/// being inferred from a wall clock that also carries the Arrow hex load.
+fn log_cell_load(cell: CellIndex, how: &str, edges: usize, t0: std::time::Instant) {
+    if std::env::var("POPUP_TIMING").as_deref() == Ok("1") {
+        eprintln!(
+            "obstacle-index {how} cell={cell} edges={edges} in {:.0} ms",
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
     }
 }
 
-/// Outer-ring area (m²) — lockstep with tile-painter's `outer_ring_area_m2`.
-fn outer_ring_area_m2(wkb: &[u8]) -> f32 {
-    let mut total = 0.0f64;
-    for (outer, _holes) in noise_compute::wkb::parse_wkb_polygons_bytes(wkb) {
-        if outer.len() < 4 {
-            continue;
+/// Read a cell's `buildings.arrow` into the low-profile cap's lookup — the Arrow
+/// half of [`noise_compute::low_profile`], which carries the rule itself (shared
+/// with the tile painter's loader, so popup and tiles cap the same footprints).
+///
+/// ABSENT is not the same as UNREADABLE. No file (`NotFound`, or no path at all)
+/// means the cell has ML-only coverage: nothing to cap against, so an empty
+/// lookup is the right answer. An older schema without the four columns is the
+/// same story — a correction layer that cannot be applied is not an error. But a
+/// transient read/parse failure is: swallowing it caps NOTHING, and
+/// [`cell_index`] then writes that uncapped index to disk AND to the memo under
+/// the NORMAL fingerprint, so every later query reports garages at 8 m instead
+/// of 3 m until the file's mtime happens to move (2026-08-08 review; the tile
+/// painter's twin has always failed loud here, and popup ≠ tiles at every capped
+/// footprint is exactly what this rule exists to prevent).
+fn load_low_profile(buildings_arrow: Option<&Path>) -> Result<LowProfileLookup, String> {
+    let empty = || Ok(LowProfileLookup::default());
+    let Some(path) = buildings_arrow else {
+        return empty();
+    };
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return empty(),
+        Err(e) => return Err(format!("read {}: {e}", path.display())),
+    };
+    let reader = FileReader::try_new(Cursor::new(bytes), None)
+        .map_err(|e| format!("arrow open {}: {e}", path.display()))?;
+    let mut lookup = LowProfileLookup::default();
+    for batch in reader {
+        let batch = batch.map_err(|e| format!("arrow batch {}: {e}", path.display()))?;
+        let (Some(lats), Some(lons), Some(types), Some(areas)) = (
+            batch
+                .column_by_name("centroid_lat")
+                .and_then(|c| c.as_any().downcast_ref::<Float64Array>()),
+            batch
+                .column_by_name("centroid_lon")
+                .and_then(|c| c.as_any().downcast_ref::<Float64Array>()),
+            batch
+                .column_by_name("building_type")
+                .and_then(|c| c.as_any().downcast_ref::<UInt8Array>()),
+            batch
+                .column_by_name("area_m2")
+                .and_then(|c| c.as_any().downcast_ref::<Float32Array>()),
+        ) else {
+            return empty(); // older schema → no capping, never an error
+        };
+        for i in 0..batch.num_rows() {
+            if lats.is_null(i) || lons.is_null(i) || types.is_null(i) || areas.is_null(i) {
+                continue;
+            }
+            lookup.insert_if_low(types.value(i), lats.value(i), lons.value(i), areas.value(i));
         }
-        let m_lon = 111_320.0 * outer[0].0.to_radians().cos().max(0.1);
-        let mut acc = 0.0f64;
-        for w in outer.windows(2) {
-            acc += w[0].1 * m_lon * (w[1].0 * 111_320.0) - w[1].1 * m_lon * (w[0].0 * 111_320.0);
-        }
-        total += (acc * 0.5).abs();
     }
-    total as f32
+    Ok(lookup)
 }
 
 /// Build one cell's index from its sorted shards. The index origin is the
 /// CELL CENTRE (not the query point) so the cache entry is query-independent;
 /// crossings project the ray per call, so mixed origins across a set are fine.
+///
+/// `shards` is the caller's listing, not a fresh one: the same list must decide
+/// the cache fingerprint AND the obstacle ordinals, or a shard appearing between
+/// the two reads would key an index under the wrong inputs.
 fn build_cell_index(
     cell: CellIndex,
-    dir: &Path,
+    shards: &[PathBuf],
     buildings_arrow: Option<&Path>,
 ) -> Result<ObstacleIndex, String> {
     let centre = LatLng::from(cell);
     let mut builder = ObstacleIndex::builder(centre.lat(), centre.lng());
     let mut next_id: u32 = 0;
-    let low_profile = LowProfileLookup::load(buildings_arrow);
-    let shards = shard_paths(dir)?;
-    if shards.is_empty() {
-        return Err(format!("shard dir emptied under us: {}", dir.display()));
-    }
+    let low_profile = load_low_profile(buildings_arrow)?;
     for path in shards {
-        let bytes = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
         let reader = FileReader::try_new(Cursor::new(bytes), None)
             .map_err(|e| format!("arrow open {}: {e}", path.display()))?;
         for batch in reader {
@@ -367,7 +689,7 @@ fn build_cell_index(
                             tiers.value(i),
                             clats.value(i),
                             clons.value(i),
-                            outer_ring_area_m2(wkb.value(i)),
+                            noise_compute::wkb::outer_ring_area_m2(wkb.value(i)),
                         );
                     }
                 }
@@ -428,7 +750,12 @@ pub fn footprints_in_bbox(
             continue;
         };
         let buildings_arrow = h3r4_dir.map(|h| h.join(cell.to_string()).join("buildings.arrow"));
-        let low_profile = LowProfileLookup::load(buildings_arrow.as_deref());
+        // A cell whose cap cannot be read contributes NOTHING, rather than
+        // footprints drawn at their uncapped height: this overlay exists to show
+        // what the engine screens with, so a wrong number is worse than a gap.
+        let Ok(low_profile) = load_low_profile(buildings_arrow.as_deref()) else {
+            continue;
+        };
         let Ok(shards) = shard_paths(&dir) else {
             continue;
         };
@@ -480,7 +807,7 @@ pub fn footprints_in_bbox(
                         tier,
                         clat,
                         clon,
-                        outer_ring_area_m2(wkb.value(i)),
+                        noise_compute::wkb::outer_ring_area_m2(wkb.value(i)),
                     );
                     for (outer, _holes) in
                         noise_compute::wkb::parse_wkb_polygons_bytes(wkb.value(i))
@@ -502,6 +829,52 @@ pub fn footprints_in_bbox(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    /// Environment variables are PROCESS-global and `cargo test` runs tests in
+    /// parallel threads, so two tests setting `QM_OBSTACLES_DIR` read each
+    /// other's value. Every test below that touches the environment takes this
+    /// lock and restores what it found, and every one of them points the two
+    /// caches at its OWN temp dirs — the suite's answer must not depend on its
+    /// order (2026-08-05: it did, in both directions).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Holds [`ENV_LOCK`] and the previous values of the vars it pinned.
+    struct EnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvGuard {
+        /// Pin `vars` (`None` = unset) for the rest of the test body.
+        fn set(vars: &[(&'static str, Option<&str>)]) -> Self {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let mut saved = Vec::new();
+            for (k, v) in vars {
+                saved.push((*k, std::env::var(k).ok()));
+                match v {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+            EnvGuard { _lock: lock, saved }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (k, v) in &self.saved {
+                match v {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
+
+    fn path_str(dir: &TempDir) -> String {
+        dir.path().to_str().expect("utf-8 temp path").to_string()
+    }
 
     /// Runs only where the Praha obstacle staging exists (dev boxes after the
     /// geodata-v2 night-1 ingest); hermetic CI skips silently. Asserts the
@@ -517,10 +890,16 @@ mod tests {
         if !staged {
             return;
         }
-        std::env::set_var("QM_OBSTACLES_ALLOW_PARTIAL", "1");
+        // Its own index dir: this test must exercise the COLD build, and it
+        // must not read (or evict) the box's production cache.
+        let index_dir = TempDir::new().expect("temp index dir");
+        let _env = EnvGuard::set(&[
+            ("QM_OBSTACLES_DIR", None),
+            ("QM_OBSTACLES_ALLOW_PARTIAL", Some("1")),
+            ("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir))),
+        ]);
         let t0 = std::time::Instant::now();
         let Some(set) = load_obstacle_set(None, data_dir, 50.08, 14.43) else {
-            std::env::remove_var("QM_OBSTACLES_ALLOW_PARTIAL");
             return; // cell not ingested on this box — skip
         };
         let cold = t0.elapsed();
@@ -548,31 +927,84 @@ mod tests {
         std::env::remove_var("QM_OBSTACLES_ALLOW_PARTIAL");
     }
 
-    /// Strict default: a missing ring cell aborts to the raster path; the
-    /// dev override admits the partial disk.
+    /// Fix 4 popup half, on synthetic footprints so it runs everywhere: a
+    /// 100 m block with a 30 m courtyard plus a low 3 m garage beside it.
+    /// * block interior → inside, reporting the footprint's height;
+    /// * COURTYARD → outdoors (a hole shares its outer ring's id, so the
+    ///   crossing-parity test reads it outside — same rule as the heatmap
+    ///   mask);
+    /// * open ground → outdoors;
+    /// * the 3 m garage → inside at 3 m (no 5 m enclosure gate here);
+    /// * where two footprints overlap the TALLEST one is reported.
     #[test]
-    fn missing_ring_cell_falls_back_unless_partial_allowed() {
-        let tmp = std::env::temp_dir().join(format!("qm-obst-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
-        let dir = tmp.join(cell.to_string());
-        std::fs::create_dir_all(&dir).unwrap();
-        // One tiny valid shard: a single closed square footprint (~20 m), WKB
-        // little-endian Polygon with 1 ring × 5 points.
+    fn point_inside_obstacle_matrix() {
+        use noise_compute::constants::{m_per_deg_lon, M_PER_DEG_LAT};
+        use noise_compute::propagation::obstacle_index::ObstacleIndex;
+
+        const OLAT: f64 = 50.08;
+        const OLON: f64 = 14.43;
+        let d_lat = |m: f64| m / M_PER_DEG_LAT;
+        let d_lon = |m: f64| m / m_per_deg_lon(OLAT.to_radians());
+        let square = |north_m: f64, east_m: f64, half: f64| {
+            vec![
+                (OLAT + d_lat(north_m - half), OLON + d_lon(east_m - half)),
+                (OLAT + d_lat(north_m - half), OLON + d_lon(east_m + half)),
+                (OLAT + d_lat(north_m + half), OLON + d_lon(east_m + half)),
+                (OLAT + d_lat(north_m + half), OLON + d_lon(east_m - half)),
+            ]
+        };
+        let at = |north_m: f64, east_m: f64| (OLAT + d_lat(north_m), OLON + d_lon(east_m));
+
+        let mut b = ObstacleIndex::builder(OLAT, OLON);
+        b.add_ring(&square(0.0, 0.0, 50.0), 18.5, ObstacleKind::Building, 0);
+        b.add_ring(&square(0.0, 0.0, 15.0), 18.5, ObstacleKind::Building, 0); // courtyard
+        b.add_ring(&square(0.0, 200.0, 10.0), 3.0, ObstacleKind::Building, 1); // garage
+        b.add_ring(&square(0.0, 205.0, 10.0), 40.0, ObstacleKind::Building, 2); // tower over it
+        let set = ObstacleSet {
+            indexes: vec![Arc::new(b.build())],
+        };
+
+        let h = point_inside_obstacle(&set, at(30.0, 0.0).0, at(30.0, 0.0).1)
+            .expect("block interior is inside");
+        assert!((h - 18.5).abs() < 0.1, "block height {h} ≠ 18.5");
+        assert!(
+            point_inside_obstacle(&set, at(0.0, 0.0).0, at(0.0, 0.0).1).is_none(),
+            "courtyard is open ground"
+        );
+        assert!(
+            point_inside_obstacle(&set, at(0.0, 120.0).0, at(0.0, 120.0).1).is_none(),
+            "open ground between footprints"
+        );
+        let g = point_inside_obstacle(&set, at(0.0, 193.0).0, at(0.0, 193.0).1)
+            .expect("a 3 m garage interior is still an interior");
+        assert!((g - 3.0).abs() < 0.1, "garage height {g} ≠ 3.0");
+        let t = point_inside_obstacle(&set, at(0.0, 203.0).0, at(0.0, 203.0).1)
+            .expect("garage ∩ tower");
+        assert!(
+            (t - 40.0).abs() < 0.1,
+            "overlap must report the tallest, got {t}"
+        );
+    }
+
+    /// One tiny valid shard: a single closed square footprint (~20 m) whose
+    /// south-west corner sits at `(lat, lon)`, WKB little-endian Polygon with
+    /// 1 ring × 5 points.
+    fn write_test_shard(dir: &Path, name: &str, lat: f64, lon: f64) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
         let schema = arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("polygon_wkb", arrow::datatypes::DataType::Binary, false),
             arrow::datatypes::Field::new("height_m", arrow::datatypes::DataType::Float32, false),
         ]);
         let mut wkb: Vec<u8> = vec![1, 3, 0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0];
-        for (lon, lat) in [
-            (14.4300, 50.0800),
-            (14.4303, 50.0800),
-            (14.4303, 50.0802),
-            (14.4300, 50.0802),
-            (14.4300, 50.0800),
+        for (dlon, dlat) in [
+            (0.0, 0.0),
+            (0.0003, 0.0),
+            (0.0003, 0.0002),
+            (0.0, 0.0002),
+            (0.0, 0.0),
         ] {
-            wkb.extend_from_slice(&f64::to_le_bytes(lon));
-            wkb.extend_from_slice(&f64::to_le_bytes(lat));
+            wkb.extend_from_slice(&f64::to_le_bytes(lon + dlon));
+            wkb.extend_from_slice(&f64::to_le_bytes(lat + dlat));
         }
         let batch = arrow::record_batch::RecordBatch::try_new(
             Arc::new(schema.clone()),
@@ -582,29 +1014,299 @@ mod tests {
             ],
         )
         .unwrap();
-        let file = std::fs::File::create(dir.join("obstacles-TEST.arrow")).unwrap();
+        let path = dir.join(name);
+        let file = std::fs::File::create(&path).unwrap();
         let mut w = arrow::ipc::writer::FileWriter::try_new(file, &schema).unwrap();
         w.write(&batch).unwrap();
         w.finish().unwrap();
+        path
+    }
 
-        std::env::set_var("QM_OBSTACLES_DIR", tmp.to_str().unwrap());
-        std::env::remove_var("QM_OBSTACLES_ALLOW_PARTIAL");
-        let strict = load_obstacle_set(None, Path::new("/nonexistent"), 50.08, 14.43);
+    /// The disk cache must give back exactly the index that was built, and must
+    /// refuse it the moment its inputs move. Exercised on the real functions
+    /// the query path calls — the process LRU would hide the disk hop if this
+    /// went through `load_obstacle_set`.
+    #[test]
+    fn disk_cache_round_trips_and_follows_its_inputs() {
+        let tmp = TempDir::new().expect("temp dir");
+        let tmp = tmp.path();
+        let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
+        let dir = tmp.join(cell.to_string());
+        let shard = write_test_shard(&dir, "obstacles-TEST.arrow", 50.08, 14.43);
+        let root = tmp.join("index-cache");
+
+        let shards = shard_paths(&dir).unwrap();
+        let data_ver = cell_data_ver(cell, &shards, None).expect("input fingerprint");
+        let built = build_cell_index(cell, &shards, None).unwrap();
+        store_cached_index(&root, cell, &built, data_ver);
+
+        let path = cache_file_path(&root, cell);
+        assert!(path.is_file(), "the cache file must exist at {path:?}");
+        let mapped = load_cached_index(&path, data_ver).expect("maps back");
+        assert_eq!(mapped.edge_count(), built.edge_count());
+        let ray = |idx: &ObstacleIndex| {
+            let mut out = Vec::new();
+            idx.crossings(50.0801, 14.4295, 50.0801, 14.4310, &mut out);
+            out
+        };
+        let (a, b) = (ray(&built), ray(&mapped));
+        assert_eq!(a.len(), 2, "the probe ray must enter and leave the square");
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(&b) {
+            assert_eq!(x.t.to_bits(), y.t.to_bits());
+            assert_eq!(x.height_m.to_bits(), y.height_m.to_bits());
+            assert_eq!(x.id, y.id);
+        }
+
+        // A shard that moved under us must not be served from cache — and the
+        // refused file is dropped so it cannot sit in the budget forever.
+        let touched = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&shard)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(touched))
+            .unwrap();
+        let moved = cell_data_ver(cell, &shards, None).expect("input fingerprint");
+        assert_ne!(
+            moved, data_ver,
+            "an input mtime must rotate the fingerprint"
+        );
+        assert!(load_cached_index(&path, moved).is_none(), "stale file used");
+        assert!(!path.exists(), "a refused cache file must be removed");
+
+        // A second shard is a different input SET, hence a different index.
+        write_test_shard(&dir, "obstacles-TEST2.arrow", 50.081, 14.431);
+        let two = shard_paths(&dir).unwrap();
+        assert_eq!(two.len(), 2);
+        assert_ne!(cell_data_ver(cell, &two, None).unwrap(), moved);
+    }
+
+    /// EVERY input that shapes a cell's index must move its identity, and a
+    /// file written under the old one must then be refused.
+    ///
+    /// This is the regression guard for 2026-08-05, when a cache served the
+    /// answer to a different question. It is written as an ENUMERATION rather
+    /// than one case on purpose: the defect class is "the key forgot
+    /// something", so the test walks the closed list [`cell_data_ver`] actually
+    /// folds — cell, shard ROOT, shard set, per-shard LENGTH and mtime, the
+    /// `buildings.arrow` the low-profile cap reads, and [`CACHE_CODE_VER`].
+    /// Adding an input to `build_cell_index` without a case here leaves the same
+    /// hole, so the list is the review surface.
+    ///
+    /// NOT in the list, deliberately: shard CONTENT. Rewriting a shard to the
+    /// same length while forcing the same mtime keeps the identity — that is the
+    /// `world-stamps.py` staleness contract (mtime is the change signal), not an
+    /// oversight, and hashing hundreds of MB per cell per query to close it would
+    /// cost more than the rebuild the cache exists to avoid.
+    #[test]
+    fn cache_identity_moves_with_everything_that_shapes_the_index() {
+        let tmp = TempDir::new().expect("temp dir");
+        let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
+        let other_cell = LatLng::new(-23.5505, -46.6333)
+            .unwrap()
+            .to_cell(Resolution::Four);
+        let dir = tmp.path().join(cell.to_string());
+        let shard = write_test_shard(&dir, "obstacles-TEST.arrow", 50.08, 14.43);
+        let root = tmp.path().join("index-cache");
+        let shards = shard_paths(&dir).unwrap();
+        let base = cell_data_ver(cell, &shards, None).expect("input fingerprint");
+
+        // Positive control FIRST: without it every `is_none()` below would
+        // also pass on a key that is simply always wrong.
+        let built = build_cell_index(cell, &shards, None).unwrap();
+        let path = cache_file_path(&root, cell);
+        store_cached_index(&root, cell, &built, base);
+        assert!(
+            load_cached_index(&path, base).is_some(),
+            "the unchanged identity must still map its own file"
+        );
+
+        // Each mutation must rotate the identity AND make the stored file
+        // unusable. `load_cached_index` deletes what it refuses, so the file is
+        // re-written before every case.
+        let refuses = |ver: u64, what: &str| {
+            assert_ne!(ver, base, "{what} must rotate the index identity");
+            store_cached_index(&root, cell, &built, base);
+            assert!(
+                load_cached_index(&path, ver).is_none(),
+                "{what}: a file written under the old identity was served"
+            );
+        };
+
+        // 1. The cell — its centre is the index's metric origin, so the same
+        //    shards under another cell are a different index.
+        refuses(
+            cell_data_ver(other_cell, &shards, None).unwrap(),
+            "a different cell",
+        );
+
+        // 2. The shard ROOT: identical bytes at another path are another
+        //    staging tree (`QM_OBSTACLES_DIR`, an A/B mount) and may hold
+        //    entirely different obstacles for this cell tomorrow.
+        let root_b = TempDir::new().expect("temp dir");
+        let dir_b = root_b.path().join(cell.to_string());
+        write_test_shard(&dir_b, "obstacles-TEST.arrow", 50.08, 14.43);
+        refuses(
+            cell_data_ver(cell, &shard_paths(&dir_b).unwrap(), None).unwrap(),
+            "another shard root",
+        );
+
+        // 3. A shard's mtime (the world-stamps.py staleness contract).
+        let touched = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&shard)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(touched))
+            .unwrap();
+        refuses(
+            cell_data_ver(cell, &shards, None).unwrap(),
+            "a shard's mtime",
+        );
+
+        // 4. `buildings.arrow` appearing — the low-profile cap reads it, so
+        //    the very same shards yield different HEIGHTS with it present.
+        let b_arrow = dir.join("buildings.arrow");
+        let absent = cell_data_ver(cell, &shards, Some(&b_arrow)).unwrap();
+        assert_ne!(
+            absent, base,
+            "asking about a buildings.arrow at all is a different question \
+             from not consulting one"
+        );
+        std::fs::write(&b_arrow, b"not-arrow-but-present").unwrap();
+        refuses(
+            cell_data_ver(cell, &shards, Some(&b_arrow)).unwrap(),
+            "a buildings.arrow appearing",
+        );
+
+        // 5. A shard's LENGTH — the one content signal the key carries, folded
+        //    per shard next to the mtime. Pinned at a FIXED mtime so it is the
+        //    length alone doing the work, not case 3 again.
+        let before_len = cell_data_ver(cell, &shards, None).unwrap();
+        std::fs::write(&shard, b"a-shard-of-a-very-different-length").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&shard)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(touched))
+            .unwrap();
+        let after_len = cell_data_ver(cell, &shards, None).unwrap();
+        assert_ne!(
+            after_len, before_len,
+            "a shard's length must rotate the identity at an unchanged mtime"
+        );
+        refuses(after_len, "a shard's length");
+
+        // 6. A shard SET that grew.
+        write_test_shard(&dir, "obstacles-TEST2.arrow", 50.081, 14.431);
+        let two = shard_paths(&dir).unwrap();
+        assert_eq!(two.len(), 2);
+        refuses(cell_data_ver(cell, &two, None).unwrap(), "an extra shard");
+
+        // 7. This file's own decisions (id ordering, shard order, the capping
+        //    call) are in the version, on top of the builder's chain — which is
+        //    what carries the low-profile rule now that it lives in
+        //    `noise_compute::low_profile`.
+        assert_eq!(
+            CACHE_CODE_VER,
+            fnv1a64(BUILDER_CODE_VER, include_bytes!("obstacle_store.rs"))
+        );
+        assert_ne!(
+            CACHE_CODE_VER, BUILDER_CODE_VER,
+            "the loader's own source must be in the version, not just the builder's"
+        );
+    }
+
+    /// The process memo in front of the disk cache must key on the same
+    /// identity the file does — 2026-08-05's live defect, where it keyed on the
+    /// CELL alone and handed the second query the first query's index no matter
+    /// which shard root it asked about.
+    ///
+    /// Runs entirely through `cell_index`, the function the query path calls,
+    /// because that is the layer that was wrong: the disk file always carried
+    /// its fingerprint and would have refused these.
+    #[test]
+    fn process_memo_never_answers_for_another_shard_root() {
+        let index_dir = TempDir::new().expect("temp index dir");
+        let _env = EnvGuard::set(&[("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir)))]);
+        let one = TempDir::new().expect("temp dir");
+        let two = TempDir::new().expect("temp dir");
+        let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
+
+        // Same cell, two staging trees: one square in A, two in B.
+        let dir_a = one.path().join(cell.to_string());
+        let dir_b = two.path().join(cell.to_string());
+        write_test_shard(&dir_a, "obstacles-TEST.arrow", 50.08, 14.43);
+        write_test_shard(&dir_b, "obstacles-TEST.arrow", 50.08, 14.43);
+        write_test_shard(&dir_b, "obstacles-TEST2.arrow", 50.081, 14.431);
+
+        let data_dir = one.path().join("prepared");
+        let edges = |dir: &Path| {
+            cell_index(cell, dir, None, &data_dir)
+                .expect("test shards build")
+                .edge_count()
+        };
+        assert_eq!(edges(&dir_a), 4, "one square is four edges");
+        assert_eq!(
+            edges(&dir_b),
+            8,
+            "the memo served A's index for B's shards — it is keyed on the \
+             cell, not on the inputs"
+        );
+        assert_eq!(edges(&dir_a), 4, "and back, without either poisoning");
+
+        // A shard changing under a LIVE process is the same hole with one
+        // root: the memo must notice, not hold yesterday's obstacles.
+        write_test_shard(&dir_a, "obstacles-TEST2.arrow", 50.081, 14.431);
+        assert_eq!(edges(&dir_a), 8, "a shard added under us must be picked up");
+    }
+
+    /// Strict default: a missing ring cell aborts to the raster path; the dev
+    /// override admits the partial disk.
+    ///
+    /// Runs strict → partial → strict on ONE process and one disk, which is
+    /// the question "does `QM_OBSTACLES_ALLOW_PARTIAL` belong in the cache
+    /// key?" asked as a test. It does not: the flag is re-read per query in
+    /// `load_obstacle_set` and only ever decides which CELLS are assembled
+    /// into the set; a cache entry is one cell's index, built from that cell's
+    /// shards alone, so no dev A/B run can leave a file that answers a strict
+    /// query differently. The final strict pass is what would catch it if that
+    /// ever stopped being true.
+    #[test]
+    fn missing_ring_cell_falls_back_unless_partial_allowed() {
+        let tmp = TempDir::new().expect("temp dir");
+        let index_dir = TempDir::new().expect("temp index dir");
+        let _env = EnvGuard::set(&[
+            ("QM_OBSTACLES_DIR", Some(&path_str(&tmp))),
+            ("QM_OBSTACLES_ALLOW_PARTIAL", None),
+            ("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir))),
+        ]);
+        let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
+        let dir = tmp.path().join(cell.to_string());
+        write_test_shard(&dir, "obstacles-TEST.arrow", 50.08, 14.43);
+        let data_dir = tmp.path().join("prepared");
+
+        let strict = load_obstacle_set(None, &data_dir, 50.08, 14.43);
         assert!(
             strict.is_none(),
             "missing ring cells must fall back to raster"
         );
 
         std::env::set_var("QM_OBSTACLES_ALLOW_PARTIAL", "1");
-        let partial = load_obstacle_set(None, Path::new("/nonexistent"), 50.08, 14.43);
+        let partial = load_obstacle_set(None, &data_dir, 50.08, 14.43);
         assert!(
             partial.is_some(),
             "dev override must admit the partial disk"
         );
         assert_eq!(partial.unwrap().edge_count(), 4);
 
-        std::env::remove_var("QM_OBSTACLES_DIR");
+        // The A/B run just cached this cell, in memory and on disk. The strict
+        // query must still refuse the incomplete ring.
         std::env::remove_var("QM_OBSTACLES_ALLOW_PARTIAL");
-        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            load_obstacle_set(None, &data_dir, 50.08, 14.43).is_none(),
+            "a partial-mode run must not leave anything that answers a strict query"
+        );
     }
 }

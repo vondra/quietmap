@@ -127,7 +127,7 @@ fn metadata_populated_with_arr_dep_split_and_profile_mix() {
     };
     let mut summary: AirportSummaryLookup = HashMap::new();
     summary.insert(
-        "LKPR",
+        "LKPR".to_string(),
         AirportSummaryEntry {
             arr_count: 2,
             dep_count: 2,
@@ -248,7 +248,7 @@ fn metadata_gse_per_day_populated() {
     };
     let mut summary: AirportSummaryLookup = HashMap::new();
     summary.insert(
-        "LKPR",
+        "LKPR".to_string(),
         AirportSummaryEntry {
             arr_count: 0,
             dep_count: 0,

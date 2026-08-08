@@ -102,6 +102,61 @@ pub fn compute_baseline(
     }
 }
 
+/// Ground attenuation `A_ground` for one octave band [dB] — THE definition.
+///
+/// Every lane goes through here: the scalar and SIMD propagation kernels, the
+/// popup traces, the aircraft ground-ops kernel, the railway reach solver, arc
+/// screening, the tile-painter scatter kernels, and — via a `build.rs` injection of
+/// [`GROUND_HARD_FLOOR_DB`] into `scatter.cu`, since CUDA cannot call Rust —
+/// the GPU kernel. It used to be nine hand-copied expressions, which is how a
+/// missing term survived in all of them at once.
+///
+/// CNOSSOS-EU 2015/996 (2.5.15) + (2.5.18) read
+/// `A_ground,H = max(analytic(G, f, h_s, h_r, d), −3(1 − Ḡm))`. The engine
+/// carries the band-mean surrogate [`GROUND_CF`]`·G` in place of the analytic
+/// term, so the same shape becomes
+///
+/// ```text
+/// A_gr[i] = max(CF[i]·G, 0) − 3·(1 − G)
+/// ```
+///
+/// The `max(·, 0)` is what keeps the two parts from stacking: (2.5.18) makes
+/// `−3(1 − Ḡm)` a LOWER BOUND on `A_ground`, not an addend, so the surrogate's
+/// negative low-frequency lobe is REPLACED by the floor instead of piling onto
+/// it. Hard ground (`G = 0`) then lands on exactly −3 dB in every band, which
+/// the standard states verbatim; `tests/tc_ground.rs` pins that against the
+/// official TC01 and pins the `G > 0` totals against TC02/TC03.
+#[inline]
+pub fn ground_atten_db(band: usize, ground_g: f64) -> f64 {
+    (GROUND_CF[band] * ground_g).max(0.0) + GROUND_HARD_FLOOR_DB * (1.0 - ground_g)
+}
+
+/// [`ground_atten_db`] over all octave bands.
+#[inline]
+pub fn ground_atten_bands(ground_g: f64) -> [f64; NUM_BANDS] {
+    std::array::from_fn(|i| ground_atten_db(i, ground_g))
+}
+
+/// The ground/barrier term for one band (§7.3.1, as
+/// [`propagate_variants_impl`] applies it): the barrier arm REPLACES the ground
+/// arm when it exists, and `A_ground` alone stands when it does not.
+///
+/// Every angular quadrature of a line source averages THIS term rather than the
+/// bare screening increment, because the two are not independent — a fan 14 %
+/// blocked by 17 dB yields ~0.3 dB of average screening, which the `max` would
+/// discard. So it lives here, once: `arc_screening` (adaptive nodes),
+/// `seg_sampling` (uniform nodes) and the tile painter's cp path all have to
+/// composite identically or their answers are not comparable.
+#[inline]
+pub fn ground_or_barrier_db(ground_db: f64, terrain_db: f64, screening_db: f64) -> f64 {
+    let barrier = terrain_db + screening_db;
+    if barrier > 0.0 {
+        ground_db.max(barrier)
+    } else {
+        ground_db
+    }
+}
+
 /// Propagation result per band.
 #[derive(Debug, Clone)]
 pub struct BandLevels {
@@ -130,7 +185,7 @@ pub fn propagate_bands(
 
     for i in 0..NUM_BANDS {
         bands[i] =
-            emission_bands[i] - geo_div - ALPHA_ATM[i] * d_over_1000 - GROUND_CF[i] * ground_g;
+            emission_bands[i] - geo_div - ALPHA_ATM[i] * d_over_1000 - ground_atten_db(i, ground_g);
     }
 
     let a_weighted = a_weighted_total(&bands);
@@ -199,7 +254,10 @@ fn propagate_variants_impl<const FULL: bool>(
 
     let geo_v = f64x4::splat(geo_div);
     let d1000_v = f64x4::splat(d_over_1000);
-    let g_v = f64x4::splat(ground_g);
+    // Ground is a function of `ground_g` alone, so the eight bands are formed
+    // ONCE through the shared scalar term and then loaded per half — no SIMD
+    // re-derivation of the formula that could drift from it.
+    let a_gr_bands = ground_atten_bands(ground_g);
     let refl_v = f64x4::splat(reflection_boost_db);
     let flc_v = f64x4::splat(finite_line_corr);
     let zero_v = f64x4::splat(0.0);
@@ -212,14 +270,13 @@ fn propagate_variants_impl<const FULL: bool>(
         };
         let emission_v = load4(emission_bands);
         let alpha_v = load4(&ALPHA_ATM);
-        let cf_v = load4(&GROUND_CF);
         let aw_v = load4(&A_WEIGHTING);
         let terr_v = load4(terrain_atten);
         let scr_v = load4(screening_atten);
         let veg_v = load4(vegetation_atten);
 
         let base = emission_v - geo_v - alpha_v * d1000_v;
-        let a_gr = cf_v * g_v;
+        let a_gr = load4(&a_gr_bands);
 
         let a_bar_full = terr_v + scr_v;
         let gob_full = a_bar_full
@@ -352,11 +409,17 @@ mod tests {
     #[test]
     fn test_propagation_k4_hard_ground() {
         // K4: Propagation 100m, G=0 (hard), line source
-        // Expected attenuation: 28.58 dB
+        // Expected attenuation: 25.56 dB
         // Use reference emission from K1: cat1, 50 km/h, 10000 AADT
         // (We test attenuation = emission_aw - received_aw)
-
-        // Reference emission bands (from kernel-test — approximate)
+        //
+        // WAS 28.58 dB, and that number was the BUG, not the reference: it is
+        // 25.56 + 3.00, the value this kernel produced while `A_ground` was
+        // `CF[i]·G` alone and therefore vanished over hard ground. ISO 9613-2
+        // Table 3 and CNOSSOS (2.5.15) both put `A_ground = −3 dB` at G = 0
+        // (`GROUND_HARD_FLOOR_DB`), so 25.56 dB is what the cited standard
+        // actually gives. Recomputed with the fix, never re-fitted; the
+        // per-band anchor lives in `tests/tc_ground.rs` against official TC01.
         let emission = [65.0, 70.0, 73.0, 74.0, 73.0, 70.0, 65.0, 58.0];
         let em_aw = a_weighted_total(&emission);
 
@@ -365,8 +428,8 @@ mod tests {
 
         // Allow ±1 dB tolerance (our emission approximation, not exact CNOSSOS coefficients)
         assert!(
-            (attenuation - 28.58).abs() < 1.5,
-            "K4: expected ~28.58, got {:.2} (emission_aw={:.2}, received_aw={:.2})",
+            (attenuation - 25.56).abs() < 1.5,
+            "K4: expected ~25.56, got {:.2} (emission_aw={:.2}, received_aw={:.2})",
             attenuation,
             em_aw,
             result.a_weighted

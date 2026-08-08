@@ -13,6 +13,18 @@ pub(crate) fn compute_roads(
 ) -> (NoisePeriods, Vec<Contributor>) {
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
     let mut cand_scratch = Vec::new();
+    // Arc-screening scratch (fix-pack Fix 1): the receiver SKYLINE plus the
+    // interval-ray profile/crossing buffers, amortised across all segments —
+    // one receiver, one skyline, however many segments reach it.
+    let mut arc_skyline = propagation::arc_screening::ArcSkyline::default();
+    let mut arc_scratch = propagation::arc_screening::ArcScreeningScratch::new();
+    // ONE profile buffer for the whole segment list. `build_path_profile`
+    // clears it before every fill, so reusing it is bit-for-bit the same
+    // sampling a fresh `PathProfile` gives — it only stops the five inner
+    // `Vec`s being allocated, grown sample by sample (a doubling memmove
+    // chain per array) and dropped once per segment. A São Paulo popup runs
+    // this loop ~7.9 k times.
+    let mut path_profile = propagation::PathProfile::new();
 
     use std::collections::HashMap;
 
@@ -119,7 +131,25 @@ pub(crate) fn compute_roads(
         let speed = norm.speed_kmh;
         let base_speed = norm.base_speed_kmh;
         let surf_corr = norm.surf_corr_db;
-        let flc = geo::finite_line_correction(seg.length_m as f64, seg.dist_m, seg.fraction);
+        // Finite-line geometry runs on the perpendicular distance to the
+        // segment's INFINITE line paired with the signed foot position, while
+        // divergence/atmosphere stay on `seg.dist_m` (fix-pack C). `seg.fraction`
+        // is the clamped foot — the signed one comes from the recomputed
+        // decomposition.
+        let pts = geo::point_to_segment_full(
+            receiver.lat,
+            receiver.lon,
+            seg.start_lat,
+            seg.start_lon,
+            seg.end_lat,
+            seg.end_lon,
+        );
+        let flc = geo::finite_line_correction_for_divergence(
+            seg.length_m as f64,
+            pts.d_perp_m,
+            pts.fraction,
+            seg.dist_m,
+        );
 
         // Early exit: skip if free-field < threshold (matching pipeline)
         {
@@ -140,7 +170,6 @@ pub(crate) fn compute_roads(
         }
 
         // Unified path profile — sampled once, shared across all path-effect calls.
-        let mut path_profile = propagation::PathProfile::new();
         rasters.build_path_profile(
             seg.cp_lat,
             seg.cp_lon,
@@ -168,8 +197,13 @@ pub(crate) fn compute_roads(
             seg.cp_lon,
             receiver.lat,
             receiver.lon,
+            Some(&propagation::obstacle_index::CellPrune::for_profile(
+                &path_profile,
+                src_alt,
+                rcv_alt,
+            )),
         );
-        let (screening_atten, obstacle_trace) =
+        let (cp_screening_atten, obstacle_trace) =
             propagation::path_effects::screening_attenuation_with_meta(
                 &mut path_profile,
                 barriers,
@@ -179,6 +213,46 @@ pub(crate) fn compute_roads(
                 0.0, // roads: no exclusion radius
                 &terrain.attenuation_bands,
             );
+        // Arc screening (fix-pack Fix 1): the cp ray's verdict covers only the
+        // directions it flies through; the segment's other azimuths get their
+        // own evaluation, energy-averaged over the span. The cp result stays
+        // the obstacle trace, the degenerate-span fallback, and the evaluation
+        // reused for the interval it falls in — so the one-obstacle case
+        // marches no extra ray. Without a vector obstacle store there is
+        // nothing to clip arcs against and the cp verdict stands.
+        // Arc pre-gate: a segment that cannot subtend the span floor at this
+        // receiver keeps the cp verdict without so much as an atan2.
+        let screening_atten = if !propagation::arc_screening::segment_can_span(
+            seg.length_m as f64,
+            seg.dist_m,
+            propagation::arc_screening::ArcBounds::shipped(),
+        ) {
+            cp_screening_atten
+        } else {
+            crate::arc_screened_line_segment(
+                &crate::LineSegmentScreening {
+                    receiver,
+                    start_lat: seg.start_lat,
+                    start_lon: seg.start_lon,
+                    end_lat: seg.end_lat,
+                    end_lon: seg.end_lon,
+                    cp_lat: seg.cp_lat,
+                    cp_lon: seg.cp_lon,
+                    src_alt_m: src_alt,
+                    cp_screening: &cp_screening_atten,
+                    cp_terrain: &terrain.attenuation_bands,
+                    ground_g,
+                    source_height_m: norm.source_height_m,
+                    length_m: seg.length_m as f64,
+                    dist_m: seg.dist_m,
+                    barriers,
+                    obstacles,
+                },
+                rasters,
+                &mut arc_skyline,
+                &mut arc_scratch,
+            )
+        };
         let veg_atten = propagation::path_effects::vegetation_attenuation_path(&path_profile);
 
         let mut seg_variants = [
@@ -533,7 +607,10 @@ pub(crate) fn compute_roads(
 
     // Emit grouped contributors
     let mut contributors = Vec::new();
-    for ((_ref, _name, _class), acc) in &roads_by_key {
+    // Ascending group key, not HashMap order — the contributor sequence
+    // is summed downstream and its JSON order is part of the popup
+    // reference output. See `crate::compute::key_sorted`.
+    for (_, acc) in crate::compute::key_sorted(&roads_by_key) {
         // Full energy from variants (includes all path effects per-band)
         let ld = PropagationVariants::to_db(acc.variants[0].full_energy);
         let le = PropagationVariants::to_db(acc.variants[1].full_energy);
@@ -646,7 +723,9 @@ pub(crate) fn compute_roads(
 
     // Total must come from all grouped energies, not from display-filtered contributors.
     let mut total_energy = [0.0f64; 3];
-    for acc in roads_by_key.values() {
+    // f64 addition is not associative: ascending key order, not HashMap
+    // order, or this total moves ±1 ULP per query.
+    for (_, acc) in crate::compute::key_sorted(&roads_by_key) {
         total_energy[0] += acc.variants[0].full_energy;
         total_energy[1] += acc.variants[1].full_energy;
         total_energy[2] += acc.variants[2].full_energy;
@@ -727,8 +806,11 @@ mod tests {
         }
     }
 
+    /// 200 m due north of the segment — the geometry has to AGREE with the
+    /// fixture's `dist_m`/`cp`/`fraction`, since the finite-line correction
+    /// reads the segment's real perpendicular distance (fix-pack C).
     fn receiver() -> Receiver {
-        Receiver::new(50.0, 14.0015, 200.0)
+        Receiver::new(50.001809, 14.0015, 200.0)
     }
 
     fn one_road_meta(roads: &[RoadSegment]) -> RoadMetadata {
@@ -776,6 +858,60 @@ mod tests {
         assert_eq!(plain.le_db, channeled.le_db);
         assert_eq!(plain.ln_db, channeled.ln_db);
         assert_eq!(plain.lden_db, channeled.lden_db);
+    }
+
+    /// Stripe regression (fix-pack Fix 1): a 30 m building straddling the cp
+    /// ray must NOT screen the whole 214 m segment. Its shadow covers ~22 % of
+    /// the fan the receiver sees, so the loss is ~1 dB — the cp-ray verdict
+    /// alone applied the full ~15 dB diffraction to every metre of the
+    /// segment, which is the constant-width stripe behind buildings.
+    #[test]
+    fn box_on_the_cp_ray_screens_only_its_angular_share() {
+        use crate::propagation::obstacle_index::{ObstacleIndex, ObstacleKind, ObstacleSet};
+        let lat_of = |north_m: f64| 50.0 + north_m / crate::constants::M_PER_DEG_LAT;
+        let lon_of =
+            |east_m: f64| 14.0 + east_m / crate::constants::m_per_deg_lon(50.0_f64.to_radians());
+        // 30 m wide × 10 m deep × 8 m tall, 50 m north of the segment, centred
+        // on the receiver's perpendicular foot.
+        let mut b = ObstacleIndex::builder(50.0, 14.0);
+        b.add_ring(
+            &[
+                (lat_of(50.0), lon_of(92.0)),
+                (lat_of(50.0), lon_of(122.0)),
+                (lat_of(60.0), lon_of(122.0)),
+                (lat_of(60.0), lon_of(92.0)),
+            ],
+            8.0,
+            ObstacleKind::Building,
+            0,
+        );
+        let obstacles = ObstacleSet {
+            indexes: vec![std::sync::Arc::new(b.build())],
+        };
+
+        let roads = vec![secondary_segment()];
+        let clear = compute_roads(&receiver(), &roads, &[], None, &FlatRasters, None)
+            .0
+            .lden_db;
+        let screened = compute_roads(
+            &receiver(),
+            &roads,
+            &[],
+            Some(&obstacles),
+            &FlatRasters,
+            None,
+        )
+        .0
+        .lden_db;
+        let loss = clear - screened;
+        assert!(
+            loss > 0.2,
+            "the box must screen the arc it covers, got {loss:.2} dB"
+        );
+        assert!(
+            loss < 3.0,
+            "…but not the whole segment: {loss:.2} dB (cp-ray verdict was ~15 dB)"
+        );
     }
 
     /// Gate (c) popup: a baked `\0\0` row is WORLD defaults — `Some(UNKNOWN)`

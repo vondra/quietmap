@@ -130,7 +130,7 @@ fn build_top_flights_orders_descending_and_drops_silent() {
     );
 
     let cruise_cands: HashMap<u64, TopFlightCandidate> = HashMap::new();
-    let out = build_top_flights(&flights, &cruise_cands, 350.0);
+    let out = build_top_flights(&crate::compute::key_sorted(&flights), &cruise_cands, 350.0);
     assert_eq!(out.len(), 3, "got {} top flights", out.len());
     assert_eq!(out[0].lmax_db, 80.0);
     assert_eq!(out[0].aircraft_type, "A320");
@@ -157,7 +157,7 @@ fn build_top_flights_caps_at_top_n() {
         );
     }
     let cruise_cands: HashMap<u64, TopFlightCandidate> = HashMap::new();
-    let out = build_top_flights(&flights, &cruise_cands, 300.0);
+    let out = build_top_flights(&crate::compute::key_sorted(&flights), &cruise_cands, 300.0);
     assert_eq!(out.len(), TOP_FLIGHTS_N);
     // Loudest preserved.
     assert_eq!(out[0].lmax_db, 100.0);
@@ -171,7 +171,7 @@ fn build_top_flights_synth_fid_marks_synthetic() {
     let synth_fid = flight_id::pack_synth(0x1234_5678);
     flights.insert(synth_fid, make_flight(75.0, 50.0, false, [0; 4], ""));
     let cruise_cands: HashMap<u64, TopFlightCandidate> = HashMap::new();
-    let out = build_top_flights(&flights, &cruise_cands, 50.0);
+    let out = build_top_flights(&crate::compute::key_sorted(&flights), &cruise_cands, 50.0);
     assert_eq!(out.len(), 1);
     assert!(out[0].synthetic);
     assert!(out[0].icao_hex.is_empty());
@@ -214,7 +214,7 @@ fn build_top_flights_interleaves_airborne_and_cruise() {
         make_cruise_cand(70.0, *b"B777", "CRZ1"),
     );
 
-    let out = build_top_flights(&flights, &cruise_cands, 150.0);
+    let out = build_top_flights(&crate::compute::key_sorted(&flights), &cruise_cands, 150.0);
     assert_eq!(out.len(), 3);
     assert_eq!(out[0].callsign, "AIR1");
     assert_eq!(out[1].callsign, "CRZ1", "cruise must interleave by Lmax");
@@ -233,7 +233,7 @@ fn build_top_flights_dedupes_same_fid_in_both_maps() {
     let mut cruise_cands: HashMap<u64, TopFlightCandidate> = HashMap::new();
     cruise_cands.insert(dual_fid, make_cruise_cand(60.0, *b"A320", "DUAL"));
 
-    let out = build_top_flights(&flights, &cruise_cands, 50.0);
+    let out = build_top_flights(&crate::compute::key_sorted(&flights), &cruise_cands, 50.0);
     assert_eq!(out.len(), 1, "same real fid must not appear twice");
     assert_eq!(out[0].callsign, "DUAL");
     assert!(out[0].energy_pct > 0.0, "airborne entry kept (real energy)");
@@ -245,7 +245,7 @@ fn build_top_flights_synth_cruise_fid_is_marked_synthetic() {
     let mut cruise_cands: HashMap<u64, TopFlightCandidate> = HashMap::new();
     let synth = flight_id::pack_synth(0xABCD);
     cruise_cands.insert(synth, make_cruise_cand(50.0, [0; 4], ""));
-    let out = build_top_flights(&flights, &cruise_cands, 1.0);
+    let out = build_top_flights(&crate::compute::key_sorted(&flights), &cruise_cands, 1.0);
     assert_eq!(out.len(), 1);
     assert!(
         out[0].synthetic,
@@ -434,4 +434,165 @@ fn ga_hybrid_drops_airborne_lden_by_14_8_db() {
         (drop - expected).abs() < 0.05,
         "GA hybrid airborne Lden drop {drop:.2} dB != {expected:.2} dB"
     );
+}
+
+/// Every f64 total the popup's aircraft detail exposes must be a function
+/// of the accumulator CONTENTS, never of the map walk order. `RandomState`
+/// re-seeds per `HashMap::new()`, so building the same content twice in one
+/// process already gives two different walk orders — this test rebuilds
+/// each map on every repeat and demands identical bytes.
+///
+/// It complements the end-to-end
+/// `compute::aircraft_v6::tests::repeated_identical_clicks_are_bit_identical`:
+/// that one drives real geometry but can only make the dominant energy sums
+/// order-sensitive. Here the inputs are chosen to be adversarial for each
+/// individual accumulator — non-uniform `flight_weight`
+/// (`observed_flights_per_day`), scattered altitudes (`avg_altitude_m` via
+/// `band_stats`), and a wall of exactly-equal `peak_lmax` straddling the
+/// 20-row `top_flights` cut.
+#[test]
+fn aircraft_detail_ignores_map_iteration_order() {
+    use crate::compute::aircraft_v6::cruise::band_stats;
+    use crate::compute::aircraft_v6::state::CruiseFlightStats;
+
+    const N: usize = 400;
+    // Irrational-ish spread: consecutive terms differ across the whole
+    // mantissa, so any re-association shows up in the low bits.
+    let spread = |i: usize, salt: f64| -> f64 {
+        ((i as f64 * 0.617_924_313_7 + salt).sin() * 0.5 + 0.5) * 0.999 + 0.001
+    };
+
+    let build = || {
+        let mut flights: HashMap<u64, FlightAccum> = HashMap::new();
+        let mut cruise_flights: HashMap<u64, FlightAccum> = HashMap::new();
+        let mut stats: HashMap<u64, CruiseFlightStats> = HashMap::new();
+        let mut cands: HashMap<u64, TopFlightCandidate> = HashMap::new();
+        for i in 0..N {
+            let fid = flight_id::pack_real(
+                0x40_0000 + i as u32,
+                1_750_000_000 + (i as u32 % 9) * 86_400,
+            )
+            .expect("test fid");
+            let mut acc = FlightAccum::new(
+                (i % 8) as u8,
+                spread(i, 1.0) * 3.0,
+                false,
+                *b"A320",
+                format!("CS{i:04}"),
+            );
+            // Airborne energies deliberately two decades BELOW the cruise
+            // ones below: `build_detail` folds cruise in first and airborne
+            // on top, so an airborne total that dominated would round the
+            // cruise re-association away and hide a regression there.
+            acc.period_energy = [
+                spread(i, 2.0) * 1e-5,
+                spread(i, 3.0) * 1e-5,
+                spread(i, 4.0) * 1e-5,
+            ];
+            // 12 airborne flights sit on ONE Lmax value and everything else
+            // is strictly below it. The cruise side (below) puts a much
+            // larger wall on the SAME value, so the 20-row cut is filled by
+            // 12 airborne ties plus 8 of the cruise ties — which 8 depends
+            // entirely on the cruise walk order, and which 12 on the
+            // airborne one.
+            acc.peak_lmax = if i < 12 {
+                72.5
+            } else {
+                40.0 + spread(i, 5.0) * 25.0
+            };
+            acc.peak_altitude_m = 200.0 + spread(i, 6.0) * 9_000.0;
+            acc.min_dist_m = 100.0 + spread(i, 7.0) * 5_000.0;
+            flights.insert(fid, acc);
+
+            let synth = flight_id::pack_synth(i as u64);
+            let mut cacc =
+                FlightAccum::new((i % 8) as u8, spread(i, 8.0), true, [0; 4], String::new());
+            // Three decades of spread: big enough that re-association moves
+            // the low bits of the total, small enough that no term is lost
+            // under the sum's ULP (which would make order irrelevant again).
+            let mag = 1e-3 * 10f64.powi(-((i % 4) as i32));
+            cacc.period_energy = [
+                spread(i, 9.0) * mag,
+                spread(i, 10.0) * mag,
+                spread(i, 11.0) * mag,
+            ];
+            cacc.peak_lmax = 30.0 + spread(i, 12.0) * 30.0;
+            cruise_flights.insert(synth, cacc);
+
+            let real = flight_id::pack_real(
+                0x50_0000 + i as u32,
+                1_750_000_000 + (i as u32 % 6) * 86_400,
+            )
+            .expect("test fid");
+            stats.insert(
+                real,
+                CruiseFlightStats {
+                    peak_lmax: 31.0 + spread(i, 13.0) * 40.0,
+                    alt_at_peak: 8_000.0 + spread(i, 14.0) * 4_000.0,
+                    class_at_peak: i % aircraft::NUM_CLASSES,
+                },
+            );
+            cands.insert(
+                real,
+                TopFlightCandidate {
+                    peak_lmax: if i % 3 == 0 {
+                        72.5
+                    } else {
+                        45.0 + spread(i, 15.0) * 20.0
+                    },
+                    peak_altitude_m: 9_000.0 + spread(i, 16.0) * 2_000.0,
+                    peak_period: (i % 3) as u8,
+                    peak_seg_start: [14.0, 50.0],
+                    peak_seg_end: [14.1, 50.1],
+                    min_dist_m: 5_000.0 + spread(i, 17.0) * 5_000.0,
+                    profile_idx: (i % 8) as u8,
+                    aircraft_type: *b"B738",
+                    callsign: format!("DL{i:04}"),
+                },
+            );
+        }
+        (flights, cruise_flights, stats, cands)
+    };
+
+    let run = || {
+        let (flights, cruise_flights, stats, cands) = build();
+        let bands = band_stats(&stats);
+        let (periods, detail) = build_detail(
+            &flights,
+            &cruise_flights,
+            stats.len(),
+            &cands,
+            &bands,
+            7.0,
+            7.0,
+        );
+        // JSON round-trips f64 as shortest-roundtrip decimal, which is
+        // injective on f64 — equal strings mean equal bits.
+        serde_json::to_string(&(&periods, &detail)).unwrap()
+    };
+
+    let first = run();
+    assert!(
+        first.contains("\"top_flights\":[{"),
+        "no top flights built — test would be vacuous"
+    );
+    for i in 1..10 {
+        let again = run();
+        if again != first {
+            let at = first
+                .bytes()
+                .zip(again.bytes())
+                .position(|(a, b)| a != b)
+                .unwrap_or(first.len().min(again.len()));
+            let from = at.saturating_sub(70);
+            panic!(
+                "aircraft detail changed on repeat {i} with identical accumulator \
+                 contents — an f64 sum, max or top-N cut is walking a HashMap again; \
+                 see crate::compute::key_sorted.\n  first byte {at} differs\n  \
+                 run 0: …{}\n  run {i}: …{}",
+                &first[from..(at + 30).min(first.len())],
+                &again[from..(at + 30).min(again.len())],
+            );
+        }
+    }
 }

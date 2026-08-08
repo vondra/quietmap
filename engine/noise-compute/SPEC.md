@@ -37,11 +37,12 @@ foliage in full leaf. Scalar approximates average Central European mixed forest 
 (~50 %). See `docs/future-plans/forest-continuous-density.md` for the continuous-density plan
 (Copernicus HRL TCD + Hansen GFC) that replaces the scalar with per-pixel canopy fraction.
 
-### Ground correction factors (CNOSSOS-EU §2.5.15)
+### Ground correction factors (CNOSSOS-EU §2.5.15 + §2.5.18)
 ```
 CF = [-1.5, -0.7, 1.5, 2.5, 2.0, 1.3, 0.7, 0.2]
-A_ground[i] = CF[i] × G    where G = 1 - IMD/100 (from imperviousness raster)
+A_ground[i] = max(CF[i] × G, 0) − 3 × (1 − G)    where G = 1 - IMD/100 (imperviousness raster)
 ```
+See §3.3 for the derivation and for why the −3 dB is a floor, not an addend.
 
 ---
 
@@ -219,11 +220,39 @@ where d_slant = √(d_horizontal² + Δh²), Δh = (h_source + z_source) - (h_re
 A_atm,i = α_atm,i × d_slant / 1000    [dB]
 ```
 
-### 3.3 Ground effect (CNOSSOS-EU §2.5.15)
+### 3.3 Ground effect (CNOSSOS-EU §2.5.15 + §2.5.18)
 ```
-A_ground,i = CF[i] × G
+A_ground,i = max(CF[i] × G, 0) + HARD_FLOOR × (1 − G)      HARD_FLOOR = −3 dB
 ```
 where G = `1 - IMD/100`, from the imperviousness raster. G=0 hard, G=1 soft.
+
+2015/996 gives `A_ground,H = max(analytic(G, f, h_s, h_r, d), −3(1 − Ḡm))`
+((2.5.15) with the (2.5.18) lower bound), and states the hard-ground case
+verbatim: *"if Gpath = 0: Aground,H = −3 dB"*. ISO 9613-2 Table 3 agrees
+(`As + Ar = −1.5 − 1.5`). The physics is the image source: over a reflective
+surface the direct and reflected rays arrive in phase, so the level sits ~3 dB
+ABOVE free field — an attenuation of −3 dB, not zero.
+
+`CF[i] × G` is our band-mean surrogate for the analytic term, so the max() is
+kept in the same shape: the `max(·, 0)` is what stops the two parts stacking,
+and the floor REPLACES the surrogate's negative low-frequency lobe rather than
+adding to it. At G = 1 the change is worth −0.01 dB on the A-weighted sum; at
+G = 0 it is the full 3.00 dB in every band.
+
+Formed in exactly ONE place, `propagation::iso9613::ground_atten_db` — the
+scalar and SIMD kernels, popup traces, aircraft ground-ops, arc screening, the
+tile-painter scatter kernels and (via a `noise-gpu/build.rs` `-D` injection of
+`GROUND_HARD_FLOOR_DB`, since CUDA cannot call Rust) `scatter.cu` all route
+through it. It was nine hand-copied expressions until 2026-08-05, which is how
+the term went missing from all of them at once. Pinned band-by-band against the
+official CNOSSOS TC01/TC02/TC03 in `tests/tc_ground.rs`.
+
+Consequence for the energy-budget skip in `tile-painter`: the largest ground
+GAIN any band can reach is now `−HARD_FLOOR` = 3.0 dB, attained at G = 0 in
+every band, replacing the old per-band `max(−CF[i], 0)` (1.5 / 0.7 / 0…). The
+bound is `constants::GROUND_GAIN_UB_DB`; leaving the old values in place would
+make the skip's `ub ≥ exact` invariant false over hard ground and drop audible
+sources silently.
 
 Water is hard (ISO 9613-2 §7.3.1 groups water with paving/concrete): the
 WorldCover→IMD LUT maps water to 100; snow/ice stays 0 (porous snow cover →
@@ -251,13 +280,29 @@ Ground and barrier attenuation are **not** added together.
 Uses **HORIZONTAL** distance and angle subtended:
 ```
 d1, d2 = along-segment horizontal offsets from the foot of the receiver's
-         perpendicular to the two segment endpoints
-d_perp = perpendicular horizontal distance from receiver to segment line
+         perpendicular to the two segment endpoints, SIGNED (d1 < 0 when the
+         foot lies past the segment's start — the receiver is off the end)
+d_perp = perpendicular horizontal distance from receiver to the segment's
+         INFINITE line (unclamped foot), floored at 0.5 m
+d_div  = the distance the divergence term was evaluated at (§3.1) — the
+         endpoint-clamped `dist_m` the source loaders precompute
 
-θ = atan(d1/d_perp) + atan(d2/d_perp)    [radians]
-FLC = 10 × log₁₀(θ / π)                  [dB, always ≤ 0]
+θ   = atan(d1/d_perp) + atan(d2/d_perp)              [radians]
+FLC = 10 × log₁₀(θ / π) + 10 × log₁₀(d_div/d_perp)   [dB]
 ```
 Note: Uses HORIZONTAL distances, not 3D slant. This is a fix from V33/V44 which incorrectly used 3D.
+
+The exact free-field energy of a straight finite line is `∝ θ/d_perp`
+(`∫dy/(d_perp² + y²)`), so `θ` and the divergence distance must be the same
+`d_perp`; the second term re-references the divergence the kernel already took
+at `d_div`, leaving atmospheric absorption on the true (endpoint) distance.
+Both terms vanish when the receiver's perpendicular foot lies ON the segment
+(`d_div == d_perp`) — the common case, and the only geometry the pre-2026-08-03
+form (endpoint distance + clamped fraction) was valid for. Off the end it read
+a 250 m segment up to +1.9 dB loud, ≈ +0.9 dB on a whole line
+(`screening_fixture` scene B). Consequence: subdividing a microsegment now
+conserves received energy exactly (`geo.rs::off_end_split_conserves_energy`).
+The audibility cull keeps using the endpoint-clamped distance.
 
 ### 3.5 Terrain diffraction (ISO 9613-2 §7.3 + CNOSSOS-EU §2.5.6(c), single-edge)
 ```
@@ -266,9 +311,59 @@ Note: Uses HORIZONTAL distances, not 3D slant. This is a fix from V33/V44 which 
 Single edge (§7.3):
 A_bar,i = min(20, 10 × log₁₀(3 + 20 × δ × f[i] / 340))
 
-Rayleigh gate (CNOSSOS-EU §2.5.6(c)):
-if δ ≤ λ/4 − δ*  then  A_bar,i = 0
+Rayleigh criterion — UNBLOCKED RAYS ONLY
+(Commission Delegated Directive (EU) 2021/1226 point (9)(c)):
+if δ < 0 and δ ≤ λ/4 − δ*  then  A_bar,i = 0
 ```
+
+**The `δ < 0` scope is the whole criterion, and it was missing until
+2026-08-05.** The amendment's sentence opens "*If the direct ray is not
+blocked*" and notes the path differences there are negative; ISO/TR 17534-4:2020
+§5.9 states the agreed interpretation outright — "*If the line of sight is
+blocked, diffraction is always calculated*" — and NoiseModelling's
+`AttenuationCnossos.isValidRcrit` is the same predicate verbatim
+(`pp.delta >= 0 || (pp.delta > -lambda/20 && pp.delta > lambda/4 - pp.deltaPrime)`).
+Applying it to a blocked ray was this engine's own addition and made
+`A_bar` a step function of obstacle height: the cut sits where the formula
+already reads `10·lg(8 − 20δ*/λ)`, i.e. **9.03 dB at δ\* = 0 and 7.40 dB on
+flat ground** (where `δ* = |δ|` exactly). Measured: a 200 m path, 0.05 m
+source, 4 m receiver, wall at mid-path — 4.1229 m of wall gave 0 dB at 1 kHz
+and 4.1249 m gave 7.48 dB. Obstacle heights are quantised, so that step drew
+building outlines into the map. Continuity is now a live gate
+(`diffraction::attenuation_is_continuous_in_obstacle_height`, sweeping a wall
+from below the sight line past `δ = λ₆₃/4` against the analytic Lipschitz bound
+of the band function).
+
+MEASURED on 156 Prague receivers (popup engine, `queryNoiseAtPoint`, before vs
+after): max |ΔLden| **1.81 dB**, 21 receivers (13.5 %) move more than 0.5 dB,
+78 (50 %) more than 0.1 dB, 137 (87.8 %) move at all — and the direction is
+**one-way quieter** (136 of 137; mean −0.24 dB). That is the attenuation the
+gate was discarding behind low and mid-height obstacles: per band it restores
++1.8 to +8.1 dB in whichever bands sat below the old cut, and nothing at all
+once `δ > λ₆₃/4 = 1.35 m` (a ~13.6 m wall at mid-path on 200 m), where the old
+gate already passed every band.
+
+The criterion is NOT decoration on the negative arm: without it a 0.5 m wall
+1.5 m *below* the sight line screens 3.8 dB at 63 Hz, because on a 200 m path
+no obstacle can reach `δ = −λ₆₃/20 = −0.27 m` at all and the whole penumbra
+window stands open (`path_effects::far_below_candidate_stays_silent`).
+
+ONE verdict per path, taken on the homogeneous δ and spent on both
+meteorological states — a deviation from ISO/TR 17534-4 §5.9 ("*made separately
+for homogeneous and favourable conditions*") forced by δ\* being
+straight-geometry here: testing a curved δ_F against a straight δ\* gave the
+favourable arm its own admission step at `δ_F = 0`, worth **3.13 dB across 2 mm
+of wall height** at an arbitrary wall height. Revisit if δ\* ever goes
+per-state.
+
+**OPEN — the sight-line step.** A band with `δ* ≤ λ/4` is rejected at δ = 0⁻ and
+takes the blocked branch's `10·lg 3 = 4.77 dB` at δ = 0⁺ (≤ 4.32 dB measured
+after the (2.5.9) mix). That edge is CNOSSOS's own: its "otherwise" branch
+swaps the two split mean ground planes for one common plane and returns
+`Aground` instead (2.5.30–2.5.32), a switch §3.3's
+`max(A_ground, A_terrain + A_screen)` does not implement. Bounded and pinned
+(`diffraction::the_sight_line_step_is_the_standards_own_and_bounded`); closing
+it means implementing the Δground split, not another gate.
 
 **Edge selection (N = 1, single-edge model):** among profile samples above the
 source→receiver line-of-sight, the edge with the **largest path-length
@@ -288,7 +383,19 @@ single-edge selection. The attenuation cap is therefore **20 dB in all cases**.
 Simplifications vs. strict CNOSSOS:
 - **Single edge only (N = 1)** — multiple diffraction (ISO §7.4 / CNOSSOS §2.5.23) removed 2026-06-01, see above.
 - We use **vertical** reflection across the fitted plane (standard acoustic practice in NMPB / NoiseModelling), not perpendicular-to-plane.
-- The **−λ/20** near-miss clause is not implemented — the path-difference scan early-returns zero when no sampled elevation sits above the line-of-sight, collapsing all non-blocked paths to zero before diffraction is considered; a negative favourable δ_F is likewise zeroed by the `delta <= 0` gate rather than retaining the near-miss band.
+- The **−λ/20** near-miss clause (penumbra) is implemented for VECTOR obstacle
+  candidates: a crossing whose top sits below the line of sight keeps its
+  geometry and takes the NEGATIVE path difference `δ = −(d_SO + d_OR − d_SR)`,
+  and `maekawa_bands` evaluates the CNOSSOS §2.5.6(c) branch
+  `10·log₁₀(3 + (40/λ)·δ)` down to `δ = −λ/20`, where it reaches exactly 0 dB
+  and meets the ISO `20/λ` arm at `δ = 0` (both 10·log₁₀3 ≈ 4.8 dB). The δ\*
+  Rayleigh criterion applies to this arm — that is the branch the 2021
+  amendment wrote it for — so grazing geometry over flat ground stays
+  owned by the ground term. Two deliberate scope limits: (a) sampled BARE-EARTH
+  edges do not take the branch — every ground sample sits below the LOS, so a
+  negative branch there would make flat terrain diffract and double-count the
+  ground effect; (b) the near-miss δ_F takes the standard's own unblocked
+  branch (2.5.27) — see §3.9.
 - `Δground` additive combination (CNOSSOS §2.5.31) is not implemented — we still combine ground and barrier via `max(A_ground, A_terrain + A_screen)` in §3.3.
 - Favourable-conditions curved rays ((2.5.24)) are implemented behind the
   OFF-by-default `FAVOURABLE_MIXING` flag — see §3.9.
@@ -302,7 +409,7 @@ DEM, Overture building height, WorldCover forest cover and IMD imperviousness ar
 
 ### 3.5b Combined terrain + building + barrier screening
 
-Diffraction is computed once over a composite top profile (`elevation + max(building_h, barrier_h)`), avoiding the terrain+screening double-count that would otherwise occur when a building sits on a hill. The δ* OLS mean-ground fit stays on bare-earth elevation. Implementation + caller API split (`terrain_attenuation` vs `screening_attenuation`): `propagation::path_effects::screening_attenuation_with_meta`. Ground G and vegetation depth are path integrals weighted by interval length so non-uniform bilateral spacing doesn't bias endpoints.
+Diffraction is computed once over a composite top profile (`elevation + building_h`), avoiding the terrain+screening double-count that would otherwise occur when a building sits on a hill. The δ* OLS mean-ground fit stays on bare-earth elevation. Implementation + caller API split (`terrain_attenuation` vs `screening_attenuation`): `propagation::path_effects::screening_attenuation_with_meta`. Ground G and vegetation depth are path integrals weighted by interval length so non-uniform bilateral spacing doesn't bias endpoints.
 
 
 **Vector obstacle candidates (geodata-v2, behind `QM_VECTOR_BUILDINGS`, OFF in
@@ -314,14 +421,304 @@ edge on δ; the winning candidate is evaluated by `compute_single_edge_at`
 point D on BOTH sides, so a candidate at a sample's t reproduces the raster
 result bit-for-bit). Candidates never enter the cadence sample arrays —
 ground/vegetation integrals and the GPU sample envelope are untouched.
-Barriers keep the sampled midpoint path until plan step 1.7.
+
+**Noise barriers: EXACT ray×segment crossings (2026-08-03 fix-pack Fix 3).**
+A wall is a polyline element with two endpoints, so whether a path crosses it —
+and where — is a closed-form intersection, not a proximity question. Every
+`types::Barrier` of the per-tile (heatmap) or per-receiver (popup) slice is
+intersected with the source→receiver ray by the same primitive the building
+edges use (`obstacle_index::segment_intersection_t`), and each hit becomes an
+ordinary dominant-edge candidate at its exact chainage, δ-ranked against the
+buildings and the cadence edge. Walls therefore never enter the composite top
+profile and never enter `ObstacleIndex` (they arrive per tile from
+`barriers.arrow`), and the popup names the wall by its OSM way id.
+*Superseded:* until this fix a barrier was screened when its segment MIDPOINT
+projected onto the ray within a ±50 m perpendicular radius, then snapped to the
+nearest profile sample — which missed a real crossing far from a long wall's
+midpoint and screened a near-midpoint pass that never crossed (measured on the
+Voznice D4 wall, 618 m/5 segments: 22 % of all (D4 microsegment × receiver)
+pairs in a ±500 m grid got the wrong verdict — 18 % false screens, 4 % missed
+crossings). The scan's early-break horizon is `path_len +
+BARRIER_PATH_HORIZON_M` (125 m max wall half-segment + 50 m flat-earth slack):
+a crossing point lies on the path, but the crossing wall's midpoint — the point
+`dist_m` is measured to — can sit a half-segment beyond it.
+
+### 3.5c Arc-clipped screening for line sources (2026-08-03 fix-pack Fix 1)
+
+A road/rail microsegment runs up to 250 m and subtends a wide angle at a nearby
+receiver (136° at 50 m), but §3.5b evaluates screening ONE ray per segment — to
+its characteristic point — and applies that verdict to the whole segment's
+emission. A 30 m building covering 33° of the fan therefore screened everything
+or nothing, toggling as the cp ray hit or missed it: the measured
+constant-width shadow stripes behind buildings (−8..−15 dB where line-source
+physics gives −1..−2 dB).
+
+`propagation::arc_screening` replaces the verdict with an angular energy
+average, for line callers holding a vector obstacle store:
+
+```
+span      = angular span of the segment at the receiver (2 × atan2)
+skyline   = the receiver's merged blocked azimuth arcs, LAYERED BY STRATUM —
+            every obstacle edge within `radius` projected to its short arc,
+            each carrying the nearest range `b` and the absolute top it reaches.
+            Built ONCE PER RECEIVER and shared by all its segments. Two arcs
+            merge only inside ONE stratum of height (3 m bands) AND of range
+            (geometric bands of ratio 1.5): a merge hands `b = min` and
+            `h = max` to the UNION of the merged azimuth ranges, which is
+            honest only where every member describes the same obstacle to
+            within those bands. Inside a stratum the arcs are sorted and
+            disjoint; across strata they overlap freely and each faces the
+            admission test with its OWN range.
+blocked_i = `skyline` clipped to `span`, keeping only arcs that stand in FRONT
+            of the source (b < d), break its sight line (h > 0) and bend it by
+            at least δ_min (h²·d ≥ 2·δ_min·a·b)
+A_i       = §3.5b screening on the ray to the EXACT point on the segment at
+            interval i's centre azimuth (its own path profile + terrain, which
+            serve only as that call's increment base); an interval wider than
+            0.26 rad is split into 3 sub-intervals, once
+f_i       = |blocked_i| / span
+
+D_i    = max(A_ground, A_terrain + A_i)   per §3.3   (D_clear for the rest)
+D̄      = −10 × log₁₀( f_clear·10^(−D_clear/10) + Σ f_i·10^(−D_i/10) )
+A_screen = max(0, D̄ − A_terrain)
+```
+
+Averaging is done on the §3.3 ground/barrier term, NOT on the bare screening
+increment: the two are not independent, and a 14 %-blocked fan yields ~0.3 dB
+of mean screening, which `max(A_ground, …)` would discard whole. Handing back
+`D̄ − A_terrain` makes the caller's own `max()` reproduce `D̄` exactly —
+**whenever `D̄ ≥ A_terrain`**, which is every case except one:
+
+> `A_screen` is non-negative by contract and the caller reads
+> `A_terrain + A_screen = 0` as "no barrier", so `D̄ < A_terrain_cp` cannot be
+> transported — `A_terrain_cp` being the cp ray's terrain, the one the caller
+> re-adds. There are **two** ways to land under it:
+>
+> 1. `A_terrain_cp = 0`: it arises exactly when `D̄ < 0`, i.e. when the fan
+>    averages to a net boost — which the §3.3 hard-ground floor
+>    (`A_ground = −3 dB`) makes true for fans blocked less than ≈50 %.
+>    **Louder than exact by `D̄ − A_ground` ≤ 3.0 dB**, on hard ground only,
+>    peaking at ≈50 % blocked and vanishing at both ends.
+> 2. `A_terrain_cp > 0` while the FAN's terrain is smaller. Each `D_i` is
+>    `≥ A_terrain_i` — its OWN direction's terrain, which stopped being the cp
+>    ray's when the fan's terrain went per-direction (2026-08-08 §3.5c
+>    correction). So "each `D_i ≥ A_terrain`, hence so does their mean" is no
+>    longer a theorem, and a cp ray running over the fan's one crest can set a
+>    bar the flatter directions average under. **Magnitude unmeasured** — the
+>    fixture's only relief scene (I) is dominated by case 1 — so this is an
+>    open item, not a bounded one.
+>
+> Either way the clamp returns 0, the caller falls back to
+> `max(A_ground, A_terrain_cp)`, and the pixel keeps that rather than the fan
+> mean. Over-prediction is the safe direction here, but closing the gap needs a
+> signed `A_screen` plus an explicit "barrier present" flag on the CPU and CUDA
+> lanes — a contract change, deliberately not taken with the hard-ground fix.
+> OPEN.
+
+### Bounds (owner ruling 2026-08-03 §4b: ≤ 0.5 dB at every pixel)
+
+Exact arc clipping is an AREA query per (segment, receiver) pair, which measured
+60× the GPU line kernel on a dense rail cell. Four bounds replace per-pair work
+with per-receiver work; all four come from the same law that makes the profile
+cadence dense at both endpoints, δ ≈ h²·d/(2ab):
+
+- **skyline** — the candidate set is per RECEIVER, not per pair. No
+  approximation, and a better candidate set than the pair's triangle (a
+  footprint is no longer split by the query boundary).
+- **grazing prune** (`δ_min = λ/8 at 8 kHz = 0.0053 m`) — a grid cell whose
+  tallest edge cannot reach `h = sqrt(2·δ_min·b)` at its own range is skipped
+  whole: `maekawa_bands` gates such a path to zero in every band.
+- **span floor** (`min_span`) — below it the segment radiates in essentially one
+  direction and the cp ray IS that direction. Pre-gated by the exact bound
+  `span ≤ L/d`, so a narrow pair costs one compare, not two atan2.
+- **skyline radius** — `L/(2·tan(min_span/2)) + L`, a CONSEQUENCE of the span
+  floor rather than a free parameter: anything screening a path stands between
+  receiver and segment, so a radius that reaches every span-eligible segment
+  reaches every screen too, which is what lets the clear fraction of the fan be
+  treated as exactly clear. Grown on demand and snapped UP to a range-stratum
+  boundary, so a stratum is either gathered whole or not at all.
+
+**REPRODUCIBILITY IS PART OF THE MODEL.** The skyline is grown to whatever the
+CURRENT segment needs and every later segment of that receiver reads the grown
+result, so the arcs a segment is clipped against depend on which sources came
+before it. That is harmless only while the merge keeps each arc's own range: an
+arc standing beyond the segment then falls to `b < d` whatever dragged it in.
+Merged across ranges it does not, and reordering the loader's rows — a
+transformation that must change nothing — moves the map. MEASURED on a
+production road tile with the energy-budget skip OFF, so both orders do
+bit-identically the same 70 939 403 path calls: with a height-only fuse,
+RMS 0.074 dB / **max +10.70 dB** / 543 pixels over 0.5 dB; with the strata,
+RMS 0.005 dB / max +0.39 dB / **0 pixels over 0.5 dB**, and 0.0004 dB max over
+the ≥45 dB pixels the map actually shows. Pinned by
+`arc_screening::source_order_never_changes_the_answer`, which shuffles the source
+order over four geometries × 12 permutations and asserts bit equality (it reports
+11.64 dB against the height-only rule).
+
+Terrain, ground G, vegetation and the finite-line correction stay on the cp ray
+(they vary slowly along a segment, and the §3.5b terrain+screening pairing must
+stay intact). Without a vector obstacle store there are no arcs to clip and the
+cp verdict stands unchanged; the same holds for point sources, which have no
+span. Validation (`src/bin/screening_fixture.rs`, 697 receivers × 3 scenes,
+vs a 33-sub-segment reference integration): shadow-zone error 7.19 → 0.73 dB
+behind a 30 × 10 × 8 m box, 1.07 → 0.31 dB behind a 3 m barrier, no-obstacle
+parity unchanged at 0.25 dB, for ~2× the screening cost of one cp ray.
+
+### 3.5d Uniform angular quadrature — the TILE path since 2026-08-05
+
+§3.5c integrates the fan with ADAPTIVE quadrature: nodes taken from the
+receiver's obstacle skyline. `propagation::seg_sampling` integrates the SAME
+term with UNIFORM quadrature: the span is cut into `N` equal angular buckets,
+each evaluated on the exact source point at its centre azimuth, and
+`max(A_ground, A_terrain + A_screen)` energy-averaged over them; `N → ∞` is a
+reference for both rules. Ground `G` and vegetation stay on the cp ray in both.
+`N = 1` here is NOT §3.5b's cp verdict — one bucket rays the fan's CENTRE
+azimuth, the cp is its CLOSEST point — so the tile kernel keeps `N = 1` on the
+cp path instead of calling this. `QM_SEG_SAMPLES=1` alone does NOT restore the
+pre-2026-08-05 bytes any more: it only routes the painter down the cp fallback,
+which since 2026-08-08 arc-clips segments wider than 3° and leaves narrower ones
+on a plain cp verdict. The pair `QM_SEG_SAMPLES=1 QM_ARC_MIN_SPAN_DEG=0` is what
+reproduces the old rule (byte parity verified on all four tiles when the switch
+landed, i.e. before the 3° gate existed — **not re-verified since**).
+
+WHICH RULE RUNS WHERE, and why they are not the same choice:
+
+* **Tiles** run uniform `N = 5`, with §3.5c ON *per bucket* for any bucket wider
+  than `seg_sampling::SEG_ARC_MIN_SPAN_RAD` (3°) and off for the rest
+  (`tile_painter::scatter_band::{seg_samples, tile_arc_bounds}`; `QM_SEG_SAMPLES`
+  / `QM_ARC_MIN_SPAN_DEG` move both). Measured 2026-08-05 on four production
+  tiles, one binary, sandwiched arms, CPU-seconds and RMS dB against an `N = 9`
+  reference from the same binary:
+
+  | tile | §3.5c (was) | §3.5d (is) | cheaper | closer |
+  |---|---|---|---|---|
+  | praha | 28542 s / 0.77 dB | 7443 s / 0.42 dB | 3.83× | 1.84× |
+  | suburb | 7596 s / 0.40 dB | 1960 s / 0.15 dB | 3.88× | 2.62× |
+  | d1open | 4585 s / 0.43 dB | 1096 s / 0.14 dB | 4.18× | 2.99× |
+  | rail2206 | 5703 s / 0.34 dB | 1243 s / 0.06 dB | 4.59× | 5.24× |
+
+  The two corrections also OVERLAP (r = 0.67-0.80, same sign on 82-97 % of the
+  pixels either moves) rather than add, so composing them AT WHOLE-SEGMENT
+  GRANULARITY is worse than the quadrature alone at 2.5-3× the price. Composing
+  per BUCKET is a different trade and the one that ships — see §3.5e.
+* **The popup** keeps §3.5c on its single cp ray. One receiver can afford
+  adaptive quadrature, and it is the accuracy etalon.
+* **The CUDA lane** has no equivalent and paints §3.5c. A CPU-vs-GPU tile
+  comparison must therefore run `QM_SEG_SAMPLES=1 QM_ARC_MIN_SPAN_DEG=0`.
+
+The uniform rule hands back the ground/barrier COMPOSITE, not a screening
+increment, so at the OUTER level — the quadrature's own average over buckets —
+there is no non-negative channel to saturate and no `D̄ < A_terrain` clamp.
+Pinned by `tile_painter::scatter_line::hard_ground_keeps_its_partial_screening`
+(2.2 dB where the handback gave 0.0).
+
+That does **not** close the hole on the tile path. §3.5e runs §3.5c *inside* every
+bucket wider than 3° (`seg_sampling.rs` → `arc_screened_attenuation`), and that
+call still returns an increment through the same `max(0, D̄ − A_terrain)` clamp —
+so the hole recurs PER BUCKET, on the bucket's own terrain, wherever a wide
+bucket is partially blocked over hard ground. What the composite handback removes
+is one clamp at whole-segment granularity, not the clamp itself. OPEN on all
+three lanes (tiles per bucket, popup and CUDA per segment).
+
+Both rules take each ray's own `A_terrain`, never the cp ray's — see §3.5c.
+
+### 3.5e The near-field gate — why §3.5c is back, per bucket (2026-08-08)
+
+§3.5d shipped with a known TAIL: on the eleven `screening_fixture` scenes,
+uniform `N = 5` reached **2.4-7.6 dB** at its worst receiver where §3.5c holds
+0.6-0.9 dB, breaching the owner's 1.0 dB-anywhere line on NINE of the eleven.
+Tile RMS still favoured it because those pairs are a small pixel share, so the
+two metrics disagreed and both rules stayed in the tree.
+
+**The tail is aliasing, not under-resolution, and that is why `N` cannot fix it.**
+Uniform nodes at pitch `span/N` beat against a building row's own pitch: a
+bucket count that lands the nodes in the gaps reports the row as open. Swept from
+this binary, worst receiver per scene: `N = 5` → 2.17 dB on scene F, `N = 6` →
+**8.21 dB**, `N = 33` → 1.09, `N = 49` → 1.19. The MEAN falls as `N^-1` (0.40 →
+0.27 dB) exactly as §3.5d predicts; the WORST POINT is not monotone in `N` at
+all, and nothing under `N ≈ 65` — 13× the ray budget, i.e. dearer than the §3.5c
+it replaced — is reliably inside 1.0 dB. Two targeted `N` rules were built and
+swept, and both are rejected for the same reason (bucket-width cap: six scenes
+get WORSE at the proposed 0.26 rad; disagreement-driven refinement: halves the
+mean, leaves the tail at 1.6-3.2 dB, and REGRESSES on top of the gate). The
+sweeps live in `propagation::seg_sampling`'s module docs.
+
+**What ships is a SELECTOR over the two existing rules.** `seg_sampling` could
+always nest §3.5c inside a bucket, over that bucket's own sub-span; it was off.
+It is now on for any bucket wider than `SEG_ARC_MIN_SPAN_RAD = 3°`, and off
+below — so the nodes come from the GEOMETRY exactly where five of them cannot
+describe the fan, and nowhere else. It is a WIDTH test on the bucket, which is
+what makes it affordable: a bucket is `1/N` of the segment, so a 250 m
+microsegment 3 km out subtends 0.017 rad per bucket and never asks, and far pairs
+are what a tile's cost is made of.
+
+Threshold from a sweep, worst receiver over all eleven scenes: 15° → 2.75 dB, 7°
+→ 2.00, 5° → 1.33 (fails), **4° → 0.96 (passes)**, **3° → 0.85**, 1° → 0.85. A
+clean knee between 5° and 4°, and a plateau from 3° down that is not quadrature
+error at all — §3.5c itself reads 0.88 dB there and refining the fixture's own
+reference moves it. 3° is one notch inside the knee AND on the plateau.
+
+Result, all eleven scenes, `|reference33 − rule|` (`v5` arm, which reports through
+§3.5c's non-negative increment channel and is therefore a LOWER bound on what the
+tile path gets):
+
+| | worst receiver | mean of scene means |
+|---|---|---|
+| §3.5d alone (`N = 5`) | 7.60 dB | 0.305 dB |
+| §3.5d + this gate | **0.85 dB** | **0.262 dB** |
+| §3.5c alone (the etalon) | 0.93 dB | 0.261 dB |
+
+Every receiver on every scene is now inside 1.0 dB, and the suite's remaining
+breaches are scenes C/D at their own 0.35 dB limit, where §3.5c and the CUDA rule
+breach identically (0.44-0.48) — a floor on the 3 m wall shared by all three
+rules, not this one's tail.
+
+COST, and READ THIS BEFORE QUOTING §3.5d's SPEEDUP: the four-tile table in §3.5d
+was measured 2026-08-05 and its 3.8-4.6× is STALE, because §3.5c's own machinery
+got ~1.8-2.1× faster in the same session (`ARC_QUADRATURE_MIN_RAD` window
+coalescing, the sector wedge). Re-measured 2026-08-08 on the same four tiles and
+windows, one binary, sandwiched arms, CPU-seconds:
+
+| tile | §3.5c (v3) | §3.5d alone | vs v3 | §3.5d + gate | vs v3 | gate costs |
+|---|---|---|---|---|---|---|
+| praha | 13432 s | 7334 s | 1.83× | 7638 s | 1.76× | +4.1 % |
+| suburb | 5858 s | 1880 s | 3.12× | 1978 s | 2.96× | +5.2 % |
+| d1open | 2581 s | 1043 s | 2.47× | 1122 s | 2.30× | +7.6 % |
+| rail2206 | 2979 s | 1223 s | 2.44× | 1244 s | 2.39× | +1.7 % |
+| **together** | **24850 s** | **11480 s** | **2.16×** | **11981 s** | **2.07×** | **+4.4 %** |
+
+So the gate keeps 92-98 % of the uniform rule's own speedup. What it does NOT do is
+restore §3.5d's 3.8-4.6× — that number was never the gate's to lose. Re-confirmed
+on a LATER tree state (the exact-cadence change of the same day, which lengthens
+every ray under 400 m and re-prices both arms): d1open v3 11619 s, `N = 5` 5250 s
+(2.21×), gated 5578 s (2.08×, +6.2 %); rail2206 v3 12952 s, `N = 5` 5383 s
+(2.41×), gated 5454 s (2.37 ×, +1.3 %). The surcharge is stable across both tree
+states; the BASELINE is what moves.
+
+ACCURACY on the same four tiles has to be scored against a reference converged in
+BOTH parameters, because an `N = 9` UNIFORM reference shares the aliasing defect
+under test and therefore flatters the rule that has it (against `N = 9` the gate
+reads a WORSE RMS on three tiles and a better p95 on all four — the signature of a
+biased reference, not of a worse rule). `N = 9` with the gate at 1° is converged:
+on the fixture, `N = 9 → 17` and `1° → 0.5°` each move the verdict by ≤0.01 dB.
+Against it (RMS / p95 / share of pixels over 1 dB):
+
+| tile | §3.5c (v3) | §3.5d alone | §3.5d + gate |
+|---|---|---|---|
+| praha | 0.700 / 1.380 / 9.1 % | 0.380 / 0.703 / 2.2 % | **0.321 / 0.523 / 1.2 %** |
+| suburb | 0.348 / 0.461 / 1.2 % | 0.154 / 0.245 / 0.3 % | **0.149 / 0.138 / 0.1 %** |
+| d1open | 0.395 / 0.647 / 1.6 % | 0.140 / 0.218 / 0.2 % | **0.124 / 0.139 / 0.1 %** |
+| rail2206 | 0.315 / 0.612 / 1.3 % | 0.070 / 0.120 / 0.02 % | **0.069 / 0.107 / 0.02 %** |
+
+Pareto-better than §3.5d alone on every tile and every column, and 2.2-4.6× lower
+RMS than §3.5c — so the gate is not a tail-for-bulk trade. It buys the fixture's
+worst receiver AND the tile's bulk, for 4.4 % of the paint.
 
 ### 3.6 Building screening (ISO 9613-2, per-band)
 Samples Overture Maps 30m building raster at the same bilateral cadence (§3.5a). Explicit `noise_barrier` geometries compete with raster buildings. For industrial sources, screening samples inside the source's own footprint are skipped via an exclusion radius.
 
-**Barrier consumers (B8/C9, 2026-06-11).** Popup and ALL CPU surface heatmap kernels (road/rail `scatter_line`, industrial/building `scatter_point`, aircraft `ground_ops`) feed `barriers.arrow` vector barriers into the §3.5b composite via the shared `screening_attenuation`; the heatmap prepares one slice per z13 tile (`tile-painter::source_loader_barrier::BarrierData::for_tile` — sorted ascending by a conservative lower-bound distance; contract documented on `types::Barrier`). The **GPU line kernels (`noise-gpu`, road/rail on GPU cluster boxes) screen the SAME vector barriers behind the `QM_GPU_BARRIERS` gate** (default ON since 2026-08-02 — in the ENGINE itself, after the v2 orchestrator lost the wrapper-supplied env and fleet GPU paints ran wall-blind): the per-tile `for_tile` slice is uploaded and the kernel applies the identical projection-and-snap (`scatter.cu` `line_source`; measured on RTX 5070 mean 0.002 / max 1.5 dB vs the CPU truth). Burning barriers into the 30 m cover raster was the rejected alternative — it was measured acoustically unsound, the §3.5a bilateral cadence (≥ ~30 m sample spacing) stepping over a one-cell-thin burned wall on most paths (mean +3.7 / max +13.8 dB under-screening at wall-adjacent shadow pixels vs the vector path; decision record: `tile-painter/tests/barrier_screening.rs`). With the gate OFF the GPU lane uploads no barriers and the C9 orchestrator gate (build-heatmap.sh / the world orchestrator) routes barrier-carrying R4s (~1.5% of hexes) to the CPU builders, as before; `QM_GPU_BARRIERS=0` is the explicit barrier-blind baseline (tests; A/B) — since 2026-08-02 the ON default lives in the ENGINE (owner-directed 2026-06-13, mean 0.002 / max 1.5 dB validated), so no launcher can lose it again.
+**Barrier consumers (B8/C9, 2026-06-11).** Popup and ALL CPU surface heatmap kernels (road/rail `scatter_line`, industrial/building `scatter_point`, aircraft `ground_ops`) feed `barriers.arrow` vector barriers into the §3.5b exact-crossing candidate race via the shared `screening_attenuation`; the heatmap prepares one slice per z13 tile (`tile-painter::source_loader_barrier::BarrierData::for_tile` — sorted ascending by a conservative lower-bound distance; contract documented on `types::Barrier`). The **GPU line kernels (`noise-gpu`, road/rail on GPU cluster boxes) screen the SAME vector barriers behind the `QM_GPU_BARRIERS` gate** (default ON since 2026-08-02 — in the ENGINE itself, after the v2 orchestrator lost the wrapper-supplied env and fleet GPU paints ran wall-blind): the per-tile `for_tile` slice is uploaded with both endpoints and the kernel runs the identical ray×segment intersection (`scatter.cu` `barrier_best_candidate`, sharing `seg_isect_t` with the building walk; the pre-Fix-3 projection-and-snap measured on RTX 5070 mean 0.002 / max 1.5 dB vs the CPU truth, and the host-side crossing replicas are pinned to the CPU oracle in `tile-painter/tests/barrier_screening.rs`). Burning barriers into the 30 m cover raster was the rejected alternative — it was measured acoustically unsound, the §3.5a bilateral cadence (≥ ~30 m sample spacing) stepping over a one-cell-thin burned wall on most paths (mean +3.7 / max +13.8 dB under-screening at wall-adjacent shadow pixels vs the vector path; decision record: `tile-painter/tests/barrier_screening.rs`). With the gate OFF the GPU lane uploads no barriers and the C9 orchestrator gate (build-heatmap.sh / the world orchestrator) routes barrier-carrying R4s (~1.5% of hexes) to the CPU builders, as before; `QM_GPU_BARRIERS=0` is the explicit barrier-blind baseline (tests; A/B) — since 2026-08-02 the ON default lives in the ENGINE (owner-directed 2026-06-13, mean 0.002 / max 1.5 dB validated), so no launcher can lose it again.
 
-**Screening is not computed standalone.** Buildings and barriers are merged into the §3.5b composite top profile (`elevation + max(building_h, barrier_h)`) and diffraction is computed once by the §3.5 single-edge algorithm (max-δ edge, Rayleigh gate). The per-band screening cap inherits from §3.5 — 20 dB — not a dedicated building-only cap.
+**Screening is not computed standalone.** Raster buildings enter the §3.5b composite top profile (`elevation + building_h`) while vector footprints and barriers enter as exact crossings, and diffraction is computed once by the §3.5 single-edge algorithm over the δ-winner (max-δ edge; the Rayleigh criterion gates only the unblocked arm, §3.5). The per-band screening cap inherits from §3.5 — 20 dB — not a dedicated building-only cap.
 
 The popup-facing `screening_attenuation` value returned by the engine is the increment of the combined result over bare-earth terrain diffraction, i.e. `atten_combined − atten_terrain` (clamped ≥ 0). With that definition `A_terrain + A_screen ≡ A_combined`, which is what §3.3 feeds into the ground/barrier combination. See §3.5b for the motivating double-count problem the merge fixes.
 
@@ -382,15 +779,27 @@ single term where favourable/homogeneous physically diverge — diffraction:
   at km-scale paths a sub-metre
   δ collapses to negative — the curved ray clears the hill (the audible
   distant-motorway-under-inversion mechanism).
-- `diffraction_attenuation_rayleigh` then mixes the two Maekawa band
+- BOTH branches of (2.5.25) are implemented, selected on the STRAIGHT ray S–R
+  as the standard prescribes: (2.5.26) `δ_F = ŜO + ÔR − ŜR` when the direct ray
+  is broken, (2.5.27) `δ_F = 2ŜA + 2ÂR − ŜO − ÔR − ŜR` when it is not, with A
+  the crossing of the straight S–R and the vertical through the edge
+  (`curved_path_difference_near_miss`). The favourable ray is concave toward
+  the ground, so it arches ≈`d²/8Γ` ABOVE the chord and a near miss is screened
+  LESS, not more, in this state. The two expressions agree exactly at A = O,
+  which is what keeps δ_F — and therefore the rule "a taller screen can never
+  make a receiver louder" — continuous through the sight line
+  (`arc_screening::taller_screen_never_makes_the_receiver_louder`, a live gate
+  over 216 geometries × 33 heights).
+- `diffraction_attenuation_mixed` then mixes the two Maekawa band
   attenuations energetically with `P_FAV = 0.5` (`mix_fav_hom`, (2.5.9)).
   Both states share every other chain term, so mixing the attenuation is
   identical to mixing received levels; with the single flat p it is also
   identical to per-period or Lden-level mixing.
 
-Deliberate simplifications (review-pinned): the Rayleigh δ* gate stays on
-straight geometry under the favourable state (conservative — suppresses part
-of the low-band favourable boost); edge selection stays max-δ on straight
+Deliberate simplifications (review-pinned): the Rayleigh criterion stays on
+straight geometry under the favourable state, and is asked ONCE on the
+homogeneous δ for both states (§3.5 — asking it per state against a straight
+δ* put a 3.13 dB step at δ_F = 0); edge selection stays max-δ on straight
 geometry (second-order on multi-bump profiles); no favourable variant of the
 CF-table ground model (a Fav variant of a non-CNOSSOS ground model would be
 fake precision); no per-period p (owner 2026-07-28); no Cmet.
@@ -1004,11 +1413,23 @@ placeholders, never presented as measured. Rendered within the
 |------|-------|----------|--------|
 | K1 | Cat1, 50 km/h, asphalt, 10000 AADT, day | 79.11 dB(A)/m | CNOSSOS-EU |
 | K2 | Cat3, 80 km/h, cobblestone (+4dB), 500 AADT, day | 80.07 dB(A)/m | CNOSSOS-EU |
-| K4 | Propagation 100m, G=0, line source | 28.58 dB attenuation | ISO 9613-2 |
+| K4 | Propagation 100m, G=0, line source | 25.56 dB attenuation | ISO 9613-2 |
 | K5 | Propagation 100m, G=1, line source | 31.66 dB attenuation | ISO 9613-2 |
 | K6 | Single barrier 50m, δ=0.5m, G=0 | 15.28 dB barrier atten | ISO 9613-2 |
 | K7 | removed — the double-edge band math was deleted 2026-07-03 (single-edge only; K6 covers Maekawa) | — | — |
 | K8 | Lden: Ld=60, Le=55, Ln=50 | 60.00 dB | END 2002/49/EC |
+
+**K4 was 28.58 dB until 2026-08-05, and that figure pinned a bug rather than
+the standard it cites.** It is exactly 25.56 + 3.00: the engine formed
+`A_ground = GROUND_CF[i] · G`, which is 0 dB at G = 0, while ISO 9613-2
+Table 3 (`As + Ar = −1.5 − 1.5`) and CNOSSOS-EU 2015/996 (2.5.15) — *"if
+Gpath = 0: Aground,H = −3 dB"* — both put the hard-ground term at −3 dB in
+every band. Quoting the old number as an ISO reference made the omission look
+verified. The corrected term is
+`A_gr[i] = max(CF[i]·G, 0) + GROUND_HARD_FLOOR_DB·(1 − G)`, formed in exactly
+one place (`propagation::iso9613::ground_atten_db`) and pinned band-by-band
+against the official TC01/TC02/TC03 in `tests/tc_ground.rs`. K5 (G = 1) moves
+by +0.01 dB under the same change and keeps its row.
 
 ---
 

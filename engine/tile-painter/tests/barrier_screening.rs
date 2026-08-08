@@ -23,8 +23,8 @@
 //!    never misses. Thin-line features cannot be faithfully burned into a
 //!    raster sampled at ≥ cell-size cadence — so the BURN is rejected; the GPU
 //!    line kernel instead screens the same VECTOR slice behind `QM_GPU_BARRIERS`
-//!    (the `w2_gpu_vector_projection_matches_cpu_snap` arm below pins its
-//!    projection to the CPU oracle; divergence documented in SPEC §3.6 and
+//!    (the `w2_gpu_vector_crossings_match_cpu_oracle` arm below pins its
+//!    crossings to the CPU oracle; divergence documented in SPEC §3.6 and
 //!    gpu_surface.rs). The test stays as the decision record: it asserts
 //!    the measured divergence, so if cadence/raster resolution ever changes
 //!    enough for the burn to become viable, it fails loudly and the decision
@@ -34,14 +34,12 @@ use std::f64::consts::{LN_10, PI};
 use std::path::Path;
 use std::sync::Arc;
 
-use noise_compute::constants::{
-    ALPHA_ATM, A_WEIGHTING, GROUND_CF, M_PER_DEG_LAT, M_PER_DEG_LON_EQ,
-};
+use noise_compute::constants::{ALPHA_ATM, A_WEIGHTING, M_PER_DEG_LAT, M_PER_DEG_LON_EQ};
 use noise_compute::propagation::geo::{finite_line_correction, point_to_segment_full};
-use noise_compute::propagation::iso9613::fast_exp_f64;
+use noise_compute::propagation::iso9613::{fast_exp_f64, ground_atten_db};
 use noise_compute::propagation::path_effects;
 use noise_compute::propagation::PathProfile;
-use noise_compute::types::{Barrier, RasterSampler};
+use noise_compute::types::{Barrier, RasterSampler, BARRIER_PATH_HORIZON_M};
 use raster_reader::fused_tile_z13::{FusedTileZ13, TILE_PX};
 use raster_reader::RealRasters;
 use tile_painter::accumulator::TileAccumulator;
@@ -205,7 +203,7 @@ fn line_kernel_applies_vector_barriers() {
     let veg = path_effects::vegetation_attenuation_path(&profile);
     let mut expected = 0.0f64;
     for i in 0..NUM_BANDS {
-        let a_gr = GROUND_CF[i] * ground_g;
+        let a_gr = ground_atten_db(i, ground_g);
         let a_bar = terrain[i] + screening[i];
         let gob = if a_bar > 0.0 { a_gr.max(a_bar) } else { a_gr };
         let path_db = base_db - ALPHA_ATM[i] * atm_d_km - gob - veg[i];
@@ -287,7 +285,7 @@ fn point_kernel_applies_vector_barriers() {
     let veg = path_effects::vegetation_attenuation_path(&profile);
     let mut expected = 0.0f64;
     for i in 0..NUM_BANDS {
-        let a_gr = GROUND_CF[i] * ground_g;
+        let a_gr = ground_atten_db(i, ground_g);
         let a_bar = terrain[i] + screening[i];
         let gob = if a_bar > 0.0 { a_gr.max(a_bar) } else { a_gr };
         let path_db = base_db - ALPHA_ATM[i] * atm_d_km - gob - veg[i];
@@ -301,125 +299,96 @@ fn point_kernel_applies_vector_barriers() {
     );
 }
 
-/// CPU oracle arm: verbatim replica of the barrier projection-and-snap in
+/// CPU oracle arm: verbatim replica of the barrier crossing scan in
 /// `path_effects::screening_attenuation_with_meta` §1 (f64 midpoint cosine, no
-/// clamp; binary-search `nearest_t_index` with the tie → lower-index bracket
-/// pick). Returns `barrier_at` — tallest barrier per profile sample.
-fn cpu_snap(
-    t: &[f64],
+/// clamp; `obstacle_index::segment_intersection_t`). Returns one
+/// `(chainage, height)` per wall segment the ray actually crosses.
+fn cpu_crossings(
     src: (f64, f64),
     rcv: (f64, f64),
     dist_m: f64,
     barriers: &[Barrier],
-) -> Vec<f32> {
+) -> Vec<(f64, f32)> {
     let (src_lat, src_lon) = src;
     let (rcv_lat, rcv_lon) = rcv;
     let meters_per_deg_lon = M_PER_DEG_LON_EQ * ((src_lat + rcv_lat) * 0.5).to_radians().cos();
     let path_dx_m = (rcv_lon - src_lon) * meters_per_deg_lon;
     let path_dy_m = (rcv_lat - src_lat) * M_PER_DEG_LAT;
-    let path_len_sq_m = (path_dx_m * path_dx_m + path_dy_m * path_dy_m).max(1e-12);
-    let mut barrier_at = vec![0.0f32; t.len()];
-    for barrier in barriers {
-        if barrier.dist_m > dist_m + 100.0 {
+    let mut out = Vec::new();
+    for b in barriers {
+        if b.dist_m > dist_m + BARRIER_PATH_HORIZON_M {
             break;
         }
-        let bx_m = (barrier.lon - src_lon) * meters_per_deg_lon;
-        let by_m = (barrier.lat - src_lat) * M_PER_DEG_LAT;
-        let t_proj = (bx_m * path_dx_m + by_m * path_dy_m) / path_len_sq_m;
-        if !(0.01..=0.99).contains(&t_proj) {
-            continue;
-        }
-        let perp_dx_m = bx_m - t_proj * path_dx_m;
-        let perp_dy_m = by_m - t_proj * path_dy_m;
-        if perp_dx_m * perp_dx_m + perp_dy_m * perp_dy_m >= 50.0 * 50.0 {
-            continue;
-        }
-        // nearest_t_index replica (binary search; tie → lower index).
-        let idx = match t.binary_search_by(|x| x.partial_cmp(&t_proj).unwrap()) {
-            Ok(i) => i,
-            Err(i) => {
-                if i == 0 {
-                    0
-                } else if i >= t.len() {
-                    t.len() - 1
-                } else if (t[i] - t_proj) < (t_proj - t[i - 1]) {
-                    i
-                } else {
-                    i - 1
-                }
-            }
-        };
-        if barrier.height_m > barrier_at[idx] {
-            barrier_at[idx] = barrier.height_m;
+        let x0 = (b.start_lon - src_lon) * meters_per_deg_lon;
+        let y0 = (b.start_lat - src_lat) * M_PER_DEG_LAT;
+        let x1 = (b.end_lon - src_lon) * meters_per_deg_lon;
+        let y1 = (b.end_lat - src_lat) * M_PER_DEG_LAT;
+        if let Some(t) = ray_segment_t(path_dx_m, path_dy_m, x0, y0, x1, y1) {
+            out.push((t, b.height_m));
         }
     }
-    barrier_at
+    out
 }
 
-/// GPU arm: replica of the scatter.cu `line_source` barrier block — the SAME
-/// projection but with the kernel's deviations: f32 midpoint cosine clamped at
-/// 0.01 (`__cosf` house style) and a linear nearest-sample scan whose strict
-/// `<` keeps the lower index on ties.
-fn gpu_snap(
-    t: &[f64],
+/// GPU arm: replica of the scatter.cu `barrier_best_candidate` scan — the SAME
+/// intersection with the kernel's one deviation: an f32 midpoint cosine clamped
+/// at 0.01 (`__cosf` house style).
+fn gpu_crossings(
     src: (f64, f64),
     rcv: (f64, f64),
     dist_m: f64,
     barriers: &[Barrier],
-) -> Vec<f32> {
+) -> Vec<(f64, f32)> {
     let (cplat, cplon) = src;
     let (rlat, rlon) = rcv;
-    let mut barr_at = vec![0.0f32; t.len()];
-    if barriers.is_empty() || barriers[0].dist_m > dist_m + 100.0 {
-        return barr_at;
+    let mut out = Vec::new();
+    if barriers.is_empty() || barriers[0].dist_m > dist_m + BARRIER_PATH_HORIZON_M {
+        return out;
     }
     let ray_mid = (cplat + rlat) * 0.5 * (std::f64::consts::PI / 180.0);
     let ray_mlon = M_PER_DEG_LON_EQ * f64::from((ray_mid as f32).cos().max(0.01f32));
     let pdx = (rlon - cplon) * ray_mlon;
     let pdy = (rlat - cplat) * M_PER_DEG_LAT;
-    let plen2 = (pdx * pdx + pdy * pdy).max(1e-12);
     for b in barriers {
-        if b.dist_m > dist_m + 100.0 {
+        if b.dist_m > dist_m + BARRIER_PATH_HORIZON_M {
             break;
         }
-        let bdx = (b.lon - cplon) * ray_mlon;
-        let bdy = (b.lat - cplat) * M_PER_DEG_LAT;
-        let tpj = (bdx * pdx + bdy * pdy) / plen2;
-        if !(0.01..=0.99).contains(&tpj) {
-            continue;
-        }
-        let ex = bdx - tpj * pdx;
-        let ey = bdy - tpj * pdy;
-        if ex * ex + ey * ey >= 50.0 * 50.0 {
-            continue;
-        }
-        let mut idx = 0usize;
-        let mut bestd = (t[0] - tpj).abs();
-        for (j, &tj) in t.iter().enumerate().skip(1) {
-            let dd = (tj - tpj).abs();
-            if dd < bestd {
-                bestd = dd;
-                idx = j;
-            }
-        }
-        if b.height_m > barr_at[idx] {
-            barr_at[idx] = b.height_m;
+        let x0 = (b.start_lon - cplon) * ray_mlon;
+        let y0 = (b.start_lat - cplat) * M_PER_DEG_LAT;
+        let x1 = (b.end_lon - cplon) * ray_mlon;
+        let y1 = (b.end_lat - cplat) * M_PER_DEG_LAT;
+        if let Some(t) = ray_segment_t(pdx, pdy, x0, y0, x1, y1) {
+            out.push((t, b.height_m));
         }
     }
-    barr_at
+    out
 }
 
-/// W2 GPU-vector arm — the spike's host-side unit check. The CUDA port's only
-/// NEW math is the projection-and-snap (the composite fold + single-edge are
-/// the kernel's already-validated building path, fed `max(building, barrier)`
-/// instead of `building`). So pin exactly that: replay the kernel's block in
-/// Rust against a verbatim replica of the CPU's, over every audible pixel of
-/// the burn-record fixture at both spacings, and require the snapped
-/// (sample → height) maps to be IDENTICAL. Identical maps ⇒ identical
-/// composite ⇒ identical screening — the inverse of the burn record's
-/// cadence-miss (the vector snap cannot step over a wall).
+/// `obstacle_index::segment_intersection_t` / scatter.cu `seg_isect_t` with the
+/// ray anchored at the origin — the one primitive both lanes run on a wall.
+fn ray_segment_t(dx: f64, dy: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> Option<f64> {
+    let (ex, ey) = (x1 - x0, y1 - y0);
+    let denom = dx * ey - dy * ex;
+    if denom == 0.0 {
+        return None;
+    }
+    let t = (x0 * ey - y0 * ex) / denom;
+    let u = (x0 * dy - y0 * dx) / denom;
+    (t > 0.0 && t < 1.0 && (0.0..=1.0).contains(&u)).then_some(t)
+}
+
+/// W2 GPU-vector arm — the spike's host-side unit check, now on Fix 3's exact
+/// geometry. The CUDA port's only NEW math is the ray×wall intersection (the
+/// δ race + single-edge are the kernel's already-validated candidate path). So
+/// pin exactly that: replay the kernel's scan in Rust against a verbatim
+/// replica of the CPU's, over every audible pixel of the burn-record fixture at
+/// both spacings, and require the same crossings at the same chainages.
+/// Identical crossings ⇒ identical candidates ⇒ identical screening — the
+/// inverse of the burn record's cadence-miss (an intersection cannot step over
+/// a wall). The chainage tolerance is the kernel's `__cosf` lon scale: 1e-6
+/// relative on a scale factor is ≤ 1 cm of a 10 km path.
 #[test]
-fn w2_gpu_vector_projection_matches_cpu_snap() {
+fn w2_gpu_vector_crossings_match_cpu_oracle() {
     for spacing_m in [45.0, 27.0] {
         let tile = flat_tile();
         let (c_lat, c_lon) = centre(&tile);
@@ -429,10 +398,10 @@ fn w2_gpu_vector_projection_matches_cpu_snap() {
         let barriers = BarrierData::from_segments(segs).for_tile(&tile.bbox, 10_000.0);
         assert!(!barriers.is_empty());
 
-        let mut profile = PathProfile::new();
         let mut pixels_with_hits = 0usize;
-        let mut snapped_total = 0usize;
+        let mut crossings_total = 0usize;
         let mut mismatched_pixels = 0usize;
+        let mut worst_dt = 0.0f64;
         for py in 0..TILE_PX {
             let rx_lat = tile.rx_lat[py];
             for px in 0..TILE_PX {
@@ -449,53 +418,44 @@ fn w2_gpu_vector_projection_matches_cpu_snap() {
                 if dist_m < 30.0 {
                     continue; // screening gate (n<3 || dist<30) — kernel parity
                 }
-                tile.build_path_profile(
-                    pts.cp_lat,
-                    pts.cp_lon,
-                    rx_lat,
-                    rx_lon,
-                    dist_m,
-                    &mut profile,
-                );
                 let src = (pts.cp_lat, pts.cp_lon);
                 let rcv = (rx_lat, rx_lon);
-                let cpu = cpu_snap(&profile.t, src, rcv, dist_m, &barriers);
-                let gpu = gpu_snap(&profile.t, src, rcv, dist_m, &barriers);
-                if cpu != gpu {
+                let cpu = cpu_crossings(src, rcv, dist_m, &barriers);
+                let gpu = gpu_crossings(src, rcv, dist_m, &barriers);
+                let same = cpu.len() == gpu.len()
+                    && cpu.iter().zip(&gpu).all(|(a, b)| {
+                        worst_dt = worst_dt.max((a.0 - b.0).abs());
+                        (a.0 - b.0).abs() < 1e-6 && a.1 == b.1
+                    });
+                if !same {
                     mismatched_pixels += 1;
                     if mismatched_pixels <= 5 {
-                        let diffs: Vec<(usize, f32, f32)> = cpu
-                            .iter()
-                            .zip(&gpu)
-                            .enumerate()
-                            .filter(|(_, (a, b))| a != b)
-                            .map(|(i, (a, b))| (i, *a, *b))
-                            .collect();
                         eprintln!(
-                            "mismatch @py={py} px={px} dist={dist_m:.1} m: (idx, cpu_h, gpu_h) = {diffs:?}"
+                            "mismatch @py={py} px={px} dist={dist_m:.1} m: cpu={cpu:?} gpu={gpu:?}"
                         );
                     }
                 }
-                if cpu.iter().any(|&h| h > 0.0) {
+                if !cpu.is_empty() {
                     pixels_with_hits += 1;
-                    snapped_total += cpu.iter().filter(|&&h| h > 0.0).count();
+                    crossings_total += cpu.len();
                 }
             }
         }
         println!(
-            "W2 GPU-vector snap parity @ {spacing_m} m: {pixels_with_hits} pixels with snapped \
-             walls ({snapped_total} snaps), {mismatched_pixels} mismatched pixels of {} compared",
+            "W2 GPU-vector crossing parity @ {spacing_m} m: {pixels_with_hits} pixels cross the \
+             wall ({crossings_total} crossings), {mismatched_pixels} mismatched pixels of {} \
+             compared, worst |Δt| {worst_dt:.2e}",
             TILE_PX * TILE_PX
         );
-        // Measured 2026-06-12: 7,688 pixels snap at 45 m (12% of the tile);
-        // half that guards against a future fixture change going vacuous.
+        // The wall spans 720 m of a 512 px tile, so every pixel east of it on a
+        // path from the road crosses it; half the tile is the vacuity guard.
         assert!(
             pixels_with_hits > 3_500,
-            "fixture must exercise the snap broadly, got {pixels_with_hits} pixels"
+            "fixture must exercise the crossing broadly, got {pixels_with_hits} pixels"
         );
         assert_eq!(
             mismatched_pixels, 0,
-            "GPU projection replica must snap identically to the CPU oracle at {spacing_m} m"
+            "GPU intersection replica must match the CPU oracle at {spacing_m} m"
         );
     }
 }
