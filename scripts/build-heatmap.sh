@@ -225,10 +225,13 @@ if ! $COMBINE_ONLY; then
       # input, so any barriers.arrow in the bbox routes the line layers to the CPU
       # vector path (mirrors cluster-build-chunk.sh; 11 dB divergence measured on
       # barrier-dense LKPR without it, 2026-06-12). UNLESS QM_GPU_BARRIERS=1: then
-      # gpu-surface screens the vector walls itself (kernel projection-and-snap;
+      # gpu-surface screens the vector walls itself (kernel ray×segment crossing;
       # spike GO 2026-06-12, 1.97× on barrier-dense vs 1.0× CPU demotion). Default
-      # ON (owner-directed 2026-06-13): validated mean 0.002 / max 1.5 dB vs the CPU
-      # truth — within 30 m-data noise; QM_GPU_BARRIERS=0 forces the CPU demotion.
+      # ON (owner-directed 2026-06-13). The "mean 0.002 / max 1.5 dB vs the CPU
+      # truth" that used to stand here was measured on the midpoint-projection-and-
+      # snap kernel that the 2026-08 exact ray×segment rewrite replaced, so it no
+      # longer describes this code and is NOT restated as a bound — the live figure
+      # is whatever `e2-full` reports. QM_GPU_BARRIERS=0 forces the CPU demotion.
       GPU_LINE_MIN_MB="${GPU_LINE_MIN_MB:-2}"
       QM_GPU_BARRIERS="${QM_GPU_BARRIERS:-1}"
       bbox_line_bytes=0
