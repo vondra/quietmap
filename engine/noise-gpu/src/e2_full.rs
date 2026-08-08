@@ -40,10 +40,26 @@ fn main() -> Result<()> {
     // `QM_ARC_MIN_SPAN_DEG` lets `seg_arc_bounds()` raise the arc gate to 3°,
     // while the kernel has no quadrature at all and arc-screens from
     // `ARC_DEGENERATE_SPAN` (1e-4 rad) up. A bare run therefore PASSED the guard
-    // while comparing two different algorithms — which is the leading suspect
-    // for this gate's 4469-cell / 17.6 dB failure (gg review 2026-08-08 A#1).
+    // while comparing two different algorithms (gg review 2026-08-08 A#1).
     // Pinning here rather than in the guard because `gpu-surface` shares the
     // guard and runs no CPU painter, so for it these levers are meaningless.
+    //
+    // MEASURED, and it is NOT the explanation for this gate's 4469-cell /
+    // 17.63 dB failure — 9863d74's message said it was the leading suspect and
+    // that was wrong. The run that produced 4469 already had both pins set, and
+    // pinning changes it by zero cells. Bare is a DIFFERENT and larger failure
+    // (69005 cells) in the OPPOSITE direction (88.5 % CPU-louder against 66.7 %
+    // GPU-louder pinned), so the two never were the same number. What the
+    // 17.63 dB is: unknown, but bracketed — `QM_VECTOR_BUILDINGS=0` drops the
+    // whole gate to 6 cells / 0.90 dB, so it is inside the vector obstacle path
+    // and the shared terrain/ground/veg/emission is clean; and the max is
+    // identical to four decimals with the entire CPU integrator swapped
+    // (5-ray quadrature vs arc), so it is in the EVALUATION of vector candidates
+    // that both CPU branches share, not in either integrator. Ruled out by
+    // measurement: the cell prune (0 cells), the energy-budget skip, the
+    // kernel confirm ray (5.7 % of cells, 0 on the max) and
+    // `ARC_QUADRATURE_MIN_RAD` (2.6 %, 0 on the max). Next step is a dump of the
+    // worst pixels, not another lever.
     for (k, v) in [("QM_SEG_SAMPLES", "1"), ("QM_ARC_MIN_SPAN_DEG", "0")] {
         match std::env::var(k) {
             // An explicit non-pinning value is the operator asking for a rigged
