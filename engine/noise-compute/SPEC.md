@@ -412,9 +412,11 @@ DEM, Overture building height, WorldCover forest cover and IMD imperviousness ar
 Diffraction is computed once over a composite top profile (`elevation + building_h`), avoiding the terrain+screening double-count that would otherwise occur when a building sits on a hill. The δ* OLS mean-ground fit stays on bare-earth elevation. Implementation + caller API split (`terrain_attenuation` vs `screening_attenuation`): `propagation::path_effects::screening_attenuation_with_meta`. Ground G and vegetation depth are path integrals weighted by interval length so non-uniform bilateral spacing doesn't bias endpoints.
 
 
-**Vector obstacle candidates (geodata-v2, behind `QM_VECTOR_BUILDINGS`, OFF in
-production):** when enabled, building screening stops reading the 30 m raster
-channel. Exact footprint crossings from the per-cell obstacle store
+**Vector obstacle candidates (geodata-v2, `QM_VECTOR_BUILDINGS` — ON by default
+since the Wave-1 cutover 2026-07-31, commit 9cf166b; only an explicit
+`QM_VECTOR_BUILDINGS=0` restores the raster channel — see the `ENABLED` gate in
+`propagation::obstacle_index`):** building screening stops reading the 30 m
+raster channel. Exact footprint crossings from the per-cell obstacle store
 (`ObstacleIndex`, ray×edge intersections) compete with the cadence composite
 edge on δ; the winning candidate is evaluated by `compute_single_edge_at`
 (explicit edge point; the §2.5.6(c) mean-ground fits include the bare-ground
@@ -753,8 +755,9 @@ Applied ONCE per receiver, not per source-receiver path. Maximum is 3 dB
 (0 / 1.5 / 3.0 by probe density; the former `reflection.rs` clamp helper was
 dead code and is deleted).
 
-VECTOR MODE (`QM_VECTOR_BUILDINGS=1`, geodata-v2 — OFF in production until
-the Wave-1 cutover): the SAME nine probes, radius, height gate, and
+VECTOR MODE (geodata-v2 — ON by default since the Wave-1 cutover 2026-07-31,
+commit 9cf166b; opt out only via `QM_VECTOR_BUILDINGS=0`, same `ENABLED` gate
+as §3.5b): the SAME nine probes, radius, height gate, and
 thresholds, but each probe is an exact point-in-footprint parity test
 against the obstacle store (`obstacle_index::enclosure_db`) instead of a
 30 m raster cell read. The pipeline pre-bakes it into `rx_refl_db` per
