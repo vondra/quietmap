@@ -190,6 +190,13 @@ pub fn pack_sources(lines: &[LineRow]) -> SourceBuffers {
 /// SHARED batch halo. `barriers` is this tile's `BarrierData::for_tile` slice;
 /// an empty slice packs one zero row (cuMemAlloc rejects 0 bytes) with
 /// `meta[11] = 0` so the kernel never reads it.
+///
+/// `eta` keeps its name and its slot (`meta[9]`) but not its meaning: the surface
+/// kernel replaced the energy-budget skip with the exact byte-space stop
+/// (`scatter.cu`'s `bs_decided`, mirroring `tile_painter::byte_stop`), which has
+/// no tolerance to set. The kernel now reads the slot as ON/OFF, and `0` — what
+/// `SURFACE_BUDGET_ETA=0` has always produced — still means "skip nothing, exact
+/// reference", so every caller and harness keeps working unchanged.
 pub fn pack_tile(
     tile: &FusedTileZ13,
     halo_geom: (f64, f64, f64, usize, usize),
@@ -305,18 +312,19 @@ pub struct ObstacleFlat {
     pub foot_edge_starts: Vec<u32>,
     /// Edge indices per footprint, grouped by owner (index-local).
     pub foot_edge_refs: Vec<u32>,
-    /// Per footprint: `[min_x, min_y, max_x, max_y, max_height_m, convex]` in
-    /// the index's local frame. The first four feed the wedge prune, so a
-    /// footprint that cannot lie inside the segment's angular span is rejected
-    /// by sign tests alone before any `atan2` touches its vertices.
+    /// Per footprint: `[min_x, min_y, max_x, max_y]` in the index's local frame.
+    /// It feeds the wedge prune, so a footprint that cannot lie inside the
+    /// segment's angular span is rejected by sign tests alone before any `atan2`
+    /// touches its vertices.
     ///
-    /// `convex` is 1.0 when the footprint's edges form ONE closed chain whose
-    /// turns never change sign. That is exactly the condition under which the
-    /// angular silhouette seen from outside is a single contiguous arc, i.e.
-    /// the convex angular hull equals the union of the per-edge arcs. For an
-    /// L-shaped or courtyard block it does not, and the hull screens directions
-    /// that pass through the notch without touching material — so those take
-    /// the exact per-edge union instead.
+    /// It USED to carry two more slots, `max_height_m` and a `convex` flag, for a
+    /// walk that emitted one angular HULL arc per convex footprint. Both went with
+    /// that walk (2026-08-09): a hull arc can carry only one RANGE, and handing a
+    /// footprint's minimum range to all of its directions was a measured 17.6 dB
+    /// parity fault against the CPU lane, so every footprint now emits one arc per
+    /// obstacle EDGE — the rule `ObstacleIndex::skyline_arcs_within` follows — and
+    /// each arc reads its own edge's range and height (`edges` slot 4). Neither the
+    /// footprint-wide height nor its convexity has anything left to decide.
     pub foot_box: Vec<f32>,
     /// Per grid cell, the CSR extent of [`Self::cell_foot_ids`].
     pub cell_foot_starts: Vec<u32>,
@@ -340,52 +348,9 @@ pub struct ObstacleFlat {
     pub cell_foot_cell: Vec<u32>,
 }
 
-/// f32 slots per footprint in [`ObstacleFlat::foot_box`].
-pub const FOOT_BOX_STRIDE: usize = 6;
-
-/// Do these edges form ONE closed chain with consistently signed turns?
-/// Conservative: anything it cannot verify (a broken chain, a multi-ring
-/// footprint with holes, a degenerate edge) is reported non-convex, which only
-/// costs the exact per-edge path — never accuracy.
-fn is_convex_ring(
-    v: &noise_compute::propagation::obstacle_index::GpuGridView<'_>,
-    refs: &[u32],
-) -> bool {
-    let n = refs.len();
-    if n < 3 {
-        return false;
-    }
-    let pt = |e: u32, k: usize| {
-        let g = &v.edges_xyxyh[e as usize * 5..e as usize * 5 + 4];
-        (g[k * 2] as f64, g[k * 2 + 1] as f64)
-    };
-    // closed chain?
-    for i in 0..n {
-        let (_, e1) = (pt(refs[i], 0), pt(refs[i], 1));
-        let s2 = pt(refs[(i + 1) % n], 0);
-        if (e1.0 - s2.0).abs() > 1e-6 || (e1.1 - s2.1).abs() > 1e-6 {
-            return false;
-        }
-    }
-    let mut sign = 0i32;
-    for i in 0..n {
-        let (a0, a1) = (pt(refs[i], 0), pt(refs[i], 1));
-        let (_, b1) = (pt(refs[(i + 1) % n], 0), pt(refs[(i + 1) % n], 1));
-        let (ux, uy) = (a1.0 - a0.0, a1.1 - a0.1);
-        let (wx, wy) = (b1.0 - a1.0, b1.1 - a1.1);
-        let cr = ux * wy - uy * wx;
-        if cr.abs() < 1e-12 {
-            continue;
-        }
-        let s = if cr > 0.0 { 1 } else { -1 };
-        if sign == 0 {
-            sign = s;
-        } else if sign != s {
-            return false;
-        }
-    }
-    sign != 0
-}
+/// f32 slots per footprint in [`ObstacleFlat::foot_box`] — the bbox alone; see
+/// that field for the two the per-edge arc walk retired.
+pub const FOOT_BOX_STRIDE: usize = 4;
 
 /// One index's footprint-CSR, built from the `gpu_view` edge order + `edge_ids`.
 struct FootprintCsr {
@@ -421,7 +386,7 @@ fn footprint_csr_for_index(
         edge_foot[e] = f;
     }
     // 2. counting sort of the edges by owner ⇒ the per-footprint CSR, plus each
-    //    footprint's local-frame bbox and max height.
+    //    footprint's local-frame bbox.
     let mut foot_edge_starts = vec![0u32; n_foot + 1];
     for &f in &edge_foot {
         foot_edge_starts[f as usize + 1] += 1;
@@ -442,25 +407,12 @@ fn footprint_csr_for_index(
         let f = f as usize;
         foot_edge_refs[cursor[f] as usize] = e as u32;
         cursor[f] += 1;
-        let g = &v.edges_xyxyh[e * 5..e * 5 + 5];
+        let g = &v.edges_xyxyh[e * 5..e * 5 + 4];
         let b = &mut foot_box[f * FOOT_BOX_STRIDE..f * FOOT_BOX_STRIDE + FOOT_BOX_STRIDE];
         b[0] = b[0].min(g[0]).min(g[2]);
         b[1] = b[1].min(g[1]).min(g[3]);
         b[2] = b[2].max(g[0]).max(g[2]);
         b[3] = b[3].max(g[1]).max(g[3]);
-        b[4] = b[4].max(g[4]);
-    }
-    // convexity: one closed chain, turns all the same sign.
-    for f in 0..n_foot {
-        let (lo, hi) = (
-            foot_edge_starts[f] as usize,
-            foot_edge_starts[f + 1] as usize,
-        );
-        foot_box[f * FOOT_BOX_STRIDE + 5] = if is_convex_ring(v, &foot_edge_refs[lo..hi]) {
-            1.0
-        } else {
-            0.0
-        };
     }
 
     // 2. per cell, the footprints its edge list names — deduplicated, each

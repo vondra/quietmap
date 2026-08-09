@@ -149,15 +149,13 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #ifndef OBST_META_STRIDE
 #define OBST_META_STRIDE 19
 #endif
-// f32 slots per footprint in foot_box — injected like the rest.
-// -DARC_EDGE_UNION=0 forces every footprint down the convex-hull path — the
-// pre-fix behaviour — so the accuracy the exact per-edge union buys can be
-// measured rather than asserted.
-#ifndef ARC_EDGE_UNION
-#define ARC_EDGE_UNION 1
-#endif
+// f32 slots per footprint in foot_box (the bbox) — injected like the rest. The
+// height + convexity slots went with the -DARC_EDGE_UNION switch on 2026-08-09:
+// the hull emission it selected is not a cheaper approximation of the per-edge
+// union but different physics, because a hull arc can carry only one RANGE. Kept
+// where the emission is, arc walk below.
 #ifndef FOOT_BOX_STRIDE
-#define FOOT_BOX_STRIDE 6
+#define FOOT_BOX_STRIDE 4
 #endif
 // ---- Footprint-CSR arc walk (TRACK C 2026-08-03). -DARC_FOOTPRINT_CSR=0
 // restores the edge-CSR walk, which is what the acceptance A/B compares
@@ -1735,7 +1733,10 @@ __device__ __forceinline__ double arc_gob(double terr_b, double ground_b, double
 //
 //   1. the segment's angular span at the receiver (two atan2),
 //   2. the sub-intervals of that span that vector obstacles actually block —
-//      one angular hull per footprint, confirmed by an exact ray crossing,
+//      one arc per obstacle EDGE at that edge's own range and height, exactly as
+//      `ObstacleIndex::skyline_arcs_within` emits them, each confirmed by an
+//      exact ray crossing (the per-footprint angular hull survives only as a
+//      cheap reject, because one hull arc cannot carry per-edge ranges),
 //   3. ONE screening evaluation per blocked interval, on the ray to the EXACT
 //      source point on the segment at the interval's centre azimuth (exact
 //      range, no banding), the cp evaluation reused for the interval that
@@ -1901,16 +1902,16 @@ __device__ void arc_screen_bands(
                     // per edge as the edge walk, just gathered in one place.
                     unsigned int k0 = __ldg(&foot_es[fes_off + f]);
                     unsigned int k1 = __ldg(&foot_es[fes_off + f + 1]);
-                    // CONCAVE footprints take the exact per-edge union below;
-                    // the convex hull would screen directions that pass through
-                    // an L-notch or a courtyard without touching material.
-                    bool convex = !ARC_EDGE_UNION || __ldg(&fb[5]) != 0.0f;
+                    // The hull is a cheap exact REJECT and nothing else: every
+                    // footprint EMITS the per-edge union below, with each arc
+                    // carrying its OWN range (see the emit block). It therefore
+                    // computes NO range — the footprint-wide minimum that used to
+                    // live here was the parity defect, and a variable named
+                    // `near_m` in this scope is what let it hide.
                     double h_lo = 1e300, h_hi = -1e300;
                     // First vertex's unwrapped angle — the turn every other
                     // vertex of THIS footprint is unwrapped onto (see below).
                     double hull_anchor = 0.0;
-                    // Closest range in the arc — `SkylineArc::near_m`.
-                    double near_m = 1e300;
 #if ARC_HULL_CACHE
                     // Absolute-azimuth hull, cached per (receiver, footprint).
                     unsigned int ckey = ((unsigned int)gi << 28) | (f & 0x0FFFFFFFu);
@@ -1937,23 +1938,23 @@ __device__ void arc_screen_bands(
                         // TEARS a footprint whose vertices straddle the seam
                         // relative to `base`: half the edges land near +π and
                         // half near −π, so fmin/fmax spans almost the whole
-                        // circle. The confirmation ray is then aimed at the
-                        // middle of that bogus hull — a direction the building
-                        // is nowhere near — it misses, and the footprint is
-                        // DISCARDED. The building stops screening and the pixel
-                        // gets LOUDER than with no obstacles at all, which is
-                        // exactly what P4's worst cell does: raster GPU 51.812 =
-                        // CPU 51.812, but with vectors the CPU goes −9.8 dB
-                        // (screened) while the GPU goes +5.1 dB. Screening
-                        // cannot add energy; missing a screen can.
+                        // circle.
                         //
-                        // The CPU never had this: it emits one SHORT ARC PER
-                        // EDGE in absolute azimuth and lets `insert_merged`'s
-                        // ±2π clip shifts rejoin them (arc_screening.rs), so
-                        // there is no whole-footprint min/max to tear.
-                        // Rare (needs the straddle), large (a whole building's
-                        // screening), one-sided (always GPU-louder) — the
-                        // signature of P4's residual tail. Review 2026-08-04.
+                        // A torn hull is now only WIDER than the true one, and
+                        // this hull is only a REJECT, so the tear can cost an
+                        // admitted footprint's worth of per-edge work and cannot
+                        // change an answer. It used to change answers: while a
+                        // convex footprint EMITTED its hull, the confirmation ray
+                        // was aimed at the middle of the bogus span — a direction
+                        // the building is nowhere near — it missed, and the whole
+                        // footprint was DISCARDED, so the pixel came out LOUDER
+                        // than with no obstacles at all (P4's worst cell: raster
+                        // GPU 51.812 = CPU 51.812, but with vectors the CPU went
+                        // −9.8 dB while the GPU went +5.1 dB). The per-edge
+                        // emission below removes that mechanism — each arc is
+                        // confirmed on ITS OWN centre ray — and the anchor stays
+                        // because a hull that spans the circle rejects nothing and
+                        // makes the prune worthless. Review 2026-08-04.
                         double r0;
                         if (kk == k0) {
                             r0 = wrap_pi_d(a0 - base);
@@ -1964,15 +1965,6 @@ __device__ void arc_screen_bands(
                         double r1 = r0 + wrap_pi_d(a1 - a0);
                         h_lo = fmin(h_lo, fmin(r0, r1));
                         h_hi = fmax(h_hi, fmax(r0, r1));
-                        // point→segment distance from the receiver, index frame
-                        double ex0 = (double)g[0] - rxl, ey0 = (double)g[1] - ryl;
-                        double ex1 = (double)g[2] - rxl, ey1 = (double)g[3] - ryl;
-                        double vx = ex1 - ex0, vy = ey1 - ey0;
-                        double vv = vx * vx + vy * vy;
-                        double tt2 = (vv > 0.0) ? fmin(fmax(-(ex0 * vx + ey0 * vy) / vv, 0.0), 1.0)
-                                                : 0.0;
-                        double qx = ex0 + tt2 * vx, qy = ey0 + tt2 * vy;
-                        near_m = fmin(near_m, sqrt(qx * qx + qy * qy));
                     }
 #if ARC_HULL_CACHE
                         hc_key[cslot] = ckey;
@@ -1980,38 +1972,85 @@ __device__ void arc_screen_bands(
                         hc_hi[cslot] = h_hi - h_lo;
                     }
 #endif
-                    // The CONVEX HULL is used first as a cheap exact REJECT: the
+                    // The CONVEX HULL is used ONLY as a cheap exact REJECT: the
                     // union of the per-edge arcs is contained in it, so an empty
-                    // hull clip means an empty union.
+                    // hull clip means an empty union. `st`/`en` are the clip's
+                    // outputs and nothing downstream reads them — every emitted
+                    // arc clips ITSELF against the span below.
                     double st = 0.0, en = -1.0;
                     if (!arc_clip_span(h_lo, h_hi, lo, hi, &st, &en)) continue;
                     if (PROF_COUNTERS && arcstat) arcstat[4] += 1.0f;   // survived the clip
-                    // Emit the silhouette. For a CONVEX footprint the hull IS the
-                    // silhouette — one contiguous arc — so the single interval is
-                    // exact. For a concave one (an L-block, a courtyard) it is
-                    // not: the hull spans the notch, screening directions that
-                    // reach the segment without touching material, so those emit
-                    // the exact UNION of their per-edge arcs instead. Each arc is
-                    // confirmed on its own centre ray, because a direction inside
-                    // the silhouette still has to have the footprint BETWEEN the
-                    // receiver and the segment.
-                    int n_emit = convex ? 1 : (int)(k1 - k0);
-                    for (int ei = 0; ei < n_emit; ei++) {
-                        double est = st, een = en;
-                        if (!convex) {
-                            const float* g =
-                                &edges[(eoff + __ldg(&foot_er[fer_off + k0 + ei])) * 5];
-                            double lat0 = m[0] + (double)g[1] / M_LAT;
-                            double lon0 = m[1] + (double)g[0] / imlon;
-                            double lat1 = m[0] + (double)g[3] / M_LAT;
-                            double lon1 = m[1] + (double)g[2] / imlon;
-                            double a0 = arc_az(rlat, rlon, mlon, lat0, lon0);
-                            double a1 = arc_az(rlat, rlon, mlon, lat1, lon1);
-                            double r0 = wrap_pi_d(a0 - base);
-                            double r1 = r0 + wrap_pi_d(a1 - a0);
-                            if (!arc_clip_span(fmin(r0, r1), fmax(r0, r1), lo, hi, &est, &een))
-                                continue;
-                        }
+                    // ---- Emit the silhouette as the exact UNION OF THE PER-EDGE
+                    // ARCS, for EVERY footprint — convex ones included. This is
+                    // the rule `ObstacleIndex::skyline_arcs_within` follows
+                    // (obstacle_index.rs: one `SkylineArc` per edge, each with its
+                    // own `near_m` from `origin_to_segment_dist`), and the reason
+                    // it is not merely a nicety is the RANGE, not the shape:
+                    //
+                    // one hull arc can carry only ONE range, so the pre-fix code
+                    // gave every direction of a convex footprint that footprint's
+                    // MINIMUM range — and `b` is then handed to the admission test
+                    // and to δ ≈ h²·d/(2ab) as if the diffracting edge stood
+                    // there. Any part of a house closer than 1 m therefore
+                    // rejected the WHOLE house through the `b < 1.0` gate below,
+                    // and a receiver standing INSIDE a footprint (hull 6.2832 rad,
+                    // min range 0.05 m) had its entire panorama declared clear.
+                    // With per-edge arcs the near edge is the only one that
+                    // rejects; its neighbours keep screening at their own ranges,
+                    // and for a receiver inside the ring the union of the edge
+                    // arcs still covers the full turn.
+                    //
+                    // MEASURED, e2-full on rail 2206/1391 (cells >0.5 dB / max dB /
+                    // share GPU-louder), 2026-08-09:
+                    //
+                    //   footprint-wide range, hull for convex   4469 / 17.63 / 66.7 %
+                    //   per-EDGE range, hull for convex         3472 / 16.12 / 59.7 %
+                    //   per-edge arcs everywhere (THIS, = CPU)  2298 /  5.91 / 39.5 %
+                    //
+                    // The middle row is why the shape cannot be left convex-only:
+                    // a hull arc's range is not a property of the hull's own edge
+                    // set, so fixing the range without fixing the emission leaves
+                    // half the fault in place. Cost of the third row over the
+                    // first: +17 % kernel time (156.4 s -> 183.8 s on that tile),
+                    // paid in per-edge `arc_az` pairs and one confirmation ray per
+                    // emitted arc.
+                    //
+                    // `foot_box` is down to its bbox (FOOT_BOX_STRIDE 4): the
+                    // footprint's max height and the host's convexity flag went
+                    // with the hull emission, since the per-edge arc reads the
+                    // EDGE's own height and range.
+                    for (unsigned int ei = k0; ei < k1; ei++) {
+                        const float* g = &edges[(eoff + __ldg(&foot_er[fer_off + ei])) * 5];
+                        double lat0 = m[0] + (double)g[1] / M_LAT;
+                        double lon0 = m[1] + (double)g[0] / imlon;
+                        double lat1 = m[0] + (double)g[3] / M_LAT;
+                        double lon1 = m[1] + (double)g[2] / imlon;
+                        double a0 = arc_az(rlat, rlon, mlon, lat0, lon0);
+                        double a1 = arc_az(rlat, rlon, mlon, lat1, lon1);
+                        double r0 = wrap_pi_d(a0 - base);
+                        double r1 = r0 + wrap_pi_d(a1 - a0);
+                        double est = 0.0, een = -1.0;
+                        if (!arc_clip_span(fmin(r0, r1), fmax(r0, r1), lo, hi, &est, &een))
+                            continue;
+                        // THIS EDGE's closest approach to the receiver — the arc's
+                        // own `SkylineArc::near_m` (`origin_to_segment_dist`,
+                        // obstacle_index.rs:444), in the index-local frame.
+                        double ex0 = (double)g[0] - rxl, ey0 = (double)g[1] - ryl;
+                        double ex1 = (double)g[2] - rxl, ey1 = (double)g[3] - ryl;
+                        double vx = ex1 - ex0, vy = ey1 - ey0;
+                        double vv = vx * vx + vy * vy;
+                        double tt2 = (vv > 0.0) ? fmin(fmax(-(ex0 * vx + ey0 * vy) / vv, 0.0), 1.0)
+                                                : 0.0;
+                        double qx = ex0 + tt2 * vx, qy = ey0 + tt2 * vy;
+                        double near_m = sqrt(qx * qx + qy * qy);
+                        // …and its own HEIGHT (`SkylineArc::height_m` is the
+                        // EDGE's, edges stride 5 = x0,y0,x1,y1,height). Equal to
+                        // the footprint maximum for every store this lane can be
+                        // given — `add_polygon_wkb` stamps one height on every ring
+                        // of an id — but it is the per-edge value that the fuse key
+                        // and `top_alt` are defined on, so read it where the
+                        // definition is.
+                        double h_edge = (double)__ldg(&g[4]);
                         // Confirmation: the ray to this arc's centre must actually
                         // cross THIS footprint. With its edge run in hand that is a
                         // direct ray×polygon test — the edge walk had to re-run a
@@ -2023,11 +2062,13 @@ __device__ void arc_screen_bands(
                         double sxc = (slon_c - m[1]) * imlon, syc = (slat_c - m[0]) * M_LAT;
                         double dxc = rxl - sxc, dyc = ryl - syc;
                         bool hit = false;
+                        // `gk` not `g`: `g` above is THIS arc's edge, and the
+                        // confirmation asks about the whole ring.
                         for (unsigned int kk = k0; kk < k1 && !hit; kk++) {
-                            const float* g = &edges[(eoff + __ldg(&foot_er[fer_off + kk])) * 5];
+                            const float* gk = &edges[(eoff + __ldg(&foot_er[fer_off + kk])) * 5];
                             double tt;
-                            hit = seg_isect_t(sxc, syc, dxc, dyc, (double)g[0], (double)g[1],
-                                              (double)g[2], (double)g[3], &tt);
+                            hit = seg_isect_t(sxc, syc, dxc, dyc, (double)gk[0], (double)gk[1],
+                                              (double)gk[2], (double)gk[3], &tt);
                         }
                         if (!hit) continue;
                         // ---- PER-ARC ADMISSION, mirroring arc_screening §1: an
@@ -2041,22 +2082,58 @@ __device__ void arc_screen_bands(
                         double ddx2 = (slon_c - rlon) * mlon, ddy2 = (slat_c - rlat) * M_LAT;
                         double d_src = sqrt(ddx2 * ddx2 + ddy2 * ddy2);
                         double b_rng = near_m, a_rng = d_src - b_rng;
+                        // The 1 m floors are `arc_screening.rs:1124` exactly, and
+                        // they stay exactly that. `b` is now what the norm says it
+                        // is — the distance to the DIFFRACTING EDGE — so the floor
+                        // is a statement about the edge, not about the building:
+                        // δ ≈ h²·d/(2ab) is the parabolic thin-screen expansion,
+                        // it diverges as b -> 0 (a wall the receiver is touching
+                        // would return δ -> ∞, i.e. maximum screening), and it
+                        // needs the receiver in the edge's FAR field, b ≫ λ, which
+                        // at b < 1 m already fails for every band below ~340 Hz —
+                        // half of the model's 63 Hz .. 8 kHz range. That is also
+                        // why CNOSSOS/ISO 9613-2 place a facade receiver 2 m OFF
+                        // the facade and treat it as an immission point rather than
+                        // a diffraction path. So an edge within a metre is not
+                        // screening data this model can use, and dropping it errs
+                        // toward LESS screening (louder), never toward a phantom
+                        // shadow.
+                        //
+                        // What changes with the per-edge range is the BLAST RADIUS,
+                        // which is the whole defect: the drop now costs the few
+                        // degrees that one edge subtends instead of every direction
+                        // its footprint covers. A receiver standing INSIDE a
+                        // footprint (measured: pixel 52/496 of 2206/1391, nearest
+                        // edge 0.0538 m, hull the full 6.2832 rad) used to lose the
+                        // whole panorama and 10-12 dB on 8+ sources; now it loses
+                        // the arc of the wall it is leaning on and keeps the rest of
+                        // the ring — which is also what the CPU lane does with the
+                        // same geometry, so the two agree instead of merely both
+                        // being defensible.
                         if (a_rng <= 1.0 || b_rng < 1.0) continue;
                         // One elevation sample resolves the arc's ABSOLUTE top,
-                        // taken at its own range along the interval's centre.
+                        // taken at its own range along the interval's centre. That
+                        // range is this EDGE's now, so the sample finally lands on
+                        // the ground under the edge that does the diffracting.
                         double az_c = base + 0.5 * (est + een);
                         double g_alt = tile_elev(inner, elev, rows, cols, lat_min, lon_min, inv, bb,
                                                  rlat + b_rng * sin(az_c) / M_LAT,
                                                  rlon + b_rng * cos(az_c) / mlon);
-                        double top_alt = g_alt + (double)__ldg(&fb[4]);
+                        double top_alt = g_alt + h_edge;
                         double los_a = ralt - (b_rng / d_src) * (ralt - q_src_alt);
                         double h_a = top_alt - los_a;
                         double two_ab = 2.0 * a_rng * b_rng, dnum = h_a * h_a * d_src;
                         if (h_a < 0.0 && dnum > ARC_PENUMBRA_FLOOR_M * two_ab) continue;
                         if (h_a >= 0.0 && dnum < ARC_DELTA_MIN_M * two_ab) continue;
                         if (PROF_COUNTERS && arcstat) arcstat[5] += 1.0f;   // admitted
+                        // `arc_fuse_key(near, height)` can finally do its job: the
+                        // arcs of one footprint now arrive with DIFFERENT ranges, so
+                        // they land in the range strata they belong to instead of
+                        // all sharing the footprint minimum's stratum and fusing
+                        // into one arc that carried the nearest edge's range across
+                        // the whole silhouette.
                         niv = arc_iv_union(iv_s, iv_e, iv_near, iv_h, iv_top, iv_key, niv, est, een,
-                                           (float)b_rng, __ldg(&fb[4]), (float)top_alt,
+                                           (float)b_rng, (float)h_edge, (float)top_alt,
                                            &iv_overflow);
                     }
                 }
@@ -2153,6 +2230,12 @@ __device__ void arc_screen_bands(
         return;
     }
 #else
+    // DEV ABLATION ONLY, and no longer a CPU mirror: this walk pre-dates the
+    // per-arc admission test, so its intervals carry no range or height at all —
+    // it cannot express the per-EDGE range the footprint walk above (and the CPU
+    // skyline) is built on. Keep it for what it was kept for, pricing the area
+    // query against the footprint walk; do not read its field as a reference.
+    //
     // 1. One angular hull per footprint over the (receiver, start, end) triangle
     //    bbox — the AREA sibling of the cp ray's crossings query: the cp ray's
     //    own hits would miss exactly the obstacles screening the segment's other
@@ -2484,21 +2567,82 @@ __device__ void arc_screen_bands(
 #endif
 #define BIN_TILES (TPX / BIN_W)  // 32 bins per axis, 1024 bins per tile
 
-// ── One source's contribution to one receiver pixel: geometry → energy-budget
-// skip → cadence ray-march → terrain/screening/ground/veg → max(A_gr,A_bar)
-// combine → accumulate 3-period energy (f32) + kept (f64). Shared by `line`
-// (scans all sources) and `line_binned` (scans a block's pre-binned list). seg/sp
-// point at THIS source's 4-tuple, em at its 24 emission bands; e0..e2/kept/skipped
-// are the caller's per-pixel running state. Returns on reach-cull or budget-skip.
+// ── tile-painter/src/byte_stop.rs mirror ─────────────────────────────────────
+// A pixel's whole answer is one HM3 byte (`u8 × 0.5 dB`), so it is finished once
+// its BYTE is pinned, not once its value is. The caller keeps `kept` = P⁻ (what
+// is computed exactly) and `resid` = Σ bound over everything left, and stops the
+// moment both ends quantise the same. That is EXACT — it never drops energy that
+// could change the output — and it is what replaced the energy-budget skip
+// (`skipped ≤ η·kept`) this kernel shipped with, whose verdict depended on the
+// source order and admitted up to 10·log10(1.4) = 1.46 dB of uncounted energy.
+// Keep in lockstep with byte_stop.rs: the two lanes must agree on the BYTE, and
+// they now can even though they walk different tails (this lane in source order,
+// the CPU loudest-bound-first — the order is a cost knob, not an answer).
+//
+// BENCHMARK THIS LANE BEFORE SHIPPING IT — the order is a cost knob and this lane
+// has the bad setting. A thread has no room to sort its pixel's pairs, so the walk
+// is source order, and source order is what the CPU measured at 8.6-11.0 % of
+// pairs skipped instead of 49.9-51.7 % loudest-first (the table on
+// `scatter_band::PairBound`), which came out 1.5-1.8× SLOWER than the η rule it
+// replaces. The fix does not need per-thread sorting — ordering the SOURCE ARRAY
+// once on the host (descending Lden emission, a pixel-independent key) gives every
+// thread a near-loudest-first walk for free, and keeps all threads on ONE order so
+// the two lanes stay comparable pair for pair. Until then the accuracy is right
+// and the speed is not.
+#define HM3_QUANT_DB 0.5
+#define HM3_NO_DATA_Q (-1)
+#define HM3_MAX_Q 254.0
+#define BS_F32_U 5.960464477539063e-8
+#define BS_ACC_SAFETY 2.0
+#define BS_LDEN_SCALE (1.0 / 24.0)
+
+// wire_hm3::quantise_lden on a Lden ENERGY; HM3_NO_DATA_Q where it writes 255.
+__device__ __forceinline__ int bs_quant(double e) {
+    double x = e * BS_LDEN_SCALE;
+    if (!(x > 0.0)) return HM3_NO_DATA_Q;
+    double db = 10.0 * log10(x);
+    if (!isfinite(db) || db < 0.0) return HM3_NO_DATA_Q;
+    double q = round(db / HM3_QUANT_DB);
+    return (q >= HM3_MAX_Q) ? (int)HM3_MAX_Q : (int)q;
+}
+
+// Relative margin the decision must clear on both ends: the output accumulator
+// is f32, so a sequential sum of `npair` terms carries up to (npair+1)·u of
+// rounding either way, and widening the interval by that makes the byte-identity
+// a proof rather than a hope. It also covers this lane's ONE extra imprecision
+// over the CPU's: a thread has no room for the CPU's suffix sums, so `resid` is
+// maintained by subtraction, whose ≤ npair·u_f64 (~1e-12) drift sits nine orders
+// below this margin.
+__device__ __forceinline__ double bs_margin(int npair) {
+    return ((double)npair + 1.0) * BS_F32_U * BS_ACC_SAFETY;
+}
+
+__device__ __forceinline__ bool bs_decided(double p_lo, double p_hi, double margin) {
+    if (!isfinite(p_hi)) return false;   // a broken bound must never read decided
+    return bs_quant(p_lo * (1.0 - margin)) == bs_quant(p_hi * (1.0 + margin));
+}
+
+// ── One source's contribution to one receiver pixel: geometry → cheap bound →
+// cadence ray-march → terrain/screening/ground/veg → max(A_gr,A_bar) combine →
+// accumulate 3-period energy (f32) + kept (f64). Shared by `line` (scans all
+// sources) and `line_binned_fused` (scans a block's culled chunks). seg/sp point
+// at THIS source's 4-tuple, em at its 24 emission bands; e0..e2/kept/resid/npair
+// are the caller's per-pixel running state. Returns on reach-cull.
+//
+// `ub_only` is the byte-stop's CHEAP PASS: price the pair (`resid += ub`, count
+// it) and return without marching anything. One function rather than two so the
+// geometry the bound is built on cannot drift from the geometry the exact path
+// uses — that identity is what makes `ub ≥ exact` true per pair.
 __device__ __forceinline__ void line_source(
     const float* elev, const float* inner, const unsigned char* cover,
     int rows, int cols, double lat_min, double lon_min, double inv, const double* bb,
-    double rlat, double rlon, double ralt, double refl, double eta,
+    double rlat, double rlon, double ralt, double refl, bool ub_only,
     const double* seg, const double* sp, const float* em,
     const double* barr, int nbarr, const unsigned long long* obst,
     double* tprof, double* ed, double* comp,
     unsigned char* bld, unsigned char* forr, unsigned char* imdp,
-    float& e0, float& e1, float& e2, double& kept, double& skipped, float* arcstat,
+    float& e0, float& e1, float& e2, double& kept, double& resid, int& npair,
+    float* arcstat,
     unsigned int* hc_key, double* hc_lo, double* hc_hi, unsigned int* arc_drops)
 {
     double dend, dperp, cplat, cplon, frac;
@@ -2514,17 +2658,19 @@ __device__ __forceinline__ void line_source(
     float base = (float)refl + fc - 10.0f * log10f(2.0f * (float)PI_D * dslant);
     float atm_km = dslant / 1000.0f;
 
-    // energy-budget skip (kept/skipped/ub f64 — the ratio needs the precision).
-    // The per-band Lden weight Σ_p LDEN_W[p]·em[p·8+i] is host-precomputed into
-    // sp[4+i] (pack_sources) — same f64 FMA, hoisted off the per-source×receiver hot
-    // path. Byte-identical to the in-kernel `LDEN_W[0]*em[i]+…` form.
+    // The pair's cheap UPPER BOUND (f64 — the byte decision needs the precision):
+    // free field, no terrain/screening/veg, most favourable ground, so provably
+    // ≥ this pair's exact contribution. The per-band Lden weight
+    // Σ_p LDEN_W[p]·em[p·8+i] is host-precomputed into sp[4+i] (pack_sources) —
+    // same f64 FMA, hoisted off the per-source×receiver hot path. Byte-identical
+    // to the in-kernel `LDEN_W[0]*em[i]+…` form.
     double ub = 0.0;
     for (int i = 0; i < NB; i++) {
         float pdb = (base - (float)ALPHA_ATM[i] * atm_km + GROUND_GAIN_UB_F + (float)A_W[i]) * (float)LN10 * 0.1f;
         ub += sp[4 + i] * fexp((double)pdb);
     }
     ub *= UB_SAFETY;
-    if (skipped + ub <= eta * kept) { skipped += ub; return; }
+    if (ub_only) { resid += ub; npair++; return; }   // byte-stop cheap pass
 
     // ONE ray evaluator for the cp ray and every arc-screening interval ray
     // (ray_path_bands): cadence march + barriers + terrain + vector candidate +
@@ -2593,17 +2739,23 @@ __device__ __forceinline__ void line_source(
             kept_add += power * LDEN_W[p];
         }
     }
+    // THE SOUNDNESS INVARIANT (scatter_band asserts it; a device assert would
+    // cost a trap frame per pair, so it is stated and enforced by construction:
+    // `ub` above is this same geometry with every attenuation term dropped and
+    // the ground at its most favourable, times UB_SAFETY).
     kept += kept_add;
+    resid -= ub;   // this pair is now known EXACTLY — it leaves the bound
 }
 
 // RAIL scatter: free-field + terrain diffraction + building screening + ground +
 // vegetation, combined max(A_ground,A_terrain+A_screen) (ISO 9613-2 §7.3.1), with
-// the per-pixel energy-budget skip. Thread-per-pixel; mirrors scatter_band
-// (sources in array order, per-thread kept/skipped). Tiled (swizzled) pixel
+// the per-pixel BYTE-SPACE STOP. Thread-per-pixel; mirrors scatter_band
+// (per-thread kept/resid). Tiled (swizzled) pixel
 // mapping (meta[10]=tile width) keeps each block's rays' terrain L2-hot. Scans
 // ALL sources (reach cull is inside line_source); `line_binned` is the pre-binned
 // variant. Per-period energy in f32 (matching TileAccumulator), kept in f64.
-//   meta = [rows, cols, lat_min, lon_min, inv, north, south, west, east, eta,
+//   meta = [rows, cols, lat_min, lon_min, inv, north, south, west, east,
+//           byte_stop_on (the old η slot: 0 = off/exact, non-zero = on),
 //           tile_width, nbarr, nsrc, out_slots]  (out_slots = f32 slots the host
 //           allocated in `out` — see the `out` LAYOUT block near the top)
 //   inner = TPX×TPX tile DEM; cover = halo [building,forest,imd] u8.
@@ -2635,7 +2787,12 @@ extern "C" __global__ void line(
     int rows = (int)meta[0], cols = (int)meta[1];
     double lat_min = meta[2], lon_min = meta[3], inv = meta[4];
     const double* bb = &meta[5];   // north_lat, south_lat, west_lon, east_lon
-    double eta = meta[9];
+    // meta[9] used to carry the budget skip's η. It now carries the byte-stop's
+    // ON/OFF, and the mapping is deliberate: every host, harness and doc already
+    // writes 0 there to mean "exact reference, skip nothing", and that is exactly
+    // what a disabled byte-stop is. Non-zero (the shipped 0.40) = stop on. So no
+    // host change, and `SURFACE_BUDGET_ETA=0` still means what it always meant.
+    bool stop_on = meta[9] != 0.0;
     int nsrc = (int)meta[12];
     // Tiled (swizzled) pixel mapping: consecutive threads fill a 16×16 pixel tile
     // before the next, so each warp/block covers a COMPACT 2D region — its rays to a
@@ -2651,7 +2808,8 @@ extern "C" __global__ void line(
     double ralt = rxar[opix * 2], refl = rxar[opix * 2 + 1];
     int nbarr = (int)meta[11];
     float e0 = 0.0f, e1 = 0.0f, e2 = 0.0f;
-    double kept = 0.0, skipped = 0.0;
+    double kept = 0.0, resid = 0.0;
+    int npair = 0;
     double tprof[MAXT], ed[MAXT], comp[MAXT];
     unsigned char bld[MAXT], forr[MAXT], imdp[MAXT];
     // Optional `out` regions, entered only on the host's declared buffer size —
@@ -2665,12 +2823,27 @@ extern "C" __global__ void line(
     double hc_lo[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1], hc_hi[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
     for (int i = 0; i < (ARC_HULL_CACHE ? ARC_HULL_CACHE : 1); i++) hc_key[i] = 0xFFFFFFFFu;
 
+    // CHEAP PASS: price every pair, so `resid` is a bound over the WHOLE tail
+    // before any of it is computed. This is the bound the superseded budget skip
+    // already paid on every pair; what it buys now is a certain upper bound.
     for (int s = 0; s < nsrc; s++)
         line_source(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
-                    rlat, rlon, ralt, refl, eta, &seg[s * 4], &sp[s * 12], &semis[s * 24],
+                    rlat, rlon, ralt, refl, true, &seg[s * 4], &sp[s * 12], &semis[s * 24],
                     barr, nbarr, obst,
-                    tprof, ed, comp, bld, forr, imdp, e0, e1, e2, kept, skipped, arcstat,
+                    tprof, ed, comp, bld, forr, imdp, e0, e1, e2, kept, resid, npair, arcstat,
                     hc_key, hc_lo, hc_hi, &arc_drops);
+    double margin = bs_margin(npair);
+    // THE WALK: exact per pair until [kept, kept+resid] pins one byte. No
+    // barriers in this kernel, so a plain break is safe (line_binned_fused below
+    // must use a per-thread flag instead).
+    for (int s = 0; s < nsrc; s++) {
+        if (stop_on && bs_decided(kept, kept + resid, margin)) break;
+        line_source(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
+                    rlat, rlon, ralt, refl, false, &seg[s * 4], &sp[s * 12], &semis[s * 24],
+                    barr, nbarr, obst,
+                    tprof, ed, comp, bld, forr, imdp, e0, e1, e2, kept, resid, npair, arcstat,
+                    hc_key, hc_lo, hc_hi, &arc_drops);
+    }
     out[opix * 3 + 0] = e0;
     out[opix * 3 + 1] = e1;
     out[opix * 3 + 2] = e2;
@@ -2685,9 +2858,11 @@ extern "C" __global__ void line(
 // line_source only on survivors. cos=1 block radius (block_reach_ub) is a universal
 // upper bound on the p2s block-corner distance ⇒ conservative superset at every
 // latitude; the per-pixel cull in line_source stays authoritative; the 0..nsrc
-// ordered replay preserves the order-dependent energy-budget skip ⇒ byte-identical
-// to `line`. One cull per source (not once per pixel), fixed BIN_W²-byte shared,
-// no atomics.
+// ordered replay walks the pairs in the same order `line` does ⇒ byte-identical
+// to `line`. (The byte-stop no longer NEEDS that order to agree — it drops only
+// tails it has proven immaterial — but keeping it means the two kernels remain
+// comparable pair for pair, which is how a divergence gets localised.) One cull
+// per source (not once per pixel), fixed BIN_W²-byte shared, no atomics.
 // See docs/dev/gpu-binning-plan.md.
 extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused(
     const float*  __restrict__ elev,
@@ -2708,7 +2883,7 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
     int rows = (int)meta[0], cols = (int)meta[1];
     double lat_min = meta[2], lon_min = meta[3], inv = meta[4];
     const double* bb = &meta[5];
-    double eta = meta[9];
+    bool stop_on = meta[9] != 0.0;   // see `line` for why the η slot carries this
     int nsrc = (int)meta[12];
     int by = bid / BIN_TILES, bx = bid % BIN_TILES;
     int py0 = by * BIN_W, py1 = by * BIN_W + BIN_W - 1;
@@ -2719,7 +2894,10 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
     double ralt = rxar[opix * 2], refl = rxar[opix * 2 + 1];
     int nbarr = (int)meta[11];
     float e0 = 0.0f, e1 = 0.0f, e2 = 0.0f;
-    double kept = 0.0, skipped = 0.0;
+    double kept = 0.0, resid = 0.0;
+    int npair = 0;
+    double margin = 0.0;
+    bool done = false;
     double tprof[MAXT], ed[MAXT], comp[MAXT];
     unsigned char bld[MAXT], forr[MAXT], imdp[MAXT];
     // Optional `out` regions — see the `out` LAYOUT block near the top.
@@ -2738,26 +2916,44 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
     double reach = block_reach_ub(0.5 * fabs(rxll[py1] - rxll[py0]) * M_LAT,
                                   0.5 * fabs(rxll[TPX + px1] - rxll[TPX + px0]));
     __shared__ unsigned char keep[BIN_W * BIN_W];
-    for (int base = 0; base < nsrc; base += BIN_W * BIN_W) {
-        int s = base + lane;
-        keep[lane] = 0;
-        if (s < nsrc) {
-            double de, dp, cpa, cpo, fr;
-            p2s(clat, clon, seg[s * 4], seg[s * 4 + 1], seg[s * 4 + 2], seg[s * 4 + 3],
-                &de, &dp, &cpa, &cpo, &fr);
-            keep[lane] = (de <= sp[s * 12 + 1] + reach) ? 1 : 0;
-        }
-        __syncthreads();
-        int chunk_n = min(BIN_W * BIN_W, nsrc - base);
-        for (int j = 0; j < chunk_n; ++j)
-            if (keep[j])
+    // TWO PASSES over the same chunked scan: `pass 0` prices every pair into
+    // `resid` (the byte-stop's cheap pass), `pass 1` walks them exactly until the
+    // byte is pinned. The chunk cull is cooperative and repeated in both passes —
+    // it is one p2s per source per BLOCK, not per pixel.
+    //
+    // A per-thread `done` flag, NOT a break: the chunk loop carries
+    // `__syncthreads()`, so a thread that left it early would strand the rest of
+    // its block at the barrier. The flag costs a predicated branch per pair and
+    // keeps every lane on the same barrier schedule.
+    for (int pass = 0; pass < 2; ++pass) {
+        bool ub_only = (pass == 0);
+        if (!ub_only) margin = bs_margin(npair);
+        for (int base = 0; base < nsrc; base += BIN_W * BIN_W) {
+            int s = base + lane;
+            keep[lane] = 0;
+            if (s < nsrc) {
+                double de, dp, cpa, cpo, fr;
+                p2s(clat, clon, seg[s * 4], seg[s * 4 + 1], seg[s * 4 + 2], seg[s * 4 + 3],
+                    &de, &dp, &cpa, &cpo, &fr);
+                keep[lane] = (de <= sp[s * 12 + 1] + reach) ? 1 : 0;
+            }
+            __syncthreads();
+            int chunk_n = min(BIN_W * BIN_W, nsrc - base);
+            for (int j = 0; j < chunk_n; ++j) {
+                if (!keep[j]) continue;
+                if (!ub_only) {
+                    if (stop_on && !done && bs_decided(kept, kept + resid, margin)) done = true;
+                    if (done) continue;
+                }
                 line_source(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
-                            rlat, rlon, ralt, refl, eta, &seg[(base + j) * 4],
+                            rlat, rlon, ralt, refl, ub_only, &seg[(base + j) * 4],
                             &sp[(base + j) * 12], &semis[(base + j) * 24],
                             barr, nbarr, obst,
-                            tprof, ed, comp, bld, forr, imdp, e0, e1, e2, kept, skipped, arcstat,
-                            hc_key, hc_lo, hc_hi, &arc_drops);
-        __syncthreads();
+                            tprof, ed, comp, bld, forr, imdp, e0, e1, e2, kept, resid, npair,
+                            arcstat, hc_key, hc_lo, hc_hi, &arc_drops);
+            }
+            __syncthreads();
+        }
     }
     out[opix * 3 + 0] = e0;
     out[opix * 3 + 1] = e1;

@@ -1155,13 +1155,33 @@ impl Probe<'_> {
     }
 }
 
-// ── v4: the CUDA lane's arc rule, ported ──────────────────────────────────
+// ── v4: the CUDA lane's arc rule as it stood BEFORE 2026-08-09, ported ────
 //
-// Authority: `engine/noise-gpu/kernels/scatter.cu` — `arc_screen_bands` (:1370)
-// in its shipped configuration (`ARC_FOOTPRINT_CSR = 1`, `ARC_TRI_WALK = 1`,
-// `ARC_EDGE_UNION = 1`, `ARC_HULL_CACHE = 0`, `ARC_AZ_F32 = 0`) — plus the host
-// grouping it consumes, `noise_gpu::footprint_csr_for_index`
-// (engine/noise-gpu/src/lib.rs:366) and `is_convex_ring` (:310).
+// STALE ON PURPOSE, and it must not be read as "what the kernel does" any more.
+// The kernel now emits one arc per obstacle EDGE for every footprint, each arc
+// carrying its OWN nearest range and its own edge height — the rule
+// `ObstacleIndex::skyline_arcs_within` follows. What this port reproduces is the
+// PRE-FIX rule: one range for the whole footprint (`near_m` below, the min over
+// its edges) handed to every arc it emits, and one hull arc for a convex
+// footprint. That range then went into the `b < 1.0` admission floor, so any
+// footprint with a part within a metre of the receiver was rejected WHOLE —
+// measured at 4469 cells >0.5 dB and 17.63 dB max against the CPU lane on
+// 2206/1391, of which the per-edge rule leaves 2298 / 5.91 dB.
+//
+// Porting it forward is two edits — move the `near_m` computation into the emit
+// loop (per edge, from that edge alone) and drop the `convex` branch so
+// `n_emit` is always `k1 - k0` — but every verdict recorded in this file's
+// comments was scored on the rule as written, so a port has to be re-scored
+// against `reference33` in the same commit, not assumed.
+//
+// Authority for the pre-fix rule: `engine/noise-gpu/kernels/scatter.cu` —
+// `arc_screen_bands` in its then-shipped configuration (`ARC_FOOTPRINT_CSR = 1`,
+// `ARC_TRI_WALK = 1`, `ARC_EDGE_UNION = 1`, `ARC_HULL_CACHE = 0`,
+// `ARC_AZ_F32 = 0`) — plus the host grouping it consumed,
+// `noise_gpu::footprint_csr_for_index`. Neither `ARC_EDGE_UNION` nor the host's
+// convexity flag exists any more (both went with the hull emission on
+// 2026-08-09), so the port below is the only place the pre-fix rule still lives —
+// which is the point of it, and the reason its own `is_convex_ring` copy stays.
 //
 // WHY: both lanes pass their own gates and still disagree by 14.94 dB on 9 % of
 // a dense Dobříš rail tile. `v3` is the CPU rule scored against `reference33`;
@@ -1190,8 +1210,10 @@ impl Probe<'_> {
 //   * `ARC_MAX_MERGED` cannot bind on these scenes (5 footprints, cap 32); it
 //     is ported anyway so the behaviour is on the record.
 
-/// f32 slots per footprint in [`FootprintIndex::foot_box`] —
-/// `noise_gpu::FOOT_BOX_STRIDE`: `(min_x, min_y, max_x, max_y, height_m, convex)`.
+/// f32 slots per footprint in [`FootprintIndex::foot_box`]:
+/// `(min_x, min_y, max_x, max_y, height_m, convex)` — what
+/// `noise_gpu::FOOT_BOX_STRIDE` was before the per-edge arcs took its last two
+/// slots away, since the pre-fix rule needs both.
 const FOOT_BOX_STRIDE: usize = 6;
 /// `ARC_MIN_SPAN` (scatter.cu:163) = `ArcBounds::min_span_rad`.
 const GPU_ARC_MIN_SPAN: f64 = 0.01;
@@ -1337,9 +1359,11 @@ fn footprint_csr(view: &GpuGridView<'_>) -> (Vec<u32>, Vec<u32>, Vec<f32>) {
     (starts, refs, boxes)
 }
 
-/// `noise_gpu::is_convex_ring` — do these edges form ONE closed chain with
-/// consistently signed turns? Conservative: anything unverifiable is reported
-/// non-convex, which only costs the exact per-edge path.
+/// The host's retired `noise_gpu::is_convex_ring` — do these edges form ONE
+/// closed chain with consistently signed turns? Conservative: anything
+/// unverifiable is reported non-convex, which only costs the exact per-edge path.
+/// The live lane has no convexity notion left, so this is now the rule's only
+/// copy, which is where a pre-fix port should keep it.
 fn is_convex_ring(edges_xyxyh: &[f32], refs: &[u32]) -> bool {
     let n = refs.len();
     if n < 3 {
