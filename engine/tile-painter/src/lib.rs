@@ -19,6 +19,7 @@
 
 pub mod accumulator;
 pub mod airborne;
+pub mod byte_stop;
 pub mod cruise;
 pub mod cruise_field;
 pub mod engine_spans;

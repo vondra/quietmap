@@ -54,6 +54,8 @@ pub struct LineScatterStats {
     pub rows: usize,
     pub path_calls: u64,
     pub skipped_calls: u64,
+    /// (source, receiver) pairs priced — the skip fraction's denominator.
+    pub pairs: u64,
     /// Ray-march cadence samples (×4 = raster cell reads).
     pub raster_samples: u64,
 }
@@ -64,6 +66,7 @@ impl From<ScatterStats> for LineScatterStats {
             rows: s.rows,
             path_calls: s.path_calls,
             skipped_calls: s.skipped_calls,
+            pairs: s.pairs,
             raster_samples: s.raster_samples,
         }
     }

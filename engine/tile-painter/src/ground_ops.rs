@@ -17,12 +17,25 @@
 //!  * Half-pixel divergence floor on both `d_endpoint` and `d_perp`, anti-aliasing
 //!    the bright dots a runway/taxiway crossing a pixel obliquely would produce.
 //!
-//! Energy-budget skip (shared machinery with the line/point kernels): a microseg
-//! whose best-case contribution at a pixel — no terrain/screening/veg + max ground
-//! gain, exact geometry, provably ≥ exact — keeps the pixel's total skipped Lden
-//! within `η` of its kept Lden is dropped without the path build (bound
-//! `≤ 10·log10(1+η)`). The mixed-geometry upper bound is two dot-products (one per
-//! veh_kind family) over the microseg's Lden-weighted band energy.
+//! Energy-budget skip: a microseg whose best-case contribution at a pixel — no
+//! terrain/screening/veg + max ground gain, exact geometry, provably ≥ exact —
+//! keeps the pixel's total skipped Lden within `η` of its kept Lden is dropped
+//! without the path build (bound `≤ 10·log10(1+η)`). The mixed-geometry upper
+//! bound is two dot-products (one per veh_kind family) over the microseg's
+//! Lden-weighted band energy.
+//!
+//! THIS IS THE LAST KERNEL STILL ON THAT RULE, and the rule is known bad: it
+//! compares against a `kept` that starts at zero and only grows, so its verdict
+//! depends on the load order and it admits up to `10·log10(1+η)` = 1.46 dB of
+//! energy never counted. The line/point kernels replaced it with the exact
+//! byte-space interval ([`crate::byte_stop`], [`crate::scatter_band`]) in
+//! 2026-08. Converting this one is a change of its own size, not a rename: the
+//! walk has to go pixel-major so a receiver sees all its microsegs before any is
+//! computed, and the accumulation order has to be preserved separately. What it
+//! does NOT need is new byte-stop machinery — `byte_stop::decided` takes the Lden
+//! energy with the per-period weights already folded in, and this layer's are
+//! `W_p / (n_days × period_seconds_p)` (Convention B, below) instead of the
+//! surface layers' bare `W_p`.
 //!
 //! Energy normalisation (Convention B / `airport_traffic_v6`): `band_energy_lin` is
 //! raw Σ over n_days; the caller's [`crate::wire_hm3::collapse_lden_u8`] divides by

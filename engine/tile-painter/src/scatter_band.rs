@@ -1,7 +1,7 @@
 //! Generic surface-scatter kernel for the road/rail line sources
 //! ([`crate::scatter_line`], via its `LineGeometry`) and the industrial/building
 //! point sources ([`crate::scatter_point`], via its `PointGeometry`). Both walk
-//! the SAME receiver-block structure, energy-budget skip, terrain ray-march,
+//! the SAME receiver-block structure, byte-space stop, terrain ray-march,
 //! `max(A_gr, A_bar)` path assembly, and 3-period accumulation; they differ ONLY
 //! in the per-pixel geometry that turns a (source, receiver) pair into the
 //! propagation terms. That divergence is the [`PixelGeometry`] trait; everything
@@ -23,25 +23,49 @@
 //! mixed-geometry skip bound, and a different Lden collapse, so its band body
 //! stays its own.
 //!
-//! ## Energy-budget skip (receiver-band ownership)
+//! ## Stopping in byte space (receiver-block ownership)
 //!
-//! Most far/quiet sources are inaudible at a pixel a louder near source already
-//! dominates — computing their exact terrain/diffraction path is wasted work an
-//! aggregate Lden can't resolve. So per pixel we track the kept Lden energy and a
-//! `skipped` accumulator: a pair whose BEST-CASE contribution (a cheap upper
-//! bound — no terrain/screening/veg + max ground gain ⇒ provably ≥ exact) keeps
-//! total skipped within `BUDGET_ETA` of kept is dropped without the profile
-//! build. Total under-read is bounded by `10·log10(1+η) = 1.5 dB`. Unlike a
-//! reach-radius cut this is PER-PIXEL energy-aware: an isolated rural dwelling
-//! whose only source is one far road has no louder source to mask it, so `kept`
-//! stays ~0 and the source is computed exactly.
+//! Most far/quiet sources cannot move a pixel a louder near source already
+//! dominates — computing their exact terrain/diffraction path is wasted work the
+//! OUTPUT cannot resolve. And the output is one `u8 × 0.5 dB` cell, so a pixel is
+//! finished once its BYTE is pinned, not once its value is. Per pixel the kernel
+//! therefore keeps an interval — `P⁻` exactly computed, `P⁺` adding the cheap
+//! free-field bound ([`budget_ub_lden`], provably ≥ exact) over everything not yet
+//! computed — and stops the moment both ends quantise to the same byte
+//! ([`crate::byte_stop`]). Every completion of the tail then writes the same
+//! cell, so the stop is EXACT: bit-identical output, with the exact per-pair path
+//! as the fallback that guarantees termination.
 //!
-//! The skip needs each pixel's running `kept` to see ALL its sources, so the
-//! scatter is parallelised over receiver BLOCKS (not over sources): one block
-//! owns a square pixel rectangle ([`recv_block_regions`]) and loops every source
-//! clipped to it. (Source-major `par_iter` splits a pixel's sources across
-//! threads → partial budgets, measured ~10 % skip vs ~30-46 % for block
-//! ownership.)
+//! This REPLACED an energy-budget skip (`skipped ≤ η·kept`, η = 0.40, 2026-08),
+//! and the replacement is a bug fix before it is an optimisation. That test ran
+//! against a `kept` which starts at zero and only grows, so it (a) gave a
+//! different answer for a different source-load order — measured on dense Praha,
+//! two orders keep different source sets, ~75 k pairs apart — (b) admitted up to
+//! `10·log10(1+η) = 1.46 dB` of energy never counted at all (NoiseModelling's
+//! comparable default is 0.1 dB, 15× tighter), and (c) was one of the standing
+//! CPU↔GPU discrepancies. An interval in byte space has none of the three: it
+//! never drops energy that could change the answer, so the answer no longer
+//! depends on order (`tests::source_order_never_changes_the_answer`).
+//!
+//! It also strictly dominates the old rule where the old rule was weakest. An
+//! isolated rural dwelling reached by one far road has no louder source to mask
+//! it, so `kept` stayed ~0 and η never skipped anything; the interval closes at
+//! pair ZERO whenever the pixel's whole remaining bound is still under the 0 dB
+//! NO_DATA floor.
+//!
+//! The walk needs each pixel to see ALL its sources, so the scatter is
+//! parallelised over receiver BLOCKS (not over sources): one block owns a square
+//! pixel rectangle ([`recv_block_regions`]) and, inside it, each pixel walks
+//! every source clipped to the block. (Source-major `par_iter` would split a
+//! pixel's sources across threads, and a per-thread interval is a partial one.)
+//!
+//! PIXEL-MAJOR INSIDE THE BLOCK, and the order of the walk is load-bearing for
+//! COST but never for the ANSWER. Pairs are walked cheapest-bound-last so the
+//! interval closes as early as possible; they are ACCUMULATED into the tile in
+//! source-load order regardless (`BandScratch::pair_pow`), because the f32
+//! accumulator and the [`ArcSkyline`]'s per-sector growth are both mildly
+//! order-sensitive and a pixel that never closes must stay bit-identical to a
+//! kernel with no stopping at all.
 
 use std::f64::consts::LN_10;
 use std::sync::OnceLock;
@@ -64,6 +88,7 @@ use raster_reader::fused_tile_z13::{FusedTileZ13, TileBbox, TILE_PX};
 use rayon::prelude::*;
 
 use crate::accumulator::{TileAccumulator, NUM_PERIODS};
+use crate::byte_stop;
 
 pub(crate) const NUM_BANDS: usize = 8;
 
@@ -108,16 +133,21 @@ pub(crate) fn recv_block_regions() -> Vec<(usize, usize, usize, usize)> {
         .collect()
 }
 
-/// Energy-budget skip tolerance: total skipped Lden energy stays within η of
-/// the kept energy, so the displayed under-read is `≤ 10·log10(1+η)`. η=0.40 ⇒
-/// ≤ 1.5 dB (HM3's 1 dB quantisation can show a 2.0 dB byte step).
-/// The error concentrates at LOUD pixels (large budget); faint near-floor
-/// pixels keep a tiny budget so they barely skip and stay near-exact.
+/// Energy-budget skip tolerance for [`crate::ground_ops`], the one kernel still
+/// on the approximate rule: total skipped Lden energy stays within η of the kept
+/// energy, so the displayed under-read is `≤ 10·log10(1+η)` = 1.46 dB at η=0.40.
 /// `SURFACE_BUDGET_ETA` lowers it (clamped to `[0, this]`; 0 = exact reference).
+///
+/// This kernel does NOT use it any more — see the module docs: an order-dependent
+/// test against a growing `kept` was replaced by the exact byte-space interval.
+/// ground-ops has its own band body (per-row event weights, a mixed-geometry
+/// bound, and an `n_days × period_seconds` Lden collapse), so converting it is a
+/// separate change; its Lden coefficients are the only thing
+/// [`crate::byte_stop`] needs to cover it too.
 const BUDGET_ETA: f64 = 0.40;
 
 /// Clamp the env override to `[0, BUDGET_ETA]`: it may only make the skip MORE
-/// conservative (or disable it), never exceed the validated ≤1.5 dB bound — an
+/// conservative (or disable it), never exceed the validated ≤1.46 dB bound — an
 /// accidental `SURFACE_BUDGET_ETA=1.0` would otherwise mean a 3 dB under-read.
 pub(crate) fn budget_eta() -> f64 {
     static ETA: OnceLock<f64> = OnceLock::new();
@@ -129,6 +159,22 @@ pub(crate) fn budget_eta() -> f64 {
             .map(|e| e.min(BUDGET_ETA))
             .unwrap_or(BUDGET_ETA)
     })
+}
+
+/// Is byte-space stopping on? `SURFACE_BUDGET_ETA=0` turns it off, i.e. computes
+/// every pair — the exact reference, in the SAME binary. The stop's claim is
+/// bit-identical output, and the only honest way to check that is to paint both
+/// arms with one build and diff the bytes.
+///
+/// It rides the η env rather than getting one of its own because ONE variable has
+/// to put BOTH lanes on the exact path: the CUDA twin has no room for a second
+/// flag and reads the stop's ON/OFF out of `meta[9]`, the old η slot
+/// (`scatter.cu`'s `line`). With two envs the CPU↔GPU parity gate could compare a
+/// stopped kernel against an unstopped one and blame the difference on the GPU.
+/// There is nothing to tune either way — an interval in byte space has no
+/// tolerance, so an on/off is the whole knob.
+pub(crate) fn byte_stop_enabled() -> bool {
+    budget_eta() != 0.0
 }
 
 /// `fast_exp_f64` is ~1.45e-6 non-monotone at its range-reduction joints (Codex
@@ -307,15 +353,55 @@ pub(crate) fn db_to_lin_a(path_db: f64, band: usize) -> f64 {
     fast_exp_f64((path_db + A_WEIGHTING[band]) * LN_10 * 0.1)
 }
 
-/// Best-case Lden energy of a source→pixel pair for the budget skip: no
-/// terrain/screening/veg + the most favourable ground any band can meet
-/// ([`GROUND_GAIN_UB_DB`] = 3.0 dB, the CNOSSOS hard-ground floor attained at
-/// G = 0 in every band — see the constant for why it is no longer the per-band
-/// `(-CF).max(0)`), inflated by [`UB_SAFETY`] — provably ≥ the exact
+/// Best-case Lden energy of a source→pixel pair — the byte-space stop's `P⁺`
+/// per pair: no terrain/screening/veg + the most favourable ground any band can
+/// meet ([`GROUND_GAIN_UB_DB`] = 3.0 dB, the CNOSSOS hard-ground floor attained
+/// at G = 0 in every band — see the constant for why it is no longer the
+/// per-band `(-CF).max(0)`), inflated by [`UB_SAFETY`] — provably ≥ the exact
 /// contribution. Shared verbatim by the line + point kernels so the
 /// `ub ≥ exact` soundness invariant lives in one place. `base_db` already folds
 /// in divergence/FLC/reflection; `emission_lden` is the pair's Lden-weighted
 /// band spectrum.
+///
+/// ## How much a TIGHTER bound would buy, and what it costs to stay sound
+///
+/// This bound is loose by ~22 dB (per-pair median), which is what caps the stop:
+/// replayed over 47.1 M recorded pairs from six tiles, walking loudest-bound
+/// first closes 51.6 % of the way through the pair list on average (0 byte
+/// mismatches). Per-pixel median slack splits GROUND / TERRAIN / OBSTACLE as
+/// 1.6-1.7 / 2.2-3.1 / 2.9-4.8 dB in Praha, 4.0-4.1 / 1.4-2.2 / 0.5-1.6 in
+/// suburb, 4.6 / 5.8-9.8 / 0.3-0.6 in open country. Perfect ground knowledge
+/// alone would take the walk to 45.5 %, perfect ground+terrain to 22.9 %.
+/// **Terrain in open country is the lever; buildings outside dense cities are
+/// not**, which is why an obstacle-side bound is not attempted here (and a
+/// cp-ray one is measured WRONG for a different reason: of pairs with a ≥10 m
+/// building on the ray at d > 60 m, 30.05 % are screened by under 0.5 dB,
+/// because the arc energy-averages over the whole angular span).
+///
+/// The terrain lever has a REAL obstacle, found while building it. A K-sample
+/// subset of a ray's own cadence gives `max-δ(subset) ≤ max-δ(full)`, and
+/// Maekawa is monotone in δ, so a coarse march is a sound LOWER bound on that
+/// RAY's terrain attenuation (measured: K = 8 recovers 79-84 % of the terrain
+/// dB, 0 violations in 240 k pairs, at ~4-5 % of a pair's cost). But the shipped
+/// exact value is not one ray's terrain: with the angular quadrature on
+/// ([`seg_samples`] = 5, the default whenever there is a vector obstacle store)
+/// `seg_sampling::sampled_gob_bands` composites EACH BUCKET's own terrain —
+/// pinned by its `composite_uses_each_buckets_own_terrain` — and a cp-ray march
+/// bounds none of the others. Sound options are (a) a coarse march per bucket,
+/// `n_seg × K` samples, which the energy mean then averages legitimately, or
+/// (b) apply it only where the exact path really is a single cp ray (point
+/// sources, raster-fallback regions, `QM_SEG_SAMPLES=1`). Not (c) a cp-ray march
+/// used under the quadrature: that reads as tighter and is simply unsound.
+///
+/// The GROUND lever has no such problem — `ground_g` is one scalar shared by
+/// every bucket, so replacing `GROUND_GAIN_UB_DB` with `A_gr(i, G_lo)` for any
+/// lower bound `G_lo` is sound for the fan too. It needs a max-pooled
+/// imperviousness pyramid to bound the path average without marching (measured:
+/// K = 8 chunks recover 56-65 % of the ground dB in open country but only 7-11 %
+/// in a city centre, at ~1-2 % of a pair), and **uniform 1/K chunk weights are
+/// NOT sound** — the coarse middle throws one 737 m interval across several
+/// chunks (7 violations in 40 k). The weights have to be the cadence's own
+/// trapezoid mass, which is a closed function of `dist_m` and needs no march.
 #[inline]
 pub(crate) fn budget_ub_lden(base_db: f64, atm_d_km: f64, emission_lden: &[f64; NUM_BANDS]) -> f64 {
     let mut ub = 0.0;
@@ -327,9 +413,11 @@ pub(crate) fn budget_ub_lden(base_db: f64, atm_d_km: f64, emission_lden: &[f64; 
 }
 
 /// Per-worker scatter state, threaded through the blocks one rayon worker folds.
-/// `kept`/`skipped` are full-tile but each block touches only its own (disjoint)
-/// pixel rectangle, so they need no clearing between a worker's blocks. Shared by
-/// the line, point, and ground-ops kernels.
+/// Shared by the line, point, and ground-ops kernels — `kept`/`skipped` are the
+/// energy-budget skip's per-pixel state and only [`crate::ground_ops`] still
+/// writes them (this kernel stops in byte space instead). They are full-tile but
+/// each block touches only its own (disjoint) pixel rectangle, so they need no
+/// clearing between a worker's blocks.
 pub(crate) struct BandScratch {
     pub(crate) local: TileAccumulator,
     pub(crate) profile: PathProfile,
@@ -337,6 +425,8 @@ pub(crate) struct BandScratch {
     pub(crate) skipped: Vec<f64>,
     pub(crate) path_calls: u64,
     pub(crate) skipped_calls: u64,
+    /// Pairs this worker's cheap pass priced — see [`ScatterStats::pairs`].
+    pairs_seen: u64,
     /// Raster cadence samples taken by `build_path_profile` (the ray-march). Each
     /// reads a 4-cell bilinear quad, so cell reads = 4× this — the numerator of
     /// the read-redundancy metric (cell reads ÷ grid cells = ×-reread).
@@ -346,17 +436,13 @@ pub(crate) struct BandScratch {
     /// Arc-screening (fix-pack Fix 1) interval-ray buffers, amortised across
     /// every (source, pixel) pair this worker folds.
     pub(crate) arc_scratch: ArcScreeningScratch,
-    /// One obstacle SKYLINE per pixel of the receiver block this worker owns,
-    /// in block-local `(py - py_lo) * w + (px - px_lo)` order.
-    ///
-    /// The scatter loops SOURCES outside PIXELS (block ownership is what keeps
-    /// the energy-budget skip effective), so a single skyline slot would rebuild
-    /// on every pair and buy nothing. One slot per pixel of the block instead:
-    /// each receiver's skyline is built on the first source that needs it and
-    /// reused by every later source — the same "once per receiver" the popup
-    /// kernels get for free, and the same thing the CUDA lane gets from
-    /// thread-per-pixel.
-    pub(crate) skylines: Vec<ArcSkyline>,
+    /// The CURRENT receiver's obstacle skyline, reset when the walk moves to the
+    /// next pixel. One slot suffices because the walk is pixel-major: a receiver's
+    /// whole source list is done before the next receiver starts, so the skyline is
+    /// built on the first source that needs it and reused by every later one — the
+    /// same "once per receiver" the popup kernels get for free, and the same thing
+    /// the CUDA lane gets from thread-per-pixel.
+    pub(crate) skyline: ArcSkyline,
     /// Bounds ([`tile_arc_bounds`]) read once per worker, never per pair.
     pub(crate) arc_bounds: ArcBounds,
     /// Bucket-ray buffers for the angular quadrature ([`seg_samples`]). Kept
@@ -365,6 +451,75 @@ pub(crate) struct BandScratch {
     /// resolves them (and exactly as `arc_screening` resolves them for its own
     /// interval rays).
     pub(crate) seg_scratch: SegSampleScratch,
+    /// Prepared-source indices whose reach box meets the block being folded —
+    /// resolved ONCE per block, then re-scanned per pixel. Without it the
+    /// pixel-major walk would re-clip all of `prep` at every one of the block's
+    /// 256 receivers.
+    pairs_cand: Vec<u32>,
+    /// The current pixel's pairs and their cheap bounds, sorted loudest-bound
+    /// first (see [`PairBound`]).
+    pairs: Vec<PairBound>,
+    /// `suffix[i]` = Σ bound over `pairs[i..]`, i.e. `P⁺ − P⁻` when the walk
+    /// stands at `i`. Built once per pixel from the sorted bounds instead of
+    /// decremented along the walk: a running subtraction of a f64 sum loses
+    /// digits to cancellation, and a residual that reads too SMALL is an
+    /// interval that closes too early — the one way this rule could stop being
+    /// exact.
+    suffix: Vec<f64>,
+    /// Per-period power of each pair the walk computed exactly, indexed by the
+    /// pair's SOURCE-LOAD position, plus a hit flag. The walk visits pairs
+    /// loudest-bound-first but the tile is accumulated in source-load order, so
+    /// a pixel that never closes lands byte-for-byte where an unstopped kernel
+    /// lands it (f32 addition does not commute, and [`ArcSkyline`] growth is
+    /// per-sector order-sensitive by its own module's measurement).
+    pair_pow: Vec<[f32; NUM_PERIODS]>,
+    pair_hit: Vec<bool>,
+}
+
+/// One (source, receiver) pair as the cheap pass records it: which prepared
+/// source it came from, where it sat in source-load order, and its free-field
+/// Lden bound.
+///
+/// Sorting these by descending `ub` is what makes the interval close early — the
+/// loudest contributors go in first, so `P⁻` climbs as fast as it can while the
+/// tail `P⁺` adds shrinks as fast as it can. It changes only the COST: any order
+/// commits the same byte, which is what `tests::source_order_never_changes_the_answer`
+/// pins.
+///
+/// The sort is not a tuning preference, it IS the optimisation. Measured
+/// 2026-08-09, one binary, both arms back to back on an idle box (CPU-seconds;
+/// the A→B→A sandwich put box drift at ≤0.14 %):
+///
+/// ```text
+///                       pairs skipped        CPU-s     vs the old η=0.40
+///   d1open  loudest       49.9 %             4 761        1.17× faster
+///           load          11.0 %             8 387        1.51× SLOWER
+///   rail    loudest       51.7 %             4 777        1.14× faster
+///           load           8.6 %             9 909        1.81× SLOWER
+/// ```
+///
+/// In load order a pixel's dominant source arrives at a random point in the list,
+/// so the interval cannot close until nearly everything has been computed and the
+/// kernel comes out SLOWER than the approximate rule it replaced.
+///
+/// The price is stated exactly, and it is not the stop's. Against the pre-stop
+/// kernel at η=0, walking in load order is bit-identical (0 of 256 496 cells on
+/// rail); walking loudest-first differs at 1 cell on d1open and 29 on rail — RMS
+/// 0.0088 dB, 2 cells over 0.5 dB, max 3.5 dB at one cell — because [`ArcSkyline`]
+/// grows its per-sector radius on demand and is mildly order-sensitive by its own
+/// module's measurement. With the stop OFF and ON, loudest-first paints the same
+/// FILE byte for byte on both tiles. It does mean the CPU no longer walks pairs in
+/// the order `scatter.cu` does, so a CPU↔GPU comparison is a >0.5 dB / max-dB one
+/// until that skyline bookkeeping is order-free.
+#[derive(Clone, Copy)]
+struct PairBound {
+    /// Index into the `prep` slice.
+    src: u32,
+    /// Position in source-load order — the ACCUMULATION order (see
+    /// `BandScratch::pair_pow`).
+    ord: u32,
+    /// [`budget_ub_lden`] for this pair: provably ≥ its exact Lden contribution.
+    ub: f64,
 }
 
 impl BandScratch {
@@ -377,12 +532,18 @@ impl BandScratch {
             skipped: vec![0.0; n],
             path_calls: 0,
             skipped_calls: 0,
+            pairs_seen: 0,
             raster_samples: 0,
             cand_scratch: Vec::new(),
             arc_scratch: ArcScreeningScratch::new(),
-            skylines: Vec::new(),
+            skyline: ArcSkyline::default(),
             arc_bounds: tile_arc_bounds(),
             seg_scratch: SegSampleScratch::new(),
+            pairs_cand: Vec::new(),
+            pairs: Vec::new(),
+            suffix: Vec::new(),
+            pair_pow: Vec::new(),
+            pair_hit: Vec::new(),
         }
     }
 }
@@ -688,6 +849,11 @@ pub(crate) struct ScatterStats {
     pub(crate) rows: usize,
     pub(crate) path_calls: u64,
     pub(crate) skipped_calls: u64,
+    /// (source, receiver) pairs the cheap pass priced — the DENOMINATOR the skip
+    /// fraction actually wants. `path_calls` counts profile builds, and with the
+    /// angular quadrature one pair builds `1 + n_seg` of them, so
+    /// `skipped/(path+skipped)` understated the pair-level skip several-fold.
+    pub(crate) pairs: u64,
     /// Ray-march cadence samples (×4 = raster cell reads). See [`BandScratch`].
     pub(crate) raster_samples: u64,
 }
@@ -739,24 +905,30 @@ pub(crate) fn scatter_tile_with_cfg<G: PixelGeometry>(
         };
     }
 
-    let eta = budget_eta();
-    let (merged, path_calls, skipped_calls, raster_samples) = recv_block_regions()
+    let (merged, path_calls, skipped_calls, pairs, raster_samples) = recv_block_regions()
         .into_par_iter()
         .fold(BandScratch::new, |mut s, (py_lo, py_hi, px_lo, px_hi)| {
             if py_lo < py_hi && px_lo < px_hi {
                 scatter_band(
-                    geo, tile, &prep, barriers, obstacles, py_lo, py_hi, px_lo, px_hi, eta, cfg,
-                    &mut s,
+                    geo, tile, &prep, barriers, obstacles, py_lo, py_hi, px_lo, px_hi, cfg, &mut s,
                 );
             }
             s
         })
-        .map(|s| (s.local, s.path_calls, s.skipped_calls, s.raster_samples))
+        .map(|s| {
+            (
+                s.local,
+                s.path_calls,
+                s.skipped_calls,
+                s.pairs_seen,
+                s.raster_samples,
+            )
+        })
         .reduce(
-            || (TileAccumulator::new(), 0u64, 0u64, 0u64),
+            || (TileAccumulator::new(), 0u64, 0u64, 0u64, 0u64),
             |mut a, b| {
                 a.0.merge_from(&b.0);
-                (a.0, a.1 + b.1, a.2 + b.2, a.3 + b.3)
+                (a.0, a.1 + b.1, a.2 + b.2, a.3 + b.3, a.4 + b.4)
             },
         );
     accum.merge_from(&merged);
@@ -764,13 +936,15 @@ pub(crate) fn scatter_tile_with_cfg<G: PixelGeometry>(
         rows: n_rows,
         path_calls,
         skipped_calls,
+        pairs,
         raster_samples,
     }
 }
 
 /// Scatter every source that reaches the block `[py_lo, py_hi) × [px_lo, px_hi)`
-/// into its pixels, applying the per-pixel energy-budget skip. The single hot
-/// loop both line and point share; the per-pixel geometry is `geo.pixel`.
+/// into its pixels, stopping each pixel as soon as its output BYTE is decided
+/// ([`crate::byte_stop`], and the module docs for why that is exact). The single
+/// hot loop both line and point share; the per-pixel geometry is `geo.pixel`.
 #[allow(clippy::too_many_arguments)]
 fn scatter_band<G: PixelGeometry>(
     geo: &G,
@@ -782,52 +956,99 @@ fn scatter_band<G: PixelGeometry>(
     py_hi: usize,
     px_lo: usize,
     px_hi: usize,
-    eta: f64,
     cfg: Option<CoarseMid>,
     s: &mut BandScratch,
 ) {
-    // One skyline slot per pixel of this block, all stale — the previous block's
-    // receivers are gone.
-    let block_w = px_hi - px_lo;
-    s.skylines
-        .resize_with(block_w * (py_hi - py_lo), ArcSkyline::default);
-    for sk in s.skylines.iter_mut() {
-        sk.reset();
+    // Sources reaching this block AT ALL, resolved once. The walk below is
+    // pixel-major, so without the shortlist every one of the block's 256
+    // receivers would re-clip the whole `prep` slice.
+    s.pairs_cand.clear();
+    for (i, pr) in prep.iter().enumerate() {
+        let (rpy0, rpy1, rpx0, rpx1) = pr.reach_box();
+        if rpy0 < py_hi && rpy1 >= py_lo && rpx0 < px_hi && rpx1 >= px_lo {
+            s.pairs_cand.push(i as u32);
+        }
+    }
+    if s.pairs_cand.is_empty() {
+        return;
     }
     let n_seg = seg_samples();
-    for pr in prep {
-        let (rpy0, rpy1, rpx0, rpx1) = pr.reach_box();
-        let py0 = rpy0.max(py_lo);
-        let py1 = rpy1.min(py_hi - 1);
-        if py0 > py1 {
-            continue;
-        }
-        let px0 = rpx0.max(px_lo);
-        let px1 = rpx1.min(px_hi - 1);
-        if px0 > px1 {
-            continue;
-        }
-        let emission_lin = pr.emission_lin();
-        let emission_lden = pr.emission_lden();
+    let stop_on = byte_stop_enabled();
 
-        for py in py0..=py1 {
-            let rx_lat = tile.rx_lat[py];
-            let row_base = py * TILE_PX;
-            for px in px0..=px1 {
-                let rx_lon = tile.rx_lon[px];
-                let idx = row_base + px;
-                let rx_alt = tile.rx_alt_m[idx] as f64;
-                let refl = tile.rx_refl_db[idx] as f64;
+    for py in py_lo..py_hi {
+        let rx_lat = tile.rx_lat[py];
+        let row_base = py * TILE_PX;
+        for px in px_lo..px_hi {
+            let rx_lon = tile.rx_lon[px];
+            let idx = row_base + px;
+            let rx_alt = tile.rx_alt_m[idx] as f64;
+            let refl = tile.rx_refl_db[idx] as f64;
+
+            // ── cheap pass: this receiver's pairs and their bounds ──────────
+            // `P⁺` needs the bound over the WHOLE tail, so every pair is priced
+            // before any is computed. This is the same per-pair bound the
+            // superseded budget skip already paid for on every pair; what it
+            // buys now is a certain upper bound instead of a running comparison.
+            s.pairs.clear();
+            for k in 0..s.pairs_cand.len() {
+                let ci = s.pairs_cand[k];
+                let pr = &prep[ci as usize];
+                let (rpy0, rpy1, rpx0, rpx1) = pr.reach_box();
+                if py < rpy0 || py > rpy1 || px < rpx0 || px > rpx1 {
+                    continue;
+                }
                 let Some(t) = geo.pixel(pr, tile, rx_lat, rx_lon, rx_alt, refl) else {
                     continue;
                 };
+                let ub = budget_ub_lden(t.base_db, t.atm_d_km, pr.emission_lden());
+                let ord = s.pairs.len() as u32;
+                s.pairs.push(PairBound { src: ci, ord, ub });
+            }
+            let n_pairs = s.pairs.len();
+            if n_pairs == 0 {
+                continue;
+            }
+            s.pairs_seen += n_pairs as u64;
+            // Loudest bound first — cost only, never the answer (see [`PairBound`]).
+            s.pairs.sort_unstable_by(|a, b| b.ub.total_cmp(&a.ub));
+            s.suffix.clear();
+            s.suffix.resize(n_pairs + 1, 0.0);
+            for k in (0..n_pairs).rev() {
+                s.suffix[k] = s.suffix[k + 1] + s.pairs[k].ub;
+            }
+            s.pair_hit.clear();
+            s.pair_hit.resize(n_pairs, false);
+            if s.pair_pow.len() < n_pairs {
+                s.pair_pow.resize(n_pairs, [0.0; NUM_PERIODS]);
+            }
+            let margin = byte_stop::accum_margin(n_pairs);
+            s.skyline.reset();
+            let mut p_lo = 0.0f64;
+            let mut walked = n_pairs;
 
-                let ub_lden = budget_ub_lden(t.base_db, t.atm_d_km, emission_lden);
-                if s.skipped[idx] + ub_lden <= eta * s.kept[idx] {
-                    s.skipped[idx] += ub_lden;
-                    s.skipped_calls += 1;
-                    continue;
+            for k in 0..n_pairs {
+                // ── THE STOP ────────────────────────────────────────────────
+                // `[P⁻, P⁺]` brackets every completion of the tail, so once both
+                // ends quantise to one byte the tail cannot be seen and the
+                // pixel is finished. Tested BEFORE the pair is priced in, so the
+                // pair that would have closed it is never computed either.
+                if stop_on
+                    && byte_stop::decided(
+                        p_lo,
+                        p_lo + s.suffix[k],
+                        byte_stop::SURFACE_LDEN_SCALE,
+                        margin,
+                    )
+                {
+                    walked = k;
+                    break;
                 }
+                let PairBound { src, ord, ub } = s.pairs[k];
+                let pr = &prep[src as usize];
+                let emission_lin = pr.emission_lin();
+                let Some(t) = geo.pixel(pr, tile, rx_lat, rx_lon, rx_alt, refl) else {
+                    continue;
+                };
 
                 build_surface_profile(
                     tile,
@@ -856,7 +1077,6 @@ fn scatter_band<G: PixelGeometry>(
                 // ground, never adds. Two ways to get it for a LINE segment,
                 // which subtends an angle at this receiver and screens
                 // differently across it, and one for everything else.
-                let slot = (py - py_lo) * block_w + (px - px_lo);
                 // (1) UNIFORM ANGULAR QUADRATURE ([`seg_samples`], the default):
                 // N bucket rays across the fan, energy-averaged. Tried FIRST
                 // because when it applies the cp ray's own screening is dead
@@ -880,17 +1100,12 @@ fn scatter_band<G: PixelGeometry>(
                             set,
                             s.arc_bounds,
                         );
-                        let BandScratch {
-                            skylines,
-                            seg_scratch,
-                            ..
-                        } = &mut *s;
                         sampled_gob_bands(
                             &query,
                             &SurfaceCadenceRasters { tile, cfg },
                             n_seg,
-                            &mut skylines[slot],
-                            seg_scratch,
+                            &mut s.skyline,
+                            &mut s.seg_scratch,
                         )
                     }
                     _ => None,
@@ -956,7 +1171,7 @@ fn scatter_band<G: PixelGeometry>(
                                 arc_screened_attenuation(
                                     &query,
                                     &SurfaceCadenceRasters { tile, cfg },
-                                    &mut s.skylines[slot],
+                                    &mut s.skyline,
                                     &mut s.arc_scratch,
                                 )
                             }
@@ -983,18 +1198,52 @@ fn scatter_band<G: PixelGeometry>(
                 }
 
                 let mut kept_add = 0.0;
+                let mut pow = [0.0f32; NUM_PERIODS];
                 for p in 0..NUM_PERIODS {
                     let mut power = 0.0f64;
                     for i in 0..NUM_BANDS {
                         power += emission_lin[p][i] as f64 * pf[i];
                     }
                     if power.is_finite() && power > 0.0 {
-                        s.local
-                            .add_energy_at(py as u32, px as u32, p as u8, power as f32);
+                        pow[p] = power as f32;
                         kept_add += power * LDEN_WEIGHTS[p];
                     }
                 }
-                s.kept[idx] += kept_add;
+                // ── THE SOUNDNESS INVARIANT, IN THE KERNEL ──────────────────
+                // The whole method rests on `ub ≥ exact` for every single pair:
+                // if one bound ever under-reads its pair, `P⁺` stops being an
+                // upper bound and a pixel can commit the wrong byte. It is one
+                // f64 compare per exactly-computed pair — cheap enough to assert
+                // in RELEASE, which is the only build that paints the world.
+                // (`UB_SAFETY`'s 1e-4 head-room absorbs `fast_exp_f64`'s ~1.4e-6
+                // non-monotonicity and the band/period summation-order split
+                // between `emission_lden` and this loop; a failure here is a real
+                // bound bug, not float noise.)
+                assert!(
+                    kept_add <= ub,
+                    "byte-stop bound violated: exact {kept_add:e} > ub {ub:e} \
+                     (py={py} px={px} src={src})"
+                );
+                p_lo += kept_add;
+                s.pair_hit[ord as usize] = true;
+                s.pair_pow[ord as usize] = pow;
+            }
+            s.skipped_calls += (n_pairs - walked) as u64;
+
+            // ── accumulate in SOURCE-LOAD order ─────────────────────────────
+            // Not the walk's order: f32 addition does not commute, so a pixel
+            // that never closed must land where a kernel with no stopping at all
+            // lands it, to the bit. See `BandScratch::pair_pow`.
+            for o in 0..n_pairs {
+                if !s.pair_hit[o] {
+                    continue;
+                }
+                let pow = s.pair_pow[o];
+                for (p, &e) in pow.iter().enumerate() {
+                    if e > 0.0 {
+                        s.local.add_energy_at(py as u32, px as u32, p as u8, e);
+                    }
+                }
             }
         }
     }
@@ -1022,7 +1271,99 @@ pub(crate) fn lon_to_px(bbox: &TileBbox, lon: f64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source_line::LineRow;
+    use crate::wire_hm3::collapse_lden_surface_u8;
+    use noise_compute::constants::{m_per_deg_lon, M_PER_DEG_LAT};
     use noise_compute::propagation::path_profile::{fill_t_values, fill_t_values_coarse_mid};
+    use raster_reader::RealRasters;
+    use std::path::Path;
+
+    /// A scene of many line sources of wildly different loudness spread over the
+    /// tile, so a receiver's pair list spans tens of dB and the interval has
+    /// something to close on. `emission_lin` steps by decades and the segments
+    /// step across the tile, which puts each pixel's dominant source at a
+    /// different position in the load order — the property the old η rule was
+    /// sensitive to.
+    fn many_sources(tile: &FusedTileZ13) -> Vec<LineRow> {
+        let c_lat = (tile.bbox.north_lat + tile.bbox.south_lat) * 0.5;
+        let c_lon = (tile.bbox.west_lon + tile.bbox.east_lon) * 0.5;
+        let d_lat = |m: f64| m / M_PER_DEG_LAT;
+        let d_lon = |m: f64| m / m_per_deg_lon(c_lat.to_radians());
+        (0..24)
+            .map(|k| {
+                let off = (k as f64 - 11.5) * 130.0;
+                let e = 1.0e5 * 10f32.powi(k % 5);
+                LineRow {
+                    start_lat: c_lat + d_lat(off),
+                    start_lon: c_lon + d_lon(-300.0 + 40.0 * (k % 7) as f64),
+                    end_lat: c_lat + d_lat(off + 40.0),
+                    end_lon: c_lon + d_lon(300.0),
+                    length_m: 620.0,
+                    max_distance_m: 2_500.0,
+                    source_height_m: 0.05,
+                    bridge: k % 11 == 0,
+                    emission_lin: [[e; NUM_BANDS]; NUM_PERIODS],
+                }
+            })
+            .collect()
+    }
+
+    /// THE regression the byte-space stop exists to close.
+    ///
+    /// The superseded energy-budget skip compared each pair against a `kept`
+    /// that starts at zero and only grows, so whether a source was dropped
+    /// depended on how many louder ones had already been folded — i.e. on the
+    /// order rows came off disk. Two orders kept different source sets and
+    /// painted different tiles (measured on dense Praha: ~75 k pairs apart).
+    ///
+    /// The interval rule cannot do that: it only ever drops a tail it has
+    /// PROVEN cannot move the byte, and that proof does not reference the order.
+    /// So the painted bytes must be identical for any permutation of the load
+    /// order — asserted here on the whole 512² grid, not a sample. A single
+    /// differing cell means the tail was not really immaterial.
+    #[test]
+    fn source_order_never_changes_the_answer() {
+        let rasters = RealRasters::new(Path::new("/nonexistent-quietmap-bytestop-fixture"));
+        let tile = FusedTileZ13::build(12, 2211, 1386, 2_500.0, &rasters);
+        let lines = many_sources(&tile);
+
+        let paint = |rows: &[LineRow]| {
+            let mut accum = TileAccumulator::new();
+            let stats = crate::scatter_line::scatter_tile(&tile, rows, &[], None, &mut accum);
+            (collapse_lden_surface_u8(&accum), stats)
+        };
+        let (bytes_a, stats_a) = paint(&lines);
+
+        // Not a vacuous test: the stop must actually be firing on this scene,
+        // and the scene must actually be painting something.
+        assert!(
+            stats_a.skipped_calls > 0,
+            "fixture never triggers the stop — the assertion below proves nothing"
+        );
+        assert!(
+            bytes_a.iter().any(|&b| b != crate::wire_hm3::NO_DATA),
+            "fixture painted an empty tile"
+        );
+
+        // Reversed, and a stride shuffle: two permutations that move every
+        // pixel's dominant source to a different place in the walk.
+        let mut rev = many_sources(&tile);
+        rev.reverse();
+        let mut shuffled = many_sources(&tile);
+        for i in 0..shuffled.len() {
+            let j = (i * 7 + 3) % shuffled.len();
+            shuffled.swap(i, j);
+        }
+        for (name, rows) in [("reversed", &rev), ("shuffled", &shuffled)] {
+            let (bytes_b, _) = paint(rows);
+            let diff = bytes_a
+                .iter()
+                .zip(bytes_b.iter())
+                .filter(|(a, b)| a != b)
+                .count();
+            assert_eq!(diff, 0, "{name} load order moved {diff} cells");
+        }
+    }
 
     /// The cadence the production build ships (env-free).
     fn shipped() -> CoarseMid {

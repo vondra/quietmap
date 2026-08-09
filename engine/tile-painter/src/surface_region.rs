@@ -156,6 +156,9 @@ pub struct LayerStats {
     pub scatter: Duration,
     pub path_calls: u64,
     pub skipped_calls: u64,
+    /// (source, receiver) pairs priced by the cheap pass — the denominator the
+    /// skip fraction wants (`path_calls` counts RAYS, several per pair).
+    pub pairs: u64,
     pub raster_samples: u64,
     pub ground_rows_in_reach: u64,
     pub ground_unique_microsegs: u64,
@@ -167,6 +170,7 @@ impl LayerStats {
         self.scatter += o.scatter;
         self.path_calls += o.path_calls;
         self.skipped_calls += o.skipped_calls;
+        self.pairs += o.pairs;
         self.raster_samples += o.raster_samples;
         self.ground_rows_in_reach += o.ground_rows_in_reach;
         self.ground_unique_microsegs += o.ground_unique_microsegs;
@@ -402,7 +406,8 @@ pub fn process_surface_region(
             for (rows, source_id, dir_name) in &layer_rows {
                 let mut accum = TileAccumulator::new();
                 let t_s = Instant::now();
-                let (walked, sk, rs, ground_rows, ground_microsegs, time_divided) = match rows {
+                let (walked, sk, npr, rs, ground_rows, ground_microsegs, time_divided) = match rows
+                {
                     SurfaceRows::Line(r) => {
                         let st = scatter_line::scatter_tile(
                             tile,
@@ -414,6 +419,7 @@ pub fn process_surface_region(
                         (
                             st.path_calls,
                             st.skipped_calls,
+                            st.pairs,
                             st.raster_samples,
                             0,
                             0,
@@ -431,6 +437,7 @@ pub fn process_surface_region(
                         (
                             st.path_calls,
                             st.skipped_calls,
+                            st.pairs,
                             st.raster_samples,
                             0,
                             0,
@@ -450,6 +457,9 @@ pub fn process_surface_region(
                         (
                             st.path_calls,
                             st.skipped_calls,
+                            // ground-ops is still on the η budget skip, which has
+                            // no cheap-pass pair count to report.
+                            0,
                             0,
                             st.rows_in_reach as u64,
                             st.unique_microsegs as u64,
@@ -462,6 +472,7 @@ pub fn process_surface_region(
                 e.scatter += t_s.elapsed();
                 e.path_calls += walked;
                 e.skipped_calls += sk;
+                e.pairs += npr;
                 e.raster_samples += rs;
                 e.ground_rows_in_reach += ground_rows;
                 e.ground_unique_microsegs += ground_microsegs;

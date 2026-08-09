@@ -639,11 +639,18 @@ fn report(
         .by_layer
         .iter()
         .map(|(name, stats)| {
-            let n = (stats.path_calls + stats.skipped_calls).max(1);
+            // Pair-level skip where the kernel reports pairs (line/point, on the
+            // byte-space stop); ground-ops has no pair count, so fall back to the
+            // ray-level ratio it always printed.
+            let n = if stats.pairs > 0 {
+                stats.pairs
+            } else {
+                (stats.path_calls + stats.skipped_calls).max(1)
+            };
             format!(
                 "{name} {:.1}s/{:.2}Gpr({:.0}%skip)",
                 stats.scatter.as_secs_f64(),
-                (stats.path_calls + stats.skipped_calls) as f64 / 1e9,
+                n as f64 / 1e9,
                 stats.skipped_calls as f64 / n as f64 * 100.0
             )
         })
@@ -659,13 +666,18 @@ fn report(
         elapsed.as_secs_f64(),
     );
     for (name, stats) in &total.by_layer {
-        let n = (stats.path_calls + stats.skipped_calls).max(1);
+        let n = if stats.pairs > 0 {
+            stats.pairs
+        } else {
+            (stats.path_calls + stats.skipped_calls).max(1)
+        };
         eprintln!(
-            "layer-stats {name}: loaded_rows={} scatter_s={:.3} path_calls={} skipped_calls={} skip_pct={:.1} raster_samples={} ground_rows_in_reach={} ground_unique_microsegs={}",
+            "layer-stats {name}: loaded_rows={} scatter_s={:.3} path_calls={} skipped_calls={} pairs={} skip_pct={:.1} raster_samples={} ground_rows_in_reach={} ground_unique_microsegs={}",
             stats.loaded_rows,
             stats.scatter.as_secs_f64(),
             stats.path_calls,
             stats.skipped_calls,
+            stats.pairs,
             stats.skipped_calls as f64 / n as f64 * 100.0,
             stats.raster_samples,
             stats.ground_rows_in_reach,

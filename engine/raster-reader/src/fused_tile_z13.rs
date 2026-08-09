@@ -343,10 +343,20 @@ impl RasterSampler for FusedTileZ13 {
         }
     }
 
+    /// Clamped to `[0, 1]` like the other two implementations of this formula
+    /// (`RealRasters::ground_g`, `FusedGrid::ground_g`) — `inner_imd` is filled
+    /// by an `as u8` saturating cast of the raster sample, so a nodata or
+    /// out-of-spec IMD cell above 100 would otherwise make G NEGATIVE. That is
+    /// not merely a wrong level: `A_gr(G) = max(CF·G, 0) + FLOOR·(1 − G)` is
+    /// bounded below by `GROUND_HARD_FLOOR_DB` only across `[0, 1]`, and
+    /// `scatter_band::budget_ub_lden` prices every pair's upper bound on exactly
+    /// that floor (`GROUND_GAIN_UB_DB`, constants.rs). A negative G breaks
+    /// `ub ≥ exact`, which the byte-stop asserts in RELEASE — so an unclamped
+    /// cell here would abort a paint rather than mis-shade one pixel.
     fn ground_g(&self, lat: f64, lon: f64) -> f64 {
         if self.bbox_contains(lat, lon) {
             let imd = self.inner_imd[self.latlon_to_inner_idx(lat, lon)] as f64;
-            1.0 - imd / 100.0
+            (1.0 - imd / 100.0).clamp(0.0, 1.0)
         } else {
             self.halo.ground_g(lat, lon)
         }

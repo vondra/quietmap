@@ -77,7 +77,10 @@ fn main() -> Result<()> {
     let baseline = env("NOISE_GPU_BASELINE", "/root/baseline");
     let year = env("DATA_YEAR", "2026");
     let halo_m: f64 = env("NOISE_GPU_HALO_M", "10000").parse()?;
-    // Matches scatter_line::budget_eta(): default 0.40, clamped to [0, 0.40].
+    // The old η slot, now the surface kernel's byte-stop ON/OFF (see
+    // `noise_gpu::pack_tile`): 0 = skip nothing, non-zero = stop once the byte is
+    // decided. Kept reading SURFACE_BUDGET_ETA so `=0` still selects the exact
+    // reference on BOTH lanes with one env, which is what the parity gate needs.
     let eta: f64 = env("SURFACE_BUDGET_ETA", "0.40")
         .parse::<f64>()
         .unwrap_or(0.40)
@@ -304,11 +307,10 @@ fn main() -> Result<()> {
 
     // ---- CPU reference: the PRODUCTION unified kernel, not a hand-copied mirror
     // (CLAUDE.md anti-mirror rule). scatter_line::scatter_tile_with_cfg builds the
-    // same per-pixel terms (cylindrical divergence + clamped-foot FLC), runs the
-    // identical energy-budget skip with the same η (its budget_eta() reads the same
-    // SURFACE_BUDGET_ETA env this bin clamps into `eta` above), and accumulates f32
-    // into a TileAccumulator whose `.energy` is the exact [py][px][period] layout
-    // of `cpu`. The cadence MUST match the kernel's compile-time coarse-middle
+    // same per-pixel terms (cylindrical divergence + clamped-foot FLC), stops on
+    // the identical byte-space rule, and accumulates f32 into a TileAccumulator
+    // whose `.energy` is the exact [py][px][period] layout of
+    // `cpu`. The cadence MUST match the kernel's compile-time coarse-middle
     // mirror (scatter.cu SHADOW_MID_STRIDE 3 / 600 m zones — the CPU env
     // DEFAULTS): a `None` (exact) reference conflates cadence differences with
     // GPU drift (gg review 2026-07-28 #1; candidate terrain LERP and δ*
@@ -504,6 +506,21 @@ fn main() -> Result<()> {
 
     // ---- compare vs CPU ref (skipped under NOISE_GPU_ONLY): exact f32 inequality +
     // zero-sided mismatches + both-positive dB.
+    //
+    // WHAT THIS COMPARES, AND WHY THE BYTE-STOP DOES NOT COVER IT: the loop below
+    // reads PER-PERIOD energies, not the HM3 byte. The byte-stop's guarantee is
+    // only ever about the byte of the Lden COLLAPSE — `Σ_p W_p·e_p` — so it does
+    // NOT bound a single period's relative error: a period carrying a small share
+    // of that weighted sum can absorb the whole dropped tail and read several dB
+    // off, with the collapsed byte still identical. Both lanes stop by default
+    // (η = 0.40 ⇒ meta[9] non-zero) and they drop DIFFERENT tails, because the CPU
+    // walks loudest-bound-first and the kernel walks source order. So the maxdb
+    // below is real GPU drift PLUS legitimate stop divergence, and the two cannot
+    // be separated from this number alone: re-run with SURFACE_BUDGET_ETA=0, which
+    // puts both lanes on the exact path, before attributing a residual to the
+    // kernel. (Direction matters when reading a failure: the CPU skips ~50 % of
+    // pairs and the kernel 9-11 %, so the stop makes the CPU the QUIETER lane —
+    // it cannot manufacture a CPU-louder asymmetry, only mask one.)
     if !gpu_only {
         let (mut maxdb, mut nover, mut nbit, mut nzero) = (0f64, 0usize, 0usize, 0usize);
         // SIGN of each divergence, which is what separates fp32 noise from a lane

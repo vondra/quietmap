@@ -48,7 +48,12 @@ mod gpu_init;
 use gpu_init::{timing_enabled, warm_device, warm_device_on, LineLayer, Progress};
 
 const NO_DATA: u8 = 255;
-const ETA: f64 = 0.40; // energy-budget skip threshold (production default)
+// `meta[9]`: since the surface kernel moved to byte-space stopping this is an
+// ON/OFF, not a threshold — non-zero means "stop each pixel once its HM3 byte is
+// decided", 0 means "compute every pair". It keeps the η name and the 0.40 value
+// so one env (`SURFACE_BUDGET_ETA=0`) still puts BOTH lanes on the exact path,
+// which is what the e2 parity gate needs. See `scatter_band::byte_stop_enabled`.
+const ETA: f64 = 0.40;
 const TW: f64 = 8.0; // pack_tile swizzle width — the binned kernel ignores it (only
                      // the un-binned `rail` bench kernel in e2-full swizzles by it)
 
