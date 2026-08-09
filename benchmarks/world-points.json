@@ -161,10 +161,10 @@
    "correction_provenance": null
   },
   "regression_band": [
-   71.13,
-   75.13
+   73.9,
+   77.9
   ],
-  "tolerance_note": "model runs on default_by_class nominal 3,000 → −11.8 dB traffic input deficit (road-report R4); audit model 63.0; band = SHM target — flips via the Praha city enricher (plan C3.1 v2) | v2 2026-07-09: R4 CLOSED -- live 73.13 inside SHM [70,75] (city AADT enricher landed since the audit); known_gap removed; band=live +/-2",
+  "tolerance_note": "model runs on default_by_class nominal 3,000 → −11.8 dB traffic input deficit (road-report R4); audit model 63.0; band = SHM target — flips via the Praha city enricher (plan C3.1 v2) | v2 2026-07-09: R4 CLOSED -- live 73.13 inside SHM [70,75] (city AADT enricher landed since the audit); known_gap removed; band=live +/-2 | v2 2026-08-09: band=live 75.90 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal); TSK-Praha enrichment unchanged at re-pin time",
   "caveats": "one-way street: oneway ×0.5 halving doubles the deficit (R10)"
  },
  {
@@ -383,11 +383,11 @@
    "correction_provenance": null
   },
   "regression_band": [
-   62.71,
-   66.71
+   64.88,
+   68.88
   ],
   "known_gap": "road-R25-city-matcher-missnap",
-  "tolerance_note": "audit model 67.6 (−2.4..−7.4): probe pixel = quai D7 mainline on defaults while EU-city counts landed on its link + service road; périph row carries 0 heavy (road-report R25); band = published band | v2 2026-07-09: band=live 64.71 +/-2; R25 miss-snap gap stays visible as EXTERNAL-GAP -5.3",
+  "tolerance_note": "audit model 67.6 (−2.4..−7.4): probe pixel = quai D7 mainline on defaults while EU-city counts landed on its link + service road; périph row carries 0 heavy (road-report R25); band = published band | v2 2026-07-09: band=live 64.71 +/-2; R25 miss-snap gap stays visible as EXTERNAL-GAP -5.3 | v2 2026-08-09: band=live 66.88 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal)",
   "caveats": "périph centerline 223 m from probe in OSM"
  },
  {
@@ -427,11 +427,11 @@
    "correction_provenance": null
   },
   "regression_band": [
-   57.09,
-   61.09
+   61.08,
+   65.08
   ],
   "known_gap": "road-R4R25-city-arterial",
-  "tolerance_note": "audit model 59.3 (−11.7): S106 Overtoom mainline on defaults, counts snapped to service road + living street (road-report R4+R25); band = RIVM ±3 | v2 2026-07-09: band=live 59.09 +/-2; R4+R25 arterial gap visible as EXTERNAL-GAP -8.9",
+  "tolerance_note": "audit model 59.3 (−11.7): S106 Overtoom mainline on defaults, counts snapped to service road + living street (road-report R4+R25); band = RIVM ±3 | v2 2026-07-09: band=live 59.09 +/-2; R4+R25 arterial gap visible as EXTERNAL-GAP -8.9 | v2 2026-08-09: band=live 63.08 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal)",
   "caveats": "our total there is 74.6 but tram-dominated (railway 74.5) — RIVM layer is road-only, compare the road source only"
  },
  {
@@ -496,11 +496,11 @@
    "dominance": "near_source"
   },
   "regression_band": [
-   81.41,
-   85.41
+   83.83,
+   87.83
   ],
   "known_gap": "road-us-i5-default-aadt",
-  "tolerance_note": "the full-tree host verified 2026-06-11: road 80.9 (world-validation §B1); this segment default_by_class Σ29,310 → −6.4 dB input deficit, masked by on-carriageway receiver; band = measured ±2; matcher gap-fill (world-report #7) would raise it | v2 2026-07-09: band=live 83.41 +/-2 (+2.5 vs 2026-06-11 full-tree 80.9 after the 2026 dataset re-extract); input-deficit KG unchanged",
+  "tolerance_note": "the full-tree host verified 2026-06-11: road 80.9 (world-validation §B1); this segment default_by_class Σ29,310 → −6.4 dB input deficit, masked by on-carriageway receiver; band = measured ±2; matcher gap-fill (world-report #7) would raise it | v2 2026-07-09: band=live 83.41 +/-2 (+2.5 vs 2026-06-11 full-tree 80.9 after the 2026 dataset re-extract); input-deficit KG unchanged | v2 2026-08-09: band=live 85.83 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal)",
   "caveats": "surface=unpaved +1.0 dB bug on I-5 (world-report #10, extends R24); BTS band is 24-h LAeq, not Lden; SKIPPED on partial-tree hosts (no US arrows)"
  },
  {
@@ -541,11 +541,11 @@
    "correction_provenance": null
   },
   "regression_band": [
-   53.2,
-   57.2
+   55.79,
+   59.79
   ],
   "known_gap": "rail-freight-R1R2",
-  "tolerance_note": "freight absent (rail R1+R2) → known cold −6..−11; audit model 53.9; live 51.65 after the 2026-06-10 family-aware rail re-run sync | v2 2026-07-09: band=live 53.71 +/-2; freight gap -6..-11 visible as EXTERNAL-GAP",
+  "tolerance_note": "freight absent (rail R1+R2) → known cold −6..−11; audit model 53.9; live 51.65 after the 2026-06-10 family-aware rail re-run sync | v2 2026-07-09: band=live 53.71 +/-2; freight gap -6..-11 visible as EXTERNAL-GAP | v2 2026-08-09: band=live 57.79 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal)",
   "caveats": "SHM uses real SŽ counts incl. freight; 238 m from track; model Ln ≡ Lden − 7.91 (fixed split) → the −14..−19 night gap is invisible in Lden mode"
  },
  {
@@ -633,11 +633,11 @@
    "correction_provenance": null
   },
   "regression_band": [
-   47.6,
-   51.6
+   50.63,
+   54.63
   ],
   "known_gap": "rail-freight-R2",
-  "tolerance_note": "Lden in band (audit 45.2, live 45.19); the audit's Ln −8..−13 cold is the R1 night-split signature — invisible in Lden mode; band = audit ±2 capped at SHM <50 | C1 (2026-06-12) shipped the R1 night split: Ln 37.3->41.5 (SHM 45-50); the remaining ~4 dB needs R2 measured freight counts. | v2 2026-07-09: band=live 47.61 +/-2 (inside SHM <50)",
+  "tolerance_note": "Lden in band (audit 45.2, live 45.19); the audit's Ln −8..−13 cold is the R1 night-split signature — invisible in Lden mode; band = audit ±2 capped at SHM <50 | C1 (2026-06-12) shipped the R1 night split: Ln 37.3->41.5 (SHM 45-50); the remaining ~4 dB needs R2 measured freight counts. | v2 2026-07-09: band=live 47.61 +/-2 (inside SHM <50) | v2 2026-08-09: band=live 52.63 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal); now +2.6 over SHM <50, the freight R2 kg keeps the external distance visible",
   "caveats": "screened site (buildings, forest); 358 m from track"
  },
  {
@@ -812,11 +812,11 @@
    "correction_provenance": null
   },
   "regression_band": [
-   50.7,
-   54.7
+   53.55,
+   57.55
   ],
   "known_gap": "industrial-distance-tail-underdecay",
-  "tolerance_note": "Fix B heavy-cap guard for CHEMICAL (subtype 4 / NACE 19-20), the other uncapped heavy family — confirms the raise doesn't over-predict refineries. Shell Pernis / Botlek (one of Europe's largest petrochemical clusters). Model 52.7 vs official 56 (-3.3) at Pernis village; no over-prediction (Botlek core 58.7 vs 65 also under). regression_band pins Fix-B pre-re-enrich.",
+  "tolerance_note": "Fix B heavy-cap guard for CHEMICAL (subtype 4 / NACE 19-20), the other uncapped heavy family — confirms the raise doesn't over-predict refineries. Shell Pernis / Botlek (one of Europe's largest petrochemical clusters). Model 52.7 vs official 56 (-3.3) at Pernis village; no over-prediction (Botlek core 58.7 vs 65 also under). regression_band pins Fix-B pre-re-enrich. | v2 2026-08-09: band=live 55.55 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal); now inside the RIVM [54,58] external band",
   "caveats": "RIVM continuous-dB receptor raster; industrial-dominant (52.7 vs rail 50.1, road 48.4)"
  },
  {
@@ -891,10 +891,10 @@
    "dominance": "total_ambient"
   },
   "regression_band": [
-   40.3,
-   44.3
+   35.96,
+   39.96
   ],
-  "tolerance_note": "band = post-C7 (B4+B6) expectation 36.9 ±2: pre-C7 audit model 42.4 + spectrum normalization −5.4..−5.7 across the village-site mix (NPP 3511 = −5.65); → Lday ≈ 31.5 vs measured 33.9, slightly cold post-fix. Valid only after the wave-end rebuild | v2 2026-07-09: band=live 35.82 +/-2 (post-C7 state inside the old post-C7 expectation band) | v3 2026-07-13 (Wave 2): re-banded to live 41.4 (C1 +5.6 landed uniformly). This now reads +7.5 OVER the 33.9 LAeq measurement — a KNOWN over-prediction from the NPP polygon double-count (I-07) compounded by C1, NOT a calibration signal (0-month LAeq spot, SSOT-barred). Fix I-07 (MultiPolygon dedup), not base_lw, is the lever. Flagged, deferred. ; re-pinned 2026-07-28 at the FAVOURABLE_MIXING flip to the live mixed value (42.31 ±2) — the earlier post-C7 band was aspirational, not live state",
+  "tolerance_note": "band = post-C7 (B4+B6) expectation 36.9 ±2: pre-C7 audit model 42.4 + spectrum normalization −5.4..−5.7 across the village-site mix (NPP 3511 = −5.65); → Lday ≈ 31.5 vs measured 33.9, slightly cold post-fix. Valid only after the wave-end rebuild | v2 2026-07-09: band=live 35.82 +/-2 (post-C7 state inside the old post-C7 expectation band) | v3 2026-07-13 (Wave 2): re-banded to live 41.4 (C1 +5.6 landed uniformly). This now reads +7.5 OVER the 33.9 LAeq measurement — a KNOWN over-prediction from the NPP polygon double-count (I-07) compounded by C1, NOT a calibration signal (0-month LAeq spot, SSOT-barred). Fix I-07 (MultiPolygon dedup), not base_lw, is the lever. Flagged, deferred. ; re-pinned 2026-07-28 at the FAVOURABLE_MIXING flip to the live mixed value (42.31 ±2) — the earlier post-C7 band was aspirational, not live state | v2 2026-08-09: band=live 37.96 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal); back near the 33.9 LAeq spot, the I-07 double-count now partly offset by screening",
   "caveats": "industrial total dominated by small village sites, not the NPP; NPP polygon double-counted (I-07)"
  },
  {
@@ -2287,11 +2287,11 @@
    "correction_provenance": null
   },
   "regression_band": [
-   47.1,
-   51.1
+   49.71,
+   53.71
   ],
   "known_gap": "rail-freight-R1R2",
-  "tolerance_note": "SHM Ln 60-65; C1 night split closes part of the gap, the rest needs R2 measured freight counts (plan C1 P3) | v2 2026-07-09: band=live 47.54 +/-2; night freight gap -12.5 below SHM Ln stays the loudest EXTERNAL-GAP in the set (R2 measured freight counts)",
+  "tolerance_note": "SHM Ln 60-65; C1 night split closes part of the gap, the rest needs R2 measured freight counts (plan C1 P3) | v2 2026-07-09: band=live 47.54 +/-2; night freight gap -12.5 below SHM Ln stays the loudest EXTERNAL-GAP in the set (R2 measured freight counts) | v2 2026-08-09: band=live 51.71 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal)",
   "caveats": "SHM uses real SŽ counts incl. freight; 238 m from track; model Ln ≡ Lden − 7.91 (fixed split) → the −14..−19 night gap is invisible in Lden mode"
  },
  {
@@ -2381,11 +2381,11 @@
    "correction_provenance": null
   },
   "regression_band": [
-   41.1,
-   45.1
+   44.06,
+   48.06
   ],
   "known_gap": "rail-freight-R2",
-  "tolerance_note": "SHM Ln 45-50; C1 plan §4 — clear/retag per live value | v2 2026-07-09: band=live 41.50 +/-2; -3.5 below SHM Ln = the R2 residual (C1 closed 37.3->41.5)",
+  "tolerance_note": "SHM Ln 45-50; C1 plan §4 — clear/retag per live value | v2 2026-07-09: band=live 41.50 +/-2; -3.5 below SHM Ln = the R2 residual (C1 closed 37.3->41.5) | v2 2026-08-09: band=live 46.06 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal)",
   "caveats": "screened site (buildings, forest); 358 m from track"
  },
  {
@@ -2423,10 +2423,10 @@
    "correction_provenance": null
   },
   "regression_band": [
-   42.8,
-   46.8
+   39.66,
+   43.66
   ],
-  "tolerance_note": "settlement v2 phase 1 (2026-06-12) landed the building source INSIDE the BS4142 practice band: 45.0 day / 35.0 night (was 40.7 / ~25 with the -20 night cut). Band = the practice range itself, not live+/-2. | v2 2026-07-09: band=live 44.47 +/-2; practice envelope stays external.band"
+  "tolerance_note": "settlement v2 phase 1 (2026-06-12) landed the building source INSIDE the BS4142 practice band: 45.0 day / 35.0 night (was 40.7 / ~25 with the -20 night cut). Band = the practice range itself, not live+/-2. | v2 2026-07-09: band=live 44.47 +/-2; practice envelope stays external.band | v2 2026-08-09: band=live 41.66 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal); settlement screening moved down — plausible but watch; still inside BS4142 [40,55]"
  },
  {
   "id": "bldg_old_town_square",
@@ -2458,11 +2458,11 @@
    "dominance": "total_ambient"
   },
   "regression_band": [
-   41.0,
-   45.0
+   33.79,
+   37.79
   ],
   "known_gap": "building-phase2-classification",
-  "tolerance_note": "phase 1 moved 25.1 -> 31.7 but the square's restaurants/shops are building=yes -> residential profile until the phase-2 POI join; band = post-phase-2 expectation. KNOWN-GAP until then. | v2 2026-07-09: band=live 42.82 +/-2 (phase-1 state; phase-2 POI join stays the kg)"
+  "tolerance_note": "phase 1 moved 25.1 -> 31.7 but the square's restaurants/shops are building=yes -> residential profile until the phase-2 POI join; band = post-phase-2 expectation. KNOWN-GAP until then. | v2 2026-07-09: band=live 42.82 +/-2 (phase-1 state; phase-2 POI join stays the kg) | v2 2026-08-09: band=live 35.79 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal); settlement screening moved down (-7.2) — plausible but watch; phase-2 POI join stays the kg"
  },
  {
   "id": "road_th_hospitality_krabi",
@@ -2493,10 +2493,10 @@
    "dominance": "near_source"
   },
   "regression_band": [
-   29.66,
-   33.66
+   34.84,
+   38.84
   ],
-  "tolerance_note": "EXTERNAL-GAP: known undercount — OSM building typing sparse in rural TH + building-only trip model misses through-traffic (plan trip-generators Phase 2). Band pins the 2026-07-17 computed 31.66 dB; owner observation kept as the accuracy worklist marker."
+  "tolerance_note": "EXTERNAL-GAP: known undercount — OSM building typing sparse in rural TH + building-only trip model misses through-traffic (plan trip-generators Phase 2). Band pins the 2026-07-17 computed 31.66 dB; owner observation kept as the accuracy worklist marker. | v2 2026-08-09: band=live 36.84 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal); undercount kg-pattern unchanged, owner observation still the worklist marker"
  },
  {
   "id": "air_es_lapalma_quiet",
