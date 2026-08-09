@@ -110,7 +110,7 @@ struct Args {
     write_empty: bool,
     /// Build EXACTLY the output R4s listed in this file (one 15-hex cell/line),
     /// instead of --world/--bbox/--tile. The cluster orchestrator's per-chunk
-    /// work unit (`build-heatmap-cluster.sh`); disjoint chunks → no double build.
+    /// work unit; disjoint chunks → no double build.
     #[arg(long)]
     regions_file: Option<PathBuf>,
     /// Resolve the build-wide `n_days` over the selection's sources, print it,

@@ -8,7 +8,7 @@
 //! obstacle, against a per-segment sampled reference integration of the SAME
 //! physics — and how much of that error does arc clipping remove?
 //!
-//! Four integrators run over the same hardcoded scenes and the same probe
+//! Five integrators run over the same hardcoded scenes and the same probe
 //! grid, all funnelling through the production entry points
 //! (`path_effects::terrain_attenuation`, `path_effects::screening_attenuation_with_meta`,
 //! `iso9613::propagate_variants_full`) — only the SCREENING EVALUATION differs:
@@ -125,11 +125,15 @@
 //! `source-reader::query`), which `path_effects` §1 intersects with each ray.
 //! Two paths, one wall, one answer — the pair is the proof.
 //!
-//! Deterministic: no RNG, no clock, no environment, no I/O beyond stdout.
+//! Deterministic: no RNG, no clock, no I/O beyond stdout. NOT independent of
+//! the environment: `v3` and `v5` reach `ArcBounds::from_env` through the
+//! production entry points, so `QM_ARC_MIN_SPAN_DEG` MOVES this harness
+//! (measured: `--scene a --integrator v3` differs with it at `0`). A
+//! reproducible run needs the `QM_ARC_*` levers unset.
 //!
-//! Usage:
-//!   screening_fixture [--scene a|b|c|d|e|f|g|h|i|j|k|all] [--integrator reference33|current|v3|v4|all]
-//!                     [--reference-subdivisions N]
+//! Usage: the `USAGE` const next to the parser that honours it — one spelling,
+//! because the copy that used to live here went stale (it offered neither
+//! `v5`, the shipped rule, nor `--seg-samples`).
 //!
 //! Output: TSV `scene integrator x y lden_db` on stdout, followed by `#`-prefixed
 //! summary lines (shadow-region vs outside max |reference33 − X| per integrator,

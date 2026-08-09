@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 # GPU backend for the surface scatter (docs/dev/gpu-ground-hybrid-plan.md).
-# cudarc + the nvcc kernel build live behind the `gpu` feature (used only by the two
-# bins). Default build = the CPU-side lib alone, so a host with no CUDA toolkit (e.g.
+# cudarc + the nvcc kernel build live behind the `gpu` feature (required by all four
+# bins below, and by nothing else). Default build = the CPU-side lib alone, so a host with no CUDA toolkit (e.g.
 # a CPU-only box) builds noise-gpu cleanly; the GPU path is `--features gpu` on a GPU host.
 # cuda-12060 = highest bindings cudarc 0.12 ships; the 12.x driver API is
 # forward-compatible with the box's 12.8. `std` re-enables DriverError's Display + Error impls
@@ -24,7 +24,7 @@ rayon = "1"
 clap = { version = "4", features = ["derive"], optional = true }
 
 [features]
-# The gpu-surface/e2-full bins (require this feature) pull in cudarc and trigger the
+# All four bins require this feature; it pulls in cudarc and triggers the
 # nvcc PTX build. OFF by default so the lib builds without any CUDA on the host.
 gpu = ["dep:cudarc", "dep:clap"]
 

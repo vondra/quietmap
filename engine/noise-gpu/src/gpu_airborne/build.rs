@@ -218,7 +218,8 @@ pub(crate) fn gpu_build_cell_one_pass(
 }
 
 /// M2 chunked build (the fallback for a cell whose full region won't fit one host/VRAM pass): build
-/// the cell in `MAX_CANDIDATES_PER_CHUNK`-sized candidate passes, summing each pass's per-tile energy
+/// the cell in [`max_candidates_per_chunk`]-sized candidate passes (VRAM-derived, not a knob),
+/// summing each pass's per-tile energy
 /// into running accumulators (`TileAccumulator::merge_from` — additive in the linear domain, so the
 /// sum reconstructs the one-pass result), then write once. Unlike the A2 fast path this re-loads the
 /// region's sources HERE (the GPU thread's own cache), since a too-big cell never crossed the prep

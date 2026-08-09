@@ -110,7 +110,7 @@ fn host_mem_budget() -> Option<(u64, u64)> {
 /// (`build_receiver_altitude_only`: airborne reads only `rx_alt_m`, so skip building/forest/imd +
 /// the halo a full build computes). The block topology (which z13 tiles land in which batch, and
 /// each batch's receiver-altitude grid) is built ONE way for BOTH the one-pass prep (`prep_cell`)
-/// and the M2 chunked build (`gpu_build_cell_chunked`) — CLAUDE.md one source of truth: a divergence
+/// and the M2 chunked build (`gpu_build_cell_chunked`) — AGENTS.md one source of truth: a divergence
 /// here would scatter the chunked megahubs against a different receiver grid than the one-pass cells.
 pub(crate) fn build_dem_blocks(
     rasters: &RealRasters,

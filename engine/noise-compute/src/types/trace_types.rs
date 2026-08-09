@@ -29,20 +29,6 @@ pub struct LdenVariants {
     pub no_atmospheric: f64,
 }
 
-impl LdenVariants {}
-
-impl PerPeriod<[f64; NUM_BANDS]> {
-    /// Per-period band triple where every band is `f64::NEG_INFINITY`
-    /// — the silent-row sentinel used across the trace builders.
-    pub fn silent_bands() -> Self {
-        Self {
-            day: [f64::NEG_INFINITY; NUM_BANDS],
-            evening: [f64::NEG_INFINITY; NUM_BANDS],
-            night: [f64::NEG_INFINITY; NUM_BANDS],
-        }
-    }
-}
-
 /// One contiguous forested interval along a source→receiver path.
 #[derive(Debug, Clone, Serialize)]
 pub struct ForestRun {

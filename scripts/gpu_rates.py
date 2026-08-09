@@ -9,7 +9,7 @@ import os
 import re
 
 from cpu_rates import find_entry   # table-agnostic (any {"rates":[{"match":...}]} shape) -- one substring
-                                    # matcher shared by both tables, not duplicated (CLAUDE.md: one source
+                                    # matcher shared by both tables, not duplicated (AGENTS.md: one source
                                     # of truth; duplication across siblings is where drift bugs hide)
 
 RATES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gpu-rates.json")
@@ -43,7 +43,7 @@ def _entry(name, table):
     (hyphens only appear in datacenter form-factor suffixes, already handled by CANONICAL_PREFIX in
     gpu_rates_build.py, or in unrelated vGPU/monitor rows) -- a general separator-normalizing tokenizer
     would add real complexity for a currently-theoretical case, so this is accepted, not fixed, per
-    CLAUDE.md's Occam's razor (re-check if a future CSV refresh introduces hyphenated consumer names)."""
+    AGENTS.md's Occam's razor (re-check if a future CSV refresh introduces hyphenated consumer names)."""
     e = find_entry(name, table)
     if e and not re.search(r"(?<!\w)" + re.escape(e["match"].lower()) + r"(?!\w)", (name or "").lower()):
         return None

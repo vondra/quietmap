@@ -24,9 +24,17 @@
 //   si   i32[4*N]    = per-seg [inst,class_idx,is_dep,period] (stride 4)
 //   npd  f32[2*NC*(NB+1)] = NPD SEL LUT, approach[0..] | departure[NC*(NB+1)..]
 
-#define TPX 512                         // tile side in receivers — lockstep with
-                                        // TILE_PX in raster-reader/tile-painter
-#define TPX_SHIFT 9                     // log2(TPX): pix >> TPX_SHIFT = py
+// `build.rs` passes -DTPX from raster_reader::TILE_PX, exactly as it does for
+// scatter.cu. This guard is what makes that injection WIN: unguarded, the
+// hand-copied 512 below silently shadowed it, so a TILE_PX change would have
+// forked the two kernels with no compile error — the same silent-out-of-bounds
+// hazard the 2026-08-04 audit fixed on scatter.cu and missed here. The fallback
+// exists only for a bare `nvcc kernels/airborne.cu` syntax check.
+#ifndef TPX
+#define TPX 512
+#endif
+// log2(TPX). Derived, not copied: a mismatch would index the wrong receiver row.
+#define TPX_SHIFT (31 - __builtin_clz(TPX))
 #define TPX_MASK (TPX - 1)              // pix & TPX_MASK = px
 #define MLAT 111132.92                  // M_PER_DEG_LAT (Doc 29 value, doc29.rs:25)
 #define LN10 2.302585092994046

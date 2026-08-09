@@ -10,7 +10,7 @@
  * Read-only fixture (skipped gracefully if unreadable in a sandbox — see
  * `t.skip` below). Numbers asserted here were COMPUTED by actually running
  * `buildRailGraph`/`walkRailStationPairs` against this exact fixture (never
- * estimated — CLAUDE.md rule), and are smaller than the plan's aspirational
+ * estimated — AGENTS.md rule), and are smaller than the plan's aspirational
  * "pairsWalked >= 15" figure: only 5 of the fixture's 28 raw CZPTT pair
  * entries have BOTH endpoints GPS-resolved (the rest are pseudo-locations —
  * "Km 67,500", "vl. v km 75,245", "odb.výh.101", or genuinely un-tagged OSM

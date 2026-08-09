@@ -1,12 +1,16 @@
 //! Aircraft pipeline — popup-first extraction.
 //!
-//! Five stages, each producing stable Arrow artifacts. Stage 0 ingests
-//! adsb.lol TAR archives into per-day flight records. Stage 1 attaches
-//! DEM AGL, classifies phase (Ground/Airborne/Cruise), and applies
-//! receiver-independent filters with trajectory-aware truncation.
-//! Stages 2A/2B/2C aggregate per-R4 to three popup Arrow files:
-//! airborne sub-segments, cruise R7 buckets, and ground paths from raw
-//! ADS-B trajectories. Every schema stamps `schema_version =
+//! Six stages, each producing stable Arrow artifacts (the `--from-stage`
+//! names in `bin/aircraft_extract.rs`). Stage 0 ingests adsb.lol TAR
+//! archives into per-day flight records. Stage 1 attaches DEM AGL,
+//! classifies phase (Ground/Airborne/Cruise), and applies
+//! receiver-independent filters with trajectory-aware truncation. Stage
+//! 1.5 (`stage_airport_discover`) discovers aerodromes the OSM set
+//! misses. Stages 2A/2B/2C aggregate per-R4 to three popup Arrow files:
+//! airborne sub-segments (`airborne.arrow`), cruise R7 buckets
+//! (`cruise.arrow`), and per-microsegment airport ground ops
+//! (`airport_traffic.arrow`, plus the global `airport_summary.arrow`
+//! reduce). Every schema stamps `schema_version =
 //! SCHEMA_VERSION` so the popup reader can refuse stale inputs.
 
 pub mod airport_index;

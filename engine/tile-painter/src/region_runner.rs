@@ -257,7 +257,7 @@ pub fn split_configured_layers<L: Copy>(
 
 /// Read output-R4 cells (one 15-digit hex per line; blanks and `#` comments
 /// skipped) from a regions file — the per-chunk work unit the cluster
-/// orchestrator (`build-heatmap-cluster.sh`) hands each worker. Both builders
+/// orchestrator hands each worker (`--regions-file`). Both builders
 /// turn each R4 into its `region_tiles`, so a chunk builds exactly its R4s'
 /// tiles — disjoint from every other chunk by centre-R4 ownership.
 pub fn read_r4_file(path: &Path) -> Result<Vec<u64>> {

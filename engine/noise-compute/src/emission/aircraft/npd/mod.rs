@@ -32,8 +32,8 @@ pub const AIRCRAFT_NPD_REACH_CAP_M: f64 = 16_000.0;
 /// rejection.
 pub const AIRCRAFT_MAX_HORIZONTAL_REACH_M: f64 = 16_000.0;
 
-/// Slant threshold above which `segment_energy_fast` and
-/// `segment_sel_with_overrides` switch to the closed-form far-field kernel
+/// Slant threshold above which `segment_sel_with_overrides` (the one kernel
+/// every popup and tile call funnels through) switches to the closed-form far-field kernel
 /// (CFFK). The corrections that the per-segment Doc 29 path applies
 /// (ΔI, ΔF, lateral attenuation) are all bounded:
 ///   - λ is identically 0 for elevation angle β > 50° (already gated).

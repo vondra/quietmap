@@ -1,7 +1,7 @@
 //! Shared pmtiles manifest parsing — the "is this `file` reference safe, and what does
 //! this manifest keep alive" logic used by BOTH `tile_store_pack.rs` (partial-pack merge
 //! preflight) and `tile_store_gc.rs` (retention mark-and-sweep). ONE definition so the two
-//! never drift on what counts as a safe archive filename (CLAUDE.md: correctness-critical
+//! never drift on what counts as a safe archive filename (AGENTS.md: correctness-critical
 //! logic lives in one place, not duplicated per binary).
 
 use std::path::Path;

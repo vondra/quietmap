@@ -306,7 +306,7 @@ fn main() -> Result<()> {
     }
 
     // ---- CPU reference: the PRODUCTION unified kernel, not a hand-copied mirror
-    // (CLAUDE.md anti-mirror rule). scatter_line::scatter_tile_with_cfg builds the
+    // (AGENTS.md anti-mirror rule). scatter_line::scatter_tile_with_cfg builds the
     // same per-pixel terms (cylindrical divergence + clamped-foot FLC), stops on
     // the identical byte-space rule, and accumulates f32 into a TileAccumulator
     // whose `.energy` is the exact [py][px][period] layout of

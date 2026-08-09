@@ -1,5 +1,7 @@
-//! Shared host-side helpers for the GPU surface scatter (used by the e2-full
-//! validator and the gpu-surface production batch runner).
+//! Shared host-side helpers for the GPU scatter, used by all four bins in
+//! `Cargo.toml`: the `gpu-surface` / `gpu-airborne` production batch runners
+//! and the `e2-full` / `e2-airborne` parity validators. Surface geometry and
+//! obstacle upload live here; the airborne path is [`airborne`].
 
 /// Region-resident GPU airborne scatter, shared by the `e2-airborne` validator and the
 /// `gpu-airborne` production builder (cudarc-backed, so gated on the `gpu` feature).
@@ -669,7 +671,8 @@ mod cpu_only_lever_tests {
             std::env::set_var("QM_ARC_MIN_SPAN_DEG", "0");
             assert!(
                 super::ensure_no_cpu_only_arc_levers().is_ok(),
-                "0 is the shipped default and build.rs injects it into the kernel"
+                "0 is the value build.rs injects into the kernel; unset is the FORK \
+                 (the CPU gate rises to 3°), which is why only the explicit 0 passes"
             );
             std::env::set_var("QM_ARC_MIN_SPAN_DEG", "1000000");
             assert!(

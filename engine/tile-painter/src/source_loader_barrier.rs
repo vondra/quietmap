@@ -19,7 +19,7 @@
 //!   decision-record test in tests/barrier_screening.rs); the burn helper
 //!   (`FusedGrid::burn_building_max`) survives only as that gate-test apparatus.
 //!   With the gate OFF the GPU lane uploads no barriers (nbarr==0, kernel no-op)
-//!   and barrier chunks demote to the CPU builders (cluster-build-chunk.sh, C9).
+//!   and barrier chunks demote to the CPU builders (`build_heatmap_surface`, C9).
 
 use std::path::Path;
 

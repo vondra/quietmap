@@ -3,10 +3,12 @@
 //! grid (~12 m/pixel at Praha lat).
 //!
 //! Architecture: tile-first iteration. The outer loop groups tiles
-//! into N×N batches that share one halo [`raster_reader::fused_tile_z13::
-//! FusedGrid`] covering the batch bbox + 16 km. Each tile inside a
-//! batch builds its own inner core (256² Mercator-aligned cells) but
-//! reuses the shared halo for path-profile sampling. The ground-ops
+//! into N×N batches that share one halo
+//! [`raster_reader::fused_grid::FusedGrid`] covering the batch bbox plus
+//! the layer's own reach (`surface_region`'s per-layer `*_HALO_M`). Each
+//! tile inside a batch builds its own inner core ([`grid::TILE_PX`]²
+//! Mercator-aligned cells) but reuses the shared halo for path-profile
+//! sampling. The ground-ops
 //! scatter kernel ([`ground_ops::scatter_tile`]) consumes a
 //! [`raster_reader::fused_tile_z13::FusedTileZ13`] by reference —
 //! static dispatch, zero `RealRasters` mmap reads in the hot loop.

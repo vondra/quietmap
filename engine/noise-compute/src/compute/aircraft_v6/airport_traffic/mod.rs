@@ -735,7 +735,7 @@ pub fn run(
             debug_assert!(
                 (row.class_idx as usize) < NUM_GSE_CLASSES,
                 "GSE class_idx {} out of range (expected < {NUM_GSE_CLASSES}); \
-                 stale binary or arrow file? See CLAUDE.md.",
+                 stale binary or arrow file? See AGENTS.md.",
                 row.class_idx
             );
         }

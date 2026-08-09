@@ -191,7 +191,7 @@ pub(crate) const UB_SAFETY: f64 = 1.0001;
 /// with the 600 m zones protecting the diffraction-critical near field, stride 3
 /// (vs 2) buys +11 pt deep-middle reduction at essentially the same error
 /// (exceed ≤4.5 % of cells, DEV p99 ≤0.8 dB ≪ the floor's 2.6-5.2 dB p99);
-/// stride 4 adds little for the same accuracy. See /tmp/s6-coarse-shadow-report.md.
+/// stride 4 adds little for the same accuracy.
 const SHADOW_MID_STRIDE: usize = 3;
 
 /// Default full-res half-window metres from each end (≈600 m). The dense

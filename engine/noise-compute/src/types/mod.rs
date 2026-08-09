@@ -41,9 +41,6 @@ pub const NUM_BANDS: usize = 8;
 /// kind. 100 leaves the whole `building_type` 0–13 range free.
 pub const LEISURE_TYPE_BASE: u8 = 100;
 
-/// Octave band center frequencies [Hz].
-pub const BAND_FREQ: [f64; NUM_BANDS] = [63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0];
-
 mod aircraft_detail;
 mod config;
 mod inputs;

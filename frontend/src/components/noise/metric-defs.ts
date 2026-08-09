@@ -3,7 +3,7 @@
  *
  * One entry per term with `label`, `description`, optional `standard`.
  * Structured for future i18n layer — copy is English for now (matches rest
- * of the app per CLAUDE.md "English everywhere" rule).
+ * of the app per AGENTS.md "English everywhere" rule).
  */
 
 type MetricDef = {

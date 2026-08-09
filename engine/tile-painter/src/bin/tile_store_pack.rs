@@ -2204,7 +2204,8 @@ mod tests {
 
     /// Rewritten retention test (2026-07-16 Track 2 — replaces the old `prune_*` tests, which
     /// exercised a `prune_superseded` function that no longer exists): running a REAL pack
-    /// (`pack_layer` + `write_manifest`, the exact pair `main()` calls) must leave every other
+    /// (`pack_snapshots_transactionally`, which is what `main()` calls and which owns the
+    /// `stage_layer` + `write_manifest` pair) must leave every other
     /// `.pmtiles` file in `out_dir` untouched — old generations of the SAME layer, a sibling
     /// layer's archive, everything. Retention is `tile-store-gc`'s job now, proven separately
     /// in `tile_store_gc.rs`'s own tests; this just locks in that packing never deletes.
@@ -2289,14 +2290,14 @@ mod tests {
         Ok(())
     }
 
-    /// End-to-end `pack_layer` over a store mid-cutover: one entry already rewritten through
+    /// End-to-end `pack_snapshots_transactionally` over a store mid-cutover: one entry already rewritten through
     /// the new `put_cells_hm3`/`BrotliHm3` write path, one entry still the legacy `ZstdCells`
     /// working codec (`put_cells`) — exactly the mixed state every real store is in for a
     /// while after 2026-07-16 (only tiles a combine/pyramid pass actually touches get
     /// rewritten; the rest keep publishing correctly via the ZstdCells arm). Both must ship:
-    /// pack_layer must not error, must produce a tile for each, and — the actual point of the
+    /// the pack must not error, must produce a tile for each, and — the actual point of the
     /// publish-speed fix — the BrotliHm3 entry must ship byte-identical to what was stored,
-    /// the exact call (`get_hm3_by_entry`) pack_layer's prefetch pipeline makes per tile.
+    /// the exact call (`get_hm3_by_entry`) `stage_layer`'s prefetch pipeline makes per tile.
     #[test]
     fn pack_layer_ships_mixed_codec_store_correctly() -> Result<()> {
         let dir = tempdir()?;
@@ -2324,7 +2325,7 @@ mod tests {
         assert_eq!(result.tiles, 2, "both codecs must ship");
         assert!(out_dir.join("road.b1.pmtiles").exists());
 
-        // pack_layer's own ship-out call is `TileStore::get_hm3_by_entry` — reopen the store
+        // `stage_layer`'s own ship-out call is `TileStore::get_hm3_by_entry` — reopen the store
         // and call it the same way to confirm what actually got fed to the pmtiles writer.
         let reopened = TileStore::open(&layer_dir, 6, false)?;
         assert_eq!(

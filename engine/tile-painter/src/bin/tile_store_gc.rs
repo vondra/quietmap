@@ -136,7 +136,8 @@ fn main() -> Result<()> {
 }
 
 /// The full mark-and-sweep, as a testable unit (mirrors `tile_store_fsck.rs`'s `fsck_one` /
-/// `tile_store_pack.rs`'s `pack_layer` split: `main` only owns argv + printing). Acquires
+/// `tile_store_pack.rs`'s `pack_snapshots_transactionally` split: `main` only owns argv +
+/// printing). Acquires
 /// `.pack.lock` itself, for the whole call — see the module doc's locking note.
 fn run_gc(
     out_dir: &Path,

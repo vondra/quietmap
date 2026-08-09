@@ -2,9 +2,10 @@
 //!
 //! `Flight` (Stage 0 output) carries the raw point list per aircraft.
 //! `FlightSegment` (Stage 1 output) carries one classified segment.
-//! `AirborneEvent` / `CruiseBucket` / `GroundPath` are the per-R4
-//! aggregates produced by Stage 2A / 2B / 2C and serialised into the
-//! per-R4 Arrow files.
+//! `AirborneEvent` / `CruiseBucket` are the per-R4 aggregates produced
+//! by Stage 2A / 2B and serialised into the per-R4 Arrow files. Stage
+//! 2C's own aggregate lives in `stage_2c::airport_traffic` — it writes
+//! per-microsegment airport ground ops, not a per-flight path.
 
 use crate::trace::TracePoint;
 
@@ -174,8 +175,9 @@ pub struct AirborneEvent {
 /// `terrain_*_elev_m` are pre-sampled at extract time (Opt A v15):
 /// start/end propagate from Stage 1's per-point elevation; q1, mid,
 /// q3 are sampled at Stage 2A from the sub-segment's 0.25 / 0.5 / 0.75
-/// points. The popup terrain gates (`is_ground_stale`,
-/// `is_valid_airborne`, `segment_sel`) read these directly instead of
+/// points. The popup terrain gates (`is_ground_stale_with_terrain`,
+/// `is_valid_airborne_with_terrain`, `segment_sel_with_terrain`) read
+/// these directly instead of
 /// calling `SegmentTerrain::sample` (5 raster lookups per sub-segment).
 /// At LKPR popup this saves ~1 M raster mutex acquisitions.
 ///
@@ -243,58 +245,6 @@ pub struct CruiseBucket {
     pub top_candidates: Vec<CruiseTopCandidate>,
     pub source_id: u8,
     pub origin: u8,
-}
-
-/// Stage 2C row — one aircraft × one contiguous ground path. Polyline
-/// of consecutive `FlightSegment` endpoints (segN.start = segN-1.end)
-/// in `vertices`; `legs[i]` joins `vertices[start_idx]` to
-/// `vertices[end_idx]` with a smoothed `ops_kind`,
-/// `count_weight = 1 / n_legs_of_this_kind_in_path` (one movement's
-/// energy distributed across same-kind legs so summation reconstructs
-/// a single SEL), and per-leg `em_bands` (8 dB SPL floats; silent
-/// rows round-trip as `f32::NEG_INFINITY`).
-#[derive(Clone)]
-pub struct GroundPath {
-    pub flight_id: u64,
-    pub callsign: String,
-    pub aircraft_type: [u8; 4],
-    pub profile_idx: u8,
-    pub airport_key: String,
-    pub vertices: Vec<GroundPathVertex>,
-    pub legs: Vec<GroundPathLeg>,
-    pub length_m_runway: f32,
-    pub length_m_taxi: f32,
-    pub length_m_apron: f32,
-    pub period_rep: u8,
-    pub date_id: i16,
-    pub is_departure: bool,
-    pub source_id: u8,
-    pub origin: u8,
-}
-
-#[derive(Clone, Copy)]
-pub struct GroundPathVertex {
-    pub lat: f32,
-    pub lon: f32,
-    pub alt_m: f32,
-    pub speed_kt: f32,
-    pub ts_offset_s: f32,
-}
-
-#[derive(Clone)]
-pub struct GroundPathLeg {
-    pub start_idx: u16,
-    pub end_idx: u16,
-    /// 1 = runway_roll, 2 = taxi, 3 = apron_movement (post-smoothing).
-    pub ops_kind: u8,
-    /// 1 / n_legs_of_this_kind_in_path. Distributes one movement's
-    /// reference SEL energy across same-kind legs of the path so that
-    /// summing energies × count_weight reconstructs one movement.
-    pub count_weight: f32,
-    pub length_m: f32,
-    /// 8 octave-band emission levels (dB SPL); silent legs round-trip
-    /// as `[NEG_INFINITY; 8]`.
-    pub em_bands: [f32; 8],
 }
 
 /// FL bins — five buckets covering the cruise altitude range. Tracks

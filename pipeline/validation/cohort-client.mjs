@@ -2,7 +2,7 @@
 // /check-world skill's run.mjs and pipeline/validation/delta-table.ts) had grown verbatim
 // copies of this fetch + shape validation, so a server-side contract bump (schema_version,
 // TTL bounds) had to be patched twice or one gate silently diverged — the exact
-// fix-one-miss-the-rest class CLAUDE.md's one-source-of-truth rule targets (/simplify
+// fix-one-miss-the-rest class AGENTS.md's one-source-of-truth rule targets (/simplify
 // 2026-07-15). Shared-module shape mirrors snapshot-loader.mjs (.mjs + .d.mts) so the TS
 // runner and the skill's plain-JS runner import the same file.
 

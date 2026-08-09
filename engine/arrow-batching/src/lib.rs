@@ -6,7 +6,8 @@
 //! (source-reader) skips decoding any batch whose bbox lies farther from the
 //! click than the source class's audibility radius. File IO stays in each
 //! caller — this crate only transforms columns and defines the metadata
-//! contract. SSOT: docs/dev/popup-batch-pruning.md.
+//! contract. The contract itself is `qm_batch_bboxes` below — this crate IS the
+//! SSOT (the design note it used to cite is not in this repo).
 
 use std::collections::HashMap;
 use std::sync::Arc;

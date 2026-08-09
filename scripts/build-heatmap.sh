@@ -183,7 +183,7 @@ if $is_scoped; then
   SCOPED_STAGING="$OUTPUT"
 fi
 
-# Rebuild — Fastify dlopen + long jobs cache stale binaries (CLAUDE.md).
+# Rebuild — Fastify dlopen + long jobs cache stale binaries (AGENTS.md).
 log "rebuilding (release)"
 cargo build --release --manifest-path engine/tile-painter/Cargo.toml \
   --bin build-heatmap-surface --bin build-heatmap-aircraft \

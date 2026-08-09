@@ -7,7 +7,6 @@
 //! field directly.
 
 use crate::grid::TILE_PX;
-use noise_compute::emission::aircraft;
 
 pub const NUM_PERIODS: usize = 3;
 
@@ -29,18 +28,6 @@ impl TileAccumulator {
     pub fn add_energy_at(&mut self, py: u32, px: u32, period: u8, e: f32) {
         let idx = (py as usize * TILE_PX + px as usize) * NUM_PERIODS + period as usize;
         self.energy[idx] += e;
-    }
-
-    /// True if any cell exceeds the visibility floor for any period.
-    /// `min_db` is in dBA — typically 30 to suppress empty tiles.
-    pub fn has_above_floor(&self, n_days_f: f64, min_db: f64) -> bool {
-        // Energy floor matches `period_leq` inverse for the longest
-        // period (12h day): if even daytime energy can't reach min_db,
-        // night certainly can't either.
-        let floor_lin = (min_db / 10.0 * std::f64::consts::LN_10).exp()
-            * aircraft::PERIOD_SECONDS[0]
-            * n_days_f;
-        self.energy.iter().any(|&e| e as f64 >= floor_lin)
     }
 
     /// Add `other`'s energy element-wise into `self`. Used by the

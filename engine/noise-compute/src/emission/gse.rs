@@ -42,8 +42,6 @@ pub const GSE_CLASS_LIGHT: u8 = 0;
 pub const GSE_CLASS_MEDIUM: u8 = 1;
 pub const GSE_CLASS_HEAVY: u8 = 2;
 
-pub static GSE_CLASS_NAMES: [&str; NUM_GSE_CLASSES] = ["LIGHT", "MEDIUM", "HEAVY"];
-
 /// Per-class octave-band sound-power level Lw (dB) at low operating
 /// speed (CNOSSOS validated floor, 20 km/h). Lw is per-second
 /// sustained emission; per-event SEL depends on propagation

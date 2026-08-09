@@ -37,13 +37,6 @@ fn seg_name_from_tags(ref_tag: &str, name_tag: &str, subtype: &str, osm_id: i64)
     }
 }
 
-/// A-weighted dB(A) summary of a per-band *level* array (emission Lw or
-/// received bands). Matches `iso9613::a_weighted_total` which is the same
-/// aggregation the pipeline uses for totals.
-pub fn bands_to_db_a(bands: &[f64; NUM_BANDS]) -> f64 {
-    iso9613::a_weighted_total(bands)
-}
-
 /// Lden under each propagation-variant hypothesis (full / free-field /
 /// no_terrain / no_screening / no_vegetation). Uses the existing
 /// `PropagationVariants::lden_from_periods` helper, so values match what the
