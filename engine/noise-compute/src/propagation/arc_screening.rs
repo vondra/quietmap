@@ -117,6 +117,60 @@
 //!
 //! Blocked intervals come from the VECTOR obstacle store; a caller without one
 //! (`obstacles: None`) keeps today's cp-ray verdict unchanged.
+//!
+//! ## Why the blocked test is geometry only
+//!
+//! An arc is admitted on two questions — does it cover any of this segment's
+//! span, and does it stand in FRONT of the source (`a = d − near > 1`, `near ≥ 1`)
+//! — and on nothing else. It used to carry a third, `|δ| ≈ h²·d/(2ab)` against the
+//! sight line, to drop arcs passing too far below the line (CNOSSOS-EU §2.5.6(c)'s
+//! penumbra floor) or too close to grazing. That test is GONE from both lanes.
+//!
+//! The reason is that admission is not a value, it is a FORK between two ray
+//! marches. An admitted direction goes to [`interval_screening`]: its own source
+//! point, its own path profile, its own terrain, its own exact crossings, and
+//! `path_effects` ranking the candidates on the real δ — including the penumbra
+//! branch. A rejected direction goes to [`interval_terrain`], the SAME source
+//! point, profile and terrain with the screening term set to zero. So the two
+//! arms differ in exactly one thing: whether obstacles and barriers are consulted
+//! at all. A false NEGATIVE therefore deletes a real screen outright. A false
+//! POSITIVE is second order but NOT free, and the first version of this note said
+//! it was: the admitted arc's endpoints become quadrature boundaries, so they move
+//! the sub-interval midpoints the terrain is sampled at, and a piece that ends up
+//! containing the cp azimuth reuses `cp_terrain`/`cp_screening` instead of
+//! marching its own ray (see the `parts` loop below). So a false positive can
+//! shift the TERRAIN term even when its own screening returns ~0 dB. The errors
+//! are still strongly asymmetric — bounded requadrature against an unbounded lost
+//! screen — and that is what makes a prefilter that is not a sound
+//! over-approximation worse than none.
+//!
+//! Neither lane's was sound, and they were unsound in OPPOSITE directions,
+//! which is how this surfaced (parity gate, rail 2206/1391 and 2208/1390):
+//!
+//! * here, `top_alt_m` was ONE elevation sample, taken at the merged arc's mid
+//!   azimuth at `near_m` — the range of the NEAREST member. A fused chain spans a
+//!   whole range stratum radially, so on rising ground that sample is
+//!   systematically the lowest footing in the arc, and it is not even a member's
+//!   own value. Pixel 86/507, source 3930: 19 of the 23 arcs clipping that span
+//!   were rejected with tops 10-16 m BELOW the sight line, the segment scored
+//!   0.75 dB against its own closest-point ray's 12.33, and the pixel came out
+//!   5.91 dB LOUDER than CUDA. The chains stand on a hillside that rises ~10 %
+//!   over the 200 m their stratum spans.
+//! * the kernel sampled per EDGE, at that edge's own range, and fused
+//!   `top = max`, so it read those same chains 11-22 m higher — but it also ran
+//!   the test per RAW EDGE, which this lane cannot: the skyline is built once per
+//!   RECEIVER and clipped by every segment of it, so a segment-dependent test
+//!   cannot run before the merge. Per edge is the stricter rule, and pixel
+//!   109/509 is what that costs: sources 3931/1879/1877/3932/3933 with a
+//!   closest-point ray of 12.49 dB and an arc verdict of 0.00, i.e. the whole
+//!   segment's screening thrown away.
+//!
+//! A SOUND version was built and measured before it was dropped: bound the
+//! ground from above over the arc's own annulus sector instead of sampling a
+//! point of it. It works, and it costs MORE than having no prefilter at all —
+//! the bound needs raster reads per arc, while the extra pieces the wider
+//! admission produces are cheap. On 2206/1391: 138.4 s of kernel with the sound
+//! bound, 132.5 s with no test, and the no-test arm is the more accurate one.
 
 use super::geo;
 use super::iso9613::ground_or_barrier_db;
@@ -147,22 +201,6 @@ const ESCALATE_SPAN_RAD: f64 = 0.26;
 /// ESCALATE_SPAN_RAD` (~140°) is a receiver walled in on all sides, where the
 /// remaining sub-intervals all report the same deep screening anyway.
 const ESCALATE_MAX_PARTS: usize = 9;
-
-/// How far BELOW the sight line an obstacle may pass and still attenuate:
-/// CNOSSOS-EU §2.5.6(c)'s penumbra branch runs down to δ = −λ/20 and
-/// `diffraction::maekawa_bands` returns zero past it. λ/20 at 63 Hz — the
-/// longest wavelength in the model, hence the deepest near-miss that can still
-/// carry energy in ANY band. A 3 m noise wall with a 4 m receiver never breaks
-/// the sight line at all, yet screens by ~0.6 dB through this branch, so a
-/// prune written as "the top must clear the sight line" deletes precisely the
-/// geometry a wall exists to create.
-/// ONE definition, in [`crate::constants::PENUMBRA_DELTA_FLOOR_M`] (signed,
-/// negative, over `SPEED_OF_SOUND`); this is its magnitude, because every use
-/// below compares a positive numerator against it. Hand-copying `340.0` here was
-/// the fifth copy of the same formula, and the reason eight of nine call sites
-/// once lost a term (2026-08-08 review); `build.rs` now injects the same number
-/// into the kernel as `ARC_PENUMBRA_FLOOR_M`.
-const PENUMBRA_FLOOR_M: f64 = -crate::constants::PENUMBRA_DELTA_FLOOR_M;
 
 /// Width (m) of a skyline STRATUM in height. Two arcs may fuse only if their
 /// heights land in the same `[k·tol, (k+1)·tol)` band.
@@ -543,16 +581,18 @@ impl Default for ArcSkyline {
 }
 
 /// One merged blocked arc. `lo`/`hi` are absolute azimuths with `lo <= hi`;
-/// `near_m` is the closest range in the arc and `top_alt_m` its ABSOLUTE top
-/// (local ground + height), so the grazing prune runs on real altitudes rather
-/// than assuming the obstacle stands on the receiver's own ground.
+/// `near_m` is the closest range in the arc, and since the δ prefilter went it
+/// has exactly ONE consumer left — the admission test's `a = d − near` and
+/// `near ≥ 1` floors. No diffraction formula reads it: [`BlockedInterval`] carries
+/// only the azimuths, and `interval_screening` re-derives δ from the marched
+/// profile. There is no top altitude on this record either (see the module note
+/// "Why the blocked test is geometry only").
 #[derive(Clone, Copy, Debug)]
 struct MergedArc {
     lo: f64,
     hi: f64,
     near_m: f32,
     height_m: f32,
-    top_alt_m: f32,
     /// The (height, range) STRATUM this arc belongs to — see [`fuse_key`]. The
     /// list is sorted by `(key, lo)`, so one stratum's arcs are contiguous and
     /// disjoint, and only same-key arcs ever fuse.
@@ -656,7 +696,6 @@ impl ArcSkyline {
         set: &ObstacleSet,
         barriers: &[Barrier],
         source_height_m: f64,
-        rasters: &dyn RasterSampler,
         bounds: ArcBounds,
     ) {
         // Snap the growth radius UP to a range-stratum boundary, which is what
@@ -809,18 +848,6 @@ impl ArcSkyline {
         for &i in &touched {
             self.built_radius_m[i] = self.built_radius_m[i].max(need as f32);
         }
-
-        // One elevation sample per MERGED arc resolves its absolute top. Doing
-        // it after the merge (not per raw edge) keeps it to a few dozen lookups
-        // per growth step instead of one per obstacle edge.
-        let m_lon = m_per_deg_lon(lat.to_radians());
-        for arc in arcs.iter_mut() {
-            let az = 0.5 * (arc.lo + arc.hi);
-            let (dx, dy) = (az.cos(), az.sin());
-            let b = arc.near_m as f64;
-            let g = rasters.elevation(lat + b * dy / M_PER_DEG_LAT, lon + b * dx / m_lon);
-            arc.top_alt_m = (g + arc.height_m as f64) as f32;
-        }
     }
 }
 
@@ -848,7 +875,6 @@ fn insert_merged(
         hi: a.hi,
         near_m: a.near_m,
         height_m: a.height_m,
-        top_alt_m: 0.0,
         key: fuse_key(a.near_m, a.height_m),
     };
     // Sorted by `(key, lo)`: one STRATUM's arcs are contiguous, and inside a
@@ -974,7 +1000,6 @@ fn insert_merged(
             hi: if hi - lo > TAU { lo + TAU } else { hi },
             near_m,
             height_m,
-            top_alt_m: v[k].top_alt_m.max(next.top_alt_m),
             key: fuse_key(near_m, height_m),
         };
         v.remove(k + 1);
@@ -1069,16 +1094,16 @@ pub fn arc_screened_attenuation(
         q.obstacles,
         q.barriers,
         q.source_height_m,
-        rasters,
         q.bounds,
     );
     if skyline.arcs.is_empty() {
         return *q.cp_screening;
     }
 
-    // 1. Clip the receiver's skyline to this segment's span, then keep only the
-    //    arcs that can actually screen THIS path: in front of the source, above
-    //    its sight line, and bending it by at least δ_min.
+    // 1. Clip the receiver's skyline to this segment's span, then keep the arcs
+    //    that stand in FRONT of the source and not under the receiver's feet.
+    //    That is the whole test — geometry, no δ (see the module note "Why the
+    //    blocked test is geometry only").
     intervals.clear();
     'arcs: for arc in skyline.arcs.iter() {
         // EVERY piece of the span this arc covers, not merely the first one.
@@ -1124,19 +1149,20 @@ pub fn arc_screened_attenuation(
             if a <= 1.0 || b < 1.0 {
                 continue; // the arc stands beyond the segment, or on the receiver
             }
-            // |δ| ≈ h²·d/(2ab) on the sight line to THIS source point, SIGNED by
-            // whether the top clears it. Below the line the penumbra branch still
-            // carries energy until δ = −λ/20; above it the (currently disabled)
-            // grazing prune applies.
-            let los = q.receiver_alt_m - (b / d) * (q.receiver_alt_m - q.src_alt_m);
-            let h = arc.top_alt_m as f64 - los;
-            let two_ab = 2.0 * a * b;
-            let delta_num = h * h * d;
-            let below_penumbra = h < 0.0 && delta_num > PENUMBRA_FLOOR_M * two_ab;
-            let above_grazing = h >= 0.0 && delta_num < q.bounds.delta_min_m * two_ab;
-            if below_penumbra || above_grazing {
-                continue;
-            }
+            // NO δ PREFILTER HERE, and that is deliberate — see the module note
+            // "Why the blocked test is geometry only". The arc has an obstacle in
+            // it and it stands in front of the source; whether that obstacle bends
+            // THIS ray is what the ray march below answers, from the real profile.
+            //
+            // `b` here is a RECEIVER-WIDE minimum: the skyline is built once per
+            // receiver and `insert_merged` takes `near = min` over every member of
+            // the stratum, including members outside this segment's span. The CUDA
+            // lane clips to the span BEFORE its union, so its `b` is a min over the
+            // in-span subset and is therefore >= this one. Same floors, different
+            // `b`, so the two lanes can disagree on an arc whose nearest member is
+            // out-of-span — see the KNOWN RESIDUAL FORK note in `scatter.cu`'s
+            // admission block. This lane is the more permissive of the two, which
+            // is the safe direction: it costs a march that returns ~0 dB.
             intervals.push(BlockedInterval { start, end });
             if intervals.len() >= q.bounds.max_intervals {
                 break 'arcs;
@@ -2120,7 +2146,6 @@ mod tests {
                 hi: hi - 0.001 + TAU,
                 near_m: 100.0,
                 height_m: 8.0,
-                top_alt_m: 8.0,
                 key: fuse_key(100.0, 8.0),
             }],
             fuse_scratch: Vec::new(),
@@ -2752,23 +2777,6 @@ mod wedge_tests {
         assert!(mismatches.is_empty(), "{mismatches:#?}");
     }
 
-    /// Flat ground — `ensure` samples elevation once per merged arc.
-    struct FlatGround;
-    impl RasterSampler for FlatGround {
-        fn elevation(&self, _: f64, _: f64) -> f64 {
-            0.0
-        }
-        fn building_height(&self, _: f64, _: f64) -> f64 {
-            0.0
-        }
-        fn ground_g(&self, _: f64, _: f64) -> f64 {
-            0.5
-        }
-        fn building_enclosure(&self, _: f64, _: f64) -> f64 {
-            0.0
-        }
-    }
-
     /// Two 6 m-wide buildings 3.2° apart, both inside sector 0 (azimuth
     /// [0, 5.625°)) — the geometry the sector bookkeeping cannot tell apart but
     /// the wedge gather can. Both stand at 800 m, where 3.2° is 45 m of
@@ -2827,7 +2835,6 @@ mod wedge_tests {
                 &set,
                 &[],
                 0.05,
-                &FlatGround,
                 ARC_BOUNDS_DEFAULT,
             );
         }

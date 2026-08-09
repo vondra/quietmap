@@ -1172,11 +1172,20 @@ impl Probe<'_> {
 // measured at 4469 cells >0.5 dB and 17.63 dB max against the CPU lane on
 // 2206/1391, of which the per-edge rule leaves 2298 / 5.91 dB.
 //
-// Porting it forward is two edits — move the `near_m` computation into the emit
+// Porting it forward WAS two edits — move the `near_m` computation into the emit
 // loop (per edge, from that edge alone) and drop the `convex` branch so
-// `n_emit` is always `k1 - k0` — but every verdict recorded in this file's
-// comments was scored on the rule as written, so a port has to be re-scored
-// against `reference33` in the same commit, not assumed.
+// `n_emit` is always `k1 - k0`. As of 2026-08-09 it is FOUR: the kernel also
+// dropped the per-edge δ prefilter (penumbra + grazing), the ray×polygon
+// confirmation, and the per-edge elevation sample that fed them, and it moved the
+// surviving 1 m geometry floors onto the MERGED arc. Both of those are in the
+// REPRODUCED list below and neither is in the kernel any more.
+//
+// So the gap this port has to close is now wider than when it was written, and
+// the measured consequence is that `v4` is currently BLIND to the change that
+// widened it: on `--scene all`, this commit moved 25 of 7667 `v3` rows and 0 of
+// 7667 `v4` rows. Every verdict recorded in this file's comments was scored on
+// the rule as written, so a port has to be re-scored against `reference33` in the
+// same commit, not assumed.
 //
 // Authority for the pre-fix rule: `engine/noise-gpu/kernels/scatter.cu` —
 // `arc_screen_bands` in its then-shipped configuration (`ARC_FOOTPRINT_CSR = 1`,
@@ -1238,12 +1247,15 @@ fn gpu_fuse_key(near_m: f64, height_m: f64) -> i64 {
     let r = (near_m.max(1e-3).ln() / GPU_ARC_FUSE_RANGE_RATIO.ln()).floor() as i64;
     (h << 20) | ((r + 0x4_0000) & 0xf_ffff)
 }
-/// `ARC_PENUMBRA_FLOOR_M` (scatter.cu) = `arc_screening::PENUMBRA_FLOOR_M`, which
-/// is `-constants::PENUMBRA_DELTA_FLOOR_M`. Also injected into the kernel by
+/// `ARC_PENUMBRA_FLOOR_M` (scatter.cu) is the magnitude of
+/// `constants::PENUMBRA_DELTA_FLOOR_M`. Also injected into the kernel by
 /// `noise-gpu/build.rs` since 2026-08-08; hand-written here for the same reason as
 /// `GPU_ARC_FUSE_HEIGHT_TOL_M` above.
 const GPU_ARC_PENUMBRA_FLOOR_M: f64 = 340.0 / 63.0 / 20.0;
-/// `ARC_DELTA_MIN_M` (scatter.cu) — the grazing prune, OFF on both lanes.
+/// The grazing prune of the PRE-2026-08-09 kernel, which this port deliberately
+/// preserves — `ARC_DELTA_MIN_M` no longer exists in scatter.cu, and it was inert
+/// at this same 0.0 there and on the CPU before it was deleted. Mirrors nothing
+/// live; it is here because `v4` reproduces the pre-fix rule (see the v4 header).
 const GPU_ARC_DELTA_MIN_M: f64 = 0.0;
 /// `ARC_ESCALATE_SPAN` (scatter.cu:80) = `arc_screening::ESCALATE_SPAN_RAD`.
 const GPU_ARC_ESCALATE_SPAN: f64 = 0.26;

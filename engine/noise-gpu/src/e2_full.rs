@@ -417,7 +417,10 @@ fn main() -> Result<()> {
     // Energies + the ARC FAULT slot + EIGHT per-pixel counter slots the kernel
     // fills only when it is built with -DPROF_COUNTERS=1 (pairs past the budget
     // skip, pairs taking the arc path, hull lookups/hits, clip survivors,
-    // confirmations, interval overflows — see the ARCSTAT read-back below).
+    // arcs EMITTED into the union, interval overflows — see the ARCSTAT read-back
+    // below). Slot 5 counted post-confirmation admissions until the confirmation
+    // ray and the δ prefilter were removed from the kernel; it is now the count
+    // of arcs handed to `arc_iv_union`, before the per-merged-arc geometry test.
     // Always allocated, so one host binary serves both PTX builds: 512²·8·4 B =
     // 8.0 MiB on top of the 3.0 MiB of energies, once per process, in THIS
     // validator only — and meta[13] above is what tells the kernel it may use it.
@@ -486,20 +489,20 @@ fn main() -> Result<()> {
     // this bin exists to catch lane forks, and a dropped arc IS one.
     let arc_drops = gpu[noise_gpu::OUT_FAULT_SLOT] as f64;
     eprintln!("ARC FAULT dropped_arcs={arc_drops:.0} (ARC_MAX_MERGED overflow)");
-    let (pairs, arced, look, hit, clipped, confirmed) = (c[0], c[1], c[2], c[3], c[4], c[5]);
+    let (pairs, arced, look, hit, clipped, emitted) = (c[0], c[1], c[2], c[3], c[4], c[5]);
     let (ovf, ovf_pairs) = (c[6], c[7]);
     if pairs > 0.0 {
         let r = |a: f64, b: f64| if b > 0.0 { a / b } else { 0.0 };
         eprintln!(
             "ARCSTAT pairs={pairs:.0} arc_pairs={arced:.0} arc_frac={:.4} \
              hull_lookups={look:.0} hulls_per_pair={:.1} hull_hit_rate={:.4} \
-             clipped={clipped:.0} clip_rate={:.4} confirmed={confirmed:.0} confirm_rate={:.4} \
+             clipped={clipped:.0} clip_rate={:.4} emitted={emitted:.0} emit_rate={:.4} \
              iv_overflow={ovf:.0} pairs_with_overflow={ovf_pairs:.0} ovf_pair_rate={:.6}",
             r(arced, pairs),
             r(look, arced),
             r(hit, look),
             r(clipped, look),
-            r(confirmed, look),
+            r(emitted, look),
             r(ovf_pairs, arced)
         );
     }

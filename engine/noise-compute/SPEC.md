@@ -460,7 +460,8 @@ average, for line callers holding a vector obstacle store:
 span      = angular span of the segment at the receiver (2 × atan2)
 skyline   = the receiver's merged blocked azimuth arcs, LAYERED BY STRATUM —
             every obstacle edge within `radius` projected to its short arc,
-            each carrying the nearest range `b` and the absolute top it reaches.
+            each carrying the nearest range `b` it reaches. No absolute top is
+            carried: nothing downstream of admission reads one (see `blocked_i`).
             Built ONCE PER RECEIVER and shared by all its segments. Two arcs
             merge only inside ONE stratum of height (3 m bands) AND of range
             (geometric bands of ratio 1.5): a merge hands `b = min` and
@@ -470,8 +471,17 @@ skyline   = the receiver's merged blocked azimuth arcs, LAYERED BY STRATUM —
             disjoint; across strata they overlap freely and each faces the
             admission test with its OWN range.
 blocked_i = `skyline` clipped to `span`, keeping only arcs that stand in FRONT
-            of the source (b < d), break its sight line (h > 0) and bend it by
-            at least δ_min (h²·d ≥ 2·δ_min·a·b)
+            of the source and not under the receiver's feet: `b ≥ 1` and
+            `a = d − b > 1`, in metres. GEOMETRY ONLY — no sight-line or δ
+            test. Admission is a FORK between two ray marches that differ in
+            one thing, whether obstacles are consulted: a false negative
+            deletes a real screen outright, while a false positive only
+            requadratures (its endpoints move the sampled midpoints, and a
+            piece covering the cp azimuth reuses the cp verdict) — bounded
+            against unbounded. Both lanes' δ prefilters were unsound, in
+            opposite directions, and a sound one measured slower AND less
+            accurate than none (2026-08-09). The real δ, penumbra branch
+            included, is re-derived per ray by §3.5b from the marched profile.
 A_i       = §3.5b screening on the ray to the EXACT point on the segment at
             interval i's centre azimuth (its own path profile + terrain, which
             serve only as that call's increment base); an interval wider than

@@ -102,7 +102,6 @@ pub const SPEED_OF_SOUND: f64 = 340.0;
 ///
 /// # THE definition — every other appearance derives from this line
 ///
-/// * `propagation::arc_screening::PENUMBRA_FLOOR_M` is its magnitude (`-` of it).
 /// * `scatter.cu`'s `ARC_PENUMBRA_FLOOR_M` and `ARC_DELTA_REJECT` come from
 ///   `noise-gpu/build.rs`, which mirrors THIS EXPRESSION (reading
 ///   [`SPEED_OF_SOUND`] and dividing) and injects the result via `-D`.

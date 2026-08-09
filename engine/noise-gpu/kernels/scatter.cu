@@ -131,9 +131,22 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #define ARC_ESCALATE_SPAN 0.26     // ESCALATE_SPAN_RAD
 #define ARC_ESCALATE_MAX_PARTS 9   // ESCALATE_MAX_PARTS
 // Blocked-interval capacity per (segment, receiver) pair. GPU-ONLY bound: the
-// CPU grows a Vec, a thread cannot. Sized against the geometry, not a guess —
-// an interval survives only if a footprint's angular hull overlaps the span AND
-// a ray to its centre crosses it, i.e. it is one of the buildings actually
+// CPU grows a Vec, a thread cannot.
+//
+// WARNING, 2026-08-09: the sizing premise below is now WEAKER than when it was
+// written and the demand study further down was measured under the OLD regime.
+// It assumed an interval survives only if a footprint's angular hull overlaps the
+// span AND a ray to its centre crosses it — i.e. it was sized against the set
+// that had already passed the confirmation ray and the δ prefilter. Both are gone
+// (see `arc_screening`'s "Why the blocked test is geometry only"), so what enters
+// this capped list is now EVERY span-clipped edge, admission runs only after
+// collection, and the peaks in the demand study are under-estimates. The two
+// tiles measured after the change reported dropped_arcs = 0, so it did not bind
+// there, but the bound has NOT been re-derived for the widened set. Do that
+// before trusting this number on denser geometry than rail 2206/1391.
+//
+// The old premise, kept because the shape of the argument still applies to the
+// admitted set: an interval matters only if it is one of the buildings actually
 // standing in the fan between receiver and segment. Overflow drops the EXTRA
 // footprints (the intervals already collected still average), which degrades
 // continuously toward less screening rather than snapping back to the cp
@@ -243,9 +256,10 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 // obstacle that is simultaneously near-and-low and far-and-tall, which is the
 // same "phantom" the convex hull makes, one level coarser. ARC_PENUMBRA_FLOOR_M
 // is the δ*-free floor (λ/20 at the LOWEST band) and is defined with
-// ARC_DELTA_REJECT near the top, both injected by build.rs; ARC_DELTA_MIN_M is
-// the grazing prune, OFF (0.0) on both lanes because it is terrain-blind as
-// formulated. ARC_FUSE_HEIGHT_TOL_M is injected too — `arc_fuse_key` FLOORS a
+// ARC_DELTA_REJECT near the top, both injected by build.rs. There is no grazing
+// prune here any more: it, and the whole δ prefilter it belonged to, are gone
+// from BOTH lanes — see `arc_screening`'s "Why the blocked test is geometry
+// only". ARC_FUSE_HEIGHT_TOL_M is injected too — `arc_fuse_key` FLOORS a
 // height by it, so the two lanes must divide by the same f32 or an arc lands in
 // the neighbouring stratum. Fallback = bare-nvcc syntax check only.
 #ifndef ARC_FUSE_HEIGHT_TOL_M
@@ -266,9 +280,6 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 // from Rust's `1.5f32.ln()` by one ulp and that ulp moves arcs between strata
 // (see `arc_fuse_key`). A hand-copied `1.5f` here would have been a second,
 // silent source of the same fork.
-#ifndef ARC_DELTA_MIN_M
-#define ARC_DELTA_MIN_M 0.0
-#endif
 // Scanline-rasterise the (receiver, start, end) triangle instead of sweeping its
 // bbox. -DARC_TRI_WALK=0 builds the bbox sweep, which — with the footprint walk
 // and no cap — is the EXACT kernel every optimisation is diffed against.
@@ -1641,9 +1652,9 @@ __device__ __forceinline__ int arc_fuse_key(float near_m, float height_m)
 // footprint immediately instead of parking it in a capped table. Touching
 // intervals merge (`<=`), mirroring the CPU's `iv_s[i] <= iv_e[mg]`.
 __device__ __forceinline__ int arc_iv_union(
-    double* iv_s, double* iv_e, float* iv_near, float* iv_h, float* iv_top,
+    double* iv_s, double* iv_e, float* iv_near, float* iv_h,
     int* iv_key, int niv, double st, double en, float near_m, float h_m,
-    float top_m, int* overflow)
+    int* overflow)
 {
     // Sorted by `(stratum key, lo)`, so one STRATUM's arcs are contiguous and,
     // inside it, disjoint. Arcs of different strata are left side by side and
@@ -1653,7 +1664,7 @@ __device__ __forceinline__ int arc_iv_union(
     // height, both of which only keep the arc alive, so it can cost an
     // evaluation ray and never a lost screen.
     double s0 = st, e0 = en;
-    float n0 = near_m, h0 = h_m, t0 = top_m;
+    float n0 = near_m, h0 = h_m;
     int key = arc_fuse_key(near_m, h_m);
     int i = 0;
     while (i < niv && (iv_key[i] < key || (iv_key[i] == key && iv_s[i] < s0))) i++;
@@ -1662,10 +1673,10 @@ __device__ __forceinline__ int arc_iv_union(
     if (i > 0 && iv_key[i - 1] == key && iv_e[i - 1] >= s0) {
         i--;
         s0 = fmin(s0, iv_s[i]); e0 = fmax(e0, iv_e[i]);
-        n0 = fminf(n0, iv_near[i]); t0 = fmaxf(t0, iv_top[i]); h0 = fmaxf(h0, iv_h[i]);
+        n0 = fminf(n0, iv_near[i]); h0 = fmaxf(h0, iv_h[i]);
         for (int q = i; q < niv - 1; q++) {
             iv_s[q] = iv_s[q + 1]; iv_e[q] = iv_e[q + 1];
-            iv_near[q] = iv_near[q + 1]; iv_h[q] = iv_h[q + 1]; iv_top[q] = iv_top[q + 1];
+            iv_near[q] = iv_near[q + 1]; iv_h[q] = iv_h[q + 1];
             iv_key[q] = iv_key[q + 1];
         }
         niv--;
@@ -1674,11 +1685,11 @@ __device__ __forceinline__ int arc_iv_union(
     // slot is re-tested against the wider arc and the scan needs no rewind.
     while (i < niv && iv_key[i] == key && iv_s[i] <= e0) {
         s0 = fmin(s0, iv_s[i]); e0 = fmax(e0, iv_e[i]);
-        n0 = fminf(n0, iv_near[i]); t0 = fmaxf(t0, iv_top[i]);
         h0 = fmaxf(h0, iv_h[i]);
+        n0 = fminf(n0, iv_near[i]);
         for (int q = i; q < niv - 1; q++) {
             iv_s[q] = iv_s[q + 1]; iv_e[q] = iv_e[q + 1];
-            iv_near[q] = iv_near[q + 1]; iv_h[q] = iv_h[q + 1]; iv_top[q] = iv_top[q + 1];
+            iv_near[q] = iv_near[q + 1]; iv_h[q] = iv_h[q + 1];
             iv_key[q] = iv_key[q + 1];
         }
         niv--;
@@ -1709,10 +1720,10 @@ __device__ __forceinline__ int arc_iv_union(
     if (niv >= ARC_MAX_MERGED) { *overflow += 1; return niv; }
     for (int q = niv; q > i; q--) {
         iv_s[q] = iv_s[q - 1]; iv_e[q] = iv_e[q - 1];
-        iv_near[q] = iv_near[q - 1]; iv_h[q] = iv_h[q - 1]; iv_top[q] = iv_top[q - 1];
+        iv_near[q] = iv_near[q - 1]; iv_h[q] = iv_h[q - 1];
         iv_key[q] = iv_key[q - 1];
     }
-    iv_s[i] = s0; iv_e[i] = e0; iv_near[i] = n0; iv_h[i] = h0; iv_top[i] = t0;
+    iv_s[i] = s0; iv_e[i] = e0; iv_near[i] = n0; iv_h[i] = h0;
     iv_key[i] = key;
     return niv + 1;
 }
@@ -1783,13 +1794,13 @@ __device__ void arc_screen_bands(
     // its divergence from the CPU's uncapped grouping), and the full-grid DDA
     // the confirmation used to need.
     double iv_s[ARC_MAX_MERGED], iv_e[ARC_MAX_MERGED];
-    float iv_near[ARC_MAX_MERGED], iv_h[ARC_MAX_MERGED], iv_top[ARC_MAX_MERGED];
+    float iv_near[ARC_MAX_MERGED], iv_h[ARC_MAX_MERGED];
     int iv_key[ARC_MAX_MERGED];
     int niv = 0, iv_overflow = 0;
-    // The cp source altitude — the sight line the admission test measures
-    // against, mirroring `ArcScreening::src_alt_m`.
-    double q_src_alt = tile_elev(inner, elev, rows, cols, lat_min, lon_min, inv, bb,
-                                 cplat, cplon) + src_height;
+    // No cp source ALTITUDE is read here any more. It existed only to build the
+    // sight line the deleted δ prefilter measured against; the admission test
+    // below is geometry only, and the ray march re-derives δ from the real
+    // profile. Removing it also removes a `tile_elev` raster read per call.
     const double* metas = (const double*)obst[1];
     const float* edges = (const float*)obst[4];
     const unsigned int* foot_es = (const unsigned int*)obst[7];
@@ -2047,94 +2058,40 @@ __device__ void arc_screen_bands(
                         // EDGE's, edges stride 5 = x0,y0,x1,y1,height). Equal to
                         // the footprint maximum for every store this lane can be
                         // given — `add_polygon_wkb` stamps one height on every ring
-                        // of an id — but it is the per-edge value that the fuse key
-                        // and `top_alt` are defined on, so read it where the
-                        // definition is.
+                        // of an id — but it is the per-edge value the fuse key is
+                        // defined on, so read it where the definition is.
                         double h_edge = (double)__ldg(&g[4]);
-                        // Confirmation: the ray to this arc's centre must actually
-                        // cross THIS footprint. With its edge run in hand that is a
-                        // direct ray×polygon test — the edge walk had to re-run a
-                        // whole-grid DDA per interval to answer the same question.
-                        double slat_c, slon_c;
-                        if (!arc_source_point(rlat, rlon, mlon, alat, alon, blat, blon,
-                                              base + 0.5 * (est + een), &slat_c, &slon_c))
-                            continue;
-                        double sxc = (slon_c - m[1]) * imlon, syc = (slat_c - m[0]) * M_LAT;
-                        double dxc = rxl - sxc, dyc = ryl - syc;
-                        bool hit = false;
-                        // `gk` not `g`: `g` above is THIS arc's edge, and the
-                        // confirmation asks about the whole ring.
-                        for (unsigned int kk = k0; kk < k1 && !hit; kk++) {
-                            const float* gk = &edges[(eoff + __ldg(&foot_er[fer_off + kk])) * 5];
-                            double tt;
-                            hit = seg_isect_t(sxc, syc, dxc, dyc, (double)gk[0], (double)gk[1],
-                                              (double)gk[2], (double)gk[3], &tt);
-                        }
-                        if (!hit) continue;
-                        // ---- PER-ARC ADMISSION, mirroring arc_screening §1: an
-                        // arc screens THIS path only if it stands in front of the
-                        // source and actually bends the ray. δ ≈ h²·d/(2ab) on
-                        // the sight line to this source point, SIGNED by whether
-                        // the top clears it. Without this the walk turned every
-                        // crossed footprint into a blocked arc — the bulk of the
-                        // measured GPU↔CPU gap, and over-screening in exactly the
-                        // direction the isolation run showed.
-                        double ddx2 = (slon_c - rlon) * mlon, ddy2 = (slat_c - rlat) * M_LAT;
-                        double d_src = sqrt(ddx2 * ddx2 + ddy2 * ddy2);
-                        double b_rng = near_m, a_rng = d_src - b_rng;
-                        // The 1 m floors are `arc_screening.rs:1124` exactly, and
-                        // they stay exactly that. `b` is now what the norm says it
-                        // is — the distance to the DIFFRACTING EDGE — so the floor
-                        // is a statement about the edge, not about the building:
-                        // δ ≈ h²·d/(2ab) is the parabolic thin-screen expansion,
-                        // it diverges as b -> 0 (a wall the receiver is touching
-                        // would return δ -> ∞, i.e. maximum screening), and it
-                        // needs the receiver in the edge's FAR field, b ≫ λ, which
-                        // at b < 1 m already fails for every band below ~340 Hz —
-                        // half of the model's 63 Hz .. 8 kHz range. That is also
-                        // why CNOSSOS/ISO 9613-2 place a facade receiver 2 m OFF
-                        // the facade and treat it as an immission point rather than
-                        // a diffraction path. So an edge within a metre is not
-                        // screening data this model can use, and dropping it errs
-                        // toward LESS screening (louder), never toward a phantom
-                        // shadow.
+                        if (PROF_COUNTERS && arcstat) arcstat[5] += 1.0f;   // emitted
+                        // Straight into the union: an emitted arc carries its
+                        // azimuth range, its own range and its own height, and
+                        // NOTHING is decided about it here.
                         //
-                        // What changes with the per-edge range is the BLAST RADIUS,
-                        // which is the whole defect: the drop now costs the few
-                        // degrees that one edge subtends instead of every direction
-                        // its footprint covers. A receiver standing INSIDE a
-                        // footprint (measured: pixel 52/496 of 2206/1391, nearest
-                        // edge 0.0538 m, hull the full 6.2832 rad) used to lose the
-                        // whole panorama and 10-12 dB on 8+ sources; now it loses
-                        // the arc of the wall it is leaning on and keeps the rest of
-                        // the ring — which is also what the CPU lane does with the
-                        // same geometry, so the two agree instead of merely both
-                        // being defensible.
-                        if (a_rng <= 1.0 || b_rng < 1.0) continue;
-                        // One elevation sample resolves the arc's ABSOLUTE top,
-                        // taken at its own range along the interval's centre. That
-                        // range is this EDGE's now, so the sample finally lands on
-                        // the ground under the edge that does the diffracting.
-                        double az_c = base + 0.5 * (est + een);
-                        double g_alt = tile_elev(inner, elev, rows, cols, lat_min, lon_min, inv, bb,
-                                                 rlat + b_rng * sin(az_c) / M_LAT,
-                                                 rlon + b_rng * cos(az_c) / mlon);
-                        double top_alt = g_alt + h_edge;
-                        double los_a = ralt - (b_rng / d_src) * (ralt - q_src_alt);
-                        double h_a = top_alt - los_a;
-                        double two_ab = 2.0 * a_rng * b_rng, dnum = h_a * h_a * d_src;
-                        if (h_a < 0.0 && dnum > ARC_PENUMBRA_FLOOR_M * two_ab) continue;
-                        if (h_a >= 0.0 && dnum < ARC_DELTA_MIN_M * two_ab) continue;
-                        if (PROF_COUNTERS && arcstat) arcstat[5] += 1.0f;   // admitted
-                        // `arc_fuse_key(near, height)` can finally do its job: the
-                        // arcs of one footprint now arrive with DIFFERENT ranges, so
-                        // they land in the range strata they belong to instead of
-                        // all sharing the footprint minimum's stratum and fusing
-                        // into one arc that carried the nearest edge's range across
-                        // the whole silhouette.
-                        niv = arc_iv_union(iv_s, iv_e, iv_near, iv_h, iv_top, iv_key, niv, est, een,
-                                           (float)b_rng, (float)h_edge, (float)top_alt,
-                                           &iv_overflow);
+                        // Three tests used to stand in this spot and all three are
+                        // gone. Two of them — the confirmation ray (does the ray to
+                        // this arc's centre really cross the footprint) and the
+                        // per-edge δ test against the sight line — have no CPU twin
+                        // that could ever run per raw edge: `ArcSkyline` is built
+                        // once per RECEIVER and clipped by every segment of it, so a
+                        // segment-dependent test cannot precede the merge there. The
+                        // third, the range floor, IS the CPU's, but the CPU applies
+                        // it to the MERGED arc, which is the more permissive
+                        // granularity. All three therefore only ever made this lane
+                        // stricter than the reference, and the δ one made it wrong:
+                        // pixel 109/509 of rail 2206/1391 lost a whole segment's
+                        // screening on five sources (closest-point ray 12.49 dB,
+                        // arc verdict 0.00) where the CPU kept 12.49. See
+                        // `arc_screening`'s "Why the blocked test is geometry only"
+                        // for why a prefilter that is not a sound
+                        // over-approximation is worse than none at all.
+                        //
+                        // `arc_fuse_key(near, height)` still does its job: the arcs
+                        // of one footprint arrive with DIFFERENT ranges, so they
+                        // land in the range strata they belong to instead of all
+                        // sharing the footprint minimum's stratum and fusing into
+                        // one arc that carried the nearest edge's range across the
+                        // whole silhouette.
+                        niv = arc_iv_union(iv_s, iv_e, iv_near, iv_h, iv_key, niv, est, een,
+                                           (float)near_m, (float)h_edge, &iv_overflow);
                     }
                 }
             }
@@ -2178,24 +2135,8 @@ __device__ void arc_screen_bands(
             double wr1 = wr0 + wrap_pi_d(wa1 - wa0);
             double wst = 0.0, wen = -1.0;
             if (!arc_clip_span(fmin(wr0, wr1), fmax(wr0, wr1), lo, hi, &wst, &wen)) continue;
-            double waz = base + 0.5 * (wst + wen);
-            double wslat, wslon;
-            if (!arc_source_point(rlat, rlon, mlon, alat, alon, blat, blon, waz, &wslat, &wslon))
-                continue;
-            double wdx = (wslon - rlon) * mlon, wdy = (wslat - rlat) * M_LAT;
-            double wd = sqrt(wdx * wdx + wdy * wdy);
-            double wb = near_m, wa = wd - near_m;
-            if (wa <= 1.0 || wb < 1.0) continue;
-            double wg = tile_elev(inner, elev, rows, cols, lat_min, lon_min, inv, bb,
-                                  rlat + wb * sin(waz) / M_LAT, rlon + wb * cos(waz) / mlon);
-            double wtop = wg + w[4];
-            double wlos = ralt - (wb / wd) * (ralt - q_src_alt);
-            double wh = wtop - wlos;
-            double wtwo = 2.0 * wa * wb, wnum = wh * wh * wd;
-            if (wh < 0.0 && wnum > ARC_PENUMBRA_FLOOR_M * wtwo) continue;
-            if (wh >= 0.0 && wnum < ARC_DELTA_MIN_M * wtwo) continue;
-            niv = arc_iv_union(iv_s, iv_e, iv_near, iv_h, iv_top, iv_key, niv, wst, wen,
-                               (float)wb, (float)w[4], (float)wtop, &iv_overflow);
+            niv = arc_iv_union(iv_s, iv_e, iv_near, iv_h, iv_key, niv, wst, wen,
+                               (float)near_m, (float)w[4], &iv_overflow);
         }
     }
     // ARC_MAX_MERGED overflow: `arc_iv_union` DROPS the arc it cannot place
@@ -2221,6 +2162,51 @@ __device__ void arc_screen_bands(
     if (PROF_COUNTERS && arcstat) {
         arcstat[6] += (float)iv_overflow;
         if (iv_overflow > 0) arcstat[7] += 1.0f;
+    }
+    if (niv == 0) return;
+    // ---- ADMISSION, `arc_screening::arc_screened_attenuation` §1, at the
+    // granularity that lane can share: per MERGED arc, geometry only. The arc has
+    // to stand in FRONT of the source point its own centre picks out on the
+    // segment, and not under the receiver's feet. Nothing else is asked; the ray
+    // march below re-derives δ from the real profile, penumbra branch included.
+    //
+    // The 1 m floors are the CPU's exactly. `b` is the distance to the
+    // DIFFRACTING EDGE, so the floor is a statement about the edge, not the
+    // building: δ ≈ h²·d/(2ab) is the parabolic thin-screen expansion, it diverges
+    // as b -> 0, and it needs the receiver in the edge's FAR field, b ≫ λ, which at
+    // b < 1 m already fails for every band below ~340 Hz — half of the model's
+    // 63 Hz .. 8 kHz range. CNOSSOS/ISO 9613-2 place a facade receiver 2 m OFF the
+    // facade for the same reason. Dropping such an edge errs toward LESS screening
+    // (louder), never toward a phantom shadow.
+    //
+    // KNOWN RESIDUAL FORK, and it is in the `b`, not in the floors. Edges are
+    // clipped to this segment's span BEFORE the union above, so `iv_near` is the
+    // minimum over IN-SPAN members only; the CPU builds its skyline per RECEIVER
+    // and takes `near = min` over EVERY member of the stratum
+    // (`arc_screening.rs`, `insert_merged`). A min over a subset is >= the min
+    // over the superset, so for one physical chain this lane's `b` can be LARGER,
+    // its `a = d - b` smaller, and it can therefore fail `a > 1` on an arc the
+    // reference lane admits — under-screening, i.e. louder, which is the sign of
+    // the measured residual on rail 2206/1391 (67.4 % GPU louder). Closing it
+    // means carrying the fused group's minimum range across the span clip; that
+    // is a collection change and needs its own measurement, so it is recorded
+    // rather than patched here.
+    {
+        int keep = 0;
+        for (int i = 0; i < niv; i++) {
+            double aslat, aslon;
+            if (!arc_source_point(rlat, rlon, mlon, alat, alon, blat, blon,
+                                  base + 0.5 * (iv_s[i] + iv_e[i]), &aslat, &aslon))
+                continue;
+            double adx = (aslon - rlon) * mlon, ady = (aslat - rlat) * M_LAT;
+            double d_a = sqrt(adx * adx + ady * ady);
+            double b_a = (double)iv_near[i];
+            if (d_a - b_a <= 1.0 || b_a < 1.0) continue;
+            iv_s[keep] = iv_s[i]; iv_e[keep] = iv_e[i];
+            iv_near[keep] = iv_near[i]; iv_h[keep] = iv_h[i]; iv_key[keep] = iv_key[i];
+            keep++;
+        }
+        niv = keep;
     }
     if (niv == 0) return;
     if (ABL_ARC_HULL || ABL_ARC_CONFIRM) {   // DEV ablation stops
