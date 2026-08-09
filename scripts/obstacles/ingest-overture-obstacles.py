@@ -50,7 +50,11 @@ SCHEMA = pa.schema(
         ("height_m", pa.float32()),
         ("centroid_lat", pa.float64()),
         ("centroid_lon", pa.float64()),
-        # 0 = Overture row with mapped height, 1 = floors-derived, 2 = default
+        # 0 = Overture row with mapped height, 1 = floors-derived, 2 = default.
+        # Tiers 3 (city-measured zonal) and 4 (GHS-BUILT-H ANBH areal prior)
+        # are written AFTER promotion by enrich-obstacle-heights.py — this
+        # ingest only ever emits 0/1/2 (full ladder: that script's header and
+        # noise_compute::low_profile).
         ("height_tier", pa.uint8()),
     ]
 )

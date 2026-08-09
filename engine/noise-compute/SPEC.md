@@ -424,6 +424,18 @@ point D on BOTH sides, so a candidate at a sample's t reproduces the raster
 result bit-for-bit). Candidates never enter the cadence sample arrays —
 ground/vegetation integrals and the GPU sample envelope are untouched.
 
+*Obstacle heights (the store's `height_m`/`height_tier`, 2026-08-09 ladder):*
+tier 0 mapped per-building height (OSM/Overture), tier 1 floors × 3 m, tier 2
+flat 8 m world default (`BUILDING_{FLOOR_HEIGHT,DEFAULT_HEIGHT}_M`), tier 3
+city/national measured per-building zonal from a 1 m DSM−DTM raster (IPR Praha
+first), tier 4 GHS-BUILT-H ANBH 100 m areal average at the centroid replacing
+only the flat default. The low-profile shed cap (`low_profile`, 3 m on a
+matched garage/shed-class OSM footprint) applies to tiers 2 AND 4 — the two
+tiers that carry no per-building knowledge — never to 0/1/3. Producers:
+`scripts/obstacles/ingest-overture-obstacles.py` (0–2),
+`scripts/obstacles/enrich-obstacle-heights.py` (3–4, regenerates promoted
+cells from staging + rasters).
+
 **Noise barriers: EXACT ray×segment crossings (2026-08-03 fix-pack Fix 3).**
 A wall is a polyline element with two endpoints, so whether a path crosses it —
 and where — is a closed-form intersection, not a proximity question. Every

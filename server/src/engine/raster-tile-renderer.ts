@@ -258,8 +258,8 @@ function getBarriersInBbox(south: number, north: number, west: number, east: num
 
 /// One obstacle footprint from the popup worker's store — the wire shape of
 /// sourceModule.queryObstacleFootprints (o = outer ring [[lat,lon]…],
-/// h = AS-USED height in m after the low-profile cap, t = ingest tier,
-/// c = capped).
+/// h = AS-USED height in m after the low-profile cap, t = height tier
+/// 0 mapped/1 floors/2 default/3 city-measured/4 ANBH prior, c = capped).
 type FootprintRow = { o: [number, number][]; h: number; t: number; c: boolean }
 
 /// The building-height overlay as MODEL TRUTH (owner ask 2026-08-02): fill

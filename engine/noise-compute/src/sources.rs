@@ -1296,6 +1296,26 @@ pub const SOURCES: &[Source] = &[
         url: Some("https://www.mlit.go.jp/road/census/r3/"),
         year: Some(2021),
     },
+    Source {
+        id: 9866,
+        key: "global-ghsl-built-h",
+        provenance: Provenance::Baseline,
+        layer: "buildings",
+        name: "GHS-BUILT-H R2023A ANBH building heights (JRC)",
+        license: Some("CC-BY-4.0"),
+        url: Some("https://human-settlement.emergency.copernicus.eu/ghs_buH2023.php"),
+        year: Some(2018),
+    },
+    Source {
+        id: 9867,
+        key: "cz-ipr-praha-vysky",
+        provenance: Provenance::CityMeasured,
+        layer: "buildings",
+        name: "IPR Praha – Relativní výšky budov (building DSM−DTM, 1 m)",
+        license: Some("CC-BY-4.0"),
+        url: Some("https://opendata.geoportalpraha.cz/maps/ad9aca20e9c042d2b52eb31ff18961b6"),
+        year: Some(2023),
+    },
 ];
 
 #[cfg(test)]

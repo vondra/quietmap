@@ -50,6 +50,13 @@ For now, `trains_freight` remains 0 in the enriched data. CNOSSOS-EU defaults ar
 - **[Copernicus GLO-30 DEM](https://spacedata.copernicus.eu/collections/copernicus-digital-elevation-model)** — 30 m global DEM from TanDEM-X (<4 m LE90 accuracy), with [SRTM](https://www.usgs.gov/centers/eros/science/usgs-eros-archive-digital-elevation-shuttle-radar-topography-mission-srtm-1) as fallback
 - Critical for accurate terrain diffraction — Czech landscape has many valleys and ridges that significantly affect noise propagation
 
+## Building heights (screening)
+
+- **[IPR Praha — Relativní výšky budov](https://opendata.geoportalpraha.cz/maps/ad9aca20e9c042d2b52eb31ff18961b6)** (CC BY) — Prague's photogrammetric building model minus terrain at 1 m resolution; sampled per building footprint into measured screening heights for the whole city
+- **[GHS-BUILT-H ANBH](https://human-settlement.emergency.copernicus.eu/ghs_buH2023.php)** (JRC, CC BY 4.0, epoch 2018) — global 100 m average building height; replaces the flat 8 m default wherever no better height exists
+- **OpenStreetMap / RÚIAN** — mapped heights and floor counts (floors × 3 m) where present
+- Building height controls barrier diffraction: raising a courtyard block from a wrong 3–8 m to its real ~20 m deepens the acoustic shadow behind it by several dB
+
 ## Noise barriers
 
 - **SHM barrier database** — Known noise wall locations along major roads and railways

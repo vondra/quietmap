@@ -115,3 +115,5 @@ export const SOURCE_ID_OSM_TRANSITION_TAPER = 9862 as const // osm-transition-ta
 export const SOURCE_ID_CZ_TIMETABLE_SILENT = 9863 as const // cz-timetable-silent
 export const SOURCE_ID_DE_NATIONAL_RAILWAY = 9864 as const // de-national-railway
 export const SOURCE_ID_JP_CLASS_MEDIAN_FALLBACK = 9865 as const // jp-class-median-fallback
+export const SOURCE_ID_GLOBAL_GHSL_BUILT_H = 9866 as const // global-ghsl-built-h
+export const SOURCE_ID_CZ_IPR_PRAHA_VYSKY = 9867 as const // cz-ipr-praha-vysky

@@ -251,8 +251,9 @@ pub fn query_buildings(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<St
 /// Obstacle footprints intersecting a bbox with their AS-USED heights (after
 /// the low-profile cap) — the building-height debug overlay's data source,
 /// so the map shows exactly what the propagation model screens with. JSON:
-/// [{o: [[lat,lon]…], h, t, c}] (o = outer ring, h = height m, t = ingest
-/// tier 0 mapped/1 floors/2 default, c = low-profile-capped).
+/// [{o: [[lat,lon]…], h, t, c}] (o = outer ring, h = height m, t = height
+/// tier 0 mapped/1 floors/2 default/3 city-measured zonal/4 ANBH areal prior
+/// — see noise_compute::low_profile, c = low-profile-capped).
 pub fn query_obstacle_footprints(
     south: f64,
     west: f64,
