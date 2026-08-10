@@ -472,6 +472,39 @@ fn main() -> Result<()> {
     dev.synchronize().expect("sync");
     let gpu_ms = t.elapsed().as_secs_f64() * 1e3;
     let gpu = dev.dtoh_sync_copy(&d_out).expect("dtoh");
+    // ARC FAULT — filled by EVERY build, counters or not (kernel `arc_drops`).
+    // Read BEFORE the raw dump below so a dump can fail closed on it: a run
+    // that dropped arcs under-screens, and its dump would silently compare two
+    // different rules. The !gpu_only gate at the bottom re-checks it fatally.
+    let arc_drops = gpu[noise_gpu::OUT_FAULT_SLOT] as f64;
+    eprintln!("ARC FAULT dropped_arcs={arc_drops:.0} (ARC_MAX_MERGED overflow)");
+    // NOISE_GPU_DUMP_RAW=<path>: the raw per-period f32 energies, so two KERNEL
+    // variants can be diffed against EACH OTHER instead of against the CPU. That
+    // is the right instrument for a precision change and the wrong one for a
+    // parity claim: it isolates the change's delta from every other lane
+    // difference, which is exactly what you want while the CPU↔GPU arc parity
+    // crack is open and must not be mixed into the measurement. It also costs no
+    // CPU reference, so it runs under NOISE_GPU_PERF_ONLY on tiles whose
+    // reference is 45 minutes. Sibling of NOISE_GPU_WRITE_TILE below, one level
+    // rawer: that one quantises to the HM3 byte (0.5 dB), which is coarser than
+    // the drift being measured here.
+    if let Ok(p) = std::env::var("NOISE_GPU_DUMP_RAW") {
+        anyhow::ensure!(
+            arc_drops == 0.0,
+            "NOISE_GPU_DUMP_RAW refused: {arc_drops:.0} dropped arcs — this arm \
+             under-screens and its dump would poison the A/B evidence"
+        );
+        let path = Path::new(&p);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let mut raw = Vec::with_capacity(n * 3 * 4);
+        for v in &gpu[..n * 3] {
+            raw.extend_from_slice(&v.to_le_bytes());
+        }
+        std::fs::write(path, raw)?;
+        eprintln!("dumped {} raw f32 energies to {p}", n * 3);
+    }
     eprintln!("GPU kernel {gpu_ms:.1} ms");
     // Arc-path take-up (only non-zero under -DPROF_COUNTERS=1): the fraction of
     // budget-surviving pairs that still reach the arc walk. This is the number
@@ -483,12 +516,6 @@ fn main() -> Result<()> {
             *acc += *v as f64;
         }
     }
-    // ARC FAULT — filled by EVERY build, counters or not (kernel `arc_drops`).
-    // Every arc counted here was DROPPED, i.e. this run under-screens and is not
-    // the kernel the uncapped CPU reference is being compared against. Fatal:
-    // this bin exists to catch lane forks, and a dropped arc IS one.
-    let arc_drops = gpu[noise_gpu::OUT_FAULT_SLOT] as f64;
-    eprintln!("ARC FAULT dropped_arcs={arc_drops:.0} (ARC_MAX_MERGED overflow)");
     let (pairs, arced, look, hit, clipped, emitted) = (c[0], c[1], c[2], c[3], c[4], c[5]);
     let (ovf, ovf_pairs) = (c[6], c[7]);
     if pairs > 0.0 {

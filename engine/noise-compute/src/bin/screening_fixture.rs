@@ -42,7 +42,7 @@
 //! noise floor the G/H verdicts have to clear, and they clear it by 5×.
 //!
 //! `v4` — the CUDA lane's arc rule, ported to CPU from
-//! `engine/noise-gpu/kernels/scatter.cu` (`arc_screen_bands`, :1370) so the
+//! `engine/noise-gpu/kernels/scatter.cu` (`arc_screen_bands`) so the
 //! same 33-point reference can judge THE RULE rather than the lane. The two
 //! lanes each pass their own gates yet disagree by 14.94 dB on 9 % of a dense
 //! Dobříš rail tile, and inference has run out; this integrator is the oracle.
@@ -1506,8 +1506,8 @@ fn arc_clip_span(a_lo: f64, a_hi: f64, lo: f64, hi: f64) -> Option<(f64, f64)> {
     None
 }
 
-/// `seg_isect_t` (scatter.cu:594) — does the ray `(sx,sy) + t·(dx,dy)` cross the
-/// segment strictly inside both?
+/// scatter.cu `seg_isect_t` — does the ray `(sx,sy) + t·(dx,dy)` cross the
+/// segment with `t` strictly inside (0,1) and `u` inclusive in [0,1]?
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn seg_isect_t(sx: f64, sy: f64, dx: f64, dy: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> bool {
@@ -1522,7 +1522,7 @@ fn seg_isect_t(sx: f64, sy: f64, dx: f64, dy: f64, x0: f64, y0: f64, x1: f64, y1
     t > 0.0 && t < 1.0 && (0.0..=1.0).contains(&u)
 }
 
-/// `arc_source_point` (scatter.cu:356) — the point ON the segment the receiver
+/// scatter.cu `arc_source_point` — the point ON the segment the receiver
 /// sees at `azimuth`, by exact ray×line intersection. `None` when the ray runs
 /// parallel to the segment.
 fn gpu_source_point_at(q: &ArcScreening<'_>, m_lon: f64, azimuth: f64) -> Option<(f64, f64)> {

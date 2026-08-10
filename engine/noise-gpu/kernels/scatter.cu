@@ -366,6 +366,20 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #ifndef PROF_COUNTERS
 #define PROF_COUNTERS 0
 #endif
+// -DPROF_BLOCK_MOD=<K> runs only every K-th swizzle TILE of the `line` kernel
+// (`line_binned_fused` ignores it — its launch is not tile-major), so a tile
+// that costs hours measures in minutes — the ONLY way a dense city tile enters
+// an A/B at all: praha 2212/1387 is hours of kernel per arm whole, minutes at K=32.
+// Output is deliberately WRONG (untouched pixels stay zero) and only the RATIO
+// between two builds carrying the SAME K means anything, exactly like PROF_ABLATE
+// below. The sampled set is FIXED geometry, identical in every arm — at K=32
+// with the default TW=8/TPX=512 that is swizzle-tile columns 0 and 32 of every
+// row (two vertical strips, not a stratified sample), and each selected
+// 64-thread tile shares its 128-thread block with an idle sibling, so occupancy
+// differs from a full run too. Order-of-magnitude A/B only, never a benchmark.
+#ifndef PROF_BLOCK_MOD
+#define PROF_BLOCK_MOD 1
+#endif
 // Per-RECEIVER footprint hull cache (direct-mapped, power of two; 0 = off).
 // A footprint's angular hull depends only on (receiver, footprint), but the
 // walk recomputes it once per SEGMENT — and a receiver sees ~321 segments on
@@ -549,6 +563,65 @@ __device__ __forceinline__ double wrap_pi_d(double a) {
 #ifndef ARC_AZ_F32
 #define ARC_AZ_F32 0
 #endif
+// ---- THE PRECISION SPLIT — BUILT, MEASURED, AND LEFT DEFAULT OFF (2026-08-10).
+// -DARC_REL_F32=1 narrows the arc lane's RELATIVE geometry to f32: the
+// ray×segment solve in `arc_source_point`, the chainage solve in `seg_isect_t`,
+// the per-edge `near_m`, and the per-arc admission distance `d_a`. Absolute
+// coordinates and azimuth FORMATION stay f64 in both arms; every difference is
+// still formed in f64 and only the result is narrowed.
+//
+// The case for it: no consumer card can afford f64 on bulk arithmetic — the
+// f64:f32 throughput ratio is 1:32 on Turing and 1:64 on Ada/Blackwell, i.e. it
+// gets WORSE with newer hardware — and a clean 5070 profile shows a kernel
+// queued behind one slow unit (100 % SM busy, memory idle, 74 W of 250 W).
+//
+// MEASURED on a rented RTX 5070 Ti (sm_120), product `bae61a3`, `e2-full`,
+// ABBA-interleaved timing, accuracy from exact-walk raw energy dumps diffed
+// against the f64 arm (same-binary control bit-identical first):
+//
+//   tile                     f64 s   f32 s      ×   raw max dB  cells >0.5 dB
+//   rail   2206/1391         186.2   140.1   1.33      0.0455 a            0
+//   suburb 2206/1394         128.7   101.9   1.26      0.2109 b            0
+//   d1open 2205/1394          13.5    11.6   1.16      0.1687 b            0
+//   praha  2212/1387 (1/32)  965.2   ~690   ~1.35    **2.3203** ab      **3**
+//
+// (a) = this arm, direction formed at f64. (b) = the earlier variant that
+// narrowed the ANGLE; suburb and d1open were not re-measured after the switch
+// to f64 sincos, so their numbers are upper bounds for this arm. Praha was
+// measured BOTH ways and came out identical to four decimals — which is the
+// finding below. The f32 seconds are the geometry alone; the candidate-path
+// prefilters that ship unconditionally are in both columns.
+//
+// PRAHA IS WHY IT IS OFF: 2.3203 dB on the raw gate (3 of 24 576 per-period
+// energies) and 2.000 dB in HM3 bytes — past the owner's line, on the tile
+// class the product is judged by. AND IT IS VISIBLE, which is the test that
+// actually decides under a level-banded budget: those raw values collapse to
+// 2 differing PAINTED cells, and the one over 1.0 dB moves 43.0 → 41.0 dB —
+// 13 dB ABOVE the 30 dB palette floor, so it is a pixel a visitor sees, not a
+// sub-threshold one (the other differing cell sits at 55.0 dB and moves
+// 0.5 dB). THE DURABLE LESSON, because it cost a full campaign to
+// learn: the 2026-08-09 lane patch advertised "0 cells >0.5 dB", and that
+// number was measured on tiles that are NOT a dense city. IT DOES NOT
+// GENERALISE. A precision change must be gated on a dense urban tile or it is
+// not gated at all — sparse rail and open motorway simply do not contain the
+// geometry that breaks.
+//
+// It is NOT the azimuth, which was the obvious suspect and was tested: forming
+// sin/cos at f64 and narrowing only the DIRECTION (what this arm now does, and
+// strictly better — rail 0.0781 → 0.0455 dB) left praha at EXACTLY 2.3203 dB
+// and the same 3 cells. An unchanged max to four decimals across a changed
+// arithmetic path is a DISCRETE GATE FLIP — an interval switching on or off,
+// with the Maekawa cliff turning it into whole dB — not accumulated rounding.
+// Ranked suspects for a re-attempt, most-gate-like first: (1) this file's
+// `fabs(denom) < 1e-12` parallel test, whose f32 twin can never fire because
+// `denom` cancels to a ~2e-5 floor, so a near-parallel ray returns an
+// endpoint-CLAMPED point where f64 returned false and skipped the piece;
+// (2) `seg_isect_t`'s chainage/edge bounds; (3) `near_m` feeding the `__logf`
+// fusion-stratum key; (4) `d_a` against the 1 m admission floor. Protocol and
+// evidence: gpu-gather-redesign-2026-08-09.md §3a (private repo).
+#ifndef ARC_REL_F32
+#define ARC_REL_F32 0
+#endif
 __device__ __forceinline__ double arc_az(double flat, double flon, double fmlon,
                                          double lat, double lon) {
 #if ARC_AZ_F32
@@ -561,11 +634,38 @@ __device__ __forceinline__ double arc_az(double flat, double flon, double fmlon,
 // arc_screening::source_point_at — the point ON the segment the receiver sees at
 // `az`, by exact ray×line intersection (the interpolated endpoints at the solved
 // fraction). False when the ray runs parallel to the segment.
+//
+// The OUTPUT is f64 in both arms and built from the ABSOLUTE endpoints
+// (`alat + u·…`): only the dimensionless fraction `u` is ever narrowed, so the
+// returned point keeps full coordinate resolution however the fraction rounded.
 __device__ __forceinline__ bool arc_source_point(
     double rlat, double rlon, double mlon,
     double alat, double alon, double blat, double blon, double az,
     double* olat, double* olon)
 {
+#if ARC_REL_F32
+    // Differences FORMED in f64 (absolute coordinates), narrowed after.
+    float ax = (float)((alon - rlon) * mlon), ay = (float)((alat - rlat) * M_LAT);
+    float bx = (float)((blon - rlon) * mlon), by = (float)((blat - rlat) * M_LAT);
+    // The DIRECTION is formed at f64 and only then narrowed — the azimuth is
+    // never rounded to f32. Measured: narrowing the angle instead is no worse
+    // on praha (identical 2.3203 dB) but is worse on rail (0.0781 vs 0.0455),
+    // and one f64 sincos per evaluated interval piece — not per edge — is not
+    // a hot cost. See THE PRECISION SPLIT above.
+    double dxd, dyd;
+    sincos(az, &dyd, &dxd);
+    float dxf = (float)dxd, dyf = (float)dyd;
+    float ex = bx - ax, ey = by - ay;
+    float denom = dxf * ey - dyf * ex;
+    // SUSPECT #1 for the praha deviation, kept here deliberately unchanged so
+    // the arm stays the measured one: `denom` is |segment|·sin(angle), order
+    // 250 m for a microsegment, and in f32 the subtraction cancels to a ~2e-5
+    // floor — so this test can never fire, and a truly parallel ray returns a
+    // garbage-over-tiny ratio that the clamp below pins to a segment ENDPOINT
+    // where the f64 arm returned false and the caller skipped the piece.
+    if (fabsf(denom) < 1e-12f) return false;
+    double u = (double)fminf(fmaxf((dyf * ax - dxf * ay) / denom, 0.0f), 1.0f);
+#else
     double ax = (alon - rlon) * mlon, ay = (alat - rlat) * M_LAT;
     double bx = (blon - rlon) * mlon, by = (blat - rlat) * M_LAT;
     double dx = cos(az), dy = sin(az);
@@ -573,6 +673,7 @@ __device__ __forceinline__ bool arc_source_point(
     double denom = dx * ey - dy * ex;
     if (fabs(denom) < 1e-12) return false;
     double u = fmin(fmax((dy * ax - dx * ay) / denom, 0.0), 1.0);
+#endif
     *olat = alat + u * (blat - alat);
     *olon = alon + u * (blon - alon);
     return true;
@@ -797,12 +898,78 @@ __device__ double dstar_at(const double* t, const double* bare, int n, double t_
     return v > 0.0 ? v : 0.0;
 }
 
+// ---- CONSERVATIVE fp32 MISS-REJECT, in front of the exact f64 solve below.
+// Harvested from the codex lab's candidate-path campaign (2026-08-10 12:34 +
+// 13:03 entries): the vector-obstacle candidate walk is 95.5 % edge EVALUATION
+// against 4.5 % grid traversal, and most of those evaluations are edges the ray
+// plainly misses — obvious non-crossings burning full f64 intersections. The
+// lab measured this pre-reject at 1.345× of the whole arc-off kernel floor,
+// with all eight bbox tiles byte-identical, on sm_75.
+//
+// It is a TWO-SIDED ORIENTATION test in fp32, and it may only ever answer "no
+// crossing, certainly" or "don't know": both segment endpoints strictly on one
+// side of the ray line (or both ray endpoints strictly on one side of the edge
+// line) means no intersection, by a sign argument that no rounding can undo AS
+// LONG AS the deciding margin dominates the fp32 error of the cross products it
+// compares. Hence the tolerances: a RELATIVE term scaled by the magnitudes that
+// actually entered each product, plus an ABSOLUTE coordinate term in metres, so
+// the "certainly" verdict stays certain for both far-apart and near-degenerate
+// geometry. Everything ambiguous — every genuine crossing, every grazing case,
+// every collinear case — falls through to the unchanged f64 `seg_isect_t`, so
+// the accepted set, the returned chainage and every downstream δ are bit-for-bit
+// what they were. Verified, not just argued: raw-energy dumps byte-equal (`cmp`)
+// against the un-prefiltered kernel on all four reference tiles.
+__device__ __forceinline__ bool seg_may_isect_f32(
+    float sx, float sy, float rx, float ry,
+    float x0, float y0, float x1, float y1)
+{
+    const float REL_EPS = 1.0e-4f, COORD_EPS_M = 0.05f;
+    float dx = rx - sx, dy = ry - sy;
+    float w0x = x0 - sx, w0y = y0 - sy;
+    float w1x = x1 - sx, w1y = y1 - sy;
+    float c0 = dx * w0y - dy * w0x;
+    float c1 = dx * w1y - dy * w1x;
+    float e0 = REL_EPS * (fabsf(dx * w0y) + fabsf(dy * w0x) + 1.0f)
+             + COORD_EPS_M * (fabsf(dx) + fabsf(dy) + 1.0f);
+    float e1 = REL_EPS * (fabsf(dx * w1y) + fabsf(dy * w1x) + 1.0f)
+             + COORD_EPS_M * (fabsf(dx) + fabsf(dy) + 1.0f);
+    if ((c0 > e0 && c1 > e1) || (c0 < -e0 && c1 < -e1)) return false;
+    float ex = x1 - x0, ey = y1 - y0;
+    float srx = sx - x0, sry = sy - y0;
+    float rrx = rx - x0, rry = ry - y0;
+    float c2 = ex * sry - ey * srx;
+    float c3 = ex * rry - ey * rrx;
+    float e2 = REL_EPS * (fabsf(ex * sry) + fabsf(ey * srx) + 1.0f)
+             + COORD_EPS_M * (fabsf(ex) + fabsf(ey) + 1.0f);
+    float e3 = REL_EPS * (fabsf(ex * rry) + fabsf(ey * rrx) + 1.0f)
+             + COORD_EPS_M * (fabsf(ex) + fabsf(ey) + 1.0f);
+    return !((c2 > e2 && c3 > e3) || (c2 < -e2 && c3 < -e3));
+}
+
 // ---- obstacle_index::segment_intersection_t — chainage of ray×edge, t strictly
 // inside (0,1), hit within the segment (u ∈ [0,1] inclusive), collinear → none.
+// f64 by DEFAULT — narrowing this solve rides with ARC_REL_F32, which is off
+// (THE PRECISION SPLIT above has the praha numbers). NOTE THE SCOPE: this
+// serves the cp ray's own crossings walk (`obstacle_best_candidate`) and the
+// barrier race (`barrier_best_candidate`) as well as the arc walks, so the
+// switch reaches the NON-arc path here — which is one reason it stays off by
+// default. The cheap win that DOES ship is not doing the solve at all when the
+// edge obviously misses, which `seg_may_isect_f32` above decides for both arms.
 __device__ __forceinline__ bool seg_isect_t(
     double sx, double sy, double dx, double dy,
     double x0, double y0, double x1, double y1, double* t_out)
 {
+#if ARC_REL_F32
+    float ex = (float)(x1 - x0), ey = (float)(y1 - y0);
+    float dxf = (float)dx, dyf = (float)dy;
+    float denom = dxf * ey - dyf * ex;
+    if (denom == 0.0f) return false;
+    float wx = (float)(x0 - sx), wy = (float)(y0 - sy);
+    float tt = (wx * ey - wy * ex) / denom;
+    float u = (wx * dyf - wy * dxf) / denom;
+    if (tt > 0.0f && tt < 1.0f && u >= 0.0f && u <= 1.0f) { *t_out = (double)tt; return true; }
+    return false;
+#else
     double ex = x1 - x0, ey = y1 - y0;
     double denom = dx * ey - dy * ex;
     if (denom == 0.0) return false;
@@ -811,6 +978,7 @@ __device__ __forceinline__ bool seg_isect_t(
     double u = (wx * dy - wy * dx) / denom;
     if (tt > 0.0 && tt < 1.0 && u >= 0.0 && u <= 1.0) { *t_out = tt; return true; }
     return false;
+#endif
 }
 
 // ---- ObstacleSet::crossings + path_effects §5b fused for the GPU: walk every
@@ -835,6 +1003,12 @@ __device__ void obstacle_best_candidate(
     int* have, double* cand_t, double* cand_top)
 {
     *have = 0;
+    // Per-call constants of the fp32 δ-prefilter in the edge loop below (codex
+    // lab, 2026-08-10 13:03): `third_f` is the shared last term of δ's
+    // cancellation-free form, dz_sr²/(d_sr + dist).
+    float dist_f = (float)dist;
+    float dzsr_f = (float)(re - se);
+    float third_f = dzsr_f * dzsr_f / (float)(dsr + dist);
     // Signed δ: a below-LOS near miss stays in the race with a NEGATIVE δ
     // (mirror of path_effects §5b after the fix-pack penumbra landed), so the
     // running best must start below every possible value, not at 0.
@@ -866,6 +1040,9 @@ __device__ void obstacle_best_candidate(
         double sx = (src_lon - m[1]) * mlon, sy = (src_lat - m[0]) * M_LAT;
         double rx = (rcv_lon - m[1]) * mlon, ry = (rcv_lat - m[0]) * M_LAT;
         double dx = rx - sx, dy = ry - sy;
+        // fp32 mirrors of the ray endpoints, for the miss-reject in the edge loop.
+        float sx_f = (float)sx, sy_f = (float)sy;
+        float rx_f = (float)rx, ry_f = (float)ry;
         // Slab reject (GPU-only perf; results identical — edges only exist
         // inside the grid): a ray whose bbox misses this index's extent
         // cannot cross any of its edges. A typical region holds 7 per-cell
@@ -977,6 +1154,11 @@ __device__ void obstacle_best_candidate(
             }
             for (unsigned int k = lo; k < hi; k++) {
                 const float* e = &edges[(eoff + (size_t)refs[roff + k]) * 5];
+                // Most references in this list are edges the ray plainly misses;
+                // deciding that in fp32 costs a few multiplies instead of a full
+                // f64 intersection. Conservative — "don't know" falls through.
+                if (!seg_may_isect_f32(sx_f, sy_f, rx_f, ry_f, e[0], e[1], e[2], e[3]))
+                    continue;
                 double tt;
                 if (!seg_isect_t(sx, sy, dx, dy,
                                  (double)e[0], (double)e[1], (double)e[2], (double)e[3], &tt))
@@ -994,6 +1176,36 @@ __device__ void obstacle_best_candidate(
                 // the §2.5.6(c) penumbra. Rank on the SIGNED δ so a real blocker
                 // still beats every near miss (path_effects §5b).
                 double sign = (top >= los) ? 1.0 : -1.0;
+                // fp32 δ-PREFILTER, winner-preserving (codex lab, 2026-08-10
+                // 13:03: a conservative fp32 δ bound with an f64 fallback was
+                // HM3-exact and repriced the survivor loop; their measured
+                // margin knee is 1e-3 m. Their faster fp32 SELECT variant, which
+                // ranks the race in fp32 instead of merely gating it, is NOT
+                // taken — it re-orders winners and their own bbox showed it
+                // costing byte-exactness on one tile).
+                //
+                // Skip the exact TWO-SQRT f64 δ only when this candidate cannot
+                // beat the incumbent even allowing for every rounding involved.
+                // The estimate uses δ's cancellation-free identity —
+                //   δ = h_s²/(d_sb+d_sg) + h_r²/(d_br+d_rg) − dz_sr²/(d_sr+dist)
+                // — so it carries a few ulp of its own terms, not the ruinous
+                // cancellation of the two-sqrt form: micrometres in flat
+                // country, ~1e-4 m with a 500 m cliff in the path, i.e. ≥10×
+                // inside the 1e-3 m margin even there. An exact TIE, which the
+                // lower-t rule below must still arbitrate, can therefore never
+                // be skipped. Winner identical ⇒ output bit-identical, and the
+                // raw-dump `cmp` gate says so on all four reference tiles.
+                if (*have) {
+                    float tt_f = (float)tt;
+                    float dsg_f = tt_f * dist_f, drg_f = dist_f - dsg_f;
+                    float dzsb_f = (float)(top - se), dzbr_f = (float)(top - re);
+                    float dsb_f = sqrtf(dsg_f * dsg_f + dzsb_f * dzsb_f);
+                    float dbr_f = sqrtf(drg_f * drg_f + dzbr_f * dzbr_f);
+                    float est_f = dzsb_f * dzsb_f / (dsb_f + dsg_f)
+                                + dzbr_f * dzbr_f / (dbr_f + drg_f) - third_f;
+                    if (sign < 0.0) est_f = -est_f;
+                    if (est_f + 1e-3f < (float)best_delta) continue;
+                }
                 double d_sg = tt * dist, d_rg = (1.0 - tt) * dist;
                 double delta = sign
                              * (sqrt(d_sg * d_sg + (top - se) * (top - se))
@@ -2058,6 +2270,23 @@ __device__ void arc_screen_bands(
                         // THIS EDGE's closest approach to the receiver — the arc's
                         // own `SkylineArc::near_m` (`origin_to_segment_dist`,
                         // obstacle_index.rs:444), in the index-local frame.
+#if ARC_REL_F32
+                        // The edge coordinates are ALREADY f32 in the store
+                        // (`edges` stride 5 is a float array), so the f64 arm
+                        // widens f32 data to subtract an f64 receiver offset;
+                        // this arm forms that subtraction in f64 and narrows the
+                        // result. SUSPECT #3: `near_m` feeds the `__logf` fusion
+                        // stratum key, so a range within ~1e-7·near of a ladder
+                        // boundary changes which stratum an arc fuses into.
+                        float ex0 = (float)((double)g[0] - rxl), ey0 = (float)((double)g[1] - ryl);
+                        float ex1 = (float)((double)g[2] - rxl), ey1 = (float)((double)g[3] - ryl);
+                        float vx = ex1 - ex0, vy = ey1 - ey0;
+                        float vv = vx * vx + vy * vy;
+                        float tt2 = (vv > 0.0f) ? fminf(fmaxf(-(ex0 * vx + ey0 * vy) / vv, 0.0f), 1.0f)
+                                                : 0.0f;
+                        float qx = ex0 + tt2 * vx, qy = ey0 + tt2 * vy;
+                        double near_m = (double)sqrtf(qx * qx + qy * qy);
+#else
                         double ex0 = (double)g[0] - rxl, ey0 = (double)g[1] - ryl;
                         double ex1 = (double)g[2] - rxl, ey1 = (double)g[3] - ryl;
                         double vx = ex1 - ex0, vy = ey1 - ey0;
@@ -2066,6 +2295,7 @@ __device__ void arc_screen_bands(
                                                 : 0.0;
                         double qx = ex0 + tt2 * vx, qy = ey0 + tt2 * vy;
                         double near_m = sqrt(qx * qx + qy * qy);
+#endif
                         // …and its own HEIGHT (`SkylineArc::height_m` is the
                         // EDGE's, edges stride 5 = x0,y0,x1,y1,height). Equal to
                         // the footprint maximum for every store this lane can be
@@ -2210,8 +2440,16 @@ __device__ void arc_screen_bands(
             if (!arc_source_point(rlat, rlon, mlon, alat, alon, blat, blon,
                                   base + 0.5 * (iv_s[i] + iv_e[i]), &aslat, &aslon))
                 continue;
+#if ARC_REL_F32
+            // SUSPECT #4: this distance is a GATE (the 1 m floors below), so an
+            // f32 error of ~1e-4 m at 10 km can flip an admission for a pair
+            // sitting that close to the floor.
+            float adx = (float)((aslon - rlon) * mlon), ady = (float)((aslat - rlat) * M_LAT);
+            double d_a = (double)sqrtf(adx * adx + ady * ady);
+#else
             double adx = (aslon - rlon) * mlon, ady = (aslat - rlat) * M_LAT;
             double d_a = sqrt(adx * adx + ady * ady);
+#endif
             double b_a = (double)iv_near[i];
             if (d_a - b_a <= 1.0 || b_a < 1.0) continue;
             iv_s[keep] = iv_s[i]; iv_e[keep] = iv_e[i];
@@ -2841,6 +3079,9 @@ extern "C" __global__ void line(
     // identical; only the memory access pattern changes.
     int TW = (int)meta[10], TPR = TPX / TW;   // tile width (swept; must divide TPX)
     int tl = pix / (TW * TW), it = pix % (TW * TW);
+#if PROF_BLOCK_MOD > 1
+    if (tl % PROF_BLOCK_MOD != 0) return;
+#endif
     int py = (tl / TPR) * TW + it / TW;
     int pxi = (tl % TPR) * TW + it % TW;
     int opix = py * TPX + pxi;   // actual pixel index (rxar/out are pixel-indexed)

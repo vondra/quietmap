@@ -628,6 +628,16 @@ WHICH RULE RUNS WHERE, and why they are not the same choice:
   adaptive quadrature, and it is the accuracy etalon.
 * **The CUDA lane** has no equivalent and paints §3.5c. A CPU-vs-GPU tile
   comparison must therefore run `QM_SEG_SAMPLES=1 QM_ARC_MIN_SPAN_DEG=0`.
+  Its arc geometry is f64. An f32 relative-geometry lane exists behind
+  `-DARC_REL_F32=1` and is **OFF**: measured 2026-08-10 on sm_120 it is
+  1.16–1.33× but costs **2.32 dB (raw) / 2.00 dB (HM3) on the dense Praha tile
+  2212/1387**, while three sparser tiles showed 0 cells >0.5 dB. The damage is
+  VISIBLE, not sub-threshold: the worst PAINTED cell moves 43.0 → 41.0 dB,
+  13 dB above the 30 dB palette floor. **That contrast is the rule, not a detail: a precision
+  change gated only on rail/motorway/suburb tiles is not gated at all — the
+  geometry that breaks lives in dense cities.** The lane patch that advertised
+  "0 cells >0.5 dB" had simply never been run on one. Detail and the ranked
+  suspects: scatter.cu "THE PRECISION SPLIT".
 
 The uniform rule hands back the ground/barrier COMPOSITE, not a screening
 increment, so at the OUTER level — the quadrature's own average over buckets —
