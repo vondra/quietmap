@@ -329,30 +329,15 @@ mod tests {
         assert_eq!(a.continent, Continent::Europe);
     }
 
-    #[test]
-    fn singleton_init_then_lookup_by_hex_or_latlng() {
-        // Verify the OnceLock wiring path — init once, then the static
-        // helpers resolve CZ for Dobříš and Unknown for untouched coords.
-        let path = Path::new("../../data/prepared/h3r4-admin.bin");
-        if !path.exists() {
-            return;
-        }
-        // Whether a prior test (or caller) already initialised — idempotent
-        // SET ignores return, so either way the table should be present.
-        let _ = init_admin_table(path);
-        assert!(is_initialised());
-
-        // Dobris via hex id
-        let dobris: u64 = 0x0841_e309_ffff_ffff;
-        assert_eq!(admin_for_hex(dobris).country_code(), Some("CZ"));
-
-        // Dobris via lat/lng (49.78, 14.17)
-        assert_eq!(admin_for_latlng(49.78, 14.17).country_code(), Some("CZ"));
-
-        // Ocean coord (mid-Pacific) — should be Unknown
-        let mid_pacific = admin_for_latlng(-20.0, -140.0);
-        assert_eq!(mid_pacific.country_code(), None);
-    }
+    // The OnceLock singleton wiring test lives in tests/admin_singleton.rs —
+    // an integration binary, i.e. its OWN process. In here it would initialise
+    // the process-wide ADMIN_TABLE for every concurrently-running lib test,
+    // and any test computing with an admin-dependent default (the road/rail
+    // kernels' receiver fallback) would flip arms depending on WHEN this
+    // test's init landed — a real observed flake: the rail none-channel
+    // bit-identity test lost the race between its two compute calls on
+    // data-carrying boxes (CI never saw it — the init test is data-gated and
+    // skips there). Lib tests may assume the table is NEVER initialised.
 
     #[test]
     fn prague_hex_tagged_as_metro() {
