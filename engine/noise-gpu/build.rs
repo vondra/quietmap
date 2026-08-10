@@ -76,6 +76,10 @@ fn main() {
         "../noise-compute/src/propagation/arc_screening.rs",
         "const CP_AZIMUTH_EPS: f64 = ",
     );
+    let arc_quadrature_min = const_from(
+        "../noise-compute/src/propagation/arc_screening.rs",
+        "const ARC_QUADRATURE_MIN_RAD: f64 = ",
+    );
     // And the CNOSSOS hard-ground floor. `A_ground` is ONE formula living in
     // `iso9613::ground_atten_db`; CUDA cannot call it, so the kernel mirrors the
     // EXPRESSION and takes the only number in it from the Rust const. Hand-copying
@@ -164,6 +168,7 @@ fn main() {
                     &format!("-DFOOT_BOX_STRIDE={foot_box_stride}"),
                     &format!("-DARC_DEGENERATE_SPAN={degenerate_span}"),
                     &format!("-DARC_CP_EPS={cp_eps}"),
+                    &format!("-DARC_QUADRATURE_MIN_RAD={arc_quadrature_min}"),
                     &format!("-DGROUND_HARD_FLOOR_DB={ground_hard_floor}"),
                     &format!("-DARC_PENUMBRA_FLOOR_M={penumbra_floor}"),
                     &format!("-DARC_FUSE_HEIGHT_TOL_M={fuse_height_tol}"),

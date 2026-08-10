@@ -128,6 +128,11 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #ifndef ARC_CP_EPS
 #define ARC_CP_EPS 1e-9
 #endif
+// Likewise from ARC_QUADRATURE_MIN_RAD — the minimum angular resolution of a
+// blocked run. Injected so both lanes choose the same evaluation rays.
+#ifndef ARC_QUADRATURE_MIN_RAD
+#define ARC_QUADRATURE_MIN_RAD 0.005
+#endif
 #define ARC_ESCALATE_SPAN 0.26     // ESCALATE_SPAN_RAD
 #define ARC_ESCALATE_MAX_PARTS 9   // ESCALATE_MAX_PARTS
 // Blocked-interval capacity per (segment, receiver) pair. GPU-ONLY bound: the
@@ -2812,6 +2817,25 @@ __device__ void arc_screen_bands(
         bool covered = false;
         for (int i = 0; i < niv && !covered; i++)
             covered = (iv_s[i] <= piece_mid && piece_mid <= iv_e[i]);
+        // Match the CPU quadrature floor: coalesce adjacent windows of one
+        // blocked run until the accumulated window is wide enough. A clear gap
+        // ends the run, so blocked and clear extents stay unchanged.
+        if (covered) {
+            while (piece_hi - piece_lo < ARC_QUADRATURE_MIN_RAD && piece_hi < hi) {
+                double next = hi;
+                for (int i = 0; i < niv; i++) {
+                    if (iv_s[i] > piece_hi && iv_s[i] < next) next = iv_s[i];
+                    if (iv_e[i] > piece_hi && iv_e[i] < next) next = iv_e[i];
+                }
+                if (next <= piece_hi) break;
+                double next_mid = 0.5 * (piece_hi + next);
+                bool next_covered = false;
+                for (int i = 0; i < niv && !next_covered; i++)
+                    next_covered = (iv_s[i] <= next_mid && next_mid <= iv_e[i]);
+                if (!next_covered) break;
+                piece_hi = next;
+            }
+        }
         // ---- CLEAR ARM. CLEAR IS NOT TERRAIN-FREE. These directions used to
         // fall through to the lumped remainder below, which carried the CP
         // RAY's A_terrain — right only over level ground. Over relief the
