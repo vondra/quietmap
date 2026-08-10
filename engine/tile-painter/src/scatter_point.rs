@@ -20,7 +20,8 @@
 //! collapses with the surface (no time-division) Lden collapse.
 
 use noise_compute::propagation::geo::{
-    below_free_field_threshold, effective_area_source_dist, flat_dist, slant_dist,
+    below_free_field_threshold, effective_area_source_dist, flat_dist, reach_box_half_extents_deg,
+    slant_dist,
 };
 use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_compute::propagation::path_profile::CoarseMid;
@@ -153,8 +154,11 @@ impl<'a> PixelGeometry for PointGeometry<'a> {
             }
             let reach = point.max_distance_m;
             // Reach disk in degrees (coarse — the per-pixel distance gate is exact).
-            let reach_lat_deg = reach / 110_540.0;
-            let reach_lon_deg = reach / (111_320.0 * point.lat.to_radians().cos().max(0.2));
+            // ONE place for this geometry: cos at the POLEWARD EDGE, clamped
+            // where `m_per_deg_lon` clamps, so the box always contains the disk.
+            // The `cos(point.lat).max(0.2)` this replaces under-covered longitude
+            // by up to 2.3x above 78.46 deg and dropped audible sources there.
+            let (reach_lat_deg, reach_lon_deg) = reach_box_half_extents_deg(point.lat, reach);
             if point.lat - reach_lat_deg > bbox.north_lat
                 || point.lat + reach_lat_deg < bbox.south_lat
                 || point.lon - reach_lon_deg > bbox.east_lon

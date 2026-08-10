@@ -290,9 +290,79 @@ pub fn finite_line_correction(
     correction.min(0.0)
 }
 
+/// Half-extents in DEGREES of the bounding box that must cover a source's reach
+/// disk of `reach_m`, given the widest ABSOLUTE latitude the disk spans.
+///
+/// The one place this geometry lives. It exists because the same expression was
+/// written twice, fixed once, and left broken in the sibling: `ground_ops` used
+/// the poleward edge and a `0.01` cosine floor, while `scatter_point` used the
+/// SOURCE latitude and a `0.2` floor — which under-covers longitude by up to
+/// 2.3x above 78.46 deg and silently drops audible industrial / building /
+/// leisure sources at Ny-Alesund, Station Nord and Alert.
+///
+/// Two rules, both load-bearing, both violated by the old point version:
+///  * take `cos` at the POLEWARD EDGE (`widest_abs_lat_deg + reach_lat_deg`), not
+///    at the source — the box has to cover its own poleward corner, where a
+///    degree of longitude is shortest;
+///  * clamp `cos` at `0.01`, matching [`crate::constants::m_per_deg_lon`], the
+///    function the EXACT per-pixel distance gate uses. A looser clamp makes the
+///    box smaller than the disk that gate accepts, so the box — not the physics —
+///    decides audibility.
+///
+/// Conservative by construction: the returned box always CONTAINS the reach disk,
+/// so the exact `flat_dist` gate downstream stays the only thing that culls.
+#[inline]
+pub fn reach_box_half_extents_deg(widest_abs_lat_deg: f64, reach_m: f64) -> (f64, f64) {
+    let reach_lat_deg = reach_m / M_PER_DEG_LAT;
+    let poleward_lat = widest_abs_lat_deg.abs() + reach_lat_deg;
+    let reach_lon_deg = reach_m / m_per_deg_lon(poleward_lat.to_radians());
+    (reach_lat_deg, reach_lon_deg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The box must CONTAIN the reach disk at every latitude a source can sit at,
+    /// including the polar band where the retired `cos().max(0.2)` clamp bit.
+    #[test]
+    fn reach_box_contains_the_disk_including_above_the_78_5_clamp() {
+        for &reach_m in &[281.84_f64, 2_000.0, 4_000.0] {
+            for lat in [
+                0.0_f64, 50.0, 70.0, 78.0, 79.0, 80.0, 81.6, 82.5, 83.0, 85.0,
+            ] {
+                let (lat_deg, lon_deg) = reach_box_half_extents_deg(lat, reach_m);
+                let needed = reach_m / m_per_deg_lon((lat + lat_deg).to_radians());
+                assert!(
+                    lon_deg >= needed - 1e-12,
+                    "lat={lat} reach={reach_m}: half-width {lon_deg} < needed {needed}"
+                );
+            }
+        }
+    }
+
+    /// The specific regression: at 80 deg with a 281.84 m reach (an office-class
+    /// industrial grid point, Lw ~= 60 dB), the retired form yields a box narrower
+    /// than the disk, so a receiver ~257 m east — one the free-field gate keeps —
+    /// was never enumerated.
+    #[test]
+    fn the_retired_0_2_clamp_really_did_under_cover() {
+        let (lat_deg, lon_deg) = reach_box_half_extents_deg(80.0, 281.84);
+        let retired = 281.84 / (111_320.0 * 80.0_f64.to_radians().cos().max(0.2));
+        assert!(
+            lon_deg > retired,
+            "fixed {lon_deg} must exceed retired {retired}"
+        );
+        let receiver_east_deg = 257.10 / m_per_deg_lon((80.0 + lat_deg).to_radians());
+        assert!(
+            lon_deg >= receiver_east_deg,
+            "{lon_deg} < {receiver_east_deg}"
+        );
+        assert!(
+            retired < receiver_east_deg,
+            "retired form must have missed it"
+        );
+    }
 
     #[test]
     fn test_flat_dist() {

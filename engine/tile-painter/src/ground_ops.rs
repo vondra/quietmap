@@ -51,7 +51,7 @@ use std::f64::consts::LN_10;
 
 use noise_compute::compute::aircraft_v6::AirportTrafficRowView;
 use noise_compute::constants::{ground_ops_max_radius, ALPHA_ATM, GROUND_GAIN_UB_DB};
-use noise_compute::propagation::geo::point_to_segment_full;
+use noise_compute::propagation::geo::{point_to_segment_full, reach_box_half_extents_deg};
 use noise_compute::propagation::iso9613::{fast_exp_f64, ground_atten_db};
 use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_compute::propagation::path_effects;
@@ -228,13 +228,10 @@ fn prepare_microsegs(
             let seg_n_lat = start_lat.max(end_lat);
             let seg_w_lon = start_lon.min(end_lon);
             let seg_e_lon = start_lon.max(end_lon);
-            let reach_lat_deg = reach / 110_540.0;
-            // Longitude reach at the segment's widest latitude PLUS the poleward
-            // reach extension, clamped to match `geo::m_per_deg_lon`'s cos floor
-            // (0.01) — a looser clamp would under-cover the reach disk above ~78.5°
-            // and clip pixels the per-pixel gate keeps.
-            let widest_lat = seg_n_lat.abs().max(seg_s_lat.abs()) + reach_lat_deg;
-            let reach_lon_deg = reach / (111_320.0 * widest_lat.to_radians().cos().max(0.01));
+            // Shared with the point kernel (this rule was right here and wrong
+            // there; now there is one copy).
+            let (reach_lat_deg, reach_lon_deg) =
+                reach_box_half_extents_deg(seg_n_lat.abs().max(seg_s_lat.abs()), reach);
             if seg_s_lat - reach_lat_deg > bbox.north_lat
                 || seg_n_lat + reach_lat_deg < bbox.south_lat
                 || seg_w_lon - reach_lon_deg > bbox.east_lon
