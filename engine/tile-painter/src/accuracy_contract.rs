@@ -27,15 +27,28 @@ pub const PAINT_FLOOR_DB: f64 = 30.0;
 /// zero-flip gate without this clearance fails the unmodified kernel itself.
 pub const FLIP_CLEARANCE_DB: f64 = 1.0;
 
-/// Hard bound on systematic bias, both waves: half the 0.5 dB output quantum.
+/// Hard bound on systematic one-sided bias (owner, 2026-08-10), measured as the signed
+/// mean over PAINTED cells — reference ≥30 dB — in one tile.
 ///
-/// This is a CHOSEN bound, not a derived one. A 0.25 dB lean does move bytes — every
-/// cell sitting within 0.25 dB below a rounding boundary steps up — so the only honest
-/// claim is that the lean stays small relative to the resolution the output can
-/// express. It is bounded at all because `build-pyramid` averages ENERGY, not dB: a
-/// one-sided error does not cancel at overview zoom, it accumulates into the zoom a
-/// visitor sees first.
-pub const MAX_SIGNED_MEAN_DB: f64 = 0.25;
+/// Why bias needs a bound of its OWN, separate from the amplitude ladder: a uniform dB
+/// offset passes through energy averaging **unchanged**. `build-pyramid` averages
+/// energy, so a uniform `+δ` scales every cell by `10^(δ/10)`, scales the mean by the
+/// same factor, and comes back out as `L + δ`. The offset therefore reaches EVERY
+/// overview zoom at full strength, while the ladder — which only ever sees a small
+/// per-cell magnitude — cannot detect it. Reach, not size, is what makes it dangerous.
+///
+/// At 0.25 dB (wave 2) the offset can move a cell by at most ONE storage step, and only
+/// cells already within 0.25 dB of a byte boundary: a one-step shade change on a
+/// minority of cells at every zoom, which reads as a slight uniform tint and never as
+/// structure. At 0.5 dB (wave 1) it can move EVERY cell by one step — the most a draft
+/// wave may cost a viewer.
+///
+/// These are CHOSEN bounds calibrated to the storage quantum, not derived from a
+/// perception study, and the owner may move them. What is not negotiable is that a bias
+/// bound exists and is reported for every configuration.
+pub const MAX_SIGNED_MEAN_DB_WAVE_TWO: f64 = 0.25;
+/// See [`MAX_SIGNED_MEAN_DB_WAVE_TWO`] — the draft wave's looser bound.
+pub const MAX_SIGNED_MEAN_DB_WAVE_ONE: f64 = 0.5;
 
 /// Presence flips carry the SAME allowance as the top amplitude rung — 0.01 %, ≈26
 /// cells on a full tile — in both waves (owner ruling 2026-08-10). A flip is a real
@@ -117,6 +130,16 @@ impl Wave {
     /// Wave 2 fails on amplitude; wave 1 reports the overshoot and passes.
     pub fn amplitude_is_binding(self) -> bool {
         self == Wave::Two
+    }
+
+    /// Bound on the signed mean over painted cells. Unlike the amplitude tiers this
+    /// does NOT soften for the draft — it widens to exactly one storage step, and then
+    /// binds.
+    pub fn max_signed_mean_db(self) -> f64 {
+        match self {
+            Wave::One => MAX_SIGNED_MEAN_DB_WAVE_ONE,
+            Wave::Two => MAX_SIGNED_MEAN_DB_WAVE_TWO,
+        }
     }
 }
 
@@ -383,8 +406,14 @@ impl Score {
 
     /// The two gates that hold in BOTH waves and are visible in two tiles. (The third,
     /// physics deleted rather than approximated, is a code-review gate.)
-    pub fn hard_gates_hold(&self) -> bool {
-        !self.flips_over_budget() && self.loud.signed_mean_db().abs() <= MAX_SIGNED_MEAN_DB
+    pub fn hard_gates_hold(&self, wave: Wave) -> bool {
+        !self.flips_over_budget() && !self.bias_over_budget(wave)
+    }
+
+    /// Systematic lean beyond what this wave allows — see
+    /// [`MAX_SIGNED_MEAN_DB_WAVE_TWO`] for why this is gated apart from the ladder.
+    pub fn bias_over_budget(&self, wave: Wave) -> bool {
+        self.loud.signed_mean_db().abs() > wave.max_signed_mean_db()
     }
 
     /// Cells that may flip across the paint edge before the tile fails — the same
@@ -413,7 +442,7 @@ impl Score {
     }
 
     pub fn verdict(&self, wave: Wave) -> Verdict {
-        if !self.hard_gates_hold() {
+        if !self.hard_gates_hold(wave) {
             return Verdict::Fail;
         }
         let amplitude_clean =
@@ -563,7 +592,7 @@ mod tests {
         let over_first_rung = allowance(CELLS, 0.20) + 10_000;
         let s = score(&reference, &sign_split_over(over_first_rung, 1.0));
         assert_eq!(s.amplitude_overshoots(Wave::One), vec![0]);
-        assert!(s.hard_gates_hold());
+        assert!(s.hard_gates_hold(Wave::Two));
         assert_eq!(s.verdict(Wave::One), Verdict::PassWithOvershoot);
         assert_eq!(s.verdict(Wave::Two), Verdict::Fail);
     }
@@ -640,7 +669,7 @@ mod tests {
         assert_eq!(s.qualifying_flips, 26);
         assert_eq!(s.flip_allowance(), 26);
         assert!(!s.flips_over_budget(), "at the allowance, not over it");
-        assert!(s.hard_gates_hold());
+        assert!(s.hard_gates_hold(Wave::Two));
         assert_eq!(s.verdict(Wave::Two), Verdict::Pass);
         assert_eq!(s.verdict(Wave::One), Verdict::Pass);
 
@@ -679,18 +708,36 @@ mod tests {
     }
 
     #[test]
-    fn a_one_sided_lean_fails_even_when_every_magnitude_passes() {
+    fn a_one_sided_lean_is_gated_apart_from_the_ladder_and_per_wave() {
         // 60 % of cells one step louder: max 0.5 dB is inside wave 2's baseline, so the
-        // ladder is spotless — but `build-pyramid` averages ENERGY, so this lean does
-        // not cancel at overview zoom, it accumulates.
+        // ladder is spotless. A uniform dB offset passes through energy averaging
+        // UNCHANGED, so it reaches every overview zoom at full strength — the ladder
+        // cannot see it and the bias bound is what catches it.
         let reference = reference_tile();
         let s = score(&reference, &candidate_with(&[(CELLS * 3 / 5, 0.5)]));
         assert_eq!(s.loud.max_abs_db, 0.5);
         assert!(s.amplitude_overshoots(Wave::Two).is_empty());
         assert!(s.loud.cand_louder_pct() > 99.0);
-        assert!(s.loud.signed_mean_db() > MAX_SIGNED_MEAN_DB);
+        let lean = s.loud.signed_mean_db();
+        assert!((0.25..0.5).contains(&lean), "~0.3 dB lean, got {lean}");
+        assert!(s.bias_over_budget(Wave::Two));
         assert_eq!(s.verdict(Wave::Two), Verdict::Fail);
-        assert_eq!(s.verdict(Wave::One), Verdict::Fail, "hard in both waves");
+        // The draft wave allows a whole storage step of lean, so 0.3 dB is fine there.
+        assert!(!s.bias_over_budget(Wave::One));
+        assert_eq!(s.verdict(Wave::One), Verdict::Pass);
+
+        // 60 % of cells a full 1.0 dB louder: nothing EXCEEDS wave 1's 1 dB baseline,
+        // so its ladder is clean too and only the 0.6 dB lean fails the tile. Bias is
+        // the one bound that does not soften into guidance for the draft.
+        let s = score(&reference, &candidate_with(&[(CELLS * 3 / 5, 1.0)]));
+        assert!(s.amplitude_overshoots(Wave::One).is_empty());
+        assert!(s.loud.signed_mean_db() > 0.5);
+        assert!(s.bias_over_budget(Wave::One));
+        assert_eq!(
+            s.verdict(Wave::One),
+            Verdict::Fail,
+            "bias binds in the draft"
+        );
     }
 
     #[test]
@@ -708,7 +755,7 @@ mod tests {
             "1.0 dB does not exceed that rung"
         );
         assert!(
-            s.hard_gates_hold(),
+            s.hard_gates_hold(Wave::Two),
             "576 leaning cells in 262,144 is no bias"
         );
         assert_eq!(s.verdict(Wave::Two), Verdict::Pass);
@@ -722,7 +769,7 @@ mod tests {
         assert!(s.loud.cells_over(1.0) > allowance(CELLS, 0.01));
         assert_eq!(s.loud.max_abs_db, 16.5);
         assert_eq!(s.loud.cells_over(6.0), 1, "over the hard ceiling");
-        assert!(s.hard_gates_hold());
+        assert!(s.hard_gates_hold(Wave::Two));
         assert_eq!(s.amplitude_overshoots(Wave::Two), vec![1, 3]);
         assert_eq!(s.verdict(Wave::Two), Verdict::Fail);
     }

@@ -148,8 +148,8 @@ fn print_verdict(s: &Score, wave: Wave, scoring: Scoring) -> Verdict {
     let bias = s.loud.signed_mean_db().abs();
     println!(
         "  bias |signed_mean_db| {bias:.4}   limit {:.2}  {}",
-        tile_painter::accuracy_contract::MAX_SIGNED_MEAN_DB,
-        if bias <= tile_painter::accuracy_contract::MAX_SIGNED_MEAN_DB {
+        wave.max_signed_mean_db(),
+        if !s.bias_over_budget(wave) {
             "ok"
         } else {
             "FAIL"
