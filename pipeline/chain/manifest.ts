@@ -454,18 +454,19 @@ export function buildPlan(scope: ResolvedScope): { steps: PlanStep[]; excludedBy
     notes: 'Copernicus GLO-30 DEM under prepared/dem/copernicus.',
     skipReason: 'raster-side one-time global enrichment — DEM is year-shared and survives an OSM re-extract; run manually via /enrich-global',
   })
-  push({
-    id: 'obstacle-heights',
-    script: 'enrich-obstacle-heights.ts',
-    phase: 'global-priors',
-    layer: 'buildings',
-    country: null,
-    args: [],
-    notes:
-      'height-tier ladder for prepared obstacles.arrow SCREENING heights (tier 3 city-measured zonal — IPR Praha; tier 4 GHS-BUILT-H ANBH prior replacing the flat 8 m default; ladder table in the enricher headers + noise_compute::low_profile). The worker REGENERATES each promoted cell from the immutable Overture staging shards + rasters — never from its own output — so a re-run is always safe and always converges (gg 2026-08-09). MUST RE-RUN after any Overture re-ingest + re-promotion: that flow rewrites prepared obstacles.arrow outside this chain, reverting tiers to 0/1/2 while this step stays stamped (the buildings.arrow NOTE_BUILDINGS_NATIONAL problem, one store over). Never pass --cells in a chain run (verification isolation only).',
-    skipReason:
-      'obstacles.arrow is NOT produced by the OSM extract and survives it — a routine post-extract chain has nothing to redo; run manually (npx tsx pipeline/enrich-obstacle-heights.ts --enrich-only [--bbox S,W,N,E]) after an Overture re-ingest/re-promotion or when a new height raster lands',
-  })
+  pushPerBbox(
+    {
+      id: 'obstacle-heights',
+      script: 'enrich-obstacle-heights.ts',
+      phase: 'global-priors',
+      layer: 'buildings',
+      country: null,
+      notes:
+        'height-tier ladder for prepared obstacles.arrow SCREENING heights (tier 3 city-measured zonal — IPR Praha; tier 4 GHS-BUILT-H ANBH prior replacing the flat 8 m default; ladder table in the enricher headers + noise_compute::low_profile). Every promoted cell carries an adjacent proof bound to its output inode, immutable Overture staging shards, height rasters, and worker source. Current cells are a cheap no-op; Overture re-promotion, raster replacement, staging change, or worker change makes the cell provably stale and regenerates it. Missing staging or a required height raster fails the chain rather than certifying a reverted cell.',
+      skipReason: null,
+    },
+    (b) => (b ? ['--enrich-only', '--bbox', serializeBbox(b)] : ['--enrich-only']),
+  )
   // PRE-heal, deliberately BEFORE every ROAD claimer incl. roads-europe (/gg
   // #33 Codex CRITICAL — same one-cycle hole flagged for rail): a legacy
   // foreign/zero stamp outranks the EU continental claimer via shouldOverwrite,

@@ -38,6 +38,10 @@ function railwayEuropeSteps(scope: ResolvedScope): PlanStep[] {
   return buildPlan(scope).steps.filter((s) => s.script === 'enrich-railway-europe.ts')
 }
 
+function obstacleHeightSteps(scope: ResolvedScope): PlanStep[] {
+  return buildPlan(scope).steps.filter((s) => s.script === 'enrich-obstacle-heights.ts')
+}
+
 test('world scope: ONE railway-europe step, no --country, expectMinInputs DERIVED from the FEEDS registry (item 7: the hand-written 23 is dead)', () => {
   const steps = railwayEuropeSteps(parseScope('world'))
   assert.equal(steps.length, 1)
@@ -80,4 +84,26 @@ test('country scope steps never carry the world-mode note about the enricher\'s 
   const steps = railwayEuropeSteps(countryScope('DE'))
   assert.match(steps[0].notes, /--country/)
   assert.doesNotMatch(steps[0].notes, /all-countries SEQUENTIAL loop/)
+})
+
+test('obstacle heights stays world-scoped and is never downgraded to a sync-safe cache skip', () => {
+  const steps = obstacleHeightSteps(parseScope('world'))
+  assert.equal(steps.length, 1)
+  assert.equal(steps[0].id, 'obstacle-heights')
+  assert.equal(steps[0].skipReason, null)
+  assert.deepEqual(steps[0].args, ['--enrich-only'])
+})
+
+test('obstacle heights receives the exact bbox under a scoped chain run', () => {
+  const scope: ResolvedScope = {
+    kind: 'bbox',
+    iso2: null,
+    bboxes: [[49.7, 13.9, 50.4, 15.0]],
+    label: 'bbox:test',
+    canonical: 'bbox:49.7,13.9,50.4,15',
+  }
+  const steps = obstacleHeightSteps(scope)
+  assert.equal(steps.length, 1)
+  assert.equal(steps[0].skipReason, null)
+  assert.deepEqual(steps[0].args, ['--enrich-only', '--bbox', '49.7,13.9,50.4,15'])
 })

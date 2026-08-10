@@ -29,21 +29,23 @@
 # Merge order = sorted shard filenames, the same order the Wave-1 promotion
 # used and the loaders' shard_paths() sort — regenerating a never-enriched
 # cell reproduces the promoted file byte-for-byte except enriched rows.
-# Cells with no staging are SKIPPED loudly (prepared left untouched); cells
-# staged but never promoted are skipped too — promotion policy stays with the
-# world cutover, this tool only re-materializes already-promoted cells.
+# A promoted cell with no staging FAILS loudly: leaving its old output while a
+# chain step exits zero would falsely certify it. Cells staged but never
+# promoted are skipped — promotion policy stays with the world cutover; this
+# tool only re-materializes already-promoted cells.
 #
 # An OSM planet re-extract does NOT touch obstacles.arrow (osm-to-h3r4.sh
-# rewrites only its own per-file arrows). After an Overture re-ingest +
-# re-promotion, re-run this enricher (manifest step `obstacle-heights` notes;
-# the TS face `pipeline/enrich-obstacle-heights.ts` resolves paths and spawns
-# this worker).
+# rewrites only its own per-file arrows). The manifest runs the TS face on every
+# chain pass. It selects only cells whose adjacent proof no longer matches the
+# output, staging, raster, or worker identity; this worker seals the exact
+# output inode it published.
 #
 # Usage:
 #   enrich-obstacle-heights.py --h3r4-dir data/prepared/2026/h3r4 \
 #     --staging-dir data/enrichment/global/overture-obstacles/h3r4 \
 #     --ghsl <ANBH .tif> [--regional <mosaic .vrt|.tif>] \
 #     (--cells hex1,hex2,... | --cells-file <one hex per line>)
+#     [--proof-manifest <JSON object mapping cell to input SHA-256>]
 #
 # --cells-file exists because a world run's cell list exceeds ARG_MAX as a
 # single argument (gg pass 2); the TS face always writes a manifest file.
@@ -51,6 +53,7 @@
 
 import argparse
 import glob
+import json
 import math
 import os
 import sys
@@ -74,6 +77,8 @@ TIER3_CLAMP = (2.5, 250.0)
 ANBH_MIN_M = 1.0          # ANBH below this = no better info than the default
 ANBH_MAX_VALID = 250.0    # GHSL NoData sentinel is 255 — belt for a missing tag
 TIER4_CLAMP = (3.0, 100.0)
+HEIGHT_PROOF_FILENAME = "obstacles.height-materialization.json"
+HEIGHT_PROOF_VERSION = 1
 
 SCHEMA = pa.schema(
     [
@@ -183,15 +188,61 @@ def read_staging(staging_cell_dir):
     return pa.concat_tables(tables).combine_chunks()
 
 
-def enrich_cell(cell, h3r4_dir, staging_dir, ghsl, regional):
+def stable_file_identity(stat_result):
+    """JSON-safe identity shared with pipeline/lib/obstacle-height-materialization.ts."""
+    return {
+        "dev": str(stat_result.st_dev),
+        "ino": str(stat_result.st_ino),
+        "size": str(stat_result.st_size),
+        "mtimeNs": str(stat_result.st_mtime_ns),
+        "ctimeNs": str(stat_result.st_ctime_ns),
+    }
+
+
+def fsync_directory(path):
+    """Persist a completed rename before publishing a proof that depends on it."""
+    directory_fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def write_height_proof(cell, out_path, output_stat, inputs_sha256, before, after):
+    """Seal the exact inode this worker published, never a later path lookup.
+
+    If a concurrent promotion replaces the path between output publication and
+    this proof write, the proof retains the worker inode and therefore reads as
+    stale on the next verification instead of blessing the promoted payload.
+    """
+    proof_path = os.path.join(os.path.dirname(out_path), HEIGHT_PROOF_FILENAME)
+    tmp = f"{proof_path}.tmp.{os.getpid()}"
+    proof = {
+        "version": HEIGHT_PROOF_VERSION,
+        "cell": cell,
+        "inputsSha256": inputs_sha256,
+        "output": stable_file_identity(output_stat),
+        "rows": int(sum(after)),
+        "beforeTiers": [int(value) for value in before],
+        "afterTiers": [int(value) for value in after],
+    }
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(proof, f, sort_keys=True, separators=(",", ":"))
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, proof_path)
+    fsync_directory(os.path.dirname(proof_path))
+
+
+def enrich_cell(cell, h3r4_dir, staging_dir, ghsl, regional, proof_inputs_sha256=None):
     out_path = os.path.join(h3r4_dir, cell, "obstacles.arrow")
     if not os.path.exists(out_path):
         print(f"{cell}: not promoted — skipped (promotion stays with the world cutover)", file=sys.stderr)
         return
     staged = read_staging(os.path.join(staging_dir, cell))
     if staged is None:
-        print(f"{cell}: NO STAGING SHARDS — prepared left untouched", file=sys.stderr)
-        return
+        raise RuntimeError(f"{cell}: NO STAGING SHARDS — refusing to leave a promoted cell unmaterialized")
     # Row-count TRIPWIRE, not proof: same-count re-ingested staging passes and
     # is regenerated from — which is the desired refresh after a re-ingest. A
     # count mismatch means promotion and staging visibly disagree; stop and let
@@ -261,8 +312,18 @@ def enrich_cell(cell, h3r4_dir, staging_dir, ghsl, regional):
     tmp = f"{out_path}.tmp.{os.getpid()}"
     with ipc.new_file(tmp, SCHEMA) as w:
         w.write_table(out)
-    os.replace(tmp, out_path)
     after = np.bincount(tiers, minlength=5)
+    output_fd = os.open(tmp, os.O_RDONLY)
+    try:
+        os.fsync(output_fd)
+        os.replace(tmp, out_path)
+        fsync_directory(os.path.dirname(out_path))
+        if proof_inputs_sha256 is not None:
+            # fstat holds the inode written above even if another process races
+            # an atomic replacement of the path immediately after publication.
+            write_height_proof(cell, out_path, os.fstat(output_fd), proof_inputs_sha256, before, after)
+    finally:
+        os.close(output_fd)
     print(
         f"{cell}: {len(heights)} rows; tiers {list(before)} -> {list(after)}; "
         f"tier3 {stats['tier3']}, tier4 {stats['tier4']}, regional-abstain {stats['abstain']}"
@@ -278,16 +339,33 @@ def main():
     group = ap.add_mutually_exclusive_group(required=True)
     group.add_argument("--cells")
     group.add_argument("--cells-file")
+    ap.add_argument("--proof-manifest")
     args = ap.parse_args()
     if args.cells_file:
         with open(args.cells_file) as f:
             cells = [line.strip() for line in f if line.strip()]
     else:
         cells = args.cells.split(",")
+    proof_inputs = None
+    if args.proof_manifest:
+        with open(args.proof_manifest, encoding="utf-8") as f:
+            proof_inputs = json.load(f)
+        if set(proof_inputs) != set(cells):
+            raise SystemExit("proof manifest cells do not exactly match the requested cells")
+        for cell, digest in proof_inputs.items():
+            if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                raise SystemExit(f"{cell}: invalid proof input SHA-256")
     ghsl = GlobalPrior(args.ghsl)
     regional = RegionalHeights(args.regional) if args.regional else None
     for cell in cells:
-        enrich_cell(cell, args.h3r4_dir, args.staging_dir, ghsl, regional)
+        enrich_cell(
+            cell,
+            args.h3r4_dir,
+            args.staging_dir,
+            ghsl,
+            regional,
+            proof_inputs[cell] if proof_inputs is not None else None,
+        )
 
 
 if __name__ == "__main__":

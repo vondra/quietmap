@@ -22,11 +22,12 @@
  * overlapping any region run ANBH-only, and per-row zonal coverage decides
  * inside overlapping cells.
  *
- * Re-run contract: an OSM planet re-extract does NOT touch obstacles.arrow, so
- * routine post-extract chains have nothing to redo (manifest lists this step
- * with a permanent skip, like `global-buildings`). After an Overture re-ingest
- * + re-promotion, re-run manually:
- *   npx tsx pipeline/enrich-obstacle-heights.ts --enrich-only [--bbox S,W,N,E]
+ * Freshness contract: every materialized cell carries an adjacent proof bound
+ * to the output inode, staging shards, height rasters, and worker source. The
+ * enrichment chain invokes this face on every run; current cells are a cheap
+ * no-op, while an Overture re-promotion or input change selects only stale
+ * cells. Missing staging or a required height raster is fatal rather than a
+ * sync-safe skip that could certify a reverted output.
  *
  * Registry: `global-ghsl-built-h` (9866) + `cz-ipr-praha-vysky` (9867) in
  * enrichment-datasets.ts — obstacle rows carry `height_tier`, not `source_id`;
@@ -39,6 +40,13 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { cellToBoundary } from 'h3-js'
 import { DATA_YEAR } from './lib/data-year.js'
+import {
+  OBSTACLE_HEIGHT_PROOF_FILENAME,
+  obstacleHeightInputsSha256,
+  obstacleHeightProofState,
+  obstacleHeightSharedInputContract,
+  type ObstacleHeightCandidate,
+} from './lib/obstacle-height-materialization.js'
 
 const REPO_ROOT = resolve(import.meta.dirname, '..')
 const ENRICH = resolve(REPO_ROOT, 'data', 'enrichment')
@@ -103,6 +111,21 @@ function overlaps(a: readonly number[], b: readonly number[]): boolean {
   return a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
 }
 
+function stagingShardPaths(hex: string): string[] {
+  const dir = resolve(STAGING_DIR, hex)
+  if (!existsSync(dir)) throw new Error(`promoted cell ${hex} has no staging directory ${dir}`)
+  const shards = readdirSync(dir)
+    .filter((name) => name.startsWith('obstacles-') && name.endsWith('.arrow'))
+    .sort()
+    .map((name) => resolve(dir, name))
+  if (shards.length === 0) throw new Error(`promoted cell ${hex} has no staging obstacle shards in ${dir}`)
+  return shards
+}
+
+function regionalRasterForCell(hex: string): (typeof REGIONAL_RASTERS)[number] | undefined {
+  return REGIONAL_RASTERS.find((r) => overlaps(cellEnvelope(hex), r.bbox))
+}
+
 /** Promoted cells in scope: hex dirs carrying obstacles.arrow whose boundary
  *  envelope overlaps the bbox. (Antimeridian-straddling cells are the usual
  *  envelope caveat — none of the promoted store's cells wrap today.) */
@@ -117,8 +140,54 @@ function promotedCellsInScope(bbox: number[] | null): string[] {
   return out.sort()
 }
 
+type HeightCandidate = ObstacleHeightCandidate & { regionalVrtPath: string }
+
+function currentInputCandidate(
+  hex: string,
+  sharedContracts: Map<string, ReturnType<typeof obstacleHeightSharedInputContract>>,
+): HeightCandidate {
+  if (!/^[0-9a-f]{15}$/.test(hex)) throw new Error(`invalid H3R4 cell '${hex}'`)
+  const outputPath = resolve(H3R4_DIR, hex, 'obstacles.arrow')
+  if (!existsSync(outputPath)) {
+    throw new Error(`requested cell ${hex} is not promoted (${outputPath} is missing)`)
+  }
+  const region = regionalRasterForCell(hex)
+  if (region && !existsSync(region.vrt)) {
+    // NEVER silently degrade to ANBH-only: regenerating a regional cell
+    // without its raster erases every tier-3 height it had (gg pass 1).
+    // Deleting the REGIONAL_RASTERS row is the explicit opt-out.
+    throw new Error(
+      `cell ${hex} overlaps regional raster ${region.key} but ${region.vrt} is missing — ` +
+        `run scripts/obstacles/download-height-rasters.sh (or remove the region row to accept ANBH-only)`,
+    )
+  }
+  const regionalVrtPath = region?.vrt ?? ''
+  let shared = sharedContracts.get(regionalVrtPath)
+  if (!shared) {
+    shared = obstacleHeightSharedInputContract({
+      workerPath: WORKER,
+      ghslPath: GHSL_TIF,
+      regionalVrtPath: regionalVrtPath || null,
+    })
+    sharedContracts.set(regionalVrtPath, shared)
+  }
+  return {
+    cell: hex,
+    outputPath,
+    proofPath: resolve(H3R4_DIR, hex, OBSTACLE_HEIGHT_PROOF_FILENAME),
+    inputsSha256: obstacleHeightInputsSha256({ shared, stagingShardPaths: stagingShardPaths(hex) }),
+    regionalVrtPath,
+  }
+}
+
 function main(): void {
   const { enrichOnly, bbox, cells } = parseArgs(process.argv)
+
+  const requested = [...new Set(cells ?? promotedCellsInScope(bbox))].sort()
+  if (requested.length === 0) {
+    console.log('no promoted cells in scope — nothing to enrich')
+    return
+  }
 
   if (!enrichOnly) {
     // DATA_YEAR must reach the shell explicitly — its fallback literal would
@@ -135,32 +204,34 @@ function main(): void {
     )
   }
 
-  const targets = cells ?? promotedCellsInScope(bbox)
-  if (targets.length === 0) {
-    console.log('no promoted cells in scope — nothing to enrich')
+  const sharedContracts = new Map<string, ReturnType<typeof obstacleHeightSharedInputContract>>()
+  const candidates: HeightCandidate[] = []
+  const staleReasons = new Map<string, number>()
+  for (const hex of requested) {
+    const candidate = currentInputCandidate(hex, sharedContracts)
+    const state = obstacleHeightProofState(candidate)
+    if (!state.current) {
+      candidates.push(candidate)
+      staleReasons.set(state.reason, (staleReasons.get(state.reason) ?? 0) + 1)
+    }
+  }
+  if (candidates.length === 0) {
+    console.log(`[obstacle-heights] ${requested.length} promoted cell(s); every height proof is current`)
     return
   }
+  console.log(
+    `[obstacle-heights] ${requested.length} promoted cell(s); ${candidates.length} stale (` +
+      [...staleReasons].map(([reason, count]) => `${reason}=${count}`).join(', ') + ')',
+  )
 
   // Group by the regional raster overlapping the cell boundary (first match
   // wins); one worker run per group keeps the ~4 GB regional array loaded
   // exactly once.
-  const groups = new Map<string, string[]>()
-  for (const hex of targets) {
-    const env = cellEnvelope(hex)
-    const region = REGIONAL_RASTERS.find((r) => overlaps(env, r.bbox))
-    if (region && !existsSync(region.vrt)) {
-      // NEVER silently degrade to ANBH-only: regenerating a regional cell
-      // without its raster erases every tier-3 height it had (gg pass 1).
-      // Deleting the REGIONAL_RASTERS row is the explicit opt-out.
-      throw new Error(
-        `cell ${hex} overlaps regional raster ${region.key} but ${region.vrt} is missing — ` +
-          `run scripts/obstacles/download-height-rasters.sh (or remove the region row to accept ANBH-only)`,
-      )
-    }
-    const key = region ? region.vrt : ''
-    let group = groups.get(key)
-    if (!group) groups.set(key, (group = []))
-    group.push(hex)
+  const groups = new Map<string, typeof candidates>()
+  for (const candidate of candidates) {
+    let group = groups.get(candidate.regionalVrtPath)
+    if (!group) groups.set(candidate.regionalVrtPath, (group = []))
+    group.push(candidate)
   }
 
   // Cells travel via a manifest file, never argv — a world run's cell list
@@ -168,22 +239,39 @@ function main(): void {
   const manifestDir = mkdtempSync(join(tmpdir(), 'obstacle-heights-'))
   try {
     let g = 0
-    for (const [vrt, hexes] of groups) {
-      const cellsFile = join(manifestDir, `cells-${g++}.txt`)
-      writeFileSync(cellsFile, hexes.join('\n') + '\n')
+    for (const [vrt, group] of groups) {
+      const groupId = g++
+      const cellsFile = join(manifestDir, `cells-${groupId}.txt`)
+      const proofManifest = join(manifestDir, `proofs-${groupId}.json`)
+      writeFileSync(cellsFile, group.map((candidate) => candidate.cell).join('\n') + '\n')
+      writeFileSync(
+        proofManifest,
+        JSON.stringify(Object.fromEntries(group.map((candidate) => [candidate.cell, candidate.inputsSha256]))) + '\n',
+      )
       const args = [
         WORKER,
         '--h3r4-dir', H3R4_DIR,
         '--staging-dir', STAGING_DIR,
         '--ghsl', GHSL_TIF,
         '--cells-file', cellsFile,
+        '--proof-manifest', proofManifest,
       ]
       if (vrt) args.push('--regional', vrt)
       console.log(
-        `[obstacle-heights] ${hexes.length} cell(s) ${vrt ? `with regional ${vrt}` : 'ANBH-only'}`,
+        `[obstacle-heights] ${group.length} cell(s) ${vrt ? `with regional ${vrt}` : 'ANBH-only'}`,
       )
       const run = spawnSync('python3', args, { stdio: 'inherit' })
       if (run.status !== 0) throw new Error(`enrich worker failed (exit ${run.status})`)
+      // Re-read every input after the worker. Reusing the pre-run digest would
+      // bless a proof that was already stale if staging, a raster, or worker
+      // source changed while the group was materializing.
+      const postRunSharedContracts = new Map<string, ReturnType<typeof obstacleHeightSharedInputContract>>()
+      const unsealed = group
+        .map((candidate) => currentInputCandidate(candidate.cell, postRunSharedContracts))
+        .filter((candidate) => !obstacleHeightProofState(candidate).current)
+      if (unsealed.length > 0) {
+        throw new Error(`worker returned success but ${unsealed.length} cell(s) lack a current proof: ${unsealed.slice(0, 5).map((c) => c.cell).join(', ')}`)
+      }
     }
   } finally {
     rmSync(manifestDir, { recursive: true, force: true })

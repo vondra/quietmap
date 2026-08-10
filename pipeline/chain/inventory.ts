@@ -27,13 +27,19 @@ interface PlanIndex {
  *  the world plan. Returns an error string, or null when the token is valid. */
 function resolveParentToken(token: string, plan: PlanIndex): string | null {
   if (token.startsWith('extract:') || token.startsWith('aircraft-extract:')) return null
+  if (token.startsWith('overture-ingest:')) {
+    const script = token.slice('overture-ingest:'.length)
+    return existsSync(resolve(REPO_ROOT, script))
+      ? null
+      : `overture ingest producer '${script}' does not exist`
+  }
   const family = /^(national|city):([a-z]+)$/.exec(token)
   if (family) {
     if (plan.phaseLayers.has(`${family[1]}|${family[2]}`)) return null
     return `family '${token}' matches NO manifest step (phase ${family[1]}, layer ${family[2]})`
   }
   if (plan.stepIds.has(token)) return null
-  return `'${token}' is not a manifest step id (nor extract:/aircraft-extract:/national:/city: token)`
+  return `'${token}' is not a manifest step id (nor extract:/aircraft-extract:/overture-ingest:/national:/city: token)`
 }
 
 export function runInventory(): number {
@@ -84,13 +90,13 @@ export function runInventory(): number {
         console.log(`${file.padEnd(w.file)} ${c.padEnd(w.col)} ${'ORPHAN!'.padEnd(w.flag)} !! live column with NO declared parent — nothing recreates it`)
         orphans++
       } else {
-        const flag = origin.chainOnly ? 'CHAIN' : 'extract'
+        const flag = origin.chainOnly ? 'CHAIN' : 'source'
         console.log(`${file.padEnd(w.file)} ${c.padEnd(w.col)} ${flag.padEnd(w.flag)} ${describe(origin)}`)
       }
     }
     // Declared-but-absent columns. A missing CHAIN-ONLY column on the enriched
     // reference hex is a loud WARN — it means the chain step that materializes
-    // it has not run here (or stopped writing it); extract-parent columns can
+    // it has not run here (or stopped writing it); non-chain columns can
     // legitimately lag a schema addition, so they stay informational.
     for (const c of Object.keys(known)) {
       if (!cols.includes(c)) {
