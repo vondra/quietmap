@@ -20,6 +20,7 @@
 //! Brotli, served `Content-Encoding: br`).
 
 pub mod accumulator;
+pub mod accuracy_contract;
 pub mod airborne;
 pub mod byte_stop;
 pub mod cruise;
