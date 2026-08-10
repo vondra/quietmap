@@ -317,8 +317,94 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 // the CPU EXPRESSION, not a copy of its number, so the lanes cannot drift apart
 // again by editing one side. -DARC_MIN_SPAN=<x> raises it for A/B, which is the
 // ONLY thing a -D lever may be used for.
+//
+// 2026-08-10 — THE CASE FOR RAISING IT TO 5° IS MEASURED AND THE DEFAULT IS STILL
+// OFF. READ THE CONFIGURATION BEFORE REUSING THE NUMBERS: every figure below was
+// measured with BOTH thresholds at 5°, i.e.
+// `-DARC_MIN_SPAN=0.0872664626 -DARC_MIN_SPAN_REALISED=0.0872664626`, which is the
+// pre-split behaviour of this one constant. Since the split, -DARC_MIN_SPAN alone
+// raises only the pre-gate and is a DIFFERENT, UNMEASURED rule — do not attach
+// these numbers to it.
+// Two independent agent labs swept the angle on different hardware and found the
+// same knee; re-measured here on ONE card with an exclusive GPU and a complete
+// obstacle halo, dense rail tile, marginal against the UNGATED kernel by the map's
+// paint bands (nothing renders below 30 dB):
+//   ungated                        275.0 s   1.0x
+//   sound gate 5° + 600 m window    24.4 s  11.3x  ≥60: 0  30-60: 0    max 1.0
+//   sound gate 8° + 600 m window    18.6 s  14.8x  ≥60: 0  30-60: 13   max 2.0
+//   both tests 5° + 600 m window    17.4 s  15.8x  ≥60: 0  30-60: 5    max 1.5
+//   both tests 8° + 600 m window    16.4 s  16.8x  ≥60: 0  30-60: 210  max 4.0
+// No operating point moves ONE cell over 1 dB in the loud band. The SOUND split is
+// the accuracy winner outright, and 8° is Pareto-dominated by 5° here — 6 % more
+// speed for 42x the visible drift. The gate alone is worth 10.6x and the window
+// alone only 1.20x: the window earns its 1.49x only AFTER the gate removes the arc
+// walk, because what is left is the cp-ray obstacle DDA it cuts. On dense city the
+// gated kernel also lands CLOSER to the CPU rule than the ungated one (3 442 vs
+// 4 120 cells >1 dB).
+//
+// Turning it on is nonetheless a SEPARATE, OWNER-LEVEL decision, for two reasons.
+// (i) It re-forks the lanes: the CPU's counterpart is 0.0, so enabling this needs
+// the pinning value in `ensure_no_cpu_only_arc_levers` moved with it, or every
+// later lane comparison is rigged — the failure this constant has been paid for
+// twice. (ii) The dense-city result is partly ERROR CANCELLATION: the ungated
+// kernel's own vector-candidate fork runs GPU-louder there and this gate is
+// uniformly quieter, so the gate scores well by cancelling a fork it does not own.
+// When that fork closes, the cancellation goes with it. Re-measure then.
+//
+// 2026-08-10 — WHICH OF THE TWO TESTS THIS NUMBER DRIVES. The note above named
+// the defect ("ONE number drives TWO different tests") and then left both wired
+// to it, so every A/B of this lever silently measured them together. They are
+// now separate, because they are not the same claim:
+//   * the PRE-GATE (`arc_span_possible`, in `line_source`) keeps the pair when
+//     L > dend·ARC_MIN_SPAN, where `dend` is the distance to the segment's
+//     NEAREST POINT (p2s clamps the foot). Within ONE flat-earth frame L/dend
+//     bounds BOTH ways a segment can fail to be a point: the ANGLE, since
+//     span ≤ 2·atan(L/(2·dend)) ≤ L/dend; and the RANGE spread, since distance
+//     to the receiver is 1-Lipschitz along the segment, so its max minus its
+//     min over the segment is ≤ L while that min IS dend. A pair it rejects is
+//     point-like in both senses, which is what a point-source test has to mean.
+//     CAVEAT, and it is why the word here is CONSERVATIVE and never PROVABLE.
+//     TWO things break the inequality at the margin:
+//       (a) FRAMES. `sp[0]` is the host's own `length_m`, p2s scales longitude
+//           by the SEGMENT-MIDPOINT latitude (via `__cosf`, f32), and the
+//           realised span below scales it by the RECEIVER's (f64 `cos`). Those
+//           differ by cos(lat_rcv)/cos(lat_mid) — ~0.2 % over 10 km of latitude
+//           at 50°.
+//       (b) LENGTH ROUNDING. `length_m` is serialised to ONE decimal by the
+//           extractor, so it can sit up to 0.05 m BELOW the true chord — 0.5 %
+//           on a 10 m segment, 0.02 % on a 250 m one, and always in the
+//           rejecting direction.
+//     Together, at a 5° setting this decides pairs whose realised span is
+//     5° ± a few hundredths of a degree. Physically nil, formally not a bound:
+//     do not restate it as one, and do not build a proof on top of it. Making
+//     it exact would mean deriving length and distance in ONE frame from the
+//     endpoints — a sqrt per pair that this pre-gate exists to avoid, and not
+//     worth buying for a lever that is off by default.
+//   * the realised-span test at the top of `arc_screen_bands` tests the ACTUAL
+//     atan2 span, which ALSO collapses for a long segment seen nearly END-ON.
+//     There the cp ray does not represent the segment at all: what the cp ray
+//     misses is the segment's RANGE spread (a 250 m segment pointing away from
+//     the receiver spans 250 m of distance at ~0.1° of azimuth), and range
+//     spread is exactly what a point-source argument may not throw away. That
+//     test now reads ARC_MIN_SPAN_REALISED below.
+// Both default to the degenerate threshold, so the shipped kernel is unchanged
+// either way; what changed is that raising ARC_MIN_SPAN no longer silently
+// drops the end-on geometry that dense rail corridors are made of.
 #ifndef ARC_MIN_SPAN
 #define ARC_MIN_SPAN ARC_DEGENERATE_SPAN
+#endif
+// Realised-span floor for the arc walk itself. Its ONE sound job is numerical:
+// the interval arithmetic divides by the span, so a span of ~0 divides by ~0.
+// That job is ARC_DEGENERATE_SPAN's, and this is an A/B lever for measuring what
+// raising it costs — the 2026-08-04 Praha sweep on the CPU lane (25 road / 37
+// rail receivers over 1.0 dB, maxima 7.8 / 11.4 dB) was measured at 0.01 rad =
+// 0.57°, about a NINTH of the 5° an angular gate wants, and dense-city geometry
+// is where it bites. Note also that a PERFECTLY radial segment still returns
+// here at any setting (its realised span is exactly 0), so what separating the
+// thresholds recovers is the NEARLY end-on population, not the exactly end-on
+// one.
+#ifndef ARC_MIN_SPAN_REALISED
+#define ARC_MIN_SPAN_REALISED ARC_DEGENERATE_SPAN
 #endif
 // ---- `out` LAYOUT. Mirrored by the OUT_* consts in noise-gpu/src/lib.rs, and
 // the host tells the kernel how many f32 slots it actually ALLOCATED in
@@ -441,6 +527,38 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 // marches fold into an unprovably-false sink).
 #ifndef PROF_SIXMARCH
 #define PROF_SIXMARCH 0
+#endif
+
+// ---- DEV-ONLY candidate END-WINDOW (-DCAND_END_WINDOW_M=<metres>, 0 = exact,
+// the default). An INPUT PREFILTER on `obstacle_best_candidate`'s DDA: a cell
+// whose whole chainage interval lies inside the middle band [W, dist−W] of the
+// ray hands back no edges, so neither the branch-and-bound prune nor the edge
+// walk runs for it. Prior art is CadnaA's obstacle window: the premise is that
+// obstacles matter near the source and near the receiver, and rarely in the
+// middle of a long path.
+//
+// It filters CELLS, not obstacles, and it is therefore GRID-DEPENDENT and leaky
+// in the safe direction: edges are listed in every supercover cell they cross,
+// and the edge loop below solves each referenced edge's FULL intersection
+// without requiring the crossing to fall inside the current cell — so a
+// mid-path edge that also happens to be listed in a RETAINED end cell is still
+// found and still screens. Do not read a skipped cell as a deleted obstacle,
+// and do not quote this lever as pricing a clean "obstacles near the ends only"
+// rule; it prices this particular cell-run filter and nothing tidier.
+//
+// It is a lever, not a rule, and it is DEFAULT-OFF because no non-zero W is
+// exact for all geometry — one tall mid-path building is exactly what it throws
+// away — against the model invariant that path effects are computed at every
+// distance inside a source's reach. The error is not literally unbounded: it is
+// capped by the §3.5 per-band screening ceiling of 20 dB, which is far too
+// coarse to serve as a bound. Measured cost of getting W wrong, 2026-08-10 on a
+// dense rail tile: W=100 moved 2 202 cells over 1.0 dB with a +7.5 dB worst
+// cell (mid-path tall buildings), while W=600 moved ~nothing over the arc gate
+// alone on the same tile. A window that has to be tuned per city is a
+// per-receiver candidate structure wearing a disguise, so this stays an A/B
+// lever until that structure exists.
+#ifndef CAND_END_WINDOW_M
+#define CAND_END_WINDOW_M 0
 #endif
 
 // ---- raster_reader::FusedGrid::lookup_fused_rc (elevation bilinear) ----
@@ -1071,6 +1189,25 @@ __device__ void obstacle_best_candidate(
         while (1) {
             size_t c = (size_t)cy * (size_t)cols + (size_t)cx;
             unsigned int lo = starts[soff + c], hi = starts[soff + c + 1];
+            // END-WINDOW prefilter (see CAND_END_WINDOW_M; compiled out at the
+            // default 0). Emptying the cell's edge run here — rather than
+            // branching around the body — makes the prune block and the edge
+            // loop below no-ops in one place and leaves the DDA advance at the
+            // bottom untouched, so a skipped cell cannot desynchronise the walk.
+            // `win_lo` not advancing for a skipped cell is harmless: it only
+            // ever moves forward, and the next cell that needs it re-advances.
+            // `#if`, not `if (CAND_END_WINDOW_M > 0)`: a runtime test on a macro is
+            // dead-code-eliminated just the same, but its mere presence re-orders
+            // the scheduler enough to move one `mov.f64` in the emitted PTX. The
+            // preprocessor form keeps the default build BYTE-IDENTICAL to the
+            // kernel without this lever, which is what makes it safe to carry.
+#if CAND_END_WINDOW_M > 0
+            {
+                double t_exit_w = fmin(fmin(t_max_x, t_max_y), 1.0);
+                if (t_enter * dist >= (double)CAND_END_WINDOW_M &&
+                    t_exit_w * dist <= dist - (double)CAND_END_WINDOW_M) hi = lo;
+            }
+#endif
             // Exact cell prune (maxh == NULL ⇒ pruning disabled — the host
             // writes slot 5 as 0 under NOISE_GPU_DISABLE_PRUNE=1, an
             // incident A/B lever that needs no rebuild).
@@ -1999,9 +2136,11 @@ __device__ void arc_screen_bands(
     double mlon = M_LON_EQ * fmax(cos(rlat * (PI_D / 180.0)), 0.01);
     double base = arc_az(rlat, rlon, mlon, alat, alon);
     double delta = wrap_pi_d(arc_az(rlat, rlon, mlon, blat, blon) - base);
-    // Below this span the segment IS a point source at this receiver: the cp ray
-    // already represents it, and the interval arithmetic would divide by ~0.
-    if (fabs(delta) < ARC_MIN_SPAN) return;
+    // Below this span the interval arithmetic would divide by ~0. It is NOT the
+    // point-source test — that one is the caller's pre-gate on L/dend; a span
+    // that collapses here can also be a long segment seen end-on, whose range
+    // spread the cp ray does not carry (see ARC_MIN_SPAN_REALISED).
+    if (fabs(delta) < ARC_MIN_SPAN_REALISED) return;
     // Span in the base-relative frame; a segment subtends at most π at a
     // receiver off its line, so the short arc between the endpoints IS it.
     double lo = delta < 0.0 ? delta : 0.0;

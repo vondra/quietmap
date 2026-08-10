@@ -747,6 +747,156 @@ Pareto-better than §3.5d alone on every tile and every column, and 2.2-4.6× lo
 RMS than §3.5c — so the gate is not a tail-for-bulk trade. It buys the fixture's
 worst receiver AND the tile's bulk, for 4.4 % of the paint.
 
+**THE CUDA TILE LANE'S ELIGIBILITY LEVER, AND WHY ITS DEFAULT IS OFF
+(2026-08-10).** The CUDA lane paints §3.5c per pair and has no bucket to gate
+(§3.5d), so its analogue of this section is `ARC_MIN_SPAN` in
+`noise-gpu/kernels/scatter.cu`: whether a (segment, receiver) pair gets the arc
+walk at all. That one constant used to drive TWO tests, which is why every A/B of
+it measured them together. It now drives the sound one only:
+
+* the **pre-gate** keeps the pair when `L > dend·ARC_MIN_SPAN`, with `dend` the
+  distance to the segment's NEAREST point. In ONE flat-earth frame `L/dend` bounds
+  both ways a segment can fail to be a point — the ANGLE
+  (`span ≤ 2·atan(L/(2·dend)) ≤ L/dend`) and the RANGE spread (distance to the
+  receiver is 1-Lipschitz along the segment, so its max less its min is `≤ L`, and
+  that min IS `dend`) — so what it rejects is point-like in both senses, which is
+  what a point-source test has to mean. It is CONSERVATIVE, not provable, for two
+  reasons. FRAMES: `sp[0]` is the host's `length_m`, `p2s` scales longitude by the
+  segment-MIDPOINT latitude through `__cosf` (f32), and the realised span uses the
+  RECEIVER's in f64 — differing by `cos(lat_rcv)/cos(lat_mid)`, ~0.2 % over 10 km
+  of latitude at 50°. ROUNDING: `length_m` is serialised to one decimal by the
+  extractor, so it can sit up to 0.05 m below the true chord (0.5 % on a 10 m
+  segment), always in the rejecting direction. At a 5° setting it therefore decides
+  pairs whose realised span is 5° ± a few hundredths of a degree: physically nil,
+  formally not a bound. Making it exact means deriving length and distance in ONE
+  frame from the endpoints — a per-pair `sqrt` this pre-gate exists to avoid, and
+  not worth buying for a lever that is off by default.
+* the **realised-span test** inside `arc_screen_bands` compares the ACTUAL atan2
+  span. It bounds the angle alone, so it also discards a long segment seen nearly
+  END-ON — 250 m of range at ~0.1° of azimuth — where the cp ray does not
+  represent the segment and the point-source argument does not hold. It reads
+  `ARC_MIN_SPAN_REALISED`, whose default stays the degenerate threshold: its one
+  sound job is numerical, because the interval arithmetic divides by the span.
+
+Both default to the degenerate threshold, so the shipped kernel is unchanged, shown
+two ways: the emitted PTX is byte-identical to a build of the kernel without these
+levers, and painting a reference tile with each binary gives cell-for-cell identical
+output. (The end-window guard is `#if`, not `if (MACRO > 0)`, for that reason — a
+runtime test on a macro is eliminated all the same but perturbs instruction
+scheduling, which breaks hash-verifiable inertness without changing behaviour.)
+This section's CPU rule is untouched. They stay DEFAULT-OFF, and the reason is the
+invariant recorded at `ARC_MIN_SPAN`. This constant's CPU counterpart is
+`arc_screening::ARC_BOUNDS_DEFAULT.min_span_rad`, which the CPU swept on its own
+lane and set to 0.0 on 2026-08-04 — at 0.01 rad dense Praha put 25 road and 37 rail
+receivers over 1.0 dB (maxima 7.8 / 11.4 dB) to buy 1.15-1.33×. That record also
+states the root cause and the remedy, and this change is that remedy applied to the
+CUDA lane: *"this one number drives TWO different tests … the in-kernel test skips
+whenever the ACTUAL span is small, which ALSO fires for a segment seen nearly
+END-ON … in a street grid a receiver is nearly collinear with hundreds of close,
+energetic segments, which is why Praha degrades ~5× harder than Dobříš. Re-enabling
+this needs the two thresholds SEPARATED, not a different constant."* Separating them
+is what makes the eligibility bound re-measurable at all; it does not by itself make
+it safe to turn on, because raising the GPU's threshold alone still re-forks the
+lanes — the failure that constant has been paid for twice. Note precisely what
+"move with it" has to mean: `min_span_rad` still drives BOTH CPU tests
+(`segment_can_span` AND the realised-span return), so the counterpart is today a
+DEFAULT-VALUE one, not a semantic one. Setting the two lanes to the same non-zero
+number would still fork them — the CPU would additionally discard the end-on
+population the GPU now keeps. Enabling this by default requires splitting the CPU
+thresholds too, which is the same edit on the other lane and is not made here.
+
+**MEASURED, AND WHY THE DEFAULT IS STILL OFF (2026-08-10).** Read the configuration
+before reusing these numbers: every figure below was measured with BOTH thresholds at
+5° (`-DARC_MIN_SPAN=0.0872664626 -DARC_MIN_SPAN_REALISED=0.0872664626`), the pre-split
+behaviour of the single constant. Since the split, `-DARC_MIN_SPAN` alone raises only
+the pre-gate and is a different, UNMEASURED rule — do not attach these numbers to it.
+Two independent agent labs swept the angle on different hardware and found the same
+5° knee. Against the
+CPU production tile rule on three reference cells, the gate's own marginal (gated vs
+ungated GPU) splits like this by the map's own paint bands — the frontend ramp starts
+at 30 dB and renders nothing below it, so sub-30 dB drift cannot be seen:
+
+Measured on one RTX 5070 Ti with an exclusive GPU and a complete obstacle halo,
+tile 2206/1391 rail, against a CPU production-rule reference painted from the same
+data. The gate's own marginal against the UNGATED kernel, by band:
+
+| operating point | kernel | ×vs ungated | ≥60 dB >1 dB | 30-60 dB >1 dB | max |
+|---|---|---|---|---|---|
+| ungated | 275.0 s | 1.0× | — | — | — |
+| sound gate 5°, +600 m window | 24.4 s | 11.3× | 0 | **0** | 1.0 |
+| sound gate 8°, +600 m window | 18.6 s | 14.8× | 0 | 13 | 2.0 |
+| both tests 5°, +600 m window | 17.4 s | 15.8× | 0 | 5 | 1.5 |
+| both tests 8°, +600 m window | 16.4 s | 16.8× | 0 | **210** | 4.0 |
+
+Three things this settles. In the LOUD band no operating point moves a single cell
+over 1 dB. The SOUND formulation is the accuracy winner outright — zero cells over
+1 dB in every band at 5°, and an order of magnitude better than the unsound one at
+8° (13 vs 210). And 8° is Pareto-dominated by 5° on this tile: 6 % more speed for
+42× the visible drift. On the rural holdout no operating point moves any visible
+cell by more than 0.5 dB, and its rail tile is entirely below 30 dB.
+
+THE ERROR IS ONE-SIDED, AND THAT MATTERS MORE THAN ITS SIZE. `compare_hm3`
+historically reported magnitude only, which is positive by construction and can
+hide a systematic lean. It cannot be ignored here because `build-pyramid` averages
+ENERGY: a bias that leans one way PERSISTS into the lower-zoom overview instead of
+cancelling there, and the overview is the first thing a visitor sees. Signed means,
+with the share of MOVED cells that got louder:
+
+| comparison | band | signed mean | of moved, louder |
+|---|---|---|---|
+| gate marginal, dense rail | ≥60 dB | +0.0013 dB | 59 % |
+| gate marginal, dense rail | 30-60 dB | +0.0258 dB | 69 % |
+| gate marginal, dense city rail | ≥60 dB | −0.0056 dB | 3 % |
+| gate marginal, dense city rail | 30-60 dB | −0.0396 dB | 3 % |
+| pre-existing fork, dense rail | 30-60 dB | −0.1321 dB | 10 % |
+| pre-existing fork, dense city rail | ≥60 dB | +0.1021 dB | 92 % |
+
+So the gate's error IS one-sided — and its SIGN FLIPS BY TILE, louder on dense
+rail, quieter on dense city. That is precisely why it partly cancels the fork on
+dense city, where the fork is 92 % louder, and slightly adds on dense rail, where
+the fork is 90 % quieter. Sizes: the gate's lean is ≤0.04 dB, about a twelfth of
+the 0.5 dB HM3 quantum, so it cannot by itself move a rendered byte; the fork's
+0.10-0.21 dB can, and is the one to fix. Note the lean PERSISTS at overview zoom
+rather than growing — energy-averaging N cells each biased by +0.03 dB yields
++0.03 dB, not N × 0.03 dB.
+
+Decomposition, same tile: the gate alone is worth 10.6×, the 600 m window alone
+only 1.20×; the window earns its 1.49× only AFTER the gate removes the arc walk,
+because what remains is the cp-ray obstacle DDA it cuts.
+
+Enabling it is nonetheless a separate, owner-level decision, on two grounds. First it
+re-forks the lanes, so the pinning value in
+`noise_gpu::ensure_no_cpu_only_arc_levers` must move with it or every later lane
+comparison is rigged. Second — and this is the one to carry forward — the dense-city
+result is partly ERROR CANCELLATION: the ungated kernel's own vector-candidate fork
+runs GPU-louder on that tile while this gate is uniformly quieter, so the gate scores
+well there by cancelling a fork it does not own. Its 419-cell marginal is 100 %
+one-directional, which is the signature. When that fork closes the cancellation closes
+with it. RE-MEASURE THE GATE AT THAT POINT rather than inheriting this verdict.
+
+Read `min_span_rad` carefully when comparing lanes: the tile path takes it from
+`seg_sampling::seg_arc_bounds`, which substitutes `SEG_ARC_MIN_SPAN_RAD` (3°) when
+`QM_ARC_MIN_SPAN_DEG` is unset — but there it gates the PER-BUCKET nesting of
+§3.5e, not whether a segment gets angular treatment at all. `ARC_BOUNDS_DEFAULT`'s
+0.0 is the exact/popup value, and it is the one the CUDA default mirrors. This is
+why a CPU-vs-GPU tile comparison must set `QM_SEG_SAMPLES=1 QM_ARC_MIN_SPAN_DEG=0`
+explicitly: neither lane's default is the other's.
+
+The same file carries `CAND_END_WINDOW_M`, a DEV-ONLY input prefilter letting the
+per-ray obstacle DDA skip cells lying wholly inside the middle band `[W, dist−W]`
+of the path. It filters CELLS, not obstacles: edges are listed in every supercover
+cell they cross and the edge loop solves each referenced edge's full intersection
+without requiring the crossing to lie in the current cell, so a mid-path edge also
+listed in a retained END cell still screens. It is therefore grid-dependent, leaky
+in the safe direction, and not a clean "obstacles near the ends only" rule.
+It is likewise DEFAULT-OFF, for a blunter reason: no non-zero `W` is exact for all
+geometry — one tall mid-path building is precisely what it discards — against the
+model invariant that path effects are computed at every distance inside a source's
+reach. The error is not literally unbounded, being capped by this section's 20 dB
+per-band screening ceiling, but that ceiling is far too coarse to serve as a bound.
+What
+it prices is the per-receiver candidate structure that would replace it.
+
 ### 3.6 Building screening (ISO 9613-2, per-band)
 Samples Overture Maps 30m building raster at the same bilateral cadence (§3.5a). Explicit `noise_barrier` geometries compete with raster buildings. For industrial sources, screening samples inside the source's own footprint are skipped via an exclusion radius.
 
