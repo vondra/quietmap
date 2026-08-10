@@ -512,7 +512,7 @@ fn obstacle_input_for_ray<'a>(
     }
 }
 
-/// One line microsegment's inputs to [`arc_screened_line_segment`].
+/// One line microsegment's inputs to [`arc_screened_line_segment_prepared`].
 pub(crate) struct LineSegmentScreening<'a> {
     pub receiver: &'a Receiver,
     pub start_lat: f64,
@@ -539,74 +539,145 @@ pub(crate) struct LineSegmentScreening<'a> {
     pub obstacles: Option<&'a ObstacleSet>,
 }
 
-/// Arc-clipped screening for ONE road/rail microsegment (fix-pack Fix 1): the
-/// receiver's obstacle skyline clipped to the segment's angular span, then the
-/// energy average over the blocked fractions (`propagation::arc_screening`).
-///
-/// Both line kernels call THIS — the cp ray's single verdict was the shadow
-/// stripe, and one implementation is what keeps road and rail from drifting
-/// apart. The skyline lives in `scratch` and is rebuilt only when the receiver
-/// moves, so a popup's whole segment list pays for it once.
-///
-/// Without a vector obstacle store the arc rule still runs whenever the segment
-/// has BARRIERS: noise walls reach the skyline through their own slice, so an
-/// absent store becomes an EMPTY set (`NO_VECTOR_OBSTACLES` below) rather than a
-/// bypass. Only "no store AND no barriers" returns the caller's cp-ray bands
-/// unchanged — see the block in the body, which is the fix this docstring
-/// contradicted.
-pub(crate) fn arc_screened_line_segment(
+/// NO vector store is not the same as NOTHING TO CLIP AGAINST. Noise WALLS
+/// reach the skyline through their own slice (`barriers`, arc_screening.rs
+/// §"the other half of the skyline"), not through the obstacle index — so
+/// returning the cp bands on `obstacles: None` silently denied every wall its
+/// angular treatment in exactly the regions the vector store has not been
+/// ingested for. That is the shipped behaviour the owner reported from the D4
+/// wall at Voznice ("není za nima tišeji"): one closest-point verdict applied
+/// to a whole 250 m microsegment. An absent store is an EMPTY set, and the
+/// kernel already returns `cp_screening` by itself when nothing clips the
+/// span. (Review 2026-08-04; CUDA carries the same bypass at scatter.cu:2093 —
+/// its guard must become `vector obstacles || nbarr > 0`.)
+static NO_VECTOR_OBSTACLES: propagation::obstacle_index::ObstacleSet =
+    propagation::obstacle_index::ObstacleSet {
+        indexes: Vec::new(),
+    };
+
+/// The obstacle set the arc rule clips against, or `None` when the arc rule
+/// does not run at all ("no store AND no barriers" — the cp verdict stands).
+/// ONE resolution shared by the mutable path, the prepared path and the
+/// kernels' growth schedulers, so they cannot disagree on whether a segment
+/// is arc-screened.
+pub(crate) fn arc_obstacle_set<'a>(
+    obstacles: Option<&'a ObstacleSet>,
+    barriers: &[Barrier],
+) -> Option<&'a ObstacleSet> {
+    match obstacles {
+        Some(set) => Some(set),
+        None if !barriers.is_empty() => Some(&NO_VECTOR_OBSTACLES),
+        None => None,
+    }
+}
+
+/// ONE pass-1 scheduler step of the parallel line kernels, shared by roads and
+/// railways so the growth chain cannot drift between them (their blocks were
+/// identical except the source height): replay the skyline ensure this
+/// segment's SEQUENTIAL twin would run — eliding the calls `needs_growth`
+/// proves to be no-ops — and hand back the frozen state its parallel
+/// evaluation must read. `None` = the segment is not arc-screened (span
+/// pre-gate, degenerate span, or no obstacle store and no walls).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn arc_growth_chain_step(
+    skyline: &mut propagation::arc_screening::ArcSkyline,
+    epoch_snap: &mut Option<propagation::arc_screening::SkylineSnapshot>,
+    arc_set: Option<&ObstacleSet>,
+    receiver: &Receiver,
+    barriers: &[Barrier],
+    seg_start_lat: f64,
+    seg_start_lon: f64,
+    seg_end_lat: f64,
+    seg_end_lon: f64,
+    seg_dist_m: f64,
+    seg_length_m: f64,
+    source_height_m: f64,
+    bounds: propagation::arc_screening::ArcBounds,
+) -> Option<propagation::arc_screening::SkylineSnapshot> {
+    let set = arc_set.filter(|_| {
+        propagation::arc_screening::segment_can_span(seg_length_m, seg_dist_m, bounds)
+    })?;
+    let p = propagation::arc_screening::planned_ensure(
+        receiver.lat,
+        receiver.lon,
+        seg_start_lat,
+        seg_start_lon,
+        seg_end_lat,
+        seg_end_lon,
+        seg_dist_m,
+        seg_length_m,
+        bounds,
+    )?;
+    if skyline.needs_growth(receiver.lat, receiver.lon, &p, bounds) {
+        *epoch_snap = None;
+        skyline.ensure_planned(
+            receiver.lat,
+            receiver.lon,
+            &p,
+            set,
+            barriers,
+            source_height_m,
+            bounds,
+        );
+    }
+    Some(epoch_snap.get_or_insert_with(|| skyline.snapshot()).clone())
+}
+
+/// The [`propagation::arc_screening::ArcScreening`] query for one line
+/// microsegment — the ONE place the popup's line kernels (and any sequential
+/// caller composing `arc_screened_attenuation` directly, see the wall test)
+/// build it, so every path asks bit-identical questions.
+fn line_segment_arc_query<'a>(
+    q: &'a LineSegmentScreening<'a>,
+    set: &'a ObstacleSet,
+) -> propagation::arc_screening::ArcScreening<'a> {
+    propagation::arc_screening::ArcScreening {
+        receiver_lat: q.receiver.lat,
+        receiver_lon: q.receiver.lon,
+        receiver_alt_m: q.receiver.altitude_m(),
+        start_lat: q.start_lat,
+        start_lon: q.start_lon,
+        end_lat: q.end_lat,
+        end_lon: q.end_lon,
+        source_height_m: q.source_height_m,
+        cp_lat: q.cp_lat,
+        cp_lon: q.cp_lon,
+        src_alt_m: q.src_alt_m,
+        cp_screening: q.cp_screening,
+        cp_terrain: q.cp_terrain,
+        ground_g: q.ground_g,
+        barriers: q.barriers,
+        obstacles: set,
+        length_m: q.length_m,
+        dist_m: q.dist_m,
+        // Line sources never self-screen: a road has no footprint of its
+        // own to exclude (unlike an industrial area source).
+        exclusion_radius_m: 0.0,
+        bounds: propagation::arc_screening::ArcBounds::shipped(),
+    }
+}
+
+/// Arc-clipped screening for ONE road/rail microsegment (fix-pack Fix 1),
+/// against a [`propagation::arc_screening::SkylineSnapshot`] the kernel's
+/// growth scheduler froze at exactly the state this segment's sequential twin
+/// would have read (see `compute_roads` pass 1). Both line kernels call THIS —
+/// one implementation is what keeps road and rail from drifting apart. The
+/// equivalent sequential form is `arc_screened_attenuation` on
+/// [`line_segment_arc_query`], which the growth chain + snapshot replay
+/// reproduce bit for bit.
+pub(crate) fn arc_screened_line_segment_prepared(
     q: &LineSegmentScreening<'_>,
     rasters: &dyn RasterSampler,
-    skyline: &mut propagation::arc_screening::ArcSkyline,
+    snapshot: &propagation::arc_screening::SkylineSnapshot,
     scratch: &mut propagation::arc_screening::ArcScreeningScratch,
 ) -> [f64; NUM_BANDS] {
-    // NO vector store is not the same as NOTHING TO CLIP AGAINST. Noise WALLS
-    // reach the skyline through their own slice (`barriers`, arc_screening.rs
-    // §"the other half of the skyline"), not through the obstacle index — so
-    // returning the cp bands here silently denied every wall its angular
-    // treatment in exactly the regions the vector store has not been ingested
-    // for. That is the shipped behaviour the owner reported from the D4 wall at
-    // Voznice ("není za nima tišeji"): one closest-point verdict applied to a
-    // whole 250 m microsegment. An absent store is an EMPTY set, and the kernel
-    // already returns `cp_screening` by itself when nothing clips the span.
-    // (Review 2026-08-04; CUDA carries the same bypass at scatter.cu:2093 —
-    // its guard must become `vector obstacles || nbarr > 0`.)
-    static NO_VECTOR_OBSTACLES: propagation::obstacle_index::ObstacleSet =
-        propagation::obstacle_index::ObstacleSet {
-            indexes: Vec::new(),
-        };
-    let set = match q.obstacles {
-        Some(set) => set,
-        None if !q.barriers.is_empty() => &NO_VECTOR_OBSTACLES,
-        None => return *q.cp_screening,
+    let Some(set) = arc_obstacle_set(q.obstacles, q.barriers) else {
+        return *q.cp_screening;
     };
-    propagation::arc_screening::arc_screened_attenuation(
-        &propagation::arc_screening::ArcScreening {
-            receiver_lat: q.receiver.lat,
-            receiver_lon: q.receiver.lon,
-            receiver_alt_m: q.receiver.altitude_m(),
-            start_lat: q.start_lat,
-            start_lon: q.start_lon,
-            end_lat: q.end_lat,
-            end_lon: q.end_lon,
-            source_height_m: q.source_height_m,
-            cp_lat: q.cp_lat,
-            cp_lon: q.cp_lon,
-            src_alt_m: q.src_alt_m,
-            cp_screening: q.cp_screening,
-            cp_terrain: q.cp_terrain,
-            ground_g: q.ground_g,
-            barriers: q.barriers,
-            obstacles: set,
-            length_m: q.length_m,
-            dist_m: q.dist_m,
-            // Line sources never self-screen: a road has no footprint of its
-            // own to exclude (unlike an industrial area source).
-            exclusion_radius_m: 0.0,
-            bounds: propagation::arc_screening::ArcBounds::shipped(),
-        },
+    propagation::arc_screening::arc_screened_attenuation_prepared(
+        &line_segment_arc_query(q, set),
         rasters,
-        skyline,
+        snapshot,
         scratch,
     )
 }
@@ -676,10 +747,22 @@ mod tests {
             barriers: &barriers,
             obstacles,
         };
+        // The sequential composition of the same pieces the parallel kernels
+        // use: `arc_obstacle_set` resolves the store, `line_segment_arc_query`
+        // builds the query, the mutable arc kernel grows + evaluates.
         let run = |obstacles| {
+            let q = mk(obstacles);
             let mut skyline = propagation::arc_screening::ArcSkyline::default();
             let mut scratch = propagation::arc_screening::ArcScreeningScratch::default();
-            arc_screened_line_segment(&mk(obstacles), &MockRasters, &mut skyline, &mut scratch)
+            match arc_obstacle_set(q.obstacles, q.barriers) {
+                None => *q.cp_screening,
+                Some(set) => propagation::arc_screening::arc_screened_attenuation(
+                    &line_segment_arc_query(&q, set),
+                    &MockRasters,
+                    &mut skyline,
+                    &mut scratch,
+                ),
+            }
         };
         let without = run(None);
         let with_empty = run(Some(&empty));

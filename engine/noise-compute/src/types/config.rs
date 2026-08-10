@@ -29,6 +29,14 @@ impl Default for ComputeConfig {
 /// which populates a [`crate::propagation::PathProfile`]. Path-effect callers
 /// in [`crate::propagation::path_effects`] read from the profile instead of
 /// walking the path per-raster.
+///
+/// CONTRACT: every method must be VALUE-PURE — the same coordinates return the
+/// same bits regardless of call order, interleaving, or calling thread.
+/// Internal caching/locking is fine (the production tile stores use mutexed
+/// LRU over immutable mmaps); observable state that feeds answers is not. The
+/// parallel popup kernels (`compute_roads`/`compute_railways`) re-order and
+/// interleave raster reads across rayon workers and are bit-reproducible only
+/// under this contract; it held implicitly for every sampler before them.
 pub trait RasterSampler: Send + Sync {
     fn elevation(&self, lat: f64, lon: f64) -> f64;
     fn building_height(&self, lat: f64, lon: f64) -> f64;

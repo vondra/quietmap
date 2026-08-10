@@ -22,6 +22,10 @@ serde_json = "1"
 h3o = "0.7"
 # SIMD for propagate_variants 8-band inner loop (stable, AVX2/AVX-512 with scalar fallback)
 wide = "0.7"
+# Popup segment loops: parallel per-segment evaluation with a deterministic
+# ordered reduce (compute/roads.rs, compute/railways.rs). Values are
+# bit-identical at any pool size; rayon only moves the work.
+rayon = "1"
 
 [dev-dependencies]
 # For unit tests

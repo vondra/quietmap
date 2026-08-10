@@ -660,6 +660,122 @@ impl MergedArc {
     }
 }
 
+/// The `ensure` call an arc query will make, precomputed from geometry alone
+/// (receiver, segment endpoints, `dist + length`). `None` when the span is
+/// degenerate or under `bounds.min_span_rad` — those queries return the cp
+/// verdict before ever touching the skyline, so there is nothing to grow.
+///
+/// This is the scheduling half of the popup's parallel segment loop: the
+/// kernels replay the EXACT ensure sequence the sequential loop would run
+/// ([`ArcSkyline::needs_growth`] + [`ArcSkyline::ensure_planned`], in segment
+/// order, on one thread) and evaluate everything between two growth steps in
+/// parallel against a [`SkylineSnapshot`] of the state those segments would
+/// have read. Splitting the plan from the evaluation is what makes that
+/// replay affordable without paying for any evaluation on the scheduling
+/// thread.
+#[derive(Clone, Copy, Debug)]
+pub struct PlannedEnsure {
+    span_lo: f64,
+    span_hi: f64,
+    need_radius_m: f64,
+}
+
+/// The span + radius [`arc_screened_attenuation`] hands to `ensure`, or `None`
+/// when its pre-ensure early-outs fire. This IS that function's opening block
+/// (it calls this), so the scheduler's replay cannot diverge from the
+/// sequential kernel by even one growth step.
+#[allow(clippy::too_many_arguments)]
+pub fn planned_ensure(
+    receiver_lat: f64,
+    receiver_lon: f64,
+    start_lat: f64,
+    start_lon: f64,
+    end_lat: f64,
+    end_lon: f64,
+    dist_m: f64,
+    length_m: f64,
+    bounds: ArcBounds,
+) -> Option<PlannedEnsure> {
+    let frame = Frame::at(receiver_lat, receiver_lon);
+    let base = frame.azimuth(start_lat, start_lon);
+    let delta = wrap_pi(frame.azimuth(end_lat, end_lon) - base);
+    let span = delta.abs();
+    // Small-span skip: below the threshold the segment radiates in essentially
+    // one direction and the cp ray IS that direction.
+    if span < DEGENERATE_SPAN_RAD || span < bounds.min_span_rad {
+        return None;
+    }
+    // Span in absolute azimuth; a segment subtends at most π at a receiver off
+    // its line, so the short arc between the endpoints IS it.
+    let (lo, hi) = if delta < 0.0 {
+        (base + delta, base)
+    } else {
+        (base, base + delta)
+    };
+    Some(PlannedEnsure {
+        span_lo: lo,
+        span_hi: hi,
+        need_radius_m: dist_m + length_m,
+    })
+}
+
+/// An immutable copy of a skyline's merged-arc list, shared across threads by
+/// `Arc`. The evaluation side of the arc rule reads NOTHING of the skyline but
+/// this list — `ensure` is the only mutator — so a snapshot taken between two
+/// growth steps reproduces, bit for bit, the state every segment before the
+/// next growth would have read from the live skyline.
+#[derive(Clone)]
+pub struct SkylineSnapshot {
+    arcs: std::sync::Arc<[MergedArc]>,
+}
+
+/// The growth radius snapped UP to a range-stratum boundary — the ladder rule
+/// documented inside [`ArcSkyline::ensure`]. One function, shared by `ensure`
+/// and [`ArcSkyline::needs_growth`], so the two can never disagree on a rung.
+#[inline]
+fn snapped_need(need_radius_m: f64, bounds: ArcBounds) -> f64 {
+    let rungs =
+        (need_radius_m.max(1.0).ln() / (ARC_FUSE_RANGE_RATIO as f64).ln()) / RADIUS_LADDER_STEP;
+    let ladder = RADIUS_LADDER_STEP * rungs.ceil();
+    // `QM_ARC_NEED_CLIP_M` (census DEV lever, ∞ in production): bound the
+    // gather to measure the near-field skyline demand of the gather redesign's
+    // increment D. Output-changing when finite — census runs only. It lives
+    // HERE so `ensure` and `needs_growth` agree under the clip as well.
+    (ARC_FUSE_RANGE_RATIO as f64)
+        .powf(ladder)
+        .min(bounds.radius_m)
+        .min(super::census::need_clip_m())
+}
+
+/// First and last angular sector a span touches (inclusive, un-wrapped — every
+/// consumer applies `rem_euclid` per index). Shared by `ensure` and
+/// [`ArcSkyline::needs_growth`].
+#[inline]
+fn sector_span(span_lo: f64, span_hi: f64) -> (i64, i64) {
+    (
+        (span_lo / SECTOR_RAD).floor() as i64,
+        (span_hi / SECTOR_RAD).floor() as i64,
+    )
+}
+
+/// "Already walked to this rung": the short-circuit of `ensure` and
+/// [`ArcSkyline::needs_growth`], in F32 SPACE on both sides.
+///
+/// `built_radius_m` stores radii as f32 while `snapped_need` computes the rung
+/// in f64, and roughly half the rungs round DOWN in storage — a raw
+/// `from >= need` then reads "not yet walked" forever for that rung, so every
+/// same-rung call re-walks an annulus that is provably already gathered. In
+/// the old sequential kernel that was only wasted time (`insert_merged`
+/// re-inserts are byte-neutral); on the popup's growth scheduler it also
+/// re-snapshots the skyline per segment — an O(segments × arcs) memory hazard
+/// (found by review 2026-08-09). Rounding `need` through f32 makes the test
+/// agree with the bookkeeping exactly; the elided walks are exact re-walks,
+/// so outputs are unchanged to the bit.
+#[inline]
+fn walked_to(from: f64, need: f64) -> bool {
+    from >= f64::from(need as f32)
+}
+
 impl ArcSkyline {
     /// Number of merged arcs (telemetry / tests).
     pub fn len(&self) -> usize {
@@ -668,6 +784,66 @@ impl ArcSkyline {
 
     pub fn is_empty(&self) -> bool {
         self.arcs.is_empty()
+    }
+
+    /// Least-grown radius over the sectors `[s0, s1]` touch — the `from` of
+    /// the annulus walk and the short-circuit input of [`Self::needs_growth`].
+    #[inline]
+    fn min_built_in(&self, s0: i64, s1: i64) -> f64 {
+        (s0..=s1)
+            .map(|k| self.built_radius_m[k.rem_euclid(SECTORS as i64) as usize] as f64)
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    /// Would [`Self::ensure_planned`] with these inputs walk (grow) this
+    /// skyline, or is it a no-op? EXACTLY the short-circuit test `ensure`
+    /// runs — same ladder snap, same sector minimum, through the same shared
+    /// helpers — so the popup's epoch scheduler and `ensure` cannot drift.
+    /// A no-growth ensure on the same receiver mutates nothing (no reset,
+    /// early return before the gather), which is what lets the scheduler
+    /// elide it entirely.
+    pub fn needs_growth(&self, lat: f64, lon: f64, p: &PlannedEnsure, bounds: ArcBounds) -> bool {
+        if !self.built || self.lat != lat || self.lon != lon {
+            return true;
+        }
+        let (s0, s1) = sector_span(p.span_lo, p.span_hi);
+        !walked_to(
+            self.min_built_in(s0, s1),
+            snapped_need(p.need_radius_m, bounds),
+        )
+    }
+
+    /// [`Self::ensure`] with a precomputed [`PlannedEnsure`] — the form the
+    /// popup's segment scheduler drives the growth chain with.
+    #[allow(clippy::too_many_arguments)]
+    pub fn ensure_planned(
+        &mut self,
+        lat: f64,
+        lon: f64,
+        p: &PlannedEnsure,
+        set: &ObstacleSet,
+        barriers: &[Barrier],
+        source_height_m: f64,
+        bounds: ArcBounds,
+    ) {
+        self.ensure(
+            lat,
+            lon,
+            p.span_lo,
+            p.span_hi,
+            p.need_radius_m,
+            set,
+            barriers,
+            source_height_m,
+            bounds,
+        );
+    }
+
+    /// Freeze the current merged-arc list for read-only parallel evaluation.
+    pub fn snapshot(&self) -> SkylineSnapshot {
+        SkylineSnapshot {
+            arcs: self.arcs.as_slice().into(),
+        }
     }
 
     /// Rebuild for `(lat, lon)` unless this is already that receiver's skyline.
@@ -696,7 +872,6 @@ impl ArcSkyline {
     /// reaches the source reaches every screen. Growing on demand is what lets
     /// that be exact without walking a rail layer's whole 10 km reach for a
     /// receiver whose segments are all close.
-    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     fn ensure(
         &mut self,
@@ -741,16 +916,7 @@ impl ArcSkyline {
         // max +0.39 dB at one pixel, 0 pixels over 0.5 dB, 0.0004 dB over the
         // ≥45 dB ones. Passing `wedge: None` to the gather below is not the same
         // experiment: it widens the GATHER, not the bookkeeping.
-        let rungs =
-            (need_radius_m.max(1.0).ln() / (ARC_FUSE_RANGE_RATIO as f64).ln()) / RADIUS_LADDER_STEP;
-        let ladder = RADIUS_LADDER_STEP * rungs.ceil();
-        // `QM_ARC_NEED_CLIP_M` (census DEV lever, ∞ in production): bound the
-        // gather to measure the near-field skyline demand of the gather
-        // redesign's increment D. Output-changing when finite — census runs only.
-        let need = (ARC_FUSE_RANGE_RATIO as f64)
-            .powf(ladder)
-            .min(bounds.radius_m)
-            .min(super::census::need_clip_m());
+        let need = snapped_need(need_radius_m, bounds);
         self.need_max_m = self.need_max_m.max(need);
         if !self.built || self.lat != lat || self.lon != lon {
             self.lat = lat;
@@ -762,19 +928,16 @@ impl ArcSkyline {
         }
         // Sectors this span touches. The span is under a full turn, so the
         // touched set is one contiguous run on the circle (possibly wrapping).
-        let s0 = (span_lo / SECTOR_RAD).floor() as i64;
-        let s1 = (span_hi / SECTOR_RAD).floor() as i64;
-        let touched: Vec<usize> = (s0..=s1)
-            .map(|k| k.rem_euclid(SECTORS as i64) as usize)
-            .collect();
+        let (s0, s1) = sector_span(span_lo, span_hi);
         // The annulus to walk is bounded by the LEAST-grown sector in the
         // wedge; sectors already further out are re-visited, and `insert_merged`
         // is idempotent on a repeat, so that costs time and never correctness.
-        let from = touched
-            .iter()
-            .map(|&i| self.built_radius_m[i] as f64)
-            .fold(f64::INFINITY, f64::min);
-        if from >= need {
+        //
+        // This gate and [`Self::needs_growth`] are the same computation through
+        // the same helpers (`walked_to` carries the f32 bookkeeping round-trip)
+        // — the popup scheduler relies on the equivalence.
+        let from = self.min_built_in(s0, s1);
+        if walked_to(from, need) {
             return;
         }
 
@@ -862,7 +1025,8 @@ impl ArcSkyline {
             );
         }
         self.overflows = overflows;
-        for &i in &touched {
+        for k in s0..=s1 {
+            let i = k.rem_euclid(SECTORS as i64) as usize;
             self.built_radius_m[i] = self.built_radius_m[i].max(need as f32);
         }
     }
@@ -1078,12 +1242,62 @@ pub fn arc_screened_attenuation(
     skyline: &mut ArcSkyline,
     scratch: &mut ArcScreeningScratch,
 ) -> [f64; NUM_BANDS] {
+    let Some(p) = planned_ensure(
+        q.receiver_lat,
+        q.receiver_lon,
+        q.start_lat,
+        q.start_lon,
+        q.end_lat,
+        q.end_lon,
+        q.dist_m,
+        q.length_m,
+        q.bounds,
+    ) else {
+        return *q.cp_screening;
+    };
+    skyline.ensure_planned(
+        q.receiver_lat,
+        q.receiver_lon,
+        &p,
+        q.obstacles,
+        q.barriers,
+        q.source_height_m,
+        q.bounds,
+    );
+    arc_screened_eval(q, rasters, &skyline.arcs, scratch)
+}
+
+/// [`arc_screened_attenuation`] against a [`SkylineSnapshot`] instead of the
+/// live skyline — the read-only form the popup's parallel segment loop calls
+/// from worker threads. The caller (the epoch scheduler) has already replayed
+/// every `ensure` this query's sequential twin would have run, so the snapshot
+/// IS the state the mutable kernel would read here, and the two paths are
+/// bit-identical by construction.
+pub fn arc_screened_attenuation_prepared(
+    q: &ArcScreening<'_>,
+    rasters: &dyn RasterSampler,
+    snapshot: &SkylineSnapshot,
+    scratch: &mut ArcScreeningScratch,
+) -> [f64; NUM_BANDS] {
+    arc_screened_eval(q, rasters, &snapshot.arcs, scratch)
+}
+
+/// The evaluation half: clip `arcs` to the span, quadrate the blocked fan,
+/// energy-average. Reads the arc list and nothing else of the skyline.
+fn arc_screened_eval(
+    q: &ArcScreening<'_>,
+    rasters: &dyn RasterSampler,
+    arcs: &[MergedArc],
+    scratch: &mut ArcScreeningScratch,
+) -> [f64; NUM_BANDS] {
     let frame = Frame::at(q.receiver_lat, q.receiver_lon);
     let base = frame.azimuth(q.start_lat, q.start_lon);
     let delta = wrap_pi(frame.azimuth(q.end_lat, q.end_lon) - base);
     let span = delta.abs();
     // Small-span skip: below the threshold the segment radiates in essentially
-    // one direction and the cp ray IS that direction.
+    // one direction and the cp ray IS that direction. (Re-derived from the
+    // same expressions `planned_ensure` ran — identical bits, and the prepared
+    // path needs the span anyway.)
     if span < DEGENERATE_SPAN_RAD || span < q.bounds.min_span_rad {
         return *q.cp_screening;
     }
@@ -1102,18 +1316,7 @@ pub fn arc_screened_attenuation(
         cuts,
         presplit,
     } = scratch;
-    skyline.ensure(
-        q.receiver_lat,
-        q.receiver_lon,
-        lo,
-        hi,
-        q.dist_m + q.length_m,
-        q.obstacles,
-        q.barriers,
-        q.source_height_m,
-        q.bounds,
-    );
-    if skyline.arcs.is_empty() {
+    if arcs.is_empty() {
         return *q.cp_screening;
     }
 
@@ -1122,7 +1325,7 @@ pub fn arc_screened_attenuation(
     //    That is the whole test — geometry, no δ (see the module note "Why the
     //    blocked test is geometry only").
     intervals.clear();
-    'arcs: for arc in skyline.arcs.iter() {
+    'arcs: for arc in arcs.iter() {
         // EVERY piece of the span this arc covers, not merely the first one.
         //
         // `lo`/`hi` are UNWRAPPED azimuths that [`MergedArc::absorb`] grows, so
@@ -2565,19 +2768,34 @@ mod tests {
         }
     }
 
+    /// Per-path state for [`segment_bands_both`]: the mutable kernel's skyline
+    /// and, in lockstep, the popup scheduler's replay (its own skyline, the
+    /// current epoch snapshot, its own scratch).
+    #[derive(Default)]
+    struct BothPaths {
+        sky_mut: ArcSkyline,
+        scratch_mut: ArcScreeningScratch,
+        sky_sched: ArcSkyline,
+        epoch_snap: Option<SkylineSnapshot>,
+        scratch_sched: ArcScreeningScratch,
+    }
+
     /// One arc-screened 250 m segment whose midpoint sits `dist_m` west of the
     /// receiver, offset `off_m` north — the caller's own cp ray included, so the
-    /// number compared is the one the kernel hands the tile.
-    #[allow(clippy::too_many_arguments)]
-    fn segment_bands(
+    /// number compared is the one the kernel hands the tile. Evaluated TWICE:
+    /// through the mutable kernel, and through the scheduler replay the popup's
+    /// parallel segment loop runs (`planned_ensure` → `needs_growth` →
+    /// `ensure_planned` → `snapshot` → `arc_screened_attenuation_prepared`).
+    /// The two must agree to the bit on every source, whatever order the
+    /// sources arrive in — that is the equivalence the parallel loop stands on.
+    fn segment_bands_both(
         rcv_x: f64,
         dist_m: f64,
         off_m: f64,
         obstacles: &ObstacleSet,
         bars: &[Barrier],
-        skyline: &mut ArcSkyline,
-        scratch: &mut ArcScreeningScratch,
-    ) -> [f64; NUM_BANDS] {
+        state: &mut BothPaths,
+    ) -> ([f64; NUM_BANDS], [f64; NUM_BANDS]) {
         let (rlat, rlon) = ll(rcv_x, 0.0);
         let sx = rcv_x - dist_m;
         let (alat, alon) = ll(sx, off_m - 125.0);
@@ -2612,7 +2830,44 @@ mod tests {
         let cp = interval_screening(&q, &FlatGround, &frame, az, &mut prof, &mut cands)
             .map_or(NO_TERRAIN, |(_terrain, screening)| screening);
         q.cp_screening = &cp;
-        arc_screened_attenuation(&q, &FlatGround, skyline, scratch)
+        let via_mut =
+            arc_screened_attenuation(&q, &FlatGround, &mut state.sky_mut, &mut state.scratch_mut);
+        let via_sched = match planned_ensure(
+            q.receiver_lat,
+            q.receiver_lon,
+            q.start_lat,
+            q.start_lon,
+            q.end_lat,
+            q.end_lon,
+            q.dist_m,
+            q.length_m,
+            q.bounds,
+        ) {
+            None => *q.cp_screening,
+            Some(p) => {
+                if state
+                    .sky_sched
+                    .needs_growth(q.receiver_lat, q.receiver_lon, &p, q.bounds)
+                {
+                    state.epoch_snap = None;
+                    state.sky_sched.ensure_planned(
+                        q.receiver_lat,
+                        q.receiver_lon,
+                        &p,
+                        q.obstacles,
+                        q.barriers,
+                        q.source_height_m,
+                        q.bounds,
+                    );
+                }
+                let snap = state
+                    .epoch_snap
+                    .get_or_insert_with(|| state.sky_sched.snapshot())
+                    .clone();
+                arc_screened_attenuation_prepared(&q, &FlatGround, &snap, &mut state.scratch_sched)
+            }
+        };
+        (via_mut, via_sched)
     }
 
     /// THE GATE. Shuffle the order the sources reach one receiver and every
@@ -2633,6 +2888,13 @@ mod tests {
     /// 1 kHz band, 8.17 vs 19.82 dB). With the strata it is 0.000000 dB, and the
     /// gate is exact equality — a reordering that changes anything at all is a
     /// defect, not a tolerance to be widened.
+    ///
+    /// EXTENDED for the popup's parallel segment loop: every source is also
+    /// evaluated through the scheduler replay (`planned_ensure` →
+    /// `needs_growth` → `ensure_planned` → `snapshot` →
+    /// `arc_screened_attenuation_prepared`) in lockstep, and the two paths
+    /// must agree to the bit on every source in every permutation — pinning
+    /// both the snapshot-eval equivalence and the no-op-ensure elision.
     #[test]
     fn source_order_never_changes_the_answer() {
         // Ranges deliberately spread over three decades: 1.2 m (the receiver's
@@ -2675,13 +2937,23 @@ mod tests {
                 } else {
                     permutation(sources.len(), p)
                 };
-                let mut skyline = ArcSkyline::default();
-                let mut scratch = ArcScreeningScratch::new();
+                let mut state = BothPaths::default();
                 let mut got = vec![[0.0_f64; NUM_BANDS]; sources.len()];
                 for &s in order.iter() {
                     let (d, off) = sources[s];
-                    got[s] =
-                        segment_bands(rcv_x, d, off, obstacles, bars, &mut skyline, &mut scratch);
+                    let (via_mut, via_sched) =
+                        segment_bands_both(rcv_x, d, off, obstacles, bars, &mut state);
+                    // The popup's scheduler replay (snapshot + prepared eval,
+                    // no-op ensures elided) must reproduce the mutable kernel
+                    // to the BIT, in every arrival order — the equivalence the
+                    // parallel segment loop stands on.
+                    assert_eq!(
+                        via_mut.map(f64::to_bits),
+                        via_sched.map(f64::to_bits),
+                        "{name}, permutation {p}, source at {d} m (offset {off} m): \
+                         prepared/snapshot path diverged from the mutable kernel"
+                    );
+                    got[s] = via_mut;
                 }
                 if p == 0 {
                     reference = got;
