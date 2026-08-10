@@ -203,6 +203,10 @@ pub struct SegSampleCost {
     pub rays: u64,
     /// Raster cadence samples those rays took.
     pub raster_samples: u64,
+    /// Buckets that cleared [`SEG_ARC_MIN_SPAN_RAD`] and ran the nested arc
+    /// query (§3.5e) — `> 0` marks this pair ELIGIBLE in the gather-redesign
+    /// census ([`census`](super::census)).
+    pub escalated: u64,
 }
 
 /// The receiver's flat-earth view of one microsegment's fan — the frame that
@@ -376,6 +380,7 @@ pub fn sampled_gob_bands(
                 .sqrt();
             let sub_dist = d0.min(d1).min(sdist);
             if segment_can_span(sub_len, sub_dist, q.bounds) {
+                cost.escalated += 1;
                 scr = arc_screened_attenuation(
                     &ArcScreening {
                         start_lat: lat0,
@@ -409,6 +414,7 @@ pub fn sampled_gob_bands(
         used += 1;
         lo_pt = hi_pt;
     }
+    super::census::quad_pair(cost.rays, cost.escalated);
     let mut out = [0.0f64; NUM_BANDS];
     if used == 0 {
         // Every bucket degenerate: the receiver sits ON this microsegment, where

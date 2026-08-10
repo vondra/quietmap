@@ -564,6 +564,9 @@ pub struct ArcSkyline {
     /// skyline — 0 on every receiver of a normal cell; a non-zero total is the
     /// signal that a capped lane's [`ArcBounds::max_arcs`] is too small here.
     pub overflows: u32,
+    /// Largest gather need (m, ladder-snapped, post census clip) this receiver
+    /// ever asked for — census telemetry only, flushed on [`Self::reset`].
+    need_max_m: f64,
 }
 
 impl Default for ArcSkyline {
@@ -576,6 +579,7 @@ impl Default for ArcSkyline {
             arcs: Vec::new(),
             fuse_scratch: Vec::new(),
             overflows: 0,
+            need_max_m: 0.0,
         }
     }
 }
@@ -670,10 +674,18 @@ impl ArcSkyline {
     /// Mark every cached skyline stale (the tile scatter reuses one array of
     /// them per receiver block).
     pub fn reset(&mut self) {
+        // Census flush (QM_TILE_CENSUS=1): the tile lane resets per receiver,
+        // so a built skyline dying here IS one receiver's final demand. The
+        // popup's mid-`ensure` receiver switch does not flush — census runs are
+        // tile builds.
+        if self.built {
+            super::census::skyline_receiver(self.arcs.len(), self.need_max_m);
+        }
         self.built = false;
         self.built_radius_m = [0.0; SECTORS];
         self.arcs.clear();
         self.overflows = 0;
+        self.need_max_m = 0.0;
     }
 
     /// Make this skyline cover `need_radius_m` around `(lat, lon)`, walking only
@@ -732,9 +744,14 @@ impl ArcSkyline {
         let rungs =
             (need_radius_m.max(1.0).ln() / (ARC_FUSE_RANGE_RATIO as f64).ln()) / RADIUS_LADDER_STEP;
         let ladder = RADIUS_LADDER_STEP * rungs.ceil();
+        // `QM_ARC_NEED_CLIP_M` (census DEV lever, ∞ in production): bound the
+        // gather to measure the near-field skyline demand of the gather
+        // redesign's increment D. Output-changing when finite — census runs only.
         let need = (ARC_FUSE_RANGE_RATIO as f64)
             .powf(ladder)
-            .min(bounds.radius_m);
+            .min(bounds.radius_m)
+            .min(super::census::need_clip_m());
+        self.need_max_m = self.need_max_m.max(need);
         if !self.built || self.lat != lat || self.lon != lon {
             self.lat = lat;
             self.lon = lon;
@@ -2150,6 +2167,7 @@ mod tests {
             }],
             fuse_scratch: Vec::new(),
             overflows: 0,
+            need_max_m: 0.0,
         };
         let mut scratch = ArcScreeningScratch::new();
         let out = arc_screened_attenuation(&q, &FlatGround, &mut skyline, &mut scratch);

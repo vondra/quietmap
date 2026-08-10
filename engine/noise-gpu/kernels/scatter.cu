@@ -417,6 +417,18 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #define ABL_ARC_SPAN    (PROF_ABLATE & 32)
 #define ABL_ARC_CELLS   (PROF_ABLATE & 64)
 
+// ---- DEV-ONLY milestone-zero ray floor (-DPROF_SIXMARCH=1, paired with
+// -DPROF_ABLATE=1): every nondegenerate exactly-computed pair marches 5 extra
+// bucket rays with per-direction terrain + screening — the FIXED per-pair cost
+// of the tile sampling rule (SPEC §3.5d, N=5) priced at cp-march throughput
+// BEFORE any of it is implemented (gpu-gather-redesign §8 task 0(iv)). The
+// kernel-time delta of this build against the same-flags PROF_ABLATE=1 build is
+// the 6-march ray floor; tiles stay byte-identical to that floor build (the
+// marches fold into an unprovably-false sink).
+#ifndef PROF_SIXMARCH
+#define PROF_SIXMARCH 0
+#endif
+
 // ---- raster_reader::FusedGrid::lookup_fused_rc (elevation bilinear) ----
 __device__ __forceinline__ double bilinear_elev_d(
     const float* elev, int rows, int cols,
@@ -2731,6 +2743,48 @@ __device__ __forceinline__ void line_source(
     // the ground at its most favourable, times UB_SAFETY).
     kept += kept_add;
     resid -= ub;   // this pair is now known EXACTLY — it leaves the bound
+#if PROF_SIXMARCH
+    // Bucket geometry mirrors the CPU rule (seg_sampling::SegFan): equal
+    // angular buckets across the pair's span, source point = bucket-centre ray
+    // × segment-line intersection, elevation-only march (need_cover=0 — ground
+    // G and vegetation ride the cp ray, DECISION 2026-08-03), obstacle/barrier
+    // candidates per direction. Placed AFTER the pair's real accumulation so
+    // the shared ray scratch (tprof/ed/…) is free to clobber.
+    {
+        double mlon6 = M_LON_EQ * fmax(cos(rlat * (PI_D / 180.0)), 0.01);
+        double ax = (seg[1] - rlon) * mlon6, ay = (seg[0] - rlat) * M_LAT;
+        double bx = (seg[3] - rlon) * mlon6, by = (seg[2] - rlat) * M_LAT;
+        double ex = bx - ax, ey = by - ay;
+        float sink = 0.0f;
+        if (ex * ex + ey * ey >= 1e-6) {
+            double az0 = atan2(ay, ax);
+            double span = atan2(by, bx) - az0;
+            if (span > PI_D) span -= 2.0 * PI_D;
+            if (span < -PI_D) span += 2.0 * PI_D;
+            for (int k6 = 0; k6 < 5; k6++) {
+                double az = az0 + (k6 + 0.5) * 0.2 * span;
+                double ux = cos(az), uy = sin(az);
+                double cr_e = ux * ey - uy * ex;
+                double cr_a = ux * ay - uy * ax;
+                double tt = fabs(cr_e) > 1e-12 ? fmin(fmax(-cr_a / cr_e, 0.0), 1.0) : 0.5;
+                double sx = ax + tt * ex, sy = ay + tt * ey;
+                double d6 = sqrt(sx * sx + sy * sy);
+                if (!isfinite(d6) || d6 < 1.0) continue;
+                double slat6 = rlat + sy / M_LAT, slon6 = rlon + sx / mlon6;
+                double salt6 =
+                    tile_elev(inner, elev, rows, cols, lat_min, lon_min, inv, bb, slat6, slon6)
+                    + sp[2];
+                float terr6[NB], screen6[NB];
+                ray_path_bands(elev, cover, rows, cols, lat_min, lon_min, inv,
+                               slat6, slon6, salt6, rlat, rlon, ralt, d6,
+                               barr, nbarr, obst, tprof, ed, comp, bld, forr, imdp,
+                               terr6, screen6, 0);
+                for (int i = 0; i < NB; i++) sink += terr6[i] + screen6[i];
+            }
+        }
+        if (sink == 1.2345678e30f) e0 += sink;   // unprovably-false keep-alive
+    }
+#endif
 }
 
 // RAIL scatter: free-field + terrain diffraction + building screening + ground +

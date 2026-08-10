@@ -399,6 +399,9 @@ fn run_stream(args: &Args, layers: &[Source], halo_m: f64) -> Result<()> {
         lock.lock().unwrap().1 = true;
         cv.notify_all();
     });
+    if let Some(line) = noise_compute::propagation::census::report() {
+        eprintln!("{line}");
+    }
     Ok(())
 }
 
@@ -553,6 +556,9 @@ fn main() -> Result<()> {
         })?;
 
     report(&regions, n_tiles, &total, t.elapsed());
+    if let Some(line) = noise_compute::propagation::census::report() {
+        eprintln!("{line}");
+    }
     Ok(())
 }
 

@@ -75,6 +75,7 @@ use noise_compute::propagation::arc_screening::{
     arc_screened_attenuation, segment_can_span, ArcBounds, ArcScreening, ArcScreeningScratch,
     ArcSkyline,
 };
+use noise_compute::propagation::census;
 use noise_compute::propagation::iso9613::{fast_exp_f64, ground_atten_db, ground_or_barrier_db};
 use noise_compute::propagation::obstacle_index::{CellPrune, CrossingCandidate, ObstacleSet};
 use noise_compute::propagation::path_effects;
@@ -1025,6 +1026,9 @@ fn scatter_band<G: PixelGeometry>(
             s.skyline.reset();
             let mut p_lo = 0.0f64;
             let mut walked = n_pairs;
+            // Gather-redesign census (QM_TILE_CENSUS=1, else dead bools).
+            let mut census_any_quad = false;
+            let mut census_any_esc = false;
 
             for k in 0..n_pairs {
                 // ── THE STOP ────────────────────────────────────────────────
@@ -1049,6 +1053,7 @@ fn scatter_band<G: PixelGeometry>(
                 let Some(t) = geo.pixel(pr, tile, rx_lat, rx_lon, rx_alt, refl) else {
                     continue;
                 };
+                census::pair_walked();
 
                 build_surface_profile(
                     tile,
@@ -1114,6 +1119,8 @@ fn scatter_band<G: PixelGeometry>(
                     Some((gob, cost)) => {
                         s.path_calls += cost.rays;
                         s.raster_samples += cost.raster_samples;
+                        census_any_quad = true;
+                        census_any_esc |= cost.escalated > 0;
                         gob
                     }
                     // (2) ONE CHARACTERISTIC-POINT RAY, optionally arc-clipped
@@ -1245,6 +1252,7 @@ fn scatter_band<G: PixelGeometry>(
                     }
                 }
             }
+            census::receiver_done(census_any_quad, census_any_esc);
         }
     }
 }
