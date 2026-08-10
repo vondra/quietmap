@@ -34,7 +34,7 @@
 use std::f64::consts::PI;
 
 use noise_compute::propagation::geo::{
-    finite_line_correction_for_divergence, point_to_segment_full,
+    finite_line_correction_for_divergence, point_to_segment_full, reach_box_half_extents_deg,
 };
 use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_compute::propagation::path_profile::CoarseMid;
@@ -168,11 +168,12 @@ impl<'a> PixelGeometry for LineGeometry<'a> {
             let seg_n_lat = line.start_lat.max(line.end_lat);
             let seg_w_lon = line.start_lon.min(line.end_lon);
             let seg_e_lon = line.start_lon.max(line.end_lon);
-            // Longitude uses the segment's widest latitude so a poleward-leaning
-            // segment is never under-covered (smaller cos → wider lon reach).
-            let widest_lat = seg_n_lat.abs().max(seg_s_lat.abs());
-            let reach_lat_deg = reach / 110_540.0;
-            let reach_lon_deg = reach / (111_320.0 * widest_lat.to_radians().cos().max(0.2));
+            // Shared with the point and ground-ops kernels: cos at the POLEWARD
+            // EDGE, clamped where `m_per_deg_lon` clamps. The `max(0.2)` this
+            // replaces under-covered longitude above 78.46 deg (world sweep of the
+            // same defect fixed in `scatter_point`).
+            let (reach_lat_deg, reach_lon_deg) =
+                reach_box_half_extents_deg(seg_n_lat.abs().max(seg_s_lat.abs()), reach);
             if seg_s_lat - reach_lat_deg > bbox.north_lat
                 || seg_n_lat + reach_lat_deg < bbox.south_lat
                 || seg_w_lon - reach_lon_deg > bbox.east_lon
@@ -294,6 +295,63 @@ mod tests {
             (tile.bbox.north_lat + tile.bbox.south_lat) * 0.5,
             (tile.bbox.west_lon + tile.bbox.east_lon) * 0.5,
         )
+    }
+
+    /// Road and rail use the shared polar reach-box geometry, not the retired
+    /// `cos(lat).max(0.2)` copy. Each source sits just far enough east of its
+    /// tile that the old box rejected it while the exact per-pixel reach disk
+    /// still touches the tile. The five rows pin the inhabited 79-83 deg band.
+    #[test]
+    fn polar_line_reach_box_keeps_sources_the_exact_gate_can_reach() {
+        let rasters = RealRasters::new(Path::new("/nonexistent-quietmap-polar-line-fixture"));
+        for (expected_lat, tile_y) in [
+            (79.0_f64, 522_u32),
+            (80.0, 459),
+            (81.6, 345),
+            (82.5, 271),
+            (83.0, 226),
+        ] {
+            let tile = FusedTileZ13::build_receiver_altitude_only(12, 2207, tile_y, &rasters);
+            let source_lat = (tile.bbox.north_lat + tile.bbox.south_lat) * 0.5;
+            assert!((source_lat - expected_lat).abs() < 0.01, "lat={source_lat}");
+
+            let reach_m = 281.84;
+            let (_, fixed_lon_deg) = reach_box_half_extents_deg(source_lat, reach_m);
+            let retired_lon_deg = reach_m / (111_320.0 * source_lat.to_radians().cos().max(0.2));
+            assert!(fixed_lon_deg > retired_lon_deg);
+            let source_lon = tile.bbox.east_lon + (fixed_lon_deg + retired_lon_deg) * 0.5;
+            let nearest_tile_distance_m = noise_compute::propagation::geo::flat_dist(
+                source_lat,
+                source_lon,
+                source_lat,
+                tile.bbox.east_lon,
+            );
+            assert!(
+                nearest_tile_distance_m <= reach_m,
+                "line at {source_lat:.2} deg is {nearest_tile_distance_m:.2} m outside the tile"
+            );
+            let line = LineRow {
+                start_lat: source_lat,
+                start_lon: source_lon,
+                end_lat: source_lat,
+                end_lon: source_lon,
+                length_m: 1.0,
+                max_distance_m: reach_m,
+                source_height_m: 0.05,
+                bridge: false,
+                emission_lin: [[1.0; NUM_BANDS]; NUM_PERIODS],
+            };
+            let mut prepared = Vec::new();
+            LineGeometry {
+                lines: std::slice::from_ref(&line),
+            }
+            .prepare(&tile, &mut prepared);
+            assert_eq!(
+                prepared.len(),
+                1,
+                "line at {source_lat:.2} deg was dropped by its reach box"
+            );
+        }
     }
 
     /// The scene, run twice on one tile: `(clear_db, screened_db)` at the pixel

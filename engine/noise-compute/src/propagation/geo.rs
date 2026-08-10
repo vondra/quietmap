@@ -324,19 +324,29 @@ mod tests {
     use super::*;
 
     /// The box must CONTAIN the reach disk at every latitude a source can sit at,
-    /// including the polar band where the retired `cos().max(0.2)` clamp bit.
+    /// including both hemispheres of the 79-83 deg inhabited polar band where
+    /// the retired `cos().max(0.2)` clamp began under-covering.
     #[test]
     fn reach_box_contains_the_disk_including_above_the_78_5_clamp() {
         for &reach_m in &[281.84_f64, 2_000.0, 4_000.0] {
-            for lat in [
-                0.0_f64, 50.0, 70.0, 78.0, 79.0, 80.0, 81.6, 82.5, 83.0, 85.0,
+            for abs_lat in [
+                0.0_f64, 50.0, 70.0, 78.0, 79.0, 80.0, 81.0, 81.6, 82.0, 82.5, 83.0, 85.0,
             ] {
-                let (lat_deg, lon_deg) = reach_box_half_extents_deg(lat, reach_m);
-                let needed = reach_m / m_per_deg_lon((lat + lat_deg).to_radians());
-                assert!(
-                    lon_deg >= needed - 1e-12,
-                    "lat={lat} reach={reach_m}: half-width {lon_deg} < needed {needed}"
-                );
+                for lat in [abs_lat, -abs_lat] {
+                    let (lat_deg, lon_deg) = reach_box_half_extents_deg(lat, reach_m);
+                    for north_step in -8..=8 {
+                        let north_m = reach_m * f64::from(north_step) / 8.0;
+                        let east_m = (reach_m * reach_m - north_m * north_m).max(0.0).sqrt();
+                        let receiver_lat = lat + north_m / M_PER_DEG_LAT;
+                        let mid_lat = (lat + receiver_lat) * 0.5;
+                        let receiver_lon = east_m / m_per_deg_lon(mid_lat.to_radians());
+                        assert!((receiver_lat - lat).abs() <= lat_deg + 1e-12);
+                        assert!(
+                            receiver_lon <= lon_deg + 1e-12,
+                            "lat={lat} reach={reach_m}: half-width {lon_deg} < disk point {receiver_lon}"
+                        );
+                    }
+                }
             }
         }
     }
