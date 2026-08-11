@@ -15,6 +15,10 @@
  * Only complete lines are consumed: a trailing partial line (Caddy
  * mid-write) is left for the next run.
  *
+ * Run ownership: data/web-stats-run.lock excludes overlapping timer and
+ * manual invocations from before state loading until every output is closed.
+ * SQLite owns the lock, so process death releases it without stale cleanup.
+ *
  * Exactly-once: the DB is committed BEFORE the state file is written, so a
  * crash between the two reprocesses bytes and double-counts the additive
  * counters (visitors stay exact — sketch merge is idempotent). Do not
@@ -35,11 +39,13 @@ import {
   SEARCH_TERM_MIN_COUNT,
   VisitorSketch,
 } from './lib/web-stats-aggregates.js'
+import { tryAcquireSqliteRunLock } from './lib/sqlite-run-lock.js'
 
 const REPO_ROOT = resolve(import.meta.dirname, '..')
 const DATABASE_PATH = resolve(REPO_ROOT, 'data/web-stats.sqlite')
 const STATE_PATH = resolve(REPO_ROOT, 'data/web-stats-state.json')
 const SNAPSHOT_PATH = resolve(REPO_ROOT, 'data/web-stats-latest.json')
+const RUN_LOCK_PATH = resolve(REPO_ROOT, 'data/web-stats-run.lock')
 const GEOIP_DATABASE_PATH = resolve(REPO_ROOT, 'data/prepared/geoip/dbip-city-lite.mmdb')
 const MAX_SUDO_OUTPUT_BYTES = 1 << 30
 
@@ -86,10 +92,14 @@ function loadState(): StatsState {
   }
 }
 
+function saveJsonAtomically(destination: string, value: unknown): void {
+  const temporary = `${destination}.tmp`
+  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`)
+  renameSync(temporary, destination)
+}
+
 function saveState(state: StatsState): void {
-  const temporary = `${STATE_PATH}.tmp`
-  writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`)
-  renameSync(temporary, STATE_PATH)
+  saveJsonAtomically(STATE_PATH, state)
 }
 
 function sudoRead(argv: string[]): Buffer {
@@ -320,21 +330,12 @@ function printAndSnapshotSite(db: DatabaseSync, site: string): object | null {
   }
 }
 
-function main(): void {
-  const sites = process.argv.slice(2)
-  const siteList = sites.length > 0 ? sites : ['quietmap.org']
-  for (const site of siteList) {
-    if (!/^[a-z0-9.-]+$/i.test(site)) {
-      console.error(`invalid site name '${site}' — refusing to build a log path from it`)
-      process.exitCode = 1
-      return
-    }
-  }
-
-  mkdirSync(resolve(REPO_ROOT, 'data'), { recursive: true })
-  const geoipCountry = openGeoipCountryLookup()
-  const state = loadState()
-  const db = new DatabaseSync(DATABASE_PATH)
+function aggregateSitesWithDatabase(
+  db: DatabaseSync,
+  state: StatsState,
+  geoipCountry: (ip: string) => string,
+  siteList: string[],
+): void {
   createSchema(db)
 
   const snapshots: Record<string, object> = {}
@@ -408,12 +409,46 @@ function main(): void {
 
   // State moves forward only after the DB commit succeeded (see header).
   saveState(state)
-  writeFileSync(
-    SNAPSHOT_PATH,
-    `${JSON.stringify({ generated_at: new Date().toISOString(), sites: snapshots }, null, 2)}\n`,
-  )
+  saveJsonAtomically(SNAPSHOT_PATH, {
+    generated_at: new Date().toISOString(),
+    sites: snapshots,
+  })
   console.log(`\ndb ${DATABASE_PATH} · state ${STATE_PATH} · snapshot ${SNAPSHOT_PATH}`)
-  db.close()
+}
+
+function aggregateSites(siteList: string[]): void {
+  const geoipCountry = openGeoipCountryLookup()
+  const state = loadState()
+  const db = new DatabaseSync(DATABASE_PATH)
+  try {
+    aggregateSitesWithDatabase(db, state, geoipCountry, siteList)
+  } finally {
+    db.close()
+  }
+}
+
+function main(): void {
+  const sites = process.argv.slice(2)
+  const siteList = sites.length > 0 ? sites : ['quietmap.org']
+  for (const site of siteList) {
+    if (!/^[a-z0-9.-]+$/i.test(site)) {
+      console.error(`invalid site name '${site}' — refusing to build a log path from it`)
+      process.exitCode = 1
+      return
+    }
+  }
+
+  mkdirSync(resolve(REPO_ROOT, 'data'), { recursive: true })
+  const runLock = tryAcquireSqliteRunLock(RUN_LOCK_PATH)
+  if (!runLock) {
+    console.log('web-stats aggregation is already running; leaving logs and state untouched')
+    return
+  }
+  try {
+    aggregateSites(siteList)
+  } finally {
+    runLock.release()
+  }
 }
 
 main()
