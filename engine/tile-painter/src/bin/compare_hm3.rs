@@ -134,6 +134,10 @@ fn print_verdict(s: &Score, wave: Wave, scoring: Scoring) -> Verdict {
         wave.quiet_band_max_db(),
         mark(!s.quiet_band_over(wave)),
     );
+    println!(
+        "  paint-edge crossings {}   (all, including the rounding band)",
+        s.paint_edge_crossings,
+    );
     // The two hard gates that two tiles can show. The third — physics deleted rather
     // than approximated — is a code-review gate this tool cannot stand in for.
     println!(

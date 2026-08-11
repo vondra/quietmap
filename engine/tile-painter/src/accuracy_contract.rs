@@ -277,6 +277,9 @@ pub struct Score {
     pub quiet: Band,
     /// Cells where exactly one side is `NO_DATA`, for the statistics line.
     pub presence_changed: usize,
+    /// Every visible crossing of the 30 dB paint edge, including the near-edge
+    /// rounding band that is deliberately exempt from the hard flip gate.
+    pub paint_edge_crossings: usize,
     /// Flips across the 30 dB paint edge where the reference sits ≥1 dB clear of it.
     pub qualifying_flips: usize,
     /// Silence painted as noise.
@@ -305,6 +308,7 @@ pub fn score(reference: &[u8], candidate: &[u8]) -> Score {
         loud: Band::new(),
         quiet: Band::new(),
         presence_changed: 0,
+        paint_edge_crossings: 0,
         qualifying_flips: 0,
         flips_newly_painted: 0,
         flips_newly_silent: 0,
@@ -315,6 +319,7 @@ pub fn score(reference: &[u8], candidate: &[u8]) -> Score {
         // visitor sees flip is colour appearing or disappearing, not a byte.
         let r_painted = is_painted(r);
         if r_painted != is_painted(c) {
+            s.paint_edge_crossings += 1;
             // An absent reference is fully clear below the edge, so painting noise
             // over silence always counts.
             // The clearance exemption is for ROUNDING noise across the threshold, so it
@@ -599,12 +604,29 @@ mod tests {
 
     #[test]
     fn a_flip_counts_only_when_the_reference_is_clear_of_the_edge() {
+        // NO_DATA and a subfloor byte are both transparent to the visitor. Their
+        // storage representation differs, but the visible paint edge does not.
+        let s = score(&[NO_DATA; 4], &[quantise_lden(29.5); 4]);
+        assert_eq!(s.paint_edge_crossings, 0);
+
+        // A targeted 30.0 → 29.5 dB remap crosses the visible edge but remains
+        // inside the rounding exemption. Keep that crossing observable even though
+        // it correctly does not become a hard-gate flip by itself.
+        let s = score(&[quantise_lden(30.0); 4], &[quantise_lden(29.5); 4]);
+        assert_eq!(s.paint_edge_crossings, 4);
+        assert_eq!(s.qualifying_flips, 0);
+
         // Reference at 30.5 dB is inside the 1 dB clearance: edge noise, not a flip.
         let s = score(&[quantise_lden(30.5); 4], &[quantise_lden(29.5); 4]);
+        assert_eq!(
+            s.paint_edge_crossings, 4,
+            "the visible contour still changed"
+        );
         assert_eq!(s.qualifying_flips, 0, "edge noise is not a flip");
 
         // Reference at 31 dB is exactly 1 dB clear: audible content vanishing.
         let s = score(&[quantise_lden(31.0); 4], &[quantise_lden(29.5); 4]);
+        assert_eq!(s.paint_edge_crossings, 4);
         assert_eq!(s.qualifying_flips, 4);
         assert_eq!(s.flips_newly_silent, 4);
         assert_eq!(s.verdict(Wave::One), Verdict::Fail, "hard in both waves");
@@ -612,6 +634,7 @@ mod tests {
 
         // Silence painted as noise: an absent reference is fully clear below the edge.
         let s = score(&[NO_DATA; 4], &[quantise_lden(45.0); 4]);
+        assert_eq!(s.paint_edge_crossings, 4);
         assert_eq!(s.qualifying_flips, 4);
         assert_eq!(s.flips_newly_painted, 4);
         assert_eq!(s.presence_changed, 4);
@@ -629,6 +652,7 @@ mod tests {
         // no flip would qualify, and the presence mismatch skips amplitude and bias.
         let reference = vec![quantise_lden(30.5); CELLS];
         let s = score(&reference, &[NO_DATA; CELLS]);
+        assert_eq!(s.paint_edge_crossings, CELLS);
         assert_eq!(s.qualifying_flips, CELLS, "a vanished tile is not free");
         assert_eq!(s.flips_newly_silent, CELLS);
         assert_eq!(s.loud.cells, 0, "nothing to compare — hence the flip gate");
