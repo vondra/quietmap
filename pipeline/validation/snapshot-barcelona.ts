@@ -19,6 +19,7 @@ import { createWriteStream, existsSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import { replaceCacheFileAtomicallyAsync } from '../lib/atomic-cache.js'
 import {
   boundedCoveragePercent,
   assertDir, ckanResources, endPeriodForLocalHour, energeticMeanDb, ldenFromPeriods,
@@ -119,9 +120,9 @@ async function downloadIfMissing(url: string, name: string): Promise<string> {
   console.error(`[barcelona] downloading ${name}…`)
   const r = await fetch(url, { signal: AbortSignal.timeout(1800000) })
   if (!r.ok || !r.body) throw new Error(`[barcelona] ${name}: HTTP ${r.status}`)
-  await pipeline(Readable.fromWeb(r.body as never), createWriteStream(path + '.part'))
-  const { renameSync } = await import('node:fs')
-  renameSync(path + '.part', path)
+  await replaceCacheFileAtomicallyAsync(path, async temporaryPath => {
+    await pipeline(Readable.fromWeb(r.body as never), createWriteStream(temporaryPath))
+  })
   return path
 }
 

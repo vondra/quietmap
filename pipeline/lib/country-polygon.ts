@@ -28,9 +28,10 @@
  * This is an actual-polygon gate — NOT `h3r4-admin.bin`, which is H3 res-4
  * (~22 km, centroid-based) and far too coarse to separate roads at a border.
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
+import { replaceCacheFileAtomically } from './atomic-cache.js'
 import { pointInRing, pointToSegmentDist } from './spatial.js'
 
 const CACHE_DIR = resolve(import.meta.dirname, '..', '..', 'scripts', 'cache')
@@ -46,19 +47,21 @@ function cgazFeatures(): ReadonlyArray<CgazFeature> {
   if (features) return features
   if (!existsSync(CGAZ_GEOJSON)) {
     mkdirSync(CACHE_DIR, { recursive: true })
-    // tmp + rename so an interrupted download/convert can't leave a truncated
-    // file that existsSync would happily accept on the next run
+    // Atomic replace so an interrupted or concurrent cold start cannot leave a
+    // truncated cache or steal another process's temporary file.
     if (!existsSync(CGAZ_GPKG)) {
-      execFileSync('curl', ['-fsSL', '--max-time', '600', CGAZ_URL, '-o', `${CGAZ_GPKG}.tmp`])
-      renameSync(`${CGAZ_GPKG}.tmp`, CGAZ_GPKG)
+      replaceCacheFileAtomically(CGAZ_GPKG, temporaryPath => {
+        execFileSync('curl', ['-fsSL', '--max-time', '600', CGAZ_URL, '-o', temporaryPath])
+      })
     }
-    try {
-      execFileSync('ogr2ogr', ['-f', 'GeoJSON', `${CGAZ_GEOJSON}.tmp`, CGAZ_GPKG,
-        '-select', 'shapeGroup', '-simplify', '0.0005', '-lco', 'COORDINATE_PRECISION=6'])
-    } catch (e) {
-      throw new Error(`country-polygon: ogr2ogr conversion failed — is GDAL installed (apt install gdal-bin)? ${e}`)
-    }
-    renameSync(`${CGAZ_GEOJSON}.tmp`, CGAZ_GEOJSON)
+    replaceCacheFileAtomically(CGAZ_GEOJSON, temporaryPath => {
+      try {
+        execFileSync('ogr2ogr', ['-f', 'GeoJSON', temporaryPath, CGAZ_GPKG,
+          '-select', 'shapeGroup', '-simplify', '0.0005', '-lco', 'COORDINATE_PRECISION=6'])
+      } catch (e) {
+        throw new Error(`country-polygon: ogr2ogr conversion failed — is GDAL installed (apt install gdal-bin)? ${e}`)
+      }
+    })
   }
   return (features = JSON.parse(readFileSync(CGAZ_GEOJSON, 'utf8')).features)
 }
@@ -303,8 +306,9 @@ export function allCountryPolygonBboxes(): Record<string, CountryBbox[]> {
       return [s, w, n, e] as const
     })
   }
-  writeFileSync(`${BBOX_CACHE}.tmp`, JSON.stringify(out))
-  renameSync(`${BBOX_CACHE}.tmp`, BBOX_CACHE)
+  replaceCacheFileAtomically(BBOX_CACHE, temporaryPath => {
+    writeFileSync(temporaryPath, JSON.stringify(out))
+  })
   return (bboxCache = out)
 }
 

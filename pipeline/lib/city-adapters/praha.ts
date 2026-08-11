@@ -27,10 +27,11 @@
  * it out of counted-only consumers while the popup still shows it as the
  * city-measured source it is.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import * as XLSX from 'xlsx'
+import { replaceCacheFileAtomically } from '../atomic-cache.js'
 import type { CityRecord } from './types.js'
 import { DATA_YEAR as YEAR } from '../data-year.js'
 
@@ -49,8 +50,9 @@ export async function loadPraha(opts: { enrichOnly: boolean; forceDownload: bool
     if (opts.enrichOnly) {
       throw new Error(`praha adapter: --enrich-only but no cache at ${XLSX_PATH}`)
     }
-    execFileSync('curl', ['-fsSL', '--max-time', '300', XLSX_URL, '-o', `${XLSX_PATH}.tmp`])
-    renameSync(`${XLSX_PATH}.tmp`, XLSX_PATH)
+    replaceCacheFileAtomically(XLSX_PATH, temporaryPath => {
+      execFileSync('curl', ['-fsSL', '--max-time', '300', XLSX_URL, '-o', temporaryPath])
+    })
   }
 
   const wb = XLSX.read(readFileSync(XLSX_PATH), { type: 'buffer' })
@@ -121,9 +123,9 @@ export async function loadPraha(opts: { enrichOnly: boolean; forceDownload: bool
     aadtHeavy: Math.round(a.heavy / a.len),
     aadtMoto: 0,
   }))
-  const tmp = `${PARSED_PATH}.tmp`
-  writeFileSync(tmp, JSON.stringify(records))
-  renameSync(tmp, PARSED_PATH)
+  replaceCacheFileAtomically(PARSED_PATH, temporaryPath => {
+    writeFileSync(temporaryPath, JSON.stringify(records))
+  })
   console.log(`[praha] parsed ${sections} sections → ${records.length} streets (cache ${PARSED_PATH})`)
   return records
 }

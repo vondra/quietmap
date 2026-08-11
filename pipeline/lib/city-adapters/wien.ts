@@ -24,9 +24,10 @@
  * STRTYP is only B (Hauptstraßen B) and G (Gemeindestraßen) — Vienna's
  * motorways are ASFINAG's, absent here (registry coverage excludes them).
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { replaceCacheFileAtomically } from '../atomic-cache.js'
 import type { CityRecord } from './types.js'
 import { DATA_YEAR as YEAR } from '../data-year.js'
 
@@ -51,8 +52,9 @@ const MIN_STATIONS = 50
 
 function download(url: string, dest: string, enrichOnly: boolean): void {
   if (enrichOnly) throw new Error(`wien adapter: --enrich-only but no cache at ${dest}`)
-  execFileSync('curl', ['-fsSL', '--max-time', '300', url, '-o', `${dest}.tmp`])
-  renameSync(`${dest}.tmp`, dest)
+  replaceCacheFileAtomically(dest, temporaryPath => {
+    execFileSync('curl', ['-fsSL', '--max-time', '300', url, '-o', temporaryPath])
+  })
 }
 
 export async function loadWien(opts: { enrichOnly: boolean; forceDownload: boolean }): Promise<CityRecord[]> {
@@ -162,9 +164,9 @@ export async function loadWien(opts: { enrichOnly: boolean; forceDownload: boole
     throw new Error(`wien adapter: only ${records.length} stations survived the geometry join — WFS/CSV drift?`)
   }
 
-  const tmp = `${PARSED_PATH}.tmp`
-  writeFileSync(tmp, JSON.stringify({ year: usedYear, records }))
-  renameSync(tmp, PARSED_PATH)
+  replaceCacheFileAtomically(PARSED_PATH, temporaryPath => {
+    writeFileSync(temporaryPath, JSON.stringify({ year: usedYear, records }))
+  })
   console.log(
     `[wien] year ${usedYear}: ${records.length} stations (${noGeometry} without geometry dropped; cache ${PARSED_PATH})`,
   )

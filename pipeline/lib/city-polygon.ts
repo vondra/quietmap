@@ -16,11 +16,13 @@
  *
  * Per-country ADM2 GeoJSONs are a few MB (CZE 1.7 MB) vs the 162 MB global
  * ADM0 GeoPackage — downloaded on demand, cached under `scripts/cache/`,
- * tmp+rename so an interrupted download can't leave a truncated file.
+ * unique tmp+rename so interrupted or concurrent downloads cannot leave a
+ * truncated file or steal one another's temporary path.
  */
-import { readFileSync, existsSync, mkdirSync, renameSync } from 'node:fs'
+import { readFileSync, existsSync, mkdirSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
+import { replaceCacheFileAtomically } from './atomic-cache.js'
 import { pointInRing } from './spatial.js'
 
 const CACHE_DIR = resolve(import.meta.dirname, '..', '..', 'scripts', 'cache')
@@ -40,8 +42,9 @@ function loadAdm2(iso3: string): ReadonlyArray<Adm2Feature> {
   if (!existsSync(path)) {
     mkdirSync(CACHE_DIR, { recursive: true })
     const url = `https://github.com/wmgeolab/geoBoundaries/raw/v6.0.0/releaseData/gbOpen/${iso3}/ADM2/geoBoundaries-${iso3}-ADM2.geojson`
-    execFileSync('curl', ['-fsSL', '--max-time', '600', url, '-o', `${path}.tmp`])
-    renameSync(`${path}.tmp`, path)
+    replaceCacheFileAtomically(path, temporaryPath => {
+      execFileSync('curl', ['-fsSL', '--max-time', '600', url, '-o', temporaryPath])
+    })
   }
   return JSON.parse(readFileSync(path, 'utf8')).features
 }

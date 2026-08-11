@@ -22,9 +22,10 @@
  * each edition carries sections forward between survey campaigns — counted
  * and modelled sections are indistinguishable per row.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { replaceCacheFileAtomically } from '../atomic-cache.js'
 import type { CityRecord } from './types.js'
 import { DATA_YEAR as YEAR } from '../data-year.js'
 
@@ -54,8 +55,9 @@ export async function loadBrno(opts: { enrichOnly: boolean; forceDownload: boole
   }
   if (!existsSync(RAW_PATH) || opts.forceDownload) {
     if (opts.enrichOnly) throw new Error(`brno adapter: --enrich-only but no cache at ${RAW_PATH}`)
-    execFileSync('curl', ['-fsSL', '--max-time', '300', QUERY_URL, '-o', `${RAW_PATH}.tmp`])
-    renameSync(`${RAW_PATH}.tmp`, RAW_PATH)
+    replaceCacheFileAtomically(RAW_PATH, temporaryPath => {
+      execFileSync('curl', ['-fsSL', '--max-time', '300', QUERY_URL, '-o', temporaryPath])
+    })
   }
 
   const fc = JSON.parse(readFileSync(RAW_PATH, 'utf8'))
@@ -118,9 +120,9 @@ export async function loadBrno(opts: { enrichOnly: boolean; forceDownload: boole
     throw new Error(`brno adapter: only ${records.length} usable sections in edition ${usedYear}`)
   }
 
-  const tmp = `${PARSED_PATH}.tmp`
-  writeFileSync(tmp, JSON.stringify({ year: usedYear, records }))
-  renameSync(tmp, PARSED_PATH)
+  replaceCacheFileAtomically(PARSED_PATH, temporaryPath => {
+    writeFileSync(temporaryPath, JSON.stringify({ year: usedYear, records }))
+  })
   console.log(`[brno] pentlogram ${usedYear}: ${records.length} section records (cache ${PARSED_PATH})`)
   return records
 }
