@@ -42,6 +42,7 @@ import {
   type GateVerdict,
 } from './gate.js'
 import { runInventory } from './inventory.js'
+import { createChainRunDirectory } from './run-directory.js'
 import {
   writeChainStatus, parseCompletenessMarker, stepIsComplete,
   type ChainStatus, type StepStatus, type GateStatus,
@@ -400,9 +401,7 @@ async function main(): Promise<number> {
     return 0
   }
 
-  const runId = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19)
-  const logDir = resolve(REPO_ROOT, 'logs', 'chain', runId)
-  mkdirSync(logDir, { recursive: true })
+  const { runId, logDir } = createChainRunDirectory(REPO_ROOT)
 
   if (opts.updateGateBaseline) {
     const gate = allSteps.find((s) => s.phase === 'gate')!
