@@ -19,6 +19,9 @@ if [ "$HALF" != "rust" ]; then
   step "pipeline: offline tests"
   (cd pipeline && npm ci --no-audit --no-fund && npm test)
 
+  step "layer topology metadata"
+  node scripts/test-layer-spec.mjs
+
   step "shell scripts"
   bash -n scripts/run-extraction.sh scripts/build-heatmap.sh scripts/osm-to-h3r4.sh \
     scripts/run-aircraft-extract.sh scripts/rasters-global.sh start.sh

@@ -1,9 +1,13 @@
 {
-  "_doc": "SINGLE SOURCE OF TRUTH for the cluster's layer/group topology. hub.mjs (JSON.parse), world-stamps.py (json.load), provision.sh + stream-region-to-box.sh (jq) all DERIVE from this \u2014 never re-encode a group's layers/arrows/seed/binary by hand (that is the fix-one-miss-the-rest drift this file removes). Derived, NOT stored: a group's stage-excludes = every layer arrow NOT in its own layers; the tile-layer set = the union of all groups' layers. NOT covered here: layer-codever.py's per-layer engine-source-file partition (DEFAULT_EXCL) \u2014 that is code-versioning, not topology, and stays its own authority. Placeholders {OUTPUT} {SEED} {H3R4} {PREP} {ZOOM} in worker_types.flags are substituted at launch (provision.sh / worker.py).",
+  "_doc": "SINGLE SOURCE OF TRUTH for the cluster's layer/group topology. hub.mjs (JSON.parse), world-stamps.py (json.load), provision.sh + stream-region-to-box.sh (jq) all DERIVE from this \u2014 never re-encode a group's layers/arrows/seed/binary by hand (that is the fix-one-miss-the-rest drift this file removes). A layer's arrows is the orchestration read set currently consumed for data-version invalidation, region transport and stage inclusion; this documentation-only change neither changes nor certifies that set's composition. dependency_arrows documents the subset of those declared arrows whose presence alone must not create a task; every dependency arrow is also in arrows. This field is classification metadata only: current readers intentionally continue to consume arrows unchanged, and the planner still over-approximates buildability from arrows until the pending dual-reviewed read-set/buildability split lands. Derived, NOT stored: a group's stage-excludes = every layer arrow NOT in its own layers; the tile-layer set = the union of all groups' layers. NOT covered here: layer-codever.py's per-layer engine-source-file partition (DEFAULT_EXCL) \u2014 that is code-versioning, not topology, and stays its own authority. Placeholders {OUTPUT} {SEED} {H3R4} {PREP} {ZOOM} in worker_types.flags are substituted at launch (provision.sh / worker.py).",
   "layers": {
     "road": {
       "arrows": [
         "roads.arrow",
+        "obstacles.arrow",
+        "barriers.arrow"
+      ],
+      "dependency_arrows": [
         "obstacles.arrow",
         "barriers.arrow"
       ]
@@ -13,11 +17,19 @@
         "railways.arrow",
         "obstacles.arrow",
         "barriers.arrow"
+      ],
+      "dependency_arrows": [
+        "obstacles.arrow",
+        "barriers.arrow"
       ]
     },
     "industrial": {
       "arrows": [
         "industrial.arrow",
+        "obstacles.arrow",
+        "barriers.arrow"
+      ],
+      "dependency_arrows": [
         "obstacles.arrow",
         "barriers.arrow"
       ]
@@ -28,6 +40,10 @@
         "leisure.arrow",
         "obstacles.arrow",
         "barriers.arrow"
+      ],
+      "dependency_arrows": [
+        "obstacles.arrow",
+        "barriers.arrow"
       ]
     },
     "aircraft-ground": {
@@ -35,17 +51,23 @@
         "airport_traffic.arrow",
         "obstacles.arrow",
         "barriers.arrow"
+      ],
+      "dependency_arrows": [
+        "obstacles.arrow",
+        "barriers.arrow"
       ]
     },
     "aircraft-airborne": {
       "arrows": [
         "airborne.arrow"
-      ]
+      ],
+      "dependency_arrows": []
     },
     "aircraft-cruise": {
       "arrows": [
         "cruise.arrow"
-      ]
+      ],
+      "dependency_arrows": []
     }
   },
   "groups": {
