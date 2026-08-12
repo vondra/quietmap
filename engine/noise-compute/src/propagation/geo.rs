@@ -170,6 +170,19 @@ pub fn closest_point_on_segment(
 /// the threshold in reality.
 pub const ATM_ALPHA_A_WEIGHTED: f64 = 0.002;
 
+/// Conservative reach for a point source whose loudest day band is
+/// `max_emission_db`, bounded by the layer's physical `cap_m`.
+///
+/// This inverts only geometric divergence, deliberately omitting atmospheric
+/// absorption: at the uncapped result [`below_free_field_threshold`] is already
+/// negative by `ATM_ALPHA_A_WEIGHTED * radius`, and decreases monotonically at
+/// every greater distance. A caller may therefore use this as an enumeration
+/// bound without dropping any pair that the exact free-field gate would keep.
+#[inline]
+pub fn point_source_audibility_radius(max_emission_db: f64, cap_m: f64) -> f64 {
+    10f64.powf((max_emission_db - 11.0) / 20.0).min(cap_m)
+}
+
 /// Check if a point source is too weak to contribute at this distance.
 /// Geometric divergence ~20*log10(d) + 11 dB plus conservative A-weighted
 /// atmospheric absorption. Path effects (ground, screening, vegetation)
@@ -385,6 +398,23 @@ mod tests {
         let s = slant_dist(100.0, 10.0, 1.5);
         // √(100² + 8.5²) ≈ 100.36
         assert!((s - 100.36).abs() < 0.1, "s={s}");
+    }
+
+    #[test]
+    fn point_source_audibility_radius_never_preempts_the_free_field_gate() {
+        for max_emission_db in (10..=120).map(f64::from) {
+            let uncapped = point_source_audibility_radius(max_emission_db, f64::INFINITY);
+            assert!(
+                below_free_field_threshold(max_emission_db, uncapped, 0.0),
+                "free-field gate still keeps {max_emission_db} dB at {uncapped} m"
+            );
+            assert!(below_free_field_threshold(
+                max_emission_db,
+                uncapped.next_up(),
+                0.0
+            ));
+        }
+        assert_eq!(point_source_audibility_radius(120.0, 4_000.0), 4_000.0);
     }
 
     #[test]

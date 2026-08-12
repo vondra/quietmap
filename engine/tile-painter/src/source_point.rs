@@ -19,8 +19,9 @@ pub struct PointRow {
     /// Source height above ground (m): industrial 5/8/10, wind hub height,
     /// building per `prepare_building_points`.
     pub source_height_m: f64,
-    /// Propagation cutoff (m): industrial = `INDUSTRIAL_MAX_RADIUS`,
-    /// building = emission-dependent.
+    /// Propagation cutoff (m): industrial = per-grid-point loudest-day-band
+    /// audibility, capped at `INDUSTRIAL_MAX_RADIUS`; building = parent-Lw
+    /// audibility.
     pub max_distance_m: f64,
     /// Self-screening footprint radius `√(area_per_point/π)` (m): buildings
     /// within it are the source's own footprint, not a barrier (ISO 9613-2).

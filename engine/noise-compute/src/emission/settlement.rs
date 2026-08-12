@@ -277,7 +277,7 @@ pub fn building_emission_bands(profile: &BuildingProfile, lw: f64) -> [f64; NUM_
 /// Max distance at which building is audible (inverse of free-field propagation).
 /// Lp(d) = Lw - 20·log₁₀(d) - 11 = 0 → d = 10^((Lw-11)/20).
 pub fn building_max_dist(lw: f64) -> f64 {
-    10f64.powf((lw - 11.0) / 20.0).min(2000.0)
+    crate::propagation::geo::point_source_audibility_radius(lw, 2_000.0)
 }
 
 #[cfg(test)]

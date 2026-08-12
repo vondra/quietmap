@@ -1,6 +1,6 @@
 //! Point-source normalization: building / industrial / leisure AREA rows →
 //! discretised per-cell [`PreparedPoint`]s (GFA-scaled Lw, self-screening
-//! exclusion, Lw-derived cull radius) the popup and heatmap loaders share.
+//! exclusion, emission-derived cull radius) the popup and heatmap loaders share.
 
 use crate::emission::{industrial, leisure, settlement, wind};
 use crate::types::{PointSource, NUM_BANDS};
@@ -132,12 +132,40 @@ struct AreaSource<'a> {
     /// Square-grid cell pitch (building 30 m, industrial/leisure 75 m).
     cell_m: f64,
     source_height_m: f32,
-    max_radius_m: f64,
+    reach: PointReach,
     /// Echoed to `PreparedPoint` for the popup trace (0 / None outside
     /// buildings & wind turbines).
     floors: u8,
     hub_height_m: Option<f32>,
     rated_power_kw: Option<f32>,
+}
+
+/// How one discretised point gets its receiver-enumeration radius.
+/// Buildings and leisure retain their parent source's Lw-derived radius;
+/// industrial area cells use their own post-split loudest day band because the
+/// exact receiver gate tests that same value.
+#[derive(Clone, Copy)]
+enum PointReach {
+    Fixed(f64),
+    LoudestDayBand { cap_m: f64 },
+}
+
+fn loudest_day_band_db(lw_day: &[f32; NUM_BANDS]) -> f64 {
+    lw_day.iter().copied().fold(f32::NEG_INFINITY, f32::max) as f64
+}
+
+impl PointReach {
+    fn resolve(self, lw_day: &[f32; NUM_BANDS]) -> f64 {
+        match self {
+            Self::Fixed(radius_m) => radius_m,
+            Self::LoudestDayBand { cap_m } => {
+                crate::propagation::geo::point_source_audibility_radius(
+                    loudest_day_band_db(lw_day),
+                    cap_m,
+                )
+            }
+        }
+    }
 }
 
 /// Derive the evening + night band arrays from the day bands by adding the
@@ -212,7 +240,7 @@ fn discretize_area_source(
                 lw_night: night,
                 n_points,
                 exclusion_radius_m: (point_area as f32 / std::f32::consts::PI).sqrt(),
-                max_radius_m: src.max_radius_m,
+                max_radius_m: src.reach.resolve(&day),
                 floors: src.floors,
                 area_m2: src.area_m2 as f32,
                 hub_height_m: src.hub_height_m,
@@ -265,7 +293,7 @@ pub fn prepare_building_points(input: RawBuildingInput<'_>) -> Vec<PreparedPoint
             grid_threshold_m2: BUILDING_AREA_THRESHOLD_M2,
             cell_m: BUILDING_AREA_CELL_M,
             source_height_m: actual_height / 2.0,
-            max_radius_m: settlement::building_max_dist(lw),
+            reach: PointReach::Fixed(settlement::building_max_dist(lw)),
             floors: lw_floors,
             hub_height_m: None,
             rated_power_kw: None,
@@ -310,7 +338,10 @@ pub fn prepare_industrial_points(input: RawIndustrialInput<'_>) -> Vec<PreparedP
             lw_night: emission,
             n_points: 1,
             exclusion_radius_m: 0.0,
-            max_radius_m: crate::constants::INDUSTRIAL_MAX_RADIUS,
+            max_radius_m: crate::propagation::geo::point_source_audibility_radius(
+                loudest_day_band_db(&emission),
+                crate::constants::INDUSTRIAL_MAX_RADIUS,
+            ),
             floors: 0,
             area_m2: 0.0,
             hub_height_m: Some(hub_height_m),
@@ -353,7 +384,9 @@ pub fn prepare_industrial_points(input: RawIndustrialInput<'_>) -> Vec<PreparedP
             grid_threshold_m2: INDUSTRIAL_AREA_THRESHOLD_M2,
             cell_m: INDUSTRIAL_AREA_CELL_M,
             source_height_m,
-            max_radius_m: crate::constants::INDUSTRIAL_MAX_RADIUS,
+            reach: PointReach::LoudestDayBand {
+                cap_m: crate::constants::INDUSTRIAL_MAX_RADIUS,
+            },
             floors: 0,
             hub_height_m: None,
             rated_power_kw: None,
@@ -397,7 +430,7 @@ pub fn prepare_leisure_points(input: RawLeisureInput<'_>) -> Vec<PreparedPoint> 
             grid_threshold_m2: INDUSTRIAL_AREA_THRESHOLD_M2,
             cell_m: INDUSTRIAL_AREA_CELL_M,
             source_height_m: crate::constants::SOURCE_HEIGHT_INDUSTRIAL_OPEN as f32,
-            max_radius_m,
+            reach: PointReach::Fixed(max_radius_m),
             floors: 0,
             hub_height_m: None,
             rated_power_kw: None,
@@ -411,6 +444,21 @@ pub fn prepare_leisure_points(input: RawLeisureInput<'_>) -> Vec<PreparedPoint> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Little-endian WKB Polygon (type 3) from `(lat, lon)` rings.
+    fn polygon_wkb(rings: &[&[(f64, f64)]]) -> String {
+        let mut bytes = vec![1_u8];
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&(rings.len() as u32).to_le_bytes());
+        for ring in rings {
+            bytes.extend_from_slice(&(ring.len() as u32).to_le_bytes());
+            for &(lat, lon) in *ring {
+                bytes.extend_from_slice(&lon.to_le_bytes());
+                bytes.extend_from_slice(&lat.to_le_bytes());
+            }
+        }
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
 
     #[test]
     fn prepared_building_uses_radius_from_lw() {
@@ -478,6 +526,45 @@ mod tests {
         // Buildings-only fields stay 0 on turbines.
         assert_eq!(points[0].floors, 0);
         assert_eq!(points[0].area_m2, 0.0);
+    }
+
+    #[test]
+    fn industrial_cull_radius_uses_each_points_post_split_loudest_day_band() {
+        let ring: &[(f64, f64)] = &[
+            (50.000, 14.000),
+            (50.000, 14.006),
+            (50.004, 14.006),
+            (50.004, 14.000),
+            (50.000, 14.000),
+        ];
+        let polygon = polygon_wkb(&[ring]);
+        let points = prepare_industrial_points(RawIndustrialInput {
+            centroid_lat: 50.002,
+            centroid_lon: 14.003,
+            source_type: 0,
+            site_subtype: 0,
+            nace_4digit: None,
+            hub_height_m: None,
+            rated_power_kw: None,
+            area_m2: Some(6_000.0),
+            polygon_wkb: &polygon,
+        });
+
+        assert!(
+            points.len() > 1,
+            "test polygon must exercise area splitting"
+        );
+        for point in points {
+            let expected = crate::propagation::geo::point_source_audibility_radius(
+                loudest_day_band_db(&point.lw_day),
+                crate::constants::INDUSTRIAL_MAX_RADIUS,
+            );
+            assert_eq!(point.max_radius_m, expected);
+            assert!(
+                point.max_radius_m < crate::constants::INDUSTRIAL_MAX_RADIUS,
+                "fixture must exercise the solved reach rather than the cap"
+            );
+        }
     }
 
     /// Settlement v2 phase 1: the cull radius is the honest free-field

@@ -4,9 +4,10 @@
 //! industrial site (or wind turbine); [`prepare_industrial_points`] resolves
 //! its emission profile (NACE → subtype → site-type), splits a large polygon
 //! into weighted area cells (`Lw + 10·log10(cell_area / total_area)`), and sets
-//! the self-screening exclusion radius `√(cell_area/π)`. This is the exact chain
-//! the popup runs (`source-reader::lib`), so the scatter matches
-//! `compute_point_sources` to quantisation noise.
+//! the self-screening exclusion radius `√(cell_area/π)` plus a per-cell reach
+//! derived from that cell's loudest day band. This is the exact chain the popup
+//! runs (`source-reader::lib`), so the scatter matches `compute_point_sources`
+//! to quantisation noise.
 //!
 //! Column reads + the wind-turbine (`source_type == 10`) blank-WKB rule mirror
 //! the popup reader; industrial has no admin-dependent defaults.

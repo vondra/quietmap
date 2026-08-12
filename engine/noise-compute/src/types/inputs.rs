@@ -149,7 +149,8 @@ pub struct PointSource {
     // Self-screening exclusion radius: R = √(area/π). Screening within R of source
     // is the source's own footprint, not a real barrier (ISO 9613-2).
     pub exclusion_radius_m: f32,
-    // Source audibility / fade-out radius. Buildings vary by emitted Lw, industrial fixed at 5km.
+    // Source audibility / fade-out radius. Buildings derive it from parent Lw;
+    // industrial points derive it from their post-split loudest day band.
     pub max_radius_m: f64,
     pub source_id: u16, // single source-of-truth stamp — see pipeline/lib/sources.ts
     /// Building OSM tag `building:levels` (0 = absent → engine
