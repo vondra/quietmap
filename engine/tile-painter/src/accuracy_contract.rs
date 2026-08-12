@@ -5,15 +5,19 @@
 //! Error is `candidate − reference` per cell, banded by the REFERENCE cell's level —
 //! not the candidate's and not `max(ref, cand)`; that ambiguity is closed. The rungs
 //! are CUMULATIVE (each counts every cell above its threshold, so they nest) and their
-//! budgets are fractions of the WHOLE tile, which is how the owner's worked example
-//! reads: 20 % of 262,144 = 52,429 cells.
+//! legacy single-pair budgets are fractions of the WHOLE tile. Release decisions use
+//! [`AggregateScore`], whose denominator is the reference's PAINTED cells across the
+//! benchmark, with hard 3x per-row anti-dilution limits on amplitude and the
+//! catastrophic flip-area backstop.
 //!
-//! Wave 1's amplitude rungs are GUIDANCE — in the draft wave speed wins and wave 2
-//! repairs the accuracy, so an overshoot is reported, not failed. Three things are hard
-//! in BOTH waves because wave 2 cannot repair them: qualifying presence flips,
-//! systematic one-sided bias, and physics deleted rather than approximated. Only the
-//! first two are visible in two tiles; the third is a code-review gate.
+//! Wave 1's aggregate amplitude rungs and quiet-band cap are GUIDANCE — an overshoot is
+//! reported, not failed. The 3x per-row anti-dilution limit remains hard, as do clustered
+//! or catastrophic-area presence flips and systematic one-sided bias. Physics deleted
+//! rather than approximated is the separate code-review gate.
 
+use std::collections::BTreeMap;
+
+use crate::grid::TILE_PX;
 use crate::wire_hm3::{dequantise_lden, NO_DATA};
 
 /// Level at which the palette starts painting: `frontend/src/lib/heatmap-palette.ts:24`,
@@ -50,13 +54,32 @@ pub const MAX_SIGNED_MEAN_DB_WAVE_TWO: f64 = 0.25;
 /// See [`MAX_SIGNED_MEAN_DB_WAVE_TWO`] — the draft wave's looser bound.
 pub const MAX_SIGNED_MEAN_DB_WAVE_ONE: f64 = 0.5;
 
-/// Presence flips carry the SAME allowance as the top amplitude rung — 0.01 %, ≈26
-/// cells on a full tile — in both waves (owner ruling 2026-08-10). A flip is a real
-/// defect, but a handful of them is not a different CLASS of wrongness from a handful
-/// of large amplitude errors, and the ladder is the owner's own calibration of how much
-/// visible error a wave may carry. Zero tolerance here would have made 3 flipped cells
-/// stricter than 26 cells ten times worse in amplitude.
-pub const FLIP_MAX_FRACTION: f64 = 0.0001;
+/// A qualifying flip component longer than this many 8-connected cells is a visible
+/// contour displacement and fails either wave. Owner-set from the first retained
+/// fixed-workload evidence; changing it requires a new ruling, not automatic
+/// recalibration to whichever candidate is under test.
+pub const MAX_FLIP_RUN_LENGTH: usize = 5;
+
+/// Components longer than this are reported separately from the longest component.
+pub const LONG_FLIP_RUN_THRESHOLD: usize = 4;
+
+/// At most this many components may exceed [`LONG_FLIP_RUN_THRESHOLD`] across one
+/// aggregate benchmark verdict. Together with [`MAX_FLIP_RUN_LENGTH`], this admits the
+/// measured scattered s08w600 edge noise but rejects repeated short contour shifts.
+/// Owner-set: changing it requires a new ruling, not candidate-driven recalibration.
+pub const MAX_LONG_FLIP_RUNS: usize = 1;
+
+/// Catastrophic-area backstop for qualifying flips across an aggregate benchmark.
+/// Geometry remains the primary gate, but no local connectivity can bound an arbitrarily
+/// sparse mass deletion. One percent is over 100x the retained s08w600 share (0.0098 %),
+/// while a hard 3x per-row ceiling prevents a damaged sparse tile hiding in clean rows.
+/// Owner-set: changing it requires a new ruling, not candidate-driven recalibration.
+pub const MAX_QUALIFYING_FLIP_FRACTION: f64 = 0.01;
+
+/// Aggregate amplitude and catastrophic-flip budgets may be this many times denser in
+/// one row. This hard limit binds in both waves and prevents one broken city/layer from
+/// hiding inside mostly quiet benchmark rows.
+pub const ROW_ANTI_DILUTION_MULTIPLIER: f64 = 3.0;
 
 /// Distinct byte differences an HM3 pair can show: cells are `0..=254` (255 is
 /// `NO_DATA`), so `|Δbyte|` lands in `0..=254`.
@@ -271,6 +294,11 @@ impl Band {
 pub struct Score {
     /// Every cell in the tile — the denominator for every rung budget.
     pub cells: usize,
+    /// Every reference cell that is actually painted, including one whose candidate
+    /// disappeared. Aggregate scoring uses this as its denominator; `loud.cells`
+    /// excludes a reference/candidate `NO_DATA` mismatch because no amplitude exists
+    /// to subtract.
+    pub reference_painted_cells: usize,
     /// Reference ≥30 dB: the painted band, where the ladder applies.
     pub loud: Band,
     /// Reference <30 dB: invisible, so only a flat cap applies.
@@ -286,6 +314,9 @@ pub struct Score {
     pub flips_newly_painted: usize,
     /// Audible content that vanished.
     pub flips_newly_silent: usize,
+    /// Sizes of all 8-connected qualifying-flip components, descending. Different
+    /// tile/layer rows remain separate components in aggregate scoring.
+    flip_component_sizes: Vec<usize>,
 }
 
 /// Is this cell painted on the map? `NO_DATA` is silence, and so is anything under the
@@ -300,11 +331,85 @@ pub fn allowance(cells: usize, fraction: f64) -> usize {
     (cells as f64 * fraction).round() as usize
 }
 
+fn qualifying_flip_components(mask: &[bool], width: usize) -> Vec<usize> {
+    assert!(width > 0, "flip grid width must be non-zero");
+    assert_eq!(
+        mask.len() % width,
+        0,
+        "flip grid must contain complete rows"
+    );
+    let height = mask.len() / width;
+    let mut seen = vec![false; mask.len()];
+    let mut stack = Vec::new();
+    let mut sizes = Vec::new();
+
+    for start in 0..mask.len() {
+        if !mask[start] || seen[start] {
+            continue;
+        }
+        seen[start] = true;
+        stack.push(start);
+        let mut size = 0usize;
+        while let Some(index) = stack.pop() {
+            size += 1;
+            let x = index % width;
+            let y = index / width;
+            let mut visit = |neighbour: usize| {
+                if mask[neighbour] && !seen[neighbour] {
+                    seen[neighbour] = true;
+                    stack.push(neighbour);
+                }
+            };
+            if x > 0 {
+                visit(index - 1);
+            }
+            if x + 1 < width {
+                visit(index + 1);
+            }
+            if y > 0 {
+                visit(index - width);
+            }
+            if y + 1 < height {
+                visit(index + width);
+            }
+            if x > 0 && y > 0 {
+                visit(index - width - 1);
+            }
+            if x + 1 < width && y > 0 {
+                visit(index - width + 1);
+            }
+            if x > 0 && y + 1 < height {
+                visit(index + width - 1);
+            }
+            if x + 1 < width && y + 1 < height {
+                visit(index + width + 1);
+            }
+        }
+        sizes.push(size);
+    }
+    sizes.sort_unstable_by(|a, b| b.cmp(a));
+    sizes
+}
+
 /// Score a candidate tile against a reference tile. Both are dense `u8 × 0.5 dB` HM3
 /// cell arrays of equal length.
 pub fn score(reference: &[u8], candidate: &[u8]) -> Score {
+    assert_eq!(
+        reference.len(),
+        candidate.len(),
+        "reference and candidate grids must be the same size"
+    );
+    // Production HM3 is always 512x512. Small synthetic unit-test grids remain useful
+    // and are treated as one row unless they contain complete HM3-width rows.
+    let width = if reference.len() >= TILE_PX && reference.len().is_multiple_of(TILE_PX) {
+        TILE_PX
+    } else {
+        reference.len().max(1)
+    };
+    let mut qualifying_flip_mask = vec![false; reference.len()];
     let mut s = Score {
         cells: reference.len(),
+        reference_painted_cells: 0,
         loud: Band::new(),
         quiet: Band::new(),
         presence_changed: 0,
@@ -312,12 +417,14 @@ pub fn score(reference: &[u8], candidate: &[u8]) -> Score {
         qualifying_flips: 0,
         flips_newly_painted: 0,
         flips_newly_silent: 0,
+        flip_component_sizes: Vec::new(),
     };
 
-    for (&r, &c) in reference.iter().zip(candidate.iter()) {
+    for (index, (&r, &c)) in reference.iter().zip(candidate.iter()).enumerate() {
         // Presence is judged at the PAINT floor, not at the NO_DATA sentinel: what a
         // visitor sees flip is colour appearing or disappearing, not a byte.
         let r_painted = is_painted(r);
+        s.reference_painted_cells += usize::from(r_painted);
         if r_painted != is_painted(c) {
             s.paint_edge_crossings += 1;
             // An absent reference is fully clear below the edge, so painting noise
@@ -331,6 +438,7 @@ pub fn score(reference: &[u8], candidate: &[u8]) -> Score {
                 || c == NO_DATA
                 || (dequantise_lden(r) - PAINT_FLOOR_DB).abs() >= FLIP_CLEARANCE_DB;
             if qualifies {
+                qualifying_flip_mask[index] = true;
                 s.qualifying_flips += 1;
                 if r_painted {
                     s.flips_newly_silent += 1;
@@ -354,6 +462,7 @@ pub fn score(reference: &[u8], candidate: &[u8]) -> Score {
             s.quiet.add(delta_bytes);
         }
     }
+    s.flip_component_sizes = qualifying_flip_components(&qualifying_flip_mask, width);
     s
 }
 
@@ -409,26 +518,60 @@ impl Score {
         ]
     }
 
-    /// The two gates that hold in BOTH waves and are visible in two tiles. (The third,
-    /// physics deleted rather than approximated, is a code-review gate.)
+    /// Number of disconnected qualifying-flip components under 8-connectivity.
+    pub fn flip_components(&self) -> usize {
+        self.flip_component_sizes.len()
+    }
+
+    /// Size of the largest qualifying-flip component, or zero when none exists.
+    pub fn longest_flip_run(&self) -> usize {
+        self.flip_component_sizes.first().copied().unwrap_or(0)
+    }
+
+    /// Number of qualifying-flip components strictly longer than `threshold`.
+    pub fn flip_runs_longer_than(&self, threshold: usize) -> usize {
+        self.flip_component_sizes
+            .iter()
+            .filter(|&&size| size > threshold)
+            .count()
+    }
+
+    /// `(component size, count)` in ascending size order, for durable evidence output.
+    pub fn flip_run_histogram(&self) -> Vec<(usize, usize)> {
+        let mut histogram = BTreeMap::new();
+        for &size in &self.flip_component_sizes {
+            *histogram.entry(size).or_insert(0usize) += 1;
+        }
+        histogram.into_iter().collect()
+    }
+
+    /// The primary flip gate is geometric. A separate loose count backstop below catches
+    /// catastrophic sparse deletion that no local-connectivity rule can bound.
+    pub fn flip_clusters_over_budget(&self) -> bool {
+        self.longest_flip_run() > MAX_FLIP_RUN_LENGTH
+            || self.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD) > MAX_LONG_FLIP_RUNS
+    }
+
+    pub fn flip_count_backstop_allowance(&self) -> usize {
+        allowance(self.reference_painted_cells, MAX_QUALIFYING_FLIP_FRACTION)
+    }
+
+    pub fn flip_count_backstop_over_budget(&self) -> bool {
+        self.qualifying_flips > self.flip_count_backstop_allowance()
+    }
+
+    /// Machine-checkable gates that hold in both waves. Physics deleted rather than
+    /// approximated remains the independent code-review gate.
     pub fn hard_gates_hold(&self, wave: Wave) -> bool {
-        !self.flips_over_budget() && !self.bias_over_budget(wave)
+        !self.flip_clusters_over_budget()
+            && !self.flip_count_backstop_over_budget()
+            && !self.bias_over_budget(wave)
     }
 
     /// Systematic lean beyond what this wave allows — see
     /// [`MAX_SIGNED_MEAN_DB_WAVE_TWO`] for why this is gated apart from the ladder.
     pub fn bias_over_budget(&self, wave: Wave) -> bool {
         self.loud.signed_mean_db().abs() > wave.max_signed_mean_db()
-    }
-
-    /// Cells that may flip across the paint edge before the tile fails — the same
-    /// 0.01 % the top amplitude rung gets.
-    pub fn flip_allowance(&self) -> usize {
-        allowance(self.cells, FLIP_MAX_FRACTION)
-    }
-
-    pub fn flips_over_budget(&self) -> bool {
-        self.qualifying_flips > self.flip_allowance()
     }
 
     /// Rung indices whose budget is exceeded.
@@ -444,6 +587,228 @@ impl Score {
 
     pub fn quiet_band_over(&self, wave: Wave) -> bool {
         self.quiet.max_abs_db > wave.quiet_band_max_db()
+    }
+
+    pub fn verdict(&self, wave: Wave) -> Verdict {
+        if !self.hard_gates_hold(wave) {
+            return Verdict::Fail;
+        }
+        let amplitude_clean =
+            self.amplitude_overshoots(wave).is_empty() && !self.quiet_band_over(wave);
+        if amplitude_clean {
+            Verdict::Pass
+        } else if wave.amplitude_is_binding() {
+            Verdict::Fail
+        } else {
+            Verdict::PassWithOvershoot
+        }
+    }
+}
+
+/// Painted-weighted verdict over a fixed benchmark's `(tile, layer)` rows.
+///
+/// Amplitude counts and the catastrophic flip-area allowance are summed over
+/// reference-painted cells. Each row also has a hard 3x rate ceiling in both waves, so
+/// quiet rows cannot dilute a locally broken result.
+/// Flip components never connect across rows; the global gate takes their longest
+/// component and their total number of components longer than four cells. Bias remains
+/// a per-row hard gate so opposite-signed rows cannot cancel one another.
+pub struct AggregateScore<'a> {
+    rows: &'a [Score],
+}
+
+impl<'a> AggregateScore<'a> {
+    pub fn new(rows: &'a [Score]) -> Self {
+        assert!(!rows.is_empty(), "aggregate score needs at least one row");
+        AggregateScore { rows }
+    }
+
+    pub fn rows(&self) -> &'a [Score] {
+        self.rows
+    }
+
+    pub fn painted_cells(&self) -> usize {
+        self.rows
+            .iter()
+            .map(|row| row.reference_painted_cells)
+            .sum()
+    }
+
+    pub fn count_rungs(&self, wave: Wave) -> [usize; 4] {
+        let mut counts = [0usize; 4];
+        for row in self.rows {
+            for (total, count) in counts.iter_mut().zip(row.count_rungs(wave)) {
+                *total += count;
+            }
+        }
+        counts
+    }
+
+    pub fn amplitude_overshoots(&self, wave: Wave) -> Vec<usize> {
+        let counts = self.count_rungs(wave);
+        wave.rungs()
+            .iter()
+            .enumerate()
+            .filter(|(i, rung)| counts[*i] > allowance(self.painted_cells(), rung.max_fraction))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    pub fn row_anti_dilution_allowance(&self, row: usize, rung: Rung) -> usize {
+        allowance(
+            self.rows[row].reference_painted_cells,
+            rung.max_fraction * ROW_ANTI_DILUTION_MULTIPLIER,
+        )
+    }
+
+    /// `(row index, rung index)` pairs that exceed the 3x local rate ceiling.
+    pub fn row_amplitude_overshoots(&self, wave: Wave) -> Vec<(usize, usize)> {
+        let rungs = wave.rungs();
+        let mut overshoots = Vec::new();
+        for (row_index, row) in self.rows.iter().enumerate() {
+            let counts = row.count_rungs(wave);
+            for (rung_index, rung) in rungs.iter().copied().enumerate() {
+                if counts[rung_index] > self.row_anti_dilution_allowance(row_index, rung) {
+                    overshoots.push((row_index, rung_index));
+                }
+            }
+        }
+        overshoots
+    }
+
+    pub fn loud_max_abs_db(&self) -> f64 {
+        self.rows
+            .iter()
+            .map(|row| row.loud.max_abs_db)
+            .fold(0.0, f64::max)
+    }
+
+    pub fn quiet_max_abs_db(&self) -> f64 {
+        self.rows
+            .iter()
+            .map(|row| row.quiet.max_abs_db)
+            .fold(0.0, f64::max)
+    }
+
+    pub fn quiet_band_over(&self, wave: Wave) -> bool {
+        self.rows.iter().any(|row| row.quiet_band_over(wave))
+    }
+
+    pub fn signed_mean_db(&self) -> f64 {
+        let cells: usize = self.rows.iter().map(|row| row.loud.cells).sum();
+        if cells == 0 {
+            0.0
+        } else {
+            self.rows
+                .iter()
+                .map(|row| row.loud.signed_sum_db)
+                .sum::<f64>()
+                / cells as f64
+        }
+    }
+
+    pub fn cand_louder_pct(&self) -> f64 {
+        let moved: usize = self.rows.iter().map(|row| row.loud.moved).sum();
+        if moved == 0 {
+            0.0
+        } else {
+            100.0
+                * self
+                    .rows
+                    .iter()
+                    .map(|row| row.loud.cand_louder)
+                    .sum::<usize>() as f64
+                / moved as f64
+        }
+    }
+
+    pub fn qualifying_flips(&self) -> usize {
+        self.rows.iter().map(|row| row.qualifying_flips).sum()
+    }
+
+    pub fn flips_newly_painted(&self) -> usize {
+        self.rows.iter().map(|row| row.flips_newly_painted).sum()
+    }
+
+    pub fn flips_newly_silent(&self) -> usize {
+        self.rows.iter().map(|row| row.flips_newly_silent).sum()
+    }
+
+    pub fn presence_changed(&self) -> usize {
+        self.rows.iter().map(|row| row.presence_changed).sum()
+    }
+
+    pub fn paint_edge_crossings(&self) -> usize {
+        self.rows.iter().map(|row| row.paint_edge_crossings).sum()
+    }
+
+    pub fn flip_components(&self) -> usize {
+        self.rows.iter().map(Score::flip_components).sum()
+    }
+
+    pub fn longest_flip_run(&self) -> usize {
+        self.rows
+            .iter()
+            .map(Score::longest_flip_run)
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn flip_runs_longer_than(&self, threshold: usize) -> usize {
+        self.rows
+            .iter()
+            .map(|row| row.flip_runs_longer_than(threshold))
+            .sum()
+    }
+
+    pub fn flip_run_histogram(&self) -> Vec<(usize, usize)> {
+        let mut histogram = BTreeMap::new();
+        for row in self.rows {
+            for (size, count) in row.flip_run_histogram() {
+                *histogram.entry(size).or_insert(0usize) += count;
+            }
+        }
+        histogram.into_iter().collect()
+    }
+
+    pub fn flip_clusters_over_budget(&self) -> bool {
+        self.longest_flip_run() > MAX_FLIP_RUN_LENGTH
+            || self.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD) > MAX_LONG_FLIP_RUNS
+    }
+
+    pub fn flip_count_backstop_allowance(&self) -> usize {
+        allowance(self.painted_cells(), MAX_QUALIFYING_FLIP_FRACTION)
+    }
+
+    pub fn flip_count_backstop_over_budget(&self) -> bool {
+        self.qualifying_flips() > self.flip_count_backstop_allowance()
+    }
+
+    pub fn row_flip_count_backstop_allowance(&self, row: usize) -> usize {
+        allowance(
+            self.rows[row].reference_painted_cells,
+            MAX_QUALIFYING_FLIP_FRACTION * ROW_ANTI_DILUTION_MULTIPLIER,
+        )
+    }
+
+    /// Row indices whose qualifying-flip area exceeds the hard 3x local ceiling.
+    pub fn row_flip_count_backstop_overshoots(&self) -> Vec<usize> {
+        self.rows
+            .iter()
+            .enumerate()
+            .filter(|(row_index, row)| {
+                row.qualifying_flips > self.row_flip_count_backstop_allowance(*row_index)
+            })
+            .map(|(row_index, _)| row_index)
+            .collect()
+    }
+
+    pub fn hard_gates_hold(&self, wave: Wave) -> bool {
+        !self.flip_clusters_over_budget()
+            && !self.flip_count_backstop_over_budget()
+            && self.row_flip_count_backstop_overshoots().is_empty()
+            && self.rows.iter().all(|row| !row.bias_over_budget(wave))
+            && self.row_amplitude_overshoots(wave).is_empty()
     }
 
     pub fn verdict(&self, wave: Wave) -> Verdict {
@@ -506,8 +871,9 @@ mod tests {
     }
 
     #[test]
-    fn the_worked_example_allowances_match_the_contract() {
-        // docs/dev/accuracy-contract.md §6: 262,144 cells → 52,429 / 2,621 / 26.
+    fn legacy_single_pair_allowances_remain_stable() {
+        // Single-pair diagnostic mode retains its whole-tile denominator; aggregate
+        // release mode is separately pinned below with a painted-cell denominator.
         assert_eq!(allowance(CELLS, 0.20), 52_429);
         assert_eq!(allowance(CELLS, 0.01), 2_621);
         assert_eq!(allowance(CELLS, 0.0001), 26);
@@ -629,8 +995,8 @@ mod tests {
         assert_eq!(s.paint_edge_crossings, 4);
         assert_eq!(s.qualifying_flips, 4);
         assert_eq!(s.flips_newly_silent, 4);
-        assert_eq!(s.verdict(Wave::One), Verdict::Fail, "hard in both waves");
-        assert_eq!(s.verdict(Wave::Two), Verdict::Fail);
+        assert_eq!(s.longest_flip_run(), 4);
+        assert!(!s.flip_clusters_over_budget());
 
         // Silence painted as noise: an absent reference is fully clear below the edge.
         let s = score(&[NO_DATA; 4], &[quantise_lden(45.0); 4]);
@@ -639,9 +1005,8 @@ mod tests {
         assert_eq!(s.flips_newly_painted, 4);
         assert_eq!(s.presence_changed, 4);
         assert_eq!(s.loud.cells, 0, "no reference value to compare against");
-        // A 4-cell tile's 0.01 % allowance rounds to 0, so 4 flips is over budget.
-        assert_eq!(s.flip_allowance(), 0);
-        assert_eq!(s.verdict(Wave::One), Verdict::Fail);
+        assert_eq!(s.longest_flip_run(), 4);
+        assert!(!s.flip_clusters_over_budget());
     }
 
     #[test]
@@ -671,39 +1036,145 @@ mod tests {
     }
 
     #[test]
-    fn flips_carry_the_top_rungs_allowance_in_both_waves() {
-        // Owner ruling 2026-08-10: a handful of flips is not a different CLASS of
-        // wrongness from a handful of large amplitude errors, so flips get the same
-        // 0.01 % the top rung gets. Zero tolerance made 3 flipped cells stricter than
-        // 26 cells ten times worse in amplitude.
-        let mut reference = reference_tile();
-        for cell in reference.iter_mut().take(64) {
-            // Exactly 1 dB clear of the edge, so a flip here qualifies.
-            *cell = quantise_lden(31.0);
-        }
-        let flip_n = |n: usize| {
+    fn flip_geometry_and_catastrophic_area_both_gate() {
+        let with_flips = |indices: &[usize]| {
+            let mut reference = reference_tile();
             let mut candidate = reference.clone();
-            for cell in candidate.iter_mut().take(n) {
-                *cell = quantise_lden(29.5);
+            for &index in indices {
+                reference[index] = quantise_lden(31.0);
+                candidate[index] = quantise_lden(29.5);
             }
-            candidate
+            score(&reference, &candidate)
         };
 
-        let s = score(&reference, &flip_n(26));
-        assert_eq!(s.qualifying_flips, 26);
-        assert_eq!(s.flip_allowance(), 26);
-        assert!(!s.flips_over_budget(), "at the allowance, not over it");
-        assert!(s.hard_gates_hold(Wave::Two));
+        // One hundred scattered flips exceed the former 26-cell count budget but are
+        // one-pixel components at the faint paint edge, so they pass the geometry gate.
+        let singletons: Vec<_> = (0..100).map(|i| i * 2).collect();
+        let s = with_flips(&singletons);
+        assert_eq!(s.qualifying_flips, 100);
+        assert_eq!(s.flip_components(), 100);
+        assert_eq!(s.longest_flip_run(), 1);
+        assert!(!s.flip_clusters_over_budget());
+        assert_eq!(s.flip_count_backstop_allowance(), 2_621);
+        assert!(!s.flip_count_backstop_over_budget());
         assert_eq!(s.verdict(Wave::Two), Verdict::Pass);
         assert_eq!(s.verdict(Wave::One), Verdict::Pass);
 
-        let s = score(&reference, &flip_n(27));
-        assert_eq!(s.qualifying_flips, 27);
-        assert!(s.flips_over_budget());
-        // Amplitudes are still spotless — only the flip budget fails the tile.
-        assert!(s.amplitude_overshoots(Wave::Two).is_empty());
+        // The measured calibration boundary itself: one five-cell run is admitted.
+        let s = with_flips(&[1_024, 1_025, 1_026, 1_027, 1_028]);
+        assert_eq!(s.longest_flip_run(), MAX_FLIP_RUN_LENGTH);
+        assert_eq!(s.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD), 1);
+        assert!(!s.flip_clusters_over_budget());
+
+        // One longer run, or two runs beyond four cells, is a displaced contour.
+        let s = with_flips(&[1_024, 1_025, 1_026, 1_027, 1_028, 1_029]);
+        assert!(s.flip_clusters_over_budget());
+        assert_eq!(s.verdict(Wave::One), Verdict::Fail);
+
+        let s = with_flips(&[
+            1_024, 1_025, 1_026, 1_027, 1_028, 2_048, 2_049, 2_050, 2_051, 2_052,
+        ]);
+        assert_eq!(s.longest_flip_run(), 5);
+        assert_eq!(s.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD), 2);
+        assert!(s.flip_clusters_over_budget());
+
+        // An oblique contour is connected too: 4-connectivity fragmented this exact
+        // staircase into singletons and let a visibly displaced diagonal edge pass.
+        let diagonal: Vec<_> = (0..200).map(|i| i * (TILE_PX + 1)).collect();
+        let s = with_flips(&diagonal);
+        assert_eq!(s.flip_components(), 1);
+        assert_eq!(s.longest_flip_run(), 200);
+        assert!(s.flip_clusters_over_budget());
+
+        // Even 8-connectivity cannot join an arbitrarily sparse lattice. The 1% area
+        // backstop catches catastrophic mass loss while remaining >100x above s08.
+        let lattice: Vec<_> = (0..TILE_PX)
+            .step_by(3)
+            .flat_map(|y| (0..TILE_PX).step_by(3).map(move |x| y * TILE_PX + x))
+            .collect();
+        let s = with_flips(&lattice);
+        assert_eq!(s.longest_flip_run(), 1);
+        assert!(s.qualifying_flips > s.flip_count_backstop_allowance());
+        assert!(s.flip_count_backstop_over_budget());
+        assert_eq!(s.verdict(Wave::One), Verdict::Fail);
+
+        // The review's half-tile checkerboard erasure is one diagonal component under
+        // 8-connectivity and also far beyond the catastrophic-area backstop.
+        let reference = reference_tile();
+        let mut checkerboard = reference.clone();
+        for y in 0..TILE_PX {
+            for x in 0..TILE_PX {
+                if (x + y) % 2 == 0 {
+                    checkerboard[y * TILE_PX + x] = NO_DATA;
+                }
+            }
+        }
+        let s = score(&reference, &checkerboard);
+        assert_eq!(s.qualifying_flips, CELLS / 2);
+        assert_eq!(s.flip_components(), 1);
+        assert_eq!(s.longest_flip_run(), CELLS / 2);
+        assert!(s.flip_count_backstop_over_budget());
         assert_eq!(s.verdict(Wave::Two), Verdict::Fail);
-        assert_eq!(s.verdict(Wave::One), Verdict::Fail, "hard in both waves");
+    }
+
+    #[test]
+    fn catastrophic_flip_backstops_have_exact_aggregate_and_row_boundaries() {
+        let lattice = (0..TILE_PX)
+            .step_by(3)
+            .flat_map(|y| (0..TILE_PX).step_by(3).map(move |x| y * TILE_PX + x))
+            .collect::<Vec<_>>();
+        let with_absent_flips = |count: usize| {
+            let reference = reference_tile();
+            let mut candidate = reference.clone();
+            for &index in lattice.iter().take(count) {
+                candidate[index] = NO_DATA;
+            }
+            score(&reference, &candidate)
+        };
+
+        // The aggregate 1% budget is inclusive and rounded to the nearest cell.
+        let at_aggregate_limit_rows = [with_absent_flips(2_621)];
+        let at_aggregate_limit = AggregateScore::new(&at_aggregate_limit_rows);
+        assert_eq!(at_aggregate_limit.longest_flip_run(), 1);
+        assert_eq!(at_aggregate_limit.flip_count_backstop_allowance(), 2_621);
+        assert!(!at_aggregate_limit.flip_count_backstop_over_budget());
+        assert_eq!(at_aggregate_limit.verdict(Wave::One), Verdict::Pass);
+
+        let over_aggregate_limit_rows = [with_absent_flips(2_622)];
+        let over_aggregate_limit = AggregateScore::new(&over_aggregate_limit_rows);
+        assert!(over_aggregate_limit.flip_count_backstop_over_budget());
+        assert_eq!(over_aggregate_limit.verdict(Wave::One), Verdict::Fail);
+
+        // Four equal painted rows dilute 7,865 sparse flips below the aggregate 1%
+        // allowance (10,486). The hard local 3% ceiling is 7,864, so exactly 7,864
+        // passes and the next cell fails. All flips remain isolated, proving that the
+        // quantity backstop — not component geometry — decides this attack.
+        let clean_reference = reference_tile();
+        let clean = score(&clean_reference, &clean_reference);
+        let rows_at = [
+            with_absent_flips(7_864),
+            clean.clone(),
+            clean.clone(),
+            clean.clone(),
+        ];
+        let aggregate_at = AggregateScore::new(&rows_at);
+        assert_eq!(aggregate_at.flip_count_backstop_allowance(), 10_486);
+        assert_eq!(aggregate_at.row_flip_count_backstop_allowance(0), 7_864);
+        assert!(aggregate_at.row_flip_count_backstop_overshoots().is_empty());
+        assert_eq!(aggregate_at.verdict(Wave::One), Verdict::Pass);
+
+        let rows_over = [
+            with_absent_flips(7_865),
+            clean.clone(),
+            clean.clone(),
+            clean,
+        ];
+        let aggregate_over = AggregateScore::new(&rows_over);
+        assert!(!aggregate_over.flip_count_backstop_over_budget());
+        assert_eq!(aggregate_over.longest_flip_run(), 1);
+        assert_eq!(aggregate_over.row_flip_count_backstop_overshoots(), vec![0]);
+        assert_eq!(aggregate_over.verdict(Wave::Two), Verdict::Fail);
+        assert_eq!(aggregate_over.verdict(Wave::One), Verdict::Fail);
     }
 
     #[test]
@@ -762,6 +1233,104 @@ mod tests {
             Verdict::Fail,
             "bias binds in the draft"
         );
+    }
+
+    #[test]
+    fn aggregate_uses_painted_cells_and_a_hard_three_times_row_limit() {
+        let large_reference = vec![quantise_lden(60.0); 900];
+        let large = score(&large_reference, &large_reference);
+
+        let small_reference = vec![quantise_lden(60.0); 100];
+        let mut small_candidate = small_reference.clone();
+        // Seventy cells exceed wave 2's 0.5 dB baseline, split in sign so this tests
+        // amplitude accounting rather than the independent bias gate.
+        for cell in small_candidate.iter_mut().take(35) {
+            *cell = quantise_lden(61.0);
+        }
+        for cell in small_candidate.iter_mut().skip(35).take(35) {
+            *cell = quantise_lden(59.0);
+        }
+        let small = score(&small_reference, &small_candidate);
+        let rows = [large, small];
+        let aggregate = AggregateScore::new(&rows);
+
+        assert_eq!(aggregate.painted_cells(), 1_000);
+        assert_eq!(aggregate.count_rungs(Wave::Two)[0], 70);
+        assert!(
+            aggregate.amplitude_overshoots(Wave::Two).is_empty(),
+            "70/1000 is inside the aggregate 20% allowance"
+        );
+        assert_eq!(
+            aggregate.row_anti_dilution_allowance(1, Wave::Two.rungs()[0]),
+            60
+        );
+        assert_eq!(aggregate.row_amplitude_overshoots(Wave::Two), vec![(1, 0)]);
+        assert_eq!(aggregate.verdict(Wave::Two), Verdict::Fail);
+
+        let mut draft_candidate = small_reference.clone();
+        for cell in draft_candidate.iter_mut().take(35) {
+            *cell = quantise_lden(62.0);
+        }
+        for cell in draft_candidate.iter_mut().skip(35).take(35) {
+            *cell = quantise_lden(58.0);
+        }
+        let draft_small = score(&small_reference, &draft_candidate);
+        let draft_rows = [rows[0].clone(), draft_small];
+        let draft_aggregate = AggregateScore::new(&draft_rows);
+        assert_eq!(
+            draft_aggregate.row_amplitude_overshoots(Wave::One),
+            vec![(1, 0)]
+        );
+        assert_eq!(
+            draft_aggregate.verdict(Wave::One),
+            Verdict::Fail,
+            "the mandatory 3x anti-dilution limit binds in both waves"
+        );
+
+        // The owner explicitly kept nearest-cell rounding at zero for a tiny row's
+        // Wave-1 tail: one physically large error remains an investigable hard FAIL.
+        let tiny_reference = vec![quantise_lden(60.0); 1_666];
+        let mut tiny_candidate = tiny_reference.clone();
+        tiny_candidate[0] = quantise_lden(73.0);
+        let tiny = score(&tiny_reference, &tiny_candidate);
+        let tiny_rows = [rows[0].clone(), tiny];
+        let tiny_aggregate = AggregateScore::new(&tiny_rows);
+        assert_eq!(
+            tiny_aggregate.row_anti_dilution_allowance(1, Wave::One.rungs()[3]),
+            0
+        );
+        assert_eq!(
+            tiny_aggregate.row_amplitude_overshoots(Wave::One),
+            vec![(1, 2), (1, 3)]
+        );
+        assert_eq!(tiny_aggregate.verdict(Wave::One), Verdict::Fail);
+
+        // NO_DATA is transparent, not painted denominator ballast.
+        let reference = [quantise_lden(60.0), quantise_lden(31.0), NO_DATA, NO_DATA];
+        let silent_row = score(&reference, &reference);
+        let rows = [silent_row];
+        assert_eq!(AggregateScore::new(&rows).painted_cells(), 2);
+    }
+
+    #[test]
+    fn aggregate_flip_components_remain_separate_between_rows() {
+        let row_with_run = |start: usize| {
+            let mut reference = reference_tile();
+            let mut candidate = reference.clone();
+            for index in start..start + 5 {
+                reference[index] = quantise_lden(31.0);
+                candidate[index] = quantise_lden(29.5);
+            }
+            score(&reference, &candidate)
+        };
+        let rows = [row_with_run(1_024), row_with_run(1_024)];
+        let aggregate = AggregateScore::new(&rows);
+        assert_eq!(aggregate.qualifying_flips(), 10);
+        assert_eq!(aggregate.flip_components(), 2);
+        assert_eq!(aggregate.longest_flip_run(), 5);
+        assert_eq!(aggregate.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD), 2);
+        assert!(aggregate.flip_clusters_over_budget());
+        assert_eq!(aggregate.verdict(Wave::One), Verdict::Fail);
     }
 
     #[test]
