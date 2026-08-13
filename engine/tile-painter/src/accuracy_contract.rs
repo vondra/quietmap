@@ -1,19 +1,18 @@
 //! The accuracy contract of `docs/dev/accuracy-contract.md` (owner, 2026-08-10) as a
-//! scorer: two HM3 tiles in, a PASS/FAIL verdict out, so a measurement produces a
-//! verdict instead of a table someone has to interpret.
+//! scorer: the complete ordered HM3 benchmark in, one PASS/FAIL verdict out. A single
+//! pair remains diagnostic and cannot qualify a release.
 //!
 //! Error is `candidate − reference` per cell, banded by the REFERENCE cell's level —
 //! not the candidate's and not `max(ref, cand)`; that ambiguity is closed. The rungs
 //! are CUMULATIVE (each counts every cell above its threshold, so they nest) and their
-//! legacy single-pair budgets are fractions of the WHOLE tile. Release decisions use
-//! [`AggregateScore`], whose denominator is the reference's PAINTED cells across the
-//! benchmark, with hard 3x per-row anti-dilution limits on amplitude and the
-//! catastrophic flip-area backstop.
+//! legacy single-pair budgets are fractions of the WHOLE tile. Release amplitude and
+//! presence allowances use the reference's PAINTED cells across the whole benchmark.
+//! Signed bias averages the subset with a numeric candidate value; `NO_DATA` has no dB
+//! delta and is charged independently to the presence gate.
 //!
-//! Wave 1's aggregate amplitude rungs and quiet-band cap are GUIDANCE — an overshoot is
-//! reported, not failed. The 3x per-row anti-dilution limit remains hard, as do clustered
-//! or catastrophic-area presence flips and systematic one-sided bias. Physics deleted
-//! rather than approximated is the separate code-review gate.
+//! Only benchmark-wide aggregate amplitude, presence-change area, and signed bias gate
+//! either wave. Every per-row quantity and all component geometry remain diagnostics;
+//! physics deleted rather than approximated is the separate code-review gate.
 
 use std::collections::BTreeMap;
 
@@ -31,8 +30,8 @@ pub const PAINT_FLOOR_DB: f64 = 30.0;
 /// zero-flip gate without this clearance fails the unmodified kernel itself.
 pub const FLIP_CLEARANCE_DB: f64 = 1.0;
 
-/// Hard bound on systematic one-sided bias (owner, 2026-08-10), measured as the signed
-/// mean over PAINTED cells — reference ≥30 dB — in one tile.
+/// Hard bound on systematic one-sided bias (owner, 2026-08-12), measured as the signed
+/// mean over PAINTED cells — reference ≥30 dB — across the full benchmark.
 ///
 /// Why bias needs a bound of its OWN, separate from the amplitude ladder: a uniform dB
 /// offset passes through energy averaging **unchanged**. `build-pyramid` averages
@@ -41,44 +40,35 @@ pub const FLIP_CLEARANCE_DB: f64 = 1.0;
 /// overview zoom at full strength, while the ladder — which only ever sees a small
 /// per-cell magnitude — cannot detect it. Reach, not size, is what makes it dangerous.
 ///
-/// At 0.25 dB (wave 2) the offset can move a cell by at most ONE storage step, and only
-/// cells already within 0.25 dB of a byte boundary: a one-step shade change on a
-/// minority of cells at every zoom, which reads as a slight uniform tint and never as
-/// structure. At 0.5 dB (wave 1) it can move EVERY cell by one step — the most a draft
-/// wave may cost a viewer.
+/// At 0.5 dB the offset can move every cell by one storage step — the most either
+/// heatmap wave may cost a viewer.
 ///
 /// These are CHOSEN bounds calibrated to the storage quantum, not derived from a
 /// perception study, and the owner may move them. What is not negotiable is that a bias
 /// bound exists and is reported for every configuration.
-pub const MAX_SIGNED_MEAN_DB_WAVE_TWO: f64 = 0.25;
-/// See [`MAX_SIGNED_MEAN_DB_WAVE_TWO`] — the draft wave's looser bound.
-pub const MAX_SIGNED_MEAN_DB_WAVE_ONE: f64 = 0.5;
+pub const MAX_AGGREGATE_SIGNED_MEAN_DB: f64 = 0.5;
 
-/// A qualifying flip component longer than this many 8-connected cells is a visible
-/// contour displacement and fails either wave. Owner-set from the first retained
-/// fixed-workload evidence; changing it requires a new ruling, not automatic
-/// recalibration to whichever candidate is under test.
-pub const MAX_FLIP_RUN_LENGTH: usize = 5;
+/// Rows above this qualifying presence-change share are rendered for human inspection
+/// before paint. This is a diagnostic trigger, never a numeric release gate.
+pub const ROW_EYEBALL_PRESENCE_FRACTION: f64 = 0.05;
 
-/// Components longer than this are reported separately from the longest component.
+/// Rows above this absolute signed bias are rendered for human inspection before paint.
+/// This is a diagnostic trigger, never a numeric release gate.
+pub const ROW_EYEBALL_SIGNED_MEAN_DB: f64 = 2.0;
+
+/// Components longer than this are reported as a diagnostic alongside the full
+/// histogram. Geometry never gates: the visitor has no reference overlay against which
+/// a one-pixel contour displacement is visible (owner ruling, 2026-08-12).
 pub const LONG_FLIP_RUN_THRESHOLD: usize = 4;
 
-/// At most this many components may exceed [`LONG_FLIP_RUN_THRESHOLD`] across one
-/// aggregate benchmark verdict. Together with [`MAX_FLIP_RUN_LENGTH`], this admits the
-/// measured scattered s08w600 edge noise but rejects repeated short contour shifts.
-/// Owner-set: changing it requires a new ruling, not candidate-driven recalibration.
-pub const MAX_LONG_FLIP_RUNS: usize = 1;
-
-/// Catastrophic-area backstop for qualifying flips across an aggregate benchmark.
-/// Geometry remains the primary gate, but no local connectivity can bound an arbitrarily
-/// sparse mass deletion. One percent is over 100x the retained s08w600 share (0.0098 %),
-/// while a hard 3x per-row ceiling prevents a damaged sparse tile hiding in clean rows.
+/// Area backstop for qualifying flips across an aggregate benchmark. Flip geometry and
+/// every per-row share are diagnostic only; this benchmark-wide one-percent cap is the
+/// artifact/mass-deletion gate.
 /// Owner-set: changing it requires a new ruling, not candidate-driven recalibration.
 pub const MAX_QUALIFYING_FLIP_FRACTION: f64 = 0.01;
 
-/// Aggregate amplitude and catastrophic-flip budgets may be this many times denser in
-/// one row. This hard limit binds in both waves and prevents one broken city/layer from
-/// hiding inside mostly quiet benchmark rows.
+/// Diagnostic per-row comparison against the aggregate amplitude and presence rates.
+/// It no longer gates either wave; retained so reviewers can see localized debt.
 pub const ROW_ANTI_DILUTION_MULTIPLIER: f64 = 3.0;
 
 /// Distinct byte differences an HM3 pair can show: cells are `0..=254` (255 is
@@ -96,9 +86,9 @@ pub struct Rung {
 /// Which of the two heatmap contracts to score against.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Wave {
-    /// Draft z12: double wave 2's amplitudes, tiers are guidance.
+    /// Draft z12: double wave 2's amplitudes.
     One,
-    /// Accurate (+ z13 city tier): the popup's physics, every tier hard.
+    /// Accurate z13: the popup's physics, every aggregate painted-cell tier hard.
     Two,
 }
 
@@ -118,7 +108,17 @@ impl Wave {
         }
     }
 
-    /// Flat cap on the invisible band, where nothing is painted.
+    /// Exact `(tile, layer)` rows in the fixed complete benchmark for this wave.
+    /// qexp separately attests the ordered key set; this count prevents a probe or
+    /// historical subset from being mislabeled as a release verdict.
+    pub fn benchmark_rows(self) -> usize {
+        match self {
+            Wave::One => 250,
+            Wave::Two => 980,
+        }
+    }
+
+    /// Former flat cap on the invisible band, retained as a diagnostic.
     pub fn quiet_band_max_db(self) -> f64 {
         match self {
             Wave::One => 20.0,
@@ -147,21 +147,6 @@ impl Wave {
                 rung(6.0, 0.0001),
                 rung(12.0, 0.0001),
             ],
-        }
-    }
-
-    /// Wave 2 fails on amplitude; wave 1 reports the overshoot and passes.
-    pub fn amplitude_is_binding(self) -> bool {
-        self == Wave::Two
-    }
-
-    /// Bound on the signed mean over painted cells. Unlike the amplitude tiers this
-    /// does NOT soften for the draft — it widens to exactly one storage step, and then
-    /// binds.
-    pub fn max_signed_mean_db(self) -> f64 {
-        match self {
-            Wave::One => MAX_SIGNED_MEAN_DB_WAVE_ONE,
-            Wave::Two => MAX_SIGNED_MEAN_DB_WAVE_TWO,
         }
     }
 }
@@ -197,9 +182,6 @@ impl Scoring {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
     Pass,
-    /// Wave 1 only: amplitude over a rung, which is guidance, not grounds for
-    /// rejection.
-    PassWithOvershoot,
     Fail,
 }
 
@@ -207,7 +189,6 @@ impl Verdict {
     pub fn label(self) -> &'static str {
         match self {
             Verdict::Pass => "PASS",
-            Verdict::PassWithOvershoot => "PASS_WITH_OVERSHOOT",
             Verdict::Fail => "FAIL",
         }
     }
@@ -436,7 +417,8 @@ pub fn score(reference: &[u8], candidate: &[u8]) -> Score {
             // NO_DATA erases painted content for free.
             let qualifies = r == NO_DATA
                 || c == NO_DATA
-                || (dequantise_lden(r) - PAINT_FLOOR_DB).abs() >= FLIP_CLEARANCE_DB;
+                || (dequantise_lden(r) - PAINT_FLOOR_DB).abs() >= FLIP_CLEARANCE_DB
+                || (dequantise_lden(c) - PAINT_FLOOR_DB).abs() >= FLIP_CLEARANCE_DB;
             if qualifies {
                 qualifying_flip_mask[index] = true;
                 s.qualifying_flips += 1;
@@ -545,33 +527,12 @@ impl Score {
         histogram.into_iter().collect()
     }
 
-    /// The primary flip gate is geometric. A separate loose count backstop below catches
-    /// catastrophic sparse deletion that no local-connectivity rule can bound.
-    pub fn flip_clusters_over_budget(&self) -> bool {
-        self.longest_flip_run() > MAX_FLIP_RUN_LENGTH
-            || self.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD) > MAX_LONG_FLIP_RUNS
-    }
-
     pub fn flip_count_backstop_allowance(&self) -> usize {
         allowance(self.reference_painted_cells, MAX_QUALIFYING_FLIP_FRACTION)
     }
 
     pub fn flip_count_backstop_over_budget(&self) -> bool {
         self.qualifying_flips > self.flip_count_backstop_allowance()
-    }
-
-    /// Machine-checkable gates that hold in both waves. Physics deleted rather than
-    /// approximated remains the independent code-review gate.
-    pub fn hard_gates_hold(&self, wave: Wave) -> bool {
-        !self.flip_clusters_over_budget()
-            && !self.flip_count_backstop_over_budget()
-            && !self.bias_over_budget(wave)
-    }
-
-    /// Systematic lean beyond what this wave allows — see
-    /// [`MAX_SIGNED_MEAN_DB_WAVE_TWO`] for why this is gated apart from the ladder.
-    pub fn bias_over_budget(&self, wave: Wave) -> bool {
-        self.loud.signed_mean_db().abs() > wave.max_signed_mean_db()
     }
 
     /// Rung indices whose budget is exceeded.
@@ -588,31 +549,15 @@ impl Score {
     pub fn quiet_band_over(&self, wave: Wave) -> bool {
         self.quiet.max_abs_db > wave.quiet_band_max_db()
     }
-
-    pub fn verdict(&self, wave: Wave) -> Verdict {
-        if !self.hard_gates_hold(wave) {
-            return Verdict::Fail;
-        }
-        let amplitude_clean =
-            self.amplitude_overshoots(wave).is_empty() && !self.quiet_band_over(wave);
-        if amplitude_clean {
-            Verdict::Pass
-        } else if wave.amplitude_is_binding() {
-            Verdict::Fail
-        } else {
-            Verdict::PassWithOvershoot
-        }
-    }
 }
 
 /// Painted-weighted verdict over a fixed benchmark's `(tile, layer)` rows.
 ///
-/// Amplitude counts and the catastrophic flip-area allowance are summed over
-/// reference-painted cells. Each row also has a hard 3x rate ceiling in both waves, so
-/// quiet rows cannot dilute a locally broken result.
-/// Flip components never connect across rows; the global gate takes their longest
-/// component and their total number of components longer than four cells. Bias remains
-/// a per-row hard gate so opposite-signed rows cannot cancel one another.
+/// Amplitude counts and qualifying presence-change area are summed against all
+/// reference-painted cells. Signed bias is summed over numerically comparable painted
+/// cells because `NO_DATA` has no dB delta; the presence gate accounts for those cells.
+/// All three gate only after the entire benchmark is combined. Every per-row rate and
+/// flip component is a printed diagnostic. Components never connect across rows.
 pub struct AggregateScore<'a> {
     rows: &'a [Score],
 }
@@ -661,7 +606,7 @@ impl<'a> AggregateScore<'a> {
         )
     }
 
-    /// `(row index, rung index)` pairs that exceed the 3x local rate ceiling.
+    /// `(row index, rung index)` pairs above the former 3x local diagnostic reference.
     pub fn row_amplitude_overshoots(&self, wave: Wave) -> Vec<(usize, usize)> {
         let rungs = wave.rungs();
         let mut overshoots = Vec::new();
@@ -771,11 +716,6 @@ impl<'a> AggregateScore<'a> {
         histogram.into_iter().collect()
     }
 
-    pub fn flip_clusters_over_budget(&self) -> bool {
-        self.longest_flip_run() > MAX_FLIP_RUN_LENGTH
-            || self.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD) > MAX_LONG_FLIP_RUNS
-    }
-
     pub fn flip_count_backstop_allowance(&self) -> usize {
         allowance(self.painted_cells(), MAX_QUALIFYING_FLIP_FRACTION)
     }
@@ -791,7 +731,7 @@ impl<'a> AggregateScore<'a> {
         )
     }
 
-    /// Row indices whose qualifying-flip area exceeds the hard 3x local ceiling.
+    /// Row indices whose qualifying-flip area exceeds the former 3x diagnostic reference.
     pub fn row_flip_count_backstop_overshoots(&self) -> Vec<usize> {
         self.rows
             .iter()
@@ -803,27 +743,56 @@ impl<'a> AggregateScore<'a> {
             .collect()
     }
 
-    pub fn hard_gates_hold(&self, wave: Wave) -> bool {
-        !self.flip_clusters_over_budget()
-            && !self.flip_count_backstop_over_budget()
-            && self.row_flip_count_backstop_overshoots().is_empty()
-            && self.rows.iter().all(|row| !row.bias_over_budget(wave))
-            && self.row_amplitude_overshoots(wave).is_empty()
+    pub fn row_qualifying_flip_fraction(&self, row: usize) -> f64 {
+        let painted = self.rows[row].reference_painted_cells;
+        if painted == 0 {
+            if self.rows[row].qualifying_flips == 0 {
+                0.0
+            } else {
+                f64::INFINITY
+            }
+        } else {
+            self.rows[row].qualifying_flips as f64 / painted as f64
+        }
     }
 
-    pub fn verdict(&self, wave: Wave) -> Verdict {
-        if !self.hard_gates_hold(wave) {
-            return Verdict::Fail;
-        }
-        let amplitude_clean =
-            self.amplitude_overshoots(wave).is_empty() && !self.quiet_band_over(wave);
-        if amplitude_clean {
+    pub fn row_presence_eyeball_rows(&self) -> Vec<usize> {
+        (0..self.rows.len())
+            .filter(|&row| self.row_qualifying_flip_fraction(row) > ROW_EYEBALL_PRESENCE_FRACTION)
+            .collect()
+    }
+
+    pub fn row_bias_eyeball_rows(&self) -> Vec<usize> {
+        self.rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.loud.signed_mean_db().abs() > ROW_EYEBALL_SIGNED_MEAN_DB)
+            .map(|(row, _)| row)
+            .collect()
+    }
+
+    pub fn bias_over_budget(&self) -> bool {
+        self.signed_mean_db().abs() > MAX_AGGREGATE_SIGNED_MEAN_DB
+    }
+
+    fn hard_gates_hold(&self, wave: Wave) -> bool {
+        !self.flip_count_backstop_over_budget()
+            && self.amplitude_overshoots(wave).is_empty()
+            && !self.bias_over_budget()
+    }
+
+    fn computed_verdict(&self, wave: Wave) -> Verdict {
+        if self.hard_gates_hold(wave) {
             Verdict::Pass
-        } else if wave.amplitude_is_binding() {
-            Verdict::Fail
         } else {
-            Verdict::PassWithOvershoot
+            Verdict::Fail
         }
+    }
+
+    /// Release verdict only for the fixed complete benchmark row count. Exact ordered
+    /// key identity is qexp's separate responsibility.
+    pub fn verdict(&self, wave: Wave) -> Option<Verdict> {
+        (self.rows.len() == wave.benchmark_rows()).then(|| self.computed_verdict(wave))
     }
 }
 
@@ -870,6 +839,10 @@ mod tests {
             .expect("rung exists")
     }
 
+    fn aggregate_verdict(row: &Score, wave: Wave) -> Verdict {
+        AggregateScore::new(std::slice::from_ref(row)).computed_verdict(wave)
+    }
+
     #[test]
     fn legacy_single_pair_allowances_remain_stable() {
         // Single-pair diagnostic mode retains its whole-tile denominator; aggregate
@@ -877,6 +850,33 @@ mod tests {
         assert_eq!(allowance(CELLS, 0.20), 52_429);
         assert_eq!(allowance(CELLS, 0.01), 2_621);
         assert_eq!(allowance(CELLS, 0.0001), 26);
+        assert_eq!(Wave::One.benchmark_rows(), 250);
+        assert_eq!(Wave::Two.benchmark_rows(), 980);
+
+        let reference = reference_tile();
+        let clean = score(&reference, &reference);
+        let probe = [clean.clone()];
+        assert_eq!(AggregateScore::new(&probe).verdict(Wave::One), None);
+        let wave_one = vec![clean.clone(); Wave::One.benchmark_rows()];
+        assert_eq!(
+            AggregateScore::new(&wave_one).verdict(Wave::One),
+            Some(Verdict::Pass)
+        );
+        assert_eq!(
+            AggregateScore::new(&wave_one).verdict(Wave::Two),
+            None,
+            "a complete Wave-1 workset is only diagnostic under the Wave-2 ladder"
+        );
+        let wave_two = vec![clean; Wave::Two.benchmark_rows()];
+        assert_eq!(
+            AggregateScore::new(&wave_two).verdict(Wave::Two),
+            Some(Verdict::Pass)
+        );
+        assert_eq!(
+            AggregateScore::new(&wave_two).verdict(Wave::One),
+            None,
+            "a complete Wave-2 workset is only diagnostic under the Wave-1 ladder"
+        );
     }
 
     #[test]
@@ -885,8 +885,8 @@ mod tests {
         let s = score(&reference, &reference);
         assert_eq!(s.loud.cells, CELLS);
         assert_eq!(s.qualifying_flips, 0);
-        assert_eq!(s.verdict(Wave::Two), Verdict::Pass);
-        assert_eq!(s.verdict(Wave::One), Verdict::Pass);
+        assert_eq!(aggregate_verdict(&s, Wave::Two), Verdict::Pass);
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Pass);
     }
 
     #[test]
@@ -899,7 +899,7 @@ mod tests {
         assert_eq!(s.loud.max_abs_db, 0.5);
         assert_eq!(s.loud.cells_over(0.5), 0, "0.5 dB does not EXCEED baseline");
         assert_eq!(s.loud.moved, CELLS);
-        assert_eq!(s.verdict(Wave::Two), Verdict::Pass);
+        assert_eq!(aggregate_verdict(&s, Wave::Two), Verdict::Pass);
     }
 
     #[test]
@@ -916,13 +916,13 @@ mod tests {
                 s.amplitude_overshoots(Wave::Two).is_empty(),
                 "{allowed} cells over {over_db} dB is exactly the budget"
             );
-            assert_eq!(s.verdict(Wave::Two), Verdict::Pass);
+            assert_eq!(aggregate_verdict(&s, Wave::Two), Verdict::Pass);
 
             // One cell more, and wave 2 fails on that rung and no other.
             let s = score(&reference, &sign_split_over(allowed + 1, over_db));
             assert_eq!(s.loud.cells_over(over_db), allowed + 1);
             assert_eq!(s.amplitude_overshoots(Wave::Two), vec![index]);
-            assert_eq!(s.verdict(Wave::Two), Verdict::Fail);
+            assert_eq!(aggregate_verdict(&s, Wave::Two), Verdict::Fail);
         }
     }
 
@@ -934,16 +934,20 @@ mod tests {
         let s = score(&reference, &candidate_with(&[(1, 7.0)]));
         assert_eq!(s.loud.cells_over(6.0), 1);
         assert_eq!(s.amplitude_overshoots(Wave::Two), vec![3]);
-        assert_eq!(s.verdict(Wave::Two), Verdict::Fail, "6 dB ceiling is hard");
+        assert_eq!(
+            aggregate_verdict(&s, Wave::Two),
+            Verdict::Fail,
+            "6 dB ceiling is hard"
+        );
         assert_eq!(s.loud.cells_over(12.0), 0);
-        assert_eq!(s.verdict(Wave::One), Verdict::Pass);
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Pass);
 
         // Wave 1 tolerates an unbounded tail — but only 26 cells of it.
         let s = score(&reference, &candidate_with(&[(26, 40.0)]));
         assert_eq!(s.loud.cells_over(12.0), 26);
         assert!(s.loud.max_abs_db > 12.0, "no upper bound in wave 1");
         assert!(s.amplitude_overshoots(Wave::One).is_empty());
-        assert_eq!(s.verdict(Wave::One), Verdict::Pass);
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Pass);
 
         // The 27th trips it. Both top rungs move together: >12 dB is NESTED inside
         // >6 dB and they share the 0.01 % allowance, so the count above 12 dB can
@@ -952,24 +956,22 @@ mod tests {
         let s = score(&reference, &candidate_with(&[(27, 40.0)]));
         assert_eq!(s.loud.cells_over(12.0), 27);
         assert_eq!(s.amplitude_overshoots(Wave::One), vec![2, 3]);
-        assert_eq!(s.verdict(Wave::One), Verdict::PassWithOvershoot);
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Fail);
     }
 
     #[test]
-    fn wave_one_amplitude_overshoot_reports_but_does_not_reject() {
-        // In the draft wave speed wins and wave 2 repairs the accuracy, so a fast
-        // configuration is not discarded over a marginal amplitude overshoot.
+    fn wave_one_aggregate_amplitude_overshoot_rejects() {
+        // The owner made both wave ladders binding over the complete benchmark.
         let reference = reference_tile();
         let over_first_rung = allowance(CELLS, 0.20) + 10_000;
         let s = score(&reference, &sign_split_over(over_first_rung, 1.0));
         assert_eq!(s.amplitude_overshoots(Wave::One), vec![0]);
-        assert!(s.hard_gates_hold(Wave::Two));
-        assert_eq!(s.verdict(Wave::One), Verdict::PassWithOvershoot);
-        assert_eq!(s.verdict(Wave::Two), Verdict::Fail);
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Fail);
+        assert_eq!(aggregate_verdict(&s, Wave::Two), Verdict::Fail);
     }
 
     #[test]
-    fn a_flip_counts_only_when_the_reference_is_clear_of_the_edge() {
+    fn a_numeric_crossing_is_exempt_only_inside_the_rounding_band() {
         // NO_DATA and a subfloor byte are both transparent to the visitor. Their
         // storage representation differs, but the visible paint edge does not.
         let s = score(&[NO_DATA; 4], &[quantise_lden(29.5); 4]);
@@ -990,13 +992,30 @@ mod tests {
         );
         assert_eq!(s.qualifying_flips, 0, "edge noise is not a flip");
 
+        // The rounding exemption requires BOTH numeric values to remain strictly
+        // inside (29, 31). A large change cannot hide behind a near-edge reference.
+        let s = score(&[quantise_lden(29.5); 4], &[quantise_lden(60.0); 4]);
+        assert_eq!(s.qualifying_flips, 4);
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Fail);
+
+        let s = score(&[quantise_lden(29.5); 4], &[quantise_lden(31.0); 4]);
+        assert_eq!(s.qualifying_flips, 4, "the candidate boundary is inclusive");
+
+        let s = score(&[quantise_lden(30.5); 4], &[quantise_lden(10.0); 4]);
+        assert_eq!(s.qualifying_flips, 4);
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Fail);
+
         // Reference at 31 dB is exactly 1 dB clear: audible content vanishing.
         let s = score(&[quantise_lden(31.0); 4], &[quantise_lden(29.5); 4]);
         assert_eq!(s.paint_edge_crossings, 4);
         assert_eq!(s.qualifying_flips, 4);
         assert_eq!(s.flips_newly_silent, 4);
         assert_eq!(s.longest_flip_run(), 4);
-        assert!(!s.flip_clusters_over_budget());
+        assert_eq!(
+            aggregate_verdict(&s, Wave::One),
+            Verdict::Fail,
+            "the aggregate presence area, not its component length, fails"
+        );
 
         // Silence painted as noise: an absent reference is fully clear below the edge.
         let s = score(&[NO_DATA; 4], &[quantise_lden(45.0); 4]);
@@ -1006,7 +1025,11 @@ mod tests {
         assert_eq!(s.presence_changed, 4);
         assert_eq!(s.loud.cells, 0, "no reference value to compare against");
         assert_eq!(s.longest_flip_run(), 4);
-        assert!(!s.flip_clusters_over_budget());
+        assert_eq!(
+            aggregate_verdict(&s, Wave::One),
+            Verdict::Fail,
+            "zero painted denominator makes every structural appearance exceed the area cap"
+        );
     }
 
     #[test]
@@ -1021,14 +1044,14 @@ mod tests {
         assert_eq!(s.qualifying_flips, CELLS, "a vanished tile is not free");
         assert_eq!(s.flips_newly_silent, CELLS);
         assert_eq!(s.loud.cells, 0, "nothing to compare — hence the flip gate");
-        assert_eq!(s.verdict(Wave::Two), Verdict::Fail);
-        assert_eq!(s.verdict(Wave::One), Verdict::Fail);
+        assert_eq!(aggregate_verdict(&s, Wave::Two), Verdict::Fail);
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Fail);
 
         // Same in the other direction: silence filled in with near-edge paint.
         let s = score(&[NO_DATA; CELLS], &vec![quantise_lden(30.5); CELLS]);
         assert_eq!(s.qualifying_flips, CELLS);
         assert_eq!(s.flips_newly_painted, CELLS);
-        assert_eq!(s.verdict(Wave::One), Verdict::Fail);
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Fail);
 
         // But a genuine rounding crossing, both sides present, is still exempt.
         let s = score(&[quantise_lden(30.5); 4], &[quantise_lden(29.5); 4]);
@@ -1036,7 +1059,7 @@ mod tests {
     }
 
     #[test]
-    fn flip_geometry_and_catastrophic_area_both_gate() {
+    fn flip_geometry_is_diagnostic_while_catastrophic_area_gates() {
         let with_flips = |indices: &[usize]| {
             let mut reference = reference_tile();
             let mut candidate = reference.clone();
@@ -1048,35 +1071,35 @@ mod tests {
         };
 
         // One hundred scattered flips exceed the former 26-cell count budget but are
-        // one-pixel components at the faint paint edge, so they pass the geometry gate.
+        // one-pixel components at the faint paint edge; geometry remains diagnostic.
         let singletons: Vec<_> = (0..100).map(|i| i * 2).collect();
         let s = with_flips(&singletons);
         assert_eq!(s.qualifying_flips, 100);
         assert_eq!(s.flip_components(), 100);
         assert_eq!(s.longest_flip_run(), 1);
-        assert!(!s.flip_clusters_over_budget());
         assert_eq!(s.flip_count_backstop_allowance(), 2_621);
         assert!(!s.flip_count_backstop_over_budget());
-        assert_eq!(s.verdict(Wave::Two), Verdict::Pass);
-        assert_eq!(s.verdict(Wave::One), Verdict::Pass);
+        assert_eq!(aggregate_verdict(&s, Wave::Two), Verdict::Pass);
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Pass);
 
-        // The measured calibration boundary itself: one five-cell run is admitted.
+        // A five-cell run remains visible in the diagnostics.
         let s = with_flips(&[1_024, 1_025, 1_026, 1_027, 1_028]);
-        assert_eq!(s.longest_flip_run(), MAX_FLIP_RUN_LENGTH);
+        assert_eq!(s.longest_flip_run(), 5);
         assert_eq!(s.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD), 1);
-        assert!(!s.flip_clusters_over_budget());
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Pass);
 
-        // One longer run, or two runs beyond four cells, is a displaced contour.
+        // One arbitrarily long one-pixel contour displacement, or multiple such runs,
+        // remains diagnostic while its total area stays inside the retained cap.
         let s = with_flips(&[1_024, 1_025, 1_026, 1_027, 1_028, 1_029]);
-        assert!(s.flip_clusters_over_budget());
-        assert_eq!(s.verdict(Wave::One), Verdict::Fail);
+        assert_eq!(s.longest_flip_run(), 6);
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Pass);
 
         let s = with_flips(&[
             1_024, 1_025, 1_026, 1_027, 1_028, 2_048, 2_049, 2_050, 2_051, 2_052,
         ]);
         assert_eq!(s.longest_flip_run(), 5);
         assert_eq!(s.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD), 2);
-        assert!(s.flip_clusters_over_budget());
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Pass);
 
         // An oblique contour is connected too: 4-connectivity fragmented this exact
         // staircase into singletons and let a visibly displaced diagonal edge pass.
@@ -1084,10 +1107,10 @@ mod tests {
         let s = with_flips(&diagonal);
         assert_eq!(s.flip_components(), 1);
         assert_eq!(s.longest_flip_run(), 200);
-        assert!(s.flip_clusters_over_budget());
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Pass);
 
         // Even 8-connectivity cannot join an arbitrarily sparse lattice. The 1% area
-        // backstop catches catastrophic mass loss while remaining >100x above s08.
+        // backstop catches catastrophic mass loss regardless of component geometry.
         let lattice: Vec<_> = (0..TILE_PX)
             .step_by(3)
             .flat_map(|y| (0..TILE_PX).step_by(3).map(move |x| y * TILE_PX + x))
@@ -1096,7 +1119,7 @@ mod tests {
         assert_eq!(s.longest_flip_run(), 1);
         assert!(s.qualifying_flips > s.flip_count_backstop_allowance());
         assert!(s.flip_count_backstop_over_budget());
-        assert_eq!(s.verdict(Wave::One), Verdict::Fail);
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Fail);
 
         // The review's half-tile checkerboard erasure is one diagonal component under
         // 8-connectivity and also far beyond the catastrophic-area backstop.
@@ -1114,7 +1137,7 @@ mod tests {
         assert_eq!(s.flip_components(), 1);
         assert_eq!(s.longest_flip_run(), CELLS / 2);
         assert!(s.flip_count_backstop_over_budget());
-        assert_eq!(s.verdict(Wave::Two), Verdict::Fail);
+        assert_eq!(aggregate_verdict(&s, Wave::Two), Verdict::Fail);
     }
 
     #[test]
@@ -1138,17 +1161,23 @@ mod tests {
         assert_eq!(at_aggregate_limit.longest_flip_run(), 1);
         assert_eq!(at_aggregate_limit.flip_count_backstop_allowance(), 2_621);
         assert!(!at_aggregate_limit.flip_count_backstop_over_budget());
-        assert_eq!(at_aggregate_limit.verdict(Wave::One), Verdict::Pass);
+        assert_eq!(
+            at_aggregate_limit.computed_verdict(Wave::One),
+            Verdict::Pass
+        );
 
         let over_aggregate_limit_rows = [with_absent_flips(2_622)];
         let over_aggregate_limit = AggregateScore::new(&over_aggregate_limit_rows);
         assert!(over_aggregate_limit.flip_count_backstop_over_budget());
-        assert_eq!(over_aggregate_limit.verdict(Wave::One), Verdict::Fail);
+        assert_eq!(
+            over_aggregate_limit.computed_verdict(Wave::One),
+            Verdict::Fail
+        );
 
-        // Four equal painted rows dilute 7,865 sparse flips below the aggregate 1%
-        // allowance (10,486). The hard local 3% ceiling is 7,864, so exactly 7,864
-        // passes and the next cell fails. All flips remain isolated, proving that the
-        // quantity backstop — not component geometry — decides this attack.
+        // Four equal painted rows put 7,865 sparse flips below the aggregate 1%
+        // allowance (10,486). The old local 3% ceiling is retained as a diagnostic:
+        // exactly 7,864 is on it and the next cell appears in rows_over, but neither
+        // changes the aggregate verdict.
         let clean_reference = reference_tile();
         let clean = score(&clean_reference, &clean_reference);
         let rows_at = [
@@ -1161,26 +1190,36 @@ mod tests {
         assert_eq!(aggregate_at.flip_count_backstop_allowance(), 10_486);
         assert_eq!(aggregate_at.row_flip_count_backstop_allowance(0), 7_864);
         assert!(aggregate_at.row_flip_count_backstop_overshoots().is_empty());
-        assert_eq!(aggregate_at.verdict(Wave::One), Verdict::Pass);
+        assert_eq!(aggregate_at.computed_verdict(Wave::One), Verdict::Pass);
 
         let rows_over = [
             with_absent_flips(7_865),
             clean.clone(),
             clean.clone(),
-            clean,
+            clean.clone(),
         ];
         let aggregate_over = AggregateScore::new(&rows_over);
         assert!(!aggregate_over.flip_count_backstop_over_budget());
         assert_eq!(aggregate_over.longest_flip_run(), 1);
         assert_eq!(aggregate_over.row_flip_count_backstop_overshoots(), vec![0]);
-        assert_eq!(aggregate_over.verdict(Wave::Two), Verdict::Fail);
-        assert_eq!(aggregate_over.verdict(Wave::One), Verdict::Fail);
+        assert_eq!(aggregate_over.computed_verdict(Wave::Two), Verdict::Pass);
+        assert_eq!(aggregate_over.computed_verdict(Wave::One), Verdict::Pass);
+        assert!(aggregate_over.row_presence_eyeball_rows().is_empty());
+
+        let rows_for_eyeball = [
+            with_absent_flips(13_108),
+            clean.clone(),
+            clean.clone(),
+            clean,
+        ];
+        let aggregate_for_eyeball = AggregateScore::new(&rows_for_eyeball);
+        assert_eq!(aggregate_for_eyeball.row_presence_eyeball_rows(), vec![0]);
     }
 
     #[test]
-    fn the_invisible_band_has_its_own_flat_cap() {
-        // Reference below the paint floor: 12 dB of error is fine for wave 1 and not
-        // for wave 2, and neither flips anything — the candidate stays unpainted.
+    fn the_invisible_band_cap_is_diagnostic_only() {
+        // Reference below the paint floor: neither candidate paints anything. The
+        // historic flat cap remains visible but is outside the three aggregate gates.
         let s = score(&[quantise_lden(10.0); 16], &[quantise_lden(22.0); 16]);
         assert_eq!(s.quiet.cells, 16);
         assert_eq!(s.loud.cells, 0);
@@ -1188,55 +1227,109 @@ mod tests {
         assert_eq!(s.quiet.max_abs_db, 12.0);
         assert!(s.quiet_band_over(Wave::Two));
         assert!(!s.quiet_band_over(Wave::One));
-        assert_eq!(s.verdict(Wave::Two), Verdict::Fail);
-        assert_eq!(s.verdict(Wave::One), Verdict::Pass);
+        assert_eq!(aggregate_verdict(&s, Wave::Two), Verdict::Pass);
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Pass);
 
         // Over even wave 1's cap, and still invisible on both sides (nothing crosses
         // the paint floor, so no flip). The sub-30 dB cap is an amplitude tier like any
-        // other, so wave 1 REPORTS it and wave 2 fails on it.
+        // other, so both waves report it without changing the verdict.
         let s = score(&[quantise_lden(5.0); 16], &[quantise_lden(27.0); 16]);
         assert_eq!(s.quiet.max_abs_db, 22.0);
         assert_eq!(s.qualifying_flips, 0);
         assert!(s.quiet_band_over(Wave::One));
-        assert_eq!(s.verdict(Wave::One), Verdict::PassWithOvershoot);
-        assert_eq!(s.verdict(Wave::Two), Verdict::Fail);
+        assert_eq!(aggregate_verdict(&s, Wave::One), Verdict::Pass);
+        assert_eq!(aggregate_verdict(&s, Wave::Two), Verdict::Pass);
     }
 
     #[test]
-    fn a_one_sided_lean_is_gated_apart_from_the_ladder_and_per_wave() {
+    fn aggregate_bias_is_half_a_db_in_both_waves() {
+        let reference = reference_tile();
+
+        // The aggregate limit is inclusive at exactly one storage quantum.
+        let s = score(&reference, &candidate_with(&[(CELLS, 0.5)]));
+        let rows = [s];
+        let aggregate = AggregateScore::new(&rows);
+        assert_eq!(aggregate.signed_mean_db(), 0.5);
+        assert!(!aggregate.bias_over_budget());
+        assert_eq!(aggregate.computed_verdict(Wave::Two), Verdict::Pass);
+
         // 60 % of cells one step louder: max 0.5 dB is inside wave 2's baseline, so the
         // ladder is spotless. A uniform dB offset passes through energy averaging
         // UNCHANGED, so it reaches every overview zoom at full strength — the ladder
         // cannot see it and the bias bound is what catches it.
-        let reference = reference_tile();
         let s = score(&reference, &candidate_with(&[(CELLS * 3 / 5, 0.5)]));
         assert_eq!(s.loud.max_abs_db, 0.5);
         assert!(s.amplitude_overshoots(Wave::Two).is_empty());
         assert!(s.loud.cand_louder_pct() > 99.0);
         let lean = s.loud.signed_mean_db();
         assert!((0.25..0.5).contains(&lean), "~0.3 dB lean, got {lean}");
-        assert!(s.bias_over_budget(Wave::Two));
-        assert_eq!(s.verdict(Wave::Two), Verdict::Fail);
-        // The draft wave allows a whole storage step of lean, so 0.3 dB is fine there.
-        assert!(!s.bias_over_budget(Wave::One));
-        assert_eq!(s.verdict(Wave::One), Verdict::Pass);
+        let rows = [s];
+        let aggregate = AggregateScore::new(&rows);
+        assert!(!aggregate.bias_over_budget());
+        assert_eq!(aggregate.computed_verdict(Wave::Two), Verdict::Pass);
+        assert_eq!(aggregate.computed_verdict(Wave::One), Verdict::Pass);
 
         // 60 % of cells a full 1.0 dB louder: nothing EXCEEDS wave 1's 1 dB baseline,
-        // so its ladder is clean too and only the 0.6 dB lean fails the tile. Bias is
-        // the one bound that does not soften into guidance for the draft.
+        // so its ladder is clean too and only the 0.6 dB aggregate lean fails.
         let s = score(&reference, &candidate_with(&[(CELLS * 3 / 5, 1.0)]));
         assert!(s.amplitude_overshoots(Wave::One).is_empty());
         assert!(s.loud.signed_mean_db() > 0.5);
-        assert!(s.bias_over_budget(Wave::One));
+        let rows = [s];
+        let aggregate = AggregateScore::new(&rows);
+        assert!(aggregate.bias_over_budget());
+        assert_eq!(aggregate.computed_verdict(Wave::One), Verdict::Fail);
+        assert_eq!(aggregate.computed_verdict(Wave::Two), Verdict::Fail);
+
+        // A small row can exceed the human-inspection trigger while the aggregate
+        // amplitude and bias stay clean. That row is named but does not gate.
+        let large_reference = vec![quantise_lden(60.0); 10_000];
+        let large = score(&large_reference, &large_reference);
+        let small_reference = vec![quantise_lden(60.0); 100];
+        let small_candidate = vec![quantise_lden(63.0); 100];
+        let small = score(&small_reference, &small_candidate);
+        let rows = [large, small];
+        let aggregate = AggregateScore::new(&rows);
+        assert_eq!(aggregate.row_bias_eyeball_rows(), vec![1]);
+        assert_eq!(aggregate.computed_verdict(Wave::One), Verdict::Pass);
+    }
+
+    #[test]
+    fn row_eyeball_thresholds_are_strict_diagnostics() {
+        let reference = vec![quantise_lden(31.0); 100];
+        let with_flips = |count: usize| {
+            let mut candidate = reference.clone();
+            for cell in candidate.iter_mut().take(count) {
+                *cell = quantise_lden(29.5);
+            }
+            score(&reference, &candidate)
+        };
+
+        let at_presence_rows = [with_flips(5)];
+        let at_presence = AggregateScore::new(&at_presence_rows);
+        assert_eq!(at_presence.row_qualifying_flip_fraction(0), 0.05);
+        assert!(at_presence.row_presence_eyeball_rows().is_empty());
+
+        let over_presence_rows = [with_flips(6)];
+        let over_presence = AggregateScore::new(&over_presence_rows);
+        assert_eq!(over_presence.row_presence_eyeball_rows(), vec![0]);
+
+        let bias_reference = vec![quantise_lden(60.0); 100];
+        let at_bias = score(&bias_reference, &[quantise_lden(62.0); 100]);
+        let at_bias_rows = [at_bias];
+        assert!(AggregateScore::new(&at_bias_rows)
+            .row_bias_eyeball_rows()
+            .is_empty());
+
+        let over_bias = score(&bias_reference, &[quantise_lden(62.5); 100]);
+        let over_bias_rows = [over_bias];
         assert_eq!(
-            s.verdict(Wave::One),
-            Verdict::Fail,
-            "bias binds in the draft"
+            AggregateScore::new(&over_bias_rows).row_bias_eyeball_rows(),
+            vec![0]
         );
     }
 
     #[test]
-    fn aggregate_uses_painted_cells_and_a_hard_three_times_row_limit() {
+    fn aggregate_uses_painted_cells_and_reports_three_times_row_debt() {
         let large_reference = vec![quantise_lden(60.0); 900];
         let large = score(&large_reference, &large_reference);
 
@@ -1265,7 +1358,7 @@ mod tests {
             60
         );
         assert_eq!(aggregate.row_amplitude_overshoots(Wave::Two), vec![(1, 0)]);
-        assert_eq!(aggregate.verdict(Wave::Two), Verdict::Fail);
+        assert_eq!(aggregate.computed_verdict(Wave::Two), Verdict::Pass);
 
         let mut draft_candidate = small_reference.clone();
         for cell in draft_candidate.iter_mut().take(35) {
@@ -1281,19 +1374,17 @@ mod tests {
             draft_aggregate.row_amplitude_overshoots(Wave::One),
             vec![(1, 0)]
         );
-        assert_eq!(
-            draft_aggregate.verdict(Wave::One),
-            Verdict::Fail,
-            "the mandatory 3x anti-dilution limit binds in both waves"
-        );
+        assert_eq!(draft_aggregate.computed_verdict(Wave::One), Verdict::Pass);
 
-        // The owner explicitly kept nearest-cell rounding at zero for a tiny row's
-        // Wave-1 tail: one physically large error remains an investigable hard FAIL.
+        // Nearest-cell rounding at zero remains useful in the diagnostic: the tiny row
+        // is named, while one tail cell stays inside the aggregate allowance.
         let tiny_reference = vec![quantise_lden(60.0); 1_666];
         let mut tiny_candidate = tiny_reference.clone();
         tiny_candidate[0] = quantise_lden(73.0);
         let tiny = score(&tiny_reference, &tiny_candidate);
-        let tiny_rows = [rows[0].clone(), tiny];
+        let aggregate_clean_reference = vec![quantise_lden(60.0); 10_000];
+        let aggregate_clean = score(&aggregate_clean_reference, &aggregate_clean_reference);
+        let tiny_rows = [aggregate_clean, tiny];
         let tiny_aggregate = AggregateScore::new(&tiny_rows);
         assert_eq!(
             tiny_aggregate.row_anti_dilution_allowance(1, Wave::One.rungs()[3]),
@@ -1303,7 +1394,7 @@ mod tests {
             tiny_aggregate.row_amplitude_overshoots(Wave::One),
             vec![(1, 2), (1, 3)]
         );
-        assert_eq!(tiny_aggregate.verdict(Wave::One), Verdict::Fail);
+        assert_eq!(tiny_aggregate.computed_verdict(Wave::One), Verdict::Pass);
 
         // NO_DATA is transparent, not painted denominator ballast.
         let reference = [quantise_lden(60.0), quantise_lden(31.0), NO_DATA, NO_DATA];
@@ -1313,7 +1404,7 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_flip_components_remain_separate_between_rows() {
+    fn aggregate_flip_components_remain_separate_diagnostics_between_rows() {
         let row_with_run = |start: usize| {
             let mut reference = reference_tile();
             let mut candidate = reference.clone();
@@ -1329,8 +1420,7 @@ mod tests {
         assert_eq!(aggregate.flip_components(), 2);
         assert_eq!(aggregate.longest_flip_run(), 5);
         assert_eq!(aggregate.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD), 2);
-        assert!(aggregate.flip_clusters_over_budget());
-        assert_eq!(aggregate.verdict(Wave::One), Verdict::Fail);
+        assert_eq!(aggregate.computed_verdict(Wave::One), Verdict::Pass);
     }
 
     #[test]
@@ -1347,11 +1437,10 @@ mod tests {
             0,
             "1.0 dB does not exceed that rung"
         );
-        assert!(
-            s.hard_gates_hold(Wave::Two),
-            "576 leaning cells in 262,144 is no bias"
-        );
-        assert_eq!(s.verdict(Wave::Two), Verdict::Pass);
+        let rows = [s];
+        let aggregate = AggregateScore::new(&rows);
+        assert!(aggregate.hard_gates_hold(Wave::Two));
+        assert_eq!(aggregate.computed_verdict(Wave::Two), Verdict::Pass);
 
         // §7: Praha rail 4,120 cells >1 dB (1.57 %, budget 1 %), max 16.5 dB → FAILS
         // wave 2 on the second rung AND on the hard 6 dB ceiling. 99 % candidate-louder
@@ -1362,8 +1451,7 @@ mod tests {
         assert!(s.loud.cells_over(1.0) > allowance(CELLS, 0.01));
         assert_eq!(s.loud.max_abs_db, 16.5);
         assert_eq!(s.loud.cells_over(6.0), 1, "over the hard ceiling");
-        assert!(s.hard_gates_hold(Wave::Two));
         assert_eq!(s.amplitude_overshoots(Wave::Two), vec![1, 3]);
-        assert_eq!(s.verdict(Wave::Two), Verdict::Fail);
+        assert_eq!(aggregate_verdict(&s, Wave::Two), Verdict::Fail);
     }
 }

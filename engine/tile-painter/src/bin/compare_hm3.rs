@@ -5,14 +5,14 @@
 //! Used to gate approximations (coarse-grid, 1 Hz aggregation) against an
 //! exact baseline under the engine's ±0.5 dB tile tolerance.
 //!
-//! With `--wave` it also scores the pair against the accuracy contract
-//! (`docs/dev/accuracy-contract.md`) and prints a PASS/FAIL verdict, so a measurement
-//! ends in a verdict rather than a table someone has to interpret. Scoring lives in
-//! [`tile_painter::accuracy_contract`]; this binary is the driver.
+//! With `--wave` it also prints one pair's contract diagnostics. Only `--aggregate`
+//! emits a PASS/FAIL release verdict; a single row or probe never qualifies a wave.
+//! Scoring lives in [`tile_painter::accuracy_contract`]; this binary is the driver.
 //!
-//! Aggregate release verdicts accept any number of reference/candidate pairs and
-//! weight their ladder by reference-painted cells, with a hard 3x per-row
-//! anti-dilution limit:
+//! Aggregate scoring accepts any number of pairs, but emits a release verdict only at
+//! the fixed 250/980-row Wave-1/Wave-2 benchmark sizes. Amplitude and presence use
+//! reference-painted cells; bias uses the numerically comparable painted subset.
+//! Per-row rates are diagnostics:
 //! `compare_hm3 --aggregate <ref> <cand> [<ref> <cand> ...] --wave 1|2`.
 
 use std::path::Path;
@@ -20,7 +20,8 @@ use std::process::ExitCode;
 
 use tile_painter::accuracy_contract::{
     allowance, score, AggregateScore, Score, Scoring, Verdict, Wave, LONG_FLIP_RUN_THRESHOLD,
-    MAX_FLIP_RUN_LENGTH, MAX_LONG_FLIP_RUNS, ROW_ANTI_DILUTION_MULTIPLIER,
+    MAX_AGGREGATE_SIGNED_MEAN_DB, ROW_ANTI_DILUTION_MULTIPLIER, ROW_EYEBALL_PRESENCE_FRACTION,
+    ROW_EYEBALL_SIGNED_MEAN_DB,
 };
 use tile_painter::wire_hm3;
 
@@ -145,12 +146,30 @@ fn format_flip_histogram(histogram: &[(usize, usize)]) -> String {
         .join(",")
 }
 
-fn print_verdict(s: &Score, wave: Wave, scoring: Scoring) -> Verdict {
-    let verdict = s.verdict(wave);
+fn format_rows(rows: &[usize]) -> String {
+    if rows.is_empty() {
+        "none".to_string()
+    } else {
+        rows.iter()
+            .map(|row| (row + 1).to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+fn format_percentage(count: usize, denominator: usize) -> String {
+    if denominator == 0 && count > 0 {
+        "inf".to_string()
+    } else {
+        format!("{:.3}", percentage(count, denominator))
+    }
+}
+
+fn print_row_diagnostics(s: &Score, wave: Wave, scoring: Scoring) {
     let counts = s.count_rungs(wave);
     let overshoots = s.amplitude_overshoots(wave);
     println!(
-        "contract wave={} scoring={} cells={}",
+        "contract diagnostic_only wave={} scoring={} cells={}",
         wave.label(),
         scoring.label(),
         s.cells
@@ -171,7 +190,7 @@ fn print_verdict(s: &Score, wave: Wave, scoring: Scoring) -> Verdict {
             format!("{:.4}% of tile", rung.max_fraction * 100.0)
         };
         println!(
-            "    >{:>4.1} dB {:>9} cells {:>7.3}%   allowed {:>9} ({budget})  {}",
+            "    >{:>4.1} dB {:>9} cells {:>7.3}%   allowed {:>9} ({budget})  {} diagnostic_only",
             rung.over_db,
             counts[i],
             percentage(counts[i], s.cells),
@@ -180,7 +199,7 @@ fn print_verdict(s: &Score, wave: Wave, scoring: Scoring) -> Verdict {
         );
     }
     println!(
-        "  ref<30dB  compared={} max_abs_db={:.3}   limit {:.1} dB  {}",
+        "  ref<30dB  compared={} max_abs_db={:.3}   former_limit {:.1} dB  {} diagnostic_only",
         s.quiet.cells,
         s.quiet.max_abs_db,
         wave.quiet_band_max_db(),
@@ -192,45 +211,33 @@ fn print_verdict(s: &Score, wave: Wave, scoring: Scoring) -> Verdict {
     );
     println!(
         "  flips>=1dB clear of 30dB {}   silenced {}   painted-over-silence {}   \
-         catastrophic_backstop_allowed {}  {}",
+         one_percent_reference_allowance {}  diagnostic_only",
         s.qualifying_flips,
         s.flips_newly_silent,
         s.flips_newly_painted,
         s.flip_count_backstop_allowance(),
-        hard_mark(!s.flip_count_backstop_over_budget()),
     );
     println!(
-        "  flip runs components={} histogram={}   longest {} allowed {}  {}",
+        "  flip runs components={} histogram={}   longest {} allowed=none diagnostic_only",
         s.flip_components(),
         format_flip_histogram(&s.flip_run_histogram()),
         s.longest_flip_run(),
-        MAX_FLIP_RUN_LENGTH,
-        hard_mark(s.longest_flip_run() <= MAX_FLIP_RUN_LENGTH),
     );
     println!(
-        "  flip runs>{} {}   allowed {}  {}",
+        "  flip runs>{} {}   allowed=none diagnostic_only",
         LONG_FLIP_RUN_THRESHOLD,
         s.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD),
-        MAX_LONG_FLIP_RUNS,
-        hard_mark(s.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD) <= MAX_LONG_FLIP_RUNS),
     );
     let bias = s.loud.signed_mean_db().abs();
     println!(
-        "  bias |signed_mean_db| {bias:.4}   limit {:.2}  {}",
-        wave.max_signed_mean_db(),
-        if !s.bias_over_budget(wave) {
-            "ok"
-        } else {
-            "FAIL"
-        },
+        "  bias |signed_mean_db| {bias:.4}   aggregate_reference {:.2} diagnostic_only",
+        MAX_AGGREGATE_SIGNED_MEAN_DB,
     );
-    // One greppable line carrying amplitude debt, flip geometry, and the deliberately
-    // loose catastrophic-area backstop.
+    // One greppable line carrying row diagnostics without claiming a release verdict.
     let rungs = wave.rungs();
     println!(
-        "verdict={} wave={} scoring={} cells>{:.0}dB={} cells>{:.0}dB={} flips={} \
-         flip_backstop_allowed={} longest_flip_run={} flip_runs_gt{}={}",
-        verdict.label(),
+        "diagnostic_only wave={} scoring={} cells>{:.0}dB={} cells>{:.0}dB={} flips={} \
+         presence_reference_1pct={} longest_flip_run={} flip_runs_gt{}={}",
         wave.label(),
         scoring.label(),
         rungs[2].over_db,
@@ -243,7 +250,6 @@ fn print_verdict(s: &Score, wave: Wave, scoring: Scoring) -> Verdict {
         LONG_FLIP_RUN_THRESHOLD,
         s.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD),
     );
-    verdict
 }
 
 fn percentage(count: usize, denominator: usize) -> f64 {
@@ -254,14 +260,22 @@ fn percentage(count: usize, denominator: usize) -> f64 {
     }
 }
 
-fn print_aggregate_verdict(
+fn print_aggregate_score(
     scores: &[Score],
     paths: &[PairPaths],
     wave: Wave,
     scoring: Scoring,
-) -> Verdict {
+) -> Option<Verdict> {
     let aggregate = AggregateScore::new(scores);
     let verdict = aggregate.verdict(wave);
+    let release_eligible = verdict.is_some();
+    let decision_mark = |ok| {
+        if release_eligible {
+            hard_mark(ok)
+        } else {
+            mark(ok)
+        }
+    };
     let counts = aggregate.count_rungs(wave);
     let aggregate_overshoots = aggregate.amplitude_overshoots(wave);
     let row_overshoots = aggregate.row_amplitude_overshoots(wave);
@@ -269,7 +283,12 @@ fn print_aggregate_verdict(
     let painted = aggregate.painted_cells();
 
     println!(
-        "contract aggregate wave={} scoring={} rows={} painted_cells={}",
+        "contract aggregate{} wave={} scoring={} rows={} painted_cells={}",
+        if release_eligible {
+            ""
+        } else {
+            " diagnostic_only"
+        },
         wave.label(),
         scoring.label(),
         scores.len(),
@@ -293,30 +312,29 @@ fn print_aggregate_verdict(
             .map(|(row, _)| (row + 1).to_string())
             .collect::<Vec<_>>();
         println!(
-            "    >{:>4.1} dB {:>9} cells {:>7.3}%   aggregate_allowed {:>9} {}   \
-             row_limit={}x rows_over={} {}",
+            "    >{:>4.1} dB {:>9} cells {:>7.3}%   aggregate_allowed {:>9} \
+             aggregate_gate={}   row_reference={}x rows_over={} row_diagnostic_only",
             rung.over_db,
             counts[rung_index],
             percentage(counts[rung_index], painted),
             allowed,
-            mark(!aggregate_overshoots.contains(&rung_index)),
+            decision_mark(!aggregate_overshoots.contains(&rung_index)),
             ROW_ANTI_DILUTION_MULTIPLIER,
             if rows_over.is_empty() {
                 "none".to_string()
             } else {
                 rows_over.join(",")
             },
-            hard_mark(rows_over.is_empty()),
         );
     }
 
     for (row_index, (row, pair)) in aggregate.rows().iter().zip(paths).enumerate() {
         let row_counts = row.count_rungs(wave);
-        let flip_row_ok = !row_flip_overshoots.contains(&row_index);
+        let flip_row_over = row_flip_overshoots.contains(&row_index);
         println!(
             "  row={} painted={} compared={} presence_changed={} silenced={} \
              paint_edge_crossings={} counts={}/{}/{}/{} bias={:+.4} flips={} \
-             flip_row_allowed={} {} \
+             presence_pct={} presence_3x_reference={} {} diagnostic_only \
              longest_flip_run={} flip_runs_gt{}={} reference={} candidate={}",
             row_index + 1,
             row.reference_painted_cells,
@@ -330,8 +348,9 @@ fn print_aggregate_verdict(
             row_counts[3],
             row.loud.signed_mean_db(),
             row.qualifying_flips,
+            format_percentage(row.qualifying_flips, row.reference_painted_cells),
             aggregate.row_flip_count_backstop_allowance(row_index),
-            hard_mark(flip_row_ok),
+            mark(!flip_row_over),
             row.longest_flip_run(),
             LONG_FLIP_RUN_THRESHOLD,
             row.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD),
@@ -341,19 +360,20 @@ fn print_aggregate_verdict(
     }
 
     println!(
-        "  ref<30dB max_abs_db={:.3}   limit {:.1} dB per row  {}",
+        "  ref<30dB max_abs_db={:.3}   former_limit {:.1} dB per row  {} diagnostic_only",
         aggregate.quiet_max_abs_db(),
         wave.quiet_band_max_db(),
         mark(!aggregate.quiet_band_over(wave)),
     );
     println!(
         "  qualifying flips {}   silenced {}   painted-over-silence {}   \
-         catastrophic_backstop_allowed {}  {}   row_limit={}x rows_over={}  {}",
+         aggregate_presence_allowed {}  aggregate_gate={}   \
+         row_reference={}x rows_over={} row_diagnostic_only",
         aggregate.qualifying_flips(),
         aggregate.flips_newly_silent(),
         aggregate.flips_newly_painted(),
         aggregate.flip_count_backstop_allowance(),
-        hard_mark(!aggregate.flip_count_backstop_over_budget()),
+        decision_mark(!aggregate.flip_count_backstop_over_budget()),
         ROW_ANTI_DILUTION_MULTIPLIER,
         if row_flip_overshoots.is_empty() {
             "none".to_string()
@@ -364,49 +384,66 @@ fn print_aggregate_verdict(
                 .collect::<Vec<_>>()
                 .join(",")
         },
-        hard_mark(row_flip_overshoots.is_empty()),
     );
     println!(
-        "  flip runs components={} histogram={}   longest {} allowed {}  {}",
+        "  flip runs components={} histogram={}   longest {} allowed=none diagnostic_only",
         aggregate.flip_components(),
         format_flip_histogram(&aggregate.flip_run_histogram()),
         aggregate.longest_flip_run(),
-        MAX_FLIP_RUN_LENGTH,
-        hard_mark(aggregate.longest_flip_run() <= MAX_FLIP_RUN_LENGTH),
     );
     println!(
-        "  flip runs>{} {}   allowed {}  {}",
+        "  flip runs>{} {}   allowed=none diagnostic_only",
         LONG_FLIP_RUN_THRESHOLD,
         aggregate.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD),
-        MAX_LONG_FLIP_RUNS,
-        hard_mark(aggregate.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD) <= MAX_LONG_FLIP_RUNS),
     );
     let bias_rows = scores
         .iter()
         .enumerate()
-        .filter(|(_, row)| row.bias_over_budget(wave))
+        .filter(|(_, row)| row.loud.signed_mean_db().abs() > MAX_AGGREGATE_SIGNED_MEAN_DB)
         .map(|(row, _)| (row + 1).to_string())
         .collect::<Vec<_>>();
     println!(
-        "  bias per-row |signed_mean_db| limit {:.2}   rows_over={}  {}",
-        wave.max_signed_mean_db(),
+        "  bias aggregate |signed_mean_db| {:.4}   limit {:.2}  aggregate_gate={}",
+        aggregate.signed_mean_db().abs(),
+        MAX_AGGREGATE_SIGNED_MEAN_DB,
+        decision_mark(!aggregate.bias_over_budget()),
+    );
+    println!(
+        "  bias per-row reference {:.2}   rows_over={} diagnostic_only",
+        MAX_AGGREGATE_SIGNED_MEAN_DB,
         if bias_rows.is_empty() {
             "none".to_string()
         } else {
             bias_rows.join(",")
         },
-        hard_mark(bias_rows.is_empty()),
     );
+    let presence_eyeball = aggregate.row_presence_eyeball_rows();
+    let bias_eyeball = aggregate.row_bias_eyeball_rows();
+    let mut eyeball_rows = presence_eyeball
+        .iter()
+        .chain(&bias_eyeball)
+        .copied()
+        .collect::<Vec<_>>();
+    eyeball_rows.sort_unstable();
+    eyeball_rows.dedup();
     println!(
-        "verdict={} wave={} scoring={} aggregate_rows={} painted_cells={} \
-         paint_edge_crossings={} \
-         cells>{:.0}dB={} cells>{:.0}dB={} flips={} flip_backstop_allowed={} \
-         flip_rows_over={} longest_flip_run={} flip_runs_gt{}={}",
-        verdict.label(),
+        "  eyeball presence>{:.0}% rows={} bias>{:.1}dB rows={} inspect_rows={} diagnostic_only",
+        ROW_EYEBALL_PRESENCE_FRACTION * 100.0,
+        format_rows(&presence_eyeball),
+        ROW_EYEBALL_SIGNED_MEAN_DB,
+        format_rows(&bias_eyeball),
+        format_rows(&eyeball_rows),
+    );
+    let summary = format!(
+        "wave={} scoring={} aggregate_rows={} painted_cells={} aggregate_bias={:+.4} \
+         paint_edge_crossings={} cells>{:.0}dB={} cells>{:.0}dB={} flips={} \
+         aggregate_presence_allowed={} diagnostic_presence_rows_over_3x={} eyeball_rows={} \
+         longest_flip_run={} flip_runs_gt{}={}",
         wave.label(),
         scoring.label(),
         scores.len(),
         painted,
+        aggregate.signed_mean_db(),
         aggregate.paint_edge_crossings(),
         rungs[2].over_db,
         counts[2],
@@ -414,20 +451,22 @@ fn print_aggregate_verdict(
         counts[3],
         aggregate.qualifying_flips(),
         aggregate.flip_count_backstop_allowance(),
-        if row_flip_overshoots.is_empty() {
-            "none".to_string()
-        } else {
-            row_flip_overshoots
-                .iter()
-                .map(|row| (row + 1).to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        },
+        format_rows(&row_flip_overshoots),
+        format_rows(&eyeball_rows),
         aggregate.longest_flip_run(),
         LONG_FLIP_RUN_THRESHOLD,
         aggregate.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD),
     );
-    verdict
+    if let Some(verdict) = verdict {
+        println!("verdict={} {summary}", verdict.label());
+        Some(verdict)
+    } else {
+        println!(
+            "diagnostic_only {summary} expected_benchmark_rows={}",
+            wave.benchmark_rows()
+        );
+        None
+    }
 }
 
 fn read_score(pair: &PairPaths) -> Result<Score, String> {
@@ -466,22 +505,22 @@ fn main() -> ExitCode {
         }
     }
 
-    let verdict = if args.aggregate {
-        print_aggregate_verdict(
+    if args.aggregate {
+        let verdict = print_aggregate_score(
             &scores,
             &args.pairs,
             args.wave.expect("aggregate requires wave"),
             args.scoring,
-        )
+        );
+        return match verdict {
+            Some(Verdict::Fail) => ExitCode::FAILURE,
+            Some(Verdict::Pass) | None => ExitCode::SUCCESS,
+        };
     } else {
         print_statistics(&scores[0]);
-        match args.wave {
-            None => return ExitCode::SUCCESS,
-            Some(wave) => print_verdict(&scores[0], wave, args.scoring),
+        if let Some(wave) = args.wave {
+            print_row_diagnostics(&scores[0], wave, args.scoring);
         }
-    };
-    match verdict {
-        Verdict::Fail => ExitCode::FAILURE,
-        _ => ExitCode::SUCCESS,
     }
+    ExitCode::SUCCESS
 }
