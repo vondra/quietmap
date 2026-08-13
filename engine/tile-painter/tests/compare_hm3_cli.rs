@@ -50,6 +50,8 @@ fn legacy_line_aggregate_verdict_and_exit_codes_stay_pinned() {
     let draft_path = dir.path().join("draft.bin");
     let local_break_path = dir.path().join("local-break.bin");
     let local_flip_break_path = dir.path().join("local-flip-break.bin");
+    let bias_break_path = dir.path().join("bias-break.bin");
+    let eyeball_break_path = dir.path().join("eyeball-break.bin");
     let erased_path = dir.path().join("erased.bin");
     let cells = TILE_PX * TILE_PX;
     let reference = vec![quantise_lden(60.0); cells];
@@ -81,8 +83,16 @@ fn legacy_line_aggregate_verdict_and_exit_codes_stay_pinned() {
     assert!(stdout.contains("presence_changed=0"));
     assert!(stdout.contains("paint_edge_crossings=0"));
     assert!(stdout.contains("aggregate_gate=ok"));
-    assert!(stdout.contains("longest 0 allowed=none diagnostic_only"));
-    assert!(stdout.contains("flip runs>4 0   allowed=none diagnostic_only"));
+    assert!(stdout.contains("population=painted_or_extreme_presence"));
+    assert!(stdout.contains("extreme_over_12db=0"));
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| line.trim_start().starts_with('>') && line.contains(" dB"))
+            .count(),
+        4,
+        "Wave 2 has four amplitude rungs and no extra >12 diagnostic row"
+    );
     assert!(stdout.contains("verdict=PASS wave=2 (accurate)"));
 
     // A subset can inspect aggregate arithmetic but never emits a release verdict.
@@ -123,6 +133,20 @@ fn legacy_line_aggregate_verdict_and_exit_codes_stay_pinned() {
     assert_eq!(output.status.code(), Some(1));
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("aggregate_gate=FAIL"));
+    let extreme_diagnostic = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with(">12.0 dB"))
+        .expect("Wave-1 >12 dB diagnostic");
+    assert!(extreme_diagnostic.contains("aggregate_allowed=none diagnostic_only"));
+    assert!(!extreme_diagnostic.contains("aggregate_gate="));
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| line.trim_start().starts_with('>') && line.contains(" dB"))
+            .count(),
+        4,
+        "Wave 1 has three amplitude rungs plus one >12 count-only diagnostic"
+    );
     assert!(stdout.contains("verdict=FAIL"));
 
     // Across the complete 250-row verdict domain, a 70%-broken row contributes
@@ -157,15 +181,12 @@ fn legacy_line_aggregate_verdict_and_exit_codes_stay_pinned() {
     assert!(stdout.contains("row=250"));
     assert!(stdout.contains("verdict=PASS wave=1 (draft) scoring=marginal"));
 
-    // Isolate the former per-row presence gate through the real 250-row CLI: 7,865
-    // disconnected deletions are below the aggregate allowance (655,360), but one
-    // above this row's inclusive 3% diagnostic reference (7,864).
+    // Isolate the former per-row presence gate through the real 250-row CLI: 11,797
+    // deletions are below the aggregate allowance (983,040), but one above this
+    // row's inclusive 3x (4.5%) diagnostic reference (11,796).
     let mut local_flip_break = reference.clone();
-    let isolated_indices = (0..TILE_PX)
-        .step_by(3)
-        .flat_map(|y| (0..TILE_PX).step_by(3).map(move |x| y * TILE_PX + x));
-    for index in isolated_indices.take(7_865) {
-        local_flip_break[index] = NO_DATA;
+    for cell in local_flip_break.iter_mut().take(11_797) {
+        *cell = NO_DATA;
     }
     write_fixture(&local_flip_break_path, &local_flip_break);
     let local_flip_break_arg = local_flip_break_path.to_str().unwrap();
@@ -179,12 +200,48 @@ fn legacy_line_aggregate_verdict_and_exit_codes_stay_pinned() {
     ));
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout
-        .contains("flips=7865 presence_pct=3.000 presence_3x_reference=7864 OVER diagnostic_only"));
+    assert!(stdout.contains(
+        "flips=11797 presence_pct=4.500 presence_3x_reference=11796 OVER diagnostic_only"
+    ));
     assert!(stdout.contains("row_reference=3x rows_over=250 row_diagnostic_only"));
     assert!(stdout.contains("diagnostic_presence_rows_over_3x=250"));
     assert!(stdout.contains("eyeball_rows=none"));
     assert!(stdout.contains("verdict=PASS"));
+
+    // A uniform +1 dB shift sits exactly on Wave 1's baseline, so no amplitude rung
+    // sees it. The full-domain verdict must still fail on aggregate signed bias alone.
+    write_fixture(&bias_break_path, &vec![quantise_lden(61.0); cells]);
+    let bias_candidates = vec![bias_break_path.to_str().unwrap(); 250];
+    let output = run_owned(&aggregate_args(reference_arg, &bias_candidates, "1", None));
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("bias aggregate |signed_mean_db| 1.0000"));
+    assert!(stdout.contains("limit 0.50  aggregate_gate=FAIL"));
+    assert!(stdout.contains("verdict=FAIL wave=1 (draft)"));
+
+    // One row can trigger both human-inspection reasons without becoming two rows in
+    // `inspect_rows`. Its aggregate debt is small enough that all three gate families
+    // still pass, proving the list remains diagnostic.
+    let mut eyeball_break = vec![quantise_lden(62.5); cells];
+    for cell in eyeball_break.iter_mut().take(cells * 6 / 100) {
+        *cell = NO_DATA;
+    }
+    write_fixture(&eyeball_break_path, &eyeball_break);
+    let mut eyeball_candidates = vec![identical_arg; 250];
+    eyeball_candidates[249] = eyeball_break_path.to_str().unwrap();
+    let output = run_owned(&aggregate_args(
+        reference_arg,
+        &eyeball_candidates,
+        "1",
+        None,
+    ));
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(
+        "eyeball presence>5% rows=250 bias>2.0dB rows=250 inspect_rows=250 diagnostic_only"
+    ));
+    assert!(stdout.contains("eyeball_rows=250"));
+    assert!(stdout.contains("verdict=PASS wave=1 (draft)"));
 
     write_fixture(&erased_path, &vec![NO_DATA; cells]);
     let output = run(&[
@@ -214,7 +271,35 @@ fn legacy_line_aggregate_verdict_and_exit_codes_stay_pinned() {
     assert!(stdout.contains("eyeball presence>5% rows=1,2"));
     assert!(stdout.contains(",979,980 bias>2.0dB rows=none inspect_rows="));
     assert!(stdout.contains("eyeball_rows=1,2"));
-    assert!(stdout.contains(",979,980 longest_flip_run=262144"));
+    let eyeball_line = stdout
+        .lines()
+        .find(|line| line.starts_with("  eyeball presence>5% rows="))
+        .expect("eyeball diagnostic line");
+    let presence_rows = eyeball_line
+        .split_once("presence>5% rows=")
+        .unwrap()
+        .1
+        .split_once(" bias>2.0dB")
+        .unwrap()
+        .0;
+    let inspect_rows = eyeball_line
+        .split_once(" inspect_rows=")
+        .unwrap()
+        .1
+        .strip_suffix(" diagnostic_only")
+        .unwrap();
+    assert_eq!(presence_rows.split(',').count(), 980);
+    assert_eq!(inspect_rows.split(',').count(), 980);
+
+    // The below-paint hover cap is also a real release gate, not row diagnostics.
+    write_fixture(&reference_path, &vec![quantise_lden(10.0); cells]);
+    write_fixture(&draft_path, &vec![quantise_lden(22.0); cells]);
+    let quiet_candidates = vec![draft_path.to_str().unwrap(); 980];
+    let output = run_owned(&aggregate_args(reference_arg, &quiet_candidates, "2", None));
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("ref<30dB max_abs_db=12.000   limit 10.0 dB  aggregate_gate=FAIL"));
+    assert!(stdout.contains("verdict=FAIL wave=2 (accurate)"));
 
     assert_eq!(run(&[]).status.code(), Some(2));
     assert_eq!(

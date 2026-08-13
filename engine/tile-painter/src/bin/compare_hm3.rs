@@ -2,8 +2,8 @@
 //! SIGN. `signed_mean_db` and `cand_louder_pct` exist because the magnitude alone
 //! is positive by construction and hides a systematic lean — and a lean is what
 //! survives `build-pyramid`, which averages energy, into the overview zoom.
-//! Used to gate approximations (coarse-grid, 1 Hz aggregation) against an
-//! exact baseline under the engine's ±0.5 dB tile tolerance.
+//! Used to gate approximations (coarse-grid, 1 Hz aggregation) against an exact
+//! baseline under the aggregate accuracy contract.
 //!
 //! With `--wave` it also prints one pair's contract diagnostics. Only `--aggregate`
 //! emits a PASS/FAIL release verdict; a single row or probe never qualifies a wave.
@@ -19,7 +19,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use tile_painter::accuracy_contract::{
-    allowance, score, AggregateScore, Score, Scoring, Verdict, Wave, LONG_FLIP_RUN_THRESHOLD,
+    allowance, score, AggregateScore, Score, Scoring, Verdict, Wave, DIAGNOSTIC_EXTREME_OVER_DB,
     MAX_AGGREGATE_SIGNED_MEAN_DB, ROW_ANTI_DILUTION_MULTIPLIER, ROW_EYEBALL_PRESENCE_FRACTION,
     ROW_EYEBALL_SIGNED_MEAN_DB,
 };
@@ -135,17 +135,6 @@ fn hard_mark(ok: bool) -> &'static str {
     }
 }
 
-fn format_flip_histogram(histogram: &[(usize, usize)]) -> String {
-    if histogram.is_empty() {
-        return "none".to_string();
-    }
-    histogram
-        .iter()
-        .map(|(size, count)| format!("{size}:{count}"))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 fn format_rows(rows: &[usize]) -> String {
     if rows.is_empty() {
         "none".to_string()
@@ -163,6 +152,15 @@ fn format_percentage(count: usize, denominator: usize) -> String {
     } else {
         format!("{:.3}", percentage(count, denominator))
     }
+}
+
+fn format_rung_counts(wave: Wave, counts: &[usize]) -> String {
+    wave.rungs()
+        .iter()
+        .zip(counts)
+        .map(|(rung, count)| format!("{:.1}:{count}", rung.over_db))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn print_row_diagnostics(s: &Score, wave: Wave, scoring: Scoring) {
@@ -184,22 +182,27 @@ fn print_row_diagnostics(s: &Score, wave: Wave, scoring: Scoring) {
     );
     for (i, rung) in wave.rungs().iter().enumerate() {
         let allowed = allowance(s.cells, rung.max_fraction);
-        let budget = if rung.max_fraction == 0.0 {
-            "hard ceiling".to_string()
-        } else {
-            format!("{:.4}% of tile", rung.max_fraction * 100.0)
-        };
+        let budget = format!("{:.4}% of tile", rung.max_fraction * 100.0);
         println!(
-            "    >{:>4.1} dB {:>9} cells {:>7.3}%   allowed {:>9} ({budget})  {} diagnostic_only",
+            "    >{:>4.1} dB {:>9} cells {:>7.3}%   allowed {:>9} ({budget})  {} \
+             population={} diagnostic_only",
             rung.over_db,
             counts[i],
             percentage(counts[i], s.cells),
             allowed,
             mark(!overshoots.contains(&i)),
+            rung.population_label(),
+        );
+    }
+    if wave == Wave::One {
+        println!(
+            "    >{:>4.1} dB {:>9} cells   allowed=none diagnostic_only",
+            DIAGNOSTIC_EXTREME_OVER_DB,
+            s.loud.cells_over(DIAGNOSTIC_EXTREME_OVER_DB),
         );
     }
     println!(
-        "  ref<30dB  compared={} max_abs_db={:.3}   former_limit {:.1} dB  {} diagnostic_only",
+        "  ref<30dB  compared={} max_abs_db={:.3}   aggregate_reference {:.1} dB  {} diagnostic_only",
         s.quiet.cells,
         s.quiet.max_abs_db,
         wave.quiet_band_max_db(),
@@ -210,23 +213,12 @@ fn print_row_diagnostics(s: &Score, wave: Wave, scoring: Scoring) {
         s.paint_edge_crossings,
     );
     println!(
-        "  flips>=1dB clear of 30dB {}   silenced {}   painted-over-silence {}   \
-         one_percent_reference_allowance {}  diagnostic_only",
+        "  qualifying paint-state flips {}   silenced {}   painted-over-silence {}   \
+         aggregate_reference_allowance {}  diagnostic_only",
         s.qualifying_flips,
         s.flips_newly_silent,
         s.flips_newly_painted,
-        s.flip_count_backstop_allowance(),
-    );
-    println!(
-        "  flip runs components={} histogram={}   longest {} allowed=none diagnostic_only",
-        s.flip_components(),
-        format_flip_histogram(&s.flip_run_histogram()),
-        s.longest_flip_run(),
-    );
-    println!(
-        "  flip runs>{} {}   allowed=none diagnostic_only",
-        LONG_FLIP_RUN_THRESHOLD,
-        s.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD),
+        s.presence_allowance(wave),
     );
     let bias = s.loud.signed_mean_db().abs();
     println!(
@@ -234,21 +226,19 @@ fn print_row_diagnostics(s: &Score, wave: Wave, scoring: Scoring) {
         MAX_AGGREGATE_SIGNED_MEAN_DB,
     );
     // One greppable line carrying row diagnostics without claiming a release verdict.
-    let rungs = wave.rungs();
     println!(
-        "diagnostic_only wave={} scoring={} cells>{:.0}dB={} cells>{:.0}dB={} flips={} \
-         presence_reference_1pct={} longest_flip_run={} flip_runs_gt{}={}",
+        "diagnostic_only wave={} scoring={} rung_counts={} extreme_over_12db={} flips={} \
+         presence_gate_cells={} presence_reference={} quiet_max_db={:.1} \
+         wave2_unified_tail={}",
         wave.label(),
         scoring.label(),
-        rungs[2].over_db,
-        counts[2],
-        rungs[3].over_db,
-        counts[3],
+        format_rung_counts(wave, &counts),
+        s.loud.cells_over(DIAGNOSTIC_EXTREME_OVER_DB),
         s.qualifying_flips,
-        s.flip_count_backstop_allowance(),
-        s.longest_flip_run(),
-        LONG_FLIP_RUN_THRESHOLD,
-        s.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD),
+        s.gated_presence_changes,
+        s.presence_allowance(wave),
+        s.quiet.max_abs_db,
+        s.wave_two_unified_tail,
     );
 }
 
@@ -279,7 +269,7 @@ fn print_aggregate_score(
     let counts = aggregate.count_rungs(wave);
     let aggregate_overshoots = aggregate.amplitude_overshoots(wave);
     let row_overshoots = aggregate.row_amplitude_overshoots(wave);
-    let row_flip_overshoots = aggregate.row_flip_count_backstop_overshoots();
+    let row_presence_overshoots = aggregate.row_presence_diagnostic_overshoots(wave);
     let painted = aggregate.painted_cells();
 
     println!(
@@ -313,12 +303,14 @@ fn print_aggregate_score(
             .collect::<Vec<_>>();
         println!(
             "    >{:>4.1} dB {:>9} cells {:>7.3}%   aggregate_allowed {:>9} \
-             aggregate_gate={}   row_reference={}x rows_over={} row_diagnostic_only",
+             aggregate_gate={}   population={} row_reference={}x rows_over={} \
+             row_diagnostic_only",
             rung.over_db,
             counts[rung_index],
             percentage(counts[rung_index], painted),
             allowed,
             decision_mark(!aggregate_overshoots.contains(&rung_index)),
+            rung.population_label(),
             ROW_ANTI_DILUTION_MULTIPLIER,
             if rows_over.is_empty() {
                 "none".to_string()
@@ -327,74 +319,73 @@ fn print_aggregate_score(
             },
         );
     }
+    if wave == Wave::One {
+        println!(
+            "    >{:>4.1} dB {:>9} cells   aggregate_allowed=none diagnostic_only",
+            DIAGNOSTIC_EXTREME_OVER_DB,
+            aggregate.diagnostic_extreme_count(),
+        );
+    }
 
     for (row_index, (row, pair)) in aggregate.rows().iter().zip(paths).enumerate() {
         let row_counts = row.count_rungs(wave);
-        let flip_row_over = row_flip_overshoots.contains(&row_index);
+        let presence_row_over = row_presence_overshoots.contains(&row_index);
         println!(
-            "  row={} painted={} compared={} presence_changed={} silenced={} \
-             paint_edge_crossings={} counts={}/{}/{}/{} bias={:+.4} flips={} \
+            "  row={} painted={} compared={} presence_changed={} presence_gate_cells={} silenced={} \
+             paint_edge_crossings={} counts={} painted_max_db={:.1} quiet_max_db={:.1} \
+             extreme_over_12db={} bias={:+.4} flips={} \
              presence_pct={} presence_3x_reference={} {} diagnostic_only \
-             longest_flip_run={} flip_runs_gt{}={} reference={} candidate={}",
+             wave2_unified_tail={} reference={} candidate={}",
             row_index + 1,
             row.reference_painted_cells,
             row.compared(),
             row.presence_changed,
+            row.gated_presence_changes,
             row.flips_newly_silent,
             row.paint_edge_crossings,
-            row_counts[0],
-            row_counts[1],
-            row_counts[2],
-            row_counts[3],
+            format_rung_counts(wave, &row_counts),
+            row.loud.max_abs_db,
+            row.quiet.max_abs_db,
+            row.loud.cells_over(DIAGNOSTIC_EXTREME_OVER_DB),
             row.loud.signed_mean_db(),
             row.qualifying_flips,
-            format_percentage(row.qualifying_flips, row.reference_painted_cells),
-            aggregate.row_flip_count_backstop_allowance(row_index),
-            mark(!flip_row_over),
-            row.longest_flip_run(),
-            LONG_FLIP_RUN_THRESHOLD,
-            row.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD),
+            format_percentage(row.gated_presence_changes, row.reference_painted_cells),
+            aggregate.row_presence_diagnostic_allowance(row_index, wave),
+            mark(!presence_row_over),
+            row.wave_two_unified_tail,
             pair.reference,
             pair.candidate,
         );
     }
 
     println!(
-        "  ref<30dB max_abs_db={:.3}   former_limit {:.1} dB per row  {} diagnostic_only",
+        "  ref<30dB max_abs_db={:.3}   limit {:.1} dB  aggregate_gate={}",
         aggregate.quiet_max_abs_db(),
         wave.quiet_band_max_db(),
-        mark(!aggregate.quiet_band_over(wave)),
+        decision_mark(!aggregate.quiet_band_over(wave)),
     );
     println!(
-        "  qualifying flips {}   silenced {}   painted-over-silence {}   \
+        "  aggregate presence gate cells {}   qualifying flips {}   raw NO_DATA mismatches {}   \
+         silenced {}   painted-over-silence {}   \
          aggregate_presence_allowed {}  aggregate_gate={}   \
          row_reference={}x rows_over={} row_diagnostic_only",
+        aggregate.gated_presence_changes(),
         aggregate.qualifying_flips(),
+        aggregate.presence_changed(),
         aggregate.flips_newly_silent(),
         aggregate.flips_newly_painted(),
-        aggregate.flip_count_backstop_allowance(),
-        decision_mark(!aggregate.flip_count_backstop_over_budget()),
+        aggregate.presence_allowance(wave),
+        decision_mark(!aggregate.presence_over_budget(wave)),
         ROW_ANTI_DILUTION_MULTIPLIER,
-        if row_flip_overshoots.is_empty() {
+        if row_presence_overshoots.is_empty() {
             "none".to_string()
         } else {
-            row_flip_overshoots
+            row_presence_overshoots
                 .iter()
                 .map(|row| (row + 1).to_string())
                 .collect::<Vec<_>>()
                 .join(",")
         },
-    );
-    println!(
-        "  flip runs components={} histogram={}   longest {} allowed=none diagnostic_only",
-        aggregate.flip_components(),
-        format_flip_histogram(&aggregate.flip_run_histogram()),
-        aggregate.longest_flip_run(),
-    );
-    println!(
-        "  flip runs>{} {}   allowed=none diagnostic_only",
-        LONG_FLIP_RUN_THRESHOLD,
-        aggregate.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD),
     );
     let bias_rows = scores
         .iter()
@@ -436,26 +427,26 @@ fn print_aggregate_score(
     );
     let summary = format!(
         "wave={} scoring={} aggregate_rows={} painted_cells={} aggregate_bias={:+.4} \
-         paint_edge_crossings={} cells>{:.0}dB={} cells>{:.0}dB={} flips={} \
-         aggregate_presence_allowed={} diagnostic_presence_rows_over_3x={} eyeball_rows={} \
-         longest_flip_run={} flip_runs_gt{}={}",
+         paint_edge_crossings={} rung_counts={} extreme_over_12db={} flips={} \
+         presence_gate_cells={} \
+         aggregate_presence_allowed={} \
+         quiet_max_db={:.1} wave2_unified_tail={} \
+         diagnostic_presence_rows_over_3x={} eyeball_rows={}",
         wave.label(),
         scoring.label(),
         scores.len(),
         painted,
         aggregate.signed_mean_db(),
         aggregate.paint_edge_crossings(),
-        rungs[2].over_db,
-        counts[2],
-        rungs[3].over_db,
-        counts[3],
+        format_rung_counts(wave, &counts),
+        aggregate.diagnostic_extreme_count(),
         aggregate.qualifying_flips(),
-        aggregate.flip_count_backstop_allowance(),
-        format_rows(&row_flip_overshoots),
+        aggregate.gated_presence_changes(),
+        aggregate.presence_allowance(wave),
+        aggregate.quiet_max_abs_db(),
+        aggregate.wave_two_unified_tail(),
+        format_rows(&row_presence_overshoots),
         format_rows(&eyeball_rows),
-        aggregate.longest_flip_run(),
-        LONG_FLIP_RUN_THRESHOLD,
-        aggregate.flip_runs_longer_than(LONG_FLIP_RUN_THRESHOLD),
     );
     if let Some(verdict) = verdict {
         println!("verdict={} {summary}", verdict.label());
