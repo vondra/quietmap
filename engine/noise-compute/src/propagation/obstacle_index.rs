@@ -10,7 +10,7 @@
 //! arrays (GPU `MAXT` envelope, IMD/vegetation integral algebra and the
 //! bare-earth δ* fit stay untouched by construction; plan v5 Phase 1).
 
-use crate::constants::{m_per_deg_lon, M_PER_DEG_LAT};
+use crate::constants::{m_per_deg_lon, BUILDING_HEIGHT_MAX_M, M_PER_DEG_LAT};
 
 use super::obstacle_index_file::IndexArray;
 
@@ -1146,6 +1146,14 @@ impl Builder {
         {
             return;
         }
+        // This is the single formation site for building obstacle edges: both
+        // WKB loaders route every outer ring and hole through it. Noise barriers
+        // are a separate physical domain and retain their mapped height.
+        let height_m = if kind == ObstacleKind::Building {
+            height_m.min(BUILDING_HEIGHT_MAX_M as f32)
+        } else {
+            height_m
+        };
         for i in 0..ring.len() {
             let (lat0, lon0) = ring[i];
             let (lat1, lon1) = ring[(i + 1) % ring.len()];
@@ -1588,6 +1596,42 @@ mod tests {
             c.iter().map(|x| x.id).collect::<Vec<_>>(),
             vec![1, 1, 2, 2],
             "near building's two edges first"
+        );
+    }
+
+    /// The obstacle store must not turn the same bad building tag rejected by
+    /// settlement normalization into a 31 km screening wall. The building-only
+    /// ceiling deliberately leaves the independent noise-barrier domain alone.
+    #[test]
+    fn building_obstacle_height_is_clamped_at_edge_formation() {
+        let mut b = ObstacleIndex::builder(OLAT, OLON);
+        b.add_ring(
+            &square(300.0, 0.0, 10.0),
+            31_231.0,
+            ObstacleKind::Building,
+            1,
+        );
+        b.add_polyline(
+            &[ll(700.0, -20.0), ll(700.0, 20.0)],
+            31_231.0,
+            ObstacleKind::Barrier,
+            2,
+        );
+        let idx = b.build();
+        let crossings = run(&idx, ll(0.0, 0.0), ll(1000.0, 0.0));
+
+        let building_heights: Vec<_> = crossings
+            .iter()
+            .filter(|candidate| candidate.kind == ObstacleKind::Building)
+            .map(|candidate| candidate.height_m)
+            .collect();
+        assert_eq!(building_heights, vec![828.0, 828.0]);
+        assert_eq!(
+            crossings
+                .iter()
+                .find(|candidate| candidate.kind == ObstacleKind::Barrier)
+                .map(|candidate| candidate.height_m),
+            Some(31_231.0)
         );
     }
 

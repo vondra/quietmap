@@ -2,6 +2,7 @@
 //! discretised per-cell [`PreparedPoint`]s (GFA-scaled Lw, self-screening
 //! exclusion, emission-derived cull radius) the popup and heatmap loaders share.
 
+use crate::constants::BUILDING_HEIGHT_MAX_M;
 use crate::emission::{industrial, leisure, settlement, wind};
 use crate::types::{PointSource, NUM_BANDS};
 
@@ -257,7 +258,8 @@ pub fn prepare_building_points(input: RawBuildingInput<'_>) -> Vec<PreparedPoint
         input.floors as f32 * crate::constants::BUILDING_FLOOR_HEIGHT_M as f32
     } else {
         crate::constants::BUILDING_DEFAULT_HEIGHT_M as f32
-    };
+    }
+    .min(BUILDING_HEIGHT_MAX_M as f32);
     let actual_floors = if input.floors > 0 {
         input.floors
     } else {
@@ -473,6 +475,33 @@ mod tests {
         });
         assert_eq!(points.len(), 1);
         assert!(points[0].max_radius_m > 0.0);
+    }
+
+    /// The physical ceiling is applied after the complete height ladder, so
+    /// explicit tag errors cannot lift a source into the stratosphere while
+    /// valid skyscrapers and the largest representable floor count stay exact.
+    #[test]
+    fn prepared_building_clamps_resolved_height_to_physical_ceiling() {
+        let source_height = |height_m, floors| {
+            let points = prepare_building_points(RawBuildingInput {
+                centroid_lat: 49.0,
+                centroid_lon: 14.0,
+                height_m,
+                floors,
+                building_type: 1,
+                area_m2: Some(300.0),
+                polygon_wkb: "",
+            });
+            assert_eq!(points.len(), 1);
+            points[0].source_height_m
+        };
+
+        assert_eq!(source_height(31_231.0, 2), 414.0);
+        // u8::MAX floors resolve to 765 m, which is honestly below the 828 m
+        // ceiling and therefore remains 382.5 m at the facade midpoint.
+        assert_eq!(source_height(0.0, u8::MAX), 382.5);
+        assert!((source_height(827.8, 0) - 413.9).abs() < 1e-3);
+        assert_eq!(source_height(300.0, 0), 150.0);
     }
 
     /// `prepare_building_points` must carry `floors` and `area_m2`

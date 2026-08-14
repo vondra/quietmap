@@ -175,6 +175,11 @@ pub const SOURCE_HEIGHT_INDUSTRIAL_ENCLOSED: f64 = 4.0;
 /// emission agree on unmapped buildings (the rasterizer formerly used 6 m).
 pub const BUILDING_DEFAULT_HEIGHT_M: f64 = 8.0;
 
+/// Maximum physical building height (m). The Burj Khalifa is the tallest
+/// building on Earth at 828 m; any larger mapped value is a tag error.
+/// Applied during engine normalization so extracted source data stays raw.
+pub const BUILDING_HEIGHT_MAX_M: f64 = 828.0;
+
 /// Storey height (m) for `building:levels` / Overture `num_floors` × N
 /// height conversions — the middle rung of the building height ladder.
 /// Canonical here, mirrored by the shell rasterizer alongside
