@@ -230,6 +230,79 @@ pub fn baseline_trace(
     }
 }
 
+/// Already-computed common inputs for the CNOSSOS portion of a popup trace.
+/// Source builders retain their emission and segment metadata; this only keeps
+/// the shared propagation trace assembly in one place.
+struct BuildCnossosPropagation {
+    d_slant_m: f64,
+    src_alt_m: f64,
+    rcv_alt_m: f64,
+    ground_g: f64,
+    finite_line_corr_db: f64,
+    reflection_boost_db: f64,
+    source_geometry: iso9613::SourceGeometry,
+    path_profile: PathProfile,
+    terrain: TerrainTrace,
+    screening_atten: [f64; NUM_BANDS],
+    obstacle_trace: ScreeningObstacleTrace,
+    veg_atten: [f64; NUM_BANDS],
+    variants: [PropagationVariants; 3],
+    lw_bands: [[f64; NUM_BANDS]; 3],
+}
+
+/// Assemble the propagation fields shared by point, road, and rail popup
+/// traces from values each kernel has already computed.
+fn build_cnossos_propagation(inputs: BuildCnossosPropagation) -> PropagationBreakdown {
+    let BuildCnossosPropagation {
+        d_slant_m,
+        src_alt_m,
+        rcv_alt_m,
+        ground_g,
+        finite_line_corr_db,
+        reflection_boost_db,
+        source_geometry,
+        path_profile,
+        terrain,
+        screening_atten,
+        obstacle_trace,
+        veg_atten,
+        variants,
+        lw_bands,
+    } = inputs;
+    let vegetation = vegetation_trace(
+        veg_atten,
+        &path_profile.t,
+        &path_profile.forest_u8,
+        path_profile.dist_m,
+    );
+    PropagationBreakdown::Cnossos(Box::new(CnossosBreakdown {
+        baseline: baseline_trace(
+            d_slant_m,
+            src_alt_m,
+            ground_g,
+            finite_line_corr_db,
+            reflection_boost_db,
+            source_geometry,
+        ),
+        path_profile: path_profile_into_trace(path_profile, src_alt_m, rcv_alt_m),
+        terrain,
+        screening: screening_trace(screening_atten, obstacle_trace),
+        vegetation,
+        ground: ground_trace(ground_g),
+        lw_bands: PerPeriod {
+            day: lw_bands[0],
+            evening: lw_bands[1],
+            night: lw_bands[2],
+        },
+        lw_db_a: PerPeriod {
+            day: iso9613::a_weighted_total(&lw_bands[0]),
+            evening: iso9613::a_weighted_total(&lw_bands[1]),
+            night: iso9613::a_weighted_total(&lw_bands[2]),
+        },
+        received_bands: variants_to_received_bands(&variants),
+    }))
+}
+
 /// Inputs for building a per-segment road trace. Keyword-struct style to avoid
 /// a 30-argument function. Consumed (not borrowed) for heavy fields that can
 /// be moved into the resulting SegmentTrace.
@@ -330,13 +403,6 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
         }
     };
 
-    let vegetation = vegetation_trace(
-        veg_atten,
-        &path_profile.t,
-        &path_profile.forest_u8,
-        path_profile.dist_m,
-    );
-
     SegmentTrace {
         kind: source_kind,
         osm_id: Some(src.osm_id),
@@ -356,32 +422,22 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
         bridge: false,
         tunnel: false,
         emission,
-        propagation: PropagationBreakdown::Cnossos(Box::new(CnossosBreakdown {
-            baseline: baseline_trace(
-                d_slant,
-                src_alt,
-                ground_g,
-                0.0,
-                reflection_boost_db,
-                iso9613::SourceGeometry::Point,
-            ),
-            path_profile: path_profile_into_trace(path_profile, src_alt, rcv_alt),
+        propagation: build_cnossos_propagation(BuildCnossosPropagation {
+            d_slant_m: d_slant,
+            src_alt_m: src_alt,
+            rcv_alt_m: rcv_alt,
+            ground_g,
+            finite_line_corr_db: 0.0,
+            reflection_boost_db,
+            source_geometry: iso9613::SourceGeometry::Point,
+            path_profile,
             terrain,
-            screening: screening_trace(screening_atten, obstacle_trace),
-            vegetation,
-            ground: ground_trace(ground_g),
-            lw_bands: PerPeriod {
-                day: lw_bands[0],
-                evening: lw_bands[1],
-                night: lw_bands[2],
-            },
-            lw_db_a: PerPeriod {
-                day: iso9613::a_weighted_total(&lw_bands[0]),
-                evening: iso9613::a_weighted_total(&lw_bands[1]),
-                night: iso9613::a_weighted_total(&lw_bands[2]),
-            },
-            received_bands: variants_to_received_bands(&seg_variants),
-        })),
+            screening_atten,
+            obstacle_trace,
+            veg_atten,
+            variants: seg_variants,
+            lw_bands,
+        }),
         received_lden: variants_to_lden(&seg_variants),
         aircraft_subtype: 0,
         polyline: None,
@@ -436,13 +492,6 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
     let rail_type = rail_type_name(seg.rail_type);
     let seg_name = seg_name_from_tags(&seg.rail_ref, &seg.name, rail_type, seg.osm_id);
 
-    let vegetation = vegetation_trace(
-        veg_atten,
-        &path_profile.t,
-        &path_profile.forest_u8,
-        path_profile.dist_m,
-    );
-
     SegmentTrace {
         kind: LayerKind::Railway,
         osm_id: Some(seg.osm_id),
@@ -482,32 +531,22 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
             rail_type,
             service: seg.service,
         },
-        propagation: PropagationBreakdown::Cnossos(Box::new(CnossosBreakdown {
-            baseline: baseline_trace(
-                d_slant,
-                src_alt,
-                ground_g,
-                flc,
-                reflection_boost_db,
-                iso9613::SourceGeometry::Line,
-            ),
-            path_profile: path_profile_into_trace(path_profile, src_alt, rcv_alt),
+        propagation: build_cnossos_propagation(BuildCnossosPropagation {
+            d_slant_m: d_slant,
+            src_alt_m: src_alt,
+            rcv_alt_m: rcv_alt,
+            ground_g,
+            finite_line_corr_db: flc,
+            reflection_boost_db,
+            source_geometry: iso9613::SourceGeometry::Line,
+            path_profile,
             terrain,
-            screening: screening_trace(screening_atten, obstacle_trace),
-            vegetation,
-            ground: ground_trace(ground_g),
-            lw_bands: PerPeriod {
-                day: lw_bands[0],
-                evening: lw_bands[1],
-                night: lw_bands[2],
-            },
-            lw_db_a: PerPeriod {
-                day: iso9613::a_weighted_total(&lw_bands[0]),
-                evening: iso9613::a_weighted_total(&lw_bands[1]),
-                night: iso9613::a_weighted_total(&lw_bands[2]),
-            },
-            received_bands: variants_to_received_bands(&seg_variants),
-        })),
+            screening_atten,
+            obstacle_trace,
+            veg_atten,
+            variants: seg_variants,
+            lw_bands,
+        }),
         received_lden: variants_to_lden(&seg_variants),
         aircraft_subtype: 0,
         polyline: None,
@@ -569,13 +608,6 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
         lanes: seg.lanes,
     };
 
-    let vegetation = vegetation_trace(
-        veg_atten,
-        &path_profile.t,
-        &path_profile.forest_u8,
-        path_profile.dist_m,
-    );
-
     SegmentTrace {
         kind: LayerKind::Road,
         osm_id: Some(seg.osm_id),
@@ -595,32 +627,22 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
         bridge: seg.bridge,
         tunnel: seg.tunnel,
         emission,
-        propagation: PropagationBreakdown::Cnossos(Box::new(CnossosBreakdown {
-            baseline: baseline_trace(
-                d_slant,
-                src_alt,
-                ground_g,
-                flc,
-                reflection_boost_db,
-                iso9613::SourceGeometry::Line,
-            ),
-            path_profile: path_profile_into_trace(path_profile, src_alt, rcv_alt),
+        propagation: build_cnossos_propagation(BuildCnossosPropagation {
+            d_slant_m: d_slant,
+            src_alt_m: src_alt,
+            rcv_alt_m: rcv_alt,
+            ground_g,
+            finite_line_corr_db: flc,
+            reflection_boost_db,
+            source_geometry: iso9613::SourceGeometry::Line,
+            path_profile,
             terrain,
-            screening: screening_trace(screening_atten, obstacle_trace),
-            vegetation,
-            ground: ground_trace(ground_g),
-            lw_bands: PerPeriod {
-                day: lw_bands[0],
-                evening: lw_bands[1],
-                night: lw_bands[2],
-            },
-            lw_db_a: PerPeriod {
-                day: iso9613::a_weighted_total(&lw_bands[0]),
-                evening: iso9613::a_weighted_total(&lw_bands[1]),
-                night: iso9613::a_weighted_total(&lw_bands[2]),
-            },
-            received_bands: variants_to_received_bands(&seg_variants),
-        })),
+            screening_atten,
+            obstacle_trace,
+            veg_atten,
+            variants: seg_variants,
+            lw_bands,
+        }),
         received_lden: variants_to_lden(&seg_variants),
         aircraft_subtype: 0,
         polyline: None,
