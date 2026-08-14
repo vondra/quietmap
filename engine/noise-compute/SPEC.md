@@ -628,16 +628,16 @@ WHICH RULE RUNS WHERE, and why they are not the same choice:
   adaptive quadrature, and it is the accuracy etalon.
 * **The CUDA lane** has no equivalent and paints §3.5c. A CPU-vs-GPU tile
   comparison must therefore run `QM_SEG_SAMPLES=1 QM_ARC_MIN_SPAN_DEG=0`.
-  Its arc geometry is f64. An f32 relative-geometry lane exists behind
-  `-DARC_REL_F32=1` and is **OFF**: measured 2026-08-10 on sm_120 it is
-  1.16–1.33× but costs **2.32 dB (raw) / 2.00 dB (HM3) on the dense Praha tile
-  2212/1387**, while three sparser tiles showed 0 cells >0.5 dB. The damage is
-  VISIBLE, not sub-threshold: the worst PAINTED cell moves 43.0 → 41.0 dB,
-  13 dB above the 30 dB palette floor. **That contrast is the rule, not a detail: a precision
-  change gated only on rail/motorway/suburb tiles is not gated at all — the
-  geometry that breaks lives in dense cities.** The lane patch that advertised
-  "0 cells >0.5 dB" had simply never been run on one. Detail and the ranked
-  suspects: scatter.cu "THE PRECISION SPLIT".
+  Its arc geometry is f64. One EXPERIMENTAL `SEG_ISECT_F32` switch narrows the
+  shared ray-edge chainage solve after its coordinate differences are formed in
+  f64. In the repaired official RTX role-attribution series this role contributed
+  a repeatable **7.64--15.94 % road** and **5.13--9.60 % rail** gain; every
+  role-attribution pair was byte-identical. This is a SPEED CEILING, not a
+  safety result: strict intersection boundaries can change topology without an
+  ambiguity proof and complete-operation f64 restart, and the candidate has not
+  passed the complete fixed workload or the independent dense and polar gates.
+  The switch therefore remains **OFF** by default. Implementation and stop rule:
+  `scatter.cu` at `SEG_ISECT_F32`.
 
 The uniform rule hands back the ground/barrier COMPOSITE, not a screening
 increment, so at the OUTER level — the quadrature's own average over buckets —
