@@ -10,6 +10,7 @@
 use super::diffraction;
 use super::diffraction::DiffractionResult;
 use super::horizon::single_edge_atten;
+use super::iso9613::GroundPath;
 use super::obstacle_index::{segment_intersection_t, CrossingCandidate, ObstacleKind};
 use super::path_profile::{path_integral_u8, vegetation_run_length, PathProfile};
 use super::vegetation;
@@ -546,6 +547,52 @@ pub fn ground_g_from_profile(profile: &PathProfile) -> f64 {
     (1.0 - avg_imd / 100.0).clamp(0.0, 1.0)
 }
 
+/// Direct CNOSSOS ground input for a sampled ray.
+///
+/// The OLS calculation is the same bare-earth regression primitive used by
+/// diffraction's `δ*` construction.  It deliberately excludes the composite
+/// building/barrier profile: those objects belong only to the screen arm of
+/// the existing `max(A_ground, A_terrain + A_screen)` composite.  Bridges pass
+/// `force_hard_ground=true`, preserving their explicit hard-surface rule.
+pub fn cnossos_ground_path_from_profile(
+    profile: &mut PathProfile,
+    src_alt_m: f64,
+    rcv_alt_m: f64,
+    force_hard_ground: bool,
+) -> GroundPath {
+    if profile.t.is_empty() || profile.elevation_m.is_empty() {
+        return GroundPath::new(0.0, 0.05, 0.5, 0.0, 0.0);
+    }
+    let ground_path_g = if force_hard_ground {
+        0.0
+    } else {
+        ground_g_from_profile(profile)
+    };
+    let source_ground_g = if force_hard_ground {
+        0.0
+    } else {
+        (1.0 - profile.imd_u8[0] as f64 / 100.0).clamp(0.0, 1.0)
+    };
+    let dist_m = profile.dist_m;
+    let PathProfile {
+        t,
+        elevation_m,
+        elevation_f64_scratch,
+        ..
+    } = profile;
+    let elevation_m = PathProfile::elevation_f64_from(elevation_f64_scratch, elevation_m);
+    let (slope, intercept) = diffraction::fit_mean_ground_plane(t, elevation_m, 0.0, dist_m);
+    let src_plane_m = intercept;
+    let rcv_plane_m = slope * dist_m + intercept;
+    GroundPath::new(
+        dist_m,
+        src_alt_m - src_plane_m,
+        rcv_alt_m - rcv_plane_m,
+        ground_path_g,
+        source_ground_g,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -581,6 +628,27 @@ mod tests {
         assert_eq!(trace.delta_m, 0.0, "flat profile should not diffract");
         assert!(trace.edges.is_empty());
         assert!(trace.attenuation_bands.iter().all(|&a| a == 0.0));
+    }
+
+    #[test]
+    fn cnossos_ground_path_uses_bare_earth_ols_and_path_mean_g() {
+        let mut p = build_flat_profile(1_000.0, 10.0);
+        // Make the endpoint distinguishable from the path mean: trapezoidal
+        // integration stays 0.5 in this symmetric profile while §2.5.14 sees
+        // the hard source endpoint separately.
+        p.imd_u8[0] = 100;
+        let last = p.imd_u8.len() - 1;
+        p.imd_u8[last] = 0;
+        let got = cnossos_ground_path_from_profile(&mut p, 11.0, 14.0, false);
+        assert!((got.dp_m - 1_000.0).abs() < 1e-9);
+        assert!((got.zs_h_m - 1.0).abs() < 1e-9);
+        assert!((got.zr_h_m - 4.0).abs() < 1e-9);
+        assert!((got.source_ground_g - 0.0).abs() < 1e-9);
+        assert!((got.ground_path_g - 0.5).abs() < 1e-9);
+
+        let bridge = cnossos_ground_path_from_profile(&mut p, 11.0, 14.0, true);
+        assert_eq!(bridge.ground_path_g, 0.0);
+        assert_eq!(bridge.source_ground_g, 0.0);
     }
 
     #[test]

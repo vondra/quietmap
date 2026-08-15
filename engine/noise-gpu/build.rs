@@ -89,6 +89,22 @@ fn main() {
         "../noise-compute/src/constants.rs",
         "pub const GROUND_HARD_FLOOR_DB: f64 = ",
     );
+    let ground_sound_speed = const_from(
+        "../noise-compute/src/constants.rs",
+        "pub const SPEED_OF_SOUND: f64 = ",
+    );
+    let ground_alpha0 = const_from(
+        "../noise-compute/src/propagation/iso9613.rs",
+        "pub const CNOSSOS_GROUND_ALPHA0: f64 = ",
+    );
+    let ground_delta_zt = const_from(
+        "../noise-compute/src/propagation/iso9613.rs",
+        "pub const CNOSSOS_GROUND_DELTA_ZT_COEFF: f64 = ",
+    );
+    let p_fav = const_from(
+        "../noise-compute/src/constants.rs",
+        "pub const P_FAV: f64 = ",
+    );
     // The penumbra δ floor, λ/20 at the LOWEST band — how far below the sight
     // line an obstacle may pass and still attenuate. `constants.rs` writes it as
     // an EXPRESSION over SPEED_OF_SOUND, so mirror the expression here (as
@@ -170,6 +186,10 @@ fn main() {
                     &format!("-DARC_CP_EPS={cp_eps}"),
                     &format!("-DARC_QUADRATURE_MIN_RAD={arc_quadrature_min}"),
                     &format!("-DGROUND_HARD_FLOOR_DB={ground_hard_floor}"),
+                    &format!("-DGROUND_SOUND_SPEED={ground_sound_speed}"),
+                    &format!("-DCNOSSOS_GROUND_ALPHA0={ground_alpha0}"),
+                    &format!("-DCNOSSOS_GROUND_DELTA_ZT_COEFF={ground_delta_zt}"),
+                    &format!("-DP_FAV={p_fav}"),
                     &format!("-DARC_PENUMBRA_FLOOR_M={penumbra_floor}"),
                     &format!("-DARC_FUSE_HEIGHT_TOL_M={fuse_height_tol}"),
                     &format!("-DARC_FUSE_RANGE_RATIO_LN={fuse_ratio_ln}"),

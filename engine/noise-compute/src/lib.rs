@@ -525,11 +525,12 @@ pub(crate) struct LineSegmentScreening<'a> {
     /// …its absolute source altitude (DEM + source height), which fixes the
     /// sight line the skyline's grazing prune measures obstacles against…
     pub src_alt_m: f64,
-    /// …its screening and terrain bands, and the path-averaged ground factor
-    /// they were combined with.
+    /// …its screening and terrain bands, plus the CP ground vector that the
+    /// current arc increment channel uses for the whole fan.
     pub cp_screening: &'a [f64; NUM_BANDS],
     pub cp_terrain: &'a [f64; NUM_BANDS],
     pub ground_g: f64,
+    pub ground_bands: &'a [f64; NUM_BANDS],
     /// Source height above ground at any point of this segment.
     pub source_height_m: f64,
     /// Segment length and the receiver's distance to its nearest point.
@@ -674,10 +675,11 @@ pub(crate) fn arc_screened_line_segment_prepared(
     let Some(set) = arc_obstacle_set(q.obstacles, q.barriers) else {
         return *q.cp_screening;
     };
-    propagation::arc_screening::arc_screened_attenuation_prepared(
+    propagation::arc_screening::arc_screened_attenuation_prepared_with_ground(
         &line_segment_arc_query(q, set),
         rasters,
         snapshot,
+        q.ground_bands,
         scratch,
     )
 }
@@ -726,6 +728,7 @@ mod tests {
         }];
         let cp_screening = [0.0f64; NUM_BANDS];
         let cp_terrain = [0.0f64; NUM_BANDS];
+        let ground_bands = propagation::iso9613::legacy_ground_atten_bands(0.5);
         let empty = propagation::obstacle_index::ObstacleSet {
             indexes: Vec::new(),
         };
@@ -741,6 +744,7 @@ mod tests {
             cp_screening: &cp_screening,
             cp_terrain: &cp_terrain,
             ground_g: 0.5,
+            ground_bands: &ground_bands,
             source_height_m: 0.05,
             length_m: 285.0,
             dist_m: 133.0,

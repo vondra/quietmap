@@ -44,8 +44,7 @@ use raster_reader::fused_tile_z13::FusedTileZ13;
 use crate::accumulator::{TileAccumulator, NUM_PERIODS};
 use crate::scatter_band::{
     coarse_mid_cfg, lat_to_py, lon_to_px, scatter_tile_with_cfg as band_scatter_tile_with_cfg,
-    ArcSegment, GroundSrc, PixelGeometry, PixelTerms, PreparedSource, ScatterStats, LDEN_WEIGHTS,
-    NUM_BANDS,
+    ArcSegment, PixelGeometry, PixelTerms, PreparedSource, ScatterStats, LDEN_WEIGHTS, NUM_BANDS,
 };
 use crate::source_line::LineRow;
 
@@ -249,11 +248,7 @@ impl<'a> PixelGeometry for LineGeometry<'a> {
             excl_m: 0.0,
             cp_lat: pts.cp_lat,
             cp_lon: pts.cp_lon,
-            ground_src: if line.bridge {
-                GroundSrc::Fixed(0.0)
-            } else {
-                GroundSrc::FromProfile
-            },
+            force_hard_ground: line.bridge,
             // Arc screening (fix-pack Fix 1): the segment the cp ray stands for.
             arc: Some(ArcSegment {
                 start_lat: line.start_lat,

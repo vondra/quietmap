@@ -36,7 +36,7 @@ use std::sync::Arc;
 
 use noise_compute::constants::{ALPHA_ATM, A_WEIGHTING, M_PER_DEG_LAT, M_PER_DEG_LON_EQ};
 use noise_compute::propagation::geo::{finite_line_correction, point_to_segment_full};
-use noise_compute::propagation::iso9613::{fast_exp_f64, ground_atten_db};
+use noise_compute::propagation::iso9613::{fast_exp_f64, legacy_ground_atten_db};
 use noise_compute::propagation::path_effects;
 use noise_compute::propagation::PathProfile;
 use noise_compute::types::{Barrier, RasterSampler, BARRIER_PATH_HORIZON_M};
@@ -203,7 +203,7 @@ fn line_kernel_applies_vector_barriers() {
     let veg = path_effects::vegetation_attenuation_path(&profile);
     let mut expected = 0.0f64;
     for i in 0..NUM_BANDS {
-        let a_gr = ground_atten_db(i, ground_g);
+        let a_gr = legacy_ground_atten_db(i, ground_g);
         let a_bar = terrain[i] + screening[i];
         let gob = if a_bar > 0.0 { a_gr.max(a_bar) } else { a_gr };
         let path_db = base_db - ALPHA_ATM[i] * atm_d_km - gob - veg[i];
@@ -285,7 +285,7 @@ fn point_kernel_applies_vector_barriers() {
     let veg = path_effects::vegetation_attenuation_path(&profile);
     let mut expected = 0.0f64;
     for i in 0..NUM_BANDS {
-        let a_gr = ground_atten_db(i, ground_g);
+        let a_gr = legacy_ground_atten_db(i, ground_g);
         let a_bar = terrain[i] + screening[i];
         let gob = if a_bar > 0.0 { a_gr.max(a_bar) } else { a_gr };
         let path_db = base_db - ALPHA_ATM[i] * atm_d_km - gob - veg[i];

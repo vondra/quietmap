@@ -347,8 +347,9 @@ impl RasterSampler for FusedTileZ13 {
     /// (`RealRasters::ground_g`, `FusedGrid::ground_g`) — `inner_imd` is filled
     /// by an `as u8` saturating cast of the raster sample, so a nodata or
     /// out-of-spec IMD cell above 100 would otherwise make G NEGATIVE. That is
-    /// not merely a wrong level: `A_gr(G) = max(CF·G, 0) + FLOOR·(1 − G)` is
-    /// bounded below by `GROUND_HARD_FLOOR_DB` only across `[0, 1]`, and
+    /// not merely a wrong level: literal CNOSSOS ground uses clamped path and
+    /// source factors, and is bounded below by `GROUND_HARD_FLOOR_DB` only
+    /// across `[0, 1]`.
     /// `scatter_band::budget_ub_lden` prices every pair's upper bound on exactly
     /// that floor (`GROUND_GAIN_UB_DB`, constants.rs). A negative G breaks
     /// `ub ≥ exact`, which the byte-stop asserts in RELEASE — so an unclamped

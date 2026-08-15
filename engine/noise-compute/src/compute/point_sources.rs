@@ -45,7 +45,6 @@ pub(crate) fn compute_point_sources(
         source_id: u16,
     }
     let mut pts_by_osm: HashMap<i64, PtAccum> = HashMap::new();
-    let ground_g = rasters.ground_g(receiver.lat, receiver.lon);
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
 
     for src in sources {
@@ -77,6 +76,17 @@ pub(crate) fn compute_point_sources(
             src.dist_m,
             &mut path_profile,
         );
+        // Point sources used receiver-local G until the literal ground core.
+        // The direct CNOSSOS path requires the same ray-mean IMD semantics as
+        // line sources, including the source-end §2.5.14 correction.
+        let ground_path = propagation::path_effects::cnossos_ground_path_from_profile(
+            &mut path_profile,
+            src_alt,
+            rcv_alt,
+            false,
+        );
+        let ground_g = ground_path.ground_path_g;
+        let ground_bands = iso9613::ground_atten_bands(ground_path);
         let (terrain, _terrain_profile_points) =
             propagation::path_effects::terrain_attenuation_with_meta(
                 &mut path_profile,
@@ -104,33 +114,33 @@ pub(crate) fn compute_point_sources(
             );
         let veg_atten = propagation::path_effects::vegetation_attenuation_path(&path_profile);
 
-        let v_day = iso9613::propagate_variants_full(
+        let v_day = iso9613::propagate_variants_cnossos_ground_full(
             &src.lw_day.map(|v| v as f64),
             d_slant,
             SourceGeometry::Point,
-            ground_g,
+            ground_path,
             &terrain.attenuation_bands,
             &screening_atten,
             &veg_atten,
             reflection,
             0.0,
         );
-        let v_eve = iso9613::propagate_variants_full(
+        let v_eve = iso9613::propagate_variants_cnossos_ground_full(
             &src.lw_evening.map(|v| v as f64),
             d_slant,
             SourceGeometry::Point,
-            ground_g,
+            ground_path,
             &terrain.attenuation_bands,
             &screening_atten,
             &veg_atten,
             reflection,
             0.0,
         );
-        let v_night = iso9613::propagate_variants_full(
+        let v_night = iso9613::propagate_variants_cnossos_ground_full(
             &src.lw_night.map(|v| v as f64),
             d_slant,
             SourceGeometry::Point,
-            ground_g,
+            ground_path,
             &terrain.attenuation_bands,
             &screening_atten,
             &veg_atten,
@@ -203,6 +213,7 @@ pub(crate) fn compute_point_sources(
                 d_slant,
                 prop_dist,
                 ground_g,
+                ground_bands,
                 reflection_boost_db: reflection,
                 path_profile: std::mem::take(&mut path_profile),
                 terrain,

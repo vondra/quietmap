@@ -24,7 +24,8 @@
 
 use noise_compute::constants::{ALPHA_ATM, GROUND_CF, GROUND_GAIN_UB_DB, GROUND_HARD_FLOOR_DB};
 use noise_compute::propagation::iso9613::{
-    a_weighted_total, ground_atten_bands, propagate_bands, propagate_variants, SourceGeometry,
+    a_weighted_total, cnossos_ground_homogeneous_atten_bands, legacy_ground_atten_bands,
+    propagate_bands, propagate_variants, GroundPath, SourceGeometry,
 };
 use noise_compute::types::{PropagationVariants, NUM_BANDS};
 
@@ -72,6 +73,13 @@ fn kernel_a_ground(ground_g: f64) -> [f64; NUM_BANDS] {
     std::array::from_fn(|i| LW[i] - geo - ALPHA_ATM[i] * D / 1000.0 - out.bands[i])
 }
 
+/// The TC direct/LH scenes are homogeneous paths.  Their source and receiver
+/// stand 1 m and 4 m over one flat mean-ground plane, so the literal core has
+/// no projection ambiguity: `dp=D`, `zs=1`, `zr=4`, and source/path G agree.
+fn cnossos_tc_ground(ground_g: f64) -> [f64; NUM_BANDS] {
+    cnossos_ground_homogeneous_atten_bands(GroundPath::new(D, 1.0, 4.0, ground_g, ground_g))
+}
+
 fn fmt(v: &[f64; NUM_BANDS]) -> String {
     v.iter()
         .map(|x| format!("{x:6.2}"))
@@ -87,7 +95,7 @@ fn fmt(v: &[f64; NUM_BANDS]) -> String {
 #[test]
 fn tc01_hard_ground_is_minus_three_db_in_every_band() {
     let reference = ref_a_ground(&TC01_LH);
-    let helper = ground_atten_bands(0.0);
+    let helper = legacy_ground_atten_bands(0.0);
     let kernel = kernel_a_ground(0.0);
     for i in 0..NUM_BANDS {
         assert!(
@@ -160,9 +168,35 @@ fn tc02_tc03_a_weighted_total_within_surrogate_budget() {
             gap.abs() < SURROGATE_BUDGET_DB,
             "{name} (G={g}) L_H total gap {gap:+.2} dB exceeds the surrogate budget\n  \
              engine A_ground    {}\n  reference A_ground {}",
-            fmt(&ground_atten_bands(g)),
+            fmt(&legacy_ground_atten_bands(g)),
             fmt(&ref_a_ground(&lh))
         );
+    }
+}
+
+/// The analytic core replaces the band-mean surrogate.  These are the same
+/// official direct/LH rows as above, but now every octave band is pinned to
+/// the published CNOSSOS calculation rather than merely keeping its
+/// A-weighted total inside a 1 dB surrogate allowance.
+#[test]
+fn literal_cnossos_core_matches_tc01_tc02_tc03_per_band() {
+    for (name, lh, g) in [
+        ("TC01", TC01_LH, 0.0),
+        ("TC02", TC02_LH, 0.5),
+        ("TC03", TC03_LH, 1.0),
+    ] {
+        let reference = ref_a_ground(&lh);
+        let got = cnossos_tc_ground(g);
+        for i in 0..NUM_BANDS {
+            assert!(
+                (got[i] - reference[i]).abs() < TOL_DB,
+                "{name} (G={g}) band {i}: literal core {:.3} dB, reference {:.3} dB\n  core      {}\n  reference {}",
+                got[i],
+                reference[i],
+                fmt(&got),
+                fmt(&reference)
+            );
+        }
     }
 }
 
@@ -176,7 +210,7 @@ fn ground_attenuation_respects_the_cnossos_lower_bound() {
     for step in 0..=20 {
         let g = step as f64 / 20.0;
         let floor = GROUND_HARD_FLOOR_DB * (1.0 - g);
-        let bands = ground_atten_bands(g);
+        let bands = legacy_ground_atten_bands(g);
         for i in 0..NUM_BANDS {
             assert!(
                 bands[i] >= floor - 1e-12,
@@ -207,7 +241,7 @@ fn ground_gain_upper_bound_is_tight_and_sound() {
     let mut deepest = f64::INFINITY;
     for step in 0..=1000 {
         let g = step as f64 / 1000.0;
-        for a in ground_atten_bands(g) {
+        for a in legacy_ground_atten_bands(g) {
             deepest = deepest.min(a);
         }
     }

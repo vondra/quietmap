@@ -278,7 +278,8 @@ pub(super) fn emit_segment_traces(
             // matches between road and ground rows.
             for i in 0..NUM_BANDS {
                 atmospheric_bands[i] = ALPHA_ATM[i] * d_km;
-                ground_bands[i] = ground_atten_db(i, p.ground_g);
+                ground_bands[i] =
+                    crate::propagation::iso9613::aircraft_ground_atten_db(i, p.ground_g);
                 terrain_bands[i] = p.terrain_atten_db[i];
                 screening_bands[i] = p.screening_atten_db[i];
                 vegetation_bands[i] = p.vegetation_atten_db[i];

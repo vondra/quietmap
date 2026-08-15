@@ -404,7 +404,7 @@ fn free_field_lden_at(
     d: f64,
 ) -> f64 {
     use crate::constants::ALPHA_ATM;
-    use crate::propagation::iso9613::{a_weighted_total, ground_atten_db};
+    use crate::propagation::iso9613::{a_weighted_total, legacy_ground_atten_db};
 
     let d = d.max(1.0);
     let geo = 10.0 * (2.0 * std::f64::consts::PI * d).log10();
@@ -424,7 +424,7 @@ fn free_field_lden_at(
             // upper bound on audibility; kept explicit, and routed through the
             // shared term, so the boundary matches the kernel's free-field
             // limit exactly. Post hard-ground fix that term is −3 dB, not 0.
-            bands[i] = em[i] - geo - ALPHA_ATM[i] * d_over_1000 - ground_atten_db(i, 0.0);
+            bands[i] = em[i] - geo - ALPHA_ATM[i] * d_over_1000 - legacy_ground_atten_db(i, 0.0);
         }
         a_weighted_total(&bands)
     };
@@ -845,7 +845,7 @@ mod tests {
                 bands[i] = em[i]
                     - geo
                     - crate::constants::ALPHA_ATM[i] * (d / 1000.0)
-                    - crate::propagation::iso9613::ground_atten_db(i, 0.0);
+                    - crate::propagation::iso9613::legacy_ground_atten_db(i, 0.0);
             }
             a_weighted_total(&bands)
         };

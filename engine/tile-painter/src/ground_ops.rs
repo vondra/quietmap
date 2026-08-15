@@ -52,7 +52,7 @@ use std::f64::consts::LN_10;
 use noise_compute::compute::aircraft_v6::AirportTrafficRowView;
 use noise_compute::constants::{ground_ops_max_radius, ALPHA_ATM, GROUND_GAIN_UB_DB};
 use noise_compute::propagation::geo::{point_to_segment_full, reach_box_half_extents_deg};
-use noise_compute::propagation::iso9613::{fast_exp_f64, ground_atten_db};
+use noise_compute::propagation::iso9613::{aircraft_ground_atten_db, fast_exp_f64};
 use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_compute::propagation::path_effects;
 use noise_compute::types::{Barrier, RasterSampler};
@@ -419,7 +419,7 @@ fn scatter_band(
                 let mut path_aw_per_band = [0.0f64; NUM_BANDS];
                 for i in 0..NUM_BANDS {
                     let atm_db = ALPHA_ATM[i] * d_minus_ref_km;
-                    let a_gr = ground_atten_db(i, ground_g);
+                    let a_gr = aircraft_ground_atten_db(i, ground_g);
                     let a_bar = terrain[i] + screening[i];
                     // ISO 9613-2 §7.3.1: barrier REPLACES ground (max), never adds.
                     let gob = if a_bar > 0.0 { a_gr.max(a_bar) } else { a_gr };

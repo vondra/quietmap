@@ -31,7 +31,7 @@ use raster_reader::fused_tile_z13::FusedTileZ13;
 use crate::accumulator::{TileAccumulator, NUM_PERIODS};
 use crate::scatter_band::{
     coarse_mid_cfg, lat_to_py, lon_to_px, scatter_tile_with_cfg as band_scatter_tile_with_cfg,
-    GroundSrc, PixelGeometry, PixelTerms, PreparedSource, ScatterStats, LDEN_WEIGHTS, NUM_BANDS,
+    PixelGeometry, PixelTerms, PreparedSource, ScatterStats, LDEN_WEIGHTS, NUM_BANDS,
 };
 use crate::source_point::PointRow;
 
@@ -226,11 +226,10 @@ impl<'a> PixelGeometry for PointGeometry<'a> {
             excl_m: point.exclusion_radius_m,
             cp_lat: point.lat,
             cp_lon: point.lon,
-            // Point sources use the receiver's ground_g (oracle samples it once at
-            // the receiver), not the line kernel's path-averaged value. Deferred
-            // (`ReceiverSampled`) so the kernel only samples it past the budget
-            // skip — matching the original point loop's lazy evaluation.
-            ground_src: GroundSrc::ReceiverSampled,
+            // Point sources now share the line path's bare-earth OLS and
+            // path-averaged IMD semantics.  The shared scatter kernel forms it
+            // only after the byte-stop admits this pair.
+            force_hard_ground: false,
             // No angular span to clip: a point source IS its characteristic
             // point, so the cp-ray verdict already covers every direction.
             arc: None,

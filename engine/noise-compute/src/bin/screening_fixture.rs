@@ -1903,7 +1903,7 @@ fn gpu_arc_screened_attenuation(
 
     // One screening evaluation per (sub-)interval centre, energy-averaged on the
     // ground/barrier term.
-    let ground = noise_compute::propagation::iso9613::ground_atten_bands(q.ground_g);
+    let ground = noise_compute::propagation::iso9613::legacy_ground_atten_bands(q.ground_g);
     let cp_rel = wrap_pi(azimuth(q.cp_lat, q.cp_lon) - base);
     let mut blocked_fraction = 0.0f64;
     let mut energy = [0.0f64; NUM_BANDS];

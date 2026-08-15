@@ -1242,6 +1242,24 @@ pub fn arc_screened_attenuation(
     skyline: &mut ArcSkyline,
     scratch: &mut ArcScreeningScratch,
 ) -> [f64; NUM_BANDS] {
+    let ground_bands = crate::propagation::iso9613::legacy_ground_atten_bands(q.ground_g);
+    arc_screened_attenuation_with_ground(q, rasters, skyline, &ground_bands, scratch)
+}
+
+/// [`arc_screened_attenuation`] with the caller's already-formed
+/// characteristic-point ground vector.
+///
+/// This is the mutable counterpart of
+/// [`arc_screened_attenuation_prepared_with_ground`].  It preserves the
+/// current increment-return architecture's one-vector compatibility seam while
+/// surface callers move from the CF surrogate to literal CNOSSOS ground.
+pub fn arc_screened_attenuation_with_ground(
+    q: &ArcScreening<'_>,
+    rasters: &dyn RasterSampler,
+    skyline: &mut ArcSkyline,
+    ground_bands: &[f64; NUM_BANDS],
+    scratch: &mut ArcScreeningScratch,
+) -> [f64; NUM_BANDS] {
     let Some(p) = planned_ensure(
         q.receiver_lat,
         q.receiver_lon,
@@ -1264,7 +1282,7 @@ pub fn arc_screened_attenuation(
         q.source_height_m,
         q.bounds,
     );
-    arc_screened_eval(q, rasters, &skyline.arcs, scratch)
+    arc_screened_eval(q, rasters, &skyline.arcs, ground_bands, scratch)
 }
 
 /// [`arc_screened_attenuation`] against a [`SkylineSnapshot`] instead of the
@@ -1279,7 +1297,24 @@ pub fn arc_screened_attenuation_prepared(
     snapshot: &SkylineSnapshot,
     scratch: &mut ArcScreeningScratch,
 ) -> [f64; NUM_BANDS] {
-    arc_screened_eval(q, rasters, &snapshot.arcs, scratch)
+    let ground_bands = crate::propagation::iso9613::legacy_ground_atten_bands(q.ground_g);
+    arc_screened_eval(q, rasters, &snapshot.arcs, &ground_bands, scratch)
+}
+
+/// Prepared arc evaluation with the caller's already-formed CP ground vector.
+///
+/// This keeps the current increment-return architecture's one-ground-vector
+/// convention while allowing the surface callers to replace the CF surrogate
+/// without changing the arc's screening payload.  Node evaluation removes this
+/// compatibility seam by carrying every ray's full composite directly.
+pub fn arc_screened_attenuation_prepared_with_ground(
+    q: &ArcScreening<'_>,
+    rasters: &dyn RasterSampler,
+    snapshot: &SkylineSnapshot,
+    ground_bands: &[f64; NUM_BANDS],
+    scratch: &mut ArcScreeningScratch,
+) -> [f64; NUM_BANDS] {
+    arc_screened_eval(q, rasters, &snapshot.arcs, ground_bands, scratch)
 }
 
 /// The evaluation half: clip `arcs` to the span, quadrate the blocked fan,
@@ -1288,6 +1323,7 @@ fn arc_screened_eval(
     q: &ArcScreening<'_>,
     rasters: &dyn RasterSampler,
     arcs: &[MergedArc],
+    ground: &[f64; NUM_BANDS],
     scratch: &mut ArcScreeningScratch,
 ) -> [f64; NUM_BANDS] {
     let frame = Frame::at(q.receiver_lat, q.receiver_lon);
@@ -1469,7 +1505,6 @@ fn arc_screened_eval(
     // Clamp it in so the "which interval owns the cp evaluation" question has
     // the same answer on both lanes.
     let cp_rel = clamp_into_span(frame.azimuth(q.cp_lat, q.cp_lon), lo, hi).clamp(lo, hi);
-    let ground = crate::propagation::iso9613::ground_atten_bands(q.ground_g);
     let mut blocked_fraction = 0.0_f64;
     let mut clear_fraction = 0.0_f64;
     let mut energy = [0.0_f64; NUM_BANDS];
@@ -1488,7 +1523,7 @@ fn arc_screened_eval(
                 q,
                 rasters,
                 &frame,
-                &ground,
+                ground,
                 cursor,
                 iv.start,
                 span,
@@ -1555,7 +1590,7 @@ fn arc_screened_eval(
             q,
             rasters,
             &frame,
-            &ground,
+            ground,
             cursor,
             hi,
             span,
@@ -1903,7 +1938,7 @@ mod tests {
         soft.ground_g = 1.0;
         let out_soft = buf.run(&soft);
         for (b, &a) in out_soft.iter().enumerate() {
-            let clear = iso9613::ground_atten_db(b, 1.0);
+            let clear = iso9613::legacy_ground_atten_db(b, 1.0);
             assert!(
                 a > clear && a < 12.0,
                 "band {b}: arc-averaged {a:.2} dB must sit between the clear fan                  {clear:.2} dB and the cp verdict 12 dB"
@@ -2069,7 +2104,7 @@ mod tests {
         soft.ground_g = 1.0;
         let out_soft = Buffers::default().run(&soft);
         for (b, &a) in out_soft.iter().enumerate() {
-            let clear = iso9613::ground_atten_db(b, 1.0);
+            let clear = iso9613::legacy_ground_atten_db(b, 1.0);
             assert!(
                 a > clear && a < 12.0,
                 "band {b}: soft-ground wall share {a:.2} dB outside ({clear:.2}, 12)"

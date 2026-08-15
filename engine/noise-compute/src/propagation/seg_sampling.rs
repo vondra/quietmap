@@ -111,10 +111,10 @@
 //! implemented, it just had to be turned on where it pays.
 
 use crate::propagation::arc_screening::{
-    arc_screened_attenuation, segment_can_span, ArcBounds, ArcScreening, ArcScreeningScratch,
-    ArcSkyline,
+    arc_screened_attenuation_with_ground, segment_can_span, ArcBounds, ArcScreening,
+    ArcScreeningScratch, ArcSkyline,
 };
-use crate::propagation::iso9613::{fast_exp_f64, ground_atten_db, ground_or_barrier_db};
+use crate::propagation::iso9613::{fast_exp_f64, ground_or_barrier_db, legacy_ground_atten_bands};
 use crate::propagation::obstacle_index::{CellPrune, CrossingCandidate};
 use crate::propagation::path_effects::{screening_attenuation, terrain_attenuation, ObstacleInput};
 use crate::propagation::PathProfile;
@@ -314,6 +314,22 @@ pub fn sampled_gob_bands(
     skyline: &mut ArcSkyline,
     scratch: &mut SegSampleScratch,
 ) -> Option<([f64; NUM_BANDS], SegSampleCost)> {
+    let ground_bands = legacy_ground_atten_bands(q.ground_g);
+    sampled_gob_bands_with_ground(q, rasters, n, &ground_bands, skyline, scratch)
+}
+
+/// [`sampled_gob_bands`] with a caller-formed characteristic-point ground
+/// vector.  Individual bucket rays retain their own terrain/screening, while
+/// node evaluation will later remove this current arc transport seam and carry
+/// a full direct-ground composite per ray.
+pub fn sampled_gob_bands_with_ground(
+    q: &ArcScreening<'_>,
+    rasters: &dyn RasterSampler,
+    n: usize,
+    ground_bands: &[f64; NUM_BANDS],
+    skyline: &mut ArcSkyline,
+    scratch: &mut SegSampleScratch,
+) -> Option<([f64; NUM_BANDS], SegSampleCost)> {
     let n = n.max(1);
     let fan = SegFan::new(
         q.receiver_lat,
@@ -381,7 +397,7 @@ pub fn sampled_gob_bands(
             let sub_dist = d0.min(d1).min(sdist);
             if segment_can_span(sub_len, sub_dist, q.bounds) {
                 cost.escalated += 1;
-                scr = arc_screened_attenuation(
+                scr = arc_screened_attenuation_with_ground(
                     &ArcScreening {
                         start_lat: lat0,
                         start_lon: lon0,
@@ -401,6 +417,7 @@ pub fn sampled_gob_bands(
                     },
                     rasters,
                     skyline,
+                    ground_bands,
                     arc,
                 );
             }
@@ -408,7 +425,7 @@ pub fn sampled_gob_bands(
         // The composite is taken on THIS bucket's terrain, not the cp ray's:
         // `terr` is already in hand from the ray we just marched.
         for (i, a) in acc.iter_mut().enumerate() {
-            let gob = ground_or_barrier_db(ground_atten_db(i, q.ground_g), terr[i], scr[i]);
+            let gob = ground_or_barrier_db(ground_bands[i], terr[i], scr[i]);
             *a += fast_exp_f64(-gob * DB_TO_ENERGY_EXP);
         }
         used += 1;
@@ -421,7 +438,7 @@ pub fn sampled_gob_bands(
         // the shipped cp ray also resolves to no screening. Ground alone, which
         // is what `max(A_gr, A_terrain + 0)` gives on a zero-length path.
         for (i, o) in out.iter_mut().enumerate() {
-            let a_gr = ground_atten_db(i, q.ground_g);
+            let a_gr = ground_bands[i];
             *o = if q.cp_terrain[i] > 0.0 {
                 a_gr.max(q.cp_terrain[i])
             } else {
@@ -528,7 +545,7 @@ mod tests {
                 sampled_gob_bands(&q, &FlatGround, n, &mut skyline, &mut scratch).expect("fan");
             assert_eq!(cost.rays, n as u64, "n={n} should march n rays");
             for (i, g) in gob.iter().enumerate() {
-                let want = ground_atten_db(i, 0.5);
+                let want = legacy_ground_atten_bands(0.5)[i];
                 // 1e-4 dB, not exact: the energy round-trip goes through the
                 // kernel's `fast_exp_f64`, worth ~1e-5 dB here — the same
                 // approximation every other energy conversion in the engine
@@ -574,7 +591,7 @@ mod tests {
         let (gob, _) =
             sampled_gob_bands(&q, &FlatGround, 5, &mut skyline, &mut scratch).expect("fan");
         for (i, g) in gob.iter().enumerate() {
-            let want = ground_atten_db(i, 0.5);
+            let want = legacy_ground_atten_bands(0.5)[i];
             assert!(
                 (g - want).abs() < 1e-4,
                 "band {i}: {g} != {want} — the cp terrain leaked into the composite"

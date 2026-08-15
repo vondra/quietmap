@@ -13,7 +13,7 @@
 //!                   + terrain_atten_db[i]                         // DEM-derived
 //!                   + screening_atten_db[i]                       // building diffraction
 //!                   + veg_atten_db[i]                             // forest mask
-//!                   + ground_atten_db(i, ground_g)                // ISO/CNOSSOS ground
+//!                   + aircraft_ground_atten_db(i, ground_g)       // frozen aircraft ground
 //!                  ) / 10)
 //! received_band_lin[i] = row.band_energy_lin[i] × prop_band[i]
 //! aw_band_lin[i]       = received_band_lin[i] × 10^(A_WEIGHTING[i] / 10)
@@ -57,7 +57,7 @@ use crate::emission::gse::NUM_GSE_CLASSES;
 use crate::emission::profiles_generated::NUM_CLASSES;
 use crate::periods;
 use crate::propagation::geo::point_to_segment_full;
-use crate::propagation::iso9613::ground_atten_db;
+use crate::propagation::iso9613::aircraft_ground_atten_db;
 use crate::propagation::path_effects;
 use crate::propagation::PathProfile;
 use crate::types::{
@@ -227,7 +227,7 @@ fn compute_microseg_path(
 ///
 /// All four arrays hold per-band dB attenuation (negative for losses).
 /// `ground_g` is the scalar ground factor [0, 1] consumed by the shared
-/// `iso9613::ground_atten_db` term in the per-band propagation.
+/// `iso9613::aircraft_ground_atten_db` term in the per-band propagation.
 #[derive(Clone, Copy)]
 struct MicrosegPath {
     terrain_atten_db: [f64; NUM_BANDS],
@@ -514,7 +514,7 @@ pub fn run(
             // distance (here, from the 25 m line-source anchor
             // outward).
             let atm_atten_db = ALPHA_ATM[i] * d_minus_ref_km;
-            let a_gr = ground_atten_db(i, path.ground_g);
+            let a_gr = aircraft_ground_atten_db(i, path.ground_g);
             let a_terr = path.terrain_atten_db[i];
             let a_scr = path.screening_atten_db[i];
             let a_veg = path.vegetation_atten_db[i];

@@ -318,12 +318,18 @@ pub(crate) fn compute_railways(
                     seg.dist_m,
                     path_profile,
                 );
-                // Bridge: hard surface below → G=0. Otherwise line-averaged G along path.
-                let ground_g = if seg.bridge {
-                    0.0
-                } else {
-                    propagation::path_effects::ground_g_from_profile(path_profile)
-                };
+                // The current arc payload carries one CP ground vector for its
+                // fan; form it from this ray's bare-earth OLS + IMD profile.
+                // Node evaluation later removes that compatibility seam and
+                // carries each fan ray's full composite directly.
+                let ground_path = propagation::path_effects::cnossos_ground_path_from_profile(
+                    path_profile,
+                    src_alt,
+                    rcv_alt,
+                    seg.bridge,
+                );
+                let ground_g = ground_path.ground_path_g;
+                let ground_bands = iso9613::ground_atten_bands(ground_path);
                 let (terrain, _terrain_profile_points) =
                     propagation::path_effects::terrain_attenuation_with_meta(
                         path_profile,
@@ -371,6 +377,7 @@ pub(crate) fn compute_railways(
                             cp_screening: &cp_screening_atten,
                             cp_terrain: &terrain.attenuation_bands,
                             ground_g,
+                            ground_bands: &ground_bands,
                             source_height_m: SOURCE_HEIGHT_RAIL,
                             length_m: seg.length_m as f64,
                             dist_m: seg.dist_m,
@@ -400,11 +407,11 @@ pub(crate) fn compute_railways(
                         q_frt * frt_pct,
                         hours,
                     );
-                    let v = iso9613::propagate_variants_full(
+                    let v = iso9613::propagate_variants_cnossos_ground_full(
                         &emission,
                         d_slant,
                         SourceGeometry::Line,
-                        ground_g,
+                        ground_path,
                         &terrain.attenuation_bands,
                         &screening_atten,
                         &veg_atten,
@@ -445,6 +452,7 @@ pub(crate) fn compute_railways(
                         d_slant,
                         flc,
                         ground_g,
+                        ground_bands,
                         reflection_boost_db: reflection,
                         q_pax,
                         q_frt,

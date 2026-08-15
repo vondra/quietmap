@@ -82,6 +82,139 @@ pub enum SourceGeometry {
     Point,
 }
 
+/// Bare-earth geometry and ground factors for one direct CNOSSOS path.
+///
+/// `dp_m` is deliberately the horizontal source--receiver distance.  The
+/// equivalent endpoint heights are measured against the same unweighted OLS
+/// bare-earth plane used by the diffraction `δ*` fits; buildings and walls do
+/// not enter either fit.  `ground_path_g` is the interval-weighted IMD path
+/// factor and `source_ground_g` is the source-end factor required only by the
+/// §2.5.14 near-source correction.
+#[derive(Debug, Clone, Copy)]
+pub struct GroundPath {
+    pub dp_m: f64,
+    pub zs_h_m: f64,
+    pub zr_h_m: f64,
+    pub ground_path_g: f64,
+    pub source_ground_g: f64,
+}
+
+impl GroundPath {
+    /// Construct a numerically safe direct path.  The production profile
+    /// builder supplies positive receiver/source heights; this constructor
+    /// also makes standalone fixtures well-defined at degenerate geometry.
+    #[inline]
+    pub fn new(
+        dp_m: f64,
+        zs_h_m: f64,
+        zr_h_m: f64,
+        ground_path_g: f64,
+        source_ground_g: f64,
+    ) -> Self {
+        Self {
+            dp_m: dp_m.max(1e-6),
+            zs_h_m: zs_h_m.abs().max(0.05),
+            zr_h_m: zr_h_m.abs().max(0.05),
+            ground_path_g: ground_path_g.clamp(0.0, 1.0),
+            source_ground_g: source_ground_g.clamp(0.0, 1.0),
+        }
+    }
+}
+
+/// CNOSSOS-EU 2015/996 §2.5.19 favourable-ray curvature coefficient.
+pub const CNOSSOS_GROUND_ALPHA0: f64 = 2e-4;
+/// CNOSSOS-EU 2015/996 §2.5.19 terrain-height term [1].
+pub const CNOSSOS_GROUND_DELTA_ZT_COEFF: f64 = 6e-3;
+
+/// Literal CNOSSOS ground attenuation for one meteorological state.
+///
+/// `favourable=false` implements §2.5.15; `true` implements §2.5.20.  The
+/// latter deliberately uses `G_path` in the impedance term while both states
+/// retain `G'_path` for the §2.5.18 lower bound, matching the standard's
+/// §2.5.14/2.5.20 split.
+#[inline]
+fn cnossos_ground_state_db(band: usize, path: GroundPath, favourable: bool) -> f64 {
+    let g_path = path.ground_path_g;
+    if g_path == 0.0 {
+        // The standard states this case verbatim.  Besides being exact, the
+        // branch avoids the zero-impedance intermediate below.
+        return GROUND_HARD_FLOOR_DB;
+    }
+
+    let (zs_h, zr_h) = (path.zs_h_m, path.zr_h_m);
+    let height_sum = zs_h + zr_h;
+    let test_form_h = path.dp_m / (30.0 * height_sum);
+    // §2.5.14: at short paths blend the path ground with source ground.
+    let g_prime = if test_form_h <= 1.0 {
+        g_path * test_form_h + path.source_ground_g * (1.0 - test_form_h)
+    } else {
+        g_path
+    };
+    let (zs, zr, gw) = if favourable {
+        let delta_zt = CNOSSOS_GROUND_DELTA_ZT_COEFF * path.dp_m / height_sum;
+        let dp_sq_half = path.dp_m * path.dp_m * 0.5;
+        let zs_f =
+            zs_h + CNOSSOS_GROUND_ALPHA0 * (zs_h / height_sum).powi(2) * dp_sq_half + delta_zt;
+        let zr_f =
+            zr_h + CNOSSOS_GROUND_ALPHA0 * (zr_h / height_sum).powi(2) * dp_sq_half + delta_zt;
+        (zs_f, zr_f, g_path)
+    } else {
+        (zs_h, zr_h, g_prime)
+    };
+
+    let f = BAND_FREQ[band];
+    let k = 2.0 * std::f64::consts::PI * f / SPEED_OF_SOUND;
+    let gw13 = gw.powf(1.3);
+    let gw26 = gw13 * gw13;
+    // §2.5.17, then §2.5.16.
+    let w =
+        0.0185 * f.powf(2.5) * gw26 / (f.powf(1.5) * gw26 + 1.3e3 * f.powf(0.75) * gw13 + 1.16e6);
+    let wd = w * path.dp_m;
+    let cf = path.dp_m * (1.0 + 3.0 * wd * (-wd.sqrt()).exp()) / (1.0 + wd);
+    let image_product = (zs * zs - (2.0 * cf / k).sqrt() * zs + cf / k)
+        * (zr * zr - (2.0 * cf / k).sqrt() * zr + cf / k);
+    let analytic = -10.0 * (4.0 * k * k / (path.dp_m * path.dp_m) * image_product).log10();
+    // §2.5.18.  The screen-specific split (§2.5.30--32) remains outside the
+    // Quiet Map composite; callers still choose max(A_ground, A_barrier).
+    analytic.max(GROUND_HARD_FLOOR_DB * (1.0 - g_prime))
+}
+
+/// Literal homogeneous (§2.5.15) ground attenuation for fixtures and the
+/// direct-state validator. Production propagation uses [`ground_atten_bands`],
+/// which also includes §2.5.20.
+#[inline]
+pub fn cnossos_ground_homogeneous_atten_db(band: usize, path: GroundPath) -> f64 {
+    cnossos_ground_state_db(band, path, false)
+}
+
+/// [`cnossos_ground_homogeneous_atten_db`] over all octave bands.
+#[inline]
+pub fn cnossos_ground_homogeneous_atten_bands(path: GroundPath) -> [f64; NUM_BANDS] {
+    std::array::from_fn(|i| cnossos_ground_homogeneous_atten_db(i, path))
+}
+
+/// Literal CNOSSOS direct-ground core, with homogeneous and favourable
+/// propagation mixed energetically using the engine-wide `P_FAV` convention.
+#[inline]
+pub fn ground_atten_db(band: usize, path: GroundPath) -> f64 {
+    if path.ground_path_g == 0.0 {
+        // Both meteorological states are the standard's explicit hard-ground
+        // case.  Return it before the energy round-trip so the byte-stop bound
+        // keeps its exact −3 dB anchor, not merely a 1-ULP approximation.
+        return GROUND_HARD_FLOOR_DB;
+    }
+    let hom = cnossos_ground_state_db(band, path, false);
+    let fav = cnossos_ground_state_db(band, path, true);
+    let energy = P_FAV * 10.0_f64.powf(-fav / 10.0) + (1.0 - P_FAV) * 10.0_f64.powf(-hom / 10.0);
+    -10.0 * energy.log10()
+}
+
+/// [`ground_atten_db`] for all octave bands.
+#[inline]
+pub fn ground_atten_bands(path: GroundPath) -> [f64; NUM_BANDS] {
+    std::array::from_fn(|i| ground_atten_db(i, path))
+}
+
 /// Propagation baseline tied to the closest segment — divergence + the ground
 /// factor the engine read from the raster. Atmospheric and ground *impacts*
 /// belong on the Contributor (energy-weighted across all segments, derived
@@ -102,14 +235,13 @@ pub fn compute_baseline(
     }
 }
 
-/// Ground attenuation `A_ground` for one octave band [dB] — THE definition.
+/// Former band-mean ground attenuation retained only for aircraft ground
+/// operations and compatibility wrappers that have no geometry input.
 ///
-/// Every lane goes through here: the scalar and SIMD propagation kernels, the
-/// popup traces, the aircraft ground-ops kernel, the railway reach solver, arc
-/// screening, the tile-painter scatter kernels, and — via a `build.rs` injection of
-/// [`GROUND_HARD_FLOOR_DB`] into `scatter.cu`, since CUDA cannot call Rust —
-/// the GPU kernel. It used to be nine hand-copied expressions, which is how a
-/// missing term survived in all of them at once.
+/// Surface line and point propagation forms the literal per-band core exactly
+/// once through [`ground_atten_bands`]. This scalar remains deliberately
+/// isolated so aircraft ground operations stay byte-stable until they gain an
+/// independent validation lane.
 ///
 /// CNOSSOS-EU 2015/996 (2.5.15) + (2.5.18) read
 /// `A_ground,H = max(analytic(G, f, h_s, h_r, d), −3(1 − Ḡm))`. The engine
@@ -127,14 +259,33 @@ pub fn compute_baseline(
 /// the standard states verbatim; `tests/tc_ground.rs` pins that against the
 /// official TC01 and pins the `G > 0` totals against TC02/TC03.
 #[inline]
-pub fn ground_atten_db(band: usize, ground_g: f64) -> f64 {
+fn band_mean_ground_atten_db(band: usize, ground_g: f64) -> f64 {
     (GROUND_CF[band] * ground_g).max(0.0) + GROUND_HARD_FLOOR_DB * (1.0 - ground_g)
 }
 
-/// [`ground_atten_db`] over all octave bands.
+/// Aircraft-ground-operations' explicitly carved-out band-mean formation.
+///
+/// Aircraft has no ground-core validation lane yet, so it is intentionally
+/// insulated from the surface-source CNOSSOS upgrade.  Keep this as the only
+/// aircraft call target; its byte stability is tested before any landing.
 #[inline]
-pub fn ground_atten_bands(ground_g: f64) -> [f64; NUM_BANDS] {
-    std::array::from_fn(|i| ground_atten_db(i, ground_g))
+pub fn aircraft_ground_atten_db(band: usize, ground_g: f64) -> f64 {
+    band_mean_ground_atten_db(band, ground_g)
+}
+
+/// Transitional band-mean compatibility helper. New surface propagation must
+/// use [`ground_atten_db`] via a ray-derived [`GroundPath`]; this wrapper
+/// remains only for old arc/testing callers until node evaluation retires that
+/// return channel.
+#[inline]
+pub fn legacy_ground_atten_db(band: usize, ground_g: f64) -> f64 {
+    band_mean_ground_atten_db(band, ground_g)
+}
+
+/// [`legacy_ground_atten_db`] over all octave bands.
+#[inline]
+pub fn legacy_ground_atten_bands(ground_g: f64) -> [f64; NUM_BANDS] {
+    std::array::from_fn(|i| legacy_ground_atten_db(i, ground_g))
 }
 
 /// The ground/barrier term for one band (§7.3.1, as
@@ -184,8 +335,10 @@ pub fn propagate_bands(
     let d_over_1000 = d_slant / 1000.0;
 
     for i in 0..NUM_BANDS {
-        bands[i] =
-            emission_bands[i] - geo_div - ALPHA_ATM[i] * d_over_1000 - ground_atten_db(i, ground_g);
+        bands[i] = emission_bands[i]
+            - geo_div
+            - ALPHA_ATM[i] * d_over_1000
+            - legacy_ground_atten_db(i, ground_g);
     }
 
     let a_weighted = a_weighted_total(&bands);
@@ -229,7 +382,7 @@ fn propagate_variants_impl<const FULL: bool>(
     emission_bands: &[f64; NUM_BANDS],
     d_slant: f64,
     source_geom: SourceGeometry,
-    ground_g: f64,
+    ground_bands: &[f64; NUM_BANDS],
     terrain_atten: &[f64; NUM_BANDS],
     screening_atten: &[f64; NUM_BANDS],
     vegetation_atten: &[f64; NUM_BANDS],
@@ -254,10 +407,6 @@ fn propagate_variants_impl<const FULL: bool>(
 
     let geo_v = f64x4::splat(geo_div);
     let d1000_v = f64x4::splat(d_over_1000);
-    // Ground is a function of `ground_g` alone, so the eight bands are formed
-    // ONCE through the shared scalar term and then loaded per half — no SIMD
-    // re-derivation of the formula that could drift from it.
-    let a_gr_bands = ground_atten_bands(ground_g);
     let refl_v = f64x4::splat(reflection_boost_db);
     let flc_v = f64x4::splat(finite_line_corr);
     let zero_v = f64x4::splat(0.0);
@@ -276,7 +425,7 @@ fn propagate_variants_impl<const FULL: bool>(
         let veg_v = load4(vegetation_atten);
 
         let base = emission_v - geo_v - alpha_v * d1000_v;
-        let a_gr = load4(&a_gr_bands);
+        let a_gr = load4(ground_bands);
 
         let a_bar_full = terr_v + scr_v;
         let gob_full = a_bar_full
@@ -360,11 +509,12 @@ pub fn propagate_variants(
     reflection_boost_db: f64,
     finite_line_corr: f64,
 ) -> crate::types::PropagationVariants {
+    let ground_bands = legacy_ground_atten_bands(ground_g);
     propagate_variants_impl::<false>(
         emission_bands,
         d_slant,
         source_geom,
-        ground_g,
+        &ground_bands,
         terrain_atten,
         screening_atten,
         vegetation_atten,
@@ -389,11 +539,42 @@ pub fn propagate_variants_full(
     reflection_boost_db: f64,
     finite_line_corr: f64,
 ) -> crate::types::PropagationVariants {
+    let ground_bands = legacy_ground_atten_bands(ground_g);
     propagate_variants_impl::<true>(
         emission_bands,
         d_slant,
         source_geom,
-        ground_g,
+        &ground_bands,
+        terrain_atten,
+        screening_atten,
+        vegetation_atten,
+        reflection_boost_db,
+        finite_line_corr,
+    )
+}
+
+/// Popup kernel with the analytic CNOSSOS ground core.  This is intentionally
+/// a separate entrypoint while aircraft ground operations retain their
+/// validated band-mean formation; all non-aircraft source callers must pass a
+/// ray-specific [`GroundPath`] rather than silently falling back to receiver G.
+#[inline]
+pub fn propagate_variants_cnossos_ground_full(
+    emission_bands: &[f64; NUM_BANDS],
+    d_slant: f64,
+    source_geom: SourceGeometry,
+    ground_path: GroundPath,
+    terrain_atten: &[f64; NUM_BANDS],
+    screening_atten: &[f64; NUM_BANDS],
+    vegetation_atten: &[f64; NUM_BANDS],
+    reflection_boost_db: f64,
+    finite_line_corr: f64,
+) -> crate::types::PropagationVariants {
+    let ground_bands = ground_atten_bands(ground_path);
+    propagate_variants_impl::<true>(
+        emission_bands,
+        d_slant,
+        source_geom,
+        &ground_bands,
         terrain_atten,
         screening_atten,
         vegetation_atten,
@@ -433,6 +614,103 @@ mod tests {
             attenuation,
             em_aw,
             result.a_weighted
+        );
+    }
+
+    #[test]
+    fn aircraft_carveout_keeps_the_band_mean_bytes() {
+        // Aircraft ground operations are deliberately exempt from the surface
+        // core until they own an independent validation lane.  Pin the exact
+        // formation here so a later surface migration cannot alter it through
+        // a shared helper by accident; HM3 A/B remains the landing receipt.
+        for g in [0.0, 0.1, 0.5, 0.9, 1.0] {
+            for band in 0..NUM_BANDS {
+                assert_eq!(
+                    aircraft_ground_atten_db(band, g).to_bits(),
+                    band_mean_ground_atten_db(band, g).to_bits(),
+                    "aircraft carve-out drifted at G={g}, band={band}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn literal_ground_core_keeps_the_existing_three_db_gain_bound() {
+        // In each state the literal core is `max(analytic, -3(1-Gm))`.
+        // Both G inputs are clamped, §2.5.14 is their convex blend, hence
+        // `Gm ∈ [0,1]` and every state is >= -3 dB.  The P_FAV energy mix of
+        // values >= -3 dB is also >= -3 dB.  This grid pins the implemented
+        // arithmetic at the domain corners; the accompanying derivation is
+        // the review/landing authority for the continuous domain.
+        for &dp_m in &[1e-6, 0.01, 1.0, 30.0, 300.0, 3_000.0, 10_000.0] {
+            // 15,615.5 m is the current worst raw building-source midpoint;
+            // this regression pins that a bad OSM height cannot invalidate the
+            // byte-stop ground-gain bound while a separate data policy handles
+            // whether that source itself is plausible.
+            for &zs_h_m in &[0.05, 0.5, 1.5, 10.0, 105.0, 175.0, 414.0, 15_615.5] {
+                for &ground_path_g in &[0.0, 0.01, 0.5, 0.99, 1.0] {
+                    for &source_ground_g in &[0.0, 0.5, 1.0] {
+                        let path = GroundPath::new(
+                            dp_m,
+                            zs_h_m,
+                            DEFAULT_RECEIVER_HEIGHT,
+                            ground_path_g,
+                            source_ground_g,
+                        );
+                        for band in 0..NUM_BANDS {
+                            assert!(
+                                ground_atten_db(band, path) >= -GROUND_GAIN_UB_DB - 1e-12,
+                                "dp={dp_m}, zs={zs_h_m}, Gpath={ground_path_g}, Gsource={source_ground_g}, band={band}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let hard = GroundPath::new(100.0, 0.05, DEFAULT_RECEIVER_HEIGHT, 0.0, 1.0);
+        assert_eq!(
+            ground_atten_db(0, hard).to_bits(),
+            GROUND_HARD_FLOOR_DB.to_bits(),
+            "hard-ground P_FAV arithmetic must retain the byte-exact −3 dB anchor"
+        );
+    }
+
+    #[test]
+    fn literal_core_uses_source_end_g_and_the_barrier_replaces_it() {
+        // §2.5.14 is observable only on a short path: the same path mean with
+        // opposite source-end IMD must not collapse back to the old scalar G.
+        let hard_source = GroundPath::new(1.0, 1.0, 4.0, 0.5, 0.0);
+        let soft_source = GroundPath::new(1.0, 1.0, 4.0, 0.5, 1.0);
+        let delta = (0..NUM_BANDS)
+            .map(|band| {
+                (cnossos_ground_homogeneous_atten_db(band, hard_source)
+                    - cnossos_ground_homogeneous_atten_db(band, soft_source))
+                .abs()
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(
+            delta > 0.5,
+            "source-end G' correction vanished: {delta:.3} dB"
+        );
+
+        let emission = [70.0; NUM_BANDS];
+        let zero = [0.0; NUM_BANDS];
+        let opaque_barrier = [100.0; NUM_BANDS];
+        let v = propagate_variants_cnossos_ground_full(
+            &emission,
+            200.0,
+            SourceGeometry::Line,
+            GroundPath::new(200.0, 1.0, 4.0, 1.0, 1.0),
+            &zero,
+            &opaque_barrier,
+            &zero,
+            0.0,
+            0.0,
+        );
+        assert_eq!(
+            v.full_energy.to_bits(),
+            v.no_ground_energy.to_bits(),
+            "an opaque barrier must replace ground, not add to it"
         );
     }
 

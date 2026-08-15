@@ -72,16 +72,16 @@ use std::sync::OnceLock;
 
 use noise_compute::constants::{ALPHA_ATM, A_WEIGHTING, GROUND_GAIN_UB_DB};
 use noise_compute::propagation::arc_screening::{
-    arc_screened_attenuation, segment_can_span, ArcBounds, ArcScreening, ArcScreeningScratch,
-    ArcSkyline,
+    arc_screened_attenuation_with_ground, segment_can_span, ArcBounds, ArcScreening,
+    ArcScreeningScratch, ArcSkyline,
 };
 use noise_compute::propagation::census;
-use noise_compute::propagation::iso9613::{fast_exp_f64, ground_atten_db, ground_or_barrier_db};
+use noise_compute::propagation::iso9613::{fast_exp_f64, ground_atten_bands, ground_or_barrier_db};
 use noise_compute::propagation::obstacle_index::{CellPrune, CrossingCandidate, ObstacleSet};
 use noise_compute::propagation::path_effects;
 use noise_compute::propagation::path_profile::CoarseMid;
 use noise_compute::propagation::seg_sampling::{
-    sampled_gob_bands, seg_arc_bounds, SegSampleScratch,
+    sampled_gob_bands_with_ground, seg_arc_bounds, SegSampleScratch,
 };
 use noise_compute::propagation::PathProfile;
 use noise_compute::types::{Barrier, RasterSampler};
@@ -733,23 +733,6 @@ fn arc_query<'a>(
     }
 }
 
-/// How a pixel's ground attenuation coefficient `G` is resolved AFTER the path
-/// profile is built — the one branch where the line and point ground models
-/// diverge. Line path-averages the profile (hard `G=0` on a bridge); point
-/// samples the receiver's `ground_g` (the popup oracle samples it once at the
-/// receiver, not along the path).
-pub(crate) enum GroundSrc {
-    /// `path_effects::ground_g_from_profile(&profile)` — the line's path average.
-    FromProfile,
-    /// A pixel-resolved constant — the line's bridge `0.0`.
-    Fixed(f64),
-    /// `tile.ground_g(rx_lat, rx_lon)` — the point's receiver-sampled `G` (oracle
-    /// parity). Resolved by the kernel AFTER the budget skip (like the original
-    /// point loop), so a skipped pixel never pays for the raster lookup; the value
-    /// is a pure lat/lon function so deferring it is byte-identical.
-    ReceiverSampled,
-}
-
 /// Everything the generic band loop needs from a (source, receiver) pair that the
 /// per-geometry [`PixelGeometry::pixel`] computes. The shared kernel folds these
 /// into the budget bound, the path build, and the `max(A_gr, A_bar)` assembly
@@ -774,8 +757,10 @@ pub(crate) struct PixelTerms {
     /// `cp_lat/cp_lon`; point = the source `lat/lon`.
     pub(crate) cp_lat: f64,
     pub(crate) cp_lon: f64,
-    /// How `G` is resolved after the profile is built (line vs point ground model).
-    pub(crate) ground_src: GroundSrc,
+    /// Preserve the explicit bridge hard-surface rule.  Every other source
+    /// geometry (line and point) derives both path G and source-end G from this
+    /// pair's sampled IMD profile after the byte-stop has admitted it.
+    pub(crate) force_hard_ground: bool,
     /// The LINE geometry's arc-screening query (fix-pack Fix 1); `None` for the
     /// point kernels, which have no angular span to clip.
     pub(crate) arc: Option<ArcSegment>,
@@ -1067,11 +1052,17 @@ fn scatter_band<G: PixelGeometry>(
                 );
                 s.path_calls += 1;
                 s.raster_samples += s.profile.len() as u64;
-                let ground_g = match t.ground_src {
-                    GroundSrc::FromProfile => path_effects::ground_g_from_profile(&s.profile),
-                    GroundSrc::Fixed(g) => g,
-                    GroundSrc::ReceiverSampled => tile.ground_g(rx_lat, rx_lon),
-                };
+                let ground_path = path_effects::cnossos_ground_path_from_profile(
+                    &mut s.profile,
+                    t.src_alt,
+                    rx_alt,
+                    t.force_hard_ground,
+                );
+                let ground_g = ground_path.ground_path_g;
+                // The arc transport still returns a screening increment, so it
+                // receives this CP vector until node_eval carries each ray's
+                // full composite.  Clear point paths use the same vector here.
+                let ground_bands = ground_atten_bands(ground_path);
                 // Heatmap discards the popup obstacle traces, so call the
                 // metadata-free band-only variants: terrain skips the per-pixel
                 // EdgePoint Vec, screening skips the ObstacleEdge materialisation.
@@ -1105,10 +1096,11 @@ fn scatter_band<G: PixelGeometry>(
                             set,
                             s.arc_bounds,
                         );
-                        sampled_gob_bands(
+                        sampled_gob_bands_with_ground(
                             &query,
                             &SurfaceCadenceRasters { tile, cfg },
                             n_seg,
+                            &ground_bands,
                             &mut s.skyline,
                             &mut s.seg_scratch,
                         )
@@ -1175,10 +1167,11 @@ fn scatter_band<G: PixelGeometry>(
                                     set,
                                     s.arc_bounds,
                                 );
-                                arc_screened_attenuation(
+                                arc_screened_attenuation_with_ground(
                                     &query,
                                     &SurfaceCadenceRasters { tile, cfg },
                                     &mut s.skyline,
+                                    &ground_bands,
                                     &mut s.arc_scratch,
                                 )
                             }
@@ -1187,7 +1180,7 @@ fn scatter_band<G: PixelGeometry>(
                         let mut gob = [0.0f64; NUM_BANDS];
                         for (i, g) in gob.iter_mut().enumerate() {
                             *g = ground_or_barrier_db(
-                                ground_atten_db(i, ground_g),
+                                ground_bands[i],
                                 terrain_bands[i],
                                 screening[i],
                             );

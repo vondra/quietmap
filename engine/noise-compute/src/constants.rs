@@ -47,14 +47,15 @@ pub const GROUND_HARD_FLOOR_DB: f64 = -3.0;
 /// possibly have, and if that assumption under-states the real gain the bound
 /// stops being an upper bound and the pipeline silently drops audible sources.
 ///
-/// WHY EXACTLY 3.0. With `A_gr(G) = max(CF·G, 0) + FLOOR·(1 − G)` the first
-/// term is ≥ 0 by construction, so `A_gr(G) ≥ FLOOR·(1 − G) ≥ FLOOR` across
-/// `[0,1]`, with equality at `G = 0` in EVERY band — the minimum is the floor
-/// itself. The former per-band `max(−CF[i], 0)` (1.5 dB at 63 Hz, 0.7 at
-/// 125 Hz, 0 above) was the correct bound only while `A_gr = CF·G` bottomed out
-/// at 0 over hard ground; leaving it in place alongside the floor would make
-/// `ub < exact` on every hard-ground path. `tests/tc_ground.rs` pins both the
-/// soundness and the tightness by sweeping G.
+/// WHY EXACTLY 3.0. Every literal CNOSSOS state ends in
+/// `max(analytic, FLOOR·(1−G′))`. Both IMD factors are clamped and §2.5.14
+/// makes `G′` their convex blend, so `A_gr ≥ FLOOR` for every finite path
+/// geometry; the P_FAV energy mix preserves that lower bound. Equality is the
+/// explicit `Gpath=0` hard-ground case in every band. The former per-band
+/// `max(−CF[i], 0)` (1.5 dB at 63 Hz, 0.7 at 125 Hz, 0 above) was correct only
+/// before the hard-ground floor existed; leaving it would make `ub < exact` on
+/// every hard-ground path. `tests/tc_ground.rs` and the literal-core domain
+/// test pin soundness and tightness.
 pub const GROUND_GAIN_UB_DB: f64 = -GROUND_HARD_FLOOR_DB;
 
 /// Octave band center frequencies [Hz].

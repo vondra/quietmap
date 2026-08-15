@@ -405,8 +405,9 @@ fn compute_delta_star(
     let d_sg = t[d_idx] * total_dist;
     let d_rg = (1.0 - t[d_idx]) * total_dist;
 
-    let (_, b_src) = fit_plane(&t[..=d_idx], &profile[..=d_idx], 0.0, total_dist);
-    let (a_rcv, b_rcv) = fit_plane(&t[d_idx..], &profile[d_idx..], t[d_idx], total_dist);
+    let (_, b_src) = fit_mean_ground_plane(&t[..=d_idx], &profile[..=d_idx], 0.0, total_dist);
+    let (a_rcv, b_rcv) =
+        fit_mean_ground_plane(&t[d_idx..], &profile[d_idx..], t[d_idx], total_dist);
     let plane_rcv_at_end = a_rcv * d_rg + b_rcv;
 
     let s_star_z = 2.0 * b_src - (profile[0] + source_height);
@@ -419,7 +420,18 @@ fn compute_delta_star(
     (d_sd + d_dr - d_sr).max(0.0)
 }
 
-fn fit_plane(ts: &[f64], zs: &[f64], t_offset: f64, total_dist: f64) -> (f64, f64) {
+/// Unweighted OLS mean-ground plane used by every CNOSSOS ground consumer.
+///
+/// The diffraction `δ*` construction fits one such plane on each side of its
+/// dominant edge.  A direct-ground path fits it over the whole bare-earth ray.
+/// Keeping the regression here prevents the two consumers from silently
+/// acquiring different mean-ground conventions.
+pub(crate) fn fit_mean_ground_plane(
+    ts: &[f64],
+    zs: &[f64],
+    t_offset: f64,
+    total_dist: f64,
+) -> (f64, f64) {
     let n = zs.len() as f64;
     debug_assert_eq!(ts.len(), zs.len());
     if n < 1.0 {

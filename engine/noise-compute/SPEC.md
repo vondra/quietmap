@@ -37,12 +37,14 @@ foliage in full leaf. Scalar approximates average Central European mixed forest 
 (~50 %). See `docs/future-plans/forest-continuous-density.md` for the continuous-density plan
 (Copernicus HRL TCD + Hansen GFC) that replaces the scalar with per-pixel canopy fraction.
 
-### Ground correction factors (CNOSSOS-EU §2.5.15 + §2.5.18)
+### Aircraft ground-operations compatibility factors
 ```
 CF = [-1.5, -0.7, 1.5, 2.5, 2.0, 1.3, 0.7, 0.2]
 A_ground[i] = max(CF[i] × G, 0) − 3 × (1 − G)    where G = 1 - IMD/100 (imperviousness raster)
 ```
-See §3.3 for the derivation and for why the −3 dB is a floor, not an addend.
+This is the explicitly carved-out, byte-stable aircraft ground-operations
+formation. Surface line and point sources use the literal per-band CNOSSOS
+core in §3.3 instead.
 
 ---
 
@@ -220,37 +222,50 @@ where d_slant = √(d_horizontal² + Δh²), Δh = (h_source + z_source) - (h_re
 A_atm,i = α_atm,i × d_slant / 1000    [dB]
 ```
 
-### 3.3 Ground effect (CNOSSOS-EU §2.5.15 + §2.5.18)
+### 3.3 Ground effect (CNOSSOS-EU §2.5.14--2.5.20)
 ```
-A_ground,i = max(CF[i] × G, 0) + HARD_FLOOR × (1 − G)      HARD_FLOOR = −3 dB
+A_ground,H,i = max(analytic(w_i, cf_i, f_i, d_p, z_s, z_r), −3 × (1 − G′_path))
+A_ground,F,i = max(analytic(w_i, cf_i, f_i, d_p, z_s,F, z_r,F), −3 × (1 − G′_path))
+A_ground,i   = −10 × log10((1−P_FAV)×10^(−A_ground,H,i/10) + P_FAV×10^(−A_ground,F,i/10))
+P_FAV = 0.5
 ```
-where G = `1 - IMD/100`, from the imperviousness raster. G=0 hard, G=1 soft.
+`w_i` is §2.5.17, `cf_i` §2.5.16, the homogeneous state §2.5.15 and the
+favourable state §2.5.20. `G′_path` is §2.5.14's source-end correction: for
+`d_p/(30(z_s+z_r)) ≤ 1`, it blends path-average `G_path` with the source IMD
+factor; otherwise it equals `G_path`. `d_p` is horizontal distance. `z_s` and
+`z_r` are measured against the one bare-earth mean-ground OLS plane shared
+with the diffraction `δ*` machinery. `G_path = 1 − IMD/100` is sampled over
+the ray for line, area, and point sources alike; bridge paths force both
+factors to zero.
 
-2015/996 gives `A_ground,H = max(analytic(G, f, h_s, h_r, d), −3(1 − Ḡm))`
-((2.5.15) with the (2.5.18) lower bound), and states the hard-ground case
-verbatim: *"if Gpath = 0: Aground,H = −3 dB"*. ISO 9613-2 Table 3 agrees
+2015/996 states the hard-ground case verbatim: *"if Gpath = 0: Aground,H = −3 dB"*. ISO 9613-2 Table 3 agrees
 (`As + Ar = −1.5 − 1.5`). The physics is the image source: over a reflective
 surface the direct and reflected rays arrive in phase, so the level sits ~3 dB
 ABOVE free field — an attenuation of −3 dB, not zero.
 
-`CF[i] × G` is our band-mean surrogate for the analytic term, so the max() is
-kept in the same shape: the `max(·, 0)` is what stops the two parts stacking,
-and the floor REPLACES the surrogate's negative low-frequency lobe rather than
-adding to it. At G = 1 the change is worth −0.01 dB on the A-weighted sum; at
-G = 0 it is the full 3.00 dB in every band.
+The lower bound is a replacement, not an addend. Surface sources form the
+literal vector once in `propagation::iso9613::ground_atten_bands` (with
+`ground_atten_db` as its per-band scalar); the
+CPU popup/tile kernels and `scatter.cu` use that vector. CUDA receives the
+Rust-owned physical constants only through `noise-gpu/build.rs -D`; no ground
+constant is hand-maintained in the kernel. The official TC01/TC02/TC03 fixtures
+pin the homogeneous direct state band-by-band in `tests/tc_ground.rs`.
 
-Formed in exactly ONE place, `propagation::iso9613::ground_atten_db` — the
-scalar and SIMD kernels, popup traces, aircraft ground-ops, arc screening, the
-tile-painter scatter kernels and (via a `noise-gpu/build.rs` `-D` injection of
-`GROUND_HARD_FLOOR_DB`, since CUDA cannot call Rust) `scatter.cu` all route
-through it. It was nine hand-copied expressions until 2026-08-05, which is how
-the term went missing from all of them at once. Pinned band-by-band against the
-official CNOSSOS TC01/TC02/TC03 in `tests/tc_ground.rs`.
+Aircraft ground operations intentionally keep their own band-mean `CF` function
+above: they have no independent ground-core validation lane and must remain
+byte-stable until one exists.
+
+**Transitional line-fan cause (V1 review):** the existing arc increment
+transport applies the characteristic-point literal ground vector to its fan
+subrays; node evaluation replaces that transport with each ray's complete
+ground/barrier composite. This standalone core does not change the increment
+payload or its non-negative clamp.
 
 Consequence for the energy-budget skip in `tile-painter`: the largest ground
-GAIN any band can reach is now `−HARD_FLOOR` = 3.0 dB, attained at G = 0 in
-every band, replacing the old per-band `max(−CF[i], 0)` (1.5 / 0.7 / 0…). The
-bound is `constants::GROUND_GAIN_UB_DB`; leaving the old values in place would
+GAIN any band can reach is `GROUND_GAIN_UB_DB = 3.0 dB`, attained by the
+`-3*(1-G_prime)` floor at `G_prime = 0` in every band, replacing the old
+per-band `max(−CF[i], 0)` (1.5 / 0.7 / 0…). The bound is
+`constants::GROUND_GAIN_UB_DB`; leaving the old values in place would
 make the skip's `ub ≥ exact` invariant false over hard ground and drop audible
 sources silently.
 
@@ -263,11 +278,11 @@ missing northern LAND reads hard too; the production host's complete raster
 tree is the truth.
 
 Current implementation:
-- **Line sources** (roads, railways, aircraft-ground): both popup and pipeline
-  use **path-averaged** `G_path` from closest-point to receiver — identical
-  evaluation at an R11 hex center.
-- **Point sources** (buildings, industrial): both popup and pipeline use
-  **receiver-local** `G` at the receiver coordinate — also identical.
+- **Surface line and point sources**: popup and pipeline use the same
+  **path-averaged** `G_path` from source/closest point to receiver, plus the
+  §2.5.14 source-end factor.
+- **Aircraft ground operations**: retain the isolated band-mean compatibility
+  formation until their own validation lane exists.
 
 Barrier interaction:
 ```
@@ -401,13 +416,373 @@ Simplifications vs. strict CNOSSOS:
   OFF-by-default `FAVOURABLE_MIXING` flag — see §3.9.
 - Lateral diffraction around vertical edges (§2.5.6(i)) is not implemented.
 
-See §3.5a for the shared path-sampling scheme.
+See §3.5b for the V2 node evaluator's shared path sampling scheme.
+The V2 clauses below are the D1 review draft; they become the live contract
+only with the V2 evaluator landing.  The demoted V1 text is retained solely as
+an implementation/archive record until its verified deletion package lands.
 
-### 3.5a Unified path sampler
+### 3.5a Element decomposition and deterministic line-node placement (V2 draft)
+
+Model V2 evaluates every source as incoherent **point-like emitting elements**
+at the receiver.  It does not transport a characteristic-point path effect over
+a line fan.  For a receiver `R` and emitting geometry `S`, the received energy
+is the sum of the full transfer of its nodes:
+
+```text
+[N-01]  L(R) = 10 lg Σ_nodes 10^((E_node - A(node, R)) / 10)
+```
+
+The decomposition policy is selected once per source/receiver pair, then nodes
+stream one at a time; it is not a runtime virtual dispatch in the hot loop.
+
+* **Point:** one node, preserving the present point-emitter semantics.
+* **Area:** the existing `point_sources` grid is the area policy verbatim; each
+  grid point is one node.  A far-field collapse is not part of V2.
+* **Line:** roads and railways use the closed-form placement below for every
+  storage piece and receiver.  Uniform angular buckets, adaptive fan
+  requadrature and blocked-fraction averaging are not line policies in V2.
+
+`D_FLOOR` is a pinned, per-layer physical constant: emitter height plus half
+the lane/track width.  It is not an accuracy or capacity dial.  The
+soundness note in §4 records the numerical values and their provenance.  Line
+storage pieces satisfy `L <= L_MAX = 250 m`; an over-length input is split at
+load, fail-closed if that invariant cannot be established.  The storage split
+is an emission-attribution boundary, and a 1/2/N split-merge fixture pins
+invariance.
+
+The following labels are normative for both `node_eval.rs` and the CUDA mirror
+under the frozen model-v2 plan, §6
+(`PLAN-MODEL-V2-NODE-QUADRATURE-20260815.md`).
+All placement arithmetic is explicitly ordered f64 in the pair's p2s frame;
+placement expressions do not contract into FMA.  `qm_atan` and `qm_tan` are
+the shared, bit-pinned transcendentals of that frozen-plan contract.
+
+```text
+[N-02 FRAME]  t      = unclamped foot parameter of R on line(A, B)
+               F      = A + t * (B - A)
+               x(s)   = signed abscissa from F on the storage piece
+               d_perp = horizontal |R - F|
+               h      = max(d_perp, D_FLOOR)
+               u(s)   = qm_atan(x(s) / h)
+               d_pl(x) = sqrt(h^2 + x^2)
+
+[N-03 BOUNDS] U = {u(A), u(B)} plus u=0 when the foot is interior.
+               The foot is always a boundary: every cell lies on one arm,
+               so no cell evaluates sign(0).
+
+[N-04 HINTS]  Add only the admitted §3.5c skyline transitions.  Hints are
+               refinement geometry, never blocked/clear truth.
+
+[N-04a HINT-AZIMUTH] For d_perp >= D_FLOOR,
+               u_hint = phi_transition - phi_foot.
+
+[N-04b HINT-RANGE] For d_perp < D_FLOOR, a candidate arc of own range b
+               admits each physical crossing d_perp < b <= piece_range as
+               x = +/-sqrt(b^2 - d_perp^2), u_hint = qm_atan(x / h).
+               Both roots are independent candidates; d_perp, never h,
+               is the radicand quantity.
+
+[N-04c ADMISSION] Clip to the piece, retain at most H_MAX candidates in
+               ascending range stratum, then (start, end, source_id), then
+               u_hint ascending order; dedupe only f64-equal u values and
+               sort U ascending. Surplus hints increment an always-on soft
+               counter: they mean less refinement, never less screening.
+
+[N-05 CELLS]  For each [U_k, U_k+1],
+               Every interior cell boundary is s_i = F + h*qm_tan(u_i).
+               arm = -1 left of F and +1 right of F; no cell crosses F.
+               K = ceil((U_k+1 - U_k) / THETA_MAX).
+               Cells are half-open [u_i, u_i+1); piece ends remain exact.
+
+[N-06 CHUNKS] On each one-arm cell, advance from its near end in d_pl.
+               Cut while d_pl_far - d_pl_cur > S_live(d_pl_cur), where
+               S_live(d) = THETA_MAX * R_ATM_BASE *
+                   (ALPHA_ATM[8 kHz] / alpha_live(d)),
+               alpha_live(d) = max { ALPHA_ATM[b] :
+                   ALPHA_ATM[b] * d / 1000 <= A_LIVE_DB }.
+               R_ATM_BASE = 1,000 m/rad; A_LIVE_DB = 25 dB.
+               Cut at d_pl_cur + S_live(d_pl_cur), then invert only as
+               s = F + arm * sqrt((d_pl_cur + S_live(d_pl_cur))^2 - h^2).
+
+[N-07 NODE]   For a chunk [s1, s2], length ell = s2 - s1 and
+               Delta_u = u(s2) - u(s1):
+               D^2 = ell * h / Delta_u;
+               s_node = F + arm * sqrt(D^2 - h^2).
+               The node evaluates its exact 3D slant and azimuth, not d_pl.
+
+[N-08 WEIGHT] W_node = (W_prime / m) * ell.
+```
+
+`d_pl` is only the placement metric.  Evaluation uses the node's exact 3D
+slant.  The free-field-exact position in `[N-07]` makes the weighted node sum
+reproduce the chunk's `integral ds / d_pl^2`; weights telescope to the storage
+piece.  This is the required free-field normalization identity, not a midpoint
+approximation.
+
+
+For the production working point `THETA_MAX = 3 degrees`, `H_MAX = 32`, and
+`L_MAX = 250 m`, the generator has the proven bound
+
+```text
+[N-09 BOUND] N <= ceil(pi / THETA_MAX) + H_MAX + floor(L / S_min) + 2
+             S_min = THETA_MAX * R_ATM_BASE
+```
+
+which is 98 nodes per pair.  Node overflow remains an always-on hard fault:
+its receipt count must be zero, because a non-zero count means the invariant
+or implementation is broken, not that a cap was undersized.  Judge mode uses
+the same generator with `THETA_MAX -> eps_judge`, uncapped hints and scaled
+`S_live`; it is CPU-only and converges constructively for on-source, off-end,
+radial and broadside geometry.
+
+### 3.5b One node evaluator and shared path profile (V2 draft)
+
+Every node takes the same complete path evaluation:
+
+```text
+[N-10 EVAL] A(node, R) = A_div(r) + A_atm(r) + A_ground_or_barrier
+                          + A_vegetation + A_meteo
+```
+
+The evaluator marches the node's own DEM/forest/IMD profile, derives its own
+terrain diffraction and exact building/barrier crossing race, and evaluates
+vegetation and literal CNOSSOS ground on that path.  A skyline-clear node may
+skip the vector obstacle walk, but never the terrain, ground or vegetation
+march. `node_eval` is the one CPU evaluator; CUDA implements the labelled
+mirror under the frozen model-v2 plan, §6
+(`PLAN-MODEL-V2-NODE-QUADRATURE-20260815.md`).
+
+DEM, Overture building height, WorldCover forest and IMD are sampled along a
+node ray by the single bilateral cadence in `path_profile::fill_t_values`.
+The heatmap-only coarse-middle cadence is not an evaluator semantic and must
+not be used by popup or judge mode.  Terrain diffraction, screening,
+vegetation depth and path-mean ground `G` consume the same `PathProfile`.
+
+The ground upgrade is the analytic CNOSSOS ground core **inside** the existing
+Quiet Map composite, not a claim of full screened-ground CNOSSOS:
+
+```text
+[N-11 COMPOSITE] A_ground_or_barrier = max(A_ground, A_terrain + A_screen)
+```
+
+Ground is replaced under a winning barrier and never added to it.  The
+CNOSSOS 2.5.30--2.5.32 screened-ground split remains open; the sight-line step
+described in §3.5 terrain diffraction remains explicitly unresolved.  Aircraft
+ground operations retain their isolated legacy ground formation until an
+aircraft validation lane exists.
+
+### 3.5c Vector skyline: admission and node-boundary ABI (V2 draft)
+
+The receiver-local vector skyline survives only as an **admission and hint
+provider**.  It contains candidate footprint-edge and barrier intervals, not
+screening truth.  Every admitted node re-derives its actual terrain and vector
+screening from its own ray; no skyline miss is permitted to discard a screen.
+
+Intervals are half-open `[start, end)` azimuths in the pair p2s frame.  A seam
+crossing is split first; candidates then iterate in the shared canonical total
+order `(start, end, source_id)`.  The union sweep gives transition ownership to
+the run it opens.  Per-pair `near_m` is computed after span clipping and
+multiply-emitted physical edges dedupe by stable edge/source identity.  CPU and
+CUDA share these rules and their fault semantics: interval overflow drops toward
+less screening and is counted; node overflow is hard; hint drops are counted
+softly. The frozen model-v2 plan, §6
+(`PLAN-MODEL-V2-NODE-QUADRATURE-20260815.md`) is the detailed CPU/CUDA ABI contract for these labels.
+
+The old fan quantities `f_i`, `D_bar` and the transported
+`A_screen = max(0, D_bar - A_terrain)` increment do not exist in V2.  This
+removes the hard-ground partial-screening clamp structurally: a node returns
+its complete composite, and a segment is the energy sum of its nodes.
+
+### 3.5d Production accuracy and CPU judge (V2 draft)
+
+Production uses the finite dialled generator of §3.5a.  The CPU judge uses the
+same equations with `eps_judge`, uncapped hints and scaled live-range chunks.
+The required convergence receipt halves `eps_judge` and shows every gated cell
+moves by at most 0.01 dB.  The V3 production sweep then compares the complete
+production evaluator against that judge on the fixed cells including dense
+Praha; its required bound is at most 0.5 dB per pixel and zero paint-presence
+flips.  No uniform-node, blocked-fraction or distant-LOD result is reusable as
+this proof.
+
+### 3.5e Popup node contract (V2 draft)
+
+The base popup retains one aggregate segment row and adds only its `node_count`.
+It contains no per-node rows.  Its uncompressed response limit is
+`BASE_PAYLOAD_MAX_BYTES = 3,200,000`; rows are emitted in descending segment
+Lden contribution, tie-broken by stable row id.  At the limit it truncates at a
+row boundary and returns `truncated` plus a last-row cursor; continuation uses
+the same order and limit.
+
+Expanding a segment lazily returns compact node rows
+`{angle, r, screening_class, node_lden}` under
+`NODE_LIST_RESPONSE_MAX_BYTES = 65,536`.  Clicking a node lazily returns its
+complete engine propagation breakdown under
+`NODE_BREAKDOWN_RESPONSE_MAX_BYTES = 65,536`.  Node identity is
+`(layer, source_row_id, piece_index, node_index)`.  Every lazy request binds
+the kernel identity hash, data-build identity, receiver coordinate and layer;
+a mismatch after deploy or data publication is rejected and the client refetches
+the base response.  Show-all returns aggregate rows only.  The frontend derives
+no node physics: every displayed node value is engine-computed, and the segment
+row is the energy sum of its nodes.
+
+### 3.5f V2 §4 soundness derivation note (D1 review draft)
+
+**Evidence record.** This signed derivation merges the independently authored
+S2 notes against frozen V8 plan
+`2524216d6d2ba529d46055e2374222037eb45441e34df7ea950a7bef5fb56b47`:
+Seat A byte-stop/normalization
+`a62a5b6c363c4c0e264b67c03e55ec95116e80ba32dfc11ebc9443d8d1be98a0`,
+Seat B ground/reach
+`0b78f51b0c18b66f176b10fef7414abaca92e0986ab8fb4889efb955da5cfec7`, and
+Seat C cull/split/D_FLOOR
+`a1e618e7f71c60274013087be112da76ec11d900b8173de563450159bb5dc3ca`.
+Every fast-path bound below is a pre-implementation gate: the affected lever
+cannot land until its named fixture is green.
+
+#### §4.1 Node byte-stop upper bound
+
+For a line piece of total power `W_piece`, define `d_near_h` as the
+**horizontal endpoint-clamped minimum** receiver-to-piece distance (`dend`).
+It is never a closest-foot slant and never `d_pl`.  The one v2 construction is
+
+```text
+[S-01 UB] d_ub = max(d_near_h, 1.0 m)
+          ub_b = UB_SAFETY * W_piece *
+                 10^((refl + GROUND_GAIN_UB_DB + A_weight_b
+                      - 20 lg(d_ub) - 11 - alpha_b*d_ub/1000) / 10)
+          ub = sum_b ub_b
+```
+
+`W_piece` includes the piece length because the source spectrum is per metre;
+the old FLC performed that integration implicitly.  Every node lies on the
+piece (`[N-07]`), so its horizontal distance is at least `d_near_h`; its exact
+3D slant is at least that horizontal distance; the shared 1 m divergence floor
+and non-negative atmospheric absorption preserve the inequality.  Ground is
+bounded by §4.2, terrain/screening/vegetation are non-negative, and
+`sum(W_node) = W_piece`.  Therefore `ub >= exact` term by term for any node
+placement.  The horizontal definition is load-bearing: a 30% sloping source
+line makes foot-slant `d_near` understate by 0.374 dB, far beyond the 0.0004 dB
+`UB_SAFETY` margin.  It also removes the elevation read from the cheap pass.
+
+The required `the_node_bound_is_never_below_the_node_sum` fixture (note A A1-A7) covers
+on-source, end-on, off-end, dense-row and far-broadside pieces; all ground,
+screening and vegetation corners; `theta_max` 5/3/1 degrees; and 0.06/0.30
+slope.  It asserts strict `ub >= exact`, containment, weight telescoping,
+far-tail slack <= 0.05 dB at >=1 km, D_FLOOR bit-independence and that
+on-source pairs are never byte-stopped.  The G1-CPU receipt reports the new
+skip rate and the separately measured saved elevation reads; it must not net
+one against the other silently.
+
+#### §4.2 Literal ground gain bound
+
+For the implemented CNOSSOS 2.5.15/2.5.20 pair, both meteorological states
+end in `max(analytic, -3*(1-G_prime))`, where §2.5.14 makes `G_prime` a convex
+blend in `[0,1]`.  The favourable energy mix preserves the maximum, hence
+
+```text
+[S-02 GROUND] A_ground,b >= -3.0 dB,  so  GROUND_GAIN_UB_DB = 3.0 dB.
+```
+
+This is independent of band, `z_s`, `d_p` and the open `z_s -> 0` / `d_p -> 0`
+branches.  The evidence sweep covered 202,376 numerical states plus 1,800
+implementation states with zero violations and a 4.9e-13 dB Rust/Python
+maximum difference.  `tc_ground` pins the plain floor at `G=0`.  The literal
+NoiseModelling favourable minimum is deliberately **not** adopted: it could
+require a 6.93 dB upper bound.  That is a named V4 cause and tripwire, not a
+silent library substitution.
+
+#### §4.3 Normalization, reach and owner-held rail ceiling
+
+The node sum replaces the retired FLC/line-divergence pair.  With the code's
+rounded point term `20 lg(r) + 11`, rather than an exact `10 lg(4*pi)`, the
+realized emission-reference shift is
+
+```text
+[S-03 NORMALIZATION] Delta_line = 10 lg(2*pi^2*10^(-1.1))
+                                      = +1.953297 dB
+                     geometric reach multiplier = 1.567941.
+```
+
+`+1.9612 dB` / `pi/2` is the exact-`4*pi` counterfactual and is not the live
+constant.  Fixture B4 pins `1.9533 +/- 0.0010 dB`; the 0.0079 dB difference
+is explicit rather than rounded away.  Node weight is `W_node = W_prime/m *
+Delta_s`, point divergence is `20 lg(r)+11`, and no FLC or line re-reference
+survives in V2.  The free-field node sum equals the closed-form line integral
+for any node count; B1--B6 pin broadside, off-end, end-on, non-horizontal and
+split cases.
+
+All free-field exits add the 3.0 dB ground headroom.  The v2 line exit is
+`L + 3 - (10 lg(d_end) + 6.0) - 0.002*d_end < threshold`; the old `+8`
+form can silently over-cull by 4.97 dB.  Point exits add the same headroom and
+their uncapped radii scale by 1.412538.  Road caps remain unchanged: their v2
+free-field bounds at the present caps are 29.7--31.0 dB, i.e. the render-floor
+convention.  Industrial, building, leisure and aircraft-ground caps also stay
+unchanged with a 0.00 dB node-normalization shift for those policies.
+
+**DECIDED OWNER POLICY — rail halo ceiling.**
+`RAILWAY_REACH_CLAMP_MAX = 11,000 m`, and the halo-sizer alias equals it.  Rail
+reach is solved independently per row from its traffic, type and speed before
+the `[2,000, 11,000] m` clamp.  The additional halo therefore applies only to
+rows whose solved crossing exceeds 10 km: the busy main corridors by
+construction; quiet branches retain their smaller solved reach without a
+separate class rule.
+
+The default mainline's v2 crossing is 10,178.8 m, so it is inside the decided
+cap.  The loudest European corridor family's 30 dB crossing is 12,416 m, so
+the remaining quantified clip is its 1,416 m above-floor tail; that truncation
+is explicit, not a silent source-cull claim.  The rail-only halo disk cost is
+`(11/10)^2 = x1.21`, measured by G1-CPU.  The 25 dB target and 2,000 m minimum
+are unchanged.  The fixture pins the unclamped default mainline at
+10,178.8 +/- 1 m and the decided 11,000 m clamp;
+`reach_box_half_extents_deg` is unchanged geometry but includes 11,000 m in
+its containment fixture list.
+
+#### §4.4 Indexed source-cull invariance
+
+The indexed source list remains a strict superset of the authoritative
+per-pixel cull.  In the same segment p2s frame, endpoint-clamped distance is
+1-Lipschitz and the box's cos=1 half-diagonal dominates every pixel-centre
+distance.  Thus `dend(P) <= R_s` implies
+`dend(center) <= R_s + R_box`; every contributing source is retained.  The
+per-pixel cull stays above node generation and all accumulation, and stable
+ascending source-id compaction preserves the exact accumulation sequence;
+therefore this is byte identity, not merely presence neutrality.
+
+The invariant is: every cull, reach solver and halo uses endpoint-clamped
+`dend`; none reads `d_perp`, `d_pl` or `D_FLOOR`; there is no new per-node
+cull below the pair cull.  The barrier-ABI source-id bump derives the
+candidate-tail offset from the same `BARR_STRIDE` used by the packer, with a
+poison-last-barrier-row fixture.  Receiver longitudes remain unwrapped and
+monotone.  The required differential runs indexed and parent exact arms on
+Praha road and rail and asserts raw HM3 identity, equal faults and equal
+source-list hashes.
+
+#### §4.5 Split-at-load and D_FLOOR pins
+
+`L_MAX = 250.0 m` becomes a Rust-owned SSOT and CUDA-injected constant.  Each
+road/rail loader passes a conforming row byte-identically; for an over-length
+row it emits `ceil(length/L_MAX)` equal chord pieces, preserves intensive
+per-metre emission and reports an always-on split counter.  Weight uses the
+same length it integrates: `W_piece = emission_per_m * stored_length` and
+`W_per_m = W_piece / chord_length`.  This resolves the present <=0.0032%
+chord/polyline discrepancy as a chord redistribution rather than an energy
+leak.  Split/merge fixtures cover 1, 2, 33, asymmetric and loader-produced
+pieces; free-field energy is tight to 1e-9 relative and full production
+agreement is <=0.1 dB.
+
+`D_FLOOR` is placement-only and physically pinned: road = 0.05 + 3.50 =
+3.55 m; rail = 0.50 + 0.7175 = 1.2175 m.  New SSOT constants are
+`ROAD_HALF_WIDTH_M` (half a 7.0 m two-lane carriageway) and
+`RAIL_HALF_WIDTH_M` (half standard 1,435 mm gauge); both are injected through
+the frozen model-v2 plan, §6 (`PLAN-MODEL-V2-NODE-QUADRATURE-20260815.md`), never tuned by V3.  The node theorem is independent of D_FLOOR (98 at 3
+degrees / 72 at 5 degrees).  Pins assert values, CPU/CUDA parity,
+bound-independence and placement-only isolation.
+
+#### Legacy V1 §3.5a — Unified path sampler (non-normative archive)
 
 DEM, Overture building height, WorldCover forest cover and IMD imperviousness are all sampled along the source→receiver line by a single bilateral cadence — density highest near endpoints (Fresnel zone narrowest), coarsest in the middle. Implementation + cadence rationale: `propagation::path_profile::fill_t_values`. Terrain diffraction, building screening, vegetation depth, and ground-effect G all read from the resulting `PathProfile`. The surface **heatmap** additionally runs a coarser distance-dependent middle cadence (`fill_t_values_coarse_mid`) — a heatmap-only speed approximation; the popup always uses the exact cadence.
 
-### 3.5b Combined terrain + building + barrier screening
+#### Legacy V1 §3.5b — Combined terrain + building + barrier screening (non-normative archive)
 
 Diffraction is computed once over a composite top profile (`elevation + building_h`), avoiding the terrain+screening double-count that would otherwise occur when a building sits on a hill. The δ* OLS mean-ground fit stays on bare-earth elevation. Implementation + caller API split (`terrain_attenuation` vs `screening_attenuation`): `propagation::path_effects::screening_attenuation_with_meta`. Ground G and vegetation depth are path integrals weighted by interval length so non-uniform bilateral spacing doesn't bias endpoints.
 
@@ -457,7 +832,7 @@ BARRIER_PATH_HORIZON_M` (125 m max wall half-segment + 50 m flat-earth slack):
 a crossing point lies on the path, but the crossing wall's midpoint — the point
 `dist_m` is measured to — can sit a half-segment beyond it.
 
-### 3.5c Arc-clipped screening for line sources (2026-08-03 fix-pack Fix 1)
+#### Legacy V1 §3.5c — Arc-clipped screening for line sources (non-normative archive)
 
 A road/rail microsegment runs up to 250 m and subtends a wide angle at a nearby
 receiver (136° at 50 m), but §3.5b evaluates screening ONE ray per segment — to
@@ -578,23 +953,25 @@ the ≥45 dB pixels the map actually shows. Pinned by
 order over four geometries × 12 permutations and asserts bit equality (it reports
 11.64 dB against the height-only rule).
 
-Terrain, ground G, vegetation and the finite-line correction stay on the cp ray
-(they vary slowly along a segment, and the §3.5b terrain+screening pairing must
-stay intact). Without a vector obstacle store there are no arcs to clip and the
+Terrain, the literal direct-ground vector, vegetation and the finite-line
+correction stay on the cp ray in the current increment-return transport. The
+future node evaluator carries each ray's complete composite; it is the only
+per-ray ground change in scope. Without a vector obstacle store there are no arcs to clip and the
 cp verdict stands unchanged; the same holds for point sources, which have no
 span. Validation (`src/bin/screening_fixture.rs`, 697 receivers × 3 scenes,
 vs a 33-sub-segment reference integration): shadow-zone error 7.19 → 0.73 dB
 behind a 30 × 10 × 8 m box, 1.07 → 0.31 dB behind a 3 m barrier, no-obstacle
 parity unchanged at 0.25 dB, for ~2× the screening cost of one cp ray.
 
-### 3.5d Uniform angular quadrature — the TILE path since 2026-08-05
+#### Legacy V1 §3.5d — Uniform angular quadrature (non-normative archive)
 
 §3.5c integrates the fan with ADAPTIVE quadrature: nodes taken from the
 receiver's obstacle skyline. `propagation::seg_sampling` integrates the SAME
 term with UNIFORM quadrature: the span is cut into `N` equal angular buckets,
 each evaluated on the exact source point at its centre azimuth, and
 `max(A_ground, A_terrain + A_screen)` energy-averaged over them; `N → ∞` is a
-reference for both rules. Ground `G` and vegetation stay on the cp ray in both.
+reference for both rules. The current literal ground vector and vegetation stay
+on the cp ray in both.
 `N = 1` here is NOT §3.5b's cp verdict — one bucket rays the fan's CENTRE
 azimuth, the cp is its CLOSEST point — so the tile kernel keeps `N = 1` on the
 cp path instead of calling this. `QM_SEG_SAMPLES=1` alone does NOT restore the
@@ -655,7 +1032,7 @@ three lanes (tiles per bucket, popup and CUDA per segment).
 
 Both rules take each ray's own `A_terrain`, never the cp ray's — see §3.5c.
 
-### 3.5e The near-field gate — why §3.5c is back, per bucket (2026-08-08)
+#### Legacy V1 §3.5e — Near-field gate (non-normative archive)
 
 §3.5d shipped with a known TAIL: on the eleven `screening_fixture` scenes,
 uniform `N = 5` reached **2.4-7.6 dB** at its worst receiver where §3.5c holds
@@ -985,9 +1362,8 @@ Deliberate simplifications (review-pinned): the Rayleigh criterion stays on
 straight geometry under the favourable state, and is asked ONCE on the
 homogeneous δ for both states (§3.5 — asking it per state against a straight
 δ* put a 3.13 dB step at δ_F = 0); edge selection stays max-δ on straight
-geometry (second-order on multi-bump profiles); no favourable variant of the
-CF-table ground model (a Fav variant of a non-CNOSSOS ground model would be
-fake precision); no per-period p (owner 2026-07-28); no Cmet.
+geometry (second-order on multi-bump profiles); no per-period p (owner
+2026-07-28); no Cmet.
 
 ### 3.10 Transport-specific adjustments
 Applied in pipeline and popup:
@@ -1610,11 +1986,9 @@ the standard it cites.** It is exactly 25.56 + 3.00: the engine formed
 Table 3 (`As + Ar = −1.5 − 1.5`) and CNOSSOS-EU 2015/996 (2.5.15) — *"if
 Gpath = 0: Aground,H = −3 dB"* — both put the hard-ground term at −3 dB in
 every band. Quoting the old number as an ISO reference made the omission look
-verified. The corrected term is
-`A_gr[i] = max(CF[i]·G, 0) + GROUND_HARD_FLOOR_DB·(1 − G)`, formed in exactly
-one place (`propagation::iso9613::ground_atten_db`) and pinned band-by-band
-against the official TC01/TC02/TC03 in `tests/tc_ground.rs`. K5 (G = 1) moves
-by +0.01 dB under the same change and keeps its row.
+verified. The floor correction landed first in the old `CF` surrogate; surface
+sources now use the literal §2.5.14--2.5.20 formulation in §3.3, pinned
+band-by-band against the official TC01/TC02/TC03 fixtures.
 
 ---
 

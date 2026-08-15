@@ -24,7 +24,6 @@
 __constant__ double A_W[NB]       = {-26.2,-16.1,-8.6,-3.2,0.0,1.2,1.0,-1.1};
 __constant__ double ALPHA_ATM[NB] = {0.1,0.4,1.0,1.9,3.7,8.7,22.0,58.4};
 __constant__ double BAND_FREQ[NB] = {63.0,125.0,250.0,500.0,1000.0,2000.0,4000.0,8000.0};
-__constant__ double GROUND_CF[NB] = {-1.5,-0.7,1.5,2.5,2.0,1.3,0.7,0.2};
 // CNOSSOS-EU 2015/996 (2.5.15) hard-ground floor, INJECTED by build.rs from
 // noise-compute's GROUND_HARD_FLOOR_DB. This fallback exists only for a bare
 // `nvcc kernels/scatter.cu` syntax check — do not hand-edit it into agreement.
@@ -36,25 +35,65 @@ __constant__ double GROUND_CF[NB] = {-1.5,-0.7,1.5,2.5,2.0,1.3,0.7,0.2};
 // expression.
 #define GHF_D ((double)(GROUND_HARD_FLOOR_DB))
 #define GHF_F ((float)(GROUND_HARD_FLOOR_DB))
-// Largest ground GAIN any band can reach for any G in [0,1] — mirrors
-// constants::GROUND_GAIN_UB_DB. `A_gr(G) = max(CF*G,0) + FLOOR*(1-G) >= FLOOR`
-// with equality at G = 0 in EVERY band, so the deepest gain is the floor
-// itself. The old per-band `max(-CF[i],0)` (1.5/0.7/0…) was the bound only
-// while A_gr bottomed out at 0 over hard ground; keeping it would make the
-// energy-budget skip's `ub >= exact` false and drop audible sources silently.
+#ifndef P_FAV
+#define P_FAV 0.5
+#endif
+#ifndef GROUND_SOUND_SPEED
+#define GROUND_SOUND_SPEED 340.0
+#endif
+#ifndef CNOSSOS_GROUND_ALPHA0
+#define CNOSSOS_GROUND_ALPHA0 2e-4
+#endif
+#ifndef CNOSSOS_GROUND_DELTA_ZT_COEFF
+#define CNOSSOS_GROUND_DELTA_ZT_COEFF 6e-3
+#endif
+// Largest ground GAIN any band can reach — mirrors constants::GROUND_GAIN_UB_DB.
+// Each literal state is `max(analytic, FLOOR*(1-G'))`; §2.5.14 makes G' a
+// convex blend of clamped factors, so it remains in [0,1] and every state is
+// >= FLOOR. The P_FAV energy mix preserves that lower bound, with byte-exact
+// equality at Gpath=0. Keeping this bound sound is mandatory: an understated
+// upper bound silently drops audible sources in the energy-budget skip.
 #define GROUND_GAIN_UB_F ((float)(-(GROUND_HARD_FLOOR_DB)))
 
-// THE ground term, mirroring iso9613::ground_atten_db expression-for-expression:
-// `A_gr[i] = max(CF[i]*G, 0) + FLOOR*(1-G)`. The max() is the (2.5.18) lower
-// bound, which REPLACES the CF table's negative low-frequency lobe instead of
-// stacking on it; at G = 0 every band lands on the -3 dB the standard states
-// verbatim. f64 arm for the arc kernel, f32 arm for the scatter hot loop —
-// same expression, the kernel's usual two precisions.
-__device__ __forceinline__ double ground_atten_d(int i, double g) {
-    return fmax(GROUND_CF[i] * g, 0.0) + GHF_D * (1.0 - g);
+// Literal CNOSSOS direct-ground core, mirroring iso9613's homogeneous
+// §2.5.15 / favourable §2.5.20 pair including §2.5.14 G' correction. Every
+// numeric constant comes through noise-gpu/build.rs -D from Rust; CUDA keeps
+// no hand-maintained physics value.  The existing arc transport carries one
+// characteristic-point vector for the fan; node_eval will carry one full
+// composite per ray and remove that compatibility seam.
+__device__ __forceinline__ double ground_state_d(
+    int i, double dp, double zs_h, double zr_h, double g_path, double g_source, int favourable)
+{
+    if (g_path == 0.0) return GHF_D;
+    double sum_h = zs_h + zr_h;
+    double test_h = dp / (30.0 * sum_h);
+    double g_prime = (test_h <= 1.0) ? g_path * test_h + g_source * (1.0 - test_h) : g_path;
+    double zs = zs_h, zr = zr_h, gw = g_prime;
+    if (favourable) {
+        double delta_zt = (double)CNOSSOS_GROUND_DELTA_ZT_COEFF * dp / sum_h;
+        double dp_sq_half = dp * dp * 0.5;
+        zs += (double)CNOSSOS_GROUND_ALPHA0 * (zs_h / sum_h) * (zs_h / sum_h) * dp_sq_half + delta_zt;
+        zr += (double)CNOSSOS_GROUND_ALPHA0 * (zr_h / sum_h) * (zr_h / sum_h) * dp_sq_half + delta_zt;
+        gw = g_path;
+    }
+    double f = BAND_FREQ[i], k = 2.0 * PI_D * f / (double)GROUND_SOUND_SPEED;
+    double gw13 = pow(gw, 1.3), gw26 = gw13 * gw13;
+    double w = 0.0185 * pow(f, 2.5) * gw26 /
+        (pow(f, 1.5) * gw26 + 1.3e3 * pow(f, 0.75) * gw13 + 1.16e6);
+    double wd = w * dp;
+    double cf = dp * (1.0 + 3.0 * wd * exp(-sqrt(wd))) / (1.0 + wd);
+    double q = (zs * zs - sqrt(2.0 * cf / k) * zs + cf / k)
+             * (zr * zr - sqrt(2.0 * cf / k) * zr + cf / k);
+    return fmax(-10.0 * log10(4.0 * k * k / (dp * dp) * q), GHF_D * (1.0 - g_prime));
 }
-__device__ __forceinline__ float ground_atten_f(int i, float g) {
-    return fmaxf((float)GROUND_CF[i] * g, 0.0f) + GHF_F * (1.0f - g);
+__device__ __forceinline__ double ground_atten_d(
+    int i, double dp, double zs_h, double zr_h, double g_path, double g_source)
+{
+    if (g_path == 0.0) return GHF_D;
+    double hom = ground_state_d(i, dp, zs_h, zr_h, g_path, g_source, 0);
+    double fav = ground_state_d(i, dp, zs_h, zr_h, g_path, g_source, 1);
+    return -10.0 * log10((double)P_FAV * pow(10.0, -fav * 0.1)
+                       + (1.0 - (double)P_FAV) * pow(10.0, -hom * 0.1));
 }
 __constant__ double ALPHA_VEG[NB] = {0.01,0.015,0.02,0.025,0.03,0.04,0.045,0.06};
 __constant__ double MAX_VEG[NB]   = {2.0,3.0,4.0,5.0,6.0,8.0,9.0,12.0};
@@ -69,7 +108,6 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 // IN THE SAME commit as the CPU const + rebuild the PTX + re-run e2-full
 // CPU≡GPU parity (the plan's G6 gate) — a one-sided flip silently forks the
 // physics between lanes.
-#define P_FAV 0.5
 #define FAVOURABLE_MIXING 1
 #define FAV_GAMMA_MIN 1000.0
 #define FAV_GAMMA_PER_DSR 8.0
@@ -2052,7 +2090,7 @@ __device__ void arc_screen_bands(
     int rows, int cols, double lat_min, double lon_min, double inv, const double* bb,
     double rlat, double rlon, double ralt,
     double alat, double alon, double blat, double blon, double src_height,
-    double cplat, double cplon, const float* cp_terr, float ground_g,
+    double cplat, double cplon, const float* cp_terr, const double* ground,
     const double* barr, int nbarr, const unsigned long long* obst,
     double* tprof, double* ed, double* comp,
     unsigned char* bld, unsigned char* forr, unsigned char* imdp,
@@ -2658,8 +2696,6 @@ __device__ void arc_screen_bands(
     //    sub-evaluations — once, no recursion.
     float cp_screen[NB];
     for (int i = 0; i < NB; i++) cp_screen[i] = screen[i];
-    double ground[NB];
-    for (int i = 0; i < NB; i++) ground[i] = ground_atten_d(i, (double)ground_g);
     double cp_rel = wrap_pi_d(arc_az(rlat, rlon, mlon, cplat, cplon) - base);
     double blocked = 0.0;
     double energy[NB];
@@ -2982,6 +3018,21 @@ __device__ __forceinline__ void line_source(
     // segment, DECISION 2026-08-03) — read them out BEFORE the arc pass.
     float gimd = path_integral_imd(tprof, imdp, n);
     float ground_g = (sp[3] != 0.0) ? 0.0f : fminf(fmaxf(1.0f - gimd / 100.0f, 0.0f), 1.0f);
+    float source_ground_g = (sp[3] != 0.0) ? 0.0f : fminf(fmaxf(1.0f - (float)imdp[0] / 100.0f, 0.0f), 1.0f);
+    // Direct-ground heights come from the SAME bare-earth OLS primitive as
+    // dstar().  Horizontal dend is dp by the CPU contract; buildings never
+    // enter this fit.
+    double plane_a, plane_b;
+    fit_plane(tprof, ed, 0, n - 1, 0.0, dend, &plane_a, &plane_b);
+    double zs_h = fmax(fabs(salt - plane_b), 0.05);
+    double zr_h = fmax(fabs(ralt - (plane_a * dend + plane_b)), 0.05);
+    // `fit_plane` intentionally sees the physical (possibly zero) span, as
+    // does the CPU helper; only the direct-ground denominator follows
+    // GroundPath::new's numerical floor.
+    double ground_dp = fmax(dend, 1e-6);
+    double ground[NB];
+    for (int i = 0; i < NB; i++)
+        ground[i] = ground_atten_d(i, ground_dp, zs_h, zr_h, (double)ground_g, (double)source_ground_g);
     veg_bands(veg_run_length(tprof, forr, n, (float)dend), veg);
 
     // Arc screening (fix-pack Fix 1): the cp ray's verdict covers only the
@@ -3014,13 +3065,13 @@ __device__ __forceinline__ void line_source(
     if (!ABL_ARC_OFF && arc_span_possible && (has_footprints || nbarr > 0))
         arc_screen_bands(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
                          rlat, rlon, ralt, seg[0], seg[1], seg[2], seg[3], sp[2],
-                         cplat, cplon, terr, ground_g,
+                         cplat, cplon, terr, ground,
                          barr, nbarr, obst, tprof, ed, comp, bld, forr, imdp, screen,
                          hc_key, hc_lo, hc_hi, arcstat, arc_drops);
 
     float pf[NB];
     for (int i = 0; i < NB; i++) {
-        float a_gr = ground_atten_f(i, ground_g);
+        float a_gr = (float)ground[i];
         float a_bar = terr[i] + screen[i];
         float gob = (a_bar > 0.0f) ? fmaxf(a_gr, a_bar) : a_gr;   // barrier REPLACES ground
         float pdb = (base - (float)ALPHA_ATM[i] * atm_km - gob - veg[i] + (float)A_W[i]) * (float)LN10 * 0.1f;

@@ -191,11 +191,11 @@ pub fn vegetation_trace(
     }
 }
 
-/// Build a `GroundTrace` from path-averaged ground factor G. Shares
-/// [`crate::propagation::iso9613::ground_atten_db`] with the kernels, so the
-/// popup's per-band ground row is the term the heatmap actually applied.
-pub fn ground_trace(factor_g: f64) -> GroundTrace {
-    let attenuation_bands = iso9613::ground_atten_bands(factor_g);
+/// Build a `GroundTrace` from the kernel's already-formed direct-ground
+/// vector. `factor_g` remains the path-mean display value; the bands include
+/// the ray geometry, source-end correction, and meteorological mix used by the
+/// surface kernel itself.
+pub fn ground_trace(factor_g: f64, attenuation_bands: [f64; NUM_BANDS]) -> GroundTrace {
     GroundTrace {
         factor_g,
         attenuation_bands,
@@ -238,6 +238,7 @@ struct BuildCnossosPropagation {
     src_alt_m: f64,
     rcv_alt_m: f64,
     ground_g: f64,
+    ground_bands: [f64; NUM_BANDS],
     finite_line_corr_db: f64,
     reflection_boost_db: f64,
     source_geometry: iso9613::SourceGeometry,
@@ -258,6 +259,7 @@ fn build_cnossos_propagation(inputs: BuildCnossosPropagation) -> PropagationBrea
         src_alt_m,
         rcv_alt_m,
         ground_g,
+        ground_bands,
         finite_line_corr_db,
         reflection_boost_db,
         source_geometry,
@@ -288,7 +290,7 @@ fn build_cnossos_propagation(inputs: BuildCnossosPropagation) -> PropagationBrea
         terrain,
         screening: screening_trace(screening_atten, obstacle_trace),
         vegetation,
-        ground: ground_trace(ground_g),
+        ground: ground_trace(ground_g, ground_bands),
         lw_bands: PerPeriod {
             day: lw_bands[0],
             evening: lw_bands[1],
@@ -314,6 +316,7 @@ pub(crate) struct BuildRoadTrace<'a> {
     pub d_slant: f64,
     pub flc: f64,
     pub ground_g: f64,
+    pub ground_bands: [f64; NUM_BANDS],
     pub reflection_boost_db: f64,
     pub light: f64,
     pub medium: f64,
@@ -338,6 +341,7 @@ pub(crate) struct BuildPointTrace<'a> {
     pub d_slant: f64,
     pub prop_dist: f64,
     pub ground_g: f64,
+    pub ground_bands: [f64; NUM_BANDS],
     pub reflection_boost_db: f64,
     pub path_profile: PathProfile,
     pub terrain: TerrainTrace,
@@ -357,6 +361,7 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
         d_slant,
         prop_dist,
         ground_g,
+        ground_bands,
         reflection_boost_db,
         path_profile,
         terrain,
@@ -432,6 +437,7 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
             source_geometry: iso9613::SourceGeometry::Point,
             path_profile,
             terrain,
+            ground_bands,
             screening_atten,
             obstacle_trace,
             veg_atten,
@@ -455,6 +461,7 @@ pub(crate) struct BuildRailTrace<'a> {
     pub d_slant: f64,
     pub flc: f64,
     pub ground_g: f64,
+    pub ground_bands: [f64; NUM_BANDS],
     pub reflection_boost_db: f64,
     pub q_pax: f64,
     pub q_frt: f64,
@@ -476,6 +483,7 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
         d_slant,
         flc,
         ground_g,
+        ground_bands,
         reflection_boost_db,
         q_pax,
         q_frt,
@@ -541,6 +549,7 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
             source_geometry: iso9613::SourceGeometry::Line,
             path_profile,
             terrain,
+            ground_bands,
             screening_atten,
             obstacle_trace,
             veg_atten,
@@ -566,6 +575,7 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
         d_slant,
         flc,
         ground_g,
+        ground_bands,
         reflection_boost_db,
         light,
         medium,
@@ -637,6 +647,7 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
             source_geometry: iso9613::SourceGeometry::Line,
             path_profile,
             terrain,
+            ground_bands,
             screening_atten,
             obstacle_trace,
             veg_atten,
@@ -693,7 +704,7 @@ mod tests {
 
     #[test]
     fn ground_trace_shape() {
-        assert_bands_no_scalar(&ground_trace(0.5));
+        assert_bands_no_scalar(&ground_trace(0.5, [0.0; NUM_BANDS]));
     }
 
     /// The popup trace accumulator mirrors `vegetation_run_length` exactly:
