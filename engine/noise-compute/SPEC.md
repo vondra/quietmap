@@ -40,7 +40,7 @@ foliage in full leaf. Scalar approximates average Central European mixed forest 
 ### Aircraft ground-operations compatibility factors
 ```
 CF = [-1.5, -0.7, 1.5, 2.5, 2.0, 1.3, 0.7, 0.2]
-A_ground[i] = max(CF[i] × G, 0) − 3 × (1 − G)    where G = 1 - IMD/100 (imperviousness raster)
+A_ground,aircraft[i] = max(CF[i] × G, 0) − 3 × (1 − G)    where G = 1 - IMD/100 (imperviousness raster)
 ```
 This is the explicitly carved-out, byte-stable aircraft ground-operations
 formation. Surface line and point sources use the literal per-band CNOSSOS
@@ -205,7 +205,7 @@ Post-adjustments applied even on measured counts: `service > 0` → counts × **
 
 ### 3.1 Geometric divergence
 
-**Line source**:
+**Line source (V1 legacy; retired by the V2 evaluator in §3.5f.3)**:
 ```
 A_div,i = 10 × log₁₀(2π × d_slant)
 ```
@@ -291,7 +291,7 @@ A_ground_or_barrier,i = max(A_ground,i, A_terrain,i + A_screen,i)   if barrier e
 ```
 Ground and barrier attenuation are **not** added together.
 
-### 3.4 Finite-line correction (line sources only)
+### 3.4 Finite-line correction (V1 legacy line sources only)
 Uses **HORIZONTAL** distance and angle subtended:
 ```
 d1, d2 = along-segment horizontal offsets from the foot of the receiver's
@@ -413,7 +413,7 @@ Simplifications vs. strict CNOSSOS:
   branch (2.5.27) — see §3.9.
 - `Δground` additive combination (CNOSSOS §2.5.31) is not implemented — we still combine ground and barrier via `max(A_ground, A_terrain + A_screen)` in §3.3.
 - Favourable-conditions curved rays ((2.5.24)) are implemented behind the
-  OFF-by-default `FAVOURABLE_MIXING` flag — see §3.9.
+  `FAVOURABLE_MIXING` flag, live since 2026-07-28 — see §3.9.
 - Lateral diffraction around vertical edges (§2.5.6(i)) is not implemented.
 
 See §3.5b for the V2 node evaluator's shared path sampling scheme.
@@ -432,8 +432,8 @@ is the sum of the full transfer of its nodes:
 [N-01]  L(R) = 10 lg Σ_nodes 10^((E_node - A(node, R)) / 10)
 ```
 
-The decomposition policy is selected once per source/receiver pair, then nodes
-stream one at a time; it is not a runtime virtual dispatch in the hot loop.
+The decomposition policy is selected once per source/receiver block, then its
+nodes stream one at a time.
 
 * **Point:** one node, preserving the present point-emitter semantics.
 * **Area:** the existing `point_sources` grid is the area policy verbatim; each
@@ -444,7 +444,7 @@ stream one at a time; it is not a runtime virtual dispatch in the hot loop.
 
 `D_FLOOR` is a pinned, per-layer physical constant: emitter height plus half
 the lane/track width.  It is not an accuracy or capacity dial.  The
-soundness note in §4 records the numerical values and their provenance.  Line
+soundness note in §3.5f records the numerical values and their provenance.  Line
 storage pieces satisfy `L <= L_MAX = 250 m`; an over-length input is split at
 load, fail-closed if that invariant cannot be established.  The storage split
 is an emission-attribution boundary, and a 1/2/N split-merge fixture pins
@@ -465,6 +465,7 @@ the shared, bit-pinned transcendentals of that frozen-plan contract.
                h      = max(d_perp, D_FLOOR)
                u(s)   = qm_atan(x(s) / h)
                d_pl(x) = sqrt(h^2 + x^2)
+               W_per_m = W_piece / chord_length
 
 [N-03 BOUNDS] U = {u(A), u(B)} plus u=0 when the foot is interior.
                The foot is always a boundary: every cell lies on one arm,
@@ -489,20 +490,20 @@ the shared, bit-pinned transcendentals of that frozen-plan contract.
                counter: they mean less refinement, never less screening.
 
 [N-05 CELLS]  For each [U_k, U_k+1],
-               Every interior cell boundary is s_i = F + h*qm_tan(u_i).
-               arm = -1 left of F and +1 right of F; no cell crosses F.
                K = ceil((U_k+1 - U_k) / THETA_MAX).
                Cells are half-open [u_i, u_i+1); piece ends remain exact.
+               Every interior cell boundary is s_i = F + h*qm_tan(u_i).
+               arm = -1 left of F and +1 right of F; no cell crosses F.
 
 [N-06 CHUNKS] On each one-arm cell, advance from its near end in d_pl.
                Cut while d_pl_far - d_pl_cur > S_live(d_pl_cur), where
                S_live(d) = THETA_MAX * R_ATM_BASE *
-                   (ALPHA_ATM[8 kHz] / alpha_live(d)),
+                   (ALPHA_ATM[7] / alpha_live(d)),
                alpha_live(d) = max { ALPHA_ATM[b] :
                    ALPHA_ATM[b] * d / 1000 <= A_LIVE_DB }.
                R_ATM_BASE = 1,000 m/rad; A_LIVE_DB = 25 dB.
-               Cut at d_pl_cur + S_live(d_pl_cur), then invert only as
-               s = F + arm * sqrt((d_pl_cur + S_live(d_pl_cur))^2 - h^2).
+               d_pl_cut = d_pl_cur + S_live(d_pl_cur), then invert only as
+               s = F + arm * sqrt(d_pl_cut^2 - h^2).
 
 [N-07 NODE]   For a chunk [s1, s2], length ell = s2 - s1 and
                Delta_u = u(s2) - u(s1):
@@ -510,15 +511,17 @@ the shared, bit-pinned transcendentals of that frozen-plan contract.
                s_node = F + arm * sqrt(D^2 - h^2).
                The node evaluates its exact 3D slant and azimuth, not d_pl.
 
-[N-08 WEIGHT] W_node = (W_prime / m) * ell.
+[N-08 WEIGHT] W_node = W_per_m * ell.
 ```
 
 `d_pl` is only the placement metric.  Evaluation uses the node's exact 3D
 slant.  The free-field-exact position in `[N-07]` makes the weighted node sum
 reproduce the chunk's `integral ds / d_pl^2`; weights telescope to the storage
-piece.  This is the required free-field normalization identity, not a midpoint
-approximation.
-
+piece. This is the required free-field normalization identity, not a midpoint
+approximation; placement-metric versus exact-3D residual is <= 0.005 dB
+A-weighted (Seat A B3 pins realized max 0.00099 dB at `d_perp=5 m`, 3°).
+`ALPHA_ATM[7] = 58.4 dB/km` is a derived constant of the frozen model-v2 plan, §6
+(`PLAN-MODEL-V2-NODE-QUADRATURE-20260815.md`), not an accuracy dial.
 
 For the production working point `THETA_MAX = 3 degrees`, `H_MAX = 32`, and
 `L_MAX = 250 m`, the generator has the proven bound
@@ -552,11 +555,10 @@ march. `node_eval` is the one CPU evaluator; CUDA implements the labelled
 mirror under the frozen model-v2 plan, §6
 (`PLAN-MODEL-V2-NODE-QUADRATURE-20260815.md`).
 
-DEM, Overture building height, WorldCover forest and IMD are sampled along a
-node ray by the single bilateral cadence in `path_profile::fill_t_values`.
-The heatmap-only coarse-middle cadence is not an evaluator semantic and must
-not be used by popup or judge mode.  Terrain diffraction, screening,
-vegetation depth and path-mean ground `G` consume the same `PathProfile`.
+Every V2 lane samples DEM, Overture building height, WorldCover forest and IMD
+along a node ray by the single bilateral cadence in
+`path_profile::fill_t_values`. Terrain diffraction, screening, vegetation depth
+and path-mean ground `G` consume the same `PathProfile`.
 
 The ground upgrade is the analytic CNOSSOS ground core **inside** the existing
 Quiet Map composite, not a claim of full screened-ground CNOSSOS:
@@ -567,9 +569,9 @@ Quiet Map composite, not a claim of full screened-ground CNOSSOS:
 
 Ground is replaced under a winning barrier and never added to it.  The
 CNOSSOS 2.5.30--2.5.32 screened-ground split remains open; the sight-line step
-described in §3.5 terrain diffraction remains explicitly unresolved.  Aircraft
-ground operations retain their isolated legacy ground formation until an
-aircraft validation lane exists.
+described in §3.5 terrain diffraction remains explicitly unresolved. Aircraft
+ground operations retain their isolated legacy `aircraft_ground_atten_db`
+formation until an aircraft validation lane exists.
 
 ### 3.5c Vector skyline: admission and node-boundary ABI (V2 draft)
 
@@ -586,7 +588,8 @@ multiply-emitted physical edges dedupe by stable edge/source identity.  CPU and
 CUDA share these rules and their fault semantics: interval overflow drops toward
 less screening and is counted; node overflow is hard; hint drops are counted
 softly. The frozen model-v2 plan, §6
-(`PLAN-MODEL-V2-NODE-QUADRATURE-20260815.md`) is the detailed CPU/CUDA ABI contract for these labels.
+(`PLAN-MODEL-V2-NODE-QUADRATURE-20260815.md`) is the detailed CPU/CUDA ABI
+contract for these labels.
 
 The old fan quantities `f_i`, `D_bar` and the transported
 `A_screen = max(0, D_bar - A_terrain)` increment do not exist in V2.  This
@@ -615,17 +618,22 @@ the same order and limit.
 
 Expanding a segment lazily returns compact node rows
 `{angle, r, screening_class, node_lden}` under
-`NODE_LIST_RESPONSE_MAX_BYTES = 65,536`.  Clicking a node lazily returns its
-complete engine propagation breakdown under
-`NODE_BREAKDOWN_RESPONSE_MAX_BYTES = 65,536`.  Node identity is
+`LAZY_NODE_RESPONSE_MAX_BYTES = 65,536`. Clicking a node lazily returns its
+complete engine propagation breakdown under that same cap. Node identity is
 `(layer, source_row_id, piece_index, node_index)`.  Every lazy request binds
 the kernel identity hash, data-build identity, receiver coordinate and layer;
 a mismatch after deploy or data publication is rejected and the client refetches
 the base response.  Show-all returns aggregate rows only.  The frontend derives
 no node physics: every displayed node value is engine-computed, and the segment
-row is the energy sum of its nodes.
+row is the energy sum of its nodes. An end-to-end popup receipt at the pinned
+Praha receiver verifies aggregate segment energy, a lazy node page and a lazy
+node breakdown against the same engine identity.
 
-### 3.5f V2 §4 soundness derivation note (D1 review draft)
+The frozen V8 plan's two identically valued lazy-response names resolve to this
+single public contract constant; changing either response limit changes the one
+cap and requires the same popup receipt.
+
+### 3.5f Soundness derivation note for the frozen model-v2 plan §4 (D1 review draft)
 
 **Evidence record.** This signed derivation merges the independently authored
 S2 notes against frozen V8 plan
@@ -639,7 +647,7 @@ Seat C cull/split/D_FLOOR
 Every fast-path bound below is a pre-implementation gate: the affected lever
 cannot land until its named fixture is green.
 
-#### §4.1 Node byte-stop upper bound
+#### §3.5f.1 Node byte-stop upper bound
 
 For a line piece of total power `W_piece`, define `d_near_h` as the
 **horizontal endpoint-clamped minimum** receiver-to-piece distance (`dend`).
@@ -658,7 +666,7 @@ the old FLC performed that integration implicitly.  Every node lies on the
 piece (`[N-07]`), so its horizontal distance is at least `d_near_h`; its exact
 3D slant is at least that horizontal distance; the shared 1 m divergence floor
 and non-negative atmospheric absorption preserve the inequality.  Ground is
-bounded by §4.2, terrain/screening/vegetation are non-negative, and
+bounded by §3.5f.2, terrain/screening/vegetation are non-negative, and
 `sum(W_node) = W_piece`.  Therefore `ub >= exact` term by term for any node
 placement.  The horizontal definition is load-bearing: a 30% sloping source
 line makes foot-slant `d_near` understate by 0.374 dB, far beyond the 0.0004 dB
@@ -673,7 +681,7 @@ on-source pairs are never byte-stopped.  The G1-CPU receipt reports the new
 skip rate and the separately measured saved elevation reads; it must not net
 one against the other silently.
 
-#### §4.2 Literal ground gain bound
+#### §3.5f.2 Literal ground gain bound
 
 For the implemented CNOSSOS 2.5.15/2.5.20 pair, both meteorological states
 end in `max(analytic, -3*(1-G_prime))`, where §2.5.14 makes `G_prime` a convex
@@ -686,12 +694,15 @@ blend in `[0,1]`.  The favourable energy mix preserves the maximum, hence
 This is independent of band, `z_s`, `d_p` and the open `z_s -> 0` / `d_p -> 0`
 branches.  The evidence sweep covered 202,376 numerical states plus 1,800
 implementation states with zero violations and a 4.9e-13 dB Rust/Python
-maximum difference.  `tc_ground` pins the plain floor at `G=0`.  The literal
-NoiseModelling favourable minimum is deliberately **not** adopted: it could
-require a 6.93 dB upper bound.  That is a named V4 cause and tripwire, not a
-silent library substitution.
+maximum difference. Seat A fixtures A1--A7 pin the plain floor at `G=0`.
+Seat B carries `tc_ground_v2::ground_gain_upper_bound_v2_corner_sweep`
+(12 × 11 × 6 × 3): its plain, non-NoiseModelling sweep reaches exactly
+`-GROUND_GAIN_UB_DB`, and its tripwire (`G=1e-9`, `d_p=10,000 m`,
+`z_s=0.05 m`) records that a literal NoiseModelling favourable substitution
+would require 6.93 dB. That substitution is a named V4 cause and tripwire,
+not a silent library substitution.
 
-#### §4.3 Normalization, reach and owner-held rail ceiling
+#### §3.5f.3 Normalization, reach and decided rail ceiling
 
 The node sum replaces the retired FLC/line-divergence pair.  With the code's
 rounded point term `20 lg(r) + 11`, rather than an exact `10 lg(4*pi)`, the
@@ -705,18 +716,23 @@ realized emission-reference shift is
 
 `+1.9612 dB` / `pi/2` is the exact-`4*pi` counterfactual and is not the live
 constant.  Fixture B4 pins `1.9533 +/- 0.0010 dB`; the 0.0079 dB difference
-is explicit rather than rounded away.  Node weight is `W_node = W_prime/m *
-Delta_s`, point divergence is `20 lg(r)+11`, and no FLC or line re-reference
+is explicit rather than rounded away. Node weight is `W_node = W_per_m * ell`,
+point divergence is `20 lg(r)+11`, and no FLC or line re-reference
 survives in V2.  The free-field node sum equals the closed-form line integral
 for any node count; B1--B6 pin broadside, off-end, end-on, non-horizontal and
-split cases.
+split cases. V1 test vectors K4/K5 describe the retired FLC/line-divergence
+formation only; V2 must re-specify them as piece geometry plus node-sum vectors
+before a V2 pin is admitted.
 
 All free-field exits add the 3.0 dB ground headroom.  The v2 line exit is
 `L + 3 - (10 lg(d_end) + 6.0) - 0.002*d_end < threshold`; the old `+8`
 form can silently over-cull by 4.97 dB.  Point exits add the same headroom and
-their uncapped radii scale by 1.412538.  Road caps remain unchanged: their v2
-free-field bounds at the present caps are 29.7--31.0 dB, i.e. the render-floor
-convention.  Industrial, building, leisure and aircraft-ground caps also stay
+their uncapped radii scale by 1.412538. Road caps remain unchanged: the
+crossing-derived classes' V2 free-field bounds at their present caps are
+29.7--31.0 dB, i.e. the render-floor convention. Links and deliberately short
+local classes retain separate caps because they run beside or into their louder
+parent corridor, not because of a crossing solve. Industrial, building, leisure
+and aircraft-ground caps also stay
 unchanged with a 0.00 dB node-normalization shift for those policies.
 
 **DECIDED OWNER POLICY — rail halo ceiling.**
@@ -727,17 +743,17 @@ rows whose solved crossing exceeds 10 km: the busy main corridors by
 construction; quiet branches retain their smaller solved reach without a
 separate class rule.
 
-The default mainline's v2 crossing is 10,178.8 m, so it is inside the decided
-cap.  The loudest European corridor family's 30 dB crossing is 12,416 m, so
-the remaining quantified clip is its 1,416 m above-floor tail; that truncation
-is explicit, not a silent source-cull claim.  The rail-only halo disk cost is
-`(11/10)^2 = x1.21`, measured by G1-CPU.  The 25 dB target and 2,000 m minimum
-are unchanged.  The fixture pins the unclamped default mainline at
-10,178.8 +/- 1 m and the decided 11,000 m clamp;
+The default mainline's V2 crossing is 10,178.8 m, so it is inside the decided
+cap. The loudest corridor families cross 30 dB at 12,416 m in Europe, 13,053 m
+on the Tokaido and 15,116 m on the sampled US freight corridor — all strictly
+less truncated than under the retired 10 km ceiling, so there is no regression.
+The rail-only halo disk cost is `(11/10)^2 = x1.21`, measured by G1-CPU. The
+25 dB target and 2,000 m minimum are unchanged. The fixture pins the
+unclamped default mainline at 10,178.8 +/- 1 m and the decided 11,000 m clamp;
 `reach_box_half_extents_deg` is unchanged geometry but includes 11,000 m in
 its containment fixture list.
 
-#### §4.4 Indexed source-cull invariance
+#### §3.5f.4 Indexed source-cull invariance
 
 The indexed source list remains a strict superset of the authoritative
 per-pixel cull.  In the same segment p2s frame, endpoint-clamped distance is
@@ -748,6 +764,10 @@ per-pixel cull stays above node generation and all accumulation, and stable
 ascending source-id compaction preserves the exact accumulation sequence;
 therefore this is byte identity, not merely presence neutrality.
 
+This is a prerequisite to §3.5f.1's residual bound: that bound covers a whole
+tail only after every source whose endpoint-clamped distance can contribute is
+retained by this indexed superset.
+
 The invariant is: every cull, reach solver and halo uses endpoint-clamped
 `dend`; none reads `d_perp`, `d_pl` or `D_FLOOR`; there is no new per-node
 cull below the pair cull.  The barrier-ABI source-id bump derives the
@@ -757,7 +777,7 @@ monotone.  The required differential runs indexed and parent exact arms on
 Praha road and rail and asserts raw HM3 identity, equal faults and equal
 source-list hashes.
 
-#### §4.5 Split-at-load and D_FLOOR pins
+#### §3.5f.5 Split-at-load and D_FLOOR pins
 
 `L_MAX = 250.0 m` becomes a Rust-owned SSOT and CUDA-injected constant.  Each
 road/rail loader passes a conforming row byte-identically; for an over-length
@@ -768,7 +788,8 @@ same length it integrates: `W_piece = emission_per_m * stored_length` and
 chord/polyline discrepancy as a chord redistribution rather than an energy
 leak.  Split/merge fixtures cover 1, 2, 33, asymmetric and loader-produced
 pieces; free-field energy is tight to 1e-9 relative and full production
-agreement is <=0.1 dB.
+agreement is <=0.1 dB. Node counts are deliberately not a split-invariance
+fixture: decomposition may change counts while preserving emitted energy.
 
 `D_FLOOR` is placement-only and physically pinned: road = 0.05 + 3.50 =
 3.55 m; rail = 0.50 + 0.7175 = 1.2175 m.  New SSOT constants are
@@ -778,11 +799,16 @@ the frozen model-v2 plan, §6 (`PLAN-MODEL-V2-NODE-QUADRATURE-20260815.md`), nev
 degrees / 72 at 5 degrees).  Pins assert values, CPU/CUDA parity,
 bound-independence and placement-only isolation.
 
-#### Legacy V1 §3.5a — Unified path sampler (non-normative archive)
+### 3.5z Legacy V1 archive (non-normative)
+
+#### Legacy V1 §3.5a — Unified path sampler
+
+Within this V1 archive, every unqualified `§3.5a`--`§3.5e` reference means the
+identically labelled Legacy V1 section, never the V2 draft above.
 
 DEM, Overture building height, WorldCover forest cover and IMD imperviousness are all sampled along the source→receiver line by a single bilateral cadence — density highest near endpoints (Fresnel zone narrowest), coarsest in the middle. Implementation + cadence rationale: `propagation::path_profile::fill_t_values`. Terrain diffraction, building screening, vegetation depth, and ground-effect G all read from the resulting `PathProfile`. The surface **heatmap** additionally runs a coarser distance-dependent middle cadence (`fill_t_values_coarse_mid`) — a heatmap-only speed approximation; the popup always uses the exact cadence.
 
-#### Legacy V1 §3.5b — Combined terrain + building + barrier screening (non-normative archive)
+#### Legacy V1 §3.5b — Combined terrain + building + barrier screening
 
 Diffraction is computed once over a composite top profile (`elevation + building_h`), avoiding the terrain+screening double-count that would otherwise occur when a building sits on a hill. The δ* OLS mean-ground fit stays on bare-earth elevation. Implementation + caller API split (`terrain_attenuation` vs `screening_attenuation`): `propagation::path_effects::screening_attenuation_with_meta`. Ground G and vegetation depth are path integrals weighted by interval length so non-uniform bilateral spacing doesn't bias endpoints.
 
@@ -832,7 +858,7 @@ BARRIER_PATH_HORIZON_M` (125 m max wall half-segment + 50 m flat-earth slack):
 a crossing point lies on the path, but the crossing wall's midpoint — the point
 `dist_m` is measured to — can sit a half-segment beyond it.
 
-#### Legacy V1 §3.5c — Arc-clipped screening for line sources (non-normative archive)
+#### Legacy V1 §3.5c — Arc-clipped screening for line sources
 
 A road/rail microsegment runs up to 250 m and subtends a wide angle at a nearby
 receiver (136° at 50 m), but §3.5b evaluates screening ONE ray per segment — to
@@ -914,7 +940,7 @@ of mean screening, which `max(A_ground, …)` would discard whole. Handing back
 > lanes — a contract change, deliberately not taken with the hard-ground fix.
 > OPEN.
 
-### Bounds (owner ruling 2026-08-03 §4b: ≤ 0.5 dB at every pixel)
+#### Bounds (owner ruling 2026-08-03 §4b: ≤ 0.5 dB at every pixel)
 
 Exact arc clipping is an AREA query per (segment, receiver) pair, which measured
 60× the GPU line kernel on a dense rail cell. Four bounds replace per-pair work
@@ -963,7 +989,7 @@ vs a 33-sub-segment reference integration): shadow-zone error 7.19 → 0.73 dB
 behind a 30 × 10 × 8 m box, 1.07 → 0.31 dB behind a 3 m barrier, no-obstacle
 parity unchanged at 0.25 dB, for ~2× the screening cost of one cp ray.
 
-#### Legacy V1 §3.5d — Uniform angular quadrature (non-normative archive)
+#### Legacy V1 §3.5d — Uniform angular quadrature
 
 §3.5c integrates the fan with ADAPTIVE quadrature: nodes taken from the
 receiver's obstacle skyline. `propagation::seg_sampling` integrates the SAME
@@ -1032,7 +1058,7 @@ three lanes (tiles per bucket, popup and CUDA per segment).
 
 Both rules take each ray's own `A_terrain`, never the cp ray's — see §3.5c.
 
-#### Legacy V1 §3.5e — Near-field gate (non-normative archive)
+#### Legacy V1 §3.5e — Near-field gate
 
 §3.5d shipped with a known TAIL: on the eleven `screening_fixture` scenes,
 uniform `N = 5` reached **2.4-7.6 dB** at its worst receiver where §3.5c holds
@@ -1275,19 +1301,22 @@ What
 it prices is the per-receiver candidate structure that would replace it.
 
 ### 3.6 Building screening (ISO 9613-2, per-band)
-Samples Overture Maps 30m building raster at the same bilateral cadence (§3.5a). Explicit `noise_barrier` geometries compete with raster buildings. For industrial sources, screening samples inside the source's own footprint are skipped via an exclusion radius.
+Current V1 samples the Overture Maps 30m building raster at the Legacy V1 §3.5a
+bilateral cadence. V2 uses §3.5b's per-node cadence. Explicit `noise_barrier`
+geometries compete with raster buildings. For industrial sources, screening
+samples inside the source's own footprint are skipped via an exclusion radius.
 
-**Barrier consumers (B8/C9, 2026-06-11).** Popup and ALL CPU surface heatmap kernels (road/rail `scatter_line`, industrial/building `scatter_point`, aircraft `ground_ops`) feed `barriers.arrow` vector barriers into the §3.5b exact-crossing candidate race via the shared `screening_attenuation`; the heatmap prepares one slice per z13 tile (`tile-painter::source_loader_barrier::BarrierData::for_tile` — sorted ascending by a conservative lower-bound distance; contract documented on `types::Barrier`). The **GPU line kernels (`noise-gpu`, road/rail on GPU cluster boxes) screen the SAME vector barriers behind the `QM_GPU_BARRIERS` gate** (default ON since 2026-08-02 — in the ENGINE itself, after the v2 orchestrator lost the wrapper-supplied env and fleet GPU paints ran wall-blind): the per-tile `for_tile` slice is uploaded with both endpoints and the kernel runs the identical ray×segment intersection (`scatter.cu` `barrier_best_candidate`, sharing `seg_isect_t` with the building walk; the pre-Fix-3 projection-and-snap measured on RTX 5070 mean 0.002 / max 1.5 dB vs the CPU truth, and the host-side crossing replicas are pinned to the CPU oracle in `tile-painter/tests/barrier_screening.rs`). Burning barriers into the 30 m cover raster was the rejected alternative — it was measured acoustically unsound, the §3.5a bilateral cadence (≥ ~30 m sample spacing) stepping over a one-cell-thin burned wall on most paths (mean +3.7 / max +13.8 dB under-screening at wall-adjacent shadow pixels vs the vector path; decision record: `tile-painter/tests/barrier_screening.rs`). With the gate OFF the GPU lane uploads no barriers and the C9 orchestrator gate (build-heatmap.sh / the world orchestrator) routes barrier-carrying R4s (~1.5% of hexes) to the CPU builders, as before; `QM_GPU_BARRIERS=0` is the explicit barrier-blind baseline (tests; A/B) — since 2026-08-02 the ON default lives in the ENGINE (owner-directed 2026-06-13, mean 0.002 / max 1.5 dB validated), so no launcher can lose it again.
+**Barrier consumers (B8/C9, 2026-06-11).** Popup and ALL current V1 CPU surface heatmap kernels (road/rail `scatter_line`, industrial/building `scatter_point`, aircraft `ground_ops`) feed `barriers.arrow` vector barriers into the Legacy V1 §3.5b exact-crossing candidate race via the shared `screening_attenuation`; the heatmap prepares one slice per z13 tile (`tile-painter::source_loader_barrier::BarrierData::for_tile` — sorted ascending by a conservative lower-bound distance; contract documented on `types::Barrier`). The **GPU line kernels (`noise-gpu`, road/rail on GPU cluster boxes) screen the SAME vector barriers behind the `QM_GPU_BARRIERS` gate** (default ON since 2026-08-02 — in the ENGINE itself, after the v2 orchestrator lost the wrapper-supplied env and fleet GPU paints ran wall-blind): the per-tile `for_tile` slice is uploaded with both endpoints and the kernel runs the identical ray×segment intersection (`scatter.cu` `barrier_best_candidate`, sharing `seg_isect_t` with the building walk; the pre-Fix-3 projection-and-snap measured on RTX 5070 mean 0.002 / max 1.5 dB vs the CPU truth, and the host-side crossing replicas are pinned to the CPU oracle in `tile-painter/tests/barrier_screening.rs`). Burning barriers into the 30 m cover raster was the rejected alternative — it was measured acoustically unsound, the Legacy V1 §3.5a bilateral cadence (≥ ~30 m sample spacing) stepping over a one-cell-thin burned wall on most paths (mean +3.7 / max +13.8 dB under-screening at wall-adjacent shadow pixels vs the vector path; decision record: `tile-painter/tests/barrier_screening.rs`). With the gate OFF the GPU lane uploads no barriers and the C9 orchestrator gate (build-heatmap.sh / the world orchestrator) routes barrier-carrying R4s (~1.5% of hexes) to the CPU builders, as before; `QM_GPU_BARRIERS=0` is the explicit barrier-blind baseline (tests; A/B) — since 2026-08-02 the ON default lives in the ENGINE (owner-directed 2026-06-13, mean 0.002 / max 1.5 dB validated), so no launcher can lose it again.
 
-**Screening is not computed standalone.** Raster buildings enter the §3.5b composite top profile (`elevation + building_h`) while vector footprints and barriers enter as exact crossings, and diffraction is computed once by the §3.5 single-edge algorithm over the δ-winner (max-δ edge; the Rayleigh criterion gates only the unblocked arm, §3.5). The per-band screening cap inherits from §3.5 — 20 dB — not a dedicated building-only cap.
+**Screening is not computed standalone.** In current V1, raster buildings enter the Legacy V1 §3.5b composite top profile (`elevation + building_h`) while vector footprints and barriers enter as exact crossings, and diffraction is computed once by the §3.5 single-edge algorithm over the δ-winner (max-δ edge; the Rayleigh criterion gates only the unblocked arm). The per-band screening cap inherits from §3.5 — 20 dB — not a dedicated building-only cap.
 
-The popup-facing `screening_attenuation` value returned by the engine is the increment of the combined result over bare-earth terrain diffraction, i.e. `atten_combined − atten_terrain` (clamped ≥ 0). With that definition `A_terrain + A_screen ≡ A_combined`, which is what §3.3 feeds into the ground/barrier combination. See §3.5b for the motivating double-count problem the merge fixes.
+The popup-facing `screening_attenuation` value returned by the engine is the increment of the combined result over bare-earth terrain diffraction, i.e. `atten_combined − atten_terrain` (clamped ≥ 0). With that definition `A_terrain + A_screen ≡ A_combined`, which is what §3.3 feeds into the ground/barrier combination. See Legacy V1 §3.5b for the motivating double-count problem the merge fixes.
 
 ### 3.7 Vegetation (ISO 9613-2:2024 A.2.2, Central Europe × 0.5 calibration)
 ```
 A_veg,i = min(MAX_VEG_ATTEN[i], α_veg[i] × depth_m)
 ```
-where depth_m = density-weighted forest depth along the source-receiver path: `Σ Δlength × forest[i]/100` with right-endpoint sampling over contiguous forested intervals (see §3.5a). Runs whose PHYSICAL extent is shorter than 10 m are discarded to avoid scattered-tree false positives. On the current binary raster (0/100) this equals the plain run length bit-for-bit; continuous canopy-density tiles (geodata-v2 2a) scale each interval by its density.
+where depth_m = density-weighted forest depth along the source-receiver path: `Σ Δlength × forest[i]/100` with right-endpoint sampling over contiguous forested intervals (see Legacy V1 §3.5a for current V1). Runs whose PHYSICAL extent is shorter than 10 m are discarded to avoid scattered-tree false positives. On the current binary raster (0/100) this equals the plain run length bit-for-bit; continuous canopy-density tiles (geodata-v2 2a) scale each interval by its density.
 
 Constants (`ALPHA_VEG`, `MAX_VEG_ATTEN`) are ISO 9613-2:2024 Table A.1 values × 0.5 — see
 the constants block at the top of this SPEC. Rationale: binary WorldCover forest raster
@@ -1306,7 +1335,7 @@ dead code and is deleted).
 
 VECTOR MODE (geodata-v2 — ON by default since the Wave-1 cutover 2026-07-31,
 commit 9cf166b; opt out only via `QM_VECTOR_BUILDINGS=0`, same `ENABLED` gate
-as §3.5b): the SAME nine probes, radius, height gate, and
+as Legacy V1 §3.5b): the SAME nine probes, radius, height gate, and
 thresholds, but each probe is an exact point-in-footprint parity test
 against the obstacle store (`obstacle_index::enclosure_db`) instead of a
 30 m raster cell read. The pipeline pre-bakes it into `rx_refl_db` per
@@ -1330,8 +1359,9 @@ bump for the 5 surface layers in 0db-private 66b1d3ff; world repaint
 pending the combined post-geodata-v2 wave — rollout record:
 docs/dev/favourable-propagation-plan.md in 0db-private).
 
-Mechanism (2015/996 formulas (2.5.9), (2.5.24), (2.5.25)), scoped to the
-single term where favourable/homogeneous physically diverge — diffraction:
+Mechanism (2015/996 formulas (2.5.9), (2.5.24), (2.5.25)), scoped to the two
+terms where favourable/homogeneous physically diverge in the surface kernel —
+ground and diffraction:
 
 - For the max-δ edge, `compute_single_edge` also computes δ_F on the
   favourable curved ray: every straight chord is replaced by the arc of a
@@ -1363,7 +1393,8 @@ straight geometry under the favourable state, and is asked ONCE on the
 homogeneous δ for both states (§3.5 — asking it per state against a straight
 δ* put a 3.13 dB step at δ_F = 0); edge selection stays max-δ on straight
 geometry (second-order on multi-bump profiles); no per-period p (owner
-2026-07-28); no Cmet.
+2026-07-28); no Cmet. Aircraft does not take a favourable-condition shortcut
+until an aircraft validation lane admits one.
 
 ### 3.10 Transport-specific adjustments
 Applied in pipeline and popup:
@@ -1402,7 +1433,7 @@ is not evaluated at all:
 | Source | Max radius |
 |---|---|
 | Road (by class) | motorway 10 km · trunk 7 km · primary 5 km · secondary 3 km · unclassified 2 km · tertiary 1.6 km · motorway_link 1.2 km · trunk_link 900 m · residential 800 m · primary_link 600 m · service 500 m · living_street 400 m · track 300 m |
-| Railway | per-row: solved to the 25 dB free-field Lden boundary, clamped [2 km, 10 km] (see below) |
+| Railway | current V1: per-row 25 dB free-field Lden, clamped [2 km, 10 km]; V2: [2 km, 11 km] after its reach solver lands (see below) |
 | Industrial | 4 km |
 | Building | fade radius from Lw, capped 2 km |
 | Aircraft ground ops | runway 5 km · taxi 3 km · apron 1.5 km |
@@ -1411,27 +1442,27 @@ is not evaluated at all:
 **Rail reach is solved per row** (`emission/railway.rs::rail_reach_m`):
 each segment reaches to the distance where its OWN free-field Lden falls
 to `RAILWAY_REACH_TARGET_LDEN_DB = 25 dB` (bisection over log-distance, 40
-steps in [100 m, 50 km]), clamped **[2 km, 10 km]** (`constants.rs`). The
-old blanket 7 km ("all types") is retired — a quiet branch line truncating
-at the same distance as a 300 km/h corridor was a correctness bug.
-For a default mainline (80 pax + 20 frt @ 80 km/h) the C1 per-region split
-crosses 25 dB at ≈ 7.7 km on the world split (test
-`default_mainline_reach_post_c1`) and further under the EU freight-night
-split — the flat pre-C1 split crossed at ≈ 7 km and is retired as
-value-neutral on purpose. Quiet rows shrink, loud/HS corridors extend toward the
-10 km ceiling (the existing road-halo budget). Known shared convention gap
-(documented on the constants): the solve is free-field UNREFLECTED while
-kernels add receiver reflection (up to ~+5 dB) — affects only the 25–30 dB
-fringe at facades; the 7 km blanket had the same gap.
+steps in [100 m, 50 km]). Current V1 code clamps **[2 km, 10 km]**. When the
+V2 reach solver lands, `RAILWAY_REACH_CLAMP_MAX = 11,000 m` and its halo-sizer
+alias use the decided **[2 km, 11 km]** interval from §3.5f.3. The old blanket
+7 km ("all types") is retired — a quiet branch line truncating at the same
+distance as a 300 km/h corridor was a correctness bug. The current post-C1
+`default_mainline_reach_post_c1` test is about 9.2 km; the V2 ground-aware solve is 10,178.8 m.
+Quiet rows shrink, loud/HS corridors extend toward the applicable ceiling.
+Known shared convention gap (documented on the constants): the solve is
+free-field UNREFLECTED while kernels add receiver reflection (up to ~+5 dB) —
+affects only the 25–30 dB fringe at facades; the 7 km blanket had the same gap.
 
 Additionally a **free-field early-exit**
 (`geo.rs::below_free_field_threshold[_line]`): when emission minus a
 conservative divergence + atmospheric bound is already below the caller's
-threshold, the full path computation is skipped (provably no audible loss —
-path effects only attenuate further). Both gates trade the strict "compute at
-all distances" principle for speed; radii are sized so the dropped
-contribution sits well below audibility for that class's maximum plausible
-emission.
+threshold, the full path computation is skipped. The current V1 premise that
+path effects only attenuate is stale because literal hard ground can add up to
+3.0 dB. V2 makes the gate conservative by adding `GROUND_GAIN_UB_DB` before
+the comparison; only then is the skipped contribution provably inaudible.
+Both gates trade the strict "compute at all distances" principle for speed;
+radii are sized so the dropped contribution sits well below audibility for
+that class's maximum plausible emission.
 
 ---
 
@@ -1974,8 +2005,8 @@ placeholders, never presented as measured. Rendered within the
 |------|-------|----------|--------|
 | K1 | Cat1, 50 km/h, asphalt, 10000 AADT, day | 79.11 dB(A)/m | CNOSSOS-EU |
 | K2 | Cat3, 80 km/h, cobblestone (+4dB), 500 AADT, day | 80.07 dB(A)/m | CNOSSOS-EU |
-| K4 | Propagation 100m, G=0, line source | 25.56 dB attenuation | ISO 9613-2 |
-| K5 | Propagation 100m, G=1, line source | 31.66 dB attenuation | ISO 9613-2 |
+| K4 (V1 legacy) | Propagation 100m, G=0, line source | 25.56 dB attenuation | ISO 9613-2 |
+| K5 (V1 legacy) | Propagation 100m, G=1, line source | 31.66 dB attenuation | ISO 9613-2 |
 | K6 | Single barrier 50m, δ=0.5m, G=0 | 15.28 dB barrier atten | ISO 9613-2 |
 | K7 | removed — the double-edge band math was deleted 2026-07-03 (single-edge only; K6 covers Maekawa) | — | — |
 | K8 | Lden: Ld=60, Le=55, Ln=50 | 60.00 dB | END 2002/49/EC |
