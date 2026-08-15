@@ -685,13 +685,14 @@ impl ObstacleIndex {
         };
 
         // An edge spans every supercover cell it passes through, so the ray
-        // can re-test it in each of them. The ring buffer is only a cheap
-        // prune of immediate re-tests; CORRECTNESS comes from the post-sort
-        // dedup below (gg review 2026-07-28: the ring alone loses to >8
-        // intervening hits, and a ray through a shared ring vertex hits two
-        // edges of the same obstacle at one t).
-        let mut recent: [u32; 8] = [u32::MAX; 8];
-        let mut recent_at = 0usize;
+        // can re-test it in each of them. A direct-mapped 64-slot set records
+        // EVERY tested edge, not only hits: ray and edge are immutable within
+        // this walk, so repeating `segment_intersection_t` cannot change its
+        // answer. A hash collision merely evicts the older entry and performs
+        // an extra test; it can never suppress a distinct edge. CORRECTNESS
+        // still belongs to the post-sort dedup below (a shared ring vertex can
+        // hit two edges of one footprint at one chainage).
+        let mut recent: [u32; 64] = [u32::MAX; 64];
 
         let mut guard = (self.cols + self.rows) as i64 + 4;
         // Chainage the ray entered the current cell at, and a monotone pointer
@@ -723,9 +724,11 @@ impl ObstacleIndex {
                 }
             }
             'edges: for &eref in &self.edge_refs[lo..hi] {
-                if recent.contains(&eref) {
+                let slot = eref as usize & (recent.len() - 1);
+                if recent[slot] == eref {
                     continue 'edges;
                 }
+                recent[slot] = eref;
                 let e = self.edges[eref as usize];
                 if let Some(t) = segment_intersection_t(
                     sx,
@@ -737,8 +740,6 @@ impl ObstacleIndex {
                     e.x1 as f64,
                     e.y1 as f64,
                 ) {
-                    recent[recent_at % recent.len()] = eref;
-                    recent_at += 1;
                     out.push(CrossingCandidate {
                         t,
                         height_m: e.height_m,
