@@ -16,6 +16,8 @@ quietmap.org shows how loud the world really is — and helps you find the quiet
 
 Human-made noise is not the same as natural sound. A forest at 50 dB with birdsong feels quiet. A road at 50 dB with traffic feels loud. quietmap.org measures environmental noise from human sources — transport, industry, and urban activity — not nature.
 
+→ **[What's new](/about/news)** — recent improvements and what we are working on.
+
 ## How the map works
 
 Three steps:
