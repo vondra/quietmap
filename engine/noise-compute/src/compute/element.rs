@@ -199,6 +199,55 @@ impl LineNodeIterator {
         hints: &[SkylineHint],
         cap_override: Option<usize>,
     ) -> Result<Self, LineNodeError> {
+        Self::with_dials_and_selected_u_hints(
+            piece,
+            receiver_m,
+            d_floor_m,
+            theta_max_rad,
+            h_max,
+            hints,
+            None,
+            cap_override,
+        )
+    }
+
+    /// CPU-only V3/judge seam. The streaming-reduction authority has already
+    /// selected and validated these exact `u_hint` values; this generator only
+    /// consumes them. Production H0 and the legacy H32-capable constructor do
+    /// not call this seam.
+    pub(crate) fn with_selected_u_hints(
+        piece: LinePiece,
+        receiver_m: [f64; 2],
+        d_floor_m: f64,
+        theta_max_rad: f64,
+        h_max: usize,
+        selected_u_hints: &[f64],
+    ) -> Result<Self, LineNodeError> {
+        debug_assert!(selected_u_hints.len() <= h_max);
+        debug_assert!(selected_u_hints.iter().all(|value| value.is_finite()));
+        Self::with_dials_and_selected_u_hints(
+            piece,
+            receiver_m,
+            d_floor_m,
+            theta_max_rad,
+            h_max,
+            &[],
+            Some(selected_u_hints),
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn with_dials_and_selected_u_hints(
+        piece: LinePiece,
+        receiver_m: [f64; 2],
+        d_floor_m: f64,
+        theta_max_rad: f64,
+        h_max: usize,
+        hints: &[SkylineHint],
+        selected_u_hints: Option<&[f64]>,
+        cap_override: Option<usize>,
+    ) -> Result<Self, LineNodeError> {
         let d = [
             piece.end_m[0] - piece.start_m[0],
             piece.end_m[1] - piece.start_m[1],
@@ -232,7 +281,10 @@ impl LineNodeIterator {
         // The sparse skyline can contain hundreds of thousands of candidates.
         // N-04c permits only H_MAX admitted boundaries, so retaining all of
         // them before sorting would make the proof's bounded admission false.
-        let mut candidates = Vec::with_capacity(h_max);
+        // The judge supplies an already sorted/deduplicated boundary list and
+        // must not pay a second H_JUDGE_MAX-sized allocation for the unused
+        // production selector.
+        let mut candidates = Vec::with_capacity(if selected_u_hints.is_some() { 0 } else { h_max });
         let mut hint_drop_count = 0;
         for hint in hints {
             match hint.kind {
@@ -279,7 +331,11 @@ impl LineNodeIterator {
         if low_s < 0.0 && 0.0 < high_s {
             bounds.push(0.0);
         }
-        bounds.extend(candidates.into_iter().map(|entry| entry.u));
+        if let Some(selected) = selected_u_hints {
+            bounds.extend(selected.iter().copied());
+        } else {
+            bounds.extend(candidates.into_iter().map(|entry| entry.u));
+        }
         bounds.sort_unstable_by(f64::total_cmp);
         bounds.dedup_by(|a, b| *a == *b);
 

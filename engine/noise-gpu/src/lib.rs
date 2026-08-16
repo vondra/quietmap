@@ -7,6 +7,8 @@
 /// `gpu-airborne` production builder (cudarc-backed, so gated on the `gpu` feature).
 #[cfg(feature = "gpu")]
 pub mod airborne;
+#[cfg(feature = "h0-v3")]
+pub mod h0_v3_field;
 
 use noise_compute::emission::aircraft::{Installation, SegmentPrepared, M_PER_DEG_LAT};
 use noise_compute::propagation::streaming_reduction::{source_frame_mlon, SourceId64};

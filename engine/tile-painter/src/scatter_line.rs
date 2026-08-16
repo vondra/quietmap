@@ -117,7 +117,7 @@ pub fn scatter_tile_with_cfg(
 /// of its row, precomputed once so the per-block loop is a cheap reach-box ∩ block
 /// clip + pixel sweep.
 pub(crate) struct PreparedLine<'a> {
-    line: &'a LineRow,
+    pub(crate) line: &'a LineRow,
     py0: usize,
     py1: usize,
     px0: usize,

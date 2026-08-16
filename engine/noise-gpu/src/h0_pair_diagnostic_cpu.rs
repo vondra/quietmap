@@ -12,9 +12,11 @@ use tile_painter::source_line::LineRow;
 
 use noise_gpu::ObstacleFlat;
 
+#[allow(dead_code)] // record path is used only by the GPU diagnostic target
 pub(crate) type DiagnosticRecord = [u64; noise_gpu::H0_PAIR_DIAGNOSTIC_RECORD_WORDS];
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)] // record path is used only by the GPU diagnostic target
 pub(crate) struct RawCandidate {
     pub(crate) candidate: H0Candidate,
     #[allow(dead_code)] // consumed by the GPU parity bin, not the CPU-only census
@@ -27,6 +29,7 @@ fn geometry<T>(
     result.map_err(|error| anyhow!("invalid diagnostic geometry: {error:?}"))
 }
 
+#[allow(dead_code)] // record path is used only by the GPU diagnostic target
 fn record_for(
     source0: MetricVector,
     source1: MetricVector,
@@ -86,31 +89,16 @@ fn tri_row_x_span(
     (hi >= lo).then_some((lo, hi))
 }
 
-/// Replay the device triangle/CSR walk over exactly the bytes later uploaded.
-pub(crate) fn collect_raw_candidates(
+fn visit_candidates(
     flat: &ObstacleFlat,
     barriers: &[Barrier],
     line: &LineRow,
     receiver_latitude: f64,
     receiver_longitude: f64,
-) -> Result<Vec<RawCandidate>> {
-    let source_mlon = geometry(source_frame_mlon(line.start_lat, line.end_lat))?;
-    let source0 = geometry(source_frame_vector_from_world(
-        line.start_lat,
-        line.start_lon,
-        receiver_latitude,
-        receiver_longitude,
-        source_mlon,
-    ))?;
-    let source1 = geometry(source_frame_vector_from_world(
-        line.end_lat,
-        line.end_lon,
-        receiver_latitude,
-        receiver_longitude,
-        source_mlon,
-    ))?;
+    source_mlon: f64,
+    mut emit: impl FnMut(H0Candidate) -> Result<()>,
+) -> Result<()> {
     ensure!(flat.metas.len() == flat.n_indexes * noise_gpu::META_STRIDE);
-    let mut raw = Vec::new();
 
     for index in 0..flat.n_indexes {
         let meta =
@@ -204,10 +192,7 @@ pub(crate) fn collect_raw_candidates(
                         endpoint1,
                         edge[4],
                     ))?;
-                    raw.push(RawCandidate {
-                        record: record_for(source0, source1, candidate),
-                        candidate,
-                    });
+                    emit(candidate)?;
                 }
             }
         }
@@ -235,12 +220,84 @@ pub(crate) fn collect_raw_candidates(
             endpoint1,
             barrier.height_m,
         ))?;
-        raw.push(RawCandidate {
-            record: record_for(source0, source1, candidate),
-            candidate,
-        });
+        emit(candidate)?;
     }
+    Ok(())
+}
+
+/// Replay the device triangle/CSR walk over exactly the bytes later uploaded.
+#[allow(dead_code)] // record path is used only by the GPU diagnostic target
+pub(crate) fn collect_raw_candidates(
+    flat: &ObstacleFlat,
+    barriers: &[Barrier],
+    line: &LineRow,
+    receiver_latitude: f64,
+    receiver_longitude: f64,
+) -> Result<Vec<RawCandidate>> {
+    let source_mlon = geometry(source_frame_mlon(line.start_lat, line.end_lat))?;
+    let source0 = geometry(source_frame_vector_from_world(
+        line.start_lat,
+        line.start_lon,
+        receiver_latitude,
+        receiver_longitude,
+        source_mlon,
+    ))?;
+    let source1 = geometry(source_frame_vector_from_world(
+        line.end_lat,
+        line.end_lon,
+        receiver_latitude,
+        receiver_longitude,
+        source_mlon,
+    ))?;
+    let mut raw = Vec::new();
+    visit_candidates(
+        flat,
+        barriers,
+        line,
+        receiver_latitude,
+        receiver_longitude,
+        source_mlon,
+        |candidate| {
+            raw.push(RawCandidate {
+                record: record_for(source0, source1, candidate),
+                candidate,
+            });
+            Ok(())
+        },
+    )?;
     Ok(raw)
+}
+
+/// Record-free replay for the CPU V3 campaign. The hard bound limits transient
+/// input-store materialisation; it is not a retained-model capacity dial.
+#[allow(dead_code)] // record-free path is unused by the GPU diagnostic target
+pub(crate) fn collect_h0_candidates(
+    flat: &ObstacleFlat,
+    barriers: &[Barrier],
+    line: &LineRow,
+    receiver_latitude: f64,
+    receiver_longitude: f64,
+    maximum_candidates: usize,
+) -> Result<Vec<H0Candidate>> {
+    let source_mlon = geometry(source_frame_mlon(line.start_lat, line.end_lat))?;
+    let mut candidates = Vec::new();
+    visit_candidates(
+        flat,
+        barriers,
+        line,
+        receiver_latitude,
+        receiver_longitude,
+        source_mlon,
+        |candidate| {
+            ensure!(
+                candidates.len() < maximum_candidates,
+                "raw H0 candidate replay exceeds the per-pair bound of {maximum_candidates}"
+            );
+            candidates.push(candidate);
+            Ok(())
+        },
+    )?;
+    Ok(candidates)
 }
 
 #[cfg(test)]

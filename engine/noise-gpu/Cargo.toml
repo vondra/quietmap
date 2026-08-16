@@ -19,6 +19,9 @@ noise-compute = { path = "../noise-compute" }
 h3o = "0.7"
 anyhow = "1"
 rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11.0"
 # Only the gpu-airborne production bin parses a CLI; gated with cudarc so the CPU-only lib
 # build stays dependency-light (gpu-surface/e2 hand-parse their few args).
 clap = { version = "4", features = ["derive"], optional = true }
@@ -36,6 +39,9 @@ v2-h0-counters = ["v2-h0"]
 # Evidence-only actual prepared-store pair collector. Its retained diagnostic
 # records are compiled into a separate binary and never into the timed H0 arm.
 v2-h0-diagnostic = ["v2-h0", "tile-painter/h0-diagnostic"]
+# Review-only CPU H0/V3 sweep. It exposes the pair and tile reference modules
+# only to the fixed experiment binaries; production GPU roles remain unchanged.
+h0-v3 = ["tile-painter/h0-v3"]
 
 [lib]
 name = "noise_gpu"
@@ -78,3 +84,53 @@ required-features = ["v2-h0-diagnostic"]
 name = "h0-actual-store-census"
 path = "src/h0_actual_store_census.rs"
 # Intentionally CPU-only: no required feature and no CUDA build/context.
+
+[[bin]]
+name = "h0-v3-h0-5"
+path = "src/h0_v3_h0_5.rs"
+required-features = ["h0-v3"]
+
+[[bin]]
+name = "h0-v3-stock"
+path = "src/h0_v3_stock.rs"
+required-features = ["h0-v3"]
+
+[[bin]]
+name = "h0-v3-h0-4"
+path = "src/h0_v3_h0_4.rs"
+required-features = ["h0-v3"]
+
+[[bin]]
+name = "h0-v3-h0-3"
+path = "src/h0_v3_h0_3.rs"
+required-features = ["h0-v3"]
+
+[[bin]]
+name = "h0-v3-h0-2"
+path = "src/h0_v3_h0_2.rs"
+required-features = ["h0-v3"]
+
+[[bin]]
+name = "h0-v3-judge-coarse"
+path = "src/h0_v3_judge_coarse.rs"
+required-features = ["h0-v3"]
+
+[[bin]]
+name = "h0-v3-judge-fine"
+path = "src/h0_v3_judge_fine.rs"
+required-features = ["h0-v3"]
+
+[[bin]]
+name = "h0-v3-preflight"
+path = "src/h0_v3_preflight.rs"
+required-features = ["h0-v3"]
+
+[[bin]]
+name = "h0-v3-analyze"
+path = "src/h0_v3_analyze.rs"
+required-features = ["h0-v3"]
+
+[[bin]]
+name = "h0-v3-budget"
+path = "src/h0_v3_budget.rs"
+required-features = ["h0-v3"]

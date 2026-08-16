@@ -1136,6 +1136,9 @@ dependencies = [
  "noise-compute",
  "raster-reader",
  "rayon",
+ "serde",
+ "serde_json",
+ "sha2",
  "tile-painter",
 ]
 

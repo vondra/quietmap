@@ -5,7 +5,11 @@ use std::f64::consts::LN_10;
 use noise_compute::compute::element::{LineLayer, LinePiece};
 use noise_compute::constants::{ALPHA_ATM, A_WEIGHTING, M_PER_DEG_LAT};
 use noise_compute::propagation::h0_streaming_reduction::{
-    reduce_h0, H0Candidate, H0Reduction, H0ReductionError,
+    reduce_h0, H0Candidate, H0Node, H0Reduction, H0ReductionError,
+};
+use noise_compute::propagation::h0_v3::{
+    build_h0_judge_nodes, reduce_h0_v3, H0V3Error, H0V3Theta, JUDGE_COARSE_EPSILON_DEGREES,
+    JUDGE_FINE_EPSILON_DEGREES,
 };
 use noise_compute::propagation::iso9613::{fast_exp_f64, ground_atten_bands};
 use noise_compute::propagation::node_eval::{evaluate_node_attenuation_bands, NodePathTerms};
@@ -33,6 +37,26 @@ pub struct H0PairReference {
     pub period_power_f32: [f32; NUM_PERIODS],
 }
 
+/// One CPU-only V3 arm. These values never select a CUDA runtime branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum H0V3PairArm {
+    Production(H0V3Theta),
+    JudgeCoarse,
+    JudgeFine,
+}
+
+/// One complete physical pair result for the V3 scorer.
+#[derive(Debug)]
+pub struct H0V3PairReference {
+    pub node_count: usize,
+    pub distinct_hint_records: usize,
+    pub unique_u_hints: usize,
+    pub logical_hint_storage_bytes: usize,
+    pub admitted_node_count: usize,
+    pub period_band_power: [[f64; NUM_BANDS]; NUM_PERIODS],
+    pub period_power_f32: [f32; NUM_PERIODS],
+}
+
 /// Fail-closed errors from the physical H0 CPU reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum H0PairReferenceError {
@@ -40,6 +64,7 @@ pub enum H0PairReferenceError {
     PairOutsideReach,
     Geometry(GeometryError),
     Reduction(H0ReductionError),
+    V3(H0V3Error),
     NonFinitePath,
 }
 
@@ -52,6 +77,12 @@ impl From<GeometryError> for H0PairReferenceError {
 impl From<H0ReductionError> for H0PairReferenceError {
     fn from(error: H0ReductionError) -> Self {
         Self::Reduction(error)
+    }
+}
+
+impl From<H0V3Error> for H0PairReferenceError {
+    fn from(error: H0V3Error) -> Self {
+        Self::V3(error)
     }
 }
 
@@ -75,6 +106,116 @@ pub fn evaluate_h0_pair<I>(
 where
     I: IntoIterator<Item = H0Candidate>,
 {
+    let pair = prepare_pair_geometry(tile, line, pixel_y, pixel_x)?;
+    let reduction = reduce_h0(pair.piece, layer, candidates)?;
+    let (period_band_power, period_power_f32) = evaluate_node_powers(
+        tile,
+        line,
+        barriers,
+        obstacles,
+        pair,
+        reduction.nodes(),
+        cadence,
+        |node_index, _| reduction.node_is_admitted(node_index) == Some(true),
+    )?;
+    Ok(H0PairReference {
+        reduction,
+        period_band_power,
+        period_power_f32,
+    })
+}
+
+/// Evaluate one pre-registered CPU-only V3 arm on a real pair. Judge arms use
+/// bounded-large, zero-drop hints and force the vector walk at every node.
+/// P2b is deliberately absent: today's merged-arc midpoint cannot be recovered
+/// from one raw candidate without recreating the rejected retained-list model.
+/// Its declared model delta is scored by the separate stock arm.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_h0_v3_pair<I>(
+    tile: &FusedTileZ13,
+    line: &LineRow,
+    barriers: &[Barrier],
+    obstacles: Option<&ObstacleSet>,
+    pixel_y: usize,
+    pixel_x: usize,
+    layer: LineLayer,
+    candidates: I,
+    cadence: Option<CoarseMid>,
+    arm: H0V3PairArm,
+) -> Result<H0V3PairReference, H0PairReferenceError>
+where
+    I: IntoIterator<Item = H0Candidate>,
+{
+    let pair = prepare_pair_geometry(tile, line, pixel_y, pixel_x)?;
+    let (nodes, distinct_hint_records, unique_u_hints, logical_hint_storage_bytes, admitted): (
+        Vec<H0Node>,
+        usize,
+        usize,
+        usize,
+        Vec<bool>,
+    ) = match arm {
+        H0V3PairArm::Production(theta) => {
+            let reduction = reduce_h0_v3(pair.piece, layer, theta, candidates)?;
+            let admitted = (0..reduction.nodes().len())
+                .map(|index| reduction.node_is_admitted(index) == Some(true))
+                .collect();
+            (reduction.nodes().to_vec(), 0, 0, 0, admitted)
+        }
+        H0V3PairArm::JudgeCoarse | H0V3PairArm::JudgeFine => {
+            let epsilon_degrees = if arm == H0V3PairArm::JudgeCoarse {
+                JUDGE_COARSE_EPSILON_DEGREES
+            } else {
+                JUDGE_FINE_EPSILON_DEGREES
+            };
+            let judge = build_h0_judge_nodes(pair.piece, layer, epsilon_degrees, candidates)?;
+            let admitted = vec![true; judge.nodes.len()];
+            (
+                judge.nodes,
+                judge.distinct_hint_records,
+                judge.unique_u_hints,
+                judge.logical_hint_storage_bytes,
+                admitted,
+            )
+        }
+    };
+    let admitted_node_count = admitted.iter().filter(|value| **value).count();
+    let (period_band_power, period_power_f32) = evaluate_node_powers(
+        tile,
+        line,
+        barriers,
+        obstacles,
+        pair,
+        &nodes,
+        cadence,
+        |index, _| admitted[index],
+    )?;
+    Ok(H0V3PairReference {
+        node_count: nodes.len(),
+        distinct_hint_records,
+        unique_u_hints,
+        logical_hint_storage_bytes,
+        admitted_node_count,
+        period_band_power,
+        period_power_f32,
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PairGeometry {
+    piece: LinePiece,
+    receiver_latitude: f64,
+    receiver_longitude: f64,
+    receiver_altitude_m: f64,
+    receiver_reflection_db: f64,
+    source_mlon: f64,
+}
+
+fn prepare_pair_geometry(
+    tile: &FusedTileZ13,
+    line: &LineRow,
+    pixel_y: usize,
+    pixel_x: usize,
+) -> Result<PairGeometry, H0PairReferenceError> {
     if pixel_y >= TILE_PX || pixel_x >= TILE_PX {
         return Err(H0PairReferenceError::PixelOutsideTile);
     }
@@ -98,30 +239,60 @@ where
         receiver_longitude,
         source_mlon,
     )?;
-    let nearest_distance_m = point_to_segment_distance(start_m, end_m);
-    if nearest_distance_m > line.max_distance_m {
+    if point_to_segment_distance(start_m, end_m) > line.max_distance_m {
         return Err(H0PairReferenceError::PairOutsideReach);
     }
-    let reduction = reduce_h0(
-        LinePiece {
+    Ok(PairGeometry {
+        piece: LinePiece {
             start_m: [start_m.x, start_m.y],
             end_m: [end_m.x, end_m.y],
             emission_per_m: 1.0,
         },
-        layer,
-        candidates,
-    )?;
+        receiver_latitude,
+        receiver_longitude,
+        receiver_altitude_m,
+        receiver_reflection_db,
+        source_mlon,
+    })
+}
 
-    let vector_mode = obstacles.is_some_and(|set| !set.indexes.is_empty());
+/// Construct the exact receiver-centred piece used by the physical H0 path.
+/// The V3 census calls this seam so its node counts cannot drift from the
+/// field renderer's frame or reach decision.
+pub fn h0_pair_piece_in_receiver_frame(
+    tile: &FusedTileZ13,
+    line: &LineRow,
+    pixel_y: usize,
+    pixel_x: usize,
+) -> Result<LinePiece, H0PairReferenceError> {
+    Ok(prepare_pair_geometry(tile, line, pixel_y, pixel_x)?.piece)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_node_powers<F>(
+    tile: &FusedTileZ13,
+    line: &LineRow,
+    barriers: &[Barrier],
+    obstacles: Option<&ObstacleSet>,
+    pair: PairGeometry,
+    nodes: &[H0Node],
+    cadence: Option<CoarseMid>,
+    mut node_is_admitted: F,
+) -> Result<([[f64; NUM_BANDS]; NUM_PERIODS], [f32; NUM_PERIODS]), H0PairReferenceError>
+where
+    F: FnMut(usize, &H0Node) -> bool,
+{
+    let vector_mode = !barriers.is_empty() || obstacles.is_some_and(|set| !set.indexes.is_empty());
     let mut profile = PathProfile::new();
     let mut crossing_candidates: Vec<CrossingCandidate> = Vec::new();
     let mut period_band_power = [[0.0_f64; NUM_BANDS]; NUM_PERIODS];
-    for (node_index, node) in reduction.nodes().iter().enumerate() {
-        let source_latitude = receiver_latitude + node.line_node.position_m[1] / M_PER_DEG_LAT;
-        let source_longitude = receiver_longitude + node.line_node.position_m[0] / source_mlon;
+    for (node_index, node) in nodes.iter().enumerate() {
+        let source_latitude = pair.receiver_latitude + node.line_node.position_m[1] / M_PER_DEG_LAT;
+        let source_longitude =
+            pair.receiver_longitude + node.line_node.position_m[0] / pair.source_mlon;
         let source_altitude_m =
             tile.elevation(source_latitude, source_longitude) + line.source_height_m;
-        let vertical_m = source_altitude_m - receiver_altitude_m;
+        let vertical_m = source_altitude_m - pair.receiver_altitude_m;
         let exact_slant_m =
             (node.node_distance_m * node.node_distance_m + vertical_m * vertical_m).sqrt();
         if !exact_slant_m.is_finite() {
@@ -132,31 +303,34 @@ where
             cadence,
             source_latitude,
             source_longitude,
-            receiver_latitude,
-            receiver_longitude,
+            pair.receiver_latitude,
+            pair.receiver_longitude,
             node.node_distance_m,
             &mut profile,
         );
         let ground_path = path_effects::cnossos_ground_path_from_profile(
             &mut profile,
             source_altitude_m,
-            receiver_altitude_m,
+            pair.receiver_altitude_m,
             line.bridge,
         );
         let ground_db = ground_atten_bands(ground_path);
-        let terrain_db =
-            path_effects::terrain_attenuation(&mut profile, source_altitude_m, receiver_altitude_m);
+        let terrain_db = path_effects::terrain_attenuation(
+            &mut profile,
+            source_altitude_m,
+            pair.receiver_altitude_m,
+        );
 
-        let admitted = !vector_mode || reduction.node_is_admitted(node_index) == Some(true);
+        let admitted = !vector_mode || node_is_admitted(node_index, node);
         crossing_candidates.clear();
         if admitted {
             if let Some(set) = obstacles {
                 set.crossings_pruned(
                     source_latitude,
                     source_longitude,
-                    receiver_latitude,
-                    receiver_longitude,
-                    &CellPrune::for_profile(&profile, source_altitude_m, receiver_altitude_m),
+                    pair.receiver_latitude,
+                    pair.receiver_longitude,
+                    &CellPrune::for_profile(&profile, source_altitude_m, pair.receiver_altitude_m),
                     &mut crossing_candidates,
                 );
             }
@@ -176,7 +350,7 @@ where
                 ObstacleInput::CANDIDATES_OFF
             },
             source_altitude_m,
-            receiver_altitude_m,
+            pair.receiver_altitude_m,
             0.0,
             &terrain_db,
         );
@@ -191,7 +365,7 @@ where
                 terrain_db,
                 screening_db,
                 vegetation_db,
-                meteo_db: [-receiver_reflection_db; NUM_BANDS],
+                meteo_db: [-pair.receiver_reflection_db; NUM_BANDS],
                 barrier_present: vector_path_present,
             },
         );
@@ -212,11 +386,7 @@ where
             0.0
         }
     });
-    Ok(H0PairReference {
-        reduction,
-        period_band_power,
-        period_power_f32,
-    })
+    Ok((period_band_power, period_power_f32))
 }
 
 fn point_to_segment_distance(
@@ -286,5 +456,110 @@ mod tests {
                 (result.period_band_power[period].iter().sum::<f64>() as f32).to_bits()
             );
         }
+    }
+
+    #[test]
+    fn judge_is_unmasked_while_h0_retains_the_empty_candidate_mask() {
+        let rasters = RealRasters::new(Path::new("/nonexistent-h0-v3-judge-fixture"));
+        let tile = FusedTileZ13::build_receiver_altitude_only(12, 2211, 1386, &rasters);
+        let centre_lat = (tile.bbox.north_lat + tile.bbox.south_lat) * 0.5;
+        let centre_lon = (tile.bbox.west_lon + tile.bbox.east_lon) * 0.5;
+        let d_lon = |metres: f64| metres / m_per_deg_lon(centre_lat.to_radians());
+        let line = LineRow {
+            start_lat: centre_lat,
+            start_lon: centre_lon + d_lon(-50.0),
+            end_lat: centre_lat,
+            end_lon: centre_lon + d_lon(50.0),
+            length_m: 100.0,
+            max_distance_m: 2_000.0,
+            source_height_m: 0.05,
+            bridge: false,
+            emission_lin: [[1.0; NUM_BANDS]; NUM_PERIODS],
+        };
+        let pixel_y = crate::scatter_band::lat_to_py(&tile.bbox, centre_lat);
+        let pixel_x = crate::scatter_band::lon_to_px(&tile.bbox, centre_lon);
+        let h0 = evaluate_h0_v3_pair(
+            &tile,
+            &line,
+            &[],
+            None,
+            pixel_y,
+            pixel_x,
+            LineLayer::Road,
+            [],
+            None,
+            H0V3PairArm::Production(H0V3Theta::Degrees3),
+        )
+        .unwrap();
+        let judge = evaluate_h0_v3_pair(
+            &tile,
+            &line,
+            &[],
+            None,
+            pixel_y,
+            pixel_x,
+            LineLayer::Road,
+            [],
+            None,
+            H0V3PairArm::JudgeFine,
+        )
+        .unwrap();
+        assert_eq!(h0.admitted_node_count, 0);
+        assert_eq!(judge.admitted_node_count, judge.node_count);
+        assert!(judge.node_count > h0.node_count);
+    }
+
+    #[test]
+    fn barrier_only_vector_store_obeys_the_h0_admission_mask() {
+        let rasters = RealRasters::new(Path::new("/nonexistent-h0-v3-barrier-only-fixture"));
+        let tile = FusedTileZ13::build_receiver_altitude_only(12, 2211, 1386, &rasters);
+        let centre_lat = (tile.bbox.north_lat + tile.bbox.south_lat) * 0.5;
+        let centre_lon = (tile.bbox.west_lon + tile.bbox.east_lon) * 0.5;
+        let d_lat = |metres: f64| metres / M_PER_DEG_LAT;
+        let d_lon = |metres: f64| metres / m_per_deg_lon(centre_lat.to_radians());
+        let line = LineRow {
+            start_lat: centre_lat,
+            start_lon: centre_lon + d_lon(-50.0),
+            end_lat: centre_lat,
+            end_lon: centre_lon + d_lon(50.0),
+            length_m: 100.0,
+            max_distance_m: 2_000.0,
+            source_height_m: 0.05,
+            bridge: false,
+            emission_lin: [[1.0; NUM_BANDS]; NUM_PERIODS],
+        };
+        let wall = Barrier {
+            osm_id: 1,
+            segment_idx: 0,
+            height_m: 8.0,
+            start_lat: centre_lat + d_lat(50.0),
+            start_lon: centre_lon + d_lon(-100.0),
+            end_lat: centre_lat + d_lat(50.0),
+            end_lon: centre_lon + d_lon(100.0),
+            dist_m: 0.0,
+        };
+        let pixel_y = crate::scatter_band::lat_to_py(&tile.bbox, centre_lat + d_lat(100.0));
+        let pixel_x = crate::scatter_band::lon_to_px(&tile.bbox, centre_lon);
+        let evaluate = |barriers: &[Barrier]| {
+            evaluate_h0_v3_pair(
+                &tile,
+                &line,
+                barriers,
+                None,
+                pixel_y,
+                pixel_x,
+                LineLayer::Road,
+                [],
+                None,
+                H0V3PairArm::Production(H0V3Theta::Degrees3),
+            )
+            .unwrap()
+        };
+        let clear = evaluate(&[]);
+        let masked_wall = evaluate(std::slice::from_ref(&wall));
+        assert_eq!(clear.admitted_node_count, 0);
+        assert_eq!(masked_wall.admitted_node_count, 0);
+        assert_eq!(clear.period_power_f32, masked_wall.period_power_f32);
+        assert_eq!(clear.period_band_power, masked_wall.period_band_power);
     }
 }

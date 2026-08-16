@@ -262,8 +262,68 @@ where
     I: IntoIterator<Item = H0Candidate>,
 {
     validate_pair_inputs(piece_in_receiver_frame)?;
-
     let mut iterator = LineNodeIterator::new_h0(piece_in_receiver_frame, [0.0, 0.0], layer)?;
+    reduce_with_node_iterator(&mut iterator, candidates)
+}
+
+/// CPU-only V3 production arm at one pre-registered angular spacing.
+///
+/// The public V3 API validates the exact sweep grid before reaching this seam.
+/// CUDA and the frozen 3-degree H0 production candidate continue to call
+/// [`reduce_h0`].
+pub(crate) fn reduce_h0_with_theta<I>(
+    piece_in_receiver_frame: LinePiece,
+    layer: LineLayer,
+    theta_max_rad: f64,
+    candidates: I,
+) -> Result<H0Reduction, H0ReductionError>
+where
+    I: IntoIterator<Item = H0Candidate>,
+{
+    validate_pair_inputs(piece_in_receiver_frame)?;
+    let mut iterator = LineNodeIterator::with_selected_u_hints(
+        piece_in_receiver_frame,
+        [0.0, 0.0],
+        layer.d_floor_m(),
+        theta_max_rad,
+        0,
+        &[],
+    )?;
+    reduce_with_node_iterator(&mut iterator, candidates)
+}
+
+/// CPU-only judge nodes. Candidate hints have already passed the streaming
+/// reducer's orientation constructor and zero-drop storage gate.
+pub(crate) fn judge_nodes_with_u_hints(
+    piece_in_receiver_frame: LinePiece,
+    layer: LineLayer,
+    epsilon_rad: f64,
+    hint_capacity: usize,
+    selected_u_hints: &[f64],
+) -> Result<Vec<H0Node>, H0ReductionError> {
+    validate_pair_inputs(piece_in_receiver_frame)?;
+    let mut iterator = LineNodeIterator::with_selected_u_hints(
+        piece_in_receiver_frame,
+        [0.0, 0.0],
+        layer.d_floor_m(),
+        epsilon_rad,
+        hint_capacity,
+        selected_u_hints,
+    )?;
+    let mut nodes = Vec::with_capacity(H0_NODE_CAP);
+    while let Some(line_node) = iterator.next_checked()? {
+        nodes.push(h0_node_geometry(line_node)?);
+    }
+    Ok(nodes)
+}
+
+fn reduce_with_node_iterator<I>(
+    iterator: &mut LineNodeIterator,
+    candidates: I,
+) -> Result<H0Reduction, H0ReductionError>
+where
+    I: IntoIterator<Item = H0Candidate>,
+{
     let mut nodes = Vec::with_capacity(H0_NODE_CAP);
     while let Some(line_node) = iterator.next_checked()? {
         nodes.push(h0_node_geometry(line_node)?);
