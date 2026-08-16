@@ -5,6 +5,8 @@ use crate::propagation::shared_math::{qm_atan, qm_tan};
 
 pub const THETA_MAX_RAD: f64 = core::f64::consts::PI / 60.0;
 pub const H_MAX: usize = 32;
+/// Frozen H0 node cap: ceil(pi/theta) + H_MAX(0) + floor(L_max/(theta R)) + 2.
+pub const H0_NODE_CAP: usize = 66;
 pub const R_ATM_BASE_M_PER_RAD: f64 = 1_000.0;
 pub const A_LIVE_DB: f64 = 25.0;
 pub const ROAD_D_FLOOR_M: f64 = 3.55;
@@ -57,7 +59,7 @@ pub struct SkylineHint {
     pub source_id: u64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LineNode {
     pub position_m: [f64; 2],
     /// Parameter on the original storage piece. The road/rail adapter maps it
@@ -65,6 +67,8 @@ pub struct LineNode {
     pub piece_fraction: f64,
     pub weight: f64,
     pub placement_distance_m: f64,
+    /// Signed abscissa from the perpendicular foot in the source frame.
+    pub node_x_m: f64,
     pub arm: i8,
 }
 
@@ -123,6 +127,28 @@ pub struct LineNodeIterator {
 }
 
 impl LineNodeIterator {
+    /// Frozen H0 generator: equal-u cells only, with no skyline hints.
+    pub fn new_h0(
+        piece: LinePiece,
+        receiver_m: [f64; 2],
+        layer: LineLayer,
+    ) -> Result<Self, LineNodeError> {
+        let iterator = Self::with_dials(
+            piece,
+            receiver_m,
+            layer.d_floor_m(),
+            THETA_MAX_RAD,
+            0,
+            &[],
+            None,
+        )?;
+        assert_eq!(
+            iterator.hard_cap, H0_NODE_CAP,
+            "the frozen H0 constants must derive the 66-node cap"
+        );
+        Ok(iterator)
+    }
+
     pub fn new(
         piece: LinePiece,
         receiver_m: [f64; 2],
@@ -430,6 +456,7 @@ impl Iterator for LineNodeIterator {
                 piece_fraction: (self.foot_from_start_m + node_s) / self.piece_length_m,
                 weight: self.emission_per_m * length,
                 placement_distance_m: d2.sqrt(),
+                node_x_m: node_s,
                 arm: cell.arm,
             });
         }
@@ -695,6 +722,10 @@ mod tests {
         assert_eq!(
             derived_node_cap(THETA_MAX_RAD, H_MAX, LINE_MAX_LENGTH_M),
             98
+        );
+        assert_eq!(
+            derived_node_cap(THETA_MAX_RAD, 0, LINE_MAX_LENGTH_M),
+            H0_NODE_CAP
         );
         assert_eq!(LineLayer::Road.d_floor_m(), 3.55);
         assert_eq!(LineLayer::Rail.d_floor_m(), 1.2175);

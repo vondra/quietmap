@@ -276,6 +276,31 @@ pub fn origin_to_segment_distance_f32(
     Ok(distance as f32)
 }
 
+/// Horizontal receiver range of one node in the receiver-centred pair frame.
+///
+/// This mask-affecting expression is mirrored by CUDA in step 3. Keeping it in
+/// the shared decision module prevents the CPU reducer from growing a second
+/// arithmetic authority.
+pub fn node_horizontal_range_from_receiver(
+    node_vector: MetricVector,
+) -> Result<f64, GeometryError> {
+    if !node_vector.is_finite() {
+        return Err(GeometryError::NonFinite);
+    }
+    if node_vector.is_zero() {
+        return Err(GeometryError::AmbiguousDirection);
+    }
+    // SRM-NODE-RANGE-1  RN(sqrt(RN(x*x) + RN(y*y))); no reassociation.
+    let x_squared = node_vector.x * node_vector.x;
+    let y_squared = node_vector.y * node_vector.y;
+    let distance = (x_squared + y_squared).sqrt();
+    if distance.is_finite() {
+        Ok(distance)
+    } else {
+        Err(GeometryError::NonFinite)
+    }
+}
+
 /// Physical radial hint root. Equality is owned by the mandatory foot boundary.
 pub fn radial_range_root(d_perp: f64, near_f32: f32) -> Result<Option<f64>, GeometryError> {
     let b = f64::from(near_f32);
@@ -519,6 +544,14 @@ mod tests {
         assert_eq!(
             origin_to_segment_distance_f32(nonfinite, east),
             Err(GeometryError::NonFinite)
+        );
+        assert_eq!(
+            node_horizontal_range_from_receiver(nonfinite),
+            Err(GeometryError::NonFinite)
+        );
+        assert_eq!(
+            node_horizontal_range_from_receiver(zero),
+            Err(GeometryError::AmbiguousDirection)
         );
         assert_eq!(
             radial_range_root(f64::NAN, 2.0),

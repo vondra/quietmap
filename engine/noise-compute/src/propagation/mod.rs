@@ -4,6 +4,7 @@ pub mod arc_screening;
 pub mod census;
 pub mod diffraction;
 pub mod geo;
+pub mod h0_streaming_reduction;
 pub mod horizon;
 pub mod iso9613;
 pub mod node_eval;
