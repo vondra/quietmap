@@ -50,7 +50,7 @@
 #else
 #include <math.h>
 #include <string.h>
-#define QM_FN static
+#define QM_FN static inline
 #define QM_TABLE static const double
 #define QM_ADD(a, b) ((a) + (b))
 #define QM_SUB(a, b) ((a) - (b))

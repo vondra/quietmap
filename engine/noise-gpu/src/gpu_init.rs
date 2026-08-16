@@ -59,6 +59,12 @@ impl LineLayer {
             Self::Rail => SOURCE_ID_RAIL,
         }
     }
+    pub(crate) const fn h0_abi_tag(self) -> usize {
+        match self {
+            Self::Road => 0,
+            Self::Rail => 1,
+        }
+    }
     /// Per-layer halo reach; the kernel still culls each source at its own
     /// per-row `max_distance_m` (the rail loader bakes each segment's solved
     /// 25 dB reach), so a block's shared halo can use the widest of these

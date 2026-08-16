@@ -259,6 +259,7 @@ fn main() -> Result<()> {
         // PROF_COUNTERS block, so a counter-instrumented PTX writes it here and
         // writes nothing of it under the production painter (`OUT_SLOTS_PROD`).
         noise_gpu::OUT_SLOTS_PROF as f64,
+        1.0, // meta[14] = rail H0 placement-floor tag
     ];
     // sp = 12/source: length/reach/height/bridge ++ 8 host-precomputed Lden band
     // weights (Σ_p LDEN_W[p]·emission_lin[p][i]) — mirrors pack_sources so the shared

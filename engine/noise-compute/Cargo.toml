@@ -16,6 +16,12 @@ path = "src/lib.rs"
 name = "screening_fixture"
 path = "src/bin/screening_fixture.rs"
 
+# CPU-only step-3 mechanism census. Reads frozen pair/candidate JSONL on stdin
+# and emits deterministic C/N/Q distributions through the landed H0 reducer.
+[[bin]]
+name = "h0-mechanism-census"
+path = "src/bin/h0_mechanism_census.rs"
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

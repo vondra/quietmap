@@ -216,6 +216,65 @@ pub struct ObstacleInput<'a> {
     pub replace_sample_buildings: bool,
 }
 
+fn barrier_crossing_candidates(
+    barriers: &[Barrier],
+    src_lat: f64,
+    src_lon: f64,
+    rcv_lat: f64,
+    rcv_lon: f64,
+    dist_m: f64,
+) -> impl Iterator<Item = CrossingCandidate> + '_ {
+    let meters_per_deg_lon = M_PER_DEG_LON_EQ * ((src_lat + rcv_lat) * 0.5).to_radians().cos();
+    let path_dx_m = (rcv_lon - src_lon) * meters_per_deg_lon;
+    let path_dy_m = (rcv_lat - src_lat) * M_PER_DEG_LAT;
+    let barrier_horizon_m = dist_m + BARRIER_PATH_HORIZON_M;
+    barriers
+        .iter()
+        .take_while(move |barrier| barrier.dist_m <= barrier_horizon_m)
+        .filter_map(move |barrier| {
+            let x0 = (barrier.start_lon - src_lon) * meters_per_deg_lon;
+            let y0 = (barrier.start_lat - src_lat) * M_PER_DEG_LAT;
+            let x1 = (barrier.end_lon - src_lon) * meters_per_deg_lon;
+            let y1 = (barrier.end_lat - src_lat) * M_PER_DEG_LAT;
+            let t = segment_intersection_t(0.0, 0.0, path_dx_m, path_dy_m, x0, y0, x1, y1)?;
+            Some(CrossingCandidate {
+                t,
+                height_m: barrier.height_m,
+                kind: ObstacleKind::Barrier,
+                // Current world OSM way ids fit u32; stable V2 identity remains
+                // the separate bit-preserving `(osm_id, segment_idx)` ABI.
+                id: barrier.osm_id as u32,
+            })
+        })
+}
+
+/// Whether a V2 H0 line-node ray owns the vector composite in N-11.
+///
+/// This reports existence of an exact building/wall crossing, not whether its
+/// rounded screening increment is positive. It shares the barrier constructor
+/// with [`screening_attenuation_with_meta`], so the CPU H0 reference cannot
+/// drift from the production path while deciding the composite branch.
+#[must_use]
+pub fn line_vector_path_present(
+    profile: &PathProfile,
+    barriers: &[Barrier],
+    obstacle_candidates: &[CrossingCandidate],
+) -> bool {
+    profile.t.len() >= 3
+        && profile.dist_m >= 30.0
+        && (!obstacle_candidates.is_empty()
+            || barrier_crossing_candidates(
+                barriers,
+                profile.src_lat,
+                profile.src_lon,
+                profile.rcv_lat,
+                profile.rcv_lon,
+                profile.dist_m,
+            )
+            .next()
+            .is_some())
+}
+
 impl ObstacleInput<'static> {
     pub const CANDIDATES_OFF: ObstacleInput<'static> = ObstacleInput {
         candidates: &[],
@@ -294,28 +353,8 @@ pub fn screening_attenuation_with_meta(
     //    slice is sorted ascending on a lower-bound `dist_m`, so the first
     //    barrier past the horizon ends the scan (see `BARRIER_PATH_HORIZON_M`
     //    for why the horizon is the path length plus a wall half-length).
-    let meters_per_deg_lon = M_PER_DEG_LON_EQ * ((src_lat + rcv_lat) * 0.5).to_radians().cos();
-    let path_dx_m = (rcv_lon - src_lon) * meters_per_deg_lon;
-    let path_dy_m = (rcv_lat - src_lat) * M_PER_DEG_LAT;
-    let barrier_horizon_m = dist_m + BARRIER_PATH_HORIZON_M;
-    let barrier_candidates = barriers
-        .iter()
-        .take_while(|b| b.dist_m <= barrier_horizon_m)
-        .filter_map(|b| {
-            let x0 = (b.start_lon - src_lon) * meters_per_deg_lon;
-            let y0 = (b.start_lat - src_lat) * M_PER_DEG_LAT;
-            let x1 = (b.end_lon - src_lon) * meters_per_deg_lon;
-            let y1 = (b.end_lat - src_lat) * M_PER_DEG_LAT;
-            let t = segment_intersection_t(0.0, 0.0, path_dx_m, path_dy_m, x0, y0, x1, y1)?;
-            Some(CrossingCandidate {
-                t,
-                height_m: b.height_m,
-                kind: ObstacleKind::Barrier,
-                // OSM way id, so the popup names the wall it is standing
-                // behind (current world max ≈ 1.4e9, inside u32).
-                id: b.osm_id as u32,
-            })
-        });
+    let barrier_candidates =
+        barrier_crossing_candidates(barriers, src_lat, src_lon, rcv_lat, rcv_lon, dist_m);
 
     // 2. Bare-earth elevation as f64 (reuses amortized scratch buffer).
     //    Split-borrow pattern per terrain_attenuation_with_meta. No copy:
@@ -816,6 +855,35 @@ mod tests {
             &terrain_atten,
         );
         assert_eq!(bands, atten, "band-only wrapper == _with_meta bands");
+    }
+
+    #[test]
+    fn h0_vector_presence_is_crossing_existence_not_screening_magnitude() {
+        let dist_m = 200.0;
+        let crossing = wall(100.0, -30.0, 100.0, 30.0, 0.01, dist_m / 2.0);
+        let miss = wall(100.0, 20.0, 100.0, 30.0, 20.0, dist_m / 2.0);
+        let profile = build_flat_profile(dist_m, 0.0);
+        assert!(line_vector_path_present(
+            &profile,
+            std::slice::from_ref(&crossing),
+            &[]
+        ));
+        assert!(!line_vector_path_present(
+            &profile,
+            std::slice::from_ref(&miss),
+            &[]
+        ));
+        let candidate = CrossingCandidate {
+            t: 0.5,
+            height_m: 0.01,
+            kind: ObstacleKind::Building,
+            id: 7,
+        };
+        assert!(line_vector_path_present(
+            &profile,
+            &[],
+            std::slice::from_ref(&candidate)
+        ));
     }
 
     /// Early-out refinement: with no buildings and every (sorted, lower-bound

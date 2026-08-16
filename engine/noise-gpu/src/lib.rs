@@ -138,6 +138,49 @@ pub const OUT_SLOTS_PROD: usize = OUT_ENERGY_SLOTS + 1;
 /// of the buffer.
 pub const OUT_SLOTS_PROF: usize = OUT_ARCSTAT_BASE + TILE_PX * TILE_PX * 8;
 
+/// Byte-aligned start of the exact H0 u64 counters in the existing `out`
+/// allocation. The obstacle pointer table has no spare slot; keeping these
+/// counters in `out` also leaves the barrier candidate-tail authority untouched.
+pub const OUT_H0_COUNTER_BYTE_OFFSET: usize = 3_145_736;
+const _: () = assert!(
+    OUT_H0_COUNTER_BYTE_OFFSET
+        == (OUT_SLOTS_PROD * std::mem::size_of::<f32>())
+            .next_multiple_of(std::mem::size_of::<u64>())
+);
+/// Exact u64 channels: node overflow, hard geometry, ABI/layout, guarded legal
+/// degenerates, completed pairs, raw candidate visits, generated nodes and
+/// admitted nodes. They are review evidence, never acoustic accumulation.
+pub const OUT_H0_COUNTERS: usize = 8;
+/// f32 allocation length for the compile-time H0 arm, including aligned u64s.
+pub const OUT_SLOTS_H0: usize = 786_450;
+const _: () = assert!(
+    OUT_SLOTS_H0
+        == (OUT_H0_COUNTER_BYTE_OFFSET + OUT_H0_COUNTERS * std::mem::size_of::<u64>())
+            .div_ceil(std::mem::size_of::<f32>())
+);
+
+/// Versioned word layout of the diagnostic-only actual-store H0 pair dump.
+/// This buffer is a separate kernel argument; it never enters the production
+/// 12-argument line launch or its `out` allocation.
+pub const H0_PAIR_DIAGNOSTIC_ABI_VERSION: usize = 1;
+pub const H0_PAIR_DIAGNOSTIC_HEADER_WORDS: usize = 24;
+pub const H0_PAIR_DIAGNOSTIC_NODE_WORDS: usize = 8;
+pub const H0_PAIR_DIAGNOSTIC_RECORD_WORDS: usize = 7;
+pub const H0_PAIR_DIAGNOSTIC_NODE_BASE: usize = 24;
+pub const H0_PAIR_DIAGNOSTIC_RECORD_BASE: usize = 552;
+pub const H0_PAIR_DIAGNOSTIC_MAGIC: u64 = 0x514d_4830_5041_4952;
+const _: () = assert!(
+    H0_PAIR_DIAGNOSTIC_RECORD_BASE
+        == H0_PAIR_DIAGNOSTIC_NODE_BASE
+            + noise_compute::compute::element::H0_NODE_CAP * H0_PAIR_DIAGNOSTIC_NODE_WORDS
+);
+
+/// Versioned surface metadata layout. Slot 14 carries the line-layer tag used
+/// to select the frozen road/rail H0 placement floor.
+pub const SURFACE_META_ABI_VERSION: usize = 2;
+pub const SURFACE_META_SLOTS: usize = 15;
+pub const SURFACE_META_LAYER_SLOT: usize = 14;
+
 /// Per-tile non-halo buffers packed for the `line`/`line_binned_fused` kernels (the halo
 /// elev/cover are uploaded once per batch and shared; the line SOURCES are uploaded
 /// once per layer — see [`SourceBuffers`]). `meta` carries the SHARED halo geom +
@@ -210,7 +253,10 @@ pub fn pack_sources(lines: &[LineRow]) -> SourceBuffers {
     SourceBuffers { seg, sp, semis }
 }
 
-fn pack_barrier_rows(barriers: &[Barrier]) -> Vec<f64> {
+/// Pack one physical barrier slice with the versioned stride and mandatory
+/// zero-count dummy row. Exposed for the actual-store H0 diagnostic so it
+/// launches the same bytes as [`pack_tile`].
+pub fn pack_barrier_rows(barriers: &[Barrier]) -> Vec<f64> {
     let physical_slots = barrier_candidate_tail_slot_offset(barriers.len());
     let mut packed = Vec::with_capacity(physical_slots);
     for barrier in barriers {
@@ -254,6 +300,7 @@ pub fn pack_tile(
     barriers: &[Barrier],
     nsrc: usize,
     out_slots: usize,
+    line_layer_tag: usize,
 ) -> TileBuffers {
     let (lat_min, lon_min, inv, rows, cols) = halo_geom;
     let n = TILE_PX * TILE_PX;
@@ -265,6 +312,10 @@ pub fn pack_tile(
     // only when this proves the room exists, so the buffer size and the writes
     // to it cannot drift apart — the shape of bug that let a counter build write
     // 8 MiB past the end of the production painter's buffer.
+    assert!(
+        line_layer_tag <= 1,
+        "surface line-layer tag must be road=0 or rail=1"
+    );
     let meta = vec![
         rows as f64,
         cols as f64,
@@ -280,7 +331,9 @@ pub fn pack_tile(
         barriers.len() as f64,
         nsrc as f64,
         out_slots as f64,
+        line_layer_tag as f64,
     ];
+    debug_assert_eq!(meta.len(), SURFACE_META_SLOTS);
     let mut rxll = Vec::with_capacity(2 * TILE_PX);
     rxll.extend_from_slice(&tile.rx_lat);
     rxll.extend_from_slice(&tile.rx_lon);
@@ -700,6 +753,25 @@ mod streaming_abi_tests {
     }
 
     #[test]
+    fn h0_exact_counters_are_aligned_and_disjoint_from_candidate_tail() {
+        assert_eq!(OUT_H0_COUNTER_BYTE_OFFSET % std::mem::size_of::<u64>(), 0);
+        assert!(OUT_H0_COUNTER_BYTE_OFFSET >= OUT_SLOTS_PROD * std::mem::size_of::<f32>());
+        assert_eq!(OUT_H0_COUNTERS, 8);
+        assert_eq!(
+            OUT_SLOTS_H0 * std::mem::size_of::<f32>(),
+            OUT_H0_COUNTER_BYTE_OFFSET + OUT_H0_COUNTERS * std::mem::size_of::<u64>()
+        );
+        assert_eq!(SURFACE_META_ABI_VERSION, 2);
+        assert_eq!(SURFACE_META_SLOTS, SURFACE_META_LAYER_SLOT + 1);
+        for barrier_count in [0_usize, 1, 2, 17] {
+            assert_eq!(
+                barrier_candidate_tail_byte_offset(barrier_count),
+                barrier_candidate_tail_slot_offset(barrier_count) * std::mem::size_of::<f64>()
+            );
+        }
+    }
+
+    #[test]
     fn source_stride_five_preserves_the_first_four_coordinate_lanes() {
         let row = |start_lat, start_lon, end_lat, end_lon| LineRow {
             start_lat,
@@ -984,7 +1056,6 @@ mod obstacle_upload {
         dev: &Arc<CudaDevice>,
         set: Option<&noise_compute::propagation::obstacle_index::ObstacleSet>,
     ) -> Result<ObstDev> {
-        use cudarc::driver::DevicePtr;
         let Some(set) = set else {
             // Raster mode: the kernel reads slots 1..=13 only when slot 0 is
             // non-zero, but the table must still be long enough that a slot
@@ -1001,6 +1072,17 @@ mod obstacle_upload {
             });
         };
         let flat = crate::flatten_obstacles(set);
+        upload_obstacle_flat(dev, flat)
+    }
+
+    /// Upload one already flattened store. The H0 diagnostic first walks these
+    /// exact host bytes for its CPU authority, then moves the same vectors to
+    /// CUDA; production uses [`upload_obstacles`] and remains unchanged.
+    pub fn upload_obstacle_flat(
+        dev: &Arc<CudaDevice>,
+        flat: crate::ObstacleFlat,
+    ) -> Result<ObstDev> {
+        use cudarc::driver::DevicePtr;
         let metas = dev.htod_copy(flat.metas).context("obst metas")?;
         let starts = dev.htod_copy(flat.starts).context("obst starts")?;
         let refs = dev.htod_copy(flat.refs).context("obst refs")?;
@@ -1079,4 +1161,4 @@ mod obstacle_upload {
     }
 }
 #[cfg(feature = "gpu")]
-pub use obstacle_upload::{upload_obstacles, ObstDev};
+pub use obstacle_upload::{upload_obstacle_flat, upload_obstacles, ObstDev};

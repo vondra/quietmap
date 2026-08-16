@@ -24,6 +24,15 @@
 #ifndef LINE_KERNEL_ARGUMENT_COUNT
 #error "LINE_KERNEL_ARGUMENT_COUNT must be injected from noise-gpu/src/lib.rs"
 #endif
+#ifndef SURFACE_META_ABI_VERSION
+#error "SURFACE_META_ABI_VERSION must be injected from noise-gpu/src/lib.rs"
+#endif
+#ifndef SURFACE_META_SLOTS
+#error "SURFACE_META_SLOTS must be injected from noise-gpu/src/lib.rs"
+#endif
+#ifndef M_LAT
+#error "M_LAT must be generated from noise-compute constants"
+#endif
 
 #if BARRIER_ABI_VERSION != 2 || BARRIER_STRIDE != 7
 #error "stale barrier ABI"
@@ -33,6 +42,9 @@
 #endif
 #if LINE_KERNEL_ARGUMENT_COUNT != 12
 #error "surface line launch must retain twelve physical arguments"
+#endif
+#if SURFACE_META_ABI_VERSION != 2 || SURFACE_META_SLOTS != 15
+#error "stale surface metadata ABI"
 #endif
 
 #ifdef __CUDACC__
@@ -59,10 +71,30 @@ enum qm_wedge_decision {
     QM_WEDGE_HARD_FAULT = 3,
 };
 
+enum qm_span_decision {
+    QM_SPAN_OUTSIDE = 0,
+    QM_SPAN_OVERLAPS = 1,
+    QM_SPAN_NEAR_GUARDED_DEGENERATE = 2,
+    QM_SPAN_HARD_FAULT = 3,
+};
+
 QM_FN unsigned long long qm_barrier_candidate_tail_slot_offset(unsigned long long barrier_count) {
     const unsigned long long physical_rows = barrier_count > 0ull ? barrier_count : 1ull;
     return physical_rows * (unsigned long long)BARRIER_STRIDE;
 }
+
+#if V2_H0
+QM_FN int qm_h0_layout_valid(int line_layer_tag, unsigned long long out_slots,
+                              long long barrier_count,
+                              unsigned long long candidate_tail_slot) {
+    return (line_layer_tag == 0 || line_layer_tag == 1) &&
+           out_slots >= (unsigned long long)OUT_SLOTS_H0 &&
+           barrier_count >= 0ll &&
+           candidate_tail_slot ==
+               qm_barrier_candidate_tail_slot_offset(
+                   (unsigned long long)barrier_count);
+}
+#endif
 
 QM_FN double qm_canonical_zero(double value) { return value == 0.0 ? 0.0 : value; }
 
@@ -90,6 +122,21 @@ QM_FN int qm_source_id_wall(long long osm_id, unsigned short segment_bits,
     *out = SR_WALL_SOURCE_TAG | (((unsigned long long)osm_id) << 16) |
            (unsigned long long)segment_bits;
     return 1;
+}
+
+QM_FN int qm_source_frame_vector_from_world(
+    double latitude, double longitude, double receiver_latitude,
+    double receiver_longitude, double source_mlon, qm_metric_vector *out) {
+    if (!isfinite(latitude) || !isfinite(longitude) ||
+        !isfinite(receiver_latitude) || !isfinite(receiver_longitude) ||
+        !isfinite(source_mlon) || !(source_mlon > 0.0))
+        return 0;
+    // SRM-FRAME-1
+    const double longitude_delta = QM_SUB(longitude, receiver_longitude);
+    const double latitude_delta = QM_SUB(latitude, receiver_latitude);
+    out->x = QM_MUL(longitude_delta, source_mlon);
+    out->y = QM_MUL(latitude_delta, M_LAT);
+    return qm_vector_is_finite(*out);
 }
 
 QM_FN double qm_orient(qm_metric_vector a, qm_metric_vector b) {
@@ -183,6 +230,86 @@ QM_FN int qm_candidate_wedge_owns(qm_metric_vector a, qm_metric_vector b,
     return owns ? QM_WEDGE_OWNS : QM_WEDGE_DOES_NOT_OWN;
 }
 
+QM_FN int qm_candidate_wedge_strictly_owns(qm_metric_vector a,
+                                            qm_metric_vector b,
+                                            qm_metric_vector node,
+                                            float near_f32) {
+    const int decision = qm_candidate_wedge_owns(a, b, node, near_f32);
+    if (decision != QM_WEDGE_OWNS) return decision;
+    int fault = 0;
+    const int at_a = qm_same_ray(a, node, &fault);
+    if (fault) return QM_WEDGE_HARD_FAULT;
+    const int at_b = qm_same_ray(b, node, &fault);
+    if (fault) return QM_WEDGE_HARD_FAULT;
+    return at_a || at_b ? QM_WEDGE_DOES_NOT_OWN : QM_WEDGE_OWNS;
+}
+
+QM_FN int qm_candidate_overlaps_source_span(
+    qm_metric_vector source0, qm_metric_vector source1,
+    qm_metric_vector candidate0, qm_metric_vector candidate1, float near_f32) {
+    if (!qm_vector_is_finite(source0) || !qm_vector_is_finite(source1) ||
+        !qm_vector_is_finite(candidate0) || !qm_vector_is_finite(candidate1) ||
+        !isfinite(near_f32) ||
+        (qm_vector_is_zero(source0) && qm_vector_is_zero(source1)))
+        return QM_SPAN_HARD_FAULT;
+    if (qm_vector_is_zero(candidate0) || qm_vector_is_zero(candidate1))
+        return near_f32 < 1.0f ? QM_SPAN_NEAR_GUARDED_DEGENERATE
+                               : QM_SPAN_HARD_FAULT;
+
+    const double candidate_turn = qm_orient(candidate0, candidate1);
+    if (candidate_turn == 0.0 && qm_dot(candidate0, candidate1) < 0.0)
+        return near_f32 < 1.0f ? QM_SPAN_NEAR_GUARDED_DEGENERATE
+                               : QM_SPAN_HARD_FAULT;
+
+    qm_metric_vector radial_direction;
+    int radial = 0;
+    if (qm_vector_is_zero(source0)) {
+        radial_direction = source1;
+        radial = 1;
+    } else if (qm_vector_is_zero(source1)) {
+        radial_direction = source0;
+        radial = 1;
+    } else {
+        int fault = 0;
+        radial = qm_same_ray(source0, source1, &fault);
+        if (fault) return QM_SPAN_HARD_FAULT;
+        radial_direction = source0;
+    }
+    if (radial) {
+        const int decision = qm_candidate_wedge_owns(
+            candidate0, candidate1, radial_direction, near_f32);
+        return decision;
+    }
+
+    if (qm_orient(source0, source1) == 0.0 && qm_dot(source0, source1) < 0.0) {
+        const int first = qm_candidate_wedge_owns(
+            candidate0, candidate1, source0, near_f32);
+        if (first != QM_WEDGE_DOES_NOT_OWN) return first;
+        return qm_candidate_wedge_owns(candidate0, candidate1, source1, near_f32);
+    }
+
+    int same_fault = 0;
+    const int reverse_first = qm_same_ray(source0, candidate1, &same_fault);
+    if (same_fault) return QM_SPAN_HARD_FAULT;
+    const int reverse_second = qm_same_ray(source1, candidate0, &same_fault);
+    if (same_fault) return QM_SPAN_HARD_FAULT;
+    if (reverse_first && reverse_second) return QM_SPAN_OVERLAPS;
+
+    // SRM-SPAN-1: inclusive starts plus excluded ends strictly inside the
+    // other wedge cover every remaining positive-width overlap.
+    const int decisions[4] = {
+        qm_candidate_wedge_owns(source0, source1, candidate0, 1.0f),
+        qm_candidate_wedge_owns(candidate0, candidate1, source0, near_f32),
+        qm_candidate_wedge_strictly_owns(source0, source1, candidate1, 1.0f),
+        qm_candidate_wedge_strictly_owns(candidate0, candidate1, source1,
+                                         near_f32),
+    };
+    for (int index = 0; index < 4; index++) {
+        if (decisions[index] != QM_WEDGE_DOES_NOT_OWN) return decisions[index];
+    }
+    return QM_SPAN_OUTSIDE;
+}
+
 QM_FN int qm_origin_to_segment_distance_f32(qm_metric_vector a, qm_metric_vector b,
                                              float *out) {
     if (!qm_vector_is_finite(a) || !qm_vector_is_finite(b)) return 0;
@@ -198,6 +325,17 @@ QM_FN int qm_origin_to_segment_distance_f32(qm_metric_vector a, qm_metric_vector
     const double distance = SR_SQRT(QM_ADD(QM_MUL(qx, qx), QM_MUL(qy, qy)));
     if (!isfinite(distance)) return 0;
     *out = SR_TO_F32(distance);
+    return 1;
+}
+
+QM_FN int qm_node_horizontal_range(qm_metric_vector node, double *out) {
+    if (!qm_vector_is_finite(node) || qm_vector_is_zero(node)) return 0;
+    // SRM-NODE-RANGE-1
+    const double x_squared = QM_MUL(node.x, node.x);
+    const double y_squared = QM_MUL(node.y, node.y);
+    const double distance = SR_SQRT(QM_ADD(x_squared, y_squared));
+    if (!isfinite(distance)) return 0;
+    *out = distance;
     return 1;
 }
 

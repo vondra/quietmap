@@ -8,6 +8,10 @@ description = "Heatmap v3 — Lden raster tiles (road/rail/industrial/building/a
 name = "tile_painter"
 path = "src/lib.rs"
 
+[features]
+# CPU reference linked only by noise-gpu's separately compiled diagnostic role.
+h0-diagnostic = []
+
 [[bin]]
 name = "build-heatmap-aircraft"
 path = "src/bin/build_heatmap_aircraft.rs"

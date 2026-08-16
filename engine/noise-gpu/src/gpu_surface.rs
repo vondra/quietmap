@@ -57,6 +57,14 @@ const ETA: f64 = 0.40;
 const TW: f64 = 8.0; // pack_tile swizzle width — the binned kernel ignores it (only
                      // the un-binned `rail` bench kernel in e2-full swizzles by it)
 
+#[cfg(feature = "v2-h0")]
+fn h0_exact_counter(output: &[f32], index: usize) -> u64 {
+    assert!(index < noise_gpu::OUT_H0_COUNTERS);
+    let first_slot = noise_gpu::OUT_H0_COUNTER_BYTE_OFFSET / std::mem::size_of::<f32>()
+        + index * (std::mem::size_of::<u64>() / std::mem::size_of::<f32>());
+    u64::from(output[first_slot].to_bits()) | (u64::from(output[first_slot + 1].to_bits()) << 32)
+}
+
 /// Process-wide byte budget for host-resident tile blocks (E1, gg z13 v2
 /// review): bounds building + ready blocks across ALL stream workers and
 /// both halves of each worker's double buffer — a per-worker block-count
@@ -325,12 +333,20 @@ fn process_block(
     // meta[13] and the kernel enters its optional regions only on that word, so a
     // `-DPROF_COUNTERS=1` PTX under this binary writes nothing past the fault slot
     // instead of 8 MiB past the end of the allocation.
-    let mut d_out = dev
-        .alloc_zeros::<f32>(noise_gpu::OUT_SLOTS_PROD)
-        .expect("out");
+    let out_slots = if cfg!(feature = "v2-h0") {
+        noise_gpu::OUT_SLOTS_H0
+    } else {
+        noise_gpu::OUT_SLOTS_PROD
+    };
+    let mut d_out = dev.alloc_zeros::<f32>(out_slots).expect("out");
     // Arcs the kernel had to drop for ARC_MAX_MERGED overflow, cumulative over
     // this block (the buffer is allocated once and the kernel only ever adds).
+    #[cfg(not(feature = "v2-h0"))]
     let mut arc_drops_seen = 0f32;
+    #[cfg(feature = "v2-h0")]
+    let arc_drops_seen = 0f32;
+    #[cfg(feature = "v2-h0")]
+    let mut h0_counts_seen = [0_u64; noise_gpu::OUT_H0_COUNTERS];
     let launch_cfg = LaunchConfig {
         grid_dim: (N_BINS as u32, 1, 1),
         block_dim: ((BIN_W * BIN_W) as u32, 1, 1),
@@ -370,7 +386,8 @@ fn process_block(
             TW,
             &tile_barriers,
             nsrc,
-            noise_gpu::OUT_SLOTS_PROD,
+            out_slots,
+            layer.h0_abi_tag(),
         )
     };
     let prep_timed = |it: (u32, u32, LineLayer), stats: &mut BTreeMap<&'static str, LayerStat>| {
@@ -474,15 +491,69 @@ fn process_block(
         // fatal: the tile is still the best this kernel can produce, and a world
         // build should not die on it — but it must never again be invisible.
         if gpu[noise_gpu::OUT_FAULT_SLOT] > arc_drops_seen {
-            eprintln!(
-                "!! ARC OVERFLOW {} z{}/{tx}/{ty}: {:.0} blocked arcs DROPPED \
-                 (ARC_MAX_MERGED too small for this geometry) — this tile UNDER-screens; \
-                 re-measure with NOISE_GPU_DEFINES=\"-DARC_MAX_MERGED=<bigger>\"",
+            #[cfg(feature = "v2-h0")]
+            bail!(
+                "V2 H0 ABI/layout fault {} z{}/{tx}/{ty}: production_fault_slot_delta={:.0}",
                 layer.dir(),
                 cfg.z,
                 gpu[noise_gpu::OUT_FAULT_SLOT] - arc_drops_seen,
             );
-            arc_drops_seen = gpu[noise_gpu::OUT_FAULT_SLOT];
+            #[cfg(not(feature = "v2-h0"))]
+            {
+                eprintln!(
+                    "!! ARC OVERFLOW {} z{}/{tx}/{ty}: {:.0} blocked arcs DROPPED \
+                 (ARC_MAX_MERGED too small for this geometry) — this tile UNDER-screens; \
+                 re-measure with NOISE_GPU_DEFINES=\"-DARC_MAX_MERGED=<bigger>\"",
+                    layer.dir(),
+                    cfg.z,
+                    gpu[noise_gpu::OUT_FAULT_SLOT] - arc_drops_seen,
+                );
+                arc_drops_seen = gpu[noise_gpu::OUT_FAULT_SLOT];
+            }
+        }
+        #[cfg(feature = "v2-h0")]
+        {
+            let mut delta = [0_u64; noise_gpu::OUT_H0_COUNTERS];
+            for index in 0..noise_gpu::OUT_H0_COUNTERS {
+                let current = h0_exact_counter(&gpu, index);
+                delta[index] = current
+                    .checked_sub(h0_counts_seen[index])
+                    .context("V2 H0 exact counter moved backwards")?;
+                h0_counts_seen[index] = current;
+            }
+            let [node_overflow, hard_geometry, abi_layout, guarded_legal, completed_pairs, candidate_visits, generated_nodes, admitted_nodes] =
+                delta;
+            if node_overflow != 0 || hard_geometry != 0 || abi_layout != 0 {
+                bail!(
+                    "V2 H0 hard fault {} z{}/{tx}/{ty}: node_overflow={} hard_geometry={} \
+                     abi_layout={} guarded_legal={}",
+                    layer.dir(),
+                    cfg.z,
+                    node_overflow,
+                    hard_geometry,
+                    abi_layout,
+                    guarded_legal,
+                );
+            }
+            #[cfg(feature = "v2-h0-counters")]
+            eprintln!(
+                "H0STAT {} z{}/{tx}/{ty}: pairs={} candidates={} nodes={} admitted={} guarded={}",
+                layer.dir(),
+                cfg.z,
+                completed_pairs,
+                candidate_visits,
+                generated_nodes,
+                admitted_nodes,
+                guarded_legal,
+            );
+            #[cfg(not(feature = "v2-h0-counters"))]
+            let _ = (
+                completed_pairs,
+                candidate_visits,
+                generated_nodes,
+                admitted_nodes,
+                guarded_legal,
+            );
         }
         let output_started = Instant::now();
         let mut accum = TileAccumulator::new();
@@ -657,9 +728,9 @@ fn process_region(
     // Vector obstacles (geodata-v2 1.6, QM_VECTOR_BUILDINGS=1): the same
     // loader + policy as the CPU builder (all-or-raster, region cell required
     // under partial, shard errors hard). Uploaded ONCE per region; the kernel
-    // reads it through a 6-slot pointer table {n, metas, starts, refs, edges,
-    // cell_max_h} (obst[0]==0 ⇒ raster mode — one zero row keeps cuMemAlloc
-    // happy; slot 5 == 0 ⇒ E2 pruning disabled).
+    // reads it through the complete 14-slot table owned by
+    // `noise_gpu::upload_obstacles` (obst[0]==0 ⇒ raster mode; slot 5 == 0 ⇒
+    // E2 pruning disabled). There is deliberately no reserved pointer slot.
     let obstacle_data = ObstacleData::load_for_r4s(&cfg.h3r4, r4, &ring)
         .with_context(|| format!("load obstacles R4 {r4:015x}"))?;
     let obst_dev = upload_obstacles(dev, obstacle_data.set())?;

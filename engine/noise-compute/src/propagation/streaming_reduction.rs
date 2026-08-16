@@ -108,6 +108,16 @@ pub enum WedgeDecision {
     HardFault = 3,
 }
 
+/// Orientation-only SR-2 membership of one candidate in one source span.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SpanDecision {
+    Outside = 0,
+    Overlaps = 1,
+    NearGuardedDegenerate = 2,
+    HardFault = 3,
+}
+
 /// Compute the one source-frame longitude scale packed for both lanes.
 ///
 /// `mlon` is host-owned; CUDA consumes these exact bits and never calls cosine.
@@ -120,6 +130,44 @@ pub fn source_frame_mlon(start_lat: f64, end_lat: f64) -> Result<f64, GeometryEr
     let mlon = m_per_deg_lon(midpoint_rad);
     if mlon.is_finite() {
         Ok(mlon)
+    } else {
+        Err(GeometryError::NonFinite)
+    }
+}
+
+/// Transform one geographic point into the receiver-centred source frame.
+///
+/// The labelled order is part of the CUDA parity contract. In particular, the
+/// longitude subtraction happens before its scale multiply; neither lane may
+/// rewrite this as a world-space position followed by a second subtraction.
+pub fn source_frame_vector_from_world(
+    latitude: f64,
+    longitude: f64,
+    receiver_latitude: f64,
+    receiver_longitude: f64,
+    source_mlon: f64,
+) -> Result<MetricVector, GeometryError> {
+    if ![
+        latitude,
+        longitude,
+        receiver_latitude,
+        receiver_longitude,
+        source_mlon,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+        || source_mlon <= 0.0
+    {
+        return Err(GeometryError::NonFinite);
+    }
+    // SRM-FRAME-1
+    let longitude_delta = longitude - receiver_longitude;
+    let latitude_delta = latitude - receiver_latitude;
+    let x = longitude_delta * source_mlon;
+    let y = latitude_delta * crate::constants::M_PER_DEG_LAT;
+    let vector = MetricVector::new(x, y);
+    if vector.is_finite() {
+        Ok(vector)
     } else {
         Err(GeometryError::NonFinite)
     }
@@ -247,6 +295,127 @@ pub fn candidate_wedge_owns(
     } else {
         WedgeDecision::DoesNotOwn
     }
+}
+
+/// Whether a candidate's angular point/wedge overlaps a finite source piece.
+///
+/// This is the diagnostic/H32 SR-2 constructor. H0 pass A deliberately does
+/// not call it: generated nodes already lie inside the source span and test the
+/// original candidate wedge directly.
+pub fn candidate_overlaps_source_span(
+    source0: MetricVector,
+    source1: MetricVector,
+    candidate0: MetricVector,
+    candidate1: MetricVector,
+    near_f32: f32,
+) -> SpanDecision {
+    if !source0.is_finite()
+        || !source1.is_finite()
+        || !candidate0.is_finite()
+        || !candidate1.is_finite()
+        || !near_f32.is_finite()
+    {
+        return SpanDecision::HardFault;
+    }
+    if source0.is_zero() && source1.is_zero() {
+        return SpanDecision::HardFault;
+    }
+    if candidate0.is_zero() || candidate1.is_zero() {
+        return if near_f32 < 1.0 {
+            SpanDecision::NearGuardedDegenerate
+        } else {
+            SpanDecision::HardFault
+        };
+    }
+    let candidate_turn = orient(candidate0, candidate1);
+    if candidate_turn == 0.0 && dot(candidate0, candidate1) < 0.0 {
+        return if near_f32 < 1.0 {
+            SpanDecision::NearGuardedDegenerate
+        } else {
+            SpanDecision::HardFault
+        };
+    }
+
+    let radial_direction = if source0.is_zero() {
+        Some(source1)
+    } else if source1.is_zero() || same_ray(source0, source1) == Ok(true) {
+        Some(source0)
+    } else {
+        None
+    };
+    if let Some(direction) = radial_direction {
+        return match candidate_wedge_owns(candidate0, candidate1, direction, near_f32) {
+            WedgeDecision::DoesNotOwn => SpanDecision::Outside,
+            WedgeDecision::Owns => SpanDecision::Overlaps,
+            WedgeDecision::NearGuardedDegenerate => SpanDecision::NearGuardedDegenerate,
+            WedgeDecision::HardFault => SpanDecision::HardFault,
+        };
+    }
+
+    // A source crossing the receiver consists of two radial arms with opposite
+    // directions. It is not an empty half-open span.
+    if orient(source0, source1) == 0.0 && dot(source0, source1) < 0.0 {
+        for direction in [source0, source1] {
+            match candidate_wedge_owns(candidate0, candidate1, direction, near_f32) {
+                WedgeDecision::Owns => return SpanDecision::Overlaps,
+                WedgeDecision::NearGuardedDegenerate => {
+                    return SpanDecision::NearGuardedDegenerate;
+                }
+                WedgeDecision::HardFault => return SpanDecision::HardFault,
+                WedgeDecision::DoesNotOwn => {}
+            }
+        }
+        return SpanDecision::Outside;
+    }
+
+    // Opposite physical ordering of the same two boundary rays owns neither
+    // other's start, but the two half-open wedges share their whole interior.
+    // Keep this exact orientation case before the general start theorem.
+    let reverse_same_boundaries =
+        match (same_ray(source0, candidate1), same_ray(source1, candidate0)) {
+            (Ok(first), Ok(second)) => first && second,
+            _ => return SpanDecision::HardFault,
+        };
+    if reverse_same_boundaries {
+        return SpanDecision::Overlaps;
+    }
+
+    let strictly_owns = |a, b, direction, near| {
+        let decision = candidate_wedge_owns(a, b, direction, near);
+        if decision != WedgeDecision::Owns {
+            return decision;
+        }
+        match (same_ray(a, direction), same_ray(b, direction)) {
+            (Ok(at_a), Ok(at_b)) if at_a || at_b => WedgeDecision::DoesNotOwn,
+            (Ok(_), Ok(_)) => WedgeDecision::Owns,
+            _ => WedgeDecision::HardFault,
+        }
+    };
+
+    // SRM-SPAN-1. Starts carry each physical half-open wedge's inclusive
+    // endpoint. An excluded end strictly inside the other wedge proves a
+    // positive-width overlap immediately before that end. The reverse-same-
+    // boundaries case above is the only remaining topology. This preserves
+    // clockwise physical ownership without atan2 or a numeric seam.
+    let source_owns = |direction| candidate_wedge_owns(source0, source1, direction, 1.0);
+    let candidate_owns =
+        |direction| candidate_wedge_owns(candidate0, candidate1, direction, near_f32);
+    for decision in [
+        source_owns(candidate0),
+        candidate_owns(source0),
+        strictly_owns(source0, source1, candidate1, 1.0),
+        strictly_owns(candidate0, candidate1, source1, near_f32),
+    ] {
+        match decision {
+            WedgeDecision::Owns => return SpanDecision::Overlaps,
+            WedgeDecision::NearGuardedDegenerate => {
+                return SpanDecision::NearGuardedDegenerate;
+            }
+            WedgeDecision::HardFault => return SpanDecision::HardFault,
+            WedgeDecision::DoesNotOwn => {}
+        }
+    }
+    SpanDecision::Outside
 }
 
 /// Full finite-edge origin distance, rounded exactly once to f32.
@@ -377,6 +546,48 @@ mod tests {
     }
 
     #[test]
+    fn source_frame_uses_receiver_relative_order_for_non_origin_world_coordinates() {
+        let expected = MetricVector::new(512.0, 0.5 * crate::constants::M_PER_DEG_LAT);
+        let local = source_frame_vector_from_world(32.5, -8.25, 32.0, -8.5, 2048.0)
+            .expect("finite non-origin frame");
+        let translated = source_frame_vector_from_world(64.5, 23.75, 64.0, 23.5, 2048.0)
+            .expect("translation preserves the exact binary deltas");
+        assert_eq!(local.x.to_bits(), expected.x.to_bits());
+        assert_eq!(local.y.to_bits(), expected.y.to_bits());
+        assert_eq!(translated.x.to_bits(), expected.x.to_bits());
+        assert_eq!(translated.y.to_bits(), expected.y.to_bits());
+
+        let latitude = 50.100987654321;
+        let longitude = 14.300123456789;
+        let receiver_latitude = 50.100123456789;
+        let receiver_longitude = 14.299987654321;
+        let mlon = 71432.123456789;
+        let discriminating = source_frame_vector_from_world(
+            latitude,
+            longitude,
+            receiver_latitude,
+            receiver_longitude,
+            mlon,
+        )
+        .expect("finite reassociation-killing frame");
+        assert_eq!(discriminating.x.to_bits(), 0x4023_66bc_bb5b_dc1c);
+        assert_eq!(discriminating.y.to_bits(), 0x4057_e1d1_3a0c_8f46);
+        let forbidden_x = longitude * mlon - receiver_longitude * mlon;
+        let forbidden_y = latitude * crate::constants::M_PER_DEG_LAT
+            - receiver_latitude * crate::constants::M_PER_DEG_LAT;
+        assert_ne!(discriminating.x.to_bits(), forbidden_x.to_bits());
+        assert_ne!(discriminating.y.to_bits(), forbidden_y.to_bits());
+        assert_eq!(
+            source_frame_vector_from_world(1.0, 2.0, 0.0, 0.0, 0.0),
+            Err(GeometryError::NonFinite)
+        );
+        assert_eq!(
+            source_frame_vector_from_world(f64::NAN, 2.0, 0.0, 0.0, 1.0),
+            Err(GeometryError::NonFinite)
+        );
+    }
+
+    #[test]
     fn source_id_namespaces_round_trip_without_numeric_f64_conversion() {
         for ordinal in [0, 1, WALL_SOURCE_TAG - 1] {
             let id = SourceId64::obstacle(ordinal).unwrap();
@@ -479,6 +690,157 @@ mod tests {
             WedgeDecision::Owns,
             "the clockwise neighbour owns its physical start"
         );
+    }
+
+    #[test]
+    fn source_span_overlap_owns_starts_and_excludes_touching_ends() {
+        let east = MetricVector::new(1.0, 0.0);
+        let north_east = MetricVector::new(1.0, 1.0);
+        let north = MetricVector::new(0.0, 1.0);
+        let north_west = MetricVector::new(-1.0, 1.0);
+        let west = MetricVector::new(-1.0, 0.0);
+        let south_east = MetricVector::new(1.0, -1.0);
+
+        assert_eq!(
+            candidate_overlaps_source_span(east, north, north_east, north_west, 2.0),
+            SpanDecision::Overlaps
+        );
+        assert_eq!(
+            candidate_overlaps_source_span(east, north, north, west, 2.0),
+            SpanDecision::Outside,
+            "a candidate opening exactly at the source's excluded end only touches"
+        );
+        assert_eq!(
+            candidate_overlaps_source_span(north, east, north_east, south_east, 2.0),
+            SpanDecision::Overlaps,
+            "clockwise spans retain physical start ownership"
+        );
+        assert_eq!(
+            candidate_overlaps_source_span(south_east, north_east, east, east, 2.0),
+            SpanDecision::Overlaps,
+            "a zero-width point inside a seam-crossing span survives"
+        );
+    }
+
+    #[test]
+    fn source_span_overlap_handles_radial_crossing_guard_and_fault_cases() {
+        let zero = MetricVector::new(0.0, -0.0);
+        let east = MetricVector::new(1.0, 0.0);
+        let west = MetricVector::new(-1.0, 0.0);
+        let north = MetricVector::new(0.0, 1.0);
+        assert_eq!(
+            candidate_overlaps_source_span(zero, east, east, east, 2.0),
+            SpanDecision::Overlaps
+        );
+        assert_eq!(
+            candidate_overlaps_source_span(west, east, west, west, 2.0),
+            SpanDecision::Overlaps,
+            "receiver crossing exposes both radial arms"
+        );
+        assert_eq!(
+            candidate_overlaps_source_span(east, north, zero, east, 0.5),
+            SpanDecision::NearGuardedDegenerate
+        );
+        assert_eq!(
+            candidate_overlaps_source_span(east, north, zero, east, 2.0),
+            SpanDecision::HardFault
+        );
+        assert_eq!(
+            candidate_overlaps_source_span(zero, zero, east, north, 2.0),
+            SpanDecision::HardFault
+        );
+        assert_eq!(
+            candidate_overlaps_source_span(
+                east,
+                north,
+                MetricVector::new(f64::NAN, 0.0),
+                north,
+                2.0,
+            ),
+            SpanDecision::HardFault
+        );
+    }
+
+    #[test]
+    fn source_span_overlap_matches_the_half_open_set_oracle() {
+        // Integer direction vectors avoid a trigonometric oracle. Because every
+        // tested endpoint is also a sampled direction, two non-empty half-open
+        // wedges overlap iff this finite direction set contains a direction
+        // owned by both. This exercises normal, seam-crossing, clockwise and
+        // zero-width wedges without restating SRM-SPAN-1's start theorem.
+        let directions = [
+            MetricVector::new(1.0, 0.0),
+            MetricVector::new(2.0, 1.0),
+            MetricVector::new(1.0, 1.0),
+            MetricVector::new(1.0, 2.0),
+            MetricVector::new(0.0, 1.0),
+            MetricVector::new(-1.0, 2.0),
+            MetricVector::new(-1.0, 1.0),
+            MetricVector::new(-2.0, 1.0),
+            MetricVector::new(-1.0, 0.0),
+            MetricVector::new(-2.0, -1.0),
+            MetricVector::new(-1.0, -1.0),
+            MetricVector::new(-1.0, -2.0),
+            MetricVector::new(0.0, -1.0),
+            MetricVector::new(1.0, -2.0),
+            MetricVector::new(1.0, -1.0),
+            MetricVector::new(2.0, -1.0),
+        ];
+        for source0 in directions {
+            for source1 in directions {
+                // An antipodal source is the explicit receiver-crossing case;
+                // its mathematical set is the union of its two radial arms.
+                let source_crosses_receiver =
+                    orient(source0, source1) == 0.0 && dot(source0, source1) < 0.0;
+                for candidate0 in directions {
+                    for candidate1 in directions {
+                        // A candidate crossing the receiver is a legal guarded
+                        // degenerate only below 1 m. It is not an ordinary set.
+                        if orient(candidate0, candidate1) == 0.0
+                            && dot(candidate0, candidate1) < 0.0
+                        {
+                            continue;
+                        }
+                        let source_owns = |direction| {
+                            if source_crosses_receiver {
+                                same_ray(source0, direction).unwrap()
+                                    || same_ray(source1, direction).unwrap()
+                            } else {
+                                candidate_wedge_owns(source0, source1, direction, 2.0)
+                                    == WedgeDecision::Owns
+                            }
+                        };
+                        let mut oracle_directions = directions.to_vec();
+                        let endpoints = [source0, source1, candidate0, candidate1];
+                        for first in endpoints {
+                            for second in endpoints {
+                                let midpoint =
+                                    MetricVector::new(first.x + second.x, first.y + second.y);
+                                if !midpoint.is_zero() {
+                                    oracle_directions.push(midpoint);
+                                }
+                            }
+                        }
+                        let expected = oracle_directions.into_iter().any(|direction| {
+                            source_owns(direction)
+                                && candidate_wedge_owns(candidate0, candidate1, direction, 2.0)
+                                    == WedgeDecision::Owns
+                        });
+                        assert_eq!(
+                            candidate_overlaps_source_span(
+                                source0, source1, candidate0, candidate1, 2.0,
+                            ),
+                            if expected {
+                                SpanDecision::Overlaps
+                            } else {
+                                SpanDecision::Outside
+                            },
+                            "source={source0:?}..{source1:?} candidate={candidate0:?}..{candidate1:?}",
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
