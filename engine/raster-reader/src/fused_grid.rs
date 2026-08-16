@@ -7,7 +7,18 @@
 //! per-raster interpolation config (DEM/IMD bilinear, building/forest nearest) so
 //! pipeline output matches mmap-based [`RealRasters`] to ~0 dB.
 
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::RealRasters;
+
+/// Each FusedGrid allocation/mutation gets a new id so worker-local cached
+/// pixels can never survive into a distinct halo that reused an allocator slot.
+static NEXT_GRID_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_grid_id() -> u64 {
+    NEXT_GRID_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// L3-cache-resident cropped raster grid for pipeline compute.
 ///
@@ -19,14 +30,28 @@ use crate::RealRasters;
 /// `Clone` exists for [`FusedGrid::burn_building_max`] experiments: burning
 /// into a COPY leaves the original — and the receiver reflection pre-baked
 /// from it — untouched.
-#[derive(Clone)]
 pub struct FusedGrid {
     data: Vec<FusedPixel>,
+    grid_id: u64,
     lat_min: f64,
     lon_min: f64,
     inv_cell_deg: f64,
     cols: usize,
     rows: usize,
+}
+
+impl Clone for FusedGrid {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            grid_id: next_grid_id(),
+            lat_min: self.lat_min,
+            lon_min: self.lon_min,
+            inv_cell_deg: self.inv_cell_deg,
+            cols: self.cols,
+            rows: self.rows,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -39,10 +64,94 @@ pub struct FusedPixel {
     pub _pad: u8,       // total: 4+1+1+1+1 = 8 bytes per pixel
 }
 
+/// The C7.1 locality receipt measured 77.7775% exact hits at this capacity.
+/// At 36 bytes per entry it is 288 KiB per worker, so two SMT siblings fit in
+/// msas2's 1 MiB private L2 with room for profile state; 16K would not.
+const PROFILE_QUAD_CACHE_ENTRIES: usize = 8192;
+const _: () = assert!(PROFILE_QUAD_CACHE_ENTRIES.is_power_of_two());
+
+#[derive(Clone, Copy, Default)]
+struct CachedPixelQuad {
+    /// `base + 1`; zero is the cold-entry sentinel and cannot alias a grid
+    /// index because a u32-max base bypasses this cache.
+    tag: u32,
+    pixels: [FusedPixel; 4],
+}
+
+/// Per-thread direct map. It is deliberately not shared: a lock would cost
+/// more than four L3-resident loads. A Rayon worker can interleave receiver
+/// blocks from multiple concurrent halos, so `grid_id !=` must flush on every
+/// halo replacement or mutation, including a return to an older generation.
+struct WorkerPixelQuadCache {
+    grid_id: u64,
+    entries: Vec<CachedPixelQuad>,
+}
+
+impl WorkerPixelQuadCache {
+    fn new() -> Self {
+        Self {
+            grid_id: 0,
+            entries: vec![CachedPixelQuad::default(); PROFILE_QUAD_CACHE_ENTRIES],
+        }
+    }
+
+    #[inline]
+    fn lookup_or_insert(
+        &mut self,
+        grid_id: u64,
+        base: usize,
+        cols: usize,
+        data: &[FusedPixel],
+    ) -> [FusedPixel; 4] {
+        let Some(tag) = base
+            .checked_add(1)
+            .and_then(|base_plus_one| u32::try_from(base_plus_one).ok())
+        else {
+            return [
+                data[base],
+                data[base + 1],
+                data[base + cols],
+                data[base + cols + 1],
+            ];
+        };
+        if self.grid_id != grid_id {
+            self.grid_id = grid_id;
+            self.entries.fill(CachedPixelQuad::default());
+        }
+        let entry = &mut self.entries[base & (PROFILE_QUAD_CACHE_ENTRIES - 1)];
+        if entry.tag == tag {
+            return entry.pixels;
+        }
+        let pixels = [
+            data[base],
+            data[base + 1],
+            data[base + cols],
+            data[base + cols + 1],
+        ];
+        *entry = CachedPixelQuad { tag, pixels };
+        pixels
+    }
+}
+
+thread_local! {
+    static WORKER_PIXEL_QUAD_CACHE: RefCell<Option<WorkerPixelQuadCache>> = const { RefCell::new(None) };
+}
+
 impl FusedGrid {
+    #[inline]
+    fn pixel_quad(&self, base: usize) -> [FusedPixel; 4] {
+        WORKER_PIXEL_QUAD_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            cache
+                .get_or_insert_with(WorkerPixelQuadCache::new)
+                .lookup_or_insert(self.grid_id, base, self.cols, &self.data)
+        })
+    }
+
     pub(crate) fn empty() -> Self {
         FusedGrid {
             data: vec![FusedPixel::default(); 4],
+            grid_id: next_grid_id(),
             lat_min: 0.0,
             lon_min: 0.0,
             inv_cell_deg: 3600.0,
@@ -128,6 +237,7 @@ impl FusedGrid {
 
         FusedGrid {
             data,
+            grid_id: next_grid_id(),
             lat_min: lat_lo,
             lon_min: lon_lo,
             inv_cell_deg,
@@ -218,12 +328,17 @@ impl FusedGrid {
         // Supercover visits exactly |Δr| + |Δc| + 1 cells; the +4 pads float
         // edge cases so a boundary-grazing segment can't loop unbounded.
         let mut guard = (r_end - r).abs() + (c_end - c).abs() + 4;
+        let mut modified = false;
         loop {
             if (0..rows).contains(&r) && (0..cols).contains(&c) {
                 let px = &mut self.data[r as usize * self.cols + c as usize];
                 px.building = px.building.max(h);
+                modified = true;
             }
             if (r == r_end && c == c_end) || guard <= 0 {
+                if modified {
+                    self.grid_id = next_grid_id();
+                }
                 return;
             }
             guard -= 1;
@@ -503,6 +618,7 @@ impl FusedGrid {
     pub fn with_origin_shift(&self, dlat: f64, dlon: f64) -> FusedGrid {
         FusedGrid {
             data: self.data.clone(),
+            grid_id: next_grid_id(),
             lat_min: self.lat_min + dlat,
             lon_min: self.lon_min + dlon,
             inv_cell_deg: self.inv_cell_deg,
@@ -563,10 +679,7 @@ impl FusedGrid {
         let fr = rf - r0 as f64;
         let fc = cf - c0 as f64;
         let base = r0 * self.cols + c0;
-        let px00 = self.data[base];
-        let px01 = self.data[base + 1];
-        let px10 = self.data[base + self.cols];
-        let px11 = self.data[base + self.cols + 1];
+        let [px00, px01, px10, px11] = self.pixel_quad(base);
         // Elevation bilinear (DEM is a continuous field).
         let v0e = px00.elevation as f64 + fc * (px01.elevation as f64 - px00.elevation as f64);
         let v1e = px10.elevation as f64 + fc * (px11.elevation as f64 - px10.elevation as f64);
@@ -840,6 +953,124 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn cached_quad_matches_the_uncached_quad_across_every_aliasing_base() {
+        // 197x197 = 38,809 cells over an 8,192-entry direct map: every slot is
+        // claimed by ~4.7 distinct bases, so a truncated tag or a wrong index
+        // mask returns a NEIGHBOUR ROW's quad here.
+        let mut g = empty_grid();
+        let (rows, cols) = (g.rows, g.cols);
+        assert!(rows * cols > 4 * PROFILE_QUAD_CACHE_ENTRIES);
+        let (lat_min, lon_min) = (g.lat_min, g.lon_min);
+        for r in 0..rows {
+            let lat = lat_min + r as f64 / 3600.0;
+            let h = (1 + r % 200) as f32;
+            g.burn_building_max(lat, lon_min, lat, lon_min + cols as f64 / 3600.0, h);
+        }
+        for r0 in 0..rows - 1 {
+            for c0 in 0..cols - 1 {
+                let base = r0 * cols + c0;
+                let want = [
+                    g.data[base],
+                    g.data[base + 1],
+                    g.data[base + cols],
+                    g.data[base + cols + 1],
+                ];
+                let got = g.pixel_quad(base);
+                for i in 0..4 {
+                    assert_eq!(
+                        (
+                            got[i].building,
+                            got[i].forest,
+                            got[i].imd,
+                            got[i].elevation.to_bits()
+                        ),
+                        (
+                            want[i].building,
+                            want[i].forest,
+                            want[i].imd,
+                            want[i].elevation.to_bits()
+                        ),
+                        "cached quad != uncached quad at base {base} corner {i}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn two_live_grids_never_leak_quads_into_each_other() {
+        // The production surface build runs `region_concurrency` regions at once
+        // while the inner receiver-block par_iter steals across the whole pool,
+        // so ONE worker thread alternates between distinct halo grids.
+        let mut a = empty_grid();
+        let mut b = empty_grid();
+        a.burn_building_max(0.01, 0.01, 0.01, 0.01, 7.0);
+        b.burn_building_max(0.01, 0.01, 0.01, 0.01, 3.0);
+        for _ in 0..4 {
+            assert_eq!(
+                a.lookup_fused_rc(44.0, 44.0).1,
+                7,
+                "grid A read grid B's quad"
+            );
+            assert_eq!(
+                b.lookup_fused_rc(44.0, 44.0).1,
+                3,
+                "grid B read grid A's quad"
+            );
+        }
+    }
+
+    #[test]
+    fn cached_quad_is_invalidated_after_a_grid_mutation() {
+        let mut grid = FusedGrid::empty();
+        assert_eq!(grid.lookup_fused_rc(0.0, 0.0).1, 0);
+        let before = grid.grid_id;
+        grid.burn_building_max(0.0, 0.0, 0.0, 0.0, 9.0);
+        assert_ne!(grid.grid_id, before, "a burn must invalidate quad caches");
+        assert_eq!(
+            grid.lookup_fused_rc(0.0, 0.0).1,
+            9,
+            "a stale cached quad must not survive the burn"
+        );
+    }
+
+    #[test]
+    fn pixel_quad_cache_keeps_full_tags_and_flushes_on_grid_revisit() {
+        let cols = 2usize;
+        let mut first = vec![FusedPixel::default(); PROFILE_QUAD_CACHE_ENTRIES + cols + 2];
+        first[0].building = 11;
+        first[PROFILE_QUAD_CACHE_ENTRIES].building = 22;
+        let mut cache = WorkerPixelQuadCache::new();
+
+        assert_eq!(cache.lookup_or_insert(1, 0, cols, &first)[0].building, 11);
+        assert_eq!(
+            cache.lookup_or_insert(1, PROFILE_QUAD_CACHE_ENTRIES, cols, &first)[0].building,
+            22,
+            "same direct-map slot must compare the complete base tag"
+        );
+
+        first[0].building = 33;
+        let mut second = vec![FusedPixel::default(); cols + 2];
+        second[0].building = 44;
+        assert_eq!(cache.lookup_or_insert(1, 0, cols, &first)[0].building, 33);
+        assert_eq!(cache.lookup_or_insert(2, 0, cols, &second)[0].building, 44);
+        assert_eq!(
+            cache.lookup_or_insert(1, 0, cols, &first)[0].building,
+            33,
+            "returning to an older live grid must flush the newer grid's quad"
+        );
+    }
+
+    #[test]
+    fn pixel_quad_cache_entry_stays_within_the_l2_budget() {
+        assert_eq!(std::mem::size_of::<CachedPixelQuad>(), 36);
+        assert_eq!(
+            PROFILE_QUAD_CACHE_ENTRIES * std::mem::size_of::<CachedPixelQuad>(),
+            288 * 1024
+        );
     }
 
     #[test]
