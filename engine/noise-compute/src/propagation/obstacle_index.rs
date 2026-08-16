@@ -696,12 +696,14 @@ impl ObstacleIndex {
 
         // An edge spans every supercover cell it passes through, so the ray
         // can re-test it in each of them. A direct-mapped 64-slot set records
-        // EVERY tested edge, not only hits: ray and edge are immutable within
-        // this walk, so repeating `segment_intersection_t` cannot change its
-        // answer. A hash collision merely evicts the older entry and performs
-        // an extra test; it can never suppress a distinct edge. CORRECTNESS
-        // still belongs to the post-sort dedup below (a shared ring vertex can
-        // hit two edges of one footprint at one chainage).
+        // EVERY edge that reaches the exact predicate, not only hits: ray and
+        // edge are immutable within this walk, so repeating the predicate
+        // cannot change its answer. An AABB rejection is deliberately not
+        // remembered: the same edge can span a later DDA cell that contains
+        // the true crossing. A hash collision merely evicts the older entry
+        // and performs an extra test; it can never suppress a distinct edge.
+        // CORRECTNESS still belongs to the post-sort dedup below (a shared
+        // ring vertex can hit two edges of one footprint at one chainage).
         let mut recent: [u32; 64] = [u32::MAX; 64];
 
         let mut guard = (self.cols + self.rows) as i64 + 4;
@@ -715,47 +717,58 @@ impl ObstacleIndex {
             let mut lo = self.cell_starts[cell] as usize;
             let hi = self.cell_starts[cell + 1] as usize;
             if hi > lo {
+                // The DDA visit covers this closed ray interval. Both ends
+                // are retained because the edge supercover and this DDA walk
+                // meet at cell boundaries. Their accumulated and cross-product
+                // chainages can differ by a few ulps, so the AABB below is
+                // padded before it filters the authoritative exact predicate.
+                let t_exit = t_max_x.min(t_max_y).min(1.0);
+                let (cell_t_lo, cell_t_hi) = (t_enter.clamp(0.0, 1.0), t_exit.clamp(0.0, 1.0));
                 if let Some(p) = prune {
-                    let t_exit = t_max_x.min(t_max_y).min(1.0);
-                    let (a, b) = (t_enter.clamp(0.0, 1.0), t_exit.clamp(0.0, 1.0));
-                    while win_lo + 1 < p.t.len() && p.t[win_lo + 1] <= a {
+                    while win_lo + 1 < p.t.len() && p.t[win_lo + 1] <= cell_t_lo {
                         win_lo += 1;
                     }
                     let mut terr_win = p.elevation_m[win_lo] as f64;
                     let mut k = win_lo;
-                    while k + 1 < p.t.len() && p.t[k] < b {
+                    while k + 1 < p.t.len() && p.t[k] < cell_t_hi {
                         k += 1;
                         terr_win = terr_win.max(p.elevation_m[k] as f64);
                     }
                     let top_bound = self.cell_top_bound(cell, terr_win);
-                    if p.max_delta(top_bound, a, b) < p.floor_m {
+                    if p.max_delta(top_bound, cell_t_lo, cell_t_hi) < p.floor_m {
                         lo = hi; // no edge here can reach the consumer's floor
                     }
                 }
-            }
-            'edges: for &eref in &self.edge_refs[lo..hi] {
-                let slot = eref as usize & (recent.len() - 1);
-                if recent[slot] == eref {
-                    continue 'edges;
-                }
-                recent[slot] = eref;
-                let e = self.edges[eref as usize];
-                if let Some(t) = segment_intersection_t(
-                    sx,
-                    sy,
-                    dx,
-                    dy,
-                    e.x0 as f64,
-                    e.y0 as f64,
-                    e.x1 as f64,
-                    e.y1 as f64,
-                ) {
-                    out.push(CrossingCandidate {
-                        t,
-                        height_m: e.height_m,
-                        kind: e.kind(),
-                        id: e.id,
-                    });
+                if lo < hi {
+                    let (ray_x, ray_y) = ray_cell_aabb(sx, sy, dx, dy, cell_t_lo, cell_t_hi);
+                    for &eref in &self.edge_refs[lo..hi] {
+                        let slot = eref as usize & (recent.len() - 1);
+                        if recent[slot] == eref {
+                            continue;
+                        }
+                        let e = &self.edges[eref as usize];
+                        if !ray_cell_aabb_may_overlap(ray_x, ray_y, e) {
+                            continue;
+                        }
+                        recent[slot] = eref;
+                        if let Some(t) = segment_intersection_t(
+                            sx,
+                            sy,
+                            dx,
+                            dy,
+                            e.x0 as f64,
+                            e.y0 as f64,
+                            e.x1 as f64,
+                            e.y1 as f64,
+                        ) {
+                            out.push(CrossingCandidate {
+                                t,
+                                height_m: e.height_m,
+                                kind: e.kind(),
+                                id: e.id,
+                            });
+                        }
+                    }
                 }
             }
             if (cx == end_cx && cy == end_cy) || guard <= 0 {
@@ -1077,6 +1090,43 @@ pub(crate) fn origin_to_segment_dist(x0: f64, y0: f64, x1: f64, y1: f64) -> f64 
     };
     let (px, py) = (x0 + t * ex, y0 + t * ey);
     (px * px + py * py).sqrt()
+}
+
+/// Closed, padded AABB of one DDA cell visit.
+#[inline]
+fn ray_cell_aabb(
+    sx: f64,
+    sy: f64,
+    dx: f64,
+    dy: f64,
+    t_lo: f64,
+    t_hi: f64,
+) -> ((f64, f64), (f64, f64)) {
+    let ray_x0 = sx + dx * t_lo;
+    let ray_x1 = sx + dx * t_hi;
+    let ray_y0 = sy + dy * t_lo;
+    let ray_y1 = sy + dy * t_hi;
+    // DDA boundaries accumulate t_delta, whereas the exact intersection uses
+    // independent cross products. This pad only covers their f64 last-ulp
+    // disagreement; it cannot change the exact predicate's answer.
+    let pad = 1e-9 * (1.0 + dx.abs() + dy.abs());
+    (
+        (ray_x0.min(ray_x1) - pad, ray_x0.max(ray_x1) + pad),
+        (ray_y0.min(ray_y1) - pad, ray_y0.max(ray_y1) + pad),
+    )
+}
+
+/// Conservative broad phase for one edge in one DDA cell visit.
+///
+/// The edge is binned by supercover and the ray DDA visits every crossed cell;
+/// a closed, padded box therefore only rejects an edge whose crossing cannot
+/// be in this cell. Boundary touches always reach the exact predicate below.
+#[inline]
+fn ray_cell_aabb_may_overlap(ray_x: (f64, f64), ray_y: (f64, f64), edge: &ObstacleEdge) -> bool {
+    let (edge_x_lo, edge_x_hi) = (edge.x0.min(edge.x1) as f64, edge.x0.max(edge.x1) as f64);
+    let (edge_y_lo, edge_y_hi) = (edge.y0.min(edge.y1) as f64, edge.y0.max(edge.y1) as f64);
+
+    !(ray_x.1 < edge_x_lo || edge_x_hi < ray_x.0 || ray_y.1 < edge_y_lo || edge_y_hi < ray_y.0)
 }
 
 /// Angle folded into `(−π, π]` — shared by the skyline walk and
@@ -1588,6 +1638,227 @@ mod tests {
         b.add_ring(&square(500.0, 100.0, 10.0), 12.0, ObstacleKind::Building, 1);
         let idx = b.build();
         assert!(run(&idx, ll(0.0, 0.0), ll(1000.0, 0.0)).is_empty());
+    }
+
+    #[test]
+    fn ray_cell_aabb_keeps_boundary_touches_and_rejects_separation() {
+        let edge = |x0, y0, x1, y1| ObstacleEdge {
+            x0,
+            y0,
+            x1,
+            y1,
+            height_m: 1.0,
+            id: 0,
+            kind: ObstacleKind::Building.code(),
+        };
+        let ray_x = (0.0, 1.0);
+        let ray_y = (0.0, 1.0);
+        for (name, touch, outside) in [
+            (
+                "left",
+                edge(0.0, 0.2, 0.0, 0.8),
+                edge(-1e-6, 0.2, -1e-6, 0.8),
+            ),
+            (
+                "right",
+                edge(1.0, 0.2, 1.0, 0.8),
+                edge(1.0 + 1e-6, 0.2, 1.0 + 1e-6, 0.8),
+            ),
+            (
+                "bottom",
+                edge(0.2, 0.0, 0.8, 0.0),
+                edge(0.2, -1e-6, 0.8, -1e-6),
+            ),
+            (
+                "top",
+                edge(0.2, 1.0, 0.8, 1.0),
+                edge(0.2, 1.0 + 1e-6, 0.8, 1.0 + 1e-6),
+            ),
+        ] {
+            assert!(
+                ray_cell_aabb_may_overlap(ray_x, ray_y, &touch),
+                "a closed AABB must keep its {name} boundary touch"
+            );
+            assert!(
+                !ray_cell_aabb_may_overlap(ray_x, ray_y, &outside),
+                "strictly separated {name} AABBs can skip the exact predicate"
+            );
+        }
+    }
+
+    #[test]
+    fn ray_cell_aabb_never_rejects_an_exact_intersection_point() {
+        let mut state = 0x0d15_ea5e_5eed_u64;
+        let mut hits = 0usize;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            ((state >> 32) as u32 as f64 / u32::MAX as f64) * 200.0 - 100.0
+        };
+        for _ in 0..4_000 {
+            let (sx, sy) = (next(), next());
+            let (dx, dy) = (next(), next());
+            let edge = ObstacleEdge {
+                x0: next() as f32,
+                y0: next() as f32,
+                x1: next() as f32,
+                y1: next() as f32,
+                height_m: 1.0,
+                id: 0,
+                kind: ObstacleKind::Building.code(),
+            };
+            if let Some(t) = segment_intersection_t(
+                sx,
+                sy,
+                dx,
+                dy,
+                edge.x0 as f64,
+                edge.y0 as f64,
+                edge.x1 as f64,
+                edge.y1 as f64,
+            ) {
+                hits += 1;
+                let (ray_x, ray_y) = ray_cell_aabb(sx, sy, dx, dy, t, t);
+                assert!(
+                    ray_cell_aabb_may_overlap(ray_x, ray_y, &edge),
+                    "exact hit t={t} cannot be outside its edge AABB"
+                );
+            }
+        }
+        assert!(
+            hits > 100,
+            "test distribution must exercise exact hits: {hits}"
+        );
+    }
+
+    fn unscreened_crossings(
+        idx: &ObstacleIndex,
+        from: (f64, f64),
+        to: (f64, f64),
+    ) -> Vec<CrossingCandidate> {
+        let (sx, sy) = idx.to_local(from.0, from.1);
+        let (rx, ry) = idx.to_local(to.0, to.1);
+        let (dx, dy) = (rx - sx, ry - sy);
+        let mut out: Vec<_> = idx
+            .edges
+            .iter()
+            .filter_map(|edge| {
+                segment_intersection_t(
+                    sx,
+                    sy,
+                    dx,
+                    dy,
+                    edge.x0 as f64,
+                    edge.y0 as f64,
+                    edge.x1 as f64,
+                    edge.y1 as f64,
+                )
+                .map(|t| CrossingCandidate {
+                    t,
+                    height_m: edge.height_m,
+                    kind: edge.kind(),
+                    id: edge.id,
+                })
+            })
+            .collect();
+        out.sort_unstable_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+        out.dedup_by(|a, b| a.id == b.id && (a.t - b.t).abs() < 1e-9);
+        out
+    }
+
+    /// REGRESSION (S6 C8). The index origin is the minimum edge coordinate, so
+    /// an axis-aligned exterior wall sits on gridline zero and has no neighbour
+    /// cell to absorb accumulated-DDA versus cross-product last-ulp drift.
+    #[test]
+    fn min_y_wall_matches_unscreened_reference() {
+        let mut builder = ObstacleIndex::builder(OLAT, OLON);
+        builder.add_ring(&square(0.0, 0.0, 10.0), 10.0, ObstacleKind::Building, 0);
+        builder.add_ring(&square(0.0, 200.0, 10.0), 10.0, ObstacleKind::Building, 1);
+        let idx = builder.build();
+        let from = ll(0.0, 2_000.0);
+        let to = ll(0.0, -2_000.0);
+        let screened = run(&idx, from, to);
+        let reference = unscreened_crossings(&idx, from, to);
+        assert_eq!(
+            screened.len(),
+            4,
+            "both footprints, entry + exit: {screened:?}"
+        );
+        assert_eq!(
+            screened.len(),
+            reference.len(),
+            "screened={screened:?}, reference={reference:?}"
+        );
+        for (got, expected) in screened.iter().zip(&reference) {
+            assert_eq!(got.t, expected.t);
+            assert_eq!(got.id, expected.id);
+            assert_eq!(got.height_m, expected.height_m);
+            assert_eq!(got.kind, expected.kind);
+        }
+    }
+
+    /// REGRESSION (S6 C8). The screen must be a strict SUPERSET filter. Two
+    /// invariants are load-bearing and each is one line from silent removal:
+    /// the pad in `ray_cell_aabb` (the index origin IS the minimum edge
+    /// coordinate, so an axis-aligned exterior wall sits on gridline zero with a
+    /// degenerate AABB, binned into one row only, with no neighbour cell to
+    /// absorb accumulated-DDA versus cross-product last-ulp drift), and NOT
+    /// writing `recent` on an AABB reject (the crossing may live in a later
+    /// cell). A single fixed geometry cannot guard a last-ulp property — which
+    /// ulp side it lands on is luck — so this sweeps. Removing the pad loses
+    /// ~38 % of crossings on gridline-snapped footprints; remembering a reject
+    /// loses ~17 %.
+    #[test]
+    fn screen_never_loses_a_crossing_over_a_swept_population() {
+        let mut state = 0xC85E_ED01_u64;
+        let mut next = |lo: f64, hi: f64| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            lo + (hi - lo) * ((state >> 11) as f64 / (1u64 << 53) as f64)
+        };
+        let mut checked = 0usize;
+        for trial in 0..200 {
+            let mut builder = ObstacleIndex::builder(OLAT, OLON);
+            for id in 0..12 {
+                // Half the trials snap corners onto the 64 m grid pitch, so
+                // crossings sit exactly ON cell boundaries by construction.
+                let (cx, cy, half) = if trial % 2 == 0 {
+                    (
+                        (next(-6.0, 6.0) as i64) as f64 * OBSTACLE_GRID_CELL_M,
+                        (next(-6.0, 6.0) as i64) as f64 * OBSTACLE_GRID_CELL_M,
+                        OBSTACLE_GRID_CELL_M / 2.0,
+                    )
+                } else {
+                    (next(-450.0, 450.0), next(-450.0, 450.0), next(4.0, 30.0))
+                };
+                builder.add_ring(&square(cx, cy, half), 10.0, ObstacleKind::Building, id);
+            }
+            let idx = builder.build();
+            for k in 0..120 {
+                let off = -500.0 + k as f64 * 8.4;
+                for &(from, to) in &[
+                    (ll(off, -1500.0), ll(off, 1500.0)), // axis-aligned
+                    (ll(-1500.0, off), ll(1500.0, off)), // axis-aligned
+                    (ll(off - 1500.0, -1500.0), ll(off + 1500.0, 1500.0)), // diagonal
+                ] {
+                    let screened = run(&idx, from, to);
+                    for want in unscreened_crossings(&idx, from, to) {
+                        assert!(
+                            screened
+                                .iter()
+                                .any(|got| got.id == want.id && (got.t - want.t).abs() < 1e-9),
+                            "screen dropped id={} t={} (trial {trial})",
+                            want.id,
+                            want.t
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 100_000, "sweep must reach the walk: {checked}");
     }
 
     /// Receiver inside the footprint: entry edge only — and endpoint
