@@ -771,6 +771,7 @@ mod tests {
         let (end_lat, end_lon) = barrier_ll(x1, y1);
         Barrier {
             osm_id: 1_390_017_809,
+            segment_idx: 0,
             height_m,
             start_lat,
             start_lon,

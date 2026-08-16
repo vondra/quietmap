@@ -480,7 +480,7 @@ mod tests {
     /// A round-tripped index must answer bit-identically — the property the
     /// whole cache rests on.
     #[test]
-    fn round_trip_is_bit_identical() {
+    fn obstacle_source_ids_survive_built_and_mmap_views() {
         let built = sample_index();
         let bytes = to_file_bytes(&built, 0xabc, 0xdef);
         let mapped = ObstacleIndex::from_blob(Arc::new(bytes), 0xabc, 0xdef).expect("loads");
@@ -515,6 +515,16 @@ mod tests {
         assert_eq!(ga.cell_starts, gb.cell_starts);
         assert_eq!(ga.edge_refs, gb.edge_refs);
         assert_eq!(ga.cell_max_h, gb.cell_max_h);
+
+        let mut skyline_a = Vec::new();
+        let mut skyline_b = Vec::new();
+        built.skyline_arcs_within(0, OLAT, OLON, 0.0, 2_000.0, 0.0, 0.0, None, &mut |arc| {
+            skyline_a.push((arc.source_id.bits(), arc.lo.to_bits(), arc.hi.to_bits()))
+        });
+        mapped.skyline_arcs_within(0, OLAT, OLON, 0.0, 2_000.0, 0.0, 0.0, None, &mut |arc| {
+            skyline_b.push((arc.source_id.bits(), arc.lo.to_bits(), arc.hi.to_bits()))
+        });
+        assert_eq!(skyline_a, skyline_b, "derived source IDs survive mmap");
     }
 
     /// The rural fast path (no edges at all) must survive the round trip too —

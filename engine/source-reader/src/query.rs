@@ -9,8 +9,9 @@ use std::path::Path;
 
 use crate::geo;
 use crate::hex_store::{
-    self, hex_encode, load_hex, query_barriers_from_batches, query_buildings_from_batches,
-    query_leisure_from_batches, query_railways_from_batches, query_roads_from_batches,
+    self, canonicalize_barrier_results, hex_encode, load_hex, query_barriers_from_batches,
+    query_buildings_from_batches, query_leisure_from_batches, query_railways_from_batches,
+    query_roads_from_batches, BarrierResult,
 };
 
 const BUILDING_QUERY_RADIUS_M: f64 = 2_000.0;
@@ -65,7 +66,7 @@ pub fn collect_sources_at_point(
         .collect::<Result<_, _>>()?;
     let refs: Vec<&hex_store::HexData> = loaded.iter().collect();
 
-    Ok(collect_from_hex_data(&refs, lat, lng))
+    collect_from_hex_data(&refs, lat, lng)
 }
 
 /// Shared source collection logic. Takes pre-loaded hex data.
@@ -76,14 +77,14 @@ pub fn collect_from_hex_data(
     hex_data: &[&hex_store::HexData],
     lat: f64,
     lng: f64,
-) -> PointQueryData {
+) -> Result<PointQueryData, String> {
     let mut all_roads = Vec::new();
     let mut all_railways = Vec::new();
     let mut all_road_admins = Vec::new();
     let mut all_rail_admins = Vec::new();
     let mut all_buildings = Vec::new();
     let mut all_industrial = Vec::new();
-    let mut all_barriers = Vec::new();
+    let mut all_barrier_results: Vec<BarrierResult> = Vec::new();
     let mut all_airborne_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
     let mut all_cruise_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
     let mut all_airport_traffic_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
@@ -497,18 +498,8 @@ pub fn collect_from_hex_data(
         const BARRIER_RADIUS_M: f64 =
             10_000.0 + noise_compute::types::BARRIER_SEGMENT_MAX_HALF_LEN_M;
         let barrier_batches = data.barriers.batches_within(lat, lng, BARRIER_RADIUS_M);
-        let barriers = query_barriers_from_batches(&barrier_batches, lat, lng, BARRIER_RADIUS_M);
-        for b in barriers {
-            all_barriers.push(noise_compute::types::Barrier {
-                osm_id: b.osm_id,
-                height_m: b.height,
-                start_lat: b.start_lat,
-                start_lon: b.start_lon,
-                end_lat: b.end_lat,
-                end_lon: b.end_lon,
-                dist_m: b.dist_m,
-            });
-        }
+        let barriers = query_barriers_from_batches(&barrier_batches, lat, lng, BARRIER_RADIUS_M)?;
+        all_barrier_results.extend(barriers);
 
         // Aircraft popup arrows: bbox-gated above (per_hex_aircraft);
         // per-row reach prune + emission contract live inside
@@ -521,13 +512,27 @@ pub fn collect_from_hex_data(
         all_synth_airport_lines_batches.extend(data.synth_airport_lines_batches.iter().cloned());
     }
 
+    let mut all_barriers: Vec<_> = canonicalize_barrier_results(all_barrier_results)?
+        .into_iter()
+        .map(|b| noise_compute::types::Barrier {
+            osm_id: b.osm_id,
+            segment_idx: b.segment_idx,
+            height_m: b.height,
+            start_lat: b.start_lat,
+            start_lon: b.start_lon,
+            end_lat: b.end_lat,
+            end_lon: b.end_lon,
+            dist_m: b.dist_m,
+        })
+        .collect();
+
     all_barriers.sort_unstable_by(|a, b| {
         a.dist_m
             .partial_cmp(&b.dist_m)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    PointQueryData {
+    Ok(PointQueryData {
         roads: all_roads,
         railways: all_railways,
         road_admins: all_road_admins,
@@ -541,7 +546,7 @@ pub fn collect_from_hex_data(
         synth_airport_lines_batches: all_synth_airport_lines_batches,
         barriers: all_barriers,
         n_days,
-    }
+    })
 }
 
 #[cfg(feature = "node")]

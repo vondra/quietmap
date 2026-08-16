@@ -7,6 +7,8 @@
 // cull, LoS diffraction gate + δ*/fit_plane cancellation, profiles, cadence, budgets.
 // Args are packed into a few buffers (cudarc's tuple launch caps at ~12 args).
 
+#include "qm_streaming_reduction.cuh"
+
 #define NB 8
 // TPX (tile side in receiver px) and OBST_META_STRIDE are INJECTED by build.rs
 // from raster_reader::TILE_PX and noise_gpu::META_STRIDE. They decide how far
@@ -528,10 +530,10 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #ifndef ARC_HULL_CACHE
 #define ARC_HULL_CACHE 0
 #endif
-// Vector noise walls are SEGMENTS on the GPU too (fix-pack Fix 3): 6 f64 each,
-// {start_lat, start_lon, end_lat, end_lon, height_m, dist_m}. Mirrors
+// Vector noise walls are SEGMENTS on the GPU too (fix-pack Fix 3): 7 f64 each,
+// {start_lat, start_lon, end_lat, end_lon, height_m, dist_m, source_id_bits}. Mirrors
 // `noise_gpu::BARRIER_STRIDE` and `types::BARRIER_PATH_HORIZON_M`.
-#define BARR_STRIDE 6
+#define BARR_STRIDE BARRIER_STRIDE
 #define BARR_HORIZON_M 175.0
 #define TAU_D 6.283185307179586
 // geo::FLC_MIN_PERP_M — a receiver on the segment's extended line has
@@ -3152,8 +3154,8 @@ __device__ __forceinline__ void line_source(
 //   sp = nsrc×12 {length_m, max_distance_m, source_height_m, bridge, then the 8
 //   host-precomputed Lden band energies} — see `line_buffers` in
 //   noise-gpu/src/lib.rs, which writes it.
-//   barr = nbarr×BARR_STRIDE (6) {start_lat, start_lon, end_lat, end_lon,
-//   height_m, dist_m} — this tile's sorted for_tile()
+//   barr = max(nbarr,1)×BARR_STRIDE (7) {start_lat, start_lon, end_lat, end_lon,
+//   height_m, dist_m, source_id_bits} — this tile's sorted for_tile()
 //   barrier slice (nbarr in meta[11]). obst = the 14-slot vector-obstacle
 //   pointer table (slot map above `obstacle_best_candidate`; obst[0]==0 ⇒
 //   raster mode); nsrc rides in meta[12] because cudarc's tuple launch caps at
@@ -3221,7 +3223,7 @@ extern "C" __global__ void line(
     // already paid on every pair; what it buys now is a certain upper bound.
     for (int s = 0; s < nsrc; s++)
         line_source(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
-                    rlat, rlon, ralt, refl, true, &seg[s * 4], &sp[s * 12], &semis[s * 24],
+                    rlat, rlon, ralt, refl, true, &seg[s * SOURCE_SEGMENT_STRIDE], &sp[s * 12], &semis[s * 24],
                     barr, nbarr, obst,
                     tprof, ed, comp, bld, forr, imdp, e0, e1, e2, kept, resid, npair, arcstat,
                     hc_key, hc_lo, hc_hi, &arc_drops);
@@ -3232,7 +3234,7 @@ extern "C" __global__ void line(
     for (int s = 0; s < nsrc; s++) {
         if (stop_on && bs_decided(kept, kept + resid, margin)) break;
         line_source(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
-                    rlat, rlon, ralt, refl, false, &seg[s * 4], &sp[s * 12], &semis[s * 24],
+                    rlat, rlon, ralt, refl, false, &seg[s * SOURCE_SEGMENT_STRIDE], &sp[s * 12], &semis[s * 24],
                     barr, nbarr, obst,
                     tprof, ed, comp, bld, forr, imdp, e0, e1, e2, kept, resid, npair, arcstat,
                     hc_key, hc_lo, hc_hi, &arc_drops);
@@ -3326,7 +3328,10 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
             keep[lane] = 0;
             if (s < nsrc) {
                 double de, dp, cpa, cpo, fr;
-                p2s(clat, clon, seg[s * 4], seg[s * 4 + 1], seg[s * 4 + 2], seg[s * 4 + 3],
+                p2s(clat, clon, seg[s * SOURCE_SEGMENT_STRIDE],
+                    seg[s * SOURCE_SEGMENT_STRIDE + 1],
+                    seg[s * SOURCE_SEGMENT_STRIDE + 2],
+                    seg[s * SOURCE_SEGMENT_STRIDE + 3],
                     &de, &dp, &cpa, &cpo, &fr);
                 keep[lane] = (de <= sp[s * 12 + 1] + reach) ? 1 : 0;
             }
@@ -3339,7 +3344,8 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
                     if (done) continue;
                 }
                 line_source(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
-                            rlat, rlon, ralt, refl, ub_only, &seg[(base + j) * 4],
+                            rlat, rlon, ralt, refl, ub_only,
+                            &seg[(base + j) * SOURCE_SEGMENT_STRIDE],
                             &sp[(base + j) * 12], &semis[(base + j) * 24],
                             barr, nbarr, obst,
                             tprof, ed, comp, bld, forr, imdp, e0, e1, e2, kept, resid, npair,

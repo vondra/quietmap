@@ -21,12 +21,14 @@
 //!   With the gate OFF the GPU lane uploads no barriers (nbarr==0, kernel no-op)
 //!   and barrier chunks demote to the CPU builders (`build_heatmap_surface`, C9).
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use arrow::array::{Float32Array, Float64Array, Int64Array};
+use arrow::array::{Float32Array, Float64Array, Int16Array, Int64Array};
 use arrow::record_batch::RecordBatch;
 use noise_compute::propagation::geo::flat_dist;
+use noise_compute::propagation::streaming_reduction::SourceId64;
 use noise_compute::types::{Barrier, BARRIER_SEGMENT_MAX_HALF_LEN_M};
 use raster_reader::fused_tile_z13::TileBbox;
 
@@ -39,6 +41,7 @@ const DEFAULT_BARRIER_HEIGHT_M: f32 = 3.0;
 /// One barrier microsegment as stored in `barriers.arrow`.
 pub struct BarrierSeg {
     pub osm_id: i64,
+    pub segment_idx: i16,
     pub start_lat: f64,
     pub start_lon: f64,
     pub end_lat: f64,
@@ -66,6 +69,7 @@ impl BarrierData {
                 |batch| absorb_batch(batch, &mut segs),
             )?;
         }
+        canonicalize_barrier_provenience(&mut segs)?;
         Ok(Self { segs })
     }
 
@@ -138,6 +142,7 @@ impl BarrierData {
                 }
                 Some(Barrier {
                     osm_id: s.osm_id,
+                    segment_idx: s.segment_idx,
                     height_m: s.height_m,
                     start_lat: s.start_lat,
                     start_lon: s.start_lon,
@@ -156,6 +161,37 @@ impl BarrierData {
     }
 }
 
+fn canonicalize_barrier_provenience(segs: &mut Vec<BarrierSeg>) -> Result<()> {
+    let mut seen = HashMap::with_capacity(segs.len());
+    let mut unique = Vec::with_capacity(segs.len());
+    for segment in segs.drain(..) {
+        let source_id = SourceId64::wall(segment.osm_id, segment.segment_idx)
+            .map_err(|error| anyhow::anyhow!("invalid barrier provenience: {error:?}"))?;
+        let geometry_bits = [
+            segment.start_lat.to_bits(),
+            segment.start_lon.to_bits(),
+            segment.end_lat.to_bits(),
+            segment.end_lon.to_bits(),
+            u64::from(segment.height_m.to_bits()),
+        ];
+        match seen.entry(source_id) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(geometry_bits);
+                unique.push(segment);
+            }
+            std::collections::hash_map::Entry::Occupied(entry) if *entry.get() == geometry_bits => {
+            }
+            std::collections::hash_map::Entry::Occupied(_) => anyhow::bail!(
+                "barrier provenience ({}, {}) names different geometry",
+                segment.osm_id,
+                segment.segment_idx
+            ),
+        }
+    }
+    *segs = unique;
+    Ok(())
+}
+
 fn absorb_batch(batch: &RecordBatch, out: &mut Vec<BarrierSeg>) -> Result<()> {
     let n = batch.num_rows();
     if n == 0 {
@@ -163,19 +199,23 @@ fn absorb_batch(batch: &RecordBatch, out: &mut Vec<BarrierSeg>) -> Result<()> {
     }
     // Same required set as `query_barriers_from_batches`: id + geometry;
     // height defaults when the column is absent.
-    let (Some(osm_id), Some(slat), Some(slon), Some(elat), Some(elon)) = (
-        opt::<Int64Array>(batch, "osm_id"),
-        opt::<Float64Array>(batch, "start_lat"),
-        opt::<Float64Array>(batch, "start_lon"),
-        opt::<Float64Array>(batch, "end_lat"),
-        opt::<Float64Array>(batch, "end_lon"),
-    ) else {
-        return Ok(());
-    };
+    let osm_id = opt::<Int64Array>(batch, "osm_id")
+        .ok_or_else(|| anyhow::anyhow!("barriers.arrow missing required osm_id column"))?;
+    let segment_idx = opt::<Int16Array>(batch, "segment_idx")
+        .ok_or_else(|| anyhow::anyhow!("barriers.arrow missing required segment_idx column"))?;
+    let slat = opt::<Float64Array>(batch, "start_lat")
+        .ok_or_else(|| anyhow::anyhow!("barriers.arrow missing required start_lat column"))?;
+    let slon = opt::<Float64Array>(batch, "start_lon")
+        .ok_or_else(|| anyhow::anyhow!("barriers.arrow missing required start_lon column"))?;
+    let elat = opt::<Float64Array>(batch, "end_lat")
+        .ok_or_else(|| anyhow::anyhow!("barriers.arrow missing required end_lat column"))?;
+    let elon = opt::<Float64Array>(batch, "end_lon")
+        .ok_or_else(|| anyhow::anyhow!("barriers.arrow missing required end_lon column"))?;
     let height = opt::<Float32Array>(batch, "height");
     for i in 0..n {
         out.push(BarrierSeg {
             osm_id: osm_id.value(i),
+            segment_idx: segment_idx.value(i),
             start_lat: slat.value(i),
             start_lon: slon.value(i),
             end_lat: elat.value(i),
@@ -200,6 +240,10 @@ mod tests {
             (
                 Field::new("osm_id", DataType::Int64, false),
                 Arc::new(Int64Array::from(vec![7i64])),
+            ),
+            (
+                Field::new("segment_idx", DataType::Int16, false),
+                Arc::new(Int16Array::from(vec![-3i16])),
             ),
             (
                 Field::new("start_lat", DataType::Float64, false),
@@ -230,16 +274,27 @@ mod tests {
     }
 
     #[test]
-    fn absorbs_height_and_defaults_missing_column() {
+    fn barrier_loaders_preserve_osm_id_and_segment_idx() {
         let mut segs = Vec::new();
         absorb_batch(&barrier_batch(true), &mut segs).unwrap();
         absorb_batch(&barrier_batch(false), &mut segs).unwrap();
         assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].segment_idx, -3);
         assert_eq!(segs[0].height_m, 4.5);
         assert_eq!(
             segs[1].height_m, DEFAULT_BARRIER_HEIGHT_M,
             "missing column → 3.0 default"
         );
+    }
+
+    #[test]
+    fn missing_segment_idx_fails_closed() {
+        let mut batch = barrier_batch(true);
+        batch.remove_column(1);
+        let error = absorb_batch(&batch, &mut Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("missing required segment_idx"));
     }
 
     /// `for_tile` must produce a sorted slice whose `dist_m` lower-bounds the
@@ -251,6 +306,7 @@ mod tests {
         let c_lat = (bbox.north_lat + bbox.south_lat) * 0.5;
         let mk = |dlon_deg: f64| BarrierSeg {
             osm_id: 1,
+            segment_idx: 0,
             start_lat: c_lat,
             start_lon: bbox.east_lon + dlon_deg,
             end_lat: c_lat,
@@ -303,5 +359,37 @@ mod tests {
         assert!(data.is_empty());
         assert_eq!(data.len(), 0);
         assert!(data.for_tile(&bbox, 10_000.0).is_empty());
+    }
+
+    #[test]
+    fn barrier_authority_dedupes_identical_and_rejects_conflicting_provenience() {
+        let seg = |osm_id, segment_idx, start_lat| BarrierSeg {
+            osm_id,
+            segment_idx,
+            start_lat,
+            start_lon: 14.0,
+            end_lat: start_lat + 0.001,
+            end_lon: 14.001,
+            height_m: 3.0,
+        };
+        let mut distinct = vec![seg(7, -3, 50.0), seg(7, 4, 50.0)];
+        canonicalize_barrier_provenience(&mut distinct).unwrap();
+        assert_eq!(distinct.len(), 2);
+
+        let mut identical = vec![seg(7, -3, 50.0), seg(7, -3, 50.0)];
+        canonicalize_barrier_provenience(&mut identical).unwrap();
+        assert_eq!(identical.len(), 1);
+
+        let mut conflicting = vec![seg(7, -3, 50.0), seg(7, -3, 50.5)];
+        assert!(canonicalize_barrier_provenience(&mut conflicting)
+            .unwrap_err()
+            .to_string()
+            .contains("names different geometry"));
+
+        let mut invalid = vec![seg(-1, 0, 50.0)];
+        assert!(canonicalize_barrier_provenience(&mut invalid)
+            .unwrap_err()
+            .to_string()
+            .contains("invalid barrier provenience"));
     }
 }

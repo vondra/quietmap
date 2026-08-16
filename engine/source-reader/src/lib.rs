@@ -295,9 +295,13 @@ pub fn query_barriers(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<Str
             continue;
         };
         let barrier_batches = data.barriers.batches_within(lat, lng, max_radius_m);
-        let mut results = query_barriers_from_batches(&barrier_batches, lat, lng, max_radius_m);
+        let mut results = query_barriers_from_batches(&barrier_batches, lat, lng, max_radius_m)
+            .map_err(|error| Error::new(Status::GenericFailure, error))?;
         all_results.append(&mut results);
     }
+
+    let all_results = hex_store::canonicalize_barrier_results(all_results)
+        .map_err(|error| Error::new(Status::GenericFailure, error))?;
 
     Ok(serde_json::to_string(&all_results).unwrap())
 }
@@ -374,7 +378,8 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     // elevation is 0.0.
     let elevation = rasters.elevation(lat, lng);
     let t_load = t_start.elapsed();
-    let sources = collect_from_hex_data(&hex_refs, lat, lng);
+    let sources = collect_from_hex_data(&hex_refs, lat, lng)
+        .map_err(|error| Error::new(Status::GenericFailure, error))?;
     let t_collect = t_start.elapsed() - t_load;
     drop(store);
 

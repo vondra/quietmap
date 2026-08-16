@@ -84,6 +84,7 @@ fn wall_segments(c_lat: f64, wall_lon: f64, extent_m: f64, height_m: f32) -> Vec
             let b = c_lat + m_to_deg_lat(-extent_m + (i + 1) as f64 * seg_len_m);
             BarrierSeg {
                 osm_id: 1_354_881_685 + i as i64,
+                segment_idx: 0,
                 start_lat: a,
                 start_lon: wall_lon,
                 end_lat: b,

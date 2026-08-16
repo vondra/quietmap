@@ -719,6 +719,7 @@ mod tests {
         // Wall 60 m north of the receiver, running east-west across the span.
         let barriers = [Barrier {
             osm_id: 1,
+            segment_idx: 0,
             height_m: 6.0,
             start_lat: 50.08054,
             start_lon: 14.4188,

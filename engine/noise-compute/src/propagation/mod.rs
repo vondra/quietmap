@@ -13,6 +13,7 @@ pub mod path_effects;
 pub mod path_profile;
 pub mod seg_sampling;
 pub mod shared_math;
+pub mod streaming_reduction;
 pub mod vegetation;
 
 pub use path_profile::PathProfile;

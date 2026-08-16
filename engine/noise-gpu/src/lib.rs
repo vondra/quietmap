@@ -9,10 +9,26 @@
 pub mod airborne;
 
 use noise_compute::emission::aircraft::{Installation, SegmentPrepared, M_PER_DEG_LAT};
+use noise_compute::propagation::streaming_reduction::{source_frame_mlon, SourceId64};
 use noise_compute::types::Barrier;
 use raster_reader::fused_tile_z13::{FusedTileZ13, TILE_PX};
 use tile_painter::source_line::LineRow;
 
+/// Build the frozen twelve-argument surface tuple. Adding or removing an
+/// argument is a compile-time ABI error at every launch site.
+#[macro_export]
+macro_rules! line_kernel_arguments {
+    (
+        $arg0:expr, $arg1:expr, $arg2:expr, $arg3:expr,
+        $arg4:expr, $arg5:expr, $arg6:expr, $arg7:expr,
+        $arg8:expr, $arg9:expr, $arg10:expr, $arg11:expr $(,)?
+    ) => {{
+        const _: [(); $crate::LINE_KERNEL_ARGUMENT_COUNT] = [(); 12];
+        (
+            $arg0, $arg1, $arg2, $arg3, $arg4, $arg5, $arg6, $arg7, $arg8, $arg9, $arg10, $arg11,
+        )
+    }};
+}
 fn inst_code(inst: Installation) -> i32 {
     match inst {
         Installation::Wing => 0,
@@ -127,7 +143,7 @@ pub const OUT_SLOTS_PROF: usize = OUT_ARCSTAT_BASE + TILE_PX * TILE_PX * 8;
 /// once per layer — see [`SourceBuffers`]). `meta` carries the SHARED halo geom +
 /// this tile's bbox + eta + swizzle width + barrier count. `barr` is the tile's
 /// vector noise-wall slice, nbarr×[`BARRIER_STRIDE`]
-/// `{start_lat, start_lon, end_lat, end_lon, height_m, dist_m}` in
+/// `{start_lat, start_lon, end_lat, end_lon, height_m, dist_m, source_id_bits}` in
 /// `BarrierData::for_tile` order (dist_m a conservative lower bound, sorted
 /// ascending — the kernel's early-break key). The kernel intersects the
 /// ENDPOINTS with each propagation ray, exactly as `path_effects` §1 does.
@@ -149,7 +165,8 @@ pub struct SourceBuffers {
     pub semis: Vec<f32>,
 }
 
-/// Pack a layer's line sources (tile-invariant): `seg` (4 coords), `sp` (12 =
+/// Pack a layer's line sources (tile-invariant): `seg` (4 coords + the exact
+/// source-frame longitude scale), `sp` (12 =
 /// length/reach/height/bridge ++ 8 host-precomputed Lden band weights), `semis`
 /// (3 periods × 8 emission bands). The 8 `sp[4+i]` = `Σ_p LDEN_W[p]·emission_lin[p][i]`
 /// — the energy-budget-skip UB loop's per-band Lden weight, hoisted off the GPU
@@ -158,12 +175,19 @@ pub struct SourceBuffers {
 const LDEN_W: [f64; 3] = [12.0, 12.649110640673518, 80.0]; // 4·√10 (mirror scatter.cu LDEN_W)
 pub fn pack_sources(lines: &[LineRow]) -> SourceBuffers {
     let (mut seg, mut sp, mut semis) = (
-        Vec::with_capacity(lines.len() * 4),
+        Vec::with_capacity(lines.len() * SOURCE_SEGMENT_STRIDE),
         Vec::with_capacity(lines.len() * 12),
         Vec::with_capacity(lines.len() * 24),
     );
     for r in lines {
-        seg.extend_from_slice(&[r.start_lat, r.start_lon, r.end_lat, r.end_lon]);
+        seg.extend_from_slice(&[
+            r.start_lat,
+            r.start_lon,
+            r.end_lat,
+            r.end_lon,
+            source_frame_mlon(r.start_lat, r.end_lat)
+                .expect("non-finite source geometry cannot enter the GPU ABI"),
+        ]);
         sp.extend_from_slice(&[
             r.length_m as f64,
             r.max_distance_m,
@@ -184,6 +208,29 @@ pub fn pack_sources(lines: &[LineRow]) -> SourceBuffers {
         }
     }
     SourceBuffers { seg, sp, semis }
+}
+
+fn pack_barrier_rows(barriers: &[Barrier]) -> Vec<f64> {
+    let physical_slots = barrier_candidate_tail_slot_offset(barriers.len());
+    let mut packed = Vec::with_capacity(physical_slots);
+    for barrier in barriers {
+        packed.extend_from_slice(&[
+            barrier.start_lat,
+            barrier.start_lon,
+            barrier.end_lat,
+            barrier.end_lon,
+            barrier.height_m as f64,
+            barrier.dist_m,
+            SourceId64::wall(barrier.osm_id, barrier.segment_idx)
+                .expect("barrier provenience outside the GPU ABI")
+                .as_f64_bits(),
+        ]);
+    }
+    if packed.is_empty() {
+        packed.resize(physical_slots, 0.0);
+    }
+    debug_assert_eq!(packed.len(), physical_slots);
+    packed
 }
 
 /// Pack one tile's per-tile device buffers (inner DEM + meta + receivers +
@@ -242,20 +289,7 @@ pub fn pack_tile(
         rxar.push(tile.rx_alt_m[i]);
         rxar.push(tile.rx_refl_db[i]);
     }
-    let mut barr = Vec::with_capacity(barriers.len().max(1) * BARRIER_STRIDE);
-    for b in barriers {
-        barr.extend_from_slice(&[
-            b.start_lat,
-            b.start_lon,
-            b.end_lat,
-            b.end_lon,
-            b.height_m as f64,
-            b.dist_m,
-        ]);
-    }
-    if barr.is_empty() {
-        barr.extend_from_slice(&[0.0; BARRIER_STRIDE]);
-    }
+    let barr = pack_barrier_rows(barriers);
     TileBuffers {
         inner: tile.inner_elev_m.clone(),
         meta,
@@ -532,9 +566,32 @@ pub fn flatten_obstacles(
     flat
 }
 
-/// f64 slots per barrier in the `barr` buffer — mirrored by `BARR_STRIDE` in
-/// `kernels/scatter.cu`; the two must move together.
-pub const BARRIER_STRIDE: usize = 6;
+/// Barrier layout version injected into every CUDA translation unit.
+pub const BARRIER_ABI_VERSION: usize = 2;
+/// f64 slots per barrier in the `barr` buffer.
+pub const BARRIER_STRIDE: usize = 7;
+/// Source-segment layout version injected into every CUDA translation unit.
+pub const SOURCE_SEGMENT_ABI_VERSION: usize = 2;
+/// f64 slots per source segment: four coordinates plus authoritative `mlon`.
+pub const SOURCE_SEGMENT_STRIDE: usize = 5;
+/// Cudarc's physical tuple remains frozen at twelve kernel arguments.
+pub const LINE_KERNEL_ARGUMENT_COUNT: usize = 12;
+
+/// First f64 slot after the physical barrier rows, including the mandatory
+/// dummy row for `barrier_count == 0`. Indexed replay must append here.
+pub fn barrier_candidate_tail_slot_offset(barrier_count: usize) -> usize {
+    barrier_count
+        .max(1)
+        .checked_mul(BARRIER_STRIDE)
+        .expect("barrier candidate-tail slot offset overflow")
+}
+
+/// Byte form of [`barrier_candidate_tail_slot_offset`].
+pub fn barrier_candidate_tail_byte_offset(barrier_count: usize) -> usize {
+    barrier_candidate_tail_slot_offset(barrier_count)
+        .checked_mul(std::mem::size_of::<f64>())
+        .expect("barrier candidate-tail byte offset overflow")
+}
 
 /// f64 slots per index in [`ObstacleFlat::metas`].
 pub const META_STRIDE: usize = 19;
@@ -624,6 +681,92 @@ pub fn ensure_no_cpu_only_arc_levers() -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
+mod streaming_abi_tests {
+    use super::*;
+
+    #[test]
+    fn abi_tail_offsets_are_exact_for_0_1_2_17_barriers() {
+        for barrier_count in [0_usize, 1, 2, 17] {
+            let rows = barrier_count.max(1);
+            assert_eq!(
+                barrier_candidate_tail_slot_offset(barrier_count),
+                rows * BARRIER_STRIDE
+            );
+            assert_eq!(
+                barrier_candidate_tail_byte_offset(barrier_count),
+                rows * BARRIER_STRIDE * std::mem::size_of::<f64>()
+            );
+        }
+    }
+
+    #[test]
+    fn source_stride_five_preserves_the_first_four_coordinate_lanes() {
+        let row = |start_lat, start_lon, end_lat, end_lon| LineRow {
+            start_lat,
+            start_lon,
+            end_lat,
+            end_lon,
+            length_m: 180.0,
+            max_distance_m: 10_000.0,
+            source_height_m: 0.5,
+            bridge: false,
+            emission_lin: [[0.0; noise_compute::types::NUM_BANDS]; 3],
+        };
+        let coordinates = [
+            [-0.0, 179.9995, 0.0, -179.9995],
+            [90.0, 0.0, 90.0, 0.0],
+            [80.0, 179.999, 80.001, -179.999],
+        ];
+        let rows: Vec<_> = coordinates
+            .iter()
+            .map(|c| row(c[0], c[1], c[2], c[3]))
+            .collect();
+        let packed = pack_sources(&rows);
+        assert_eq!(packed.seg.len(), rows.len() * SOURCE_SEGMENT_STRIDE);
+        for (expected, actual) in coordinates
+            .iter()
+            .zip(packed.seg.chunks_exact(SOURCE_SEGMENT_STRIDE))
+        {
+            let actual_coordinate_bits: Vec<_> =
+                actual[..4].iter().map(|value| value.to_bits()).collect();
+            assert_eq!(
+                actual_coordinate_bits.as_slice(),
+                &expected.map(f64::to_bits),
+                "coordinate bits changed during packing"
+            );
+            assert_eq!(
+                actual[4].to_bits(),
+                source_frame_mlon(expected[0], expected[2])
+                    .unwrap()
+                    .to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn barrier_stride_seven_preserves_the_first_six_numeric_lanes() {
+        let barrier = Barrier {
+            osm_id: 42,
+            segment_idx: -7,
+            height_m: 3.5,
+            start_lat: 50.0,
+            start_lon: 14.0,
+            end_lat: 50.001,
+            end_lon: 14.002,
+            dist_m: 123.0,
+        };
+        let packed = pack_barrier_rows(&[barrier]);
+        assert_eq!(packed.len(), BARRIER_STRIDE);
+        assert_eq!(&packed[..6], &[50.0, 14.0, 50.001, 14.002, 3.5, 123.0]);
+        assert_eq!(
+            packed[6].to_bits(),
+            SourceId64::wall(42, -7).unwrap().bits()
+        );
+        assert_eq!(pack_barrier_rows(&[]).len(), BARRIER_STRIDE);
+    }
+}
+
+#[cfg(test)]
 mod cpu_only_lever_tests {
     /// The guard must refuse a fork and ALLOW the pinning value — banning the
     /// pinning value bans the documented lane-comparison procedure itself, which
@@ -707,7 +850,7 @@ mod obstacle_flat_tests {
     /// Offsets must tile the shared arrays exactly — a mis-offset walks a
     /// neighbouring cell-index's edges (silent physics corruption).
     #[test]
-    fn flatten_offsets_are_consistent() {
+    fn obstacle_source_ids_match_flattened_gpu_ordinals_across_indexes() {
         use noise_compute::propagation::obstacle_index::{
             ObstacleIndex, ObstacleKind, ObstacleSet,
         };
@@ -723,8 +866,23 @@ mod obstacle_flat_tests {
         }
         let set = ObstacleSet { indexes: sets };
         let flat = super::flatten_obstacles(&set);
+        let mut source_ids = std::collections::BTreeSet::new();
+        set.skyline_arcs_within(50.25, 14.25, 0.0, 100_000.0, 0.0, 0.0, None, &mut |arc| {
+            source_ids.insert(arc.source_id.bits());
+        });
+        assert_eq!(
+            source_ids,
+            (0..8).collect(),
+            "CPU IDs equal eoff + local edge ref in the flattened GPU store"
+        );
         assert_eq!(flat.n_indexes, 2);
         assert_eq!(flat.metas.len(), 2 * super::META_STRIDE);
+        assert_eq!(
+            source_ids.len(),
+            flat.edges.len() / 5,
+            "one CPU source ID per edge in the flattened GPU store"
+        );
+        assert_eq!(flat.metas[10] as usize, 0, "first GPU edge offset");
         // Second index's offsets start exactly where the first index ends,
         // and its extents tile the shared arrays completely.
         let (starts_off2, refs_off2, edges_off2, n_cells2) = (

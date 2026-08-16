@@ -13,6 +13,7 @@ use arrow::datatypes::DataType;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use memmap2::Mmap;
+use noise_compute::propagation::streaming_reduction::SourceId64;
 use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
@@ -877,9 +878,11 @@ pub fn query_leisure_from_batches(
 /// One `barriers.arrow` row for the popup lane: the wall microsegment's
 /// geometry (both endpoints — what `path_effects` intersects the ray with) plus
 /// its midpoint, which is the point `dist_m` is measured to.
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub struct BarrierResult {
     pub osm_id: i64,
+    #[serde(skip_serializing)]
+    pub segment_idx: i16,
     pub height: f32,
     /// Segment midpoint (`dist_m`'s reference point).
     pub lat: f64,
@@ -896,25 +899,32 @@ pub fn query_barriers_from_batches(
     lat: f64,
     lon: f64,
     max_radius: f64,
-) -> Vec<BarrierResult> {
+) -> Result<Vec<BarrierResult>, String> {
     let mut results = Vec::new();
-
     for batch in batches {
         let n = batch.num_rows();
-        let osm_id = col_i64(batch, "osm_id");
+        let osm_id = col_i64(batch, "osm_id")
+            .ok_or_else(|| "barriers.arrow missing required osm_id column".to_string())?;
+        let segment_idx = col_i16(batch, "segment_idx")
+            .ok_or_else(|| "barriers.arrow missing required segment_idx column".to_string())?;
         let height = col_f32(batch, "height");
-        let slat = col_f64(batch, "start_lat");
-        let slon = col_f64(batch, "start_lon");
-        let elat = col_f64(batch, "end_lat");
-        let elon = col_f64(batch, "end_lon");
-
-        let (Some(osm_id), Some(slat), Some(slon), Some(elat), Some(elon)) =
-            (osm_id, slat, slon, elat, elon)
-        else {
-            continue;
-        };
+        let slat = col_f64(batch, "start_lat")
+            .ok_or_else(|| "barriers.arrow missing required start_lat column".to_string())?;
+        let slon = col_f64(batch, "start_lon")
+            .ok_or_else(|| "barriers.arrow missing required start_lon column".to_string())?;
+        let elat = col_f64(batch, "end_lat")
+            .ok_or_else(|| "barriers.arrow missing required end_lat column".to_string())?;
+        let elon = col_f64(batch, "end_lon")
+            .ok_or_else(|| "barriers.arrow missing required end_lon column".to_string())?;
 
         for i in 0..n {
+            SourceId64::wall(osm_id.value(i), segment_idx.value(i)).map_err(|error| {
+                format!(
+                    "invalid barriers.arrow provenience ({}, {}): {error:?}",
+                    osm_id.value(i),
+                    segment_idx.value(i)
+                )
+            })?;
             let mid_lat = (slat.value(i) + elat.value(i)) / 2.0;
             let mid_lon = (slon.value(i) + elon.value(i)) / 2.0;
             let dist = crate::geo::flat_dist(lat, lon, mid_lat, mid_lon);
@@ -924,6 +934,7 @@ pub fn query_barriers_from_batches(
 
             results.push(BarrierResult {
                 osm_id: osm_id.value(i),
+                segment_idx: segment_idx.value(i),
                 height: height.map(|a| a.value(i)).unwrap_or(3.0),
                 lat: mid_lat,
                 lon: mid_lon,
@@ -936,7 +947,41 @@ pub fn query_barriers_from_batches(
         }
     }
 
-    results
+    canonicalize_barrier_results(results)
+}
+
+/// Stable-dedupe exact repeated emissions and reject one ID naming two shapes.
+pub fn canonicalize_barrier_results(
+    results: Vec<BarrierResult>,
+) -> Result<Vec<BarrierResult>, String> {
+    let mut seen = std::collections::BTreeMap::new();
+    let mut unique = Vec::with_capacity(results.len());
+    for result in results {
+        let source_id = SourceId64::wall(result.osm_id, result.segment_idx)
+            .map_err(|error| format!("invalid barrier provenience: {error:?}"))?;
+        let geometry_bits = [
+            result.start_lat.to_bits(),
+            result.start_lon.to_bits(),
+            result.end_lat.to_bits(),
+            result.end_lon.to_bits(),
+            u64::from(result.height.to_bits()),
+        ];
+        match seen.entry(source_id) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(geometry_bits);
+                unique.push(result);
+            }
+            std::collections::btree_map::Entry::Occupied(entry)
+                if *entry.get() == geometry_bits => {}
+            std::collections::btree_map::Entry::Occupied(_) => {
+                return Err(format!(
+                    "barrier provenience ({}, {}) names different geometry",
+                    result.osm_id, result.segment_idx
+                ));
+            }
+        }
+    }
+    Ok(unique)
 }
 
 pub fn col_i64<'a>(b: &'a RecordBatch, name: &str) -> Option<&'a Int64Array> {
@@ -1007,6 +1052,83 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
         out.push(HEX[(b & 0x0f) as usize] as char);
     }
     out
+}
+
+#[cfg(test)]
+mod barrier_provenance_tests {
+    use super::*;
+    use arrow::datatypes::{Field, Schema};
+
+    fn batch(
+        osm_ids: Vec<i64>,
+        segment_indices: Vec<i16>,
+        start_latitudes: Vec<f64>,
+    ) -> RecordBatch {
+        let rows = osm_ids.len();
+        let end_latitudes: Vec<_> = start_latitudes.iter().map(|value| value + 0.001).collect();
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("osm_id", DataType::Int64, false),
+                Field::new("segment_idx", DataType::Int16, false),
+                Field::new("start_lat", DataType::Float64, false),
+                Field::new("start_lon", DataType::Float64, false),
+                Field::new("end_lat", DataType::Float64, false),
+                Field::new("end_lon", DataType::Float64, false),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(osm_ids)),
+                Arc::new(Int16Array::from(segment_indices)),
+                Arc::new(Float64Array::from(start_latitudes)),
+                Arc::new(Float64Array::from(vec![14.0; rows])),
+                Arc::new(Float64Array::from(end_latitudes)),
+                Arc::new(Float64Array::from(vec![14.001; rows])),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn barrier_loaders_preserve_osm_id_and_segment_idx() {
+        let results = query_barriers_from_batches(
+            &[batch(vec![7, 7], vec![-3, 4], vec![50.0, 50.0])],
+            50.0,
+            14.0,
+            1_000.0,
+        )
+        .unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].segment_idx, -3);
+        assert_eq!(results[1].segment_idx, 4);
+    }
+
+    #[test]
+    fn barrier_authority_dedupes_identical_and_rejects_conflicting_provenience() {
+        let identical = query_barriers_from_batches(
+            &[batch(vec![7, 7], vec![-3, -3], vec![50.0, 50.0])],
+            50.0,
+            14.0,
+            1_000.0,
+        )
+        .unwrap();
+        assert_eq!(identical.len(), 1);
+
+        let conflicting = query_barriers_from_batches(
+            &[batch(vec![7, 7], vec![-3, -3], vec![50.0, 50.5])],
+            50.0,
+            14.0,
+            100_000.0,
+        )
+        .unwrap_err();
+        assert!(conflicting.contains("names different geometry"));
+    }
+
+    #[test]
+    fn missing_barrier_segment_idx_fails_closed() {
+        let mut missing = batch(vec![7], vec![-3], vec![50.0]);
+        missing.remove_column(1);
+        let error = query_barriers_from_batches(&[missing], 50.0, 14.0, 1_000.0).unwrap_err();
+        assert!(error.contains("missing required segment_idx"));
+    }
 }
 
 #[cfg(test)]

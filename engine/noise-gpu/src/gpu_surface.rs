@@ -426,7 +426,7 @@ fn process_block(
             f.clone()
                 .launch(
                     launch_cfg,
-                    (
+                    noise_gpu::line_kernel_arguments!(
                         &d_elev,
                         &d_inner,
                         &d_cover,

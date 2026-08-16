@@ -58,6 +58,29 @@ fn main() {
         "pub const TILE_PX: usize = ",
     );
     let bin_w = const_from("src/lib.rs", "pub const BIN_W: usize = ");
+    let barrier_abi_version = const_from("src/lib.rs", "pub const BARRIER_ABI_VERSION: usize = ");
+    let barrier_stride = const_from("src/lib.rs", "pub const BARRIER_STRIDE: usize = ");
+    let source_segment_abi_version = const_from(
+        "src/lib.rs",
+        "pub const SOURCE_SEGMENT_ABI_VERSION: usize = ",
+    );
+    let source_segment_stride =
+        const_from("src/lib.rs", "pub const SOURCE_SEGMENT_STRIDE: usize = ");
+    let line_kernel_argument_count = const_from(
+        "src/lib.rs",
+        "pub const LINE_KERNEL_ARGUMENT_COUNT: usize = ",
+    );
+    fs::write(
+        out.join("qm_streaming_abi_generated.h"),
+        format!(
+            "#define BARRIER_ABI_VERSION {barrier_abi_version}\n\
+             #define BARRIER_STRIDE {barrier_stride}\n\
+             #define SOURCE_SEGMENT_ABI_VERSION {source_segment_abi_version}\n\
+             #define SOURCE_SEGMENT_STRIDE {source_segment_stride}\n\
+             #define LINE_KERNEL_ARGUMENT_COUNT {line_kernel_argument_count}\n"
+        ),
+    )
+    .expect("write generated streaming ABI header");
     // Same contract for the two constants the footprint-CSR arc walk added: a
     // drifted stride walks a neighbouring index's grid or mis-reads foot_box.
     let meta_stride = const_from("src/lib.rs", "pub const META_STRIDE: usize = ");
@@ -180,6 +203,11 @@ fn main() {
                     &format!("-DNPD_NC={num_classes}"),
                     &format!("-DTPX={tile_px}"),
                     &format!("-DBIN_W={bin_w}"),
+                    &format!("-DBARRIER_ABI_VERSION={barrier_abi_version}"),
+                    &format!("-DBARRIER_STRIDE={barrier_stride}"),
+                    &format!("-DSOURCE_SEGMENT_ABI_VERSION={source_segment_abi_version}"),
+                    &format!("-DSOURCE_SEGMENT_STRIDE={source_segment_stride}"),
+                    &format!("-DLINE_KERNEL_ARGUMENT_COUNT={line_kernel_argument_count}"),
                     &format!("-DOBST_META_STRIDE={meta_stride}"),
                     &format!("-DFOOT_BOX_STRIDE={foot_box_stride}"),
                     &format!("-DARC_DEGENERATE_SPAN={degenerate_span}"),

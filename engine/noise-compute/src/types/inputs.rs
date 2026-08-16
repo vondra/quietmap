@@ -273,6 +273,8 @@ impl AirportArea {
 #[derive(Debug, Clone, Copy)]
 pub struct Barrier {
     pub osm_id: i64,
+    /// Stable microsegment identity within the OSM element.
+    pub segment_idx: i16,
     /// Height above local ground (m); extract defaults untagged walls to 3.0.
     pub height_m: f32,
     /// Segment endpoints, verbatim from `barriers.arrow`.

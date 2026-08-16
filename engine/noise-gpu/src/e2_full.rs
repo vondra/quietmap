@@ -14,8 +14,9 @@ use anyhow::{Context, Result};
 use cudarc::driver::{CudaDevice, LaunchAsync, LaunchConfig};
 use cudarc::nvrtc::Ptx;
 use h3o::CellIndex;
+use noise_compute::propagation::streaming_reduction::source_frame_mlon;
 use noise_compute::types::Barrier;
-use noise_gpu::{BIN_W, N_BINS};
+use noise_gpu::{BIN_W, N_BINS, SOURCE_SEGMENT_STRIDE};
 use raster_reader::fused_tile_z13::{default_batch_size, TileBatch, TILE_PX};
 use raster_reader::RealRasters;
 use tile_painter::accumulator::TileAccumulator;
@@ -263,11 +264,18 @@ fn main() -> Result<()> {
     // weights (Σ_p LDEN_W[p]·emission_lin[p][i]) — mirrors pack_sources so the shared
     // `line`/`line_binned_fused` kernels read sp[4+i] for the energy-budget UB.
     const LDEN_W: [f64; 3] = [12.0, 12.649110640673518, 80.0];
-    let mut seg = Vec::with_capacity(nsrc * 4);
+    let mut seg = Vec::with_capacity(nsrc * SOURCE_SEGMENT_STRIDE);
     let mut sp = Vec::with_capacity(nsrc * 12);
     let mut semis = Vec::with_capacity(nsrc * 24);
     for r in &rail {
-        seg.extend_from_slice(&[r.start_lat, r.start_lon, r.end_lat, r.end_lon]);
+        seg.extend_from_slice(&[
+            r.start_lat,
+            r.start_lon,
+            r.end_lat,
+            r.end_lon,
+            source_frame_mlon(r.start_lat, r.end_lat)
+                .expect("non-finite source geometry cannot enter the GPU ABI"),
+        ]);
         sp.extend_from_slice(&[
             r.length_m as f64,
             r.max_distance_m,
@@ -452,7 +460,7 @@ fn main() -> Result<()> {
         // above). nsrc rides in meta[12].
         f.launch(
             cfg,
-            (
+            noise_gpu::line_kernel_arguments!(
                 &d_elev,
                 &d_inner,
                 &d_cover,

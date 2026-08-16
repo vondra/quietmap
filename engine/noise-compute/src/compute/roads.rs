@@ -1152,6 +1152,7 @@ mod tests {
         let (segs, obstacles) = pool_gate_scene();
         let wall = [Barrier {
             osm_id: 9,
+            segment_idx: 0,
             height_m: 4.0,
             start_lat: 50.000_36,
             start_lon: 13.998,

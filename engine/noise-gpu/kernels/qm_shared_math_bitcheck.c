@@ -93,6 +93,15 @@ static int constants_match_published_bit_patterns(void) {
             bad++;
         }
     }
+    const double pi = QM_FROM_BITS(0x400921fb54442d18ull);
+    if (QM_BITS(qm_atan2(-0.0, -1.0)) != QM_BITS(-pi)) {
+        printf("qm_atan2 signed seam differs\n");
+        bad++;
+    }
+    if (QM_BITS(qm_wrap_pi(-pi)) != QM_BITS(pi)) {
+        printf("qm_wrap_pi negative seam differs\n");
+        bad++;
+    }
     return bad;
 }
 

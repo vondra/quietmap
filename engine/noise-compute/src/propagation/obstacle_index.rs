@@ -13,6 +13,7 @@
 use crate::constants::{m_per_deg_lon, BUILDING_HEIGHT_MAX_M, M_PER_DEG_LAT};
 
 use super::obstacle_index_file::IndexArray;
+use super::streaming_reduction::SourceId64;
 
 /// One obstacle edge in the index's local metric frame.
 ///
@@ -97,6 +98,8 @@ pub struct CrossingCandidate {
 /// the source" test, which replaces a second ray query per candidate.
 #[derive(Clone, Copy, Debug)]
 pub struct SkylineArc {
+    /// Stable flattened edge identity; repeated cell emissions keep this ID.
+    pub source_id: SourceId64,
     pub lo: f64,
     pub hi: f64,
     pub near_m: f32,
@@ -350,6 +353,7 @@ impl ObstacleIndex {
     #[allow(clippy::too_many_arguments)]
     pub fn skyline_arcs_within(
         &self,
+        edge_ordinal_base: u64,
         lat: f64,
         lon: f64,
         min_radius_m: f64,
@@ -453,6 +457,12 @@ impl ObstacleIndex {
                     // origin hits a closed ring iff it hits one of its edges.
                     let r1 = a0 + wrap_pi(a1 - a0);
                     visit(SkylineArc {
+                        source_id: SourceId64::obstacle(
+                            edge_ordinal_base
+                                .checked_add(u64::from(eref))
+                                .expect("flattened obstacle edge ordinal overflow"),
+                        )
+                        .expect("flattened obstacle edge ordinal entered wall namespace"),
                         lo: a0.min(r1),
                         hi: a0.max(r1),
                         near_m: near_m as f32,
@@ -851,8 +861,10 @@ impl ObstacleSet {
         wedge: Option<(f64, f64)>,
         visit: &mut impl FnMut(SkylineArc),
     ) {
+        let mut edge_ordinal_base = 0_u64;
         for idx in &self.indexes {
             idx.skyline_arcs_within(
+                edge_ordinal_base,
                 lat,
                 lon,
                 min_radius_m,
@@ -862,6 +874,9 @@ impl ObstacleSet {
                 wedge,
                 visit,
             );
+            edge_ordinal_base = edge_ordinal_base
+                .checked_add(idx.edges.len() as u64)
+                .expect("flattened obstacle edge count overflow");
         }
     }
 }
@@ -1432,7 +1447,9 @@ mod tests {
         let idx = b.build();
         let mut arcs = Vec::new();
         let o = ll(0.0, 0.0);
-        idx.skyline_arcs_within(o.0, o.1, 0.0, 500.0, 0.0, 0.0, None, &mut |a| arcs.push(a));
+        idx.skyline_arcs_within(0, o.0, o.1, 0.0, 500.0, 0.0, 0.0, None, &mut |a| {
+            arcs.push(a)
+        });
         assert_eq!(arcs.len(), 4, "one ring in range, four edges: {arcs:?}");
         for a in &arcs {
             assert!(a.hi - a.lo < std::f64::consts::PI, "short arc: {a:?}");
@@ -1445,7 +1462,9 @@ mod tests {
         }
         // A radius that reaches neither box.
         arcs.clear();
-        idx.skyline_arcs_within(o.0, o.1, 0.0, 100.0, 0.0, 0.0, None, &mut |a| arcs.push(a));
+        idx.skyline_arcs_within(0, o.0, o.1, 0.0, 100.0, 0.0, 0.0, None, &mut |a| {
+            arcs.push(a)
+        });
         assert!(arcs.is_empty());
     }
 
@@ -1460,7 +1479,9 @@ mod tests {
         let o = ll(0.0, 0.0);
         let count = |delta_min: f64| {
             let mut n = 0;
-            idx.skyline_arcs_within(o.0, o.1, 0.0, 500.0, 4.0, delta_min, None, &mut |_| n += 1);
+            idx.skyline_arcs_within(0, o.0, o.1, 0.0, 500.0, 4.0, delta_min, None, &mut |_| {
+                n += 1
+            });
             n
         };
         assert_eq!(count(0.02), 4, "δ_min below the box's 0.04 m: kept");
@@ -1470,7 +1491,7 @@ mod tests {
         b.add_ring(&square(200.0, 0.0, 15.0), 3.0, ObstacleKind::Building, 0);
         let low = b.build();
         let mut n = 0;
-        low.skyline_arcs_within(o.0, o.1, 0.0, 500.0, 4.0, 0.0, None, &mut |_| n += 1);
+        low.skyline_arcs_within(0, o.0, o.1, 0.0, 500.0, 4.0, 0.0, None, &mut |_| n += 1);
         assert_eq!(n, 0, "top below the 4 m sight line");
     }
 
@@ -1488,11 +1509,14 @@ mod tests {
         let idx = b.build();
         let o = ll(0.0, 0.0);
         let mut arcs = Vec::new();
-        idx.skyline_arcs_within(o.0, o.1, 0.0, 1000.0, 0.0, 0.0, None, &mut |a| arcs.push(a));
+        idx.skyline_arcs_within(0, o.0, o.1, 0.0, 1000.0, 0.0, 0.0, None, &mut |a| {
+            arcs.push(a)
+        });
         assert!(!arcs.is_empty());
         assert!(
-            arcs.iter()
-                .all(|a| a.lo == arcs[0].lo && a.hi == arcs[0].hi),
+            arcs.iter().all(|a| a.lo == arcs[0].lo
+                && a.hi == arcs[0].hi
+                && a.source_id == arcs[0].source_id),
             "one wall segment, one arc geometry: {arcs:?}"
         );
         // It spans from due south-ish to due north-ish through due east.
@@ -1516,6 +1540,19 @@ mod tests {
         let mut arcs = Vec::new();
         set.skyline_arcs_within(o.0, o.1, 0.0, 500.0, 0.0, 0.0, None, &mut |a| arcs.push(a));
         assert_eq!(arcs.len(), 8);
+        let first_ids: std::collections::BTreeSet<_> = arcs
+            .iter()
+            .take(4)
+            .map(|arc| arc.source_id.bits())
+            .collect();
+        let second_ids: std::collections::BTreeSet<_> = arcs
+            .iter()
+            .skip(4)
+            .map(|arc| arc.source_id.bits())
+            .collect();
+        assert_eq!(first_ids, [0, 1, 2, 3].into_iter().collect());
+        assert_eq!(second_ids, [4, 5, 6, 7].into_iter().collect());
+        assert!(first_ids.is_disjoint(&second_ids));
         assert!(arcs.iter().any(|a| a.hi < 0.0), "the southern box");
         assert!(arcs.iter().any(|a| a.lo > 0.0), "the northern box");
     }

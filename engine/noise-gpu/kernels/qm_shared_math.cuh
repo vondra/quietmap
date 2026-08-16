@@ -30,10 +30,10 @@
 // -ffp-contract=off (gcc defaults to `fast`), or the host mirror contracts where
 // the device one does not and the comparison tests the wrong thing.
 //
-// STATUS: DRAFT. Not included by scatter.cu yet — the plan-v5 review has to bless
-// the §6 contract item first. `qm_shared_math_selftest.cu` is the standalone
-// compile+run check; build.rs picks it up automatically because it globs
-// kernels/*.cu.
+// STATUS: SHARED CONTRACT. `qm_streaming_reduction.cuh` layers the reviewed
+// decision helpers on this file and scatter.cu includes that one header.
+// `qm_shared_math_selftest.cu` remains the independent compile+run check;
+// build.rs picks it up automatically because it globs kernels/*.cu.
 
 #ifndef QM_SHARED_MATH_CUH
 #define QM_SHARED_MATH_CUH
@@ -48,6 +48,7 @@
 #define QM_BITS(x) ((unsigned long long)__double_as_longlong(x))
 #define QM_FROM_BITS(b) __longlong_as_double((long long)(b))
 #else
+#include <math.h>
 #include <string.h>
 #define QM_FN static
 #define QM_TABLE static const double
@@ -356,6 +357,66 @@ QM_FN double qm_tan(double x) {
     }
 
     return (bits >> 63) != 0ull ? -magnitude : magnitude;
+}
+
+// ---------------------------------------------------------------------------
+// qm_atan2 / qm_wrap_pi — mirror shared_math.rs decision helpers
+// ---------------------------------------------------------------------------
+
+QM_FN double qm_atan2(double y, double x) {
+    const double pi = QM_FROM_BITS(0x400921fb54442d18ull);
+    const double half_pi = QM_FROM_BITS(0x3ff921fb54442d18ull);
+    const double canonical_nan = QM_FROM_BITS(0x7ff8000000000000ull);
+
+    // QM-ATAN2-1
+    if (!isfinite(x) || !isfinite(y)) {
+        return canonical_nan;
+    }
+    const unsigned long long x_bits = QM_BITS(x);
+    const unsigned long long y_bits = QM_BITS(y);
+    const int x_negative = (int)(x_bits >> 63);
+    const int y_negative = (int)(y_bits >> 63);
+
+    // QM-ATAN2-2
+    if (y == 0.0) {
+        if (x_negative) {
+            return y_negative ? -pi : pi;
+        }
+        return y;
+    }
+    if (x == 0.0) {
+        return y_negative ? -half_pi : half_pi;
+    }
+
+    const double ax = QM_FROM_BITS(x_bits & 0x7fffffffffffffffull);
+    const double ay = QM_FROM_BITS(y_bits & 0x7fffffffffffffffull);
+
+    // QM-ATAN2-3
+    const double acute = ax >= ay ? qm_atan(QM_DIV(ay, ax))
+                                 : QM_SUB(half_pi, qm_atan(QM_DIV(ax, ay)));
+
+    // QM-ATAN2-4
+    const double magnitude = x_negative ? QM_SUB(pi, acute) : acute;
+    return y_negative ? -magnitude : magnitude;
+}
+
+QM_FN double qm_wrap_pi(double angle) {
+    const double pi = QM_FROM_BITS(0x400921fb54442d18ull);
+    const double tau = QM_FROM_BITS(0x401921fb54442d18ull);
+    const double canonical_nan = QM_FROM_BITS(0x7ff8000000000000ull);
+
+    // QM-WRAP-1
+    if (!isfinite(angle) || angle < -tau || angle > tau) {
+        return canonical_nan;
+    }
+    // QM-WRAP-2
+    if (angle > pi) {
+        return QM_SUB(angle, tau);
+    }
+    if (angle <= -pi) {
+        return QM_ADD(angle, tau);
+    }
+    return angle;
 }
 
 #endif // QM_SHARED_MATH_CUH

@@ -2,9 +2,9 @@
 // transcendentals over a host-supplied sample array so the GPU owner can
 // bit-compare against the CPU lane's dump.
 //
-// DRAFT scaffolding for the model-v2 §6 contract item: it exists so the header
-// is COMPILED (nvcc syntax + ptxas) and RUN on real hardware before anything
-// includes it in anger. scatter.cu is deliberately untouched.
+// Independent model-v2 §6 contract gate: it keeps the base transcendentals
+// separately compiled and run even though scatter.cu now reaches this header
+// through qm_streaming_reduction.cuh.
 //
 // build.rs globs kernels/*.cu, so `cargo build --features gpu` already emits
 // $OUT_DIR/qm_shared_math_selftest.ptx — no wiring needed. A bare syntax check

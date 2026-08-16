@@ -218,7 +218,7 @@ pub fn qm_atan(x: f64) -> f64 {
 /// it, which is the one deliberate structural difference between the lanes.
 pub fn qm_tan(x: f64) -> f64 {
     debug_assert!(
-        x.abs() <= core::f64::consts::FRAC_PI_2,
+        x.abs() < core::f64::consts::FRAC_PI_2,
         "qm_tan is contracted on (-pi/2, pi/2); got {x}"
     );
     let bits = x.to_bits();
@@ -342,6 +342,88 @@ fn qm_tan_kernel(x: f64, y: f64, odd: i32) -> f64 {
 /// splits a double into an exactly-representable head plus a tail.
 fn zero_low_word(x: f64) -> f64 {
     f64::from_bits(x.to_bits() & 0xffff_ffff_0000_0000)
+}
+
+// ---------------------------------------------------------------------------
+// qm_atan2 / qm_wrap_pi — streaming-reducer decision helpers
+// ---------------------------------------------------------------------------
+
+/// Finite-input `atan2(y, x)`, built exclusively from [`qm_atan`] and exact
+/// quadrant operations so the CPU and CUDA lanes return identical bits.
+///
+/// Non-finite inputs return one canonical quiet NaN. Streaming geometry treats
+/// that value as a hard fault; canonicalising it keeps the diagnostic dump
+/// lane-identical instead of preserving platform-specific NaN payloads.
+pub fn qm_atan2(y: f64, x: f64) -> f64 {
+    const PI: f64 = core::f64::consts::PI;
+    const FRAC_PI_2: f64 = core::f64::consts::FRAC_PI_2;
+    const CANONICAL_NAN: f64 = f64::from_bits(0x7ff8_0000_0000_0000);
+
+    // QM-ATAN2-1  Reject non-finite geometry before any ratio can produce a
+    // platform-specific NaN payload.
+    if !x.is_finite() || !y.is_finite() {
+        return CANONICAL_NAN;
+    }
+
+    let x_bits = x.to_bits();
+    let y_bits = y.to_bits();
+    let x_negative = (x_bits >> 63) != 0;
+    let y_negative = (y_bits >> 63) != 0;
+
+    // QM-ATAN2-2  Signed axes follow IEEE atan2 ownership exactly.
+    if y == 0.0 {
+        if x_negative {
+            return if y_negative { -PI } else { PI };
+        }
+        return y;
+    }
+    if x == 0.0 {
+        return if y_negative { -FRAC_PI_2 } else { FRAC_PI_2 };
+    }
+
+    let ax = f64::from_bits(x_bits & 0x7fff_ffff_ffff_ffff);
+    let ay = f64::from_bits(y_bits & 0x7fff_ffff_ffff_ffff);
+
+    // QM-ATAN2-3  Form a ratio <= 1 to avoid overflow/underflow at exponent
+    // extremes. Both expressions are positive and qm_atan returns [0, pi/4].
+    let acute = if ax >= ay {
+        qm_atan(ay / ax)
+    } else {
+        FRAC_PI_2 - qm_atan(ax / ay)
+    };
+
+    // QM-ATAN2-4  Restore the quadrant, then the sign of y. Negation is exact.
+    let magnitude = if x_negative { PI - acute } else { acute };
+    if y_negative {
+        -magnitude
+    } else {
+        magnitude
+    }
+}
+
+/// Fold a finite source-span delta from `[-2pi, 2pi]` into `(-pi, pi]`.
+///
+/// The source-span constructor subtracts two [`qm_atan2`] results, so one
+/// add/subtract is sufficient and avoids a platform `fmod` fork. Inputs outside
+/// that contracted range or non-finite inputs return canonical NaN, which is a
+/// hard geometry fault for the caller.
+pub fn qm_wrap_pi(angle: f64) -> f64 {
+    const PI: f64 = core::f64::consts::PI;
+    const TAU: f64 = core::f64::consts::TAU;
+    const CANONICAL_NAN: f64 = f64::from_bits(0x7ff8_0000_0000_0000);
+
+    // QM-WRAP-1  The branch domain is part of the parity contract.
+    if !angle.is_finite() || !(-TAU..=TAU).contains(&angle) {
+        return CANONICAL_NAN;
+    }
+    // QM-WRAP-2  The negative seam maps to +pi, hence (-pi, pi].
+    if angle > PI {
+        angle - TAU
+    } else if angle <= -PI {
+        angle + TAU
+    } else {
+        angle
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -502,6 +584,49 @@ mod tests {
         assert_eq!(qm_atan(f64::INFINITY), FRAC_PI_2);
         assert_eq!(qm_atan(f64::NEG_INFINITY), -FRAC_PI_2);
         assert!(qm_atan(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn atan2_signed_axes_quadrants_and_extreme_ratios_are_exact() {
+        use core::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+        for (y, x, want) in [
+            (0.0, 1.0, 0.0),
+            (-0.0, 1.0, -0.0),
+            (0.0, -1.0, PI),
+            (-0.0, -1.0, -PI),
+            (1.0, 0.0, FRAC_PI_2),
+            (-1.0, 0.0, -FRAC_PI_2),
+            (1.0, 1.0, FRAC_PI_4),
+            (-1.0, 1.0, -FRAC_PI_4),
+            (1.0, -1.0, 3.0 * FRAC_PI_4),
+            (-1.0, -1.0, -3.0 * FRAC_PI_4),
+        ] {
+            assert_eq!(qm_atan2(y, x).to_bits(), want.to_bits(), "y={y} x={x}");
+        }
+        assert!(qm_atan2(f64::MAX, f64::MIN_POSITIVE).is_finite());
+        assert!(qm_atan2(f64::MIN_POSITIVE, f64::MAX).is_finite());
+        assert_eq!(
+            qm_atan2(f64::INFINITY, 1.0).to_bits(),
+            0x7ff8_0000_0000_0000
+        );
+    }
+
+    #[test]
+    fn wrap_pi_owns_the_negative_seam_and_rejects_out_of_contract_input() {
+        use core::f64::consts::{PI, TAU};
+        assert_eq!(qm_wrap_pi(-PI).to_bits(), PI.to_bits());
+        assert_eq!(qm_wrap_pi(PI).to_bits(), PI.to_bits());
+        assert_eq!(qm_wrap_pi(TAU).to_bits(), 0.0f64.to_bits());
+        assert_eq!(qm_wrap_pi(-TAU).to_bits(), 0.0f64.to_bits());
+        assert_eq!(
+            qm_wrap_pi(PI.next_up()).to_bits(),
+            (-PI).next_up().to_bits()
+        );
+        assert_eq!(
+            qm_wrap_pi((-PI).next_down()).to_bits(),
+            PI.next_down().to_bits()
+        );
+        assert!(qm_wrap_pi(TAU.next_up()).is_nan());
     }
 
     /// Accuracy pin, `qm_atan` vs the platform libm over 10^7 log-uniform
@@ -798,13 +923,16 @@ mod tests {
             tan_seams.push(FRAC_PI_2 - 2f64.powi(-k));
         }
         let mut tan_seam = seam_neighborhoods(&tan_seams, 400);
-        // Approach the domain edge strictly from below — π/2 rounds DOWN in f64,
-        // so the nearest double is itself a legal argument.
-        for step in 0..=20_000u64 {
+        // Approach the open domain edge strictly from below. The first
+        // predecessor of π/2 is the nearest legal f64 argument.
+        for step in 1..=20_000u64 {
             let value = f64::from_bits(FRAC_PI_2.to_bits() - step);
             tan_seam.push(value);
             tan_seam.push(-value);
         }
+        // Wide ULP neighbourhoods around the closest range-reduction seams can
+        // cross the open function domain. They are not legal qm_tan inputs.
+        tan_seam.retain(|value| value.abs() < FRAC_PI_2);
 
         let mut rng = Lcg(0x5eed_0f00_d15e_a5e5);
         let mut bytes: Vec<u8> = Vec::with_capacity(1_000_000 * 32);

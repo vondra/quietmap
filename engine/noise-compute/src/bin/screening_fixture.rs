@@ -837,6 +837,7 @@ fn build_barriers(scene: SceneId) -> Vec<Barrier> {
             let (end_lat, end_lon) = to_lat_lon(x, b);
             Barrier {
                 osm_id: 1_390_017_809 + i as i64,
+                segment_idx: i as i16,
                 height_m: BARRIER_HEIGHT_M,
                 start_lat,
                 start_lon,
