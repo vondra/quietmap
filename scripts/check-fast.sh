@@ -35,6 +35,13 @@ if [ "$HALF" != "node" ]; then
   for crate in noise-compute source-reader tile-painter; do
     (cd "engine/$crate" && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked --all-targets)
   done
+
+  step "engine: CUDA compile-only role matrix"
+  if command -v nvcc >/dev/null 2>&1; then
+    "$ROOT/scripts/check-nvcc-roles-local.sh"
+  else
+    echo "NVCC_ROLE_MATRIX=SKIP reason=nvcc-not-found"
+  fi
 fi
 
 echo; echo "quality: all OK"
