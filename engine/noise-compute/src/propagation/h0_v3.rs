@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::compute::element::{LineLayer, LinePiece, THETA_MAX_RAD};
+use crate::compute::element::{LineLayer, LinePiece, H0_V3_THETA_3_RAD};
 
 use super::h0_streaming_reduction::{
     reduce_h0_with_theta, H0Candidate, H0Reduction, H0ReductionError,
@@ -90,7 +90,7 @@ impl H0V3Theta {
         match self {
             Self::Degrees5 => core::f64::consts::PI / 36.0,
             Self::Degrees4 => core::f64::consts::PI / 45.0,
-            Self::Degrees3 => THETA_MAX_RAD,
+            Self::Degrees3 => H0_V3_THETA_3_RAD,
             Self::Degrees2 => core::f64::consts::PI / 90.0,
         }
     }
@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(caps, [40, 50, 66, 99]);
         assert_eq!(
             H0V3Theta::Degrees3.radians().to_bits(),
-            THETA_MAX_RAD.to_bits()
+            H0_V3_THETA_3_RAD.to_bits()
         );
     }
 }

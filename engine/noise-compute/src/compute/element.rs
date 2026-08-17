@@ -3,10 +3,20 @@
 use crate::constants::ALPHA_ATM;
 use crate::propagation::shared_math::{qm_atan, qm_tan};
 
-pub const THETA_MAX_RAD: f64 = core::f64::consts::PI / 60.0;
+/// Frozen three-degree V3 arm and legacy hinted-generator dial.
+pub const H0_V3_THETA_3_RAD: f64 = core::f64::consts::PI / 60.0;
+#[cfg(not(feature = "h0-production-selection"))]
+pub const THETA_MAX_RAD: f64 = H0_V3_THETA_3_RAD;
+#[cfg(feature = "h0-production-selection")]
+pub const THETA_MAX_RAD: f64 =
+    f64::from_bits(crate::h0_production_selection_record::H0_PRODUCTION_THETA_RADIANS_BITS);
 pub const H_MAX: usize = 32;
-/// Frozen H0 node cap: ceil(pi/theta) + H_MAX(0) + floor(L_max/(theta R)) + 2.
+/// H0 node cap: ceil(pi/theta) + H_MAX(0) + floor(L_max/(theta R)) + 2.
+#[cfg(not(feature = "h0-production-selection"))]
 pub const H0_NODE_CAP: usize = 66;
+#[cfg(feature = "h0-production-selection")]
+pub const H0_NODE_CAP: usize = crate::h0_production_selection_record::H0_PRODUCTION_NODE_CAP;
+const _: () = assert!(H0_NODE_CAP <= 128);
 pub const R_ATM_BASE_M_PER_RAD: f64 = 1_000.0;
 pub const A_LIVE_DB: f64 = 25.0;
 pub const ROAD_D_FLOOR_M: f64 = 3.55;
@@ -144,7 +154,7 @@ impl LineNodeIterator {
         )?;
         assert_eq!(
             iterator.hard_cap, H0_NODE_CAP,
-            "the frozen H0 constants must derive the 66-node cap"
+            "the selected H0 theta and theorem cap must stay paired"
         );
         Ok(iterator)
     }
@@ -159,7 +169,7 @@ impl LineNodeIterator {
             piece,
             receiver_m,
             layer.d_floor_m(),
-            THETA_MAX_RAD,
+            H0_V3_THETA_3_RAD,
             H_MAX,
             hints,
             None,
@@ -183,7 +193,7 @@ impl LineNodeIterator {
             piece,
             receiver_m,
             layer.d_floor_m(),
-            THETA_MAX_RAD,
+            H0_V3_THETA_3_RAD,
             H_MAX,
             hints,
             Some(cap),
@@ -776,7 +786,7 @@ mod tests {
                 && iterator.boundaries().iter().any(|b| (*b + u).abs() < 1e-14)
         );
         assert_eq!(
-            derived_node_cap(THETA_MAX_RAD, H_MAX, LINE_MAX_LENGTH_M),
+            derived_node_cap(H0_V3_THETA_3_RAD, H_MAX, LINE_MAX_LENGTH_M),
             98
         );
         assert_eq!(
@@ -850,7 +860,7 @@ mod tests {
             line,
             receiver,
             ROAD_D_FLOOR_M,
-            THETA_MAX_RAD,
+            H0_V3_THETA_3_RAD,
             0,
             &hints,
             None,
@@ -871,7 +881,7 @@ mod tests {
         .unwrap();
         let nodes: Vec<_> = iterator.by_ref().collect();
         let count = nodes.len();
-        assert!(count <= derived_node_cap(THETA_MAX_RAD, H_MAX, LINE_MAX_LENGTH_M));
+        assert!(count <= derived_node_cap(H0_V3_THETA_3_RAD, H_MAX, LINE_MAX_LENGTH_M));
         assert_eq!(iterator.hard_fault_count(), 0);
         assert!(nodes
             .iter()

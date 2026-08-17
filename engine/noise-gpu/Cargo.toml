@@ -32,7 +32,7 @@ clap = { version = "4", features = ["derive"], optional = true }
 gpu = ["dep:cudarc", "dep:clap"]
 # Review-only model-v2 H0 vertical slice. This is a separate compile-time arm:
 # the stock production binary has neither its code nor a runtime branch.
-v2-h0 = ["gpu"]
+v2-h0 = ["gpu", "noise-compute/h0-production-selection"]
 # Full-counter evidence role. Cargo owns this compile-time switch so a free-form
 # nvcc define cannot produce PTX whose Rust host believes is the timed role.
 v2-h0-counters = ["v2-h0"]

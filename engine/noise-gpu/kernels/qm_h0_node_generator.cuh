@@ -16,6 +16,18 @@
 #ifndef V2_THETA_MAX_RAD
 #error "V2_THETA_MAX_RAD must be generated from compute/element.rs"
 #endif
+#ifndef V2_THETA_MAX_RAD_BITS
+#error "V2_THETA_MAX_RAD_BITS must come from the verified H0 selection"
+#endif
+#ifndef V2_H0_SELECTION_SCHEMA
+#error "V2_H0_SELECTION_SCHEMA must come from the verified H0 selection"
+#endif
+#ifndef V2_H0_SELECTION_EPOCH
+#error "V2_H0_SELECTION_EPOCH must come from the verified H0 selection"
+#endif
+#ifndef V2_H0_H_MAX
+#error "V2_H0_H_MAX must come from the verified H0 selection"
+#endif
 #ifndef V2_ROAD_D_FLOOR_M
 #error "V2_ROAD_D_FLOOR_M must be generated from compute/element.rs"
 #endif
@@ -31,8 +43,33 @@
 #ifndef V2_LINE_MAX_LENGTH_M
 #error "V2_LINE_MAX_LENGTH_M must be generated from compute/element.rs"
 #endif
-#if V2_H0_NODE_CAP != 66
-#error "the reviewed H0 theorem currently derives exactly 66 nodes"
+#if V2_H0 && V2_H0_SELECTION_SCHEMA != 1
+#error "an H0 production role requires selection schema 1"
+#endif
+#if V2_H0 && V2_H0_SELECTION_EPOCH == 0
+#error "an H0 production role requires a nonzero selection epoch"
+#endif
+#if V2_H0_H_MAX != 0
+#error "the reviewed H0 production mechanism has no retained skyline hints"
+#endif
+#if V2_H0_NODE_CAP != 40 && V2_H0_NODE_CAP != 50 && V2_H0_NODE_CAP != 66 && \
+    V2_H0_NODE_CAP != 99
+#error "H0 node cap is outside the reviewed V3 theorem instances"
+#endif
+#if (V2_THETA_MAX_RAD_BITS == 0x3fb657184ae74487ull && V2_H0_NODE_CAP != 40) || \
+    (V2_THETA_MAX_RAD_BITS == 0x3fb1df46a2529d39ull && V2_H0_NODE_CAP != 50) || \
+    (V2_THETA_MAX_RAD_BITS == 0x3faacee9f37bebd5ull && V2_H0_NODE_CAP != 66) || \
+    (V2_THETA_MAX_RAD_BITS == 0x3fa1df46a2529d39ull && V2_H0_NODE_CAP != 99)
+#error "H0 theta bits and theorem cap are not the same reviewed V3 pair"
+#endif
+#if V2_THETA_MAX_RAD_BITS != 0x3fb657184ae74487ull && \
+    V2_THETA_MAX_RAD_BITS != 0x3fb1df46a2529d39ull && \
+    V2_THETA_MAX_RAD_BITS != 0x3faacee9f37bebd5ull && \
+    V2_THETA_MAX_RAD_BITS != 0x3fa1df46a2529d39ull
+#error "H0 theta bits are outside the reviewed V3 points"
+#endif
+#if V2_H0_NODE_CAP > 128
+#error "the H0 node mask has exactly two u64 words"
 #endif
 
 #define QM_H0_FAULT_NONFINITE 1u

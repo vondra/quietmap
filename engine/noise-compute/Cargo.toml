@@ -22,6 +22,16 @@ path = "src/bin/screening_fixture.rs"
 name = "h0-mechanism-census"
 path = "src/bin/h0_mechanism_census.rs"
 
+[[bin]]
+name = "verify-h0-production-selection"
+path = "src/bin/verify_h0_production_selection.rs"
+required-features = ["h0-production-selection"]
+
+[features]
+# Build-time numerical authority for the selected H0 line model. The feature is
+# intentionally unusable until the reviewed record exists and verifies.
+h0-production-selection = []
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

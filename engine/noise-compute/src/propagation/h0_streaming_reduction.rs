@@ -396,6 +396,7 @@ fn h0_node_geometry(line_node: LineNode) -> Result<H0Node, H0ReductionError> {
 #[cfg(test)]
 mod semantic_set_tests {
     use super::*;
+    use crate::h0_production_selection::H0_THETA_CAP_PAIRS;
 
     fn candidate(id: u64, endpoint0: (f64, f64), endpoint1: (f64, f64)) -> H0Candidate {
         H0Candidate::from_metric_segment(
@@ -477,6 +478,32 @@ mod semantic_set_tests {
         assert!(result.admitted_mask_words().is_empty());
         assert_eq!(result.candidate_visit_count(), 1);
     }
+
+    #[test]
+    fn every_reviewed_theta_runs_the_complete_streaming_reducer() {
+        let wall = candidate(0, (5.0, -1.0), (5.0, 1.0));
+        let exact_on_track_counts = [38, 48, 64, 94];
+        for (pair, expected_count) in H0_THETA_CAP_PAIRS.into_iter().zip(exact_on_track_counts) {
+            let reduction = reduce_h0_with_theta(
+                LinePiece {
+                    start_m: [-125.0, 0.0],
+                    end_m: [125.0, 0.0],
+                    emission_per_m: 1.0,
+                },
+                LineLayer::Rail,
+                f64::from_bits(pair.theta_radians_bits),
+                [wall],
+            )
+            .unwrap();
+            assert_eq!(reduction.nodes().len(), expected_count);
+            assert!(expected_count < pair.node_cap);
+            assert_eq!(
+                reduction.admitted_mask_words().len(),
+                expected_count.div_ceil(64)
+            );
+            assert!(reduction.any_node_is_admitted());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -492,6 +519,16 @@ mod cross_lane_tests {
     const FIXTURE_SCALAR_WORDS: usize = 7;
     const FIXTURE_OUTPUT_WORDS: usize = FIXTURE_SCALAR_WORDS + H0_NODE_CAP * NODE_WORDS;
     const FIXTURE_MAGIC: u64 = 0x514d_4830_4649_5831;
+
+    const fn selected_on_track_node_count() -> u64 {
+        match H0_NODE_CAP {
+            40 => 38,
+            50 => 48,
+            66 => 64,
+            99 => 94,
+            _ => panic!("H0 node cap is outside the reviewed theta set"),
+        }
+    }
 
     fn hash_nodes(nodes: &[H0Node]) -> (u64, u64) {
         let mut left = 0xcbf2_9ce4_8422_2325_u64;
@@ -716,8 +753,8 @@ mod cross_lane_tests {
             }
         }
         assert!(
-            counts.contains(&64),
-            "rail worst-case count remains in corpus"
+            counts.contains(&selected_on_track_node_count()),
+            "selected-theta rail worst-case count remains in corpus"
         );
         assert!(
             counts.len() >= 20,

@@ -488,6 +488,9 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #define OUT_SLOTS_PROD    (OUT_ENERGY_SLOTS + 1)
 #define OUT_SLOTS_PROF    (OUT_ARCSTAT_BASE + TPX * TPX * 8)
 #if V2_H0
+#ifndef V2_H0_OUTPUT_ABI_VERSION
+#error "V2_H0_OUTPUT_ABI_VERSION must be generated from noise-gpu/src/lib.rs"
+#endif
 #ifndef OUT_H0_COUNTER_BYTE_OFFSET
 #error "OUT_H0_COUNTER_BYTE_OFFSET must be generated from noise-gpu/src/lib.rs"
 #endif
@@ -499,6 +502,9 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #endif
 #if OUT_H0_COUNTERS != 8
 #error "the reviewed H0 exact-counter layout has eight u64 channels"
+#endif
+#if V2_H0_OUTPUT_ABI_VERSION != 1
+#error "the H0 output counter ABI changed without a reviewed version update"
 #endif
 #ifndef PROF_H0_COUNTERS
 #define PROF_H0_COUNTERS 0

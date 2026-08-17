@@ -16,6 +16,8 @@ pub mod country_speed_defaults_generated;
 pub mod defaults;
 pub mod emission;
 pub mod flight_id;
+pub mod h0_production_selection;
+mod h0_production_selection_parser;
 pub mod low_profile;
 pub mod normalize;
 pub mod periods;
@@ -26,6 +28,14 @@ pub mod sources;
 pub mod traces;
 pub mod types;
 pub mod wkb;
+
+/// Checked-in numerical authority for a selected production H0 epoch. This
+/// module does not exist in the prep payload: enabling the feature before the
+/// terminal V3 verdict therefore fails closed in `build.rs`.
+#[cfg(feature = "h0-production-selection")]
+pub mod h0_production_selection_record {
+    include!("h0_production_selection_record.rs");
+}
 
 use constants::*;
 use emission::road::{self};

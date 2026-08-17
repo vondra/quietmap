@@ -11,9 +11,17 @@
 // toolkit (e.g. a CPU-only box) then builds noise-gpu cleanly. nvcc is required only when you
 // explicitly build `--features gpu`, which only happens on a GPU host.
 mod build_defines;
+#[path = "../noise-compute/src/h0_production_selection.rs"]
+#[allow(dead_code)]
+mod h0_production_selection;
+#[path = "../noise-compute/src/h0_production_selection_parser.rs"]
+mod h0_production_selection_parser;
 
 use build_defines::parse_experimental_defines;
+use h0_production_selection::H0ProductionSelection;
 use std::{env, fs, path::PathBuf, process::Command};
+
+const H0_SELECTION_RECORD_PATH: &str = "../noise-compute/src/h0_production_selection_record.rs";
 
 fn main() {
     println!("cargo:rerun-if-env-changed=NOISE_GPU_ARCH");
@@ -22,6 +30,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_V2_H0_DIAGNOSTIC");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_V2_H0_COUNTERS");
     println!("cargo:rerun-if-changed=build_defines.rs");
+    println!("cargo:rerun-if-changed=../noise-compute/src/h0_production_selection.rs");
+    println!("cargo:rerun-if-changed=../noise-compute/src/h0_production_selection_parser.rs");
     let extra_defines =
         parse_experimental_defines(&env::var("NOISE_GPU_DEFINES").unwrap_or_default())
             .unwrap_or_else(|error| panic!("invalid NOISE_GPU_DEFINES: {error}"));
@@ -69,6 +79,23 @@ fn main() {
         h0_counters == 0 || v2_h0 == 1,
         "the H0 counter role must compile on the H0 device mirror"
     );
+    let h0_selection = if v2_h0 == 1 {
+        // Never watch an absent record in the stock role: Cargo treats a
+        // missing watched path as dirty forever and would rerun nvcc on every
+        // no-op build. The v2-h0 feature transition is already a rerun key.
+        println!("cargo:rerun-if-changed={H0_SELECTION_RECORD_PATH}");
+        let source = fs::read_to_string(H0_SELECTION_RECORD_PATH).unwrap_or_else(|error| {
+            panic!(
+                "feature `v2-h0` requires reviewed `{H0_SELECTION_RECORD_PATH}` after terminal H0_QUADRATURE_ACCEPTED: {error}"
+            )
+        });
+        Some(
+            H0ProductionSelection::parse_and_verify(&source)
+                .unwrap_or_else(|error| panic!("invalid H0 production selection record: {error}")),
+        )
+    } else {
+        None
+    };
     let tile_px = const_from(
         "../raster-reader/src/fused_tile_z13.rs",
         "pub const TILE_PX: usize = ",
@@ -94,6 +121,8 @@ fn main() {
         "pub const OUT_H0_COUNTER_BYTE_OFFSET: usize = ",
     )
     .replace('_', "");
+    let h0_output_abi_version =
+        const_from("src/lib.rs", "pub const H0_OUTPUT_ABI_VERSION: usize = ");
     let out_h0_counters = const_from("src/lib.rs", "pub const OUT_H0_COUNTERS: usize = ");
     let out_slots_h0 =
         const_from("src/lib.rs", "pub const OUT_SLOTS_H0: usize = ").replace('_', "");
@@ -117,25 +146,62 @@ fn main() {
         "src/lib.rs",
         "pub const H0_PAIR_DIAGNOSTIC_NODE_BASE: usize = ",
     );
-    let h0_pair_diagnostic_record_base = const_from(
-        "src/lib.rs",
-        "pub const H0_PAIR_DIAGNOSTIC_RECORD_BASE: usize = ",
-    );
     let h0_pair_diagnostic_magic =
         numeric_u64_const("src/lib.rs", "pub const H0_PAIR_DIAGNOSTIC_MAGIC: u64 = ");
-    let h0_node_cap = const_from(
-        "../noise-compute/src/compute/element.rs",
-        "pub const H0_NODE_CAP: usize = ",
-    );
-    let theta_max_expr = const_from(
-        "../noise-compute/src/compute/element.rs",
-        "pub const THETA_MAX_RAD: f64 = ",
-    );
-    assert_eq!(
-        theta_max_expr, "core::f64::consts::PI / 60.0",
-        "THETA_MAX_RAD changed: extend the reviewed Rust-to-CUDA constant generator"
-    );
-    let theta_max_rad = c_f64(core::f64::consts::PI / 60.0);
+    let (
+        h0_node_cap,
+        theta_max_rad,
+        theta_max_rad_bits,
+        h0_selection_schema,
+        h0_selection_epoch,
+        h0_h_max,
+    ) = if let Some(selection) = &h0_selection {
+        (
+            selection.node_cap.to_string(),
+            c_f64(selection.theta_radians()),
+            format!("0x{:016x}", selection.theta_radians_bits),
+            selection.schema.to_string(),
+            selection.epoch.to_string(),
+            selection.h_max.to_string(),
+        )
+    } else {
+        (
+            "66".to_owned(),
+            c_f64(core::f64::consts::PI / 60.0),
+            format!("0x{:016x}", (core::f64::consts::PI / 60.0).to_bits()),
+            "0".to_owned(),
+            "0".to_owned(),
+            "0".to_owned(),
+        )
+    };
+    let h0_pair_diagnostic_record_base = (h0_pair_diagnostic_node_base
+        .replace('_', "")
+        .parse::<usize>()
+        .expect("H0 pair diagnostic node base is usize")
+        + h0_node_cap.parse::<usize>().expect("H0 node cap is usize")
+            * h0_pair_diagnostic_node_words
+                .replace('_', "")
+                .parse::<usize>()
+                .expect("H0 pair diagnostic node words is usize"))
+    .to_string();
+    if let Some(selection) = &h0_selection {
+        fs::write(
+            out.join("h0-production-selection-receipt.txt"),
+            selection.render_build_receipt(),
+        )
+        .expect("write H0 production selection receipt");
+    }
+    // Rust consumes this generated mirror even when Cargo feature unification
+    // enables noise-compute's selection without noise-gpu's v2-h0 role. The
+    // compile-time assertions in lib.rs make that mixed role impossible.
+    fs::write(
+        out.join("generated_h0_selection.rs"),
+        format!(
+            "pub const GENERATED_V2_H0_NODE_CAP: usize = {h0_node_cap};\n\
+             pub const GENERATED_V2_THETA_MAX_RAD_BITS: u64 = {theta_max_rad_bits};\n"
+        ),
+    )
+    .expect("write generated Rust H0 selection mirror");
     let road_d_floor_m = numeric_f64_const(
         "../noise-compute/src/compute/element.rs",
         "pub const ROAD_D_FLOOR_M: f64 = ",
@@ -181,6 +247,7 @@ fn main() {
              #define SURFACE_META_ABI_VERSION {surface_meta_abi_version}\n\
              #define SURFACE_META_SLOTS {surface_meta_slots}\n\
              #define V2_H0 {v2_h0}\n\
+             #define V2_H0_OUTPUT_ABI_VERSION {h0_output_abi_version}\n\
              #define OUT_H0_COUNTER_BYTE_OFFSET {out_h0_counter_byte_offset}\n\
              #define OUT_H0_COUNTERS {out_h0_counters}\n\
              #define OUT_SLOTS_H0 {out_slots_h0}\n\
@@ -193,8 +260,12 @@ fn main() {
              #define H0_PAIR_DIAGNOSTIC_NODE_BASE {h0_pair_diagnostic_node_base}\n\
              #define H0_PAIR_DIAGNOSTIC_RECORD_BASE {h0_pair_diagnostic_record_base}\n\
              #define H0_PAIR_DIAGNOSTIC_MAGIC {h0_pair_diagnostic_magic}ull\n\
+             #define V2_H0_SELECTION_SCHEMA {h0_selection_schema}\n\
+             #define V2_H0_SELECTION_EPOCH {h0_selection_epoch}ull\n\
              #define V2_H0_NODE_CAP {h0_node_cap}\n\
              #define V2_THETA_MAX_RAD {theta_max_rad}\n\
+             #define V2_THETA_MAX_RAD_BITS {theta_max_rad_bits}ull\n\
+             #define V2_H0_H_MAX {h0_h_max}\n\
              #define V2_ROAD_D_FLOOR_M {road_d_floor_m}\n\
              #define V2_RAIL_D_FLOOR_M {rail_d_floor_m}\n\
              #define V2_R_ATM_BASE_M_PER_RAD {r_atm_base_m_per_rad}\n\
@@ -329,6 +400,7 @@ fn main() {
         format!("-DSURFACE_META_ABI_VERSION={surface_meta_abi_version}"),
         format!("-DSURFACE_META_SLOTS={surface_meta_slots}"),
         format!("-DV2_H0={v2_h0}"),
+        format!("-DV2_H0_OUTPUT_ABI_VERSION={h0_output_abi_version}"),
         format!("-DOUT_H0_COUNTER_BYTE_OFFSET={out_h0_counter_byte_offset}"),
         format!("-DOUT_H0_COUNTERS={out_h0_counters}"),
         format!("-DOUT_SLOTS_H0={out_slots_h0}"),
@@ -341,8 +413,12 @@ fn main() {
         format!("-DH0_PAIR_DIAGNOSTIC_NODE_BASE={h0_pair_diagnostic_node_base}"),
         format!("-DH0_PAIR_DIAGNOSTIC_RECORD_BASE={h0_pair_diagnostic_record_base}"),
         format!("-DH0_PAIR_DIAGNOSTIC_MAGIC={h0_pair_diagnostic_magic}ull"),
+        format!("-DV2_H0_SELECTION_SCHEMA={h0_selection_schema}"),
+        format!("-DV2_H0_SELECTION_EPOCH={h0_selection_epoch}ull"),
         format!("-DV2_H0_NODE_CAP={h0_node_cap}"),
         format!("-DV2_THETA_MAX_RAD={theta_max_rad}"),
+        format!("-DV2_THETA_MAX_RAD_BITS={theta_max_rad_bits}ull"),
+        format!("-DV2_H0_H_MAX={h0_h_max}"),
         format!("-DV2_ROAD_D_FLOOR_M={road_d_floor_m}"),
         format!("-DV2_RAIL_D_FLOOR_M={rail_d_floor_m}"),
         format!("-DV2_R_ATM_BASE_M_PER_RAD={r_atm_base_m_per_rad}"),

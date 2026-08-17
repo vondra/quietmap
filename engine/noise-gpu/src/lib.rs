@@ -10,6 +10,23 @@ pub mod airborne;
 #[cfg(feature = "h0-v3")]
 pub mod h0_v3_field;
 
+#[cfg(feature = "gpu")]
+mod generated_h0_selection {
+    include!(concat!(env!("OUT_DIR"), "/generated_h0_selection.rs"));
+}
+
+#[cfg(feature = "gpu")]
+const _: () = {
+    assert!(
+        generated_h0_selection::GENERATED_V2_H0_NODE_CAP
+            == noise_compute::compute::element::H0_NODE_CAP
+    );
+    assert!(
+        generated_h0_selection::GENERATED_V2_THETA_MAX_RAD_BITS
+            == noise_compute::compute::element::THETA_MAX_RAD.to_bits()
+    );
+};
+
 use noise_compute::emission::aircraft::{Installation, SegmentPrepared, M_PER_DEG_LAT};
 use noise_compute::propagation::streaming_reduction::{source_frame_mlon, SourceId64};
 use noise_compute::types::Barrier;
@@ -140,6 +157,9 @@ pub const OUT_SLOTS_PROD: usize = OUT_ENERGY_SLOTS + 1;
 /// of the buffer.
 pub const OUT_SLOTS_PROF: usize = OUT_ARCSTAT_BASE + TILE_PX * TILE_PX * 8;
 
+/// Version of the offset/count/length triple and the ordered meaning of all
+/// eight H0 counters below.
+pub const H0_OUTPUT_ABI_VERSION: usize = 1;
 /// Byte-aligned start of the exact H0 u64 counters in the existing `out`
 /// allocation. The obstacle pointer table has no spare slot; keeping these
 /// counters in `out` also leaves the barrier candidate-tail authority untouched.
@@ -169,13 +189,9 @@ pub const H0_PAIR_DIAGNOSTIC_HEADER_WORDS: usize = 24;
 pub const H0_PAIR_DIAGNOSTIC_NODE_WORDS: usize = 8;
 pub const H0_PAIR_DIAGNOSTIC_RECORD_WORDS: usize = 7;
 pub const H0_PAIR_DIAGNOSTIC_NODE_BASE: usize = 24;
-pub const H0_PAIR_DIAGNOSTIC_RECORD_BASE: usize = 552;
+pub const H0_PAIR_DIAGNOSTIC_RECORD_BASE: usize = H0_PAIR_DIAGNOSTIC_NODE_BASE
+    + noise_compute::compute::element::H0_NODE_CAP * H0_PAIR_DIAGNOSTIC_NODE_WORDS;
 pub const H0_PAIR_DIAGNOSTIC_MAGIC: u64 = 0x514d_4830_5041_4952;
-const _: () = assert!(
-    H0_PAIR_DIAGNOSTIC_RECORD_BASE
-        == H0_PAIR_DIAGNOSTIC_NODE_BASE
-            + noise_compute::compute::element::H0_NODE_CAP * H0_PAIR_DIAGNOSTIC_NODE_WORDS
-);
 
 /// Versioned surface metadata layout. Slot 14 carries the line-layer tag used
 /// to select the frozen road/rail H0 placement floor.
@@ -756,6 +772,7 @@ mod streaming_abi_tests {
 
     #[test]
     fn h0_exact_counters_are_aligned_and_disjoint_from_candidate_tail() {
+        assert_eq!(H0_OUTPUT_ABI_VERSION, 1);
         assert_eq!(OUT_H0_COUNTER_BYTE_OFFSET % std::mem::size_of::<u64>(), 0);
         assert!(OUT_H0_COUNTER_BYTE_OFFSET >= OUT_SLOTS_PROD * std::mem::size_of::<f32>());
         assert_eq!(OUT_H0_COUNTERS, 8);
