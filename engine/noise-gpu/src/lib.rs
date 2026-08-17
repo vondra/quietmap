@@ -9,6 +9,7 @@
 pub mod airborne;
 #[cfg(feature = "h0-v3")]
 pub mod h0_v3_field;
+pub mod tile_timing;
 
 #[cfg(feature = "gpu")]
 mod generated_h0_selection {

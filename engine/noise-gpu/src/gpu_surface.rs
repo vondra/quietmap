@@ -188,8 +188,9 @@ fn env(k: &str, d: &str) -> String {
 /// Off by default: a world worker builds thousands of tile-layers and the
 /// boxlog must not carry one line each. `wall_ms` is the host wall from H2D
 /// start to D2H join and so INCLUDES the next tile's CPU prep overlapped under
-/// this kernel; `kernel_ms` (NOISE_GPU_TIMING=1, else NaN) is the CUDA-event
-/// bracket of exactly the kernel.
+/// this kernel. Its compact JSON payload uses `kernel_ms=null` plus status
+/// `unavailable` unless `NOISE_GPU_TIMING=1` measured a finite CUDA-event
+/// duration.
 fn tile_times_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("QM_GPU_TILE_TIMES").as_deref() == Ok("1"))
@@ -468,14 +469,14 @@ fn process_block(
         // Join: dtoh_sync_copy waits for the kernel, then reads the result back.
         let gpu = dev.dtoh_sync_copy(&d_out).expect("dtoh");
         let tile_wall_s = tk.elapsed().as_secs_f64();
-        let mut tile_kernel_ms = f64::NAN;
+        let mut tile_kernel_ms = None;
         {
             let st = stats.entry(layer.dir()).or_default();
             st.t_kernel += tile_wall_s;
             if let Some((start, stop, _)) = kernel_evt {
                 // Stream is synced by dtoh above ⇒ both events are recorded.
                 let ms = unsafe { result::event::elapsed(start, stop).expect("elapsed") } as f64;
-                tile_kernel_ms = ms;
+                tile_kernel_ms = Some(ms);
                 st.kernel_ms += ms;
                 st.kernel_calls += 1;
                 unsafe {
@@ -633,11 +634,14 @@ fn process_block(
         }
         stats.entry(layer.dir()).or_default().n_tiles += 1;
         if tile_times_enabled() {
+            let timing =
+                noise_gpu::tile_timing::TileTimingRecord::new(tile_wall_s * 1000.0, tile_kernel_ms)
+                    .expect("Instant and CUDA events must yield finite tile timing");
             eprintln!(
-                "tile-time {} z{}/{tx}/{ty} wall_ms={:.0} kernel_ms={tile_kernel_ms:.1}",
+                "tile-time {} z{}/{tx}/{ty} {}",
                 layer.dir(),
                 cfg.z,
-                tile_wall_s * 1000.0,
+                timing.to_json().expect("validated tile timing serializes"),
             );
         }
         prog.tick();
