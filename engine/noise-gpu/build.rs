@@ -10,13 +10,21 @@
 // crate is the CPU-side lib alone, so skip nvcc entirely — a host with no CUDA
 // toolkit (e.g. a CPU-only box) then builds noise-gpu cleanly. nvcc is required only when you
 // explicitly build `--features gpu`, which only happens on a GPU host.
+mod build_defines;
+
+use build_defines::parse_experimental_defines;
 use std::{env, fs, path::PathBuf, process::Command};
 
 fn main() {
     println!("cargo:rerun-if-env-changed=NOISE_GPU_ARCH");
+    println!("cargo:rerun-if-env-changed=NOISE_GPU_DEFINES");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_V2_H0");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_V2_H0_DIAGNOSTIC");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_V2_H0_COUNTERS");
+    println!("cargo:rerun-if-changed=build_defines.rs");
+    let extra_defines =
+        parse_experimental_defines(&env::var("NOISE_GPU_DEFINES").unwrap_or_default())
+            .unwrap_or_else(|error| panic!("invalid NOISE_GPU_DEFINES: {error}"));
     // Watch the whole dir, not just each .cu — otherwise ADDING a new kernel
     // (e.g. airborne.cu) doesn't re-run this script, so its .ptx never builds.
     println!("cargo:rerun-if-changed=kernels");
@@ -45,25 +53,11 @@ fn main() {
     // nothing enforced the equality — a TILE_PX change would have produced silent
     // out-of-bounds device writes and corrupted tiles, not a compile error
     // (2026-08-04 audit). BIN_W is the same hazard for launch geometry.
-    // NOISE_GPU_DEFINES: extra -D flags for the kernel build (space separated,
-    // e.g. "-DPROF_COUNTERS=1"). DEV INSTRUMENT ONLY — every switch it drives
-    // defaults to the production value, so an unset var builds the shipped
-    // kernel. Without this passthrough the -D levers are silently IGNORED and an
-    // A/B measures the default build twice, which is worse than not having them.
-    println!("cargo:rerun-if-env-changed=NOISE_GPU_DEFINES");
-    let extra_defines: Vec<String> = env::var("NOISE_GPU_DEFINES")
-        .unwrap_or_default()
-        .split_whitespace()
-        .map(str::to_owned)
-        .collect();
-    assert!(
-        extra_defines.iter().all(|define| {
-            !define.contains("V2_H0")
-                && !define.contains("PROF_H0_PAIR_DIAGNOSTIC")
-                && !define.contains("PROF_H0_COUNTERS")
-        }),
-        "H0 roles are selected only by Cargo features; a free-form -D would fork host and PTX"
-    );
+    // NOISE_GPU_DEFINES is a parsed list of reviewed DEV-INSTRUMENT switches,
+    // not a compiler-option passthrough. Every switch defaults to production,
+    // so an empty value builds the shipped kernel. Without the explicit levers
+    // an A/B can silently measure the default build twice; without the allowlist
+    // a later -D can silently replace the host-owned constants injected below.
     let v2_h0 = usize::from(env::var_os("CARGO_FEATURE_V2_H0").is_some());
     let h0_pair_diagnostic = usize::from(env::var_os("CARGO_FEATURE_V2_H0_DIAGNOSTIC").is_some());
     let h0_counters = usize::from(env::var_os("CARGO_FEATURE_V2_H0_COUNTERS").is_some());

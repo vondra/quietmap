@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# Prove that only reviewed CUDA experiment defines reach nvcc.
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+BUILD_RS="$ROOT/engine/noise-gpu/build.rs"
+work_root=$(mktemp -d "${TMPDIR:-/tmp}/quietmap-gpu-defines.XXXXXX")
+
+cleanup() {
+  local original_rc=$1
+  trap - EXIT
+  case "$work_root" in
+    "${TMPDIR:-/tmp}"/quietmap-gpu-defines.*) rm -rf -- "$work_root" ;;
+    *) echo "refusing to remove unexpected test root: $work_root" >&2; original_rc=90 ;;
+  esac
+  exit "$original_rc"
+}
+trap 'cleanup $?' EXIT
+
+rustc --edition=2021 --test "$BUILD_RS" -o "$work_root/build-rs-tests"
+"$work_root/build-rs-tests"
+
+rustc --edition=2021 "$BUILD_RS" -o "$work_root/build-rs"
+mkdir -p "$work_root/bin" "$work_root/out"
+cat >"$work_root/bin/nvcc" <<'FAKE_NVCC'
+#!/usr/bin/env bash
+set -euo pipefail
+: >"$NVCC_INVOCATION_MARKER"
+exit 97
+FAKE_NVCC
+chmod +x "$work_root/bin/nvcc"
+
+assert_rejected_before_nvcc() {
+  local mutation=$1
+  local label=$2
+  local log="$work_root/$label.log"
+  local marker="$work_root/$label.nvcc-invoked"
+  local rc=0
+
+  rm -f -- "$marker"
+  (
+    cd "$ROOT/engine/noise-gpu"
+    env \
+      CARGO_FEATURE_GPU=1 \
+      NOISE_GPU_DEFINES="$mutation" \
+      OUT_DIR="$work_root/out" \
+      NVCC_INVOCATION_MARKER="$marker" \
+      PATH="$work_root/bin:$PATH" \
+      "$work_root/build-rs"
+  ) >"$log" 2>&1 || rc=$?
+
+  if [ "$rc" -eq 0 ]; then
+    echo "GPU_DEFINE_MUTATION=FAIL label=$label reason=unexpected-success" >&2
+    return 1
+  fi
+  if [ -e "$marker" ]; then
+    echo "GPU_DEFINE_MUTATION=FAIL label=$label reason=reached-nvcc" >&2
+    return 1
+  fi
+  if ! grep -Fq 'invalid NOISE_GPU_DEFINES:' "$log"; then
+    echo "GPU_DEFINE_MUTATION=FAIL label=$label reason=wrong-failure" >&2
+    cat "$log" >&2
+    return 1
+  fi
+  echo "GPU_DEFINE_MUTATION=PASS label=$label rejected_before_nvcc=1"
+}
+
+assert_define_set_reaches_nvcc() {
+  local defines=$1
+  local label=$2
+  local log="$work_root/$label.log"
+  local marker="$work_root/$label.nvcc-invoked"
+  local rc=0
+
+  (
+    cd "$ROOT/engine/noise-gpu"
+    env \
+      CARGO_FEATURE_GPU=1 \
+      NOISE_GPU_DEFINES="$defines" \
+      OUT_DIR="$work_root/out" \
+      NVCC_INVOCATION_MARKER="$marker" \
+      PATH="$work_root/bin:$PATH" \
+      "$work_root/build-rs"
+  ) >"$log" 2>&1 || rc=$?
+
+  if [ "$rc" -eq 0 ] || [ ! -e "$marker" ]; then
+    echo "GPU_DEFINE_ALLOWLIST=FAIL label=$label reason=accepted-set-did-not-reach-nvcc rc=$rc" >&2
+    cat "$log" >&2
+    return 1
+  fi
+  if grep -Fq 'invalid NOISE_GPU_DEFINES:' "$log"; then
+    echo "GPU_DEFINE_ALLOWLIST=FAIL label=$label reason=accepted-set-rejected" >&2
+    cat "$log" >&2
+    return 1
+  fi
+  echo "GPU_DEFINE_ALLOWLIST=PASS label=$label reached_nvcc=1"
+}
+
+assert_rejected_before_nvcc '-DV2_THETA_MAX_RAD=0' theta
+assert_rejected_before_nvcc '-DV2_H0_NODE_CAP=1' node-cap
+assert_rejected_before_nvcc '-DV2_H0=0' role
+assert_rejected_before_nvcc '-DOUT_SLOTS_H0=1' output-layout
+assert_rejected_before_nvcc '-DBARRIER_ABI_VERSION=1' barrier-abi
+assert_rejected_before_nvcc '-DSOURCE_SEGMENT_ABI_VERSION=1' segment-abi
+assert_rejected_before_nvcc '-DTPX=1' architecture
+assert_rejected_before_nvcc '-DUNKNOWN_SWITCH=1' unknown
+assert_rejected_before_nvcc '-UARC_TRI_WALK' undefine
+assert_rejected_before_nvcc '@defines.rsp' response-file
+assert_rejected_before_nvcc '--compiler-options=-DV2_H0=0' compiler-option
+assert_rejected_before_nvcc '-D ARC_TRI_WALK=0' split-define
+assert_rejected_before_nvcc '-DARC_TRI_WALK=0 -DARC_TRI_WALK=1' duplicate
+assert_define_set_reaches_nvcc '' production-empty
+assert_define_set_reaches_nvcc '-DARC_TRI_WALK=0 -DPROF_COUNTERS=1' reviewed-experiment
+
+echo "GPU_DEFINE_MUTATIONS=PASS mutations=13 rejected_nvcc_invocations=0"

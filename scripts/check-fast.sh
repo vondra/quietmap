@@ -28,6 +28,9 @@ if [ "$HALF" != "rust" ]; then
 fi
 
 if [ "$HALF" != "node" ]; then
+  step "engine: GPU define contract"
+  "$ROOT/scripts/test-noise-gpu-defines.sh"
+
   step "engine: rustfmt + clippy + tests"
   for manifest in engine/*/Cargo.toml; do
     cargo fmt --manifest-path "$manifest" -- --check
