@@ -324,6 +324,14 @@ fn main() {
         let path = entry.unwrap().path();
         if path.extension().is_some_and(|e| e == "cu") {
             let stem = path.file_stem().unwrap().to_str().unwrap();
+            println!("cargo:rerun-if-changed={}", path.display());
+            // This translation unit exercises the H0-only layout contract. A
+            // stock `gpu` build intentionally has no `qm_h0_layout_valid`, so
+            // compiling the selftest without the matching host feature creates
+            // a third, invalid role instead of testing production.
+            if stem == "qm_h0_node_selftest" && v2_h0 == 0 {
+                continue;
+            }
             let ptx = out.join(format!("{stem}.ptx"));
             let status = Command::new("nvcc")
                 .args([
@@ -390,7 +398,6 @@ fn main() {
                 .status()
                 .expect("nvcc not found — `--features gpu` needs the CUDA toolkit on this host");
             assert!(status.success(), "nvcc failed to compile {path:?}");
-            println!("cargo:rerun-if-changed={}", path.display());
         }
     }
 }
