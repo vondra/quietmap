@@ -19,11 +19,13 @@ mod generated_h0_selection {
 const _: () = {
     assert!(
         generated_h0_selection::GENERATED_V2_H0_NODE_CAP
-            == noise_compute::compute::element::H0_NODE_CAP
+            == noise_compute::compute::element::H0_NODE_CAP,
+        "generated CUDA V2_H0_NODE_CAP differs from the selected Rust H0_NODE_CAP"
     );
     assert!(
         generated_h0_selection::GENERATED_V2_THETA_MAX_RAD_BITS
-            == noise_compute::compute::element::THETA_MAX_RAD.to_bits()
+            == noise_compute::compute::element::THETA_MAX_RAD.to_bits(),
+        "generated CUDA V2_THETA_MAX_RAD_BITS differs from the selected Rust THETA_MAX_RAD"
     );
 };
 

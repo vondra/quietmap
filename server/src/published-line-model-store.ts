@@ -73,8 +73,9 @@ export async function writePublishedLineModelState(
 ): Promise<void> {
   const parent = dirname(path)
   await mkdir(parent, { recursive: true, mode: 0o700 })
-  // mkdir does not narrow an existing directory. State must remain private
-  // even when an operator or older release created the parent too broadly.
+  // This directory is owned exclusively by the publication protocol. Normalize
+  // both broader and narrower owner modes to 0700 before every durable write;
+  // mode narrowing is not a supported pause mechanism for this state machine.
   await chmod(parent, 0o700)
   const temporary = `${path}.tmp-${process.pid}-${Date.now()}`
   const handle = await open(temporary, 'wx', 0o600)

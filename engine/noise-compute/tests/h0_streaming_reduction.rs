@@ -73,6 +73,14 @@ fn receiver_crossing_has_disjoint_radial_arms_and_no_receiver_node() {
 
     let east_indices = admitted_indices(&east);
     let west_indices = admitted_indices(&west);
+    // The record-absent prep epoch is the reviewed 3-degree arm. Keep its
+    // per-arm count exact while later selected theta values retain the
+    // structural symmetry assertions below.
+    #[cfg(not(feature = "h0-production-selection"))]
+    {
+        assert_eq!(east.admitted_node_count(), 11);
+        assert_eq!(west.admitted_node_count(), 11);
+    }
     assert!(east.admitted_node_count() > 0);
     assert_eq!(east.admitted_node_count(), west.admitted_node_count());
     assert!(east_indices
