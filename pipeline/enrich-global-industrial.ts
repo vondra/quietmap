@@ -41,7 +41,7 @@ import { DATA_YEAR as YEAR } from './lib/data-year.js'
 const H3R4_DIR = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
 const CACHE_DIR = resolve(import.meta.dirname, '../data/enrichment/global')
 const GPPD_CACHE = resolve(CACHE_DIR, 'gppd.csv')
-const EPRTR_CACHE = resolve(CACHE_DIR, 'eprtr-facilities.csv')
+const EPRTR_CACHE = resolve(CACHE_DIR, 'eprtr-facilities.json')
 
 const forceDownload = process.argv.includes('--force-download')
 const enrichOnly = process.argv.includes('--enrich-only')
@@ -100,11 +100,30 @@ const GEM_DATASET_ID: Record<GemTracker['key'], number> = {
   coalmine: SOURCE_ID_GLOBAL_GEM_COALMINE,
 }
 
-// E-PRTR facility data — European Pollutant Release and Transfer Register
-const EPRTR_URLS = [
-  'https://industry.eea.europa.eu/api/v1/download/facilities?format=csv',
-  'https://industry.eea.europa.eu/download?format=csv',
-]
+// E-PRTR facility data — European Pollutant Release and Transfer Register.
+// The European Industrial Emissions Portal (industry.eea.europa.eu) that used to
+// serve a facilities CSV export has been down since well before 2026-08 (its
+// /download route 500s — a server-side rendering error, not a moved endpoint).
+// The EEA's own DISCODATA SQL API (https://discodata.eea.europa.eu/Help.html) is
+// the documented, versioned interface behind that portal, so we query it
+// directly: [IED].[latest].[ProductionFacility_NoGeo] is the EU Registry on
+// Industrial Sites facility table (x_4326/y_4326 = WGS84 centroid,
+// EPRTRAnnexIMainActivity = the Annex I sector code mapped to NACE below).
+// `reportingYear = MAX(reportingYear)` is a subquery, not a pinned year, so the
+// query keeps following the newest published reporting year on its own — the
+// CZ RUIAN date bug (pipeline/enrich-buildings-cz.ts) taught us a hardcoded
+// "current" value silently rots.
+const EPRTR_SQL_QUERY = `
+SELECT id, facilityName, countryCode, reportingYear, EPRTRAnnexIMainActivity, x_4326, y_4326
+FROM [IED].[latest].[ProductionFacility_NoGeo]
+WHERE reportingYear = (SELECT MAX(reportingYear) FROM [IED].[latest].[ProductionFacility_NoGeo])
+`.trim()
+// nrOfHits caps the single page at 100k rows (current: ~60k) — comfortably above
+// today's size with headroom for growth; downloadEprtr() below verifies the
+// response stayed under that cap so a future overflow fails loud instead of
+// silently truncating.
+const EPRTR_PAGE_SIZE = 100_000
+const EPRTR_QUERY_URL = `https://discodata.eea.europa.eu/sql?query=${encodeURIComponent(EPRTR_SQL_QUERY)}&p=1&nrOfHits=${EPRTR_PAGE_SIZE}`
 
 const GPPD_DATASET_ID = SOURCE_ID_GLOBAL_GPPD
 const EPRTR_DATASET_ID = SOURCE_ID_EUROPE_EPRTR
@@ -162,48 +181,69 @@ async function downloadGppd(): Promise<string> {
 
 // ── Step 2: Download E-PRTR ──
 
+// Shared by both return paths in downloadEprtr() below: parseEprtr()'s own
+// JSON.parse is unguarded (unlike parseGem()'s), so it relies on every string
+// downloadEprtr() hands back — cached or freshly downloaded — already being
+// proven-parseable, proven-sized JSON. Skipping this on the cache-hit path
+// would let a corrupted cache file (partial write, disk fault, hand edit)
+// throw uncaught out of parseEprtr() and abort GPPD's and GEM's results too,
+// contradicting downloadEprtr()'s own "one source's failure doesn't abort the
+// run" contract below.
+function validateEprtrJson(text: string, sourceLabel: string): void {
+  const parsed = JSON.parse(text) as { results?: unknown[] }
+  if (!Array.isArray(parsed.results) || parsed.results.length < 100) {
+    throw new Error(`${sourceLabel} has ${parsed.results?.length ?? 0} rows (expected tens of thousands) — DISCODATA schema or query may have changed, or the cache is corrupt`)
+  }
+  if (parsed.results.length >= EPRTR_PAGE_SIZE) {
+    throw new Error(`${sourceLabel} has ${parsed.results.length} rows, at/above the ${EPRTR_PAGE_SIZE} single-page cap — results may be truncated, add pagination (p=2, ...) instead of raising the cap blindly`)
+  }
+}
+
+// A failed E-PRTR refresh must never look like success: it's reported with
+// console.error (not the routine console.log WARN other optional sources use)
+// naming the exact URL and cause, and the caller leaves E-PRTR's existing
+// stamps untouched rather than resetting them against an empty result (see the
+// participating-source floor in main()). It does not abort the whole run —
+// GPPD and GEM are independent sources and still complete (same tolerance the
+// per-tracker GEM downloads already have below).
 async function downloadEprtr(): Promise<string | null> {
   if (enrichOnly || (!forceDownload && existsSync(EPRTR_CACHE))) {
     if (!existsSync(EPRTR_CACHE)) {
       console.log('  WARN: --enrich-only but no E-PRTR cache — skipping E-PRTR')
       return null
     }
-    console.log(`  Using cached E-PRTR: ${EPRTR_CACHE}`)
-    return readFileSync(EPRTR_CACHE, 'utf-8')
-  }
-
-  for (const url of EPRTR_URLS) {
-    console.log(`  Trying E-PRTR download: ${url}`)
+    const cached = readFileSync(EPRTR_CACHE, 'utf-8')
     try {
-      const res = await fetch(url, {
-        signal: AbortSignal.timeout(120_000),
-        headers: { 'Accept': 'text/csv,application/csv,*/*' },
-      })
-      if (!res.ok) {
-        console.log(`    HTTP ${res.status} — trying next URL`)
-        continue
-      }
-      const contentType = res.headers.get('content-type') || ''
-      const text = await res.text()
-
-      const lines = text.split('\n').filter(l => l.trim().length > 0)
-      if (lines.length < 10 || !lines[0].includes(',')) {
-        console.log(`    Response doesn't look like CSV (${lines.length} lines, content-type: ${contentType}) — trying next`)
-        continue
-      }
-
-      mkdirSync(CACHE_DIR, { recursive: true })
-      writeFileSync(EPRTR_CACHE, text)
-      console.log(`  Cached E-PRTR to ${EPRTR_CACHE} (${(text.length / 1024 / 1024).toFixed(1)} MB, ${lines.length} lines)`)
-      return text
+      validateEprtrJson(cached, EPRTR_CACHE)
     } catch (err: any) {
-      console.log(`    Failed: ${err.message} — trying next`)
+      console.error(`  ERROR: cached E-PRTR is unusable — ${err.message}`)
+      console.error(`  Delete ${EPRTR_CACHE} and re-run without --enrich-only to refresh it. E-PRTR stamps from a previous run (if any) are left untouched.`)
+      return null
     }
+    console.log(`  Using cached E-PRTR: ${EPRTR_CACHE}`)
+    return cached
   }
 
-  console.log('  WARN: Could not download E-PRTR from any URL. Proceeding with GPPD only.')
-  console.log('  TIP: Manually place CSV at', EPRTR_CACHE, 'and run with --enrich-only')
-  return null
+  console.log(`  Downloading E-PRTR from DISCODATA: ${EPRTR_QUERY_URL}`)
+  try {
+    const res = await fetch(EPRTR_QUERY_URL, { signal: AbortSignal.timeout(120_000) })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const text = await res.text()
+
+    // JSON.parse (inside validateEprtrJson) throws its own actionable SyntaxError
+    // (e.g. "Unexpected token <" — a giveaway the response was an HTML error page)
+    // straight into the catch below, which is where the URL gets attached.
+    validateEprtrJson(text, EPRTR_QUERY_URL)
+
+    mkdirSync(CACHE_DIR, { recursive: true })
+    writeFileSync(EPRTR_CACHE, text)
+    console.log(`  Cached E-PRTR to ${EPRTR_CACHE} (${(text.length / 1024 / 1024).toFixed(1)} MB)`)
+    return text
+  } catch (err: any) {
+    console.error(`  ERROR: E-PRTR refresh failed — GET ${EPRTR_QUERY_URL} — ${err.message}`)
+    console.error(`  E-PRTR stamps from a previous run (if any) are left untouched, NOT re-stamped. Fix the query/endpoint above and re-run.`)
+    return null
+  }
 }
 
 // ── Step 3: Parse GPPD CSV ──
@@ -253,13 +293,13 @@ async function parseGppd(csvText: string): Promise<Facility[]> {
   return facilities
 }
 
-// ── Step 4: Parse E-PRTR CSV ──
+// ── Step 4: Parse E-PRTR (DISCODATA JSON) ──
 
 // E-PRTR Annex I main activity sectors (1-9) → representative NACE 6-digit for noise
-// profiling. DISCODATA (the live source since the industry.eea endpoint died 2026-06)
-// exposes the Annex I activity code, e.g. "5(a)" / "4(a)(viii)", NOT a NACE code. Sector
-// granularity is enough for the emission profile — the sector fixes the plant type and
-// thus the loudness class. Ref: Regulation (EC) No 166/2006 Annex I.
+// profiling. DISCODATA's ProductionFacility_NoGeo table exposes the Annex I activity
+// code, e.g. "5(a)" / "4(a)(viii)", NOT a NACE code. Sector granularity is enough for
+// the emission profile — the sector fixes the plant type and thus the loudness class.
+// Ref: Regulation (EC) No 166/2006 Annex I.
 const EPRTR_ANNEX_SECTOR_TO_NACE: Record<number, string> = {
   1: '351100', // Energy: refineries, coke, thermal power, combustion → electricity/thermal
   2: '241000', // Metals: iron, steel, ferrous/non-ferrous → basic metals
@@ -272,95 +312,37 @@ const EPRTR_ANNEX_SECTOR_TO_NACE: Record<number, string> = {
   9: '131000', // Other: textile, leather, surface treatment, shipyards → textiles
 }
 
-async function parseEprtr(csvText: string): Promise<Facility[]> {
-  const { parse } = await import('csv-parse/sync')
-
-  let records: Record<string, string>[]
-  try {
-    records = parse(csvText, {
-      columns: true,
-      skip_empty_lines: true,
-      bom: true,
-      relax_column_count: true,
-      delimiter: ',',
-    }) as Record<string, string>[]
-
-    if (records.length > 0 && Object.keys(records[0]).length < 3) {
-      records = parse(csvText, {
-        columns: true,
-        skip_empty_lines: true,
-        bom: true,
-        relax_column_count: true,
-        delimiter: ';',
-      }) as Record<string, string>[]
-    }
-  } catch {
-    records = parse(csvText, {
-      columns: true,
-      skip_empty_lines: true,
-      bom: true,
-      relax_column_count: true,
-      delimiter: ';',
-    }) as Record<string, string>[]
-  }
-
-  const cols = Object.keys(records[0] || {})
-  console.log(`  E-PRTR: ${records.length} raw records, columns: ${cols.slice(0, 8).join(', ')}...`)
-
-  const latCol = cols.find(c => /^(lat|y_?coord|facility_?lat)/i.test(c)) || ''
-  const lonCol = cols.find(c => /^(lon|long|x_?coord|facility_?lon)/i.test(c)) || ''
-  const nameCol = cols.find(c => /^(facility_?name|name|facilityname)/i.test(c)) || ''
-  const naceCol = cols.find(c => /^(nace|economic_?activity|nace_?code|main_?activity|economicactivitycode|nacemaineconomicactivitycode|annex_?activity|eprtr_?annex)/i.test(c)) || ''
-
-  if (!latCol || !lonCol) {
-    console.log(`  WARN: E-PRTR — could not identify lat/lon columns: ${cols.join(', ')}`)
-    const latCol2 = cols.find(c => c.toLowerCase().includes('lat'))
-    const lonCol2 = cols.find(c => c.toLowerCase().includes('lon'))
-    if (latCol2 && lonCol2) {
-      console.log(`  Trying fuzzy match: lat=${latCol2}, lon=${lonCol2}`)
-      return parseEprtrWithCols(records, latCol2, lonCol2, nameCol || cols.find(c => c.toLowerCase().includes('name')) || '', naceCol || cols.find(c => c.toLowerCase().includes('nace') || c.toLowerCase().includes('activity')) || '')
-    }
-    console.log('  WARN: Cannot parse E-PRTR — skipping')
-    return []
-  }
-
-  console.log(`  E-PRTR columns mapped: lat=${latCol}, lon=${lonCol}, name=${nameCol}, nace=${naceCol}`)
-  return parseEprtrWithCols(records, latCol, lonCol, nameCol, naceCol)
+// Row shape from EPRTR_SQL_QUERY — the columns are fixed by that query, not sniffed,
+// since we own the query and DISCODATA's schema is documented (unlike a CSV export of
+// unknown provenance, there's nothing to guess here).
+interface EprtrRow {
+  facilityName: string | null
+  EPRTRAnnexIMainActivity: string | null
+  x_4326: number | null
+  y_4326: number | null
 }
 
-function parseEprtrWithCols(records: Record<string, string>[], latCol: string, lonCol: string, nameCol: string, naceCol: string): Facility[] {
+async function parseEprtr(jsonText: string): Promise<Facility[]> {
+  const parsed = JSON.parse(jsonText) as { results: EprtrRow[] }
+  const rows = parsed.results
+  console.log(`  E-PRTR: ${rows.length} raw records from DISCODATA`)
+
   const facilities: Facility[] = []
+  let skippedNoCoords = 0, skippedNoActivity = 0
+  for (const r of rows) {
+    const lat = r.y_4326
+    const lon = r.x_4326
+    if (lat == null || lon == null || Math.abs(lat) > 90 || Math.abs(lon) > 180) { skippedNoCoords++; continue }
 
-  for (const r of records) {
-    const lat = parseFloat((r[latCol] || '').replace(',', '.'))
-    const lon = parseFloat((r[lonCol] || '').replace(',', '.'))
-    if (!lat || !lon || isNaN(lat) || isNaN(lon)) continue
-    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) continue
+    // Annex I activity code (e.g. "5(a)", "4(a)(viii)") → sector 1-9 → NACE.
+    const annexSector = (r.EPRTRAnnexIMainActivity ?? '').match(/^\s*(\d{1,2})\s*[.(]/)
+    const nace = annexSector ? (EPRTR_ANNEX_SECTOR_TO_NACE[parseInt(annexSector[1], 10)] ?? '') : ''
+    if (!nace) { skippedNoActivity++; continue }
 
-    const name = (r[nameCol] || '').trim()
-    const raw = (r[naceCol] || '').trim()
-    let nace: string
-
-    // E-PRTR Annex I activity code (e.g. "5(a)", "4(a)(viii)") → map sector 1-9 to NACE.
-    // The legacy industry.eea endpoint gave a literal NACE; DISCODATA gives the Annex code.
-    const annexSector = raw.match(/^\s*(\d{1,2})\s*[.(]/)
-    if (annexSector && raw.includes('(')) {
-      nace = EPRTR_ANNEX_SECTOR_TO_NACE[parseInt(annexSector[1], 10)] || ''
-      if (!nace) continue
-    } else {
-      nace = raw.replace(/^[A-Z]\s*/i, '').replace(/^NACE\s*/i, '').replace(/\./g, '').replace(/[^0-9]/g, '')
-      if (!nace || nace.length < 2) continue
-      while (nace.length < 6) nace += '0'
-      if (nace.length > 6) nace = nace.substring(0, 6)
-    }
-
-    const div = parseInt(nace.substring(0, 2), 10)
-    if (div < 1 || div > 99) continue
-
-    facilities.push({ name: name || 'E-PRTR Facility', lat, lon, nace, source: 'eprtr' })
+    facilities.push({ name: r.facilityName?.trim() || 'E-PRTR Facility', lat, lon, nace, source: 'eprtr' })
   }
 
-  console.log(`  E-PRTR: ${facilities.length} facilities with valid coordinates + NACE`)
+  console.log(`  E-PRTR: ${facilities.length} facilities with valid coordinates + Annex I activity (skipped ${skippedNoCoords} no-coords, ${skippedNoActivity} no-activity-code)`)
   return facilities
 }
 
@@ -692,16 +674,16 @@ async function main() {
   const gppdCsv = await downloadGppd()
 
   console.log('\n--- Step 2: Download E-PRTR ---')
-  const eprtrCsv = await downloadEprtr()
+  const eprtrJson = await downloadEprtr()
 
   // ── Parse phase ──
   console.log('\n--- Step 3: Parse GPPD ---')
   const gppdFacilities = await parseGppd(gppdCsv)
 
   let eprtrFacilities: Facility[] = []
-  if (eprtrCsv) {
+  if (eprtrJson) {
     console.log('\n--- Step 4: Parse E-PRTR ---')
-    eprtrFacilities = await parseEprtr(eprtrCsv)
+    eprtrFacilities = await parseEprtr(eprtrJson)
   }
 
   console.log('\n--- Step 4b: Download + parse GEM heavy-industry trackers ---')
@@ -725,9 +707,10 @@ async function main() {
 
   // A source participates FULLY or not at all: its old stamps are reset AND its
   // facilities stamp only when it parsed a big-enough share of its normal size
-  // this run (GPPD ~35 k, E-PRTR ~85 k, GEM 900-4 000 — floors catch a corrupt/
-  // truncated download, /gg Codex). A sub-floor source stamping WITHOUT its reset
-  // would leave a mixed state: fresh stamps on top of its stale carpet (/gg Gemini).
+  // this run (GPPD ~35 k, E-PRTR ~50 k post-filter from ~60 k raw DISCODATA rows,
+  // GEM 900-4 000 — floors catch a corrupt/truncated download, /gg Codex). A
+  // sub-floor source stamping WITHOUT its reset would leave a mixed state: fresh
+  // stamps on top of its stale carpet (/gg Gemini).
   const resetIds = new Set<number>()
   if (gppdFacilities.length >= 1000) resetIds.add(GPPD_DATASET_ID)
   if (eprtrFacilities.length >= 10_000) resetIds.add(EPRTR_DATASET_ID)

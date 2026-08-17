@@ -32,7 +32,12 @@ const CACHE_FILE = resolve(CACHE_DIR, 'ruian-buildings.json')
 const enrichOnly = process.argv.includes('--enrich-only')
 const forceDownload = process.argv.includes('--force-download')
 
-const ATOM_URL = 'https://atom.cuzk.cz/RUIAN-S-Z-U/RUIAN-S-Z-U.xml'
+// ČÚZK's INSPIRE Atom index for the "současná stavová data - základní datová
+// sada" (current state, basic dataset) feed — the feed advertised for RUIAN-S-ZA-U
+// by https://atom.cuzk.cz's own getcapabilities.ashx catalog. It lists exactly the
+// files currently live under vdp.cuzk.gov.cz/vymenny_format/soucasna/, so its single
+// "*_ST_UZSZ.xml.zip" entry names the authoritative current publication date.
+const VFR_INDEX_URL = 'https://services.cuzk.cz/atom-index/RUIAN-S-ZA-U/5514/'
 const CONCURRENCY = 20
 
 // RÚIAN ZpusobVyuzitiKod → our building_type mapping
@@ -69,6 +74,31 @@ interface RuianBuilding {
   useCode: number
 }
 
+// ČÚZK republishes "současná" (current) VFR roughly once a month and keeps only
+// the last ~2 months live — anything older 404s. A pinned date therefore rolls
+// off within weeks (it happened: 2026-03-31 died once April/May/June/July
+// published over it). The publication date must be discovered fresh every run,
+// never hardcoded, and the run must fail loudly — never silently reuse a stale
+// date or skip the refresh — if discovery itself fails.
+async function discoverVfrDatePrefix(): Promise<string> {
+  const res = await fetch(VFR_INDEX_URL, { signal: AbortSignal.timeout(30000) }).catch((err: any) => {
+    throw new Error(`RÚIAN VFR publication date discovery failed: GET ${VFR_INDEX_URL} — ${err.message}`)
+  })
+  if (!res.ok) {
+    throw new Error(`RÚIAN VFR publication date discovery failed: GET ${VFR_INDEX_URL} → HTTP ${res.status}`)
+  }
+  const html = await res.text()
+  // The index normally carries exactly one live publication (each href+link-text
+  // pair repeats the same date twice), but take the max rather than the first
+  // match in HTML order — an undocumented page change adding a second, older
+  // entry (e.g. an archive link) must not silently pin last month's date.
+  const dates = new Set([...html.matchAll(/(\d{8})_ST_UZSZ\.xml\.zip/g)].map(m => m[1]))
+  if (dates.size === 0) {
+    throw new Error(`RÚIAN VFR publication date discovery failed: no "*_ST_UZSZ.xml.zip" entry found in ${VFR_INDEX_URL}`)
+  }
+  return [...dates].sort().at(-1)!
+}
+
 // ── Step 1: Download RÚIAN per municipality ──
 
 async function downloadRuian(): Promise<RuianBuilding[]> {
@@ -83,15 +113,21 @@ async function downloadRuian(): Promise<RuianBuilding[]> {
 
   mkdirSync(CACHE_DIR, { recursive: true })
 
+  // Discover today's publication date before touching any dated URL — see
+  // discoverVfrDatePrefix() for why this can't be pinned.
+  console.log(`  Discovering current VFR publication date from ${VFR_INDEX_URL}...`)
+  const DATE_PREFIX = await discoverVfrDatePrefix()
+  console.log(`  VFR publication date: ${DATE_PREFIX}`)
+
   // Get municipality list: download state-level RÚIAN CSV for municipality codes
   console.log('  Getting municipality list...')
 
   // Use WFS GetFeature to get all municipality codes (lightweight query)
   // Alternative: hardcoded list from RÚIAN state VFR (municipality codes don't change often)
   // For now: use the state-level VFR which has Obec list
-  const stateUrl = 'https://vdp.cuzk.gov.cz/vymenny_format/soucasna/20260331_ST_UZSZ.xml.zip'
+  const stateUrl = `https://vdp.cuzk.gov.cz/vymenny_format/soucasna/${DATE_PREFIX}_ST_UZSZ.xml.zip`
   const stateRes = await fetch(stateUrl, { signal: AbortSignal.timeout(120000) })
-  if (!stateRes.ok) throw new Error(`State VFR download failed: ${stateRes.status}`)
+  if (!stateRes.ok) throw new Error(`State VFR download failed: ${stateRes.status} ${stateUrl}`)
 
   const stateBuf = Buffer.from(await stateRes.arrayBuffer())
   const stateZip = resolve(CACHE_DIR, 'state-vfr.zip')
@@ -108,7 +144,6 @@ async function downloadRuian(): Promise<RuianBuilding[]> {
     municipalityCodes.add(mc[1])
   }
 
-  const DATE_PREFIX = '20260331' // VFR publication date
   const municipalities = [...municipalityCodes].map(code => ({
     url: `https://vdp.cuzk.gov.cz/vymenny_format/soucasna/${DATE_PREFIX}_OB_${code}_UZSZ.xml.zip`,
     code,
