@@ -149,78 +149,91 @@
     "gpu-line": {
       "group": "line",
       "gpu": true,
+      "artifact_family": "surface-production",
       "binary": "gpu-surface",
       "flags": "--stream --layers road,rail --zoom {ZOOM} --output {OUTPUT}"
     },
     "cpu-line": {
       "group": "line",
       "gpu": false,
+      "artifact_family": "surface-cpu-production",
       "binary": "build-heatmap-surface",
       "flags": "--stream --source ground --exclude industrial --exclude building --exclude aircraft-ground --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}"
     },
     "cpu-rest": {
       "group": "rest",
       "gpu": false,
+      "artifact_family": "surface-cpu-production",
       "binary": "build-heatmap-surface",
       "flags": "--stream --source ground --exclude road --exclude rail --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}"
     },
     "cpu-industrial": {
       "group": "industrial",
       "gpu": false,
+      "artifact_family": "surface-cpu-production",
       "binary": "build-heatmap-surface",
       "flags": "--stream --source ground --exclude road --exclude rail --exclude building --exclude aircraft-ground --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}"
     },
     "cpu-ground": {
       "group": "ground",
       "gpu": false,
+      "artifact_family": "surface-cpu-production",
       "binary": "build-heatmap-surface",
       "flags": "--stream --source ground --exclude road --exclude rail --exclude industrial --exclude building --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}"
     },
     "cpu-building": {
       "group": "building",
       "gpu": false,
+      "artifact_family": "surface-cpu-production",
       "binary": "build-heatmap-surface",
       "flags": "--stream --source ground --exclude road --exclude rail --exclude industrial --exclude aircraft-ground --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}"
     },
     "cpu-road": {
       "group": "road",
       "gpu": false,
+      "artifact_family": "surface-cpu-production",
       "binary": "build-heatmap-surface",
       "flags": "--stream --source ground --exclude rail --exclude industrial --exclude building --exclude aircraft-ground --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}"
     },
     "cpu-rail": {
       "group": "rail",
       "gpu": false,
+      "artifact_family": "surface-cpu-production",
       "binary": "build-heatmap-surface",
       "flags": "--stream --source ground --exclude road --exclude industrial --exclude building --exclude aircraft-ground --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}"
     },
     "cpu-cruise": {
       "group": "cruise",
       "gpu": false,
+      "artifact_family": "aircraft-cpu-production",
       "binary": "build-heatmap-aircraft",
       "flags": "--stream --source cruise --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}/aircraft-cruise"
     },
     "gpu-airborne": {
       "group": "airborne",
       "gpu": true,
+      "artifact_family": "airborne-production",
       "binary": "gpu-airborne",
       "flags": "--stream --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}/aircraft-airborne"
     },
     "cpu-airborne": {
       "group": "airborne",
       "gpu": false,
+      "artifact_family": "aircraft-cpu-production",
       "binary": "build-heatmap-aircraft",
       "flags": "--stream --source airborne --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}/aircraft-airborne"
     },
     "gpu-road": {
       "group": "road",
       "gpu": true,
+      "artifact_family": "surface-production",
       "binary": "gpu-surface",
       "flags": "--stream --layers road --zoom {ZOOM} --output {OUTPUT}"
     },
     "gpu-rail": {
       "group": "rail",
       "gpu": true,
+      "artifact_family": "surface-production",
       "binary": "gpu-surface",
       "flags": "--stream --layers rail --zoom {ZOOM} --output {OUTPUT}"
     }

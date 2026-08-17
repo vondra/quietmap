@@ -47,6 +47,55 @@
         }
       },
       "selected_role": "surface-stock-v1"
+    },
+    "surface-cpu-production": {
+      "kind": "cpu",
+      "roles": {
+        "surface-cpu-stock-v1": {
+          "binary": "build-heatmap-surface",
+          "cargo_features": [],
+          "manifest": "engine/tile-painter/Cargo.toml",
+          "model_role": "stock",
+          "package": "tile-painter"
+        }
+      },
+      "selected_role": "surface-cpu-stock-v1"
+    },
+    "aircraft-cpu-production": {
+      "kind": "cpu",
+      "roles": {
+        "aircraft-cpu-stock-v1": {
+          "binary": "build-heatmap-aircraft",
+          "cargo_features": [],
+          "manifest": "engine/tile-painter/Cargo.toml",
+          "model_role": "stock",
+          "package": "tile-painter"
+        }
+      },
+      "selected_role": "aircraft-cpu-stock-v1"
+    },
+    "popup-production": {
+      "kind": "addon",
+      "roles": {
+        "popup-stock-v1": {
+          "binary": "libsource_reader.so",
+          "cargo_features": [
+            "node"
+          ],
+          "manifest": "engine/source-reader/Cargo.toml",
+          "model_role": "stock",
+          "package": "source-reader"
+        }
+      },
+      "selected_role": "popup-stock-v1"
+    }
+  },
+  "non_worker_cohorts": {
+    "cpu-utility-stock-v1": {
+      "cargo_features": [],
+      "manifest": "engine/tile-painter/Cargo.toml",
+      "package": "tile-painter",
+      "worker_launchable": false
     }
   },
   "schema": 1

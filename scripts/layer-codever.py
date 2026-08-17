@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Per-layer code_ver for the world build's incremental-regen stamps.
 code_ver[L] = a CONTENT set-hash over SHARED ∪ L's EXCLUSIVE files, where SHARED = the
-heatmap COMPUTE closure (the 4 compute crates' production *.rs/*.cu/Cargo.toml + the global
-build config .cargo/config.toml / rust-toolchain) MINUS every layer's exclusive files. Cargo.lock is
+heatmap COMPUTE closure (the 4 compute crates' production *.rs/*.cu/*.cuh/Cargo.toml + the global
+build config .cargo/config.toml / rust-toolchain and the selected model-role spec) MINUS every
+layer's exclusive files. Cargo.lock is
 EXCLUDED — it is host/feature-dependent (a gpu build adds CUDA deps), so hashing it cv-gated every
 gpu-line box off the cpu-only planner's cv (see closure_files). A content hash,
 NOT a max-mtime: a backdated git checkout or an rsync -a that preserves an old mtime still flips it
@@ -27,7 +28,11 @@ EXCLUDE_BINS = {
     "tile_store_fsck.rs",
 }
 # Global build inputs OUTSIDE the crates that still change produced tiles (e.g. rustflags=target-cpu).
-GLOBAL_BUILD = (".cargo/config.toml", ".cargo/config", "rust-toolchain.toml", "rust-toolchain")
+GLOBAL_BUILD = (
+    ".cargo/config.toml", ".cargo/config", "rust-toolchain.toml", "rust-toolchain",
+    "scripts/model-role-spec.json",
+)
+REQUIRED_GLOBAL_BUILD = ("scripts/model-role-spec.json",)
 
 # The layer→exclusive-source partition (paths relative to engine/). The SINGLE source of truth for which
 # files are a layer's own loader/compute/emission — everything else in the closure is SHARED (over-
@@ -81,7 +86,7 @@ def closure_files(engine):
                 # GPU boxes could never build. The recipe (source) is what changes output; a dep pin is
                 # captured by the crates' Cargo.toml + the source that uses it. So hash *.rs/*.cu + Cargo.toml
                 # only. (If a silent within-range dep bump ever needs to re-stale, bump a source file.)
-                if fn.endswith((".rs", ".cu")) or fn == "Cargo.toml":
+                if fn.endswith((".rs", ".cu", ".cuh")) or fn == "Cargo.toml":
                     out.add(os.path.join(dp, fn))
     repo = os.path.dirname(os.path.abspath(engine))
     for g in GLOBAL_BUILD:
@@ -92,12 +97,12 @@ def closure_files(engine):
 
 
 def expand(engine, spec):
-    """A spec is a file or a dir (recurse over its .rs/.cu); paths relative to engine/. A missing
+    """A spec is a file or a dir (recurse over its .rs/.cu/.cuh); paths relative to engine/. A missing
     path is returned as-is so --check can flag it (a stale mapping after a rename)."""
     p = os.path.join(engine, spec)
     if os.path.isdir(p):
         return {os.path.join(dp, fn) for dp, _, fns in os.walk(p)
-                for fn in fns if fn.endswith((".rs", ".cu"))}
+                for fn in fns if fn.endswith((".rs", ".cu", ".cuh"))}
     return {p}
 
 
@@ -145,6 +150,12 @@ def main():
     if check:
         ok = True
         seen = {}
+        repo = os.path.dirname(os.path.abspath(engine))
+        global_paths = {os.path.join(repo, relative): relative for relative in GLOBAL_BUILD}
+        for relative in REQUIRED_GLOBAL_BUILD:
+            path = os.path.join(repo, relative)
+            if not os.path.exists(path):
+                print(f"MISSING global build input {relative}", file=sys.stderr); ok = False
         for L, fs in excl.items():
             for f in fs:
                 if not os.path.exists(f):
@@ -153,6 +164,9 @@ def main():
                     print(f"OUT-OF-CLOSURE exclusive {f} (layer {L})", file=sys.stderr); ok = False
                 if f in seen and seen[f] != L:
                     print(f"DUPLICATE {f}: layers {seen[f]} and {L}", file=sys.stderr); ok = False
+                absolute = os.path.abspath(f)
+                if absolute in global_paths:
+                    print(f"GLOBAL input classified exclusive: {global_paths[absolute]} (layer {L})", file=sys.stderr); ok = False
                 seen[f] = L
         sys.exit(0 if ok else 1)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate GPU model roles and their immutable artifact receipts."""
+"""Validate model roles, worker-family bindings, and immutable artifacts."""
 
 from __future__ import annotations
 
@@ -8,7 +8,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tarfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -71,6 +74,9 @@ GENERATED_DEFINE_NAMES = frozenset(
 ROLE_SHAPES = {
     "gpu-airborne": {
         "family": "airborne-production",
+        "kind": "gpu",
+        "manifest": "engine/noise-gpu/Cargo.toml",
+        "package": "noise-gpu",
         "ptx": ["airborne.ptx"],
         "entries": [
             "airborne_classify_count",
@@ -81,10 +87,54 @@ ROLE_SHAPES = {
     },
     "gpu-surface": {
         "family": "surface-production",
+        "kind": "gpu",
+        "manifest": "engine/noise-gpu/Cargo.toml",
+        "package": "noise-gpu",
         "ptx": ["scatter.ptx"],
         "entries": ["line_binned_fused"],
     },
+    "build-heatmap-surface": {
+        "family": "surface-cpu-production",
+        "kind": "cpu",
+        "manifest": "engine/tile-painter/Cargo.toml",
+        "package": "tile-painter",
+        "ptx": [],
+        "entries": [],
+    },
+    "build-heatmap-aircraft": {
+        "family": "aircraft-cpu-production",
+        "kind": "cpu",
+        "manifest": "engine/tile-painter/Cargo.toml",
+        "package": "tile-painter",
+        "ptx": [],
+        "entries": [],
+    },
+    "libsource_reader.so": {
+        "family": "popup-production",
+        "kind": "addon",
+        "manifest": "engine/source-reader/Cargo.toml",
+        "package": "source-reader",
+        "ptx": [],
+        "entries": [],
+    },
 }
+
+REQUIRED_FAMILIES = frozenset(shape["family"] for shape in ROLE_SHAPES.values())
+LINE_ROLE_FAMILIES = (
+    "surface-production",
+    "surface-cpu-production",
+    "popup-production",
+)
+MODEL_SOURCE_DIRS = (
+    "engine/noise-compute",
+    "engine/noise-gpu",
+    "engine/source-reader",
+    "engine/tile-painter",
+)
+MODEL_SOURCE_GLOBALS = (
+    ".cargo/config.toml",
+    "rust-toolchain.toml",
+)
 
 
 class ContractError(ValueError):
@@ -101,6 +151,65 @@ def sha256_file(path: Path) -> str:
 
 def file_record(path: Path) -> dict[str, int | str]:
     return {"bytes": path.stat().st_size, "sha256": sha256_file(path)}
+
+
+def git_archive_commit(archive: Path) -> str:
+    with archive.open("rb") as source:
+        result = subprocess.run(
+            ["git", "get-tar-commit-id"],
+            stdin=source,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    if result.returncode != 0 or not HEX40.fullmatch(result.stdout.strip()):
+        raise ContractError("source archive has no exact Git commit identity")
+    return result.stdout.strip()
+
+
+def extract_git_archive(archive: Path, destination: Path) -> None:
+    seen: set[str] = set()
+    with tarfile.open(archive, mode="r:") as source:
+        for member in source.getmembers():
+            path = PurePosixPath(member.name)
+            if (
+                path.is_absolute()
+                or not path.parts
+                or ".." in path.parts
+                or "." in path.parts
+                or "\n" in member.name
+                or "\r" in member.name
+                or "\\" in member.name
+            ):
+                raise ContractError(f"source archive contains unsafe path {member.name!r}")
+            relative = path.as_posix().rstrip("/")
+            if relative in seen:
+                raise ContractError(f"source archive contains duplicate path {relative}")
+            seen.add(relative)
+            target = destination.joinpath(*path.parts)
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+            elif member.isfile():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                extracted = source.extractfile(member)
+                if extracted is None:
+                    raise ContractError(f"cannot read archived file {relative}")
+                with target.open("xb") as output:
+                    shutil.copyfileobj(extracted, output)
+                target.chmod(member.mode & 0o777)
+            else:
+                raise ContractError(f"source archive contains non-file entry {relative}")
+
+
+def source_manifest(root: Path) -> str:
+    lines: list[str] = []
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+        if path.is_symlink():
+            raise ContractError(f"extracted source contains symlink {path.relative_to(root)}")
+        if path.is_file():
+            relative = path.relative_to(root).as_posix()
+            lines.append(f"{sha256_file(path)}  {relative}")
+    return "\n".join(lines) + "\n"
 
 
 def parse_ptx(ptx_bytes: bytes, label: str) -> tuple[str, list[str]]:
@@ -169,7 +278,11 @@ def load_and_validate_spec(path: Path) -> dict[str, Any]:
         raise ContractError(f"cannot read model-role spec: {error}") from error
     if not isinstance(spec, dict):
         raise ContractError("model-role spec must be an object")
-    _exact_keys(spec, {"schema", "authority", "families"}, "spec")
+    _exact_keys(
+        spec,
+        {"schema", "authority", "families", "non_worker_cohorts"},
+        "spec",
+    )
     if spec["schema"] != 1:
         raise ContractError("model-role spec schema must be 1")
 
@@ -181,19 +294,16 @@ def load_and_validate_spec(path: Path) -> dict[str, Any]:
         raise ContractError("model-role spec names the wrong integration design")
 
     families = spec["families"]
-    if not isinstance(families, dict) or set(families) != {
-        "airborne-production",
-        "surface-production",
-    }:
-        raise ContractError("the GPU role spec must contain exactly both production families")
+    if not isinstance(families, dict) or set(families) != REQUIRED_FAMILIES:
+        raise ContractError("model-role spec has the wrong production-family set")
 
     seen_roles: set[str] = set()
     for family_name, family in families.items():
         if not IDENTIFIER.fullmatch(family_name) or not isinstance(family, dict):
             raise ContractError(f"invalid family {family_name!r}")
         _exact_keys(family, {"kind", "selected_role", "roles"}, family_name)
-        if family["kind"] != "gpu":
-            raise ContractError(f"{family_name}.kind must be gpu")
+        if family["kind"] not in {"gpu", "cpu", "addon"}:
+            raise ContractError(f"{family_name}.kind is invalid")
         roles = family["roles"]
         if not isinstance(roles, dict) or not roles:
             raise ContractError(f"{family_name}.roles must be a non-empty object")
@@ -213,31 +323,37 @@ def load_and_validate_spec(path: Path) -> dict[str, Any]:
                 "manifest",
                 "model_role",
                 "package",
-                "ptx",
-                "required_ptx_entries",
             }
+            if family["kind"] == "gpu":
+                required_keys |= {"ptx", "required_ptx_entries"}
             optional_keys = {"selection_epoch"}
             if not required_keys <= set(role) or not set(role) <= required_keys | optional_keys:
                 raise ContractError(f"role {role_name} has missing or unexpected fields")
-            if role["package"] != "noise-gpu":
-                raise ContractError(f"role {role_name} must build package noise-gpu")
-            if _safe_relative_path(role["manifest"], f"{role_name}.manifest") != (
-                "engine/noise-gpu/Cargo.toml"
-            ):
-                raise ContractError(f"role {role_name} names the wrong Cargo manifest")
-
             binary = role["binary"]
             shape = ROLE_SHAPES.get(binary)
-            if shape is None or shape["family"] != family_name:
+            if (
+                shape is None
+                or shape["family"] != family_name
+                or shape["kind"] != family["kind"]
+            ):
                 raise ContractError(f"role {role_name} binary does not belong to {family_name}")
-            if role["ptx"] != shape["ptx"]:
+            if role["package"] != shape["package"]:
+                raise ContractError(f"role {role_name} names the wrong Cargo package")
+            if _safe_relative_path(role["manifest"], f"{role_name}.manifest") != shape["manifest"]:
+                raise ContractError(f"role {role_name} names the wrong Cargo manifest")
+            if role.get("ptx", []) != shape["ptx"]:
                 raise ContractError(f"role {role_name} has the wrong PTX set")
-            if role["required_ptx_entries"] != shape["entries"]:
+            if role.get("required_ptx_entries", []) != shape["entries"]:
                 raise ContractError(f"role {role_name} has the wrong PTX entry contract")
 
             model_role = role["model_role"]
             if model_role == "stock":
-                if role["cargo_features"] != ["gpu"] or "selection_epoch" in role:
+                expected_features = {
+                    "gpu": ["gpu"],
+                    "cpu": [],
+                    "addon": ["node"],
+                }[family["kind"]]
+                if role["cargo_features"] != expected_features or "selection_epoch" in role:
                     raise ContractError(f"stock role {role_name} has non-stock features or epoch")
                 if not role_name.endswith("-stock-v1"):
                     raise ContractError(f"stock role {role_name} lacks its versioned stock suffix")
@@ -247,6 +363,23 @@ def load_and_validate_spec(path: Path) -> dict[str, Any]:
                 )
             else:
                 raise ContractError(f"role {role_name} has unknown model_role")
+
+    cohorts = spec["non_worker_cohorts"]
+    if not isinstance(cohorts, dict) or set(cohorts) != {"cpu-utility-stock-v1"}:
+        raise ContractError("model-role spec has the wrong non-worker cohort set")
+    utility = cohorts["cpu-utility-stock-v1"]
+    _exact_keys(
+        utility,
+        {"cargo_features", "manifest", "package", "worker_launchable"},
+        "cpu-utility-stock-v1",
+    )
+    if utility != {
+        "cargo_features": [],
+        "manifest": "engine/tile-painter/Cargo.toml",
+        "package": "tile-painter",
+        "worker_launchable": False,
+    }:
+        raise ContractError("cpu-utility-stock-v1 has an invalid build contract")
     return spec
 
 
@@ -262,6 +395,123 @@ def resolve_role(spec: dict[str, Any], family_name: str, role_name: str) -> dict
         "role": role_name,
         "selected": role_name == family["selected_role"],
         **role,
+    }
+
+
+def selected_role(spec: dict[str, Any], family_name: str) -> dict[str, Any]:
+    family = spec["families"].get(family_name)
+    if family is None:
+        raise ContractError(f"unknown artifact family {family_name!r}")
+    return resolve_role(spec, family_name, family["selected_role"])
+
+
+def model_source_recipe_sha256(product_root: Path) -> str:
+    """Hash the architecture-independent source/recipe closure of the line model.
+
+    This intentionally over-invalidates across the four model crates. Native binaries and PTX do
+    not enter this digest: their exact hashes remain artifact-cohort evidence.
+    """
+    records: list[tuple[str, str]] = []
+    for relative_root in MODEL_SOURCE_DIRS:
+        root = product_root / relative_root
+        if not root.is_dir():
+            raise ContractError(f"model source directory is absent: {relative_root}")
+        for path in sorted(root.rglob("*")):
+            relative = path.relative_to(product_root).as_posix()
+            if path.is_symlink():
+                raise ContractError(f"model source closure contains a symlink: {relative}")
+            relative_parts = path.relative_to(product_root).parts
+            if not path.is_file() or "target" in relative_parts or "tests" in relative_parts:
+                continue
+            if path.suffix not in {".rs", ".cu", ".cuh"} and path.name != "Cargo.toml":
+                continue
+            records.append((relative, sha256_file(path)))
+    for relative in MODEL_SOURCE_GLOBALS:
+        path = product_root / relative
+        if not path.is_file() or path.is_symlink():
+            raise ContractError(f"model build input is absent or unsafe: {relative}")
+        records.append((relative, sha256_file(path)))
+    encoded = "".join(f"{digest}  {relative}\n" for relative, digest in sorted(records)).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def output_abi_version(product_root: Path) -> int:
+    wire = product_root / "engine/tile-painter/src/wire_hm3.rs"
+    match = re.search(r"(?m)^pub const VERSION: u8 = ([0-9]+);$", wire.read_text(encoding="utf-8"))
+    if match is None:
+        raise ContractError("cannot resolve the HM3 output ABI version")
+    return int(match.group(1))
+
+
+def line_model_role_sha256(spec_path: Path, spec: dict[str, Any]) -> tuple[str, str, int]:
+    """Architecture-independent semantic digest of the selected line-model tuple."""
+    product_root = spec_path.parent.parent
+    source_recipe = model_source_recipe_sha256(product_root)
+    abi_version = output_abi_version(product_root)
+    selected = []
+    for family_name in LINE_ROLE_FAMILIES:
+        role = selected_role(spec, family_name)
+        selected.append(
+            {
+                "family": family_name,
+                "model_role": role["model_role"],
+                "role": role["role"],
+                "selection_epoch": role.get("selection_epoch"),
+            }
+        )
+    payload = {
+        "model_source_recipe_sha256": source_recipe,
+        "numerical_selection_record_sha256": None,
+        "output_abi_version": abi_version,
+        "role_spec_sha256": sha256_file(spec_path),
+        "schema": 1,
+        "selected_line_roles": selected,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest(), source_recipe, abi_version
+
+
+def deployment_contract(spec_path: Path, layer_spec_path: Path) -> dict[str, Any]:
+    spec_path = spec_path.resolve(strict=True)
+    layer_spec_path = layer_spec_path.resolve(strict=True)
+    spec = load_and_validate_spec(spec_path)
+    try:
+        layer_spec = json.loads(layer_spec_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ContractError(f"cannot read layer spec: {error}") from error
+    workers = layer_spec.get("worker_types") if isinstance(layer_spec, dict) else None
+    if not isinstance(workers, dict) or not workers:
+        raise ContractError("layer spec has no worker_types object")
+    resolved_workers: dict[str, dict[str, Any]] = {}
+    for worker_name, worker in workers.items():
+        if not IDENTIFIER.fullmatch(worker_name) or not isinstance(worker, dict):
+            raise ContractError(f"invalid layer-spec worker {worker_name!r}")
+        family_name = worker.get("artifact_family")
+        if not isinstance(family_name, str) or not IDENTIFIER.fullmatch(family_name):
+            raise ContractError(f"worker {worker_name} has no valid artifact_family")
+        role = selected_role(spec, family_name)
+        if worker.get("binary") != role["binary"]:
+            raise ContractError(
+                f"worker {worker_name} binary disagrees with selected {family_name} role"
+            )
+        if bool(worker.get("gpu")) != (spec["families"][family_name]["kind"] == "gpu"):
+            raise ContractError(f"worker {worker_name} GPU kind disagrees with {family_name}")
+        resolved_workers[worker_name] = {
+            "artifact_family": family_name,
+            "binary": role["binary"],
+            "model_role": role["model_role"],
+            "resolved_role": role["role"],
+            "selection_epoch": role.get("selection_epoch"),
+        }
+    line_digest, source_recipe, abi_version = line_model_role_sha256(spec_path, spec)
+    return {
+        "line_model_role_sha256": line_digest,
+        "model_source_recipe_sha256": source_recipe,
+        "numerical_selection_record_sha256": None,
+        "output_abi_version": abi_version,
+        "role_spec_sha256": sha256_file(spec_path),
+        "schema": 1,
+        "workers": resolved_workers,
     }
 
 
@@ -382,6 +632,8 @@ def verify_artifact(root: Path, expected_role_spec: Path) -> dict[str, Any]:
         if source_files.get(relative) != expected:
             raise ContractError(f"source manifest disagrees with receipt input {relative}")
     resolved = resolve_role(spec, receipt.get("family", ""), receipt.get("role", ""))
+    if spec["families"][resolved["family"]]["kind"] != "gpu":
+        raise ContractError("GPU artifact receipt names a non-GPU role")
     for key in ("binary", "cargo_features", "model_role", "package"):
         if receipt.get(key) != resolved[key]:
             raise ContractError(f"artifact receipt {key} disagrees with role spec")
@@ -556,6 +808,196 @@ def verify_artifact(root: Path, expected_role_spec: Path) -> dict[str, Any]:
     return receipt
 
 
+def verify_rust_artifact(root: Path, expected_role_spec: Path) -> dict[str, Any]:
+    """Replay one CPU worker or popup role built from an immutable archive."""
+    root = root.resolve(strict=True)
+    records = _read_sha256sums(root)
+    actual_files = {
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_file() and path != root / "SHA256SUMS"
+    }
+    if any(path.is_symlink() for path in root.rglob("*")) or set(records) != actual_files:
+        raise ContractError("Rust role artifact file set differs or contains a symlink")
+    for relative, expected in records.items():
+        if sha256_file(root / relative) != expected:
+            raise ContractError(f"Rust role artifact hash mismatch: {relative}")
+    try:
+        receipt = json.loads((root / "artifact-receipt.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ContractError(f"cannot read Rust role receipt: {error}") from error
+    _exact_keys(
+        receipt,
+        {
+            "artifact_kind", "binary", "build", "cargo_features", "created_at", "family",
+            "model_role", "package", "payload", "role", "schema", "selected", "source",
+        },
+        "Rust role receipt",
+    )
+    if receipt["schema"] != 1 or receipt["artifact_kind"] != "rust-model-role":
+        raise ContractError("invalid Rust role receipt schema")
+    spec_path = root / "input/model-role-spec.json"
+    spec = load_and_validate_spec(spec_path)
+    expected_role_spec = expected_role_spec.resolve(strict=True)
+    load_and_validate_spec(expected_role_spec)
+    role = resolve_role(spec, receipt["family"], receipt["role"])
+    kind = spec["families"][role["family"]]["kind"]
+    if kind not in {"cpu", "addon"}:
+        raise ContractError("Rust role artifact names a GPU family")
+    for key in ("binary", "cargo_features", "model_role", "package"):
+        if receipt[key] != role[key]:
+            raise ContractError(f"Rust role receipt {key} disagrees with the role spec")
+    if receipt["selected"] is not role["selected"]:
+        raise ContractError("Rust role selected bit disagrees with the role spec")
+    source = receipt["source"]
+    _exact_keys(
+        source,
+        {
+            "archive_sha256", "cargo_config_sha256", "cargo_lock_sha256", "product_commit",
+            "role_spec_sha256", "rust_toolchain_sha256", "source_manifest_sha256",
+        },
+        "Rust role source receipt",
+    )
+    if not HEX40.fullmatch(source.get("product_commit", "")) or any(
+        not HEX64.fullmatch(value) for key, value in source.items() if key != "product_commit"
+    ):
+        raise ContractError("Rust role source identity is incomplete")
+    if source["role_spec_sha256"] != sha256_file(spec_path) or source["role_spec_sha256"] != sha256_file(expected_role_spec):
+        raise ContractError("Rust role spec differs from release admission authority")
+    source_manifest_path = root / "input/source-files.sha256"
+    if source["source_manifest_sha256"] != sha256_file(source_manifest_path):
+        raise ContractError("Rust role source manifest hash mismatch")
+    source_files = _read_hash_manifest(source_manifest_path, "Rust role source manifest")
+    bindings = {
+        ".cargo/config.toml": source["cargo_config_sha256"],
+        f"engine/{role['package']}/Cargo.lock": source["cargo_lock_sha256"],
+        "rust-toolchain.toml": source["rust_toolchain_sha256"],
+        "scripts/build-rust-model-role.py": sha256_file(root / "input/build-rust-model-role.py"),
+        "scripts/gpu_model_role.py": sha256_file(root / "input/gpu_model_role.py"),
+        "scripts/model-role-spec.json": source["role_spec_sha256"],
+    }
+    for relative, expected in bindings.items():
+        if source_files.get(relative) != expected:
+            raise ContractError(f"Rust role source binding differs: {relative}")
+    build = receipt["build"]
+    _exact_keys(
+        build,
+        {
+            "builder_sha256", "cargo_command", "contract_sha256", "environment", "fresh_target",
+            "rust_host", "tool_versions",
+        },
+        "Rust role build receipt",
+    )
+    if build["fresh_target"] is not True or not HEX64.fullmatch(build.get("builder_sha256", "")) \
+            or not HEX64.fullmatch(build.get("contract_sha256", "")):
+        raise ContractError("Rust role build identity is incomplete")
+    if build["builder_sha256"] != sha256_file(root / "input/build-rust-model-role.py") \
+            or build["contract_sha256"] != sha256_file(root / "input/gpu_model_role.py"):
+        raise ContractError("Rust role replay helpers differ from the receipt")
+    expected_command = [
+        "cargo", "build", "--release", "--locked", "--manifest-path", role["manifest"],
+        "--no-default-features",
+    ]
+    if role["cargo_features"]:
+        expected_command += ["--features", ",".join(role["cargo_features"])]
+    expected_command += ["--lib"] if kind == "addon" else ["--bin", role["binary"]]
+    if build["cargo_command"] != expected_command:
+        raise ContractError("Rust role Cargo command differs from the selected role")
+    environment = build["environment"]
+    _exact_keys(
+        environment,
+        {
+            "CARGO_HOME", "CARGO_INCREMENTAL", "CARGO_TARGET_DIR", "HOME", "LC_ALL",
+            "LD_LIBRARY_PATH", "PATH", "RUSTUP_HOME", "TERM",
+        },
+        "Rust role environment",
+    )
+    if environment["CARGO_INCREMENTAL"] != "0" or environment["LC_ALL"] != "C" \
+            or environment["TERM"] != "dumb" or not all(environment.get(key) for key in (
+                "CARGO_HOME", "CARGO_TARGET_DIR", "HOME", "PATH", "RUSTUP_HOME"
+            )):
+        raise ContractError("Rust role environment is incomplete")
+    _exact_keys(build["tool_versions"], {"cargo", "rustc"}, "Rust role tool versions")
+    if not all(isinstance(value, str) and value for value in build["tool_versions"].values()) \
+            or not isinstance(build["rust_host"], str) or not build["rust_host"]:
+        raise ContractError("Rust role toolchain receipt is incomplete")
+    binary = root / role["binary"]
+    if not binary.is_file() or (kind == "cpu" and not os.access(binary, os.X_OK)):
+        raise ContractError("Rust role payload is absent or has the wrong mode")
+    payload = receipt["payload"]
+    if not isinstance(payload, dict) or not payload:
+        raise ContractError("Rust role payload manifest is absent")
+    for relative, expected in payload.items():
+        relative = _safe_relative_path(relative, "Rust role payload path")
+        if not isinstance(expected, dict):
+            raise ContractError(f"invalid Rust role payload record: {relative}")
+        _exact_keys(expected, {"bytes", "sha256"}, f"Rust role payload {relative}")
+        if expected != file_record(root / relative):
+            raise ContractError(f"Rust role payload mismatch: {relative}")
+    if set(payload) != set(records) - {"artifact-receipt.json", "BUILD_TERMINAL"}:
+        raise ContractError("Rust role payload does not cover every pre-terminal file")
+    receipt_sha = sha256_file(root / "artifact-receipt.json")
+    if (root / "BUILD_TERMINAL").read_text(encoding="utf-8").splitlines() != [
+        "RUST_MODEL_ROLE_BUILD=PASS",
+        f"family={receipt['family']}",
+        f"role={receipt['role']}",
+        f"artifact_receipt_sha256={receipt_sha}",
+    ]:
+        raise ContractError("Rust role BUILD_TERMINAL is invalid")
+    return receipt
+
+
+def artifact_set(
+    spec_path: Path,
+    layer_spec_path: Path,
+    artifact_root: Path,
+    families: list[str],
+) -> dict[str, Any]:
+    """Verify selected role artifacts and return their portable launch identity."""
+    contract = deployment_contract(spec_path, layer_spec_path)
+    spec = load_and_validate_spec(spec_path)
+    unique_families = sorted(set(families))
+    if not unique_families or len(unique_families) != len(families):
+        raise ContractError("artifact-set families must be unique and non-empty")
+    artifacts: dict[str, dict[str, Any]] = {}
+    product_commit: str | None = None
+    for family_name in unique_families:
+        role = selected_role(spec, family_name)
+        kind = spec["families"][family_name]["kind"]
+        if kind == "addon":
+            raise ContractError("popup artifacts are not renderer-worker artifacts")
+        root = artifact_root / role["role"]
+        receipt = (
+            verify_artifact(root, spec_path)
+            if kind == "gpu"
+            else verify_rust_artifact(root, spec_path)
+        )
+        current_commit = receipt["source"]["product_commit"]
+        if product_commit is None:
+            product_commit = current_commit
+        elif product_commit != current_commit:
+            raise ContractError("artifact set mixes product commits")
+        artifacts[family_name] = {
+            "artifact_family": family_name,
+            "artifact_manifest_sha256": sha256_file(root / "SHA256SUMS"),
+            "binary": role["binary"],
+            "binary_sha256": sha256_file(root / role["binary"]),
+            "model_role": role["model_role"],
+            "relative_binary_path": f"{role['role']}/{role['binary']}",
+            "resolved_role": role["role"],
+            "selection_epoch": role.get("selection_epoch"),
+        }
+    return {
+        "artifacts": artifacts,
+        "line_model_role_sha256": contract["line_model_role_sha256"],
+        "model_source_recipe_sha256": contract["model_source_recipe_sha256"],
+        "output_abi_version": contract["output_abi_version"],
+        "product_commit": product_commit,
+        "role_spec_sha256": contract["role_spec_sha256"],
+        "schema": 1,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -565,9 +1007,30 @@ def main() -> None:
     resolve.add_argument("spec", type=Path)
     resolve.add_argument("family")
     resolve.add_argument("role")
+    selected = subparsers.add_parser("resolve-selected", help="resolve a family's selected role")
+    selected.add_argument("spec", type=Path)
+    selected.add_argument("family")
+    deployment = subparsers.add_parser(
+        "deployment-contract",
+        help="validate layer-spec artifact families and print selected worker identities",
+    )
+    deployment.add_argument("spec", type=Path)
+    deployment.add_argument("layer_spec", type=Path)
     verify = subparsers.add_parser("verify-artifact", help="replay an artifact receipt")
     verify.add_argument("artifact", type=Path)
     verify.add_argument("--expected-role-spec", required=True, type=Path)
+    verify_rust = subparsers.add_parser(
+        "verify-rust-artifact", help="replay a CPU worker or popup artifact receipt"
+    )
+    verify_rust.add_argument("artifact", type=Path)
+    verify_rust.add_argument("--expected-role-spec", required=True, type=Path)
+    artifact_set_parser = subparsers.add_parser(
+        "artifact-set", help="verify selected renderer artifacts and print launch identities"
+    )
+    artifact_set_parser.add_argument("spec", type=Path)
+    artifact_set_parser.add_argument("layer_spec", type=Path)
+    artifact_set_parser.add_argument("artifact_root", type=Path)
+    artifact_set_parser.add_argument("families", nargs="+")
     args = parser.parse_args()
     try:
         if args.command == "validate":
@@ -576,9 +1039,21 @@ def main() -> None:
         elif args.command == "resolve":
             spec = load_and_validate_spec(args.spec)
             print(json.dumps(resolve_role(spec, args.family, args.role), sort_keys=True))
-        else:
+        elif args.command == "resolve-selected":
+            spec = load_and_validate_spec(args.spec)
+            print(json.dumps(selected_role(spec, args.family), sort_keys=True))
+        elif args.command == "deployment-contract":
+            print(json.dumps(deployment_contract(args.spec, args.layer_spec), sort_keys=True))
+        elif args.command == "verify-artifact":
             receipt = verify_artifact(args.artifact, args.expected_role_spec)
             print(f"GPU_MODEL_ROLE_ARTIFACT=PASS role={receipt['role']}")
+        elif args.command == "verify-rust-artifact":
+            receipt = verify_rust_artifact(args.artifact, args.expected_role_spec)
+            print(f"RUST_MODEL_ROLE_ARTIFACT=PASS role={receipt['role']}")
+        else:
+            print(json.dumps(artifact_set(
+                args.spec, args.layer_spec, args.artifact_root, args.families
+            ), sort_keys=True, separators=(",", ":")))
     except (ContractError, OSError) as error:
         print(f"GPU_MODEL_ROLE=FAIL reason={error}", file=sys.stderr)
         raise SystemExit(1) from error

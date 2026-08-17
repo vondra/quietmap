@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation and fake-toolchain tests for GPU model-role artifacts."""
+"""Mutation and fake-toolchain tests for production model-role artifacts."""
 
 from __future__ import annotations
 
@@ -18,15 +18,19 @@ from pathlib import Path
 from gpu_model_role import (
     EXPERIMENTAL_DEFINE_NAMES,
     ContractError,
+    deployment_contract,
     load_and_validate_spec,
+    model_source_recipe_sha256,
     resolve_role,
     verify_artifact,
+    verify_rust_artifact,
 )
 
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC_PATH = ROOT / "scripts/model-role-spec.json"
 BUILDER = ROOT / "scripts/build-gpu-model-role.py"
+RUST_BUILDER = ROOT / "scripts/build-rust-model-role.py"
 
 
 def sha256(path: Path) -> str:
@@ -88,6 +92,16 @@ class ModelRoleSpecTests(unittest.TestCase):
         self.assertTrue(airborne["selected"])
         self.assertEqual(surface["cargo_features"], ["gpu"])
         self.assertEqual(airborne["cargo_features"], ["gpu"])
+        self.assertEqual(
+            resolve_role(spec, "surface-cpu-production", "surface-cpu-stock-v1")[
+                "binary"
+            ],
+            "build-heatmap-surface",
+        )
+        self.assertEqual(
+            resolve_role(spec, "popup-production", "popup-stock-v1")["cargo_features"],
+            ["node"],
+        )
         self.assertFalse(
             any(
                 role["model_role"] == "h0"
@@ -96,6 +110,68 @@ class ModelRoleSpecTests(unittest.TestCase):
             ),
             "an H0 role requires the still-pending numerical selection record",
         )
+
+    def test_every_layer_worker_resolves_one_selected_artifact_family(self) -> None:
+        contract = deployment_contract(SPEC_PATH, ROOT / "scripts/layer-spec.json")
+        layer_spec = json.loads((ROOT / "scripts/layer-spec.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(contract["workers"]), set(layer_spec["worker_types"]))
+        self.assertRegex(contract["line_model_role_sha256"], r"^[0-9a-f]{64}$")
+        self.assertRegex(contract["model_source_recipe_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(contract["output_abi_version"], 3)
+
+    def test_layer_worker_family_or_binary_mutation_is_rejected(self) -> None:
+        layer_spec = json.loads((ROOT / "scripts/layer-spec.json").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "layer-spec.json"
+            layer_spec["worker_types"]["cpu-road"]["artifact_family"] = "aircraft-cpu-production"
+            path.write_text(json.dumps(layer_spec), encoding="utf-8")
+            with self.assertRaises(ContractError):
+                deployment_contract(SPEC_PATH, path)
+
+    def test_cuda_header_changes_the_shared_model_source_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for directory in (
+                "engine/noise-compute", "engine/noise-gpu/kernels",
+                "engine/source-reader", "engine/tile-painter", ".cargo",
+            ):
+                (root / directory).mkdir(parents=True, exist_ok=True)
+            for crate in ("noise-compute", "noise-gpu", "source-reader", "tile-painter"):
+                (root / f"engine/{crate}/Cargo.toml").write_text(
+                    "[package]\nname='fixture'\n", encoding="utf-8"
+                )
+            header = root / "engine/noise-gpu/kernels/qm_fixture.cuh"
+            header.write_text("#define FIXTURE 1\n", encoding="utf-8")
+            (root / ".cargo/config.toml").write_text("[build]\n", encoding="utf-8")
+            (root / "rust-toolchain.toml").write_text("[toolchain]\n", encoding="utf-8")
+            before = model_source_recipe_sha256(root)
+            header.write_text("#define FIXTURE 2\n", encoding="utf-8")
+            self.assertNotEqual(before, model_source_recipe_sha256(root))
+
+    def test_model_source_digest_ignores_checkout_ancestor_names(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            scratch = Path(temporary)
+            product = scratch / "product"
+            for directory in (
+                "engine/noise-compute", "engine/noise-gpu/kernels",
+                "engine/source-reader", "engine/tile-painter", ".cargo",
+            ):
+                (product / directory).mkdir(parents=True, exist_ok=True)
+            for crate in ("noise-compute", "noise-gpu", "source-reader", "tile-painter"):
+                (product / f"engine/{crate}/Cargo.toml").write_text(
+                    "[package]\nname='fixture'\n", encoding="utf-8"
+                )
+            (product / "engine/noise-gpu/kernels/qm_fixture.cuh").write_text(
+                "#define FIXTURE 1\n", encoding="utf-8"
+            )
+            (product / ".cargo/config.toml").write_text("[build]\n", encoding="utf-8")
+            (product / "rust-toolchain.toml").write_text(
+                "[toolchain]\n", encoding="utf-8"
+            )
+            expected = model_source_recipe_sha256(product)
+            nested = scratch / "tests/target/quietmap"
+            shutil.copytree(product, nested)
+            self.assertEqual(expected, model_source_recipe_sha256(nested))
 
     def test_unknown_family_field_is_rejected(self) -> None:
         self.validate_mutation(lambda spec: spec["families"]["surface-production"].update(foo=1))
@@ -348,6 +424,134 @@ echo 'ptxas info : Function properties for line_binned_fused airborne_classify_c
             output.write(b"tampered")
         with self.assertRaises(ContractError):
             verify_artifact(artifact, SPEC_PATH)
+
+
+class FakeRustArtifactBuildTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.source = self.root / "source"
+        for path in (
+            "scripts",
+            "engine/tile-painter/src",
+            "engine/noise-compute/src",
+            "engine/noise-gpu/src",
+            "engine/source-reader/src",
+            ".cargo",
+        ):
+            (self.source / path).mkdir(parents=True, exist_ok=True)
+        for path in (
+            "scripts/model-role-spec.json",
+            "scripts/build-rust-model-role.py",
+            "scripts/gpu_model_role.py",
+        ):
+            shutil.copyfile(ROOT / path, self.source / path)
+        for crate in ("tile-painter", "noise-compute", "noise-gpu", "source-reader"):
+            (self.source / f"engine/{crate}/Cargo.toml").write_text(
+                f'[package]\nname="{crate}"\nversion="0.0.0"\n', encoding="utf-8"
+            )
+            (self.source / f"engine/{crate}/src/lib.rs").write_text(
+                "//! fake source\n", encoding="utf-8"
+            )
+        (self.source / "engine/tile-painter/Cargo.lock").write_text(
+            "# fake locked source\n", encoding="utf-8"
+        )
+        (self.source / "engine/tile-painter/src/wire_hm3.rs").write_text(
+            "pub const VERSION: u8 = 3;\n", encoding="utf-8"
+        )
+        (self.source / "rust-toolchain.toml").write_text(
+            '[toolchain]\nchannel="1.99.0"\n', encoding="utf-8"
+        )
+        (self.source / ".cargo/config.toml").write_text("[build]\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=self.source, check=True)
+        subprocess.run(["git", "add", "."], cwd=self.source, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=role-test", "-c", "user.email=role-test@example.invalid",
+             "commit", "-qm", "fake source"],
+            cwd=self.source,
+            check=True,
+        )
+        self.commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=self.source, text=True
+        ).strip()
+        self.archive = self.root / "source.tar"
+        with self.archive.open("wb") as output:
+            subprocess.run(
+                ["git", "archive", "--format=tar", self.commit],
+                cwd=self.source,
+                stdout=output,
+                check=True,
+            )
+        self.tools = self.root / "tools"
+        self.tools.mkdir()
+        write_executable(
+            self.tools / "rustc",
+            "#!/bin/sh\necho 'rustc 1.99.0 (fake)'\necho 'host: x86_64-unknown-linux-gnu'\n",
+        )
+        write_executable(
+            self.tools / "cargo",
+            """#!/bin/sh
+set -eu
+if [ "${1:-}" = -vV ]; then echo 'cargo 1.99.0 (fake)'; exit 0; fi
+binary=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --bin ]; then binary=$2; shift 2; else shift; fi
+done
+[ -n "$binary" ]
+mkdir -p "$CARGO_TARGET_DIR/release"
+printf '#!/bin/sh\nexit 0\n' > "$CARGO_TARGET_DIR/release/$binary"
+chmod +x "$CARGO_TARGET_DIR/release/$binary"
+""",
+        )
+        self.artifacts = self.root / "artifacts"
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def command(self) -> list[str]:
+        return [
+            sys.executable, str(RUST_BUILDER),
+            "--source-archive", str(self.archive),
+            "--source-archive-sha256", sha256(self.archive),
+            "--product-commit", self.commit,
+            "--role-spec-sha256", sha256(SPEC_PATH),
+            "--builder-sha256", sha256(RUST_BUILDER),
+            "--contract-sha256", sha256(ROOT / "scripts/gpu_model_role.py"),
+            "--family", "surface-cpu-production",
+            "--role", "surface-cpu-stock-v1",
+            "--artifact-root", str(self.artifacts),
+        ]
+
+    def run_builder(self) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        environment["PATH"] = f"{self.tools}:{environment['PATH']}"
+        return subprocess.run(
+            self.command(), text=True, capture_output=True, env=environment, check=False
+        )
+
+    def test_fake_cpu_role_builds_replays_and_is_immutable(self) -> None:
+        result = self.run_builder()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        artifact = self.artifacts / "surface-cpu-stock-v1"
+        receipt = verify_rust_artifact(artifact, SPEC_PATH)
+        self.assertEqual(receipt["binary"], "build-heatmap-surface")
+        self.assertEqual(receipt["cargo_features"], [])
+        self.assertTrue((artifact / "build-heatmap-surface").is_file())
+        repeated = self.run_builder()
+        self.assertNotEqual(repeated.returncode, 0)
+
+    def test_tampered_cpu_role_payload_is_rejected(self) -> None:
+        result = self.run_builder()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        artifact = self.artifacts / "surface-cpu-stock-v1"
+        with (artifact / "build-heatmap-surface").open("ab") as output:
+            output.write(b"tampered")
+        with self.assertRaises(ContractError):
+            verify_rust_artifact(artifact, SPEC_PATH)
+
+
+class FakeArtifactMutationTests(FakeArtifactBuildTests):
+    """Resealed attacks exercise the GPU artifact verifier after a valid fake build."""
 
     def test_resealed_semantic_role_mutation_is_rejected(self) -> None:
         result = self.run_builder(self.command())
