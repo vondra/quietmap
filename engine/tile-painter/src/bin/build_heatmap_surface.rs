@@ -41,6 +41,9 @@ use tile_painter::region_runner::{
 use tile_painter::surface_region::{
     layer_meta, process_surface_region, Heartbeat, Source, SurfaceCtx, SurfaceStats,
 };
+use tile_painter::surface_stream_scheduler::{
+    SurfaceStreamQueue, SURFACE_STREAM_MAX_REGIONS_PER_CLAIM,
+};
 use tile_painter::worklist::resolve_n_days;
 
 /// Region concurrency when neither `--region-concurrency`/the env knob is set
@@ -115,14 +118,8 @@ struct Args {
     seed_regions: Option<PathBuf>,
 }
 
-/// Shared streaming work queue: (pending Morton-ordered (cell, per-cell stale-layers-request)
-/// pairs, stream-closed flag) under a mutex + a condvar to park idle workers — identical to
-/// gpu-airborne's, so the box agent feeds either. The optional `Vec<String>` is the stdin
-/// line's `layers=` token (paint-pipeline-v4 PR#1 §3) — `None` = build every configured layer.
-type StreamQueue = std::sync::Arc<(
-    std::sync::Mutex<(std::collections::VecDeque<(u64, Option<Vec<String>>)>, bool)>,
-    std::sync::Condvar,
-)>;
+/// One queued CPU-surface region and its optional per-cell layer restriction.
+type StreamRegion = (u64, Option<Vec<String>>);
 
 fn parse_bbox(s: &str) -> Result<[f64; 4], String> {
     let v: Vec<f64> = s
@@ -223,9 +220,8 @@ fn cgroup_mem_max_bytes() -> Option<u64> {
 /// `done <r4hex> <written> <skipped> <ms>` (or `fail <r4hex> <err>`) per cell. n_days +
 /// class_weights resolve ONCE from --seed-regions, so streamed cells inherit the build-wide value.
 fn run_stream(args: &Args, layers: &[Source], halo_m: f64) -> Result<()> {
-    use std::collections::VecDeque;
     use std::io::{BufRead, Write};
-    use std::sync::{Arc, Condvar, Mutex};
+    use std::sync::Arc;
 
     let seed = args.seed_regions.as_ref().context(
         "--stream requires --seed-regions (resolves the build-wide n_days + class_weights)",
@@ -259,38 +255,19 @@ fn run_stream(args: &Args, layers: &[Source], halo_m: f64) -> Result<()> {
     let heartbeat = Heartbeat::new(0, 0); // stream total is unknown; the per-cell `done` IS progress
     let n_workers = region_concurrency(args.region_concurrency, args.zoom, halo_m, batch_n);
     eprintln!(
-        "stream: n_days={n_days}, layers={layers:?}, halo={halo_m:.0}m, {n_workers} worker(s) (≤ that many halos) — reading R4 cells from stdin"
+        "stream: n_days={n_days}, layers={layers:?}, halo={halo_m:.0}m, {n_workers} worker(s) (≤ that many halos), max_regions_per_claim={SURFACE_STREAM_MAX_REGIONS_PER_CLAIM} — reading R4 cells from stdin"
     );
 
-    // Morton-locality streaming pool (identical to gpu-airborne's): warm workers pull a CONTIGUOUS
-    // run off a shared queue the reader fills in arrival (= Morton) order. One shared RealRasters +
-    // n_workers caps the resident halos exactly like the batch path's region_concurrency.
-    const PULL_BATCH: usize = 4;
-    let work: StreamQueue = Arc::new((Mutex::new((VecDeque::new(), false)), Condvar::new()));
+    // One shared RealRasters plus n_workers caps resident halos. A worker releases the queue lock
+    // after one FIFO claim, so a four-cell campaign cannot be monopolised by one private batch.
+    let work: Arc<SurfaceStreamQueue<StreamRegion>> = Arc::new(SurfaceStreamQueue::default());
     std::thread::scope(|scope| {
         for worker_slot in 0..n_workers {
             let work = Arc::clone(&work);
             let ctx = &ctx;
             let heartbeat = &heartbeat;
-            scope.spawn(move || loop {
-                let batch: Vec<(u64, Option<Vec<String>>)> = {
-                    let (lock, cv) = &*work;
-                    let mut g = lock.lock().unwrap();
-                    loop {
-                        if !g.0.is_empty() {
-                            let take = g.0.len().min(PULL_BATCH);
-                            break g.0.drain(..take).collect();
-                        }
-                        if g.1 {
-                            break Vec::new();
-                        }
-                        g = cv.wait(g).unwrap();
-                    }
-                };
-                if batch.is_empty() {
-                    break;
-                }
-                for (r4, req_layers) in batch {
+            scope.spawn(move || {
+                while let Some((r4, req_layers)) = work.claim_one() {
                     announce_stream_cell_started(r4);
                     let t = Instant::now();
                     let mut spans =
@@ -385,19 +362,16 @@ fn run_stream(args: &Args, layers: &[Source], halo_m: f64) -> Result<()> {
             let (hex, req_layers) = split_stream_line(s);
             match u64::from_str_radix(hex, 16) {
                 Ok(r4) => {
-                    let (lock, cv) = &*work;
-                    lock.lock().unwrap().0.push_back((
+                    work.push((
                         r4,
                         req_layers.map(|v| v.into_iter().map(str::to_string).collect()),
-                    ));
-                    cv.notify_one();
+                    ))
+                    .expect("surface stream queue cannot close before stdin EOF");
                 }
                 Err(_) => eprintln!("stream: skip non-hex line: {s}"),
             }
         }
-        let (lock, cv) = &*work;
-        lock.lock().unwrap().1 = true;
-        cv.notify_all();
+        work.close();
     });
     if let Some(line) = noise_compute::propagation::census::report() {
         eprintln!("{line}");
