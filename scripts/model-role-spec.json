@@ -1,0 +1,53 @@
+{
+  "authority": {
+    "integration_design_sha256": "44b606ca8fb8c5fd0b4f81d3e81c103ed0d45f495fa173d4f0760b791c939b1e"
+  },
+  "families": {
+    "airborne-production": {
+      "kind": "gpu",
+      "roles": {
+        "airborne-stock-v1": {
+          "binary": "gpu-airborne",
+          "cargo_features": [
+            "gpu"
+          ],
+          "manifest": "engine/noise-gpu/Cargo.toml",
+          "model_role": "stock",
+          "package": "noise-gpu",
+          "ptx": [
+            "airborne.ptx"
+          ],
+          "required_ptx_entries": [
+            "airborne_classify_count",
+            "airborne_classify_scatter",
+            "airborne_coarse_batched",
+            "airborne_exact_batched"
+          ]
+        }
+      },
+      "selected_role": "airborne-stock-v1"
+    },
+    "surface-production": {
+      "kind": "gpu",
+      "roles": {
+        "surface-stock-v1": {
+          "binary": "gpu-surface",
+          "cargo_features": [
+            "gpu"
+          ],
+          "manifest": "engine/noise-gpu/Cargo.toml",
+          "model_role": "stock",
+          "package": "noise-gpu",
+          "ptx": [
+            "scatter.ptx"
+          ],
+          "required_ptx_entries": [
+            "line_binned_fused"
+          ]
+        }
+      },
+      "selected_role": "surface-stock-v1"
+    }
+  },
+  "schema": 1
+}

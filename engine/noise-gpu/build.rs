@@ -314,6 +314,69 @@ fn main() {
     // `{:e}` is the shortest representation that round-trips to the same f32, and
     // it can never come out looking like an integer (`2f` is not a C literal).
     let fuse_ratio_ln = format!("{fuse_ratio_ln:e}f");
+    // This vector is both the nvcc argument authority and the artifact receipt.
+    // Keeping one ordered value prevents a successful binary from being sealed
+    // against a hand-reconstructed define list that differs from its PTX.
+    let mut nvcc_defines = vec![
+        format!("-DNPD_NC={num_classes}"),
+        format!("-DTPX={tile_px}"),
+        format!("-DBIN_W={bin_w}"),
+        format!("-DBARRIER_ABI_VERSION={barrier_abi_version}"),
+        format!("-DBARRIER_STRIDE={barrier_stride}"),
+        format!("-DSOURCE_SEGMENT_ABI_VERSION={source_segment_abi_version}"),
+        format!("-DSOURCE_SEGMENT_STRIDE={source_segment_stride}"),
+        format!("-DLINE_KERNEL_ARGUMENT_COUNT={line_kernel_argument_count}"),
+        format!("-DSURFACE_META_ABI_VERSION={surface_meta_abi_version}"),
+        format!("-DSURFACE_META_SLOTS={surface_meta_slots}"),
+        format!("-DV2_H0={v2_h0}"),
+        format!("-DOUT_H0_COUNTER_BYTE_OFFSET={out_h0_counter_byte_offset}"),
+        format!("-DOUT_H0_COUNTERS={out_h0_counters}"),
+        format!("-DOUT_SLOTS_H0={out_slots_h0}"),
+        format!("-DPROF_H0_COUNTERS={h0_counters}"),
+        format!("-DPROF_H0_PAIR_DIAGNOSTIC={h0_pair_diagnostic}"),
+        format!("-DH0_PAIR_DIAGNOSTIC_ABI_VERSION={h0_pair_diagnostic_abi_version}"),
+        format!("-DH0_PAIR_DIAGNOSTIC_HEADER_WORDS={h0_pair_diagnostic_header_words}"),
+        format!("-DH0_PAIR_DIAGNOSTIC_NODE_WORDS={h0_pair_diagnostic_node_words}"),
+        format!("-DH0_PAIR_DIAGNOSTIC_RECORD_WORDS={h0_pair_diagnostic_record_words}"),
+        format!("-DH0_PAIR_DIAGNOSTIC_NODE_BASE={h0_pair_diagnostic_node_base}"),
+        format!("-DH0_PAIR_DIAGNOSTIC_RECORD_BASE={h0_pair_diagnostic_record_base}"),
+        format!("-DH0_PAIR_DIAGNOSTIC_MAGIC={h0_pair_diagnostic_magic}ull"),
+        format!("-DV2_H0_NODE_CAP={h0_node_cap}"),
+        format!("-DV2_THETA_MAX_RAD={theta_max_rad}"),
+        format!("-DV2_ROAD_D_FLOOR_M={road_d_floor_m}"),
+        format!("-DV2_RAIL_D_FLOOR_M={rail_d_floor_m}"),
+        format!("-DV2_R_ATM_BASE_M_PER_RAD={r_atm_base_m_per_rad}"),
+        format!("-DV2_A_LIVE_DB={a_live_db}"),
+        format!("-DV2_LINE_MAX_LENGTH_M={line_max_length_m}"),
+        format!("-DM_LAT={metres_per_degree_latitude}"),
+        format!("-DV2_ALPHA_ATM_0={}", alpha_atm[0]),
+        format!("-DV2_ALPHA_ATM_1={}", alpha_atm[1]),
+        format!("-DV2_ALPHA_ATM_2={}", alpha_atm[2]),
+        format!("-DV2_ALPHA_ATM_3={}", alpha_atm[3]),
+        format!("-DV2_ALPHA_ATM_4={}", alpha_atm[4]),
+        format!("-DV2_ALPHA_ATM_5={}", alpha_atm[5]),
+        format!("-DV2_ALPHA_ATM_6={}", alpha_atm[6]),
+        format!("-DV2_ALPHA_ATM_7={}", alpha_atm[7]),
+        format!("-DOBST_META_STRIDE={meta_stride}"),
+        format!("-DFOOT_BOX_STRIDE={foot_box_stride}"),
+        format!("-DARC_DEGENERATE_SPAN={degenerate_span}"),
+        format!("-DARC_CP_EPS={cp_eps}"),
+        format!("-DARC_QUADRATURE_MIN_RAD={arc_quadrature_min}"),
+        format!("-DGROUND_HARD_FLOOR_DB={ground_hard_floor}"),
+        format!("-DGROUND_SOUND_SPEED={ground_sound_speed}"),
+        format!("-DCNOSSOS_GROUND_ALPHA0={ground_alpha0}"),
+        format!("-DCNOSSOS_GROUND_DELTA_ZT_COEFF={ground_delta_zt}"),
+        format!("-DP_FAV={p_fav}"),
+        format!("-DARC_PENUMBRA_FLOOR_M={penumbra_floor}"),
+        format!("-DARC_FUSE_HEIGHT_TOL_M={fuse_height_tol}"),
+        format!("-DARC_FUSE_RANGE_RATIO_LN={fuse_ratio_ln}"),
+    ];
+    nvcc_defines.extend(extra_defines);
+    fs::write(
+        out.join("nvcc-defines.txt"),
+        format!("{}\n", nvcc_defines.join("\n")),
+    )
+    .expect("write exact nvcc define receipt");
     for entry in fs::read_dir("kernels").expect("kernels/ dir") {
         let path = entry.unwrap().path();
         if path.extension().is_some_and(|e| e == "cu") {
@@ -328,64 +391,8 @@ fn main() {
             }
             let ptx = out.join(format!("{stem}.ptx"));
             let status = Command::new("nvcc")
-                .args([
-                    "-ptx",
-                    &format!("-arch={arch}"),
-                    "-O3",
-                    &format!("-DNPD_NC={num_classes}"),
-                    &format!("-DTPX={tile_px}"),
-                    &format!("-DBIN_W={bin_w}"),
-                    &format!("-DBARRIER_ABI_VERSION={barrier_abi_version}"),
-                    &format!("-DBARRIER_STRIDE={barrier_stride}"),
-                    &format!("-DSOURCE_SEGMENT_ABI_VERSION={source_segment_abi_version}"),
-                    &format!("-DSOURCE_SEGMENT_STRIDE={source_segment_stride}"),
-                    &format!("-DLINE_KERNEL_ARGUMENT_COUNT={line_kernel_argument_count}"),
-                    &format!("-DSURFACE_META_ABI_VERSION={surface_meta_abi_version}"),
-                    &format!("-DSURFACE_META_SLOTS={surface_meta_slots}"),
-                    &format!("-DV2_H0={v2_h0}"),
-                    &format!("-DOUT_H0_COUNTER_BYTE_OFFSET={out_h0_counter_byte_offset}"),
-                    &format!("-DOUT_H0_COUNTERS={out_h0_counters}"),
-                    &format!("-DOUT_SLOTS_H0={out_slots_h0}"),
-                    &format!("-DPROF_H0_COUNTERS={h0_counters}"),
-                    &format!("-DPROF_H0_PAIR_DIAGNOSTIC={h0_pair_diagnostic}"),
-                    &format!("-DH0_PAIR_DIAGNOSTIC_ABI_VERSION={h0_pair_diagnostic_abi_version}"),
-                    &format!("-DH0_PAIR_DIAGNOSTIC_HEADER_WORDS={h0_pair_diagnostic_header_words}"),
-                    &format!("-DH0_PAIR_DIAGNOSTIC_NODE_WORDS={h0_pair_diagnostic_node_words}"),
-                    &format!("-DH0_PAIR_DIAGNOSTIC_RECORD_WORDS={h0_pair_diagnostic_record_words}"),
-                    &format!("-DH0_PAIR_DIAGNOSTIC_NODE_BASE={h0_pair_diagnostic_node_base}"),
-                    &format!("-DH0_PAIR_DIAGNOSTIC_RECORD_BASE={h0_pair_diagnostic_record_base}"),
-                    &format!("-DH0_PAIR_DIAGNOSTIC_MAGIC={h0_pair_diagnostic_magic}ull"),
-                    &format!("-DV2_H0_NODE_CAP={h0_node_cap}"),
-                    &format!("-DV2_THETA_MAX_RAD={theta_max_rad}"),
-                    &format!("-DV2_ROAD_D_FLOOR_M={road_d_floor_m}"),
-                    &format!("-DV2_RAIL_D_FLOOR_M={rail_d_floor_m}"),
-                    &format!("-DV2_R_ATM_BASE_M_PER_RAD={r_atm_base_m_per_rad}"),
-                    &format!("-DV2_A_LIVE_DB={a_live_db}"),
-                    &format!("-DV2_LINE_MAX_LENGTH_M={line_max_length_m}"),
-                    &format!("-DM_LAT={metres_per_degree_latitude}"),
-                    &format!("-DV2_ALPHA_ATM_0={}", alpha_atm[0]),
-                    &format!("-DV2_ALPHA_ATM_1={}", alpha_atm[1]),
-                    &format!("-DV2_ALPHA_ATM_2={}", alpha_atm[2]),
-                    &format!("-DV2_ALPHA_ATM_3={}", alpha_atm[3]),
-                    &format!("-DV2_ALPHA_ATM_4={}", alpha_atm[4]),
-                    &format!("-DV2_ALPHA_ATM_5={}", alpha_atm[5]),
-                    &format!("-DV2_ALPHA_ATM_6={}", alpha_atm[6]),
-                    &format!("-DV2_ALPHA_ATM_7={}", alpha_atm[7]),
-                    &format!("-DOBST_META_STRIDE={meta_stride}"),
-                    &format!("-DFOOT_BOX_STRIDE={foot_box_stride}"),
-                    &format!("-DARC_DEGENERATE_SPAN={degenerate_span}"),
-                    &format!("-DARC_CP_EPS={cp_eps}"),
-                    &format!("-DARC_QUADRATURE_MIN_RAD={arc_quadrature_min}"),
-                    &format!("-DGROUND_HARD_FLOOR_DB={ground_hard_floor}"),
-                    &format!("-DGROUND_SOUND_SPEED={ground_sound_speed}"),
-                    &format!("-DCNOSSOS_GROUND_ALPHA0={ground_alpha0}"),
-                    &format!("-DCNOSSOS_GROUND_DELTA_ZT_COEFF={ground_delta_zt}"),
-                    &format!("-DP_FAV={p_fav}"),
-                    &format!("-DARC_PENUMBRA_FLOOR_M={penumbra_floor}"),
-                    &format!("-DARC_FUSE_HEIGHT_TOL_M={fuse_height_tol}"),
-                    &format!("-DARC_FUSE_RANGE_RATIO_LN={fuse_ratio_ln}"),
-                ])
-                .args(&extra_defines)
+                .args(["-ptx", &format!("-arch={arch}"), "-O3"])
+                .args(&nvcc_defines)
                 .arg(&path)
                 .arg("-o")
                 .arg(&ptx)

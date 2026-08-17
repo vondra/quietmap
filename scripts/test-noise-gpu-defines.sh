@@ -35,15 +35,17 @@ assert_rejected_before_nvcc() {
   local label=$2
   local log="$work_root/$label.log"
   local marker="$work_root/$label.nvcc-invoked"
+  local out="$work_root/out/$label"
   local rc=0
 
   rm -f -- "$marker"
+  mkdir -p "$out"
   (
     cd "$ROOT/engine/noise-gpu"
     env \
       CARGO_FEATURE_GPU=1 \
       NOISE_GPU_DEFINES="$mutation" \
-      OUT_DIR="$work_root/out" \
+      OUT_DIR="$out" \
       NVCC_INVOCATION_MARKER="$marker" \
       PATH="$work_root/bin:$PATH" \
       "$work_root/build-rs"
@@ -70,14 +72,16 @@ assert_define_set_reaches_nvcc() {
   local label=$2
   local log="$work_root/$label.log"
   local marker="$work_root/$label.nvcc-invoked"
+  local out="$work_root/out/$label"
   local rc=0
 
+  mkdir -p "$out"
   (
     cd "$ROOT/engine/noise-gpu"
     env \
       CARGO_FEATURE_GPU=1 \
       NOISE_GPU_DEFINES="$defines" \
-      OUT_DIR="$work_root/out" \
+      OUT_DIR="$out" \
       NVCC_INVOCATION_MARKER="$marker" \
       PATH="$work_root/bin:$PATH" \
       "$work_root/build-rs"
@@ -91,6 +95,10 @@ assert_define_set_reaches_nvcc() {
   if grep -Fq 'invalid NOISE_GPU_DEFINES:' "$log"; then
     echo "GPU_DEFINE_ALLOWLIST=FAIL label=$label reason=accepted-set-rejected" >&2
     cat "$log" >&2
+    return 1
+  fi
+  if [ ! -s "$out/nvcc-defines.txt" ]; then
+    echo "GPU_DEFINE_ALLOWLIST=FAIL label=$label reason=missing-define-receipt" >&2
     return 1
   fi
   echo "GPU_DEFINE_ALLOWLIST=PASS label=$label reached_nvcc=1"
@@ -111,5 +119,29 @@ assert_rejected_before_nvcc '-D ARC_TRI_WALK=0' split-define
 assert_rejected_before_nvcc '-DARC_TRI_WALK=0 -DARC_TRI_WALK=1' duplicate
 assert_define_set_reaches_nvcc '' production-empty
 assert_define_set_reaches_nvcc '-DARC_TRI_WALK=0 -DPROF_COUNTERS=1' reviewed-experiment
+if grep -Eq '^-D(ARC_TRI_WALK|PROF_COUNTERS)(=|$)' \
+  "$work_root/out/production-empty/nvcc-defines.txt"; then
+  echo "GPU_DEFINE_RECEIPT=FAIL reason=production-receipt-contains-experiment" >&2
+  exit 1
+fi
+grep -Fxq -- '-DARC_TRI_WALK=0' "$work_root/out/reviewed-experiment/nvcc-defines.txt"
+grep -Fxq -- '-DPROF_COUNTERS=1' "$work_root/out/reviewed-experiment/nvcc-defines.txt"
+PYTHONPATH="$ROOT/scripts" python3 - \
+  "$work_root/out/production-empty/nvcc-defines.txt" \
+  "$work_root/out/reviewed-experiment/nvcc-defines.txt" <<'PY'
+import sys
+from pathlib import Path
+
+from gpu_model_role import parse_nvcc_define_receipt
+
+_, production_experimental = parse_nvcc_define_receipt(Path(sys.argv[1]))
+_, reviewed_experimental = parse_nvcc_define_receipt(Path(sys.argv[2]))
+if production_experimental:
+    raise SystemExit("production define receipt contains an experimental macro")
+if reviewed_experimental != ["-DARC_TRI_WALK=0", "-DPROF_COUNTERS=1"]:
+    raise SystemExit(f"reviewed define receipt mismatch: {reviewed_experimental}")
+print("GPU_DEFINE_VERIFIER=PASS production_experimental=0 reviewed_experimental=2")
+PY
+echo "GPU_DEFINE_RECEIPT=PASS production_empty=1 reviewed_experiment=2"
 
 echo "GPU_DEFINE_MUTATIONS=PASS mutations=13 rejected_nvcc_invocations=0"
