@@ -893,6 +893,7 @@ name = "noise-compute"
 version = "0.1.0"
 dependencies = [
  "h3o",
+ "rayon",
  "serde",
  "serde_json",
  "wide",
