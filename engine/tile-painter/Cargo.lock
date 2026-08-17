@@ -1622,6 +1622,7 @@ dependencies = [
  "pmtiles",
  "raster-reader",
  "rayon",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",

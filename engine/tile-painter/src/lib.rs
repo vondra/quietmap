@@ -35,6 +35,8 @@ pub mod h0_v3_tile_reference;
 pub mod pyramid;
 pub mod r4_source_cache;
 pub mod region_runner;
+pub mod renderer_evidence;
+mod renderer_evidence_attestation;
 pub mod scatter_band;
 pub mod scatter_line;
 pub mod scatter_point;

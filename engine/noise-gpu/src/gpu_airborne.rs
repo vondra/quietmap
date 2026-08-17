@@ -140,6 +140,58 @@ fn main() -> Result<()> {
         bail!("zoom {} out of supported range 6..=18", args.zoom);
     }
     let z = args.zoom;
+    let static_batch_n = if args.batch_size == 0 {
+        raster_reader::fused_tile_z13::default_batch_size()
+    } else {
+        args.batch_size
+    };
+    let static_workers = std::env::var("QM_GPU_STREAM_WORKERS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(2)
+        .clamp(1, 2);
+    if tile_painter::renderer_evidence::maybe_run_static_attestation(
+        "gpu-airborne",
+        tile_painter::renderer_evidence::StaticAttestationParameters {
+            runtime: tile_painter::renderer_evidence::RuntimeParameters {
+                zoom: z,
+                batch_size: static_batch_n,
+                n_days: args.n_days,
+                rayon_threads: rayon::current_num_threads(),
+                stream_workers: static_workers,
+                region_concurrency_configured: static_workers,
+                region_concurrency_effective: static_workers,
+                max_regions_per_claim: 4,
+                layers: vec!["aircraft-airborne".to_string()],
+            },
+            accepted_options: [
+                "--batch-size/1",
+                "--bbox/1",
+                "--h3r4-dir/1",
+                "--n-days/1",
+                "--output/1",
+                "--prepared-dir/1",
+                "--r4-cache/1",
+                "--regions-file/1",
+                "--seed-regions/1",
+                "--stream/0",
+                "--tile-x/1",
+                "--tile-y/1",
+                "--write-empty/0",
+                "--zoom/1",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            prepared_root: args.prepared_dir.clone(),
+            h3r4_dir: args.h3r4_dir.clone(),
+            halo_m: 0.0,
+            layers: vec!["aircraft-airborne".to_string()],
+            profile: tile_painter::renderer_evidence::DependencyProfile::Aircraft,
+        },
+    )? {
+        return Ok(());
+    }
 
     if args.stream {
         return run_stream(&args, z);

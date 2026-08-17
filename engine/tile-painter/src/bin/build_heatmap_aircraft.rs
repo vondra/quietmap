@@ -29,6 +29,10 @@ use tile_painter::region_runner::{
     announce_stream_cell_started, morton_order, process_region, read_r4_file, region_tiles,
     tile_centre_r4, RegionCtx, RegionStats,
 };
+use tile_painter::renderer_evidence::{
+    maybe_run_static_attestation, DependencyProfile, RegionTerminalStatus, RendererEvidence,
+    RuntimeParameters, StaticAttestationParameters,
+};
 use tile_painter::worklist::{any_source_arrow, resolve_n_days, WorkList};
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -59,6 +63,15 @@ impl Source {
                 traffic: false,
             },
         }
+    }
+}
+
+fn evidence_layer_for_selection(sel: SourceSel) -> &'static str {
+    match (sel.cruise, sel.airborne) {
+        (true, false) => "aircraft-cruise",
+        (false, true) => "aircraft-airborne",
+        (true, true) => "aircraft-combined",
+        (false, false) => unreachable!("aircraft selection always enables a source"),
     }
 }
 
@@ -235,6 +248,21 @@ fn run_stream(args: &Args, sel: SourceSel) -> Result<()> {
         rasters: &rasters,
     };
     let n_workers = rayon::current_num_threads().max(1);
+    let evidence_layers = vec![evidence_layer_for_selection(sel).to_string()];
+    let evidence = RendererEvidence::from_env(
+        "build-heatmap-aircraft",
+        RuntimeParameters {
+            zoom: args.zoom,
+            batch_size: batch_n,
+            n_days: Some(n_days),
+            rayon_threads: rayon::current_num_threads(),
+            stream_workers: n_workers,
+            region_concurrency_configured: n_workers,
+            region_concurrency_effective: n_workers,
+            max_regions_per_claim: PULL_BATCH,
+            layers: evidence_layers.clone(),
+        },
+    )?;
     eprintln!("stream: n_days={n_days}, {n_workers} worker(s) — reading R4 cells from stdin");
 
     // Morton-locality streaming pool (identical to gpu-airborne's): warm workers pull a CONTIGUOUS
@@ -247,6 +275,8 @@ fn run_stream(args: &Args, sel: SourceSel) -> Result<()> {
         for worker_slot in 0..n_workers {
             let work = Arc::clone(&work);
             let ctx = &ctx;
+            let evidence = evidence.clone();
+            let evidence_layers = &evidence_layers;
             scope.spawn(move || {
                 let mut cache = R4SourceCache::new(&args.h3r4_dir, args.r4_cache, ctx.sel);
                 loop {
@@ -268,12 +298,27 @@ fn run_stream(args: &Args, sel: SourceSel) -> Result<()> {
                         break;
                     }
                     for r4 in batch {
+                        let interval_id = evidence
+                            .region_claim(r4, worker_slot)
+                            .expect("emit aircraft region claim");
                         announce_stream_cell_started(r4);
                         let t = Instant::now();
                         let mut spans =
                             EngineCellSpans::new(r4, "build-heatmap-aircraft", worker_slot, t);
                         spans.metric_bool("cuda_event_timing_enabled", false);
                         let tiles = region_tiles(r4, ctx.zoom);
+                        let evidence_layer_refs: Vec<&str> =
+                            evidence_layers.iter().map(String::as_str).collect();
+                        let dependencies = evidence.region_dependencies(
+                            r4,
+                            &args.prepared_dir,
+                            &args.h3r4_dir,
+                            &tiles,
+                            ctx.zoom,
+                            0.0,
+                            &evidence_layer_refs,
+                            DependencyProfile::Aircraft,
+                        );
                         spans.metric("owned_tiles", serde_json::json!(tiles.len()));
                         spans.metric(
                             "sources",
@@ -282,7 +327,9 @@ fn run_stream(args: &Args, sel: SourceSel) -> Result<()> {
                                 "airborne": ctx.sel.airborne,
                             }),
                         );
-                        let line = match process_region(ctx, &mut cache, r4, &tiles) {
+                        let line = match dependencies
+                            .and_then(|()| process_region(ctx, &mut cache, r4, &tiles))
+                        {
                             Ok(st) => {
                                 spans.push_aggregate_span(
                                     "source_load",
@@ -327,6 +374,38 @@ fn run_stream(args: &Args, sel: SourceSel) -> Result<()> {
                                     st.tiles_skipped,
                                     Some(st.bytes_written),
                                 );
+                                for &(x, y) in &tiles {
+                                    for &layer in &evidence_layer_refs {
+                                        let output = ctx
+                                            .output
+                                            .join(ctx.zoom.to_string())
+                                            .join(x.to_string())
+                                            .join(format!("{y}.bin"));
+                                        evidence
+                                            .tile_terminal(
+                                                r4,
+                                                layer,
+                                                ctx.zoom,
+                                                x,
+                                                y,
+                                                ctx.output,
+                                                &output,
+                                                "all-periods-silent",
+                                            )
+                                            .expect("emit aircraft tile terminal");
+                                    }
+                                }
+                                evidence
+                                    .region_terminal(
+                                        r4,
+                                        worker_slot,
+                                        interval_id,
+                                        RegionTerminalStatus::Done,
+                                        st.tiles_written,
+                                        st.tiles_skipped,
+                                        None,
+                                    )
+                                    .expect("emit aircraft region terminal");
                                 format!(
                                     "done {r4:x} {} {} {}",
                                     st.tiles_written,
@@ -337,6 +416,17 @@ fn run_stream(args: &Args, sel: SourceSel) -> Result<()> {
                             Err(e) => {
                                 let line = format!("fail {r4:x} {e}");
                                 spans.finish_failed(t.elapsed(), &line);
+                                evidence
+                                    .region_terminal(
+                                        r4,
+                                        worker_slot,
+                                        interval_id,
+                                        RegionTerminalStatus::Fail,
+                                        0,
+                                        0,
+                                        Some(&line),
+                                    )
+                                    .expect("emit aircraft region failure");
                                 line
                             }
                         };
@@ -382,6 +472,58 @@ fn main() -> Result<()> {
     // Which source layers to build (--source); the work-list + n_days
     // checks only consider these arrow types.
     let sel = args.source.sel();
+    let static_layers = vec![evidence_layer_for_selection(sel).to_string()];
+    let static_batch_n = if args.batch_size == 0 {
+        default_batch_size()
+    } else {
+        args.batch_size
+    };
+    if maybe_run_static_attestation(
+        "build-heatmap-aircraft",
+        StaticAttestationParameters {
+            runtime: RuntimeParameters {
+                zoom: args.zoom,
+                batch_size: static_batch_n,
+                n_days: args.n_days,
+                rayon_threads: rayon::current_num_threads(),
+                stream_workers: rayon::current_num_threads(),
+                region_concurrency_configured: rayon::current_num_threads(),
+                region_concurrency_effective: rayon::current_num_threads(),
+                max_regions_per_claim: 4,
+                layers: static_layers.clone(),
+            },
+            accepted_options: [
+                "--batch-size/1",
+                "--bbox/1",
+                "--h3r4-dir/1",
+                "--n-days/1",
+                "--output/1",
+                "--prepared-dir/1",
+                "--print-n-days/0",
+                "--r4-cache/1",
+                "--regions-file/1",
+                "--seed-regions/1",
+                "--shard/1",
+                "--source/1",
+                "--stream/0",
+                "--tile-x/1",
+                "--tile-y/1",
+                "--world/0",
+                "--write-empty/0",
+                "--zoom/1",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            prepared_root: args.prepared_dir.clone(),
+            h3r4_dir: args.h3r4_dir.clone(),
+            halo_m: 0.0,
+            layers: static_layers,
+            profile: DependencyProfile::Aircraft,
+        },
+    )? {
+        return Ok(());
+    }
 
     // Cell-stream worker: a warm process fed R4 cell IDs on stdin (mutually exclusive with the
     // --world/--bbox/--regions-file batch modes below).

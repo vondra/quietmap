@@ -36,6 +36,10 @@ use tile_painter::region_runner::{
     announce_stream_cell_started, read_r4_file, region_tiles, split_configured_layers,
     split_stream_line, tile_centre_r4,
 };
+use tile_painter::renderer_evidence::{
+    maybe_run_static_attestation, DependencyProfile, RegionTerminalStatus, RendererEvidence,
+    RuntimeParameters, StaticAttestationParameters, RENDERER_EVIDENCE_FLAG,
+};
 use tile_painter::source_line::LineRow;
 use tile_painter::source_loader_barrier::BarrierData;
 use tile_painter::source_loader_obstacle::ObstacleData;
@@ -930,6 +934,20 @@ fn run_stream(
         .unwrap_or(2)
         .max(1);
     let names: Vec<&str> = layers.iter().map(|l| l.dir()).collect();
+    let evidence = RendererEvidence::from_env(
+        "gpu-surface",
+        RuntimeParameters {
+            zoom: z,
+            batch_size: batch_n,
+            n_days: None,
+            rayon_threads: rayon::current_num_threads(),
+            stream_workers: n_workers,
+            region_concurrency_configured: n_workers,
+            region_concurrency_effective: n_workers,
+            max_regions_per_claim: 1,
+            layers: names.iter().map(|name| (*name).to_string()).collect(),
+        },
+    )?;
     eprintln!(
         "stream: layers={names:?}, halo={halo_m:.0}m, batch={batch_n}, {n_workers} worker(s) — reading R4 cells from stdin"
     );
@@ -980,6 +998,7 @@ fn run_stream(
         for worker_slot in 0..n_workers {
             let work = Arc::clone(&work);
             let out = Arc::clone(&out);
+            let evidence = evidence.clone();
             scope.spawn(move || {
                 // Warm per-worker state: own CUDA stream (overlaps on the GPU) + own stats/prog
                 // (worker-local, gg); raster access via the per-rayon-thread RASTERS instances.
@@ -1007,6 +1026,9 @@ fn run_stream(
                         }
                     };
                     let Some((r4, req_layers)) = cell else { break };
+                    let interval_id = evidence
+                        .region_claim(r4, worker_slot)
+                        .expect("emit GPU surface region claim");
                     announce_stream_cell_started(r4);
                     let t = Instant::now();
                     let mut spans = EngineCellSpans::new(r4, "gpu-surface", worker_slot, t);
@@ -1044,11 +1066,37 @@ fn run_stream(
                             skipped.join(",")
                         );
                         spans.finish_failed(t.elapsed(), &line);
+                        evidence
+                            .region_terminal(
+                                r4,
+                                worker_slot,
+                                interval_id,
+                                RegionTerminalStatus::Fail,
+                                0,
+                                0,
+                                Some(&line),
+                            )
+                            .expect("emit GPU surface region failure");
                         line
                     } else {
-                        match process_region(
-                            r4, &tiles, &effective, cfg, &dev, &f, prepared, &mut stats, &mut prog,
-                        ) {
+                        let effective_names: Vec<&str> =
+                            effective.iter().map(|layer| layer.dir()).collect();
+                        let dependencies = evidence.region_dependencies(
+                            r4,
+                            Path::new(prepared),
+                            &cfg.h3r4,
+                            &tiles,
+                            z,
+                            cfg.halo_m,
+                            &effective_names,
+                            DependencyProfile::Surface,
+                        );
+                        match dependencies.and_then(|()| {
+                            process_region(
+                                r4, &tiles, &effective, cfg, &dev, &f, prepared, &mut stats,
+                                &mut prog,
+                            )
+                        }) {
                             Ok(result) => {
                                 let mut output_bytes = 0usize;
                                 if !result.raster.is_zero() {
@@ -1159,6 +1207,45 @@ fn run_stream(
                                     result.skipped,
                                     Some(output_bytes),
                                 );
+                                if evidence.is_enabled() {
+                                    let output_root = cfg
+                                        .output
+                                        .as_deref()
+                                        .map(Path::new)
+                                        .expect("GPU surface evidence requires --output");
+                                    for &(x, y) in &tiles {
+                                        for &layer in &effective_names {
+                                            let output = output_root
+                                                .join(layer)
+                                                .join(z.to_string())
+                                                .join(x.to_string())
+                                                .join(format!("{y}.bin"));
+                                            evidence
+                                                .tile_terminal(
+                                                    r4,
+                                                    layer,
+                                                    z,
+                                                    x,
+                                                    y,
+                                                    output_root,
+                                                    &output,
+                                                    "all-periods-silent",
+                                                )
+                                                .expect("emit GPU surface tile terminal");
+                                        }
+                                    }
+                                }
+                                evidence
+                                    .region_terminal(
+                                        r4,
+                                        worker_slot,
+                                        interval_id,
+                                        RegionTerminalStatus::Done,
+                                        result.written,
+                                        result.skipped,
+                                        None,
+                                    )
+                                    .expect("emit GPU surface region terminal");
                                 format!(
                                     "done {r4:x} {} {} {}",
                                     result.written,
@@ -1169,6 +1256,17 @@ fn run_stream(
                             Err(e) => {
                                 let line = format!("fail {r4:x} {e}");
                                 spans.finish_failed(t.elapsed(), &line);
+                                evidence
+                                    .region_terminal(
+                                        r4,
+                                        worker_slot,
+                                        interval_id,
+                                        RegionTerminalStatus::Fail,
+                                        0,
+                                        0,
+                                        Some(&line),
+                                    )
+                                    .expect("emit GPU surface region failure");
                                 line
                             }
                         }
@@ -1294,12 +1392,55 @@ fn main() -> Result<()> {
     if batch_n == 0 {
         bail!("--batch / block size must be >= 1");
     }
+    let static_workers: usize = env("QM_GPU_STREAM_WORKERS", "2")
+        .parse()
+        .unwrap_or(2)
+        .max(1);
+    let static_layers: Vec<String> = layers.iter().map(|layer| layer.dir().to_string()).collect();
+    if maybe_run_static_attestation(
+        "gpu-surface",
+        StaticAttestationParameters {
+            runtime: RuntimeParameters {
+                zoom: z,
+                batch_size: batch_n,
+                n_days: None,
+                rayon_threads: rayon::current_num_threads(),
+                stream_workers: static_workers,
+                region_concurrency_configured: static_workers,
+                region_concurrency_effective: static_workers,
+                max_regions_per_claim: 1,
+                layers: static_layers.clone(),
+            },
+            accepted_options: [
+                "--batch/1",
+                "--bbox/1",
+                "--layers/1",
+                "--output/1",
+                "--regions-file/1",
+                "--stream/0",
+                "--zoom/1",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            prepared_root: PathBuf::from(&prepared),
+            h3r4_dir: h3r4.clone(),
+            halo_m,
+            layers: static_layers,
+            profile: DependencyProfile::Surface,
+        },
+    )? {
+        return Ok(());
+    }
 
     // Init when EITHER line layer is built: road needs default-AADT, rail needs
     // the C1 per-region period split — a rail-only run on Admin::UNKNOWN would
     // take the world split and break popup parity (Codex delta 1).
     if layers.contains(&LineLayer::Road) || layers.contains(&LineLayer::Rail) {
-        let _ = admin::init_admin_table(&admin::default_admin_path(&h3r4));
+        let result = admin::init_admin_table(&admin::default_admin_path(&h3r4));
+        if std::env::var(RENDERER_EVIDENCE_FLAG).as_deref() == Ok("1") {
+            result.context("renderer evidence requires the physical admin table")?;
+        }
     }
 
     if stream {

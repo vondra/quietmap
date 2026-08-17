@@ -9,6 +9,9 @@ use raster_reader::RealRasters;
 use tile_painter::engine_spans::EngineCellSpans;
 use tile_painter::r4_source_cache::R4SourceCache;
 use tile_painter::region_runner::{announce_stream_cell_started, region_tiles};
+use tile_painter::renderer_evidence::{
+    DependencyProfile, RegionTerminalStatus, RendererEvidence, RuntimeParameters,
+};
 use tile_painter::worklist::{any_source_arrow, resolve_n_days};
 
 use crate::build::{
@@ -272,6 +275,7 @@ fn run_gpu_worker(
     n_days: u16,
     z: u8,
     bn: u32,
+    evidence: RendererEvidence,
 ) {
     use std::io::Write;
     use std::time::Instant;
@@ -294,9 +298,11 @@ fn run_gpu_worker(
         let Ok((r4, cell_started, prep_finished, prepared)) = message else {
             break;
         };
+        let interval_id = evidence
+            .region_claim(r4, worker_id)
+            .expect("emit GPU airborne region claim");
         let dequeued_at = Instant::now();
         let queue_duration = dequeued_at.duration_since(prep_finished);
-        let preparation_failed = prepared.is_err();
         let prep_meta = prepared.as_ref().ok().map(|p| {
             (
                 p.t_start,
@@ -329,61 +335,75 @@ fn run_gpu_worker(
         let mut chunked_reason = used_chunked.then_some("host-budget");
         let mut abandoned_one_pass_wall = std::time::Duration::ZERO;
         let tiles = region_tiles(r4, z);
-        let built = match prepared {
-            Err(e) => Err(e),
-            Ok(p) if p.too_big => {
-                let started = Instant::now();
-                let result = gpu_build_cell_chunked(
-                    &gpu,
-                    &mut gpu_cache,
-                    &gpu_rasters,
-                    args,
-                    n_days,
-                    z,
-                    bn,
-                    r4,
-                    &tiles,
-                );
-                build_ms += started.elapsed().as_millis();
-                result
-            }
-            Ok(p) => {
-                let started = Instant::now();
-                let first = gpu_build_cell_one_pass(&gpu, args, n_days, p);
-                let first_wall = started.elapsed();
-                build_ms += first_wall.as_millis();
-                match first {
-                    Err(e) if is_cell_unbuildable(&e) => {
-                        // The estimate was deliberately conservative, but fragmentation or an
-                        // unusually large classify list can still reject a shared one-pass build.
-                        // Rebuild it chunked only after upgrading to exclusive VRAM ownership.
-                        used_chunked = true;
-                        chunked_reason = Some("vram-fallback");
-                        abandoned_one_pass_wall = first_wall;
-                        if initial_permits < n_workers {
-                            drop(lease.take());
-                            let upgrade_start = Instant::now();
-                            lease = Some(vram_gate.acquire(n_workers));
-                            vram_wait_ms += upgrade_start.elapsed().as_millis();
-                        }
-                        let started = Instant::now();
-                        let result = gpu_build_cell_chunked(
-                            &gpu,
-                            &mut gpu_cache,
-                            &gpu_rasters,
-                            args,
-                            n_days,
-                            z,
-                            bn,
-                            r4,
-                            &tiles,
-                        );
-                        build_ms += started.elapsed().as_millis();
-                        result
-                    }
-                    other => other,
+        let dependencies = evidence.region_dependencies(
+            r4,
+            &args.prepared_dir,
+            &args.h3r4_dir,
+            &tiles,
+            z,
+            0.0,
+            &["aircraft-airborne"],
+            DependencyProfile::Aircraft,
+        );
+        let preparation_failed = prepared.is_err() || dependencies.is_err();
+        let built = match dependencies {
+            Err(error) => Err(error),
+            Ok(()) => match prepared {
+                Err(e) => Err(e),
+                Ok(p) if p.too_big => {
+                    let started = Instant::now();
+                    let result = gpu_build_cell_chunked(
+                        &gpu,
+                        &mut gpu_cache,
+                        &gpu_rasters,
+                        args,
+                        n_days,
+                        z,
+                        bn,
+                        r4,
+                        &tiles,
+                    );
+                    build_ms += started.elapsed().as_millis();
+                    result
                 }
-            }
+                Ok(p) => {
+                    let started = Instant::now();
+                    let first = gpu_build_cell_one_pass(&gpu, args, n_days, p);
+                    let first_wall = started.elapsed();
+                    build_ms += first_wall.as_millis();
+                    match first {
+                        Err(e) if is_cell_unbuildable(&e) => {
+                            // The estimate was deliberately conservative, but fragmentation or an
+                            // unusually large classify list can still reject a shared one-pass build.
+                            // Rebuild it chunked only after upgrading to exclusive VRAM ownership.
+                            used_chunked = true;
+                            chunked_reason = Some("vram-fallback");
+                            abandoned_one_pass_wall = first_wall;
+                            if initial_permits < n_workers {
+                                drop(lease.take());
+                                let upgrade_start = Instant::now();
+                                lease = Some(vram_gate.acquire(n_workers));
+                                vram_wait_ms += upgrade_start.elapsed().as_millis();
+                            }
+                            let started = Instant::now();
+                            let result = gpu_build_cell_chunked(
+                                &gpu,
+                                &mut gpu_cache,
+                                &gpu_rasters,
+                                args,
+                                n_days,
+                                z,
+                                bn,
+                                r4,
+                                &tiles,
+                            );
+                            build_ms += started.elapsed().as_millis();
+                            result
+                        }
+                        other => other,
+                    }
+                }
+            },
         };
         drop(lease);
 
@@ -404,7 +424,7 @@ fn run_gpu_worker(
         spans.metric_bool("cuda_event_timing_enabled", false);
         let line = match built {
             Ok(built) => {
-                let (t_start, timings, candidates, blocks, tiles) =
+                let (t_start, timings, candidates, blocks, prepared_tiles) =
                     prep_meta.expect("successful prep metadata");
                 let pipeline_wall = t_start.elapsed();
                 let protocol_wall = cell_started.elapsed();
@@ -415,7 +435,7 @@ fn run_gpu_worker(
                     build: built.timings,
                     candidates,
                     blocks,
-                    tiles,
+                    tiles: prepared_tiles,
                 });
                 if let Some(summary) = perf.add(
                     queue_ms,
@@ -571,6 +591,36 @@ fn run_gpu_worker(
                     built.skipped,
                     Some(built.output_bytes),
                 );
+                for &(x, y) in &tiles {
+                    let path = args
+                        .output
+                        .join(z.to_string())
+                        .join(x.to_string())
+                        .join(format!("{y}.bin"));
+                    evidence
+                        .tile_terminal(
+                            r4,
+                            "aircraft-airborne",
+                            z,
+                            x,
+                            y,
+                            &args.output,
+                            &path,
+                            "all-periods-silent",
+                        )
+                        .expect("emit GPU airborne tile terminal");
+                }
+                evidence
+                    .region_terminal(
+                        r4,
+                        worker_id,
+                        interval_id,
+                        RegionTerminalStatus::Done,
+                        built.written,
+                        built.skipped,
+                        None,
+                    )
+                    .expect("emit GPU airborne region terminal");
                 let perf_suffix =
                     cell_perf_suffix(queue_ms, vram_wait_ms, build_ms, built.timings, detail);
                 format!(
@@ -585,10 +635,32 @@ fn run_gpu_worker(
                 CellFailureDisposition::ReportCellFailure => {
                     let line = stream_cell_failure_line(r4, &e);
                     spans.finish_failed(cell_started.elapsed(), &line);
+                    evidence
+                        .region_terminal(
+                            r4,
+                            worker_id,
+                            interval_id,
+                            RegionTerminalStatus::Fail,
+                            0,
+                            0,
+                            Some(&line),
+                        )
+                        .expect("emit GPU airborne region failure");
                     line
                 }
                 CellFailureDisposition::FatalProcess => {
                     spans.finish_failed(cell_started.elapsed(), &format!("{e:#}"));
+                    evidence
+                        .region_terminal(
+                            r4,
+                            worker_id,
+                            interval_id,
+                            RegionTerminalStatus::Fail,
+                            0,
+                            0,
+                            Some(&format!("{e:#}")),
+                        )
+                        .expect("emit fatal GPU airborne region failure");
                     let mut out = std::io::stdout().lock();
                     let _ = writeln!(out, "{}", spans.line());
                     let _ = out.flush();
@@ -659,6 +731,20 @@ pub(crate) fn run_stream(args: &Args, z: u8) -> Result<()> {
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(2)
         .clamp(1, 2);
+    let evidence = RendererEvidence::from_env(
+        "gpu-airborne",
+        RuntimeParameters {
+            zoom: z,
+            batch_size: bn,
+            n_days: Some(n_days),
+            rayon_threads: rayon::current_num_threads(),
+            stream_workers: n_workers,
+            region_concurrency_configured: n_workers,
+            region_concurrency_effective: n_workers,
+            max_regions_per_claim: PULL_BATCH,
+            layers: vec!["aircraft-airborne".to_string()],
+        },
+    )?;
     eprintln!(
         "stream: n_days={n_days}, batch={bn}, parallel-prep + {n_workers} VRAM-gated GPU stream(s) — reading R4 cells from stdin"
     );
@@ -736,6 +822,7 @@ pub(crate) fn run_stream(args: &Args, z: u8) -> Result<()> {
             let receiver = Arc::clone(&gpu_rx);
             let class_weights = &class_weights;
             let gate = &vram_gate;
+            let evidence = evidence.clone();
             scope.spawn(move || {
                 run_gpu_worker(
                     worker_id,
@@ -747,6 +834,7 @@ pub(crate) fn run_stream(args: &Args, z: u8) -> Result<()> {
                     n_days,
                     z,
                     bn,
+                    evidence,
                 )
             });
         }

@@ -63,9 +63,20 @@ impl ObstacleData {
     /// query-cell requirement.
     pub fn load_for_r4s(h3r4_dir: &Path, region_r4: u64, r4_hexes: &[u64]) -> Result<Self> {
         if !vector_buildings_enabled() {
+            if renderer_evidence_requires_vector_mode() {
+                bail!("renderer evidence requires vector obstacles, but vector mode is disabled");
+            }
             return Ok(Self::off());
         }
         let allow_partial = std::env::var("QM_OBSTACLES_ALLOW_PARTIAL").is_ok_and(|v| v == "1");
+        if renderer_evidence_requires_vector_mode() && allow_partial {
+            bail!("renderer evidence forbids QM_OBSTACLES_ALLOW_PARTIAL");
+        }
+        if renderer_evidence_requires_vector_mode()
+            && std::env::var_os("QM_OBSTACLES_DIR").is_some()
+        {
+            bail!("renderer evidence requires canonical promoted obstacles, not QM_OBSTACLES_DIR");
+        }
         let mut indexes = Vec::new();
         for &r4 in r4_hexes {
             let cell = CellIndex::try_from(r4).context("invalid r4 hex")?;
@@ -79,6 +90,9 @@ impl ObstacleData {
                      for dev A/B)",
                     if r4 == region_r4 { "REGION" } else { "ring" },
                 );
+                if renderer_evidence_requires_vector_mode() {
+                    bail!("renderer evidence requires complete vector obstacles; missing {cell}");
+                }
                 return Ok(Self::off());
             };
             let low_profile = load_low_profile(h3r4_dir, cell)?;
@@ -86,6 +100,9 @@ impl ObstacleData {
         }
         let set = ObstacleSet { indexes };
         if set.edge_count() == 0 {
+            if renderer_evidence_requires_vector_mode() {
+                bail!("renderer evidence requires positive vector mode; obstacle ring is empty");
+            }
             return Ok(Self::off());
         }
         eprintln!(
@@ -97,6 +114,10 @@ impl ObstacleData {
             set: Some(Arc::new(set)),
         })
     }
+}
+
+fn renderer_evidence_requires_vector_mode() -> bool {
+    std::env::var(crate::renderer_evidence::RENDERER_EVIDENCE_FLAG).as_deref() == Ok("1")
 }
 
 /// Overwrite one tile's pre-baked `rx_refl_db` with the VECTOR enclosure —

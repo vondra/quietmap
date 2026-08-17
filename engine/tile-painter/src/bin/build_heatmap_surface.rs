@@ -38,6 +38,10 @@ use tile_painter::region_runner::{
     announce_stream_cell_started, morton_order, read_r4_file, region_tiles,
     split_configured_layers, split_stream_line, tile_centre_r4,
 };
+use tile_painter::renderer_evidence::{
+    maybe_run_static_attestation, DependencyProfile, RegionTerminalStatus, RendererEvidence,
+    RuntimeParameters, StaticAttestationParameters, RENDERER_EVIDENCE_FLAG,
+};
 use tile_painter::surface_region::{
     layer_meta, process_surface_region, Heartbeat, Source, SurfaceCtx, SurfaceStats,
 };
@@ -254,6 +258,24 @@ fn run_stream(args: &Args, layers: &[Source], halo_m: f64) -> Result<()> {
     };
     let heartbeat = Heartbeat::new(0, 0); // stream total is unknown; the per-cell `done` IS progress
     let n_workers = region_concurrency(args.region_concurrency, args.zoom, halo_m, batch_n);
+    let layer_names: Vec<String> = layers
+        .iter()
+        .map(|&source| layer_meta(source).2.to_string())
+        .collect();
+    let evidence = RendererEvidence::from_env(
+        "build-heatmap-surface",
+        RuntimeParameters {
+            zoom: args.zoom,
+            batch_size: batch_n,
+            n_days: Some(n_days as u16),
+            rayon_threads: rayon::current_num_threads(),
+            stream_workers: n_workers,
+            region_concurrency_configured: args.region_concurrency,
+            region_concurrency_effective: n_workers,
+            max_regions_per_claim: SURFACE_STREAM_MAX_REGIONS_PER_CLAIM,
+            layers: layer_names,
+        },
+    )?;
     eprintln!(
         "stream: n_days={n_days}, layers={layers:?}, halo={halo_m:.0}m, {n_workers} worker(s) (≤ that many halos), max_regions_per_claim={SURFACE_STREAM_MAX_REGIONS_PER_CLAIM} — reading R4 cells from stdin"
     );
@@ -266,8 +288,12 @@ fn run_stream(args: &Args, layers: &[Source], halo_m: f64) -> Result<()> {
             let work = Arc::clone(&work);
             let ctx = &ctx;
             let heartbeat = &heartbeat;
+            let evidence = evidence.clone();
             scope.spawn(move || {
                 while let Some((r4, req_layers)) = work.claim_one() {
+                    let interval_id = evidence
+                        .region_claim(r4, worker_slot)
+                        .expect("emit surface region claim");
                     announce_stream_cell_started(r4);
                     let t = Instant::now();
                     let mut spans =
@@ -296,9 +322,36 @@ fn run_stream(args: &Args, layers: &[Source], halo_m: f64) -> Result<()> {
                             skipped.join(",")
                         );
                         spans.finish_failed(t.elapsed(), &error);
+                        evidence
+                            .region_terminal(
+                                r4,
+                                worker_slot,
+                                interval_id,
+                                RegionTerminalStatus::Fail,
+                                0,
+                                0,
+                                Some(&error),
+                            )
+                            .expect("emit surface region failure");
                         error
                     } else {
-                        match process_surface_region(ctx, r4, &tiles, heartbeat, &effective) {
+                        let effective_names: Vec<&str> = effective
+                            .iter()
+                            .map(|&source| layer_meta(source).2)
+                            .collect();
+                        let dependencies = evidence.region_dependencies(
+                            r4,
+                            &args.prepared_dir,
+                            &args.h3r4_dir,
+                            &tiles,
+                            ctx.zoom,
+                            ctx.halo_m,
+                            &effective_names,
+                            DependencyProfile::Surface,
+                        );
+                        match dependencies.and_then(|()| {
+                            process_surface_region(ctx, r4, &tiles, heartbeat, &effective)
+                        }) {
                             Ok(st) => {
                                 spans.push_aggregate_span(
                                     "source_load",
@@ -329,6 +382,39 @@ fn run_stream(args: &Args, layers: &[Source], halo_m: f64) -> Result<()> {
                                 );
                                 let wall = t.elapsed();
                                 spans.finish_done(wall, st.written, st.skipped, Some(st.bytes));
+                                for &(x, y) in &tiles {
+                                    for &layer in &effective_names {
+                                        let output = ctx
+                                            .output
+                                            .join(layer)
+                                            .join(ctx.zoom.to_string())
+                                            .join(x.to_string())
+                                            .join(format!("{y}.bin"));
+                                        evidence
+                                            .tile_terminal(
+                                                r4,
+                                                layer,
+                                                ctx.zoom,
+                                                x,
+                                                y,
+                                                ctx.output,
+                                                &output,
+                                                "all-periods-silent",
+                                            )
+                                            .expect("emit surface tile terminal");
+                                    }
+                                }
+                                evidence
+                                    .region_terminal(
+                                        r4,
+                                        worker_slot,
+                                        interval_id,
+                                        RegionTerminalStatus::Done,
+                                        st.written,
+                                        st.skipped,
+                                        None,
+                                    )
+                                    .expect("emit surface region terminal");
                                 format!(
                                     "done {r4:x} {} {} {}",
                                     st.written,
@@ -339,6 +425,17 @@ fn run_stream(args: &Args, layers: &[Source], halo_m: f64) -> Result<()> {
                             Err(e) => {
                                 let line = format!("fail {r4:x} {e}");
                                 spans.finish_failed(t.elapsed(), &line);
+                                evidence
+                                    .region_terminal(
+                                        r4,
+                                        worker_slot,
+                                        interval_id,
+                                        RegionTerminalStatus::Fail,
+                                        0,
+                                        0,
+                                        Some(&line),
+                                    )
+                                    .expect("emit surface region failure");
                                 line
                             }
                         }
@@ -415,6 +512,63 @@ fn main() -> Result<()> {
         .iter()
         .map(|&s| layer_meta(s).1)
         .fold(0.0_f64, f64::max);
+    let static_batch_n = if args.batch_size == 0 {
+        default_batch_size()
+    } else {
+        args.batch_size
+    };
+    let static_workers =
+        region_concurrency(args.region_concurrency, args.zoom, halo_m, static_batch_n);
+    let static_layers: Vec<String> = layers
+        .iter()
+        .map(|&source| layer_meta(source).2.to_string())
+        .collect();
+    if maybe_run_static_attestation(
+        "build-heatmap-surface",
+        StaticAttestationParameters {
+            runtime: RuntimeParameters {
+                zoom: args.zoom,
+                batch_size: static_batch_n,
+                n_days: args.n_days,
+                rayon_threads: rayon::current_num_threads(),
+                stream_workers: static_workers,
+                region_concurrency_configured: args.region_concurrency,
+                region_concurrency_effective: static_workers,
+                max_regions_per_claim: SURFACE_STREAM_MAX_REGIONS_PER_CLAIM,
+                layers: static_layers.clone(),
+            },
+            accepted_options: [
+                "--batch-size/1",
+                "--bbox/1",
+                "--exclude/1",
+                "--h3r4-dir/1",
+                "--n-days/1",
+                "--output/1",
+                "--prepared-dir/1",
+                "--region-concurrency/1",
+                "--regions-file/1",
+                "--seed-regions/1",
+                "--shard/1",
+                "--source/1",
+                "--stream/0",
+                "--tile-x/1",
+                "--tile-y/1",
+                "--world/0",
+                "--write-empty/0",
+                "--zoom/1",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            prepared_root: args.prepared_dir.clone(),
+            h3r4_dir: args.h3r4_dir.clone(),
+            halo_m,
+            layers: static_layers,
+            profile: DependencyProfile::Surface,
+        },
+    )? {
+        return Ok(());
+    }
 
     // Admin table drives road default-AADT AND the C1 rail per-region period
     // split (EU freight ~55 % at night) — init when EITHER line layer is built,
@@ -423,7 +577,10 @@ fn main() -> Result<()> {
     // before the parallel region loop — a process-wide OnceLock the per-region
     // loads only READ (concurrency-safe).
     if layers.contains(&Source::Road) || layers.contains(&Source::Rail) {
-        let _ = admin::init_admin_table(&admin::default_admin_path(&args.h3r4_dir));
+        let result = admin::init_admin_table(&admin::default_admin_path(&args.h3r4_dir));
+        if std::env::var(RENDERER_EVIDENCE_FLAG).as_deref() == Ok("1") {
+            result.context("renderer evidence requires the physical admin table")?;
+        }
     }
 
     // Cell-stream worker: a warm process fed R4 cell IDs on stdin (admin table above is live;
