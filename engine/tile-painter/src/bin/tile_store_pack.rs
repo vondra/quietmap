@@ -1458,14 +1458,62 @@ fn write_manifest(
 mod tests {
     use super::*;
     use std::cell::Cell;
+    use std::fs::OpenOptions;
+    use std::sync::{Mutex, MutexGuard};
 
-    use tempfile::tempdir;
+    use tempfile::{tempdir, TempDir};
     use tile_painter::grid::TILE_PX;
     use tile_painter::tile_store::{
         ingest_store_lock_path, master_store_lock_path, zoom_store_lock_path, StoreFileLock,
         TileCodec, TileStore, REBUILD_INCOMPLETE_MARKER,
     };
     use tile_painter::wire_hm3::{self, NO_DATA, SOURCE_ID_RAIL, SOURCE_ID_ROAD};
+
+    static PACK_TEST_SCRATCH_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Owns one unique scratch tree while preventing production-sized store
+    /// preallocation from exhausting the shared test filesystem. Every first
+    /// tile reserves a 256 MiB data-log extent; unique paths alone therefore
+    /// do not make disk-heavy pack tests safe to run in parallel.
+    struct PackTestScratch {
+        // Fields drop in declaration order: remove the tree before another test
+        // can acquire the guard and start reserving extents.
+        dir: TempDir,
+        _exclusive: MutexGuard<'static, ()>,
+    }
+
+    impl PackTestScratch {
+        fn path(&self) -> &Path {
+            self.dir.path()
+        }
+    }
+
+    fn pack_test_scratch() -> Result<PackTestScratch> {
+        let exclusive = PACK_TEST_SCRATCH_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = tempdir()?;
+        Ok(PackTestScratch {
+            dir,
+            _exclusive: exclusive,
+        })
+    }
+
+    /// Release the unused tail of the production 256 MiB extent reservation.
+    /// The test blob remains byte-identical; extending by one byte and then
+    /// truncating back forces the filesystem to discard allocations past the
+    /// logical EOF instead of treating a same-length truncate as a no-op.
+    fn release_test_store_extent_reservation(layer_dir: &Path, zoom: u8) -> Result<()> {
+        let path = layer_dir.join(format!("z{zoom}.qtsd"));
+        let file = OpenOptions::new().read(true).write(true).open(&path)?;
+        let logical_len = file.metadata()?.len();
+        let extended_len = logical_len
+            .checked_add(1)
+            .context("test store data length cannot be extended")?;
+        file.set_len(extended_len)?;
+        file.set_len(logical_len)?;
+        Ok(())
+    }
 
     fn create_one_tile_layer_store(
         store_root: &Path,
@@ -1483,6 +1531,8 @@ mod tests {
                 store.put_blob(1, 1, TileCodec::BrotliHm3, &blob)?;
             }
             store.sync_all()?;
+            drop(store);
+            release_test_store_extent_reservation(&layer_dir, zoom)?;
         }
         Ok(layer_dir)
     }
@@ -1506,12 +1556,14 @@ mod tests {
         let store = TileStore::create(&layer_dir, tier, source_id, TILE_PX as u16)?;
         store.put_blob(4424, 2774, TileCodec::BrotliHm3, &blob)?;
         store.sync_all()?;
+        drop(store);
+        release_test_store_extent_reservation(&layer_dir, tier)?;
         Ok(layer_dir)
     }
 
     #[test]
     fn tier_pack_tokens_index_and_full_pack_preservation() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let store_root = dir.path().join("store");
         let tier_root = dir.path().join("z13").join("store");
         let out_dir = dir.path().join("pmtiles");
@@ -1663,7 +1715,7 @@ mod tests {
 
     #[test]
     fn publish_gc_lock_wait_is_bounded() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let held = acquire_pack_lock(dir.path(), Duration::from_secs(1))?;
         let started = Instant::now();
         assert!(acquire_pack_lock(dir.path(), Duration::ZERO).is_err());
@@ -1675,7 +1727,7 @@ mod tests {
 
     #[test]
     fn archive_staging_cleanup_never_leaves_a_final_named_partial() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let final_path = dir.path().join("road.b1.pmtiles");
         let temp_path = dir.path().join(".road.b1.pmtiles.tmp");
         fs::write(&temp_path, b"stale crash residue")?;
@@ -1692,7 +1744,7 @@ mod tests {
 
     #[test]
     fn archive_publish_atomically_renames_complete_temp_without_overwrite() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let final_path = dir.path().join("road.b1.pmtiles");
         let temp_path = dir.path().join(".road.b1.pmtiles.tmp");
         let (staged, mut file) = StagedArchive::create(final_path.clone())?;
@@ -1711,7 +1763,7 @@ mod tests {
 
     #[test]
     fn sha256_is_bound_to_the_stable_open_file_identity() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let path = dir.path().join("total.b1.pmtiles");
         fs::write(&path, b"abc")?;
 
@@ -1727,7 +1779,7 @@ mod tests {
 
     #[test]
     fn manifest_proof_rejects_a_same_size_atomic_replacement() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let file = "total.b1.pmtiles";
         let path = dir.path().join(file);
         fs::write(&path, b"abc")?;
@@ -1744,7 +1796,7 @@ mod tests {
 
     #[test]
     fn partial_merge_preflight_rejects_a_legacy_entry_without_proof() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let path = dir.path().join("road.b1.pmtiles");
         fs::write(&path, b"road")?;
         let legacy = serde_json::json!({
@@ -1759,7 +1811,7 @@ mod tests {
 
     #[test]
     fn layer_shape_rejects_a_zoom_gap_and_cross_zoom_source_mismatch() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let store_root = dir.path().join("tiles/2026/store");
         let layer_dir = create_one_tile_road_store(&store_root, 42)?;
 
@@ -1782,7 +1834,7 @@ mod tests {
 
     #[test]
     fn layer_shape_rejects_an_internally_consistent_wrong_source_id() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let layer_dir = dir.path().join("tiles/2026/store/road");
         for zoom in PUBLISHED_MIN_ZOOM..=6 {
             TileStore::create(&layer_dir, zoom, SOURCE_ID_RAIL, TILE_PX as u16)?.sync_all()?;
@@ -1824,7 +1876,7 @@ mod tests {
 
     #[test]
     fn full_pack_selection_refuses_a_partial_store_directory_set() -> Result<()> {
-        let dir = tempfile::tempdir()?;
+        let dir = pack_test_scratch()?;
         create_one_tile_road_store(&dir.path().join("store"), 42)?;
         let error = match selected_layer_stores(&dir.path().join("store"), &[]) {
             Ok(_) => panic!("partial store set unexpectedly accepted for a full pack"),
@@ -1839,7 +1891,7 @@ mod tests {
 
     #[test]
     fn partial_total_pack_fscks_every_unselected_input_but_stages_only_scope() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let store_root = dir.path().join("tiles/2026/store");
         for layer in std::iter::once("total").chain(TOTAL_INPUT_LAYERS.iter().copied()) {
             create_one_tile_layer_store(
@@ -1918,7 +1970,7 @@ mod tests {
 
     #[test]
     fn rebuild_marker_blocks_before_validation_or_staging() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let store_root = dir.path().join("tiles/2026/store");
         let layer_dir = create_one_tile_road_store(&store_root, 42)?;
         fs::write(layer_dir.join(REBUILD_INCOMPLETE_MARKER), b"interrupted\n")?;
@@ -1946,7 +1998,7 @@ mod tests {
 
     #[test]
     fn scoped_root_transaction_blocks_pack_before_store_detection() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let store_root = dir.path().join("tiles/2026/store");
         tile_painter::tile_store::StoreUpdateFence::begin(&store_root, "z12|bbox-a|road")?;
         let callback_called = Cell::new(false);
@@ -1973,7 +2025,7 @@ mod tests {
 
     #[test]
     fn incomplete_two_phase_publish_is_recovered_without_orphan_finals() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let out_dir = dir.path();
         let files = vec!["rail.b8.pmtiles".to_string(), "road.b8.pmtiles".to_string()];
         let mut staged = Vec::new();
@@ -1999,7 +2051,7 @@ mod tests {
 
     #[test]
     fn crash_before_transaction_marker_leaves_only_cleanup_safe_hidden_temps() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let out_dir = dir.path();
         let archive_temp = out_dir.join(".road.b8.pmtiles.tmp");
         let transaction_temp = out_dir.join(".pack-transaction-b8.incomplete.tmp");
@@ -2017,7 +2069,7 @@ mod tests {
 
     #[test]
     fn recovery_keeps_archives_after_manifest_commit() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let out_dir = dir.path();
         let files = vec!["road.b9.pmtiles".to_string()];
         let (archive, mut handle) = StagedArchive::create(out_dir.join(&files[0]))?;
@@ -2038,7 +2090,7 @@ mod tests {
 
     #[test]
     fn snapshot_retains_every_writer_lock_through_validation_and_pack() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let store_root = dir.path().join("tiles/2026/store");
         create_one_tile_road_store(&store_root, 42)?;
         let master_path = master_store_lock_path(&store_root)?;
@@ -2104,7 +2156,7 @@ mod tests {
 
     #[test]
     fn snapshot_waits_for_the_same_per_zoom_lock_as_a_direct_tile_store_writer() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let store_root = dir.path().join("tiles/2026/store");
         let layer_dir = create_one_tile_road_store(&store_root, 42)?;
         let direct_writer = TileStore::open(&layer_dir, 6, true)?;
@@ -2139,7 +2191,7 @@ mod tests {
 
     #[test]
     fn captured_entry_reads_the_validated_blob_after_ingest_overwrites_the_tile() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let store_root = dir.path().join("tiles/2026/store");
         let layer_dir = create_one_tile_road_store(&store_root, 42)?;
         let snapshot = snapshot_test_layer(&layer_dir, "road")?;
@@ -2173,7 +2225,7 @@ mod tests {
 
     #[test]
     fn captured_validation_failure_never_enters_archive_creation() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let store_root = dir.path().join("tiles/2026/store");
         let layer_dir = create_one_tile_road_store(&store_root, 42)?;
         let writer = TileStore::open(&layer_dir, 6, true)?;
@@ -2211,7 +2263,7 @@ mod tests {
     /// in `tile_store_gc.rs`'s own tests; this just locks in that packing never deletes.
     #[test]
     fn pack_never_deletes_other_archives_in_out_dir() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let store_root = dir.path().join("store");
         let out_dir = dir.path().join("pmtiles");
         fs::create_dir_all(&out_dir)?;
@@ -2267,7 +2319,7 @@ mod tests {
 
     #[test]
     fn pack_layer_keeps_global_tile_id_order_across_zoom_stores() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let layer_dir = dir.path().join("store/road");
         let out_dir = dir.path().join("pmtiles");
         fs::create_dir_all(&out_dir)?;
@@ -2300,7 +2352,7 @@ mod tests {
     /// the exact call (`get_hm3_by_entry`) `stage_layer`'s prefetch pipeline makes per tile.
     #[test]
     fn pack_layer_ships_mixed_codec_store_correctly() -> Result<()> {
-        let dir = tempdir()?;
+        let dir = pack_test_scratch()?;
         let layer_dir = dir.path().join("store").join("road");
         let out_dir = dir.path().join("pmtiles");
         fs::create_dir_all(&out_dir)?;
