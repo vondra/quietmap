@@ -5,6 +5,7 @@ import { stat } from 'node:fs/promises'
 import { PMTILES_BASE } from './heatmap-shared.js'
 import { PmtilesManifestPinMissingError, readValidatedPmtilesManifest } from '../runtime-readiness.js'
 import { resolveManifestPath } from '../tile-manifest-reader.js'
+import type { PublishedLineModel } from '../published-line-model.js'
 
 const TILES_MANIFEST_VALIDATION_CACHE_MS = 10_000
 
@@ -24,12 +25,26 @@ const TILES_MANIFEST_VALIDATION_CACHE_MS = 10_000
  * layers); 500 = TILE_ENV misconfigured or this checkout was never seeded (see
  * `resolveManifestPath`'s error message — logged, never sent to the client).
  */
-export async function tilesManifestRoutes(app: FastifyInstance): Promise<void> {
+export type TilesManifestRouteOptions = {
+  publishedLineModel?: PublishedLineModel
+}
+
+export async function tilesManifestRoutes(
+  app: FastifyInstance,
+  options: TilesManifestRouteOptions = {},
+): Promise<void> {
   const tileBase = (process.env.PUBLIC_TILE_BASE || '').replace(/\/$/, '') || null
   let cached: { identity: string; validatedAt: number;
     manifest: Awaited<ReturnType<typeof readValidatedPmtilesManifest>> } | null = null
   app.get('/api/tiles-manifest', async (_req, reply) => {
     reply.header('Cache-Control', 'no-cache')
+    if (options.publishedLineModel?.enabled) {
+      const published = options.publishedLineModel.mapManifest()
+      if (!published) {
+        return reply.code(503).send({ error: 'published line model unavailable' })
+      }
+      return { ...published, tile_base: tileBase }
+    }
     let manifest
     let pinExists = false
     try {
