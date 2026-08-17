@@ -1,7 +1,7 @@
 /**
  * High-resolution country point-in-polygon gate from geoBoundaries CGAZ ADM0
- * (`scripts/cache/geoBoundariesCGAZ_ADM0_s0005.geojson`, derived on demand from
- * the release GeoPackage pinned at tag v6.0.0 — see below).
+ * (`geoBoundariesCGAZ_ADM0_s0005.geojson`, derived from the release GeoPackage
+ * pinned at tag v6.0.0 — see below).
  *
  * Use to stop an enricher writing one country's data onto another country's roads
  * where a rectangular `*_HEX_BBOX` overlaps a neighbour: Poland's bbox blankets
@@ -17,53 +17,84 @@
  * geoBoundaries — Runfola et al. 2020, doi:10.1371/journal.pone.0231866); all
  * CZ salients verified correct (Hlučínsko, Šluknov, Frýdlant, Bogatynia).
  *
- * On-demand derivation (first run on a fresh host; needs curl + GDAL's ogr2ogr,
- * `apt install gdal-bin`): download the 162 MB GeoPackage, then one-time-convert
- * to a 95 MB GeoJSON with `-simplify 0.0005` (~55 m Douglas-Peucker — full CGAZ
- * rings are 8-15x denser, parse 3.6 s and cost ~200 µs/gate-call for fidelity the
- * gate doesn't need; the 55 m band flips 0.06 % of points vs full, measured on a
- * 111 m grid over Hlučínsko) and `COORDINATE_PRECISION=6` (~0.1 m). The GeoPackage
- * is kept beside the GeoJSON so the tolerance can be retuned without re-download.
+ * Derivation (needs GDAL's ogr2ogr, `apt install gdal-bin`): the 162 MB
+ * GeoPackage is one-time-converted to a 95 MB GeoJSON with `-simplify 0.0005`
+ * (~55 m Douglas-Peucker — full CGAZ rings are 8-15x denser, parse 3.6 s and
+ * cost ~200 µs/gate-call for fidelity the gate doesn't need; the 55 m band
+ * flips 0.06 % of points vs full, measured on a 111 m grid over Hlučínsko) and
+ * `COORDINATE_PRECISION=6` (~0.1 m). The GeoPackage is kept beside the GeoJSON
+ * so the tolerance can be retuned without re-acquiring it.
+ *
+ * ACQUIRING the dataset is NOT this module's job and never happens on the read
+ * path: `prepare-country-polygon-caches.ts` is the ONE step that downloads it.
+ * WHY the split — a unit test that merely writes a road row must not be able to
+ * reach the network. `writeRoadAadt` derives its national gate from the stamped
+ * `source_id`, so every writer test used to trigger a 162 MB download; when
+ * geoBoundaries deleted the pinned v6.0.0 release (404 since 2026-08-17) that
+ * turned the data-free CI gate red. A missing dataset now fails LOUD here
+ * instead — nothing in this module substitutes different geometry, because a
+ * silently ungated national enricher writes one country's counts onto another
+ * country's roads, the exact bug the gate exists to prevent.
  *
  * This is an actual-polygon gate — NOT `h3r4-admin.bin`, which is H3 res-4
  * (~22 km, centroid-based) and far too coarse to separate roads at a border.
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { readFileSync, mkdirSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { replaceCacheFileAtomically } from './atomic-cache.js'
+import { DOWNLOAD_CACHE_DIR, describeDownloadSearchPath, findDownloadedFile } from './download-cache.js'
 import { pointInRing, pointToSegmentDist } from './spatial.js'
 
-const CACHE_DIR = resolve(import.meta.dirname, '..', '..', 'scripts', 'cache')
-const CGAZ_GPKG = resolve(CACHE_DIR, 'geoBoundariesCGAZ_ADM0.gpkg')
-const CGAZ_GEOJSON = resolve(CACHE_DIR, 'geoBoundariesCGAZ_ADM0_s0005.geojson')
-// Pinned release tag, not `main`: boundaries silently moving under a data gate
-// would make enrichment runs irreproducible.
-const CGAZ_URL = 'https://github.com/wmgeolab/geoBoundaries/raw/v6.0.0/releaseData/CGAZ/geoBoundariesCGAZ_ADM0.gpkg'
+/** Release-pinned file names — a version bump renames both, so a stale cache
+ *  can never masquerade as the current dataset (boundaries silently moving
+ *  under a data gate would make enrichment runs irreproducible). */
+export const CGAZ_GPKG_FILE = 'geoBoundariesCGAZ_ADM0.gpkg'
+export const CGAZ_GEOJSON_FILE = 'geoBoundariesCGAZ_ADM0_s0005.geojson'
+
+/** Absolute path of the prepared CGAZ GeoJSON, or null when no cache visible to
+ *  this checkout holds it. The read-only probe callers use to ask "is the
+ *  boundary dataset available here?" — the gate's own tests skip on null, and
+ *  the prepare step uses it to decide whether to acquire. */
+export function preparedCountryPolygonFile(): string | null {
+  return findDownloadedFile(CGAZ_GEOJSON_FILE)
+}
+
+/** Convert an already-downloaded GeoPackage into the working cache's GeoJSON.
+ *  Local only — ogr2ogr, no network. Returns null when no GeoPackage is on
+ *  disk either. Atomic replace so an interrupted or concurrent cold start
+ *  cannot leave a truncated cache or steal another process's temporary file. */
+function deriveGeojsonFromDownloadedGeopackage(): string | null {
+  const gpkg = findDownloadedFile(CGAZ_GPKG_FILE)
+  if (!gpkg) return null
+  const geojson = resolve(DOWNLOAD_CACHE_DIR, CGAZ_GEOJSON_FILE)
+  mkdirSync(DOWNLOAD_CACHE_DIR, { recursive: true })
+  replaceCacheFileAtomically(geojson, temporaryPath => {
+    try {
+      execFileSync('ogr2ogr', ['-f', 'GeoJSON', temporaryPath, gpkg,
+        '-select', 'shapeGroup', '-simplify', '0.0005', '-lco', 'COORDINATE_PRECISION=6'])
+    } catch (e) {
+      throw new Error(`country-polygon: ogr2ogr conversion failed — is GDAL installed (apt install gdal-bin)? ${e}`)
+    }
+  })
+  return geojson
+}
 
 type CgazFeature = { properties: Record<string, unknown>; geometry: { type: string; coordinates: unknown } }
 let features: ReadonlyArray<CgazFeature> | null = null
 function cgazFeatures(): ReadonlyArray<CgazFeature> {
   if (features) return features
-  if (!existsSync(CGAZ_GEOJSON)) {
-    mkdirSync(CACHE_DIR, { recursive: true })
-    // Atomic replace so an interrupted or concurrent cold start cannot leave a
-    // truncated cache or steal another process's temporary file.
-    if (!existsSync(CGAZ_GPKG)) {
-      replaceCacheFileAtomically(CGAZ_GPKG, temporaryPath => {
-        execFileSync('curl', ['-fsSL', '--max-time', '600', CGAZ_URL, '-o', temporaryPath])
-      })
-    }
-    replaceCacheFileAtomically(CGAZ_GEOJSON, temporaryPath => {
-      try {
-        execFileSync('ogr2ogr', ['-f', 'GeoJSON', temporaryPath, CGAZ_GPKG,
-          '-select', 'shapeGroup', '-simplify', '0.0005', '-lco', 'COORDINATE_PRECISION=6'])
-      } catch (e) {
-        throw new Error(`country-polygon: ogr2ogr conversion failed — is GDAL installed (apt install gdal-bin)? ${e}`)
-      }
-    })
+  const path = preparedCountryPolygonFile() ?? deriveGeojsonFromDownloadedGeopackage()
+  if (!path) {
+    throw new Error(
+      `country-polygon: the CGAZ ADM0 boundary dataset is not prepared — neither ${CGAZ_GEOJSON_FILE} nor ` +
+      `${CGAZ_GPKG_FILE} found in ${describeDownloadSearchPath()}. Run ` +
+      `\`npx tsx pipeline/prepare-country-polygon-caches.ts\`, the one step that acquires it.`)
   }
-  return (features = JSON.parse(readFileSync(CGAZ_GEOJSON, 'utf8')).features)
+  // Log the resolved file: the gate's answers are only as trustworthy as the
+  // geometry behind them, and the search path spans several caches.
+  console.log(`  country-polygon: CGAZ ADM0 from ${path}`)
+  return (features = JSON.parse(readFileSync(path, 'utf8')).features)
 }
 
 // CGAZ keys countries by ISO 3166-1 alpha-3 (`shapeGroup`); callers use alpha-2.
@@ -262,27 +293,42 @@ export function hasCountryPolygon(iso2: string): boolean {
   return cgazFeatures().some(x => x.properties.shapeGroup === iso3)
 }
 
-// ── Per-polygon country bboxes (cache-backed) ────────────────────────────────
+// ── Per-polygon country bboxes (committed table) ─────────────────────────────
 
-const BBOX_CACHE = resolve(CACHE_DIR, 'country-polygon-bboxes-cgaz-v6-s0005.json')
+const BBOX_TABLE_FILE = 'country-polygon-bboxes-cgaz-v6-s0005.generated.json'
 
 export type CountryBbox = readonly [number, number, number, number] // [s, w, n, e]
 
-let bboxCache: Record<string, CountryBbox[]> | null = null
+let bboxTable: Record<string, CountryBbox[]> | null = null
 
 /**
  * ISO2 → bbox per CGAZ polygon PART (outer rings only). Per-part, never a
  * union: FR/GB/NO territories would span half the globe as one box. Consumers:
  * chain/scope.ts (country → hex enumeration) and lib/hex-country.ts
- * (microstate candidate discovery). Served from the committed-format cache
- * file; derived once from the CGAZ geojson when the cache is cold (tmp+rename
- * so an interrupted write can't leave a truncated cache).
+ * (microstate candidate discovery).
+ *
+ * Read from the COMMITTED table, never derived at call time. WHY committed: a
+ * few hundred rectangles are the whole answer, and deriving them meant parsing
+ * the 95 MB dataset — so every chain dry-run and every scope resolution
+ * inherited the boundary dataset's availability. The file name pins the CGAZ
+ * release and simplification tolerance it was generated from, so a version bump
+ * renames it rather than silently changing scopes underneath a run; regenerate
+ * with `npm run gen:country-polygon-bboxes`.
  */
 export function allCountryPolygonBboxes(): Record<string, CountryBbox[]> {
-  if (bboxCache) return bboxCache
-  if (existsSync(BBOX_CACHE)) {
-    return (bboxCache = JSON.parse(readFileSync(BBOX_CACHE, 'utf8')) as Record<string, CountryBbox[]>)
-  }
+  if (bboxTable) return bboxTable
+  const table = JSON.parse(readFileSync(resolve(import.meta.dirname, BBOX_TABLE_FILE), 'utf8')) as
+    { bboxes: Record<string, CountryBbox[]> }
+  return (bboxTable = table.bboxes)
+}
+
+/**
+ * Re-derive the committed bbox table from the prepared CGAZ GeoJSON — the
+ * generator behind `country-polygon-bboxes-*.generated.json`. Only
+ * `lib/gen-country-polygon-bboxes.ts` calls it; every consumer reads the
+ * committed table so scope resolution never needs the boundary dataset.
+ */
+export function deriveCountryPolygonBboxes(): Record<string, CountryBbox[]> {
   const iso3to2 = new Map(Object.entries(ISO2_TO_ISO3).map(([a2, a3]) => [a3, a2]))
   const out: Record<string, CountryBbox[]> = {}
   for (const f of cgazFeatures()) {
@@ -306,10 +352,7 @@ export function allCountryPolygonBboxes(): Record<string, CountryBbox[]> {
       return [s, w, n, e] as const
     })
   }
-  replaceCacheFileAtomically(BBOX_CACHE, temporaryPath => {
-    writeFileSync(temporaryPath, JSON.stringify(out))
-  })
-  return (bboxCache = out)
+  return out
 }
 
 // Global land-mask over ALL CGAZ features (incl. disputed / non-ISO), memoised +

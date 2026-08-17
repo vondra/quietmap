@@ -15,17 +15,20 @@
  * own boundary even though they have no CGAZ ADM0 feature (Codex /gg).
  *
  * Per-country ADM2 GeoJSONs are a few MB (CZE 1.7 MB) vs the 162 MB global
- * ADM0 GeoPackage — downloaded on demand, cached under `scripts/cache/`,
- * unique tmp+rename so interrupted or concurrent downloads cannot leave a
- * truncated file or steal one another's temporary path.
+ * ADM0 GeoPackage — small enough that this gate still fetches lazily, unlike
+ * the ADM0 gate whose acquisition is a separate prepare step. A copy already in
+ * the download search path always wins over the network: upstream deleted this
+ * release (404 since 2026-08-17), so the preserved copies are the only source
+ * left. A fresh fetch lands in `scripts/cache/` with unique tmp+rename, so
+ * interrupted or concurrent downloads cannot leave a truncated file or steal
+ * one another's temporary path.
  */
-import { readFileSync, existsSync, mkdirSync } from 'node:fs'
+import { readFileSync, mkdirSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { replaceCacheFileAtomically } from './atomic-cache.js'
+import { DOWNLOAD_CACHE_DIR, findDownloadedFile } from './download-cache.js'
 import { pointInRing } from './spatial.js'
-
-const CACHE_DIR = resolve(import.meta.dirname, '..', '..', 'scripts', 'cache')
 
 type Ring = ReadonlyArray<readonly [number, number]>
 type Adm2Feature = {
@@ -33,15 +36,13 @@ type Adm2Feature = {
   geometry: { type: 'Polygon' | 'MultiPolygon'; coordinates: unknown }
 }
 
-function adm2Path(iso3: string): string {
-  return resolve(CACHE_DIR, `geoBoundaries-${iso3}-ADM2.geojson`)
-}
-
 function loadAdm2(iso3: string): ReadonlyArray<Adm2Feature> {
-  const path = adm2Path(iso3)
-  if (!existsSync(path)) {
-    mkdirSync(CACHE_DIR, { recursive: true })
-    const url = `https://github.com/wmgeolab/geoBoundaries/raw/v6.0.0/releaseData/gbOpen/${iso3}/ADM2/geoBoundaries-${iso3}-ADM2.geojson`
+  const fileName = `geoBoundaries-${iso3}-ADM2.geojson`
+  let path = findDownloadedFile(fileName)
+  if (!path) {
+    path = resolve(DOWNLOAD_CACHE_DIR, fileName)
+    mkdirSync(DOWNLOAD_CACHE_DIR, { recursive: true })
+    const url = `https://github.com/wmgeolab/geoBoundaries/raw/v6.0.0/releaseData/gbOpen/${iso3}/ADM2/${fileName}`
     replaceCacheFileAtomically(path, temporaryPath => {
       execFileSync('curl', ['-fsSL', '--max-time', '600', url, '-o', temporaryPath])
     })

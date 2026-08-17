@@ -10,17 +10,23 @@
 
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
   Table, vectorFromArray, tableFromIPC, tableToIPC,
   Float64, Int32, Uint8, Uint16, Utf8,
 } from 'apache-arrow'
+import { preparedCountryPolygonFile } from './country-polygon.js'
 import { writeRoadAadt, osmRoadClassRank, type RoadRow } from './roads-arrow.js'
 
-// cz-rsd-scitani — a real national-measured registry id, so shouldOverwrite(0, id) passes.
-const STAMP_ID = 20
+// eu-city-traffic — a real registered roads id that is MEASURED (so the
+// measured-zero guard applies) and CONTINENTAL, not country-scoped. These are
+// writer-plumbing tests; stamping a national `cc-` id would make every one of
+// them build the country gate's real CGAZ polygon, putting a 95 MB boundary
+// dataset behind assertions about coverage, retract and speed_taper. The
+// auto-gate has its own test below, which stamps national ids on purpose.
+const STAMP_ID = 10
 
 const TMP = mkdtempSync(join(tmpdir(), 'roads-arrow-test-'))
 after(() => rmSync(TMP, { recursive: true, force: true }))
@@ -145,32 +151,32 @@ test('fail-loud: unregistered positive id and non-roads layer id both throw (#31
 })
 
 test('retract: disowns owned rows (incl. out-of-coverage) and zeroes AADT; counter reports them', async () => {
-  // The "Zelená 20" heal shape: a class-7 service row stamped by census id 20
+  // The "Zelená 20" heal shape: a class-7 service row stamped by a census id
   // must be disowned even though class 7 is outside the dataset's coverage —
   // retraction runs BEFORE the coverage gate. A class-2 row owned by the same
   // id with a healthy ref stays; a row owned by ANOTHER id is never touched.
   const classes = [7, 2, 7]
   const path = writeRoadsFixture('retract.arrow', classes)
-  // Re-stamp fixture: row0 owned by 20 (bad: class 7), row1 owned by 20
-  // (good: class 2), row2 owned by 12 (foreign, road-continuity-heuristic —
-  // untouchable; must be a REGISTERED roads id since #31.4b).
+  // Re-stamp fixture: row0 owned by STAMP_ID (bad: class 7), row1 owned by
+  // STAMP_ID (good: class 2), row2 owned by 12 (foreign, road-continuity-
+  // heuristic — untouchable; must be a REGISTERED roads id since #31.4b).
   await writeRoadAadt(path, (row, i) =>
-    ({ light: 111, medium: 0, heavy: 0, moto: 0, sourceId: i === 2 ? 12 : 20 }))
+    ({ light: 111, medium: 0, heavy: 0, moto: 0, sourceId: i === 2 ? 12 : STAMP_ID }))
 
   const result = await writeRoadAadt(
     path,
     () => null, // no new matches — pure heal pass
     undefined,
     new Set([0, 1, 2, 3, 4, 10, 11, 12]),
-    { sourceId: 20, when: (row) => osmRoadClassRank(row.roadClass) > 4 },
+    { sourceId: STAMP_ID, when: (row) => osmRoadClassRank(row.roadClass) > 4 },
   )
-  assert.equal(result.retracted, 1, 'exactly the class-7 row owned by 20')
+  assert.equal(result.retracted, 1, 'exactly the class-7 row owned by STAMP_ID')
   assert.equal(result.updated, true)
 
   const t = tableFromIPC(readFileSync(path))
   const src = [...Array(3)].map((_, i) => t.getChild('source_id')!.get(i))
   const light = [...Array(3)].map((_, i) => t.getChild('aadt_light')!.get(i))
-  assert.deepEqual(src, [0, 20, 12], 'row0 disowned, row1 kept, foreign row untouched')
+  assert.deepEqual(src, [0, STAMP_ID, 12], 'row0 disowned, row1 kept, foreign row untouched')
   assert.equal(light[0], 0, 'retracted AADT zeroed')
   assert.equal(light[1], 111, 'kept AADT intact')
   assert.equal(light[2], 111, 'foreign AADT intact')
@@ -180,19 +186,19 @@ test('retract: falls through to match — a re-claimable row is re-stamped in th
   // The rail-twin consensus fix (/gg #31 round 2): a real measurement that
   // happens to trip the retract fingerprint must not be dropped for a cycle.
   const path = writeRoadsFixture('retract-reclaim.arrow', [2])
-  await writeRoadAadt(path, () => ({ light: 111, medium: 0, heavy: 0, moto: 0, sourceId: 20 }))
+  await writeRoadAadt(path, () => ({ light: 111, medium: 0, heavy: 0, moto: 0, sourceId: STAMP_ID }))
   const r = await writeRoadAadt(
     path,
-    () => ({ light: 500, medium: 10, heavy: 5, moto: 2, sourceId: 20 }), // today's join still reaches it
+    () => ({ light: 500, medium: 10, heavy: 5, moto: 2, sourceId: STAMP_ID }), // today's join still reaches it
     undefined,
     new Set([0, 1, 2, 3, 4, 10, 11, 12]),
-    { sourceId: 20, when: () => true }, // legacy-tuple fingerprint fires
+    { sourceId: STAMP_ID, when: () => true }, // legacy-tuple fingerprint fires
   )
   assert.equal(r.retracted, 1)
   assert.equal(r.matched, 1, 'same-pass re-claim, counted in both')
   const t = tableFromIPC(readFileSync(path))
   assert.equal(t.getChild('aadt_light')!.get(0), 500)
-  assert.equal(t.getChild('source_id')!.get(0), 20)
+  assert.equal(t.getChild('source_id')!.get(0), STAMP_ID)
 })
 
 // ── #33 auto-derived national-ownership gate ────────────────────────────────
@@ -201,12 +207,14 @@ test('retract: falls through to match — a re-claimable row is re-stamped in th
 // its country); a CZ source and a world-scoped heuristic (no cc- prefix) stamp
 // normally. Needs the CGAZ cache (present on dev/build hosts).
 
-// Skip on a cold checkout: the auto-gate builds a real CGAZ polygon, and a
-// unit test must not trigger the 162 MB download + GDAL convert (/gg #33
-// Codex). Present on every dev/build host; country-polygon.test.ts covers the
-// predicates themselves.
-const CGAZ_CACHE = join(import.meta.dirname, '..', '..', 'scripts', 'cache', 'geoBoundariesCGAZ_ADM0_s0005.geojson')
-test('countryGate auto-derive: a foreign national id is refused; CZ id and heuristic stamp', { skip: !existsSync(CGAZ_CACHE) }, async () => {
+// Skip on a checkout without the boundary dataset: this is the ONE test here
+// that stamps national ids on purpose, so it is the only one that needs a real
+// CGAZ polygon (/gg #33 Codex). Prepared on every dev/build host;
+// country-polygon.test.ts covers the predicates themselves. Asking the gate
+// module where the dataset is keeps the search path in one place — a guard with
+// its own hardcoded cache path would skip on a host that has it elsewhere.
+test('countryGate auto-derive: a foreign national id is refused; CZ id and heuristic stamp',
+  { skip: preparedCountryPolygonFile() === null }, async () => {
   // US census (id 21, cc- = us) at Prague → wholly foreign → skippedForeign.
   const usPath = writeRoadsFixture('foreign-us.arrow', [0, 2])
   const before = readFileSync(usPath)
@@ -267,7 +275,7 @@ test('speedTaper: column created on first write; OSM speed_limit never touched',
 
   // AADT-only write on a schema WITHOUT the column must not invent it.
   const plain = writeRoadsFixture('taper-nocol.arrow', [2])
-  await writeRoadAadt(plain, () => ({ light: 700, medium: 1, heavy: 2, moto: 3, sourceId: 20 }))
+  await writeRoadAadt(plain, () => ({ light: 700, medium: 1, heavy: 2, moto: 3, sourceId: STAMP_ID }))
   assert.equal(tableFromIPC(readFileSync(plain)).getChild('speed_taper'), null, 'no column invented')
 
   // Out-of-range payloads fail loud (0 means "omit", 255 is the derestricted sentinel).
@@ -303,8 +311,8 @@ test('speedTaper is a derived annotation: any overwrite or retract clears it unl
   // A higher-rank census overwrite of the tapered row clears the annotation —
   // the ramp was computed from the state the census just replaced.
   await writeRoadAadt(path, (_row, i) =>
-    i === 0 ? { light: 9000, medium: 200, heavy: 300, moto: 20, sourceId: 20 } : null)
+    i === 0 ? { light: 9000, medium: 200, heavy: 300, moto: 20, sourceId: STAMP_ID } : null)
   t = tableFromIPC(readFileSync(path))
-  assert.equal(t.getChild('source_id')!.get(0), 20, 'census owns the row now')
+  assert.equal(t.getChild('source_id')!.get(0), STAMP_ID, 'census owns the row now')
   assert.equal(t.getChild('speed_taper')!.get(0), 0, 'stale graded speed cannot hide behind the census stamp')
 })

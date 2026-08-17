@@ -155,10 +155,12 @@ if [ "$RUN_SERVICE_TREE" = "1" ]; then
         exit 1
     fi
 
-    # Warm the CGAZ polygon caches ONCE before fan-out: border hexes make the
-    # shards lazily derive the geoBoundaries GeoJSON + bbox cache, and a fresh
-    # host would run that download/convert 96× concurrently against the same
-    # .tmp files (/gg diff review). Single-process here, cache hits in shards.
+    # Acquire the CGAZ ADM0 dataset ONCE before fan-out: border hexes make the
+    # shards read the geoBoundaries GeoJSON, and a fresh host would run the same
+    # download/convert 96× concurrently against the same .tmp files (/gg diff
+    # review). This is the ONLY step allowed to download it — the gate library
+    # itself only reads, and fails loud when the dataset is missing, so a shard
+    # can never quietly proceed ungated. Single-process here, cache hits in shards.
     log ""
     log "Preparing CGAZ country-polygon caches ..."
     (
