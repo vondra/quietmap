@@ -62,6 +62,14 @@ const ACC_SAFETY: f64 = 2.0;
 /// division (see [`crate::wire_hm3::collapse_lden_surface_u8`]).
 pub(crate) const SURFACE_LDEN_SCALE: f64 = 1.0 / 24.0;
 
+/// Energy scale for airport ground-ops: `collapse_lden_u8` divides each
+/// period's accumulated event energy by `n_days × PERIOD_SECONDS[p]`, which
+/// inside `compute_lden` factors to `Σ_p GROUND_LDEN_WEIGHTS[p]·e_p / (86400 × n_days)`.
+#[inline]
+pub(crate) fn ground_lden_scale(n_days: f64) -> f64 {
+    1.0 / (86400.0 * n_days.max(1.0))
+}
+
 /// Relative energy margin the byte decision must clear on both ends for a pixel
 /// with `n_pairs` contributing pairs. See the module docs.
 #[inline]
@@ -191,6 +199,50 @@ mod tests {
                 db < cap_db,
                 "{n} pairs: margin {db} dB eats too much of a 0.25 dB half-bin"
             );
+        }
+    }
+
+    /// Ground-ops energy scale: quantising `Σ_p GROUND_LDEN_WEIGHTS[p]·e_p` with
+    /// `ground_lden_scale(n_days)` must agree with `collapse_lden_u8` across
+    /// energy magnitudes, arbitrary period mixes, and different `n_days` spans.
+    #[test]
+    fn ground_lden_scale_agrees_with_collapse_lden_u8() {
+        use crate::accumulator::TileAccumulator;
+        use crate::wire_hm3::collapse_lden_u8;
+
+        const GROUND_LDEN_WEIGHTS: [f64; 3] = [1.0, 3.162_277_660_168_379_5, 10.0];
+
+        for &n_days in &[1.0, 30.0, 365.0] {
+            let scale = ground_lden_scale(n_days);
+            for &(e0, e1, e2) in &[
+                (1e6, 2e5, 5e4),
+                (5e8, 1e8, 2e7),
+                (1e10, 5e9, 1e9),
+                (0.0, 1e7, 0.0),
+                (0.0, 0.0, 1e6),
+                (1e3, 0.0, 0.0),
+            ] {
+                let mut acc = TileAccumulator::new();
+                if e0 > 0.0 {
+                    acc.add_energy_at(0, 0, 0, e0 as f32);
+                }
+                if e1 > 0.0 {
+                    acc.add_energy_at(0, 0, 1, e1 as f32);
+                }
+                if e2 > 0.0 {
+                    acc.add_energy_at(0, 0, 2, e2 as f32);
+                }
+
+                let wire_byte = collapse_lden_u8(&acc, n_days)[0];
+                let weighted_energy = e0 * GROUND_LDEN_WEIGHTS[0]
+                    + e1 * GROUND_LDEN_WEIGHTS[1]
+                    + e2 * GROUND_LDEN_WEIGHTS[2];
+                let stop_byte = quant_of(weighted_energy, scale);
+                assert_eq!(
+                    wire_byte, stop_byte,
+                    "n_days={n_days} e=({e0}, {e1}, {e2}): wire {wire_byte} != stop {stop_byte}"
+                );
+            }
         }
     }
 }

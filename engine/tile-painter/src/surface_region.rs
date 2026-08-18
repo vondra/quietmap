@@ -452,14 +452,13 @@ pub fn process_surface_region(
                             &tile_barriers,
                             obstacle_data.set(),
                             &ctx.class_weights,
+                            ctx.n_days,
                             &mut accum,
                         );
                         (
                             st.path_calls,
                             st.skipped_calls,
-                            // ground-ops is still on the η budget skip, which has
-                            // no cheap-pass pair count to report.
-                            0,
+                            st.pairs,
                             0,
                             st.rows_in_reach as u64,
                             st.unique_microsegs as u64,
