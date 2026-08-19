@@ -219,10 +219,16 @@ pub struct TileBuffers {
     pub barr: Vec<f64>,
 }
 
-/// A layer's line sources, packed ONCE per (region, layer) and uploaded once; the
-/// per-tile bins (`PixelBins.indices`) index into these arrays, so they are tile-
-/// invariant. Previously re-packed and re-uploaded per tile — ~160 MB/tile on a
-/// dense (LKPR-class) layer, ~30× redundant PCIe + CPU work across a region.
+/// A layer's line sources, packed ONCE per (region, layer) and uploaded once, so
+/// they are tile-invariant. Previously re-packed and re-uploaded per tile —
+/// ~160 MB/tile on a dense (LKPR-class) layer, ~30× redundant PCIe + CPU work
+/// across a region; any future per-tile narrowing must therefore replay an INDEX
+/// into these arrays, never re-pack them.
+///
+/// There is no per-tile source index today: `line_binned_fused` walks all
+/// `nsrc` of a region's rows for every block and rejects each with its own
+/// `max_distance_m`. (The `PixelBins.indices` this comment used to name has not
+/// existed for some time.)
 pub struct SourceBuffers {
     pub seg: Vec<f64>,
     pub sp: Vec<f64>,
