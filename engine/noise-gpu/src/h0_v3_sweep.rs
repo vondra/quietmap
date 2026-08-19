@@ -13,6 +13,7 @@ use noise_compute::propagation::h0_v3::{
 };
 use serde::Serialize;
 use tile_painter::h0_pair_reference::H0V3PairArm;
+use tile_painter::h0_v3_sampler::{h0_v3_sampled_receivers, H0_V3_SAMPLED_RECEIVERS};
 use tile_painter::h0_v3_tile_reference::{evaluate_h0_v3_stock_tile, evaluate_h0_v3_tile};
 
 use case::{map_tile_error, parse_arguments, run_identity, with_loaded_case, write_json};
@@ -78,13 +79,16 @@ pub fn run_stock() -> Result<()> {
     })?;
     let started = Instant::now();
     with_loaded_case(&arguments, |loaded| {
+        let receivers = h0_v3_sampled_receivers(loaded.arguments.case_index as u32);
         let field = evaluate_h0_v3_stock_tile(
             loaded.tile,
             loaded.rows,
             loaded.barriers,
             Some(loaded.obstacle_set),
+            &receivers,
         );
-        ensure!(field.period_power_f32.len() == 512 * 512);
+        ensure!(field.receiver_indices.len() == H0_V3_SAMPLED_RECEIVERS);
+        ensure!(field.period_power_f32.len() == H0_V3_SAMPLED_RECEIVERS);
         let field_path = loaded.arguments.output.join("field.bin");
         write_h0_v3_field(
             &field_path,
@@ -151,6 +155,7 @@ pub fn run(arm: H0V3PairArm) -> Result<()> {
     with_loaded_case(&arguments, |loaded| {
         let raw_candidate_visits = AtomicU64::new(0);
         let maximum_raw_candidates_per_pair = AtomicU64::new(0);
+        let receivers = h0_v3_sampled_receivers(loaded.arguments.case_index as u32);
         let field = evaluate_h0_v3_tile(
             loaded.tile,
             loaded.rows,
@@ -158,6 +163,7 @@ pub fn run(arm: H0V3PairArm) -> Result<()> {
             Some(loaded.obstacle_set),
             loaded.arguments.layer.line_layer(),
             arm,
+            &receivers,
             &|line, receiver_latitude, receiver_longitude| {
                 let candidates =
                     loaded.collect_candidates(line, receiver_latitude, receiver_longitude)?;
@@ -168,7 +174,8 @@ pub fn run(arm: H0V3PairArm) -> Result<()> {
             },
         )
         .map_err(map_tile_error)?;
-        ensure!(field.period_band_power.len() == 512 * 512);
+        ensure!(field.receiver_indices.len() == H0_V3_SAMPLED_RECEIVERS);
+        ensure!(field.period_band_power.len() == H0_V3_SAMPLED_RECEIVERS);
         ensure!(field.evaluated_pair_count > 0);
         if matches!(arm, H0V3PairArm::JudgeCoarse | H0V3PairArm::JudgeFine) {
             ensure!(field.maximum_distinct_hint_records <= H_JUDGE_MAX);

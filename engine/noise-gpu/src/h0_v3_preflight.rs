@@ -11,6 +11,7 @@ use noise_compute::propagation::h0_v3::{
     H0_V3_RAW_CANDIDATES_PER_PAIR_MAX, H_JUDGE_MAX, JUDGE_LOGICAL_HINT_BYTES_MAX,
 };
 use serde::Serialize;
+use tile_painter::h0_v3_sampler::h0_v3_sampled_receivers;
 use tile_painter::h0_v3_tile_reference::census_h0_v3_judge_tile;
 
 use case::{map_tile_error, parse_arguments, run_identity, with_loaded_case, write_json};
@@ -60,10 +61,12 @@ fn main() -> Result<()> {
     let started = Instant::now();
     with_loaded_case(&arguments, |loaded| {
         ensure!(!loaded.obstacle_set.indexes.is_empty());
+        let receivers = h0_v3_sampled_receivers(loaded.arguments.case_index as u32);
         let census = census_h0_v3_judge_tile(
             loaded.tile,
             loaded.rows,
             loaded.arguments.layer.line_layer(),
+            &receivers,
             &|line, receiver_latitude, receiver_longitude| {
                 loaded.collect_candidates(line, receiver_latitude, receiver_longitude)
             },

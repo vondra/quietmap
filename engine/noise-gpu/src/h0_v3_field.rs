@@ -13,14 +13,22 @@ use tile_painter::accumulator::NUM_PERIODS;
 use tile_painter::h0_pair_reference::H0V3PairArm;
 use tile_painter::h0_v3_tile_reference::H0V3TileField;
 
-pub const H0_V3_FIELD_MAGIC: [u8; 8] = *b"QMV3H0F2";
-pub const H0_V3_FIELD_VERSION: u32 = 2;
-const HEADER_U32_FIELDS: usize = 6;
+/// Format 3 carries an explicit sampled receiver key list. Format 2 was the
+/// implicit full-resolution `TILE_PX * TILE_PX` layout; it is not read here, so
+/// a full-resolution field can never be mixed into a sampled arm matrix.
+pub const H0_V3_FIELD_MAGIC: [u8; 8] = *b"QMV3H0F3";
+pub const H0_V3_FIELD_VERSION: u32 = 3;
+const HEADER_U32_FIELDS: usize = 7;
 pub const H0_V3_FIELD_HEADER_BYTES: usize = 8 + HEADER_U32_FIELDS * 4;
-pub const H0_V3_FIELD_DATA_BYTES: usize = TILE_PX
-    * TILE_PX
-    * (NUM_PERIODS * size_of::<f32>() + NUM_PERIODS * NUM_BANDS * size_of::<f64>());
-pub const H0_V3_FIELD_BYTES: usize = H0_V3_FIELD_HEADER_BYTES + H0_V3_FIELD_DATA_BYTES;
+/// Bytes per emitted receiver: its `u32` key, then period and band powers.
+pub const H0_V3_FIELD_BYTES_PER_RECEIVER: usize =
+    size_of::<u32>() + NUM_PERIODS * size_of::<f32>() + NUM_PERIODS * NUM_BANDS * size_of::<f64>();
+
+/// Exact on-disk size of a field carrying `receiver_count` receivers.
+#[must_use]
+pub const fn h0_v3_field_bytes(receiver_count: usize) -> usize {
+    H0_V3_FIELD_HEADER_BYTES + receiver_count * H0_V3_FIELD_BYTES_PER_RECEIVER
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct H0V3FieldIdentity {
@@ -104,16 +112,30 @@ pub fn arm_from_code(code: u32) -> Result<H0V3FieldArm, H0V3FieldError> {
     }
 }
 
-/// Write one complete field with a self-describing, fixed-size header.
+/// Write one complete field: a self-describing header, the ascending sampled
+/// receiver key list, then one record per sampled receiver in that same order.
+/// The key list is the sole authority for which receivers the arm carries, so
+/// two arms of a case are comparable only if their key lists are identical.
 pub fn write_h0_v3_field(
     path: &Path,
     identity: H0V3FieldIdentity,
     field: &H0V3TileField,
 ) -> Result<(), H0V3FieldError> {
-    if field.period_power_f32.len() != TILE_PX * TILE_PX
-        || field.period_band_power.len() != TILE_PX * TILE_PX
+    let receiver_count = field.receiver_indices.len();
+    if receiver_count == 0
+        || field.period_power_f32.len() != receiver_count
+        || field.period_band_power.len() != receiver_count
     {
         return Err(H0V3FieldError::InvalidLength);
+    }
+    // Strictly ascending and in range: the analyser's key ordering and the
+    // cross-arm identity of the sampled population both rest on this.
+    let mut previous: Option<u32> = None;
+    for &index in &field.receiver_indices {
+        if index as usize >= TILE_PX * TILE_PX || previous.is_some_and(|prior| index <= prior) {
+            return Err(H0V3FieldError::InvalidValue);
+        }
+        previous = Some(index);
     }
     let mut output = BufWriter::new(File::create(path).map_err(|_| H0V3FieldError::Io)?);
     output
@@ -126,9 +148,15 @@ pub fn write_h0_v3_field(
         NUM_BANDS as u32,
         identity.case_index,
         arm_code(identity.arm),
+        receiver_count as u32,
     ] {
         output
             .write_all(&value.to_le_bytes())
+            .map_err(|_| H0V3FieldError::Io)?;
+    }
+    for &index in &field.receiver_indices {
+        output
+            .write_all(&index.to_le_bytes())
             .map_err(|_| H0V3FieldError::Io)?;
     }
     for (period_power, period_band_power) in
@@ -156,14 +184,16 @@ pub fn write_h0_v3_field(
     output.flush().map_err(|_| H0V3FieldError::Io)
 }
 
-/// Read and validate one complete field, then convert every cell through the
-/// sole frozen V3 observation constructor.
+/// Read and validate one complete field, then convert every sampled cell
+/// through the sole frozen V3 observation constructor. Observation keys are
+/// `(case_index << 32) | receiver_index`, so the scorer's strictly-ascending
+/// key requirement is inherited directly from the validated key list.
 pub fn read_h0_v3_observations(
     path: &Path,
     expected: H0V3FieldIdentity,
 ) -> Result<Vec<H0V3Observation>, H0V3FieldError> {
     let metadata = std::fs::metadata(path).map_err(|_| H0V3FieldError::Io)?;
-    if metadata.len() != H0_V3_FIELD_BYTES as u64 {
+    if metadata.len() < H0_V3_FIELD_HEADER_BYTES as u64 {
         return Err(H0V3FieldError::InvalidLength);
     }
     let mut input = BufReader::new(File::open(path).map_err(|_| H0V3FieldError::Io)?);
@@ -189,8 +219,31 @@ pub fn read_h0_v3_observations(
     {
         return Err(H0V3FieldError::InvalidHeader);
     }
-    let mut observations = Vec::with_capacity(TILE_PX * TILE_PX);
-    for pixel_index in 0..TILE_PX * TILE_PX {
+    let receiver_count = header[6] as usize;
+    if receiver_count == 0
+        || receiver_count > TILE_PX * TILE_PX
+        || metadata.len() != h0_v3_field_bytes(receiver_count) as u64
+    {
+        return Err(H0V3FieldError::InvalidLength);
+    }
+    // The key list is read and validated before any power, so a field whose
+    // sampled population is malformed never reaches the scorer.
+    let mut receiver_indices = Vec::with_capacity(receiver_count);
+    let mut previous: Option<u32> = None;
+    for _ in 0..receiver_count {
+        let mut bytes = [0_u8; 4];
+        input
+            .read_exact(&mut bytes)
+            .map_err(|_| H0V3FieldError::Io)?;
+        let index = u32::from_le_bytes(bytes);
+        if index as usize >= TILE_PX * TILE_PX || previous.is_some_and(|prior| index <= prior) {
+            return Err(H0V3FieldError::InvalidValue);
+        }
+        previous = Some(index);
+        receiver_indices.push(index);
+    }
+    let mut observations = Vec::with_capacity(receiver_count);
+    for &pixel_index in &receiver_indices {
         let mut period_power = [0.0_f32; NUM_PERIODS];
         for power in &mut period_power {
             let mut bytes = [0_u8; 4];

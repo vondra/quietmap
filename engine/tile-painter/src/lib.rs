@@ -32,6 +32,8 @@ pub mod ground_ops;
 #[cfg(any(feature = "h0-diagnostic", test))]
 pub mod h0_pair_reference;
 #[cfg(any(feature = "h0-v3", test))]
+pub mod h0_v3_sampler;
+#[cfg(any(feature = "h0-v3", test))]
 pub mod h0_v3_tile_reference;
 pub mod pyramid;
 pub mod r4_source_cache;

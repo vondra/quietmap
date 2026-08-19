@@ -20,10 +20,13 @@ use crate::scatter_band::{PixelGeometry, PreparedSource};
 use crate::scatter_line::LineGeometry;
 use crate::source_line::LineRow;
 
-/// One exact full CPU field. Period powers use the production `f32`
-/// accumulation order; unrounded `f64` band powers are diagnostic only.
+/// One exact CPU field over a frozen sampled receiver set. Period powers use
+/// the production `f32` accumulation order; unrounded `f64` band powers are
+/// diagnostic only. `receiver_indices` is the ascending key list the field was
+/// rendered over, parallel to the two power vectors.
 #[derive(Debug)]
 pub struct H0V3TileField {
+    pub receiver_indices: Vec<u32>,
     pub period_power_f32: Vec<[f32; NUM_PERIODS]>,
     pub period_band_power: Vec<[[f64; NUM_BANDS]; NUM_PERIODS]>,
     pub evaluated_pair_count: u64,
@@ -62,11 +65,17 @@ pub struct H0V3JudgeCensus {
 /// baseline. This is the complete staged model delta, not an isolated P2b
 /// magnitude; the direct predicate fixture owns P2b attribution. The stock
 /// accumulator exposes period powers but retains no per-band diagnostics.
+///
+/// The production painter fills the whole tile in one pass, so this arm paints
+/// everything and then emits only `receivers`. Receivers are independent, so
+/// the emitted values are identical to a hypothetical sampled-only paint —
+/// unlike the judge and H0 arms, sampling buys this arm no wall time.
 pub fn evaluate_h0_v3_stock_tile(
     tile: &FusedTileZ13,
     lines: &[LineRow],
     barriers: &[Barrier],
     obstacles: Option<&ObstacleSet>,
+    receivers: &[u32],
 ) -> H0V3TileField {
     let mut accumulator = TileAccumulator::new();
     let stats = crate::scatter_line::scatter_tile_with_cfg(
@@ -77,14 +86,19 @@ pub fn evaluate_h0_v3_stock_tile(
         &mut accumulator,
         None,
     );
-    let period_power_f32 = accumulator
+    let painted: Vec<[f32; NUM_PERIODS]> = accumulator
         .energy
         .chunks_exact(NUM_PERIODS)
         .map(|periods| [periods[0], periods[1], periods[2]])
         .collect();
+    let period_power_f32 = receivers
+        .iter()
+        .map(|&index| painted[index as usize])
+        .collect();
     H0V3TileField {
+        receiver_indices: receivers.to_vec(),
         period_power_f32,
-        period_band_power: vec![[[0.0; NUM_BANDS]; NUM_PERIODS]; TILE_PX * TILE_PX],
+        period_band_power: vec![[[0.0; NUM_BANDS]; NUM_PERIODS]; receivers.len()],
         evaluated_pair_count: stats.pairs,
         evaluated_node_count: 0,
         admitted_node_count: 0,
@@ -122,11 +136,16 @@ impl H0V3JudgeCensus {
     }
 }
 
-/// Census every live pair in one exact V3 tile without running path physics.
+/// Census every live pair over the frozen sampled receiver set, without running
+/// path physics. It is handed the identical key list as the arms, so the judge
+/// node counts it prices are exactly the nodes the judge arms will evaluate —
+/// the budget gate compares measured work against measured work, never an
+/// extrapolation from a full-resolution census.
 pub fn census_h0_v3_judge_tile<F, E>(
     tile: &FusedTileZ13,
     lines: &[LineRow],
     layer: LineLayer,
+    receivers: &[u32],
     candidates_for_pair: &F,
 ) -> Result<H0V3JudgeCensus, H0V3TileError<E>>
 where
@@ -136,14 +155,16 @@ where
     let geometry = LineGeometry { lines };
     let mut prepared = Vec::new();
     geometry.prepare(tile, &mut prepared);
-    let rows: Result<Vec<_>, H0V3TileError<E>> = (0..TILE_PX)
-        .into_par_iter()
-        .map(|pixel_y| {
+    let rows: Result<Vec<_>, H0V3TileError<E>> = receivers
+        .par_iter()
+        .map(|&receiver_key| {
+            let receiver_index = receiver_key as usize;
+            let pixel_y = receiver_index / TILE_PX;
+            let pixel_x = receiver_index % TILE_PX;
             let receiver_latitude = tile.rx_lat[pixel_y];
             let mut row = H0V3JudgeCensus::default();
-            for pixel_x in 0..TILE_PX {
+            {
                 let receiver_longitude = tile.rx_lon[pixel_x];
-                let receiver_index = pixel_y * TILE_PX + pixel_x;
                 let receiver_altitude_m = tile.rx_alt_m[receiver_index] as f64;
                 let receiver_reflection_db = tile.rx_refl_db[receiver_index] as f64;
                 for source in &prepared {
@@ -222,10 +243,15 @@ where
     Ok(census)
 }
 
-/// Render one complete pre-registered V3 field on CPU. Pixels may run in
-/// parallel, but each pixel consumes source rows in canonical loader order.
+/// Render one pre-registered V3 arm over the frozen sampled receiver set.
+/// Receivers may run in parallel, but each receiver consumes source rows in
+/// canonical loader order, so no value depends on the pool size.
 /// Its period accumulator mirrors `TileAccumulator::add_energy_at`; the f64
 /// band accumulator exists only for the pre-registered diagnostic report.
+///
+/// `receivers` must be the case's frozen sampled key list, ascending. Every
+/// arm of a case is handed the identical list — that is what makes the arms
+/// comparable, and the field writer re-checks it on the way to disk.
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_h0_v3_tile<F, E>(
     tile: &FusedTileZ13,
@@ -234,6 +260,7 @@ pub fn evaluate_h0_v3_tile<F, E>(
     obstacles: Option<&ObstacleSet>,
     layer: LineLayer,
     arm: H0V3PairArm,
+    receivers: &[u32],
     candidates_for_pair: &F,
 ) -> Result<H0V3TileField, H0V3TileError<E>>
 where
@@ -243,67 +270,65 @@ where
     let geometry = LineGeometry { lines };
     let mut prepared = Vec::new();
     geometry.prepare(tile, &mut prepared);
-    let rows: Result<Vec<_>, H0V3TileError<E>> = (0..TILE_PX)
-        .into_par_iter()
-        .map(|pixel_y| {
+    let cells: Result<Vec<_>, H0V3TileError<E>> = receivers
+        .par_iter()
+        .map(|&receiver_key| {
+            let receiver_index = receiver_key as usize;
+            let pixel_y = receiver_index / TILE_PX;
+            let pixel_x = receiver_index % TILE_PX;
             let receiver_latitude = tile.rx_lat[pixel_y];
-            let mut fields = Vec::with_capacity(TILE_PX);
+            let receiver_longitude = tile.rx_lon[pixel_x];
+            let receiver_altitude_m = tile.rx_alt_m[receiver_index] as f64;
+            let receiver_reflection_db = tile.rx_refl_db[receiver_index] as f64;
             let mut counters = RowCounters::default();
-            for pixel_x in 0..TILE_PX {
-                let receiver_longitude = tile.rx_lon[pixel_x];
-                let receiver_index = pixel_y * TILE_PX + pixel_x;
-                let receiver_altitude_m = tile.rx_alt_m[receiver_index] as f64;
-                let receiver_reflection_db = tile.rx_refl_db[receiver_index] as f64;
-                let mut pixel_field = ProductionOrderPixelField::default();
-                for (source_ordinal, source) in prepared.iter().enumerate() {
-                    let (py0, py1, px0, px1) = source.reach_box();
-                    if pixel_y < py0 || pixel_y > py1 || pixel_x < px0 || pixel_x > px1 {
-                        continue;
-                    }
-                    if geometry
-                        .pixel(
-                            source,
-                            tile,
-                            receiver_latitude,
-                            receiver_longitude,
-                            receiver_altitude_m,
-                            receiver_reflection_db,
-                        )
-                        .is_none()
-                    {
-                        continue;
-                    }
-                    let candidates =
-                        candidates_for_pair(source.line, receiver_latitude, receiver_longitude)
-                            .map_err(H0V3TileError::CandidateStore)?;
-                    let pair = evaluate_h0_v3_pair(
-                        tile,
-                        source.line,
-                        barriers,
-                        obstacles,
-                        pixel_y,
-                        pixel_x,
-                        layer,
-                        candidates,
-                        None,
-                        arm,
-                    )
-                    .map_err(H0V3TileError::Pair)?;
-                    counters.add_pair(&pair);
-                    pixel_field
-                        .add_source(
-                            source_ordinal,
-                            pair.period_power_f32,
-                            pair.period_band_power,
-                        )
-                        .map_err(|()| H0V3TileError::SourceOrder)?;
+            let mut pixel_field = ProductionOrderPixelField::default();
+            for (source_ordinal, source) in prepared.iter().enumerate() {
+                let (py0, py1, px0, px1) = source.reach_box();
+                if pixel_y < py0 || pixel_y > py1 || pixel_x < px0 || pixel_x > px1 {
+                    continue;
                 }
-                fields.push(pixel_field.into_field());
+                if geometry
+                    .pixel(
+                        source,
+                        tile,
+                        receiver_latitude,
+                        receiver_longitude,
+                        receiver_altitude_m,
+                        receiver_reflection_db,
+                    )
+                    .is_none()
+                {
+                    continue;
+                }
+                let candidates =
+                    candidates_for_pair(source.line, receiver_latitude, receiver_longitude)
+                        .map_err(H0V3TileError::CandidateStore)?;
+                let pair = evaluate_h0_v3_pair(
+                    tile,
+                    source.line,
+                    barriers,
+                    obstacles,
+                    pixel_y,
+                    pixel_x,
+                    layer,
+                    candidates,
+                    None,
+                    arm,
+                )
+                .map_err(H0V3TileError::Pair)?;
+                counters.add_pair(&pair);
+                pixel_field
+                    .add_source(
+                        source_ordinal,
+                        pair.period_power_f32,
+                        pair.period_band_power,
+                    )
+                    .map_err(|()| H0V3TileError::SourceOrder)?;
             }
-            Ok((fields, counters))
+            Ok((pixel_field.into_field(), counters))
         })
         .collect();
-    Ok(assemble_field(rows?))
+    Ok(assemble_field(receivers, cells?))
 }
 
 #[derive(Default)]
@@ -380,18 +405,17 @@ impl RowCounters {
 
 type PixelField = ([f32; NUM_PERIODS], [[f64; NUM_BANDS]; NUM_PERIODS]);
 
-fn assemble_field(rows: Vec<(Vec<PixelField>, RowCounters)>) -> H0V3TileField {
-    let mut period_power_f32 = Vec::with_capacity(TILE_PX * TILE_PX);
-    let mut period_band_power = Vec::with_capacity(TILE_PX * TILE_PX);
+fn assemble_field(receivers: &[u32], cells: Vec<(PixelField, RowCounters)>) -> H0V3TileField {
+    let mut period_power_f32 = Vec::with_capacity(cells.len());
+    let mut period_band_power = Vec::with_capacity(cells.len());
     let mut counters = RowCounters::default();
-    for (row, row_counters) in rows {
-        for (period_power, period_band) in row {
-            period_power_f32.push(period_power);
-            period_band_power.push(period_band);
-        }
-        counters.merge(row_counters);
+    for ((period_power, period_band), cell_counters) in cells {
+        period_power_f32.push(period_power);
+        period_band_power.push(period_band);
+        counters.merge(cell_counters);
     }
     H0V3TileField {
+        receiver_indices: receivers.to_vec(),
         period_power_f32,
         period_band_power,
         evaluated_pair_count: counters.pairs,
@@ -417,6 +441,7 @@ mod tests {
         let provider = |_: &LineRow, _: f64, _: f64| -> Result<Vec<H0Candidate>, ()> {
             panic!("an empty source tile must not request candidates")
         };
+        let receivers = crate::h0_v3_sampler::h0_v3_sampled_receivers(0);
         let field = evaluate_h0_v3_tile(
             &tile,
             &[],
@@ -424,15 +449,17 @@ mod tests {
             None,
             LineLayer::Road,
             H0V3PairArm::JudgeFine,
+            &receivers,
             &provider,
         )
         .unwrap();
-        assert_eq!(field.period_power_f32.len(), TILE_PX * TILE_PX);
+        assert_eq!(field.receiver_indices, receivers);
+        assert_eq!(field.period_power_f32.len(), receivers.len());
         assert!(field
             .period_power_f32
             .iter()
             .all(|pixel| *pixel == [0.0; NUM_PERIODS]));
-        assert_eq!(field.period_band_power.len(), TILE_PX * TILE_PX);
+        assert_eq!(field.period_band_power.len(), receivers.len());
         assert!(field
             .period_band_power
             .iter()
