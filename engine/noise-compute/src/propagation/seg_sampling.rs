@@ -32,11 +32,15 @@
 //!
 //! `QM_SEG_SAMPLES=1` is therefore NOT by itself the pre-2026-08-05 output. It
 //! only routes the painter down the cp fallback
-//! (`tile_painter::scatter_band`), and that fallback still arc-clips every
-//! segment wider than [`SEG_ARC_MIN_SPAN_RAD`] (3°, the 2026-08-08 gate) —
-//! narrower ones now keep a plain cp verdict they did not keep before. Restoring
-//! the old bytes takes `QM_SEG_SAMPLES=1 QM_ARC_MIN_SPAN_DEG=0` together, which
-//! is also the pairing the CPU-vs-GPU tile comparison runs (SPEC §3.5d).
+//! (`tile_painter::scatter_band`). With a complete vector store that fallback
+//! still arc-clips every segment wider than [`SEG_ARC_MIN_SPAN_RAD`] (3°, the
+//! 2026-08-08 gate); without that complete skyline authority, raster fallback
+//! keeps the cp verdict. Narrow vector-backed spans also keep a plain cp verdict
+//! they did not keep before. Restoring the old vector-backed bytes takes
+//! `QM_SEG_SAMPLES=1 QM_ARC_MIN_SPAN_DEG=0` together, which until 2026-08-19 was
+//! also the pairing the CPU-vs-GPU tile comparison pinned (SPEC §3.5d) — the
+//! kernel then had no quadrature and arc-screened every pair; it now paints this
+//! rule (5 buckets + the 3° gate, compiled in).
 //!
 //! ## CLEAR IS NOT TERRAIN-FREE, and neither is a bucket
 //!
@@ -488,8 +492,8 @@ mod tests {
         }
     }
 
-    /// Arc screening beyond reach: no sub-span can ever clear the gate, so the
-    /// uniform quadrature runs alone — the shipped tile configuration.
+    /// Arc screening beyond reach: no sub-span can ever clear the gate, so this
+    /// test isolates the uniform quadrature instead of the shipped 3° nesting.
     fn arc_off() -> ArcBounds {
         ArcBounds {
             min_span_rad: f64::INFINITY,
@@ -531,8 +535,9 @@ mod tests {
 
     /// Nothing screens, so every bucket returns the bare ground term and the
     /// energy mean of a constant is that constant — for ANY `n`. The invariant
-    /// that catches a mis-weighted bucket or a bad energy round-trip, and the
-    /// reason `n = 1` reproduces the shipped cp verdict exactly.
+    /// that catches a mis-weighted bucket or a bad energy round-trip. On this
+    /// empty flat scene `n = 1` also matches the cp result; its fan-centre ray is
+    /// not the cp ray in general (module docs).
     #[test]
     fn empty_world_is_ground_for_every_n() {
         let obstacles = empty_obstacles();

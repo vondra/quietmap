@@ -17,7 +17,7 @@
 //!   250 m microsegment subtends 136° at 50 m, so the cp ray's single screening
 //!   verdict cannot stand for the whole segment. Vector regions energy-average
 //!   the ground/barrier term over the segment's angular span; raster-fallback
-//!   regions keep the cp verdict.
+//!   regions keep the cp verdict because their footprint skyline is incomplete.
 //! * CNOSSOS `L_W'/m` emission, pre-baked per period as linear band energy in
 //!   the loader; the hot loop multiplies by a shared per-pixel path factor.
 //! * Source height carried on the row (road 0.05 m, rail 0.5 m); receiver 4 m

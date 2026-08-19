@@ -979,12 +979,17 @@ the ≥45 dB pixels the map actually shows. Pinned by
 order over four geometries × 12 permutations and asserts bit equality (it reports
 11.64 dB against the height-only rule).
 
-Terrain, the literal direct-ground vector, vegetation and the finite-line
-correction stay on the cp ray in the current increment-return transport. The
-future node evaluator carries each ray's complete composite; it is the only
-per-ray ground change in scope. Without a vector obstacle store there are no arcs to clip and the
-cp verdict stands unchanged; the same holds for point sources, which have no
-span. Validation (`src/bin/screening_fixture.rs`, 697 receivers × 3 scenes,
+The literal direct-ground vector, vegetation and finite-line correction stay on
+the cp ray. Each bucket and each interval ray already evaluates its own terrain;
+the tile path consumes that composite directly, while the popup's legacy
+increment-return transport can carry only its non-negative increment above the
+cp terrain. A future full-node evaluator would remove that transport loss. In
+the **tile-painter CPU and CUDA lanes**, no vector obstacle store means no
+complete skyline to clip, so the cp verdict stands unchanged even when a noise
+wall exists; otherwise the arc rays would erase real raster-building screening.
+The popup engine has no raster-building fallback and may safely construct a
+wall-only skyline from an empty vector set. Point sources have no span. Validation
+(`src/bin/screening_fixture.rs`, 697 receivers × 3 scenes,
 vs a 33-sub-segment reference integration): shadow-zone error 7.19 → 0.73 dB
 behind a 30 × 10 × 8 m box, 1.07 → 0.31 dB behind a 3 m barrier, no-obstacle
 parity unchanged at 0.25 dB, for ~2× the screening cost of one cp ray.
@@ -1002,10 +1007,12 @@ on the cp ray in both.
 azimuth, the cp is its CLOSEST point — so the tile kernel keeps `N = 1` on the
 cp path instead of calling this. `QM_SEG_SAMPLES=1` alone does NOT restore the
 pre-2026-08-05 bytes any more: it only routes the painter down the cp fallback,
-which since 2026-08-08 arc-clips segments wider than 3° and leaves narrower ones
-on a plain cp verdict. The pair `QM_SEG_SAMPLES=1 QM_ARC_MIN_SPAN_DEG=0` is what
-reproduces the old rule (byte parity verified on all four tiles when the switch
-landed, i.e. before the 3° gate existed — **not re-verified since**).
+which with a complete vector store has since 2026-08-08 arc-clipped segments
+wider than 3° and left narrower ones on a plain cp verdict. Raster fallback has
+no complete skyline authority and remains cp-only. On the vector-backed path,
+the pair `QM_SEG_SAMPLES=1 QM_ARC_MIN_SPAN_DEG=0` is what reproduces the old rule
+(byte parity verified on all four tiles when the switch landed, i.e. before the
+3° gate existed — **not re-verified since**).
 
 WHICH RULE RUNS WHERE, and why they are not the same choice:
 
@@ -1029,8 +1036,15 @@ WHICH RULE RUNS WHERE, and why they are not the same choice:
   per BUCKET is a different trade and the one that ships — see §3.5e.
 * **The popup** keeps §3.5c on its single cp ray. One receiver can afford
   adaptive quadrature, and it is the accuracy etalon.
-* **The CUDA lane** has no equivalent and paints §3.5c. A CPU-vs-GPU tile
-  comparison must therefore run `QM_SEG_SAMPLES=1 QM_ARC_MIN_SPAN_DEG=0`.
+* **The CUDA lane** paints §3.5e since 2026-08-19: `scatter.cu`'s `line_source`
+  runs the same 5-bucket quadrature with the same per-bucket 3° gate, both
+  constants injected by `build.rs` from `SEG_SAMPLES_DEFAULT` and
+  `SEG_ARC_MIN_SPAN_RAD` so the lanes cannot drift. A CPU-vs-GPU tile comparison
+  therefore runs BOTH lanes at defaults — `noise_gpu::ensure_no_cpu_only_arc_levers`
+  refuses every CPU-only override. (`QM_SEG_SAMPLES=1` /
+  `QM_ARC_MIN_SPAN_DEG=0` are the PRE-PORT kernel's rule, and before the port
+  they were the pins this comparison had to run under, which hid the fork by
+  construction.)
   Its arc geometry is f64. One EXPERIMENTAL `SEG_ISECT_F32` switch narrows the
   shared ray-edge chainage solve after its coordinate differences are formed in
   f64. In the repaired official RTX role-attribution series this role contributed
@@ -1054,7 +1068,8 @@ call still returns an increment through the same `max(0, D̄ − A_terrain)` cla
 so the hole recurs PER BUCKET, on the bucket's own terrain, wherever a wide
 bucket is partially blocked over hard ground. What the composite handback removes
 is one clamp at whole-segment granularity, not the clamp itself. OPEN on all
-three lanes (tiles per bucket, popup and CUDA per segment).
+three lanes (tiles and — since the 2026-08-19 port — CUDA per bucket, popup per
+segment).
 
 Both rules take each ray's own `A_terrain`, never the cp ray's — see §3.5c.
 
@@ -1105,9 +1120,10 @@ tile path gets):
 | §3.5c alone (the etalon) | 0.93 dB | 0.261 dB |
 
 Every receiver on every scene is now inside 1.0 dB, and the suite's remaining
-breaches are scenes C/D at their own 0.35 dB limit, where §3.5c and the CUDA rule
-breach identically (0.44-0.48) — a floor on the 3 m wall shared by all three
-rules, not this one's tail.
+breaches are scenes C/D at their own 0.35 dB limit, where §3.5c and the
+pre-port CUDA rule (one cp ray + a per-segment arc pass) breached identically
+(0.44-0.48) — a floor on the 3 m wall shared by all the rules, not this one's
+tail.
 
 COST, and READ THIS BEFORE QUOTING §3.5d's SPEEDUP: the four-tile table in §3.5d
 was measured 2026-08-05 and its 3.8-4.6× is STALE, because §3.5c's own machinery
@@ -1150,14 +1166,51 @@ Pareto-better than §3.5d alone on every tile and every column, and 2.2-4.6× lo
 RMS than §3.5c — so the gate is not a tail-for-bulk trade. It buys the fixture's
 worst receiver AND the tile's bulk, for 4.4 % of the paint.
 
-**THE CUDA TILE LANE'S ELIGIBILITY LEVER, AND WHY ITS DEFAULT IS OFF
-(2026-08-10).** The CUDA lane paints §3.5c per pair and has no bucket to gate
-(§3.5d), so its analogue of this section is `ARC_MIN_SPAN` in
-`noise-gpu/kernels/scatter.cu`: whether a (segment, receiver) pair gets the arc
-walk at all. That one constant used to drive TWO tests, which is why every A/B of
-it measured them together. It now drives the sound one only:
+**THE CUDA TILE LANE PAINTS THIS RULE SINCE 2026-08-19.** Before the port the
+CUDA lane painted §3.5c per pair and had no bucket to gate, so its analogue of
+this section was `ARC_MIN_SPAN` in `noise-gpu/kernels/scatter.cu`: whether a
+(segment, receiver) pair got the arc walk at all, default OFF — a fork the
+parity harness hid by pinning the CPU back onto the kernel's rule. The port
+makes the constant the SAME gate the CPU runs: `ARC_MIN_SPAN` now defaults to
+`SEG_ARC_MIN_SPAN_RAD` (injected by `build.rs` through the same `to_radians`
+spelling, so the two lanes hold bit-identical thresholds), and it decides per
+BUCKET, by the chord law, whether that bucket escalates to a nested arc query
+over its own sub-span. In the raster-fallback branch (no complete vector
+obstacle store) the cp verdict stands, including for wall-bearing paths, so that
+the missing footprint skyline cannot erase raster-building screening.
+`-DARC_MIN_SPAN=<x>` remains the A/B lever on the gate width.
 
-* the **pre-gate** keeps the pair when `L > dend·ARC_MIN_SPAN`, with `dend` the
+Accuracy evidence, labelled by what it is evidence FOR. For the RULE: the CPU
+measurements of this section (the fixture sweep and the four-tile table above)
+— they price §3.5e itself and carry over to the kernel unchanged, because the
+kernel port substitutes the `gob` term and nothing else. For the PORT: the
+pin-free `e2-full` lane gate, which pre-port compared two different rules BY
+DEFAULT (the fork: 69,005 cells moved, 88.5 % CPU-louder, on rail z12/2206/1391)
+and post-port compares the same rule on both lanes — its residual is the
+pre-existing vector-candidate evaluation fork documented at
+`scatter.cu`'s `arc_screen_bands` (the per-edge-range work: 2,298 cells /
+5.91 dB / 39.5 % GPU-louder on that tile), which the port neither fixes nor
+hides. The `-DPROF_ABLATE=1` build measures §3.5d (buckets, no escalation) on
+the GPU; there is no GPU build of pre-port §3.5c any more.
+
+The port applies the 3° rule twice, just like the CPU: the outer chord test
+rejects buckets that are point-like in combined angle/range, and the inner
+`ARC_MIN_SPAN_REALISED` test rejects buckets whose actual endpoint azimuths are
+narrower than 3°. `ARC_DEGENERATE_SPAN` remains the independent numerical guard
+against division by a near-zero span. This second test matters for long segments
+seen nearly end-on; defaulting it to only the numerical floor would be a hidden
+CUDA-only rule. The record below is kept as the history of the PRE-PORT kernel —
+its 5° sweep measured a segment-granularity gate on the old rule, not this one.
+
+<details><summary>Pre-port record (2026-08-10): the segment-granularity
+eligibility lever on the old §3.5c-per-pair kernel</summary>
+
+The CUDA lane used to paint §3.5c per pair and had no bucket to gate, so its
+analogue of this section was `ARC_MIN_SPAN`: whether a (segment, receiver) pair
+got the arc walk at all. That one constant drove TWO tests, which is why every
+A/B of it measured them together:
+
+* the **pre-gate** kept the pair when `L > dend·ARC_MIN_SPAN`, with `dend` the
   distance to the segment's NEAREST point. In ONE flat-earth frame `L/dend` bounds
   both ways a segment can fail to be a point — the ANGLE
   (`span ≤ 2·atan(L/(2·dend)) ≤ L/dend`) and the RANGE spread (distance to the
@@ -1171,48 +1224,31 @@ it measured them together. It now drives the sound one only:
   extractor, so it can sit up to 0.05 m below the true chord (0.5 % on a 10 m
   segment), always in the rejecting direction. At a 5° setting it therefore decides
   pairs whose realised span is 5° ± a few hundredths of a degree: physically nil,
-  formally not a bound. Making it exact means deriving length and distance in ONE
-  frame from the endpoints — a per-pair `sqrt` this pre-gate exists to avoid, and
-  not worth buying for a lever that is off by default.
-* the **realised-span test** inside `arc_screen_bands` compares the ACTUAL atan2
+  formally not a bound.
+* the **realised-span test** inside `arc_screen_bands` compared the ACTUAL atan2
   span. It bounds the angle alone, so it also discards a long segment seen nearly
   END-ON — 250 m of range at ~0.1° of azimuth — where the cp ray does not
   represent the segment and the point-source argument does not hold. It reads
-  `ARC_MIN_SPAN_REALISED`, whose default stays the degenerate threshold: its one
-  sound job is numerical, because the interval arithmetic divides by the span.
+  `ARC_MIN_SPAN_REALISED`, whose pre-port default was the degenerate threshold:
+  its one sound job in that old rule was numerical, because the interval
+  arithmetic divides by the span.
 
-Both default to the degenerate threshold, so the shipped kernel is unchanged, shown
-two ways: the emitted PTX is byte-identical to a build of the kernel without these
-levers, and painting a reference tile with each binary gives cell-for-cell identical
-output. (The end-window guard is `#if`, not `if (MACRO > 0)`, for that reason — a
-runtime test on a macro is eliminated all the same but perturbs instruction
-scheduling, which breaks hash-verifiable inertness without changing behaviour.)
-This section's CPU rule is untouched. They stay DEFAULT-OFF, and the reason is the
-invariant recorded at `ARC_MIN_SPAN`. This constant's CPU counterpart is
+Both defaulted to the degenerate threshold, so the shipped kernel was unchanged,
+shown two ways: the emitted PTX was byte-identical to a build of the kernel
+without these levers, and painting a reference tile with each binary gave
+cell-for-cell identical output. (The end-window guard is `#if`, not `if (MACRO >
+0)`, for that reason — a runtime test on a macro is eliminated all the same but
+perturbs instruction scheduling, which breaks hash-verifiable inertness without
+changing behaviour.) This constant's CPU counterpart was
 `arc_screening::ARC_BOUNDS_DEFAULT.min_span_rad`, which the CPU swept on its own
-lane and set to 0.0 on 2026-08-04 — at 0.01 rad dense Praha put 25 road and 37 rail
-receivers over 1.0 dB (maxima 7.8 / 11.4 dB) to buy 1.15-1.33×. That record also
-states the root cause and the remedy, and this change is that remedy applied to the
-CUDA lane: *"this one number drives TWO different tests … the in-kernel test skips
-whenever the ACTUAL span is small, which ALSO fires for a segment seen nearly
-END-ON … in a street grid a receiver is nearly collinear with hundreds of close,
-energetic segments, which is why Praha degrades ~5× harder than Dobříš. Re-enabling
-this needs the two thresholds SEPARATED, not a different constant."* Separating them
-is what makes the eligibility bound re-measurable at all; it does not by itself make
-it safe to turn on, because raising the GPU's threshold alone still re-forks the
-lanes — the failure that constant has been paid for twice. Note precisely what
-"move with it" has to mean: `min_span_rad` still drives BOTH CPU tests
-(`segment_can_span` AND the realised-span return), so the counterpart is today a
-DEFAULT-VALUE one, not a semantic one. Setting the two lanes to the same non-zero
-number would still fork them — the CPU would additionally discard the end-on
-population the GPU now keeps. Enabling this by default requires splitting the CPU
-thresholds too, which is the same edit on the other lane and is not made here.
+lane and set to 0.0 on 2026-08-04 — at 0.01 rad dense Praha put 25 road and 37
+rail receivers over 1.0 dB (maxima 7.8 / 11.4 dB) to buy 1.15-1.33×.
 
-**MEASURED, AND WHY THE DEFAULT IS STILL OFF (2026-08-10).** Read the configuration
-before reusing these numbers: every figure below was measured with BOTH thresholds at
-5° (`-DARC_MIN_SPAN=0.0872664626 -DARC_MIN_SPAN_REALISED=0.0872664626`), the pre-split
-behaviour of the single constant. Since the split, `-DARC_MIN_SPAN` alone raises only
-the pre-gate and is a different, UNMEASURED rule — do not attach these numbers to it.
+**MEASURED, ON THE PRE-PORT KERNEL (2026-08-10).** Every figure below was
+measured with BOTH thresholds at 5°
+(`-DARC_MIN_SPAN=0.0872664626 -DARC_MIN_SPAN_REALISED=0.0872664626`), the
+pre-split behaviour of the single constant, on the pre-port rule — do not attach
+these numbers to the shipped §3.5e port.
 Two independent agent labs swept the angle on different hardware and found the same
 5° knee. Against the
 CPU production tile rule on three reference cells, the gate's own marginal (gated vs
@@ -1268,9 +1304,9 @@ only 1.20×; the window earns its 1.49× only AFTER the gate removes the arc wal
 because what remains is the cp-ray obstacle DDA it cuts.
 
 Enabling it is nonetheless a separate, owner-level decision, on two grounds. First it
-re-forks the lanes, so the pinning value in
-`noise_gpu::ensure_no_cpu_only_arc_levers` must move with it or every later lane
-comparison is rigged. Second — and this is the one to carry forward — the dense-city
+re-forks the lanes, so `noise_gpu::ensure_no_cpu_only_arc_levers` requires every
+CPU-only override to stay unset and the GPU build consumes the compiled CPU default
+directly. Second — and this is the one to carry forward — the dense-city
 result is partly ERROR CANCELLATION: the ungated kernel's own vector-candidate fork
 runs GPU-louder on that tile while this gate is uniformly quieter, so the gate scores
 well there by cancelling a fork it does not own. Its 419-cell marginal is 100 %
@@ -1281,9 +1317,12 @@ Read `min_span_rad` carefully when comparing lanes: the tile path takes it from
 `seg_sampling::seg_arc_bounds`, which substitutes `SEG_ARC_MIN_SPAN_RAD` (3°) when
 `QM_ARC_MIN_SPAN_DEG` is unset — but there it gates the PER-BUCKET nesting of
 §3.5e, not whether a segment gets angular treatment at all. `ARC_BOUNDS_DEFAULT`'s
-0.0 is the exact/popup value, and it is the one the CUDA default mirrors. This is
-why a CPU-vs-GPU tile comparison must set `QM_SEG_SAMPLES=1 QM_ARC_MIN_SPAN_DEG=0`
-explicitly: neither lane's default is the other's.
+0.0 is the exact/popup value. Before the port neither lane's default was the
+other's, which is why the comparison pinned `QM_SEG_SAMPLES=1
+QM_ARC_MIN_SPAN_DEG=0` explicitly; since 2026-08-19 both lanes' defaults ARE the
+same rule, and the guard requires every CPU-only lever to stay unset instead.
+
+</details>
 
 The same file carries `CAND_END_WINDOW_M`, a DEV-ONLY input prefilter letting the
 per-ray obstacle DDA skip cells lying wholly inside the middle band `[W, dist−W]`

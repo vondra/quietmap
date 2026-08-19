@@ -664,11 +664,13 @@ impl BandScratch {
 ///
 /// ## Lane divergence — read before comparing against CUDA
 ///
-/// The CUDA surface kernel (`engine/noise-gpu/kernels/scatter.cu`) has NO
-/// equivalent: it arc-screens one cp ray per microsegment. With this default the
-/// two lanes therefore compute different physics, by the full 1.5 dB Praha gap.
-/// Any CPU-vs-GPU tile comparison must run the CPU with `QM_SEG_SAMPLES=1
-/// QM_ARC_MIN_SPAN_DEG=0`, which restores the pre-2026-08-05 kernel exactly.
+/// The CUDA surface kernel (`engine/noise-gpu/kernels/scatter.cu`) paints the
+/// same rule: since the 2026-08-19 §3.5e port it compiles this default in
+/// (SEG_SAMPLES buckets + the 3° bucket gate, injected by build.rs from
+/// `SEG_SAMPLES_DEFAULT` and `seg_sampling::SEG_ARC_MIN_SPAN_RAD`).
+/// A CPU-vs-GPU tile comparison therefore runs BOTH lanes at defaults;
+/// `noise_gpu::ensure_no_cpu_only_arc_levers` refuses every CPU-only override;
+/// accepting a copied numeric default would create a second source of truth.
 pub(crate) fn seg_samples() -> usize {
     static N: OnceLock<usize> = OnceLock::new();
     *N.get_or_init(|| {
@@ -703,9 +705,9 @@ const SEG_SAMPLES_DEFAULT: usize = 5;
 /// single cp ray unconditionally: the popup is the accuracy etalon and one
 /// receiver can afford the adaptive rule.
 ///
-/// Note this feeds BOTH the quadrature's per-bucket query and the cp-ray fallback
-/// below it (branch 2, the no-vector-store lane), which is deliberate — the
-/// fallback is a whole-span cp ray, so the same width test is the right one.
+/// Note this feeds BOTH the quadrature's per-bucket query and branch 2's
+/// whole-span query when a complete vector store exists but quadrature cannot
+/// form a fan. The no-vector-store lane keeps its cp verdict unchanged.
 pub(crate) fn tile_arc_bounds() -> ArcBounds {
     static V: OnceLock<ArcBounds> = OnceLock::new();
     *V.get_or_init(seg_arc_bounds)

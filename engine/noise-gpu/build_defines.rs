@@ -22,7 +22,6 @@ const REVIEWED_EXPERIMENTAL_DEFINES: &[&str] = &[
     "PROF_ABLATE",
     "PROF_BLOCK_MOD",
     "PROF_COUNTERS",
-    "PROF_SIXMARCH",
     "SEG_ISECT_F32",
 ];
 
@@ -92,6 +91,8 @@ fn is_build_generated_define(name: &str) -> bool {
                 | "OBST_META_STRIDE"
                 | "FOOT_BOX_STRIDE"
                 | "ARC_DEGENERATE_SPAN"
+                | "SEG_ARC_MIN_SPAN_RAD"
+                | "SEG_SAMPLES"
                 | "ARC_CP_EPS"
                 | "ARC_QUADRATURE_MIN_RAD"
                 | "GROUND_HARD_FLOOR_DB"

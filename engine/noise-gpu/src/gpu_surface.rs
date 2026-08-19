@@ -25,7 +25,10 @@ use cudarc::driver::{result, CudaDevice, CudaFunction, CudaSlice, LaunchAsync, L
 use h3o::CellIndex;
 use noise_compute::admin;
 use noise_compute::propagation::obstacle_index::ObstacleSet;
-use noise_gpu::{pack_sources, pack_tile, upload_obstacles, ObstDev, TileBuffers, BIN_W, N_BINS};
+use noise_gpu::{
+    pack_sources, pack_tile, upload_obstacles, ObstDev, SurfaceKernelTileParameters, TileBuffers,
+    BIN_W, N_BINS,
+};
 use raster_reader::fused_tile_z13::{default_batch_size, TileBatch};
 use raster_reader::RealRasters;
 use rayon::prelude::*;
@@ -39,6 +42,7 @@ use tile_painter::region_runner::{
 use tile_painter::renderer_evidence::{
     maybe_run_static_attestation, DependencyProfile, RegionTerminalStatus, RendererEvidence,
     RuntimeParameters, StaticAttestationParameters, RENDERER_EVIDENCE_FLAG,
+    RENDERER_STATIC_ATTEST_FLAG,
 };
 use tile_painter::source_line::LineRow;
 use tile_painter::source_loader_barrier::BarrierData;
@@ -200,6 +204,17 @@ fn tile_times_enabled() -> bool {
     *ON.get_or_init(|| std::env::var("QM_GPU_TILE_TIMES").as_deref() == Ok("1"))
 }
 
+/// Opt-in acceptance census for the reviewed rail z12/2206/1391 fixture. This
+/// is deliberately separate from ordinary production: it allocates the 10 MiB
+/// PROF_COUNTERS tail and requires a matching counter-instrumented PTX.
+fn rail_arcstat_census_required() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("NOISE_GPU_REQUIRE_RAIL_ARCSTAT_CENSUS").as_deref() == Ok("1"))
+}
+
+static RAIL_ARCSTAT_CENSUS_PASSES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// Per-layer end-to-end counters (timings in seconds, summed over tiles).
 #[derive(Clone, Default)]
 struct LayerStat {
@@ -333,12 +348,17 @@ fn process_block(
     }
     let d_elev = dev.htod_copy(elev).expect("elev");
     let d_cover = dev.htod_copy(cover).expect("cover");
-    // Energies + the one-f32 ARC FAULT slot (`noise_gpu::OUT_FAULT_SLOT`), and
-    // NOT the 8 MiB PROF_COUNTERS block: `pack_tile` puts this same length in
-    // meta[13] and the kernel enters its optional regions only on that word, so a
-    // `-DPROF_COUNTERS=1` PTX under this binary writes nothing past the fault slot
-    // instead of 8 MiB past the end of the allocation.
-    let out_slots = if cfg!(feature = "v2-h0") {
+    // Ordinary production allocates energies + ARC FAULT only. The explicit
+    // rail acceptance census adds the 10 MiB PROF_COUNTERS tail; `pack_tile`
+    // carries the exact size in meta[13], so a counter PTX remains safe under a
+    // normal production binary and a required census fails if counters are absent.
+    let require_arcstat = rail_arcstat_census_required();
+    if require_arcstat && cfg!(feature = "v2-h0") {
+        bail!("rail ARCSTAT census is only defined for the stock surface role");
+    }
+    let out_slots = if require_arcstat {
+        noise_gpu::OUT_SLOTS_PROF
+    } else if cfg!(feature = "v2-h0") {
         noise_gpu::OUT_SLOTS_H0
     } else {
         noise_gpu::OUT_SLOTS_PROD
@@ -352,6 +372,7 @@ fn process_block(
     let arc_drops_seen = 0f32;
     #[cfg(feature = "v2-h0")]
     let mut h0_counts_seen = [0_u64; noise_gpu::OUT_H0_COUNTERS];
+    let mut arcstat_seen = [0f64; noise_gpu::OUT_ARCSTAT_COUNTERS];
     let launch_cfg = LaunchConfig {
         grid_dim: (N_BINS as u32, 1, 1),
         block_dim: ((BIN_W * BIN_W) as u32, 1, 1),
@@ -387,12 +408,14 @@ fn process_block(
         pack_tile(
             tile,
             halo_geom,
-            ETA,
-            TW,
             &tile_barriers,
-            nsrc,
-            out_slots,
-            layer.h0_abi_tag(),
+            SurfaceKernelTileParameters {
+                byte_stop_control: ETA,
+                swizzle_width: TW,
+                source_count: nsrc,
+                output_slots: out_slots,
+                line_layer_tag: layer.h0_abi_tag(),
+            },
         )
     };
     let prep_timed = |it: (u32, u32, LineLayer), stats: &mut BTreeMap<&'static str, LayerStat>| {
@@ -495,13 +518,14 @@ fn process_block(
         // direction that a building genuinely blocks was painted clear. Loud, not
         // fatal: the tile is still the best this kernel can produce, and a world
         // build should not die on it — but it must never again be invisible.
-        if gpu[noise_gpu::OUT_FAULT_SLOT] > arc_drops_seen {
+        let arc_drops_this_tile = gpu[noise_gpu::OUT_FAULT_SLOT] - arc_drops_seen;
+        if arc_drops_this_tile > 0.0 {
             #[cfg(feature = "v2-h0")]
             bail!(
                 "V2 H0 ABI/layout fault {} z{}/{tx}/{ty}: production_fault_slot_delta={:.0}",
                 layer.dir(),
                 cfg.z,
-                gpu[noise_gpu::OUT_FAULT_SLOT] - arc_drops_seen,
+                arc_drops_this_tile,
             );
             #[cfg(not(feature = "v2-h0"))]
             {
@@ -511,10 +535,54 @@ fn process_block(
                  re-measure with NOISE_GPU_DEFINES=\"-DARC_MAX_MERGED=<bigger>\"",
                     layer.dir(),
                     cfg.z,
-                    gpu[noise_gpu::OUT_FAULT_SLOT] - arc_drops_seen,
+                    arc_drops_this_tile,
                 );
                 arc_drops_seen = gpu[noise_gpu::OUT_FAULT_SLOT];
             }
+        }
+        if require_arcstat {
+            anyhow::ensure!(
+                arc_drops_this_tile == 0.0,
+                "rail ARCSTAT census dropped {arc_drops_this_tile:.0} arcs"
+            );
+            anyhow::ensure!(
+                layer == LineLayer::Rail && cfg.z == 12 && tx == 2206 && ty == 1391,
+                "rail ARCSTAT census requires exactly rail z12/2206/1391, got {} z{}/{tx}/{ty}",
+                layer.dir(),
+                cfg.z,
+            );
+            let mut current = [0f64; noise_gpu::OUT_ARCSTAT_COUNTERS];
+            for px in
+                gpu[noise_gpu::OUT_ARCSTAT_BASE..].chunks_exact(noise_gpu::OUT_ARCSTAT_COUNTERS)
+            {
+                for (acc, value) in current.iter_mut().zip(px.iter()) {
+                    *acc += f64::from(*value);
+                }
+            }
+            let mut delta = [0f64; noise_gpu::OUT_ARCSTAT_COUNTERS];
+            for i in 0..noise_gpu::OUT_ARCSTAT_COUNTERS {
+                delta[i] = current[i] - arcstat_seen[i];
+            }
+            let census = noise_gpu::validate_rail_port_arcstat_census(&delta)?;
+            eprintln!(
+                "ARCSTAT_TILE=PASS fixture=rail-2206-1391 quadrature_pairs={:.0} \
+                 bucket_rays={:.0} buckets_per_gpu_pair={:.6} \
+                 escalating_pairs={:.0} gpu_pair_escalation_frac={:.6} \
+                 gpu_escalating_pairs_per_authority_pair={:.6} escalating_buckets={:.0} \
+                 gpu_bucket_escalation_frac={:.6} \
+                 gpu_escalating_buckets_per_authority_bucket_ray={:.6}",
+                delta[0],
+                delta[2],
+                census.buckets_per_gpu_pair,
+                delta[1],
+                census.gpu_pair_escalation_frac,
+                census.gpu_escalating_pairs_per_authority_pair,
+                delta[3],
+                census.gpu_bucket_escalation_frac,
+                census.gpu_escalating_buckets_per_authority_bucket_ray,
+            );
+            arcstat_seen = current;
+            RAIL_ARCSTAT_CENSUS_PASSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         #[cfg(feature = "v2-h0")]
         {
@@ -1375,6 +1443,22 @@ fn main() -> Result<()> {
         }
         None => 12,
     };
+    let require_arcstat = rail_arcstat_census_required();
+    if require_arcstat {
+        anyhow::ensure!(
+            !cfg!(feature = "v2-h0"),
+            "rail ARCSTAT census is only defined for the stock surface role"
+        );
+        anyhow::ensure!(!stream, "rail ARCSTAT census refuses --stream");
+        anyhow::ensure!(
+            layers.as_slice() == [LineLayer::Rail] && z == 12,
+            "rail ARCSTAT census requires --layers rail --zoom 12"
+        );
+        anyhow::ensure!(
+            std::env::var_os(RENDERER_STATIC_ATTEST_FLAG).is_none(),
+            "rail ARCSTAT census refuses static renderer attestation"
+        );
+    }
     let prepared = env("NOISE_GPU_PREPARED", "/dev/shm/qmap/prepared");
     let baseline = env("NOISE_GPU_BASELINE", ""); // empty ⇒ no diff (production)
     let year = env("DATA_YEAR", "2026");
@@ -1514,6 +1598,13 @@ fn main() -> Result<()> {
         bail!("no tiles to build (no valid z{z} tiles in range)");
     }
     let n_targets: usize = regions.values().map(Vec::len).sum();
+    if require_arcstat {
+        let targets: Vec<(u32, u32)> = regions.values().flatten().copied().collect();
+        anyhow::ensure!(
+            targets.as_slice() == [(2206, 1391)],
+            "rail ARCSTAT census requires exactly tile 2206/1391, got {targets:?}"
+        );
+    }
     let layer_names: Vec<&str> = layers.iter().map(|l| l.dir()).collect();
     eprintln!(
         "{mode} | {} region(s), {n_targets} tile(s), layers={:?}, halo={halo_m:.0} m, batch={blk_n}",
@@ -1600,6 +1691,14 @@ fn main() -> Result<()> {
     }
     if let Some(root) = &output {
         eprintln!("  → HM3 under {root}/{{{}}}/{z}", layer_names.join(","));
+    }
+    if require_arcstat {
+        let passes = RAIL_ARCSTAT_CENSUS_PASSES.load(std::sync::atomic::Ordering::Relaxed);
+        anyhow::ensure!(
+            passes == 1,
+            "rail ARCSTAT census requires exactly one completed fixture, got {passes}"
+        );
+        eprintln!("ARCSTAT_GATE=PASS fixture=rail-2206-1391 passes=1");
     }
     Ok(())
 }

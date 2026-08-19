@@ -307,9 +307,9 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 // documented overflow policy is to FUSE the closest pair, not to drop — so 32 had
 // no CPU counterpart at all and every drop was a pure lane fork. A cap chosen from
 // two tiles is still a bet on unseen geometry; that is what the always-on fault
-// counter (`OUT_FAULT_SLOT`) and the e2 gate's hard failure on it are for. Note
-// the fixture cannot catch any of this: its scenes carry 5 footprints, so no cap
-// can bind there (screening_fixture.rs:1089).
+// counter (`OUT_FAULT_SLOT`) and the e2 gate's hard failure on it are for. The
+// current fixture mirror also aborts on its first attempted drop; production
+// density remains the authority for choosing the ceiling.
 #ifndef ARC_MAX_MERGED
 #define ARC_MAX_MERGED 160
 #endif
@@ -348,125 +348,61 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #ifndef ARC_TRI_WALK
 #define ARC_TRI_WALK 1
 #endif
-// Minimum angular span (rad) that gets the arc treatment at all. The default is
-// ARC_DEGENERATE_SPAN — i.e. OFF, the exact kernel. The physics argument for
-// raising it is CNOSSOS point-source validity, which is also the fix-pack's own
-// K=1 rule: below ~10° a microsegment IS a point source at that receiver, so the
-// cp verdict already represents it and the blocked-fraction correction has
-// nothing to correct. It is a DECLARED bound, swept against the exact kernel
-// with compare_hm3 — never a tuned constant.
+// Minimum angular width that gets the arc treatment at all — THE §3.5e GATE.
+// Since the 2026-08-19 port the kernel paints the CPU tile painter's rule
+// (`seg_sampling::sampled_gob_bands_with_ground`): the fan is quadratured in
+// SEG_SAMPLES buckets and this gate decides, per BUCKET (chord law), whether
+// that bucket escalates to a nested arc query over its own sub-span. A
+// raster-fallback path keeps its cp verdict because its footprint skyline is
+// incomplete. The default is
+// SEG_ARC_MIN_SPAN_RAD, injected by build.rs from seg_sampling.rs through the
+// same `to_radians` — 3°, bit-for-bit the CPU's — so the lanes cannot drift
+// apart by editing one side. -DARC_MIN_SPAN=<x> sweeps the gate for A/B, which
+// is the ONLY thing a -D lever may be used for.
+//
 // INVARIANT: A PHYSICS CONSTANT IS DEFAULT-ON IN EVERY LANE OR IT DOES NOT
-// EXIST. This kernel once had the gate reachable only through -DARC_MIN_SPAN, so
-// the shipped GPU ran arc screening on every pair the CPU skipped: the lanes
-// forked silently, P4 measured a comparison that had been rigged by the
-// asymmetry, and it cost 2.6x kernel time as well (267 428 -> 102 653 ms on the
-// dense rail tile). The cure was to make it a DEFAULT here — and then the same
-// invariant bit in the other direction and had to be paid a second time.
+// EXIST. This kernel's gate has forked from the CPU's twice and both times it
+// was found by review, not by a gate (2026-08-04: the kernel sat at 0.01 rad
+// for two hours after the CPU sweep turned its own gate off, worth up to 11.4
+// dB on dense geometry; 2026-08-08 onward: the kernel arc-screened EVERY pair
+// from ARC_DEGENERATE_SPAN up while the CPU shipped 5 buckets + this 3° gate,
+// and the parity harness pinned the CPU back onto the old rule so the fork
+// never showed as drift — the port this comment heads closes that one).
 //
-// 2026-08-04: the CPU swept this gate on its OWN lane and turned it OFF
-// (`ARC_BOUNDS_DEFAULT.min_span_rad = 0.0`). At 0.01 rad dense Praha puts 25
-// road and 37 rail receivers over the 1.0 dB line, maxima 7.8 / 11.4 dB, to buy
-// 1.15-1.33x. The reason is that ONE number drives TWO different tests: the
-// pre-gate at the bottom of this file is a genuine point-source test and is
-// sound (it fires zero times), while the in-kernel test above skips whenever the
-// ACTUAL span is small — which also catches a long segment seen nearly END-ON,
-// where the cp ray does NOT represent it. This define stayed at 0.01 for two
-// hours after the CPU moved, i.e. the invariant was violated again, silently,
-// by the fix for its first violation. Found by review, not by a gate.
-//
-// The default is ARC_DEGENERATE_SPAN, which makes the effective threshold
-// identical to the CPU's `max(DEGENERATE_SPAN_RAD, min_span_rad)` — mirroring
-// the CPU EXPRESSION, not a copy of its number, so the lanes cannot drift apart
-// again by editing one side. -DARC_MIN_SPAN=<x> raises it for A/B, which is the
-// ONLY thing a -D lever may be used for.
-//
-// 2026-08-10 — THE CASE FOR RAISING IT TO 5° IS MEASURED AND THE DEFAULT IS STILL
-// OFF. READ THE CONFIGURATION BEFORE REUSING THE NUMBERS: every figure below was
-// measured with BOTH thresholds at 5°, i.e.
-// `-DARC_MIN_SPAN=0.0872664626 -DARC_MIN_SPAN_REALISED=0.0872664626`, which is the
-// pre-split behaviour of this one constant. Since the split, -DARC_MIN_SPAN alone
-// raises only the pre-gate and is a DIFFERENT, UNMEASURED rule — do not attach
-// these numbers to it.
-// Two independent agent labs swept the angle on different hardware and found the
-// same knee; re-measured here on ONE card with an exclusive GPU and a complete
-// obstacle halo, dense rail tile, marginal against the UNGATED kernel by the map's
-// paint bands (nothing renders below 30 dB):
-//   ungated                        275.0 s   1.0x
-//   sound gate 5° + 600 m window    24.4 s  11.3x  ≥60: 0  30-60: 0    max 1.0
-//   sound gate 8° + 600 m window    18.6 s  14.8x  ≥60: 0  30-60: 13   max 2.0
-//   both tests 5° + 600 m window    17.4 s  15.8x  ≥60: 0  30-60: 5    max 1.5
-//   both tests 8° + 600 m window    16.4 s  16.8x  ≥60: 0  30-60: 210  max 4.0
-// No operating point moves ONE cell over 1 dB in the loud band. The SOUND split is
-// the accuracy winner outright, and 8° is Pareto-dominated by 5° here — 6 % more
-// speed for 42x the visible drift. The gate alone is worth 10.6x and the window
-// alone only 1.20x: the window earns its 1.49x only AFTER the gate removes the arc
-// walk, because what is left is the cp-ray obstacle DDA it cuts. On dense city the
-// gated kernel also lands CLOSER to the CPU rule than the ungated one (3 442 vs
-// 4 120 cells >1 dB).
-//
-// Turning it on is nonetheless a SEPARATE, OWNER-LEVEL decision, for two reasons.
-// (i) It re-forks the lanes: the CPU's counterpart is 0.0, so enabling this needs
-// the pinning value in `ensure_no_cpu_only_arc_levers` moved with it, or every
-// later lane comparison is rigged — the failure this constant has been paid for
-// twice. (ii) The dense-city result is partly ERROR CANCELLATION: the ungated
-// kernel's own vector-candidate fork runs GPU-louder there and this gate is
-// uniformly quieter, so the gate scores well by cancelling a fork it does not own.
-// When that fork closes, the cancellation goes with it. Re-measure then.
-//
-// 2026-08-10 — WHICH OF THE TWO TESTS THIS NUMBER DRIVES. The note above named
-// the defect ("ONE number drives TWO different tests") and then left both wired
-// to it, so every A/B of this lever silently measured them together. They are
-// now separate, because they are not the same claim:
-//   * the PRE-GATE (`arc_span_possible`, in `line_source`) keeps the pair when
-//     L > dend·ARC_MIN_SPAN, where `dend` is the distance to the segment's
-//     NEAREST POINT (p2s clamps the foot). Within ONE flat-earth frame L/dend
-//     bounds BOTH ways a segment can fail to be a point: the ANGLE, since
-//     span ≤ 2·atan(L/(2·dend)) ≤ L/dend; and the RANGE spread, since distance
-//     to the receiver is 1-Lipschitz along the segment, so its max minus its
-//     min over the segment is ≤ L while that min IS dend. A pair it rejects is
-//     point-like in both senses, which is what a point-source test has to mean.
-//     CAVEAT, and it is why the word here is CONSERVATIVE and never PROVABLE.
-//     TWO things break the inequality at the margin:
-//       (a) FRAMES. `sp[0]` is the host's own `length_m`, p2s scales longitude
-//           by the SEGMENT-MIDPOINT latitude (via `__cosf`, f32), and the
-//           realised span below scales it by the RECEIVER's (f64 `cos`). Those
-//           differ by cos(lat_rcv)/cos(lat_mid) — ~0.2 % over 10 km of latitude
-//           at 50°.
-//       (b) LENGTH ROUNDING. `length_m` is serialised to ONE decimal by the
-//           extractor, so it can sit up to 0.05 m BELOW the true chord — 0.5 %
-//           on a 10 m segment, 0.02 % on a 250 m one, and always in the
-//           rejecting direction.
-//     Together, at a 5° setting this decides pairs whose realised span is
-//     5° ± a few hundredths of a degree. Physically nil, formally not a bound:
-//     do not restate it as one, and do not build a proof on top of it. Making
-//     it exact would mean deriving length and distance in ONE frame from the
-//     endpoints — a sqrt per pair that this pre-gate exists to avoid, and not
-//     worth buying for a lever that is off by default.
-//   * the realised-span test at the top of `arc_screen_bands` tests the ACTUAL
-//     atan2 span, which ALSO collapses for a long segment seen nearly END-ON.
-//     There the cp ray does not represent the segment at all: what the cp ray
-//     misses is the segment's RANGE spread (a 250 m segment pointing away from
-//     the receiver spans 250 m of distance at ~0.1° of azimuth), and range
-//     spread is exactly what a point-source argument may not throw away. That
-//     test now reads ARC_MIN_SPAN_REALISED below.
-// Both default to the degenerate threshold, so the shipped kernel is unchanged
-// either way; what changed is that raising ARC_MIN_SPAN no longer silently
-// drops the end-on geometry that dense rail corridors are made of.
+// The gate is a WIDTH test (`segment_can_span`: L > min_span·d), not a distance
+// test, and at bucket granularity it is nearly free for the reason
+// seg_sampling.rs records: a 250 m microsegment 3 km out has a 0.08 rad fan,
+// one bucket of which is 0.017 rad, so it never asks — and pairs like that are
+// what a tile's cost is made of. Two caveats the pre-port kernel documented for
+// the segment-level form still apply in branch (2) when a complete vector store
+// exists but no real fan can be formed: (a) FRAMES — `sp[0]` is the host's
+// `length_m`, p2s scales longitude by the SEGMENT-midpoint latitude, the fan
+// frame by the RECEIVER's (~0.2 % over 10 km at 50°); (b) LENGTH ROUNDING —
+// `length_m` is serialised to one decimal, up to 0.05 m below the true chord.
+// Together they move a threshold verdict by a few hundredths of a degree.
+// Physically nil, formally not a bound: do not restate it as one.
 #ifndef ARC_MIN_SPAN
-#define ARC_MIN_SPAN ARC_DEGENERATE_SPAN
+#define ARC_MIN_SPAN SEG_ARC_MIN_SPAN_RAD
 #endif
-// Realised-span floor for the arc walk itself. Its ONE sound job is numerical:
-// the interval arithmetic divides by the span, so a span of ~0 divides by ~0.
-// That job is ARC_DEGENERATE_SPAN's, and this is an A/B lever for measuring what
-// raising it costs — the 2026-08-04 Praha sweep on the CPU lane (25 road / 37
-// rail receivers over 1.0 dB, maxima 7.8 / 11.4 dB) was measured at 0.01 rad =
-// 0.57°, about a NINTH of the 5° an angular gate wants, and dense-city geometry
-// is where it bites. Note also that a PERFECTLY radial segment still returns
-// here at any setting (its realised span is exactly 0), so what separating the
-// thresholds recovers is the NEARLY end-on population, not the exactly end-on
-// one.
+// Buckets per microsegment fan — the CPU tile painter's `SEG_SAMPLES_DEFAULT`,
+// injected by build.rs so the two lanes cannot drift. NOT a knob: the worst
+// receiver is non-monotone in n (seg_sampling.rs's own sweep — scene F reads
+// 2.17 dB at n=5 and 8.21 at n=6), so a "tuned" n is an aliasing lottery.
+#ifndef SEG_SAMPLES
+#error "SEG_SAMPLES must be generated from tile-painter/src/scatter_band.rs"
+#endif
+#ifndef SEG_ARC_MIN_SPAN_RAD
+#error "SEG_ARC_MIN_SPAN_RAD must be generated from noise-compute/src/propagation/seg_sampling.rs"
+#endif
+// Realised-span gate inside the arc walk. The CPU applies the SAME 3° bound
+// after the outer chord test (`arc_screened_eval` checks both the numerical
+// degeneracy floor and `bounds.min_span_rad`), which matters for a long segment
+// seen nearly end-on: its L/d chord can pass while its realised azimuth does
+// not. Defaulting this to only ARC_DEGENERATE_SPAN made those buckets a hidden
+// CUDA-only rule. The separate define remains solely for controlled A/B work;
+// acceptance builds inherit the generated per-bucket gate exactly.
 #ifndef ARC_MIN_SPAN_REALISED
-#define ARC_MIN_SPAN_REALISED ARC_DEGENERATE_SPAN
+#define ARC_MIN_SPAN_REALISED ARC_MIN_SPAN
 #endif
 // ---- `out` LAYOUT. Mirrored by the OUT_* consts in noise-gpu/src/lib.rs, and
 // the host tells the kernel how many f32 slots it actually ALLOCATED in
@@ -476,17 +412,23 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 //   [0, OUT_ENERGY_SLOTS)                the three period energies per pixel
 //   [OUT_FAULT_SLOT]                     ARC FAULT: blocked arcs dropped for
 //                                        ARC_MAX_MERGED overflow, whole launch
-//   [OUT_ARCSTAT_BASE + opix*8, +8)      per-pixel PROF_COUNTERS counters
+//   [OUT_ARCSTAT_BASE + opix*10, +10)    per-pixel PROF_COUNTERS counters
 //
 // The fault slot is ONE float and is always allocated, in production too: a
 // silent drop with no channel to report it on is what let ARC_MAX_MERGED
-// under-screen 1.1 M arcs unnoticed. The 8-per-pixel counter block is 8 MiB at
+// under-screen 1.1 M arcs unnoticed. The 10-per-pixel block is 10 MiB at
 // 512² and is NOT allocated in production.
 #define OUT_ENERGY_SLOTS  (TPX * TPX * 3)
 #define OUT_FAULT_SLOT    OUT_ENERGY_SLOTS
 #define OUT_ARCSTAT_BASE  (OUT_ENERGY_SLOTS + 1)
 #define OUT_SLOTS_PROD    (OUT_ENERGY_SLOTS + 1)
-#define OUT_SLOTS_PROF    (OUT_ARCSTAT_BASE + TPX * TPX * 8)
+#ifndef OUT_ARCSTAT_COUNTERS
+#error "OUT_ARCSTAT_COUNTERS must be generated from noise-gpu/src/lib.rs"
+#endif
+#if OUT_ARCSTAT_COUNTERS != 10
+#error "the reviewed arc-stat counter layout has ten channels"
+#endif
+#define OUT_SLOTS_PROF    (OUT_ARCSTAT_BASE + TPX * TPX * OUT_ARCSTAT_COUNTERS)
 #if V2_H0
 #ifndef V2_H0_OUTPUT_ABI_VERSION
 #error "V2_H0_OUTPUT_ABI_VERSION must be generated from noise-gpu/src/lib.rs"
@@ -513,15 +455,18 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #define PROF_H0_PAIR_DIAGNOSTIC 0
 #endif
 #endif
-// -DPROF_COUNTERS=1 makes the kernel report, per pixel, how many (segment,
-// receiver) pairs survived the budget skip and how many of those actually took
-// the arc path. The RATIO is what transfers between cells: it says whether a
-// span bound is trimming pairs that cannot matter or clipping real work.
+// -DPROF_COUNTERS=1 reports quadrature pairs, pairs with an escalating bucket,
+// marched bucket rays, escalating buckets, then six arc-walk diagnostics. The
+// first four independently prove the port shape: buckets/pair ≈5 and honest raw
+// GPU pair/bucket escalation fractions. The required rail census additionally
+// normalises GPU escalation COUNTS by the fixed CPU authority populations;
+// those count-agreement metrics are the ≈1.2 % acceptance check and must not be
+// confused with the lower raw GPU fractions printed beside them.
 //
 // The counters are a compile-time AND a runtime choice, and it takes both.
 // Compile-time alone (what this was until 2026-08-05) meant a kernel built with
-// -DPROF_COUNTERS=1 wrote `out[OUT_ARCSTAT_BASE + opix*8 .. +8]` unconditionally
-// — fine under `e2-full`, which allocates that region, and 8 MiB of writes PAST
+// -DPROF_COUNTERS=1 wrote the per-pixel block unconditionally — fine under
+// `e2-full`, which allocates that region, and 10 MiB of writes PAST
 // THE END of the device buffer under `gpu-surface`, which allocates the energies
 // alone. No bounds check exists on a device store: it is silent corruption of
 // whatever cudarc handed out next. Now the writes are gated on the host having
@@ -591,8 +536,8 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 // kernel-time DELTA between two builds prices that phase; the outputs of a
 // non-zero build are deliberately wrong and must never be gated or shipped.
 //   1  arc screening off entirely      (pre-fix-pack cp-ray behaviour)
-//   2  arc stops after the hull build  (prices the triangle-bbox area query)
-//   4  arc stops after confirm+merge   (prices arc_ray_hits_id)
+//   2  arc stops after the hull build  (prices the triangle area query)
+//   4  arc stops after collection/admission (legacy edge-CSR also confirms)
 //   8  interval rays reuse the cp bands (prices the per-interval ray_path_bands)
 //  16  cp ray skips obstacle_best_candidate (prices the cp-ray obstacle DDA)
 //  32  arc returns right after the span setup   (prices the CALL, not the walk)
@@ -607,18 +552,6 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #define ABL_CAND_OFF    (PROF_ABLATE & 16)
 #define ABL_ARC_SPAN    (PROF_ABLATE & 32)
 #define ABL_ARC_CELLS   (PROF_ABLATE & 64)
-
-// ---- DEV-ONLY milestone-zero ray floor (-DPROF_SIXMARCH=1, paired with
-// -DPROF_ABLATE=1): every nondegenerate exactly-computed pair marches 5 extra
-// bucket rays with per-direction terrain + screening — the FIXED per-pair cost
-// of the tile sampling rule (SPEC §3.5d, N=5) priced at cp-march throughput
-// BEFORE any of it is implemented (gpu-gather-redesign §8 task 0(iv)). The
-// kernel-time delta of this build against the same-flags PROF_ABLATE=1 build is
-// the 6-march ray floor; tiles stay byte-identical to that floor build (the
-// marches fold into an unprovably-false sink).
-#ifndef PROF_SIXMARCH
-#define PROF_SIXMARCH 0
-#endif
 
 // ---- DEV-ONLY candidate END-WINDOW (-DCAND_END_WINDOW_M=<metres>, 0 = exact,
 // the default). An INPUT PREFILTER on `obstacle_best_candidate`'s DDA: a cell
@@ -758,9 +691,10 @@ __device__ __forceinline__ double wrap_pi_d(double a) {
 }
 
 // -DARC_AZ_F32=0 restores the f64 atan2. The measured case for fp32: 91 % of the
-// footprints whose hull is built are CONFIRMED blockers (clip 0.94, confirm 0.91
-// on the dense rail tile), so none of this atan2 volume — ~2.6e9 calls — can be
-// pruned away; it can only be made cheaper. The displacements are formed in f64
+// footprints whose hull was built survived the former confirmation step (clip
+// 0.94, confirm 0.91 on the dense rail tile), so none of this atan2 volume —
+// ~2.6e9 calls — can be pruned away; it can only be made cheaper. The
+// displacements are formed in f64
 // and only the ANGLE is fp32, with about 4e-7 rad rounding. The first dense-rail
 // sample measured 1.36x but moved 11 cells above 0.5 dB, max 1.0 dB. Its old
 // flat-budget rejection is superseded by the aggregate contract, but no complete
@@ -1937,11 +1871,12 @@ __device__ int ray_path_bands(
 // misses the row entirely.
 //
 // The arc walk's candidate set only has to cover the triangle, not its bbox:
-// every confirmation ray runs from the receiver to a point ON the segment, so it
-// is a chord of the triangle, and a footprint lying ENTIRELY outside one can
-// never be crossed by any of them — its hull would be built, clipped and then
-// rejected. For a 250 m segment seen from 2 km the triangle is ~1/16 of its own
-// bbox, and with the physics rays measured free that ratio IS the walk's cost.
+// every interval ray runs from the receiver to a point ON the segment, so it is
+// a chord of the triangle. Candidate collection is now semantic because the
+// former confirmation ray was removed; a footprint outside this exact workset
+// must therefore be unable to affect any interval. For a 250 m segment seen
+// from 2 km the triangle is ~1/16 of its own bbox, and with the physics rays
+// measured free that ratio IS the walk's cost.
 __device__ __forceinline__ bool tri_row_x_span(
     double rx, double ry, double ax, double ay, double bx, double by,
     double y_lo, double y_hi, double* x_lo, double* x_hi)
@@ -2336,12 +2271,11 @@ __device__ __forceinline__ int arc_fuse_key(float near_m, float height_m)
     return (min(max(h, 0), 16000) << 16) | ((min(max(r, -16000), 16000) + 0x4000) & 0xffff);
 }
 
-// ---- Union-insert one blocked arc into a SORTED, non-overlapping list.
-// The union of a set of intervals does not depend on insertion order, so the
-// incremental form here yields exactly the interval set the CPU's
-// sort-then-merge pass produces — the footprint walk can therefore retire each
-// footprint immediately instead of parking it in a capped table. Touching
-// intervals merge (`<=`), mirroring the CPU's `iv_s[i] <= iv_e[mg]`.
+// ---- Union-insert one blocked arc into a list sorted by (stratum key, start).
+// Each stratum is internally disjoint; different height/range strata may
+// overlap, and the boundary split below evaluates their angular union without
+// double-counting it. The footprint walk can therefore retire each footprint
+// immediately instead of parking it in a capped table.
 __device__ __forceinline__ int arc_iv_union(
     double* iv_s, double* iv_e, float* iv_near, float* iv_h,
     int* iv_key, int niv, double st, double en, float near_m, float h_m,
@@ -2387,7 +2321,7 @@ __device__ __forceinline__ int arc_iv_union(
     }
     // The strata make the list LONGER — a near and a far footprint that used to
     // collapse into one slot now hold two — and an overflow DROPS the arc, i.e.
-    // under-screens. `arcstat[6]`/`[7]` count them, but ONLY under
+    // under-screens. `arcstat[8]`/`[9]` count them, but ONLY under
     // -DPROF_COUNTERS=1; an unflagged build reads zeros and looks clean.
     //
     // ALREADY MEASURED, without a GPU (2026-08-05). `ArcBounds::max_intervals`
@@ -2405,9 +2339,9 @@ __device__ __forceinline__ int arc_iv_union(
     // the value must be fixed against a production-density run, not this one.
     // The CPU twin cannot be the last word (it stops collecting on overflow,
     // where this loop keeps fusing into occupied slots, so it reads slightly
-    // pessimistic); confirm the final number with `arcstat[6]`/`[7]` on GPU.
-    // Note the fixture cannot catch this: its scenes carry 5 footprints, so
-    // ARC_MAX_MERGED can never bind there (screening_fixture.rs:1089).
+    // pessimistic); confirm the final number with `arcstat[8]`/`[9]` on GPU.
+    // The fixture mirror aborts if this cap binds, while production reports the
+    // exact dropped count through `arcstat[8]`/`[9]` and the fault slot.
     if (niv >= ARC_MAX_MERGED) { *overflow += 1; return niv; }
     for (int q = niv; q > i; q--) {
         iv_s[q] = iv_s[q - 1]; iv_e[q] = iv_e[q - 1];
@@ -2436,9 +2370,9 @@ __device__ __forceinline__ double arc_gob(double terr_b, double ground_b, double
 //   1. the segment's angular span at the receiver (two atan2),
 //   2. the sub-intervals of that span that vector obstacles actually block —
 //      one arc per obstacle EDGE at that edge's own range and height, exactly as
-//      `ObstacleIndex::skyline_arcs_within` emits them, each confirmed by an
-//      exact ray crossing (the per-footprint angular hull survives only as a
-//      cheap reject, because one hull arc cannot carry per-edge ranges),
+//      `ObstacleIndex::skyline_arcs_within` emits them (the per-footprint
+//      angular hull survives only as a cheap reject, because one hull arc cannot
+//      carry per-edge ranges),
 //   3. ONE screening evaluation per blocked interval, on the ray to the EXACT
 //      source point on the segment at the interval's centre azimuth (exact
 //      range, no banding), the cp evaluation reused for the interval that
@@ -2446,11 +2380,12 @@ __device__ __forceinline__ double arc_gob(double terr_b, double ground_b, double
 //   4. an energy average over the interval fractions of the span, taken on the
 //      term the kernel actually applies — max(A_ground, A_terrain + A_screen).
 //
-// Terrain, ground G and vegetation stay on the caller's cp ray; the terrain of
-// an interval ray is used ONLY inside that interval's own screening call, as the
-// increment base. `screen` is BOTH the cp verdict in and the arc result out (all
-// reads finish before the single write pass), and is left untouched whenever the
-// CPU would return the cp bands: degenerate span, no hull, nothing confirmed.
+// Ground G and vegetation stay on the caller's cp ray. Each interval's terrain
+// enters that interval's own `arc_gob` composite; the returned `screen` is the
+// non-negative increment above cp terrain required by the legacy downstream
+// transport. `screen` is BOTH the cp verdict in and the arc result out (all reads
+// finish before the single write pass), and is left untouched whenever the CPU
+// would return the cp bands: degenerate span, no admitted arc.
 __device__ void arc_screen_bands(
     const float* elev, const float* inner, const unsigned char* cover,
     int rows, int cols, double lat_min, double lon_min, double inv, const double* bb,
@@ -2466,11 +2401,10 @@ __device__ void arc_screen_bands(
     double mlon = M_LON_EQ * fmax(cos(rlat * (PI_D / 180.0)), 0.01);
     double base = arc_az(rlat, rlon, mlon, alat, alon);
     double delta = wrap_pi_d(arc_az(rlat, rlon, mlon, blat, blon) - base);
-    // Below this span the interval arithmetic would divide by ~0. It is NOT the
-    // point-source test — that one is the caller's pre-gate on L/dend; a span
-    // that collapses here can also be a long segment seen end-on, whose range
-    // spread the cp ray does not carry (see ARC_MIN_SPAN_REALISED).
-    if (fabs(delta) < ARC_MIN_SPAN_REALISED) return;
+    // Match the CPU's two checks: numerical safety is unconditional, then the
+    // realised-angle half of the 3° bucket rule. The outer chord test alone is
+    // insufficient for a long segment seen nearly end-on.
+    if (fabs(delta) < ARC_DEGENERATE_SPAN || fabs(delta) < ARC_MIN_SPAN_REALISED) return;
     // Span in the base-relative frame; a segment subtends at most π at a
     // receiver off its line, so the short arc between the endpoints IS it.
     double lo = delta < 0.0 ? delta : 0.0;
@@ -2621,8 +2555,8 @@ __device__ void arc_screen_bands(
                     unsigned int ckey = ((unsigned int)gi << 28) | (f & 0x0FFFFFFFu);
                     int cslot = (int)((f * 2654435761u) & (unsigned int)(ARC_HULL_CACHE - 1));
                     if (PROF_COUNTERS && arcstat) {
-                        arcstat[2] += 1.0f;                       // hull lookups
-                        if (hc_key[cslot] == ckey) arcstat[3] += 1.0f;   // hits
+                        arcstat[4] += 1.0f;                       // hull lookups
+                        if (hc_key[cslot] == ckey) arcstat[5] += 1.0f;   // hits
                     }
                     if (hc_key[cslot] == ckey) {
                         h_lo = wrap_pi_d(hc_lo[cslot] - base);
@@ -2655,8 +2589,8 @@ __device__ void arc_screen_bands(
                         // than with no obstacles at all (P4's worst cell: raster
                         // GPU 51.812 = CPU 51.812, but with vectors the CPU went
                         // −9.8 dB while the GPU went +5.1 dB). The per-edge
-                        // emission below removes that mechanism — each arc is
-                        // confirmed on ITS OWN centre ray — and the anchor stays
+                        // emission below removes that mechanism — each edge arc
+                        // is clipped on ITS OWN geometry — and the anchor stays
                         // because a hull that spans the circle rejects nothing and
                         // makes the prune worthless. Review 2026-08-04.
                         double r0;
@@ -2683,7 +2617,7 @@ __device__ void arc_screen_bands(
                     // arc clips ITSELF against the span below.
                     double st = 0.0, en = -1.0;
                     if (!arc_clip_span(h_lo, h_hi, lo, hi, &st, &en)) continue;
-                    if (PROF_COUNTERS && arcstat) arcstat[4] += 1.0f;   // survived the clip
+                    if (PROF_COUNTERS && arcstat) arcstat[6] += 1.0f;   // survived the clip
                     // ---- Emit the silhouette as the exact UNION OF THE PER-EDGE
                     // ARCS, for EVERY footprint — convex ones included. This is
                     // the rule `ObstacleIndex::skyline_arcs_within` follows
@@ -2716,8 +2650,7 @@ __device__ void arc_screen_bands(
                     // set, so fixing the range without fixing the emission leaves
                     // half the fault in place. Cost of the third row over the
                     // first: +17 % kernel time (156.4 s -> 183.8 s on that tile),
-                    // paid in per-edge `arc_az` pairs and one confirmation ray per
-                    // emitted arc.
+                    // paid in per-edge `arc_az` pairs and interval-ray work.
                     //
                     // `foot_box` is down to its bbox (FOOT_BOX_STRIDE 4): the
                     // footprint's max height and the host's convexity flag went
@@ -2754,7 +2687,7 @@ __device__ void arc_screen_bands(
                         // of an id — but it is the per-edge value the fuse key is
                         // defined on, so read it where the definition is.
                         double h_edge = (double)__ldg(&g[4]);
-                        if (PROF_COUNTERS && arcstat) arcstat[5] += 1.0f;   // emitted
+                        if (PROF_COUNTERS && arcstat) arcstat[7] += 1.0f;   // emitted
                         // Straight into the union: an emitted arc carries its
                         // azimuth range, its own range and its own height, and
                         // NOTHING is decided about it here.
@@ -2791,18 +2724,21 @@ __device__ void arc_screen_bands(
         }
     }
     if (ABL_ARC_CELLS) { if (iv_overflow == 12345678) screen[0] += 1.0f; return; }
-    // ---- Noise WALLS are the other half of the skyline (fix-pack Fix 5). A wall
-    // IS a segment, so its arc is the same primitive a building edge produces:
+    // ---- Noise WALLS are the other half of a COMPLETE vector skyline (fix-pack
+    // Fix 5). The caller enters this routine only when the footprint store is
+    // present; raster fallback keeps the cp verdict because a wall-only skyline
+    // would erase raster-building screening. A wall IS a segment, so its arc is
+    // the same primitive a building edge produces:
     // the short arc between its endpoint azimuths, at its nearest range. Without
     // this a receiver behind a wall gets NO blocked interval, the cp verdict
     // stands for the whole segment, and the constant-width shadow band survives
     // exactly where a wall makes it most visible. The CPU has carried this since
     // the fix-pack (`ArcSkyline::ensure`'s barrier arm); this kernel walked
     // obstacle-index footprints only, so `barr` reached the interval RAYS but
-    // could never create an interval. The fixture's scene D — the same wall
-    // through the production `types::Barrier` lane — read the pre-fix-pack
-    // `current` verdict exactly (0.63 dB vs the CPU's 0.28) until this landed,
-    // and reads 0.29 with it.
+    // could never create an interval. The fixture's scene D isolates this wall
+    // primitive with an empty-but-complete obstacle authority: it read the
+    // pre-fix-pack `current` verdict exactly (0.63 dB vs the CPU's 0.28) until
+    // this landed, and reads 0.29 with it.
     //
     // No ray confirmation, mirroring the CPU skyline: a wall arc is kept on the
     // range test alone. `need` is the far end of the segment — nothing beyond it
@@ -2852,12 +2788,12 @@ __device__ void arc_screen_bands(
     // end of the kernel, so an overflowing tile costs one atomic per pixel and a
     // clean one costs none. That slot is an f32 and therefore saturates once the
     // running total passes ~2^24 times the increment: it is a fault FLAG with an
-    // order of magnitude, not a census. The exact census is `arcstat[6]`, under
+    // order of magnitude, not a census. The exact census is `arcstat[8]`, under
     // -DPROF_COUNTERS=1, which is where a re-sizing measurement should read it.
     if (iv_overflow > 0) *arc_drops += (unsigned int)iv_overflow;
     if (PROF_COUNTERS && arcstat) {
-        arcstat[6] += (float)iv_overflow;
-        if (iv_overflow > 0) arcstat[7] += 1.0f;
+        arcstat[8] += (float)iv_overflow;
+        if (iv_overflow > 0) arcstat[9] += 1.0f;
     }
     if (niv == 0) return;
     // ---- ADMISSION, `arc_screening::arc_screened_attenuation` §1, at the
@@ -3058,8 +2994,8 @@ __device__ void arc_screen_bands(
 #endif  // ARC_FOOTPRINT_CSR
 
     // 4. One screening evaluation per (sub-)interval centre, energy-averaged on
-    //    the ground/barrier term. An interval wider than ~15° gets three
-    //    sub-evaluations — once, no recursion.
+    //    the ground/barrier term. Intervals are sampled at 15° resolution, from
+    //    one evaluation through the cap of nine — once, no recursion.
     float cp_screen[NB];
     for (int i = 0; i < NB; i++) cp_screen[i] = screen[i];
     double cp_rel = wrap_pi_d(arc_az(rlat, rlon, mlon, cplat, cplon) - base);
@@ -3067,10 +3003,9 @@ __device__ void arc_screen_bands(
     double energy[NB];
     for (int i = 0; i < NB; i++) energy[i] = 0.0;
     // ---- BOUNDARY SPLIT (2026-08-04). `arc_iv_union` fuses only neighbours
-    // whose heights agree within ARC_FUSE_HEIGHT_TOL_M — it must, because one
-    // (range, height) pair cannot describe a near-and-low and a far-and-tall
-    // obstacle at once — so two footprints at different RANGES with materially
-    // different heights stay side by side, OVERLAPPING. Averaging that list
+    // with the same exact (height stratum, range stratum) key: one (range,
+    // height) pair cannot describe a near-and-low and a far-and-tall obstacle.
+    // Different keys therefore stay side by side, OVERLAPPING. Averaging that list
     // directly adds `step / span` for EACH of them, so every shared direction is
     // counted twice: `blocked` overruns the fan, the clear remainder is clamped
     // away, and the mean is taken over a total weight > 1.
@@ -3608,6 +3543,33 @@ extern "C" __global__ void h0_pair_path_diagnostic(
 #endif
 #endif
 
+// ---- seg_sampling::SegFan::at — the point on the segment the receiver sees at
+// fraction `f` of the fan: ray at azimuth az0 + f·span × the segment line, the
+// identical solve arc_source_point runs for an interval's centre azimuth. The
+// fan frame (ax,ay,ex,ey,az0,span) is built once per pair by the caller.
+// Returns false where the CPU returns None: the receiver degenerate against
+// that direction (on the segment's line, or closer than a metre — no screening
+// geometry left to resolve).
+__device__ __forceinline__ bool seg_fan_at(
+    double ax, double ay, double ex, double ey, double az0, double span,
+    double rlat, double rlon, double mlon, double f,
+    double* slat, double* slon, double* d)
+{
+    double az = az0 + f * span;
+    double ux = cos(az), uy = sin(az);
+    // a + t·e parallel to u  ⇒  cross(u, a) + t·cross(u, e) = 0.
+    double cr_e = ux * ey - uy * ex;
+    double cr_a = ux * ay - uy * ax;
+    double tt = fabs(cr_e) > 1e-12 ? fmin(fmax(-cr_a / cr_e, 0.0), 1.0) : 0.5;
+    double sx = ax + tt * ex, sy = ay + tt * ey;
+    double dd = sqrt(sx * sx + sy * sy);
+    if (!isfinite(dd) || dd < 1.0) return false;
+    *slat = rlat + sy / M_LAT;
+    *slon = rlon + sx / mlon;
+    *d = dd;
+    return true;
+}
+
 __device__ __forceinline__ void line_source(
     const float* elev, const float* inner, const unsigned char* cover,
     int rows, int cols, double lat_min, double lon_min, double inv, const double* bb,
@@ -3693,46 +3655,160 @@ __device__ __forceinline__ void line_source(
         ground[i] = ground_atten_d(i, ground_dp, zs_h, zr_h, (double)ground_g, (double)source_ground_g);
     veg_bands(veg_run_length(tprof, forr, n, (float)dend), veg);
 
-    // Arc screening (fix-pack Fix 1): the cp ray's verdict covers only the
-    // directions it flies through; the rest of the segment's angular span gets
-    // its own evaluation, energy-averaged over the blocked fractions. Vector
-    // regions only — a raster-fallback region has no footprints to clip arcs
-    // against and keeps today's cp-ray behaviour exactly.
-    // Span PRE-GATE, transcendental-free: a segment of length L whose nearest
-    // point is `dend` away subtends at most 2·atan(L/2·dend) ≤ L/dend at this
-    // receiver. Both quantities are already in hand from p2s, so a pair that
-    // provably cannot reach ARC_MIN_SPAN is rejected before the two f64 atan2
-    // the span itself costs — measured at 18 s on the dense rail tile, 71 % of
-    // the whole pre-fix-pack kernel, paid on every surviving pair. At the
-    // default ARC_MIN_SPAN (= the degenerate threshold) this never fires, so the
-    // exact kernel is unchanged; it only bites when the bound is raised.
-    bool arc_span_possible = sp[0] > dend * (double)ARC_MIN_SPAN;
-    if (PROF_COUNTERS && arcstat) {
-        arcstat[0] += 1.0f;
-        if (arc_span_possible) arcstat[1] += 1.0f;
-    }
-    // Enter the arc kernel when there is ANYTHING to clip against: vector
-    // footprints OR noise walls. Walls arrive in `barr`, not in the obstacle
-    // table, so gating on the table alone denied every wall its angular
-    // treatment in raster-fallback regions — the shipped behaviour behind the
-    // owner's D4/Voznice report. Safe with an empty table: the footprint walk
-    // is bounded by `n_idx = obst[0]`, so at 0 it dereferences nothing, and the
-    // `nbarr` arm inside runs on its own. Mirrors noise-compute/src/lib.rs
-    // `arc_screened_line_segment` (review 2026-08-04).
+    // ---- The ground/barrier term `max(A_ground, A_terrain + A_screen)` of a
+    // LINE microsegment, ISO 9613-2 §7.3.1 — the §3.5e port (2026-08-19).
+    // `seg_sampling::sampled_gob_bands_with_ground` in kernel form: the segment
+    // subtends a FAN at this receiver, the fan is cut into SEG_SAMPLES equal
+    // angular buckets, each bucket is marched on its OWN ray (so it composites
+    // against its own terrain — never the cp ray's, seg_sampling.rs:41-51), a
+    // bucket wider than ARC_MIN_SPAN arc-screens its own sub-span, and the
+    // COMPOSITE — not the screening increment — is energy-averaged over the
+    // buckets. This replaces the pre-port rule (one cp verdict + an arc pass on
+    // every pair from ARC_DEGENERATE_SPAN up), which the CPU tile painter
+    // retired on 2026-08-05/2026-08-08 while the parity harness pinned the CPU
+    // back onto it. Divergence, atmosphere, ground G and vegetation stay on the
+    // cp ray exactly as before (DECISION 2026-08-03); the quadrature replaces
+    // ONE term and nothing else (scatter_band.rs's `path_db` line has the
+    // identical shape below).
+    //
+    // Branch (1) needs a complete vector obstacle store — `has_footprints` — and
+    // a real fan. With that store but no fan, branch (2) keeps one cp ray and may
+    // arc-clip when the whole segment clears the 3° gate. Without the complete
+    // store branch (2) keeps the cp verdict unchanged.
     bool has_footprints = obst[0] != 0ULL && obst[6] != 0ULL;
-    if (!ABL_ARC_OFF && arc_span_possible && (has_footprints || nbarr > 0))
-        arc_screen_bands(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
-                         rlat, rlon, ralt, seg[0], seg[1], seg[2], seg[3], sp[2],
-                         cplat, cplon, terr, ground,
-                         barr, nbarr, obst, tprof, ed, comp, bld, forr, imdp, screen,
-                         hc_key, hc_lo, hc_hi, arcstat, arc_drops);
+    float gob[NB];
+    // The receiver-centred flat frame (seg_sampling::SegFan::new): cheap enough
+    // to build unconditionally — the two atan2 the span costs sit inside the
+    // branch that needs them.
+    double mlon = M_LON_EQ * fmax(cos(rlat * (PI_D / 180.0)), 0.01);
+    double ax = (seg[1] - rlon) * mlon, ay = (seg[0] - rlat) * M_LAT;
+    double bx = (seg[3] - rlon) * mlon, by = (seg[2] - rlat) * M_LAT;
+    double ex = bx - ax, ey = by - ay;
+    if (has_footprints && ex * ex + ey * ey >= 1e-6) {
+        double az0 = atan2(ay, ax);
+        double span = atan2(by, bx) - az0;
+        if (span > PI_D) span -= 2.0 * PI_D;
+        if (span < -PI_D) span += 2.0 * PI_D;
+        const double inv_n = 1.0 / (double)SEG_SAMPLES;
+        // Bucket width in azimuth — the chord law below needs it, and it is the
+        // same for every bucket by construction, so the cos is hoisted: one
+        // transcendental per pair, not per bucket.
+        double d_az = fabs(span) * inv_n;
+        double cos_d_az = cos(d_az);
+        double acc[NB];
+        for (int i = 0; i < NB; i++) acc[i] = 0.0;
+        int used = 0;
+        bool pair_escalated = false;
+        double lo_lat = 0.0, lo_lon = 0.0, lo_d = 0.0;
+        bool lo_ok = seg_fan_at(ax, ay, ex, ey, az0, span, rlat, rlon, mlon,
+                                0.0, &lo_lat, &lo_lon, &lo_d);
+        for (int k = 0; k < SEG_SAMPLES; k++) {
+            double hi_lat = 0.0, hi_lon = 0.0, hi_d = 0.0;
+            bool hi_ok = seg_fan_at(ax, ay, ex, ey, az0, span, rlat, rlon, mlon,
+                                    (double)(k + 1) * inv_n, &hi_lat, &hi_lon, &hi_d);
+            double slat, slon, sdist;
+            // A bucket whose centre ray lands within a metre of the receiver
+            // has no screening geometry left to resolve; drop it from the mean
+            // rather than march a degenerate ray (the CPU's own skip).
+            if (!seg_fan_at(ax, ay, ex, ey, az0, span, rlat, rlon, mlon,
+                            ((double)k + 0.5) * inv_n, &slat, &slon, &sdist)) {
+                lo_ok = hi_ok; lo_lat = hi_lat; lo_lon = hi_lon; lo_d = hi_d;
+                continue;
+            }
+            double salt_k =
+                tile_elev(inner, elev, rows, cols, lat_min, lon_min, inv, bb, slat, slon)
+                + sp[2];
+            float terr_k[NB], screen_k[NB];
+            // need_cover=0: ground G and vegetation ride the cp ray
+            // (DECISION 2026-08-03); the obstacle/barrier candidates run per
+            // direction. The shared tprof/ed/… scratch is the caller's and is
+            // free to clobber — the cp ray's reads finished above.
+            ray_path_bands(elev, cover, rows, cols, lat_min, lon_min, inv,
+                           slat, slon, salt_k, rlat, rlon, ralt, sdist,
+                           barr, nbarr, obst, tprof, ed, comp, bld, forr, imdp,
+                           terr_k, screen_k, 0
+#if V2_H0
+                           , 1, (int *)0
+#endif
+                           );
+            // The 3° gate, per BUCKET (segment_can_span at sub-span
+            // granularity): chord of the sub-span in the receiver frame — exact,
+            // and cheaper than another lat/lon distance. A bucket too narrow to
+            // stripe keeps its single centre ray; tile cost is far pairs, and
+            // those never ask (rail: 1.2 % of pairs escalate, city 3.2 % —
+            // measured CPU-side, seg_sampling census 2026-08-19).
+            if (!ABL_ARC_OFF && lo_ok && hi_ok) {
+                double sub_len = sqrt(fmax(
+                    lo_d * lo_d + hi_d * hi_d - 2.0 * lo_d * hi_d * cos_d_az, 0.0));
+                double sub_dist = fmin(fmin(lo_d, hi_d), sdist);
+                if (sub_len > (double)ARC_MIN_SPAN * sub_dist) {
+                    pair_escalated = true;
+                    if (PROF_COUNTERS && arcstat) arcstat[3] += 1.0f;
+                    // The bucket IS the sub-segment: its own centre is the cp,
+                    // its own terrain the composite base (cp_terrain), its own
+                    // screening verdict the cp bands the arc query refines.
+                    arc_screen_bands(elev, inner, cover, rows, cols, lat_min, lon_min,
+                                     inv, bb, rlat, rlon, ralt,
+                                     lo_lat, lo_lon, hi_lat, hi_lon, sp[2],
+                                     slat, slon, terr_k, ground,
+                                     barr, nbarr, obst, tprof, ed, comp, bld, forr,
+                                     imdp, screen_k, hc_key, hc_lo, hc_hi, arcstat,
+                                     arc_drops);
+                }
+            }
+            // Average the COMPOSITE, not the screening increment: a segment 14 %
+            // of whose fan is blocked by 17 dB yields ~0.3 dB of mean screening,
+            // which a max() AFTER the average would discard entirely.
+            for (int i = 0; i < NB; i++) {
+                double a_bar = (double)terr_k[i] + (double)screen_k[i];
+                double gob_k = (a_bar > 0.0) ? fmax(ground[i], a_bar) : ground[i];
+                acc[i] += fexp(-gob_k * LN10 * 0.1);
+            }
+            used++;
+            lo_ok = hi_ok; lo_lat = hi_lat; lo_lon = hi_lon; lo_d = hi_d;
+        }
+        if (PROF_COUNTERS && arcstat) {
+            arcstat[0] += 1.0f;
+            if (pair_escalated) arcstat[1] += 1.0f;
+            arcstat[2] += (float)used;
+        }
+        if (used == 0) {
+            // Every bucket degenerate: the receiver sits ON this microsegment,
+            // where the shipped cp ray also resolves to no screening. Ground
+            // alone, with the cp ray's terrain when positive — the CPU's own
+            // used==0 arm.
+            for (int i = 0; i < NB; i++) {
+                float a_gr = (float)ground[i];
+                gob[i] = (terr[i] > 0.0f) ? fmaxf(a_gr, terr[i]) : a_gr;
+            }
+        } else {
+            double inv_used = 1.0 / (double)used;
+            for (int i = 0; i < NB; i++)
+                gob[i] = (float)(-10.0 * log10(fmax(acc[i] * inv_used, 1e-12)));
+        }
+    } else {
+        // Branch (2): one cp ray, arc-clipped when the whole segment clears the
+        // 3° gate AND a complete vector footprint store exists. Raster fallback
+        // must keep the cp verdict even when walls exist: an arc walk without
+        // the missing footprint skyline would replace real raster-building
+        // screening with an incomplete clear fan. This mirrors the CPU lane.
+        bool arc_span_possible = sp[0] > dend * (double)ARC_MIN_SPAN;
+        if (!ABL_ARC_OFF && arc_span_possible && has_footprints)
+            arc_screen_bands(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
+                             rlat, rlon, ralt, seg[0], seg[1], seg[2], seg[3], sp[2],
+                             cplat, cplon, terr, ground,
+                             barr, nbarr, obst, tprof, ed, comp, bld, forr, imdp, screen,
+                             hc_key, hc_lo, hc_hi, arcstat, arc_drops);
+        for (int i = 0; i < NB; i++) {
+            float a_gr = (float)ground[i];
+            float a_bar = terr[i] + screen[i];
+            gob[i] = (a_bar > 0.0f) ? fmaxf(a_gr, a_bar) : a_gr;   // barrier REPLACES ground
+        }
+    }
 
     float pf[NB];
     for (int i = 0; i < NB; i++) {
-        float a_gr = (float)ground[i];
-        float a_bar = terr[i] + screen[i];
-        float gob = (a_bar > 0.0f) ? fmaxf(a_gr, a_bar) : a_gr;   // barrier REPLACES ground
-        float pdb = (base - (float)ALPHA_ATM[i] * atm_km - gob - veg[i] + (float)A_W[i]) * (float)LN10 * 0.1f;
+        float pdb = (base - (float)ALPHA_ATM[i] * atm_km - gob[i] - veg[i] + (float)A_W[i]) * (float)LN10 * 0.1f;
         pf[i] = (float)fexp((double)pdb);
     }
     double kept_add = 0.0;   // summed over periods then added once (matches scatter_band)
@@ -3751,52 +3827,6 @@ __device__ __forceinline__ void line_source(
     // the ground at its most favourable, times UB_SAFETY).
     kept += kept_add;
     resid -= ub;   // this pair is now known EXACTLY — it leaves the bound
-#if PROF_SIXMARCH
-    // Bucket geometry mirrors the CPU rule (seg_sampling::SegFan): equal
-    // angular buckets across the pair's span, source point = bucket-centre ray
-    // × segment-line intersection, elevation-only march (need_cover=0 — ground
-    // G and vegetation ride the cp ray, DECISION 2026-08-03), obstacle/barrier
-    // candidates per direction. Placed AFTER the pair's real accumulation so
-    // the shared ray scratch (tprof/ed/…) is free to clobber.
-    {
-        double mlon6 = M_LON_EQ * fmax(cos(rlat * (PI_D / 180.0)), 0.01);
-        double ax = (seg[1] - rlon) * mlon6, ay = (seg[0] - rlat) * M_LAT;
-        double bx = (seg[3] - rlon) * mlon6, by = (seg[2] - rlat) * M_LAT;
-        double ex = bx - ax, ey = by - ay;
-        float sink = 0.0f;
-        if (ex * ex + ey * ey >= 1e-6) {
-            double az0 = atan2(ay, ax);
-            double span = atan2(by, bx) - az0;
-            if (span > PI_D) span -= 2.0 * PI_D;
-            if (span < -PI_D) span += 2.0 * PI_D;
-            for (int k6 = 0; k6 < 5; k6++) {
-                double az = az0 + (k6 + 0.5) * 0.2 * span;
-                double ux = cos(az), uy = sin(az);
-                double cr_e = ux * ey - uy * ex;
-                double cr_a = ux * ay - uy * ax;
-                double tt = fabs(cr_e) > 1e-12 ? fmin(fmax(-cr_a / cr_e, 0.0), 1.0) : 0.5;
-                double sx = ax + tt * ex, sy = ay + tt * ey;
-                double d6 = sqrt(sx * sx + sy * sy);
-                if (!isfinite(d6) || d6 < 1.0) continue;
-                double slat6 = rlat + sy / M_LAT, slon6 = rlon + sx / mlon6;
-                double salt6 =
-                    tile_elev(inner, elev, rows, cols, lat_min, lon_min, inv, bb, slat6, slon6)
-                    + sp[2];
-                float terr6[NB], screen6[NB];
-                ray_path_bands(elev, cover, rows, cols, lat_min, lon_min, inv,
-                               slat6, slon6, salt6, rlat, rlon, ralt, d6,
-                               barr, nbarr, obst, tprof, ed, comp, bld, forr, imdp,
-                               terr6, screen6, 0
-#if V2_H0
-                               , 1, (int *)0
-#endif
-                               );
-                for (int i = 0; i < NB; i++) sink += terr6[i] + screen6[i];
-            }
-        }
-        if (sink == 1.2345678e30f) e0 += sink;   // unprovably-false keep-alive
-    }
-#endif
 #endif  // V2_H0
 }
 
@@ -3875,7 +3905,7 @@ extern "C" __global__ void line(
     // see the `out` LAYOUT block near the top of this file.
     int out_slots = (int)meta[13];
     float* arcstat = (PROF_COUNTERS && out_slots >= OUT_SLOTS_PROF)
-                         ? &out[OUT_ARCSTAT_BASE + opix * 8] : (float*)0;
+                         ? &out[OUT_ARCSTAT_BASE + opix * OUT_ARCSTAT_COUNTERS] : (float*)0;
     float* fault = (out_slots > OUT_FAULT_SLOT) ? &out[OUT_FAULT_SLOT] : (float*)0;
     unsigned int arc_drops = 0;
 #if V2_H0
@@ -4024,7 +4054,7 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
     // Optional `out` regions — see the `out` LAYOUT block near the top.
     int out_slots = (int)meta[13];
     float* arcstat = (PROF_COUNTERS && out_slots >= OUT_SLOTS_PROF)
-                         ? &out[OUT_ARCSTAT_BASE + opix * 8] : (float*)0;
+                         ? &out[OUT_ARCSTAT_BASE + opix * OUT_ARCSTAT_COUNTERS] : (float*)0;
     float* fault = (out_slots > OUT_FAULT_SLOT) ? &out[OUT_FAULT_SLOT] : (float*)0;
     unsigned int arc_drops = 0;
 #if V2_H0

@@ -124,6 +124,7 @@ fn main() {
     let h0_output_abi_version =
         const_from("src/lib.rs", "pub const H0_OUTPUT_ABI_VERSION: usize = ");
     let out_h0_counters = const_from("src/lib.rs", "pub const OUT_H0_COUNTERS: usize = ");
+    let out_arcstat_counters = const_from("src/lib.rs", "pub const OUT_ARCSTAT_COUNTERS: usize = ");
     let out_slots_h0 =
         const_from("src/lib.rs", "pub const OUT_SLOTS_H0: usize = ").replace('_', "");
     let h0_pair_diagnostic_abi_version = const_from(
@@ -290,6 +291,36 @@ fn main() {
         "../noise-compute/src/propagation/arc_screening.rs",
         "const DEGENERATE_SPAN_RAD: f64 = ",
     );
+    // The §3.5e quadrature's two constants, injected so the kernel cannot drift
+    // from the CPU rule it paints: the bucket count (the tile painter's
+    // SEG_SAMPLES_DEFAULT) and the per-bucket arc gate. The gate is SPELLED
+    // `<deg>_f64.to_radians()` in seg_sampling.rs and the spelling is
+    // load-bearing — `3·π/180` differs from `3.0_f64.to_radians()` by 1 ULP
+    // (seg_sampling.rs's own provenance note), and the measured constant went
+    // through `to_radians` — so parse the degree literal out of the Rust source
+    // and run the SAME `to_radians` here, in Rust, bit-for-bit.
+    let seg_samples = const_from(
+        "../tile-painter/src/scatter_band.rs",
+        "const SEG_SAMPLES_DEFAULT: usize = ",
+    );
+    let seg_arc_gate_expr = const_from(
+        "../noise-compute/src/propagation/seg_sampling.rs",
+        "pub const SEG_ARC_MIN_SPAN_RAD: f64 = ",
+    );
+    let seg_arc_min_span = {
+        let deg: f64 = seg_arc_gate_expr
+            .strip_suffix("_f64.to_radians()")
+            .unwrap_or_else(|| {
+                panic!(
+                    "SEG_ARC_MIN_SPAN_RAD must stay spelled `<deg>_f64.to_radians()` \
+                     (the kernel mirrors the expression, not the value), got \
+                     `{seg_arc_gate_expr}`"
+                )
+            })
+            .parse()
+            .expect("SEG_ARC_MIN_SPAN_RAD degree literal must parse as f64");
+        c_f64(deg.to_radians())
+    };
     let cp_eps = const_from(
         "../noise-compute/src/propagation/arc_screening.rs",
         "const CP_AZIMUTH_EPS: f64 = ",
@@ -403,6 +434,7 @@ fn main() {
         format!("-DV2_H0_OUTPUT_ABI_VERSION={h0_output_abi_version}"),
         format!("-DOUT_H0_COUNTER_BYTE_OFFSET={out_h0_counter_byte_offset}"),
         format!("-DOUT_H0_COUNTERS={out_h0_counters}"),
+        format!("-DOUT_ARCSTAT_COUNTERS={out_arcstat_counters}"),
         format!("-DOUT_SLOTS_H0={out_slots_h0}"),
         format!("-DPROF_H0_COUNTERS={h0_counters}"),
         format!("-DPROF_H0_PAIR_DIAGNOSTIC={h0_pair_diagnostic}"),
@@ -436,6 +468,8 @@ fn main() {
         format!("-DOBST_META_STRIDE={meta_stride}"),
         format!("-DFOOT_BOX_STRIDE={foot_box_stride}"),
         format!("-DARC_DEGENERATE_SPAN={degenerate_span}"),
+        format!("-DSEG_ARC_MIN_SPAN_RAD={seg_arc_min_span}"),
+        format!("-DSEG_SAMPLES={seg_samples}"),
         format!("-DARC_CP_EPS={cp_eps}"),
         format!("-DARC_QUADRATURE_MIN_RAD={arc_quadrature_min}"),
         format!("-DGROUND_HARD_FLOOR_DB={ground_hard_floor}"),

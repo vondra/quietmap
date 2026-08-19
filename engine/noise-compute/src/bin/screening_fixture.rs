@@ -1,7 +1,7 @@
 //! `screening_fixture` — synthetic validation harness for the CNOSSOS
 //! screening fix-pack (`0db-private/docs/dev/cnossos-screening-fixpack.md`,
-//! §"DECISION 2026-08-03" / §"Validation protocol"; the shipped model is
-//! SPEC §3.5c).
+//! §"DECISION 2026-08-03" / §"Validation protocol"; the shipped TILE line
+//! model is SPEC §3.5e).
 //!
 //! It answers ONE question with numbers instead of eyeballed tiles: how much
 //! does a ONE-RAY-PER-SEGMENT screening evaluation err behind a small
@@ -18,8 +18,8 @@
 //! on the segment is the `cp`, and that single ray's attenuation is applied to
 //! the whole segment's emission.
 //!
-//! `v3` — the shipped kernel: same one cp ray per microsegment for terrain,
-//! ground and vegetation, but screening is arc-clipped
+//! `v3` — the historical whole-segment arc integrator: same one cp ray per
+//! microsegment for terrain, ground and vegetation, but screening is arc-clipped
 //! (`propagation::arc_screening`) — the segment's angular span at the receiver
 //! is split into blocked and clear sub-intervals, each blocked one evaluated on
 //! the ray to its own centre azimuth and energy-averaged.
@@ -41,24 +41,22 @@
 //! 6 m behind the near block row; every other row is ≤0.41 dB. That is the
 //! noise floor the G/H verdicts have to clear, and they clear it by 5×.
 //!
-//! `v4` — the CUDA lane's arc rule, ported to CPU from
-//! `engine/noise-gpu/kernels/scatter.cu` (`arc_screen_bands`) so the
-//! same 33-point reference can judge THE RULE rather than the lane. The two
-//! lanes each pass their own gates yet disagree by 14.94 dB on 9 % of a dense
-//! Dobříš rail tile, and inference has run out; this integrator is the oracle.
-//! It differs from `v3` in the GROUPING UNIT and in four smaller places — see
-//! [`gpu_arc_screened_attenuation`]. Fixture-only: it never touches the
-//! production kernels, and where CUDA carries fp32 it uses f64, because what is
-//! on trial is the rule, not the arithmetic.
+//! `v4` — the CUDA lane's CURRENT §3.5e rule, ported to CPU from
+//! `engine/noise-gpu/kernels/scatter.cu`: five equal angular buckets, one full
+//! path ray at each centre, and the kernel's own `arc_screen_bands` mirror only
+//! for buckets wider than 3°. This lets the same 33-point reference judge the
+//! port's rule rather than only its tile output. Fixture-only: it never touches
+//! the production kernels, and where CUDA carries fp32 it uses f64, because
+//! what is on trial is the rule, not the arithmetic.
 //!
 //! `v5` — the rule the TILES ship since 2026-08-05
 //! (`propagation::seg_sampling`, called here, not re-implemented): the same fan,
 //! integrated by UNIFORM angular quadrature instead of skyline-adaptive
 //! clipping. `--seg-samples` buckets across the span, one ray at each bucket's
 //! centre, `max(A_ground, A_terrain + A_screen)` energy-averaged; default 5, the
-//! shipped value. Arc screening inside the buckets follows the tile default —
-//! off unless `QM_ARC_MIN_SPAN_DEG` names it — so one env var moves this arm and
-//! the tile kernel together.
+//! shipped value. Arc screening inside buckets follows the shipped 3° default;
+//! `QM_ARC_MIN_SPAN_DEG` moves this CPU arm, while v4 remains the compiled CUDA
+//! rule and therefore catches a CPU-only pin.
 //!
 //! MEASURED, 2026-08-05: the two rules did NOT order the same way on the two
 //! metrics that matter, and THIS SUITE is what caught it. On four PRODUCTION
@@ -86,7 +84,8 @@
 //! `--seg-samples` is NOT one of them, are recorded in `seg_sampling`'s module
 //! docs; that sweep was run from this binary.
 //!
-//! MEASURED, 2026-08-04. On scenes A-F, v4 lands within 0.15 dB of v3, and
+//! HISTORICAL, 2026-08-04. On scenes A-F, the then arc-only v4 landed within
+//! 0.15 dB of v3, and
 //! swapping ONLY its interval escalation for the CPU's makes it reproduce v3
 //! exactly — so the grouping unit, the ray×polygon confirmation, the hull /
 //! silhouette split, the height-tolerant fuse and the per-arc admission test are
@@ -95,7 +94,9 @@
 //! **7.25 dB on G**. Merging them away only halves it (2.53 dB) because one
 //! interval carries one ray; the BOUNDARY SPLIT that both lanes now run brings
 //! v4 to **0.63 / 0.79 dB on G / H**, level with the CPU's 0.63 / 0.61. The
-//! escalation fork is worth ≤1 dB and is still open on the GPU.
+//! escalation fork was worth ≤1 dB. Those measurements explain the arc
+//! primitive's structure below; they are not acceptance numbers for today's
+//! five-bucket v4 arm.
 //!
 //! The scenes carry NO raster obstacles. Buildings arrive through the
 //! geodata-v2 vector lane (`obstacle_index::ObstacleSet` exact ray×edge
@@ -103,20 +104,15 @@
 //! exact and cadence-independent: neither integrator can win or lose on whether
 //! the bilateral profile cadence happened to drop a probe inside a 10 m deep box.
 //!
-//! Scene K (2026-08-04) is the first scene that fails for a reason none of A-J
-//! can express, and it was built from a MEASUREMENT on a production tile rather
-//! than from a hypothesis: on tile 2206/1391 the CPU's height-only `fusible`
-//! chains a receiver's whole skyline into a handful of ~190°-wide arcs carrying
-//! the range of the house at the receiver's own facade. A-J cannot see the
-//! consequence because they all stand 45-445 m from their source, where a
-//! microsegment subtends up to 2.12 rad and the interval escalation splits a
-//! fused arc into nine rays whatever the fuse did. Move the source to 3 km, and
-//! the span drops to 0.07 rad: one fused arc covers it, escalation returns ONE
-//! part, and the entire arc-clipping fix collapses back to the single cp ray it
-//! was written to replace. `v3` then reads `current` to the decimal —
-//! **1.48 dB shadow / 1.22 dB outside, against 0.20 / 0.17 with `fusible`
-//! disabled**, on a reference converged to 0.045 dB. That ratio is what makes
-//! scene K a bench: a fuse candidate can be judged on it in a second of CPU.
+//! Scene K (2026-08-04) was built from a production-tile MEASUREMENT, not a
+//! hypothesis. Before the range-strata fix, the CPU's height-only `fusible`
+//! chained a receiver's skyline into ~190° arcs carrying the nearest house's
+//! range; at a 3 km source the 0.07 rad microsegment then collapsed back to one
+//! cp ray. Historical result: `v3` read **1.48 dB shadow / 1.22 dB outside,
+//! against 0.20 / 0.17 with that fuse disabled**, on a reference converged to
+//! 0.045 dB. The current height-and-range key closes that fault; K remains the
+//! one-second regression geometry that will fail if cross-range chaining ever
+//! returns.
 //!
 //! Scenes C and D are the SAME 3 m wall through the two different code paths a
 //! barrier can take: C puts it in the obstacle index (a path production never
@@ -271,14 +267,11 @@ const STACK_GAP_M: f64 = 25.0;
 const STACK_NEAR_COUNT: usize = 5;
 const STACK_FAR_COUNT: usize = 6;
 
-/// Scene I: scene F's geometry on a HILLSIDE. Scenes A-H are all flat, and flat
-/// ground is the one condition under which the two lanes' per-arc admission
-/// tests cannot disagree: the CPU merges arcs across footprints whenever their
-/// heights agree within `ARC_FUSE_HEIGHT_TOL_M`, takes `near = min` /
-/// `height = max`, and resolves the composite's absolute top from ONE elevation
-/// sample at its own centre azimuth; the GPU resolves each footprint's top at
-/// its own range and azimuth. With every footprint standing on z = 0 those are
-/// the same number by construction.
+/// Scene I: scene F's geometry on a HILLSIDE. Scenes A-H are all flat, which
+/// cannot expose a disagreement in the absolute top reconstructed for two arcs
+/// fused inside one height-and-range stratum. Here neighbouring blocks can
+/// still share a stratum, but stand on different ground; each lane must resolve
+/// the fused interval from the same evaluation ray and terrain authority.
 ///
 /// The row runs along y, so the ground has to vary along Y to give neighbouring
 /// blocks different tops — a slope in x would leave the whole row at one
@@ -298,19 +291,19 @@ const STACK_FAR_COUNT: usize = 6;
 const SLOPE_PER_M_Y: f64 = 0.1;
 const SLOPE_Y_HALF_M: f64 = 150.0;
 
-/// Scene J: the G/H stack with the two rows at the SAME height. That is the one
-/// case `fusible` actually fires across footprints at different RANGES — the CPU
-/// then describes a near block and a far block as ONE arc carrying the nearer
-/// range, and gives that union a single evaluation ray, where the GPU keeps two
-/// arcs and the boundary split gives their union up to three. G/H cannot test it
-/// (14 m apart, never fusible) and E/F cannot (one range, no overlap).
+/// Scene J: the G/H stack with the two rows at the SAME height. Before range was
+/// added to the fuse key, this made a near and far footprint one arc carrying
+/// the nearer range. It is retained as a regression scene: equal height must not
+/// defeat the current range strata, and the boundary split must still evaluate
+/// the angular union once.
 const STACK_EQUAL_M: f32 = 10.0;
 
 /// Scene K: a VILLAGE of same-height houses spread over three decades of RANGE,
-/// with the source a rail-like line 3 km away. This is the geometry the CPU's
-/// arc FUSE chain actually lives on, and no scene up to J can hold it.
+/// with the source a rail-like line 3 km away. It reproduces the geometry that
+/// exposed the former height-only fuse chain and now guards the range-stratified
+/// replacement; no scene up to J can hold that population.
 ///
-/// WHAT IT REPRODUCES. Measured on the production tile 2206/1391 (rail,
+/// HISTORICAL FAILURE IT REPRODUCES. Measured on production tile 2206/1391 (rail,
 /// receiver 49.838591 / 13.893328): the CPU skyline grows CUMULATIVELY over the
 /// whole panorama and over the whole source pass (42 → 137 arcs), and because
 /// `fusible` keys on HEIGHT ALONE, every overlapping arc of similar height
@@ -319,7 +312,8 @@ const STACK_EQUAL_M: f32 = 10.0;
 /// that single chain. The four nearest sources then have a CPU arc over the
 /// WHOLE segment span while the other lane covers 21-40 %.
 ///
-/// This scene puts the SAME chain under the fixture (measured here, 2026-08-04,
+/// Before the range-strata fix this scene put the SAME chain under the fixture
+/// (measured here, 2026-08-04,
 /// by instrumenting `ArcSkyline`): every one of the 697 probes ends with a
 /// merged arc wider than the tile's narrowest (1.25-3.06 rad, median 1.92 rad =
 /// 110°), 315 of them carry `near_m < 2 m`, and the skyline collapses from
@@ -328,25 +322,23 @@ const STACK_EQUAL_M: f32 = 10.0;
 /// `blocked_fraction ≥ 0.999` — the tile's "arc over the whole segment span",
 /// on the bench.
 ///
-/// Three ingredients, all absent from A-J:
+/// Three ingredients made that historical failure, all absent from A-J:
 ///
 /// * **a house at the receiver's own facade** — [`K_NEAR_GAP_M`] = 1.2 m, just
 ///   past the `b < 1.0` reject in `arc_screening`'s admission test, so the
-///   chain inherits `near = 1.2 m` exactly as the tile does at 1.3 m;
+///   chain inherited `near = 1.2 m` exactly as the tile did at 1.3 m;
 /// * **the same height everywhere** (8/9 m, inside `ARC_FUSE_HEIGHT_TOL_M`) at
-///   ranges from 1.2 m to ~600 m, so the fuse fires ACROSS three decades of
-///   range rather than between two rows 80 m apart (scene J);
-/// * **a FAR source**, which is what turns the chain into an ERROR. At 3 km a
+///   ranges from 1.2 m to ~600 m, which made the former height-only fuse fire
+///   ACROSS three decades of range;
+/// * **a FAR source**, which turned the chain into an ERROR. At 3 km a
 ///   250 m microsegment subtends 0.053-0.082 rad, far under `ESCALATE_SPAN_RAD`
-///   — so once the chain swallows the span there is exactly ONE blocked
+///   — so once the chain swallowed the span there was exactly ONE blocked
 ///   interval and, after escalation, exactly ONE evaluation ray: the cp ray.
-///   Arc clipping degenerates to the pre-fix-pack verdict it was written to
-///   replace, and `v3` reads `current` to the last decimal. Every scene up to J
+///   Arc clipping degenerated to the pre-fix-pack verdict it was written to
+///   replace, and old `v3` read `current` to the last decimal. Every scene up to J
 ///   stands 45-445 m from its source, where the span runs to 2.12 rad and the
 ///   escalation splits a fused interval into up to NINE pieces whatever the
-///   fuse did — which is exactly why A-J are structurally blind to this and
-///   why J, the one scene that does fuse across ranges, only reaches
-///   `blocked_fraction ≥ 0.999` on 40 % of its pairs.
+///   fuse did — which is why A-J were structurally blind to this failure.
 ///
 /// WHY 3 km AND NOT THE TILE'S 6. Swept 1-6 km with everything else fixed; the
 /// scene reproduces the defect over the whole range and the fuse is the ONLY
@@ -559,19 +551,21 @@ impl SceneId {
     ///
     /// Scene K stays at 33 and is the CHEAPEST reference of the suite to trust:
     /// its source is 3 km away, so a microsegment's sub-elements are nearly
-    /// congruent and the quadrature has almost nothing to resolve. Measured
-    /// 2026-08-04: 33→99 moves the v3 verdict by 0.03 dB (shadow 1.48 → 1.45)
-    /// and 0.01 dB (outside 1.22 → 1.23), and the single worst RECEIVER of the
-    /// 697 moves 0.045 dB; 99→297 moves 0.014 dB. The error it gates is 1.5 dB,
-    /// i.e. 33× its own noise floor — the widest margin in the suite.
+    /// congruent and the quadrature has almost nothing to resolve. Historical
+    /// 2026-08-04 height-only-fuse result: 33→99 moved the v3 verdict by 0.03 dB
+    /// (shadow 1.48 → 1.45) and 0.01 dB (outside 1.22 → 1.23), and the single worst RECEIVER of the
+    /// 697 moved 0.045 dB; 99→297 moved 0.014 dB. That former 1.5 dB failure was
+    /// 33× its own noise floor; the current range-stratified rule keeps the same
+    /// converged reference as a regression gate.
     ///
     /// `(shadow_max_db, outside_max_db)` the shipped rule must stay within.
     /// The owner's line is 1.0 dB anywhere; a scene sits TIGHTER than that only
     /// where its geometry admits no honest slack (B has no obstacle at all;
     /// C/D are one 3 m wall; J's two rows are the same height, so nothing is
     /// approximated by the fuse). Never loosened to fit a measurement — and
-    /// scene K is the proof of that rule: it FAILS at 1.48 / 1.22 dB against the
-    /// owner's 1.00 / 0.75, which is the whole reason it exists.
+    /// scene K is the proof of that rule: the historical height-only v3 failed
+    /// at 1.48 / 1.22 dB against the owner's 1.00 / 0.75, and the limit stayed
+    /// fixed when the range-strata repair made it pass.
     fn limits_db(self) -> (f64, f64) {
         match self {
             SceneId::B => (0.50, 0.50),
@@ -635,14 +629,14 @@ impl SceneId {
                  where two footprints under one merged arc stand on different ground"
             }
             SceneId::J => {
-                "the stack with BOTH rows 10 m — equal heights, so the CPU's fuse tolerance \
-                 merges a near and a far footprint into one arc carrying the nearer range"
+                "the stack with BOTH rows 10 m — regression geometry for the range-stratified \
+                 fuse and the boundary-split union"
             }
             SceneId::K => {
                 "VILLAGE + 3 km source: 25 rows of 8/9 m houses (24 m wall, 36 m gap, \
                  per-row phase) at ranges 1.2 m to 600 m, one row 1.2 m west of every probe \
-                 column — the height-only fuse chains them into one arc that swallows a \
-                 0.07 rad microsegment span whole, leaving ONE evaluation ray"
+                 column — regression geometry for the former height-only chain across \
+                 three decades of range"
             }
         }
     }
@@ -894,7 +888,7 @@ struct Probe<'a> {
     /// Sub-points per microsegment for `reference33` on THIS scene.
     reference_subdivisions: usize,
     /// The line source's x in scene metres — 0 everywhere but scene K, which
-    /// stands it 6 km west (see [`SceneId::source_x_m`]).
+    /// stands it 3 km west (see [`SceneId::source_x_m`]).
     source_x_m: f64,
     /// v4: its own ray buffers — the cp `profile` above is still read after the
     /// screening call (`vegetation_attenuation_path`), so an interval ray must
@@ -1062,15 +1056,14 @@ impl Probe<'_> {
             {
                 arc_screened_attenuation(&arc_query, self.rasters, &mut self.skyline, &mut self.arc)
             }
-            // v4 carries the GPU's own span gate INSIDE the rule (`ARC_MIN_SPAN`,
-            // scatter.cu:1386) — the kernel has no `segment_can_span` pre-gate,
-            // and the two thresholds are the same 0.01 rad.
-            Integrator::V4 => gpu_arc_screened_attenuation(
-                &arc_query,
-                self.rasters,
-                self.footprints,
-                &mut self.v4,
-            ),
+            // v4 mirrors CUDA branch (1): fixed five-bucket angular quadrature,
+            // with the kernel's own arc rule entered only for a bucket wider
+            // than its compiled 3° gate.
+            Integrator::V4 => {
+                gpu_sampled_gob_bands(&arc_query, self.rasters, self.footprints, &mut self.v4)
+                    .map(|gob| std::array::from_fn(|b| (gob[b] - terrain[b]).max(0.0)))
+                    .unwrap_or(cp_screening)
+            }
             _ => cp_screening,
         };
         let vegetation = vegetation_attenuation_path(&self.profile);
@@ -1160,77 +1153,47 @@ impl Probe<'_> {
     }
 }
 
-// ── v4: the CUDA lane's arc rule as it stood BEFORE 2026-08-09, ported ────
+// ── v4: the CURRENT CUDA §3.5e line rule, ported to CPU ────────────────────
 //
-// STALE ON PURPOSE, and it must not be read as "what the kernel does" any more.
-// The kernel now emits one arc per obstacle EDGE for every footprint, each arc
-// carrying its OWN nearest range and its own edge height — the rule
-// `ObstacleIndex::skyline_arcs_within` follows. What this port reproduces is the
-// PRE-FIX rule: one range for the whole footprint (`near_m` below, the min over
-// its edges) handed to every arc it emits, and one hull arc for a convex
-// footprint. That range then went into the `b < 1.0` admission floor, so any
-// footprint with a part within a metre of the receiver was rejected WHOLE —
-// measured at 4469 cells >0.5 dB and 17.63 dB max against the CPU lane on
-// 2206/1391, of which the per-edge rule leaves 2298 / 5.91 dB.
+// Authority: `engine/noise-gpu/kernels/scatter.cu`, branch (1) of
+// `line_source`: five equal angular buckets and the bucket-width 3° gate,
+// followed by `arc_screen_bands` for each eligible sub-span. The inner mirror
+// emits one arc per obstacle edge with that edge's own range and height, fuses
+// by the kernel's (height, range) key, applies the 1 m geometry floors after
+// fusion, boundary-splits the fan, and carries each interval ray's own terrain.
+// This is intentionally independent code: a transcription error in the CUDA
+// port must move v4 away from v5/reference33 instead of being shared.
 //
-// Porting it forward WAS two edits — move the `near_m` computation into the emit
-// loop (per edge, from that edge alone) and drop the `convex` branch so
-// `n_emit` is always `k1 - k0`. As of 2026-08-09 it is FOUR: the kernel also
-// dropped the per-edge δ prefilter (penumbra + grazing), the ray×polygon
-// confirmation, and the per-edge elevation sample that fed them, and it moved the
-// surviving 1 m geometry floors onto the MERGED arc. Both of those are in the
-// REPRODUCED list below and neither is in the kernel any more.
-//
-// So the gap this port has to close is now wider than when it was written, and
-// the measured consequence is that `v4` is currently BLIND to the change that
-// widened it: on `--scene all`, this commit moved 25 of 7667 `v3` rows and 0 of
-// 7667 `v4` rows. Every verdict recorded in this file's comments was scored on
-// the rule as written, so a port has to be re-scored against `reference33` in the
-// same commit, not assumed.
-//
-// Authority for the pre-fix rule: `engine/noise-gpu/kernels/scatter.cu` —
-// `arc_screen_bands` in its then-shipped configuration (`ARC_FOOTPRINT_CSR = 1`,
-// `ARC_TRI_WALK = 1`, `ARC_EDGE_UNION = 1`, `ARC_HULL_CACHE = 0`,
-// `ARC_AZ_F32 = 0`) — plus the host grouping it consumed,
-// `noise_gpu::footprint_csr_for_index`. Neither `ARC_EDGE_UNION` nor the host's
-// convexity flag exists any more (both went with the hull emission on
-// 2026-08-09), so the port below is the only place the pre-fix rule still lives —
-// which is the point of it, and the reason its own `is_convex_ring` copy stays.
-//
-// WHY: both lanes pass their own gates and still disagree by 14.94 dB on 9 % of
-// a dense Dobříš rail tile. `v3` is the CPU rule scored against `reference33`;
-// this is the GPU rule scored against the SAME reference, so the disagreement
-// can be attributed to the rule or to the CUDA implementation of it.
-//
-// REPRODUCED: per-footprint-per-(segment, receiver) grouping; the wedge prune;
-// the per-footprint angular hull with its `near_m`; the hull clip against the
-// segment's span; the convex-hull / per-edge-silhouette split; the exact
-// ray×polygon confirmation against the source point on the segment;
-// `arc_iv_union`'s height-tolerant fuse and its capacity behaviour; the per-arc
-// admission test; the fixed 1-or-3-way interval split; and the energy average
-// over `max(A_ground, A_terrain + A_screen)`.
+// REPRODUCED because it is now potentially semantic: the exact triangle
+// scanline cell workset and its cell→footprint lists. The fixture uses a bool
+// set for dedup instead of CUDA's backlink chain; both select the first listing
+// of each footprint in the same walked cell sequence.
 //
 // NOT REPRODUCED, deliberately:
-//   * The triangle scanline walk that ENUMERATES footprints (`tri_row_x_span`,
-//     :1242) and its back-link dedup. Every confirmation ray runs receiver → a
-//     point ON the segment, i.e. a chord of the (receiver, start, end)
-//     triangle, so a footprint the cell walk misses lies wholly outside that
-//     triangle and cannot be crossed by any of them — the confirmation would
-//     reject it. Visiting every footprint is an exactly equivalent superset,
-//     and the walk is an acceleration structure, not part of the rule.
-//   * fp32. CUDA carries edge coordinates, the footprint bbox, heights and the
-//     band arrays in fp32; here they are f64 throughout. The rule is on trial,
-//     not the arithmetic.
-//   * `ARC_MAX_MERGED` cannot bind on these scenes (5 footprints, cap 32); it
-//     is ported anyway so the behaviour is on the record.
+//   * fp32 arithmetic. CUDA stores edge coordinates, footprint bboxes, heights
+//     and band arrays as fp32; this mirror converts those fp32 inputs to f64 for
+//     the rule calculation. The rule is on trial, not the arithmetic.
+// `ARC_MAX_MERGED` is reproduced and any attempted drop aborts the fixture,
+// matching the acceptance census's fail-closed overflow policy.
 
 /// f32 slots per footprint in [`FootprintIndex::foot_box`]:
-/// `(min_x, min_y, max_x, max_y, height_m, convex)` — what
-/// `noise_gpu::FOOT_BOX_STRIDE` was before the per-edge arcs took its last two
-/// slots away, since the pre-fix rule needs both.
-const FOOT_BOX_STRIDE: usize = 6;
-/// `ARC_MIN_SPAN` (scatter.cu:163) = `ArcBounds::min_span_rad`.
-const GPU_ARC_MIN_SPAN: f64 = 0.01;
+/// `(min_x, min_y, max_x, max_y)`, matching `noise_gpu::FOOT_BOX_STRIDE`.
+const FOOT_BOX_STRIDE: usize = 4;
+/// CUDA's compiled `SEG_SAMPLES`, independently mirrored from the Rust SSOT.
+const GPU_SEG_SAMPLES: usize = 5;
+/// CUDA's compiled per-bucket `SEG_ARC_MIN_SPAN_RAD`.
+const GPU_SEG_ARC_MIN_SPAN_RAD: f64 = 3.0_f64.to_radians();
+/// CUDA's inner realised-span gate. The numerical 1e-4-rad floor is dominated
+/// by this shipped 3° bound, exactly as it is in the CPU arc evaluator.
+const GPU_ARC_REALIZED_MIN_SPAN_RAD: f64 = GPU_SEG_ARC_MIN_SPAN_RAD;
+/// Minimum covered window accumulated before an interval ray is evaluated.
+const GPU_ARC_QUADRATURE_MIN_RAD: f64 = 0.005;
+/// Characteristic-point ownership tolerance at interval boundaries.
+const GPU_ARC_CP_EPS: f64 = 1e-9;
+/// Maximum rule-level Lden difference between the independent CUDA mirror and
+/// the shipped CPU §3.5e arm. One fifth of an HM3 byte: a port transcription
+/// must agree below the product's 0.5 dB storage quantum on every probe.
+const GPU_PORT_PARITY_MAX_DB: f64 = 0.1;
 /// `ARC_FUSE_HEIGHT_TOL_M` (scatter.cu) = `arc_screening::ARC_FUSE_HEIGHT_TOL_M`
 /// — now the width of a height STRATUM rather than a pairwise tolerance. Since
 /// 2026-08-08 `noise-gpu/build.rs` INJECTS the kernel's copy from the Rust const,
@@ -1248,23 +1211,13 @@ fn gpu_fuse_key(near_m: f64, height_m: f64) -> i64 {
     let r = (near_m.max(1e-3).ln() / GPU_ARC_FUSE_RANGE_RATIO.ln()).floor() as i64;
     (h << 20) | ((r + 0x4_0000) & 0xf_ffff)
 }
-/// `ARC_PENUMBRA_FLOOR_M` (scatter.cu) is the magnitude of
-/// `constants::PENUMBRA_DELTA_FLOOR_M`. Also injected into the kernel by
-/// `noise-gpu/build.rs` since 2026-08-08; hand-written here for the same reason as
-/// `GPU_ARC_FUSE_HEIGHT_TOL_M` above.
-const GPU_ARC_PENUMBRA_FLOOR_M: f64 = 340.0 / 63.0 / 20.0;
-/// The grazing prune of the PRE-2026-08-09 kernel, which this port deliberately
-/// preserves — `ARC_DELTA_MIN_M` no longer exists in scatter.cu, and it was inert
-/// at this same 0.0 there and on the CPU before it was deleted. Mirrors nothing
-/// live; it is here because `v4` reproduces the pre-fix rule (see the v4 header).
-const GPU_ARC_DELTA_MIN_M: f64 = 0.0;
 /// `ARC_ESCALATE_SPAN` (scatter.cu:80) = `arc_screening::ESCALATE_SPAN_RAD`.
 const GPU_ARC_ESCALATE_SPAN: f64 = 0.26;
 /// `ESCALATE_MAX_PARTS` — the ceiling on that split, mirroring `arc_screening`.
 const GPU_ARC_ESCALATE_MAX_PARTS: usize = 9;
 /// `ARC_MAX_MERGED` (scatter.cu:127) — merged blocked arcs per (segment,
 /// receiver). The CPU is uncapped (`ArcBounds::max_arcs = usize::MAX`).
-const GPU_ARC_MAX_MERGED: usize = 32;
+const GPU_ARC_MAX_MERGED: usize = 160;
 
 /// One obstacle index regrouped by FOOTPRINT — the structure
 /// `footprint_csr_for_index` uploads and the kernel's arc walk indexes into.
@@ -1273,6 +1226,11 @@ struct FootprintIndex {
     origin_lat: f64,
     origin_lon: f64,
     m_per_deg_lon: f64,
+    cell_m: f64,
+    min_x: f64,
+    min_y: f64,
+    cols: usize,
+    rows: usize,
     /// `(x0, y0, x1, y1, height_m)` per edge in that frame, stride 5.
     edges_xyxyh: Vec<f32>,
     /// CSR: footprint → its contiguous run of edge indices, in ring order.
@@ -1280,6 +1238,10 @@ struct FootprintIndex {
     foot_edge_refs: Vec<u32>,
     /// Stride [`FOOT_BOX_STRIDE`].
     foot_box: Vec<f32>,
+    /// Grid cell → deduplicated footprint ids, the exact candidate authority
+    /// walked by CUDA's triangle scan.
+    cell_foot_starts: Vec<u32>,
+    cell_foot_ids: Vec<u32>,
 }
 
 impl FootprintIndex {
@@ -1298,28 +1260,43 @@ impl FootprintIndex {
 
 /// Group every index of the set by footprint id, exactly as
 /// `noise_gpu::footprint_csr_for_index` does host-side: first-appearance id
-/// order, counting sort by owner, per-footprint bbox + max height + convexity.
+/// order, counting sort by owner, per-footprint bbox, and cell→footprint CSR.
 fn build_footprint_indexes(set: &ObstacleSet) -> Vec<FootprintIndex> {
     set.indexes
         .iter()
         .map(|index| {
             let view = index.gpu_view();
-            let (foot_edge_starts, foot_edge_refs, foot_box) = footprint_csr(&view);
+            let csr = footprint_csr(&view);
             FootprintIndex {
                 origin_lat: view.origin_lat,
                 origin_lon: view.origin_lon,
                 m_per_deg_lon: view.m_per_deg_lon,
+                cell_m: view.cell_m,
+                min_x: view.min_x,
+                min_y: view.min_y,
+                cols: view.cols,
+                rows: view.rows,
                 edges_xyxyh: view.edges_xyxyh,
-                foot_edge_starts,
-                foot_edge_refs,
-                foot_box,
+                foot_edge_starts: csr.foot_edge_starts,
+                foot_edge_refs: csr.foot_edge_refs,
+                foot_box: csr.foot_box,
+                cell_foot_starts: csr.cell_foot_starts,
+                cell_foot_ids: csr.cell_foot_ids,
             }
         })
         .collect()
 }
 
-/// `footprint_csr_for_index` — `(starts, refs, boxes)`.
-fn footprint_csr(view: &GpuGridView<'_>) -> (Vec<u32>, Vec<u32>, Vec<f32>) {
+struct FixtureFootprintCsr {
+    foot_edge_starts: Vec<u32>,
+    foot_edge_refs: Vec<u32>,
+    foot_box: Vec<f32>,
+    cell_foot_starts: Vec<u32>,
+    cell_foot_ids: Vec<u32>,
+}
+
+/// Fixture copy of `noise_gpu::footprint_csr_for_index`'s acoustic arrays.
+fn footprint_csr(view: &GpuGridView<'_>) -> FixtureFootprintCsr {
     let n_edges = view.edge_ids.len();
     // 1. id ⇒ footprint index (first appearance), and the per-edge owner.
     let mut edge_foot = vec![0u32; n_edges];
@@ -1334,7 +1311,7 @@ fn footprint_csr(view: &GpuGridView<'_>) -> (Vec<u32>, Vec<u32>, Vec<f32>) {
         edge_foot[e] = f;
     }
     let n_foot = n_foot as usize;
-    // 2. counting sort by owner ⇒ the CSR, plus each footprint's bbox and height.
+    // 2. Counting sort by owner ⇒ the per-footprint CSR and bbox.
     let mut starts = vec![0u32; n_foot + 1];
     for &f in &edge_foot {
         starts[f as usize + 1] += 1;
@@ -1356,68 +1333,43 @@ fn footprint_csr(view: &GpuGridView<'_>) -> (Vec<u32>, Vec<u32>, Vec<f32>) {
         let f = f as usize;
         refs[cursor[f] as usize] = e as u32;
         cursor[f] += 1;
-        let g = &view.edges_xyxyh[e * 5..e * 5 + 5];
+        let g = &view.edges_xyxyh[e * 5..e * 5 + 4];
         let b = &mut boxes[f * FOOT_BOX_STRIDE..f * FOOT_BOX_STRIDE + FOOT_BOX_STRIDE];
         b[0] = b[0].min(g[0]).min(g[2]);
         b[1] = b[1].min(g[1]).min(g[3]);
         b[2] = b[2].max(g[0]).max(g[2]);
         b[3] = b[3].max(g[1]).max(g[3]);
-        b[4] = b[4].max(g[4]);
     }
-    // 3. convexity: one closed chain, turns all the same sign.
-    for f in 0..n_foot {
-        let (lo, hi) = (starts[f] as usize, starts[f + 1] as usize);
-        boxes[f * FOOT_BOX_STRIDE + 5] = if is_convex_ring(&view.edges_xyxyh, &refs[lo..hi]) {
-            1.0
-        } else {
-            0.0
-        };
+    // 3. Per cell, the distinct footprint ids named by its edge list.
+    let n_cells = view.cell_starts.len().saturating_sub(1);
+    let mut cell_foot_starts = Vec::with_capacity(n_cells + 1);
+    let mut cell_foot_ids = Vec::new();
+    let mut scratch = Vec::new();
+    cell_foot_starts.push(0);
+    for cell in 0..n_cells {
+        let lo = view.cell_starts[cell] as usize;
+        let hi = view.cell_starts[cell + 1] as usize;
+        scratch.clear();
+        scratch.extend(
+            view.edge_refs[lo..hi]
+                .iter()
+                .map(|&edge| edge_foot[edge as usize]),
+        );
+        scratch.sort_unstable();
+        scratch.dedup();
+        cell_foot_ids.extend_from_slice(&scratch);
+        cell_foot_starts.push(cell_foot_ids.len() as u32);
     }
-    (starts, refs, boxes)
+    FixtureFootprintCsr {
+        foot_edge_starts: starts,
+        foot_edge_refs: refs,
+        foot_box: boxes,
+        cell_foot_starts,
+        cell_foot_ids,
+    }
 }
 
-/// The host's retired `noise_gpu::is_convex_ring` — do these edges form ONE
-/// closed chain with consistently signed turns? Conservative: anything
-/// unverifiable is reported non-convex, which only costs the exact per-edge path.
-/// The live lane has no convexity notion left, so this is now the rule's only
-/// copy, which is where a pre-fix port should keep it.
-fn is_convex_ring(edges_xyxyh: &[f32], refs: &[u32]) -> bool {
-    let n = refs.len();
-    if n < 3 {
-        return false;
-    }
-    let pt = |e: u32, k: usize| {
-        let g = &edges_xyxyh[e as usize * 5..e as usize * 5 + 4];
-        (g[k * 2] as f64, g[k * 2 + 1] as f64)
-    };
-    for i in 0..n {
-        let e1 = pt(refs[i], 1);
-        let s2 = pt(refs[(i + 1) % n], 0);
-        if (e1.0 - s2.0).abs() > 1e-6 || (e1.1 - s2.1).abs() > 1e-6 {
-            return false;
-        }
-    }
-    let mut sign = 0i32;
-    for i in 0..n {
-        let (a0, a1) = (pt(refs[i], 0), pt(refs[i], 1));
-        let b1 = pt(refs[(i + 1) % n], 1);
-        let (ux, uy) = (a1.0 - a0.0, a1.1 - a0.1);
-        let (wx, wy) = (b1.0 - a1.0, b1.1 - a1.1);
-        let cr = ux * wy - uy * wx;
-        if cr.abs() < 1e-12 {
-            continue;
-        }
-        let s = if cr > 0.0 { 1 } else { -1 };
-        if sign == 0 {
-            sign = s;
-        } else if sign != s {
-            return false;
-        }
-    }
-    sign != 0
-}
-
-/// One blocked arc in the kernel's per-pair list (`iv_s/iv_e/iv_near/iv_h/iv_top`),
+/// One blocked arc in the kernel's per-pair list (`iv_s/iv_e/iv_near/iv_h`),
 /// in BASE-RELATIVE azimuth — the frame `arc_screen_bands` works in.
 #[derive(Clone, Copy)]
 struct GpuArc {
@@ -1425,7 +1377,6 @@ struct GpuArc {
     end: f64,
     near_m: f64,
     height_m: f64,
-    top_alt_m: f64,
 }
 
 /// v4's ray buffers, the counterpart of [`ArcScreeningScratch`].
@@ -1433,6 +1384,8 @@ struct GpuArc {
 struct GpuArcScratch {
     profile: PathProfile,
     candidates: Vec<CrossingCandidate>,
+    footprint_candidates: Vec<usize>,
+    footprint_seen: Vec<bool>,
     intervals: Vec<GpuArc>,
     /// Boundary-split working set — every arc endpoint plus the fan's own two
     /// ends, then every piece of `[lo, hi]` with its covered flag.
@@ -1440,21 +1393,57 @@ struct GpuArcScratch {
     pieces: Vec<(f64, f64, bool)>,
 }
 
-/// `arc_iv_union` (scatter.cu:1288) — union-insert one blocked arc into the
-/// list sorted by `start`.
+/// CUDA `tri_row_x_span`: x extent of the receiver/source triangle inside one
+/// horizontal obstacle-grid row.
+#[allow(clippy::too_many_arguments)]
+fn triangle_row_x_span(
+    receiver_x: f64,
+    receiver_y: f64,
+    start_x: f64,
+    start_y: f64,
+    end_x: f64,
+    end_y: f64,
+    row_y_lo: f64,
+    row_y_hi: f64,
+) -> Option<(f64, f64)> {
+    let mut x_lo = f64::INFINITY;
+    let mut x_hi = f64::NEG_INFINITY;
+    let xs = [receiver_x, start_x, end_x];
+    let ys = [receiver_y, start_y, end_y];
+    for i in 0..3 {
+        if ys[i] >= row_y_lo && ys[i] <= row_y_hi {
+            x_lo = x_lo.min(xs[i]);
+            x_hi = x_hi.max(xs[i]);
+        }
+        let j = (i + 1) % 3;
+        let dy = ys[j] - ys[i];
+        if dy == 0.0 {
+            continue;
+        }
+        for boundary_y in [row_y_lo, row_y_hi] {
+            let t = (boundary_y - ys[i]) / dy;
+            if !(0.0..=1.0).contains(&t) {
+                continue;
+            }
+            let x = xs[i] + t * (xs[j] - xs[i]);
+            x_lo = x_lo.min(x);
+            x_hi = x_hi.max(x);
+        }
+    }
+    (x_hi >= x_lo).then_some((x_lo, x_hi))
+}
+
+/// `arc_iv_union` (scatter.cu) — union-insert one blocked arc into the list
+/// sorted by `(height-and-range stratum, start)`.
 ///
-/// NOT a disjoint set: only FUSIBLE neighbours (heights within
-/// [`GPU_ARC_FUSE_HEIGHT_TOL_M`]) are absorbed, so overlapping arcs of
-/// materially different height are left side by side — and the energy average
-/// downstream then counts their shared directions twice. The CPU merges its
-/// clipped intervals unconditionally (`arc_screening` step 1's sort+merge),
-/// which is one of the two structural forks this integrator exists to price.
+/// NOT globally disjoint: only neighbours in the same height-and-range stratum
+/// are absorbed, so arcs from different strata can overlap. The boundary split
+/// downstream evaluates the union without double-counting that overlap.
 ///
-/// Capacity: the kernel DROPS the new arc when the list is full
-/// (`if (niv >= ARC_MAX_MERGED) { *overflow += 1; return niv; }`), although its
-/// own header comment at scatter.cu:121-125 claims the arc is unioned into its
-/// nearest neighbour instead. The code is reproduced, not the comment.
-fn arc_iv_union(list: &mut Vec<GpuArc>, mut arc: GpuArc) {
+/// Capacity: the kernel drops the new arc when the list is full and increments
+/// its overflow counter. This mirror aborts instead, so the acceptance gate
+/// cannot pass after silently losing an arc.
+fn arc_iv_union(list: &mut Vec<GpuArc>, mut arc: GpuArc) -> bool {
     let key = gpu_fuse_key(arc.near_m, arc.height_m);
     let k = |a: &GpuArc| gpu_fuse_key(a.near_m, a.height_m);
     let mut i = 0;
@@ -1478,9 +1467,10 @@ fn arc_iv_union(list: &mut Vec<GpuArc>, mut arc: GpuArc) {
         }
     }
     if list.len() >= GPU_ARC_MAX_MERGED {
-        return; // overflow ⇒ the arc is dropped, exactly as the kernel does
+        return false;
     }
     list.insert(i, arc);
+    true
 }
 
 /// A fusion takes the widest arc, the MINIMUM range and the MAXIMUM height —
@@ -1490,7 +1480,6 @@ fn absorb(into: &mut GpuArc, other: GpuArc) {
     into.start = into.start.min(other.start);
     into.end = into.end.max(other.end);
     into.near_m = into.near_m.min(other.near_m);
-    into.top_alt_m = into.top_alt_m.max(other.top_alt_m);
     into.height_m = into.height_m.max(other.height_m);
 }
 
@@ -1505,22 +1494,6 @@ fn arc_clip_span(a_lo: f64, a_hi: f64, lo: f64, hi: f64) -> Option<(f64, f64)> {
         }
     }
     None
-}
-
-/// scatter.cu `seg_isect_t` — does the ray `(sx,sy) + t·(dx,dy)` cross the
-/// segment with `t` strictly inside (0,1) and `u` inclusive in [0,1]?
-#[inline]
-#[allow(clippy::too_many_arguments)]
-fn seg_isect_t(sx: f64, sy: f64, dx: f64, dy: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> bool {
-    let (ex, ey) = (x1 - x0, y1 - y0);
-    let denom = dx * ey - dy * ex;
-    if denom == 0.0 {
-        return false;
-    }
-    let (wx, wy) = (x0 - sx, y0 - sy);
-    let t = (wx * ey - wy * ex) / denom;
-    let u = (wx * dy - wy * dx) / denom;
-    t > 0.0 && t < 1.0 && (0.0..=1.0).contains(&u)
 }
 
 /// scatter.cu `arc_source_point` — the point ON the segment the receiver
@@ -1568,21 +1541,129 @@ fn gpu_db_to_energy(db: f64) -> f64 {
     fast_exp_f64(db * std::f64::consts::LN_10 * 0.1)
 }
 
+/// CUDA `line_source` branch (1): five uniform angular buckets, each
+/// carrying its own path, with `arc_screen_bands` nested only past the compiled
+/// 3° bucket-width gate. Returns the per-band ground-or-barrier composite.
+fn gpu_sampled_gob_bands(
+    q: &ArcScreening<'_>,
+    rasters: &SceneGround,
+    footprints: &[FootprintIndex],
+    scratch: &mut GpuArcScratch,
+) -> Option<[f64; NUM_BANDS]> {
+    let m_lon = M_PER_DEG_LON_EQ * q.receiver_lat.to_radians().cos().max(0.01);
+    let ax = (q.start_lon - q.receiver_lon) * m_lon;
+    let ay = (q.start_lat - q.receiver_lat) * M_PER_DEG_LAT;
+    let bx = (q.end_lon - q.receiver_lon) * m_lon;
+    let by = (q.end_lat - q.receiver_lat) * M_PER_DEG_LAT;
+    let (ex, ey) = (bx - ax, by - ay);
+    if ex * ex + ey * ey < 1e-6 {
+        return None;
+    }
+    let base = ay.atan2(ax);
+    let delta = wrap_pi(by.atan2(bx) - base);
+    let point_at = |fraction: f64| {
+        let azimuth = base + fraction * delta;
+        let (ux, uy) = (azimuth.cos(), azimuth.sin());
+        let cross_edge = ux * ey - uy * ex;
+        let cross_start = ux * ay - uy * ax;
+        let t = if cross_edge.abs() > 1e-12 {
+            (-cross_start / cross_edge).clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
+        let (sx, sy) = (ax + t * ex, ay + t * ey);
+        let distance_m = (sx * sx + sy * sy).sqrt();
+        (distance_m.is_finite() && distance_m >= 1.0).then_some((
+            q.receiver_lat + sy / M_PER_DEG_LAT,
+            q.receiver_lon + sx / m_lon,
+            distance_m,
+        ))
+    };
+
+    let ground = noise_compute::propagation::iso9613::legacy_ground_atten_bands(q.ground_g);
+    let inv_n = 1.0 / GPU_SEG_SAMPLES as f64;
+    let bucket_azimuth_width = delta.abs() * inv_n;
+    let mut accumulated_energy = [0.0; NUM_BANDS];
+    let mut used = 0usize;
+    let mut lo_point = point_at(0.0);
+    for bucket in 0..GPU_SEG_SAMPLES {
+        let hi_point = point_at((bucket + 1) as f64 * inv_n);
+        let Some((source_lat, source_lon, source_distance_m)) =
+            point_at((bucket as f64 + 0.5) * inv_n)
+        else {
+            lo_point = hi_point;
+            continue;
+        };
+        let (terrain, mut screening) = gpu_path_screening(
+            q,
+            rasters,
+            source_lat,
+            source_lon,
+            &mut scratch.profile,
+            &mut scratch.candidates,
+        );
+        if let (Some((lo_lat, lo_lon, lo_distance)), Some((hi_lat, hi_lon, hi_distance))) =
+            (lo_point, hi_point)
+        {
+            let bucket_length_m = (lo_distance * lo_distance + hi_distance * hi_distance
+                - 2.0 * lo_distance * hi_distance * bucket_azimuth_width.cos())
+            .max(0.0)
+            .sqrt();
+            let bucket_distance_m = lo_distance.min(hi_distance).min(source_distance_m);
+            if bucket_length_m > bucket_distance_m * GPU_SEG_ARC_MIN_SPAN_RAD {
+                let source_alt_m = rasters.elevation(source_lat, source_lon) + q.source_height_m;
+                screening = gpu_arc_screened_attenuation(
+                    &ArcScreening {
+                        start_lat: lo_lat,
+                        start_lon: lo_lon,
+                        end_lat: hi_lat,
+                        end_lon: hi_lon,
+                        cp_lat: source_lat,
+                        cp_lon: source_lon,
+                        src_alt_m: source_alt_m,
+                        cp_screening: &screening,
+                        cp_terrain: &terrain,
+                        length_m: bucket_length_m,
+                        dist_m: bucket_distance_m,
+                        ..*q
+                    },
+                    rasters,
+                    footprints,
+                    scratch,
+                );
+            }
+        }
+        for band in 0..NUM_BANDS {
+            let gob = gpu_ground_or_barrier(terrain[band], ground[band], screening[band]);
+            accumulated_energy[band] += gpu_db_to_energy(-gob);
+        }
+        used += 1;
+        lo_point = hi_point;
+    }
+
+    if used == 0 {
+        return Some(std::array::from_fn(|band| {
+            gpu_ground_or_barrier(q.cp_terrain[band], ground[band], 0.0)
+        }));
+    }
+    let inverse_used = 1.0 / used as f64;
+    Some(std::array::from_fn(|band| {
+        -10.0 * (accumulated_energy[band] * inverse_used).max(1e-12).log10()
+    }))
+}
+
 /// The GPU's `arc_screen_bands`, in CPU code: the per-band effective screening
 /// of the whole segment as seen from this receiver.
 ///
-/// Five places it forked from `arc_screening::arc_screened_attenuation` when
-/// this integrator was written on 2026-08-04. Three are now CLOSED — the kernel
-/// carries the fix and this code mirrors it; they are kept on the record
-/// because each was found here and priced here:
+/// The mirror deliberately preserves the current kernel's collection shape,
+/// including the one known residual against the CPU skyline:
 ///
 /// 1. **Grouping** (OPEN, measured immaterial). Arcs are built PER FOOTPRINT PER
 ///    (segment, receiver) inside the fan, not read off a per-receiver skyline
 ///    merged over the whole circle. On every scene here the two agree.
-/// 2. **Confirmation** (OPEN, measured immaterial). Every emitted arc must be
-///    crossed by the exact ray from the receiver to the source point at its own
-///    centre azimuth; the CPU keeps an arc on the range test alone. Stricter, so
-///    it can only remove screening, and it removes 2 arcs in 66 912 pairs here.
+/// 2. **Per-edge emission/admission** (CLOSED). Every edge carries its own range
+///    and height; confirmation and δ prefilters are gone, and the shared 1 m
+///    geometry floors run only after keyed fusion.
 /// 3. **Overlap** (CLOSED). [`arc_iv_union`] leaves overlapping arcs of
 ///    materially different height side by side — it must, since one
 ///    (range, height) pair cannot describe both. Averaging that list counted
@@ -1593,11 +1674,13 @@ fn gpu_db_to_energy(db: f64) -> f64 {
 ///    [`GPU_ARC_ESCALATE_SPAN`] into exactly THREE parts however wide it was;
 ///    both lanes now split to that fixed angular RESOLUTION, capped at
 ///    [`GPU_ARC_ESCALATE_MAX_PARTS`]. Worth 0.15 dB on scene E, 0.03 on C.
-/// 5. **Noise walls** (CLOSED). The kernel built intervals from obstacle-index
-///    footprints only, so `barr` reached the interval RAYS but could never
-///    create one — scene D, the same wall through the production
-///    `types::Barrier` lane, read the pre-fix-pack `current` verdict exactly
-///    (0.63 dB vs the CPU's 0.28). Both lanes now carry the wall arm.
+/// 5. **Noise walls** (CLOSED inside a complete skyline authority). The kernel
+///    built intervals from obstacle-index footprints only, so `barr` reached the
+///    interval RAYS but could never create one. Scene D isolates that arc
+///    primitive with an empty-but-complete fixture authority: v4 read the
+///    pre-fix-pack `current` verdict exactly (0.63 dB vs the CPU's 0.28) before
+///    the fix. Production raster fallback is a separate cp-only branch because
+///    it lacks the complete footprint skyline.
 fn gpu_arc_screened_attenuation(
     q: &ArcScreening<'_>,
     rasters: &SceneGround,
@@ -1610,8 +1693,9 @@ fn gpu_arc_screened_attenuation(
     };
     let base = azimuth(q.start_lat, q.start_lon);
     let delta = wrap_pi(azimuth(q.end_lat, q.end_lon) - base);
-    // Below this span the segment IS a point source at this receiver.
-    if delta.abs() < GPU_ARC_MIN_SPAN {
+    // The outer chord gate can pass on range spread while the realised endpoint
+    // azimuths nearly coincide; both production lanes apply this second bound.
+    if delta.abs() < GPU_ARC_REALIZED_MIN_SPAN_RAD {
         return *q.cp_screening;
     }
     let (lo, hi) = if delta < 0.0 {
@@ -1624,6 +1708,8 @@ fn gpu_arc_screened_attenuation(
     let GpuArcScratch {
         profile,
         candidates,
+        footprint_candidates,
+        footprint_seen,
         intervals,
         bounds,
         pieces,
@@ -1635,6 +1721,9 @@ fn gpu_arc_screened_attenuation(
     let (dhi_x, dhi_y) = ((base + hi).cos(), (base + hi).sin());
 
     for index in footprints {
+        if index.footprint_count() == 0 {
+            continue;
+        }
         let imlon = index.m_per_deg_lon;
         let rxl = (q.receiver_lon - index.origin_lon) * imlon;
         let ryl = (q.receiver_lat - index.origin_lat) * M_PER_DEG_LAT;
@@ -1645,9 +1734,83 @@ fn gpu_arc_screened_attenuation(
         let (alx, aly) = (dlo_x * kx, dlo_y);
         let (ahx, ahy) = (dhi_x * kx, dhi_y);
 
-        for f in 0..index.footprint_count() {
+        // Exact CUDA triangle-cell workset. Since current CUDA removed the
+        // confirmation ray, candidate collection can affect the answer and is
+        // therefore mirrored here rather than widened to every footprint.
+        let q_min_lat = q.receiver_lat.min(q.start_lat).min(q.end_lat);
+        let q_max_lat = q.receiver_lat.max(q.start_lat).max(q.end_lat);
+        let q_min_lon = q.receiver_lon.min(q.start_lon).min(q.end_lon);
+        let q_max_lon = q.receiver_lon.max(q.start_lon).max(q.end_lon);
+        let xa = (q_min_lon - index.origin_lon) * imlon;
+        let xb = (q_max_lon - index.origin_lon) * imlon;
+        let ya = (q_min_lat - index.origin_lat) * M_PER_DEG_LAT;
+        let yb = (q_max_lat - index.origin_lat) * M_PER_DEG_LAT;
+        let inverse_cell = 1.0 / index.cell_m;
+        let cx0_unclamped = ((xa.min(xb) - index.min_x) * inverse_cell).floor();
+        let cx1_unclamped = ((xa.max(xb) - index.min_x) * inverse_cell).floor();
+        let cy0_unclamped = ((ya.min(yb) - index.min_y) * inverse_cell).floor();
+        let cy1_unclamped = ((ya.max(yb) - index.min_y) * inverse_cell).floor();
+        if cx1_unclamped < 0.0
+            || cx0_unclamped > (index.cols - 1) as f64
+            || cy1_unclamped < 0.0
+            || cy0_unclamped > (index.rows - 1) as f64
+        {
+            continue;
+        }
+        let cx0 = cx0_unclamped.max(0.0) as usize;
+        let cx1 = cx1_unclamped.min((index.cols - 1) as f64) as usize;
+        let cy0 = cy0_unclamped.max(0.0) as usize;
+        let cy1 = cy1_unclamped.min((index.rows - 1) as f64) as usize;
+        let start_x = (q.start_lon - index.origin_lon) * imlon;
+        let start_y = (q.start_lat - index.origin_lat) * M_PER_DEG_LAT;
+        let end_x = (q.end_lon - index.origin_lon) * imlon;
+        let end_y = (q.end_lat - index.origin_lat) * M_PER_DEG_LAT;
+        footprint_candidates.clear();
+        footprint_seen.clear();
+        footprint_seen.resize(index.footprint_count(), false);
+        for cy in cy0..=cy1 {
+            let row_y_lo = index.min_y + cy as f64 * index.cell_m;
+            let Some((row_x_lo, row_x_hi)) = triangle_row_x_span(
+                rxl,
+                ryl,
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+                row_y_lo,
+                row_y_lo + index.cell_m,
+            ) else {
+                continue;
+            };
+            let row_cx0 = ((row_x_lo - index.min_x) * inverse_cell)
+                .floor()
+                .max(cx0 as f64);
+            let row_cx1 = ((row_x_hi - index.min_x) * inverse_cell)
+                .floor()
+                .min(cx1 as f64);
+            // CUDA keeps these signed and gets an empty range when the row lies
+            // left of the grid. A direct negative-f64-to-usize cast saturates
+            // to zero and would incorrectly visit the leftmost cell.
+            if row_cx1 < row_cx0 {
+                continue;
+            }
+            let (row_cx0, row_cx1) = (row_cx0 as usize, row_cx1 as usize);
+            for cx in row_cx0..=row_cx1 {
+                let cell = cy * index.cols + cx;
+                let lo = index.cell_foot_starts[cell] as usize;
+                let hi = index.cell_foot_starts[cell + 1] as usize;
+                for &footprint in &index.cell_foot_ids[lo..hi] {
+                    let footprint = footprint as usize;
+                    if !footprint_seen[footprint] {
+                        footprint_seen[footprint] = true;
+                        footprint_candidates.push(footprint);
+                    }
+                }
+            }
+        }
+
+        for &f in footprint_candidates.iter() {
             let fb = &index.foot_box[f * FOOT_BOX_STRIDE..f * FOOT_BOX_STRIDE + FOOT_BOX_STRIDE];
-            let (height_m, convex) = (fb[4] as f64, fb[5] != 0.0);
             // Wedge prune, no transcendentals: a direction p is inside the
             // (convex, ≤π) fan iff cross(d_lo, p) ≥ 0 and cross(p, d_hi) ≥ 0.
             // Both are linear in p, so their MAXIMUM over the footprint's bbox
@@ -1665,106 +1828,55 @@ fn gpu_arc_screened_attenuation(
                 continue;
             }
 
-            // Hull from the footprint's own edges, plus the closest range in it
-            // (`SkylineArc::near_m`) — one value for the WHOLE footprint, reused
-            // by every silhouette arc it emits.
+            // The hull is only a cheap exact reject. Every surviving footprint
+            // emits its per-edge arcs below, matching the current kernel.
             let (k0, k1) = (
                 index.foot_edge_starts[f] as usize,
                 index.foot_edge_starts[f + 1] as usize,
             );
             let mut hull_lo = f64::INFINITY;
             let mut hull_hi = f64::NEG_INFINITY;
-            let mut near_m = f64::INFINITY;
             for kk in k0..k1 {
                 let (r0, r1) = edge_arc(index, kk, imlon, base, &azimuth);
                 hull_lo = hull_lo.min(r0.min(r1));
                 hull_hi = hull_hi.max(r0.max(r1));
-                let g = index.edge(kk);
-                near_m = near_m.min(point_to_segment_dist(
-                    g[0] - rxl,
-                    g[1] - ryl,
-                    g[2] - rxl,
-                    g[3] - ryl,
-                ));
             }
-            // The convex hull is used first as a cheap exact REJECT: the union
-            // of the per-edge arcs is contained in it.
-            let Some((hull_start, hull_end)) = arc_clip_span(hull_lo, hull_hi, lo, hi) else {
+            if arc_clip_span(hull_lo, hull_hi, lo, hi).is_none() {
                 continue;
-            };
-            // A CONVEX footprint's hull IS its silhouette; a concave one (an
-            // L-block, a courtyard) emits the exact union of its per-edge arcs,
-            // because the hull spans the notch.
-            let n_emit = if convex { 1 } else { k1 - k0 };
-            for ei in 0..n_emit {
-                let (start, end) = if convex {
-                    (hull_start, hull_end)
-                } else {
-                    let (r0, r1) = edge_arc(index, k0 + ei, imlon, base, &azimuth);
-                    match arc_clip_span(r0.min(r1), r0.max(r1), lo, hi) {
-                        Some(v) => v,
-                        None => continue,
-                    }
-                };
-                let centre_az = base + 0.5 * (start + end);
-                let Some((src_lat, src_lon)) = gpu_source_point_at(q, m_lon, centre_az) else {
+            }
+            for edge_index in k0..k1 {
+                let (r0, r1) = edge_arc(index, edge_index, imlon, base, &azimuth);
+                let Some((start, end)) = arc_clip_span(r0.min(r1), r0.max(r1), lo, hi) else {
                     continue;
                 };
-                // Confirmation: the ray to this arc's centre must actually cross
-                // THIS footprint.
-                let sxc = (src_lon - index.origin_lon) * imlon;
-                let syc = (src_lat - index.origin_lat) * M_PER_DEG_LAT;
-                let (dxc, dyc) = (rxl - sxc, ryl - syc);
-                let hit = (k0..k1).any(|kk| {
-                    let g = index.edge(kk);
-                    seg_isect_t(sxc, syc, dxc, dyc, g[0], g[1], g[2], g[3])
-                });
-                if !hit {
-                    continue;
-                }
-                // Per-arc admission: the arc screens THIS path only if it stands
-                // in front of the source and actually bends the ray.
-                // δ ≈ h²·d/(2ab) on the sight line to this source point, SIGNED
-                // by whether the top clears it.
-                let ddx = (src_lon - q.receiver_lon) * m_lon;
-                let ddy = (src_lat - q.receiver_lat) * M_PER_DEG_LAT;
-                let d_src = (ddx * ddx + ddy * ddy).sqrt();
-                let (b_rng, a_rng) = (near_m, d_src - near_m);
-                if a_rng <= 1.0 || b_rng < 1.0 {
-                    continue;
-                }
-                let ground_alt = rasters.elevation(
-                    q.receiver_lat + b_rng * centre_az.sin() / M_PER_DEG_LAT,
-                    q.receiver_lon + b_rng * centre_az.cos() / m_lon,
+                let edge = index.edge(edge_index);
+                let near_m = point_to_segment_dist(
+                    edge[0] - rxl,
+                    edge[1] - ryl,
+                    edge[2] - rxl,
+                    edge[3] - ryl,
                 );
-                let top_alt_m = ground_alt + height_m;
-                let los = q.receiver_alt_m - (b_rng / d_src) * (q.receiver_alt_m - q.src_alt_m);
-                let h = top_alt_m - los;
-                let two_ab = 2.0 * a_rng * b_rng;
-                let delta_num = h * h * d_src;
-                if h < 0.0 && delta_num > GPU_ARC_PENUMBRA_FLOOR_M * two_ab {
-                    continue;
-                }
-                if h >= 0.0 && delta_num < GPU_ARC_DELTA_MIN_M * two_ab {
-                    continue;
-                }
-                arc_iv_union(
-                    intervals,
-                    GpuArc {
-                        start,
-                        end,
-                        near_m: b_rng,
-                        height_m,
-                        top_alt_m,
-                    },
+                assert!(
+                    arc_iv_union(
+                        intervals,
+                        GpuArc {
+                            start,
+                            end,
+                            near_m,
+                            height_m: edge[4],
+                        },
+                    ),
+                    "CUDA fixture mirror dropped an arc at ARC_MAX_MERGED={GPU_ARC_MAX_MERGED}"
                 );
             }
         }
     }
-    // ---- Noise WALLS are the other half of the skyline (fix-pack Fix 5). A
-    // wall IS a segment, so its arc is the same primitive a building edge
-    // produces: the short arc between its endpoint azimuths, at its nearest
-    // range. Without this a receiver behind a wall gets NO blocked interval, the
+    // ---- Noise WALLS are the other half of a complete skyline authority
+    // (fix-pack Fix 5). This fixture supplies that authority even when its
+    // footprint list is empty; production raster fallback deliberately does not
+    // call the arc integrator. A wall IS a segment, so its arc is the same
+    // primitive a building edge produces: the short arc between its endpoint
+    // azimuths, at its nearest range. Without this a receiver behind a wall gets NO blocked interval, the
     // cp verdict stands for the whole segment, and the constant-width shadow
     // band survives exactly where a wall makes it most visible. The CPU has
     // carried this since the fix-pack (`ArcSkyline::ensure`'s barrier arm); the
@@ -1814,54 +1926,42 @@ fn gpu_arc_screened_attenuation(
             let Some((start, end)) = arc_clip_span(r0.min(r1), r0.max(r1), lo, hi) else {
                 continue;
             };
-            let centre_az = base + 0.5 * (start + end);
-            let Some((src_lat, src_lon)) = gpu_source_point_at(q, m_lon, centre_az) else {
-                continue;
-            };
-            let ddx = (src_lon - q.receiver_lon) * m_lon;
-            let ddy = (src_lat - q.receiver_lat) * M_PER_DEG_LAT;
-            let d_src = (ddx * ddx + ddy * ddy).sqrt();
-            let (b_rng, a_rng) = (near_m, d_src - near_m);
-            if a_rng <= 1.0 || b_rng < 1.0 {
-                continue;
-            }
-            let ground_alt = rasters.elevation(
-                q.receiver_lat + b_rng * centre_az.sin() / M_PER_DEG_LAT,
-                q.receiver_lon + b_rng * centre_az.cos() / m_lon,
-            );
-            let top_alt_m = ground_alt + w.height_m as f64;
-            let los = q.receiver_alt_m - (b_rng / d_src) * (q.receiver_alt_m - q.src_alt_m);
-            let h = top_alt_m - los;
-            let two_ab = 2.0 * a_rng * b_rng;
-            let delta_num = h * h * d_src;
-            if h < 0.0 && delta_num > GPU_ARC_PENUMBRA_FLOOR_M * two_ab {
-                continue;
-            }
-            if h >= 0.0 && delta_num < GPU_ARC_DELTA_MIN_M * two_ab {
-                continue;
-            }
-            arc_iv_union(
-                intervals,
-                GpuArc {
-                    start,
-                    end,
-                    near_m: b_rng,
-                    height_m: w.height_m as f64,
-                    top_alt_m,
-                },
+            assert!(
+                arc_iv_union(
+                    intervals,
+                    GpuArc {
+                        start,
+                        end,
+                        near_m,
+                        height_m: w.height_m as f64,
+                    },
+                ),
+                "CUDA fixture mirror dropped a wall arc at ARC_MAX_MERGED={GPU_ARC_MAX_MERGED}"
             );
         }
     }
+
+    // Current CUDA applies the geometry-only 1 m floors after the keyed union,
+    // at the same merged-arc granularity the CPU skyline can share.
+    intervals.retain(|arc| {
+        let centre_azimuth = base + 0.5 * (arc.start + arc.end);
+        let Some((source_lat, source_lon)) = gpu_source_point_at(q, m_lon, centre_azimuth) else {
+            return false;
+        };
+        let dx = (source_lon - q.receiver_lon) * m_lon;
+        let dy = (source_lat - q.receiver_lat) * M_PER_DEG_LAT;
+        let source_distance_m = (dx * dx + dy * dy).sqrt();
+        source_distance_m - arc.near_m > 1.0 && arc.near_m >= 1.0
+    });
 
     if intervals.is_empty() {
         return *q.cp_screening;
     }
 
-    // ---- BOUNDARY SPLIT. `arc_iv_union` fuses only neighbours whose heights
-    // agree within [`GPU_ARC_FUSE_HEIGHT_TOL_M`] — it must, because one
-    // (range, height) pair cannot describe a near-and-low and a far-and-tall
-    // obstacle at once — so two footprints at different RANGES with materially
-    // different heights stay side by side, OVERLAPPING. The average below then
+    // ---- BOUNDARY SPLIT. `arc_iv_union` fuses only neighbours with the same
+    // exact (height stratum, range stratum) key: one (range, height) pair cannot
+    // describe a near-and-low and a far-and-tall obstacle. Different keys stay
+    // side by side, OVERLAPPING. The average below then
     // adds `step / span` for EACH of them, so every direction they share is
     // counted twice: `blocked` overruns the fan, the clear remainder is clamped
     // away, and the mean is taken over a total weight > 1.
@@ -1901,12 +2001,25 @@ fn gpu_arc_screened_attenuation(
         let covered = intervals.iter().any(|iv| iv.start <= mid && mid <= iv.end);
         pieces.push((start, end, covered));
     }
+    let mut piece_index = 0usize;
+    while piece_index < pieces.len() {
+        if pieces[piece_index].2 {
+            while pieces[piece_index].1 - pieces[piece_index].0 < GPU_ARC_QUADRATURE_MIN_RAD
+                && piece_index + 1 < pieces.len()
+                && pieces[piece_index + 1].2
+            {
+                pieces[piece_index].1 = pieces[piece_index + 1].1;
+                pieces.remove(piece_index + 1);
+            }
+        }
+        piece_index += 1;
+    }
 
     // One screening evaluation per (sub-)interval centre, energy-averaged on the
     // ground/barrier term.
     let ground = noise_compute::propagation::iso9613::legacy_ground_atten_bands(q.ground_g);
     let cp_rel = wrap_pi(azimuth(q.cp_lat, q.cp_lon) - base);
-    let mut blocked_fraction = 0.0f64;
+    let mut evaluated_fraction = 0.0f64;
     let mut energy = [0.0f64; NUM_BANDS];
     for &(piece_start, piece_end, covered) in pieces.iter() {
         // ---- CLEAR ARM (scatter.cu `ray_terrain_bands`). CLEAR IS NOT
@@ -1925,7 +2038,7 @@ fn gpu_arc_screened_attenuation(
                     gpu_interval_terrain(q, rasters, m_lon, base + start + 0.5 * step, profile)
                         .unwrap_or(*q.cp_terrain);
                 let fraction = step / span;
-                blocked_fraction += fraction;
+                evaluated_fraction += fraction;
                 for b in 0..NUM_BANDS {
                     energy[b] += fraction
                         * gpu_db_to_energy(-gpu_ground_or_barrier(terrain[b], ground[b], 0.0));
@@ -1945,26 +2058,27 @@ fn gpu_arc_screened_attenuation(
         for p in 0..parts {
             let start = piece_start + p as f64 * step;
             let end = start + step;
-            // No epsilon and no re-basing here: the kernel compares the raw
-            // base-relative cp azimuth against the raw interval bounds.
+            // The kernel gives a boundary-adjacent characteristic point the
+            // same ±epsilon ownership as the CPU arc integrator.
             // The terrain the average is TAKEN ON is this piece's own ray's,
             // the cp's only where no interval ray runs — `ray_path_bands` fills
             // it either way and the kernel was throwing it away.
-            let (terrain, bands) = if cp_rel >= start && cp_rel <= end {
-                (*q.cp_terrain, *q.cp_screening)
-            } else {
-                gpu_interval_screening(
-                    q,
-                    rasters,
-                    m_lon,
-                    base + 0.5 * (start + end),
-                    profile,
-                    candidates,
-                )
-                .unwrap_or((*q.cp_terrain, *q.cp_screening))
-            };
+            let (terrain, bands) =
+                if cp_rel >= start - GPU_ARC_CP_EPS && cp_rel <= end + GPU_ARC_CP_EPS {
+                    (*q.cp_terrain, *q.cp_screening)
+                } else {
+                    gpu_interval_screening(
+                        q,
+                        rasters,
+                        m_lon,
+                        base + 0.5 * (start + end),
+                        profile,
+                        candidates,
+                    )
+                    .unwrap_or((*q.cp_terrain, *q.cp_screening))
+                };
             let fraction = step / span;
-            blocked_fraction += fraction;
+            evaluated_fraction += fraction;
             for b in 0..NUM_BANDS {
                 energy[b] += fraction
                     * gpu_db_to_energy(-gpu_ground_or_barrier(terrain[b], ground[b], bands[b]));
@@ -1972,10 +2086,10 @@ fn gpu_arc_screened_attenuation(
         }
     }
 
-    // …plus the clear rest of the fan, which carries the terrain/ground term
-    // alone. With the boundary split above, `blocked_fraction` is now the exact
-    // angular measure of the union and can no longer exceed 1.
-    let clear_fraction = (1.0 - blocked_fraction).max(0.0);
+    // …plus the unevaluated rounding remainder of the fan, which carries the cp
+    // terrain/ground term alone. Covered and clear pieces both contribute to
+    // `evaluated_fraction`; the boundary walk covers the full fan in normal use.
+    let clear_fraction = (1.0 - evaluated_fraction).max(0.0);
     std::array::from_fn(|b| {
         let clear = clear_fraction
             * gpu_db_to_energy(-gpu_ground_or_barrier(q.cp_terrain[b], ground[b], 0.0));
@@ -1984,8 +2098,8 @@ fn gpu_arc_screened_attenuation(
     })
 }
 
-/// The base-relative azimuths of edge `k`'s two endpoints — the SHORT arc
-/// between them, unwrapped exactly as the kernel's hull pass does.
+/// The base-relative azimuths of edge `k`'s two endpoints — the same SHORT-arc
+/// unwrap rule the kernel applies to each candidate edge.
 fn edge_arc(
     index: &FootprintIndex,
     k: usize,
@@ -2039,6 +2153,22 @@ fn gpu_interval_screening(
     if dist_m < 1.0 {
         return None;
     }
+    Some(gpu_path_screening(
+        q, rasters, src_lat, src_lon, profile, candidates,
+    ))
+}
+
+/// Full path bands to an already-resolved source point, shared by the outer
+/// five-bucket quadrature and the inner interval rays.
+fn gpu_path_screening(
+    q: &ArcScreening<'_>,
+    rasters: &SceneGround,
+    src_lat: f64,
+    src_lon: f64,
+    profile: &mut PathProfile,
+    candidates: &mut Vec<CrossingCandidate>,
+) -> ([f64; NUM_BANDS], [f64; NUM_BANDS]) {
+    let dist_m = geo::flat_dist(src_lat, src_lon, q.receiver_lat, q.receiver_lon);
     let src_alt = rasters.elevation(src_lat, src_lon) + q.source_height_m;
     rasters.build_path_profile(
         src_lat,
@@ -2069,7 +2199,7 @@ fn gpu_interval_screening(
         q.exclusion_radius_m,
         &terrain,
     );
-    Some((terrain, screening))
+    (terrain, screening)
 }
 
 /// Bare-earth terrain bands on the ray to the source point at `azimuth` — the
@@ -2249,18 +2379,20 @@ screening_fixture — CNOSSOS line-source screening validation fixture
 
 Usage:
   screening_fixture [--scene a|b|c|d|e|f|g|h|i|j|k|all]
-                    [--integrator reference33|current|v3|v4|v5|all]
+                    [--integrator reference33|current|v3|v4|v5|all|port-parity]
                     [--reference-subdivisions N] [--seg-samples N]
 
 Options:
   --scene       which synthetic scene to run (default: all)
   --integrator  which screening evaluation to report (default: all; `both` =
-                reference33 + current, the pre-v3 spelling)
+                reference33 + current, the pre-v3 spelling; `port-parity` =
+                current CUDA v4 mirror + shipped CPU v5 rule, concise gate output)
   --reference-subdivisions
                 override every scene's sub-points per microsegment — the
                 convergence lever (run 33 vs 99 and watch the verdict move)
   --seg-samples angular buckets per microsegment for `v5` (default 5, the
-                shipped tile value); 1 collapses v5 onto `current`
+                shipped tile value); 1 samples the fan-centre ray, while the
+                production tile caller routes n=1 to its cp fallback instead
   --help        print this text
 
 Output: TSV `scene integrator x y lden_db` on stdout, then `#` summary lines.
@@ -2315,6 +2447,7 @@ fn main() {
                     "v4" => vec![Integrator::V4],
                     "v5" => vec![Integrator::V5],
                     "both" => vec![Integrator::Reference33, Integrator::Current],
+                    "port-parity" => vec![Integrator::V4, Integrator::V5],
                     "all" => ALL_INTEGRATORS.to_vec(),
                     other => {
                         eprintln!("unknown --integrator {other}\n\n{USAGE}");
@@ -2349,6 +2482,39 @@ fn main() {
         }
     }
 
+    let port_parity_only = integrators.as_slice() == [Integrator::V4, Integrator::V5];
+    if port_parity_only {
+        let cpu_only_levers = [
+            "QM_ARC_EXACT",
+            "QM_ARC_MIN_SPAN_DEG",
+            "QM_ARC_RADIUS_M",
+            "QM_ARC_DELTA_MIN_M",
+            "QM_ARC_MAX_ARCS",
+            "QM_ARC_MAX_INTERVALS",
+            "QM_ARC_NEED_CLIP_M",
+            "QM_SEG_SAMPLES",
+        ];
+        let set_levers: Vec<_> = cpu_only_levers
+            .into_iter()
+            .filter(|name| std::env::var_os(name).is_some())
+            .collect();
+        if scenes.as_slice() != ALL_SCENES
+            || seg_samples != SEG_SAMPLES_DEFAULT
+            || subdivisions.is_some()
+            || !set_levers.is_empty()
+        {
+            eprintln!(
+                "port-parity requires all 11 scenes, shipped n=5, no reference override, and \
+                 CPU-only arc levers unset; scenes={} n={seg_samples} reference_override={} \
+                 set_levers={}",
+                scenes.len(),
+                subdivisions.is_some(),
+                set_levers.join(",")
+            );
+            std::process::exit(2);
+        }
+    }
+
     println!(
         "# source: line x=0 (x={K_SOURCE_X_M} on scene k), y={LINE_Y_MIN}..{LINE_Y_MAX} m, \
          {N_SEGMENTS} x {SEGMENT_LEN_M} m microsegments, motorway WORLD_DEFAULT[0] @ \
@@ -2372,32 +2538,37 @@ fn main() {
     println!("# v3 bounds: {:?}", ArcBounds::shipped());
     println!(
         "# v5 = propagation::seg_sampling (THE SHIPPED TILE RULE), {seg_samples} angular \
-         buckets per microsegment, per-bucket arc min_span {:?} rad (INF = off, the \
-         shipped tile default); reported through v3's non-negative increment channel, so \
+         buckets per microsegment, per-bucket arc min_span {:?} rad (3° shipped; INF = off); \
+         reported through v3's non-negative increment channel, so \
          it is a lower bound on what the tile path (which takes the composite directly) gets",
         seg_arc_bounds().min_span_rad
     );
     println!(
-        "# v4 = noise-gpu kernels/scatter.cu arc_screen_bands, ported (min_span \
-         {GPU_ARC_MIN_SPAN} rad, fuse tol {GPU_ARC_FUSE_HEIGHT_TOL_M} m, penumbra floor \
-         {GPU_ARC_PENUMBRA_FLOOR_M:.6} m, escalate {GPU_ARC_ESCALATE_SPAN} rad x<={GPU_ARC_ESCALATE_MAX_PARTS}, max merged {GPU_ARC_MAX_MERGED})"
+        "# v4 = current noise-gpu kernels/scatter.cu §3.5e port: {GPU_SEG_SAMPLES} angular \
+         buckets, per-bucket min_span {GPU_SEG_ARC_MIN_SPAN_RAD} rad, fuse tol \
+         {GPU_ARC_FUSE_HEIGHT_TOL_M} m, interval resolution {GPU_ARC_ESCALATE_SPAN} rad \
+         x<={GPU_ARC_ESCALATE_MAX_PARTS}, max merged {GPU_ARC_MAX_MERGED}"
     );
     println!("scene\tintegrator\tx\ty\tlden_db");
 
     let mut summaries = Vec::new();
+    const PORT_PARITY_PROBES_PER_SCENE: usize = 697;
+    let mut gpu_port_parity = Vec::new();
     for &scene in &scenes {
         let (rows, timings) = run_scene(scene, &integrators, subdivisions, seg_samples);
-        for integrator in &integrators {
-            for row in &rows {
-                if let Some(lden) = row.lden[integrator.slot()] {
-                    println!(
-                        "{}\t{}\t{:.0}\t{:.0}\t{:.3}",
-                        scene.label(),
-                        integrator.label(),
-                        row.x,
-                        row.y,
-                        lden
-                    );
+        if !port_parity_only {
+            for integrator in &integrators {
+                for row in &rows {
+                    if let Some(lden) = row.lden[integrator.slot()] {
+                        println!(
+                            "{}\t{}\t{:.0}\t{:.0}\t{:.3}",
+                            scene.label(),
+                            integrator.label(),
+                            row.x,
+                            row.y,
+                            lden
+                        );
+                    }
                 }
             }
         }
@@ -2408,6 +2579,35 @@ fn main() {
             if let Some(summary) = summarize(&rows, integrator, scene) {
                 summaries.push((scene, integrator, summary));
             }
+        }
+        if integrators.contains(&Integrator::V4) && integrators.contains(&Integrator::V5) {
+            let mut max_difference_db = 0.0f64;
+            let mut at = (f64::NAN, f64::NAN);
+            let mut finite_comparisons = 0usize;
+            for row in &rows {
+                let difference_db = match (
+                    row.lden[Integrator::V4.slot()],
+                    row.lden[Integrator::V5.slot()],
+                ) {
+                    (Some(gpu_port), Some(cpu_rule))
+                        if gpu_port.is_finite() && cpu_rule.is_finite() =>
+                    {
+                        finite_comparisons += 1;
+                        (gpu_port - cpu_rule).abs()
+                    }
+                    _ => f64::INFINITY,
+                };
+                if at.0.is_nan() || difference_db > max_difference_db {
+                    max_difference_db = difference_db;
+                    at = (row.x, row.y);
+                }
+            }
+            if rows.len() != PORT_PARITY_PROBES_PER_SCENE
+                || finite_comparisons != PORT_PARITY_PROBES_PER_SCENE
+            {
+                max_difference_db = f64::INFINITY;
+            }
+            gpu_port_parity.push((scene, max_difference_db, at, rows.len(), finite_comparisons));
         }
         for &integrator in &integrators {
             println!(
@@ -2429,24 +2629,36 @@ fn main() {
     );
     if summaries.is_empty() {
         println!("# (none — reference33 plus one other integrator are needed)");
-        return;
+    } else {
+        for (scene, integrator, s) in &summaries {
+            println!(
+                "# scene {} / {} — {}",
+                scene.label(),
+                integrator.label(),
+                scene.description()
+            );
+            println!(
+                "#   shadow  max {:.2} dB at (x={:.0}, y={:.0}), mean {:.2} dB",
+                s.shadow_max, s.shadow_at.0, s.shadow_at.1, s.shadow_mean
+            );
+            println!(
+                "#   outside max {:.2} dB at (x={:.0}, y={:.0}), mean {:.2} dB",
+                s.outside_max, s.outside_at.0, s.outside_at.1, s.outside_mean
+            );
+            println!("#   receivers compared: {}", s.pairs);
+        }
     }
-    for (scene, integrator, s) in &summaries {
+    for (scene, max_difference_db, at, rows, finite_comparisons) in &gpu_port_parity {
         println!(
-            "# scene {} / {} — {}",
+            "# GPU PORT PARITY scene {} comparisons {}/{} rows={} max |v4-v5| {:.6} dB at (x={:.0}, y={:.0})",
             scene.label(),
-            integrator.label(),
-            scene.description()
+            finite_comparisons,
+            PORT_PARITY_PROBES_PER_SCENE,
+            rows,
+            max_difference_db,
+            at.0,
+            at.1
         );
-        println!(
-            "#   shadow  max {:.2} dB at (x={:.0}, y={:.0}), mean {:.2} dB",
-            s.shadow_max, s.shadow_at.0, s.shadow_at.1, s.shadow_mean
-        );
-        println!(
-            "#   outside max {:.2} dB at (x={:.0}, y={:.0}), mean {:.2} dB",
-            s.outside_max, s.outside_at.0, s.outside_at.1, s.outside_mean
-        );
-        println!("#   receivers compared: {}", s.pairs);
     }
 
     // ---- VERDICT. Until 2026-08-04 this harness printed the numbers and then
@@ -2461,13 +2673,13 @@ fn main() {
     // which is exactly the measured-plus-headroom the ruling forbids — it is
     // 1.00 here and scene I therefore FAILS at 1.01 dB, which is the truth and
     // the open work item (fuse on absolute top, see arc_screening.rs). And scene
-    // D was absent from the table altogether, so the PRODUCTION barrier lane —
-    // the one carrying every noise wall in the world — was ungated; it now
-    // shares scene C's limits, since it is the same wall through the other path.
-    // BOTH shipped rules are gated: `v3` is what the CPU paints with and `v4`
-    // is the CUDA rule ported here, so gating only v3 would let the GPU lane
-    // fail this suite silently — which is the whole reason v4 exists (review
-    // 2026-08-04 caught the first version of this gate doing exactly that).
+    // D was absent from the table altogether, so the barrier arc primitive used
+    // by the complete-vector production lane was ungated; it now shares scene
+    // C's limits, since it is the same wall through the other path. BOTH arc
+    // integrators are gated: `v3` is the CPU arc rule, `v4` is the current CUDA
+    // five-bucket port mirror, and `v5` is the production CPU five-bucket rule.
+    // This does not exercise the separate raster-fallback branch, which keeps
+    // its cp verdict because no complete footprint skyline exists there.
     let gated = |i: &Integrator| matches!(i, Integrator::V3 | Integrator::V4 | Integrator::V5);
     let mut failures = Vec::new();
     for (scene, integrator, s) in &summaries {
@@ -2498,12 +2710,41 @@ fn main() {
             ));
         }
     }
-    if !summaries.iter().any(|(_, i, _)| gated(i)) {
+    for (scene, max_difference_db, at, rows, finite_comparisons) in &gpu_port_parity {
+        if *rows != PORT_PARITY_PROBES_PER_SCENE
+            || *finite_comparisons != PORT_PARITY_PROBES_PER_SCENE
+        {
+            failures.push(format!(
+                "scene {} [v4-v5 port parity] comparisons {}/{} with {} rows",
+                scene.label(),
+                finite_comparisons,
+                PORT_PARITY_PROBES_PER_SCENE,
+                rows
+            ));
+        } else if *max_difference_db > GPU_PORT_PARITY_MAX_DB {
+            failures.push(format!(
+                "scene {} [v4-v5 port parity] {:.6} dB > {:.3} at (x={:.0}, y={:.0})",
+                scene.label(),
+                max_difference_db,
+                GPU_PORT_PARITY_MAX_DB,
+                at.0,
+                at.1
+            ));
+        }
+    }
+    if !summaries.iter().any(|(_, i, _)| gated(i)) && gpu_port_parity.is_empty() {
         println!("# VERDICT skipped — no gated integrator was run");
         return;
     }
     if failures.is_empty() {
-        println!("# VERDICT PASS — every scene within the owner's limits");
+        if summaries.is_empty() {
+            println!(
+                "# VERDICT PASS — CUDA v4 mirror stays within {GPU_PORT_PARITY_MAX_DB:.3} dB \
+                 of the shipped CPU v5 rule on every scene"
+            );
+        } else {
+            println!("# VERDICT PASS — every scene within the owner's limits");
+        }
         return;
     }
     for f in &failures {

@@ -35,41 +35,25 @@ fn main() -> Result<()> {
     // This binary IS the lane-parity gate, so it is the one place a CPU-only
     // lever must never pass silently — it would compare two different kernels.
     //
-    // PIN FIRST, then check. Refusing conflicting values is not enough, because
-    // the CPU tile painter's DEFAULTS are themselves a fork as of 2026-08-08:
-    // unset `QM_SEG_SAMPLES` means N=5 angular buckets and unset
-    // `QM_ARC_MIN_SPAN_DEG` lets `seg_arc_bounds()` raise the arc gate to 3°,
-    // while the kernel has no quadrature at all and arc-screens from
-    // `ARC_DEGENERATE_SPAN` (1e-4 rad) up. A bare run therefore PASSED the guard
-    // while comparing two different algorithms (gg review 2026-08-08 A#1).
-    // Pinning here rather than in the guard because `gpu-surface` shares the
-    // guard and runs no CPU painter, so for it these levers are meaningless.
+    // Since the 2026-08-19 §3.5e port the kernel paints the CPU painter's OWN
+    // rule — 5 uniform buckets per microsegment fan, the 3° bucket gate on the
+    // nested arc query, both compiled in from the CPU's own constants — so the
+    // honest comparison runs the CPU reference at its production DEFAULTS, with
+    // no pins at all. (Before the port the kernel arc-screened every pair from
+    // `ARC_DEGENERATE_SPAN` = 1e-4 rad up with no quadrature, and this binary
+    // pinned the CPU back onto that rule with `QM_SEG_SAMPLES=1
+    // QM_ARC_MIN_SPAN_DEG=0`; a bare run therefore PASSED the guard while
+    // comparing two different algorithms — the fork, measured: 69,005 cells,
+    // 88.5 % CPU-louder. The port closes it; the residual this gate reports is
+    // the analysis below.)
     //
-    // MEASURED, and it is NOT the explanation for this gate's 4469-cell /
-    // 17.63 dB failure — 9863d74's message said it was the leading suspect and
-    // that was wrong. The run that produced 4469 already had both pins set, and
-    // pinning changes it by zero cells. Bare is a DIFFERENT and larger failure
-    // (69005 cells) in the OPPOSITE direction (88.5 % CPU-louder against 66.7 %
-    // GPU-louder pinned), so the two never were the same number. What the
-    // 17.63 dB is: unknown, but bracketed — `QM_VECTOR_BUILDINGS=0` drops the
-    // whole gate to 6 cells / 0.90 dB, so it is inside the vector obstacle path
-    // and the shared terrain/ground/veg/emission is clean; and the max is
-    // identical to four decimals with the entire CPU integrator swapped
-    // (5-ray quadrature vs arc), so it is in the EVALUATION of vector candidates
-    // that both CPU branches share, not in either integrator. Ruled out by
-    // measurement: the cell prune (0 cells), the energy-budget skip, the
-    // kernel confirm ray (5.7 % of cells, 0 on the max) and
-    // `ARC_QUADRATURE_MIN_RAD` (2.6 %, 0 on the max). Next step is a dump of the
-    // worst pixels, not another lever.
-    for (k, v) in [("QM_SEG_SAMPLES", "1"), ("QM_ARC_MIN_SPAN_DEG", "0")] {
-        match std::env::var(k) {
-            // An explicit non-pinning value is the operator asking for a rigged
-            // comparison; let the guard below say so rather than overriding it.
-            Ok(prev) if prev.trim() != v => {}
-            // SAFETY: single-threaded, before any work starts.
-            _ => unsafe { std::env::set_var(k, v) },
-        }
-    }
+    // The pre-port pins were also MEASURED to not be the explanation for this
+    // gate's historical 4469-cell / 17.63 dB failure — the run already had both
+    // pins set, and changing them moved zero cells. The fault was later isolated
+    // to one footprint-wide range standing in for its differently ranged edges
+    // in the CUDA hull. Per-edge arcs reduced that residual to 2298 cells / 5.91
+    // dB; it remains a separate vector-candidate evaluation fork, documented at
+    // `arc_screen_bands`, rather than a quadrature-port or pinning effect.
     noise_gpu::ensure_no_cpu_only_arc_levers()?;
     let a: Vec<String> = std::env::args().collect();
     let (x, y): (u32, u32) = (a[1].parse()?, a[2].parse()?);
@@ -423,15 +407,12 @@ fn main() -> Result<()> {
         .htod_copy(vec![0.0f64; noise_gpu::BARRIER_STRIDE])
         .expect("barr");
     let obst = noise_gpu::upload_obstacles(&dev, obstacle_data.set()).expect("obstacles");
-    // Energies + the ARC FAULT slot + EIGHT per-pixel counter slots the kernel
-    // fills only when it is built with -DPROF_COUNTERS=1 (pairs past the budget
-    // skip, pairs taking the arc path, hull lookups/hits, clip survivors,
-    // arcs EMITTED into the union, interval overflows — see the ARCSTAT read-back
-    // below). Slot 5 counted post-confirmation admissions until the confirmation
-    // ray and the δ prefilter were removed from the kernel; it is now the count
-    // of arcs handed to `arc_iv_union`, before the per-merged-arc geometry test.
-    // Always allocated, so one host binary serves both PTX builds: 512²·8·4 B =
-    // 8.0 MiB on top of the 3.0 MiB of energies, once per process, in THIS
+    // Energies + the ARC FAULT slot + TEN per-pixel counters the kernel fills
+    // only when built with -DPROF_COUNTERS=1: quadrature pairs, pairs with an
+    // escalation, marched bucket rays, escalating buckets, hull lookups/hits,
+    // clip survivors, emitted arcs and interval overflows. Always allocated, so
+    // one host binary serves both PTX builds: 512²·10·4 B = 10.0 MiB on top of
+    // the 3.0 MiB of energies, once per process, in THIS
     // validator only — and meta[13] above is what tells the kernel it may use it.
     let mut d_out = dev
         .alloc_zeros::<f32>(noise_gpu::OUT_SLOTS_PROF)
@@ -515,31 +496,38 @@ fn main() -> Result<()> {
         eprintln!("dumped {} raw f32 energies to {p}", n * 3);
     }
     eprintln!("GPU kernel {gpu_ms:.1} ms");
-    // Arc-path take-up (only non-zero under -DPROF_COUNTERS=1): the fraction of
-    // budget-surviving pairs that still reach the arc walk. This is the number
-    // that transfers between cells — a span bound is only safe where it is
-    // trimming pairs the geometry says cannot matter.
-    let mut c = [0f64; 8];
-    for px in gpu[noise_gpu::OUT_ARCSTAT_BASE..].chunks_exact(8) {
+    // Port-shape census (only non-zero under -DPROF_COUNTERS=1). These units are
+    // deliberately separate: mixing escalating BUCKETS with quadrature PAIRS
+    // produces neither the pair nor the bucket eligibility rate. This unbinned
+    // e2 source-order population is diagnostic; the production-path rail census
+    // owns the reviewed ≈1.2 % acceptance check.
+    let mut c = [0f64; noise_gpu::OUT_ARCSTAT_COUNTERS];
+    for px in gpu[noise_gpu::OUT_ARCSTAT_BASE..].chunks_exact(noise_gpu::OUT_ARCSTAT_COUNTERS) {
         for (acc, v) in c.iter_mut().zip(px.iter()) {
             *acc += *v as f64;
         }
     }
-    let (pairs, arced, look, hit, clipped, emitted) = (c[0], c[1], c[2], c[3], c[4], c[5]);
-    let (ovf, ovf_pairs) = (c[6], c[7]);
-    if pairs > 0.0 {
-        let r = |a: f64, b: f64| if b > 0.0 { a / b } else { 0.0 };
+    let (quad_pairs, escalating_pairs, bucket_rays, escalating_buckets) = (c[0], c[1], c[2], c[3]);
+    let (look, hit, clipped, emitted) = (c[4], c[5], c[6], c[7]);
+    let (ovf, ovf_calls) = (c[8], c[9]);
+    let r = |a: f64, b: f64| if b > 0.0 { a / b } else { 0.0 };
+    let buckets_per_pair = r(bucket_rays, quad_pairs);
+    let pair_escalation_frac = r(escalating_pairs, quad_pairs);
+    let bucket_escalation_frac = r(escalating_buckets, bucket_rays);
+    if quad_pairs > 0.0 {
         eprintln!(
-            "ARCSTAT pairs={pairs:.0} arc_pairs={arced:.0} arc_frac={:.4} \
-             hull_lookups={look:.0} hulls_per_pair={:.1} hull_hit_rate={:.4} \
+            "ARCSTAT quadrature_pairs={quad_pairs:.0} bucket_rays={bucket_rays:.0} \
+             buckets_per_pair={:.6} escalating_pairs={escalating_pairs:.0} \
+             pair_escalation_frac={:.6} escalating_buckets={escalating_buckets:.0} \
+             bucket_escalation_frac={:.6} hull_lookups={look:.0} hull_hit_rate={:.4} \
              clipped={clipped:.0} clip_rate={:.4} emitted={emitted:.0} emit_rate={:.4} \
-             iv_overflow={ovf:.0} pairs_with_overflow={ovf_pairs:.0} ovf_pair_rate={:.6}",
-            r(arced, pairs),
-            r(look, arced),
+             iv_overflow={ovf:.0} arc_calls_with_overflow={ovf_calls:.0}",
+            buckets_per_pair,
+            pair_escalation_frac,
+            bucket_escalation_frac,
             r(hit, look),
             r(clipped, look),
-            r(emitted, look),
-            r(ovf_pairs, arced)
+            r(emitted, look)
         );
     }
 

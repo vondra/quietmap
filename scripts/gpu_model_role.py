@@ -39,7 +39,6 @@ EXPERIMENTAL_DEFINE_NAMES = frozenset(
         "PROF_ABLATE",
         "PROF_BLOCK_MOD",
         "PROF_COUNTERS",
-        "PROF_SIXMARCH",
         "SEG_ISECT_F32",
     }
 )
@@ -63,7 +62,10 @@ GENERATED_DEFINE_NAMES = frozenset(
         "M_LAT",
         "NPD_NC",
         "OBST_META_STRIDE",
+        "OUT_ARCSTAT_COUNTERS",
         "P_FAV",
+        "SEG_ARC_MIN_SPAN_RAD",
+        "SEG_SAMPLES",
         "SOURCE_SEGMENT_ABI_VERSION",
         "SOURCE_SEGMENT_STRIDE",
         "SURFACE_META_ABI_VERSION",

@@ -145,20 +145,83 @@ pub const OUT_ENERGY_SLOTS: usize = TILE_PX * TILE_PX * 3;
 /// was painted clear. It is one f32, allocated in production too, because for as
 /// long as the only overflow counter lived behind `-DPROF_COUNTERS=1` there was no
 /// way to tell "never happened" from "never measured", and the answer turned out
-/// to be 1.1 M dropped arcs per dense tile. Being an f32 it saturates well past
-/// 2^24, so read it as a fault flag with an order of magnitude; the exact census
-/// is `arcstat[6]` under `-DPROF_COUNTERS=1`.
+/// to be 1.1 M dropped arcs per dense tile. Because f32 loses unit resolution
+/// past 2^24, read it as a fault flag with an order of magnitude; the exact
+/// census is `arcstat[8]` under `-DPROF_COUNTERS=1`.
 pub const OUT_FAULT_SLOT: usize = OUT_ENERGY_SLOTS;
-/// First slot of the per-pixel `-DPROF_COUNTERS=1` block (8 f32 per pixel).
+/// First slot of the per-pixel `-DPROF_COUNTERS=1` block.
 pub const OUT_ARCSTAT_BASE: usize = OUT_ENERGY_SLOTS + 1;
+/// Per-pixel counter channels: quadrature pairs, escalating pairs, bucket rays,
+/// escalating buckets, then the six arc-walk diagnostics.
+pub const OUT_ARCSTAT_COUNTERS: usize = 10;
 /// `out` length the PRODUCTION painter allocates: energies + the fault slot.
 pub const OUT_SLOTS_PROD: usize = OUT_ENERGY_SLOTS + 1;
-/// `out` length a counter-instrumented build needs (+8 MiB at 512 px). The kernel
+/// `out` length a counter-instrumented build needs (+10 MiB at 512 px). The kernel
 /// writes the counter block ONLY when `meta[13]` says the buffer is at least this
 /// long, so a `-DPROF_COUNTERS=1` PTX run under the production painter — which
 /// allocates [`OUT_SLOTS_PROD`] — writes none of it instead of running off the end
 /// of the buffer.
-pub const OUT_SLOTS_PROF: usize = OUT_ARCSTAT_BASE + TILE_PX * TILE_PX * 8;
+pub const OUT_SLOTS_PROF: usize = OUT_ARCSTAT_BASE + TILE_PX * TILE_PX * OUT_ARCSTAT_COUNTERS;
+
+/// Ratios from the reviewed §3.5e rail work census.
+pub struct RailPortArcstatCensus {
+    pub buckets_per_gpu_pair: f64,
+    pub gpu_pair_escalation_frac: f64,
+    pub gpu_bucket_escalation_frac: f64,
+    pub gpu_escalating_pairs_per_authority_pair: f64,
+    pub gpu_escalating_buckets_per_authority_bucket_ray: f64,
+}
+
+/// Validate the reviewed §3.5e work shape on the rail acceptance tile
+/// z12/2206/1391.
+///
+/// The CPU authority measured 90,385,255 pairs, 451,925,193 usable bucket rays
+/// (5× minus 1,082 degenerates), 1.188 % escalating pairs and 1.051 % escalating
+/// buckets on 2026-08-19. The GPU's source-order byte-stop is intentionally less
+/// effective than the CPU's per-receiver bound order (about 176 M vs 90 M walked
+/// pairs on this fixture), so its raw escalation FRACTION is diluted even though
+/// it finds the same near-span population. The acceptance comparison therefore
+/// divides the independently measured GPU escalation COUNTS by the fixed CPU
+/// authority populations; the receipt also reports the raw GPU fractions.
+pub fn validate_rail_port_arcstat_census(
+    counters: &[f64; OUT_ARCSTAT_COUNTERS],
+) -> anyhow::Result<RailPortArcstatCensus> {
+    const AUTHORITY_PAIRS: f64 = 90_385_255.0;
+    const AUTHORITY_BUCKET_RAYS: f64 = 451_925_193.0;
+    let (pairs, escalating_pairs, bucket_rays, escalating_buckets) =
+        (counters[0], counters[1], counters[2], counters[3]);
+    anyhow::ensure!(
+        pairs > 0.0,
+        "ARCSTAT census required but no counters were reported; rebuild with \
+         NOISE_GPU_DEFINES=\"-DPROF_COUNTERS=1\""
+    );
+    let census = RailPortArcstatCensus {
+        buckets_per_gpu_pair: bucket_rays / pairs,
+        gpu_pair_escalation_frac: escalating_pairs / pairs,
+        gpu_bucket_escalation_frac: escalating_buckets / bucket_rays,
+        gpu_escalating_pairs_per_authority_pair: escalating_pairs / AUTHORITY_PAIRS,
+        gpu_escalating_buckets_per_authority_bucket_ray: escalating_buckets / AUTHORITY_BUCKET_RAYS,
+    };
+    anyhow::ensure!(
+        (4.99..=5.0).contains(&census.buckets_per_gpu_pair),
+        "ARCSTAT bucket-ray parity failed: buckets_per_pair={:.6}, \
+         expected 4.99..=5.0",
+        census.buckets_per_gpu_pair
+    );
+    anyhow::ensure!(
+        (0.010..=0.014).contains(&census.gpu_escalating_pairs_per_authority_pair),
+        "ARCSTAT pair escalation failed: gpu_escalating_pairs_per_authority_pair={:.6}, \
+         expected 0.010..=0.014",
+        census.gpu_escalating_pairs_per_authority_pair
+    );
+    anyhow::ensure!(
+        (0.009..=0.013).contains(&census.gpu_escalating_buckets_per_authority_bucket_ray),
+        "ARCSTAT bucket escalation failed: gpu_escalating_buckets_per_authority_bucket_ray={:.6}, \
+         expected 0.009..=0.013",
+        census.gpu_escalating_buckets_per_authority_bucket_ray
+    );
+    Ok(census)
+}
 
 /// Version of the offset/count/length triple and the ordered meaning of all
 /// eight H0 counters below.
@@ -217,6 +280,16 @@ pub struct TileBuffers {
     pub rxll: Vec<f64>,
     pub rxar: Vec<f32>,
     pub barr: Vec<f64>,
+}
+
+/// Scalar metadata packed with one surface tile for the CUDA line kernel.
+#[derive(Clone, Copy)]
+pub struct SurfaceKernelTileParameters {
+    pub byte_stop_control: f64,
+    pub swizzle_width: f64,
+    pub source_count: usize,
+    pub output_slots: usize,
+    pub line_layer_tag: usize,
 }
 
 /// A layer's line sources, packed ONCE per (region, layer) and uploaded once, so
@@ -322,12 +395,8 @@ pub fn pack_barrier_rows(barriers: &[Barrier]) -> Vec<f64> {
 pub fn pack_tile(
     tile: &FusedTileZ13,
     halo_geom: (f64, f64, f64, usize, usize),
-    eta: f64,
-    tw: f64,
     barriers: &[Barrier],
-    nsrc: usize,
-    out_slots: usize,
-    line_layer_tag: usize,
+    parameters: SurfaceKernelTileParameters,
 ) -> TileBuffers {
     let (lat_min, lon_min, inv, rows, cols) = halo_geom;
     let n = TILE_PX * TILE_PX;
@@ -338,9 +407,9 @@ pub fn pack_tile(
     // kernel's optional regions (fault slot, PROF_COUNTERS block) are entered
     // only when this proves the room exists, so the buffer size and the writes
     // to it cannot drift apart — the shape of bug that let a counter build write
-    // 8 MiB past the end of the production painter's buffer.
+    // 10 MiB past the end of the production painter's buffer.
     assert!(
-        line_layer_tag <= 1,
+        parameters.line_layer_tag <= 1,
         "surface line-layer tag must be road=0 or rail=1"
     );
     let meta = vec![
@@ -353,12 +422,12 @@ pub fn pack_tile(
         tile.bbox.south_lat,
         tile.bbox.west_lon,
         tile.bbox.east_lon,
-        eta,
-        tw,
+        parameters.byte_stop_control,
+        parameters.swizzle_width,
         barriers.len() as f64,
-        nsrc as f64,
-        out_slots as f64,
-        line_layer_tag as f64,
+        parameters.source_count as f64,
+        parameters.output_slots as f64,
+        parameters.line_layer_tag as f64,
     ];
     debug_assert_eq!(meta.len(), SURFACE_META_SLOTS);
     let mut rxll = Vec::with_capacity(2 * TILE_PX);
@@ -694,57 +763,41 @@ pub const META_STRIDE: usize = 19;
 /// The kernel's own levers go through `NOISE_GPU_DEFINES="-DNAME=value"`, which
 /// `build.rs` forwards to nvcc and which therefore moves the GPU rule for real.
 /// To sweep the CPU alone, run a CPU-only binary — not this one.
-pub fn ensure_no_cpu_only_arc_levers() -> anyhow::Result<()> {
-    /// Every environment name that moves the CPU's ANSWER and not the kernel's.
-    /// Keep in step with `ArcBounds::from_env` and `scatter_band::seg_samples` —
-    /// a lever added there and missed here is exactly the silent fork this guard
-    /// exists to stop.
-    ///
-    /// Deliberately NOT listed: `QM_ARC_DISABLE_CELL_PRUNE` and
-    /// `QM_OBSTACLE_INDEX_CACHE`. Those gate a prune and a cache that are meant to
-    /// be exact by construction (skip only strictly-worse candidates; re-read the
-    /// same bytes), so a mismatch should cost time and never change a level.
-    /// Listing them would fire on honest cost measurements, and a guard that cries
-    /// wolf gets switched off. NOTE that "meant to be" is doing work here: on
-    /// 2026-08-08 `CellPrune::max_delta` was found underbounding the below-sight-
-    /// line branch, i.e. the prune WAS changing levels, which is why the lever
-    /// stays even though nothing else reads it.
-    /// `(name, value that PINS the CPU to the kernel's rule)`. A lever set to its
-    /// pinning value is the OPPOSITE of a fork — it is how an honest lane
-    /// comparison is made — so only other values are refused. Filtering by name
-    /// alone banned the very procedure `scatter_band::seg_samples` documents as
-    /// mandatory, which made `e2-full` unrunnable as specified (2026-08-08).
-    const CPU_ONLY: [(&str, Option<&str>); 7] = [
-        ("QM_ARC_EXACT", None),
-        // 0 makes the CPU arc-screen from the same floor the kernel does
-        // (`build.rs` injects it as ARC_DEGENERATE_SPAN, 1e-4 rad). NOT the same
-        // as leaving it unset: since 2026-08-08 `seg_arc_bounds()` raises the gate
-        // to 3° when this is absent, so absent is a FORK and only the explicit 0
-        // pins the lanes. `e2-full` sets it for exactly that reason.
-        ("QM_ARC_MIN_SPAN_DEG", Some("0")),
-        ("QM_ARC_RADIUS_M", None),
-        ("QM_ARC_DELTA_MIN_M", None),
-        ("QM_ARC_MAX_ARCS", None),
-        ("QM_ARC_MAX_INTERVALS", None),
-        // The tile painter's angular quadrature. CUDA has no sampling at all, so
-        // the shipped default (N=5) already forks the lanes BY DESIGN — worth up
-        // to 1.5 dB on the CPU painter and exactly 0 on the kernel (SPEC §3.5d).
-        // N=1 is the one value that restores the kernel's single cp ray.
-        ("QM_SEG_SAMPLES", Some("1")),
-    ];
-    let set: Vec<&str> = CPU_ONLY
+const CPU_ONLY_ARC_LEVERS: [&str; 8] = [
+    "QM_ARC_EXACT",
+    "QM_ARC_MIN_SPAN_DEG",
+    "QM_ARC_RADIUS_M",
+    "QM_ARC_DELTA_MIN_M",
+    "QM_ARC_MAX_ARCS",
+    "QM_ARC_MAX_INTERVALS",
+    "QM_ARC_NEED_CLIP_M",
+    "QM_SEG_SAMPLES",
+];
+
+fn ensure_no_cpu_only_arc_levers_with(mut is_set: impl FnMut(&str) -> bool) -> anyhow::Result<()> {
+    // Every environment name that moves the CPU's ANSWER and not the kernel's.
+    // Keep in step with `ArcBounds::from_env`, `census::need_clip_m` and
+    // `scatter_band::seg_samples` — a lever added there and missed here is
+    // exactly the silent fork this guard exists to stop.
+    //
+    // Deliberately NOT listed: `QM_ARC_DISABLE_CELL_PRUNE` and
+    // `QM_OBSTACLE_INDEX_CACHE`. Those gate a prune and a cache that are meant to
+    // be exact by construction (skip only strictly-worse candidates; re-read the
+    // same bytes), so a mismatch should cost time and never change a level.
+    // Listing them would fire on honest cost measurements, and a guard that cries
+    // wolf gets switched off. NOTE that "meant to be" is doing work here: on
+    // 2026-08-08 `CellPrune::max_delta` was found underbounding the below-sight-
+    // line branch, i.e. the prune WAS changing levels, which is why the lever
+    // stays even though nothing else reads it.
+    // Since the 2026-08-19 §3.5e port the kernel paints the CPU painter's own
+    // defaults. Unset is therefore the only accepted state. Accepting a copied
+    // numeric "pin" would recreate a second source of truth; accepting malformed
+    // whitespace is worse because the guard could parse it while the CPU falls
+    // back to a different rule.
+    let set: Vec<&str> = CPU_ONLY_ARC_LEVERS
         .iter()
-        // Compare the pinning value NUMERICALLY: `0.0` and `0` pin identically,
-        // and rejecting one of them for its spelling is a false alarm.
-        .filter(|(k, pin)| match (std::env::var(k), pin) {
-            (Ok(v), Some(p)) => match (v.trim().parse::<f64>(), p.parse::<f64>()) {
-                (Ok(got), Ok(want)) => got != want,
-                _ => v.trim() != *p,
-            },
-            (Ok(_), None) => true,
-            (Err(_), _) => false,
-        })
-        .map(|(k, _)| *k)
+        .filter(|name| is_set(name))
+        .copied()
         .collect();
     anyhow::ensure!(
         set.is_empty(),
@@ -752,12 +805,15 @@ pub fn ensure_no_cpu_only_arc_levers() -> anyhow::Result<()> {
          The kernel compiles its constants in and never reads the environment, so this \
          would run the CPU under one rule and the GPU under another — every number out \
          of such a run is a comparison of two different kernels. Move the GPU with \
-         NOISE_GPU_DEFINES=\"-DARC_...=value\", unset these, or — to compare the \
-         lanes — set them to the value that pins the CPU to the kernel's rule \
-         (QM_SEG_SAMPLES=1, QM_ARC_MIN_SPAN_DEG=0).",
+         NOISE_GPU_DEFINES=\"-DARC_...=value\", or unset these; lane comparisons \
+         run both sides at their shared defaults.",
         set.join(", ")
     );
     Ok(())
+}
+
+pub fn ensure_no_cpu_only_arc_levers() -> anyhow::Result<()> {
+    ensure_no_cpu_only_arc_levers_with(|name| std::env::var_os(name).is_some())
 }
 
 #[cfg(test)]
@@ -867,80 +923,48 @@ mod streaming_abi_tests {
 }
 
 #[cfg(test)]
-mod cpu_only_lever_tests {
-    /// The guard must refuse a fork and ALLOW the pinning value — banning the
-    /// pinning value bans the documented lane-comparison procedure itself, which
-    /// is how this guard made `e2-full` unrunnable as specified (2026-08-08).
-    ///
-    /// One test, run serially inside itself: the environment is process-global and
-    /// the harness is threaded, so splitting these into separate `#[test]` fns
-    /// would let them race each other's `set_var`.
+mod arcstat_census_tests {
     #[test]
-    fn pinning_values_pass_and_every_other_value_fails() {
-        let restore = |k: &str| std::env::var(k).ok();
-        let (prev_seg, prev_span) = (restore("QM_SEG_SAMPLES"), restore("QM_ARC_MIN_SPAN_DEG"));
-        // SAFETY: single-threaded within this test; every other test in the crate
-        // is pure arithmetic over local buffers and reads no environment.
-        unsafe {
-            std::env::remove_var("QM_SEG_SAMPLES");
-            std::env::remove_var("QM_ARC_MIN_SPAN_DEG");
-            assert!(
-                super::ensure_no_cpu_only_arc_levers().is_ok(),
-                "unset must pass"
-            );
+    fn reviewed_rail_work_shape_passes_and_missing_or_mixed_units_fail() {
+        let mut counters = [0.0; super::OUT_ARCSTAT_COUNTERS];
+        assert!(super::validate_rail_port_arcstat_census(&counters).is_err());
 
-            std::env::set_var("QM_SEG_SAMPLES", "1");
-            assert!(
-                super::ensure_no_cpu_only_arc_levers().is_ok(),
-                "QM_SEG_SAMPLES=1 pins the CPU to the kernel's single cp ray"
-            );
-            std::env::set_var("QM_SEG_SAMPLES", " 1 ");
-            assert!(
-                super::ensure_no_cpu_only_arc_levers().is_ok(),
-                "whitespace around the pinning value must not fork the lanes"
-            );
+        counters[..4].copy_from_slice(&[90_385_255.0, 1_073_849.0, 451_925_193.0, 4_750_856.0]);
+        let census = super::validate_rail_port_arcstat_census(&counters).unwrap();
+        assert!((census.buckets_per_gpu_pair - 4.999_988).abs() < 0.000_001);
+        assert!((census.gpu_escalating_pairs_per_authority_pair - 0.011_881).abs() < 0.000_001);
+        assert!(
+            (census.gpu_escalating_buckets_per_authority_bucket_ray - 0.010_513).abs() < 0.000_001
+        );
 
-            std::env::set_var("QM_SEG_SAMPLES", "5");
-            let err = super::ensure_no_cpu_only_arc_levers()
+        counters[..4].copy_from_slice(&[176_114_626.0, 1_145_981.0, 880_572_015.0, 5_049_645.0]);
+        let census = super::validate_rail_port_arcstat_census(&counters).unwrap();
+        assert!((census.gpu_pair_escalation_frac - 0.006_507).abs() < 0.000_001);
+        assert!((census.gpu_escalating_pairs_per_authority_pair - 0.012_679).abs() < 0.000_001);
+
+        counters[1] = 4_750_856.0;
+        assert!(super::validate_rail_port_arcstat_census(&counters).is_err());
+    }
+}
+
+#[cfg(test)]
+mod cpu_only_lever_tests {
+    #[test]
+    fn unset_is_the_only_state_that_cannot_fork_the_lanes() {
+        assert!(
+            super::ensure_no_cpu_only_arc_levers_with(|_| false).is_ok(),
+            "unset must pass"
+        );
+
+        for configured in super::CPU_ONLY_ARC_LEVERS {
+            let err = super::ensure_no_cpu_only_arc_levers_with(|name| name == configured)
                 .unwrap_err()
                 .to_string();
-            assert!(err.contains("QM_SEG_SAMPLES"), "N=5 forks the lanes: {err}");
             assert!(
-                err.contains("QM_SEG_SAMPLES=1"),
-                "error must name the way out"
+                err.contains(configured),
+                "guard omitted {configured}: {err}"
             );
-
-            std::env::remove_var("QM_SEG_SAMPLES");
-            std::env::set_var("QM_ARC_MIN_SPAN_DEG", "0");
-            assert!(
-                super::ensure_no_cpu_only_arc_levers().is_ok(),
-                "0 is the value build.rs injects into the kernel; unset is the FORK \
-                 (the CPU gate rises to 3°), which is why only the explicit 0 passes"
-            );
-            std::env::set_var("QM_ARC_MIN_SPAN_DEG", "1000000");
-            assert!(
-                super::ensure_no_cpu_only_arc_levers().is_err(),
-                "arc off on CPU only"
-            );
-
-            std::env::remove_var("QM_ARC_MIN_SPAN_DEG");
-            // A lever with no pinning value is refused whatever it says.
-            std::env::set_var("QM_ARC_EXACT", "0");
-            assert!(
-                super::ensure_no_cpu_only_arc_levers().is_err(),
-                "no pinning value"
-            );
-            std::env::remove_var("QM_ARC_EXACT");
-
-            for (k, v) in [
-                ("QM_SEG_SAMPLES", prev_seg),
-                ("QM_ARC_MIN_SPAN_DEG", prev_span),
-            ] {
-                match v {
-                    Some(v) => std::env::set_var(k, v),
-                    None => std::env::remove_var(k),
-                }
-            }
+            assert!(err.contains("unset"), "error must name the way out");
         }
     }
 }

@@ -550,17 +550,14 @@ pub(crate) struct LineSegmentScreening<'a> {
     pub obstacles: Option<&'a ObstacleSet>,
 }
 
-/// NO vector store is not the same as NOTHING TO CLIP AGAINST. Noise WALLS
-/// reach the skyline through their own slice (`barriers`, arc_screening.rs
-/// §"the other half of the skyline"), not through the obstacle index — so
-/// returning the cp bands on `obstacles: None` silently denied every wall its
-/// angular treatment in exactly the regions the vector store has not been
-/// ingested for. That is the shipped behaviour the owner reported from the D4
-/// wall at Voznice ("není za nima tišeji"): one closest-point verdict applied
-/// to a whole 250 m microsegment. An absent store is an EMPTY set, and the
-/// kernel already returns `cp_screening` by itself when nothing clips the
-/// span. (Review 2026-08-04; CUDA carries the same bypass at scatter.cu:2093 —
-/// its guard must become `vector obstacles || nbarr > 0`.)
+/// Popup-only wall authority for an absent vector store. Popup road/rail
+/// evaluation has no raster-building fallback to preserve, so its barrier slice
+/// is a complete wall skyline and an absent store can safely mean an EMPTY set.
+/// This fixed the D4 wall at Voznice: returning the cp bands on
+/// `obstacles: None` had applied one closest-point verdict to the whole 250 m
+/// microsegment. Do not copy this substitution into the tile-painter/CUDA
+/// raster fallback: those lanes would erase real raster-building screening by
+/// replacing it with an incomplete wall-only fan.
 static NO_VECTOR_OBSTACLES: propagation::obstacle_index::ObstacleSet =
     propagation::obstacle_index::ObstacleSet {
         indexes: Vec::new(),
