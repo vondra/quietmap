@@ -22,6 +22,7 @@
 pub mod accumulator;
 pub mod accuracy_contract;
 pub mod airborne;
+mod bound_m3;
 pub mod byte_stop;
 pub mod cruise;
 pub mod cruise_field;

@@ -113,6 +113,67 @@ fn compute_terrain_diffraction<'a>(
     })
 }
 
+/// Max-δ over a caller-supplied SUBSET of a ray's own cadence, plus the direct
+/// slant distance — the sound inputs of the M3b byte-stop terrain bound
+/// (`scatter_band`'s doc block option (b)).
+///
+/// `t`/`elevation_m` must be samples of the SAME ray the exact march would
+/// walk (bit-identical elevation values at shared `t` — the caller samples
+/// them through the same raster path), with BOTH endpoints included so
+/// `src_h`/`rcv_h` (and hence `dsr`) match the exact evaluation exactly. A
+/// subset's max-δ edge can only be ≤ the full cadence's max-δ edge, so with
+/// `dsr` the caller derives both δ lower bounds the sound mixed-band bound
+/// needs ([`diffraction::diffraction_mixed_lower_bound`]).
+///
+/// Returns `None` when the subset shows no sample above the line of sight
+/// (no terrain term to bound). Sound ONLY for a single-cp-ray exact path,
+/// never under the angular quadrature (each bucket marches its own terrain).
+pub fn terrain_subset_delta_lower_bound(
+    t: &[f64],
+    elevation_m: &[f32],
+    dist_m: f64,
+    src_elev: f64,
+    rcv_alt: f64,
+) -> Option<(f64, f64)> {
+    let n = t.len();
+    if n < 3 || dist_m < 30.0 || elevation_m.len() != n {
+        return None;
+    }
+    let dz_total = rcv_alt - src_elev;
+    if !t
+        .iter()
+        .zip(elevation_m.iter())
+        .any(|(&ti, &e)| (e as f64) > src_elev + dz_total * ti)
+    {
+        return None;
+    }
+    let src_h = (src_elev - elevation_m[0] as f64).max(0.05);
+    let rcv_h = (rcv_alt - elevation_m[n - 1] as f64)
+        .max(crate::constants::DEFAULT_RECEIVER_HEIGHT.min(0.5));
+    let src_e = elevation_m[0] as f64 + src_h;
+    let rcv_e = elevation_m[n - 1] as f64 + rcv_h;
+    let dsr = (dist_m * dist_m + (rcv_e - src_e).powi(2)).sqrt();
+    let mut best = 0.0f64;
+    let mut any = false;
+    for i in 1..n - 1 {
+        let top = elevation_m[i] as f64;
+        let los = src_e + (rcv_e - src_e) * t[i];
+        if top <= los {
+            continue;
+        }
+        let d_sg = t[i] * dist_m;
+        let d_rg = (1.0 - t[i]) * dist_m;
+        let delta = ((d_sg * d_sg + (top - src_e).powi(2)).sqrt()
+            + (d_rg * d_rg + (top - rcv_e).powi(2)).sqrt())
+            - dsr;
+        if delta > best {
+            best = delta;
+            any = true;
+        }
+    }
+    any.then_some((best, dsr))
+}
+
 /// Terrain attenuation + single-edge trace for popup tooltips.
 ///
 /// Returns `(trace, profile_points)` where `trace` carries per-band attenuation,
@@ -756,6 +817,89 @@ mod tests {
         let rcv_alt = 11.5;
         let (trace, _) = terrain_attenuation_with_meta(&mut p, src_elev, rcv_alt);
         assert!(trace.delta_m > 0.0, "terrace at t=0.97 must be caught");
+    }
+
+    /// THE M3b soundness property, on terrain the full cadence actually
+    /// diffracts: the K-sample subset bound — max-δ over the subset, then the
+    /// provable mixed-band bound at (δ_sub, δ_sub − κ) with κ the favourable
+    /// arc correction of the direct ray — never exceeds the full profile's
+    /// exact `terrain_attenuation` bands. Sweeps hill positions, heights and
+    /// distances.
+    #[test]
+    fn terrain_subset_bound_never_exceeds_the_full_cadence_bands() {
+        use super::super::diffraction::diffraction_mixed_lower_bound;
+        use crate::constants::{FAV_RAY_CURVATURE_MIN_M, FAV_RAY_CURVATURE_PER_DSR};
+        let src_elev = 10.05;
+        let rcv_alt = 11.5;
+        for &dist in &[600.0, 1_000.0, 3_000.0] {
+            for &hill_t in &[0.2, 0.35, 0.5, 0.65, 0.8] {
+                for &hill_h in &[14.0, 20.0, 30.0, 45.0, 70.0] {
+                    let mut p = build_flat_profile(dist, 10.0);
+                    let (idx, _) =
+                        p.t.iter()
+                            .enumerate()
+                            .min_by(|(_, &a), (_, &b)| {
+                                ((a - hill_t).abs())
+                                    .partial_cmp(&((b - hill_t).abs()))
+                                    .unwrap()
+                            })
+                            .unwrap();
+                    p.elevation_m[idx] = hill_h;
+                    let full = terrain_attenuation(&mut p, src_elev, rcv_alt);
+                    let n = p.t.len();
+                    let k = 8usize;
+                    let subset: Vec<usize> = (0..k)
+                        .map(|j| ((j as f64) * (n - 1) as f64 / (k - 1) as f64).round() as usize)
+                        .collect();
+                    let t_sub: Vec<f64> = subset.iter().map(|&i| p.t[i]).collect();
+                    let e_sub: Vec<f32> = subset.iter().map(|&i| p.elevation_m[i]).collect();
+                    let Some((delta_sub, dsr)) =
+                        terrain_subset_delta_lower_bound(&t_sub, &e_sub, dist, src_elev, rcv_alt)
+                    else {
+                        continue; // no hill in the subset ⇒ no bound ⇒ sound
+                    };
+                    let gamma = FAV_RAY_CURVATURE_MIN_M.max(FAV_RAY_CURVATURE_PER_DSR * dsr);
+                    let kappa = 2.0 * gamma * (dsr / (2.0 * gamma)).asin() - dsr;
+                    let bound = diffraction_mixed_lower_bound(delta_sub, delta_sub - kappa);
+                    for b in 0..NUM_BANDS {
+                        assert!(
+                            bound[b] <= full[b] + 1e-9,
+                            "d={dist} hill_t={hill_t} hill_h={hill_h} band {b}: bound {:.6} > full {:.6}",
+                            bound[b],
+                            full[b]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The subset march degenerates exactly like the exact path: under 3
+    /// samples or under 30 m there is no terrain term to bound, and a flat
+    /// subset yields no edge above the line of sight.
+    #[test]
+    fn terrain_subset_march_degenerate_shapes() {
+        assert!(terrain_subset_delta_lower_bound(
+            &[0.0, 0.5, 1.0],
+            &[10.0, 30.0, 10.0],
+            25.0,
+            12.0,
+            14.0
+        )
+        .is_none());
+        assert!(
+            terrain_subset_delta_lower_bound(&[0.0, 1.0], &[10.0, 10.0], 100.0, 12.0, 14.0)
+                .is_none()
+        );
+        // Flat subset: no edge above LOS ⇒ no bound.
+        assert!(terrain_subset_delta_lower_bound(
+            &[0.0, 0.25, 0.5, 0.75, 1.0],
+            &[10.0; 5],
+            1000.0,
+            12.0,
+            14.0
+        )
+        .is_none());
     }
 
     #[test]

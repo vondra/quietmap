@@ -809,12 +809,14 @@ fn report(
             (stats.path_calls + stats.skipped_calls).max(1)
         };
         eprintln!(
-            "layer-stats {name}: loaded_rows={} scatter_s={:.3} path_calls={} skipped_calls={} pairs={} skip_pct={:.1} raster_samples={} ground_rows_in_reach={} ground_unique_microsegs={}",
+            "layer-stats {name}: loaded_rows={} scatter_s={:.3} path_calls={} skipped_calls={} pairs={} walked_pairs={} walked_frac={:.4} skip_pct={:.1} raster_samples={} ground_rows_in_reach={} ground_unique_microsegs={}",
             stats.loaded_rows,
             stats.scatter.as_secs_f64(),
             stats.path_calls,
             stats.skipped_calls,
             stats.pairs,
+            stats.walked_pairs,
+            stats.walked_pairs as f64 / n as f64,
             stats.skipped_calls as f64 / n as f64 * 100.0,
             stats.raster_samples,
             stats.ground_rows_in_reach,

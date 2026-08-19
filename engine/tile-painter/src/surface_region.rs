@@ -159,6 +159,9 @@ pub struct LayerStats {
     /// (source, receiver) pairs priced by the cheap pass — the denominator the
     /// skip fraction wants (`path_calls` counts RAYS, several per pair).
     pub pairs: u64,
+    /// Pairs the walk actually computed; `walked_pairs/pairs` is the M3
+    /// walked-fraction census (measured per tile, per bound arm).
+    pub walked_pairs: u64,
     pub raster_samples: u64,
     pub ground_rows_in_reach: u64,
     pub ground_unique_microsegs: u64,
@@ -171,6 +174,7 @@ impl LayerStats {
         self.path_calls += o.path_calls;
         self.skipped_calls += o.skipped_calls;
         self.pairs += o.pairs;
+        self.walked_pairs += o.walked_pairs;
         self.raster_samples += o.raster_samples;
         self.ground_rows_in_reach += o.ground_rows_in_reach;
         self.ground_unique_microsegs += o.ground_unique_microsegs;
@@ -406,8 +410,16 @@ pub fn process_surface_region(
             for (rows, source_id, dir_name) in &layer_rows {
                 let mut accum = TileAccumulator::new();
                 let t_s = Instant::now();
-                let (walked, sk, npr, rs, ground_rows, ground_microsegs, time_divided) = match rows
-                {
+                let (
+                    walked,
+                    sk,
+                    npr,
+                    walked_pairs,
+                    rs,
+                    ground_rows,
+                    ground_microsegs,
+                    time_divided,
+                ) = match rows {
                     SurfaceRows::Line(r) => {
                         let st = scatter_line::scatter_tile(
                             tile,
@@ -420,6 +432,7 @@ pub fn process_surface_region(
                             st.path_calls,
                             st.skipped_calls,
                             st.pairs,
+                            st.walked_pairs,
                             st.raster_samples,
                             0,
                             0,
@@ -438,6 +451,7 @@ pub fn process_surface_region(
                             st.path_calls,
                             st.skipped_calls,
                             st.pairs,
+                            st.walked_pairs,
                             st.raster_samples,
                             0,
                             0,
@@ -459,6 +473,8 @@ pub fn process_surface_region(
                             st.path_calls,
                             st.skipped_calls,
                             st.pairs,
+                            // Ground-ops has 1 path per pair (no angular quadrature), so st.path_calls is the walked pair count.
+                            st.path_calls,
                             0,
                             st.rows_in_reach as u64,
                             st.unique_microsegs as u64,
@@ -472,6 +488,7 @@ pub fn process_surface_region(
                 e.path_calls += walked;
                 e.skipped_calls += sk;
                 e.pairs += npr;
+                e.walked_pairs += walked_pairs;
                 e.raster_samples += rs;
                 e.ground_rows_in_reach += ground_rows;
                 e.ground_unique_microsegs += ground_microsegs;

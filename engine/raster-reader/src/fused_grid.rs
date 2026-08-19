@@ -10,6 +10,7 @@
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::imd_max_pyramid::ImdMaxPyramid;
 use crate::RealRasters;
 
 /// Each FusedGrid allocation/mutation gets a new id so worker-local cached
@@ -38,6 +39,12 @@ pub struct FusedGrid {
     inv_cell_deg: f64,
     cols: usize,
     rows: usize,
+    /// Max-pooled IMD over `data`, built once at grid build — the scatter
+    /// byte-stop's ground bound (M3a) queries it per ray chunk instead of
+    /// marching. Never mutated after build (the quad cache's `grid_id`
+    /// invalidation covers the one mutator, `burn_building_max`, which does
+    /// not touch IMD).
+    imd_pyramid: ImdMaxPyramid,
 }
 
 impl Clone for FusedGrid {
@@ -50,6 +57,7 @@ impl Clone for FusedGrid {
             inv_cell_deg: self.inv_cell_deg,
             cols: self.cols,
             rows: self.rows,
+            imd_pyramid: self.imd_pyramid.clone(),
         }
     }
 }
@@ -149,14 +157,17 @@ impl FusedGrid {
     }
 
     pub(crate) fn empty() -> Self {
+        let data = vec![FusedPixel::default(); 4];
+        let imd_pyramid = ImdMaxPyramid::from_imd_plane(&data, 2, 2);
         FusedGrid {
-            data: vec![FusedPixel::default(); 4],
+            data,
             grid_id: next_grid_id(),
             lat_min: 0.0,
             lon_min: 0.0,
             inv_cell_deg: 3600.0,
             cols: 2,
             rows: 2,
+            imd_pyramid,
         }
     }
 
@@ -235,6 +246,7 @@ impl FusedGrid {
             }
         }
 
+        let imd_pyramid = ImdMaxPyramid::from_imd_plane(&data, rows, cols);
         FusedGrid {
             data,
             grid_id: next_grid_id(),
@@ -243,6 +255,7 @@ impl FusedGrid {
             inv_cell_deg,
             cols,
             rows,
+            imd_pyramid,
         }
     }
 
@@ -624,7 +637,29 @@ impl FusedGrid {
             inv_cell_deg: self.inv_cell_deg,
             cols: self.cols,
             rows: self.rows,
+            // Same stored cells ⇒ same IMD plane; the pyramid is origin-blind.
+            imd_pyramid: self.imd_pyramid.clone(),
         }
+    }
+
+    /// Upper bound on every IMD value `lookup_fused_rc` can return for any
+    /// sample whose (fractional, pre-clamp) raster coordinate lies in
+    /// `[rf_lo..=rf_hi] × [cf_lo..=cf_hi]`: the pyramid max over the cell box
+    /// `[floor(clamp(rf_lo)) ..= floor(clamp(rf_hi))+1]` per axis. The `+1` is
+    /// what makes a bilinear sample SOUND — a sample at fractional `rf` reads
+    /// the quad `floor(rf)..floor(rf)+1`, so the box must cover the quad, not
+    /// the point. Callers may pass `rf_lo > rf_hi` (rays run either way); the
+    /// min/max is normalized here.
+    pub fn imd_max_over_rc_box(&self, rf_lo: f64, rf_hi: f64, cf_lo: f64, cf_hi: f64) -> u8 {
+        let clamp_pair = |lo: f64, hi: f64, n: usize| -> (usize, usize) {
+            let lo = lo.clamp(0.0, (n - 1) as f64);
+            let hi = hi.clamp(0.0, (n - 1) as f64);
+            let (lo, hi) = (lo.min(hi), lo.max(hi));
+            (lo.floor() as usize, ((hi.floor() as usize) + 1).min(n - 1))
+        };
+        let (r_lo, r_hi) = clamp_pair(rf_lo, rf_hi, self.rows);
+        let (c_lo, c_hi) = clamp_pair(cf_lo, cf_hi, self.cols);
+        self.imd_pyramid.max_over_cell_box(r_lo, r_hi, c_lo, c_hi)
     }
 
     /// Packed pixel array for the GPU backend (engine/noise-gpu) to upload as a

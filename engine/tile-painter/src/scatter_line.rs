@@ -55,6 +55,8 @@ pub struct LineScatterStats {
     pub skipped_calls: u64,
     /// (source, receiver) pairs priced — the skip fraction's denominator.
     pub pairs: u64,
+    /// Pairs the walk actually computed — the M3 walked-fraction census.
+    pub walked_pairs: u64,
     /// Ray-march cadence samples (×4 = raster cell reads).
     pub raster_samples: u64,
 }
@@ -66,6 +68,7 @@ impl From<ScatterStats> for LineScatterStats {
             path_calls: s.path_calls,
             skipped_calls: s.skipped_calls,
             pairs: s.pairs,
+            walked_pairs: s.walked_pairs,
             raster_samples: s.raster_samples,
         }
     }
@@ -137,6 +140,12 @@ impl PreparedSource for PreparedLine<'_> {
     #[inline]
     fn emission_lden(&self) -> &[f64; NUM_BANDS] {
         &self.emission_lden
+    }
+    #[inline]
+    fn block_constant_source_latlon(&self) -> Option<(f64, f64)> {
+        // The line profile's sample point is the segment FOOT nearest each
+        // receiver — receiver-dependent, so no per-block cache.
+        None
     }
 }
 

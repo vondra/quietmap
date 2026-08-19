@@ -70,7 +70,7 @@
 use std::f64::consts::LN_10;
 use std::sync::OnceLock;
 
-use noise_compute::constants::{ALPHA_ATM, A_WEIGHTING, GROUND_GAIN_UB_DB};
+use noise_compute::constants::{ALPHA_ATM, A_WEIGHTING};
 use noise_compute::propagation::arc_screening::{
     arc_screened_attenuation_with_ground, segment_can_span, ArcBounds, ArcScreening,
     ArcScreeningScratch, ArcSkyline,
@@ -356,13 +356,14 @@ pub(crate) fn db_to_lin_a(path_db: f64, band: usize) -> f64 {
 
 /// Best-case Lden energy of a source→pixel pair — the byte-space stop's `P⁺`
 /// per pair: no terrain/screening/veg + the most favourable ground any band can
-/// meet ([`GROUND_GAIN_UB_DB`] = 3.0 dB, the CNOSSOS hard-ground floor attained
-/// at G = 0 in every band — see the constant for why it is no longer the
-/// per-band `(-CF).max(0)`), inflated by [`UB_SAFETY`] — provably ≥ the exact
-/// contribution. Shared verbatim by the line + point kernels so the
-/// `ub ≥ exact` soundness invariant lives in one place. `base_db` already folds
-/// in divergence/FLC/reflection; `emission_lden` is the pair's Lden-weighted
-/// band spectrum.
+/// meet, tightened per pair by [`crate::bound_m3`] (M3: the ground-gain floor
+/// from a max-pooled imperviousness pyramid, plus a cp-ray terrain lower bound
+/// where the exact path is a single characteristic-point ray — see the doc
+/// block below and `bound_m3.rs` for the soundness arguments), inflated by
+/// [`UB_SAFETY`] — provably ≥ the exact contribution. Shared verbatim by the
+/// line + point kernels so the `ub ≥ exact` soundness invariant lives in one
+/// place. `base_db` already folds in divergence/FLC/reflection; `emission_lden`
+/// is the pair's Lden-weighted band spectrum.
 ///
 /// ## How much a TIGHTER bound would buy, and what it costs to stay sound
 ///
@@ -403,11 +404,23 @@ pub(crate) fn db_to_lin_a(path_db: f64, band: usize) -> f64 {
 /// NOT sound** — the coarse middle throws one 737 m interval across several
 /// chunks (7 violations in 40 k). The weights have to be the cadence's own
 /// trapezoid mass, which is a closed function of `dist_m` and needs no march.
+///
+/// Both levers are IMPLEMENTED in [`crate::bound_m3`] (M3): the ground bound
+/// is the monotone `−3·(1−g_lo)` floor of the two CNOSSOS states (the
+/// analytic term itself is NOT monotone in G — image-source interference — so
+/// the floor is the sound reading of `A_gr(i, G_lo)`), and the terrain bound
+/// walks a K = 8 subset of the ray's own cadence only on the cp-ray population
+/// named above. `SURFACE_BOUND_M3=0` restores this loose bound bit-for-bit.
 #[inline]
-pub(crate) fn budget_ub_lden(base_db: f64, atm_d_km: f64, emission_lden: &[f64; NUM_BANDS]) -> f64 {
+pub(crate) fn budget_ub_lden(
+    base_db: f64,
+    atm_d_km: f64,
+    emission_lden: &[f64; NUM_BANDS],
+    bound: &crate::bound_m3::M3PairBound,
+) -> f64 {
     let mut ub = 0.0;
     for i in 0..NUM_BANDS {
-        let path_db = base_db - ALPHA_ATM[i] * atm_d_km + GROUND_GAIN_UB_DB;
+        let path_db = base_db - ALPHA_ATM[i] * atm_d_km - bound.gob_lb_db(i);
         ub += emission_lden[i] * db_to_lin_a(path_db, i);
     }
     ub * UB_SAFETY
@@ -475,6 +488,17 @@ pub(crate) struct BandScratch {
     /// per-sector order-sensitive by its own module's measurement).
     pair_pow: Vec<[f32; NUM_PERIODS]>,
     pair_hit: Vec<bool>,
+    /// Reused cadence buffer for the M3 per-pair bound (`bound_m3::pair_bound`)
+    /// — never allocated in the hot loop.
+    bound_t: Vec<f64>,
+    /// Per-(source, block) pooled IMD maxima for the M3a ground bound, indexed
+    /// like [`BandScratch::pairs_cand`] — `None` entries mean the source's
+    /// profile origin is receiver-dependent (line sources fall back to
+    /// per-pair chunk boxes).
+    bound_blocks: Vec<Option<crate::bound_m3::BlockGroundMaxima>>,
+    /// Pairs the walk actually computed (the M3 payoff census numerator:
+    /// walked fraction before/after the tightened bound).
+    walked_pairs: u64,
 }
 
 /// One (source, receiver) pair as the cheap pass records it: which prepared
@@ -545,6 +569,9 @@ impl BandScratch {
             suffix: Vec::new(),
             pair_pow: Vec::new(),
             pair_hit: Vec::new(),
+            bound_t: Vec::new(),
+            bound_blocks: Vec::new(),
+            walked_pairs: 0,
         }
     }
 }
@@ -799,6 +826,12 @@ pub(crate) trait PreparedSource {
     fn emission_lin(&self) -> &[[f32; NUM_BANDS]; NUM_PERIODS];
     /// Lden-weighted band spectrum for the budget upper bound.
     fn emission_lden(&self) -> &[f64; NUM_BANDS];
+    /// The source-side profile origin, when it is RECEIVER-INDEPENDENT (a
+    /// point source IS its own characteristic point). `None` for line sources
+    /// (the profile foot moves with the receiver), which disables the
+    /// per-(source, block) M3 ground-bound cache and falls back to per-pair
+    /// chunk queries.
+    fn block_constant_source_latlon(&self) -> Option<(f64, f64)>;
 }
 
 /// The per-pixel geometry divergence between the line and point kernels. One
@@ -840,6 +873,9 @@ pub(crate) struct ScatterStats {
     /// angular quadrature one pair builds `1 + n_seg` of them, so
     /// `skipped/(path+skipped)` understated the pair-level skip several-fold.
     pub(crate) pairs: u64,
+    /// (source, receiver) pairs the walk actually computed — the walked
+    /// fraction `walked_pairs/pairs` is the M3 payoff number, per tile per arm.
+    pub(crate) walked_pairs: u64,
     /// Ray-march cadence samples (×4 = raster cell reads). See [`BandScratch`].
     pub(crate) raster_samples: u64,
 }
@@ -891,38 +927,42 @@ pub(crate) fn scatter_tile_with_cfg<G: PixelGeometry>(
         };
     }
 
-    let (merged, path_calls, skipped_calls, pairs, raster_samples) = recv_block_regions()
-        .into_par_iter()
-        .fold(BandScratch::new, |mut s, (py_lo, py_hi, px_lo, px_hi)| {
-            if py_lo < py_hi && px_lo < px_hi {
-                scatter_band(
-                    geo, tile, &prep, barriers, obstacles, py_lo, py_hi, px_lo, px_hi, cfg, &mut s,
-                );
-            }
-            s
-        })
-        .map(|s| {
-            (
-                s.local,
-                s.path_calls,
-                s.skipped_calls,
-                s.pairs_seen,
-                s.raster_samples,
-            )
-        })
-        .reduce(
-            || (TileAccumulator::new(), 0u64, 0u64, 0u64, 0u64),
-            |mut a, b| {
-                a.0.merge_from(&b.0);
-                (a.0, a.1 + b.1, a.2 + b.2, a.3 + b.3, a.4 + b.4)
-            },
-        );
+    let (merged, path_calls, skipped_calls, pairs, walked_pairs, raster_samples) =
+        recv_block_regions()
+            .into_par_iter()
+            .fold(BandScratch::new, |mut s, (py_lo, py_hi, px_lo, px_hi)| {
+                if py_lo < py_hi && px_lo < px_hi {
+                    scatter_band(
+                        geo, tile, &prep, barriers, obstacles, py_lo, py_hi, px_lo, px_hi, cfg,
+                        &mut s,
+                    );
+                }
+                s
+            })
+            .map(|s| {
+                (
+                    s.local,
+                    s.path_calls,
+                    s.skipped_calls,
+                    s.pairs_seen,
+                    s.walked_pairs,
+                    s.raster_samples,
+                )
+            })
+            .reduce(
+                || (TileAccumulator::new(), 0u64, 0u64, 0u64, 0u64, 0u64),
+                |mut a, b| {
+                    a.0.merge_from(&b.0);
+                    (a.0, a.1 + b.1, a.2 + b.2, a.3 + b.3, a.4 + b.4, a.5 + b.5)
+                },
+            );
     accum.merge_from(&merged);
     ScatterStats {
         rows: n_rows,
         path_calls,
         skipped_calls,
         pairs,
+        walked_pairs,
         raster_samples,
     }
 }
@@ -960,6 +1000,32 @@ fn scatter_band<G: PixelGeometry>(
     }
     let n_seg = seg_samples();
     let stop_on = byte_stop_enabled();
+    // M3a per-(source, block) pooled chunk maxima, resolved ONCE per block
+    // (8 pyramid boxes per source instead of per pair) for the sources whose
+    // profile origin is receiver-independent.
+    if crate::bound_m3::surface_bound_m3_enabled() {
+        let (lat_lo, lat_hi) = if tile.rx_lat[py_lo] <= tile.rx_lat[py_hi - 1] {
+            (tile.rx_lat[py_lo], tile.rx_lat[py_hi - 1])
+        } else {
+            (tile.rx_lat[py_hi - 1], tile.rx_lat[py_lo])
+        };
+        let (lon_lo, lon_hi) = if tile.rx_lon[px_lo] <= tile.rx_lon[px_hi - 1] {
+            (tile.rx_lon[px_lo], tile.rx_lon[px_hi - 1])
+        } else {
+            (tile.rx_lon[px_hi - 1], tile.rx_lon[px_lo])
+        };
+        s.bound_blocks.clear();
+        for &ci in &s.pairs_cand {
+            let m = prep[ci as usize]
+                .block_constant_source_latlon()
+                .map(|(la, lo)| {
+                    crate::bound_m3::block_ground_maxima(
+                        tile, la, lo, lat_lo, lat_hi, lon_lo, lon_hi,
+                    )
+                });
+            s.bound_blocks.push(m);
+        }
+    }
 
     for py in py_lo..py_hi {
         let rx_lat = tile.rx_lat[py];
@@ -986,7 +1052,23 @@ fn scatter_band<G: PixelGeometry>(
                 let Some(t) = geo.pixel(pr, tile, rx_lat, rx_lon, rx_alt, refl) else {
                     continue;
                 };
-                let ub = budget_ub_lden(t.base_db, t.atm_d_km, pr.emission_lden());
+                // M3: tighten this pair's bound (ground pyramid + cp-ray
+                // terrain march) BEFORE pricing it into P⁺ — the cheap pass is
+                // where every pair is priced, so the tightening must be at
+                // least an order under the exact path it saves.
+                let bound = crate::bound_m3::pair_bound(
+                    tile,
+                    cfg,
+                    &t,
+                    rx_lat,
+                    rx_lon,
+                    rx_alt,
+                    obstacles,
+                    n_seg,
+                    s.bound_blocks.get(k).and_then(|m| m.as_ref()),
+                    &mut s.bound_t,
+                );
+                let ub = budget_ub_lden(t.base_db, t.atm_d_km, pr.emission_lden(), &bound);
                 let ord = s.pairs.len() as u32;
                 s.pairs.push(PairBound { src: ci, ord, ub });
             }
@@ -1229,6 +1311,7 @@ fn scatter_band<G: PixelGeometry>(
                 s.pair_pow[ord as usize] = pow;
             }
             s.skipped_calls += (n_pairs - walked) as u64;
+            s.walked_pairs += walked as u64;
 
             // ── accumulate in SOURCE-LOAD order ─────────────────────────────
             // Not the walk's order: f32 addition does not commute, so a pixel

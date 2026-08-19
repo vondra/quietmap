@@ -42,6 +42,8 @@ pub struct PointScatterStats {
     pub skipped_calls: u64,
     /// (source, receiver) pairs priced — the skip fraction's denominator.
     pub pairs: u64,
+    /// Pairs the walk actually computed — the M3 walked-fraction census.
+    pub walked_pairs: u64,
     /// Ray-march cadence samples (×4 = raster cell reads).
     pub raster_samples: u64,
 }
@@ -53,6 +55,7 @@ impl From<ScatterStats> for PointScatterStats {
             path_calls: s.path_calls,
             skipped_calls: s.skipped_calls,
             pairs: s.pairs,
+            walked_pairs: s.walked_pairs,
             raster_samples: s.raster_samples,
         }
     }
@@ -125,6 +128,13 @@ impl PreparedSource for PreparedPoint<'_> {
     #[inline]
     fn emission_lden(&self) -> &[f64; NUM_BANDS] {
         &self.emission_lden
+    }
+    #[inline]
+    fn block_constant_source_latlon(&self) -> Option<(f64, f64)> {
+        // A point source IS its characteristic point: every receiver's
+        // profile starts here, so the M3 ground-bound chunk maxima are
+        // receiver-independent up to the receiver block's extent.
+        Some((self.point.lat, self.point.lon))
     }
 }
 

@@ -11,6 +11,7 @@
 
 pub mod fused_grid;
 pub mod fused_tile_z13;
+pub mod imd_max_pyramid;
 pub mod real_rasters;
 pub mod tile;
 

@@ -533,6 +533,34 @@ pub fn diffraction_attenuation(delta: f64) -> [f64; NUM_BANDS] {
     maekawa_bands(delta, &[true; NUM_BANDS])
 }
 
+/// PROVABLE per-band lower bound on [`diffraction_attenuation_mixed`] for ANY
+/// edge whose homogeneous path difference is `≥ delta_lb` and whose favourable
+/// path difference is `≥ delta_fav_lb` — the M3b byte-stop bound input.
+///
+/// Each `maekawa_bands` arm is monotone in its δ and `mix_fav_hom` is monotone
+/// in each arm, so evaluating the mix AT the two lower bounds cannot exceed
+/// the mix at the real edge. Both δ's of a real above-LOS edge are handled:
+/// the Rayleigh `admits` verdict is all-true whenever the edge's δ ≥ 0, which
+/// the caller guarantees by only passing max-δ edges from above-LOS samples.
+///
+/// This exists because the naive subset evaluation — running the full mixed
+/// core on the subset's own argmax edge — is NOT sound: the favourable δ_F is
+/// not monotone across different edge positions (the arc construction
+/// compresses mid-path detours and stretches near-endpoint ones), so a
+/// subset edge with smaller δ can carry a LARGER δ_F than the exact path's
+/// dominant edge (measured on Dobris industrial: 20 851 of 259 496 pairs
+/// over-reading, up to 2.9 dB, before this form).
+pub fn diffraction_mixed_lower_bound(delta_lb: f64, delta_fav_lb: f64) -> [f64; NUM_BANDS] {
+    let admits = [true; NUM_BANDS];
+    let hom = maekawa_bands(delta_lb, &admits);
+    let fav = maekawa_bands(delta_fav_lb, &admits);
+    if FAVOURABLE_MIXING {
+        mix_fav_hom(&hom, &fav, P_FAV)
+    } else {
+        hom
+    }
+}
+
 /// The banded attenuation of a computed edge: [`maekawa_bands`] on the
 /// homogeneous δ, mixed with the favourable-ray δ_F per (2.5.9) when
 /// [`FAVOURABLE_MIXING`] is on. One [`rayleigh_admits`] verdict feeds both.
