@@ -1721,6 +1721,23 @@ __device__ void barrier_best_candidate(
     }
 }
 
+// ---- path_profile::clamp_source_platform (SPEC §3.5.1): within one DEM cell
+// of the source, bare-earth samples may not exceed the source cell's own
+// elevation — CNOSSOS puts the point source 0.05 m above the ROAD SURFACE, so
+// the road body (bench, embankment shoulder) is no diffraction obstacle, and a
+// 30 m DEM cannot resolve that bench (flanking cells read up to ~1.3 m over
+// the road cell at the D4 Voznice; the phantom hump flipped the terrain term
+// 0 ↔ 9.6 dB between receivers 25 m apart). Same carve as the CPU: monotone
+// (never raises a sample), idempotent, zone t·dist < CELL_M, t ascending.
+__device__ void clamp_source_platform(const double* t, double* e, int n, double dist) {
+    if (n < 2) return;
+    const double e0 = e[0];
+    for (int i = 1; i < n; i++) {
+        if (t[i] * dist >= CELL_M) break; // t ascending — the zone ends here
+        if (e[i] > e0) e[i] = e0;
+    }
+}
+
 // ---- the CLEAR-FAN arm of `ray_path_bands`: bare-earth terrain only.
 //
 // A clear direction has no obstacle to rank, so the crossing scan, the
@@ -1741,6 +1758,9 @@ __device__ void ray_terrain_bands(
         float rf = src_rf + (float)tprof[i] * d_rf, cf = src_cf + (float)tprof[i] * d_cf;
         ed[i] = (double)bilinear_elev_rc(elev, rows, cols, rf, cf);
     }
+    // The scratch is per-call throwaway here (no ground fit downstream), so the
+    // carve stays in place — matching the CPU's shared carved scratch.
+    clamp_source_platform(tprof, ed, n, dist);
     terrain_bands(tprof, ed, n, dist, salt, ralt, terr);
 }
 
@@ -1802,6 +1822,12 @@ __device__ int ray_path_bands(
         }
     }
 
+    // Source-platform clamp (SPEC §3.5.1) on the shared scratch: the terrain
+    // march, the composite base and the candidate LERPs below all read the
+    // carved profile, exactly as the CPU's clamped scratch; the raw profile is
+    // restored before return for the caller's ground mean-plane.
+    clamp_source_platform(tprof, ed, n, dist);
+
     // path effects (bands in fp32)
     terrain_bands(tprof, ed, n, dist, salt, ralt, terr);
     for (int i = 0; i < NB; i++) screen[i] = 0.0f;
@@ -1862,6 +1888,15 @@ __device__ int ray_path_bands(
         single_edge_bands_cand(tprof, comp, ed, n, dist, salt, ralt,
                                have_cand, cand_t, cand_top, comb);
         for (int i = 0; i < NB; i++) screen[i] = fmaxf(comb[i] - terr[i], 0.0f);
+    }
+    // SPEC §3.5.1 isolation: restore the raw near-source samples so the
+    // caller's ground mean-plane OLS (over `ed`) and vegetation keep the
+    // uncarved earth — the clamp applies at the diffraction/screening
+    // evaluation points only. Deterministic re-read, ≤ the CELL_M zone.
+    for (int i = 1; i < n; i++) {
+        if (tprof[i] * dist >= CELL_M) break; // t ascending — zone ends here
+        float rf = src_rf + (float)tprof[i] * d_rf, cf = src_cf + (float)tprof[i] * d_cf;
+        ed[i] = (double)bilinear_elev_rc(elev, rows, cols, rf, cf);
     }
     return n;
 }

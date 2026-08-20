@@ -454,8 +454,12 @@ wall's terrain base LERP takes the same clamped profile, so a wall and its
 source stay on one consistent platform). Pin:
 `path_effects::tests::phantom_shoulder_hump_is_carved_to_the_platform`,
 `cut_slope_beyond_one_cell_still_screens`. The GPU kernel
-(`noise-gpu/kernels/scatter.cu`) mirrors the single-edge selection and MUST
-grow the same clamp at landing (resync + PTX rebuild).
+(`noise-gpu/kernels/scatter.cu`) grows the same clamp in the same landing
+set (2026-08-20): `clamp_source_platform` carves the per-ray scratch before
+the terrain march (the composite base and candidate LERPs inherit it, as on
+the CPU), and `ray_path_bands` re-reads the raw near-source samples before
+returning so the caller's ground mean-plane stays on the uncarved earth —
+the same isolation as the CPU.
 
 Alternative considered and rejected (Occam): denser near-source sampling
 (fix B). It does not remove the phantom — the hump is a whole DEM cell — it
