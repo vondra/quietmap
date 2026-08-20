@@ -416,6 +416,56 @@ Simplifications vs. strict CNOSSOS:
   `FAVOURABLE_MIXING` flag, live since 2026-07-28 — see §3.9.
 - Lateral diffraction around vertical edges (§2.5.6(i)) is not implemented.
 
+#### 3.5.1 Source platform clamp (2026-08-20)
+
+**Within one DEM cell (`CELL_M` ≈ 30.7 m) of the source, bare-earth profile
+samples may not exceed the source cell's own elevation.** The road body is not
+a diffraction obstacle: CNOSSOS puts the point source 0.05 m above the ROAD
+SURFACE (2021/1226 §2.2, "*this point source is placed 0,05 m above the road
+surface*"), so the terrain term must integrate over the road platform, not over
+the DEM's rendering of it. A 30 m DEM cannot resolve the bench: the cells
+flanking a road mix the embankment crown with the falling terrain and read up
+to **+1.3 m** above the road cell (measured on the D4 at Voznice, fine-probe
+crest +0.98 m at 7.5 m from the centreline). On a downhill ray the steep
+near-source sight line grazes that phantom hump and the terrain term flipped
+0 ↔ −9.6 dB between receivers 25 m apart — razor-straight shadow wedges
+radiating from every embankment road (owner verdict 2026-08-20; measured popup
+grid: adjacent-receiver |Δterrain| max **8.5 dB**). The clamp removes the
+phantom while keeping the genuine plateau-edge graze (the embankment-toe
+shadow the DEM actually supports) and every obstacle beyond one cell.
+
+Applied at the diffraction evaluation points only —
+`path_profile::clamp_source_platform` inside `compute_terrain_diffraction`
+(exact march + popup trace), the same clamp inside
+`screening_attenuation_with_meta` (otherwise the phantom re-enters through the
+composite as a spurious screening increment), and the read-time form
+`source_platform_clamped` inside `terrain_subset_delta_lower_bound` (the M3b
+bound stays sound: the rule is pointwise in (t, e) given the shared endpoint
+e0, so subset-of-carved = carved-of-subset). Ground effect and vegetation keep
+the raw profile (their integrals are blind to a sub-cell hump). The clamp is
+idempotent and never raises a sample.
+
+Explicit trade, recorded for review: a REAL feature rising within one cell of
+the source (cut-slope toe, unmapped berm) no longer screens — at 30 m
+resolution the source cell's own value is the only defensible platform, and
+intra-cell geometry is unresolvable by construction. Mapped noise walls are
+NOT affected (exact ray×segment barrier crossings with their own heights; the
+wall's terrain base LERP takes the same clamped profile, so a wall and its
+source stay on one consistent platform). Pin:
+`path_effects::tests::phantom_shoulder_hump_is_carved_to_the_platform`,
+`cut_slope_beyond_one_cell_still_screens`. The GPU kernel
+(`noise-gpu/kernels/scatter.cu`) mirrors the single-edge selection and MUST
+grow the same clamp at landing (resync + PTX rebuild).
+
+Alternative considered and rejected (Occam): denser near-source sampling
+(fix B). It does not remove the phantom — the hump is a whole DEM cell — it
+only makes every azimuth see it CONSISTENTLY: measured at the Voznice
+transect the crest (+0.98 m at 7.5 m) would diffract uniformly at δ ≈ 0.21 m
+→ −9.6…−20 dB across bands, i.e. stripes traded for a uniform phantom shadow
+≈ +4…+7 dB over the clean azimuths (a new bias), plus cadence growth on every
+ray and a GPU resync. The clamp fixes the physics; denser sampling entrenches
+the artifact.
+
 See §3.5b for the V2 node evaluator's shared path sampling scheme.
 The V2 clauses below are the D1 review draft; they become the live contract
 only with the V2 evaluator landing.  The demoted V1 text is retained solely as
