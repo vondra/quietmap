@@ -373,13 +373,12 @@ pub fn process_surface_region(
             ctx.rasters,
             obstacle_data.set().is_none(),
         );
-        // Vector mode: the pre-baked rx_refl (raster 3×3 enclosure) is
-        // recomputed from footprints — the SAME 150 × 150 m probe — and the
-        // GPU rxar upload carries it unchanged (gg review: pre-bake site).
-        // NOTE: the POPUP still takes reflection from the raster probe; its
-        // vector enclosure lands with the popup-reflection follow-up (plan
-        // 1.4b) — until then flag-ON pipeline vs popup reflection may differ
-        // by one 1.5 dB step at footprint edges.
+        // Vector mode: the raster rx_refl bake is skipped (see
+        // build_opt_rx_refl above) and the pre-bake below is the one writer —
+        // recomputed from footprints, the SAME 150 × 150 m probe, and the GPU
+        // rxar upload carries it unchanged (gg review: pre-bake site). The
+        // popup reads vector reflection too (1.4b VectorReflectionSampler,
+        // landed) — pipeline and popup agree on one reflection source.
         if let Some(set) = obstacle_data.set() {
             // Only the REQUESTED tiles are painted — rebaking the whole
             // batch_n² grid would triple the bake cost for nothing.

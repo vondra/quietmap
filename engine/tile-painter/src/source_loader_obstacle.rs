@@ -114,23 +114,29 @@ impl ObstacleData {
             let low_profile = load_low_profile(h3r4_dir, cell)?;
             indexes.push(Arc::new(build_cell_index(cell, &dir, &low_profile)?));
         }
-        let set = ObstacleSet { indexes };
+        let set = ObstacleSet {
+            indexes: indexes.clone(),
+        };
         if set.edge_count() == 0 {
             if renderer_evidence_requires_vector_mode() {
                 bail!("renderer evidence requires positive vector mode; obstacle ring is empty");
             }
-            // Reaching here needs every cell staged-with-shards yet all empty,
-            // or every cell proven ingested-empty — keep vector mode (an empty
-            // set screens nothing, masks nothing, reflects 0 dB: exactly what
-            // an equally empty raster channel would say) so covered-empty
-            // regions stop reading the raster entirely.
-            eprintln!(
-                "[obstacles] vector mode: 0 edges across {} cells (all ingested-empty)",
-                set.indexes.len()
-            );
-            return Ok(ObstacleData {
-                set: Some(Arc::new(set)),
-            });
+            // Zero edges is vector-EMPTY only when NO shard-backed index was
+            // loaded — i.e. every ring cell was proven ingested-empty by the
+            // manifest. Shard-backed-but-zero-edges (degenerate WKB, zero-row
+            // shard, rejected heights) falls back to raster exactly as before
+            // this branch: a staged shard that builds no edges is a data
+            // anomaly, not proof of emptiness (/gg Codex finding 3).
+            if indexes.is_empty() {
+                eprintln!(
+                    "[obstacles] vector mode: 0 edges across {} cells (all ingested-empty)",
+                    r4_hexes.len()
+                );
+                return Ok(ObstacleData {
+                    set: Some(Arc::new(set)),
+                });
+            }
+            return Ok(Self::off());
         }
         eprintln!(
             "[obstacles] vector mode: {} edges across {} cells",

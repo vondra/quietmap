@@ -1404,7 +1404,11 @@ loader policy additionally treats a shard-less cell whose every overlapped
 1-degree tile is listed in the world ingest manifest (`.ingested-tiles`,
 `obstacle_ingest_coverage`) as INGESTED-EMPTY rather than missing — vector
 mode proceeds without it, because our building raster derives from the same
-Overture release and would contribute nothing there. Known remaining raster
+Overture release and would contribute nothing there. Polar pentagons are
+refused coverage (their vertex bbox is not longitude-conservative); a
+building-raster restage from a NEWER Overture release must delete the
+manifest in the same change (operational invariant, documented in
+`obstacle_ingest_coverage`). Known remaining raster
 consumer in vector mode: `PathProfile::building_h_m` feeds the composite
 top profile that terrain diffraction (§3.5) rides — removing it changes
 model semantics (buildings as topography) and is scheduled separately from

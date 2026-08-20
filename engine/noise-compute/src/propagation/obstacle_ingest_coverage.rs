@@ -20,11 +20,24 @@
 //!
 //! Coverage is CONSERVATIVE by construction: the tile set comes from the
 //! cell boundary's bounding box (may include tiles the hexagon never
-//! touches), and ANY unlisted tile — including ocean tiles that carry no
-//! Overture parquet at all, so coast-hugging cells often stay unproven —
-//! keeps the old raster fallback. A manifest that is absent or unreadable
-//! (e.g. a Vast worker that staged only the h3r4 tree) means coverage
-//! UNKNOWN: the loaders keep today's behavior there.
+//! touches), polar pentagons are refused outright (their vertex bbox spans
+//! only part of the longitudes that belong to the cell), and ANY unlisted
+//! tile — including ocean tiles that carry no Overture parquet at all, so
+//! coast-hugging cells often stay unproven — keeps the old raster fallback.
+//! A manifest that is absent or unreadable (e.g. a Vast worker that staged
+//! only the h3r4 tree) means coverage UNKNOWN: the loaders keep today's
+//! behavior there.
+//!
+//! OPERATIONAL INVARIANT (unverified at load time, /gg both-reviewer
+//! finding): the raster-building pipeline and this ingest must stay on the
+//! SAME Overture release. A building-raster restage from a NEWER release
+//! MUST delete `.ingested-tiles` (and re-run the ingest) in the same
+//! change — otherwise a cell empty in the old release and built-up in the
+//! new one would read manifest-proven-empty while the raster channel has
+//! buildings. Re-ingesting a tile keeps this safe by removing its manifest
+//! line before unlinking shards (ingest-overture-obstacles.py reconcile
+//! step); full release-id pinning of the manifest against the raster
+//! provenance stamp is the recommended follow-up.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -78,13 +91,25 @@ impl IngestManifest {
     }
 
     /// Is every 1-degree tile overlapped by `cell`'s bounding box listed as
-    /// ingested? Conservative in both directions — see the module doc.
+    /// ingested? Conservative in both directions — see the module doc —
+    /// EXCEPT it must never be asked about polar cells (below).
     pub fn covers_cell(&self, cell: CellIndex) -> bool {
         let (lat_min, lat_max, lon_min, lon_max) = cell_boundary_bbox(cell);
+        // Polar pentagons: the vertex bbox spans only PART of the longitudes
+        // that belong to the cell (the pole itself touches every meridian),
+        // so tile enumeration over it is NOT conservative — a manifest
+        // listing just the vertex-span tiles would wrongly prove coverage
+        // (/gg Codex finding 2 vs Kimi's fail-safe read; Codex is right).
+        // Guard by latitude: beyond ±89° the only R4 cells are the polar
+        // pentagons; refuse coverage there (raster fallback — ice/ocean,
+        // zero buildings, no cost).
+        if lat_max > 89.0 || lat_min < -89.0 {
+            return false;
+        }
         let lat_s = lat_min.floor() as i32;
-        let lat_n = (lat_max - f64::EPSILON).floor() as i32;
+        let lat_n = lat_max.floor() as i32;
         let lon_w = lon_min.floor() as i32;
-        let lon_e = (lon_max - f64::EPSILON).floor() as i32;
+        let lon_e = lon_max.floor() as i32;
         for lat in lat_s..=lat_n {
             for lon in lon_w..=lon_e {
                 if !self.tiles.contains(&degree_tile_name(lat, lon)) {
@@ -164,6 +189,30 @@ mod tests {
     }
 
     #[test]
+    fn polar_and_dateline_cells_refuse_coverage() {
+        // Dateline straddle: bbox lon range ≈ global → some tile always
+        // missing → false. (Fixture manifest holding EVERY tile would be
+        // needed to flip it; assert the conservative default instead.)
+        let dateline = cell_at(49.5, 179.999);
+        let sparse = IngestManifest {
+            tiles: [degree_tile_name(49, 179), degree_tile_name(49, -180)]
+                .into_iter()
+                .collect(),
+        };
+        assert!(!sparse.covers_cell(dateline));
+        // Polar pentagon: even a manifest holding the vertex-span tiles
+        // must refuse (the pole belongs to every meridian).
+        let north = cell_at(89.99, 0.0);
+        let mut greedy = HashSet::new();
+        for lon in -180..180 {
+            for lat in 84..90 {
+                greedy.insert(degree_tile_name(lat, lon));
+            }
+        }
+        assert!(!IngestManifest { tiles: greedy }.covers_cell(north));
+    }
+
+    #[test]
     fn absent_manifest_is_none() {
         assert!(IngestManifest::load_cached(Path::new("/nonexistent/.ingested-tiles")).is_none());
     }
@@ -171,7 +220,7 @@ mod tests {
     fn bbox_tiles(cell: CellIndex) -> Vec<String> {
         let (lat_min, lat_max, lon_min, lon_max) = cell_boundary_bbox(cell);
         let mut out = Vec::new();
-        for lat in lat_min.floor() as i32..=(lat_max - f64::EPSILON).floor() as i32 {
+        for lat in lat_min.floor() as i32..=lat_max.floor() as i32 {
             for lon in lon_w(lon_min)..=(lon_e(lon_max)) {
                 out.push(degree_tile_name(lat, lon));
             }
@@ -180,7 +229,7 @@ mod tests {
             lon_min.floor() as i32
         }
         fn lon_e(lon_max: f64) -> i32 {
-            (lon_max - f64::EPSILON).floor() as i32
+            lon_max.floor() as i32
         }
         out
     }

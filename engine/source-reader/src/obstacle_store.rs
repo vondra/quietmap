@@ -474,15 +474,18 @@ pub fn load_obstacle_set(
     }
     let set = ObstacleSet { indexes };
     if set.edge_count() == 0 {
-        // Every ring cell staged-with-shards yet all empty, or all proven
-        // ingested-empty: keep vector mode — an empty set screens nothing and
-        // reflects 0 dB, exactly what the equally empty raster channel would
-        // say, and the query never touches the raster at all.
-        eprintln!("obstacle_store: vector mode with 0 edges (all ingested-empty)");
-        Some(set)
-    } else {
-        Some(set)
+        // Zero edges is vector-EMPTY only when no shard-backed index was
+        // loaded (every ring cell manifest-proven ingested-empty). A staged
+        // shard that builds zero edges is a data anomaly — raster fallback,
+        // exactly the pre-branch behavior (/gg Codex finding 3, tile-painter
+        // twin rule).
+        if set.indexes.is_empty() {
+            eprintln!("obstacle_store: vector mode with 0 edges (all ingested-empty)");
+            return Some(set);
+        }
+        return None;
     }
+    Some(set)
 }
 
 /// The world-ingest manifest next to the staging tree, when present (the

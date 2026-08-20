@@ -880,8 +880,15 @@ fn process_region(
                 RASTERS.with(|slot| {
                     let mut slot = slot.borrow_mut();
                     let rasters = slot.get_or_insert_with(|| RealRasters::new(Path::new(prepared)));
-                    let mut batch =
-                        TileBatch::build(cfg.z, bx, by, cfg.batch_n, cfg.halo_m, rasters);
+                    let mut batch = TileBatch::build_opt_rx_refl(
+                        cfg.z,
+                        bx,
+                        by,
+                        cfg.batch_n,
+                        cfg.halo_m,
+                        rasters,
+                        obstacle_data.set().is_none(),
+                    );
                     // Vector mode: pre-bake vector reflection into rx_refl —
                     // the rxar upload then carries it to the kernel unchanged
                     // (the one shared helper, SPEC §3.8); only painted tiles.

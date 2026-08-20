@@ -127,6 +127,18 @@ def process_tile(name: str) -> None:
 
     # Reconcile before writing: a re-ingest after an upstream re-extract may
     # move rows between cells — this tile's old shards must not survive it.
+    # The ingest-coverage manifest entry goes FIRST: while shards are being
+    # rewritten, a shard-less cell must read "not ingested" (raster fallback),
+    # never manifest-proven-empty — ingest-world-incremental.sh re-appends the
+    # tile on success (engine obstacle_ingest_coverage.rs, /gg finding).
+    manifest = "data/enrichment/global/overture-obstacles/.ingested-tiles"
+    if os.path.exists(manifest):
+        with open(manifest) as f:
+            lines = f.readlines()
+        kept = [l for l in lines if l.strip() != name]
+        if len(kept) != len(lines):
+            with open(manifest, "w") as f:
+                f.writelines(kept)
     for stale in glob.glob(os.path.join(OUT_DIR, "*", f"obstacles-{name}.arrow")):
         os.unlink(stale)
 
