@@ -89,23 +89,16 @@ impl PathProfile {
         self.rcv_lon = 0.0;
     }
 
-    /// Populate (if needed) and return the f64 elevation scratch buffer,
-    /// converted from `elevation_m`. Reuses capacity across calls.
+    /// Populate (if needed) and return the f64 elevation scratch buffer as
+    /// mutable, converted from `elevation_m`, for callers that transform the
+    /// f64 view in place (the source-platform clamp). Amortized refill: the
+    /// clamp is idempotent, so a same-length reuse keeps one rule applied —
+    /// but after a carving pass the scratch holds CARVED data, so reuse is
+    /// only valid under that rule.
     ///
     /// Free function so callers can use split borrows — the scratch field
     /// can be borrowed mutably while other `PathProfile` fields stay
     /// available for read-only access.
-    pub fn elevation_f64_from<'a>(scratch: &'a mut Vec<f64>, src: &[f32]) -> &'a [f64] {
-        if scratch.len() != src.len() {
-            scratch.clear();
-            scratch.extend(src.iter().map(|&e| e as f64));
-        }
-        scratch.as_slice()
-    }
-
-    /// Mutable twin of [`elevation_f64_from`] for callers that transform the
-    /// f64 view in place (the source-platform clamp). Same amortized refill:
-    /// the clamp is idempotent, so a same-length reuse keeps one rule applied.
     pub fn elevation_f64_from_mut<'a>(scratch: &'a mut Vec<f64>, src: &[f32]) -> &'a mut [f64] {
         if scratch.len() != src.len() {
             scratch.clear();

@@ -453,7 +453,13 @@ NOT affected (exact ray×segment barrier crossings with their own heights; the
 wall's terrain base LERP takes the same clamped profile, so a wall and its
 source stay on one consistent platform). Pin:
 `path_effects::tests::phantom_shoulder_hump_is_carved_to_the_platform`,
-`cut_slope_beyond_one_cell_still_screens`. The GPU kernel
+`cut_slope_beyond_one_cell_still_screens`. Receiver-end edge, pinned by
+`annulus_receiver_carve_cannot_fork_the_terrain_term`: on 30 ≤ dist < CELL_M
+rays the receiver sample itself sits inside the zone, so an uphill receiver's
+ground is carved while the march's `rcv_h` stays derived from the raw sample
+(screening and the CUDA kernel derive it post-carve) — the value-level fork
+is unobservable because the whole sub-cell ray carves flat, leaving no edge
+under either height order. The GPU kernel
 (`noise-gpu/kernels/scatter.cu`) grows the same clamp in the same landing
 set (2026-08-20): `clamp_source_platform` carves the per-ray scratch before
 the terrain march (the composite base and candidate LERPs inherit it, as on

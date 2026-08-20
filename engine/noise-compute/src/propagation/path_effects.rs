@@ -719,7 +719,7 @@ pub fn cnossos_ground_path_from_profile(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::propagation::path_profile::fill_t_values;
+    use crate::propagation::path_profile::{fill_t_values, CELL_M};
 
     fn build_flat_profile(dist_m: f64, ground_elev_m: f32) -> PathProfile {
         let mut p = PathProfile::new();
@@ -898,6 +898,68 @@ mod tests {
         assert!(trace.delta_m > 0.0);
     }
 
+    /// Landing-review adjudication (2026-08-21, Grok WARNING vs Qwen F3): on
+    /// the annulus 30 <= dist < CELL_M the receiver sample (t=1) sits INSIDE
+    /// the clamp zone, so the exact march carves an uphill receiver's ground
+    /// to e0 while its `rcv_h` was derived from the RAW sample — the rebuilt
+    /// `rcv_elev = carved[n-1] + rcv_h` then sits below `rcv_alt`, unlike
+    /// screening (heights post-carve) and the CUDA rebuild, which recover
+    /// `rcv_alt`. The value-level fork is real but cannot reach an output:
+    /// dist < CELL_M puts EVERY sample in-zone, the carve flattens the whole
+    /// profile to e0 (never raises), and both chord variants stay above that
+    /// bed (src_e >= e0+0.05; the march's frozen rcv_e >= e0+0.5 via the
+    /// height floor; screening's rcv_e = rcv_alt > e0) — no edge, no terrain
+    /// term, march == screening == CUDA on the annulus. Pin the agreement at
+    /// the worst case (deepest carve + the 0.5 m floor): any reorder that
+    /// lets the frozen `rcv_h` manufacture or kill an edge here must fail.
+    #[test]
+    fn annulus_receiver_carve_cannot_fork_the_terrain_term() {
+        // 30.5 m ray: terrain runs (>= 30 m) and the whole ray is in-zone.
+        let dist = 30.5;
+        assert!((30.0..CELL_M).contains(&dist), "the annulus this test pins");
+        let t = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0];
+        // Phantom mid humps + an UPHILL receiver 12 m above the source cell —
+        // the deepest carve the zone can produce on this ray.
+        let raw: [f32; 4] = [100.0, 108.0, 106.0, 112.0];
+        let src_elev = 100.05;
+        let rcv_alt = 112.5; // receiver exactly at the 0.5 m height floor
+
+        // As shipped: raw `rcv_h` frozen, then the carve (the march's order).
+        let mut p = PathProfile::new();
+        p.dist_m = dist;
+        p.t = t.to_vec();
+        p.elevation_m = raw.to_vec();
+        p.building_h_m = vec![0; 4];
+        p.forest_u8 = vec![0; 4];
+        p.imd_u8 = vec![50; 4];
+        let march = terrain_attenuation(&mut p, src_elev, rcv_alt);
+        assert_eq!(
+            march, [0.0; NUM_BANDS],
+            "carved-flat annulus must be silent"
+        );
+
+        // Both height orders by hand over the same carved bed:
+        let mut carved: Vec<f64> = raw.iter().map(|&e| e as f64).collect();
+        clamp_source_platform(&t, &mut carved, dist);
+        assert!(
+            carved.iter().all(|&e| e == 100.0),
+            "dist < CELL_M flattens the whole ray, got {carved:?}"
+        );
+        let rcv_h_frozen = (rcv_alt - raw[3] as f64).max(0.5); // march order
+        let rcv_h_carved = (rcv_alt - carved[3]).max(0.5); // screening/CUDA order
+        assert!(rcv_h_frozen < rcv_h_carved, "the fork under test");
+        let (bands_frozen, diff_frozen) =
+            single_edge_atten(&t, &carved, &carved, dist, 0.05, rcv_h_frozen);
+        let (bands_carved, diff_carved) =
+            single_edge_atten(&t, &carved, &carved, dist, 0.05, rcv_h_carved);
+        assert_eq!(
+            bands_frozen, bands_carved,
+            "the annulus fork is unobservable in the bands"
+        );
+        assert!(diff_frozen.is_none() && diff_carved.is_none());
+        assert_eq!(bands_frozen, march);
+    }
+
     #[test]
     fn endpoint_near_cliff_catches() {
         // Cliff at t≈0.03 (right next to receiver) — old 3-probe starts at t=0.25
@@ -942,53 +1004,76 @@ mod tests {
     /// provable mixed-band bound at (δ_sub, δ_sub − κ) with κ the favourable
     /// arc correction of the direct ray — never exceeds the full profile's
     /// exact `terrain_attenuation` bands. Sweeps hill positions, heights and
-    /// distances.
+    /// distances, including hills INSIDE the clamp zone (landing-review
+    /// hardening 2026-08-21): march/bound clamp agreement is pinned where the
+    /// carve actually removes the hill, not just structurally guaranteed.
     #[test]
     fn terrain_subset_bound_never_exceeds_the_full_cadence_bands() {
         use super::super::diffraction::diffraction_mixed_lower_bound;
         use crate::constants::{FAV_RAY_CURVATURE_MIN_M, FAV_RAY_CURVATURE_PER_DSR};
         let src_elev = 10.05;
         let rcv_alt = 11.5;
+        // One case: plant `hill_h` on the sample nearest `hill_t` (never the
+        // source cell itself — that would move the shared e0), run the full
+        // cadence and the K-sample subset bound, assert bound <= full per
+        // band. Returns the hill's distance so callers can assert zone side.
+        let check = |dist: f64, hill_t: f64, hill_h: f32| -> f64 {
+            let mut p = build_flat_profile(dist, 10.0);
+            let (idx, _) =
+                p.t.iter()
+                    .enumerate()
+                    .skip(1)
+                    .min_by(|(_, &a), (_, &b)| {
+                        ((a - hill_t).abs())
+                            .partial_cmp(&((b - hill_t).abs()))
+                            .unwrap()
+                    })
+                    .unwrap();
+            p.elevation_m[idx] = hill_h;
+            let hill_d = p.t[idx] * dist;
+            let full = terrain_attenuation(&mut p, src_elev, rcv_alt);
+            let n = p.t.len();
+            let k = 8usize;
+            let subset: Vec<usize> = (0..k)
+                .map(|j| ((j as f64) * (n - 1) as f64 / (k - 1) as f64).round() as usize)
+                .collect();
+            let t_sub: Vec<f64> = subset.iter().map(|&i| p.t[i]).collect();
+            let e_sub: Vec<f32> = subset.iter().map(|&i| p.elevation_m[i]).collect();
+            // No hill in the subset ⇒ no bound ⇒ sound.
+            if let Some((delta_sub, dsr)) =
+                terrain_subset_delta_lower_bound(&t_sub, &e_sub, dist, src_elev, rcv_alt)
+            {
+                let gamma = FAV_RAY_CURVATURE_MIN_M.max(FAV_RAY_CURVATURE_PER_DSR * dsr);
+                let kappa = 2.0 * gamma * (dsr / (2.0 * gamma)).asin() - dsr;
+                let bound = diffraction_mixed_lower_bound(delta_sub, delta_sub - kappa);
+                for b in 0..NUM_BANDS {
+                    assert!(
+                        bound[b] <= full[b] + 1e-9,
+                        "d={dist} hill_t={hill_t} hill_h={hill_h} band {b}: bound {:.6} > full {:.6}",
+                        bound[b],
+                        full[b]
+                    );
+                }
+            }
+            hill_d
+        };
         for &dist in &[600.0, 1_000.0, 3_000.0] {
             for &hill_t in &[0.2, 0.35, 0.5, 0.65, 0.8] {
                 for &hill_h in &[14.0, 20.0, 30.0, 45.0, 70.0] {
-                    let mut p = build_flat_profile(dist, 10.0);
-                    let (idx, _) =
-                        p.t.iter()
-                            .enumerate()
-                            .min_by(|(_, &a), (_, &b)| {
-                                ((a - hill_t).abs())
-                                    .partial_cmp(&((b - hill_t).abs()))
-                                    .unwrap()
-                            })
-                            .unwrap();
-                    p.elevation_m[idx] = hill_h;
-                    let full = terrain_attenuation(&mut p, src_elev, rcv_alt);
-                    let n = p.t.len();
-                    let k = 8usize;
-                    let subset: Vec<usize> = (0..k)
-                        .map(|j| ((j as f64) * (n - 1) as f64 / (k - 1) as f64).round() as usize)
-                        .collect();
-                    let t_sub: Vec<f64> = subset.iter().map(|&i| p.t[i]).collect();
-                    let e_sub: Vec<f32> = subset.iter().map(|&i| p.elevation_m[i]).collect();
-                    let Some((delta_sub, dsr)) =
-                        terrain_subset_delta_lower_bound(&t_sub, &e_sub, dist, src_elev, rcv_alt)
-                    else {
-                        continue; // no hill in the subset ⇒ no bound ⇒ sound
-                    };
-                    let gamma = FAV_RAY_CURVATURE_MIN_M.max(FAV_RAY_CURVATURE_PER_DSR * dsr);
-                    let kappa = 2.0 * gamma * (dsr / (2.0 * gamma)).asin() - dsr;
-                    let bound = diffraction_mixed_lower_bound(delta_sub, delta_sub - kappa);
-                    for b in 0..NUM_BANDS {
-                        assert!(
-                            bound[b] <= full[b] + 1e-9,
-                            "d={dist} hill_t={hill_t} hill_h={hill_h} band {b}: bound {:.6} > full {:.6}",
-                            bound[b],
-                            full[b]
-                        );
-                    }
+                    check(dist, hill_t, hill_h);
                 }
             }
+        }
+        // Near-source arm: at 600 m the 10 m near-endpoint probe sits INSIDE
+        // the carve zone (hill_d < CELL_M) — the clamp removes the hill in
+        // both the full march (in-place) and the bound (read-time), and the
+        // bound property must still hold.
+        for &hill_h in &[14.0, 20.0, 30.0, 45.0, 70.0] {
+            let hill_d = check(600.0, 0.02, hill_h);
+            assert!(
+                hill_d < CELL_M,
+                "near-source arm must land inside the carve zone, got {hill_d} m"
+            );
         }
     }
 
