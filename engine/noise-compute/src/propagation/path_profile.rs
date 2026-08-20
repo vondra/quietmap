@@ -103,6 +103,17 @@ impl PathProfile {
         scratch.as_slice()
     }
 
+    /// Mutable twin of [`elevation_f64_from`] for callers that transform the
+    /// f64 view in place (the source-platform clamp). Same amortized refill:
+    /// the clamp is idempotent, so a same-length reuse keeps one rule applied.
+    pub fn elevation_f64_from_mut<'a>(scratch: &'a mut Vec<f64>, src: &[f32]) -> &'a mut [f64] {
+        if scratch.len() != src.len() {
+            scratch.clear();
+            scratch.extend(src.iter().map(|&e| e as f64));
+        }
+        scratch.as_mut_slice()
+    }
+
     #[inline]
     pub fn len(&self) -> usize {
         self.t.len()
@@ -111,6 +122,54 @@ impl PathProfile {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.t.is_empty()
+    }
+}
+
+/// Source-platform clamp (SPEC §3.5.1, 2026-08-20): within ONE DEM cell of the
+/// source, bare-earth elevation may not exceed the source cell's own value.
+///
+/// WHY: CNOSSOS puts the point source 0.05 m above the ROAD SURFACE — the road
+/// body (bench, embankment shoulder) is not a diffraction obstacle. A 30 m DEM
+/// cannot resolve that bench: the cells flanking a road mix the embankment
+/// crown with the falling terrain, reading up to ~1.3 m above the road cell
+/// (measured on the D4 at Voznice). On a downhill ray the steep near-source
+/// sight line then grazes that phantom hump and δ flips 0 ↔ ~0.13 m between
+/// receivers 25 m apart (±9 dB terrain term) — razor-straight shadow stripes
+/// radiating from embankment roads (owner verdict 2026-08-20). Clamping the
+/// first cell's samples to the source cell's own elevation removes the phantom
+/// while leaving the genuine embankment-toe graze (the plateau edge) and every
+/// obstacle beyond one cell untouched. Applied at the diffraction evaluation
+/// points only — ground-effect and vegetation keep the raw profile.
+///
+/// The clamp is idempotent and monotone (never raises a sample), so the exact
+/// march, the screening composite and the M3b subset bound all see the same
+/// carved profile by construction.
+pub fn clamp_source_platform(t: &[f64], elevation_m: &mut [f64], dist_m: f64) {
+    debug_assert_eq!(t.len(), elevation_m.len());
+    if t.len() < 2 {
+        return;
+    }
+    let e0 = elevation_m[0];
+    for i in 1..t.len() {
+        if t[i] * dist_m >= CELL_M {
+            break; // t is ascending — the zone ends here for all later samples
+        }
+        if elevation_m[i] > e0 {
+            elevation_m[i] = e0;
+        }
+    }
+}
+
+/// Read-time form of [`clamp_source_platform`] for callers that must not
+/// mutate their input (the M3b subset bound reads a caller-owned slice).
+/// f32→f64 conversion is exact, so clamping in f64 and truncating back is
+/// bit-identical to clamping in f32.
+#[inline]
+pub fn source_platform_clamped(t_i: f64, dist_m: f64, e_i: f64, e0: f64) -> f64 {
+    if t_i * dist_m < CELL_M && e_i > e0 {
+        e0
+    } else {
+        e_i
     }
 }
 
@@ -660,6 +719,55 @@ mod tests {
             "10 km path must fit in 64-slot SmallVec, got {}",
             buf.len()
         );
+    }
+
+    /// The phantom-hump clamp: near-source samples above the source cell's own
+    /// elevation are flattened within one DEM cell; everything else untouched.
+    #[test]
+    fn clamp_source_platform_flattens_only_near_source_excess() {
+        let dist = 200.0;
+        let t = vec![0.0, 0.05, 0.15, 0.155, 0.5, 1.0]; // 0, 10, 30, 31, 100, 200 m
+        let mut e = vec![100.0, 101.3, 102.0, 103.0, 105.0, 99.0];
+        clamp_source_platform(&t, &mut e, dist);
+        assert_eq!(e[0], 100.0, "source sample never moves");
+        assert_eq!(e[1], 100.0, "phantom at 10 m clamped to e0");
+        assert_eq!(e[2], 100.0, "phantom at 30 m clamped to e0");
+        assert_eq!(e[3], 103.0, "beyond one cell (31 m > 30.71 m): untouched");
+        assert_eq!(e[4], 105.0, "mid-path hill untouched");
+        assert_eq!(e[5], 99.0, "receiver sample never moves");
+    }
+
+    /// Samples BELOW e0 within the zone must not be raised (a cutting floor
+    /// stays a floor), and a second run is a no-op (the screening pass may
+    /// re-apply on the shared scratch).
+    #[test]
+    fn clamp_source_platform_never_raises_and_is_idempotent() {
+        let dist = 200.0;
+        let t = vec![0.0, 0.05, 0.15, 0.5, 1.0];
+        let mut e = vec![100.0, 97.0, 101.0, 96.0, 100.0];
+        clamp_source_platform(&t, &mut e, dist);
+        assert_eq!(e, vec![100.0, 97.0, 100.0, 96.0, 100.0]);
+        let before = e.clone();
+        clamp_source_platform(&t, &mut e, dist);
+        assert_eq!(e, before, "idempotent");
+    }
+
+    /// Read-time form agrees with the mutating form point-for-point (the M3b
+    /// subset bound must carve exactly what the exact march carves).
+    #[test]
+    fn source_platform_clamped_matches_mutating_form() {
+        let dist = 173.7;
+        let t = vec![0.0, 0.0576, 0.1468, 0.2354, 0.6, 1.0]; // 10, 25.5, 40.9 m
+        let e = vec![375.28_f64, 375.8, 372.77, 368.92, 367.0, 366.34];
+        let mut carved = e.clone();
+        clamp_source_platform(&t, &mut carved, dist);
+        for i in 0..t.len() {
+            assert_eq!(
+                source_platform_clamped(t[i], dist, e[i], e[0]),
+                carved[i],
+                "sample {i}"
+            );
+        }
     }
 
     #[test]

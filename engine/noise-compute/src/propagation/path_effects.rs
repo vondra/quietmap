@@ -12,7 +12,10 @@ use super::diffraction::DiffractionResult;
 use super::horizon::single_edge_atten;
 use super::iso9613::GroundPath;
 use super::obstacle_index::{segment_intersection_t, CrossingCandidate, ObstacleKind};
-use super::path_profile::{path_integral_u8, vegetation_run_length, PathProfile};
+use super::path_profile::{
+    clamp_source_platform, path_integral_u8, source_platform_clamped, vegetation_run_length,
+    PathProfile,
+};
 use super::vegetation;
 use crate::constants::{M_PER_DEG_LAT, M_PER_DEG_LON_EQ};
 use crate::types::{
@@ -101,7 +104,11 @@ fn compute_terrain_diffraction<'a>(
         elevation_f64_scratch,
         ..
     } = profile;
-    let prof_f64 = PathProfile::elevation_f64_from(elevation_f64_scratch, elevation_m);
+    let prof_f64 = PathProfile::elevation_f64_from_mut(elevation_f64_scratch, elevation_m);
+    // Source-platform clamp: the phantom near-source hump must not diffract
+    // (SPEC §3.5.1). The scratch is shared with the screening pass below, so
+    // the composite profile inherits the same carved bare-earth by construction.
+    clamp_source_platform(t, prof_f64, dist_m);
     // Single-edge δ over bare-earth (was the multi-edge hull compute_path_difference).
     let (bands, diff) = single_edge_atten(t, prof_f64, prof_f64, dist_m, src_h, rcv_h);
     Some(TerrainDiffraction {
@@ -140,23 +147,26 @@ pub fn terrain_subset_delta_lower_bound(
         return None;
     }
     let dz_total = rcv_alt - src_elev;
-    if !t
-        .iter()
-        .zip(elevation_m.iter())
-        .any(|(&ti, &e)| (e as f64) > src_elev + dz_total * ti)
-    {
+    let e0 = elevation_m[0] as f64;
+    // Source-platform clamp, read-time form (SPEC §3.5.1): the exact march
+    // carves the same samples, so a subset clamped by the same rule stays a
+    // sound lower bound of the carved full march (subset-of-carved =
+    // carved-of-subset — the rule is pointwise in (t, e) given shared e0).
+    if !t.iter().zip(elevation_m.iter()).any(|(&ti, &e)| {
+        source_platform_clamped(ti, dist_m, e as f64, e0) > src_elev + dz_total * ti
+    }) {
         return None;
     }
-    let src_h = (src_elev - elevation_m[0] as f64).max(0.05);
+    let src_h = (src_elev - e0).max(0.05);
     let rcv_h = (rcv_alt - elevation_m[n - 1] as f64)
         .max(crate::constants::DEFAULT_RECEIVER_HEIGHT.min(0.5));
-    let src_e = elevation_m[0] as f64 + src_h;
+    let src_e = e0 + src_h;
     let rcv_e = elevation_m[n - 1] as f64 + rcv_h;
     let dsr = (dist_m * dist_m + (rcv_e - src_e).powi(2)).sqrt();
     let mut best = 0.0f64;
     let mut any = false;
     for i in 1..n - 1 {
-        let top = elevation_m[i] as f64;
+        let top = source_platform_clamped(t[i], dist_m, elevation_m[i] as f64, e0);
         let los = src_e + (rcv_e - src_e) * t[i];
         if top <= los {
             continue;
@@ -428,7 +438,13 @@ pub fn screening_attenuation_with_meta(
         composite_h_scratch,
         ..
     } = profile;
-    let elevation_f64: &[f64] = PathProfile::elevation_f64_from(elevation_f64_scratch, elevation_m);
+    let elevation_f64_mut = PathProfile::elevation_f64_from_mut(elevation_f64_scratch, elevation_m);
+    // Same source-platform clamp as the terrain pass (idempotent when that
+    // pass already ran on this profile — the shared scratch stays carved):
+    // without it a phantom hump the terrain pass carved away would re-enter
+    // through the composite as a spurious "screening" increment (SPEC §3.5.1).
+    clamp_source_platform(t, elevation_f64_mut, dist_m);
+    let elevation_f64: &[f64] = elevation_f64_mut;
 
     // 3. Composite top profile = elevation + raster building height, with the
     //    exclusion radius zeroing buildings near the source. Barriers are NOT
@@ -778,6 +794,74 @@ mod tests {
             1,
             "expected exactly the one dominant diffraction edge"
         );
+    }
+
+    /// THE defect SPEC §3.5.1 exists for: a phantom shoulder hump one sample
+    /// (~10 m) from the source on a downhill embankment path must NOT dominate
+    /// the terrain term — after the platform clamp, only the genuine plateau
+    /// edge (source cell's own elevation) may diffract. Geometry measured on
+    /// the D4 at Voznice (owner report 2026-08-20): src cell 375.28, phantom
+    /// 375.80 at 10 m, receiver 51 m downhill at 366.34.
+    #[test]
+    fn phantom_shoulder_hump_is_carved_to_the_platform() {
+        let dist = 50.9;
+        let mut p = PathProfile::new();
+        p.dist_m = dist;
+        p.t = vec![0.0, 0.1963, 0.5, 0.8037, 1.0];
+        p.elevation_m = vec![375.28, 375.80, 371.0, 369.0, 366.34];
+        p.building_h_m = vec![0; 5];
+        p.forest_u8 = vec![0; 5];
+        p.imd_u8 = vec![50; 5];
+        let src_elev = 375.28 + 0.05;
+        let rcv_alt = 366.34 + 4.0;
+        let (trace, _) = terrain_attenuation_with_meta(&mut p, src_elev, rcv_alt);
+        // The dominant edge still sits at 10 m — but at the CLAMPED platform
+        // elevation, so δ is the plateau-edge 0.053 m, not the phantom 0.13 m
+        // (values from the offline harness on the live DEM at this geometry).
+        assert_eq!(trace.edges.len(), 1);
+        assert!((trace.edges[0].t - 0.1963).abs() < 1e-9);
+        assert!(
+            (trace.edges[0].elevation_m - 375.28).abs() < 1e-3,
+            "edge elevation must be the clamped platform, got {}",
+            trace.edges[0].elevation_m
+        );
+        assert!(
+            (trace.delta_m - 0.0533).abs() < 0.002,
+            "plateau-edge δ, got {}",
+            trace.delta_m
+        );
+        // High-band attenuation drops from the phantom's ~18 dB to ~14.4 dB;
+        // low bands stay ~5 dB (the genuine shoulder graze is kept).
+        assert!(
+            (trace.attenuation_bands[7] - 14.39).abs() < 0.2,
+            "8 kHz band, got {}",
+            trace.attenuation_bands[7]
+        );
+    }
+
+    /// A real cut slope rising WITHIN one cell of the source is also clamped —
+    /// the price of the rule, pinned so the trade-off is explicit in review:
+    /// shielding from intra-cell cut geometry is surrendered; slopes beyond
+    /// one cell (the resolvable kind) screen exactly as before.
+    #[test]
+    fn cut_slope_beyond_one_cell_still_screens() {
+        let dist = 200.0;
+        let mut p = PathProfile::new();
+        p.dist_m = dist;
+        // Cut floor at 100, slope crest +6 m at 40 m (beyond CELL_M).
+        p.t = vec![0.0, 0.05, 0.2, 0.5, 1.0];
+        p.elevation_m = vec![100.0, 101.0, 106.0, 103.0, 100.0];
+        p.building_h_m = vec![0; 5];
+        p.forest_u8 = vec![0; 5];
+        p.imd_u8 = vec![50; 5];
+        let (trace, _) = terrain_attenuation_with_meta(&mut p, 100.05, 104.0);
+        assert_eq!(trace.edges.len(), 1, "the crest must remain the edge");
+        assert!(
+            (trace.edges[0].elevation_m - 106.0).abs() < 1e-9,
+            "beyond-cell crest is untouched, got {}",
+            trace.edges[0].elevation_m
+        );
+        assert!(trace.delta_m > 0.0);
     }
 
     #[test]
