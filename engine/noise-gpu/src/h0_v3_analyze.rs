@@ -1,4 +1,10 @@
-//! Fail-closed analyser for the pre-registered CPU H0 V3 field matrix.
+//! Fail-closed analyser for the pre-registered sampled CPU H0 V3 field matrix.
+//!
+//! Every arm must be a `QMV3H0F3` field over the same frozen 1,024 ascending
+//! receiver keys. An accepted matrix emits `H0_QUADRATURE_ACCEPTED_SAMPLED`
+//! and records the sealed 95% zero-event exceedance bounds rather than making
+//! a full-resolution claim. Authority: `ESCALATIONS.md` SHA-256
+//! `6d6b8239f1107cd62d2fc81f063d971c3753e75f8f524ad7c76e42f7acdf1fa3`.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
@@ -12,6 +18,9 @@ use noise_compute::propagation::h0_v3::{
     H0_V3_RAW_CANDIDATES_PER_PAIR_MAX, H_JUDGE_MAX, JUDGE_LOGICAL_HINT_BYTES_MAX,
 };
 use serde::Serialize;
+use tile_painter::h0_v3_sampler::{
+    H0_V3_RECEIVER_POPULATION, H0_V3_SAMPLED_RECEIVERS, H0_V3_SAMPLER_RULE_ID, H0_V3_SAMPLER_SEED,
+};
 
 use noise_gpu::h0_v3_field::{
     read_h0_v3_observations, sha256_file_hex, H0V3FieldArm, H0V3FieldIdentity,
@@ -29,6 +38,27 @@ const ARM_NAMES: [(&str, H0V3FieldArm); 7] = [
 
 const H0_ARM_NAMES: [&str; 4] = ["h0-5", "h0-4", "h0-3", "h0-2"];
 
+const ZERO_EVENT_ALPHA: f64 = 0.05;
+const SEALED_PER_CASE_PERCENT: f64 = 0.29212;
+const SEALED_POOLED_PERCENT: f64 = 0.0732;
+
+#[derive(Serialize)]
+struct PopulationViolationUpper95 {
+    confidence_percent: u8,
+    per_case_fraction: f64,
+    per_case_percent: f64,
+    per_case_population_receivers_at_most: usize,
+    pooled_fraction: f64,
+    pooled_percent: f64,
+}
+
+#[derive(Serialize)]
+struct SamplerIdentity {
+    rule_id: &'static str,
+    seed: String,
+    sampled_receivers_per_case: usize,
+}
+
 #[derive(Serialize)]
 struct CaseAnalysis<'a> {
     case: &'a str,
@@ -44,6 +74,10 @@ struct AnalysisReceipt<'a> {
     verdict: &'static str,
     design_v3_sha256: &'static str,
     plan_v9_sha256: &'static str,
+    sampled_receivers_per_case: usize,
+    population_violation_upper_95: PopulationViolationUpper95,
+    sampled_presence_flips: Option<usize>,
+    sampler_identity: SamplerIdentity,
     cases: Vec<CaseAnalysis<'a>>,
     aggregate_judge_halving: H0V3DeltaSummary,
     aggregate_h0: BTreeMap<u8, H0V3DeltaSummary>,
@@ -96,6 +130,29 @@ struct ArmReceipt {
     binary_sha256: String,
     field_sha256: String,
     surface_budget_eta: String,
+}
+
+fn zero_event_population_violation_upper_95(sample_count: usize) -> f64 {
+    debug_assert!(sample_count > 0);
+    1.0 - ZERO_EVENT_ALPHA.powf(1.0 / sample_count as f64)
+}
+
+fn sampled_population_violation_upper_95() -> PopulationViolationUpper95 {
+    let per_case_fraction = zero_event_population_violation_upper_95(H0_V3_SAMPLED_RECEIVERS);
+    let pooled_fraction =
+        zero_event_population_violation_upper_95(H0_V3_SAMPLED_RECEIVERS * H0_V3_CASES.len());
+    PopulationViolationUpper95 {
+        confidence_percent: 95,
+        per_case_fraction,
+        // These displayed percentages are verbatim sealed statements. The
+        // full-precision fractions above remain the arithmetic authority.
+        per_case_percent: SEALED_PER_CASE_PERCENT,
+        per_case_population_receivers_at_most: (per_case_fraction
+            * H0_V3_RECEIVER_POPULATION as f64)
+            .ceil() as usize,
+        pooled_fraction,
+        pooled_percent: SEALED_POOLED_PERCENT,
+    }
 }
 
 fn is_sha256(value: &str) -> bool {
@@ -297,10 +354,12 @@ fn main() -> Result<()> {
     let verdict = if !every_case_judge_passes {
         "JUDGE_CONVERGENCE_FAILED"
     } else if selected.is_some() {
-        "H0_QUADRATURE_ACCEPTED"
+        "H0_QUADRATURE_ACCEPTED_SAMPLED"
     } else {
         "NEEDS_H32"
     };
+    let sampled_presence_flips =
+        selected.map(|theta| aggregate_h0[&theta.degrees()].period_presence_flips);
     let selected_stock_model_delta =
         selected.map(|theta| aggregate_stock_model_delta[&theta.degrees()].clone());
     let receipt = AnalysisReceipt {
@@ -308,6 +367,14 @@ fn main() -> Result<()> {
         verdict,
         design_v3_sha256: "382ee570373553c7007ef4a477ffc6951d407daccff0d8725f0582d0e857605b",
         plan_v9_sha256: "65ce0074a3b9bfc8a62293a093a3ebfc1b5216d07c7f14c3fae4e68ecdc09dba",
+        sampled_receivers_per_case: H0_V3_SAMPLED_RECEIVERS,
+        population_violation_upper_95: sampled_population_violation_upper_95(),
+        sampled_presence_flips,
+        sampler_identity: SamplerIdentity {
+            rule_id: H0_V3_SAMPLER_RULE_ID,
+            seed: format!("0x{H0_V3_SAMPLER_SEED:016x}"),
+            sampled_receivers_per_case: H0_V3_SAMPLED_RECEIVERS,
+        },
         cases: case_analyses,
         aggregate_judge_halving,
         aggregate_h0,
@@ -335,4 +402,21 @@ fn main() -> Result<()> {
     )?;
     verdict_output.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sealed_zero_event_bounds_follow_the_registered_arithmetic() {
+        let bounds = sampled_population_violation_upper_95();
+
+        assert!((bounds.per_case_fraction - 0.002_921_244_635_388_009_5).abs() < 1.0e-15);
+        assert!((bounds.pooled_fraction - 0.000_731_112_556_475_399_5).abs() < 1.0e-15);
+        assert_eq!(bounds.per_case_percent, 0.29212);
+        assert_eq!(bounds.pooled_percent, 0.0732);
+        assert_eq!(bounds.per_case_population_receivers_at_most, 766);
+        assert_eq!(bounds.confidence_percent, 95);
+    }
 }

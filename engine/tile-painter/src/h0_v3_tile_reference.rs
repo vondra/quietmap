@@ -1,4 +1,4 @@
-//! Full 512x512 CPU field driver for pre-registered H0 V3 arms.
+//! Sampled CPU field driver for the pre-registered H0 V3 arms.
 
 use noise_compute::compute::element::LineLayer;
 use noise_compute::propagation::h0_streaming_reduction::H0Candidate;

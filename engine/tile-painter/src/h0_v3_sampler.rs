@@ -22,7 +22,9 @@
 //! rule yields from the four sealed GO-1 `h0-3` walls and judge-node censuses —
 //! the largest power of two under 8192 keeping the binding case (`praha-rail`,
 //! 43.72431 s of seven-arm work per receiver) inside the sealed 20 wall-hour
-//! budget, i.e. `S_max = 1646.7`. See the sealed pre-registration block.
+//! budget, i.e. `S_max = 1646.7`. The authority is the sealed
+//! `ESCALATIONS.md` block with SHA-256
+//! `6d6b8239f1107cd62d2fc81f063d971c3753e75f8f524ad7c76e42f7acdf1fa3`.
 
 use sha2::{Digest, Sha256};
 
@@ -30,6 +32,9 @@ use raster_reader::fused_tile_z13::TILE_PX;
 
 /// Receivers scored per case. Rule-derived and sealed; never an operator input.
 pub const H0_V3_SAMPLED_RECEIVERS: usize = 1024;
+
+/// Stable receipt identity for the sealed uniform-without-replacement rule.
+pub const H0_V3_SAMPLER_RULE_ID: &str = "H0_V3_UNIFORM_SHA256_V1";
 
 /// Frozen sampler seed: the eight ASCII bytes `H0V3S7!1`, big-endian. The value
 /// is arbitrary by nature — what is binding is that it was fixed before any

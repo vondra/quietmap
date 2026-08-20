@@ -1,4 +1,10 @@
-//! Versioned binary field shared by the CPU H0 V3 renderer and analyser.
+//! Sampled binary field shared by the CPU H0 V3 renderer and analyser.
+//!
+//! Format 3 (`QMV3H0F3`) carries exactly 1,024 receiver keys in ascending
+//! order. Both writer and reader bind those keys to the frozen uniform S7
+//! sampler, so a truncated, full-resolution, or differently sampled arm fails
+//! before scoring. This is the sampled protocol sealed by `ESCALATIONS.md`
+//! SHA-256 `6d6b8239f1107cd62d2fc81f063d971c3753e75f8f524ad7c76e42f7acdf1fa3`.
 
 use std::fmt::Write as _;
 use std::fs::File;
@@ -11,6 +17,7 @@ use raster_reader::fused_tile_z13::TILE_PX;
 use sha2::{Digest, Sha256};
 use tile_painter::accumulator::NUM_PERIODS;
 use tile_painter::h0_pair_reference::H0V3PairArm;
+use tile_painter::h0_v3_sampler::{h0_v3_sampled_receivers, H0_V3_SAMPLED_RECEIVERS};
 use tile_painter::h0_v3_tile_reference::H0V3TileField;
 
 /// Format 3 carries an explicit sampled receiver key list. Format 2 was the
@@ -122,7 +129,7 @@ pub fn write_h0_v3_field(
     field: &H0V3TileField,
 ) -> Result<(), H0V3FieldError> {
     let receiver_count = field.receiver_indices.len();
-    if receiver_count == 0
+    if receiver_count != H0_V3_SAMPLED_RECEIVERS
         || field.period_power_f32.len() != receiver_count
         || field.period_band_power.len() != receiver_count
     {
@@ -136,6 +143,9 @@ pub fn write_h0_v3_field(
             return Err(H0V3FieldError::InvalidValue);
         }
         previous = Some(index);
+    }
+    if field.receiver_indices != h0_v3_sampled_receivers(identity.case_index) {
+        return Err(H0V3FieldError::InvalidValue);
     }
     let mut output = BufWriter::new(File::create(path).map_err(|_| H0V3FieldError::Io)?);
     output
@@ -220,8 +230,7 @@ pub fn read_h0_v3_observations(
         return Err(H0V3FieldError::InvalidHeader);
     }
     let receiver_count = header[6] as usize;
-    if receiver_count == 0
-        || receiver_count > TILE_PX * TILE_PX
+    if receiver_count != H0_V3_SAMPLED_RECEIVERS
         || metadata.len() != h0_v3_field_bytes(receiver_count) as u64
     {
         return Err(H0V3FieldError::InvalidLength);
@@ -241,6 +250,9 @@ pub fn read_h0_v3_observations(
         }
         previous = Some(index);
         receiver_indices.push(index);
+    }
+    if receiver_indices != h0_v3_sampled_receivers(expected.case_index) {
+        return Err(H0V3FieldError::InvalidValue);
     }
     let mut observations = Vec::with_capacity(receiver_count);
     for &pixel_index in &receiver_indices {
@@ -277,6 +289,42 @@ pub fn read_h0_v3_observations(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::{self, OpenOptions};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    fn test_field_path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "quietmap-h0-v3-field-{}-{label}-{}",
+            std::process::id(),
+            TEST_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    fn write_zero_field(path: &Path, magic: [u8; 8], case_index: u32, receiver_indices: &[u32]) {
+        let mut output = BufWriter::new(File::create(path).unwrap());
+        output.write_all(&magic).unwrap();
+        for value in [
+            H0_V3_FIELD_VERSION,
+            TILE_PX as u32,
+            NUM_PERIODS as u32,
+            NUM_BANDS as u32,
+            case_index,
+            arm_code(H0V3FieldArm::JudgeFine),
+            receiver_indices.len() as u32,
+        ] {
+            output.write_all(&value.to_le_bytes()).unwrap();
+        }
+        for receiver_index in receiver_indices {
+            output.write_all(&receiver_index.to_le_bytes()).unwrap();
+        }
+        let zero_observation = vec![0_u8; H0_V3_FIELD_BYTES_PER_RECEIVER - size_of::<u32>()];
+        for _ in receiver_indices {
+            output.write_all(&zero_observation).unwrap();
+        }
+        output.flush().unwrap();
+    }
 
     #[test]
     fn arm_codes_are_complete_and_unique() {
@@ -292,5 +340,73 @@ mod tests {
         for arm in arms {
             assert_eq!(arm_from_code(arm_code(arm)), Ok(arm));
         }
+    }
+
+    #[test]
+    fn sampled_format_three_parses_the_frozen_ascending_key_list() {
+        let path = test_field_path("valid");
+        let receiver_indices = h0_v3_sampled_receivers(0);
+        write_zero_field(&path, H0_V3_FIELD_MAGIC, 0, &receiver_indices);
+        let observations = read_h0_v3_observations(
+            &path,
+            H0V3FieldIdentity {
+                case_index: 0,
+                arm: H0V3FieldArm::JudgeFine,
+            },
+        )
+        .unwrap();
+        fs::remove_file(path).unwrap();
+
+        assert_eq!(observations.len(), H0_V3_SAMPLED_RECEIVERS);
+        assert_eq!(observations[0].key, u64::from(receiver_indices[0]));
+        assert_eq!(
+            observations.last().unwrap().key,
+            u64::from(*receiver_indices.last().unwrap())
+        );
+    }
+
+    #[test]
+    fn truncated_mixed_and_differently_sampled_fields_fail_closed() {
+        let identity = H0V3FieldIdentity {
+            case_index: 0,
+            arm: H0V3FieldArm::JudgeFine,
+        };
+        let receiver_indices = h0_v3_sampled_receivers(0);
+
+        let truncated = test_field_path("truncated");
+        write_zero_field(&truncated, H0_V3_FIELD_MAGIC, 0, &receiver_indices);
+        let length = fs::metadata(&truncated).unwrap().len();
+        OpenOptions::new()
+            .write(true)
+            .open(&truncated)
+            .unwrap()
+            .set_len(length - 1)
+            .unwrap();
+        assert_eq!(
+            read_h0_v3_observations(&truncated, identity),
+            Err(H0V3FieldError::InvalidLength)
+        );
+        fs::remove_file(truncated).unwrap();
+
+        let mixed_format = test_field_path("format-two");
+        write_zero_field(&mixed_format, *b"QMV3H0F2", 0, &receiver_indices);
+        assert_eq!(
+            read_h0_v3_observations(&mixed_format, identity),
+            Err(H0V3FieldError::InvalidHeader)
+        );
+        fs::remove_file(mixed_format).unwrap();
+
+        let wrong_sample = test_field_path("wrong-sample");
+        write_zero_field(
+            &wrong_sample,
+            H0_V3_FIELD_MAGIC,
+            0,
+            &h0_v3_sampled_receivers(1),
+        );
+        assert_eq!(
+            read_h0_v3_observations(&wrong_sample, identity),
+            Err(H0V3FieldError::InvalidValue)
+        );
+        fs::remove_file(wrong_sample).unwrap();
     }
 }
