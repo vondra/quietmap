@@ -61,12 +61,19 @@ fn main() -> Result<()> {
     let (zoom, x, y): (u8, u32, u32) = (a[2].parse()?, a[3].parse()?, a[4].parse()?);
 
     let cell = CellIndex::try_from(r4).map_err(|e| anyhow::anyhow!("bad r4: {e}"))?;
-    let ring: Vec<u64> = cell.grid_disk::<Vec<_>>(1).into_iter().map(Into::into).collect();
+    let ring: Vec<u64> = cell
+        .grid_disk::<Vec<_>>(1)
+        .into_iter()
+        .map(Into::into)
+        .collect();
     let rows = RailData::load_for_r4s(&h3r4, &ring, Admin::UNKNOWN)?.into_rows();
 
     let bbox = TileBbox::from_xyz(zoom, x, y);
     let slack = block_slack_m(&bbox);
-    let kept = rows.iter().filter(|r| reaches_tile(r, &bbox, slack)).count();
+    let kept = rows
+        .iter()
+        .filter(|r| reaches_tile(r, &bbox, slack))
+        .count();
 
     println!("region rows        {}", rows.len());
     println!("block slack        {slack:.1} m");
