@@ -696,7 +696,14 @@ pub fn cnossos_ground_path_from_profile(
         elevation_f64_scratch,
         ..
     } = profile;
-    let elevation_m = PathProfile::elevation_f64_from(elevation_f64_scratch, elevation_m);
+    // FORCE-REFILL, never the amortized reuse: the terrain/screening passes
+    // carve this scratch with the source-platform clamp (SPEC §3.5.1), and the
+    // ground mean-plane must fit the RAW profile. Those passes re-apply their
+    // clamp unconditionally after every refill, so any call order stays
+    // correct (ground → terrain or terrain → ground).
+    elevation_f64_scratch.clear();
+    elevation_f64_scratch.extend(elevation_m.iter().map(|&e| e as f64));
+    let elevation_m: &[f64] = elevation_f64_scratch;
     let (slope, intercept) = diffraction::fit_mean_ground_plane(t, elevation_m, 0.0, dist_m);
     let src_plane_m = intercept;
     let rcv_plane_m = slope * dist_m + intercept;
@@ -802,6 +809,33 @@ mod tests {
     /// edge (source cell's own elevation) may diffract. Geometry measured on
     /// the D4 at Voznice (owner report 2026-08-20): src cell 375.28, phantom
     /// 375.80 at 10 m, receiver 51 m downhill at 366.34.
+    /// The ground mean-plane must read the RAW profile even after the
+    /// terrain pass carved the shared scratch (SPEC §3.5.1): ground result is
+    /// identical whether or not terrain ran first, and repeats are stable.
+    #[test]
+    fn ground_path_is_blind_to_the_platform_clamp() {
+        let build = || {
+            let mut p = PathProfile::new();
+            p.dist_m = 50.9;
+            p.t = vec![0.0, 0.1963, 0.5, 0.8037, 1.0];
+            p.elevation_m = vec![375.28, 375.80, 371.0, 369.0, 366.34];
+            p.building_h_m = vec![0; 5];
+            p.forest_u8 = vec![0; 5];
+            p.imd_u8 = vec![50; 5];
+            p
+        };
+        let mut fresh = build();
+        let raw = cnossos_ground_path_from_profile(&mut fresh, 375.33, 370.34, false);
+        let mut used = build();
+        let _ = terrain_attenuation(&mut used, 375.33, 370.34);
+        let after_terrain = cnossos_ground_path_from_profile(&mut used, 375.33, 370.34, false);
+        let after_repeat = cnossos_ground_path_from_profile(&mut used, 375.33, 370.34, false);
+        assert_eq!(raw.dp_m, after_terrain.dp_m);
+        assert_eq!(raw.zs_h_m, after_terrain.zs_h_m, "source plane moved");
+        assert_eq!(raw.zr_h_m, after_terrain.zr_h_m, "receiver plane moved");
+        assert_eq!(raw.zs_h_m, after_repeat.zs_h_m, "repeat not stable");
+    }
+
     #[test]
     fn phantom_shoulder_hump_is_carved_to_the_platform() {
         let dist = 50.9;
