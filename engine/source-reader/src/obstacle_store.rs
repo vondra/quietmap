@@ -15,6 +15,11 @@
 //!   raster buildings where coverage is absent — silent under-screening.
 //!   `QM_OBSTACLES_ALLOW_PARTIAL=1` relaxes ONLY the missing-cell rule for
 //!   dev A/B runs inside a partially staged world; shard errors always abort.
+//!   EXCEPTION (ingested-empty proof): a shard-less cell whose every
+//!   overlapped 1-degree tile is listed in the world ingest manifest
+//!   (`.ingested-tiles`) was provably swept and contributed zero footprints
+//!   — it is EMPTY, not missing, and vector mode proceeds without it
+//!   (`propagation::obstacle_ingest_coverage`).
 //!
 //! Shard roots, per cell, first hit wins: the PROMOTED tree
 //! (`…/prepared/{year}/h3r4/<cell>/obstacles*.arrow`, post-Wave-1) and the
@@ -426,6 +431,7 @@ pub fn load_obstacle_set(
 ) -> Option<ObstacleSet> {
     let allow_partial = std::env::var("QM_OBSTACLES_ALLOW_PARTIAL").is_ok_and(|v| v == "1");
     let cell = LatLng::new(lat, lon).ok()?.to_cell(Resolution::Four);
+    let manifest = ingest_manifest(h3r4_dir, data_dir);
     let mut indexes = Vec::new();
     for c in cell.grid_disk::<Vec<_>>(1) {
         let dir = match cell_dir(h3r4_dir, data_dir, c) {
@@ -437,6 +443,13 @@ pub fn load_obstacle_set(
             }
             Ok(Some(dir)) => dir,
             Ok(None) => {
+                if manifest.is_some_and(|m| m.covers_cell(c)) {
+                    // INGESTED-EMPTY, proven by the world ingest manifest —
+                    // vector mode proceeds without this cell's index (the
+                    // tile-painter loader's twin rule; see
+                    // obstacle_ingest_coverage for why this drops nothing).
+                    continue;
+                }
                 if c == cell {
                     return None; // query cell itself not ingested — plain raster
                 }
@@ -461,10 +474,53 @@ pub fn load_obstacle_set(
     }
     let set = ObstacleSet { indexes };
     if set.edge_count() == 0 {
-        None
+        // Every ring cell staged-with-shards yet all empty, or all proven
+        // ingested-empty: keep vector mode — an empty set screens nothing and
+        // reflects 0 dB, exactly what the equally empty raster channel would
+        // say, and the query never touches the raster at all.
+        eprintln!("obstacle_store: vector mode with 0 edges (all ingested-empty)");
+        Some(set)
     } else {
         Some(set)
     }
+}
+
+/// The world-ingest manifest next to the staging tree, when present (the
+/// tile-painter loader's twin). Absent ⇒ coverage unknown ⇒ the strict
+/// all-or-raster fallback keeps today's behavior.
+fn ingest_manifest(
+    h3r4_dir: Option<&Path>,
+    data_dir: &Path,
+) -> Option<&'static noise_compute::propagation::obstacle_ingest_coverage::IngestManifest> {
+    // The tile-painter staging_root derivation (h3r4 ancestors) and the
+    // popup's (data_dir parent) meet at the same tree; prefer whichever
+    // resolves with the manifest file actually present.
+    let mut candidates = Vec::new();
+    if let Some(h3r4) = h3r4_dir {
+        if std::env::var("QM_OBSTACLES_DIR").is_err() {
+            if let Some(root) = h3r4
+                .ancestors()
+                .nth(3)
+                .map(|d| d.join("enrichment/global/overture-obstacles"))
+            {
+                candidates.push(root.join(".ingested-tiles"));
+            }
+        }
+    }
+    candidates.push(
+        staging_root(data_dir)
+            .parent()
+            .map(|p| p.join(".ingested-tiles"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".ingested-tiles")),
+    );
+    for path in candidates {
+        if let Some(m) =
+            noise_compute::propagation::obstacle_ingest_coverage::IngestManifest::load_cached(&path)
+        {
+            return Some(m);
+        }
+    }
+    None
 }
 
 /// Tallest structure the height probe will report (m) — comfortably above the

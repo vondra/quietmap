@@ -155,17 +155,20 @@ impl FusedTileZ13 {
         Self::build_with_halo(zoom, tile_x, tile_y, rasters, halo)
     }
 
-    /// Build only the inner core; reuse an externally provided halo.
-    ///
-    /// The halo's bbox must cover the tile bbox extended by [`HALO_M`]
-    /// on every side — usually because the halo was built once for the
-    /// enclosing [`TileBatch`].
-    pub fn build_with_halo(
+    /// [`Self::build_with_halo`] with the receiver-reflection source chosen
+    /// by the caller: `rx_refl_from_raster = false` leaves `rx_refl_db`
+    /// zeroed so a caller that vector-bakes reflection
+    /// (`source_loader_obstacle::bake_tile_vector_rx_refl`) does not ALSO
+    /// pay the raster 3×3 probe per pixel — in vector regions the raster
+    /// bake was pure waste, computed only to be overwritten tile by tile.
+    /// Zero is the neutral value: an unpainted tile never reads it.
+    pub fn build_with_halo_opt_rx_refl(
         zoom: u8,
         tile_x: u32,
         tile_y: u32,
         rasters: &RealRasters,
         halo: Arc<FusedGrid>,
+        rx_refl_from_raster: bool,
     ) -> Self {
         let bbox = TileBbox::from_xyz(zoom, tile_x, tile_y);
 
@@ -204,7 +207,9 @@ impl FusedTileZ13 {
                 inner_forest[idx] = rasters.forest.sample(lat, lon) as u8;
                 inner_imd[idx] = rasters.imd.sample(lat, lon).round() as u8;
                 rx_alt_m[idx] = elev + DEFAULT_RECEIVER_HEIGHT as f32;
-                rx_refl_db[idx] = halo.building_enclosure(lat, lon) as f32;
+                if rx_refl_from_raster {
+                    rx_refl_db[idx] = halo.building_enclosure(lat, lon) as f32;
+                }
             }
         }
 
@@ -223,6 +228,21 @@ impl FusedTileZ13 {
             rx_refl_db,
             halo,
         }
+    }
+
+    /// Build only the inner core; reuse an externally provided halo.
+    ///
+    /// The halo's bbox must cover the tile bbox extended by [`HALO_M`]
+    /// on every side — usually because the halo was built once for the
+    /// enclosing [`TileBatch`].
+    pub fn build_with_halo(
+        zoom: u8,
+        tile_x: u32,
+        tile_y: u32,
+        rasters: &RealRasters,
+        halo: Arc<FusedGrid>,
+    ) -> Self {
+        Self::build_with_halo_opt_rx_refl(zoom, tile_x, tile_y, rasters, halo, true)
     }
 
     /// Build the receiver lattice and altitude only. This is for NPD aircraft heatmap paths only: airborne
@@ -523,6 +543,22 @@ impl TileBatch {
         halo_m: f64,
         rasters: &RealRasters,
     ) -> Self {
+        Self::build_opt_rx_refl(zoom, base_x, base_y, batch_n, halo_m, rasters, true)
+    }
+
+    /// [`Self::build`] with the raster receiver-reflection bake optional —
+    /// pass `false` when every REQUESTED tile of the batch gets its vector
+    /// `rx_refl_db` pre-bake (`bake_tile_vector_rx_refl`); unrequested tiles
+    /// are never painted and keep the neutral 0 dB.
+    pub fn build_opt_rx_refl(
+        zoom: u8,
+        base_x: u32,
+        base_y: u32,
+        batch_n: u32,
+        halo_m: f64,
+        rasters: &RealRasters,
+        rx_refl_from_raster: bool,
+    ) -> Self {
         assert!(batch_n >= 1, "batch_n must be ≥ 1");
         let batch_bbox = Self::batch_bbox(zoom, base_x, base_y, batch_n);
         let halo = Arc::new(build_halo_for(rasters, &batch_bbox, halo_m));
@@ -530,12 +566,13 @@ impl TileBatch {
         let mut tiles = Vec::with_capacity((batch_n * batch_n) as usize);
         for dy in 0..batch_n {
             for dx in 0..batch_n {
-                tiles.push(FusedTileZ13::build_with_halo(
+                tiles.push(FusedTileZ13::build_with_halo_opt_rx_refl(
                     zoom,
                     base_x + dx,
                     base_y + dy,
                     rasters,
                     halo.clone(),
+                    rx_refl_from_raster,
                 ));
             }
         }

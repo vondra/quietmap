@@ -13,6 +13,7 @@ pub mod iso9613;
 pub mod node_eval;
 pub mod obstacle_index;
 pub mod obstacle_index_file;
+pub mod obstacle_ingest_coverage;
 pub mod path_effects;
 pub mod path_profile;
 pub mod seg_sampling;

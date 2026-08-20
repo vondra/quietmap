@@ -1392,6 +1392,24 @@ double-hits evaluated twice instead of deduped (identical bands in fp32).
 e2-full run with `QM_VECTOR_BUILDINGS=1` is the parity gate (hard-fails on
 zero-sided cells, a missing store, or a tile where no candidate fires).
 
+Vector-mode raster residuals CLOSED by the bldgfix branch (2026-08-20):
+the surface batch no longer ALSO bakes the raster 3×3 probe into `rx_refl_db`
+(`TileBatch::build_opt_rx_refl(…, false)` — the vector pre-bake is the one
+writer for painted tiles, so the raster bake was pure waste), and the
+roads/rail group-histogram probe ("N of M segments had obstacles", popup
+transparency only — no dB reads it) answers from exact footprint crossings
+(`ObstacleSet::max_height_crossed`) instead of the raster cadence walk; the
+raster walk survives only on the raster-fallback path. The all-or-raster
+loader policy additionally treats a shard-less cell whose every overlapped
+1-degree tile is listed in the world ingest manifest (`.ingested-tiles`,
+`obstacle_ingest_coverage`) as INGESTED-EMPTY rather than missing — vector
+mode proceeds without it, because our building raster derives from the same
+Overture release and would contribute nothing there. Known remaining raster
+consumer in vector mode: `PathProfile::building_h_m` feeds the composite
+top profile that terrain diffraction (§3.5) rides — removing it changes
+model semantics (buildings as topography) and is scheduled separately from
+this branch.
+
 ### 3.9 Favourable meteorological conditions (CNOSSOS-EU §2.5.21)
 ✅ LIVE — `FAVOURABLE_MIXING = true` since 2026-07-28 (eb8a432; OUTPUT_VER
 bump for the 5 surface layers in 0db-private 66b1d3ff; world repaint

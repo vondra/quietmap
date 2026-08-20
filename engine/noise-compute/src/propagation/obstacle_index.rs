@@ -819,6 +819,33 @@ impl ObstacleSet {
         self.indexes.iter().map(|i| i.edge_count()).sum()
     }
 
+    /// Tallest BUILDING footprint crossed by the straight path
+    /// `src → rcv`, as `(height_m, t_of_max)` — the vector twin of the raster
+    /// `RasterSampler::max_building_along_path` group-histogram probe. Used
+    /// ONLY for the popup's "N of M segments had obstacles" transparency and
+    /// its trace; no dB anywhere reads it. Exact edge crossings replace the
+    /// raster's 30–184 m cadence walk, so a footprint between cadence samples
+    /// — invisible to the raster probe — is counted here. Walls
+    /// (`ObstacleKind::Barrier`) are excluded to keep parity with what the
+    /// raster building channel answered.
+    pub fn max_height_crossed(
+        &self,
+        src_lat: f64,
+        src_lon: f64,
+        rcv_lat: f64,
+        rcv_lon: f64,
+        scratch: &mut Vec<CrossingCandidate>,
+    ) -> (f64, f64) {
+        self.crossings(src_lat, src_lon, rcv_lat, rcv_lon, scratch);
+        let mut best = (0.0_f64, 0.0_f64);
+        for c in scratch.iter() {
+            if c.kind == ObstacleKind::Building && c.height_m as f64 > best.0 {
+                best = (c.height_m as f64, c.t);
+            }
+        }
+        best
+    }
+
     /// Exact crossings of the ray across every cell index, t-sorted.
     pub fn crossings(
         &self,
@@ -2261,6 +2288,36 @@ mod tests {
         assert!(!idx.contains_built(alat, wlon, 5.0, &mut sc));
         let (ilat, ilon) = ll(0.0, 20.0);
         assert!(idx.contains_built(ilat, ilon, 5.0, &mut sc), "interior");
+    }
+
+    /// Histogram twin: `max_height_crossed` reports the tallest BUILDING
+    /// footprint the path actually crosses (exact), ignoring barriers and
+    /// footprints off the path — the vector replacement for the popup's
+    /// raster `max_building_along_path` group histogram.
+    #[test]
+    fn max_height_crossed_reads_exact_crossings() {
+        let mut b = ObstacleIndex::builder(OLAT, OLON);
+        // 12 m block 300 m east, 8 m block 600 m west, wall to the north.
+        b.add_ring(&square(300.0, 0.0, 60.0), 12.0, ObstacleKind::Building, 0);
+        b.add_ring(&square(-600.0, 0.0, 60.0), 8.0, ObstacleKind::Building, 1);
+        b.add_ring(&square(0.0, 400.0, 60.0), 20.0, ObstacleKind::Barrier, 2);
+        let set = ObstacleSet {
+            indexes: vec![std::sync::Arc::new(b.build())],
+        };
+        let mut scratch = Vec::new();
+        // Ray east from the origin: crosses the 12 m block at ~t=0.27.
+        let (h, t) = set.max_height_crossed(OLAT, OLON, OLAT, OLON + 0.02, &mut scratch);
+        assert_eq!(h, 12.0);
+        assert!((0.05..0.5).contains(&t), "crossing t {t} not mid-path");
+        // Ray west: the 8 m block; the 20 m wall stands aside, not on it.
+        let (h, _) = set.max_height_crossed(OLAT, OLON, OLAT, OLON - 0.02, &mut scratch);
+        assert_eq!(h, 8.0);
+        // Ray north: only the wall (a Barrier) is there — buildings say 0.
+        let (h, _) = set.max_height_crossed(OLAT, OLON, OLAT + 0.02, OLON, &mut scratch);
+        assert_eq!(h, 0.0);
+        // Clear path: nothing.
+        let (h, _) = set.max_height_crossed(OLAT, OLON, OLAT - 0.02, OLON, &mut scratch);
+        assert_eq!(h, 0.0);
     }
 
     /// 1.4b wrapper: `building_enclosure` answers from the store, every

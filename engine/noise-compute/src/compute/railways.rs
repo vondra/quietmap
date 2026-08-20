@@ -282,9 +282,10 @@ pub(crate) fn compute_railways(
                     propagation::PathProfile::new(),
                     ArcScreeningScratch::new(),
                     Vec::new(),
+                    Vec::new(),
                 )
             },
-            |(path_profile, arc_scratch, cand_scratch), (seg_i, p)| {
+            |(path_profile, arc_scratch, cand_scratch, hist_scratch), (seg_i, p)| {
                 let seg = &railways[*seg_i];
                 let (rail_type, speed, q_pax, q_frt) = (p.rail_type, p.speed, p.q_pax, p.q_frt);
                 let (src_alt, d_slant) = (p.src_alt, p.d_slant);
@@ -432,15 +433,26 @@ pub(crate) fn compute_railways(
                     period_emissions[pi] = emission;
                 }
 
-                // Group-level obstacle histogram probe (pure raster read).
-                let (seg_max_bh, _) = rasters.max_building_along_path(
-                    seg.cp_lat,
-                    seg.cp_lon,
-                    receiver.lat,
-                    receiver.lon,
-                    seg.dist_m,
-                    0.0,
-                );
+                // Group-level obstacle histogram probe — vector crossings in
+                // vector mode, raster walk only on the fallback path (twin of
+                // the roads histogram; popup transparency only, no dB).
+                let (seg_max_bh, _) = match obstacles {
+                    Some(set) => set.max_height_crossed(
+                        seg.cp_lat,
+                        seg.cp_lon,
+                        receiver.lat,
+                        receiver.lon,
+                        hist_scratch,
+                    ),
+                    None => rasters.max_building_along_path(
+                        seg.cp_lat,
+                        seg.cp_lon,
+                        receiver.lat,
+                        receiver.lon,
+                        seg.dist_m,
+                        0.0,
+                    ),
+                };
 
                 // Popup trace, built here so the allocation-heavy part runs in
                 // parallel; pass 3 pushes it in segment order.

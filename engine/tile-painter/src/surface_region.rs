@@ -362,7 +362,17 @@ pub fn process_surface_region(
     for ((bx, by), batch_tiles) in &batches {
         // ONE halo per batch (10 km in ground mode), shared by every layer.
         let t_r = Instant::now();
-        let mut batch = TileBatch::build(ctx.zoom, *bx, *by, ctx.batch_n, ctx.halo_m, ctx.rasters);
+        // rx_refl: raster bake skipped in vector regions — the vector
+        // pre-bake below is the one and only writer for painted tiles.
+        let mut batch = TileBatch::build_opt_rx_refl(
+            ctx.zoom,
+            *bx,
+            *by,
+            ctx.batch_n,
+            ctx.halo_m,
+            ctx.rasters,
+            obstacle_data.set().is_none(),
+        );
         // Vector mode: the pre-baked rx_refl (raster 3×3 enclosure) is
         // recomputed from footprints — the SAME 150 × 150 m probe — and the
         // GPU rxar upload carries it unchanged (gg review: pre-bake site).

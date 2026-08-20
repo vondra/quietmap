@@ -18,6 +18,12 @@
 //! directory listing — is a hard `Err` that fails the region build: a
 //! pipeline must never silently paint with different physics than requested
 //! (the popup, facing users, soft-falls to raster instead).
+//! EXCEPTION (ingested-empty proof): a shard-less cell whose every
+//! overlapped 1-degree tile is listed in the world ingest manifest
+//! (`.ingested-tiles`, see `obstacle_ingest_coverage`) was provably swept
+//! by the same Overture release our raster derives from and contributed
+//! zero footprints — it is EMPTY, not missing, and vector mode proceeds
+//! without it.
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -77,11 +83,21 @@ impl ObstacleData {
         {
             bail!("renderer evidence requires canonical promoted obstacles, not QM_OBSTACLES_DIR");
         }
+        let manifest = ingest_manifest(h3r4_dir);
         let mut indexes = Vec::new();
         for &r4 in r4_hexes {
             let cell = CellIndex::try_from(r4).context("invalid r4 hex")?;
             let Some(dir) = cell_dir(h3r4_dir, cell)? else {
                 if allow_partial && r4 != region_r4 {
+                    continue;
+                }
+                if manifest.is_some_and(|m| m.covers_cell(cell)) {
+                    // INGESTED-EMPTY, proven by the world ingest manifest:
+                    // the sweep covered this cell and it contributed zero
+                    // footprints, so an index for it would be empty anyway —
+                    // vector mode proceeds WITHOUT dropping anything the
+                    // raster fallback would have added (our building raster
+                    // derives from the same Overture release).
                     continue;
                 }
                 eprintln!(
@@ -103,7 +119,18 @@ impl ObstacleData {
             if renderer_evidence_requires_vector_mode() {
                 bail!("renderer evidence requires positive vector mode; obstacle ring is empty");
             }
-            return Ok(Self::off());
+            // Reaching here needs every cell staged-with-shards yet all empty,
+            // or every cell proven ingested-empty — keep vector mode (an empty
+            // set screens nothing, masks nothing, reflects 0 dB: exactly what
+            // an equally empty raster channel would say) so covered-empty
+            // regions stop reading the raster entirely.
+            eprintln!(
+                "[obstacles] vector mode: 0 edges across {} cells (all ingested-empty)",
+                set.indexes.len()
+            );
+            return Ok(ObstacleData {
+                set: Some(Arc::new(set)),
+            });
         }
         eprintln!(
             "[obstacles] vector mode: {} edges across {} cells",
@@ -262,6 +289,22 @@ fn staging_root(h3r4_dir: &Path) -> PathBuf {
         .nth(3)
         .map(|d| d.join("enrichment/global/overture-obstacles/h3r4"))
         .unwrap_or_else(|| PathBuf::from("data/enrichment/global/overture-obstacles/h3r4"))
+}
+
+/// The world-ingest manifest next to the staging tree, when present —
+/// the proof that shard-less cells are ingested-empty (see
+/// `noise_compute::propagation::obstacle_ingest_coverage`). Absent (e.g. a
+/// Vast worker that staged only the h3r4 tree) ⇒ coverage unknown ⇒ the
+/// all-or-raster fallback keeps today's behavior.
+fn ingest_manifest(
+    h3r4_dir: &Path,
+) -> Option<&'static noise_compute::propagation::obstacle_ingest_coverage::IngestManifest> {
+    noise_compute::propagation::obstacle_ingest_coverage::IngestManifest::load_cached(
+        &staging_root(h3r4_dir)
+            .parent()
+            .map(|p| p.join(".ingested-tiles"))
+            .unwrap_or_else(|| PathBuf::from(".ingested-tiles")),
+    )
 }
 
 fn cell_dir(h3r4_dir: &Path, cell: CellIndex) -> Result<Option<PathBuf>> {
@@ -569,8 +612,77 @@ mod tests {
             "corrupt shard must fail the region build"
         );
 
+        // ── Ingested-empty proof: a shard-less halo cell whose degree tiles
+        // are ALL listed in the world ingest manifest keeps vector mode even
+        // STRICT; remove the manifest and the same ring falls back to raster.
+        // Isolated root so its manifest can never collide with the matrix's
+        // own (the manifest sits in the PARENT of QM_OBSTACLES_DIR).
+        std::env::remove_var("QM_OBSTACLES_ALLOW_PARTIAL");
+        let mroot = std::env::temp_dir().join(format!(
+            "qm-obst-manifest-test-{}-{region}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&mroot);
+        let obst_root = mroot.join("obst");
+        std::fs::create_dir_all(&obst_root).unwrap();
+        for &r4 in &ring {
+            if r4 == last {
+                continue;
+            }
+            let c = CellIndex::try_from(r4).unwrap();
+            let centre = LatLng::from(c);
+            write_shard(&obst_root.join(c.to_string()), centre.lat(), centre.lng());
+        }
+        let missing = CellIndex::try_from(last).unwrap();
+        let mut names = String::new();
+        let (lat_min, lat_max, lon_min, lon_max) = missing_boundary_bbox(missing);
+        for lat in lat_min.floor() as i32..=(lat_max - f64::EPSILON).floor() as i32 {
+            for lon in lon_min.floor() as i32..=(lon_max - f64::EPSILON).floor() as i32 {
+                names.push_str(&format!(
+                    "{}{:02}{}{:03}\n",
+                    if lat >= 0 { 'N' } else { 'S' },
+                    lat.abs(),
+                    if lon >= 0 { 'E' } else { 'W' },
+                    lon.abs()
+                ));
+            }
+        }
+        std::fs::write(mroot.join(".ingested-tiles"), names).unwrap();
+        std::env::set_var("QM_OBSTACLES_DIR", obst_root.to_str().unwrap());
+        let covered = ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).unwrap();
+        let set = covered
+            .set()
+            .expect("manifest-proven empty halo cell keeps vector mode (strict)");
+        assert_eq!(set.indexes.len(), ring.len() - 1);
+        // Manifest gone → coverage unknown → strict fallback again.
+        std::fs::remove_file(mroot.join(".ingested-tiles")).unwrap();
+        let uncovered = ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).unwrap();
+        assert!(
+            uncovered.set().is_none(),
+            "without the manifest the missing halo neighbour must fall back to raster"
+        );
+
         std::env::remove_var("QM_OBSTACLES_DIR");
         std::env::remove_var("QM_OBSTACLES_ALLOW_PARTIAL");
         let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&mroot);
+    }
+
+    /// Lat/lon bbox of a cell boundary — test twin of the private helper in
+    /// `obstacle_ingest_coverage` (kept local so the fixture cannot silently
+    /// diverge from the unit under test).
+    fn missing_boundary_bbox(cell: CellIndex) -> (f64, f64, f64, f64) {
+        let mut lat_min = f64::MAX;
+        let mut lat_max = f64::MIN;
+        let mut lon_min = f64::MAX;
+        let mut lon_max = f64::MIN;
+        for ll in cell.boundary().iter() {
+            let (lat, lon) = (ll.lat_radians().to_degrees(), ll.lng_radians().to_degrees());
+            lat_min = lat_min.min(lat);
+            lat_max = lat_max.max(lat);
+            lon_min = lon_min.min(lon);
+            lon_max = lon_max.max(lon);
+        }
+        (lat_min, lat_max, lon_min, lon_max)
     }
 }

@@ -233,9 +233,10 @@ pub(crate) fn compute_roads(
                     propagation::PathProfile::new(),
                     ArcScreeningScratch::new(),
                     Vec::new(),
+                    Vec::new(),
                 )
             },
-            |(path_profile, arc_scratch, cand_scratch), (seg_i, p)| {
+            |(path_profile, arc_scratch, cand_scratch, hist_scratch), (seg_i, p)| {
                 let seg = &roads[*seg_i];
                 let norm = &p.norm;
                 let (src_alt, d_slant) = (p.src_alt, p.d_slant);
@@ -437,17 +438,27 @@ pub(crate) fn compute_roads(
                         seg.road_ref.clone()
                     };
 
-                // Cheap group-level obstacle histogram — another tile-cached
-                // scan of the same path as screening just computed. Popup shows
-                // "N of M segments had obstacles on path" based on this.
-                let (seg_max_bh, _) = rasters.max_building_along_path(
-                    seg.cp_lat,
-                    seg.cp_lon,
-                    receiver.lat,
-                    receiver.lon,
-                    seg.dist_m,
-                    0.0,
-                );
+                // Group-level obstacle histogram — the popup's "N of M
+                // segments had obstacles on path". Vector mode reads it from
+                // exact footprint crossings (`max_height_crossed`); the raster
+                // walk survives only on the raster-fallback path.
+                let (seg_max_bh, _) = match obstacles {
+                    Some(set) => set.max_height_crossed(
+                        seg.cp_lat,
+                        seg.cp_lon,
+                        receiver.lat,
+                        receiver.lon,
+                        hist_scratch,
+                    ),
+                    None => rasters.max_building_along_path(
+                        seg.cp_lat,
+                        seg.cp_lon,
+                        receiver.lat,
+                        receiver.lon,
+                        seg.dist_m,
+                        0.0,
+                    ),
+                };
 
                 // Popup trace, built here so the allocation-heavy part runs in
                 // parallel; pass 3 pushes it in segment order. `std::mem::take`
