@@ -27,8 +27,9 @@ pub const JUDGE_HALVING_MAX_DELTA_DB: f64 = 0.01;
 pub const H0_V3_MAX_DELTA_DB: f64 = 0.5;
 pub const H0_V3_JUDGE_MACHINE_HOUR_CEILING: f64 = 192.0;
 
-/// Exact CPU fields pre-registered for the H0 decision. Each arm renders all
-/// 512x512 pixels; these are not probe coordinates.
+/// Exact CPU fields pre-registered for the H0 decision. The six H0/judge arms
+/// render a frozen 1,024-receiver sample; stock paints the full tile and emits
+/// that same sample. These are not hand-picked probe coordinates.
 pub const H0_V3_CASES: [H0V3Case; 4] = [
     H0V3Case::new("dobris-road", 12, 2206, 1391, LineLayer::Road),
     H0V3Case::new("dobris-rail", 12, 2206, 1391, LineLayer::Rail),

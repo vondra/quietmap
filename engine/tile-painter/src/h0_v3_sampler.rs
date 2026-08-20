@@ -27,7 +27,9 @@
 //! `6d6b8239f1107cd62d2fc81f063d971c3753e75f8f524ad7c76e42f7acdf1fa3`.
 
 use sha2::{Digest, Sha256};
+use std::sync::OnceLock;
 
+use noise_compute::propagation::h0_v3::H0_V3_CASES;
 use raster_reader::fused_tile_z13::TILE_PX;
 
 /// Receivers scored per case. Rule-derived and sealed; never an operator input.
@@ -44,6 +46,9 @@ pub const H0_V3_SAMPLER_SEED: u64 = 0x4830_5633_5337_2131;
 /// Total receivers in one case's tile.
 pub const H0_V3_RECEIVER_POPULATION: usize = TILE_PX * TILE_PX;
 
+static SAMPLED_RECEIVERS_BY_CASE: OnceLock<[OnceLock<Vec<u32>>; H0_V3_CASES.len()]> =
+    OnceLock::new();
+
 /// Keyed pseudorandom order for one receiver. Domain-separated by seed and
 /// case so two cases draw independent samples from the same population.
 fn selection_digest(case_index: u32, receiver_index: u32) -> [u8; 32] {
@@ -54,7 +59,7 @@ fn selection_digest(case_index: u32, receiver_index: u32) -> [u8; 32] {
     digest.finalize().into()
 }
 
-/// The case's frozen sampled receiver set, ascending.
+/// Compute one case's frozen sampled receiver set, ascending.
 ///
 /// Uniform without replacement: order the whole population by
 /// `SHA-256(seed ‖ case ‖ receiver)` and take the first `S`. Uniformity is what
@@ -64,8 +69,7 @@ fn selection_digest(case_index: u32, receiver_index: u32) -> [u8; 32] {
 ///
 /// The digest is compared before the index, and indices are unique, so the
 /// order is total and the result is identical on every host and every arm.
-#[must_use]
-pub fn h0_v3_sampled_receivers(case_index: u32) -> Vec<u32> {
+fn compute_h0_v3_sampled_receivers(case_index: u32) -> Vec<u32> {
     let mut ordered: Vec<([u8; 32], u32)> = (0..H0_V3_RECEIVER_POPULATION as u32)
         .map(|receiver_index| (selection_digest(case_index, receiver_index), receiver_index))
         .collect();
@@ -77,6 +81,27 @@ pub fn h0_v3_sampled_receivers(case_index: u32) -> Vec<u32> {
         .collect();
     selected.sort_unstable();
     selected
+}
+
+/// Return the case's frozen sampled receiver set, ascending.
+///
+/// The four pre-registered cases are computed once per process. Writers and
+/// readers still receive an owned list, while the analyser avoids repeating
+/// the full-population hash and sort for every arm.
+#[must_use]
+pub fn h0_v3_sampled_receivers(case_index: u32) -> Vec<u32> {
+    let Ok(registered_case_index) = usize::try_from(case_index) else {
+        return compute_h0_v3_sampled_receivers(case_index);
+    };
+    let Some(sample) = SAMPLED_RECEIVERS_BY_CASE
+        .get_or_init(|| std::array::from_fn(|_| OnceLock::new()))
+        .get(registered_case_index)
+    else {
+        return compute_h0_v3_sampled_receivers(case_index);
+    };
+    sample
+        .get_or_init(|| compute_h0_v3_sampled_receivers(case_index))
+        .clone()
 }
 
 #[cfg(test)]

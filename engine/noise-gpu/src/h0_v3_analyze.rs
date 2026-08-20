@@ -39,6 +39,9 @@ const ARM_NAMES: [(&str, H0V3FieldArm); 7] = [
 const H0_ARM_NAMES: [&str; 4] = ["h0-5", "h0-4", "h0-3", "h0-2"];
 
 const ZERO_EVENT_ALPHA: f64 = 0.05;
+// The seal rounds each case to the nearest five decimal places, but states the
+// pooled percentage as a conservative four-decimal ceiling. Keep both display
+// values verbatim; the full-precision fractions below remain the authority.
 const SEALED_PER_CASE_PERCENT: f64 = 0.29212;
 const SEALED_POOLED_PERCENT: f64 = 0.0732;
 
@@ -75,7 +78,8 @@ struct AnalysisReceipt<'a> {
     design_v3_sha256: &'static str,
     plan_v9_sha256: &'static str,
     sampled_receivers_per_case: usize,
-    population_violation_upper_95: PopulationViolationUpper95,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    population_violation_upper_95: Option<PopulationViolationUpper95>,
     sampled_presence_flips: Option<usize>,
     sampler_identity: SamplerIdentity,
     cases: Vec<CaseAnalysis<'a>>,
@@ -144,8 +148,6 @@ fn sampled_population_violation_upper_95() -> PopulationViolationUpper95 {
     PopulationViolationUpper95 {
         confidence_percent: 95,
         per_case_fraction,
-        // These displayed percentages are verbatim sealed statements. The
-        // full-precision fractions above remain the arithmetic authority.
         per_case_percent: SEALED_PER_CASE_PERCENT,
         per_case_population_receivers_at_most: (per_case_fraction
             * H0_V3_RECEIVER_POPULATION as f64)
@@ -153,6 +155,12 @@ fn sampled_population_violation_upper_95() -> PopulationViolationUpper95 {
         pooled_fraction,
         pooled_percent: SEALED_POOLED_PERCENT,
     }
+}
+
+fn accepted_sampled_population_violation_upper_95(
+    verdict: &str,
+) -> Option<PopulationViolationUpper95> {
+    (verdict == "H0_QUADRATURE_ACCEPTED_SAMPLED").then(sampled_population_violation_upper_95)
 }
 
 fn is_sha256(value: &str) -> bool {
@@ -192,6 +200,34 @@ fn read_and_verify_arm_receipt(
     Ok(receipt)
 }
 
+fn verify_pair_populations(
+    case: &str,
+    sampled_evaluated_pairs: &[u64],
+    stock_evaluated_pairs: Option<u64>,
+) -> Result<()> {
+    ensure!(
+        sampled_evaluated_pairs.len() == ARM_NAMES.len() - 1,
+        "missing sampled pair population in {case}"
+    );
+    let expected_sampled_pairs = sampled_evaluated_pairs[0];
+    ensure!(
+        sampled_evaluated_pairs
+            .iter()
+            .all(|&evaluated_pairs| evaluated_pairs == expected_sampled_pairs),
+        "mixed sampled pair population in {case}"
+    );
+    let stock_evaluated_pairs = stock_evaluated_pairs
+        .with_context(|| format!("missing stock pair population in {case}"))?;
+    // Stock paints the complete tile and emits only the frozen receivers, while
+    // every H0/judge arm evaluates only those receivers. Its work counter must
+    // therefore cover, not equal, the sampled arms' common pair population.
+    ensure!(
+        stock_evaluated_pairs >= expected_sampled_pairs,
+        "stock pair population does not cover sampled pairs in {case}"
+    );
+    Ok(())
+}
+
 fn load_case(
     root: &Path,
     case_index: usize,
@@ -200,7 +236,9 @@ fn load_case(
     let case = H0_V3_CASES[case_index];
     ensure!(budget_case.case == case.name);
     let mut fields = BTreeMap::new();
-    let mut geometry_identity = None;
+    let mut input_geometry_identity = None;
+    let mut sampled_evaluated_pairs = Vec::with_capacity(ARM_NAMES.len() - 1);
+    let mut stock_evaluated_pairs = None;
     for (arm_name, arm) in ARM_NAMES {
         let arm_root = root.join(case.name).join(arm_name);
         let field_path = arm_root.join("field.bin");
@@ -214,20 +252,24 @@ fn load_case(
         ensure!(receipt.hostname == budget_case.hostname);
         ensure!(receipt.cpu_model == budget_case.cpu_model);
         ensure!(receipt.rayon_num_threads == budget_case.rayon_num_threads);
-        let arm_geometry = (
+        let arm_input_geometry = (
             receipt.region_source_rows,
             receipt.barrier_rows,
             receipt.obstacle_indexes,
-            receipt.evaluated_pairs,
         );
-        if let Some(expected) = geometry_identity {
+        if let Some(expected) = input_geometry_identity {
             ensure!(
-                arm_geometry == expected,
+                arm_input_geometry == expected,
                 "mixed input geometry in {}",
                 case.name
             );
         } else {
-            geometry_identity = Some(arm_geometry);
+            input_geometry_identity = Some(arm_input_geometry);
+        }
+        if arm_name == "stock" {
+            stock_evaluated_pairs = Some(receipt.evaluated_pairs);
+        } else {
+            sampled_evaluated_pairs.push(receipt.evaluated_pairs);
         }
         if arm_name == "h0-3" {
             ensure!(receipt.binary_sha256 == budget_case.h0_three_degree_binary_sha256);
@@ -243,6 +285,7 @@ fn load_case(
         .map_err(|error| anyhow::anyhow!("invalid {}/{} field: {error:?}", case.name, arm_name))?;
         fields.insert(arm_name, observations);
     }
+    verify_pair_populations(case.name, &sampled_evaluated_pairs, stock_evaluated_pairs)?;
     Ok(fields)
 }
 
@@ -368,7 +411,7 @@ fn main() -> Result<()> {
         design_v3_sha256: "382ee570373553c7007ef4a477ffc6951d407daccff0d8725f0582d0e857605b",
         plan_v9_sha256: "65ce0074a3b9bfc8a62293a093a3ebfc1b5216d07c7f14c3fae4e68ecdc09dba",
         sampled_receivers_per_case: H0_V3_SAMPLED_RECEIVERS,
-        population_violation_upper_95: sampled_population_violation_upper_95(),
+        population_violation_upper_95: accepted_sampled_population_violation_upper_95(verdict),
         sampled_presence_flips,
         sampler_identity: SamplerIdentity {
             rule_id: H0_V3_SAMPLER_RULE_ID,
@@ -418,5 +461,29 @@ mod tests {
         assert_eq!(bounds.pooled_percent, 0.0732);
         assert_eq!(bounds.per_case_population_receivers_at_most, 766);
         assert_eq!(bounds.confidence_percent, 95);
+    }
+
+    #[test]
+    fn population_bound_is_emitted_only_for_a_sampled_acceptance() {
+        assert!(
+            accepted_sampled_population_violation_upper_95("H0_QUADRATURE_ACCEPTED_SAMPLED")
+                .is_some()
+        );
+        assert!(
+            accepted_sampled_population_violation_upper_95("JUDGE_CONVERGENCE_FAILED").is_none()
+        );
+        assert!(accepted_sampled_population_violation_upper_95("NEEDS_H32").is_none());
+    }
+
+    #[test]
+    fn stock_full_tile_pair_count_may_exceed_the_common_sampled_count() {
+        let sampled = [694_873; ARM_NAMES.len() - 1];
+
+        assert!(verify_pair_populations("dobris-road", &sampled, Some(177_122_915)).is_ok());
+
+        let mut mixed_sampled = sampled;
+        mixed_sampled[5] += 1;
+        assert!(verify_pair_populations("dobris-road", &mixed_sampled, Some(177_122_915)).is_err());
+        assert!(verify_pair_populations("dobris-road", &sampled, Some(694_872)).is_err());
     }
 }

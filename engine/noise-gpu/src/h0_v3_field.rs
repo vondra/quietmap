@@ -135,15 +135,6 @@ pub fn write_h0_v3_field(
     {
         return Err(H0V3FieldError::InvalidLength);
     }
-    // Strictly ascending and in range: the analyser's key ordering and the
-    // cross-arm identity of the sampled population both rest on this.
-    let mut previous: Option<u32> = None;
-    for &index in &field.receiver_indices {
-        if index as usize >= TILE_PX * TILE_PX || previous.is_some_and(|prior| index <= prior) {
-            return Err(H0V3FieldError::InvalidValue);
-        }
-        previous = Some(index);
-    }
     if field.receiver_indices != h0_v3_sampled_receivers(identity.case_index) {
         return Err(H0V3FieldError::InvalidValue);
     }
@@ -238,18 +229,12 @@ pub fn read_h0_v3_observations(
     // The key list is read and validated before any power, so a field whose
     // sampled population is malformed never reaches the scorer.
     let mut receiver_indices = Vec::with_capacity(receiver_count);
-    let mut previous: Option<u32> = None;
     for _ in 0..receiver_count {
         let mut bytes = [0_u8; 4];
         input
             .read_exact(&mut bytes)
             .map_err(|_| H0V3FieldError::Io)?;
-        let index = u32::from_le_bytes(bytes);
-        if index as usize >= TILE_PX * TILE_PX || previous.is_some_and(|prior| index <= prior) {
-            return Err(H0V3FieldError::InvalidValue);
-        }
-        previous = Some(index);
-        receiver_indices.push(index);
+        receiver_indices.push(u32::from_le_bytes(bytes));
     }
     if receiver_indices != h0_v3_sampled_receivers(expected.case_index) {
         return Err(H0V3FieldError::InvalidValue);
@@ -290,6 +275,7 @@ pub fn read_h0_v3_observations(
 mod tests {
     use super::*;
     use std::fs::{self, OpenOptions};
+    use std::io::{Seek, SeekFrom};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -323,6 +309,28 @@ mod tests {
         for _ in receiver_indices {
             output.write_all(&zero_observation).unwrap();
         }
+        output.flush().unwrap();
+    }
+
+    fn zero_tile_field(receiver_indices: Vec<u32>) -> H0V3TileField {
+        let receiver_count = receiver_indices.len();
+        H0V3TileField {
+            receiver_indices,
+            period_power_f32: vec![[0.0; NUM_PERIODS]; receiver_count],
+            period_band_power: vec![[[0.0; NUM_BANDS]; NUM_PERIODS]; receiver_count],
+            evaluated_pair_count: 0,
+            evaluated_node_count: 0,
+            admitted_node_count: 0,
+            maximum_distinct_hint_records: 0,
+            maximum_unique_u_hints: 0,
+            maximum_logical_hint_storage_bytes: 0,
+        }
+    }
+
+    fn overwrite_u32(path: &Path, offset: u64, value: u32) {
+        let mut output = OpenOptions::new().write(true).open(path).unwrap();
+        output.seek(SeekFrom::Start(offset)).unwrap();
+        output.write_all(&value.to_le_bytes()).unwrap();
         output.flush().unwrap();
     }
 
@@ -408,5 +416,106 @@ mod tests {
             Err(H0V3FieldError::InvalidValue)
         );
         fs::remove_file(wrong_sample).unwrap();
+    }
+
+    #[test]
+    fn writer_rejects_wrong_receiver_count_and_key_list() {
+        let identity = H0V3FieldIdentity {
+            case_index: 0,
+            arm: H0V3FieldArm::JudgeFine,
+        };
+        let frozen = h0_v3_sampled_receivers(0);
+        for count in [H0_V3_SAMPLED_RECEIVERS - 1, H0_V3_SAMPLED_RECEIVERS + 1] {
+            let path = test_field_path("writer-count");
+            let mut keys = frozen.clone();
+            keys.truncate(count);
+            if count > keys.len() {
+                keys.push(u32::MAX);
+            }
+            let field = zero_tile_field(keys);
+            assert_eq!(
+                write_h0_v3_field(&path, identity, &field),
+                Err(H0V3FieldError::InvalidLength)
+            );
+            assert!(!path.exists());
+        }
+
+        let path = test_field_path("writer-keys");
+        let mut wrong_keys = frozen;
+        wrong_keys.swap(0, 1);
+        let field = zero_tile_field(wrong_keys);
+        assert_eq!(
+            write_h0_v3_field(&path, identity, &field),
+            Err(H0V3FieldError::InvalidValue)
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn reader_rejects_header_tamper_and_overlength() {
+        let identity = H0V3FieldIdentity {
+            case_index: 0,
+            arm: H0V3FieldArm::JudgeFine,
+        };
+        let frozen = h0_v3_sampled_receivers(0);
+
+        let header_tamper = test_field_path("header-tamper");
+        write_zero_field(&header_tamper, H0_V3_FIELD_MAGIC, 0, &frozen);
+        overwrite_u32(&header_tamper, 8, H0_V3_FIELD_VERSION + 1);
+        assert_eq!(
+            read_h0_v3_observations(&header_tamper, identity),
+            Err(H0V3FieldError::InvalidHeader)
+        );
+        fs::remove_file(header_tamper).unwrap();
+
+        let count_tamper = test_field_path("count-tamper");
+        write_zero_field(&count_tamper, H0_V3_FIELD_MAGIC, 0, &frozen);
+        overwrite_u32(
+            &count_tamper,
+            (H0_V3_FIELD_HEADER_BYTES - size_of::<u32>()) as u64,
+            (H0_V3_SAMPLED_RECEIVERS - 1) as u32,
+        );
+        assert_eq!(
+            read_h0_v3_observations(&count_tamper, identity),
+            Err(H0V3FieldError::InvalidLength)
+        );
+        fs::remove_file(count_tamper).unwrap();
+
+        let overlength = test_field_path("overlength");
+        write_zero_field(&overlength, H0_V3_FIELD_MAGIC, 0, &frozen);
+        OpenOptions::new()
+            .append(true)
+            .open(&overlength)
+            .unwrap()
+            .write_all(&[0])
+            .unwrap();
+        assert_eq!(
+            read_h0_v3_observations(&overlength, identity),
+            Err(H0V3FieldError::InvalidLength)
+        );
+        fs::remove_file(overlength).unwrap();
+    }
+
+    #[test]
+    fn reader_rejects_nonascending_and_duplicate_keys() {
+        let identity = H0V3FieldIdentity {
+            case_index: 0,
+            arm: H0V3FieldArm::JudgeFine,
+        };
+        let frozen = h0_v3_sampled_receivers(0);
+        for (label, mut keys) in [("nonascending", frozen.clone()), ("duplicate", frozen)] {
+            if label == "nonascending" {
+                keys.swap(0, 1);
+            } else {
+                keys[1] = keys[0];
+            }
+            let path = test_field_path(label);
+            write_zero_field(&path, H0_V3_FIELD_MAGIC, 0, &keys);
+            assert_eq!(
+                read_h0_v3_observations(&path, identity),
+                Err(H0V3FieldError::InvalidValue)
+            );
+            fs::remove_file(path).unwrap();
+        }
     }
 }
