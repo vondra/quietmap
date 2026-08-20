@@ -351,8 +351,12 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 // Minimum angular width that gets the arc treatment at all — THE §3.5e GATE.
 // Since the 2026-08-19 port the kernel paints the CPU tile painter's rule
 // (`seg_sampling::sampled_gob_bands_with_ground`): the fan is quadratured in
-// SEG_SAMPLES buckets and this gate decides, per BUCKET (chord law), whether
-// that bucket escalates to a nested arc query over its own sub-span. A
+// buckets and this gate decides, per BUCKET (chord law), whether
+// that bucket escalates to a nested arc query over its own sub-span. The bucket
+// count is span-adaptive since 2026-08-20 (L3): ONE span-centre bucket when the
+// whole fan fits under this gate, SEG_SAMPLES otherwise — the CPU lane cuts
+// SEG_SAMPLES unconditionally, so the count is the kernel's one deliberate
+// approximation against it (W1-budgeted; `line_source` has the rule). A
 // raster-fallback path keeps its cp verdict because its footprint skyline is
 // incomplete. The default is
 // SEG_ARC_MIN_SPAN_RAD, injected by build.rs from seg_sampling.rs through the
@@ -3691,10 +3695,11 @@ __device__ __forceinline__ void line_source(
     veg_bands(veg_run_length(tprof, forr, n, (float)dend), veg);
 
     // ---- The ground/barrier term `max(A_ground, A_terrain + A_screen)` of a
-    // LINE microsegment, ISO 9613-2 §7.3.1 — the §3.5e port (2026-08-19).
+    // LINE microsegment, ISO 9613-2 §7.3.1 — the §3.5e port (2026-08-19), with
+    // the L3 span-adaptive bucket count layered on (2026-08-20, n_buck below).
     // `seg_sampling::sampled_gob_bands_with_ground` in kernel form: the segment
-    // subtends a FAN at this receiver, the fan is cut into SEG_SAMPLES equal
-    // angular buckets, each bucket is marched on its OWN ray (so it composites
+    // subtends a FAN at this receiver, the fan is cut into equal angular
+    // buckets, each bucket is marched on its OWN ray (so it composites
     // against its own terrain — never the cp ray's, seg_sampling.rs:41-51), a
     // bucket wider than ARC_MIN_SPAN arc-screens its own sub-span, and the
     // COMPOSITE — not the screening increment — is energy-averaged over the
@@ -3709,7 +3714,10 @@ __device__ __forceinline__ void line_source(
     // Branch (1) needs a complete vector obstacle store — `has_footprints` — and
     // a real fan. With that store but no fan, branch (2) keeps one cp ray and may
     // arc-clip when the whole segment clears the 3° gate. Without the complete
-    // store branch (2) keeps the cp verdict unchanged.
+    // store branch (2) keeps the cp verdict unchanged. Branch (1) cuts the fan
+    // into ONE span-centre bucket when the whole span fits under the 3° gate,
+    // SEG_SAMPLES equal angular buckets otherwise (the L3 span-adaptive count —
+    // see the n_buck comment below); the CPU lane cuts SEG_SAMPLES always.
     bool has_footprints = obst[0] != 0ULL && obst[6] != 0ULL;
     float gob[NB];
     // The receiver-centred flat frame (seg_sampling::SegFan::new): cheap enough
@@ -3724,7 +3732,20 @@ __device__ __forceinline__ void line_source(
         double span = atan2(by, bx) - az0;
         if (span > PI_D) span -= 2.0 * PI_D;
         if (span < -PI_D) span += 2.0 * PI_D;
-        const double inv_n = 1.0 / (double)SEG_SAMPLES;
+        // L3 span-adaptive bucket count (2026-08-20): a pair whose WHOLE fan
+        // fits under the 3° gate marches ONE span-centre bucket instead of
+        // SEG_SAMPLES — 98.8 % of walked pairs qualify (seg_sampling census
+        // 2026-08-19; a 250 m piece past ~4.8 km subtends < 3°, so a 10 km-reach
+        // layer's far pairs are nearly all narrow). This is an APPROXIMATION
+        // against the CPU lane's unconditional SEG_SAMPLES — the narrow-span
+        // error class is bounded by the bucket fraction and is what the W1
+        // aggregate gates score — not a reach cut: every pair still marches
+        // once, and the bucket's own chord-law gate below runs unchanged, so
+        // the per-bucket escalation rule is identical in both arms. Keyed on
+        // the generated constant itself, never the ARC_MIN_SPAN sweep alias,
+        // so a gate A/B cannot confound march counts.
+        const int n_buck = fabs(span) < (double)SEG_ARC_MIN_SPAN_RAD ? 1 : SEG_SAMPLES;
+        const double inv_n = 1.0 / (double)n_buck;
         // Bucket width in azimuth — the chord law below needs it, and it is the
         // same for every bucket by construction, so the cos is hoisted: one
         // transcendental per pair, not per bucket.
@@ -3737,7 +3758,7 @@ __device__ __forceinline__ void line_source(
         double lo_lat = 0.0, lo_lon = 0.0, lo_d = 0.0;
         bool lo_ok = seg_fan_at(ax, ay, ex, ey, az0, span, rlat, rlon, mlon,
                                 0.0, &lo_lat, &lo_lon, &lo_d);
-        for (int k = 0; k < SEG_SAMPLES; k++) {
+        for (int k = 0; k < n_buck; k++) {
             double hi_lat = 0.0, hi_lon = 0.0, hi_d = 0.0;
             bool hi_ok = seg_fan_at(ax, ay, ex, ey, az0, span, rlat, rlon, mlon,
                                     (double)(k + 1) * inv_n, &hi_lat, &hi_lon, &hi_d);

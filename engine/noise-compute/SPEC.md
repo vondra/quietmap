@@ -1097,11 +1097,21 @@ WHICH RULE RUNS WHERE, and why they are not the same choice:
 * **The popup** keeps §3.5c on its single cp ray. One receiver can afford
   adaptive quadrature, and it is the accuracy etalon.
 * **The CUDA lane** paints §3.5e since 2026-08-19: `scatter.cu`'s `line_source`
-  runs the same 5-bucket quadrature with the same per-bucket 3° gate, both
+  runs the same bucketed quadrature with the same per-bucket 3° gate, both
   constants injected by `build.rs` from `SEG_SAMPLES_DEFAULT` and
-  `SEG_ARC_MIN_SPAN_RAD` so the lanes cannot drift. A CPU-vs-GPU tile comparison
-  therefore runs BOTH lanes at defaults — `noise_gpu::ensure_no_cpu_only_arc_levers`
-  refuses every CPU-only override. (`QM_SEG_SAMPLES=1` /
+  `SEG_ARC_MIN_SPAN_RAD` so the lanes cannot drift. Since 2026-08-20 the bucket
+  count is span-adaptive (the L3 lever): a pair whose whole fan fits under the
+  3° gate marches ONE span-centre bucket instead of `SEG_SAMPLES` — 98.8 % of
+  walked pairs qualify (seg_sampling census 2026-08-19; a 250 m piece past
+  ~4.8 km subtends < 3°). That count is the kernel's ONE deliberate
+  approximation against this section's rule — an accuracy spend the W1
+  aggregate gates score (evidence: `research/ai-labs-2026-08-19/
+  FINDINGS-k3port2.md` in the ops repo), not a reach cut: every pair still
+  marches once and the per-bucket gate+escalation is unchanged. A CPU-vs-GPU
+  tile comparison therefore runs BOTH lanes at defaults and its residual now
+  includes this n=1 narrow-span class —
+  `noise_gpu::ensure_no_cpu_only_arc_levers` refuses every CPU-only override.
+  (`QM_SEG_SAMPLES=1` /
   `QM_ARC_MIN_SPAN_DEG=0` are the PRE-PORT kernel's rule, and before the port
   they were the pins this comparison had to run under, which hid the fork by
   construction.)
