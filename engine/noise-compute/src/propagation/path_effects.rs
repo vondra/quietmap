@@ -803,12 +803,6 @@ mod tests {
         );
     }
 
-    /// THE defect SPEC §3.5.1 exists for: a phantom shoulder hump one sample
-    /// (~10 m) from the source on a downhill embankment path must NOT dominate
-    /// the terrain term — after the platform clamp, only the genuine plateau
-    /// edge (source cell's own elevation) may diffract. Geometry measured on
-    /// the D4 at Voznice (owner report 2026-08-20): src cell 375.28, phantom
-    /// 375.80 at 10 m, receiver 51 m downhill at 366.34.
     /// The ground mean-plane must read the RAW profile even after the
     /// terrain pass carved the shared scratch (SPEC §3.5.1): ground result is
     /// identical whether or not terrain ran first, and repeats are stable.
@@ -836,6 +830,12 @@ mod tests {
         assert_eq!(raw.zs_h_m, after_repeat.zs_h_m, "repeat not stable");
     }
 
+    /// THE defect SPEC §3.5.1 exists for: a phantom shoulder hump one sample
+    /// (~10 m) from the source on a downhill embankment path must NOT dominate
+    /// the terrain term — after the platform clamp, only the genuine plateau
+    /// edge (source cell's own elevation) may diffract. Geometry measured on
+    /// the D4 at Voznice (owner report 2026-08-20): src cell 375.28, phantom
+    /// 375.80 at 10 m, receiver 51 m downhill at 366.34.
     #[test]
     fn phantom_shoulder_hump_is_carved_to_the_platform() {
         let dist = 50.9;
