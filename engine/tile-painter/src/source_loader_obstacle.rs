@@ -912,8 +912,8 @@ mod tests {
                     100
                 } else {
                     // All synthetic façade cells contain 50 dB, so the
-                    // DEFAULT 28 dB product estimate quantises to 22 dB.
-                    crate::wire_hm3::quantise_lden(22.0)
+                    // DEFAULT 25 dB product estimate quantises to 25 dB.
+                    crate::wire_hm3::quantise_lden(25.0)
                 },
                 "cell {i}"
             );

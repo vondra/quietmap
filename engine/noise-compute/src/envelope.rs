@@ -30,7 +30,12 @@ impl EnvelopeClass {
             Self::Residential => Some(30.0),
             Self::Commercial => Some(35.0),
             Self::Industrial => Some(20.0),
-            Self::Historic | Self::Default => Some(28.0),
+            Self::Historic => Some(28.0),
+            // WHO Environmental Noise Guidelines for the European Region
+            // (2018) provide the newer ~25 dB closed-window context for an
+            // otherwise unclassified building; the other class-specific
+            // values remain EN 12354 practice assumptions.
+            Self::Default => Some(25.0),
         }
     }
     pub const fn name(self) -> &'static str {

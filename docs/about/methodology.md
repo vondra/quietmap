@@ -202,16 +202,19 @@ wall-and-window reduction), not a second propagation run:
 | Office | 35 dB |
 | Industrial hall | 20 dB |
 | Historic building | 28 dB |
-| Other building | 28 dB |
+| Other building | 25 dB |
 
-These reductions are product assumptions, not ISO or WHO class values. The
+The default 25 dB closed-window value follows the newer WHO Environmental
+Noise Guidelines for the European Region (2018) context. A fully open window
+is approximately 10 dB in the WHO 2018 context; the popup's tilted/open
+variant remains 15 dB. The house, office, industrial-hall, and historic
+values are EN 12354-practice product assumptions, not WHO class values. The
 method follows the façade-to-indoor approach described by EN ISO 12354-3 and
 ISO 16283-3. The popup shows the real computation as three tidy total-level
 steps: **outside at the wall** → **walls & windows** → **indoors**. Source
 groups, source-receiver segments, angles, and path effects remain the actual
 façade values computed by the engine; only the aggregate display total uses
-the reduction. A tilted/open-window variant uses the product's 15 dB context
-value (WHO); occupant behaviour dominates, so the estimate is typically
+the reduction. Occupant behaviour dominates, so the estimate is typically
 uncertain by ±8–12 dB.
 
 #### The exact maths

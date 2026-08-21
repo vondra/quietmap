@@ -2394,7 +2394,7 @@ unchanged. The stored `u8` values are:
 | 2 | `COMMERCIAL` | 35 dB |
 | 3 | `INDUSTRIAL` | 20 dB |
 | 4 | `HISTORIC` | 28 dB |
-| 5 | `DEFAULT` | 28 dB |
+| 5 | `DEFAULT` | 25 dB |
 
 `OUTDOOR` is only the official Overture class set `carport`, `roof`,
 `greenhouse`, `glasshouse`, `bridge_structure`, and `grandstand`. All other
@@ -2422,12 +2422,16 @@ step, and the resulting indoor estimate as one calculation breakdown. In the
 plain-language UI, “building envelope” is shown as “Walls & windows” followed
 by the selected building type.
 
-The ΔL values are product closed-window assumptions informed by literature,
-not ISO/WHO class values. EN ISO 12354-3 / ISO 16283-3 describe
-façade-to-indoor methodology; WHO's 15 dB tilted/open value is popup context
-only. Occupant behaviour dominates; the estimate is typically uncertain by
-±8–12 dB. Propagation physics, source reach, speed floors, and HM3 format are
-unchanged.
+The default 25 dB closed-window value follows the newer WHO Environmental Noise
+Guidelines for the European Region (2018) context. WHO 2018's fully-open
+window context is approximately 10 dB; the popup's existing tilted/open
+variant remains 15 dB. These are external comparison anchors, not a change to
+the indoor estimate semantics. The residential, commercial/office,
+industrial, and historic values above remain EN 12354-practice product
+assumptions. EN ISO 12354-3 / ISO 16283-3 describe façade-to-indoor
+methodology. Occupant behaviour dominates; the estimate is typically
+uncertain by ±8–12 dB. Propagation physics, source reach, speed floors, and
+HM3 format are unchanged.
 
 The same ΔL is applied to the aggregate total regardless of the contributing
 source layers; it is not applied to individual source, contributor, or segment
