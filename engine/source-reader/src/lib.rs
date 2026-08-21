@@ -525,8 +525,12 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         t.collect_ms = t_collect.as_secs_f64() * 1000.0;
     }
     let facade_lden = result.total.lden_db;
-    let indoor = inside_envelope
-        .and_then(|(class, height)| class.delta_db().map(|delta| (class, height, delta)));
+    let indoor = inside_envelope.and_then(|winner| {
+        winner
+            .effective_class
+            .delta_db()
+            .map(|delta| (winner.stored_class, winner.height_m, delta))
+    });
     if let Some((_, _, delta)) = indoor {
         wire::attenuate_total_for_indoor_display(&mut result, delta);
     }

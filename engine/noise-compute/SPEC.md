@@ -2407,6 +2407,13 @@ semantic class. Courtyards remain outdoor through the existing footprint hole
 parity. Overlapping enclosed footprints choose the tallest containing
 footprint, then the lower index ordinal and lower footprint ordinal.
 
+For an unclassified (`DEFAULT`) footprint, the shared
+`effective_envelope_class(class, height_m)` rule uses the lightweight 20 dB
+assumption at height ≤6 m and the 25 dB `DEFAULT` assumption above 6 m. The
+stored `envelope_class` remains `DEFAULT`; this is a paint/popup application
+rule, not a data rewrite. Classified footprints keep their class-specific
+values at every height.
+
 The display equation is:
 
 ```text

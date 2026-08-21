@@ -34,7 +34,7 @@ use anyhow::{bail, Context, Result};
 use arrow::array::{Array, BinaryArray, Float32Array, Float64Array, UInt8Array};
 use arrow::ipc::reader::FileReader;
 use h3o::{CellIndex, LatLng};
-use noise_compute::envelope::EnvelopeClass;
+use noise_compute::envelope::{effective_envelope_class, EnvelopeClass};
 use noise_compute::low_profile::LowProfileLookup;
 use noise_compute::propagation::obstacle_index::{
     vector_buildings_enabled, ObstacleIndex, ObstacleKind, ObstacleSet,
@@ -184,9 +184,11 @@ pub fn bake_tile_vector_rx_refl(
 /// this one answers "is this point indoors", which a 3 m garage also is.
 const INTERIOR_MASK_MIN_HEIGHT_M: f32 = 0.0;
 
-/// Classify the receiver lattice once per tile. The result is a class raster,
-/// not a boolean mask: OUTDOOR footprints remain ordinary receivers and every
-/// enclosed class carries the ΔL used by Pass B.
+/// Classify the receiver lattice once per tile. The result is an effective
+/// class raster, not a boolean mask: OUTDOOR footprints remain ordinary
+/// receivers and every enclosed class carries the ΔL used by Pass B. The
+/// source `envelope_class` in Arrow remains unchanged; the height-aware
+/// effective class exists only in this paint-time raster.
 ///
 /// WHY classify at all: END / CNOSSOS strategic mapping puts receivers on
 /// FACADES, never indoors. A receiver inside a footprint must therefore use a
@@ -230,8 +232,8 @@ pub fn bake_tile_envelope_classes(
                         .then_with(|| b.2.cmp(&a.2))
                         .then_with(|| b.3.cmp(&a.3))
                 });
-            if let Some((class, _, _, _)) = winner {
-                classes[py * TILE_PX + px] = class as u8;
+            if let Some((class, height, _, _)) = winner {
+                classes[py * TILE_PX + px] = effective_envelope_class(class, height) as u8;
             }
         }
     }
@@ -895,6 +897,16 @@ mod tests {
             indoor(px_of(0.0, 600.0)),
             "a 3 m garage interior is enclosed"
         );
+        assert_eq!(
+            EnvelopeClass::from_u8(classes[px_of(70.0, 0.0)]),
+            EnvelopeClass::Default,
+            "the tall unclassified block keeps DEFAULT in the effective raster"
+        );
+        assert_eq!(
+            EnvelopeClass::from_u8(classes[px_of(0.0, 600.0)]),
+            EnvelopeClass::Industrial,
+            "the short unclassified garage uses the lightweight 20 dB delta"
+        );
 
         // ~12.26 m/px at this lat ⇒ (200² − 60²) + 20² m² ≈ 245 px.
         let masked = classes.iter().filter(|&&v| v != 0).count();
@@ -911,9 +923,11 @@ mod tests {
                 if class == noise_compute::envelope::EnvelopeClass::Outdoor as u8 {
                     100
                 } else {
-                    // All synthetic façade cells contain 50 dB, so the
-                    // DEFAULT 25 dB product estimate quantises to 25 dB.
-                    crate::wire_hm3::quantise_lden(25.0)
+                    // The façade cells contain 50 dB; the effective class
+                    // chooses 25 dB for the 12 m block and 20 dB for the 3 m
+                    // unclassified garage.
+                    let delta = EnvelopeClass::from_u8(class).delta_db().unwrap();
+                    crate::wire_hm3::quantise_lden(50.0 - delta)
                 },
                 "cell {i}"
             );

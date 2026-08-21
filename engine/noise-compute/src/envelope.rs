@@ -49,3 +49,56 @@ impl EnvelopeClass {
         }
     }
 }
+
+/// Select the in-memory envelope class used for the indoor display estimate.
+///
+/// The Arrow `envelope_class` remains the source classification. Only an
+/// unclassified low building uses the lightweight 20 dB assumption, encoded
+/// by reusing the existing `Industrial` delta; all taller/default buildings
+/// keep the WHO 2018-informed 25 dB `Default` delta. Keeping this decision in
+/// the shared noise-compute crate makes painter and popup selection identical.
+pub const fn effective_envelope_class(class: EnvelopeClass, height_m: f32) -> EnvelopeClass {
+    match class {
+        EnvelopeClass::Default if height_m <= 6.0 => EnvelopeClass::Industrial,
+        _ => class,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{effective_envelope_class, EnvelopeClass};
+
+    #[test]
+    fn effective_envelope_class_height_matrix() {
+        assert_eq!(
+            effective_envelope_class(EnvelopeClass::Default, 5.0),
+            EnvelopeClass::Industrial
+        );
+        assert_eq!(
+            effective_envelope_class(EnvelopeClass::Default, 7.0),
+            EnvelopeClass::Default
+        );
+        assert_eq!(
+            effective_envelope_class(EnvelopeClass::Default, 5.0)
+                .delta_db()
+                .unwrap(),
+            20.0
+        );
+        assert_eq!(
+            effective_envelope_class(EnvelopeClass::Default, 7.0)
+                .delta_db()
+                .unwrap(),
+            25.0
+        );
+
+        for class in [
+            EnvelopeClass::Residential,
+            EnvelopeClass::Commercial,
+            EnvelopeClass::Industrial,
+            EnvelopeClass::Historic,
+        ] {
+            assert_eq!(effective_envelope_class(class, 5.0), class);
+            assert_eq!(effective_envelope_class(class, 7.0), class);
+        }
+    }
+}

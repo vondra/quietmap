@@ -52,7 +52,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use arrow::array::{Array, BinaryArray, Float32Array, Float64Array, UInt8Array};
 use arrow::ipc::reader::FileReader;
 use h3o::{CellIndex, LatLng, Resolution};
-use noise_compute::envelope::EnvelopeClass;
+use noise_compute::envelope::{effective_envelope_class, EnvelopeClass};
 use noise_compute::low_profile::LowProfileLookup;
 use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind, ObstacleSet};
 use noise_compute::propagation::obstacle_index_file::{fnv1a64, IndexBlob, BUILDER_CODE_VER};
@@ -581,18 +581,31 @@ pub fn point_inside_obstacle(set: &ObstacleSet, lat: f64, lon: f64) -> Option<f3
 }
 
 /// Display-envelope winner shared with the painter: only enclosed footprints
-/// participate, tallest first and ordinal second.
+/// participate, tallest first and ordinal second. `stored_class` is the
+/// source classification; `effective_class` is the paint/popup delta choice
+/// and is never written back to the Arrow data.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EnclosedEnvelopeWinner {
+    pub stored_class: EnvelopeClass,
+    pub effective_class: EnvelopeClass,
+    pub height_m: f32,
+}
+
 pub fn point_inside_enclosed(
     set: &ObstacleSet,
     lat: f64,
     lon: f64,
-) -> Option<(noise_compute::envelope::EnvelopeClass, f32)> {
+) -> Option<EnclosedEnvelopeWinner> {
     let mut seen = Vec::new();
     set.indexes
         .iter()
         .filter_map(|index| index.containing_enclosed(lat, lon, 0.0, &mut seen))
         .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.2.cmp(&a.2)))
-        .map(|(class, height, _)| (class, height))
+        .map(|(stored_class, height_m, _)| EnclosedEnvelopeWinner {
+            stored_class,
+            effective_class: effective_envelope_class(stored_class, height_m),
+            height_m,
+        })
 }
 
 /// One cell's index, from the nearest source that still holds it: the process
@@ -1071,6 +1084,18 @@ mod tests {
             (t - 40.0).abs() < 0.1,
             "overlap must report the tallest, got {t}"
         );
+
+        let block = point_inside_enclosed(&set, at(30.0, 0.0).0, at(30.0, 0.0).1)
+            .expect("the tall unclassified block is an enclosed winner");
+        assert_eq!(block.stored_class, EnvelopeClass::Default);
+        assert_eq!(block.effective_class, EnvelopeClass::Default);
+        assert_eq!(block.effective_class.delta_db(), Some(25.0));
+
+        let garage = point_inside_enclosed(&set, at(0.0, 193.0).0, at(0.0, 193.0).1)
+            .expect("the short unclassified garage is an enclosed winner");
+        assert_eq!(garage.stored_class, EnvelopeClass::Default);
+        assert_eq!(garage.effective_class, EnvelopeClass::Industrial);
+        assert_eq!(garage.effective_class.delta_db(), Some(20.0));
     }
 
     /// One tiny valid shard: a single closed square footprint (~20 m) whose

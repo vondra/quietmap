@@ -204,6 +204,11 @@ wall-and-window reduction), not a second propagation run:
 | Historic building | 28 dB |
 | Other building | 25 dB |
 
+For an unclassified building, the map uses the lightweight 20 dB reduction at
+height ≤6 m and the 25 dB default above 6 m. The stored building class does
+not change; this is only the shared paint-and-popup rule for applying the
+estimate. Classified building types keep their values at every height.
+
 The default 25 dB closed-window value follows the newer WHO Environmental
 Noise Guidelines for the European Region (2018) context. A fully open window
 is approximately 10 dB in the WHO 2018 context; the popup's tilted/open
