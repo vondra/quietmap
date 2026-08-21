@@ -188,6 +188,9 @@ pub struct WireResult {
     pub h3_center: [f64; 2],
     pub elevation_m: f64,
     #[serde(serialize_with = "noise_compute::types::serialize_lden_db_opt")]
+    /// Aggregate display total. When the receiver is inside an enclosed
+    /// footprint, this carries the indoor estimate; source, contributor and
+    /// segment values below remain the façade values that produced it.
     pub total_lden: f64,
     #[serde(serialize_with = "noise_compute::types::serialize_lden_db_opt")]
     pub total_lden_free: f64,
@@ -201,9 +204,9 @@ pub struct WireResult {
     /// popup has to be able to say why the map is blank under the cursor.
     /// Vector-obstacle regions only; `false` wherever the raster path runs.
     ///
-    /// PURELY a label: every dB number in this response is computed exactly as
-    /// before. What an indoor receiver should REPORT (facade exposure) is a
-    /// separate product decision.
+    /// `sources`, `top_contributors`, `other_sources_lden`, and `segments`
+    /// remain the façade values from the outdoor donor query. Only the
+    /// aggregate display total applies the indoor product estimate.
     pub inside_building: bool,
     /// Height (m) of the tallest footprint containing the point. Absent when
     /// [`Self::inside_building`] is false.
@@ -262,8 +265,14 @@ pub fn build_wire_result(
         envelope_class: indoor.map(|(class, _, _, _)| class.name()),
         envelope_delta_db: indoor.map(|(_, _, delta, _)| delta),
         facade_lden: indoor.map(|(_, _, _, facade)| round1(facade)),
-        indoor_lden: indoor.map(|_| round1(result.total.lden_db)),
-        indoor_lden_tilted: indoor.map(|(_, _, _, facade)| round1((facade - 15.0).max(0.0))),
+        indoor_lden: indoor.and_then(|(_, _, delta, facade)| {
+            facade
+                .is_finite()
+                .then(|| round1((facade - delta).max(0.0)))
+        }),
+        indoor_lden_tilted: indoor.and_then(|(_, _, _, facade)| {
+            facade.is_finite().then(|| round1((facade - 15.0).max(0.0)))
+        }),
         indoor_estimate: indoor.map(|_| true),
         compute_time_ms: COMPUTE_TIME_MS_SENTINEL,
         segments: result.segments,
@@ -272,8 +281,12 @@ pub fn build_wire_result(
     }
 }
 
-/// Apply one façade-to-indoor product estimate to every displayed level.
-pub fn attenuate_result(result: &mut NoiseResult, delta: f64) {
+/// Apply the façade-to-indoor product estimate only to aggregate display totals.
+///
+/// Source rows and segment traces are deliberately left at their façade
+/// values: they describe the actual source-to-receiver computation, while the
+/// indoor estimate is a display-level transformation of the final total.
+pub fn attenuate_total_for_indoor_display(result: &mut NoiseResult, delta: f64) {
     let attenuate = |value: &mut f64| {
         if value.is_finite() {
             *value = (*value - delta).max(0.0)
@@ -285,21 +298,4 @@ pub fn attenuate_result(result: &mut NoiseResult, delta: f64) {
         attenuate(&mut periods.ln_db);
         attenuate(&mut periods.lden_db);
     }
-    for source in &mut result.sources {
-        for periods in [&mut source.periods, &mut source.periods_free] {
-            attenuate(&mut periods.ld_db);
-            attenuate(&mut periods.le_db);
-            attenuate(&mut periods.ln_db);
-            attenuate(&mut periods.lden_db);
-        }
-    }
-    for contributor in &mut result.contributors {
-        for periods in [&mut contributor.periods, &mut contributor.periods_free] {
-            attenuate(&mut periods.ld_db);
-            attenuate(&mut periods.le_db);
-            attenuate(&mut periods.ln_db);
-            attenuate(&mut periods.lden_db);
-        }
-    }
-    attenuate(&mut result.other_sources_lden);
 }

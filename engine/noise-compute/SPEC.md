@@ -2413,6 +2413,15 @@ The display equation is:
 L_indoor = max(0, L_facade - ΔL[class])
 ```
 
+For the popup, `L_facade` is the aggregate total from the normal outdoor-donor
+query. The source rows, contributor rows, and segment traces remain at those
+façade values because they describe the actual source-to-receiver physics.
+Only the aggregate display totals (`total_lden` and `total_lden_free`) receive
+the reduction; the popup presents the façade total, the building-envelope
+step, and the resulting indoor estimate as one calculation breakdown. In the
+plain-language UI, “building envelope” is shown as “Walls & windows” followed
+by the selected building type.
+
 The ΔL values are product closed-window assumptions informed by literature,
 not ISO/WHO class values. EN ISO 12354-3 / ISO 16283-3 describe
 façade-to-indoor methodology; WHO's 15 dB tilted/open value is popup context
@@ -2420,8 +2429,10 @@ only. Occupant behaviour dominates; the estimate is typically uncertain by
 ±8–12 dB. Propagation physics, source reach, speed floors, and HM3 format are
 unchanged.
 
-The same ΔL is applied to every layer; applying the traffic correction `C_tr`
-to rail and aircraft is a documented product simplification.
+The same ΔL is applied to the aggregate total regardless of the contributing
+source layers; it is not applied to individual source, contributor, or segment
+rows. Applying the traffic correction `C_tr` to rail and aircraft is a
+documented product simplification.
 
 #### Donor transform and two-pass paint
 

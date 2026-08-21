@@ -19,12 +19,21 @@ export interface NoiseDetailContentProps {
   maxSources?: number
 }
 
+interface IndoorCalculation {
+  buildingType: string
+  facadeLden: number
+  reductionDb: number
+  indoorLden: number
+  tiltedLden: number | null
+}
+
 // The rich popup body (sources + segments tabs, diagrams, per-effect tooltips).
 // It pulls in the whole components/noise/ tree (~3.8 kLoC), so it is a lazy
 // chunk — DetailCard / MobileDetailSheet import it via React.lazy and show
 // DetailSkeleton until both the ~1.5 s noise compute AND this chunk land.
 export default function NoiseDetailContent({ data, onHighlight, maxSources }: NoiseDetailContentProps) {
   const [centerLat, centerLng] = data.h3_center
+  const indoorCalculation = getIndoorCalculation(data)
   // Hide silence-sentinel values (sources with no audible contribution at this point).
   // The Rust engine returns periods even for empty source classes; their Lden falls
   // to ~−113 dB (silence) which is meaningless to display in the breakdown.
@@ -34,6 +43,15 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
           .filter(s => s.lden != null && s.lden > 0)
           .map(s => [SOURCE_LABELS[s.source_type] ?? s.source_type, `${s.lden!.toFixed(1)} dB`] as [string, string]),
         { sep: true },
+        ...(indoorCalculation ? [
+          ['Outside at the wall', `${indoorCalculation.facadeLden.toFixed(1)} dB`] as [string, string],
+          [`Walls & windows (${indoorCalculation.buildingType})`, `−${indoorCalculation.reductionDb.toFixed(1)} dB`] as [string, string],
+          ['Indoors', `~${indoorCalculation.indoorLden.toFixed(1)} dB (estimate, windows closed)`] as [string, string],
+          ...(indoorCalculation.tiltedLden != null
+            ? [['Tilted/open window', `~${indoorCalculation.tiltedLden.toFixed(1)} dB (estimate)`] as [string, string]]
+            : []),
+        ] : []),
+        ...(indoorCalculation ? [{ sep: true } as const] : []),
         ['Total Lden', `${data.total_lden.toFixed(1)} dB`],
       ], 14, 9)
     : ''
@@ -99,14 +117,7 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
               )}
             </div>
           </div>
-          {data.indoor_estimate && data.indoor_lden != null && data.facade_lden != null && (
-            <div className="mb-1 text-xs text-muted-foreground">
-              <div>Inside building ~{data.indoor_lden.toFixed(1)} dB (estimate)</div>
-              <div>Facade {data.facade_lden.toFixed(1)} dB · closed-window product estimate (EN ISO 12354-3 methodology)</div>
-              <div>Estimate uncertainty ±8–12 dB; occupant behaviour dominates.</div>
-              {data.indoor_lden_tilted != null && <div>Tilted/open window ~{data.indoor_lden_tilted.toFixed(1)} dB (WHO 15 dB)</div>}
-            </div>
-          )}
+          <IndoorCalculationBreakdown calculation={indoorCalculation} />
           {hasSegmentsTab ? (
             <TabStrip
               active={tab}
@@ -159,6 +170,62 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
       ) : (
         <div className="text-sm text-muted-foreground mt-1">No noise data computed for this location.</div>
       )}
+    </div>
+  )
+}
+
+function getIndoorCalculation(data: NoiseComputeData): IndoorCalculation | null {
+  if (
+    !data.indoor_estimate ||
+    data.facade_lden == null ||
+    data.envelope_delta_db == null ||
+    data.indoor_lden == null
+  ) {
+    return null
+  }
+  return {
+    buildingType: buildingTypeLabel(data.envelope_class),
+    facadeLden: data.facade_lden,
+    reductionDb: data.envelope_delta_db,
+    indoorLden: data.indoor_lden,
+    tiltedLden: data.indoor_lden_tilted ?? null,
+  }
+}
+
+function buildingTypeLabel(envelopeClass: NoiseComputeData['envelope_class']): string {
+  switch (envelopeClass) {
+    case 'residential': return 'house'
+    case 'commercial': return 'office'
+    case 'industrial': return 'industrial hall'
+    case 'historic': return 'historic building'
+    default: return 'building'
+  }
+}
+
+function IndoorCalculationBreakdown({ calculation }: { calculation: IndoorCalculation | null }) {
+  if (!calculation) return null
+  return (
+    <div data-testid="indoor-calculation" className="mb-1 border-b border-border/50">
+      <div className="flex items-baseline gap-1.5 px-0 py-1 text-xs">
+        <span className="truncate flex-1">Outside at the wall:</span>
+        <span className="shrink-0 text-right tabular-nums">{calculation.facadeLden.toFixed(1)} dB</span>
+      </div>
+      <div className="flex items-baseline gap-1.5 px-0 py-1 text-xs">
+        <span className="truncate flex-1">Walls &amp; windows ({calculation.buildingType}):</span>
+        <span className="shrink-0 text-right tabular-nums">−{calculation.reductionDb.toFixed(1)} dB</span>
+      </div>
+      <div className="flex items-baseline gap-1.5 px-0 py-1 text-xs font-medium">
+        <span className="truncate flex-1">Indoors:</span>
+        <span className="shrink-0 text-right tabular-nums">
+          ~{calculation.indoorLden.toFixed(1)} dB <span className="font-normal text-muted-foreground/70">(estimate, windows closed)</span>
+        </span>
+      </div>
+      <div className="px-0 pb-1 text-[11px] leading-snug text-muted-foreground/70">
+        {calculation.tiltedLden != null && (
+          <div>Tilted/open window: ~{calculation.tiltedLden.toFixed(1)} dB (estimate)</div>
+        )}
+        <div>Estimate uncertainty ±8–12 dB; occupant behaviour dominates.</div>
+      </div>
     </div>
   )
 }

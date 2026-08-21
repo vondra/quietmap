@@ -528,7 +528,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     let indoor = inside_envelope
         .and_then(|(class, height)| class.delta_db().map(|delta| (class, height, delta)));
     if let Some((_, _, delta)) = indoor {
-        wire::attenuate_result(&mut result, delta);
+        wire::attenuate_total_for_indoor_display(&mut result, delta);
     }
     let wire_result = wire::build_wire_result(
         result,

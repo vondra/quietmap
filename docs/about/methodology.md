@@ -189,6 +189,31 @@ This is a **custom extension, not a CNOSSOS-EU standard source**: the EU Environ
 - **Model:** one **area-law** — a bigger source is louder; the same rule for a warehouse, a supermarket, a restaurant terrace and a football pitch
 - **Impact:** twice as big ≈ +3 dB; a 10-floor block over its footprint ≈ +10 dB vs one floor
 
+#### Indoor estimate at an enclosed building
+
+The map receiver is normally a façade/outdoor receiver. When a click is
+inside an enclosed Overture footprint, the popup also gives a closed-window
+indoor estimate. This is a display-level use of the building envelope (the
+wall-and-window reduction), not a second propagation run:
+
+| Building type | Product reduction ΔL |
+|---|---:|
+| House | 30 dB |
+| Office | 35 dB |
+| Industrial hall | 20 dB |
+| Historic building | 28 dB |
+| Other building | 28 dB |
+
+These reductions are product assumptions, not ISO or WHO class values. The
+method follows the façade-to-indoor approach described by EN ISO 12354-3 and
+ISO 16283-3. The popup shows the real computation as three tidy total-level
+steps: **outside at the wall** → **walls & windows** → **indoors**. Source
+groups, source-receiver segments, angles, and path effects remain the actual
+façade values computed by the engine; only the aggregate display total uses
+the reduction. A tilted/open-window variant uses the product's 15 dB context
+value (WHO); occupant behaviour dominates, so the estimate is typically
+uncertain by ±8–12 dB.
+
 #### The exact maths
 
 Each source radiates a total **sound power** `Lw` (like the wattage of a loudspeaker — how much sound it pours out *before* any travels to you):
