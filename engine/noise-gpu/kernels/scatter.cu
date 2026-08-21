@@ -525,6 +525,13 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #ifndef ARC_HULL_CACHE
 #define ARC_HULL_CACHE 0
 #endif
+// Candidate-4 exact work deletion. In the complete vector-backed fan branch,
+// every bucket computes its own screening verdict; the cp screening result is
+// dead after its terrain/profile feeds ground G and vegetation. `=0` is the
+// otherwise-identical measurement control.
+#ifndef CP_SCREEN_DELETE
+#define CP_SCREEN_DELETE 1
+#endif
 // Vector noise walls are SEGMENTS on the GPU too (fix-pack Fix 3): 7 f64 each,
 // {start_lat, start_lon, end_lat, end_lon, height_m, dist_m, source_id_bits}. Mirrors
 // `noise_gpu::BARRIER_STRIDE` and `types::BARRIER_PATH_HORIZON_M`.
@@ -1007,21 +1014,21 @@ __device__ __forceinline__ bool seg_may_isect_f32(
 
 // ---- obstacle_index::segment_intersection_t — chainage of ray×edge, t strictly
 // inside (0,1), hit within the segment (u ∈ [0,1] inclusive), collinear → none.
-// f64 by DEFAULT. The EXPERIMENTAL `SEG_ISECT_F32` switch narrows this solve
-// only. NOTE THE SCOPE: this
+// Candidate-4 defaults the reviewed `SEG_ISECT_F32` speed lever on; `=0` keeps
+// the otherwise-identical f64 control. NOTE THE SCOPE: this
 // serves the cp ray's own crossings walk (`obstacle_best_candidate`) and the
 // barrier race (`barrier_best_candidate`) as well as the arc walks, so the
-// switch reaches the NON-arc path here — which is one reason it stays off by
-// default. The cheap win that DOES ship is not doing the solve at all when the
+// switch reaches the NON-arc path here. The cheap independent win is not doing
+// the solve at all when the
 // edge obviously misses, which `seg_may_isect_f32` above decides for both arms.
 // In the repaired official RTX role-attribution series this role contributed a
 // repeatable 7.64--15.94% road and 5.13--9.60% rail gain, with every paired
-// role-attribution output byte-identical. The complete fixed-workload repeat is
-// a separate pending gate. This still makes strict topology decisions in f32
-// without an ambiguity proof or complete-operation f64 restart, so it is not
-// product-safe and must remain an explicit experiment.
+// role-attribution output byte-identical. Its accepted default is an explicit
+// accuracy-headroom spend; Candidate-4 re-scores the composed output against
+// the regenerated bcb872e CPU reference while retaining `=0` as the isolation
+// control.
 #ifndef SEG_ISECT_F32
-#define SEG_ISECT_F32 0
+#define SEG_ISECT_F32 1
 #endif
 __device__ __forceinline__ bool seg_isect_t(
     double sx, double sy, double dx, double dy,
@@ -1742,6 +1749,22 @@ __device__ void clamp_source_platform(const double* t, double* e, int n, double 
     }
 }
 
+// Undo only the temporary diffraction carve before a caller fits its physical
+// ground plane. Shared by the screened and screening-deleted ray exits so the
+// Candidate-4 arm cannot drift from §3.5.1 restoration.
+__device__ __forceinline__ void restore_source_platform_samples(
+    const float* elev, int rows, int cols,
+    float src_rf, float src_cf, float d_rf, float d_cf,
+    const double* t, double* e, int n, double dist)
+{
+    for (int i = 1; i < n; i++) {
+        if (t[i] * dist >= CELL_M) break;
+        float rf = src_rf + (float)t[i] * d_rf;
+        float cf = src_cf + (float)t[i] * d_cf;
+        e[i] = (double)bilinear_elev_rc(elev, rows, cols, rf, cf);
+    }
+}
+
 // ---- the CLEAR-FAN arm of `ray_path_bands`: bare-earth terrain only.
 //
 // A clear direction has no obstacle to rank, so the crossing scan, the
@@ -1786,7 +1809,7 @@ __device__ int ray_path_bands(
     const double* barr, int nbarr, const unsigned long long* obst,
     double* tprof, double* ed, double* comp,
     unsigned char* bld, unsigned char* forr, unsigned char* imdp,
-    float* terr, float* screen, int need_cover
+    float* terr, float* screen, int need_cover, int need_screening
 #if V2_H0
     , int need_vector, int *vector_path_present
 #endif
@@ -1835,6 +1858,16 @@ __device__ int ray_path_bands(
     // path effects (bands in fp32)
     terrain_bands(tprof, ed, n, dist, salt, ralt, terr);
     for (int i = 0; i < NB; i++) screen[i] = 0.0f;
+    // A complete non-degenerate vector fan consumes only the bucket rays'
+    // screening. The cp profile still supplies terrain, ground G, vegetation,
+    // and its raw elevation scratch, so delete only the dead crossing/composite
+    // phase and restore the shared profile exactly as the screened exit does.
+    if (!need_screening) {
+        restore_source_platform_samples(
+            elev, rows, cols, src_rf, src_cf, d_rf, d_cf,
+            tprof, ed, n, dist);
+        return n;
+    }
     // Vector obstacles (geodata-v2, QM_VECTOR_BUILDINGS=1): exact crossings
     // REPLACE the raster building channel (path_effects
     // replace_sample_buildings) — the composite keeps only barriers, and the
@@ -1897,11 +1930,9 @@ __device__ int ray_path_bands(
     // caller's ground mean-plane OLS (over `ed`) and vegetation keep the
     // uncarved earth — the clamp applies at the diffraction/screening
     // evaluation points only. Deterministic re-read, ≤ the CELL_M zone.
-    for (int i = 1; i < n; i++) {
-        if (tprof[i] * dist >= CELL_M) break; // t ascending — zone ends here
-        float rf = src_rf + (float)tprof[i] * d_rf, cf = src_cf + (float)tprof[i] * d_cf;
-        ed[i] = (double)bilinear_elev_rc(elev, rows, cols, rf, cf);
-    }
+    restore_source_platform_samples(
+        elev, rows, cols, src_rf, src_cf, d_rf, d_cf,
+        tprof, ed, n, dist);
     return n;
 }
 
@@ -3201,7 +3232,7 @@ __device__ void arc_screen_bands(
                         ray_path_bands(elev, cover, rows, cols, lat_min, lon_min, inv,
                                        slat, slon, isalt, rlat, rlon, ralt, idist,
                                        barr, nbarr, obst, tprof, ed, comp,
-                                       bld, forr, imdp, iterr, bands, 0
+                                       bld, forr, imdp, iterr, bands, 0, 1
 #if V2_H0
                                        , 1, (int *)0
 #endif
@@ -3449,7 +3480,7 @@ __device__ __forceinline__ void line_source_h0(
             elev, cover, rows, cols, lat_min, lon_min, inv,
             slat, slon, salt, rlat, rlon, ralt, node.node_distance_m,
             barr, nbarr, obst, tprof, ed, comp, bld, forr, imdp,
-            terrain, screening, 1, admitted, &vector_path_present);
+            terrain, screening, 1, 1, admitted, &vector_path_present);
         const float mean_imd = path_integral_imd(tprof, imdp, sample_count);
         const float ground_g = sp[3] != 0.0
             ? 0.0f
@@ -3660,6 +3691,24 @@ __device__ __forceinline__ void line_source(
     ub *= UB_SAFETY;
     if (ub_only) { resid += ub; npair++; return; }   // byte-stop cheap pass
 
+    // Candidate-4 decides whether the cp screening phase is dead before that
+    // ray runs. Reproduce the production fan-validity operations exactly, but
+    // retain only one bool across the large ray/ground phase; the full frame is
+    // rebuilt below so six f64 coordinates do not extend the live frame.
+    bool has_footprints = obst[0] != 0ULL && obst[6] != 0ULL;
+    double mlon = M_LON_EQ * fmax(cos(rlat * (PI_D / 180.0)), 0.01);
+    bool has_complete_fan = false;
+    if (has_footprints) {
+        double early_ax = (seg[1] - rlon) * mlon;
+        double early_ay = (seg[0] - rlat) * M_LAT;
+        double early_bx = (seg[3] - rlon) * mlon;
+        double early_by = (seg[2] - rlat) * M_LAT;
+        double early_ex = early_bx - early_ax;
+        double early_ey = early_by - early_ay;
+        double early_len2 = early_ex * early_ex + early_ey * early_ey;
+        has_complete_fan = early_len2 >= 1e-6;
+    }
+
     // ONE ray evaluator for the cp ray and every arc-screening interval ray
     // (ray_path_bands): cadence march + barriers + terrain + vector candidate +
     // screening. It OWNS tprof/ed/comp/bld/forr/imdp, so anything read off the
@@ -3668,7 +3717,8 @@ __device__ __forceinline__ void line_source(
     int n = ray_path_bands(elev, cover, rows, cols, lat_min, lon_min, inv,
                            cplat, cplon, salt, rlat, rlon, ralt, dend,
                            barr, nbarr, obst, tprof, ed, comp, bld, forr, imdp,
-                           terr, screen, 1
+                           terr, screen, 1,
+                           !CP_SCREEN_DELETE || !has_complete_fan
 #if V2_H0
                            , 1, (int *)0
 #endif
@@ -3718,16 +3768,15 @@ __device__ __forceinline__ void line_source(
     // into ONE span-centre bucket when the whole span fits under the 3° gate,
     // SEG_SAMPLES equal angular buckets otherwise (the L3 span-adaptive count —
     // see the n_buck comment below); the CPU lane cuts SEG_SAMPLES always.
-    bool has_footprints = obst[0] != 0ULL && obst[6] != 0ULL;
     float gob[NB];
     // The receiver-centred flat frame (seg_sampling::SegFan::new): cheap enough
-    // to build unconditionally — the two atan2 the span costs sit inside the
-    // branch that needs them.
-    double mlon = M_LON_EQ * fmax(cos(rlat * (PI_D / 180.0)), 0.01);
+    // to rebuild after the cp ray without carrying six f64 coordinates through
+    // its large live frame — the two atan2 the span costs sit inside the branch
+    // that needs them. `mlon` and `has_complete_fan` were established above.
     double ax = (seg[1] - rlon) * mlon, ay = (seg[0] - rlat) * M_LAT;
     double bx = (seg[3] - rlon) * mlon, by = (seg[2] - rlat) * M_LAT;
     double ex = bx - ax, ey = by - ay;
-    if (has_footprints && ex * ex + ey * ey >= 1e-6) {
+    if (has_complete_fan) {
         double az0 = atan2(ay, ax);
         double span = atan2(by, bx) - az0;
         if (span > PI_D) span -= 2.0 * PI_D;
@@ -3782,7 +3831,7 @@ __device__ __forceinline__ void line_source(
             ray_path_bands(elev, cover, rows, cols, lat_min, lon_min, inv,
                            slat, slon, salt_k, rlat, rlon, ralt, sdist,
                            barr, nbarr, obst, tprof, ed, comp, bld, forr, imdp,
-                           terr_k, screen_k, 0
+                           terr_k, screen_k, 0, 1
 #if V2_H0
                            , 1, (int *)0
 #endif

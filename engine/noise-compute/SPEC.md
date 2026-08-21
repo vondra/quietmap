@@ -1115,16 +1115,26 @@ WHICH RULE RUNS WHERE, and why they are not the same choice:
   `QM_ARC_MIN_SPAN_DEG=0` are the PRE-PORT kernel's rule, and before the port
   they were the pins this comparison had to run under, which hid the fork by
   construction.)
-  Its arc geometry is f64. One EXPERIMENTAL `SEG_ISECT_F32` switch narrows the
+  Candidate-4 deletes one output-exact subphase in the complete,
+  non-degenerate vector-fan branch: the cp ray still marches DEM+cover and
+  supplies terrain, the ground plane, G and vegetation, but it does not scan
+  obstacle/barrier crossings or build a screening composite. That screening
+  value is dead because every bucket supplies its own composite; raster
+  fallback, an incomplete/degenerate fan, and every bucket/interval/H0 ray keep
+  screening unchanged. Even the complete-fan `used==0` fallback consumes only
+  the cp terrain and ground terms, never its screening result.
+  `CP_SCREEN_DELETE=0` is the reviewed measurement control.
+  Its arc geometry is f64. The reviewed `SEG_ISECT_F32` switch narrows the
   shared ray-edge chainage solve after its coordinate differences are formed in
   f64. In the repaired official RTX role-attribution series this role contributed
   a repeatable **7.64--15.94 % road** and **5.13--9.60 % rail** gain; every
-  role-attribution pair was byte-identical. This is a SPEED CEILING, not a
-  safety result: strict intersection boundaries can change topology without an
-  ambiguity proof and complete-operation f64 restart, and the candidate has not
-  passed the complete fixed workload or the independent dense and polar gates.
-  The switch therefore remains **OFF** by default. Implementation and stop rule:
-  `scatter.cu` at `SEG_ISECT_F32`.
+  role-attribution pair was byte-identical. Candidate-4 explicitly spends the
+  accepted accuracy headroom and defaults this lever **ON**, while retaining
+  `SEG_ISECT_F32=0` as the otherwise-identical f64 isolation control. Strict
+  intersection boundaries can still change topology; the composed candidate
+  is therefore scored against the regenerated bcb872e CPU reference rather
+  than treating the earlier byte identity as a proof. Implementation and
+  control: `scatter.cu` at `SEG_ISECT_F32`.
 
 The uniform rule hands back the ground/barrier COMPOSITE, not a screening
 increment, so at the OUTER level — the quadrature's own average over buckets —

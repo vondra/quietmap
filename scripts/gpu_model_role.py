@@ -35,6 +35,7 @@ EXPERIMENTAL_DEFINE_NAMES = frozenset(
         "ARC_MIN_SPAN_REALISED",
         "ARC_TRI_WALK",
         "CAND_END_WINDOW_M",
+        "CP_SCREEN_DELETE",
         "PENUMBRA",
         "PROF_ABLATE",
         "PROF_BLOCK_MOD",
