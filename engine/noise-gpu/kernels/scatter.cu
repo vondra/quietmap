@@ -3640,7 +3640,12 @@ __device__ __forceinline__ bool seg_fan_at(
     return true;
 }
 
-__device__ __forceinline__ void line_source(
+// Keep the source-pair evaluator in its own device frame. The adaptive fan
+// loop and its arc-screening callees are deliberately large; forcing them into
+// each launch kernel makes the driver's PTX JIT retain the complete combined
+// frame while compiling. A call boundary changes storage/liveness only; the
+// candidate-4 arithmetic and traversal order remain inside this function.
+__device__ __noinline__ void line_source(
     const float* elev, const float* inner, const unsigned char* cover,
     int rows, int cols, double lat_min, double lon_min, double inv, const double* bb,
     double rlat, double rlon, double ralt, double refl, bool ub_only,
