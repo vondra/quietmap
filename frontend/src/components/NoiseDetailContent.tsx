@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ldenToColor } from '../utils/noise-colors'
 import { DataPoint } from './noise/noise-tooltips'
+import { HoverText } from './ui/info-tip'
 import { txtTable } from '../utils/formatters'
 import { SOURCE_LABELS } from './noise/shared'
 import { SegmentList } from './noise/SegmentList'
@@ -44,12 +45,8 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
           .map(s => [SOURCE_LABELS[s.source_type] ?? s.source_type, `${s.lden!.toFixed(1)} dB`] as [string, string]),
         { sep: true },
         ...(indoorCalculation ? [
-          ['Outside at the wall', `${indoorCalculation.facadeLden.toFixed(1)} dB`] as [string, string],
-          [`Walls & windows (${indoorCalculation.buildingType})`, `−${indoorCalculation.reductionDb.toFixed(1)} dB`] as [string, string],
-          ['Indoors', `~${indoorCalculation.indoorLden.toFixed(1)} dB (estimate, windows closed)`] as [string, string],
-          ...(indoorCalculation.tiltedLden != null
-            ? [['Tilted/open window', `~${indoorCalculation.tiltedLden.toFixed(1)} dB (estimate)`] as [string, string]]
-            : []),
+          ['Indoors', `~${indoorCalculation.indoorLden.toFixed(1)} dB (estimate)`] as [string, string],
+          indoorCalculationDetail(indoorCalculation),
         ] : []),
         ...(indoorCalculation ? [{ sep: true } as const] : []),
         ['Total Lden', `${data.total_lden.toFixed(1)} dB`],
@@ -206,28 +203,23 @@ function IndoorCalculationBreakdown({ calculation }: { calculation: IndoorCalcul
   if (!calculation) return null
   return (
     <div data-testid="indoor-calculation" className="mb-1 border-b border-border/50">
-      <div className="flex items-baseline gap-1.5 px-0 py-1 text-xs">
-        <span className="truncate flex-1">Outside at the wall:</span>
-        <span className="shrink-0 text-right tabular-nums">{calculation.facadeLden.toFixed(1)} dB</span>
-      </div>
-      <div className="flex items-baseline gap-1.5 px-0 py-1 text-xs">
-        <span className="truncate flex-1">Walls &amp; windows ({calculation.buildingType}):</span>
-        <span className="shrink-0 text-right tabular-nums">−{calculation.reductionDb.toFixed(1)} dB</span>
-      </div>
-      <div className="flex items-baseline gap-1.5 px-0 py-1 text-xs font-medium">
-        <span className="truncate flex-1">Indoors:</span>
-        <span className="shrink-0 text-right tabular-nums">
-          ~{calculation.indoorLden.toFixed(1)} dB <span className="font-normal text-muted-foreground/70">(estimate, windows closed)</span>
+      <HoverText title={indoorCalculationDetail(calculation)} className="block">
+        <span className="flex items-baseline gap-1.5 px-0 py-1 text-xs font-medium">
+          <span className="truncate flex-1">Indoors:</span>
+          <span className="shrink-0 text-right tabular-nums">
+            ~{calculation.indoorLden.toFixed(1)} dB <span className="font-normal text-muted-foreground/70">(estimate)</span>
+          </span>
         </span>
-      </div>
-      <div className="px-0 pb-1 text-[11px] leading-snug text-muted-foreground/70">
-        {calculation.tiltedLden != null && (
-          <div>Tilted/open window: ~{calculation.tiltedLden.toFixed(1)} dB (estimate)</div>
-        )}
-        <div>Estimate uncertainty ±8–12 dB; occupant behaviour dominates.</div>
-      </div>
+      </HoverText>
     </div>
   )
+}
+
+function indoorCalculationDetail(calculation: IndoorCalculation): string {
+  const openWindow = calculation.tiltedLden == null
+    ? ''
+    : ` With an open window: ~${calculation.tiltedLden.toFixed(1)} dB.`
+  return `Outside at the facade: ${calculation.facadeLden.toFixed(1)} dB. A ${calculation.buildingType} typically reduces noise by ~${calculation.reductionDb.toFixed(1)} dB with windows closed.${openWindow} Uncertainty ±8–12 dB.`
 }
 
 function TimingsOverlay({ timings }: { timings: NoiseComputeData['timings'] }) {
