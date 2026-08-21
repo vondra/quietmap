@@ -56,6 +56,7 @@ export default function CellInspectorLayer({
   )
 
   const enabled = activeLayers.length > 0 && noiseLayersOff
+  const shouldRenderCellOutline = activeLayers.some(layer => layer !== 'building')
 
   useEffect(() => {
     if (!enabled || !mapRef) {
@@ -125,7 +126,7 @@ export default function CellInspectorLayer({
   // polygon when the cursor crosses into a new cell.
   const cellKey = hover ? `${cellI}:${cellJ}` : null
   const outline = useMemo(() => {
-    if (!hover) return null
+    if (!hover || !shouldRenderCellOutline) return null
     const half = CELL_STEP_DEG / 2
     const lat0 = cellCenterLat - half
     const lon0 = cellCenterLon - half
@@ -143,24 +144,26 @@ export default function CellInspectorLayer({
       }],
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cellKey])
+  }, [cellKey, shouldRenderCellOutline])
 
-  if (!enabled || !hover || !values || !outline) return null
+  if (!enabled || !hover || !values) return null
 
   return (
     <>
-      <Source id="cell-inspector-outline" type="geojson" data={outline}>
-        <Layer
-          id="cell-inspector-outline-line"
-          type="line"
-          paint={{ 'line-color': 'rgba(0,0,0,0.65)', 'line-width': 1 }}
-        />
-        <Layer
-          id="cell-inspector-outline-fill"
-          type="fill"
-          paint={{ 'fill-color': 'rgba(255,255,255,0.12)' }}
-        />
-      </Source>
+      {outline ? (
+        <Source id="cell-inspector-outline" type="geojson" data={outline}>
+          <Layer
+            id="cell-inspector-outline-line"
+            type="line"
+            paint={{ 'line-color': 'rgba(0,0,0,0.65)', 'line-width': 1 }}
+          />
+          <Layer
+            id="cell-inspector-outline-fill"
+            type="fill"
+            paint={{ 'fill-color': 'rgba(255,255,255,0.12)' }}
+          />
+        </Source>
+      ) : null}
       <div
         style={{
           position: 'fixed',
