@@ -57,6 +57,10 @@ impl EnvelopeClass {
 /// by reusing the existing `Industrial` delta; all taller/default buildings
 /// keep the WHO 2018-informed 25 dB `Default` delta. Keeping this decision in
 /// the shared noise-compute crate makes painter and popup selection identical.
+// Owner product decision (2026-08-22, variant A): the 6 m / 20 dB pairing
+// treats an unclassified building at or below 6 m as the garage/shed/lightweight
+// class, following EN 12354 practice. WHO 2018 anchors only the 25 dB default;
+// the resulting 5 dB discontinuity at 6 m is deliberate and auditable.
 pub const fn effective_envelope_class(class: EnvelopeClass, height_m: f32) -> EnvelopeClass {
     match class {
         EnvelopeClass::Default if height_m <= 6.0 => EnvelopeClass::Industrial,
@@ -73,6 +77,18 @@ mod tests {
         assert_eq!(
             effective_envelope_class(EnvelopeClass::Default, 5.0),
             EnvelopeClass::Industrial
+        );
+        assert_eq!(
+            effective_envelope_class(EnvelopeClass::Default, 6.0),
+            EnvelopeClass::Industrial,
+            "the owner boundary includes exactly 6.0 m"
+        );
+        let just_above_six_m = f32::from_bits(6.0_f32.to_bits() + 1);
+        assert!(just_above_six_m > 6.0);
+        assert_eq!(
+            effective_envelope_class(EnvelopeClass::Default, just_above_six_m),
+            EnvelopeClass::Default,
+            "the owner boundary switches immediately above 6.0 m"
         );
         assert_eq!(
             effective_envelope_class(EnvelopeClass::Default, 7.0),

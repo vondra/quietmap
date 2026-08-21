@@ -419,7 +419,8 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     };
     // Fix 4 (popup half): does the receiver stand INSIDE a footprint? The
     // heatmap masks such pixels to no-data, so the popup must be able to say
-    // so. Label only — no dB number below changes because of it.
+    // so. The shared winner also supplies the effective envelope delta for the
+    // aggregate indoor display estimate; source traces remain façade values.
     let inside_envelope = obstacle_set
         .as_ref()
         .and_then(|set| obstacle_store::point_inside_enclosed(set, lat, lng));

@@ -580,10 +580,6 @@ pub fn point_inside_obstacle(set: &ObstacleSet, lat: f64, lon: f64) -> Option<f3
     Some(0.5 * (lo + hi))
 }
 
-/// Display-envelope winner shared with the painter: only enclosed footprints
-/// participate, tallest first and ordinal second. `stored_class` is the
-/// source classification; `effective_class` is the paint/popup delta choice
-/// and is never written back to the Arrow data.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EnclosedEnvelopeWinner {
     pub stored_class: EnvelopeClass,
@@ -591,6 +587,11 @@ pub struct EnclosedEnvelopeWinner {
     pub height_m: f32,
 }
 
+/// Select the display-envelope winner using the painter's exact order: only
+/// enclosed footprints participate, then tallest height, lower index ordinal,
+/// and lower footprint ordinal win. `stored_class` is the source
+/// classification; `effective_class` is the paint/popup delta choice and is
+/// never written back to the Arrow data.
 pub fn point_inside_enclosed(
     set: &ObstacleSet,
     lat: f64,
@@ -599,9 +600,20 @@ pub fn point_inside_enclosed(
     let mut seen = Vec::new();
     set.indexes
         .iter()
-        .filter_map(|index| index.containing_enclosed(lat, lon, 0.0, &mut seen))
-        .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.2.cmp(&a.2)))
-        .map(|(stored_class, height_m, _)| EnclosedEnvelopeWinner {
+        .enumerate()
+        .filter_map(|(index_ordinal, index)| {
+            index.containing_enclosed(lat, lon, 0.0, &mut seen).map(
+                |(stored_class, height_m, footprint_ordinal)| {
+                    (stored_class, height_m, index_ordinal, footprint_ordinal)
+                },
+            )
+        })
+        .max_by(|a, b| {
+            a.1.total_cmp(&b.1)
+                .then_with(|| b.2.cmp(&a.2))
+                .then_with(|| b.3.cmp(&a.3))
+        })
+        .map(|(stored_class, height_m, _, _)| EnclosedEnvelopeWinner {
             stored_class,
             effective_class: effective_envelope_class(stored_class, height_m),
             height_m,
@@ -1096,6 +1108,43 @@ mod tests {
         assert_eq!(garage.stored_class, EnvelopeClass::Default);
         assert_eq!(garage.effective_class, EnvelopeClass::Industrial);
         assert_eq!(garage.effective_class.delta_db(), Some(20.0));
+
+        // Equal-height cross-index winners must use the lower index ordinal,
+        // just like the painter. The first index is DEFAULT at the 6 m
+        // boundary (effective 20 dB); the later index is residential (30 dB).
+        let tie_wkb = {
+            let ring = square(0.0, -300.0, 20.0);
+            let mut wkb = vec![1, 3, 0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0];
+            for &(lat, lon) in ring.iter().chain(std::iter::once(&ring[0])) {
+                wkb.extend_from_slice(&lon.to_le_bytes());
+                wkb.extend_from_slice(&lat.to_le_bytes());
+            }
+            wkb
+        };
+        let mut first = ObstacleIndex::builder(OLAT, OLON);
+        first.add_polygon_wkb(
+            &tie_wkb,
+            6.0,
+            ObstacleKind::Building,
+            0,
+            EnvelopeClass::Default,
+        );
+        let mut second = ObstacleIndex::builder(OLAT, OLON);
+        second.add_polygon_wkb(
+            &tie_wkb,
+            6.0,
+            ObstacleKind::Building,
+            0,
+            EnvelopeClass::Residential,
+        );
+        let tie_set = ObstacleSet {
+            indexes: vec![Arc::new(first.build()), Arc::new(second.build())],
+        };
+        let tie = point_inside_enclosed(&tie_set, at(0.0, -300.0).0, at(0.0, -300.0).1)
+            .expect("equal-height cross-index footprints overlap");
+        assert_eq!(tie.stored_class, EnvelopeClass::Default);
+        assert_eq!(tie.effective_class, EnvelopeClass::Industrial);
+        assert_eq!(tie.effective_class.delta_db(), Some(20.0));
     }
 
     /// One tiny valid shard: a single closed square footprint (~20 m) whose
