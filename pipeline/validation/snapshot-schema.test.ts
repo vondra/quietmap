@@ -11,6 +11,7 @@ const expected = {
   'dublin-sonitus.2025.json': ['dublin-sonitus', 'IE', 14, 'upper_bound', 2],
   'eba-laermmonitoring.2023.json': ['eba-laermmonitoring', 'DE', 19, 'trend_only', null],
   'zrh-nmt.2024.json': ['zrh-nmt', 'CH', 4, 'trend_only', null],
+  'lkpr-tanos.2026.json': ['lkpr-tanos', 'CZ', 14, 'trend_only', null],
 } as const
 
 test('adapter coverage rounding cannot publish more than 100 percent', () => {
@@ -114,12 +115,14 @@ const payloadFields: Record<string, string[]> = {
   'dublin-sonitus.2025.json': ['station_id', 'name', 'lat', 'lng', 'ld', 'le', 'ln', 'lden', 'months_covered', 'coverage_pct'],
   'eba-laermmonitoring.2023.json': ['station_id', 'name', 'lat', 'lng', 'laeq_24h', 'laeq_tag_0622', 'laeq_nacht_2206', 'trains_per_day', 'freight_trains_per_day', 'trains_night', 'mean_speed_kmh', 'mean_train_length_m'],
   'zrh-nmt.2024.json': ['station_id', 'name', 'lat', 'lng', 'laeq_tag_0622'],
+  'lkpr-tanos.2026.json': ['station_id', 'name', 'lat', 'lng', 'month', 'laeq_aircraft_day_0622', 'laeq_aircraft_night_2206'],
 }
 const payloadSha256: Record<string, string> = {
   'barcelona-xarxa-soroll.2025.json': '56228b9ca7fae304697395c4ace799763a26b151e9bd82afd3bcc3c07786f513',
   'dublin-sonitus.2025.json': 'cd72ec4c81a5f67a8b43e7e758f3b21af3624004e35519af0102dfebfdf12451',
   'eba-laermmonitoring.2023.json': 'e9945f0e5f2acc18706a00483edb44f62ee6e1b8f51f1730314486c27ca1f8d2',
   'zrh-nmt.2024.json': '8593f8304902247e3a96021a1e551c8cfce86ba4e050a9ae38aa0bc36e82fbdc',
+  'lkpr-tanos.2026.json': '6f284ec4b3ceebc63d41e4b64508832afa0e32e3d34e435afd951f47f5b7f115',
 }
 
 test('reviewed station measurements and coordinates remain pinned', () => {

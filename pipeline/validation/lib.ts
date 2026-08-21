@@ -108,7 +108,7 @@ export type AnchorType = 'measurement' | 'official_map' | 'regression'
 export type ValidationRegime = 'road' | 'rail' | 'aircraft' | 'industrial_wind' | 'settlement' | 'mixed'
 export type ComparisonMode = 'two_sided' | 'upper_bound' | 'trend_only'
 export type ModelMetricField = 'lden' | 'ld' | 'le' | 'ln'
-export type MeasuredMetricField = ModelMetricField | 'laeq' | 'laeq_24h' | 'laeq_tag_0622' | 'laeq_nacht_2206'
+export type MeasuredMetricField = ModelMetricField | 'laeq' | 'laeq_24h' | 'laeq_tag_0622' | 'laeq_nacht_2206' | 'laeq_aircraft_day_0622' | 'laeq_aircraft_night_2206'
 export type SnapshotCommensurability = {
   metric_variant: string
   dominance: string
@@ -164,7 +164,7 @@ const VALIDATION_REGIMES = new Set<ValidationRegime>(['road', 'rail', 'aircraft'
 const COMPARISON_MODES = new Set<ComparisonMode>(['two_sided', 'upper_bound', 'trend_only'])
 const MODEL_METRIC_FIELDS = new Set<ModelMetricField>(['lden', 'ld', 'le', 'ln'])
 const MEASURED_METRIC_FIELDS = new Set<MeasuredMetricField>([
-  'lden', 'ld', 'le', 'ln', 'laeq', 'laeq_24h', 'laeq_tag_0622', 'laeq_nacht_2206',
+  'lden', 'ld', 'le', 'ln', 'laeq', 'laeq_24h', 'laeq_tag_0622', 'laeq_nacht_2206', 'laeq_aircraft_day_0622', 'laeq_aircraft_night_2206',
 ])
 const NETWORK_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 type FactorVocab = {

@@ -1,0 +1,170 @@
+{
+  "schema_version": 2,
+  "network": "lkpr-tanos",
+  "country_code": "CZ",
+  "year": 2026,
+  "license": "Letiště Praha public TANOS monthly report; cite the report URL",
+  "source": [
+    "https://www.prg.aero/sites/default/files/obsah/harmonika/soubory/leden-2026-batch-report-cz.pdf"
+  ],
+  "fetched_at": "2026-08-20T17:41:03.012Z",
+  "mode": "source:aircraft",
+  "anchor_type": "measurement",
+  "regime": "aircraft",
+  "tags": [],
+  "comparison_mode": "trend_only",
+  "comparison_tolerance_db": null,
+  "comparison_tolerance_basis": null,
+  "measured_metric_field": "laeq_aircraft_day_0622",
+  "model_metric_field": "lden",
+  "commensurability": {
+    "metric_variant": "laeq_windows",
+    "dominance": "event_classified",
+    "receiver_convention": "nmt_pole",
+    "coord_uncertainty_m": 300,
+    "note": "Published monthly aircraft-only LAeq,T day 06–22; monthly report explicitly says it is not comparable to statutory characteristic-flight-day limits. Model Lden Δ is descriptive only."
+  },
+  "method": "pdftotext -layout; strict MP01–MP14 header and six-column monthly-average parse; stores aircraft-only day/night metrics without conversion.",
+  "stations": [
+    {
+      "station_id": "mp01",
+      "name": "Jeneč",
+      "month": "2026-01",
+      "laeq_aircraft_day_0622": 55.2,
+      "laeq_aircraft_night_2206": 48.6,
+      "lat": 50.0889,
+      "lng": 14.2103,
+      "report_month": 1
+    },
+    {
+      "station_id": "mp02",
+      "name": "Červený Újezd",
+      "month": "2026-01",
+      "laeq_aircraft_day_0622": 49.9,
+      "laeq_aircraft_night_2206": 43.6,
+      "lat": 50.071,
+      "lng": 14.1646,
+      "report_month": 1
+    },
+    {
+      "station_id": "mp03",
+      "name": "Unhošť",
+      "month": "2026-01",
+      "laeq_aircraft_day_0622": 50.6,
+      "laeq_aircraft_night_2206": 44.6,
+      "lat": 50.0815,
+      "lng": 14.1292,
+      "report_month": 1
+    },
+    {
+      "station_id": "mp04",
+      "name": "Pavlov",
+      "month": "2026-01",
+      "laeq_aircraft_day_0622": 51.6,
+      "laeq_aircraft_night_2206": 45.1,
+      "lat": 50.0952,
+      "lng": 14.1646,
+      "report_month": 1
+    },
+    {
+      "station_id": "mp05",
+      "name": "Hostivice",
+      "month": "2026-01",
+      "laeq_aircraft_day_0622": 42.8,
+      "laeq_aircraft_night_2206": 36.1,
+      "lat": 50.0814,
+      "lng": 14.2347,
+      "report_month": 1
+    },
+    {
+      "station_id": "mp06",
+      "name": "Dobrovíz",
+      "month": "2026-01",
+      "laeq_aircraft_day_0622": 52.7,
+      "laeq_aircraft_night_2206": 46.4,
+      "lat": 50.1144,
+      "lng": 14.2207,
+      "report_month": 1
+    },
+    {
+      "station_id": "mp07",
+      "name": "Kněževes",
+      "month": "2026-01",
+      "laeq_aircraft_day_0622": 55.6,
+      "laeq_aircraft_night_2206": 48.2,
+      "lat": 50.1199,
+      "lng": 14.2584,
+      "report_month": 1
+    },
+    {
+      "station_id": "mp08",
+      "name": "Horoměřice střed",
+      "month": "2026-01",
+      "laeq_aircraft_day_0622": 51.9,
+      "laeq_aircraft_night_2206": 46.1,
+      "lat": 50.14,
+      "lng": 14.3341,
+      "report_month": 1
+    },
+    {
+      "station_id": "mp09",
+      "name": "Praha - Přední Kopanina",
+      "month": "2026-01",
+      "laeq_aircraft_day_0622": 53.7,
+      "laeq_aircraft_night_2206": 46.5,
+      "lat": 50.1172,
+      "lng": 14.3014,
+      "report_month": 1
+    },
+    {
+      "station_id": "mp10",
+      "name": "Horoměřice",
+      "month": "2026-01",
+      "laeq_aircraft_day_0622": 51.8,
+      "laeq_aircraft_night_2206": 45.7,
+      "lat": 50.1299,
+      "lng": 14.3439,
+      "report_month": 1
+    },
+    {
+      "station_id": "mp11",
+      "name": "Roztoky",
+      "month": "2026-01",
+      "laeq_aircraft_day_0622": 50.5,
+      "laeq_aircraft_night_2206": 45.3,
+      "lat": 50.1589,
+      "lng": 14.3946,
+      "report_month": 1
+    },
+    {
+      "station_id": "mp12",
+      "name": "Praha 17 - Řepy",
+      "month": "2026-01",
+      "laeq_aircraft_day_0622": 38.3,
+      "laeq_aircraft_night_2206": null,
+      "lat": 50.0711,
+      "lng": 14.3208,
+      "report_month": 1
+    },
+    {
+      "station_id": "mp13",
+      "name": "Suchdol",
+      "month": "2026-01",
+      "laeq_aircraft_day_0622": 53.6,
+      "laeq_aircraft_night_2206": 48.7,
+      "lat": 50.1456,
+      "lng": 14.3787,
+      "report_month": 1
+    },
+    {
+      "station_id": "mp14",
+      "name": "Malé Kyšice",
+      "month": "2026-01",
+      "laeq_aircraft_day_0622": 51.4,
+      "laeq_aircraft_night_2206": 46,
+      "lat": 50.0588,
+      "lng": 14.082,
+      "report_month": 1
+    }
+  ]
+}
