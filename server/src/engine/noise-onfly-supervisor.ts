@@ -7,7 +7,7 @@ export type NoiseOnflyWorkerReply = {
   error?: string
 }
 
-export type NoiseOnflyOp = 'point' | 'unfiltered' | 'ready' | 'footprints'
+export type NoiseOnflyOp = 'point' | 'unfiltered' | 'ready' | 'footprints' | 'building-at'
 
 export interface NoiseOnflyWorker {
   postMessage(message: { id: number; lat: number; lng: number; lat2?: number; lng2?: number; op?: NoiseOnflyOp }): void
@@ -165,6 +165,11 @@ export class NoiseOnflySupervisor {
     south: number, west: number, north: number, east: number, signal?: AbortSignal,
   ): Promise<string> {
     return this.enqueue(south, west, 'footprints', signal, north, east)
+  }
+
+  /** One vector obstacle containing a point, with its as-used height and type. */
+  async queryBuildingAt(lat: number, lng: number, signal?: AbortSignal): Promise<string> {
+    return this.enqueue(lat, lng, 'building-at', signal)
   }
 
   /**

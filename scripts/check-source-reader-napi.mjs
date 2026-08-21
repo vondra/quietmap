@@ -40,6 +40,7 @@ process.dlopen(nativeModule, addonPath)
 const workerExports = [
   'sourceInit',
   'sourceValidateReference',
+  'queryBuildingAt',
   'queryNoiseAtPoint',
   'queryNoiseAtPointUnfiltered',
 ]

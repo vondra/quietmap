@@ -620,6 +620,21 @@ pub fn point_inside_enclosed(
         })
 }
 
+/// Plain-language building type used by the map tooltip. The obstacle shards
+/// retain the envelope class used by the engine rather than the full Overture
+/// building-class vocabulary, so the tooltip deliberately uses the same five
+/// labels as the popup's indoor estimate.
+pub fn building_type_from_envelope(class: EnvelopeClass) -> Option<&'static str> {
+    match class {
+        EnvelopeClass::Outdoor => None,
+        EnvelopeClass::Residential => Some("house"),
+        EnvelopeClass::Commercial => Some("office"),
+        EnvelopeClass::Industrial => Some("industrial hall"),
+        EnvelopeClass::Historic => Some("historic building"),
+        EnvelopeClass::Default => Some("building"),
+    }
+}
+
 /// One cell's index, from the nearest source that still holds it: the process
 /// memo, then the on-disk index cache, then a rebuild from the Arrow shards
 /// (which is also written back). Build errors are not cached; successful
@@ -1145,6 +1160,31 @@ mod tests {
         assert_eq!(tie.stored_class, EnvelopeClass::Default);
         assert_eq!(tie.effective_class, EnvelopeClass::Industrial);
         assert_eq!(tie.effective_class.delta_db(), Some(20.0));
+    }
+
+    #[test]
+    fn building_type_labels_match_popup_language() {
+        assert_eq!(
+            building_type_from_envelope(EnvelopeClass::Residential),
+            Some("house")
+        );
+        assert_eq!(
+            building_type_from_envelope(EnvelopeClass::Commercial),
+            Some("office")
+        );
+        assert_eq!(
+            building_type_from_envelope(EnvelopeClass::Industrial),
+            Some("industrial hall")
+        );
+        assert_eq!(
+            building_type_from_envelope(EnvelopeClass::Historic),
+            Some("historic building")
+        );
+        assert_eq!(
+            building_type_from_envelope(EnvelopeClass::Default),
+            Some("building")
+        );
+        assert_eq!(building_type_from_envelope(EnvelopeClass::Outdoor), None);
     }
 
     /// One tiny valid shard: a single closed square footprint (~20 m) whose

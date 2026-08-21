@@ -70,6 +70,11 @@ parentPort?.on('message', ({ id, lat, lng, lat2, lng2, op }) => {
       parentPort?.postMessage({ id, ok: true, resultJson })
       return
     }
+    if (op === 'building-at') {
+      const resultJson = sourceModule.queryBuildingAt(lat, lng)
+      parentPort?.postMessage({ id, ok: true, resultJson })
+      return
+    }
     const fn = op === 'unfiltered'
       ? sourceModule.queryNoiseAtPointUnfiltered
       : sourceModule.queryNoiseAtPoint

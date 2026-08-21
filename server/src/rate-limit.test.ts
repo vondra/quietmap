@@ -53,6 +53,23 @@ test('popup compute route returns 429 on the 6th request within a second', async
   assert.equal(otherClient.statusCode, 400)
 })
 
+test('building hover lookup allows normal bursts but remains rate-limited', async (t) => {
+  const app = await buildApp({ readinessCheck: ready })
+  t.after(async () => app.close())
+
+  const statuses: number[] = []
+  for (let i = 0; i < 21; i++) {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/building-at?lat=bogus&lng=bogus',
+      remoteAddress: '203.0.113.12',
+    })
+    statuses.push(response.statusCode)
+  }
+  assert.deepEqual(statuses.slice(0, 20), Array(20).fill(400))
+  assert.equal(statuses[20], 429)
+})
+
 test('geocode proxies are rate-limited too', async (t) => {
   const app = await buildApp({ readinessCheck: ready })
   t.after(async () => app.close())

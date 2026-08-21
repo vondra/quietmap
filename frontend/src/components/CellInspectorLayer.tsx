@@ -23,11 +23,23 @@ interface CellInspectorLayerProps {
 
 type TileEntry = ArrayBuffer | 'loading' | 'failed'
 
+interface BuildingAtResult {
+  height_m: number
+  building_type: string
+}
+
+type BuildingAtState =
+  | { status: 'loading' }
+  | { status: 'ready'; result: BuildingAtResult | null }
+  | { status: 'failed' }
+
+const BUILDING_QUERY_DEBOUNCE_MS = 120
+
 /**
- * Hover tooltip that shows the raw raster-cell values (DEM elevation /
- * Overture building height / WorldCover forest flag) of the 1°/3600 cell
- * under the cursor. Active only while at least one Advanced overlay is on
- * AND every noise-source layer is off — otherwise the popup takes priority.
+ * Hover tooltip that shows raster-cell values for terrain/forest and the
+ * exact vector obstacle height/type for buildings under the cursor. Active
+ * only while at least one Advanced overlay is on AND every noise-source layer
+ * is off — otherwise the popup takes priority.
  */
 export default function CellInspectorLayer({
   rasterOverlays,
@@ -42,6 +54,10 @@ export default function CellInspectorLayer({
     zoom: number
   } | null>(null)
   const [tileEpoch, setTileEpoch] = useState(0)
+  const [buildingAt, setBuildingAt] = useState<BuildingAtState>({
+    status: 'ready',
+    result: null,
+  })
 
   const activeLayers: DataLayer[] = useMemo(
     () => DATA_LAYERS.filter(id => rasterOverlays[overlayKey(id)]),
@@ -56,6 +72,7 @@ export default function CellInspectorLayer({
   )
 
   const enabled = activeLayers.length > 0 && noiseLayersOff
+  const buildingOverlayActive = activeLayers.includes('building')
   const shouldRenderCellOutline = activeLayers.some(layer => layer !== 'building')
 
   useEffect(() => {
@@ -102,17 +119,59 @@ export default function CellInspectorLayer({
     if (!hover) return
     const { x, y } = lngLatToTile(cellCenterLon, cellCenterLat, dataZ)
     for (const layer of activeLayers) {
+      if (layer === 'building') continue
       ensureTileFetched(layer, dataZ, x, y, tileCache.current, () =>
         setTileEpoch(e => e + 1),
       )
     }
   }, [hover, dataZ, activeLayers, cellCenterLat, cellCenterLon])
 
+  // Building-height readouts come from the same vector obstacle polygons that
+  // screen sound in the engine. Debounce pointer motion so a visitor moving
+  // across a neighbourhood does not turn every mouse event into a request.
+  const hoverLat = hover?.lat ?? null
+  const hoverLng = hover?.lng ?? null
+  useEffect(() => {
+    if (!enabled || !buildingOverlayActive || hoverLat === null || hoverLng === null) {
+      setBuildingAt({ status: 'ready', result: null })
+      return
+    }
+
+    setBuildingAt({ status: 'loading' })
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      const query = new URLSearchParams({
+        lat: String(hoverLat),
+        lng: String(hoverLng),
+      })
+      fetch(`/api/building-at?${query.toString()}`, { signal: controller.signal })
+        .then(response => {
+          if (!response.ok) throw new Error(`building lookup failed: ${response.status}`)
+          return response.json() as Promise<unknown>
+        })
+        .then(value => {
+          if (controller.signal.aborted) return
+          setBuildingAt({ status: 'ready', result: parseBuildingAtResult(value) })
+        })
+        .catch(error => {
+          if (controller.signal.aborted) return
+          console.error(error)
+          setBuildingAt({ status: 'failed' })
+        })
+    }, BUILDING_QUERY_DEBOUNCE_MS)
+
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [enabled, buildingOverlayActive, hoverLat, hoverLng])
+
   const values = useMemo(() => {
     if (!hover) return null
     const { x, y } = lngLatToTile(cellCenterLon, cellCenterLat, dataZ)
     const out: Partial<Record<DataLayer, number | null>> = {}
     for (const layer of activeLayers) {
+      if (layer === 'building') continue
       out[layer] = readCellValue(
         layer, dataZ, cellCenterLat, cellCenterLon, x, y, tileCache.current,
       )
@@ -174,7 +233,7 @@ export default function CellInspectorLayer({
         }}
         className="rounded-md bg-zinc-900/95 text-zinc-50 border border-zinc-700/60 shadow-xl px-2 py-1 font-mono text-[11px] leading-snug"
       >
-        {renderLines(values)}
+        {renderLines(values, buildingOverlayActive ? buildingAt : null)}
       </div>
     </>
   )
@@ -192,9 +251,21 @@ const TOOLTIP_ROWS: Array<{
   { key: 'forest', label: 'Forest', fmt: v => v > 0 ? `${Math.round(v)} %` : 'no' },
 ]
 
-function renderLines(values: Partial<Record<DataLayer, number | null>>): ReactNode {
+function renderLines(
+  values: Partial<Record<DataLayer, number | null>>,
+  buildingAt: BuildingAtState | null,
+): ReactNode {
   const rows: ReactNode[] = []
   for (const row of TOOLTIP_ROWS) {
+    if (row.key === 'building') {
+      if (!buildingAt) continue
+      rows.push(
+        <div key={row.key}>
+          {row.label}: {formatBuildingAt(buildingAt)}
+        </div>,
+      )
+      continue
+    }
     if (!(row.key in values)) continue
     const v = values[row.key]
     rows.push(
@@ -204,6 +275,27 @@ function renderLines(values: Partial<Record<DataLayer, number | null>>): ReactNo
     )
   }
   return rows
+}
+
+function parseBuildingAtResult(value: unknown): BuildingAtResult | null {
+  if (value === null || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  const height = record.height_m
+  const buildingType = record.building_type
+  if (
+    typeof height !== 'number' || !Number.isFinite(height) || height <= 0 ||
+    typeof buildingType !== 'string' || buildingType.length === 0
+  ) {
+    return null
+  }
+  return { height_m: height, building_type: buildingType }
+}
+
+function formatBuildingAt(state: BuildingAtState): string {
+  if (state.status === 'loading') return '…'
+  if (state.status === 'failed') return 'unavailable'
+  if (!state.result) return 'none'
+  return `height ${state.result.height_m.toFixed(1)} m - ${state.result.building_type}`
 }
 
 function tileBbox(z: number, x: number, y: number) {

@@ -280,6 +280,31 @@ pub fn query_obstacle_footprints(
     Ok(serde_json::to_string(&rows).unwrap())
 }
 
+/// Return the vector obstacle containing a point, if any. This is intentionally
+/// a containment-only query: it reuses the exact obstacle set and enclosed
+/// winner selection used by the popup and heatmap, without running noise
+/// collection or propagation.
+#[cfg(feature = "node")]
+#[napi]
+pub fn query_building_at(lat: f64, lng: f64) -> napi::Result<String> {
+    let h3r4 = H3R4_DIR.get().map(|p| p.as_path());
+    let data_dir = DATA_DIR
+        .get()
+        .map(|p| p.as_path())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let result = obstacle_store::load_obstacle_set(h3r4, data_dir, lat, lng)
+        .and_then(|set| obstacle_store::point_inside_enclosed(&set, lat, lng))
+        .and_then(|(class, height)| {
+            obstacle_store::building_type_from_envelope(class).map(|building_type| {
+                serde_json::json!({
+                    "height_m": height,
+                    "building_type": building_type,
+                })
+            })
+        });
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
 #[cfg(feature = "node")]
 #[napi]
 pub fn query_barriers(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String> {

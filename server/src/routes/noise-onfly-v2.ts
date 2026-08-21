@@ -9,7 +9,7 @@ import {
   NoiseOnflySupervisor,
 } from '../engine/noise-onfly-supervisor.js'
 import { prepareSourceReaderAddon } from '../engine/source-reader-addon.js'
-import { EXPENSIVE_ROUTE_RATE_LIMIT } from '../rate-limit.js'
+import { BUILDING_LOOKUP_RATE_LIMIT, EXPENSIVE_ROUTE_RATE_LIMIT } from '../rate-limit.js'
 import { H3R4_DIR, SOURCE_READER_PATH } from '../runtime-paths.js'
 import {
   PublishedLineModelUnavailableError,
@@ -71,6 +71,41 @@ export async function noiseOnflyV2Routes(
   app.addHook('onClose', async () => {
     await supervisor.close()
   })
+
+  app.get<{ Querystring: { lat?: string; lng?: string } }>(
+    '/api/building-at',
+    // Hover can move faster than the expensive popup route, but the public
+    // endpoint still needs a per-client ceiling against scripted abuse.
+    { config: { rateLimit: BUILDING_LOOKUP_RATE_LIMIT } },
+    async (request, reply) => {
+      const lat = parseFloat(request.query.lat ?? '')
+      const lng = parseFloat(request.query.lng ?? '')
+      if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        return reply.status(400).send({ error: 'valid lat and lng required' })
+      }
+
+      const abortController = new AbortController()
+      const onClose = () => abortController.abort()
+      request.raw.once('close', onClose)
+      try {
+        const resultJson = await supervisor.queryBuildingAt(lat, lng, abortController.signal)
+        return reply.type('application/json').send(resultJson)
+      } catch (err) {
+        if (abortController.signal.aborted || request.raw.aborted || request.raw.destroyed) {
+          return
+        }
+        const error = err instanceof Error ? err : new Error(String(err))
+        const statusCode = err instanceof NoiseOnflyRequestError
+          ? err.statusCode
+          : error.message.includes('timeout')
+            ? 504
+            : 500
+        return reply.status(statusCode).send({ error: error.message })
+      } finally {
+        request.raw.removeListener('close', onClose)
+      }
+    },
+  )
 
   app.get<{ Querystring: { lat?: string; lng?: string; full?: string } }>(
     '/api/noise-onfly-v2',

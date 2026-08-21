@@ -1,15 +1,24 @@
 /**
- * Per-client rate limiting for the EXPENSIVE endpoints only (owner directive
- * 2026-07-15): the popup noise compute and the Photon geocode proxies. Tiles
- * (/api/tiles*) and static assets must NEVER be limited — the map fetches
- * dozens of cheap immutable tiles per pan, so the plugin registers with
- * `global: false` and only routes that opt in via
- * `config: { rateLimit: EXPENSIVE_ROUTE_RATE_LIMIT }` are throttled.
+ * Per-client rate limiting for public request-heavy endpoints (owner
+ * directive 2026-07-15). Tiles (/api/tiles*) and static assets must NEVER be
+ * limited — the map fetches dozens of cheap immutable tiles per pan, so the
+ * plugin registers with `global: false` and only routes that opt in via a
+ * route-level `config.rateLimit` are throttled.
  */
 
 /** 5 req/s per client bucket — route-level opt-in config for @fastify/rate-limit. */
 export const EXPENSIVE_ROUTE_RATE_LIMIT = {
   max: 5,
+  timeWindow: 1000,
+}
+
+/**
+ * The building-height hover lookup is containment-only and cache-backed, but
+ * a moving pointer can issue several requests per second. Keep it protected
+ * while allowing normal hover interaction to stay smooth.
+ */
+export const BUILDING_LOOKUP_RATE_LIMIT = {
+  max: 20,
   timeWindow: 1000,
 }
 

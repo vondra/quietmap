@@ -200,3 +200,24 @@ test('readiness uses a real pool worker without querying a point', async (t) => 
   workers[0].replyAt(0, '{"ready":true}')
   await ready
 })
+
+test('building lookup dispatches containment-only worker operation', async (t) => {
+  const workers: FakeWorker[] = []
+  const supervisor = new NoiseOnflySupervisor({
+    createWorker: () => {
+      const worker = new FakeWorker()
+      workers.push(worker)
+      return worker
+    },
+    maxQueue: 1,
+    queueTimeoutMs: 1000,
+    workTimeoutMs: 1000,
+  })
+  t.after(async () => supervisor.close())
+
+  const lookup = supervisor.queryBuildingAt(49.7910, 14.1963)
+  await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
+  assert.equal(workers[0].postMessages[0].op, 'building-at')
+  workers[0].replyAt(0, '{"height_m":3,"building_type":"building"}')
+  assert.equal(await lookup, '{"height_m":3,"building_type":"building"}')
+})
