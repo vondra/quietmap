@@ -11,6 +11,7 @@
 //! bare-earth δ* fit stay untouched by construction; plan v5 Phase 1).
 
 use crate::constants::{m_per_deg_lon, BUILDING_HEIGHT_MAX_M, M_PER_DEG_LAT};
+use crate::envelope::EnvelopeClass;
 
 use super::obstacle_index_file::IndexArray;
 use super::streaming_reduction::SourceId64;
@@ -262,6 +263,8 @@ pub struct ObstacleIndex {
     /// containment walk skips footprints whose bbox lies strictly east of the
     /// probe. Requires DENSE ids (the loaders' sequential ordinals).
     pub(super) footprint_xmin: IndexArray<f32>,
+    /// Overture envelope class, indexed by the same dense footprint ordinal.
+    pub(super) footprint_class: IndexArray<u8>,
     /// Max per-footprint bbox width (m) — bounds the containment walk: a
     /// footprint straddling the probe cannot extend further east than this.
     pub(super) max_footprint_w: f64,
@@ -310,6 +313,7 @@ impl ObstacleIndex {
             origin_lon,
             m_per_deg_lon: m_per_deg_lon(origin_lat.to_radians()),
             edges: Vec::new(),
+            footprint_class: Vec::new(),
         }
     }
 
@@ -1002,6 +1006,69 @@ impl ObstacleIndex {
         }
         seen.iter().any(|(_, n)| n % 2 == 1)
     }
+
+    /// Winning enclosed footprint at a point: tallest wins, then lower ordinal.
+    /// Hole parity is evaluated per footprint, exactly as `contains_built`.
+    pub fn containing_enclosed(
+        &self,
+        lat: f64,
+        lon: f64,
+        min_height_m: f32,
+        seen: &mut Vec<(u32, u32)>,
+    ) -> Option<(EnvelopeClass, f32, u32)> {
+        if self.edges.is_empty() {
+            return None;
+        }
+        let (x, y) = self.to_local(lat, lon);
+        let max_x = self.min_x + self.cols as f64 * self.cell_m;
+        let max_y = self.min_y + self.rows as f64 * self.cell_m;
+        if x < self.min_x || x > max_x || y < self.min_y || y > max_y {
+            return None;
+        }
+        seen.clear();
+        let inv = 1.0 / self.cell_m;
+        let cy = (((y - self.min_y) * inv).floor() as i64).clamp(0, self.rows as i64 - 1);
+        let mut cx = (((x - self.min_x) * inv).floor() as i64).clamp(0, self.cols as i64 - 1);
+        let end = (((x + self.max_footprint_w - self.min_x) * inv).floor() as i64)
+            .clamp(0, self.cols as i64 - 1);
+        let row = cy as usize * self.cols;
+        while cx <= end {
+            let lo_cell = self.min_x + cx as f64 * self.cell_m;
+            let hi_cell = lo_cell + self.cell_m;
+            let lo = self.cell_starts[row + cx as usize] as usize;
+            let hi = self.cell_starts[row + cx as usize + 1] as usize;
+            for &eref in &self.edge_refs[lo..hi] {
+                let e = self.edges[eref as usize];
+                if e.height_m <= min_height_m || self.footprint_xmin[e.id as usize] as f64 > x {
+                    continue;
+                }
+                let (y0, y1) = (e.y0 as f64, e.y1 as f64);
+                if (y0 > y) == (y1 > y) {
+                    continue;
+                }
+                let xc = e.x0 as f64 + (y - y0) * (e.x1 as f64 - e.x0 as f64) / (y1 - y0);
+                if xc > x && xc >= lo_cell && xc < hi_cell {
+                    match seen.iter_mut().find(|(id, _)| *id == e.id) {
+                        Some((_, n)) => *n += 1,
+                        None => seen.push((e.id, 1)),
+                    }
+                }
+            }
+            cx += 1;
+        }
+        seen.iter()
+            .filter(|(_, n)| n % 2 == 1)
+            .filter_map(|(id, _)| {
+                let class = EnvelopeClass::from_u8(self.footprint_class[*id as usize]);
+                let height = self
+                    .edges
+                    .iter()
+                    .find(|e| e.id == *id)
+                    .map(|e| e.height_m)?;
+                class.delta_db().map(|_| (class, height, *id))
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.2.cmp(&a.2)))
+    }
 }
 
 /// Receiver-local enclosure over a set of per-cell indexes — the vector twin
@@ -1214,6 +1281,7 @@ pub struct Builder {
     origin_lon: f64,
     m_per_deg_lon: f64,
     edges: Vec<ObstacleEdge>,
+    pub(super) footprint_class: Vec<u8>,
 }
 
 impl Builder {
@@ -1271,7 +1339,20 @@ impl Builder {
     /// rings AND holes — a courtyard wall is a wall). Invalid or non-areal
     /// WKB adds nothing. This is the obstacle-store ingestion entry: the
     /// per-cell arrows carry Overture WKB bytes unencoded.
-    pub fn add_polygon_wkb(&mut self, wkb: &[u8], height_m: f32, kind: ObstacleKind, id: u32) {
+    pub fn add_polygon_wkb(
+        &mut self,
+        wkb: &[u8],
+        height_m: f32,
+        kind: ObstacleKind,
+        id: u32,
+        class: EnvelopeClass,
+    ) {
+        let slot = id as usize;
+        if self.footprint_class.len() <= slot {
+            self.footprint_class
+                .resize(slot + 1, EnvelopeClass::Default as u8);
+        }
+        self.footprint_class[slot] = class as u8;
         for (outer, holes) in crate::wkb::parse_wkb_polygons_bytes(wkb) {
             self.add_ring(&outer, height_m, kind, id);
             for hole in &holes {
@@ -1306,7 +1387,7 @@ impl Builder {
 
     /// Freeze into the CSR grid index. Empty builder yields an index whose
     /// `crossings` is a no-op (the rural fast path).
-    pub fn build(self) -> ObstacleIndex {
+    pub fn build(mut self) -> ObstacleIndex {
         let cell_m = OBSTACLE_GRID_CELL_M;
         let (mut min_x, mut min_y) = (f64::MAX, f64::MAX);
         let (mut max_x, mut max_y) = (f64::MIN, f64::MIN);
@@ -1331,6 +1412,7 @@ impl Builder {
                 edges: Vec::new().into(),
                 cell_max_h: vec![0.0].into(),
                 footprint_xmin: Vec::new().into(),
+                footprint_class: Vec::new().into(),
                 max_footprint_w: 0.0,
             };
         }
@@ -1340,6 +1422,10 @@ impl Builder {
         // assign sequential ordinals; each footprint has ≥ 3 edges, so a
         // sparse id space signals a broken caller, not big data.
         let max_id = self.edges.iter().map(|e| e.id).max().unwrap() as usize;
+        if self.footprint_class.len() <= max_id {
+            self.footprint_class
+                .resize(max_id + 1, EnvelopeClass::Default as u8);
+        }
         assert!(
             max_id < self.edges.len().saturating_mul(4) + 1024,
             "obstacle ids must be dense loader ordinals (max id {max_id}, {} edges)",
@@ -1406,6 +1492,7 @@ impl Builder {
             edges: self.edges.into(),
             cell_max_h: cell_max_h.into(),
             footprint_xmin: footprint_xmin.into(),
+            footprint_class: self.footprint_class.into(),
             max_footprint_w,
         }
     }

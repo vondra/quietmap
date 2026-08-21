@@ -206,6 +206,7 @@ export const COLUMN_PARENTS: Readonly<Record<string, Readonly<Record<string, Col
     centroid_lat: OBSTACLE_BASE,
     centroid_lon: OBSTACLE_BASE,
     height_tier: OBSTACLE_HEIGHTS,
+    envelope_class: OBSTACLE_BASE,
   },
   'leisure.arrow': {
     osm_id: EXTRACT_LEISURE,
@@ -372,6 +373,7 @@ export const REQUIRED_PARENT_CHECKS: ReadonlyArray<{ file: string; column: strin
   { file: 'industrial.arrow', column: 'nace_4digit', parent: 'global-industrial' },
   { file: 'obstacles.arrow', column: 'polygon_wkb', parent: OVERTURE_OBSTACLES },
   { file: 'obstacles.arrow', column: 'height_tier', parent: OVERTURE_OBSTACLES },
+  { file: 'obstacles.arrow', column: 'envelope_class', parent: OVERTURE_OBSTACLES },
   { file: 'obstacles.arrow', column: 'height_m', parent: 'obstacle-heights' },
   { file: 'obstacles.arrow', column: 'height_tier', parent: 'obstacle-heights' },
 ]

@@ -33,6 +33,7 @@ use anyhow::{bail, Context, Result};
 use arrow::array::{Array, BinaryArray, Float32Array, Float64Array, UInt8Array};
 use arrow::ipc::reader::FileReader;
 use h3o::{CellIndex, LatLng};
+use noise_compute::envelope::EnvelopeClass;
 use noise_compute::low_profile::LowProfileLookup;
 use noise_compute::propagation::obstacle_index::{
     vector_buildings_enabled, ObstacleIndex, ObstacleKind, ObstacleSet,
@@ -203,12 +204,13 @@ const INTERIOR_MASK_MIN_HEIGHT_M: f32 = 0.0;
 /// A footprint smaller than one pixel (~12 m at the base zoom) rarely covers
 /// a pixel centre and so rarely masks anything. Accepted, no special
 /// handling: the mask is a display-semantics correction, not physics.
-pub fn bake_tile_interior_mask(
+pub fn bake_tile_envelope_classes(
     tile: &raster_reader::fused_tile_z13::FusedTileZ13,
     set: &ObstacleSet,
-) -> Vec<bool> {
+) -> Vec<u8> {
     use raster_reader::fused_tile_z13::TILE_PX;
-    let mut mask = vec![false; TILE_PX * TILE_PX];
+    let mut classes =
+        vec![noise_compute::envelope::EnvelopeClass::Outdoor as u8; TILE_PX * TILE_PX];
     // One scratch vec for the whole tile — `contains_built` clears it per
     // probe (same reuse the 9-probe `enclosure_db` does).
     let mut seen: Vec<(u32, u32)> = Vec::new();
@@ -216,13 +218,19 @@ pub fn bake_tile_interior_mask(
         let lat = tile.rx_lat[py];
         for px in 0..TILE_PX {
             let lon = tile.rx_lon[px];
-            mask[py * TILE_PX + px] = set
+            let winner = set
                 .indexes
                 .iter()
-                .any(|i| i.contains_built(lat, lon, INTERIOR_MASK_MIN_HEIGHT_M, &mut seen));
+                .filter_map(|i| {
+                    i.containing_enclosed(lat, lon, INTERIOR_MASK_MIN_HEIGHT_M, &mut seen)
+                })
+                .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.2.cmp(&a.2)));
+            if let Some((class, _, _)) = winner {
+                classes[py * TILE_PX + px] = class as u8;
+            }
         }
     }
-    mask
+    classes
 }
 
 /// Stamp [`crate::wire_hm3::NO_DATA`] onto every cell [`bake_tile_interior_mask`]
@@ -231,10 +239,162 @@ pub fn bake_tile_interior_mask(
 /// Runs LAST, after the area median fill: that fill exists to close the
 /// discretisation holes INSIDE a footprint, so masking before it would only
 /// have it paint the interiors straight back in.
-pub fn apply_interior_mask(cells: &mut [u8], interior: &[bool]) {
-    debug_assert_eq!(cells.len(), interior.len());
-    for (cell, &inside) in cells.iter_mut().zip(interior) {
-        if inside {
+pub fn apply_interior_estimate(cells: &mut [u8], classes: &[u8]) {
+    use crate::wire_hm3::{dequantise_lden, quantise_lden, NO_DATA};
+    use noise_compute::envelope::EnvelopeClass;
+    debug_assert_eq!(cells.len(), classes.len());
+    let n = raster_reader::fused_tile_z13::TILE_PX;
+    for index in 0..cells.len() {
+        let class = EnvelopeClass::from_u8(classes[index]);
+        let Some(delta) = class.delta_db() else {
+            continue;
+        };
+        let (x, y) = (index % n, index / n);
+        let mut donor = None;
+        for radius in 1..n {
+            for dy in -(radius as isize)..=(radius as isize) {
+                for dx in -(radius as isize)..=(radius as isize) {
+                    let nx = x as isize + dx;
+                    let ny = y as isize + dy;
+                    if nx < 0
+                        || ny < 0
+                        || nx >= n as isize
+                        || ny >= n as isize
+                        || dx.unsigned_abs().max(dy.unsigned_abs()) != radius
+                    {
+                        continue;
+                    }
+                    let ni = ny as usize * n + nx as usize;
+                    if EnvelopeClass::from_u8(classes[ni]) == EnvelopeClass::Outdoor {
+                        donor = Some(ni);
+                        break;
+                    }
+                }
+                if donor.is_some() {
+                    break;
+                }
+            }
+            if donor.is_some() {
+                break;
+            }
+        }
+        cells[index] = donor
+            .and_then(|i| {
+                let facade = dequantise_lden(cells[i]);
+                facade
+                    .is_finite()
+                    .then(|| quantise_lden((facade - delta).max(0.0)))
+            })
+            .unwrap_or(NO_DATA);
+    }
+}
+
+/// A geometry-only exterior donor for one centre-tile receiver pixel. Tile
+/// ordinal is row-major in the 3×3 halo (`0..9`); it is deliberately shared
+/// by every layer so energy composition commutes with the envelope loss.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InteriorDonor {
+    pub tile_ordinal: usize,
+    pub pixel_ordinal: usize,
+}
+
+/// Build donors for the centre member of a 3×3 class-raster halo. This never
+/// inspects HM3 bytes: a silent exterior receiver is still the only valid
+/// façade, and therefore remains silent indoors rather than jumping to a road.
+pub fn bake_interior_donors(halo_classes: &[Vec<u8>; 9]) -> Vec<Option<InteriorDonor>> {
+    use noise_compute::envelope::EnvelopeClass;
+    use raster_reader::fused_tile_z13::TILE_PX;
+    let centre = &halo_classes[4];
+    debug_assert!(halo_classes
+        .iter()
+        .all(|classes| classes.len() == TILE_PX * TILE_PX));
+    let mut donors = vec![None; TILE_PX * TILE_PX];
+    for py in 0..TILE_PX {
+        for px in 0..TILE_PX {
+            let index = py * TILE_PX + px;
+            if EnvelopeClass::from_u8(centre[index]).delta_db().is_none() {
+                continue;
+            }
+            let mut best: Option<(i64, i32, i32, InteriorDonor)> = None;
+            for halo_y in 0..3i32 {
+                for halo_x in 0..3i32 {
+                    let tile_ordinal = (halo_y * 3 + halo_x) as usize;
+                    for donor_y in 0..TILE_PX {
+                        for donor_x in 0..TILE_PX {
+                            let pixel_ordinal = donor_y * TILE_PX + donor_x;
+                            if EnvelopeClass::from_u8(halo_classes[tile_ordinal][pixel_ordinal])
+                                != EnvelopeClass::Outdoor
+                            {
+                                continue;
+                            }
+                            let dy = (halo_y - 1) * TILE_PX as i32 + donor_y as i32 - py as i32;
+                            let dx = (halo_x - 1) * TILE_PX as i32 + donor_x as i32 - px as i32;
+                            let key = (
+                                i64::from(dx) * i64::from(dx) + i64::from(dy) * i64::from(dy),
+                                dy,
+                                dx,
+                                InteriorDonor {
+                                    tile_ordinal,
+                                    pixel_ordinal,
+                                },
+                            );
+                            if best
+                                .as_ref()
+                                .is_none_or(|old| (key.0, key.1, key.2) < (old.0, old.1, old.2))
+                            {
+                                best = Some(key);
+                            }
+                        }
+                    }
+                }
+            }
+            donors[index] = best.map(|(_, _, _, donor)| donor);
+        }
+    }
+    donors
+}
+
+/// Pass B of the interior estimate. `halo_cells` are already collapsed and
+/// area-filled Pass-A outputs; only the centre vector is mutated/written.
+pub fn apply_interior_estimate_with_donors(
+    cells: &mut [u8],
+    centre_classes: &[u8],
+    halo_cells: &[Vec<u8>; 9],
+    donors: &[Option<InteriorDonor>],
+) {
+    use crate::wire_hm3::{dequantise_lden, quantise_lden, NO_DATA};
+    use noise_compute::envelope::EnvelopeClass;
+    debug_assert_eq!(cells.len(), donors.len());
+    for (index, cell) in cells.iter_mut().enumerate() {
+        let Some(delta) = EnvelopeClass::from_u8(centre_classes[index]).delta_db() else {
+            continue;
+        };
+        *cell = donors[index]
+            .and_then(|donor| {
+                let facade = dequantise_lden(halo_cells[donor.tile_ordinal][donor.pixel_ordinal]);
+                facade
+                    .is_finite()
+                    .then(|| quantise_lden((facade - delta).max(0.0)))
+            })
+            .unwrap_or(NO_DATA);
+    }
+}
+
+#[cfg(test)]
+fn bake_tile_interior_mask(
+    tile: &raster_reader::fused_tile_z13::FusedTileZ13,
+    set: &ObstacleSet,
+) -> Vec<bool> {
+    bake_tile_envelope_classes(tile, set)
+        .into_iter()
+        .map(|v| v != noise_compute::envelope::EnvelopeClass::Outdoor as u8)
+        .collect()
+}
+
+#[cfg(test)]
+fn apply_interior_mask(cells: &mut [u8], interior: &[bool]) {
+    for (cell, inside) in cells.iter_mut().zip(interior) {
+        if *inside {
             *cell = crate::wire_hm3::NO_DATA;
         }
     }
@@ -413,7 +573,19 @@ fn build_cell_index(
                         height = capped_h;
                     }
                 }
-                builder.add_polygon_wkb(wkb.value(i), height, ObstacleKind::Building, next_id);
+                let class = batch
+                    .column_by_name("envelope_class")
+                    .and_then(|c| c.as_any().downcast_ref::<UInt8Array>())
+                    .filter(|a| !a.is_null(i))
+                    .map(|a| EnvelopeClass::from_u8(a.value(i)))
+                    .unwrap_or(EnvelopeClass::Default);
+                builder.add_polygon_wkb(
+                    wkb.value(i),
+                    height,
+                    ObstacleKind::Building,
+                    next_id,
+                    class,
+                );
                 next_id = next_id.wrapping_add(1);
             }
         }

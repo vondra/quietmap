@@ -641,9 +641,9 @@ fn process_block(
         if let Some(set) = obstacles {
             let mask = interior_masks.entry((tx, ty)).or_insert_with(|| {
                 let tile = &batch.tiles[((ty - by) * cfg.batch_n + (tx - bx)) as usize];
-                tile_painter::source_loader_obstacle::bake_tile_interior_mask(tile, set)
+                tile_painter::source_loader_obstacle::bake_tile_envelope_classes(tile, set)
             });
-            tile_painter::source_loader_obstacle::apply_interior_mask(&mut cells, mask);
+            tile_painter::source_loader_obstacle::apply_interior_estimate(&mut cells, mask);
         }
         let encode_done = Instant::now();
         stats.entry(layer.dir()).or_default().t_encode +=

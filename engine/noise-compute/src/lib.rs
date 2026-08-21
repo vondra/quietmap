@@ -15,6 +15,7 @@ pub mod country_defaults_generated;
 pub mod country_speed_defaults_generated;
 pub mod defaults;
 pub mod emission;
+pub mod envelope;
 pub mod flight_id;
 pub mod h0_production_selection;
 mod h0_production_selection_parser;

@@ -186,7 +186,7 @@ pub const BUILDER_CODE_VER: u64 = {
 const MAGIC: &[u8; 4] = b"QOIX";
 /// Bumped only for a layout change the content hash cannot see (it can see
 /// every one of ours, so this exists for forensics, not for gating).
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 const HEADER_BYTES: usize = 128;
 /// Every section starts on this boundary, so the mapping's page alignment
 /// carries through to each typed view (`u32`/`f32`/[`ObstacleEdge`] all want 4).
@@ -201,6 +201,7 @@ struct Layout {
     edges: (usize, usize),
     cell_max_h: (usize, usize),
     footprint_xmin: (usize, usize),
+    footprint_class: (usize, usize),
     total: usize,
 }
 
@@ -222,12 +223,14 @@ impl Layout {
         let edges = section(n_edges, std::mem::size_of::<ObstacleEdge>())?;
         let cell_max_h = section(cells, 4)?;
         let footprint_xmin = section(n_fp, 4)?;
+        let footprint_class = section(n_fp, 1)?;
         Some(Layout {
             cell_starts,
             edge_refs,
             edges,
             cell_max_h,
             footprint_xmin,
+            footprint_class,
             total: at,
         })
     }
@@ -293,7 +296,7 @@ impl ObstacleIndex {
         put(112, self.footprint_xmin.len() as u64);
         put(120, layout.total as u64);
 
-        let mut sections = Vec::with_capacity(10);
+        let mut sections = Vec::with_capacity(12);
         let mut at = HEADER_BYTES;
         for bytes in [
             as_bytes(&self.cell_starts),
@@ -301,6 +304,7 @@ impl ObstacleIndex {
             as_bytes(&self.edges),
             as_bytes(&self.cell_max_h),
             as_bytes(&self.footprint_xmin),
+            as_bytes(&self.footprint_class),
         ] {
             sections.push(bytes);
             at += bytes.len();
@@ -386,6 +390,8 @@ impl ObstacleIndex {
         let cell_max_h: IndexArray<f32> = map(&blob, layout.cell_max_h, cells, "cell_max_h")?;
         let footprint_xmin: IndexArray<f32> =
             map(&blob, layout.footprint_xmin, n_fp, "footprint_xmin")?;
+        let footprint_class: IndexArray<u8> =
+            map(&blob, layout.footprint_class, n_fp, "footprint_class")?;
 
         // O(1) structural check: the CSR's own invariant. Catches a truncated
         // or half-written file without touching (and paging in) a single edge —
@@ -411,6 +417,7 @@ impl ObstacleIndex {
             edges,
             cell_max_h,
             footprint_xmin,
+            footprint_class,
             max_footprint_w: f64::from_bits(get(72)),
         })
     }
@@ -461,6 +468,7 @@ mod tests {
             ObstacleKind::Barrier,
             12,
         );
+        b.footprint_class = (0..13).map(|i| if i == 5 { 2 } else { 5 }).collect();
         b.build()
     }
 
@@ -486,6 +494,7 @@ mod tests {
         let mapped = ObstacleIndex::from_blob(Arc::new(bytes), 0xabc, 0xdef).expect("loads");
 
         assert_eq!(mapped.edge_count(), built.edge_count());
+        assert_eq!(mapped.footprint_class[5], 2, "envelope class survives mmap");
         let (a, b) = (crossings(&built), crossings(&mapped));
         assert!(!a.is_empty(), "the probe ray must hit something");
         assert_eq!(a.len(), b.len());

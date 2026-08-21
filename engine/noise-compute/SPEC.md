@@ -2359,3 +2359,25 @@ The table above is a pointer, not a reproduction — numbers above cite the
 **year / table / section** within each source so future reviewers can
 re-verify. If a link rots, the underlying paper is still traceable via
 the tag.
+
+### Indoor envelope display estimate
+
+The 4 m map receiver inside an enclosed Overture footprint publishes a
+closed-window indoor estimate, not a statutory END indoor map. The footprint
+class is assigned once at Overture ingest. `OUTDOOR` (`carport`, `roof`,
+`greenhouse`, `glasshouse`, `bridge_structure`, `grandstand`) is not masked;
+unknown and old rows are enclosed `DEFAULT`.
+
+`L_indoor = max(0, L_facade - ΔL)`. ΔL is 30 dB residential, 35 dB
+commercial, 20 dB industrial, and 28 dB historic/default. These are product
+closed-window assumptions informed by literature, not ISO/WHO class values.
+EN ISO 12354-3 / ISO 16283-3 describe façade-to-indoor methodology; WHO's
+15 dB tilted/open value is popup context only. Occupant behaviour dominates;
+the estimate is typically uncertain by ±8–12 dB.
+
+The façade value is sampled at one geometric nearest-outdoor receiver lattice
+point, shared by every layer including aircraft; it is never the self-screened
+inside value and it never searches for a louder audible donor. Overlaps choose
+the tallest enclosed footprint (then lower ordinal). This is display-only:
+propagation and GPU marches remain unchanged, and applying the same traffic
+ΔL to rail and aircraft is a documented simplification.

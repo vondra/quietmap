@@ -41,6 +41,7 @@ pub struct RegionCtx<'a> {
     pub class_weights: noise_compute::emission::aircraft::ClassWeights,
     pub batch_n: u32,
     pub output: &'a Path,
+    pub h3r4_dir: &'a Path,
     pub write_empty: bool,
     pub rasters: &'a RealRasters,
 }
@@ -300,6 +301,14 @@ pub fn process_region(
     }
     let cruise_views: Vec<_> = arcs.iter().flat_map(|a| a.cruise.views()).collect();
     let airborne_views: Vec<_> = arcs.iter().flat_map(|a| a.airborne.views()).collect();
+    let ring: Vec<u64> = cell
+        .grid_disk::<Vec<_>>(1)
+        .into_iter()
+        .map(u64::from)
+        .collect();
+    let obstacle_data =
+        crate::source_loader_obstacle::ObstacleData::load_for_r4s(ctx.h3r4_dir, region_r4, &ring)
+            .with_context(|| format!("load obstacles R4 {region_r4:015x}"))?;
 
     let mut stats = RegionStats {
         t_load: t0.elapsed(),
@@ -368,7 +377,11 @@ pub fn process_region(
                 .join(ctx.zoom.to_string())
                 .join(x.to_string())
                 .join(format!("{y}.bin"));
-            let cells = wire_hm3::collapse_lden_u8(&accum, ctx.n_days as f64);
+            let mut cells = wire_hm3::collapse_lden_u8(&accum, ctx.n_days as f64);
+            if let Some(set) = obstacle_data.set() {
+                let classes = crate::source_loader_obstacle::bake_tile_envelope_classes(tile, set);
+                crate::source_loader_obstacle::apply_interior_estimate(&mut cells, &classes);
+            }
             let written = wire_hm3::write_tile(
                 &out_path,
                 &cells,

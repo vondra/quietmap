@@ -383,8 +383,6 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     let t_collect = t_start.elapsed() - t_load;
     drop(store);
 
-    let receiver = noise_compute::types::Receiver::new(lat, lng, elevation);
-
     let config = noise_compute::types::ComputeConfig {
         n_days: sources.n_days,
         ..Default::default()
@@ -422,9 +420,39 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     // Fix 4 (popup half): does the receiver stand INSIDE a footprint? The
     // heatmap masks such pixels to no-data, so the popup must be able to say
     // so. Label only — no dB number below changes because of it.
-    let inside_building_m = obstacle_set
+    let inside_envelope = obstacle_set
         .as_ref()
-        .and_then(|set| obstacle_store::point_inside_obstacle(set, lat, lng));
+        .and_then(|set| obstacle_store::point_inside_enclosed(set, lat, lng));
+    // A façade receiver is the first cardinal metre step outside the same
+    // enclosed-containment query used by paint. The source selection was made
+    // at the click and a one-metre shift never changes its R4 ring.
+    let (facade_lat, facade_lng) = if inside_envelope.is_some() {
+        let step_lat = 1.0 / noise_compute::constants::M_PER_DEG_LAT;
+        let step_lon = 1.0 / noise_compute::constants::m_per_deg_lon(lat.to_radians());
+        let mut outside = None;
+        if let Some(set) = obstacle_set.as_ref() {
+            for distance in 1..=100 {
+                for (dy, dx) in [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)] {
+                    let candidate = (
+                        lat + dy * distance as f64 * step_lat,
+                        lng + dx * distance as f64 * step_lon,
+                    );
+                    if obstacle_store::point_inside_enclosed(set, candidate.0, candidate.1)
+                        .is_none()
+                    {
+                        outside = Some(candidate);
+                        break;
+                    }
+                }
+                if outside.is_some() {
+                    break;
+                }
+            }
+        }
+        outside.unwrap_or((lat, lng))
+    } else {
+        (lat, lng)
+    };
     // 1.4b: with a loaded store, the receiver reflection probe answers from
     // exact footprints too (the popup twin of the pipeline rx_refl pre-bake)
     // — one wrapped sampler serves EVERY popup kernel, raster otherwise.
@@ -438,6 +466,11 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         Some(w) => w,
         None => rasters,
     };
+    let receiver = noise_compute::types::Receiver::new(
+        facade_lat,
+        facade_lng,
+        rasters.elevation(facade_lat, facade_lng),
+    );
 
     let mut traces = noise_compute::types::TraceCollector::new();
     // M4/M5: hand the per-row baked admins to the kernels through their
@@ -491,7 +524,19 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         t.load_ms = t_load.as_secs_f64() * 1000.0;
         t.collect_ms = t_collect.as_secs_f64() * 1000.0;
     }
-    let wire_result = wire::build_wire_result(result, lat, lng, elevation, inside_building_m);
+    let facade_lden = result.total.lden_db;
+    let indoor = inside_envelope
+        .and_then(|(class, height)| class.delta_db().map(|delta| (class, height, delta)));
+    if let Some((_, _, delta)) = indoor {
+        wire::attenuate_result(&mut result, delta);
+    }
+    let wire_result = wire::build_wire_result(
+        result,
+        lat,
+        lng,
+        elevation,
+        indoor.map(|(class, height, delta)| (class, height, delta, facade_lden)),
+    );
     let json = serde_json::to_string(&wire_result).unwrap();
     let t_total = t_start.elapsed();
 

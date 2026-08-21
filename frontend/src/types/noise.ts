@@ -415,6 +415,14 @@ export interface NoiseComputeData {
   sources: SourceSummary[]
   top_contributors: Contributor[]
   other_sources_lden: number | null
+  inside_building?: boolean
+  inside_building_height_m?: number
+  envelope_class?: 'residential' | 'commercial' | 'industrial' | 'historic' | 'default'
+  envelope_delta_db?: number
+  facade_lden?: number
+  indoor_lden?: number
+  indoor_lden_tilted?: number
+  indoor_estimate?: boolean
   compute_time_ms: number
   segments?: SegmentTrace[]
   segments_meta?: SegmentTracesSummary | null

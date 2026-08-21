@@ -49,7 +49,7 @@
 #
 # --cells-file exists because a world run's cell list exceeds ARG_MAX as a
 # single argument (gg pass 2); the TS face always writes a manifest file.
-# Writes each cell's obstacles.arrow atomically (tmp + rename), schema unchanged.
+# Writes each cell's obstacles.arrow atomically (tmp + rename), preserving envelope class.
 
 import argparse
 import glob
@@ -89,6 +89,7 @@ SCHEMA = pa.schema(
         # 0/1/2 from the ingest ladder, 3/4 written here — full table above and
         # in noise_compute::low_profile (cap applies to tiers 2 and 4).
         ("height_tier", pa.uint8()),
+        ("envelope_class", pa.uint8()),
     ]
 )
 
@@ -304,6 +305,9 @@ def enrich_cell(cell, h3r4_dir, staging_dir, ghsl, regional, proof_inputs_sha256
             "centroid_lat": staged.column("centroid_lat"),
             "centroid_lon": staged.column("centroid_lon"),
             "height_tier": pa.array(tiers, pa.uint8()),
+            # Pre-envelope staging remains a supported degraded mode: preserve
+            # its geometry but materialize the documented enclosed DEFAULT.
+            "envelope_class": staged.column("envelope_class") if "envelope_class" in staged.column_names else pa.array([5] * len(heights), pa.uint8()),
         },
         schema=SCHEMA,
     )

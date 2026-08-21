@@ -244,6 +244,7 @@ fn run_stream(args: &Args, sel: SourceSel) -> Result<()> {
         class_weights,
         batch_n,
         output,
+        h3r4_dir: &args.h3r4_dir,
         write_empty: args.write_empty,
         rasters: &rasters,
     };
@@ -654,6 +655,7 @@ fn main() -> Result<()> {
         class_weights,
         batch_n,
         output,
+        h3r4_dir: &args.h3r4_dir,
         write_empty: args.write_empty,
         rasters: &rasters,
     };

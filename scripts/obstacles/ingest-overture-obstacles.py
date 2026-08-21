@@ -56,10 +56,25 @@ SCHEMA = pa.schema(
         # ingest only ever emits 0/1/2 (full ladder: that script's header and
         # noise_compute::low_profile).
         ("height_tier", pa.uint8()),
+        ("envelope_class", pa.uint8()),
     ]
 )
 
 POLYGON_TYPES = {ogr.wkbPolygon, ogr.wkbMultiPolygon}
+OUTDOOR = {"carport", "roof", "greenhouse", "glasshouse", "bridge_structure", "grandstand"}
+RESIDENTIAL = {"allotment_house", "apartments", "beach_hut", "boathouse", "bungalow", "cabin", "college", "detached", "dormitory", "dwelling_house", "ger", "hospital", "house", "houseboat", "hut", "kindergarten", "residential", "school", "semi", "semidetached_house", "static_caravan", "stilt_house", "terrace", "trullo", "university"}
+COMMERCIAL = {"commercial", "hotel", "office", "retail", "supermarket"}
+INDUSTRIAL = {"agricultural", "barn", "cowshed", "digester", "factory", "farm", "farm_auxiliary", "hangar", "industrial", "manufacture", "shed", "silo", "slurry_tank", "stable", "storage_tank", "sty", "warehouse"}
+HISTORIC = {"cathedral", "chapel", "church", "civic", "fire_station", "government", "library", "monastery", "mosque", "post_office", "presbytery", "public", "religious", "shrine", "synagogue", "temple", "wayside_shrine"}
+SUBTYPE = {"residential": 1, "education": 1, "medical": 1, "commercial": 2, "agricultural": 3, "industrial": 3, "civic": 4, "religious": 4}
+def envelope_class(building_class, subtype, underground):
+    if underground: return 0
+    if building_class in OUTDOOR: return 0
+    if building_class in RESIDENTIAL: return 1
+    if building_class in COMMERCIAL: return 2
+    if building_class in INDUSTRIAL: return 3
+    if building_class in HISTORIC: return 4
+    return SUBTYPE.get(subtype, 5) if building_class is None else 5
 
 
 def ladder(h, f):
@@ -91,15 +106,20 @@ def process_tile(name: str) -> None:
     has_floors = "num_floors" in schema_names
     if has_floors:
         cols.append("num_floors")
+    for column in ("class", "subtype", "is_underground"):
+        if column in schema_names: cols.append(column)
     t = pq.read_table(src, columns=cols)
     geoms = t.column("geometry").to_pylist()
     heights = t.column("height").to_pylist()
     floors = t.column("num_floors").to_pylist() if has_floors else [None] * len(t)
+    classes = t.column("class").to_pylist() if "class" in schema_names else [None] * len(t)
+    subtypes = t.column("subtype").to_pylist() if "subtype" in schema_names else [None] * len(t)
+    underground = t.column("is_underground").to_pylist() if "is_underground" in schema_names else [False] * len(t)
 
     per_cell = {}
     skipped = 0
     foreign = 0
-    for g, h, f in zip(geoms, heights, floors):
+    for g, h, f, bc, st, ug in zip(geoms, heights, floors, classes, subtypes, underground):
         if g is None:
             skipped += 1
             continue
@@ -123,7 +143,7 @@ def process_tile(name: str) -> None:
             continue
         height, tier = ladder(h, f)
         cell = h3.latlng_to_cell(lat, lon, 4)
-        per_cell.setdefault(cell, []).append((bytes(g), height, lat, lon, tier))
+        per_cell.setdefault(cell, []).append((bytes(g), height, lat, lon, tier, envelope_class(bc, st, bool(ug))))
 
     # Reconcile before writing: a re-ingest after an upstream re-extract may
     # move rows between cells — this tile's old shards must not survive it.
@@ -156,6 +176,7 @@ def process_tile(name: str) -> None:
                 "centroid_lat": pa.array([r[2] for r in rows], pa.float64()),
                 "centroid_lon": pa.array([r[3] for r in rows], pa.float64()),
                 "height_tier": pa.array([r[4] for r in rows], pa.uint8()),
+                "envelope_class": pa.array([r[5] for r in rows], pa.uint8()),
             },
             schema=SCHEMA,
         )

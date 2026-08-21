@@ -52,6 +52,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use arrow::array::{Array, BinaryArray, Float32Array, Float64Array, UInt8Array};
 use arrow::ipc::reader::FileReader;
 use h3o::{CellIndex, LatLng, Resolution};
+use noise_compute::envelope::EnvelopeClass;
 use noise_compute::low_profile::LowProfileLookup;
 use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind, ObstacleSet};
 use noise_compute::propagation::obstacle_index_file::{fnv1a64, IndexBlob, BUILDER_CODE_VER};
@@ -579,6 +580,21 @@ pub fn point_inside_obstacle(set: &ObstacleSet, lat: f64, lon: f64) -> Option<f3
     Some(0.5 * (lo + hi))
 }
 
+/// Display-envelope winner shared with the painter: only enclosed footprints
+/// participate, tallest first and ordinal second.
+pub fn point_inside_enclosed(
+    set: &ObstacleSet,
+    lat: f64,
+    lon: f64,
+) -> Option<(noise_compute::envelope::EnvelopeClass, f32)> {
+    let mut seen = Vec::new();
+    set.indexes
+        .iter()
+        .filter_map(|index| index.containing_enclosed(lat, lon, 0.0, &mut seen))
+        .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.2.cmp(&a.2)))
+        .map(|(class, height, _)| (class, height))
+}
+
 /// One cell's index, from the nearest source that still holds it: the process
 /// memo, then the on-disk index cache, then a rebuild from the Arrow shards
 /// (which is also written back). Build errors are not cached; successful
@@ -752,7 +768,19 @@ fn build_cell_index(
                         );
                     }
                 }
-                builder.add_polygon_wkb(wkb.value(i), height, ObstacleKind::Building, next_id);
+                let class = batch
+                    .column_by_name("envelope_class")
+                    .and_then(|c| c.as_any().downcast_ref::<UInt8Array>())
+                    .filter(|a| !a.is_null(i))
+                    .map(|a| EnvelopeClass::from_u8(a.value(i)))
+                    .unwrap_or(EnvelopeClass::Default);
+                builder.add_polygon_wkb(
+                    wkb.value(i),
+                    height,
+                    ObstacleKind::Building,
+                    next_id,
+                    class,
+                );
                 next_id = next_id.wrapping_add(1);
             }
         }

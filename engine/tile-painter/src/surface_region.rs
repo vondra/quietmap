@@ -414,7 +414,7 @@ pub fn process_surface_region(
             let t_m = Instant::now();
             let interior_mask = obstacle_data
                 .set()
-                .map(|set| crate::source_loader_obstacle::bake_tile_interior_mask(tile, set));
+                .map(|set| crate::source_loader_obstacle::bake_tile_envelope_classes(tile, set));
             stats.t_raster += t_m.elapsed();
             for (rows, source_id, dir_name) in &layer_rows {
                 let mut accum = TileAccumulator::new();
@@ -519,7 +519,7 @@ pub fn process_surface_region(
                 // Interiors are not receivers (Fix 4) — stamped LAST so the
                 // area fill can't paint a masked footprint back in.
                 if let Some(mask) = &interior_mask {
-                    crate::source_loader_obstacle::apply_interior_mask(&mut cells, mask);
+                    crate::source_loader_obstacle::apply_interior_estimate(&mut cells, mask);
                 }
                 let out = ctx
                     .output

@@ -209,6 +209,18 @@ pub struct WireResult {
     /// [`Self::inside_building`] is false.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inside_building_height_m: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub envelope_class: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub envelope_delta_db: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub facade_lden: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indoor_lden: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indoor_lden_tilted: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indoor_estimate: Option<bool>,
     /// Unique string sentinel — Node route replaces this with the
     /// wall-time `Date.now() - t0` measurement. See
     /// [`COMPUTE_TIME_MS_SENTINEL`].
@@ -229,8 +241,9 @@ pub fn build_wire_result(
     lat: f64,
     lng: f64,
     elevation: f64,
-    inside_building_m: Option<f32>,
+    indoor: Option<(noise_compute::envelope::EnvelopeClass, f32, f64, f64)>,
 ) -> WireResult {
+    let inside_building_m = indoor.map(|(_, height, _, _)| height);
     WireResult {
         h3_index: String::new(),
         h3_center: [lat, lng],
@@ -246,9 +259,47 @@ pub fn build_wire_result(
         other_sources_lden: result.other_sources_lden,
         inside_building: inside_building_m.is_some(),
         inside_building_height_m: inside_building_m.map(|h| round1(h as f64)),
+        envelope_class: indoor.map(|(class, _, _, _)| class.name()),
+        envelope_delta_db: indoor.map(|(_, _, delta, _)| delta),
+        facade_lden: indoor.map(|(_, _, _, facade)| round1(facade)),
+        indoor_lden: indoor.map(|_| round1(result.total.lden_db)),
+        indoor_lden_tilted: indoor.map(|(_, _, _, facade)| round1((facade - 15.0).max(0.0))),
+        indoor_estimate: indoor.map(|_| true),
         compute_time_ms: COMPUTE_TIME_MS_SENTINEL,
         segments: result.segments,
         segments_meta: result.segments_meta,
         timings: result.timings.map(WireTimings::from),
     }
+}
+
+/// Apply one façade-to-indoor product estimate to every displayed level.
+pub fn attenuate_result(result: &mut NoiseResult, delta: f64) {
+    let attenuate = |value: &mut f64| {
+        if value.is_finite() {
+            *value = (*value - delta).max(0.0)
+        }
+    };
+    for periods in [&mut result.total, &mut result.total_free] {
+        attenuate(&mut periods.ld_db);
+        attenuate(&mut periods.le_db);
+        attenuate(&mut periods.ln_db);
+        attenuate(&mut periods.lden_db);
+    }
+    for source in &mut result.sources {
+        for periods in [&mut source.periods, &mut source.periods_free] {
+            attenuate(&mut periods.ld_db);
+            attenuate(&mut periods.le_db);
+            attenuate(&mut periods.ln_db);
+            attenuate(&mut periods.lden_db);
+        }
+    }
+    for contributor in &mut result.contributors {
+        for periods in [&mut contributor.periods, &mut contributor.periods_free] {
+            attenuate(&mut periods.ld_db);
+            attenuate(&mut periods.le_db);
+            attenuate(&mut periods.ln_db);
+            attenuate(&mut periods.lden_db);
+        }
+    }
+    attenuate(&mut result.other_sources_lden);
 }
