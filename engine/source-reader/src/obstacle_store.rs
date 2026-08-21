@@ -430,6 +430,28 @@ pub fn load_obstacle_set(
     lat: f64,
     lon: f64,
 ) -> Option<ObstacleSet> {
+    load_obstacle_set_with_logging(h3r4_dir, data_dir, lat, lon, true)
+}
+
+/// Assemble an obstacle set without logging expected raster fallback paths.
+/// The building-height hover endpoint calls this variant because a moving
+/// pointer can otherwise print one fallback line per debounced request.
+pub fn load_obstacle_set_quiet(
+    h3r4_dir: Option<&Path>,
+    data_dir: &Path,
+    lat: f64,
+    lon: f64,
+) -> Option<ObstacleSet> {
+    load_obstacle_set_with_logging(h3r4_dir, data_dir, lat, lon, false)
+}
+
+fn load_obstacle_set_with_logging(
+    h3r4_dir: Option<&Path>,
+    data_dir: &Path,
+    lat: f64,
+    lon: f64,
+    log_fallback: bool,
+) -> Option<ObstacleSet> {
     let allow_partial = std::env::var("QM_OBSTACLES_ALLOW_PARTIAL").is_ok_and(|v| v == "1");
     let cell = LatLng::new(lat, lon).ok()?.to_cell(Resolution::Four);
     let manifest = ingest_manifest(h3r4_dir, data_dir);
@@ -439,7 +461,9 @@ pub fn load_obstacle_set(
             Err(e) => {
                 // Discovery I/O fault ≠ "not ingested": abort loudly even
                 // under partial mode.
-                eprintln!("obstacle_store: {e} — falling back to raster for this query");
+                if log_fallback {
+                    eprintln!("obstacle_store: {e} — falling back to raster for this query");
+                }
                 return None;
             }
             Ok(Some(dir)) => dir,
@@ -457,10 +481,12 @@ pub fn load_obstacle_set(
                 if allow_partial {
                     continue; // dev A/B at the staging frontier — documented risk
                 }
-                eprintln!(
-                    "obstacle_store: ring cell {c} not ingested — falling back to raster \
-                     (set QM_OBSTACLES_ALLOW_PARTIAL=1 only for dev A/B)"
-                );
+                if log_fallback {
+                    eprintln!(
+                        "obstacle_store: ring cell {c} not ingested — falling back to raster \
+                         (set QM_OBSTACLES_ALLOW_PARTIAL=1 only for dev A/B)"
+                    );
+                }
                 return None;
             }
         };
@@ -468,7 +494,9 @@ pub fn load_obstacle_set(
         match cell_index(c, &dir, buildings_arrow.as_deref(), data_dir) {
             Ok(idx) => indexes.push(idx),
             Err(e) => {
-                eprintln!("obstacle_store: {e} — falling back to raster for this query");
+                if log_fallback {
+                    eprintln!("obstacle_store: {e} — falling back to raster for this query");
+                }
                 return None;
             }
         }
@@ -481,7 +509,9 @@ pub fn load_obstacle_set(
         // exactly the pre-branch behavior (/gg Codex finding 3, tile-painter
         // twin rule).
         if set.indexes.is_empty() {
-            eprintln!("obstacle_store: vector mode with 0 edges (all ingested-empty)");
+            if log_fallback {
+                eprintln!("obstacle_store: vector mode with 0 edges (all ingested-empty)");
+            }
             return Some(set);
         }
         return None;
@@ -620,19 +650,21 @@ pub fn point_inside_enclosed(
         })
 }
 
-/// Plain-language building type used by the map tooltip. The obstacle shards
-/// retain the envelope class used by the engine rather than the full Overture
-/// building-class vocabulary, so the tooltip deliberately uses the same five
-/// labels as the popup's indoor estimate.
-pub fn building_type_from_envelope(class: EnvelopeClass) -> Option<&'static str> {
-    match class {
-        EnvelopeClass::Outdoor => None,
-        EnvelopeClass::Residential => Some("house"),
-        EnvelopeClass::Commercial => Some("office"),
-        EnvelopeClass::Industrial => Some("industrial hall"),
-        EnvelopeClass::Historic => Some("historic building"),
-        EnvelopeClass::Default => Some("building"),
-    }
+/// Hover-only winner over every visible footprint, including Outdoor-class
+/// carports and roof structures. The popup's indoor calculation deliberately
+/// keeps using [`point_inside_enclosed`] so Outdoor does not become an indoor
+/// attenuation estimate.
+pub fn point_inside_footprint(
+    set: &ObstacleSet,
+    lat: f64,
+    lon: f64,
+) -> Option<(EnvelopeClass, f32)> {
+    let mut seen = Vec::new();
+    set.indexes
+        .iter()
+        .filter_map(|index| index.containing_footprint(lat, lon, 0.0, &mut seen))
+        .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.2.cmp(&a.2)))
+        .map(|(class, height, _)| (class, height))
 }
 
 /// One cell's index, from the nearest source that still holds it: the process
@@ -1163,28 +1195,37 @@ mod tests {
     }
 
     #[test]
-    fn building_type_labels_match_popup_language() {
+    fn point_inside_footprint_keeps_outdoor_hover_structure() {
+        use noise_compute::constants::{m_per_deg_lon, M_PER_DEG_LAT};
+        use noise_compute::propagation::obstacle_index::ObstacleIndex;
+
+        const OLAT: f64 = 50.08;
+        const OLON: f64 = 14.43;
+        let d_lat = |m: f64| m / M_PER_DEG_LAT;
+        let d_lon = |m: f64| m / m_per_deg_lon(OLAT.to_radians());
+        let mut wkb = vec![1, 3, 0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0];
+        for (lon, lat) in [
+            (OLON - d_lon(10.0), OLAT - d_lat(10.0)),
+            (OLON + d_lon(10.0), OLAT - d_lat(10.0)),
+            (OLON + d_lon(10.0), OLAT + d_lat(10.0)),
+            (OLON - d_lon(10.0), OLAT + d_lat(10.0)),
+            (OLON - d_lon(10.0), OLAT - d_lat(10.0)),
+        ] {
+            wkb.extend_from_slice(&lon.to_le_bytes());
+            wkb.extend_from_slice(&lat.to_le_bytes());
+        }
+
+        let mut builder = ObstacleIndex::builder(OLAT, OLON);
+        builder.add_polygon_wkb(&wkb, 3.0, ObstacleKind::Building, 0, EnvelopeClass::Outdoor);
+        let set = ObstacleSet {
+            indexes: vec![Arc::new(builder.build())],
+        };
+
         assert_eq!(
-            building_type_from_envelope(EnvelopeClass::Residential),
-            Some("house")
+            point_inside_footprint(&set, OLAT, OLON),
+            Some((EnvelopeClass::Outdoor, 3.0))
         );
-        assert_eq!(
-            building_type_from_envelope(EnvelopeClass::Commercial),
-            Some("office")
-        );
-        assert_eq!(
-            building_type_from_envelope(EnvelopeClass::Industrial),
-            Some("industrial hall")
-        );
-        assert_eq!(
-            building_type_from_envelope(EnvelopeClass::Historic),
-            Some("historic building")
-        );
-        assert_eq!(
-            building_type_from_envelope(EnvelopeClass::Default),
-            Some("building")
-        );
-        assert_eq!(building_type_from_envelope(EnvelopeClass::Outdoor), None);
+        assert!(point_inside_enclosed(&set, OLAT, OLON).is_none());
     }
 
     /// One tiny valid shard: a single closed square footprint (~20 m) whose

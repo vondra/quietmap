@@ -978,6 +978,26 @@ impl ObstacleIndex {
             .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.2.cmp(&a.2)))
     }
 
+    /// Winning footprint at a point, including Outdoor-class structures.
+    /// Indoor estimates use [`Self::containing_enclosed`] instead because
+    /// Outdoor has no attenuation value, while the building hover still needs
+    /// to name visible carports and roof structures.
+    pub fn containing_footprint(
+        &self,
+        lat: f64,
+        lon: f64,
+        min_height_m: f32,
+        seen: &mut Vec<(u32, u32, f32)>,
+    ) -> Option<(EnvelopeClass, f32, u32)> {
+        self.collect_containing_footprints(lat, lon, min_height_m, seen);
+        seen.iter()
+            .filter_map(|(id, _, height)| {
+                let class = EnvelopeClass::from_u8(self.footprint_class[*id as usize]);
+                Some((class, *height, *id))
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.2.cmp(&a.2)))
+    }
+
     /// Walk the eastward containment ray once and retain each footprint's
     /// crossing parity and height at first sighting. Both boolean containment
     /// and envelope winner selection use this same CSR walk; the height is

@@ -1,8 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Source, Layer, useMap } from 'react-map-gl/maplibre'
 import { HEATMAP_LAYERS } from './HeatmapOverlay'
 import { lngLatToTile, tileXToLng, tileYToLat } from '../lib/tile-math'
+import {
+  formatBuildingAt,
+  parseBuildingAtResponse,
+  type BuildingAtState,
+} from './cell-inspector-building'
 
 const TILE_SIZE = 64
 const CELL_STEP_DEG = 1 / 3600
@@ -23,17 +28,13 @@ interface CellInspectorLayerProps {
 
 type TileEntry = ArrayBuffer | 'loading' | 'failed'
 
-interface BuildingAtResult {
-  height_m: number
-  building_type: string
-}
-
-type BuildingAtState =
-  | { status: 'loading' }
-  | { status: 'ready'; result: BuildingAtResult | null }
-  | { status: 'failed' }
-
 const BUILDING_QUERY_DEBOUNCE_MS = 120
+
+type BuildingLookupRequest = {
+  lat: number
+  lng: number
+  sequence: number
+}
 
 /**
  * Hover tooltip that shows raster-cell values for terrain/forest and the
@@ -58,6 +59,12 @@ export default function CellInspectorLayer({
     status: 'ready',
     result: null,
   })
+  const buildingLookupActiveRef = useRef<{
+    request: BuildingLookupRequest
+    promise: Promise<void>
+  } | null>(null)
+  const buildingLookupPendingRef = useRef<BuildingLookupRequest | null>(null)
+  const buildingLookupSequenceRef = useRef(0)
 
   const activeLayers: DataLayer[] = useMemo(
     () => DATA_LAYERS.filter(id => rasterOverlays[overlayKey(id)]),
@@ -127,44 +134,76 @@ export default function CellInspectorLayer({
   }, [hover, dataZ, activeLayers, cellCenterLat, cellCenterLon])
 
   // Building-height readouts come from the same vector obstacle polygons that
-  // screen sound in the engine. Debounce pointer motion so a visitor moving
-  // across a neighbourhood does not turn every mouse event into a request.
+  // screen sound in the engine. Debounce pointer motion and serialize the
+  // requests: aborting fetch does not abort the synchronous worker/index build,
+  // so one cold lookup must finish before the latest pending point can start.
   const hoverLat = hover?.lat ?? null
   const hoverLng = hover?.lng ?? null
+  const startBuildingLookup = useCallback((request: BuildingLookupRequest) => {
+    if (request.sequence !== buildingLookupSequenceRef.current) return
+    buildingLookupPendingRef.current = null
+    const query = new URLSearchParams({
+      lat: String(request.lat),
+      lng: String(request.lng),
+    })
+    const promise = fetch(`/api/building-at?${query.toString()}`)
+      .then(response => {
+        if (!response.ok) throw new Error(`building lookup failed: ${response.status}`)
+        return response.json() as Promise<unknown>
+      })
+      .then(value => {
+        if (request.sequence !== buildingLookupSequenceRef.current) return
+        const parsed = parseBuildingAtResponse(value)
+        if (parsed.kind === 'unavailable') {
+          setBuildingAt({ status: 'failed' })
+        } else if (parsed.kind === 'none') {
+          setBuildingAt({ status: 'ready', result: null })
+        } else {
+          setBuildingAt({ status: 'ready', result: parsed.result })
+        }
+      })
+      .catch(error => {
+        if (request.sequence !== buildingLookupSequenceRef.current) return
+        console.error(error)
+        setBuildingAt({ status: 'failed' })
+      })
+      .finally(() => {
+        const active = buildingLookupActiveRef.current
+        if (!active || active.request.sequence !== request.sequence) return
+        buildingLookupActiveRef.current = null
+        const pending = buildingLookupPendingRef.current
+        if (pending && pending.sequence === buildingLookupSequenceRef.current) {
+          startBuildingLookup(pending)
+        } else {
+          buildingLookupPendingRef.current = null
+        }
+      })
+    buildingLookupActiveRef.current = { request, promise }
+  }, [])
+
   useEffect(() => {
+    const sequence = buildingLookupSequenceRef.current + 1
+    buildingLookupSequenceRef.current = sequence
     if (!enabled || !buildingOverlayActive || hoverLat === null || hoverLng === null) {
+      buildingLookupPendingRef.current = null
       setBuildingAt({ status: 'ready', result: null })
       return
     }
 
     setBuildingAt({ status: 'loading' })
-    const controller = new AbortController()
     const timer = window.setTimeout(() => {
-      const query = new URLSearchParams({
-        lat: String(hoverLat),
-        lng: String(hoverLng),
-      })
-      fetch(`/api/building-at?${query.toString()}`, { signal: controller.signal })
-        .then(response => {
-          if (!response.ok) throw new Error(`building lookup failed: ${response.status}`)
-          return response.json() as Promise<unknown>
-        })
-        .then(value => {
-          if (controller.signal.aborted) return
-          setBuildingAt({ status: 'ready', result: parseBuildingAtResult(value) })
-        })
-        .catch(error => {
-          if (controller.signal.aborted) return
-          console.error(error)
-          setBuildingAt({ status: 'failed' })
-        })
+      const request = { lat: hoverLat, lng: hoverLng, sequence }
+      buildingLookupPendingRef.current = request
+      if (!buildingLookupActiveRef.current) startBuildingLookup(request)
     }, BUILDING_QUERY_DEBOUNCE_MS)
 
-    return () => {
-      window.clearTimeout(timer)
-      controller.abort()
-    }
-  }, [enabled, buildingOverlayActive, hoverLat, hoverLng])
+    return () => window.clearTimeout(timer)
+  }, [enabled, buildingOverlayActive, hoverLat, hoverLng, startBuildingLookup])
+
+  useEffect(() => () => {
+    buildingLookupSequenceRef.current += 1
+    buildingLookupPendingRef.current = null
+  }, [])
 
   const values = useMemo(() => {
     if (!hover) return null
@@ -245,7 +284,6 @@ const TOOLTIP_ROWS: Array<{
   fmt: (v: number) => string
 }> = [
   { key: 'dem', label: 'Elevation', fmt: v => `${Math.round(v)} m` },
-  { key: 'building', label: 'Building', fmt: v => v > 0 ? `${v} m` : 'none' },
   // Canopy density 0–100 % (geodata-v2 2a continuous tiles; the legacy
   // binary raster reads 100 % where forested, so this stays truthful).
   { key: 'forest', label: 'Forest', fmt: v => v > 0 ? `${Math.round(v)} %` : 'no' },
@@ -256,16 +294,8 @@ function renderLines(
   buildingAt: BuildingAtState | null,
 ): ReactNode {
   const rows: ReactNode[] = []
+  let buildingLineAdded = false
   for (const row of TOOLTIP_ROWS) {
-    if (row.key === 'building') {
-      if (!buildingAt) continue
-      rows.push(
-        <div key={row.key}>
-          {row.label}: {formatBuildingAt(buildingAt)}
-        </div>,
-      )
-      continue
-    }
     if (!(row.key in values)) continue
     const v = values[row.key]
     rows.push(
@@ -273,29 +303,23 @@ function renderLines(
         {row.label}: {v == null ? '…' : row.fmt(v)}
       </div>,
     )
+    if (row.key === 'dem' && buildingAt) {
+      rows.push(
+        <div key="building">
+          Building: {formatBuildingAt(buildingAt)}
+        </div>,
+      )
+      buildingLineAdded = true
+    }
+  }
+  if (buildingAt && !buildingLineAdded) {
+    rows.unshift(
+      <div key="building">
+        Building: {formatBuildingAt(buildingAt)}
+      </div>,
+    )
   }
   return rows
-}
-
-function parseBuildingAtResult(value: unknown): BuildingAtResult | null {
-  if (value === null || typeof value !== 'object') return null
-  const record = value as Record<string, unknown>
-  const height = record.height_m
-  const buildingType = record.building_type
-  if (
-    typeof height !== 'number' || !Number.isFinite(height) || height <= 0 ||
-    typeof buildingType !== 'string' || buildingType.length === 0
-  ) {
-    return null
-  }
-  return { height_m: height, building_type: buildingType }
-}
-
-function formatBuildingAt(state: BuildingAtState): string {
-  if (state.status === 'loading') return '…'
-  if (state.status === 'failed') return 'unavailable'
-  if (!state.result) return 'none'
-  return `height ${state.result.height_m.toFixed(1)} m - ${state.result.building_type}`
 }
 
 function tileBbox(z: number, x: number, y: number) {

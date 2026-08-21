@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, type ReactNode } from "react"
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useId, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 
 import { cn } from "@/lib/utils"
@@ -22,13 +22,16 @@ export function HoverText({
   title,
   children,
   className,
+  focusable = false,
 }: {
   title: string
   children: ReactNode
   className?: string
+  focusable?: boolean
 }) {
   const triggerRef = useRef<HTMLSpanElement>(null)
   const tooltipRef = useRef<HTMLDivElement>(null)
+  const descriptionId = useId()
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState<{ left: number; top: number; ready: boolean } | null>(null)
   const closeTimer = useRef<number | null>(null)
@@ -133,12 +136,29 @@ export function HoverText({
     <>
       <span
         ref={triggerRef}
+        role={focusable ? "button" : undefined}
+        tabIndex={focusable ? 0 : undefined}
+        aria-expanded={focusable ? open : undefined}
+        aria-describedby={focusable ? descriptionId : undefined}
         className={cn(
           "cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2",
           className,
         )}
         onMouseEnter={show}
         onMouseLeave={scheduleHide}
+        onFocus={focusable ? show : undefined}
+        onBlur={focusable ? scheduleHide : undefined}
+        onKeyDown={focusable ? (e) => {
+          if (e.key !== "Enter" && e.key !== " ") return
+          e.preventDefault()
+          e.stopPropagation()
+          if (open) {
+            setOpen(false)
+            setPos(null)
+          } else {
+            show()
+          }
+        } : undefined}
         onClick={(e) => {
           e.stopPropagation()
           if (open) {
@@ -150,6 +170,7 @@ export function HoverText({
         }}
       >
         {children}
+        {focusable && <span id={descriptionId} className="sr-only">{title}</span>}
       </span>
       {open && pos && createPortal(
         <div

@@ -39,9 +39,15 @@ export type NoiseOnflyEngine = {
   queryObstacleFootprints: (south: number, west: number, north: number, east: number) => Promise<string>
 }
 
+export type NoiseOnflyV2RouteOptions = {
+  /** Test seam for the containment-only endpoint; production uses the pool. */
+  queryBuildingAt?: (lat: number, lng: number, signal?: AbortSignal) => Promise<string>
+}
+
 export async function noiseOnflyV2Routes(
   app: FastifyInstance,
   publishedLineModel: PublishedLineModel,
+  options: NoiseOnflyV2RouteOptions = {},
 ): Promise<NoiseOnflyEngine> {
   const supervisor = new NoiseOnflySupervisor({
     createWorker: () => {
@@ -67,6 +73,9 @@ export async function noiseOnflyV2Routes(
       app.log[level](message)
     },
   })
+  const queryBuildingAt = options.queryBuildingAt
+    ?? ((lat: number, lng: number, signal?: AbortSignal) =>
+      supervisor.queryBuildingAt(lat, lng, signal))
 
   app.addHook('onClose', async () => {
     await supervisor.close()
@@ -88,7 +97,7 @@ export async function noiseOnflyV2Routes(
       const onClose = () => abortController.abort()
       request.raw.once('close', onClose)
       try {
-        const resultJson = await supervisor.queryBuildingAt(lat, lng, abortController.signal)
+        const resultJson = await queryBuildingAt(lat, lng, abortController.signal)
         return reply.type('application/json').send(resultJson)
       } catch (err) {
         if (abortController.signal.aborted || request.raw.aborted || request.raw.destroyed) {

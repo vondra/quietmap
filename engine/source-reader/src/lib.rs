@@ -280,6 +280,20 @@ pub fn query_obstacle_footprints(
     Ok(serde_json::to_string(&rows).unwrap())
 }
 
+/// Map the engine's envelope class to the small plain-language vocabulary
+/// used by the building hover tooltip. Kept outside `obstacle_store.rs` so
+/// changing display wording does not rotate its disk-index cache version.
+fn building_type_from_envelope(class: noise_compute::envelope::EnvelopeClass) -> &'static str {
+    match class {
+        noise_compute::envelope::EnvelopeClass::Outdoor => "carport/roof structure",
+        noise_compute::envelope::EnvelopeClass::Residential => "house",
+        noise_compute::envelope::EnvelopeClass::Commercial => "office",
+        noise_compute::envelope::EnvelopeClass::Industrial => "industrial hall",
+        noise_compute::envelope::EnvelopeClass::Historic => "historic building",
+        noise_compute::envelope::EnvelopeClass::Default => "building",
+    }
+}
+
 /// Return the vector obstacle containing a point, if any. This is intentionally
 /// a containment-only query: it reuses the exact obstacle set and enclosed
 /// winner selection used by the popup and heatmap, without running noise
@@ -292,17 +306,51 @@ pub fn query_building_at(lat: f64, lng: f64) -> napi::Result<String> {
         .get()
         .map(|p| p.as_path())
         .unwrap_or_else(|| std::path::Path::new("."));
-    let result = obstacle_store::load_obstacle_set(h3r4, data_dir, lat, lng)
-        .and_then(|set| obstacle_store::point_inside_enclosed(&set, lat, lng))
-        .and_then(|(class, height)| {
-            obstacle_store::building_type_from_envelope(class).map(|building_type| {
-                serde_json::json!({
-                    "height_m": height,
-                    "building_type": building_type,
-                })
-            })
-        });
+    let result = match obstacle_store::load_obstacle_set_quiet(h3r4, data_dir, lat, lng) {
+        None => serde_json::json!({ "status": "unavailable" }),
+        Some(set) => match obstacle_store::point_inside_footprint(&set, lat, lng) {
+            None => serde_json::Value::Null,
+            Some((class, height)) => serde_json::json!({
+                "height_m": height,
+                "building_type": building_type_from_envelope(class),
+            }),
+        },
+    };
     Ok(serde_json::to_string(&result).unwrap())
+}
+
+#[cfg(test)]
+mod building_type_tests {
+    use super::building_type_from_envelope;
+    use noise_compute::envelope::EnvelopeClass;
+
+    #[test]
+    fn building_type_labels_match_popup_language() {
+        assert_eq!(
+            building_type_from_envelope(EnvelopeClass::Outdoor),
+            "carport/roof structure"
+        );
+        assert_eq!(
+            building_type_from_envelope(EnvelopeClass::Residential),
+            "house"
+        );
+        assert_eq!(
+            building_type_from_envelope(EnvelopeClass::Commercial),
+            "office"
+        );
+        assert_eq!(
+            building_type_from_envelope(EnvelopeClass::Industrial),
+            "industrial hall"
+        );
+        assert_eq!(
+            building_type_from_envelope(EnvelopeClass::Historic),
+            "historic building"
+        );
+        assert_eq!(
+            building_type_from_envelope(EnvelopeClass::Default),
+            "building"
+        );
+    }
 }
 
 #[cfg(feature = "node")]

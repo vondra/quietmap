@@ -203,7 +203,7 @@ function IndoorCalculationBreakdown({ calculation }: { calculation: IndoorCalcul
   if (!calculation) return null
   return (
     <div data-testid="indoor-calculation" className="mb-1 border-b border-border/50">
-      <HoverText title={indoorCalculationDetail(calculation)} className="block">
+      <HoverText title={indoorCalculationDetail(calculation)} className="block" focusable>
         <span className="flex items-baseline gap-1.5 px-0 py-1 text-xs font-medium">
           <span className="truncate flex-1">Indoors:</span>
           <span className="shrink-0 text-right tabular-nums">
@@ -219,7 +219,7 @@ function indoorCalculationDetail(calculation: IndoorCalculation): string {
   const openWindow = calculation.tiltedLden == null
     ? ''
     : ` With an open window: ~${calculation.tiltedLden.toFixed(1)} dB.`
-  return `Outside at the facade: ${calculation.facadeLden.toFixed(1)} dB. A ${calculation.buildingType} typically reduces noise by ~${calculation.reductionDb.toFixed(1)} dB with windows closed.${openWindow} Uncertainty ±8–12 dB.`
+  return `Outside at the wall: ${calculation.facadeLden.toFixed(1)} dB. A ${calculation.buildingType} typically reduces noise by ~${calculation.reductionDb.toFixed(1)} dB with windows closed.${openWindow} Uncertainty ±8–12 dB; occupant behaviour dominates.`
 }
 
 function TimingsOverlay({ timings }: { timings: NoiseComputeData['timings'] }) {
