@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use h3o::{CellIndex, LatLng};
-use raster_reader::fused_tile_z13::TileBatch;
+use raster_reader::fused_tile_z13::{TileBatch, TILE_PX};
 use raster_reader::{FusedPixel, RealRasters};
 
 use crate::accumulator::TileAccumulator;
@@ -38,7 +38,8 @@ use crate::source_loader_traffic::AirportTrafficData;
 use crate::source_point::PointRow;
 use crate::wire_hm3::{
     collapse_lden_surface_u8, collapse_lden_u8, fill_area_median, write_tile, AREA_FILL_RADIUS_PX,
-    SOURCE_ID_AIRCRAFT, SOURCE_ID_BUILDING, SOURCE_ID_INDUSTRIAL, SOURCE_ID_RAIL, SOURCE_ID_ROAD,
+    NO_DATA, SOURCE_ID_AIRCRAFT, SOURCE_ID_BUILDING, SOURCE_ID_INDUSTRIAL, SOURCE_ID_RAIL,
+    SOURCE_ID_ROAD,
 };
 use crate::{ground_ops, scatter_line, scatter_point};
 use noise_compute::admin;
@@ -360,37 +361,32 @@ pub fn process_surface_region(
             .push((x, y));
     }
     for ((bx, by), batch_tiles) in &batches {
-        // ONE halo per batch (10 km in ground mode), shared by every layer.
+        // Pass A owns the painted tiles plus their 8-neighbour halo. The
+        // expanded batch keeps every halo tile on the same terrain lattice;
+        // Pass B writes only the centre tiles, because each neighbour R4 owns
+        // its own output.
+        let pass_a_tiles = crate::region_runner::tile_halo_window(batch_tiles, ctx.zoom);
+        let batch_base_x = bx.saturating_sub(1);
+        let batch_base_y = by.saturating_sub(1);
+        let batch_n = ctx.batch_n + 2;
         let t_r = Instant::now();
-        // rx_refl: raster bake skipped in vector regions — the vector
-        // pre-bake below is the one and only writer for painted tiles.
         let mut batch = TileBatch::build_opt_rx_refl(
             ctx.zoom,
-            *bx,
-            *by,
-            ctx.batch_n,
+            batch_base_x,
+            batch_base_y,
+            batch_n,
             ctx.halo_m,
             ctx.rasters,
             obstacle_data.set().is_none(),
         );
-        // Vector mode: the raster rx_refl bake is skipped (see
-        // build_opt_rx_refl above) and the pre-bake below is the one writer —
-        // recomputed from footprints, the SAME 150 × 150 m probe, and the GPU
-        // rxar upload carries it unchanged (gg review: pre-bake site). The
-        // popup reads vector reflection too (1.4b VectorReflectionSampler,
-        // landed) — pipeline and popup agree on one reflection source.
         if let Some(set) = obstacle_data.set() {
-            // Only the REQUESTED tiles are painted — rebaking the whole
-            // batch_n² grid would triple the bake cost for nothing.
-            for &(x, y) in batch_tiles {
-                let tile = &mut batch.tiles[((y - by) * ctx.batch_n + (x - bx)) as usize];
+            for &(x, y) in &pass_a_tiles {
+                let slot = crate::region_runner::batch_slot(&batch, x, y);
+                let tile = &mut batch.tiles[slot];
                 crate::source_loader_obstacle::bake_tile_vector_rx_refl(tile, set);
             }
         }
         stats.t_raster += t_r.elapsed();
-        // Count the shared halo's cells once per batch (adjacent batch halos
-        // overlap → allocated batch-halo cells, a slight over-count ⇒ a
-        // conservative redundancy floor for multi-batch runs).
         stats.grid_cells += batch.tiles[0].halo.cell_count() as u64;
         if !stats.halo_logged {
             let mb = (batch.tiles[0].halo.cell_count() * std::mem::size_of::<FusedPixel>()) as f64
@@ -402,20 +398,26 @@ pub fn process_surface_region(
             stats.halo_logged = true;
         }
 
-        for &(x, y) in batch_tiles {
-            let tile = &batch.tiles[((y - by) * ctx.batch_n + (x - bx)) as usize];
-            // One sorted, conservative-distance barrier slice per tile, shared by
-            // every layer (contract: types::Barrier docs).
+        let mut class_rasters = BTreeMap::new();
+        if let Some(set) = obstacle_data.set() {
+            let t_class = Instant::now();
+            for &(x, y) in &pass_a_tiles {
+                let tile = &batch.tiles[crate::region_runner::batch_slot(&batch, x, y)];
+                class_rasters.insert(
+                    (x, y),
+                    crate::source_loader_obstacle::bake_tile_envelope_classes(tile, set),
+                );
+            }
+            stats.t_raster += t_class.elapsed();
+        }
+
+        // The collapsed, area-filled Pass-A cells stay in memory until all
+        // centre tiles have a common geometric donor map. No layer writes in
+        // this loop, so every layer receives exactly the same donor offsets.
+        let mut collapsed: BTreeMap<((u32, u32), u8), Vec<u8>> = BTreeMap::new();
+        for &(x, y) in &pass_a_tiles {
+            let tile = &batch.tiles[crate::region_runner::batch_slot(&batch, x, y)];
             let tile_barriers = barrier_data.for_tile(&tile.bbox, ctx.halo_m);
-            // Building-interior receiver mask (fix-pack Fix 4): ONE
-            // point-in-footprint pass per tile, shared by every layer (they all
-            // ride the same receiver lattice). Vector regions only — a
-            // raster-fallback region keeps today's behavior.
-            let t_m = Instant::now();
-            let interior_mask = obstacle_data
-                .set()
-                .map(|set| crate::source_loader_obstacle::bake_tile_envelope_classes(tile, set));
-            stats.t_raster += t_m.elapsed();
             for (rows, source_id, dir_name) in &layer_rows {
                 let mut accum = TileAccumulator::new();
                 let t_s = Instant::now();
@@ -482,7 +484,6 @@ pub fn process_surface_region(
                             st.path_calls,
                             st.skipped_calls,
                             st.pairs,
-                            // Ground-ops has 1 path per pair (no angular quadrature), so st.path_calls is the walked pair count.
                             st.path_calls,
                             0,
                             st.rows_in_reach as u64,
@@ -502,24 +503,64 @@ pub fn process_surface_region(
                 e.ground_rows_in_reach += ground_rows;
                 e.ground_unique_microsegs += ground_microsegs;
 
-                let t_w = Instant::now();
-                // Ground ops sum event energy ÷ n_days; the surface layers are
-                // steady-power (no time division).
+                let t_collapse = Instant::now();
                 let mut cells = if time_divided {
                     collapse_lden_u8(&accum, ctx.n_days)
                 } else {
                     collapse_lden_surface_u8(&accum)
                 };
-                // AREA sources (building / industrial / leisure) discretise into a
-                // point grid that leaves an inter-point ripple; smooth it into a
-                // solid footprint. Line + ground-ops layers are already continuous.
                 if matches!(rows, SurfaceRows::Point(_)) {
                     fill_area_median(&mut cells, AREA_FILL_RADIUS_PX);
                 }
-                // Interiors are not receivers (Fix 4) — stamped LAST so the
-                // area fill can't paint a masked footprint back in.
-                if let Some(mask) = &interior_mask {
-                    crate::source_loader_obstacle::apply_interior_estimate(&mut cells, mask);
+                stats.t_write += t_collapse.elapsed();
+                collapsed.insert(((x, y), *source_id), cells);
+            }
+        }
+
+        for &(x, y) in batch_tiles {
+            let interior = obstacle_data.set().map(|_| {
+                let halo_classes: [Vec<u8>; 9] = std::array::from_fn(|ordinal| {
+                    let hx = x as i64 + ordinal as i64 % 3 - 1;
+                    let hy = y as i64 + ordinal as i64 / 3 - 1;
+                    if hx < 0 || hy < 0 {
+                        vec![5; TILE_PX * TILE_PX]
+                    } else {
+                        class_rasters
+                            .get(&(hx as u32, hy as u32))
+                            .cloned()
+                            .unwrap_or_else(|| vec![5; TILE_PX * TILE_PX])
+                    }
+                });
+                crate::source_loader_obstacle::bake_interior_donors(&halo_classes)
+            });
+            for (_, source_id, dir_name) in &layer_rows {
+                let t_w = Instant::now();
+                let mut cells = collapsed
+                    .get(&((x, y), *source_id))
+                    .cloned()
+                    .expect("Pass A collapsed every requested layer");
+                if let Some(donors) = &interior {
+                    let halo_cells: [Vec<u8>; 9] = std::array::from_fn(|ordinal| {
+                        let hx = x as i64 + ordinal as i64 % 3 - 1;
+                        let hy = y as i64 + ordinal as i64 / 3 - 1;
+                        if hx < 0 || hy < 0 {
+                            vec![NO_DATA; TILE_PX * TILE_PX]
+                        } else {
+                            collapsed
+                                .get(&((hx as u32, hy as u32), *source_id))
+                                .cloned()
+                                .unwrap_or_else(|| vec![NO_DATA; TILE_PX * TILE_PX])
+                        }
+                    });
+                    let centre_classes = class_rasters
+                        .get(&(x, y))
+                        .expect("Pass A class raster for every painted tile");
+                    crate::source_loader_obstacle::apply_interior_estimate_with_donors(
+                        &mut cells,
+                        centre_classes,
+                        &halo_cells,
+                        donors,
+                    );
                 }
                 let out = ctx
                     .output
@@ -529,8 +570,6 @@ pub fn process_surface_region(
                     .join(format!("{y}.bin"));
                 let n = write_tile(&out, &cells, *source_id, !ctx.write_empty)?;
                 if n == 0 {
-                    // Rebuilt all-silent: unlink any stale tile a prior build left
-                    // so combine can't read stale source energy.
                     if out.exists() {
                         std::fs::remove_file(&out)
                             .with_context(|| format!("rm stale {}", out.display()))?;
@@ -540,8 +579,6 @@ pub fn process_surface_region(
                     stats.written += 1;
                     stats.bytes += n;
                 }
-                // Collapse/fill, Brotli encoding, write and stale-output removal are measured as
-                // the complete existing composite, including an all-silent rebuild.
                 stats.t_write += t_w.elapsed();
             }
             heartbeat.tick(region_r4);

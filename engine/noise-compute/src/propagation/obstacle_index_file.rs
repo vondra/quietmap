@@ -186,7 +186,7 @@ pub const BUILDER_CODE_VER: u64 = {
 const MAGIC: &[u8; 4] = b"QOIX";
 /// Bumped only for a layout change the content hash cannot see (it can see
 /// every one of ours, so this exists for forensics, not for gating).
-const VERSION: u8 = 2;
+const VERSION: u8 = 3;
 const HEADER_BYTES: usize = 128;
 /// Every section starts on this boundary, so the mapping's page alignment
 /// carries through to each typed view (`u32`/`f32`/[`ObstacleEdge`] all want 4).

@@ -12,13 +12,13 @@
 //! per-R4 views — so a tile gets the identical source set either way
 //! (gg review 2026-05-25).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use h3o::{CellIndex, LatLng, Resolution};
-use raster_reader::fused_tile_z13::{FusedTileZ13, TileBatch};
+use raster_reader::fused_tile_z13::TileBatch;
 use raster_reader::RealRasters;
 
 use crate::accumulator::TileAccumulator;
@@ -68,6 +68,35 @@ pub struct RegionStats {
     pub t_cruise_scatter: Duration,
     pub t_airborne_scatter: Duration,
     pub t_write: Duration,
+}
+
+/// Return the valid base-zoom tiles in the one-tile halo around a painted
+/// tile set. The returned order is stable for deterministic Pass A work. A
+/// world-edge neighbour is omitted because `TileBatch` is a contiguous
+/// Cartesian block; its absent class/cell is treated as no donor by Pass B.
+pub fn tile_halo_window(tiles: &[(u32, u32)], zoom: u8) -> Vec<(u32, u32)> {
+    let limit = 1_u32 << zoom;
+    let mut window = BTreeSet::new();
+    for &(x, y) in tiles {
+        for dy in -1_i64..=1 {
+            for dx in -1_i64..=1 {
+                let nx = i64::from(x) + dx;
+                let ny = i64::from(y) + dy;
+                if (0..i64::from(limit)).contains(&nx) && (0..i64::from(limit)).contains(&ny) {
+                    window.insert((nx as u32, ny as u32));
+                }
+            }
+        }
+    }
+    window.into_iter().collect()
+}
+
+/// Locate a tile in a contiguous [`TileBatch`] without duplicating its
+/// row-major indexing arithmetic in the CPU, GPU, and aircraft Pass A code.
+pub fn batch_slot(batch: &TileBatch, x: u32, y: u32) -> usize {
+    assert!(x >= batch.base_x && x < batch.base_x + batch.batch_n);
+    assert!(y >= batch.base_y && y < batch.base_y + batch.batch_n);
+    ((y - batch.base_y) * batch.batch_n + (x - batch.base_x)) as usize
 }
 
 impl RegionStats {
@@ -337,19 +366,39 @@ pub fn process_region(
     }
 
     for ((bx, by), batch_tiles) in &batches {
+        // Airborne and cruise use only the receiver lattice, but building
+        // interiors still need a geometric 3×3 donor window. Pass A therefore
+        // computes all eight neighbours and Pass B writes only owned tiles.
+        let pass_a_tiles = tile_halo_window(batch_tiles, ctx.zoom);
+        let batch_base_x = bx.saturating_sub(1);
+        let batch_base_y = by.saturating_sub(1);
+        let batch_n = ctx.batch_n + 2;
         let t_batch = Instant::now();
-        // Airborne/cruise are NPD and never ray-march the tile halo (cruise reads
-        // the full raster store, airborne is pre-sampled at extract), so build with
-        // a 0 halo — only the inner FusedTileZ13 (receiver lattice + rx_alt) is read.
-        let batch =
-            TileBatch::build_receiver_altitude_only(ctx.zoom, *bx, *by, ctx.batch_n, ctx.rasters);
+        let batch = TileBatch::build_receiver_altitude_only(
+            ctx.zoom,
+            batch_base_x,
+            batch_base_y,
+            batch_n,
+            ctx.rasters,
+        );
         stats.t_raster += t_batch.elapsed();
-        for &(x, y) in batch_tiles {
-            let dx = x - bx;
-            let dy = y - by;
-            // Row-major slot, mirroring TileBatch::build's push order.
-            let tile: &FusedTileZ13 = &batch.tiles[(dy * ctx.batch_n + dx) as usize];
 
+        let mut class_rasters = BTreeMap::new();
+        if let Some(set) = obstacle_data.set() {
+            let t_class = Instant::now();
+            for &(x, y) in &pass_a_tiles {
+                let tile = &batch.tiles[batch_slot(&batch, x, y)];
+                class_rasters.insert(
+                    (x, y),
+                    crate::source_loader_obstacle::bake_tile_envelope_classes(tile, set),
+                );
+            }
+            stats.t_raster += t_class.elapsed();
+        }
+
+        let mut collapsed: BTreeMap<(u32, u32), Vec<u8>> = BTreeMap::new();
+        for &(x, y) in &pass_a_tiles {
+            let tile = &batch.tiles[batch_slot(&batch, x, y)];
             let mut accum = TileAccumulator::new();
             if let Some(field) = cruise_field.as_mut() {
                 let t_cruise = Instant::now();
@@ -370,6 +419,62 @@ pub fn process_region(
                 stats.t_airborne_scatter += dt;
                 stats.t_scatter += dt;
             }
+            collapsed.insert(
+                (x, y),
+                wire_hm3::collapse_lden_u8(&accum, ctx.n_days as f64),
+            );
+        }
+
+        for &(x, y) in batch_tiles {
+            let donors = obstacle_data.set().map(|_| {
+                let halo_classes: [Vec<u8>; 9] = std::array::from_fn(|ordinal| {
+                    let hx = x as i64 + ordinal as i64 % 3 - 1;
+                    let hy = y as i64 + ordinal as i64 / 3 - 1;
+                    if hx < 0 || hy < 0 {
+                        vec![5; raster_reader::fused_tile_z13::TILE_PX.pow(2)]
+                    } else {
+                        class_rasters
+                            .get(&(hx as u32, hy as u32))
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                vec![5; raster_reader::fused_tile_z13::TILE_PX.pow(2)]
+                            })
+                    }
+                });
+                crate::source_loader_obstacle::bake_interior_donors(&halo_classes)
+            });
+            let mut cells = collapsed
+                .get(&(x, y))
+                .cloned()
+                .expect("Pass A collapsed every aircraft tile");
+            if let Some(donors) = &donors {
+                let halo_cells: [Vec<u8>; 9] = std::array::from_fn(|ordinal| {
+                    let hx = x as i64 + ordinal as i64 % 3 - 1;
+                    let hy = y as i64 + ordinal as i64 / 3 - 1;
+                    if hx < 0 || hy < 0 {
+                        vec![wire_hm3::NO_DATA; raster_reader::fused_tile_z13::TILE_PX.pow(2)]
+                    } else {
+                        collapsed
+                            .get(&(hx as u32, hy as u32))
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                vec![
+                                    wire_hm3::NO_DATA;
+                                    raster_reader::fused_tile_z13::TILE_PX.pow(2)
+                                ]
+                            })
+                    }
+                });
+                let centre_classes = class_rasters
+                    .get(&(x, y))
+                    .expect("Pass A class raster for every aircraft tile");
+                crate::source_loader_obstacle::apply_interior_estimate_with_donors(
+                    &mut cells,
+                    centre_classes,
+                    &halo_cells,
+                    donors,
+                );
+            }
 
             let t_write = Instant::now();
             let out_path = ctx
@@ -377,11 +482,6 @@ pub fn process_region(
                 .join(ctx.zoom.to_string())
                 .join(x.to_string())
                 .join(format!("{y}.bin"));
-            let mut cells = wire_hm3::collapse_lden_u8(&accum, ctx.n_days as f64);
-            if let Some(set) = obstacle_data.set() {
-                let classes = crate::source_loader_obstacle::bake_tile_envelope_classes(tile, set);
-                crate::source_loader_obstacle::apply_interior_estimate(&mut cells, &classes);
-            }
             let written = wire_hm3::write_tile(
                 &out_path,
                 &cells,
@@ -389,9 +489,6 @@ pub fn process_region(
                 !ctx.write_empty,
             )?;
             if written == 0 {
-                // Re-run shrank this tile to silence — unlink any stale prior tile
-                // so an incremental recombine/pyramid can't read phantom energy
-                // (mirrors the surface builder).
                 if out_path.exists() {
                     std::fs::remove_file(&out_path)
                         .with_context(|| format!("rm stale {}", out_path.display()))?;
@@ -401,8 +498,6 @@ pub fn process_region(
                 stats.tiles_written += 1;
                 stats.bytes_written += written;
             }
-            // Collapse, Brotli encoding, filesystem write and stale-output removal are one
-            // existing production boundary; record the complete composite, including silence.
             stats.t_write += t_write.elapsed();
         }
     }

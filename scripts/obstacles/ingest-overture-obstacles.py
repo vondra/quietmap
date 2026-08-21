@@ -61,20 +61,72 @@ SCHEMA = pa.schema(
 )
 
 POLYGON_TYPES = {ogr.wkbPolygon, ogr.wkbMultiPolygon}
-OUTDOOR = {"carport", "roof", "greenhouse", "glasshouse", "bridge_structure", "grandstand"}
-RESIDENTIAL = {"allotment_house", "apartments", "beach_hut", "boathouse", "bungalow", "cabin", "college", "detached", "dormitory", "dwelling_house", "ger", "hospital", "house", "houseboat", "hut", "kindergarten", "residential", "school", "semi", "semidetached_house", "static_caravan", "stilt_house", "terrace", "trullo", "university"}
+OUTDOOR = {
+    "carport",
+    "roof",
+    "greenhouse",
+    "glasshouse",
+    "bridge_structure",
+    "grandstand",
+}
+RESIDENTIAL = {
+    "allotment_house", "apartments", "beach_hut", "boathouse", "bungalow",
+    "cabin", "college", "detached", "dormitory", "dwelling_house", "ger",
+    "hospital", "house", "houseboat", "hut", "kindergarten", "residential",
+    "school", "semi", "semidetached_house", "static_caravan", "stilt_house",
+    "terrace", "trullo", "university",
+}
 COMMERCIAL = {"commercial", "hotel", "office", "retail", "supermarket"}
-INDUSTRIAL = {"agricultural", "barn", "cowshed", "digester", "factory", "farm", "farm_auxiliary", "hangar", "industrial", "manufacture", "shed", "silo", "slurry_tank", "stable", "storage_tank", "sty", "warehouse"}
-HISTORIC = {"cathedral", "chapel", "church", "civic", "fire_station", "government", "library", "monastery", "mosque", "post_office", "presbytery", "public", "religious", "shrine", "synagogue", "temple", "wayside_shrine"}
-SUBTYPE = {"residential": 1, "education": 1, "medical": 1, "commercial": 2, "agricultural": 3, "industrial": 3, "civic": 4, "religious": 4}
+INDUSTRIAL = {
+    "agricultural", "barn", "cowshed", "digester", "factory", "farm",
+    "farm_auxiliary", "hangar", "industrial", "manufacture", "shed", "silo",
+    "slurry_tank", "stable", "storage_tank", "sty", "warehouse",
+}
+HISTORIC = {
+    "cathedral", "chapel", "church", "civic", "fire_station", "government",
+    "library", "monastery", "mosque", "post_office", "presbytery", "public",
+    "religious", "shrine", "synagogue", "temple", "wayside_shrine",
+}
+# The explicit DEFAULT set is the published official BuildingClass remainder.
+# Keeping it here makes the ingest test able to reject invented strings while
+# retaining class-over-subtype precedence for known default classes.
+DEFAULT = {
+    "garage", "garages", "kiosk", "service", "parking", "stadium",
+    "sports_centre", "sports_hall", "pavilion", "toilets", "bunker", "military",
+    "transportation", "train_station", "transformer_tower", "outbuilding",
+    "guardhouse",
+}
+OFFICIAL_CLASSES = OUTDOOR | RESIDENTIAL | COMMERCIAL | INDUSTRIAL | HISTORIC | DEFAULT
+SUBTYPE = {
+    "residential": 1,
+    "education": 1,
+    "medical": 1,
+    "commercial": 2,
+    "agricultural": 3,
+    "industrial": 3,
+    "civic": 4,
+    "religious": 4,
+}
+
+
 def envelope_class(building_class, subtype, underground):
-    if underground: return 0
-    if building_class in OUTDOOR: return 0
-    if building_class in RESIDENTIAL: return 1
-    if building_class in COMMERCIAL: return 2
-    if building_class in INDUSTRIAL: return 3
-    if building_class in HISTORIC: return 4
-    return SUBTYPE.get(subtype, 5) if building_class is None else 5
+    if underground:
+        return 0
+    if building_class in OUTDOOR:
+        return 0
+    if building_class in RESIDENTIAL:
+        return 1
+    if building_class in COMMERCIAL:
+        return 2
+    if building_class in INDUSTRIAL:
+        return 3
+    if building_class in HISTORIC:
+        return 4
+    # A null or unknown class is not evidence for DEFAULT: class refines
+    # subtype, so only that case may use the official subtype fallback.
+    if building_class is None or building_class not in OFFICIAL_CLASSES:
+        return SUBTYPE.get(subtype, 5)
+    return 5
 
 
 def ladder(h, f):

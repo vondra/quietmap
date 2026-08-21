@@ -183,18 +183,13 @@ pub fn bake_tile_vector_rx_refl(
 /// this one answers "is this point indoors", which a 3 m garage also is.
 const INTERIOR_MASK_MIN_HEIGHT_M: f32 = 0.0;
 
-/// Receiver pixels whose CENTRE falls INSIDE a vector obstacle footprint —
-/// the building-interior receiver mask (CNOSSOS fix-pack Fix 4). Baked ONCE
-/// per tile and shared by every surface layer of that tile: all five ride the
-/// same receiver lattice, so the mask cannot differ between them.
+/// Classify the receiver lattice once per tile. The result is a class raster,
+/// not a boolean mask: OUTDOOR footprints remain ordinary receivers and every
+/// enclosed class carries the ΔL used by Pass B.
 ///
-/// WHY mask at all: END / CNOSSOS strategic mapping puts receivers on
-/// FACADES, never indoors. A receiver inside a footprint today computes real
-/// physics and paints either a white hole (small building — every wall is
-/// close, everything is screened) or a bogus "indoor" level (a 250 m hall,
-/// where only mild roof diffraction survives → ~68 dB "inside the hall").
-/// Neither is a receiver value, so the output cell becomes
-/// [`crate::wire_hm3::NO_DATA`] via [`apply_interior_mask`].
+/// WHY classify at all: END / CNOSSOS strategic mapping puts receivers on
+/// FACADES, never indoors. A receiver inside a footprint must therefore use a
+/// façade donor and an explicit display estimate, not its self-screened value.
 ///
 /// VECTOR-ONLY by construction: a raster-fallback region has no
 /// [`ObstacleSet`] and keeps today's behavior. The 30 m building raster
@@ -221,11 +216,20 @@ pub fn bake_tile_envelope_classes(
             let winner = set
                 .indexes
                 .iter()
-                .filter_map(|i| {
-                    i.containing_enclosed(lat, lon, INTERIOR_MASK_MIN_HEIGHT_M, &mut seen)
+                .enumerate()
+                .filter_map(|(index_ordinal, index)| {
+                    index
+                        .containing_enclosed(lat, lon, INTERIOR_MASK_MIN_HEIGHT_M, &mut seen)
+                        .map(|(class, height, footprint_ordinal)| {
+                            (class, height, index_ordinal, footprint_ordinal)
+                        })
                 })
-                .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.2.cmp(&a.2)));
-            if let Some((class, _, _)) = winner {
+                .max_by(|a, b| {
+                    a.1.total_cmp(&b.1)
+                        .then_with(|| b.2.cmp(&a.2))
+                        .then_with(|| b.3.cmp(&a.3))
+                });
+            if let Some((class, _, _, _)) = winner {
                 classes[py * TILE_PX + px] = class as u8;
             }
         }
@@ -233,60 +237,32 @@ pub fn bake_tile_envelope_classes(
     classes
 }
 
-/// Stamp [`crate::wire_hm3::NO_DATA`] onto every cell [`bake_tile_interior_mask`]
-/// marked as interior.
-///
-/// Runs LAST, after the area median fill: that fill exists to close the
-/// discretisation holes INSIDE a footprint, so masking before it would only
-/// have it paint the interiors straight back in.
+/// Compatibility convenience for callers that have only one tile. Production
+/// writers use [`apply_interior_estimate_with_donors`] with a real 3×3 halo;
+/// this wrapper supplies outdoor neighbours so old unit fixtures retain the
+/// local-tile behaviour without reintroducing the old quadratic search.
 pub fn apply_interior_estimate(cells: &mut [u8], classes: &[u8]) {
-    use crate::wire_hm3::{dequantise_lden, quantise_lden, NO_DATA};
-    use noise_compute::envelope::EnvelopeClass;
-    debug_assert_eq!(cells.len(), classes.len());
-    let n = raster_reader::fused_tile_z13::TILE_PX;
-    for index in 0..cells.len() {
-        let class = EnvelopeClass::from_u8(classes[index]);
-        let Some(delta) = class.delta_db() else {
-            continue;
-        };
-        let (x, y) = (index % n, index / n);
-        let mut donor = None;
-        for radius in 1..n {
-            for dy in -(radius as isize)..=(radius as isize) {
-                for dx in -(radius as isize)..=(radius as isize) {
-                    let nx = x as isize + dx;
-                    let ny = y as isize + dy;
-                    if nx < 0
-                        || ny < 0
-                        || nx >= n as isize
-                        || ny >= n as isize
-                        || dx.unsigned_abs().max(dy.unsigned_abs()) != radius
-                    {
-                        continue;
-                    }
-                    let ni = ny as usize * n + nx as usize;
-                    if EnvelopeClass::from_u8(classes[ni]) == EnvelopeClass::Outdoor {
-                        donor = Some(ni);
-                        break;
-                    }
-                }
-                if donor.is_some() {
-                    break;
-                }
-            }
-            if donor.is_some() {
-                break;
-            }
+    use raster_reader::fused_tile_z13::TILE_PX;
+
+    debug_assert_eq!(cells.len(), TILE_PX * TILE_PX);
+    debug_assert_eq!(classes.len(), cells.len());
+    let outdoor = noise_compute::envelope::EnvelopeClass::Outdoor as u8;
+    let halo_classes: [Vec<u8>; 9] = std::array::from_fn(|ordinal| {
+        if ordinal == 4 {
+            classes.to_vec()
+        } else {
+            vec![outdoor; TILE_PX * TILE_PX]
         }
-        cells[index] = donor
-            .and_then(|i| {
-                let facade = dequantise_lden(cells[i]);
-                facade
-                    .is_finite()
-                    .then(|| quantise_lden((facade - delta).max(0.0)))
-            })
-            .unwrap_or(NO_DATA);
-    }
+    });
+    let donors = bake_interior_donors(&halo_classes);
+    let halo_cells: [Vec<u8>; 9] = std::array::from_fn(|ordinal| {
+        if ordinal == 4 {
+            cells.to_vec()
+        } else {
+            vec![crate::wire_hm3::NO_DATA; TILE_PX * TILE_PX]
+        }
+    });
+    apply_interior_estimate_with_donors(cells, classes, &halo_cells, &donors);
 }
 
 /// A geometry-only exterior donor for one centre-tile receiver pixel. Tile
@@ -298,60 +274,170 @@ pub struct InteriorDonor {
     pub pixel_ordinal: usize,
 }
 
+/// `INF` is larger than every squared distance in the 1536×1536 receiver
+/// window. The EDT deliberately stays in signed integer space: no floating
+/// rounding is allowed to decide which façade wins a tie.
+const EDT_INF: i32 = i32::MAX / 4;
+
+/// Exact Felzenszwalb–Huttenlocher nearest-site transform for a rectangular
+/// query window. The only O(N) scratch is one squared-distance grid, one
+/// nearest-site-y grid, and the two lower-envelope arrays. The closure is
+/// queried directly instead of materialising an outdoor-point list.
+fn nearest_site_offsets(
+    side: usize,
+    query_x: std::ops::Range<usize>,
+    query_y: std::ops::Range<usize>,
+    is_site: impl Fn(usize, usize) -> bool,
+    is_query: impl Fn(usize, usize) -> bool,
+) -> Vec<Option<(usize, usize)>> {
+    assert!(side > 0 && side <= u16::MAX as usize);
+    assert!(query_x.end <= side && query_y.end <= side);
+    let query_width = query_x.end - query_x.start;
+    let mut g = vec![EDT_INF; side * side];
+    let mut sy = vec![u16::MAX; side * side];
+
+    // Column pass: two sweeps give the exact 1D transform. The backward
+    // sweep replaces only a strictly shorter candidate, so a vertical tie
+    // keeps the smaller site y as required by the amended tie-break.
+    for x in 0..side {
+        let mut nearest_y: Option<usize> = None;
+        for y in 0..side {
+            if is_site(x, y) {
+                nearest_y = Some(y);
+            }
+            if let Some(site_y) = nearest_y {
+                let distance = y - site_y;
+                let index = y * side + x;
+                g[index] = (distance * distance) as i32;
+                sy[index] = site_y as u16;
+            }
+        }
+        nearest_y = None;
+        for y in (0..side).rev() {
+            if is_site(x, y) {
+                nearest_y = Some(y);
+            }
+            if let Some(site_y) = nearest_y {
+                let distance = site_y - y;
+                let index = y * side + x;
+                let candidate = (distance * distance) as i32;
+                if candidate < g[index] {
+                    g[index] = candidate;
+                    sy[index] = site_y as u16;
+                }
+            }
+        }
+    }
+
+    let mut envelope_vertices = vec![0i32; side];
+    let mut envelope_starts = vec![0i32; side];
+    let mut donors = vec![None; query_width * (query_y.end - query_y.start)];
+
+    // Row pass: the lower envelope of the column parabolas. `div_euclid`
+    // implements floor division for negative numerators; +1 is the first
+    // integer where the right parabola is strictly closer. Querying with
+    // `<=` keeps the left (smaller x) site at an exact tie.
+    for y in 0..side {
+        let mut envelope_len = 0usize;
+        for q in 0..side {
+            if g[y * side + q] >= EDT_INF {
+                continue;
+            }
+            if envelope_len == 0 {
+                envelope_vertices[0] = q as i32;
+                envelope_starts[0] = i32::MIN;
+                envelope_len = 1;
+                continue;
+            }
+            let separator = |p: usize, q: usize| -> i32 {
+                let numerator = (q as i64) * (q as i64) - (p as i64) * (p as i64)
+                    + i64::from(g[y * side + q])
+                    - i64::from(g[y * side + p]);
+                let denominator = 2 * (q as i64 - p as i64);
+                (numerator.div_euclid(denominator) + 1) as i32
+            };
+            let mut start = separator(envelope_vertices[envelope_len - 1] as usize, q);
+            while envelope_len > 0 && start <= envelope_starts[envelope_len - 1] {
+                envelope_len -= 1;
+                if envelope_len > 0 {
+                    start = separator(envelope_vertices[envelope_len - 1] as usize, q);
+                }
+            }
+            if envelope_len == 0 {
+                envelope_vertices[0] = q as i32;
+                envelope_starts[0] = i32::MIN;
+                envelope_len = 1;
+            } else {
+                envelope_vertices[envelope_len] = q as i32;
+                envelope_starts[envelope_len] = start;
+                envelope_len += 1;
+            }
+        }
+        if envelope_len == 0 {
+            continue;
+        }
+        let mut envelope_index = 0usize;
+        for x in 0..side {
+            while envelope_index + 1 < envelope_len
+                && envelope_starts[envelope_index + 1] <= x as i32
+            {
+                envelope_index += 1;
+            }
+            if !(query_x.start..query_x.end).contains(&x)
+                || !(query_y.start..query_y.end).contains(&y)
+                || !is_query(x, y)
+            {
+                continue;
+            }
+            let site_x = envelope_vertices[envelope_index] as usize;
+            let site_y = sy[y * side + site_x];
+            if site_y == u16::MAX {
+                continue;
+            }
+            let output_index = (y - query_y.start) * query_width + (x - query_x.start);
+            donors[output_index] = Some((site_x, site_y as usize));
+        }
+    }
+    donors
+}
+
 /// Build donors for the centre member of a 3×3 class-raster halo. This never
 /// inspects HM3 bytes: a silent exterior receiver is still the only valid
 /// façade, and therefore remains silent indoors rather than jumping to a road.
 pub fn bake_interior_donors(halo_classes: &[Vec<u8>; 9]) -> Vec<Option<InteriorDonor>> {
     use noise_compute::envelope::EnvelopeClass;
     use raster_reader::fused_tile_z13::TILE_PX;
-    let centre = &halo_classes[4];
+
+    let expected_len = TILE_PX * TILE_PX;
     debug_assert!(halo_classes
         .iter()
-        .all(|classes| classes.len() == TILE_PX * TILE_PX));
-    let mut donors = vec![None; TILE_PX * TILE_PX];
-    for py in 0..TILE_PX {
-        for px in 0..TILE_PX {
-            let index = py * TILE_PX + px;
-            if EnvelopeClass::from_u8(centre[index]).delta_db().is_none() {
-                continue;
-            }
-            let mut best: Option<(i64, i32, i32, InteriorDonor)> = None;
-            for halo_y in 0..3i32 {
-                for halo_x in 0..3i32 {
-                    let tile_ordinal = (halo_y * 3 + halo_x) as usize;
-                    for donor_y in 0..TILE_PX {
-                        for donor_x in 0..TILE_PX {
-                            let pixel_ordinal = donor_y * TILE_PX + donor_x;
-                            if EnvelopeClass::from_u8(halo_classes[tile_ordinal][pixel_ordinal])
-                                != EnvelopeClass::Outdoor
-                            {
-                                continue;
-                            }
-                            let dy = (halo_y - 1) * TILE_PX as i32 + donor_y as i32 - py as i32;
-                            let dx = (halo_x - 1) * TILE_PX as i32 + donor_x as i32 - px as i32;
-                            let key = (
-                                i64::from(dx) * i64::from(dx) + i64::from(dy) * i64::from(dy),
-                                dy,
-                                dx,
-                                InteriorDonor {
-                                    tile_ordinal,
-                                    pixel_ordinal,
-                                },
-                            );
-                            if best
-                                .as_ref()
-                                .is_none_or(|old| (key.0, key.1, key.2) < (old.0, old.1, old.2))
-                            {
-                                best = Some(key);
-                            }
-                        }
-                    }
-                }
-            }
-            donors[index] = best.map(|(_, _, _, donor)| donor);
-        }
-    }
-    donors
+        .all(|classes| classes.len() == expected_len));
+    let offsets = nearest_site_offsets(
+        TILE_PX * 3,
+        TILE_PX..TILE_PX * 2,
+        TILE_PX..TILE_PX * 2,
+        |x, y| {
+            let tile_ordinal = (y / TILE_PX) * 3 + (x / TILE_PX);
+            let pixel_ordinal = (y % TILE_PX) * TILE_PX + (x % TILE_PX);
+            EnvelopeClass::from_u8(halo_classes[tile_ordinal][pixel_ordinal])
+                == EnvelopeClass::Outdoor
+        },
+        |x, y| {
+            let pixel_ordinal = (y - TILE_PX) * TILE_PX + (x - TILE_PX);
+            EnvelopeClass::from_u8(halo_classes[4][pixel_ordinal])
+                .delta_db()
+                .is_some()
+        },
+    );
+    offsets
+        .into_iter()
+        .map(|offset| {
+            offset.map(|(x, y)| InteriorDonor {
+                tile_ordinal: (y / TILE_PX) * 3 + (x / TILE_PX),
+                pixel_ordinal: (y % TILE_PX) * TILE_PX + (x % TILE_PX),
+            })
+        })
+        .collect()
 }
 
 /// Pass B of the interior estimate. `halo_cells` are already collapsed and
@@ -377,26 +463,6 @@ pub fn apply_interior_estimate_with_donors(
                     .then(|| quantise_lden((facade - delta).max(0.0)))
             })
             .unwrap_or(NO_DATA);
-    }
-}
-
-#[cfg(test)]
-fn bake_tile_interior_mask(
-    tile: &raster_reader::fused_tile_z13::FusedTileZ13,
-    set: &ObstacleSet,
-) -> Vec<bool> {
-    bake_tile_envelope_classes(tile, set)
-        .into_iter()
-        .map(|v| v != noise_compute::envelope::EnvelopeClass::Outdoor as u8)
-        .collect()
-}
-
-#[cfg(test)]
-fn apply_interior_mask(cells: &mut [u8], interior: &[bool]) {
-    for (cell, inside) in cells.iter_mut().zip(interior) {
-        if *inside {
-            *cell = crate::wire_hm3::NO_DATA;
-        }
     }
 }
 
@@ -643,23 +709,23 @@ mod tests {
     /// Fix 4's decision matrix on a REAL base-zoom receiver lattice (z12/512 px
     /// over Praha, ~12 m/px) with synthetic footprints: a 200 m block with a
     /// 60 m courtyard, plus a 3 m garage 600 m east.
-    /// * annulus pixel → masked (interiors are not receivers);
-    /// * COURTYARD centre → NOT masked (a hole shares its outer ring's id, so
+    /// * annulus pixel → enclosed class (interiors use a façade donor);
+    /// * COURTYARD centre → OUTDOOR (a hole shares its outer ring's id, so
     ///   the crossing-parity test reads it as outdoors — an open yard IS a
     ///   receiver);
     /// * open ground between the two footprints → not masked;
-    /// * the 3 m garage → masked (the mask's height gate is 0, not the
+    /// * the 3 m garage → enclosed (the class raster's height gate is 0, not the
     ///   enclosure probe's 5 m — a garage interior is still an interior);
     /// * masked area ≈ the footprint area in pixels;
-    /// * `apply_interior_mask` stamps NO_DATA on exactly those cells.
+    /// * Pass B attenuates exactly those cells from a finite façade donor.
     #[test]
-    fn interior_mask_matrix() {
+    fn interior_envelope_matrix() {
         use crate::scatter_band::{lat_to_py, lon_to_px};
         use noise_compute::constants::{m_per_deg_lon, M_PER_DEG_LAT};
         use raster_reader::fused_tile_z13::{FusedTileZ13, TILE_PX};
 
         // Stub rasters (missing dir → every sample is the store default); the
-        // mask reads only the tile's receiver lat/lon lattice.
+        // Class geometry reads only the tile's receiver lat/lon lattice.
         let rasters = raster_reader::RealRasters::new(Path::new("/nonexistent-qm-interior-mask"));
         let (tx, ty) = crate::grid::lat_lon_to_tile(12, 50.08, 14.43);
         let tile = FusedTileZ13::build(12, tx, ty, 0.0, &rasters);
@@ -690,41 +756,88 @@ mod tests {
             indexes: vec![Arc::new(b.build())],
         };
 
-        let mask = bake_tile_interior_mask(&tile, &set);
-        assert_eq!(mask.len(), TILE_PX * TILE_PX);
-        assert!(mask[px_of(70.0, 0.0)], "block interior (annulus) is masked");
-        assert!(mask[px_of(0.0, -70.0)], "block interior, other side");
+        let classes = bake_tile_envelope_classes(&tile, &set);
+        assert_eq!(classes.len(), TILE_PX * TILE_PX);
+        let indoor = |i: usize| classes[i] != noise_compute::envelope::EnvelopeClass::Outdoor as u8;
         assert!(
-            !mask[px_of(0.0, 0.0)],
-            "courtyard is open ground, not indoors"
+            indoor(px_of(70.0, 0.0)),
+            "block interior (annulus) is enclosed"
         );
-        assert!(!mask[px_of(0.0, 300.0)], "open ground between footprints");
-        assert!(!mask[px_of(400.0, 0.0)], "open ground north of the block");
+        assert!(indoor(px_of(0.0, -70.0)), "block interior, other side");
         assert!(
-            mask[px_of(0.0, 600.0)],
-            "a 3 m garage interior is an interior"
+            !indoor(px_of(0.0, 0.0)),
+            "courtyard is open ground, not enclosed"
+        );
+        assert!(!indoor(px_of(0.0, 300.0)), "open ground between footprints");
+        assert!(!indoor(px_of(400.0, 0.0)), "open ground north of the block");
+        assert!(
+            indoor(px_of(0.0, 600.0)),
+            "a 3 m garage interior is enclosed"
         );
 
         // ~12.26 m/px at this lat ⇒ (200² − 60²) + 20² m² ≈ 245 px.
-        let masked = mask.iter().filter(|&&m| m).count();
+        let masked = classes.iter().filter(|&&v| v != 0).count();
         assert!(
             (180..=320).contains(&masked),
             "masked area {masked} px is not the ~245 px the footprints cover"
         );
 
         let mut cells = vec![100u8; TILE_PX * TILE_PX];
-        apply_interior_mask(&mut cells, &mask);
-        for (i, &inside) in mask.iter().enumerate() {
+        apply_interior_estimate(&mut cells, &classes);
+        for (i, &class) in classes.iter().enumerate() {
             assert_eq!(
                 cells[i],
-                if inside {
-                    crate::wire_hm3::NO_DATA
-                } else {
+                if class == noise_compute::envelope::EnvelopeClass::Outdoor as u8 {
                     100
+                } else {
+                    // All synthetic façade cells contain 50 dB, so the
+                    // DEFAULT 28 dB product estimate quantises to 22 dB.
+                    crate::wire_hm3::quantise_lden(22.0)
                 },
                 "cell {i}"
             );
         }
+    }
+
+    #[test]
+    fn felzenszwalb_edt_matches_bruteforce_on_diamond_ties() {
+        // The four cardinal sites produce equal-distance diamond ties around
+        // the centre. The amended product tie-break is smaller absolute x,
+        // then smaller absolute y, not whichever site happened to be visited
+        // first by the transform.
+        let side = 7;
+        let sites = [(0usize, 3usize), (6, 3), (3, 0), (3, 6)];
+        let transformed = nearest_site_offsets(
+            side,
+            0..side,
+            0..side,
+            |x, y| sites.contains(&(x, y)),
+            |_, _| true,
+        );
+
+        for y in 0..side {
+            for x in 0..side {
+                let expected = sites
+                    .iter()
+                    .map(|&(site_x, site_y)| {
+                        let dx = x as i64 - site_x as i64;
+                        let dy = y as i64 - site_y as i64;
+                        (dx * dx + dy * dy, site_x, site_y, (site_x, site_y))
+                    })
+                    .min()
+                    .map(|(_, _, _, offset)| offset);
+                assert_eq!(transformed[y * side + x], expected, "pixel ({x}, {y})");
+            }
+        }
+
+        // (3, 3) is equidistant from the four cardinal sites; smaller x then
+        // smaller y selects (0, 3) exactly.
+        assert_eq!(transformed[3 * side + 3], Some((0, 3)));
+        assert!(
+            nearest_site_offsets(side, 0..side, 0..side, |_, _| false, |_, _| true)
+                .into_iter()
+                .all(|site| site.is_none())
+        );
     }
 
     #[test]
