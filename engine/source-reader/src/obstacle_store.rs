@@ -557,7 +557,7 @@ const HEIGHT_PROBE_RESOLUTION_M: f32 = 0.05;
 /// the cheaper shape, and is the named follow-up for whoever next opens
 /// `propagation::obstacle_index`.
 pub fn point_inside_obstacle(set: &ObstacleSet, lat: f64, lon: f64) -> Option<f32> {
-    let mut seen: Vec<(u32, u32)> = Vec::new();
+    let mut seen: Vec<(u32, u32, f32)> = Vec::new();
     let mut inside = |min_h: f32| {
         set.indexes
             .iter()

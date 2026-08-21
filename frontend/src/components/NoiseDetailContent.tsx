@@ -103,6 +103,7 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
             <div className="mb-1 text-xs text-muted-foreground">
               <div>Inside building ~{data.indoor_lden.toFixed(1)} dB (estimate)</div>
               <div>Facade {data.facade_lden.toFixed(1)} dB · closed-window product estimate (EN ISO 12354-3 methodology)</div>
+              <div>Estimate uncertainty ±8–12 dB; occupant behaviour dominates.</div>
               {data.indoor_lden_tilted != null && <div>Tilted/open window ~{data.indoor_lden_tilted.toFixed(1)} dB (WHO 15 dB)</div>}
             </div>
           )}

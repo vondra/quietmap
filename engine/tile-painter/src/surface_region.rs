@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use h3o::{CellIndex, LatLng};
-use raster_reader::fused_tile_z13::{TileBatch, TILE_PX};
+use raster_reader::fused_tile_z13::TileBatch;
 use raster_reader::{FusedPixel, RealRasters};
 
 use crate::accumulator::TileAccumulator;
@@ -38,8 +38,7 @@ use crate::source_loader_traffic::AirportTrafficData;
 use crate::source_point::PointRow;
 use crate::wire_hm3::{
     collapse_lden_surface_u8, collapse_lden_u8, fill_area_median, write_tile, AREA_FILL_RADIUS_PX,
-    NO_DATA, SOURCE_ID_AIRCRAFT, SOURCE_ID_BUILDING, SOURCE_ID_INDUSTRIAL, SOURCE_ID_RAIL,
-    SOURCE_ID_ROAD,
+    SOURCE_ID_AIRCRAFT, SOURCE_ID_BUILDING, SOURCE_ID_INDUSTRIAL, SOURCE_ID_RAIL, SOURCE_ID_ROAD,
 };
 use crate::{ground_ops, scatter_line, scatter_point};
 use noise_compute::admin;
@@ -360,15 +359,15 @@ pub fn process_surface_region(
             .or_default()
             .push((x, y));
     }
-    for ((bx, by), batch_tiles) in &batches {
+    let mut interior_pass = crate::source_loader_obstacle::InteriorPass::new();
+    for ((_bx, _by), batch_tiles) in &batches {
         // Pass A owns the painted tiles plus their 8-neighbour halo. The
         // expanded batch keeps every halo tile on the same terrain lattice;
         // Pass B writes only the centre tiles, because each neighbour R4 owns
         // its own output.
         let pass_a_tiles = crate::region_runner::tile_halo_window(batch_tiles, ctx.zoom);
-        let batch_base_x = bx.saturating_sub(1);
-        let batch_base_y = by.saturating_sub(1);
-        let batch_n = ctx.batch_n + 2;
+        let (batch_base_x, batch_base_y, batch_n) =
+            crate::region_runner::tile_batch_window(&pass_a_tiles, ctx.zoom);
         let t_r = Instant::now();
         let mut batch = TileBatch::build_opt_rx_refl(
             ctx.zoom,
@@ -398,15 +397,16 @@ pub fn process_surface_region(
             stats.halo_logged = true;
         }
 
-        let mut class_rasters = BTreeMap::new();
         if let Some(set) = obstacle_data.set() {
             let t_class = Instant::now();
             for &(x, y) in &pass_a_tiles {
-                let tile = &batch.tiles[crate::region_runner::batch_slot(&batch, x, y)];
-                class_rasters.insert(
-                    (x, y),
-                    crate::source_loader_obstacle::bake_tile_envelope_classes(tile, set),
-                );
+                if !interior_pass.has_class_raster((x, y)) {
+                    let tile = &batch.tiles[crate::region_runner::batch_slot(&batch, x, y)];
+                    interior_pass.insert_class_raster(
+                        (x, y),
+                        crate::source_loader_obstacle::bake_tile_envelope_classes(tile, set),
+                    );
+                }
             }
             stats.t_raster += t_class.elapsed();
         }
@@ -414,11 +414,14 @@ pub fn process_surface_region(
         // The collapsed, area-filled Pass-A cells stay in memory until all
         // centre tiles have a common geometric donor map. No layer writes in
         // this loop, so every layer receives exactly the same donor offsets.
-        let mut collapsed: BTreeMap<((u32, u32), u8), Vec<u8>> = BTreeMap::new();
         for &(x, y) in &pass_a_tiles {
+            let tile_key = (x, y);
             let tile = &batch.tiles[crate::region_runner::batch_slot(&batch, x, y)];
             let tile_barriers = barrier_data.for_tile(&tile.bbox, ctx.halo_m);
             for (rows, source_id, dir_name) in &layer_rows {
+                if interior_pass.has_collapsed(tile_key, *source_id) {
+                    continue;
+                }
                 let mut accum = TileAccumulator::new();
                 let t_s = Instant::now();
                 let (
@@ -513,55 +516,21 @@ pub fn process_surface_region(
                     fill_area_median(&mut cells, AREA_FILL_RADIUS_PX);
                 }
                 stats.t_write += t_collapse.elapsed();
-                collapsed.insert(((x, y), *source_id), cells);
+                interior_pass.insert_collapsed(tile_key, *source_id, cells);
             }
         }
 
         for &(x, y) in batch_tiles {
-            let interior = obstacle_data.set().map(|_| {
-                let halo_classes: [Vec<u8>; 9] = std::array::from_fn(|ordinal| {
-                    let hx = x as i64 + ordinal as i64 % 3 - 1;
-                    let hy = y as i64 + ordinal as i64 / 3 - 1;
-                    if hx < 0 || hy < 0 {
-                        vec![5; TILE_PX * TILE_PX]
-                    } else {
-                        class_rasters
-                            .get(&(hx as u32, hy as u32))
-                            .cloned()
-                            .unwrap_or_else(|| vec![5; TILE_PX * TILE_PX])
-                    }
-                });
-                crate::source_loader_obstacle::bake_interior_donors(&halo_classes)
-            });
+            if obstacle_data.set().is_some() {
+                interior_pass.ensure_donors((x, y));
+            }
             for (_, source_id, dir_name) in &layer_rows {
                 let t_w = Instant::now();
-                let mut cells = collapsed
-                    .get(&((x, y), *source_id))
-                    .cloned()
+                let mut cells = interior_pass
+                    .collapsed((x, y), *source_id)
+                    .map(|cells| cells.to_vec())
                     .expect("Pass A collapsed every requested layer");
-                if let Some(donors) = &interior {
-                    let halo_cells: [Vec<u8>; 9] = std::array::from_fn(|ordinal| {
-                        let hx = x as i64 + ordinal as i64 % 3 - 1;
-                        let hy = y as i64 + ordinal as i64 / 3 - 1;
-                        if hx < 0 || hy < 0 {
-                            vec![NO_DATA; TILE_PX * TILE_PX]
-                        } else {
-                            collapsed
-                                .get(&((hx as u32, hy as u32), *source_id))
-                                .cloned()
-                                .unwrap_or_else(|| vec![NO_DATA; TILE_PX * TILE_PX])
-                        }
-                    });
-                    let centre_classes = class_rasters
-                        .get(&(x, y))
-                        .expect("Pass A class raster for every painted tile");
-                    crate::source_loader_obstacle::apply_interior_estimate_with_donors(
-                        &mut cells,
-                        centre_classes,
-                        &halo_cells,
-                        donors,
-                    );
-                }
+                interior_pass.apply((x, y), *source_id, &mut cells);
                 let out = ctx
                     .output
                     .join(*dir_name)

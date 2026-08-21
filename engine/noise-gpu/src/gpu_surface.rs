@@ -37,7 +37,7 @@ use tile_painter::engine_spans::EngineCellSpans;
 use tile_painter::grid::tile_range;
 use tile_painter::region_runner::{
     announce_stream_cell_started, batch_slot, read_r4_file, region_tiles, split_configured_layers,
-    split_stream_line, tile_centre_r4, tile_halo_window,
+    split_stream_line, tile_batch_window, tile_centre_r4, tile_halo_window,
 };
 use tile_painter::renderer_evidence::{
     maybe_run_static_attestation, DependencyProfile, RegionTerminalStatus, RendererEvidence,
@@ -325,6 +325,8 @@ fn process_block(
     barriers: &BarrierData,
     obst_dev: &ObstDev,
     obstacles: Option<&ObstacleSet>,
+    interior_pass: &mut tile_painter::source_loader_obstacle::InteriorPass,
+    tile_timing: &mut BTreeMap<((u32, u32), u8), (f64, Option<f64>)>,
     stats: &mut BTreeMap<&'static str, LayerStat>,
     prog: &mut Progress,
 ) -> Result<()> {
@@ -429,21 +431,21 @@ fn process_block(
     // Pass A stores every collapsed tile/layer, including the 8-neighbour
     // halo. Pass B below applies one geometric donor raster to every layer and
     // writes only the centre tiles owned by this block.
-    let mut class_rasters: BTreeMap<(u32, u32), Vec<u8>> = BTreeMap::new();
     if let Some(set) = obstacles {
         for &(tx, ty) in &pass_a_tiles {
-            let tile = &batch.tiles[batch_slot(batch, tx, ty)];
-            class_rasters.insert(
-                (tx, ty),
-                tile_painter::source_loader_obstacle::bake_tile_envelope_classes(tile, set),
-            );
+            if !interior_pass.has_class_raster((tx, ty)) {
+                let tile = &batch.tiles[batch_slot(batch, tx, ty)];
+                interior_pass.insert_class_raster(
+                    (tx, ty),
+                    tile_painter::source_loader_obstacle::bake_tile_envelope_classes(tile, set),
+                );
+            }
         }
     }
-    let mut collapsed: BTreeMap<((u32, u32), u8), Vec<u8>> = BTreeMap::new();
-    let mut tile_timing: BTreeMap<((u32, u32), u8), (f64, Option<f64>)> = BTreeMap::new();
-
     let mut iter = items.into_iter();
-    let mut pending = iter.next().map(|it| prep_timed(it, stats));
+    let mut pending = iter
+        .find(|(tx, ty, layer)| !interior_pass.has_collapsed((*tx, *ty), layer.source_id()))
+        .map(|it| prep_timed(it, stats));
     while let Some(((tx, ty, layer), bufs)) = pending {
         let tk = Instant::now();
         let d_inner = dev.htod_copy(bufs.inner).expect("inner");
@@ -498,7 +500,11 @@ fn process_block(
             unsafe { result::event::record(stop, stream).expect("record stop") };
         }
         // Overlap: prep the NEXT item on the CPU while this kernel runs on the GPU.
-        pending = iter.next().map(|it| prep_timed(it, stats));
+        pending = iter
+            .find(|(next_tx, next_ty, next_layer)| {
+                !interior_pass.has_collapsed((*next_tx, *next_ty), next_layer.source_id())
+            })
+            .map(|it| prep_timed(it, stats));
         // Join: dtoh_sync_copy waits for the kernel, then reads the result back.
         let gpu = dev.dtoh_sync_copy(&d_out).expect("dtoh");
         let tile_wall_s = tk.elapsed().as_secs_f64();
@@ -640,8 +646,9 @@ fn process_block(
         accum
             .energy
             .copy_from_slice(&gpu[..noise_gpu::OUT_ENERGY_SLOTS]);
-        collapsed.insert(
-            ((tx, ty), layer.source_id()),
+        interior_pass.insert_collapsed(
+            (tx, ty),
+            layer.source_id(),
             collapse_lden_surface_u8(&accum),
         );
         tile_timing.insert(((tx, ty), layer.source_id()), (tile_wall_s, tile_kernel_ms));
@@ -651,52 +658,16 @@ fn process_block(
     // layer the same geometric donor offsets and ensures halo tiles never
     // become output ownership conflicts.
     for &(tx, ty) in block_tiles {
-        let donors = obstacles.map(|_| {
-            let halo_classes: [Vec<u8>; 9] = std::array::from_fn(|ordinal| {
-                let hx = tx as i64 + ordinal as i64 % 3 - 1;
-                let hy = ty as i64 + ordinal as i64 / 3 - 1;
-                if hx < 0 || hy < 0 {
-                    vec![5; raster_reader::fused_tile_z13::TILE_PX.pow(2)]
-                } else {
-                    class_rasters
-                        .get(&(hx as u32, hy as u32))
-                        .cloned()
-                        .unwrap_or_else(|| vec![5; raster_reader::fused_tile_z13::TILE_PX.pow(2)])
-                }
-            });
-            tile_painter::source_loader_obstacle::bake_interior_donors(&halo_classes)
-        });
+        if obstacles.is_some() {
+            interior_pass.ensure_donors((tx, ty));
+        }
         for layer in region_rows.iter().map(|(layer, _)| *layer) {
             let output_started = Instant::now();
-            let mut cells = collapsed
-                .get(&((tx, ty), layer.source_id()))
-                .cloned()
+            let mut cells = interior_pass
+                .collapsed((tx, ty), layer.source_id())
+                .map(|cells| cells.to_vec())
                 .expect("Pass A collapsed every requested GPU layer");
-            if let Some(donors) = &donors {
-                let halo_cells: [Vec<u8>; 9] = std::array::from_fn(|ordinal| {
-                    let hx = tx as i64 + ordinal as i64 % 3 - 1;
-                    let hy = ty as i64 + ordinal as i64 / 3 - 1;
-                    if hx < 0 || hy < 0 {
-                        vec![NO_DATA; raster_reader::fused_tile_z13::TILE_PX.pow(2)]
-                    } else {
-                        collapsed
-                            .get(&((hx as u32, hy as u32), layer.source_id()))
-                            .cloned()
-                            .unwrap_or_else(|| {
-                                vec![NO_DATA; raster_reader::fused_tile_z13::TILE_PX.pow(2)]
-                            })
-                    }
-                });
-                let centre_classes = class_rasters
-                    .get(&(tx, ty))
-                    .expect("Pass A class raster for every painted GPU tile");
-                tile_painter::source_loader_obstacle::apply_interior_estimate_with_donors(
-                    &mut cells,
-                    centre_classes,
-                    &halo_cells,
-                    donors,
-                );
-            }
+            interior_pass.apply((tx, ty), layer.source_id(), &mut cells);
             let encode_done = Instant::now();
             stats.entry(layer.dir()).or_default().t_encode +=
                 encode_done.duration_since(output_started).as_secs_f64();
@@ -914,6 +885,8 @@ fn process_region(
     // only the chunk granularity of the double buffer, not the memory
     // contract.
     let block_keys: Vec<(u32, u32)> = blocks.keys().copied().collect();
+    let mut interior_pass = tile_painter::source_loader_obstacle::InteriorPass::new();
+    let mut tile_timing: BTreeMap<((u32, u32), u8), (f64, Option<f64>)> = BTreeMap::new();
     let window: usize = std::env::var("NOISE_GPU_PIPELINE_BLOCKS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -926,11 +899,13 @@ fn process_region(
         let estimate: u64 = keys
             .iter()
             .map(|&(bx, by)| {
+                let pass_a_tiles = tile_halo_window(&blocks[&(bx, by)], cfg.z);
+                let (batch_base_x, batch_base_y, batch_n) = tile_batch_window(&pass_a_tiles, cfg.z);
                 TileBatch::estimate_heap_bytes(
                     cfg.z,
-                    bx.saturating_sub(1),
-                    by.saturating_sub(1),
-                    cfg.batch_n + 2,
+                    batch_base_x,
+                    batch_base_y,
+                    batch_n,
                     cfg.halo_m,
                 )
             })
@@ -942,11 +917,14 @@ fn process_region(
                 RASTERS.with(|slot| {
                     let mut slot = slot.borrow_mut();
                     let rasters = slot.get_or_insert_with(|| RealRasters::new(Path::new(prepared)));
+                    let pass_a_tiles = tile_halo_window(&blocks[&(bx, by)], cfg.z);
+                    let (batch_base_x, batch_base_y, batch_n) =
+                        tile_batch_window(&pass_a_tiles, cfg.z);
                     let mut batch = TileBatch::build_opt_rx_refl(
                         cfg.z,
-                        bx.saturating_sub(1),
-                        by.saturating_sub(1),
-                        cfg.batch_n + 2,
+                        batch_base_x,
+                        batch_base_y,
+                        batch_n,
                         cfg.halo_m,
                         rasters,
                         obstacle_data.set().is_none(),
@@ -956,7 +934,6 @@ fn process_region(
                     // (the one shared helper, SPEC §3.8); paint the Pass-A
                     // halo as well as the block's owned tiles.
                     if let Some(set) = obstacle_data.set() {
-                        let pass_a_tiles = tile_halo_window(&blocks[&(bx, by)], cfg.z);
                         for &(tx, ty) in &pass_a_tiles {
                             let slot = batch_slot(&batch, tx, ty);
                             let tile = &mut batch.tiles[slot];
@@ -1003,6 +980,8 @@ fn process_region(
                     &barrier_data,
                     &obst_dev,
                     obstacle_data.set(),
+                    &mut interior_pass,
+                    &mut tile_timing,
                     stats,
                     prog,
                 ) {

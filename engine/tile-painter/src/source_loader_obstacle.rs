@@ -25,6 +25,7 @@
 //! zero footprints — it is EMPTY, not missing, and vector mode proceeds
 //! without it.
 
+use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -208,7 +209,7 @@ pub fn bake_tile_envelope_classes(
         vec![noise_compute::envelope::EnvelopeClass::Outdoor as u8; TILE_PX * TILE_PX];
     // One scratch vec for the whole tile — `contains_built` clears it per
     // probe (same reuse the 9-probe `enclosure_db` does).
-    let mut seen: Vec<(u32, u32)> = Vec::new();
+    let mut seen: Vec<(u32, u32, f32)> = Vec::new();
     for py in 0..TILE_PX {
         let lat = tile.rx_lat[py];
         for px in 0..TILE_PX {
@@ -241,6 +242,7 @@ pub fn bake_tile_envelope_classes(
 /// writers use [`apply_interior_estimate_with_donors`] with a real 3×3 halo;
 /// this wrapper supplies outdoor neighbours so old unit fixtures retain the
 /// local-tile behaviour without reintroducing the old quadratic search.
+#[cfg(test)]
 pub fn apply_interior_estimate(cells: &mut [u8], classes: &[u8]) {
     use raster_reader::fused_tile_z13::TILE_PX;
 
@@ -254,7 +256,8 @@ pub fn apply_interior_estimate(cells: &mut [u8], classes: &[u8]) {
             vec![outdoor; TILE_PX * TILE_PX]
         }
     });
-    let donors = bake_interior_donors(&halo_classes);
+    let halo_class_refs = std::array::from_fn(|ordinal| halo_classes[ordinal].as_slice());
+    let donors = bake_interior_donors(halo_class_refs);
     let halo_cells: [Vec<u8>; 9] = std::array::from_fn(|ordinal| {
         if ordinal == 4 {
             cells.to_vec()
@@ -262,7 +265,8 @@ pub fn apply_interior_estimate(cells: &mut [u8], classes: &[u8]) {
             vec![crate::wire_hm3::NO_DATA; TILE_PX * TILE_PX]
         }
     });
-    apply_interior_estimate_with_donors(cells, classes, &halo_cells, &donors);
+    let halo_cell_refs = std::array::from_fn(|ordinal| halo_cells[ordinal].as_slice());
+    apply_interior_estimate_with_donors(cells, classes, halo_cell_refs, &donors);
 }
 
 /// A geometry-only exterior donor for one centre-tile receiver pixel. Tile
@@ -272,6 +276,123 @@ pub fn apply_interior_estimate(cells: &mut [u8], classes: &[u8]) {
 pub struct InteriorDonor {
     pub tile_ordinal: usize,
     pub pixel_ordinal: usize,
+}
+
+const INTERIOR_TILE_CELLS: usize =
+    raster_reader::fused_tile_z13::TILE_PX * raster_reader::fused_tile_z13::TILE_PX;
+static MISSING_CLASS_RASTER: [u8; INTERIOR_TILE_CELLS] =
+    [noise_compute::envelope::EnvelopeClass::Default as u8; INTERIOR_TILE_CELLS];
+static MISSING_HM3_RASTER: [u8; INTERIOR_TILE_CELLS] =
+    [crate::wire_hm3::NO_DATA; INTERIOR_TILE_CELLS];
+
+/// Region-scoped state for the building-interior two-pass paint. All three
+/// writers use this same cache: Pass A scatters each `(tile, source_id)` once
+/// across the region's union halo, and Pass B reuses one donor map per centre
+/// tile for every layer. Missing world-edge neighbours are represented by
+/// static enclosed/NO_DATA rasters, never by phantom `TileBatch` slots.
+pub struct InteriorPass {
+    class_rasters: BTreeMap<(u32, u32), Vec<u8>>,
+    collapsed: BTreeMap<((u32, u32), u8), Vec<u8>>,
+    donors: BTreeMap<(u32, u32), Vec<Option<InteriorDonor>>>,
+}
+
+impl Default for InteriorPass {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl InteriorPass {
+    /// Empty region-scoped Pass-A/Pass-B cache.
+    pub fn new() -> Self {
+        Self {
+            class_rasters: BTreeMap::new(),
+            collapsed: BTreeMap::new(),
+            donors: BTreeMap::new(),
+        }
+    }
+
+    /// Whether the class raster for one Pass-A tile is already available.
+    pub fn has_class_raster(&self, tile: (u32, u32)) -> bool {
+        self.class_rasters.contains_key(&tile)
+    }
+
+    /// Retain a class raster exactly once in the region cache.
+    pub fn insert_class_raster(&mut self, tile: (u32, u32), classes: Vec<u8>) {
+        assert_eq!(classes.len(), INTERIOR_TILE_CELLS);
+        assert!(self.class_rasters.insert(tile, classes).is_none());
+    }
+
+    /// Whether Pass A already collapsed this tile/layer as a centre or halo
+    /// in an earlier block.
+    pub fn has_collapsed(&self, tile: (u32, u32), source_id: u8) -> bool {
+        self.collapsed.contains_key(&(tile, source_id))
+    }
+
+    /// Retain one collapsed, area-filled Pass-A tile/layer in region scope.
+    pub fn insert_collapsed(&mut self, tile: (u32, u32), source_id: u8, cells: Vec<u8>) {
+        assert_eq!(cells.len(), INTERIOR_TILE_CELLS);
+        assert!(self.collapsed.insert((tile, source_id), cells).is_none());
+    }
+
+    /// Borrow a cached collapsed tile for Pass B.
+    pub fn collapsed(&self, tile: (u32, u32), source_id: u8) -> Option<&[u8]> {
+        self.collapsed.get(&(tile, source_id)).map(Vec::as_slice)
+    }
+
+    /// Bake one donor map once per centre tile. Every subsequent layer applies
+    /// the same geometry, so energy composition cannot change the façade pick.
+    pub fn ensure_donors(&mut self, tile: (u32, u32)) {
+        if self.donors.contains_key(&tile) {
+            return;
+        }
+        let classes = self.halo_class_refs(tile);
+        self.donors.insert(tile, bake_interior_donors(classes));
+    }
+
+    /// Apply the cached donor geometry to one layer's centre tile. If no vector
+    /// class raster exists (raster fallback), this is deliberately a no-op.
+    pub fn apply(&self, tile: (u32, u32), source_id: u8, cells: &mut [u8]) {
+        let Some(centre_classes) = self.class_rasters.get(&tile) else {
+            return;
+        };
+        let donors = self
+            .donors
+            .get(&tile)
+            .expect("InteriorPass donors must be baked before Pass B");
+        let halo_cells = self.halo_cell_refs(tile, source_id);
+        apply_interior_estimate_with_donors(cells, centre_classes, halo_cells, donors);
+    }
+
+    fn halo_class_refs(&self, (x, y): (u32, u32)) -> [&[u8]; 9] {
+        std::array::from_fn(|ordinal| {
+            let hx = i64::from(x) + ordinal as i64 % 3 - 1;
+            let hy = i64::from(y) + ordinal as i64 / 3 - 1;
+            if hx < 0 || hy < 0 {
+                &MISSING_CLASS_RASTER
+            } else {
+                self.class_rasters
+                    .get(&(hx as u32, hy as u32))
+                    .map(Vec::as_slice)
+                    .unwrap_or(&MISSING_CLASS_RASTER)
+            }
+        })
+    }
+
+    fn halo_cell_refs(&self, (x, y): (u32, u32), source_id: u8) -> [&[u8]; 9] {
+        std::array::from_fn(|ordinal| {
+            let hx = i64::from(x) + ordinal as i64 % 3 - 1;
+            let hy = i64::from(y) + ordinal as i64 / 3 - 1;
+            if hx < 0 || hy < 0 {
+                &MISSING_HM3_RASTER
+            } else {
+                self.collapsed
+                    .get(&((hx as u32, hy as u32), source_id))
+                    .map(Vec::as_slice)
+                    .unwrap_or(&MISSING_HM3_RASTER)
+            }
+        })
+    }
 }
 
 /// `INF` is larger than every squared distance in the 1536×1536 receiver
@@ -404,7 +525,7 @@ fn nearest_site_offsets(
 /// Build donors for the centre member of a 3×3 class-raster halo. This never
 /// inspects HM3 bytes: a silent exterior receiver is still the only valid
 /// façade, and therefore remains silent indoors rather than jumping to a road.
-pub fn bake_interior_donors(halo_classes: &[Vec<u8>; 9]) -> Vec<Option<InteriorDonor>> {
+pub fn bake_interior_donors(halo_classes: [&[u8]; 9]) -> Vec<Option<InteriorDonor>> {
     use noise_compute::envelope::EnvelopeClass;
     use raster_reader::fused_tile_z13::TILE_PX;
 
@@ -445,7 +566,7 @@ pub fn bake_interior_donors(halo_classes: &[Vec<u8>; 9]) -> Vec<Option<InteriorD
 pub fn apply_interior_estimate_with_donors(
     cells: &mut [u8],
     centre_classes: &[u8],
-    halo_cells: &[Vec<u8>; 9],
+    halo_cells: [&[u8]; 9],
     donors: &[Option<InteriorDonor>],
 ) {
     use crate::wire_hm3::{dequantise_lden, quantise_lden, NO_DATA};

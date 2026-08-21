@@ -2400,6 +2400,9 @@ only. Occupant behaviour dominates; the estimate is typically uncertain by
 ±8–12 dB. Propagation physics, source reach, speed floors, and HM3 format are
 unchanged.
 
+The same ΔL is applied to every layer; applying the traffic correction `C_tr`
+to rail and aircraft is a documented product simplification.
+
 #### Donor transform and two-pass paint
 
 The donor is an exact integer Felzenszwalb–Huttenlocher two-pass squared
@@ -2430,5 +2433,5 @@ Pass B; no `.cu` kernel change is permitted. Aircraft `region_runner` does the
 same after cruise and airborne collapse, so aircraft and all ground layers
 share geometry and donor offsets. This is display-only and deliberately does
 not alter the line/point/aircraft propagation kernels. The QOIX obstacle index
-layout is version 3, while HM3 remains version 3; the content-hashed layer
+layout is version 2, while HM3 remains version 3; the content-hashed layer
 code-version machinery therefore invalidates affected output stamps.

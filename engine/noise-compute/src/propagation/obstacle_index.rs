@@ -953,10 +953,46 @@ impl ObstacleIndex {
         lat: f64,
         lon: f64,
         min_height_m: f32,
-        seen: &mut Vec<(u32, u32)>,
+        seen: &mut Vec<(u32, u32, f32)>,
     ) -> bool {
+        self.collect_containing_footprints(lat, lon, min_height_m, seen);
+        seen.iter().any(|(_, crossings, _)| crossings % 2 == 1)
+    }
+
+    /// Winning enclosed footprint at a point: tallest wins, then lower ordinal.
+    /// Hole parity is evaluated per footprint, exactly as `contains_built`.
+    pub fn containing_enclosed(
+        &self,
+        lat: f64,
+        lon: f64,
+        min_height_m: f32,
+        seen: &mut Vec<(u32, u32, f32)>,
+    ) -> Option<(EnvelopeClass, f32, u32)> {
+        self.collect_containing_footprints(lat, lon, min_height_m, seen);
+        seen.iter()
+            .filter(|(_, crossings, _)| crossings % 2 == 1)
+            .filter_map(|(id, _, height)| {
+                let class = EnvelopeClass::from_u8(self.footprint_class[*id as usize]);
+                class.delta_db().map(|_| (class, *height, *id))
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.2.cmp(&a.2)))
+    }
+
+    /// Walk the eastward containment ray once and retain each footprint's
+    /// crossing parity and height at first sighting. Both boolean containment
+    /// and envelope winner selection use this same CSR walk; the height is
+    /// carried in `seen`, so winner lookup is O(1) instead of rescanning all
+    /// edges for every indoor pixel.
+    fn collect_containing_footprints(
+        &self,
+        lat: f64,
+        lon: f64,
+        min_height_m: f32,
+        seen: &mut Vec<(u32, u32, f32)>,
+    ) {
+        seen.clear();
         if self.edges.is_empty() {
-            return false;
+            return;
         }
         let (x, y) = self.to_local(lat, lon);
         // Bbox reject: a point outside this index's edge extent cannot be
@@ -965,9 +1001,8 @@ impl ObstacleIndex {
         let max_x = self.min_x + self.cols as f64 * self.cell_m;
         let max_y = self.min_y + self.rows as f64 * self.cell_m;
         if x < self.min_x || x > max_x || y < self.min_y || y > max_y {
-            return false;
+            return;
         }
-        seen.clear();
         let inv_cell = 1.0 / self.cell_m;
         let cy = (((y - self.min_y) * inv_cell).floor() as i64).clamp(0, self.rows as i64 - 1);
         let mut cx = (((x - self.min_x) * inv_cell).floor() as i64).clamp(0, self.cols as i64 - 1);
@@ -996,78 +1031,14 @@ impl ObstacleIndex {
                 let (x0, x1) = (e.x0 as f64, e.x1 as f64);
                 let xc = x0 + (y - y0) * (x1 - x0) / (y1 - y0);
                 if xc > x && xc >= cell_lo && xc < cell_hi {
-                    match seen.iter_mut().find(|(id, _)| *id == e.id) {
-                        Some((_, n)) => *n += 1,
-                        None => seen.push((e.id, 1)),
+                    match seen.iter_mut().find(|(id, _, _)| *id == e.id) {
+                        Some((_, crossings, _)) => *crossings += 1,
+                        None => seen.push((e.id, 1, e.height_m)),
                     }
                 }
             }
             cx += 1;
         }
-        seen.iter().any(|(_, n)| n % 2 == 1)
-    }
-
-    /// Winning enclosed footprint at a point: tallest wins, then lower ordinal.
-    /// Hole parity is evaluated per footprint, exactly as `contains_built`.
-    pub fn containing_enclosed(
-        &self,
-        lat: f64,
-        lon: f64,
-        min_height_m: f32,
-        seen: &mut Vec<(u32, u32)>,
-    ) -> Option<(EnvelopeClass, f32, u32)> {
-        if self.edges.is_empty() {
-            return None;
-        }
-        let (x, y) = self.to_local(lat, lon);
-        let max_x = self.min_x + self.cols as f64 * self.cell_m;
-        let max_y = self.min_y + self.rows as f64 * self.cell_m;
-        if x < self.min_x || x > max_x || y < self.min_y || y > max_y {
-            return None;
-        }
-        seen.clear();
-        let inv = 1.0 / self.cell_m;
-        let cy = (((y - self.min_y) * inv).floor() as i64).clamp(0, self.rows as i64 - 1);
-        let mut cx = (((x - self.min_x) * inv).floor() as i64).clamp(0, self.cols as i64 - 1);
-        let end = (((x + self.max_footprint_w - self.min_x) * inv).floor() as i64)
-            .clamp(0, self.cols as i64 - 1);
-        let row = cy as usize * self.cols;
-        while cx <= end {
-            let lo_cell = self.min_x + cx as f64 * self.cell_m;
-            let hi_cell = lo_cell + self.cell_m;
-            let lo = self.cell_starts[row + cx as usize] as usize;
-            let hi = self.cell_starts[row + cx as usize + 1] as usize;
-            for &eref in &self.edge_refs[lo..hi] {
-                let e = self.edges[eref as usize];
-                if e.height_m <= min_height_m || self.footprint_xmin[e.id as usize] as f64 > x {
-                    continue;
-                }
-                let (y0, y1) = (e.y0 as f64, e.y1 as f64);
-                if (y0 > y) == (y1 > y) {
-                    continue;
-                }
-                let xc = e.x0 as f64 + (y - y0) * (e.x1 as f64 - e.x0 as f64) / (y1 - y0);
-                if xc > x && xc >= lo_cell && xc < hi_cell {
-                    match seen.iter_mut().find(|(id, _)| *id == e.id) {
-                        Some((_, n)) => *n += 1,
-                        None => seen.push((e.id, 1)),
-                    }
-                }
-            }
-            cx += 1;
-        }
-        seen.iter()
-            .filter(|(_, n)| n % 2 == 1)
-            .filter_map(|(id, _)| {
-                let class = EnvelopeClass::from_u8(self.footprint_class[*id as usize]);
-                let height = self
-                    .edges
-                    .iter()
-                    .find(|e| e.id == *id)
-                    .map(|e| e.height_m)?;
-                class.delta_db().map(|_| (class, height, *id))
-            })
-            .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.2.cmp(&a.2)))
     }
 }
 
@@ -1080,7 +1051,7 @@ pub fn enclosure_db(set: &ObstacleSet, lat: f64, lon: f64, radius_m: f64) -> f64
     let step_lat = radius_m / M_PER_DEG_LAT;
     let step_lon = radius_m / m_per_deg_lon(lat.to_radians());
     let mut built = 0u32;
-    let mut scratch: Vec<(u32, u32)> = Vec::new();
+    let mut scratch: Vec<(u32, u32, f32)> = Vec::new();
     for dr in [-1.0, 0.0, 1.0] {
         for dc in [-1.0_f64, 0.0, 1.0] {
             let plat = lat + dr * step_lat;
@@ -1426,6 +1397,7 @@ impl Builder {
             self.footprint_class
                 .resize(max_id + 1, EnvelopeClass::Default as u8);
         }
+        self.footprint_class.truncate(max_id + 1);
         assert!(
             max_id < self.edges.len().saturating_mul(4) + 1024,
             "obstacle ids must be dense loader ordinals (max id {max_id}, {} edges)",

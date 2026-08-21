@@ -99,6 +99,36 @@ pub fn batch_slot(batch: &TileBatch, x: u32, y: u32) -> usize {
     ((y - batch.base_y) * batch.batch_n + (x - batch.base_x)) as usize
 }
 
+/// Return a square, world-bounded `TileBatch` window containing the supplied
+/// Pass-A tiles. The square may include valid unused cells, but never creates
+/// x/y coordinates at or beyond `2^zoom` at a world edge.
+pub fn tile_batch_window(tiles: &[(u32, u32)], zoom: u8) -> (u32, u32, u32) {
+    assert!(
+        !tiles.is_empty(),
+        "a TileBatch needs at least one Pass-A tile"
+    );
+    let limit = 1_u32 << zoom;
+    let (min_x, max_x) = tiles
+        .iter()
+        .fold((u32::MAX, 0), |(lo, hi), &(x, _)| (lo.min(x), hi.max(x)));
+    let (min_y, max_y) = tiles
+        .iter()
+        .fold((u32::MAX, 0), |(lo, hi), &(_, y)| (lo.min(y), hi.max(y)));
+    let span = (max_x - min_x + 1).max(max_y - min_y + 1);
+    assert!(span <= limit, "Pass-A window exceeds the world");
+    let base_x = if min_x + span > limit {
+        limit - span
+    } else {
+        min_x
+    };
+    let base_y = if min_y + span > limit {
+        limit - span
+    } else {
+        min_y
+    };
+    (base_x, base_y, span)
+}
+
 impl RegionStats {
     pub fn merge(&mut self, o: RegionStats) {
         self.tiles_written += o.tiles_written;
@@ -365,14 +395,13 @@ pub fn process_region(
         batches.entry((bx, by)).or_default().push((x, y));
     }
 
-    for ((bx, by), batch_tiles) in &batches {
+    let mut interior_pass = crate::source_loader_obstacle::InteriorPass::new();
+    for ((_bx, _by), batch_tiles) in &batches {
         // Airborne and cruise use only the receiver lattice, but building
         // interiors still need a geometric 3×3 donor window. Pass A therefore
         // computes all eight neighbours and Pass B writes only owned tiles.
         let pass_a_tiles = tile_halo_window(batch_tiles, ctx.zoom);
-        let batch_base_x = bx.saturating_sub(1);
-        let batch_base_y = by.saturating_sub(1);
-        let batch_n = ctx.batch_n + 2;
+        let (batch_base_x, batch_base_y, batch_n) = tile_batch_window(&pass_a_tiles, ctx.zoom);
         let t_batch = Instant::now();
         let batch = TileBatch::build_receiver_altitude_only(
             ctx.zoom,
@@ -383,21 +412,24 @@ pub fn process_region(
         );
         stats.t_raster += t_batch.elapsed();
 
-        let mut class_rasters = BTreeMap::new();
         if let Some(set) = obstacle_data.set() {
             let t_class = Instant::now();
             for &(x, y) in &pass_a_tiles {
-                let tile = &batch.tiles[batch_slot(&batch, x, y)];
-                class_rasters.insert(
-                    (x, y),
-                    crate::source_loader_obstacle::bake_tile_envelope_classes(tile, set),
-                );
+                if !interior_pass.has_class_raster((x, y)) {
+                    let tile = &batch.tiles[batch_slot(&batch, x, y)];
+                    interior_pass.insert_class_raster(
+                        (x, y),
+                        crate::source_loader_obstacle::bake_tile_envelope_classes(tile, set),
+                    );
+                }
             }
             stats.t_raster += t_class.elapsed();
         }
 
-        let mut collapsed: BTreeMap<(u32, u32), Vec<u8>> = BTreeMap::new();
         for &(x, y) in &pass_a_tiles {
+            if interior_pass.has_collapsed((x, y), wire_hm3::SOURCE_ID_AIRCRAFT) {
+                continue;
+            }
             let tile = &batch.tiles[batch_slot(&batch, x, y)];
             let mut accum = TileAccumulator::new();
             if let Some(field) = cruise_field.as_mut() {
@@ -419,62 +451,22 @@ pub fn process_region(
                 stats.t_airborne_scatter += dt;
                 stats.t_scatter += dt;
             }
-            collapsed.insert(
+            interior_pass.insert_collapsed(
                 (x, y),
+                wire_hm3::SOURCE_ID_AIRCRAFT,
                 wire_hm3::collapse_lden_u8(&accum, ctx.n_days as f64),
             );
         }
 
         for &(x, y) in batch_tiles {
-            let donors = obstacle_data.set().map(|_| {
-                let halo_classes: [Vec<u8>; 9] = std::array::from_fn(|ordinal| {
-                    let hx = x as i64 + ordinal as i64 % 3 - 1;
-                    let hy = y as i64 + ordinal as i64 / 3 - 1;
-                    if hx < 0 || hy < 0 {
-                        vec![5; raster_reader::fused_tile_z13::TILE_PX.pow(2)]
-                    } else {
-                        class_rasters
-                            .get(&(hx as u32, hy as u32))
-                            .cloned()
-                            .unwrap_or_else(|| {
-                                vec![5; raster_reader::fused_tile_z13::TILE_PX.pow(2)]
-                            })
-                    }
-                });
-                crate::source_loader_obstacle::bake_interior_donors(&halo_classes)
-            });
-            let mut cells = collapsed
-                .get(&(x, y))
-                .cloned()
-                .expect("Pass A collapsed every aircraft tile");
-            if let Some(donors) = &donors {
-                let halo_cells: [Vec<u8>; 9] = std::array::from_fn(|ordinal| {
-                    let hx = x as i64 + ordinal as i64 % 3 - 1;
-                    let hy = y as i64 + ordinal as i64 / 3 - 1;
-                    if hx < 0 || hy < 0 {
-                        vec![wire_hm3::NO_DATA; raster_reader::fused_tile_z13::TILE_PX.pow(2)]
-                    } else {
-                        collapsed
-                            .get(&(hx as u32, hy as u32))
-                            .cloned()
-                            .unwrap_or_else(|| {
-                                vec![
-                                    wire_hm3::NO_DATA;
-                                    raster_reader::fused_tile_z13::TILE_PX.pow(2)
-                                ]
-                            })
-                    }
-                });
-                let centre_classes = class_rasters
-                    .get(&(x, y))
-                    .expect("Pass A class raster for every aircraft tile");
-                crate::source_loader_obstacle::apply_interior_estimate_with_donors(
-                    &mut cells,
-                    centre_classes,
-                    &halo_cells,
-                    donors,
-                );
+            if obstacle_data.set().is_some() {
+                interior_pass.ensure_donors((x, y));
             }
+            let mut cells = interior_pass
+                .collapsed((x, y), wire_hm3::SOURCE_ID_AIRCRAFT)
+                .map(|cells| cells.to_vec())
+                .expect("Pass A collapsed every aircraft tile");
+            interior_pass.apply((x, y), wire_hm3::SOURCE_ID_AIRCRAFT, &mut cells);
 
             let t_write = Instant::now();
             let out_path = ctx
@@ -571,6 +563,21 @@ mod tests {
         // Morton keeps consecutive regions far closer than raw index order.
         let (m, r) = (mean_step(&mortoned), mean_step(&raw));
         assert!(m < r, "morton mean step {m:.3}° must beat raw {r:.3}°");
+    }
+
+    #[test]
+    fn tile_batch_window_clips_world_edges() {
+        assert_eq!(
+            tile_batch_window(&tile_halo_window(&[(0, 0)], 3), 3),
+            (0, 0, 2)
+        );
+        assert_eq!(
+            tile_batch_window(&tile_halo_window(&[(7, 7)], 3), 3),
+            (6, 6, 2)
+        );
+        let (base_x, base_y, span) = tile_batch_window(&tile_halo_window(&[(6, 6), (7, 7)], 3), 3);
+        assert!(base_x + span <= 1 << 3);
+        assert!(base_y + span <= 1 << 3);
     }
 
     // ── paint-pipeline-v4 PR#1 §3: per-layer worker builds ──
