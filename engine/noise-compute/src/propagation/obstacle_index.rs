@@ -991,9 +991,9 @@ impl ObstacleIndex {
     ) -> Option<(EnvelopeClass, f32, u32)> {
         self.collect_containing_footprints(lat, lon, min_height_m, seen);
         seen.iter()
-            .filter_map(|(id, _, height)| {
+            .map(|(id, _, height)| {
                 let class = EnvelopeClass::from_u8(self.footprint_class[*id as usize]);
-                Some((class, *height, *id))
+                (class, *height, *id)
             })
             .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.2.cmp(&a.2)))
     }
