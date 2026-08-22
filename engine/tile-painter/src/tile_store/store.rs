@@ -337,9 +337,12 @@ impl TileStore {
     /// [`Self::get_hm3`] for an entry already in hand (see
     /// [`Self::get_blob_by_entry`]).
     ///
-    /// SHIP-OUT PATH: `BrotliHm3` bytes return verbatim; the mandatory
-    /// pre-publish fsck validates them once per captured layer. `ZstdCells`
-    /// remains a legacy compatibility path and is decoded into a fresh HM3.
+    /// SHIP-OUT PATH: `BrotliHm3` bytes return VERBATIM, with no downstream
+    /// decode or validation. Per-tile validation was deliberately removed after
+    /// measuring ~20% of publish CPU; the mandatory pre-publish fsck validates
+    /// once per captured layer instead. That gate retains the corruption defense
+    /// introduced after a pre-flock-fix blob reached a published archive.
+    /// `ZstdCells` remains a legacy path and is decoded into a fresh HM3.
     pub fn get_hm3_by_entry(&self, e: &Entry) -> Result<Vec<u8>> {
         let blob = self.get_blob_by_entry(e)?;
         match e.codec {
@@ -397,6 +400,9 @@ impl TileStore {
     /// `put_blob` trusts the caller not to hand it an all-silent blob
     /// (migration blobs are non-silent by construction — `write_tile` never
     /// wrote silent tiles).
+    ///
+    /// INVARIANT: a `BrotliHm3` blob ships VERBATIM from here into PMTiles;
+    /// nothing downstream re-decodes it at ship-out time.
     ///
     /// A writer that stores an externally produced blob it did not just
     /// encode itself (tile-store-ingest, tile-store-transcode: fleet bytes,

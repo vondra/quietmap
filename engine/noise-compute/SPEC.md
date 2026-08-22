@@ -4,6 +4,8 @@ Engineering formulas inspired by CNOSSOS-EU 2021/1226, ISO 9613-2:2024, and ECAC
 
 **Purpose**: Global noise atlas for public information ("where do I hear noise"). Not regulatory END mapping.
 
+*Last verified against code: 2026-08-22.*
+
 ## Constants
 
 ### Receiver

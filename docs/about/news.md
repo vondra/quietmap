@@ -21,3 +21,5 @@ attenuation was disappearing over paved surfaces, and the shadow behind a
 wall switched on too abruptly. Forest is no longer a yes/no flag but a
 continuous canopy density, and traffic data improved for Thailand, Mexico
 and Japan.
+
+Visible tiles may still show the previous model run; the worldwide repaint has not shipped yet.

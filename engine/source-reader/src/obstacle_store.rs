@@ -566,14 +566,21 @@ const MAX_PROBE_HEIGHT_M: f32 = 1_000.0;
 const HEIGHT_PROBE_RESOLUTION_M: f32 = 0.05;
 
 /// Height of the tallest vector footprint containing the receiver, regardless
-/// of envelope class. The indoor calculation uses [`point_inside_enclosed`].
+/// of envelope class. This is CNOSSOS fix-pack Fix 4's popup half and the
+/// lockstep twin of tile-painter's `bake_tile_interior_mask`: change one,
+/// change both so popup and heatmap keep shared inside/hole/overlap semantics.
+/// The indoor calculation uses [`point_inside_enclosed`].
+///
+/// DISPLAY ONLY: the popup keeps computing and reporting the same dB values;
+/// this function only labels them. What an indoor receiver should report
+/// (facade exposure rather than interior noise) is a separate product decision.
 ///
 /// Runs on the already-loaded query set — zero extra I/O. The height comes out
 /// of the containment test itself: `ObstacleIndex::contains_built(…, min_h)`
 /// answers "inside a footprint TALLER than `min_h`", which is monotone in
 /// `min_h`, so the tallest containing footprint is the threshold where it
 /// flips — ~15 in-memory probes. That keeps the exact same polygon test (and
-/// its hole/overlap semantics) as the enclosure probe;
+/// its hole/overlap semantics) as the heatmap mask and enclosure probe;
 /// a height-returning containment query on `ObstacleIndex` itself would be
 /// the cheaper shape, and is the named follow-up for whoever next opens
 /// `propagation::obstacle_index`.
