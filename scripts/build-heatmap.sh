@@ -21,13 +21,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-DATA_YEAR="${DATA_YEAR:-$(python3 -c 'import json;print(json.load(open("scripts/dataset-year.json"))["current_year"])')}"  # default from committed ./DATA_YEAR (bump there yearly); env overrides
+DATA_YEAR="${DATA_YEAR:-$(python3 -c 'import json;print(json.load(open("scripts/dataset-year.json"))["current_year"])')}"
 DATA_ROOT="${DATA_ROOT:-data}"
 H3R4="$DATA_ROOT/prepared/$DATA_YEAR/h3r4"
 PREP="$DATA_ROOT/prepared"
 OUTPUT="${OUTPUT:-$DATA_ROOT/tiles/$DATA_YEAR/build}"
-# The tile STORE root is its own path, NOT derived from the staging root — the
-# 2026-07-09 rename decoupled them (staging=build/, store=store/; /gg Codex).
+# The tile store root is configured independently from the loose staging root.
 STORE_ROOT="${STORE_ROOT:-$DATA_ROOT/tiles/$DATA_YEAR/store}"
 ZOOM="${ZOOM:-12}"
 TARGET=engine/tile-painter/target/release
@@ -41,10 +40,8 @@ GPU_SURFACE="engine/noise-gpu/target/release/gpu-surface"  # --gpu: line layers 
 
 log() { echo "[build-heatmap] $(date '+%H:%M:%S') $*"; }
 
-# Manual pyramid/combine writes take the SAME _combine flock qm-combine and tile-store-pack
-# hold (/gg Codex, 2026-07-15: this path used to run UNLOCKED — a manual full combine could
-# TileStore::create-truncate total/ or a pyramid level mid-sidecar-write). BLOCKING acquire:
-# a manual run waits out the sidecar's batch (seconds-to-minutes), never skips or races.
+# Manual pyramid/combine writes take the same blocking _combine flock as qm-combine and
+# tile-store-pack. A manual run waits out the sidecar's batch; it never skips or races.
 # Scoped kernels finish staging before this lock is taken. Their complete ingest → every source
 # pyramid → total combine mutation bracket then holds this one master mutex and a durable owned
 # root marker. A crash therefore cannot expose a half-updated store to pack/fsck, and an exact
@@ -221,17 +218,9 @@ if ! $COMBINE_ONLY; then
       # master's polyfill idiom — a whole-tree scan would always read "dense" and
       # walk 121k dirs on the world host). GPU_LINE_MIN_MB default = 2 MB matches
       # the cluster's DENSE_LINE_MB — the same measured dense/sparse boundary.
-      # The same R4 set feeds the C9 barrier gate: the GPU kernel has no barrier
-      # input, so any barriers.arrow in the bbox routes the line layers to the CPU
-      # vector path (mirrors cluster-build-chunk.sh; 11 dB divergence measured on
-      # barrier-dense LKPR without it, 2026-06-12). UNLESS QM_GPU_BARRIERS=1: then
-      # gpu-surface screens the vector walls itself (kernel ray×segment crossing;
-      # spike GO 2026-06-12, 1.97× on barrier-dense vs 1.0× CPU demotion). Default
-      # ON (owner-directed 2026-06-13). The "mean 0.002 / max 1.5 dB vs the CPU
-      # truth" that used to stand here was measured on the midpoint-projection-and-
-      # snap kernel that the 2026-08 exact ray×segment rewrite replaced, so it no
-      # longer describes this code and is NOT restated as a bound — the live figure
-      # is whatever `e2-full` reports. QM_GPU_BARRIERS=0 forces the CPU demotion.
+      # The same R4 set feeds the barrier gate. GPU vector barriers default on;
+      # QM_GPU_BARRIERS=0 demotes any barrier-bearing bbox to the CPU vector path.
+      # `e2-full` is the current GPU/CPU parity authority.
       GPU_LINE_MIN_MB="${GPU_LINE_MIN_MB:-2}"
       QM_GPU_BARRIERS="${QM_GPU_BARRIERS:-1}"
       bbox_line_bytes=0

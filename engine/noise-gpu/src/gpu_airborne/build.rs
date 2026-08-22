@@ -1,6 +1,6 @@
 //! GPU build stage for the gpu-airborne bin: scatter a prepped cell's candidate SoA into
-//! per-tile accumulators and write the z13 HM3 tiles. Routes one-pass vs the M2 chunked build,
-//! and exposes `process_region_gpu` (the batch `par_chunks` per-cell prep+build).
+//! per-tile accumulators and write HM3 tiles at the requested zoom. Routes one-pass vs the M2
+//! chunked build, and exposes `process_region_gpu` (the batch `par_chunks` per-cell prep+build).
 
 use std::time::{Duration, Instant};
 
@@ -61,7 +61,7 @@ impl BuiltCell {
 /// budget `(vram − 4 GB headroom for the NPD LUTs + sources + scratch) ÷ 117 B/cand`, clamped to keep
 /// the far-list offset (cand × batch_n², batch_n ≤ 4) < 2^31 and the host peak (~208 B/cand) sane. So
 /// an 11 GB card → ~64M (~5 passes for Phoenix's 308M; the wall is the per-pass scatter calls, not
-/// CPU prep — /gg 2026-06-21 Codex+Gemini), a 24 GB card → the 120M cap (~3 passes). Each pass's
+/// CPU prep), a 24 GB card → the 120M cap (~3 passes). Each pass's
 /// per-tile energy is `merge_from`-summed (additive), reconstructing the one-pass result on ANY card.
 /// `NOISE_GPU_AIRBORNE_CHUNK` stays ONLY as a test override (force many small passes to parity-test
 /// the accumulation), not a tuning knob.

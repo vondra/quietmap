@@ -298,7 +298,7 @@ NUM_CLASSES += len(PINNED_ANCHORS)  # → 15
 # arm and is_negligible_noise_typecode, so the two can never drift apart
 # (simplifier note, 2026-06-11). BALL = ICAO 8643 special designator for
 # balloon: unpowered, burner fires seconds per minute — same negligible-Lden
-# argument as soaring gliders (/gg Gemini C10a CRITICAL, 2026-06-11).
+# argument as soaring gliders.
 GLIDER_PATTERNS = [
     'b"GLID" | b"VENT" | b"DISC" | b"DUOD" | b"NIMB" | b"JANU"',
     "| [b'A', b'S', b'2', b'0'..=b'9'] | b\"AS14\" | b\"AS30\" | b\"AS31\"",
@@ -708,7 +708,7 @@ RUNWAY_DB_BY_ANCHOR: dict[str, float] = {
     # via WING_B789, so their ground ops stay level while MD11/IL76 rise
     # from the 104 narrowbody band. Without this entry the dep@200ft−10
     # fallback emitted 100.1 → a −7.9 dB ground-ops regression for the
-    # whole family (Codex /gg C10b CRITICAL, 2026-06-11). Raising above
+    # whole family. Raising above
     # 108 needs a cited Doc 29 / airport-measurement source.
     "B748":     108.0,
     "CRJ9":     100.0,   # regional jet, fuselage-mounted
@@ -918,13 +918,13 @@ def emit_rust(
     lines.append("    // AA-5, Mooney M20K (M20T), Socata TB-9/TB-10/TB-20, Aquila A210, MS-880")
     lines.append("    // Rallye, Commander 114, FFA AS-202 Bravo, Tecnam P2006T, Partenavia")
     lines.append("    // P-68. Each verified L1P/L2P piston in ICAO 8643 (2026-06-11).")
-    lines.append("    // 2026-07-03 (CZ FALLBACK scan + dual /gg vs ICAO 8643): Zlin Z-42/142/242")
+    lines.append("    // 2026-07-03 CZ FALLBACK scan against ICAO 8643: Zlin Z-42/142/242")
     lines.append("    // + Z-43/143 + Z-26 + Z-50 (largest real type on FALLBACK in CZ — 78")
     lines.append("    // flights/49 cells; the Novy Knin case: one Z-42 pass = 66 % of a point's")
     lines.append("    // airborne dB on the jet fallback), Cessna R182 (C82R — escapes the C1xx")
     lines.append("    // pattern), Fournier RF-6/RF-10, Jodel D150, Extra 300/NG, and Zenair")
     lines.append("    // CH-601 (CH60 — L1P fixed-wing; the CZ scan draft mislabelled it a")
-    lines.append("    // helicopter, /gg Codex caught it).")
+    lines.append("    // helicopter).")
     lines.append("    // Previously fell to the jet-flavoured FALLBACK energy-mean — +10..25 dB")
     lines.append("    // vs reality for light pistons (audit 2026-06 airborne A1; DR40 alone =")
     lines.append("    // 1,437 rows in a 600-R4 Europe sample).")
@@ -950,7 +950,7 @@ def emit_rust(
     lines.append("    // 2026-07-03: ATEC Faeta (FAET) + Zephyr (ZEPH/ZEP2), TL-2000 Sting")
     lines.append("    // (TL20), Jabiru J400, Alpi Pioneer 300 (PNR3) — Czech/eur UL classics")
     lines.append("    // concentrated locally, invisible to the global-volume scan that seeded")
-    lines.append("    // this list (dual /gg vs ICAO 8643).")
+    lines.append("    // this list.")
     lines.append("    // Verified in ICAO 8643 (2026-06-11). Ordering: ECHO/ASTO must precede")
     lines.append("    // the EC*/AS* helicopter arm, SF25 the SF*→SAAB turboprop arm.")
     lines.append('    if matches!(b, b"WT9" | b"C42" | b"ULAC" | b"SIRA" | b"ECHO" | b"ASTO"')
@@ -967,8 +967,8 @@ def emit_rust(
     lines.append("    //  underestimate; DH8D anchor is the closest single-class fit).")
     lines.append("    // + Shorts Skyvan (SC7, para-ops), CASA C-295 + Dornier 328 (Kbely),")
     lines.append("    // and Antonov An-2: a 1000 hp radial-piston biplane — acoustically the")
-    lines.append("    // DH8D curve, NOT C172 (dual /gg 2026-07-03: do not pick the class for")
-    lines.append("    // its 365-day weighting; para-ops burstiness noted to the owner).")
+    lines.append("    // DH8D curve, not C172; sampling-window membership must not determine")
+    lines.append("    // the acoustic class.")
     lines.append('    if matches!(b, b"C130" | b"C30J" | b"SC7" | b"C295" | b"D328" | b"AN2") {')
     lines.append('        return profile_idx("DH8D");')
     lines.append("    }")
@@ -994,7 +994,7 @@ def emit_rust(
     lines.append('        return profile_idx("C56X");')
     lines.append("    }")
     lines.append("    // Beechcraft Bonanza/Baron/Duke piston singles + twins (BE19/23/24/3x/5x/6x/76/77/80/88).")
-    lines.append("    // Carved out of the BE turboprop bucket — Codex/Gemini /gg flagged BE35→DH8D as a")
+    lines.append("    // Carved out of the BE turboprop bucket: BE35→DH8D was a")
     lines.append("    // 10+ dB overestimate (Bonanza is a piston single, not a King Air).")
     lines.append('    if matches!(b, [b\'B\', b\'E\', b\'1\', b\'9\']')
     lines.append('                     | [b\'B\', b\'E\', b\'2\', b\'3\' | b\'4\']')
@@ -1063,7 +1063,7 @@ def emit_rust(
     lines.append("    }")
     lines.append("    // BAe 146 / Avro RJ — 4-engine rear-fuselage regional jet")
     lines.append("    // (carved out before the Bell B4xx helicopter pattern, which would otherwise")
-    lines.append("    //  route a 4-engine jet to a single-rotor helicopter — Codex/Gemini /gg flag).")
+    lines.append("    //  route a 4-engine jet to a single-rotor helicopter).")
     lines.append('    if matches!(b, b"B461" | b"B462" | b"B463" | b"B14R" | b"RJ70" | b"RJ85" | b"RJ1H") {')
     lines.append('        return profile_idx("CRJ9");')
     lines.append("    }")
@@ -1093,7 +1093,7 @@ def emit_rust(
     lines.append("    // + Mil Mi-8/17 (MI8), PZL W-3 Sokol (W3, police/army CZ), Bell 212")
     lines.append("    // (B212 — the B4xx pattern misses it), Schweizer 269 (H269), Guimbal")
     lines.append("    // Cabri G2 (G2CA, H1P piston trainer), Magni M-16 gyro (MM16 — gyros")
-    lines.append("    // follow the GYRO→rotorcraft convention). Dual /gg vs ICAO 8643 2026-07-03.")
+    lines.append("    // follow the GYRO→rotorcraft convention). Verified against ICAO 8643 2026-07-03.")
     lines.append('    if matches!(b, b"H60" | b"R22" | b"R44" | b"R66" | b"S70" | b"S76" | b"S92" | b"UHEL"')
     lines.append('                     | b"MI8" | b"W3" | b"B212" | b"H269" | b"G2CA" | b"MM16") {')
     lines.append('        return profile_idx("EC35");')

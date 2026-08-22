@@ -6,8 +6,8 @@
 //!
 //! Pure blob copy: every loose tile is already a whole-file-Brotli HM3 image,
 //! so it is stored VERBATIM ([`TileCodec::BrotliHm3`]) at every zoom — no
-//! re-encode, no decoded-value drift possible. The working codec (zstd) enters
-//! only later, when combine/pyramid REWRITE tiles.
+//! re-encode, no decoded-value drift possible. Combine and pyramid rewrites
+//! also emit Brotli HM3; zstd remains legacy-read compatibility only.
 //!
 //! Everything is derived, no tuning flags (project rule): source zoom levels
 //! from the layer dir listing, `source_id` from tile headers. The complete
@@ -15,11 +15,11 @@
 //! production requires base z12 and finishes with exactly z2..z12 sharing one
 //! source id and tile size.
 //!
-//! Parity (three independent gates, all in one run — dual /gg reviewed):
+//! Parity uses three independent gates in one run:
 //!   1. count — store scan total == loose census total (catches extras)
 //!   2. exhaustive — EVERY census tile byte-compared loose vs store. This is
 //!      the deletion-grade proof; a sampled gate would let unsampled
-//!      corruption exit green (Codex CRITICAL, 2026-07-08).
+//!      corruption exit green.
 //!   3. reference — every tile in the Dobříš + Ruzyně H3 R4 cells compared by
 //!      decoded cells at every zoom (semantic smoke test on the project anchors)
 //!
@@ -31,7 +31,7 @@
 //! and blocks pack until this same path succeeds. On success the store is
 //! fsynced (files + dir) BEFORE the green exit: exit 0 is
 //! the license to delete the loose tree, so it must mean durable-on-disk, not
-//! page-cache (Gemini CRITICAL, 2026-07-08).
+//! page-cache.
 //!
 //! Usage: tile-store-transcode <loose-layer-dir> <store-layer-dir>
 //!   e.g.  tile-store-transcode data/tiles/2026/build/road \
@@ -254,7 +254,7 @@ fn transcode_zoom(loose_dir: &Path, store_dir: &Path, plan: &SourceZoomPlan) -> 
                 .with_context(|| format!("z{z}/{x}/{y} vanished mid-transcode"))?;
             // Validate EVERY blob (decode + magic/version/size + layer id) — the
             // store ships BrotliHm3 verbatim into pmtiles, so a stale/corrupt
-            // loose tile must be rejected HERE, not published (/gg Codex).
+            // loose tile must be rejected here, not published.
             let sid = read_tile_bytes_source_id(&blob)
                 .with_context(|| format!("z{z}/{x}/{y}: invalid HM3 tile"))?;
             if sid != plan.source_id {

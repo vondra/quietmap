@@ -1,6 +1,6 @@
-//! tile-painter: produces Lden raster tiles for every heatmap layer
-//! (road/rail/industrial/building/aircraft) on the Web Mercator z=12
-//! grid (~12 m/pixel at Praha lat).
+//! tile-painter: produces Web Mercator Lden raster tiles for every heatmap
+//! layer (road/rail/industrial/building/aircraft), with z12 as the published
+//! base and optional finer tiers.
 //!
 //! Architecture: tile-first iteration. The outer loop groups tiles
 //! into N×N batches that share one halo
@@ -16,7 +16,7 @@
 //! Per-cell accumulator during compute: `[3 periods] f32` of
 //! A-weighted linear energy. At write time, the three periods collapse
 //! to one Lden byte via [`wire_hm3::collapse_lden_u8`] and the tile
-//! ships in the HM3 v2 wire format (`u8 × 0.5 dB` dense cells, whole-file
+//! ships in the HM3 v3 wire format (`u8 × 0.5 dB` dense cells, whole-file
 //! Brotli, served `Content-Encoding: br`).
 
 pub mod accumulator;

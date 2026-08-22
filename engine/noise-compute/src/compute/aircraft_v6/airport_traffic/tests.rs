@@ -182,8 +182,8 @@ fn metadata_populated_with_arr_dep_split_and_profile_mix() {
 
 /// v5 internal contract: when the `airport_summary` lookup is
 /// `None` here, the compute kernel returns zero arr/dep — it
-/// must NOT silently fall back to per-row sum (which would over-
-/// count rotations by 4-8× per Codex C4). The source-reader
+/// must NOT silently fall back to per-row sum, which would over-
+/// count rotations by 4-8×. The source-reader
 /// layer above is the gatekeeper that turns "airport_traffic.arrow
 /// rows present but sidecar missing" into a loud Err; this test
 /// only pins the compute kernel's contract when the caller
@@ -353,8 +353,8 @@ fn ground_lden(out: &[Contributor]) -> f64 {
 
 /// GSE rows (`veh_kind == 1`) MUST weight 1.0 even under the hybrid
 /// LUT — their `class_idx` indexes the GSE class space and GSE is an
-/// airline-pass artifact (`ga-365d-hybrid-plan.md` §2 / layer-ground.md
-/// §4). Same row → identical received Lden under hybrid vs uniform.
+/// airline-pass artifact. Same row → identical received Lden under hybrid
+/// vs uniform.
 #[test]
 fn gse_row_weight_pinned_to_one_under_hybrid() {
     let bands: [f32; 8] = [1e6; 8];
@@ -880,7 +880,7 @@ fn screening_path_effect_engages_max_rule() {
     // Same max-rule guard as the terrain test, but with A_bar
     // = A_scr (no terrain). Under the max rule, A_bar dominates
     // → ground_impact ≈ 0. Under the additive bug, ground would
-    // drop full Lden by ~1.7 dB (Codex-simulated). 0.5 dB
+    // drop full Lden by ~1.7 dB. 0.5 dB
     // separates the two regimes cleanly.
     assert!(
         md.ground_impact_db.abs() < 0.5,
@@ -924,11 +924,9 @@ fn max_rule_not_sum_rule() {
     let md = pe_ground_ops(&out);
     // Under the max rule, ground_impact ≈ 0 (per-band identity:
     // both full and no_ground use a_bar when a_bar > a_gr).
-    // Codex-simulated values: max-rule ground = +0.009 dB,
-    // additive-bug ground = -1.87 dB. A 0.5 dB threshold
-    // separates the two regimes cleanly. A LOOSER threshold (e.g.
-    // 2 dB) would have let the additive bug pass — the prior
-    // version of this test did and was reported by /gg.
+    // Max-rule ground = +0.009 dB; additive-bug ground = -1.87 dB.
+    // A 0.5 dB threshold separates the two regimes cleanly; 2 dB would
+    // let the additive bug pass.
     assert!(
         md.ground_impact_db.abs() < 0.5,
         "ground_impact_db {} indicates additive A_gr instead of \

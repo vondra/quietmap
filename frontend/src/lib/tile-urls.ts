@@ -1,7 +1,7 @@
 // Versioned heatmap-tile URLs — tracks the published pmtiles generation
 // ("build") from /api/tiles-manifest.
 //
-// GENERATION-SNAPSHOT CONTRACT (dual-model review consensus, 2026-07-08): the
+// GENERATION-SNAPSHOT CONTRACT: the
 // build is delivered to components ONLY as a subscribed snapshot
 // (`useTileBuild`) and passed EXPLICITLY into `tileUrl` — never read from
 // module state inside a fetch closure. Every deck.gl layer id / tile cache is
@@ -95,7 +95,7 @@ export function tileUrl(builds: TileBuilds, source: string, z: number, x: number
  * layer ids and composite signatures key on THIS, not on `latest` — so a
  * partial flip re-keys exactly the layers whose archives changed (unchanged
  * layers keep their deck tile cache), and a same-`latest` sequential partial
- * still re-keys the layer it republished (/gg Codex + Gemini consensus).
+ * still re-keys the layer it republished.
  * Tier packs fold in as a suffix so coverage growth re-keys tile caches too.
  */
 export function buildKey(builds: TileBuilds, sources: readonly string[]): string {

@@ -322,7 +322,7 @@ impl FusedTileZ13 {
 
     /// Map `(lat, lon)` inside the bbox to inner-core flat index. Linear
     /// fractional interpolation across the Mercator pixel grid; sub-metre
-    /// error across one z=13 tile (~3 km wide).
+    /// error across one base heatmap tile.
     #[inline]
     pub fn latlon_to_inner_idx(&self, lat: f64, lon: f64) -> usize {
         let n = TILE_PX as f64;

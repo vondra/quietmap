@@ -63,8 +63,8 @@ pub fn bearing_deg(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f32 {
 
 /// Maximum perpendicular distance an intermediate vertex may stray from
 /// the chord before the walker emits and restarts. 1 m matches OSM
-/// surveyor digitisation noise and is well under the per-pixel
-/// resolution of receivers on the heatmap (~25 m at zoom 13).
+/// surveyor digitisation noise and is well below the current base heatmap
+/// pixel size (~19.1 m at the equator, ~12.3 m at 50° N).
 const CHORD_EPS_M: f64 = 1.0;
 
 /// Perpendicular distance from `p` to the chord `(a, b)` in metres.

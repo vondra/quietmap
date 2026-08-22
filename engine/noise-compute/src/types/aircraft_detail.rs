@@ -72,12 +72,10 @@ pub struct AircraftAirborneDetail {
     pub faint: AircraftEventBandStats,
     pub audible: AircraftEventBandStats,
     pub disruptive: AircraftEventBandStats,
-    /// Sampling-fragility transparency (audit 2026-06-12, dual-/gg
-    /// consensus): the Lden average comes from `sample_days` archive days,
-    /// so a one-off GA/helicopter day caught in the sample is weighted
-    /// ×365/sample_days (+14.8 dB at 12 days). These shares let the UI
-    /// flag receivers where the aircraft value hangs on a single day or
-    /// flight (display thresholds 0.5 / 0.3 live in the frontend).
+    /// Sampling-fragility transparency: the estimator uses finite per-class
+    /// archive windows, so one sampled day or flight can dominate at a
+    /// receiver. These shares let the UI flag that case (display thresholds
+    /// 0.5 / 0.3 live in the frontend).
     /// Shares are of TOTAL aircraft energy (airborne + cruise); 0.0 when
     /// no dated airborne flights contribute.
     pub top_day_energy_share: f64,
@@ -88,10 +86,10 @@ pub struct AircraftAirborneDetail {
     /// (`n_days`, the 12-day TTM window).
     pub sample_days: u32,
     /// Number of archive days behind GA + helicopter classes — the
-    /// 365-day window in a hybrid extract, equal to `sample_days` when
-    /// non-hybrid (`ga-365d-hybrid-plan.md` §2, delta 7). The popup's
-    /// "Data" row renders both so the sample basis is honest per class
-    /// (e.g. "jets 12 d/yr · GA+heli 365 d/yr").
+    /// GA window in a hybrid extract, equal to `sample_days` when
+    /// non-hybrid. The popup's
+    /// "Data" row renders the actual two counts so the sample basis is honest
+    /// per class.
     pub ga_sample_days: u32,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub top_flights: Vec<AircraftTopFlight>,

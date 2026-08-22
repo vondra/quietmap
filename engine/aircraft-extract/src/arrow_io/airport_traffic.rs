@@ -87,13 +87,13 @@ pub struct AirportTrafficRow {
     /// `microseg_unique_ga_*`. Replicated on every row of the same
     /// microsegment so the popup loader can populate per-microseg
     /// observed_movements without a HashSet UNION join, and divide each
-    /// window by its own day count (`ga-365d-hybrid-plan.md` §2).
+    /// window by its own day count.
     pub microseg_unique_count: u32,
     pub microseg_unique_arr_count: u32,
     pub microseg_unique_dep_count: u32,
     pub microseg_unique_gse_count_per_class: [u32; NUM_GSE_CLASSES],
     /// v9 GA-class (PROP_C172 + HELICOPTER) microsegment UNION — the
-    /// 365-day-window split of the three counts above. Zero on a
+    /// full-year-window split of the three counts above. Zero on a
     /// non-hybrid extract. (GSE has no GA split — airline-pass only.)
     pub microseg_unique_ga_count: u32,
     pub microseg_unique_ga_arr_count: u32,
@@ -103,8 +103,8 @@ pub struct AirportTrafficRow {
 /// Write one R4 hex's traffic counters. `n_days` (airline window) +
 /// `ga_n_days` (GA-class window, 0 = single-window extract) stamp the GA
 /// hybrid metadata (`n_days`, `ga_n_days`, `sample_days_by_class`) so the
-/// popup consumer weights GA energy at 1/365 and divides the GA-split
-/// movement counts by their own window (`ga-365d-hybrid-plan.md` §2).
+/// popup consumer weights GA energy at `1/ga_n_days` and divides the GA-split
+/// movement counts by their own window.
 pub fn write_airport_traffic(
     path: &Path,
     rows: &[AirportTrafficRow],

@@ -17,7 +17,7 @@
 //!   `<out_dir>/<R4>/<phase>.arrow` sequentially. Per-worker peak RAM
 //!   bounded by one (phase, hash) bucket's decoded segments.
 //!
-//! Empirically at 365-day global: Pass A produces ~256 × 2 × 365 ≈ 187k
+//! At full-year global scale, Pass A produces `days × 2 × 256` possible
 //! temp files (decode cost dominates write cost). Pass B's per-bucket
 //! decoded peak ≈ `total_segments / 256` ≈ ~6 GB per worker; `--max-threads`
 //! caps concurrent workers when the host's RAM is below that × cores.
@@ -37,7 +37,7 @@ use crate::scope::ScopeBbox;
 
 /// Coarse hash buckets the shuffle is partitioned across. 256 is small
 /// enough that one Pass B worker holds one bucket's decoded segments in
-/// RAM (~6 GB at 365-day global) without OOM on a 90-128 GB box, and
+/// RAM (~6 GB at full-year global scale) without OOM on a 90-128 GB box, and
 /// large enough that Pass A's per-worker bucket count stays well under
 /// any FD limit (each writer opens one file at a time).
 const SHUFFLE_HASH_BUCKETS: u64 = 256;
@@ -72,8 +72,7 @@ fn phase_name(phase: Phase) -> Option<&'static str> {
 /// Pass-A temp shard key carries a pass discriminator (`air_` / `ga_`)
 /// because the airline and GA hybrid passes share first-of-month day
 /// stems (`2025-07-01` …) — an undiscriminated `day_<stem>.arrow` path
-/// would race and silently overwrite one pass's segments
-/// (`ga-365d-hybrid-plan.md`, binding delta 1).
+/// would race and silently overwrite one pass's segments.
 fn pass_a_path(temp_dir: &Path, phase: &str, hash: u64, pass: &str, day_stem: &str) -> PathBuf {
     temp_dir
         .join(phase)
@@ -97,8 +96,7 @@ fn pass_a_bucket_dir(temp_dir: &Path, phase: &str, hash: u64) -> PathBuf {
 /// hybrid GA window's per-day shards (empty for plain single-window
 /// extracts — output is then byte-identical to the pre-hybrid shuffle).
 /// The two windows merge here because this is the last per-day stage;
-/// Stage 2 consumers read one per-R4 pool and weight rows per class
-/// (`ga-365d-hybrid-plan.md` §4.2).
+/// Stage 2 consumers read one per-R4 pool and weight rows per class.
 ///
 /// `scope`, when set, drops out-of-scope R4s during Pass A so they
 /// never hit disk. Cleanup of the temp scratch dir is best-effort —
@@ -211,14 +209,14 @@ const PASS_A_PEAK_PER_DAY_GB: f64 = 28.0;
 
 /// GA-filtered day shards decode to a small fraction of a full day
 /// (only PROP_C172 + HELICOPTER classes survive Stage 0); the full-day
-/// estimate would throttle the 365-shard GA pass to 2-3 concurrent
-/// days for no RAM benefit (`ga-365d-hybrid-plan.md` §4.2.7).
+/// estimate would throttle the GA pass to 2-3 concurrent days for no
+/// RAM benefit.
 const PASS_A_GA_PEAK_PER_DAY_GB: f64 = 6.0;
 
 /// Bail on duplicate day stems within one pass list: Pass A keys temp
 /// shards by `(pass, day_stem)`, so two same-stem inputs in one list
 /// would race on one temp path and silently drop segments — the
-/// within-pass analog of binding delta 1's cross-pass collision.
+/// within-pass analog of the cross-pass collision above.
 fn require_unique_day_stems(pass: &str, day_paths: &[PathBuf]) -> Result<()> {
     let mut seen = std::collections::HashSet::with_capacity(day_paths.len());
     for path in day_paths {
@@ -621,7 +619,7 @@ mod tests {
 
     /// Hybrid merge with COLLIDING day stems — `2025-07-01` exists in
     /// both passes (first-of-month overlap). Both segments must reach
-    /// the R4 shard: before binding delta 1 the undiscriminated Pass-A
+    /// the R4 shard: the former undiscriminated Pass-A
     /// temp path raced between passes and one silently vanished. Day
     /// counts come from the two input lists, never a combined `len()`.
     #[test]

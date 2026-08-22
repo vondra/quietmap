@@ -1,4 +1,4 @@
-//! Airport ground-ops scatter onto a Web Mercator z13 tile — taxiway / runway /
+//! Airport ground-ops scatter onto a Web Mercator heatmap tile — taxiway / runway /
 //! apron line sources + GSE point rows. Mirrors the road/rail
 //! [`crate::scatter_line`] and industrial/building [`crate::scatter_point`]
 //! kernels: per-source reach-bbox prepare, receiver-BLOCK parallelism,
@@ -174,8 +174,8 @@ pub fn scatter_tile(
     traffic: &[AirportTrafficRowView<'_>],
     barriers: &[Barrier],
     obstacles: Option<&ObstacleSet>,
-    // GA 365-day hybrid per-class weight LUT (`ga-365d-hybrid-plan.md` §2,
-    // layer-ground.md §4). Applied to `veh_kind == 0` (aircraft) rows
+    // GA hybrid per-class weight LUT. Applied to `veh_kind == 0` (aircraft)
+    // rows
     // only — GSE rows weight 1.0. Uniform for non-hybrid extracts.
     class_weights: &noise_compute::emission::aircraft::ClassWeights,
     n_days: f64,

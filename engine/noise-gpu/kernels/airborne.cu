@@ -44,8 +44,8 @@
 #define SEL_FLOOR 20.0f
 // NPD_NC = NUM_CLASSES, injected by build.rs from the generated
 // profiles_generated.rs so the LUT stride can never drift from the Rust
-// upload (a hardcoded 14 mis-stepped every departure lookup when the
-// pinned 15th class landed - Gemini /gg C10b CRITICAL, 2026-06-11).
+// upload; a hardcoded 14 mis-stepped every departure lookup when the
+// 15th class landed.
 #ifndef NPD_NC
 #error "NPD_NC must be passed by build.rs (-DNPD_NC=<NUM_CLASSES>)"
 #endif
@@ -174,8 +174,8 @@ __device__ __forceinline__ int coarse_pixel(int n, int i) {
 // NEAR (exact): one thread per receiver pixel, loop this tile's near sub-segs via the
 // index list `idx[0..nidx]` into the REGION-resident SoA (E5: segs uploaded once per
 // region, `sll` lon half at offset `nreg`; per-tile only the index list changes).
-// `w` = NPD_NC-length GA 365-day hybrid per-class weight LUT (ga-365d-hybrid-plan.md §2):
-// each sub-seg's energy is scaled by w[class] so a GA one-off divides by 365 not 12
+// `w` = NPD_NC-length GA hybrid per-class weight LUT:
+// each sub-seg's energy is scaled by w[class] so GA rows use ga_n_days rather than n_days
 // (uniform 1.0 for non-hybrid extracts → byte-identical to the pre-hybrid scatter).
 extern "C" __global__ void airborne_exact(
     const double* __restrict__ rll, const float* __restrict__ rxa,
@@ -222,7 +222,7 @@ extern "C" __global__ void airborne_coarse(
     double start_lat = sll[s], start_lon = sll[nreg + s];
     const float* f = sf + s * 12;
     int cls = si[s*4+1], is_dep = si[s*4+2], inst = si[s*4+0], period = si[s*4+3];
-    float gw = w[cls];   // GA 365-day hybrid per-class weight (seg-constant).
+    float gw = w[cls];   // Per-class hybrid weight (segment-constant).
     for (int ci = 0; ci < n; ci++) {
         int py = coarse_pixel(n, ci);
         double rx_lat = rll[py], mpdl = rll[2 * TPX + py];
@@ -332,7 +332,7 @@ extern "C" __global__ void airborne_coarse_batched(
 // meta_b f64[5*ntiles] per tile = [centre_lat, centre_lon, m_per_deg_lon, half_diag,
 // tile_max_rx_alt]. Seg start_lat/lon from sll (f64 — the catastrophic-cancellation site);
 // d_lon/sdy/sdz/start_alt/reach_sq from sf (f32 → promoted to f64 for the gate math, matching
-// classify_tile's f64 arithmetic; gg C5: measure parity, escalate to an f64 seg buffer only if
+// classify_tile's f64 arithmetic; measure parity and escalate to an f64 segment buffer only if
 // borderline near/far/drop flips exceed tolerance — the physics kernel re-gates on reach_sq so a
 // false-admit is merely wasted work, and near↔far flips at the 500 m boundary differ only by
 // exact-vs-coarse interpolation, ≪0.5 dB).

@@ -5,7 +5,7 @@
 //! cell's `grid_disk(1)` — the halo the ingest contract requires
 //! (centroid-assigned footprints; `scripts/obstacles/ingest-overture-obstacles.py`).
 //!
-//! Two hard rules from the gg review (2026-07-28):
+//! Two hard rules:
 //! - **Bounded cost.** Per-cell indexes are built ONCE per process and
 //!   LRU-cached (`CELL_CACHE_CAP`); a query only Arc-clones ≤7 of them.
 //!   The naive per-query rebuild measured 448 MB RSS / 0.47 s per popup.
@@ -399,7 +399,7 @@ fn cell_dir(
 /// obstacle ordinals stable for one on-disk state. A missing directory is a
 /// legitimate "not ingested" (`Ok(empty)`); any OTHER I/O failure is an
 /// error — a permission or disk fault must not read as "cell missing" and
-/// admit an incomplete index under partial mode (gg review 2026-07-28).
+/// admit an incomplete index under partial mode.
 fn shard_paths(dir: &Path) -> Result<Vec<PathBuf>, String> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -506,8 +506,7 @@ fn load_obstacle_set_with_logging(
         // Zero edges is vector-EMPTY only when no shard-backed index was
         // loaded (every ring cell manifest-proven ingested-empty). A staged
         // shard that builds zero edges is a data anomaly — raster fallback,
-        // exactly the pre-branch behavior (/gg Codex finding 3, tile-painter
-        // twin rule).
+        // exactly the pre-branch behavior shared by tile-painter.
         if set.indexes.is_empty() {
             if log_fallback {
                 eprintln!("obstacle_store: vector mode with 0 edges (all ingested-empty)");
@@ -566,23 +565,15 @@ const MAX_PROBE_HEIGHT_M: f32 = 1_000.0;
 /// popup would display.
 const HEIGHT_PROBE_RESOLUTION_M: f32 = 0.05;
 
-/// Is the receiver INSIDE a vector obstacle footprint, and how tall is the
-/// tallest footprint containing it? `None` ⇒ outdoors (CNOSSOS fix-pack Fix 4,
-/// popup half — the lockstep twin of tile-painter's
-/// `source_loader_obstacle::bake_tile_interior_mask`, which turns the same
-/// answer into a `NO_DATA` heatmap cell).
+/// Height of the tallest vector footprint containing the receiver, regardless
+/// of envelope class. The indoor calculation uses [`point_inside_enclosed`].
 ///
-/// DISPLAY ONLY today: the popup keeps computing and reporting the very same
-/// dB numbers it always did, this just labels them. What an indoor receiver
-/// SHOULD report (the fix-pack's "inside building — facade exposure", i.e. the
-/// nearest outside facade value) is a separate product decision.
-///
-/// Runs on the ALREADY-LOADED query set — zero extra IO. The height comes out
+/// Runs on the already-loaded query set — zero extra I/O. The height comes out
 /// of the containment test itself: `ObstacleIndex::contains_built(…, min_h)`
 /// answers "inside a footprint TALLER than `min_h`", which is monotone in
 /// `min_h`, so the tallest containing footprint is the threshold where it
 /// flips — ~15 in-memory probes. That keeps the exact same polygon test (and
-/// its hole/overlap semantics) as the heatmap mask and the enclosure probe;
+/// its hole/overlap semantics) as the enclosure probe;
 /// a height-returning containment query on `ObstacleIndex` itself would be
 /// the cheaper shape, and is the named follow-up for whoever next opens
 /// `propagation::obstacle_index`.
@@ -1037,8 +1028,7 @@ mod tests {
 
     /// Runs only where the Praha obstacle staging exists (dev boxes after the
     /// geodata-v2 night-1 ingest); hermetic CI skips silently. Asserts the
-    /// REAL scale (the gg review flagged a >10k assertion as hiding it) and
-    /// that the second load is a cache hit, not a rebuild.
+    /// real scale and that the second load is a cache hit, not a rebuild.
     #[test]
     fn loads_praha_set_and_caches_cells() {
         let data_dir = Path::new("../../data/prepared");

@@ -75,9 +75,9 @@ pub fn is_cell_unbuildable(e: &anyhow::Error) -> bool {
 /// `region_tiles` keeps only centre-in-hexagon tiles) padded by the per-tile admit reach:
 /// `scatter_tile` admits a sub-seg up to `AIRCRAFT_MAX_HORIZONTAL_REACH_M + half_diag` from a
 /// tile centre. Deriving it from the actual R4 geometry — not a fixed radius around one tile —
-/// is exact at any latitude: near the equator z13 tiles widen, so the worst R4 spans ~52 km
-/// centre-to-centre and a 70 km radius around a corner tile dropped opposite-edge contributors
-/// (Codex /gg 2026-06-07).
+/// is exact at any latitude: near the equator, tiles at the requested zoom are
+/// widest. The worst R4 spans ~52 km centre-to-centre, and a fixed 70 km radius
+/// around a corner tile dropped opposite-edge contributors.
 pub fn region_candidates(
     views: &[AirborneRowView<'_>],
     r4: u64,
@@ -121,10 +121,12 @@ impl RegionEnvelope {
             w = w.min(ll.lng());
             e = e.max(ll.lng());
         }
-        // Pad = max horizontal reach + max tile half-diagonal. Size half_diag at the equatorial
-        // z13 tile (widest, cos = 1) so it bounds every tile in the region; the lon pad uses the
-        // region's highest |lat| (most degrees per metre). Over-padding only adds a few one-time
-        // candidates that `classify_tile` rejects per tile — under-padding silently drops them.
+        // Pad = max horizontal reach + max tile half-diagonal. Size half_diag at
+        // the equatorial tile at the requested zoom (widest, cos = 1) so it
+        // bounds every tile in the region; the longitude pad uses the maximum
+        // region |lat| (most degrees per metre). Over-padding only adds
+        // one-time candidates that `classify_tile` rejects per tile;
+        // under-padding silently drops them.
         let half_diag =
             (TILE_PX as f64) * tile_pixel_size_m(zoom, 0.0) * std::f64::consts::SQRT_2 * 0.5;
         let pad_m = AIRCRAFT_MAX_HORIZONTAL_REACH_M + half_diag;
@@ -318,7 +320,7 @@ fn classify_tile(
 }
 
 /// GPU handle: the device, the two airborne kernels, the NPD LUTs, and the
-/// GA 365-day hybrid per-class weight LUT (all uploaded once, device-global).
+/// GA full-year hybrid per-class weight LUT (all uploaded once, device-global).
 /// Construct once per build; reuse across every region and tile.
 pub struct AirborneGpu {
     dev: Arc<CudaDevice>,
@@ -333,7 +335,7 @@ pub struct AirborneGpu {
     f_classify_scatter: CudaFunction,
     d_npd: CudaSlice<f32>,
     /// `NUM_CLASSES`-length GA hybrid weight LUT (f32). The kernel scales
-    /// each sub-seg's energy by `d_w[class]` (`ga-365d-hybrid-plan.md` §2).
+    /// each sub-segment's energy by `d_w[class]`.
     d_w: CudaSlice<f32>,
     /// Total VRAM (bytes) of this device, queried once at open — the M2 chunked build derives its
     /// candidate-chunk size from it (no hand-set chunk knob; see `gpu_airborne::max_candidates_per_chunk`).
@@ -364,7 +366,7 @@ impl RegionResident {
 // a `Default::default()` would silently hide all that I/O.
 #[allow(clippy::new_without_default)]
 impl AirborneGpu {
-    /// Open CUDA device 0, load the airborne PTX, and upload the NPD LUTs + the GA 365-day
+    /// Open CUDA device 0, load the airborne PTX, and upload the NPD LUTs + the GA full-year
     /// hybrid per-class weight LUT once. CUDA failures `expect`-panic (the codebase convention
     /// — see `gpu_surface`): a dead device or missing kernel is fatal to the whole build, so
     /// the worker dies loudly and the chunk re-dispatches. `class_weights` is build-wide
@@ -375,7 +377,7 @@ impl AirborneGpu {
         // THIS instance's OWN stream, not the shared default/null stream. The world builder
         // makes one AirborneGpu per rayon worker, so per-worker streams let the workers' GPU
         // launches + copies overlap instead of serializing device-wide on the null stream
-        // (gg C1). Each worker holds its own CudaDevice instance ⇒ no shared-event hazard.
+        // across workers. Each worker holds its own CudaDevice instance ⇒ no shared-event hazard.
         let dev = CudaDevice::new_with_stream(0).expect("open cuda device 0");
         dev.load_ptx(
             Ptx::from_src(AIRBORNE_PTX),

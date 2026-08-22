@@ -23,11 +23,11 @@
 # `./scripts/run-aircraft-extract.sh --from-stage stage2a` reuses the
 # cached Stage 1 segments and per-R4 shuffle, runs only Stage 2A/2B/2C.
 #
-# HYBRID two-window extract (HYBRID=1) — ga-365d-hybrid-plan.md §4.2.
-# GA + helicopter classes are sampled over all 365 adsb.lol days while
-# airline traffic keeps the 12-day first-of-month window, so a one-off
-# GA flight weighs 1/365 instead of 1/12 (kills the ×30 / +14.8 dB
-# phantom from the Kytín audit 2026-06-12). Three invocations:
+# HYBRID two-window extract (HYBRID=1).
+# GA + helicopter classes use every available adsb.lol day while airline
+# traffic keeps the 12-day first-of-month window, so a one-off GA flight is
+# divided by its GA-window day count instead of the airline-window day count
+# (kills the ×30 / +14.8 dB phantom from the Kytín audit 2026-06-12). Three invocations:
 #   pass J (airline): --feed $AIRLINE_FEED --class-filter non-ga --until-stage stage1 → $WORK_DIR/airline
 #   pass G (GA):      --feed adsblol      --class-filter ga     --until-stage stage1 → $WORK_DIR/ga
 #   merge:            --work-dir $WORK_DIR/airline --ga-segments-dir $WORK_DIR/ga/segments --from-stage shuffle
@@ -40,9 +40,9 @@
 # hybrid mode — set AIRLINE_DAYS / GA_DAYS instead (both default to
 # every day present in their cache). Hybrid env knobs: AIRLINE_FEED
 # (default adsbexchange), AIRLINE_CACHE (the airline feed cache on the ops
-# storage host), AIRLINE_DAYS, GA_CACHE (the raw adsb.lol 2025 archive on
+# storage host), AIRLINE_DAYS, GA_CACHE (the raw adsb.lol archive on
 # the ADS-B archive host), GA_DAYS, FAIL_ON_GA_CRUISE=1
-# (merge hard-fails if GA classes leak into cruise — plan delta 4).
+# (merge hard-fails if GA classes leak into cruise).
 # Cross-host runbook (plan §4.2): run pass G on the ADS-B archive host
 # (data-local), rsync $WORK_DIR/ga/segments to the compute host, run
 # pass J + merge there.
@@ -232,8 +232,8 @@ stamp_gate() {
 }
 
 if [ -n "$HYBRID" ]; then
-    # Two-window hybrid flow (ga-365d-hybrid-plan.md §4.2): both passes
-    # stop after Stage 1; one merge invocation shuffles airline ∪ GA
+    # Both hybrid passes stop after Stage 1; one merge invocation shuffles
+    # airline ∪ GA
     # day shards and runs Stage 1.5/2A/2B/2C. `tee` streams every
     # milestone into the shared log, same as the single-feed flow.
     [ -z "$DAYS" ] || die "HYBRID=1 ignores DAYS — set AIRLINE_DAYS / GA_DAYS instead"
@@ -256,8 +256,8 @@ if [ -n "$HYBRID" ]; then
         if [ -n "$(ls -A "$wd/segments" 2>/dev/null)" ]; then
             # A crashed pass leaves a PARTIAL segments/ that a bare populated-dir
             # check would silently accept — the merge would then ship a wrong
-            # sample basis (ga_n_days counted from the partial set). The day-file
-            # count must match the request exactly (Codex /gg 2026-06-12).
+            # sample basis (`ga_n_days` counted from the partial set). The
+            # day-file count must match the request exactly.
             local have want
             have=$(find "$wd/segments" -maxdepth 1 -name '*.arrow' | wc -l)
             want=$(count_csv "$days")
@@ -311,10 +311,10 @@ if [ -z "$DAYS" ]; then
     DAYS="$(derive_days "$ADSB_CACHE")"
 fi
 [ -n "$DAYS" ] || die "no ADS-B TAR days resolved from $ADSB_CACHE"
-# The adsblol default cache is now the full 365-day global archive — a bare
+# The adsblol default cache is now the full global archive — a bare
 # `./run-aircraft-extract.sh` would silently start a multi-hour TB-scan where
-# the old default was the 14-day Praha subset (2-of-2 /gg consensus
-# 2026-06-12). Deriving a big window without explicit DAYS needs an ack.
+# the old default was the 14-day Praha subset. Deriving a big window without
+# explicit DAYS needs an acknowledgement.
 if [ "$(count_csv "$DAYS")" -gt 60 ] && [ "${ALLOW_FULL_ARCHIVE:-}" != 1 ]; then
     die "derived $(count_csv "$DAYS") day(s) from $ADSB_CACHE — full-archive run. Set DAYS=… for a subset, or ALLOW_FULL_ARCHIVE=1 to confirm."
 fi

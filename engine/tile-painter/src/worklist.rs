@@ -2,7 +2,7 @@
 //! prepared `h3r4/` tree, dilate them to the output-region set, and
 //! resolve the single build-wide `n_days` from arrow metadata.
 //!
-//! Two R4 sets, deliberately distinct (gg review 2026-05-25):
+//! Two R4 sets, deliberately distinct:
 //! - `source_r4s` — R4s that own aircraft arrows; the per-region source
 //!   load keys.
 //! - `output_r4s` — `union(grid_disk(1))` over the sources; the regions
@@ -121,7 +121,7 @@ fn has_source_arrow(dir: &Path, sel: SourceSel) -> Result<bool> {
 /// Does ANY of `source_r4s` carry a `sel`-selected arrow? A cluster chunk can hold one
 /// source (e.g. road) but not another (airborne) — building the absent one must be a no-op,
 /// NOT the fatal "no source arrows" that `resolve_n_days` raises, else a job that bundles two
-/// sources (the GPU `line` job = road/rail + airborne) loses BOTH when one is empty (Codex /gg).
+/// sources (the GPU `line` job = road/rail + airborne) loses BOTH when one is empty.
 /// Callers check this first and exit 0 when false.
 pub fn any_source_arrow(h3r4_dir: &Path, source_r4s: &[u64], sel: SourceSel) -> Result<bool> {
     for &r4 in source_r4s {
@@ -136,7 +136,7 @@ pub fn any_source_arrow(h3r4_dir: &Path, source_r4s: &[u64], sel: SourceSel) -> 
 /// metadata stamped on every source R4's arrows and asserting they all
 /// agree. The extract writes one window into every stage output, so a
 /// disagreement means mixed/stale shards (e.g. a 14-day R4 beside
-/// 365-day ones) that would seam ~10·log10(ratio) dB across the map —
+/// full-year ones) that would seam ~10·log10(ratio) dB across the map —
 /// bail with the offending values rather than divide by a wrong window.
 /// Every present source arrow MUST carry a valid `n_days` (missing,
 /// unparseable, or 0 is fatal): a metadata-less shard sitting beside
@@ -176,9 +176,9 @@ pub fn resolve_n_days(h3r4_dir: &Path, source_r4s: &[u64], sel: SourceSel) -> Re
     }
 }
 
-/// Resolve the build-wide GA 365-day hybrid weight LUT from the
-/// `sample_days_by_class` metadata stamped on the source arrows
-/// (`ga-365d-hybrid-plan.md` §2). Reads the vector off every present
+/// Resolve the build-wide GA full-year hybrid weight LUT from the
+/// `sample_days_by_class` metadata stamped on the source arrows. Reads the
+/// vector off every present
 /// source arrow, asserts they all agree (a disagreement = mixed/stale
 /// shards that would seam GA weighting across the map), and parses it
 /// against `n_days`. FAILS LOUD when any GA-stamped source arrow lacks

@@ -106,13 +106,12 @@ pub struct DiffractionResult {
     /// entirely). (2.5.26) when the straight SR is broken,
     /// (2.5.27) when it is not. Consumed only when
     /// [`FAVOURABLE_MIXING`] is on; the edge itself stays max-δ-selected on
-    /// straight geometry (plan-accepted second-order simplification).
+    /// straight geometry (a second-order simplification).
     pub delta_fav: f64,
     /// Rayleigh δ\* of 2021/1226 point (9)(c): path difference over the
     /// dominant edge with mirror source/receiver reflected across the per-side
-    /// mean ground planes. 0.0 when there is no obstruction. Kept
-    /// straight-geometry under the favourable state too (review-pinned
-    /// conservative choice).
+    /// mean ground planes. 0.0 when there is no obstruction. It stays on
+    /// straight geometry under the favourable state too.
     ///
     /// Feeds the `δ ≤ λ/4 − δ*` criterion on the NEGATIVE arm of
     /// [`maekawa_bands`] only (2021/1226 point (9)(c) scopes it to an
@@ -181,8 +180,8 @@ pub(crate) fn curved_path_difference_near_miss(
 /// other term of the level chain (emission, divergence, atmosphere, ground,
 /// vegetation), so mixing the diffraction attenuation is algebraically
 /// identical to mixing the received levels — and with the single flat
-/// [`P_FAV`] it is also identical to mixing per period or mixing Lden
-/// (verified in the plan review). Mixing leans to the LOUDER (favourable)
+/// [`P_FAV`] it is also identical to mixing per period or mixing Lden.
+/// Mixing leans to the LOUDER (favourable)
 /// state, which is the standard's point.
 pub(crate) fn mix_fav_hom(
     hom: &[f64; NUM_BANDS],
@@ -392,7 +391,7 @@ fn fit_plane_with_point(
 
 /// The Rayleigh δ\* of 2021/1226 point (9)(c) — mirror source and mirror
 /// receiver across the two per-side OLS mean ground planes, same edge D.
-/// Reported in the path trace; it gates nothing (module header).
+/// Reported in the path trace and used by [`rayleigh_admits`] on the negative arm.
 fn compute_delta_star(
     t: &[f64],
     profile: &[f64],
@@ -488,8 +487,8 @@ pub(crate) fn fit_mean_ground_plane(
 /// homogeneous and favourable conditions respectively*". The standard can
 /// afford that because it re-derives δ\* per state on curved rays too
 /// (NoiseModelling's `computeRayleighDiff` has a whole `toCurve` branch for
-/// it); ours is straight-geometry by review-pinned choice, so asking the
-/// criterion per state would pair a CURVED δ_F with a STRAIGHT δ\* — two
+/// it); ours uses straight geometry, so asking the criterion per state would
+/// pair a CURVED δ_F with a STRAIGHT δ\* — two
 /// constructions mixed. It showed, too: the favourable arm then took its own
 /// admission step at `δ_F = 0`, which on a 200 m path lands at `δ = +0.098 m`,
 /// i.e. **3.13 dB across 2 mm of wall height at a 5.155 m wall** — an
@@ -569,9 +568,8 @@ pub fn diffraction_attenuation_mixed(result: &DiffractionResult) -> [f64; NUM_BA
     // is a clear path (`empty_result`), but `maekawa_bands(δ = 0, admitted)` is
     // `10·lg(3)` = 4.77 dB in EVERY band — the (2.5.21) curve's value AT the
     // grazing point, not zero. Every caller today filters clear paths out before
-    // reaching here, so this returned the right answer by luck; returning `hom`
-    // for an edge-less result was a trap armed for the first caller that did not
-    // (2026-08-08 review).
+    // reaching here. Returning `hom` for an edge-less result would give the
+    // first unfiltered caller 4.77 dB of false attenuation.
     if result.n_edges == 0 {
         return [0.0; NUM_BANDS];
     }

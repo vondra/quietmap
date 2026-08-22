@@ -92,7 +92,7 @@ Brazil has the richest power-sector geometry in this pipeline. ANEEL (the nation
 | UsinaFotovoltaica | 322 solar PV plants | |
 | UsinaTermonuclear | 3 nuclear plants | Angra I, II, III |
 
-Only operational plants are stamped (`OPERACAO = SIM` for turbines, `ESTAGIO` = operação for other plants). All map to **NACE 35** (electricity generation) with sector-specific engine emission classes: thermal/nuclear → 97 dB Lw running near-24/7, hydro → 90 dB Lw 24/7 baseload, solar → 55 dB Lw and effectively silent at night. Each OSM industrial site gets its single nearest plant within 2 km, loudest type first (thermal > hydro > nuclear > solar; wind excluded — see below). This national registry overrides the global GPPD power-plant baseline (255 BR plants).
+Only operational plants are stamped (`OPERACAO = SIM` for turbines, `ESTAGIO` = operação for other plants). All map to NACE 35, resolving the corresponding industrial base profiles before shared spectrum and area terms. Each OSM industrial site gets its nearest plant within 2 km using fixed input precedence (thermal → hydro → nuclear → solar; wind excluded). This national registry overrides the global GPPD power-plant baseline (255 BR plants).
 
 ### Wind turbines
 

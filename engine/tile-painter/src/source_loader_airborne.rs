@@ -37,11 +37,9 @@ struct OwnedRow {
     sub_period: Vec<u8>,
     sub_date_id: Vec<i16>,
     sub_flags: Vec<u8>,
-    /// v16 (K3): only start/end terrain elevs are stored — the chord
-    /// mountain-peak gate (q1/mid/q3) moved to Stage 1's
-    /// `airborne_chord_clears_peaks`. Heatmap mirrors popup: feeds
-    /// `SegmentTerrain` with zeroed mid/q1/q3 since the popup-side
-    /// validity check that read those columns is gone.
+    /// Only start/end terrain elevations are stored. Heatmap and popup feed
+    /// `SegmentTerrain` with zeroed q1/mid/q3 and retain the endpoint-based
+    /// checks; the removed chord check remains the SPEC §5 known gap.
     sub_terrain_start_elev_m: Vec<f32>,
     sub_terrain_end_elev_m: Vec<f32>,
 }

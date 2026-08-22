@@ -106,12 +106,12 @@ fn host_mem_budget() -> Option<(u64, u64)> {
     Some((total, total.saturating_sub(avail)))
 }
 
-/// Pre-fault the tiles' DEM footprint, then batch them into grid-aligned DEM-only blocks
-/// (`build_receiver_altitude_only`: airborne reads only `rx_alt_m`, so skip building/forest/imd +
-/// the halo a full build computes). The block topology (which z13 tiles land in which batch, and
-/// each batch's receiver-altitude grid) is built ONE way for BOTH the one-pass prep (`prep_cell`)
-/// and the M2 chunked build (`gpu_build_cell_chunked`) — AGENTS.md one source of truth: a divergence
-/// here would scatter the chunked megahubs against a different receiver grid than the one-pass cells.
+/// Pre-fault the tile DEM footprints, then batch them into grid-aligned DEM-only blocks.
+/// `build_receiver_altitude_only` reads only `rx_alt_m`, skipping building/forest/IMD and
+/// the halo a full build computes. Requested-zoom tile batching and the receiver-altitude grid
+/// use one path for both one-pass prep (`prep_cell`) and the M2 chunked build
+/// (`gpu_build_cell_chunked`); a divergence would scatter megahubs against a different receiver
+/// grid than one-pass cells.
 pub(crate) fn build_dem_blocks(
     rasters: &RealRasters,
     z: u8,

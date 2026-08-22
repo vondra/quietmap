@@ -410,8 +410,7 @@ pub fn run_all(
     // / 2A / 2C all consume these; Stage 2B reads the per-day
     // shards directly (cruise straddles R4 boundaries) plus the
     // `n_days` manifest written here. The GA-window shards merge
-    // into the same per-R4 pool under a distinct pass key
-    // (ga-365d-hybrid-plan.md §4.2).
+    // into the same per-R4 pool under a distinct pass key.
     if runs(FromStage::Shuffle) {
         run_stage_shuffle(&ok_paths, &ga_day_paths, &by_r4_dir, scope.as_ref())?;
     } else {
@@ -786,8 +785,7 @@ fn run_stage_2b_phase(
     // Hybrid runs change nothing here: `ok_paths` is the AIRLINE
     // pass only (GA shards enter solely via --ga-segments-dir →
     // shuffle), so cruise keeps plain `n_days` semantics and this
-    // guard still compares airline days to the airline manifest
-    // (ga-365d-hybrid-plan.md §4.2.6).
+    // guard still compares airline days to the airline manifest.
     if ok_paths.len() as u16 != window_n_days {
         anyhow::bail!(
             "Stage 2B input is {} day(s) but the shuffled window is {} \

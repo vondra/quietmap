@@ -20,7 +20,7 @@ But **all Korean government data portals refuse connections from non-KR IPs** (d
 
 ### Critical limitation: Korean subway lines not extracted
 
-The pipeline's OSM extractor (`engine/osm-extract/src/classify.rs`) only accepts railway tags `rail | tram | light_rail | narrow_gauge | funicular`. Korean **subway** systems tagged as `railway=subway` in OSM are NOT in the extracted data:
+The pipeline's OSM extractor (`engine/osm-extract/src/classify/ways.rs`) only accepts railway tags `rail | tram | light_rail | narrow_gauge | funicular`. Korean **subway** systems tagged as `railway=subway` in OSM are NOT in the extracted data:
 
 - **Seoul Metropolitan Subway** — Lines 1-9, Sinbundang, Suin-Bundang, Gyeongui-Jungang, Airport Express, Gimpo Goldline, Sillim, Ui-Sinseol — the world's most extensive metro network by ridership
 - **Busan Metro** — Lines 1-4 + Donghae Line
@@ -29,7 +29,7 @@ The pipeline's OSM extractor (`engine/osm-extract/src/classify.rs`) only accepts
 - **Gwangju Metro** — Line 1
 - **Incheon Metro** — Lines 1, 2
 
-This is a pipeline-level issue (not specific to enrichment). Adding `subway` to the railway accept list in classify.rs and re-extracting OSM would unlock the entire Korean metro network.
+This is a pipeline-level issue (not specific to enrichment). Adding `subway` to the railway accept list in `classify/ways.rs` and re-extracting OSM would unlock the entire Korean metro network.
 
 ### KORAIL operator-class CNOSSOS defaults
 
@@ -66,9 +66,9 @@ The global pass also stamps GEM steel / cement / coal-mine sites where they fall
 
 ### Korean-name NACE heuristic (bespoke)
 
-GPPD catches Korea's power plants and the global name heuristic matched a handful of sites, but that keyword list is Latin-script only, so it missed every Korean-named heavy-industry giant — 포항제철소 (POSCO Pohang, a 10.1M m² steelworks), 여수국가산업단지 (Yeosu petrochemical, 25.7M m²), 현대중공업 / 삼성중공업 / 한화오션 (three of the world's largest shipyards), 현대제철, 동국제강. Those sat at the generic 93 dB factory profile, understating the loudest point sources in the country.
+GPPD catches Korea's power plants and the global name heuristic matched a handful of sites, but that keyword list is Latin-script only, so it missed every Korean-named heavy-industry giant — 포항제철소 (POSCO Pohang, a 10.1M m² steelworks), 여수국가산업단지 (Yeosu petrochemical, 25.7M m²), 현대중공업 / 삼성중공업 / 한화오션 (three of the world's largest shipyards), 현대제철, 동국제강. Those used the generic OSM industrial base profile with no NACE override, understating the loudest point sources in the country.
 
-`enrich-industrial-kr.ts` matches Korean (+ English) name tokens (제철/제강/철강 → steel, 시멘트 → cement, 조선/중공업 → shipyard, 석유화학/정유 → petrochemical, 자동차 → vehicles, 발전소/화력 → power) to a NACE 4-digit code and stamps the engine's sector profile (steel/cement 100 dB, +7 dB over generic). This is a **name heuristic** (priority 10): it fills `source_id == 0` sites and supersedes the Latin-only global heuristic, but never overrides GPPD/GEM measured matches. A POSITIVE country polygon is unusable (the generalised ADM0 coastline rejects reclaimed-land sites including the Geoje shipyards), so it gates negatively — keep a site unless it falls inside North Korea or Japan. K-PRTR (below) would replace this with measured sectors but is geofenced.
+`enrich-industrial-kr.ts` matches Korean (+ English) name tokens (제철/제강/철강 → steel, 시멘트 → cement, 조선/중공업 → shipyard, 석유화학/정유 → petrochemical, 자동차 → vehicles, 발전소/화력 → power) to a NACE 4-digit code and stamps the engine’s sector profile (steel/cement: 100 dB base Lw). This is a **name heuristic** (priority 10): it fills `source_id == 0` sites and supersedes the Latin-only global heuristic, but never overrides GPPD/GEM measured matches. A POSITIVE country polygon is unusable (the generalised ADM0 coastline rejects reclaimed-land sites including the Geoje shipyards), so it gates negatively — keep a site unless it falls inside North Korea or Japan. K-PRTR (below) would replace this with measured sectors but is geofenced.
 
 ### Wind turbines
 

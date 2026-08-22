@@ -287,11 +287,8 @@ fn decode_validated(compressed: &[u8]) -> Result<Vec<u8>> {
     // The decoder returns success the instant it finds ONE complete valid
     // stream — it never checks for leftover input. A corrupt entry whose blob
     // is [valid stream for a DIFFERENT, shorter tile][trailing garbage] would
-    // otherwise decode "successfully" and silently return the WRONG tile's
-    // data instead of erroring (/gg finding, 2026-07-14: found live in the
-    // industrial store — two index entries sharing one offset, the longer
-    // entry decoding as the shorter one's content plus ~1.6 KB of unconsumed
-    // tail). A well-formed single-stream blob must consume every input byte.
+    // otherwise decode "successfully" and silently return the wrong tile.
+    // A well-formed single-stream blob must consume every input byte.
     let unconsumed = compressed.len() - cursor.position() as usize;
     if unconsumed > 0 {
         bail!(
@@ -302,7 +299,7 @@ fn decode_validated(compressed: &[u8]) -> Result<Vec<u8>> {
         );
     }
     // Length gate BEFORE any header index — a truncated blob must be a clean
-    // Err from this Result API, not an index panic (review find).
+    // Err from this Result API, not an index panic.
     if raw.len() < HEADER_BYTES {
         bail!("HM3 blob too short: {} bytes", raw.len());
     }

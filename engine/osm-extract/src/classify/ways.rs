@@ -258,7 +258,6 @@ pub fn extract_way_tags(way: &Way, ftype: &FeatureType) -> Tags {
                 // WHY: Many buildings are tagged building=yes but have amenity=school,
                 // shop=supermarket, etc. Without these tags, schools get classified as
                 // residential (type 0) and get wrong emission profile.
-                // REVIEWED: GPT-5.4 found this as WARNING 5.
                 if matches!(
                     k,
                     "building"

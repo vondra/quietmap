@@ -434,8 +434,8 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         .collect();
 
     // Resolve airport_summary.arrow path: sibling of h3r4_dir under
-    // `aircraft/` (Stage 2C v5 reduce output). Missing file →
-    // popup returns zero airport-level counts (per Codex C4).
+    // `aircraft/` (Stage 2C v5 reduce output). Missing file means
+    // the popup returns zero airport-level counts.
     let airport_summary_pathbuf = std::path::Path::new(&store.h3r4_dir)
         .parent()
         .map(|p| p.join("aircraft").join("airport_summary.arrow"));
@@ -490,16 +490,15 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     } else {
         None
     };
-    // Fix 4 (popup half): does the receiver stand INSIDE a footprint? The
-    // heatmap masks such pixels to no-data, so the popup must be able to say
-    // so. The shared winner also supplies the effective envelope delta for the
-    // aggregate indoor display estimate; source traces remain façade values.
+    // Select the enclosed footprint winner once; it supplies the effective
+    // envelope delta for the aggregate indoor estimate while traces stay at
+    // façade values.
     let inside_envelope = obstacle_set
         .as_ref()
         .and_then(|set| obstacle_store::point_inside_enclosed(set, lat, lng));
-    // A façade receiver is the first cardinal metre step outside the same
-    // enclosed-containment query used by paint. The source selection was made
-    // at the click and a one-metre shift never changes its R4 ring.
+    // Search outward in one-metre cardinal steps using the same containment
+    // rule. The ≤100 m shift stays inside the loaded R4 ring, so sources need
+    // no reload.
     let (facade_lat, facade_lng) = if inside_envelope.is_some() {
         let step_lat = 1.0 / noise_compute::constants::M_PER_DEG_LAT;
         let step_lon = 1.0 / noise_compute::constants::m_per_deg_lon(lat.to_radians());
@@ -552,7 +551,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     // cannot carry the field). The guard clears on scope exit INCLUDING a
     // kernel unwind — napi-rs turns a caught panic into a JS throw, and a
     // stale vec on the surviving worker thread would paint the previous
-    // click's countries onto the next query's segments (/gg M4/M5 #2).
+    // click's countries onto the next query's segments.
     noise_compute::defaults::set_road_row_admins(Some(sources.road_admins));
     noise_compute::emission::railway::set_rail_row_admins(Some(sources.rail_admins));
     let _row_admin_guard = RowAdminGuard;

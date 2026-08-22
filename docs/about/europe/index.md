@@ -14,7 +14,7 @@ The [Common Noise Assessment Methods](https://publications.jrc.ec.europa.eu/repo
 
 - **Road emission model** — Noise power per vehicle category, speed, and road surface
 - **Railway emission model** — Noise per train type, speed, track properties
-- **Industrial emission model** — NACE sector-differentiated source power levels (20 NACE sector profiles + 12 OSM sub-type profiles), anchored to measured literature values, with sector codes from IRZ/E-PRTR facility registry data; re-calibration against official SHM contours is pending
+- **Industrial emission model** — NACE sector-differentiated source power levels (20 NACE sector profiles + 12 OSM sub-type profiles), anchored to measured literature values, with sector codes from IRZ/E-PRTR facility registry data
 - **Propagation model** — Sound attenuation through distance, ground, terrain, buildings, and atmosphere
 
 quietmap.org implements CNOSSOS-EU emission models for road (Annex II), railway (Annex IV), and industrial sources, with ISO 9613-2 propagation. Aircraft noise uses an NPD-based approach inspired by ECAC Doc 29 (referenced by CNOSSOS-EU §2.7) but is not a certified implementation — see [methodology page](/about#aircraft) for details.
@@ -40,9 +40,7 @@ Click any point on the map to see how much terrain, forest, and buildings attenu
 | **Terrain diffraction** | Hills and ridges can block sound — a ridge can reduce noise by 10 dB or more |
 | **Building screening** | Buildings between source and receiver block and reflect sound |
 | **Forest attenuation** | Dense vegetation absorbs and scatters sound energy |
-| **Meteorological** | Defined as a placeholder only — not applied; the maps assume neutral propagation conditions (see note below) |
-
-A favourable-propagation probability (P_FAV = 0.5, per CNOSSOS-EU §2.5.21) is defined in the code as a placeholder but is not applied — the maps assume neutral propagation conditions.
+| **Meteorological** | `P_FAV = 0.5` long-term homogeneous/favourable ground and diffraction mix; no local wind/inversion input |
 
 ## How far noise travels
 
@@ -127,8 +125,4 @@ Enriched European countries outside the EU continental dataset:
 
 ## Validation
 
-Model predictions are validated against reference measurements:
-
-- **State noise monitoring** — Official strategic noise maps (e.g. SHM/CENIA in Czech Republic) serve as the primary reference. Target accuracy: mean absolute error below 3 dB.
-- **Mobile measurements** (planned) — Users measure real noise with a phone app. AI classification separates natural sounds (birds, water, wind) from human noise (traffic, aircraft, industry).
-- **Feedback loop** — Measurements improve the model, and the model guides where to measure next.
+Model validation prioritizes commensurable public monitoring measurements. Official strategic maps are cross-checks, not calibration targets; see [methodology](/about/methodology#validation).

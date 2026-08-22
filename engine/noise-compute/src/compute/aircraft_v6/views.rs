@@ -7,15 +7,9 @@
 /// the same length; sub-segment `i` is fully described by index `i`
 /// across every slice.
 ///
-/// `terrain_*_elev_m` are pre-sampled at extract time (Opt A v15) so
-/// the popup terrain gates can skip `SegmentTerrain::sample` (5 raster
-/// lookups per sub-segment, mutex-serialised). Start / end propagate
-/// from Stage 1's per-point elevation; q1, mid, q3 are sampled at
-/// Stage 2A from the sub-segment's 0.25 / 0.5 / 0.75 points. All three
-/// intermediate elevations are stored explicitly: real DEM isn't
-/// linearly interpolated between endpoints, so a sharp peak at
-/// frac=0.25 or 0.75 (LOWI / SEQM / KASE mountain airports) can sit
-/// tens of metres above any linear estimate.
+/// `terrain_start_elev_m` and `terrain_end_elev_m` propagate Stage 1's
+/// endpoint samples. The airborne path uses them for endpoint checks and
+/// stores no intermediate terrain elevations.
 #[derive(Clone, Copy, Debug)]
 pub struct SubSegmentSlice<'a> {
     pub start_lat: &'a [f32],
@@ -73,8 +67,8 @@ pub const NUM_GSE_CLASSES: usize = 3;
 /// v7 replaces v6's "absolute SEL@25m for aircraft + FLC-delta at
 /// receiver" formulation, which violated refinement invariance: the
 /// same physical microsegment split into N collinear sub-segments
-/// produced different received Lden (Codex /gg-flagged on LKPR
-/// runway 4052652 — 10× discrepancy). The per-metre `LW'`
+/// produced different received Lden (LKPR runway 4052652 showed a
+/// 10× discrepancy). The per-metre `LW'`
 /// formulation matches CNOSSOS-EU Directive 2015/996 Annex II §2.5.5.
 ///
 /// Scalar `unique_*_count` counters plus row-replicated per-microsegment
@@ -114,12 +108,12 @@ pub struct AirportTrafficRowView<'a> {
     /// three count NON-GA-class fids only — the GA-class union is below.
     /// Same value on every row of the microsegment — popup reads first
     /// row's value to populate per-microseg observed_movements, dividing
-    /// each window by its own day count (`ga-365d-hybrid-plan.md` §2).
+    /// each window by its own day count.
     pub microseg_unique_count: u32,
     pub microseg_unique_arr_count: u32,
     pub microseg_unique_dep_count: u32,
     pub microseg_unique_gse_count_per_class: &'a [u32; NUM_GSE_CLASSES],
-    /// v9 GA-class (365-day window) microseg UNION split. Zero on
+    /// v9 GA-class full-year-window microseg UNION split. Zero on
     /// non-hybrid extracts.
     pub microseg_unique_ga_count: u32,
     pub microseg_unique_ga_arr_count: u32,

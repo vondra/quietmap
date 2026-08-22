@@ -96,10 +96,10 @@ pub fn scatter(
     receiver: &Receiver,
     rows: &[AirborneRowView<'_>],
     n_days_f: f64,
-    // GA 365-day hybrid per-class weight LUT (`ga-365d-hybrid-plan.md` §2).
+    // GA hybrid per-class weight LUT.
     // Each row's energy AND its count (`flight_weight`) are multiplied by
-    // `class_weights.get(class)` so a 365-day-sampled GA one-off divides by
-    // 365 not 12. Uniform (all-1.0) for non-hybrid extracts.
+    // `class_weights.get(class)` so a GA one-off divides by `ga_n_days`, not
+    // `n_days`. Uniform (all-1.0) for non-hybrid extracts.
     class_weights: &aircraft::ClassWeights,
     horizon: Option<&aircraft::ReceiverHorizon>,
     trace_cap: usize,
@@ -130,9 +130,9 @@ pub fn scatter(
     // its slant test, so a row whose endpoints lie just outside a
     // smaller class envelope can still have an unclamped foot inside
     // class reach and survive ΔF. Tightening the bbox here would
-    // false-reject those rows (Codex /gg 2026-05-24 CRITICAL).
+    // false-reject those rows.
     // The per-class gate fires at the per-direction line-distance check
-    // below and inside `segment_sel_with_terrain`. At airport density a
+    // below and inside `segment_sel_with_cuts`. At airport density a
     // popup touches ~21 k rows (3 k/R4 × 7 R4); the prune drops 60-80 %
     // of those rows before per-sub-seg work.
     let radius_lat_deg = aircraft::meters_to_lat_deg(aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M);
@@ -146,8 +146,7 @@ pub fn scatter(
     // wrap past ±180°, fall back to a no-op longitude prune. Stored
     // bboxes are in [-180, 180]; the simple comparison `bb.max_lon <
     // env_min_lon` would otherwise drop sources on the other side of
-    // the dateline. /gg (Codex) flagged this as a global-atlas
-    // false-negative silence bug. Latitude is bounded ±90 so it never
+    // the dateline. Latitude is bounded ±90 so it never
     // wraps; only longitude gets the guard.
     let lon_prune_active = env_min_lon_raw >= -180.0 && env_max_lon_raw <= 180.0;
     let env_min_lon = env_min_lon_raw as f32;
@@ -155,12 +154,11 @@ pub fn scatter(
 
     // Sub-seg line-distance projection constants — receiver-relative
     // meters factors are computed ONCE outside the loops.
-    // BUG FIX (Codex /gg 2026-05-24): `m_per_deg_lon` expects RADIANS,
-    // we were passing degrees. At 50 °N that made east/west metres
-    // ~1.5× too large, mis-projecting the line-distance check.
+    // `m_per_deg_lon` expects radians; degrees would make east/west metres
+    // ~1.5× too large at 50 °N and mis-project the line-distance check.
     // Also mirror the kernel's lat factor (constants module's
-    // `M_PER_DEG_LAT` differs from `aircraft::M_PER_DEG_LAT = 111132.92`
-    // — Codex flagged the discrepancy; we match the kernel's value so
+    // `M_PER_DEG_LAT` differs from `aircraft::M_PER_DEG_LAT = 111132.92`.
+    // Match the kernel's value so
     // the prefilter geometry is bit-identical to `segment_sel_with_overrides`).
     let cos_lat = receiver.lat.to_radians().cos().max(0.2);
     let rx_m_per_lon = aircraft::M_PER_DEG_LAT * cos_lat;
@@ -183,8 +181,8 @@ pub fn scatter(
         // most.
         let class_idx = aircraft::noise_class_of(row.profile_idx) as usize;
         let reach_sq_class = aircraft::REACH_SQ_TABLE[class_idx];
-        // GA hybrid weight for this row's class (`ga-365d-hybrid-plan.md` §2)
-        // — one f64 per row, applied to every sub-seg's energy + the flight's
+        // GA hybrid weight for this row's class: one f64 per row, applied to
+        // every sub-segment's energy and the flight's
         // count. A whole airborne row is one flight = one class, so the
         // weight is row-constant.
         let class_weight = class_weights.get(class_idx as u8);
@@ -279,10 +277,8 @@ pub fn scatter(
                 ground_ops_kind: aircraft::GROUND_OPS_KIND_NONE,
                 source_id: row.source_id as u16,
             };
-            // v16 (K3): only start/end terrain elevs are pre-sampled at
-            // extract time. The chord mountain-peak check (mid/q1/q3 AGL
-            // gate) moved to Stage 1, so the popup hot path no longer
-            // calls `is_valid_airborne_with_terrain`. The endpoint
+            // Only start/end terrain elevations are stored. The popup does
+            // not run the intermediate chord validity gate; the endpoint
             // ground-stale gate still runs (start/end AGL ≤ 15 m), and
             // Filter D's extrapolation cuts are receiver-dependent — they
             // stay here, fed from the two stored endpoint elevs.
@@ -290,10 +286,8 @@ pub fn scatter(
             let end_elev = sub.terrain_end_elev_m[i] as f64;
             let terrain = aircraft::SegmentTerrain {
                 start_elev,
-                // q1/mid/q3 zeroed: the popup-side validity calls that
-                // touched these moved to Stage 1; the structure is kept
-                // for cruise (`compute/aircraft_v6/cruise.rs`) which still
-                // calls `SegmentTerrain::sample` against rasters.
+                // q1/mid/q3 are unused by the endpoint-only stale-ground gate;
+                // cruise still populates all five samples for its validity gate.
                 q1_elev: 0.0,
                 mid_elev: 0.0,
                 q3_elev: 0.0,
@@ -316,11 +310,11 @@ pub fn scatter(
             };
             // GA hybrid weight folded into the per-sub-seg energy here so
             // EVERY downstream consumer (period totals, band stats, trace
-            // rank/energies) sees the 1/365-scaled value with no further
+            // rank/energies) sees the `1/ga_n_days`-scaled value with no further
             // per-site multiply. `flight_weight = class_weight` carries the
             // SAME factor through the count machinery (helicopter_flights_
-            // per_day, observed_flights_per_day) — (12/365)/12 = 1/365 per
-            // one-off (`ga-365d-hybrid-plan.md` §2).
+            // per_day, observed_flights_per_day): weight/n_days = 1/ga_n_days
+            // per one-off.
             let energy = fast_exp_f64(sel * std::f64::consts::LN_10 * 0.1) * class_weight;
             let period = (seg.period.min(2)) as usize;
             let acc = flights.entry(row.flight_id).or_insert_with(|| {
@@ -447,8 +441,7 @@ pub fn scatter(
 /// Build airborne-side `AircraftAirborneDetail` and the airborne-only
 /// periods (Doc 29 normalized). Walks airborne flights for per-band
 /// stats; folds cruise period_energy into the periods total via the
-/// separate `cruise_flights` table — keeping the synth-fid namespaces
-/// disjoint per /gg (Codex) guidance.
+/// separate `cruise_flights` table, whose synth-fid namespace is disjoint.
 #[allow(clippy::too_many_arguments)]
 pub fn build_detail(
     flights: &HashMap<u64, FlightAccum>,
@@ -457,7 +450,7 @@ pub fn build_detail(
     top_flight_candidates: &HashMap<u64, TopFlightCandidate>,
     cruise_band_stats: &[BandStats; 3],
     n_days_f: f64,
-    // GA-class window for the popup's per-class "Data" row (delta 7);
+    // GA-class window for the popup's per-class "Data" row;
     // equals `n_days_f` for non-hybrid extracts.
     ga_n_days_f: f64,
 ) -> (NoisePeriods, AircraftAirborneDetail) {
@@ -532,8 +525,7 @@ pub fn build_detail(
         let cls = aircraft::noise_class_of(acc.profile_idx) as usize;
         let weight = acc.flight_weight.round().max(1.0) as u32;
         // Band stats want average altitude per event, not CPA distance.
-        // /gg (Codex) caught a regression where this fed `min_dist_m`
-        // into `alt_sum` — popup band detail then reported CPA values
+        // Feeding `min_dist_m` into `alt_sum` would report CPA values
         // labelled as altitude. Use the peak-encounter altitude
         // weighted by flight_weight to match cruise.rs band stats.
         let alt_w_sum = acc.peak_altitude_m * acc.flight_weight;

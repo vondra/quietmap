@@ -174,13 +174,13 @@ pub fn is_helicopter_profile(profile_idx: u8) -> bool {
     cls < CLASS_NAMES.len() && CLASS_NAMES[cls] == "HELICOPTER"
 }
 
-/// Classes sampled over the full-year (365-day) window in hybrid
+/// Classes sampled over the full available-year window in hybrid
 /// extracts; everything else keeps the 12-day first-of-month airline
-/// window (`ga-365d-hybrid-plan.md`). GA + helicopter traffic is
+/// window. GA + helicopter traffic is
 /// sporadic and one-off-heavy, so a 12-day sample weights a single
 /// flight ×30.42 (+14.8 dB phantom — Kytín audit 2026-06-12); sampling
-/// those classes over all 365 days makes a one-off contribute exactly
-/// 1/365 of its energy while genuinely daily patterns are unchanged.
+/// those classes over `ga_n_days` makes a one-off contribute exactly
+/// `1/ga_n_days` of its energy while genuinely daily patterns are unchanged.
 ///
 /// Deliberately NOT included (plan §3):
 /// - `PROP_DH8D` — the *airline turboprop* class (AT72/76, DH8x, SF34,
@@ -213,22 +213,23 @@ pub fn is_ga_sampled_profile(profile_idx: u8) -> bool {
 }
 
 /// Schema-metadata key holding the per-class sample-day vector that the
-/// hybrid GA estimator weights against (`ga-365d-hybrid-plan.md` §2,
-/// contract option C). A `NUM_CLASSES`-length comma vector indexed by
-/// noise-class idx: GA-sampled classes carry `ga_n_days` (365), every
+/// hybrid GA estimator weights against. A `NUM_CLASSES`-length comma vector
+/// indexed by
+/// noise-class idx: GA-sampled classes carry `ga_n_days`, every
 /// other class carries the airline window `n_days` (12). A single-window
 /// extract stamps the uniform `n_days` vector. Stamped by
 /// `aircraft_extract::arrow_schemas::with_n_days_and_windows`.
 pub const SAMPLE_DAYS_BY_CLASS_KEY: &str = "sample_days_by_class";
 
-/// Per-class energy/count weight LUT for the GA 365-day hybrid estimator
-/// (`ga-365d-hybrid-plan.md` §2). `w[c] = n_days / sample_days_by_class[c]`:
+/// Per-class energy/count weight LUT for the GA hybrid estimator.
+/// `w[c] = n_days / sample_days_by_class[c]`:
 /// airline classes (sampled over the same `n_days` window the consumer
-/// divides by) get `1.0`; GA classes sampled over 365 days get
-/// `n_days / 365 ≈ 0.0329`. Applying `÷ n_days` (unchanged everywhere)
-/// then `× w[class]` at each row-accumulation site yields `E / 365` for a
+/// divides by) get `1.0`; GA classes get `n_days / ga_n_days`. Applying
+/// `÷ n_days` (unchanged everywhere) then `× w[class]` yields
+/// `E / ga_n_days` for a
 /// GA row and `E / n_days` for an airline row — so a one-off GA flight
-/// contributes `1/365` of its energy instead of `1/12` (kills the +14.8 dB
+/// uses the full-year frequency instead of the airline-window frequency
+/// (kills the +14.8 dB
 /// Kytín phantom), while genuinely-daily GA patterns are unchanged.
 ///
 /// `veh_kind = 1` (GSE) rows MUST keep weight `1.0` — their `class_idx`
@@ -242,7 +243,7 @@ pub struct ClassWeights {
     /// same window). Equals `n_days` for a uniform (non-hybrid) vector.
     /// The popup's split-window count math (`microseg_unique_ga_*` and the
     /// airport-summary GA fid sets) divides by THIS, while the non-GA
-    /// counts divide by `n_days` (`ga-365d-hybrid-plan.md` §2 / delta 2).
+    /// counts divide by `n_days`.
     ga_n_days: u16,
 }
 
@@ -624,9 +625,9 @@ impl NpdLuts {
 /// Build a 128-bin LAmax LUT mirroring `build_npd_lut` for SEL. Beyond 25 000 ft
 /// we extrapolate via spherical divergence (`−20·log10(d/d_ref)`) plus the SEL
 /// per-profile `alpha_eff` for atmospheric absorption — peak SPL and integrated
-/// energy share the same source spectrum, so they share `alpha_eff`. (The prior
-/// clamp at the last NPD point would have overstated far-cruise LAmax by ~18 dB
-/// at 50 k ft slant — Codex/Gemini /gg flagged this as a popup-band false-positive.)
+/// energy share the same source spectrum, so they share `alpha_eff`. The prior
+/// clamp at the last NPD point overstated far-cruise LAmax by ~18 dB at 50 k ft
+/// slant and caused popup-band false positives.
 pub fn build_lmax_lut(profile: &NpdProfile, is_departure: bool) -> [f64; NPD_LUT_BINS + 1] {
     let lmax = if is_departure {
         &profile.departure_lmax

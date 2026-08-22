@@ -9,8 +9,7 @@
 //! Equivalence to the legacy whole-bbox build: a tile is assigned to the
 //! region of its CENTRE R4 (matching the old per-tile centre-R4 source
 //! pick), and the kernels sum commutatively over the concatenated
-//! per-R4 views — so a tile gets the identical source set either way
-//! (gg review 2026-05-25).
+//! per-R4 views, so both paths give a tile the identical source set.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -34,10 +33,10 @@ pub struct RegionCtx<'a> {
     pub zoom: u8,
     pub sel: SourceSel,
     pub n_days: u16,
-    /// GA 365-day hybrid per-class weight LUT, resolved once build-wide
+    /// GA full-year hybrid per-class weight LUT, resolved once build-wide
     /// from the source arrows' `sample_days_by_class` metadata
     /// (`worklist::resolve_class_weights`). Threaded into the airborne
-    /// scatter (`ga-365d-hybrid-plan.md` §2).
+    /// scatter.
     pub class_weights: noise_compute::emission::aircraft::ClassWeights,
     pub batch_n: u32,
     pub output: &'a Path,

@@ -71,7 +71,7 @@ Segments with no `ref` match above are **not stamped by this enricher**; rows st
 
 **Thai vehicle split**: 62/10/13/**15** rural and 60/8/7/**25** Bangkok (light/medium/heavy/motorcycle). Motorcycles are the single largest vehicle class in central Bangkok and dominate rural routes too.
 
-*A measured DRR-derived arm (M6.3) was built and then parked within a day: the census number-band → engine-class crosswalk proved invalid (/gg review — 1xxx–5xxx sections are dominantly engine class 4, not 3, so band-median defaults biased class-3 roads low). It re-lands after class attribution via exact-ref joins.*
+*A measured DRR-derived arm (M6.3) was parked because the census number-band → engine-class crosswalk proved invalid: 1xxx–5xxx sections are dominantly engine class 4, not 3, so band-median defaults biased class-3 roads low. It re-lands after class attribution via exact-ref joins.*
 
 **Coverage**: 12M+ OSM road segments scanned across 402 Thai hexes.
 
@@ -109,7 +109,7 @@ The **Office of Transport and Traffic Policy and Planning (สนข., OTP)** un
 
 ### Critical pipeline limitation: MRT Bangkok subway NOT extracted
 
-**Bangkok MRT Blue + Purple + Yellow + Pink lines are all tagged `railway=subway` in OSM.** The pipeline's OSM extractor (`engine/osm-extract/src/classify.rs:55-62`) only accepts `rail | tram | light_rail | narrow_gauge | funicular`, so **all 4 MRT lines (~120 km) are missing from `railways.arrow`**.
+**Bangkok MRT Blue + Purple + Yellow + Pink lines are all tagged `railway=subway` in OSM.** The pipeline's OSM extractor (`engine/osm-extract/src/classify/ways.rs:28-30`) only accepts `rail | tram | light_rail | narrow_gauge | funicular`, so **all 4 MRT lines (~120 km) are missing from `railways.arrow`**.
 
 The Namtang GTFS parser correctly processes MRT frequency data (1,595 trains/day at Tao Poon), but there are no matching OSM segments to write to.
 
@@ -149,7 +149,7 @@ WRI Global Power Plant Database via `/enrich-global` covers **196 Thai power pla
 - **Industrial Estate Authority of Thailand (IEAT, การนิคมอุตสาหกรรม)** at [ieat.go.th](https://www.ieat.go.th/) operates 68 industrial estates including **Map Ta Phut** (Rayong — major petrochemical), **Eastern Seaboard** (Rayong/Chonburi), **Laem Chabang** (Chonburi — port + industrial), **Pinthong**, **Bangpoo**, **Lat Krabang**, **Hemaraj**. No machine-readable open data — all visible only as OSM `landuse=industrial` polygons.
 - **PTT / Siam Cement Group (SCG) / Thai Oil** — no open facility registries.
 
-No NACE sector enrichment applied to Thai industrial sites. Map Ta Phut, Laem Chabang, Bang Pu, and Eastern Economic Corridor (EEC) facilities model at the generic 93 dB CNOSSOS industrial default.
+No NACE sector enrichment is applied to Thai industrial sites. Map Ta Phut, Laem Chabang, Bang Pu, and Eastern Economic Corridor facilities use the generic OSM industrial base profile with no NACE override.
 
 ## Validation
 

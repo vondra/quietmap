@@ -33,8 +33,8 @@ pub const RAIL_PERIOD_HOURS: [f64; 3] = [12.0, 4.0, 8.0];
 /// Per-region, per-category day/evening/night traffic split for rail.
 ///
 /// Replaces the flat 65/20/15 that was applied to passenger AND freight alike —
-/// the cause of rail `L_night` always being exactly `Lden − 7.91 dB`
-/// (audit rail-report §G.4). `pax` and `frt` each sum to 1.0; freight shares
+/// the cause of rail `L_night` always being exactly `Lden − 7.91 dB`.
+/// `pax` and `frt` each sum to 1.0; freight shares
 /// only ever differ from `pax` for [`RailType::Rail`] (other types carry no
 /// freight, so the resolver hands them `frt = pax` — belt and suspenders).
 #[derive(Debug, Clone, Copy)]
@@ -47,7 +47,7 @@ impl RailTimeDist {
     /// `(pax_share, frt_share, period_hours)` per END period — the single
     /// iterator every rail period loop consumes. Keeping the zip here (not
     /// re-spelled at each call site) is what makes the popup kernel, the heatmap
-    /// loader, and the reach solver provably share one split (plan delta 4).
+    /// loader, and the reach solver share one split.
     #[inline]
     pub fn periods(&self) -> [(f64, f64, f64); 3] {
         [
@@ -63,8 +63,8 @@ impl RailTimeDist {
 /// 54.6 % at night). The 16 h END "day" block (06–18 day + 18–22 evening)
 /// carries the 129 daytime trains, split 12:4 by hour ⇒ 129·12/16 = 96.75 day,
 /// 129·4/16 = 32.25 evening; night = 155. Total 96.75+32.25+155 = 284 ⇒
-/// **0.3407 / 0.1136 / 0.5458** (shipping the EXACT fractions, not the rounded
-/// 0.33/0.13/0.54 — Codex delta 3). Corroboration: EBA Lärm-Monitoring
+/// **0.3407 / 0.1136 / 0.5458** (shipping the exact fractions, not the rounded
+/// 0.33/0.13/0.54). Corroboration: EBA Lärm-Monitoring
 /// Jahresbericht 2023 (night Lm freight-dominated at ~all 19 stations); UBA.
 const EU_FREIGHT: [f64; 3] = [96.75 / 284.0, 32.25 / 284.0, 155.0 / 284.0];
 
@@ -106,7 +106,7 @@ const TD_WORLD_TRAM: RailTimeDist = RailTimeDist {
 /// NO, UK. Keyed on the country code, NOT [`crate::admin::Continent::Europe`] —
 /// that label is *geographic* Europe (it includes RU-west / UA / BY), and the
 /// EP/EBA freight curve is only sourced for the central/western EU corridor
-/// network (Codex delta 2). Geographic-Europe countries outside this list fall
+/// network. Geographic-Europe countries outside this list fall
 /// through to the world/uniform table.
 const EU_ISO_WHITELIST: [&[u8; 2]; 30] = [
     b"AT", b"BE", b"BG", b"HR", b"CY", b"CZ", b"DK", b"EE", b"FI", b"FR", b"DE", b"GR", b"HU",
@@ -150,7 +150,7 @@ pub fn rail_time_dist(admin: Admin, rail_type: RailType) -> &'static RailTimeDis
     }
 }
 
-// ── Per-segment admin (plan M5, 2026-07-28) ─────────────────────────────────
+// Per-segment admin
 //
 // The M3 bake (`pipeline/enrich-roads-country.ts`) stamps three all-or-none
 // columns into every `railways.arrow`: `country_iso` (UInt16, two ASCII bytes
@@ -377,9 +377,8 @@ pub fn default_speed(rail_type: RailType) -> f64 {
 
 /// Free-field Lden [dB(A)] of one rail row at horizontal distance `d` metres.
 ///
-/// **Reference propagation** (the per-row reach solver's spine — identical to
-/// the derivation that reproduced the 2026-05-24 Codex empirical at the 7 km
-/// boundary, `.claude/plans/heatmap-orchestrator-audit/layer-line.md` §A):
+/// **Reference propagation** (the per-row reach solver's spine, which
+/// reproduces the default mainline boundary at 7 km):
 /// ISO 9613-2 cylindrical line spreading `10·log10(2π·d)` + atmospheric
 /// absorption `α_atm·d/1000`, **best-case ground** (`G = 0`, hard reflective
 /// ground — the loudest the receiver can ever hear, so reach never under-shoots
@@ -584,8 +583,8 @@ mod tests {
     /// the WORLD split (`Admin::UNKNOWN`, freight 0.50/0.167/0.333) reaches
     /// ≈9.2 km — PAST the retired blanket `RAILWAY_MAX_RADIUS = 7000` because
     /// even the uniform world split lifts the freight night share 0.15→0.333 vs
-    /// the old flat split (layer-line.md §A's 25.3 dB @ 7 km was the FLAT-split
-    /// crossing). The dominant mainline class is no longer perfectly
+    /// the old flat split, whose crossing was 25.3 dB at 7 km. The dominant
+    /// mainline class is no longer perfectly
     /// value-neutral — that is the intended C1 effect (the night-heavy
     /// redistribution reaches the fringe ring), bounded by the 10 km clamp.
     ///
@@ -623,8 +622,8 @@ mod tests {
         );
     }
 
-    /// HONESTY FIX: a 300 km/h high-speed PASSENGER corridor is 30.8 dB @ 7 km
-    /// (layer-line.md §A) — 5.8 dB louder than the boundary. Pax-only, so the EU
+    /// HONESTY FIX: a 300 km/h high-speed passenger corridor is 30.8 dB at 7 km,
+    /// 5.8 dB louder than the boundary. Pax-only, so the EU
     /// vs world freight split is irrelevant (pax night 0.10 both).
     ///
     /// Its unclamped crossing was ≈9.3 km and is ≈11.9 km since the CNOSSOS
@@ -658,8 +657,8 @@ mod tests {
 
     /// PERF WIN: tram (120 services/day @ 40 km/h) is only 16.8 dB @ 7 km —
     /// far below the boundary, so it shrinks. Calibrated reach ≈4.3-4.7 km
-    /// (continuous form; layer-line.md's 3.5 km bucket was the rounded
-    /// light-rail figure — the busier 120-train tram default lands a touch
+    /// (continuous form; the 3.5 km bucket was the rounded light-rail figure,
+    /// while the busier 120-train tram default lands a touch
     /// higher). Lighter rail classes shrink further still. Was ≈3.6 km before
     /// the CNOSSOS hard-ground floor made the G = 0 free-field limit −3 dB
     /// instead of 0 dB; recomputed, not re-fitted.
@@ -703,8 +702,8 @@ mod tests {
 
     // ── C1: per-region, per-category period shares ──────────────────────────
 
-    /// Every shipped table row's pax AND frt shares must sum to 1.0 (energy is
-    /// only redistributed across periods, never created/destroyed). Plan §3.5.
+    /// Every shipped table row's pax AND frt shares must sum to 1.0; energy is
+    /// only redistributed across periods, never created or destroyed.
     #[test]
     fn time_dist_shares_sum_to_one() {
         for td in [&TD_EU_RAIL, &TD_EU_TRAM, &TD_WORLD_RAIL, &TD_WORLD_TRAM] {
@@ -715,7 +714,7 @@ mod tests {
         }
     }
 
-    /// Plausibility bands (plan §3.5): EU freight night ∈ [0.45, 0.60]; EU pax
+    /// Plausibility bands: EU freight night ∈ [0.45, 0.60]; EU pax
     /// night ∈ [0.05, 0.15]; tram night ≤ 0.08; non-EU freight night = 8/24.
     // assertions_on_constants: the tram bound asserts a single const ≤ literal;
     // kept as a runtime guard (with its message) alongside the range checks it sits with.
@@ -744,7 +743,7 @@ mod tests {
         );
     }
 
-    /// The EXACT derived EU freight fractions (Codex delta 3) — 96.75/32.25/155
+    /// The exact derived EU freight fractions — 96.75/32.25/155
     /// of 284 — must ship, not the rounded-then-drifted 0.33/0.13/0.54.
     #[test]
     fn eu_freight_exact_derived_fractions() {
@@ -765,8 +764,8 @@ mod tests {
         );
     }
 
-    /// The resolver hands trams/light-rail/etc the urban PAX curve in BOTH slots
-    /// (no freight ever applies to rail_type 1-4). Plan risk §5.
+    /// The resolver hands trams/light-rail/etc the urban PAX curve in both slots;
+    /// no freight ever applies to rail_type 1-4.
     #[test]
     fn freight_shares_never_apply_to_non_rail_types() {
         for rt in [
@@ -790,8 +789,8 @@ mod tests {
     }
 
     /// Geographic Europe outside the EU whitelist (RU/UA/BY) must take the WORLD
-    /// table, not the EU freight curve (Codex delta 2 — `Continent::Europe` is
-    /// geographic, not the EU).
+    /// table, not the EU freight curve; `Continent::Europe` is geographic,
+    /// not the EU.
     #[test]
     fn geographic_europe_outside_whitelist_is_world() {
         for iso in [*b"RU", *b"UA", *b"BY"] {
@@ -860,8 +859,8 @@ mod tests {
     }
 
     /// C1 CORE INVARIANT: a mixed EU line's `Ln − Lden` must NOT equal the old
-    /// −7.91 dB identity (the flat-split artifact this milestone kills,
-    /// rail-report §G.4). And a freight-heavy EU corridor must have night HOURLY
+    /// −7.91 dB identity (the flat-split artifact this milestone kills). A
+    /// freight-heavy EU corridor must also have night hourly
     /// energy exceed day — the physical point of the freight night split.
     #[test]
     fn eu_split_breaks_minus_7_91_identity_and_night_exceeds_day() {
@@ -897,7 +896,7 @@ mod tests {
         );
     }
 
-    /// GATE UPPER-BOUND REGRESSION (Codex /gg CRITICAL): the popup early-exit in
+    /// GATE UPPER-BOUND REGRESSION: the popup early-exit in
     /// `compute_railways` must screen on the LOUDEST period, not day. For a quiet,
     /// slow EU freight row the night block (freight 0.5458 over 8 h) is louder than
     /// day (freight 0.3407 over 12 h), so a day-only gate would prune a segment the
@@ -945,9 +944,9 @@ mod tests {
         );
     }
 
-    /// A PAX-ONLY line's Lden shifts only modestly vs the old flat split — its
-    /// night fraction drops 0.15→0.10, so Lden falls ~0.8 dB (plan §3.5:
-    /// −0.8 ± 0.2 dB). Computed against the retired flat 0.65/0.20/0.15 split.
+    /// A pax-only line's Lden shifts only modestly vs the old flat split: its
+    /// night fraction drops 0.15→0.10, so Lden falls −0.8 ± 0.2 dB.
+    /// Computed against the retired flat 0.65/0.20/0.15 split.
     #[test]
     fn pax_only_lden_shift_vs_old_flat_split() {
         let cz = Admin {

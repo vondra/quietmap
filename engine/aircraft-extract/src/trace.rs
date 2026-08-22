@@ -91,8 +91,7 @@ pub fn read_day_traces(day_dir: &Path) -> Result<Vec<AircraftTrace>> {
 /// Outcome counters for the gzip typecode prefix probe in
 /// [`read_day_traces_filtered`]. The probe is an optimization ONLY —
 /// a miss falls back to the full inflate+parse and the post-parse
-/// filter, never to classification by absence
-/// (`ga-365d-hybrid-plan.md`, binding delta 5).
+/// filter, never to classification by absence.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct TypecodeProbeStats {
     /// `"t":"…"` recovered from the inflated prefix → the probe alone
@@ -181,8 +180,8 @@ pub fn read_day_traces_filtered(
             }
             None => {
                 stats.probe_misses += 1;
-                // Binding delta 5: never classify by absence — full
-                // parse, then filter on the parsed typecode.
+                // Never classify by absence: parse fully, then filter on
+                // the parsed typecode.
                 if let Ok(Some(trace)) = parse_trace(gz_bytes.as_slice()) {
                     if filter(&trace.aircraft_type) {
                         traces.push(trace);
@@ -205,7 +204,7 @@ const TYPECODE_PROBE_DECOMPRESSED_BYTES: usize = 512;
 /// trace and scan for the `"t":"<typecode>"` header field. `None` is a
 /// probe MISS (no `"t"` key, non-string value, value crossing the
 /// probe window, undecodable gzip) — callers MUST fall back to the
-/// full parse on miss (`ga-365d-hybrid-plan.md`, binding delta 5), so
+/// full parse on miss, so
 /// a miss can never misclassify a trace.
 fn probe_typecode_prefix(gz_bytes: &[u8]) -> Option<String> {
     let mut head = [0u8; TYPECODE_PROBE_DECOMPRESSED_BYTES];
@@ -583,7 +582,7 @@ mod tests {
         tmp
     }
 
-    /// End-to-end probe semantics (`ga-365d-hybrid-plan.md` delta 5):
+    /// End-to-end probe semantics:
     /// probe hits skip rejected traces pre-parse; probe misses (late
     /// `"t"`, absent `"t"`) ALWAYS full-parse and are filtered on the
     /// parsed typecode — a trace is never classified by absence.

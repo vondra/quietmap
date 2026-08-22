@@ -23,8 +23,8 @@ pub const ENTRY_BYTES: u64 = 16;
 /// store can hold mixed codecs (fleet Brotli blobs + central zstd rewrites).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TileCodec {
-    /// A complete HM3 v2 file image: whole-file Brotli of header + cells —
-    /// byte-identical to a legacy loose `.bin`. Ships verbatim into pmtiles
+    /// A complete HM3 file image: whole-file Brotli of header + cells —
+    /// byte-identical to its loose staging `.bin`. Ships verbatim into PMTiles
     /// (`TileStore::get_hm3_by_entry`) — since 2026-07-16 this is how EVERY
     /// central writer (`build_heatmap_combine`, `pyramid::build_one_level`,
     /// via `TileStore::put_cells_hm3`) stores its output too, not just
@@ -32,7 +32,7 @@ pub enum TileCodec {
     /// once at write time, amortized over the days between publishes,
     /// instead of hundreds of GB of it being redone on every publish.
     BrotliHm3 = 0,
-    /// zstd-1 over the raw 65,536 cells (NO HM3 header — zoom/source_id live
+    /// zstd-1 over the raw cell grid (no HM3 header — zoom/source_id live
     /// in the store header). LEGACY READ-ONLY since 2026-07-16 — it was the
     /// cheap working codec central rewrites used before that date, which
     /// forced `tile-store-pack` to zstd-decode-then-brotli-q9-re-encode every
@@ -88,8 +88,7 @@ impl Entry {
     }
 }
 
-/// Header of either file. `tile_px` is stored so the 512-tile transition is a
-/// header field, not a recompile guess.
+/// Header of either file. `tile_px` makes the stored grid size explicit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Header {
     pub zoom: u8,

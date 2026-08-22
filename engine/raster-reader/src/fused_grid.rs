@@ -262,21 +262,18 @@ impl FusedGrid {
     /// Rasterise one noise-barrier segment into the BUILDING channel: every
     /// grid cell the segment crosses gets `building = max(building, height)`.
     ///
-    /// NOT wired into any production path (B8/C9 verdict, 2026-06-11): this
-    /// was the candidate GPU barrier representation (the CUDA surface kernels
-    /// read screening obstacles from the 30 m cover raster and have no
-    /// vector-barrier input), but the quantified comparison —
+    /// Test-only rejected barrier representation. CPU and GPU production paths
+    /// both consume exact vector barriers; the quantified comparison —
     /// tile-painter `tests/barrier_screening.rs::w2_vector_vs_burn_
     /// quantified_decision_record` — measured the burn UNDER-screening by
     /// mean +3.7 / max +13.8 dB at wall-adjacent shadow pixels: the bilateral
     /// ray cadence (≥ ~30 m sample spacing) steps over a one-cell-thin burned
-    /// wall on most paths, while the CPU vector path
-    /// (`path_effects::screening_attenuation`) maps the wall onto the nearest
-    /// existing sample and never misses. Thin-line features cannot be
+    /// wall on most paths, while the exact vector path
+    /// (`path_effects::screening_attenuation`) evaluates each crossing at its
+    /// own chainage. Thin-line features cannot be
     /// faithfully represented in a raster sampled at ≥ cell-size cadence, so
-    /// barriers ship CPU-vector-only and this function remains as the
-    /// decision-record apparatus. If you re-open the GPU question, burn a
-    /// CLONE (receiver reflection is pre-baked from the unburned halo by
+    /// this function remains only as decision-record apparatus. Tests must burn
+    /// a clone (receiver reflection is pre-baked from the unburned halo by
     /// `FusedTileZ13::build_with_halo` — barriers must screen, never reflect).
     ///
     /// Supercover traversal (Amanatides & Woo, 4-connected): a diagonal wall
@@ -911,8 +908,7 @@ mod tests {
 
     #[test]
     fn fused_building_enclosure_near_bbox_edge() {
-        // Regression test for Gemini-flagged bug: insufficient bbox
-        // margin made `building_enclosure()` silently clamp the 3×3
+        // Insufficient bbox margin made `building_enclosure()` silently clamp the 3×3
         // probe to edge pixels at hex boundaries. Current 8-cell margin
         // covers the metric probe (ENCLOSURE_RADIUS_M = 75 m ≈ 2.4 lat
         // cells, ~3.4 lon cells at 50°N) plus rounding slack.
@@ -931,8 +927,8 @@ mod tests {
 
     #[test]
     fn fused_oob_clamp_no_extrapolation() {
-        // Regression test for Gemini-flagged OOB bilinear extrapolation.
-        // Query outside the FusedGrid bbox — pre-fix would extrapolate
+        // Query outside the grid must clamp instead of extrapolating.
+        // The pre-fix path would extrapolate
         // linearly into space (negative `fr`/`fc`). Post-fix clamps to
         // the edge elevation.
         let Some((_, fg)) = test_fused() else {

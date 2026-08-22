@@ -10,14 +10,9 @@
 //! every writable `open`/`create` takes an exclusive OS `flock` on a
 //! per-(layer,zoom) `z{N}.lock` file BEFORE it recovers the tail or reserves any
 //! offset, and holds it until the `TileStore` drops (see [`acquire_write_lock`]).
-//! Without it two writer processes that opened the same store recovered the SAME
-//! tail (it is a process-local `AtomicU64`, seeded from the data-file length on
-//! open) and reserved IDENTICAL offsets, physically overwriting each other's
-//! blobs while each committed its own index entry — the industrial/z12 overlap
-//! corruption of 2026-07 (root cause: dual /gg, task #12; the earlier
-//! caller-side `.ingest.lock` only ever covered ingest×ingest, leaving
-//! `tile-store-transcode` and any future writer unguarded). Read-only opens take
-//! NO lock: they reserve nothing, so they must neither block writers nor be
+//! Without it two writer processes can recover the same process-local tail and
+//! reserve identical offsets, overwriting each other's blobs. Read-only opens
+//! take no lock: they reserve nothing, so they neither block writers nor are
 //! blocked by them.
 
 use std::fs::{File, OpenOptions};
@@ -242,8 +237,8 @@ impl TileStore {
         self.header.source_id
     }
 
-    /// Tile side in pixels (256 pre-shift, 512 post) — the size-agnostic
-    /// combine/pyramid derive their cell counts from this, never from a const.
+    /// Stored tile side in pixels. Size-agnostic readers derive cell counts
+    /// from this header, never from a constant.
     pub fn tile_px(&self) -> u16 {
         self.header.tile_px
     }
@@ -313,7 +308,7 @@ impl TileStore {
     /// bytes don't decode" (a known, self-healing corrupt-blob class, safe to
     /// treat as absent — see `pyramid::get_cells_lenient`) can call
     /// [`Self::get_blob`] then this separately instead of only getting one
-    /// combined `Result` (/gg finding, 2026-07-14). `pub`, not `pub(crate)`:
+    /// combined `Result`. `pub`, not `pub(crate)`:
     /// `tile-store-fsck` (a separate bin crate) needs the same fetch/decode
     /// split to distinguish an I/O failure from a corrupt blob.
     pub fn decode_cells(&self, codec: TileCodec, blob: &[u8]) -> Result<Vec<u8>> {
@@ -328,7 +323,7 @@ impl TileStore {
         Ok(cells)
     }
 
-    /// A complete HM3 v2 file image (whole-file Brotli) whatever the stored
+    /// A complete HM3 file image (whole-file Brotli) whatever the stored
     /// codec — verbatim for [`TileCodec::BrotliHm3`], composed via
     /// [`wire_hm3::encode_tile_bytes`] for working-codec tiles. The ship-out
     /// path: the pmtiles packer stays codec-blind.
@@ -342,27 +337,9 @@ impl TileStore {
     /// [`Self::get_hm3`] for an entry already in hand (see
     /// [`Self::get_blob_by_entry`]).
     ///
-    /// SHIP-OUT PATH — codec-blind and, for `BrotliHm3`, VERBATIM: no decode,
-    /// no validation, just the stored bytes back. Until 2026-07-16 this arm
-    /// also decode+magic/version/source_id-validated every `BrotliHm3` blob
-    /// (a /gg finding, 2026-07-14, after a corrupt pre-flock-fix blob rode
-    /// verbatim into a published archive) — that cost ~20 % of a publish's
-    /// CPU (full Brotli decode + a fresh allocation per tile) for a check that
-    /// only ever needs to run ONCE before a publish, not once per read. It now
-    /// lives in [`Self::validate_hm3_by_entry`], run by the MANDATORY
-    /// `tile-store-fsck` core `tile-store-pack` runs over every captured layer
-    /// before archive creation — it already re-detects the
-    /// exact aliasing/corrupt-blob class this validation existed for (its own
-    /// module doc), so ship-out no longer needs to repeat it per tile.
-    /// Ingest-time validation (`tile_store_ingest.rs`, `put_blob`'s own
-    /// invariant) is the other half: every writer of externally-produced
-    /// `BrotliHm3` bytes already checks them before they ever land in the
-    /// data log.
-    ///
-    /// `ZstdCells` (legacy central rewrites, pre-2026-07-16 — see
-    /// [`TileCodec`]) is still decoded and re-encoded to a fresh HM3 image
-    /// here: the one remaining per-publish Brotli-q9 cost, paid only for
-    /// entries not yet rewritten through [`Self::put_cells_hm3`].
+    /// SHIP-OUT PATH: `BrotliHm3` bytes return verbatim; the mandatory
+    /// pre-publish fsck validates them once per captured layer. `ZstdCells`
+    /// remains a legacy compatibility path and is decoded into a fresh HM3.
     pub fn get_hm3_by_entry(&self, e: &Entry) -> Result<Vec<u8>> {
         let blob = self.get_blob_by_entry(e)?;
         match e.codec {
@@ -421,15 +398,11 @@ impl TileStore {
     /// (migration blobs are non-silent by construction — `write_tile` never
     /// wrote silent tiles).
     ///
-    /// INVARIANT: a `BrotliHm3` blob ships VERBATIM from here into pmtiles —
-    /// nothing downstream re-decodes it at ship-out time (2026-07-16:
-    /// `get_hm3_by_entry` stopped decode-validating too; see its doc — that
-    /// gate moved to ingest + the mandatory pre-publish `tile-store-fsck`).
-    /// A writer that stores an EXTERNALLY-produced blob it did not just
+    /// A writer that stores an externally produced blob it did not just
     /// encode itself (tile-store-ingest, tile-store-transcode: fleet bytes,
-    /// or bytes read back off a legacy loose tree) MUST validate it (decode +
+    /// or bytes read back from a loose staging tree) MUST validate it (decode +
     /// magic/version/size) before calling `put_blob` — a new such writer must
-    /// add the same gate (/gg Codex, 2026-07-09). [`Self::put_cells_hm3`] is
+    /// add the same gate. [`Self::put_cells_hm3`] is
     /// exempt: it encodes the blob itself, in this same call, from cells the
     /// caller already holds valid — there is no external byte stream to
     /// distrust, only a hypothetical bug in `encode_tile_bytes` itself, which
@@ -503,15 +476,9 @@ impl TileStore {
             self.delete(x, y)?;
             return Ok(0);
         }
-        // The HM3 wire format is version-locked to ONE global tile size (wire_hm3.rs's own doc:
-        // "v2 (256²) is gone" — VERSION=3 IS 512² by spec, not a per-store parameter), so
-        // encode_tile_bytes asserts cells.len() against the CURRENT BUILD's crate::grid::TILE_PX,
-        // not this store's own header. Every current store already satisfies this (put_cells_hm3
-        // is only reachable at the store's own tile_px, which equals the global one everywhere
-        // this ships), but a store the crate itself created at a NOW-stale size — the exact
-        // condition tile-store-fsck's tile_px_mismatch check exists to catch before a publish —
-        // must not turn into an assert! panic that crashes a whole pyramid/combine run; it fails
-        // this one call with a clean, diagnosable Result instead (fsck's own doc, 2026-07-14).
+        // HM3 v3 has one global 512-pixel tile size, while a store header can
+        // expose a stale size. Reject that mismatch before encode_tile_bytes
+        // asserts, so one bad store cannot panic a pyramid/combine run.
         if usize::from(self.header.tile_px) != crate::grid::TILE_PX {
             bail!(
                 "put_cells_hm3 {x}/{y}: store tile_px {} ≠ current build TILE_PX {} — BrotliHm3 \
@@ -708,7 +675,7 @@ mod tests {
     fn brotli_blob_round_trips_through_get_cells() {
         let dir = tempfile::tempdir().unwrap();
         let s = TileStore::create(dir.path(), 6, SOURCE_ID_ROAD, TILE_PX as u16).unwrap();
-        // Build a legacy HM3 v2 blob via write_tile, store it verbatim.
+        // Build an HM3 blob via write_tile and store it verbatim.
         let cells = cells_with(&[(123, 77)]);
         let tmp = dir.path().join("legacy.bin");
         wire_hm3::write_tile(&tmp, &cells, SOURCE_ID_ROAD, false).unwrap();

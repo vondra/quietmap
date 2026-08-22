@@ -6,9 +6,9 @@
 //! alone is correct (Decision #12).
 //!
 //! Per-row bbox prefilter drops out-of-reach rows before the sub-segment
-//! loop. Per-sub-segment terrain elevations are pre-sampled at extract
-//! time (v15 Opt A) so the hot path no longer calls
-//! `SegmentTerrain::sample` (5 raster lookups). A per-thread accumulator
+//! loop. Extract-time endpoint terrain samples feed the stale-ground and
+//! Filter D checks; the airborne path does not run a five-point terrain
+//! validity gate. A per-thread accumulator
 //! with rayon fold/reduce mirrors cruise and ground_ops; per-thread stats
 //! (`AirborneStats`) fold the same way — no atomics, no hot-loop contention.
 
@@ -44,7 +44,7 @@ use crate::grid::TILE_PX;
 /// a near-floor far segment could exceed 0.5 dB. Before trusting this on
 /// mountainous regions, re-validate with `compare_hm3` exact-vs-coarse on
 /// such a tile (e.g. LOWI) and, if it bites, raise the cutoff with tile
-/// terrain roughness (`max(500, k·(max-min rx_alt))`). /gg consensus.
+/// terrain roughness (`max(500, k·(max-min rx_alt))`).
 const NEAR_SLANT_M: f64 = 500.0;
 
 /// Parity escape hatch: with `QM_AIRBORNE_FORCE_EXACT=1` every admitted
@@ -141,10 +141,10 @@ impl AirborneStats {
 pub fn scatter_tile(
     tile: &FusedTileZ13,
     airborne: &[AirborneRowView<'_>],
-    // GA 365-day hybrid per-class weight LUT (`ga-365d-hybrid-plan.md` §2).
-    // Each sub-seg's energy is scaled by `class_weights.get(class)` so a
-    // 365-day-sampled GA one-off divides by 365 not 12. Uniform for
-    // non-hybrid extracts (byte-identical to the pre-hybrid scatter).
+    // GA hybrid per-class weight LUT.
+    // Each sub-segment's energy is scaled by `class_weights.get(class)` so a
+    // GA one-off divides by `ga_n_days`, not `n_days`. Uniform for non-hybrid
+    // extracts (byte-identical to the pre-hybrid scatter).
     class_weights: &aircraft::ClassWeights,
     accum: &mut TileAccumulator,
 ) -> AirborneStats {
@@ -220,7 +220,7 @@ pub fn scatter_tile(
 
                 // GA hybrid weight for this row's class — row-constant (one
                 // airborne row = one flight = one class). Folded into every
-                // sub-seg's energy before scatter (`ga-365d-hybrid-plan.md` §2).
+                // sub-segment's energy before scatter.
                 let class_weight =
                     class_weights.get(aircraft::noise_class_of(row.profile_idx)) as f32;
 
@@ -289,10 +289,8 @@ pub fn scatter_tile(
                         ground_ops_kind: GROUND_OPS_KIND_NONE,
                         source_id: row.source_id as u16,
                     };
-                    // v16 (K3): only start/end terrain elevs are stored.
-                    // Mirror popup: drop the popup-side validity call (Stage 1
-                    // absorbed it via `airborne_chord_clears_peaks`); keep
-                    // the endpoint ground-stale gate (start/end AGL ≤ 15 m).
+                    // Only start/end terrain elevations are stored. Keep the
+                    // endpoint ground-stale gate (start/end AGL ≤ 15 m).
                     // Filter D extrapolation cuts pre-computed once per
                     // sub-seg from the two endpoint elevs, then passed into
                     // the per-pixel `segment_sel_with_cuts` call so the

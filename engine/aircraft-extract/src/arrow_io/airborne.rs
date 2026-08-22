@@ -18,7 +18,7 @@ use super::write_record_batches;
 
 /// `n_days` (airline window) + `ga_n_days` (GA-class window, 0 =
 /// single-window) stamp the GA hybrid metadata so the popup/heatmap
-/// weight 365-day-sampled GA rows at 1/365 (`ga-365d-hybrid-plan.md` §2).
+/// weight GA rows at `1/ga_n_days`.
 pub fn write_airborne(
     path: &Path,
     rows: &[AirborneEvent],
@@ -218,8 +218,8 @@ mod tests {
             .unwrap();
         assert_eq!(cs.value(0), "TVS100P");
         assert_eq!(at.value(0), b"A320");
-        // v16 (K3) keeps only start/end terrain elevs; mid/q1/q3 absorbed
-        // into Stage 1's chord mountain-peak check.
+        // The current shape keeps only start/end terrain elevations; the
+        // removed q1/mid/q3 chord check is the SPEC §5 known gap.
         let sub_list = batches[0]
             .column_by_name("sub_segments")
             .unwrap()

@@ -4,8 +4,6 @@ Engineering formulas inspired by CNOSSOS-EU 2021/1226, ISO 9613-2:2024, and ECAC
 
 **Purpose**: Global noise atlas for public information ("where do I hear noise"). Not regulatory END mapping.
 
-*Last verified against code: 2026-06-10 (whole-file audit of `noise-compute`, `source-reader`, `aircraft-extract`, `raster-reader`); targeted re-sync 2026-07-03 (C1 rail split · per-row rail reach · settlement v2/v3 + leisure · GA 365-day hybrid · C2 airborne horizon · 15 aircraft classes).*
-
 ## Constants
 
 ### Receiver
@@ -34,8 +32,7 @@ max = [2, 3, 4, 5, 6, 8, 9, 12] dB per band
 ```
 Reason for × 0.5: ESA WorldCover class 10 covers canopy ≥ 10 %; ISO A.2.2 calibrated for dense
 foliage in full leaf. Scalar approximates average Central European mixed forest canopy density
-(~50 %). See `docs/future-plans/forest-continuous-density.md` for the continuous-density plan
-(Copernicus HRL TCD + Hansen GFC) that replaces the scalar with per-pixel canopy fraction.
+(~50 %).
 
 ### Aircraft ground-operations compatibility factors
 ```
@@ -69,7 +66,7 @@ OSM `maxspeed` is parsed unit-aware at extract (`osm-extract::classify::parse_ma
 
 **Untagged maxspeed (0)** first passes through the R7 `speed_taper` (a graded
 effective speed from the road class and geometry, `normalize/road.rs`), then
-resolves through the country's LEGAL implicit limit before the world table (`defaults.rs::resolve_speed_default`, table generated from the OSM-wiki legal-defaults dataset — `scripts/gen-country-speed-defaults-rs.mjs`): class 0 → motorway, 1 → motorroad-else-rural, 2/3/4/9 → urban/rural by the `built_up` roads.arrow column (building-raster sample at the segment midpoint; 0 = unknown → skip to the world table, never guessed rural). Local classes 5-8 and links 10-12 stay on the world table by design — a national urban limit would overstate them by +20-30 km/h (/gg 2026-07-03). Rationale: one global default (50) painted a ±5-6 dB colour seam at every tagged/untagged boundary mid-road (Wetherby A168 case, task #15). **Country comes from the segment itself wherever the M3 bake has run** (`country_iso`/`city_id`/`continent` columns): absent columns keep the old receiver-country approximation at borders; a baked `00` resolves `Admin::UNKNOWN` (WORLD), never the receiver's country.
+resolves through the country's LEGAL implicit limit before the world table (`defaults.rs::resolve_speed_default`, table generated from the OSM-wiki legal-defaults dataset — `scripts/gen-country-speed-defaults-rs.mjs`): class 0 → motorway, 1 → motorroad-else-rural, 2/3/4/9 → urban/rural by the `built_up` roads.arrow column (building-raster sample at the segment midpoint; 0 = unknown → skip to the world table, never guessed rural). Local classes 5-8 and links 10-12 stay on the world table by design — a national urban limit would overstate them by +20-30 km/h. Rationale: one global default (50) painted a ±5-6 dB colour seam at every tagged/untagged boundary mid-road (Wetherby A168 case, task #15). **Country comes from the segment itself wherever the M3 bake has run** (`country_iso`/`city_id`/`continent` columns): absent columns keep the old receiver-country approximation at borders; a baked `00` resolves `Admin::UNKNOWN` (WORLD), never the receiver's country.
 
 ### Rolling noise per band (CNOSSOS-EU §2.4.6)
 ```
@@ -1425,7 +1422,7 @@ bilateral cadence. V2 uses §3.5b's per-node cadence. Explicit `noise_barrier`
 geometries compete with raster buildings. For industrial sources, screening
 samples inside the source's own footprint are skipped via an exclusion radius.
 
-**Barrier consumers (B8/C9, 2026-06-11).** Popup and ALL current V1 CPU surface heatmap kernels (road/rail `scatter_line`, industrial/building `scatter_point`, aircraft `ground_ops`) feed `barriers.arrow` vector barriers into the Legacy V1 §3.5b exact-crossing candidate race via the shared `screening_attenuation`; the heatmap prepares one slice per z13 tile (`tile-painter::source_loader_barrier::BarrierData::for_tile` — sorted ascending by a conservative lower-bound distance; contract documented on `types::Barrier`). The **GPU line kernels (`noise-gpu`, road/rail on GPU cluster boxes) screen the SAME vector barriers behind the `QM_GPU_BARRIERS` gate** (default ON since 2026-08-02 — in the ENGINE itself, after the v2 orchestrator lost the wrapper-supplied env and fleet GPU paints ran wall-blind): the per-tile `for_tile` slice is uploaded with both endpoints and the kernel runs the identical ray×segment intersection (`scatter.cu` `barrier_best_candidate`, sharing `seg_isect_t` with the building walk; the pre-Fix-3 projection-and-snap measured on RTX 5070 mean 0.002 / max 1.5 dB vs the CPU truth, and the host-side crossing replicas are pinned to the CPU oracle in `tile-painter/tests/barrier_screening.rs`). Burning barriers into the 30 m cover raster was the rejected alternative — it was measured acoustically unsound, the Legacy V1 §3.5a bilateral cadence (≥ ~30 m sample spacing) stepping over a one-cell-thin burned wall on most paths (mean +3.7 / max +13.8 dB under-screening at wall-adjacent shadow pixels vs the vector path; decision record: `tile-painter/tests/barrier_screening.rs`). With the gate OFF the GPU lane uploads no barriers and the C9 orchestrator gate (build-heatmap.sh / the world orchestrator) routes barrier-carrying R4s (~1.5% of hexes) to the CPU builders, as before; `QM_GPU_BARRIERS=0` is the explicit barrier-blind baseline (tests; A/B) — since 2026-08-02 the ON default lives in the ENGINE (owner-directed 2026-06-13, mean 0.002 / max 1.5 dB validated), so no launcher can lose it again.
+**Barrier consumers (B8/C9, 2026-06-11).** Popup and ALL current V1 CPU surface heatmap kernels (road/rail `scatter_line`, industrial/building `scatter_point`, aircraft `ground_ops`) feed `barriers.arrow` vector barriers into the Legacy V1 §3.5b exact-crossing candidate race via the shared `screening_attenuation`; the heatmap prepares one slice per requested tile (`tile-painter::source_loader_barrier::BarrierData::for_tile` — sorted ascending by a conservative lower-bound distance; contract documented on `types::Barrier`). The **GPU line kernels (`noise-gpu`, road/rail on GPU cluster boxes) screen the SAME vector barriers behind the `QM_GPU_BARRIERS` gate** (default ON since 2026-08-02 — in the ENGINE itself, after the v2 orchestrator lost the wrapper-supplied env and fleet GPU paints ran wall-blind): the per-tile `for_tile` slice is uploaded with both endpoints and the kernel runs the identical ray×segment intersection (`scatter.cu` `barrier_best_candidate`, sharing `seg_isect_t` with the building walk; the pre-Fix-3 projection-and-snap measured on RTX 5070 mean 0.002 / max 1.5 dB vs the CPU truth, and the host-side crossing replicas are pinned to the CPU oracle in `tile-painter/tests/barrier_screening.rs`). Burning barriers into the 30 m cover raster was the rejected alternative — it was measured acoustically unsound, the Legacy V1 §3.5a bilateral cadence (≥ ~30 m sample spacing) stepping over a one-cell-thin burned wall on most paths (mean +3.7 / max +13.8 dB under-screening at wall-adjacent shadow pixels vs the vector path; decision record: `tile-painter/tests/barrier_screening.rs`). With the gate OFF the GPU lane uploads no barriers and the C9 orchestrator gate (build-heatmap.sh / the world orchestrator) routes barrier-carrying R4s (~1.5% of hexes) to the CPU builders, as before; `QM_GPU_BARRIERS=0` is the explicit barrier-blind baseline (tests; A/B). The ON default lives in the engine and current CPU/GPU parity is gated by `e2-full`, so no launcher can lose it again.
 
 **Screening is not computed standalone.** In current V1, raster buildings enter the Legacy V1 §3.5b composite top profile (`elevation + building_h`) while vector footprints and barriers enter as exact crossings, and diffraction is computed once by the §3.5 single-edge algorithm over the δ-winner (max-δ edge; the Rayleigh criterion gates only the unblocked arm). The per-band screening cap inherits from §3.5 — 20 dB — not a dedicated building-only cap.
 
@@ -1495,10 +1492,7 @@ model semantics (buildings as topography) and is scheduled separately from
 this branch.
 
 ### 3.9 Favourable meteorological conditions (CNOSSOS-EU §2.5.21)
-✅ LIVE — `FAVOURABLE_MIXING = true` since 2026-07-28 (eb8a432; OUTPUT_VER
-bump for the 5 surface layers in 0db-private 66b1d3ff; world repaint
-pending the combined post-geodata-v2 wave — rollout record:
-docs/dev/favourable-propagation-plan.md in 0db-private).
+✅ LIVE — `FAVOURABLE_MIXING = true` since 2026-07-28 (eb8a432).
 
 Mechanism (2015/996 formulas (2.5.9), (2.5.24), (2.5.25)), scoped to the two
 terms where favourable/homogeneous physically diverge in the surface kernel —
@@ -1529,7 +1523,7 @@ ground and diffraction:
   identical to mixing received levels; with the single flat p it is also
   identical to per-period or Lden-level mixing.
 
-Deliberate simplifications (review-pinned): the Rayleigh criterion stays on
+Deliberate simplifications: the Rayleigh criterion stays on
 straight geometry under the favourable state, and is asked ONCE on the
 homogeneous δ for both states (§3.5 — asking it per state against a straight
 δ* put a 3.13 dB step at δ_F = 0); edge selection stays max-δ on straight
@@ -1591,8 +1585,8 @@ distance as a 300 km/h corridor was a correctness bug. The current post-C1
 `default_mainline_reach_post_c1` test is about 9.2 km; the V2 ground-aware solve is 10,178.8 m.
 Quiet rows shrink, loud/HS corridors extend toward the applicable ceiling.
 Known shared convention gap (documented on the constants): the solve is
-free-field UNREFLECTED while kernels add receiver reflection (up to ~+5 dB) —
-affects only the 25–30 dB fringe at facades; the 7 km blanket had the same gap.
+free-field unreflected while kernels add up to 3 dB of receiver reflection,
+so reflective receivers can remain audible beyond the solved reach.
 
 Additionally a **free-field early-exit**
 (`geo.rs::below_free_field_threshold[_line]`): when emission minus a
@@ -1769,14 +1763,14 @@ Leq_period = 10 × log₁₀(E_period / (n_days × T_period))
 T_day = 43200s, T_evening = 14400s, T_night = 28800s
 ```
 
-**GA 365-day hybrid weighting**: every airborne/ground row's energy AND
+**GA full-year hybrid weighting**: every airborne/ground row's energy AND
 movement count is additionally scaled by a per-class weight
 `w[c] = n_days / sample_days_by_class[c]`
 (`emission/aircraft/npd/mod.rs::ClassWeights`) before the `÷ n_days`
 above. Airline classes are sampled over the same `n_days` window (w = 1);
-GA classes (`PROP_C172`, `HELICOPTER`) are sampled over **365 days**
-(w = n_days/365 ≈ 0.033 at n_days = 12), so a one-off GA flight
-contributes 1/365 of its energy instead of 1/12 — kills the +14.8 dB
+GA classes (`PROP_C172`, `HELICOPTER`) use the full available-year window
+(`ga_n_days`, currently 364), so a one-off GA flight contributes
+`1/ga_n_days` of its energy instead of `1/n_days` — killing the +14.8 dB
 Kytín phantom while leaving genuinely-daily GA patterns unchanged. The
 per-class day vector rides in arrow metadata (`sample_days_by_class`);
 parsing FAILS LOUD on pre-hybrid arrows (no uniform fallback —
@@ -1899,8 +1893,9 @@ skipped. No speed classifier — OSM geometry is the source of truth.
 - Both apply shared CNOSSOS-EU §2.5 path effects (atmospheric, ground,
   terrain, screening, vegetation, reflection). Variants are built inline
   per row from a per-microsegment path-effect cache. `d_perp` /
-  `d_endpoint` are floored at half a z13 pixel for heatmap parity
-  (popup would otherwise read ~5-8 dB hot directly on the line).
+  `d_endpoint` are floored at half the requested heatmap pixel; the popup
+  mirrors the base z12/512 floor (otherwise it would read ~5-8 dB hot directly
+  on the line).
   Per-`ops_kind` reach caps: runway 5 km, taxi 3 km, apron 1.5 km
   (`ground_ops_max_radius`, shared popup + heatmap; see §3.13).
 
@@ -2181,8 +2176,8 @@ cascade is **3.68** = 4.0 base × 0.92 occupancy (OECD HM1-1 vacancy) —
 bit-identical to the pre-2026-07 global `TRIPS_PER_DWELLING`, so countries
 without a table row behave exactly as before.
 
-Quantity definition (one per row, /gg 2026-07 review — the earlier table
-mixed person-trips, car availability and vehicle-trips): rows are entered
+Quantity definition (the earlier table mixed person-trips, car availability
+and vehicle-trips): rows are entered
 as **motor-vehicle trips per OCCUPIED dwelling (household) per day, both
 directions, annual average, all vehicle classes including motorcycles** —
 the surveys' native unit — and the generator multiplies by 0.92 stock
@@ -2441,10 +2436,8 @@ methodology. Occupant behaviour dominates; the estimate is typically
 uncertain by ±8–12 dB. Propagation physics, source reach, speed floors, and
 HM3 format are unchanged.
 
-The same ΔL is applied to the aggregate total regardless of the contributing
-source layers; it is not applied to individual source, contributor, or segment
-rows. Applying the traffic correction `C_tr` to rail and aircraft is a
-documented product simplification.
+Applying the traffic correction `C_tr` to rail and aircraft is a documented
+product simplification.
 
 #### Donor transform and two-pass paint
 

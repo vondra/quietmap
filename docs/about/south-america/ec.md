@@ -74,7 +74,7 @@ Ecuador has **no bespoke rail enricher** — only Argentina does in South Americ
 
 ### Metro de Quito Line 1 (opened December 2023 — Ecuador's first metro)
 
-- **Metro de Quito Line 1**: 22 km underground, Quitumbe ↔ El Labrador, opened December 2023. Designed for ~380,000 daily passengers. Operator: Empresa Metro de Quito. A `Metro_de_Quito` ArcGIS layer (station points + Line 1 alignment) exists but is **not ingested** — Metro track geometry comes from OSM `railway=subway`, with the light_rail class default below.
+- **Metro de Quito Line 1**: 22 km underground, Quitumbe ↔ El Labrador, opened December 2023. Designed for ~380,000 daily passengers. Operator: Empresa Metro de Quito. A `Metro_de_Quito` ArcGIS layer (station points + Line 1 alignment) exists but is **not ingested**. OSM `railway=subway` is excluded from the surface-rail extract, so the underground metro does not contribute to this layer.
 
 ### Ecuadorian rail context
 
@@ -129,7 +129,7 @@ All mapped to **NACE 35** (Electricity generation).
 ### Ecuador does NOT have
 
 - **No open mining concession cadastre** — ARCOM publishes only via the (blocked) gov portal. All community mirrors have been deleted. Major mines (**Mirador** copper, **Fruta del Norte** gold, **Cascabel** exploration) rely on OSM coordinates only.
-- **No Petroecuador refinery database** — Esmeraldas (~110k bpd), La Libertad (~45k bpd, Santa Elena), and Shushufindi refineries are tagged via OSM `landuse=industrial` at generic 93 dB.
+- **No Petroecuador refinery database** — Esmeraldas (~110k bpd), La Libertad (~45k bpd, Santa Elena), and Shushufindi refineries are tagged via OSM `landuse=industrial` with the generic OSM industrial base profile and no NACE override.
 - **No per-segment IMD/AADT** — the only SA country in pipeline without ANY real traffic measurements.
 
 ## Validation

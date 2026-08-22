@@ -19,9 +19,9 @@ use crate::segment::split_flights;
 use crate::source::FlightSource;
 use crate::trace::{read_day_traces, read_day_traces_filtered, AircraftTrace, TracePoint};
 
-/// Stage-0 class-window routing for the hybrid GA/airline sampling
-/// (`ga-365d-hybrid-plan.md` §3). The GA pass observes only the
-/// 365-day-sampled classes (PROP_C172 + HELICOPTER); the airline pass
+/// Stage-0 class-window routing for the hybrid GA/airline sampling. The GA
+/// pass observes only full-year-sampled classes (PROP_C172 + HELICOPTER);
+/// the airline pass
 /// keeps the complement — including GSE: ground vehicles belong to the
 /// 12-day airline window. `All` is the single-window default,
 /// byte-identical to the pre-hybrid pipeline.
@@ -99,9 +99,8 @@ impl AdsbTarSource {
     /// archive). Second candidate: the raw adsb.lol release naming
     /// `<root>/<year>/v{YYYY.MM.DD}-planes-readsb-prod-0/` as
     /// downloaded in the release tree — reading it in place
-    /// keeps the 1.1 TB archive pristine, no symlink farm
-    /// (`ga-365d-hybrid-plan.md` §4.1; the per-day `.ok` markers are
-    /// ignored by the tar-extension filter). The `…prod-0tmp` suffix
+    /// keeps the 1.1 TB archive pristine with no symlink farm. Per-day `.ok`
+    /// markers are ignored by the tar-extension filter. The `…prod-0tmp` suffix
     /// is upstream's release-tag naming for 15 days of 2025-05/06 —
     /// complete downloads, verified on the real archive; without it
     /// those days would silently resolve to zero flights. Falls back
@@ -223,8 +222,8 @@ pub fn trace_to_flight(tr: AircraftTrace, source: u8, window: ClassWindowFilter)
         return Vec::new();
     }
     let is_gse = typecode_trim.eq_ignore_ascii_case("GND");
-    // Hybrid class-window routing (`ga-365d-hybrid-plan.md` §3): the GA
-    // pass keeps only GA-sampled classes (GSE → airline pass), the
+    // Hybrid class-window routing: the GA pass keeps only GA-sampled
+    // classes (GSE → airline pass), while the
     // airline pass drops them. Runs before the per-point work so a
     // probe-missed trace costs no more than its parse.
     if !window.keeps_typecode(&tr.aircraft_type) {

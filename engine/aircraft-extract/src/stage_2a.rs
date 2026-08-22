@@ -8,13 +8,8 @@
 //! [`crate::shuffle::shuffle_per_r4`] — one input file per R4 means each
 //! worker owns its R4's segments + accumulator, no global merge.
 //!
-//! v15 (Opt A) samples per-sub-segment midpoint elevation here from
-//! `rasters.dem` so the popup terrain gates can drop `SegmentTerrain::sample`
-//! (5 raster lookups per sub-segment, mutex-serialised in raster-reader)
-//! on the hot path. Start/end elevations propagate from Stage 1's
-//! per-point loop. Stage 2A is the right layer for mid because the
-//! mid-point is interpolated between two ADS-B samples, not stored
-//! per-point.
+//! Each sub-segment retains the start/end terrain elevations sampled in Stage 1.
+//! Intermediate chord terrain is not stored; see SPEC §5's post-K3 gating gap.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -35,20 +30,14 @@ use raster_reader::RealRasters;
 /// subdirs outside it are skipped — scope was applied during shuffle
 /// already, so this is defensive and cheap.
 ///
-/// `rasters` provides DEM access for per-sub-segment midpoint elevation
-/// (v15 Opt A). The shared `RealRasters` instance is mutex-internal so
-/// rayon parallelism is safe; the caller may want to call
-/// `rasters.dem.preload_bbox` before invoking us if the scope is known
-/// (CLI does this implicitly via Stage 1 having already touched every
-/// tile in scope; in isolated `stage2a` runs preload happens per-R4
-/// inside the per-shard loop).
+/// `rasters` is retained in the stage interface but no longer sampled here.
 pub fn run_stage_2a(
     segments_by_r4_dir: &Path,
     h3r4_dir: &Path,
     n_days: u16,
     // GA-class window (0 = single-window extract). Stamped into the
-    // airborne.arrow metadata so the popup/heatmap weight GA rows at
-    // 1/365 (`ga-365d-hybrid-plan.md` §2).
+    // airborne.arrow metadata so popup/heatmap weight GA rows at
+    // `1/ga_n_days`.
     ga_n_days: u16,
     scope: Option<&ScopeBbox>,
     rasters: &RealRasters,
@@ -178,10 +167,9 @@ impl AirborneEventBuilder {
         self.bbox_min_lon = self.bbox_min_lon.min(seg.start_lon).min(seg.end_lon);
         self.bbox_max_lon = self.bbox_max_lon.max(seg.start_lon).max(seg.end_lon);
         self.total_length_m += seg.length_m;
-        // v16 (K3): only start/end terrain elevs are stored — the popup
-        // no longer needs q1 / mid / q3 because the chord mountain-peak
-        // check moved to Stage 1 (`airborne_chord_clears_peaks`). Start /
-        // end come from Stage 1's per-point ADS-B-time DEM sampler.
+        // Only Stage 1's start/end terrain elevations are stored. Runtime
+        // consumers use them for stale-ground and Filter D checks; the removed
+        // q1/mid/q3 chord check remains the documented SPEC §5 gap.
         self.sub_segments.push(AirborneSubSegment {
             start_lat: seg.start_lat,
             start_lon: seg.start_lon,
@@ -293,17 +281,14 @@ mod tests {
 
     #[test]
     fn aggregate_propagates_terrain_elevs_from_stage1() {
-        // Synthetic case: Stage 1 said start=250 m, end=260 m. With
-        // ZeroRasters q1/mid/q3 = 0. Verifies start/end pass through
-        // and q1/mid/q3 are sampled (not interpolated).
+        // Synthetic case: Stage 1 said start=250 m, end=260 m. Verify both
+        // endpoint elevations pass through unchanged.
         let rasters = test_rasters();
         let events = aggregate_events_for_r4(&[seg(1, 50.10, 14.26)], &rasters);
         assert_eq!(events.len(), 1);
         let sub = &events[0].sub_segments[0];
         assert!((sub.terrain_start_elev_m - 250.0).abs() < 1e-3);
         assert!((sub.terrain_end_elev_m - 260.0).abs() < 1e-3);
-        // v16 (K3): q1/mid/q3 columns are gone — chord mountain-peak
-        // check moved to Stage 1 (`airborne_chord_clears_peaks`).
     }
 
     /// Round trip: write a per-R4 airborne shard via the shuffle

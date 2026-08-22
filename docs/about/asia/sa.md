@@ -67,7 +67,7 @@ Saudi Arabia publishes no GTFS feeds — for any operator, and there is no bespo
 - **Mecca ↔ Jeddah Airport ↔ Jeddah ↔ KAEC ↔ Rabigh ↔ Medinah** (450 km, 10 stations)
 - Fleet: 35 Talgo 350 trainsets
 - Baseline service: ~6 trains per direction per day, surging during Umrah/Hajj
-- **Tagged `highspeed=yes` in OSM** — correctly differentiated from SAR freight via the `highspeed` column, which selects the engine's high-speed-rail emission/speed profile
+- **Tagged `highspeed=yes` in OSM** — when `maxspeed` is missing, the normalizer resolves 300 km/h. Emission still uses the standard passenger spectrum scaled by speed.
 
 ### Riyadh Metro (King Abdulaziz Public Transport Project)
 

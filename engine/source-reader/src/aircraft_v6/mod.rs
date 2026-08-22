@@ -69,9 +69,9 @@ fn build_osm_ref_lookup(batches: &[RecordBatch]) -> HashMap<u64, String> {
     out
 }
 
-/// Build the GA 365-day hybrid per-class weight LUT from the
-/// `sample_days_by_class` metadata stamped on the airborne /
-/// airport_traffic arrows (`ga-365d-hybrid-plan.md` §2). Mirrors the
+/// Build the GA full-year hybrid per-class weight LUT from the
+/// `sample_days_by_class` metadata stamped on the airborne and
+/// airport_traffic arrows. Mirrors the
 /// heatmap's `worklist::resolve_class_weights` strictness: every loaded
 /// airborne/airport_traffic batch MUST carry the stamp and they must all
 /// AGREE — a missing stamp or a disagreement across the grid_disk(1)
@@ -121,8 +121,8 @@ fn build_class_weights(
 /// `airport_summary_path` points at the global `airport_summary.arrow`
 /// sidecar (typically `<prepared>/aircraft/airport_summary.arrow`).
 /// When the file is absent OR an airport is missing from it, popup
-/// arr/dep/observed counts return zero — per Codex C4 + Claude W1; no
-/// silent fallback to per-row sum (which over-counts 4-8×).
+/// arr/dep/observed counts return zero; there is no fallback to per-row
+/// sums, which over-count by 4-8×.
 ///
 /// Returns `Err(String)` when any of the popup arrows fails its schema
 /// check (`v15` for airborne/cruise, `airport_traffic_v8` for the
@@ -171,9 +171,9 @@ pub fn add_v6_aircraft_to_result(
     if !airport_traffic_batches.is_empty() {
         assert_airport_traffic_contract("airport_traffic.arrow", airport_traffic_batches)?;
     }
-    // GA 365-day hybrid per-class weight LUT — built from the
+    // GA full-year hybrid per-class weight LUT — built from the
     // `sample_days_by_class` metadata the airborne / airport_traffic
-    // arrows stamp (`ga-365d-hybrid-plan.md` §2). FAILS LOUD when rows
+    // arrows stamp. FAILS LOUD when rows
     // exist but the stamp is missing (owner directive 2026-06-12 — no
     // compat shim): the arrows predate the hybrid contract and must be
     // re-extracted. The contract bumps (airborne v4 / airport_traffic v9)
@@ -191,8 +191,8 @@ pub fn add_v6_aircraft_to_result(
     // load one line before the `total_rows == 0` bail-out below — and, uncached,
     // re-paid it on every request, which is a real CPU wall at popup scale.
     //
-    // When traffic rows DO exist the sidecar is MANDATORY (Plan §4.3 + Codex C4
-    // + /gg Gemini audit): a missing sidecar or unwired path is a FATAL pipeline
+    // When traffic rows DO exist the sidecar is MANDATORY: a missing sidecar
+    // or unwired path is a fatal pipeline
     // state (Stage 2C reduce did not run, or operator forgot to copy it), raised
     // as a loud `eprintln!` + `Err` so the popup HTTP path returns 500 instead of
     // silently showing zero arr/dep counts (indistinguishable from "no ADS-B data").
@@ -346,8 +346,7 @@ pub fn add_v6_aircraft_to_result(
     // `periods_free == periods`. Ground ops sets the same — see TODO on
     // `SourceResult.periods_free` doc in noise-compute/src/types/propagation.rs
     // to pull real free-field periods out of the airport_traffic kernel
-    // variants (Codex /gg #80 CRITICAL — acceptable approximation today
-    // because the field was always null before this commit).
+    // variants. This remains an explicit approximation until then.
     let aircraft_periods_free = noise_compute::periods::sum_periods(
         &air_contribs
             .iter()
@@ -448,22 +447,13 @@ fn sum_periods_linear(sources: &[SourceResult]) -> NoisePeriods {
 /// Stamp written by every aircraft-extract Arrow file. Inline copy
 /// (not a build-dep) keeps arrow IPC / parquet / anyhow out of the
 /// popup runtime; must move in lock-step with `aircraft-extract::SCHEMA_VERSION`.
-/// v15 (Opt A) adds pre-sampled terrain elevations to airborne
-/// sub-segments (`terrain_start_elev_m`, `terrain_mid_elev_m`,
-/// `terrain_end_elev_m`) + Stage 1 `start_elev_m` / `end_elev_m` so
-/// the popup can skip ~1 M raster lookups per LKPR query. v14 files
-/// would decode the missing columns as zero and falsely keep
-/// "below-ground" segments — must reject loud.
+/// v15 adds mandatory endpoint terrain elevations to airborne sub-segments
+/// and Stage 1. Earlier files cannot supply them and must be rejected.
 pub(super) const EXPECTED_SCHEMA_VERSION: &str = "v15";
 
 /// Versions accepted under the dev-only `ACCEPT_LEGACY_AIRCRAFT_SCHEMA=1`
-/// escape hatch. Empty since v15 (Opt A): v15 adds mandatory
-/// `terrain_*_elev_m` sub-segment columns that earlier versions cannot
-/// provide; loading v12 / v13 / v14 under v15 reader code would silently
-/// zero-out terrain in the popup (and the heatmap loader's
-/// `unwrap_or_else(vec![0.0; n])` would do the same), masking real
-/// underground segments. /gg flagged this in rev 2; force re-extract
-/// instead of degrading silently.
+/// escape hatch. Empty since v15: earlier versions cannot provide mandatory
+/// endpoint terrain elevations; force re-extract instead of degrading silently.
 const LEGACY_SCHEMA_VERSIONS: &[&str] = &[];
 
 /// The `airport_traffic.arrow` semantic contract. `schema_version`
@@ -474,10 +464,10 @@ const LEGACY_SCHEMA_VERSIONS: &[&str] = &[];
 /// per-microseg UNION `microseg_unique_*` replace the v4 `flight_ids`
 /// list. Airport-level UNION across R4s lives in the separate
 /// `airport_summary.arrow` sidecar.
-/// v9 (GA 365-day hybrid): the microseg UNIONs split into non-GA +
+/// v9 (GA full-year hybrid): the microseg UNIONs split into non-GA +
 /// `microseg_unique_ga_*`, and the file stamps `sample_days_by_class`
-/// so the consumer weights GA energy at 1/365 (`ga-365d-hybrid-plan.md`
-/// §2). A v8 reader would double-weight GA at 1/12 — the bump refuses it.
+/// so the consumer weights GA energy at `1/ga_n_days`. A v8 reader would
+/// double-weight GA at 1/12 — the bump refuses it.
 pub(super) const EXPECTED_AIRPORT_TRAFFIC_CONTRACT: &str = "airport_traffic_v9";
 
 /// Legacy `airport_traffic_contract` variants accepted under the same
@@ -495,9 +485,9 @@ const LEGACY_AIRPORT_TRAFFIC_CONTRACTS: &[&str] = &[];
 /// v1 file because the 13-col offset shifts every read past
 /// `flags` — silent decoding would alias `terrain_q1_elev_m` slice
 /// over what v2 treats as `terrain_end_elev_m`.
-/// v4 (GA 365-day hybrid): no column change, but the file carries the
+/// v4 (GA full-year hybrid): no column change, but the file carries the
 /// `sample_days_by_class` vector the consumer REQUIRES to weight GA rows
-/// at 1/365. A v3 reader ignores it and ships the +14.8 dB phantom.
+/// at `1/ga_n_days`. A v3 reader ignores it and ships the +14.8 dB phantom.
 pub(super) const EXPECTED_AIRBORNE_CONTRACT: &str = "airborne_v4";
 const LEGACY_AIRBORNE_CONTRACTS: &[&str] = &[];
 

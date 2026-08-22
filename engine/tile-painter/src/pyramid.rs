@@ -249,7 +249,7 @@ fn build_pyramid_managing_fence(
     // The base level must exist even when the level range is EMPTY
     // (dst == base, the zoom-tier no-op): the per-level "requires source"
     // check never runs then, and a silent success over a missing store would
-    // hide a broken tier root (gg barrier-fix review).
+    // hide a broken tier root.
     let base_path = layer_dir.join(format!("z{base_zoom}.qtsi"));
     if !base_path.exists() {
         anyhow::bail!(
@@ -438,25 +438,12 @@ fn build_one_level(
     ))
 }
 
-/// `store.get_cells(x, y)`, but a DECODE failure on an already-fetched blob
-/// (e.g. the 2026-07-13 concurrent-writer bug, fixed by the
-/// tile_store_ingest flock, left some blobs corrupt) is treated as absent
-/// instead of propagating — self-heals once the owning cell's next
-/// legitimate ingest overwrites the blob, rather than aborting a whole
-/// pyramid/combine pass over one stale tile. A failure to even FETCH the
-/// blob (I/O error, corrupt index) is an infrastructure problem, not known
-/// self-healing corruption, and stays fatal via `?` — only the decode step
-/// is swallowed (/gg finding, 2026-07-14: the first version swallowed every
-/// error class here, including e.g. a transient EIO).
-/// Shared by `build_one_level` and `build-heatmap-combine`'s energy sum —
-/// NOT by the pmtiles packer, whose ship-out (`TileStore::get_hm3_by_entry`)
-/// is codec-blind verbatim-or-compose and must keep failing loudly on a
-/// corrupt blob rather than silently treat it as absent: a published archive
-/// can't self-heal the way a working-store read can. That is now
-/// `tile-store-fsck`'s job instead (`TileStore::validate_hm3_by_entry`), run
-/// as a MANDATORY gate inside every `tile-store-pack` run — a store with a
-/// lingering corrupt tile fails the publish loudly before any archive is
-/// Deliberately doesn't log per-tile: this runs inside a `par_iter` hot loop,
+/// Read cells while treating a decode failure after a successful fetch as a
+/// self-healing absent tile. Fetch/index I/O remains fatal, and mandatory fsck
+/// blocks a corrupt store from publication. Shared by pyramid and combine,
+/// never by the packer's ship-out path.
+///
+/// Deliberately does not log per tile: this runs inside a `par_iter` hot loop,
 /// and under mass corruption one `eprintln!` per bad tile would serialize
 /// every worker on stderr's lock. `corrupt` tallies hits for one aggregate
 /// summary line after the parallel pass instead.

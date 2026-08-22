@@ -139,8 +139,7 @@ pub fn read_window_n_days(by_r4_dir: &Path) -> Result<u16> {
 /// Sibling of [`read_window_n_days`] for the GA-window manifest
 /// (`<by_r4_dir>/ga_n_days`, written only by hybrid shuffles). A
 /// missing file is 0 = plain single-window extract — all downstream
-/// stamping then degenerates to today's behavior
-/// (`ga-365d-hybrid-plan.md` §4.2.4).
+/// stamping then degenerates to today's behavior.
 pub fn read_ga_n_days(by_r4_dir: &Path) -> Result<u16> {
     let path = by_r4_dir.join("ga_n_days");
     let raw = match std::fs::read_to_string(&path) {

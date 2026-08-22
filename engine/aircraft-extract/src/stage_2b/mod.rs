@@ -14,7 +14,7 @@
 //! **Disk spill.** The per-`(R4, CruiseKey)` accumulator carries a
 //! `flight_meta: HashMap<flight_id, (typecode, callsign)>` whose size
 //! scales as `O(unique flight_ids × R7 cells touched)`. Back-of-
-//! envelope at 365-day global: ~40 M unique cruise flight_ids × ~500
+//! envelope at full-year global scale: ~40 M unique cruise flight_ids × ~500
 //! R7 cells touched/flight × ~80 B/entry ≈ ~1.6 TB if held entirely
 //! in memory. Workers flush their thread-local map to
 //! `spill_cruise/hash_<R4 hash % N>/part_<atomic_id>.arrow` when it
@@ -41,8 +41,7 @@ use crate::scope::ScopeBbox;
 
 /// log10 of 25 m expressed in ft — popup's `lookup_lmax` indexes into a
 /// fixed log-d LUT. 25 m = 82.021 ft, log10(82.021) ≈ 1.9139. The popup
-/// ranks cruise candidates by NPD Lmax at the 25 m reference (rev 2
-/// switch from SEL to peak Lmax per Codex C1 + Gemini C1 + Claude C1).
+/// ranks cruise candidates by NPD Lmax at the 25 m reference, not SEL.
 fn log_d_25m_ft() -> f64 {
     (25.0 * FT_PER_M).log10()
 }
@@ -113,8 +112,7 @@ fn spill_part_path(spill_dir: &Path, bucket: u64, id: u64) -> std::path::PathBuf
 ///
 /// `fail_on_ga_cruise` upgrades the GA-class-segment warning (see the
 /// counter below) to a hard failure — the cross-check for hybrid runs
-/// where Stage 2B input must be the airline pass only
-/// (`ga-365d-hybrid-plan.md` §4.2.6 + binding delta 4).
+/// where Stage 2B input must be the airline pass only.
 pub fn run_stage_2b(
     day_paths: &[PathBuf],
     h3r4_dir: &Path,
@@ -160,7 +158,7 @@ pub fn run_stage_2b(
     // PROP_C172 class absorbs PA**/P28*/P32*/P46* fallbacks). Counted
     // unconditionally — processing is unchanged so plain extracts stay
     // byte-identical — warned after the spill phase, fatal behind
-    // `fail_on_ga_cruise` (`ga-365d-hybrid-plan.md`, binding delta 4).
+    // `fail_on_ga_cruise`.
     let ga_class_cruise = AtomicU64::new(0);
     // Phase 1: par_iter days. Each worker holds a thread-local
     // accumulator for the duration of its day(s); the periodic size

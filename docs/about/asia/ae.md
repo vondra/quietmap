@@ -72,7 +72,7 @@ The WRI Global Power Plant Database via `/enrich-global` covers the UAE's major 
 - **ADNOC, Dubai Petroleum, Jebel Ali Free Zone** — no open asset maps. Ruwais refinery, Habshan, Das Island, Jebel Ali Free Zone facilities visible only in OSM tags (no NACE sector codes)
 - **E-PRTR / UNEP PRTR** — UAE is not a party, no public pollutant-release register
 
-UAE industrial facilities currently model at the generic 93 dB base emission. Major noise hotspots (Ruwais refinery complex, Jebel Ali tank farm, Taweelah power/desal) are tagged but not NACE-classified.
+UAE industrial facilities currently use the generic OSM industrial base profile with no NACE override. Major noise hotspots (Ruwais refinery complex, Jebel Ali tank farm, Taweelah power/desal) are tagged but not NACE-classified.
 
 ## Validation
 

@@ -49,8 +49,8 @@ pub fn compute_aircraft_v6(
     // cruise is structurally exempt (β ≥ 26.6°, see segment_sel).
     horizon: Option<&ReceiverHorizon>,
     n_days: u16,
-    // GA 365-day hybrid per-class weight LUT (`ga-365d-hybrid-plan.md` §2),
-    // built from the arrows' `sample_days_by_class` metadata by the caller.
+    // GA hybrid per-class weight LUT, built from the arrows'
+    // `sample_days_by_class` metadata by the caller.
     // Threads into the airborne scatter; cruise is airline-only (no GA
     // classes reach cruise altitude) so it ignores this.
     class_weights: &crate::emission::aircraft::ClassWeights,
@@ -85,8 +85,8 @@ pub fn compute_aircraft_v6(
     // Cruise gets its own FlightAccum table — the cruise synth fids
     // (`flight_id::pack_synth(idx)` with idx = row index) share the
     // SYNTHETIC_BIT tagging used by airborne TIS-B / anonymous flights
-    // at extract time. /gg (Codex) flagged that an airborne synth fid
-    // can collide with a cruise idx, and the merged accumulator (now
+    // at extract time. An airborne synth fid can collide with a cruise
+    // idx, and the merged accumulator (now
     // tagged `is_cruise = true`) silently swallows the airborne energy
     // inside `build_detail`'s `if acc.is_cruise { continue }` branch.
     // Keeping the maps disjoint makes the namespaces structurally
@@ -218,7 +218,7 @@ pub fn compute_aircraft_v6_separable(
     cruise_rows: &[CruiseRowView<'_>],
     rasters: &dyn RasterSampler,
     n_days: u16,
-    // GA 365-day hybrid per-class weight LUT — same as `compute_aircraft_v6`.
+    // GA full-year hybrid per-class weight LUT — same as `compute_aircraft_v6`.
     class_weights: &crate::emission::aircraft::ClassWeights,
 ) -> AircraftPeriodsBreakdown {
     use crate::emission::aircraft;

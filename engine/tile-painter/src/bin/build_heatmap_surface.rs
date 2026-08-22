@@ -573,7 +573,7 @@ fn main() -> Result<()> {
     // Admin table drives road default-AADT AND the C1 rail per-region period
     // split (EU freight ~55 % at night) — init when EITHER line layer is built,
     // else a rail-only run resolves Admin::UNKNOWN → world split while popup uses
-    // real admin → parity break (Codex delta 1). Best-effort; filled ONCE here
+    // real admin → parity break. Best-effort; filled ONCE here
     // before the parallel region loop — a process-wide OnceLock the per-region
     // loads only READ (concurrency-safe).
     if layers.contains(&Source::Road) || layers.contains(&Source::Rail) {
@@ -734,11 +734,10 @@ fn resolve_surface_n_days(
     Ok(resolve_n_days(&args.h3r4_dir, &src, traffic)? as f64)
 }
 
-/// Resolve the GA 365-day hybrid weight LUT for the ground-ops layer
+/// Resolve the GA full-year hybrid weight LUT for the ground-ops layer
 /// (the only surface layer that consumes it), from the build's
 /// `airport_traffic.arrow` `sample_days_by_class` metadata. Uniform when
-/// ground ops isn't in the build or no traffic arrows exist
-/// (`ga-365d-hybrid-plan.md` §2).
+/// ground ops isn't in the build or no traffic arrows exist.
 fn resolve_surface_class_weights(
     args: &Args,
     layers: &[Source],

@@ -22,8 +22,8 @@ use tile_painter::pyramid::{build_pyramid, scope_from_args};
 struct Args {
     #[arg(long)]
     store_dir: PathBuf,
-    /// Base (source) Mercator zoom — the store's finest level (z12 in the
-    /// 512@z12 world; the kernels' 256@z13 output until Phase B lands).
+    /// Base (source) Mercator zoom — the finest level in the store (z12 for current
+    /// 512-pixel tiles).
     #[arg(long, default_value_t = 12)]
     base_zoom: u8,
     /// Lowest pyramid level to generate (inclusive). Defaults to z=2 — the

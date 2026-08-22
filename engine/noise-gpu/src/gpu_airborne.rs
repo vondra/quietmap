@@ -8,7 +8,7 @@
 //! Morton order keeps the R4 source LRU hot, exactly like the CPU builder.
 //!
 //!   NOISE_GPU_PREPARED=… DATA_YEAR=… gpu-airborne --regions-file <r4-list> --n-days N \
-//!       --h3r4-dir <h3r4> --prepared-dir <prep> --zoom 13 --output <dir>
+//!       --h3r4-dir <h3r4> --prepared-dir <prep> --zoom <z> --output <dir>
 //!   gpu-airborne --bbox S,W,N,E …      gpu-airborne --tile-x X --tile-y Y …   (dev modes)
 //!
 //! Submodules: `prep` (CPU prep stage — pack a cell's candidate SoA + DEM tile-blocks),
@@ -233,7 +233,7 @@ fn main() -> Result<()> {
     // cluster resolves it once for the whole area and passes it to every chunk).
     let source_r4s = ring_union(regions.keys().copied());
     // A chunk can hold road/rail but no airborne (rural). Building the absent airborne is a
-    // no-op, not a fatal resolve — else the shared `line` job loses its road/rail too (Codex /gg).
+    // no-op, not a fatal resolve — else the shared `line` job loses its road/rail too.
     if !any_source_arrow(&args.h3r4_dir, &source_r4s, SEL)? {
         eprintln!("no airborne data in this chunk — nothing to build");
         return Ok(());
@@ -245,7 +245,7 @@ fn main() -> Result<()> {
         }
         _ => resolved,
     };
-    // GA 365-day hybrid weight LUT, resolved once build-wide from the
+    // GA full-year hybrid weight LUT, resolved once build-wide from the
     // source arrows' `sample_days_by_class` (consistency-asserted like
     // n_days) and uploaded device-global by `AirborneGpu::new`.
     let class_weights =

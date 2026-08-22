@@ -4,7 +4,7 @@
 //! kernel (`line_binned`) serves both; only the loader, halo reach, and HM3
 //! source_id differ. Builds one tile block's shared 10 km halo once, then per
 //! tile per layer: load rows, bin sources per 8×8 block, run the kernel,
-//! collapse to Lden u8, write `{output}/{layer}/13/x/y.bin` and (if a baseline
+//! collapse to Lden u8, write `{output}/{layer}/{z}/x/y.bin` and (if a baseline
 //! exists) diff it. Reports per-layer throughput.
 //!
 //!   # one grid-aligned block (dev/bench), diff vs baseline:
@@ -73,10 +73,10 @@ fn h0_exact_counter(output: &[f32], index: usize) -> u64 {
     u64::from(output[first_slot].to_bits()) | (u64::from(output[first_slot + 1].to_bits()) << 32)
 }
 
-/// Process-wide byte budget for host-resident tile blocks (E1, gg z13 v2
-/// review): bounds building + ready blocks across ALL stream workers and
-/// both halves of each worker's double buffer — a per-worker block-count
-/// window is not a memory bound (2 workers × current+next × window ⇒ up to
+/// Process-wide byte budget for host-resident tile blocks: bounds building and
+/// ready blocks across all stream workers and both buffer halves for every
+/// worker. A per-worker block-count window is not a memory bound (2 workers ×
+/// current+next × window ⇒ up to
 /// 8 batches). Blocks reserve their exact pre-build size (the same
 /// `FusedGrid::grid_dims` math the build allocates with), correct it to the
 /// measured size after building, and release when the GPU loop drops them.
@@ -90,8 +90,8 @@ struct PipelineByteGate {
 /// builder BEFORE any block of the chunk is built (one permit per chunk —
 /// per-block permits inside a rayon collect deadlock the moment a chunk's
 /// aggregate exceeds the budget: finished blocks hold bytes while a sibling
-/// waits, and nothing releases until the whole collect returns; gg z13 impl
-/// review, Codex CRITICAL). Dropping the permit releases — panic-safe.
+/// waits, and nothing releases until the whole collect returns. Dropping the
+/// permit releases — panic-safe.
 struct ChunkPermit {
     bytes: u64,
 }
@@ -299,7 +299,7 @@ struct Cfg {
     /// road/rail paint ran wall-blind until Voznice exposed it. `=0` remains
     /// the explicit barrier-blind baseline (what
     /// `tests/barrier_screening.rs` compares ON against, via the programmatic
-    /// flag). See the spike record (.claude/plans/heatmap-orchestrator-audit/).
+    /// flag).
     barriers_enabled: bool,
 }
 
@@ -867,10 +867,9 @@ fn process_region(
     // while the main thread runs window k's GPU work. The GPU loop consumes
     // the SAME sorted block order, so output is byte-identical to the old
     // build-everything-first path (which materialised EVERY block at once —
-    // ~2.8 GiB/region measured at 10 m fields; gg z13 review).
+    // ~2.8 GiB/region measured at 10 m fields).
     //
-    // RESIDENCY CONTRACT (gg z13 impl review, Codex CRITICAL — two prior
-    // drafts deadlocked): host block bytes are bounded PROCESS-WIDE by the
+    // RESIDENCY CONTRACT: host block bytes are bounded PROCESS-WIDE by the
     // byte gate. ONE RAII permit per CHUNK, acquired by the builder for the
     // chunk's summed pre-build estimate BEFORE any block is built (per-block
     // permits inside the rayon collect deadlock once a chunk's aggregate
@@ -991,7 +990,7 @@ fn process_region(
             }
             // Drop the consumed chunk (and its permit) BEFORE joining: the
             // builder may be blocked on the gate waiting for exactly these
-            // bytes — joining first is the deadlock the review caught.
+            // bytes; joining first would deadlock.
             drop(current.take());
             let built = next_handle.map(|h| h.join().expect("chunk builder panicked"));
             (built, err)
@@ -1045,8 +1044,8 @@ fn run_stream(
         barriers_enabled,
     };
     // FIXED N (default 2, NOT rayon thread count): each worker holds a whole region's source uploads +
-    // per-tile GPU scratch on its own stream, so N is bounded by VRAM/RAM, not cores (codex: a
-    // halo-only cap is unsafe). 2 fits the 12 GB cards; QM_GPU_STREAM_WORKERS overrides.
+    // per-tile GPU scratch on its own stream, so N is bounded by VRAM/RAM, not cores. A halo-only
+    // cap is unsafe. 2 fits the 12 GB cards; QM_GPU_STREAM_WORKERS overrides.
     let n_workers: usize = env("QM_GPU_STREAM_WORKERS", "2")
         .parse()
         .unwrap_or(2)
@@ -1084,7 +1083,7 @@ fn run_stream(
 
     let reader_work = Arc::clone(&work);
     // DETACHED (not joined): on a broken-pipe abort the workers exit while this thread may still be
-    // blocked in stdin.lines() with stdin open — joining it would deadlock main (gg-gemini CRITICAL).
+    // blocked in stdin.lines() with stdin open — joining it would deadlock main.
     // On normal EOF it sets closed + returns; either way the OS reaps it when main returns.
     std::thread::spawn(move || {
         for line in std::io::stdin().lock().lines() {
@@ -1118,10 +1117,10 @@ fn run_stream(
             let out = Arc::clone(&out);
             let evidence = evidence.clone();
             scope.spawn(move || {
-                // Warm per-worker state: own CUDA stream (overlaps on the GPU) + own stats/prog
-                // (worker-local, gg); raster access via the per-rayon-thread RASTERS instances.
+                // Warm per-worker state: own CUDA stream (overlaps on the GPU) + own stats/prog;
+                // raster access via the per-rayon-thread RASTERS instances.
                 // Safe under UNIQUE centre-R4 ownership (the scheduler leases each cell once per stream):
-                // each cell's output tiles are disjoint, so two workers never write the same .bin (gg-codex).
+                // each cell's output tiles are disjoint, so two workers never write the same .bin.
                 let (dev, f) = warm_device_on(true);
                 let mut stats: BTreeMap<&'static str, LayerStat> = BTreeMap::new();
                 let mut prog = Progress {
@@ -1569,7 +1568,7 @@ fn main() -> Result<()> {
 
     // Init when EITHER line layer is built: road needs default-AADT, rail needs
     // the C1 per-region period split — a rail-only run on Admin::UNKNOWN would
-    // take the world split and break popup parity (Codex delta 1).
+    // take the world split and break popup parity.
     if layers.contains(&LineLayer::Road) || layers.contains(&LineLayer::Rail) {
         let result = admin::init_admin_table(&admin::default_admin_path(&h3r4));
         if std::env::var(RENDERER_EVIDENCE_FLAG).as_deref() == Ok("1") {

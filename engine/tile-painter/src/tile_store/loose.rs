@@ -1,8 +1,7 @@
-//! Read-only adapter over the legacy loose tree `{layer}/{z}/{x}/{y}.bin`.
+//! Read-only adapter over a loose staging tree `{layer}/{z}/{x}/{y}.bin`.
 //!
-//! Exists for the migration only: the transcoder reads it as its source and
-//! the parity gate diffs a freshly-built [`super::TileStore`] against it.
-//! Deleted together with the loose trees at the end of the migration.
+//! Single-host builds still emit run-scoped loose tiles before the transcoder
+//! ingests them into the working [`super::TileStore`]; parity reads both forms.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -36,7 +35,7 @@ impl LooseTree {
         self.tile_path(x, y).exists()
     }
 
-    /// The on-disk bytes verbatim (a whole-file-Brotli HM3 v2 image).
+    /// The on-disk bytes verbatim (a whole-file-Brotli HM3 image).
     pub fn get_blob(&self, x: u32, y: u32) -> Result<Option<Vec<u8>>> {
         match fs::read(self.tile_path(x, y)) {
             Ok(b) => Ok(Some(b)),

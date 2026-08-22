@@ -535,7 +535,7 @@ fn main() -> Result<()> {
     // Cluster master fast path: resolve + print the build-wide n_days and exit.
     // Every chunk then gets the SAME divisor via --n-days; a per-chunk
     // resolve_n_days would only see its own R4s and could silently diverge from
-    // the whole-area value (a 14- vs 365-day seam is ~14 dB). /gg.
+    // the whole-area value; mixed sample windows would create a visible seam.
     if args.print_n_days {
         let src = match &args.regions_file {
             Some(rf) => ring_union(read_r4_file(rf)?.into_iter()),
@@ -609,7 +609,7 @@ fn main() -> Result<()> {
 
     // A cluster chunk can hold one source but not another (a rural chunk with road data but
     // no airborne); building the absent one is a no-op, not the fatal "no source arrows" that
-    // resolve_n_days raises (Codex /gg). Without this a no-airborne chunk fails the whole job —
+    // resolve_n_days raises. Without this a no-airborne chunk fails the whole job —
     // and post-E7c that job (the GPU `line` job) also owns road/rail, which would be lost.
     if !any_source_arrow(&args.h3r4_dir, &source_r4s, sel)? {
         eprintln!("no source arrows for the selection in this chunk — nothing to build");
@@ -625,7 +625,7 @@ fn main() -> Result<()> {
         }
         _ => resolved,
     };
-    // GA 365-day hybrid weight LUT, resolved once build-wide from the
+    // GA full-year hybrid weight LUT, resolved once build-wide from the
     // source arrows' `sample_days_by_class` (consistency-asserted like
     // n_days). Threaded into the airborne scatter; cruise is airline-only.
     let class_weights =

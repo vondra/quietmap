@@ -23,7 +23,7 @@ Singapore roads currently use OSM `maxspeed` + class defaults.
 
 ### Critical pipeline limitation
 
-The pipeline's OSM extractor (`engine/osm-extract/src/classify.rs`) only accepts railway tags `rail | tram | light_rail | narrow_gauge | funicular`. **Singapore's MRT lines tagged as `railway=subway` in OSM are NOT extracted into railways.arrow** — the same bug affects Korea, Japan, Hong Kong, and many other Asian countries.
+The pipeline's OSM extractor (`engine/osm-extract/src/classify/ways.rs`) only accepts railway tags `rail | tram | light_rail | narrow_gauge | funicular`. **Singapore's MRT lines tagged as `railway=subway` in OSM are NOT extracted into railways.arrow** — the same bug affects Korea, Japan, Hong Kong, and many other Asian countries.
 
 Singapore's central hex has only 195 rail segments (mostly LRT loops at Bukit Panjang, Sengkang, Punggol), MISSING the entire MRT 6-line network:
 

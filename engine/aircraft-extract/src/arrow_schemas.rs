@@ -28,8 +28,8 @@ pub fn with_n_days(schema: Arc<Schema>, n_days: u16) -> Arc<Schema> {
     Arc::new((*schema).clone().with_metadata(md))
 }
 
-/// Build the `sample_days_by_class` metadata vector for the GA 365-day
-/// hybrid contract (`ga-365d-hybrid-plan.md` §2): a `NUM_CLASSES`-length
+/// Build the `sample_days_by_class` metadata vector for the GA hybrid
+/// contract: a `NUM_CLASSES`-length
 /// comma string indexed by noise-class idx — GA-sampled classes carry
 /// `ga_n_days`, every other class carries `n_days`. A single-window
 /// extract (`ga_n_days == 0`) stamps the uniform `n_days` vector so the
@@ -52,11 +52,11 @@ pub fn sample_days_by_class_vector(n_days: u16, ga_n_days: u16) -> String {
         .join(",")
 }
 
-/// Returns a clone of `schema` with the GA 365-day hybrid window metadata
+/// Returns a clone of `schema` with the GA full-year hybrid window metadata
 /// stamped: `n_days` (airline window), `ga_n_days` (GA-class window — only
 /// when hybrid, i.e. `ga_n_days > 0`), and the per-class
-/// `sample_days_by_class` vector the consumer's `ClassWeights` parses
-/// (`ga-365d-hybrid-plan.md` §2). Used by the airborne + airport_traffic
+/// `sample_days_by_class` vector the consumer's `ClassWeights` parses.
+/// Used by the airborne + airport_traffic
 /// writers (cruise stays on plain [`with_n_days`] — it is airline-only).
 pub fn with_n_days_and_windows(schema: Arc<Schema>, n_days: u16, ga_n_days: u16) -> Arc<Schema> {
     use noise_compute::emission::aircraft::SAMPLE_DAYS_BY_CLASS_KEY;
@@ -141,14 +141,9 @@ pub fn segments_schema() -> Arc<Schema> {
 /// crossing. `sub_segments` carries per-sub-segment period / date /
 /// flags so a long crossing that straddles 19:00 still buckets right.
 ///
-/// v16 (K3) keeps only `terrain_start_elev_m` / `terrain_end_elev_m`
-/// at sub-segment level (Stage 1 sampler). The popup terrain gates skip
-/// `SegmentTerrain::sample` (5 raster lookups → 0 on the hot path) and
-/// the chord mountain-peak check (mid / q1 / q3 vs DEM) moved to Stage 1
-/// itself (`airborne_chord_clears_peaks` in `stage_1.rs`), so v15's three
-/// intermediate columns are no longer needed at popup time. v15 stored
-/// them because the check ran in the popup; the architectural unification
-/// trades 12 % airborne.arrow size for a single source of truth.
+/// The sub-segment stores only Stage 1's `terrain_start_elev_m` and
+/// `terrain_end_elev_m`. Runtime consumers retain endpoint stale-ground and
+/// Filter D checks; the removed intermediate chord check is a documented gap.
 pub fn airborne_schema() -> Arc<Schema> {
     let sub_struct = DataType::Struct(Fields::from(vec![
         Field::new("start_lat", DataType::Float32, false),
@@ -196,19 +191,16 @@ pub fn airborne_schema() -> Arc<Schema> {
 /// traffic) are tracked via the orthogonal `*_contract` stamps.
 ///
 /// v1 stored five terrain elevations per sub-segment (start / q1 / mid /
-/// q3 / end). v2 (K3, 2026-05) drops q1 / mid / q3; the chord
-/// mountain-peak check that needed them moved to Stage 1
-/// (`airborne_chord_clears_peaks`). v1 readers crash on v2's missing
-/// columns and v2 readers can't ignore v1's extra columns silently
-/// (would degrade Stage 1's parity claim), so the stamp must mismatch
-/// loud.
+/// q3 / end). v2 (K3, 2026-05) drops q1 / mid / q3. v1 readers crash on
+/// v2's missing columns and v2 readers must not silently ignore v1's extras,
+/// so the stamp must mismatch loud.
 /// v3 (C10b, 2026-06-11): pinned WING_B748 heavy class — NUM_CLASSES
 /// 14→15 and the traffic re-sort renumbered every class index, so the
 /// `class` column of older files maps to the wrong NPD table.
-/// v4 (GA 365-day hybrid, 2026-06-12): no column change, but the file now
+/// v4 (GA full-year hybrid, 2026-06-12): no column change, but the file now
 /// carries the `sample_days_by_class` metadata vector the consumer's
-/// `ClassWeights` REQUIRES to weight GA rows at 1/365 (`ga-365d-hybrid-plan.md`
-/// §2). A v3 reader would ignore the vector and double-weight GA at 1/12
+/// `ClassWeights` REQUIRES to weight GA rows at `1/ga_n_days`. A v3 reader
+/// would ignore the vector and double-weight GA at 1/12
 /// (the +14.8 dB phantom); the bump makes that skew refuse to load.
 pub const AIRBORNE_CONTRACT_V4: &str = "airborne_v4";
 
@@ -348,24 +340,24 @@ pub fn assert_cruise_contract(metadata: &HashMap<String, String>) -> anyhow::Res
 /// v8 (C10b, 2026-06-11): pinned WING_B748 — `class_idx` renumbering AND
 /// the baked per-class `band_energy_lin` reflect the new 15-class table,
 /// see [`AIRBORNE_CONTRACT_V4`].
-/// v9 (GA 365-day hybrid, 2026-06-12): the row-replicated `microseg_unique_*`
-/// UNIONs are the ONE place airline (12-day) and GA (365-day) movement
+/// v9 (GA full-year hybrid, 2026-06-12): the row-replicated `microseg_unique_*`
+/// UNIONs are the ONE place airline-window and GA-window movement
 /// counts would mix in a single number. Because classes partition flights,
 /// the union splits exactly: the existing three columns become **non-GA
 /// only** and three new `microseg_unique_ga_*` columns hold the GA-class
-/// union. The popup divides `non_ga / n_days + ga / ga_n_days`
-/// (`ga-365d-hybrid-plan.md` §2). The file also stamps `sample_days_by_class`
-/// so the consumer weights GA *energy* at 1/365. (`unique_gse_count_per_class`
+/// union. The popup divides `non_ga / n_days + ga / ga_n_days`. The file also
+/// stamps `sample_days_by_class`
+/// so the consumer weights GA energy at `1/ga_n_days`. (`unique_gse_count_per_class`
 /// is untouched — GSE is airline-pass only.)
 pub const AIRPORT_TRAFFIC_CONTRACT_V9: &str = "airport_traffic_v9";
 
 /// Global airport summary sidecar contract (one row per airport_key,
 /// truly unique counts across all R4s). Produced by Stage 2C reduce phase
 /// from per-R4 `airport_summary_parts/` dumps.
-/// v2 (GA 365-day hybrid, 2026-06-12): the airport-level arr/dep/ops fid
+/// v2 (GA full-year hybrid, 2026-06-12): the airport-level arr/dep/ops fid
 /// UNIONs also cross windows, so each splits into a non-GA (existing) and a
-/// GA set; the popup divides `non_ga / n_days + ga / ga_n_days` (Codex CRIT
-/// delta 2). GSE is airline-pass only — its per-class counts are unsplit.
+/// GA set; the popup divides `non_ga / n_days + ga / ga_n_days`. GSE is
+/// airline-pass only — its per-class counts are unsplit.
 pub const AIRPORT_SUMMARY_CONTRACT_V2: &str = "airport_summary_v2";
 
 /// `geometry_kind` enum stamped on each airport_traffic row.
@@ -447,13 +439,13 @@ pub fn airport_traffic_schema() -> Arc<Schema> {
         // popup populate per-microseg movement counts without a UNION
         // join over per-row scalars. v9: these three count NON-GA-class
         // fids only — the GA-class union lives in the `microseg_unique_ga_*`
-        // columns below so the popup can divide each by its own window
-        // (`non_ga / n_days + ga / ga_n_days`, `ga-365d-hybrid-plan.md` §2).
+        // columns below so the popup can divide each by its own window:
+        // `non_ga / n_days + ga / ga_n_days`.
         Field::new("microseg_unique_count", DataType::UInt32, false),
         Field::new("microseg_unique_arr_count", DataType::UInt32, false),
         Field::new("microseg_unique_dep_count", DataType::UInt32, false),
         Field::new("microseg_unique_gse_count_per_class", gse_per_class, false),
-        // v9 GA-class microseg UNION (PROP_C172 + HELICOPTER): the 365-day
+        // v9 GA-class microseg UNION (PROP_C172 + HELICOPTER): the full-year
         // window split of the three columns above. Zero on non-hybrid
         // extracts (no flights routed to the GA window) — then the popup's
         // `ga / ga_n_days` term vanishes and the math degenerates to legacy.
@@ -491,7 +483,7 @@ pub fn assert_airport_traffic_contract_v9(
 /// reduce phase. Loaded once at popup query time; HashMap keyed by
 /// airport_key.
 ///
-/// v2 (GA 365-day hybrid): arr/dep/ops counts split into non-GA (existing
+/// v2 (GA full-year hybrid): arr/dep/ops counts split into non-GA (existing
 /// columns) + GA (`airport_unique_ga_*`) so the popup divides
 /// `non_ga / n_days + ga / ga_n_days`. GSE per-class stays unsplit
 /// (airline-pass only). GA columns are zero on non-hybrid extracts.
@@ -513,7 +505,7 @@ pub fn airport_summary_schema() -> Arc<Schema> {
         Field::new("airport_unique_dep_count", DataType::UInt32, false),
         Field::new("airport_unique_gse_count_per_class", gse_per_class, false),
         Field::new("airport_unique_ops_count_per_kind", ops_per_kind(), false),
-        // GA-class (365-day) window.
+        // GA-class full-year window.
         Field::new("airport_unique_ga_arr_count", DataType::UInt32, false),
         Field::new("airport_unique_ga_dep_count", DataType::UInt32, false),
         Field::new(

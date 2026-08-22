@@ -24,8 +24,7 @@ pub(super) fn emit_segment_traces(
     microsegs_by_id: Vec<((u64, u16), MicrosegAcc)>,
     microseg_cache: &HashMap<(u64, u16), MicrosegPath>,
     n_days_f: f64,
-    // GA-class window (365-day) divisor for the split-union microseg
-    // movement counts (`ga-365d-hybrid-plan.md` §2 / delta 2).
+    // GA-class divisor for the split-union microsegment movement counts.
     ga_n_days_f: f64,
     recv_lat: f64,
     recv_lon: f64,
@@ -295,7 +294,7 @@ pub(super) fn emit_segment_traces(
         // (`microseg_unique_*`) captured into MicrosegAcc on first
         // insert — popup reads them directly without HashSet union.
         // v9: each split into `non_ga / n_days + ga / ga_n_days` so a
-        // one-off GA movement reads at its true 365-day frequency.
+        // one-off GA movement reads at its full-year frequency.
         let split = |non_ga: u32, ga: u32| non_ga as f64 / n_days_f + ga as f64 / ga_n_days_f;
         let observed_movements = split(acc.unique_count, acc.unique_ga_count);
         let arrivals_per_day = split(acc.unique_arr_count, acc.unique_ga_arr_count);

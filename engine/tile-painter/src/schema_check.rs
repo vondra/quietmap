@@ -21,8 +21,8 @@ use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use memmap2::Mmap;
 
-/// Rev 2 plan §1.4 + Codex W1 + Claude W7: empty since v15 (Opt A).
-/// v15 adds mandatory `terrain_*_elev_m` sub-segment columns; legacy
+/// Empty since v15: terrain elevations are mandatory.
+/// v15 adds `terrain_*_elev_m` sub-segment columns; legacy
 /// versions can't provide them, and the heatmap loader's per-column
 /// `unwrap_or_else(vec![0.0; n])` would silently zero-out terrain,
 /// masking real underground segments. Re-extract is the only path
@@ -108,8 +108,8 @@ pub fn check_airport_traffic_contract(label: &str, batches: &[RecordBatch]) -> R
 }
 
 /// `airborne.arrow` carries `airborne_contract` (K3, 2026-05). v1
-/// stored five terrain elevations per sub-segment; v2 dropped q1/mid/q3
-/// (chord mountain-peak check moved to Stage 1). Heatmap loader uses
+/// stored five terrain elevations per sub-segment; v2 dropped q1/mid/q3.
+/// Heatmap loader uses
 /// `take_f32` with a `0.0`-fill fallback, so a v1 file would silently
 /// alias `terrain_q1_elev_m` data into what v2 treats as
 /// `terrain_end_elev_m` — produce wrong Filter D cuts at every pixel.

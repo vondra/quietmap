@@ -88,7 +88,7 @@ Day: 07:00–19:00, evening: 19:00–23:00, night: 23:00–07:00.
 
 ### Grid
 
-A Web-Mercator raster at zoom 12 (512-pixel tiles, ~12 m per pixel at 50°N, varies with latitude) — fine enough to distinguish the street-facing vs garden side of a building. A zoom pyramid (z2–12) serves coarser tiles when zoomed out.
+A Web-Mercator raster at zoom 12 (512-pixel tiles, ~12 m per pixel at 50°N, varies with latitude) — fine enough to distinguish the street-facing vs garden side of a building. A zoom pyramid (z2–12) serves coarser tiles when zoomed out; selected areas can publish z13 detail at half the pixel spacing.
 
 ### Color scale
 
@@ -132,7 +132,7 @@ Shades every map pixel below a configurable noise threshold (default 35 dB, slid
 Computed — a physics model (CNOSSOS-EU emission, ISO 9613-2 propagation) over public data. No microphone network could cover the planet at 12-meter resolution. The model is continuously checked against real monitoring stations; see [Validation](/about/methodology).
 
 **How accurate is it?**
-It's an engineering estimate, not a certificate. The target is a mean error under 3 dB against official strategic noise maps for road noise, and every confirmed gap against a real measurement station becomes a fix. For a single address, read the value as "around X dB" — and click the point to see exactly what the number is built from.
+It's an engineering estimate, not a certificate. A gap against a measurement or official map is first attributed to better input data, a justified methodology difference, or a model defect; only defects become fixes. For a single address, read the value as "around X dB" — and click the point to see exactly what the number is built from.
 
 **Why does my quiet street show 50 dB?**
 Click it. Most surprises have a visible cause: a road with no measured traffic falls back to class defaults, a nearby factory is classified by registry sector, or the dominant source is something you've tuned out. If the inputs are genuinely wrong for your street, [tell us](mailto:hello@quietmap.org) — reports with an address are how the map gets better.
@@ -169,7 +169,7 @@ Some of it was built while hiking the forests of La Palma — changes discussed 
 
 quietmap.org is an internal project of [Miton](https://www.miton.cz/en/).
 
-The code will be open-sourced once the repository is cleaned up for public release. The computations themselves are already transparent and reproducible from public data.
+The [product code is open source](https://github.com/vondra/quietmap), and the computations are transparent and reproducible from public data.
 
 ## Credits & terms
 

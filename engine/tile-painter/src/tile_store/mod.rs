@@ -16,27 +16,15 @@
 //!            the natural compaction pass), never in place.
 //! ```
 //!
-//! Design decided by measurement (2026-07-08; see the census + codec
-//! experiment in the git history of this file):
+//! Design constraints:
 //!
-//! * **Variable-size blobs + dense index, NOT fixed slots**: z13 sizes spread
-//!   p50 717 B → max 41,460 B (`total`); fixed max-sized slots would burn
-//!   534 GB for 55 GB of actual bytes (~90 % waste). Bounds: every 256 px tile
-//!   < 42 KB, every 2×2 block (future 512 px tile) < 160 KB, pyramid z8 max
-//!   51 KB ⇒ `len` fits u32 with huge margin, `offset` is u64.
-//! * **Codecs** ([`TileCodec`]): source-layer z13 keeps the fleet-encoded
-//!   whole-file-Brotli HM3 v2 blob VERBATIM (flows untouched into pmtiles).
+//! * **Variable-size blobs + dense index, not fixed slots**: measured tile
+//!   sizes vary too widely for fixed slots. Blob length fits u32; offset is u64.
+//! * **Codecs** ([`TileCodec`]): source-layer entries keep the fleet-encoded
+//!   whole-file-Brotli HM3 blob verbatim (it flows untouched into PMTiles).
 //!   Central intermediates (total, all pyramid levels) ALSO write `BrotliHm3`
-//!   directly since 2026-07-16 (`TileStore::put_cells_hm3`) — every store
-//!   entry ships verbatim at publish time now, whatever wrote it. Before that
-//!   date central writes used zstd-1 over the raw 65,536 cells (measured
-//!   132 µs/tile round-trip vs 8,803 µs for the brotli-q9 round-trip, 67×
-//!   less codec CPU at WRITE time — the reason the combine/pyramid phase
-//!   wasn't compression-bound), but it forced `tile-store-pack` to redo that
-//!   same brotli-q9 encode, from scratch, on EVERY publish (measured ~63 min
-//!   for one 580k-tile layer) — moving the encode to write time is what
-//!   killed that cost. `ZstdCells` is now legacy-read-only; see its own
-//!   doc for the deletion condition.
+//!   directly (`TileStore::put_cells_hm3`), so every current entry ships
+//!   verbatim. `ZstdCells` is legacy-read-only; see its own deletion condition.
 //! * **pread/pwrite, no mmap**: reads hit the same page cache mmap would; no
 //!   unsafe, no remap-on-growth. The index is fixed-size from creation; the
 //!   data log grows by [`store::FALLOC_CHUNK`] `fallocate` steps (concurrent
@@ -48,10 +36,9 @@
 //!   per-(layer,zoom) `flock` before recovering the tail or reserving any offset
 //!   (`store::acquire_write_lock`). The build-level `_combine`/`.ingest.lock`
 //!   flocks stay as coarser OUTER locks, but are no longer the only thing
-//!   between two writer processes and offset-overlap corruption (industrial/z12,
-//!   2026-07 — dual /gg root cause).
-//! * **Crash contract: process-crash-safe, NOT host-crash-durable** (dual
-//!   review 2026-07-08). There is deliberately no per-tile fsync (throughput);
+//!   between two writer processes and offset-overlap corruption.
+//! * **Crash contract: process-crash-safe, NOT host-crash-durable**. There is
+//!   deliberately no per-tile fsync (throughput);
 //!   after an unclean HOST crash, entries whose data pages never reached disk
 //!   may decode as garbage. Recovery path: every producer (transcode, combine,
 //!   hub pushes) is re-runnable and the pack step decode-validates every tile —
@@ -62,8 +49,8 @@
 //!   window (index page durable, data size update not).
 //!
 //! Submodules: [`format`] = on-disk layout + entry codec · [`store`] = the
-//! read/write store · [`loose`] = read-only adapter over the legacy loose tree
-//! (transcode source + parity diffing) · [`manifest`] = shared pmtiles-manifest
+//! read/write store · [`loose`] = read-only adapter over run-scoped loose staging
+//! (transcode source + parity diffing) · [`manifest`] = shared PMTiles-manifest
 //! parsing (safe filenames, `layers` → `file` extraction) used by both the packer's
 //! merge preflight and `tile-store-gc`'s retention sweep.
 

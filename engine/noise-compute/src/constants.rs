@@ -12,7 +12,6 @@ pub const ALPHA_ATM: [f64; NUM_BANDS] = [0.1, 0.4, 1.0, 1.9, 3.7, 8.7, 22.0, 58.
 /// Vegetation attenuation [dB/m] (ISO 9613-2:2024 Annex A.2.2 × 0.5 Central Europe calibration).
 /// WHY: ISO values calibrated for dense deciduous foliage in full leaf. ESA WorldCover
 /// "tree cover" class 10 includes canopy ≥10% (sparse/coniferous/mixed), averaging ~50%.
-/// See docs/future-plans/forest-continuous-density.md for the continuous-raster alternative.
 pub const ALPHA_VEG: [f64; NUM_BANDS] = [0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.045, 0.06];
 
 /// Maximum vegetation attenuation per band [dB] (ISO 9613-2 Table A.1 × 0.5 Central Europe calibration).
@@ -134,7 +133,7 @@ pub const P_FAV: f64 = 0.5;
 pub const FAVOURABLE_MIXING: bool = true;
 
 /// CNOSSOS-EU (2.5.24) favourable-ray curvature Γ = max(Γ_MIN, Γ_PER_DSR·d),
-/// d = slant source→receiver distance (review-pinned reading).
+/// d = slant source→receiver distance.
 pub const FAV_RAY_CURVATURE_MIN_M: f64 = 1000.0;
 pub const FAV_RAY_CURVATURE_PER_DSR: f64 = 8.0;
 
@@ -239,9 +238,8 @@ pub const ROAD_MAX_RADIUS: [f64; 13] = [
 /// every row (commit `8540e4cb`, "all types") is retired — a quiet branch line
 /// truncating at the same distance as a 300 km/h corridor was a correctness
 /// bug, not a tuning choice. The solver reproduces the old 7 km for a *default
-/// mainline* (80 pax + 20 freight @ 80 km/h → 25.3 dB @ 7 km, the 2026-05-24
-/// Codex empirical re-derived in `.claude/plans/heatmap-orchestrator-audit/
-/// layer-line.md` §A), so the change is value-neutral for the dominant class
+/// mainline* (80 pax + 20 freight @ 80 km/h → 25.3 dB @ 7 km), so the change
+/// is value-neutral for the dominant class
 /// and only moves the 25-30 dB fringe ring on the tails (quiet rows shrink,
 /// HS/loud corridors extend to the noise we currently truncate).
 ///
@@ -263,15 +261,10 @@ pub const RAILWAY_REACH_CLAMP_MAX: f64 = 10_000.0;
 /// at the same crossing — e.g. motorway 10 km, residential 800 m — so road and
 /// rail reach use one boundary). Display floor, not a physics cutoff.
 ///
-/// KNOWN CONVENTION GAP (shared with the road caps; Codex /gg 2026-06-12):
-/// the solve is free-field UNREFLECTED, but the kernels add receiver-facade
-/// reflection (up to ~+5 dB) before propagation — at a reflective receiver
-/// the true 25 dB crossing sits past the cap (default mainline 7.1 → 9.5 km;
-/// worst CZ stamped row 8.9 → 11.6 km, still 27.9 dB at the 10 km ceiling).
-/// Affected band: 25-30 dB at facades only; the pre-S5 7 km blanket had the
-/// SAME gap (its reflected mainline crossing was already ~9.5 km). Revisit
-/// road+rail TOGETHER (+5 dB solve headroom) if SHM/check-world facade
-/// points near cutoffs show measurable under-coverage.
+/// KNOWN CONVENTION GAP shared with the road caps: the solve is free-field
+/// unreflected, while the kernels can add up to 3 dB of receiver reflection.
+/// Revisit road and rail together if measured facade points near their cutoffs
+/// show under-coverage.
 pub const RAILWAY_REACH_TARGET_LDEN_DB: f64 = 25.0;
 
 /// Widest rail reach the clamp can return — used to size the rail-only

@@ -32,7 +32,7 @@ For now, `trains_freight` remains 0 in the enriched data. CNOSSOS-EU defaults ar
 - **OpenStreetMap** — Industrial/commercial landuse polygons with `industrial=*` sub-tags (factory, warehouse, sawmill, scrap_yard, wastewater_plant, etc.)
 - **E-PRTR (European Pollutant Release and Transfer Register)** — supplies 2-digit NACE sector codes for Czech industrial complexes (CZ is an E-PRTR reporter), spatially joined to OSM industrial sites within 2 km via the continental industrial pass (`enrich-global-industrial.ts`). GPPD (power plants, NACE 35) and the GEM steel/cement/coal-mine trackers add coverage via `/enrich-global`.
 - **[IRZ (Integrovaný registr znečišťování)](https://www.irz.cz/)** — the Czech national pollution register (ČHMÚ) is registered as a higher-priority national source but is not yet ingested; Czech sector codes currently come from E-PRTR.
-- **[SHM 2022 industrial contours](https://geoportal.mzcr.cz/server/rest/services/SHM2022/INSPIRE/MapServer)** — Official industrial noise contours in 6 agglomerations (Praha, Brno, Ostrava, Plzeň, Olomouc, Liberec), used for model calibration and validation
+- **[SHM 2022 industrial contours](https://geoportal.mzcr.cz/server/rest/services/SHM2022/INSPIRE/MapServer)** — Official industrial noise contours in 6 agglomerations (Praha, Brno, Ostrava, Plzeň, Olomouc, Liberec), used to cross-check input coverage and methodology
 
 ## Wind turbines
 
@@ -43,7 +43,6 @@ For now, `trains_freight` remains 0 in the enriched data. CNOSSOS-EU defaults ar
 
 - **[adsb.lol](https://adsb.lol)** — Historical ADS-B trajectories over Czech airspace
 - Flight paths, altitudes, and aircraft types extracted for noise computation
-- Aircraft noise is not yet formally validated; official SHM airport contours are the planned reference
 
 ## Terrain elevation
 
@@ -65,13 +64,11 @@ For now, `trains_freight` remains 0 in the enriched data. CNOSSOS-EU defaults ar
 
 ## Reference measurements and validation
 
-- **[Strategic Noise Maps (SHM)](https://shm.env.cz/) / [CENIA](https://www.cenia.cz/)** — Official strategic noise maps used as validation reference
-- Target accuracy: mean absolute error below 3 dB compared to SHM reference data
-- Validation is a manual benchmark suite run before releases
+- **[Strategic Noise Maps (SHM)](https://shm.env.cz/) / [CENIA](https://www.cenia.cz/)** — Official strategic noise maps used to explain deviations in input coverage and methodology, never as a calibration target
 - **[Prague Geoportal](https://atlas.geoportalpraha.cz/)** — Prague noise maps with layers:
   - Noise level — day (6:00–22:00) and night (22:00–6:00) per Czech national definition (differs from END standard 07–19/19–23/23–07; quietmap.org uses the END periods for its own Lden calculation)
   - Strategic noise map 2022 (SHM) — Ldvn bands (day) and Ln bands (night)
-  - Useful for per-street validation in Prague area
+  - Useful for per-street cross-checks in Prague
 
 ## Real estate — in preparation
 

@@ -12,7 +12,7 @@ The map computes environmental noise in three steps:
 
 2. **Sound travels and fades** — noise gets quieter with distance. Hills block it, buildings screen it, forests absorb it. We simulate this physics for every source-receiver pair using ISO 9613-2 propagation with 8 octave bands.
 
-3. **You see the result** — the map shows noise at every ~12-meter raster cell, colored from pale at the quiet end through yellow and orange to red and deep purple (very loud, 80+ dB). Each source layer is independent — toggle them to see roads alone, railways alone, or everything combined.
+3. **You see the result** — the base atlas samples noise about every 12 m; the optional z13 city-detail tier halves that spacing to about 6 m. Cells are colored from pale at the quiet end through yellow and orange to red and deep purple (very loud, 80+ dB). Each source layer is independent — toggle them to see roads alone, railways alone, or everything combined.
 
 ![quietmap.org — noise visualization](map-overview.jpg)
 
@@ -94,7 +94,7 @@ Measured counts override defaults. The day/evening/night split varies by region 
 
 The aircraft layer combines two models: airborne overflights from ADS-B radar trajectories, processed through NPD (Noise-Power-Distance) profiles inspired by ECAC Doc 29, and airport ground operations (runway roll, taxi, apron movement) extracted directly from low-altitude / on-ground ADS-B trajectories with the nearest mapped aerodrome attached for identity. The map shows everything together; the popup splits aircraft into three tabs — ground paths, airborne sub-segments, and cruise hexes.
 
-- **Data:** ADS-B trajectories from two feeds — [ADSBExchange](https://www.adsbexchange.com) samples (1st of each month, 12 days/year) for airline and other scheduled traffic, and [adsb.lol](https://adsb.lol) community feeds sampled across all 365 days for GA and helicopter traffic, whose occasional flights need the full year to be weighted honestly — plus OSM aeroway lines (runways / taxiways) and aerodrome polygons. ADS-B ground legs project onto OSM microsegments to derive per-microsegment movements.
+- **Data:** ADS-B trajectories from two feeds — [ADSBExchange](https://www.adsbexchange.com) samples (1st of each month, 12 days/year) for airline and other scheduled traffic, and [adsb.lol](https://adsb.lol) community feeds sampled on the 364 available days from 2 June 2025 through 1 June 2026 (one day was never published upstream) for GA and helicopter traffic, whose occasional flights need the full year to be weighted honestly — plus OSM aeroway lines (runways / taxiways) and aerodrome polygons. ADS-B ground legs project onto OSM microsegments to derive per-microsegment movements.
 - **Per-typecode aircraft profiles** auto-generated from EASA ANP v2.3 (Aircraft Noise and Performance database) — covers Boeing 737/747/757/767/777/787, Airbus A319/A320/A321/A330/A340/A350/A380, Embraer E-Jets, ATR, Dash 8 — plus dedicated light-GA (Cessna 172) and helicopter noise classes.
 - **Limitations:** Most modern jets (737 MAX, A320neo, A321neo) have dedicated profiles from EASA ANP v2.3 + supplementary v9 sources; less-common variants fall back to a similarity-based mapping by engine type and size class. Ground ops show what ADS-B observed — no synthetic backfill, so movements outside the receiver coverage don't appear. Where no volunteer ADS-B feeder is nearby, low-altitude flights are not received at all and the map shows only high-altitude cruise noise (~20 dB) — a limit of the data source, not the model. Day/evening/night periods are derived from the segment-midpoint coordinate using an IANA timezone database (DST-aware). Atlas-scale patterns, not certified airport contouring.
 
@@ -114,7 +114,7 @@ The aircraft layer combines two models: airborne overflights from ADS-B radar tr
 | Light GA | C172 (Cessna) | 85.0, 80.0, 76.0, 72.0, 65.0, 58.0, 53.0, 47.0, 41.0, 35.0 |
 | Helicopter | EC35 | 99.3, 95.9, 93.5, 91.0, 86.6, 81.2, 77.4, 72.7, 66.7, 59.9 |
 
-**Airport ground ops** — per-microsegment model on OSM aeroway geometry. Each ADS-B ground leg projects onto runway / taxiway microsegments (50 m perpendicular buffer); `ops_kind` comes from OSM `aeroway_type` where a microsegment match exists (a speed-threshold fallback covers unmatched legs). Per-event SEL anchored at 25 m, propagated through Section 3 path effects. Runway-roll departures get Doc 29's +2 dB. DBSCAN auto-discovery covers OSM-missing airfields. Movements outside the ADS-B receiver footprint don't appear (no synthetic backfill).
+**Airport ground ops** — each ADS-B ground leg is clipped against runway / taxiway microsegments within the 50 m buffer; `ops_kind` comes from OSM. Legs missing every real or DBSCAN-synthetic microsegment are dropped. Aircraft rows store per-metre `LW′`; ground-support-equipment rows store per-event SEL at 25 m. Runway-roll departures get +2 dB. Movements outside ADS-B coverage do not appear.
 
 **Popup tabs**: *Ground* (per airport microsegment + movement kind), *Airborne* (per Stage 2A sub-segment), *Cruise* (per crossed H3-R7 hex).
 
@@ -130,12 +130,12 @@ Industrial noise is spatially concentrated, near-constant, and locally dominant 
 
 - **Data:** OpenStreetMap industrial landuse + NACE codes from pollution registries (EU-wide E-PRTR, Global Power Plant Database)
 - **Wind turbines:** IEC 61400-11 model, emission based on rated power (98–106.5 dB(A) Lw)
-- **Formula:** `Lw = base_sector + 10 × log₁₀(area / 10,000 m²)` — area capped at 500,000 m²
+- **Formula:** `Lw = base_sector + a_weighted_total(spectrum) + 10 × log₁₀(clamp(area, 100 m², cap) / 10,000 m²)` — cap 500,000 m² by default and 3,000,000 m² for heavy sectors/subtypes
 
 <details>
 <summary>Technical: industrial emission profiles (ISO 8297 + NACE)</summary>
 
-[ISO 8297](https://www.iso.org/standard/15401.html), [CNOSSOS-EU §2.4](https://eur-lex.europa.eu/eli/dir_del/2021/1226). Reference area 10 000 m² (a 100 000 m² factory adds 10 dB to its base). Profile priority: registry `nace_4digit` → OSM subtype → coarse source type. The Base Lw values below were calibrated against the EU's [END](https://eur-lex.europa.eu/eli/dir/2002/49/oj/eng) strategic noise maps (2022 round; plus EU Directive 2000/14/EC limits and 3M Noise Navigator measurements), and the radiated total deliberately stays on that calibration: each sector's A-weighted spectrum adds a fixed +4.9 to +6.4 dB(A) on top of its Base Lw. A per-sector re-anchoring against multi-country measurements is the planned next step.
+[ISO 8297](https://www.iso.org/standard/15401.html), [CNOSSOS-EU §2.4](https://eur-lex.europa.eu/eli/dir_del/2021/1226). Reference area 10 000 m² (a 100 000 m² factory adds 10 dB to its base). Profile priority: registry `nace_4digit` → OSM subtype → coarse source type. Base Lw was authored against Czech SHM 2022 under the former spectrum normalization; the current engine explicitly restores the exact per-profile spectrum scalar. Multi-country checks found no residual per-sector re-anchoring warranted.
 
 **By OSM site type** (when no registry NACE):
 
@@ -169,8 +169,6 @@ Industrial noise is spatially concentrated, near-constant, and locally dominant 
 | Retail / logistics | 46/47 | 84 dB | -8 | -20 |
 | Agriculture | 1-3 | 70 dB | -5 | -20 |
 
-The tabulated Base Lw is a calibration anchor, not the radiated total: the site radiates Base Lw plus its sector spectrum's A-weighted sum (+4.9..+6.4 dB(A)), preserving the END strategic-noise-map calibration the bases were authored against.
-
 Source height: 8 m (quarry), 10 m (heavy industry NACE 5/8/23/24/35), 5 m (other), hub height for wind turbines (default 105 m, tag errors clamped at 175 m).
 
 **Wind turbines** (IEC 61400-11): published max LwA is nearly flat across ratings — 98 dB(A) (< 1 MW), 104 (1–2 MW), 105 (2–3 MW + unknown default), 106 (3–5 MW), 106.5 (≥ 5 MW); ratings above 8 MW are treated as OSM tag errors (unknown).
@@ -195,6 +193,10 @@ The map receiver is normally a façade/outdoor receiver. When a click is
 inside an enclosed Overture footprint, the popup also gives a closed-window
 indoor estimate. This is a display-level use of the building envelope (the
 wall-and-window reduction), not a second propagation run:
+
+Painted indoor cells use one geometrically nearest outdoor donor in their 3×3
+neighbourhood for every layer; `NO_DATA` remains `NO_DATA`. The popup reports
+the nearest outside façade point.
 
 | Building type | Product reduction ΔL |
 |---|---:|
@@ -272,7 +274,7 @@ Per type from `settlement.rs::building_profile`. **Scale** = whether floors mult
 
 `building=yes` (~79 % of all polygons, no specific type) defaults to apartments. **~1.7 % are *silent*** (sheds, roofs, ruins, greenhouses — uninhabited / unheated) and emit nothing. Each building radiates from height / 2 (mid-facade) as an ISO 9613-2 point source.
 
-**A specific structural tag wins over an amenity POI inside it** (fixed 2026-06): a `building=warehouse` or `building=stadium` with an `amenity=bar` is a warehouse / stadium, **not** a restaurant the size of the whole envelope. (This was the Strahov-Stadium-as-100 dB-restaurant bug.) Only generic envelopes (`building=yes`/`commercial`) take their type from the amenity.
+**A specific structural `building=*` tag wins over an amenity POI inside it:** a warehouse or stadium remains a warehouse or stadium. Only generic envelopes (`building=yes`/`commercial`) take their function from the amenity.
 
 </details>
 
@@ -327,12 +329,12 @@ Road, railway, industrial, settlement, and aircraft ground ops use the same prop
 |--------|-------------|-------------|-----------|
 | Distance | Sound spreads out — 3 dB per doubling (line), 6 dB (point) | Geometry | Baseline |
 | Atmosphere | Air absorbs high frequencies over long distances | ISO 9613-1 (15°C, 70% RH) | Baseline |
-| Ground | Soft ground (grass) absorbs; hard ground (asphalt) reflects | ESA WorldCover land-cover → imperviousness proxy (global) refined by Copernicus IMD where sourced (currently CZ) → G-factor | ~3 dB |
+| Ground | Soft ground (grass) absorbs; hard ground (asphalt) reflects | ESA WorldCover land-cover → imperviousness proxy (global) refined by Copernicus IMD where sourced → G-factor | ~3 dB |
 | Terrain | Hills block sound via diffraction | Copernicus GLO-30 DEM (30m) | 20 dB |
-| Buildings | Buildings screen sound like walls | Overture building-height raster (30m) | 20 dB/band |
+| Buildings | Buildings screen sound like walls | Overture footprint obstacle store with exact ray crossings; 30 m building-height raster as an all-or-raster fallback | 20 dB/band |
 | Vegetation | Forests absorb sound, especially high frequencies | ESA WorldCover 2021 | 2–12 dB/band |
 | Reflections | Urban canyons bounce sound, increasing levels | Building enclosure heuristic | +3 dB |
-| Weather | Downwind/inversion conditions can carry sound further | Not currently modelled | — |
+| Weather | Long-term favourable conditions alter ground and diffraction | CNOSSOS homogeneous/favourable mix, `P_FAV = 0.5` | Path-dependent |
 
 **Key rule:** When a barrier (hill or building) is present, it replaces the ground effect — you get the larger of the two, not both (ISO 9613-2 §7.3.1). Vegetation attenuation is always additive.
 
@@ -354,7 +356,7 @@ L_received,i = L_emission,i − A_div,i − A_atm,i − max(A_ground,i, A_terrai
 
 **A-weighting** (IEC 61672-1): `[-26.2, -16.1, -8.6, -3.2, 0.0, 1.2, 1.0, -1.1]` dB.
 
-**Diffraction**: DEM + building heights + explicit barriers merge into one composite top-profile sampled along source→receiver; diffraction computed once over the composite so a building on a hill can't double-count Fresnel. Capped at 20 dB in all cases (the multi-edge 25 dB cascade was retired 2026-06; one composite edge now). The popup splits the combined attenuation back into `terrain` + `screening` for UI breakdown, but the physics is computed together. Building reflections (§7.5) are a 0 / 1.5 / 3 dB boost keyed to local enclosure density.
+**Diffraction**: sampled DEM supplies the cadence edge. With complete vector coverage, Overture footprint crossings and explicit barrier crossings are exact candidates; otherwise buildings use the 30 m raster fallback. Exact and sampled candidates compete by maximum path difference δ, and one dominant edge is evaluated once, capped at 20 dB per band. The popup splits the combined attenuation back into `terrain` + `screening` for UI breakdown, but the physics is computed together. Building reflections (§7.5) are a 0 / 1.5 / 3 dB boost keyed to local enclosure density.
 
 **Vegetation** (ISO 9613-2:2024 A.2.2 × 0.5 Central Europe calibration):
 
@@ -365,9 +367,9 @@ L_received,i = L_emission,i − A_div,i − A_atm,i − max(A_ground,i, A_terrai
 
 × 0.5 reflects that WorldCover binary forest raster fires at ≥ 10 % tree cover but ISO defaults assume dense canopy.
 
-**Ground**: G = 1 − IMD/100 (G = 0 hard, G = 1 soft). Per-band correction factors `[-1.5, -0.7, 1.5, 2.5, 2.0, 1.3, 0.7, 0.2]` × G.
+**Ground**: `G = 1 − IMD/100`. Surface sources evaluate CNOSSOS §2.5.14–20 per band from ray geometry, path/source-end G, and the `P_FAV = 0.5` state mix. Aircraft ground operations alone retain the band-mean compatibility formation.
 
-**Favourable weather**: not currently applied. `P_FAV = 0.5` placeholder in code; no wind / inversion boost.
+**Favourable weather**: homogeneous and favourable ground/diffraction states are mixed energetically with `P_FAV = 0.5`; no local wind, inversion, or period-specific probability is ingested.
 
 → Full derivation, edge selection, Rayleigh δ\* gate, simplifications: `engine/noise-compute/SPEC.md` §3.
 
@@ -382,27 +384,24 @@ This model is an engineering approximation for a continental-scale noise atlas �
 | Area | Standard says | We do | Impact |
 |------|-------------|-------|--------|
 | Source height (roads) | CNOSSOS-EU: 0.05 m (rolling) / 0.30 m (propulsion) | 0.05 m for both | Minor — propulsion height difference negligible at atlas scale |
-| Terrain profile | Professional SW: 5–10 m spacing | Adaptive 30 m spacing (8–50 points) | May miss narrow barriers (<30 m wide) |
+| Terrain profile | Professional SW: 5–10 m spacing | One 10 m near-probe and three probes at each of 30/60/120 m from both ends, then ~240 m middle steps; the surface heatmap alone coarsens the long-ray middle to ~491 m by default | May miss narrow raster terrain between samples; exact building and barrier vectors remain candidates |
 | Aircraft type mapping | Doc 29 / ANP: aircraft-specific certified profiles + procedural steps + weights | Per-ICAO-typecode NPD profiles auto-generated from EASA ANP v2.3 (+ v9 supplement), bucketed at a fixed set of noise classes for aggregation (see SPEC §5) | ±1-2 dB for ANP-mapped types; similarity fallback for unmapped typecodes routes to closest anchor by engine/size class |
 | Aircraft timing | Airport-local time and operational preprocessing | Segment midpoint → IANA timezone (tzf-rs) → DST-aware local time (chrono-tz); END default period boundaries | Global local time; only airport-local operational-preprocessing differences remain |
 | Aircraft ground ops | Curated surface-movement inventories + airport-local operational data | ADS-B legs projected onto OSM aeroway microsegments (runway/taxiway); per-microsegment movement counters; DBSCAN auto-discovery for OSM-missing airfields | Near-runway levels depend on ADS-B coverage; movements outside the receiver footprint don't appear (no synthetic backfill) |
 | Tile propagation | Operational studies may expose a per-effect propagation breakdown | Tiles store one combined full-propagation Lden per source layer (z12 HM3); the click popup's `traces` expose per-leg / per-sub-segment detail | No per-effect (terrain/screening/vegetation) isolation at tile resolution |
-| Receiver grid | END: facade receivers (4 m height, 2 m from wall) | z12 Web-Mercator raster pixel centers (~12 m at 50°N, 4 m height) | Area average, not per-facade |
+| Receiver grid | END: facade receivers (4 m height, 2 m from wall) | Web-Mercator pixel centers at 4 m height: ~12 m at 50°N for base z12, ~6 m for the optional z13 detail tier | Area average, not per-facade |
 | Road corrections | CNOSSOS-EU: gradient, intersection, temperature | Not implemented | ±1–3 dB on steep/cold roads |
 | Building reflections | ISO 9613-2 §7.5: image-source ray tracing | Simplified: local enclosure heuristic, 0–3 dB boost | May underestimate in complex geometries |
 | Settlement noise | Not standardised (END covers road/rail/aircraft/industry only) | Unified area-law: 14 building types + leisure areas | Extension — built on EN ISO 12354-4 / VDI / DIN engineering data |
-| Atmospheric conditions | Variable: temperature, humidity, wind speed | Fixed: 15°C, 70% RH; favourable-weather boost not applied | Seasonal/hourly variation not captured |
-
-These simplifications target MAE < 3 dB against national strategic noise maps for road noise. Formal cross-country MAE validation is still pending, but an internal accuracy loop against real measurement stations is active — several hundred station-years across airport monitoring terminals (Prague, Zürich, Amsterdam, Frankfurt, San Francisco), city networks (Barcelona, Paris, Dublin), and German rail-corridor stations, with findings tracked openly in the repository.
+| Atmospheric conditions | Variable: temperature, humidity, wind speed | Fixed 15°C and 70% RH, plus a `P_FAV = 0.5` homogeneous/favourable propagation mix; no local or time-varying meteorology | Seasonal/hourly variation not captured |
 
 ---
 
 ## Validation
 
-Accuracy is a continuous loop, not a one-off benchmark: measure the gap against real monitoring stations → attribute the cause → fix the data or the model → re-measure. Every confirmed gap becomes a short finding committed openly in the repository.
+Accuracy is a continuous loop, not a match score: measure a deviation, then attribute it to better input data, a methodology difference, or a defect in our data or model. Only defects trigger a fix; every confirmed deviation and its cause becomes a short finding committed openly in the repository.
 
 - **Primary reference — real measurements.** Annual per-station levels from public monitoring networks: city networks (Barcelona, Dublin), airport monitoring terminals (Prague, Zürich, Amsterdam, Frankfurt, San Francisco), and German rail-corridor stations (EBA) — several hundred station-years across five countries, and growing. Each station carries commensurability metadata (metric variant, receiver height, coordinate uncertainty) so a comparison is only made where it is honest.
 - **Honest comparison.** A street microphone hears everything at once — traffic, voices, weather — so a single modelled layer is checked there only as an *upper bound* (the model must never exceed the measured total). Event-classified airport terminals and near-source geometries allow a full two-sided check.
 - **Official maps as a benchmark, not a target.** The EU's END strategic noise maps cross-check our results and probe our input data — a systematic gap that tracks a data regime points at enrichment, not physics — never as a calibration target.
 - **Already corrected by the loop.** A street-tram default speed and the double-counting of parallel rail tracks were each surfaced by a measurement station and fixed, then re-verified against the same stations.
-- **Target:** mean absolute error < 3 dB vs national strategic maps for road noise. A formal cross-country MAE is still pending — the per-network gap tables and a layer × country uncertainty breakdown are the interim measure.

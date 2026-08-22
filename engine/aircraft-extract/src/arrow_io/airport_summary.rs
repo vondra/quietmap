@@ -28,7 +28,7 @@ use super::{read_all_batches, write_record_batches};
 /// truly unique counts across all R4s. v2 splits arr/dep/ops into a
 /// non-GA window (existing fields) and a GA window
 /// (`airport_unique_ga_*`); the popup divides `non_ga / n_days +
-/// ga / ga_n_days` (`ga-365d-hybrid-plan.md` §2, delta 2). GSE is
+/// ga / ga_n_days`. GSE is
 /// airline-pass only (unsplit).
 #[derive(Clone)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
@@ -174,7 +174,7 @@ fn column<'a, T: arrow::array::Array + 'static>(
 /// airport_key carrying raw `List<UInt64>` fid sets per dimension. The
 /// reduce loops every R4 part for one airport, UNIONs the HashSets, and
 /// counts to produce the global summary row. v9 splits arr/dep/ops into
-/// non-GA + GA windows (`ga_*` columns; `ga-365d-hybrid-plan.md` §2).
+/// non-GA + GA windows (`ga_*` columns).
 fn part_schema() -> Arc<Schema> {
     let u64_list = DataType::List(Arc::new(Field::new("item", DataType::UInt64, false)));
     let fixed_of =

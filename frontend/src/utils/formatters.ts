@@ -67,7 +67,7 @@ import { PROFILE_CLASS } from './profile-class.generated'
 /** Flight-tracker trace deep-link for an ICAO 24-bit hex, routed to the
  *  network that actually SOURCED the flight (feeder communities differ, so
  *  the sourcing network's globe is the one guaranteed to hold the trace):
- *  GA + helicopter classes come from the adsb.lol 365-day archive →
+ *  GA + helicopter classes come from the adsb.lol full available-year archive →
  *  adsb.lol globe; every other class comes from the ADSBexchange
  *  first-of-month TAR samples (12 d/yr) → globe.adsbexchange.com. The GA
  *  set mirrors the engine's `is_ga_sampled_class` (npd/mod.rs); class is

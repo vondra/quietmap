@@ -6,7 +6,7 @@
 //! Submodules:
 //! - [`real_rasters`] — [`RealRasters`]: lazy mmap'd 1° tiles, the popup + extract sampler.
 //! - [`fused_grid`] — [`FusedGrid`] + [`FusedPixel`]: L3-resident cropped grid for pipeline compute.
-//! - [`fused_tile_z13`] — z13 tile batching/halo over [`FusedGrid`].
+//! - [`fused_tile_z13`] — base heatmap tile batching/halo over [`FusedGrid`].
 //! - [`tile`] — the underlying [`TileStore`](tile::TileStore) / [`RawTile`] mmap cache.
 
 pub mod fused_grid;

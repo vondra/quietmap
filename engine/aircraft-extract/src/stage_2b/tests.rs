@@ -239,7 +239,7 @@ fn run_stage_2b_empty_segments_writes_nothing() {
     assert!(!tmp.path().join("spill_cruise").exists());
 }
 
-/// GA-class cruise cross-check (`ga-365d-hybrid-plan.md` delta 4):
+/// GA-class cruise cross-check:
 /// a C172-profile cruise segment warns but still processes by
 /// default (plain extracts byte-identical), and hard-fails when
 /// `fail_on_ga_cruise` is set.

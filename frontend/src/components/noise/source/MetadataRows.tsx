@@ -291,10 +291,10 @@ export function MetadataRows({ c }: { c: Contributor }) {
     const dayShare = a.top_day_energy_share ?? 0
     const flightShare = a.top_flight_energy_share ?? 0
     const sparse = dayShare > DAY_SHARE_WARN || flightShare > FLIGHT_SHARE_WARN
-    // GA 365-day hybrid (delta 7): airline classes sample N days, GA +
-    // helicopters sample a separate (365-day) window. When the two differ
-    // the sample basis must be stated per class, not as one figure —
-    // otherwise the popup implies jets were averaged over 365 days too.
+    // GA full-year hybrid: airline classes sample N days while GA +
+    // helicopters use a separate full available-year window. State both
+    // bases when they differ; otherwise the popup implies jets used the
+    // same full-year window.
     const nDays = a.sample_days
     const gaDays = a.ga_sample_days
     const hybrid = gaDays != null && nDays != null && gaDays !== nDays

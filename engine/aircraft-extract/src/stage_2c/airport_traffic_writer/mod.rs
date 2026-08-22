@@ -56,11 +56,10 @@ pub(crate) struct AirportSummaryPartRow {
     pub dep_fids: Vec<u64>,
     pub gse_fids_per_class: [Vec<u64>; NUM_GSE_CLASSES],
     /// Index 0=runway, 1=taxi, 2=apron — matches `GROUND_OPS_KIND_*`
-    /// minus 1. VEH_KIND=0 only per Codex WARN-GSE.
+    /// minus 1. VEH_KIND=0 only; GSE has separate class sets.
     pub ops_fids_per_kind: [Vec<u64>; 3],
-    /// GA-class (PROP_C172 + HELICOPTER) arr/dep/ops fid sets (365-day
-    /// window) — the delta-2 split so the popup divides each window by its
-    /// own day count. GSE has no GA split (airline-pass only).
+    /// GA-class (PROP_C172 + HELICOPTER) arr/dep/ops fid sets. The popup
+    /// divides these by `ga_n_days`; GSE has no GA split (airline-pass only).
     pub ga_arr_fids: Vec<u64>,
     pub ga_dep_fids: Vec<u64>,
     pub ga_ops_fids_per_kind: [Vec<u64>; 3],
@@ -128,7 +127,7 @@ struct CounterAcc {
     length_m: f32,
 }
 
-/// Per-microsegment aggregator (Claude C2 fix option 2). UNION across
+/// Per-microsegment aggregator. UNION across
 /// every row of the same `(osm_id, segment_idx)` regardless of period
 /// / class / ops_kind. Replicated onto every row of the microsegment
 /// at write time so the popup loader can populate per-microsegment
@@ -139,9 +138,8 @@ struct MicrosegAcc {
     fid_set_arr: HashSet<u64>,
     fid_set_dep: HashSet<u64>,
     fid_set_gse_per_class: [HashSet<u64>; NUM_GSE_CLASSES],
-    /// v9 GA-class (365-day window) split of the three aircraft fid sets
-    /// above — so the popup divides `non_ga / n_days + ga / ga_n_days`
-    /// (`ga-365d-hybrid-plan.md` §2). GSE is airline-pass only (no GA set).
+    /// v9 GA-class split of the three aircraft fid sets above, so the popup
+    /// divides `non_ga / n_days + ga / ga_n_days`. GSE is airline-pass only.
     fid_set_ga: HashSet<u64>,
     fid_set_ga_arr: HashSet<u64>,
     fid_set_ga_dep: HashSet<u64>,
@@ -157,8 +155,7 @@ struct AirportAggregateAcc {
     gse_per_class: [HashSet<u64>; NUM_GSE_CLASSES],
     /// Index 0=runway, 1=taxi, 2=apron (VEH_KIND=0 only).
     ops_per_kind: [HashSet<u64>; 3],
-    /// v9 GA-class (365-day window) split of arr/dep/ops — the delta-2
-    /// airport-level union split (`ga-365d-hybrid-plan.md` §2).
+    /// v9 GA-class split of arr/dep/ops for the airport-level union.
     ga_arr: HashSet<u64>,
     ga_dep: HashSet<u64>,
     ga_ops_per_kind: [HashSet<u64>; 3],
@@ -175,8 +172,8 @@ pub fn run_airport_traffic(
     h3r4_dir: &Path,
     n_days: u16,
     // GA-class window (0 = single-window extract). Stamped into the
-    // arrow metadata so the popup divides GA-split movement counts by 365
-    // and weights GA energy at 1/365 (`ga-365d-hybrid-plan.md` §2).
+    // arrow metadata so the popup normalizes GA-split movement counts and
+    // energy by `ga_n_days`.
     ga_n_days: u16,
     scope: Option<&ScopeBbox>,
 ) -> Result<usize> {
@@ -185,7 +182,7 @@ pub fn run_airport_traffic(
     // Without this, a prior crash + different scope can leave stale
     // per-R4 partials that the reduce phase would silently UNION
     // into the new global summary, over-counting fids for airports
-    // touched by both extracts (Claude /gg W3).
+    // touched by both extracts.
     let parts_root = h3r4_dir
         .parent()
         .ok_or_else(|| anyhow::anyhow!("h3r4_dir has no parent for airport_summary_parts"))?
@@ -327,7 +324,7 @@ fn accumulate_segment(
         noise_class_of(seg.profile_idx)
     };
     let is_dep = (seg.veh_kind == 0 && seg.is_departure()) as u8;
-    // GA 365-day-window membership for the delta-2 microseg + airport
+    // GA full-year-window membership for the microseg + airport
     // union splits. GSE (`veh_kind == 1`) is never GA — its `class_idx`
     // indexes the GSE class space, and GSE is airline-pass only.
     let is_ga =
@@ -407,9 +404,8 @@ fn accumulate_segment(
             *acc += band as f64;
         }
 
-        // Per-row arr/dep/gse subset gating (Codex WARN-GSE: ops_kind
-        // splits gate on veh_kind==0; GSE counts go to their own
-        // per-class sets only). The microseg + airport UNIONs are
+        // Ops-kind splits gate on `veh_kind == 0`; GSE counts go to their
+        // own per-class sets. The microseg + airport UNIONs are
         // class-MIXED, so each splits into a non-GA and a GA set
         // (`is_ga`) — the per-counter `entry.fid_set*` are class-pure
         // (CounterKey carries class_idx), so they need no split.

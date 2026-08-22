@@ -100,7 +100,7 @@ impl Feed {
 }
 
 /// CLI surface (`all|ga|non-ga`) for the hybrid Stage-0 class-window
-/// filter (`ga-365d-hybrid-plan.md` §3). `all` keeps every trace —
+/// filter. `all` keeps every trace —
 /// byte-identical to the pre-hybrid single-window extract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum ClassFilterArg {
@@ -121,9 +121,8 @@ impl ClassFilterArg {
     /// Stage 0/1 per-day RAM estimate (GB) for `max_concurrent_days`.
     /// GA-filtered days decode to a small fraction of a full day (only
     /// PROP_C172 + HELICOPTER traces survive the prefix probe), so the
-    /// full-day 28 GB calibration would throttle the 365-day GA pass
+    /// full-day 28 GB calibration would throttle the full-year GA pass
     /// to 2 concurrent days for no RAM benefit
-    /// (`ga-365d-hybrid-plan.md` §4.2.7).
     fn stage01_peak_per_day_gb(self) -> f64 {
         match self {
             ClassFilterArg::Ga => 6.0,
@@ -142,7 +141,7 @@ enum Cmd {
         out: PathBuf,
         #[arg(long)]
         day: String,
-        /// Hybrid class-window pass (`ga-365d-hybrid-plan.md` §3).
+        /// Hybrid class-window pass.
         #[arg(long, value_enum, default_value_t = ClassFilterArg::All)]
         class_filter: ClassFilterArg,
     },
@@ -166,7 +165,7 @@ enum Cmd {
         segments_dir: Vec<PathBuf>,
         /// GA-pass `segments/<day>.arrow` dir(s) for hybrid extracts —
         /// shuffled under a distinct pass key and counted into the
-        /// `ga_n_days` manifest (`ga-365d-hybrid-plan.md` §4.2.3).
+        /// `ga_n_days` manifest.
         #[arg(long)]
         ga_segments_dir: Vec<PathBuf>,
         /// Output dir for `<R4>/{airborne,ground}.arrow` per-R4 shards.
@@ -223,8 +222,7 @@ enum Cmd {
         n_days: u16,
         #[arg(long)]
         scope_bbox: Option<String>,
-        /// Hard-fail when GA-class segments reach cruise (default:
-        /// warn only — `ga-365d-hybrid-plan.md` binding delta 4).
+        /// Hard-fail when GA-class segments reach cruise (default: warn only).
         #[arg(long, default_value_t = false)]
         fail_on_ga_cruise: bool,
     },
@@ -283,7 +281,7 @@ enum Cmd {
         /// Stop after the named stage (inclusive; default `stage2c` =
         /// run to the end). The hybrid flow's per-pass invocations end
         /// at `--until-stage stage1`; a later merge invocation resumes
-        /// with `--from-stage shuffle` (`ga-365d-hybrid-plan.md` §4.2).
+        /// with `--from-stage shuffle`.
         #[arg(long, value_enum, default_value_t = FromStage::Stage2c)]
         until_stage: FromStage,
         /// Which network `--adsb-cache` holds; stamps the provenance source_id
@@ -291,19 +289,18 @@ enum Cmd {
         #[arg(long, value_enum, default_value_t = Feed::Adsblol)]
         feed: Feed,
         /// Hybrid class-window pass for Stage 0 ingest: `ga` keeps only
-        /// the 365-day-sampled GA/heli classes, `non-ga` the complement
+        /// the full-year-sampled GA/heli classes, `non-ga` the complement
         /// (incl. GSE). Default `all` = byte-identical single-window
-        /// extract (`ga-365d-hybrid-plan.md` §3).
+        /// extract.
         #[arg(long, value_enum, default_value_t = ClassFilterArg::All)]
         class_filter: ClassFilterArg,
         /// Hybrid merge: the GA pass's `segments/` dir (per-day Stage 1
         /// shards). Shuffle unions both windows and writes the
-        /// `ga_n_days` manifest next to `n_days`
-        /// (`ga-365d-hybrid-plan.md` §4.2.3).
+        /// `ga_n_days` manifest next to `n_days`.
         #[arg(long)]
         ga_segments_dir: Option<PathBuf>,
         /// Hard-fail when GA-class segments reach Stage 2B / cruise
-        /// (default: warn only — `ga-365d-hybrid-plan.md` delta 4).
+        /// (default: warn only).
         #[arg(long, default_value_t = false)]
         fail_on_ga_cruise: bool,
     },

@@ -298,9 +298,9 @@ interface AircraftAirborneDetail {
   /** Archive days behind the Lden average for AIRLINE classes (12-day TTM). */
   sample_days?: number
   /**
-   * Archive days behind GA + helicopter classes — 365 in a hybrid extract,
+   * Archive days behind GA + helicopter classes — `ga_n_days` in a hybrid extract,
    * equal to `sample_days` when non-hybrid. The "Data" row shows both so the
-   * sample basis is honest per class (ga-365d-hybrid-plan.md delta 7).
+   * sample basis is honest per class.
    */
   ga_sample_days?: number
   top_flights?: AircraftTopFlight[]
@@ -399,8 +399,7 @@ export interface Contributor {
   ground_impact_db: number
   received_lden: number
   received_lden_free: number
-  /** Per-contributor L_night (END 23:00–07:00, no penalty); 0 when silent
-   * (mirrors received_lden). C1 rail night break (Gemini delta 5). */
+  /** Per-contributor L_night (END 23:00–07:00, no penalty); 0 when silent. */
   received_ln: number
   received_bands: number[]
   geometry: any | null

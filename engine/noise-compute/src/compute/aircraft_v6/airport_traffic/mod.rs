@@ -274,8 +274,8 @@ struct MicrosegAcc {
     unique_arr_count: u32,
     unique_dep_count: u32,
     unique_gse_count_per_class: [u32; NUM_GSE_CLASSES],
-    /// v9 GA-class (365-day window) split of the three counts above, so
-    /// the trace divides `non_ga / n_days + ga / ga_n_days` (delta 2).
+    /// v9 GA-class split of the three counts above, so the trace divides
+    /// `non_ga / n_days + ga / ga_n_days`.
     unique_ga_count: u32,
     unique_ga_arr_count: u32,
     unique_ga_dep_count: u32,
@@ -316,7 +316,7 @@ struct AirportAcc {
 /// process (it lives inside the mtime-keyed `AirportSummaryAccum` cache)
 /// and hands a borrow to [`run`]. **Missing entry** (or missing summary
 /// file) → popup MUST refuse to compute airport arr/dep counts (returns
-/// `None`) — per Codex C4 + Claude W1; no silent fallback to per-row sum.
+/// `None`); there is no fallback to per-row sums.
 ///
 /// Owned `String` keys rather than `&str` borrowed from a parallel
 /// `Vec<String>`: the borrowed form forced the map to be rebuilt on every
@@ -336,9 +336,9 @@ pub struct AirportSummaryEntry {
     pub gse_count_per_class: [u32; NUM_GSE_CLASSES],
     /// Index 0=runway, 1=taxi, 2=apron — VEH_KIND=0 only.
     pub ops_count_per_kind: [u32; 3],
-    /// GA-class (365-day) window split of arr/dep/ops. The popup divides
-    /// `non_ga / n_days + ga / ga_n_days` (`ga-365d-hybrid-plan.md` §2,
-    /// delta 2). GSE has no GA split (airline-pass only).
+    /// GA-class split of arr/dep/ops. The popup divides
+    /// `non_ga / n_days + ga / ga_n_days`. GSE has no GA split
+    /// (airline-pass only).
     pub ga_arr_count: u32,
     pub ga_dep_count: u32,
     pub ga_ops_count_per_kind: [u32; 3],
@@ -351,8 +351,8 @@ pub struct AirportSummaryEntry {
 ///
 /// `airport_summary` is the global UNION lookup (v5 sidecar) keyed by
 /// `airport_key`. When `None` or when an airport is missing from the
-/// lookup, the popup returns `None` for that airport's arr/dep counts
-/// — per Codex C4 + Claude W1; per-row sum is forbidden as it would
+/// lookup, the popup returns `None` for that airport's arr/dep counts.
+/// Per-row sums are forbidden because they would
 /// over-count rotations crossing N microsegments by ~N×.
 ///
 /// `osm_ref_lookup` maps `osm_id` → OSM `ref` tag (e.g. "06/24") for
@@ -363,8 +363,7 @@ pub fn run(
     receiver: &Receiver,
     rows: &[AirportTrafficRowView<'_>],
     n_days: u16,
-    // GA 365-day hybrid per-class weight LUT (`ga-365d-hybrid-plan.md` §2,
-    // layer-ground.md §4). Applied to the RECEIVED Lden energy + per-row
+    // GA hybrid per-class weight LUT. Applied to received Lden energy and
     // movement counts of `veh_kind == 0` (aircraft) rows only — GSE
     // (`veh_kind == 1`) rows always weight 1.0 (their `class_idx` indexes
     // the GSE class space and GSE is an airline-pass artifact). The
@@ -387,8 +386,8 @@ pub fn run(
     let mut cand_scratch: Vec<crate::propagation::obstacle_index::CrossingCandidate> = Vec::new();
     let n_days_f = (n_days as f64).max(1.0);
     // GA-window divisor for the split-union movement counts: GA-class fids
-    // are observed over 365 days, so the popup divides them by THIS while
-    // non-GA counts divide by `n_days` (`ga-365d-hybrid-plan.md` §2).
+    // use the GA window, so the popup divides them by THIS while
+    // non-GA counts divide by `n_days`.
     let ga_n_days_f = (class_weights.ga_n_days() as f64).max(1.0);
     let recv_lat = receiver.lat;
     let recv_lon = receiver.lon;
@@ -400,9 +399,9 @@ pub fn run(
     // so this probe answers from exact footprints like every kernel.
     let refl_db = rasters.building_enclosure(recv_lat, recv_lon);
     // Heatmap-parity divergence floor: the user reads popup numbers
-    // off a z=13 HM3 pixel, so the popup uses the same half-pixel
-    // floor on `d_perp`/`d_endpoint` that the heatmap kernel uses at
-    // `tile-painter/src/ground_ops.rs:111`. Without it, popup
+    // off a base HM3 pixel, so the popup uses the same half-pixel floor on
+    // `d_perp`/`d_endpoint` as `tile_painter::ground_ops::scatter_tile`.
+    // Without it, the popup
     // reports ~5-8 dB louder than the underlying pixel on near-line
     // receivers (line-source 1/d singularity sampled at a point).
     let pixel_floor_m = popup_pixel_floor_m(recv_lat);
@@ -575,12 +574,12 @@ pub fn run(
             aw_no_atmospheric += z * prop_no_atmospheric[i] * aw_lin;
             aw_no_ground += z * prop_no_ground[i] * aw_lin;
         }
-        // GA hybrid weight (`ga-365d-hybrid-plan.md` §2, layer-ground.md §4):
-        // aircraft rows scale by `w[class]`, GSE rows by 1.0. Fold into the
+        // GA hybrid weight: aircraft rows scale by `w[class]`, GSE rows by
+        // 1.0. Fold into the
         // RECEIVED energies (all variants) so every Lden-normalized
         // accumulator below — airport, per-microseg, per-ops-kind,
         // class_energy, and the trace `received_bands` — inherits the
-        // 1/365 scaling for a one-off GA movement. `aw_band_sum_25m` (the
+        // `1/ga_n_days` scaling for a one-off GA movement. `aw_band_sum_25m` (the
         // per-event emission Lw display) is deliberately left UNWEIGHTED:
         // it is per-event source physics, like the airborne SEL/Lmax.
         let row_weight = if row.veh_kind == 0 {

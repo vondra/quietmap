@@ -91,7 +91,7 @@ GEM tags the co-gen power generation side of all three as NACE 35. The actual pu
 
 - **No open TPDA/AADT data** — MTOP GeoServer is blocked
 - **No mining concessions** — modest mining (limestone, granite, dolomite) without open registry
-- **No ANCAP refinery NACE classification** — La Teja refinery (Montevideo, ~50k bpd) remains tagged via OSM industrial at generic 93 dB
+- **No ANCAP refinery NACE classification** — La Teja refinery (Montevideo, ~50k bpd) remains tagged via OSM industrial with the generic OSM industrial base profile and no NACE override
 - **No metro/light rail** — Montevideo uses buses only
 
 ## Validation

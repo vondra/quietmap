@@ -9,14 +9,14 @@ use super::*;
 /// `summary_entry` is the `airport_summary.arrow` UNION counts for
 /// this airport (v5). When `None`, the popup MUST NOT silently fall
 /// back to per-row sum — per-row sum would over-count rotations
-/// crossing N microsegments by ~N×. Per Codex C4 + Claude W1 we
-/// return zeros so the FE renders "—" / hides the row.
+/// crossing N microsegments by ~N×. Return zeros so the frontend
+/// renders "—" or hides the row.
 pub(super) fn build_ground_ops_metadata(
     acc: &AirportAcc,
     periods: &crate::types::NoisePeriods,
     n_days_f: f64,
-    // GA-class window (365-day) divisor for the split-union counts;
-    // non-GA counts divide by `n_days_f` (`ga-365d-hybrid-plan.md` §2).
+    // GA-class divisor for the split-union counts;
+    // non-GA counts divide by `n_days_f`.
     ga_n_days_f: f64,
     summary_entry: Option<AirportSummaryEntry>,
 ) -> AircraftGroundOpsDetail {
@@ -25,7 +25,7 @@ pub(super) fn build_ground_ops_metadata(
     // Missing summary = popup refuses to display arr/dep — see
     // function docstring. v9: each split count = `non_ga / n_days +
     // ga / ga_n_days` so a one-off GA rotation reads at its true
-    // 365-day frequency (delta 2).
+    // full-year frequency.
     let (
         arrivals_per_day,
         departures_per_day,

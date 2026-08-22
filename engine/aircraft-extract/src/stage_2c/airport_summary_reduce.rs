@@ -86,8 +86,8 @@ pub fn run_airport_summary_reduce(parts_root: &Path, output_path: &Path) -> Resu
                     entry.ops_per_kind[i].insert(fid);
                 }
             }
-            // GA-class (365-day window) split — UNIONed separately so the
-            // popup divides each window by its own day count (delta 2).
+            // GA-class counts stay separate so the popup divides each
+            // sampling window by its own day count.
             for fid in row.ga_arr_fids {
                 entry.ga_arr.insert(fid);
             }

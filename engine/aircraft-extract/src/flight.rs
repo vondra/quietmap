@@ -172,21 +172,9 @@ pub struct AirborneEvent {
 /// stored per sub-segment so a long airborne crossing that spans the
 /// 19:00 evening boundary still gets the correct Lden weighting.
 ///
-/// `terrain_*_elev_m` are pre-sampled at extract time (Opt A v15):
-/// start/end propagate from Stage 1's per-point elevation; q1, mid,
-/// q3 are sampled at Stage 2A from the sub-segment's 0.25 / 0.5 / 0.75
-/// points. The popup terrain gates (`is_ground_stale_with_terrain`,
-/// `is_valid_airborne_with_terrain`, `segment_sel_with_terrain`) read
-/// these directly instead of
-/// calling `SegmentTerrain::sample` (5 raster lookups per sub-segment).
-/// At LKPR popup this saves ~1 M raster mutex acquisitions.
-///
-/// All three intermediate elevations are stored: real DEM isn't
-/// linearly interpolated between endpoints, so in mountain terrain
-/// (LOWI / SEQM / SLLP / KASE) a sharp peak between two ADS-B samples
-/// can sit tens of meters above any linear estimate. /gg rev 2 (3 of
-/// 4 reviewers) caught that storing only mid lets a narrow spike at
-/// frac=0.25 or 0.75 sneak past the AGL gate.
+/// `terrain_start_elev_m` and `terrain_end_elev_m` propagate Stage 1's
+/// endpoint samples. Popup and heatmap use them for the stale-ground gate
+/// and Filter D cuts; this row stores no intermediate terrain samples.
 #[derive(Clone)]
 pub struct AirborneSubSegment {
     pub start_lat: f32,
@@ -205,9 +193,8 @@ pub struct AirborneSubSegment {
 }
 
 /// One entry in a cruise row's `top_candidates` list (v14).
-/// Identity + ranking dimension only — row-constant fields
-/// (period / date_id) are NOT duplicated per candidate per
-/// Codex W4 + Claude C3.
+/// Identity + ranking dimension only; row-constant fields
+/// (period / date_id) are not duplicated per candidate.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CruiseTopCandidate {
     pub flight_id: u64,

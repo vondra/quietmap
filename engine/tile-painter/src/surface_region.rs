@@ -227,10 +227,10 @@ pub struct SurfaceCtx<'a> {
     pub halo_m: f64,
     pub batch_n: u32,
     pub n_days: f64,
-    /// GA 365-day hybrid per-class weight LUT — only the ground-ops
+    /// GA full-year hybrid per-class weight LUT — only the ground-ops
     /// (aircraft traffic) layer consumes it; other surface layers ignore
     /// it. Resolved build-wide from `airport_traffic.arrow`'s
-    /// `sample_days_by_class` (`ga-365d-hybrid-plan.md` §2). Uniform when
+    /// `sample_days_by_class`. Uniform when
     /// ground ops isn't in the build.
     pub class_weights: noise_compute::emission::aircraft::ClassWeights,
     pub write_empty: bool,

@@ -27,8 +27,8 @@ fn day_dir_flat_fallback_when_year_layer_absent() {
     assert_eq!(s.day_dir("2025-07-17"), flat);
 }
 
-/// Raw adsb.lol release naming (`<archive-root>/<year>/` layout,
-/// `ga-365d-hybrid-plan.md` §4.1) resolves as the second candidate;
+/// Raw adsb.lol release naming (`<archive-root>/<year>/` layout) resolves
+/// as the second candidate;
 /// the plain year-nested form keeps precedence when both exist.
 /// The `…prod-0tmp` upstream tag variant (15 real days in 2025-05/06)
 /// resolves too.
@@ -54,7 +54,7 @@ fn day_dir_release_naming_used_when_plain_day_absent() {
     );
 }
 
-/// Pass complementarity (`ga-365d-hybrid-plan.md` §3): across
+/// Pass complementarity: across
 /// jet / airline-turboprop / GA / heli / GSE / TWR / glider / blank
 /// traces, every trace lands in EXACTLY one of (GaOnly-kept,
 /// NonGa-kept, dropped-by-both-as-designed {TWR, glider}) — and the

@@ -285,7 +285,7 @@ fn test_pinned_heavy_class_membership() {
     assert_eq!(NUM_CLASSES, 15, "14 algorithmic + 1 pinned heavy");
 }
 
-/// Hybrid GA-window membership pins (`ga-365d-hybrid-plan.md` §3).
+/// Hybrid GA-window membership pins.
 /// IN: the PROP_C172 piston/UL family and every rotorcraft. OUT:
 /// airline turboprops (PROP_DH8D — incl. the PC12 fallback
 /// residual), jets, bizjet classes, and the blank-typecode
@@ -329,13 +329,11 @@ fn test_ga_sampled_window_membership() {
 }
 
 /// Weight-LUT round-trip from the `sample_days_by_class` metadata
-/// vector. The hybrid stamp gives GA classes 365 days, airline classes
-/// `n_days` (12); with the consumer dividing by 12, a GA row's weight
-/// is 12/365 and an airline row's is 1.0 — the exact factor that turns
-/// a 1/12-sampled energy into 1/365.
+/// vector. This synthetic case uses 365 GA days and 12 airline days;
+/// live extracts carry their available day count in metadata.
 #[test]
 fn class_weights_round_trip_from_metadata() {
-    // Build the canonical hybrid vector: GA classes → 365, else → 12.
+    // Build a non-uniform hybrid vector: GA classes → 365, else → 12.
     let vec: String = (0..NUM_CLASSES)
         .map(|c| {
             if is_ga_sampled_class(c as u8) {

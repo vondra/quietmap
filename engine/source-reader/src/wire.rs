@@ -34,11 +34,8 @@ fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
 
-/// `received_lden` / `received_lden_free` in the frontend `Contributor`
-/// interface are typed `number` (NOT nullable). Map silence
-/// (`NEG_INFINITY`) to `0.0` to satisfy the TS contract; Gemini /gg #80
-/// flagged this as CRITICAL — previously Node coalesced via
-/// `?? c.received_lden ?? 0`.
+/// `received_lden` / `received_lden_free` are non-nullable frontend fields;
+/// map silence (`NEG_INFINITY`) to `0.0`.
 #[inline]
 fn finite_or_zero(v: f64) -> f64 {
     if v.is_finite() {
@@ -115,7 +112,7 @@ pub struct WireContributor {
     pub received_lden_free: f64,
     /// Per-contributor `L_night` (END 23:00–07:00, no penalty). Mirrors
     /// `received_lden`'s `0.0`-for-silence mapping so the TS type stays
-    /// non-nullable. Surfaced for the C1 rail night break (Gemini delta 5).
+    /// non-nullable.
     pub received_ln: f64,
     pub received_bands: [f64; NUM_BANDS],
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -198,11 +195,8 @@ pub struct WireResult {
     pub top_contributors: Vec<WireContributor>,
     #[serde(serialize_with = "noise_compute::types::serialize_lden_db_opt")]
     pub other_sources_lden: f64,
-    /// The clicked point sits INSIDE a building footprint (CNOSSOS fix-pack
-    /// Fix 4). END/CNOSSOS strategic mapping puts receivers on facades, never
-    /// indoors, and the heatmap now paints such pixels as no-data — so the
-    /// popup has to be able to say why the map is blank under the cursor.
-    /// Vector-obstacle regions only; `false` wherever the raster path runs.
+    /// The clicked point sits inside an enclosed building footprint.
+    /// Vector-obstacle regions only; `false` on the raster fallback.
     ///
     /// `sources`, `top_contributors`, `other_sources_lden`, and `segments`
     /// remain the façade values from the outdoor donor query. Only the
@@ -236,9 +230,8 @@ pub struct WireResult {
     pub timings: Option<WireTimings>,
 }
 
-/// `inside_building_m`: the containing footprint's height from
-/// `obstacle_store::point_inside_obstacle`, `None` when the receiver is
-/// outdoors (or the query ran on the raster path).
+/// `indoor`: the winning enclosed footprint, its effective delta, and the
+/// outdoor façade total; `None` outdoors or on the raster fallback.
 pub fn build_wire_result(
     result: NoiseResult,
     lat: f64,
