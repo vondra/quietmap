@@ -367,7 +367,7 @@ L_received,i = L_emission,i − A_div,i − A_atm,i − max(A_ground,i, A_terrai
 
 × 0.5 reflects that WorldCover binary forest raster fires at ≥ 10 % tree cover but ISO defaults assume dense canopy.
 
-**Ground**: `G = 1 − IMD/100`. Surface sources evaluate CNOSSOS §2.5.14–20 per band from ray geometry, path/source-end G, and the `P_FAV = 0.5` state mix. Aircraft ground operations alone retain the band-mean compatibility formation.
+**Ground**: `G = 1 − IMD/100`. Surface sources evaluate CNOSSOS §2.5.14–20 per band from ray geometry, path/source-end G, and the `P_FAV = 0.5` state mix. Aircraft ground operations alone retain the band-mean compatibility formulation.
 
 **Favourable weather**: homogeneous and favourable ground/diffraction states are mixed energetically with `P_FAV = 0.5`; no local wind, inversion, or period-specific probability is ingested.
 
@@ -384,7 +384,7 @@ This model is an engineering approximation for a continental-scale noise atlas �
 | Area | Standard says | We do | Impact |
 |------|-------------|-------|--------|
 | Source height (roads) | CNOSSOS-EU: 0.05 m (rolling) / 0.30 m (propulsion) | 0.05 m for both | Minor — propulsion height difference negligible at atlas scale |
-| Terrain profile | Professional SW: 5–10 m spacing | One 10 m near-probe and three probes at each of 30/60/120 m from both ends, then ~240 m middle steps; the surface heatmap alone coarsens the long-ray middle to ~491 m by default | May miss narrow raster terrain between samples; exact building and barrier vectors remain candidates |
+| Terrain profile | Professional SW: 5–10 m spacing | One 10 m near-probe and three probes at each of 30/60/120 m from both ends, then ~240 m middle steps; the surface heatmap alone coarsens the long-ray middle to ~737 m by default | May miss narrow raster terrain between samples; exact building and barrier vectors remain candidates |
 | Aircraft type mapping | Doc 29 / ANP: aircraft-specific certified profiles + procedural steps + weights | Per-ICAO-typecode NPD profiles auto-generated from EASA ANP v2.3 (+ v9 supplement), bucketed at a fixed set of noise classes for aggregation (see SPEC §5) | ±1-2 dB for ANP-mapped types; similarity fallback for unmapped typecodes routes to closest anchor by engine/size class |
 | Aircraft timing | Airport-local time and operational preprocessing | Segment midpoint → IANA timezone (tzf-rs) → DST-aware local time (chrono-tz); END default period boundaries | Global local time; only airport-local operational-preprocessing differences remain |
 | Aircraft ground ops | Curated surface-movement inventories + airport-local operational data | ADS-B legs projected onto OSM aeroway microsegments (runway/taxiway); per-microsegment movement counters; DBSCAN auto-discovery for OSM-missing airfields | Near-runway levels depend on ADS-B coverage; movements outside the receiver footprint don't appear (no synthetic backfill) |

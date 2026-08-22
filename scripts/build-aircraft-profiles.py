@@ -708,8 +708,8 @@ RUNWAY_DB_BY_ANCHOR: dict[str, float] = {
     # via WING_B789, so their ground ops stay level while MD11/IL76 rise
     # from the 104 narrowbody band. Without this entry the dep@200ft−10
     # fallback emitted 100.1 → a −7.9 dB ground-ops regression for the
-    # whole family. Raising above
-    # 108 needs a cited Doc 29 / airport-measurement source.
+    # whole family. Raising above 108 needs a cited Doc 29 /
+    # airport-measurement source.
     "B748":     108.0,
     "CRJ9":     100.0,   # regional jet, fuselage-mounted
     "C56X":      99.0,   # light bizjet, fuselage-mounted
