@@ -2,7 +2,7 @@
  * Enrich US industrial.arrow with USWTDB wind turbine specs.
  *
  * Source: USWTDB (US Wind Turbine Database, USGS + LBNL)
- *   Pre-cached at /0db/data/source/enrichment/global/uswtdb.csv
+ *   Pre-cached in the shared enrichment cache (global/uswtdb.csv)
  *   75,728 turbines with rated power (kW), hub height (m), rotor diameter (m)
  *
  * Already in pipeline globally but not applied per-hex to US OSM turbines.

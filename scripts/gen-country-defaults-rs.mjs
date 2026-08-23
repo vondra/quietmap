@@ -35,7 +35,7 @@
 // states, ocean-side hexes near dual boundaries).
 //
 // Usage:
-//   cd /0db/data/runtime/code && node scripts/gen-country-defaults-rs.mjs
+//   cd <runtime code checkout> && node scripts/gen-country-defaults-rs.mjs
 //
 // Commit both input JSONs and the generated .rs file.
 
