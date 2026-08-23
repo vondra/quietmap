@@ -24,7 +24,6 @@ use cudarc::driver::sys::CUevent_flags;
 use cudarc::driver::{result, CudaDevice, CudaFunction, CudaSlice, LaunchAsync, LaunchConfig};
 use h3o::CellIndex;
 use noise_compute::admin;
-use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_gpu::{
     pack_sources, pack_tile, upload_obstacles, ObstDev, SurfaceKernelTileParameters, TileBuffers,
     BIN_W, N_BINS,
@@ -36,8 +35,8 @@ use tile_painter::accumulator::TileAccumulator;
 use tile_painter::engine_spans::EngineCellSpans;
 use tile_painter::grid::tile_range;
 use tile_painter::region_runner::{
-    announce_stream_cell_started, batch_slot, read_r4_file, region_tiles, split_configured_layers,
-    split_stream_line, tile_batch_window, tile_centre_r4, tile_halo_window,
+    announce_stream_cell_started, batch_slot, block_batch_origin, read_r4_file, region_tiles,
+    split_configured_layers, split_stream_line, tile_centre_r4,
 };
 use tile_painter::renderer_evidence::{
     maybe_run_static_attestation, DependencyProfile, RegionTerminalStatus, RendererEvidence,
@@ -46,7 +45,7 @@ use tile_painter::renderer_evidence::{
 };
 use tile_painter::source_line::LineRow;
 use tile_painter::source_loader_barrier::BarrierData;
-use tile_painter::source_loader_obstacle::ObstacleData;
+use tile_painter::source_loader_obstacle::{InteriorEstimate, ObstacleData};
 use tile_painter::wire_hm3::{collapse_lden_surface_u8, read_tile, write_tile};
 
 // One-time GPU/layer setup lives in the sibling `gpu_init` module; the hot
@@ -316,17 +315,13 @@ fn process_block(
     dev: &Arc<CudaDevice>,
     f: &CudaFunction,
     batch: &TileBatch,
+    interiors: &[Option<InteriorEstimate>],
     cfg: &Cfg,
-    bx: u32,
-    by: u32,
     block_tiles: &[(u32, u32)],
     region_rows: &[(LineLayer, Vec<LineRow>)],
     src_dev: &[LayerSrc],
     barriers: &BarrierData,
     obst_dev: &ObstDev,
-    obstacles: Option<&ObstacleSet>,
-    interior_pass: &mut tile_painter::source_loader_obstacle::InteriorPass,
-    tile_timing: &mut BTreeMap<((u32, u32), u8), (f64, Option<f64>)>,
     stats: &mut BTreeMap<&'static str, LayerStat>,
     prog: &mut Progress,
 ) -> Result<()> {
@@ -388,10 +383,9 @@ fn process_block(
     // Order by LAYER first (all road, then all rail), not interleaved: the pipeline
     // overlaps tile N+1's prep with tile N's kernel, so consecutive same-layer items
     // (similar kernel ≈ similar prep cost) overlap far better than road↔rail swings.
-    let pass_a_tiles = tile_halo_window(block_tiles, cfg.z);
     let items: Vec<(u32, u32, LineLayer)> = region_rows
         .iter()
-        .flat_map(|(l, _)| pass_a_tiles.iter().map(move |&(tx, ty)| (tx, ty, *l)))
+        .flat_map(|(l, _)| block_tiles.iter().map(move |&(tx, ty)| (tx, ty, *l)))
         .collect();
     // GPU-side binning: the kernel (line_binned_fused) does the per-block source cull
     // itself, so per-tile prep is just the pack — no CPU build_pixel_bins (the old
@@ -428,24 +422,8 @@ fn process_block(
         (it, p)
     };
 
-    // Pass A stores every collapsed tile/layer, including the 8-neighbour
-    // halo. Pass B below applies one geometric donor raster to every layer and
-    // writes only the centre tiles owned by this block.
-    if let Some(set) = obstacles {
-        for &(tx, ty) in &pass_a_tiles {
-            if !interior_pass.has_class_raster((tx, ty)) {
-                let tile = &batch.tiles[batch_slot(batch, tx, ty)];
-                interior_pass.insert_class_raster(
-                    (tx, ty),
-                    tile_painter::source_loader_obstacle::bake_tile_envelope_classes(tile, set),
-                );
-            }
-        }
-    }
     let mut iter = items.into_iter();
-    let mut pending = iter
-        .find(|(tx, ty, layer)| !interior_pass.has_collapsed((*tx, *ty), layer.source_id()))
-        .map(|it| prep_timed(it, stats));
+    let mut pending = iter.next().map(|it| prep_timed(it, stats));
     while let Some(((tx, ty, layer), bufs)) = pending {
         let tk = Instant::now();
         let d_inner = dev.htod_copy(bufs.inner).expect("inner");
@@ -500,11 +478,7 @@ fn process_block(
             unsafe { result::event::record(stop, stream).expect("record stop") };
         }
         // Overlap: prep the NEXT item on the CPU while this kernel runs on the GPU.
-        pending = iter
-            .find(|(next_tx, next_ty, next_layer)| {
-                !interior_pass.has_collapsed((*next_tx, *next_ty), next_layer.source_id())
-            })
-            .map(|it| prep_timed(it, stats));
+        pending = iter.next().map(|it| prep_timed(it, stats));
         // Join: dtoh_sync_copy waits for the kernel, then reads the result back.
         let gpu = dev.dtoh_sync_copy(&d_out).expect("dtoh");
         let tile_wall_s = tk.elapsed().as_secs_f64();
@@ -561,42 +535,40 @@ fn process_block(
                     *acc += f64::from(*value);
                 }
             }
-            if block_tiles.contains(&(tx, ty)) {
-                anyhow::ensure!(
-                    arc_drops_this_tile == 0.0,
-                    "rail ARCSTAT census dropped {arc_drops_this_tile:.0} arcs"
-                );
-                anyhow::ensure!(
-                    layer == LineLayer::Rail && cfg.z == 12 && tx == 2206 && ty == 1391,
-                    "rail ARCSTAT census requires exactly rail z12/2206/1391, got {} z{}/{tx}/{ty}",
-                    layer.dir(),
-                    cfg.z,
-                );
-                let mut delta = [0f64; noise_gpu::OUT_ARCSTAT_COUNTERS];
-                for i in 0..noise_gpu::OUT_ARCSTAT_COUNTERS {
-                    delta[i] = current[i] - arcstat_seen[i];
-                }
-                let census = noise_gpu::validate_rail_port_arcstat_census(&delta)?;
-                eprintln!(
-                    "ARCSTAT_TILE=PASS fixture=rail-2206-1391 quadrature_pairs={:.0} \
-                     bucket_rays={:.0} buckets_per_gpu_pair={:.6} \
-                     escalating_pairs={:.0} gpu_pair_escalation_frac={:.6} \
-                     gpu_escalating_pairs_per_authority_pair={:.6} escalating_buckets={:.0} \
-                     gpu_bucket_escalation_frac={:.6} \
-                     gpu_escalating_buckets_per_authority_bucket_ray={:.6}",
-                    delta[0],
-                    delta[2],
-                    census.buckets_per_gpu_pair,
-                    delta[1],
-                    census.gpu_pair_escalation_frac,
-                    census.gpu_escalating_pairs_per_authority_pair,
-                    delta[3],
-                    census.gpu_bucket_escalation_frac,
-                    census.gpu_escalating_buckets_per_authority_bucket_ray,
-                );
-                RAIL_ARCSTAT_CENSUS_PASSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            anyhow::ensure!(
+                arc_drops_this_tile == 0.0,
+                "rail ARCSTAT census dropped {arc_drops_this_tile:.0} arcs"
+            );
+            anyhow::ensure!(
+                layer == LineLayer::Rail && cfg.z == 12 && tx == 2206 && ty == 1391,
+                "rail ARCSTAT census requires exactly rail z12/2206/1391, got {} z{}/{tx}/{ty}",
+                layer.dir(),
+                cfg.z,
+            );
+            let mut delta = [0f64; noise_gpu::OUT_ARCSTAT_COUNTERS];
+            for i in 0..noise_gpu::OUT_ARCSTAT_COUNTERS {
+                delta[i] = current[i] - arcstat_seen[i];
             }
+            let census = noise_gpu::validate_rail_port_arcstat_census(&delta)?;
+            eprintln!(
+                "ARCSTAT_TILE=PASS fixture=rail-2206-1391 quadrature_pairs={:.0} \
+                 bucket_rays={:.0} buckets_per_gpu_pair={:.6} \
+                 escalating_pairs={:.0} gpu_pair_escalation_frac={:.6} \
+                 gpu_escalating_pairs_per_authority_pair={:.6} escalating_buckets={:.0} \
+                 gpu_bucket_escalation_frac={:.6} \
+                 gpu_escalating_buckets_per_authority_bucket_ray={:.6}",
+                delta[0],
+                delta[2],
+                census.buckets_per_gpu_pair,
+                delta[1],
+                census.gpu_pair_escalation_frac,
+                census.gpu_escalating_pairs_per_authority_pair,
+                delta[3],
+                census.gpu_bucket_escalation_frac,
+                census.gpu_escalating_buckets_per_authority_bucket_ray,
+            );
             arcstat_seen = current;
+            RAIL_ARCSTAT_CENSUS_PASSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         #[cfg(feature = "v2-h0")]
         {
@@ -642,106 +614,90 @@ fn process_block(
                 guarded_legal,
             );
         }
+        let output_started = Instant::now();
         let mut accum = TileAccumulator::new();
         accum
             .energy
             .copy_from_slice(&gpu[..noise_gpu::OUT_ENERGY_SLOTS]);
-        interior_pass.insert_collapsed(
-            (tx, ty),
-            layer.source_id(),
-            collapse_lden_surface_u8(&accum),
-        );
-        tile_timing.insert(((tx, ty), layer.source_id()), (tile_wall_s, tile_kernel_ms));
-    }
-
-    // Pass B is deliberately outside the CUDA loop. It gives every line
-    // layer the same geometric donor offsets and ensures halo tiles never
-    // become output ownership conflicts.
-    for &(tx, ty) in block_tiles {
-        if obstacles.is_some() {
-            interior_pass.ensure_donors((tx, ty));
+        let mut cells = collapse_lden_surface_u8(&accum);
+        // Building interiors: façade donor − ΔL, stamped after the collapse and
+        // BEFORE the baseline diff so the comparison is like for like. One
+        // estimate per tile (baked with the block), shared by its layers.
+        if let Some(interior) = &interiors[batch_slot(batch, tx, ty)] {
+            interior.apply(&mut cells);
         }
-        for layer in region_rows.iter().map(|(layer, _)| *layer) {
-            let output_started = Instant::now();
-            let mut cells = interior_pass
-                .collapsed((tx, ty), layer.source_id())
-                .map(|cells| cells.to_vec())
-                .expect("Pass A collapsed every requested GPU layer");
-            interior_pass.apply((tx, ty), layer.source_id(), &mut cells);
-            let encode_done = Instant::now();
-            stats.entry(layer.dir()).or_default().t_encode +=
-                encode_done.duration_since(output_started).as_secs_f64();
+        let encode_done = Instant::now();
+        stats.entry(layer.dir()).or_default().t_encode +=
+            encode_done.duration_since(output_started).as_secs_f64();
 
-            if let Some(root) = &cfg.output {
-                let out = Path::new(root)
-                    .join(layer.dir())
-                    .join(cfg.z.to_string())
-                    .join(tx.to_string())
-                    .join(format!("{ty}.bin"));
-                let bytes = write_tile(&out, &cells, layer.source_id(), true)?;
-                if bytes > 0 {
-                    stats.entry(layer.dir()).or_default().n_written += 1;
-                } else if out.exists() {
-                    std::fs::remove_file(&out)
-                        .with_context(|| format!("rm stale {}", out.display()))?;
-                }
-                let write_done = Instant::now();
-                stats.entry(layer.dir()).or_default().t_write +=
-                    write_done.duration_since(encode_done).as_secs_f64();
+        if let Some(root) = &cfg.output {
+            let out = Path::new(root)
+                .join(layer.dir())
+                .join(cfg.z.to_string())
+                .join(tx.to_string())
+                .join(format!("{ty}.bin"));
+            let bytes = write_tile(&out, &cells, layer.source_id(), true)?;
+            if bytes > 0 {
+                let st = stats.entry(layer.dir()).or_default();
+                st.n_written += 1;
+                st.bytes_written += bytes;
+            } else if out.exists() {
+                // Rebuilt all-silent: unlink any stale tile a prior build left, else
+                // combine keeps summing stale GPU energy (mirrors build_heatmap_surface).
+                std::fs::remove_file(&out)
+                    .with_context(|| format!("rm stale {}", out.display()))?;
             }
-            if !cfg.baseline.is_empty() {
-                let bp = Path::new(&cfg.baseline)
-                    .join(layer.dir())
-                    .join(cfg.z.to_string())
-                    .join(tx.to_string())
-                    .join(format!("{ty}.bin"));
-                if bp.exists() {
-                    let b = read_tile(&bp)?;
-                    let st = stats.entry(layer.dir()).or_default();
-                    for ci in 0..cells.len().min(b.len()) {
-                        let (c, bb) = (cells[ci], b[ci]);
-                        let differ = if c != NO_DATA && bb != NO_DATA {
-                            let d = (c as i32 - bb as i32).abs();
-                            st.max_diff = st.max_diff.max(d);
-                            st.n_cmp += 1;
-                            if d <= 1 {
-                                st.n_le1 += 1;
-                            }
-                            if d <= 3 {
-                                st.n_le3 += 1;
-                            }
-                            d > 0
-                        } else {
-                            c != bb
-                        };
-                        if differ {
-                            st.n_diff += 1;
+            // `write_tile` includes Brotli encoding. Keep this one honest composite through the
+            // stale-output unlink rather than presenting either operation as an isolated write.
+            let write_done = Instant::now();
+            stats.entry(layer.dir()).or_default().t_write +=
+                write_done.duration_since(encode_done).as_secs_f64();
+        }
+        if !cfg.baseline.is_empty() {
+            let bp = Path::new(&cfg.baseline)
+                .join(layer.dir())
+                .join(cfg.z.to_string())
+                .join(tx.to_string())
+                .join(format!("{ty}.bin"));
+            if bp.exists() {
+                let b = read_tile(&bp)?;
+                let st = stats.entry(layer.dir()).or_default();
+                for ci in 0..cells.len().min(b.len()) {
+                    let (c, bb) = (cells[ci], b[ci]);
+                    let differ = if c != NO_DATA && bb != NO_DATA {
+                        let d = (c as i32 - bb as i32).abs();
+                        st.max_diff = st.max_diff.max(d);
+                        st.n_cmp += 1;
+                        if d <= 1 {
+                            st.n_le1 += 1;
                         }
+                        if d <= 3 {
+                            st.n_le3 += 1;
+                        }
+                        d > 0
+                    } else {
+                        c != bb
+                    };
+                    if differ {
+                        st.n_diff += 1;
                     }
-                    st.n_baseline += 1;
                 }
+                st.n_baseline += 1;
             }
-            let st = stats.entry(layer.dir()).or_default();
-            st.n_tiles += 1;
-            if let Some(&(tile_wall_s, tile_kernel_ms)) =
-                tile_timing.get(&((tx, ty), layer.source_id()))
-            {
-                if tile_times_enabled() {
-                    let timing = noise_gpu::tile_timing::TileTimingRecord::new(
-                        tile_wall_s * 1000.0,
-                        tile_kernel_ms,
-                    )
-                    .expect("Instant and CUDA events must yield finite tile timing");
-                    eprintln!(
-                        "tile-time {} z{}/{tx}/{ty} {}",
-                        layer.dir(),
-                        cfg.z,
-                        timing.to_json().expect("validated tile timing serializes"),
-                    );
-                }
-            }
-            prog.tick();
         }
+        stats.entry(layer.dir()).or_default().n_tiles += 1;
+        if tile_times_enabled() {
+            let timing =
+                noise_gpu::tile_timing::TileTimingRecord::new(tile_wall_s * 1000.0, tile_kernel_ms)
+                    .expect("Instant and CUDA events must yield finite tile timing");
+            eprintln!(
+                "tile-time {} z{}/{tx}/{ty} {}",
+                layer.dir(),
+                cfg.z,
+                timing.to_json().expect("validated tile timing serializes"),
+            );
+        }
+        prog.tick();
     }
     if arc_drops_seen > 0.0 {
         eprintln!(
@@ -884,68 +840,76 @@ fn process_region(
     // only the chunk granularity of the double buffer, not the memory
     // contract.
     let block_keys: Vec<(u32, u32)> = blocks.keys().copied().collect();
-    let mut interior_pass = tile_painter::source_loader_obstacle::InteriorPass::new();
-    let mut tile_timing: BTreeMap<((u32, u32), u8), (f64, Option<f64>)> = BTreeMap::new();
     let window: usize = std::env::var("NOISE_GPU_PIPELINE_BLOCKS")
         .ok()
         .and_then(|v| v.parse().ok())
         .filter(|&w: &usize| w >= 1)
         .unwrap_or(2);
     let raster_ns = std::sync::atomic::AtomicU64::new(0);
-    type Chunk = (Vec<((u32, u32), TileBatch)>, ChunkPermit);
+    // A built block: its shared-halo batch plus, per batch slot, the tile's
+    // building-interior estimate (vector regions; painted tiles only) — baked
+    // here on the builder thread, next to the vector rx_refl bake, so the GPU
+    // loop never waits for it and the byte gate counts it.
+    type Block = ((u32, u32), TileBatch, Vec<Option<InteriorEstimate>>);
+    type Chunk = (Vec<Block>, ChunkPermit);
     let build_chunk = |keys: &[(u32, u32)]| -> Chunk {
         let t0 = Instant::now();
         let estimate: u64 = keys
             .iter()
             .map(|&(bx, by)| {
-                let pass_a_tiles = tile_halo_window(&blocks[&(bx, by)], cfg.z);
-                let (batch_base_x, batch_base_y, batch_n) = tile_batch_window(&pass_a_tiles, cfg.z);
-                TileBatch::estimate_heap_bytes(
-                    cfg.z,
-                    batch_base_x,
-                    batch_base_y,
-                    batch_n,
-                    cfg.halo_m,
-                )
+                let (base_x, base_y) = block_batch_origin(bx, by, cfg.batch_n, cfg.z);
+                TileBatch::estimate_heap_bytes(cfg.z, base_x, base_y, cfg.batch_n, cfg.halo_m)
             })
             .sum();
         let mut permit = pipeline_gate().acquire(estimate);
-        let built: Vec<((u32, u32), TileBatch)> = keys
+        let built: Vec<Block> = keys
             .par_iter()
             .map(|&(bx, by)| {
                 RASTERS.with(|slot| {
                     let mut slot = slot.borrow_mut();
                     let rasters = slot.get_or_insert_with(|| RealRasters::new(Path::new(prepared)));
-                    let pass_a_tiles = tile_halo_window(&blocks[&(bx, by)], cfg.z);
-                    let (batch_base_x, batch_base_y, batch_n) =
-                        tile_batch_window(&pass_a_tiles, cfg.z);
+                    let (base_x, base_y) = block_batch_origin(bx, by, cfg.batch_n, cfg.z);
                     let mut batch = TileBatch::build_opt_rx_refl(
                         cfg.z,
-                        batch_base_x,
-                        batch_base_y,
-                        batch_n,
+                        base_x,
+                        base_y,
+                        cfg.batch_n,
                         cfg.halo_m,
                         rasters,
                         obstacle_data.set().is_none(),
                     );
                     // Vector mode: pre-bake vector reflection into rx_refl —
                     // the rxar upload then carries it to the kernel unchanged
-                    // (the one shared helper, SPEC §3.8); paint the Pass-A
-                    // halo as well as the block's owned tiles.
-                    if let Some(set) = obstacle_data.set() {
-                        for &(tx, ty) in &pass_a_tiles {
-                            let slot = batch_slot(&batch, tx, ty);
-                            let tile = &mut batch.tiles[slot];
+                    // (the one shared helper, SPEC §3.8); only painted tiles.
+                    let mut interiors: Vec<Option<InteriorEstimate>> =
+                        (0..batch.tiles.len()).map(|_| None).collect();
+                    for &(tx, ty) in &blocks[&(bx, by)] {
+                        let slot = batch_slot(&batch, tx, ty);
+                        if let Some(set) = obstacle_data.set() {
                             tile_painter::source_loader_obstacle::bake_tile_vector_rx_refl(
-                                tile, set,
+                                &mut batch.tiles[slot],
+                                set,
                             );
                         }
+                        interiors[slot] = obstacle_data.interior_estimate(&batch.tiles[slot]);
                     }
-                    ((bx, by), batch)
+                    ((bx, by), batch, interiors)
                 })
             })
             .collect();
-        permit.adjust_to(built.iter().map(|(_, batch)| batch.heap_bytes()).sum());
+        permit.adjust_to(
+            built
+                .iter()
+                .map(|(_, batch, interiors)| {
+                    batch.heap_bytes()
+                        + interiors
+                            .iter()
+                            .flatten()
+                            .map(InteriorEstimate::heap_bytes)
+                            .sum::<u64>()
+                })
+                .sum(),
+        );
         raster_ns.fetch_add(
             t0.elapsed().as_nanos() as u64,
             std::sync::atomic::Ordering::Relaxed,
@@ -964,23 +928,18 @@ fn process_region(
             let next_handle = (!next_range.is_empty())
                 .then(|| scope.spawn(|| build_chunk(&block_keys[next_range.clone()])));
             let mut err = None;
-            for (key, batch) in &current.as_ref().expect("loop guard").0 {
-                let (bx, by) = *key;
+            for (key, batch, interiors) in &current.as_ref().expect("loop guard").0 {
                 if let Err(e) = process_block(
                     dev,
                     f,
                     batch,
+                    interiors,
                     cfg,
-                    bx,
-                    by,
                     &blocks[key],
                     &region_rows,
                     &src_dev,
                     &barrier_data,
                     &obst_dev,
-                    obstacle_data.set(),
-                    &mut interior_pass,
-                    &mut tile_timing,
                     stats,
                     prog,
                 ) {

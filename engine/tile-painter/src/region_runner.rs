@@ -11,7 +11,7 @@
 //! pick), and the kernels sum commutatively over the concatenated
 //! per-R4 views, so both paths give a tile the identical source set.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -69,63 +69,27 @@ pub struct RegionStats {
     pub t_write: Duration,
 }
 
-/// Return the valid base-zoom tiles in the one-tile halo around a painted
-/// tile set. The returned order is stable for deterministic Pass A work. A
-/// world-edge neighbour is omitted because `TileBatch` is a contiguous
-/// Cartesian block; its absent class/cell is treated as no donor by Pass B.
-pub fn tile_halo_window(tiles: &[(u32, u32)], zoom: u8) -> Vec<(u32, u32)> {
+/// North-west tile of the `batch_n × batch_n` [`TileBatch`] that paints a
+/// grid-aligned block. Normally the block's own grid origin; at the east /
+/// south world edge (a zoom width not divisible by `batch_n`, e.g. the L3
+/// default 3 against 4096 columns) the origin slides back so no tile at or
+/// beyond `2^zoom` is ever built. Every owned tile of the block stays inside
+/// the batch; only world-edge blocks see a shifted shared halo lattice.
+pub fn block_batch_origin(block_x: u32, block_y: u32, batch_n: u32, zoom: u8) -> (u32, u32) {
     let limit = 1_u32 << zoom;
-    let mut window = BTreeSet::new();
-    for &(x, y) in tiles {
-        for dy in -1_i64..=1 {
-            for dx in -1_i64..=1 {
-                let nx = i64::from(x) + dx;
-                let ny = i64::from(y) + dy;
-                if (0..i64::from(limit)).contains(&nx) && (0..i64::from(limit)).contains(&ny) {
-                    window.insert((nx as u32, ny as u32));
-                }
-            }
-        }
-    }
-    window.into_iter().collect()
+    assert!(
+        batch_n >= 1 && batch_n <= limit,
+        "batch {batch_n} exceeds the z{zoom} world"
+    );
+    (block_x.min(limit - batch_n), block_y.min(limit - batch_n))
 }
 
 /// Locate a tile in a contiguous [`TileBatch`] without duplicating its
-/// row-major indexing arithmetic in the CPU, GPU, and aircraft Pass A code.
+/// row-major indexing arithmetic in the CPU, GPU, and aircraft writers.
 pub fn batch_slot(batch: &TileBatch, x: u32, y: u32) -> usize {
     assert!(x >= batch.base_x && x < batch.base_x + batch.batch_n);
     assert!(y >= batch.base_y && y < batch.base_y + batch.batch_n);
     ((y - batch.base_y) * batch.batch_n + (x - batch.base_x)) as usize
-}
-
-/// Return a square, world-bounded `TileBatch` window containing the supplied
-/// Pass-A tiles. The square may include valid unused cells, but never creates
-/// x/y coordinates at or beyond `2^zoom` at a world edge.
-pub fn tile_batch_window(tiles: &[(u32, u32)], zoom: u8) -> (u32, u32, u32) {
-    assert!(
-        !tiles.is_empty(),
-        "a TileBatch needs at least one Pass-A tile"
-    );
-    let limit = 1_u32 << zoom;
-    let (min_x, max_x) = tiles
-        .iter()
-        .fold((u32::MAX, 0), |(lo, hi), &(x, _)| (lo.min(x), hi.max(x)));
-    let (min_y, max_y) = tiles
-        .iter()
-        .fold((u32::MAX, 0), |(lo, hi), &(_, y)| (lo.min(y), hi.max(y)));
-    let span = (max_x - min_x + 1).max(max_y - min_y + 1);
-    assert!(span <= limit, "Pass-A window exceeds the world");
-    let base_x = if min_x + span > limit {
-        limit - span
-    } else {
-        min_x
-    };
-    let base_y = if min_y + span > limit {
-        limit - span
-    } else {
-        min_y
-    };
-    (base_x, base_y, span)
 }
 
 impl RegionStats {
@@ -144,8 +108,15 @@ impl RegionStats {
     }
 }
 
-/// R4 hex of a tile's centre, or `None` if the centre is out of range.
+/// R4 hex of a tile's centre. `None` for `x`/`y` at or beyond `2^zoom` —
+/// not a tile, even though its centre still computes to a finite lat/lon
+/// (the dev `--tile-x/--tile-y` and positional-block paths can ask) — or
+/// when H3 rejects the centre.
 pub fn tile_centre_r4(zoom: u8, x: u32, y: u32) -> Option<u64> {
+    let limit = 1_u32 << zoom;
+    if x >= limit || y >= limit {
+        return None;
+    }
     let b = tile_bbox(zoom, x, y);
     let lat = (b.north_lat + b.south_lat) * 0.5;
     let lon = (b.east_lon + b.west_lon) * 0.5;
@@ -394,42 +365,29 @@ pub fn process_region(
         batches.entry((bx, by)).or_default().push((x, y));
     }
 
-    let mut interior_pass = crate::source_loader_obstacle::InteriorPass::new();
-    for ((_bx, _by), batch_tiles) in &batches {
-        // Airborne and cruise use only the receiver lattice, but building
-        // interiors still need a geometric 3×3 donor window. Pass A therefore
-        // computes all eight neighbours and Pass B writes only owned tiles.
-        let pass_a_tiles = tile_halo_window(batch_tiles, ctx.zoom);
-        let (batch_base_x, batch_base_y, batch_n) = tile_batch_window(&pass_a_tiles, ctx.zoom);
+    for ((bx, by), batch_tiles) in &batches {
+        // Airborne/cruise are NPD and never ray-march the tile halo (cruise reads
+        // the full raster store, airborne is pre-sampled at extract), so build with
+        // a 0 halo — only the inner FusedTileZ13 (receiver lattice + rx_alt) is read.
+        let (base_x, base_y) = block_batch_origin(*bx, *by, ctx.batch_n, ctx.zoom);
         let t_batch = Instant::now();
         let batch = TileBatch::build_receiver_altitude_only(
             ctx.zoom,
-            batch_base_x,
-            batch_base_y,
-            batch_n,
+            base_x,
+            base_y,
+            ctx.batch_n,
             ctx.rasters,
         );
         stats.t_raster += t_batch.elapsed();
 
-        if let Some(set) = obstacle_data.set() {
-            let t_class = Instant::now();
-            for &(x, y) in &pass_a_tiles {
-                if !interior_pass.has_class_raster((x, y)) {
-                    let tile = &batch.tiles[batch_slot(&batch, x, y)];
-                    interior_pass.insert_class_raster(
-                        (x, y),
-                        crate::source_loader_obstacle::bake_tile_envelope_classes(tile, set),
-                    );
-                }
-            }
-            stats.t_raster += t_class.elapsed();
-        }
-
-        for &(x, y) in &pass_a_tiles {
-            if interior_pass.has_collapsed((x, y), wire_hm3::SOURCE_ID_AIRCRAFT) {
-                continue;
-            }
+        for &(x, y) in batch_tiles {
             let tile = &batch.tiles[batch_slot(&batch, x, y)];
+            // Building interiors (vector regions only): the same per-tile class
+            // raster + façade donor map the surface painters bake for this tile.
+            let t_class = Instant::now();
+            let interior = obstacle_data.interior_estimate(tile);
+            stats.t_raster += t_class.elapsed();
+
             let mut accum = TileAccumulator::new();
             if let Some(field) = cruise_field.as_mut() {
                 let t_cruise = Instant::now();
@@ -450,24 +408,12 @@ pub fn process_region(
                 stats.t_airborne_scatter += dt;
                 stats.t_scatter += dt;
             }
-            interior_pass.insert_collapsed(
-                (x, y),
-                wire_hm3::SOURCE_ID_AIRCRAFT,
-                wire_hm3::collapse_lden_u8(&accum, ctx.n_days as f64),
-            );
-        }
-
-        for &(x, y) in batch_tiles {
-            if obstacle_data.set().is_some() {
-                interior_pass.ensure_donors((x, y));
-            }
-            let mut cells = interior_pass
-                .collapsed((x, y), wire_hm3::SOURCE_ID_AIRCRAFT)
-                .map(|cells| cells.to_vec())
-                .expect("Pass A collapsed every aircraft tile");
-            interior_pass.apply((x, y), wire_hm3::SOURCE_ID_AIRCRAFT, &mut cells);
 
             let t_write = Instant::now();
+            let mut cells = wire_hm3::collapse_lden_u8(&accum, ctx.n_days as f64);
+            if let Some(interior) = &interior {
+                interior.apply(&mut cells);
+            }
             let out_path = ctx
                 .output
                 .join(ctx.zoom.to_string())
@@ -480,6 +426,9 @@ pub fn process_region(
                 !ctx.write_empty,
             )?;
             if written == 0 {
+                // Re-run shrank this tile to silence — unlink any stale prior tile
+                // so an incremental recombine/pyramid can't read phantom energy
+                // (mirrors the surface builder).
                 if out_path.exists() {
                     std::fs::remove_file(&out_path)
                         .with_context(|| format!("rm stale {}", out_path.display()))?;
@@ -489,6 +438,9 @@ pub fn process_region(
                 stats.tiles_written += 1;
                 stats.bytes_written += written;
             }
+            // Collapse, interior estimate, Brotli encoding, filesystem write and
+            // stale-output removal are one production boundary; record the
+            // composite, including silence.
             stats.t_write += t_write.elapsed();
         }
     }
@@ -565,18 +517,23 @@ mod tests {
     }
 
     #[test]
-    fn tile_batch_window_clips_world_edges() {
-        assert_eq!(
-            tile_batch_window(&tile_halo_window(&[(0, 0)], 3), 3),
-            (0, 0, 2)
-        );
-        assert_eq!(
-            tile_batch_window(&tile_halo_window(&[(7, 7)], 3), 3),
-            (6, 6, 2)
-        );
-        let (base_x, base_y, span) = tile_batch_window(&tile_halo_window(&[(6, 6), (7, 7)], 3), 3);
-        assert!(base_x + span <= 1 << 3);
-        assert!(base_y + span <= 1 << 3);
+    fn tile_centre_r4_rejects_tiles_outside_the_world() {
+        // z3 = 8 tiles per axis: (7, 7) is the last valid tile, (8, 0) and
+        // (0, 8) are beyond the world even though their centres are finite.
+        assert!(tile_centre_r4(3, 7, 7).is_some());
+        assert!(tile_centre_r4(3, 8, 0).is_none());
+        assert!(tile_centre_r4(3, 0, 8).is_none());
+    }
+
+    #[test]
+    fn block_batch_origin_slides_back_at_world_edges() {
+        // z3 = 8 tiles per axis; batch 3 does not divide 8: the last grid block
+        // starts at 6 and would build tiles 6..=8 — the origin slides to 5.
+        assert_eq!(block_batch_origin(0, 0, 3, 3), (0, 0));
+        assert_eq!(block_batch_origin(3, 3, 3, 3), (3, 3));
+        assert_eq!(block_batch_origin(6, 6, 3, 3), (5, 5));
+        assert_eq!(block_batch_origin(6, 0, 2, 3), (6, 0));
+        assert_eq!(block_batch_origin(7, 7, 1, 3), (7, 7));
     }
 
     // ── paint-pipeline-v4 PR#1 §3: per-layer worker builds ──

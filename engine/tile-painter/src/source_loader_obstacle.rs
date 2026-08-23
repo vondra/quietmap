@@ -25,7 +25,6 @@
 //! zero footprints — it is EMPTY, not missing, and vector mode proceeds
 //! without it.
 
-use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -151,6 +150,18 @@ impl ObstacleData {
     }
 }
 
+impl ObstacleData {
+    /// The one entry point the three writers share: a tile's interior
+    /// estimate in a vector region, `None` in a raster-fallback region (no
+    /// footprints to classify → today's unmasked physics, never a panic).
+    pub fn interior_estimate(
+        &self,
+        tile: &raster_reader::fused_tile_z13::FusedTileZ13,
+    ) -> Option<InteriorEstimate> {
+        self.set().map(|set| InteriorEstimate::bake(tile, set))
+    }
+}
+
 fn renderer_evidence_requires_vector_mode() -> bool {
     std::env::var(crate::renderer_evidence::RENDERER_EVIDENCE_FLAG).as_deref() == Ok("1")
 }
@@ -186,7 +197,7 @@ const INTERIOR_MASK_MIN_HEIGHT_M: f32 = 0.0;
 
 /// Classify the receiver lattice once per tile. The result is an effective
 /// class raster, not a boolean mask: OUTDOOR footprints remain ordinary
-/// receivers and every enclosed class carries the ΔL used by Pass B. The
+/// receivers and every enclosed class carries the ΔL `InteriorEstimate::apply` uses. The
 /// source `envelope_class` in Arrow remains unchanged; the height-aware
 /// effective class exists only in this paint-time raster.
 ///
@@ -202,7 +213,7 @@ const INTERIOR_MASK_MIN_HEIGHT_M: f32 = 0.0;
 /// A footprint smaller than one pixel (~12 m at the base zoom) rarely covers
 /// a pixel centre and so rarely masks anything. Accepted, no special
 /// handling: the mask is a display-semantics correction, not physics.
-pub fn bake_tile_envelope_classes(
+fn bake_tile_envelope_classes(
     tile: &raster_reader::fused_tile_z13::FusedTileZ13,
     set: &ObstacleSet,
 ) -> Vec<u8> {
@@ -240,164 +251,106 @@ pub fn bake_tile_envelope_classes(
     classes
 }
 
-/// Compatibility convenience for callers that have only one tile. Production
-/// writers use [`apply_interior_estimate_with_donors`] with a real 3×3 halo;
-/// this wrapper supplies outdoor neighbours so old unit fixtures retain the
-/// local-tile behaviour without reintroducing the old quadratic search.
-#[cfg(test)]
-pub fn apply_interior_estimate(cells: &mut [u8], classes: &[u8]) {
-    use raster_reader::fused_tile_z13::TILE_PX;
-
-    debug_assert_eq!(cells.len(), TILE_PX * TILE_PX);
-    debug_assert_eq!(classes.len(), cells.len());
-    let outdoor = noise_compute::envelope::EnvelopeClass::Outdoor as u8;
-    let halo_classes: [Vec<u8>; 9] = std::array::from_fn(|ordinal| {
-        if ordinal == 4 {
-            classes.to_vec()
-        } else {
-            vec![outdoor; TILE_PX * TILE_PX]
-        }
-    });
-    let halo_class_refs = std::array::from_fn(|ordinal| halo_classes[ordinal].as_slice());
-    let donors = bake_interior_donors(halo_class_refs);
-    let halo_cells: [Vec<u8>; 9] = std::array::from_fn(|ordinal| {
-        if ordinal == 4 {
-            cells.to_vec()
-        } else {
-            vec![crate::wire_hm3::NO_DATA; TILE_PX * TILE_PX]
-        }
-    });
-    let halo_cell_refs = std::array::from_fn(|ordinal| halo_cells[ordinal].as_slice());
-    apply_interior_estimate_with_donors(cells, classes, halo_cell_refs, &donors);
+/// One tile's building-interior display estimate: the effective envelope
+/// class of every receiver pixel plus, for every enclosed pixel, its façade
+/// donor — the nearest OUTDOOR lattice pixel of the SAME tile (exact integer
+/// EDT, [`nearest_site_offsets`]). Baked once per tile and applied to every
+/// layer of that tile by all three writers (the aircraft runner bakes the
+/// identical map from the identical lattice), so energy composition commutes
+/// with the envelope loss.
+///
+/// WHY per tile and not a 3×3 tile halo: a halo donor needs the neighbour
+/// tiles' painted bytes, i.e. the full propagation kernel on a ring of tiles
+/// the painter never writes (measured cost and the seam consequence: SPEC
+/// "Donor transform (per tile)"). A tile's bytes depend only on that tile's
+/// own inputs again.
+pub struct InteriorEstimate {
+    classes: Vec<u8>,
+    /// Donor pixel ordinal per receiver pixel; [`NO_DONOR`] outside enclosed
+    /// footprints and for an enclosed pixel of a tile without any outdoor
+    /// pixel (then `apply` leaves `NO_DATA`).
+    donors: Vec<u32>,
 }
 
-/// A geometry-only exterior donor for one centre-tile receiver pixel. Tile
-/// ordinal is row-major in the 3×3 halo (`0..9`); it is deliberately shared
-/// by every layer so energy composition commutes with the envelope loss.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct InteriorDonor {
-    pub tile_ordinal: usize,
-    pub pixel_ordinal: usize,
+impl InteriorEstimate {
+    /// Classify the tile's lattice against the region's footprints and bake
+    /// the donor map (vector regions only — see
+    /// [`ObstacleData::interior_estimate`]).
+    pub fn bake(tile: &raster_reader::fused_tile_z13::FusedTileZ13, set: &ObstacleSet) -> Self {
+        Self::from_classes(bake_tile_envelope_classes(tile, set))
+    }
+
+    /// The donor map for an effective-class raster: sites are outdoor pixels,
+    /// queries are enclosed pixels. Exact FH transform, integer tie-break
+    /// (smaller site x, then smaller site y) — SPEC "Donor transform".
+    pub fn from_classes(classes: Vec<u8>) -> Self {
+        use raster_reader::fused_tile_z13::TILE_PX;
+        assert_eq!(classes.len(), INTERIOR_TILE_CELLS);
+        let donors = nearest_site_offsets(
+            TILE_PX,
+            0..TILE_PX,
+            0..TILE_PX,
+            |x, y| EnvelopeClass::from_u8(classes[y * TILE_PX + x]) == EnvelopeClass::Outdoor,
+            |x, y| {
+                EnvelopeClass::from_u8(classes[y * TILE_PX + x])
+                    .delta_db()
+                    .is_some()
+            },
+        );
+        Self { classes, donors }
+    }
+
+    /// Effective envelope class per receiver pixel (row-major, `TILE_PX²`).
+    pub fn classes(&self) -> &[u8] {
+        &self.classes
+    }
+
+    /// Donor pixel ordinal per receiver pixel ([`NO_DONOR`] outside enclosed
+    /// footprints, or enclosed without any outdoor pixel in the tile).
+    pub fn donors(&self) -> &[u32] {
+        &self.donors
+    }
+
+    /// Resident bytes, for the GPU lane's pipeline byte gate.
+    pub fn heap_bytes(&self) -> u64 {
+        (self.classes.capacity() + self.donors.capacity() * std::mem::size_of::<u32>()) as u64
+    }
+
+    /// Rewrite every enclosed pixel of one layer's collapsed tile with
+    /// `max(0, L_facade − ΔL)`; a missing or `NO_DATA` donor stays `NO_DATA`.
+    /// In place is safe: a donor is always an OUTDOOR pixel, and outdoor
+    /// pixels are never rewritten here, so `cells[donor]` is still the
+    /// collapsed façade value whenever it is read.
+    pub fn apply(&self, cells: &mut [u8]) {
+        use crate::wire_hm3::{dequantise_lden, quantise_lden, NO_DATA};
+        assert_eq!(cells.len(), self.classes.len());
+        for (index, class) in self.classes.iter().enumerate() {
+            let Some(delta) = EnvelopeClass::from_u8(*class).delta_db() else {
+                continue;
+            };
+            let donor = self.donors[index];
+            let facade = if donor == NO_DONOR {
+                f64::NEG_INFINITY
+            } else {
+                dequantise_lden(cells[donor as usize])
+            };
+            cells[index] = if facade.is_finite() {
+                quantise_lden((facade - delta).max(0.0))
+            } else {
+                NO_DATA
+            };
+        }
+    }
 }
 
 const INTERIOR_TILE_CELLS: usize =
     raster_reader::fused_tile_z13::TILE_PX * raster_reader::fused_tile_z13::TILE_PX;
-static MISSING_CLASS_RASTER: [u8; INTERIOR_TILE_CELLS] =
-    [noise_compute::envelope::EnvelopeClass::Default as u8; INTERIOR_TILE_CELLS];
-static MISSING_HM3_RASTER: [u8; INTERIOR_TILE_CELLS] =
-    [crate::wire_hm3::NO_DATA; INTERIOR_TILE_CELLS];
 
-/// Region-scoped state for the building-interior two-pass paint. All three
-/// writers use this same cache: Pass A scatters each `(tile, source_id)` once
-/// across the region's union halo, and Pass B reuses one donor map per centre
-/// tile for every layer. Missing world-edge neighbours are represented by
-/// static enclosed/NO_DATA rasters, never by phantom `TileBatch` slots.
-pub struct InteriorPass {
-    class_rasters: BTreeMap<(u32, u32), Vec<u8>>,
-    collapsed: BTreeMap<((u32, u32), u8), Vec<u8>>,
-    donors: BTreeMap<(u32, u32), Vec<Option<InteriorDonor>>>,
-}
+/// "No site reachable" marker in [`nearest_site_offsets`] output: `side ≤
+/// u16::MAX` keeps every real ordinal below it.
+pub const NO_DONOR: u32 = u32::MAX;
 
-impl Default for InteriorPass {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl InteriorPass {
-    /// Empty region-scoped Pass-A/Pass-B cache.
-    pub fn new() -> Self {
-        Self {
-            class_rasters: BTreeMap::new(),
-            collapsed: BTreeMap::new(),
-            donors: BTreeMap::new(),
-        }
-    }
-
-    /// Whether the class raster for one Pass-A tile is already available.
-    pub fn has_class_raster(&self, tile: (u32, u32)) -> bool {
-        self.class_rasters.contains_key(&tile)
-    }
-
-    /// Retain a class raster exactly once in the region cache.
-    pub fn insert_class_raster(&mut self, tile: (u32, u32), classes: Vec<u8>) {
-        assert_eq!(classes.len(), INTERIOR_TILE_CELLS);
-        assert!(self.class_rasters.insert(tile, classes).is_none());
-    }
-
-    /// Whether Pass A already collapsed this tile/layer as a centre or halo
-    /// in an earlier block.
-    pub fn has_collapsed(&self, tile: (u32, u32), source_id: u8) -> bool {
-        self.collapsed.contains_key(&(tile, source_id))
-    }
-
-    /// Retain one collapsed, area-filled Pass-A tile/layer in region scope.
-    pub fn insert_collapsed(&mut self, tile: (u32, u32), source_id: u8, cells: Vec<u8>) {
-        assert_eq!(cells.len(), INTERIOR_TILE_CELLS);
-        assert!(self.collapsed.insert((tile, source_id), cells).is_none());
-    }
-
-    /// Borrow a cached collapsed tile for Pass B.
-    pub fn collapsed(&self, tile: (u32, u32), source_id: u8) -> Option<&[u8]> {
-        self.collapsed.get(&(tile, source_id)).map(Vec::as_slice)
-    }
-
-    /// Bake one donor map once per centre tile. Every subsequent layer applies
-    /// the same geometry, so energy composition cannot change the façade pick.
-    pub fn ensure_donors(&mut self, tile: (u32, u32)) {
-        if self.donors.contains_key(&tile) {
-            return;
-        }
-        let classes = self.halo_class_refs(tile);
-        self.donors.insert(tile, bake_interior_donors(classes));
-    }
-
-    /// Apply the cached donor geometry to one layer's centre tile. If no vector
-    /// class raster exists (raster fallback), this is deliberately a no-op.
-    pub fn apply(&self, tile: (u32, u32), source_id: u8, cells: &mut [u8]) {
-        let Some(centre_classes) = self.class_rasters.get(&tile) else {
-            return;
-        };
-        let donors = self
-            .donors
-            .get(&tile)
-            .expect("InteriorPass donors must be baked before Pass B");
-        let halo_cells = self.halo_cell_refs(tile, source_id);
-        apply_interior_estimate_with_donors(cells, centre_classes, halo_cells, donors);
-    }
-
-    fn halo_class_refs(&self, (x, y): (u32, u32)) -> [&[u8]; 9] {
-        std::array::from_fn(|ordinal| {
-            let hx = i64::from(x) + ordinal as i64 % 3 - 1;
-            let hy = i64::from(y) + ordinal as i64 / 3 - 1;
-            if hx < 0 || hy < 0 {
-                &MISSING_CLASS_RASTER
-            } else {
-                self.class_rasters
-                    .get(&(hx as u32, hy as u32))
-                    .map(Vec::as_slice)
-                    .unwrap_or(&MISSING_CLASS_RASTER)
-            }
-        })
-    }
-
-    fn halo_cell_refs(&self, (x, y): (u32, u32), source_id: u8) -> [&[u8]; 9] {
-        std::array::from_fn(|ordinal| {
-            let hx = i64::from(x) + ordinal as i64 % 3 - 1;
-            let hy = i64::from(y) + ordinal as i64 / 3 - 1;
-            if hx < 0 || hy < 0 {
-                &MISSING_HM3_RASTER
-            } else {
-                self.collapsed
-                    .get(&((hx as u32, hy as u32), source_id))
-                    .map(Vec::as_slice)
-                    .unwrap_or(&MISSING_HM3_RASTER)
-            }
-        })
-    }
-}
-
-/// `INF` is larger than every squared distance in the 1536×1536 receiver
+/// `INF` is larger than every squared distance in a `TILE_PX²` receiver
 /// window. The EDT deliberately stays in signed integer space: no floating
 /// rounding is allowed to decide which façade wins a tie.
 const EDT_INF: i32 = i32::MAX / 4;
@@ -405,14 +358,18 @@ const EDT_INF: i32 = i32::MAX / 4;
 /// Exact Felzenszwalb–Huttenlocher nearest-site transform for a rectangular
 /// query window. The only O(N) scratch is one squared-distance grid, one
 /// nearest-site-y grid, and the two lower-envelope arrays. The closure is
-/// queried directly instead of materialising an outdoor-point list.
-fn nearest_site_offsets(
+/// queried directly instead of materialising an outdoor-point list. Returns,
+/// per query-window pixel (row-major), the nearest site's ordinal
+/// `y * side + x` in the `side` frame, or [`NO_DONOR`]. Public so census
+/// tooling can replay other window shapes against the same exact transform
+/// and tie-break.
+pub fn nearest_site_offsets(
     side: usize,
     query_x: std::ops::Range<usize>,
     query_y: std::ops::Range<usize>,
     is_site: impl Fn(usize, usize) -> bool,
     is_query: impl Fn(usize, usize) -> bool,
-) -> Vec<Option<(usize, usize)>> {
+) -> Vec<u32> {
     assert!(side > 0 && side <= u16::MAX as usize);
     assert!(query_x.end <= side && query_y.end <= side);
     let query_width = query_x.end - query_x.start;
@@ -454,7 +411,7 @@ fn nearest_site_offsets(
 
     let mut envelope_vertices = vec![0i32; side];
     let mut envelope_starts = vec![0i32; side];
-    let mut donors = vec![None; query_width * (query_y.end - query_y.start)];
+    let mut donors = vec![NO_DONOR; query_width * (query_y.end - query_y.start)];
 
     // Row pass: the lower envelope of the column parabolas. `div_euclid`
     // implements floor division for negative numerators; +1 is the first
@@ -518,75 +475,10 @@ fn nearest_site_offsets(
                 continue;
             }
             let output_index = (y - query_y.start) * query_width + (x - query_x.start);
-            donors[output_index] = Some((site_x, site_y as usize));
+            donors[output_index] = (site_y as usize * side + site_x) as u32;
         }
     }
     donors
-}
-
-/// Build donors for the centre member of a 3×3 class-raster halo. This never
-/// inspects HM3 bytes: a silent exterior receiver is still the only valid
-/// façade, and therefore remains silent indoors rather than jumping to a road.
-pub fn bake_interior_donors(halo_classes: [&[u8]; 9]) -> Vec<Option<InteriorDonor>> {
-    use noise_compute::envelope::EnvelopeClass;
-    use raster_reader::fused_tile_z13::TILE_PX;
-
-    let expected_len = TILE_PX * TILE_PX;
-    debug_assert!(halo_classes
-        .iter()
-        .all(|classes| classes.len() == expected_len));
-    let offsets = nearest_site_offsets(
-        TILE_PX * 3,
-        TILE_PX..TILE_PX * 2,
-        TILE_PX..TILE_PX * 2,
-        |x, y| {
-            let tile_ordinal = (y / TILE_PX) * 3 + (x / TILE_PX);
-            let pixel_ordinal = (y % TILE_PX) * TILE_PX + (x % TILE_PX);
-            EnvelopeClass::from_u8(halo_classes[tile_ordinal][pixel_ordinal])
-                == EnvelopeClass::Outdoor
-        },
-        |x, y| {
-            let pixel_ordinal = (y - TILE_PX) * TILE_PX + (x - TILE_PX);
-            EnvelopeClass::from_u8(halo_classes[4][pixel_ordinal])
-                .delta_db()
-                .is_some()
-        },
-    );
-    offsets
-        .into_iter()
-        .map(|offset| {
-            offset.map(|(x, y)| InteriorDonor {
-                tile_ordinal: (y / TILE_PX) * 3 + (x / TILE_PX),
-                pixel_ordinal: (y % TILE_PX) * TILE_PX + (x % TILE_PX),
-            })
-        })
-        .collect()
-}
-
-/// Pass B of the interior estimate. `halo_cells` are already collapsed and
-/// area-filled Pass-A outputs; only the centre vector is mutated/written.
-pub fn apply_interior_estimate_with_donors(
-    cells: &mut [u8],
-    centre_classes: &[u8],
-    halo_cells: [&[u8]; 9],
-    donors: &[Option<InteriorDonor>],
-) {
-    use crate::wire_hm3::{dequantise_lden, quantise_lden, NO_DATA};
-    use noise_compute::envelope::EnvelopeClass;
-    debug_assert_eq!(cells.len(), donors.len());
-    for (index, cell) in cells.iter_mut().enumerate() {
-        let Some(delta) = EnvelopeClass::from_u8(centre_classes[index]).delta_db() else {
-            continue;
-        };
-        *cell = donors[index]
-            .and_then(|donor| {
-                let facade = dequantise_lden(halo_cells[donor.tile_ordinal][donor.pixel_ordinal]);
-                facade
-                    .is_finite()
-                    .then(|| quantise_lden((facade - delta).max(0.0)))
-            })
-            .unwrap_or(NO_DATA);
-    }
 }
 
 /// Read this cell's `buildings.arrow` into the low-profile cap's lookup — the
@@ -840,7 +732,7 @@ mod tests {
     /// * the 3 m garage → enclosed (the class raster's height gate is 0, not the
     ///   enclosure probe's 5 m — a garage interior is still an interior);
     /// * masked area ≈ the footprint area in pixels;
-    /// * Pass B attenuates exactly those cells from a finite façade donor.
+    /// * `apply` attenuates exactly those cells from a finite façade donor.
     #[test]
     fn interior_envelope_matrix() {
         use crate::scatter_band::{lat_to_py, lon_to_px};
@@ -879,7 +771,8 @@ mod tests {
             indexes: vec![Arc::new(b.build())],
         };
 
-        let classes = bake_tile_envelope_classes(&tile, &set);
+        let estimate = InteriorEstimate::bake(&tile, &set);
+        let classes = estimate.classes();
         assert_eq!(classes.len(), TILE_PX * TILE_PX);
         let indoor = |i: usize| classes[i] != noise_compute::envelope::EnvelopeClass::Outdoor as u8;
         assert!(
@@ -916,7 +809,7 @@ mod tests {
         );
 
         let mut cells = vec![100u8; TILE_PX * TILE_PX];
-        apply_interior_estimate(&mut cells, &classes);
+        estimate.apply(&mut cells);
         for (i, &class) in classes.iter().enumerate() {
             assert_eq!(
                 cells[i],
@@ -957,22 +850,112 @@ mod tests {
                     .map(|&(site_x, site_y)| {
                         let dx = x as i64 - site_x as i64;
                         let dy = y as i64 - site_y as i64;
-                        (dx * dx + dy * dy, site_x, site_y, (site_x, site_y))
+                        (dx * dx + dy * dy, site_x, site_y)
                     })
                     .min()
-                    .map(|(_, _, _, offset)| offset);
+                    .map(|(_, site_x, site_y)| (site_y * side + site_x) as u32)
+                    .unwrap();
                 assert_eq!(transformed[y * side + x], expected, "pixel ({x}, {y})");
             }
         }
 
         // (3, 3) is equidistant from the four cardinal sites; smaller x then
         // smaller y selects (0, 3) exactly.
-        assert_eq!(transformed[3 * side + 3], Some((0, 3)));
+        assert_eq!(transformed[3 * side + 3], (3 * side) as u32);
         assert!(
             nearest_site_offsets(side, 0..side, 0..side, |_, _| false, |_, _| true)
                 .into_iter()
-                .all(|site| site.is_none())
+                .all(|site| site == NO_DONOR)
         );
+    }
+
+    /// The per-tile donor contract: an enclosed block touching the tile's west
+    /// seam (its globally nearest façade would lie in the neighbour tile) is
+    /// served from THIS tile's outdoor pixels — no neighbour bytes exist. Every
+    /// outdoor byte is untouched, every enclosed byte is `façade − ΔL` of an
+    /// outdoor in-tile donor, and a donor `NO_DATA` façade stays `NO_DATA`.
+    #[test]
+    fn interior_estimate_is_tile_self_contained_at_seams() {
+        use crate::wire_hm3::{dequantise_lden, quantise_lden, NO_DATA};
+        use raster_reader::fused_tile_z13::TILE_PX;
+
+        let outdoor = EnvelopeClass::Outdoor as u8;
+        let mut classes = vec![outdoor; TILE_PX * TILE_PX];
+        // A 4-px-wide, 12-px-tall residential block flush with x = 0 and a
+        // 3-px commercial block flush with the south-east corner.
+        for y in 100..112 {
+            for x in 0..4 {
+                classes[y * TILE_PX + x] = EnvelopeClass::Residential as u8;
+            }
+        }
+        for y in TILE_PX - 3..TILE_PX {
+            for x in TILE_PX - 3..TILE_PX {
+                classes[y * TILE_PX + x] = EnvelopeClass::Commercial as u8;
+            }
+        }
+        let estimate = InteriorEstimate::from_classes(classes.clone());
+
+        // Façade bytes vary with position so the donor choice is observable;
+        // the row right of the west block at y = 105 is silent.
+        let mut cells: Vec<u8> = (0..TILE_PX * TILE_PX)
+            .map(|i| ((i % 97) + 40) as u8)
+            .collect();
+        cells[105 * TILE_PX + 4] = NO_DATA;
+        let before = cells.clone();
+        estimate.apply(&mut cells);
+
+        for (i, &class) in classes.iter().enumerate() {
+            let (x, y) = (i % TILE_PX, i / TILE_PX);
+            if class == outdoor {
+                assert_eq!(cells[i], before[i], "outdoor pixel ({x}, {y}) rewritten");
+                continue;
+            }
+            let delta = EnvelopeClass::from_u8(class).delta_db().unwrap();
+            let donor = estimate.donors[i];
+            assert_ne!(
+                donor, NO_DONOR,
+                "enclosed pixel ({x}, {y}) has an in-tile donor"
+            );
+            let donor = donor as usize;
+            assert_eq!(
+                classes[donor], outdoor,
+                "donor of ({x}, {y}) is not outdoor"
+            );
+            let expected = if before[donor] == NO_DATA {
+                NO_DATA
+            } else {
+                quantise_lden((dequantise_lden(before[donor]) - delta).max(0.0))
+            };
+            assert_eq!(cells[i], expected, "enclosed pixel ({x}, {y})");
+        }
+        // West-seam block, mid row: the nearest outdoor pixel is column x = 4
+        // of the same row (distance 1..4; the block's top/bottom rows are 6–7
+        // away), never "across the seam" — and that façade is silent here, so
+        // the whole row of the block stays silent indoors.
+        assert_eq!(estimate.donors[105 * TILE_PX], (105 * TILE_PX + 4) as u32);
+        for x in 0..4 {
+            assert_eq!(
+                cells[105 * TILE_PX + x],
+                NO_DATA,
+                "silent façade stays silent indoors"
+            );
+        }
+        // South-east corner block: donors come from the tile, x = 508 or y = 508.
+        let corner = estimate.donors[(TILE_PX - 1) * TILE_PX + TILE_PX - 1] as usize;
+        assert!(corner % TILE_PX == TILE_PX - 4 || corner / TILE_PX == TILE_PX - 4);
+    }
+
+    /// A tile without a single outdoor pixel has no façade anywhere: every
+    /// enclosed byte becomes `NO_DATA` instead of borrowing a neighbour.
+    #[test]
+    fn interior_estimate_without_outdoor_pixels_is_no_data() {
+        use crate::wire_hm3::NO_DATA;
+        use raster_reader::fused_tile_z13::TILE_PX;
+        let estimate =
+            InteriorEstimate::from_classes(vec![EnvelopeClass::Default as u8; TILE_PX * TILE_PX]);
+        let mut cells = vec![90u8; TILE_PX * TILE_PX];
+        estimate.apply(&mut cells);
+        assert!(cells.iter().all(|&c| c == NO_DATA));
     }
 
     #[test]

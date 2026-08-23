@@ -2441,35 +2441,42 @@ HM3 format are unchanged.
 Applying the traffic correction `C_tr` to rail and aircraft is a documented
 product simplification.
 
-#### Donor transform and two-pass paint
+#### Donor transform (per tile)
 
 The donor is an exact integer Felzenszwalb–Huttenlocher two-pass squared
-Euclidean distance transform over the 3×3 receiver-tile window (1536×1536
-pixels at the current 512-pixel tile size). The implementation uses signed
-integer `i32`/`i64` arithmetic, one `i32` squared-distance grid `g`, one
-`u16` nearest-site-y grid `sy`, and two lower-envelope arrays. The column
-forward/backward sweeps retain the smaller site-y on a tie. The row envelope
-uses floor Euclidean division plus one for the first strictly-closer integer
-separator, pops on `<=`, and queries on `<=`; therefore an equal squared-distance
-tie chooses the smaller absolute site x, then the smaller site y. A brute-force
-small-lattice fixture, including diamond ties and the no-site case, is
-mandatory because an EDT tie bug changes every indoor pixel near a façade.
+Euclidean distance transform over the tile's OWN receiver lattice (512×512 at
+the current tile size): sites are the tile's outdoor pixels, queries its
+enclosed pixels. The implementation uses signed integer `i32`/`i64`
+arithmetic, one `i32` squared-distance grid `g`, one `u16` nearest-site-y grid
+`sy`, and two lower-envelope arrays. The column forward/backward sweeps retain
+the smaller site-y on a tie. The row envelope uses floor Euclidean division
+plus one for the first strictly-closer integer separator, pops on `<=`, and
+queries on `<=`; therefore an equal squared-distance tie chooses the smaller
+site x, then the smaller site y. A brute-force small-lattice fixture,
+including diamond ties and the no-site case, is mandatory because an EDT tie
+bug changes every indoor pixel near a façade.
 
-Both CPU and GPU-host painters use the same two passes:
+The donor is any outdoor lattice pixel — this building's façade, a
+neighbouring building's, a courtyard — never chosen from source loudness and
+never self-screened. For a finite donor each layer publishes `L_indoor`; a
+`NO_DATA` donor stays `NO_DATA`; a tile without a single outdoor pixel (never
+observed at ≥6 km tiles) paints every enclosed pixel `NO_DATA`. A footprint
+straddling a tile seam takes the nearest façade pixel on each side of the
+seam separately. This is the one deliberate difference from the 3×3-tile
+donor window the feature first shipped with (2026-08-21): that window needed
+the neighbour tiles' painted bytes, i.e. the full propagation kernel on a
+ring of tiles the painter never writes — measured on the official benchmark
+card (RTX 5070, 2026-08-23) as +70 % kernel work per z12 R4 region and ×5.2 on a 2×2
+tile bbox (300 → 1,573 s). Per-tile donors restore the painter invariant
+that a tile's bytes depend only on that tile's own inputs: bbox, region and
+stream builds of the same grid-aligned block geometry are byte-identical (as
+before the feature, only a different shared-halo `batch` size moves bytes).
 
-1. Pass A scatters, collapses, and area-fills every painted tile and its
-   8-neighbour halo. Halo cells are memory-only; they are never written as
-   output by this owner.
-2. Pass B bakes one class raster and one geometric donor map for the 3×3
-   window, then applies that donor map to every layer's already-collapsed
-   centre tile. For a finite donor, each layer uses the donor HM3 value and
-   `L_indoor`; a missing/`NO_DATA` donor stays `NO_DATA`. The donor is never
-   chosen from source loudness and is never self-screened.
-
-The GPU lane stashes collapsed Pass-A cells on the host and runs this same
-Pass B; no `.cu` kernel change is permitted. Aircraft `region_runner` does the
-same after cruise and airborne collapse, so aircraft and all ground layers
+One `InteriorEstimate` (class raster + donor map) is baked per tile and
+applied, after collapse and area fill, to every layer of that tile by all
+three writers — the CPU surface painter, the GPU host lane (no `.cu` kernel
+change), and the aircraft `region_runner` — so aircraft and all ground layers
 share geometry and donor offsets. This is display-only and deliberately does
-not alter the line/point/aircraft propagation kernels. The QOIX obstacle index
-layout is version 2, while HM3 remains version 3; the content-hashed layer
-code-version machinery therefore invalidates affected output stamps.
+not alter the line/point/aircraft propagation kernels. The QOIX obstacle
+index layout is version 2, while HM3 remains version 3; the content-hashed
+layer code-version machinery therefore invalidates affected output stamps.

@@ -359,33 +359,44 @@ pub fn process_surface_region(
             .or_default()
             .push((x, y));
     }
-    let mut interior_pass = crate::source_loader_obstacle::InteriorPass::new();
-    for ((_bx, _by), batch_tiles) in &batches {
-        // Pass A owns the painted tiles plus their 8-neighbour halo. The
-        // expanded batch keeps every halo tile on the same terrain lattice;
-        // Pass B writes only the centre tiles, because each neighbour R4 owns
-        // its own output.
-        let pass_a_tiles = crate::region_runner::tile_halo_window(batch_tiles, ctx.zoom);
-        let (batch_base_x, batch_base_y, batch_n) =
-            crate::region_runner::tile_batch_window(&pass_a_tiles, ctx.zoom);
+    for ((bx, by), batch_tiles) in &batches {
+        // ONE halo per grid-aligned block (10 km in ground mode), shared by
+        // every layer; a block only ever holds this region's own tiles.
+        let (base_x, base_y) =
+            crate::region_runner::block_batch_origin(*bx, *by, ctx.batch_n, ctx.zoom);
         let t_r = Instant::now();
+        // rx_refl: raster bake skipped in vector regions — the vector
+        // pre-bake below is the one and only writer for painted tiles.
         let mut batch = TileBatch::build_opt_rx_refl(
             ctx.zoom,
-            batch_base_x,
-            batch_base_y,
-            batch_n,
+            base_x,
+            base_y,
+            ctx.batch_n,
             ctx.halo_m,
             ctx.rasters,
             obstacle_data.set().is_none(),
         );
+        // Vector mode: the raster rx_refl bake is skipped (see
+        // build_opt_rx_refl above) and the pre-bake below is the one writer —
+        // recomputed from footprints, the SAME 150 × 150 m probe, and the GPU
+        // rxar upload carries it unchanged (gg review: pre-bake site). The
+        // popup reads vector reflection too (1.4b VectorReflectionSampler,
+        // landed) — pipeline and popup agree on one reflection source.
         if let Some(set) = obstacle_data.set() {
-            for &(x, y) in &pass_a_tiles {
+            // Only the REQUESTED tiles are painted — rebaking the whole
+            // batch_n² grid would triple the bake cost for nothing.
+            for &(x, y) in batch_tiles {
                 let slot = crate::region_runner::batch_slot(&batch, x, y);
-                let tile = &mut batch.tiles[slot];
-                crate::source_loader_obstacle::bake_tile_vector_rx_refl(tile, set);
+                crate::source_loader_obstacle::bake_tile_vector_rx_refl(
+                    &mut batch.tiles[slot],
+                    set,
+                );
             }
         }
         stats.t_raster += t_r.elapsed();
+        // Count the shared halo's cells once per batch (adjacent batch halos
+        // overlap → allocated batch-halo cells, a slight over-count ⇒ a
+        // conservative redundancy floor for multi-batch runs).
         stats.grid_cells += batch.tiles[0].halo.cell_count() as u64;
         if !stats.halo_logged {
             let mb = (batch.tiles[0].halo.cell_count() * std::mem::size_of::<FusedPixel>()) as f64
@@ -397,31 +408,18 @@ pub fn process_surface_region(
             stats.halo_logged = true;
         }
 
-        if let Some(set) = obstacle_data.set() {
-            let t_class = Instant::now();
-            for &(x, y) in &pass_a_tiles {
-                if !interior_pass.has_class_raster((x, y)) {
-                    let tile = &batch.tiles[crate::region_runner::batch_slot(&batch, x, y)];
-                    interior_pass.insert_class_raster(
-                        (x, y),
-                        crate::source_loader_obstacle::bake_tile_envelope_classes(tile, set),
-                    );
-                }
-            }
-            stats.t_raster += t_class.elapsed();
-        }
-
-        // The collapsed, area-filled Pass-A cells stay in memory until all
-        // centre tiles have a common geometric donor map. No layer writes in
-        // this loop, so every layer receives exactly the same donor offsets.
-        for &(x, y) in &pass_a_tiles {
-            let tile_key = (x, y);
+        for &(x, y) in batch_tiles {
             let tile = &batch.tiles[crate::region_runner::batch_slot(&batch, x, y)];
+            // One sorted, conservative-distance barrier slice per tile, shared by
+            // every layer (contract: types::Barrier docs).
             let tile_barriers = barrier_data.for_tile(&tile.bbox, ctx.halo_m);
+            // Building interiors: ONE class raster + façade donor map per tile,
+            // shared by every layer (they all ride the same receiver lattice).
+            // Vector regions only — a raster-fallback region keeps its physics.
+            let t_m = Instant::now();
+            let interior = obstacle_data.interior_estimate(tile);
+            stats.t_raster += t_m.elapsed();
             for (rows, source_id, dir_name) in &layer_rows {
-                if interior_pass.has_collapsed(tile_key, *source_id) {
-                    continue;
-                }
                 let mut accum = TileAccumulator::new();
                 let t_s = Instant::now();
                 let (
@@ -487,6 +485,7 @@ pub fn process_surface_region(
                             st.path_calls,
                             st.skipped_calls,
                             st.pairs,
+                            // Ground-ops has 1 path per pair (no angular quadrature), so st.path_calls is the walked pair count.
                             st.path_calls,
                             0,
                             st.rows_in_reach as u64,
@@ -506,31 +505,25 @@ pub fn process_surface_region(
                 e.ground_rows_in_reach += ground_rows;
                 e.ground_unique_microsegs += ground_microsegs;
 
-                let t_collapse = Instant::now();
+                let t_w = Instant::now();
+                // Ground ops sum event energy ÷ n_days; the surface layers are
+                // steady-power (no time division).
                 let mut cells = if time_divided {
                     collapse_lden_u8(&accum, ctx.n_days)
                 } else {
                     collapse_lden_surface_u8(&accum)
                 };
+                // AREA sources (building / industrial / leisure) discretise into a
+                // point grid that leaves an inter-point ripple; smooth it into a
+                // solid footprint. Line + ground-ops layers are already continuous.
                 if matches!(rows, SurfaceRows::Point(_)) {
                     fill_area_median(&mut cells, AREA_FILL_RADIUS_PX);
                 }
-                stats.t_write += t_collapse.elapsed();
-                interior_pass.insert_collapsed(tile_key, *source_id, cells);
-            }
-        }
-
-        for &(x, y) in batch_tiles {
-            if obstacle_data.set().is_some() {
-                interior_pass.ensure_donors((x, y));
-            }
-            for (_, source_id, dir_name) in &layer_rows {
-                let t_w = Instant::now();
-                let mut cells = interior_pass
-                    .collapsed((x, y), *source_id)
-                    .map(|cells| cells.to_vec())
-                    .expect("Pass A collapsed every requested layer");
-                interior_pass.apply((x, y), *source_id, &mut cells);
+                // Interior estimate LAST so the area fill can't paint a façade
+                // value back over an enclosed footprint.
+                if let Some(interior) = &interior {
+                    interior.apply(&mut cells);
+                }
                 let out = ctx
                     .output
                     .join(*dir_name)

@@ -194,8 +194,8 @@ inside an enclosed Overture footprint, the popup also gives a closed-window
 indoor estimate. This is a display-level use of the building envelope (the
 wall-and-window reduction), not a second propagation run:
 
-Painted indoor cells use one geometrically nearest outdoor donor in their 3×3
-neighbourhood for every layer; `NO_DATA` remains `NO_DATA`. The popup reports
+Painted indoor cells use one geometrically nearest outdoor donor within the
+same map tile for every layer; `NO_DATA` remains `NO_DATA`. The popup reports
 the nearest outside façade point.
 
 | Building type | Product reduction ΔL |
