@@ -3,10 +3,6 @@
 These conventions bind every contributor to the public Quiet Map product.
 Ops/automation conventions live in the private repo and do not apply here.
 
-## Language
-
-Use English in code, comments, docstrings, commits, docs, and UI.
-
 ## Quality gate
 
 Before every commit, run `./scripts/check-fast.sh` (optional `node` or
