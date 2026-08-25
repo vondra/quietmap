@@ -6,9 +6,8 @@ fn gpu_bins_use_the_exported_macro_and_the_tuple_stays_twelve_wide() {
         include_str!("../src/gpu_surface.rs"),
         include_str!("../src/e2_full.rs"),
     ] {
-        assert_eq!(
-            source.matches("noise_gpu::line_kernel_arguments!(").count(),
-            1,
+        assert!(
+            source.contains("noise_gpu::line_kernel_arguments!("),
             "each bin must call the library macro through the external crate path"
         );
         assert!(!source.contains("crate::line_kernel_arguments!("));

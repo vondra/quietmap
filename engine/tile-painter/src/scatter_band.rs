@@ -433,7 +433,10 @@ pub(crate) fn budget_ub_lden(
 /// each block touches only its own (disjoint) pixel rectangle, so they need no
 /// clearing between a worker's blocks.
 pub(crate) struct BandScratch {
-    pub(crate) local: TileAccumulator,
+    /// Dense per-worker output for the ordinary block path. The selected W1
+    /// path deliberately leaves this absent: its worker output is a sparse
+    /// receiver list, not a 512² grid.
+    pub(crate) local: Option<TileAccumulator>,
     pub(crate) profile: PathProfile,
     pub(crate) kept: Vec<f64>,
     pub(crate) skipped: Vec<f64>,
@@ -499,6 +502,7 @@ pub(crate) struct BandScratch {
     /// Pairs the walk actually computed (the M3 payoff census numerator:
     /// walked fraction before/after the tightened bound).
     walked_pairs: u64,
+    sparse_output: Vec<(usize, [f32; NUM_PERIODS])>,
 }
 
 /// One (source, receiver) pair as the cheap pass records it: which prepared
@@ -551,7 +555,7 @@ impl BandScratch {
     pub(crate) fn new() -> Self {
         let n = TILE_PX * TILE_PX;
         Self {
-            local: TileAccumulator::new(),
+            local: Some(TileAccumulator::new()),
             profile: PathProfile::new(),
             kept: vec![0.0; n],
             skipped: vec![0.0; n],
@@ -572,6 +576,34 @@ impl BandScratch {
             bound_t: Vec::new(),
             bound_blocks: Vec::new(),
             walked_pairs: 0,
+            sparse_output: Vec::new(),
+        }
+    }
+
+    fn new_compact() -> Self {
+        Self {
+            local: None,
+            profile: PathProfile::new(),
+            kept: Vec::new(),
+            skipped: Vec::new(),
+            path_calls: 0,
+            skipped_calls: 0,
+            pairs_seen: 0,
+            raster_samples: 0,
+            cand_scratch: Vec::new(),
+            arc_scratch: ArcScreeningScratch::new(),
+            skyline: ArcSkyline::default(),
+            arc_bounds: tile_arc_bounds(),
+            seg_scratch: SegSampleScratch::new(),
+            pairs_cand: Vec::new(),
+            pairs: Vec::new(),
+            suffix: Vec::new(),
+            pair_pow: Vec::new(),
+            pair_hit: Vec::new(),
+            bound_t: Vec::new(),
+            bound_blocks: Vec::new(),
+            walked_pairs: 0,
+            sparse_output: Vec::new(),
         }
     }
 }
@@ -917,6 +949,37 @@ pub(crate) fn scatter_tile_with_cfg<G: PixelGeometry>(
     accum: &mut TileAccumulator,
     cfg: Option<CoarseMid>,
 ) -> ScatterStats {
+    scatter_tile_with_cfg_and_options(
+        geo, tile, barriers, obstacles, n_rows, accum, cfg, None, None, None,
+    )
+}
+
+/// [`scatter_tile_with_cfg`] with an optional receiver mask and direct
+/// point-source surrogate. This is an experiment hook: `None, None` is the
+/// stock exact path, while the W1 industrial candidate passes a mask for
+/// exact anchors/blocks or `Some(0.0)` for its direct-local surrogate. The
+/// mask is row-major over the complete 512² receiver lattice and is checked
+/// before any source/path work for a receiver.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn scatter_tile_with_cfg_and_options<G: PixelGeometry>(
+    geo: &G,
+    tile: &FusedTileZ13,
+    barriers: &[Barrier],
+    obstacles: Option<&ObstacleSet>,
+    n_rows: usize,
+    accum: &mut TileAccumulator,
+    cfg: Option<CoarseMid>,
+    receiver_mask: Option<&[bool]>,
+    direct_extra_db: Option<f64>,
+    selected_receivers: Option<&[usize]>,
+) -> ScatterStats {
+    if let Some(mask) = receiver_mask {
+        assert_eq!(
+            mask.len(),
+            TILE_PX * TILE_PX,
+            "receiver mask must cover the complete tile"
+        );
+    }
     if n_rows == 0 {
         return ScatterStats::default();
     }
@@ -928,14 +991,46 @@ pub(crate) fn scatter_tile_with_cfg<G: PixelGeometry>(
             ..Default::default()
         };
     }
+    if let Some(receivers) = selected_receivers {
+        assert!(receiver_mask.is_none() && direct_extra_db.is_none());
+        return scatter_selected_receivers(
+            geo, tile, &prep, barriers, obstacles, n_rows, accum, cfg, receivers,
+        );
+    }
 
     let (merged, path_calls, skipped_calls, pairs, walked_pairs, raster_samples) =
         recv_block_regions()
             .into_par_iter()
             .fold(BandScratch::new, |mut s, (py_lo, py_hi, px_lo, px_hi)| {
-                if py_lo < py_hi && px_lo < px_hi {
+                // Sparse exact phases often have entire 16x16 receiver blocks
+                // outside the selected mask. Do this cheap row-slice check
+                // before building the block's source shortlist; otherwise a
+                // false-only block still pays pairs_cand clipping and the
+                // M3 block-bound setup even though the pixel loop rejects
+                // every receiver. The direct phase passes None and keeps
+                // the ordinary all-receiver behavior.
+                let block_has_receiver = receiver_mask.is_none_or(|mask| {
+                    (py_lo..py_hi).any(|py| {
+                        mask[py * TILE_PX + px_lo..py * TILE_PX + px_hi]
+                            .iter()
+                            .any(|&selected| selected)
+                    })
+                });
+                if py_lo < py_hi && px_lo < px_hi && block_has_receiver {
                     scatter_band(
-                        geo, tile, &prep, barriers, obstacles, py_lo, py_hi, px_lo, px_hi, cfg,
+                        geo,
+                        tile,
+                        &prep,
+                        barriers,
+                        obstacles,
+                        py_lo,
+                        py_hi,
+                        px_lo,
+                        px_hi,
+                        cfg,
+                        receiver_mask,
+                        direct_extra_db,
+                        None,
                         &mut s,
                     );
                 }
@@ -943,7 +1038,7 @@ pub(crate) fn scatter_tile_with_cfg<G: PixelGeometry>(
             })
             .map(|s| {
                 (
-                    s.local,
+                    s.local.expect("dense scatter scratch"),
                     s.path_calls,
                     s.skipped_calls,
                     s.pairs_seen,
@@ -959,6 +1054,149 @@ pub(crate) fn scatter_tile_with_cfg<G: PixelGeometry>(
                 },
             );
     accum.merge_from(&merged);
+    ScatterStats {
+        rows: n_rows,
+        path_calls,
+        skipped_calls,
+        pairs,
+        walked_pairs,
+        raster_samples,
+    }
+}
+
+#[inline]
+fn add_source_power_in_load_order(
+    destination: &mut [f32; NUM_PERIODS],
+    source_power: &[f32; NUM_PERIODS],
+) {
+    for (dst, &value) in destination.iter_mut().zip(source_power.iter()) {
+        if value > 0.0 {
+            *dst += value;
+        }
+    }
+}
+
+#[inline]
+fn validate_selected_receiver_indices(receivers: &[usize]) {
+    assert!(
+        receivers.iter().all(|&index| index < TILE_PX * TILE_PX),
+        "selected receiver index is outside the tile"
+    );
+    assert!(
+        receivers.windows(2).all(|pair| pair[0] < pair[1]),
+        "selected receiver indices must be strictly sorted and unique"
+    );
+}
+
+fn merge_compact_output(
+    accum: &mut TileAccumulator,
+    mut sparse_output: Vec<(usize, [f32; NUM_PERIODS])>,
+) {
+    sparse_output.sort_unstable_by_key(|(pixel_index, _)| *pixel_index);
+    assert!(
+        sparse_output.windows(2).all(|pair| pair[0].0 < pair[1].0),
+        "selected receiver output contains a duplicate pixel index"
+    );
+    for (pixel_index, energy) in sparse_output {
+        let destination = pixel_index * NUM_PERIODS;
+        for (period, &value) in energy.iter().enumerate() {
+            if value > 0.0 {
+                accum.energy[destination + period] += value;
+            }
+        }
+    }
+}
+
+/// Scatter a compact receiver list in parallel spatial blocks. Each block builds
+/// its source shortlist and M3 bounds once, then the pixel loop filters to the
+/// selected receivers; unselected pixels never enter the pair evaluator.
+#[allow(clippy::too_many_arguments)]
+fn scatter_selected_receivers<G: PixelGeometry>(
+    geo: &G,
+    tile: &FusedTileZ13,
+    prep: &[G::Prep],
+    barriers: &[Barrier],
+    obstacles: Option<&ObstacleSet>,
+    n_rows: usize,
+    accum: &mut TileAccumulator,
+    cfg: Option<CoarseMid>,
+    receivers: &[usize],
+) -> ScatterStats {
+    validate_selected_receiver_indices(receivers);
+    if receivers.is_empty() {
+        return ScatterStats {
+            rows: n_rows,
+            ..Default::default()
+        };
+    }
+
+    // The selector returns row-major indices, so each group is already sorted
+    // for the binary-search membership check in scatter_band. Grouping by the
+    // same spatial blocks as the ordinary path is the key optimization: one
+    // shortlist and one M3 setup serve all selected pixels in that block.
+    let regions = recv_block_regions();
+    let block_size = recv_block_px();
+    let blocks_per_side = TILE_PX.div_ceil(block_size);
+    let mut selected_by_block: Vec<Vec<usize>> = (0..regions.len()).map(|_| Vec::new()).collect();
+    for &index in receivers {
+        let py = index / TILE_PX;
+        let px = index % TILE_PX;
+        let block_index = (py / block_size) * blocks_per_side + px / block_size;
+        selected_by_block[block_index].push(index);
+    }
+
+    let (sparse_output, path_calls, skipped_calls, pairs, walked_pairs, raster_samples) =
+        selected_by_block
+            .into_par_iter()
+            .enumerate()
+            .filter(|(_, selected)| !selected.is_empty())
+            .fold(
+                BandScratch::new_compact,
+                |mut s, (block_index, selected)| {
+                    let (py_lo, py_hi, px_lo, px_hi) = regions[block_index];
+                    scatter_band(
+                        geo,
+                        tile,
+                        prep,
+                        barriers,
+                        obstacles,
+                        py_lo,
+                        py_hi,
+                        px_lo,
+                        px_hi,
+                        cfg,
+                        None,
+                        None,
+                        Some(selected.as_slice()),
+                        &mut s,
+                    );
+                    s
+                },
+            )
+            .map(|s| {
+                (
+                    s.sparse_output,
+                    s.path_calls,
+                    s.skipped_calls,
+                    s.pairs_seen,
+                    s.walked_pairs,
+                    s.raster_samples,
+                )
+            })
+            .reduce(
+                || (Vec::new(), 0u64, 0u64, 0u64, 0u64, 0u64),
+                |mut a, b| {
+                    if a.0.len() < b.0.len() {
+                        let mut larger = b.0;
+                        larger.extend(a.0);
+                        a.0 = larger;
+                    } else {
+                        a.0.extend(b.0);
+                    }
+                    (a.0, a.1 + b.1, a.2 + b.2, a.3 + b.3, a.4 + b.4, a.5 + b.5)
+                },
+            );
+    merge_compact_output(accum, sparse_output);
     ScatterStats {
         rows: n_rows,
         path_calls,
@@ -985,6 +1223,9 @@ fn scatter_band<G: PixelGeometry>(
     px_lo: usize,
     px_hi: usize,
     cfg: Option<CoarseMid>,
+    receiver_mask: Option<&[bool]>,
+    direct_extra_db: Option<f64>,
+    selected_pixels: Option<&[usize]>,
     s: &mut BandScratch,
 ) {
     // Sources reaching this block AT ALL, resolved once. The walk below is
@@ -1005,7 +1246,10 @@ fn scatter_band<G: PixelGeometry>(
     // M3a per-(source, block) pooled chunk maxima, resolved ONCE per block
     // (8 pyramid boxes per source instead of per pair) for the sources whose
     // profile origin is receiver-independent.
-    if crate::bound_m3::surface_bound_m3_enabled() {
+    if direct_extra_db.is_none()
+        && byte_stop_enabled()
+        && crate::bound_m3::surface_bound_m3_enabled()
+    {
         let (lat_lo, lat_hi) = if tile.rx_lat[py_lo] <= tile.rx_lat[py_hi - 1] {
             (tile.rx_lat[py_lo], tile.rx_lat[py_hi - 1])
         } else {
@@ -1033,10 +1277,59 @@ fn scatter_band<G: PixelGeometry>(
         let rx_lat = tile.rx_lat[py];
         let row_base = py * TILE_PX;
         for px in px_lo..px_hi {
-            let rx_lon = tile.rx_lon[px];
             let idx = row_base + px;
+            if receiver_mask.is_some_and(|mask| !mask[idx])
+                || selected_pixels.is_some_and(|pixels| pixels.binary_search(&idx).is_err())
+            {
+                continue;
+            }
+            let rx_lon = tile.rx_lon[px];
             let rx_alt = tile.rx_alt_m[idx] as f64;
             let refl = tile.rx_refl_db[idx] as f64;
+
+            // Direct-local W1 surrogate: keep the point geometry (reach,
+            // free-field audibility, area-source distance, spherical spread,
+            // receiver altitude and atmospheric attenuation), but do not
+            // build a terrain profile or query obstacles/barriers. The fixed
+            // loose M3 floor is deliberately conservative and is only
+            // reachable through the explicit industrial candidate API.
+            if let Some(extra_db) = direct_extra_db {
+                let loose = crate::bound_m3::M3PairBound::loose();
+                for &ci in &s.pairs_cand {
+                    let pr = &prep[ci as usize];
+                    let (rpy0, rpy1, rpx0, rpx1) = pr.reach_box();
+                    if py < rpy0 || py > rpy1 || px < rpx0 || px > rpx1 {
+                        continue;
+                    }
+                    let Some(t) = geo.pixel(pr, tile, rx_lat, rx_lon, rx_alt, refl) else {
+                        continue;
+                    };
+                    debug_assert!(t.arc.is_none(), "direct W1 point arm reached a line source");
+                    s.pairs_seen += 1;
+                    s.walked_pairs += 1;
+                    let emission_lin = pr.emission_lin();
+                    let mut path_factor = [0.0f64; NUM_BANDS];
+                    for band in 0..NUM_BANDS {
+                        let path_db = t.base_db
+                            - ALPHA_ATM[band] * t.atm_d_km
+                            - (loose.gob_lb_db(band) + extra_db);
+                        path_factor[band] = db_to_lin_a(path_db, band);
+                    }
+                    for (period, period_emission) in emission_lin.iter().enumerate() {
+                        let mut power = 0.0f64;
+                        for band in 0..NUM_BANDS {
+                            power += period_emission[band] as f64 * path_factor[band];
+                        }
+                        if power.is_finite() && power > 0.0 {
+                            s.local
+                                .as_mut()
+                                .expect("dense scatter scratch")
+                                .add_energy_at(py as u32, px as u32, period as u8, power as f32);
+                        }
+                    }
+                }
+                continue;
+            }
 
             // ── cheap pass: this receiver's pairs and their bounds ──────────
             // `P⁺` needs the bound over the WHOLE tail, so every pair is priced
@@ -1319,14 +1612,27 @@ fn scatter_band<G: PixelGeometry>(
             // Not the walk's order: f32 addition does not commute, so a pixel
             // that never closed must land where a kernel with no stopping at all
             // lands it, to the bit. See `BandScratch::pair_pow`.
-            for o in 0..n_pairs {
-                if !s.pair_hit[o] {
-                    continue;
+            if selected_pixels.is_some() {
+                let mut compact_energy = [0.0f32; NUM_PERIODS];
+                for o in 0..n_pairs {
+                    if s.pair_hit[o] {
+                        add_source_power_in_load_order(&mut compact_energy, &s.pair_pow[o]);
+                    }
                 }
-                let pow = s.pair_pow[o];
-                for (p, &e) in pow.iter().enumerate() {
-                    if e > 0.0 {
-                        s.local.add_energy_at(py as u32, px as u32, p as u8, e);
+                s.sparse_output.push((idx, compact_energy));
+            } else {
+                for o in 0..n_pairs {
+                    if !s.pair_hit[o] {
+                        continue;
+                    }
+                    let pow = s.pair_pow[o];
+                    for (p, &e) in pow.iter().enumerate() {
+                        if e > 0.0 {
+                            s.local
+                                .as_mut()
+                                .expect("dense scatter scratch")
+                                .add_energy_at(py as u32, px as u32, p as u8, e);
+                        }
                     }
                 }
             }
@@ -1553,6 +1859,75 @@ mod tests {
         assert!(
             heatmap_t(Some(shipped()), d).len() < popup_t(d).len(),
             "the coarse middle must still cut samples on a 10 km ray"
+        );
+    }
+    #[test]
+    fn compact_accumulation_matches_dense_in_source_load_order() {
+        let mut dense = TileAccumulator::new();
+        let mut compact = TileAccumulator::new();
+        for (pixel_index, sources) in [
+            (
+                7usize,
+                [
+                    [1.0, 0.0, 3.5],
+                    [0.0001, 2.0, 0.0],
+                    [16_777_216.0, 0.25, 4.0],
+                    [0.0, 0.00000005, 1.0],
+                ],
+            ),
+            (
+                TILE_PX + 11,
+                [
+                    [0.5, 7.0, 0.0],
+                    [0.5, 0.0, 9.0],
+                    [0.0000001, 2.0, 3.0],
+                    [8.0, 0.0, 0.0000002],
+                ],
+            ),
+        ] {
+            let mut compact_energy = [0.0f32; NUM_PERIODS];
+            let py = pixel_index / TILE_PX;
+            let px = pixel_index % TILE_PX;
+            for source_power in sources {
+                add_source_power_in_load_order(&mut compact_energy, &source_power);
+                for (period, &value) in source_power.iter().enumerate() {
+                    if value > 0.0 {
+                        dense.add_energy_at(py as u32, px as u32, period as u8, value);
+                    }
+                }
+            }
+            merge_compact_output(&mut compact, vec![(pixel_index, compact_energy)]);
+        }
+        assert_eq!(dense.energy, compact.energy);
+    }
+
+    #[test]
+    fn compact_scratch_omits_dense_buffers() {
+        let scratch = BandScratch::new_compact();
+        assert!(scratch.local.is_none());
+        assert!(scratch.kept.is_empty());
+        assert!(scratch.skipped.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "strictly sorted and unique")]
+    fn selected_receiver_duplicates_are_rejected() {
+        validate_selected_receiver_indices(&[1, 1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "outside the tile")]
+    fn selected_receiver_out_of_range_is_rejected() {
+        validate_selected_receiver_indices(&[TILE_PX * TILE_PX]);
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate pixel index")]
+    fn compact_output_duplicates_are_rejected() {
+        let mut accum = TileAccumulator::new();
+        merge_compact_output(
+            &mut accum,
+            vec![(3, [1.0; NUM_PERIODS]), (3, [2.0; NUM_PERIODS])],
         );
     }
 }

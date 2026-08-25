@@ -31,9 +31,9 @@ use noise_gpu::{
 use raster_reader::fused_tile_z13::{default_batch_size, TileBatch};
 use raster_reader::RealRasters;
 use rayon::prelude::*;
-use tile_painter::accumulator::TileAccumulator;
+use tile_painter::accumulator::{TileAccumulator, NUM_PERIODS};
 use tile_painter::engine_spans::EngineCellSpans;
-use tile_painter::grid::tile_range;
+use tile_painter::grid::{tile_range, TILE_PX};
 use tile_painter::region_runner::{
     announce_stream_cell_started, batch_slot, block_batch_origin, read_r4_file, region_tiles,
     split_configured_layers, split_stream_line, tile_centre_r4,
@@ -52,7 +52,7 @@ use tile_painter::wire_hm3::{collapse_lden_surface_u8, read_tile, write_tile};
 // kernel-launch path (process_block/region, run_stream, main) stays here.
 #[path = "gpu_init.rs"]
 mod gpu_init;
-use gpu_init::{timing_enabled, warm_device, warm_device_on, LineLayer, Progress};
+use gpu_init::{timing_enabled, warm_device, warm_device_on, LineFunctions, LineLayer, Progress};
 
 const NO_DATA: u8 = 255;
 // `meta[9]`: since the surface kernel moved to byte-space stopping this is an
@@ -188,6 +188,908 @@ fn env(k: &str, d: &str) -> String {
     std::env::var(k).unwrap_or_else(|_| d.to_string())
 }
 
+/// Whether this binary was built with the W1-only multifidelity PTX arm.
+/// `build.rs` derives the marker from the exact `NOISE_GPU_DEFINES` token, so
+/// the host cannot accidentally pair stock output allocation with candidate
+/// reconstruction at runtime.
+fn multifidelity_line_enabled() -> bool {
+    option_env!("NOISE_GPU_MULTIFIDELITY_LINE") == Some("1")
+}
+
+/// Runtime anchor lattice used by the W1 candidate. The compact CUDA launch
+/// receives an explicit record count; keeping the lattice here as a closed
+/// value object makes axis construction, masks, reconstruction, and allocation
+/// share one stride instead of a compile-time anchor-count ABI.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MultifidelityStride {
+    // The current production selector chooses stride 16. The other reviewed
+    // lattices remain test fixtures for the shared reconstruction machinery.
+    #[allow(dead_code)]
+    Stride4,
+    #[allow(dead_code)]
+    Stride8,
+    Stride16,
+    #[allow(dead_code)]
+    Stride32,
+}
+
+impl MultifidelityStride {
+    const fn pixels(self) -> usize {
+        match self {
+            Self::Stride4 => 4,
+            Self::Stride8 => 8,
+            Self::Stride16 => 16,
+            Self::Stride32 => 32,
+        }
+    }
+
+    #[cfg(test)]
+    const fn from_pixels(pixels: usize) -> Option<Self> {
+        match pixels {
+            4 => Some(Self::Stride4),
+            8 => Some(Self::Stride8),
+            16 => Some(Self::Stride16),
+            32 => Some(Self::Stride32),
+            _ => None,
+        }
+    }
+
+    fn anchor_axis(self) -> Vec<usize> {
+        let mut axis: Vec<usize> = (0..TILE_PX).step_by(self.pixels()).collect();
+        if axis.last().copied() != Some(TILE_PX - 1) {
+            axis.push(TILE_PX - 1);
+        }
+        axis
+    }
+
+    fn anchor_count(self) -> usize {
+        self.anchor_axis().len()
+    }
+
+    fn anchor_record_count(self) -> usize {
+        self.anchor_count() * self.anchor_count()
+    }
+
+    fn compact_output_len(self) -> usize {
+        self.anchor_record_count() * noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_STRIDE
+    }
+
+    fn is_anchor(self, py: usize, px: usize) -> bool {
+        (py.is_multiple_of(self.pixels()) || py == TILE_PX - 1)
+            && (px.is_multiple_of(self.pixels()) || px == TILE_PX - 1)
+    }
+}
+
+/// Inputs deliberately exposed to the pure candidate selector. This bounded
+/// A/B selects either the stock exact kernel or the measured stride16 road and
+/// rail schedules from loaded region content, without coordinate allowlists,
+/// environment knobs, or a new launch ABI.
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct MultifidelitySelectionInputs {
+    layer: LineLayer,
+    nsrc: usize,
+}
+
+/// Use the stock exact kernel for sparse roads, where exact work stays bounded
+/// by the much smaller source set, and stride16 for dense roads and all rail.
+/// This is calibrated from normalized rows loaded from a region's
+/// `grid_disk(1)`: the z12 W1 rings measured 3,125–5,987 road rows in Sahara
+/// versus more than one million in Dobříš/Ruzyně. The 6,000-source boundary
+/// covers exactly 23,615 of 86,666 regions in the 2026 census while touching
+/// only 0.477% of world road source mass. A fixed content threshold keeps the
+/// rule geographic-data driven and applies to unseen areas. `None` means the
+/// unchanged dense stock kernel; `Some` means multifidelity reconstruction.
+const ROAD_SPARSE_STOCK_MAX_SOURCES: usize = 6_000;
+
+fn select_multifidelity_stride(
+    inputs: MultifidelitySelectionInputs,
+) -> Option<MultifidelityStride> {
+    match inputs.layer {
+        LineLayer::Road if inputs.nsrc <= ROAD_SPARSE_STOCK_MAX_SOURCES => None,
+        LineLayer::Road | LineLayer::Rail => Some(MultifidelityStride::Stride16),
+    }
+}
+
+/// Tile coordinates sampled by the selected runtime stride. The final pixel is
+/// explicit because a stride lattice normally lands before the 511 boundary;
+/// omitting it would leave the final interpolation interval without an exact
+/// corner.
+fn multifidelity_anchor_axis(stride: MultifidelityStride) -> Vec<usize> {
+    stride.anchor_axis()
+}
+
+const MULTIFIDELITY_PRESENCE_PROBABILITY: f64 = 0.40;
+
+/// W1 anchors-only timing/visual candidate. The adaptive replay selector is
+/// retained in code so its measured quality/speed trade-off stays directly
+/// comparable, but this build reconstructs every non-anchor receiver from the
+/// fixed exact lattice and never launches the selected exact tail.
+const MULTIFIDELITY_REPLAY_SELECTED_BLOCKS: bool = false;
+
+/// Decode the explicit compact output ABI. Every record carries its own dense
+/// pixel index, so a stale count, short allocation, fractional index, or
+/// out-of-tile write is rejected before reconstruction can turn it into a
+/// tile. The device kernel performs the matching count/stride bounds check.
+fn decode_multifidelity_compact_output(
+    output: &[f32],
+    record_count: usize,
+) -> Result<Vec<(usize, [f32; 3], f32)>, String> {
+    let stride = noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_STRIDE;
+    let expected = record_count
+        .checked_mul(stride)
+        .ok_or_else(|| "compact output length overflow".to_string())?;
+    if output.len() != expected {
+        return Err(format!(
+            "compact output length {} != {} records × {} words",
+            output.len(),
+            record_count,
+            stride
+        ));
+    }
+    let mut decoded = Vec::with_capacity(record_count);
+    let mut seen = vec![false; TILE_PX * TILE_PX];
+    for (record, words) in output.chunks_exact(stride).enumerate() {
+        let index_f = words[noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT];
+        if !index_f.is_finite() || index_f < 0.0 || index_f.fract() != 0.0 {
+            return Err(format!(
+                "compact output record {record} has invalid dense index {index_f}"
+            ));
+        }
+        let index = index_f as usize;
+        if index >= TILE_PX * TILE_PX {
+            return Err(format!(
+                "compact output record {record} dense index {index} exceeds {}",
+                TILE_PX * TILE_PX
+            ));
+        }
+        if seen[index] {
+            return Err(format!(
+                "compact output record {record} repeats dense index {index}"
+            ));
+        }
+        seen[index] = true;
+        let energy_base = noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE;
+        let energies = [
+            words[energy_base],
+            words[energy_base + 1],
+            words[energy_base + 2],
+        ];
+        if energies
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err(format!("compact output record {record} has invalid energy"));
+        }
+        let fault = words[noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT];
+        if !fault.is_finite() || fault < 0.0 {
+            return Err(format!(
+                "compact output record {record} has invalid fault count"
+            ));
+        }
+        decoded.push((index, energies, fault));
+    }
+    Ok(decoded)
+}
+
+fn multifidelity_compact_fault_sum(output: &[f32], record_count: usize) -> Result<f32, String> {
+    let records = decode_multifidelity_compact_output(output, record_count)?;
+    Ok(records.into_iter().map(|(_, _, fault)| fault).sum())
+}
+
+fn add_multifidelity_fault_total_to_dense_slot(
+    dense_output: &mut [f32],
+    multifidelity_fault_total: f32,
+) {
+    dense_output[noise_gpu::OUT_FAULT_SLOT] += multifidelity_fault_total;
+}
+
+/// Pack dense receiver inputs into the compact kernel's explicit four-word
+/// record ABI. The compact receiver pass never receives or indexes the dense `rxll`
+/// or `rxar` arrays; this host-side conversion is the only dense read.
+fn pack_multifidelity_compact_receivers(
+    rxll: &[f64],
+    rxar: &[f32],
+    dense_indices: &[usize],
+) -> Result<Vec<u64>, String> {
+    if rxll.len() != TILE_PX * 2 {
+        return Err(format!("rxll length {} != {}", rxll.len(), TILE_PX * 2));
+    }
+    if rxar.len() != TILE_PX * TILE_PX * 2 {
+        return Err(format!(
+            "rxar length {} != {}",
+            rxar.len(),
+            TILE_PX * TILE_PX * 2
+        ));
+    }
+    let words = dense_indices
+        .len()
+        .checked_mul(noise_gpu::MULTIFIDELITY_COMPACT_RECEIVER_RECORD_WORDS)
+        .ok_or_else(|| "compact receiver length overflow".to_string())?;
+    let mut packed = Vec::with_capacity(words);
+    for &dense_index in dense_indices {
+        if dense_index >= TILE_PX * TILE_PX {
+            return Err(format!("compact receiver index {dense_index} exceeds tile"));
+        }
+        let py = dense_index / TILE_PX;
+        let px = dense_index % TILE_PX;
+        let lat = rxll[py];
+        let lon = rxll[TILE_PX + px];
+        let altitude = rxar[dense_index * 2];
+        let reflection = rxar[dense_index * 2 + 1];
+        if !lat.is_finite() || !lon.is_finite() || !altitude.is_finite() || !reflection.is_finite()
+        {
+            return Err(format!(
+                "compact receiver {dense_index} contains non-finite input"
+            ));
+        }
+        packed.extend_from_slice(&[
+            lat.to_bits(),
+            lon.to_bits(),
+            u64::from(altitude.to_bits()) | (u64::from(reflection.to_bits()) << 32),
+            dense_index as u64,
+        ]);
+    }
+    Ok(packed)
+}
+
+fn multifidelity_compact_control(record_count: usize) -> Vec<u64> {
+    assert!(record_count <= TILE_PX * TILE_PX);
+    vec![
+        record_count as u64,
+        noise_gpu::MULTIFIDELITY_COMPACT_ABI_VERSION as u64,
+        noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_STRIDE as u64,
+    ]
+}
+
+struct MultifidelityInterpolation {
+    stride: MultifidelityStride,
+    cheap_accum: TileAccumulator,
+    cheap_cells: Vec<u8>,
+    exact_accum: TileAccumulator,
+    /// Per-anchor exact energy, indexed by the anchor lattice rather than by
+    /// the dense tile. Zero is a real silent period, not a missing record.
+    exact_anchor_energy: Vec<[f64; NUM_PERIODS]>,
+    /// Multiplicative exact/cheap correction in natural-log energy space. A
+    /// period is valid only when both anchor energies are strictly positive;
+    /// zero-sided corners use the linear-energy fallback below.
+    log_energy_correction: Vec<[f64; NUM_PERIODS]>,
+    log_energy_correction_valid: Vec<[bool; NUM_PERIODS]>,
+    residual: Vec<f64>,
+    valid: Vec<bool>,
+    axis: Vec<usize>,
+    lower: Vec<usize>,
+    upper: Vec<usize>,
+    fraction: Vec<f64>,
+}
+
+/// Decode launch-A's cheap field and compact exact fixed-stride anchor output
+/// once on the host. The receiver mask and final HM3 reconstruction both
+/// consume this object; no reference tile or popup oracle enters either path.
+fn multifidelity_interpolation(
+    stride: MultifidelityStride,
+    cheap_gpu: &[f32],
+    exact_anchor_output: &[f32],
+) -> MultifidelityInterpolation {
+    assert!(cheap_gpu.len() >= noise_gpu::OUT_SLOTS_MULTIFIDELITY);
+    let exact =
+        decode_multifidelity_compact_output(exact_anchor_output, stride.anchor_record_count())
+            .unwrap_or_else(|error| panic!("invalid compact anchor output: {error}"));
+    let mut cheap_accum = TileAccumulator::new();
+    cheap_accum
+        .energy
+        .copy_from_slice(&cheap_gpu[..noise_gpu::OUT_ENERGY_SLOTS]);
+
+    let axis = multifidelity_anchor_axis(stride);
+    assert_eq!(axis.len(), stride.anchor_count());
+    let mut exact_accum = TileAccumulator::new();
+    for (dense_index, energies, _) in exact {
+        let py = dense_index / TILE_PX;
+        let px = dense_index % TILE_PX;
+        assert!(multifidelity_is_anchor(stride, py, px));
+        let target = dense_index * NUM_PERIODS;
+        exact_accum.energy[target..target + NUM_PERIODS].copy_from_slice(&energies);
+    }
+    let anchor_count = axis.len() * axis.len();
+    let mut exact_anchor_energy = vec![[0.0f64; NUM_PERIODS]; anchor_count];
+    let mut log_energy_correction = vec![[0.0f64; NUM_PERIODS]; anchor_count];
+    let mut log_energy_correction_valid = vec![[false; NUM_PERIODS]; anchor_count];
+    for (ay, &py) in axis.iter().enumerate() {
+        for (ax, &px) in axis.iter().enumerate() {
+            let dense_index = py * TILE_PX + px;
+            let anchor = ay * axis.len() + ax;
+            let target = dense_index * NUM_PERIODS;
+            for period in 0..NUM_PERIODS {
+                let exact = f64::from(exact_accum.energy[target + period]);
+                let cheap = f64::from(cheap_accum.energy[target + period]);
+                // The compact decoder already rejects invalid exact values.
+                // Keep the explicit finite/non-negative check here as the
+                // reconstruction boundary: a malformed cheap f32 becomes a
+                // silent fallback, never NaN/inf in a logarithm or tile.
+                let exact = if exact.is_finite() && exact >= 0.0 {
+                    exact
+                } else {
+                    0.0
+                };
+                exact_anchor_energy[anchor][period] = exact;
+                if exact > 0.0 && cheap.is_finite() && cheap > 0.0 {
+                    let ratio_log = (exact / cheap).ln();
+                    if ratio_log.is_finite() {
+                        log_energy_correction[anchor][period] = ratio_log;
+                        log_energy_correction_valid[anchor][period] = true;
+                    }
+                }
+            }
+        }
+    }
+    let cheap_cells = collapse_lden_surface_u8(&cheap_accum);
+    let exact_cells = collapse_lden_surface_u8(&exact_accum);
+    let mut residual = vec![0.0f64; axis.len() * axis.len()];
+    let mut valid = vec![false; axis.len() * axis.len()];
+    for (ay, &py) in axis.iter().enumerate() {
+        for (ax, &px) in axis.iter().enumerate() {
+            let index = py * TILE_PX + px;
+            let anchor = ay * axis.len() + ax;
+            valid[anchor] = exact_cells[index] != tile_painter::wire_hm3::NO_DATA
+                && cheap_cells[index] != tile_painter::wire_hm3::NO_DATA;
+            if valid[anchor] {
+                residual[anchor] = (exact_cells[index] as f64 - cheap_cells[index] as f64) / 2.0;
+            }
+        }
+    }
+
+    let mut lower = vec![0usize; TILE_PX];
+    let mut upper = vec![0usize; TILE_PX];
+    let mut fraction = vec![0.0f64; TILE_PX];
+    for p in 0..TILE_PX {
+        let lo = if p >= *axis.last().expect("anchor axis") {
+            axis.len() - 2
+        } else {
+            axis.partition_point(|&anchor| anchor <= p)
+                .saturating_sub(1)
+        };
+        let hi = lo + 1;
+        lower[p] = lo;
+        upper[p] = hi;
+        fraction[p] = (p - axis[lo]) as f64 / (axis[hi] - axis[lo]) as f64;
+    }
+
+    MultifidelityInterpolation {
+        stride,
+        cheap_accum,
+        cheap_cells,
+        exact_accum,
+        exact_anchor_energy,
+        log_energy_correction,
+        log_energy_correction_valid,
+        residual,
+        valid,
+        axis,
+        lower,
+        upper,
+        fraction,
+    }
+}
+
+#[inline]
+fn multifidelity_is_anchor(stride: MultifidelityStride, py: usize, px: usize) -> bool {
+    stride.is_anchor(py, px)
+}
+
+#[inline]
+fn multifidelity_morton_part(mut value: u32) -> u32 {
+    value &= 0x1ff;
+    value = (value | (value << 8)) & 0x00ff00ff;
+    value = (value | (value << 4)) & 0x0f0f0f0f;
+    value = (value | (value << 2)) & 0x33333333;
+    (value | (value << 1)) & 0x55555555
+}
+
+#[inline]
+fn multifidelity_morton_key(dense_index: usize) -> u32 {
+    let py = (dense_index / TILE_PX) as u32;
+    let px = (dense_index % TILE_PX) as u32;
+    multifidelity_morton_part(px) | (multifidelity_morton_part(py) << 1)
+}
+
+// Keep this as one host-side knob so isolated source builds can compare compact
+// envelope widths without changing the receiver/output ABI.
+const MULTIFIDELITY_COMPACT_BUCKET_PX: usize = 32;
+const MULTIFIDELITY_COMPACT_RECORDS_PER_BLOCK: usize = BIN_W * BIN_W;
+/// The packed prototype keeps one independent source-cull envelope per warp.
+/// `BIN_W` is 16, so eight 32-lane warps retain the existing 256-thread launch
+/// and the compact receiver ABI without widening a warp's local receiver set.
+const MULTIFIDELITY_COMPACT_PACKED_WARPS_PER_BLOCK: usize = 8;
+const MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP: usize = 32;
+const MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_BLOCK: usize =
+    MULTIFIDELITY_COMPACT_PACKED_WARPS_PER_BLOCK * MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP;
+
+const _: () = assert!(
+    MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_BLOCK == MULTIFIDELITY_COMPACT_RECORDS_PER_BLOCK
+);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MultifidelityCompactLaunch {
+    record_offset: usize,
+    record_count: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+struct MultifidelityCompactPlan {
+    indices: Vec<usize>,
+    launches: Vec<MultifidelityCompactLaunch>,
+}
+
+/// One 32-lane warp descriptor in the packed CUDA prototype. A zero
+/// `record_count` is an explicit inactive tail descriptor; keeping eight
+/// descriptors in every block makes the existing header + offset/count control
+/// ABI usable without adding a control-length argument.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MultifidelityCompactPackedWarp {
+    record_offset: usize,
+    record_count: usize,
+}
+
+/// Packed compact plan: each CUDA block owns up to eight independent 32×32
+/// receiver buckets, one bucket descriptor per warp. The dense receiver index
+/// remains in each record, so output order and reconstruction are unchanged.
+#[derive(Clone, Debug, Default)]
+struct MultifidelityCompactPackedPlan {
+    indices: Vec<usize>,
+    launches: Vec<[MultifidelityCompactPackedWarp; MULTIFIDELITY_COMPACT_PACKED_WARPS_PER_BLOCK]>,
+}
+
+#[inline]
+fn multifidelity_compact_bucket(dense_index: usize) -> (usize, usize) {
+    (
+        (dense_index / TILE_PX) / MULTIFIDELITY_COMPACT_BUCKET_PX,
+        (dense_index % TILE_PX) / MULTIFIDELITY_COMPACT_BUCKET_PX,
+    )
+}
+
+/// Order compact receivers by aligned bucket macrotiles and split each bucket
+/// into independent ≤256-record block chunks. A block never mixes buckets, so
+/// every conservative source-cull envelope stays within the bucket span per axis,
+/// including the explicit 511 boundary receiver. Source traversal inside each
+/// receiver remains ascending, and explicit dense indices make block order
+/// irrelevant to reconstruction.
+fn multifidelity_compact_plan(dense_indices: &[usize]) -> Result<MultifidelityCompactPlan, String> {
+    let mut ordered = dense_indices.to_vec();
+    if let Some(&index) = ordered.iter().find(|&&index| index >= TILE_PX * TILE_PX) {
+        return Err(format!("compact receiver index {index} exceeds tile"));
+    }
+    ordered.sort_unstable_by_key(|&index| {
+        (
+            multifidelity_compact_bucket(index),
+            multifidelity_morton_key(index),
+            index,
+        )
+    });
+    if let Some(pair) = ordered.windows(2).find(|pair| pair[0] == pair[1]) {
+        return Err(format!("compact receiver index {} is duplicated", pair[0]));
+    }
+    let mut launches = Vec::new();
+    let mut bucket_start = 0;
+    while bucket_start < ordered.len() {
+        let bucket = multifidelity_compact_bucket(ordered[bucket_start]);
+        let mut bucket_end = bucket_start + 1;
+        while bucket_end < ordered.len()
+            && multifidelity_compact_bucket(ordered[bucket_end]) == bucket
+        {
+            bucket_end += 1;
+        }
+        let mut record_offset = bucket_start;
+        while record_offset < bucket_end {
+            let record_count =
+                (bucket_end - record_offset).min(MULTIFIDELITY_COMPACT_RECORDS_PER_BLOCK);
+            launches.push(MultifidelityCompactLaunch {
+                record_offset,
+                record_count,
+            });
+            record_offset += record_count;
+        }
+        bucket_start = bucket_end;
+    }
+    Ok(MultifidelityCompactPlan {
+        indices: ordered,
+        launches,
+    })
+}
+
+/// Build the packed prototype plan. Records are first ordered exactly like the
+/// existing compact plan, then split into 32-record warp descriptors while
+/// staying inside one aligned 32×32 receiver bucket. Descriptors are grouped
+/// eight per CUDA block; a group may contain descriptors from adjacent buckets,
+/// but each warp computes its own envelope and never shares a cull decision.
+fn multifidelity_compact_packed_plan(
+    dense_indices: &[usize],
+) -> Result<MultifidelityCompactPackedPlan, String> {
+    let mut ordered = dense_indices.to_vec();
+    if let Some(&index) = ordered.iter().find(|&&index| index >= TILE_PX * TILE_PX) {
+        return Err(format!("compact receiver index {index} exceeds tile"));
+    }
+    ordered.sort_unstable_by_key(|&index| {
+        (
+            multifidelity_compact_bucket(index),
+            multifidelity_morton_key(index),
+            index,
+        )
+    });
+    if let Some(pair) = ordered.windows(2).find(|pair| pair[0] == pair[1]) {
+        return Err(format!("compact receiver index {} is duplicated", pair[0]));
+    }
+
+    let mut descriptors = Vec::new();
+    let mut bucket_start = 0;
+    while bucket_start < ordered.len() {
+        let bucket = multifidelity_compact_bucket(ordered[bucket_start]);
+        let mut bucket_end = bucket_start + 1;
+        while bucket_end < ordered.len()
+            && multifidelity_compact_bucket(ordered[bucket_end]) == bucket
+        {
+            bucket_end += 1;
+        }
+        let mut record_offset = bucket_start;
+        while record_offset < bucket_end {
+            let record_count =
+                (bucket_end - record_offset).min(MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP);
+            descriptors.push(MultifidelityCompactPackedWarp {
+                record_offset,
+                record_count,
+            });
+            record_offset += record_count;
+        }
+        bucket_start = bucket_end;
+    }
+
+    let empty = MultifidelityCompactPackedWarp {
+        record_offset: 0,
+        record_count: 0,
+    };
+    let mut launches = Vec::new();
+    for descriptor_group in descriptors.chunks(MULTIFIDELITY_COMPACT_PACKED_WARPS_PER_BLOCK) {
+        let mut block = [empty; MULTIFIDELITY_COMPACT_PACKED_WARPS_PER_BLOCK];
+        block[..descriptor_group.len()].copy_from_slice(descriptor_group);
+        launches.push(block);
+    }
+    Ok(MultifidelityCompactPackedPlan {
+        indices: ordered,
+        launches,
+    })
+}
+
+#[inline]
+fn multifidelity_bilinear_corners(
+    data: &MultifidelityInterpolation,
+    py: usize,
+    px: usize,
+) -> ([usize; 4], [f64; 4]) {
+    let y0 = data.lower[py];
+    let y1 = data.upper[py];
+    let x0 = data.lower[px];
+    let x1 = data.upper[px];
+    let corners = [
+        y0 * data.axis.len() + x0,
+        y0 * data.axis.len() + x1,
+        y1 * data.axis.len() + x0,
+        y1 * data.axis.len() + x1,
+    ];
+    let fy = data.fraction[py];
+    let fx = data.fraction[px];
+    (
+        corners,
+        [
+            (1.0 - fy) * (1.0 - fx),
+            (1.0 - fy) * fx,
+            fy * (1.0 - fx),
+            fy * fx,
+        ],
+    )
+}
+
+/// Reconstruct one period from launch-A cheap energy and the exact anchor
+/// field. Positive, well-conditioned corners interpolate the exact/cheap
+/// ratio in log energy (a smooth attenuation correction); a zero-sided corner
+/// falls back to bilinear linear exact energy. This keeps silence finite and
+/// avoids inventing an infinity by taking `log(0)`.
+#[inline]
+fn multifidelity_bilinear_period_energy(
+    data: &MultifidelityInterpolation,
+    py: usize,
+    px: usize,
+    period: usize,
+) -> Option<f64> {
+    let (corners, weights) = multifidelity_bilinear_corners(data, py, px);
+    if corners
+        .iter()
+        .any(|&corner| !data.log_energy_correction_valid[corner][period])
+    {
+        let exact = corners
+            .iter()
+            .zip(weights)
+            .map(|(&corner, weight)| data.exact_anchor_energy[corner][period] * weight)
+            .sum::<f64>();
+        return exact
+            .is_finite()
+            .then_some(exact.clamp(0.0, f64::from(f32::MAX)));
+    }
+
+    let log_correction = corners
+        .iter()
+        .zip(weights)
+        .map(|(&corner, weight)| data.log_energy_correction[corner][period] * weight)
+        .sum::<f64>();
+    let cheap_index = (py * TILE_PX + px) * NUM_PERIODS + period;
+    let cheap = f64::from(data.cheap_accum.energy[cheap_index]);
+    if log_correction.is_finite() && cheap.is_finite() && cheap > 0.0 {
+        let corrected = cheap * log_correction.exp();
+        if corrected.is_finite() && corrected >= 0.0 && corrected <= f64::from(f32::MAX) {
+            return Some(corrected);
+        }
+    }
+
+    // A finite exact fallback also covers cheap zero/negative/NaN values and
+    // an overflowing multiplicative correction. Exact anchor energies are f32
+    // values, so this weighted sum is bounded by f32::MAX.
+    let exact = corners
+        .iter()
+        .zip(weights)
+        .map(|(&corner, weight)| data.exact_anchor_energy[corner][period] * weight)
+        .sum::<f64>();
+    exact
+        .is_finite()
+        .then_some(exact.clamp(0.0, f64::from(f32::MAX)))
+}
+
+#[inline]
+fn multifidelity_anchor_presence_probability(
+    data: &MultifidelityInterpolation,
+    py: usize,
+    px: usize,
+) -> f64 {
+    let y0 = data.lower[py];
+    let y1 = data.upper[py];
+    let x0 = data.lower[px];
+    let x1 = data.upper[px];
+    let fy = data.fraction[py];
+    let fx = data.fraction[px];
+    let present = |ay: usize, ax: usize| {
+        let anchor = ay * data.axis.len() + ax;
+        f64::from(
+            data.exact_anchor_energy[anchor]
+                .iter()
+                .any(|&energy| energy.is_finite() && energy > 0.0),
+        )
+    };
+    present(y0, x0) * (1.0 - fy) * (1.0 - fx)
+        + present(y0, x1) * (1.0 - fy) * fx
+        + present(y1, x0) * fy * (1.0 - fx)
+        + present(y1, x1) * fy * fx
+}
+
+#[inline]
+fn multifidelity_interior_is_present(
+    data: &MultifidelityInterpolation,
+    py: usize,
+    px: usize,
+) -> bool {
+    let index = py * TILE_PX + px;
+    match data.stride {
+        // The exact stride4 lattice already tracks sparse-source contours.
+        // Launch A can be much louder than the exact model in a few low-source
+        // halo tiles, so using its dense presence there creates false areas.
+        MultifidelityStride::Stride4 => {
+            multifidelity_anchor_presence_probability(data, py, px)
+                >= MULTIFIDELITY_PRESENCE_PROBABILITY
+        }
+        // Coarser lattices visibly quantise the contour when presence follows
+        // only four corners. Their dense cheap field is the better boundary
+        // signal; exact anchors remain authoritative in either policy.
+        MultifidelityStride::Stride8
+        | MultifidelityStride::Stride16
+        | MultifidelityStride::Stride32 => {
+            data.cheap_cells[index] != tile_painter::wire_hm3::NO_DATA
+        }
+    }
+}
+
+/// Build launch C's exact receiver list from launch-A observables only:
+/// cheap HM3 state, compact exact-anchor state, and the unchanged measured
+/// layer-specific selector features. The compact kernel receives only the
+/// selected records, never dense receiver arrays.
+fn multifidelity_receiver_mask(layer: LineLayer, data: &MultifidelityInterpolation) -> Vec<f32> {
+    multifidelity_receiver_mask_with_replay(layer, data, MULTIFIDELITY_REPLAY_SELECTED_BLOCKS)
+}
+
+fn multifidelity_receiver_mask_with_replay(
+    layer: LineLayer,
+    data: &MultifidelityInterpolation,
+    replay_selected_blocks: bool,
+) -> Vec<f32> {
+    let mut mask = vec![0.0f32; TILE_PX * TILE_PX];
+    // The stride lattice is not tile-divisible: the final interval is the
+    // actual [axis[len - 2], axis[len - 1]) tail (496..511 for stride 16).
+    // Iterate adjacent axis windows themselves so tail receivers participate
+    // in selection and no range crosses the tile edge.
+    for (by, py_window) in data.axis.windows(2).enumerate() {
+        let py_start = py_window[0];
+        let py_end = py_window[1];
+        for (bx, px_window) in data.axis.windows(2).enumerate() {
+            let px_start = px_window[0];
+            let px_end = px_window[1];
+            let corners = [
+                by * data.axis.len() + bx,
+                by * data.axis.len() + bx + 1,
+                (by + 1) * data.axis.len() + bx,
+                (by + 1) * data.axis.len() + bx + 1,
+            ];
+            let mut residual_low = f64::INFINITY;
+            let mut residual_high = f64::NEG_INFINITY;
+            for &corner in &corners {
+                if data.valid[corner] {
+                    residual_low = residual_low.min(data.residual[corner]);
+                    residual_high = residual_high.max(data.residual[corner]);
+                }
+            }
+            if !residual_low.is_finite() {
+                residual_low = 0.0;
+                residual_high = 0.0;
+            }
+            let residual_range = residual_high - residual_low;
+            let residual_abs_max = residual_low.abs().max(residual_high.abs());
+            let mut cheap_low = f64::INFINITY;
+            let mut cheap_high = f64::NEG_INFINITY;
+            let mut gradient = 0.0f64;
+            for py in py_start..py_end {
+                for px in px_start..px_end {
+                    let index = py * TILE_PX + px;
+                    if data.cheap_cells[index] != tile_painter::wire_hm3::NO_DATA {
+                        let value = f64::from(data.cheap_cells[index]) / 2.0;
+                        cheap_low = cheap_low.min(value);
+                        cheap_high = cheap_high.max(value);
+                    }
+                    if px > px_start {
+                        let left = data.cheap_cells[index - 1];
+                        if left != tile_painter::wire_hm3::NO_DATA
+                            && data.cheap_cells[index] != tile_painter::wire_hm3::NO_DATA
+                        {
+                            gradient = gradient.max(
+                                (f64::from(data.cheap_cells[index]) - f64::from(left)).abs() / 2.0,
+                            );
+                        }
+                    }
+                    if py > py_start {
+                        let above = data.cheap_cells[index - TILE_PX];
+                        if above != tile_painter::wire_hm3::NO_DATA
+                            && data.cheap_cells[index] != tile_painter::wire_hm3::NO_DATA
+                        {
+                            gradient = gradient.max(
+                                (f64::from(data.cheap_cells[index]) - f64::from(above)).abs() / 2.0,
+                            );
+                        }
+                    }
+                }
+            }
+            if !cheap_low.is_finite() {
+                cheap_low = 0.0;
+                cheap_high = 0.0;
+            }
+            let cheap_value_range = cheap_high - cheap_low;
+            let exact_block = replay_selected_blocks
+                && match layer {
+                    LineLayer::Road => residual_abs_max >= 20.0 || cheap_value_range >= 20.0,
+                    LineLayer::Rail => residual_range >= 8.0 || gradient >= 20.0,
+                };
+            if exact_block {
+                for py in py_start..py_end {
+                    for px in px_start..px_end {
+                        mask[py * TILE_PX + px] = 1.0;
+                    }
+                }
+            }
+        }
+    }
+    // Exact anchors are already present in launch B's compact output. Keep
+    // them out of launch C even when their stride-window selector block was selected;
+    // reconstruction restores their authoritative values separately.
+    for &py in &data.axis {
+        for &px in &data.axis {
+            mask[py * TILE_PX + px] = 0.0;
+        }
+    }
+    let selected = mask.iter().filter(|&&value| value >= 0.5).count();
+    let anchor_count = data.axis.len() * data.axis.len();
+    eprintln!(
+        "MULTIFIDELITY_MASK layer={} replay={selected}/{} ({:.4}%) anchors={} exact_total={} ({:.4}%)",
+        layer.dir(),
+        mask.len(),
+        selected as f64 * 100.0 / mask.len() as f64,
+        anchor_count,
+        selected + anchor_count,
+        (selected + anchor_count) as f64 * 100.0 / mask.len() as f64,
+    );
+    mask
+}
+
+/// Reconstruct a dense HM3 tile from cheap full-grid energies, compact exact
+/// fixed-stride anchors, and compact selected replay records. Every non-authoritative
+/// receiver gets a per-period energy correction before the one final canonical
+/// HM3 collapse; compact outputs are mapped by their explicit dense index.
+fn reconstruct_multifidelity_cells(
+    data: &MultifidelityInterpolation,
+    exact_replay_output: &[f32],
+) -> Vec<u8> {
+    let replay_count = exact_replay_output.len() / noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_STRIDE;
+    let replay = decode_multifidelity_compact_output(exact_replay_output, replay_count)
+        .unwrap_or_else(|error| panic!("invalid compact replay output: {error}"));
+    let mut output_accum = TileAccumulator::new();
+    output_accum
+        .energy
+        .copy_from_slice(&data.cheap_accum.energy);
+    for &py in &data.axis {
+        for &px in &data.axis {
+            let target = (py * TILE_PX + px) * NUM_PERIODS;
+            output_accum.energy[target..target + NUM_PERIODS]
+                .copy_from_slice(&data.exact_accum.energy[target..target + NUM_PERIODS]);
+        }
+    }
+    let mut replay_mask = vec![false; TILE_PX * TILE_PX];
+    for (dense_index, energies, _) in replay {
+        replay_mask[dense_index] = true;
+        let target = dense_index * NUM_PERIODS;
+        output_accum.energy[target..target + NUM_PERIODS].copy_from_slice(&energies);
+    }
+
+    // Reconstruct in the raw three-period energy field. Positive anchor
+    // periods use an interpolated log(exact/cheap) correction, while a zero-
+    // sided/silent corner uses the linear exact-energy fallback. Exact anchors
+    // remain authoritative; interior presence follows the dense cheap field so
+    // the audibility contour is not quantised to the sparse anchor lattice.
+    let mut reconstructed = vec![false; TILE_PX * TILE_PX];
+    for py in 0..TILE_PX {
+        for px in 0..TILE_PX {
+            let index = py * TILE_PX + px;
+            if multifidelity_is_anchor(data.stride, py, px) || replay_mask[index] {
+                continue;
+            }
+            if !multifidelity_interior_is_present(data, py, px) {
+                continue;
+            }
+            let target = index * NUM_PERIODS;
+            let mut any_period = false;
+            for period in 0..NUM_PERIODS {
+                if let Some(energy) = multifidelity_bilinear_period_energy(data, py, px, period) {
+                    output_accum.energy[target + period] = energy as f32;
+                    any_period = true;
+                }
+            }
+            reconstructed[index] = any_period;
+        }
+    }
+
+    // This is the only HM3 collapse in the reconstructed path. In particular,
+    // no interpolated byte or byte residual can alter the authoritative exact
+    // anchor/replay energies after quantisation.
+    let output_cells = collapse_lden_surface_u8(&output_accum);
+    let mut cells = vec![tile_painter::wire_hm3::NO_DATA; TILE_PX * TILE_PX];
+    for py in 0..TILE_PX {
+        for px in 0..TILE_PX {
+            let index = py * TILE_PX + px;
+            // Exact anchors and launch-C lanes are authoritative outputs.
+            if multifidelity_is_anchor(data.stride, py, px) || replay_mask[index] {
+                cells[index] = output_cells[index];
+                continue;
+            }
+            if reconstructed[index] || multifidelity_interior_is_present(data, py, px) {
+                // If an unexpected non-finite input made all period helpers
+                // decline, this preserves launch A after the same presence
+                // gate; normal records take the reconstructed branch above.
+                cells[index] = output_cells[index];
+            }
+        }
+    }
+    cells
+}
+
 /// `QM_GPU_TILE_TIMES=1` — one `tile-time` stderr line per (tile, layer), the
 /// per-tile distribution instrument of the gather redesign (its §8 task 0(i):
 /// lane sums hide the benchmark's heavy tail — Sahara tiles run ~0.1 s while
@@ -313,7 +1215,7 @@ type LayerSrc = (LineLayer, (CudaSlice<f64>, CudaSlice<f64>, CudaSlice<f32>));
 #[allow(clippy::too_many_arguments)]
 fn process_block(
     dev: &Arc<CudaDevice>,
-    f: &CudaFunction,
+    functions: &LineFunctions,
     batch: &TileBatch,
     interiors: &[Option<InteriorEstimate>],
     cfg: &Cfg,
@@ -328,6 +1230,7 @@ fn process_block(
     let halo = &batch.tiles[0].halo;
     let halo_geom = halo.geom();
     let (_, _, _, rows, cols) = halo_geom;
+    let candidate_build_on = multifidelity_line_enabled() && cfg.z == 12;
 
     let elev: Vec<f32> = halo.pixels().iter().map(|p| p.elevation).collect();
     // Noise barriers reach the kernel as the VECTOR per-tile `for_tile` slice
@@ -350,11 +1253,16 @@ fn process_block(
     // carries the exact size in meta[13], so a counter PTX remains safe under a
     // normal production binary and a required census fails if counters are absent.
     let require_arcstat = rail_arcstat_census_required();
+    if require_arcstat && candidate_build_on {
+        bail!("rail ARCSTAT census is incompatible with the multifidelity W1 candidate");
+    }
     if require_arcstat && cfg!(feature = "v2-h0") {
         bail!("rail ARCSTAT census is only defined for the stock surface role");
     }
     let out_slots = if require_arcstat {
         noise_gpu::OUT_SLOTS_PROF
+    } else if candidate_build_on {
+        noise_gpu::OUT_SLOTS_MULTIFIDELITY
     } else if cfg!(feature = "v2-h0") {
         noise_gpu::OUT_SLOTS_H0
     } else {
@@ -367,6 +1275,11 @@ fn process_block(
     let mut arc_drops_seen = 0f32;
     #[cfg(feature = "v2-h0")]
     let arc_drops_seen = 0f32;
+    // Launch A's ordinary output is cumulative across this block, while the
+    // compact exact launches use fresh per-tile allocations. Keep their fault
+    // count cumulative before combining it with d_out, otherwise the previous
+    // tile's exact drops would be subtracted twice by the existing ARC delta.
+    let mut multifidelity_faults_seen = 0f32;
     #[cfg(feature = "v2-h0")]
     let mut h0_counts_seen = [0_u64; noise_gpu::OUT_H0_COUNTERS];
     let mut arcstat_seen = [0f64; noise_gpu::OUT_ARCSTAT_COUNTERS];
@@ -426,8 +1339,21 @@ fn process_block(
     let mut pending = iter.next().map(|it| prep_timed(it, stats));
     while let Some(((tx, ty, layer), bufs)) = pending {
         let tk = Instant::now();
+        let multifidelity_stride = candidate_build_on
+            .then(|| {
+                let nsrc = region_rows
+                    .iter()
+                    .find(|(candidate_layer, _)| *candidate_layer == layer)
+                    .expect("layer rows")
+                    .1
+                    .len();
+                select_multifidelity_stride(MultifidelitySelectionInputs { layer, nsrc })
+            })
+            .flatten();
+        let candidate_on = multifidelity_stride.is_some();
         let d_inner = dev.htod_copy(bufs.inner).expect("inner");
-        let d_meta = dev.htod_copy(bufs.meta).expect("meta");
+        let meta_host = bufs.meta;
+        let d_meta = dev.htod_copy(meta_host.clone()).expect("meta");
         // Region-resident sources (uploaded once per layer above) — not re-uploaded per tile.
         // (nsrc rides in meta[12] — pack_tile; the freed launch slot carries the
         // obstacle pointer table.)
@@ -436,13 +1362,34 @@ fn process_block(
             .find(|(l, _)| *l == layer)
             .expect("layer src")
             .1;
+        // Cheap and stock keep their frozen dense receiver ABI. The candidate
+        // exact passes receive a separate host-packed list; retaining one host
+        // copy is necessary for launch C because the selector chooses replay
+        // indices after the dense receiver upload has been consumed.
+        let compact_receiver_host = candidate_on.then(|| (bufs.rxll.clone(), bufs.rxar.clone()));
+        let compact_anchor_plan = if let Some(stride) = multifidelity_stride {
+            let axis = multifidelity_anchor_axis(stride);
+            let dense_indices = axis
+                .iter()
+                .flat_map(|&py| axis.iter().map(move |&px| py * TILE_PX + px))
+                .collect::<Vec<_>>();
+            multifidelity_compact_packed_plan(&dense_indices).expect("packed compact anchor plan")
+        } else {
+            MultifidelityCompactPackedPlan::default()
+        };
+        let compact_anchor_words = if let Some((rxll, rxar)) = compact_receiver_host.as_ref() {
+            pack_multifidelity_compact_receivers(rxll, rxar, &compact_anchor_plan.indices)
+                .expect("compact anchor receiver pack")
+        } else {
+            Vec::new()
+        };
         let d_rxll = dev.htod_copy(bufs.rxll).expect("rxll");
         let d_rxar = dev.htod_copy(bufs.rxar).expect("rxar");
         let d_barr = dev.htod_copy(bufs.barr).expect("barr");
         let h2d_done = Instant::now();
         stats.entry(layer.dir()).or_default().t_h2d += h2d_done.duration_since(tk).as_secs_f64();
         // CUDA-event bracket (timing only): record on the SAME stream the kernel
-        // launches on (`f.launch` → `dev.cu_stream()`), so `start`/`stop` straddle
+        // launches on the selected function → `dev.cu_stream()`, so `start`/`stop` straddle
         // exactly the kernel — not the htod copies above or the dtoh join below. The
         // `elapsed` read happens after dtoh_sync_copy synchronises the stream, so
         // both events are complete. Off ⇒ no events created at all.
@@ -453,8 +1400,44 @@ fn process_block(
             unsafe { result::event::record(start, stream).expect("record start") };
             (start, stop, stream)
         });
+        // Optional phase census for the W1 design review. These CUDA events
+        // isolate dense cheap, compact anchors, and compact selected replay;
+        // they are never created for stock/W2 or ordinary timed runs.
+        let stage_timing =
+            candidate_on && std::env::var("QM_MULTIFIDELITY_STAGE_TIMES").as_deref() == Ok("1");
+        let stage_events = stage_timing.then(|| {
+            let make = || {
+                result::event::create(CUevent_flags::CU_EVENT_DEFAULT)
+                    .expect("multifidelity stage event")
+            };
+            (
+                make(),
+                make(),
+                make(),
+                make(),
+                make(),
+                make(),
+                *dev.cu_stream(),
+            )
+        });
+        let mut stage_replay_recorded = false;
+        let mut kernel_stop_recorded = false;
+        if let Some((dense_start, _, _, _, _, _, stream)) = stage_events.as_ref() {
+            unsafe {
+                result::event::record(*dense_start, *stream).expect("record dense stage start");
+            }
+        }
+        let dense_function = if candidate_on {
+            functions
+                .multifidelity_cheap
+                .as_ref()
+                .expect("multifidelity cheap PTX function")
+        } else {
+            &functions.stock
+        };
         unsafe {
-            f.clone()
+            dense_function
+                .clone()
                 .launch(
                     launch_cfg,
                     noise_gpu::line_kernel_arguments!(
@@ -474,13 +1457,180 @@ fn process_block(
                 )
                 .expect("launch");
         }
-        if let Some((_, stop, stream)) = kernel_evt {
-            unsafe { result::event::record(stop, stream).expect("record stop") };
+        // Preserve the original stock timing contract: its stop event is
+        // recorded immediately after launch, before any candidate-only work.
+        if !candidate_on {
+            if let Some((_, stop, stream)) = kernel_evt {
+                unsafe { result::event::record(stop, stream).expect("record stop") };
+                kernel_stop_recorded = true;
+            }
         }
-        // Overlap: prep the NEXT item on the CPU while this kernel runs on the GPU.
+        // Dense stage stop is queued immediately after launch A.
+        if let Some((_, dense_stop, _, _, _, _, stream)) = stage_events.as_ref() {
+            unsafe {
+                result::event::record(*dense_stop, *stream).expect("record dense stage stop");
+            }
+        }
+        // Overlap: prep the NEXT item on the CPU while launch A runs on the GPU.
         pending = iter.next().map(|it| prep_timed(it, stats));
-        // Join: dtoh_sync_copy waits for the kernel, then reads the result back.
-        let gpu = dev.dtoh_sync_copy(&d_out).expect("dtoh");
+
+        let mut exact_replay_output = Vec::new();
+        let mut candidate_interpolation = None;
+        let mut gpu;
+        if candidate_on {
+            let anchor_count = compact_anchor_plan.indices.len();
+            let stride = multifidelity_stride.expect("candidate stride");
+            assert_eq!(anchor_count, stride.anchor_record_count());
+            let d_anchor_receivers = dev
+                .htod_copy(compact_anchor_words)
+                .expect("compact anchor receivers");
+            let d_anchor_control = dev
+                .htod_copy(multifidelity_compact_packed_plan_controls(
+                    &compact_anchor_plan,
+                ))
+                .expect("compact anchor control");
+            let mut d_anchor_out = dev
+                .alloc_zeros::<f32>(stride.compact_output_len())
+                .expect("compact anchor output");
+            if let Some((_, _, anchor_start, _, _, _, stream)) = stage_events.as_ref() {
+                unsafe {
+                    result::event::record(*anchor_start, *stream)
+                        .expect("record anchor stage start");
+                }
+            }
+            launch_multifidelity_compact_records_packed(
+                functions
+                    .multifidelity_compact_packed
+                    .as_ref()
+                    .expect("multifidelity packed compact PTX function"),
+                &compact_anchor_plan,
+                &d_elev,
+                &d_inner,
+                &d_cover,
+                &d_meta,
+                d_seg,
+                d_sp,
+                d_semis,
+                &d_anchor_receivers,
+                &d_anchor_control,
+                &d_barr,
+                &obst_dev.table,
+                &mut d_anchor_out,
+            );
+            if let Some((_, _, _, anchor_stop, _, _, stream)) = stage_events.as_ref() {
+                unsafe {
+                    result::event::record(*anchor_stop, *stream).expect("record anchor stage stop");
+                }
+            }
+
+            // The selector sees only cheap full-grid output and compact exact
+            // anchors. It never reads a dense exact tail or mutates d_out.
+            gpu = dev
+                .dtoh_sync_copy(&d_out)
+                .expect("multifidelity cheap dtoh");
+            let exact_anchor_output = dev
+                .dtoh_sync_copy(&d_anchor_out)
+                .expect("multifidelity compact anchor dtoh");
+            let anchor_fault = multifidelity_compact_fault_sum(&exact_anchor_output, anchor_count)
+                .expect("multifidelity compact anchor fault decode");
+            let interpolation = multifidelity_interpolation(stride, &gpu, &exact_anchor_output);
+            let receiver_mask = multifidelity_receiver_mask(layer, &interpolation);
+            candidate_interpolation = Some(interpolation);
+            let replay_indices_unsorted: Vec<usize> = receiver_mask
+                .iter()
+                .enumerate()
+                .filter_map(|(index, &value)| (value >= 0.5).then_some(index))
+                .collect();
+            let replay_plan =
+                multifidelity_compact_plan(&replay_indices_unsorted).expect("compact replay plan");
+            let mut exact_fault_this_tile = anchor_fault;
+
+            if replay_plan.indices.is_empty() {
+                if let Some((_, stop, stream)) = kernel_evt {
+                    unsafe { result::event::record(stop, stream).expect("record stop") };
+                    unsafe { result::stream::synchronize(stream).expect("synchronize stop") };
+                    kernel_stop_recorded = true;
+                }
+            } else {
+                let (rxll, rxar) = compact_receiver_host
+                    .as_ref()
+                    .expect("compact receiver host copy");
+                let replay_words =
+                    pack_multifidelity_compact_receivers(rxll, rxar, &replay_plan.indices)
+                        .expect("compact replay receiver pack");
+                let replay_count = replay_plan.indices.len();
+                let d_replay_receivers = dev
+                    .htod_copy(replay_words)
+                    .expect("compact replay receivers");
+                let d_replay_control = dev
+                    .htod_copy(multifidelity_compact_plan_controls(&replay_plan))
+                    .expect("compact replay control");
+                let mut d_replay_out = dev
+                    .alloc_zeros::<f32>(
+                        replay_count * noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_STRIDE,
+                    )
+                    .expect("compact replay output");
+                if let Some((_, _, _, _, replay_start, _, stream)) = stage_events.as_ref() {
+                    unsafe {
+                        result::event::record(*replay_start, *stream)
+                            .expect("record replay stage start");
+                    }
+                }
+                launch_multifidelity_compact_records(
+                    functions
+                        .multifidelity_compact
+                        .as_ref()
+                        .expect("multifidelity compact PTX function"),
+                    &replay_plan,
+                    &d_elev,
+                    &d_inner,
+                    &d_cover,
+                    &d_meta,
+                    d_seg,
+                    d_sp,
+                    d_semis,
+                    &d_replay_receivers,
+                    &d_replay_control,
+                    &d_barr,
+                    &obst_dev.table,
+                    &mut d_replay_out,
+                );
+                if let Some((_, _, _, _, _, replay_stop, stream)) = stage_events.as_ref() {
+                    unsafe {
+                        result::event::record(*replay_stop, *stream)
+                            .expect("record replay stage stop");
+                    }
+                    stage_replay_recorded = true;
+                }
+                if let Some((_, stop, stream)) = kernel_evt {
+                    unsafe { result::event::record(stop, stream).expect("record stop") };
+                    kernel_stop_recorded = true;
+                }
+                exact_replay_output = dev
+                    .dtoh_sync_copy(&d_replay_out)
+                    .expect("multifidelity compact replay dtoh");
+                let replay_fault =
+                    multifidelity_compact_fault_sum(&exact_replay_output, replay_count)
+                        .expect("multifidelity compact replay fault decode");
+                exact_fault_this_tile += replay_fault;
+            }
+            multifidelity_faults_seen += exact_fault_this_tile;
+        } else {
+            gpu = dev.dtoh_sync_copy(&d_out).expect("dtoh");
+        }
+        // A multifidelity build can mix candidate rail/dense-road tiles with
+        // stock sparse-road tiles in either CLI layer order. Always combine
+        // both cumulative counters so the existing per-tile delta remains
+        // monotonic when the next item switches back to the dense stock slot.
+        if candidate_build_on {
+            add_multifidelity_fault_total_to_dense_slot(&mut gpu, multifidelity_faults_seen);
+        }
+        if !kernel_stop_recorded {
+            if let Some((_, stop, stream)) = kernel_evt {
+                unsafe { result::event::record(stop, stream).expect("record stop") };
+                unsafe { result::stream::synchronize(stream).expect("synchronize stop") };
+            }
+        }
         let tile_wall_s = tk.elapsed().as_secs_f64();
         let mut tile_kernel_ms = None;
         {
@@ -496,6 +1646,43 @@ fn process_block(
                     result::event::destroy(start).expect("destroy start");
                     result::event::destroy(stop).expect("destroy stop");
                 }
+            }
+        }
+
+        if let Some((
+            dense_start,
+            dense_stop,
+            anchor_start,
+            anchor_stop,
+            replay_start,
+            replay_stop,
+            _,
+        )) = stage_events
+        {
+            let dense_ms = unsafe {
+                result::event::elapsed(dense_start, dense_stop).expect("dense stage elapsed")
+            } as f64;
+            let anchor_ms = unsafe {
+                result::event::elapsed(anchor_start, anchor_stop).expect("anchor stage elapsed")
+            } as f64;
+            let replay_ms = if stage_replay_recorded {
+                Some(unsafe {
+                    result::event::elapsed(replay_start, replay_stop).expect("replay stage elapsed")
+                } as f64)
+            } else {
+                None
+            };
+            eprintln!(
+                "MULTIFIDELITY_STAGE layer={} z{}/{tx}/{ty} dense_ms={dense_ms:.3} anchor_ms={anchor_ms:.3} replay_ms={replay_ms:?}",
+                layer.dir(), cfg.z,
+            );
+            unsafe {
+                result::event::destroy(dense_start).expect("destroy dense stage start");
+                result::event::destroy(dense_stop).expect("destroy dense stage stop");
+                result::event::destroy(anchor_start).expect("destroy anchor stage start");
+                result::event::destroy(anchor_stop).expect("destroy anchor stage stop");
+                result::event::destroy(replay_start).expect("destroy replay stage start");
+                result::event::destroy(replay_stop).expect("destroy replay stage stop");
             }
         }
 
@@ -615,11 +1802,20 @@ fn process_block(
             );
         }
         let output_started = Instant::now();
-        let mut accum = TileAccumulator::new();
-        accum
-            .energy
-            .copy_from_slice(&gpu[..noise_gpu::OUT_ENERGY_SLOTS]);
-        let mut cells = collapse_lden_surface_u8(&accum);
+        let mut cells = if candidate_on {
+            reconstruct_multifidelity_cells(
+                candidate_interpolation
+                    .as_ref()
+                    .expect("multifidelity interpolation"),
+                &exact_replay_output,
+            )
+        } else {
+            let mut accum = TileAccumulator::new();
+            accum
+                .energy
+                .copy_from_slice(&gpu[..noise_gpu::OUT_ENERGY_SLOTS]);
+            collapse_lden_surface_u8(&accum)
+        };
         // Building interiors: façade donor − ΔL, stamped after the collapse and
         // BEFORE the baseline diff so the comparison is like for like. One
         // estimate per tile (baked with the block), shared by its layers.
@@ -721,7 +1917,7 @@ fn process_region(
     layers: &[LineLayer],
     cfg: &Cfg,
     dev: &Arc<CudaDevice>,
-    f: &CudaFunction,
+    functions: &LineFunctions,
     prepared: &str,
     stats: &mut BTreeMap<&'static str, LayerStat>,
     prog: &mut Progress,
@@ -931,7 +2127,7 @@ fn process_region(
             for (key, batch, interiors) in &current.as_ref().expect("loop guard").0 {
                 if let Err(e) = process_block(
                     dev,
-                    f,
+                    functions,
                     batch,
                     interiors,
                     cfg,
@@ -1080,7 +2276,7 @@ fn run_stream(
                 // raster access via the per-rayon-thread RASTERS instances.
                 // Safe under UNIQUE centre-R4 ownership (the scheduler leases each cell once per stream):
                 // each cell's output tiles are disjoint, so two workers never write the same .bin.
-                let (dev, f) = warm_device_on(true);
+                let (dev, functions) = warm_device_on(true);
                 let mut stats: BTreeMap<&'static str, LayerStat> = BTreeMap::new();
                 let mut prog = Progress {
                     done: 0,
@@ -1169,8 +2365,8 @@ fn run_stream(
                         );
                         match dependencies.and_then(|()| {
                             process_region(
-                                r4, &tiles, &effective, cfg, &dev, &f, prepared, &mut stats,
-                                &mut prog,
+                                r4, &tiles, &effective, cfg, &dev, &functions, prepared,
+                                &mut stats, &mut prog,
                             )
                         }) {
                             Ok(result) => {
@@ -1620,7 +2816,7 @@ fn main() -> Result<()> {
         layer_names,
     );
 
-    let (dev, f) = warm_device();
+    let (dev, functions) = warm_device();
 
     let barriers_enabled = gpu_barriers_enabled();
     let cfg = Cfg {
@@ -1646,7 +2842,7 @@ fn main() -> Result<()> {
             &layers,
             &cfg,
             &dev,
-            &f,
+            &functions,
             &prepared,
             &mut stats,
             &mut prog,
@@ -1709,4 +2905,760 @@ fn main() -> Result<()> {
         eprintln!("ARCSTAT_GATE=PASS fixture=rail-2206-1391 passes=1");
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod multifidelity_tests {
+    use super::*;
+
+    fn compact_anchor_output(
+        axis: &[usize],
+        energy: impl Fn(usize, usize, usize) -> f32,
+    ) -> Vec<f32> {
+        let stride = noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_STRIDE;
+        let mut output = vec![0.0f32; axis.len() * axis.len() * stride];
+        for (ay, &py) in axis.iter().enumerate() {
+            for (ax, &px) in axis.iter().enumerate() {
+                let record = ay * axis.len() + ax;
+                let offset = record * stride;
+                output[offset + noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT] =
+                    (py * TILE_PX + px) as f32;
+                for period in 0..NUM_PERIODS {
+                    output[offset + noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE + period] =
+                        energy(py, px, period);
+                }
+            }
+        }
+        output
+    }
+
+    #[test]
+    fn stride_anchor_axis_carries_the_final_boundary() {
+        let stride = MultifidelityStride::Stride16;
+        let axis = multifidelity_anchor_axis(stride);
+        assert_eq!(stride.pixels(), 16);
+        assert_eq!(axis.len(), stride.anchor_count());
+        assert_eq!(axis.len(), 33);
+        assert_eq!(axis[axis.len() - 2], 496);
+        assert_eq!(axis.last().copied(), Some(TILE_PX - 1));
+        assert_eq!(axis, (0..=496).step_by(16).chain([511]).collect::<Vec<_>>());
+        assert!(multifidelity_is_anchor(stride, 496, 496));
+        assert!(multifidelity_is_anchor(stride, TILE_PX - 1, TILE_PX - 1));
+        assert!(!multifidelity_is_anchor(stride, 495, 495));
+    }
+
+    #[test]
+    fn runtime_strides_cover_boundary_and_expected_record_counts() {
+        for (pixels, axis_count, record_count, penultimate) in [
+            (4, 129, 16_641, 508),
+            (8, 65, 4_225, 504),
+            (16, 33, 1_089, 496),
+            (32, 17, 289, 480),
+        ] {
+            let stride = MultifidelityStride::from_pixels(pixels).expect("supported stride");
+            let axis = multifidelity_anchor_axis(stride);
+            assert_eq!(stride.pixels(), pixels);
+            assert_eq!(axis.len(), axis_count);
+            assert_eq!(stride.anchor_record_count(), record_count);
+            assert_eq!(axis[axis.len() - 2], penultimate);
+            assert_eq!(axis.last().copied(), Some(TILE_PX - 1));
+            assert!(multifidelity_is_anchor(stride, TILE_PX - 1, TILE_PX - 1));
+            assert!(multifidelity_is_anchor(stride, penultimate, penultimate));
+            assert!(!multifidelity_is_anchor(
+                stride,
+                penultimate - 1,
+                penultimate - 1
+            ));
+            assert_eq!(
+                stride.compact_output_len(),
+                record_count * noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_STRIDE
+            );
+        }
+        for unsupported in [0, 1, 2, 3, 5, 12, 24, 511] {
+            assert_eq!(MultifidelityStride::from_pixels(unsupported), None);
+        }
+    }
+
+    #[test]
+    fn candidate_selector_is_pure_and_uses_only_layer_and_source_count() {
+        for nsrc in [0, 1, 256, ROAD_SPARSE_STOCK_MAX_SOURCES] {
+            assert_eq!(
+                select_multifidelity_stride(MultifidelitySelectionInputs {
+                    layer: LineLayer::Road,
+                    nsrc,
+                }),
+                None
+            );
+            assert_eq!(
+                select_multifidelity_stride(MultifidelitySelectionInputs {
+                    layer: LineLayer::Rail,
+                    nsrc,
+                }),
+                Some(MultifidelityStride::Stride16)
+            );
+        }
+        assert_eq!(
+            select_multifidelity_stride(MultifidelitySelectionInputs {
+                layer: LineLayer::Road,
+                nsrc: ROAD_SPARSE_STOCK_MAX_SOURCES + 1,
+            }),
+            Some(MultifidelityStride::Stride16)
+        );
+        assert_eq!(
+            select_multifidelity_stride(MultifidelitySelectionInputs {
+                layer: LineLayer::Road,
+                nsrc: usize::MAX,
+            }),
+            Some(MultifidelityStride::Stride16)
+        );
+    }
+
+    #[test]
+    fn every_runtime_stride_decodes_allocates_and_reconstructs() {
+        let mut cheap_gpu = vec![0.0f32; noise_gpu::OUT_SLOTS_MULTIFIDELITY];
+        for index in 0..TILE_PX * TILE_PX {
+            cheap_gpu[index * NUM_PERIODS] = 10.0;
+        }
+        for (pixels, expected_records) in [(4, 16_641), (8, 4_225), (16, 1_089), (32, 289)] {
+            let stride = MultifidelityStride::from_pixels(pixels).expect("supported stride");
+            let axis = multifidelity_anchor_axis(stride);
+            let exact =
+                compact_anchor_output(&axis, |_, _, period| if period == 0 { 40.0 } else { 0.0 });
+            assert_eq!(exact.len(), stride.compact_output_len());
+            let decoded = decode_multifidelity_compact_output(&exact, expected_records)
+                .expect("runtime compact output decodes");
+            assert_eq!(decoded.len(), expected_records);
+            let data = multifidelity_interpolation(stride, &cheap_gpu, &exact);
+            assert_eq!(data.stride, stride);
+            assert_eq!(data.axis.len() * data.axis.len(), expected_records);
+            let cells = reconstruct_multifidelity_cells(&data, &[]);
+            assert_eq!(cells[0], 26);
+            assert_eq!(cells[TILE_PX * TILE_PX - 1], 26);
+        }
+    }
+
+    #[test]
+    fn selector_covers_the_final_stride_axis_window() {
+        let mut cheap_gpu = vec![0.0f32; noise_gpu::OUT_SLOTS_MULTIFIDELITY];
+        for index in 0..TILE_PX * TILE_PX {
+            cheap_gpu[index * NUM_PERIODS] = 10.0;
+        }
+        let stride = MultifidelityStride::Stride16;
+        let axis = multifidelity_anchor_axis(stride);
+        let exact = compact_anchor_output(&axis, |py, px, period| {
+            if period == 0 && py == 496 && px == 496 {
+                1_000_000.0
+            } else if period == 0 {
+                10.0
+            } else {
+                0.0
+            }
+        });
+        let data = multifidelity_interpolation(stride, &cheap_gpu, &exact);
+        let mask = multifidelity_receiver_mask_with_replay(LineLayer::Road, &data, true);
+
+        // The last real axis window is [496, 511); its interior must be
+        // selectable while both boundary anchors remain authoritative.
+        assert_eq!(mask[497 * TILE_PX + 497], 1.0);
+        assert_eq!(mask[496 * TILE_PX + 496], 0.0);
+        assert_eq!(mask[511 * TILE_PX + 511], 0.0);
+
+        let anchors_only = multifidelity_receiver_mask(LineLayer::Road, &data);
+        assert!(anchors_only.iter().all(|&value| value == 0.0));
+    }
+
+    #[test]
+    fn compact_output_rejects_short_fractional_and_out_of_bounds_records() {
+        let valid = vec![3.0, 1.0, 2.0, 3.0, 0.0];
+        let decoded = decode_multifidelity_compact_output(&valid, 1).expect("valid compact output");
+        assert_eq!(decoded, vec![(3, [1.0, 2.0, 3.0], 0.0)]);
+        assert!(decode_multifidelity_compact_output(&valid[..4], 1).is_err());
+
+        let mut fractional = valid.clone();
+        fractional[0] = 3.5;
+        assert!(decode_multifidelity_compact_output(&fractional, 1).is_err());
+
+        let mut out_of_bounds = valid;
+        out_of_bounds[0] = (TILE_PX * TILE_PX) as f32;
+        assert!(decode_multifidelity_compact_output(&out_of_bounds, 1).is_err());
+
+        let duplicate = vec![3.0, 1.0, 2.0, 3.0, 0.0, 3.0, 4.0, 5.0, 6.0, 0.0];
+        assert!(decode_multifidelity_compact_output(&duplicate, 2).is_err());
+    }
+
+    #[test]
+    fn compact_receiver_pack_rejects_out_of_bounds_dense_index() {
+        let rxll = vec![0.0f64; TILE_PX * 2];
+        let rxar = vec![0.0f32; TILE_PX * TILE_PX * 2];
+        let last = TILE_PX * TILE_PX - 1;
+        let packed = pack_multifidelity_compact_receivers(&rxll, &rxar, &[0, last])
+            .expect("valid compact receiver pack");
+        assert_eq!(
+            packed.len(),
+            2 * noise_gpu::MULTIFIDELITY_COMPACT_RECEIVER_RECORD_WORDS
+        );
+        assert_eq!(packed[3], 0);
+        assert_eq!(packed[7], last as u64);
+        assert!(pack_multifidelity_compact_receivers(&rxll, &rxar, &[TILE_PX * TILE_PX]).is_err());
+        let mut nonfinite = rxar;
+        nonfinite[0] = f32::NAN;
+        assert!(pack_multifidelity_compact_receivers(&rxll, &nonfinite, &[0]).is_err());
+    }
+
+    #[test]
+    fn compact_bucket_plan_preserves_set_and_reconstruction() {
+        let multifidelity_stride = MultifidelityStride::Stride16;
+        let axis = multifidelity_anchor_axis(multifidelity_stride);
+        let row_major: Vec<usize> = axis
+            .iter()
+            .flat_map(|&py| axis.iter().map(move |&px| py * TILE_PX + px))
+            .collect();
+        let check_plan = |label: &str,
+                          dense_indices: &[usize],
+                          expected_launches: usize,
+                          expected_global_blocks: usize| {
+            let plan = multifidelity_compact_plan(dense_indices).expect(label);
+            assert_eq!(
+                plan.indices.len(),
+                dense_indices.len(),
+                "{label}: record count"
+            );
+            assert_eq!(
+                plan.launches.len(),
+                expected_launches,
+                "{label}: block count"
+            );
+            assert_eq!(
+                dense_indices
+                    .len()
+                    .div_ceil(MULTIFIDELITY_COMPACT_RECORDS_PER_BLOCK),
+                expected_global_blocks,
+                "{label}: global one-grid baseline",
+            );
+            let mut expected = dense_indices.to_vec();
+            expected.sort_unstable();
+            let mut actual = plan.indices.clone();
+            actual.sort_unstable();
+            assert_eq!(actual, expected, "{label}: sorted index set changed");
+            actual.dedup();
+            assert_eq!(actual.len(), plan.indices.len(), "{label}: duplicate index");
+
+            let controls = multifidelity_compact_plan_controls(&plan);
+            assert_eq!(
+                controls.len(),
+                noise_gpu::MULTIFIDELITY_COMPACT_CONTROL_WORDS
+                    + plan.launches.len() * noise_gpu::MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS,
+                "{label}: control length",
+            );
+            assert_eq!(controls[0], dense_indices.len() as u64);
+            assert_eq!(
+                controls[1],
+                noise_gpu::MULTIFIDELITY_COMPACT_ABI_VERSION as u64
+            );
+            assert_eq!(
+                controls[2],
+                noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_STRIDE as u64
+            );
+            let mut covered = Vec::with_capacity(plan.indices.len());
+            for (block_index, launch) in plan.launches.iter().enumerate() {
+                assert!(launch.record_count > 0);
+                assert!(launch.record_count <= MULTIFIDELITY_COMPACT_RECORDS_PER_BLOCK);
+                assert_eq!(
+                    launch.record_offset,
+                    covered.len(),
+                    "{label}: gap at block {block_index}"
+                );
+                let control = noise_gpu::MULTIFIDELITY_COMPACT_CONTROL_WORDS
+                    + block_index * noise_gpu::MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS;
+                assert_eq!(controls[control], launch.record_offset as u64);
+                assert_eq!(controls[control + 1], launch.record_count as u64);
+                let end = launch.record_offset + launch.record_count;
+                let chunk = &plan.indices[launch.record_offset..end];
+                let bucket = multifidelity_compact_bucket(chunk[0]);
+                assert!(chunk
+                    .iter()
+                    .all(|&index| multifidelity_compact_bucket(index) == bucket));
+                let min_x = chunk.iter().map(|&index| index % TILE_PX).min().unwrap();
+                let max_x = chunk.iter().map(|&index| index % TILE_PX).max().unwrap();
+                let min_y = chunk.iter().map(|&index| index / TILE_PX).min().unwrap();
+                let max_y = chunk.iter().map(|&index| index / TILE_PX).max().unwrap();
+                assert!(
+                    max_x - min_x < MULTIFIDELITY_COMPACT_BUCKET_PX,
+                    "{label}: x span at block {block_index}"
+                );
+                assert!(
+                    max_y - min_y < MULTIFIDELITY_COMPACT_BUCKET_PX,
+                    "{label}: y span at block {block_index}"
+                );
+                covered.extend_from_slice(chunk);
+            }
+            assert_eq!(
+                covered, plan.indices,
+                "{label}: block ranges are not contiguous"
+            );
+            eprintln!(
+                "COMPACT_PLAN_CENSUS label={label} active={} global_blocks={} bucket_blocks={} overhead={}",
+                dense_indices.len(),
+                expected_global_blocks,
+                expected_launches,
+                expected_launches - expected_global_blocks,
+            );
+            plan
+        };
+        // Sixteen 32-pixel buckets per axis; the final bucket carries the
+        // explicit 511 boundary alongside the 16-pixel lattice, so the plan
+        // emits 256 bucket blocks.
+        let anchor_plan = check_plan("anchors", &row_major, 256, 5);
+        let selector_indices: Vec<usize> = (0..TILE_PX * TILE_PX)
+            .filter(|index| index % 12 == 0)
+            .collect();
+        let _selector_plan = check_plan("selector", &selector_indices, 256, 86);
+        let all_indices: Vec<usize> = (0..TILE_PX * TILE_PX).collect();
+        let _all_plan = check_plan("all", &all_indices, 1024, 1024);
+        let boundary = TILE_PX * TILE_PX - 1;
+        let boundary_block = anchor_plan
+            .launches
+            .iter()
+            .find(|launch| {
+                let end = launch.record_offset + launch.record_count;
+                anchor_plan.indices[launch.record_offset..end].contains(&boundary)
+            })
+            .expect("anchor boundary block");
+        assert_eq!(multifidelity_compact_bucket(boundary), (15, 15));
+        assert!(anchor_plan.indices[boundary_block.record_offset
+            ..boundary_block.record_offset + boundary_block.record_count]
+            .contains(&boundary));
+        assert!(multifidelity_compact_plan(&[0, 0]).is_err());
+        assert!(multifidelity_compact_plan(&[TILE_PX * TILE_PX]).is_err());
+
+        let mut cheap_gpu = vec![0.0f32; noise_gpu::OUT_SLOTS_MULTIFIDELITY];
+        for index in 0..TILE_PX * TILE_PX {
+            cheap_gpu[index * 3] = 10.0;
+        }
+        let stride = noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_STRIDE;
+        let mut row_output = vec![0.0f32; row_major.len() * stride];
+        let mut row_record_for_dense = vec![usize::MAX; TILE_PX * TILE_PX];
+        for (record, &dense_index) in row_major.iter().enumerate() {
+            row_record_for_dense[dense_index] = record;
+            let output = record * stride;
+            row_output[output + noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT] =
+                dense_index as f32;
+            row_output[output + noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE] =
+                if record % 7 == 0 { 100.0 } else { 0.0 };
+        }
+        let mut bucket_output = Vec::with_capacity(row_output.len());
+        for &dense_index in &anchor_plan.indices {
+            let record = row_record_for_dense[dense_index];
+            bucket_output.extend_from_slice(&row_output[record * stride..(record + 1) * stride]);
+        }
+        let interpolation =
+            multifidelity_interpolation(multifidelity_stride, &cheap_gpu, &row_output);
+        let _selector_mask = multifidelity_receiver_mask(LineLayer::Road, &interpolation);
+        assert_eq!(
+            reconstruct_multifidelity_cells(&interpolation, &row_output),
+            reconstruct_multifidelity_cells(&interpolation, &bucket_output),
+            "explicit output indices must make compact block order irrelevant"
+        );
+    }
+
+    #[test]
+    fn packed_compact_plan_preserves_each_warp_bucket_and_record_bounds() {
+        let stride = MultifidelityStride::Stride32;
+        let axis = multifidelity_anchor_axis(stride);
+        let dense_indices: Vec<usize> = axis
+            .iter()
+            .flat_map(|&py| axis.iter().map(move |&px| py * TILE_PX + px))
+            .collect();
+        let plan = multifidelity_compact_packed_plan(&dense_indices).expect("packed anchor plan");
+        assert_eq!(plan.indices.len(), stride.anchor_record_count());
+        assert_eq!(plan.indices.len(), 289);
+        assert!(plan
+            .launches
+            .iter()
+            .all(|block| block.len() == MULTIFIDELITY_COMPACT_PACKED_WARPS_PER_BLOCK));
+
+        let controls = multifidelity_compact_packed_plan_controls(&plan);
+        assert_eq!(controls[0], dense_indices.len() as u64);
+        assert_eq!(
+            controls[1],
+            noise_gpu::MULTIFIDELITY_COMPACT_ABI_VERSION as u64
+        );
+        assert_eq!(
+            controls[2],
+            noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_STRIDE as u64
+        );
+        assert_eq!(
+            controls.len(),
+            noise_gpu::MULTIFIDELITY_COMPACT_CONTROL_WORDS
+                + plan.launches.len()
+                    * MULTIFIDELITY_COMPACT_PACKED_WARPS_PER_BLOCK
+                    * noise_gpu::MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS
+        );
+
+        let mut covered = Vec::with_capacity(plan.indices.len());
+        for (block_index, block) in plan.launches.iter().enumerate() {
+            for (warp_index, descriptor) in block.iter().enumerate() {
+                let control = noise_gpu::MULTIFIDELITY_COMPACT_CONTROL_WORDS
+                    + (block_index * MULTIFIDELITY_COMPACT_PACKED_WARPS_PER_BLOCK + warp_index)
+                        * noise_gpu::MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS;
+                assert_eq!(controls[control], descriptor.record_offset as u64);
+                assert_eq!(controls[control + 1], descriptor.record_count as u64);
+                if descriptor.record_count == 0 {
+                    assert!(covered.len() == plan.indices.len());
+                    continue;
+                }
+                assert!(descriptor.record_count <= MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP);
+                assert_eq!(descriptor.record_offset, covered.len());
+                let end = descriptor.record_offset + descriptor.record_count;
+                let chunk = &plan.indices[descriptor.record_offset..end];
+                let bucket = multifidelity_compact_bucket(chunk[0]);
+                assert!(chunk
+                    .iter()
+                    .all(|&index| multifidelity_compact_bucket(index) == bucket));
+                let min_x = chunk.iter().map(|&index| index % TILE_PX).min().unwrap();
+                let max_x = chunk.iter().map(|&index| index % TILE_PX).max().unwrap();
+                let min_y = chunk.iter().map(|&index| index / TILE_PX).min().unwrap();
+                let max_y = chunk.iter().map(|&index| index / TILE_PX).max().unwrap();
+                assert!(max_x - min_x < MULTIFIDELITY_COMPACT_BUCKET_PX);
+                assert!(max_y - min_y < MULTIFIDELITY_COMPACT_BUCKET_PX);
+                covered.extend_from_slice(chunk);
+            }
+        }
+        assert_eq!(covered, plan.indices);
+    }
+
+    #[test]
+    fn packed_stride16_plan_covers_the_production_anchor_lattice() {
+        let stride = MultifidelityStride::Stride16;
+        let axis = multifidelity_anchor_axis(stride);
+        let dense_indices: Vec<usize> = axis
+            .iter()
+            .flat_map(|&py| axis.iter().map(move |&px| py * TILE_PX + px))
+            .collect();
+        let plan = multifidelity_compact_packed_plan(&dense_indices)
+            .expect("production packed anchor plan");
+
+        assert_eq!(plan.indices.len(), 1_089);
+        assert_eq!(plan.indices.len(), stride.anchor_record_count());
+        assert_eq!(plan.launches.len(), 32);
+        assert_eq!(
+            multifidelity_compact_packed_plan_controls(&plan).len(),
+            noise_gpu::MULTIFIDELITY_COMPACT_CONTROL_WORDS
+                + plan.launches.len()
+                    * MULTIFIDELITY_COMPACT_PACKED_WARPS_PER_BLOCK
+                    * noise_gpu::MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS
+        );
+
+        let mut covered = plan.indices.clone();
+        covered.sort_unstable();
+        let mut expected = dense_indices;
+        expected.sort_unstable();
+        assert_eq!(covered, expected);
+    }
+
+    #[test]
+    fn multifidelity_fault_total_stays_monotonic_across_mixed_layer_order() {
+        let mut previous = 0.0f32;
+        for (dense_total, sampled_total, expected_delta) in
+            [(0.0, 3.0, 3.0), (2.0, 3.0, 2.0), (2.0, 4.0, 1.0)]
+        {
+            let mut output = vec![0.0; noise_gpu::OUT_SLOTS_MULTIFIDELITY];
+            output[noise_gpu::OUT_FAULT_SLOT] = dense_total;
+            add_multifidelity_fault_total_to_dense_slot(&mut output, sampled_total);
+            let current = output[noise_gpu::OUT_FAULT_SLOT];
+            assert_eq!(current - previous, expected_delta);
+            previous = current;
+        }
+    }
+
+    #[test]
+    fn packed_compact_plan_rejects_bad_indices_and_splits_a_full_bucket() {
+        let bucket_indices: Vec<usize> = (0..32)
+            .flat_map(|py| (0..32).map(move |px| py * TILE_PX + px))
+            .collect();
+        let plan = multifidelity_compact_packed_plan(&bucket_indices).expect("full bucket plan");
+        assert_eq!(plan.indices.len(), 1024);
+        assert_eq!(plan.launches.len(), 4);
+        assert!(plan
+            .launches
+            .iter()
+            .flat_map(|block| block.iter())
+            .all(|descriptor| descriptor.record_count == 32));
+        let controls = multifidelity_compact_packed_plan_controls(&plan);
+        assert_eq!(controls[0], 1024);
+        assert_eq!(
+            controls.len(),
+            noise_gpu::MULTIFIDELITY_COMPACT_CONTROL_WORDS
+                + 4 * MULTIFIDELITY_COMPACT_PACKED_WARPS_PER_BLOCK
+                    * noise_gpu::MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS
+        );
+        assert!(multifidelity_compact_packed_plan(&[0, 0]).is_err());
+        assert!(multifidelity_compact_packed_plan(&[TILE_PX * TILE_PX]).is_err());
+    }
+
+    #[test]
+    fn packed_compact_launch_geometry_keeps_the_existing_cuda_abi() {
+        let indices = multifidelity_anchor_axis(MultifidelityStride::Stride32)
+            .iter()
+            .map(|&coordinate| coordinate * TILE_PX + coordinate)
+            .collect::<Vec<_>>();
+        let plan = multifidelity_compact_packed_plan(&indices).expect("diagonal plan");
+        let (grid_x, block_x, shared_mem_bytes) =
+            multifidelity_compact_packed_launch_geometry(&plan).expect("launch geometry");
+        assert_eq!(grid_x as usize, plan.launches.len());
+        assert_eq!(block_x as usize, BIN_W * BIN_W);
+        assert_eq!(
+            block_x as usize,
+            MULTIFIDELITY_COMPACT_PACKED_WARPS_PER_BLOCK
+                * MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP
+        );
+        assert_eq!(shared_mem_bytes, 0);
+        assert!(multifidelity_compact_packed_launch_geometry(
+            &MultifidelityCompactPackedPlan::default()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn energy_reconstruction_handles_log_ratio_zero_fallback_and_silence() {
+        let mut cheap_gpu = vec![0.0f32; noise_gpu::OUT_SLOTS_MULTIFIDELITY];
+        for index in 0..TILE_PX * TILE_PX {
+            cheap_gpu[index * NUM_PERIODS] = 10.0;
+        }
+        let multifidelity_stride = MultifidelityStride::Stride16;
+        let axis = multifidelity_anchor_axis(multifidelity_stride);
+        // All-positive corners use log(exact/cheap): 40/10 = 4×, applied to
+        // the raw period energy before Lden.  40 linear energy is 13.01 dB
+        // Lden, hence HM3 byte 26.
+        let exact =
+            compact_anchor_output(&axis, |_, _, period| if period == 0 { 40.0 } else { 0.0 });
+        let data = multifidelity_interpolation(multifidelity_stride, &cheap_gpu, &exact);
+        let cells = reconstruct_multifidelity_cells(&data, &[]);
+        assert_eq!(cells[TILE_PX + 1], 26);
+        assert_eq!(cells[(TILE_PX - 1) * TILE_PX + (TILE_PX - 1)], 26);
+
+        // A zero exact corner must not enter log(0). At one quarter of the
+        // 16-pixel window, the silent (0,0) corner has weight 9/16, so the
+        // linear fallback yields 40 × 7/16 = 17.5. The dense cheap field is
+        // present at this receiver, so reconstruction is admitted.
+        let exact_with_silent_corner = compact_anchor_output(&axis, |py, px, period| {
+            if period == 0 && (py != 0 || px != 0) {
+                40.0
+            } else {
+                0.0
+            }
+        });
+        let quarter_stride = multifidelity_stride.pixels() / 4;
+        let target = quarter_stride * TILE_PX + quarter_stride;
+        let data = multifidelity_interpolation(
+            multifidelity_stride,
+            &cheap_gpu,
+            &exact_with_silent_corner,
+        );
+        let cells = reconstruct_multifidelity_cells(&data, &[]);
+        assert_eq!(cells[target], 19);
+
+        // The same exact-anchor interpolation is suppressed when launch A's
+        // dense cheap field says the interior receiver is silent. This is the
+        // contour-preserving gate used by the W1 candidate.
+        cheap_gpu[target * NUM_PERIODS] = 0.0;
+        let data = multifidelity_interpolation(
+            multifidelity_stride,
+            &cheap_gpu,
+            &exact_with_silent_corner,
+        );
+        let cells = reconstruct_multifidelity_cells(&data, &[]);
+        assert_eq!(cells[target], tile_painter::wire_hm3::NO_DATA);
+
+        // The supported stride4 lattice remains the presence authority even
+        // when launch A has a false-silent interior. The production selector
+        // currently routes sparse road through stock exact instead.
+        let sparse_stride = MultifidelityStride::Stride4;
+        let sparse_axis = multifidelity_anchor_axis(sparse_stride);
+        let sparse_exact = compact_anchor_output(&sparse_axis, |py, px, period| {
+            if period == 0 && (py != 0 || px != 0) {
+                40.0
+            } else {
+                0.0
+            }
+        });
+        let sparse_target = TILE_PX + 1;
+        cheap_gpu[sparse_target * NUM_PERIODS] = 0.0;
+        let data = multifidelity_interpolation(sparse_stride, &cheap_gpu, &sparse_exact);
+        let cells = reconstruct_multifidelity_cells(&data, &[]);
+        assert_eq!(cells[sparse_target], 19);
+
+        // Exact silence wins over a cheap false positive: no period gets an
+        // invented log correction and every receiver remains NO_DATA.
+        let silent = compact_anchor_output(&axis, |_, _, _| 0.0);
+        let data = multifidelity_interpolation(multifidelity_stride, &cheap_gpu, &silent);
+        let cells = reconstruct_multifidelity_cells(&data, &[]);
+        assert!(cells
+            .iter()
+            .all(|&cell| cell == tile_painter::wire_hm3::NO_DATA));
+    }
+}
+
+fn multifidelity_compact_plan_controls(plan: &MultifidelityCompactPlan) -> Vec<u64> {
+    let mut controls = multifidelity_compact_control(plan.indices.len());
+    controls.reserve(
+        plan.launches
+            .len()
+            .checked_mul(noise_gpu::MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS)
+            .expect("compact control length overflow"),
+    );
+    for launch in &plan.launches {
+        controls.extend([launch.record_offset as u64, launch.record_count as u64]);
+    }
+    controls
+}
+
+/// Serialize a packed plan using the unchanged compact control ABI. The eight
+/// descriptors per block are always emitted, including zero-count tail entries,
+/// because the device kernel has no separate control-length argument.
+fn multifidelity_compact_packed_plan_controls(plan: &MultifidelityCompactPackedPlan) -> Vec<u64> {
+    let mut controls = multifidelity_compact_control(plan.indices.len());
+    controls.reserve(
+        plan.launches
+            .len()
+            .checked_mul(
+                MULTIFIDELITY_COMPACT_PACKED_WARPS_PER_BLOCK
+                    * noise_gpu::MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS,
+            )
+            .expect("packed compact control length overflow"),
+    );
+    for block in &plan.launches {
+        for descriptor in block {
+            controls.extend([
+                descriptor.record_offset as u64,
+                descriptor.record_count as u64,
+            ]);
+        }
+    }
+    controls
+}
+
+fn multifidelity_compact_packed_launch_geometry(
+    plan: &MultifidelityCompactPackedPlan,
+) -> Result<(u32, u32, u32), String> {
+    if plan.launches.is_empty() {
+        return Err("packed compact plan must have one block descriptor".to_string());
+    }
+    let grid_x = u32::try_from(plan.launches.len())
+        .map_err(|_| "packed compact launch grid overflow".to_string())?;
+    Ok((
+        grid_x,
+        MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_BLOCK as u32,
+        0,
+    ))
+}
+
+/// Submit all compact records in one grid. Each CUDA block reads its
+/// offset/count descriptor from the flat control plan; the receiver/output
+/// allocations retain the explicit dense-index ABI, with no padding record that
+/// could be mistaken for an exact receiver by the host decoder.
+#[allow(clippy::too_many_arguments)]
+fn launch_multifidelity_compact_records(
+    function: &CudaFunction,
+    plan: &MultifidelityCompactPlan,
+    d_elev: &CudaSlice<f32>,
+    d_inner: &CudaSlice<f32>,
+    d_cover: &CudaSlice<u8>,
+    d_meta: &CudaSlice<f64>,
+    d_seg: &CudaSlice<f64>,
+    d_sp: &CudaSlice<f64>,
+    d_semis: &CudaSlice<f32>,
+    d_receivers: &CudaSlice<u64>,
+    d_controls: &CudaSlice<u64>,
+    d_barr: &CudaSlice<f64>,
+    d_obstacles: &CudaSlice<u64>,
+    d_out: &mut CudaSlice<f32>,
+) {
+    let block_count = plan.launches.len();
+    assert!(
+        block_count > 0,
+        "compact plan must have one block descriptor"
+    );
+    debug_assert!(plan.launches.iter().all(|launch| launch.record_count > 0
+        && launch.record_count <= MULTIFIDELITY_COMPACT_RECORDS_PER_BLOCK));
+    let grid_x = u32::try_from(block_count).expect("compact launch grid overflow");
+    let launch_cfg = LaunchConfig {
+        grid_dim: (grid_x, 1, 1),
+        block_dim: (MULTIFIDELITY_COMPACT_RECORDS_PER_BLOCK as u32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    unsafe {
+        function
+            .clone()
+            .launch(
+                launch_cfg,
+                noise_gpu::line_kernel_arguments!(
+                    d_elev,
+                    d_inner,
+                    d_cover,
+                    d_meta,
+                    d_seg,
+                    d_sp,
+                    d_semis,
+                    d_receivers,
+                    d_controls,
+                    d_barr,
+                    d_obstacles,
+                    d_out,
+                ),
+            )
+            .expect("multifidelity compact grid launch");
+    }
+}
+
+/// Submit the bounded warp-packed prototype. Its 256-thread launch is split
+/// into eight 32-lane subgroups; every subgroup consumes one descriptor and
+/// therefore performs source culling against only its own 32×32 bucket.
+#[allow(clippy::too_many_arguments)]
+fn launch_multifidelity_compact_records_packed(
+    function: &CudaFunction,
+    plan: &MultifidelityCompactPackedPlan,
+    d_elev: &CudaSlice<f32>,
+    d_inner: &CudaSlice<f32>,
+    d_cover: &CudaSlice<u8>,
+    d_meta: &CudaSlice<f64>,
+    d_seg: &CudaSlice<f64>,
+    d_sp: &CudaSlice<f64>,
+    d_semis: &CudaSlice<f32>,
+    d_receivers: &CudaSlice<u64>,
+    d_controls: &CudaSlice<u64>,
+    d_barr: &CudaSlice<f64>,
+    d_obstacles: &CudaSlice<u64>,
+    d_out: &mut CudaSlice<f32>,
+) {
+    let (grid_x, block_x, shared_mem_bytes) = multifidelity_compact_packed_launch_geometry(plan)
+        .expect("packed compact plan must have one block descriptor");
+    let launch_cfg = LaunchConfig {
+        grid_dim: (grid_x, 1, 1),
+        block_dim: (block_x, 1, 1),
+        shared_mem_bytes,
+    };
+    unsafe {
+        function
+            .clone()
+            .launch(
+                launch_cfg,
+                noise_gpu::line_kernel_arguments!(
+                    d_elev,
+                    d_inner,
+                    d_cover,
+                    d_meta,
+                    d_seg,
+                    d_sp,
+                    d_semis,
+                    d_receivers,
+                    d_controls,
+                    d_barr,
+                    d_obstacles,
+                    d_out,
+                ),
+            )
+            .expect("multifidelity packed compact grid launch");
+    }
 }

@@ -564,6 +564,56 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #define ABL_ARC_SPAN    (PROF_ABLATE & 32)
 #define ABL_ARC_CELLS   (PROF_ABLATE & 64)
 
+// DEV-ONLY W1 ceiling probe. This is deliberately a compile-time arm rather
+// than a runtime branch: the stock line kernel and every popup/W2 path remain
+// unchanged when the switch is absent. The cheap evaluator is only linked from
+// the multifidelity entry point; it can never replace line_binned_fused.
+#ifndef MULTIFIDELITY_CHEAP_GROUND_DB
+#define MULTIFIDELITY_CHEAP_GROUND_DB GHF_F
+#endif
+#ifndef MULTIFIDELITY_LINE
+#define MULTIFIDELITY_LINE 0
+#endif
+#ifndef MULTIFIDELITY_COMPACT_RECEIVER_RECORD_WORDS
+#define MULTIFIDELITY_COMPACT_RECEIVER_RECORD_WORDS 4
+#endif
+#ifndef MULTIFIDELITY_COMPACT_CONTROL_WORDS
+#define MULTIFIDELITY_COMPACT_CONTROL_WORDS 3
+#endif
+#ifndef MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS
+#define MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS 2
+#endif
+#ifndef MULTIFIDELITY_COMPACT_ABI_VERSION
+#define MULTIFIDELITY_COMPACT_ABI_VERSION 2
+#endif
+#ifndef MULTIFIDELITY_COMPACT_OUTPUT_STRIDE
+#define MULTIFIDELITY_COMPACT_OUTPUT_STRIDE 5
+#endif
+#ifndef MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT
+#define MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT 0
+#endif
+#ifndef MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE
+#define MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE 1
+#endif
+#ifndef MULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT
+#define MULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT 4
+#endif
+#if MULTIFIDELITY_COMPACT_RECEIVER_RECORD_WORDS != 4 || \
+    MULTIFIDELITY_COMPACT_CONTROL_WORDS != 3 || \
+    MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS != 2 || \
+    MULTIFIDELITY_COMPACT_OUTPUT_STRIDE != 5 || \
+    MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT != 0 || \
+    MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE != 1 || \
+    MULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT != 4
+#error "compact receiver/output ABI drift"
+#endif
+#ifndef MULTIFIDELITY_COMPACT_BYTE_STOP
+#define MULTIFIDELITY_COMPACT_BYTE_STOP 1
+#endif
+#if MULTIFIDELITY_LINE && V2_H0
+#error "MULTIFIDELITY_LINE is defined only for the stock line model"
+#endif
+
 // ---- DEV-ONLY candidate END-WINDOW (-DCAND_END_WINDOW_M=<metres>, 0 = exact,
 // the default). An INPUT PREFILTER on `obstacle_best_candidate`'s DDA: a cell
 // whose whole chainage interval lies inside the middle band [W, dist−W] of the
@@ -3640,6 +3690,63 @@ __device__ __forceinline__ bool seg_fan_at(
     return true;
 }
 
+#if MULTIFIDELITY_LINE
+// DEV-ONLY one-pass W1 ceiling probe. It keeps only source geometry, the
+// per-source reach cull, finite-line correction, cylindrical spreading,
+// atmosphere, emission energy, and one fixed hard-ground term. In particular,
+// it does not call ray_path_bands, obstacle screening, barrier screening, or
+// arc_screen_bands. The intentionally wrong output prices the arithmetic floor
+// of deleting the complete path/screening stack; it is never selected at
+// runtime and is compiled only with -DMULTIFIDELITY_LINE=1.
+__device__ __forceinline__ void line_source_multifidelity_cheap(
+    const float* elev, const float* inner,
+    int rows, int cols, double lat_min, double lon_min, double inv, const double* bb,
+    double rlat, double rlon, double ralt, double refl,
+    const double* seg, const double* sp, const float* em,
+    float& e0, float& e1, float& e2)
+{
+    double dend, dperp, cplat, cplon, frac;
+    p2s(rlat, rlon, seg[0], seg[1], seg[2], seg[3],
+        &dend, &dperp, &cplat, &cplon, &frac);
+    if (dend > sp[1]) return;
+
+    // Keep the endpoint slant geometry used by the exact line lane. A single
+    // local DEM lookup supplies source height; no path profile is built.
+    double salt = tile_elev(inner, elev, rows, cols, lat_min, lon_min, inv, bb,
+                            cplat, cplon) + sp[2];
+    double dz = salt - ralt;
+    float dslant = fmaxf((float)sqrt(dend * dend + dz * dz), 1.0f);
+    float fc = flc_div((float)sp[0], (float)dperp, (float)frac, (float)dend);
+    float base = (float)refl + fc
+        - 10.0f * log10f(2.0f * (float)PI_D * dslant);
+    float atm_km = dslant / 1000.0f;
+
+    // Fixed local hard ground: the default is the injected CNOSSOS hard-ground floor;
+    // the reviewed multifidelity ground override is the sole hybrid calibration
+    // arm, still standing in for all terrain, vegetation, obstacle and barrier terms.
+    // It is an attenuation in the same sign convention as ground[].
+    const float local_ground_db = (float)(MULTIFIDELITY_CHEAP_GROUND_DB);
+    float transfer[NB];
+    for (int band = 0; band < NB; band++) {
+        float pdb = (base - (float)ALPHA_ATM[band] * atm_km
+                     - local_ground_db + (float)A_W[band])
+            * (float)LN10 * 0.1f;
+        transfer[band] = (float)fexp((double)pdb);
+    }
+
+    for (int period = 0; period < 3; period++) {
+        double power = 0.0;
+        for (int band = 0; band < NB; band++)
+            power += (double)em[period * NB + band] * transfer[band];
+        if (!isfinite(power) || !(power > 0.0)) continue;
+        float power_f32 = (float)power;
+        if (period == 0) e0 += power_f32;
+        else if (period == 1) e1 += power_f32;
+        else e2 += power_f32;
+    }
+}
+#endif
+
 // Keep the source-pair evaluator in its own device frame. The adaptive fan
 // loop and its arc-screening callees are deliberately large; forcing them into
 // each launch kernel makes the driver's PTX JIT retain the complete combined
@@ -4107,6 +4214,485 @@ extern "C" __global__ void line(
     }
 #endif
 }
+
+#if MULTIFIDELITY_LINE
+// W1-only dense cheap launch. This entry point is intentionally separate from
+// line_binned_fused: stock/W2 keeps its original frame and resource profile.
+extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_multifidelity_cheap_w1(
+    const float*  __restrict__ elev,
+    const float*  __restrict__ inner,
+    const unsigned char* __restrict__ cover,
+    const double* __restrict__ meta,
+    const double* __restrict__ seg,
+    const double* __restrict__ sp,
+    const float*  __restrict__ semis,
+    const double* __restrict__ rxll,
+    const float*  __restrict__ rxar,
+    const double* __restrict__ barr,
+    const unsigned long long* __restrict__ obst,
+    float* __restrict__ out)
+{
+    int bid = blockIdx.x, lane = threadIdx.x;
+    if (bid >= BIN_TILES * BIN_TILES || lane >= BIN_W * BIN_W) return;
+    int rows = (int)meta[0], cols = (int)meta[1];
+    double lat_min = meta[2], lon_min = meta[3], inv = meta[4];
+    const double* bb = &meta[5];
+    int nsrc = (int)meta[12];
+    int by = bid / BIN_TILES, bx = bid % BIN_TILES;
+    int py0 = by * BIN_W, py1 = by * BIN_W + BIN_W - 1;
+    int px0 = bx * BIN_W, px1 = bx * BIN_W + BIN_W - 1;
+    int py = py0 + lane / BIN_W, pxi = px0 + lane % BIN_W;
+    int opix = py * TPX + pxi;
+    double rlat = rxll[py], rlon = rxll[TPX + pxi];
+    double ralt = rxar[opix * 2], refl = rxar[opix * 2 + 1];
+    int out_slots = (int)meta[13];
+    float e0 = 0.0f, e1 = 0.0f, e2 = 0.0f;
+    (void)cover; (void)barr; (void)obst;
+    float* fault = (out_slots > OUT_FAULT_SLOT) ? &out[OUT_FAULT_SLOT] : (float*)0;
+    double clat = 0.5 * (rxll[py0] + rxll[py1]);
+    double clon = 0.5 * (rxll[TPX + px0] + rxll[TPX + px1]);
+    double reach = block_reach_ub(0.5 * fabs(rxll[py1] - rxll[py0]) * M_LAT,
+                                  0.5 * fabs(rxll[TPX + px1] - rxll[TPX + px0]));
+    __shared__ unsigned char keep[BIN_W * BIN_W];
+    for (int base = 0; base < nsrc; base += BIN_W * BIN_W) {
+        int s = base + lane;
+        keep[lane] = 0;
+        if (s < nsrc) {
+            double de, dp, cpa, cpo, fr;
+            p2s(clat, clon, seg[s * SOURCE_SEGMENT_STRIDE],
+                seg[s * SOURCE_SEGMENT_STRIDE + 1],
+                seg[s * SOURCE_SEGMENT_STRIDE + 2],
+                seg[s * SOURCE_SEGMENT_STRIDE + 3],
+                &de, &dp, &cpa, &cpo, &fr);
+            keep[lane] = (de <= sp[s * 12 + 1] + reach) ? 1 : 0;
+        }
+        __syncthreads();
+        int chunk_n = min(BIN_W * BIN_W, nsrc - base);
+        for (int j = 0; j < chunk_n; ++j) {
+            if (!keep[j]) continue;
+            const double* source_seg = &seg[(base + j) * SOURCE_SEGMENT_STRIDE];
+            const double* source_sp = &sp[(base + j) * 12];
+            const float* source_em = &semis[(base + j) * 24];
+            line_source_multifidelity_cheap(
+                elev, inner, rows, cols, lat_min, lon_min, inv, bb,
+                rlat, rlon, ralt, refl, source_seg, source_sp, source_em,
+                e0, e1, e2);
+        }
+        __syncthreads();
+    }
+    __syncthreads();
+    out[opix * 3 + 0] = e0;
+    out[opix * 3 + 1] = e1;
+    out[opix * 3 + 2] = e2;
+    return;
+}
+
+// W1-only compact exact launch. The receiver ABI is intentionally independent
+// from the dense cheap launch: each record carries receiver lat/lon, altitude/
+// reflection, and its dense output index. The kernel never indexes rxll/rxar
+// with a compact index and never aliases a sentinel into meta or out.
+extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_multifidelity_compact_w1(
+    const float*  __restrict__ elev,
+    const float*  __restrict__ inner,
+    const unsigned char* __restrict__ cover,
+    const double*  __restrict__ meta,
+    const double*  __restrict__ seg,
+    const double*  __restrict__ sp,
+    const float*  __restrict__ semis,
+    const unsigned long long* __restrict__ compact_receivers,
+    const unsigned long long* __restrict__ compact_control,
+    const double* __restrict__ barr,
+    const unsigned long long* __restrict__ obst,
+    float* __restrict__ compact_out)
+{
+    if (compact_control == 0 || compact_receivers == 0 ||
+        compact_out == 0)
+        return;
+    const unsigned long long record_count = compact_control[0];
+    if (record_count == 0ull ||
+        record_count > (unsigned long long)TPX * (unsigned long long)TPX ||
+        compact_control[1] != (unsigned long long)MULTIFIDELITY_COMPACT_ABI_VERSION ||
+        compact_control[2] != (unsigned long long)MULTIFIDELITY_COMPACT_OUTPUT_STRIDE)
+        return;
+    const unsigned long long plan_base =
+        (unsigned long long)MULTIFIDELITY_COMPACT_CONTROL_WORDS +
+        (unsigned long long)blockIdx.x *
+            (unsigned long long)MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS;
+    const unsigned long long record_offset = compact_control[plan_base];
+    const unsigned long long block_record_count = compact_control[plan_base + 1ull];
+    if (block_record_count == 0ull ||
+        block_record_count > (unsigned long long)BIN_W * (unsigned long long)BIN_W ||
+        record_offset > record_count ||
+        block_record_count > record_count - record_offset)
+        return;
+
+    const int lane = (int)threadIdx.x;
+    const unsigned long long record = record_offset + (unsigned long long)lane;
+    const bool listed = (unsigned long long)lane < block_record_count;
+    unsigned int dense_index = 0;
+    bool index_valid = false;
+    double rlat = 0.0, rlon = 0.0;
+    double ralt = 0.0, refl = 0.0;
+    if (listed) {
+        const unsigned long long* words =
+            compact_receivers + record * MULTIFIDELITY_COMPACT_RECEIVER_RECORD_WORDS;
+        rlat = __longlong_as_double((long long)words[0]);
+        rlon = __longlong_as_double((long long)words[1]);
+        const unsigned long long alt_refl = words[2];
+        ralt = (double)__uint_as_float((unsigned int)(alt_refl & 0xffffffffull));
+        refl = (double)__uint_as_float((unsigned int)(alt_refl >> 32));
+        const unsigned long long index_word = words[3];
+        index_valid = index_word < (unsigned long long)TPX * (unsigned long long)TPX;
+        if (index_valid)
+            dense_index = (unsigned int)index_word;
+    }
+    const bool active = listed && index_valid && isfinite(rlat) && isfinite(rlon)
+        && isfinite(ralt) && isfinite(refl);
+
+    // The host bucket plan keeps every block inside one aligned dense-pixel
+    // macrotile. Build one conservative envelope from exactly this block's
+    // records; inactive tail lanes still participate in every barrier below.
+    __shared__ double receiver_lat[BIN_W * BIN_W];
+    __shared__ double receiver_lon[BIN_W * BIN_W];
+    __shared__ unsigned char receiver_valid[BIN_W * BIN_W];
+    receiver_lat[lane] = active ? rlat : 0.0;
+    receiver_lon[lane] = active ? rlon : 0.0;
+    receiver_valid[lane] = active ? 1 : 0;
+    __shared__ double block_lat_min;
+    __shared__ double block_lat_max;
+    __shared__ double block_lon_min;
+    __shared__ double block_lon_max;
+    __shared__ unsigned char block_has_receiver;
+    __syncthreads();
+    if (lane == 0) {
+        double lat_min = 1e300, lat_max = -1e300;
+        double lon_min = 1e300, lon_max = -1e300;
+        unsigned char any = 0;
+        for (int i = 0; i < BIN_W * BIN_W; ++i) {
+            if (!receiver_valid[i]) continue;
+            any = 1;
+            lat_min = fmin(lat_min, receiver_lat[i]);
+            lat_max = fmax(lat_max, receiver_lat[i]);
+            lon_min = fmin(lon_min, receiver_lon[i]);
+            lon_max = fmax(lon_max, receiver_lon[i]);
+        }
+        block_lat_min = any ? lat_min : 0.0;
+        block_lat_max = any ? lat_max : 0.0;
+        block_lon_min = any ? lon_min : 0.0;
+        block_lon_max = any ? lon_max : 0.0;
+        block_has_receiver = any;
+    }
+    __syncthreads();
+
+    const int rows = (int)meta[0], cols = (int)meta[1];
+    const double lat_min = meta[2], lon_min = meta[3], inv = meta[4];
+    const double* bb = &meta[5];
+    const int nsrc = (int)meta[12];
+    const double block_lat = 0.5 * (block_lat_min + block_lat_max);
+    const double block_lon = 0.5 * (block_lon_min + block_lon_max);
+    const double block_reach = block_reach_ub(
+        0.5 * fabs(block_lat_max - block_lat_min) * M_LAT,
+        0.5 * fabs(block_lon_max - block_lon_min));
+
+    double kept = 0.0, resid = 0.0;
+    int npair = 0;
+    double margin = 0.0;
+    bool done = false;
+    const bool stop_on = MULTIFIDELITY_COMPACT_BYTE_STOP && meta[9] != 0.0;
+    double tprof[MAXT], ed[MAXT], comp[MAXT];
+    unsigned char bld[MAXT], forr[MAXT], imdp[MAXT];
+    float e0 = 0.0f, e1 = 0.0f, e2 = 0.0f;
+    float* arcstat = (float*)0;
+    unsigned int arc_drops = 0;
+#if !V2_H0
+    unsigned int hc_key[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
+    double hc_lo[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
+    double hc_hi[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
+    for (int i = 0; i < (ARC_HULL_CACHE ? ARC_HULL_CACHE : 1); ++i)
+        hc_key[i] = 0xFFFFFFFFu;
+#endif
+
+    __shared__ unsigned char keep[BIN_W * BIN_W];
+    // TWO PASSES over the same chunked source scan. Pass 0 prices every pair into
+    // `resid`; pass 1 replays source order until the byte is decided. The explicit
+    // switch keeps a measured exact-without-price-pass build available for A/B.
+#if MULTIFIDELITY_COMPACT_BYTE_STOP
+    for (int pass = 0; pass < 2; ++pass) {
+#else
+    for (int pass = 1; pass < 2; ++pass) {
+#endif
+        const bool ub_only = pass == 0;
+        if (!ub_only) margin = bs_margin(npair);
+        for (int base = 0; base < nsrc; base += BIN_W * BIN_W) {
+            const int source_index = base + lane;
+            keep[lane] = 0;
+            if (source_index < nsrc && block_has_receiver) {
+                double de, dp, cpa, cpo, fr;
+                p2s(block_lat, block_lon,
+                    seg[source_index * SOURCE_SEGMENT_STRIDE],
+                    seg[source_index * SOURCE_SEGMENT_STRIDE + 1],
+                    seg[source_index * SOURCE_SEGMENT_STRIDE + 2],
+                    seg[source_index * SOURCE_SEGMENT_STRIDE + 3],
+                    &de, &dp, &cpa, &cpo, &fr);
+                keep[lane] = (de <= sp[source_index * 12 + 1] + block_reach) ? 1 : 0;
+            }
+            __syncthreads();
+            const int chunk_n = min(BIN_W * BIN_W, nsrc - base);
+            if (active) {
+                for (int j = 0; j < chunk_n; ++j) {
+                    if (!keep[j]) continue;
+                    if (!ub_only) {
+                        if (stop_on && !done && bs_decided(kept, kept + resid, margin))
+                            done = true;
+                        if (done) continue;
+                    }
+                    line_source(
+                        elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
+                        rlat, rlon, ralt, refl, ub_only,
+                        &seg[(base + j) * SOURCE_SEGMENT_STRIDE],
+                        &sp[(base + j) * 12], &semis[(base + j) * 24],
+                        barr, (int)meta[11], obst, tprof, ed, comp, bld, forr, imdp,
+                        e0, e1, e2, kept, resid, npair, arcstat,
+                        hc_key, hc_lo, hc_hi, &arc_drops);
+                }
+            }
+            __syncthreads();
+        }
+
+    }
+    if (active) {
+        const unsigned long long output =
+            (unsigned long long)record * (unsigned long long)MULTIFIDELITY_COMPACT_OUTPUT_STRIDE;
+        compact_out[output + MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT] =
+            (float)dense_index;
+        compact_out[output + MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE + 0] = e0;
+        compact_out[output + MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE + 1] = e1;
+        compact_out[output + MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE + 2] = e2;
+        compact_out[output + MULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT] = (float)arc_drops;
+    } else if (listed) {
+        // Preserve a deterministic host-side rejection marker for a malformed
+        // compact index; never silently alias it to dense pixel zero.
+        const unsigned long long output =
+            (unsigned long long)record * (unsigned long long)MULTIFIDELITY_COMPACT_OUTPUT_STRIDE;
+        compact_out[output + MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT] = -1.0f;
+    }
+}
+
+// Bounded prototype: keep the 256-thread launch, but split it into eight
+// independent 32-lane receiver groups. The host supplies one descriptor per
+// aligned 32×32 receiver bucket (or a <=32-record chunk of that bucket), so a
+// warp never imports a cull envelope from a neighbouring bucket. Shared state
+// is explicitly warp-strided and barriers are warp-local; this is not the
+// low-occupancy variant that serialised one bucket's source cull in lane zero.
+#define MULTIFIDELITY_COMPACT_PACKED_WARPS 8
+#define MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP 32
+#if BIN_W * BIN_W != MULTIFIDELITY_COMPACT_PACKED_WARPS * MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP
+#error "packed compact prototype must fill one 256-thread block"
+#endif
+extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_multifidelity_compact_packed_w1(
+    const float*  __restrict__ elev,
+    const float*  __restrict__ inner,
+    const unsigned char* __restrict__ cover,
+    const double*  __restrict__ meta,
+    const double*  __restrict__ seg,
+    const double*  __restrict__ sp,
+    const float*  __restrict__ semis,
+    const unsigned long long* __restrict__ compact_receivers,
+    const unsigned long long* __restrict__ compact_control,
+    const double*  __restrict__ barr,
+    const unsigned long long* __restrict__ obst,
+    float* __restrict__ compact_out)
+{
+    // All 256 lanes stay resident through every warp-local barrier. A null
+    // pointer is a process-level launch error and is the only early return.
+    if (compact_control == 0 || compact_receivers == 0 || compact_out == 0)
+        return;
+
+    const unsigned long long record_count = compact_control[0];
+    const bool global_control_valid =
+        record_count != 0ull &&
+        record_count <= (unsigned long long)TPX * (unsigned long long)TPX &&
+        compact_control[1] == (unsigned long long)MULTIFIDELITY_COMPACT_ABI_VERSION &&
+        compact_control[2] == (unsigned long long)MULTIFIDELITY_COMPACT_OUTPUT_STRIDE;
+
+    const int thread = (int)threadIdx.x;
+    const int lane = thread & 31;
+    const int warp_id = thread >> 5;
+    const int warp_base = warp_id * MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP;
+    const unsigned long long descriptor =
+        (unsigned long long)blockIdx.x * (unsigned long long)MULTIFIDELITY_COMPACT_PACKED_WARPS +
+        (unsigned long long)warp_id;
+    const unsigned long long plan_base =
+        (unsigned long long)MULTIFIDELITY_COMPACT_CONTROL_WORDS +
+        descriptor * (unsigned long long)MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS;
+
+    // Every launched block has eight serialized descriptors. A zero-count
+    // descriptor is the host's explicit inactive tail, so malformed tails do
+    // not make active warps leave their warp-local barrier schedule.
+    unsigned long long record_offset = 0ull;
+    unsigned long long warp_record_count = 0ull;
+    if (global_control_valid) {
+        record_offset = compact_control[plan_base];
+        warp_record_count = compact_control[plan_base + 1ull];
+    }
+    const bool descriptor_valid =
+        global_control_valid && warp_record_count != 0ull &&
+        warp_record_count <= (unsigned long long)MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP &&
+        record_offset <= record_count &&
+        warp_record_count <= record_count - record_offset;
+    const unsigned long long record = record_offset + (unsigned long long)lane;
+    const bool listed = descriptor_valid &&
+        (unsigned long long)lane < warp_record_count;
+
+    unsigned int dense_index = 0;
+    bool index_valid = false;
+    double rlat = 0.0, rlon = 0.0;
+    double ralt = 0.0, refl = 0.0;
+    if (listed) {
+        const unsigned long long* words =
+            compact_receivers + record * MULTIFIDELITY_COMPACT_RECEIVER_RECORD_WORDS;
+        rlat = __longlong_as_double((long long)words[0]);
+        rlon = __longlong_as_double((long long)words[1]);
+        const unsigned long long alt_refl = words[2];
+        ralt = (double)__uint_as_float((unsigned int)(alt_refl & 0xffffffffull));
+        refl = (double)__uint_as_float((unsigned int)(alt_refl >> 32));
+        const unsigned long long index_word = words[3];
+        index_valid = index_word < (unsigned long long)TPX * (unsigned long long)TPX;
+        if (index_valid)
+            dense_index = (unsigned int)index_word;
+    }
+    const bool active = listed && index_valid && isfinite(rlat) && isfinite(rlon)
+        && isfinite(ralt) && isfinite(refl);
+
+    // One receiver-envelope and one source-cull byte per warp. The arrays are
+    // deliberately not block-shared scalars: adjacent buckets may be in the
+    // same block and must never widen one another's reach cull.
+    __shared__ double receiver_lat[MULTIFIDELITY_COMPACT_PACKED_WARPS * MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP];
+    __shared__ double receiver_lon[MULTIFIDELITY_COMPACT_PACKED_WARPS * MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP];
+    __shared__ unsigned char receiver_valid[MULTIFIDELITY_COMPACT_PACKED_WARPS * MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP];
+    __shared__ double block_lat_min[MULTIFIDELITY_COMPACT_PACKED_WARPS];
+    __shared__ double block_lat_max[MULTIFIDELITY_COMPACT_PACKED_WARPS];
+    __shared__ double block_lon_min[MULTIFIDELITY_COMPACT_PACKED_WARPS];
+    __shared__ double block_lon_max[MULTIFIDELITY_COMPACT_PACKED_WARPS];
+    __shared__ unsigned char block_has_receiver[MULTIFIDELITY_COMPACT_PACKED_WARPS];
+    __shared__ unsigned char keep[MULTIFIDELITY_COMPACT_PACKED_WARPS * MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP];
+
+    receiver_lat[warp_base + lane] = active ? rlat : 0.0;
+    receiver_lon[warp_base + lane] = active ? rlon : 0.0;
+    receiver_valid[warp_base + lane] = active ? 1 : 0;
+    __syncwarp();
+    if (lane == 0) {
+        double lat_min = 1e300, lat_max = -1e300;
+        double lon_min = 1e300, lon_max = -1e300;
+        unsigned char any = 0;
+        for (int i = 0; i < MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP; ++i) {
+            const int index = warp_base + i;
+            if (!receiver_valid[index]) continue;
+            any = 1;
+            lat_min = fmin(lat_min, receiver_lat[index]);
+            lat_max = fmax(lat_max, receiver_lat[index]);
+            lon_min = fmin(lon_min, receiver_lon[index]);
+            lon_max = fmax(lon_max, receiver_lon[index]);
+        }
+        block_lat_min[warp_id] = any ? lat_min : 0.0;
+        block_lat_max[warp_id] = any ? lat_max : 0.0;
+        block_lon_min[warp_id] = any ? lon_min : 0.0;
+        block_lon_max[warp_id] = any ? lon_max : 0.0;
+        block_has_receiver[warp_id] = any;
+    }
+    __syncwarp();
+
+    const int rows = (int)meta[0], cols = (int)meta[1];
+    const double lat_min = meta[2], lon_min = meta[3], inv = meta[4];
+    const double* bb = &meta[5];
+    const int nsrc = (int)meta[12];
+    const double block_lat = 0.5 * (block_lat_min[warp_id] + block_lat_max[warp_id]);
+    const double block_lon = 0.5 * (block_lon_min[warp_id] + block_lon_max[warp_id]);
+    const double block_reach = block_reach_ub(
+        0.5 * fabs(block_lat_max[warp_id] - block_lat_min[warp_id]) * M_LAT,
+        0.5 * fabs(block_lon_max[warp_id] - block_lon_min[warp_id]));
+
+    double kept = 0.0, resid = 0.0;
+    int npair = 0;
+    double margin = 0.0;
+    bool done = false;
+    double tprof[MAXT], ed[MAXT], comp[MAXT];
+    unsigned char bld[MAXT], forr[MAXT], imdp[MAXT];
+    float e0 = 0.0f, e1 = 0.0f, e2 = 0.0f;
+    unsigned int arc_drops = 0;
+    unsigned int hc_key[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
+    double hc_lo[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
+    double hc_hi[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
+    for (int i = 0; i < (ARC_HULL_CACHE ? ARC_HULL_CACHE : 1); ++i)
+        hc_key[i] = 0xFFFFFFFFu;
+
+    const bool stop_on = MULTIFIDELITY_COMPACT_BYTE_STOP && meta[9] != 0.0;
+    // As in the existing compact kernel, pass zero prices the conservative
+    // bound and pass one replays exact source order. Only the source cull is
+    // cooperative; each active lane keeps its own exact accumulator/scratch.
+#if MULTIFIDELITY_COMPACT_BYTE_STOP
+    for (int pass = 0; pass < 2; ++pass) {
+#else
+    for (int pass = 1; pass < 2; ++pass) {
+#endif
+        const bool ub_only = pass == 0;
+        if (!ub_only) margin = bs_margin(npair);
+        for (int base = 0; base < nsrc; base += MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP) {
+            const int source_index = base + lane;
+            keep[warp_base + lane] = 0;
+            if (source_index < nsrc && block_has_receiver[warp_id]) {
+                double de, dp, cpa, cpo, fr;
+                p2s(block_lat, block_lon,
+                    seg[source_index * SOURCE_SEGMENT_STRIDE],
+                    seg[source_index * SOURCE_SEGMENT_STRIDE + 1],
+                    seg[source_index * SOURCE_SEGMENT_STRIDE + 2],
+                    seg[source_index * SOURCE_SEGMENT_STRIDE + 3],
+                    &de, &dp, &cpa, &cpo, &fr);
+                keep[warp_base + lane] =
+                    (de <= sp[source_index * 12 + 1] + block_reach) ? 1 : 0;
+            }
+            __syncwarp();
+            const int chunk_n = min(MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP,
+                                    nsrc - base);
+            if (active) {
+                for (int j = 0; j < chunk_n; ++j) {
+                    if (!keep[warp_base + j]) continue;
+                    if (!ub_only) {
+                        if (stop_on && !done && bs_decided(kept, kept + resid, margin))
+                            done = true;
+                        if (done) continue;
+                    }
+                    line_source(
+                        elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
+                        rlat, rlon, ralt, refl, ub_only,
+                        &seg[(base + j) * SOURCE_SEGMENT_STRIDE],
+                        &sp[(base + j) * 12], &semis[(base + j) * 24],
+                        barr, (int)meta[11], obst, tprof, ed, comp, bld, forr, imdp,
+                        e0, e1, e2, kept, resid, npair, (float*)0,
+                        hc_key, hc_lo, hc_hi, &arc_drops);
+                }
+            }
+            __syncwarp();
+        }
+    }
+
+    if (active) {
+        const unsigned long long output =
+            (unsigned long long)record * (unsigned long long)MULTIFIDELITY_COMPACT_OUTPUT_STRIDE;
+        compact_out[output + MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT] = (float)dense_index;
+        compact_out[output + MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE + 0] = e0;
+        compact_out[output + MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE + 1] = e1;
+        compact_out[output + MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE + 2] = e2;
+        compact_out[output + MULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT] = (float)arc_drops;
+    } else if (listed) {
+        const unsigned long long output =
+            (unsigned long long)record * (unsigned long long)MULTIFIDELITY_COMPACT_OUTPUT_STRIDE;
+        compact_out[output + MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT] = -1.0f;
+    }
+}
+#undef MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP
+#undef MULTIFIDELITY_COMPACT_PACKED_WARPS
+#endif
 
 // Binned scatter — bins ON the GPU (deletes the CPU build_pixel_bins prep, the
 // gpu-surface bottleneck). Same 16×16-block / 256-thread mapping as line_binned, but

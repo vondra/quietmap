@@ -10,7 +10,8 @@
 //! Scoring lives in [`tile_painter::accuracy_contract`]; this binary is the driver.
 //!
 //! Aggregate scoring accepts any number of pairs, but emits a release verdict only at
-//! the fixed 250/980-row Wave-1/Wave-2 benchmark sizes. Amplitude and presence use
+//! the fixed 250/980-row Wave-1/Wave-2 benchmark sizes, or at 125 rows for the
+//! explicitly named Wave-1 `--release-layer` scope. Amplitude and presence use
 //! reference-painted cells; bias uses the numerically comparable painted subset.
 //! Per-row rates are diagnostics:
 //! `compare_hm3 --aggregate <ref> <cand> [<ref> <cand> ...] --wave 1|2`.
@@ -23,12 +24,20 @@ use tile_painter::accuracy_contract::{
     MAX_AGGREGATE_SIGNED_MEAN_DB, ROW_ANTI_DILUTION_MULTIPLIER, ROW_EYEBALL_PRESENCE_FRACTION,
     ROW_EYEBALL_SIGNED_MEAN_DB,
 };
+use tile_painter::tile_store::{expected_source_id, TOTAL_INPUT_LAYERS};
 use tile_painter::wire_hm3;
+
+// Sealed exact W1 reference `90a7da1d...` contains 875 canonical HM3 keys:
+// one 125-key slice for each of the seven input layers. The older 250-row W1
+// aggregate is the road+rail pair of those same per-layer slices.
+const WAVE_ONE_REFERENCE_KEYS: usize = 875;
+const PER_LAYER_WAVE_ONE_ROWS: usize = WAVE_ONE_REFERENCE_KEYS / TOTAL_INPUT_LAYERS.len();
+const _: () = assert!(WAVE_ONE_REFERENCE_KEYS.is_multiple_of(TOTAL_INPUT_LAYERS.len()));
 
 const USAGE: &str = "usage: compare_hm3 <reference.bin> <candidate.bin> \
 [--wave 1|2] [--scoring absolute|marginal]\n       compare_hm3 --aggregate \
 <reference.bin> <candidate.bin> [<reference.bin> <candidate.bin> ...] \
---wave 1|2 [--scoring absolute|marginal]";
+--wave 1|2 [--scoring absolute|marginal] [--release-layer <layer>]";
 
 struct PairPaths {
     reference: String,
@@ -40,14 +49,20 @@ struct Args {
     aggregate: bool,
     wave: Option<Wave>,
     scoring: Scoring,
+    release_layer: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    parse_args_from(&argv)
+}
+
+fn parse_args_from(argv: &[String]) -> Result<Args, String> {
     let mut positional: Vec<String> = Vec::new();
     let mut aggregate = false;
     let mut wave = None;
     let mut scoring = Scoring::Absolute;
+    let mut release_layer = None;
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
@@ -64,6 +79,15 @@ fn parse_args() -> Result<Args, String> {
             "--aggregate" => {
                 aggregate = true;
                 i += 1;
+            }
+            "--release-layer" => {
+                let layer = argv
+                    .get(i + 1)
+                    .ok_or("--release-layer needs a canonical layer")?;
+                if release_layer.replace(layer.clone()).is_some() {
+                    return Err("--release-layer may be specified only once".to_string());
+                }
+                i += 2;
             }
             other if other.starts_with('-') => {
                 return Err(format!("unknown option {other}\n{USAGE}"));
@@ -83,6 +107,25 @@ fn parse_args() -> Result<Args, String> {
     if aggregate && wave.is_none() {
         return Err(format!("--aggregate requires --wave\n{USAGE}"));
     }
+    if let Some(layer) = release_layer.as_deref() {
+        if !aggregate {
+            return Err(format!("--release-layer requires --aggregate\n{USAGE}"));
+        }
+        if wave != Some(Wave::One) {
+            return Err(format!("--release-layer requires --wave 1\n{USAGE}"));
+        }
+        if scoring != Scoring::Absolute {
+            return Err(format!(
+                "--release-layer requires --scoring absolute\n{USAGE}"
+            ));
+        }
+        if !TOTAL_INPUT_LAYERS.contains(&layer) {
+            return Err(format!(
+                "bad --release-layer {layer}; expected one of {}\n{USAGE}",
+                TOTAL_INPUT_LAYERS.join(", ")
+            ));
+        }
+    }
     let pairs = positional
         .chunks_exact(2)
         .map(|pair| PairPaths {
@@ -95,6 +138,7 @@ fn parse_args() -> Result<Args, String> {
         aggregate,
         wave,
         scoring,
+        release_layer,
     })
 }
 
@@ -255,10 +299,20 @@ fn print_aggregate_score(
     paths: &[PairPaths],
     wave: Wave,
     scoring: Scoring,
+    release_layer: Option<&str>,
 ) -> Option<Verdict> {
     let aggregate = AggregateScore::new(scores);
-    let verdict = aggregate.verdict(wave);
+    let expected_rows = release_layer
+        .map(|_| PER_LAYER_WAVE_ONE_ROWS)
+        .unwrap_or_else(|| wave.benchmark_rows());
+    let verdict = match release_layer {
+        Some(_) => aggregate.verdict_for_expected_rows(wave, expected_rows),
+        None => aggregate.verdict(wave),
+    };
     let release_eligible = verdict.is_some();
+    let scope_fields = release_layer
+        .map(|layer| format!("layer={layer} scope=release-layer expected_rows={expected_rows} "))
+        .unwrap_or_default();
     let decision_mark = |ok| {
         if release_eligible {
             hard_mark(ok)
@@ -273,12 +327,13 @@ fn print_aggregate_score(
     let painted = aggregate.painted_cells();
 
     println!(
-        "contract aggregate{} wave={} scoring={} rows={} painted_cells={}",
+        "contract aggregate{} {}wave={} scoring={} rows={} painted_cells={}",
         if release_eligible {
             ""
         } else {
             " diagnostic_only"
         },
+        scope_fields,
         wave.label(),
         scoring.label(),
         scores.len(),
@@ -426,7 +481,7 @@ fn print_aggregate_score(
         format_rows(&eyeball_rows),
     );
     let summary = format!(
-        "wave={} scoring={} aggregate_rows={} painted_cells={} aggregate_bias={:+.4} \
+        "{scope_fields}wave={} scoring={} aggregate_rows={} painted_cells={} aggregate_bias={:+.4} \
          paint_edge_crossings={} rung_counts={} extreme_over_12db={} flips={} \
          presence_gate_cells={} \
          aggregate_presence_allowed={} \
@@ -454,27 +509,43 @@ fn print_aggregate_score(
     } else {
         println!(
             "diagnostic_only {summary} expected_benchmark_rows={}",
-            wave.benchmark_rows()
+            expected_rows
         );
         None
     }
 }
 
-fn read_score(pair: &PairPaths) -> Result<Score, String> {
-    let reference = wire_hm3::read_tile(Path::new(&pair.reference))
+fn read_score(pair: &PairPaths, release_layer: Option<&str>) -> Result<Score, String> {
+    let reference = wire_hm3::read_tile_decoded(Path::new(&pair.reference))
         .map_err(|error| format!("reading {}: {error}", pair.reference))?;
-    let candidate = wire_hm3::read_tile(Path::new(&pair.candidate))
+    let candidate = wire_hm3::read_tile_decoded(Path::new(&pair.candidate))
         .map_err(|error| format!("reading {}: {error}", pair.candidate))?;
-    if reference.len() != candidate.len() {
+    if let Some(layer) = release_layer {
+        let expected = expected_source_id(layer).ok_or_else(|| {
+            format!("release layer {layer} has no canonical HM3 source_id mapping")
+        })?;
+        for (side, path, actual) in [
+            ("reference", &pair.reference, reference.source_id),
+            ("candidate", &pair.candidate, candidate.source_id),
+        ] {
+            if actual != expected {
+                return Err(format!(
+                    "HM3 provenance mismatch for release layer {layer}: {side} {path} has \
+                     source_id {actual}, expected {expected}"
+                ));
+            }
+        }
+    }
+    if reference.cells.len() != candidate.cells.len() {
         return Err(format!(
             "tile cell counts differ for {} and {}: {} vs {}",
             pair.reference,
             pair.candidate,
-            reference.len(),
-            candidate.len(),
+            reference.cells.len(),
+            candidate.cells.len(),
         ));
     }
-    Ok(score(&reference, &candidate))
+    Ok(score(&reference.cells, &candidate.cells))
 }
 
 fn main() -> ExitCode {
@@ -487,7 +558,7 @@ fn main() -> ExitCode {
     };
     let mut scores = Vec::with_capacity(args.pairs.len());
     for pair in &args.pairs {
-        match read_score(pair) {
+        match read_score(pair, args.release_layer.as_deref()) {
             Ok(scored) => scores.push(scored),
             Err(error) => {
                 eprintln!("{error}");
@@ -502,6 +573,7 @@ fn main() -> ExitCode {
             &args.pairs,
             args.wave.expect("aggregate requires wave"),
             args.scoring,
+            args.release_layer.as_deref(),
         );
         return match verdict {
             Some(Verdict::Fail) => ExitCode::FAILURE,
@@ -514,4 +586,67 @@ fn main() -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tile_painter::wire_hm3::{
+        SOURCE_ID_AIRCRAFT, SOURCE_ID_BUILDING, SOURCE_ID_INDUSTRIAL, SOURCE_ID_RAIL,
+        SOURCE_ID_ROAD,
+    };
+
+    fn release_args(layer: &str) -> Vec<String> {
+        [
+            "--aggregate",
+            "reference.bin",
+            "candidate.bin",
+            "--wave",
+            "1",
+            "--release-layer",
+            layer,
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    }
+
+    #[test]
+    fn release_layer_parser_accepts_exact_canonical_mapping() {
+        let expected = [
+            ("road", SOURCE_ID_ROAD),
+            ("rail", SOURCE_ID_RAIL),
+            ("industrial", SOURCE_ID_INDUSTRIAL),
+            ("building", SOURCE_ID_BUILDING),
+            ("aircraft-airborne", SOURCE_ID_AIRCRAFT),
+            ("aircraft-cruise", SOURCE_ID_AIRCRAFT),
+            ("aircraft-ground", SOURCE_ID_AIRCRAFT),
+        ];
+        assert_eq!(TOTAL_INPUT_LAYERS, expected.map(|(layer, _)| layer));
+        for (layer, source_id) in expected {
+            let parsed = parse_args_from(&release_args(layer)).expect("canonical layer parses");
+            assert_eq!(parsed.release_layer.as_deref(), Some(layer));
+            assert_eq!(expected_source_id(layer), Some(source_id));
+        }
+    }
+
+    #[test]
+    fn release_layer_parser_rejects_wrong_scope_and_names() {
+        let mut nonaggregate = release_args("road");
+        nonaggregate[0] = "reference.bin".to_string();
+        nonaggregate.remove(1);
+        assert!(parse_args_from(&nonaggregate).is_err());
+
+        let mut wave_two = release_args("road");
+        wave_two[4] = "2".to_string();
+        assert!(parse_args_from(&wave_two).is_err());
+
+        let mut marginal = release_args("road");
+        marginal.extend(["--scoring".to_string(), "marginal".to_string()]);
+        assert!(parse_args_from(&marginal).is_err());
+
+        for layer in ["total", "unknown"] {
+            assert!(parse_args_from(&release_args(layer)).is_err());
+        }
+    }
 }

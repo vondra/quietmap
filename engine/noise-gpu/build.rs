@@ -1,10 +1,10 @@
-//! Build script for `noise-gpu` — compiles CUDA kernels to PTX (only under the
-//! `gpu` feature) so a CUDA-less host still builds the CPU-side lib cleanly.
-// Compile every kernels/*.cu to its own PTX (kernels/foo.cu -> $OUT_DIR/foo.ptx)
-// at build time via nvcc. This is the production path (vs runtime nvrtc): the PTX
-// is embedded in the binary and JIT-finalised by the driver at load, so one build
-// runs on any SM >= the arch. nvcc is isolated from Cargo's rustflags, so
-// target-cpu=native parity is untouched. NOISE_GPU_ARCH overrides sm_89 (4060).
+//! Build script for `noise-gpu` — compiles CUDA kernels to PTX plus the surface
+//! production cubin (only under `gpu`) so CUDA-less hosts still build cleanly.
+// Compile every kernels/*.cu to PTX for validators and scatter.cu to cubin for
+// zero-JIT surface workers. The cubin targets exactly NOISE_GPU_ARCH; the
+// benchmark/deploy path already rebuilds on each GPU role.
+// nvcc is isolated from Cargo's rustflags, so target-cpu=native parity is
+// untouched. NOISE_GPU_ARCH overrides sm_89 (4060).
 //
 // Only the `gpu` feature (the gpu-surface/e2-full bins) needs CUDA. Without it the
 // crate is the CPU-side lib alone, so skip nvcc entirely — a host with no CUDA
@@ -26,6 +26,7 @@ const H0_SELECTION_RECORD_PATH: &str = "../noise-compute/src/h0_production_selec
 fn main() {
     println!("cargo:rerun-if-env-changed=NOISE_GPU_ARCH");
     println!("cargo:rerun-if-env-changed=NOISE_GPU_DEFINES");
+    println!("cargo:rerun-if-env-changed=NOISE_GPU_SKIP_NVCC");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_V2_H0");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_V2_H0_DIAGNOSTIC");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_V2_H0_COUNTERS");
@@ -35,6 +36,30 @@ fn main() {
     let extra_defines =
         parse_experimental_defines(&env::var("NOISE_GPU_DEFINES").unwrap_or_default())
             .unwrap_or_else(|error| panic!("invalid NOISE_GPU_DEFINES: {error}"));
+    // The host runner must allocate and reconstruct the candidate output only
+    // when the PTX carries the same compile-time arm. Keep this derived marker
+    // in Cargo's generated environment instead of making a runtime env opt-in
+    // that could accidentally pair stock PTX with candidate host code.
+    // The W1 candidate cheap evaluator is calibrated at the reviewed
+    // +5.0 dB ground override with byte stopping disabled. Make the host
+    // candidate gate prove that exact PTX configuration, so a bare
+    // MULTIFIDELITY_LINE build with either kernel default cannot silently use
+    // candidate allocation or reconstruction.
+    let has_multifidelity_line = extra_defines
+        .iter()
+        .any(|define| define == "-DMULTIFIDELITY_LINE" || define == "-DMULTIFIDELITY_LINE=1");
+    let has_multifidelity_ground = extra_defines
+        .iter()
+        .any(|define| define == "-DMULTIFIDELITY_CHEAP_GROUND_DB=5.0");
+    let has_multifidelity_compact_byte_stop = extra_defines
+        .iter()
+        .any(|define| define == "-DMULTIFIDELITY_COMPACT_BYTE_STOP=0");
+    let multifidelity_line =
+        has_multifidelity_line && has_multifidelity_ground && has_multifidelity_compact_byte_stop;
+    println!(
+        "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_LINE={}",
+        if multifidelity_line { "1" } else { "0" }
+    );
     // Watch the whole dir, not just each .cu — otherwise ADDING a new kernel
     // (e.g. airborne.cu) doesn't re-run this script, so its .ptx never builds.
     println!("cargo:rerun-if-changed=kernels");
@@ -43,6 +68,33 @@ fn main() {
     }
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let arch = env::var("NOISE_GPU_ARCH").unwrap_or_else(|_| "sm_89".into());
+    // Host-only experiment checks use the real GPU feature so that the
+    // multifidelity binary and tests are type-checked, but deliberately skip
+    // nvcc when no CUDA toolkit is available. This branch is scratch-only and
+    // never changes the production build path.
+    if env::var_os("NOISE_GPU_SKIP_NVCC").is_some() {
+        fs::write(
+            out.join("generated_h0_selection.rs"),
+            format!(
+                "pub const GENERATED_V2_H0_NODE_CAP: usize = 66;\n\
+                 pub const GENERATED_V2_THETA_MAX_RAD_BITS: u64 = 0x{:016x};\n",
+                (core::f64::consts::PI / 60.0).to_bits()
+            ),
+        )
+        .expect("write skipped-CUDA Rust selection mirror");
+        for entry in fs::read_dir("kernels").expect("kernels/ dir") {
+            let path = entry.expect("kernel entry").path();
+            if path.extension().is_some_and(|extension| extension == "cu") {
+                let stem = path.file_stem().expect("kernel stem").to_str().unwrap();
+                fs::write(out.join(format!("{stem}.ptx")), "")
+                    .expect("write skipped-CUDA PTX placeholder");
+                if stem == "scatter" {
+                    fs::write(out.join("scatter.cubin"), []).expect("write skipped-CUDA cubin");
+                }
+            }
+        }
+        return;
+    }
     // NUM_CLASSES is parsed from the generated profiles table and injected as
     // -DNPD_NC so the kernel's NPD LUT stride can never drift from the Rust
     // upload (hardcoded 14 corrupted departures when the pinned 15th class
@@ -116,6 +168,38 @@ fn main() {
     let surface_meta_abi_version =
         const_from("src/lib.rs", "pub const SURFACE_META_ABI_VERSION: usize = ");
     let surface_meta_slots = const_from("src/lib.rs", "pub const SURFACE_META_SLOTS: usize = ");
+    let compact_receiver_record_words = const_from(
+        "src/lib.rs",
+        "pub const MULTIFIDELITY_COMPACT_RECEIVER_RECORD_WORDS: usize = ",
+    );
+    let compact_control_words = const_from(
+        "src/lib.rs",
+        "pub const MULTIFIDELITY_COMPACT_CONTROL_WORDS: usize = ",
+    );
+    let compact_control_block_words = const_from(
+        "src/lib.rs",
+        "pub const MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS: usize = ",
+    );
+    let compact_abi_version = const_from(
+        "src/lib.rs",
+        "pub const MULTIFIDELITY_COMPACT_ABI_VERSION: usize = ",
+    );
+    let compact_output_stride = const_from(
+        "src/lib.rs",
+        "pub const MULTIFIDELITY_COMPACT_OUTPUT_STRIDE: usize = ",
+    );
+    let compact_output_index_slot = const_from(
+        "src/lib.rs",
+        "pub const MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT: usize = ",
+    );
+    let compact_output_energy_base = const_from(
+        "src/lib.rs",
+        "pub const MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE: usize = ",
+    );
+    let compact_output_fault_slot = const_from(
+        "src/lib.rs",
+        "pub const MULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT: usize = ",
+    );
     let out_h0_counter_byte_offset = const_from(
         "src/lib.rs",
         "pub const OUT_H0_COUNTER_BYTE_OFFSET: usize = ",
@@ -428,6 +512,14 @@ fn main() {
         format!("-DSOURCE_SEGMENT_ABI_VERSION={source_segment_abi_version}"),
         format!("-DSOURCE_SEGMENT_STRIDE={source_segment_stride}"),
         format!("-DLINE_KERNEL_ARGUMENT_COUNT={line_kernel_argument_count}"),
+        format!("-DMULTIFIDELITY_COMPACT_RECEIVER_RECORD_WORDS={compact_receiver_record_words}"),
+        format!("-DMULTIFIDELITY_COMPACT_CONTROL_WORDS={compact_control_words}"),
+        format!("-DMULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS={compact_control_block_words}"),
+        format!("-DMULTIFIDELITY_COMPACT_ABI_VERSION={compact_abi_version}"),
+        format!("-DMULTIFIDELITY_COMPACT_OUTPUT_STRIDE={compact_output_stride}"),
+        format!("-DMULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT={compact_output_index_slot}"),
+        format!("-DMULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE={compact_output_energy_base}"),
+        format!("-DMULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT={compact_output_fault_slot}"),
         format!("-DSURFACE_META_ABI_VERSION={surface_meta_abi_version}"),
         format!("-DSURFACE_META_SLOTS={surface_meta_slots}"),
         format!("-DV2_H0={v2_h0}"),
@@ -499,16 +591,23 @@ fn main() {
             if stem == "qm_h0_node_selftest" && v2_h0 == 0 {
                 continue;
             }
-            let ptx = out.join(format!("{stem}.ptx"));
-            let status = Command::new("nvcc")
-                .args(["-ptx", &format!("-arch={arch}"), "-O3"])
-                .args(&nvcc_defines)
-                .arg(&path)
-                .arg("-o")
-                .arg(&ptx)
-                .status()
-                .expect("nvcc not found — `--features gpu` needs the CUDA toolkit on this host");
-            assert!(status.success(), "nvcc failed to compile {path:?}");
+            let compile = |kind: &str, output: PathBuf| {
+                let status = Command::new("nvcc")
+                    .args([kind, &format!("-arch={arch}"), "-O3"])
+                    .args(&nvcc_defines)
+                    .arg(&path)
+                    .arg("-o")
+                    .arg(&output)
+                    .status()
+                    .expect(
+                        "nvcc not found — `--features gpu` needs the CUDA toolkit on this host",
+                    );
+                assert!(status.success(), "nvcc {kind} failed to compile {path:?}");
+            };
+            compile("-ptx", out.join(format!("{stem}.ptx")));
+            if stem == "scatter" {
+                compile("-cubin", out.join(format!("{stem}.cubin")));
+            }
         }
     }
 }

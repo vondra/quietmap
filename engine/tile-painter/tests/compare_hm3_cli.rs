@@ -4,10 +4,14 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 use tile_painter::grid::TILE_PX;
-use tile_painter::wire_hm3::{quantise_lden, write_tile, NO_DATA, SOURCE_ID_ROAD};
+use tile_painter::wire_hm3::{quantise_lden, write_tile, NO_DATA, SOURCE_ID_RAIL, SOURCE_ID_ROAD};
 
 fn write_fixture(path: &Path, cells: &[u8]) {
-    write_tile(path, cells, SOURCE_ID_ROAD, false).expect("write HM3 fixture");
+    write_fixture_with_source_id(path, cells, SOURCE_ID_ROAD);
+}
+
+fn write_fixture_with_source_id(path: &Path, cells: &[u8], source_id: u8) {
+    write_tile(path, cells, source_id, false).expect("write HM3 fixture");
 }
 
 fn run(args: &[&str]) -> Output {
@@ -39,6 +43,13 @@ fn aggregate_args(
     if let Some(scoring) = scoring {
         args.extend(["--scoring".to_string(), scoring.to_string()]);
     }
+    args
+}
+
+fn release_layer_args(reference: &str, candidate: &str, rows: usize, layer: &str) -> Vec<String> {
+    let candidates = vec![candidate; rows];
+    let mut args = aggregate_args(reference, &candidates, "1", None);
+    args.extend(["--release-layer".to_string(), layer.to_string()]);
     args
 }
 
@@ -308,4 +319,121 @@ fn legacy_line_aggregate_verdict_and_exit_codes_stay_pinned() {
             .code(),
         Some(2)
     );
+}
+
+#[test]
+fn per_layer_release_gate_is_125_rows_fail_closed_and_provenance_checked() {
+    let dir = tempfile::tempdir().unwrap();
+    let reference_path = dir.path().join("reference.bin");
+    let identical_path = dir.path().join("identical.bin");
+    let wrong_reference_path = dir.path().join("wrong-reference.bin");
+    let wrong_candidate_path = dir.path().join("wrong-candidate.bin");
+    let cells = TILE_PX * TILE_PX;
+    let reference = vec![quantise_lden(60.0); cells];
+    write_fixture(&reference_path, &reference);
+    write_fixture(&identical_path, &reference);
+    write_fixture_with_source_id(&wrong_reference_path, &reference, SOURCE_ID_RAIL);
+    write_fixture_with_source_id(&wrong_candidate_path, &reference, SOURCE_ID_RAIL);
+
+    let reference_arg = reference_path.to_str().unwrap();
+    let identical_arg = identical_path.to_str().unwrap();
+
+    let output = run_owned(&release_layer_args(
+        reference_arg,
+        identical_arg,
+        125,
+        "road",
+    ));
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(
+        "contract aggregate layer=road scope=release-layer expected_rows=125 wave=1 (draft)"
+    ));
+    assert!(stdout.contains("verdict=PASS"));
+    assert!(stdout.contains("layer=road scope=release-layer expected_rows=125"));
+
+    for rows in [124, 126] {
+        let output = run_owned(&release_layer_args(
+            reference_arg,
+            identical_arg,
+            rows,
+            "road",
+        ));
+        assert!(output.status.success(), "{rows} rows must stay diagnostic");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains(
+            "contract aggregate diagnostic_only layer=road scope=release-layer expected_rows=125"
+        ));
+        assert!(stdout.contains("expected_benchmark_rows=125"));
+        assert!(!stdout.lines().any(|line| line.starts_with("verdict=")));
+    }
+
+    assert_eq!(
+        run(&[
+            "--aggregate",
+            reference_arg,
+            identical_arg,
+            "--wave",
+            "2",
+            "--release-layer",
+            "road",
+        ])
+        .status
+        .code(),
+        Some(2)
+    );
+    assert_eq!(
+        run(&[
+            reference_arg,
+            identical_arg,
+            "--wave",
+            "1",
+            "--release-layer",
+            "road",
+        ])
+        .status
+        .code(),
+        Some(2)
+    );
+    for layer in ["total", "unknown"] {
+        assert_eq!(
+            run(&[
+                "--aggregate",
+                reference_arg,
+                identical_arg,
+                "--wave",
+                "1",
+                "--release-layer",
+                layer,
+            ])
+            .status
+            .code(),
+            Some(2),
+            "{layer} is outside the per-layer release allow-list"
+        );
+    }
+
+    let wrong_reference_arg = wrong_reference_path.to_str().unwrap();
+    let output = run_owned(&release_layer_args(
+        wrong_reference_arg,
+        identical_arg,
+        1,
+        "road",
+    ));
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("reference"));
+    assert!(stderr.contains("source_id 2, expected 1"));
+
+    let wrong_candidate_arg = wrong_candidate_path.to_str().unwrap();
+    let output = run_owned(&release_layer_args(
+        reference_arg,
+        wrong_candidate_arg,
+        1,
+        "road",
+    ));
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("candidate"));
+    assert!(stderr.contains("source_id 2, expected 1"));
 }

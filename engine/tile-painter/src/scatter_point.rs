@@ -31,7 +31,8 @@ use raster_reader::fused_tile_z13::FusedTileZ13;
 use crate::accumulator::{TileAccumulator, NUM_PERIODS};
 use crate::scatter_band::{
     coarse_mid_cfg, lat_to_py, lon_to_px, scatter_tile_with_cfg as band_scatter_tile_with_cfg,
-    PixelGeometry, PixelTerms, PreparedSource, ScatterStats, LDEN_WEIGHTS, NUM_BANDS,
+    scatter_tile_with_cfg_and_options as band_scatter_tile_with_cfg_and_options, PixelGeometry,
+    PixelTerms, PreparedSource, ScatterStats, LDEN_WEIGHTS, NUM_BANDS,
 };
 use crate::source_point::PointRow;
 
@@ -97,6 +98,61 @@ pub fn scatter_tile_with_cfg(
         points.len(),
         accum,
         cfg,
+    )
+    .into()
+}
+
+/// Industrial W1 direct-local surrogate: use the point geometry and a fixed
+/// M3 loose path floor, but skip profile, terrain, obstacle, and barrier work.
+/// The caller keeps this behind the explicit W1 candidate switch; the ordinary
+/// [`scatter_tile`] and popup paths never call it.
+pub(crate) fn scatter_tile_industrial_direct(
+    tile: &FusedTileZ13,
+    points: &[PointRow],
+    barriers: &[Barrier],
+    obstacles: Option<&ObstacleSet>,
+    accum: &mut TileAccumulator,
+) -> PointScatterStats {
+    band_scatter_tile_with_cfg_and_options(
+        &PointGeometry { points },
+        tile,
+        barriers,
+        obstacles,
+        points.len(),
+        accum,
+        coarse_mid_cfg(),
+        None,
+        Some(0.0),
+        None,
+    )
+    .into()
+}
+
+/// Exact industrial scatter over a compact receiver index list. Each
+/// selected pixel uses the unchanged point physical evaluator, but the generic
+/// block/M3 setup is not constructed for any unselected receiver.
+pub(crate) fn scatter_tile_industrial_exact_receivers(
+    tile: &FusedTileZ13,
+    points: &[PointRow],
+    barriers: &[Barrier],
+    obstacles: Option<&ObstacleSet>,
+    accum: &mut TileAccumulator,
+    receivers: &[usize],
+) -> PointScatterStats {
+    band_scatter_tile_with_cfg_and_options(
+        &PointGeometry { points },
+        tile,
+        barriers,
+        obstacles,
+        points.len(),
+        accum,
+        // W1 exact receivers must use exact terrain cadence. Keep the
+        // process-wide coarse cadence for ordinary industrial, building, and
+        // ground scatter paths.
+        None,
+        None,
+        None,
+        Some(receivers),
     )
     .into()
 }

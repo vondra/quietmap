@@ -431,6 +431,8 @@ pub fn process_surface_region(
                     ground_rows,
                     ground_microsegs,
                     time_divided,
+                    precomputed_cells,
+                    postprocess_applied,
                 ) = match rows {
                     SurfaceRows::Line(r) => {
                         let st = scatter_line::scatter_tile(
@@ -449,26 +451,54 @@ pub fn process_surface_region(
                             0,
                             0,
                             false,
+                            None,
+                            false,
                         )
                     }
                     SurfaceRows::Point(r) => {
-                        let st = scatter_point::scatter_tile(
-                            tile,
-                            r,
-                            &tile_barriers,
-                            obstacle_data.set(),
-                            &mut accum,
-                        );
-                        (
-                            st.path_calls,
-                            st.skipped_calls,
-                            st.pairs,
-                            st.walked_pairs,
-                            st.raster_samples,
-                            0,
-                            0,
-                            false,
-                        )
+                        if *dir_name == "industrial"
+                            && crate::industrial_w1::enabled_for_zoom(ctx.zoom)
+                        {
+                            let (cells, st, reconstruction) = crate::industrial_w1::render(
+                                tile,
+                                r,
+                                &tile_barriers,
+                                obstacle_data.set(),
+                                interior.as_ref(),
+                            );
+                            (
+                                st.path_calls,
+                                st.skipped_calls,
+                                st.pairs,
+                                st.walked_pairs,
+                                st.raster_samples,
+                                0,
+                                0,
+                                false,
+                                Some(cells),
+                                reconstruction.postprocess_applied,
+                            )
+                        } else {
+                            let st = scatter_point::scatter_tile(
+                                tile,
+                                r,
+                                &tile_barriers,
+                                obstacle_data.set(),
+                                &mut accum,
+                            );
+                            (
+                                st.path_calls,
+                                st.skipped_calls,
+                                st.pairs,
+                                st.walked_pairs,
+                                st.raster_samples,
+                                0,
+                                0,
+                                false,
+                                None,
+                                false,
+                            )
+                        }
                     }
                     SurfaceRows::GroundOps(data) => {
                         let views = data.views();
@@ -491,6 +521,8 @@ pub fn process_surface_region(
                             st.rows_in_reach as u64,
                             st.unique_microsegs as u64,
                             true,
+                            None,
+                            false,
                         )
                     }
                 };
@@ -508,21 +540,25 @@ pub fn process_surface_region(
                 let t_w = Instant::now();
                 // Ground ops sum event energy ÷ n_days; the surface layers are
                 // steady-power (no time division).
-                let mut cells = if time_divided {
-                    collapse_lden_u8(&accum, ctx.n_days)
-                } else {
-                    collapse_lden_surface_u8(&accum)
-                };
+                let mut cells = precomputed_cells.unwrap_or_else(|| {
+                    if time_divided {
+                        collapse_lden_u8(&accum, ctx.n_days)
+                    } else {
+                        collapse_lden_surface_u8(&accum)
+                    }
+                });
                 // AREA sources (building / industrial / leisure) discretise into a
                 // point grid that leaves an inter-point ripple; smooth it into a
                 // solid footprint. Line + ground-ops layers are already continuous.
-                if matches!(rows, SurfaceRows::Point(_)) {
+                if matches!(rows, SurfaceRows::Point(_)) && !postprocess_applied {
                     fill_area_median(&mut cells, AREA_FILL_RADIUS_PX);
                 }
                 // Interior estimate LAST so the area fill can't paint a façade
                 // value back over an enclosed footprint.
-                if let Some(interior) = &interior {
-                    interior.apply(&mut cells);
+                if !postprocess_applied {
+                    if let Some(interior) = &interior {
+                        interior.apply(&mut cells);
+                    }
                 }
                 let out = ctx
                     .output

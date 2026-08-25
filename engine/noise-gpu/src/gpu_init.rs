@@ -1,7 +1,7 @@
 //! One-time setup for the gpu-surface batch runner — the items built once and
 //! then handed to the hot kernel-launch loop in `gpu_surface.rs`: the `LineLayer`
 //! road/rail descriptor (parse, dir, source_id, halo reach, row loader), the warm
-//! CUDA device + scatter-PTX module loaders (`warm_device` / `warm_device_on`),
+//! CUDA device + AOT scatter module loaders (`warm_device` / `warm_device_on`),
 //! the `Progress` heartbeat, and the `NOISE_GPU_TIMING` gate. No per-tile/launch
 //! state lives here; that stays in `gpu_surface.rs`.
 use std::path::Path;
@@ -10,7 +10,6 @@ use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use cudarc::driver::{CudaDevice, CudaFunction};
-use cudarc::nvrtc::Ptx;
 use h3o::{CellIndex, LatLng};
 use noise_compute::admin;
 use noise_compute::constants::RAILWAY_REACH_CEILING;
@@ -19,6 +18,7 @@ use tile_painter::source_loader_rail::RailData;
 use tile_painter::source_loader_road::RoadData;
 use tile_painter::wire_hm3::{SOURCE_ID_RAIL, SOURCE_ID_ROAD};
 
+const SCATTER_CUBIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scatter.cubin"));
 const SCATTER_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/scatter.ptx"));
 const ROAD_HALO_M: f64 = 10_000.0; // motorway-class reach (matches build_heatmap_surface)
 
@@ -100,25 +100,68 @@ impl LineLayer {
     }
 }
 
-/// CUDA device + scatter PTX, created once — shared by the batch path and --stream (the warm
+/// CUDA device + AOT scatter module, created once — shared by the batch path and --stream (the warm
 /// context the cluster used to re-pay on every chunk spawn).
-pub(crate) fn warm_device() -> (Arc<CudaDevice>, CudaFunction) {
+#[derive(Clone)]
+pub(crate) struct LineFunctions {
+    pub(crate) stock: CudaFunction,
+    pub(crate) multifidelity_cheap: Option<CudaFunction>,
+    pub(crate) multifidelity_compact: Option<CudaFunction>,
+    /// W1 path: eight independent 32-lane compact receiver buckets per
+    /// 256-thread block, loaded only with the candidate symbols.
+    pub(crate) multifidelity_compact_packed: Option<CudaFunction>,
+}
+
+pub(crate) fn multifidelity_ptx_enabled() -> bool {
+    option_env!("NOISE_GPU_MULTIFIDELITY_LINE") == Some("1")
+}
+
+pub(crate) fn warm_device() -> (Arc<CudaDevice>, LineFunctions) {
     warm_device_on(false)
 }
 
 /// `with_stream` ⇒ `CudaDevice::new_with_stream` (own stream, shared primary context) so the N
 /// --stream workers OVERLAP on the GPU (the gpu_airborne pattern, airborne.rs:252); `false` ⇒ the
-/// null-stream device the serial batch path uses. Each call gets its own scatter-PTX module load.
-pub(crate) fn warm_device_on(with_stream: bool) -> (Arc<CudaDevice>, CudaFunction) {
+/// null-stream device the serial batch path uses. Each call gets its own cubin module load.
+pub(crate) fn warm_device_on(with_stream: bool) -> (Arc<CudaDevice>, LineFunctions) {
     let dev = if with_stream {
         CudaDevice::new_with_stream(0).expect("cuda")
     } else {
         CudaDevice::new(0).expect("cuda")
     };
-    dev.load_ptx(Ptx::from_src(SCATTER_PTX), "s", &["line_binned_fused"])
-        .expect("ptx");
-    let f = dev.get_func("s", "line_binned_fused").expect("fn");
-    (dev, f)
+    let mut symbols = vec!["line_binned_fused"];
+    if multifidelity_ptx_enabled() {
+        // AOT CUDA loader vector must include all line symbols: stock, cheap,
+        // compact, and the scratch packed prototype. Omitting one can
+        // load the image but fail get_func/runtime when a prototype is selected.
+        symbols.push("line_multifidelity_cheap_w1");
+        symbols.push("line_multifidelity_compact_w1");
+        symbols.push("line_multifidelity_compact_packed_w1");
+    }
+    noise_gpu::load_embedded_cubin_or_ptx(&dev, SCATTER_CUBIN, SCATTER_PTX, "s", &symbols)
+        .expect("load scatter cubin or PTX fallback");
+    let stock = dev.get_func("s", "line_binned_fused").expect("stock fn");
+    let multifidelity_cheap = multifidelity_ptx_enabled().then(|| {
+        dev.get_func("s", "line_multifidelity_cheap_w1")
+            .expect("cheap fn")
+    });
+    let multifidelity_compact = multifidelity_ptx_enabled().then(|| {
+        dev.get_func("s", "line_multifidelity_compact_w1")
+            .expect("compact fn")
+    });
+    let multifidelity_compact_packed = multifidelity_ptx_enabled().then(|| {
+        dev.get_func("s", "line_multifidelity_compact_packed_w1")
+            .expect("packed compact fn")
+    });
+    (
+        dev,
+        LineFunctions {
+            stock,
+            multifidelity_cheap,
+            multifidelity_compact,
+            multifidelity_compact_packed,
+        },
+    )
 }
 
 /// Heartbeat so a multi-block region build is observable, not a silent wait.

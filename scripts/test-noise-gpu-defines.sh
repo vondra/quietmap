@@ -110,6 +110,7 @@ assert_rejected_before_nvcc '-DV2_H0=0' role
 assert_rejected_before_nvcc '-DOUT_SLOTS_H0=1' output-layout
 assert_rejected_before_nvcc '-DBARRIER_ABI_VERSION=1' barrier-abi
 assert_rejected_before_nvcc '-DSOURCE_SEGMENT_ABI_VERSION=1' segment-abi
+assert_rejected_before_nvcc '-DMULTIFIDELITY_COMPACT_ABI_VERSION=1' compact-abi
 assert_rejected_before_nvcc '-DTPX=1' architecture
 assert_rejected_before_nvcc '-DUNKNOWN_SWITCH=1' unknown
 assert_rejected_before_nvcc '-UARC_TRI_WALK' undefine
@@ -144,4 +145,4 @@ print("GPU_DEFINE_VERIFIER=PASS production_experimental=0 reviewed_experimental=
 PY
 echo "GPU_DEFINE_RECEIPT=PASS production_empty=1 reviewed_experiment=2"
 
-echo "GPU_DEFINE_MUTATIONS=PASS mutations=13 rejected_nvcc_invocations=0"
+echo "GPU_DEFINE_MUTATIONS=PASS mutations=14 rejected_nvcc_invocations=0"

@@ -794,7 +794,17 @@ impl<'a> AggregateScore<'a> {
     /// Release verdict only for the fixed complete benchmark row count. Exact ordered
     /// key identity is qexp's separate responsibility.
     pub fn verdict(&self, wave: Wave) -> Option<Verdict> {
-        (self.rows.len() == wave.benchmark_rows()).then(|| self.computed_verdict(wave))
+        self.verdict_for_expected_rows(wave, wave.benchmark_rows())
+    }
+
+    /// Release verdict for a caller-attested complete benchmark row count.
+    ///
+    /// The normal contract remains [`Self::verdict`], pinned to Wave 1's 250 rows
+    /// and Wave 2's 980 rows. A separately named release scope may own a different
+    /// fixed row count; it must pass that count explicitly so a short or overfull
+    /// workset can never receive a verdict.
+    pub fn verdict_for_expected_rows(&self, wave: Wave, expected_rows: usize) -> Option<Verdict> {
+        (self.rows.len() == expected_rows).then(|| self.computed_verdict(wave))
     }
 }
 
@@ -861,6 +871,21 @@ mod tests {
         let clean = score(&reference, &reference);
         let probe = [clean.clone()];
         assert_eq!(AggregateScore::new(&probe).verdict(Wave::One), None);
+        let per_layer = vec![clean.clone(); 125];
+        assert_eq!(
+            AggregateScore::new(&per_layer).verdict_for_expected_rows(Wave::One, 125),
+            Some(Verdict::Pass)
+        );
+        assert_eq!(
+            AggregateScore::new(&per_layer[..124]).verdict_for_expected_rows(Wave::One, 125),
+            None
+        );
+        let mut overfull = per_layer.clone();
+        overfull.push(clean.clone());
+        assert_eq!(
+            AggregateScore::new(&overfull).verdict_for_expected_rows(Wave::One, 125),
+            None
+        );
         let wave_one = vec![clean.clone(); Wave::One.benchmark_rows()];
         assert_eq!(
             AggregateScore::new(&wave_one).verdict(Wave::One),

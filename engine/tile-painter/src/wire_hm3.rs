@@ -59,6 +59,13 @@ pub const SOURCE_ID_BUILDING: u8 = 5;
 /// Sentinel value meaning "no data" — frontend renders transparent.
 pub const NO_DATA: u8 = 255;
 
+/// One validated HM3 tile decoded in a single Brotli pass.
+#[derive(Debug)]
+pub struct DecodedTile {
+    pub source_id: u8,
+    pub cells: Vec<u8>,
+}
+
 /// Quantise a single Lden dB value to `u8 × 0.5 dB`. `NEG_INFINITY`,
 /// `NaN`, or values below 0 dB map to the [`NO_DATA`] sentinel.
 #[inline]
@@ -261,16 +268,30 @@ pub fn write_tile(path: &Path, cells: &[u8], source_id: u8, skip_if_empty: bool)
 /// Decode an HM3 tile file (whole-file Brotli) back to its dense
 /// `TILE_PX × TILE_PX` cell array. Brotli-decode FIRST, then check the header.
 pub fn read_tile(path: &Path) -> Result<Vec<u8>> {
+    Ok(read_tile_decoded(path)?.cells)
+}
+
+/// Decode and validate an HM3 tile file, retaining its source discriminator.
+pub fn read_tile_decoded(path: &Path) -> Result<DecodedTile> {
     let compressed = fs::read(path).with_context(|| format!("open {}", path.display()))?;
-    read_tile_bytes(&compressed).with_context(|| path.display().to_string())
+    read_tile_bytes_decoded(&compressed).with_context(|| path.display().to_string())
 }
 
 /// [`read_tile`] over an in-memory blob — the same decode+validate for tiles
 /// stored outside the filesystem (the tile store, pmtiles entries).
 pub fn read_tile_bytes(compressed: &[u8]) -> Result<Vec<u8>> {
+    Ok(read_tile_bytes_decoded(compressed)?.cells)
+}
+
+/// [`read_tile_bytes`] with the validated HM3 source discriminator.
+pub fn read_tile_bytes_decoded(compressed: &[u8]) -> Result<DecodedTile> {
     let mut raw = decode_validated(compressed)?;
+    let source_id = raw[5];
     raw.drain(..HEADER_BYTES); // strip the header in place — no second 256 KB alloc
-    Ok(raw)
+    Ok(DecodedTile {
+        source_id,
+        cells: raw,
+    })
 }
 
 /// The `source_id` byte of an HM3 blob — lets a tool derive the layer
@@ -356,8 +377,10 @@ mod tests {
         // The raw file is a Brotli stream — the HM3 magic lives INSIDE it, not at byte 0.
         assert_ne!(&fs::read(&path).unwrap()[..4], MAGIC.as_slice());
 
-        let back = read_tile(&path).unwrap();
-        assert_eq!(back, cells);
+        let decoded = read_tile_decoded(&path).unwrap();
+        assert_eq!(decoded.source_id, SOURCE_ID_AIRCRAFT);
+        assert_eq!(decoded.cells, cells);
+        assert_eq!(read_tile(&path).unwrap(), cells);
     }
 
     #[test]

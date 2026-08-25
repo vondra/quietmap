@@ -3,6 +3,11 @@
 //! and the `e2-full` / `e2-airborne` parity validators. Surface geometry and
 //! obstacle upload live here; the airborne path is [`airborne`].
 
+#[cfg(feature = "gpu")]
+mod embedded_cubin;
+#[cfg(feature = "gpu")]
+pub use embedded_cubin::load_embedded_cubin_or_ptx;
+
 /// Region-resident GPU airborne scatter, shared by the `e2-airborne` validator and the
 /// `gpu-airborne` production builder (cudarc-backed, so gated on the `gpu` feature).
 #[cfg(feature = "gpu")]
@@ -51,6 +56,7 @@ macro_rules! line_kernel_arguments {
         )
     }};
 }
+
 fn inst_code(inst: Installation) -> i32 {
     match inst {
         Installation::Wing => 0,
@@ -163,6 +169,34 @@ pub const OUT_SLOTS_PROD: usize = OUT_ENERGY_SLOTS + 1;
 /// of the buffer.
 pub const OUT_SLOTS_PROF: usize = OUT_ARCSTAT_BASE + TILE_PX * TILE_PX * OUT_ARCSTAT_COUNTERS;
 
+/// W1-only multifidelity line candidate: exact anchors on a regular
+/// receiver-pixel stride plus the tile's final boundary pixel. The stride is
+/// selected by the host per line layer and tile; it never affects popup/W2 or
+/// the stock surface role. The compact CUDA ABI carries an explicit record
+/// count, so no compile-time anchor lattice belongs in the device ABI.
+/// Packed receiver record words uploaded to the compact exact kernel:
+/// receiver latitude bits, longitude bits, altitude/reflection bits, then the
+/// dense tile-pixel index. Keeping the index in the record makes the output
+/// mapping explicit instead of relying on host iteration order.
+pub const MULTIFIDELITY_COMPACT_RECEIVER_RECORD_WORDS: usize = 4;
+/// Header words in the compact control array: total record count, ABI version,
+/// and output stride. Per-block offset/count entries follow this header.
+pub const MULTIFIDELITY_COMPACT_CONTROL_WORDS: usize = 3;
+/// Each compact CUDA block reads one record offset and active record count.
+pub const MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS: usize = 2;
+pub const MULTIFIDELITY_COMPACT_ABI_VERSION: usize = 2;
+/// Compact output record: dense tile-pixel index followed by three period
+/// energies and that receiver's ARC fault count. The index is exactly
+/// representable in f32 for a 512² tile and is checked before reconstruction.
+pub const MULTIFIDELITY_COMPACT_OUTPUT_STRIDE: usize = 5;
+pub const MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT: usize = 0;
+pub const MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE: usize = 1;
+pub const MULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT: usize = 4;
+/// Launch A's cheap evaluator writes the ordinary production energy + fault
+/// slots. Exact anchors and selected replay receivers use a separate compact
+/// output allocation, so the stock output ABI is not widened or aliased.
+pub const OUT_SLOTS_MULTIFIDELITY: usize = OUT_SLOTS_PROD;
+
 /// Ratios from the reviewed §3.5e rail work census.
 pub struct RailPortArcstatCensus {
     pub buckets_per_gpu_pair: f64,
@@ -260,7 +294,9 @@ pub const H0_PAIR_DIAGNOSTIC_RECORD_BASE: usize = H0_PAIR_DIAGNOSTIC_NODE_BASE
 pub const H0_PAIR_DIAGNOSTIC_MAGIC: u64 = 0x514d_4830_5041_4952;
 
 /// Versioned surface metadata layout. Slot 14 carries the line-layer tag used
-/// to select the frozen road/rail H0 placement floor.
+/// to select the frozen road/rail H0 placement floor. Compact exact launches
+/// keep every metadata slot at its ordinary value; their receiver/control ABI
+/// is carried by separate explicit arrays.
 pub const SURFACE_META_ABI_VERSION: usize = 2;
 pub const SURFACE_META_SLOTS: usize = 15;
 pub const SURFACE_META_LAYER_SLOT: usize = 14;
@@ -821,6 +857,18 @@ mod streaming_abi_tests {
     use super::*;
 
     #[test]
+    fn compact_abi_has_explicit_non_aliasing_layout() {
+        assert_eq!(MULTIFIDELITY_COMPACT_RECEIVER_RECORD_WORDS, 4);
+        assert_eq!(MULTIFIDELITY_COMPACT_CONTROL_WORDS, 3);
+        assert_eq!(MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS, 2);
+        assert_eq!(MULTIFIDELITY_COMPACT_OUTPUT_STRIDE, 5);
+        assert_eq!(MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT, 0);
+        assert_eq!(MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE, 1);
+        assert_eq!(MULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT, 4);
+        assert_eq!(OUT_SLOTS_MULTIFIDELITY, OUT_SLOTS_PROD);
+    }
+
+    #[test]
     fn abi_tail_offsets_are_exact_for_0_1_2_17_barriers() {
         for barrier_count in [0_usize, 1, 2, 17] {
             let rows = barrier_count.max(1);
@@ -846,6 +894,7 @@ mod streaming_abi_tests {
             OUT_H0_COUNTER_BYTE_OFFSET + OUT_H0_COUNTERS * std::mem::size_of::<u64>()
         );
         assert_eq!(SURFACE_META_ABI_VERSION, 2);
+        assert_eq!(SURFACE_META_LAYER_SLOT, 14);
         assert_eq!(SURFACE_META_SLOTS, SURFACE_META_LAYER_SLOT + 1);
         for barrier_count in [0_usize, 1, 2, 17] {
             assert_eq!(
