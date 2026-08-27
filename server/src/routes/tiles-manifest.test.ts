@@ -5,10 +5,11 @@
 
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { sha256Identity } from '../generation-contract.mjs'
 
 // PMTILES_BASE and TILE_ENV are captured from the env when heatmap-shared/tile-manifest-reader
 // load — point them at the fixture dir BEFORE importing (mirrors heatmap-pmtiles.test.ts's
@@ -34,6 +35,62 @@ const legacyPath = join(dir, 'current.json')
 const clearFixture = () => {
   for (const name of readdirSync(dir)) rmSync(join(dir, name), { force: true, recursive: true })
 }
+function baseGeneration(lineModelRoleSha256 = '1'.repeat(64)) {
+  const quality = {
+    schema: 1,
+    profile_name: 'test-base-v1',
+    product_commit: 'a'.repeat(40),
+    dataset_year: 2026,
+    model_role_contract: {
+      schema: 1,
+      line_model_role_sha256: lineModelRoleSha256,
+      model_source_recipe_sha256: '2'.repeat(64),
+      numerical_selection_record_sha256: null,
+      output_abi_version: 3,
+      role_spec_sha256: '3'.repeat(64),
+      workers: {
+        'gpu-line': {
+          artifact_family: 'surface-production',
+          binary: 'gpu-surface',
+          model_role: 'stock',
+          resolved_role: 'surface-stock-v1',
+          selection_epoch: null,
+        },
+      },
+    },
+    numerical_environment: {},
+    producer_requirements: { worker_model_roles: { 'gpu-line': 'stock' } },
+    scorer_contract: {
+      bias_db_max: 0.5,
+      presence_mismatch_percent_max: 0.25,
+      threshold_percent_max: { 0.5: 20, 1: 1, 3: 0.01, 6: 0.001 },
+    },
+    wave: 'w1',
+  }
+  const qualityProfileId = sha256Identity(quality)
+  const identity = {
+    schema: 1,
+    deployment: 'base',
+    zoom: 12,
+    tier: '',
+    dataset_year: 2026,
+    raster_generation_id: 'b'.repeat(16),
+    quality_profile_id: qualityProfileId,
+    quality_profile_name: quality.profile_name,
+    base_generation_id: null,
+    base_quality_profile_id: null,
+    base_quality_profile_name: null,
+  }
+  const generationId = sha256Identity(identity)
+  return {
+    ...identity,
+    generation_id: generationId,
+    base_generation_id: generationId,
+    base_quality_profile_id: qualityProfileId,
+    base_quality_profile_name: quality.profile_name,
+    quality,
+  }
+}
 function validManifest(build = 'b3') {
   const layers: Record<string, { file: string; build: string; bytes: number; sha256: string }> = {}
   for (const layer of ALLOWED_LAYERS) {
@@ -47,7 +104,35 @@ function validManifest(build = 'b3') {
       sha256: createHash('sha256').update(content).digest('hex'),
     }
   }
-  return { build, layers }
+  const generation = baseGeneration()
+  return {
+    build,
+    generation,
+    line_model_role_sha256: generation.quality.model_role_contract.line_model_role_sha256,
+    layers,
+  }
+}
+
+function tierGeneration(base: ReturnType<typeof baseGeneration>) {
+  const quality = structuredClone(base.quality)
+  quality.profile_name = 'test-tier-v1'
+  quality.product_commit = 'b'.repeat(40)
+  quality.wave = 'w2'
+  const qualityProfileId = sha256Identity(quality)
+  const identity = {
+    schema: 1,
+    deployment: 'z13',
+    zoom: 13,
+    tier: 'z13',
+    dataset_year: base.dataset_year,
+    raster_generation_id: base.raster_generation_id,
+    quality_profile_id: qualityProfileId,
+    quality_profile_name: quality.profile_name,
+    base_generation_id: base.generation_id,
+    base_quality_profile_id: base.quality_profile_id,
+    base_quality_profile_name: base.quality_profile_name,
+  }
+  return { ...identity, generation_id: sha256Identity(identity), quality }
 }
 
 test('serves this environment pin, with tile_base attached', async () => {
@@ -59,7 +144,60 @@ test('serves this environment pin, with tile_base attached', async () => {
   assert.equal(res.json().build, 'b3')
   assert.equal(res.json().layers.total.file, 'total.b3.pmtiles')
   assert.equal(res.json().tile_base, null)
+  assert.equal(res.json().generation, undefined)
+  assert.equal(res.json().line_model_role_sha256, undefined)
   assert.equal(res.headers['cache-control'], 'no-cache')
+  await app.close()
+})
+
+test('projects tier metadata without exposing generation or publisher attestations', async () => {
+  clearFixture()
+  const manifest = validManifest('b7')
+  const tierTokens = [...ALLOWED_LAYERS].map(layer => `${layer}-z13-p001`)
+  for (const token of tierTokens) {
+    const content = `archive-${token}-b7`
+    writeFileSync(join(dir, `${token}.b7.pmtiles`), content)
+    manifest.layers[token] = {
+      file: `${token}.b7.pmtiles`,
+      build: 'b7',
+      bytes: Buffer.byteLength(content),
+      sha256: createHash('sha256').update(content).digest('hex'),
+      publisher_proof: { secret: 'internal' },
+    } as typeof manifest.layers[string]
+  }
+  const qualificationBytes = Buffer.from('{"schema":"test-qualified-tier"}')
+  const qualificationSha256 = createHash('sha256').update(qualificationBytes).digest('hex')
+  const qualificationFile = `qualification-${qualificationSha256}.json`
+  writeFileSync(join(dir, qualificationFile), qualificationBytes)
+  chmodSync(join(dir, qualificationFile), 0o444)
+  const tiered = { ...manifest, qualification_closure: {
+    file: qualificationFile,
+    sha256: qualificationSha256,
+  }, tiers: {
+    z13: {
+      packs: [{
+        pack: 'p001',
+        coverage_r4: ['841e355ffffffff'],
+        layers: tierTokens,
+        generation: tierGeneration(manifest.generation),
+      }],
+    },
+  } }
+  writeFileSync(pinPath, JSON.stringify(tiered))
+  const app = await buildApp()
+  const res = await app.inject('/api/tiles-manifest')
+  assert.equal(res.statusCode, 200)
+  assert.deepEqual(res.json().layers[tierTokens[0]], {
+    file: `${tierTokens[0]}.b7.pmtiles`,
+    build: 'b7',
+  })
+  assert.deepEqual(res.json().tiers.z13.packs, [{
+    pack: 'p001',
+    coverage_r4: ['841e355ffffffff'],
+    layers: tierTokens,
+  }])
+  assert.equal(res.json().qualification_closure, undefined)
+  assert.doesNotMatch(res.body, /quality|scorer|model_role|publisher_proof|secret/)
   await app.close()
 })
 

@@ -19,7 +19,7 @@ import {
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { dirname, relative, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   prepareRelease,
   pruneUnusedReleases,
@@ -174,6 +174,7 @@ if (compiled.status !== 0) {
 }
 
 const runtimeAssets = [
+  ['src/generation-contract.mjs', 'generation-contract.mjs'],
   ['src/workers/noise-onfly-worker.mjs', 'workers/noise-onfly-worker.mjs'],
 ]
 for (const [sourceRelative, destinationRelative] of runtimeAssets) {
@@ -203,7 +204,7 @@ if (existsSync(nativeSource) && statSync(nativeSource).isFile() && statSync(nati
   throw new Error(`missing required native addon: ${nativeSource}`)
 }
 
-for (const relative of ['server.js', 'workers/noise-onfly-worker.mjs']) {
+for (const relative of ['server.js', ...runtimeAssets.map(([, destination]) => destination)]) {
   const checked = spawnSync(process.execPath, ['--check', resolve(stage, relative)], {
     cwd: serverRoot,
     stdio: 'inherit',
@@ -212,6 +213,21 @@ for (const relative of ['server.js', 'workers/noise-onfly-worker.mjs']) {
     rmSync(stage, { recursive: true, force: true })
     process.exit(checked.status ?? 1)
   }
+}
+
+// Syntax checks do not resolve imports. Load a staged module that crosses the
+// emitted TypeScript -> copied .mjs boundary before publishing the release.
+const imported = spawnSync(process.execPath, [
+  '--input-type=module',
+  '--eval',
+  `await import(${JSON.stringify(pathToFileURL(resolve(stage, 'runtime-readiness.js')).href)})`,
+], {
+  cwd: stage,
+  stdio: 'inherit',
+})
+if (imported.status !== 0) {
+  rmSync(stage, { recursive: true, force: true })
+  process.exit(imported.status ?? 1)
 }
 
 if (sourceInputFingerprint() !== sourceInputsBefore) {

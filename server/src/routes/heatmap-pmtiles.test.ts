@@ -6,7 +6,7 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
@@ -66,5 +66,16 @@ test('unpacked layer archive is 404, unknown build id is 404', async () => {
   assert.equal(noArchive.statusCode, 404)
   const badBuild = await app.inject({ url: '/api/tiles/evil/road/6/33/21.bin' })
   assert.equal(badBuild.statusCode, 404)
+  await app.close()
+})
+
+test('symlinked archive leaf fails closed before PMTiles open', async () => {
+  const link = join(dir, 'road.b1.pmtiles')
+  symlinkSync(join(dir, 'road.b0.pmtiles'), link)
+  const app = await buildApp()
+  const res = await app.inject({ url: '/api/tiles/b1/road/6/33/21.bin' })
+  assert.equal(res.statusCode, 500)
+  assert.equal(res.body, 'archive open failed')
+  assert.equal(res.headers['cache-control'], 'no-store')
   await app.close()
 })

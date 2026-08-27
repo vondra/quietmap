@@ -1,22 +1,60 @@
 // GET /api/tiles-manifest — the currently published pmtiles generation FOR THIS ENVIRONMENT.
 
 import type { FastifyInstance } from 'fastify'
-import { stat } from 'node:fs/promises'
 import { PMTILES_BASE } from './heatmap-shared.js'
-import { PmtilesManifestPinMissingError, readValidatedPmtilesManifest } from '../runtime-readiness.js'
-import { resolveManifestPath } from '../tile-manifest-reader.js'
+import {
+  PmtilesManifestPinMissingError,
+  readCachedValidatedPmtilesManifest,
+  type PmtilesManifest,
+} from '../runtime-readiness.js'
 import type { PublishedLineModel } from '../published-line-model.js'
 
-const TILES_MANIFEST_VALIDATION_CACHE_MS = 10_000
+type PublicManifestLayer = { file: string; build?: string }
+type PublicTierPack = { pack: string; coverage_r4: string[]; layers: string[] }
+
+/** Keep generation, scorer, model-role, hashes, and publisher proofs server-side. */
+function publicManifest(manifest: PmtilesManifest) {
+  const layers: Record<string, PublicManifestLayer> = {}
+  for (const [name, value] of Object.entries(manifest.layers ?? {})) {
+    if (!value || typeof value.file !== 'string') continue
+    layers[name] = {
+      file: value.file,
+      ...(typeof value.build === 'string' ? { build: value.build } : {}),
+    }
+  }
+  const tiers: Record<string, { packs: PublicTierPack[] }> = {}
+  if (manifest.tiers && typeof manifest.tiers === 'object' && !Array.isArray(manifest.tiers)) {
+    for (const [zoom, value] of Object.entries(
+      manifest.tiers as Record<string, { packs?: unknown }>,
+    )) {
+      if (!Array.isArray(value?.packs)) continue
+      tiers[zoom] = {
+        packs: value.packs.map((pack) => {
+          const entry = pack as Record<string, unknown>
+          return {
+            pack: entry.pack as string,
+            coverage_r4: [...entry.coverage_r4 as string[]],
+            layers: [...entry.layers as string[]],
+          }
+        }),
+      }
+    }
+  }
+  return {
+    build: manifest.build,
+    layers,
+    ...(Object.keys(tiers).length > 0 ? { tiers } : {}),
+  }
+}
 
 /**
  * Serve `current.{TILE_ENV}.json` (docs/dev/checkout-restructure-plan.md Track 2 — per-env
  * pmtiles pins, resolved by `tile-manifest-reader.ts`), which the Rust packer's fan-out /
- * `worldctl promote` write atomically: `{build, created, layers: {<layer>: {file, sha256,
- * tiles, bytes}}}`. The packer's fields pass through verbatim — the manifest is the single
- * source of truth and reshaping it here would fork that truth (the shared boot-readiness
- * validator below rejects a torn, malformed, or semantically invalid manifest with a 500).
- * ONE deployment field is added on top: `tile_base` (env PUBLIC_TILE_BASE) tells
+ * `worldctl promote` write atomically. The shared boot-readiness validator rejects a torn,
+ * malformed, or semantically invalid manifest with a 500; this route then projects only the
+ * fields needed to fetch tiles. Internal generation, model-role, quality, scorer, hash, and
+ * publisher-proof data never crosses the public boundary. ONE deployment field is added on
+ * top: `tile_base` (env PUBLIC_TILE_BASE) tells
  * the frontend which HOSTNAME serves the tiles — that is serving
  * topology, which the packer can't know and which must be changeable per checkout/host
  * without a frontend rebuild. Absent env = null = same-origin (devex, localhost, canaries).
@@ -34,8 +72,6 @@ export async function tilesManifestRoutes(
   options: TilesManifestRouteOptions = {},
 ): Promise<void> {
   const tileBase = (process.env.PUBLIC_TILE_BASE || '').replace(/\/$/, '') || null
-  let cached: { identity: string; validatedAt: number;
-    manifest: Awaited<ReturnType<typeof readValidatedPmtilesManifest>> } | null = null
   app.get('/api/tiles-manifest', async (_req, reply) => {
     reply.header('Cache-Control', 'no-cache')
     if (options.publishedLineModel?.enabled) {
@@ -43,30 +79,18 @@ export async function tilesManifestRoutes(
       if (!published) {
         return reply.code(503).send({ error: 'published line model unavailable' })
       }
-      return { ...published, tile_base: tileBase }
+      return { ...publicManifest(published), tile_base: tileBase }
     }
     let manifest
-    let pinExists = false
     try {
-      const pinPath = resolveManifestPath(PMTILES_BASE)
-      const pin = await stat(pinPath, { bigint: true })
-      pinExists = true
-      const identity = `${pin.dev}:${pin.ino}:${pin.size}:${pin.mtimeNs}`
-      const now = Date.now()
-      if (cached?.identity === identity
-          && now - cached.validatedAt < TILES_MANIFEST_VALIDATION_CACHE_MS) manifest = cached.manifest
-      else {
-        manifest = await readValidatedPmtilesManifest(PMTILES_BASE)
-        cached = { identity, validatedAt: now, manifest }
-      }
+      manifest = await readCachedValidatedPmtilesManifest(PMTILES_BASE)
     } catch (e) {
-      if (e instanceof PmtilesManifestPinMissingError
-          || ((e as NodeJS.ErrnoException).code === 'ENOENT' && !pinExists)) {
+      if (e instanceof PmtilesManifestPinMissingError) {
         return reply.code(404).send({ error: 'no build published' })
       }
       app.log?.error?.(`tiles-manifest: ${(e as Error).message}`)
       return reply.code(500).send({ error: 'manifest unreadable' })
     }
-    return { ...manifest, tile_base: tileBase }
+    return { ...publicManifest(manifest), tile_base: tileBase }
   })
 }

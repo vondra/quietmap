@@ -3,8 +3,15 @@
 // avoids making every monitor request contend with point queries while still
 // detecting a worker that exits after startup.
 import { createHash } from 'node:crypto'
-import { readFile, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { lstat, open, readFile, stat, type FileHandle } from 'node:fs/promises'
 import { basename, join, relative, resolve, sep } from 'node:path'
+import {
+  lineModelRoleSha256ForGeneration,
+  validateGenerationContract,
+  validateQualificationClosureReference,
+  validateTierGenerationAnchor,
+} from './generation-contract.mjs'
 import { ALLOWED_LAYERS, parseTierToken, PMTILES_BASE } from './routes/heatmap-shared.js'
 import { FRONTEND_DIST, H3R4_DIR, SOURCE_READER_PATH } from './runtime-paths.js'
 import { resolveManifestPath } from './tile-manifest-reader.js'
@@ -48,6 +55,53 @@ async function requireNonEmptyFile(filePath: string): Promise<void> {
 
 const FRONTEND_ASSET_MANIFEST = 'asset-manifest.json'
 const SHA256 = /^[a-f0-9]{64}$/
+const MAX_QUALIFICATION_CLOSURE_BYTES = 32 * 1024 * 1024
+
+type OpenedRegularFile = {
+  descriptor: FileHandle
+  info: {
+    dev: bigint
+    ino: bigint
+    size: bigint
+    mtimeNs: bigint
+    ctimeNs: bigint
+    isFile: () => boolean
+  }
+}
+
+/** Open one regular leaf without following its final path component. */
+async function openRegularFileNoFollow(path: string, label = path): Promise<OpenedRegularFile> {
+  let descriptor: FileHandle | undefined
+  let keepOpen = false
+  try {
+    descriptor = await open(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    )
+    const info = await descriptor.stat({ bigint: true })
+    if (!info.isFile()) throw new Error(`${label} is not a regular file`)
+    keepOpen = true
+    return { descriptor, info }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
+      throw new Error(`${label} is not a regular file`)
+    }
+    throw error
+  } finally {
+    if (!keepOpen) await descriptor?.close().catch(() => {})
+  }
+}
+
+function fileIdentity(info: OpenedRegularFile['info']): string {
+  return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
+}
+
+/** Stat an archive leaf without following a symlink; readiness remains stat-only. */
+async function statRegularFileNoFollow(path: string, label = path) {
+  const info = await lstat(path, { bigint: true })
+  if (!info.isFile()) throw new Error(`${label} is not a regular file`)
+  return info
+}
 
 // The map IS the product. The build writes one immutable inventory after Vite,
 // precompression, and sitemap generation. Unlike index.html, that inventory
@@ -111,8 +165,23 @@ export type ManifestLayer = {
 const BUILD_ID = /^b[0-9]+$/
 export type PmtilesManifest = {
     build?: unknown
+    generation?: unknown
     layers?: Record<string, ManifestLayer>
+    qualification_closure?: unknown
     [key: string]: unknown
+}
+
+/** Legacy heads remain serve-only until the first generation-fenced base repaint replaces them.
+ * The pre-generation popup protocol already put `line_model_role_sha256` on its manifests, so
+ * that field alone is a valid legacy identity. A generation, however, is never valid without
+ * the matching top-level line identity used by both map readiness and popup publication. */
+function generationFencedManifest(manifest: PmtilesManifest, manifestPath: string): boolean {
+  const hasGeneration = manifest.generation !== undefined
+  const hasLineIdentity = manifest.line_model_role_sha256 !== undefined
+  if (hasGeneration && !hasLineIdentity) {
+    throw new Error(`${manifestPath} mixes legacy and generation-fenced manifest fields`)
+  }
+  return hasGeneration
 }
 
 /** Validate one already-parsed environment pin with the exact boot-readiness contract. */
@@ -126,6 +195,20 @@ export async function validatePmtilesManifest(
   }
   if (!manifest.layers || typeof manifest.layers !== 'object') {
     throw new Error(`${manifestPath} has no layers object`)
+  }
+  if (generationFencedManifest(manifest, manifestPath)) {
+    try {
+      const generation = validateGenerationContract(manifest.generation)
+      if (generation.tier !== '') {
+        throw new Error('top-level generation must be a base contract')
+      }
+      if (manifest.line_model_role_sha256
+          !== lineModelRoleSha256ForGeneration(generation)) {
+        throw new Error('line_model_role_sha256 differs from the base generation')
+      }
+    } catch (error) {
+      throw new Error(`${manifestPath} has an invalid generation contract: ${(error as Error).message}`)
+    }
   }
 
   for (const layer of ALLOWED_LAYERS) {
@@ -176,12 +259,64 @@ export async function validatePmtilesManifest(
     // that catch real operational mistakes: manifest coherence, per-layer completeness, safe
     // archive names, and exact size match (truncation / wrong-file swap).
     const archivePath = join(pmtilesDir, entry.file)
-    const archive = await stat(archivePath, { bigint: true })
-    if (!archive.isFile() || archive.size !== BigInt(entry.bytes as number)) {
+    const archive = await statRegularFileNoFollow(archivePath)
+    if (archive.size !== BigInt(entry.bytes as number)) {
       throw new Error(`${archivePath} size ${archive.size} does not match manifest ${entry.bytes}`)
     }
   }
   validateTiersIndex(manifest, manifestPath)
+  await validateManifestQualificationClosure(manifest, pmtilesDir, manifestPath)
+}
+
+async function validateManifestQualificationClosure(
+  manifest: PmtilesManifest,
+  pmtilesDir: string,
+  manifestPath: string,
+): Promise<void> {
+  const generationFenced = manifest.generation !== undefined
+  const tiered = manifest.tiers !== undefined
+  if (!generationFenced || !tiered) {
+    if (manifest.qualification_closure !== undefined) {
+      throw new Error(`${manifestPath} must not carry a qualification closure without fenced tiers`)
+    }
+    return
+  }
+
+  let reference: { file: string; sha256: string }
+  try {
+    reference = validateQualificationClosureReference(manifest.qualification_closure)
+  } catch (error) {
+    throw new Error(`${manifestPath} has an invalid qualification closure: ${(error as Error).message}`)
+  }
+  const closurePath = join(pmtilesDir, reference.file)
+  let descriptor
+  try {
+    descriptor = await open(
+      closurePath,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    )
+    const info = await descriptor.stat({ bigint: true })
+    if (!info.isFile()) {
+      throw new Error(`${closurePath} is not a regular file`)
+    }
+    if (info.size <= 0n || info.size > BigInt(MAX_QUALIFICATION_CLOSURE_BYTES)) {
+      throw new Error(`${closurePath} has an invalid byte count`)
+    }
+    if ((info.mode & 0o222n) !== 0n) {
+      throw new Error(`${closurePath} is writable`)
+    }
+    const bytes = await descriptor.readFile()
+    if (createHash('sha256').update(bytes).digest('hex') !== reference.sha256) {
+      throw new Error(`${closurePath} sha256 differs from the manifest`)
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
+      throw new Error(`${closurePath} is not a regular file`)
+    }
+    throw error
+  } finally {
+    await descriptor?.close()
+  }
 }
 
 /** Referential integrity of the zoom-tier index (city-z13 plan §D): a torn
@@ -193,10 +328,27 @@ export function validateTiersIndex(
   manifestPath: string,
 ): void {
   const tiers = manifest.tiers
-  if (tiers === undefined) return
+  if (tiers === undefined) {
+    for (const layer of Object.keys(manifest.layers || {})) {
+      if (parseTierToken(layer) !== null) {
+        throw new Error(`${manifestPath} tier token ${layer} is absent from the tiers index`)
+      }
+    }
+    return
+  }
   if (!tiers || typeof tiers !== 'object' || Array.isArray(tiers)) {
     throw new Error(`${manifestPath} tiers is not an object`)
   }
+  const generationFenced = generationFencedManifest(manifest, manifestPath)
+  let baseGeneration: ReturnType<typeof validateGenerationContract> | null = null
+  if (generationFenced) {
+    try {
+      baseGeneration = validateGenerationContract(manifest.generation)
+    } catch (error) {
+      throw new Error(`${manifestPath} tiers has an invalid base generation: ${(error as Error).message}`)
+    }
+  }
+  const indexedTierTokens = new Set<string>()
   for (const [zoom, entry] of Object.entries(tiers as Record<string, { packs?: unknown }>)) {
     const zoomNum = /^z(1[3-8])$/.exec(zoom)?.[1]
     if (!zoomNum) throw new Error(`${manifestPath} tiers has invalid zoom key ${zoom}`)
@@ -208,6 +360,17 @@ export function validateTiersIndex(
       }
       if (seen.has(p.pack)) throw new Error(`${manifestPath} tiers.${zoom} pack ${p.pack} is duplicated`)
       seen.add(p.pack)
+      if (generationFenced) {
+        try {
+          validateTierGenerationAnchor(baseGeneration, p.generation, zoom)
+        } catch (error) {
+          throw new Error(
+            `${manifestPath} tiers.${zoom} pack ${p.pack} has an invalid generation: ${(error as Error).message}`,
+          )
+        }
+      } else if (p.generation !== undefined) {
+        throw new Error(`${manifestPath} legacy tier pack ${p.pack} carries a generation identity`)
+      }
       if (!Array.isArray(p.coverage_r4) || p.coverage_r4.length === 0
         || !p.coverage_r4.every((c) => typeof c === 'string' && /^84[0-9a-f]{5}ffffffff$/.test(c))) {
         throw new Error(`${manifestPath} tiers.${zoom} pack ${p.pack} has invalid coverage_r4`)
@@ -215,15 +378,38 @@ export function validateTiersIndex(
       if (!Array.isArray(p.layers) || p.layers.length === 0) {
         throw new Error(`${manifestPath} tiers.${zoom} pack ${p.pack} has no layers list`)
       }
+      const expectedTokens = [...ALLOWED_LAYERS]
+        .map(layer => `${layer}-${zoom}-${p.pack}`)
+        .sort()
+      const observedTokens = p.layers.every(token => typeof token === 'string')
+        ? [...p.layers as string[]].sort()
+        : []
       for (const token of p.layers) {
         const parsed = typeof token === 'string' ? parseTierToken(token) : null
         if (!parsed || String(parsed.tier) !== zoomNum || parsed.pack !== p.pack) {
           throw new Error(`${manifestPath} tiers.${zoom} pack ${p.pack} lists foreign token ${String(token)}`)
         }
+      }
+      if (observedTokens.length !== expectedTokens.length
+        || observedTokens.some((token, index) => token !== expectedTokens[index])) {
+        throw new Error(
+          `${manifestPath} tiers.${zoom} pack ${p.pack} does not contain the exact 8-layer bundle`,
+        )
+      }
+      for (const token of p.layers) {
         if (!manifest.layers || typeof manifest.layers[token as string] !== 'object') {
           throw new Error(`${manifestPath} tiers.${zoom} pack ${p.pack} token ${String(token)} has no layers entry`)
         }
+        if (indexedTierTokens.has(token as string)) {
+          throw new Error(`${manifestPath} tier token ${String(token)} is indexed more than once`)
+        }
+        indexedTierTokens.add(token as string)
       }
+    }
+  }
+  for (const layer of Object.keys(manifest.layers || {})) {
+    if (parseTierToken(layer) !== null && !indexedTierTokens.has(layer)) {
+      throw new Error(`${manifestPath} tier token ${layer} is absent from the tiers index`)
     }
   }
 }
@@ -233,6 +419,38 @@ export class PmtilesManifestPinMissingError extends Error {
   readonly code = 'QM_PMTILES_MANIFEST_PIN_MISSING'
 }
 
+async function openManifestPinNoFollow(path: string): Promise<OpenedRegularFile> {
+  try {
+    return await openRegularFileNoFollow(path)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new PmtilesManifestPinMissingError(`${path} does not exist`)
+    }
+    throw error
+  }
+}
+
+const PMTILES_MANIFEST_CACHE_MS = 10_000
+type CachedPmtilesManifest = {
+  identity: string
+  validatedAt: number
+  manifest: PmtilesManifest
+}
+const pmtilesManifestCache = new Map<string, CachedPmtilesManifest>()
+const pmtilesManifestLoads = new Map<string, Promise<PmtilesManifest>>()
+
+async function readValidatedPmtilesManifestFile(
+  pmtilesDir: string,
+  manifestPath: string,
+  opened: OpenedRegularFile,
+): Promise<{ manifest: PmtilesManifest; identity: string }> {
+  const raw = (await opened.descriptor.readFile()).toString('utf8')
+  const manifest = JSON.parse(raw) as PmtilesManifest
+  await validatePmtilesManifest(manifest, pmtilesDir, manifestPath)
+  const identity = fileIdentity(await opened.descriptor.stat({ bigint: true }))
+  return { manifest, identity }
+}
+
 export async function readValidatedPmtilesManifest(
   pmtilesDir: string,
   tileEnv?: string,
@@ -240,22 +458,70 @@ export async function readValidatedPmtilesManifest(
   // Per-environment pin (docs/dev/checkout-restructure-plan.md Track 2): boot readiness and the
   // route both gate on THIS deployment's pin, never the packer's shared merge head.
   const manifestPath = resolveManifestPath(pmtilesDir, tileEnv)
-  let raw: string
+  const opened = await openManifestPinNoFollow(manifestPath)
   try {
-    raw = await readFile(manifestPath, 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new PmtilesManifestPinMissingError(`${manifestPath} does not exist`)
-    }
-    throw error
+    return (await readValidatedPmtilesManifestFile(pmtilesDir, manifestPath, opened)).manifest
+  } finally {
+    await opened.descriptor.close()
   }
-  const manifest = JSON.parse(raw) as PmtilesManifest
-  await validatePmtilesManifest(manifest, pmtilesDir, manifestPath)
-  return manifest
+}
+
+/** Share one short-lived, stat-bound validation across readiness and public manifest routes. */
+export async function readCachedValidatedPmtilesManifest(
+  pmtilesDir: string,
+  tileEnv?: string,
+): Promise<PmtilesManifest> {
+  const manifestPath = resolveManifestPath(pmtilesDir, tileEnv)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const opened = await openManifestPinNoFollow(manifestPath)
+    const identity = fileIdentity(opened.info)
+    const now = Date.now()
+    const cached = pmtilesManifestCache.get(manifestPath)
+    if (cached?.identity === identity
+        && now - cached.validatedAt < PMTILES_MANIFEST_CACHE_MS) {
+      await opened.descriptor.close()
+      return cached.manifest
+    }
+
+    const loadKey = `${manifestPath}\0${identity}`
+    let loading = pmtilesManifestLoads.get(loadKey)
+    if (!loading) {
+      loading = (async () => {
+        try {
+          const { manifest, identity: identityAfter } =
+            await readValidatedPmtilesManifestFile(pmtilesDir, manifestPath, opened)
+          if (identityAfter !== identity) {
+            throw new Error(`${manifestPath} changed while it was being validated`)
+          }
+          pmtilesManifestCache.set(manifestPath, {
+            identity,
+            validatedAt: Date.now(),
+            manifest,
+          })
+          return manifest
+        } finally {
+          await opened.descriptor.close()
+        }
+      })().finally(() => pmtilesManifestLoads.delete(loadKey))
+      pmtilesManifestLoads.set(loadKey, loading)
+    } else {
+      await opened.descriptor.close()
+    }
+    try {
+      return await loading
+    } catch (error) {
+      if (attempt === 0
+          && (error as Error).message === `${manifestPath} changed while it was being validated`) {
+        continue
+      }
+      throw error
+    }
+  }
+  throw new Error(`${manifestPath} changed repeatedly while it was being validated`)
 }
 
 async function checkPmtiles(pmtilesDir: string, tileEnv?: string): Promise<void> {
-  await readValidatedPmtilesManifest(pmtilesDir, tileEnv)
+  await readCachedValidatedPmtilesManifest(pmtilesDir, tileEnv)
 }
 
 export function createReadinessCheck(options: ReadinessOptions): ReadinessCheck {

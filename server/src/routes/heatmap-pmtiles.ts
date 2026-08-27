@@ -3,7 +3,7 @@
 // loose .bin files. A build ("b0", "b1", …) is an immutable published
 // generation, so both hits and misses are cached hard by the browser.
 
-import { readFileSync } from 'node:fs'
+import { constants } from 'node:fs'
 import { open, type FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -17,7 +17,10 @@ import {
   type Source,
 } from 'pmtiles'
 import { parseTileParams, PMTILES_BASE } from './heatmap-shared.js'
-import { resolveManifestPath } from '../tile-manifest-reader.js'
+import {
+  readCachedValidatedPmtilesManifest,
+  type PmtilesManifest,
+} from '../runtime-readiness.js'
 
 const gunzipAsync = promisify(gunzip)
 
@@ -91,8 +94,14 @@ type OpenArchive = { pmtiles: PMTiles; handle: FileHandle }
 const archiveCache = new Map<string, Promise<OpenArchive>>()
 
 async function openHeatmapArchive(path: string): Promise<OpenArchive> {
-  const handle = await open(path, 'r')
+  let handle: FileHandle | undefined
   try {
+    handle = await open(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    )
+    const info = await handle.stat({ bigint: true })
+    if (!info.isFile()) throw new Error(`${path} is not a regular file`)
     const pmtiles = new PMTiles(
       new FileHandleSource(handle, path),
       new SharedPromiseCache(100, true, gunzipDirectoriesPassthroughTiles),
@@ -114,7 +123,7 @@ async function openHeatmapArchive(path: string): Promise<OpenArchive> {
     }
     return { pmtiles, handle }
   } catch (e) {
-    await handle.close().catch(() => {})
+    await handle?.close().catch(() => {})
     throw e
   }
 }
@@ -244,9 +253,9 @@ export async function heatmapPmtilesRoutes(app: FastifyInstance): Promise<void> 
     // out of a fourth codebase location (SSOT: frontend tile-math.ts).
     const z = 8, x = 138, y = 87
 
-    let manifest: { layers?: Record<string, { file?: string; build?: string }> }
+    let manifest: PmtilesManifest
     try {
-      manifest = JSON.parse(readFileSync(resolveManifestPath(PMTILES_BASE), 'utf8'))
+      manifest = await readCachedValidatedPmtilesManifest(PMTILES_BASE)
     } catch (e) {
       app.log?.error?.(`tiles-health: manifest unreadable: ${(e as Error).message}`)
       return reply.code(503).send({ ok: false, failures: ['manifest unreadable'] })
@@ -258,7 +267,9 @@ export async function heatmapPmtilesRoutes(app: FastifyInstance): Promise<void> 
       const entry = manifest.layers?.[layer]
       // The entry's own build field is authoritative (per-layer builds);
       // the filename regex only covers pre-partial-pack manifests.
-      const build = entry?.build ?? /\.(b\d+)\.pmtiles$/.exec(entry?.file ?? '')?.[1]
+      const entryBuild = typeof entry?.build === 'string' ? entry.build : undefined
+      const entryFile = typeof entry?.file === 'string' ? entry.file : ''
+      const build = entryBuild ?? /\.(b\d+)\.pmtiles$/.exec(entryFile)?.[1]
       if (!build) { failures.push(`${layer}: no manifest entry`); continue }
       try {
         const archive = await getHeatmapArchive(build, layer)
