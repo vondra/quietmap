@@ -135,6 +135,44 @@ pub struct CellPrune<'a> {
     pub floor_m: f64,
 }
 
+/// Reused per-worker state for the ray-edge dedup table.
+///
+/// The DDA visits an edge's supercover cells, so one edge may appear in more
+/// than one cell. The historical implementation cleared a 64-entry table for
+/// every ray. A generation tag preserves the exact same direct-mapped
+/// collision/eviction semantics without 64 stores per `(source, receiver)`
+/// query. The table is deliberately bounded: collisions only cause an extra
+/// exact intersection test and the post-sort dedup remains authoritative.
+#[derive(Clone)]
+pub struct CrossingScratch {
+    recent: [u64; 64],
+    epoch: u32,
+}
+
+impl Default for CrossingScratch {
+    fn default() -> Self {
+        Self {
+            recent: [0; 64],
+            epoch: 0,
+        }
+    }
+}
+
+impl CrossingScratch {
+    #[inline]
+    fn begin_ray(&mut self) -> u32 {
+        if self.epoch == u32::MAX {
+            // Four billion rays per worker is outside any tile, but keep the
+            // reusable scratch correct if a long-lived stream ever reaches it.
+            self.recent = [0; 64];
+            self.epoch = 1;
+        } else {
+            self.epoch += 1;
+        }
+        self.epoch
+    }
+}
+
 impl<'a> CellPrune<'a> {
     /// Prune context for a ray whose profile is already built, floored at the
     /// consumer's own floor. Callers do NOT choose the floor: it belongs to
@@ -600,7 +638,18 @@ impl ObstacleIndex {
         out: &mut Vec<CrossingCandidate>,
     ) {
         out.clear();
-        self.append_crossings(src_lat, src_lon, rcv_lat, rcv_lon, None, out);
+        if self.edges.is_empty() {
+            return;
+        }
+        self.append_crossings(
+            src_lat,
+            src_lon,
+            rcv_lat,
+            rcv_lon,
+            None,
+            &mut CrossingScratch::default(),
+            out,
+        );
     }
 
     /// [`Self::crossings`] with the per-cell branch-and-bound prune.
@@ -629,7 +678,18 @@ impl ObstacleIndex {
         out: &mut Vec<CrossingCandidate>,
     ) {
         out.clear();
-        self.append_crossings(src_lat, src_lon, rcv_lat, rcv_lon, Some(prune), out);
+        if self.edges.is_empty() {
+            return;
+        }
+        self.append_crossings(
+            src_lat,
+            src_lon,
+            rcv_lat,
+            rcv_lon,
+            Some(prune),
+            &mut CrossingScratch::default(),
+            out,
+        );
     }
 
     /// [`Self::crossings`] without the clear: appends this index's hits and
@@ -645,7 +705,18 @@ impl ObstacleIndex {
         rcv_lon: f64,
         out: &mut Vec<CrossingCandidate>,
     ) {
-        self.append_crossings(src_lat, src_lon, rcv_lat, rcv_lon, None, out);
+        if self.edges.is_empty() {
+            return;
+        }
+        self.append_crossings(
+            src_lat,
+            src_lon,
+            rcv_lat,
+            rcv_lon,
+            None,
+            &mut CrossingScratch::default(),
+            out,
+        );
     }
 
     fn append_crossings(
@@ -655,12 +726,14 @@ impl ObstacleIndex {
         rcv_lat: f64,
         rcv_lon: f64,
         prune: Option<&CellPrune<'_>>,
+        scratch: &mut CrossingScratch,
         out: &mut Vec<CrossingCandidate>,
     ) {
         let start = out.len();
         if self.edges.is_empty() {
             return;
         }
+        let generation = scratch.begin_ray();
         let (sx, sy) = self.to_local(src_lat, src_lon);
         let (rx, ry) = self.to_local(rcv_lat, rcv_lon);
         let (dx, dy) = (rx - sx, ry - sy);
@@ -699,16 +772,16 @@ impl ObstacleIndex {
         };
 
         // An edge spans every supercover cell it passes through, so the ray
-        // can re-test it in each of them. A direct-mapped 64-slot set records
-        // EVERY edge that reaches the exact predicate, not only hits: ray and
-        // edge are immutable within this walk, so repeating the predicate
-        // cannot change its answer. An AABB rejection is deliberately not
-        // remembered: the same edge can span a later DDA cell that contains
-        // the true crossing. A hash collision merely evicts the older entry
-        // and performs an extra test; it can never suppress a distinct edge.
-        // CORRECTNESS still belongs to the post-sort dedup below (a shared
-        // ring vertex can hit two edges of one footprint at one chainage).
-        let mut recent: [u32; 64] = [u32::MAX; 64];
+        // can re-test it in each of them. The generation-tagged direct-mapped
+        // 64-slot table records EVERY edge that reaches the exact predicate,
+        // not only hits: ray and edge are immutable within this walk, so
+        // repeating the predicate cannot change its answer. An AABB rejection
+        // is deliberately not remembered: the same edge can span a later DDA
+        // cell that contains the true crossing. A hash collision merely evicts
+        // the older entry and performs an extra test; it can never suppress a
+        // distinct edge. CORRECTNESS still belongs to the post-sort dedup below
+        // (a shared ring vertex can hit two edges of one footprint at one
+        // chainage).
 
         let mut guard = (self.cols + self.rows) as i64 + 4;
         // Chainage the ray entered the current cell at, and a monotone pointer
@@ -746,15 +819,19 @@ impl ObstacleIndex {
                 if lo < hi {
                     let (ray_x, ray_y) = ray_cell_aabb(sx, sy, dx, dy, cell_t_lo, cell_t_hi);
                     for &eref in &self.edge_refs[lo..hi] {
-                        let slot = eref as usize & (recent.len() - 1);
-                        if recent[slot] == eref {
+                        let slot = eref as usize & (scratch.recent.len() - 1);
+                        let tag = (u64::from(generation) << 32) | u64::from(eref);
+                        if scratch.recent[slot] == tag {
                             continue;
                         }
                         let e = &self.edges[eref as usize];
                         if !ray_cell_aabb_may_overlap(ray_x, ray_y, e) {
                             continue;
                         }
-                        recent[slot] = eref;
+                        // Remember only after the AABB gate, exactly as the
+                        // historical local table did: an edge rejected by one
+                        // supercover cell must remain eligible in a later cell.
+                        scratch.recent[slot] = tag;
                         if let Some(t) = segment_intersection_t(
                             sx,
                             sy,
@@ -860,11 +937,20 @@ impl ObstacleSet {
         out: &mut Vec<CrossingCandidate>,
     ) {
         out.clear();
+        let mut scratch = None;
         for idx in &self.indexes {
-            if !idx.segment_may_hit(src_lat, src_lon, rcv_lat, rcv_lon) {
+            if idx.edge_count() == 0 || !idx.segment_may_hit(src_lat, src_lon, rcv_lat, rcv_lon) {
                 continue;
             }
-            idx.append_crossings(src_lat, src_lon, rcv_lat, rcv_lon, None, out);
+            idx.append_crossings(
+                src_lat,
+                src_lon,
+                rcv_lat,
+                rcv_lon,
+                None,
+                scratch.get_or_insert_with(CrossingScratch::default),
+                out,
+            );
         }
         out.sort_unstable_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
     }
@@ -881,11 +967,51 @@ impl ObstacleSet {
         out: &mut Vec<CrossingCandidate>,
     ) {
         out.clear();
+        let mut scratch = None;
+        for idx in &self.indexes {
+            if idx.edge_count() == 0 || !idx.segment_may_hit(src_lat, src_lon, rcv_lat, rcv_lon) {
+                continue;
+            }
+            idx.append_crossings(
+                src_lat,
+                src_lon,
+                rcv_lat,
+                rcv_lon,
+                Some(prune),
+                scratch.get_or_insert_with(CrossingScratch::default),
+                out,
+            );
+        }
+        out.sort_unstable_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+    }
+
+    /// [`Self::crossings_pruned`] with a reused per-worker edge-dedup table.
+    /// This is byte/ordering-identical to the ordinary method; it only avoids
+    /// clearing a 64-entry direct-mapped table for every ray.
+    pub fn crossings_pruned_with_scratch(
+        &self,
+        src_lat: f64,
+        src_lon: f64,
+        rcv_lat: f64,
+        rcv_lon: f64,
+        prune: &CellPrune<'_>,
+        scratch: &mut CrossingScratch,
+        out: &mut Vec<CrossingCandidate>,
+    ) {
+        out.clear();
         for idx in &self.indexes {
             if !idx.segment_may_hit(src_lat, src_lon, rcv_lat, rcv_lon) {
                 continue;
             }
-            idx.append_crossings(src_lat, src_lon, rcv_lat, rcv_lon, Some(prune), out);
+            idx.append_crossings(
+                src_lat,
+                src_lon,
+                rcv_lat,
+                rcv_lon,
+                Some(prune),
+                scratch,
+                out,
+            );
         }
         out.sort_unstable_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
     }
@@ -2533,7 +2659,15 @@ mod slab_reject_tests {
                 // Reference: every index walked, no reject.
                 without.clear();
                 for idx in &set.indexes {
-                    idx.append_crossings(src.0, src.1, rcv.0, rcv.1, None, &mut without);
+                    idx.append_crossings(
+                        src.0,
+                        src.1,
+                        rcv.0,
+                        rcv.1,
+                        None,
+                        &mut CrossingScratch::default(),
+                        &mut without,
+                    );
                 }
                 without.sort_unstable_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
                 checked += 1;
@@ -2681,6 +2815,58 @@ mod cell_prune_tests {
         );
         for (a, c) in pruned.iter().zip(&plain) {
             assert_eq!((a.t, a.height_m, a.id), (c.t, c.height_m, c.id));
+        }
+    }
+
+    /// A generation-tagged scratch table is only a storage optimization: it
+    /// must reproduce the fresh 64-slot table even when one worker reuses it
+    /// across different rays and the direct-mapped slots collide.
+    #[test]
+    fn generation_scratch_matches_fresh_pruned_walk() {
+        let mut b = ObstacleIndex::builder(OLAT, OLON);
+        for id in 0..24 {
+            let x = 4.0 + id as f64 * 2.0;
+            b.add_ring(
+                &[ll(x, -8.0), ll(x + 0.8, -8.0), ll(x + 0.8, 8.0), ll(x, 8.0)],
+                6.0,
+                ObstacleKind::Building,
+                id,
+            );
+        }
+        let idx = b.build();
+        let set = ObstacleSet {
+            indexes: vec![std::sync::Arc::new(idx)],
+        };
+        let src = ll(0.0, 0.0);
+        let (t, elev) = ([0.0, 0.5, 1.0], [0.0f32, 0.0, 0.0]);
+        let p = flat_penumbra_prune(&t, &elev);
+        let mut fresh = Vec::new();
+        let mut reused = Vec::new();
+        let mut scratch = CrossingScratch::default();
+        for end_x in [40.0, 55.0, 70.0, 85.0, 100.0, 115.0] {
+            let rcv = ll(end_x, 0.0);
+            set.crossings_pruned(src.0, src.1, rcv.0, rcv.1, &p, &mut fresh);
+            set.crossings_pruned_with_scratch(
+                src.0,
+                src.1,
+                rcv.0,
+                rcv.1,
+                &p,
+                &mut scratch,
+                &mut reused,
+            );
+            assert_eq!(
+                reused.len(),
+                fresh.len(),
+                "scratch changed ray ending at {end_x} m"
+            );
+            for (actual, expected) in reused.iter().zip(&fresh) {
+                assert_eq!(
+                    (actual.t, actual.height_m, actual.kind, actual.id),
+                    (expected.t, expected.height_m, expected.kind, expected.id),
+                    "scratch changed ray ending at {end_x} m"
+                );
+            }
         }
     }
 }

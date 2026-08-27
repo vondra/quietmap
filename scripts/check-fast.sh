@@ -43,6 +43,11 @@ if [ "$HALF" != "node" ]; then
     (cd "engine/$crate" && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked --all-targets)
   done
 
+  # The ground hoist must stay bit-exact under release optimisation; the debug
+  # all-targets run above cannot detect compiler/libm constant-folding drift.
+  step "engine: optimized ground-hoist exactness"
+  (cd engine/noise-compute && cargo test --locked --release --test ground_hoist_exact)
+
   step "engine: CUDA compile-only role matrix"
   if command -v nvcc >/dev/null 2>&1; then
     "$ROOT/scripts/check-nvcc-roles-local.sh"

@@ -5,6 +5,7 @@
 
 use crate::constants::*;
 use crate::types::NUM_BANDS;
+use std::sync::OnceLock;
 use wide::{f64x4, CmpGt};
 
 // Clamp bounds for fast_exp: just inside the f64 subnormal/overflow edges
@@ -126,57 +127,155 @@ pub const CNOSSOS_GROUND_ALPHA0: f64 = 2e-4;
 /// CNOSSOS-EU 2015/996 §2.5.19 terrain-height term [1].
 pub const CNOSSOS_GROUND_DELTA_ZT_COEFF: f64 = 6e-3;
 
-/// Literal CNOSSOS ground attenuation for one meteorological state.
+/// Runtime-evaluated frequency powers used by the literal ground formula.
 ///
-/// `favourable=false` implements §2.5.15; `true` implements §2.5.20.  The
-/// latter deliberately uses `G_path` in the impedance term while both states
-/// retain `G'_path` for the §2.5.18 lower bound, matching the standard's
-/// §2.5.14/2.5.20 split.
+/// These are intentionally initialized through the target's `f64::powf`, not
+/// as source-level constants: replacing repeated calls with a cached value is
+/// exact only when the cache is formed by the same target libm evaluation in
+/// the process's default floating-point environment.
+#[derive(Clone, Copy)]
+struct GroundBandConstants {
+    frequency_hz: f64,
+    frequency_pow_2_5: f64,
+    frequency_pow_1_5: f64,
+    frequency_pow_0_75: f64,
+}
+
+static GROUND_BAND_CONSTANTS: OnceLock<[GroundBandConstants; NUM_BANDS]> = OnceLock::new();
+
 #[inline]
-fn cnossos_ground_state_db(band: usize, path: GroundPath, favourable: bool) -> f64 {
+fn ground_band_constants() -> &'static [GroundBandConstants; NUM_BANDS] {
+    GROUND_BAND_CONSTANTS.get_or_init(|| {
+        std::array::from_fn(|band| {
+            // Keep the fixed band literals on the target runtime's libm path;
+            // `black_box` prevents build-time constant folding.
+            let frequency_hz = std::hint::black_box(BAND_FREQ[band]);
+            GroundBandConstants {
+                frequency_hz,
+                frequency_pow_2_5: frequency_hz.powf(2.5),
+                frequency_pow_1_5: frequency_hz.powf(1.5),
+                frequency_pow_0_75: frequency_hz.powf(0.75),
+            }
+        })
+    })
+}
+
+/// Shared geometry and §2.5.14 factor for one direct CNOSSOS path.
+#[derive(Clone, Copy)]
+struct PreparedGroundPath {
+    dp_m: f64,
+    zs_h_m: f64,
+    zr_h_m: f64,
+    ground_path_g: f64,
+    height_sum_m: f64,
+    g_prime: f64,
+}
+
+/// State-specific geometry and impedance powers, prepared once per path.
+#[derive(Clone, Copy)]
+struct PreparedGroundState {
+    zs_m: f64,
+    zr_m: f64,
+    gw13: f64,
+    gw26: f64,
+}
+
+/// Prepare the band-invariant portion of the direct ground path.
+#[inline]
+fn prepare_ground_path(path: GroundPath) -> Option<PreparedGroundPath> {
     let g_path = path.ground_path_g;
     if g_path == 0.0 {
-        // The standard states this case verbatim.  Besides being exact, the
+        // The standard states this case verbatim. Besides being exact, the
         // branch avoids the zero-impedance intermediate below.
-        return GROUND_HARD_FLOOR_DB;
+        return None;
     }
 
-    let (zs_h, zr_h) = (path.zs_h_m, path.zr_h_m);
-    let height_sum = zs_h + zr_h;
-    let test_form_h = path.dp_m / (30.0 * height_sum);
+    let height_sum_m = path.zs_h_m + path.zr_h_m;
+    let test_form_h = path.dp_m / (30.0 * height_sum_m);
     // §2.5.14: at short paths blend the path ground with source ground.
     let g_prime = if test_form_h <= 1.0 {
         g_path * test_form_h + path.source_ground_g * (1.0 - test_form_h)
     } else {
         g_path
     };
-    let (zs, zr, gw) = if favourable {
-        let delta_zt = CNOSSOS_GROUND_DELTA_ZT_COEFF * path.dp_m / height_sum;
-        let dp_sq_half = path.dp_m * path.dp_m * 0.5;
-        let zs_f =
-            zs_h + CNOSSOS_GROUND_ALPHA0 * (zs_h / height_sum).powi(2) * dp_sq_half + delta_zt;
-        let zr_f =
-            zr_h + CNOSSOS_GROUND_ALPHA0 * (zr_h / height_sum).powi(2) * dp_sq_half + delta_zt;
-        (zs_f, zr_f, g_path)
-    } else {
-        (zs_h, zr_h, g_prime)
-    };
+    Some(PreparedGroundPath {
+        dp_m: path.dp_m,
+        zs_h_m: path.zs_h_m,
+        zr_h_m: path.zr_h_m,
+        ground_path_g: path.ground_path_g,
+        height_sum_m,
+        g_prime,
+    })
+}
 
-    let f = BAND_FREQ[band];
-    let k = 2.0 * std::f64::consts::PI * f / SPEED_OF_SOUND;
+/// Prepare one homogeneous or favourable state without changing its formula.
+#[inline]
+fn prepare_ground_state(path: &PreparedGroundPath, favourable: bool) -> PreparedGroundState {
+    let (zs_m, zr_m, gw) = if favourable {
+        let delta_zt = CNOSSOS_GROUND_DELTA_ZT_COEFF * path.dp_m / path.height_sum_m;
+        let dp_sq_half = path.dp_m * path.dp_m * 0.5;
+        let zs_f = path.zs_h_m
+            + CNOSSOS_GROUND_ALPHA0 * (path.zs_h_m / path.height_sum_m).powi(2) * dp_sq_half
+            + delta_zt;
+        let zr_f = path.zr_h_m
+            + CNOSSOS_GROUND_ALPHA0 * (path.zr_h_m / path.height_sum_m).powi(2) * dp_sq_half
+            + delta_zt;
+        (zs_f, zr_f, path.ground_path_g)
+    } else {
+        (path.zs_h_m, path.zr_h_m, path.g_prime)
+    };
     let gw13 = gw.powf(1.3);
     let gw26 = gw13 * gw13;
-    // §2.5.17, then §2.5.16.
-    let w =
-        0.0185 * f.powf(2.5) * gw26 / (f.powf(1.5) * gw26 + 1.3e3 * f.powf(0.75) * gw13 + 1.16e6);
+    PreparedGroundState {
+        zs_m,
+        zr_m,
+        gw13,
+        gw26,
+    }
+}
+
+/// Literal CNOSSOS ground attenuation for one prepared meteorological state.
+///
+/// `favourable=false` implements §2.5.15; `true` implements §2.5.20. The
+/// latter deliberately uses `G_path` in the impedance term while both states
+/// retain `G'_path` for the §2.5.18 lower bound, matching the standard's
+/// §2.5.14/2.5.20 split.
+#[inline]
+fn ground_state_db(
+    band_constants: &GroundBandConstants,
+    path: &PreparedGroundPath,
+    state: PreparedGroundState,
+) -> f64 {
+    let f = band_constants.frequency_hz;
+    let k = 2.0 * std::f64::consts::PI * f / SPEED_OF_SOUND;
+    // §2.5.17, then §2.5.16. Frequency powers are per-band constants;
+    // `G^1.3` is prepared once per meteorological state.
+    let w = 0.0185 * band_constants.frequency_pow_2_5 * state.gw26
+        / (band_constants.frequency_pow_1_5 * state.gw26
+            + 1.3e3 * band_constants.frequency_pow_0_75 * state.gw13
+            + 1.16e6);
     let wd = w * path.dp_m;
     let cf = path.dp_m * (1.0 + 3.0 * wd * (-wd.sqrt()).exp()) / (1.0 + wd);
-    let image_product = (zs * zs - (2.0 * cf / k).sqrt() * zs + cf / k)
-        * (zr * zr - (2.0 * cf / k).sqrt() * zr + cf / k);
+    let image_product = (state.zs_m * state.zs_m - (2.0 * cf / k).sqrt() * state.zs_m + cf / k)
+        * (state.zr_m * state.zr_m - (2.0 * cf / k).sqrt() * state.zr_m + cf / k);
     let analytic = -10.0 * (4.0 * k * k / (path.dp_m * path.dp_m) * image_product).log10();
-    // §2.5.18.  The screen-specific split (§2.5.30--32) remains outside the
+    // §2.5.18. The screen-specific split (§2.5.30--32) remains outside the
     // Quiet Map composite; callers still choose max(A_ground, A_barrier).
-    analytic.max(GROUND_HARD_FLOOR_DB * (1.0 - g_prime))
+    analytic.max(GROUND_HARD_FLOOR_DB * (1.0 - path.g_prime))
+}
+
+/// Mix prepared homogeneous and favourable states using the engine convention.
+#[inline]
+fn mix_prepared_ground_states(
+    band_constants: &GroundBandConstants,
+    path: &PreparedGroundPath,
+    homogeneous: PreparedGroundState,
+    favourable: PreparedGroundState,
+) -> f64 {
+    let hom = ground_state_db(band_constants, path, homogeneous);
+    let fav = ground_state_db(band_constants, path, favourable);
+    let energy = P_FAV * 10.0_f64.powf(-fav / 10.0) + (1.0 - P_FAV) * 10.0_f64.powf(-hom / 10.0);
+    -10.0 * energy.log10()
 }
 
 /// Literal homogeneous (§2.5.15) ground attenuation for fixtures and the
@@ -184,35 +283,61 @@ fn cnossos_ground_state_db(band: usize, path: GroundPath, favourable: bool) -> f
 /// which also includes §2.5.20.
 #[inline]
 pub fn cnossos_ground_homogeneous_atten_db(band: usize, path: GroundPath) -> f64 {
-    cnossos_ground_state_db(band, path, false)
+    let Some(prepared_path) = prepare_ground_path(path) else {
+        return GROUND_HARD_FLOOR_DB;
+    };
+    let homogeneous = prepare_ground_state(&prepared_path, false);
+    ground_state_db(&ground_band_constants()[band], &prepared_path, homogeneous)
 }
 
 /// [`cnossos_ground_homogeneous_atten_db`] over all octave bands.
 #[inline]
 pub fn cnossos_ground_homogeneous_atten_bands(path: GroundPath) -> [f64; NUM_BANDS] {
-    std::array::from_fn(|i| cnossos_ground_homogeneous_atten_db(i, path))
+    let Some(prepared_path) = prepare_ground_path(path) else {
+        return [GROUND_HARD_FLOOR_DB; NUM_BANDS];
+    };
+    let homogeneous = prepare_ground_state(&prepared_path, false);
+    let band_constants = ground_band_constants();
+    std::array::from_fn(|band| ground_state_db(&band_constants[band], &prepared_path, homogeneous))
 }
 
 /// Literal CNOSSOS direct-ground core, with homogeneous and favourable
 /// propagation mixed energetically using the engine-wide `P_FAV` convention.
 #[inline]
 pub fn ground_atten_db(band: usize, path: GroundPath) -> f64 {
-    if path.ground_path_g == 0.0 {
+    let Some(prepared_path) = prepare_ground_path(path) else {
         // Both meteorological states are the standard's explicit hard-ground
-        // case.  Return it before the energy round-trip so the byte-stop bound
+        // case. Return it before the energy round-trip so the byte-stop bound
         // keeps its exact −3 dB anchor, not merely a 1-ULP approximation.
         return GROUND_HARD_FLOOR_DB;
-    }
-    let hom = cnossos_ground_state_db(band, path, false);
-    let fav = cnossos_ground_state_db(band, path, true);
-    let energy = P_FAV * 10.0_f64.powf(-fav / 10.0) + (1.0 - P_FAV) * 10.0_f64.powf(-hom / 10.0);
-    -10.0 * energy.log10()
+    };
+    let homogeneous = prepare_ground_state(&prepared_path, false);
+    let favourable = prepare_ground_state(&prepared_path, true);
+    mix_prepared_ground_states(
+        &ground_band_constants()[band],
+        &prepared_path,
+        homogeneous,
+        favourable,
+    )
 }
 
 /// [`ground_atten_db`] for all octave bands.
 #[inline]
 pub fn ground_atten_bands(path: GroundPath) -> [f64; NUM_BANDS] {
-    std::array::from_fn(|i| ground_atten_db(i, path))
+    let Some(prepared_path) = prepare_ground_path(path) else {
+        return [GROUND_HARD_FLOOR_DB; NUM_BANDS];
+    };
+    let homogeneous = prepare_ground_state(&prepared_path, false);
+    let favourable = prepare_ground_state(&prepared_path, true);
+    let band_constants = ground_band_constants();
+    std::array::from_fn(|band| {
+        mix_prepared_ground_states(
+            &band_constants[band],
+            &prepared_path,
+            homogeneous,
+            favourable,
+        )
+    })
 }
 
 /// Propagation baseline tied to the closest segment — divergence + the ground

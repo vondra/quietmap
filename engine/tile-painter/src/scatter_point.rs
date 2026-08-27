@@ -1,9 +1,13 @@
 //! Point-source (industrial + building) scatter onto a Web Mercator base-zoom tile: a
 //! thin entry point over the generic [`crate::scatter_band`] kernel with
 //! [`PointGeometry`]. The shared machinery (receiver-block parallelism,
-//! energy-budget skip, terrain ray-march, `max(A_gr, A_bar)` assembly, 3-period
-//! accumulation) lives in `scatter_band`; the point physics of the popup oracle
-//! `noise_compute::compute_point_sources` is `PointGeometry::pixel`:
+//! terrain ray-march, `max(A_gr, A_bar)` assembly, 3-period accumulation, and
+//! the ordinary receiver-major byte-space interval) lives in `scatter_band`.
+//! With `SURFACE_BUDGET_ETA=0`, a full-tile point scatter uses its exact
+//! source-major bypass and computes every admitted pair; selected receivers and
+//! the direct industrial surrogate retain the ordinary receiver-major path. The
+//! point physics of the popup oracle `noise_compute::compute_point_sources` is
+//! `PointGeometry::pixel`:
 //!
 //! * ISO 9613-2 SPHERICAL divergence `20·log10(d_slant)+11` (a line source is
 //!   `10·log10(2π·d)`; there is no finite-line correction here).
@@ -13,8 +17,9 @@
 //! * Exclusion radius: the source's own footprint shrinks the effective
 //!   propagation distance (`geo::effective_area_source_dist`) and is passed to
 //!   screening so footprint buildings are not counted as a barrier.
-//! * ground attenuation uses the RECEIVER's `ground_g` (the oracle samples it
-//!   once at the receiver), NOT the line kernel's path-averaged value.
+//! * Ground attenuation uses the same path-profile CNOSSOS evaluator as the
+//!   line kernel and popup oracle; unlike a bridge line, a point never forces
+//!   hard `G=0`.
 //!
 //! Per-period steady power accumulates into [`TileAccumulator`]; the caller
 //! collapses with the surface (no time-division) Lden collapse.
@@ -198,8 +203,8 @@ impl PreparedSource for PreparedPoint<'_> {
 /// oracle `noise_compute::compute_point_sources`: spherical divergence
 /// `20·log10(d_slant)+11`, a free-field audibility pre-gate (a real per-pixel
 /// cull), an exclusion radius (the footprint shrinks the effective distance and
-/// is excluded from screening), receiver-sampled ground, and the source as the
-/// profile sample point. The borrowed `points` slice is the source rows the
+/// is excluded from screening), path-profile CNOSSOS ground, and the source as
+/// the profile sample point. The borrowed `points` slice is the source rows the
 /// prepare phase clips.
 pub(crate) struct PointGeometry<'a> {
     pub(crate) points: &'a [PointRow],
@@ -207,6 +212,16 @@ pub(crate) struct PointGeometry<'a> {
 
 impl<'a> PixelGeometry for PointGeometry<'a> {
     type Prep = PreparedPoint<'a>;
+
+    #[inline]
+    fn exact_walk_order_is_stable(&self) -> bool {
+        true
+    }
+
+    #[inline]
+    fn cache_pixel_terms(&self) -> bool {
+        true
+    }
 
     fn prepare(&self, tile: &FusedTileZ13, prep: &mut Vec<PreparedPoint<'a>>) {
         let bbox = &tile.bbox;

@@ -51,16 +51,7 @@ use rayon::prelude::*;
 
 use crate::accumulator::TileAccumulator;
 use crate::byte_stop::{self, ground_lden_scale};
-use crate::scatter_band::{
-    byte_stop_enabled, lat_to_py, lon_to_px, recv_block_regions, BandScratch, UB_SAFETY,
-};
-
-/// Prevent dead code warning in untouched scatter_band.rs while migrating ground_ops.
-#[inline(always)]
-#[allow(dead_code)]
-fn _suppress_scratch_warning(b: &BandScratch) {
-    let _ = (&b.kept, &b.skipped);
-}
+use crate::scatter_band::{byte_stop_enabled, lat_to_py, lon_to_px, recv_block_regions, UB_SAFETY};
 
 const NUM_BANDS: usize = 8;
 const NUM_PERIODS: usize = 3;

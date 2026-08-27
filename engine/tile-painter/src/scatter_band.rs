@@ -1,12 +1,16 @@
 //! Generic surface-scatter kernel for the road/rail line sources
 //! ([`crate::scatter_line`], via its `LineGeometry`) and the industrial/building
-//! point sources ([`crate::scatter_point`], via its `PointGeometry`). Both walk
-//! the SAME receiver-block structure, byte-space stop, terrain ray-march,
-//! `max(A_gr, A_bar)` path assembly, and 3-period accumulation; they differ ONLY
-//! in the per-pixel geometry that turns a (source, receiver) pair into the
-//! propagation terms. That divergence is the [`PixelGeometry`] trait; everything
-//! else is this one kernel, so a propagation bug is fixed once and a future
-//! optimisation lands on both.
+//! point sources ([`crate::scatter_point`], via its `PointGeometry`). Both use
+//! the SAME receiver-block structure, terrain ray-march, `max(A_gr, A_bar)`
+//! path assembly, and 3-period accumulation; they differ ONLY in the per-pixel
+//! geometry that turns a (source, receiver) pair into the propagation terms.
+//! The ordinary line and byte-stopped point paths are receiver-major inside a
+//! block and use the byte-space stop. The full-tile exact point path
+//! (`SURFACE_BUDGET_ETA=0`) is a source-major bypass that computes every
+//! admitted pair, with no stop or bound sort. That traversal divergence is kept
+//! behind the
+//! [`PixelGeometry`] trait and one shared evaluator, so the physics stays one
+//! kernel while the point-only ordering optimisation remains explicit.
 //!
 //! What stays per-geometry (the [`PixelGeometry::pixel`] return [`PixelTerms`]):
 //!  * divergence law — line is ISO 9613-2 CYLINDRICAL `10·log10(2π·d_slant)`,
@@ -14,8 +18,8 @@
 //!  * the line's finite-line correction (folded into `base_db`) vs the point's
 //!    free-field audibility pre-gate (a real per-pixel cull — `pixel` returns
 //!    `None`) and its exclusion radius (effective distance + screening exclusion);
-//!  * the ground model — line path-averages `ground_g_from_profile` (hard `G=0`
-//!    on a bridge), point samples the RECEIVER's `ground_g` (oracle parity);
+//!  * the ground model — both geometries derive CNOSSOS ground from the shared
+//!    path profile; line sources additionally force hard `G=0` on a bridge;
 //!  * the profile sample point — line uses the segment foot, point the source.
 //!
 //! ground-ops ([`crate::ground_ops`]) shares the machinery (the [`BandScratch`]
@@ -53,21 +57,27 @@
 //! pair ZERO whenever the pixel's whole remaining bound is still under the 0 dB
 //! NO_DATA floor.
 //!
-//! The walk needs each pixel to see ALL its sources, so the scatter is
-//! parallelised over receiver BLOCKS (not over sources): one block owns a square
-//! pixel rectangle ([`recv_block_regions`]) and, inside it, each pixel walks
-//! every source clipped to the block. (Source-major `par_iter` would split a
-//! pixel's sources across threads, and a per-thread interval is a partial one.)
+//! The scatter is parallelised over receiver BLOCKS (not over sources): one
+//! block owns a square pixel rectangle ([`recv_block_regions`]). In the ordinary
+//! path, each pixel then walks every source clipped to the block (receiver-major)
+//! so its interval owns the complete tail. With byte stopping disabled for a
+//! full-tile point scatter, the point arm instead walks each prepared source
+//! across the block's receivers (source-major); point paths have no
+//! [`ArcSkyline`] fan whose result depends on pair order, and each receiver is
+//! still accumulated in prepared source-load order.
 //!
-//! PIXEL-MAJOR INSIDE THE BLOCK, and the order of the walk is load-bearing for
-//! COST but never for the ANSWER. Pairs are walked cheapest-bound-last so the
-//! interval closes as early as possible; they are ACCUMULATED into the tile in
-//! source-load order regardless (`BandScratch::pair_pow`), because the f32
-//! accumulator and the [`ArcSkyline`]'s per-sector growth are both mildly
-//! order-sensitive and a pixel that never closes must stay bit-identical to a
-//! kernel with no stopping at all.
+//! In the ordinary path, PIXEL-MAJOR INSIDE THE BLOCK and cheapest-bound-first
+//! order are load-bearing for COST but never for the ANSWER. Pairs are
+//! accumulated into the tile in source-load order regardless
+//! (`BandScratch::pair_pow`), because the f32 accumulator and the
+//! [`ArcSkyline`]'s per-sector growth are mildly order-sensitive and a pixel
+//! that never closes must stay bit-identical to a kernel with no stopping at
+//! all. The exact point bypass has no tail to stop and writes each pair directly
+//! in that same source-load order.
 
 use std::f64::consts::LN_10;
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 use noise_compute::constants::{ALPHA_ATM, A_WEIGHTING};
@@ -77,7 +87,9 @@ use noise_compute::propagation::arc_screening::{
 };
 use noise_compute::propagation::census;
 use noise_compute::propagation::iso9613::{fast_exp_f64, ground_atten_bands, ground_or_barrier_db};
-use noise_compute::propagation::obstacle_index::{CellPrune, CrossingCandidate, ObstacleSet};
+use noise_compute::propagation::obstacle_index::{
+    CellPrune, CrossingCandidate, CrossingScratch, ObstacleSet,
+};
 use noise_compute::propagation::path_effects;
 use noise_compute::propagation::path_profile::CoarseMid;
 use noise_compute::propagation::seg_sampling::{
@@ -134,48 +146,98 @@ pub(crate) fn recv_block_regions() -> Vec<(usize, usize, usize, usize)> {
         .collect()
 }
 
-/// Energy-budget skip tolerance for [`crate::ground_ops`], the one kernel still
-/// on the approximate rule: total skipped Lden energy stays within η of the kept
-/// energy, so the displayed under-read is `≤ 10·log10(1+η)` = 1.46 dB at η=0.40.
-/// `SURFACE_BUDGET_ETA` lowers it (clamped to `[0, this]`; 0 = exact reference).
+/// Legacy η control slot shared by the surface and ground-ops byte-space stop.
+/// A nonzero value enables the exact byte-space interval; zero disables it.
+/// For a full-tile point scatter, zero additionally selects the source-major
+/// exact bypass, while line, selected-receiver, and direct-surrogate paths stay
+/// receiver-major. The numeric value remains part of the existing GPU metadata
+/// contract, but these CPU kernels use only whether it is zero or nonzero.
 ///
-/// This kernel does NOT use it any more — see the module docs: an order-dependent
-/// test against a growing `kept` was replaced by the exact byte-space interval.
-/// ground-ops has its own band body (per-row event weights, a mixed-geometry
-/// bound, and an `n_days × period_seconds` Lden collapse), so converting it is a
-/// separate change; its Lden coefficients are the only thing
-/// [`crate::byte_stop`] needs to cover it too.
-const BUDGET_ETA: f64 = 0.40;
-
-/// Clamp the env override to `[0, BUDGET_ETA]`: it may only make the skip MORE
-/// conservative (or disable it), never exceed the validated ≤1.46 dB bound — an
-/// accidental `SURFACE_BUDGET_ETA=1.0` would otherwise mean a 3 dB under-read.
-pub(crate) fn budget_eta() -> f64 {
-    static ETA: OnceLock<f64> = OnceLock::new();
-    *ETA.get_or_init(|| {
+/// The stop's claim is bit-identical output, and the only honest way to check
+/// that is to paint both arms with one build and diff the bytes. It rides the η
+/// env rather than getting one of its own because one variable has to put both
+/// lanes on the exact path: the CUDA twin reads ON/OFF out of `meta[9]`, the old
+/// η slot (`scatter.cu`'s `line`). With two envs the CPU↔GPU parity gate could
+/// compare a stopped kernel against an unstopped one and blame the difference
+/// on the GPU. There is nothing to tune either way — an interval in byte space
+/// has no tolerance, so an on/off is the whole knob.
+pub(crate) fn byte_stop_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
         std::env::var("SURFACE_BUDGET_ETA")
             .ok()
             .and_then(|s| s.parse::<f64>().ok())
             .filter(|e| e.is_finite() && *e >= 0.0)
-            .map(|e| e.min(BUDGET_ETA))
-            .unwrap_or(BUDGET_ETA)
+            .map(|e| e != 0.0)
+            .unwrap_or(true)
     })
 }
 
-/// Is byte-space stopping on? `SURFACE_BUDGET_ETA=0` turns it off, i.e. computes
-/// every pair — the exact reference, in the SAME binary. The stop's claim is
-/// bit-identical output, and the only honest way to check that is to paint both
-/// arms with one build and diff the bytes.
-///
-/// It rides the η env rather than getting one of its own because ONE variable has
-/// to put BOTH lanes on the exact path: the CUDA twin has no room for a second
-/// flag and reads the stop's ON/OFF out of `meta[9]`, the old η slot
-/// (`scatter.cu`'s `line`). With two envs the CPU↔GPU parity gate could compare a
-/// stopped kernel against an unstopped one and blame the difference on the GPU.
-/// There is nothing to tune either way — an interval in byte space has no
-/// tolerance, so an on/off is the whole knob.
-pub(crate) fn byte_stop_enabled() -> bool {
-    budget_eta() != 0.0
+#[cfg(test)]
+static EXACT_POINT_BYPASS_PAIRS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static CACHED_PIXEL_TERM_READS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static POINT_EARLY_STOPS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static POINT_BARRIER_PATHS: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static POINT_OBSTACLE_CROSSINGS: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+fn note_exact_point_bypass_pair() {
+    #[cfg(test)]
+    EXACT_POINT_BYPASS_PAIRS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+fn note_cached_pixel_term_read() {
+    #[cfg(test)]
+    CACHED_PIXEL_TERM_READS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+fn note_early_stop() {
+    #[cfg(test)]
+    POINT_EARLY_STOPS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+fn note_barrier_path() {
+    #[cfg(test)]
+    POINT_BARRIER_PATHS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+fn note_obstacle_crossing() {
+    #[cfg(test)]
+    POINT_OBSTACLE_CROSSINGS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+fn reset_point_optimization_counts() {
+    EXACT_POINT_BYPASS_PAIRS.store(0, Ordering::Relaxed);
+    CACHED_PIXEL_TERM_READS.store(0, Ordering::Relaxed);
+    POINT_EARLY_STOPS.store(0, Ordering::Relaxed);
+    POINT_BARRIER_PATHS.store(0, Ordering::Relaxed);
+    POINT_OBSTACLE_CROSSINGS.store(0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+fn point_optimization_counts() -> (u64, u64) {
+    (
+        EXACT_POINT_BYPASS_PAIRS.load(Ordering::Relaxed),
+        CACHED_PIXEL_TERM_READS.load(Ordering::Relaxed),
+    )
+}
+
+#[cfg(test)]
+fn point_execution_counts() -> (u64, u64, u64) {
+    (
+        POINT_EARLY_STOPS.load(Ordering::Relaxed),
+        POINT_BARRIER_PATHS.load(Ordering::Relaxed),
+        POINT_OBSTACLE_CROSSINGS.load(Ordering::Relaxed),
+    )
 }
 
 /// `fast_exp_f64` is ~1.45e-6 non-monotone at its range-reduction joints (Codex
@@ -427,19 +489,12 @@ pub(crate) fn budget_ub_lden(
 }
 
 /// Per-worker scatter state, threaded through the blocks one rayon worker folds.
-/// Shared by the line, point, and ground-ops kernels — `kept`/`skipped` are the
-/// energy-budget skip's per-pixel state and only [`crate::ground_ops`] still
-/// writes them (this kernel stops in byte space instead). They are full-tile but
-/// each block touches only its own (disjoint) pixel rectangle, so they need no
-/// clearing between a worker's blocks.
 pub(crate) struct BandScratch {
     /// Dense per-worker output for the ordinary block path. The selected W1
     /// path deliberately leaves this absent: its worker output is a sparse
     /// receiver list, not a 512² grid.
     pub(crate) local: Option<TileAccumulator>,
     pub(crate) profile: PathProfile,
-    pub(crate) kept: Vec<f64>,
-    pub(crate) skipped: Vec<f64>,
     pub(crate) path_calls: u64,
     pub(crate) skipped_calls: u64,
     /// Pairs this worker's cheap pass priced — see [`ScatterStats::pairs`].
@@ -450,6 +505,10 @@ pub(crate) struct BandScratch {
     pub(crate) raster_samples: u64,
     /// Vector-obstacle crossings of the current ray (geodata-v2, reused).
     pub(crate) cand_scratch: Vec<CrossingCandidate>,
+    /// Generation-tagged obstacle-edge dedup state reused for every point ray
+    /// in this worker. It preserves the exact DDA collision semantics while
+    /// avoiding a 64-entry table clear per `(source, receiver)` pair.
+    pub(crate) crossing_scratch: CrossingScratch,
     /// Arc-screening (fix-pack Fix 1) interval-ray buffers, amortised across
     /// every (source, pixel) pair this worker folds.
     pub(crate) arc_scratch: ArcScreeningScratch,
@@ -483,17 +542,22 @@ pub(crate) struct BandScratch {
     /// interval that closes too early — the one way this rule could stop being
     /// exact.
     suffix: Vec<f64>,
-    /// Per-period power of each pair the walk computed exactly, indexed by the
-    /// pair's SOURCE-LOAD position, plus a hit flag. The walk visits pairs
-    /// loudest-bound-first but the tile is accumulated in source-load order, so
-    /// a pixel that never closes lands byte-for-byte where an unstopped kernel
-    /// lands it (f32 addition does not commute, and [`ArcSkyline`] growth is
-    /// per-sector order-sensitive by its own module's measurement).
+    /// Per-period power of each pair the ordinary walk computed exactly, indexed
+    /// by the pair's SOURCE-LOAD position, plus a hit flag. That walk visits
+    /// pairs loudest-bound-first but the tile is accumulated in source-load
+    /// order, so a pixel that never closes lands byte-for-byte where an unstopped
+    /// kernel lands it (f32 addition does not commute, and [`ArcSkyline`] growth
+    /// is per-sector order-sensitive by its own module's measurement). The exact
+    /// point source-major bypass writes directly and does not use this staging.
     pair_pow: Vec<[f32; NUM_PERIODS]>,
     pair_hit: Vec<bool>,
     /// Reused cadence buffer for the M3 per-pair bound (`bound_m3::pair_bound`)
     /// — never allocated in the hot loop.
     bound_t: Vec<f64>,
+    /// Point geometry terms computed by the cheap pass, indexed by source-load
+    /// position. Keeping this parallel to `PairBound` avoids copying a large
+    /// `PixelTerms` through every line-source sort record.
+    pair_terms: Vec<PixelTerms>,
     /// Per-(source, block) pooled IMD maxima for the M3a ground bound, indexed
     /// like [`BandScratch::pairs_cand`] — `None` entries mean the source's
     /// profile origin is receiver-dependent (line sources fall back to
@@ -505,15 +569,16 @@ pub(crate) struct BandScratch {
     sparse_output: Vec<(usize, [f32; NUM_PERIODS])>,
 }
 
-/// One (source, receiver) pair as the cheap pass records it: which prepared
-/// source it came from, where it sat in source-load order, and its free-field
-/// Lden bound.
+/// One (source, receiver) pair as the ordinary receiver-major cheap pass
+/// records it: which prepared source it came from, where it sat in source-load
+/// order, and its free-field Lden bound. The exact point source-major bypass
+/// does not materialise these records.
 ///
-/// Sorting these by descending `ub` is what makes the interval close early — the
-/// loudest contributors go in first, so `P⁻` climbs as fast as it can while the
-/// tail `P⁺` adds shrinks as fast as it can. It changes only the COST: any order
-/// commits the same byte, which is what `tests::source_order_never_changes_the_answer`
-/// pins.
+/// Sorting these by descending `ub` is what makes the ordinary interval close
+/// early — the loudest contributors go in first, so `P⁻` climbs as fast as it
+/// can while the tail `P⁺` adds shrinks as fast as it can. It changes only the
+/// COST: any order commits the same byte, which is what
+/// `tests::source_order_never_changes_the_answer` pins.
 ///
 /// The sort is not a tuning preference, it IS the optimisation. Measured
 /// 2026-08-09, one binary, both arms back to back on an idle box (CPU-seconds;
@@ -527,9 +592,11 @@ pub(crate) struct BandScratch {
 ///           load           8.6 %             9 909        1.81× SLOWER
 /// ```
 ///
-/// In load order a pixel's dominant source arrives at a random point in the list,
-/// so the interval cannot close until nearly everything has been computed and the
-/// kernel comes out SLOWER than the approximate rule it replaced.
+/// In load order an ordinary pixel's dominant source arrives at a random point in
+/// the list, so the interval cannot close until nearly everything has been
+/// computed and the kernel comes out SLOWER than the approximate rule it
+/// replaced. The exact point arm does not sort at all because it has no
+/// order-sensitive skyline.
 ///
 /// The price is stated exactly, and it is not the stop's. Against the pre-stop
 /// kernel at η=0, walking in load order is bit-identical (0 of 256 496 cells on
@@ -553,17 +620,15 @@ struct PairBound {
 
 impl BandScratch {
     pub(crate) fn new() -> Self {
-        let n = TILE_PX * TILE_PX;
         Self {
             local: Some(TileAccumulator::new()),
             profile: PathProfile::new(),
-            kept: vec![0.0; n],
-            skipped: vec![0.0; n],
             path_calls: 0,
             skipped_calls: 0,
             pairs_seen: 0,
             raster_samples: 0,
             cand_scratch: Vec::new(),
+            crossing_scratch: CrossingScratch::default(),
             arc_scratch: ArcScreeningScratch::new(),
             skyline: ArcSkyline::default(),
             arc_bounds: tile_arc_bounds(),
@@ -574,6 +639,7 @@ impl BandScratch {
             pair_pow: Vec::new(),
             pair_hit: Vec::new(),
             bound_t: Vec::new(),
+            pair_terms: Vec::new(),
             bound_blocks: Vec::new(),
             walked_pairs: 0,
             sparse_output: Vec::new(),
@@ -584,13 +650,12 @@ impl BandScratch {
         Self {
             local: None,
             profile: PathProfile::new(),
-            kept: Vec::new(),
-            skipped: Vec::new(),
             path_calls: 0,
             skipped_calls: 0,
             pairs_seen: 0,
             raster_samples: 0,
             cand_scratch: Vec::new(),
+            crossing_scratch: CrossingScratch::default(),
             arc_scratch: ArcScreeningScratch::new(),
             skyline: ArcSkyline::default(),
             arc_bounds: tile_arc_bounds(),
@@ -601,6 +666,7 @@ impl BandScratch {
             pair_pow: Vec::new(),
             pair_hit: Vec::new(),
             bound_t: Vec::new(),
+            pair_terms: Vec::new(),
             bound_blocks: Vec::new(),
             walked_pairs: 0,
             sparse_output: Vec::new(),
@@ -799,6 +865,7 @@ fn arc_query<'a>(
 /// into the budget bound, the path build, and the `max(A_gr, A_bar)` assembly
 /// identically for line and point — the divergence law, FLC, exclusion, ground
 /// model, and profile sample point are all already baked in here.
+#[derive(Clone, Copy)]
 pub(crate) struct PixelTerms {
     /// Distance/divergence/FLC/reflection folded to a pre-attenuation dB level
     /// (`refl + flc − geo_div` for line; `refl − geo_div` for point).
@@ -832,6 +899,7 @@ pub(crate) struct PixelTerms {
 ///
 /// Line sources only: a point source IS its characteristic point, so its cp-ray
 /// verdict already covers every direction it radiates in.
+#[derive(Clone, Copy)]
 pub(crate) struct ArcSegment {
     pub(crate) start_lat: f64,
     pub(crate) start_lon: f64,
@@ -894,6 +962,22 @@ pub(crate) trait PixelGeometry: Sync {
         rx_alt: f64,
         refl: f64,
     ) -> Option<PixelTerms>;
+
+    /// Whether this geometry's exact path is independent of pair walk order
+    /// when byte-stop is disabled. Point sources have no [`ArcSkyline`] fan,
+    /// so their pair result is independent; line sources retain the shipped
+    /// loudest-bound walk because skyline growth is order-sensitive.
+    fn exact_walk_order_is_stable(&self) -> bool {
+        false
+    }
+
+    /// Whether the cheap-pass [`PixelTerms`] can be reused by the ordinary
+    /// bounded walk. Point geometry is pure and receiver/source-local; line
+    /// geometry keeps the historical recomputation unless a future line-
+    /// specific proof pays for its larger terms.
+    fn cache_pixel_terms(&self) -> bool {
+        false
+    }
 }
 
 /// Telemetry returned by the generic scatter (line and point share the shape).
@@ -1207,6 +1291,276 @@ fn scatter_selected_receivers<G: PixelGeometry>(
     }
 }
 
+struct ExactPairEvaluation {
+    power: [f32; NUM_PERIODS],
+    lden_energy: f64,
+    used_quadrature: bool,
+    used_escalation: bool,
+}
+
+/// Evaluate one admitted pair with the complete shared surface physics.
+///
+/// Both the ordinary bounded walk and the exact point source-major bypass call
+/// this function. Keeping the ground/terrain/obstacle/arc/vegetation assembly in
+/// one body prevents the two traversal topologies from becoming two physical
+/// models; callers retain ownership of pair bounds, walk order, and f32
+/// accumulation order.
+#[allow(clippy::too_many_arguments)]
+fn evaluate_exact_pair(
+    tile: &FusedTileZ13,
+    barriers: &[Barrier],
+    obstacles: Option<&ObstacleSet>,
+    cfg: Option<CoarseMid>,
+    t: &PixelTerms,
+    rx_lat: f64,
+    rx_lon: f64,
+    rx_alt: f64,
+    emission_lin: &[[f32; NUM_BANDS]; NUM_PERIODS],
+    n_seg: usize,
+    s: &mut BandScratch,
+) -> ExactPairEvaluation {
+    build_surface_profile(
+        tile,
+        cfg,
+        t.cp_lat,
+        t.cp_lon,
+        rx_lat,
+        rx_lon,
+        t.profile_dist_m,
+        &mut s.profile,
+    );
+    s.path_calls += 1;
+    s.raster_samples += s.profile.len() as u64;
+    let ground_path = path_effects::cnossos_ground_path_from_profile(
+        &mut s.profile,
+        t.src_alt,
+        rx_alt,
+        t.force_hard_ground,
+    );
+    let ground_g = ground_path.ground_path_g;
+    // The arc transport still returns a screening increment, so it receives
+    // this CP vector until node_eval carries each ray's full composite. Clear
+    // point paths use the same vector here.
+    let ground_bands = ground_atten_bands(ground_path);
+    // Heatmap discards the popup obstacle traces, so call the metadata-free
+    // band-only variants: terrain skips the per-pixel EdgePoint Vec, screening
+    // skips the ObstacleEdge materialisation.
+    let terrain_bands = path_effects::terrain_attenuation(&mut s.profile, t.src_alt, rx_alt);
+    // ── the ground/barrier term, ISO 9613-2 §7.3.1 ──────────────────────────
+    // `max(A_ground, A_terrain + A_screen)`: a barrier REPLACES ground, never
+    // adds. Uniform angular quadrature is tried before the characteristic-point
+    // ray (and its optional arc-screening fallback) because each bucket already
+    // evaluates its own ray; computing the cp screening first would be dead work
+    // and turn an N-ray pair into N+1 rays. The ordering and energy average are
+    // owned by `seg_sampling::sampled_gob_bands_with_ground`; `None` means the
+    // documented degenerate/no-vector fallback, which keeps the cp-ray path.
+    let sampled = match (&t.arc, obstacles) {
+        (Some(arc), Some(set)) if n_seg > 1 => {
+            let query = arc_query(
+                arc,
+                t,
+                rx_lat,
+                rx_lon,
+                rx_alt,
+                &ZERO_BANDS,
+                &terrain_bands,
+                ground_g,
+                barriers,
+                set,
+                s.arc_bounds,
+            );
+            sampled_gob_bands_with_ground(
+                &query,
+                &SurfaceCadenceRasters { tile, cfg },
+                n_seg,
+                &ground_bands,
+                &mut s.skyline,
+                &mut s.seg_scratch,
+            )
+        }
+        _ => None,
+    };
+    let (gob_bands, used_quadrature, used_escalation) = match sampled {
+        Some((gob, cost)) => {
+            s.path_calls += cost.rays;
+            s.raster_samples += cost.raster_samples;
+            (gob, true, cost.escalated > 0)
+        }
+        None => {
+            let obstacle_input = match obstacles {
+                Some(set) => {
+                    set.crossings_pruned_with_scratch(
+                        t.cp_lat,
+                        t.cp_lon,
+                        rx_lat,
+                        rx_lon,
+                        &CellPrune::for_profile(&s.profile, t.src_alt, rx_alt),
+                        &mut s.crossing_scratch,
+                        &mut s.cand_scratch,
+                    );
+                    if !s.cand_scratch.is_empty() {
+                        note_obstacle_crossing();
+                    }
+                    path_effects::ObstacleInput {
+                        candidates: &s.cand_scratch,
+                        replace_sample_buildings: true,
+                    }
+                }
+                None => path_effects::ObstacleInput::CANDIDATES_OFF,
+            };
+            let cp_screening = path_effects::screening_attenuation(
+                &mut s.profile,
+                barriers,
+                obstacle_input,
+                t.src_alt,
+                rx_alt,
+                t.excl_m,
+                &terrain_bands,
+            );
+            let screening = match (&t.arc, obstacles) {
+                (Some(arc), Some(set))
+                    if segment_can_span(arc.length_m, arc.dist_m, s.arc_bounds) =>
+                {
+                    let query = arc_query(
+                        arc,
+                        t,
+                        rx_lat,
+                        rx_lon,
+                        rx_alt,
+                        &cp_screening,
+                        &terrain_bands,
+                        ground_g,
+                        barriers,
+                        set,
+                        s.arc_bounds,
+                    );
+                    arc_screened_attenuation_with_ground(
+                        &query,
+                        &SurfaceCadenceRasters { tile, cfg },
+                        &mut s.skyline,
+                        &ground_bands,
+                        &mut s.arc_scratch,
+                    )
+                }
+                _ => cp_screening,
+            };
+            if !barriers.is_empty() {
+                note_barrier_path();
+            }
+            let mut gob = [0.0f64; NUM_BANDS];
+            for (i, g) in gob.iter_mut().enumerate() {
+                *g = ground_or_barrier_db(ground_bands[i], terrain_bands[i], screening[i]);
+            }
+            (gob, false, false)
+        }
+    };
+    let veg = path_effects::vegetation_attenuation_path(&s.profile);
+
+    // Period-independent per-band path factor (A-weighted linear).
+    let mut pf = [0.0f64; NUM_BANDS];
+    for i in 0..NUM_BANDS {
+        let path_db = t.base_db - ALPHA_ATM[i] * t.atm_d_km - gob_bands[i] - veg[i];
+        pf[i] = db_to_lin_a(path_db, i);
+    }
+
+    let mut lden_energy = 0.0;
+    let mut power = [0.0f32; NUM_PERIODS];
+    for p in 0..NUM_PERIODS {
+        let mut period_power = 0.0f64;
+        for i in 0..NUM_BANDS {
+            period_power += emission_lin[p][i] as f64 * pf[i];
+        }
+        if period_power.is_finite() && period_power > 0.0 {
+            power[p] = period_power as f32;
+            lden_energy += period_power * LDEN_WEIGHTS[p];
+        }
+    }
+    ExactPairEvaluation {
+        power,
+        lden_energy,
+        used_quadrature,
+        used_escalation,
+    }
+}
+
+/// Exact point-source walk in source-major order.
+///
+/// With byte stopping disabled, point paths have no receiver skyline and their
+/// result is independent of source order. Walking one prepared point across the
+/// block's receivers removes the ordinary per-receiver sort and second geometry
+/// evaluation while keeping obstacle/raster state local to the source. Each
+/// receiver still accumulates in prepared-source order, and every admitted pair
+/// follows the same exact propagation body before its power is committed.
+#[allow(clippy::too_many_arguments)]
+fn scatter_exact_point_source_major<G: PixelGeometry>(
+    geo: &G,
+    tile: &FusedTileZ13,
+    prep: &[G::Prep],
+    barriers: &[Barrier],
+    obstacles: Option<&ObstacleSet>,
+    py_lo: usize,
+    py_hi: usize,
+    px_lo: usize,
+    px_hi: usize,
+    cfg: Option<CoarseMid>,
+    n_seg: usize,
+    s: &mut BandScratch,
+) {
+    for candidate_index in 0..s.pairs_cand.len() {
+        let ci = s.pairs_cand[candidate_index];
+        let pr = &prep[ci as usize];
+        let (rpy0, rpy1, rpx0, rpx1) = pr.reach_box();
+        let py_start = py_lo.max(rpy0);
+        let py_end = py_hi.min(rpy1.saturating_add(1));
+        let px_start = px_lo.max(rpx0);
+        let px_end = px_hi.min(rpx1.saturating_add(1));
+        if py_start >= py_end || px_start >= px_end {
+            continue;
+        }
+        for py in py_start..py_end {
+            let rx_lat = tile.rx_lat[py];
+            let row_base = py * TILE_PX;
+            for px in px_start..px_end {
+                let idx = row_base + px;
+                let rx_lon = tile.rx_lon[px];
+                let rx_alt = tile.rx_alt_m[idx] as f64;
+                let refl = tile.rx_refl_db[idx] as f64;
+                let Some(t) = geo.pixel(pr, tile, rx_lat, rx_lon, rx_alt, refl) else {
+                    continue;
+                };
+                debug_assert!(
+                    t.arc.is_none(),
+                    "source-major exact walk is only valid for point geometry"
+                );
+                s.pairs_seen += 1;
+                s.walked_pairs += 1;
+                note_exact_point_bypass_pair();
+                census::pair_walked();
+
+                let evaluated = evaluate_exact_pair(
+                    tile,
+                    barriers,
+                    obstacles,
+                    cfg,
+                    &t,
+                    rx_lat,
+                    rx_lon,
+                    rx_alt,
+                    pr.emission_lin(),
+                    n_seg,
+                    s,
+                );
+                let local = s.local.as_mut().expect("dense scatter scratch");
+                for (period, &power) in evaluated.power.iter().enumerate() {
+                    if power > 0.0 {
+                        local.add_energy_at(py as u32, px as u32, period as u8, power);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Scatter every source that reaches the block `[py_lo, py_hi) × [px_lo, px_hi)`
 /// into its pixels, stopping each pixel as soon as its output BYTE is decided
 /// ([`crate::byte_stop`], and the module docs for why that is exact). The single
@@ -1228,9 +1582,10 @@ fn scatter_band<G: PixelGeometry>(
     selected_pixels: Option<&[usize]>,
     s: &mut BandScratch,
 ) {
-    // Sources reaching this block AT ALL, resolved once. The walk below is
-    // pixel-major, so without the shortlist every one of the block's 256
-    // receivers would re-clip the whole `prep` slice.
+    // Sources reaching this block AT ALL, resolved once. The ordinary walk
+    // below is pixel-major, so without the shortlist every one of the block's
+    // 256 receivers would re-clip the whole `prep` slice. The exact point
+    // source-major arm uses the same shortlist to clip each source once.
     s.pairs_cand.clear();
     for (i, pr) in prep.iter().enumerate() {
         let (rpy0, rpy1, rpx0, rpx1) = pr.reach_box();
@@ -1243,13 +1598,28 @@ fn scatter_band<G: PixelGeometry>(
     }
     let n_seg = seg_samples();
     let stop_on = byte_stop_enabled();
+    // The exact/reference arm (`SURFACE_BUDGET_ETA=0`) still used to price,
+    // sort, and re-walk every point pair. For point sources there is no arc
+    // skyline whose construction depends on walk order, so preserve source
+    // load order directly and skip the cheap-pass/sort machinery. The bypass
+    // has no byte-stop tail and therefore needs no pair bound. Selected sparse
+    // receivers keep the old path because they need compact-output handling.
+    let load_order_exact = !stop_on
+        && receiver_mask.is_none()
+        && direct_extra_db.is_none()
+        && selected_pixels.is_none()
+        && geo.exact_walk_order_is_stable();
+    let cache_terms = geo.cache_pixel_terms();
+    if load_order_exact {
+        scatter_exact_point_source_major(
+            geo, tile, prep, barriers, obstacles, py_lo, py_hi, px_lo, px_hi, cfg, n_seg, s,
+        );
+        return;
+    }
     // M3a per-(source, block) pooled chunk maxima, resolved ONCE per block
     // (8 pyramid boxes per source instead of per pair) for the sources whose
     // profile origin is receiver-independent.
-    if direct_extra_db.is_none()
-        && byte_stop_enabled()
-        && crate::bound_m3::surface_bound_m3_enabled()
-    {
+    if direct_extra_db.is_none() && stop_on && crate::bound_m3::surface_bound_m3_enabled() {
         let (lat_lo, lat_hi) = if tile.rx_lat[py_lo] <= tile.rx_lat[py_hi - 1] {
             (tile.rx_lat[py_lo], tile.rx_lat[py_hi - 1])
         } else {
@@ -1272,7 +1642,6 @@ fn scatter_band<G: PixelGeometry>(
             s.bound_blocks.push(m);
         }
     }
-
     for py in py_lo..py_hi {
         let rx_lat = tile.rx_lat[py];
         let row_base = py * TILE_PX;
@@ -1337,6 +1706,7 @@ fn scatter_band<G: PixelGeometry>(
             // superseded budget skip already paid for on every pair; what it
             // buys now is a certain upper bound instead of a running comparison.
             s.pairs.clear();
+            s.pair_terms.clear();
             for k in 0..s.pairs_cand.len() {
                 let ci = s.pairs_cand[k];
                 let pr = &prep[ci as usize];
@@ -1365,6 +1735,9 @@ fn scatter_band<G: PixelGeometry>(
                 );
                 let ub = budget_ub_lden(t.base_db, t.atm_d_km, pr.emission_lden(), &bound);
                 let ord = s.pairs.len() as u32;
+                if cache_terms {
+                    s.pair_terms.push(t);
+                }
                 s.pairs.push(PairBound { src: ci, ord, ub });
             }
             let n_pairs = s.pairs.len();
@@ -1372,7 +1745,8 @@ fn scatter_band<G: PixelGeometry>(
                 continue;
             }
             s.pairs_seen += n_pairs as u64;
-            // Loudest bound first — cost only, never the answer (see [`PairBound`]).
+            // Loudest bound first — cost only, never the answer (see
+            // [`PairBound`]).
             s.pairs.sort_unstable_by(|a, b| b.ub.total_cmp(&a.ub));
             s.suffix.clear();
             s.suffix.resize(n_pairs + 1, 0.0);
@@ -1406,186 +1780,38 @@ fn scatter_band<G: PixelGeometry>(
                         margin,
                     )
                 {
+                    note_early_stop();
                     walked = k;
                     break;
                 }
                 let PairBound { src, ord, ub } = s.pairs[k];
                 let pr = &prep[src as usize];
-                let emission_lin = pr.emission_lin();
-                let Some(t) = geo.pixel(pr, tile, rx_lat, rx_lon, rx_alt, refl) else {
-                    continue;
+                let t = if cache_terms {
+                    note_cached_pixel_term_read();
+                    s.pair_terms[ord as usize]
+                } else {
+                    let Some(t) = geo.pixel(pr, tile, rx_lat, rx_lon, rx_alt, refl) else {
+                        continue;
+                    };
+                    t
                 };
                 census::pair_walked();
 
-                build_surface_profile(
+                let evaluated = evaluate_exact_pair(
                     tile,
+                    barriers,
+                    obstacles,
                     cfg,
-                    t.cp_lat,
-                    t.cp_lon,
+                    &t,
                     rx_lat,
                     rx_lon,
-                    t.profile_dist_m,
-                    &mut s.profile,
-                );
-                s.path_calls += 1;
-                s.raster_samples += s.profile.len() as u64;
-                let ground_path = path_effects::cnossos_ground_path_from_profile(
-                    &mut s.profile,
-                    t.src_alt,
                     rx_alt,
-                    t.force_hard_ground,
+                    pr.emission_lin(),
+                    n_seg,
+                    s,
                 );
-                let ground_g = ground_path.ground_path_g;
-                // The arc transport still returns a screening increment, so it
-                // receives this CP vector until node_eval carries each ray's
-                // full composite.  Clear point paths use the same vector here.
-                let ground_bands = ground_atten_bands(ground_path);
-                // Heatmap discards the popup obstacle traces, so call the
-                // metadata-free band-only variants: terrain skips the per-pixel
-                // EdgePoint Vec, screening skips the ObstacleEdge materialisation.
-                let terrain_bands =
-                    path_effects::terrain_attenuation(&mut s.profile, t.src_alt, rx_alt);
-                // ── the ground/barrier term, ISO 9613-2 §7.3.1 ──────────────
-                // `max(A_ground, A_terrain + A_screen)`: a barrier REPLACES
-                // ground, never adds. Two ways to get it for a LINE segment,
-                // which subtends an angle at this receiver and screens
-                // differently across it, and one for everything else.
-                // (1) UNIFORM ANGULAR QUADRATURE ([`seg_samples`], the default):
-                // N bucket rays across the fan, energy-averaged. Tried FIRST
-                // because when it applies the cp ray's own screening is dead
-                // work — so the pair costs N rays, not N+1. The cp PROFILE still
-                // runs above: ground-G, terrain and vegetation come off it
-                // either way. `None` = no fan (a degenerate segment) or no
-                // vector store (a raster-fallback region), and then (2) below
-                // is what runs, exactly as it always did.
-                let sampled = match (&t.arc, obstacles) {
-                    (Some(arc), Some(set)) if n_seg > 1 => {
-                        let query = arc_query(
-                            arc,
-                            &t,
-                            rx_lat,
-                            rx_lon,
-                            rx_alt,
-                            &ZERO_BANDS,
-                            &terrain_bands,
-                            ground_g,
-                            barriers,
-                            set,
-                            s.arc_bounds,
-                        );
-                        sampled_gob_bands_with_ground(
-                            &query,
-                            &SurfaceCadenceRasters { tile, cfg },
-                            n_seg,
-                            &ground_bands,
-                            &mut s.skyline,
-                            &mut s.seg_scratch,
-                        )
-                    }
-                    _ => None,
-                };
-                let gob_bands = match sampled {
-                    Some((gob, cost)) => {
-                        s.path_calls += cost.rays;
-                        s.raster_samples += cost.raster_samples;
-                        census_any_quad = true;
-                        census_any_esc |= cost.escalated > 0;
-                        gob
-                    }
-                    // (2) ONE CHARACTERISTIC-POINT RAY, optionally arc-clipped
-                    // (fix-pack Fix 1, the tile twin of the popup's
-                    // `arc_screened_line_segment`): the cp verdict covers only
-                    // the directions that ray flies through, so the rest of the
-                    // span gets its own evaluation, energy-averaged over the
-                    // blocked fractions. Gated on the segment's own width since
-                    // 2026-08-08 (see [`tile_arc_bounds`]); a segment too narrow
-                    // to stripe keeps the plain cp verdict.
-                    None => {
-                        let obstacle_input = match obstacles {
-                            Some(set) => {
-                                set.crossings_pruned(
-                                    t.cp_lat,
-                                    t.cp_lon,
-                                    rx_lat,
-                                    rx_lon,
-                                    &CellPrune::for_profile(&s.profile, t.src_alt, rx_alt),
-                                    &mut s.cand_scratch,
-                                );
-                                path_effects::ObstacleInput {
-                                    candidates: &s.cand_scratch,
-                                    replace_sample_buildings: true,
-                                }
-                            }
-                            None => path_effects::ObstacleInput::CANDIDATES_OFF,
-                        };
-                        let cp_screening = path_effects::screening_attenuation(
-                            &mut s.profile,
-                            barriers,
-                            obstacle_input,
-                            t.src_alt,
-                            rx_alt,
-                            t.excl_m,
-                            &terrain_bands,
-                        );
-                        let screening = match (&t.arc, obstacles) {
-                            (Some(arc), Some(set))
-                                if segment_can_span(arc.length_m, arc.dist_m, s.arc_bounds) =>
-                            {
-                                let query = arc_query(
-                                    arc,
-                                    &t,
-                                    rx_lat,
-                                    rx_lon,
-                                    rx_alt,
-                                    &cp_screening,
-                                    &terrain_bands,
-                                    ground_g,
-                                    barriers,
-                                    set,
-                                    s.arc_bounds,
-                                );
-                                arc_screened_attenuation_with_ground(
-                                    &query,
-                                    &SurfaceCadenceRasters { tile, cfg },
-                                    &mut s.skyline,
-                                    &ground_bands,
-                                    &mut s.arc_scratch,
-                                )
-                            }
-                            _ => cp_screening,
-                        };
-                        let mut gob = [0.0f64; NUM_BANDS];
-                        for (i, g) in gob.iter_mut().enumerate() {
-                            *g = ground_or_barrier_db(
-                                ground_bands[i],
-                                terrain_bands[i],
-                                screening[i],
-                            );
-                        }
-                        gob
-                    }
-                };
-                let veg = path_effects::vegetation_attenuation_path(&s.profile);
-
-                // Period-independent per-band path factor (A-weighted linear).
-                let mut pf = [0.0f64; NUM_BANDS];
-                for i in 0..NUM_BANDS {
-                    let path_db = t.base_db - ALPHA_ATM[i] * t.atm_d_km - gob_bands[i] - veg[i];
-                    pf[i] = db_to_lin_a(path_db, i);
-                }
-
-                let mut kept_add = 0.0;
-                let mut pow = [0.0f32; NUM_PERIODS];
-                for p in 0..NUM_PERIODS {
-                    let mut power = 0.0f64;
-                    for i in 0..NUM_BANDS {
-                        power += emission_lin[p][i] as f64 * pf[i];
-                    }
-                    if power.is_finite() && power > 0.0 {
-                        pow[p] = power as f32;
-                        kept_add += power * LDEN_WEIGHTS[p];
-                    }
-                }
+                census_any_quad |= evaluated.used_quadrature;
+                census_any_esc |= evaluated.used_escalation;
                 // ── THE SOUNDNESS INVARIANT, IN THE KERNEL ──────────────────
                 // The whole method rests on `ub ≥ exact` for every single pair:
                 // if one bound ever under-reads its pair, `P⁺` stops being an
@@ -1597,13 +1823,14 @@ fn scatter_band<G: PixelGeometry>(
                 // between `emission_lden` and this loop; a failure here is a real
                 // bound bug, not float noise.)
                 assert!(
-                    kept_add <= ub,
-                    "byte-stop bound violated: exact {kept_add:e} > ub {ub:e} \
-                     (py={py} px={px} src={src})"
+                    evaluated.lden_energy <= ub,
+                    "byte-stop bound violated: exact {:e} > ub {ub:e} \
+                     (py={py} px={px} src={src})",
+                    evaluated.lden_energy,
                 );
-                p_lo += kept_add;
+                p_lo += evaluated.lden_energy;
                 s.pair_hit[ord as usize] = true;
-                s.pair_pow[ord as usize] = pow;
+                s.pair_pow[ord as usize] = evaluated.power;
             }
             s.skipped_calls += (n_pairs - walked) as u64;
             s.walked_pairs += walked as u64;
@@ -1621,6 +1848,7 @@ fn scatter_band<G: PixelGeometry>(
                 }
                 s.sparse_output.push((idx, compact_energy));
             } else {
+                let local = s.local.as_mut().expect("dense scatter scratch");
                 for o in 0..n_pairs {
                     if !s.pair_hit[o] {
                         continue;
@@ -1628,10 +1856,7 @@ fn scatter_band<G: PixelGeometry>(
                     let pow = s.pair_pow[o];
                     for (p, &e) in pow.iter().enumerate() {
                         if e > 0.0 {
-                            s.local
-                                .as_mut()
-                                .expect("dense scatter scratch")
-                                .add_energy_at(py as u32, px as u32, p as u8, e);
+                            local.add_energy_at(py as u32, px as u32, p as u8, e);
                         }
                     }
                 }
@@ -1663,12 +1888,16 @@ pub(crate) fn lon_to_px(bbox: &TileBbox, lon: f64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scatter_point::{PointGeometry, PreparedPoint};
     use crate::source_line::LineRow;
+    use crate::source_point::PointRow;
     use crate::wire_hm3::collapse_lden_surface_u8;
     use noise_compute::constants::{m_per_deg_lon, M_PER_DEG_LAT};
+    use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind};
     use noise_compute::propagation::path_profile::{fill_t_values, fill_t_values_coarse_mid};
     use raster_reader::RealRasters;
-    use std::path::Path;
+    use std::{fs, path::Path, process::Command, sync::Arc};
+    use tempfile::TempDir;
 
     /// A scene of many line sources of wildly different loudness spread over the
     /// tile, so a receiver's pair list spans tens of dB and the interval has
@@ -1755,6 +1984,292 @@ mod tests {
                 .count();
             assert_eq!(diff, 0, "{name} load order moved {diff} cells");
         }
+    }
+
+    fn point_optimization_raster_fixture() -> TempDir {
+        let root = tempfile::tempdir().expect("create point optimization raster fixture");
+        for subdir in [
+            "dem/copernicus",
+            "rasters/building",
+            "rasters/forest",
+            "rasters/imd",
+        ] {
+            fs::create_dir_all(root.path().join(subdir)).expect("create raster fixture directory");
+        }
+
+        // RealRasters accepts the standard 1201² SRTM alternate for DEM and
+        // requires 3601² for the three u8 products. The tested z12 tile and its
+        // 700 m halo stay wholly inside N50E014.
+        let dem_value = 135_i16.to_be_bytes();
+        let mut dem = Vec::with_capacity(1201 * 1201 * 2);
+        for _ in 0..1201 * 1201 {
+            dem.extend_from_slice(&dem_value);
+        }
+        fs::write(root.path().join("dem/copernicus/N50E014.hgt"), dem).expect("write DEM fixture");
+
+        let cells = 3601 * 3601;
+        let mut building = vec![0_u8; cells];
+        // A real non-zero building patch around this tile's centre, rather than
+        // a merely present all-zero file.
+        for row in 3000..3135 {
+            building[row * 3601 + 1260..row * 3601 + 1405].fill(7);
+        }
+        fs::write(root.path().join("rasters/building/N50E014.raw"), building)
+            .expect("write building fixture");
+        fs::write(
+            root.path().join("rasters/forest/N50E014.raw"),
+            vec![37_u8; cells],
+        )
+        .expect("write forest fixture");
+        fs::write(
+            root.path().join("rasters/imd/N50E014.raw"),
+            vec![58_u8; cells],
+        )
+        .expect("write IMD fixture");
+        root
+    }
+
+    /// The exact industrial arm may bypass the receiver-major sort, while the
+    /// stopped arm may reuse cheap-pass point terms. Compare both candidates
+    /// against the historical generic evaluator on raw f32 energy, with real
+    /// raster, barrier, and vector-obstacle work in the scene. Child processes
+    /// isolate the process-wide `SURFACE_BUDGET_ETA` OnceLock.
+    #[test]
+    fn point_bypass_and_term_cache_preserve_f32_energy() {
+        let Some(mode) = std::env::var_os("QM_POINT_OPTIMIZATION_CHILD") else {
+            for (mode, eta) in [("bypass", "0"), ("cache", "0.4")] {
+                let status =
+                    Command::new(std::env::current_exe().expect("current test executable"))
+                        .arg("--exact")
+                        .arg("scatter_band::tests::point_bypass_and_term_cache_preserve_f32_energy")
+                        .arg("--nocapture")
+                        .env("QM_POINT_OPTIMIZATION_CHILD", mode)
+                        .env("SURFACE_BUDGET_ETA", eta)
+                        .status()
+                        .expect("spawn point optimization child test");
+                assert!(status.success(), "point {mode} child test failed");
+            }
+            return;
+        };
+        let mode = mode.to_str().expect("UTF-8 child mode");
+        assert_eq!(byte_stop_enabled(), mode == "cache");
+
+        let raster_fixture = point_optimization_raster_fixture();
+        let rasters = RealRasters::new(raster_fixture.path());
+        let tile = FusedTileZ13::build(12, 2211, 1386, 700.0, &rasters);
+        assert!(tile.inner_elev_m.iter().any(|&v| v > 0.0));
+        assert!(tile.inner_building.iter().any(|&v| v > 0));
+        assert!(tile.inner_forest.iter().any(|&v| v > 0));
+        assert!(tile.inner_imd.iter().any(|&v| v > 0 && v < 100));
+
+        let c_lat = (tile.bbox.north_lat + tile.bbox.south_lat) * 0.5;
+        let c_lon = (tile.bbox.west_lon + tile.bbox.east_lon) * 0.5;
+        let d_lat = |m: f64| m / M_PER_DEG_LAT;
+        let d_lon = |m: f64| m / m_per_deg_lon(c_lat.to_radians());
+
+        let point_offsets = [
+            (-210.0, -170.0),
+            (-190.0, 190.0),
+            (0.0, -260.0),
+            (0.0, 260.0),
+            (210.0, -150.0),
+            (190.0, 210.0),
+        ];
+        let points: Vec<PointRow> = point_offsets
+            .into_iter()
+            .enumerate()
+            .map(|(k, (north_m, east_m))| {
+                let base = 2.0e7_f32 * (k + 1) as f32;
+                PointRow {
+                    lat: c_lat + d_lat(north_m),
+                    lon: c_lon + d_lon(east_m),
+                    source_height_m: 6.0,
+                    max_distance_m: 550.0,
+                    exclusion_radius_m: 8.0,
+                    max_day_emission_db: 120.0,
+                    emission_lin: std::array::from_fn(|period| {
+                        std::array::from_fn(|band| {
+                            base * (1.0 + period as f32 * 0.17 + band as f32 * 0.03)
+                        })
+                    }),
+                }
+            })
+            .collect();
+
+        let barriers = [Barrier {
+            osm_id: 71,
+            segment_idx: 0,
+            height_m: 4.5,
+            start_lat: c_lat + d_lat(-160.0),
+            start_lon: c_lon,
+            end_lat: c_lat + d_lat(160.0),
+            end_lon: c_lon,
+            dist_m: 0.0,
+        }];
+        let mut obstacle_builder = ObstacleIndex::builder(c_lat, c_lon);
+        obstacle_builder.add_ring(
+            &[
+                (c_lat + d_lat(-35.0), c_lon + d_lon(-45.0)),
+                (c_lat + d_lat(-35.0), c_lon + d_lon(45.0)),
+                (c_lat + d_lat(35.0), c_lon + d_lon(45.0)),
+                (c_lat + d_lat(35.0), c_lon + d_lon(-45.0)),
+            ],
+            11.0,
+            ObstacleKind::Building,
+            19,
+        );
+        let obstacles = ObstacleSet {
+            indexes: vec![Arc::new(obstacle_builder.build())],
+        };
+        assert!(!barriers.is_empty());
+        assert!(obstacles.edge_count() > 0);
+
+        struct HistoricalPointGeometry<'a> {
+            points: &'a [PointRow],
+        }
+        impl<'a> PixelGeometry for HistoricalPointGeometry<'a> {
+            type Prep = PreparedPoint<'a>;
+
+            fn prepare(&self, tile: &FusedTileZ13, prep: &mut Vec<Self::Prep>) {
+                let geometry = PointGeometry {
+                    points: self.points,
+                };
+                geometry.prepare(tile, prep);
+            }
+
+            fn pixel(
+                &self,
+                prep: &Self::Prep,
+                tile: &FusedTileZ13,
+                rx_lat: f64,
+                rx_lon: f64,
+                rx_alt: f64,
+                refl: f64,
+            ) -> Option<PixelTerms> {
+                PointGeometry {
+                    points: self.points,
+                }
+                .pixel(prep, tile, rx_lat, rx_lon, rx_alt, refl)
+            }
+        }
+
+        let candidate = PointGeometry { points: &points };
+        let historical = HistoricalPointGeometry { points: &points };
+        reset_point_optimization_counts();
+        let mut candidate_accum = TileAccumulator::new();
+        let candidate_stats = scatter_tile_with_cfg(
+            &candidate,
+            &tile,
+            &barriers,
+            Some(&obstacles),
+            TILE_PX,
+            &mut candidate_accum,
+            None,
+        );
+        let candidate_counts = point_optimization_counts();
+        let candidate_execution = point_execution_counts();
+
+        reset_point_optimization_counts();
+        let mut historical_accum = TileAccumulator::new();
+        let historical_stats = scatter_tile_with_cfg(
+            &historical,
+            &tile,
+            &barriers,
+            Some(&obstacles),
+            TILE_PX,
+            &mut historical_accum,
+            None,
+        );
+        let historical_counts = point_optimization_counts();
+        let historical_execution = point_execution_counts();
+
+        eprintln!(
+            "point-{mode}: candidate pairs={} paths={} bypass={} cache_reads={} \
+             early_stops={} barrier_paths={} obstacle_crossings={}; historical \
+             pairs={} paths={} bypass={} cache_reads={} early_stops={} \
+             barrier_paths={} obstacle_crossings={}",
+            candidate_stats.pairs,
+            candidate_stats.path_calls,
+            candidate_counts.0,
+            candidate_counts.1,
+            candidate_execution.0,
+            candidate_execution.1,
+            candidate_execution.2,
+            historical_stats.pairs,
+            historical_stats.path_calls,
+            historical_counts.0,
+            historical_counts.1,
+            historical_execution.0,
+            historical_execution.1,
+            historical_execution.2,
+        );
+
+        assert!(candidate_stats.path_calls > 0 && historical_stats.path_calls > 0);
+        assert!(candidate_accum.energy.iter().any(|&energy| energy > 0.0));
+        for (name, execution) in [
+            ("candidate", candidate_execution),
+            ("historical", historical_execution),
+        ] {
+            assert!(
+                execution.1 > 0,
+                "{name} never executed the explicit barrier screening path"
+            );
+            assert!(
+                execution.2 > 0,
+                "{name} never executed a vector-obstacle crossing path"
+            );
+        }
+        match mode {
+            "bypass" => {
+                assert!(
+                    candidate_counts.0 > 0,
+                    "candidate never entered exact bypass"
+                );
+                assert_eq!(candidate_counts.1, 0, "exact bypass read term cache");
+                assert_eq!(historical_counts, (0, 0));
+                assert_eq!(
+                    candidate_execution.0, 0,
+                    "exact bypass unexpectedly stopped"
+                );
+                assert_eq!(
+                    historical_execution.0, 0,
+                    "unstopped historical arm stopped"
+                );
+            }
+            "cache" => {
+                assert_eq!(candidate_counts.0, 0, "stopped candidate entered bypass");
+                assert!(candidate_counts.1 > 0, "candidate never read cached terms");
+                assert_eq!(historical_counts, (0, 0));
+                assert!(
+                    candidate_execution.0 > 0 && historical_execution.0 > 0,
+                    "cache arm did not execute a real early stop: candidate={} historical={}",
+                    candidate_execution.0,
+                    historical_execution.0,
+                );
+                assert!(
+                    candidate_stats.skipped_calls > 0 && historical_stats.skipped_calls > 0,
+                    "cache arm reported no skipped pairs: candidate={} historical={}",
+                    candidate_stats.skipped_calls,
+                    historical_stats.skipped_calls,
+                );
+            }
+            other => panic!("unknown point optimization child mode {other}"),
+        }
+
+        let first_energy_difference = candidate_accum
+            .energy
+            .iter()
+            .zip(&historical_accum.energy)
+            .enumerate()
+            .find(|(_, (candidate, historical))| candidate.to_bits() != historical.to_bits());
+        assert!(
+            first_energy_difference.is_none(),
+            "point {mode} changed raw f32 energy at {first_energy_difference:?}"
+        );
+        assert_eq!(
+            collapse_lden_surface_u8(&candidate_accum),
+            collapse_lden_surface_u8(&historical_accum),
+        );
     }
 
     /// The cadence the production build ships (env-free).
@@ -1905,8 +2420,6 @@ mod tests {
     fn compact_scratch_omits_dense_buffers() {
         let scratch = BandScratch::new_compact();
         assert!(scratch.local.is_none());
-        assert!(scratch.kept.is_empty());
-        assert!(scratch.skipped.is_empty());
     }
 
     #[test]
