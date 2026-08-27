@@ -147,7 +147,7 @@ function spatialGeneration(base: ReturnType<typeof baseGeneration>) {
     },
     scorer_contract: {
       schema: 'w2-z13-spatial-scorer-v2',
-      implementation_sha256: 'a75d6e0633c9417bf90cb201a7bdd22fa7d6d46fe39f0518bfe9323cf5d27c68',
+      implementation_sha256: '86017b21cbd43af615afb52628db902e4cea9014339c929110655975e4fbcaf3',
       population_scopes: structuredClone(W2_SPATIAL_POPULATION_SCOPES),
       spatial_tolerance_pixels: 1,
       spatial_match_policy: 'symmetric-chebyshev-r1-directional-min-plus-histogram-capacity-v1',
