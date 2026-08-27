@@ -21,7 +21,10 @@ use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use cudarc::driver::sys::CUevent_flags;
-use cudarc::driver::{result, CudaDevice, CudaFunction, CudaSlice, LaunchAsync, LaunchConfig};
+use cudarc::driver::{
+    result, CudaDevice, CudaFunction, CudaSlice, CudaStream, DevicePtrMut, LaunchAsync,
+    LaunchConfig,
+};
 use h3o::CellIndex;
 use noise_compute::admin;
 use noise_gpu::{
@@ -52,7 +55,10 @@ use tile_painter::wire_hm3::{collapse_lden_surface_u8, read_tile, write_tile};
 // kernel-launch path (process_block/region, run_stream, main) stays here.
 #[path = "gpu_init.rs"]
 mod gpu_init;
-use gpu_init::{timing_enabled, warm_device, warm_device_on, LineFunctions, LineLayer, Progress};
+use gpu_init::{
+    multifidelity_cartesian_unbinned_anchor_enabled, timing_enabled, warm_device, warm_device_on,
+    LineFunctions, LineLayer, Progress,
+};
 
 const NO_DATA: u8 = 255;
 // `meta[9]`: since the surface kernel moved to byte-space stopping this is an
@@ -196,6 +202,40 @@ fn multifidelity_line_enabled() -> bool {
     option_env!("NOISE_GPU_MULTIFIDELITY_LINE") == Some("1")
 }
 
+/// The z13 W1 lift is a compile-time profile, not a runtime tuning knob. The
+/// marker pair is emitted only after `build.rs` has accepted the exact define
+/// values, so a binary cannot claim a stride that its PTX did not compile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MultifidelityZ13Profile {
+    stride: MultifidelityStride,
+}
+
+fn multifidelity_z13_profile() -> Result<Option<MultifidelityZ13Profile>> {
+    match (
+        option_env!("NOISE_GPU_MULTIFIDELITY_Z13_STRIDE"),
+        option_env!("NOISE_GPU_MULTIFIDELITY_Z13_ADAPTIVE"),
+    ) {
+        (None, None) => Ok(None),
+        (Some(stride), Some("0")) => {
+            let pixels: usize = stride
+                .parse()
+                .with_context(|| format!("invalid compiled z13 stride marker `{stride}`"))?;
+            let stride = MultifidelityStride::from_pixels(pixels)
+                .with_context(|| format!("unsupported compiled z13 stride marker `{stride}`"))?;
+            Ok(Some(MultifidelityZ13Profile { stride }))
+        }
+        (Some(stride), Some(adaptive)) => bail!(
+            "compiled z13 profile has adaptive/replay={adaptive:?}; strict ladder requires 0 (stride {stride})"
+        ),
+        (Some(stride), None) => bail!(
+            "compiled z13 profile stride {stride} is missing its adaptive=0 marker"
+        ),
+        (None, Some(adaptive)) => bail!(
+            "compiled z13 profile has adaptive marker {adaptive:?} without a stride marker"
+        ),
+    }
+}
+
 /// Runtime anchor lattice used by the W1 candidate. The compact CUDA launch
 /// receives an explicit record count; keeping the lattice here as a closed
 /// value object makes axis construction, masks, reconstruction, and allocation
@@ -223,7 +263,6 @@ impl MultifidelityStride {
         }
     }
 
-    #[cfg(test)]
     const fn from_pixels(pixels: usize) -> Option<Self> {
         match pixels {
             4 => Some(Self::Stride4),
@@ -261,32 +300,36 @@ impl MultifidelityStride {
 }
 
 /// Inputs deliberately exposed to the pure candidate selector. This bounded
-/// A/B selects either the stock exact kernel or the measured stride16 road and
-/// rail schedules from loaded region content, without coordinate allowlists,
-/// environment knobs, or a new launch ABI.
+/// A/B selects either the active role's exact binned fallback or a reviewed
+/// W1/z13 lattice from loaded region content, without coordinate allowlists,
+/// runtime environment knobs, or a new launch ABI.
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct MultifidelitySelectionInputs {
     layer: LineLayer,
     nsrc: usize,
+    requested_stride: Option<MultifidelityStride>,
 }
 
-/// Use the stock exact kernel for sparse roads, where exact work stays bounded
-/// by the much smaller source set, and stride16 for dense roads and all rail.
+/// Use the active role's exact binned fallback for sparse roads, where exact work
+/// stays bounded by the much smaller source set, and stride16 for dense roads and all rail.
 /// This is calibrated from normalized rows loaded from a region's
 /// `grid_disk(1)`: the z12 W1 rings measured 3,125–5,987 road rows in Sahara
 /// versus more than one million in Dobříš/Ruzyně. The 6,000-source boundary
 /// covers exactly 23,615 of 86,666 regions in the 2026 census while touching
 /// only 0.477% of world road source mass. A fixed content threshold keeps the
 /// rule geographic-data driven and applies to unseen areas. `None` means the
-/// unchanged dense stock kernel; `Some` means multifidelity reconstruction.
+/// role-exact binned entry; `Some` means multifidelity reconstruction.
 const ROAD_SPARSE_STOCK_MAX_SOURCES: usize = 6_000;
 
 fn select_multifidelity_stride(
     inputs: MultifidelitySelectionInputs,
 ) -> Option<MultifidelityStride> {
+    let stride = inputs
+        .requested_stride
+        .unwrap_or(MultifidelityStride::Stride16);
     match inputs.layer {
         LineLayer::Road if inputs.nsrc <= ROAD_SPARSE_STOCK_MAX_SOURCES => None,
-        LineLayer::Road | LineLayer::Rail => Some(MultifidelityStride::Stride16),
+        LineLayer::Road | LineLayer::Rail => Some(stride),
     }
 }
 
@@ -297,8 +340,6 @@ fn select_multifidelity_stride(
 fn multifidelity_anchor_axis(stride: MultifidelityStride) -> Vec<usize> {
     stride.anchor_axis()
 }
-
-const MULTIFIDELITY_PRESENCE_PROBABILITY: f64 = 0.40;
 
 /// W1 anchors-only timing/visual candidate. The adaptive replay selector is
 /// retained in code so its measured quality/speed trade-off stays directly
@@ -381,6 +422,504 @@ fn add_multifidelity_fault_total_to_dense_slot(
     multifidelity_fault_total: f32,
 ) {
     dense_output[noise_gpu::OUT_FAULT_SLOT] += multifidelity_fault_total;
+}
+
+// The stride-4 axis is Cartesian: 129 latitude coordinates by 129 longitude
+// coordinates. Nine groups of at most 16 latitude coordinates each reuse the
+// first row of nine ordinary 16x16 unbinned blocks. The final block/group pads by
+// repeating coordinate 511; all 256 lanes remain ordinary valid receivers and
+// the repeated results are discarded on the host.
+const MULTIFIDELITY_STOCK_CARTESIAN_AXIS_COORDINATES: usize = 129;
+const MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS: usize =
+    MULTIFIDELITY_STOCK_CARTESIAN_AXIS_COORDINATES.div_ceil(BIN_W);
+const MULTIFIDELITY_STOCK_CARTESIAN_LONGITUDE_BLOCKS: usize =
+    MULTIFIDELITY_STOCK_CARTESIAN_AXIS_COORDINATES.div_ceil(BIN_W);
+const MULTIFIDELITY_STOCK_CARTESIAN_LAUNCHED_COLUMNS: usize =
+    MULTIFIDELITY_STOCK_CARTESIAN_LONGITUDE_BLOCKS * BIN_W;
+const MULTIFIDELITY_STOCK_CARTESIAN_LAUNCHED_PIXELS_END: usize =
+    (BIN_W - 1) * TILE_PX + MULTIFIDELITY_STOCK_CARTESIAN_LAUNCHED_COLUMNS;
+const MULTIFIDELITY_STOCK_CARTESIAN_RXAR_VALUES: usize =
+    MULTIFIDELITY_STOCK_CARTESIAN_LAUNCHED_PIXELS_END * 2;
+const MULTIFIDELITY_STOCK_CARTESIAN_OUTPUT_VALUES: usize =
+    MULTIFIDELITY_STOCK_CARTESIAN_LAUNCHED_PIXELS_END * NUM_PERIODS;
+const MULTIFIDELITY_STOCK_CARTESIAN_COMPUTED_RECEIVERS: usize =
+    MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS
+        * MULTIFIDELITY_STOCK_CARTESIAN_LONGITUDE_BLOCKS
+        * BIN_W
+        * BIN_W;
+const MULTIFIDELITY_STOCK_CARTESIAN_META_BYTE_STOP_SLOT: usize = 9;
+const MULTIFIDELITY_STOCK_CARTESIAN_META_TILE_WIDTH_SLOT: usize = 10;
+const MULTIFIDELITY_STOCK_CARTESIAN_META_OUTPUT_SLOTS_SLOT: usize = 13;
+
+const _: () = assert!(MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS == 9);
+const _: () = assert!(MULTIFIDELITY_STOCK_CARTESIAN_LONGITUDE_BLOCKS == 9);
+const _: () = assert!(MULTIFIDELITY_STOCK_CARTESIAN_LAUNCHED_COLUMNS == 144);
+const _: () = assert!(MULTIFIDELITY_STOCK_CARTESIAN_LAUNCHED_PIXELS_END == 7_824);
+const _: () = assert!(MULTIFIDELITY_STOCK_CARTESIAN_OUTPUT_VALUES <= noise_gpu::OUT_FAULT_SLOT);
+const _: () = assert!(MULTIFIDELITY_STOCK_CARTESIAN_COMPUTED_RECEIVERS == 20_736);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MultifidelityStockCartesianPlan {
+    axis: Vec<usize>,
+}
+
+impl MultifidelityStockCartesianPlan {
+    fn stride4() -> Result<Self, String> {
+        let axis = multifidelity_anchor_axis(MultifidelityStride::Stride4);
+        if axis.len() != MULTIFIDELITY_STOCK_CARTESIAN_AXIS_COORDINATES {
+            return Err(format!(
+                "stride4 stock Cartesian axis has {} coordinates, expected {}",
+                axis.len(),
+                MULTIFIDELITY_STOCK_CARTESIAN_AXIS_COORDINATES
+            ));
+        }
+        if axis.first().copied() != Some(0) || axis.last().copied() != Some(TILE_PX - 1) {
+            return Err("stride4 stock Cartesian axis omits a tile boundary".to_string());
+        }
+        Ok(Self { axis })
+    }
+
+    fn anchor_record_count(&self) -> usize {
+        self.axis.len() * self.axis.len()
+    }
+
+    fn latitude_group_range(&self, group: usize) -> Result<std::ops::Range<usize>, String> {
+        if group >= MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS {
+            return Err(format!(
+                "stock Cartesian latitude group {group} exceeds plan"
+            ));
+        }
+        let start = group * BIN_W;
+        Ok(start..(start + BIN_W).min(self.axis.len()))
+    }
+
+    fn source_dense_index(
+        &self,
+        group: usize,
+        synthetic_y: usize,
+        synthetic_x: usize,
+    ) -> Result<usize, String> {
+        if synthetic_y >= BIN_W {
+            return Err(format!(
+                "stock Cartesian synthetic row {synthetic_y} exceeds one stock block"
+            ));
+        }
+        let synthetic_columns = MULTIFIDELITY_STOCK_CARTESIAN_LAUNCHED_COLUMNS;
+        if synthetic_x >= synthetic_columns {
+            return Err(format!(
+                "stock Cartesian synthetic column {synthetic_x} exceeds {synthetic_columns}"
+            ));
+        }
+        let group_range = self.latitude_group_range(group)?;
+        let axis_y = (group_range.start + synthetic_y).min(self.axis.len() - 1);
+        let axis_x = synthetic_x.min(self.axis.len() - 1);
+        Ok(self.axis[axis_y] * TILE_PX + self.axis[axis_x])
+    }
+}
+
+fn multifidelity_stock_cartesian_exact_meta(source: &[f64]) -> Result<Vec<f64>, String> {
+    if source.len() != noise_gpu::SURFACE_META_SLOTS {
+        return Err(format!(
+            "stock Cartesian metadata length {} != {}",
+            source.len(),
+            noise_gpu::SURFACE_META_SLOTS
+        ));
+    }
+    if source[MULTIFIDELITY_STOCK_CARTESIAN_META_OUTPUT_SLOTS_SLOT]
+        != noise_gpu::OUT_SLOTS_PROD as f64
+    {
+        return Err(format!(
+            "stock Cartesian output ABI {} != {}",
+            source[MULTIFIDELITY_STOCK_CARTESIAN_META_OUTPUT_SLOTS_SLOT],
+            noise_gpu::OUT_SLOTS_PROD
+        ));
+    }
+    let mut exact = source.to_vec();
+    exact[MULTIFIDELITY_STOCK_CARTESIAN_META_BYTE_STOP_SLOT] = 0.0;
+    exact[MULTIFIDELITY_STOCK_CARTESIAN_META_TILE_WIDTH_SLOT] = BIN_W as f64;
+    Ok(exact)
+}
+
+/// Populate the dense-index receiver ABI consumed by the candidate's unbinned
+/// entry. Only rows 0..16 and columns 0..144 are launched, so `rxar` ends after
+/// that exact pointer footprint; the split latitude/longitude `rxll` ABI keeps
+/// its canonical shape. Every launched padded lane duplicates a real boundary
+/// receiver instead of carrying an invalid sentinel into the kernel.
+fn pack_multifidelity_stock_cartesian_group(
+    plan: &MultifidelityStockCartesianPlan,
+    source_rxll: &[f64],
+    source_rxar: &[f32],
+    group: usize,
+) -> Result<(Vec<f64>, Vec<f32>), String> {
+    if source_rxll.len() != TILE_PX * 2 {
+        return Err(format!(
+            "stock Cartesian rxll length {} != {}",
+            source_rxll.len(),
+            TILE_PX * 2
+        ));
+    }
+    if source_rxar.len() != TILE_PX * TILE_PX * 2 {
+        return Err(format!(
+            "stock Cartesian rxar length {} != {}",
+            source_rxar.len(),
+            TILE_PX * TILE_PX * 2
+        ));
+    }
+    plan.latitude_group_range(group)?;
+
+    let mut packed_rxll = vec![0.0f64; TILE_PX * 2];
+    for synthetic_y in 0..TILE_PX {
+        let bounded_y = synthetic_y.min(BIN_W - 1);
+        let source_index = plan.source_dense_index(group, bounded_y, 0)?;
+        packed_rxll[synthetic_y] = source_rxll[source_index / TILE_PX];
+    }
+    for synthetic_x in 0..TILE_PX {
+        let bounded_x = synthetic_x.min(MULTIFIDELITY_STOCK_CARTESIAN_LAUNCHED_COLUMNS - 1);
+        let source_index = plan.source_dense_index(group, 0, bounded_x)?;
+        packed_rxll[TILE_PX + synthetic_x] = source_rxll[TILE_PX + source_index % TILE_PX];
+    }
+
+    let mut packed_rxar = vec![0.0f32; MULTIFIDELITY_STOCK_CARTESIAN_RXAR_VALUES];
+    for synthetic_y in 0..BIN_W {
+        for synthetic_x in 0..MULTIFIDELITY_STOCK_CARTESIAN_LAUNCHED_COLUMNS {
+            let source_index = plan.source_dense_index(group, synthetic_y, synthetic_x)?;
+            let packed_index = synthetic_y * TILE_PX + synthetic_x;
+            let values = [
+                source_rxar[source_index * 2],
+                source_rxar[source_index * 2 + 1],
+            ];
+            if !source_rxll[source_index / TILE_PX].is_finite()
+                || !source_rxll[TILE_PX + source_index % TILE_PX].is_finite()
+                || values.iter().any(|value| !value.is_finite())
+            {
+                return Err(format!(
+                    "stock Cartesian receiver {source_index} contains non-finite input"
+                ));
+            }
+            packed_rxar[packed_index * 2..packed_index * 2 + 2].copy_from_slice(&values);
+        }
+    }
+    Ok((packed_rxll, packed_rxar))
+}
+
+#[cfg(test)]
+fn multifidelity_stock_cartesian_output_prefix_sentinel() -> Vec<f32> {
+    vec![f32::NAN; MULTIFIDELITY_STOCK_CARTESIAN_OUTPUT_VALUES]
+}
+
+fn multifidelity_stock_cartesian_compact_output_sentinel(
+    plan: &MultifidelityStockCartesianPlan,
+) -> Vec<f32> {
+    let mut output =
+        vec![f32::NAN; plan.anchor_record_count() * noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_STRIDE];
+    for record in output.chunks_exact_mut(noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_STRIDE) {
+        record[noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT] = -1.0;
+    }
+    output
+}
+
+/// Convert one unbinned dense output back to the existing compact host ABI. Each
+/// compact index begins at -1 and each dense energy begins at NaN, so a missed
+/// group, missed lane, repeated group, or partial launch fails decoding.
+fn extract_multifidelity_stock_cartesian_group(
+    plan: &MultifidelityStockCartesianPlan,
+    group: usize,
+    dense_output: &[f32],
+    dense_fault: f32,
+    compact_output: &mut [f32],
+) -> Result<f32, String> {
+    if dense_output.len() != MULTIFIDELITY_STOCK_CARTESIAN_OUTPUT_VALUES {
+        return Err(format!(
+            "stock Cartesian launched output length {} != {}",
+            dense_output.len(),
+            MULTIFIDELITY_STOCK_CARTESIAN_OUTPUT_VALUES
+        ));
+    }
+    let compact_stride = noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_STRIDE;
+    let expected_compact_len = plan
+        .anchor_record_count()
+        .checked_mul(compact_stride)
+        .ok_or_else(|| "stock Cartesian compact output length overflow".to_string())?;
+    if compact_output.len() != expected_compact_len {
+        return Err(format!(
+            "stock Cartesian compact output length {} != {expected_compact_len}",
+            compact_output.len()
+        ));
+    }
+
+    // The unbinned kernel launched every 16x144 lane, including the duplicated
+    // Cartesian padding. Validate the complete launched rectangle before
+    // discarding those lanes; otherwise a partial block or a stale padding
+    // write can pass through the exact-anchor receipt unnoticed.
+    let launched_columns = MULTIFIDELITY_STOCK_CARTESIAN_LAUNCHED_COLUMNS;
+    for synthetic_y in 0..BIN_W {
+        for synthetic_x in 0..launched_columns {
+            let source_energy = (synthetic_y * TILE_PX + synthetic_x) * NUM_PERIODS;
+            let energies = &dense_output[source_energy..source_energy + NUM_PERIODS];
+            if energies
+                .iter()
+                .any(|value| !value.is_finite() || *value < 0.0)
+            {
+                return Err(format!(
+                    "stock Cartesian launched lane ({synthetic_y},{synthetic_x}) has an unwritten or invalid energy"
+                ));
+            }
+        }
+    }
+
+    let group_range = plan.latitude_group_range(group)?;
+    for (synthetic_y, axis_y) in group_range.enumerate() {
+        for axis_x in 0..plan.axis.len() {
+            let source_energy = (synthetic_y * TILE_PX + axis_x) * NUM_PERIODS;
+            let dense_index = plan.axis[axis_y] * TILE_PX + plan.axis[axis_x];
+            let record = axis_y * plan.axis.len() + axis_x;
+            let target = record * compact_stride;
+            if compact_output[target + noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT] != -1.0 {
+                return Err(format!(
+                    "stock Cartesian anchor record {record} was written more than once"
+                ));
+            }
+            let energies = &dense_output[source_energy..source_energy + NUM_PERIODS];
+            compact_output[target + noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT] =
+                dense_index as f32;
+            let energy_base = target + noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE;
+            compact_output[energy_base..energy_base + NUM_PERIODS].copy_from_slice(energies);
+            compact_output[target + noise_gpu::MULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT] = 0.0;
+        }
+    }
+
+    let fault = dense_fault;
+    if !fault.is_finite() || fault < 0.0 {
+        return Err(format!(
+            "stock Cartesian group {group} has invalid fault count {fault}"
+        ));
+    }
+    Ok(fault)
+}
+
+/// Padding receivers duplicate physical boundary pixels, but the unbinned
+/// kernel exposes only one launch-global ARC fault counter. A nonzero Cartesian
+/// total therefore cannot be attributed to real anchors without a per-lane
+/// fault ABI; fail closed before it is mixed into the dense receipt.
+fn require_zero_multifidelity_stock_cartesian_fault(fault_total: f32) -> Result<(), String> {
+    if fault_total == 0.0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "stock Cartesian exact launch reported {fault_total:.0} ARC faults; refusing to mix the aggregate because duplicate padding lanes are not dense-equivalent"
+        ))
+    }
+}
+
+/// W2's per-call pre-clip arc union may increase fixed-capacity interval demand.
+/// Its exact Cartesian anchors already reject every ARC fault; apply the same
+/// fail-closed policy to launch A before its dense cheap field can be
+/// reconstructed and written. Stock and the accepted W1 role retain their
+/// historical loud-warning policy.
+fn require_zero_w2_dense_arc_fault(w2_profile: bool, fault_delta: f32) -> Result<(), String> {
+    if !w2_profile || fault_delta == 0.0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "W2 stride4 dense launch A reported {fault_delta:.0} ARC faults; refusing to reconstruct an under-screened tile"
+        ))
+    }
+}
+
+fn validate_multifidelity_stock_cartesian_output(
+    plan: &MultifidelityStockCartesianPlan,
+    compact_output: &[f32],
+) -> Result<(), String> {
+    let decoded = decode_multifidelity_compact_output(compact_output, plan.anchor_record_count())?;
+    for (record, ((dense_index, _, _), expected_index)) in decoded
+        .into_iter()
+        .zip(
+            plan.axis
+                .iter()
+                .flat_map(|&py| plan.axis.iter().map(move |&px| py * TILE_PX + px)),
+        )
+        .enumerate()
+    {
+        if dense_index != expected_index {
+            return Err(format!(
+                "stock Cartesian record {record} index {dense_index} != {expected_index}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+struct MultifidelityStockCartesianDeviceGroup {
+    group: usize,
+    rxll: CudaSlice<f64>,
+    rxar: CudaSlice<f32>,
+    output: CudaSlice<f32>,
+}
+
+fn allocate_multifidelity_stock_cartesian_output(
+    dev: &Arc<CudaDevice>,
+    group: usize,
+) -> Result<CudaSlice<f32>> {
+    let mut output = dev
+        .alloc_zeros::<f32>(noise_gpu::OUT_SLOTS_PROD)
+        .with_context(|| format!("allocate stock Cartesian group {group} output"))?;
+    let mut launched_prefix = output.slice_mut(..MULTIFIDELITY_STOCK_CARTESIAN_OUTPUT_VALUES);
+    // The kernel writes only the launched 16x144 prefix plus the distant global
+    // fault slot. 0xff in every byte is an IEEE-754 NaN, preserving the exact
+    // unwritten-lane sentinel without uploading the unused 3 MiB dense tail;
+    // alloc_zeros keeps the fault counter at its required initial 0.0.
+    unsafe {
+        result::memset_d8_async(
+            *launched_prefix.device_ptr_mut(),
+            0xff,
+            MULTIFIDELITY_STOCK_CARTESIAN_OUTPUT_VALUES * std::mem::size_of::<f32>(),
+            *dev.cu_stream(),
+        )
+    }
+    .with_context(|| format!("initialize stock Cartesian group {group} output sentinel"))?;
+    Ok(output)
+}
+
+fn prepare_multifidelity_stock_cartesian_device_groups(
+    dev: &Arc<CudaDevice>,
+    plan: &MultifidelityStockCartesianPlan,
+    source_rxll: &[f64],
+    source_rxar: &[f32],
+) -> Result<Vec<MultifidelityStockCartesianDeviceGroup>> {
+    (0..MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS)
+        .map(|group| {
+            let (rxll, rxar) =
+                pack_multifidelity_stock_cartesian_group(plan, source_rxll, source_rxar, group)
+                    .map_err(anyhow::Error::msg)?;
+            Ok(MultifidelityStockCartesianDeviceGroup {
+                group,
+                rxll: dev
+                    .htod_copy(rxll)
+                    .with_context(|| format!("upload stock Cartesian group {group} rxll"))?,
+                rxar: dev
+                    .htod_copy(rxar)
+                    .with_context(|| format!("upload stock Cartesian group {group} rxar"))?,
+                output: allocate_multifidelity_stock_cartesian_output(dev, group)?,
+            })
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_multifidelity_stock_cartesian_device_groups(
+    function: &CudaFunction,
+    streams: &[CudaStream],
+    groups: &mut [MultifidelityStockCartesianDeviceGroup],
+    d_elev: &CudaSlice<f32>,
+    d_inner: &CudaSlice<f32>,
+    d_cover: &CudaSlice<u8>,
+    d_meta: &CudaSlice<f64>,
+    d_seg: &CudaSlice<f64>,
+    d_sp: &CudaSlice<f64>,
+    d_semis: &CudaSlice<f32>,
+    d_barr: &CudaSlice<f64>,
+    d_obstacles: &CudaSlice<u64>,
+) -> Result<()> {
+    assert_eq!(
+        groups.len(),
+        MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS,
+        "stock Cartesian launch must contain every latitude group"
+    );
+    assert_eq!(
+        streams.len(),
+        groups.len(),
+        "each stock Cartesian group requires one independent CUDA stream"
+    );
+    let launch_config = LaunchConfig {
+        grid_dim: (MULTIFIDELITY_STOCK_CARTESIAN_LONGITUDE_BLOCKS as u32, 1, 1),
+        block_dim: ((BIN_W * BIN_W) as u32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    // Each wave has private rxll/rxar/output allocations. All other arguments
+    // are immutable, so the nine streams cannot race. The streams were forked
+    // only after every H2D upload; their initial default-stream dependency makes
+    // those inputs visible before any wave begins.
+    for (expected_group, (stream, group)) in streams.iter().zip(groups.iter_mut()).enumerate() {
+        assert_eq!(group.group, expected_group, "stock Cartesian group order");
+        unsafe {
+            function
+                .clone()
+                .launch_on_stream(
+                    stream,
+                    launch_config,
+                    noise_gpu::line_kernel_arguments!(
+                        d_elev,
+                        d_inner,
+                        d_cover,
+                        d_meta,
+                        d_seg,
+                        d_sp,
+                        d_semis,
+                        &group.rxll,
+                        &group.rxar,
+                        d_barr,
+                        d_obstacles,
+                        &mut group.output,
+                    ),
+                )
+                .with_context(|| {
+                    format!("launch candidate Cartesian unbinned anchor group {expected_group}")
+                })?;
+        }
+    }
+    Ok(())
+}
+
+fn download_multifidelity_stock_cartesian_device_groups(
+    dev: &Arc<CudaDevice>,
+    plan: &MultifidelityStockCartesianPlan,
+    groups: &[MultifidelityStockCartesianDeviceGroup],
+) -> Result<(Vec<f32>, f32)> {
+    let mut compact_output = multifidelity_stock_cartesian_compact_output_sentinel(plan);
+    let mut fault_total = 0.0f32;
+    for (expected_group, group) in groups.iter().enumerate() {
+        anyhow::ensure!(
+            group.group == expected_group,
+            "stock Cartesian device group {} appears at {expected_group}",
+            group.group
+        );
+        let dense_output = dev
+            .dtoh_sync_copy(
+                &group
+                    .output
+                    .slice(..MULTIFIDELITY_STOCK_CARTESIAN_OUTPUT_VALUES),
+            )
+            .with_context(|| {
+                format!(
+                    "download stock Cartesian group {} launched output",
+                    group.group
+                )
+            })?;
+        let dense_fault = dev
+            .dtoh_sync_copy(
+                &group
+                    .output
+                    .slice(noise_gpu::OUT_FAULT_SLOT..noise_gpu::OUT_FAULT_SLOT + 1),
+            )
+            .with_context(|| format!("download stock Cartesian group {} fault", group.group))?[0];
+        let fault = extract_multifidelity_stock_cartesian_group(
+            plan,
+            group.group,
+            &dense_output,
+            dense_fault,
+            &mut compact_output,
+        )
+        .map_err(anyhow::Error::msg)?;
+        fault_total += fault;
+        anyhow::ensure!(
+            fault_total.is_finite(),
+            "stock Cartesian aggregate fault count overflowed"
+        );
+    }
+    require_zero_multifidelity_stock_cartesian_fault(fault_total).map_err(anyhow::Error::msg)?;
+    validate_multifidelity_stock_cartesian_output(plan, &compact_output)
+        .map_err(anyhow::Error::msg)?;
+    Ok((compact_output, fault_total))
 }
 
 /// Pack dense receiver inputs into the compact kernel's explicit four-word
@@ -620,9 +1159,9 @@ struct MultifidelityCompactPlan {
 }
 
 /// One 32-lane warp descriptor in the packed CUDA prototype. A zero
-/// `record_count` is an explicit inactive tail descriptor; keeping eight
-/// descriptors in every block makes the existing header + offset/count control
-/// ABI usable without adding a control-length argument.
+/// `record_count` is an explicit inactive tail descriptor; keeping the selected
+/// compile-time descriptor count in every block makes the existing header +
+/// offset/count control ABI usable without adding a control-length argument.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct MultifidelityCompactPackedWarp {
     record_offset: usize,
@@ -841,55 +1380,17 @@ fn multifidelity_bilinear_period_energy(
 }
 
 #[inline]
-fn multifidelity_anchor_presence_probability(
-    data: &MultifidelityInterpolation,
-    py: usize,
-    px: usize,
-) -> f64 {
-    let y0 = data.lower[py];
-    let y1 = data.upper[py];
-    let x0 = data.lower[px];
-    let x1 = data.upper[px];
-    let fy = data.fraction[py];
-    let fx = data.fraction[px];
-    let present = |ay: usize, ax: usize| {
-        let anchor = ay * data.axis.len() + ax;
-        f64::from(
-            data.exact_anchor_energy[anchor]
-                .iter()
-                .any(|&energy| energy.is_finite() && energy > 0.0),
-        )
-    };
-    present(y0, x0) * (1.0 - fy) * (1.0 - fx)
-        + present(y0, x1) * (1.0 - fy) * fx
-        + present(y1, x0) * fy * (1.0 - fx)
-        + present(y1, x1) * fy * fx
-}
-
-#[inline]
 fn multifidelity_interior_is_present(
     data: &MultifidelityInterpolation,
     py: usize,
     px: usize,
 ) -> bool {
     let index = py * TILE_PX + px;
-    match data.stride {
-        // The exact stride4 lattice already tracks sparse-source contours.
-        // Launch A can be much louder than the exact model in a few low-source
-        // halo tiles, so using its dense presence there creates false areas.
-        MultifidelityStride::Stride4 => {
-            multifidelity_anchor_presence_probability(data, py, px)
-                >= MULTIFIDELITY_PRESENCE_PROBABILITY
-        }
-        // Coarser lattices visibly quantise the contour when presence follows
-        // only four corners. Their dense cheap field is the better boundary
-        // signal; exact anchors remain authoritative in either policy.
-        MultifidelityStride::Stride8
-        | MultifidelityStride::Stride16
-        | MultifidelityStride::Stride32 => {
-            data.cheap_cells[index] != tile_painter::wire_hm3::NO_DATA
-        }
-    }
+    // Keep the W1 cheap presence authority for every z13 arm. In particular,
+    // stride4 must not switch to the 0.40 anchor-probability contour: that
+    // would make the ladder change two variables at once. Exact anchors remain
+    // authoritative for their lattice cells.
+    data.cheap_cells[index] != tile_painter::wire_hm3::NO_DATA
 }
 
 /// Build launch C's exact receiver list from launch-A observables only:
@@ -1230,7 +1731,9 @@ fn process_block(
     let halo = &batch.tiles[0].halo;
     let halo_geom = halo.geom();
     let (_, _, _, rows, cols) = halo_geom;
-    let candidate_build_on = multifidelity_line_enabled() && cfg.z == 12;
+    let z13_profile = multifidelity_z13_profile()?;
+    let candidate_build_on =
+        multifidelity_line_enabled() && (cfg.z == 12 || (cfg.z == 13 && z13_profile.is_some()));
 
     let elev: Vec<f32> = halo.pixels().iter().map(|p| p.elevation).collect();
     // Noise barriers reach the kernel as the VECTOR per-tile `for_tile` slice
@@ -1347,7 +1850,13 @@ fn process_block(
                     .expect("layer rows")
                     .1
                     .len();
-                select_multifidelity_stride(MultifidelitySelectionInputs { layer, nsrc })
+                let requested_stride =
+                    (cfg.z == 13).then(|| z13_profile.expect("z13 candidate profile").stride);
+                select_multifidelity_stride(MultifidelitySelectionInputs {
+                    layer,
+                    nsrc,
+                    requested_stride,
+                })
             })
             .flatten();
         let candidate_on = multifidelity_stride.is_some();
@@ -1362,37 +1871,85 @@ fn process_block(
             .find(|(l, _)| *l == layer)
             .expect("layer src")
             .1;
-        // Cheap and stock keep their frozen dense receiver ABI. The candidate
-        // exact passes receive a separate host-packed list; retaining one host
-        // copy is necessary for launch C because the selector chooses replay
-        // indices after the dense receiver upload has been consumed.
+        // Cheap and unbinned exact keep the dense receiver ABI. Compact exact
+        // passes receive a host-packed list; stride4 instead repacks the same
+        // canonical receiver arrays into nine Cartesian unbinned launches.
+        // Retaining one host copy is also necessary for launch C because the
+        // selector chooses replay indices after the dense upload is consumed.
         let compact_receiver_host = candidate_on.then(|| (bufs.rxll.clone(), bufs.rxar.clone()));
-        let compact_anchor_plan = if let Some(stride) = multifidelity_stride {
-            let axis = multifidelity_anchor_axis(stride);
-            let dense_indices = axis
-                .iter()
-                .flat_map(|&py| axis.iter().map(move |&px| py * TILE_PX + px))
-                .collect::<Vec<_>>();
-            multifidelity_compact_packed_plan(&dense_indices).expect("packed compact anchor plan")
-        } else {
-            MultifidelityCompactPackedPlan::default()
+        let stock_cartesian_anchor_plan = (multifidelity_stride
+            == Some(MultifidelityStride::Stride4))
+        .then(MultifidelityStockCartesianPlan::stride4)
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
+        if stock_cartesian_anchor_plan.is_some() {
+            anyhow::ensure!(
+                functions.cartesian_unbinned_exact.is_some(),
+                "stride4 profile is missing its candidate Cartesian unbinned CUDA function"
+            );
+        }
+        let compact_anchor_plan = match multifidelity_stride {
+            Some(stride) if stock_cartesian_anchor_plan.is_none() => {
+                let axis = multifidelity_anchor_axis(stride);
+                let dense_indices = axis
+                    .iter()
+                    .flat_map(|&py| axis.iter().map(move |&px| py * TILE_PX + px))
+                    .collect::<Vec<_>>();
+                multifidelity_compact_packed_plan(&dense_indices)
+                    .expect("packed compact anchor plan")
+            }
+            _ => MultifidelityCompactPackedPlan::default(),
         };
-        let compact_anchor_words = if let Some((rxll, rxar)) = compact_receiver_host.as_ref() {
-            pack_multifidelity_compact_receivers(rxll, rxar, &compact_anchor_plan.indices)
-                .expect("compact anchor receiver pack")
+        let compact_anchor_words = match (
+            compact_anchor_plan.indices.is_empty(),
+            compact_receiver_host.as_ref(),
+        ) {
+            (false, Some((rxll, rxar))) => {
+                pack_multifidelity_compact_receivers(rxll, rxar, &compact_anchor_plan.indices)
+                    .expect("compact anchor receiver pack")
+            }
+            _ => Vec::new(),
+        };
+        let mut stock_cartesian_device_groups =
+            if let Some(plan) = stock_cartesian_anchor_plan.as_ref() {
+                let (rxll, rxar) = compact_receiver_host
+                    .as_ref()
+                    .expect("stock Cartesian receiver host copy");
+                prepare_multifidelity_stock_cartesian_device_groups(dev, plan, rxll, rxar)?
+            } else {
+                Vec::new()
+            };
+        let d_stock_cartesian_meta = if stock_cartesian_anchor_plan.is_some() {
+            let exact_meta =
+                multifidelity_stock_cartesian_exact_meta(&meta_host).map_err(anyhow::Error::msg)?;
+            Some(dev.htod_copy(exact_meta).expect("stock Cartesian meta"))
         } else {
-            Vec::new()
+            None
         };
         let d_rxll = dev.htod_copy(bufs.rxll).expect("rxll");
         let d_rxar = dev.htod_copy(bufs.rxar).expect("rxar");
         let d_barr = dev.htod_copy(bufs.barr).expect("barr");
         let h2d_done = Instant::now();
         stats.entry(layer.dir()).or_default().t_h2d += h2d_done.duration_since(tk).as_secs_f64();
-        // CUDA-event bracket (timing only): record on the SAME stream the kernel
-        // launches on the selected function → `dev.cu_stream()`, so `start`/`stop` straddle
-        // exactly the kernel — not the htod copies above or the dtoh join below. The
-        // `elapsed` read happens after dtoh_sync_copy synchronises the stream, so
-        // both events are complete. Off ⇒ no events created at all.
+        // Fork only after every shared and wave-private input upload. The
+        // initial dependency makes those inputs visible without putting stream
+        // creation inside the timed GPU envelope.
+        let stock_cartesian_streams = if stock_cartesian_anchor_plan.is_some() {
+            (0..MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS)
+                .map(|group| {
+                    dev.fork_default_stream()
+                        .with_context(|| format!("fork stock Cartesian anchor stream {group}"))
+                })
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            Vec::new()
+        };
+        // CUDA-event bracket (timing only). Ordinary/compact work stays on the
+        // default stream. After recording start, every Cartesian stream gets an
+        // explicit second default-stream dependency that fences its exact work
+        // behind this timestamp. The backend later joins all nine waves before
+        // stop, measuring one complete concurrent GPU envelope rather than nine
+        // misleading per-wave underloads.
         let kernel_evt = timing_enabled().then(|| {
             let stream = *dev.cu_stream();
             let start = result::event::create(CUevent_flags::CU_EVENT_DEFAULT).expect("evt start");
@@ -1400,11 +1957,20 @@ fn process_block(
             unsafe { result::event::record(start, stream).expect("record start") };
             (start, stop, stream)
         });
+        if kernel_evt.is_some() {
+            for (group, stream) in stock_cartesian_streams.iter().enumerate() {
+                stream.wait_for_default().with_context(|| {
+                    format!("fence stock Cartesian anchor stream {group} behind timing start")
+                })?;
+            }
+        }
         // Optional phase census for the W1 design review. These CUDA events
-        // isolate dense cheap, compact anchors, and compact selected replay;
-        // they are never created for stock/W2 or ordinary timed runs.
-        let stage_timing =
-            candidate_on && std::env::var("QM_MULTIFIDELITY_STAGE_TIMES").as_deref() == Ok("1");
+        // isolate sequential dense cheap, compact anchors, and compact selected
+        // replay. Cartesian anchors deliberately overlap launch A on nine
+        // streams, so the sequential phase receipt is undefined for that arm.
+        let stage_timing = candidate_on
+            && stock_cartesian_anchor_plan.is_none()
+            && std::env::var("QM_MULTIFIDELITY_STAGE_TIMES").as_deref() == Ok("1");
         let stage_events = stage_timing.then(|| {
             let make = || {
                 result::event::create(CUevent_flags::CU_EVENT_DEFAULT)
@@ -1471,6 +2037,50 @@ fn process_block(
                 result::event::record(*dense_stop, *stream).expect("record dense stage stop");
             }
         }
+        // Queue all 81 unbinned exact blocks immediately after launch A. The forked
+        // streams wait only for the preceding H2D uploads, not for launch A, so
+        // cheap and exact work can occupy the device concurrently.
+        if stock_cartesian_anchor_plan.is_some() {
+            launch_multifidelity_stock_cartesian_device_groups(
+                functions
+                    .cartesian_unbinned_exact
+                    .as_ref()
+                    .expect("candidate Cartesian unbinned CUDA function"),
+                &stock_cartesian_streams,
+                &mut stock_cartesian_device_groups,
+                &d_elev,
+                &d_inner,
+                &d_cover,
+                d_stock_cartesian_meta
+                    .as_ref()
+                    .expect("stock Cartesian exact metadata"),
+                d_seg,
+                d_sp,
+                d_semis,
+                &d_barr,
+                &obst_dev.table,
+            )?;
+            // Queue every exact-wave join immediately, before host preparation
+            // or D2H can insert an idle gap into the CUDA event envelope. The
+            // default stream already contains launch A, so stop follows both
+            // cheap completion and all nine exact completions. Selected replay
+            // is compile-fenced off for this arm; if that changes, the existing
+            // post-selector stop path remains authoritative.
+            for (group, stream) in stock_cartesian_streams.iter().enumerate() {
+                dev.wait_for(stream)
+                    .with_context(|| format!("join stock Cartesian anchor stream {group}"))?;
+            }
+            if !MULTIFIDELITY_REPLAY_SELECTED_BLOCKS {
+                if let Some((_, stop, stream)) = kernel_evt {
+                    unsafe { result::event::record(stop, stream).expect("record stop") };
+                    kernel_stop_recorded = true;
+                }
+            }
+        }
+        // Drop adds a redundant default-stream dependency and destroys the
+        // forked streams while every private buffer is still alive. On unwind,
+        // declaration order preserves the same streams-before-buffers lifetime.
+        drop(stock_cartesian_streams);
         // Overlap: prep the NEXT item on the CPU while launch A runs on the GPU.
         pending = iter.next().map(|it| prep_timed(it, stats));
 
@@ -1478,45 +2088,53 @@ fn process_block(
         let mut candidate_interpolation = None;
         let mut gpu;
         if candidate_on {
-            let anchor_count = compact_anchor_plan.indices.len();
             let stride = multifidelity_stride.expect("candidate stride");
-            assert_eq!(anchor_count, stride.anchor_record_count());
-            let d_anchor_receivers = dev
-                .htod_copy(compact_anchor_words)
-                .expect("compact anchor receivers");
-            let d_anchor_control = dev
-                .htod_copy(multifidelity_compact_packed_plan_controls(
-                    &compact_anchor_plan,
+            let anchor_count = stride.anchor_record_count();
+            let mut compact_anchor_device = if stock_cartesian_anchor_plan.is_none() {
+                assert_eq!(compact_anchor_plan.indices.len(), anchor_count);
+                Some((
+                    dev.htod_copy(compact_anchor_words)
+                        .expect("compact anchor receivers"),
+                    dev.htod_copy(multifidelity_compact_packed_plan_controls(
+                        &compact_anchor_plan,
+                    ))
+                    .expect("compact anchor control"),
+                    dev.alloc_zeros::<f32>(stride.compact_output_len())
+                        .expect("compact anchor output"),
                 ))
-                .expect("compact anchor control");
-            let mut d_anchor_out = dev
-                .alloc_zeros::<f32>(stride.compact_output_len())
-                .expect("compact anchor output");
+            } else {
+                None
+            };
             if let Some((_, _, anchor_start, _, _, _, stream)) = stage_events.as_ref() {
                 unsafe {
                     result::event::record(*anchor_start, *stream)
                         .expect("record anchor stage start");
                 }
             }
-            launch_multifidelity_compact_records_packed(
-                functions
-                    .multifidelity_compact_packed
-                    .as_ref()
-                    .expect("multifidelity packed compact PTX function"),
-                &compact_anchor_plan,
-                &d_elev,
-                &d_inner,
-                &d_cover,
-                &d_meta,
-                d_seg,
-                d_sp,
-                d_semis,
-                &d_anchor_receivers,
-                &d_anchor_control,
-                &d_barr,
-                &obst_dev.table,
-                &mut d_anchor_out,
-            );
+            if stock_cartesian_anchor_plan.is_none() {
+                let (d_anchor_receivers, d_anchor_control, d_anchor_out) = compact_anchor_device
+                    .as_mut()
+                    .expect("compact anchor device buffers");
+                launch_multifidelity_compact_records_packed(
+                    functions
+                        .multifidelity_compact_packed
+                        .as_ref()
+                        .expect("multifidelity packed compact PTX function"),
+                    &compact_anchor_plan,
+                    &d_elev,
+                    &d_inner,
+                    &d_cover,
+                    &d_meta,
+                    d_seg,
+                    d_sp,
+                    d_semis,
+                    d_anchor_receivers,
+                    d_anchor_control,
+                    &d_barr,
+                    &obst_dev.table,
+                    d_anchor_out,
+                );
+            }
             if let Some((_, _, _, anchor_stop, _, _, stream)) = stage_events.as_ref() {
                 unsafe {
                     result::event::record(*anchor_stop, *stream).expect("record anchor stage stop");
@@ -1528,11 +2146,25 @@ fn process_block(
             gpu = dev
                 .dtoh_sync_copy(&d_out)
                 .expect("multifidelity cheap dtoh");
-            let exact_anchor_output = dev
-                .dtoh_sync_copy(&d_anchor_out)
-                .expect("multifidelity compact anchor dtoh");
-            let anchor_fault = multifidelity_compact_fault_sum(&exact_anchor_output, anchor_count)
-                .expect("multifidelity compact anchor fault decode");
+            let (exact_anchor_output, anchor_fault) =
+                if let Some(plan) = stock_cartesian_anchor_plan.as_ref() {
+                    download_multifidelity_stock_cartesian_device_groups(
+                        dev,
+                        plan,
+                        &stock_cartesian_device_groups,
+                    )?
+                } else {
+                    let (_, _, d_anchor_out) = compact_anchor_device
+                        .as_ref()
+                        .expect("compact anchor device buffers");
+                    let exact_anchor_output = dev
+                        .dtoh_sync_copy(d_anchor_out)
+                        .expect("multifidelity compact anchor dtoh");
+                    let anchor_fault =
+                        multifidelity_compact_fault_sum(&exact_anchor_output, anchor_count)
+                            .expect("multifidelity compact anchor fault decode");
+                    (exact_anchor_output, anchor_fault)
+                };
             let interpolation = multifidelity_interpolation(stride, &gpu, &exact_anchor_output);
             let receiver_mask = multifidelity_receiver_mask(layer, &interpolation);
             candidate_interpolation = Some(interpolation);
@@ -1546,10 +2178,12 @@ fn process_block(
             let mut exact_fault_this_tile = anchor_fault;
 
             if replay_plan.indices.is_empty() {
-                if let Some((_, stop, stream)) = kernel_evt {
-                    unsafe { result::event::record(stop, stream).expect("record stop") };
-                    unsafe { result::stream::synchronize(stream).expect("synchronize stop") };
-                    kernel_stop_recorded = true;
+                if !kernel_stop_recorded {
+                    if let Some((_, stop, stream)) = kernel_evt {
+                        unsafe { result::event::record(stop, stream).expect("record stop") };
+                        unsafe { result::stream::synchronize(stream).expect("synchronize stop") };
+                        kernel_stop_recorded = true;
+                    }
                 }
             } else {
                 let (rxll, rxar) = compact_receiver_host
@@ -1619,9 +2253,9 @@ fn process_block(
             gpu = dev.dtoh_sync_copy(&d_out).expect("dtoh");
         }
         // A multifidelity build can mix candidate rail/dense-road tiles with
-        // stock sparse-road tiles in either CLI layer order. Always combine
+        // role-exact binned sparse-road tiles in either CLI layer order. Always combine
         // both cumulative counters so the existing per-tile delta remains
-        // monotonic when the next item switches back to the dense stock slot.
+        // monotonic when the next item switches back to the dense output slot.
         if candidate_build_on {
             add_multifidelity_fault_total_to_dense_slot(&mut gpu, multifidelity_faults_seen);
         }
@@ -1688,10 +2322,17 @@ fn process_block(
 
         // ARC FAULT: a nonzero delta means THIS tile under-screens somewhere —
         // blocked arcs the merged list had no room for were dropped, so a
-        // direction that a building genuinely blocks was painted clear. Loud, not
-        // fatal: the tile is still the best this kernel can produce, and a world
-        // build should not die on it — but it must never again be invisible.
+        // direction that a building genuinely blocks was painted clear. Stock/W1
+        // keep the historical loud-but-nonfatal production policy below. W2's
+        // per-call pre-clip union is experimental and must fail closed before
+        // reconstruction; its benchmark receipt already requires zero faults.
         let arc_drops_this_tile = gpu[noise_gpu::OUT_FAULT_SLOT] - arc_drops_seen;
+        require_zero_w2_dense_arc_fault(
+            candidate_build_on && multifidelity_cartesian_unbinned_anchor_enabled(),
+            arc_drops_this_tile,
+        )
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("{} z{}/{tx}/{ty}", layer.dir(), cfg.z))?;
         if arc_drops_this_tile > 0.0 {
             #[cfg(feature = "v2-h0")]
             bail!(
@@ -2647,6 +3288,41 @@ fn main() -> Result<()> {
         }
         None => 12,
     };
+    let z13_profile = multifidelity_z13_profile()?;
+    let stock_cartesian_anchor = multifidelity_cartesian_unbinned_anchor_enabled();
+    anyhow::ensure!(
+        stock_cartesian_anchor
+            == z13_profile.is_some_and(|profile| profile.stride == MultifidelityStride::Stride4),
+        "compiled Cartesian unbinned marker does not match the stride4 z13 profile"
+    );
+    if let Some(profile) = z13_profile {
+        if !multifidelity_line_enabled() {
+            bail!("z13 profile marker exists without the reviewed W1 multifidelity marker");
+        }
+        if z != 13 {
+            bail!(
+                "z13 profile stride={} requires --zoom 13, got --zoom {z}",
+                profile.stride.pixels()
+            );
+        }
+        if stock_cartesian_anchor {
+            eprintln!(
+                "MULTIFIDELITY_PROFILE zoom={z} stride={} adaptive=0 cpu_reference_profile=0 presence=cheap exact_backend=candidate_cartesian_unbinned module=candidate_aot_only anchor_launches={} anchor_blocks={} computed_receivers={} anchors={}",
+                profile.stride.pixels(),
+                MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS,
+                MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS
+                    * MULTIFIDELITY_STOCK_CARTESIAN_LONGITUDE_BLOCKS,
+                MULTIFIDELITY_STOCK_CARTESIAN_COMPUTED_RECEIVERS,
+                profile.stride.anchor_record_count(),
+            );
+        } else {
+            eprintln!(
+                "MULTIFIDELITY_PROFILE zoom={z} stride={} adaptive=0 cpu_reference_profile=0 presence=cheap exact_backend=compact_packed packed_warps={}",
+                profile.stride.pixels(),
+                MULTIFIDELITY_COMPACT_PACKED_WARPS_PER_BLOCK,
+            );
+        }
+    }
     let require_arcstat = rail_arcstat_census_required();
     if require_arcstat {
         anyhow::ensure!(
@@ -2933,6 +3609,33 @@ mod multifidelity_tests {
         output
     }
 
+    fn complete_stock_cartesian_dense_group(
+        plan: &MultifidelityStockCartesianPlan,
+        group: usize,
+    ) -> Vec<f32> {
+        let mut output = multifidelity_stock_cartesian_output_prefix_sentinel();
+        let group_range = plan.latitude_group_range(group).expect("group range");
+        let launched_columns = MULTIFIDELITY_STOCK_CARTESIAN_LAUNCHED_COLUMNS;
+        for synthetic_y in 0..BIN_W {
+            for synthetic_x in 0..launched_columns {
+                let source = (synthetic_y * TILE_PX + synthetic_x) * NUM_PERIODS;
+                for period in 0..NUM_PERIODS {
+                    output[source + period] = (source + period + 1) as f32;
+                }
+            }
+        }
+        for (synthetic_y, axis_y) in group_range.enumerate() {
+            for axis_x in 0..plan.axis.len() {
+                let source = (synthetic_y * TILE_PX + axis_x) * NUM_PERIODS;
+                let record = axis_y * plan.axis.len() + axis_x;
+                for period in 0..NUM_PERIODS {
+                    output[source + period] = (record * NUM_PERIODS + period + 1) as f32;
+                }
+            }
+        }
+        output
+    }
+
     #[test]
     fn stride_anchor_axis_carries_the_final_boundary() {
         let stride = MultifidelityStride::Stride16;
@@ -2981,12 +3684,271 @@ mod multifidelity_tests {
     }
 
     #[test]
-    fn candidate_selector_is_pure_and_uses_only_layer_and_source_count() {
+    fn cartesian_unbinned_stride4_plan_is_nine_waves_and_covers_every_anchor() {
+        let plan = MultifidelityStockCartesianPlan::stride4().expect("stride4 Cartesian plan");
+        assert_eq!(plan.axis.len(), 129);
+        assert_eq!(plan.anchor_record_count(), 16_641);
+        assert_eq!(MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS, 9);
+        assert_eq!(MULTIFIDELITY_STOCK_CARTESIAN_LONGITUDE_BLOCKS, 9);
+        assert_eq!(MULTIFIDELITY_STOCK_CARTESIAN_COMPUTED_RECEIVERS, 20_736);
+
+        let ranges = (0..MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS)
+            .map(|group| plan.latitude_group_range(group).expect("group range"))
+            .collect::<Vec<_>>();
+        assert_eq!(ranges.first().cloned(), Some(0..16));
+        assert_eq!(ranges.last().cloned(), Some(128..129));
+        assert!(ranges.windows(2).all(|pair| pair[0].end == pair[1].start));
+
+        let mut covered = Vec::with_capacity(plan.anchor_record_count());
+        for range in &ranges {
+            for axis_y in range.clone() {
+                for axis_x in 0..plan.axis.len() {
+                    covered.push(plan.axis[axis_y] * TILE_PX + plan.axis[axis_x]);
+                }
+            }
+        }
+        assert_eq!(covered.len(), 16_641);
+        covered.sort_unstable();
+        covered.dedup();
+        assert_eq!(covered.len(), 16_641);
+        assert_eq!(covered.first().copied(), Some(0));
+        assert_eq!(covered.last().copied(), Some(TILE_PX * TILE_PX - 1));
+        assert!(covered.contains(&511));
+        assert!(covered.contains(&(511 * TILE_PX)));
+        assert_eq!(
+            plan.source_dense_index(8, BIN_W - 1, 9 * BIN_W - 1),
+            Ok(TILE_PX * TILE_PX - 1),
+            "the final wave/block padding must duplicate receiver 511,511"
+        );
+
+        // Candidate `line` maps one-dimensional pix through meta[10]. With TW=16,
+        // the nine 256-thread blocks cover exactly the packed 16x144 rectangle.
+        let tile_width = BIN_W;
+        let tiles_per_row = TILE_PX / tile_width;
+        for block in 0..MULTIFIDELITY_STOCK_CARTESIAN_LONGITUDE_BLOCKS {
+            for lane in 0..BIN_W * BIN_W {
+                let pix = block * BIN_W * BIN_W + lane;
+                let tile = pix / (tile_width * tile_width);
+                let in_tile = pix % (tile_width * tile_width);
+                let synthetic_y = (tile / tiles_per_row) * tile_width + in_tile / tile_width;
+                let synthetic_x = (tile % tiles_per_row) * tile_width + in_tile % tile_width;
+                assert_eq!(synthetic_y, lane / BIN_W);
+                assert_eq!(synthetic_x, block * BIN_W + lane % BIN_W);
+            }
+        }
+    }
+
+    #[test]
+    fn stock_cartesian_receiver_pack_is_bit_exact_and_pads_with_511() {
+        let plan = MultifidelityStockCartesianPlan::stride4().expect("stride4 Cartesian plan");
+        let mut rxll = vec![0.0f64; TILE_PX * 2];
+        for coordinate in 0..TILE_PX {
+            rxll[coordinate] = 40.0 + coordinate as f64 / 4096.0;
+            rxll[TILE_PX + coordinate] = -9.0 + coordinate as f64 / 8192.0;
+        }
+        let mut rxar = vec![0.0f32; TILE_PX * TILE_PX * 2];
+        for dense_index in 0..TILE_PX * TILE_PX {
+            rxar[dense_index * 2] = dense_index as f32 + 0.25;
+            rxar[dense_index * 2 + 1] = (dense_index % 251) as f32 + 0.5;
+        }
+
+        let mut inspected = 0;
+        for group in 0..MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS {
+            let (packed_rxll, packed_rxar) =
+                pack_multifidelity_stock_cartesian_group(&plan, &rxll, &rxar, group)
+                    .expect("stock Cartesian receiver pack");
+            assert_eq!(packed_rxll.len(), TILE_PX * 2);
+            assert_eq!(packed_rxar.len(), MULTIFIDELITY_STOCK_CARTESIAN_RXAR_VALUES);
+            for synthetic_y in 0..BIN_W {
+                for synthetic_x in 0..MULTIFIDELITY_STOCK_CARTESIAN_LAUNCHED_COLUMNS {
+                    let dense_index = plan
+                        .source_dense_index(group, synthetic_y, synthetic_x)
+                        .expect("mapped dense index");
+                    let packed_index = synthetic_y * TILE_PX + synthetic_x;
+                    assert_eq!(
+                        packed_rxll[synthetic_y].to_bits(),
+                        rxll[dense_index / TILE_PX].to_bits()
+                    );
+                    assert_eq!(
+                        packed_rxll[TILE_PX + synthetic_x].to_bits(),
+                        rxll[TILE_PX + dense_index % TILE_PX].to_bits()
+                    );
+                    assert_eq!(
+                        packed_rxar[packed_index * 2].to_bits(),
+                        rxar[dense_index * 2].to_bits()
+                    );
+                    assert_eq!(
+                        packed_rxar[packed_index * 2 + 1].to_bits(),
+                        rxar[dense_index * 2 + 1].to_bits()
+                    );
+                    inspected += 1;
+                }
+            }
+        }
+        assert_eq!(inspected, MULTIFIDELITY_STOCK_CARTESIAN_COMPUTED_RECEIVERS);
+        assert!(
+            pack_multifidelity_stock_cartesian_group(&plan, &rxll[..TILE_PX], &rxar, 0).is_err()
+        );
+        rxar[0] = f32::NAN;
+        assert!(pack_multifidelity_stock_cartesian_group(&plan, &rxll, &rxar, 0).is_err());
+    }
+
+    #[test]
+    fn stock_cartesian_extract_requires_unique_complete_group_outputs() {
+        let plan = MultifidelityStockCartesianPlan::stride4().expect("stride4 Cartesian plan");
+        let mut compact = multifidelity_stock_cartesian_compact_output_sentinel(&plan);
+        let mut fault_total = 0.0;
+        for group in 0..MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS {
+            fault_total += extract_multifidelity_stock_cartesian_group(
+                &plan,
+                group,
+                &complete_stock_cartesian_dense_group(&plan, group),
+                0.0,
+                &mut compact,
+            )
+            .expect("extract complete group");
+        }
+        assert_eq!(fault_total, 0.0);
+        validate_multifidelity_stock_cartesian_output(&plan, &compact)
+            .expect("complete Cartesian output");
+        let decoded = decode_multifidelity_compact_output(&compact, plan.anchor_record_count())
+            .expect("decode complete Cartesian output");
+        assert_eq!(decoded.len(), 16_641);
+        assert_eq!(decoded.first().map(|record| record.0), Some(0));
+        assert_eq!(
+            decoded.last().map(|record| record.0),
+            Some(TILE_PX * TILE_PX - 1)
+        );
+
+        let mut missing_group = multifidelity_stock_cartesian_compact_output_sentinel(&plan);
+        for group in 0..MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS - 1 {
+            extract_multifidelity_stock_cartesian_group(
+                &plan,
+                group,
+                &complete_stock_cartesian_dense_group(&plan, group),
+                0.0,
+                &mut missing_group,
+            )
+            .expect("extract present group");
+        }
+        assert!(validate_multifidelity_stock_cartesian_output(&plan, &missing_group).is_err());
+
+        let first_group = complete_stock_cartesian_dense_group(&plan, 0);
+        let mut duplicate_group = multifidelity_stock_cartesian_compact_output_sentinel(&plan);
+        extract_multifidelity_stock_cartesian_group(
+            &plan,
+            0,
+            &first_group,
+            0.0,
+            &mut duplicate_group,
+        )
+        .expect("extract first group once");
+        assert!(extract_multifidelity_stock_cartesian_group(
+            &plan,
+            0,
+            &first_group,
+            0.0,
+            &mut duplicate_group,
+        )
+        .is_err());
+
+        let mut unwritten_lane = complete_stock_cartesian_dense_group(&plan, 0);
+        unwritten_lane[0] = f32::NAN;
+        assert!(extract_multifidelity_stock_cartesian_group(
+            &plan,
+            0,
+            &unwritten_lane,
+            0.0,
+            &mut multifidelity_stock_cartesian_compact_output_sentinel(&plan),
+        )
+        .is_err());
+
+        let mut invalid_longitude_padding = complete_stock_cartesian_dense_group(&plan, 0);
+        let longitude_padding = plan.axis.len();
+        invalid_longitude_padding[longitude_padding * NUM_PERIODS] = f32::NAN;
+        assert!(extract_multifidelity_stock_cartesian_group(
+            &plan,
+            0,
+            &invalid_longitude_padding,
+            0.0,
+            &mut multifidelity_stock_cartesian_compact_output_sentinel(&plan),
+        )
+        .is_err());
+
+        let mut invalid_final_group_latitude_padding = complete_stock_cartesian_dense_group(
+            &plan,
+            MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS - 1,
+        );
+        let final_group_padding_row = BIN_W - 1;
+        let final_group_padding_source = final_group_padding_row * TILE_PX * NUM_PERIODS;
+        invalid_final_group_latitude_padding[final_group_padding_source] = f32::NAN;
+        assert!(extract_multifidelity_stock_cartesian_group(
+            &plan,
+            MULTIFIDELITY_STOCK_CARTESIAN_LATITUDE_GROUPS - 1,
+            &invalid_final_group_latitude_padding,
+            0.0,
+            &mut multifidelity_stock_cartesian_compact_output_sentinel(&plan),
+        )
+        .is_err());
+
+        assert!(extract_multifidelity_stock_cartesian_group(
+            &plan,
+            0,
+            &first_group,
+            f32::NAN,
+            &mut multifidelity_stock_cartesian_compact_output_sentinel(&plan),
+        )
+        .is_err());
+
+        assert!(require_zero_multifidelity_stock_cartesian_fault(0.0).is_ok());
+        let fault_error = require_zero_multifidelity_stock_cartesian_fault(1.0)
+            .expect_err("nonzero Cartesian aggregate must fail closed");
+        assert!(fault_error.contains("duplicate padding lanes"));
+    }
+
+    #[test]
+    fn w2_dense_arc_fault_policy_fails_closed_without_changing_stock_or_w1() {
+        assert!(require_zero_w2_dense_arc_fault(true, 0.0).is_ok());
+        for fault in [1.0, f32::INFINITY, f32::NAN] {
+            let error = require_zero_w2_dense_arc_fault(true, fault)
+                .expect_err("W2 must reject every nonzero or invalid dense ARC fault delta");
+            assert!(error.contains("refusing to reconstruct an under-screened tile"));
+            assert!(require_zero_w2_dense_arc_fault(false, fault).is_ok());
+        }
+    }
+
+    #[test]
+    fn cartesian_unbinned_exact_meta_sets_stop_and_tile_width_only() {
+        let mut source = (0..noise_gpu::SURFACE_META_SLOTS)
+            .map(|slot| slot as f64 + 0.25)
+            .collect::<Vec<_>>();
+        source[MULTIFIDELITY_STOCK_CARTESIAN_META_OUTPUT_SLOTS_SLOT] =
+            noise_gpu::OUT_SLOTS_PROD as f64;
+        let exact = multifidelity_stock_cartesian_exact_meta(&source).expect("exact metadata");
+        for slot in 0..noise_gpu::SURFACE_META_SLOTS {
+            match slot {
+                MULTIFIDELITY_STOCK_CARTESIAN_META_BYTE_STOP_SLOT => {
+                    assert_eq!(exact[slot], 0.0)
+                }
+                MULTIFIDELITY_STOCK_CARTESIAN_META_TILE_WIDTH_SLOT => {
+                    assert_eq!(exact[slot], BIN_W as f64)
+                }
+                _ => assert_eq!(exact[slot].to_bits(), source[slot].to_bits()),
+            }
+        }
+        assert!(multifidelity_stock_cartesian_exact_meta(&source[..13]).is_err());
+        source[MULTIFIDELITY_STOCK_CARTESIAN_META_OUTPUT_SLOTS_SLOT] += 1.0;
+        assert!(multifidelity_stock_cartesian_exact_meta(&source).is_err());
+    }
+
+    #[test]
+    fn candidate_selector_uses_role_exact_binned_fallback_only_for_sparse_roads() {
         for nsrc in [0, 1, 256, ROAD_SPARSE_STOCK_MAX_SOURCES] {
             assert_eq!(
                 select_multifidelity_stride(MultifidelitySelectionInputs {
                     layer: LineLayer::Road,
                     nsrc,
+                    requested_stride: None,
                 }),
                 None
             );
@@ -2994,6 +3956,7 @@ mod multifidelity_tests {
                 select_multifidelity_stride(MultifidelitySelectionInputs {
                     layer: LineLayer::Rail,
                     nsrc,
+                    requested_stride: None,
                 }),
                 Some(MultifidelityStride::Stride16)
             );
@@ -3002,6 +3965,7 @@ mod multifidelity_tests {
             select_multifidelity_stride(MultifidelitySelectionInputs {
                 layer: LineLayer::Road,
                 nsrc: ROAD_SPARSE_STOCK_MAX_SOURCES + 1,
+                requested_stride: None,
             }),
             Some(MultifidelityStride::Stride16)
         );
@@ -3009,9 +3973,45 @@ mod multifidelity_tests {
             select_multifidelity_stride(MultifidelitySelectionInputs {
                 layer: LineLayer::Road,
                 nsrc: usize::MAX,
+                requested_stride: None,
             }),
             Some(MultifidelityStride::Stride16)
         );
+    }
+
+    #[test]
+    fn requested_z13_stride_replaces_only_the_dense_candidate_arm() {
+        for requested in [
+            MultifidelityStride::Stride32,
+            MultifidelityStride::Stride16,
+            MultifidelityStride::Stride8,
+            MultifidelityStride::Stride4,
+        ] {
+            assert_eq!(
+                select_multifidelity_stride(MultifidelitySelectionInputs {
+                    layer: LineLayer::Road,
+                    nsrc: ROAD_SPARSE_STOCK_MAX_SOURCES + 1,
+                    requested_stride: Some(requested),
+                }),
+                Some(requested)
+            );
+            assert_eq!(
+                select_multifidelity_stride(MultifidelitySelectionInputs {
+                    layer: LineLayer::Rail,
+                    nsrc: 1,
+                    requested_stride: Some(requested),
+                }),
+                Some(requested)
+            );
+            assert_eq!(
+                select_multifidelity_stride(MultifidelitySelectionInputs {
+                    layer: LineLayer::Road,
+                    nsrc: ROAD_SPARSE_STOCK_MAX_SOURCES,
+                    requested_stride: Some(requested),
+                }),
+                None
+            );
+        }
     }
 
     #[test]
@@ -3471,9 +4471,8 @@ mod multifidelity_tests {
         let cells = reconstruct_multifidelity_cells(&data, &[]);
         assert_eq!(cells[target], tile_painter::wire_hm3::NO_DATA);
 
-        // The supported stride4 lattice remains the presence authority even
-        // when launch A has a false-silent interior. The production selector
-        // currently routes sparse road through stock exact instead.
+        // Stride4 keeps the same cheap presence authority as every other arm;
+        // the ladder must vary only physical anchor spacing.
         let sparse_stride = MultifidelityStride::Stride4;
         let sparse_axis = multifidelity_anchor_axis(sparse_stride);
         let sparse_exact = compact_anchor_output(&sparse_axis, |py, px, period| {
@@ -3487,7 +4486,7 @@ mod multifidelity_tests {
         cheap_gpu[sparse_target * NUM_PERIODS] = 0.0;
         let data = multifidelity_interpolation(sparse_stride, &cheap_gpu, &sparse_exact);
         let cells = reconstruct_multifidelity_cells(&data, &[]);
-        assert_eq!(cells[sparse_target], 19);
+        assert_eq!(cells[sparse_target], tile_painter::wire_hm3::NO_DATA);
 
         // Exact silence wins over a cheap false positive: no period gets an
         // invented log correction and every receiver remains NO_DATA.

@@ -6,7 +6,7 @@
 #[cfg(feature = "gpu")]
 mod embedded_cubin;
 #[cfg(feature = "gpu")]
-pub use embedded_cubin::load_embedded_cubin_or_ptx;
+pub use embedded_cubin::{load_embedded_cubin_exact, load_embedded_cubin_or_ptx};
 
 /// Region-resident GPU airborne scatter, shared by the `e2-airborne` validator and the
 /// `gpu-airborne` production builder (cudarc-backed, so gated on the `gpu` feature).

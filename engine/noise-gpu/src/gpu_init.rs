@@ -20,14 +20,14 @@ use tile_painter::wire_hm3::{SOURCE_ID_RAIL, SOURCE_ID_ROAD};
 
 const SCATTER_CUBIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scatter.cubin"));
 const SCATTER_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/scatter.ptx"));
+const SCATTER_CUBIN_SHA256: &str = env!("NOISE_GPU_SCATTER_CUBIN_SHA256");
 const ROAD_HALO_M: f64 = 10_000.0; // motorway-class reach (matches build_heatmap_surface)
 
-/// `NOISE_GPU_TIMING=1` → bracket every line-kernel launch with CUDA events and
-/// emit a `KERNEL_MS=<total>` line (the optimisation harness's median-of-N signal,
-/// isolating the kernel from the htod/dtoh copies the host-wall `t_kernel` folds
-/// in). Read once: a per-launch env lookup would add host overhead to the very
-/// thing being timed. OFF (the default) ⇒ no event create/record/sync at all, so
-/// production throughput is untouched.
+/// `NOISE_GPU_TIMING=1` brackets each tile's line-GPU workload with CUDA events
+/// and emits `KERNEL_MS=<total>`. That is one kernel for stock, or the concurrent
+/// cheap + exact envelope for the Cartesian arm; it excludes H2D, D2H, and CPU
+/// reconstruction. Read once: a per-launch env lookup would add host overhead to
+/// the measurement. OFF (the default) creates and records no timing events.
 pub(crate) fn timing_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("NOISE_GPU_TIMING").as_deref() == Ok("1"))
@@ -104,7 +104,13 @@ impl LineLayer {
 /// context the cluster used to re-pay on every chunk spawn).
 #[derive(Clone)]
 pub(crate) struct LineFunctions {
+    /// Exact binned entry from the active role's scatter module. Under W2 it
+    /// inherits the candidate defines; exact means no multifidelity reconstruction,
+    /// not byte identity with the separately compiled stock role.
     pub(crate) stock: CudaFunction,
+    /// Stride-4 anchors use the candidate module's unbinned entry. It shares
+    /// the exact candidate physics while avoiding the fused entry's block cull.
+    pub(crate) cartesian_unbinned_exact: Option<CudaFunction>,
     pub(crate) multifidelity_cheap: Option<CudaFunction>,
     pub(crate) multifidelity_compact: Option<CudaFunction>,
     /// W1 path: eight independent 32-lane compact receiver buckets per
@@ -114,6 +120,10 @@ pub(crate) struct LineFunctions {
 
 pub(crate) fn multifidelity_ptx_enabled() -> bool {
     option_env!("NOISE_GPU_MULTIFIDELITY_LINE") == Some("1")
+}
+
+pub(crate) fn multifidelity_cartesian_unbinned_anchor_enabled() -> bool {
+    option_env!("NOISE_GPU_MULTIFIDELITY_CARTESIAN_UNBINNED_ANCHOR") == Some("1")
 }
 
 pub(crate) fn warm_device() -> (Arc<CudaDevice>, LineFunctions) {
@@ -130,17 +140,35 @@ pub(crate) fn warm_device_on(with_stream: bool) -> (Arc<CudaDevice>, LineFunctio
         CudaDevice::new(0).expect("cuda")
     };
     let mut symbols = vec!["line_binned_fused"];
+    if multifidelity_cartesian_unbinned_anchor_enabled() {
+        symbols.push("line");
+    }
     if multifidelity_ptx_enabled() {
         // AOT CUDA loader vector must include all line symbols: stock, cheap,
-        // compact, and the scratch packed prototype. Omitting one can
+        // compact, and packed compact exact. Omitting one can
         // load the image but fail get_func/runtime when a prototype is selected.
         symbols.push("line_multifidelity_cheap_w1");
         symbols.push("line_multifidelity_compact_w1");
         symbols.push("line_multifidelity_compact_packed_w1");
     }
-    noise_gpu::load_embedded_cubin_or_ptx(&dev, SCATTER_CUBIN, SCATTER_PTX, "s", &symbols)
-        .expect("load scatter cubin or PTX fallback");
+    if multifidelity_cartesian_unbinned_anchor_enabled() {
+        noise_gpu::load_embedded_cubin_exact(
+            &dev,
+            SCATTER_CUBIN,
+            SCATTER_CUBIN_SHA256,
+            "s",
+            &symbols,
+        )
+        .expect("load required candidate AOT cubin for Cartesian exact anchors");
+    } else {
+        noise_gpu::load_embedded_cubin_or_ptx(&dev, SCATTER_CUBIN, SCATTER_PTX, "s", &symbols)
+            .expect("load scatter cubin or PTX fallback");
+    }
     let stock = dev.get_func("s", "line_binned_fused").expect("stock fn");
+    let cartesian_unbinned_exact = multifidelity_cartesian_unbinned_anchor_enabled().then(|| {
+        dev.get_func("s", "line")
+            .expect("candidate unbinned exact fn")
+    });
     let multifidelity_cheap = multifidelity_ptx_enabled().then(|| {
         dev.get_func("s", "line_multifidelity_cheap_w1")
             .expect("cheap fn")
@@ -157,6 +185,7 @@ pub(crate) fn warm_device_on(with_stream: bool) -> (Arc<CudaDevice>, LineFunctio
         dev,
         LineFunctions {
             stock,
+            cartesian_unbinned_exact,
             multifidelity_cheap,
             multifidelity_compact,
             multifidelity_compact_packed,

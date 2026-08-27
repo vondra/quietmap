@@ -14,17 +14,20 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import gpu_model_role
 from gpu_model_role import (
     ContractError,
+    extract_git_archive,
     file_record,
     load_and_validate_spec,
+    model_role_sha256,
     parse_nvcc_define_receipt,
     parse_ptx,
     resolve_role,
     sha256_file,
+    source_manifest,
     verify_artifact,
 )
 
@@ -67,55 +70,17 @@ def git_archive_commit(archive: Path) -> str:
     return result.stdout.strip()
 
 
-def extract_git_archive(archive: Path, destination: Path) -> None:
-    seen: set[str] = set()
-    with tarfile.open(archive, mode="r:") as source:
-        for member in source.getmembers():
-            path = PurePosixPath(member.name)
-            if (
-                path.is_absolute()
-                or not path.parts
-                or ".." in path.parts
-                or "." in path.parts
-                or "\n" in member.name
-                or "\r" in member.name
-                or "\\" in member.name
-            ):
-                fail(f"source archive contains unsafe path {member.name!r}")
-            relative = path.as_posix().rstrip("/")
-            if relative in seen:
-                fail(f"source archive contains duplicate path {relative}")
-            seen.add(relative)
-            target = destination.joinpath(*path.parts)
-            if member.isdir():
-                target.mkdir(parents=True, exist_ok=True)
-            elif member.isfile():
-                target.parent.mkdir(parents=True, exist_ok=True)
-                extracted = source.extractfile(member)
-                if extracted is None:
-                    fail(f"cannot read archived file {relative}")
-                with target.open("xb") as output:
-                    shutil.copyfileobj(extracted, output)
-                target.chmod(member.mode & 0o777)
-            else:
-                fail(f"source archive contains non-file entry {relative}")
-
-
-def source_manifest(root: Path) -> str:
-    lines: list[str] = []
-    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
-        if path.is_symlink():
-            fail(f"extracted source contains symlink {path.relative_to(root)}")
-        if path.is_file():
-            relative = path.relative_to(root).as_posix()
-            lines.append(f"{sha256_file(path)}  {relative}")
-    return "\n".join(lines) + "\n"
-
-
 def find_one(root: Path, name: str) -> Path:
     matches = [path for path in root.rglob(name) if path.is_file()]
     if len(matches) != 1:
         fail(f"expected exactly one generated {name}, found {len(matches)}")
+    return matches[0]
+
+
+def find_noise_gpu_build_output(root: Path) -> Path:
+    matches = [path for path in root.glob("noise-gpu-*/output") if path.is_file()]
+    if len(matches) != 1:
+        fail(f"expected one noise-gpu build-script output, found {len(matches)}")
     return matches[0]
 
 
@@ -227,6 +192,8 @@ def build(args: argparse.Namespace) -> Path:
 
             environment, tools = build_environment(cuda_root, target_root)
             environment["NOISE_GPU_ARCH"] = args.arch
+            role_noise_gpu_defines = " ".join(role.get("noise_gpu_defines", []))
+            environment["NOISE_GPU_DEFINES"] = role_noise_gpu_defines
             versions = {
                 "cargo": run_text([tools["cargo"], "-vV"], environment).strip(),
                 "rustc": run_text([tools["rustc"], "-vV"], environment).strip(),
@@ -270,9 +237,8 @@ def build(args: argparse.Namespace) -> Path:
             generated_header = find_one(target_root / "release/build", "qm_streaming_abi_generated.h")
             define_receipt = find_one(target_root / "release/build", "nvcc-defines.txt")
             _, experimental_defines = parse_nvcc_define_receipt(define_receipt)
-            role_noise_gpu_defines = " ".join(experimental_defines)
-            if role_noise_gpu_defines:
-                fail("production GPU role contains an experimental nvcc define")
+            if experimental_defines != role.get("noise_gpu_defines", []):
+                fail("nvcc define receipt disagrees with the declared role defines")
 
             staging_root.mkdir(mode=0o755)
             copy_payload(binary, staging_root / role["binary"], 0o755)
@@ -327,6 +293,41 @@ def build(args: argparse.Namespace) -> Path:
                     "sha256": sha256_file(generated_ptx),
                 }
 
+            aot_receipt: dict[str, int | str] | None = None
+            if role["binary"] == "gpu-surface":
+                scatter_cubin = find_one(target_root / "release/build", "scatter.cubin")
+                scatter_cubin_bytes = scatter_cubin.read_bytes()
+                embedded_offset = binary_bytes.find(scatter_cubin_bytes)
+                if not scatter_cubin_bytes or embedded_offset < 0:
+                    fail("build-bound scatter cubin is not embedded byte-for-byte in gpu-surface")
+                build_script_output = find_noise_gpu_build_output(target_root / "release/build")
+                cubin_sha256 = sha256_file(scatter_cubin)
+                build_script_lines = build_script_output.read_text(encoding="utf-8").splitlines()
+                if build_script_lines.count(
+                    f"cargo:rustc-env=NOISE_GPU_SCATTER_CUBIN_SHA256={cubin_sha256}"
+                ) != 1:
+                    fail("noise-gpu build output does not bind the scatter cubin SHA")
+                if role["model_role"] == "w2-stride4":
+                    for marker in (
+                        "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_LINE=1",
+                        "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_CARTESIAN_UNBINNED_ANCHOR=1",
+                        "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_Z13_STRIDE=4",
+                        "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_Z13_ADAPTIVE=0",
+                    ):
+                        if build_script_lines.count(marker) != 1:
+                            fail(f"W2 stride4 build output omits {marker}")
+                copy_payload(scatter_cubin, staging_root / "cubin/scatter.cubin", 0o644)
+                copy_payload(
+                    build_script_output,
+                    staging_root / "receipts/noise-gpu-build-script.output",
+                    0o644,
+                )
+                aot_receipt = {
+                    "bytes": len(scatter_cubin_bytes),
+                    "embedded_offset": embedded_offset,
+                    "sha256": cubin_sha256,
+                }
+
             if source_manifest(source_root) != source_before:
                 fail("the immutable extracted source changed during the build")
             lock_path = source_root / "engine/noise-gpu/Cargo.lock"
@@ -343,6 +344,7 @@ def build(args: argparse.Namespace) -> Path:
                     payload[path.relative_to(staging_root).as_posix()] = file_record(path)
             receipt = {
                 "artifact_kind": "gpu-model-role",
+                "aot": aot_receipt,
                 "binary": role["binary"],
                 "build": {
                     "arch": args.arch,
@@ -388,6 +390,9 @@ def build(args: argparse.Namespace) -> Path:
                 "payload": payload,
                 "ptx": ptx_receipts,
                 "role": args.role,
+                "role_sha256": model_role_sha256(
+                    spec_path, spec, args.family, args.role
+                ),
                 "schema": 1,
                 "selected": role["selected"],
                 "source": {

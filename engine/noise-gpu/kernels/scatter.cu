@@ -140,7 +140,12 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 // Set stride 1 = exact. NOTE: the GPU has no env knobs — these are the
 // compile-time mirror of the CPU env DEFAULTS. If the CPU knobs are tuned,
 // re-sync here + rebuild the PTX (then re-check CPU≡GPU parity).
+#ifndef SHADOW_MID_STRIDE
 #define SHADOW_MID_STRIDE 3
+#endif
+#if SHADOW_MID_STRIDE < 1
+#error "SHADOW_MID_STRIDE must be at least 1"
+#endif
 #define SHADOW_SRC_ZONE_M 600.0
 #define SHADOW_RX_ZONE_M 600.0
 // scatter_band::EXACT_CADENCE_MAX_DIST_M (fix-pack Fix 5): at or below this the
@@ -312,6 +317,13 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 // density remains the authority for choosing the ceiling.
 #ifndef ARC_MAX_MERGED
 #define ARC_MAX_MERGED 160
+#endif
+// W2 unions each call's admitted (height, range) strata before its source-span
+// clip: partial CPU alignment, not a receiver-wide skyline; the candidate set
+// remains this call's triangle/wedge. Stock CUDA and accepted W1 retain their
+// per-edge clip order; build admits this only for the exact stride-4 Cartesian role.
+#ifndef ARC_UNION_BEFORE_SPAN_CLIP
+#define ARC_UNION_BEFORE_SPAN_CLIP 0
 #endif
 // Mirrors of arc_screening.rs. Two arcs may be described by ONE (range, height)
 // pair only if their heights already agree — otherwise merging them invents an
@@ -2787,8 +2799,13 @@ __device__ void arc_screen_bands(
                         double r0 = wrap_pi_d(a0 - base);
                         double r1 = r0 + wrap_pi_d(a1 - a0);
                         double est = 0.0, een = -1.0;
+#if ARC_UNION_BEFORE_SPAN_CLIP
+                        est = fmin(r0, r1);
+                        een = fmax(r0, r1);
+#else
                         if (!arc_clip_span(fmin(r0, r1), fmax(r0, r1), lo, hi, &est, &een))
                             continue;
+#endif
                         // THIS EDGE's closest approach to the receiver — the arc's
                         // own `SkylineArc::near_m` (`origin_to_segment_dist`,
                         // obstacle_index.rs:444), in the index-local frame.
@@ -2886,11 +2903,32 @@ __device__ void arc_screen_bands(
             double wr0 = wrap_pi_d(wa0 - base);
             double wr1 = wr0 + wrap_pi_d(wa1 - wa0);
             double wst = 0.0, wen = -1.0;
+#if ARC_UNION_BEFORE_SPAN_CLIP
+            wst = fmin(wr0, wr1);
+            wen = fmax(wr0, wr1);
+#else
             if (!arc_clip_span(fmin(wr0, wr1), fmax(wr0, wr1), lo, hi, &wst, &wen)) continue;
+#endif
             niv = arc_iv_union(iv_s, iv_e, iv_near, iv_h, iv_key, niv, wst, wen,
                                (float)near_m, (float)w[4], &iv_overflow);
         }
     }
+#if ARC_UNION_BEFORE_SPAN_CLIP
+    {
+        int clipped = 0;
+        for (int i = 0; i < niv; i++) {
+            double st = 0.0, en = -1.0;
+            if (!arc_clip_span(iv_s[i], iv_e[i], lo, hi, &st, &en)) continue;
+            iv_s[clipped] = st;
+            iv_e[clipped] = en;
+            iv_near[clipped] = iv_near[i];
+            iv_h[clipped] = iv_h[i];
+            iv_key[clipped] = iv_key[i];
+            clipped++;
+        }
+        niv = clipped;
+    }
+#endif
     // ARC_MAX_MERGED overflow: `arc_iv_union` DROPS the arc it cannot place
     // (`if (niv >= ARC_MAX_MERGED) { *overflow += 1; return niv; }`), so every
     // one of these UNDER-screens — a direction that is genuinely blocked is
@@ -2931,18 +2969,13 @@ __device__ void arc_screen_bands(
     // facade for the same reason. Dropping such an edge errs toward LESS screening
     // (louder), never toward a phantom shadow.
     //
-    // KNOWN RESIDUAL FORK, and it is in the `b`, not in the floors. Edges are
-    // clipped to this segment's span BEFORE the union above, so `iv_near` is the
-    // minimum over IN-SPAN members only; the CPU builds its skyline per RECEIVER
-    // and takes `near = min` over EVERY member of the stratum
-    // (`arc_screening.rs`, `insert_merged`). A min over a subset is >= the min
-    // over the superset, so for one physical chain this lane's `b` can be LARGER,
-    // its `a = d - b` smaller, and it can therefore fail `a > 1` on an arc the
-    // reference lane admits — under-screening, i.e. louder, which is the sign of
-    // the measured residual on rail 2206/1391 (67.4 % GPU louder). Closing it
-    // means carrying the fused group's minimum range across the span clip; that
-    // is a collection change and needs its own measurement, so it is recorded
-    // rather than patched here.
+    // Stock/W1 clips each edge to the source span before union, so its
+    // `iv_near` is the minimum over in-span members only. W2 unions every
+    // member admitted by THIS call before clipping, so off-span edges of those
+    // footprints can contribute to `near = min`. Its candidate set remains
+    // this call's triangle/wedge, not the CPU's receiver-wide skyline: partial
+    // CPU alignment. This build-fenced physics is covered by its spatial quality
+    // receipt; separately compiled stock and accepted W1 roles remain byte-stable.
     {
         int keep = 0;
         for (int i = 0; i < niv; i++) {
@@ -4503,7 +4536,7 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_multifidelit
     const unsigned long long* __restrict__ obst,
     float* __restrict__ compact_out)
 {
-    // All 256 lanes stay resident through every warp-local barrier. A null
+    // Every launched lane stays resident through every warp-local barrier. A null
     // pointer is a process-level launch error and is the only early return.
     if (compact_control == 0 || compact_receivers == 0 || compact_out == 0)
         return;
@@ -4526,9 +4559,9 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_multifidelit
         (unsigned long long)MULTIFIDELITY_COMPACT_CONTROL_WORDS +
         descriptor * (unsigned long long)MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS;
 
-    // Every launched block has eight serialized descriptors. A zero-count
-    // descriptor is the host's explicit inactive tail, so malformed tails do
-    // not make active warps leave their warp-local barrier schedule.
+    // Every launched block has the compile-time number of serialized
+    // descriptors. A zero-count descriptor is the host's explicit inactive
+    // tail, so malformed tails do not alter an active warp's barrier schedule.
     unsigned long long record_offset = 0ull;
     unsigned long long warp_record_count = 0ull;
     if (global_control_valid) {
@@ -4691,6 +4724,7 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_multifidelit
     }
 }
 #undef MULTIFIDELITY_COMPACT_PACKED_RECORDS_PER_WARP
+#undef MULTIFIDELITY_COMPACT_PACKED_THREADS
 #undef MULTIFIDELITY_COMPACT_PACKED_WARPS
 #endif
 

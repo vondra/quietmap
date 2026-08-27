@@ -44,6 +44,58 @@
           "required_ptx_entries": [
             "line_binned_fused"
           ]
+        },
+        "surface-w1-z12-accepted-v1": {
+          "acceptance_evidence_sha256": "c61964e0d170ba77ada8f8276d4e1c27b1115f4fe8e0a0d2ba7533fd4eab60ca",
+          "binary": "gpu-surface",
+          "cargo_features": [
+            "gpu"
+          ],
+          "manifest": "engine/noise-gpu/Cargo.toml",
+          "model_role": "w1",
+          "noise_gpu_defines": [
+            "-DMULTIFIDELITY_LINE=1",
+            "-DMULTIFIDELITY_CHEAP_GROUND_DB=5.0",
+            "-DMULTIFIDELITY_COMPACT_BYTE_STOP=0"
+          ],
+          "package": "noise-gpu",
+          "ptx": [
+            "scatter.ptx"
+          ],
+          "required_ptx_entries": [
+            "line_binned_fused",
+            "line_multifidelity_cheap_w1",
+            "line_multifidelity_compact_packed_w1",
+            "line_multifidelity_compact_w1"
+          ]
+        },
+        "surface-w2-z13-stride4-v1": {
+          "binary": "gpu-surface",
+          "cargo_features": [
+            "gpu"
+          ],
+          "manifest": "engine/noise-gpu/Cargo.toml",
+          "model_role": "w2-stride4",
+          "noise_gpu_defines": [
+            "-DMULTIFIDELITY_LINE",
+            "-DMULTIFIDELITY_CHEAP_GROUND_DB=5.0",
+            "-DMULTIFIDELITY_COMPACT_BYTE_STOP=0",
+            "-DARC_UNION_BEFORE_SPAN_CLIP=1",
+            "-DMULTIFIDELITY_Z13_STRIDE=4",
+            "-DMULTIFIDELITY_Z13_ADAPTIVE=0",
+            "-DSHADOW_MID_STRIDE=1"
+          ],
+          "package": "noise-gpu",
+          "ptx": [
+            "scatter.ptx"
+          ],
+          "required_ptx_entries": [
+            "line",
+            "line_binned_fused",
+            "line_multifidelity_cheap_w1",
+            "line_multifidelity_compact_packed_w1",
+            "line_multifidelity_compact_w1"
+          ]
         }
       },
       "selected_role": "surface-stock-v1"

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use cudarc::driver::CudaDevice;
 use cudarc::nvrtc::Ptx;
 use sha2::{Digest, Sha256};
@@ -56,6 +56,36 @@ fn materialise_image(path: &Path, image: &[u8]) -> Result<()> {
             });
         }
     }
+    Ok(())
+}
+
+/// Load an embedded architecture-specific cubin and reject every AOT failure.
+///
+/// Exact CUDA paths use this instead of a PTX fallback because accepting a
+/// driver recompile would silently change the build-bound SASS. The
+/// content-addressed materialisation is shared with the ordinary loader below.
+#[doc(hidden)]
+pub fn load_embedded_cubin_exact(
+    device: &Arc<CudaDevice>,
+    image: &[u8],
+    expected_sha256: &str,
+    module_name: &str,
+    function_names: &[&'static str],
+) -> Result<()> {
+    let digest = image_sha256(image);
+    ensure!(
+        digest == expected_sha256,
+        "required AOT cubin {module_name} identity mismatch: embedded sha256={digest}, expected sha256={expected_sha256}"
+    );
+    let path = image_path(module_name, &digest);
+    materialise_image(&path, image)?;
+    device
+        .load_ptx(Ptx::from_file(&path), module_name, function_names)
+        .with_context(|| format!("load required AOT cubin {}", path.display()))?;
+    eprintln!(
+        "AOT_CUBIN_LOADED module={module_name} sha256={digest} identity=build_bound path={}",
+        path.display()
+    );
     Ok(())
 }
 

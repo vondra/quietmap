@@ -17,16 +17,20 @@ const REVIEWED_EXPERIMENTAL_DEFINES: &[&str] = &[
     "ARC_MIN_SPAN",
     "ARC_MIN_SPAN_REALISED",
     "ARC_TRI_WALK",
+    "ARC_UNION_BEFORE_SPAN_CLIP",
     "CAND_END_WINDOW_M",
     "CP_SCREEN_DELETE",
     "MULTIFIDELITY_CHEAP_GROUND_DB",
     "MULTIFIDELITY_COMPACT_BYTE_STOP",
     "MULTIFIDELITY_LINE",
+    "MULTIFIDELITY_Z13_ADAPTIVE",
+    "MULTIFIDELITY_Z13_STRIDE",
     "PENUMBRA",
     "PROF_ABLATE",
     "PROF_BLOCK_MOD",
     "PROF_COUNTERS",
     "SEG_ISECT_F32",
+    "SHADOW_MID_STRIDE",
 ];
 
 pub(crate) fn parse_experimental_defines(raw: &str) -> Result<Vec<String>, String> {
@@ -55,6 +59,7 @@ pub(crate) fn parse_experimental_defines(raw: &str) -> Result<Vec<String>, Strin
                 "`{name}` is not in the reviewed experimental define allowlist"
             ));
         }
+        validate_experimental_define_value(name, value)?;
         if !names.insert(name) {
             return Err(format!("duplicate macro `{name}` in NOISE_GPU_DEFINES"));
         }
@@ -66,6 +71,36 @@ pub(crate) fn parse_experimental_defines(raw: &str) -> Result<Vec<String>, Strin
     }
 
     Ok(parsed)
+}
+
+fn validate_experimental_define_value(name: &str, value: Option<&str>) -> Result<(), String> {
+    match name {
+        "ARC_UNION_BEFORE_SPAN_CLIP" => match value {
+            Some("1") => Ok(()),
+            Some(value) => Err(format!(
+                "`-D{name}={value}` must use the reviewed per-call pre-clip union value `=1`"
+            )),
+            None => Err(format!("`-D{name}` must be explicitly set to `=1`")),
+        },
+        "MULTIFIDELITY_Z13_STRIDE" => match value {
+            Some("4" | "8" | "16" | "32") => Ok(()),
+            Some(value) => Err(format!(
+                "`-D{name}={value}` must use one reviewed pixel stride: 4, 8, 16, or 32"
+            )),
+            None => Err(format!("`-D{name}` must include an explicit pixel stride")),
+        },
+        // Adaptive replay and the CPU reference profile are deliberately not
+        // part of this ladder. Keeping the accepted value explicit makes a
+        // copied runner fail closed instead of silently changing semantics.
+        "MULTIFIDELITY_Z13_ADAPTIVE" => match value {
+            Some("0") => Ok(()),
+            Some(value) => Err(format!(
+                "`-D{name}={value}` is disabled for the strict W1 z13 ladder; use `=0`"
+            )),
+            None => Err(format!("`-D{name}` must be explicitly set to `=0`")),
+        },
+        _ => Ok(()),
+    }
 }
 
 fn is_canonical_define_name(name: &str) -> bool {
@@ -176,6 +211,46 @@ mod tests {
             assert!(
                 parse_experimental_defines(raw).is_err(),
                 "unexpectedly accepted `{raw}`"
+            );
+        }
+    }
+
+    #[test]
+    fn z13_ladder_values_are_explicit_and_fail_closed() {
+        for stride in ["4", "8", "16", "32"] {
+            parse_experimental_defines(&format!(
+                "-DMULTIFIDELITY_LINE -DMULTIFIDELITY_Z13_STRIDE={stride} -DMULTIFIDELITY_Z13_ADAPTIVE=0"
+            ))
+            .unwrap();
+        }
+        for raw in [
+            "-DMULTIFIDELITY_Z13_STRIDE",
+            "-DMULTIFIDELITY_Z13_STRIDE=2",
+            "-DMULTIFIDELITY_Z13_STRIDE=64",
+            "-DMULTIFIDELITY_Z13_ADAPTIVE",
+            "-DMULTIFIDELITY_Z13_ADAPTIVE=1",
+        ] {
+            assert!(
+                parse_experimental_defines(raw).is_err(),
+                "unexpectedly accepted `{raw}`"
+            );
+        }
+    }
+
+    #[test]
+    fn per_call_preclip_union_is_one_explicit_reviewed_arm() {
+        assert_eq!(
+            parse_experimental_defines("-DARC_UNION_BEFORE_SPAN_CLIP=1").unwrap(),
+            ["-DARC_UNION_BEFORE_SPAN_CLIP=1"]
+        );
+        for raw in [
+            "-DARC_UNION_BEFORE_SPAN_CLIP",
+            "-DARC_UNION_BEFORE_SPAN_CLIP=0",
+            "-DARC_UNION_BEFORE_SPAN_CLIP=2",
+        ] {
+            assert!(
+                parse_experimental_defines(raw).is_err(),
+                "unsafe per-call pre-clip union value unexpectedly accepted: `{raw}`"
             );
         }
     }

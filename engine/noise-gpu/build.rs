@@ -19,7 +19,11 @@ mod h0_production_selection_parser;
 
 use build_defines::parse_experimental_defines;
 use h0_production_selection::H0ProductionSelection;
-use std::{env, fs, path::PathBuf, process::Command};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 const H0_SELECTION_RECORD_PATH: &str = "../noise-compute/src/h0_production_selection_record.rs";
 
@@ -60,6 +64,53 @@ fn main() {
         "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_LINE={}",
         if multifidelity_line { "1" } else { "0" }
     );
+    let z13_stride = explicit_define_value(&extra_defines, "MULTIFIDELITY_Z13_STRIDE");
+    let z13_adaptive = explicit_define_value(&extra_defines, "MULTIFIDELITY_Z13_ADAPTIVE");
+    let arc_union_before_span_clip =
+        explicit_define_value(&extra_defines, "ARC_UNION_BEFORE_SPAN_CLIP");
+    let cartesian_unbinned_anchor =
+        multifidelity_line && z13_stride == Some("4") && z13_adaptive == Some("0");
+    if cartesian_unbinned_anchor {
+        assert_eq!(
+            explicit_define_value(&extra_defines, "SHADOW_MID_STRIDE"),
+            Some("1"),
+            "the exact stride4 Cartesian backend requires SHADOW_MID_STRIDE=1"
+        );
+        assert_eq!(
+            arc_union_before_span_clip,
+            Some("1"),
+            "the exact stride4 Cartesian backend requires ARC_UNION_BEFORE_SPAN_CLIP=1"
+        );
+    } else {
+        assert!(
+            arc_union_before_span_clip.is_none(),
+            "ARC_UNION_BEFORE_SPAN_CLIP is fenced to the exact stride4 Cartesian backend"
+        );
+    }
+    println!(
+        "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_CARTESIAN_UNBINNED_ANCHOR={}",
+        if cartesian_unbinned_anchor { "1" } else { "0" }
+    );
+    match (z13_stride, z13_adaptive) {
+        (Some(stride), Some("0")) => {
+            assert!(
+                multifidelity_line,
+                "MULTIFIDELITY_Z13_STRIDE requires the reviewed W1 multifidelity define trio"
+            );
+            println!("cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_Z13_STRIDE={stride}");
+            println!("cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_Z13_ADAPTIVE=0");
+        }
+        (Some(_), Some(adaptive)) => panic!(
+            "MULTIFIDELITY_Z13_ADAPTIVE must be 0 for the strict W1 z13 ladder, got {adaptive}"
+        ),
+        (Some(_), None) => {
+            panic!("MULTIFIDELITY_Z13_STRIDE requires MULTIFIDELITY_Z13_ADAPTIVE=0")
+        }
+        (None, Some(_)) => {
+            panic!("MULTIFIDELITY_Z13_ADAPTIVE cannot be supplied without MULTIFIDELITY_Z13_STRIDE")
+        }
+        (None, None) => {}
+    }
     // Watch the whole dir, not just each .cu — otherwise ADDING a new kernel
     // (e.g. airborne.cu) doesn't re-run this script, so its .ptx never builds.
     println!("cargo:rerun-if-changed=kernels");
@@ -73,6 +124,7 @@ fn main() {
     // nvcc when no CUDA toolkit is available. This branch is scratch-only and
     // never changes the production build path.
     if env::var_os("NOISE_GPU_SKIP_NVCC").is_some() {
+        println!("cargo:rustc-env=NOISE_GPU_SCATTER_CUBIN_SHA256=skipped-nvcc-host-check");
         fs::write(
             out.join("generated_h0_selection.rs"),
             format!(
@@ -606,7 +658,19 @@ fn main() {
             };
             compile("-ptx", out.join(format!("{stem}.ptx")));
             if stem == "scatter" {
-                compile("-cubin", out.join(format!("{stem}.cubin")));
+                let scatter_cubin = out.join(format!("{stem}.cubin"));
+                compile("-cubin", scatter_cubin.clone());
+                assert!(
+                    fs::metadata(&scatter_cubin)
+                        .expect("stat compiled scatter cubin")
+                        .len()
+                        > 0,
+                    "compiled scatter cubin is empty"
+                );
+                println!(
+                    "cargo:rustc-env=NOISE_GPU_SCATTER_CUBIN_SHA256={}",
+                    file_sha256(&scatter_cubin)
+                );
             }
         }
     }
@@ -626,6 +690,39 @@ fn const_from(path: &str, prefix: &str) -> String {
                 .map(str::to_owned)
         })
         .unwrap_or_else(|| panic!("`{prefix}` not found in {path}"))
+}
+
+fn explicit_define_value<'a>(defines: &'a [String], name: &str) -> Option<&'a str> {
+    let prefix = format!("-D{name}=");
+    defines
+        .iter()
+        .find_map(|define| define.strip_prefix(prefix.as_str()))
+}
+
+fn file_sha256(path: &Path) -> String {
+    let output = Command::new("sha256sum")
+        .arg(path)
+        .output()
+        .unwrap_or_else(|error| panic!("run sha256sum for {}: {error}", path.display()));
+    assert!(
+        output.status.success(),
+        "sha256sum failed for {}: {}",
+        path.display(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    let stdout = String::from_utf8(output.stdout).expect("sha256sum output is not UTF-8");
+    let digest = stdout
+        .split_whitespace()
+        .next()
+        .expect("sha256sum output omitted the digest");
+    assert!(
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "sha256sum emitted a non-canonical digest: {digest:?}"
+    );
+    digest.to_owned()
 }
 
 fn c_f64(value: f64) -> String {

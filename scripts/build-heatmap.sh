@@ -376,4 +376,4 @@ else
   run_locked "$COMBINE" --store-root "$STORE_ROOT"
 fi
 [ -n "${SCOPED_STAGING:-}" ] && rm -rf "$SCOPED_STAGING"
-log "done → $STORE_ROOT (pack + publish: tile-store-pack <store-root> <pmtiles-dir> b<N>)"
+log "done → $STORE_ROOT (packing and publish are a separate generation-fenced worldctl operation)"
