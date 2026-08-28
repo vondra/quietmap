@@ -11,8 +11,3 @@ path = "src/lib.rs"
 [dependencies]
 memmap2 = "0.9"
 noise-compute = { path = "../noise-compute" }
-
-[dev-dependencies]
-
-[profile.release]
-opt-level = 3

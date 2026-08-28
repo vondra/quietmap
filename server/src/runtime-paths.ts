@@ -19,7 +19,7 @@ export const FRONTEND_DIST = process.env.FRONTEND_DIST
 const bundledSourceReader = resolve(import.meta.dirname, 'native/libsource_reader.so')
 export const SOURCE_READER_PATH = existsSync(bundledSourceReader) ? bundledSourceReader : resolve(
   REPO_ROOT,
-  'engine/source-reader/target/release/libsource_reader.so',
+  'engine/target/release/libsource_reader.so',
 )
 export const H3R4_DIR = process.env.H3R4_DIR
   ? resolve(process.env.H3R4_DIR)

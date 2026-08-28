@@ -24,9 +24,9 @@
 // the drift showed up within four.
 //
 // Usage — build the addon first, then point the script at it:
-//   (cd engine/source-reader && cargo build --release --features node)
+//   cargo build --release --manifest-path engine/source-reader/Cargo.toml --features node
 //   node scripts/check-popup-determinism.mjs \
-//     --so engine/source-reader/target/release/libsource_reader.so \
+//     --so engine/target/release/libsource_reader.so \
 //     [--h3r4 <dir>] [--runs 10]
 // `--h3r4` defaults to `data/prepared/2026/h3r4` relative to the addon (the
 // same path the server derives in runtime-paths.ts); pass it when your prepared

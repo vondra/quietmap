@@ -393,7 +393,7 @@ class FakeArtifactBuildTests(unittest.TestCase):
         (self.source / "engine/noise-gpu/Cargo.toml").write_text(
             '[package]\nname="noise-gpu"\nversion="0.0.0"\n', encoding="utf-8"
         )
-        (self.source / "engine/noise-gpu/Cargo.lock").write_text(
+        (self.source / "engine/Cargo.lock").write_text(
             "# fake locked source\n", encoding="utf-8"
         )
         (self.source / "rust-toolchain.toml").write_text(
@@ -823,7 +823,7 @@ class FakeRustArtifactBuildTests(unittest.TestCase):
             (self.source / f"engine/{crate}/src/lib.rs").write_text(
                 "//! fake source\n", encoding="utf-8"
             )
-        (self.source / "engine/tile-painter/Cargo.lock").write_text(
+        (self.source / "engine/Cargo.lock").write_text(
             "# fake locked source\n", encoding="utf-8"
         )
         (self.source / "engine/tile-painter/src/wire_hm3.rs").write_text(

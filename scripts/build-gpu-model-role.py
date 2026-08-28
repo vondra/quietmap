@@ -330,9 +330,9 @@ def build(args: argparse.Namespace) -> Path:
 
             if source_manifest(source_root) != source_before:
                 fail("the immutable extracted source changed during the build")
-            lock_path = source_root / "engine/noise-gpu/Cargo.lock"
+            lock_path = source_root / gpu_model_role.ENGINE_CARGO_LOCK
             if not lock_path.is_file():
-                fail("noise-gpu Cargo.lock is absent from the source archive")
+                fail("engine Cargo.lock is absent from the source archive")
             toolchain_path = source_root / "rust-toolchain.toml"
             cargo_config_path = source_root / ".cargo/config.toml"
             if not toolchain_path.is_file() or not cargo_config_path.is_file():

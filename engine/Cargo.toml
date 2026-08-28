@@ -1,0 +1,24 @@
+# One workspace for the eight engine crates. Rebuild with
+# `cargo build --release --manifest-path engine/Cargo.toml`; binaries land
+# in engine/target/release/. Crate-local target/ names are not Cargo's
+# output directory — scripts/ensure-engine-target-shims.sh points them at
+# this workspace target so older path literals keep resolving.
+[workspace]
+resolver = "2"
+members = [
+    "aircraft-extract",
+    "arrow-batching",
+    "noise-compute",
+    "noise-gpu",
+    "osm-extract",
+    "raster-reader",
+    "source-reader",
+    "tile-painter",
+]
+
+# Member [profile.release] tables are ignored in a workspace. Keep the
+# production opt-level / thin LTO here so the NAPI addon and paint bins
+# do not silently drop to Cargo's default release profile.
+[profile.release]
+opt-level = 3
+lto = "thin"

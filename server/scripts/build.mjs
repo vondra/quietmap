@@ -82,7 +82,7 @@ function treeFingerprint(root) {
   return hash.digest('hex')
 }
 
-const nativeSource = resolve(serverRoot, '..', 'engine/source-reader/target/release/libsource_reader.so')
+const nativeSource = resolve(serverRoot, '..', 'engine/target/release/libsource_reader.so')
 const sourceInputsBefore = sourceInputFingerprint()
 const dependencyLock = readFileSync(resolve(serverRoot, 'package-lock.json'))
 // A release is named after package-lock.json, so copying modules installed

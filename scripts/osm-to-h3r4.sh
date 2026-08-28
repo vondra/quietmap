@@ -25,8 +25,8 @@ PBF_FILE="${PBF_FILE:-$DATA_ROOT/source/osm/${YEAR}/planet-latest.osm.pbf}"
 OUTPUT_DIR="${OUTPUT_DIR:-$DATA_ROOT/prepared/${YEAR}/h3r4}"
 NODE_CACHE="${NODE_CACHE:-$SCRATCH_ROOT/osm_nodes.cache}"
 SPILL_DIR="${SPILL_DIR:-$SCRATCH_ROOT/osm_spill}"
-BINARY="engine/osm-extract/target/release/osm-to-h3r4"
-ROAD_ARROW_UPGRADE_BIN="engine/source-reader/target/release/road-arrow-upgrade"
+BINARY="engine/target/release/osm-to-h3r4"
+ROAD_ARROW_UPGRADE_BIN="engine/target/release/road-arrow-upgrade"
 
 log() { echo "[osm] $(date '+%H:%M:%S') $*"; }
 

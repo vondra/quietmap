@@ -31,7 +31,3 @@ rayon = "1"
 [dev-dependencies]
 tempfile = "3"
 approx = "0.5"
-
-[profile.release]
-opt-level = 3
-lto = "thin"

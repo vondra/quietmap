@@ -83,7 +83,7 @@ fi
 # same crate — `--crate-name build_heatmap_…`, underscores — doesn't match).
 if RUNNING_PID=$(pgrep -of 'build-heatmap-aircraft|build-heatmap-surface|build-heatmap-combine|build-pyramid|aircraft-extract|osm-extract' 2>/dev/null); then
     echo "  → git hook: engine job running (pid $RUNNING_PID) — SKIPPING rebuild." >&2
-    echo "    Rebuild after it finishes:  for c in engine/*/Cargo.toml; do (cd \"\${c%/Cargo.toml}\" && cargo build --release); done" >&2
+    echo "    Rebuild after it finishes:  cargo build --release --manifest-path engine/Cargo.toml" >&2
     exit 0
 fi
 
@@ -93,12 +93,14 @@ RESTART_REASON=""
 if [ -n "$ENGINE_CHANGED" ]; then
     echo "  → git hook: engine sources changed — rebuilding..." >&2
 
-    # Build every binary crate. Glob over `engine/*` instead of a
-    # hardcoded list so new crates pick up the hook automatically; the
-    # `Cargo.toml` guard skips non-crate dirs.
-    # The engine has no workspace Cargo.toml so per-crate `cd` is the
-    # only path that actually rebuilds (workspace `-p X` silently no-ops).
+    # Build every workspace member. Glob over `engine/*` so a new crate
+    # still rebuilds once it has a Cargo.toml; the workspace lockfile lives
+    # at engine/Cargo.lock. Per-crate `cd` is what the hook-regression
+    # fixture exercises (a fake engine/demo crate, no workspace root).
     FAIL=0
+    if [ -x "$REPO_ROOT/scripts/ensure-engine-target-shims.sh" ]; then
+        "$REPO_ROOT/scripts/ensure-engine-target-shims.sh"
+    fi
     for crate in engine/*; do
         [ -f "$crate/Cargo.toml" ] || continue
         # noise-gpu's gpu-surface/e2-full bins live behind --features gpu (which needs
@@ -127,9 +129,9 @@ if [ -n "$ENGINE_CHANGED" ]; then
     # Keep the process-stable shared path in place while the managed server stays
     # online. The parent refreshes it atomically before every Worker spawn. Only
     # obsolete numeric per-thread/per-slot copies consume extra static TLS paths.
-    rm -f engine/source-reader/target/release/libsource_reader.worker-[0-9]*.node \
-          engine/source-reader/target/release/libsource_reader.worker-tid-[0-9]*.node \
-          engine/source-reader/target/release/libsource_reader.worker-slot-[0-9]*.node
+    rm -f engine/target/release/libsource_reader.worker-[0-9]*.node \
+          engine/target/release/libsource_reader.worker-tid-[0-9]*.node \
+          engine/target/release/libsource_reader.worker-slot-[0-9]*.node
 
     # Fastify dlopens source-reader → noise-compute + raster-reader
     # (statically linked), so a change to any of the three invalidates the

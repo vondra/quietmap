@@ -29,14 +29,14 @@ OUTPUT="${OUTPUT:-$DATA_ROOT/tiles/$DATA_YEAR/build}"
 # The tile store root is configured independently from the loose staging root.
 STORE_ROOT="${STORE_ROOT:-$DATA_ROOT/tiles/$DATA_YEAR/store}"
 ZOOM="${ZOOM:-12}"
-TARGET=engine/tile-painter/target/release
+TARGET=engine/target/release
 SURFACE="$TARGET/build-heatmap-surface"
 AIRCRAFT="$TARGET/build-heatmap-aircraft"
 PYR="$TARGET/build-pyramid"
 COMBINE="$TARGET/build-heatmap-combine"
 TRANSCODE="$TARGET/tile-store-transcode"
 TRANSACTION="$TARGET/tile-store-transaction"
-GPU_SURFACE="engine/noise-gpu/target/release/gpu-surface"  # --gpu: line layers on GPU
+GPU_SURFACE="engine/target/release/gpu-surface"  # --gpu: line layers on GPU
 
 log() { echo "[build-heatmap] $(date '+%H:%M:%S') $*"; }
 
@@ -182,6 +182,7 @@ fi
 
 # Rebuild — Fastify dlopen + long jobs cache stale binaries (AGENTS.md).
 log "rebuilding (release)"
+./scripts/ensure-engine-target-shims.sh
 cargo build --release --manifest-path engine/tile-painter/Cargo.toml \
   --bin build-heatmap-surface --bin build-heatmap-aircraft \
   --bin build-pyramid --bin build-heatmap-combine --bin tile-store-ingest \

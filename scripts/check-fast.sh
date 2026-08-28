@@ -28,25 +28,28 @@ if [ "$HALF" != "rust" ]; then
   step "shell scripts"
   bash -n scripts/run-extraction.sh scripts/build-heatmap.sh scripts/osm-to-h3r4.sh \
     scripts/run-aircraft-extract.sh scripts/rasters-global.sh \
-    scripts/check-surface-stream-concurrency-parity.sh start.sh
+    scripts/check-surface-stream-concurrency-parity.sh \
+    scripts/ensure-engine-target-shims.sh start.sh
 fi
 
 if [ "$HALF" != "node" ]; then
   step "engine: GPU define contract"
   "$ROOT/scripts/test-noise-gpu-defines.sh"
 
+  step "engine: workspace target shims"
+  "$ROOT/scripts/ensure-engine-target-shims.sh"
+
   step "engine: rustfmt + clippy + tests"
-  for manifest in engine/*/Cargo.toml; do
-    cargo fmt --manifest-path "$manifest" -- --check
-  done
+  cargo fmt --manifest-path engine/Cargo.toml --all -- --check
   for crate in noise-compute source-reader tile-painter; do
-    (cd "engine/$crate" && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked --all-targets)
+    (cd engine && cargo clippy --locked -p "$crate" --all-targets -- -D warnings \
+      && cargo test --locked -p "$crate" --all-targets)
   done
 
   # The ground hoist must stay bit-exact under release optimisation; the debug
   # all-targets run above cannot detect compiler/libm constant-folding drift.
   step "engine: optimized ground-hoist exactness"
-  (cd engine/noise-compute && cargo test --locked --release --test ground_hoist_exact)
+  (cd engine && cargo test --locked --release -p noise-compute --test ground_hoist_exact)
 
   step "engine: CUDA compile-only role matrix"
   if command -v nvcc >/dev/null 2>&1; then

@@ -17,6 +17,8 @@ from typing import Any
 
 
 DESIGN_SHA256 = "44b606ca8fb8c5fd0b4f81d3e81c103ed0d45f495fa173d4f0760b791c939b1e"
+# All eight engine crates share this lockfile (engine/Cargo.toml workspace).
+ENGINE_CARGO_LOCK = "engine/Cargo.lock"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9-]*$")
@@ -855,7 +857,7 @@ def verify_artifact(root: Path, expected_role_spec: Path) -> dict[str, Any]:
     source_files = _read_hash_manifest(source_manifest_path, "source manifest")
     source_bindings = {
         ".cargo/config.toml": source["cargo_config_sha256"],
-        "engine/noise-gpu/Cargo.lock": source["cargo_lock_sha256"],
+        ENGINE_CARGO_LOCK: source["cargo_lock_sha256"],
         "rust-toolchain.toml": source["rust_toolchain_sha256"],
         "scripts/build-gpu-model-role.py": sha256_file(
             root / "input/build-gpu-model-role.py"
@@ -1155,7 +1157,7 @@ def verify_rust_artifact(root: Path, expected_role_spec: Path) -> dict[str, Any]
     source_files = _read_hash_manifest(source_manifest_path, "Rust role source manifest")
     bindings = {
         ".cargo/config.toml": source["cargo_config_sha256"],
-        f"engine/{role['package']}/Cargo.lock": source["cargo_lock_sha256"],
+        ENGINE_CARGO_LOCK: source["cargo_lock_sha256"],
         "rust-toolchain.toml": source["rust_toolchain_sha256"],
         "scripts/build-rust-model-role.py": sha256_file(root / "input/build-rust-model-role.py"),
         "scripts/gpu_model_role.py": sha256_file(root / "input/gpu_model_role.py"),

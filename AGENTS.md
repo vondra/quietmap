@@ -28,9 +28,10 @@ with zero compiler warnings, including Rust Clippy.
 ## Native binaries after pulls
 
 After every `git pull` or source sync touching `engine/`, rebuild native
-crates before running them. The server caches `libsource_reader.so` and
-long-running scripts cache extractor binaries; `./start.sh` rebuilds and
-restarts everything.
+crates before running them (`cargo build --release --manifest-path
+engine/Cargo.toml`; binaries land in `engine/target/release/`). The server
+caches `libsource_reader.so` and long-running scripts cache extractor
+binaries; `./start.sh` rebuilds and restarts everything.
 
 ## Public-repo boundary
 

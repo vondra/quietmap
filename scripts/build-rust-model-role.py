@@ -187,7 +187,7 @@ def build(args: argparse.Namespace) -> Path:
 
             if source_manifest(source_root) != source_before:
                 fail("the immutable extracted source changed during the build")
-            lock_path = source_root / f"engine/{role['package']}/Cargo.lock"
+            lock_path = source_root / gpu_model_role.ENGINE_CARGO_LOCK
             toolchain_path = source_root / "rust-toolchain.toml"
             cargo_config_path = source_root / ".cargo/config.toml"
             if not lock_path.is_file() or not toolchain_path.is_file() or not cargo_config_path.is_file():

@@ -182,9 +182,10 @@ ln -sf "$(basename "$LOG_FILE")" "$LOG_DIR/aircraft-extract-latest.log"
 log "logging to $LOG_FILE (symlinked $LOG_DIR/aircraft-extract-latest.log)"
 
 log "rebuilding aircraft-extract (release)"
+./scripts/ensure-engine-target-shims.sh
 cargo build --release --manifest-path engine/aircraft-extract/Cargo.toml --bin aircraft-extract \
     2>&1 | stdbuf -oL -eL tee -a "$LOG_FILE"
-BIN=./engine/aircraft-extract/target/release/aircraft-extract
+BIN=./engine/target/release/aircraft-extract
 
 # Confine RAM to MEMMAX via a transient user scope so an OOM kills only
 # this job, not the box. --scope runs synchronously (foreground), so the

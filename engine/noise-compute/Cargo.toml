@@ -46,7 +46,3 @@ rayon = "1"
 [dev-dependencies]
 # For unit tests
 approx = "0.5"
-
-[profile.release]
-opt-level = 3
-lto = "thin"
