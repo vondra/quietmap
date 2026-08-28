@@ -21,6 +21,7 @@ import {
   PublishedLineModelUnavailableError,
 } from './published-line-model-api.js'
 import {
+  generationFencedPublishedManifestSnapshotFromText,
   publishedManifestSnapshotFromText,
   publishedManifestSnapshotsEqual,
 } from './published-line-model-snapshot.js'
@@ -32,6 +33,7 @@ import {
 } from './published-line-model-store.js'
 import {
   type PmtilesManifest,
+  validateGenerationFencedPmtilesManifest,
   validatePmtilesManifest,
 } from './runtime-readiness.js'
 import { resolveManifestPath } from './tile-manifest-reader.js'
@@ -85,7 +87,10 @@ class ActivePublishedLineModel implements PublishedLineModel {
       }
       if (this.persistentState.phase === 'prepared') {
         await this.validateStoredSnapshot(this.persistentState.previous, 'prepared previous manifest')
-        await this.validateStoredSnapshot(this.persistentState.next, 'prepared next manifest')
+        await this.validateStoredGenerationFencedSnapshot(
+          this.persistentState.next,
+          'prepared next manifest',
+        )
         const disk = await this.readCurrentManifest()
         if (!publishedManifestSnapshotsEqual(disk, this.persistentState.previous)
             && !publishedManifestSnapshotsEqual(disk, this.persistentState.next)) {
@@ -159,7 +164,7 @@ class ActivePublishedLineModel implements PublishedLineModel {
     if (!this.releaseMatches(current)) {
       throw new Error('PREPARE active popup release differs from the live line model')
     }
-    const next = await publishedManifestSnapshotFromText(
+    const next = await generationFencedPublishedManifestSnapshotFromText(
       request.next_manifest_text,
       this.options.pmtilesDir,
       'PREPARE next manifest',
@@ -240,6 +245,17 @@ class ActivePublishedLineModel implements PublishedLineModel {
 
   private async validateStoredSnapshot(snapshot: PublishedManifestSnapshot, label: string): Promise<void> {
     await validatePmtilesManifest(snapshot.manifest, this.options.pmtilesDir, label)
+  }
+
+  private async validateStoredGenerationFencedSnapshot(
+    snapshot: PublishedManifestSnapshot,
+    label: string,
+  ): Promise<void> {
+    await validateGenerationFencedPmtilesManifest(
+      snapshot.manifest,
+      this.options.pmtilesDir,
+      label,
+    )
   }
 
   private async readCurrentManifest(): Promise<PublishedManifestSnapshot> {

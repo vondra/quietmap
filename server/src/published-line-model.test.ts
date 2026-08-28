@@ -17,6 +17,7 @@ import {
   type PublishedLineModel,
 } from './published-line-model.js'
 import { createRuntimePublishedLineModel } from './published-line-model-runtime.js'
+import { sha256Identity } from './generation-contract.mjs'
 import { ALLOWED_LAYERS } from './routes/heatmap-shared.js'
 
 const OLD_DIGEST = '1'.repeat(64)
@@ -31,10 +32,80 @@ function sha256(contents: string | Buffer): string {
   return createHash('sha256').update(contents).digest('hex')
 }
 
+const STOCK_PRODUCER_ROLES = {
+  'cpu-airborne': 'stock',
+  'cpu-building': 'stock',
+  'cpu-cruise': 'stock',
+  'cpu-ground': 'stock',
+  'cpu-industrial': 'stock',
+  'gpu-airborne': 'stock',
+}
+
+function acceptedW1Generation(lineModelRoleSha256: string) {
+  const workerModelRoles = { ...STOCK_PRODUCER_ROLES, 'gpu-line': 'w1' }
+  const workers = Object.fromEntries(Object.entries(workerModelRoles).map(
+    ([workerName, modelRole]) => [workerName, {
+      artifact_family: 'publication-fixture',
+      binary: 'publication-fixture',
+      model_role: modelRole,
+      resolved_role: modelRole === 'w1' ? 'publication-w1-v1' : 'publication-stock-v1',
+      selection_epoch: null,
+    }],
+  ))
+  const quality = {
+    schema: 1,
+    profile_name: 'w1-z12-accepted-v1',
+    product_commit: 'a'.repeat(40),
+    dataset_year: 2026,
+    model_role_contract: {
+      schema: 1,
+      line_model_role_sha256: lineModelRoleSha256,
+      model_source_recipe_sha256: '2'.repeat(64),
+      numerical_selection_record_sha256: null,
+      output_abi_version: 3,
+      role_spec_sha256: '3'.repeat(64),
+      workers,
+    },
+    numerical_environment: { QM_W1_INDUSTRIAL_POLICY: 'adaptive-stride5' },
+    producer_requirements: { worker_model_roles: workerModelRoles },
+    scorer_contract: {
+      bias_db_max: 0.5,
+      presence_mismatch_percent_max: 6,
+      quiet_floor_db: 26,
+      threshold_percent_max: { 1: 30, 2: 15, 6: 1.5 },
+    },
+    wave: 'w1',
+  }
+  const qualityProfileId = sha256Identity(quality)
+  const identity = {
+    schema: 1,
+    deployment: 'base',
+    zoom: 12,
+    tier: '',
+    dataset_year: 2026,
+    raster_generation_id: '4'.repeat(16),
+    quality_profile_id: qualityProfileId,
+    quality_profile_name: quality.profile_name,
+    base_generation_id: null,
+    base_quality_profile_id: null,
+    base_quality_profile_name: null,
+  }
+  const generationId = sha256Identity(identity)
+  return {
+    ...identity,
+    generation_id: generationId,
+    base_generation_id: generationId,
+    base_quality_profile_id: qualityProfileId,
+    base_quality_profile_name: quality.profile_name,
+    quality,
+  }
+}
+
 async function manifest(
   pmtilesDir: string,
   build: string,
   lineModelRoleSha256: string,
+  generationFenced = false,
 ): Promise<string> {
   const layers: Record<string, {
     file: string
@@ -57,7 +128,19 @@ async function manifest(
     build,
     line_model_role_sha256: lineModelRoleSha256,
     layers,
+    ...(generationFenced ? { generation: acceptedW1Generation(lineModelRoleSha256) } : {}),
   })
+}
+
+function manifestSnapshot(text: string) {
+  const parsed = JSON.parse(text)
+  return {
+    build: parsed.build,
+    line_model_role_sha256: parsed.line_model_role_sha256,
+    manifest_sha256: sha256(text),
+    manifest_text: text,
+    manifest: parsed,
+  }
 }
 
 async function writeReleaseIdentity(f: Fixture, digest: string): Promise<void> {
@@ -85,7 +168,8 @@ async function fixture() {
   await writeFile(tokenPath, `${TOKEN}\n`, { mode: 0o600 })
   await chmod(tokenPath, 0o600)
   const oldText = await manifest(pmtilesDir, 'b1', OLD_DIGEST)
-  const newText = await manifest(pmtilesDir, 'b2', NEW_DIGEST)
+  const newText = await manifest(pmtilesDir, 'b2', NEW_DIGEST, true)
+  const legacyNewText = await manifest(pmtilesDir, 'b3', NEW_DIGEST)
   const currentPath = join(pmtilesDir, `current.${TEST_TILE_ENV}.json`)
   await writeFile(currentPath, oldText)
   const f = {
@@ -98,6 +182,7 @@ async function fixture() {
     currentPath,
     oldText,
     newText,
+    legacyNewText,
   }
   await writeReleaseIdentity(f, OLD_DIGEST)
   return f
@@ -123,11 +208,13 @@ function prepareBody(f: Fixture) {
   }
 }
 
-test('PREPARE survives restart and only the matching popup release can COMMIT', async (t) => {
+test('PREPARE migrates a legacy current to a fenced next and only its popup can COMMIT', async (t) => {
   const f = await fixture()
   t.after(async () => rm(f.root, { recursive: true, force: true }))
   const oldServer = await manager(f)
 
+  assert.equal(JSON.parse(f.oldText).generation, undefined)
+  assert.equal(JSON.parse(f.newText).generation.quality_profile_name, 'w1-z12-accepted-v1')
   assert.throws(() => oldServer.assertReady(), /bootstrap PREPARE\/COMMIT required/)
   assert.equal(oldServer.mapManifest(), null)
   const prepared = await oldServer.prepare(prepareBody(f))
@@ -213,16 +300,39 @@ test('PREPARE rejects stale, malformed and unknown candidate identities before s
   t.after(async () => rm(f.root, { recursive: true, force: true }))
   const active = await manager(f)
   const base = prepareBody(f)
+  await assert.rejects(
+    active.prepare({ ...base, next_manifest_text: f.legacyNewText }),
+    /must be generation-fenced/,
+  )
   await assert.rejects(active.prepare({ ...base, previous_manifest_sha256: '4'.repeat(64) }), /differs/)
   await assert.rejects(active.prepare({ ...base, extra: true }), /unexpected/)
   const missingDigest = JSON.stringify({ ...JSON.parse(f.newText), line_model_role_sha256: undefined })
-  await assert.rejects(active.prepare({ ...base, next_manifest_text: missingDigest }), /line_model_role/)
+  await assert.rejects(
+    active.prepare({ ...base, next_manifest_text: missingDigest }),
+    /mixes legacy and generation-fenced manifest fields/,
+  )
   await assert.rejects(
     active.prepare({ ...base, next_manifest_text: 'x'.repeat(5 * 1024 * 1024 + 1) }),
     /exceeds .* limit/,
   )
   await assert.rejects(active.prepare({ ...base, transaction_id: 'B'.repeat(64) }), /lowercase/)
   await assert.rejects(readFile(f.statePath, 'utf8'), /ENOENT/)
+})
+
+test('restart rejects a persisted prepared next that is not generation-fenced', async (t) => {
+  const f = await fixture()
+  t.after(async () => rm(f.root, { recursive: true, force: true }))
+  const active = await manager(f)
+  await active.prepare(prepareBody(f))
+
+  const state = JSON.parse(await readFile(f.statePath, 'utf8'))
+  state.next = manifestSnapshot(f.legacyNewText)
+  await writeFile(f.statePath, `${JSON.stringify(state)}\n`)
+
+  const restarted = await manager(f)
+  assert.equal(restarted.mapManifest(), null)
+  assert.throws(() => restarted.assertReady(), /prepared next manifest must be generation-fenced/)
+  await assert.rejects(restarted.prepare(prepareBody(f)), /persistent state is invalid/)
 })
 
 test('IPC routes require both loopback and the private token', async (t) => {

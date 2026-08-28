@@ -147,7 +147,7 @@ function spatialGeneration(base: ReturnType<typeof baseGeneration>) {
     },
     scorer_contract: {
       schema: 'w2-z13-spatial-scorer-v2',
-      implementation_sha256: '86017b21cbd43af615afb52628db902e4cea9014339c929110655975e4fbcaf3',
+      implementation_sha256: 'dbb8b6b187c5ada0a55fc183a70d42cd7ab43921a593c794648ed2cc22e5e596',
       population_scopes: structuredClone(W2_SPATIAL_POPULATION_SCOPES),
       spatial_tolerance_pixels: 1,
       spatial_match_policy: 'symmetric-chebyshev-r1-directional-min-plus-histogram-capacity-v1',
@@ -179,6 +179,59 @@ function spatialGeneration(base: ReturnType<typeof baseGeneration>) {
     generation_id: sha256Identity(identity),
     quality,
   }
+}
+
+function unsupportedPublishedSpatialGeneration(base: ReturnType<typeof baseGeneration>) {
+  const generation = spatialGeneration(base)
+  generation.quality_profile_name = 'w2-z13-spatial-v2'
+  const quality = generation.quality as { profile_name: string; scorer_contract: unknown }
+  quality.profile_name = generation.quality_profile_name
+  quality.scorer_contract = {
+    bias_db_max: 0.5,
+    presence_mismatch_percent_max: 0.25,
+    quiet_floor_db: 10,
+    threshold_percent_max: { 0.5: 20, 1: 1, 3: 0.01, 6: 0.001 },
+    unified_threshold_db: 6,
+  }
+  generation.quality_profile_id = sha256Identity(generation.quality)
+  generation.generation_id = sha256Identity({
+    schema: generation.schema,
+    deployment: generation.deployment,
+    zoom: generation.zoom,
+    tier: generation.tier,
+    dataset_year: generation.dataset_year,
+    raster_generation_id: generation.raster_generation_id,
+    quality_profile_id: generation.quality_profile_id,
+    quality_profile_name: generation.quality_profile_name,
+    base_generation_id: generation.base_generation_id,
+    base_quality_profile_id: generation.base_quality_profile_id,
+    base_quality_profile_name: generation.base_quality_profile_name,
+  })
+  return generation
+}
+
+function unsupportedPublishedBaseGeneration() {
+  const generation = baseGeneration()
+  generation.quality_profile_name = 'w1-z12-accepted-v2'
+  generation.base_quality_profile_name = generation.quality_profile_name
+  generation.quality.profile_name = generation.quality_profile_name
+  generation.quality_profile_id = sha256Identity(generation.quality)
+  generation.base_quality_profile_id = generation.quality_profile_id
+  generation.generation_id = sha256Identity({
+    schema: generation.schema,
+    deployment: generation.deployment,
+    zoom: generation.zoom,
+    tier: generation.tier,
+    dataset_year: generation.dataset_year,
+    raster_generation_id: generation.raster_generation_id,
+    quality_profile_id: generation.quality_profile_id,
+    quality_profile_name: generation.quality_profile_name,
+    base_generation_id: null,
+    base_quality_profile_id: null,
+    base_quality_profile_name: null,
+  })
+  generation.base_generation_id = generation.generation_id
+  return generation
 }
 
 async function publisherProof(path: string, sha256: string) {
@@ -481,6 +534,105 @@ test('readiness accepts a named W1 base with its W2 spatial tier and rejects a c
   assert.equal(crossed.ready, false)
   assert.deepEqual(crossed.failed, ['pmtiles'])
   assert.match(crossed.errors.pmtiles ?? '', /tier is not anchored to the live base generation/)
+})
+
+test('readiness rejects a self-consistent unsupported top-level quality profile', async (t) => {
+  const fixture = await readinessFixture()
+  t.after(async () => rm(fixture.root, { recursive: true, force: true }))
+  const generation = unsupportedPublishedBaseGeneration()
+  await writeFile(
+    join(fixture.pmtilesDir, `current.${fixture.tileEnv}.json`),
+    JSON.stringify({
+      build: 'b1',
+      generation,
+      line_model_role_sha256: generation.quality.model_role_contract.line_model_role_sha256,
+      layers: fixture.layers,
+    }),
+  )
+
+  const result = await createReadinessCheck({
+    ...fixture,
+    engineProbe: async () => {},
+    filesystemCacheMs: 0,
+  })()
+  assert.equal(result.ready, false)
+  assert.deepEqual(result.failed, ['pmtiles'])
+  assert.match(result.errors.pmtiles ?? '', /published quality profile is unsupported/)
+})
+
+test('readiness rejects an unsupported quality profile in the first tier pack', async (t) => {
+  const fixture = await readinessFixture()
+  t.after(async () => rm(fixture.root, { recursive: true, force: true }))
+  const generation = unsupportedPublishedSpatialGeneration(fixture.generation)
+  const bundle = await writeTierBundle(fixture, generation)
+  await writeFile(
+    join(fixture.pmtilesDir, `current.${fixture.tileEnv}.json`),
+    JSON.stringify({
+      build: 'b1',
+      generation: fixture.generation,
+      line_model_role_sha256:
+        fixture.generation.quality.model_role_contract.line_model_role_sha256,
+      ...bundle,
+    }),
+  )
+
+  const result = await createReadinessCheck({
+    ...fixture,
+    engineProbe: async () => {},
+    filesystemCacheMs: 0,
+  })()
+  assert.equal(result.ready, false)
+  assert.deepEqual(result.failed, ['pmtiles'])
+  assert.match(result.errors.pmtiles ?? '', /published quality profile is unsupported/)
+})
+
+test('readiness rejects an unsupported quality profile in a later tier pack', async (t) => {
+  const fixture = await readinessFixture()
+  t.after(async () => rm(fixture.root, { recursive: true, force: true }))
+  const firstGeneration = spatialGeneration(fixture.generation)
+  const bundle = await writeTierBundle(fixture, firstGeneration)
+  const secondGeneration = unsupportedPublishedSpatialGeneration(fixture.generation)
+  const secondTokens: string[] = []
+  for (const layer of ALLOWED_LAYERS) {
+    const token = `${layer}-z13-p002`
+    const file = `${token}.b1.pmtiles`
+    const content = `pmtiles-${token}`
+    await writeFile(join(fixture.pmtilesDir, file), content)
+    const sha256 = createHash('sha256').update(content).digest('hex')
+    bundle.layers[token] = {
+      file,
+      bytes: Buffer.byteLength(content),
+      sha256,
+      publisher_proof: await publisherProof(join(fixture.pmtilesDir, file), sha256),
+    }
+    secondTokens.push(token)
+  }
+  bundle.tiers.z13.packs.push({
+    pack: 'p002',
+    generation: secondGeneration,
+    coverage_r4: [REFERENCE_HEX],
+    layers: secondTokens,
+  })
+  await writeFile(
+    join(fixture.pmtilesDir, `current.${fixture.tileEnv}.json`),
+    JSON.stringify({
+      build: 'b1',
+      generation: fixture.generation,
+      line_model_role_sha256:
+        fixture.generation.quality.model_role_contract.line_model_role_sha256,
+      ...bundle,
+    }),
+  )
+
+  const result = await createReadinessCheck({
+    ...fixture,
+    engineProbe: async () => {},
+    filesystemCacheMs: 0,
+  })()
+  assert.equal(result.ready, false)
+  assert.deepEqual(result.failed, ['pmtiles'])
+  assert.match(result.errors.pmtiles ?? '',
+    /pack p002 has an unsupported published generation: .*published quality profile is unsupported/)
 })
 
 test('readiness requires an immutable content-addressed qualification closure for fenced tiers', async (t) => {

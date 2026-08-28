@@ -34,6 +34,7 @@ export function validateScorerContract(
   profileName?: string,
 ): Record<string, unknown>
 export function validateGenerationContract(contract: unknown): GenerationContract
+export function validatePublishedGenerationContract(contract: unknown): GenerationContract
 export function lineModelRoleSha256ForGeneration(contract: unknown): string
 export function validateTierGenerationAnchor(
   base: unknown,

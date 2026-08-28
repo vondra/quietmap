@@ -6,13 +6,19 @@ import {
 } from './published-line-model-contract.js'
 import {
   type PmtilesManifest,
+  validateGenerationFencedPmtilesManifest,
   validatePmtilesManifest,
 } from './runtime-readiness.js'
 
-export async function publishedManifestSnapshotFromText(
+async function manifestSnapshotFromText(
   text: string,
   pmtilesDir: string,
   label: string,
+  validateManifest: (
+    manifest: PmtilesManifest,
+    pmtilesDir: string,
+    manifestPath: string,
+  ) => Promise<void>,
 ): Promise<PublishedManifestSnapshot> {
   let manifest: PmtilesManifest
   try {
@@ -20,7 +26,7 @@ export async function publishedManifestSnapshotFromText(
   } catch (error) {
     throw new Error(`${label} is not JSON: ${(error as Error).message}`)
   }
-  await validatePmtilesManifest(manifest, pmtilesDir, label)
+  await validateManifest(manifest, pmtilesDir, label)
   if (typeof manifest.line_model_role_sha256 !== 'string'
       || !/^[0-9a-f]{64}$/.test(manifest.line_model_role_sha256)) {
     throw new Error(`${label} has no valid line_model_role_sha256`)
@@ -33,6 +39,28 @@ export async function publishedManifestSnapshotFromText(
     manifest_text: text,
     manifest,
   }
+}
+
+export async function publishedManifestSnapshotFromText(
+  text: string,
+  pmtilesDir: string,
+  label: string,
+): Promise<PublishedManifestSnapshot> {
+  return manifestSnapshotFromText(text, pmtilesDir, label, validatePmtilesManifest)
+}
+
+/** Parse a new publication candidate, never a serve-only legacy pointer. */
+export async function generationFencedPublishedManifestSnapshotFromText(
+  text: string,
+  pmtilesDir: string,
+  label: string,
+): Promise<PublishedManifestSnapshot> {
+  return manifestSnapshotFromText(
+    text,
+    pmtilesDir,
+    label,
+    validateGenerationFencedPmtilesManifest,
+  )
 }
 
 export function publishedManifestSnapshotsEqual(

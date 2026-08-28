@@ -9,6 +9,7 @@ import { basename, join, relative, resolve, sep } from 'node:path'
 import {
   lineModelRoleSha256ForGeneration,
   validateGenerationContract,
+  validatePublishedGenerationContract,
   validateQualificationClosureReference,
   validateTierGenerationAnchor,
 } from './generation-contract.mjs'
@@ -198,7 +199,7 @@ export async function validatePmtilesManifest(
   }
   if (generationFencedManifest(manifest, manifestPath)) {
     try {
-      const generation = validateGenerationContract(manifest.generation)
+      const generation = validatePublishedGenerationContract(manifest.generation)
       if (generation.tier !== '') {
         throw new Error('top-level generation must be a base contract')
       }
@@ -265,7 +266,22 @@ export async function validatePmtilesManifest(
     }
   }
   validateTiersIndex(manifest, manifestPath)
+  validatePublishedTierGenerationProfiles(manifest, manifestPath)
   await validateManifestQualificationClosure(manifest, pmtilesDir, manifestPath)
+}
+
+/** Validate a newly published pointer. Existing legacy pointers remain readable
+ * for the one-way migration, but a publication candidate may never create a
+ * fresh escape hatch around generation, profile, and qualification fencing. */
+export async function validateGenerationFencedPmtilesManifest(
+  manifest: PmtilesManifest,
+  pmtilesDir: string,
+  manifestPath: string,
+): Promise<void> {
+  if (manifest.generation === undefined) {
+    throw new Error(`${manifestPath} must be generation-fenced`)
+  }
+  await validatePmtilesManifest(manifest, pmtilesDir, manifestPath)
 }
 
 async function validateManifestQualificationClosure(
@@ -410,6 +426,29 @@ export function validateTiersIndex(
   for (const layer of Object.keys(manifest.layers || {})) {
     if (parseTierToken(layer) !== null && !indexedTierTokens.has(layer)) {
       throw new Error(`${manifestPath} tier token ${layer} is absent from the tiers index`)
+    }
+  }
+}
+
+/** Keep benchmark/test profiles usable by the structural tier validator while
+ * rejecting them at the public manifest boundary. Call only after
+ * validateTiersIndex(), which establishes the tiers/packs shape. */
+function validatePublishedTierGenerationProfiles(
+  manifest: PmtilesManifest,
+  manifestPath: string,
+): void {
+  if (manifest.generation === undefined || manifest.tiers === undefined) return
+  for (const [zoom, entry] of Object.entries(
+    manifest.tiers as Record<string, { packs: Array<Record<string, unknown>> }>,
+  )) {
+    for (const pack of entry.packs) {
+      try {
+        validatePublishedGenerationContract(pack.generation)
+      } catch (error) {
+        throw new Error(
+          `${manifestPath} tiers.${zoom} pack ${String(pack.pack)} has an unsupported published generation: ${(error as Error).message}`,
+        )
+      }
     }
   }
 }

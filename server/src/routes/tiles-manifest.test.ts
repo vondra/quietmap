@@ -9,7 +9,7 @@ import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { sha256Identity } from '../generation-contract.mjs'
+import { W2_SPATIAL_POPULATION_SCOPES, sha256Identity } from '../generation-contract.mjs'
 
 // PMTILES_BASE and TILE_ENV are captured from the env when heatmap-shared/tile-manifest-reader
 // load — point them at the fixture dir BEFORE importing (mirrors heatmap-pmtiles.test.ts's
@@ -35,35 +35,81 @@ const legacyPath = join(dir, 'current.json')
 const clearFixture = () => {
   for (const name of readdirSync(dir)) rmSync(join(dir, name), { force: true, recursive: true })
 }
+const stockProducerRoles = {
+  'cpu-airborne': 'stock',
+  'cpu-building': 'stock',
+  'cpu-cruise': 'stock',
+  'cpu-ground': 'stock',
+  'cpu-industrial': 'stock',
+  'gpu-airborne': 'stock',
+}
+const worker = (
+  artifactFamily: string,
+  binary: string,
+  modelRole: string,
+  resolvedRole: string,
+) => ({
+  artifact_family: artifactFamily,
+  binary,
+  model_role: modelRole,
+  resolved_role: resolvedRole,
+  selection_epoch: null,
+})
+const modelRoleContract = (
+  lineModelRole: 'w1' | 'w2-stride4',
+  lineModelRoleSha256 = '1'.repeat(64),
+) => ({
+  schema: 1,
+  line_model_role_sha256: lineModelRoleSha256,
+  model_source_recipe_sha256: '2'.repeat(64),
+  numerical_selection_record_sha256: null,
+  output_abi_version: 3,
+  role_spec_sha256: '3'.repeat(64),
+  workers: {
+    'cpu-airborne': worker(
+      'aircraft-cpu-production', 'build-heatmap-aircraft', 'stock', 'aircraft-cpu-stock-v1',
+    ),
+    'cpu-building': worker(
+      'surface-cpu-production', 'build-heatmap-surface', 'stock', 'surface-cpu-stock-v1',
+    ),
+    'cpu-cruise': worker(
+      'aircraft-cpu-production', 'build-heatmap-aircraft', 'stock', 'aircraft-cpu-stock-v1',
+    ),
+    'cpu-ground': worker(
+      'surface-cpu-production', 'build-heatmap-surface', 'stock', 'surface-cpu-stock-v1',
+    ),
+    'cpu-industrial': worker(
+      'surface-cpu-production', 'build-heatmap-surface', 'stock', 'surface-cpu-stock-v1',
+    ),
+    'gpu-airborne': worker(
+      'airborne-production', 'gpu-airborne', 'stock', 'airborne-stock-v1',
+    ),
+    'gpu-line': worker(
+      'surface-production',
+      'gpu-surface',
+      lineModelRole,
+      lineModelRole === 'w1'
+        ? 'surface-w1-z12-accepted-v1'
+        : 'surface-w2-z13-stride4-v1',
+    ),
+  },
+})
 function baseGeneration(lineModelRoleSha256 = '1'.repeat(64)) {
   const quality = {
     schema: 1,
-    profile_name: 'test-base-v1',
+    profile_name: 'w1-z12-accepted-v1',
     product_commit: 'a'.repeat(40),
     dataset_year: 2026,
-    model_role_contract: {
-      schema: 1,
-      line_model_role_sha256: lineModelRoleSha256,
-      model_source_recipe_sha256: '2'.repeat(64),
-      numerical_selection_record_sha256: null,
-      output_abi_version: 3,
-      role_spec_sha256: '3'.repeat(64),
-      workers: {
-        'gpu-line': {
-          artifact_family: 'surface-production',
-          binary: 'gpu-surface',
-          model_role: 'stock',
-          resolved_role: 'surface-stock-v1',
-          selection_epoch: null,
-        },
-      },
+    model_role_contract: modelRoleContract('w1', lineModelRoleSha256),
+    numerical_environment: { QM_W1_INDUSTRIAL_POLICY: 'adaptive-stride5' },
+    producer_requirements: {
+      worker_model_roles: { ...stockProducerRoles, 'gpu-line': 'w1' },
     },
-    numerical_environment: {},
-    producer_requirements: { worker_model_roles: { 'gpu-line': 'stock' } },
     scorer_contract: {
       bias_db_max: 0.5,
-      presence_mismatch_percent_max: 0.25,
-      threshold_percent_max: { 0.5: 20, 1: 1, 3: 0.01, 6: 0.001 },
+      presence_mismatch_percent_max: 6,
+      quiet_floor_db: 26,
+      threshold_percent_max: { 1: 30, 2: 15, 6: 1.5 },
     },
     wave: 'w1',
   }
@@ -114,10 +160,33 @@ function validManifest(build = 'b3') {
 }
 
 function tierGeneration(base: ReturnType<typeof baseGeneration>) {
-  const quality = structuredClone(base.quality)
-  quality.profile_name = 'test-tier-v1'
-  quality.product_commit = 'b'.repeat(40)
-  quality.wave = 'w2'
+  const quality = {
+    schema: 1,
+    profile_name: 'w2-z13-spatial-v1',
+    product_commit: 'b'.repeat(40),
+    dataset_year: 2026,
+    model_role_contract: modelRoleContract('w2-stride4'),
+    numerical_environment: {},
+    producer_requirements: {
+      worker_model_roles: { ...stockProducerRoles, 'gpu-line': 'w2-stride4' },
+    },
+    scorer_contract: {
+      schema: 'w2-z13-spatial-scorer-v2',
+      implementation_sha256:
+        'dbb8b6b187c5ada0a55fc183a70d42cd7ab43921a593c794648ed2cc22e5e596',
+      population_scopes: structuredClone(W2_SPATIAL_POPULATION_SCOPES),
+      spatial_tolerance_pixels: 1,
+      spatial_match_policy:
+        'symmetric-chebyshev-r1-directional-min-plus-histogram-capacity-v1',
+      threshold_percent_max: { 0.5: 2, 1: 1, 3: 0.25, 6: 0.05 },
+      quiet_threshold_percent_max: { 10: 0.01, 15: 0.001 },
+      presence_multiplicity_percent_max: 0.25,
+      bias_db_max: 0.5,
+      warm_reference_fingerprint:
+        'c92bc8ac4159c2759645cbf5948077ce024d55d633373a6b2aed5c1a7b547dc9',
+    },
+    wave: 'w2',
+  }
   const qualityProfileId = sha256Identity(quality)
   const identity = {
     schema: 1,

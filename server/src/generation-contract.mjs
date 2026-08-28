@@ -10,8 +10,12 @@ const ENV_NAME = /^[A-Z][A-Z0-9_]*$/
 const QUALIFICATION_FILE = /^qualification-[0-9a-f]{64}\.json$/
 const W1_ACCEPTED_PROFILE = 'w1-z12-accepted-v1'
 const W2_SPATIAL_PROFILE = 'w2-z13-spatial-v1'
+const PUBLISHED_QUALITY_PROFILES = new Set([
+  W1_ACCEPTED_PROFILE,
+  W2_SPATIAL_PROFILE,
+])
 const W2_SPATIAL_IMPLEMENTATION_SHA256 =
-  '86017b21cbd43af615afb52628db902e4cea9014339c929110655975e4fbcaf3'
+  'dbb8b6b187c5ada0a55fc183a70d42cd7ab43921a593c794648ed2cc22e5e596'
 const W2_SPATIAL_WARM_REFERENCE_FINGERPRINT =
   'c92bc8ac4159c2759645cbf5948077ce024d55d633373a6b2aed5c1a7b547dc9'
 export const W2_SPATIAL_POPULATION_SCOPES = Object.freeze({
@@ -177,35 +181,11 @@ export function validateScorerContract(contract, label = 'quality', profileName 
   if (profileName === W2_SPATIAL_PROFILE || Object.hasOwn(contract, 'spatial_match_policy')) {
     requireCondition(profileName === undefined || profileName === W2_SPATIAL_PROFILE,
       label + ' spatial scorer is bound to the wrong profile')
-    exactKeys(contract, [
-      'bias_db_max',
-      'implementation_sha256',
-      'population_scopes',
-      'presence_multiplicity_percent_max',
-      'quiet_threshold_percent_max',
-      'schema',
-      'spatial_match_policy',
-      'spatial_tolerance_pixels',
-      'threshold_percent_max',
-      'warm_reference_fingerprint',
-    ], label + ' spatial scorer_contract')
-    requireCondition(contract.schema === 'w2-z13-spatial-scorer-v2'
-      && contract.implementation_sha256 === W2_SPATIAL_IMPLEMENTATION_SHA256
-      && contract.warm_reference_fingerprint === W2_SPATIAL_WARM_REFERENCE_FINGERPRINT
-      && canonicalJson(contract.population_scopes)
-        === canonicalJson(W2_SPATIAL_POPULATION_SCOPES)
-      && contract.spatial_tolerance_pixels === 1
-      && contract.spatial_match_policy
-        === 'symmetric-chebyshev-r1-directional-min-plus-histogram-capacity-v1'
-      && contract.presence_multiplicity_percent_max === 0.25
-      && contract.bias_db_max === 0.5,
-    label + ' spatial scorer identity or fixed bounds differ')
-    requireCondition(canonicalJson(contract.threshold_percent_max)
-      === canonicalJson({ 0.5: 2, 1: 1, 3: 0.25, 6: 0.05 }),
-    label + ' spatial painted ladder differs')
-    requireCondition(canonicalJson(contract.quiet_threshold_percent_max)
-      === canonicalJson({ 10: 0.01, 15: 0.001 }),
-    label + ' spatial quiet ladder differs')
+    requireCanonicalValue(
+      contract,
+      W2_SPATIAL_SCORER_CONTRACT,
+      label + ' spatial scorer contract',
+    )
     return contract
   }
   const allowed = new Set([
@@ -398,6 +378,16 @@ export function validateGenerationContract(contract) {
     'base generation does not anchor itself')
   }
   return contract
+}
+
+/** Reject structurally valid benchmark/test profiles at the public serving boundary. */
+export function validatePublishedGenerationContract(contract) {
+  const validated = validateGenerationContract(contract)
+  requireCondition(PUBLISHED_QUALITY_PROFILES.has(validated.quality_profile_name),
+    'published quality profile is unsupported: ' + validated.quality_profile_name)
+  requireCondition(PUBLISHED_QUALITY_PROFILES.has(validated.base_quality_profile_name),
+    'published base quality profile is unsupported: ' + validated.base_quality_profile_name)
+  return validated
 }
 
 /** Return the product-wide model-role identity bound inside a validated generation. */

@@ -7,13 +7,14 @@ import {
   W2_SPATIAL_POPULATION_SCOPES,
   sha256Identity,
   validateGenerationContract,
+  validatePublishedGenerationContract,
   validateScorerContract,
 } from '../src/generation-contract.mjs'
 
 const W1_PROFILE = 'w1-z12-accepted-v1'
 const W2_PROFILE = 'w2-z13-spatial-v1'
 const W2_IMPLEMENTATION_SHA256 =
-  '86017b21cbd43af615afb52628db902e4cea9014339c929110655975e4fbcaf3'
+  'dbb8b6b187c5ada0a55fc183a70d42cd7ab43921a593c794648ed2cc22e5e596'
 const W2_WARM_REFERENCE_FINGERPRINT =
   'c92bc8ac4159c2759645cbf5948077ce024d55d633373a6b2aed5c1a7b547dc9'
 
@@ -220,6 +221,21 @@ test('spatial scorer pins the exact implementation, reference, policy, and bound
 test('canonical accepted W1 base and W2 spatial tier both validate', () => {
   assert.equal(validateGenerationContract(acceptedW1Generation()).deployment, 'base')
   assert.equal(validateGenerationContract(spatialGeneration()).tier, 'z13')
+  assert.equal(validatePublishedGenerationContract(acceptedW1Generation()).deployment, 'base')
+  assert.equal(validatePublishedGenerationContract(spatialGeneration()).tier, 'z13')
+})
+
+test('published boundary rejects a self-consistent unknown quality profile', () => {
+  const contract = spatialGeneration()
+  contract.quality_profile_name = 'w2-z13-spatial-v2'
+  contract.quality.profile_name = contract.quality_profile_name
+  contract.quality.scorer_contract = structuredClone(genericScorer)
+  resealGeneration(contract)
+  assert.equal(validateGenerationContract(contract).quality_profile_name, 'w2-z13-spatial-v2')
+  assert.throws(
+    () => validatePublishedGenerationContract(contract),
+    /published quality profile is unsupported/,
+  )
 })
 
 test('W2 named profile rejects semantic drift after both identities are recomputed', () => {
