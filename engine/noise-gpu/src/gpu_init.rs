@@ -152,6 +152,9 @@ pub(crate) fn warm_device_on(with_stream: bool) -> (Arc<CudaDevice>, LineFunctio
         symbols.push("line_multifidelity_compact_packed_w1");
     }
     if multifidelity_cartesian_unbinned_anchor_enabled() {
+        // W2 loads only the exact cubin, but role attestation also binds the PTX bytes.
+        // Keep the const-folded fallback artifact embedded for byte-for-byte verification.
+        std::hint::black_box(SCATTER_PTX);
         noise_gpu::load_embedded_cubin_exact(
             &dev,
             SCATTER_CUBIN,
