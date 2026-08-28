@@ -178,6 +178,11 @@ MODEL_SOURCE_DIRS = (
     "engine/source-reader",
     "engine/tile-painter",
 )
+MODEL_SOURCE_PRUNED_DIRS = frozenset({"target", "tests"})
+# Recipe identity pinned in published generation contracts. Workspace
+# [profile.release] is CODE_VER's job (layer-codever GLOBAL_BUILD), not this
+# digest — hashing it here would churn live line_model_role_sha256 on a
+# profile-only edit.
 MODEL_SOURCE_GLOBALS = (
     ".cargo/config.toml",
     "rust-toolchain.toml",
@@ -593,16 +598,32 @@ def model_source_recipe_sha256(product_root: Path) -> str:
         root = product_root / relative_root
         if not root.is_dir():
             raise ContractError(f"model source directory is absent: {relative_root}")
-        for path in sorted(root.rglob("*")):
-            relative = path.relative_to(product_root).as_posix()
-            if path.is_symlink():
-                raise ContractError(f"model source closure contains a symlink: {relative}")
-            relative_parts = path.relative_to(product_root).parts
-            if not path.is_file() or "target" in relative_parts or "tests" in relative_parts:
-                continue
-            if path.suffix not in {".rs", ".cu", ".cuh"} and path.name != "Cargo.toml":
-                continue
-            records.append((relative, sha256_file(path)))
+        # Crate-local target/ names are shims to the workspace target.
+        # pathlib rglob raises on those symlinks (and re-lists one level
+        # through them). Prune by name, then fail closed on any other
+        # directory symlink so a relocated source dir cannot silently drop
+        # files from the published recipe digest.
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            dirnames[:] = sorted(
+                name for name in dirnames if name not in MODEL_SOURCE_PRUNED_DIRS
+            )
+            for name in dirnames:
+                child = Path(dirpath) / name
+                if child.is_symlink():
+                    relative = child.relative_to(product_root).as_posix()
+                    raise ContractError(
+                        f"model source closure contains a symlink: {relative}"
+                    )
+            for name in sorted(filenames):
+                path = Path(dirpath) / name
+                relative = path.relative_to(product_root).as_posix()
+                if path.is_symlink():
+                    raise ContractError(f"model source closure contains a symlink: {relative}")
+                if not path.is_file():
+                    continue
+                if path.suffix not in {".rs", ".cu", ".cuh"} and path.name != "Cargo.toml":
+                    continue
+                records.append((relative, sha256_file(path)))
     for relative in MODEL_SOURCE_GLOBALS:
         path = product_root / relative
         if not path.is_file() or path.is_symlink():

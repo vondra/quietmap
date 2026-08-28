@@ -287,6 +287,57 @@ class ModelRoleSpecTests(unittest.TestCase):
             shutil.copytree(product, nested)
             self.assertEqual(expected, model_source_recipe_sha256(nested))
 
+    def test_model_source_digest_ignores_crate_target_shims(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for directory in (
+                "engine/noise-compute", "engine/noise-gpu/kernels",
+                "engine/source-reader", "engine/tile-painter", ".cargo",
+            ):
+                (root / directory).mkdir(parents=True, exist_ok=True)
+            for crate in ("noise-compute", "noise-gpu", "source-reader", "tile-painter"):
+                (root / f"engine/{crate}/Cargo.toml").write_text(
+                    "[package]\nname='fixture'\n", encoding="utf-8"
+                )
+            (root / "engine/noise-gpu/kernels/qm_fixture.cuh").write_text(
+                "#define FIXTURE 1\n", encoding="utf-8"
+            )
+            (root / ".cargo/config.toml").write_text("[build]\n", encoding="utf-8")
+            (root / "rust-toolchain.toml").write_text("[toolchain]\n", encoding="utf-8")
+            before = model_source_recipe_sha256(root)
+            decoy = root / "engine/target/release/decoy.rs"
+            decoy.parent.mkdir(parents=True)
+            decoy.write_text("fn decoy() {}\n", encoding="utf-8")
+            (root / "engine/noise-compute/target").symlink_to("../target")
+            test_decoy = root / "engine/noise-compute/tests/helpers.rs"
+            test_decoy.parent.mkdir()
+            test_decoy.write_text("fn helper() {}\n", encoding="utf-8")
+            self.assertEqual(before, model_source_recipe_sha256(root))
+
+    def test_model_source_digest_rejects_non_shim_directory_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for directory in (
+                "engine/noise-compute", "engine/noise-gpu/kernels",
+                "engine/source-reader", "engine/tile-painter", ".cargo",
+            ):
+                (root / directory).mkdir(parents=True, exist_ok=True)
+            for crate in ("noise-compute", "noise-gpu", "source-reader", "tile-painter"):
+                (root / f"engine/{crate}/Cargo.toml").write_text(
+                    "[package]\nname='fixture'\n", encoding="utf-8"
+                )
+            (root / "engine/noise-gpu/kernels/qm_fixture.cuh").write_text(
+                "#define FIXTURE 1\n", encoding="utf-8"
+            )
+            (root / ".cargo/config.toml").write_text("[build]\n", encoding="utf-8")
+            (root / "rust-toolchain.toml").write_text("[toolchain]\n", encoding="utf-8")
+            elsewhere = root / "elsewhere"
+            elsewhere.mkdir()
+            (elsewhere / "sneaky.rs").write_text("fn sneaky() {}\n", encoding="utf-8")
+            (root / "engine/noise-compute/vendor").symlink_to(elsewhere)
+            with self.assertRaisesRegex(ContractError, "symlink: engine/noise-compute/vendor"):
+                model_source_recipe_sha256(root)
+
     def test_unknown_family_field_is_rejected(self) -> None:
         self.validate_mutation(lambda spec: spec["families"]["surface-production"].update(foo=1))
 

@@ -2,7 +2,8 @@
 """Per-layer code_ver for the world build's incremental-regen stamps.
 code_ver[L] = a CONTENT set-hash over SHARED ∪ L's EXCLUSIVE files, where SHARED = the
 heatmap COMPUTE closure (the 4 compute crates' production *.rs/*.cu/*.cuh/Cargo.toml + the global
-build config .cargo/config.toml / rust-toolchain and the selected model-role spec) MINUS every
+build config .cargo/config.toml / rust-toolchain, engine/Cargo.toml workspace profile, and the
+selected model-role spec) MINUS every
 layer's exclusive files. Cargo.lock is
 EXCLUDED — it is host/feature-dependent (a gpu build adds CUDA deps), so hashing it cv-gated every
 gpu-line box off the cpu-only planner's cv (see closure_files). A content hash,
@@ -31,6 +32,9 @@ EXCLUDE_BINS = {
 GLOBAL_BUILD = (
     ".cargo/config.toml", ".cargo/config", "rust-toolchain.toml", "rust-toolchain",
     "scripts/model-role-spec.json",
+    # Workspace [profile.release] lives here; member profiles are ignored. Omit this
+    # and a profile-only edit leaves every CODE_VER[layer] unchanged.
+    "engine/Cargo.toml",
 )
 REQUIRED_GLOBAL_BUILD = ("scripts/model-role-spec.json",)
 
