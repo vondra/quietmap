@@ -173,7 +173,7 @@ function tierGeneration(base: ReturnType<typeof baseGeneration>) {
     scorer_contract: {
       schema: 'w2-z13-spatial-scorer-v2',
       implementation_sha256:
-        'dbb8b6b187c5ada0a55fc183a70d42cd7ab43921a593c794648ed2cc22e5e596',
+        '4864c9f2925a2146a72e08f026deca75b3f099150d789c268e28ad2693ff638d',
       population_scopes: structuredClone(W2_SPATIAL_POPULATION_SCOPES),
       spatial_tolerance_pixels: 1,
       spatial_match_policy:
