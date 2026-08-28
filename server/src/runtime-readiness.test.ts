@@ -626,7 +626,7 @@ test('readiness rejects an unsupported quality profile in a later tier pack', as
     /pack p002 has an unsupported published generation: .*published quality profile is unsupported/)
 })
 
-test('readiness requires an immutable content-addressed qualification closure for fenced tiers', async (t) => {
+test('readiness accepts a fenced-tier manifest without a closure and validates legacy closures when present', async (t) => {
   const fixture = await readinessFixture()
   t.after(async () => rm(fixture.root, { recursive: true, force: true }))
   const bundle = await writeTierBundle(fixture, spatialGeneration(fixture.generation))
@@ -644,11 +644,14 @@ test('readiness requires an immutable content-addressed qualification closure fo
     filesystemCacheMs: 0,
   })()
 
-  const missingReference = structuredClone(manifest)
-  delete (missingReference as { qualification_closure?: unknown }).qualification_closure
-  await writeFile(manifestPath, JSON.stringify(missingReference))
-  assert.match((await check()).errors.pmtiles ?? '', /invalid qualification closure/)
+  // New tier packs carry no closure at all — absence is healthy, not an error.
+  const withoutClosure = structuredClone(manifest)
+  delete (withoutClosure as { qualification_closure?: unknown }).qualification_closure
+  await writeFile(manifestPath, JSON.stringify(withoutClosure))
+  const healthy = await check()
+  assert.equal(healthy.errors.pmtiles, undefined)
 
+  // Legacy archives still carry one; when present it must remain sealed and content-addressed.
   const closurePath = join(fixture.pmtilesDir, bundle.qualification_closure.file)
   await chmod(closurePath, 0o644)
   await writeFile(manifestPath, JSON.stringify(manifest))

@@ -50,7 +50,7 @@ use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -93,12 +93,6 @@ struct GenerationContract {
     dataset_year: u64,
     raster_generation_id: String,
     line_model_role_sha256: String,
-}
-
-#[derive(Clone)]
-struct QualificationClosureReference {
-    file: String,
-    sha256: String,
 }
 
 /// Declares Brotli in the pmtiles header while passing bytes through verbatim —
@@ -521,14 +515,6 @@ fn read_generation_contract(path: &Path, slot: PublicationSlot) -> Result<Genera
         .with_context(|| format!("validate generation contract {}", path.display()))
 }
 
-fn sha256_bytes(bytes: &[u8]) -> String {
-    let mut hex = String::with_capacity(GENERATION_ID_HEX_LENGTH);
-    for byte in Sha256::digest(bytes) {
-        write!(hex, "{byte:02x}").expect("write SHA-256 to String");
-    }
-    hex
-}
-
 fn read_coverage_r4(path: &Path) -> Result<Vec<String>> {
     let bytes = read_regular_file_without_following_symlink(path, "coverage file")?;
     let text = String::from_utf8(bytes)
@@ -561,57 +547,6 @@ fn read_coverage_r4(path: &Path) -> Result<Vec<String>> {
         bail!("--coverage-r4 {} contains duplicate cells", path.display());
     }
     Ok(coverage)
-}
-
-fn read_staged_qualification_closure(
-    path: &Path,
-    out_dir: &Path,
-) -> Result<QualificationClosureReference> {
-    let metadata = fs::symlink_metadata(path).with_context(|| {
-        format!(
-            "qualification closure {} cannot be inspected",
-            path.display()
-        )
-    })?;
-    if !metadata.is_file() {
-        bail!(
-            "qualification closure {} is not a regular file",
-            path.display()
-        );
-    }
-    if metadata.permissions().mode() & 0o222 != 0 {
-        bail!(
-            "qualification closure {} is writable; it must already be staged read-only",
-            path.display()
-        );
-    }
-    let bytes = read_regular_file_without_following_symlink(path, "qualification closure")?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes)
-        .with_context(|| format!("qualification closure {} is not valid JSON", path.display()))?;
-    if !value.is_object() {
-        bail!(
-            "qualification closure {} must contain a JSON object",
-            path.display()
-        );
-    }
-    let sha256 = sha256_bytes(&bytes);
-    let file = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .context("qualification closure has no UTF-8 basename")?
-        .to_string();
-    let expected = format!("qualification-{sha256}.json");
-    if file != expected {
-        bail!("qualification closure basename must be {expected}, got {file:?}");
-    }
-    if path.parent() != Some(out_dir) {
-        bail!(
-            "qualification closure {} must already be staged directly in {}",
-            path.display(),
-            out_dir.display()
-        );
-    }
-    Ok(QualificationClosureReference { file, sha256 })
 }
 
 fn proof_u64(proof: &serde_json::Map<String, serde_json::Value>, field: &str) -> Result<u64> {
@@ -1197,7 +1132,6 @@ struct TierPack {
     pack: String,
     coverage_r4: Vec<String>,
     generation: GenerationContract,
-    qualification_closure: QualificationClosureReference,
 }
 
 impl TierPack {
@@ -1313,7 +1247,6 @@ struct CliArguments {
     pack: Option<String>,
     coverage_r4: Option<PathBuf>,
     generation_contract: PathBuf,
-    qualification_closure: Option<PathBuf>,
 }
 
 fn next_cli_value(arguments: &mut impl Iterator<Item = String>, flag: &str) -> Result<String> {
@@ -1333,7 +1266,6 @@ fn parse_cli_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Cl
     let mut pack = None;
     let mut coverage_r4 = None;
     let mut generation_contract = None;
-    let mut qualification_closure = None;
     let mut arguments = arguments.into_iter();
 
     while let Some(argument) = arguments.next() {
@@ -1373,15 +1305,6 @@ fn parse_cli_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Cl
                     "--generation-contract",
                 )?));
             }
-            "--qualification-closure" => {
-                if qualification_closure.is_some() {
-                    bail!("--qualification-closure may be supplied only once");
-                }
-                qualification_closure = Some(PathBuf::from(next_cli_value(
-                    &mut arguments,
-                    "--qualification-closure",
-                )?));
-            }
             value if value.starts_with("--") => bail!("unknown option {value:?}"),
             value => positional.push(value.to_string()),
         }
@@ -1391,8 +1314,7 @@ fn parse_cli_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Cl
         anyhow::anyhow!(
             "usage: tile-store-pack <store-root> <out-dir> <build-id (b<N>)> \
              --generation-contract <file> [--layer L]... \
-             [--tier <zoom> --pack p<N> --coverage-r4 <file> \
-             --qualification-closure <file>]"
+             [--tier <zoom> --pack p<N> --coverage-r4 <file>]"
         )
     })?;
     if !build.starts_with('b')
@@ -1408,12 +1330,7 @@ fn parse_cli_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Cl
 
     let tier_shape = (tier.is_some(), pack.is_some(), coverage_r4.is_some());
     let tier = match tier_shape {
-        (false, false, false) => {
-            if qualification_closure.is_some() {
-                bail!("--qualification-closure is only valid with a tier pack");
-            }
-            None
-        }
+        (false, false, false) => None,
         (true, true, true) => {
             let tier_zoom = tier.expect("tier shape says tier is present");
             if !(13..=18).contains(&tier_zoom) {
@@ -1425,9 +1342,6 @@ fn parse_cli_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Cl
                 || !pack_id[1..].bytes().all(|byte| byte.is_ascii_digit())
             {
                 bail!("--pack must be p<N>, got {pack_id:?}");
-            }
-            if qualification_closure.is_none() {
-                bail!("tier publication requires --qualification-closure");
             }
             if !layers.is_empty() {
                 bail!("--tier packs the whole tier store set; --layer is not combinable");
@@ -1446,7 +1360,6 @@ fn parse_cli_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Cl
         pack,
         coverage_r4,
         generation_contract,
-        qualification_closure,
     })
 }
 
@@ -1455,7 +1368,6 @@ fn main() -> Result<()> {
     //        --generation-contract <file> [--layer L]...
     //        tile-store-pack <tier-root> <out-dir> <build-id> --tier 13
     //        --pack p001 --coverage-r4 <file> --generation-contract <file>
-    //        --qualification-closure <file>
     // With --layer, only the named layers are packed and the manifest MERGES:
     // untouched layers keep their previous archive + build id — a road-only
     // republish costs one layer's Brotli, not all eight (owner ask 2026-07-09).
@@ -1470,19 +1382,13 @@ fn main() -> Result<()> {
         .tier
         .map_or(PublicationSlot::Base, PublicationSlot::Tier);
     let generation = read_generation_contract(&cli.generation_contract, slot)?;
-    let tier_mode = match (
-        cli.tier,
-        cli.pack.as_ref(),
-        cli.coverage_r4.as_ref(),
-        cli.qualification_closure.as_ref(),
-    ) {
-        (None, None, None, None) => None,
-        (Some(tier), Some(pack), Some(coverage), Some(closure)) => Some(TierPack {
+    let tier_mode = match (cli.tier, cli.pack.as_ref(), cli.coverage_r4.as_ref()) {
+        (None, None, None) => None,
+        (Some(tier), Some(pack), Some(coverage)) => Some(TierPack {
             tier,
             pack: pack.clone(),
             coverage_r4: read_coverage_r4(coverage)?,
             generation: generation.clone(),
-            qualification_closure: read_staged_qualification_closure(closure, &cli.out_dir)?,
         }),
         _ => bail!("invalid publication argument combination"),
     };
@@ -1965,13 +1871,6 @@ fn write_manifest(
             "layers": results.iter().map(|r| r.layer.clone()).collect::<Vec<_>>(),
             "generation": tier_pack.generation.value,
         }));
-        manifest.insert(
-            "qualification_closure".into(),
-            serde_json::json!({
-                "file": tier_pack.qualification_closure.file,
-                "sha256": tier_pack.qualification_closure.sha256,
-            }),
-        );
     }
     let json = serde_json::Value::Object(manifest).to_string();
 
@@ -2151,16 +2050,6 @@ mod tests {
         validate_generation_contract_for_slot(value, slot).expect("fixture is valid")
     }
 
-    fn qualification_closure_fixture(out_dir: &Path) -> Result<QualificationClosureReference> {
-        let bytes = br#"{"qualification":"fixture"}
-"#;
-        let sha256 = sha256_bytes(bytes);
-        let path = out_dir.join(format!("qualification-{sha256}.json"));
-        fs::write(&path, bytes)?;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o444))?;
-        read_staged_qualification_closure(&path, out_dir)
-    }
-
     #[test]
     fn publication_cli_requires_fence_and_rejects_crossed_shapes() {
         let parse = |arguments: &[&str]| {
@@ -2176,19 +2065,6 @@ mod tests {
                 "out",
                 "b1",
                 "--generation-contract",
-                "base.json",
-                "--qualification-closure",
-                "qualification.json",
-            ])
-            .is_err(),
-            "a base publication cannot claim a tier closure"
-        );
-        assert!(
-            parse(&[
-                "store",
-                "out",
-                "b1",
-                "--generation-contract",
                 "tier.json",
                 "--tier",
                 "13",
@@ -2196,7 +2072,7 @@ mod tests {
                 "p001",
             ])
             .is_err(),
-            "a tier publication must include coverage and qualification closure"
+            "a tier publication must include coverage"
         );
         assert!(
             parse(&[
@@ -2211,8 +2087,6 @@ mod tests {
                 "p001",
                 "--coverage-r4",
                 "coverage.txt",
-                "--qualification-closure",
-                "qualification.json",
                 "--layer",
                 "road",
             ])
@@ -2255,10 +2129,8 @@ mod tests {
             "coverage.txt",
             "--generation-contract",
             "tier.json",
-            "--qualification-closure",
-            "qualification.json",
         ])
-        .expect("fenced tier CLI shape");
+        .expect("tier CLI shape");
         assert_eq!(tier.tier, Some(13));
         assert_eq!(tier.pack.as_deref(), Some("p001"));
     }
@@ -2376,27 +2248,6 @@ mod tests {
             assert!(read_generation_contract(&symlink, PublicationSlot::Base).is_err());
         }
 
-        let malformed_closure = dir.path().join("qualification-invalid.json");
-        fs::write(&malformed_closure, b"{")?;
-        fs::set_permissions(&malformed_closure, fs::Permissions::from_mode(0o444))?;
-        assert!(read_staged_qualification_closure(&malformed_closure, dir.path()).is_err());
-        let non_object_closure = dir.path().join("qualification-array.json");
-        fs::write(&non_object_closure, b"[]")?;
-        fs::set_permissions(&non_object_closure, fs::Permissions::from_mode(0o444))?;
-        assert!(read_staged_qualification_closure(&non_object_closure, dir.path()).is_err());
-        let writable_closure = dir.path().join("qualification-writable.json");
-        fs::write(&writable_closure, b"{}")?;
-        assert!(read_staged_qualification_closure(&writable_closure, dir.path()).is_err());
-        let closure_directory = dir.path().join("qualification-directory.json");
-        fs::create_dir(&closure_directory)?;
-        assert!(read_staged_qualification_closure(&closure_directory, dir.path()).is_err());
-        #[cfg(unix)]
-        {
-            let closure_symlink = dir.path().join("qualification-symlink.json");
-            std::os::unix::fs::symlink(&malformed_closure, &closure_symlink)?;
-            assert!(read_staged_qualification_closure(&closure_symlink, dir.path()).is_err());
-        }
-
         let coverage = dir.path().join("coverage.txt");
         fs::write(&coverage, "841e355ffffffff\n841e309ffffffff\n")?;
         assert_eq!(
@@ -2433,13 +2284,11 @@ mod tests {
 
         // Tier pack b2: token archives + the tiers index entry.
         let tier_generation = generation_fixture(PublicationSlot::Tier(13));
-        let qualification_closure = qualification_closure_fixture(&out_dir)?;
         let tier_pack = TierPack {
             tier: 13,
             pack: "p001".to_string(),
             coverage_r4: vec!["841e309ffffffff".to_string(), "841e355ffffffff".to_string()],
             generation: tier_generation.clone(),
-            qualification_closure: qualification_closure.clone(),
         };
         let mut tier_snapshots = Vec::new();
         for layer in PUBLISHED_LAYERS {
@@ -2498,14 +2347,6 @@ mod tests {
             true
         );
         assert_eq!(
-            manifest["qualification_closure"]["file"],
-            qualification_closure.file
-        );
-        assert_eq!(
-            manifest["qualification_closure"]["sha256"],
-            qualification_closure.sha256
-        );
-        assert_eq!(
             pack0["layers"].as_array().map(|l| l.len()),
             Some(PUBLISHED_LAYERS.len()),
             "index lists every packed token"
@@ -2535,7 +2376,6 @@ mod tests {
             pack: "p001".to_string(),
             coverage_r4: vec!["841e309ffffffff".to_string()],
             generation: tier_generation,
-            qualification_closure,
         };
         let mut dup_snapshots = Vec::new();
         for layer in PUBLISHED_LAYERS {
@@ -2553,8 +2393,8 @@ mod tests {
         );
         assert!(err.is_err(), "duplicate tier pack id must fail");
 
-        // A full pack for a different base generation atomically retires every tier token,
-        // the index, and its qualification closure instead of relabeling old W2 bytes.
+        // A full pack for a different base generation atomically retires every tier token
+        // and the index instead of relabeling old W2 bytes.
         let mut next_base = base_generation.clone();
         next_base.generation_id = "9".repeat(GENERATION_ID_HEX_LENGTH);
         next_base.base_generation_id = next_base.generation_id.clone();

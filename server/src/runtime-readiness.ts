@@ -297,7 +297,12 @@ async function validateManifestQualificationClosure(
     }
     return
   }
-
+  // Qualification closures are legacy campaign evidence (removed from the packer
+  // 2026-08-28): new tier packs carry none, old archives still do. Validate one only
+  // when it is present; its absence on a tiered manifest is not a readiness error.
+  if (manifest.qualification_closure === undefined) {
+    return
+  }
   let reference: { file: string; sha256: string }
   try {
     reference = validateQualificationClosureReference(manifest.qualification_closure)
