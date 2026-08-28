@@ -1,7 +1,7 @@
 /**
  * READ-ONLY enrichment-invariant scanner (A3/C2/R5 of the 2026-06 audit wave) —
- * the acceptance gate after every reset + re-enrich (see migrations/README.md)
- * and a CI tripwire: exits non-zero when any invariant is violated.
+ * the acceptance gate after every reset + re-enrich, and a CI tripwire:
+ * exits non-zero when any invariant is violated.
  *
  * Capability-aware per the /gg W5 verdict: instead of hardcoding "class>=5 +
  * national source = violation", each rule reads the source's declared

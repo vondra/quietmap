@@ -9,8 +9,6 @@ on:
       - engine/**
       - rust-toolchain.toml
       - scripts/check-fast.sh
-      - scripts/check-source-reader-napi.mjs
-      - server/src/workers/noise-onfly-worker.mjs
   push:
     branches: [main]
     paths:
@@ -20,8 +18,6 @@ on:
       - engine/**
       - rust-toolchain.toml
       - scripts/check-fast.sh
-      - scripts/check-source-reader-napi.mjs
-      - server/src/workers/noise-onfly-worker.mjs
 
 permissions:
   contents: read
@@ -42,9 +38,6 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version: 22.15.0
       - name: Check committed whitespace
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
