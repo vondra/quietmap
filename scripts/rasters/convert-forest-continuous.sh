@@ -10,9 +10,8 @@
 #   scripts/rasters/convert-forest-continuous.sh --all         # binary-tree census
 #   scripts/rasters/convert-forest-continuous.sh --list FILE   # tiles from FILE
 #
-# ONE process owns the shared VRT builds — never run multiple instances
-# concurrently (parallelism happens INSIDE via xargs; concurrent instances
-# would race on rebuilding the same .vrt files).
+# Tile conversion parallelizes via xargs; each run owns its own VRT dir.
+# Still one instance per tile set — same-tile .raw writes are not atomic.
 #
 # STAGING output: data/enrichment/global/forest-continuous/<TILE>.raw — the
 # live prepared/rasters/forest tree is untouched; Wave 1 swaps the whole tree
@@ -28,15 +27,21 @@ GRID=3601
 
 mkdir -p "$OUT_DIR"
 
-# Build the source mosaics once (VRTs are cheap indirection, no data copied).
-TCD_VRT="$OUT_DIR/.tcd-2023.vrt"
+# VRTs are build scaffolding, not products. They must not sit next to staged
+# .raw files: a tree swap that copies OUT_DIR (including hidden names) into
+# prepared/rasters/forest/ makes the raster-generation fence fail-closed.
+rm -f "$OUT_DIR"/.tcd-2023.vrt "$OUT_DIR"/.hansen-treecover.vrt \
+    "$OUT_DIR"/.hansen-lossyear.vrt
+VRT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/forest-cont-vrt.XXXXXX")
+trap 'rm -rf "$VRT_DIR"' EXIT
+TCD_VRT="$VRT_DIR/tcd-2023.vrt"
 if ls "$TCD_DIR"/*.tif &> /dev/null; then
     # -vrtnodata 255: tiles not (yet) downloaded must read as NODATA in the
     # mosaic gaps, never as 0 % canopy — 0 is a real value inside coverage.
     gdalbuildvrt -q -overwrite -vrtnodata 255 -srcnodata 255 "$TCD_VRT" "$TCD_DIR"/*.tif
 fi
-TC_VRT="$OUT_DIR/.hansen-treecover.vrt"
-LY_VRT="$OUT_DIR/.hansen-lossyear.vrt"
+TC_VRT="$VRT_DIR/hansen-treecover.vrt"
+LY_VRT="$VRT_DIR/hansen-lossyear.vrt"
 gdalbuildvrt -q -overwrite "$TC_VRT" "$HANSEN_DIR"/treecover2000/*.tif
 gdalbuildvrt -q -overwrite "$LY_VRT" "$HANSEN_DIR"/lossyear/*.tif
 

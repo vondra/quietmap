@@ -29,7 +29,8 @@ if [ "$HALF" != "rust" ]; then
   bash -n scripts/run-extraction.sh scripts/build-heatmap.sh scripts/osm-to-h3r4.sh \
     scripts/run-aircraft-extract.sh scripts/rasters-global.sh \
     scripts/check-surface-stream-concurrency-parity.sh \
-    scripts/ensure-engine-target-shims.sh start.sh
+    scripts/ensure-engine-target-shims.sh start.sh \
+    scripts/rasters/convert-forest-continuous.sh
 fi
 
 if [ "$HALF" != "node" ]; then
