@@ -1,4 +1,8 @@
 //! Strict parser and theorem verifier for the checked-in H0 production selection.
+//!
+//! Owner 2026-08-28: the deleted `h0_v3_*` / `h0-v3-analyze` campaign sources
+//! stay deleted. Regenerating the sealed evidence record is the over-engineering
+//! this cleanup removed; production `v2-h0` is this module, not those binaries.
 
 use std::fmt;
 

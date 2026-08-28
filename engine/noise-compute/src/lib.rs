@@ -30,9 +30,9 @@ pub mod traces;
 pub mod types;
 pub mod wkb;
 
-/// Checked-in numerical authority for a selected production H0 epoch. This
-/// module does not exist in the prep payload: enabling the feature before the
-/// terminal V3 verdict therefore fails closed in `build.rs`.
+/// Checked-in numerical authority for a selected production H0 epoch. Absent
+/// until `H0_QUADRATURE_ACCEPTED`; enabling the feature before that fails
+/// closed in `build.rs`. Do not restore deleted `h0_v3_*` sources to mint it.
 #[cfg(feature = "h0-production-selection")]
 pub mod h0_production_selection_record {
     include!("h0_production_selection_record.rs");
