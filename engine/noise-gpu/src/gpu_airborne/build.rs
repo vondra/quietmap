@@ -8,10 +8,10 @@ use anyhow::{Context, Result};
 use h3o::CellIndex;
 use noise_gpu::airborne::{for_each_region_chunk, is_cell_unbuildable, AirborneGpu};
 use noise_gpu::pack_airborne_segs;
-use raster_reader::fused_tile_z13::FusedTileZ13;
 use raster_reader::RealRasters;
 use tile_painter::accumulator::TileAccumulator;
 use tile_painter::r4_source_cache::R4SourceCache;
+use tile_painter::source_loader_obstacle::InteriorEstimate;
 use tile_painter::wire_hm3::{collapse_lden_u8, write_tile, SOURCE_ID_AIRCRAFT};
 
 use crate::prep::{build_dem_blocks, prep_cell, PrepBlock, PreparedCell};
@@ -79,24 +79,49 @@ pub(crate) fn max_candidates_per_chunk(vram_total_bytes: u64) -> usize {
     ((usable / BYTES_PER_CAND) as usize).clamp(8_000_000, 120_000_000)
 }
 
-/// Collapse one tile's accumulator to Lden bytes and write it — or, if the (re)build shrank the tile
-/// to silence, unlink any stale prior tile so an incremental recombine/pyramid can't read phantom
-/// energy (mirrors the CPU builder). Returns exact bytes written (zero for silence). One source of
-/// truth for the write + stale-unlink, shared by the one-pass (`gpu_build_cell_one_pass`) and M2
-/// chunked builds.
+/// Seal one airborne tile: collapse the accumulator to Lden bytes, then stamp the tile's
+/// building-interior display estimate. Split out of [`write_tile_accumulator`] so the stamp is
+/// pinned by a unit test with no `Args` or filesystem round trip.
+fn aircraft_tile_cells(
+    accum: &TileAccumulator,
+    n_days: u16,
+    interior: Option<&InteriorEstimate>,
+) -> Vec<u8> {
+    let mut cells = collapse_lden_u8(accum, n_days as f64);
+    if let Some(interior) = interior {
+        interior.apply(&mut cells);
+    }
+    cells
+}
+
+/// Collapse one tile's accumulator to Lden bytes, stamp the tile's building-interior display
+/// estimate, and write it — or, if the (re)build shrank the tile to silence, unlink any stale prior
+/// tile so an incremental recombine/pyramid can't read phantom energy (mirrors the CPU builder).
+/// Returns exact bytes written (zero for silence). One source of truth for the write + stale-unlink,
+/// shared by the one-pass (`gpu_build_cell_one_pass`) and M2 chunked builds.
+///
+/// The interior stamp is display semantics, not physics: an enclosed receiver shows its façade
+/// donor's value minus the envelope ΔL. EVERY layer of a tile must carry it, or the layers disagree
+/// indoors and the energy-summed `total` combine no longer commutes with the envelope loss — the
+/// CPU aircraft builder (`region_runner`) and both surface builders always did, this writer did not,
+/// so it painted the airborne layer 20–35 dB louder than road/rail inside every footprint. Measured
+/// against the W2 exact-CPU etalon on 2026-08-28: 1 921 cells at exactly +20.0 dB (unclassified
+/// footprints ≤ 6 m, `EnvelopeClass::Industrial`) and 72 at exactly +25.0 dB (> 6 m, `Default`) on
+/// tile 13/4406/2782 alone. `None` = a raster-fallback region with no footprints to classify.
 fn write_tile_accumulator(
     args: &Args,
     n_days: u16,
     tx: u32,
     ty: u32,
     accum: &TileAccumulator,
+    interior: Option<&InteriorEstimate>,
 ) -> Result<usize> {
     let out = args
         .output
         .join(args.zoom.to_string())
         .join(tx.to_string())
         .join(format!("{ty}.bin"));
-    let cells = collapse_lden_u8(accum, n_days as f64);
+    let cells = aircraft_tile_cells(accum, n_days, interior);
     let written = write_tile(&out, &cells, SOURCE_ID_AIRCRAFT, !args.write_empty)?;
     if written > 0 {
         Ok(written)
@@ -106,18 +131,6 @@ fn write_tile_accumulator(
         }
         Ok(0)
     }
-}
-
-/// The `&FusedTileZ13` receiver-grid refs for a block's owned tiles, in `btiles` order — the index
-/// math `((ty-by)*batch_n + (tx-bx))` that locates each tile in its batch lives ONCE here, shared by
-/// the one-pass and chunked scatter (a divergence would scatter against the wrong receiver grid).
-fn block_tile_refs(block: &PrepBlock) -> Vec<&FusedTileZ13> {
-    let (bx, by, bn) = (block.bx, block.by, block.batch.batch_n);
-    block
-        .btiles
-        .iter()
-        .map(|&(tx, ty)| &block.batch.tiles[((ty - by) * bn + (tx - bx)) as usize])
-        .collect()
 }
 
 /// One zeroed `TileAccumulator` per owned tile, parallel to each block's `btiles` — the running sum a
@@ -148,7 +161,7 @@ fn scatter_chunk_into_running(
     let upload = upload_started.elapsed();
     let scatter_started = Instant::now();
     for (block, run) in blocks.iter().zip(running.iter_mut()) {
-        let accums = gpu.scatter_region(&resident, &block_tile_refs(block))?;
+        let accums = gpu.scatter_region(&resident, &block.tile_refs())?;
         for (acc_run, acc_chunk) in run.iter_mut().zip(accums.iter()) {
             acc_run.merge_from(acc_chunk);
         }
@@ -166,8 +179,9 @@ fn write_running(
 ) -> Result<(usize, usize, usize)> {
     let (mut written, mut skipped, mut output_bytes) = (0usize, 0usize, 0usize);
     for (block, run) in blocks.iter().zip(running.iter()) {
-        for (&(tx, ty), accum) in block.btiles.iter().zip(run.iter()) {
-            let bytes = write_tile_accumulator(args, n_days, tx, ty, accum)?;
+        for (slot, &(tx, ty)) in block.btiles.iter().enumerate() {
+            let interior = block.interiors[slot].as_ref();
+            let bytes = write_tile_accumulator(args, n_days, tx, ty, &run[slot], interior)?;
             if bytes > 0 {
                 written += 1;
                 output_bytes += bytes;
@@ -257,10 +271,10 @@ pub(crate) fn gpu_build_cell_chunked(
     let views: Vec<_> = arcs.iter().flat_map(|a| a.airborne.views()).collect();
     let source_load = source_load_started.elapsed();
 
-    // DEM tile-blocks (same topology as the one-pass prep, built ONCE, reused across chunks) + a
-    // zeroed running accumulator per owned tile.
+    // DEM tile-blocks + interior estimates (same topology and stamp as the one-pass prep, built
+    // ONCE, reused across chunks) + a zeroed running accumulator per owned tile.
     let raster_started = Instant::now();
-    let blocks = build_dem_blocks(rasters, z, bn, tiles);
+    let blocks = build_dem_blocks(rasters, &args.h3r4_dir, z, bn, r4, tiles)?;
     let raster = raster_started.elapsed();
     let accumulator_started = Instant::now();
     let mut running = new_running(&blocks);
@@ -363,7 +377,57 @@ pub(crate) fn process_region_gpu(
     r4: u64,
     tiles: &[(u32, u32)],
 ) -> Result<(usize, usize)> {
-    let p = prep_cell(rasters, cache, z, bn, r4, tiles)?;
+    let p = prep_cell(rasters, cache, &args.h3r4_dir, z, bn, r4, tiles)?;
     let built = build_prepared_cell(gpu, cache, rasters, args, n_days, z, bn, r4, p, tiles)?;
     Ok((built.written, built.skipped))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use noise_compute::envelope::EnvelopeClass;
+    use raster_reader::fused_tile_z13::TILE_PX;
+    use tile_painter::wire_hm3::{dequantise_lden, quantise_lden};
+
+    /// A tile writer that forgets the interior stamp paints the airborne layer 20-35 dB louder
+    /// than every other layer inside every building footprint — the defect this file carried
+    /// until 2026-08-28. Uniform energy over the whole tile makes the façade donor's value
+    /// independent of which outdoor pixel the distance transform picks, so the assertion tests
+    /// the stamp and nothing else.
+    #[test]
+    fn the_sealed_tile_carries_the_building_interior_stamp() {
+        const ENCLOSED: usize = 5 * TILE_PX + 7;
+        let n_days = 12u16;
+        let mut accum = TileAccumulator::new();
+        for py in 0..TILE_PX as u32 {
+            for px in 0..TILE_PX as u32 {
+                accum.add_energy_at(py, px, 0, 1.0e12);
+            }
+        }
+        let mut classes = vec![EnvelopeClass::Outdoor as u8; TILE_PX * TILE_PX];
+        classes[ENCLOSED] = EnvelopeClass::Default as u8;
+        let interior = InteriorEstimate::from_classes(classes);
+
+        let bare = aircraft_tile_cells(&accum, n_days, None);
+        let stamped = aircraft_tile_cells(&accum, n_days, Some(&interior));
+
+        let facade = dequantise_lden(bare[ENCLOSED]);
+        assert!(
+            facade > 30.0,
+            "fixture must sit above the render floor, got {facade} dB"
+        );
+        let delta = EnvelopeClass::Default
+            .delta_db()
+            .expect("enclosed class has a delta");
+        assert_eq!(stamped[ENCLOSED], quantise_lden(facade - delta));
+        assert_ne!(
+            stamped[ENCLOSED], bare[ENCLOSED],
+            "the stamp must change the enclosed pixel"
+        );
+        for (i, (&sealed, &raw)) in stamped.iter().zip(bare.iter()).enumerate() {
+            if i != ENCLOSED {
+                assert_eq!(sealed, raw, "outdoor pixel {i} must keep its façade value");
+            }
+        }
+    }
 }

@@ -802,7 +802,8 @@ pub(crate) fn run_stream(args: &Args, z: u8) -> Result<()> {
                     let cell_started = std::time::Instant::now();
                     announce_stream_cell_started(r4);
                     let tiles = region_tiles(r4, z);
-                    let prepared = prep_cell(&rasters, &mut cache, z, bn, r4, &tiles);
+                    let prepared =
+                        prep_cell(&rasters, &mut cache, &args.h3r4_dir, z, bn, r4, &tiles);
                     let prep_finished = std::time::Instant::now();
                     // A prep error (CPU/IO/source-load) is forwarded with the cell identity so the
                     // GPU thread emits `fail` and continues; otherwise a deterministic corrupt input
