@@ -16,17 +16,6 @@ path = "src/lib.rs"
 name = "screening_fixture"
 path = "src/bin/screening_fixture.rs"
 
-# CPU-only step-3 mechanism census. Reads frozen pair/candidate JSONL on stdin
-# and emits deterministic C/N/Q distributions through the landed H0 reducer.
-[[bin]]
-name = "h0-mechanism-census"
-path = "src/bin/h0_mechanism_census.rs"
-
-[[bin]]
-name = "verify-h0-production-selection"
-path = "src/bin/verify_h0_production_selection.rs"
-required-features = ["h0-production-selection"]
-
 [features]
 # Build-time numerical authority for the selected H0 line model. The feature is
 # intentionally unusable until the reviewed record exists and verifies.
