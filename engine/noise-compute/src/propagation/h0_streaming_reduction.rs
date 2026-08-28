@@ -266,57 +266,6 @@ where
     reduce_with_node_iterator(&mut iterator, candidates)
 }
 
-/// CPU-only V3 production arm at one pre-registered angular spacing.
-///
-/// The public V3 API validates the exact sweep grid before reaching this seam.
-/// CUDA and the frozen 3-degree H0 production candidate continue to call
-/// [`reduce_h0`].
-pub(crate) fn reduce_h0_with_theta<I>(
-    piece_in_receiver_frame: LinePiece,
-    layer: LineLayer,
-    theta_max_rad: f64,
-    candidates: I,
-) -> Result<H0Reduction, H0ReductionError>
-where
-    I: IntoIterator<Item = H0Candidate>,
-{
-    validate_pair_inputs(piece_in_receiver_frame)?;
-    let mut iterator = LineNodeIterator::with_selected_u_hints(
-        piece_in_receiver_frame,
-        [0.0, 0.0],
-        layer.d_floor_m(),
-        theta_max_rad,
-        0,
-        &[],
-    )?;
-    reduce_with_node_iterator(&mut iterator, candidates)
-}
-
-/// CPU-only judge nodes. Candidate hints have already passed the streaming
-/// reducer's orientation constructor and zero-drop storage gate.
-pub(crate) fn judge_nodes_with_u_hints(
-    piece_in_receiver_frame: LinePiece,
-    layer: LineLayer,
-    epsilon_rad: f64,
-    hint_capacity: usize,
-    selected_u_hints: &[f64],
-) -> Result<Vec<H0Node>, H0ReductionError> {
-    validate_pair_inputs(piece_in_receiver_frame)?;
-    let mut iterator = LineNodeIterator::with_selected_u_hints(
-        piece_in_receiver_frame,
-        [0.0, 0.0],
-        layer.d_floor_m(),
-        epsilon_rad,
-        hint_capacity,
-        selected_u_hints,
-    )?;
-    let mut nodes = Vec::with_capacity(H0_NODE_CAP);
-    while let Some(line_node) = iterator.next_checked()? {
-        nodes.push(h0_node_geometry(line_node)?);
-    }
-    Ok(nodes)
-}
-
 fn reduce_with_node_iterator<I>(
     iterator: &mut LineNodeIterator,
     candidates: I,
@@ -396,7 +345,6 @@ fn h0_node_geometry(line_node: LineNode) -> Result<H0Node, H0ReductionError> {
 #[cfg(test)]
 mod semantic_set_tests {
     use super::*;
-    use crate::h0_production_selection::H0_THETA_CAP_PAIRS;
 
     fn candidate(id: u64, endpoint0: (f64, f64), endpoint1: (f64, f64)) -> H0Candidate {
         H0Candidate::from_metric_segment(
@@ -477,32 +425,6 @@ mod semantic_set_tests {
         assert!(result.nodes().is_empty());
         assert!(result.admitted_mask_words().is_empty());
         assert_eq!(result.candidate_visit_count(), 1);
-    }
-
-    #[test]
-    fn every_reviewed_theta_runs_the_complete_streaming_reducer() {
-        let wall = candidate(0, (5.0, -1.0), (5.0, 1.0));
-        let exact_on_track_counts = [38, 48, 64, 94];
-        for (pair, expected_count) in H0_THETA_CAP_PAIRS.into_iter().zip(exact_on_track_counts) {
-            let reduction = reduce_h0_with_theta(
-                LinePiece {
-                    start_m: [-125.0, 0.0],
-                    end_m: [125.0, 0.0],
-                    emission_per_m: 1.0,
-                },
-                LineLayer::Rail,
-                f64::from_bits(pair.theta_radians_bits),
-                [wall],
-            )
-            .unwrap();
-            assert_eq!(reduction.nodes().len(), expected_count);
-            assert!(expected_count < pair.node_cap);
-            assert_eq!(
-                reduction.admitted_mask_words().len(),
-                expected_count.div_ceil(64)
-            );
-            assert!(reduction.any_node_is_admitted());
-        }
     }
 }
 

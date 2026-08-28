@@ -6,7 +6,7 @@
 //! against the per-country spec tables below; a file this manifest cannot
 //! classify THROWS at plan time — a new enricher cannot silently stay outside
 //! the chain. Non-`enrich-*` diagnostics (enrichment-status, audit-map-
-//! discontinuities, calibrate-lane-ratios, import-properties, bench/*) are
+//! discontinuities, calibrate-lane-ratios, bench/*) are
 //! deliberately not steps; `write_industrial.rs` emits site_subtype at extract
 //! time, so no backfill step is needed.
 //!

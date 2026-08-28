@@ -11,8 +11,6 @@ path = "src/lib.rs"
 [features]
 # CPU reference linked only by noise-gpu's separately compiled diagnostic role.
 h0-diagnostic = []
-# Fixed H0/V3 CPU experiment arm; it is a strict extension of the H0 reference.
-h0-v3 = ["h0-diagnostic"]
 
 [[bin]]
 name = "build-heatmap-aircraft"

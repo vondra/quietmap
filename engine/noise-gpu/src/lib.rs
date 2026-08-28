@@ -12,8 +12,6 @@ pub use embedded_cubin::{load_embedded_cubin_exact, load_embedded_cubin_or_ptx};
 /// `gpu-airborne` production builder (cudarc-backed, so gated on the `gpu` feature).
 #[cfg(feature = "gpu")]
 pub mod airborne;
-#[cfg(feature = "h0-v3")]
-pub mod h0_v3_field;
 pub mod tile_timing;
 
 #[cfg(feature = "gpu")]
