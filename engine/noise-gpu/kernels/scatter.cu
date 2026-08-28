@@ -4190,16 +4190,21 @@ extern "C" __global__ void line(
     // CHEAP PASS: price every pair, so `resid` is a bound over the WHOLE tail
     // before any of it is computed. This is the bound the superseded budget skip
     // already paid on every pair; what it buys now is a certain upper bound.
+    // W2 Cartesian exact forces meta[9]=0, so the walk below never consults
+    // resid — the cheap pass is then a second full nsrc scan that writes
+    // nothing the exact pass reads. Compact already skips it under
+    // COMPACT_BYTE_STOP=0; unbinned `line` must too.
 #if !V2_H0
-    for (int s = 0; s < nsrc; s++)
-        line_source(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
-                    rlat, rlon, ralt, refl, true, &seg[s * SOURCE_SEGMENT_STRIDE], &sp[s * 12], &semis[s * 24],
-                    barr, nbarr, obst,
-                    tprof, ed, comp, bld, forr, imdp, e0, e1, e2, kept, resid, npair, arcstat,
-                    hc_key, hc_lo, hc_hi, &arc_drops);
-#endif
-#if !V2_H0
-    double margin = bs_margin(npair);
+    double margin = 0.0;
+    if (stop_on) {
+        for (int s = 0; s < nsrc; s++)
+            line_source(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
+                        rlat, rlon, ralt, refl, true, &seg[s * SOURCE_SEGMENT_STRIDE], &sp[s * 12], &semis[s * 24],
+                        barr, nbarr, obst,
+                        tprof, ed, comp, bld, forr, imdp, e0, e1, e2, kept, resid, npair, arcstat,
+                        hc_key, hc_lo, hc_hi, &arc_drops);
+        margin = bs_margin(npair);
+    }
 #endif
     // THE WALK: exact per pair until [kept, kept+resid] pins one byte. No
     // barriers in this kernel, so a plain break is safe (line_binned_fused below
@@ -4830,8 +4835,9 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
     // keeps every lane on the same barrier schedule.
     // Stock needs price+exact passes for byte-stop. H0 has no bound and starts
     // directly at the exact pass; retaining the dead price scan would double
-    // source culls without changing one bit.
-    for (int pass = V2_H0 ? 1 : 0; pass < 2; ++pass) {
+    // source culls without changing one bit. Byte-stop off (meta[9]=0) is the
+    // same situation: resid is never consulted, so skip the cheap pass.
+    for (int pass = (V2_H0 || !stop_on) ? 1 : 0; pass < 2; ++pass) {
         bool ub_only = (pass == 0);
         if (!ub_only) margin = bs_margin(npair);
         for (int base = 0; base < nsrc; base += BIN_W * BIN_W) {
