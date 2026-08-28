@@ -47,7 +47,7 @@ const W1_ACCEPTED_SCORER_CONTRACT = Object.freeze({
   quiet_floor_db: 26,
   threshold_percent_max: Object.freeze({ 1: 30, 2: 15, 6: 1.5 }),
 })
-const W2_SPATIAL_SCORER_CONTRACT = Object.freeze({
+export const W2_SPATIAL_SCORER_CONTRACT = Object.freeze({
   schema: 'w2-z13-spatial-scorer-v2',
   implementation_sha256: W2_SPATIAL_IMPLEMENTATION_SHA256,
   population_scopes: W2_SPATIAL_POPULATION_SCOPES,

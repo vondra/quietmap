@@ -9,7 +9,10 @@ import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { W2_SPATIAL_POPULATION_SCOPES, sha256Identity } from '../generation-contract.mjs'
+import {
+  W2_SPATIAL_SCORER_CONTRACT,
+  sha256Identity,
+} from '../generation-contract.mjs'
 
 // PMTILES_BASE and TILE_ENV are captured from the env when heatmap-shared/tile-manifest-reader
 // load — point them at the fixture dir BEFORE importing (mirrors heatmap-pmtiles.test.ts's
@@ -170,21 +173,7 @@ function tierGeneration(base: ReturnType<typeof baseGeneration>) {
     producer_requirements: {
       worker_model_roles: { ...stockProducerRoles, 'gpu-line': 'w2-stride4' },
     },
-    scorer_contract: {
-      schema: 'w2-z13-spatial-scorer-v2',
-      implementation_sha256:
-        '4864c9f2925a2146a72e08f026deca75b3f099150d789c268e28ad2693ff638d',
-      population_scopes: structuredClone(W2_SPATIAL_POPULATION_SCOPES),
-      spatial_tolerance_pixels: 1,
-      spatial_match_policy:
-        'symmetric-chebyshev-r1-directional-min-plus-histogram-capacity-v1',
-      threshold_percent_max: { 0.5: 2, 1: 1, 3: 0.25, 6: 0.05 },
-      quiet_threshold_percent_max: { 10: 0.01, 15: 0.001 },
-      presence_multiplicity_percent_max: 0.25,
-      bias_db_max: 0.5,
-      warm_reference_fingerprint:
-        'c92bc8ac4159c2759645cbf5948077ce024d55d633373a6b2aed5c1a7b547dc9',
-    },
+    scorer_contract: structuredClone(W2_SPATIAL_SCORER_CONTRACT),
     wave: 'w2',
   }
   const qualityProfileId = sha256Identity(quality)

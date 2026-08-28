@@ -19,6 +19,18 @@ export const W2_SPATIAL_POPULATION_SCOPES: Readonly<{
   'wbench-orig': 'four-h3/490-rows/per-changed-layer'
   'wbench-s': 'mixed-pieces/374-rows/per-changed-layer'
 }>
+export const W2_SPATIAL_SCORER_CONTRACT: Readonly<{
+  schema: string
+  implementation_sha256: string
+  population_scopes: typeof W2_SPATIAL_POPULATION_SCOPES
+  spatial_tolerance_pixels: number
+  spatial_match_policy: string
+  threshold_percent_max: Readonly<Record<string, number>>
+  quiet_threshold_percent_max: Readonly<Record<string, number>>
+  presence_multiplicity_percent_max: number
+  bias_db_max: number
+  warm_reference_fingerprint: string
+}>
 
 export function canonicalJson(value: unknown): string
 export function sha256Identity(value: unknown): string

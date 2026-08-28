@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  W2_SPATIAL_POPULATION_SCOPES,
+  W2_SPATIAL_SCORER_CONTRACT,
   sha256Identity,
   validateGenerationContract,
   validatePublishedGenerationContract,
@@ -13,10 +13,6 @@ import {
 
 const W1_PROFILE = 'w1-z12-accepted-v1'
 const W2_PROFILE = 'w2-z13-spatial-v1'
-const W2_IMPLEMENTATION_SHA256 =
-  '4864c9f2925a2146a72e08f026deca75b3f099150d789c268e28ad2693ff638d'
-const W2_WARM_REFERENCE_FINGERPRINT =
-  'c92bc8ac4159c2759645cbf5948077ce024d55d633373a6b2aed5c1a7b547dc9'
 
 const genericScorer = {
   bias_db_max: 0.5,
@@ -31,18 +27,7 @@ const w1Scorer = {
   quiet_floor_db: 26,
   threshold_percent_max: { 1: 30, 2: 15, 6: 1.5 },
 }
-const spatialScorer = {
-  schema: 'w2-z13-spatial-scorer-v2',
-  implementation_sha256: W2_IMPLEMENTATION_SHA256,
-  population_scopes: structuredClone(W2_SPATIAL_POPULATION_SCOPES),
-  spatial_tolerance_pixels: 1,
-  spatial_match_policy: 'symmetric-chebyshev-r1-directional-min-plus-histogram-capacity-v1',
-  threshold_percent_max: { 0.5: 2, 1: 1, 3: 0.25, 6: 0.05 },
-  quiet_threshold_percent_max: { 10: 0.01, 15: 0.001 },
-  presence_multiplicity_percent_max: 0.25,
-  bias_db_max: 0.5,
-  warm_reference_fingerprint: W2_WARM_REFERENCE_FINGERPRINT,
-}
+const spatialScorer = structuredClone(W2_SPATIAL_SCORER_CONTRACT)
 
 const stockProducerRoles = {
   'cpu-airborne': 'stock',
