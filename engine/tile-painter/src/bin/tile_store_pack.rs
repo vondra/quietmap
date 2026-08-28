@@ -318,6 +318,17 @@ impl PublisherProof {
     fn read(path: &Path) -> Result<Self> {
         Self::from_metadata(path, &fs::metadata(path)?)
     }
+
+    /// The fields that identify a FILE, for comparing a recorded proof against one read back
+    /// later. ctime is excluded: it advances on metadata operations that change no byte of
+    /// content, and hardlinking an archive is exactly that. Since `validate_manifest_layers`
+    /// re-validates every RETAINED layer, one hardlinked archive would otherwise permanently
+    /// refuse every later partial or tier pack over that manifest. Full struct equality (ctime
+    /// included) is still the right test for "did this file change while I was reading it" —
+    /// see `sha256_file`.
+    fn identity(&self) -> (u64, u64, u64, i128) {
+        (self.dev, self.ino, self.size, self.mtime_ns)
+    }
 }
 
 /// Open one publication input without following a final symlink, then read from that same file
@@ -640,7 +651,7 @@ fn validate_manifest_entry(out_dir: &Path, layer: &str, value: &serde_json::Valu
     }
     let archive_path = out_dir.join(file);
     let actual = PublisherProof::read(&archive_path)?;
-    if actual != expected {
+    if actual.identity() != expected.identity() {
         bail!(
             "manifest layer {layer} publisher_proof does not match {}",
             archive_path.display()
@@ -2523,6 +2534,31 @@ mod tests {
         );
         assert_eq!(bytes, 3);
         assert_eq!(proof, PublisherProof::read(&path)?);
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_proof_survives_hardlinking_the_published_archive() -> Result<()> {
+        let dir = pack_test_scratch()?;
+        let file = "total.b1.pmtiles";
+        let path = dir.path().join(file);
+        fs::write(&path, b"abc")?;
+        let (sha256, _, proof) = sha256_file(&path)?;
+        let manifest_entry = entry(file, &sha256, &proof);
+        validate_manifest_entry(dir.path(), "total", &manifest_entry)?;
+
+        // Hardlinking bumps ctime and nothing else. The proof must still validate, or one linked
+        // archive would block every later partial/tier pack that retains this layer.
+        fs::hard_link(&path, dir.path().join("total.b1.pmtiles.link"))?;
+        validate_manifest_entry(dir.path(), "total", &manifest_entry)?;
+
+        // Clock-independent half of the same claim: a proof whose recorded ctime differs from the
+        // file's is still the same file. Without this the test would go vacuous on a filesystem
+        // whose ctime granularity swallowed the link.
+        let mut moved_ctime = entry(file, &sha256, &proof);
+        moved_ctime["publisher_proof"]["ctime_ns"] =
+            serde_json::json!((proof.ctime_ns - 1_000_000_000).to_string());
+        validate_manifest_entry(dir.path(), "total", &moved_ctime)?;
         Ok(())
     }
 
