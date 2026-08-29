@@ -245,11 +245,11 @@ fn multifidelity_z13_profile() -> Result<Option<MultifidelityZ13Profile>> {
 /// share one stride instead of a compile-time anchor-count ABI.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MultifidelityStride {
-    // The current production selector chooses stride 16. The other reviewed
-    // lattices remain test fixtures for the shared reconstruction machinery.
+    // Production picks stride 16 for dense W1 roads and stride 8 for W1 rail; the
+    // W2 role compiles its own stride in. Stride4 and Stride32 remain test fixtures
+    // for the shared reconstruction machinery.
     #[allow(dead_code)]
     Stride4,
-    #[allow(dead_code)]
     Stride8,
     Stride16,
     #[allow(dead_code)]
@@ -314,7 +314,8 @@ struct MultifidelitySelectionInputs {
 }
 
 /// Use the active role's exact binned fallback for sparse roads, where exact work
-/// stays bounded by the much smaller source set, and stride16 for dense roads and all rail.
+/// stays bounded by the much smaller source set, stride16 for dense roads, and the
+/// denser stride8 for W1 rail (see the arm below for why rail can afford it).
 /// This is calibrated from normalized rows loaded from a region's
 /// `grid_disk(1)`: the z12 W1 rings measured 3,125–5,987 road rows in Sahara
 /// versus more than one million in Dobříš/Ruzyně. The 6,000-source boundary
@@ -332,6 +333,13 @@ fn select_multifidelity_stride(
         .unwrap_or(MultifidelityStride::Stride16);
     match inputs.layer {
         LineLayer::Road if inputs.nsrc <= ROAD_SPARSE_STOCK_MAX_SOURCES => None,
+        // W1 rail takes the denser lattice: measured on wbench-orig it halves rail's
+        // drift (>1 dB 21.4 % -> 10.3 %, back inside the contract) for +43 % on the
+        // rail work. Road stays on the selector's stride -- stride 8 costs +40 % there
+        // too, but road is the expensive layer and that would overshoot the wall.
+        // `requested_stride` is Some only for z13 (see the z-guard near the profile
+        // check), so this arm is the W1 path and cannot reach the W2 role.
+        LineLayer::Rail if inputs.requested_stride.is_none() => Some(MultifidelityStride::Stride8),
         LineLayer::Road | LineLayer::Rail => Some(stride),
     }
 }
@@ -4448,7 +4456,9 @@ mod multifidelity_tests {
                     nsrc,
                     requested_stride: None,
                 }),
-                Some(MultifidelityStride::Stride16)
+                // Rail takes the denser lattice regardless of source count: it is the
+                // cheaper line layer, so the accuracy costs far less there than on road.
+                Some(MultifidelityStride::Stride8)
             );
         }
         assert_eq!(
