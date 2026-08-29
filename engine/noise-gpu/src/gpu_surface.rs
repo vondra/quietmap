@@ -13,10 +13,11 @@
 //!   NOISE_GPU_PREPARED=/dev/shm/qmap/prepared DATA_YEAR=2026 \
 //!     gpu-surface --layers road,rail --bbox 38.27,-9.78,39.17,-8.50 --output OUT
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
@@ -28,8 +29,8 @@ use cudarc::driver::{
 use h3o::CellIndex;
 use noise_compute::admin;
 use noise_gpu::{
-    pack_sources, pack_tile, upload_obstacles, ObstDev, SurfaceKernelTileParameters, TileBuffers,
-    BIN_W, N_BINS,
+    pack_sources, pack_tile, upload_obstacles, ObstDev, SourceBuffers, SurfaceKernelTileParameters,
+    TileBuffers, BIN_W, N_BINS,
 };
 use raster_reader::fused_tile_z13::{default_batch_size, TileBatch};
 use raster_reader::RealRasters;
@@ -117,11 +118,11 @@ impl Drop for ChunkPermit {
 impl PipelineByteGate {
     /// Block until `bytes` fits in the budget, then reserve them. A request
     /// larger than the whole budget is admitted once nothing else is held —
-    /// one chunk always makes progress. Deadlock-freedom rests on TWO rules
-    /// (both violated by the first draft of this gate): (1) only BUILDER
-    /// threads ever wait here; (2) the GPU loop drops its chunk's permit
-    /// BEFORE joining the next builder, so a builder waiting for space can
-    /// never be waited ON by the thread that owns the space.
+    /// one chunk always makes progress. Deadlock-freedom: only BUILDER
+    /// threads wait here; GPU workers never `acquire`. The last
+    /// `Arc<ChunkPermit>` drop (a worker, after the slowest block of the
+    /// chunk) releases; that thread cannot wait on this gate, so a builder
+    /// waiting for space is never waited on by the thread that owns it.
     fn acquire(&self, bytes: u64) -> ChunkPermit {
         let mut held = self.held.lock().unwrap();
         while *held > 0 && *held + bytes > self.budget {
@@ -1651,33 +1652,31 @@ struct LayerStat {
 }
 
 impl LayerStat {
-    fn delta(&self, before: Option<&Self>) -> Self {
-        let before = before.cloned().unwrap_or_default();
-        Self {
-            t_kernel: self.t_kernel - before.t_kernel,
-            kernel_ms: self.kernel_ms - before.kernel_ms,
-            kernel_calls: self.kernel_calls - before.kernel_calls,
-            t_bins: self.t_bins - before.t_bins,
-            t_load: self.t_load - before.t_load,
-            t_h2d: self.t_h2d - before.t_h2d,
-            t_encode: self.t_encode - before.t_encode,
-            t_write: self.t_write - before.t_write,
-            t_cleanup: self.t_cleanup - before.t_cleanup,
-            max_diff: self.max_diff,
-            n_diff: self.n_diff - before.n_diff,
-            n_cmp: self.n_cmp - before.n_cmp,
-            n_le1: self.n_le1 - before.n_le1,
-            n_le3: self.n_le3 - before.n_le3,
-            n_baseline: self.n_baseline - before.n_baseline,
-            n_written: self.n_written - before.n_written,
-            bytes_written: self.bytes_written - before.bytes_written,
-            n_cleanup_checked: self.n_cleanup_checked - before.n_cleanup_checked,
-            n_cleanup_removed: self.n_cleanup_removed - before.n_cleanup_removed,
-            n_tiles: self.n_tiles - before.n_tiles,
-        }
+    fn absorb(&mut self, other: Self) {
+        self.t_kernel += other.t_kernel;
+        self.kernel_ms += other.kernel_ms;
+        self.kernel_calls += other.kernel_calls;
+        self.t_bins += other.t_bins;
+        self.t_load += other.t_load;
+        self.t_h2d += other.t_h2d;
+        self.t_encode += other.t_encode;
+        self.t_write += other.t_write;
+        self.t_cleanup += other.t_cleanup;
+        self.max_diff = self.max_diff.max(other.max_diff);
+        self.n_diff += other.n_diff;
+        self.n_cmp += other.n_cmp;
+        self.n_le1 += other.n_le1;
+        self.n_le3 += other.n_le3;
+        self.n_baseline += other.n_baseline;
+        self.n_written += other.n_written;
+        self.bytes_written += other.bytes_written;
+        self.n_cleanup_checked += other.n_cleanup_checked;
+        self.n_cleanup_removed += other.n_cleanup_removed;
+        self.n_tiles += other.n_tiles;
     }
 }
 
+#[allow(dead_code)]
 struct RegionResult {
     written: usize,
     skipped: usize,
@@ -1708,6 +1707,197 @@ struct Cfg {
 /// A layer's GPU-resident source buffers (`seg`, `sp`, `semis`), uploaded once per
 /// region (by the caller) and shared across every block/tile of that region.
 type LayerSrc = (LineLayer, (CudaSlice<f64>, CudaSlice<f64>, CudaSlice<f32>));
+
+/// CPU-side region payload loaded once, then swept by any number of GPU tile
+/// workers. Source H2D still happens per worker (each CUDA context owns its
+/// slices); the expensive host work — rows, packed SOA, barriers, obstacles —
+/// is not repeated per worker or per tile.
+struct HostRegion {
+    r4: u64,
+    region_rows: Vec<(LineLayer, Vec<LineRow>)>,
+    barriers: BarrierData,
+    obstacles: ObstacleData,
+    src_host: Vec<(LineLayer, SourceBuffers)>,
+}
+
+/// One cropped halo-block ready for `process_block`. The region's tiles in this
+/// block are independent GPU jobs over the same uploaded sources.
+struct GpuBlockJob {
+    host: Arc<HostRegion>,
+    cell: Arc<CellGate>,
+    batch: TileBatch,
+    interiors: Vec<Option<InteriorEstimate>>,
+    block_tiles: Vec<(u32, u32)>,
+    /// Last clone of the chunk byte-gate permit. Builders `acquire`; workers
+    /// never do. Drop of the last job releases the chunk — no circular wait.
+    #[allow(dead_code)]
+    permit: Arc<ChunkPermit>,
+}
+
+/// Per-cell completion gate so a loaded region's tiles can sit in the same
+/// queue as another region's tiles without mixing `done` accounting.
+struct CellGate {
+    r4: u64,
+    remaining: AtomicUsize,
+    crop_done: AtomicBool,
+    emitted: AtomicBool,
+    failed: Mutex<Option<String>>,
+    stats: Mutex<BTreeMap<&'static str, LayerStat>>,
+    total: usize,
+    t0: Instant,
+    raster: Mutex<std::time::Duration>,
+    interval_id: u64,
+    worker_slot: usize,
+    tiles: Vec<(u32, u32)>,
+    effective: Vec<LineLayer>,
+}
+
+/// Stdin cell queue shared by the reader thread and the coordinator.
+type StreamCellQueue = Arc<(Mutex<(VecDeque<(u64, Option<Vec<String>>)>, bool)>, Condvar)>;
+
+/// Stdout + evidence needed when the last halo-block of a cell finishes (any
+/// tile-worker may be the one that trips the gate).
+struct StreamSink {
+    out: Arc<Mutex<std::io::Stdout>>,
+    evidence: RendererEvidence,
+    cfg: Arc<Cfg>,
+    z: u8,
+    work: StreamCellQueue,
+}
+
+fn close_pending_stream_cells(work: &StreamCellQueue) {
+    let (lock, cv) = &**work;
+    let mut g = lock.lock().unwrap();
+    g.0.clear();
+    g.1 = true;
+    cv.notify_all();
+}
+
+/// Spans line then protocol `fail`. False means stdout is gone — stop claiming.
+fn emit_stream_fail(
+    sink: &StreamSink,
+    r4: u64,
+    worker_slot: usize,
+    interval_id: u64,
+    t0: Instant,
+    line: &str,
+) -> bool {
+    let mut spans = EngineCellSpans::new(r4, "gpu-surface", worker_slot, t0);
+    spans.finish_failed(t0.elapsed(), line);
+    sink.evidence
+        .region_terminal(
+            r4,
+            worker_slot,
+            interval_id,
+            RegionTerminalStatus::Fail,
+            0,
+            0,
+            Some(line),
+        )
+        .expect("emit GPU surface region failure");
+    write_stream_protocol_lines(sink, &spans.line(), line)
+}
+
+fn write_stream_protocol_lines(sink: &StreamSink, spans_line: &str, protocol_line: &str) -> bool {
+    let mut o = sink.out.lock().unwrap();
+    let ok = writeln!(o, "{spans_line}").is_ok()
+        && writeln!(o, "{protocol_line}").is_ok()
+        && o.flush().is_ok();
+    drop(o);
+    if !ok {
+        eprintln!("stream: stdout closed while emitting {protocol_line}");
+        close_pending_stream_cells(&sink.work);
+    }
+    ok
+}
+
+/// If a tile-worker panics between pop and `finish_block_job`, this still
+/// decrements inflight/`remaining` and closes stdin work so the coordinator
+/// cannot park forever in `wait_below` / `cv.wait`.
+struct JobAccountGuard<'a> {
+    cell: Arc<CellGate>,
+    pool: &'a TileJobPool,
+    sink: &'a StreamSink,
+    armed: bool,
+}
+
+impl Drop for JobAccountGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        *self.cell.failed.lock().unwrap() = Some("tile-worker panicked".into());
+        self.cell.remaining.fetch_sub(1, Ordering::SeqCst);
+        self.pool.job_finished();
+        close_pending_stream_cells(&self.sink.work);
+        let _ = emit_cell_if_complete(&self.cell, self.sink);
+    }
+}
+
+fn load_region_host(
+    r4: u64,
+    layers: &[LineLayer],
+    cfg: &Cfg,
+    stats: &mut BTreeMap<&'static str, LayerStat>,
+) -> Result<Option<HostRegion>> {
+    let cell = CellIndex::try_from(r4)?;
+    let ring: Vec<u64> = cell
+        .grid_disk::<Vec<_>>(1)
+        .into_iter()
+        .map(u64::from)
+        .collect();
+    let mut region_rows: Vec<(LineLayer, Vec<LineRow>)> = Vec::with_capacity(layers.len());
+    for &layer in layers {
+        let tl = Instant::now();
+        let r = layer.load_rows(&cfg.h3r4, &ring, cell)?;
+        stats.entry(layer.dir()).or_default().t_load += tl.elapsed().as_secs_f64();
+        region_rows.push((layer, r));
+    }
+    if region_rows.iter().all(|(_, rows)| rows.is_empty()) {
+        return Ok(None);
+    }
+    let barriers = if cfg.barriers_enabled {
+        BarrierData::load_for_r4s(&cfg.h3r4, &ring).context("load barriers")?
+    } else {
+        BarrierData::from_segments(Vec::new())
+    };
+    let obstacles = ObstacleData::load_for_r4s(&cfg.h3r4, r4, &ring)
+        .with_context(|| format!("load obstacles R4 {r4:015x}"))?;
+    let mut src_host: Vec<(LineLayer, SourceBuffers)> = Vec::with_capacity(region_rows.len());
+    for (layer, rows) in &region_rows {
+        let tp = Instant::now();
+        let packed = pack_sources(rows);
+        stats.entry(layer.dir()).or_default().t_bins += tp.elapsed().as_secs_f64();
+        src_host.push((*layer, packed));
+    }
+    Ok(Some(HostRegion {
+        r4,
+        region_rows,
+        barriers,
+        obstacles,
+        src_host,
+    }))
+}
+
+fn upload_host_sources(
+    dev: &Arc<CudaDevice>,
+    host: &HostRegion,
+    stats: &mut BTreeMap<&'static str, LayerStat>,
+) -> Result<(Vec<LayerSrc>, ObstDev)> {
+    let mut src_dev: Vec<LayerSrc> = Vec::with_capacity(host.src_host.len());
+    for (layer, packed) in &host.src_host {
+        let th = Instant::now();
+        let uploaded = (
+            dev.htod_copy(packed.seg.clone()).expect("seg"),
+            dev.htod_copy(packed.sp.clone()).expect("sp"),
+            dev.htod_copy(packed.semis.clone()).expect("semis"),
+        );
+        stats.entry(layer.dir()).or_default().t_h2d += th.elapsed().as_secs_f64();
+        src_dev.push((*layer, uploaded));
+    }
+    let obst_dev = upload_obstacles(dev, host.obstacles.set())?;
+    Ok((src_dev, obst_dev))
+}
 
 /// Compute every `(tile, layer)` in `block_tiles` on the GPU, using the caller-built
 /// shared halo (`batch`, cropped in parallel across the region's blocks), the region's
@@ -2547,103 +2737,25 @@ fn process_block(
     Ok(())
 }
 
-/// Build one centre-R4 region's owned tiles for every layer — the shared body of the batch loop
-/// and the --stream loop. Loads the region's grid_disk(1) rows + barriers once, uploads sources
-/// once, crops blocks in parallel (each rayon worker on its own persistent RASTERS instance —
-/// see the thread_local's decision-record comment), then runs the sequential GPU kernel loop.
-/// Returns the cell's written/skipped tile-layers plus its shared-raster wall for the event line.
-fn process_region(
-    r4: u64,
+/// Crop the region's halo-blocks in the bounded double-buffered pipeline and
+/// hand each ready chunk to `on_chunk`. The GPU sink (serial `process_block`,
+/// or enqueue-to-tile-workers) is the caller's; crop order stays sorted so
+/// output is byte-identical to the old build-everything-first path.
+fn run_block_pipeline(
     region_tiles: &[(u32, u32)],
-    layers: &[LineLayer],
     cfg: &Cfg,
-    dev: &Arc<CudaDevice>,
-    functions: &LineFunctions,
     prepared: &str,
-    stats: &mut BTreeMap<&'static str, LayerStat>,
-    prog: &mut Progress,
-) -> Result<RegionResult> {
-    let total = region_tiles.len() * layers.len();
-    let written0: usize = stats.values().map(|s| s.n_written).sum();
-    // Load every requested layer's rows ONCE for this region (grid_disk(1)).
-    let cell = CellIndex::try_from(r4)?;
-    let ring: Vec<u64> = cell
-        .grid_disk::<Vec<_>>(1)
-        .into_iter()
-        .map(u64::from)
-        .collect();
-    let mut region_rows: Vec<(LineLayer, Vec<LineRow>)> = Vec::with_capacity(layers.len());
-    for &layer in layers {
-        let tl = Instant::now();
-        let r = layer.load_rows(&cfg.h3r4, &ring, cell)?;
-        stats.entry(layer.dir()).or_default().t_load += tl.elapsed().as_secs_f64();
-        region_rows.push((layer, r));
-    }
-    // Skip a region whose grid_disk(1) ring holds NO line sources (every tile all-silent);
-    // preserve the all-silent cleanup so a direct-to-OUTPUT rebuild drops a prior build's tiles.
-    if region_rows.iter().all(|(_, rows)| rows.is_empty()) {
-        if let Some(root) = &cfg.output {
-            for l in layers {
-                let cleanup_started = Instant::now();
-                let mut removed = 0usize;
-                for &(tx, ty) in region_tiles {
-                    let path = Path::new(root)
-                        .join(l.dir())
-                        .join(cfg.z.to_string())
-                        .join(tx.to_string())
-                        .join(format!("{ty}.bin"));
-                    match std::fs::remove_file(&path) {
-                        Ok(()) => removed += 1,
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(error) => {
-                            return Err(error)
-                                .with_context(|| format!("rm stale {}", path.display()))
-                        }
-                    }
-                }
-                let stat = stats.entry(l.dir()).or_default();
-                stat.t_cleanup += cleanup_started.elapsed().as_secs_f64();
-                stat.n_cleanup_checked += region_tiles.len();
-                stat.n_cleanup_removed += removed;
-            }
-        }
-        prog.done += total;
-        return Ok(RegionResult {
-            written: 0,
-            skipped: total,
-            raster: std::time::Duration::ZERO,
-        });
-    }
-    let barrier_data = if cfg.barriers_enabled {
-        BarrierData::load_for_r4s(&cfg.h3r4, &ring).context("load barriers")?
-    } else {
-        BarrierData::from_segments(Vec::new())
-    };
-    // Vector obstacles (geodata-v2 1.6, QM_VECTOR_BUILDINGS=1): the same
-    // loader + policy as the CPU builder (all-or-raster, region cell required
-    // under partial, shard errors hard). Uploaded ONCE per region; the kernel
-    // reads it through the complete 14-slot table owned by
-    // `noise_gpu::upload_obstacles` (obst[0]==0 ⇒ raster mode; slot 5 == 0 ⇒
-    // E2 pruning disabled). There is deliberately no reserved pointer slot.
-    let obstacle_data = ObstacleData::load_for_r4s(&cfg.h3r4, r4, &ring)
-        .with_context(|| format!("load obstacles R4 {r4:015x}"))?;
-    let obst_dev = upload_obstacles(dev, obstacle_data.set())?;
-    // Upload each layer's sources to the GPU ONCE for this region.
-    let mut src_dev: Vec<LayerSrc> = Vec::with_capacity(region_rows.len());
-    for (layer, rows) in &region_rows {
-        let tp = Instant::now();
-        let s = pack_sources(rows);
-        stats.entry(layer.dir()).or_default().t_bins += tp.elapsed().as_secs_f64();
-        let th = Instant::now();
-        let uploaded = (
-            dev.htod_copy(s.seg).expect("seg"),
-            dev.htod_copy(s.sp).expect("sp"),
-            dev.htod_copy(s.semis).expect("semis"),
-        );
-        stats.entry(layer.dir()).or_default().t_h2d += th.elapsed().as_secs_f64();
-        src_dev.push((*layer, uploaded));
-    }
-    // Batch the region's tiles into grid-aligned blocks (one shared halo each).
+    obstacle_data: &ObstacleData,
+    mut on_chunk: impl FnMut(
+        Vec<(
+            (u32, u32),
+            TileBatch,
+            Vec<Option<InteriorEstimate>>,
+            Vec<(u32, u32)>,
+        )>,
+        ChunkPermit,
+    ) -> Result<()>,
+) -> Result<std::time::Duration> {
     let mut blocks: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
     for &(tx, ty) in region_tiles {
         blocks
@@ -2654,28 +2766,6 @@ fn process_region(
             .or_default()
             .push((tx, ty));
     }
-    // Crop block halos in a BOUNDED double-buffered pipeline: build window k+1
-    // on a scoped thread (internally a rayon par_iter — each worker keeps its
-    // persistent RASTERS thread_local, the twice-decided zero-sync design)
-    // while the main thread runs window k's GPU work. The GPU loop consumes
-    // the SAME sorted block order, so output is byte-identical to the old
-    // build-everything-first path (which materialised EVERY block at once —
-    // ~2.8 GiB/region measured at 10 m fields).
-    //
-    // RESIDENCY CONTRACT: host block bytes are bounded PROCESS-WIDE by the
-    // byte gate. ONE RAII permit per CHUNK, acquired by the builder for the
-    // chunk's summed pre-build estimate BEFORE any block is built (per-block
-    // permits inside the rayon collect deadlock once a chunk's aggregate
-    // exceeds the budget), corrected to the measured total after the build,
-    // and dropped by the GPU loop BEFORE it joins the next builder (a
-    // builder blocked on the gate must never be waited ON by the thread
-    // holding the bytes it needs). Only builder threads ever wait on the
-    // gate ⇒ no circular wait. The gate bounds RESIDENT chunk bytes; the
-    // per-block d_inner/H2D staging inside process_block is a transient of
-    // at most one block's halo (documented slack, covered by the default
-    // budget's headroom). `NOISE_GPU_PIPELINE_BLOCKS` (default 2, ≥1) is
-    // only the chunk granularity of the double buffer, not the memory
-    // contract.
     let block_keys: Vec<(u32, u32)> = blocks.keys().copied().collect();
     let window: usize = std::env::var("NOISE_GPU_PIPELINE_BLOCKS")
         .ok()
@@ -2683,10 +2773,6 @@ fn process_region(
         .filter(|&w: &usize| w >= 1)
         .unwrap_or(2);
     let raster_ns = std::sync::atomic::AtomicU64::new(0);
-    // A built block: its shared-halo batch plus, per batch slot, the tile's
-    // building-interior estimate (vector regions; painted tiles only) — baked
-    // here on the builder thread, next to the vector rx_refl bake, so the GPU
-    // loop never waits for it and the byte gate counts it.
     type Block = ((u32, u32), TileBatch, Vec<Option<InteriorEstimate>>);
     type Chunk = (Vec<Block>, ChunkPermit);
     let build_chunk = |keys: &[(u32, u32)]| -> Chunk {
@@ -2715,9 +2801,6 @@ fn process_region(
                         rasters,
                         obstacle_data.set().is_none(),
                     );
-                    // Vector mode: pre-bake vector reflection into rx_refl —
-                    // the rxar upload then carries it to the kernel unchanged
-                    // (the one shared helper, SPEC §3.8); only painted tiles.
                     let mut interiors: Vec<Option<InteriorEstimate>> =
                         (0..batch.tiles.len()).map(|_| None).collect();
                     for &(tx, ty) in &blocks[&(bx, by)] {
@@ -2758,48 +2841,122 @@ fn process_region(
     while current.as_ref().is_some_and(|(chunk, _)| !chunk.is_empty()) {
         let next_end = (start + window).min(block_keys.len());
         let next_range = start..next_end;
-        // The builder always gets joined and its chunk collected (RAII permit)
-        // even when a block fails — a stream worker survives a failed region,
-        // so a leaked reservation would permanently shrink the shared budget.
         let (built_next, gpu_err) = std::thread::scope(|scope| {
             let next_handle = (!next_range.is_empty())
                 .then(|| scope.spawn(|| build_chunk(&block_keys[next_range.clone()])));
             let mut err = None;
-            for (key, batch, interiors) in &current.as_ref().expect("loop guard").0 {
-                if let Err(e) = process_block(
-                    dev,
-                    functions,
-                    batch,
-                    interiors,
-                    cfg,
-                    &blocks[key],
-                    &region_rows,
-                    &src_dev,
-                    &barrier_data,
-                    &obst_dev,
-                    stats,
-                    prog,
-                ) {
+            if let Some((chunk, permit)) = current.take() {
+                let owned: Vec<_> = chunk
+                    .into_iter()
+                    .map(|(key, batch, interiors)| {
+                        let tiles = blocks[&key].clone();
+                        (key, batch, interiors, tiles)
+                    })
+                    .collect();
+                // The callback owns the permit: batch path drops it after
+                // process_block; the tile-queue path Arc's it onto each job so
+                // halo bytes stay charged until the GPU worker drops the job
+                // (PipelineByteGate: release when the GPU loop drops them).
+                if let Err(e) = on_chunk(owned, permit) {
                     err = Some(e);
-                    break;
                 }
             }
-            // Drop the consumed chunk (and its permit) BEFORE joining: the
-            // builder may be blocked on the gate waiting for exactly these
-            // bytes; joining first would deadlock.
-            drop(current.take());
             let built = next_handle.map(|h| h.join().expect("chunk builder panicked"));
             (built, err)
         });
         if let Some(e) = gpu_err {
-            drop(built_next); // RAII releases the unconsumed next chunk
+            drop(built_next);
             return Err(e);
         }
         current = built_next;
         start = next_end;
     }
-    let raster =
-        std::time::Duration::from_nanos(raster_ns.load(std::sync::atomic::Ordering::Relaxed));
+    Ok(std::time::Duration::from_nanos(
+        raster_ns.load(std::sync::atomic::Ordering::Relaxed),
+    ))
+}
+
+/// Build one centre-R4 region's owned tiles for every layer — the shared body of the batch loop
+/// and the --stream loop. Loads the region's grid_disk(1) rows + barriers once, uploads sources
+/// once, crops blocks in parallel (each rayon worker on its own persistent RASTERS instance —
+/// see the thread_local's decision-record comment), then runs the sequential GPU kernel loop.
+/// Returns the cell's written/skipped tile-layers plus its shared-raster wall for the event line.
+fn process_region(
+    r4: u64,
+    region_tiles: &[(u32, u32)],
+    layers: &[LineLayer],
+    cfg: &Cfg,
+    dev: &Arc<CudaDevice>,
+    functions: &LineFunctions,
+    prepared: &str,
+    stats: &mut BTreeMap<&'static str, LayerStat>,
+    prog: &mut Progress,
+) -> Result<RegionResult> {
+    let total = region_tiles.len() * layers.len();
+    let written0: usize = stats.values().map(|s| s.n_written).sum();
+    let Some(host) = load_region_host(r4, layers, cfg, stats)? else {
+        if let Some(root) = &cfg.output {
+            for l in layers {
+                let cleanup_started = Instant::now();
+                let mut removed = 0usize;
+                for &(tx, ty) in region_tiles {
+                    let path = Path::new(root)
+                        .join(l.dir())
+                        .join(cfg.z.to_string())
+                        .join(tx.to_string())
+                        .join(format!("{ty}.bin"));
+                    match std::fs::remove_file(&path) {
+                        Ok(()) => removed += 1,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            return Err(error)
+                                .with_context(|| format!("rm stale {}", path.display()))
+                        }
+                    }
+                }
+                let stat = stats.entry(l.dir()).or_default();
+                stat.t_cleanup += cleanup_started.elapsed().as_secs_f64();
+                stat.n_cleanup_checked += region_tiles.len();
+                stat.n_cleanup_removed += removed;
+            }
+        }
+        prog.done += total;
+        return Ok(RegionResult {
+            written: 0,
+            skipped: total,
+            raster: std::time::Duration::ZERO,
+        });
+    };
+    let (src_dev, obst_dev) = upload_host_sources(dev, &host, stats)?;
+    let region_rows = &host.region_rows;
+    let barrier_data = &host.barriers;
+    let obstacle_data = &host.obstacles;
+    let raster = run_block_pipeline(
+        region_tiles,
+        cfg,
+        prepared,
+        obstacle_data,
+        |chunk, permit| {
+            for (_key, batch, interiors, tiles) in &chunk {
+                process_block(
+                    dev,
+                    functions,
+                    batch,
+                    interiors,
+                    cfg,
+                    tiles,
+                    region_rows,
+                    &src_dev,
+                    barrier_data,
+                    &obst_dev,
+                    stats,
+                    prog,
+                )?;
+            }
+            drop(permit);
+            Ok(())
+        },
+    )?;
     let written: usize = stats.values().map(|s| s.n_written).sum::<usize>() - written0;
     Ok(RegionResult {
         written,
@@ -2808,11 +2965,380 @@ fn process_region(
     })
 }
 
+struct TileJobPool {
+    jobs: Mutex<VecDeque<GpuBlockJob>>,
+    cv: Condvar,
+    inflight: AtomicUsize,
+    closed: Mutex<bool>,
+}
+
+impl TileJobPool {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            jobs: Mutex::new(VecDeque::new()),
+            cv: Condvar::new(),
+            inflight: AtomicUsize::new(0),
+            closed: Mutex::new(false),
+        })
+    }
+
+    fn wait_idle(&self) {
+        let mut g = self.jobs.lock().unwrap();
+        while self.inflight.load(Ordering::SeqCst) > 0 {
+            g = self.cv.wait(g).unwrap();
+        }
+    }
+
+    /// Decrement inflight under the same mutex `wait_idle` waits on, so a
+    /// worker finishing between the idle-check and `cv.wait` cannot lose the
+    /// wakeup.
+    fn job_finished(&self) {
+        let _g = self.jobs.lock().unwrap();
+        self.inflight.fetch_sub(1, Ordering::SeqCst);
+        self.cv.notify_all();
+    }
+
+    fn wait_below(&self, watermark: usize) -> Result<()> {
+        let mut g = self.jobs.lock().unwrap();
+        while self.inflight.load(Ordering::SeqCst) > watermark {
+            g = self.cv.wait(g).unwrap();
+        }
+        Ok(())
+    }
+
+    fn close(&self) {
+        let _g = self.jobs.lock().unwrap();
+        *self.closed.lock().unwrap() = true;
+        self.cv.notify_all();
+    }
+}
+
+/// Closes the tile pool on every coordinator exit, including `?` and panic.
+struct PoolCloseGuard {
+    pool: Arc<TileJobPool>,
+}
+
+impl Drop for PoolCloseGuard {
+    fn drop(&mut self) {
+        self.pool.close();
+    }
+}
+
+fn emit_cell_if_complete(cell: &CellGate, sink: &StreamSink) -> Result<()> {
+    if !cell.crop_done.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    if cell.remaining.load(Ordering::SeqCst) != 0 {
+        return Ok(());
+    }
+    if cell
+        .emitted
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Ok(());
+    }
+    let fail_line = cell.failed.lock().unwrap().clone();
+    if let Some(err) = fail_line {
+        let wall = cell.t0.elapsed();
+        let line = format!("fail {:x} {err}", cell.r4);
+        let mut spans = EngineCellSpans::new(cell.r4, "gpu-surface", cell.worker_slot, cell.t0);
+        spans.finish_failed(wall, &line);
+        sink.evidence
+            .region_terminal(
+                cell.r4,
+                cell.worker_slot,
+                cell.interval_id,
+                RegionTerminalStatus::Fail,
+                0,
+                0,
+                Some(&line),
+            )
+            .expect("emit GPU surface region failure");
+        if !write_stream_protocol_lines(sink, &spans.line(), &line) {
+            return Err(anyhow::anyhow!("stream stdout closed"));
+        }
+        return Ok(());
+    }
+    let stats = cell.stats.lock().unwrap().clone();
+    let written: usize = stats.values().map(|s| s.n_written).sum();
+    let skipped = cell.total.saturating_sub(written);
+    let wall = cell.t0.elapsed();
+    let raster = *cell.raster.lock().unwrap();
+    let mut spans = EngineCellSpans::new(cell.r4, "gpu-surface", cell.worker_slot, cell.t0);
+    spans.metric_u64("owned_tiles", cell.tiles.len() as u64);
+    spans.metric_bool("cuda_event_timing_enabled", timing_enabled());
+    spans.metric_str(
+        "effective_layers",
+        &cell
+            .effective
+            .iter()
+            .map(|l| l.dir())
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    if !raster.is_zero() {
+        spans.push_aggregate_span("raster", raster, None, None, Some("surface-halo"));
+    }
+    let mut output_bytes = 0usize;
+    for layer in &cell.effective {
+        let name = layer.dir();
+        let delta = stats.get(name).cloned().unwrap_or_default();
+        if delta.t_load > 0.0 {
+            spans.push_aggregate_span(
+                "source_load",
+                std::time::Duration::from_secs_f64(delta.t_load),
+                Some(1),
+                None,
+                Some(name),
+            );
+        }
+        if delta.t_bins > 0.0 {
+            spans.push_aggregate_span(
+                "cpu_prepare",
+                std::time::Duration::from_secs_f64(delta.t_bins),
+                None,
+                None,
+                Some(name),
+            );
+        }
+        if delta.t_h2d > 0.0 {
+            spans.push_aggregate_span(
+                "h2d",
+                std::time::Duration::from_secs_f64(delta.t_h2d),
+                None,
+                None,
+                Some(name),
+            );
+        }
+        if delta.kernel_calls > 0 {
+            spans.push_cuda_span(
+                "gpu_kernel",
+                std::time::Duration::from_secs_f64((delta.kernel_ms / 1_000.0).max(0.0)),
+                Some(delta.kernel_calls as u64),
+                Some(name),
+            );
+        }
+        if delta.n_tiles > 0 {
+            spans.push_aggregate_span(
+                "gpu_pipeline_composite",
+                std::time::Duration::from_secs_f64(delta.t_kernel.max(0.0)),
+                Some(delta.n_tiles as u64),
+                None,
+                Some(name),
+            );
+            spans.push_aggregate_span(
+                "encode",
+                std::time::Duration::from_secs_f64(delta.t_encode.max(0.0)),
+                Some(delta.n_tiles as u64),
+                None,
+                Some(name),
+            );
+        }
+        if delta.t_write > 0.0 {
+            spans.push_aggregate_span(
+                "encode_write_composite",
+                std::time::Duration::from_secs_f64(delta.t_write),
+                Some(delta.n_tiles as u64),
+                Some(delta.bytes_written as u64),
+                Some(name),
+            );
+        }
+        output_bytes += delta.bytes_written;
+    }
+    spans.finish_done(wall, written, skipped, Some(output_bytes));
+    if sink.evidence.is_enabled() {
+        let output_root = sink
+            .cfg
+            .output
+            .as_deref()
+            .map(Path::new)
+            .expect("GPU surface evidence requires --output");
+        for &(x, y) in &cell.tiles {
+            for layer in &cell.effective {
+                let output = output_root
+                    .join(layer.dir())
+                    .join(sink.z.to_string())
+                    .join(x.to_string())
+                    .join(format!("{y}.bin"));
+                sink.evidence
+                    .tile_terminal(
+                        cell.r4,
+                        layer.dir(),
+                        sink.z,
+                        x,
+                        y,
+                        output_root,
+                        &output,
+                        "all-periods-silent",
+                    )
+                    .expect("emit GPU surface tile terminal");
+            }
+        }
+    }
+    sink.evidence
+        .region_terminal(
+            cell.r4,
+            cell.worker_slot,
+            cell.interval_id,
+            RegionTerminalStatus::Done,
+            written,
+            skipped,
+            None,
+        )
+        .expect("emit GPU surface region terminal");
+    let line = format!(
+        "done {:x} {} {} {}",
+        cell.r4,
+        written,
+        skipped,
+        wall.as_millis()
+    );
+    if !write_stream_protocol_lines(sink, &spans.line(), &line) {
+        return Err(anyhow::anyhow!("stream stdout closed"));
+    }
+    Ok(())
+}
+
+fn process_region_via_tile_pool(
+    region_tiles: &[(u32, u32)],
+    cfg: &Cfg,
+    prepared: &str,
+    host: Arc<HostRegion>,
+    cell: &Arc<CellGate>,
+    pool: &TileJobPool,
+    watermark: usize,
+) -> Result<std::time::Duration> {
+    run_block_pipeline(
+        region_tiles,
+        cfg,
+        prepared,
+        &host.obstacles,
+        |chunk, permit| {
+            if chunk.is_empty() {
+                drop(permit);
+                return Ok(());
+            }
+            let permit = Arc::new(permit);
+            cell.remaining.fetch_add(chunk.len(), Ordering::SeqCst);
+            {
+                let mut q = pool.jobs.lock().unwrap();
+                pool.inflight.fetch_add(chunk.len(), Ordering::SeqCst);
+                for (_key, batch, interiors, tiles) in chunk {
+                    q.push_back(GpuBlockJob {
+                        host: Arc::clone(&host),
+                        cell: Arc::clone(cell),
+                        batch,
+                        interiors,
+                        block_tiles: tiles,
+                        permit: Arc::clone(&permit),
+                    });
+                }
+            }
+            pool.cv.notify_all();
+            pool.wait_below(watermark)
+        },
+    )
+}
+
+fn finish_block_job(
+    cell: &CellGate,
+    local_stats: &mut BTreeMap<&'static str, LayerStat>,
+    pool: &TileJobPool,
+    sink: &StreamSink,
+) {
+    let taken = std::mem::take(local_stats);
+    {
+        let mut cell_stats = cell.stats.lock().unwrap();
+        for (k, v) in taken {
+            cell_stats.entry(k).or_default().absorb(v);
+        }
+    }
+    cell.remaining.fetch_sub(1, Ordering::SeqCst);
+    pool.job_finished();
+    let _ = emit_cell_if_complete(cell, sink);
+}
+
+fn tile_worker_loop(pool: &TileJobPool, cfg: &Cfg, sink: &StreamSink) {
+    let (dev, functions) = warm_device_on(true);
+    let mut src_dev: Vec<LayerSrc> = Vec::new();
+    let mut obst_dev: Option<ObstDev> = None;
+    let mut cached_r4 = None;
+    let mut local_stats: BTreeMap<&'static str, LayerStat> = BTreeMap::new();
+    let mut prog = Progress {
+        done: 0,
+        total: 0,
+        last_beat: Instant::now(),
+    };
+    loop {
+        let job = {
+            let mut g = pool.jobs.lock().unwrap();
+            loop {
+                if let Some(job) = g.pop_front() {
+                    break Some(job);
+                }
+                if *pool.closed.lock().unwrap() {
+                    break None;
+                }
+                g = pool.cv.wait(g).unwrap();
+            }
+        };
+        let Some(job) = job else { break };
+        let mut account = JobAccountGuard {
+            cell: Arc::clone(&job.cell),
+            pool,
+            sink,
+            armed: true,
+        };
+        if job.cell.failed.lock().unwrap().is_some() {
+            account.armed = false;
+            finish_block_job(&job.cell, &mut local_stats, pool, sink);
+            continue;
+        }
+        if cached_r4 != Some(job.host.r4) {
+            match upload_host_sources(&dev, &job.host, &mut local_stats) {
+                Ok((src, obst)) => {
+                    src_dev = src;
+                    obst_dev = Some(obst);
+                    cached_r4 = Some(job.host.r4);
+                }
+                Err(e) => {
+                    *job.cell.failed.lock().unwrap() = Some(format!("{e:#}"));
+                    account.armed = false;
+                    finish_block_job(&job.cell, &mut local_stats, pool, sink);
+                    continue;
+                }
+            }
+        }
+        let obst = obst_dev.as_ref().expect("uploaded obstacles");
+        if let Err(e) = process_block(
+            &dev,
+            &functions,
+            &job.batch,
+            &job.interiors,
+            cfg,
+            &job.block_tiles,
+            &job.host.region_rows,
+            &src_dev,
+            &job.host.barriers,
+            obst,
+            &mut local_stats,
+            &mut prog,
+        ) {
+            *job.cell.failed.lock().unwrap() = Some(format!("{e:#}"));
+        }
+        account.armed = false;
+        finish_block_job(&job.cell, &mut local_stats, pool, sink);
+    }
+}
+
 /// STREAM mode (`--stream`): the persistent warm surface worker the cluster orchestrator feeds.
-/// CUDA context + scatter PTX + admin table resident, and a PER-THREAD RealRasters instance
-/// (thread_local RASTERS — zero cross-thread sync; see the decision record above: the shared
-/// store was tried and reverted, cache contention gutted crop throughput) reused across the
-/// whole cell stream, so each thread's mmap-LRU stays warm across regions.
+/// CUDA context + scatter PTX + admin table resident. Each R4 cell is loaded once
+/// (rows, packed sources, barriers, obstacles, cropped halo) into a shared
+/// halo-block queue; `QM_GPU_STREAM_WORKERS` GPU threads pull those blocks.
+/// A region's shared load is independent of which stream runs which of its
+/// owned tiles — true for every cell. Cells overlap in the queue so a dense
+/// cell's remaining tiles keep every worker busy after lighter cells drain.
 /// Reads output R4 cell IDs (one hex/line), prints `start <r4hex> <unix_ms>` before work, builds
 /// each cell's owned tiles, prints one `engine-spans-v1 {json}` evidence line, then `done <r4hex>
 /// <written> <skipped> <ms>` (or `fail <r4hex> <err>`) — the same protocol as gpu-airborne, so the
@@ -2827,8 +3353,6 @@ fn run_stream(
     output: Option<String>,
     prepared: &str,
 ) -> Result<()> {
-    use std::collections::VecDeque;
-    use std::sync::{Condvar, Mutex};
     let barriers_enabled = gpu_barriers_enabled();
     let cfg = Cfg {
         z,
@@ -2839,9 +3363,11 @@ fn run_stream(
         output,
         barriers_enabled,
     };
-    // FIXED N (default 2, NOT rayon thread count): each worker holds a whole region's source uploads +
-    // per-tile GPU scratch on its own stream, so N is bounded by VRAM/RAM, not cores. A halo-only
-    // cap is unsafe. 2 fits the 12 GB cards; QM_GPU_STREAM_WORKERS overrides.
+    // FIXED N (default 2, NOT rayon thread count): each worker holds per-tile GPU
+    // scratch on its own stream. The cell itself is loaded once and its owned
+    // tiles are independent jobs over that shared payload — true for every
+    // cell on Earth, not a per-run rebalance. 2 fits the 12 GB cards;
+    // QM_GPU_STREAM_WORKERS overrides.
     let n_workers: usize = env("QM_GPU_STREAM_WORKERS", "2")
         .parse()
         .unwrap_or(2)
@@ -2855,26 +3381,22 @@ fn run_stream(
             n_days: None,
             rayon_threads: rayon::current_num_threads(),
             stream_workers: n_workers,
-            region_concurrency_configured: n_workers,
-            region_concurrency_effective: n_workers,
+            region_concurrency_configured: 1,
+            region_concurrency_effective: 1,
             max_regions_per_claim: 1,
             layers: names.iter().map(|name| (*name).to_string()).collect(),
         },
     )?;
     eprintln!(
-        "stream: layers={names:?}, halo={halo_m:.0}m, batch={batch_n}, {n_workers} worker(s) — reading R4 cells from stdin"
+        "stream: layers={names:?}, halo={halo_m:.0}m, batch={batch_n}, {n_workers} tile-worker(s) — cells share a halo-block queue; any worker may run any tile of a loaded region"
     );
 
-    // Morton-locality streaming pool (mirrors gpu_airborne run_stream): a reader thread fills a shared
-    // queue in arrival (= the orchestrator's Morton) order; each warm worker pops ONE cell per lock
-    // acquire, so its serial-crop RealRasters keeps the grid_disk(1) ring-cache warm across the cells it
-    // builds while every CUDA stream stays fed (no worker monopolizes a batch).
-    // (queue of pending (cell, per-cell stale-layers-request) pairs, stream-closed flag) + a
-    // condvar — same shape as gpu_airborne::StreamQueue. The optional `Vec<String>` is the
-    // stdin line's `layers=` token (paint-pipeline-v4 PR#1 §3) — `None` = build every
-    // configured layer, today's behavior.
-    type Work = Arc<(Mutex<(VecDeque<(u64, Option<Vec<String>>)>, bool)>, Condvar)>;
-    let work: Work = Arc::new((Mutex::new((VecDeque::new(), false)), Condvar::new()));
+    // Stdin is a cell queue (Morton order from the orchestrator). The coordinator
+    // loads each cell once and enqueues its halo-blocks; GPU workers pull from
+    // that shared queue (cells overlap up to the inflight watermark). The
+    // optional `Vec<String>` is the stdin line's `layers=` token
+    // (paint-pipeline-v4 PR#1 §3) — `None` = build every configured layer.
+    let work: StreamCellQueue = Arc::new((Mutex::new((VecDeque::new(), false)), Condvar::new()));
     let out = Arc::new(Mutex::new(std::io::stdout()));
 
     let reader_work = Arc::clone(&work);
@@ -2906,305 +3428,168 @@ fn run_stream(
         cv.notify_all();
     });
 
-    let cfg = &cfg;
-    std::thread::scope(|scope| {
-        for worker_slot in 0..n_workers {
-            let work = Arc::clone(&work);
-            let out = Arc::clone(&out);
-            let evidence = evidence.clone();
-            scope.spawn(move || {
-                // Warm per-worker state: own CUDA stream (overlaps on the GPU) + own stats/prog;
-                // raster access via the per-rayon-thread RASTERS instances.
-                // Safe under UNIQUE centre-R4 ownership (the scheduler leases each cell once per stream):
-                // each cell's output tiles are disjoint, so two workers never write the same .bin.
-                let (dev, functions) = warm_device_on(true);
-                let mut stats: BTreeMap<&'static str, LayerStat> = BTreeMap::new();
-                let mut prog = Progress {
-                    done: 0,
-                    total: 0,
-                    last_beat: Instant::now(),
-                };
+    let cfg = Arc::new(cfg);
+    let pool = TileJobPool::new();
+    let sink = Arc::new(StreamSink {
+        out: Arc::clone(&out),
+        evidence: evidence.clone(),
+        cfg: Arc::clone(&cfg),
+        z,
+        work: Arc::clone(&work),
+    });
+    let watermark = n_workers.saturating_mul(2).max(2);
+    std::thread::scope(|scope| -> Result<()> {
+        let _close = PoolCloseGuard {
+            pool: Arc::clone(&pool),
+        };
+        for _ in 0..n_workers {
+            let pool = Arc::clone(&pool);
+            let cfg = Arc::clone(&cfg);
+            let sink = Arc::clone(&sink);
+            scope.spawn(move || tile_worker_loop(&pool, &cfg, &sink));
+        }
+
+        let worker_slot = 0usize; // one coordinator claims every cell; n_workers is tile-block concurrency
+        loop {
+            let cell: Option<(u64, Option<Vec<String>>)> = {
+                let (lock, cv) = &*work;
+                let mut g = lock.lock().unwrap();
                 loop {
-                    let cell: Option<(u64, Option<Vec<String>>)> = {
-                        let (lock, cv) = &*work;
-                        let mut g = lock.lock().unwrap();
-                        loop {
-                            if let Some(cell) = g.0.pop_front() {
-                                break Some(cell);
-                            }
-                            if g.1 {
-                                break None; // stream closed + drained → exit
-                            }
-                            g = cv.wait(g).unwrap();
-                        }
-                    };
-                    let Some((r4, req_layers)) = cell else { break };
-                    let interval_id = evidence
-                        .region_claim(r4, worker_slot)
-                        .expect("emit GPU surface region claim");
-                    announce_stream_cell_started(r4);
-                    let t = Instant::now();
-                    let mut spans = EngineCellSpans::new(r4, "gpu-surface", worker_slot, t);
-                    let tiles = region_tiles(r4, z);
-                    spans.metric_u64("owned_tiles", tiles.len() as u64);
-                    spans.metric_bool("cuda_event_timing_enabled", timing_enabled());
-                    // Narrow this process's configured layers down to the requested (stale)
-                    // subset for THIS cell — absent request = build every configured layer,
-                    // today's behavior (paint-pipeline-v4 PR#1 §3). The agent only sends
-                    // `layers=` for a strict subset of the group, so an EMPTY effective set
-                    // means worker-config↔plan drift — fail LOUD (/fail → parked), never a
-                    // hollow `done` that would let the hub seal an unbuilt stale layer.
-                    let (effective, skipped) =
-                        split_configured_layers(layers, req_layers.as_deref(), |l| l.dir());
-                    spans.metric_str(
-                        "effective_layers",
-                        &effective
-                            .iter()
-                            .map(|l| l.dir())
-                            .collect::<Vec<_>>()
-                            .join(","),
-                    );
-                    spans.metric_str(
-                        "h2d_coverage",
-                        "source-soa-and-per-tile; shared-block-halo unmeasured",
-                    );
-                    spans.metric_str(
-                        "cpu_prepare_coverage",
-                        "source-pack-and-per-tile-pack; shared-block-vector-pack unmeasured",
-                    );
-                    let stats_before = stats.clone();
-                    let line = if effective.is_empty() {
-                        let line = format!(
-                            "fail {r4:x} layers-request matches none of configured [{}]",
-                            skipped.join(",")
-                        );
-                        spans.finish_failed(t.elapsed(), &line);
-                        evidence
-                            .region_terminal(
-                                r4,
-                                worker_slot,
-                                interval_id,
-                                RegionTerminalStatus::Fail,
-                                0,
-                                0,
-                                Some(&line),
-                            )
-                            .expect("emit GPU surface region failure");
-                        line
-                    } else {
-                        let effective_names: Vec<&str> =
-                            effective.iter().map(|layer| layer.dir()).collect();
-                        let dependencies = evidence.region_dependencies(
-                            r4,
-                            Path::new(prepared),
-                            &cfg.h3r4,
-                            &tiles,
-                            z,
-                            cfg.halo_m,
-                            &effective_names,
-                            DependencyProfile::Surface,
-                        );
-                        match dependencies.and_then(|()| {
-                            process_region(
-                                r4, &tiles, &effective, cfg, &dev, &functions, prepared,
-                                &mut stats, &mut prog,
-                            )
-                        }) {
-                            Ok(result) => {
-                                let mut output_bytes = 0usize;
-                                if !result.raster.is_zero() {
-                                    spans.push_aggregate_span(
-                                        "raster",
-                                        result.raster,
-                                        None,
-                                        None,
-                                        Some("surface-halo"),
-                                    );
-                                }
-                                for layer in &effective {
-                                    let name = layer.dir();
-                                    let delta = stats
-                                        .get(name)
-                                        .expect("effective layer has stats")
-                                        .delta(stats_before.get(name));
-                                    spans.push_aggregate_span(
-                                        "source_load",
-                                        std::time::Duration::from_secs_f64(delta.t_load.max(0.0)),
-                                        Some(1),
-                                        None,
-                                        Some(name),
-                                    );
-                                    if delta.t_bins > 0.0 {
-                                        spans.push_aggregate_span(
-                                            "cpu_prepare",
-                                            std::time::Duration::from_secs_f64(delta.t_bins),
-                                            None,
-                                            None,
-                                            Some(name),
-                                        );
-                                    }
-                                    if delta.t_h2d > 0.0 {
-                                        spans.push_aggregate_span(
-                                            "h2d",
-                                            std::time::Duration::from_secs_f64(delta.t_h2d),
-                                            None,
-                                            None,
-                                            Some(name),
-                                        );
-                                    }
-                                    if delta.kernel_calls > 0 {
-                                        spans.push_cuda_span(
-                                            "gpu_kernel",
-                                            std::time::Duration::from_secs_f64(
-                                                (delta.kernel_ms / 1_000.0).max(0.0),
-                                            ),
-                                            Some(delta.kernel_calls as u64),
-                                            Some(name),
-                                        );
-                                    }
-                                    // This existing host timer deliberately includes H2D, the
-                                    // overlapped prep of the next tile, kernel wait and D2H. It is
-                                    // useful evidence, but not mislabeled as isolated GPU time.
-                                    if delta.n_tiles > 0 {
-                                        spans.push_aggregate_span(
-                                            "gpu_pipeline_composite",
-                                            std::time::Duration::from_secs_f64(
-                                                delta.t_kernel.max(0.0),
-                                            ),
-                                            Some(delta.n_tiles as u64),
-                                            None,
-                                            Some(name),
-                                        );
-                                        spans.push_aggregate_span(
-                                            "encode",
-                                            std::time::Duration::from_secs_f64(
-                                                delta.t_encode.max(0.0),
-                                            ),
-                                            Some(delta.n_tiles as u64),
-                                            None,
-                                            Some(name),
-                                        );
-                                    }
-                                    if delta.t_write > 0.0 {
-                                        spans.push_aggregate_span(
-                                            "encode_write_composite",
-                                            std::time::Duration::from_secs_f64(delta.t_write),
-                                            Some(delta.n_tiles as u64),
-                                            Some(delta.bytes_written as u64),
-                                            Some(name),
-                                        );
-                                    }
-                                    if delta.n_cleanup_checked > 0 {
-                                        let cleanup_component =
-                                            format!("{name}:stale-output-cleanup");
-                                        spans.push_aggregate_span(
-                                            "write",
-                                            std::time::Duration::from_secs_f64(
-                                                delta.t_cleanup.max(0.0),
-                                            ),
-                                            Some(delta.n_cleanup_checked as u64),
-                                            None,
-                                            Some(&cleanup_component),
-                                        );
-                                        spans.metric_u64(
-                                            format!("stale_outputs_removed_{name}"),
-                                            delta.n_cleanup_removed as u64,
-                                        );
-                                    }
-                                    output_bytes += delta.bytes_written;
-                                }
-                                let wall = t.elapsed();
-                                spans.finish_done(
-                                    wall,
-                                    result.written,
-                                    result.skipped,
-                                    Some(output_bytes),
-                                );
-                                if evidence.is_enabled() {
-                                    let output_root = cfg
-                                        .output
-                                        .as_deref()
-                                        .map(Path::new)
-                                        .expect("GPU surface evidence requires --output");
-                                    for &(x, y) in &tiles {
-                                        for &layer in &effective_names {
-                                            let output = output_root
-                                                .join(layer)
-                                                .join(z.to_string())
-                                                .join(x.to_string())
-                                                .join(format!("{y}.bin"));
-                                            evidence
-                                                .tile_terminal(
-                                                    r4,
-                                                    layer,
-                                                    z,
-                                                    x,
-                                                    y,
-                                                    output_root,
-                                                    &output,
-                                                    "all-periods-silent",
-                                                )
-                                                .expect("emit GPU surface tile terminal");
-                                        }
-                                    }
-                                }
-                                evidence
-                                    .region_terminal(
-                                        r4,
-                                        worker_slot,
-                                        interval_id,
-                                        RegionTerminalStatus::Done,
-                                        result.written,
-                                        result.skipped,
-                                        None,
-                                    )
-                                    .expect("emit GPU surface region terminal");
-                                format!(
-                                    "done {r4:x} {} {} {}",
-                                    result.written,
-                                    result.skipped,
-                                    wall.as_millis()
-                                )
-                            }
-                            Err(e) => {
-                                let line = format!("fail {r4:x} {e}");
-                                spans.finish_failed(t.elapsed(), &line);
-                                evidence
-                                    .region_terminal(
-                                        r4,
-                                        worker_slot,
-                                        interval_id,
-                                        RegionTerminalStatus::Fail,
-                                        0,
-                                        0,
-                                        Some(&line),
-                                    )
-                                    .expect("emit GPU surface region failure");
-                                line
-                            }
-                        }
-                    };
-                    let mut o = out.lock().unwrap();
-                    let ok = writeln!(o, "{}", spans.line()).is_ok()
-                        && writeln!(o, "{line}").is_ok()
-                        && o.flush().is_ok();
-                    drop(o);
-                    if !ok {
-                        // downstream (the box-agent) closed its read end → stop the build, exactly
-                        // as the old serial path's `writeln!(…)?` did: signal EOF so every worker drains
-                        // and exits, instead of spinning on a dead pipe.
-                        let (lock, cv) = &*work;
-                        let mut g = lock.lock().unwrap();
-                        g.1 = true;
-                        g.0.clear(); // drop pending cells so peers exit NOW, not after wasted builds
-                        drop(g);
-                        cv.notify_all();
+                    if let Some(cell) = g.0.pop_front() {
+                        break Some(cell);
+                    }
+                    if g.1 {
+                        break None;
+                    }
+                    g = cv.wait(g).unwrap();
+                }
+            };
+            let Some((r4, req_layers)) = cell else { break };
+            let interval_id = evidence
+                .region_claim(r4, worker_slot)
+                .expect("emit GPU surface region claim");
+            announce_stream_cell_started(r4);
+            let t = Instant::now();
+            let tiles = region_tiles(r4, z);
+            let (effective, skipped) =
+                split_configured_layers(layers, req_layers.as_deref(), |l| l.dir());
+            if effective.is_empty() {
+                let line = format!(
+                    "fail {r4:x} layers-request matches none of configured [{}]",
+                    skipped.join(",")
+                );
+                if !emit_stream_fail(&sink, r4, worker_slot, interval_id, t, &line) {
+                    break;
+                }
+                continue;
+            }
+            let effective_names: Vec<&str> = effective.iter().map(|layer| layer.dir()).collect();
+            if let Err(e) = evidence.region_dependencies(
+                r4,
+                Path::new(prepared),
+                &cfg.h3r4,
+                &tiles,
+                z,
+                cfg.halo_m,
+                &effective_names,
+                DependencyProfile::Surface,
+            ) {
+                let line = format!("fail {r4:x} {e:#}");
+                if !emit_stream_fail(&sink, r4, worker_slot, interval_id, t, &line) {
+                    break;
+                }
+                continue;
+            }
+            let mut load_stats = BTreeMap::new();
+            let host = match load_region_host(r4, &effective, &cfg, &mut load_stats) {
+                Ok(host) => host,
+                Err(e) => {
+                    let line = format!("fail {r4:x} {e:#}");
+                    if !emit_stream_fail(&sink, r4, worker_slot, interval_id, t, &line) {
                         break;
                     }
+                    continue;
                 }
+            };
+            let cell = Arc::new(CellGate {
+                r4,
+                remaining: AtomicUsize::new(0),
+                crop_done: AtomicBool::new(false),
+                emitted: AtomicBool::new(false),
+                failed: Mutex::new(None),
+                stats: Mutex::new(BTreeMap::new()),
+                total: tiles.len() * effective.len(),
+                t0: t,
+                raster: Mutex::new(std::time::Duration::ZERO),
+                interval_id,
+                worker_slot,
+                tiles: tiles.clone(),
+                effective: effective.clone(),
             });
+            {
+                let mut cell_stats = cell.stats.lock().unwrap();
+                for (k, v) in load_stats {
+                    cell_stats.entry(k).or_default().absorb(v);
+                }
+            }
+            let Some(host) = host else {
+                if let Some(root) = &cfg.output {
+                    for l in &effective {
+                        let cleanup_started = Instant::now();
+                        let mut removed = 0usize;
+                        for &(tx, ty) in &tiles {
+                            let path = Path::new(root)
+                                .join(l.dir())
+                                .join(cfg.z.to_string())
+                                .join(tx.to_string())
+                                .join(format!("{ty}.bin"));
+                            match std::fs::remove_file(&path) {
+                                Ok(()) => removed += 1,
+                                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                                Err(error) => {
+                                    *cell.failed.lock().unwrap() =
+                                        Some(format!("rm stale {}: {error}", path.display()));
+                                    break;
+                                }
+                            }
+                        }
+                        let mut cell_stats = cell.stats.lock().unwrap();
+                        let stat = cell_stats.entry(l.dir()).or_default();
+                        stat.t_cleanup += cleanup_started.elapsed().as_secs_f64();
+                        stat.n_cleanup_checked += tiles.len();
+                        stat.n_cleanup_removed += removed;
+                    }
+                }
+                cell.crop_done.store(true, Ordering::SeqCst);
+                if emit_cell_if_complete(&cell, &sink).is_err() {
+                    break;
+                }
+                continue;
+            };
+            let raster = match process_region_via_tile_pool(
+                &tiles,
+                &cfg,
+                prepared,
+                Arc::new(host),
+                &cell,
+                &pool,
+                watermark,
+            ) {
+                Ok(raster) => raster,
+                Err(e) => {
+                    *cell.failed.lock().unwrap() = Some(format!("{e:#}"));
+                    std::time::Duration::ZERO
+                }
+            };
+            *cell.raster.lock().unwrap() = raster;
+            cell.crop_done.store(true, Ordering::SeqCst);
+            if emit_cell_if_complete(&cell, &sink).is_err() {
+                break;
+            }
         }
-    });
+        pool.wait_idle();
+        Ok(())
+    })?;
     Ok(())
 }
 
