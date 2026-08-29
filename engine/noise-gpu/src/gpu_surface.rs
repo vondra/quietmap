@@ -35,6 +35,7 @@ use noise_gpu::{
 use raster_reader::fused_tile_z13::{default_batch_size, TileBatch};
 use raster_reader::RealRasters;
 use rayon::prelude::*;
+use silent_tile_census::{build_reach_census, drop_unreachable_tiles, unlink_stale_tile};
 use tile_painter::accumulator::{TileAccumulator, NUM_PERIODS};
 use tile_painter::engine_spans::EngineCellSpans;
 use tile_painter::grid::{tile_range, TILE_PX};
@@ -56,6 +57,7 @@ use tile_painter::wire_hm3::{collapse_lden_surface_u8, read_tile, write_tile};
 // kernel-launch path (process_block/region, run_stream, main) stays here.
 #[path = "gpu_init.rs"]
 mod gpu_init;
+mod silent_tile_census;
 use gpu_init::{
     multifidelity_cartesian_unbinned_anchor_enabled, timing_enabled, warm_device, warm_device_on,
     LineFunctions, LineLayer, Progress,
@@ -1718,6 +1720,9 @@ struct HostRegion {
     barriers: BarrierData,
     obstacles: ObstacleData,
     src_host: Vec<(LineLayer, SourceBuffers)>,
+    /// Empty when the census is off (baseline/evidence runs keep the full sweep
+    /// so their silent-tile counters still see every tile).
+    reach: Vec<(LineLayer, std::collections::HashSet<(u32, u32)>)>,
 }
 
 /// One cropped halo-block ready for `process_block`. The region's tiles in this
@@ -1870,9 +1875,19 @@ fn load_region_host(
         stats.entry(layer.dir()).or_default().t_bins += tp.elapsed().as_secs_f64();
         src_host.push((*layer, packed));
     }
+    // Evidence and baseline runs keep the full sweep: their drift counters are
+    // defined over every tile. Same predicate the rest of the file uses.
+    let census_on =
+        cfg.baseline.is_empty() && std::env::var(RENDERER_EVIDENCE_FLAG).as_deref() != Ok("1");
+    let reach = if census_on {
+        build_reach_census(cfg.z, &region_tiles(r4, cfg.z), &region_rows)
+    } else {
+        Vec::new()
+    };
     Ok(Some(HostRegion {
         r4,
         region_rows,
+        reach,
         barriers,
         obstacles,
         src_host,
@@ -1957,6 +1972,7 @@ fn process_block(
     cfg: &Cfg,
     block_tiles: &[(u32, u32)],
     region_rows: &[(LineLayer, Vec<LineRow>)],
+    reach: &[(LineLayer, std::collections::HashSet<(u32, u32)>)],
     src_dev: &[LayerSrc],
     barriers: &BarrierData,
     obst_dev: &ObstDev,
@@ -2045,18 +2061,7 @@ fn process_block(
         let mut removed = 0usize;
         if let Some(root) = &cfg.output {
             for &(tx, ty) in block_tiles {
-                let out = Path::new(root)
-                    .join(layer.dir())
-                    .join(cfg.z.to_string())
-                    .join(tx.to_string())
-                    .join(format!("{ty}.bin"));
-                match std::fs::remove_file(&out) {
-                    Ok(()) => removed += 1,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => {
-                        return Err(error).with_context(|| format!("rm stale {}", out.display()));
-                    }
-                }
+                removed += usize::from(unlink_stale_tile(root, *layer, cfg.z, tx, ty)?);
             }
         }
         let silent = vec![NO_DATA; TILE_PX * TILE_PX];
@@ -2070,11 +2075,35 @@ fn process_block(
         st.n_cleanup_checked += block_tiles.len();
         st.n_cleanup_removed += removed;
     }
-    let items: Vec<(u32, u32, LineLayer)> = region_rows
+    let mut items: Vec<(u32, u32, LineLayer)> = region_rows
         .iter()
         .filter(|(_, rows)| !rows.is_empty())
         .flat_map(|(l, _)| block_tiles.iter().map(move |&(tx, ty)| (tx, ty, *l)))
         .collect();
+    // Silent-tile census (built once per region in `load_region_host`): drop the
+    // pairs no source can reach. Their kernel would render all-NO_DATA and
+    // `write_tile` would return 0 bytes, so the only thing lost is the work —
+    // but the stale-output unlink that the all-silent path performs must still
+    // happen, or a rebuild would leave a previous build's tile behind.
+    if !reach.is_empty() {
+        let mut dropped = Vec::new();
+        items.retain(|&(tx, ty, layer)| {
+            let reachable = reach
+                .iter()
+                .find(|(l, _)| *l == layer)
+                .is_none_or(|(_, set)| set.contains(&(tx, ty)));
+            if !reachable {
+                dropped.push((tx, ty, layer));
+            }
+            reachable
+        });
+        for (tx, ty, layer) in dropped {
+            if let Some(root) = &cfg.output {
+                unlink_stale_tile(root, layer, cfg.z, tx, ty)?;
+            }
+            prog.tick();
+        }
+    }
     // GPU-side binning: the kernel (line_binned_fused) does the per-block source cull
     // itself, so per-tile prep is just the pack — no CPU build_pixel_bins (the old
     // prep-bound bottleneck). t_bins now measures only pack_tile (sub-ms). The
@@ -2750,11 +2779,8 @@ fn process_block(
                 let st = stats.entry(layer.dir()).or_default();
                 st.n_written += 1;
                 st.bytes_written += bytes;
-            } else if out.exists() {
-                // Rebuilt all-silent: unlink any stale tile a prior build left, else
-                // combine keeps summing stale GPU energy (mirrors build_heatmap_surface).
-                std::fs::remove_file(&out)
-                    .with_context(|| format!("rm stale {}", out.display()))?;
+            } else {
+                unlink_stale_tile(root, layer, cfg.z, tx, ty)?;
             }
             // `write_tile` includes Brotli encoding. Keep this one honest composite through the
             // stale-output unlink rather than presenting either operation as an isolated write.
@@ -2982,8 +3008,26 @@ fn process_region(
     let region_rows = &host.region_rows;
     let barrier_data = &host.barriers;
     let obstacle_data = &host.obstacles;
-    let raster = run_block_pipeline(
+    let (census_tiles, census_removed) = drop_unreachable_tiles(
         region_tiles,
+        &host.reach,
+        layers,
+        cfg.output.as_ref(),
+        cfg.z,
+    )?;
+    // Those tile-layers are done: nothing will paint them and nothing will tick for
+    // them later, so charge them here or the heartbeat never reaches its total and
+    // a quiet-cell rebuild's removals vanish from the cleanup counters.
+    prog.done += (region_tiles.len() - census_tiles.len()) * layers.len();
+    for layer in layers {
+        let stat = stats.entry(layer.dir()).or_default();
+        stat.n_cleanup_checked += region_tiles.len() - census_tiles.len();
+    }
+    if let Some(layer) = layers.first() {
+        stats.entry(layer.dir()).or_default().n_cleanup_removed += census_removed;
+    }
+    let raster = run_block_pipeline(
+        &census_tiles,
         cfg,
         prepared,
         obstacle_data,
@@ -2997,6 +3041,7 @@ fn process_region(
                     cfg,
                     tiles,
                     region_rows,
+                    &host.reach,
                     &src_dev,
                     barrier_data,
                     &obst_dev,
@@ -3260,8 +3305,16 @@ fn process_region_via_tile_pool(
     pool: &TileJobPool,
     watermark: usize,
 ) -> Result<std::time::Duration> {
-    run_block_pipeline(
+    let layers: Vec<LineLayer> = host.region_rows.iter().map(|(l, _)| *l).collect();
+    let (census_tiles, _removed) = drop_unreachable_tiles(
         region_tiles,
+        &host.reach,
+        &layers,
+        cfg.output.as_ref(),
+        cfg.z,
+    )?;
+    run_block_pipeline(
+        &census_tiles,
         cfg,
         prepared,
         &host.obstacles,
@@ -3370,6 +3423,7 @@ fn tile_worker_loop(pool: &TileJobPool, cfg: &Cfg, sink: &StreamSink) {
             cfg,
             &job.block_tiles,
             &job.host.region_rows,
+            &job.host.reach,
             &src_dev,
             &job.host.barriers,
             obst,
