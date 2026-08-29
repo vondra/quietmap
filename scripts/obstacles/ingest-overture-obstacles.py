@@ -87,9 +87,9 @@ HISTORIC = {
     "library", "monastery", "mosque", "post_office", "presbytery", "public",
     "religious", "shrine", "synagogue", "temple", "wayside_shrine",
 }
-# The explicit DEFAULT set is the published official BuildingClass remainder.
-# Keeping it here makes the ingest test able to reject invented strings while
-# retaining class-over-subtype precedence for known default classes.
+# Published official BuildingClass remainder. Named here so known remainder
+# classes stay 5 instead of taking the subtype fallback (`garage` +
+# `residential` would otherwise become 1).
 DEFAULT = {
     "garage", "garages", "kiosk", "service", "parking", "stadium",
     "sports_centre", "sports_hall", "pavilion", "toilets", "bunker", "military",
