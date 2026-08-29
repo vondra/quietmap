@@ -3,8 +3,8 @@
 // Used by scripts/gen-country-defaults-rs.mjs to produce the per-country
 // scaling table for the engine defaults cascade (plan v5 §I.3).
 //
-// Output: scripts/wb-country-<year>.json — committed to git so engine
-// builds stay reproducible and the file can be diffed across refreshes.
+// Output: scripts/wb-country-<year>.json — gitignored local dump. The
+// committed truth is engine/noise-compute/src/country_defaults_generated.rs.
 //
 // Usage:
 //   node scripts/fetch-wb-country-data.mjs         # year 2022 (default)

@@ -19,6 +19,8 @@ dist/
 scripts/cache/
 # Upstream osm-legal-default-speeds dump — distilled tables are what's committed.
 scripts/legal-default-speeds.json
+# World Bank country-indicator dump — distilled country_defaults_generated.rs is committed.
+scripts/wb-country-*.json
 
 # Data - large binary files, not in git
 /data

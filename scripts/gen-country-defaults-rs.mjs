@@ -37,7 +37,7 @@
 // Usage:
 //   cd <runtime code checkout> && node scripts/gen-country-defaults-rs.mjs
 //
-// Commit both input JSONs and the generated .rs file.
+// Commit wiki-roads-fleet.json + the generated .rs file — the World Bank dump is gitignored.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
@@ -198,7 +198,7 @@ out.push(`//! Per-country and per-continent AADT scale factors relative to
 //!   node scripts/fetch-wb-country-data.mjs ${wb.year}
 //!   node scripts/fetch-wiki-roads-fleet.mjs
 //!   node scripts/gen-country-defaults-rs.mjs
-//!   # commit all three JSONs + this file
+//!   # commit wiki-roads-fleet.json + this file (WB dump is gitignored)
 
 use crate::admin::Continent;
 
