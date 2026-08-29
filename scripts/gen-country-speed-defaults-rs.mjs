@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-//! Generate engine/noise-compute/src/country_speed_defaults_generated.rs from the
-//! committed scripts/legal-default-speeds.json (osm-legal-default-speeds project —
+//! Generate engine/noise-compute/src/country_speed_defaults_generated.rs from a
+//! local scripts/legal-default-speeds.json dump (osm-legal-default-speeds —
 //! machine-readable parse of the OSM wiki "Default speed limits" legal tables).
+//! The dump is gitignored; the generated Rust/JSON tables are the committed truth.
 //!
 //! Per country we keep exactly four legal buckets (km/h, 0 = country has no value):
 //!   urban     ← rule named "urban", else a name ending "restricted road" (GB's legal
@@ -24,7 +25,7 @@
 //!   curl -fsSL https://westnordost.github.io/osm-legal-default-speeds/legal_default_speeds.json \
 //!     -o scripts/legal-default-speeds.json
 //!   node scripts/gen-country-speed-defaults-rs.mjs
-//!   # commit the JSON + the generated file
+//!   # commit only the generated Rust + pipeline JSON (not the dump)
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'

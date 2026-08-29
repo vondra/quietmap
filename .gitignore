@@ -17,6 +17,8 @@ dist/
 
 # One-time download caches for build scripts (e.g. Natural Earth GeoJSON).
 scripts/cache/
+# Upstream osm-legal-default-speeds dump — distilled tables are what's committed.
+scripts/legal-default-speeds.json
 
 # Data - large binary files, not in git
 /data
