@@ -1899,6 +1899,51 @@ fn upload_host_sources(
     Ok((src_dev, obst_dev))
 }
 
+fn accumulate_baseline_diff(
+    stats: &mut BTreeMap<&'static str, LayerStat>,
+    layer: LineLayer,
+    cfg: &Cfg,
+    tx: u32,
+    ty: u32,
+    cells: &[u8],
+) -> Result<()> {
+    if cfg.baseline.is_empty() {
+        return Ok(());
+    }
+    let bp = Path::new(&cfg.baseline)
+        .join(layer.dir())
+        .join(cfg.z.to_string())
+        .join(tx.to_string())
+        .join(format!("{ty}.bin"));
+    if !bp.exists() {
+        return Ok(());
+    }
+    let b = read_tile(&bp)?;
+    let st = stats.entry(layer.dir()).or_default();
+    for ci in 0..cells.len().min(b.len()) {
+        let (c, bb) = (cells[ci], b[ci]);
+        let differ = if c != NO_DATA && bb != NO_DATA {
+            let d = (c as i32 - bb as i32).abs();
+            st.max_diff = st.max_diff.max(d);
+            st.n_cmp += 1;
+            if d <= 1 {
+                st.n_le1 += 1;
+            }
+            if d <= 3 {
+                st.n_le3 += 1;
+            }
+            d > 0
+        } else {
+            c != bb
+        };
+        if differ {
+            st.n_diff += 1;
+        }
+    }
+    st.n_baseline += 1;
+    Ok(())
+}
+
 /// Compute every `(tile, layer)` in `block_tiles` on the GPU, using the caller-built
 /// shared halo (`batch`, cropped in parallel across the region's blocks), the region's
 /// pre-loaded rows, and pre-uploaded sources (`src_dev`) — all built/uploaded once per
@@ -1985,12 +2030,49 @@ fn process_block(
     // Software pipeline: a CUDA launch is async, so while tile N's kernel runs on
     // the GPU we bin+pack tile N+1 on the CPU (the cores otherwise idle during the
     // GPU wait). Single-threaded; dtoh_sync_copy is the join that waits for the
-    // kernel. Same per-(tile,layer) work in the same order ⇒ identical output.
+    // kernel. Nonempty per-(tile,layer) work stays in the same order. A layer
+    // with zero rows is all-NO_DATA (write_tile=0): skip its kernels, unlink
+    // stale tiles, still tick progress and compare an implicit silent tile
+    // against NOISE_GPU_BASELINE when that is set.
     // Order by LAYER first (all road, then all rail), not interleaved: the pipeline
     // overlaps tile N+1's prep with tile N's kernel, so consecutive same-layer items
     // (similar kernel ≈ similar prep cost) overlap far better than road↔rail swings.
+    for (layer, rows) in region_rows {
+        if !rows.is_empty() {
+            continue;
+        }
+        let cleanup_started = Instant::now();
+        let mut removed = 0usize;
+        if let Some(root) = &cfg.output {
+            for &(tx, ty) in block_tiles {
+                let out = Path::new(root)
+                    .join(layer.dir())
+                    .join(cfg.z.to_string())
+                    .join(tx.to_string())
+                    .join(format!("{ty}.bin"));
+                match std::fs::remove_file(&out) {
+                    Ok(()) => removed += 1,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(error).with_context(|| format!("rm stale {}", out.display()));
+                    }
+                }
+            }
+        }
+        let silent = vec![NO_DATA; TILE_PX * TILE_PX];
+        for &(tx, ty) in block_tiles {
+            accumulate_baseline_diff(stats, *layer, cfg, tx, ty, &silent)?;
+            stats.entry(layer.dir()).or_default().n_tiles += 1;
+            prog.tick();
+        }
+        let st = stats.entry(layer.dir()).or_default();
+        st.t_cleanup += cleanup_started.elapsed().as_secs_f64();
+        st.n_cleanup_checked += block_tiles.len();
+        st.n_cleanup_removed += removed;
+    }
     let items: Vec<(u32, u32, LineLayer)> = region_rows
         .iter()
+        .filter(|(_, rows)| !rows.is_empty())
         .flat_map(|(l, _)| block_tiles.iter().map(move |&(tx, ty)| (tx, ty, *l)))
         .collect();
     // GPU-side binning: the kernel (line_binned_fused) does the per-block source cull
@@ -2680,38 +2762,7 @@ fn process_block(
             stats.entry(layer.dir()).or_default().t_write +=
                 write_done.duration_since(encode_done).as_secs_f64();
         }
-        if !cfg.baseline.is_empty() {
-            let bp = Path::new(&cfg.baseline)
-                .join(layer.dir())
-                .join(cfg.z.to_string())
-                .join(tx.to_string())
-                .join(format!("{ty}.bin"));
-            if bp.exists() {
-                let b = read_tile(&bp)?;
-                let st = stats.entry(layer.dir()).or_default();
-                for ci in 0..cells.len().min(b.len()) {
-                    let (c, bb) = (cells[ci], b[ci]);
-                    let differ = if c != NO_DATA && bb != NO_DATA {
-                        let d = (c as i32 - bb as i32).abs();
-                        st.max_diff = st.max_diff.max(d);
-                        st.n_cmp += 1;
-                        if d <= 1 {
-                            st.n_le1 += 1;
-                        }
-                        if d <= 3 {
-                            st.n_le3 += 1;
-                        }
-                        d > 0
-                    } else {
-                        c != bb
-                    };
-                    if differ {
-                        st.n_diff += 1;
-                    }
-                }
-                st.n_baseline += 1;
-            }
-        }
+        accumulate_baseline_diff(stats, layer, cfg, tx, ty, &cells)?;
         stats.entry(layer.dir()).or_default().n_tiles += 1;
         if tile_times_enabled() {
             let timing =
