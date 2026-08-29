@@ -95,8 +95,7 @@ if [ -n "$ENGINE_CHANGED" ]; then
 
     # Build every workspace member. Glob over `engine/*` so a new crate
     # still rebuilds once it has a Cargo.toml; the workspace lockfile lives
-    # at engine/Cargo.lock. Per-crate `cd` is what the hook-regression
-    # fixture exercises (a fake engine/demo crate, no workspace root).
+    # at engine/Cargo.lock. Per-crate `cd` rebuilds crates outside the workspace.
     FAIL=0
     if [ -x "$REPO_ROOT/scripts/ensure-engine-target-shims.sh" ]; then
         "$REPO_ROOT/scripts/ensure-engine-target-shims.sh"
