@@ -25,7 +25,7 @@ scripts/      Product entry points: run-extraction.sh (rasters + OSM extract),
               build-heatmap.sh (whole tile build), osm-to-h3r4.sh,
               check-fast.sh, dataset-year.json
 docs/         about/ (public About + methodology pages) · standards/
-benchmarks/   Validation fixtures and baselines (popup/world point sets)
+benchmarks/   Validation fixtures (popup/world point sets)
 ```
 
 ## Build & run
