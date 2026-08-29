@@ -362,11 +362,18 @@ fn multifidelity_anchor_axis(stride: MultifidelityStride) -> Vec<usize> {
     stride.anchor_axis()
 }
 
-/// W1 anchors-only timing/visual candidate. The adaptive replay selector is
-/// retained in code so its measured quality/speed trade-off stays directly
-/// comparable, but this build reconstructs every non-anchor receiver from the
-/// fixed exact lattice and never launches the selected exact tail.
-const MULTIFIDELITY_REPLAY_SELECTED_BLOCKS: bool = false;
+/// Launch the selected exact tail on top of the fixed anchor lattice. The
+/// per-layer rule in [`multifidelity_receiver_mask_with_replay`] decides which
+/// stride blocks earn it.
+const MULTIFIDELITY_REPLAY_SELECTED_BLOCKS: bool = true;
+
+/// Whether this layer's tiles can reach the selected exact tail at all. Road
+/// cannot, see the rule's comment. This has to be answerable BEFORE the mask
+/// exists, because the stop-event record below the anchor joins needs to know
+/// whether anything will follow it; the mask alone would answer too late.
+fn multifidelity_layer_replays(layer: LineLayer) -> bool {
+    MULTIFIDELITY_REPLAY_SELECTED_BLOCKS && matches!(layer, LineLayer::Rail)
+}
 
 /// Decode the explicit compact output ABI. Every record carries its own dense
 /// pixel index, so a stale count, short allocation, fractional index, or
@@ -589,10 +596,10 @@ fn pack_multifidelity_stock_cartesian_group(
     plan.latitude_group_range(group)?;
 
     let mut packed_rxll = vec![0.0f64; TILE_PX * 2];
-    for synthetic_y in 0..TILE_PX {
+    for (synthetic_y, packed) in packed_rxll[..TILE_PX].iter_mut().enumerate() {
         let bounded_y = synthetic_y.min(BIN_W - 1);
         let source_index = plan.source_dense_index(group, bounded_y, 0)?;
-        packed_rxll[synthetic_y] = source_rxll[source_index / TILE_PX];
+        *packed = source_rxll[source_index / TILE_PX];
     }
     for synthetic_x in 0..TILE_PX {
         let bounded_x = synthetic_x.min(MULTIFIDELITY_STOCK_CARTESIAN_LAUNCHED_COLUMNS - 1);
@@ -1414,12 +1421,12 @@ fn multifidelity_interior_is_present(
     data.cheap_cells[index] != tile_painter::wire_hm3::NO_DATA
 }
 
-/// Build launch C's exact receiver list from launch-A observables only:
-/// cheap HM3 state, compact exact-anchor state, and the unchanged measured
-/// layer-specific selector features. The compact kernel receives only the
-/// selected records, never dense receiver arrays.
+/// Build launch C's exact receiver list from launch-A observables only: compact
+/// exact-anchor residuals and cheap HM3 state. One rule for both layers; which
+/// layers reach this at all is [`multifidelity_layer_replays`]. The compact
+/// kernel receives only the selected records, never dense receiver arrays.
 fn multifidelity_receiver_mask(layer: LineLayer, data: &MultifidelityInterpolation) -> Vec<f32> {
-    multifidelity_receiver_mask_with_replay(layer, data, MULTIFIDELITY_REPLAY_SELECTED_BLOCKS)
+    multifidelity_receiver_mask_with_replay(layer, data, multifidelity_layer_replays(layer))
 }
 
 fn multifidelity_receiver_mask_with_replay(
@@ -1428,6 +1435,10 @@ fn multifidelity_receiver_mask_with_replay(
     replay_selected_blocks: bool,
 ) -> Vec<f32> {
     let mut mask = vec![0.0f32; TILE_PX * TILE_PX];
+    if !replay_selected_blocks {
+        report_multifidelity_mask(layer, &mask, data);
+        return mask;
+    }
     // The stride lattice is not tile-divisible: the final interval is the
     // actual [axis[len - 2], axis[len - 1]) tail (496..511 for stride 16).
     // Iterate adjacent axis windows themselves so tail receivers participate
@@ -1457,18 +1468,10 @@ fn multifidelity_receiver_mask_with_replay(
                 residual_high = 0.0;
             }
             let residual_range = residual_high - residual_low;
-            let residual_abs_max = residual_low.abs().max(residual_high.abs());
-            let mut cheap_low = f64::INFINITY;
-            let mut cheap_high = f64::NEG_INFINITY;
             let mut gradient = 0.0f64;
             for py in py_start..py_end {
                 for px in px_start..px_end {
                     let index = py * TILE_PX + px;
-                    if data.cheap_cells[index] != tile_painter::wire_hm3::NO_DATA {
-                        let value = f64::from(data.cheap_cells[index]) / 2.0;
-                        cheap_low = cheap_low.min(value);
-                        cheap_high = cheap_high.max(value);
-                    }
                     if px > px_start {
                         let left = data.cheap_cells[index - 1];
                         if left != tile_painter::wire_hm3::NO_DATA
@@ -1491,16 +1494,26 @@ fn multifidelity_receiver_mask_with_replay(
                     }
                 }
             }
-            if !cheap_low.is_finite() {
-                cheap_low = 0.0;
-                cheap_high = 0.0;
-            }
-            let cheap_value_range = cheap_high - cheap_low;
-            let exact_block = replay_selected_blocks
-                && match layer {
-                    LineLayer::Road => residual_abs_max >= 20.0 || cheap_value_range >= 20.0,
-                    LineLayer::Rail => residual_range >= 8.0 || gradient >= 20.0,
-                };
+            // A block earns the exact tail when its anchors DISAGREE, or when the
+            // cheap field steps inside it — both say the bilinear fill between the
+            // anchors cannot be trusted.
+            //
+            // 12 dB is what the wall affords, not what the rule would like. Measured on
+            // wbench-orig against the exact-CPU reference, each arm paired against its
+            // own baseline on an idle card: 8 dB selects 4.60 % of a tile and puts the
+            // wall at 248.1 s, past its 238.5 s ceiling; 12 dB selects 1.33 % and lands
+            // at 226.5 s against a 219.4 s baseline, taking rail's >1 dB rung
+            // 10.288 -> 8.684 %, >2 dB 4.241 -> 3.169 %, >6 dB 0.390 -> 0.199 %, with
+            // max_abs 20.5 -> 19.5 dB and the quiet band 20.0 -> 18.5 dB. The wall is
+            // what binds, not the lane: all seven lanes share one card, so 1 s of rail
+            // lane costs about 0.3 s of wall.
+            //
+            // Road's old rule tested the SIZE of the anchor correction instead of the
+            // disagreement, and the cheap field it ranged over never calls obstacle
+            // screening (kernels/scatter.cu:3726), so it had no edge to find: it
+            // selected 0.3-0.5 % of a tile and bought 19 of road's 17 614 cells past
+            // the >6 dB rung, for +49.7 s on its own lane.
+            let exact_block = residual_range >= 12.0 || gradient >= 20.0;
             if exact_block {
                 for py in py_start..py_end {
                     for px in px_start..px_end {
@@ -1518,6 +1531,14 @@ fn multifidelity_receiver_mask_with_replay(
             mask[py * TILE_PX + px] = 0.0;
         }
     }
+    report_multifidelity_mask(layer, &mask, data);
+    mask
+}
+
+/// One line per tile per layer: how much of it the selector bought back exactly. A
+/// layer that never replays still reports its zero, so the log answers the question
+/// for the whole run and not only for the layers that spend.
+fn report_multifidelity_mask(layer: LineLayer, mask: &[f32], data: &MultifidelityInterpolation) {
     let selected = mask.iter().filter(|&&value| value >= 0.5).count();
     let anchor_count = data.axis.len() * data.axis.len();
     eprintln!(
@@ -1529,7 +1550,6 @@ fn multifidelity_receiver_mask_with_replay(
         selected + anchor_count,
         (selected + anchor_count) as f64 * 100.0 / mask.len() as f64,
     );
-    mask
 }
 
 /// Reconstruct a dense HM3 tile from cheap full-grid energies, compact exact
@@ -2382,14 +2402,15 @@ fn process_block(
             // Queue every exact-wave join immediately, before host preparation
             // or D2H can insert an idle gap into the CUDA event envelope. The
             // default stream already contains launch A, so stop follows both
-            // cheap completion and all nine exact completions. Selected replay
-            // is compile-fenced off for this arm; if that changes, the existing
-            // post-selector stop path remains authoritative.
+            // cheap completion and all nine exact completions. A layer that cannot
+            // reach launch C stops here; for one that can, the stop is recorded below
+            // instead — after the replay launch when there is one, and after the
+            // selector when the mask came out empty.
             for (group, stream) in stock_cartesian_streams.iter().enumerate() {
                 dev.wait_for(stream)
                     .with_context(|| format!("join stock Cartesian anchor stream {group}"))?;
             }
-            if !MULTIFIDELITY_REPLAY_SELECTED_BLOCKS {
+            if !multifidelity_layer_replays(layer) {
                 if let Some((_, stop, stream)) = kernel_evt {
                     unsafe { result::event::record(stop, stream).expect("record stop") };
                     kernel_stop_recorded = true;
@@ -4567,7 +4588,7 @@ mod multifidelity_tests {
             }
         });
         let data = multifidelity_interpolation(stride, &cheap_gpu, &exact);
-        let mask = multifidelity_receiver_mask_with_replay(LineLayer::Road, &data, true);
+        let mask = multifidelity_receiver_mask_with_replay(LineLayer::Rail, &data, true);
 
         // The last real axis window is [496, 511); its interior must be
         // selectable while both boundary anchors remain authoritative.
@@ -4575,8 +4596,17 @@ mod multifidelity_tests {
         assert_eq!(mask[496 * TILE_PX + 496], 0.0);
         assert_eq!(mask[511 * TILE_PX + 511], 0.0);
 
-        let anchors_only = multifidelity_receiver_mask(LineLayer::Road, &data);
+        // The production entry point must reach the same block through the layer
+        // authority, not only the test seam.
+        assert_eq!(multifidelity_receiver_mask(LineLayer::Rail, &data), mask);
+
+        let anchors_only = multifidelity_receiver_mask_with_replay(LineLayer::Rail, &data, false);
         assert!(anchors_only.iter().all(|&value| value == 0.0));
+
+        // Road never reaches launch C, so its mask stays empty however steep the tile.
+        assert!(!multifidelity_layer_replays(LineLayer::Road));
+        let road = multifidelity_receiver_mask(LineLayer::Road, &data);
+        assert!(road.iter().all(|&value| value == 0.0));
     }
 
     #[test]
@@ -4765,7 +4795,6 @@ mod multifidelity_tests {
         }
         let interpolation =
             multifidelity_interpolation(multifidelity_stride, &cheap_gpu, &row_output);
-        let _selector_mask = multifidelity_receiver_mask(LineLayer::Road, &interpolation);
         assert_eq!(
             reconstruct_multifidelity_cells(&interpolation, &row_output),
             reconstruct_multifidelity_cells(&interpolation, &bucket_output),
