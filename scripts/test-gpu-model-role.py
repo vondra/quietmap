@@ -283,7 +283,7 @@ class ModelRoleSpecTests(unittest.TestCase):
             shutil.copytree(product, nested)
             self.assertEqual(expected, model_source_recipe_sha256(nested))
 
-    def test_model_source_digest_ignores_crate_target_shims(self) -> None:
+    def test_model_source_digest_ignores_crate_target_directories(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for directory in (
@@ -301,16 +301,17 @@ class ModelRoleSpecTests(unittest.TestCase):
             (root / ".cargo/config.toml").write_text("[build]\n", encoding="utf-8")
             (root / "rust-toolchain.toml").write_text("[toolchain]\n", encoding="utf-8")
             before = model_source_recipe_sha256(root)
-            decoy = root / "engine/target/release/decoy.rs"
-            decoy.parent.mkdir(parents=True)
-            decoy.write_text("fn decoy() {}\n", encoding="utf-8")
-            (root / "engine/noise-compute/target").symlink_to("../target")
+            crate_target = root / "engine/noise-compute/target/debug"
+            crate_target.mkdir(parents=True)
+            (crate_target / "decoy.rs").write_text(
+                "fn crate_decoy() {}\n", encoding="utf-8"
+            )
             test_decoy = root / "engine/noise-compute/tests/helpers.rs"
             test_decoy.parent.mkdir()
             test_decoy.write_text("fn helper() {}\n", encoding="utf-8")
             self.assertEqual(before, model_source_recipe_sha256(root))
 
-    def test_model_source_digest_rejects_non_shim_directory_symlinks(self) -> None:
+    def test_model_source_digest_rejects_unpruned_directory_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for directory in (

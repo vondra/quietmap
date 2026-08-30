@@ -28,16 +28,12 @@ if [ "$HALF" != "rust" ]; then
   step "shell scripts"
   bash -n scripts/run-extraction.sh scripts/build-heatmap.sh scripts/osm-to-h3r4.sh \
     scripts/run-aircraft-extract.sh scripts/rasters-global.sh \
-    scripts/ensure-engine-target-shims.sh start.sh \
-    scripts/rasters/convert-forest-continuous.sh
+    start.sh scripts/rasters/convert-forest-continuous.sh
 fi
 
 if [ "$HALF" != "node" ]; then
   step "engine: GPU define contract"
   "$ROOT/scripts/test-noise-gpu-defines.sh"
-
-  step "engine: workspace target shims"
-  "$ROOT/scripts/ensure-engine-target-shims.sh"
 
   step "engine: rustfmt + clippy + tests"
   cargo fmt --manifest-path engine/Cargo.toml --all -- --check

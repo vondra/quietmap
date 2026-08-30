@@ -36,18 +36,9 @@ pub struct PointQueryData {
     pub aircraft_cruise_batches: Vec<arrow::record_batch::RecordBatch>,
     /// `airport_traffic.arrow` per-microsegment sparse counters.
     pub aircraft_airport_traffic_batches: Vec<arrow::record_batch::RecordBatch>,
-    /// `airport_lines.arrow` per-microsegment OSM aeroway features.
-    /// Source-reader needs `osm_id` + `ref` from here to label
-    /// SegmentTraces by runway/taxiway designator, AND the per-row
-    /// `start_lat`/`start_lon`/`end_lat`/`end_lon` to derive
-    /// per-osm_id runway-end anchors that gate the airborne 6 km
-    /// airport-context test (replaces the legacy single centroid at
-    /// hubs with multiple runway-end anchors).
+    /// `airport_lines.arrow` OSM ids and refs used to label runway and
+    /// taxiway segment traces.
     pub airport_lines_batches: Vec<arrow::record_batch::RecordBatch>,
-    /// Stage 1.5 `synth_airport_lines.arrow` for DBSCAN-discovered
-    /// airstrips. Same shape as `airport_lines_batches`; consumed
-    /// alongside them by the runway-end anchor extractor.
-    pub synth_airport_lines_batches: Vec<arrow::record_batch::RecordBatch>,
     pub barriers: Vec<noise_compute::types::Barrier>,
     pub n_days: u16,
 }
@@ -88,9 +79,6 @@ pub fn collect_from_hex_data(
     let mut all_airborne_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
     let mut all_cruise_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
     let mut all_airport_traffic_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
-    let mut all_airport_lines_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
-    let mut all_synth_airport_lines_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
-
     let mut date_ids = std::collections::HashSet::new();
     let mut n_days_from_metadata: Option<u16> = None;
     // Prune aircraft batches per hex ONCE; the collection below consumes the
@@ -117,6 +105,20 @@ pub fn collect_from_hex_data(
             )
         })
         .collect();
+    // The label lookup needs every airport-line row in the ring, but only
+    // when nearby airport traffic exists. Keep the files footer-only for all
+    // other clicks.
+    let all_airport_lines_batches = if per_hex_aircraft
+        .iter()
+        .any(|(_, _, traffic)| !traffic.is_empty())
+    {
+        hex_data
+            .iter()
+            .flat_map(|data| data.airport_lines.batches_all())
+            .collect()
+    } else {
+        Vec::new()
+    };
     // n_days is FILE-level schema metadata — read it without decoding any
     // batch. The legacy date_id fallback (pre-metadata extracts) must scan
     // the FULL files, never the pruned lists: a pruned scan would shrink the
@@ -508,8 +510,6 @@ pub fn collect_from_hex_data(
         all_airborne_batches.extend(airborne_batches);
         all_cruise_batches.extend(cruise_batches);
         all_airport_traffic_batches.extend(airport_traffic_batches);
-        all_airport_lines_batches.extend(data.airport_lines_batches.iter().cloned());
-        all_synth_airport_lines_batches.extend(data.synth_airport_lines_batches.iter().cloned());
     }
 
     let mut all_barriers: Vec<_> = canonicalize_barrier_results(all_barrier_results)?
@@ -543,7 +543,6 @@ pub fn collect_from_hex_data(
         aircraft_cruise_batches: all_cruise_batches,
         aircraft_airport_traffic_batches: all_airport_traffic_batches,
         airport_lines_batches: all_airport_lines_batches,
-        synth_airport_lines_batches: all_synth_airport_lines_batches,
         barriers: all_barriers,
         n_days,
     })

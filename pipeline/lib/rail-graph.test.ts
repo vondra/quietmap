@@ -25,11 +25,17 @@ function seg(over: Partial<RailGraphSegmentInput> & Pick<RailGraphSegmentInput, 
   }
 }
 
+function componentOfSegment(graph: ReturnType<typeof buildRailGraph>, key: string): number {
+  const edge = graph.edges.find((candidate) => candidate.parentKey === key)
+  assert.ok(edge, `missing graph edge for segment ${key}`)
+  return graph.componentOfNode[edge.nodeA]
+}
+
 test('buildRailGraph: a single segment interns exactly two nodes and one edge', () => {
   const g = buildRailGraph([seg({ key: 'a', startLat: 50, startLon: 14, endLat: 50, endLon: 14.01 })])
   assert.equal(g.nodeCount, 2)
   assert.equal(g.edgeCount, 1)
-  assert.equal(g.componentOfSegmentKey.get('a'), 0)
+  assert.equal(componentOfSegment(g, 'a'), 0)
 })
 
 test('T-junction healing: a branch touching a trunk mid-chord splits the trunk and connects the components', () => {
@@ -50,9 +56,9 @@ test('T-junction healing: a branch touching a trunk mid-chord splits the trunk a
   assert.equal(trunkEdges.length, 2, 'trunk split into two sub-edges at the junction')
   for (const e of trunkEdges) assert.equal(e.corridorToken, 'TRUNK', 'sub-edges keep the parent segment fields')
 
-  const trunkComp = g.componentOfSegmentKey.get('trunk')
-  const branchComp = g.componentOfSegmentKey.get('branch')
-  const islandComp = g.componentOfSegmentKey.get('island')
+  const trunkComp = componentOfSegment(g, 'trunk')
+  const branchComp = componentOfSegment(g, 'branch')
+  const islandComp = componentOfSegment(g, 'island')
   assert.equal(trunkComp, branchComp, 'healing connects trunk and branch into ONE component')
   assert.notEqual(trunkComp, islandComp, 'an untouched segment stays its own component')
 })
@@ -62,7 +68,7 @@ test('T-junction healing: no split when nothing touches the segment body', () =>
   const b = seg({ key: 'b', startLat: 51, startLon: 14.000, endLat: 51, endLon: 14.010 }) // far away, no touch
   const g = buildRailGraph([a, b])
   assert.equal(g.edgeCount, 2, 'neither segment is split')
-  assert.notEqual(g.componentOfSegmentKey.get('a'), g.componentOfSegmentKey.get('b'))
+  assert.notEqual(componentOfSegment(g, 'a'), componentOfSegment(g, 'b'))
 })
 
 test('snapToNearestRailGraphNode: within radius resolves to the nearest node, beyond radius fails (-1)', () => {

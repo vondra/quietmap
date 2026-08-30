@@ -23,8 +23,6 @@
  * global-suppression case for unlocalized pairs either — see
  * `rail-graph-metrics.ts`'s module doc and `RailWalkResult`'s doc
  * (rail-graph.ts) for the full rationale.
- * `RailWalkResult.failedComponents` survives only for `perComponentFailedKm`
- * comparison logging below (deprecated).
  *
  * `enableDestructive` gates `retract` (in full, including the `bleedGate`
  * sub-arm below) AND the silent residual — divisors ride with every accepted
@@ -134,7 +132,6 @@ export interface RailWalkEnrichStats {
   skippedForeignNational: number
   walk: {
     failures: RailWalkResult['failures']
-    failedComponentCount: number
     /** Pairs where NEITHER end snapped onto the graph — stats-only telemetry
      *  (2026-07-16 Step-B refinement dropped the old global silent-residual
      *  suppression; see module doc). */
@@ -142,19 +139,9 @@ export interface RailWalkEnrichStats {
     pairsWalked: number
     pairsTotal: number
   }
-  /** DEPRECATED (2026-07-16 Step-B refinement) — comparison-logging only.
-   *  Track-km of stampable (heavy-rail, non-traversal) rows sitting in a
-   *  graph component the walk marked failed. Retract/silent no longer key off
-   *  this (see `quarantinedKm`); kept to show how much tighter the
-   *  per-pair evidence shapes are in practice. */
-  perComponentFailedKm: number
   /** Track-km of stampable rows inside `RailWalkResult.quarantinedSegmentKeys`
    *  — the "how much is still stuck" figure retract/silent actually withhold
-   *  on now, computed from the same segments the graph was built from.
-   *  Usually <= `perComponentFailedKm`, but NOT always (an unlocalized
-   *  pair has no failed component yet still lays a chord band — Codex
-   *  review INFO). Typically far below it (the evidence shape is a subset of the whole
-   *  component). */
+   *  on now, computed from the same segments the graph was built from. */
   quarantinedKm: number
   /** Track-km of ALL stampable rows in the scope's graph — the denominator
    *  that makes `quarantinedKm` readable on its own. */
@@ -225,24 +212,6 @@ function collectGraphSegments(h3r4Dir: string, hexIds: readonly string[]): RailG
   return segments
 }
 
-/** DEPRECATED (2026-07-16 Step-B refinement) — comparison-logging only, see
- *  `RailWalkEnrichStats.perComponentFailedKm`'s doc. Track-km of stampable
- *  rows (walkable family, non-traversal — the graph's own candidates for a
- *  walk stamp) whose component the walk marked failed. */
-function computePerComponentFailedKm(
-  graph: RailGraph,
-  segments: readonly RailGraphSegmentInput[],
-  failedComponents: ReadonlySet<number>,
-): number {
-  let m = 0
-  for (const seg of segments) {
-    if (seg.isTraversalOnly) continue
-    const component = graph.componentOfSegmentKey.get(seg.key)
-    if (component !== undefined && failedComponents.has(component)) m += seg.lengthM
-  }
-  return m / 1000
-}
-
 /** Track-km of ALL stampable (non-traversal) rows in the scope's graph —
  *  the denominator that makes `computeQuarantinedKm`'s output readable. */
 function computeStampableKm(segments: readonly RailGraphSegmentInput[]): number {
@@ -253,9 +222,7 @@ function computeStampableKm(segments: readonly RailGraphSegmentInput[]): number 
 
 /** Track-km of stampable rows sitting inside
  *  `RailWalkResult.quarantinedSegmentKeys` — the figure retract/silent
- *  actually withhold on now (2026-07-16 Step-B refinement). Always
- *  <= `computePerComponentFailedKm`'s result on the same walk, since the
- *  bounded evidence shape is a subset of the pair's whole component. */
+ *  actually withhold on now (2026-07-16 Step-B refinement). */
 function computeQuarantinedKm(
   segments: readonly RailGraphSegmentInput[],
   quarantinedSegmentKeys: ReadonlySet<string>,
@@ -520,7 +487,6 @@ export async function enrichRailwaysByGraphWalk(opts: RailWalkEnrichOptions): Pr
     skippedForeign += result.skippedForeign
   }
 
-  const perComponentFailedKm = computePerComponentFailedKm(graph, segments, walk.failedComponents) // deprecated, comparison logging only
   const quarantinedKm = computeQuarantinedKm(segments, walk.quarantinedSegmentKeys)
   const stampableKm = computeStampableKm(segments)
   const stops = collectSnappedStops(graph, opts.pairs)
@@ -538,12 +504,10 @@ export async function enrichRailwaysByGraphWalk(opts: RailWalkEnrichOptions): Pr
     skippedForeignNational,
     walk: {
       failures: walk.failures,
-      failedComponentCount: walk.failedComponents.size,
       unlocalizedPairs: walk.unlocalizedPairs,
       pairsWalked: walk.pairsWalked,
       pairsTotal: walk.pairsTotal,
     },
-    perComponentFailedKm,
     quarantinedKm,
     stampableKm,
     sidecarPath,
@@ -555,7 +519,6 @@ export async function enrichRailwaysByGraphWalk(opts: RailWalkEnrichOptions): Pr
     `pairs ${stats.walk.pairsWalked}/${stats.walk.pairsTotal} walked; ` +
     `failures snap=${stats.walk.failures.snapFailed} disconnected=${stats.walk.failures.disconnected} ` +
     `detour=${stats.walk.failures.detourRejected} ambiguous=${stats.walk.failures.ambiguous}; ` +
-    `${stats.walk.failedComponentCount} failed component(s) (${stats.perComponentFailedKm.toFixed(1)} km, deprecated), ` +
     `${stats.quarantinedKm.toFixed(1)} of ${stats.stampableKm.toFixed(1)} stampable km quarantined, ${stats.walk.unlocalizedPairs} unlocalized`,
   )
 

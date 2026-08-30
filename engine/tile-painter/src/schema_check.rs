@@ -3,10 +3,6 @@
 //! an out-of-date `aircraft-extract` binary are silently absorbed and
 //! the heatmap bakes wrong `class_idx → NPD profile` mappings — the
 //! same risk the popup-side `source-reader::aircraft_v6::mod` guards.
-//!
-//! Honors the same `ACCEPT_LEGACY_AIRCRAFT_SCHEMA=1` escape hatch as
-//! popup so a dev iterating against pre-v13 data isn't forced into a
-//! multi-hour ADS-B re-extract just to render a tile.
 
 use std::fs::File;
 use std::io::Cursor;
@@ -21,26 +17,24 @@ use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use memmap2::Mmap;
 
-/// Empty since v15: terrain elevations are mandatory.
-/// v15 adds `terrain_*_elev_m` sub-segment columns; legacy
-/// versions can't provide them, and the heatmap loader's per-column
-/// `unwrap_or_else(vec![0.0; n])` would silently zero-out terrain,
-/// masking real underground segments. Re-extract is the only path
-/// forward. Within-v15 `airport_traffic.arrow` semantic evolutions
-/// (e.g. v5→v6 raw-Σ convention) are gated by
-/// [`check_airport_traffic_contract`] instead.
-const LEGACY_SCHEMA_VERSIONS: &[&str] = &[];
-/// Empty: v5 stored daily-average `band_energy_lin` plus a redundant
-/// `movements_per_day` column; v6 stores raw Σ over n_days and drops
-/// the redundant field. Accepting v5 under v6 code would ship wrong
-/// tile numbers (~25.6 dB low at n_days=365).
-const LEGACY_AIRPORT_TRAFFIC_CONTRACTS: &[&str] = &[];
-
-fn accept_legacy() -> bool {
-    matches!(
-        std::env::var("ACCEPT_LEGACY_AIRCRAFT_SCHEMA").as_deref(),
-        Ok("1")
-    )
+fn check_metadata_value(
+    label: &str,
+    batches: &[RecordBatch],
+    key: &str,
+    expected: &str,
+    recovery: &str,
+) -> Result<()> {
+    for (idx, batch) in batches.iter().enumerate() {
+        let actual = batch.schema_ref().metadata().get(key).map(String::as_str);
+        if actual == Some(expected) {
+            continue;
+        }
+        bail!(
+            "{label}[batch {idx}] {key} mismatch \
+             (expected {expected}, got {actual:?}) — {recovery}"
+        );
+    }
+    Ok(())
 }
 
 /// Verify every batch carries the current `schema_version` metadata.
@@ -48,30 +42,13 @@ fn accept_legacy() -> bool {
 /// which file to re-extract. Single-file IPC guarantees one schema per
 /// file but callers may merge across R4 hexes; loop every batch.
 pub fn check_batches(label: &str, batches: &[RecordBatch]) -> Result<()> {
-    let allow_legacy = accept_legacy();
-    for (idx, batch) in batches.iter().enumerate() {
-        let v = batch
-            .schema_ref()
-            .metadata()
-            .get("schema_version")
-            .map(String::as_str);
-        if v == Some(SCHEMA_VERSION) {
-            continue;
-        }
-        if allow_legacy && v.is_some_and(|s| LEGACY_SCHEMA_VERSIONS.contains(&s)) {
-            eprintln!(
-                "WARN: {label}[batch {idx}] legacy schema {v:?} accepted via \
-                 ACCEPT_LEGACY_AIRCRAFT_SCHEMA — class_idx may map to wrong NPD profile"
-            );
-            continue;
-        }
-        bail!(
-            "{label}[batch {idx}] schema_version mismatch \
-             (expected {SCHEMA_VERSION}, got {v:?}) — re-extract aircraft pipeline \
-             (or set ACCEPT_LEGACY_AIRCRAFT_SCHEMA=1 for dev)"
-        );
-    }
-    Ok(())
+    check_metadata_value(
+        label,
+        batches,
+        "schema_version",
+        SCHEMA_VERSION,
+        "re-extract aircraft pipeline",
+    )
 }
 
 /// `airport_traffic.arrow` carries a second `airport_traffic_contract`
@@ -81,30 +58,13 @@ pub fn check_batches(label: &str, batches: &[RecordBatch]) -> Result<()> {
 /// stale v5 traffic arrow doesn't silently feed wrong daily-average
 /// energy where v6 code expects raw Σ.
 pub fn check_airport_traffic_contract(label: &str, batches: &[RecordBatch]) -> Result<()> {
-    let allow_legacy = accept_legacy();
-    for (idx, batch) in batches.iter().enumerate() {
-        let c = batch
-            .schema_ref()
-            .metadata()
-            .get("airport_traffic_contract")
-            .map(String::as_str);
-        if c == Some(AIRPORT_TRAFFIC_CONTRACT_V9) {
-            continue;
-        }
-        if allow_legacy && c.is_some_and(|s| LEGACY_AIRPORT_TRAFFIC_CONTRACTS.contains(&s)) {
-            eprintln!(
-                "WARN: {label}[batch {idx}] legacy airport_traffic_contract {c:?} accepted \
-                 via ACCEPT_LEGACY_AIRCRAFT_SCHEMA — energy semantics may differ"
-            );
-            continue;
-        }
-        bail!(
-            "{label}[batch {idx}] airport_traffic_contract mismatch \
-             (expected {AIRPORT_TRAFFIC_CONTRACT_V9}, got {c:?}) \
-             — re-extract aircraft pipeline (or set ACCEPT_LEGACY_AIRCRAFT_SCHEMA=1 for dev)"
-        );
-    }
-    Ok(())
+    check_metadata_value(
+        label,
+        batches,
+        "airport_traffic_contract",
+        AIRPORT_TRAFFIC_CONTRACT_V9,
+        "re-extract aircraft pipeline",
+    )
 }
 
 /// `airborne.arrow` carries `airborne_contract` (K3, 2026-05). v1
@@ -115,22 +75,13 @@ pub fn check_airport_traffic_contract(label: &str, batches: &[RecordBatch]) -> R
 /// `terrain_end_elev_m` — produce wrong Filter D cuts at every pixel.
 /// Reject loud.
 pub fn check_airborne_contract(label: &str, batches: &[RecordBatch]) -> Result<()> {
-    for (idx, batch) in batches.iter().enumerate() {
-        let c = batch
-            .schema_ref()
-            .metadata()
-            .get("airborne_contract")
-            .map(String::as_str);
-        if c == Some(AIRBORNE_CONTRACT_V4) {
-            continue;
-        }
-        bail!(
-            "{label}[batch {idx}] airborne_contract mismatch \
-             (expected {AIRBORNE_CONTRACT_V4}, got {c:?}) \
-             — re-extract aircraft pipeline"
-        );
-    }
-    Ok(())
+    check_metadata_value(
+        label,
+        batches,
+        "airborne_contract",
+        AIRBORNE_CONTRACT_V4,
+        "re-extract aircraft pipeline",
+    )
 }
 
 /// `cruise.arrow` carries `cruise_contract` (v16, 2026-05). v16 drops
@@ -139,22 +90,13 @@ pub fn check_airborne_contract(label: &str, batches: &[RecordBatch]) -> Result<(
 /// this assert the loader would silently skip batches and zero out
 /// cruise pixels. Reject loud.
 pub fn check_cruise_contract(label: &str, batches: &[RecordBatch]) -> Result<()> {
-    for (idx, batch) in batches.iter().enumerate() {
-        let c = batch
-            .schema_ref()
-            .metadata()
-            .get("cruise_contract")
-            .map(String::as_str);
-        if c == Some(CRUISE_CONTRACT_V17) {
-            continue;
-        }
-        bail!(
-            "{label}[batch {idx}] cruise_contract mismatch \
-             (expected {CRUISE_CONTRACT_V17}, got {c:?}) \
-             — re-extract cruise stage 2B"
-        );
-    }
-    Ok(())
+    check_metadata_value(
+        label,
+        batches,
+        "cruise_contract",
+        CRUISE_CONTRACT_V17,
+        "re-extract cruise stage 2B",
+    )
 }
 
 /// Open a per-R4 arrow file, run the version + per-file contract gate,

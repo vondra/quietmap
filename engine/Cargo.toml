@@ -1,8 +1,6 @@
 # One workspace for the eight engine crates. Rebuild with
 # `cargo build --release --manifest-path engine/Cargo.toml`; binaries land
-# in engine/target/release/. Crate-local target/ names are not Cargo's
-# output directory — scripts/ensure-engine-target-shims.sh points them at
-# this workspace target so older path literals keep resolving.
+# in engine/target/release/.
 [workspace]
 resolver = "2"
 members = [

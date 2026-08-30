@@ -235,10 +235,6 @@ export interface RailGraphEdge {
 export interface RailGraph {
   nodeCount: number
   edgeCount: number
-  /** Original segment key -> component id. Well-defined even for a healed,
-   *  multi-sub-edge segment: healing only ever connects a segment's own
-   *  sub-edges to each other, so they always share one component. */
-  componentOfSegmentKey: Map<string, number>
   // Internal structure consumed by rail-graph-metrics.ts (routing, parallel
   // spread, the R15/R16 detectors). Plain fields, not hidden behind a
   // private/symbol boundary, so the sibling module can build directly on top
@@ -454,17 +450,9 @@ export function buildRailGraph(segments: RailGraphSegmentInput[]): RailGraph {
     nodeFamilyMask[e.nodeB] |= bit
   }
 
-  const componentOfSegmentKey = new Map<string, number>()
-  for (const e of edges) {
-    if (!componentOfSegmentKey.has(e.parentKey)) {
-      componentOfSegmentKey.set(e.parentKey, componentOfNode[e.nodeA])
-    }
-  }
-
   return {
     nodeCount: nodes.length,
     edgeCount: edges.length,
-    componentOfSegmentKey,
     nodes,
     edges,
     adjacency,
@@ -684,19 +672,8 @@ export interface RailWalkResult {
   /** See `RailFailedPairRecord`'s doc for the reason-specific diagnostics
    *  each entry carries. */
   failedPairChords: RailFailedPairRecord[]
-  /** Component ids touched by ANY failed pair — STATS ONLY (2026-07-16
-   *  Step-B refinement). Per-component granularity quarantined the WHOLE
-   *  connected network wherever rail forms one component: Step-A live-run
-   *  evidence found 9 failed components — including the entire CZ mainline,
-   *  31 245 km — behind only 150 failed pairs out of 2 461 (rail is one
-   *  connected component nationwide, so any single failed pair withheld
-   *  retract/silent everywhere). Retract and the silent residual
-   *  (rail-walk-enrich.ts) now key off `quarantinedSegmentKeys` — the
-   *  pair's OWN per-reason evidence shape — instead; this field survives
-   *  only for `perComponentFailedKm` comparison logging (deprecated). */
-  failedComponents: Set<number>
   /** Every stampable segment (`RailGraphSegmentInput.key`) inside a FAILED
-   *  pair's own evidence region — strictly tighter than `failedComponents`
+   *  pair's own evidence region — strictly tighter than whole-component gating
    *  (2026-07-16 Step-B refinement, /gg fix batch item 4, review round +
    *  the same-day quarantine redesign). The shape follows the FAILURE
    *  REASON (see each function in rail-graph-metrics.ts):

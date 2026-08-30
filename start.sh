@@ -7,9 +7,6 @@ cd "$(dirname "$0")"
 PORT="${PORT:-8520}"
 
 echo "==> engine (source-reader native addon)"
-if [ -x scripts/ensure-engine-target-shims.sh ]; then
-  ./scripts/ensure-engine-target-shims.sh
-fi
 cargo build --release --manifest-path engine/source-reader/Cargo.toml
 
 echo "==> frontend"

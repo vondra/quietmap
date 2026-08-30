@@ -182,7 +182,6 @@ fi
 
 # Rebuild — Fastify dlopen + long jobs cache stale binaries (AGENTS.md).
 log "rebuilding (release)"
-./scripts/ensure-engine-target-shims.sh
 cargo build --release --manifest-path engine/tile-painter/Cargo.toml \
   --bin build-heatmap-surface --bin build-heatmap-aircraft \
   --bin build-pyramid --bin build-heatmap-combine --bin tile-store-ingest \

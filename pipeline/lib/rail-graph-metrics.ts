@@ -29,8 +29,7 @@
  * merely the best path's own parallel twin — this killed 113 of the 150
  * failed pairs, all Czech double-track lines the ambiguity probe mistook for
  * a genuine second corridor. `quarantineAmbiguousPathUnion` /
- * `quarantineGraphlessPair` / `quarantineChordVicinity` replace
- * `failedComponents`-driven withholding with per-pair evidence shapes
+ * `quarantineGraphlessPair` / `quarantineChordVicinity` use per-pair evidence shapes
  * (`RailWalkResult.quarantinedSegmentKeys`: candidate-path union for
  * ambiguous; chord band + capped graph fingers for the graphless kinds) —
  * per-component granularity had
@@ -38,8 +37,6 @@
  * components, because rail is one connected component nationwide; the
  * admissible-path ellipse (both ends snapped) is strictly tighter evidence,
  * and the ball/chord shapes cover the ends the graph could not localize.
- * `failedComponents` survives only for comparison logging
- * (rail-walk-enrich.ts's deprecated `perComponentFailedKm`).
  */
 
 import { nodeKey, haversineM, flatDist, pointToSegmentDist, pointToPolylineDist, coordKey4dp, wrapLonDeltaDeg, M_PER_DEG_LAT, M_PER_DEG_LON_EQ } from './spatial.js'
@@ -973,9 +970,6 @@ export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCou
   const divisorBySegmentKey = new Map<string, number>()
   const failures = { snapFailed: 0, disconnected: 0, detourRejected: 0, ambiguous: 0 }
   const failedPairChords: RailWalkResult['failedPairChords'] = []
-  // STATS ONLY (2026-07-16 Step-B refinement) — see RailWalkResult's doc.
-  // `quarantinedSegmentKeys` below is what retract/silent actually key off.
-  const failedComponents = new Set<number>()
   const quarantinedSegmentKeys = new Set<string>()
   // Neither end snapped — stats-only telemetry now (see RailWalkResult doc);
   // the pair's own quarantine is handled via quarantineUnlocalizedPairChord
@@ -1060,8 +1054,6 @@ export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCou
       // snaps, preserving the pre-family behavior for evidence shapes.
       const fromNode = snapToNearestRailGraphNode(graph, cp.fromLat, cp.fromLon)
       const toNode = snapToNearestRailGraphNode(graph, cp.toLat, cp.toLon)
-      if (fromNode !== -1) failedComponents.add(graph.componentOfNode[fromNode])
-      if (toNode !== -1) failedComponents.add(graph.componentOfNode[toNode])
       quarantineGraphless(fromNode, toNode)
       if (fromNode === -1 && toNode === -1) {
         unlocalizedPairs++ // quarantine: quarantineGraphlessPair above already laid the chord band; with no snapped node there are no fingers
@@ -1098,8 +1090,6 @@ export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCou
 
       if (graph.componentOfNode[fromNode] !== graph.componentOfNode[toNode]) {
         primaryFailure ??= () => {
-          failedComponents.add(graph.componentOfNode[fromNode])
-          failedComponents.add(graph.componentOfNode[toNode])
           quarantineGraphless(fromNode, toNode)
           fail('disconnected')
         }
@@ -1114,7 +1104,6 @@ export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCou
         // routable edges alone — folded into 'disconnected' (same class of
         // problem at a finer grain).
         primaryFailure ??= () => {
-          failedComponents.add(graph.componentOfNode[fromNode])
           quarantineGraphless(fromNode, toNode)
           fail('disconnected')
         }
@@ -1123,7 +1112,6 @@ export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCou
 
       if (best.lengthM > bound) {
         primaryFailure ??= () => {
-          failedComponents.add(graph.componentOfNode[fromNode])
           quarantineGraphless(fromNode, toNode)
           // Diagnostics for bound tuning (CH Alpine meanders: rack/spiral
           // lines legitimately exceed 2.5x on short chords).
@@ -1167,7 +1155,6 @@ export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCou
         // 2026-07-16: the diagnostic used to re-derive it from scratch).
         const twinGate = probeFlagged ? twinGateMetrics(graph, best, alt) : null
         if (probeFlagged && !altPathIsParallelTwin(twinGate)) {
-          failedComponents.add(graph.componentOfNode[fromNode])
           quarantineAmbiguousPathUnion(graph, fromNode, toNode, best, alt, famFilter, scratch, quarantinedSegmentKeys)
           // DE Step A v2 diagnostics (fix 3): the v3 twin-gate tuning input —
           // see summarizeAmbiguousGeometry's doc.
@@ -1199,7 +1186,7 @@ export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCou
   applyParallelSpread(graph, stampsBySegmentKey, divisorBySegmentKey, geomByKey)
 
   return {
-    stampsBySegmentKey, divisorBySegmentKey, failures, failedPairChords, failedComponents,
+    stampsBySegmentKey, divisorBySegmentKey, failures, failedPairChords,
     quarantinedSegmentKeys, unlocalizedPairs, pairsWalked, pairsTotal,
   }
 }

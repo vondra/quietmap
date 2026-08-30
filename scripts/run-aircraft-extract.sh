@@ -182,7 +182,6 @@ ln -sf "$(basename "$LOG_FILE")" "$LOG_DIR/aircraft-extract-latest.log"
 log "logging to $LOG_FILE (symlinked $LOG_DIR/aircraft-extract-latest.log)"
 
 log "rebuilding aircraft-extract (release)"
-./scripts/ensure-engine-target-shims.sh
 cargo build --release --manifest-path engine/aircraft-extract/Cargo.toml --bin aircraft-extract \
     2>&1 | stdbuf -oL -eL tee -a "$LOG_FILE"
 BIN=./engine/target/release/aircraft-extract

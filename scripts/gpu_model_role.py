@@ -584,9 +584,8 @@ def model_source_recipe_sha256(product_root: Path) -> str:
         root = product_root / relative_root
         if not root.is_dir():
             raise ContractError(f"model source directory is absent: {relative_root}")
-        # Crate-local target/ names are shims to the workspace target.
-        # pathlib rglob raises on those symlinks (and re-lists one level
-        # through them). Prune by name, then fail closed on any other
+        # Cargo target/ directories are build output, never model source.
+        # Prune them by name, then fail closed on any other
         # directory symlink so a relocated source dir cannot silently drop
         # files from the published recipe digest.
         for dirpath, dirnames, filenames in os.walk(root, followlinks=False):

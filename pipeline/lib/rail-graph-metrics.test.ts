@@ -26,6 +26,12 @@ function seg(over: Partial<RailGraphSegmentInput> & Pick<RailGraphSegmentInput, 
   }
 }
 
+function componentOfSegment(graph: ReturnType<typeof buildRailGraph>, key: string): number {
+  const edge = graph.edges.find((candidate) => candidate.parentKey === key)
+  assert.ok(edge, `missing graph edge for segment ${key}`)
+  return graph.componentOfNode[edge.nodeA]
+}
+
 // ── T-junction healing: stamps map back to the ORIGINAL parent key ─────────
 
 test('walk: a path crossing a healed T-junction stamps the parent key once, not once per sub-edge', () => {
@@ -70,7 +76,6 @@ test('walk: detour gate rejects a route with no reasonable alternative to the hu
   assert.equal(result.failures.detourRejected, 1)
   assert.equal(result.pairsWalked, 0)
   assert.equal(result.stampsBySegmentKey.size, 0)
-  assert.equal(result.failedComponents.size, 1)
 })
 
 test('walk: a meander well within the detour gate is fully stamped on every edge', () => {
@@ -408,7 +413,7 @@ test('walk: a station pair on a narrow-gauge line (railType 3) snaps, walks and 
 
 // ── Disconnected pair ────────────────────────────────────────────────────────
 
-test('walk: a pair across two disconnected components fails and records both components', () => {
+test('walk: a pair across two disconnected components fails and quarantines both endpoint tracks', () => {
   const track1 = seg({ key: 't1', startLat: 50.000, startLon: 14.000, endLat: 50.000, endLon: 14.010 })
   const track2 = seg({ key: 't2', startLat: 51.000, startLon: 14.000, endLat: 51.000, endLon: 14.010 }) // far, untouching
   const g = buildRailGraph([track1, track2])
@@ -418,18 +423,15 @@ test('walk: a pair across two disconnected components fails and records both com
   assert.equal(result.failures.disconnected, 1)
   assert.equal(result.pairsWalked, 0)
   assert.equal(result.stampsBySegmentKey.size, 0)
-  assert.equal(result.failedComponents.size, 2)
   assert.equal(result.quarantinedSegmentKeys.has('t1'), true, 'disconnected takes chord band + fingers — the from-side track (at focus A) is inside')
   assert.equal(result.quarantinedSegmentKeys.has('t2'), true, 'and the to-side track too — the trains exist, the graph is broken between them')
 })
 
-// ── snapFailed: per-end component attribution + unlocalized pairs (2026-07-16
-// /gg review item 4) — a pair with only ONE end snapping still localizes
-// evidence to that side's component; a pair with NEITHER end snapping could
-// belong to any component, so it is counted separately instead of silently
-// leaving zero components flagged. ───────────────────────────────────────────
+// ── snapFailed localization (2026-07-16 /gg review item 4): one snapped
+// end anchors a bounded evidence shape; neither snapped end uses the chord
+// vicinity and increments the unlocalized count. ─────────────────────────────
 
-test('walk: a pair with only ONE end snapping marks THAT end\'s component failed, and does not touch unlocalizedPairs', () => {
+test('walk: a pair with only ONE end snapping stays localized and quarantines the snapped end', () => {
   const track1 = seg({ key: 't1', startLat: 50.000, startLon: 14.000, endLat: 50.000, endLon: 14.010 })
   const g = buildRailGraph([track1])
   // toLat/toLon sit ~1100 km away — far outside STATION_SNAP_RADIUS_M, so only
@@ -438,7 +440,6 @@ test('walk: a pair with only ONE end snapping marks THAT end\'s component failed
     { fromLat: 50.000, fromLon: 14.000, toLat: 60.000, toLon: 14.000, pax: 5, frt: 0 },
   ])
   assert.equal(result.failures.snapFailed, 1)
-  assert.equal(result.failedComponents.size, 1, 'the snapped end\'s component IS flagged')
   assert.equal(result.unlocalizedPairs, 0, 'one end resolved — this pair is localizable, not counted as unlocalized')
 })
 
@@ -507,14 +508,13 @@ test('walk: an endpoint with no graph node within the search ceiling records \'u
   assert.equal(roundTripped.snapDistanceM!.to, 'unreachable', 'survives JSON — Infinity would have collapsed to null here')
 })
 
-test('walk: a pair where NEITHER end snaps increments unlocalizedPairs and flags no component', () => {
+test('walk: a pair where NEITHER end snaps increments unlocalizedPairs', () => {
   const track1 = seg({ key: 't1', startLat: 50.000, startLon: 14.000, endLat: 50.000, endLon: 14.010 })
   const g = buildRailGraph([track1])
   const result = walkRailStationPairs(g, [
     { fromLat: 60.000, fromLon: 14.000, toLat: 61.000, toLon: 14.000, pax: 5, frt: 0 }, // both ends far from the only track
   ])
   assert.equal(result.failures.snapFailed, 1)
-  assert.equal(result.failedComponents.size, 0, 'nothing snapped — no component to blame')
   assert.equal(result.unlocalizedPairs, 1, 'unlocatable pair counted separately — it could belong to ANY component')
 })
 
@@ -526,7 +526,7 @@ test('walk: a pair where NEITHER end snaps increments unlocalizedPairs and flags
 // snapped ends (the trains exist, the graph failed to place them);
 // one-end 'snapFailed' -> the ball around the snapped end; unlocalized ->
 // chord vicinity. Verified on live CZ Step-A data: rail is one connected
-// component nationwide, so `failedComponents` alone had withheld
+// component nationwide, so whole-component gating had withheld
 // retract/silent across the ENTIRE 31 245 km mainline behind just 9 of 150
 // failed pairs. ──────────────────────────────────────────────────────────────
 
@@ -555,7 +555,7 @@ test('quarantine (DE/NL redesign): a detour-rejected pair takes chord band + gra
   ])
   assert.equal(result.failures.detourRejected, 1, 'fixture sanity: same shape as the existing detour-gate test')
   assert.equal(
-    g.componentOfSegmentKey.get('a-p'), g.componentOfSegmentKey.get('chain2'),
+    componentOfSegment(g, 'a-p'), componentOfSegment(g, 'chain2'),
     'fixture sanity: ONE connected component spans the detour pair AND the far chain',
   )
   assert.equal(result.quarantinedSegmentKeys.has('chain0'), true, 'qualifies through its A endpoint (distGraph 0 + geo(A,B) 7.16 km <= bound) — the chord corridor stays protected from the silent residual')
@@ -608,7 +608,6 @@ test('quarantine: an unlocalized pair (neither end snaps) quarantines only stamp
     { fromLat: 10.000, fromLon: 10.000, toLat: 11.000, toLon: 10.000, pax: 5, frt: 0 },
   ])
   assert.equal(result.unlocalizedPairs, 1, 'fixture sanity: neither end snaps onto either track')
-  assert.equal(result.failedComponents.size, 0, 'nothing snapped — no component to flood a bounded search from')
   assert.equal(result.quarantinedSegmentKeys.has('near'), true, 'within UNLOCALIZED_PAIR_QUARANTINE_RADIUS_M (5 km) of the chord')
   assert.equal(result.quarantinedSegmentKeys.has('far'), false, 'thousands of km from the chord — untouched')
 })

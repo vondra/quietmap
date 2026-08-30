@@ -128,9 +128,8 @@ fn build_class_weights(
 /// check (`v15` for airborne/cruise, `airport_traffic_v8` for the
 /// ground-ops arrow), so the popup HTTP path can map the failure to a
 /// structured 500 response with an operator-actionable message.
-// 14 args: the popup aircraft entry accretes one param per physics input.
-// Bundle into a context struct together with dropping the dead
-// `_synth_airport_lines_batches` param below (same planned cleanup commit).
+// 13 args: the popup aircraft entry accretes one param per physics input.
+// Bundle into a context struct when another input is added.
 #[allow(clippy::too_many_arguments)]
 pub fn add_v6_aircraft_to_result(
     result: &mut NoiseResult,
@@ -140,11 +139,6 @@ pub fn add_v6_aircraft_to_result(
     cruise_batches: &[RecordBatch],
     airport_traffic_batches: &[RecordBatch],
     airport_lines_batches: &[RecordBatch],
-    // Was used to seed airport_anchors for the popup-side is_near_airport
-    // carve-out; deleted 2026-05-23 (carve-out never fired in production).
-    // Kept in the signature so the SourceData struct + caller chain stay
-    // stable; rename or drop in a separate cleanup commit if desired.
-    _synth_airport_lines_batches: &[RecordBatch],
     airport_summary_path: Option<&Path>,
     rasters: &dyn RasterSampler,
     barriers: &[noise_compute::types::Barrier],
@@ -160,17 +154,9 @@ pub fn add_v6_aircraft_to_result(
     // SEGMENT_TOP_K_PER_KIND_FULL (1000) on the "Show all" path.
     trace_cap: usize,
 ) -> Result<(), String> {
-    assert_schema_version("airborne.arrow", airborne_batches)?;
-    assert_schema_version("cruise.arrow", cruise_batches)?;
-    if !airborne_batches.is_empty() {
-        assert_airborne_contract("airborne.arrow", airborne_batches)?;
-    }
-    if !cruise_batches.is_empty() {
-        assert_cruise_contract("cruise.arrow", cruise_batches)?;
-    }
-    if !airport_traffic_batches.is_empty() {
-        assert_airport_traffic_contract("airport_traffic.arrow", airport_traffic_batches)?;
-    }
+    assert_airborne_contract("airborne.arrow", airborne_batches)?;
+    assert_cruise_contract("cruise.arrow", cruise_batches)?;
+    assert_airport_traffic_contract("airport_traffic.arrow", airport_traffic_batches)?;
     // GA full-year hybrid per-class weight LUT — built from the
     // `sample_days_by_class` metadata the airborne / airport_traffic
     // arrows stamp. FAILS LOUD when rows
@@ -236,19 +222,6 @@ pub fn add_v6_aircraft_to_result(
         return Ok(());
     }
 
-    // Gates the 6 km `AIRPORT_CONTEXT_RADIUS_M` test in airborne
-    // scatter; without it, approach-corridor sub-segments below the
-    // 150 m fixed-wing-jet AGL floor would be dropped. Per-osm_id
-    // Note: pre-2026-05-23 the airborne kernel called `is_near_airport`
-    // over per-popup airport_anchors (runway endpoints + Stage 1.5 synth
-    // + per-airport_key centroids) to set `ground_context = AIRPORT_LINE`
-    // and bypass the popup's stale-AGL filter for legitimate low-AGL
-    // approaches at airports. Empirically the carve-out NEVER fired in
-    // production — Stage 1 + Stage 2A already correctly classify those
-    // sub-segs. Deleted the call to save 944 ns/sub-seg × 22 M sub-segs
-    // = 21 s per LKPR query. Aircraft Lden delta when bypassing the
-    // stale filter entirely: 0.000 dB on 5 reference receivers.
-
     // C2 terrain screening (P0, default OFF): one receiver horizon per
     // popup query, built from the DEM terrain surface (DSM-biased:
     // GLO-30 includes canopy/buildings) via the same tile-cached
@@ -288,8 +261,8 @@ pub fn add_v6_aircraft_to_result(
     if !traffic_views.is_empty() {
         n_traffic_rows = traffic_views.len();
         // OSM `ref` tags (e.g. runway "06/24") let SegmentTrace render
-        // "LKPR RWY 06/24" instead of generic "LKPR runway-roll". Synth
-        // osm_ids have no `ref` row → fall through to the generic label.
+        // "LKPR RWY 06/24" instead of generic "LKPR runway-roll". Rows
+        // without a matching OSM ref fall through to the generic label.
         let osm_ref_lookup = build_osm_ref_lookup(airport_lines_batches);
         // Borrow of the process-cached map — no per-query rebuild.
         let airport_summary_lookup = airport_summary_accum.as_ref().map(|a| a.lookup());
@@ -451,11 +424,6 @@ fn sum_periods_linear(sources: &[SourceResult]) -> NoisePeriods {
 /// and Stage 1. Earlier files cannot supply them and must be rejected.
 pub(super) const EXPECTED_SCHEMA_VERSION: &str = "v15";
 
-/// Versions accepted under the dev-only `ACCEPT_LEGACY_AIRCRAFT_SCHEMA=1`
-/// escape hatch. Empty since v15: earlier versions cannot provide mandatory
-/// endpoint terrain elevations; force re-extract instead of degrading silently.
-const LEGACY_SCHEMA_VERSIONS: &[&str] = &[];
-
 /// The `airport_traffic.arrow` semantic contract. `schema_version`
 /// only guards column types/order; this guards what those columns
 /// mean today: `band_energy_lin` = raw Σ over n_days of Z-weighted
@@ -470,15 +438,6 @@ const LEGACY_SCHEMA_VERSIONS: &[&str] = &[];
 /// double-weight GA at 1/12 — the bump refuses it.
 pub(super) const EXPECTED_AIRPORT_TRAFFIC_CONTRACT: &str = "airport_traffic_v9";
 
-/// Legacy `airport_traffic_contract` variants accepted under the same
-/// `ACCEPT_LEGACY_AIRCRAFT_SCHEMA=1` escape hatch as
-/// [`LEGACY_SCHEMA_VERSIONS`]. Empty: v5 stored daily-average
-/// `band_energy_lin` plus a redundant `movements_per_day` column,
-/// neither aligned with v6's raw Σ convention. Silent decoding would
-/// ship wrong Lden numbers (~25.6 dB low at n_days=365). Re-extract is
-/// the only safe path.
-const LEGACY_AIRPORT_TRAFFIC_CONTRACTS: &[&str] = &[];
-
 /// `airborne.arrow` sub-segment column-shape contract. v2 (K3) keeps
 /// only `terrain_start_elev_m` / `terrain_end_elev_m`; v1 stored five
 /// elevs (start / q1 / mid / q3 / end). Popup reader hard-fails on a
@@ -489,7 +448,6 @@ const LEGACY_AIRPORT_TRAFFIC_CONTRACTS: &[&str] = &[];
 /// `sample_days_by_class` vector the consumer REQUIRES to weight GA rows
 /// at `1/ga_n_days`. A v3 reader ignores it and ships the +14.8 dB phantom.
 pub(super) const EXPECTED_AIRBORNE_CONTRACT: &str = "airborne_v4";
-const LEGACY_AIRBORNE_CONTRACTS: &[&str] = &[];
 
 /// Expected `cruise_contract` metadata. v16 drops the tautological
 /// `flags` column (always IS_DEPARTURE per Doc 29 §A.3.2). Older
@@ -497,11 +455,23 @@ const LEGACY_AIRBORNE_CONTRACTS: &[&str] = &[];
 /// would zero out cruise contributions at every receiver.
 pub(super) const EXPECTED_CRUISE_CONTRACT: &str = "cruise_v17";
 
-fn accept_legacy() -> bool {
-    matches!(
-        std::env::var("ACCEPT_LEGACY_AIRCRAFT_SCHEMA").as_deref(),
-        Ok("1")
-    )
+fn assert_metadata_value(
+    label: &str,
+    batches: &[RecordBatch],
+    key: &str,
+    expected: &str,
+    recovery: &str,
+) -> Result<(), String> {
+    for (idx, batch) in batches.iter().enumerate() {
+        let actual = batch.schema_ref().metadata().get(key).map(String::as_str);
+        if actual == Some(expected) {
+            continue;
+        }
+        return Err(format!(
+            "{label}[batch {idx}] {key} mismatch (expected {expected}, got {actual:?}) — {recovery}"
+        ));
+    }
+    Ok(())
 }
 
 /// Verify `schema_version` on every batch in the slice — the caller
@@ -510,29 +480,13 @@ fn accept_legacy() -> bool {
 /// readers silently drop rows via `col_list(...)` → `continue`; this
 /// is the loud safety net.
 pub(super) fn assert_schema_version(label: &str, batches: &[RecordBatch]) -> Result<(), String> {
-    let allow_legacy = accept_legacy();
-    for (idx, batch) in batches.iter().enumerate() {
-        let v = batch
-            .schema_ref()
-            .metadata()
-            .get("schema_version")
-            .map(String::as_str);
-        if v == Some(EXPECTED_SCHEMA_VERSION) {
-            continue;
-        }
-        if allow_legacy && v.is_some_and(|s| LEGACY_SCHEMA_VERSIONS.contains(&s)) {
-            eprintln!(
-                "WARN: {label}[batch {idx}] legacy schema {v:?} accepted via \
-                 ACCEPT_LEGACY_AIRCRAFT_SCHEMA — class_idx may map to wrong NPD profile"
-            );
-            continue;
-        }
-        return Err(format!(
-            "{label}[batch {idx}] schema_version mismatch (expected {EXPECTED_SCHEMA_VERSION}, got {v:?}) \
-             — re-extract aircraft pipeline (or set ACCEPT_LEGACY_AIRCRAFT_SCHEMA=1 for dev)"
-        ));
-    }
-    Ok(())
+    assert_metadata_value(
+        label,
+        batches,
+        "schema_version",
+        EXPECTED_SCHEMA_VERSION,
+        "re-extract aircraft pipeline",
+    )
 }
 
 /// Guard the `airport_traffic.arrow` dimensional contract. Mirrors
@@ -547,30 +501,13 @@ pub(super) fn assert_airport_traffic_contract(
     // Enforce schema_version too: metadata corruption could leave only
     // one of the two stamps intact.
     assert_schema_version(label, batches)?;
-    let allow_legacy = accept_legacy();
-    for (idx, batch) in batches.iter().enumerate() {
-        let c = batch
-            .schema_ref()
-            .metadata()
-            .get("airport_traffic_contract")
-            .map(String::as_str);
-        if c == Some(EXPECTED_AIRPORT_TRAFFIC_CONTRACT) {
-            continue;
-        }
-        if allow_legacy && c.is_some_and(|s| LEGACY_AIRPORT_TRAFFIC_CONTRACTS.contains(&s)) {
-            eprintln!(
-                "WARN: {label}[batch {idx}] legacy airport_traffic_contract {c:?} accepted \
-                 via ACCEPT_LEGACY_AIRCRAFT_SCHEMA — energy semantics may differ"
-            );
-            continue;
-        }
-        return Err(format!(
-            "{label}[batch {idx}] airport_traffic_contract mismatch \
-             (expected {EXPECTED_AIRPORT_TRAFFIC_CONTRACT}, got {c:?}) \
-             — re-extract aircraft pipeline (or set ACCEPT_LEGACY_AIRCRAFT_SCHEMA=1 for dev)"
-        ));
-    }
-    Ok(())
+    assert_metadata_value(
+        label,
+        batches,
+        "airport_traffic_contract",
+        EXPECTED_AIRPORT_TRAFFIC_CONTRACT,
+        "re-extract aircraft pipeline",
+    )
 }
 
 /// Guard the `airborne.arrow` sub-segment column-shape contract.
@@ -581,30 +518,13 @@ pub(super) fn assert_airport_traffic_contract(
 /// every airborne sub-segment.
 pub(super) fn assert_airborne_contract(label: &str, batches: &[RecordBatch]) -> Result<(), String> {
     assert_schema_version(label, batches)?;
-    let allow_legacy = accept_legacy();
-    for (idx, batch) in batches.iter().enumerate() {
-        let c = batch
-            .schema_ref()
-            .metadata()
-            .get("airborne_contract")
-            .map(String::as_str);
-        if c == Some(EXPECTED_AIRBORNE_CONTRACT) {
-            continue;
-        }
-        if allow_legacy && c.is_some_and(|s| LEGACY_AIRBORNE_CONTRACTS.contains(&s)) {
-            eprintln!(
-                "WARN: {label}[batch {idx}] legacy airborne_contract {c:?} accepted \
-                 via ACCEPT_LEGACY_AIRCRAFT_SCHEMA — terrain columns may differ"
-            );
-            continue;
-        }
-        return Err(format!(
-            "{label}[batch {idx}] airborne_contract mismatch \
-             (expected {EXPECTED_AIRBORNE_CONTRACT}, got {c:?}) \
-             — re-extract aircraft pipeline (or set ACCEPT_LEGACY_AIRCRAFT_SCHEMA=1 for dev)"
-        ));
-    }
-    Ok(())
+    assert_metadata_value(
+        label,
+        batches,
+        "airborne_contract",
+        EXPECTED_AIRBORNE_CONTRACT,
+        "re-extract aircraft pipeline",
+    )
 }
 
 /// Guard the `cruise.arrow` spatial-resolution contract. Pre-v15 files
@@ -612,20 +532,11 @@ pub(super) fn assert_airborne_contract(label: &str, batches: &[RecordBatch]) -> 
 /// batches whose `r7_hex` column is missing, hiding the version skew.
 pub(super) fn assert_cruise_contract(label: &str, batches: &[RecordBatch]) -> Result<(), String> {
     assert_schema_version(label, batches)?;
-    for (idx, batch) in batches.iter().enumerate() {
-        let c = batch
-            .schema_ref()
-            .metadata()
-            .get("cruise_contract")
-            .map(String::as_str);
-        if c == Some(EXPECTED_CRUISE_CONTRACT) {
-            continue;
-        }
-        return Err(format!(
-            "{label}[batch {idx}] cruise_contract mismatch \
-             (expected {EXPECTED_CRUISE_CONTRACT}, got {c:?}) \
-             — re-extract cruise stage 2B"
-        ));
-    }
-    Ok(())
+    assert_metadata_value(
+        label,
+        batches,
+        "cruise_contract",
+        EXPECTED_CRUISE_CONTRACT,
+        "re-extract cruise stage 2B",
+    )
 }

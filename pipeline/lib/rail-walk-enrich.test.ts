@@ -305,13 +305,7 @@ test('a disconnected pair\'s graphless evidence shapes withhold silent+retract n
   assert.equal(stats.silentStamped, 0, 'both tiny components sit entirely inside the graphless evidence shapes — no silent even though otherwise eligible')
   assert.equal(stats.retracted, 0, 'row2 legacy stamp survives — it sits inside E\'s ball')
   assert.equal(stats.walk.failures.disconnected, 1)
-  assert.equal(stats.walk.failedComponentCount, 2, 'both endpoints\' components are flagged (stats only now)')
-
   const expectedKm = (segLengthM(rowEF) + segLengthM(rowFG) + segLengthM(rowFH) + segLengthM(rowPQ)) / 1000
-  assert.ok(
-    Math.abs(stats.perComponentFailedKm - expectedKm) < 1e-6,
-    `perComponentFailedKm ${stats.perComponentFailedKm} ~= ${expectedKm} (deprecated comparison figure)`,
-  )
   assert.ok(
     Math.abs(stats.quarantinedKm - expectedKm) < 1e-6,
     `quarantinedKm ${stats.quarantinedKm} ~= ${expectedKm} — the graphless evidence shapes sweep both tiny components in full here`,
@@ -328,7 +322,7 @@ test('a disconnected pair\'s graphless evidence shapes withhold silent+retract n
 // ── (d2) an AMBIGUOUS pair (the ONE failure kind that takes the
 // admissible-path ellipse — item 4 + review round) withholds silent inside
 // that region but not on a dead-end tail past the distA+distB bound —
-// exactly the property `failedComponents` could never express, since the
+// exactly the property whole-component gating could never express, since the
 // whole component would have withheld silent everywhere. ────────────────────
 
 test('an ambiguous pair\'s candidate-path union withholds silent on its corridors — dead-end tails at the station stay silent-eligible', async () => {
@@ -745,7 +739,6 @@ test('an unlocalized pair (neither end snaps) quarantines only stampable segment
   })
 
   assert.equal(stats.walk.unlocalizedPairs, 1)
-  assert.equal(stats.walk.failedComponentCount, 0, 'nothing snapped — no component to blame either')
   assert.equal(stats.silentStamped, 1, 'only row1 (far from the chord) is silent-eligible — row0 sits inside the 5 km quarantine vicinity')
 
   const c = readCols(resolve(h3r4Dir, HEX_A, 'railways.arrow'))

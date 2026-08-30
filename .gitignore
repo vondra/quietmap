@@ -28,9 +28,6 @@ scripts/wb-country-*.json
 # Build artifacts
 *.tsbuildinfo
 target/
-# Cargo workspace shims are symlinks named `target`, and git's `target/`
-# rule matches directories only — so name them here explicitly.
-engine/*/target
 *.node
 pipeline/lib/*.js
 pipeline/lib/*.d.ts

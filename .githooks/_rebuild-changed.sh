@@ -97,9 +97,6 @@ if [ -n "$ENGINE_CHANGED" ]; then
     # still rebuilds once it has a Cargo.toml; the workspace lockfile lives
     # at engine/Cargo.lock. Per-crate `cd` rebuilds crates outside the workspace.
     FAIL=0
-    if [ -x "$REPO_ROOT/scripts/ensure-engine-target-shims.sh" ]; then
-        "$REPO_ROOT/scripts/ensure-engine-target-shims.sh"
-    fi
     for crate in engine/*; do
         [ -f "$crate/Cargo.toml" ] || continue
         # noise-gpu's gpu-surface/e2-full bins live behind --features gpu (which needs

@@ -612,6 +612,16 @@ mod tests {
     }
 
     #[test]
+    fn parser_requires_a_pair_and_an_aggregate_wave() {
+        assert!(parse_args_from(&[]).is_err());
+        let aggregate_without_wave = ["--aggregate", "reference.bin", "candidate.bin"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(parse_args_from(&aggregate_without_wave).is_err());
+    }
+
+    #[test]
     fn release_layer_parser_accepts_exact_canonical_mapping() {
         let expected = [
             ("road", SOURCE_ID_ROAD),
