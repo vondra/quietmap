@@ -1,13 +1,13 @@
-//! W1-only industrial sparse receiver reconstruction.
+//! W1-only point-layer sparse receiver reconstruction (industrial, building).
 //!
-//! This module is deliberately opt-in through `QM_W1_INDUSTRIAL_POLICY`
-//! (`adaptive-stride5`). It renders a direct-local surrogate over the whole
-//! tile, computes exact physics only at a stride-5 anchor lattice, derives the
-//! whole-block refinement mask from anchor tri-state, raw-anchor
-//! residual range, and surrogate-predicted numeric tri-state, then computes
-//! selected blocks exactly. The normal exact
-//! industrial path, building layer, line layers, popup, and W2 remain outside
-//! this module and are unchanged when the switch is absent.
+//! This module is deliberately opt-in through `QM_W1_INDUSTRIAL_POLICY` /
+//! `QM_W1_BUILDING_POLICY` (`adaptive-stride5`). It renders a direct-local
+//! surrogate over the whole tile, computes exact physics only at a stride-5
+//! anchor lattice, derives the whole-block refinement mask from anchor
+//! tri-state, raw-anchor residual range, and surrogate-predicted numeric
+//! tri-state, then computes selected blocks exactly. The normal exact point
+//! paths, line layers, popup, and W2 remain outside this module and are
+//! unchanged when the switch is absent.
 
 use noise_compute::types::Barrier;
 use raster_reader::fused_tile_z13::{FusedTileZ13, TILE_PX};
@@ -15,7 +15,7 @@ use std::time::Instant;
 
 use crate::accumulator::TileAccumulator;
 use crate::scatter_point::{
-    scatter_tile_industrial_direct, scatter_tile_industrial_exact_receivers, PointScatterStats,
+    scatter_tile_point_direct, scatter_tile_point_exact_receivers, PointScatterStats,
 };
 use crate::source_point::PointRow;
 use crate::wire_hm3::{collapse_lden_surface_u8, NO_DATA};
@@ -24,14 +24,19 @@ use noise_compute::propagation::obstacle_index::ObstacleSet;
 const STRIDE: usize = 5;
 const PAINT_FLOOR_BYTE: u8 = 60;
 
-/// Runtime gate for the isolated W1 candidate. Any other value keeps the
-/// exact/default producer path, including the ordinary industrial receiver
-/// scatter and every non-industrial layer.
-pub(crate) fn enabled() -> bool {
-    matches!(
-        std::env::var("QM_W1_INDUSTRIAL_POLICY").as_deref(),
-        Ok("adaptive-stride5")
-    )
+/// Runtime gate for the isolated W1 candidates. Any other value keeps the
+/// exact/default producer path, including the ordinary point receiver
+/// scatter of the layer in question. Each point layer carries its own switch
+/// so the waves can adopt them independently.
+fn policy_enabled(layer: &str) -> bool {
+    // Building is ported but not yet accepted: its >6 dB tail failed the
+    // contract, so its switch stays unlisted — the module cannot be activated
+    // for it until that rung passes.
+    let var = match layer {
+        "industrial" => "QM_W1_INDUSTRIAL_POLICY",
+        _ => return false,
+    };
+    matches!(std::env::var(var).as_deref(), Ok("adaptive-stride5"))
 }
 
 fn policy_applies_at_zoom(zoom: u8, requested: bool) -> bool {
@@ -41,8 +46,8 @@ fn policy_applies_at_zoom(zoom: u8, requested: bool) -> bool {
 /// Whether the opt-in policy may replace the producer at this zoom. The W1
 /// candidate is structurally restricted to z12; z13 and every other zoom always
 /// use the exact/default path even when the environment variable is present.
-pub(crate) fn enabled_for_zoom(zoom: u8) -> bool {
-    policy_applies_at_zoom(zoom, enabled())
+pub(crate) fn enabled_for_zoom(zoom: u8, layer: &str) -> bool {
+    policy_applies_at_zoom(zoom, policy_enabled(layer))
 }
 
 /// Telemetry for one reconstructed tile. It is intentionally separate from
@@ -72,6 +77,7 @@ impl ReconstructionStats {
 /// calls.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render(
+    layer: &str,
     tile: &FusedTileZ13,
     points: &[PointRow],
     barriers: &[Barrier],
@@ -87,7 +93,7 @@ pub(crate) fn render(
     let direct_started = Instant::now();
     let mut surrogate_accum = TileAccumulator::new();
     let direct_stats =
-        scatter_tile_industrial_direct(tile, points, barriers, obstacles, &mut surrogate_accum);
+        scatter_tile_point_direct(tile, points, barriers, obstacles, &mut surrogate_accum);
     let direct_elapsed = direct_started.elapsed();
     let surrogate_raw = collapse_lden_surface_u8(&surrogate_accum);
     let mut surrogate_cells = surrogate_raw.clone();
@@ -98,7 +104,7 @@ pub(crate) fn render(
     // both the residual correction and the tri-state selector.
     let anchor_started = Instant::now();
     let mut exact_accum = TileAccumulator::new();
-    let anchor_stats = scatter_tile_industrial_exact_receivers(
+    let anchor_stats = scatter_tile_point_exact_receivers(
         tile,
         points,
         barriers,
@@ -126,17 +132,36 @@ pub(crate) fn render(
         &exact_anchor_cells,
         &axis,
     );
-    let selected_mask = block_mask(&block_flags, &axis);
+    // OR the source-proximity rule into the selector's block flags before the
+    // mask is built — a block near a source is exact regardless of what the
+    // anchors said (they cannot certify their own steep zone).
+    let proximity_flags = source_proximity_block_flags(tile, points, &axis);
+    let mut selector_flags = block_flags.clone();
+    for (flag, near_source) in selector_flags.iter_mut().zip(proximity_flags.iter()) {
+        *flag |= *near_source;
+    }
+    let selected_mask = block_mask(&selector_flags, &axis);
 
-    // Phase 3: exact physics for the selected whole blocks. Anchors were
-    // already evaluated, so exclude them to avoid double-counting energy.
+    // Façade donors must be exact: `interior.apply` rewrites every enclosed
+    // pixel from its donor's value, so an interpolated donor would inject its
+    // full error into every pixel it feeds — the same pathology the line
+    // layers fixed by adding their donors to the exact replay set. Donors are
+    // outdoor edge pixels (a small, sharply bounded set).
+    let donor_mask = interior_donor_mask(interior);
+
+    // Phase 3: exact physics for the selected whole blocks plus the donor
+    // pixels. Anchors were already evaluated, so exclude them to avoid
+    // double-counting energy.
     let refine_started = Instant::now();
-    let mut refine_mask = selected_mask.clone();
+    let mut refine_mask = selected_mask;
+    for (selected, donor) in refine_mask.iter_mut().zip(donor_mask.iter()) {
+        *selected |= *donor;
+    }
     for (selected, anchor) in refine_mask.iter_mut().zip(anchor_mask.iter()) {
         *selected &= !*anchor;
     }
     let refine_receivers = receiver_indices(&refine_mask);
-    let refine_stats = scatter_tile_industrial_exact_receivers(
+    let refine_stats = scatter_tile_point_exact_receivers(
         tile,
         points,
         barriers,
@@ -155,8 +180,8 @@ pub(crate) fn render(
         .enumerate()
         .map(|(idx, value)| quantise_candidate(*value, predicted_state(&anchor_state, &axis, idx)))
         .collect::<Vec<_>>();
-    for (idx, selected) in selected_mask.iter().enumerate() {
-        if *selected {
+    for (idx, exact) in refine_mask.iter().enumerate() {
+        if *exact {
             legacy_presence[idx] = exact_cells[idx];
         }
     }
@@ -177,9 +202,21 @@ pub(crate) fn render(
         .enumerate()
         .map(|(idx, value)| quantise_candidate(*value, predicted_state(&anchor_state, &axis, idx)))
         .collect::<Vec<_>>();
-    for (idx, selected) in selected_mask.iter().enumerate() {
-        if *selected {
-            candidate[idx] = exact_cells[idx];
+    // The exact receiver UNION — selected blocks AND anchors — pins the numeric
+    // field: the residual interpolation must never speak at a pixel whose
+    // exact byte is known (measured: anchors left to interpolation were the
+    // >6 dB tail, one-sided to silence at sharp façade gradients).
+    let mut exact_union_mask = refine_mask.clone();
+    for (union_cell, anchor) in exact_union_mask.iter_mut().zip(anchor_mask.iter()) {
+        *union_cell |= *anchor;
+    }
+    for (idx, exact) in exact_union_mask.iter().enumerate() {
+        if *exact {
+            candidate[idx] = if anchor_mask[idx] {
+                exact_anchor_cells[idx]
+            } else {
+                exact_cells[idx]
+            };
         }
     }
     for (candidate_cell, &presence_cell) in candidate.iter_mut().zip(legacy_presence.iter()) {
@@ -195,10 +232,10 @@ pub(crate) fn render(
     // union so it cannot perturb sparse numeric interpolation.
     fill_selected_area_median(
         &mut candidate,
-        &selected_mask,
+        &exact_union_mask,
         crate::wire_hm3::AREA_FILL_RADIUS_PX,
     );
-    apply_selected_interior(interior, &mut candidate, &selected_mask);
+    apply_selected_interior(interior, &mut candidate, &exact_union_mask);
     // Median fill can cross the presence threshold or fill an exact NO_DATA
     // cell. Re-apply the preserved runtime presence state after smoothing.
     for (candidate_cell, &presence_cell) in candidate.iter_mut().zip(legacy_presence.iter()) {
@@ -214,7 +251,7 @@ pub(crate) fn render(
     let reconstruction_stats = ReconstructionStats {
         exact_receivers,
         total_receivers: TILE_PX * TILE_PX,
-        selected_blocks: block_flags.iter().filter(|&&value| value).count(),
+        selected_blocks: selector_flags.iter().filter(|&&value| value).count(),
         postprocess_applied: true,
     };
     let stats = combine_stats(
@@ -223,7 +260,7 @@ pub(crate) fn render(
         points.len(),
     );
     eprintln!(
-        "[industrial-w1] stride=5 exact_receivers={}/{} fraction={:.6}% selected_blocks={} \
+        "[point-w1 {layer}] stride={STRIDE} exact_receivers={}/{} fraction={:.6}% selected_blocks={} \
          direct_pairs={} exact_pairs={} phase_ms={:.1}/{:.1}/{:.1}",
         reconstruction_stats.exact_receivers,
         reconstruction_stats.total_receivers,
@@ -621,6 +658,61 @@ fn block_mask(flags: &[bool], axis: &[usize]) -> Vec<bool> {
         }
     }
     mask
+}
+
+/// Whole stride-blocks near any point source are always exact. Façade fields
+/// change by many dB per pixel next to their own sources, so no anchor
+/// interpolation is admissible there regardless of how benign the anchors
+/// look — the same principle as the line layers' selected exact tail (a
+/// source-adjacent block cannot be certified from outside). The radius scales
+/// with the source's own footprint (`exclusion_radius_m`, the self-screening
+/// disc): a large building's steep zone spans its footprint, not a fixed few
+/// pixels, plus a fixed margin so small façades are covered too.
+/// Mask of every pixel that is the façade donor of at least one enclosed
+/// pixel in `interior` — the exact set `interior.apply` reads its values from.
+fn interior_donor_mask(interior: &crate::source_loader_obstacle::InteriorEstimate) -> Vec<bool> {
+    let mut mask = vec![false; TILE_PX * TILE_PX];
+    for &donor in interior.donors() {
+        if donor != crate::source_loader_obstacle::NO_DONOR {
+            mask[donor as usize] = true;
+        }
+    }
+    mask
+}
+
+fn source_proximity_block_flags(tile: &FusedTileZ13, points: &[PointRow], axis: &[usize]) -> Vec<bool> {
+    // The margin must also cover the area-fill median window
+    // (`AREA_FILL_RADIUS_PX`): a selected block whose 5-px smoothing halo is
+    // still surrogate would mix surrogate neighbours into the median where the
+    // stock path mixes exact ones — that was the remaining >6 dB tail.
+    const SOURCE_PROXIMITY_MARGIN_PX: f64 =
+        4.0 + crate::wire_hm3::AREA_FILL_RADIUS_PX as f64;
+    const SOURCE_PROXIMITY_MAX_PX: f64 = 64.0;
+    let blocks = axis.len() - 1;
+    let mut flags = vec![false; blocks * blocks];
+    let m_per_px = (tile.bbox.north_lat - tile.bbox.south_lat) * 111_320.0 / TILE_PX as f64;
+    for point in points {
+        let radius_px = ((point.exclusion_radius_m / m_per_px) + SOURCE_PROXIMITY_MARGIN_PX)
+            .clamp(0.0, SOURCE_PROXIMITY_MAX_PX);
+        let px = crate::scatter_band::lon_to_px(&tile.bbox, point.lon) as f64;
+        let py = crate::scatter_band::lat_to_py(&tile.bbox, point.lat) as f64;
+        for by in 0..blocks {
+            let by_lo = axis[by] as f64;
+            let by_hi = axis[by + 1] as f64;
+            if py + radius_px < by_lo || py - radius_px > by_hi {
+                continue;
+            }
+            for bx in 0..blocks {
+                let bx_lo = axis[bx] as f64;
+                let bx_hi = axis[bx + 1] as f64;
+                if px + radius_px < bx_lo || px - radius_px > bx_hi {
+                    continue;
+                }
+                flags[by * blocks + bx] = true;
+            }
+        }
+    }
+    flags
 }
 
 #[cfg(test)]

@@ -31,7 +31,7 @@ pub mod grid;
 pub mod ground_ops;
 #[cfg(any(feature = "h0-diagnostic", test))]
 pub mod h0_pair_reference;
-mod industrial_w1;
+mod point_w1;
 pub mod pyramid;
 pub mod r4_source_cache;
 pub mod region_runner;

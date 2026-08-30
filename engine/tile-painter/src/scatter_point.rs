@@ -107,11 +107,11 @@ pub fn scatter_tile_with_cfg(
     .into()
 }
 
-/// Industrial W1 direct-local surrogate: use the point geometry and a fixed
+/// Point-layer W1 direct-local surrogate (industrial, building): use the point geometry and a fixed
 /// M3 loose path floor, but skip profile, terrain, obstacle, and barrier work.
 /// The caller keeps this behind the explicit W1 candidate switch; the ordinary
 /// [`scatter_tile`] and popup paths never call it.
-pub(crate) fn scatter_tile_industrial_direct(
+pub(crate) fn scatter_tile_point_direct(
     tile: &FusedTileZ13,
     points: &[PointRow],
     barriers: &[Barrier],
@@ -133,10 +133,10 @@ pub(crate) fn scatter_tile_industrial_direct(
     .into()
 }
 
-/// Exact industrial scatter over a compact receiver index list. Each
+/// Exact point-layer scatter over a compact receiver index list. Each
 /// selected pixel uses the unchanged point physical evaluator, but the generic
 /// block/M3 setup is not constructed for any unselected receiver.
-pub(crate) fn scatter_tile_industrial_exact_receivers(
+pub(crate) fn scatter_tile_point_exact_receivers(
     tile: &FusedTileZ13,
     points: &[PointRow],
     barriers: &[Barrier],

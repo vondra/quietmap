@@ -454,10 +454,9 @@ pub fn process_surface_region(
                         )
                     }
                     SurfaceRows::Point(r) => {
-                        if *dir_name == "industrial"
-                            && crate::industrial_w1::enabled_for_zoom(ctx.zoom)
-                        {
-                            let (cells, st, reconstruction) = crate::industrial_w1::render(
+                        if crate::point_w1::enabled_for_zoom(ctx.zoom, dir_name) {
+                            let (cells, st, reconstruction) = crate::point_w1::render(
+                                dir_name,
                                 tile,
                                 r,
                                 &tile_barriers,
