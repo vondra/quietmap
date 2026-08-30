@@ -507,13 +507,9 @@ fn ingest_manifest(
     let mut candidates = Vec::new();
     if let Some(h3r4) = h3r4_dir {
         if std::env::var("QM_OBSTACLES_DIR").is_err() {
-            if let Some(root) = h3r4
-                .ancestors()
-                .nth(3)
-                .map(|d| d.join("enrichment/global/overture-obstacles"))
-            {
-                candidates.push(root.join(".ingested-tiles"));
-            }
+            candidates.extend(
+                noise_compute::propagation::obstacle_ingest_coverage::ingested_tiles_paths(h3r4),
+            );
         }
     }
     candidates.push(

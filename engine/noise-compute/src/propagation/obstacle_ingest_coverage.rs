@@ -45,6 +45,40 @@ use std::sync::{Mutex, OnceLock};
 
 use h3o::CellIndex;
 
+/// Candidate paths for `.ingested-tiles` given a region's `h3r4` directory.
+/// First existing file wins (`load_for_h3r4`).
+///
+/// Sahara halo of `843e191ffffffff`: three neighbours have no shard (desert,
+/// ingest wrote nothing). The proof is this 120 kB list, not the 309 GB
+/// staging tree. he84 keeps it at `data/source/enrichment/…`; home boxes
+/// read `/mnt/synology/enrichment/…` next to `2026/h3r4`.
+pub fn ingested_tiles_paths(h3r4_dir: &Path) -> Vec<PathBuf> {
+    const REL: &str = "enrichment/global/overture-obstacles/.ingested-tiles";
+    const SOURCE_REL: &str = "source/enrichment/global/overture-obstacles/.ingested-tiles";
+    let mut paths = Vec::new();
+    let mut push = |p: PathBuf| {
+        if !paths.iter().any(|existing| existing == &p) {
+            paths.push(p);
+        }
+    };
+    if let Some(root) = h3r4_dir.ancestors().nth(3) {
+        push(root.join(REL));
+        push(root.join(SOURCE_REL));
+    }
+    if let Some(root) = h3r4_dir.ancestors().nth(2) {
+        push(root.join(REL));
+    }
+    paths
+}
+
+/// Load the ingest manifest for a painter/popup `h3r4` root, or `None` if
+/// none of the candidate paths exist (coverage unknown).
+pub fn load_for_h3r4(h3r4_dir: &Path) -> Option<&'static IngestManifest> {
+    ingested_tiles_paths(h3r4_dir)
+        .into_iter()
+        .find_map(|path| IngestManifest::load_cached(&path))
+}
+
 /// The parsed `.ingested-tiles` manifest.
 pub struct IngestManifest {
     tiles: HashSet<String>,
@@ -215,6 +249,18 @@ mod tests {
     #[test]
     fn absent_manifest_is_none() {
         assert!(IngestManifest::load_cached(Path::new("/nonexistent/.ingested-tiles")).is_none());
+    }
+
+    #[test]
+    fn h3r4_path_walk_covers_he84_and_nas_layouts() {
+        let he84 = ingested_tiles_paths(Path::new("/quietmap/data/prepared/2026/h3r4"));
+        assert!(he84.iter().any(|p| p
+            == Path::new(
+                "/quietmap/data/source/enrichment/global/overture-obstacles/.ingested-tiles"
+            )));
+        let nas = ingested_tiles_paths(Path::new("/mnt/synology/2026/h3r4"));
+        assert!(nas.iter().any(|p| p
+            == Path::new("/mnt/synology/enrichment/global/overture-obstacles/.ingested-tiles")));
     }
 
     fn bbox_tiles(cell: CellIndex) -> Vec<String> {

@@ -515,20 +515,20 @@ fn staging_root(h3r4_dir: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("data/enrichment/global/overture-obstacles/h3r4"))
 }
 
-/// The world-ingest manifest next to the staging tree, when present —
-/// the proof that shard-less cells are ingested-empty (see
-/// `noise_compute::propagation::obstacle_ingest_coverage`). Absent (e.g. a
-/// Vast worker that staged only the h3r4 tree) ⇒ coverage unknown ⇒ the
-/// all-or-raster fallback keeps today's behavior.
+/// World ingest proof for shard-less cells. `QM_OBSTACLES_DIR` keeps the
+/// manifest next to that override (tests); otherwise walk he84 / NAS layouts.
 fn ingest_manifest(
     h3r4_dir: &Path,
 ) -> Option<&'static noise_compute::propagation::obstacle_ingest_coverage::IngestManifest> {
-    noise_compute::propagation::obstacle_ingest_coverage::IngestManifest::load_cached(
-        &staging_root(h3r4_dir)
-            .parent()
-            .map(|p| p.join(".ingested-tiles"))
-            .unwrap_or_else(|| PathBuf::from(".ingested-tiles")),
-    )
+    if std::env::var("QM_OBSTACLES_DIR").is_ok() {
+        return noise_compute::propagation::obstacle_ingest_coverage::IngestManifest::load_cached(
+            &staging_root(h3r4_dir)
+                .parent()
+                .map(|p| p.join(".ingested-tiles"))
+                .unwrap_or_else(|| PathBuf::from(".ingested-tiles")),
+        );
+    }
+    noise_compute::propagation::obstacle_ingest_coverage::load_for_h3r4(h3r4_dir)
 }
 
 fn cell_dir(h3r4_dir: &Path, cell: CellIndex) -> Result<Option<PathBuf>> {
