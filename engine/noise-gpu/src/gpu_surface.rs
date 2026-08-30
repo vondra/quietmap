@@ -1468,35 +1468,13 @@ fn multifidelity_receiver_mask_with_replay(
                 residual_high = 0.0;
             }
             let residual_range = residual_high - residual_low;
-            let mut gradient = 0.0f64;
-            for py in py_start..py_end {
-                for px in px_start..px_end {
-                    let index = py * TILE_PX + px;
-                    if px > px_start {
-                        let left = data.cheap_cells[index - 1];
-                        if left != tile_painter::wire_hm3::NO_DATA
-                            && data.cheap_cells[index] != tile_painter::wire_hm3::NO_DATA
-                        {
-                            gradient = gradient.max(
-                                (f64::from(data.cheap_cells[index]) - f64::from(left)).abs() / 2.0,
-                            );
-                        }
-                    }
-                    if py > py_start {
-                        let above = data.cheap_cells[index - TILE_PX];
-                        if above != tile_painter::wire_hm3::NO_DATA
-                            && data.cheap_cells[index] != tile_painter::wire_hm3::NO_DATA
-                        {
-                            gradient = gradient.max(
-                                (f64::from(data.cheap_cells[index]) - f64::from(above)).abs() / 2.0,
-                            );
-                        }
-                    }
-                }
-            }
-            // A block earns the exact tail when its anchors DISAGREE, or when the
-            // cheap field steps inside it — both say the bilinear fill between the
-            // anchors cannot be trusted.
+            // A block earns the exact tail when its anchors DISAGREE about the
+            // correction: that is the bilinear fill between them saying it cannot be
+            // trusted. The rule used to also fire on a step in the cheap field, but
+            // that arm selected NOTHING — 0 px across all 43 rail tiles of wbench-orig
+            // — and it could not have: the cheap field never calls obstacle screening
+            // (kernels/scatter.cu:3726), so it has no shadow edge to step over. It
+            // cost a walk over all 64 pixels of every block to measure that.
             //
             // 12 dB is what the wall affords, not what the rule would like. Measured on
             // wbench-orig against the exact-CPU reference, each arm paired against its
@@ -1513,7 +1491,7 @@ fn multifidelity_receiver_mask_with_replay(
             // screening (kernels/scatter.cu:3726), so it had no edge to find: it
             // selected 0.3-0.5 % of a tile and bought 19 of road's 17 614 cells past
             // the >6 dB rung, for +49.7 s on its own lane.
-            let exact_block = residual_range >= 12.0 || gradient >= 20.0;
+            let exact_block = residual_range >= 12.0;
             if exact_block {
                 for py in py_start..py_end {
                     for px in px_start..px_end {
