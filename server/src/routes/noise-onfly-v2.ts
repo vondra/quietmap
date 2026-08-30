@@ -11,10 +11,6 @@ import {
 import { prepareSourceReaderAddon } from '../engine/source-reader-addon.js'
 import { BUILDING_LOOKUP_RATE_LIMIT, EXPENSIVE_ROUTE_RATE_LIMIT } from '../rate-limit.js'
 import { H3R4_DIR, SOURCE_READER_PATH } from '../runtime-paths.js'
-import {
-  PublishedLineModelUnavailableError,
-  type PublishedLineModel,
-} from '../published-line-model.js'
 
 // Wire shape is built entirely in Rust (engine/source-reader/src/wire.rs).
 // Node forwards the JSON string after one sentinel replace for
@@ -46,7 +42,6 @@ export type NoiseOnflyV2RouteOptions = {
 
 export async function noiseOnflyV2Routes(
   app: FastifyInstance,
-  publishedLineModel: PublishedLineModel,
   options: NoiseOnflyV2RouteOptions = {},
 ): Promise<NoiseOnflyEngine> {
   const supervisor = new NoiseOnflySupervisor({
@@ -137,9 +132,6 @@ export async function noiseOnflyV2Routes(
       request.raw.once('close', onClose)
 
       try {
-        // Fixed-size in-memory comparison only. Manifest reads and hashing are
-        // owned by authenticated publish IPC, never by a visitor request.
-        publishedLineModel.assertPopupAvailable()
         const resultJson = full
           ? await supervisor.queryNoiseAtPointUnfiltered(lat, lng, abortController.signal)
           : await supervisor.queryNoiseAtPoint(lat, lng, abortController.signal)
@@ -167,16 +159,16 @@ export async function noiseOnflyV2Routes(
         }
         const error = err instanceof Error ? err : new Error(String(err))
         const message = error.message
-        const statusCode = err instanceof PublishedLineModelUnavailableError
-          ? 503
-          : err instanceof NoiseOnflyRequestError
+        const statusCode = err instanceof NoiseOnflyRequestError
           ? err.statusCode
           : message.includes('timeout')
             ? 504
             : 500
-        const publicMessage = err instanceof PublishedLineModelUnavailableError
-          ? 'published line model unavailable'
-          : message
+        const publicMessage = err instanceof NoiseOnflyRequestError
+          ? message
+          : statusCode === 504
+            ? 'noise computation timed out'
+            : 'noise computation failed'
         return reply.status(statusCode).send({ error: publicMessage })
       } finally {
         request.raw.removeListener('close', onClose)

@@ -4,14 +4,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import Fastify from 'fastify'
 import { noiseOnflyV2Routes } from './noise-onfly-v2.js'
-import { DISABLED_PUBLISHED_LINE_MODEL } from '../published-line-model.js'
 
 test('building-at validates, passes through null/object JSON, and maps worker errors to 500', async (t) => {
   let resultJson = 'null'
   let workerError: Error | null = null
   const calls: Array<[number, number]> = []
   const app = Fastify({ logger: false })
-  await noiseOnflyV2Routes(app, DISABLED_PUBLISHED_LINE_MODEL, {
+  await noiseOnflyV2Routes(app, {
     queryBuildingAt: async (lat, lng) => {
       calls.push([lat, lng])
       if (workerError) throw workerError

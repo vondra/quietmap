@@ -21,9 +21,7 @@ pub(super) fn write_railways(rows: &[Vec<String>], path: &Path) -> Result<()> {
         Field::new("length_m", DataType::Float32, false),
         Field::new("rail_type", DataType::UInt8, false),
         Field::new("usage", DataType::UInt8, false),
-        // UInt16 since 2026-06: 300+ km/h high-speed lines overflowed u8.
-        // Readers (hex_store, source_loader_rail) also accept legacy UInt8
-        // arrows until the next world OSM re-extract.
+        // UInt16 because 300+ km/h high-speed lines overflow u8.
         Field::new("maxspeed", DataType::UInt16, false),
         Field::new("name", DataType::Utf8, true),
         Field::new("ref", DataType::Utf8, true),

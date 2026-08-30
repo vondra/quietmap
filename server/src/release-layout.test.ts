@@ -19,7 +19,7 @@ import test, { type TestContext } from 'node:test'
 import { pathToFileURL } from 'node:url'
 
 interface ReleaseLayoutModule {
-  activatePreparedRelease(options?: { allowLegacyDirectory?: boolean }): {
+  activatePreparedRelease(): {
     active: string
     previous: string | null
   }
@@ -143,32 +143,6 @@ test('fresh releases prepare, activate, and roll back through immutable links', 
   assert.equal(await exists(fixture.previous), false)
 })
 
-test('legacy dist is migrated into the release root and remains rollbackable', async (t) => {
-  const fixture = await releaseFixture(t)
-  await mkdir(fixture.dist)
-  await writeFile(join(fixture.dist, 'server.js'), 'legacy-server')
-  const nextRelease = await fixture.createRelease('release-after-legacy', 'new-server')
-  fixture.subject.prepareRelease(nextRelease)
-
-  assert.doesNotThrow(() => fixture.subject.pruneUnusedReleases())
-  const activation = fixture.subject.activatePreparedRelease({ allowLegacyDirectory: true })
-  assert.equal(activation.active, nextRelease)
-  assert.equal(await realpath(fixture.dist), nextRelease)
-
-  const migratedLegacy = await realpath(fixture.previous)
-  assert.equal(dirname(migratedLegacy), fixture.releaseRoot)
-  assert.match(basename(migratedLegacy), /^legacy-/)
-  assert.equal(await readFile(join(migratedLegacy, 'server.js'), 'utf8'), 'legacy-server')
-  assert.equal(
-    await realpath(join(migratedLegacy, 'node_modules')),
-    join(fixture.serverRoot, 'node_modules'),
-  )
-
-  assert.equal(fixture.subject.rollbackRelease(), migratedLegacy)
-  assert.equal(await realpath(fixture.dist), migratedLegacy)
-  assert.equal(await readFile(join(fixture.dist, 'server.js'), 'utf8'), 'legacy-server')
-})
-
 test('outside and dangling release links fail closed before garbage collection', async (t) => {
   const fixture = await releaseFixture(t)
   const unreferenced = await fixture.createRelease('release-must-survive')
@@ -199,7 +173,7 @@ test('garbage collection preserves referenced releases and removes only safe sta
   const next = await fixture.createRelease('release-next')
   const previous = await fixture.createRelease('release-previous')
   const orphan = await fixture.createRelease('release-orphan')
-  const legacyOrphan = await fixture.createRelease('legacy-orphan')
+  const secondOrphan = await fixture.createRelease('release-second-orphan')
   const staleStage = await fixture.createRelease('.stage-stale')
   const freshStage = await fixture.createRelease('.stage-fresh')
   const unrelated = await fixture.createRelease('operator-notes')
@@ -214,7 +188,7 @@ test('garbage collection preserves referenced releases and removes only safe sta
   for (const kept of [active, next, previous, freshStage, unrelated]) {
     assert.equal(await exists(kept), true, `${basename(kept)} should be retained`)
   }
-  for (const pruned of [orphan, legacyOrphan, staleStage]) {
+  for (const pruned of [orphan, secondOrphan, staleStage]) {
     assert.equal(await exists(pruned), false, `${basename(pruned)} should be pruned`)
   }
 })

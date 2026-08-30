@@ -11,7 +11,7 @@
 //! overwhelming majority of entries: `BrotliHm3` blobs ship untouched whether
 //! they came from the fleet (source-layer ingest) or from a central writer
 //! (`build_heatmap_combine`, `pyramid::build_one_level`, which now encode
-//! Brotli-q9 once at write time via `TileStore::put_cells_hm3` instead of
+//! Brotli-q9 once at write time via `TileStore::put_cells` instead of
 //! deferring it here). Only a legacy `ZstdCells` entry — a central tile a
 //! store hasn't been rewritten through since the cutover — still gets
 //! composed + Brotli-encoded on this path; that population only shrinks as
@@ -3135,8 +3135,8 @@ mod tests {
     }
 
     /// End-to-end `pack_snapshots_transactionally` over a store mid-cutover: one entry already rewritten through
-    /// the new `put_cells_hm3`/`BrotliHm3` write path, one entry still the legacy `ZstdCells`
-    /// working codec (`put_cells`) — exactly the mixed state every real store is in for a
+    /// the current `put_cells`/`BrotliHm3` write path, one entry still the legacy `ZstdCells`
+    /// working codec — exactly the mixed state every real store is in for a
     /// while after 2026-07-16 (only tiles a combine/pyramid pass actually touches get
     /// rewritten; the rest keep publishing correctly via the ZstdCells arm). Both must ship:
     /// the pack must not error, must produce a tile for each, and — the actual point of the
@@ -3159,7 +3159,8 @@ mod tests {
         store.put_blob(3, 4, TileCodec::BrotliHm3, &blob_new)?; // new central-writer path
         let mut cells_legacy = vec![NO_DATA; TILE_PX * TILE_PX];
         cells_legacy[20] = 99;
-        store.put_cells(5, 6, &cells_legacy)?; // legacy working codec, not yet rewritten
+        let blob_legacy = zstd::encode_all(std::io::Cursor::new(&cells_legacy), 1)?;
+        store.put_blob(5, 6, TileCodec::ZstdCells, &blob_legacy)?;
         store.sync_all()?;
         drop(store);
 

@@ -7,6 +7,6 @@ ensureReleaseLock(fileURLToPath(import.meta.url))
 if (process.argv.includes('--rollback')) {
   console.log(`rolled back server release to ${rollbackRelease()}`)
 } else {
-  const result = activatePreparedRelease({ allowLegacyDirectory: true })
+  const result = activatePreparedRelease()
   console.log(`activated server release ${result.active}`)
 }

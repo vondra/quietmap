@@ -444,7 +444,7 @@ mod tests {
         write_loose(&loose_dir, 6, 10, 10, SOURCE_ID_RAIL, 50)?;
 
         let existing = TileStore::create(&store_dir, 6, SOURCE_ID_ROAD, TILE_PX as u16)?;
-        existing.put_cells_hm3(1, 1, &cells(77))?;
+        existing.put_cells(1, 1, &cells(77))?;
         existing.sync_all()?;
         drop(existing);
 

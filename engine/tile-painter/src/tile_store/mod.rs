@@ -23,7 +23,7 @@
 //! * **Codecs** ([`TileCodec`]): source-layer entries keep the fleet-encoded
 //!   whole-file-Brotli HM3 blob verbatim (it flows untouched into PMTiles).
 //!   Central intermediates (total, all pyramid levels) ALSO write `BrotliHm3`
-//!   directly (`TileStore::put_cells_hm3`), so every current entry ships
+//!   directly (`TileStore::put_cells`), so every new entry ships
 //!   verbatim. `ZstdCells` is legacy-read-only; see its own deletion condition.
 //! * **pread/pwrite, no mmap**: reads hit the same page cache mmap would; no
 //!   unsafe, no remap-on-growth. The index is fixed-size from creation; the

@@ -11,7 +11,7 @@
 //! quantisation.
 //!
 //! Store-to-store: reads the 7 layer stores, writes the `total` store via the
-//! ship-out `BrotliHm3` codec directly (`TileStore::put_cells_hm3`, since
+//! ship-out `BrotliHm3` codec directly (`TileStore::put_cells`, since
 //! 2026-07-16 — was the `ZstdCells` working codec, deferring the Brotli-q9
 //! encode to the pmtiles pack; see `TileCodec::ZstdCells`'s doc for why that
 //! made every publish redo it), then rolls the `total` pyramid. The old
@@ -185,7 +185,7 @@ fn main() -> Result<()> {
 
     // Each (x,y) reads its own layer cells and writes its own disjoint store
     // slot — embarrassingly parallel (atomic tail reservation, disjoint index
-    // entries). The Brotli-q9 encode (put_cells_hm3) happens once per tile
+    // entries). The Brotli-q9 encode (put_cells) happens once per tile
     // here, at combine time, amortized over the days between publishes —
     // never redone at ship-out (see the module doc).
     let t = Instant::now();
@@ -224,8 +224,8 @@ fn main() -> Result<()> {
             for (i, out) in out_cells.iter_mut().enumerate() {
                 *out = combine_cell(layer_tiles.iter().map(|t| t[i]));
             }
-            // put_cells_hm3 tombstones an all-silent result itself (present ⟺ audible).
-            if total.put_cells_hm3(x, y, out_cells)? > 0 {
+            // put_cells tombstones an all-silent result itself (present ⟺ audible).
+            if total.put_cells(x, y, out_cells)? > 0 {
                 written.fetch_add(1, Ordering::Relaxed);
             } else {
                 empty.fetch_add(1, Ordering::Relaxed);

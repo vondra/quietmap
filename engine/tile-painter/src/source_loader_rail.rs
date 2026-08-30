@@ -59,6 +59,10 @@ impl RailData {
 }
 
 fn absorb_batch(batch: &RecordBatch, region_admin: Admin, out: &mut Vec<LineRow>) -> Result<()> {
+    let maxspeed = batch
+        .column_by_name("maxspeed")
+        .and_then(|column| column.as_any().downcast_ref::<UInt16Array>())
+        .ok_or_else(|| anyhow::anyhow!("railways.arrow maxspeed must be UInt16"))?;
     let n = batch.num_rows();
     if n == 0 {
         return Ok(());
@@ -75,10 +79,6 @@ fn absorb_batch(batch: &RecordBatch, region_admin: Admin, out: &mut Vec<LineRow>
     let length = opt::<Float32Array>(batch, "length_m");
     let rail_type = opt::<UInt8Array>(batch, "rail_type");
     let usage = opt::<UInt8Array>(batch, "usage");
-    // Width-tolerant: new extracts write UInt16 maxspeed (300+ km/h
-    // overflowed u8), pre-2026-06 arrows carry UInt8.
-    let maxspeed_u16 = opt::<UInt16Array>(batch, "maxspeed");
-    let maxspeed_u8 = opt::<UInt8Array>(batch, "maxspeed");
     let service = opt::<UInt8Array>(batch, "service");
     let highspeed = opt::<BooleanArray>(batch, "highspeed");
     let trains_pax = opt::<Int32Array>(batch, "trains_passenger");
@@ -114,10 +114,7 @@ fn absorb_batch(batch: &RecordBatch, region_admin: Admin, out: &mut Vec<LineRow>
             RawRailInput {
                 rail_type: rail_type.map(|a| a.value(i)).unwrap_or(0),
                 usage: usage.map(|a| a.value(i)).unwrap_or(0),
-                maxspeed: maxspeed_u16
-                    .map(|a| a.value(i))
-                    .or_else(|| maxspeed_u8.map(|a| a.value(i) as u16))
-                    .unwrap_or(0),
+                maxspeed: maxspeed.value(i),
                 service: service.map(|a| a.value(i)).unwrap_or(0),
                 highspeed: highspeed.map(|a| a.value(i)).unwrap_or(false),
                 trains_passenger: trains_pax.map(|a| a.value(i)).unwrap_or(0),
@@ -182,12 +179,10 @@ mod tests {
     /// knobs; a mainline (rail_type 0, usage 0) with explicit train counts so
     /// the type-default fallback is bypassed.
     fn rail_batch(parallel_divisor: u8, tunnel: bool) -> RecordBatch {
-        rail_batch_with_maxspeed(
-            parallel_divisor,
-            tunnel,
-            Field::new("maxspeed", DataType::UInt16, false),
-            Arc::new(UInt16Array::from(vec![120u16])),
-        )
+        let cols = base_cols(parallel_divisor, tunnel);
+        let fields: Vec<Field> = cols.iter().map(|(field, _)| field.clone()).collect();
+        let arrays: Vec<ArrayRef> = cols.into_iter().map(|(_, array)| array).collect();
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).unwrap()
     }
 
     /// Column vec for a one-row mainline batch (100 pax + 40 freight @ 120 km/h),
@@ -260,29 +255,6 @@ mod tests {
                 Arc::new(BooleanArray::from(vec![tunnel])),
             ),
         ]
-    }
-
-    fn rail_batch_with_maxspeed(
-        parallel_divisor: u8,
-        tunnel: bool,
-        maxspeed_field: Field,
-        maxspeed_arr: ArrayRef,
-    ) -> RecordBatch {
-        // Replace the maxspeed column BY NAME (index-free).
-        let mut maxspeed = Some((maxspeed_field, maxspeed_arr));
-        let cols: Vec<(Field, ArrayRef)> = base_cols(parallel_divisor, tunnel)
-            .into_iter()
-            .map(|(f, a)| {
-                if f.name() == "maxspeed" {
-                    maxspeed.take().unwrap()
-                } else {
-                    (f, a)
-                }
-            })
-            .collect();
-        let fields: Vec<Field> = cols.iter().map(|(f, _)| f.clone()).collect();
-        let arrs: Vec<ArrayRef> = cols.into_iter().map(|(_, a)| a).collect();
-        RecordBatch::try_new(Arc::new(Schema::new(fields)), arrs).unwrap()
     }
 
     #[test]
@@ -377,29 +349,23 @@ mod tests {
         assert!(rows.is_empty(), "tunnel dropped");
     }
 
-    /// Pre-2026-06 arrows store `maxspeed` as UInt8 — the tolerant read
-    /// must produce the same emission as the current UInt16 layout.
     #[test]
-    fn legacy_u8_maxspeed_loads_identically() {
-        let mut new = Vec::new();
-        let mut legacy = Vec::new();
-        absorb_batch(&rail_batch(1, false), CZ, &mut new).unwrap();
-        absorb_batch(
-            &rail_batch_with_maxspeed(
-                1,
-                false,
-                Field::new("maxspeed", DataType::UInt8, false),
-                Arc::new(UInt8Array::from(vec![120u8])),
-            ),
-            CZ,
-            &mut legacy,
-        )
-        .unwrap();
-        assert_eq!(legacy.len(), 1);
-        assert_eq!(
-            new[0].emission_lin, legacy[0].emission_lin,
-            "u8 fallback parity"
+    fn rejects_old_u8_maxspeed_schema() {
+        let mut cols = base_cols(1, false);
+        let index = cols
+            .iter()
+            .position(|(field, _)| field.name() == "maxspeed")
+            .unwrap();
+        cols[index] = (
+            Field::new("maxspeed", DataType::UInt8, false),
+            Arc::new(UInt8Array::from(vec![120u8])),
         );
+        let fields: Vec<Field> = cols.iter().map(|(field, _)| field.clone()).collect();
+        let arrays: Vec<ArrayRef> = cols.into_iter().map(|(_, array)| array).collect();
+        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).unwrap();
+
+        let error = absorb_batch(&batch, CZ, &mut Vec::new()).unwrap_err();
+        assert!(error.to_string().contains("maxspeed must be UInt16"));
     }
 
     /// `parallel_divisor` halves the effective traffic, so the per-band linear

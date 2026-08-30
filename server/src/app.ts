@@ -20,9 +20,6 @@ import { healthRoutes } from './routes/health.js'
 import { createReadinessCheck, type ReadinessCheck } from './runtime-readiness.js'
 import { requireLocalPeer } from './internal-access.js'
 import { importOptionalOpsModule } from './ops-routes.js'
-import { createRuntimePublishedLineModel } from './published-line-model-runtime.js'
-import type { PublishedLineModel } from './published-line-model.js'
-import { registerPopupPublishIpc } from './popup-publish-ipc.js'
 
 // Deliberately identifies only this Node process, not its build or data. Long
 // validation runs use it to reject results spanning a restart/deploy.
@@ -36,8 +33,6 @@ export type BuildAppOptions = {
   importOpsModule?: typeof importOptionalOpsModule
   noIndex?: boolean
   preloadRuntimeData?: boolean
-  /** Test seam; production resolves only its immutable bundled popup identity. */
-  publishedLineModel?: PublishedLineModel
 }
 
 /** Dev checkouts expose the loopback-gated dashboard by default; an explicit flag still wins. */
@@ -103,17 +98,11 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   })
 
   await app.register(searchRoutes)
-  const publishedLineModel = opts.publishedLineModel ?? await createRuntimePublishedLineModel()
-  await registerPopupPublishIpc(app, publishedLineModel)
-
   // Registered directly because the readiness probe is a capability returned
   // by the live supervisor instance; Fastify plugin registration discards a
   // plugin's return value.
-  const engine = await noiseOnflyV2Routes(app, publishedLineModel)
-  const engineProbe = async () => {
-    publishedLineModel.assertReady()
-    await engine.checkReady()
-  }
+  const engine = await noiseOnflyV2Routes(app)
+  const engineProbe = engine.checkReady
   await app.register(isochronRoutes)
   await app.register(docsRoutes)
   await app.register(propertiesRoutes)
@@ -127,7 +116,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   // via the manifest (storage redesign 2026-07). The loose-file route is gone
   // with the loose trees.
   await app.register(heatmapPmtilesRoutes)
-  await app.register(tilesManifestRoutes, { publishedLineModel })
+  await app.register(tilesManifestRoutes)
   await app.register(initialViewRoutes)
   await app.register(validationViewRoutes)
   // Inbound-mail archive webhook (Cloudflare Email Worker → the ops mail host), ops-only:

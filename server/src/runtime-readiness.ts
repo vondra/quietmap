@@ -15,7 +15,7 @@ import {
 } from './generation-contract.mjs'
 import { ALLOWED_LAYERS, parseTierToken, PMTILES_BASE } from './routes/heatmap-shared.js'
 import { FRONTEND_DIST, H3R4_DIR, SOURCE_READER_PATH } from './runtime-paths.js'
-import { resolveManifestPath } from './tile-manifest-reader.js'
+import { resolveManifestPath, resolveTileEnv, type TileEnv } from './tile-manifest-reader.js'
 
 export const READINESS_COMPONENTS = ['engine', 'frontend', 'prepared-data', 'pmtiles'] as const
 export type ReadinessComponent = (typeof READINESS_COMPONENTS)[number]
@@ -172,10 +172,7 @@ export type PmtilesManifest = {
     [key: string]: unknown
 }
 
-/** Legacy heads remain serve-only until the first generation-fenced base repaint replaces them.
- * The pre-generation popup protocol already put `line_model_role_sha256` on its manifests, so
- * that field alone is a valid legacy identity. A generation, however, is never valid without
- * the matching top-level line identity used by both map readiness and popup publication. */
+/** A generation is never valid without its matching top-level line identity. */
 function generationFencedManifest(manifest: PmtilesManifest, manifestPath: string): boolean {
   const hasGeneration = manifest.generation !== undefined
   const hasLineIdentity = manifest.line_model_role_sha256 !== undefined
@@ -190,6 +187,7 @@ export async function validatePmtilesManifest(
   manifest: PmtilesManifest,
   pmtilesDir: string,
   manifestPath: string,
+  tileEnv: TileEnv = 'prod',
 ): Promise<void> {
   if (typeof manifest.build !== 'string' || !BUILD_ID.test(manifest.build)) {
     throw new Error(`${manifestPath} has an invalid build id`)
@@ -199,7 +197,9 @@ export async function validatePmtilesManifest(
   }
   if (generationFencedManifest(manifest, manifestPath)) {
     try {
-      const generation = validatePublishedGenerationContract(manifest.generation)
+      const generation = tileEnv === 'prod'
+        ? validatePublishedGenerationContract(manifest.generation)
+        : validateGenerationContract(manifest.generation)
       if (generation.tier !== '') {
         throw new Error('top-level generation must be a base contract')
       }
@@ -266,22 +266,8 @@ export async function validatePmtilesManifest(
     }
   }
   validateTiersIndex(manifest, manifestPath)
-  validatePublishedTierGenerationProfiles(manifest, manifestPath)
+  validateTierGenerationProfiles(manifest, manifestPath, tileEnv)
   await validateManifestQualificationClosure(manifest, pmtilesDir, manifestPath)
-}
-
-/** Validate a newly published pointer. Existing legacy pointers remain readable
- * for the one-way migration, but a publication candidate may never create a
- * fresh escape hatch around generation, profile, and qualification fencing. */
-export async function validateGenerationFencedPmtilesManifest(
-  manifest: PmtilesManifest,
-  pmtilesDir: string,
-  manifestPath: string,
-): Promise<void> {
-  if (manifest.generation === undefined) {
-    throw new Error(`${manifestPath} must be generation-fenced`)
-  }
-  await validatePmtilesManifest(manifest, pmtilesDir, manifestPath)
 }
 
 async function validateManifestQualificationClosure(
@@ -435,12 +421,11 @@ export function validateTiersIndex(
   }
 }
 
-/** Keep benchmark/test profiles usable by the structural tier validator while
- * rejecting them at the public manifest boundary. Call only after
- * validateTiersIndex(), which establishes the tiers/packs shape. */
-function validatePublishedTierGenerationProfiles(
+/** Development serves structurally valid experiments; production accepts only selected profiles. */
+function validateTierGenerationProfiles(
   manifest: PmtilesManifest,
   manifestPath: string,
+  tileEnv: TileEnv,
 ): void {
   if (manifest.generation === undefined || manifest.tiers === undefined) return
   for (const [zoom, entry] of Object.entries(
@@ -448,7 +433,8 @@ function validatePublishedTierGenerationProfiles(
   )) {
     for (const pack of entry.packs) {
       try {
-        validatePublishedGenerationContract(pack.generation)
+        if (tileEnv === 'prod') validatePublishedGenerationContract(pack.generation)
+        else validateGenerationContract(pack.generation)
       } catch (error) {
         throw new Error(
           `${manifestPath} tiers.${zoom} pack ${String(pack.pack)} has an unsupported published generation: ${(error as Error).message}`,
@@ -487,10 +473,11 @@ async function readValidatedPmtilesManifestFile(
   pmtilesDir: string,
   manifestPath: string,
   opened: OpenedRegularFile,
+  tileEnv: TileEnv,
 ): Promise<{ manifest: PmtilesManifest; identity: string }> {
   const raw = (await opened.descriptor.readFile()).toString('utf8')
   const manifest = JSON.parse(raw) as PmtilesManifest
-  await validatePmtilesManifest(manifest, pmtilesDir, manifestPath)
+  await validatePmtilesManifest(manifest, pmtilesDir, manifestPath, tileEnv)
   const identity = fileIdentity(await opened.descriptor.stat({ bigint: true }))
   return { manifest, identity }
 }
@@ -501,10 +488,13 @@ export async function readValidatedPmtilesManifest(
 ): Promise<PmtilesManifest> {
   // Per-environment pin (docs/dev/checkout-restructure-plan.md Track 2): boot readiness and the
   // route both gate on THIS deployment's pin, never the packer's shared merge head.
-  const manifestPath = resolveManifestPath(pmtilesDir, tileEnv)
+  const resolvedTileEnv = resolveTileEnv(tileEnv)
+  const manifestPath = resolveManifestPath(pmtilesDir, resolvedTileEnv)
   const opened = await openManifestPinNoFollow(manifestPath)
   try {
-    return (await readValidatedPmtilesManifestFile(pmtilesDir, manifestPath, opened)).manifest
+    return (await readValidatedPmtilesManifestFile(
+      pmtilesDir, manifestPath, opened, resolvedTileEnv,
+    )).manifest
   } finally {
     await opened.descriptor.close()
   }
@@ -515,7 +505,8 @@ export async function readCachedValidatedPmtilesManifest(
   pmtilesDir: string,
   tileEnv?: string,
 ): Promise<PmtilesManifest> {
-  const manifestPath = resolveManifestPath(pmtilesDir, tileEnv)
+  const resolvedTileEnv = resolveTileEnv(tileEnv)
+  const manifestPath = resolveManifestPath(pmtilesDir, resolvedTileEnv)
   for (let attempt = 0; attempt < 2; attempt++) {
     const opened = await openManifestPinNoFollow(manifestPath)
     const identity = fileIdentity(opened.info)
@@ -533,7 +524,9 @@ export async function readCachedValidatedPmtilesManifest(
       loading = (async () => {
         try {
           const { manifest, identity: identityAfter } =
-            await readValidatedPmtilesManifestFile(pmtilesDir, manifestPath, opened)
+            await readValidatedPmtilesManifestFile(
+              pmtilesDir, manifestPath, opened, resolvedTileEnv,
+            )
           if (identityAfter !== identity) {
             throw new Error(`${manifestPath} changed while it was being validated`)
           }

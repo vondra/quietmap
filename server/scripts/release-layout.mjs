@@ -10,7 +10,7 @@ import {
   statSync,
   symlinkSync,
 } from 'node:fs'
-import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -50,30 +50,18 @@ function replaceSymlink(linkPath, target) {
 
 function ensureRuntimeDependencies(releasePath) {
   const dependencyPath = resolve(releasePath, 'node_modules')
-  const liveDependencies = realpathSync(resolve(serverRoot, 'node_modules'))
   if (!existsSync(dependencyPath)) {
-    if (!basename(releasePath).startsWith('legacy-')) {
-      throw new Error(`${dependencyPath} is missing from an immutable release`)
-    }
-    symlinkSync(relative(releasePath, liveDependencies), dependencyPath, 'dir')
+    throw new Error(`${dependencyPath} is missing from an immutable release`)
   }
   if (!lstatSync(dependencyPath).isSymbolicLink()) {
     throw new Error(`${dependencyPath} is not a dependency snapshot symlink`)
   }
   const actual = realpathSync(dependencyPath)
-  let snapshotted = false
-  try {
-    const pathFromRoot = relative(realpathSync(dependencyRoot), actual)
-    snapshotted = pathFromRoot !== ''
-      && pathFromRoot !== '..'
-      && !pathFromRoot.startsWith(`..${sep}`)
-      && !isAbsolute(pathFromRoot)
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error
-  }
-  // `liveDependencies` is accepted only for releases made before dependency
-  // snapshots and for the one-time legacy dist migration.
-  if (actual !== liveDependencies && !snapshotted) {
+  const pathFromRoot = relative(realpathSync(dependencyRoot), actual)
+  if (pathFromRoot === ''
+      || pathFromRoot === '..'
+      || pathFromRoot.startsWith(`..${sep}`)
+      || isAbsolute(pathFromRoot)) {
     throw new Error(`${dependencyPath} points outside the dependency snapshots`)
   }
 }
@@ -110,9 +98,6 @@ export function pruneUnusedReleases() {
       if (error?.code === 'ENOENT') continue
       throw error
     }
-    // One-time migration: a legacy server/dist directory lives outside the
-    // release root, so pruning neither follows nor removes it.
-    if (linkPath === distPath && linkInfo.isDirectory()) continue
     // An existing but corrupt/unreadable link aborts pruning. Treating it as
     // absent could recursively delete the generation a live process uses.
     keep.add(validatedReleaseLink(linkPath).real)
@@ -121,7 +106,7 @@ export function pruneUnusedReleases() {
   for (const entry of readdirSync(releaseRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue
     const candidate = resolve(releaseRoot, entry.name)
-    if ((entry.name.startsWith('release-') || entry.name.startsWith('legacy-')) && !keep.has(candidate)) {
+    if (entry.name.startsWith('release-') && !keep.has(candidate)) {
       rmSync(candidate, { recursive: true, force: true })
     } else if (entry.name.startsWith('.stage-') && statSync(candidate).mtimeMs < staleStageBefore) {
       rmSync(candidate, { recursive: true, force: true })
@@ -129,11 +114,10 @@ export function pruneUnusedReleases() {
   }
 }
 
-export function activatePreparedRelease({ allowLegacyDirectory = false } = {}) {
+export function activatePreparedRelease() {
   const next = validatedReleaseLink(nextPath)
   ensureRuntimeDependencies(next.real)
   let previousTarget = null
-  let movedLegacy = null
   let originalPrevious = null
 
   try {
@@ -150,13 +134,8 @@ export function activatePreparedRelease({ allowLegacyDirectory = false } = {}) {
         const currentRelease = validatedReleaseLink(distPath)
         ensureRuntimeDependencies(currentRelease.real)
         previousTarget = currentRelease.raw
-      } else if (current.isDirectory() && allowLegacyDirectory) {
-        movedLegacy = resolve(releaseRoot, `legacy-${Date.now()}-${process.pid}`)
-        renameSync(distPath, movedLegacy)
-        ensureRuntimeDependencies(movedLegacy)
-        previousTarget = relative(serverRoot, movedLegacy)
       } else {
-        throw new Error('server/dist is a legacy directory; deploy it once through ./start.sh')
+        throw new Error('server/dist is not a release symlink')
       }
     }
 
@@ -165,7 +144,6 @@ export function activatePreparedRelease({ allowLegacyDirectory = false } = {}) {
     renameSync(nextPath, distPath)
   } catch (error) {
     try {
-      if (movedLegacy && !existsSync(distPath)) renameSync(movedLegacy, distPath)
       if (originalPrevious) replaceSymlink(previousPath, originalPrevious)
       else rmSync(previousPath, { force: true })
     } catch (recoveryError) {

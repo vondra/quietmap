@@ -515,7 +515,7 @@ mod tests {
         let cells = vec![90; TILE_PX * TILE_PX];
         let store =
             TileStore::create(&root.join("rail"), 6, SOURCE_ID_RAIL, TILE_PX as u16).unwrap();
-        store.put_cells_hm3(10, 11, &cells).unwrap();
+        store.put_cells(10, 11, &cells).unwrap();
         store.sync_all().unwrap();
         drop(store);
         fs::create_dir_all(extracted.join("rail/6")).unwrap();
@@ -553,7 +553,7 @@ mod tests {
         let new_cells = vec![100; TILE_PX * TILE_PX];
         let store =
             TileStore::create(&root.join("rail"), 6, SOURCE_ID_RAIL, TILE_PX as u16).unwrap();
-        store.put_cells_hm3(10, 11, &old_cells).unwrap();
+        store.put_cells(10, 11, &old_cells).unwrap();
         store.sync_all().unwrap();
         drop(store);
         write_tile(

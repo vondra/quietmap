@@ -21,7 +21,7 @@
 //!
 //! Store-to-store: level `z_dst` is written into the layer's
 //! `z{dst}.qtsi/.qtsd` pair from the `z_src` pair via
-//! [`crate::tile_store::TileStore::put_cells_hm3`] — the ship-out `BrotliHm3`
+//! [`crate::tile_store::TileStore::put_cells`] — the ship-out `BrotliHm3`
 //! codec directly, since 2026-07-16 (was the `ZstdCells` working codec,
 //! deferring the Brotli-q9 encode to the pmtiles pack; that made every
 //! publish redo the encode for every pyramid tile, ~63 min for one 580k-tile
@@ -414,9 +414,9 @@ fn build_one_level(
                 }
             }
             // No surviving child → tombstone any stale ancestor; an all-silent
-            // pool tombstones inside put_cells_hm3 (present ⟺ audible invariant).
+            // pool tombstones inside put_cells (present ⟺ audible invariant).
             let n = if any_data {
-                dst.put_cells_hm3(dx, dy, dst_cells)?
+                dst.put_cells(dx, dy, dst_cells)?
             } else {
                 dst.delete(dx, dy)?;
                 0
@@ -520,6 +520,11 @@ fn downsample_2x2_into_quadrant(src: &[u8], dst: &mut [u8], qx: usize, qy: usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn put_legacy_zstd_cells(store: &TileStore, x: u32, y: u32, cells: &[u8]) {
+        let blob = zstd::encode_all(std::io::Cursor::new(cells), 1).unwrap();
+        store.put_blob(x, y, TileCodec::ZstdCells, &blob).unwrap();
+    }
     use crate::grid::TILE_PX;
     use crate::tile_store::{TileCodec, REBUILD_INCOMPLETE_MARKER};
     use crate::wire_hm3::{quantise_lden, SOURCE_ID_AIRCRAFT, SOURCE_ID_RAIL, SOURCE_ID_ROAD};
@@ -578,7 +583,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let base = TileStore::create(dir.path(), 13, SOURCE_ID_ROAD, TILE_PX as u16).unwrap();
         let cells = vec![quantise_lden(60.0); TILE_PX * TILE_PX];
-        base.put_cells_hm3(4424, 2774, &cells).unwrap();
+        base.put_cells(4424, 2774, &cells).unwrap();
         base.sync_all().unwrap();
         drop(base);
         let written = build_pyramid(dir.path(), 13, 13, RebuildScope::Full).unwrap();
@@ -606,7 +611,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let base = TileStore::create(dir.path(), 6, SOURCE_ID_ROAD, TILE_PX as u16).unwrap();
         let cells = vec![quantise_lden(60.0); TILE_PX * TILE_PX];
-        base.put_cells_hm3(2, 2, &cells).unwrap();
+        base.put_cells(2, 2, &cells).unwrap();
         base.sync_all().unwrap();
         drop(base);
 
@@ -658,7 +663,7 @@ mod tests {
     fn incremental_rebuild_refuses_to_bootstrap_a_missing_destination_level() {
         let dir = tempfile::tempdir().unwrap();
         let base = TileStore::create(dir.path(), 6, SOURCE_ID_ROAD, TILE_PX as u16).unwrap();
-        base.put_cells_hm3(2, 2, &vec![quantise_lden(60.0); TILE_PX * TILE_PX])
+        base.put_cells(2, 2, &vec![quantise_lden(60.0); TILE_PX * TILE_PX])
             .unwrap();
         base.sync_all().unwrap();
         drop(base);
@@ -675,7 +680,7 @@ mod tests {
     fn injected_incremental_failure_keeps_fence_until_the_exact_retry_completes() {
         let dir = tempfile::tempdir().unwrap();
         let base = TileStore::create(dir.path(), 6, SOURCE_ID_ROAD, TILE_PX as u16).unwrap();
-        base.put_cells_hm3(2, 2, &vec![quantise_lden(60.0); TILE_PX * TILE_PX])
+        base.put_cells(2, 2, &vec![quantise_lden(60.0); TILE_PX * TILE_PX])
             .unwrap();
         base.sync_all().unwrap();
         drop(base);
@@ -703,13 +708,11 @@ mod tests {
         let base = dir.path();
         let body = vec![quantise_lden(60.0); TILE_PX * TILE_PX];
 
-        // Fixture is TILE_PX-sized (not an arbitrary legacy size): pyramid levels now write
-        // through put_cells_hm3 (BrotliHm3), which is locked to the CURRENT build's tile size
-        // (see put_cells_hm3's own doc) — a store at any other size can no longer be pyramid-
-        // built at all, by design.
+        // Feed the live read-only legacy codec through the current writer. The remaining store
+        // census still contains Zstd entries, while every new pyramid level must be BrotliHm3.
         let z13 = TileStore::create(base, 13, SOURCE_ID_AIRCRAFT, TILE_PX as u16).unwrap();
         for (sx, sy) in [(4420, 2772), (4421, 2772), (4420, 2773), (4421, 2773)] {
-            z13.put_cells(sx, sy, &body).unwrap();
+            put_legacy_zstd_cells(&z13, sx, sy, &body);
         }
         drop(z13);
 
@@ -727,7 +730,7 @@ mod tests {
         assert_eq!(cells12[0], expected, "z=12 first cell must stay 60 dB");
         assert_eq!(cells11[0], expected, "z=11 first cell must stay 60 dB");
         // 2026-07-16: pyramid levels write the ship-out codec directly
-        // (put_cells_hm3) instead of the legacy ZstdCells working codec —
+        // (put_cells) instead of the legacy ZstdCells working codec —
         // publish no longer has to re-encode these tiles at all.
         assert_eq!(
             z12.get_blob(2210, 1386).unwrap().unwrap().0,
@@ -816,9 +819,10 @@ mod tests {
     /// a DISTINCT byte must land as four uniform quadrants of the parent (a
     /// 2×2 pool of equal bytes re-quantises to the same byte). Distinct values
     /// catch qx/qy swaps and offset bugs that uniform fills can't see.
-    fn assert_pyramid_quadrants(base_zoom: u8, px: u16) {
+    fn assert_pyramid_quadrants(base_zoom: u8) {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path();
+        let px = TILE_PX as u16;
         let n = usize::from(px) * usize::from(px);
         let vals = [100u8, 110, 120, 130];
         // Coordinates valid at both z12 (max 4095) and z13 fixtures.
@@ -847,14 +851,9 @@ mod tests {
         }
     }
 
-    // A px=256 variant of this test existed before 2026-07-16: pyramid levels now write
-    // through put_cells_hm3 (BrotliHm3), which is locked to the CURRENT build's tile size
-    // (crate::grid::TILE_PX = 512) — the same reason wire_hm3.rs's own doc says "v2 (256²) is
-    // gone". A store at any other size can no longer be pyramid-built at all (put_cells_hm3
-    // bails cleanly rather than attempting it), so there is nothing left to assert at px=256.
     #[test]
     fn pyramid_quadrants_512() {
-        assert_pyramid_quadrants(12, 512);
+        assert_pyramid_quadrants(12);
     }
 
     /// A pre-existing corrupt blob (2026-07-13 concurrent-writer bug, fixed at

@@ -527,7 +527,7 @@ test('readiness accepts a named W1 base with its W2 spatial tier and rejects a c
   assert.match(crossed.errors.pmtiles ?? '', /tier is not anchored to the live base generation/)
 })
 
-test('readiness rejects a self-consistent unsupported top-level quality profile', async (t) => {
+test('development serves a structurally valid experiment that production rejects', async (t) => {
   const fixture = await readinessFixture()
   t.after(async () => rm(fixture.root, { recursive: true, force: true }))
   const generation = unsupportedPublishedBaseGeneration()
@@ -541,14 +541,26 @@ test('readiness rejects a self-consistent unsupported top-level quality profile'
     }),
   )
 
-  const result = await createReadinessCheck({
+  const development = await createReadinessCheck({
     ...fixture,
     engineProbe: async () => {},
     filesystemCacheMs: 0,
   })()
-  assert.equal(result.ready, false)
-  assert.deepEqual(result.failed, ['pmtiles'])
-  assert.match(result.errors.pmtiles ?? '', /published quality profile is unsupported/)
+  assert.deepEqual(development, { ready: true, failed: [], errors: {} })
+
+  await writeFile(
+    join(fixture.pmtilesDir, 'current.prod.json'),
+    await readFile(join(fixture.pmtilesDir, `current.${fixture.tileEnv}.json`)),
+  )
+  const production = await createReadinessCheck({
+    ...fixture,
+    tileEnv: 'prod',
+    engineProbe: async () => {},
+    filesystemCacheMs: 0,
+  })()
+  assert.equal(production.ready, false)
+  assert.deepEqual(production.failed, ['pmtiles'])
+  assert.match(production.errors.pmtiles ?? '', /published quality profile is unsupported/)
 })
 
 test('readiness rejects an unsupported quality profile in the first tier pack', async (t) => {
@@ -557,7 +569,7 @@ test('readiness rejects an unsupported quality profile in the first tier pack', 
   const generation = unsupportedPublishedSpatialGeneration(fixture.generation)
   const bundle = await writeTierBundle(fixture, generation)
   await writeFile(
-    join(fixture.pmtilesDir, `current.${fixture.tileEnv}.json`),
+    join(fixture.pmtilesDir, 'current.prod.json'),
     JSON.stringify({
       build: 'b1',
       generation: fixture.generation,
@@ -569,6 +581,7 @@ test('readiness rejects an unsupported quality profile in the first tier pack', 
 
   const result = await createReadinessCheck({
     ...fixture,
+    tileEnv: 'prod',
     engineProbe: async () => {},
     filesystemCacheMs: 0,
   })()
@@ -605,7 +618,7 @@ test('readiness rejects an unsupported quality profile in a later tier pack', as
     layers: secondTokens,
   })
   await writeFile(
-    join(fixture.pmtilesDir, `current.${fixture.tileEnv}.json`),
+    join(fixture.pmtilesDir, 'current.prod.json'),
     JSON.stringify({
       build: 'b1',
       generation: fixture.generation,
@@ -617,6 +630,7 @@ test('readiness rejects an unsupported quality profile in a later tier pack', as
 
   const result = await createReadinessCheck({
     ...fixture,
+    tileEnv: 'prod',
     engineProbe: async () => {},
     filesystemCacheMs: 0,
   })()

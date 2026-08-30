@@ -20,14 +20,14 @@ pub const HEADER_BYTES: u64 = 32;
 pub const ENTRY_BYTES: u64 = 16;
 
 /// How a stored blob is encoded. Kept as a u8 tag in every index entry so a
-/// store can hold mixed codecs (fleet Brotli blobs + central zstd rewrites).
+/// store can read legacy Zstd cells alongside current Brotli HM3 blobs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TileCodec {
     /// A complete HM3 file image: whole-file Brotli of header + cells —
     /// byte-identical to its loose staging `.bin`. Ships verbatim into PMTiles
     /// (`TileStore::get_hm3_by_entry`) — since 2026-07-16 this is how EVERY
     /// central writer (`build_heatmap_combine`, `pyramid::build_one_level`,
-    /// via `TileStore::put_cells_hm3`) stores its output too, not just
+    /// via `TileStore::put_cells`) stores its output too, not just
     /// fleet-encoded ingest/transcode blobs: the Brotli-q9 encode happens
     /// once at write time, amortized over the days between publishes,
     /// instead of hundreds of GB of it being redone on every publish.
@@ -37,10 +37,9 @@ pub enum TileCodec {
     /// cheap working codec central rewrites used before that date, which
     /// forced `tile-store-pack` to zstd-decode-then-brotli-q9-re-encode every
     /// one of those tiles on EVERY publish (measured ~63 min for one 580k-tile
-    /// layer). New central writes are `BrotliHm3` (`put_cells_hm3`); this
-    /// variant, `TileStore::put_cells`, and `decode_cells`'s `ZstdCells` arm
-    /// stay only so a store not yet fully rewritten under the new path keeps
-    /// publishing correctly. Delete this codec (and every arm handling it)
+    /// layer). New central writes are `BrotliHm3` (`put_cells`); this variant
+    /// and `decode_cells`'s `ZstdCells` arm stay only so a store not yet fully
+    /// rewritten keeps publishing correctly. Delete this codec (and every arm handling it)
     /// once every store's z2..z11+total entries have been rewritten
     /// post-cutover.
     ZstdCells = 1,

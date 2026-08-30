@@ -31,11 +31,6 @@ use crate::wire_hm3;
 /// Data-log preallocation step. Appends are sequential, but batching extent
 /// allocation keeps concurrent tail writes off the ext4 allocation lock.
 const FALLOC_CHUNK: u64 = 256 * 1024 * 1024;
-/// zstd level for central working tiles — measured 2026-07-08: 132 µs/tile
-/// round-trip at 15.6 % of raw; zstd-3 saved a further 6 % bytes for 29 %
-/// slower encode (not worth it), lz4 +46 % bytes (no case).
-const ZSTD_LEVEL: i32 = 1;
-
 pub struct TileStore {
     index: File,
     data: File,
@@ -301,7 +296,7 @@ impl TileStore {
     }
 
     /// Decode+validate an already-fetched blob (magic/version/length for
-    /// `BrotliHm3`, zstd decode for the working codec, then cell-count check
+    /// `BrotliHm3`, zstd decode for the legacy codec, then cell-count check
     /// either way). Split out of [`Self::get_cells`] so a caller that needs to
     /// distinguish "couldn't even fetch the blob" (I/O error, corrupt index —
     /// an infrastructure problem, must stay fatal) from "fetched fine but the
@@ -325,7 +320,7 @@ impl TileStore {
 
     /// A complete HM3 file image (whole-file Brotli) whatever the stored
     /// codec — verbatim for [`TileCodec::BrotliHm3`], composed via
-    /// [`wire_hm3::encode_tile_bytes`] for working-codec tiles. The ship-out
+    /// [`wire_hm3::encode_tile_bytes`] for legacy tiles. The ship-out
     /// path: the pmtiles packer stays codec-blind.
     pub fn get_hm3(&self, x: u32, y: u32) -> Result<Option<Vec<u8>>> {
         match self.read_entry(x, y)? {
@@ -408,7 +403,7 @@ impl TileStore {
     /// encode itself (tile-store-ingest, tile-store-transcode: fleet bytes,
     /// or bytes read back from a loose staging tree) MUST validate it (decode +
     /// magic/version/size) before calling `put_blob` — a new such writer must
-    /// add the same gate. [`Self::put_cells_hm3`] is
+    /// add the same gate. [`Self::put_cells`] is
     /// exempt: it encodes the blob itself, in this same call, from cells the
     /// caller already holds valid — there is no external byte stream to
     /// distrust, only a hypothetical bug in `encode_tile_bytes` itself, which
@@ -443,8 +438,16 @@ impl TileStore {
         Ok(())
     }
 
-    /// Encode cells with the working codec and store them. All-`NO_DATA` cells
-    /// delete the tile instead (mirrors `write_tile`'s `skip_if_empty`).
+    /// Encode cells with the ship-out codec ([`TileCodec::BrotliHm3`], the
+    /// same quality-9 whole-file Brotli [`wire_hm3::encode_tile_bytes`]
+    /// produces for a loose `.bin`) and store them — the central-writer path
+    /// since 2026-07-16 (`build_heatmap_combine`'s `total` writes,
+    /// `pyramid::build_one_level`'s pyramid levels). This moves the Brotli-q9 encode to
+    /// write time — once per pyramid tile per drain batch, amortized over
+    /// the days between publishes — instead of `tile-store-pack` redoing it
+    /// for every tile on every publish (measured ~63 min for one 580k-tile
+    /// layer before this change; see [`TileCodec::ZstdCells`]'s doc). All-
+    /// `NO_DATA` cells delete the tile instead.
     /// Returns stored bytes (0 = deleted-as-empty).
     pub fn put_cells(&self, x: u32, y: u32, cells: &[u8]) -> Result<usize> {
         let n_cells = usize::from(self.header.tile_px) * usize::from(self.header.tile_px);
@@ -455,39 +458,12 @@ impl TileStore {
             self.delete(x, y)?;
             return Ok(0);
         }
-        let blob = zstd::encode_all(std::io::Cursor::new(cells), ZSTD_LEVEL)?;
-        self.put_blob(x, y, TileCodec::ZstdCells, &blob)?;
-        Ok(blob.len())
-    }
-
-    /// Encode cells with the SHIP-OUT codec ([`TileCodec::BrotliHm3`], the
-    /// same quality-9 whole-file Brotli [`wire_hm3::encode_tile_bytes`]
-    /// produces for a loose `.bin`) and store them — the central-writer path
-    /// since 2026-07-16 (`build_heatmap_combine`'s `total` writes,
-    /// `pyramid::build_one_level`'s pyramid levels), replacing the old
-    /// `put_cells`/`ZstdCells` working-codec write for anything that will
-    /// eventually ship to a publish. This moves the Brotli-q9 encode to
-    /// write time — once per pyramid tile per drain batch, amortized over
-    /// the days between publishes — instead of `tile-store-pack` redoing it
-    /// for every tile on every publish (measured ~63 min for one 580k-tile
-    /// layer before this change; see [`TileCodec::ZstdCells`]'s doc). All-
-    /// `NO_DATA` cells delete the tile instead, mirroring `put_cells`.
-    /// Returns stored bytes (0 = deleted-as-empty).
-    pub fn put_cells_hm3(&self, x: u32, y: u32, cells: &[u8]) -> Result<usize> {
-        let n_cells = usize::from(self.header.tile_px) * usize::from(self.header.tile_px);
-        if cells.len() != n_cells {
-            bail!("put_cells_hm3 {x}/{y}: {} cells ≠ {n_cells}", cells.len());
-        }
-        if wire_hm3::is_silent(cells) {
-            self.delete(x, y)?;
-            return Ok(0);
-        }
         // HM3 v3 has one global 512-pixel tile size, while a store header can
         // expose a stale size. Reject that mismatch before encode_tile_bytes
         // asserts, so one bad store cannot panic a pyramid/combine run.
         if usize::from(self.header.tile_px) != crate::grid::TILE_PX {
             bail!(
-                "put_cells_hm3 {x}/{y}: store tile_px {} ≠ current build TILE_PX {} — BrotliHm3 \
+                "put_cells {x}/{y}: store tile_px {} ≠ current build TILE_PX {} — BrotliHm3 \
                  (HM3 v3) is locked to the current tile size; this store needs a full repaint at \
                  the new size before it can use the ship-out write path",
                 self.header.tile_px,
@@ -643,6 +619,11 @@ mod tests {
             c[i] = v;
         }
         c
+    }
+
+    fn put_legacy_zstd_cells(store: &TileStore, x: u32, y: u32, cells: &[u8]) {
+        let blob = zstd::encode_all(std::io::Cursor::new(cells), 1).unwrap();
+        store.put_blob(x, y, TileCodec::ZstdCells, &blob).unwrap();
     }
 
     #[test]
@@ -826,7 +807,7 @@ mod tests {
         s.put_blob(1, 2, TileCodec::BrotliHm3, &blob).unwrap();
         assert_eq!(s.get_hm3(1, 2).unwrap().unwrap(), blob);
         // Compose path: a zstd working tile ships as a valid HM3 image.
-        s.put_cells(3, 4, &cells).unwrap();
+        put_legacy_zstd_cells(&s, 3, 4, &cells);
         let shipped = s.get_hm3(3, 4).unwrap().unwrap();
         assert_eq!(wire_hm3::read_tile_bytes(&shipped).unwrap(), cells);
         assert!(s.get_hm3(0, 0).unwrap().is_none());
@@ -872,7 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn put_cells_hm3_round_trips_and_ships_verbatim() {
+    fn put_cells_round_trips_and_ships_verbatim() {
         // The new central-writer path (2026-07-16): combine/pyramid write
         // BrotliHm3 directly instead of the legacy ZstdCells working codec,
         // moving the Brotli-q9 encode to write time so publish no longer
@@ -882,7 +863,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let s = TileStore::create(dir.path(), 6, SOURCE_ID_RAIL, TILE_PX as u16).unwrap();
         let cells = cells_with(&[(0, 88), (12_345, 200)]);
-        let stored = s.put_cells_hm3(2, 3, &cells).unwrap();
+        let stored = s.put_cells(2, 3, &cells).unwrap();
         assert!(stored > 0);
         let (codec, blob) = s.get_blob(2, 3).unwrap().unwrap();
         assert_eq!(
@@ -900,11 +881,11 @@ mod tests {
     }
 
     #[test]
-    fn put_cells_hm3_all_silent_deletes_tile() {
+    fn put_cells_all_silent_deletes_tile() {
         let dir = tempfile::tempdir().unwrap();
         let s = TileStore::create(dir.path(), 6, SOURCE_ID_RAIL, TILE_PX as u16).unwrap();
         assert_eq!(
-            s.put_cells_hm3(0, 0, &vec![NO_DATA; TILE_PX * TILE_PX])
+            s.put_cells(0, 0, &vec![NO_DATA; TILE_PX * TILE_PX])
                 .unwrap(),
             0
         );
@@ -913,17 +894,16 @@ mod tests {
 
     #[test]
     fn mixed_codec_store_both_present_read_and_ship_correctly() {
-        // A store mid-cutover: some entries already rewritten through the new
-        // put_cells_hm3 (BrotliHm3) path, some still legacy put_cells
-        // (ZstdCells) — both codecs must coexist in one (layer, zoom) store
+        // A current put_cells (BrotliHm3) entry plus a legacy ZstdCells fixture:
+        // both codecs must coexist in one (layer, zoom) store
         // (the per-entry codec tag is exactly what makes that safe) and both
         // must decode and ship correctly.
         let dir = tempfile::tempdir().unwrap();
         let s = TileStore::create(dir.path(), 6, SOURCE_ID_RAIL, TILE_PX as u16).unwrap();
         let cells_a = cells_with(&[(1, 50)]);
         let cells_b = cells_with(&[(2, 60)]);
-        s.put_cells(0, 0, &cells_a).unwrap(); // legacy ZstdCells
-        s.put_cells_hm3(0, 1, &cells_b).unwrap(); // new BrotliHm3
+        put_legacy_zstd_cells(&s, 0, 0, &cells_a);
+        s.put_cells(0, 1, &cells_b).unwrap();
         assert_eq!(s.get_blob(0, 0).unwrap().unwrap().0, TileCodec::ZstdCells);
         assert_eq!(s.get_blob(0, 1).unwrap().unwrap().0, TileCodec::BrotliHm3);
         assert_eq!(s.get_cells(0, 0).unwrap().unwrap(), cells_a);

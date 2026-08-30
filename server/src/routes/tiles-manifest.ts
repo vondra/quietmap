@@ -7,7 +7,6 @@ import {
   readCachedValidatedPmtilesManifest,
   type PmtilesManifest,
 } from '../runtime-readiness.js'
-import type { PublishedLineModel } from '../published-line-model.js'
 
 type PublicManifestLayer = { file: string; build?: string }
 type PublicTierPack = { pack: string; coverage_r4: string[]; layers: string[] }
@@ -63,24 +62,10 @@ function publicManifest(manifest: PmtilesManifest) {
  * layers); 500 = TILE_ENV misconfigured or this checkout was never seeded (see
  * `resolveManifestPath`'s error message — logged, never sent to the client).
  */
-export type TilesManifestRouteOptions = {
-  publishedLineModel?: PublishedLineModel
-}
-
-export async function tilesManifestRoutes(
-  app: FastifyInstance,
-  options: TilesManifestRouteOptions = {},
-): Promise<void> {
+export async function tilesManifestRoutes(app: FastifyInstance): Promise<void> {
   const tileBase = (process.env.PUBLIC_TILE_BASE || '').replace(/\/$/, '') || null
   app.get('/api/tiles-manifest', async (_req, reply) => {
     reply.header('Cache-Control', 'no-cache')
-    if (options.publishedLineModel?.enabled) {
-      const published = options.publishedLineModel.mapManifest()
-      if (!published) {
-        return reply.code(503).send({ error: 'published line model unavailable' })
-      }
-      return { ...publicManifest(published), tile_base: tileBase }
-    }
     let manifest
     try {
       manifest = await readCachedValidatedPmtilesManifest(PMTILES_BASE)

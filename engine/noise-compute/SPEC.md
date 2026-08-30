@@ -196,7 +196,7 @@ Post-adjustments applied even on measured counts: `service > 0` → counts × **
 | NarrowGauge | 10 + 0 | 40 km/h |
 | Funicular | 40 + 0 | 20 km/h |
 
-`maxspeed` tag wins when present (unit-aware parse at extract — mph postings like WCML "125 mph" now convert instead of dropping to 0); missing `maxspeed` with `highspeed=yes` → 300 km/h (`normalize::normalize_rail`). The railways `maxspeed` column is **UInt16** since 2026-06 (300+ km/h overflowed u8); readers (`hex_store::col_u16_or_u8`, `source_loader_rail`) also accept legacy UInt8 arrows until the next world OSM re-extract.
+`maxspeed` tag wins when present (unit-aware parse at extract — mph postings like WCML "125 mph" now convert instead of dropping to 0); missing `maxspeed` with `highspeed=yes` → 300 km/h (`normalize::normalize_rail`). The railways `maxspeed` column is **UInt16** (300+ km/h overflowed u8); readers reject any stale schema and require a new OSM extract.
 
 ---
 

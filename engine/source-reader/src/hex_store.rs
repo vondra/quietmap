@@ -204,9 +204,12 @@ pub fn load_hex(dir: &str) -> Result<HexData, String> {
         "leisure.arrow",
     )?;
 
+    let railways = LazyArrow::open(&path.join("railways.arrow"));
+    check_column_type(&railways, "maxspeed", DataType::UInt16, "railways.arrow")?;
+
     Ok(HexData {
         roads: LazyArrow::open(&path.join("roads.arrow")),
-        railways: LazyArrow::open(&path.join("railways.arrow")),
+        railways,
         buildings,
         barriers: LazyArrow::open(&path.join("barriers.arrow")),
         industrial: LazyArrow::open(&path.join("industrial.arrow")),
@@ -236,6 +239,28 @@ fn check_contract(arrow: &LazyArrow, key: &str, expected: &str, label: &str) -> 
         return Err(format!(
             "{label} {key} mismatch (expected {expected}, got {c:?}) — \
              re-extract OSM (settlement v2 phase 2)"
+        ));
+    }
+    Ok(())
+}
+
+/// A present source file must use the current schema; stale extracts fail loud.
+fn check_column_type(
+    arrow: &LazyArrow,
+    column: &str,
+    expected: DataType,
+    label: &str,
+) -> Result<(), String> {
+    let Some(schema) = arrow.schema() else {
+        return Ok(());
+    };
+    let actual = schema
+        .field_with_name(column)
+        .map_err(|_| format!("{label} is missing required {column} column"))?
+        .data_type();
+    if actual != &expected {
+        return Err(format!(
+            "{label} {column} must be {expected:?}, got {actual:?} — re-extract OSM"
         ));
     }
     Ok(())
@@ -603,7 +628,7 @@ pub fn query_railways_from_batches(
         let len = col_f32(batch, "length_m");
         let rtype = col_u8(batch, "rail_type");
         let usage = col_u8(batch, "usage");
-        let maxspd = col_u16_or_u8(batch, "maxspeed");
+        let maxspd = col_u16(batch, "maxspeed");
         let name = col_str(batch, "name");
         let rail_ref = col_str(batch, "ref");
         let bridge_col = col_bool(batch, "bridge");
@@ -668,7 +693,7 @@ pub fn query_railways_from_batches(
                     }),
                 rail_type: rtype.map(|a| a.value(i)).unwrap_or(0),
                 usage: usage.map(|a| a.value(i)).unwrap_or(0),
-                maxspeed: maxspd.as_ref().map(|a| a.value(i)).unwrap_or(0),
+                maxspeed: maxspd.map(|a| a.value(i)).unwrap_or(0),
                 name: name.map(|a| a.value(i).to_string()).unwrap_or_default(),
                 rail_ref: rail_ref.map(|a| a.value(i).to_string()).unwrap_or_default(),
                 bridge: bridge_col.map(|a| a.value(i)).unwrap_or(false),
@@ -947,31 +972,6 @@ pub fn col_bool<'a>(b: &'a RecordBatch, name: &str) -> Option<&'a BooleanArray> 
     b.column_by_name(name)?.as_any().downcast_ref()
 }
 
-/// Width-tolerant accessor for columns migrated u8 → u16 (rail `maxspeed`,
-/// 2026-06: 300+ km/h overflowed u8). Old arrows keep UInt8 until the next
-/// world OSM re-extract; this reader is the migration. Module-private —
-/// a one-column shim, not part of the general `col_*` accessor surface.
-enum ColU16OrU8<'a> {
-    U16(&'a UInt16Array),
-    U8(&'a UInt8Array),
-}
-
-impl ColU16OrU8<'_> {
-    fn value(&self, i: usize) -> u16 {
-        match self {
-            Self::U16(a) => a.value(i),
-            Self::U8(a) => a.value(i) as u16,
-        }
-    }
-}
-
-fn col_u16_or_u8<'a>(b: &'a RecordBatch, name: &str) -> Option<ColU16OrU8<'a>> {
-    let col = b.column_by_name(name)?.as_any();
-    if let Some(a) = col.downcast_ref::<UInt16Array>() {
-        return Some(ColU16OrU8::U16(a));
-    }
-    col.downcast_ref::<UInt8Array>().map(ColU16OrU8::U8)
-}
 pub fn col_str<'a>(b: &'a RecordBatch, name: &str) -> Option<&'a StringArray> {
     b.column_by_name(name)?.as_any().downcast_ref()
 }
@@ -1177,27 +1177,6 @@ mod hex_store_tests {
         assert!(validate_reference_roads(root.path(), "../roads.arrow")
             .unwrap_err()
             .contains("invalid H3 reference cell"));
-    }
-
-    /// `col_u16_or_u8` must read both the new UInt16 rail `maxspeed`
-    /// column and legacy UInt8 arrows (pre-2026-06 extracts) — the
-    /// tolerant reader IS the schema migration.
-    #[test]
-    fn col_u16_or_u8_reads_both_widths() {
-        let one_col = |field: Field, arr: ArrayRef| {
-            RecordBatch::try_new(Arc::new(Schema::new(vec![field])), vec![arr]).unwrap()
-        };
-        let new = one_col(
-            Field::new("maxspeed", DataType::UInt16, false),
-            Arc::new(UInt16Array::from(vec![300u16])),
-        );
-        let legacy = one_col(
-            Field::new("maxspeed", DataType::UInt8, false),
-            Arc::new(UInt8Array::from(vec![120u8])),
-        );
-        assert_eq!(col_u16_or_u8(&new, "maxspeed").unwrap().value(0), 300);
-        assert_eq!(col_u16_or_u8(&legacy, "maxspeed").unwrap().value(0), 120);
-        assert!(col_u16_or_u8(&new, "missing").is_none());
     }
 }
 
