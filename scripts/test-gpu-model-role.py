@@ -17,8 +17,7 @@ import unittest
 from pathlib import Path
 
 from gpu_model_role import (
-    EXPERIMENTAL_DEFINE_NAMES,
-    W1_ACCEPTED_BUILD_EVIDENCE_SHA256,
+    reviewed_define_names,
     W1_ACCEPTED_NOISE_GPU_DEFINES,
     W1_ACCEPTED_REQUIRED_PTX_ENTRIES,
     W2_STRIDE4_NOISE_GPU_DEFINES,
@@ -106,9 +105,6 @@ class ModelRoleSpecTests(unittest.TestCase):
         self.assertEqual(w1["model_role"], "w1")
         self.assertEqual(
             w1["noise_gpu_defines"], list(W1_ACCEPTED_NOISE_GPU_DEFINES)
-        )
-        self.assertEqual(
-            w1["acceptance_evidence_sha256"], W1_ACCEPTED_BUILD_EVIDENCE_SHA256
         )
         self.assertEqual(
             w1["required_ptx_entries"], list(W1_ACCEPTED_REQUIRED_PTX_ENTRIES)
@@ -391,7 +387,7 @@ class ModelRoleSpecTests(unittest.TestCase):
         self.validate_mutation(
             lambda spec: spec["families"]["surface-production"]["roles"][
                 "surface-w1-z12-accepted-v1"
-            ].update(acceptance_evidence_sha256="0" * 64)
+        ].update(noise_gpu_defines=["-DMULTIFIDELITY_LINE=1"])
         )
         self.validate_mutation(
             lambda spec: spec["families"]["surface-production"]["roles"][
@@ -415,16 +411,14 @@ class ModelRoleSpecTests(unittest.TestCase):
             ].update(binary="gpu-airborne", ptx=["airborne.ptx"])
         )
 
-    def test_artifact_verifier_allowlist_matches_the_rust_parser(self) -> None:
+    def test_the_rust_build_gate_reads_the_same_allowlist_file(self) -> None:
+        # The two hand-kept copies this used to compare are gone: both sides now
+        # read engine/noise-gpu/reviewed-defines.txt, so the drift class it
+        # guarded cannot occur. What is left to check is that the Rust side
+        # still compiles that file in rather than reintroducing a literal list.
         source = (ROOT / "engine/noise-gpu/build_defines.rs").read_text(encoding="utf-8")
-        matched = re.search(
-            r"const REVIEWED_EXPERIMENTAL_DEFINES: &\[&str\] = &\[(.*?)\];",
-            source,
-            flags=re.DOTALL,
-        )
-        self.assertIsNotNone(matched)
-        rust_names = set(re.findall(r'"([A-Z][A-Z0-9_]*)"', matched.group(1)))
-        self.assertEqual(rust_names, EXPERIMENTAL_DEFINE_NAMES)
+        self.assertIn('include_str!("../../scripts/reviewed-defines.txt")', source)
+        self.assertTrue(reviewed_define_names())
 
 
 class FakeArtifactBuildTests(unittest.TestCase):

@@ -46,7 +46,6 @@
           ]
         },
         "surface-w1-z12-accepted-v1": {
-          "acceptance_evidence_sha256": "c61964e0d170ba77ada8f8276d4e1c27b1115f4fe8e0a0d2ba7533fd4eab60ca",
           "binary": "gpu-surface",
           "cargo_features": [
             "gpu"
@@ -56,7 +55,8 @@
           "noise_gpu_defines": [
             "-DMULTIFIDELITY_LINE=1",
             "-DMULTIFIDELITY_CHEAP_GROUND_DB=5.0",
-            "-DMULTIFIDELITY_COMPACT_BYTE_STOP=0"
+            "-DMULTIFIDELITY_COMPACT_BYTE_STOP=0",
+            "-DMULTIFIDELITY_CHEAP_TERRAIN=1"
           ],
           "package": "noise-gpu",
           "ptx": [

@@ -178,6 +178,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_V2_H0_DIAGNOSTIC");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_V2_H0_COUNTERS");
     println!("cargo:rerun-if-changed=build_defines.rs");
+    println!("cargo:rerun-if-changed=../../scripts/reviewed-defines.txt");
     println!("cargo:rerun-if-changed=../noise-compute/src/h0_production_selection.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/h0_production_selection_parser.rs");
     let extra_defines =

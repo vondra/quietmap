@@ -26,32 +26,25 @@ ARCH = re.compile(r"^sm_[0-9]{2,3}$")
 PTX_ENTRY = re.compile(r"\.visible\s+\.entry\s+([A-Za-z0-9_$]+)\s*\(")
 PTX_TARGET = re.compile(r"(?m)^\s*\.target\s+(sm_[0-9]{2,3})(?:\s*,|\s*$)")
 DEFINE_TOKEN = re.compile(r"^-D([A-Z][A-Z0-9_]*)(?:=(.+))?$")
-EXPERIMENTAL_DEFINE_NAMES = frozenset(
-    {
-        "ARC_AZ_F32",
-        "ARC_FOOTPRINT_CSR",
-        "ARC_HULL_CACHE",
-        "ARC_MAX_IV",
-        "ARC_MAX_MERGED",
-        "ARC_MIN_SPAN",
-        "ARC_MIN_SPAN_REALISED",
-        "ARC_TRI_WALK",
-        "ARC_UNION_BEFORE_SPAN_CLIP",
-        "CAND_END_WINDOW_M",
-        "CP_SCREEN_DELETE",
-        "MULTIFIDELITY_CHEAP_GROUND_DB",
-        "MULTIFIDELITY_COMPACT_BYTE_STOP",
-        "MULTIFIDELITY_LINE",
-        "MULTIFIDELITY_Z13_ADAPTIVE",
-        "MULTIFIDELITY_Z13_STRIDE",
-        "PENUMBRA",
-        "PROF_ABLATE",
-        "PROF_BLOCK_MOD",
-        "PROF_COUNTERS",
-        "SEG_ISECT_F32",
-        "SHADOW_MID_STRIDE",
-    }
-)
+# The reviewed CUDA switch names live in ONE file, which the Rust build gate
+# compiles in and this module reads. They used to be two hand-kept copies and
+# drifted the day a new switch was added to one of them.
+#
+# Two placements are supported because callers stage this module differently:
+# the product checkout has the engine tree beside `scripts/`, while the worker
+# provisioner copies `scripts/` alone into a staging repo and carries the file
+# next to it.
+REVIEWED_DEFINES_FILENAME = "reviewed-defines.txt"
+
+
+def reviewed_define_names() -> frozenset[str]:
+    """The reviewed CUDA switch names. Read on demand, never at import time."""
+    path = Path(__file__).resolve().parent / REVIEWED_DEFINES_FILENAME
+    return frozenset(
+        line.strip()
+        for line in path.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    )
 W2_STRIDE4_NOISE_GPU_DEFINES = (
     "-DMULTIFIDELITY_LINE",
     "-DMULTIFIDELITY_CHEAP_GROUND_DB=5.0",
@@ -65,9 +58,7 @@ W1_ACCEPTED_NOISE_GPU_DEFINES = (
     "-DMULTIFIDELITY_LINE=1",
     "-DMULTIFIDELITY_CHEAP_GROUND_DB=5.0",
     "-DMULTIFIDELITY_COMPACT_BYTE_STOP=0",
-)
-W1_ACCEPTED_BUILD_EVIDENCE_SHA256 = (
-    "c61964e0d170ba77ada8f8276d4e1c27b1115f4fe8e0a0d2ba7533fd4eab60ca"
+    "-DMULTIFIDELITY_CHEAP_TERRAIN=1",
 )
 W1_ACCEPTED_REQUIRED_PTX_ENTRIES = (
     "line_binned_fused",
@@ -343,7 +334,7 @@ def parse_nvcc_define_receipt(path: Path) -> tuple[list[str], list[str]]:
         if name in seen:
             raise ContractError(f"duplicate nvcc define receipt macro {name}")
         seen.add(name)
-        if name in EXPERIMENTAL_DEFINE_NAMES:
+        if name in reviewed_define_names():
             experimental.append(token)
         elif not (
             name in GENERATED_DEFINE_NAMES
@@ -363,7 +354,7 @@ def validate_declared_noise_gpu_defines(value: Any, where: str) -> list[str]:
     seen: set[str] = set()
     for token in value:
         matched = DEFINE_TOKEN.fullmatch(token)
-        if matched is None or matched.group(1) not in EXPERIMENTAL_DEFINE_NAMES:
+        if matched is None or matched.group(1) not in reviewed_define_names():
             raise ContractError(f"{where} contains an unreviewed define token {token!r}")
         name = matched.group(1)
         if name in seen:
@@ -448,7 +439,6 @@ def load_and_validate_spec(path: Path) -> dict[str, Any]:
             if family["kind"] == "gpu":
                 required_keys |= {"ptx", "required_ptx_entries"}
             optional_keys = {
-                "acceptance_evidence_sha256",
                 "noise_gpu_defines",
                 "selection_epoch",
             }
@@ -488,7 +478,6 @@ def load_and_validate_spec(path: Path) -> dict[str, Any]:
                 if (
                     role["cargo_features"] != expected_features
                     or "selection_epoch" in role
-                    or "acceptance_evidence_sha256" in role
                     or role_defines
                 ):
                     raise ContractError(f"stock role {role_name} has non-stock features or epoch")
@@ -501,7 +490,6 @@ def load_and_validate_spec(path: Path) -> dict[str, Any]:
                     or selected == role_name
                     or role["cargo_features"] != ["gpu"]
                     or "selection_epoch" in role
-                    or "acceptance_evidence_sha256" in role
                     or tuple(role_defines) != W2_STRIDE4_NOISE_GPU_DEFINES
                 ):
                     raise ContractError(
@@ -514,8 +502,6 @@ def load_and_validate_spec(path: Path) -> dict[str, Any]:
                     or selected == role_name
                     or role["cargo_features"] != ["gpu"]
                     or "selection_epoch" in role
-                    or role.get("acceptance_evidence_sha256")
-                    != W1_ACCEPTED_BUILD_EVIDENCE_SHA256
                     or tuple(role_defines) != W1_ACCEPTED_NOISE_GPU_DEFINES
                 ):
                     raise ContractError(

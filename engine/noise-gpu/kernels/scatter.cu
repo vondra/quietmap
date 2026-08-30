@@ -583,6 +583,17 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #ifndef MULTIFIDELITY_CHEAP_GROUND_DB
 #define MULTIFIDELITY_CHEAP_GROUND_DB GHF_F
 #endif
+// The cheap W1 evaluator's terrain diffraction. Off by default; the W1 role
+// turns it on. Sample count is fixed rather than fill_t's adaptive cadence
+// because this runs one thread per pixel and fill_t needs MAXT=80 doubles of
+// per-thread scratch -- and the cheap field does not need the exact term, only
+// its SHAPE, since the anchors' residual absorbs any bias.
+#ifndef MULTIFIDELITY_CHEAP_TERRAIN
+#define MULTIFIDELITY_CHEAP_TERRAIN 0
+#endif
+#ifndef MULTIFIDELITY_CHEAP_TERRAIN_SAMPLES
+#define MULTIFIDELITY_CHEAP_TERRAIN_SAMPLES 16
+#endif
 #ifndef MULTIFIDELITY_LINE
 #define MULTIFIDELITY_LINE 0
 #endif
@@ -3744,7 +3755,8 @@ __device__ __forceinline__ void line_source_multifidelity_cheap(
     if (dend > sp[1]) return;
 
     // Keep the endpoint slant geometry used by the exact line lane. A single
-    // local DEM lookup supplies source height; no path profile is built.
+    // local DEM lookup supplies source height; the terrain arm below builds its
+    // own fixed-stride profile, the exact lane's adaptive cadence stays there.
     double salt = tile_elev(inner, elev, rows, cols, lat_min, lon_min, inv, bb,
                             cplat, cplon) + sp[2];
     double dz = salt - ralt;
@@ -3755,14 +3767,52 @@ __device__ __forceinline__ void line_source_multifidelity_cheap(
     float atm_km = dslant / 1000.0f;
 
     // Fixed local hard ground: the default is the injected CNOSSOS hard-ground floor;
-    // the reviewed multifidelity ground override is the sole hybrid calibration
-    // arm, still standing in for all terrain, vegetation, obstacle and barrier terms.
+    // the reviewed multifidelity ground override stands in for vegetation, obstacle
+    // and barrier screening. Terrain is no longer among them -- the arm below
+    // computes it, which is what took road's >2 dB rung from 4.782 to 2.880 %.
     // It is an attenuation in the same sign convention as ground[].
     const float local_ground_db = (float)(MULTIFIDELITY_CHEAP_GROUND_DB);
+    float terr[NB] = {0};   // stays zero when the terrain arm is compiled out
+#if MULTIFIDELITY_CHEAP_TERRAIN
+    // Bare-earth diffraction over the ray, the largest term the cheap field
+    // omits: an ablation of the exact path measured it at -47 % of the road
+    // >2 dB rung. `terrain_bands` costs nothing on flat ground -- it returns
+    // early unless some profile sample rises above the source-receiver chord.
+    // `terrain_bands` itself returns zero under 30 m; skipping the march there
+    // saves the profile lookups it would then throw away.
+    if (dend >= 30.0) {
+        const int tn = MULTIFIDELITY_CHEAP_TERRAIN_SAMPLES;
+        double tp[MULTIFIDELITY_CHEAP_TERRAIN_SAMPLES];
+        double ep[MULTIFIDELITY_CHEAP_TERRAIN_SAMPLES];
+        const float src_rf = (float)((cplat - lat_min) * inv);
+        const float src_cf = (float)((cplon - lon_min) * inv);
+        const float d_rf = (float)((rlat - cplat) * inv);
+        const float d_cf = (float)((rlon - cplon) * inv);
+        for (int i = 0; i < tn; i++) {
+            tp[i] = (double)i / (double)(tn - 1);
+            ep[i] = (double)bilinear_elev_rc(elev, rows, cols,
+                                             src_rf + (float)tp[i] * d_rf,
+                                             src_cf + (float)tp[i] * d_cf);
+        }
+        // The exact lane's own wrapper carves the source platform before the
+        // diffraction test (ray_terrain_bands). Without it the DEM cells beside
+        // a road bench read above the road cell, flip the hill test and invent a
+        // hump -- a 25 m-scale artefact the stride-8 residual cannot absorb.
+        clamp_source_platform(tp, ep, tn, dend);
+        terrain_bands(tp, ep, tn, dend, salt, ralt, terr);
+    }
+#endif
     float transfer[NB];
     for (int band = 0; band < NB; band++) {
+        // The exact lane's own combination is `(a_bar > 0) ? max(a_ground, a_bar)
+        // : a_ground` with a_bar = terrain + screening. The cheap lane has no
+        // screening, so a_bar is the terrain term -- but the GUARD must stay:
+        // the ground floor is NEGATIVE (-3 dB) by default, so an unconditional
+        // max would raise every flat-ground path to 0 and lose it.
+        const float gob = (terr[band] > 0.0f) ? fmaxf(local_ground_db, terr[band])
+                                              : local_ground_db;
         float pdb = (base - (float)ALPHA_ATM[band] * atm_km
-                     - local_ground_db + (float)A_W[band])
+                     - gob + (float)A_W[band])
             * (float)LN10 * 0.1f;
         transfer[band] = (float)fexp((double)pdb);
     }
