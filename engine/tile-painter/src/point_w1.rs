@@ -1,7 +1,9 @@
 //! W1-only point-layer sparse receiver reconstruction (industrial, building).
 //!
-//! This module is deliberately opt-in through `QM_W1_INDUSTRIAL_POLICY` /
-//! `QM_W1_BUILDING_POLICY` (`adaptive-stride5`). It renders a direct-local
+//! This module is deliberately opt-in through `QM_W1_INDUSTRIAL_POLICY`
+//! (`adaptive-stride5`); the machinery is layer-agnostic and a building port
+//! exists, but its switch is UNLISTED in the gate until that port passes the
+//! drift contract — nothing can activate it. It renders a direct-local
 //! surrogate over the whole tile, computes exact physics only at a stride-5
 //! anchor lattice, derives the whole-block refinement mask from anchor
 //! tri-state, raw-anchor residual range, and surrogate-predicted numeric
@@ -346,18 +348,27 @@ fn apply_selected_interior(
     debug_assert_eq!(cells.len(), TILE_PX * TILE_PX);
     debug_assert_eq!(selected.len(), TILE_PX * TILE_PX);
     for (index, class) in interior.classes().iter().copied().enumerate() {
-        if !selected[index] {
+        let raw_donor = interior.donors()[index];
+        let donor = if raw_donor == crate::source_loader_obstacle::NO_DONOR {
+            // No reachable donor: an exact enclosed pixel mirrors the stock
+            // path's NO_DATA; a non-exact one keeps its interpolated value.
+            if selected[index] {
+                cells[index] = NO_DATA;
+            }
+            continue;
+        } else {
+            raw_donor as usize
+        };
+        // Transform when the enclosed pixel is exact OR ITS DONOR is: a
+        // non-exact enclosed pixel still inherits its donor's value, so an
+        // exact donor must propagate through it.
+        if !selected[index] && !selected[donor] {
             continue;
         }
         let Some(delta) = EnvelopeClass::from_u8(class).delta_db() else {
             continue;
         };
-        let donor = interior.donors()[index];
-        let facade = if donor == crate::source_loader_obstacle::NO_DONOR {
-            f64::NEG_INFINITY
-        } else {
-            crate::wire_hm3::dequantise_lden(cells[donor as usize])
-        };
+        let facade = crate::wire_hm3::dequantise_lden(cells[donor]);
         cells[index] = if facade.is_finite() {
             crate::wire_hm3::quantise_lden((facade - delta).max(0.0))
         } else {
@@ -680,13 +691,16 @@ fn interior_donor_mask(interior: &crate::source_loader_obstacle::InteriorEstimat
     mask
 }
 
-fn source_proximity_block_flags(tile: &FusedTileZ13, points: &[PointRow], axis: &[usize]) -> Vec<bool> {
+fn source_proximity_block_flags(
+    tile: &FusedTileZ13,
+    points: &[PointRow],
+    axis: &[usize],
+) -> Vec<bool> {
     // The margin must also cover the area-fill median window
-    // (`AREA_FILL_RADIUS_PX`): a selected block whose 5-px smoothing halo is
+    // (`AREA_FILL_RADIUS_PX`, 3 px): a selected block whose smoothing halo is
     // still surrogate would mix surrogate neighbours into the median where the
-    // stock path mixes exact ones — that was the remaining >6 dB tail.
-    const SOURCE_PROXIMITY_MARGIN_PX: f64 =
-        4.0 + crate::wire_hm3::AREA_FILL_RADIUS_PX as f64;
+    // stock path mixes exact ones.
+    const SOURCE_PROXIMITY_MARGIN_PX: f64 = 4.0 + crate::wire_hm3::AREA_FILL_RADIUS_PX as f64;
     const SOURCE_PROXIMITY_MAX_PX: f64 = 64.0;
     let blocks = axis.len() - 1;
     let mut flags = vec![false; blocks * blocks];
@@ -694,6 +708,10 @@ fn source_proximity_block_flags(tile: &FusedTileZ13, points: &[PointRow], axis: 
     for point in points {
         let radius_px = ((point.exclusion_radius_m / m_per_px) + SOURCE_PROXIMITY_MARGIN_PX)
             .clamp(0.0, SOURCE_PROXIMITY_MAX_PX);
+        debug_assert!(
+            radius_px.is_finite(),
+            "degenerate tile bbox: non-finite metres-per-pixel"
+        );
         let px = crate::scatter_band::lon_to_px(&tile.bbox, point.lon) as f64;
         let py = crate::scatter_band::lat_to_py(&tile.bbox, point.lat) as f64;
         for by in 0..blocks {
