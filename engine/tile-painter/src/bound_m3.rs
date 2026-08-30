@@ -173,7 +173,7 @@ pub(crate) fn pair_bound(
     rx_lat: f64,
     rx_lon: f64,
     rx_alt: f64,
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     n_seg: usize,
     block_maxima: Option<&BlockGroundMaxima>,
     t_scratch: &mut Vec<f64>,
@@ -222,7 +222,7 @@ pub(crate) fn pair_bound(
 
     // ── M3b terrain: the cp-ray population only ─────────────────────────
     let terrain_lb_bands =
-        if exact_path_is_single_cp_ray(t.arc.is_some(), obstacles.is_some(), n_seg) {
+        if exact_path_is_single_cp_ray(t.arc.is_some(), obstacles.edge_count() > 0, n_seg) {
             if !cadence_filled {
                 fill_cadence(t_scratch);
             }
@@ -317,7 +317,7 @@ fn terrain_lb_bands(
         {
             continue; // duplicate index on very short cadences
         }
-        let (elev, _b, _f, _imd) =
+        let (elev, _f, _imd) =
             halo.lookup_fused_rc(src_rf + t_values[i] * d_rf, src_cf + t_values[i] * d_cf);
         t_sub[m] = t_values[i];
         e_sub[m] = elev;
@@ -497,7 +497,7 @@ mod tests {
             rx_lat,
             mid_lon,
             4.0,
-            None,
+            &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
             1,
             None,
             &mut scratch,
@@ -516,7 +516,7 @@ mod tests {
             rx_lat,
             mid_lon,
             4.0,
-            None,
+            &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
             1,
             None,
             &mut scratch,

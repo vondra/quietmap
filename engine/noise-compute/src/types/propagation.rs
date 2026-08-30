@@ -170,8 +170,7 @@ pub struct ScreeningObstacleTrace {
     pub screen_h_m: f64,    // dominant excess above line-of-sight
     pub delta_m: f64,       // 3D Fresnel path difference for the combined result
     // Transparency metadata: how the engine scanned the building raster
-    pub samples_taken: u32, // number of probe points along source→receiver line
-    pub step_m: f64,        // sampling step (raster cell × adaptive factor)
+    pub step_m: f64, // sampling step (raster cell × adaptive factor)
     /// Number of diffraction edges in the combined result (0..=3).
     pub n_edges: u8,
     /// Per-edge detail when `n_edges > 0`. First entry is the leftmost edge

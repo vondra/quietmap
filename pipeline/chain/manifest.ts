@@ -356,7 +356,7 @@ export function buildPlan(scope: ResolvedScope): { steps: PlanStep[]; excludedBy
       layer: 'roads',
       country: null,
       notes:
-        'built_up (u8 rural/urban) has NO extractor parent — first step always, engine + taper consume it. Fails loud when the building raster set is absent. Idempotent: re-run over an osm-to-h3r4.sh-tail run is byte-identical.',
+        'built_up (u8 rural/urban) has NO extractor parent — first step always, engine + taper consume it. Fails loud when the Overture obstacle store or its .ingested-tiles manifest is absent. Idempotent: re-run over an osm-to-h3r4.sh-tail run is byte-identical.',
       skipReason: null,
       // The osm-to-h3r4.sh tail (RUN_SERVICE_TREE=1) already ran it on a fresh
       // extract — --assume-fresh-extract skips the byte-identical re-run.
@@ -433,17 +433,6 @@ export function buildPlan(scope: ResolvedScope): { steps: PlanStep[]; excludedBy
           : 'cache missing (data/enrichment/global/uswtdb.csv) — chain never downloads mid-run',
     })
   }
-  push({
-    id: 'global-buildings',
-    script: 'enrich-global-buildings.ts',
-    phase: 'global-priors',
-    layer: 'rasters',
-    country: null,
-    args: [],
-    notes: 'Overture building-height rasters under prepared/rasters/building.',
-    skipReason:
-      'raster-side one-time global enrichment — rasters are year-shared and survive an OSM re-extract (CLAUDE.md Data); run manually via /enrich-global when refreshing rasters',
-  })
   push({
     id: 'global-dem',
     script: 'enrich-global-dem.ts',

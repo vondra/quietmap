@@ -179,9 +179,7 @@ fn main() -> Result<()> {
     let rows = layer.load_rows(&h3r4, &ring, centre)?;
     let barriers_data = BarrierData::load_for_r4s(&h3r4, &ring)?;
     let obstacle_data = ObstacleData::load_for_r4s(&h3r4, r4, &ring)?;
-    let obstacle_set = obstacle_data
-        .set()
-        .context("actual-store census requires vector obstacles")?;
+    let obstacle_set = obstacle_data.set();
     let flat = noise_gpu::flatten_obstacles(obstacle_set);
     let bbox = tile_bbox(zoom, tile_x, tile_y);
     let barriers = barriers_data.for_tile(

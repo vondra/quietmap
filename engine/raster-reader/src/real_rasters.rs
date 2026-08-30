@@ -8,7 +8,6 @@
 
 use crate::tile::{DType, Interp, TileStore};
 use crate::RawTile;
-use noise_compute::propagation::path_profile::CELL_M;
 use noise_compute::types::RasterSampler;
 use std::path::Path;
 
@@ -23,7 +22,6 @@ fn env_usize(name: &str, default: usize) -> usize {
 /// Real raster data from 1°×1° tiles. Implements RasterSampler.
 pub struct RealRasters {
     pub dem: TileStore,
-    pub building: TileStore,
     pub forest: TileStore,
     pub imd: TileStore,
 }
@@ -38,7 +36,6 @@ impl RealRasters {
         // without code changes; operators override with the env-var
         // for global runs.
         let dem_cache_tiles = env_usize("QUIETMAP_CACHE_DEM_TILES", 32);
-        let building_cache_tiles = env_usize("QUIETMAP_CACHE_BUILDING_TILES", 64);
         let forest_cache_tiles = env_usize("QUIETMAP_CACHE_FOREST_TILES", 64);
         let imd_cache_tiles = env_usize("QUIETMAP_CACHE_IMD_TILES", 128);
 
@@ -53,17 +50,6 @@ impl RealRasters {
             dem_cache_tiles,
         )
         .with_alt_dir(data_dir.join("dem/srtm"), ".hgt");
-
-        // Building height: u8 (meters), 3601×3601 (Overture 30m), nearest-neighbor
-        let building = TileStore::new(
-            data_dir.join("rasters/building"),
-            3601,
-            DType::U8,
-            Interp::Nearest,
-            0.0,
-            ".raw",
-            building_cache_tiles,
-        );
 
         // Forest cover: u8 (0/100%), 3601×3601 (WorldCover 30m), nearest-neighbor
         let forest = TileStore::new(
@@ -93,12 +79,7 @@ impl RealRasters {
             imd_cache_tiles,
         );
 
-        RealRasters {
-            dem,
-            building,
-            forest,
-            imd,
-        }
+        RealRasters { dem, forest, imd }
     }
 
     /// Pre-load all tiles covering a bounding box. Call before rayon par_iter to avoid file opens;
@@ -106,8 +87,6 @@ impl RealRasters {
     /// to avoid per-sample cache-slot locking and LRU updates.
     pub fn preload_bbox(&self, lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) {
         self.dem.preload_bbox(lat_min, lat_max, lon_min, lon_max);
-        self.building
-            .preload_bbox(lat_min, lat_max, lon_min, lon_max);
         self.forest.preload_bbox(lat_min, lat_max, lon_min, lon_max);
         self.imd.preload_bbox(lat_min, lat_max, lon_min, lon_max);
     }
@@ -168,10 +147,6 @@ impl RasterSampler for RealRasters {
         self.dem.sample(lat, lon)
     }
 
-    fn building_height(&self, lat: f64, lon: f64) -> f64 {
-        self.building.sample(lat, lon)
-    }
-
     fn ground_g(&self, lat: f64, lon: f64) -> f64 {
         // IMD 0=natural(soft), 100=impervious(hard)
         // G: 0=hard, 1=soft → G = 1.0 - IMD/100
@@ -181,89 +156,6 @@ impl RasterSampler for RealRasters {
         // Old code returned 0.5 for IMD=0, halving ground attenuation in rural areas.
         let imd = self.imd.sample(lat, lon);
         (1.0 - imd / 100.0).clamp(0.0, 1.0)
-    }
-
-    fn building_enclosure(&self, lat: f64, lon: f64) -> f64 {
-        // 3×3 probe at ENCLOSURE_RADIUS_M (75 m) N-S and E-W.
-        // Earlier code used a constant 0.001° step which is ~111 m N-S
-        // but only ~111·cos(lat) m E-W — a 220 × 142 m rectangle at
-        // Praha (50°N), shrinking to 220 × 75 m at Tromsø (70°N).
-        // Converting to metric isotropises the enclosure footprint.
-        let step_lat_deg = crate::ENCLOSURE_RADIUS_M / noise_compute::constants::M_PER_DEG_LAT;
-        let step_lon_deg =
-            crate::ENCLOSURE_RADIUS_M / noise_compute::constants::m_per_deg_lon(lat.to_radians());
-        let mut tall_count = 0;
-        let mut total = 0;
-        for dr in [-1, 0, 1] {
-            for dc in [-1, 0, 1] {
-                // Wrap probe longitude across the antimeridian — for a
-                // receiver near ±180°, the dc=±1 column would otherwise
-                // sample an out-of-bounds tile (clamped to ±179° edge),
-                // diverging from `FusedGrid::building_enclosure`.
-                let probe_lon =
-                    ((lon + dc as f64 * step_lon_deg + 180.0).rem_euclid(360.0)) - 180.0;
-                let h = self
-                    .building
-                    .sample(lat + dr as f64 * step_lat_deg, probe_lon);
-                if h > 5.0 {
-                    tall_count += 1;
-                }
-                total += 1;
-            }
-        }
-        let density = tall_count as f64 / total as f64;
-        if density > 0.5 {
-            3.0
-        } else if density > 0.2 {
-            1.5
-        } else {
-            0.0
-        }
-    }
-
-    fn max_building_along_path(
-        &self,
-        src_lat: f64,
-        src_lon: f64,
-        rcv_lat: f64,
-        rcv_lon: f64,
-        dist_m: f64,
-        excl_start_m: f64,
-    ) -> (f64, f64) {
-        // Adaptive step locked to raster cell multiples (Overture 30 m):
-        //   ≤1 km  → 1× cell  (~30.7 m, full resolution)
-        //   ≤3 km  → 3× cell  (~92 m)
-        //   >3 km  → 6× cell  (~184 m)
-        // Fine cadence catches obstacles consistent with the 30 m building raster;
-        // tile-cached lookups keep per-sample cost near zero.
-        let step = if dist_m <= 1000.0 {
-            CELL_M
-        } else if dist_m <= 3000.0 {
-            CELL_M * 3.0
-        } else {
-            CELL_M * 6.0
-        };
-        let n = ((dist_m / step).ceil() as usize).clamp(2, 400);
-        let mut max_bh = 0.0f64;
-        let mut max_t = 0.5;
-        let mut cached_key = (i32::MIN, i32::MIN);
-        let mut cached_tile = None;
-        for k in 1..n {
-            let t = k as f64 / n as f64;
-            if excl_start_m > 0.0 && t * dist_m < excl_start_m {
-                continue;
-            }
-            let lat = src_lat + t * (rcv_lat - src_lat);
-            let lon = src_lon + t * (rcv_lon - src_lon);
-            let bh = self
-                .building
-                .sample_cached(lat, lon, &mut cached_key, &mut cached_tile);
-            if bh > max_bh {
-                max_bh = bh;
-                max_t = t;
-            }
-        }
-        (max_bh, max_t)
     }
 
     fn build_path_profile(
@@ -286,7 +178,6 @@ impl RasterSampler for RealRasters {
 
         let n = out.t.len();
         out.elevation_m.reserve(n);
-        out.building_h_m.reserve(n);
         out.forest_u8.reserve(n);
         out.imd_u8.reserve(n);
 
@@ -294,8 +185,6 @@ impl RasterSampler for RealRasters {
         // stays warm while consecutive samples fall in the same 1° tile.
         let mut dem_key = (i32::MIN, i32::MIN);
         let mut dem_tile = None;
-        let mut bld_key = (i32::MIN, i32::MIN);
-        let mut bld_tile = None;
         let mut for_key = (i32::MIN, i32::MIN);
         let mut for_tile = None;
         let mut imd_key = (i32::MIN, i32::MIN);
@@ -307,9 +196,6 @@ impl RasterSampler for RealRasters {
             let elev = self
                 .dem
                 .sample_cached(lat, lon, &mut dem_key, &mut dem_tile);
-            let bh = self
-                .building
-                .sample_cached(lat, lon, &mut bld_key, &mut bld_tile);
             let fr = self
                 .forest
                 .sample_cached(lat, lon, &mut for_key, &mut for_tile);
@@ -317,7 +203,6 @@ impl RasterSampler for RealRasters {
                 .imd
                 .sample_cached(lat, lon, &mut imd_key, &mut imd_tile);
             out.elevation_m.push(elev as f32);
-            out.building_h_m.push(bh.clamp(0.0, 255.0) as u8);
             out.forest_u8.push(fr.clamp(0.0, 255.0) as u8);
             out.imd_u8.push(imd.clamp(0.0, 255.0) as u8);
         }

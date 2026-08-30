@@ -11,9 +11,6 @@ impl RasterSampler for FlatGround {
     fn elevation(&self, _lat: f64, _lon: f64) -> f64 {
         250.0
     }
-    fn building_height(&self, _lat: f64, _lon: f64) -> f64 {
-        0.0
-    }
     fn ground_g(&self, _lat: f64, _lon: f64) -> f64 {
         0.0
     }

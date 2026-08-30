@@ -100,7 +100,7 @@
 //!
 //! The scenes carry NO raster obstacles. Buildings arrive through the
 //! geodata-v2 vector lane (`obstacle_index::ObstacleSet` exact ray×edge
-//! crossings, `ObstacleInput::replace_sample_buildings = true`), so screening is
+//! crossings, vector crossings), so screening is
 //! exact and cadence-independent: neither integrator can win or lose on whether
 //! the bilateral profile cadence happened to drop a probe inside a 10 m deep box.
 //!
@@ -438,9 +438,6 @@ impl SceneGround {
 impl RasterSampler for SceneGround {
     fn elevation(&self, lat: f64, lon: f64) -> f64 {
         self.elev(lat, lon)
-    }
-    fn building_height(&self, _lat: f64, _lon: f64) -> f64 {
-        0.0
     }
     fn ground_g(&self, _lat: f64, _lon: f64) -> f64 {
         GROUND_G
@@ -958,7 +955,7 @@ impl Probe<'_> {
             &mut self.profile,
         );
         let ground_g = ground_g_from_profile(&self.profile);
-        let terrain = terrain_attenuation(&mut self.profile, src_alt, rcv_alt);
+        let (terrain, terrain_delta_m) = terrain_attenuation(&mut self.profile, src_alt, rcv_alt);
 
         self.obstacles.crossings_pruned(
             cp_lat,
@@ -974,7 +971,6 @@ impl Probe<'_> {
         );
         let obstacle_input = ObstacleInput {
             candidates: &self.candidates,
-            replace_sample_buildings: true,
         };
         let (cp_screening, _trace) = screening_attenuation_with_meta(
             &mut self.profile,
@@ -984,6 +980,7 @@ impl Probe<'_> {
             rcv_alt,
             0.0, // roads: no self-screening exclusion radius
             &terrain,
+            terrain_delta_m,
         );
         // The one line `compute_roads` adds for the fix: the cp verdict covers
         // only the directions that ray flies through.
@@ -2178,7 +2175,7 @@ fn gpu_path_screening(
         dist_m,
         profile,
     );
-    let terrain = terrain_attenuation(profile, src_alt, q.receiver_alt_m);
+    let (terrain, terrain_delta_m) = terrain_attenuation(profile, src_alt, q.receiver_alt_m);
     q.obstacles.crossings_pruned(
         src_lat,
         src_lon,
@@ -2190,14 +2187,12 @@ fn gpu_path_screening(
     let screening = screening_attenuation(
         profile,
         q.barriers,
-        ObstacleInput {
-            candidates,
-            replace_sample_buildings: true,
-        },
+        ObstacleInput { candidates },
         src_alt,
         q.receiver_alt_m,
         q.exclusion_radius_m,
         &terrain,
+        terrain_delta_m,
     );
     (terrain, screening)
 }
@@ -2225,7 +2220,7 @@ fn gpu_interval_terrain(
         dist_m,
         profile,
     );
-    Some(terrain_attenuation(profile, src_alt, q.receiver_alt_m))
+    Some(terrain_attenuation(profile, src_alt, q.receiver_alt_m).0)
 }
 
 /// Probe grid coordinates (deterministic integer stepping, no float accumulation).

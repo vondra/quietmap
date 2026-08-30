@@ -140,7 +140,7 @@ for dir in data/prepared/2025/h3r4 data/prepared/2026/h3r4; do
     fi
 done
 
-for rtype in dem/copernicus dem/srtm rasters/building rasters/forest rasters/imd; do
+for rtype in dem/copernicus dem/srtm rasters/forest rasters/imd; do
     DIR="data/prepared/$rtype"
     if [ -d "$DIR" ]; then
         COUNT=$(ls "$DIR" 2>/dev/null | wc -l)

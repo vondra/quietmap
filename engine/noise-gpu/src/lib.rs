@@ -1153,23 +1153,8 @@ mod obstacle_upload {
 
     pub fn upload_obstacles(
         dev: &Arc<CudaDevice>,
-        set: Option<&noise_compute::propagation::obstacle_index::ObstacleSet>,
+        set: &noise_compute::propagation::obstacle_index::ObstacleSet,
     ) -> Result<ObstDev> {
-        let Some(set) = set else {
-            // Raster mode: the kernel reads slots 1..=13 only when slot 0 is
-            // non-zero, but the table must still be long enough that a slot
-            // read is never out of bounds.
-            return Ok(ObstDev {
-                table: dev.htod_copy(vec![0u64; 14]).context("obst off-table")?,
-                _metas: None,
-                _starts: None,
-                _refs: None,
-                _edges: None,
-                _maxh: None,
-                _ids: None,
-                _keep: Vec::new(),
-            });
-        };
         let flat = crate::flatten_obstacles(set);
         upload_obstacle_flat(dev, flat)
     }

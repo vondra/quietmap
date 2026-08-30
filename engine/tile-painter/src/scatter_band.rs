@@ -378,9 +378,6 @@ impl RasterSampler for SurfaceCadenceRasters<'_> {
     fn elevation(&self, lat: f64, lon: f64) -> f64 {
         self.tile.elevation(lat, lon)
     }
-    fn building_height(&self, lat: f64, lon: f64) -> f64 {
-        self.tile.building_height(lat, lon)
-    }
     fn ground_g(&self, lat: f64, lon: f64) -> f64 {
         self.tile.ground_g(lat, lon)
     }
@@ -1005,7 +1002,7 @@ pub(crate) fn scatter_tile<G: PixelGeometry>(
     geo: &G,
     tile: &FusedTileZ13,
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     n_rows: usize,
     accum: &mut TileAccumulator,
 ) -> ScatterStats {
@@ -1028,7 +1025,7 @@ pub(crate) fn scatter_tile_with_cfg<G: PixelGeometry>(
     geo: &G,
     tile: &FusedTileZ13,
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     n_rows: usize,
     accum: &mut TileAccumulator,
     cfg: Option<CoarseMid>,
@@ -1049,7 +1046,7 @@ pub(crate) fn scatter_tile_with_cfg_and_options<G: PixelGeometry>(
     geo: &G,
     tile: &FusedTileZ13,
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     n_rows: usize,
     accum: &mut TileAccumulator,
     cfg: Option<CoarseMid>,
@@ -1200,7 +1197,7 @@ fn scatter_selected_receivers<G: PixelGeometry>(
     tile: &FusedTileZ13,
     prep: &[G::Prep],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     n_rows: usize,
     accum: &mut TileAccumulator,
     cfg: Option<CoarseMid>,
@@ -1309,7 +1306,7 @@ struct ExactPairEvaluation {
 fn evaluate_exact_pair(
     tile: &FusedTileZ13,
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     cfg: Option<CoarseMid>,
     t: &PixelTerms,
     rx_lat: f64,
@@ -1345,17 +1342,22 @@ fn evaluate_exact_pair(
     // Heatmap discards the popup obstacle traces, so call the metadata-free
     // band-only variants: terrain skips the per-pixel EdgePoint Vec, screening
     // skips the ObstacleEdge materialisation.
-    let terrain_bands = path_effects::terrain_attenuation(&mut s.profile, t.src_alt, rx_alt);
+    let (terrain_bands, terrain_delta_m) =
+        path_effects::terrain_attenuation(&mut s.profile, t.src_alt, rx_alt);
     // ── the ground/barrier term, ISO 9613-2 §7.3.1 ──────────────────────────
     // `max(A_ground, A_terrain + A_screen)`: a barrier REPLACES ground, never
     // adds. Uniform angular quadrature is tried before the characteristic-point
     // ray (and its optional arc-screening fallback) because each bucket already
     // evaluates its own ray; computing the cp screening first would be dead work
     // and turn an N-ray pair into N+1 rays. The ordering and energy average are
-    // owned by `seg_sampling::sampled_gob_bands_with_ground`; `None` means the
-    // documented degenerate/no-vector fallback, which keeps the cp-ray path.
-    let sampled = match (&t.arc, obstacles) {
-        (Some(arc), Some(set)) if n_seg > 1 => {
+    // owned by `seg_sampling::sampled_gob_bands_with_ground`. The arc rule
+    // clips against the receiver's obstacle skyline, so it needs a skyline to
+    // clip: with no indexed cells the cp-ray verdict stands, exactly as it did
+    // when an absent store was representable. (An EMPTY set reaching the arc
+    // quadrature is not free — it is a different approximation of the segment,
+    // and it broke the kernel-vs-popup parity test by 43 %.)
+    let sampled = match &t.arc {
+        Some(arc) if n_seg > 1 && !obstacles.indexes.is_empty() => {
             let query = arc_query(
                 arc,
                 t,
@@ -1366,7 +1368,7 @@ fn evaluate_exact_pair(
                 &terrain_bands,
                 ground_g,
                 barriers,
-                set,
+                obstacles,
                 s.arc_bounds,
             );
             sampled_gob_bands_with_ground(
@@ -1387,26 +1389,20 @@ fn evaluate_exact_pair(
             (gob, true, cost.escalated > 0)
         }
         None => {
-            let obstacle_input = match obstacles {
-                Some(set) => {
-                    set.crossings_pruned_with_scratch(
-                        t.cp_lat,
-                        t.cp_lon,
-                        rx_lat,
-                        rx_lon,
-                        &CellPrune::for_profile(&s.profile, t.src_alt, rx_alt),
-                        &mut s.crossing_scratch,
-                        &mut s.cand_scratch,
-                    );
-                    if !s.cand_scratch.is_empty() {
-                        note_obstacle_crossing();
-                    }
-                    path_effects::ObstacleInput {
-                        candidates: &s.cand_scratch,
-                        replace_sample_buildings: true,
-                    }
-                }
-                None => path_effects::ObstacleInput::CANDIDATES_OFF,
+            obstacles.crossings_pruned_with_scratch(
+                t.cp_lat,
+                t.cp_lon,
+                rx_lat,
+                rx_lon,
+                &CellPrune::for_profile(&s.profile, t.src_alt, rx_alt),
+                &mut s.crossing_scratch,
+                &mut s.cand_scratch,
+            );
+            if !s.cand_scratch.is_empty() {
+                note_obstacle_crossing();
+            }
+            let obstacle_input = path_effects::ObstacleInput {
+                candidates: &s.cand_scratch,
             };
             let cp_screening = path_effects::screening_attenuation(
                 &mut s.profile,
@@ -1416,10 +1412,12 @@ fn evaluate_exact_pair(
                 rx_alt,
                 t.excl_m,
                 &terrain_bands,
+                terrain_delta_m,
             );
-            let screening = match (&t.arc, obstacles) {
-                (Some(arc), Some(set))
-                    if segment_can_span(arc.length_m, arc.dist_m, s.arc_bounds) =>
+            let screening = match &t.arc {
+                Some(arc)
+                    if !obstacles.indexes.is_empty()
+                        && segment_can_span(arc.length_m, arc.dist_m, s.arc_bounds) =>
                 {
                     let query = arc_query(
                         arc,
@@ -1431,7 +1429,7 @@ fn evaluate_exact_pair(
                         &terrain_bands,
                         ground_g,
                         barriers,
-                        set,
+                        obstacles,
                         s.arc_bounds,
                     );
                     arc_screened_attenuation_with_ground(
@@ -1497,7 +1495,7 @@ fn scatter_exact_point_source_major<G: PixelGeometry>(
     tile: &FusedTileZ13,
     prep: &[G::Prep],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     py_lo: usize,
     py_hi: usize,
     px_lo: usize,
@@ -1571,7 +1569,7 @@ fn scatter_band<G: PixelGeometry>(
     tile: &FusedTileZ13,
     prep: &[G::Prep],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     py_lo: usize,
     py_hi: usize,
     px_lo: usize,
@@ -1950,7 +1948,13 @@ mod tests {
 
         let paint = |rows: &[LineRow]| {
             let mut accum = TileAccumulator::new();
-            let stats = crate::scatter_line::scatter_tile(&tile, rows, &[], None, &mut accum);
+            let stats = crate::scatter_line::scatter_tile(
+                &tile,
+                rows,
+                &[],
+                &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
+                &mut accum,
+            );
             (collapse_lden_surface_u8(&accum), stats)
         };
         let (bytes_a, stats_a) = paint(&lines);
@@ -1988,12 +1992,7 @@ mod tests {
 
     fn point_optimization_raster_fixture() -> TempDir {
         let root = tempfile::tempdir().expect("create point optimization raster fixture");
-        for subdir in [
-            "dem/copernicus",
-            "rasters/building",
-            "rasters/forest",
-            "rasters/imd",
-        ] {
+        for subdir in ["dem/copernicus", "rasters/forest", "rasters/imd"] {
             fs::create_dir_all(root.path().join(subdir)).expect("create raster fixture directory");
         }
 
@@ -2014,8 +2013,6 @@ mod tests {
         for row in 3000..3135 {
             building[row * 3601 + 1260..row * 3601 + 1405].fill(7);
         }
-        fs::write(root.path().join("rasters/building/N50E014.raw"), building)
-            .expect("write building fixture");
         fs::write(
             root.path().join("rasters/forest/N50E014.raw"),
             vec![37_u8; cells],
@@ -2058,7 +2055,6 @@ mod tests {
         let rasters = RealRasters::new(raster_fixture.path());
         let tile = FusedTileZ13::build(12, 2211, 1386, 700.0, &rasters);
         assert!(tile.inner_elev_m.iter().any(|&v| v > 0.0));
-        assert!(tile.inner_building.iter().any(|&v| v > 0));
         assert!(tile.inner_forest.iter().any(|&v| v > 0));
         assert!(tile.inner_imd.iter().any(|&v| v > 0 && v < 100));
 
@@ -2161,7 +2157,7 @@ mod tests {
             &candidate,
             &tile,
             &barriers,
-            Some(&obstacles),
+            &obstacles,
             TILE_PX,
             &mut candidate_accum,
             None,
@@ -2175,7 +2171,7 @@ mod tests {
             &historical,
             &tile,
             &barriers,
-            Some(&obstacles),
+            &obstacles,
             TILE_PX,
             &mut historical_accum,
             None,

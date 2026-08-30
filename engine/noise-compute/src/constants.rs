@@ -166,13 +166,12 @@ pub const SOURCE_HEIGHT_INDUSTRIAL_ENCLOSED: f64 = 4.0;
 
 /// Fallback building height (m) when a footprint has neither a mapped height
 /// nor a floor count — the last rung of the building height ladder
-/// (`height` → `floors × BUILDING_FLOOR_HEIGHT_M` → this). CANONICAL here;
-/// the Overture screening rasterizer
-/// (`scripts/rasters/download-overture-buildings.sh`) mirrors the value in
-/// shell and must be resynced on change. 8 m ≈ 2–3 storeys at
-/// `BUILDING_FLOOR_HEIGHT_M`, the dominant residential building form, and
-/// matches the engine's long-standing emission fallback so screening and
-/// emission agree on unmapped buildings (the rasterizer formerly used 6 m).
+/// (`height` → `floors × BUILDING_FLOOR_HEIGHT_M` → this). The shell
+/// rasterizer that used to mirror this value in a second place is gone with
+/// the building raster (2026-08-30), so this is now the ONLY definition.
+/// 8 m ≈ 2–3 storeys at `BUILDING_FLOOR_HEIGHT_M`, the dominant residential
+/// building form, and matches the engine's long-standing emission fallback so
+/// screening and emission agree on unmapped buildings.
 pub const BUILDING_DEFAULT_HEIGHT_M: f64 = 8.0;
 
 /// Maximum physical building height (m). The Burj Khalifa is the tallest

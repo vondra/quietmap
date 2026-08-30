@@ -57,10 +57,9 @@ interface ScreeningObstacleTrace {
   t: number
   screen_h_m: number
   delta_m: number
-  /** Vector-store id of the dominant obstacle when screening used an exact
-   * crossing (geodata-v2, QM_VECTOR_BUILDINGS); absent on the raster path. */
+  /** Vector-store id of the dominant obstacle: its exact
+   * crossing; every obstacle is one. */
   obstacle_id?: number
-  samples_taken: number
   step_m: number
   /** Number of diffraction edges in the combined terrain+building+barrier
    * result (0..=3). When > 1 the popup should label "N diffraction edges",
@@ -71,7 +70,7 @@ interface ScreeningObstacleTrace {
   edges: ObstacleEdge[]
 }
 
-interface ObstacleEdge {
+export interface ObstacleEdge {
   /** 'terrain' = bare-earth hill (no building/barrier on top at this edge). */
   kind: 'terrain' | 'building' | 'barrier'
   t: number
@@ -489,7 +488,6 @@ interface ForestRun {
 export interface PathProfileTrace {
   t: number[]
   elevation_m: number[]
-  building_h_m: number[]
   forest_u8: number[]
   imd_u8: number[]
   dist_m: number

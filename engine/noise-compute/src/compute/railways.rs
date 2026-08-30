@@ -24,7 +24,7 @@ pub(crate) fn compute_railways(
     receiver: &Receiver,
     railways: &[RailSegment],
     barriers: &[Barrier],
-    obstacles: Option<&crate::propagation::obstacle_index::ObstacleSet>,
+    obstacles: &crate::propagation::obstacle_index::ObstacleSet,
     rasters: &dyn RasterSampler,
     mut traces: Option<&mut TraceCollector>,
 ) -> (NoisePeriods, Vec<Contributor>) {
@@ -35,9 +35,8 @@ pub(crate) fn compute_railways(
 
     let rcv_alt = receiver.altitude_m();
     let bounds = ArcBounds::shipped();
-    // The set the arc rule clips against; `None` = no store AND no walls, the
-    // cp verdict stands for every segment and the skyline is never grown.
-    let arc_set = crate::arc_obstacle_set(obstacles, barriers);
+    // The set the arc rule clips against.
+    let arc_set = obstacles;
 
     struct RailAccum {
         name: String,
@@ -359,6 +358,7 @@ pub(crate) fn compute_railways(
                         rcv_alt,
                         0.0, // railways: no exclusion radius
                         &terrain.attenuation_bands,
+                        terrain.dominant_delta_m(),
                     );
                 // Arc screening (fix-pack Fix 1) — the snapshot is pass 1's
                 // verdict on whether (and against which growth state) this
@@ -436,23 +436,13 @@ pub(crate) fn compute_railways(
                 // Group-level obstacle histogram probe — vector crossings in
                 // vector mode, raster walk only on the fallback path (twin of
                 // the roads histogram; popup transparency only, no dB).
-                let (seg_max_bh, _) = match obstacles {
-                    Some(set) => set.max_height_crossed(
-                        seg.cp_lat,
-                        seg.cp_lon,
-                        receiver.lat,
-                        receiver.lon,
-                        hist_scratch,
-                    ),
-                    None => rasters.max_building_along_path(
-                        seg.cp_lat,
-                        seg.cp_lon,
-                        receiver.lat,
-                        receiver.lon,
-                        seg.dist_m,
-                        0.0,
-                    ),
-                };
+                let (seg_max_bh, _) = obstacles.max_height_crossed(
+                    seg.cp_lat,
+                    seg.cp_lon,
+                    receiver.lat,
+                    receiver.lon,
+                    hist_scratch,
+                );
 
                 // Popup trace, built here so the allocation-heavy part runs in
                 // parallel; pass 3 pushes it in segment order.
@@ -832,9 +822,6 @@ mod tests {
         fn elevation(&self, _: f64, _: f64) -> f64 {
             200.0
         }
-        fn building_height(&self, _: f64, _: f64) -> f64 {
-            0.0
-        }
         fn ground_g(&self, _: f64, _: f64) -> f64 {
             0.5
         }
@@ -900,7 +887,15 @@ mod tests {
     }
 
     fn periods_for(segs: &[RailSegment]) -> NoisePeriods {
-        compute_railways(&receiver(), segs, &[], None, &FlatRasters, None).0
+        compute_railways(
+            &receiver(),
+            segs,
+            &[],
+            &ObstacleSet::empty(),
+            &FlatRasters,
+            None,
+        )
+        .0
     }
 
     /// Gate (d) popup: the EU vs world period split follows the SEGMENT's
@@ -995,7 +990,7 @@ mod tests {
                         &receiver(),
                         &segs,
                         &[],
-                        Some(&obstacles),
+                        &obstacles,
                         &FlatRasters,
                         with_traces.then_some(&mut traces),
                     );

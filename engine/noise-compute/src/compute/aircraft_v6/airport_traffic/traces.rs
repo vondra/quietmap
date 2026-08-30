@@ -367,7 +367,6 @@ pub(super) fn emit_segment_traces(
                 path_profile: PathProfileTrace {
                     t: Vec::new(),
                     elevation_m: Vec::new(),
-                    building_h_m: Vec::new(),
                     forest_u8: Vec::new(),
                     imd_u8: Vec::new(),
                     dist_m,

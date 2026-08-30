@@ -132,7 +132,7 @@ pub fn compute_at_point(
     buildings: &[PointSource],
     industrial: &[PointSource],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     rasters: &dyn RasterSampler,
     config: &ComputeConfig,
 ) -> NoiseResult {
@@ -152,7 +152,7 @@ pub fn compute_at_point_with_traces(
     buildings: &[PointSource],
     industrial: &[PointSource],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     rasters: &dyn RasterSampler,
     config: &ComputeConfig,
     traces: Option<&mut TraceCollector>,
@@ -171,7 +171,7 @@ fn compute_at_point_inner(
     buildings: &[PointSource],
     industrial: &[PointSource],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     rasters: &dyn RasterSampler,
     _config: &ComputeConfig,
     mut traces: Option<&mut TraceCollector>,
@@ -315,14 +315,7 @@ fn compute_at_point_inner(
     // sees the popup arrows and bumps confidence after merging.
     let has_aircraft = false;
     let has_terrain = rasters.elevation(receiver.lat, receiver.lon) != 200.0; // StubRasters returns 200.0
-    let has_building_heights = rasters.building_height(receiver.lat, receiver.lon) != 0.0;
-    let conf = confidence::Confidence::assess(
-        has_census,
-        has_railway,
-        has_aircraft,
-        has_terrain,
-        has_building_heights,
-    );
+    let conf = confidence::Confidence::assess(has_census, has_railway, has_aircraft, has_terrain);
 
     NoiseResult {
         total,
@@ -345,11 +338,12 @@ fn compute_at_point_inner(
 /// popup reference instead of re-implementing the physics.
 pub fn road_periods(
     receiver: &Receiver,
+    obstacles: &ObstacleSet,
     roads: &[RoadSegment],
     barriers: &[Barrier],
     rasters: &dyn RasterSampler,
 ) -> NoisePeriods {
-    compute_roads(receiver, roads, barriers, None, rasters, None).0
+    compute_roads(receiver, roads, barriers, obstacles, rasters, None).0
 }
 
 /// Railway [`NoisePeriods`] at a receiver — the popup rail path without trace
@@ -359,11 +353,12 @@ pub fn road_periods(
 /// rail parity validator compares against the exact popup reference.
 pub fn rail_periods(
     receiver: &Receiver,
+    obstacles: &ObstacleSet,
     railways: &[RailSegment],
     barriers: &[Barrier],
     rasters: &dyn RasterSampler,
 ) -> NoisePeriods {
-    compute_railways(receiver, railways, barriers, None, rasters, None).0
+    compute_railways(receiver, railways, barriers, obstacles, rasters, None).0
 }
 
 /// Industrial [`NoisePeriods`] at a receiver — the popup point-source path
@@ -373,6 +368,7 @@ pub fn rail_periods(
 /// popup reference.
 pub fn industrial_periods(
     receiver: &Receiver,
+    obstacles: &ObstacleSet,
     sources: &[PointSource],
     barriers: &[Barrier],
     rasters: &dyn RasterSampler,
@@ -381,7 +377,7 @@ pub fn industrial_periods(
         receiver,
         sources,
         barriers,
-        None,
+        obstacles,
         rasters,
         LayerKind::Industrial,
         None,
@@ -396,6 +392,7 @@ pub fn industrial_periods(
 /// reference.
 pub fn building_periods(
     receiver: &Receiver,
+    obstacles: &ObstacleSet,
     sources: &[PointSource],
     barriers: &[Barrier],
     rasters: &dyn RasterSampler,
@@ -404,7 +401,7 @@ pub fn building_periods(
         receiver,
         sources,
         barriers,
-        None,
+        obstacles,
         rasters,
         LayerKind::Building,
         None,
@@ -417,7 +414,7 @@ pub fn building_periods(
 pub fn compute_path_effects(
     rasters: &dyn RasterSampler,
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     src_lat: f64,
     src_lon: f64,
     src_height: f64,
@@ -467,6 +464,7 @@ pub fn compute_path_effects(
             rcv_alt,
             exclusion_radius_m,
             &terrain.attenuation_bands,
+            terrain.dominant_delta_m(),
         );
 
     let forest_depth = propagation::path_profile::vegetation_run_length(
@@ -498,9 +496,9 @@ pub fn compute_path_effects(
 
 /// Exact vector-obstacle crossings for one source→receiver ray, as an
 /// [`path_effects::ObstacleInput`]. With no index (raster mode) this is
-/// `CANDIDATES_OFF` — byte-identical legacy behavior.
+/// an empty candidate slice.
 fn obstacle_input_for_ray<'a>(
-    obstacles: Option<&crate::propagation::obstacle_index::ObstacleSet>,
+    obstacles: &crate::propagation::obstacle_index::ObstacleSet,
     scratch: &'a mut Vec<crate::propagation::obstacle_index::CrossingCandidate>,
     src_lat: f64,
     src_lon: f64,
@@ -508,18 +506,12 @@ fn obstacle_input_for_ray<'a>(
     rcv_lon: f64,
     prune: Option<&crate::propagation::obstacle_index::CellPrune<'_>>,
 ) -> propagation::path_effects::ObstacleInput<'a> {
-    match obstacles {
-        Some(idx) => {
-            match prune {
-                Some(p) => idx.crossings_pruned(src_lat, src_lon, rcv_lat, rcv_lon, p, scratch),
-                None => idx.crossings(src_lat, src_lon, rcv_lat, rcv_lon, scratch),
-            }
-            propagation::path_effects::ObstacleInput {
-                candidates: scratch,
-                replace_sample_buildings: true,
-            }
-        }
-        None => propagation::path_effects::ObstacleInput::CANDIDATES_OFF,
+    match prune {
+        Some(p) => obstacles.crossings_pruned(src_lat, src_lon, rcv_lat, rcv_lon, p, scratch),
+        None => obstacles.crossings(src_lat, src_lon, rcv_lat, rcv_lon, scratch),
+    }
+    propagation::path_effects::ObstacleInput {
+        candidates: scratch,
     }
 }
 
@@ -548,36 +540,7 @@ pub(crate) struct LineSegmentScreening<'a> {
     pub length_m: f64,
     pub dist_m: f64,
     pub barriers: &'a [Barrier],
-    pub obstacles: Option<&'a ObstacleSet>,
-}
-
-/// Popup-only wall authority for an absent vector store. Popup road/rail
-/// evaluation has no raster-building fallback to preserve, so its barrier slice
-/// is a complete wall skyline and an absent store can safely mean an EMPTY set.
-/// This fixed the D4 wall at Voznice: returning the cp bands on
-/// `obstacles: None` had applied one closest-point verdict to the whole 250 m
-/// microsegment. Do not copy this substitution into the tile-painter/CUDA
-/// raster fallback: those lanes would erase real raster-building screening by
-/// replacing it with an incomplete wall-only fan.
-static NO_VECTOR_OBSTACLES: propagation::obstacle_index::ObstacleSet =
-    propagation::obstacle_index::ObstacleSet {
-        indexes: Vec::new(),
-    };
-
-/// The obstacle set the arc rule clips against, or `None` when the arc rule
-/// does not run at all ("no store AND no barriers" — the cp verdict stands).
-/// ONE resolution shared by the mutable path, the prepared path and the
-/// kernels' growth schedulers, so they cannot disagree on whether a segment
-/// is arc-screened.
-pub(crate) fn arc_obstacle_set<'a>(
-    obstacles: Option<&'a ObstacleSet>,
-    barriers: &[Barrier],
-) -> Option<&'a ObstacleSet> {
-    match obstacles {
-        Some(set) => Some(set),
-        None if !barriers.is_empty() => Some(&NO_VECTOR_OBSTACLES),
-        None => None,
-    }
+    pub obstacles: &'a ObstacleSet,
 }
 
 /// ONE pass-1 scheduler step of the parallel line kernels, shared by roads and
@@ -591,7 +554,7 @@ pub(crate) fn arc_obstacle_set<'a>(
 pub(crate) fn arc_growth_chain_step(
     skyline: &mut propagation::arc_screening::ArcSkyline,
     epoch_snap: &mut Option<propagation::arc_screening::SkylineSnapshot>,
-    arc_set: Option<&ObstacleSet>,
+    arc_set: &ObstacleSet,
     receiver: &Receiver,
     barriers: &[Barrier],
     seg_start_lat: f64,
@@ -603,9 +566,10 @@ pub(crate) fn arc_growth_chain_step(
     source_height_m: f64,
     bounds: propagation::arc_screening::ArcBounds,
 ) -> Option<propagation::arc_screening::SkylineSnapshot> {
-    let set = arc_set.filter(|_| {
-        propagation::arc_screening::segment_can_span(seg_length_m, seg_dist_m, bounds)
-    })?;
+    if !propagation::arc_screening::segment_can_span(seg_length_m, seg_dist_m, bounds) {
+        return None;
+    }
+    let set = arc_set;
     let p = propagation::arc_screening::planned_ensure(
         receiver.lat,
         receiver.lon,
@@ -680,11 +644,8 @@ pub(crate) fn arc_screened_line_segment_prepared(
     snapshot: &propagation::arc_screening::SkylineSnapshot,
     scratch: &mut propagation::arc_screening::ArcScreeningScratch,
 ) -> [f64; NUM_BANDS] {
-    let Some(set) = arc_obstacle_set(q.obstacles, q.barriers) else {
-        return *q.cp_screening;
-    };
     propagation::arc_screening::arc_screened_attenuation_prepared_with_ground(
-        &line_segment_arc_query(q, set),
+        &line_segment_arc_query(q, q.obstacles),
         rasters,
         snapshot,
         q.ground_bands,
@@ -702,9 +663,6 @@ mod tests {
     impl RasterSampler for MockRasters {
         fn elevation(&self, _lat: f64, _lon: f64) -> f64 {
             200.0
-        }
-        fn building_height(&self, _lat: f64, _lon: f64) -> f64 {
-            0.0
         }
         fn ground_g(&self, _: f64, _: f64) -> f64 {
             0.5
@@ -761,31 +719,25 @@ mod tests {
             obstacles,
         };
         // The sequential composition of the same pieces the parallel kernels
-        // use: `arc_obstacle_set` resolves the store, `line_segment_arc_query`
-        // builds the query, the mutable arc kernel grows + evaluates.
+        // use: `line_segment_arc_query` builds the query, the mutable arc
+        // kernel grows + evaluates.
         let run = |obstacles| {
             let q = mk(obstacles);
             let mut skyline = propagation::arc_screening::ArcSkyline::default();
             let mut scratch = propagation::arc_screening::ArcScreeningScratch::default();
-            match arc_obstacle_set(q.obstacles, q.barriers) {
-                None => *q.cp_screening,
-                Some(set) => propagation::arc_screening::arc_screened_attenuation(
-                    &line_segment_arc_query(&q, set),
-                    &MockRasters,
-                    &mut skyline,
-                    &mut scratch,
-                ),
-            }
+            propagation::arc_screening::arc_screened_attenuation(
+                &line_segment_arc_query(&q, q.obstacles),
+                &MockRasters,
+                &mut skyline,
+                &mut scratch,
+            )
         };
-        let without = run(None);
-        let with_empty = run(Some(&empty));
-        assert_eq!(
-            without, with_empty,
-            "absent store must equal empty store: {without:?} vs {with_empty:?}"
-        );
+        // An empty store is the only "no buildings here" there is — the absent
+        // store this used to compare against cannot be constructed any more.
+        let with_empty = run(&empty);
         assert!(
-            without.iter().any(|&b| b > 0.1),
-            "the wall must screen SOMETHING — got the untouched cp bands {without:?}"
+            with_empty.iter().any(|&b| b > 0.1),
+            "the wall must screen SOMETHING — got the untouched cp bands {with_empty:?}"
         );
     }
 
@@ -834,7 +786,7 @@ mod tests {
             &[],
             &[],
             &[],
-            None,
+            &crate::propagation::obstacle_index::ObstacleSet::empty(),
             &MockRasters,
             &ComputeConfig::default(),
         );
@@ -937,7 +889,7 @@ mod tests {
             &[],
             &[],
             &[],
-            None,
+            &crate::propagation::obstacle_index::ObstacleSet::empty(),
             &MockRasters,
             &ComputeConfig::default(),
         );
@@ -958,7 +910,7 @@ mod tests {
             &[],
             &[],
             &[],
-            None,
+            &crate::propagation::obstacle_index::ObstacleSet::empty(),
             &MockRasters,
             &ComputeConfig::default(),
         );
@@ -969,7 +921,7 @@ mod tests {
             &[],
             &[],
             &[],
-            None,
+            &crate::propagation::obstacle_index::ObstacleSet::empty(),
             &MockRasters,
             &ComputeConfig::default(),
         );
@@ -1031,7 +983,7 @@ mod tests {
             &[],
             &[],
             &[],
-            None,
+            &crate::propagation::obstacle_index::ObstacleSet::empty(),
             &MockRasters,
             &ComputeConfig::default(),
         );
@@ -1243,7 +1195,7 @@ mod tests {
             &[],
             &[],
             &[],
-            None,
+            &crate::propagation::obstacle_index::ObstacleSet::empty(),
             &MockRasters,
             &config,
         );

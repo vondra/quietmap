@@ -2010,9 +2010,8 @@ fn process_block(
     // cadence steps over a one-cell-thin wall on most paths; mean +3.7 / max
     // +13.8 dB under-screening; decision record: tile-painter
     // tests/barrier_screening.rs).
-    let mut cover = Vec::with_capacity(rows * cols * 3);
+    let mut cover = Vec::with_capacity(rows * cols * 2);
     for p in halo.pixels() {
-        cover.push(p.building);
         cover.push(p.forest);
         cover.push(p.imd);
     }
@@ -2893,19 +2892,16 @@ fn run_block_pipeline(
                         cfg.batch_n,
                         cfg.halo_m,
                         rasters,
-                        obstacle_data.set().is_none(),
                     );
                     let mut interiors: Vec<Option<InteriorEstimate>> =
                         (0..batch.tiles.len()).map(|_| None).collect();
                     for &(tx, ty) in &blocks[&(bx, by)] {
                         let slot = batch_slot(&batch, tx, ty);
-                        if let Some(set) = obstacle_data.set() {
-                            tile_painter::source_loader_obstacle::bake_tile_vector_rx_refl(
-                                &mut batch.tiles[slot],
-                                set,
-                            );
-                        }
-                        interiors[slot] = obstacle_data.interior_estimate(&batch.tiles[slot]);
+                        tile_painter::source_loader_obstacle::bake_tile_vector_rx_refl(
+                            &mut batch.tiles[slot],
+                            obstacle_data.set(),
+                        );
+                        interiors[slot] = Some(obstacle_data.interior_estimate(&batch.tiles[slot]));
                     }
                     ((bx, by), batch, interiors)
                 })

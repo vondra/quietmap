@@ -11,12 +11,11 @@
 //!    replay of the same physics calling `path_effects::screening_attenuation`
 //!    directly with the same slice — proves the kernels feed barriers to the
 //!    shared popup kernel unchanged.
-//! 3. /gg W2 quantified comparison: CPU vector-barrier arm vs the
-//!    GPU-burn-equivalent arm (wall burned into the halo's building channel
-//!    via `FusedGrid::burn_building_max`, empty vector slice) — per-pixel Δ
-//!    stats against the plan's ≤1.0 dB wall-adjacent gate. MEASURED VERDICT
-//!    (2026-06-11): the gate fails decisively (mean +3.7 / max +5.9 dB
-//!    under-screening at 45 m road→wall; max +13.8 dB at the D11-like 27 m),
+//! 3. THE BURN IS REJECTED — decision record, no longer an executable arm.
+//!    MEASURED 2026-06-11, CPU vector-barrier arm vs a GPU-burn-equivalent arm
+//!    (the wall burned into the halo's building channel, empty vector slice):
+//!    the ≤1.0 dB wall-adjacent gate failed decisively — mean +3.7 / max +5.9 dB
+//!    under-screening at 45 m road→wall, max +13.8 dB at the D11-like 27 m,
 //!    because the bilateral ray cadence (~30–245 m sample spacing) steps over
 //!    a one-cell (~20 m lon at 50°N) burned wall column on most paths, while
 //!    the vector path maps the wall onto the nearest EXISTING sample and
@@ -25,14 +24,13 @@
 //!    line kernel instead screens the same VECTOR slice behind `QM_GPU_BARRIERS`
 //!    (the `w2_gpu_vector_crossings_match_cpu_oracle` arm below pins its
 //!    crossings to the CPU oracle; divergence documented in SPEC §3.6 and
-//!    gpu_surface.rs). The test stays as the decision record: it asserts
-//!    the measured divergence, so if cadence/raster resolution ever changes
-//!    enough for the burn to become viable, it fails loudly and the decision
+//!    gpu_surface.rs). The arm itself was deleted with the building raster on
+//!    2026-08-30: it burned into a channel that no longer exists, and reviving
+//!    the burn would mean reviving the raster the measurement rejected. The
 //!    must be revisited. Run with `--nocapture` for the stats table.
 
 use std::f64::consts::{LN_10, PI};
 use std::path::Path;
-use std::sync::Arc;
 
 use noise_compute::constants::{ALPHA_ATM, A_WEIGHTING, M_PER_DEG_LAT, M_PER_DEG_LON_EQ};
 use noise_compute::propagation::geo::{finite_line_correction, point_to_segment_full};
@@ -141,9 +139,21 @@ fn line_kernel_applies_vector_barriers() {
     assert!(!barriers.is_empty());
 
     let mut acc_no = TileAccumulator::new();
-    scatter_line::scatter_tile(&tile, &lines, &[], None, &mut acc_no);
+    scatter_line::scatter_tile(
+        &tile,
+        &lines,
+        &[],
+        &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
+        &mut acc_no,
+    );
     let mut acc_wall = TileAccumulator::new();
-    scatter_line::scatter_tile(&tile, &lines, &barriers, None, &mut acc_wall);
+    scatter_line::scatter_tile(
+        &tile,
+        &lines,
+        &barriers,
+        &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
+        &mut acc_wall,
+    );
 
     // Shadow receiver ~60 m east of the wall at the wall's mid-latitude.
     let rx_lon = wall_lon + m_to_deg_lon(60.0, c_lat);
@@ -187,15 +197,17 @@ fn line_kernel_applies_vector_barriers() {
     let mut profile = PathProfile::new();
     tile.build_path_profile(pts.cp_lat, pts.cp_lon, rx_lat, rx_lon, dist_m, &mut profile);
     let ground_g = path_effects::ground_g_from_profile(&profile);
-    let terrain = path_effects::terrain_attenuation(&mut profile, src_alt, rx_alt);
+    let (terrain, terrain_delta_m) =
+        path_effects::terrain_attenuation(&mut profile, src_alt, rx_alt);
     let screening = path_effects::screening_attenuation(
         &mut profile,
         &barriers,
-        path_effects::ObstacleInput::CANDIDATES_OFF,
+        path_effects::ObstacleInput { candidates: &[] },
         src_alt,
         rx_alt,
         0.0,
         &terrain,
+        terrain_delta_m,
     );
     assert!(
         screening.iter().any(|&s| s > 0.0),
@@ -240,9 +252,21 @@ fn point_kernel_applies_vector_barriers() {
     let barriers = BarrierData::from_segments(segs).for_tile(&tile.bbox, 10_000.0);
 
     let mut acc_no = TileAccumulator::new();
-    scatter_point::scatter_tile(&tile, &points, &[], None, &mut acc_no);
+    scatter_point::scatter_tile(
+        &tile,
+        &points,
+        &[],
+        &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
+        &mut acc_no,
+    );
     let mut acc_wall = TileAccumulator::new();
-    scatter_point::scatter_tile(&tile, &points, &barriers, None, &mut acc_wall);
+    scatter_point::scatter_tile(
+        &tile,
+        &points,
+        &barriers,
+        &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
+        &mut acc_wall,
+    );
 
     let rx_lon = wall_lon + m_to_deg_lon(60.0, c_lat);
     let (py, px) = (py_of(&tile, c_lat), px_of(&tile, rx_lon));
@@ -272,15 +296,17 @@ fn point_kernel_applies_vector_barriers() {
     let mut profile = PathProfile::new();
     tile.build_path_profile(p.lat, p.lon, rx_lat, rx_lon, dist_m, &mut profile);
     let ground_g = tile.ground_g(rx_lat, rx_lon);
-    let terrain = path_effects::terrain_attenuation(&mut profile, src_alt, rx_alt);
+    let (terrain, terrain_delta_m) =
+        path_effects::terrain_attenuation(&mut profile, src_alt, rx_alt);
     let screening = path_effects::screening_attenuation(
         &mut profile,
         &barriers,
-        path_effects::ObstacleInput::CANDIDATES_OFF,
+        path_effects::ObstacleInput { candidates: &[] },
         src_alt,
         rx_alt,
         p.exclusion_radius_m,
         &terrain,
+        terrain_delta_m,
     );
     assert!(screening.iter().any(|&s| s > 0.0));
     let veg = path_effects::vegetation_attenuation_path(&profile);
@@ -459,165 +485,4 @@ fn w2_gpu_vector_crossings_match_cpu_oracle() {
             "GPU intersection replica must match the CPU oracle at {spacing_m} m"
         );
     }
-}
-
-struct DeltaStats {
-    n: usize,
-    /// Mean of SIGNED Δ = 10·log10(E_burn / E_vector); positive ⇒ the burn
-    /// arm reads hotter (under-screens vs the popup-parity vector arm).
-    mean_signed: f64,
-    p95_abs: f64,
-    max_abs: f64,
-}
-
-fn delta_stats(deltas: &[f64]) -> DeltaStats {
-    if deltas.is_empty() {
-        return DeltaStats {
-            n: 0,
-            mean_signed: 0.0,
-            p95_abs: 0.0,
-            max_abs: 0.0,
-        };
-    }
-    let n = deltas.len();
-    let mut abs: Vec<f64> = deltas.iter().map(|d| d.abs()).collect();
-    abs.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-    DeltaStats {
-        n,
-        mean_signed: deltas.iter().sum::<f64>() / n as f64,
-        p95_abs: abs[((n as f64 * 0.95) as usize).min(n - 1)],
-        max_abs: abs[n - 1],
-    }
-}
-
-/// One W2 arm pair at a given road→wall spacing: returns per-pixel signed
-/// Δ dB = 10·log10(E_burn/E_vector) partitioned into (all, shadow-side
-/// wall-adjacent ≤150 m, source-side wall-adjacent ≤150 m), plus the
-/// presence-flip count.
-fn run_w2_comparison(spacing_m: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>, usize) {
-    let tile_v = flat_tile();
-    let (c_lat, c_lon) = centre(&tile_v);
-    let road_lon = c_lon;
-    let wall_lon = c_lon + m_to_deg_lon(spacing_m, c_lat);
-    let lines = vec![road_line(c_lat, road_lon)];
-    let segs = wall_segments(c_lat, wall_lon, 360.0, 3.0);
-
-    // GPU-burn-equivalent arm: wall burned into a fresh tile's halo building
-    // channel (rx_refl_db was pre-baked at build → unburned, exactly the
-    // semantics a production GPU burn would have had), EMPTY vector slice.
-    let mut tile_b = flat_tile();
-    {
-        let halo = Arc::get_mut(&mut tile_b.halo).expect("fixture tile owns its halo");
-        for s in &segs {
-            halo.burn_building_max(s.start_lat, s.start_lon, s.end_lat, s.end_lon, s.height_m);
-        }
-    }
-    let mut acc_b = TileAccumulator::new();
-    scatter_line::scatter_tile(&tile_b, &lines, &[], None, &mut acc_b);
-
-    // Vector arm: the SAME wall as exact midpoint barriers through the popup
-    // kernel (burn borrowed `segs` above; the vector arm consumes it now).
-    let barriers = BarrierData::from_segments(segs).for_tile(&tile_v.bbox, 10_000.0);
-    let mut acc_v = TileAccumulator::new();
-    scatter_line::scatter_tile(&tile_v, &lines, &barriers, None, &mut acc_v);
-
-    let wall_n = c_lat + m_to_deg_lat(360.0);
-    let wall_s = c_lat - m_to_deg_lat(360.0);
-    let mut all = Vec::new();
-    let mut shadow_adj = Vec::new();
-    let mut source_adj = Vec::new();
-    let mut presence_flips = 0usize;
-    for py in 0..TILE_PX {
-        for px in 0..TILE_PX {
-            let ev = day_energy(&acc_v, py, px);
-            let eb = day_energy(&acc_b, py, px);
-            if (ev > 0.0) != (eb > 0.0) {
-                presence_flips += 1;
-                continue;
-            }
-            if ev <= 0.0 {
-                continue;
-            }
-            let d = 10.0 * (eb / ev).log10(); // signed: + ⇒ burn hotter
-            all.push(d);
-            let rx_lat = tile_v.rx_lat[py];
-            let rx_lon = tile_v.rx_lon[px];
-            let pts = point_to_segment_full(rx_lat, rx_lon, wall_s, wall_lon, wall_n, wall_lon);
-            if pts.d_endpoint_m <= 150.0 {
-                if rx_lon >= wall_lon {
-                    shadow_adj.push(d);
-                } else {
-                    source_adj.push(d);
-                }
-            }
-        }
-    }
-    (all, shadow_adj, source_adj, presence_flips)
-}
-
-/// /gg W2: quantified CPU-vector vs GPU-burn comparison — the C9 DECISION
-/// RECORD. The plan's viability gate was max |Δ| ≤ 1.0 dB at wall-adjacent
-/// SHADOW pixels (the user-facing quiet side); measured 2026-06-11 it fails
-/// ~6× over (the cadence steps over the one-cell burned wall — see module
-/// docs), so B8 shipped CPU-only. The assertions pin the measured failure
-/// mode: if this test ever starts failing because the burn arm AGREES with
-/// the vector arm (max ≤ 1 dB), the sampling model has changed enough that
-/// the GPU burn decision must be re-evaluated — do that, don't just flip the
-/// assert.
-#[test]
-fn w2_vector_vs_burn_quantified_decision_record() {
-    let (all45, shadow45, src45, flips45) = run_w2_comparison(45.0);
-    let (all27, shadow27, src27, flips27) = run_w2_comparison(27.0);
-
-    println!("W2 CPU-vector vs GPU-burn-equivalent Δ dB = 10·log10(E_burn/E_vector)");
-    println!("(flat DEM, 3 m wall, 720 m chain of 60 m segs; + ⇒ burn under-screens)");
-    println!("  spacing  set                      n   mean(signed)  p95|Δ|  max|Δ|");
-    for (label, name, deltas) in [
-        ("45 m", "all audible", &all45),
-        ("45 m", "shadow ≤150 m", &shadow45),
-        ("45 m", "source side ≤150 m", &src45),
-        ("27 m", "all audible", &all27),
-        ("27 m", "shadow ≤150 m", &shadow27),
-        ("27 m", "source side ≤150 m", &src27),
-    ] {
-        let s = delta_stats(deltas);
-        println!(
-            "  {:<8} {:<20} {:>6}  {:>9.3}     {:>6.3}  {:>6.3}",
-            label, name, s.n, s.mean_signed, s.p95_abs, s.max_abs
-        );
-    }
-    println!("  presence flips: 45 m = {flips45}, 27 m = {flips27}");
-
-    assert_eq!(flips45, 0, "burn must not create/destroy audible pixels");
-    assert_eq!(flips27, 0, "burn must not create/destroy audible pixels");
-
-    let gate45 = delta_stats(&shadow45);
-    let gate27 = delta_stats(&shadow27);
-    assert!(
-        gate45.n > 100,
-        "shadow set unexpectedly small: {}",
-        gate45.n
-    );
-    // The decision facts: the burn UNDER-screens (positive mean — tiles
-    // would stay hot behind walls, the exact B8 failure mode), far past the
-    // 1.0 dB viability gate, at both a cell-separated and the D11-like
-    // road→wall spacing; the source side stays clean (the divergence is
-    // confined to the shadow the burn fails to cast).
-    assert!(
-        gate45.mean_signed > 1.0 && gate45.max_abs > 1.0,
-        "GPU-burn arm now within {:.3} dB mean / {:.3} dB max of the vector arm at 45 m — \
-         the W2 gate would PASS; re-evaluate wiring the burn into gpu_surface (plan §B8/W2)",
-        gate45.mean_signed,
-        gate45.max_abs
-    );
-    assert!(
-        gate27.max_abs > 1.0,
-        "GPU-burn arm within {:.3} dB max of vector at 27 m — re-evaluate the burn decision",
-        gate27.max_abs
-    );
-    let src_worst = delta_stats(&src45).max_abs.max(delta_stats(&src27).max_abs);
-    assert!(
-        src_worst < 0.25,
-        "source-side pixels should be untouched by the burn, max |Δ| {src_worst:.3} dB"
-    );
 }

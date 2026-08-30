@@ -142,10 +142,10 @@ pub fn add_v6_aircraft_to_result(
     airport_summary_path: Option<&Path>,
     rasters: &dyn RasterSampler,
     barriers: &[noise_compute::types::Barrier],
-    // Vector obstacles (geodata-v2): threads into ground-ops screening
+    // Vector obstacles: threads into ground-ops screening
     // (`compute_airport_traffic::run`) so airport ground shares the popup's
     // physics; airborne/cruise are structurally exempt (no ground rays).
-    obstacles: Option<&noise_compute::propagation::obstacle_index::ObstacleSet>,
+    obstacles: &noise_compute::propagation::obstacle_index::ObstacleSet,
     n_days: u16,
     // Per-kind top-K cap for airborne sub-segment traces — passed to
     // compute_aircraft_v6 so the bounded min-heap in airborne::scatter

@@ -87,7 +87,6 @@ pub fn path_profile_into_trace(
     PathProfileTrace {
         t: profile.t,
         elevation_m: profile.elevation_m,
-        building_h_m: profile.building_h_m,
         forest_u8: profile.forest_u8,
         imd_u8: profile.imd_u8,
         dist_m: profile.dist_m,

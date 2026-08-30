@@ -331,9 +331,6 @@ impl crate::types::RasterSampler for FlatGround {
     fn elevation(&self, _: f64, _: f64) -> f64 {
         0.0
     }
-    fn building_height(&self, _: f64, _: f64) -> f64 {
-        0.0
-    }
     fn ground_g(&self, _: f64, _: f64) -> f64 {
         1.0
     }

@@ -485,9 +485,9 @@ fn main() -> Result<()> {
         arguments.pixel_x as f64,
     ];
     let elevation: Vec<f32> = halo.pixels().iter().map(|pixel| pixel.elevation).collect();
-    let mut cover = Vec::with_capacity(halo_rows * halo_columns * 3);
+    let mut cover = Vec::with_capacity(halo_rows * halo_columns * 2);
     for pixel in halo.pixels() {
-        cover.extend_from_slice(&[pixel.building, pixel.forest, pixel.imd]);
+        cover.extend_from_slice(&[pixel.forest, pixel.imd]);
     }
     let mut receiver_latlon = Vec::with_capacity(TILE_PX * 2);
     receiver_latlon.extend_from_slice(&tile.rx_lat);

@@ -411,9 +411,7 @@ pub fn process_region(
 
             let t_write = Instant::now();
             let mut cells = wire_hm3::collapse_lden_u8(&accum, ctx.n_days as f64);
-            if let Some(interior) = &interior {
-                interior.apply(&mut cells);
-            }
+            interior.apply(&mut cells);
             let out_path = ctx
                 .output
                 .join(ctx.zoom.to_string())

@@ -361,7 +361,6 @@ fn collect_raster_dependencies(
         )?;
         if matches!(profile, DependencyProfile::Surface) {
             for (role, dir) in [
-                ("building-raster", "rasters/building"),
                 ("forest-raster", "rasters/forest"),
                 ("imd-raster", "rasters/imd"),
             ] {

@@ -5,7 +5,7 @@ import { deflateSync, crc32 } from 'node:zlib'
 import { tableFromIPC } from 'apache-arrow'
 import { DATA_YEAR } from '../data-year.js'
 
-type LayerId = 'dem' | 'building' | 'forest' | 'barriers'
+type LayerId = 'dem' | 'forest' | 'barriers'
 
 interface SourceTile {
   data: Int16Array | Uint8Array
@@ -17,7 +17,6 @@ const DEM_DIRS = [
   join(DATA_DIR, 'dem', 'copernicus'),
   join(DATA_DIR, 'dem', 'srtm'),
 ]
-const BUILDING_DIR = join(DATA_DIR, 'rasters', 'building')
 const FOREST_DIR = join(DATA_DIR, 'rasters', 'forest')
 
 const MAX_TILES_PER_LAYER = 5
@@ -63,9 +62,8 @@ async function readSourceTile(layer: LayerId, latInt: number, lonInt: number): P
       if (existsSync(p)) { tilePath = p; break }
     }
   } else {
-    const dir = layer === 'building' ? BUILDING_DIR : FOREST_DIR
     const fname = tileName(latInt, lonInt, 'raw')
-    const p = join(dir, fname)
+    const p = join(FOREST_DIR, fname)
     if (existsSync(p)) tilePath = p
   }
 
@@ -264,9 +262,10 @@ type FootprintRow = { o: [number, number][]; h: number; t: number; c: boolean }
 
 /// The building-height overlay as MODEL TRUTH (owner ask 2026-08-02): fill
 /// the exact obstacle-store footprints the propagation engine screens with,
-/// colored by their as-used height (buildingColor ramp — the same scale the
-/// raster view used), with capped footprints rendered at their capped
-/// height. Even-odd scanline fill on the 256 px tile grid.
+/// colored by their as-used height (the buildingColor ramp), with capped
+/// footprints rendered at their capped height. Even-odd scanline fill on the
+/// 256 px tile grid. This is the ONLY building renderer — the 30 m building
+/// raster it used to fall back to no longer exists.
 export async function renderBuildingVectorTile(
   z: number,
   x: number,
@@ -274,12 +273,13 @@ export async function renderBuildingVectorTile(
   fetchFootprintsJson: (south: number, west: number, north: number, east: number) => Promise<string>,
 ): Promise<Buffer> {
   const { latNorth, latSouth, lonWest, lonEast } = tileToLatLonBbox(z, x, y)
-  let rows: FootprintRow[]
-  try {
-    rows = JSON.parse(await fetchFootprintsJson(latSouth, lonWest, latNorth, lonEast)) as FootprintRow[]
-  } catch {
-    return getEmptyPng() // debug overlay: an engine hiccup renders empty, never 500s the tile
-  }
+  // Deliberately uncaught: an unreachable or missing obstacle store must reach
+  // the caller as an error. Answering with an empty tile would draw a
+  // building-free city — "no data" rendered as silence.
+  const rows = JSON.parse(
+    await fetchFootprintsJson(latSouth, lonWest, latNorth, lonEast),
+  ) as FootprintRow[]
+  // A successful query with zero rows is real emptiness (ocean, desert), not absence.
   if (!rows.length) return getEmptyPng()
 
   const W = 256
@@ -434,7 +434,7 @@ export async function renderTile(layer: LayerId, z: number, x: number, y: number
 
   const W = 256
   const pixels = Buffer.alloc(W * W * 4)
-  const colorFn = layer === 'dem' ? demColor : layer === 'building' ? buildingColor : forestColor
+  const colorFn = layer === 'dem' ? demColor : forestColor
   const bilinear = layer === 'dem'
 
   for (let py = 0; py < W; py++) {
@@ -471,11 +471,11 @@ const DATA_TILE_SIZE = 64
 
 /**
  * Raw raster values for a map tile — DEM as Int16 big-endian (metres,
- * signed), building / forest as u8. Nearest-neighbour from the 1° source
- * tile. Caller sets content-type.
+ * signed), forest as u8. Nearest-neighbour from the 1° source tile.
+ * Caller sets content-type.
  */
 export async function renderDataTile(
-  layer: 'dem' | 'building' | 'forest',
+  layer: 'dem' | 'forest',
   z: number,
   x: number,
   y: number,

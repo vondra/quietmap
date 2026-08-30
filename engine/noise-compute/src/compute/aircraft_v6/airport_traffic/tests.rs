@@ -7,9 +7,6 @@ impl RasterSampler for FlatGround {
     fn elevation(&self, _: f64, _: f64) -> f64 {
         0.0
     }
-    fn building_height(&self, _: f64, _: f64) -> f64 {
-        0.0
-    }
     fn ground_g(&self, _: f64, _: f64) -> f64 {
         1.0
     }
@@ -42,7 +39,7 @@ fn run_flat(
         &uniform_weights(),
         &FlatGround,
         &[],
-        None,
+        &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),
         None,
         None,
@@ -149,7 +146,7 @@ fn metadata_populated_with_arr_dep_split_and_profile_mix() {
         &uniform_weights(),
         &FlatGround,
         &[],
-        None,
+        &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),
         Some(&summary),
         None,
@@ -270,7 +267,7 @@ fn metadata_gse_per_day_populated() {
         &uniform_weights(),
         &FlatGround,
         &[],
-        None,
+        &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),
         Some(&summary),
         None,
@@ -374,7 +371,7 @@ fn gse_row_weight_pinned_to_one_under_hybrid() {
         &uniform_weights(),
         &FlatGround,
         &[],
-        None,
+        &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),
         None,
         None,
@@ -386,7 +383,7 @@ fn gse_row_weight_pinned_to_one_under_hybrid() {
         &hybrid_weights(),
         &FlatGround,
         &[],
-        None,
+        &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),
         None,
         None,
@@ -425,7 +422,7 @@ fn ga_aircraft_ground_row_weighted_down() {
         &uniform_weights(),
         &FlatGround,
         &[],
-        None,
+        &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),
         None,
         None,
@@ -437,7 +434,7 @@ fn ga_aircraft_ground_row_weighted_down() {
         &hybrid_weights(),
         &FlatGround,
         &[],
-        None,
+        &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),
         None,
         None,
@@ -571,7 +568,7 @@ fn osm_ref_lookup_renames_runway_segment_trace() {
         &uniform_weights(),
         &FlatGround,
         &[],
-        None,
+        &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &lookup,
         None,
         Some(&mut traces),
@@ -608,7 +605,7 @@ fn osm_ref_lookup_renames_taxi_segment_trace() {
         &uniform_weights(),
         &FlatGround,
         &[],
-        None,
+        &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &lookup,
         None,
         Some(&mut traces),
@@ -643,7 +640,7 @@ fn osm_ref_lookup_missing_keeps_generic_label() {
         &uniform_weights(),
         &FlatGround,
         &[],
-        None,
+        &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &empty,
         None,
         Some(&mut traces),
@@ -689,9 +686,6 @@ impl RasterSampler for MockHilly {
             0.0
         }
     }
-    fn building_height(&self, _: f64, _: f64) -> f64 {
-        0.0
-    }
     fn ground_g(&self, _: f64, _: f64) -> f64 {
         self.g
     }
@@ -701,27 +695,14 @@ impl RasterSampler for MockHilly {
 }
 
 /// Tall obstacle on the centerline between source and receiver,
-/// modeled via `building_height` (the path-profile sampler feeds
-/// this into `screening_attenuation_with_meta`). Elevation is flat
-/// so the diffraction is purely structural, not topographic.
+/// Flat ground for the screening test: the building itself arrives as a vector
+/// footprint, so this only has to keep the terrain out of the way and pin G.
 struct MockBuildingScreen {
-    obs_lat: f64,
-    obs_lon: f64,
-    obs_radius_m: f64,
-    obs_height_m: f64,
     g: f64,
 }
 impl RasterSampler for MockBuildingScreen {
     fn elevation(&self, _: f64, _: f64) -> f64 {
         0.0
-    }
-    fn building_height(&self, lat: f64, lon: f64) -> f64 {
-        let d = crate::propagation::geo::flat_dist(lat, lon, self.obs_lat, self.obs_lon);
-        if d < self.obs_radius_m {
-            self.obs_height_m
-        } else {
-            0.0
-        }
     }
     fn ground_g(&self, _: f64, _: f64) -> f64 {
         self.g
@@ -816,7 +797,7 @@ fn terrain_path_effect_engages_max_rule() {
         &uniform_weights(),
         &rasters,
         &[],
-        None,
+        &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),
         None,
         None,
@@ -845,19 +826,29 @@ fn terrain_path_effect_engages_max_rule() {
 /// screening leg of `A_bar = A_terr + A_scr`.
 #[test]
 fn screening_path_effect_engages_max_rule() {
-    let rasters = MockBuildingScreen {
-        obs_lat: PE_MID_LAT,
-        obs_lon: PE_MID_LON,
-        // Wide enough (~150 m) that at least one path-profile
-        // sample lands inside — the path sampler steps in the
-        // 20-80 m range and we want screening_attenuation to see
-        // the obstacle even at the coarsest step.
-        obs_radius_m: 150.0,
-        obs_height_m: 30.0,
-        g: 1.0,
-    };
+    let rasters = MockBuildingScreen { g: 1.0 };
     let bands: [f32; 8] = [1e6, 2e6, 3e6, 4e6, 5e6, 6e6, 7e6, 8e6];
     let row = make_path_effect_row(&bands);
+    // The building is a vector footprint, the only representation there is:
+    // a ~150 m square straddling the path midpoint, 30 m tall.
+    let d_lat = 75.0 / 111_320.0;
+    let d_lon = 75.0 / (111_320.0 * PE_MID_LAT.to_radians().cos());
+    let ring = vec![
+        (PE_MID_LAT - d_lat, PE_MID_LON - d_lon),
+        (PE_MID_LAT - d_lat, PE_MID_LON + d_lon),
+        (PE_MID_LAT + d_lat, PE_MID_LON + d_lon),
+        (PE_MID_LAT + d_lat, PE_MID_LON - d_lon),
+    ];
+    let mut b = crate::propagation::obstacle_index::ObstacleIndex::builder(PE_MID_LAT, PE_MID_LON);
+    b.add_ring(
+        &ring,
+        30.0,
+        crate::propagation::obstacle_index::ObstacleKind::Building,
+        1,
+    );
+    let obstacles = crate::propagation::obstacle_index::ObstacleSet {
+        indexes: vec![std::sync::Arc::new(b.build())],
+    };
     let out = run(
         &pe_receiver(),
         &[row],
@@ -865,7 +856,7 @@ fn screening_path_effect_engages_max_rule() {
         &uniform_weights(),
         &rasters,
         &[],
-        None,
+        &obstacles,
         &HashMap::new(),
         None,
         None,
@@ -916,7 +907,7 @@ fn max_rule_not_sum_rule() {
         &uniform_weights(),
         &rasters,
         &[],
-        None,
+        &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),
         None,
         None,
@@ -965,7 +956,7 @@ fn ground_only_when_no_obstacle() {
         &uniform_weights(),
         &rasters,
         &[],
-        None,
+        &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),
         None,
         None,

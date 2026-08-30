@@ -181,13 +181,10 @@ export function ContributorDetail({ c }: { c: Contributor }) {
         ['  Position', `${(c.screening.obstacle.t * 100).toFixed(0)}% of path`],
         ['  Above LoS', `${c.screening.obstacle.screen_h_m.toFixed(1)} m`],
         ['  Fresnel δ', `${c.screening.obstacle.delta_m.toFixed(2)} m`],
-        ['  Samples scanned', `${c.screening.obstacle.samples_taken} @ ${c.screening.obstacle.step_m.toFixed(0)} m`],
+        ['  Path cadence', `${c.screening.obstacle.step_m.toFixed(0)} m`],
       )
     } else {
-      rows.push(
-        ['  Obstacle', 'none on path'],
-        ['  Samples scanned', `${c.screening.obstacle?.samples_taken ?? 0} @ ${c.screening.obstacle?.step_m?.toFixed(0) ?? '–'} m`],
-      )
+      rows.push(['  Obstacle', 'none on path'])
     }
     if (c.metadata && (c.metadata.kind === 'road' || c.metadata.kind === 'rail') && c.metadata.segment_count > 1) {
       rows.push('', `Across all ${c.metadata.segment_count} segments:`)

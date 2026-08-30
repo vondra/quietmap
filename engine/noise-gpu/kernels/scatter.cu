@@ -1688,7 +1688,7 @@ __device__ void terrain_bands(const double* t, const double* prof, int n,
 // imd BILINEAR (round, clamp). `cover` is the halo packed [build,forest,imd] per cell.
 __device__ __forceinline__ void cover_rc(
     const unsigned char* cover, int rows, int cols, float rf, float cf,
-    unsigned char* bh, unsigned char* fr_out, unsigned char* imd_out)
+    unsigned char* fr_out, unsigned char* imd_out)
 {
     rf = fminf(fmaxf(rf, 0.0f), (float)(rows - 1));
     cf = fminf(fmaxf(cf, 0.0f), (float)(cols - 1));
@@ -1696,11 +1696,11 @@ __device__ __forceinline__ void cover_rc(
     int c0 = min((int)floorf(cf), cols - 2);
     float fr = rf - (float)r0, fc = cf - (float)c0;
     long base = (long)r0 * cols + c0;
-    long b00 = base*3, b01 = (base+1)*3, b10 = (base+cols)*3, b11 = (base+cols+1)*3;
+    long b00 = base*2, b01 = (base+1)*2, b10 = (base+cols)*2, b11 = (base+cols+1)*2;
     long near = (fr >= 0.5f) ? ((fc >= 0.5f) ? b11 : b10) : ((fc >= 0.5f) ? b01 : b00);
-    *bh = cover[near]; *fr_out = cover[near + 1];
-    float v0 = (float)cover[b00+2] + fc * ((float)cover[b01+2] - (float)cover[b00+2]);
-    float v1 = (float)cover[b10+2] + fc * ((float)cover[b11+2] - (float)cover[b10+2]);
+    *fr_out = cover[near];
+    float v0 = (float)cover[b00+1] + fc * ((float)cover[b01+1] - (float)cover[b00+1]);
+    float v1 = (float)cover[b10+1] + fc * ((float)cover[b11+1] - (float)cover[b10+1]);
     float im = fminf(fmaxf(roundf(v0 + fr * (v1 - v0)), 0.0f), 255.0f);
     *imd_out = (unsigned char)im;
 }
@@ -1867,7 +1867,7 @@ __device__ void ray_terrain_bands(
 // ---- ONE propagation ray, source→receiver: cadence march (bare elevation +
 // building/forest/IMD), vector barriers, terrain diffraction, the vector
 // obstacle candidate, and the screening increment. Fills the caller's profile
-// scratch (`tprof/ed/comp/bld/forr/imdp`, `n` samples returned) and writes
+// scratch (`tprof/ed/comp/forr/imdp`, `n` samples returned) and writes
 // `terr[]`/`screen[]`.
 //
 // THE single ray evaluator: the characteristic-point ray and every
@@ -1881,7 +1881,7 @@ __device__ int ray_path_bands(
     double rlat, double rlon, double ralt, double dist,
     const double* barr, int nbarr, const unsigned long long* obst,
     double* tprof, double* ed, double* comp,
-    unsigned char* bld, unsigned char* forr, unsigned char* imdp,
+    unsigned char* forr, unsigned char* imdp,
     float* terr, float* screen, int need_cover, int need_screening
 #if V2_H0
     , int need_vector, int *vector_path_present
@@ -1912,13 +1912,12 @@ __device__ int ray_path_bands(
         for (int i = 0; i < n; i++) {
             float rf = src_rf + (float)tprof[i] * d_rf, cf = src_cf + (float)tprof[i] * d_cf;
             ed[i] = (double)bilinear_elev_rc(elev, rows, cols, rf, cf);
-            cover_rc(cover, rows, cols, rf, cf, &bld[i], &forr[i], &imdp[i]);
+            cover_rc(cover, rows, cols, rf, cf, &forr[i], &imdp[i]);
         }
     } else {
         for (int i = 0; i < n; i++) {
             float rf = src_rf + (float)tprof[i] * d_rf, cf = src_cf + (float)tprof[i] * d_cf;
             ed[i] = (double)bilinear_elev_rc(elev, rows, cols, rf, cf);
-            bld[i] = 0;
         }
     }
 
@@ -1941,16 +1940,10 @@ __device__ int ray_path_bands(
             tprof, ed, n, dist);
         return n;
     }
-    // Vector obstacles (geodata-v2, QM_VECTOR_BUILDINGS=1): exact crossings
-    // REPLACE the raster building channel (path_effects
-    // replace_sample_buildings) — the composite keeps only barriers, and the
-    // max-δ candidate from the obstacle grids competes with the cadence edge.
-    // Exact-crossing candidates — vector building edges (geodata-v2,
-    // QM_VECTOR_BUILDINGS=1, which REPLACE the raster building channel:
-    // path_effects `replace_sample_buildings`) AND noise-barrier segments —
-    // run ONE max-δ race against the cadence composite edge, mirroring
-    // path_effects §5b/§5c. Neither kind ever enters the composite.
-    bool vec_mode = obst[0] != 0ULL;
+    // Exact-crossing candidates — vector building edges AND noise-barrier
+    // segments — run ONE max-δ race against the bare-earth terrain edge,
+    // mirroring path_effects §5b/§5c. Neither kind enters the sample profile:
+    // buildings have no raster channel to enter, and a wall never had one.
     int have_cand = 0;
     double cand_t = 0.0, cand_top = 0.0;
 #if V2_H0
@@ -1962,7 +1955,7 @@ __device__ int ray_path_bands(
         double rcv_h = fmax(ralt - ed[n - 1], 0.5);
         double se = ed[0] + src_h, re = ed[n - 1] + rcv_h;
         double dsr = sqrt(dist * dist + (re - se) * (re - se));
-        if (!ABL_CAND_OFF && vec_mode)
+        if (!ABL_CAND_OFF)
             obstacle_best_candidate(obst, slat, slon, rlat, rlon,
                                     tprof, ed, n, dist, se, re, dsr,
                                     &have_cand, &cand_t, &cand_top);
@@ -1970,30 +1963,22 @@ __device__ int ray_path_bands(
                                tprof, ed, n, dist, se, re, dsr,
                                &have_cand, &cand_t, &cand_top);
     }
-    // A wall over open ground has no building cell — its crossing must enable
-    // the screening pass too, or walls outside towns are silently ignored.
+    // Every obstacle is a crossing now, so a crossing is the whole test: no
+    // candidate means nothing to screen on, and the screening increment over
+    // bare terrain is exactly zero.
     bool anyb =
 #if V2_H0
         need_vector &&
 #endif
         have_cand;
-#if V2_H0
-    if (need_vector && !vec_mode)
-#else
-    if (!vec_mode)
-#endif
-        for (int i = 0; i < n; i++) if (bld[i] > 0) { anyb = true; break; }
     if (anyb && n >= 3 && dist >= 30.0) {
 #if V2_H0
         if (vector_path_present != 0) *vector_path_present = 1;
 #endif
-        for (int i = 0; i < n; i++) {
-            // Endpoint exclusion (tprof ∈ (0,1)) — the CPU composite gate,
-            // path_effects.rs §3. Buildings only: walls are candidates now.
-            double bh = vec_mode ? 0.0 : (double)bld[i];
-            double above = (tprof[i] > 0.0 && tprof[i] < 1.0) ? bh : 0.0;
-            comp[i] = ed[i] + above;
-        }
+        // The sample profile IS bare earth: every obstacle reaches the race as
+        // an exact crossing. `comp` stays as the API's second profile so the
+        // candidate's own δ still competes against the terrain edge.
+        for (int i = 0; i < n; i++) comp[i] = ed[i];
         float comb[NB];
         single_edge_bands_cand(tprof, comp, ed, n, dist, salt, ralt,
                                have_cand, cand_t, cand_top, comb);
@@ -2537,7 +2522,7 @@ __device__ void arc_screen_bands(
     double cplat, double cplon, const float* cp_terr, const double* ground,
     const double* barr, int nbarr, const unsigned long long* obst,
     double* tprof, double* ed, double* comp,
-    unsigned char* bld, unsigned char* forr, unsigned char* imdp,
+    unsigned char* forr, unsigned char* imdp,
     float* screen, unsigned int* hc_key, double* hc_lo, double* hc_hi, float* arcstat,
     unsigned int* arc_drops)
 {
@@ -3326,7 +3311,7 @@ __device__ void arc_screen_bands(
                         ray_path_bands(elev, cover, rows, cols, lat_min, lon_min, inv,
                                        slat, slon, isalt, rlat, rlon, ralt, idist,
                                        barr, nbarr, obst, tprof, ed, comp,
-                                       bld, forr, imdp, iterr, bands, 0, 1
+                                       forr, imdp, iterr, bands, 0, 1
 #if V2_H0
                                        , 1, (int *)0
 #endif
@@ -3454,7 +3439,7 @@ __device__ __forceinline__ void line_source_h0(
     bool ub_only, const double *seg, const double *sp, const float *em,
     const double *barr, int nbarr, const unsigned long long *obst,
     double d_floor_m, double *tprof, double *ed, double *comp,
-    unsigned char *bld, unsigned char *forr, unsigned char *imdp,
+    unsigned char *forr, unsigned char *imdp,
     float &e0, float &e1, float &e2, double &kept, int &npair,
     h0_local_faults *faults
 #if PROF_H0_PAIR_DIAGNOSTIC
@@ -3573,7 +3558,7 @@ __device__ __forceinline__ void line_source_h0(
         const int sample_count = ray_path_bands(
             elev, cover, rows, cols, lat_min, lon_min, inv,
             slat, slon, salt, rlat, rlon, ralt, node.node_distance_m,
-            barr, nbarr, obst, tprof, ed, comp, bld, forr, imdp,
+            barr, nbarr, obst, tprof, ed, comp, forr, imdp,
             terrain, screening, 1, 1, admitted, &vector_path_present);
         const float mean_imd = path_integral_imd(tprof, imdp, sample_count);
         const float ground_g = sp[3] != 0.0
@@ -3671,7 +3656,7 @@ extern "C" __global__ void h0_pair_path_diagnostic(
         const double receiver_altitude = (double)rxar[pixel * 2];
         const double receiver_reflection = (double)rxar[pixel * 2 + 1];
         double tprof[MAXT], ed[MAXT], comp[MAXT];
-        unsigned char bld[MAXT], forr[MAXT], imdp[MAXT];
+        unsigned char forr[MAXT], imdp[MAXT];
         float e0 = 0.0f, e1 = 0.0f, e2 = 0.0f;
         double kept = 0.0;
         int npair = 0;
@@ -3683,7 +3668,7 @@ extern "C" __global__ void h0_pair_path_diagnostic(
             &seg[source_index * SOURCE_SEGMENT_STRIDE], &sp[source_index * 12],
             &semis[source_index * 24], barr, nbarr, obst,
             line_layer_tag == 0 ? V2_ROAD_D_FLOOR_M : V2_RAIL_D_FLOOR_M,
-            tprof, ed, comp, bld, forr, imdp, e0, e1, e2, kept, npair, &faults,
+            tprof, ed, comp, forr, imdp, e0, e1, e2, kept, npair, &faults,
             period_band_power);
         for (int index = 0; index < 3 * NB; index++)
             out[10 + index] = QM_BITS(period_band_power[index]);
@@ -3842,7 +3827,7 @@ __device__ __noinline__ void line_source(
     const double* seg, const double* sp, const float* em,
     const double* barr, int nbarr, const unsigned long long* obst,
     double* tprof, double* ed, double* comp,
-    unsigned char* bld, unsigned char* forr, unsigned char* imdp,
+    unsigned char* forr, unsigned char* imdp,
     float& e0, float& e1, float& e2, double& kept, double& resid, int& npair,
     float* arcstat,
     unsigned int* hc_key, double* hc_lo, double* hc_hi, unsigned int* arc_drops)
@@ -3854,7 +3839,7 @@ __device__ __noinline__ void line_source(
     (void)lat_min; (void)lon_min; (void)inv; (void)bb; (void)rlat;
     (void)rlon; (void)ralt; (void)refl; (void)ub_only; (void)seg; (void)sp;
     (void)em; (void)barr; (void)nbarr; (void)obst; (void)tprof; (void)ed;
-    (void)comp; (void)bld; (void)forr; (void)imdp; (void)e0; (void)e1;
+    (void)comp; (void)forr; (void)imdp; (void)e0; (void)e1;
     (void)e2; (void)kept; (void)resid; (void)npair; (void)arcstat;
     (void)hc_key; (void)hc_lo; (void)hc_hi; (void)arc_drops;
     return;
@@ -3906,12 +3891,12 @@ __device__ __noinline__ void line_source(
 
     // ONE ray evaluator for the cp ray and every arc-screening interval ray
     // (ray_path_bands): cadence march + barriers + terrain + vector candidate +
-    // screening. It OWNS tprof/ed/comp/bld/forr/imdp, so anything read off the
+    // screening. It OWNS tprof/ed/comp/forr/imdp, so anything read off the
     // cp ray's samples must be taken before the arc pass overwrites them.
     float terr[NB], screen[NB], veg[NB];
     int n = ray_path_bands(elev, cover, rows, cols, lat_min, lon_min, inv,
                            cplat, cplon, salt, rlat, rlon, ralt, dend,
-                           barr, nbarr, obst, tprof, ed, comp, bld, forr, imdp,
+                           barr, nbarr, obst, tprof, ed, comp, forr, imdp,
                            terr, screen, 1,
                            !CP_SCREEN_DELETE || !has_complete_fan
 #if V2_H0
@@ -4025,7 +4010,7 @@ __device__ __noinline__ void line_source(
             // free to clobber — the cp ray's reads finished above.
             ray_path_bands(elev, cover, rows, cols, lat_min, lon_min, inv,
                            slat, slon, salt_k, rlat, rlon, ralt, sdist,
-                           barr, nbarr, obst, tprof, ed, comp, bld, forr, imdp,
+                           barr, nbarr, obst, tprof, ed, comp, forr, imdp,
                            terr_k, screen_k, 0, 1
 #if V2_H0
                            , 1, (int *)0
@@ -4051,7 +4036,7 @@ __device__ __noinline__ void line_source(
                                      inv, bb, rlat, rlon, ralt,
                                      lo_lat, lo_lon, hi_lat, hi_lon, sp[2],
                                      slat, slon, terr_k, ground,
-                                     barr, nbarr, obst, tprof, ed, comp, bld, forr,
+                                     barr, nbarr, obst, tprof, ed, comp, forr,
                                      imdp, screen_k, hc_key, hc_lo, hc_hi, arcstat,
                                      arc_drops);
                 }
@@ -4097,7 +4082,7 @@ __device__ __noinline__ void line_source(
             arc_screen_bands(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
                              rlat, rlon, ralt, seg[0], seg[1], seg[2], seg[3], sp[2],
                              cplat, cplon, terr, ground,
-                             barr, nbarr, obst, tprof, ed, comp, bld, forr, imdp, screen,
+                             barr, nbarr, obst, tprof, ed, comp, forr, imdp, screen,
                              hc_key, hc_lo, hc_hi, arcstat, arc_drops);
         for (int i = 0; i < NB; i++) {
             float a_gr = (float)ground[i];
@@ -4200,7 +4185,7 @@ extern "C" __global__ void line(
     double kept = 0.0, resid = 0.0;
     int npair = 0;
     double tprof[MAXT], ed[MAXT], comp[MAXT];
-    unsigned char bld[MAXT], forr[MAXT], imdp[MAXT];
+    unsigned char forr[MAXT], imdp[MAXT];
     // Optional `out` regions, entered only on the host's declared buffer size —
     // see the `out` LAYOUT block near the top of this file.
     int out_slots = (int)meta[13];
@@ -4251,7 +4236,7 @@ extern "C" __global__ void line(
             line_source(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
                         rlat, rlon, ralt, refl, true, &seg[s * SOURCE_SEGMENT_STRIDE], &sp[s * 12], &semis[s * 24],
                         barr, nbarr, obst,
-                        tprof, ed, comp, bld, forr, imdp, e0, e1, e2, kept, resid, npair, arcstat,
+                        tprof, ed, comp, forr, imdp, e0, e1, e2, kept, resid, npair, arcstat,
                         hc_key, hc_lo, hc_hi, &arc_drops);
         margin = bs_margin(npair);
     }
@@ -4269,7 +4254,7 @@ extern "C" __global__ void line(
             rlat, rlon, ralt, refl, false,
             &seg[s * SOURCE_SEGMENT_STRIDE], &sp[s * 12], &semis[s * 24],
             barr, nbarr, obst, h0_d_floor_m,
-            tprof, ed, comp, bld, forr, imdp,
+            tprof, ed, comp, forr, imdp,
             e0, e1, e2, kept, npair, &h0_faults
 #if PROF_H0_PAIR_DIAGNOSTIC
             , (double *)0
@@ -4279,7 +4264,7 @@ extern "C" __global__ void line(
         line_source(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
                     rlat, rlon, ralt, refl, false, &seg[s * SOURCE_SEGMENT_STRIDE], &sp[s * 12], &semis[s * 24],
                     barr, nbarr, obst,
-                    tprof, ed, comp, bld, forr, imdp, e0, e1, e2, kept, resid, npair, arcstat,
+                    tprof, ed, comp, forr, imdp, e0, e1, e2, kept, resid, npair, arcstat,
                     hc_key, hc_lo, hc_hi, &arc_drops);
 #endif
     }
@@ -4488,7 +4473,7 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_multifidelit
     bool done = false;
     const bool stop_on = MULTIFIDELITY_COMPACT_BYTE_STOP && meta[9] != 0.0;
     double tprof[MAXT], ed[MAXT], comp[MAXT];
-    unsigned char bld[MAXT], forr[MAXT], imdp[MAXT];
+    unsigned char forr[MAXT], imdp[MAXT];
     float e0 = 0.0f, e1 = 0.0f, e2 = 0.0f;
     float* arcstat = (float*)0;
     unsigned int arc_drops = 0;
@@ -4539,7 +4524,7 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_multifidelit
                         rlat, rlon, ralt, refl, ub_only,
                         &seg[(base + j) * SOURCE_SEGMENT_STRIDE],
                         &sp[(base + j) * 12], &semis[(base + j) * 24],
-                        barr, (int)meta[11], obst, tprof, ed, comp, bld, forr, imdp,
+                        barr, (int)meta[11], obst, tprof, ed, comp, forr, imdp,
                         e0, e1, e2, kept, resid, npair, arcstat,
                         hc_key, hc_lo, hc_hi, &arc_drops);
                 }
@@ -4705,7 +4690,7 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_multifidelit
     double margin = 0.0;
     bool done = false;
     double tprof[MAXT], ed[MAXT], comp[MAXT];
-    unsigned char bld[MAXT], forr[MAXT], imdp[MAXT];
+    unsigned char forr[MAXT], imdp[MAXT];
     float e0 = 0.0f, e1 = 0.0f, e2 = 0.0f;
     unsigned int arc_drops = 0;
     unsigned int hc_key[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
@@ -4755,7 +4740,7 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_multifidelit
                         rlat, rlon, ralt, refl, ub_only,
                         &seg[(base + j) * SOURCE_SEGMENT_STRIDE],
                         &sp[(base + j) * 12], &semis[(base + j) * 24],
-                        barr, (int)meta[11], obst, tprof, ed, comp, bld, forr, imdp,
+                        barr, (int)meta[11], obst, tprof, ed, comp, forr, imdp,
                         e0, e1, e2, kept, resid, npair, (float*)0,
                         hc_key, hc_lo, hc_hi, &arc_drops);
                 }
@@ -4835,7 +4820,7 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
     double margin = 0.0;
     bool done = false;
     double tprof[MAXT], ed[MAXT], comp[MAXT];
-    unsigned char bld[MAXT], forr[MAXT], imdp[MAXT];
+    unsigned char forr[MAXT], imdp[MAXT];
     // Optional `out` regions — see the `out` LAYOUT block near the top.
     int out_slots = (int)meta[13];
     float* arcstat = (PROF_COUNTERS && out_slots >= OUT_SLOTS_PROF)
@@ -4917,7 +4902,7 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
                             &seg[(base + j) * SOURCE_SEGMENT_STRIDE],
                             &sp[(base + j) * 12], &semis[(base + j) * 24],
                             barr, nbarr, obst, h0_d_floor_m,
-                            tprof, ed, comp, bld, forr, imdp,
+                            tprof, ed, comp, forr, imdp,
                             e0, e1, e2, kept, npair, &h0_faults
 #if PROF_H0_PAIR_DIAGNOSTIC
                             , (double *)0
@@ -4929,7 +4914,7 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
                             &seg[(base + j) * SOURCE_SEGMENT_STRIDE],
                             &sp[(base + j) * 12], &semis[(base + j) * 24],
                             barr, nbarr, obst,
-                            tprof, ed, comp, bld, forr, imdp, e0, e1, e2, kept, resid, npair,
+                            tprof, ed, comp, forr, imdp, e0, e1, e2, kept, resid, npair,
                             arcstat, hc_key, hc_lo, hc_hi, &arc_drops);
 #endif
             }

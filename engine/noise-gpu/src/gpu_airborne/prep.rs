@@ -182,7 +182,7 @@ pub(crate) fn build_dem_blocks(
             let interiors = block
                 .tile_refs()
                 .into_iter()
-                .map(|tile| obstacles.interior_estimate(tile))
+                .map(|tile| Some(obstacles.interior_estimate(tile)))
                 .collect();
             block.interiors = interiors;
             block

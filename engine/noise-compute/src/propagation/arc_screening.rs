@@ -1749,7 +1749,9 @@ fn interval_terrain(
         dist_m,
         profile,
     );
-    Some(terrain_attenuation(profile, src_alt, q.receiver_alt_m))
+    // Terrain bands only: this helper feeds the quadrature's terrain average,
+    // which never runs the obstacle race.
+    Some(terrain_attenuation(profile, src_alt, q.receiver_alt_m).0)
 }
 
 /// Terrain AND screening bands on the ray from the receiver to the source point
@@ -1784,7 +1786,7 @@ fn interval_screening(
         dist_m,
         profile,
     );
-    let terrain = terrain_attenuation(profile, src_alt, q.receiver_alt_m);
+    let (terrain, terrain_delta_m) = terrain_attenuation(profile, src_alt, q.receiver_alt_m);
     q.obstacles.crossings_pruned(
         src_lat,
         src_lon,
@@ -1796,14 +1798,12 @@ fn interval_screening(
     let screening = screening_attenuation(
         profile,
         q.barriers,
-        ObstacleInput {
-            candidates,
-            replace_sample_buildings: true,
-        },
+        ObstacleInput { candidates },
         src_alt,
         q.receiver_alt_m,
         q.exclusion_radius_m,
         &terrain,
+        terrain_delta_m,
     );
     Some((terrain, screening))
 }
@@ -1832,9 +1832,6 @@ mod tests {
     struct FlatGround;
     impl RasterSampler for FlatGround {
         fn elevation(&self, _: f64, _: f64) -> f64 {
-            0.0
-        }
-        fn building_height(&self, _: f64, _: f64) -> f64 {
             0.0
         }
         fn ground_g(&self, _: f64, _: f64) -> f64 {
@@ -2438,9 +2435,6 @@ mod tests {
         fn elevation(&self, lat: f64, _: f64) -> f64 {
             let y_m = (lat - OLAT) * M_PER_DEG_LAT;
             ((y_m.abs() - 100.0) * 0.3).clamp(0.0, 30.0)
-        }
-        fn building_height(&self, _: f64, _: f64) -> f64 {
-            0.0
         }
         fn ground_g(&self, _: f64, _: f64) -> f64 {
             0.0

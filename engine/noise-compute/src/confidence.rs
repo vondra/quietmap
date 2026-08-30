@@ -35,10 +35,14 @@ impl Confidence {
         has_railway_census: bool,
         has_aircraft_data: bool,
         has_terrain: bool,
-        has_building_heights: bool,
     ) -> Self {
         let mut c = Confidence::new();
-        let mut score = 0.3; // base: OSM geometry always available
+        // 0.4 = 0.3 OSM geometry + 0.1 building heights. The building term used
+        // to be conditional on a raster tile existing here; buildings are vector
+        // polygons now and a region without them fails to load, so there is no
+        // "we have no building data" state left to score. An EMPTY set (desert,
+        // ocean) is an answer, not a gap, and must not cost the visitor score.
+        let mut score = 0.4;
 
         if has_traffic_census {
             score += 0.2;
@@ -62,12 +66,6 @@ impl Confidence {
             score += 0.1;
         } else {
             c.add_note("Terrain: flat (no DEM available)");
-        }
-
-        if has_building_heights {
-            score += 0.1;
-        } else {
-            c.add_note("Building screening: simplified (no height raster)");
         }
 
         // Always note settlement/industrial are estimates

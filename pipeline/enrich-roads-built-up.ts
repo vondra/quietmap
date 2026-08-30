@@ -1,31 +1,28 @@
-//! Road `built_up` flag from the building raster (task #15, 2026-07-03).
+//! Road `built_up` flag from the Overture building footprints (task #15).
 //!
 //! Writes a u8 `built_up` column into every roads.arrow: 1 = rural, 2 = urban,
-//! 0 = unknown ONLY when the covering building-raster tile is missing. The
-//! engine (`noise-compute::defaults::resolve_speed_default`) uses it to pick the
+//! 0 = unknown ONLY when a 1° tile the sampling window touches was never
+//! ingested into the obstacle store. The engine
+//! (`noise-compute::defaults::resolve_speed_default`) uses it to pick the
 //! country's legal urban/rural implicit speed for UNTAGGED roads of classes
 //! 2/3/4/9; 0 falls back to the legacy world speed table. The column is written
 //! for every row regardless of class — the engine decides what consumes it.
 //!
-//! Decision rule (calibrated, see lib/building-raster.ts constants): a segment
-//! is urban iff ≥ BUILT_UP_MIN_BUILT_PIXELS building pixels (30 m, height > 0)
-//! lie in the (2·BUILT_UP_WINDOW_RADIUS_PX+1)² window around its MIDPOINT.
+//! Decision rule (see lib/building-footprints.ts): a segment is urban iff the
+//! building footprints centred within ±8.5/3600° of its MIDPOINT carry at least
+//! BUILT_UP_MIN_BUILT_PIXELS pixels' worth of area on the retired 30 m raster
+//! grid.
 //!
-//! Calibration matrix (agreement % vs tagged maxspeed ≤50 ⇒ urban, classes
-//! 2/3/4/9; grid = window radius px × min built pixels; 2026-07-03):
-//!
-//!   841942dffffffff (GB, n=21755)      841e309ffffffff (CZ, n=8402)
-//!         th=1  th=2  th=3  th=5  th=8       th=1  th=2  th=3  th=5  th=8
-//!   r=2   81.1  79.7  74.5  60.9  48.5       62.9  57.9  52.8  43.1  35.6
-//!   r=3   80.1  82.8  83.1  78.5  66.4       65.0  62.3  59.7  54.1  44.9
-//!   r=5   75.6  79.9  82.5  84.7  84.2       64.2  64.5  64.2  62.5  58.4
-//!   r=8   69.8  74.0  77.2  81.1  84.9       61.0  62.5  63.3  64.1  63.8
-//!
-//!   OVERALL pooled (n=30157): argmax r=8/th=8 = 79.0 %. The CZ column is
-//!   dragged only by class 9: Brdy forest roads bulk-tagged maxspeed=50 (e.g.
-//!   ways 100707616 "Dobrotivská", 100709173 "Klášterka") — tagged roads never
-//!   consult built_up, and excluding class 9 the same argmax r=8/th=8 wins at
-//!   85.0 % pooled (GB 84.2 %, CZ 87.4 %), so the winner is robust.
+//! WHY it no longer reads the building raster: the 166 GB raster was only ever
+//! an urban-density proxy for this one flag, and it is being deleted. The
+//! vector obstacle store the engine already screens against carries the same
+//! Overture footprints, so the probe reads those instead. Measured on 27 951
+//! road segments across CZ/DE/FR/GB/US/BR (campaign 2026-08-built-up-vector):
+//! the two probes give the same answer for 97.30 % of segments, no segment
+//! changes to or from UNKNOWN (the ingest manifest lists exactly the 13 694
+//! degree tiles the raster covered), and of the 5 483 segments that actually
+//! consult the flag — class 2/3/4/9 with no OSM maxspeed and no taper — 2.48 %
+//! resolve a different default speed.
 //!
 //! Idempotent + safe: unchanged hexes are left byte-identical; changed hexes go
 //! through `withArrowWrite` (flock + tmp + rename, never truncate in place).
@@ -44,7 +41,12 @@ import { resolve } from 'node:path'
 import { makeVector, makeTable, type Table } from 'apache-arrow'
 import { withArrowWrite } from './lib/provenance.js'
 import { iterateCountryHexes } from './lib/roads-arrow.js'
-import { BuildingRasterSampler, BUILDING_RASTER_DIR, BUILT_UP_UNKNOWN } from './lib/building-raster.js'
+import {
+  BuildingFootprintSampler,
+  OBSTACLE_STORE_DIR,
+  OBSTACLE_INGEST_MANIFEST,
+  BUILT_UP_UNKNOWN,
+} from './lib/building-footprints.js'
 import { DATA_YEAR as YEAR } from './lib/data-year.js'
 
 const H3R4_DIR = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
@@ -56,11 +58,11 @@ if (BBOX && (BBOX.length !== 4 || BBOX.some((x) => !Number.isFinite(x)))) {
   process.exit(1)
 }
 
-const sampler = new BuildingRasterSampler()
+const sampler = new BuildingFootprintSampler()
 
 interface HexResult {
   rows: number
-  unknown: number // built_up=0 (covering raster tile missing)
+  unknown: number // built_up=0 (a 1° tile the window touches was never ingested)
   rural: number
   urban: number
   changed: boolean
@@ -119,11 +121,16 @@ async function main() {
     console.error(`ERROR: H3R4 directory not found: ${H3R4_DIR}`)
     process.exit(1)
   }
-  // Fail loud if the raster set itself is absent — otherwise every segment
-  // world-wide would silently get built_up=0 and the engine would never see
-  // an urban/rural signal.
-  if (!existsSync(BUILDING_RASTER_DIR) || readdirSync(BUILDING_RASTER_DIR).length === 0) {
-    console.error(`ERROR: building raster dir missing or empty: ${BUILDING_RASTER_DIR}`)
+  // Fail loud if the obstacle store or its ingest manifest is absent —
+  // otherwise every segment world-wide would silently get built_up=0 and the
+  // engine would never see an urban/rural signal. The manifest is the one that
+  // decides UNKNOWN, so its absence is just as fatal as an empty store.
+  if (!existsSync(OBSTACLE_STORE_DIR) || readdirSync(OBSTACLE_STORE_DIR).length === 0) {
+    console.error(`ERROR: obstacle store missing or empty: ${OBSTACLE_STORE_DIR}`)
+    process.exit(1)
+  }
+  if (!existsSync(OBSTACLE_INGEST_MANIFEST)) {
+    console.error(`ERROR: obstacle ingest manifest missing: ${OBSTACLE_INGEST_MANIFEST}`)
     process.exit(1)
   }
 
@@ -170,8 +177,8 @@ async function main() {
 
   console.log(`\n=== Results ===`)
   console.log(`  ${hexes} hexes scanned, ${changedHexes} rewritten`)
-  console.log(`  ${totals.rows} segments: ${totals.urban} urban (2), ${totals.rural} rural (1), ${totals.unknown} unknown (0, raster tile missing)`)
-  if (missingTileHexes > 0) console.log(`  WARNING: ${missingTileHexes} hex(es) had segments over missing raster tiles`)
+  console.log(`  ${totals.rows} segments: ${totals.urban} urban (2), ${totals.rural} rural (1), ${totals.unknown} unknown (0, 1° tile never ingested)`)
+  if (missingTileHexes > 0) console.log(`  WARNING: ${missingTileHexes} hex(es) had segments over never-ingested tiles`)
 }
 
 main().catch((err) => {

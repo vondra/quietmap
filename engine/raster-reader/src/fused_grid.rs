@@ -28,7 +28,7 @@ fn next_grid_id() -> u64 {
 /// Implements RasterSampler so all existing path_effects code works unchanged.
 /// Zero algorithmic change = zero dB error vs mmap-based RealRasters.
 ///
-/// `Clone` exists for [`FusedGrid::burn_building_max`] experiments: burning
+/// `Clone` exists for grid experiments: mutating
 /// into a COPY leaves the original — and the receiver reflection pre-baked
 /// from it — untouched.
 pub struct FusedGrid {
@@ -42,7 +42,7 @@ pub struct FusedGrid {
     /// Max-pooled IMD over `data`, built once at grid build — the scatter
     /// byte-stop's ground bound (M3a) queries it per ray chunk instead of
     /// marching. Never mutated after build (the quad cache's `grid_id`
-    /// invalidation covers the one mutator, `burn_building_max`, which does
+    /// invalidation covers any mutator, which does
     /// not touch IMD).
     imd_pyramid: ImdMaxPyramid,
 }
@@ -66,7 +66,6 @@ impl Clone for FusedGrid {
 #[repr(C)]
 pub struct FusedPixel {
     pub elevation: f32, // DEM (meters, full precision bilinear)
-    pub building: u8,   // building height (meters)
     pub forest: u8,     // forest cover (0 or 100)
     pub imd: u8,        // imperviousness 0-100
     pub _pad: u8,       // total: 4+1+1+1+1 = 8 bytes per pixel
@@ -238,7 +237,6 @@ impl FusedGrid {
                 let elev = rasters.dem.sample(lat, lon);
                 data[idx] = FusedPixel {
                     elevation: elev as f32,
-                    building: rasters.building.sample(lat, lon) as u8,
                     forest: rasters.forest.sample(lat, lon) as u8,
                     imd: rasters.imd.sample(lat, lon) as u8,
                     _pad: 0,
@@ -257,123 +255,6 @@ impl FusedGrid {
             rows,
             imd_pyramid,
         }
-    }
-
-    /// Rasterise one noise-barrier segment into the BUILDING channel: every
-    /// grid cell the segment crosses gets `building = max(building, height)`.
-    ///
-    /// Test-only rejected barrier representation. CPU and GPU production paths
-    /// both consume exact vector barriers; the quantified comparison —
-    /// tile-painter `tests/barrier_screening.rs::w2_vector_vs_burn_
-    /// quantified_decision_record` — measured the burn UNDER-screening by
-    /// mean +3.7 / max +13.8 dB at wall-adjacent shadow pixels: the bilateral
-    /// ray cadence (≥ ~30 m sample spacing) steps over a one-cell-thin burned
-    /// wall on most paths, while the exact vector path
-    /// (`path_effects::screening_attenuation`) evaluates each crossing at its
-    /// own chainage. Thin-line features cannot be
-    /// faithfully represented in a raster sampled at ≥ cell-size cadence, so
-    /// this function remains only as decision-record apparatus. Tests must burn
-    /// a clone (receiver reflection is pre-baked from the unburned halo by
-    /// `FusedTileZ13::build_with_halo` — barriers must screen, never reflect).
-    ///
-    /// Supercover traversal (Amanatides & Woo, 4-connected): a diagonal wall
-    /// has no one-past-the-corner gaps a nearest-neighbour ray sample could
-    /// slip through, which plain 8-connected Bresenham would leave. Cells are
-    /// matched on the nearest-neighbour convention (`pixel()` rounds, so cell
-    /// (r, c) spans [r−0.5, r+0.5)). Out-of-grid cells are skipped, never
-    /// clamped — clamping would smear far barriers onto the halo edge.
-    pub fn burn_building_max(
-        &mut self,
-        start_lat: f64,
-        start_lon: f64,
-        end_lat: f64,
-        end_lon: f64,
-        height_m: f32,
-    ) {
-        let h = height_m.round().clamp(0.0, 255.0) as u8;
-        if h == 0
-            || !(start_lat.is_finite()
-                && start_lon.is_finite()
-                && end_lat.is_finite()
-                && end_lon.is_finite())
-        {
-            return;
-        }
-        // Continuous coords in floor-grid space: +0.5 shifts the rounding
-        // convention so `floor` yields the same cell `pixel()` rounds to.
-        let u0 = (start_lat - self.lat_min) * self.inv_cell_deg + 0.5;
-        let v0 = (start_lon - self.lon_min) * self.inv_cell_deg + 0.5;
-        let u1 = (end_lat - self.lat_min) * self.inv_cell_deg + 0.5;
-        let v1 = (end_lon - self.lon_min) * self.inv_cell_deg + 0.5;
-        let mut r = u0.floor() as i64;
-        let mut c = v0.floor() as i64;
-        let r_end = u1.floor() as i64;
-        let c_end = v1.floor() as i64;
-        // Whole segment on one side of the grid slab in either axis ⇒ no cell
-        // crossed; O(1) reject for the region barriers far from this halo.
-        let (rows, cols) = (self.rows as i64, self.cols as i64);
-        if (r < 0 && r_end < 0)
-            || (r >= rows && r_end >= rows)
-            || (c < 0 && c_end < 0)
-            || (c >= cols && c_end >= cols)
-        {
-            return;
-        }
-        let step_r: i64 = if u1 >= u0 { 1 } else { -1 };
-        let step_c: i64 = if v1 >= v0 { 1 } else { -1 };
-        // Parametric distance (in units of |Δ|⁻¹) to the next r/c cell
-        // boundary, then constant per-cell increments — Amanatides & Woo.
-        let inv_du = (u1 - u0).abs().recip(); // ∞ when the segment is axis-parallel
-        let inv_dv = (v1 - v0).abs().recip();
-        let mut t_max_r = if step_r > 0 {
-            (r + 1) as f64 - u0
-        } else {
-            u0 - r as f64
-        } * inv_du;
-        let mut t_max_c = if step_c > 0 {
-            (c + 1) as f64 - v0
-        } else {
-            v0 - c as f64
-        } * inv_dv;
-        // Supercover visits exactly |Δr| + |Δc| + 1 cells; the +4 pads float
-        // edge cases so a boundary-grazing segment can't loop unbounded.
-        let mut guard = (r_end - r).abs() + (c_end - c).abs() + 4;
-        let mut modified = false;
-        loop {
-            if (0..rows).contains(&r) && (0..cols).contains(&c) {
-                let px = &mut self.data[r as usize * self.cols + c as usize];
-                px.building = px.building.max(h);
-                modified = true;
-            }
-            if (r == r_end && c == c_end) || guard <= 0 {
-                if modified {
-                    self.grid_id = next_grid_id();
-                }
-                return;
-            }
-            guard -= 1;
-            if t_max_r < t_max_c {
-                t_max_r += inv_du;
-                r += step_r;
-            } else {
-                t_max_c += inv_dv;
-                c += step_c;
-            }
-        }
-    }
-
-    /// Nearest-neighbor pixel lookup — matches `TileStore::sample_nearest`
-    /// (rounds to the closest pixel). Taking `.floor() as usize` here biased
-    /// the sample up-left by half a cell and made FusedGrid-based pipeline
-    /// runs differ from RealRasters-based popup by 5-7 dB when a building /
-    /// tree / impervious-surface edge fell inside the quad.
-    #[inline]
-    fn pixel(&self, lat: f64, lon: f64) -> &FusedPixel {
-        let rf = (lat - self.lat_min) * self.inv_cell_deg;
-        let cf = (lon - self.lon_min) * self.inv_cell_deg;
-        let r = rf.round().clamp(0.0, (self.rows - 1) as f64) as usize;
-        let c = cf.round().clamp(0.0, (self.cols - 1) as f64) as usize;
-        &self.data[r * self.cols + c]
     }
 
     /// Bilinear IMD lookup — matches `RealRasters.imd` `Interp::Bilinear`
@@ -429,10 +310,6 @@ impl noise_compute::types::RasterSampler for FusedGrid {
         self.elevation_bilinear(lat, lon)
     }
 
-    fn building_height(&self, lat: f64, lon: f64) -> f64 {
-        self.pixel(lat, lon).building as f64
-    }
-
     fn ground_g(&self, lat: f64, lon: f64) -> f64 {
         // Bilinear IMD to match RealRasters config (Interp::Bilinear for
         // IMD). Without this, G jumps in 1/100 steps across pixel edges,
@@ -440,81 +317,6 @@ impl noise_compute::types::RasterSampler for FusedGrid {
         // on hard/soft ground transitions.
         let imd = self.imd_bilinear(lat, lon);
         (1.0 - imd / 100.0).clamp(0.0, 1.0)
-    }
-
-    fn building_enclosure(&self, lat: f64, lon: f64) -> f64 {
-        // Mirror RealRasters::building_enclosure: metric 3×3 probe at
-        // ENCLOSURE_RADIUS_M (75 m). Required for popup/pipeline parity.
-        let step_lat_deg = crate::ENCLOSURE_RADIUS_M / noise_compute::constants::M_PER_DEG_LAT;
-        let step_lon_deg =
-            crate::ENCLOSURE_RADIUS_M / noise_compute::constants::m_per_deg_lon(lat.to_radians());
-        let mut tall = 0;
-        let mut total = 0;
-        for dr in [-1, 0, 1] {
-            for dc in [-1, 0, 1] {
-                // Wrap probe longitude across the antimeridian — keeps parity
-                // with `RealRasters::building_enclosure`; without it, `pixel()`
-                // clamps the out-of-bbox column and the two implementations
-                // diverge near ±180°.
-                let probe_lon =
-                    ((lon + dc as f64 * step_lon_deg + 180.0).rem_euclid(360.0)) - 180.0;
-                let h = self
-                    .pixel(lat + dr as f64 * step_lat_deg, probe_lon)
-                    .building;
-                if h > 5 {
-                    tall += 1;
-                }
-                total += 1;
-            }
-        }
-        let density = tall as f64 / total as f64;
-        if density > 0.5 {
-            3.0
-        } else if density > 0.2 {
-            1.5
-        } else {
-            0.0
-        }
-    }
-
-    fn max_building_along_path(
-        &self,
-        src_lat: f64,
-        src_lon: f64,
-        rcv_lat: f64,
-        rcv_lon: f64,
-        dist_m: f64,
-        excl_start_m: f64,
-    ) -> (f64, f64) {
-        // Mirror RealRasters / trait-default cadence exactly (uniform
-        // cell / 3 × cell / 6 × cell by distance band). Previous version
-        // used `fill_t_values` bilaterally, which has a 240 m mid-gap
-        // that misses tall obstacles between endpoints — parity divergence.
-        let cell_m = noise_compute::propagation::path_profile::CELL_M;
-        let step = if dist_m <= 1000.0 {
-            cell_m
-        } else if dist_m <= 3000.0 {
-            cell_m * 3.0
-        } else {
-            cell_m * 6.0
-        };
-        let n = ((dist_m / step).ceil() as usize).clamp(2, 400);
-        let mut max_bh = 0.0_f64;
-        let mut max_t = 0.5_f64;
-        for k in 1..n {
-            let t = k as f64 / n as f64;
-            if excl_start_m > 0.0 && t * dist_m < excl_start_m {
-                continue;
-            }
-            let lat = src_lat + t * (rcv_lat - src_lat);
-            let lon = src_lon + t * (rcv_lon - src_lon);
-            let bh = self.pixel(lat, lon).building as f64;
-            if bh > max_bh {
-                max_bh = bh;
-                max_t = t;
-            }
-        }
-        (max_bh, max_t)
     }
 
     fn build_path_profile(
@@ -568,11 +370,9 @@ impl FusedGrid {
         // remaining fields, preserving t.
         let t_len = out.t.len();
         out.elevation_m.clear();
-        out.building_h_m.clear();
         out.forest_u8.clear();
         out.imd_u8.clear();
         out.elevation_f64_scratch.clear();
-        out.composite_h_scratch.clear();
         out.dist_m = dist_m;
         out.src_lat = src_lat;
         out.src_lon = src_lon;
@@ -580,7 +380,6 @@ impl FusedGrid {
         out.rcv_lon = rcv_lon;
 
         out.elevation_m.reserve(t_len);
-        out.building_h_m.reserve(t_len);
         out.forest_u8.reserve(t_len);
         out.imd_u8.reserve(t_len);
 
@@ -591,10 +390,8 @@ impl FusedGrid {
         let d_rf = (rcv_lat - src_lat) * self.inv_cell_deg;
         let d_cf = (rcv_lon - src_lon) * self.inv_cell_deg;
         for &t in &out.t {
-            let (elev, bh, fr_u8, imd_u8) =
-                self.lookup_fused_rc(src_rf + t * d_rf, src_cf + t * d_cf);
+            let (elev, fr_u8, imd_u8) = self.lookup_fused_rc(src_rf + t * d_rf, src_cf + t * d_cf);
             out.elevation_m.push(elev);
-            out.building_h_m.push(bh);
             out.forest_u8.push(fr_u8);
             out.imd_u8.push(imd_u8);
         }
@@ -687,10 +484,10 @@ impl FusedGrid {
     /// (top-left of the bilinear quad) for all three categoricals, biasing
     /// up-left by half a cell and producing up to 6+ dB divergence from
     /// `RealRasters` wherever a raster edge passed through the quad.
-    /// `(elev_bilinear, building_nearest, forest_nearest, imd_bilinear)` — the
-    /// four surface rasters in one lookup, used by the heatmap horizon builder.
+    /// `(elev_bilinear, forest_nearest, imd_bilinear)` — the three surface
+    /// rasters in one lookup, used by the heatmap horizon builder.
     #[inline]
-    pub fn lookup_fused(&self, lat: f64, lon: f64) -> (f32, u8, u8, u8) {
+    pub fn lookup_fused(&self, lat: f64, lon: f64) -> (f32, u8, u8) {
         let rf = (lat - self.lat_min) * self.inv_cell_deg;
         let cf = (lon - self.lon_min) * self.inv_cell_deg;
         self.lookup_fused_rc(rf, cf)
@@ -702,7 +499,7 @@ impl FusedGrid {
     /// re-deriving via per-sample lat/lon (measured 0.000 dB tile drift) and
     /// drops two multiplies + two subtracts per sample from the hot loop.
     #[inline]
-    pub fn lookup_fused_rc(&self, rf: f64, cf: f64) -> (f32, u8, u8, u8) {
+    pub fn lookup_fused_rc(&self, rf: f64, cf: f64) -> (f32, u8, u8) {
         // Clamp before floor: prevents negative wrap and OOB extrapolation.
         let rf = rf.clamp(0.0, (self.rows - 1) as f64);
         let cf = cf.clamp(0.0, (self.cols - 1) as f64);
@@ -729,7 +526,7 @@ impl FusedGrid {
         let v0i = px00.imd as f64 + fc * (px01.imd as f64 - px00.imd as f64);
         let v1i = px10.imd as f64 + fc * (px11.imd as f64 - px10.imd as f64);
         let imd = (v0i + fr * (v1i - v0i)).round().clamp(0.0, 255.0) as u8;
-        (elev, near.building, near.forest, imd)
+        (elev, near.forest, imd)
     }
 }
 
@@ -818,16 +615,6 @@ mod tests {
         assert!((0.0..=1.0).contains(&g2), "G rural: {g2}");
     }
 
-    #[test]
-    fn test_building_height() {
-        if !prepared_available() {
-            return;
-        }
-        let r = test_rasters();
-        let h = r.building_height(49.195, 16.608);
-        assert!((0.0..=255.0).contains(&h), "Building height: {h}m");
-    }
-
     // FusedGrid ↔ RealRasters parity tests. Regression guard for the
     // FusedGrid fix set (truncate, px00-bias, subgrid shift, IMD
     // interpolation mismatch, OOB extrapolation). Tests auto-skip when
@@ -891,41 +678,6 @@ mod tests {
     }
 
     #[test]
-    fn fused_building_height_parity() {
-        let Some((real, fg)) = test_fused() else {
-            return;
-        };
-        for (lat, lon) in &[(49.195, 16.608), (49.20, 16.60), (49.215, 16.625)] {
-            let h_real = real.building_height(*lat, *lon);
-            let h_fused = fg.building_height(*lat, *lon);
-            assert_eq!(
-                h_real as u8, h_fused as u8,
-                "building_height divergence at ({}, {}): real={h_real} fused={h_fused}",
-                lat, lon
-            );
-        }
-    }
-
-    #[test]
-    fn fused_building_enclosure_near_bbox_edge() {
-        // Insufficient bbox margin made `building_enclosure()` silently clamp the 3×3
-        // probe to edge pixels at hex boundaries. Current 8-cell margin
-        // covers the metric probe (ENCLOSURE_RADIUS_M = 75 m ≈ 2.4 lat
-        // cells, ~3.4 lon cells at 50°N) plus rounding slack.
-        let Some((real, fg)) = test_fused() else {
-            return;
-        };
-        let lat = 49.181; // 1 cell from bbox min (49.18)
-        let lon = 16.581;
-        let e_real = real.building_enclosure(lat, lon);
-        let e_fused = fg.building_enclosure(lat, lon);
-        assert!(
-            (e_real - e_fused).abs() < 0.5,
-            "building_enclosure near-edge divergence: real={e_real} fused={e_fused}"
-        );
-    }
-
-    #[test]
     fn fused_oob_clamp_no_extrapolation() {
         // Query outside the grid must clamp instead of extrapolating.
         // The pre-fix path would extrapolate
@@ -942,228 +694,11 @@ mod tests {
     }
 
     #[test]
-    fn building_enclosure_antimeridian_wraps() {
-        // Regression for the antimeridian wrap fix: a receiver at lon
-        // ≈ ±180° must not panic and the probe column at dc=+1/-1 must
-        // wrap to the opposite hemisphere, not clamp to the ±179° edge.
-        // We can't compare against a real-raster ground truth here
-        // (Pacific tiles are not in `data/prepared/`), so we assert the
-        // function is finite and matches between RealRasters / FusedGrid
-        // at both wrap polarities — the fix's purpose is parity.
-        if !prepared_available() {
-            return;
-        }
-        let r = test_rasters();
-        let lat = 0.0;
-        for &lon in &[179.9995_f64, -179.9995_f64] {
-            let v = r.building_enclosure(lat, lon);
-            assert!(v.is_finite(), "RealRasters NaN at lon={lon}");
-            assert!((0.0..=3.0).contains(&v), "out of range at lon={lon}: {v}");
-        }
-    }
-
-    // ── FusedGrid::burn_building_max (GPU barrier burn) ──────────────────
-    // A grid built from an EMPTY rasters dir is flat 0 with building 0
-    // everywhere (missing tiles are negative-cached defaults), so every
-    // non-zero building cell after a burn is the burn's own footprint.
-
-    fn empty_grid() -> FusedGrid {
-        let r = RealRasters::new(Path::new("/nonexistent-quietmap-test-rasters"));
-        FusedGrid::build(&r, 0.0, 0.05, 0.0, 0.05)
-    }
-
-    fn burned_cells(fg: &FusedGrid) -> Vec<(usize, usize, u8)> {
-        let (_, _, _, rows, cols) = fg.geom();
-        let mut out = Vec::new();
-        for r in 0..rows {
-            for c in 0..cols {
-                let b = fg.pixels()[r * cols + c].building;
-                if b > 0 {
-                    out.push((r, c, b));
-                }
-            }
-        }
-        out
-    }
-
-    #[test]
-    fn cached_quad_matches_the_uncached_quad_across_every_aliasing_base() {
-        // 197x197 = 38,809 cells over an 8,192-entry direct map: every slot is
-        // claimed by ~4.7 distinct bases, so a truncated tag or a wrong index
-        // mask returns a NEIGHBOUR ROW's quad here.
-        let mut g = empty_grid();
-        let (rows, cols) = (g.rows, g.cols);
-        assert!(rows * cols > 4 * PROFILE_QUAD_CACHE_ENTRIES);
-        let (lat_min, lon_min) = (g.lat_min, g.lon_min);
-        for r in 0..rows {
-            let lat = lat_min + r as f64 / 3600.0;
-            let h = (1 + r % 200) as f32;
-            g.burn_building_max(lat, lon_min, lat, lon_min + cols as f64 / 3600.0, h);
-        }
-        for r0 in 0..rows - 1 {
-            for c0 in 0..cols - 1 {
-                let base = r0 * cols + c0;
-                let want = [
-                    g.data[base],
-                    g.data[base + 1],
-                    g.data[base + cols],
-                    g.data[base + cols + 1],
-                ];
-                let got = g.pixel_quad(base);
-                for i in 0..4 {
-                    assert_eq!(
-                        (
-                            got[i].building,
-                            got[i].forest,
-                            got[i].imd,
-                            got[i].elevation.to_bits()
-                        ),
-                        (
-                            want[i].building,
-                            want[i].forest,
-                            want[i].imd,
-                            want[i].elevation.to_bits()
-                        ),
-                        "cached quad != uncached quad at base {base} corner {i}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn two_live_grids_never_leak_quads_into_each_other() {
-        // The production surface build runs `region_concurrency` regions at once
-        // while the inner receiver-block par_iter steals across the whole pool,
-        // so ONE worker thread alternates between distinct halo grids.
-        let mut a = empty_grid();
-        let mut b = empty_grid();
-        a.burn_building_max(0.01, 0.01, 0.01, 0.01, 7.0);
-        b.burn_building_max(0.01, 0.01, 0.01, 0.01, 3.0);
-        for _ in 0..4 {
-            assert_eq!(
-                a.lookup_fused_rc(44.0, 44.0).1,
-                7,
-                "grid A read grid B's quad"
-            );
-            assert_eq!(
-                b.lookup_fused_rc(44.0, 44.0).1,
-                3,
-                "grid B read grid A's quad"
-            );
-        }
-    }
-
-    #[test]
-    fn cached_quad_is_invalidated_after_a_grid_mutation() {
-        let mut grid = FusedGrid::empty();
-        assert_eq!(grid.lookup_fused_rc(0.0, 0.0).1, 0);
-        let before = grid.grid_id;
-        grid.burn_building_max(0.0, 0.0, 0.0, 0.0, 9.0);
-        assert_ne!(grid.grid_id, before, "a burn must invalidate quad caches");
-        assert_eq!(
-            grid.lookup_fused_rc(0.0, 0.0).1,
-            9,
-            "a stale cached quad must not survive the burn"
-        );
-    }
-
-    #[test]
-    fn pixel_quad_cache_keeps_full_tags_and_flushes_on_grid_revisit() {
-        let cols = 2usize;
-        let mut first = vec![FusedPixel::default(); PROFILE_QUAD_CACHE_ENTRIES + cols + 2];
-        first[0].building = 11;
-        first[PROFILE_QUAD_CACHE_ENTRIES].building = 22;
-        let mut cache = WorkerPixelQuadCache::new();
-
-        assert_eq!(cache.lookup_or_insert(1, 0, cols, &first)[0].building, 11);
-        assert_eq!(
-            cache.lookup_or_insert(1, PROFILE_QUAD_CACHE_ENTRIES, cols, &first)[0].building,
-            22,
-            "same direct-map slot must compare the complete base tag"
-        );
-
-        first[0].building = 33;
-        let mut second = vec![FusedPixel::default(); cols + 2];
-        second[0].building = 44;
-        assert_eq!(cache.lookup_or_insert(1, 0, cols, &first)[0].building, 33);
-        assert_eq!(cache.lookup_or_insert(2, 0, cols, &second)[0].building, 44);
-        assert_eq!(
-            cache.lookup_or_insert(1, 0, cols, &first)[0].building,
-            33,
-            "returning to an older live grid must flush the newer grid's quad"
-        );
-    }
-
-    #[test]
     fn pixel_quad_cache_entry_stays_within_the_l2_budget() {
         assert_eq!(std::mem::size_of::<CachedPixelQuad>(), 36);
         assert_eq!(
             PROFILE_QUAD_CACHE_ENTRIES * std::mem::size_of::<CachedPixelQuad>(),
             288 * 1024
         );
-    }
-
-    #[test]
-    fn burn_horizontal_segment_marks_one_cell_row() {
-        let mut fg = empty_grid();
-        fg.burn_building_max(0.01, 0.01, 0.01, 0.04, 3.0);
-        let cells = burned_cells(&fg);
-        // 0.03° span at 1/3600° cells = 108 crossings → 109 cells ±1 float edge.
-        assert!(
-            (108..=110).contains(&cells.len()),
-            "horizontal wall cell count {} not in 108..=110",
-            cells.len()
-        );
-        let row0 = cells[0].0;
-        assert!(cells.iter().all(|&(r, _, h)| r == row0 && h == 3));
-    }
-
-    #[test]
-    fn burn_diagonal_is_supercover_not_bresenham() {
-        let mut fg = empty_grid();
-        // 45° diagonal across 36×36 cells: supercover visits |Δr|+|Δc|+1 ≈ 73
-        // cells (4-connected, no corner gaps); 8-connected Bresenham would
-        // visit ~37 — the kernel's nearest-neighbour ray samples could slip
-        // diagonally through those gaps.
-        fg.burn_building_max(0.01, 0.01, 0.02, 0.02, 3.0);
-        let cells = burned_cells(&fg);
-        assert!(
-            cells.len() > 60,
-            "diagonal burn {} cells — looks 8-connected, supercover expected",
-            cells.len()
-        );
-        assert!(
-            cells.len() <= 76,
-            "diagonal burn {} cells > |Δr|+|Δc|+1 bound",
-            cells.len()
-        );
-    }
-
-    #[test]
-    fn burn_is_max_and_skips_out_of_grid() {
-        let mut fg = empty_grid();
-        fg.burn_building_max(0.02, 0.01, 0.02, 0.02, 5.0);
-        fg.burn_building_max(0.02, 0.01, 0.02, 0.02, 2.0);
-        let cells = burned_cells(&fg);
-        assert!(!cells.is_empty());
-        assert!(
-            cells.iter().all(|&(_, _, h)| h == 5),
-            "max(existing, h), never overwrite down"
-        );
-
-        // Entirely outside the grid → nothing painted, especially no edge smear.
-        let before = cells.len();
-        fg.burn_building_max(5.0, 5.0, 5.1, 5.1, 3.0);
-        fg.burn_building_max(-1.0, 0.02, -2.0, 0.02, 3.0);
-        assert_eq!(
-            burned_cells(&fg).len(),
-            before,
-            "out-of-grid burn must be a no-op"
-        );
-
-        // Degenerate point segment → exactly one new cell.
-        fg.burn_building_max(0.04, 0.04, 0.04, 0.04, 4.0);
-        assert_eq!(burned_cells(&fg).len(), before + 1);
     }
 }

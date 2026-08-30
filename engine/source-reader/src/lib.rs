@@ -265,7 +265,8 @@ pub fn query_obstacle_footprints(
         .get()
         .map(|p| p.as_path())
         .unwrap_or_else(|| std::path::Path::new("."));
-    let fps = obstacle_store::footprints_in_bbox(h3r4, data_dir, south, west, north, east);
+    let fps = obstacle_store::footprints_in_bbox(h3r4, data_dir, south, west, north, east)
+        .map_err(|e| Error::new(Status::GenericFailure, e))?;
     let rows: Vec<serde_json::Value> = fps
         .iter()
         .map(|f| {
@@ -306,15 +307,17 @@ pub fn query_building_at(lat: f64, lng: f64) -> napi::Result<String> {
         .get()
         .map(|p| p.as_path())
         .unwrap_or_else(|| std::path::Path::new("."));
-    let result = match obstacle_store::load_obstacle_set_quiet(h3r4, data_dir, lat, lng) {
-        None => serde_json::json!({ "status": "unavailable" }),
-        Some(set) => match obstacle_store::point_inside_footprint(&set, lat, lng) {
-            None => serde_json::Value::Null,
-            Some((class, height)) => serde_json::json!({
-                "height_m": height,
-                "building_type": building_type_from_envelope(class),
-            }),
-        },
+    // A missing obstacle store is an error, not an empty answer. It used to
+    // return {"status":"unavailable"} inside an HTTP 200, which reads to a
+    // visitor exactly like "there is no building here".
+    let set = obstacle_store::load_obstacle_set(h3r4, data_dir, lat, lng)
+        .map_err(|e| Error::new(Status::GenericFailure, e))?;
+    let result = match obstacle_store::point_inside_footprint(&set, lat, lng) {
+        None => serde_json::Value::Null,
+        Some((class, height)) => serde_json::json!({
+            "height_m": height,
+            "building_type": building_type_from_envelope(class),
+        }),
     };
     Ok(serde_json::to_string(&result).unwrap())
 }
@@ -480,22 +483,19 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     let n_roads = sources.roads.len();
     let n_railways = sources.railways.len();
 
-    // Vector obstacles (geodata-v2, QM_VECTOR_BUILDINGS=1): exact building
-    // crossings replace the raster building channel in screening. Built per
-    // query from the ring-1 obstacle shards; None keeps the raster path.
-    let obstacle_set = if noise_compute::propagation::obstacle_index::vector_buildings_enabled() {
-        DATA_DIR.get().and_then(|d| {
-            obstacle_store::load_obstacle_set(H3R4_DIR.get().map(|p| p.as_path()), d, lat, lng)
-        })
-    } else {
-        None
-    };
+    // Vector obstacles: the exact building crossings screening runs on, built
+    // per query from the ring-1 obstacle shards. There is no other building
+    // representation, so a store that will not load fails the query.
+    let data_dir = DATA_DIR
+        .get()
+        .ok_or_else(|| Error::new(Status::GenericFailure, "source_init was never called"))?;
+    let obstacle_set =
+        obstacle_store::load_obstacle_set(H3R4_DIR.get().map(|p| p.as_path()), data_dir, lat, lng)
+            .map_err(|e| Error::new(Status::GenericFailure, e))?;
     // Select the enclosed footprint winner once; it supplies the effective
     // envelope delta for the aggregate indoor estimate while traces stay at
     // façade values.
-    let inside_envelope = obstacle_set
-        .as_ref()
-        .and_then(|set| obstacle_store::point_inside_enclosed(set, lat, lng));
+    let inside_envelope = obstacle_store::point_inside_enclosed(&obstacle_set, lat, lng);
     // Search outward in one-metre cardinal steps using the same containment
     // rule. The ≤100 m shift stays inside the loaded R4 ring, so sources need
     // no reload.
@@ -503,7 +503,8 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         let step_lat = 1.0 / noise_compute::constants::M_PER_DEG_LAT;
         let step_lon = 1.0 / noise_compute::constants::m_per_deg_lon(lat.to_radians());
         let mut outside = None;
-        if let Some(set) = obstacle_set.as_ref() {
+        {
+            let set = &obstacle_set;
             for distance in 1..=100 {
                 for (dy, dx) in [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)] {
                     let candidate = (
@@ -528,8 +529,8 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     };
     // 1.4b: with a loaded store, the receiver reflection probe answers from
     // exact footprints too (the popup twin of the pipeline rx_refl pre-bake)
-    // — one wrapped sampler serves EVERY popup kernel, raster otherwise.
-    let vector_refl = obstacle_set.as_ref().map(|set| {
+    // — one wrapped sampler serves EVERY popup kernel.
+    let vector_refl = Some(&obstacle_set).map(|set| {
         noise_compute::propagation::obstacle_index::VectorReflectionSampler {
             inner: rasters,
             set,
@@ -562,7 +563,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         &sources.buildings,
         &sources.industrial,
         &sources.barriers,
-        obstacle_set.as_ref(),
+        &obstacle_set,
         rasters,
         &config,
         Some(&mut traces),
@@ -579,7 +580,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         airport_summary_pathbuf.as_deref(),
         rasters,
         &sources.barriers,
-        obstacle_set.as_ref(),
+        &obstacle_set,
         sources.n_days,
         top_k_per_kind,
     )
@@ -654,9 +655,6 @@ use noise_compute::types::RasterSampler;
 impl RasterSampler for StubRasters {
     fn elevation(&self, _lat: f64, _lon: f64) -> f64 {
         200.0
-    }
-    fn building_height(&self, _: f64, _: f64) -> f64 {
-        0.0
     }
     fn ground_g(&self, _: f64, _: f64) -> f64 {
         0.5

@@ -18,9 +18,3 @@ pub mod tile;
 pub use fused_grid::{FusedGrid, FusedPixel};
 pub use real_rasters::RealRasters;
 pub use tile::RawTile;
-
-/// Re-export of the canonical enclosure probe half-edge — the raster 3×3
-/// probe (here) and the vector probe (`noise_compute::propagation::
-/// obstacle_index::enclosure_db`) must cover the identical 150 × 150 m
-/// footprint for popup/pipeline parity.
-pub(crate) use noise_compute::constants::ENCLOSURE_RADIUS_M;

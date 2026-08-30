@@ -78,7 +78,7 @@ pub fn scatter_tile(
     tile: &FusedTileZ13,
     points: &[PointRow],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     accum: &mut TileAccumulator,
 ) -> PointScatterStats {
     scatter_tile_with_cfg(tile, points, barriers, obstacles, accum, coarse_mid_cfg())
@@ -91,7 +91,7 @@ pub fn scatter_tile_with_cfg(
     tile: &FusedTileZ13,
     points: &[PointRow],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     accum: &mut TileAccumulator,
     cfg: Option<CoarseMid>,
 ) -> PointScatterStats {
@@ -115,7 +115,7 @@ pub(crate) fn scatter_tile_industrial_direct(
     tile: &FusedTileZ13,
     points: &[PointRow],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     accum: &mut TileAccumulator,
 ) -> PointScatterStats {
     band_scatter_tile_with_cfg_and_options(
@@ -140,7 +140,7 @@ pub(crate) fn scatter_tile_industrial_exact_receivers(
     tile: &FusedTileZ13,
     points: &[PointRow],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     accum: &mut TileAccumulator,
     receivers: &[usize],
 ) -> PointScatterStats {

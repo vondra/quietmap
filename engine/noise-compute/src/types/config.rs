@@ -39,12 +39,20 @@ impl Default for ComputeConfig {
 /// under this contract; it held implicitly for every sampler before them.
 pub trait RasterSampler: Send + Sync {
     fn elevation(&self, lat: f64, lon: f64) -> f64;
-    fn building_height(&self, lat: f64, lon: f64) -> f64;
     fn ground_g(&self, lat: f64, lon: f64) -> f64;
-    fn building_enclosure(&self, lat: f64, lon: f64) -> f64; // reflection boost 0-3 dB
+    /// Receiver reflection boost, 0-3 dB.
+    ///
+    /// Reflection comes from building FOOTPRINTS, so only a sampler that has
+    /// them can answer: `VectorReflectionSampler` for the popup, the
+    /// vector-baked `rx_refl_db` for painted tiles. Everything else has no
+    /// footprints and therefore no reflection — 0 dB is the honest answer, not
+    /// a fallback.
+    fn building_enclosure(&self, _lat: f64, _lon: f64) -> f64 {
+        0.0
+    }
 
     /// Populate a `PathProfile` using the unified bilateral cadence. Fills
-    /// `elevation_m`, `building_h_m`, `forest_u8`, `imd_u8` at every t.
+    /// `elevation_m`, `forest_u8`, `imd_u8` at every t.
     ///
     /// Default implementation samples per-t via the other trait methods;
     /// `RealRasters` and `FusedGrid` override with a single fused loop so
@@ -63,43 +71,5 @@ pub trait RasterSampler: Send + Sync {
         crate::propagation::path_profile::build_default(
             self, src_lat, src_lon, rcv_lat, rcv_lon, dist_m, out,
         );
-    }
-
-    /// Max building height along path, sampled every ~30m (matching raster cell).
-    /// Returns (max_height, t_position). Pipeline overrides with tile-cached sampling.
-    fn max_building_along_path(
-        &self,
-        src_lat: f64,
-        src_lon: f64,
-        rcv_lat: f64,
-        rcv_lon: f64,
-        dist_m: f64,
-        excl_start_m: f64,
-    ) -> (f64, f64) {
-        let cell_m = crate::propagation::path_profile::CELL_M;
-        let step = if dist_m <= 1000.0 {
-            cell_m
-        } else if dist_m <= 3000.0 {
-            cell_m * 3.0
-        } else {
-            cell_m * 6.0
-        };
-        let n = ((dist_m / step).ceil() as usize).clamp(2, 400);
-        let mut max_bh = 0.0f64;
-        let mut max_t = 0.5;
-        for k in 1..n {
-            let t = k as f64 / n as f64;
-            if excl_start_m > 0.0 && t * dist_m < excl_start_m {
-                continue;
-            }
-            let lat = src_lat + t * (rcv_lat - src_lat);
-            let lon = src_lon + t * (rcv_lon - src_lon);
-            let bh = self.building_height(lat, lon);
-            if bh > max_bh {
-                max_bh = bh;
-                max_t = t;
-            }
-        }
-        (max_bh, max_t)
     }
 }

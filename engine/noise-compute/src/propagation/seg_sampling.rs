@@ -369,7 +369,7 @@ pub fn sampled_gob_bands_with_ground(
         rasters.build_path_profile(slat, slon, q.receiver_lat, q.receiver_lon, sdist, profile);
         cost.rays += 1;
         cost.raster_samples += profile.len() as u64;
-        let terr = terrain_attenuation(profile, salt, q.receiver_alt_m);
+        let (terr, terr_delta_m) = terrain_attenuation(profile, salt, q.receiver_alt_m);
         q.obstacles.crossings_pruned(
             slat,
             slon,
@@ -381,14 +381,12 @@ pub fn sampled_gob_bands_with_ground(
         let mut scr = screening_attenuation(
             profile,
             q.barriers,
-            ObstacleInput {
-                candidates,
-                replace_sample_buildings: true,
-            },
+            ObstacleInput { candidates },
             salt,
             q.receiver_alt_m,
             q.exclusion_radius_m,
             &terr,
+            terr_delta_m,
         );
         // Arc screening INSIDE the bucket, over the bucket's own sub-span. Off
         // whenever `q.bounds.min_span_rad` is beyond what a sub-span can reach.
@@ -473,9 +471,6 @@ mod tests {
     struct FlatGround;
     impl RasterSampler for FlatGround {
         fn elevation(&self, _: f64, _: f64) -> f64 {
-            0.0
-        }
-        fn building_height(&self, _: f64, _: f64) -> f64 {
             0.0
         }
         fn ground_g(&self, _: f64, _: f64) -> f64 {

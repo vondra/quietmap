@@ -867,18 +867,35 @@ identically labelled Legacy V1 section, never the V2 draft above.
 
 DEM, Overture building height, WorldCover forest cover and IMD imperviousness are all sampled along the source→receiver line by a single bilateral cadence — density highest near endpoints (Fresnel zone narrowest), coarsest in the middle. Implementation + cadence rationale: `propagation::path_profile::fill_t_values`. Terrain diffraction, building screening, vegetation depth, and ground-effect G all read from the resulting `PathProfile`. The surface **heatmap** additionally runs a coarser distance-dependent middle cadence (`fill_t_values_coarse_mid`) — a heatmap-only speed approximation; the popup always uses the exact cadence.
 
-#### Legacy V1 §3.5b — Combined terrain + building + barrier screening
+#### §3.5b — Combined terrain + building + barrier screening
 
-Diffraction is computed once over a composite top profile (`elevation + building_h`), avoiding the terrain+screening double-count that would otherwise occur when a building sits on a hill. The δ* OLS mean-ground fit stays on bare-earth elevation. Implementation + caller API split (`terrain_attenuation` vs `screening_attenuation`): `propagation::path_effects::screening_attenuation_with_meta`. Ground G and vegetation depth are path integrals weighted by interval length so non-uniform bilateral spacing doesn't bias endpoints.
+Diffraction is computed once, over the winner of ONE δ race between the
+bare-earth terrain edge and every exact obstacle crossing (buildings and noise
+barriers alike). That avoids the terrain+screening double-count that would
+otherwise occur when a building sits on a hill: `screening_attenuation` returns
+the INCREMENT over `terrain_attenuation`, so `A_terrain + A_screen` is
+`max(A_terrain, A_combined)` per band. The δ* OLS mean-ground fit stays on
+bare-earth elevation. Implementation + caller API split (`terrain_attenuation`
+vs `screening_attenuation`): `propagation::path_effects::screening_attenuation_with_meta`.
+Ground G and vegetation depth are path integrals weighted by interval length so
+non-uniform bilateral spacing doesn't bias endpoints.
+
+The terrain edge's δ is PASSED IN by the caller (`TerrainTrace::dominant_delta_m`),
+not recomputed. Until 2026-08-30 the screening pass built a "composite" top
+profile (`elevation + building_h` from the 30 m raster) and ran its own
+`single_edge_atten` over it. With buildings as exact crossings that composite IS
+bare earth, so the second pass was bit-identical work on every ray.
 
 
-**Vector obstacle candidates (geodata-v2, `QM_VECTOR_BUILDINGS` — ON by default
-since the Wave-1 cutover 2026-07-31, commit 9cf166b; only an explicit
-`QM_VECTOR_BUILDINGS=0` restores the raster channel — see the `ENABLED` gate in
-`propagation::obstacle_index`):** building screening stops reading the 30 m
-raster channel. Exact footprint crossings from the per-cell obstacle store
-(`ObstacleIndex`, ray×edge intersections) compete with the cadence composite
-edge on δ; the winning candidate is evaluated by `compute_single_edge_at`
+**Vector obstacle candidates:** buildings are polygons, and that is the ONLY
+building representation the engine has. The 30 m raster channel and the switch
+that chose it were deleted on 2026-08-30; a region whose vector obstacles cannot
+be loaded raises instead of painting, because there is nothing else to paint
+with. An EMPTY obstacle set is a legitimate answer (ocean, desert, a cell the
+Overture sweep proved contributed no footprints) — "empty" and "missing" are
+separated by the `.ingested-tiles` world manifest, never by a fallback.
+Exact footprint crossings from the per-cell obstacle store (`ObstacleIndex`,
+ray×edge intersections) compete with the bare-earth terrain edge on δ; the winning candidate is evaluated by `compute_single_edge_at`
 (explicit edge point; the §2.5.6(c) mean-ground fits include the bare-ground
 point D on BOTH sides, so a candidate at a sample's t reproduces the raster
 result bit-for-bit). Candidates never enter the cadence sample arrays —
@@ -903,8 +920,8 @@ and where — is a closed-form intersection, not a proximity question. Every
 intersected with the source→receiver ray by the same primitive the building
 edges use (`obstacle_index::segment_intersection_t`), and each hit becomes an
 ordinary dominant-edge candidate at its exact chainage, δ-ranked against the
-buildings and the cadence edge. Walls therefore never enter the composite top
-profile and never enter `ObstacleIndex` (they arrive per tile from
+buildings and the terrain edge. Walls never enter the sample profile and never
+enter `ObstacleIndex` (they arrive per tile from
 `barriers.arrow`), and the popup names the wall by its OSM way id.
 *Superseded:* until this fix a barrier was screened when its segment MIDPOINT
 projected onto the ray within a ±50 m perpendicular radius, then snapped to the
@@ -1451,9 +1468,9 @@ Applied ONCE per receiver, not per source-receiver path. Maximum is 3 dB
 (0 / 1.5 / 3.0 by probe density; the former `reflection.rs` clamp helper was
 dead code and is deleted).
 
-VECTOR MODE (geodata-v2 — ON by default since the Wave-1 cutover 2026-07-31,
-commit 9cf166b; opt out only via `QM_VECTOR_BUILDINGS=0`, same `ENABLED` gate
-as Legacy V1 §3.5b): the SAME nine probes, radius, height gate, and
+The nine probes read footprints, the only building representation there is
+(the raster alternative and its switch were deleted 2026-08-30): the SAME
+radius, height gate, and
 thresholds, but each probe is an exact point-in-footprint parity test
 against the obstacle store (`obstacle_index::enclosure_db`) instead of a
 30 m raster cell read. The pipeline pre-bakes it into `rx_refl_db` per
@@ -1468,8 +1485,8 @@ same vector enclosure). The GPU line lane mirrors the CPU
 pre-bakes vector `rx_refl` before upload) with two BOUNDED deviations
 documented at the kernel: ulp-level winner ties at f64-equal δ, and vertex
 double-hits evaluated twice instead of deduped (identical bands in fp32).
-e2-full run with `QM_VECTOR_BUILDINGS=1` is the parity gate (hard-fails on
-zero-sided cells, a missing store, or a tile where no candidate fires).
+The e2-full run is the parity gate (hard-fails on zero-sided cells, a missing
+store, or a tile where no candidate fires).
 
 Vector-mode raster residuals CLOSED by the bldgfix branch (2026-08-20):
 the surface batch no longer ALSO bakes the raster 3×3 probe into `rx_refl_db`
@@ -1482,16 +1499,15 @@ raster walk survives only on the raster-fallback path. The all-or-raster
 loader policy additionally treats a shard-less cell whose every overlapped
 1-degree tile is listed in the world ingest manifest (`.ingested-tiles`,
 `obstacle_ingest_coverage`) as INGESTED-EMPTY rather than missing — vector
-mode proceeds without it, because our building raster derives from the same
-Overture release and would contribute nothing there. Polar pentagons are
+mode proceeds without it: the sweep covered the cell and it contributed no
+footprints, so there is nothing an index for it could have added. Polar pentagons are
 refused coverage (their vertex bbox is not longitude-conservative); a
-building-raster restage from a NEWER Overture release must delete the
-manifest in the same change (operational invariant, documented in
-`obstacle_ingest_coverage`). Known remaining raster
-consumer in vector mode: `PathProfile::building_h_m` feeds the composite
-top profile that terrain diffraction (§3.5) rides — removing it changes
-model semantics (buildings as topography) and is scheduled separately from
-this branch.
+restage from a NEWER Overture release must delete the manifest in the same
+change (operational invariant, documented in `obstacle_ingest_coverage`).
+The last raster consumer — `PathProfile::building_h_m`, which fed buildings
+into the composite top profile that terrain diffraction rode, i.e. treated
+them as topography — is gone as of 2026-08-30. Buildings are obstacles now,
+never terrain.
 
 ### 3.9 Favourable meteorological conditions (CNOSSOS-EU §2.5.21)
 ✅ LIVE — `FAVOURABLE_MIXING = true` since 2026-07-28 (eb8a432).

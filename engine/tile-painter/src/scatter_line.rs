@@ -86,7 +86,7 @@ pub fn scatter_tile(
     tile: &FusedTileZ13,
     lines: &[LineRow],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     accum: &mut TileAccumulator,
 ) -> LineScatterStats {
     scatter_tile_with_cfg(tile, lines, barriers, obstacles, accum, coarse_mid_cfg())
@@ -100,7 +100,7 @@ pub fn scatter_tile_with_cfg(
     tile: &FusedTileZ13,
     lines: &[LineRow],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     accum: &mut TileAccumulator,
     cfg: Option<CoarseMid>,
 ) -> LineScatterStats {
@@ -398,12 +398,12 @@ mod tests {
 
         let py = lat_to_py(&tile.bbox, c_lat + d_lat(50.0));
         let px = lon_to_px(&tile.bbox, c_lon);
-        let run = |set: Option<&ObstacleSet>| {
+        let run = |set: &ObstacleSet| {
             let mut accum = TileAccumulator::new();
             scatter_tile(tile, std::slice::from_ref(&line), &[], set, &mut accum);
             pixel_db(&accum, py, px)
         };
-        (run(None), run(Some(&obstacles)))
+        (run(&ObstacleSet::empty()), run(&obstacles))
     }
 
     /// Stripe regression (fix-pack Fix 1), the TILE twin of noise-compute's

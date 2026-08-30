@@ -65,7 +65,7 @@ pub fn evaluate_h0_pair<I>(
     tile: &FusedTileZ13,
     line: &LineRow,
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     pixel_y: usize,
     pixel_x: usize,
     layer: LineLayer,
@@ -155,7 +155,7 @@ fn evaluate_node_powers<F>(
     tile: &FusedTileZ13,
     line: &LineRow,
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     pair: PairGeometry,
     nodes: &[H0Node],
     cadence: Option<CoarseMid>,
@@ -164,7 +164,7 @@ fn evaluate_node_powers<F>(
 where
     F: FnMut(usize, &H0Node) -> bool,
 {
-    let vector_mode = !barriers.is_empty() || obstacles.is_some_and(|set| !set.indexes.is_empty());
+    let vector_mode = !barriers.is_empty() || !obstacles.indexes.is_empty();
     let mut profile = PathProfile::new();
     let mut crossing_candidates: Vec<CrossingCandidate> = Vec::new();
     let mut period_band_power = [[0.0_f64; NUM_BANDS]; NUM_PERIODS];
@@ -197,7 +197,7 @@ where
             line.bridge,
         );
         let ground_db = ground_atten_bands(ground_path);
-        let terrain_db = path_effects::terrain_attenuation(
+        let (terrain_db, terrain_delta_m) = path_effects::terrain_attenuation(
             &mut profile,
             source_altitude_m,
             pair.receiver_altitude_m,
@@ -206,16 +206,14 @@ where
         let admitted = !vector_mode || node_is_admitted(node_index, node);
         crossing_candidates.clear();
         if admitted {
-            if let Some(set) = obstacles {
-                set.crossings_pruned(
-                    source_latitude,
-                    source_longitude,
-                    pair.receiver_latitude,
-                    pair.receiver_longitude,
-                    &CellPrune::for_profile(&profile, source_altitude_m, pair.receiver_altitude_m),
-                    &mut crossing_candidates,
-                );
-            }
+            obstacles.crossings_pruned(
+                source_latitude,
+                source_longitude,
+                pair.receiver_latitude,
+                pair.receiver_longitude,
+                &CellPrune::for_profile(&profile, source_altitude_m, pair.receiver_altitude_m),
+                &mut crossing_candidates,
+            );
         }
         let active_barriers = if admitted { barriers } else { &[] };
         let vector_path_present =
@@ -226,15 +224,15 @@ where
             if vector_mode {
                 ObstacleInput {
                     candidates: &crossing_candidates,
-                    replace_sample_buildings: true,
                 }
             } else {
-                ObstacleInput::CANDIDATES_OFF
+                ObstacleInput { candidates: &[] }
             },
             source_altitude_m,
             pair.receiver_altitude_m,
             0.0,
             &terrain_db,
+            terrain_delta_m,
         );
         let vegetation_db = path_effects::vegetation_attenuation_path(&profile);
         let attenuation_db = evaluate_node_attenuation_bands(
@@ -320,7 +318,7 @@ mod tests {
             &tile,
             &line,
             &[],
-            None,
+            &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
             pixel_y,
             pixel_x,
             LineLayer::Road,

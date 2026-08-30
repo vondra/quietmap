@@ -43,8 +43,6 @@ pub struct PathProfile {
     pub t: Vec<f64>,
     /// DEM ground elevation at each t (bilinear where supported).
     pub elevation_m: Vec<f32>,
-    /// Overture building height at each t (nearest cell). 0 = no building.
-    pub building_h_m: Vec<u8>,
     /// WorldCover forest flag at each t (nearest cell). 0 or 100.
     pub forest_u8: Vec<u8>,
     /// IMD imperviousness at each t (0..100).
@@ -61,10 +59,6 @@ pub struct PathProfile {
     /// `horizon::single_edge_atten` via path_effects). Grown on first use, reused
     /// across subsequent calls via `elevation_f64()`.
     pub elevation_f64_scratch: Vec<f64>,
-    /// Scratch buffer for the composite top profile (elevation + building_h +
-    /// barriers) used by `screening_attenuation_with_meta`. Amortized across
-    /// paths.
-    pub composite_h_scratch: Vec<f64>,
 }
 
 impl PathProfile {
@@ -76,11 +70,9 @@ impl PathProfile {
     pub fn clear(&mut self) {
         self.t.clear();
         self.elevation_m.clear();
-        self.building_h_m.clear();
         self.forest_u8.clear();
         self.imd_u8.clear();
         self.elevation_f64_scratch.clear();
-        self.composite_h_scratch.clear();
         self.dist_m = 0.0;
         self.step_m_med = 0.0;
         self.src_lat = 0.0;
@@ -378,7 +370,7 @@ pub fn path_dist_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 }
 
 /// Build a `PathProfile` using the default (per-point) sampler — calls
-/// `elevation`/`building_height`/`ground_g` at each t individually. Overridden
+/// `elevation`/`ground_g` at each t individually. Overridden
 /// by `RealRasters` and `FusedGrid` with tile-cache-friendly fused loops.
 ///
 /// Kept as a free function so `RasterSampler` trait's default impl can call
@@ -403,7 +395,6 @@ pub fn build_default<R: RasterSampler + ?Sized>(
 
     let n = out.t.len();
     out.elevation_m.reserve(n);
-    out.building_h_m.reserve(n);
     out.forest_u8.reserve(n);
     out.imd_u8.reserve(n);
 
@@ -411,8 +402,6 @@ pub fn build_default<R: RasterSampler + ?Sized>(
         let lat = src_lat + t * (rcv_lat - src_lat);
         let lon = src_lon + t * (rcv_lon - src_lon);
         out.elevation_m.push(rasters.elevation(lat, lon) as f32);
-        let bh = rasters.building_height(lat, lon).clamp(0.0, 255.0) as u8;
-        out.building_h_m.push(bh);
         // ground_g is in 0..=1 range (1 − imd/100). Invert for imd_u8 storage.
         let imd = ((1.0 - rasters.ground_g(lat, lon).clamp(0.0, 1.0)) * 100.0).round() as u8;
         out.imd_u8.push(imd);

@@ -46,7 +46,6 @@ pub struct ForestRun {
 pub struct PathProfileTrace {
     pub t: Vec<f64>,
     pub elevation_m: Vec<f32>,
-    pub building_h_m: Vec<u8>,
     pub forest_u8: Vec<u8>,
     pub imd_u8: Vec<u8>,
     pub dist_m: f64,
@@ -84,6 +83,24 @@ pub struct TerrainTrace {
     /// mean ground planes. Zero when there is no obstruction. Used as
     /// `δ ≤ λ/4 − δ*` per-band gate.
     pub delta_star_m: f64,
+}
+
+impl TerrainTrace {
+    /// δ of the bare-earth dominant edge, or `None` when the path is clear.
+    ///
+    /// [`screening_attenuation`](crate::propagation::path_effects::screening_attenuation)
+    /// races vector obstacle candidates against this δ. `edges` holds exactly the
+    /// dominant edge or nothing, so its emptiness IS the "no terrain edge" answer.
+    ///
+    /// `None` here means exactly what the deleted composite pass's `None` meant:
+    /// `compute_terrain_diffraction` runs `single_edge_atten` over the same
+    /// clamped scratch and propagates its `None` through `diff?`, and that
+    /// `None` is `max_delta_idx` finding no sample above the line of sight —
+    /// the same test, on the same numbers. A candidate that used to have to beat
+    /// a below-line edge still does; one that faced no edge still faces none.
+    pub fn dominant_delta_m(&self) -> Option<f64> {
+        (!self.edges.is_empty()).then_some(self.delta_m)
+    }
 }
 
 /// Per-segment building / barrier screening trace. Scalar summary lives on

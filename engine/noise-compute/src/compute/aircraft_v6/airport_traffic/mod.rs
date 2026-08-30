@@ -167,7 +167,7 @@ fn db_to_lin(db: f64) -> f64 {
 fn compute_microseg_path(
     rasters: &dyn RasterSampler,
     barriers: &[Barrier],
-    obstacles: Option<&crate::propagation::obstacle_index::ObstacleSet>,
+    obstacles: &crate::propagation::obstacle_index::ObstacleSet,
     cand_scratch: &mut Vec<crate::propagation::obstacle_index::CrossingCandidate>,
     src_lat: f64,
     src_lon: f64,
@@ -208,6 +208,7 @@ fn compute_microseg_path(
         rcv_alt,
         0.0, // no exclusion radius — airport ground source is point-like
         &terrain.attenuation_bands,
+        terrain.dominant_delta_m(),
     );
     let vegetation_atten = path_effects::vegetation_attenuation_path(&path_profile);
 
@@ -375,7 +376,7 @@ pub fn run(
     // Vector obstacles (geodata-v2): ground-ops screening takes the same
     // exact building crossings as every other popup surface kernel; `None`
     // keeps the raster path byte-identical.
-    obstacles: Option<&crate::propagation::obstacle_index::ObstacleSet>,
+    obstacles: &crate::propagation::obstacle_index::ObstacleSet,
     osm_ref_lookup: &HashMap<u64, String>,
     airport_summary: Option<&AirportSummaryLookup>,
     traces: Option<&mut crate::types::TraceCollector>,

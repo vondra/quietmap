@@ -1,6 +1,6 @@
 //! Vector obstacle loading for the popup (geodata-v2 1.4).
 //!
-//! When `QM_VECTOR_BUILDINGS=1`, each query assembles an
+//! Each query assembles an
 //! [`ObstacleSet`] from PER-CELL [`ObstacleIndex`]es covering the query
 //! cell's `grid_disk(1)` — the halo the ingest contract requires
 //! (centroid-assigned footprints; `scripts/obstacles/ingest-overture-obstacles.py`).
@@ -429,93 +429,69 @@ pub fn load_obstacle_set(
     data_dir: &Path,
     lat: f64,
     lon: f64,
-) -> Option<ObstacleSet> {
-    load_obstacle_set_with_logging(h3r4_dir, data_dir, lat, lon, true)
+) -> Result<ObstacleSet, String> {
+    load_obstacle_set_with_logging(h3r4_dir, data_dir, lat, lon)
 }
 
 /// Assemble an obstacle set without logging expected raster fallback paths.
 /// The building-height hover endpoint calls this variant because a moving
 /// pointer can otherwise print one fallback line per debounced request.
-pub fn load_obstacle_set_quiet(
-    h3r4_dir: Option<&Path>,
-    data_dir: &Path,
-    lat: f64,
-    lon: f64,
-) -> Option<ObstacleSet> {
-    load_obstacle_set_with_logging(h3r4_dir, data_dir, lat, lon, false)
-}
-
 fn load_obstacle_set_with_logging(
     h3r4_dir: Option<&Path>,
     data_dir: &Path,
     lat: f64,
     lon: f64,
-    log_fallback: bool,
-) -> Option<ObstacleSet> {
+) -> Result<ObstacleSet, String> {
     let allow_partial = std::env::var("QM_OBSTACLES_ALLOW_PARTIAL").is_ok_and(|v| v == "1");
-    let cell = LatLng::new(lat, lon).ok()?.to_cell(Resolution::Four);
+    let cell = LatLng::new(lat, lon)
+        .map_err(|e| format!("obstacle_store: {lat},{lon} is not a point on earth: {e}"))?
+        .to_cell(Resolution::Four);
     let manifest = ingest_manifest(h3r4_dir, data_dir);
     let mut indexes = Vec::new();
     for c in cell.grid_disk::<Vec<_>>(1) {
         let dir = match cell_dir(h3r4_dir, data_dir, c) {
-            Err(e) => {
-                // Discovery I/O fault ≠ "not ingested": abort loudly even
-                // under partial mode.
-                if log_fallback {
-                    eprintln!("obstacle_store: {e} — falling back to raster for this query");
-                }
-                return None;
-            }
+            Err(e) => return Err(format!("obstacle_store: {e}")),
             Ok(Some(dir)) => dir,
             Ok(None) => {
                 if manifest.is_some_and(|m| m.covers_cell(c)) {
-                    // INGESTED-EMPTY, proven by the world ingest manifest —
-                    // vector mode proceeds without this cell's index (the
-                    // tile-painter loader's twin rule; see
-                    // obstacle_ingest_coverage for why this drops nothing).
+                    // INGESTED-EMPTY, proven by the world ingest manifest: the
+                    // Overture sweep reached this cell and it contributed no
+                    // footprints. Empty is an answer; missing is not.
                     continue;
                 }
                 if c == cell {
-                    return None; // query cell itself not ingested — plain raster
+                    return Err(format!(
+                        "obstacle_store: cell {c} has no obstacle shard and the ingest \
+                         manifest does not prove it empty — buildings are vector-only, \
+                         so this query cannot be answered"
+                    ));
                 }
                 if allow_partial {
-                    continue; // dev A/B at the staging frontier — documented risk
-                }
-                if log_fallback {
+                    // Never silent — the same rule as the pipeline loader.
                     eprintln!(
-                        "obstacle_store: ring cell {c} not ingested — falling back to raster \
-                         (set QM_OBSTACLES_ALLOW_PARTIAL=1 only for dev A/B)"
+                        "obstacle_store: QM_OBSTACLES_ALLOW_PARTIAL: answering without \
+                         ring cell {c} — incomplete screening, dev A/B only"
                     );
+                    continue;
                 }
-                return None;
+                return Err(format!(
+                    "obstacle_store: ring cell {c} not ingested (set \
+                     QM_OBSTACLES_ALLOW_PARTIAL=1 only for dev A/B)"
+                ));
             }
         };
         let buildings_arrow = h3r4_dir.map(|h| h.join(c.to_string()).join("buildings.arrow"));
         match cell_index(c, &dir, buildings_arrow.as_deref(), data_dir) {
             Ok(idx) => indexes.push(idx),
-            Err(e) => {
-                if log_fallback {
-                    eprintln!("obstacle_store: {e} — falling back to raster for this query");
-                }
-                return None;
-            }
+            Err(e) => return Err(format!("obstacle_store: {e}")),
         }
     }
-    let set = ObstacleSet { indexes };
-    if set.edge_count() == 0 {
-        // Zero edges is vector-EMPTY only when no shard-backed index was
-        // loaded (every ring cell manifest-proven ingested-empty). A staged
-        // shard that builds zero edges is a data anomaly — raster fallback,
-        // exactly the pre-branch behavior shared by tile-painter.
-        if set.indexes.is_empty() {
-            if log_fallback {
-                eprintln!("obstacle_store: vector mode with 0 edges (all ingested-empty)");
-            }
-            return Some(set);
-        }
-        return None;
-    }
-    Some(set)
+    // Zero edges is a legitimate answer, whether it came from manifest-proven
+    // empty cells or from a staged shard that indexed no footprint. A shard
+    // that exists HAS been asked and HAS answered; treating its emptiness as a
+    // fault would take whole countries silent the moment an Overture release
+    // rejects their heights (raised in review, 2026-08-30).
+    Ok(ObstacleSet { indexes })
 }
 
 /// The world-ingest manifest next to the staging tree, when present (the
@@ -872,10 +848,15 @@ pub struct FootprintView {
 }
 
 /// Footprints intersecting the bbox (by centroid, padded one bucket) with
-/// as-used heights. Cells resolved exactly like a query: the res-4 cells of
-/// the bbox corners/centre plus their ring, deduped; missing cells simply
-/// contribute nothing (a debug overlay must render whatever exists, never
-/// fail closed like the physics loader).
+/// as-used heights. Cells resolved exactly like a query: the res-4 cells of the
+/// bbox corners/centre plus their ring, deduped.
+///
+/// This overlay draws what the engine screens with, so it follows the physics
+/// loader's rule rather than a softer one: a cell that is provably empty
+/// contributes nothing, and anything ELSE that stops us reading it is an error.
+/// Returning an empty list on a broken shard would paint a transparent tile,
+/// and on a noise map an absent building is indistinguishable from a quiet
+/// place (raised in review, 2026-08-30).
 pub fn footprints_in_bbox(
     h3r4_dir: Option<&Path>,
     data_dir: &Path,
@@ -883,7 +864,7 @@ pub fn footprints_in_bbox(
     west: f64,
     north: f64,
     east: f64,
-) -> Vec<FootprintView> {
+) -> Result<Vec<FootprintView>, String> {
     let mut cells: Vec<CellIndex> = Vec::new();
     for (la, lo) in [
         (south, west),
@@ -902,29 +883,35 @@ pub fn footprints_in_bbox(
     }
     let pad = 0.01;
     let mut out = Vec::new();
+    let manifest = ingest_manifest(h3r4_dir, data_dir);
     for cell in cells {
-        let Ok(Some(dir)) = cell_dir(h3r4_dir, data_dir, cell) else {
-            continue;
+        let dir = match cell_dir(h3r4_dir, data_dir, cell) {
+            Err(e) => return Err(format!("obstacle_store: {e}")),
+            Ok(Some(dir)) => dir,
+            Ok(None) => {
+                if manifest.is_some_and(|m| m.covers_cell(cell)) {
+                    continue; // proven ingested-empty — nothing to draw here
+                }
+                return Err(format!(
+                    "obstacle_store: cell {cell} has no obstacle shard and the ingest \
+                     manifest does not prove it empty"
+                ));
+            }
         };
         let buildings_arrow = h3r4_dir.map(|h| h.join(cell.to_string()).join("buildings.arrow"));
-        // A cell whose cap cannot be read contributes NOTHING, rather than
-        // footprints drawn at their uncapped height: this overlay exists to show
-        // what the engine screens with, so a wrong number is worse than a gap.
-        let Ok(low_profile) = load_low_profile(buildings_arrow.as_deref()) else {
-            continue;
-        };
-        let Ok(shards) = shard_paths(&dir) else {
-            continue;
-        };
+        // A cell whose cap cannot be read must not contribute footprints at
+        // their uncapped height: a wrong number here is worse than an error.
+        let low_profile = load_low_profile(buildings_arrow.as_deref())
+            .map_err(|e| format!("obstacle_store: low-profile cap for {cell}: {e}"))?;
+        let shards = shard_paths(&dir).map_err(|e| format!("obstacle_store: {cell}: {e}"))?;
         for path in shards {
-            let Ok(bytes) = std::fs::read(&path) else {
-                continue;
-            };
-            let Ok(reader) = FileReader::try_new(Cursor::new(bytes), None) else {
-                continue;
-            };
+            let bytes = std::fs::read(&path)
+                .map_err(|e| format!("obstacle_store: {}: {e}", path.display()))?;
+            let reader = FileReader::try_new(Cursor::new(bytes), None)
+                .map_err(|e| format!("obstacle_store: {}: {e}", path.display()))?;
             for batch in reader {
-                let Ok(batch) = batch else { continue };
+                let batch =
+                    batch.map_err(|e| format!("obstacle_store: {}: {e}", path.display()))?;
                 let (Some(wkb), Some(heights), Some(clats), Some(clons)) = (
                     batch
                         .column_by_name("polygon_wkb")
@@ -980,7 +967,7 @@ pub fn footprints_in_bbox(
             }
         }
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -1055,7 +1042,7 @@ mod tests {
             ("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir))),
         ]);
         let t0 = std::time::Instant::now();
-        let Some(set) = load_obstacle_set(None, data_dir, 50.08, 14.43) else {
+        let Ok(set) = load_obstacle_set(None, data_dir, 50.08, 14.43) else {
             return; // cell not ingested on this box — skip
         };
         let cold = t0.elapsed();
@@ -1513,7 +1500,7 @@ mod tests {
     /// query differently. The final strict pass is what would catch it if that
     /// ever stopped being true.
     #[test]
-    fn missing_ring_cell_falls_back_unless_partial_allowed() {
+    fn missing_ring_cell_fails_unless_partial_allowed() {
         let tmp = TempDir::new().expect("temp dir");
         let index_dir = TempDir::new().expect("temp index dir");
         let _env = EnvGuard::set(&[
@@ -1526,25 +1513,21 @@ mod tests {
         write_test_shard(&dir, "obstacles-TEST.arrow", 50.08, 14.43);
         let data_dir = tmp.path().join("prepared");
 
-        let strict = load_obstacle_set(None, &data_dir, 50.08, 14.43);
         assert!(
-            strict.is_none(),
-            "missing ring cells must fall back to raster"
+            load_obstacle_set(None, &data_dir, 50.08, 14.43).is_err(),
+            "missing ring cells must fail the query: buildings are vector-only"
         );
 
         std::env::set_var("QM_OBSTACLES_ALLOW_PARTIAL", "1");
-        let partial = load_obstacle_set(None, &data_dir, 50.08, 14.43);
-        assert!(
-            partial.is_some(),
-            "dev override must admit the partial disk"
-        );
-        assert_eq!(partial.unwrap().edge_count(), 4);
+        let partial = load_obstacle_set(None, &data_dir, 50.08, 14.43)
+            .expect("dev override must admit the partial disk");
+        assert_eq!(partial.edge_count(), 4);
 
         // The A/B run just cached this cell, in memory and on disk. The strict
         // query must still refuse the incomplete ring.
         std::env::remove_var("QM_OBSTACLES_ALLOW_PARTIAL");
         assert!(
-            load_obstacle_set(None, &data_dir, 50.08, 14.43).is_none(),
+            load_obstacle_set(None, &data_dir, 50.08, 14.43).is_err(),
             "a partial-mode run must not leave anything that answers a strict query"
         );
     }

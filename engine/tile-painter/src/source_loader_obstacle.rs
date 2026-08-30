@@ -35,46 +35,33 @@ use arrow::ipc::reader::FileReader;
 use h3o::{CellIndex, LatLng};
 use noise_compute::envelope::{effective_envelope_class, EnvelopeClass};
 use noise_compute::low_profile::LowProfileLookup;
-use noise_compute::propagation::obstacle_index::{
-    vector_buildings_enabled, ObstacleIndex, ObstacleKind, ObstacleSet,
-};
+use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind, ObstacleSet};
 use noise_compute::wkb;
 
-/// A region's vector obstacles: `None` ⇒ every scatter keeps the raster path.
+/// A region's vector obstacles — the only building geometry there is.
 pub struct ObstacleData {
-    set: Option<Arc<ObstacleSet>>,
+    set: Arc<ObstacleSet>,
 }
 
 impl ObstacleData {
-    /// Vector obstacles disabled (flag off / not ingested / policy fallback).
-    pub fn off() -> Self {
-        ObstacleData { set: None }
+    /// The region set. Always present: a region that could not load its
+    /// obstacles never gets this far.
+    pub fn set(&self) -> &ObstacleSet {
+        &self.set
     }
 
-    /// The region set, if vector mode is live.
-    pub fn set(&self) -> Option<&ObstacleSet> {
-        self.set.as_deref()
-    }
-
-    /// Load per-cell indexes for the region's ring when
-    /// `QM_VECTOR_BUILDINGS=1`. Follows the all-or-raster policy above; a
-    /// policy fallback logs and returns [`ObstacleData::off`], a shard ERROR
-    /// is a hard `Err` (a pipeline region must not silently paint with
-    /// different physics than requested).
+    /// Load per-cell indexes for the region's ring.
+    ///
+    /// Every failure is an `Err`. There is no second building representation to
+    /// fall back to, so "we could not read the obstacles" can only mean "do not
+    /// paint this region" — painting it anyway would publish a quiet map of a
+    /// loud place, and nothing downstream could tell the difference.
     ///
     /// `region_r4` is the cell being PAINTED: even under
     /// `QM_OBSTACLES_ALLOW_PARTIAL=1` it must be ingested — partial mode
-    /// admits a missing halo NEIGHBOUR at a staging frontier, never a
-    /// missing centre (deleting the centre's raster buildings with no
-    /// footprints to replace them). Same rule as the popup store's
-    /// query-cell requirement.
+    /// admits a missing halo NEIGHBOUR at a staging frontier, never a missing
+    /// centre. Same rule as the popup store's query-cell requirement.
     pub fn load_for_r4s(h3r4_dir: &Path, region_r4: u64, r4_hexes: &[u64]) -> Result<Self> {
-        if !vector_buildings_enabled() {
-            if renderer_evidence_requires_vector_mode() {
-                bail!("renderer evidence requires vector obstacles, but vector mode is disabled");
-            }
-            return Ok(Self::off());
-        }
         let allow_partial = std::env::var("QM_OBSTACLES_ALLOW_PARTIAL").is_ok_and(|v| v == "1");
         if renderer_evidence_requires_vector_mode() && allow_partial {
             bail!("renderer evidence forbids QM_OBSTACLES_ALLOW_PARTIAL");
@@ -90,75 +77,65 @@ impl ObstacleData {
             let cell = CellIndex::try_from(r4).context("invalid r4 hex")?;
             let Some(dir) = cell_dir(h3r4_dir, cell)? else {
                 if allow_partial && r4 != region_r4 {
+                    // Never silent: this is the one path that paints with
+                    // KNOWN-incomplete geometry, so it must leave a trace an
+                    // operator can find in a log they already read.
+                    eprintln!(
+                        "[obstacles] QM_OBSTACLES_ALLOW_PARTIAL: painting {region_r4:015x} \
+                         WITHOUT halo cell {cell} — incomplete screening, dev A/B only"
+                    );
                     continue;
                 }
                 if manifest.is_some_and(|m| m.covers_cell(cell)) {
-                    // INGESTED-EMPTY, proven by the world ingest manifest:
-                    // the sweep covered this cell and it contributed zero
-                    // footprints, so an index for it would be empty anyway —
-                    // vector mode proceeds WITHOUT dropping anything the
-                    // raster fallback would have added (our building raster
-                    // derives from the same Overture release).
+                    // INGESTED-EMPTY, proven by the world ingest manifest: the
+                    // sweep covered this cell and it contributed zero
+                    // footprints. Empty is an answer; missing is not, and this
+                    // manifest is the only thing that tells them apart.
                     continue;
                 }
-                eprintln!(
-                    "[obstacles] {} cell {cell} not ingested — region stays on the raster \
-                     path (QM_OBSTACLES_ALLOW_PARTIAL=1 admits missing halo neighbours \
+                bail!(
+                    "[obstacles] {} cell {cell} has no shard and the ingest manifest does not \
+                     prove it empty — buildings are vector-only, so this region cannot be \
+                     painted (QM_OBSTACLES_ALLOW_PARTIAL=1 admits missing halo neighbours \
                      for dev A/B)",
                     if r4 == region_r4 { "REGION" } else { "ring" },
                 );
-                if renderer_evidence_requires_vector_mode() {
-                    bail!("renderer evidence requires complete vector obstacles; missing {cell}");
-                }
-                return Ok(Self::off());
             };
             let low_profile = load_low_profile(h3r4_dir, cell)?;
             indexes.push(Arc::new(build_cell_index(cell, &dir, &low_profile)?));
         }
-        let set = ObstacleSet {
-            indexes: indexes.clone(),
-        };
+        let set = ObstacleSet { indexes };
         if set.edge_count() == 0 {
             if renderer_evidence_requires_vector_mode() {
                 bail!("renderer evidence requires positive vector mode; obstacle ring is empty");
             }
-            // Zero edges is vector-EMPTY only when NO shard-backed index was
-            // loaded — i.e. every ring cell was proven ingested-empty by the
-            // manifest. Shard-backed-but-zero-edges (degenerate WKB, zero-row
-            // shard, rejected heights) falls back to raster exactly as before
-            // this branch: a staged shard that builds no edges is a data
-            // anomaly, not proof of emptiness (/gg Codex finding 3).
-            if indexes.is_empty() {
-                eprintln!(
-                    "[obstacles] vector mode: 0 edges across {} cells (all ingested-empty)",
-                    r4_hexes.len()
-                );
-                return Ok(ObstacleData {
-                    set: Some(Arc::new(set)),
-                });
-            }
-            return Ok(Self::off());
+            // Zero edges is a legitimate answer: ocean, desert, and any cell
+            // whose staged shard indexed no footprint. A shard that exists HAS
+            // answered, and calling its emptiness a fault would black out whole
+            // countries the day an Overture release rejects their heights.
+            eprintln!(
+                "[obstacles] vector mode: 0 edges across {} cells",
+                r4_hexes.len()
+            );
+        } else {
+            eprintln!(
+                "[obstacles] vector mode: {} edges across {} cells",
+                set.edge_count(),
+                set.indexes.len()
+            );
         }
-        eprintln!(
-            "[obstacles] vector mode: {} edges across {} cells",
-            set.edge_count(),
-            set.indexes.len()
-        );
-        Ok(ObstacleData {
-            set: Some(Arc::new(set)),
-        })
+        Ok(ObstacleData { set: Arc::new(set) })
     }
 }
 
 impl ObstacleData {
     /// The one entry point the three writers share: a tile's interior
-    /// estimate in a vector region, `None` in a raster-fallback region (no
-    /// footprints to classify → today's unmasked physics, never a panic).
+    /// The tile's interior estimate, baked from this region's footprints.
     pub fn interior_estimate(
         &self,
         tile: &raster_reader::fused_tile_z13::FusedTileZ13,
-    ) -> Option<InteriorEstimate> {
-        self.set().map(|set| InteriorEstimate::bake(tile, set))
+    ) -> InteriorEstimate {
+        InteriorEstimate::bake(tile, self.set())
     }
 }
 
@@ -962,7 +939,6 @@ mod tests {
     fn loading_policy_matrix() {
         let tmp = std::env::temp_dir().join(format!("qm-obst-pipe-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        std::env::set_var("QM_VECTOR_BUILDINGS", "1");
         std::env::set_var("QM_OBSTACLES_DIR", tmp.to_str().unwrap());
         std::env::remove_var("QM_OBSTACLES_ALLOW_PARTIAL");
 
@@ -986,26 +962,23 @@ mod tests {
             write_shard(&tmp.join(c.to_string()), centre.lat(), centre.lng());
         }
 
-        let strict = ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).unwrap();
         assert!(
-            strict.set().is_none(),
-            "missing halo neighbour must stay raster (strict)"
+            ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).is_err(),
+            "a missing halo neighbour must fail the region: there is no second \
+             building representation to fall back to"
         );
 
         std::env::set_var("QM_OBSTACLES_ALLOW_PARTIAL", "1");
         let partial = ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).unwrap();
-        let set = partial
-            .set()
-            .expect("partial mode admits a staging frontier");
+        let set = partial.set(); // partial mode admits a staging frontier
         assert_eq!(set.indexes.len(), ring.len() - 1);
         assert!(set.edge_count() >= 4 * (ring.len() - 1));
 
         // Missing REGION cell: even partial mode must refuse.
         std::fs::remove_dir_all(tmp.join(region.to_string())).unwrap();
-        let no_region = ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).unwrap();
         assert!(
-            no_region.set().is_none(),
-            "missing REGION cell must stay raster even partial"
+            ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).is_err(),
+            "a missing REGION cell must fail even in partial mode"
         );
 
         // Corrupt shard in an ingested cell: hard Err, not a silent fallback.
@@ -1059,16 +1032,14 @@ mod tests {
         std::fs::write(mroot.join(".ingested-tiles"), names).unwrap();
         std::env::set_var("QM_OBSTACLES_DIR", obst_root.to_str().unwrap());
         let covered = ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).unwrap();
-        let set = covered
-            .set()
-            .expect("manifest-proven empty halo cell keeps vector mode (strict)");
-        assert_eq!(set.indexes.len(), ring.len() - 1);
-        // Manifest gone → coverage unknown → strict fallback again.
+        // A manifest-proven empty halo cell is EMPTY, not missing: the region loads.
+        assert_eq!(covered.set().indexes.len(), ring.len() - 1);
+        // Manifest gone → the same absent cell is no longer provably empty, and
+        // nothing else can answer for it.
         std::fs::remove_file(mroot.join(".ingested-tiles")).unwrap();
-        let uncovered = ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).unwrap();
         assert!(
-            uncovered.set().is_none(),
-            "without the manifest the missing halo neighbour must fall back to raster"
+            ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).is_err(),
+            "without the manifest a missing halo neighbour is unproven, so the region fails"
         );
 
         std::env::remove_var("QM_OBSTACLES_DIR");

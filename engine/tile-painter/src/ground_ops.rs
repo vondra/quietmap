@@ -164,7 +164,7 @@ pub fn scatter_tile(
     tile: &FusedTileZ13,
     traffic: &[AirportTrafficRowView<'_>],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     // GA hybrid per-class weight LUT. Applied to `veh_kind == 0` (aircraft)
     // rows
     // only — GSE rows weight 1.0. Uniform for non-hybrid extracts.
@@ -188,7 +188,7 @@ pub(crate) fn scatter_tile_impl(
     tile: &FusedTileZ13,
     traffic: &[AirportTrafficRowView<'_>],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     class_weights: &noise_compute::emission::aircraft::ClassWeights,
     n_days: f64,
     stop_on: bool,
@@ -344,7 +344,7 @@ fn scatter_band(
     prep: &[PreparedMicroseg],
     traffic: &[AirportTrafficRowView<'_>],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
+    obstacles: &ObstacleSet,
     class_weights: &noise_compute::emission::aircraft::ClassWeights,
     py_lo: usize,
     py_hi: usize,
@@ -479,16 +479,11 @@ fn scatter_band(
                 );
 
                 let ground_g = path_effects::ground_g_from_profile(&s.profile);
-                let terrain = path_effects::terrain_attenuation(&mut s.profile, src_alt, rx_alt);
-                let obstacle_input = match obstacles {
-                    Some(set) => {
-                        set.crossings(pts.cp_lat, pts.cp_lon, rx_lat, rx_lon, &mut s.cand_scratch);
-                        path_effects::ObstacleInput {
-                            candidates: &s.cand_scratch,
-                            replace_sample_buildings: true,
-                        }
-                    }
-                    None => path_effects::ObstacleInput::CANDIDATES_OFF,
+                let (terrain, terrain_delta_m) =
+                    path_effects::terrain_attenuation(&mut s.profile, src_alt, rx_alt);
+                obstacles.crossings(pts.cp_lat, pts.cp_lon, rx_lat, rx_lon, &mut s.cand_scratch);
+                let obstacle_input = path_effects::ObstacleInput {
+                    candidates: &s.cand_scratch,
                 };
                 let screening = path_effects::screening_attenuation(
                     &mut s.profile,
@@ -498,6 +493,7 @@ fn scatter_band(
                     rx_alt,
                     0.0,
                     &terrain,
+                    terrain_delta_m,
                 );
                 let veg = path_effects::vegetation_attenuation_path(&s.profile);
 
@@ -691,7 +687,7 @@ mod tests {
             &tile,
             &traffic,
             &[],
-            None,
+            &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
             &class_weights,
             n_days,
             true,
@@ -702,7 +698,7 @@ mod tests {
             &tile,
             &traffic,
             &[],
-            None,
+            &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
             &class_weights,
             n_days,
             false,
@@ -767,7 +763,7 @@ mod tests {
             &tile,
             &traffic1,
             &[],
-            None,
+            &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
             &class_weights,
             n_days,
             &mut acc1,
@@ -776,7 +772,7 @@ mod tests {
             &tile,
             &traffic2,
             &[],
-            None,
+            &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
             &class_weights,
             n_days,
             &mut acc2,

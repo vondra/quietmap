@@ -521,23 +521,6 @@ mod tests {
     }
 
     #[test]
-    fn test_building_brno() {
-        let store = TileStore::new(
-            PathBuf::from("../../source-data/rasters/building"),
-            1201,
-            DType::U8,
-            Interp::Nearest,
-            0.0,
-            ".raw",
-            4,
-        );
-        // Sample in Brno center — should find some buildings
-        let h = store.sample(49.195, 16.608);
-        // Could be 0 (street) or >0 (building) — just verify no crash
-        assert!((0.0..=255.0).contains(&h), "Building height: {h}m");
-    }
-
-    #[test]
     fn test_missing_tile() {
         let store = TileStore::new(
             PathBuf::from("/nonexistent"),

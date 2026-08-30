@@ -112,10 +112,9 @@ fn main() -> Result<()> {
     let ll = h3o::LatLng::from(cell);
     let admin = noise_compute::admin::admin_for_latlng(ll.lat(), ll.lng());
     let rail = RailData::load_for_r4s(Path::new(&h3r4), &ring, admin)?.into_rows();
-    // Vector obstacles (geodata-v2 1.6): QM_VECTOR_BUILDINGS=1 loads the
-    // region's obstacle store into BOTH lanes — the CPU reference threads the
-    // set through scatter_tile_with_cfg, the GPU gets the flattened grids —
-    // so this validator IS the vector-parity gate.
+    // The region's obstacle store loads into BOTH lanes — the CPU reference
+    // threads the set through scatter_tile_with_cfg, the GPU gets the flattened
+    // grids — so this validator IS the vector-parity gate.
     let obstacle_data = tile_painter::source_loader_obstacle::ObstacleData::load_for_r4s(
         Path::new(&h3r4),
         r4,
@@ -132,7 +131,8 @@ fn main() -> Result<()> {
         let tile = &batch.tiles[((y - by) * bn + (x - bx)) as usize];
         let bb = &tile.bbox;
         let (mut n_edges, mut n_foot, mut occ, mut cells) = (0usize, 0usize, 0usize, 0usize);
-        if let Some(set) = obstacle_data.set() {
+        {
+            let set = obstacle_data.set();
             let flat = noise_gpu::flatten_obstacles(set);
             n_edges = flat.edges.len() / 5;
             n_foot = flat.foot_box.len() / noise_gpu::FOOT_BOX_STRIDE;
@@ -145,7 +145,8 @@ fn main() -> Result<()> {
         // tile bbox grown by a typical audibility margin, in each index's frame.
         const NEAR_M: f64 = 2000.0;
         let mut foot_near = 0usize;
-        if let Some(set) = obstacle_data.set() {
+        {
+            let set = obstacle_data.set();
             for idx in &set.indexes {
                 let v = idx.gpu_view();
                 let x0 = (bb.west_lon - v.origin_lon) * v.m_per_deg_lon - NEAR_M;
@@ -204,7 +205,8 @@ fn main() -> Result<()> {
     let bn = default_batch_size();
     let (bx, by) = ((x / bn) * bn, (y / bn) * bn);
     let mut batch = TileBatch::build(z, bx, by, bn, halo_m, &rasters);
-    if let Some(set) = obstacle_data.set() {
+    {
+        let set = obstacle_data.set();
         let tile = &mut batch.tiles[((y - by) * bn + (x - bx)) as usize];
         tile_painter::source_loader_obstacle::bake_tile_vector_rx_refl(tile, set);
         eprintln!("vector obstacles: {} edges", set.edge_count());
@@ -214,14 +216,6 @@ fn main() -> Result<()> {
     let (lat_min, lon_min, inv, rows, cols) = halo.geom();
     let nsrc = rail.len();
     eprintln!("tile {x}/{y} R4 {r4:015x} | rail rows {nsrc} | halo {rows}×{cols}");
-    eprintln!(
-        "MODE: {}",
-        if noise_compute::propagation::obstacle_index::vector_buildings_enabled() {
-            "vector"
-        } else {
-            "raster"
-        }
-    );
 
     // ---- packed device buffers ----
     let n = TILE_PX * TILE_PX;
@@ -290,10 +284,9 @@ fn main() -> Result<()> {
     }
     let elev: Vec<f32> = halo.pixels().iter().map(|p| p.elevation).collect();
     let inner: Vec<f32> = tile.inner_elev_m.clone();
-    // cover = halo [building, forest, imd] per cell, interleaved
-    let mut cover = Vec::with_capacity(rows * cols * 3);
+    // cover = halo [forest, imd] per cell, interleaved
+    let mut cover = Vec::with_capacity(rows * cols * 2);
     for p in halo.pixels() {
-        cover.push(p.building);
         cover.push(p.forest);
         cover.push(p.imd);
     }
@@ -335,24 +328,18 @@ fn main() -> Result<()> {
     // CPU reference to compare against; (c) proof the candidate lane FIRED —
     // the same CPU scatter WITHOUT obstacles must differ somewhere, else the
     // tile exercises nothing and the gate is vacuous.
-    let vector_mode = noise_compute::propagation::obstacle_index::vector_buildings_enabled();
-    if vector_mode && !perf_only {
-        anyhow::ensure!(
-            obstacle_data.set().is_some(),
-            "QM_VECTOR_BUILDINGS=1 but the obstacle store did not load for this region \
-             — the vector parity gate would silently validate raster mode"
-        );
+    if !perf_only {
         anyhow::ensure!(
             !gpu_only,
-            "QM_VECTOR_BUILDINGS=1 with NOISE_GPU_ONLY removes the CPU reference — \
-             the vector parity gate needs both lanes"
+            "NOISE_GPU_ONLY removes the CPU reference — the vector parity gate \
+             needs both lanes"
         );
         let mut raster_accum = TileAccumulator::new();
         tile_painter::scatter_line::scatter_tile_with_cfg(
             tile,
             &rail,
             &[],
-            None,
+            &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
             &mut raster_accum,
             kernel_cadence,
         );

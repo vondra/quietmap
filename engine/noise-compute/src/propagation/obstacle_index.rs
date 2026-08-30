@@ -895,6 +895,17 @@ pub struct ObstacleSet {
 }
 
 impl ObstacleSet {
+    /// A set that holds no obstacles.
+    ///
+    /// This is an ANSWER, not a gap: an ocean tile or a Sahara cell genuinely
+    /// has no buildings. "We have no building data here" is not representable —
+    /// a region whose obstacles fail to load raises instead of reaching physics.
+    pub fn empty() -> Self {
+        Self {
+            indexes: Vec::new(),
+        }
+    }
+
     /// Total indexed edges across the set (telemetry / emptiness check).
     pub fn edge_count(&self) -> usize {
         self.indexes.iter().map(|i| i.edge_count()).sum()
@@ -1221,19 +1232,6 @@ pub fn enclosure_db(set: &ObstacleSet, lat: f64, lon: f64, radius_m: f64) -> f64
     }
 }
 
-/// Read `QM_VECTOR_BUILDINGS` once per process. Loaders (tile-painter,
-/// source-reader) call this at init and thread the bool — kernels never read
-/// the environment. ON by default since the Wave-1 cutover (2026-07-31:
-/// world obstacle store complete — 13 694 tiles / 67 272 cells; A/B record
-/// in geodata-v2-plan.md §1.9, m25_j17 +12.9 dB overshoot → −0.26 dB vs
-/// Defra); `QM_VECTOR_BUILDINGS=0` restores the raster path (A/B,
-/// bisection). Regions without staged obstacle cells keep the raster path
-/// via the loaders' all-or-raster policy, unchanged.
-pub fn vector_buildings_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| !std::env::var("QM_VECTOR_BUILDINGS").is_ok_and(|v| v == "0"))
-}
-
 /// [`RasterSampler`] wrapper that swaps ONLY the receiver reflection probe
 /// for the vector enclosure (plan 1.4b — the popup twin of the pipeline's
 /// `rx_refl` pre-bake): `building_enclosure` answers from exact footprints
@@ -1249,9 +1247,6 @@ pub struct VectorReflectionSampler<'a> {
 impl crate::types::RasterSampler for VectorReflectionSampler<'_> {
     fn elevation(&self, lat: f64, lon: f64) -> f64 {
         self.inner.elevation(lat, lon)
-    }
-    fn building_height(&self, lat: f64, lon: f64) -> f64 {
-        self.inner.building_height(lat, lon)
     }
     fn ground_g(&self, lat: f64, lon: f64) -> f64 {
         self.inner.ground_g(lat, lon)
@@ -1270,18 +1265,6 @@ impl crate::types::RasterSampler for VectorReflectionSampler<'_> {
     ) {
         self.inner
             .build_path_profile(src_lat, src_lon, rcv_lat, rcv_lon, dist_m, out)
-    }
-    fn max_building_along_path(
-        &self,
-        src_lat: f64,
-        src_lon: f64,
-        rcv_lat: f64,
-        rcv_lon: f64,
-        dist_m: f64,
-        excl_start_m: f64,
-    ) -> (f64, f64) {
-        self.inner
-            .max_building_along_path(src_lat, src_lon, rcv_lat, rcv_lon, dist_m, excl_start_m)
     }
 }
 
@@ -2535,9 +2518,6 @@ mod tests {
             fn elevation(&self, _: f64, _: f64) -> f64 {
                 123.0
             }
-            fn building_height(&self, _: f64, _: f64) -> f64 {
-                7.0
-            }
             fn ground_g(&self, _: f64, _: f64) -> f64 {
                 0.25
             }
@@ -2558,17 +2538,6 @@ mod tests {
                 // to the trait default and lose the inner override).
                 out.dist_m = dist_m * 2.0;
             }
-            fn max_building_along_path(
-                &self,
-                _: f64,
-                _: f64,
-                _: f64,
-                _: f64,
-                _: f64,
-                _: f64,
-            ) -> (f64, f64) {
-                (42.0, 0.5)
-            }
         }
         // Dense block around the origin ⇒ all nine probes inside ⇒ 3 dB.
         let mut b = ObstacleIndex::builder(OLAT, OLON);
@@ -2581,20 +2550,15 @@ mod tests {
             set: &set,
         };
         assert_eq!(w.elevation(OLAT, OLON), 123.0);
-        assert_eq!(w.building_height(OLAT, OLON), 7.0);
         assert_eq!(w.ground_g(OLAT, OLON), 0.25);
         assert_eq!(w.building_enclosure(OLAT, OLON), 3.0);
         let (far_lat, far_lon) = ll(5_000.0, 5_000.0);
         assert_eq!(w.building_enclosure(far_lat, far_lon), 0.0);
-        // The two defaultable methods must forward to the INNER override,
-        // not fall back to the trait default (gg review 1.4b #1).
+        // The defaultable method must forward to the INNER override, not fall
+        // back to the trait default (gg review 1.4b #1).
         let mut prof = crate::propagation::PathProfile::new();
         w.build_path_profile(OLAT, OLON, OLAT, OLON, 100.0, &mut prof);
         assert_eq!(prof.dist_m, 200.0);
-        assert_eq!(
-            w.max_building_along_path(OLAT, OLON, OLAT, OLON, 100.0, 0.0),
-            (42.0, 0.5)
-        );
     }
 }
 

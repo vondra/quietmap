@@ -37,14 +37,22 @@ use crate::types::{
 ///
 /// Fast path: no trace metadata built, no `Vec<EdgePoint>` allocation.
 /// Pipeline-worker's hot loop uses this; popup uses `_with_meta`.
+/// Bare-earth terrain diffraction: the bands, and the δ of the dominant edge
+/// (`None` when no sample rises above the line of sight).
+///
+/// The δ goes to [`screening_attenuation`], which races vector obstacle
+/// candidates against it. It is PASSED rather than recomputed: buildings arrive
+/// only as exact crossings now, so the screening pass's top profile IS this bare
+/// earth, and the `single_edge_atten` it used to run over that profile was the
+/// same call this function already made — the identical work twice per ray.
 pub fn terrain_attenuation(
     profile: &mut PathProfile,
     src_elev: f64,
     rcv_alt: f64,
-) -> [f64; NUM_BANDS] {
+) -> ([f64; NUM_BANDS], Option<f64>) {
     match compute_terrain_diffraction(profile, src_elev, rcv_alt) {
-        None => [0.0; NUM_BANDS],
-        Some(res) => res.bands,
+        None => ([0.0; NUM_BANDS], None),
+        Some(res) => (res.bands, Some(res.diff.delta)),
     }
 }
 
@@ -106,8 +114,8 @@ fn compute_terrain_diffraction<'a>(
     } = profile;
     let prof_f64 = PathProfile::elevation_f64_from_mut(elevation_f64_scratch, elevation_m);
     // Source-platform clamp: the phantom near-source hump must not diffract
-    // (SPEC §3.5.1). The scratch is shared with the screening pass below, so
-    // the composite profile inherits the same carved bare-earth by construction.
+    // (SPEC §3.5.1). The scratch is shared with the screening pass below, so a
+    // candidate's LERPed terrain inherits the same carved earth by construction.
     clamp_source_platform(t, prof_f64, dist_m);
     // Single-edge δ over bare-earth (was the multi-edge hull compute_path_difference).
     let (bands, diff) = single_edge_atten(t, prof_f64, prof_f64, dist_m, src_h, rcv_h);
@@ -222,13 +230,12 @@ pub fn terrain_attenuation_with_meta(
 
 /// Building + barrier screening attenuation per band from a `PathProfile`.
 ///
-/// Scans `building_h_m[]` for the tallest raster obstacle above line-of-sight,
-/// and intersects the ray with every explicit noise barrier of `barriers`
-/// (walls are vector polylines, never a raster channel — see §1 of
-/// [`screening_attenuation_with_meta`]).
+/// Races every exact ray×obstacle crossing — building footprints and noise
+/// barriers alike — against the bare-earth terrain edge, and returns the
+/// diffraction increment the winner adds over terrain alone.
 ///
-/// `exclusion_radius_m`: skip building samples closer than this distance from
-/// source — the source polygon's own buildings are not real obstacles. Never
+/// `exclusion_radius_m`: ignore building crossings closer than this distance to
+/// the source — the source polygon's own buildings are not real obstacles. Never
 /// applied to barriers: an explicit wall is always a real obstacle.
 pub fn screening_attenuation(
     profile: &mut PathProfile,
@@ -238,13 +245,12 @@ pub fn screening_attenuation(
     rcv_alt: f64,
     exclusion_radius_m: f64,
     terrain_atten: &[f64; NUM_BANDS],
+    terrain_delta_m: Option<f64>,
 ) -> [f64; NUM_BANDS] {
-    // No building or barrier anywhere on the path ⇒ the composite top profile
-    // equals bare earth ⇒ the screening increment over terrain is exactly zero.
-    // Skip the per-sample composite scan + OLS Fresnel fit (the dominant
-    // screening cost) for the rural majority. Conservative: a building at an
-    // endpoint (which the scan itself ignores) still trips the flag, so a real
-    // interior obstacle is never skipped.
+    // No obstacle crossing and no barrier in reach ⇒ nothing can out-δ the
+    // terrain edge ⇒ the screening increment over terrain is exactly zero.
+    // Skip the candidate race and its OLS Fresnel fit (the dominant screening
+    // cost) for the rural majority.
     //
     // Barrier arm: `dist_m` is sorted-ascending and a lower bound on the
     // receiver→midpoint distance (`types::Barrier` contract), so when even the
@@ -258,9 +264,7 @@ pub fn screening_attenuation(
     let barriers_in_reach = barriers
         .first()
         .is_some_and(|b| b.dist_m <= profile.dist_m + BARRIER_PATH_HORIZON_M);
-    let sample_buildings_active =
-        !obstacles.replace_sample_buildings && profile.building_h_m.iter().any(|&b| b > 0);
-    if !barriers_in_reach && !sample_buildings_active && obstacles.candidates.is_empty() {
+    if !barriers_in_reach && obstacles.candidates.is_empty() {
         return [0.0; NUM_BANDS];
     }
     let (atten, _) = screening_attenuation_with_meta(
@@ -271,20 +275,19 @@ pub fn screening_attenuation(
         rcv_alt,
         exclusion_radius_m,
         terrain_atten,
+        terrain_delta_m,
     );
     atten
 }
 
-/// Vector-obstacle input for screening (geodata-v2 1.3, `QM_VECTOR_BUILDINGS`).
-/// `CANDIDATES_OFF` reproduces the raster path byte-for-byte. When
-/// `replace_sample_buildings` is set, the cadence composite drops the raster
-/// building channel entirely — buildings arrive ONLY as exact crossings, so
-/// the A/B isolates the representation change (barriers stay on their sample
-/// path until plan step 1.7).
+/// Vector-obstacle input for screening: the exact ray×obstacle crossings.
+///
+/// Buildings and noise barriers arrive ONLY this way. There is no raster
+/// building channel and no switch to one — a region whose vector obstacles are
+/// missing fails at the loader, it does not quietly screen with something else.
 #[derive(Clone, Copy)]
 pub struct ObstacleInput<'a> {
     pub candidates: &'a [CrossingCandidate],
-    pub replace_sample_buildings: bool,
 }
 
 fn barrier_crossing_candidates(
@@ -346,17 +349,10 @@ pub fn line_vector_path_present(
             .is_some())
 }
 
-impl ObstacleInput<'static> {
-    pub const CANDIDATES_OFF: ObstacleInput<'static> = ObstacleInput {
-        candidates: &[],
-        replace_sample_buildings: false,
-    };
-}
-
 /// Screening attenuation + obstacle trace for popup tooltips.
 ///
 /// Combines terrain+building+barrier diffraction into a single Fresnel
-/// computation over a composite top profile, returning the *increment* over
+/// computation over the winner of one δ race, returning the *increment* over
 /// pure-terrain diffraction. `terrain_atten` must be the result of a prior
 /// `terrain_attenuation[_with_meta]` call on the same profile/source/receiver —
 /// reused here so we don't recompute bare-earth diffraction twice. In
@@ -366,7 +362,7 @@ impl ObstacleInput<'static> {
 /// on a hill — both terms then claimed full Fresnel diffraction).
 ///
 /// The δ* Rayleigh gate uses **bare-earth** elevation for the OLS mean-ground
-/// fit (CNOSSOS §2.5.6(c)). Feeding composite heights to OLS would drag the
+/// fit (CNOSSOS §2.5.6(c)). Feeding obstacle tops to OLS would drag the
 /// mean-ground plane up to rooftops, silently breaking ground-reflection
 /// physics.
 pub fn screening_attenuation_with_meta(
@@ -377,6 +373,7 @@ pub fn screening_attenuation_with_meta(
     rcv_alt: f64,
     exclusion_radius_m: f64,
     terrain_atten: &[f64; NUM_BANDS],
+    terrain_delta_m: Option<f64>,
 ) -> ([f64; NUM_BANDS], ScreeningObstacleTrace) {
     let excl_limit = exclusion_radius_m.max(0.0);
     let dist_m = profile.dist_m;
@@ -392,7 +389,6 @@ pub fn screening_attenuation_with_meta(
         t: 0.0,
         screen_h_m: 0.0,
         delta_m: 0.0,
-        samples_taken: 0,
         step_m: step_m_med,
         n_edges: 0,
         edges: Vec::new(),
@@ -433,51 +429,22 @@ pub fn screening_attenuation_with_meta(
     let PathProfile {
         t,
         elevation_m,
-        building_h_m,
         elevation_f64_scratch,
-        composite_h_scratch,
         ..
     } = profile;
     let elevation_f64_mut = PathProfile::elevation_f64_from_mut(elevation_f64_scratch, elevation_m);
-    // Same source-platform clamp as the terrain pass (idempotent when that
-    // pass already ran on this profile — the shared scratch stays carved):
-    // without it a phantom hump the terrain pass carved away would re-enter
-    // through the composite as a spurious "screening" increment (SPEC §3.5.1).
+    // Same source-platform clamp as the terrain pass (idempotent when that pass
+    // already ran on this profile — the shared scratch stays carved): a
+    // candidate's terrain is LERPed from these samples, so a phantom hump the
+    // terrain pass carved away must not re-enter under an obstacle (SPEC §3.5.1).
     clamp_source_platform(t, elevation_f64_mut, dist_m);
     let elevation_f64: &[f64] = elevation_f64_mut;
 
-    // 3. Composite top profile = elevation + raster building height, with the
-    //    exclusion radius zeroing buildings near the source. Barriers are NOT
-    //    here: they are exact crossings (§1) competing in the §5b candidate
-    //    race, never a height folded onto the nearest sample.
-    composite_h_scratch.clear();
-    composite_h_scratch.reserve(n);
-    let mut samples_taken: u32 = 0;
-    for i in 0..n {
-        let ti = t[i];
-        let mut above_ground = 0.0_f64;
-        if ti > 0.0 && ti < 1.0 {
-            above_ground = if obstacles.replace_sample_buildings {
-                // Vector mode: buildings arrive as exact crossings only.
-                0.0
-            } else if excl_limit > 0.0 && ti * dist_m < excl_limit {
-                0.0
-            } else {
-                samples_taken += 1;
-                building_h_m[i] as f64
-            };
-        }
-        composite_h_scratch.push(elevation_f64[i] + above_ground);
-    }
-
-    // 4. Per-end heights above bare-earth for the diffraction API.
+    // 3. Per-end heights above bare-earth for the diffraction API. Nothing is
+    //    folded onto the sample profile any more: buildings and barriers alike
+    //    are exact crossings competing in the §5b candidate race.
     let src_h = (src_elev - elevation_f64[0]).max(0.05);
     let rcv_h = (rcv_alt - elevation_f64[n - 1]).max(0.5);
-
-    // 5. Single dominant-δ edge over the composite, δ* fit on bare-earth (was
-    //    the multi-edge hull compute_path_difference_with_ols).
-    let (atten_combined, res_opt) =
-        single_edge_atten(t, composite_h_scratch, elevation_f64, dist_m, src_h, rcv_h);
 
     // 5b. Exact-crossing candidates — vector building edges AND noise-barrier
     //     segments, one race — compete with the cadence composite edge on δ,
@@ -528,9 +495,25 @@ pub fn screening_attenuation_with_meta(
         }
     }
 
-    // 5c. Winner: exact-crossing candidate vs cadence sample edge, by δ.
-    let candidate_wins = match (&best_cand, &res_opt) {
-        (Some((cd, _, _)), Some(res)) => *cd > res.delta,
+    // 5c. Winner: exact-crossing candidate vs the bare-earth terrain edge, by δ.
+    // The terrain edge's δ comes from the caller's terrain pass. It used to be
+    // recomputed here by running single_edge_atten over a "composite" top
+    // profile — but that composite only ever differed from bare earth by the
+    // raster building channel, which no longer exists, so the second call was
+    // the same work twice on every ray.
+    //
+    // The two derivations agree everywhere except a 0.92 m window, and the
+    // window is worth naming rather than glossing: `compute_terrain_diffraction`
+    // reads the receiver's ground from `elevation_m[n-1]` BEFORE
+    // `clamp_source_platform`, the deleted code read it AFTER. The clamp only
+    // touches samples within CELL_M (30.92 m) of the source and never index 0,
+    // so it can reach the receiver end only when `dist_m < 30.92` — while BOTH
+    // passes already return early below 30.0. That leaves paths of 30.0..30.92 m
+    // whose receiver sample sits above the source elevation. At z12 a pixel is
+    // 12.3 m, so this is a receiver one or two pixels from its source, where the
+    // direct field dominates any diffraction term by tens of dB.
+    let candidate_wins = match (&best_cand, terrain_delta_m) {
+        (Some((cd, _, _)), Some(td)) => *cd > td,
         (Some(_), None) => true,
         (None, _) => false,
     };
@@ -558,9 +541,7 @@ pub fn screening_attenuation_with_meta(
         // A near miss the penumbra branch (or the Rayleigh gate) zeroed is not
         // an obstacle: reporting it would list a building the path flies over.
         if cres.delta <= 0.0 && atten_screen.iter().all(|&a| a <= 0.0) {
-            let mut tr = make_empty();
-            tr.samples_taken = samples_taken;
-            return ([0.0; NUM_BANDS], tr);
+            return ([0.0; NUM_BANDS], make_empty());
         }
         // Trace straight from the crossing — exact kind + geometry, no
         // sample-based classification heuristics.
@@ -575,7 +556,6 @@ pub fn screening_attenuation_with_meta(
             t: cand.t,
             screen_h_m: top - los_edge,
             delta_m: cres.delta,
-            samples_taken,
             step_m: step_m_med,
             n_edges: 1,
             edges: vec![ObstacleEdge {
@@ -590,58 +570,16 @@ pub fn screening_attenuation_with_meta(
         return (atten_screen, trace);
     }
 
-    let Some(res) = res_opt else {
-        let mut tr = make_empty();
-        tr.samples_taken = samples_taken;
-        return ([0.0; NUM_BANDS], tr);
-    };
-
-    // 6. Screening = increment of combined over terrain (passed in by the caller,
-    //    already computed in terrain_attenuation — no redundant bare-earth pass).
-    //    `terrain + screen` = max(A_terrain, A_combined) per band → no double-count.
-    let mut atten_screen = [0.0_f64; NUM_BANDS];
-    for i in 0..NUM_BANDS {
-        atten_screen[i] = (atten_combined[i] - terrain_atten[i]).max(0.0);
-    }
-
-    // 7. The single δ-edge → trace. A bare-terrain dominant edge is owned by
-    //    terrain_attenuation, NOT a screening obstacle (atten_screen is 0 here) —
-    //    report "none" so the popup doesn't list a terrain hill as a barrier.
-    let idx = res.edge_idx;
-    let above = (composite_h_scratch[idx] - elevation_f64[idx]).max(0.0);
-    if above <= 0.0 {
-        let mut tr = make_empty();
-        tr.samples_taken = samples_taken;
-        return (atten_screen, tr);
-    }
-    // The composite carries ONLY raster building heights (§3), so a winning
-    // sample edge is a building by construction — walls are reported from
-    // their exact crossing above, with their OSM id.
-    let kind: &'static str = "building";
-    let los_edge = src_elev + (rcv_alt - src_elev) * t[idx];
-    let screen_h = composite_h_scratch[idx] - los_edge;
-    let height_m = above;
-
-    let trace = ScreeningObstacleTrace {
-        kind,
-        height_m,
-        t: t[idx],
-        screen_h_m: screen_h,
-        delta_m: res.delta,
-        samples_taken,
-        step_m: step_m_med,
-        n_edges: 1,
-        edges: vec![ObstacleEdge {
-            kind,
-            t: t[idx],
-            height_m,
-            screen_h_m: screen_h,
-            obstacle_id: None,
-        }],
-        obstacle_id: None,
-    };
-
-    (atten_screen, trace)
+    // 6. No candidate won, so the winning edge is bare terrain — which
+    //    `terrain_attenuation` already owns. The screening increment over it is
+    //    exactly zero, and a terrain hill is not an obstacle to report: listing
+    //    one would show the visitor a barrier that does not exist.
+    //
+    //    This used to be arithmetic (combined minus terrain, then "is the edge
+    //    above bare earth?"). Both questions had a constant answer once the
+    //    raster building channel left the composite: the composite IS bare
+    //    earth, so the difference is zero and the edge is never above it.
+    ([0.0; NUM_BANDS], make_empty())
 }
 
 /// Vegetation (forest) attenuation per band from a `PathProfile`.
@@ -731,7 +669,6 @@ mod tests {
         fill_t_values(dist_m, &mut p.t);
         let n = p.t.len();
         p.elevation_m = vec![ground_elev_m; n];
-        p.building_h_m = vec![0; n];
         p.forest_u8 = vec![0; n];
         p.imd_u8 = vec![50; n];
         p.step_m_med = if n > 1 {
@@ -813,7 +750,6 @@ mod tests {
             p.dist_m = 50.9;
             p.t = vec![0.0, 0.1963, 0.5, 0.8037, 1.0];
             p.elevation_m = vec![375.28, 375.80, 371.0, 369.0, 366.34];
-            p.building_h_m = vec![0; 5];
             p.forest_u8 = vec![0; 5];
             p.imd_u8 = vec![50; 5];
             p
@@ -843,7 +779,6 @@ mod tests {
         p.dist_m = dist;
         p.t = vec![0.0, 0.1963, 0.5, 0.8037, 1.0];
         p.elevation_m = vec![375.28, 375.80, 371.0, 369.0, 366.34];
-        p.building_h_m = vec![0; 5];
         p.forest_u8 = vec![0; 5];
         p.imd_u8 = vec![50; 5];
         let src_elev = 375.28 + 0.05;
@@ -885,7 +820,6 @@ mod tests {
         // Cut floor at 100, slope crest +6 m at 40 m (beyond CELL_M).
         p.t = vec![0.0, 0.05, 0.2, 0.5, 1.0];
         p.elevation_m = vec![100.0, 101.0, 106.0, 103.0, 100.0];
-        p.building_h_m = vec![0; 5];
         p.forest_u8 = vec![0; 5];
         p.imd_u8 = vec![50; 5];
         let (trace, _) = terrain_attenuation_with_meta(&mut p, 100.05, 104.0);
@@ -929,10 +863,9 @@ mod tests {
         p.dist_m = dist;
         p.t = t.to_vec();
         p.elevation_m = raw.to_vec();
-        p.building_h_m = vec![0; 4];
         p.forest_u8 = vec![0; 4];
         p.imd_u8 = vec![50; 4];
-        let march = terrain_attenuation(&mut p, src_elev, rcv_alt);
+        let (march, _) = terrain_attenuation(&mut p, src_elev, rcv_alt);
         assert_eq!(
             march, [0.0; NUM_BANDS],
             "carved-flat annulus must be silent"
@@ -1031,7 +964,7 @@ mod tests {
                     .unwrap();
             p.elevation_m[idx] = hill_h;
             let hill_d = p.t[idx] * dist;
-            let full = terrain_attenuation(&mut p, src_elev, rcv_alt);
+            let (full, _) = terrain_attenuation(&mut p, src_elev, rcv_alt);
             let n = p.t.len();
             let k = 8usize;
             let subset: Vec<usize> = (0..k)
@@ -1115,16 +1048,22 @@ mod tests {
             .enumerate()
             .min_by(|(_, &a), (_, &b)| ((a - 0.4).abs()).partial_cmp(&((b - 0.4).abs())).unwrap())
             .unwrap();
-        p.building_h_m[idx] = 20;
+        let cands = [CrossingCandidate {
+            t: p.t[idx],
+            height_m: 20.0,
+            kind: ObstacleKind::Building,
+            id: 1,
+        }];
         let terrain_atten = [0.0_f64; NUM_BANDS];
         let (atten, trace) = screening_attenuation_with_meta(
             &mut p,
             &[],
-            ObstacleInput::CANDIDATES_OFF,
+            ObstacleInput { candidates: &cands },
             0.01,
             1.5,
             0.0,
             &terrain_atten,
+            None,
         );
         assert_eq!(trace.kind, "building");
         assert!(trace.height_m == 20.0);
@@ -1180,11 +1119,12 @@ mod tests {
         let (atten, trace) = screening_attenuation_with_meta(
             &mut p,
             std::slice::from_ref(&barrier),
-            ObstacleInput::CANDIDATES_OFF,
+            ObstacleInput { candidates: &[] },
             0.05,
             1.5,
             0.0,
             &terrain_atten,
+            None,
         );
         assert_eq!(trace.kind, "barrier");
         assert!(
@@ -1195,11 +1135,12 @@ mod tests {
         let bands = screening_attenuation(
             &mut p2,
             std::slice::from_ref(&barrier),
-            ObstacleInput::CANDIDATES_OFF,
+            ObstacleInput { candidates: &[] },
             0.05,
             1.5,
             0.0,
             &terrain_atten,
+            None,
         );
         assert_eq!(bands, atten, "band-only wrapper == _with_meta bands");
     }
@@ -1254,21 +1195,23 @@ mod tests {
         let bands = screening_attenuation(
             &mut p,
             std::slice::from_ref(&far),
-            ObstacleInput::CANDIDATES_OFF,
+            ObstacleInput { candidates: &[] },
             0.05,
             1.5,
             0.0,
             &terrain_atten,
+            None,
         );
         let mut p2 = build_flat_profile(dist_m, 0.0);
         let empty = screening_attenuation(
             &mut p2,
             &[],
-            ObstacleInput::CANDIDATES_OFF,
+            ObstacleInput { candidates: &[] },
             0.05,
             1.5,
             0.0,
             &terrain_atten,
+            None,
         );
         assert_eq!(bands, empty);
         assert!(bands.iter().all(|&a| a == 0.0));
@@ -1289,11 +1232,12 @@ mod tests {
         let (atten, trace) = screening_attenuation_with_meta(
             &mut p,
             std::slice::from_ref(&barrier),
-            ObstacleInput::CANDIDATES_OFF,
+            ObstacleInput { candidates: &[] },
             0.05,
             1.5,
             0.0,
             &terrain_atten,
+            None,
         );
         assert_eq!(trace.kind, "barrier");
         assert_eq!(trace.obstacle_id, Some(1_390_017_809));
@@ -1321,11 +1265,12 @@ mod tests {
         let (atten, trace) = screening_attenuation_with_meta(
             &mut p,
             std::slice::from_ref(&barrier),
-            ObstacleInput::CANDIDATES_OFF,
+            ObstacleInput { candidates: &[] },
             0.05,
             1.5,
             0.0,
             &terrain_atten,
+            None,
         );
         assert_eq!(
             trace.kind, "none",
@@ -1354,11 +1299,12 @@ mod tests {
         let (atten, trace) = screening_attenuation_with_meta(
             &mut p,
             std::slice::from_ref(&barrier),
-            ObstacleInput::CANDIDATES_OFF,
+            ObstacleInput { candidates: &[] },
             0.05,
             1.5,
             0.0,
             &terrain_atten,
+            None,
         );
         assert_eq!(trace.kind, "barrier");
         assert!(atten.iter().any(|&a| a > 0.0), "{atten:?}");
@@ -1378,17 +1324,24 @@ mod tests {
             .enumerate()
             .min_by(|(_, &a), (_, &b)| ((a - 0.5).abs()).partial_cmp(&((b - 0.5).abs())).unwrap())
             .unwrap();
-        p.building_h_m[idx] = 4; // 4 m building at mid-path
-                                 // 4 m wall at t = 0.95 — nearer the receiver ⇒ larger δ.
+        // 4 m building at mid-path against a 4 m wall at t = 0.95 — the wall is
+        // nearer the receiver, so it carries the larger δ and must win.
+        let cands = [CrossingCandidate {
+            t: p.t[idx],
+            height_m: 4.0,
+            kind: ObstacleKind::Building,
+            id: 1,
+        }];
         let barrier = wall(380.0, -20.0, 380.0, 20.0, 4.0, 20.0);
         let (atten, trace) = screening_attenuation_with_meta(
             &mut p,
             std::slice::from_ref(&barrier),
-            ObstacleInput::CANDIDATES_OFF,
+            ObstacleInput { candidates: &cands },
             0.05,
             1.5,
             0.0,
             &terrain_atten,
+            None,
         );
         assert_eq!(trace.kind, "barrier");
         assert!((trace.t - 0.95).abs() < 1e-9, "t = {}", trace.t);
@@ -1409,16 +1362,16 @@ mod tests {
             .min_by(|(_, &a), (_, &b)| ((a - 0.5).abs()).partial_cmp(&((b - 0.5).abs())).unwrap())
             .unwrap();
         p.elevation_m[spike] = 40.0;
-        // building_h_m all zero — guaranteed by build_flat_profile.
         let (terrain_trace, _) = terrain_attenuation_with_meta(&mut p, 10.05, 11.5);
         let (atten, screening_trace) = screening_attenuation_with_meta(
             &mut p,
             &[],
-            ObstacleInput::CANDIDATES_OFF,
+            ObstacleInput { candidates: &[] },
             10.05,
             11.5,
             0.0,
             &terrain_trace.attenuation_bands,
+            terrain_trace.dominant_delta_m(),
         );
         assert_eq!(
             screening_trace.kind, "none",
@@ -1447,19 +1400,26 @@ mod tests {
             .min_by(|(_, &a), (_, &b)| ((a - 0.5).abs()).partial_cmp(&((b - 0.5).abs())).unwrap())
             .unwrap();
         p.elevation_m[idx] = 110.0; // 10 m hill
-        p.building_h_m[idx] = 6; // + 6 m building on top
         let src_elev = 100.05;
         let rcv_alt = 104.0;
+        // 6 m building standing ON the hill, as the exact crossing it now is.
+        let cands = [CrossingCandidate {
+            t: p.t[idx],
+            height_m: 6.0,
+            kind: ObstacleKind::Building,
+            id: 1,
+        }];
 
-        let terrain = terrain_attenuation(&mut p, src_elev, rcv_alt);
+        let (terrain, terrain_delta_m) = terrain_attenuation(&mut p, src_elev, rcv_alt);
         let (screen, _) = screening_attenuation_with_meta(
             &mut p,
             &[],
-            ObstacleInput::CANDIDATES_OFF,
+            ObstacleInput { candidates: &cands },
             src_elev,
             rcv_alt,
             0.0,
             &terrain,
+            terrain_delta_m,
         );
         assert!(terrain.iter().any(|&a| a > 0.0), "hill must attenuate");
         assert!(
@@ -1471,7 +1431,7 @@ mod tests {
         let n = p.t.len();
         let bare: Vec<f64> = p.elevation_m.iter().map(|&e| e as f64).collect();
         let mut composite = bare.clone();
-        composite[idx] += p.building_h_m[idx] as f64;
+        composite[idx] += 6.0;
         let src_h = (src_elev - bare[0]).max(0.05);
         let rcv_h = (rcv_alt - bare[n - 1]).max(0.5);
         let (combined, _) = single_edge_atten(&p.t, &composite, &bare, 500.0, src_h, rcv_h);
@@ -1487,71 +1447,10 @@ mod tests {
         }
     }
 
-    /// PARITY: a candidate at exactly a sample's t with the sample's height
-    /// must reproduce the raster path bit-for-bit — top, δ, δ* and bands all
-    /// coincide (terrain lerp at a sample t is the sample; the δ* split puts
-    /// the same points on each side).
-    #[test]
-    fn candidate_at_sample_matches_raster_screening_exactly() {
-        let mut p_raster = build_flat_profile(500.0, 100.0);
-        let (idx, _) = p_raster
-            .t
-            .iter()
-            .enumerate()
-            .min_by(|(_, &a), (_, &b)| ((a - 0.5).abs()).partial_cmp(&((b - 0.5).abs())).unwrap())
-            .unwrap();
-        p_raster.building_h_m[idx] = 12;
-        let t_edge = p_raster.t[idx];
-        let terrain = [0.0_f64; NUM_BANDS];
-        let (a_raster, tr_raster) = screening_attenuation_with_meta(
-            &mut p_raster,
-            &[],
-            ObstacleInput::CANDIDATES_OFF,
-            100.05,
-            104.0,
-            0.0,
-            &terrain,
-        );
-
-        let mut p_vec = build_flat_profile(500.0, 100.0);
-        let cands = [CrossingCandidate {
-            t: t_edge,
-            height_m: 12.0,
-            kind: ObstacleKind::Building,
-            id: 1,
-        }];
-        let (a_vec, tr_vec) = screening_attenuation_with_meta(
-            &mut p_vec,
-            &[],
-            ObstacleInput {
-                candidates: &cands,
-                replace_sample_buildings: true,
-            },
-            100.05,
-            104.0,
-            0.0,
-            &terrain,
-        );
-        assert!(tr_raster.delta_m > 0.0);
-        assert!(
-            (tr_raster.delta_m - tr_vec.delta_m).abs() < 1e-12,
-            "δ parity: raster {} vs candidate {}",
-            tr_raster.delta_m,
-            tr_vec.delta_m
-        );
-        for i in 0..NUM_BANDS {
-            assert!(
-                (a_raster[i] - a_vec[i]).abs() < 1e-12,
-                "band {i}: raster {} vs candidate {}",
-                a_raster[i],
-                a_vec[i]
-            );
-        }
-        assert_eq!(tr_vec.kind, "building");
-    }
-
-    /// A candidate BETWEEN cadence samples with larger δ beats the sample
-    /// edge — the exact-position benefit the vector engine exists for.
+    /// A candidate BETWEEN cadence samples with larger δ beats the terrain
+    /// edge the cadence found — the exact-position benefit the vector engine
+    /// exists for. The loser is a bare-earth hill, because that is the only
+    /// thing the sample cadence can still put in the race.
     #[test]
     fn candidate_between_samples_wins_on_delta() {
         let mut p = build_flat_profile(500.0, 100.0);
@@ -1561,8 +1460,8 @@ mod tests {
             .enumerate()
             .min_by(|(_, &a), (_, &b)| ((a - 0.5).abs()).partial_cmp(&((b - 0.5).abs())).unwrap())
             .unwrap();
-        p.building_h_m[idx] = 6; // modest mid-path sample obstacle
-                                 // Tall candidate near the receiver, deliberately between samples.
+        p.elevation_m[idx] = 104.0; // modest mid-path hill, ON a sample
+                                    // Tall candidate near the receiver, deliberately between samples.
         let t_c = (p.t[p.t.len() - 2] + p.t[p.t.len() - 1]) / 2.0;
         let cands = [CrossingCandidate {
             t: t_c,
@@ -1570,18 +1469,20 @@ mod tests {
             kind: ObstacleKind::Building,
             id: 7,
         }];
-        let terrain = [0.0_f64; NUM_BANDS];
+        let (terrain, terrain_delta_m) = terrain_attenuation(&mut p, 100.05, 104.0);
+        assert!(
+            terrain_delta_m.is_some(),
+            "the hill must give the race an edge"
+        );
         let (_, trace) = screening_attenuation_with_meta(
             &mut p,
             &[],
-            ObstacleInput {
-                candidates: &cands,
-                replace_sample_buildings: false,
-            },
+            ObstacleInput { candidates: &cands },
             100.05,
             104.0,
             0.0,
             &terrain,
+            terrain_delta_m,
         );
         assert_eq!(trace.kind, "building");
         assert!(
@@ -1612,14 +1513,12 @@ mod tests {
             let (atten, _) = screening_attenuation_with_meta(
                 &mut p,
                 &[],
-                ObstacleInput {
-                    candidates: &cands,
-                    replace_sample_buildings: true,
-                },
+                ObstacleInput { candidates: &cands },
                 100.05,
                 104.0,
                 60.0, // exclusion covers the candidate
                 &terrain,
+                None,
             );
             let screened = atten.iter().any(|&a| a > 0.0);
             assert_eq!(
@@ -1629,33 +1528,8 @@ mod tests {
         }
     }
 
-    /// `replace_sample_buildings` drops the raster building channel: with no
-    /// candidates, a path full of raster buildings screens ZERO (the A/B
-    /// isolation semantics of QM_VECTOR_BUILDINGS).
-    #[test]
-    fn replace_mode_ignores_raster_buildings() {
-        let mut p = build_flat_profile(500.0, 100.0);
-        for b in p.building_h_m.iter_mut() {
-            *b = 15;
-        }
-        let terrain = [0.0_f64; NUM_BANDS];
-        let bands = screening_attenuation(
-            &mut p,
-            &[],
-            ObstacleInput {
-                candidates: &[],
-                replace_sample_buildings: true,
-            },
-            100.05,
-            104.0,
-            0.0,
-            &terrain,
-        );
-        assert!(bands.iter().all(|&a| a == 0.0));
-    }
-
-    /// A candidate must still screen when the sample composite is clear —
-    /// the winner logic can't early-return on `res_opt == None`.
+    /// A candidate must still screen on a clear path — the winner logic
+    /// cannot early-return just because bare terrain has no edge.
     #[test]
     fn candidate_screens_on_otherwise_clear_path() {
         let mut p = build_flat_profile(400.0, 50.0);
@@ -1669,82 +1543,16 @@ mod tests {
         let (atten, trace) = screening_attenuation_with_meta(
             &mut p,
             &[],
-            ObstacleInput {
-                candidates: &cands,
-                replace_sample_buildings: true,
-            },
+            ObstacleInput { candidates: &cands },
             50.05,
             51.5,
             0.0,
             &terrain,
+            None,
         );
         assert!(atten.iter().any(|&a| a > 0.0), "candidate must screen");
         assert_eq!(trace.kind, "building");
         assert!((trace.t - 0.7).abs() < 1e-12);
-    }
-
-    /// Sloped-terrain exact-sample parity: with D in BOTH δ* fits (SPEC
-    /// §3.5b), a candidate at a sample's t reproduces the raster result on a
-    /// non-flat profile too — the flat-terrain blind spot the gg review
-    /// flagged is closed.
-    #[test]
-    fn candidate_at_sample_matches_raster_on_slope() {
-        let make = || {
-            let mut p = build_flat_profile(500.0, 100.0);
-            let n = p.t.len();
-            for i in 0..n {
-                p.elevation_m[i] = 100.0 + (8.0 * p.t[i]) as f32; // steady rise
-            }
-            p
-        };
-        let mut p_raster = make();
-        let (idx, _) = p_raster
-            .t
-            .iter()
-            .enumerate()
-            .min_by(|(_, &a), (_, &b)| ((a - 0.5).abs()).partial_cmp(&((b - 0.5).abs())).unwrap())
-            .unwrap();
-        p_raster.building_h_m[idx] = 12;
-        let t_edge = p_raster.t[idx];
-        let terrain = [0.0_f64; NUM_BANDS];
-        let (a_raster, tr_raster) = screening_attenuation_with_meta(
-            &mut p_raster,
-            &[],
-            ObstacleInput::CANDIDATES_OFF,
-            100.05,
-            112.0,
-            0.0,
-            &terrain,
-        );
-        let mut p_vec = make();
-        let cands = [CrossingCandidate {
-            t: t_edge,
-            height_m: 12.0,
-            kind: ObstacleKind::Building,
-            id: 1,
-        }];
-        let (a_vec, tr_vec) = screening_attenuation_with_meta(
-            &mut p_vec,
-            &[],
-            ObstacleInput {
-                candidates: &cands,
-                replace_sample_buildings: true,
-            },
-            100.05,
-            112.0,
-            0.0,
-            &terrain,
-        );
-        assert!(tr_raster.delta_m > 0.0);
-        assert!((tr_raster.delta_m - tr_vec.delta_m).abs() < 1e-12);
-        for i in 0..NUM_BANDS {
-            assert!(
-                (a_raster[i] - a_vec[i]).abs() < 1e-12,
-                "band {i} on slope: raster {} vs candidate {}",
-                a_raster[i],
-                a_vec[i]
-            );
-        }
     }
 
     /// δ* continuity: two candidates straddling a cadence sample by ±ε yield
@@ -1769,14 +1577,12 @@ mod tests {
             let (a, _) = screening_attenuation_with_meta(
                 &mut p,
                 &[],
-                ObstacleInput {
-                    candidates: &cands,
-                    replace_sample_buildings: true,
-                },
+                ObstacleInput { candidates: &cands },
                 100.05,
                 112.0,
                 0.0,
                 &terrain,
+                None,
             );
             bands.push(a);
         }
@@ -1824,14 +1630,12 @@ mod tests {
         let (atten, trace) = screening_attenuation_with_meta(
             &mut p,
             &[],
-            ObstacleInput {
-                candidates: &cands,
-                replace_sample_buildings: true,
-            },
+            ObstacleInput { candidates: &cands },
             0.05,
             4.0,
             0.0,
             &terrain,
+            None,
         );
         // 8 kHz (λ = 4 cm) and 4 kHz diffract around a 2.5 cm clearance; from
         // 2 kHz down the δ* mean-ground gate (δ* = 4.1 cm here) owns the band.
@@ -1863,14 +1667,12 @@ mod tests {
         let (atten, trace) = screening_attenuation_with_meta(
             &mut p,
             &[],
-            ObstacleInput {
-                candidates: &cands,
-                replace_sample_buildings: true,
-            },
+            ObstacleInput { candidates: &cands },
             0.05,
             4.0,
             0.0,
             &terrain,
+            None,
         );
         assert!(atten.iter().all(|&a| a == 0.0), "{atten:?}");
         assert_eq!(trace.kind, "none", "nothing to report to the popup");
@@ -1899,14 +1701,12 @@ mod tests {
         let (_, trace) = screening_attenuation_with_meta(
             &mut p,
             &[],
-            ObstacleInput {
-                candidates: &cands,
-                replace_sample_buildings: true,
-            },
+            ObstacleInput { candidates: &cands },
             0.05,
             4.0,
             0.0,
             &terrain,
+            None,
         );
         assert_eq!(trace.obstacle_id, Some(2));
         assert!(trace.delta_m > 0.0);
@@ -1941,14 +1741,12 @@ mod tests {
         let (_, trace) = screening_attenuation_with_meta(
             &mut p,
             &[],
-            ObstacleInput {
-                candidates: &cands,
-                replace_sample_buildings: true,
-            },
+            ObstacleInput { candidates: &cands },
             102.0,
             102.0,
             0.0,
             &terrain,
+            None,
         );
         assert!(
             (trace.t - 0.9).abs() < 1e-12,

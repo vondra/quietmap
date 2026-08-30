@@ -128,7 +128,6 @@ mod tests {
             let imd = (rng.next() % 101) as u8;
             data.push(FusedPixel {
                 elevation: 0.0,
-                building: 0,
                 forest: 0,
                 imd,
                 _pad: 0,

@@ -28,7 +28,7 @@ pub(crate) fn compute_roads(
     receiver: &Receiver,
     roads: &[RoadSegment],
     barriers: &[Barrier],
-    obstacles: Option<&crate::propagation::obstacle_index::ObstacleSet>,
+    obstacles: &crate::propagation::obstacle_index::ObstacleSet,
     rasters: &dyn RasterSampler,
     mut traces: Option<&mut TraceCollector>,
 ) -> (NoisePeriods, Vec<Contributor>) {
@@ -38,9 +38,8 @@ pub(crate) fn compute_roads(
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
     let rcv_alt = receiver.altitude_m();
     let bounds = ArcBounds::shipped();
-    // The set the arc rule clips against; `None` = no store AND no walls, the
-    // cp verdict stands for every segment and the skyline is never grown.
-    let arc_set = crate::arc_obstacle_set(obstacles, barriers);
+    // The set the arc rule clips against.
+    let arc_set = obstacles;
 
     use std::collections::HashMap;
 
@@ -321,6 +320,7 @@ pub(crate) fn compute_roads(
                         rcv_alt,
                         0.0, // roads: no exclusion radius
                         &terrain.attenuation_bands,
+                        terrain.dominant_delta_m(),
                     );
                 // Arc screening (fix-pack Fix 1): the cp ray's verdict covers
                 // only the directions it flies through; the segment's other
@@ -439,26 +439,15 @@ pub(crate) fn compute_roads(
                     };
 
                 // Group-level obstacle histogram — the popup's "N of M
-                // segments had obstacles on path". Vector mode reads it from
-                // exact footprint crossings (`max_height_crossed`); the raster
-                // walk survives only on the raster-fallback path.
-                let (seg_max_bh, _) = match obstacles {
-                    Some(set) => set.max_height_crossed(
-                        seg.cp_lat,
-                        seg.cp_lon,
-                        receiver.lat,
-                        receiver.lon,
-                        hist_scratch,
-                    ),
-                    None => rasters.max_building_along_path(
-                        seg.cp_lat,
-                        seg.cp_lon,
-                        receiver.lat,
-                        receiver.lon,
-                        seg.dist_m,
-                        0.0,
-                    ),
-                };
+                // segments had obstacles on path", from the exact footprint
+                // crossings.
+                let (seg_max_bh, _) = obstacles.max_height_crossed(
+                    seg.cp_lat,
+                    seg.cp_lon,
+                    receiver.lat,
+                    receiver.lon,
+                    hist_scratch,
+                );
 
                 // Popup trace, built here so the allocation-heavy part runs in
                 // parallel; pass 3 pushes it in segment order. `std::mem::take`
@@ -915,9 +904,6 @@ mod tests {
         fn elevation(&self, _: f64, _: f64) -> f64 {
             200.0
         }
-        fn building_height(&self, _: f64, _: f64) -> f64 {
-            0.0
-        }
         fn ground_g(&self, _: f64, _: f64) -> f64 {
             0.5
         }
@@ -981,7 +967,14 @@ mod tests {
     }
 
     fn one_road_meta(roads: &[RoadSegment]) -> RoadMetadata {
-        let (_periods, contribs) = compute_roads(&receiver(), roads, &[], None, &FlatRasters, None);
+        let (_periods, contribs) = compute_roads(
+            &receiver(),
+            roads,
+            &[],
+            &ObstacleSet::empty(),
+            &FlatRasters,
+            None,
+        );
         assert_eq!(contribs.len(), 1, "single segment → single contributor");
         match contribs.into_iter().next().unwrap().metadata.unwrap() {
             SourceMetadata::Road(m) => m,
@@ -1017,9 +1010,25 @@ mod tests {
     #[test]
     fn none_channel_is_receiver_path_bit_identical() {
         let roads = vec![secondary_segment()];
-        let plain = compute_roads(&receiver(), &roads, &[], None, &FlatRasters, None).0;
+        let plain = compute_roads(
+            &receiver(),
+            &roads,
+            &[],
+            &ObstacleSet::empty(),
+            &FlatRasters,
+            None,
+        )
+        .0;
         defaults::set_road_row_admins(Some(vec![None]));
-        let channeled = compute_roads(&receiver(), &roads, &[], None, &FlatRasters, None).0;
+        let channeled = compute_roads(
+            &receiver(),
+            &roads,
+            &[],
+            &ObstacleSet::empty(),
+            &FlatRasters,
+            None,
+        )
+        .0;
         defaults::set_road_row_admins(None);
         assert_eq!(plain.ld_db, channeled.ld_db);
         assert_eq!(plain.le_db, channeled.le_db);
@@ -1057,19 +1066,19 @@ mod tests {
         };
 
         let roads = vec![secondary_segment()];
-        let clear = compute_roads(&receiver(), &roads, &[], None, &FlatRasters, None)
-            .0
-            .lden_db;
-        let screened = compute_roads(
+        let clear = compute_roads(
             &receiver(),
             &roads,
             &[],
-            Some(&obstacles),
+            &ObstacleSet::empty(),
             &FlatRasters,
             None,
         )
         .0
         .lden_db;
+        let screened = compute_roads(&receiver(), &roads, &[], &obstacles, &FlatRasters, None)
+            .0
+            .lden_db;
         let loss = clear - screened;
         assert!(
             loss > 0.2,
@@ -1186,7 +1195,7 @@ mod tests {
                         &receiver(),
                         &segs,
                         &wall,
-                        Some(&obstacles),
+                        &obstacles,
                         &FlatRasters,
                         with_traces.then_some(&mut traces),
                     );

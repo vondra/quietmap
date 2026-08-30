@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
 # Download the WORLD Overture buildings parquet cache for the vector obstacle
-# ingest (geodata-v2 1.1 world extension) — download ONLY, no rasterization
-# (the raster tree is frozen for Wave 1; `download-overture-buildings.sh` is
-# the legacy parquet→raster pipeline).
+# ingest (geodata-v2 1.1 world extension).
 #
 #   scripts/obstacles/download-overture-world.sh [--jobs 6]
 #
-# Tile list = the world building-raster census (13 694 1°×1° tiles — exactly
-# where buildings were ever observed). Resumable: a tile whose parquet exists
-# non-empty is skipped; overturemaps writes via a temp file so partials never
+# Tile list comes from the VECTOR source itself (scripts/obstacles/world-tile-census.py
+# over overture-obstacles/h3r4) — it used to be `ls prepared/rasters/building/*.raw`,
+# which made the raster the source of truth for the vector ingest and blocked
+# deleting it. Resumable: a tile whose parquet exists non-empty is skipped; overturemaps writes via a temp file so partials never
 # count. ~80 GB total into data/enrichment/global/overture-buildings/parquet.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 PARQUET_DIR="data/enrichment/global/overture-buildings/parquet"
-RASTER_CENSUS="data/prepared/rasters/building"
 JOBS=6
 [ "${1:-}" = "--jobs" ] && JOBS="$2"
 
@@ -51,7 +49,7 @@ INGESTED_LIST="$(pwd)/data/enrichment/global/overture-obstacles/.ingested-tiles"
 [ -f "$INGESTED_LIST" ] || INGESTED_LIST=""
 export INGESTED_LIST
 
-ls "$RASTER_CENSUS"/*.raw | sed 's/.*\///; s/\.raw$//' | sort > /tmp/overture-world-tiles.txt
+python3 scripts/obstacles/world-tile-census.py > /tmp/overture-world-tiles.txt
 total=$(wc -l < /tmp/overture-world-tiles.txt)
 done_n=$(ls "$PARQUET_DIR"/*.parquet 2>/dev/null | wc -l)
 echo "[overture-world] $total tiles in census, $done_n cached → $PARQUET_DIR"

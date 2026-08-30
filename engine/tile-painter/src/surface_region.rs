@@ -374,15 +374,13 @@ pub fn process_surface_region(
             ctx.batch_n,
             ctx.halo_m,
             ctx.rasters,
-            obstacle_data.set().is_none(),
         );
-        // Vector mode: the raster rx_refl bake is skipped (see
-        // build_opt_rx_refl above) and the pre-bake below is the one writer —
-        // recomputed from footprints, the SAME 150 × 150 m probe, and the GPU
-        // rxar upload carries it unchanged (gg review: pre-bake site). The
-        // popup reads vector reflection too (1.4b VectorReflectionSampler,
-        // landed) — pipeline and popup agree on one reflection source.
-        if let Some(set) = obstacle_data.set() {
+        // The pre-bake below is the ONE writer of rx_refl — recomputed from
+        // footprints, the SAME 150 × 150 m probe, and the GPU rxar upload
+        // carries it unchanged. The popup reads vector reflection too
+        // (VectorReflectionSampler), so pipeline and popup agree on one source.
+        {
+            let set = obstacle_data.set();
             // Only the REQUESTED tiles are painted — rebaking the whole
             // batch_n² grid would triple the bake cost for nothing.
             for &(x, y) in batch_tiles {
@@ -464,7 +462,7 @@ pub fn process_surface_region(
                                 r,
                                 &tile_barriers,
                                 obstacle_data.set(),
-                                interior.as_ref(),
+                                &interior,
                             );
                             (
                                 st.path_calls,
@@ -556,9 +554,7 @@ pub fn process_surface_region(
                 // Interior estimate LAST so the area fill can't paint a façade
                 // value back over an enclosed footprint.
                 if !postprocess_applied {
-                    if let Some(interior) = &interior {
-                        interior.apply(&mut cells);
-                    }
+                    interior.apply(&mut cells);
                 }
                 let out = ctx
                     .output

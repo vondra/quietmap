@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify'
-import { renderTile, renderDataTile, renderBuildingVectorTile, getEmptyPng, preloadBarriers } from '../engine/raster-tile-renderer.js'
+import { renderTile, renderDataTile, renderBuildingVectorTile, preloadBarriers } from '../engine/raster-tile-renderer.js'
 
 const VALID_LAYERS = new Set(['dem', 'building', 'forest', 'barriers'])
-const VALID_DATA_LAYERS = new Set(['dem', 'building', 'forest'])
+const VALID_DATA_LAYERS = new Set(['dem', 'forest'])
 const MIN_ZOOM = 6
 const MAX_ZOOM = 16
 const CACHE_MAX = 500
@@ -45,15 +45,16 @@ function parseTileParams(
 
 export type RasterTileRouteOptions = {
   preloadRuntimeData?: boolean
-  /** Popup-engine footprint provider — when present, the `building` layer
-   *  renders MODEL-TRUTH vector footprints (as-used heights incl. the
-   *  low-profile cap) instead of the legacy 30 m raster. */
-  queryObstacleFootprints?: (south: number, west: number, north: number, east: number) => Promise<string>
+  /** Popup-engine footprint provider — the ONLY source of the `building`
+   *  layer (MODEL-TRUTH vector footprints at as-used heights, incl. the
+   *  low-profile cap). Required: without it the layer has no data at all,
+   *  and a route that quietly served nothing would be worse than no route. */
+  queryObstacleFootprints: (south: number, west: number, north: number, east: number) => Promise<string>
 }
 
 export async function rasterTileRoutes(
   app: FastifyInstance,
-  options: RasterTileRouteOptions = {},
+  options: RasterTileRouteOptions,
 ): Promise<void> {
   if (options.preloadRuntimeData) {
     preloadBarriers().catch(err => app.log.error(err, 'barrier preload failed'))
@@ -66,32 +67,36 @@ export async function rasterTileRoutes(
       if (typeof parsed === 'string') return reply.code(400).send(parsed)
       const { layer, z, x, y } = parsed
 
-      const vectorBuildings = layer === 'building' && options.queryObstacleFootprints
-      const cacheKey = `${vectorBuildings ? 'building-vec' : layer}/${z}/${x}/${y}`
-      reply.header('Content-Type', 'image/png')
-      // Model-truth footprints change with the obstacle store + cap logic —
-      // cache them shorter than the static rasters.
-      reply.header('Cache-Control', vectorBuildings ? 'public, max-age=3600' : 'public, max-age=86400')
+      const cacheKey = `${layer}/${z}/${x}/${y}`
+      // Headers are attached only on the success paths: the error handler
+      // reuses this reply, and a 5xx carrying `public, max-age=3600` would let
+      // Caddy and every browser cache the outage as if it were a tile.
+      const sendPng = (png: Buffer): Buffer => {
+        reply.header('Content-Type', 'image/png')
+        // Model-truth footprints change with the obstacle store + cap logic —
+        // cache them shorter than the static rasters.
+        reply.header('Cache-Control', layer === 'building' ? 'public, max-age=3600' : 'public, max-age=86400')
+        return png
+      }
 
       const cached = lruGet(pngCache, cacheKey)
-      if (cached !== undefined) return cached
+      if (cached !== undefined) return sendPng(cached)
 
-      let png: Buffer
-      try {
-        png = vectorBuildings
-          ? await renderBuildingVectorTile(z, x, y, options.queryObstacleFootprints!)
-          : await renderTile(layer as 'dem' | 'building' | 'forest', z, x, y)
-      } catch {
-        png = getEmptyPng()
-      }
+      // No catch: a render failure propagates to Fastify's 5xx handler. The
+      // former fallback answered 200 with a transparent tile, which on a noise
+      // map reads as "nothing here" — data loss disguised as a quiet place.
+      const png = layer === 'building'
+        ? await renderBuildingVectorTile(z, x, y, options.queryObstacleFootprints)
+        : await renderTile(layer as 'dem' | 'forest' | 'barriers', z, x, y)
       lruSet(pngCache, cacheKey, png)
-      return png
+      return sendPng(png)
     },
   )
 
   // Raw cell-value tiles for the hover cell inspector. Same z/x/y grid as
-  // the PNG endpoint; payload is Int16 (DEM) / u8 (building, forest) so the
-  // client can look up per-cell values locally without per-hover round-trips.
+  // the PNG endpoint; payload is Int16 (DEM) / u8 (forest) so the client can
+  // look up per-cell values locally without per-hover round-trips. Buildings
+  // have no entry here: their heights are vector footprints, not a cell grid.
   app.get<{ Params: { layer: string; z: string; x: string; y: string } }>(
     '/api/raster-data/:layer/:z/:x/:y.bin',
     async (request, reply) => {
@@ -106,7 +111,7 @@ export async function rasterTileRoutes(
       const cached = lruGet(dataCache, cacheKey)
       if (cached !== undefined) return cached
 
-      const data = await renderDataTile(layer as 'dem' | 'building' | 'forest', z, x, y)
+      const data = await renderDataTile(layer as 'dem' | 'forest', z, x, y)
       lruSet(dataCache, cacheKey, data)
       return data
     },

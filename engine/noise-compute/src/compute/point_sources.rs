@@ -8,7 +8,7 @@ pub(crate) fn compute_point_sources(
     receiver: &Receiver,
     sources: &[PointSource],
     barriers: &[Barrier],
-    obstacles: Option<&crate::propagation::obstacle_index::ObstacleSet>,
+    obstacles: &crate::propagation::obstacle_index::ObstacleSet,
     rasters: &dyn RasterSampler,
     source_kind: LayerKind,
     mut traces: Option<&mut TraceCollector>,
@@ -111,6 +111,7 @@ pub(crate) fn compute_point_sources(
                 rcv_alt,
                 src.exclusion_radius_m as f64,
                 &terrain.attenuation_bands,
+                terrain.dominant_delta_m(),
             );
         let veg_atten = propagation::path_effects::vegetation_attenuation_path(&path_profile);
 

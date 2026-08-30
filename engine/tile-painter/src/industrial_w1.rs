@@ -75,8 +75,8 @@ pub(crate) fn render(
     tile: &FusedTileZ13,
     points: &[PointRow],
     barriers: &[Barrier],
-    obstacles: Option<&ObstacleSet>,
-    interior: Option<&crate::source_loader_obstacle::InteriorEstimate>,
+    obstacles: &ObstacleSet,
+    interior: &crate::source_loader_obstacle::InteriorEstimate,
 ) -> (Vec<u8>, PointScatterStats, ReconstructionStats) {
     let axis = anchor_axis();
     let anchor_mask = lattice_mask(&axis);
@@ -92,9 +92,7 @@ pub(crate) fn render(
     let surrogate_raw = collapse_lden_surface_u8(&surrogate_accum);
     let mut surrogate_cells = surrogate_raw.clone();
     crate::wire_hm3::fill_area_median(&mut surrogate_cells, crate::wire_hm3::AREA_FILL_RADIUS_PX);
-    if let Some(interior) = interior {
-        interior.apply(&mut surrogate_cells);
-    }
+    interior.apply(&mut surrogate_cells);
 
     // Phase 2: exact physics only at the 104×104 anchors. These values drive
     // both the residual correction and the tri-state selector.
@@ -168,9 +166,7 @@ pub(crate) fn render(
         }
     }
     crate::wire_hm3::fill_area_median(&mut legacy_presence, crate::wire_hm3::AREA_FILL_RADIUS_PX);
-    if let Some(interior) = interior {
-        interior.apply(&mut legacy_presence);
-    }
+    interior.apply(&mut legacy_presence);
 
     // Direct + interpolated candidate everywhere, exact cells on the union
     // of anchors and selected blocks. The final-field surrogate already
@@ -202,9 +198,7 @@ pub(crate) fn render(
         &selected_mask,
         crate::wire_hm3::AREA_FILL_RADIUS_PX,
     );
-    if let Some(interior) = interior {
-        apply_selected_interior(interior, &mut candidate, &selected_mask);
-    }
+    apply_selected_interior(interior, &mut candidate, &selected_mask);
     // Median fill can cross the presence threshold or fill an exact NO_DATA
     // cell. Re-apply the preserved runtime presence state after smoothing.
     for (candidate_cell, &presence_cell) in candidate.iter_mut().zip(legacy_presence.iter()) {
