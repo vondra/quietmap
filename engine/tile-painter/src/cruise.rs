@@ -75,14 +75,14 @@ impl ScatterStats {
 
 /// Scatter every applicable cruise bucket onto `accum` for the tile.
 /// Receiver lattice (`rx_lat` / `rx_lon` / `rx_alt_m`) lives on the
-/// `FusedTileZ13`; `rasters` stays for `SegmentTerrain::sample` because
+/// `FusedTileZ13`; terrain arrives precomputed per row (`precompute_row_terrain`);
 /// cruise's synth half-segment can extend ~25 km from R7 centre — past
 /// the 16 km tile halo — so terrain has to come from the full mmap
 /// store rather than the tile's clamped halo (/gg Codex #7).
 pub fn scatter_tile(
     tile: &FusedTileZ13,
     cruise: &[CruiseRowView<'_>],
-    rasters: &dyn RasterSampler,
+    row_terrain: &[Option<SegmentTerrain>],
     accum: &mut TileAccumulator,
 ) -> ScatterStats {
     let npd_luts = NpdLuts::shared();
@@ -136,13 +136,14 @@ pub fn scatter_tile(
     // (`81bd15ca`).
     let (mut local, broadcast) = cruise
         .par_iter()
+        .enumerate()
         .fold(
             || (TileAccumulator::new(), CoarseLattice::new(far_n)),
-            |(mut local, mut broadcast), row| {
+            |(mut local, mut broadcast), (idx, row)| {
                 scatter_one_bucket(
                     row,
+                    row_terrain[idx].as_ref(),
                     tile,
-                    rasters,
                     npd_luts,
                     tile_centre_lat,
                     tile_centre_lon,
@@ -185,11 +186,73 @@ pub fn scatter_tile(
     }
 }
 
+/// Terrain of every cruise row, sampled ONCE per region build. A row's synth
+/// segment geometry depends only on (r7 cell, profile, flight-level bin,
+/// origin) — never on the tile being painted — but the row scatters into every
+/// z9 tile its ~25 km reach covers, so sampling per (row, tile) re-read the
+/// same five raster points up to a handful of times per row (times three
+/// periods, which share geometry). `None` = sampled and rejected, or no cell
+/// centre; the bucket's own centre check runs first, so uncentred rows are
+/// never miscounted as terrain-rejected.
+pub fn precompute_row_terrain(
+    cruise: &[CruiseRowView<'_>],
+    rasters: &dyn RasterSampler,
+) -> Vec<Option<SegmentTerrain>> {
+    use rayon::prelude::*;
+    cruise
+        .par_iter()
+        .map(|row| {
+            let (src_lat, src_lon) = r7_cell_center(row.r7_hex)?;
+            let (lat_off, lon_off) =
+                cruise_synth_offsets(src_lat, (row.rep_len_m as f64).max(5.0) * 0.5);
+            let seg = synth_segment(row, src_lat, src_lon, lat_off, lon_off, 0.0);
+            let terrain = SegmentTerrain::sample(&seg, rasters);
+            aircraft::is_valid_airborne_with_terrain(&seg, &terrain).then_some(terrain)
+        })
+        .collect()
+}
+
+/// The row's synthetic half-segment. Geometry depends only on (r7 cell,
+/// profile, flight-level bin); `density` only weights `count_weight`, so the
+/// precompute pass may build it with a placeholder density for terrain
+/// sampling — the bucket rebuilds with the live density.
+fn synth_segment(
+    row: &CruiseRowView<'_>,
+    src_lat: f64,
+    src_lon: f64,
+    lat_off: f64,
+    lon_off: f64,
+    density: f64,
+) -> AircraftSegment {
+    let rep_len_m = (row.rep_len_m as f64).max(5.0);
+    AircraftSegment {
+        flight_id: pack_synth(0),
+        profile_idx: row.rep_profile_idx,
+        is_departure: true,
+        on_ground: false,
+        period: row.period,
+        date_id: 0,
+        start_lat: src_lat - lat_off,
+        start_lon: src_lon - lon_off,
+        start_alt_m: row.rep_alt_m,
+        end_lat: src_lat + lat_off,
+        end_lon: src_lon + lon_off,
+        end_alt_m: row.rep_alt_m,
+        speed_kt: row.rep_speed_kt,
+        segment_length_m: rep_len_m as f32,
+        count_weight: density as f32,
+        surface_model: false,
+        ground_context: GROUND_CONTEXT_NONE,
+        ground_ops_kind: GROUND_OPS_KIND_NONE,
+        source_id: row.source_id as u16,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn scatter_one_bucket(
     row: &CruiseRowView<'_>,
+    row_terrain: Option<&SegmentTerrain>,
     tile: &FusedTileZ13,
-    rasters: &dyn RasterSampler,
     npd_luts: &NpdLuts,
     tile_centre_lat: f64,
     tile_centre_lon: f64,
@@ -235,34 +298,12 @@ fn scatter_one_bucket(
         return;
     }
 
-    let (lat_off, lon_off) = cruise_synth_offsets(src_lat, half_len_m);
-    let seg = AircraftSegment {
-        flight_id: pack_synth(0),
-        profile_idx: row.rep_profile_idx,
-        is_departure: true,
-        on_ground: false,
-        period: row.period,
-        date_id: 0,
-        start_lat: src_lat - lat_off,
-        start_lon: src_lon - lon_off,
-        start_alt_m: row.rep_alt_m,
-        end_lat: src_lat + lat_off,
-        end_lon: src_lon + lon_off,
-        end_alt_m: row.rep_alt_m,
-        speed_kt: row.rep_speed_kt,
-        segment_length_m: rep_len_m as f32,
-        count_weight: density as f32,
-        surface_model: false,
-        ground_context: GROUND_CONTEXT_NONE,
-        ground_ops_kind: GROUND_OPS_KIND_NONE,
-        source_id: row.source_id as u16,
-    };
-
-    let terrain = SegmentTerrain::sample(&seg, rasters);
-    if !aircraft::is_valid_airborne_with_terrain(&seg, &terrain) {
+    let Some(terrain) = row_terrain else {
         terrain_rejected.fetch_add(1, Ordering::Relaxed);
         return;
-    }
+    };
+    let (lat_off, lon_off) = cruise_synth_offsets(src_lat, half_len_m);
+    let seg = synth_segment(row, src_lat, src_lon, lat_off, lon_off, density);
 
     let period_idx = row.period.min(2);
 
@@ -290,7 +331,7 @@ fn scatter_one_bucket(
                 let rx_lon = tile.rx_lon[px];
                 let rx_alt = tile.rx_alt_m[py * TILE_PX + px] as f64;
                 match aircraft::segment_sel_with_terrain_energy(
-                    &seg, rx_lat, rx_lon, rx_alt, &terrain, npd_luts,
+                    &seg, rx_lat, rx_lon, rx_alt, terrain, npd_luts,
                 ) {
                     // sel → linear energy via fast_exp_f64; see airborne.rs:208.
                     Some(sel) => {
@@ -321,7 +362,7 @@ fn scatter_one_bucket(
             let rx_alt = tile.rx_alt_m[row_base + px as usize] as f64;
             local_eval += 1;
             let Some(sel) = aircraft::segment_sel_with_terrain_energy(
-                &seg, rx_lat, rx_lon, rx_alt, &terrain, npd_luts,
+                &seg, rx_lat, rx_lon, rx_alt, terrain, npd_luts,
             ) else {
                 local_below += 1;
                 continue;

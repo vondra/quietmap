@@ -282,12 +282,6 @@ fn combine_stats(a: PointScatterStats, b: PointScatterStats, rows: usize) -> Poi
 ///
 /// Numeric interpolated cells already use a final-field surrogate and must
 /// not be raised a second time. Exact cells are the only cells that still
-/// need the stock point-path smoothing before the tile is written.
-
-/// Apply the building-envelope transform only to exact cells. The numeric
-/// surrogate has already been transformed; applying it to every cell would
-/// subtract the façade delta twice from enclosed interpolation.
-
 fn anchor_axis() -> Vec<usize> {
     let mut axis = (0..TILE_PX).step_by(STRIDE).collect::<Vec<_>>();
     if axis.last().copied() != Some(TILE_PX - 1) {

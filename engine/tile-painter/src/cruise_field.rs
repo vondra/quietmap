@@ -68,6 +68,10 @@ pub struct CruiseField<'a> {
     rasters: &'a RealRasters,
     /// Borrowed for the build's lifetime; the region's `grid_disk(1)` cruise ring.
     cruise: &'a [CruiseRowView<'a>],
+    /// Row terrain sampled once per region build — a row's segment geometry is
+    /// tile-independent, but its ~25 km reach spans several z9 tiles, each of
+    /// which used to re-sample the same five raster points.
+    row_terrain: Vec<Option<noise_compute::emission::aircraft::SegmentTerrain>>,
     pub stats: ScatterStats,
 }
 
@@ -77,6 +81,7 @@ impl<'a> CruiseField<'a> {
             grid: HashMap::new(),
             rasters,
             cruise,
+            row_terrain: crate::cruise::precompute_row_terrain(cruise, rasters),
             stats: ScatterStats::default(),
         }
     }
@@ -94,7 +99,7 @@ impl<'a> CruiseField<'a> {
                 self.rasters,
             );
             let mut accum = TileAccumulator::new();
-            let s = scatter_tile(&tile, self.cruise, self.rasters, &mut accum);
+            let s = scatter_tile(&tile, self.cruise, &self.row_terrain, &mut accum);
             self.stats.merge(&s);
             self.grid
                 .insert((x10, y10), accum.energy.into_boxed_slice());
