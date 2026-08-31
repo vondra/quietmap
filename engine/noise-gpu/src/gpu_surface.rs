@@ -3481,14 +3481,37 @@ fn run_stream(
         output,
         barriers_enabled,
     };
-    // FIXED N (default 2, NOT rayon thread count): each worker holds per-tile GPU
+    // FIXED N (default 6, NOT rayon thread count): each worker holds per-tile GPU
     // scratch on its own stream. The cell itself is loaded once and its owned
     // tiles are independent jobs over that shared payload — true for every
-    // cell on Earth, not a per-run rebalance. 2 fits the 12 GB cards;
-    // QM_GPU_STREAM_WORKERS overrides.
-    let n_workers: usize = env("QM_GPU_STREAM_WORKERS", "2")
+    // cell on Earth, not a per-run rebalance.
+    //
+    // 6 is measured, not guessed (r9950, RTX 5070, wbench-orig, 2026-08-31).
+    // The previous 2 was chosen as "fits the 12 GB cards" and left most of the
+    // card idle: `nvidia-smi dmon` reads sm 100 % at 2 workers, but that only
+    // means a kernel is RESIDENT, not that the SMs are full.
+    //
+    //   workers   W1 (z12) wall   peak VRAM   W2 (z13) wall   peak VRAM
+    //      2         252.1 s        2.0 GB       1767.4 s      2.0 GB
+    //      4         206.2 s
+    //      6         182.3 s        4.5 GB       1582.1 s      4.7 GB
+    //      8         176.8 s        5.6 GB
+    //
+    // 6 is the knee: 8 buys 2.2 more points for 28 % more VRAM. VRAM tracks the
+    // WORKER COUNT and not the zoom, so 4.7 GB is the figure a card must have
+    // spare — well inside the 11 GB fleet floor that gpu_airborne/build.rs sizes
+    // its chunks against. Painted bytes do not move: road+rail (112 files) and
+    // industrial+building+ground (109) are byte-identical at every setting, and
+    // the aircraft layers differ by exactly as much between two runs of ONE
+    // setting as they do across settings.
+    //
+    // The gain is z12's: a z13 cell holds four times the tiles, so one worker
+    // already keeps the card busy there (-10.5 % against z12's -27.7 %).
+    //
+    // QM_GPU_STREAM_WORKERS overrides, for a card with less memory to spare.
+    let n_workers: usize = env("QM_GPU_STREAM_WORKERS", "6")
         .parse()
-        .unwrap_or(2)
+        .unwrap_or(6)
         .max(1);
     let names: Vec<&str> = layers.iter().map(|l| l.dir()).collect();
     let evidence = RendererEvidence::from_env(
