@@ -9,6 +9,27 @@ Before every commit, run `./scripts/check-fast.sh` (optional `node` or
 `rust` selects one side) and read its complete raw output. It must pass
 with zero compiler warnings, including Rust Clippy.
 
+## Simplicity budget
+
+Every change pays rent. Before adding code, read the complete touched feature
+and its direct callers. In that same area remove or consolidate obsolete
+branches, dormant flags/env knobs, fallbacks, compatibility shims, duplicate
+truths/tests/docs, completed migration bridges, and dead paths.
+Ship the smallest complete design; never speculative scaffolding.
+
+- This is active development: activate the selected behavior and delete the old
+  path in the same logical wave. Preserve compatibility only for irreplaceable
+  data as one explicit migration that then disappears.
+- Prefer fewer concepts and net deletion. Handoffs report added/deleted/net LOC
+  and the concepts removed. Production-code growth must name the visitor, data,
+  or operability capability it buys and why a smaller design cannot provide it.
+- Do not game LOC: descriptive names, one test per bug class, and checks that
+  protect visitors or irreplaceable data stay.
+- A verification gate may block commit or release only to protect a visitor or
+  irreplaceable data; it never blocks a dev preview, measurement, or packaging an experiment.
+- One correctness fact lives in one place. A hash verifies bytes only against
+  an independently anchored expected identity; a file never proves itself.
+
 ## Code style
 
 - **Code is the documentation.** Use long, precise, greppable names

@@ -1,4 +1,4 @@
-# Quiet Map (0db)
+# Quiet Map
 
 Global environmental noise atlas: computed sound levels (Lden) from roads,
 railways, aircraft, industry, buildings and settlements, for the whole world

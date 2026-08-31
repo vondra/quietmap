@@ -29,8 +29,8 @@ function isAbsentModuleError(error: unknown, specifier: string, resolvedPath: st
  * still typechecks — a literal import() would be resolved by tsc.
  *
  * Model B: in a private checkout the ops modules live OUTSIDE the product repo
- * (0db-private/ops-web/routes) — OPS_ROUTES_DIR points at that directory and is
- * consulted when the in-tree specifier is absent. Unset = the public shape.
+ * (quietmap-private/ops-web/routes) — OPS_ROUTES_DIR points at that directory
+ * and is consulted when the in-tree specifier is absent. Unset = the public shape.
  */
 export async function importOptionalOpsModule<T>(specifier: string): Promise<T | null> {
   const resolvedPath = fileURLToPath(new URL(specifier, import.meta.url))
