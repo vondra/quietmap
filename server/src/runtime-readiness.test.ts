@@ -93,7 +93,10 @@ function baseGeneration(rasterGenerationId = 'b'.repeat(16)) {
     product_commit: 'a'.repeat(40),
     dataset_year: 2026,
     model_role_contract: selectedModelRoleContract,
-    numerical_environment: { QM_W1_INDUSTRIAL_POLICY: 'adaptive-stride5' },
+    numerical_environment: {
+        QM_W1_INDUSTRIAL_POLICY: 'adaptive-stride5',
+        QM_W1_BUILDING_POLICY: 'adaptive-stride5',
+      },
     producer_requirements: {
       worker_model_roles: { ...STOCK_PRODUCER_ROLES, 'gpu-line': 'w1' },
     },
