@@ -1335,9 +1335,8 @@ fn evaluate_exact_pair(
         t.force_hard_ground,
     );
     let ground_g = ground_path.ground_path_g;
-    // The arc transport still returns a screening increment, so it receives
-    // this CP vector until node_eval carries each ray's full composite. Clear
-    // point paths use the same vector here.
+    // Screening is evaluated per angular bucket; the ground term remains tied
+    // to the line segment's characteristic point.
     let ground_bands = ground_atten_bands(ground_path);
     // Heatmap discards the popup obstacle traces, so call the metadata-free
     // band-only variants: terrain skips the per-pixel EdgePoint Vec, screening

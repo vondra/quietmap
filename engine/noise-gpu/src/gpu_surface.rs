@@ -73,14 +73,6 @@ const ETA: f64 = 0.40;
 const TW: f64 = 8.0; // pack_tile swizzle width — the binned kernel ignores it (only
                      // the un-binned `rail` bench kernel in e2-full swizzles by it)
 
-#[cfg(feature = "v2-h0")]
-fn h0_exact_counter(output: &[f32], index: usize) -> u64 {
-    assert!(index < noise_gpu::OUT_H0_COUNTERS);
-    let first_slot = noise_gpu::OUT_H0_COUNTER_BYTE_OFFSET / std::mem::size_of::<f32>()
-        + index * (std::mem::size_of::<u64>() / std::mem::size_of::<f32>());
-    u64::from(output[first_slot].to_bits()) | (u64::from(output[first_slot + 1].to_bits()) << 32)
-}
-
 /// Process-wide byte budget for host-resident tile blocks: bounds building and
 /// ready blocks across all stream workers and both buffer halves for every
 /// worker. A per-worker block-count window is not a memory bound (2 workers ×
@@ -2025,32 +2017,22 @@ fn process_block(
     if require_arcstat && candidate_build_on {
         bail!("rail ARCSTAT census is incompatible with the multifidelity W1 candidate");
     }
-    if require_arcstat && cfg!(feature = "v2-h0") {
-        bail!("rail ARCSTAT census is only defined for the stock surface role");
-    }
     let out_slots = if require_arcstat {
         noise_gpu::OUT_SLOTS_PROF
     } else if candidate_build_on {
         noise_gpu::OUT_SLOTS_MULTIFIDELITY
-    } else if cfg!(feature = "v2-h0") {
-        noise_gpu::OUT_SLOTS_H0
     } else {
         noise_gpu::OUT_SLOTS_PROD
     };
     let mut d_out = dev.alloc_zeros::<f32>(out_slots).expect("out");
     // Arcs the kernel had to drop for ARC_MAX_MERGED overflow, cumulative over
     // this block (the buffer is allocated once and the kernel only ever adds).
-    #[cfg(not(feature = "v2-h0"))]
     let mut arc_drops_seen = 0f32;
-    #[cfg(feature = "v2-h0")]
-    let arc_drops_seen = 0f32;
     // Launch A's ordinary output is cumulative across this block, while the
     // compact exact launches use fresh per-tile allocations. Keep their fault
     // count cumulative before combining it with d_out, otherwise the previous
     // tile's exact drops would be subtracted twice by the existing ARC delta.
     let mut multifidelity_faults_seen = 0f32;
-    #[cfg(feature = "v2-h0")]
-    let mut h0_counts_seen = [0_u64; noise_gpu::OUT_H0_COUNTERS];
     let mut arcstat_seen = [0f64; noise_gpu::OUT_ARCSTAT_COUNTERS];
     let launch_cfg = LaunchConfig {
         grid_dim: (N_BINS as u32, 1, 1),
@@ -2143,7 +2125,6 @@ fn process_block(
                 swizzle_width: TW,
                 source_count: nsrc,
                 output_slots: out_slots,
-                line_layer_tag: layer.h0_abi_tag(),
             },
         )
     };
@@ -2651,25 +2632,15 @@ fn process_block(
         .map_err(anyhow::Error::msg)
         .with_context(|| format!("{} z{}/{tx}/{ty}", layer.dir(), cfg.z))?;
         if arc_drops_this_tile > 0.0 {
-            #[cfg(feature = "v2-h0")]
-            bail!(
-                "V2 H0 ABI/layout fault {} z{}/{tx}/{ty}: production_fault_slot_delta={:.0}",
+            eprintln!(
+                "!! ARC OVERFLOW {} z{}/{tx}/{ty}: {:.0} blocked arcs DROPPED \
+                 (ARC_MAX_MERGED too small for this geometry) — this tile UNDER-screens; \
+                 re-measure with NOISE_GPU_DEFINES=\"-DARC_MAX_MERGED=<bigger>\"",
                 layer.dir(),
                 cfg.z,
                 arc_drops_this_tile,
             );
-            #[cfg(not(feature = "v2-h0"))]
-            {
-                eprintln!(
-                    "!! ARC OVERFLOW {} z{}/{tx}/{ty}: {:.0} blocked arcs DROPPED \
-                 (ARC_MAX_MERGED too small for this geometry) — this tile UNDER-screens; \
-                 re-measure with NOISE_GPU_DEFINES=\"-DARC_MAX_MERGED=<bigger>\"",
-                    layer.dir(),
-                    cfg.z,
-                    arc_drops_this_tile,
-                );
-                arc_drops_seen = gpu[noise_gpu::OUT_FAULT_SLOT];
-            }
+            arc_drops_seen = gpu[noise_gpu::OUT_FAULT_SLOT];
         }
         if require_arcstat {
             let mut current = [0f64; noise_gpu::OUT_ARCSTAT_COUNTERS];
@@ -2714,50 +2685,6 @@ fn process_block(
             );
             arcstat_seen = current;
             RAIL_ARCSTAT_CENSUS_PASSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-        #[cfg(feature = "v2-h0")]
-        {
-            let mut delta = [0_u64; noise_gpu::OUT_H0_COUNTERS];
-            for index in 0..noise_gpu::OUT_H0_COUNTERS {
-                let current = h0_exact_counter(&gpu, index);
-                delta[index] = current
-                    .checked_sub(h0_counts_seen[index])
-                    .context("V2 H0 exact counter moved backwards")?;
-                h0_counts_seen[index] = current;
-            }
-            let [node_overflow, hard_geometry, abi_layout, guarded_legal, completed_pairs, candidate_visits, generated_nodes, admitted_nodes] =
-                delta;
-            if node_overflow != 0 || hard_geometry != 0 || abi_layout != 0 {
-                bail!(
-                    "V2 H0 hard fault {} z{}/{tx}/{ty}: node_overflow={} hard_geometry={} \
-                     abi_layout={} guarded_legal={}",
-                    layer.dir(),
-                    cfg.z,
-                    node_overflow,
-                    hard_geometry,
-                    abi_layout,
-                    guarded_legal,
-                );
-            }
-            #[cfg(feature = "v2-h0-counters")]
-            eprintln!(
-                "H0STAT {} z{}/{tx}/{ty}: pairs={} candidates={} nodes={} admitted={} guarded={}",
-                layer.dir(),
-                cfg.z,
-                completed_pairs,
-                candidate_visits,
-                generated_nodes,
-                admitted_nodes,
-                guarded_legal,
-            );
-            #[cfg(not(feature = "v2-h0-counters"))]
-            let _ = (
-                completed_pairs,
-                candidate_visits,
-                generated_nodes,
-                admitted_nodes,
-                guarded_legal,
-            );
         }
         let output_started = Instant::now();
         let mut cells = if candidate_on {
@@ -3851,10 +3778,6 @@ fn main() -> Result<()> {
     }
     let require_arcstat = rail_arcstat_census_required();
     if require_arcstat {
-        anyhow::ensure!(
-            !cfg!(feature = "v2-h0"),
-            "rail ARCSTAT census is only defined for the stock surface role"
-        );
         anyhow::ensure!(!stream, "rail ARCSTAT census refuses --stream");
         anyhow::ensure!(
             layers.as_slice() == [LineLayer::Rail] && z == 12,

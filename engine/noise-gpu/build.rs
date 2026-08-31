@@ -12,21 +12,13 @@
 // toolkit (e.g. a CPU-only box) then builds noise-gpu cleanly. nvcc is required only when you
 // explicitly build `--features gpu`, which only happens on a GPU host.
 mod build_defines;
-#[path = "../noise-compute/src/h0_production_selection.rs"]
-#[allow(dead_code)]
-mod h0_production_selection;
-#[path = "../noise-compute/src/h0_production_selection_parser.rs"]
-mod h0_production_selection_parser;
 
 use build_defines::parse_experimental_defines;
-use h0_production_selection::H0ProductionSelection;
 use std::{
     env, fs,
     path::{Path, PathBuf},
     process::Command,
 };
-
-const H0_SELECTION_RECORD_PATH: &str = "../noise-compute/src/h0_production_selection_record.rs";
 
 /// Arch used when this host's own card cannot be determined: Ada (4060/4070).
 const DEFAULT_ARCH: &str = "sm_89";
@@ -174,13 +166,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=NOISE_GPU_ARCH");
     println!("cargo:rerun-if-env-changed=NOISE_GPU_DEFINES");
     println!("cargo:rerun-if-env-changed=NOISE_GPU_SKIP_NVCC");
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_V2_H0");
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_V2_H0_DIAGNOSTIC");
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_V2_H0_COUNTERS");
     println!("cargo:rerun-if-changed=build_defines.rs");
     println!("cargo:rerun-if-changed=../../scripts/reviewed-defines.txt");
-    println!("cargo:rerun-if-changed=../noise-compute/src/h0_production_selection.rs");
-    println!("cargo:rerun-if-changed=../noise-compute/src/h0_production_selection_parser.rs");
     let extra_defines =
         parse_experimental_defines(&env::var("NOISE_GPU_DEFINES").unwrap_or_default())
             .unwrap_or_else(|error| panic!("invalid NOISE_GPU_DEFINES: {error}"));
@@ -268,15 +255,6 @@ fn main() {
     // never changes the production build path.
     if env::var_os("NOISE_GPU_SKIP_NVCC").is_some() {
         println!("cargo:rustc-env=NOISE_GPU_SCATTER_CUBIN_SHA256=skipped-nvcc-host-check");
-        fs::write(
-            out.join("generated_h0_selection.rs"),
-            format!(
-                "pub const GENERATED_V2_H0_NODE_CAP: usize = 66;\n\
-                 pub const GENERATED_V2_THETA_MAX_RAD_BITS: u64 = 0x{:016x};\n",
-                (core::f64::consts::PI / 60.0).to_bits()
-            ),
-        )
-        .expect("write skipped-CUDA Rust selection mirror");
         for entry in fs::read_dir("kernels").expect("kernels/ dir") {
             let path = entry.expect("kernel entry").path();
             if path.extension().is_some_and(|extension| extension == "cu") {
@@ -319,53 +297,18 @@ fn main() {
     // so an empty value builds the shipped kernel. Without the explicit levers
     // an A/B can silently measure the default build twice; without the allowlist
     // a later -D can silently replace the host-owned constants injected below.
-    let v2_h0 = usize::from(env::var_os("CARGO_FEATURE_V2_H0").is_some());
-    let h0_pair_diagnostic = usize::from(env::var_os("CARGO_FEATURE_V2_H0_DIAGNOSTIC").is_some());
-    let h0_counters = usize::from(env::var_os("CARGO_FEATURE_V2_H0_COUNTERS").is_some());
-    assert!(
-        h0_pair_diagnostic == 0 || v2_h0 == 1,
-        "the H0 pair diagnostic must compile on the H0 device mirror"
-    );
-    assert!(
-        h0_counters == 0 || v2_h0 == 1,
-        "the H0 counter role must compile on the H0 device mirror"
-    );
-    let h0_selection = if v2_h0 == 1 {
-        // Never watch an absent record in the stock role: Cargo treats a
-        // missing watched path as dirty forever and would rerun nvcc on every
-        // no-op build. The v2-h0 feature transition is already a rerun key.
-        println!("cargo:rerun-if-changed={H0_SELECTION_RECORD_PATH}");
-        let source = fs::read_to_string(H0_SELECTION_RECORD_PATH).unwrap_or_else(|error| {
-            panic!(
-                "feature `v2-h0` requires reviewed `{H0_SELECTION_RECORD_PATH}` after terminal H0_QUADRATURE_ACCEPTED: {error}"
-            )
-        });
-        Some(
-            H0ProductionSelection::parse_and_verify(&source)
-                .unwrap_or_else(|error| panic!("invalid H0 production selection record: {error}")),
-        )
-    } else {
-        None
-    };
     let tile_px = const_from(
         "../raster-reader/src/fused_tile_z13.rs",
         "pub const TILE_PX: usize = ",
     );
     let bin_w = const_from("src/lib.rs", "pub const BIN_W: usize = ");
-    let barrier_abi_version = const_from("src/lib.rs", "pub const BARRIER_ABI_VERSION: usize = ");
     let barrier_stride = const_from("src/lib.rs", "pub const BARRIER_STRIDE: usize = ");
-    let source_segment_abi_version = const_from(
-        "src/lib.rs",
-        "pub const SOURCE_SEGMENT_ABI_VERSION: usize = ",
-    );
     let source_segment_stride =
         const_from("src/lib.rs", "pub const SOURCE_SEGMENT_STRIDE: usize = ");
     let line_kernel_argument_count = const_from(
         "src/lib.rs",
         "pub const LINE_KERNEL_ARGUMENT_COUNT: usize = ",
     );
-    let surface_meta_abi_version =
-        const_from("src/lib.rs", "pub const SURFACE_META_ABI_VERSION: usize = ");
     let surface_meta_slots = const_from("src/lib.rs", "pub const SURFACE_META_SLOTS: usize = ");
     let compact_receiver_record_words = const_from(
         "src/lib.rs",
@@ -399,167 +342,11 @@ fn main() {
         "src/lib.rs",
         "pub const MULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT: usize = ",
     );
-    let out_h0_counter_byte_offset = const_from(
-        "src/lib.rs",
-        "pub const OUT_H0_COUNTER_BYTE_OFFSET: usize = ",
-    )
-    .replace('_', "");
-    let h0_output_abi_version =
-        const_from("src/lib.rs", "pub const H0_OUTPUT_ABI_VERSION: usize = ");
-    let out_h0_counters = const_from("src/lib.rs", "pub const OUT_H0_COUNTERS: usize = ");
     let out_arcstat_counters = const_from("src/lib.rs", "pub const OUT_ARCSTAT_COUNTERS: usize = ");
-    let out_slots_h0 =
-        const_from("src/lib.rs", "pub const OUT_SLOTS_H0: usize = ").replace('_', "");
-    let h0_pair_diagnostic_abi_version = const_from(
-        "src/lib.rs",
-        "pub const H0_PAIR_DIAGNOSTIC_ABI_VERSION: usize = ",
-    );
-    let h0_pair_diagnostic_header_words = const_from(
-        "src/lib.rs",
-        "pub const H0_PAIR_DIAGNOSTIC_HEADER_WORDS: usize = ",
-    );
-    let h0_pair_diagnostic_node_words = const_from(
-        "src/lib.rs",
-        "pub const H0_PAIR_DIAGNOSTIC_NODE_WORDS: usize = ",
-    );
-    let h0_pair_diagnostic_record_words = const_from(
-        "src/lib.rs",
-        "pub const H0_PAIR_DIAGNOSTIC_RECORD_WORDS: usize = ",
-    );
-    let h0_pair_diagnostic_node_base = const_from(
-        "src/lib.rs",
-        "pub const H0_PAIR_DIAGNOSTIC_NODE_BASE: usize = ",
-    );
-    let h0_pair_diagnostic_magic =
-        numeric_u64_const("src/lib.rs", "pub const H0_PAIR_DIAGNOSTIC_MAGIC: u64 = ");
-    let (
-        h0_node_cap,
-        theta_max_rad,
-        theta_max_rad_bits,
-        h0_selection_schema,
-        h0_selection_epoch,
-        h0_h_max,
-    ) = if let Some(selection) = &h0_selection {
-        (
-            selection.node_cap.to_string(),
-            c_f64(selection.theta_radians()),
-            format!("0x{:016x}", selection.theta_radians_bits),
-            selection.schema.to_string(),
-            selection.epoch.to_string(),
-            selection.h_max.to_string(),
-        )
-    } else {
-        (
-            "66".to_owned(),
-            c_f64(core::f64::consts::PI / 60.0),
-            format!("0x{:016x}", (core::f64::consts::PI / 60.0).to_bits()),
-            "0".to_owned(),
-            "0".to_owned(),
-            "0".to_owned(),
-        )
-    };
-    let h0_pair_diagnostic_record_base = (h0_pair_diagnostic_node_base
-        .replace('_', "")
-        .parse::<usize>()
-        .expect("H0 pair diagnostic node base is usize")
-        + h0_node_cap.parse::<usize>().expect("H0 node cap is usize")
-            * h0_pair_diagnostic_node_words
-                .replace('_', "")
-                .parse::<usize>()
-                .expect("H0 pair diagnostic node words is usize"))
-    .to_string();
-    if let Some(selection) = &h0_selection {
-        fs::write(
-            out.join("h0-production-selection-receipt.txt"),
-            selection.render_build_receipt(),
-        )
-        .expect("write H0 production selection receipt");
-    }
-    // Rust consumes this generated mirror even when Cargo feature unification
-    // enables noise-compute's selection without noise-gpu's v2-h0 role. The
-    // compile-time assertions in lib.rs make that mixed role impossible.
-    fs::write(
-        out.join("generated_h0_selection.rs"),
-        format!(
-            "pub const GENERATED_V2_H0_NODE_CAP: usize = {h0_node_cap};\n\
-             pub const GENERATED_V2_THETA_MAX_RAD_BITS: u64 = {theta_max_rad_bits};\n"
-        ),
-    )
-    .expect("write generated Rust H0 selection mirror");
-    let road_d_floor_m = numeric_f64_const(
-        "../noise-compute/src/compute/element.rs",
-        "pub const ROAD_D_FLOOR_M: f64 = ",
-    );
-    let rail_d_floor_m = numeric_f64_const(
-        "../noise-compute/src/compute/element.rs",
-        "pub const RAIL_D_FLOOR_M: f64 = ",
-    );
-    let r_atm_base_m_per_rad = numeric_f64_const(
-        "../noise-compute/src/compute/element.rs",
-        "pub const R_ATM_BASE_M_PER_RAD: f64 = ",
-    );
-    let a_live_db = numeric_f64_const(
-        "../noise-compute/src/compute/element.rs",
-        "pub const A_LIVE_DB: f64 = ",
-    );
-    let line_max_length_m = numeric_f64_const(
-        "../noise-compute/src/compute/element.rs",
-        "pub const LINE_MAX_LENGTH_M: f64 = ",
-    );
-    let alpha_atm = numeric_f64_array_const(
-        "../noise-compute/src/constants.rs",
-        "pub const ALPHA_ATM: [f64; NUM_BANDS] = ",
-        8,
-    );
     let metres_per_degree_latitude = numeric_f64_const(
         "../noise-compute/src/constants.rs",
         "pub const M_PER_DEG_LAT: f64 = ",
     );
-    let alpha_atm_defines = alpha_atm
-        .iter()
-        .enumerate()
-        .map(|(index, value)| format!("#define V2_ALPHA_ATM_{index} {value}\n"))
-        .collect::<String>();
-    fs::write(
-        out.join("qm_streaming_abi_generated.h"),
-        format!(
-            "#define BARRIER_ABI_VERSION {barrier_abi_version}\n\
-             #define BARRIER_STRIDE {barrier_stride}\n\
-             #define SOURCE_SEGMENT_ABI_VERSION {source_segment_abi_version}\n\
-             #define SOURCE_SEGMENT_STRIDE {source_segment_stride}\n\
-             #define LINE_KERNEL_ARGUMENT_COUNT {line_kernel_argument_count}\n\
-             #define SURFACE_META_ABI_VERSION {surface_meta_abi_version}\n\
-             #define SURFACE_META_SLOTS {surface_meta_slots}\n\
-             #define V2_H0 {v2_h0}\n\
-             #define V2_H0_OUTPUT_ABI_VERSION {h0_output_abi_version}\n\
-             #define OUT_H0_COUNTER_BYTE_OFFSET {out_h0_counter_byte_offset}\n\
-             #define OUT_H0_COUNTERS {out_h0_counters}\n\
-             #define OUT_SLOTS_H0 {out_slots_h0}\n\
-             #define PROF_H0_COUNTERS {h0_counters}\n\
-             #define PROF_H0_PAIR_DIAGNOSTIC {h0_pair_diagnostic}\n\
-             #define H0_PAIR_DIAGNOSTIC_ABI_VERSION {h0_pair_diagnostic_abi_version}\n\
-             #define H0_PAIR_DIAGNOSTIC_HEADER_WORDS {h0_pair_diagnostic_header_words}\n\
-             #define H0_PAIR_DIAGNOSTIC_NODE_WORDS {h0_pair_diagnostic_node_words}\n\
-             #define H0_PAIR_DIAGNOSTIC_RECORD_WORDS {h0_pair_diagnostic_record_words}\n\
-             #define H0_PAIR_DIAGNOSTIC_NODE_BASE {h0_pair_diagnostic_node_base}\n\
-             #define H0_PAIR_DIAGNOSTIC_RECORD_BASE {h0_pair_diagnostic_record_base}\n\
-             #define H0_PAIR_DIAGNOSTIC_MAGIC {h0_pair_diagnostic_magic}ull\n\
-             #define V2_H0_SELECTION_SCHEMA {h0_selection_schema}\n\
-             #define V2_H0_SELECTION_EPOCH {h0_selection_epoch}ull\n\
-             #define V2_H0_NODE_CAP {h0_node_cap}\n\
-             #define V2_THETA_MAX_RAD {theta_max_rad}\n\
-             #define V2_THETA_MAX_RAD_BITS {theta_max_rad_bits}ull\n\
-             #define V2_H0_H_MAX {h0_h_max}\n\
-             #define V2_ROAD_D_FLOOR_M {road_d_floor_m}\n\
-             #define V2_RAIL_D_FLOOR_M {rail_d_floor_m}\n\
-             #define V2_R_ATM_BASE_M_PER_RAD {r_atm_base_m_per_rad}\n\
-             #define V2_A_LIVE_DB {a_live_db}\n\
-             #define V2_LINE_MAX_LENGTH_M {line_max_length_m}\n\
-             #define M_LAT {metres_per_degree_latitude}\n\
-             {alpha_atm_defines}"
-        ),
-    )
-    .expect("write generated streaming ABI header");
     // Same contract for the two constants the footprint-CSR arc walk added: a
     // drifted stride walks a neighbouring index's grid or mis-reads foot_box.
     let meta_stride = const_from("src/lib.rs", "pub const META_STRIDE: usize = ");
@@ -706,11 +493,10 @@ fn main() {
         format!("-DNPD_NC={num_classes}"),
         format!("-DTPX={tile_px}"),
         format!("-DBIN_W={bin_w}"),
-        format!("-DBARRIER_ABI_VERSION={barrier_abi_version}"),
         format!("-DBARRIER_STRIDE={barrier_stride}"),
-        format!("-DSOURCE_SEGMENT_ABI_VERSION={source_segment_abi_version}"),
         format!("-DSOURCE_SEGMENT_STRIDE={source_segment_stride}"),
         format!("-DLINE_KERNEL_ARGUMENT_COUNT={line_kernel_argument_count}"),
+        format!("-DSURFACE_META_SLOTS={surface_meta_slots}"),
         format!("-DMULTIFIDELITY_COMPACT_RECEIVER_RECORD_WORDS={compact_receiver_record_words}"),
         format!("-DMULTIFIDELITY_COMPACT_CONTROL_WORDS={compact_control_words}"),
         format!("-DMULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS={compact_control_block_words}"),
@@ -719,43 +505,8 @@ fn main() {
         format!("-DMULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT={compact_output_index_slot}"),
         format!("-DMULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE={compact_output_energy_base}"),
         format!("-DMULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT={compact_output_fault_slot}"),
-        format!("-DSURFACE_META_ABI_VERSION={surface_meta_abi_version}"),
-        format!("-DSURFACE_META_SLOTS={surface_meta_slots}"),
-        format!("-DV2_H0={v2_h0}"),
-        format!("-DV2_H0_OUTPUT_ABI_VERSION={h0_output_abi_version}"),
-        format!("-DOUT_H0_COUNTER_BYTE_OFFSET={out_h0_counter_byte_offset}"),
-        format!("-DOUT_H0_COUNTERS={out_h0_counters}"),
         format!("-DOUT_ARCSTAT_COUNTERS={out_arcstat_counters}"),
-        format!("-DOUT_SLOTS_H0={out_slots_h0}"),
-        format!("-DPROF_H0_COUNTERS={h0_counters}"),
-        format!("-DPROF_H0_PAIR_DIAGNOSTIC={h0_pair_diagnostic}"),
-        format!("-DH0_PAIR_DIAGNOSTIC_ABI_VERSION={h0_pair_diagnostic_abi_version}"),
-        format!("-DH0_PAIR_DIAGNOSTIC_HEADER_WORDS={h0_pair_diagnostic_header_words}"),
-        format!("-DH0_PAIR_DIAGNOSTIC_NODE_WORDS={h0_pair_diagnostic_node_words}"),
-        format!("-DH0_PAIR_DIAGNOSTIC_RECORD_WORDS={h0_pair_diagnostic_record_words}"),
-        format!("-DH0_PAIR_DIAGNOSTIC_NODE_BASE={h0_pair_diagnostic_node_base}"),
-        format!("-DH0_PAIR_DIAGNOSTIC_RECORD_BASE={h0_pair_diagnostic_record_base}"),
-        format!("-DH0_PAIR_DIAGNOSTIC_MAGIC={h0_pair_diagnostic_magic}ull"),
-        format!("-DV2_H0_SELECTION_SCHEMA={h0_selection_schema}"),
-        format!("-DV2_H0_SELECTION_EPOCH={h0_selection_epoch}ull"),
-        format!("-DV2_H0_NODE_CAP={h0_node_cap}"),
-        format!("-DV2_THETA_MAX_RAD={theta_max_rad}"),
-        format!("-DV2_THETA_MAX_RAD_BITS={theta_max_rad_bits}ull"),
-        format!("-DV2_H0_H_MAX={h0_h_max}"),
-        format!("-DV2_ROAD_D_FLOOR_M={road_d_floor_m}"),
-        format!("-DV2_RAIL_D_FLOOR_M={rail_d_floor_m}"),
-        format!("-DV2_R_ATM_BASE_M_PER_RAD={r_atm_base_m_per_rad}"),
-        format!("-DV2_A_LIVE_DB={a_live_db}"),
-        format!("-DV2_LINE_MAX_LENGTH_M={line_max_length_m}"),
         format!("-DM_LAT={metres_per_degree_latitude}"),
-        format!("-DV2_ALPHA_ATM_0={}", alpha_atm[0]),
-        format!("-DV2_ALPHA_ATM_1={}", alpha_atm[1]),
-        format!("-DV2_ALPHA_ATM_2={}", alpha_atm[2]),
-        format!("-DV2_ALPHA_ATM_3={}", alpha_atm[3]),
-        format!("-DV2_ALPHA_ATM_4={}", alpha_atm[4]),
-        format!("-DV2_ALPHA_ATM_5={}", alpha_atm[5]),
-        format!("-DV2_ALPHA_ATM_6={}", alpha_atm[6]),
-        format!("-DV2_ALPHA_ATM_7={}", alpha_atm[7]),
         format!("-DOBST_META_STRIDE={meta_stride}"),
         format!("-DFOOT_BOX_STRIDE={foot_box_stride}"),
         format!("-DARC_DEGENERATE_SPAN={degenerate_span}"),
@@ -783,13 +534,6 @@ fn main() {
         if path.extension().is_some_and(|e| e == "cu") {
             let stem = path.file_stem().unwrap().to_str().unwrap();
             println!("cargo:rerun-if-changed={}", path.display());
-            // This translation unit exercises the H0-only layout contract. A
-            // stock `gpu` build intentionally has no `qm_h0_layout_valid`, so
-            // compiling the selftest without the matching host feature creates
-            // a third, invalid role instead of testing production.
-            if stem == "qm_h0_node_selftest" && v2_h0 == 0 {
-                continue;
-            }
             let compile = |kind: &str, output: PathBuf| {
                 let status = Command::new("nvcc")
                     .args([kind, &format!("-arch={arch}"), "-O3"])
@@ -884,40 +628,4 @@ fn numeric_f64_const(path: &str, prefix: &str) -> String {
         .parse::<f64>()
         .unwrap_or_else(|error| panic!("`{prefix}` in {path} is not a numeric f64: {error}"));
     c_f64(value)
-}
-
-fn numeric_u64_const(path: &str, prefix: &str) -> String {
-    let source = const_from(path, prefix).replace('_', "");
-    let value = source
-        .strip_prefix("0x")
-        .map(|digits| u64::from_str_radix(digits, 16))
-        .unwrap_or_else(|| source.parse::<u64>())
-        .unwrap_or_else(|error| panic!("`{prefix}` in {path} is not a numeric u64: {error}"));
-    format!("0x{value:016x}")
-}
-
-fn numeric_f64_array_const(path: &str, prefix: &str, expected_len: usize) -> Vec<String> {
-    let source = const_from(path, prefix);
-    let body = source
-        .strip_prefix('[')
-        .and_then(|value| value.strip_suffix(']'))
-        .unwrap_or_else(|| panic!("`{prefix}` in {path} is not an array literal"));
-    let values: Vec<_> = body
-        .split(',')
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| {
-            let parsed = value
-                .trim()
-                .replace('_', "")
-                .parse::<f64>()
-                .unwrap_or_else(|error| panic!("`{value}` in {path} is not f64: {error}"));
-            c_f64(parsed)
-        })
-        .collect();
-    assert_eq!(
-        values.len(),
-        expected_len,
-        "unexpected f64 array length in {path}"
-    );
-    values
 }

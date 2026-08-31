@@ -14,27 +14,7 @@ pub use embedded_cubin::{load_embedded_cubin_exact, load_embedded_cubin_or_ptx};
 pub mod airborne;
 pub mod tile_timing;
 
-#[cfg(feature = "gpu")]
-mod generated_h0_selection {
-    include!(concat!(env!("OUT_DIR"), "/generated_h0_selection.rs"));
-}
-
-#[cfg(feature = "gpu")]
-const _: () = {
-    assert!(
-        generated_h0_selection::GENERATED_V2_H0_NODE_CAP
-            == noise_compute::compute::element::H0_NODE_CAP,
-        "generated CUDA V2_H0_NODE_CAP differs from the selected Rust H0_NODE_CAP"
-    );
-    assert!(
-        generated_h0_selection::GENERATED_V2_THETA_MAX_RAD_BITS
-            == noise_compute::compute::element::THETA_MAX_RAD.to_bits(),
-        "generated CUDA V2_THETA_MAX_RAD_BITS differs from the selected Rust THETA_MAX_RAD"
-    );
-};
-
 use noise_compute::emission::aircraft::{Installation, SegmentPrepared, M_PER_DEG_LAT};
-use noise_compute::propagation::streaming_reduction::{source_frame_mlon, SourceId64};
 use noise_compute::types::Barrier;
 use raster_reader::fused_tile_z13::{FusedTileZ13, TILE_PX};
 use tile_painter::source_line::LineRow;
@@ -255,56 +235,15 @@ pub fn validate_rail_port_arcstat_census(
     Ok(census)
 }
 
-/// Version of the offset/count/length triple and the ordered meaning of all
-/// eight H0 counters below.
-pub const H0_OUTPUT_ABI_VERSION: usize = 1;
-/// Byte-aligned start of the exact H0 u64 counters in the existing `out`
-/// allocation. The obstacle pointer table has no spare slot; keeping these
-/// counters in `out` also leaves the barrier candidate-tail authority untouched.
-pub const OUT_H0_COUNTER_BYTE_OFFSET: usize = 3_145_736;
-const _: () = assert!(
-    OUT_H0_COUNTER_BYTE_OFFSET
-        == (OUT_SLOTS_PROD * std::mem::size_of::<f32>())
-            .next_multiple_of(std::mem::size_of::<u64>())
-);
-/// Exact u64 channels: node overflow, hard geometry, ABI/layout, guarded legal
-/// degenerates, completed pairs, raw candidate visits, generated nodes and
-/// admitted nodes. They are review evidence, never acoustic accumulation.
-pub const OUT_H0_COUNTERS: usize = 8;
-/// f32 allocation length for the compile-time H0 arm, including aligned u64s.
-pub const OUT_SLOTS_H0: usize = 786_450;
-const _: () = assert!(
-    OUT_SLOTS_H0
-        == (OUT_H0_COUNTER_BYTE_OFFSET + OUT_H0_COUNTERS * std::mem::size_of::<u64>())
-            .div_ceil(std::mem::size_of::<f32>())
-);
-
-/// Versioned word layout of the diagnostic-only actual-store H0 pair dump.
-/// This buffer is a separate kernel argument; it never enters the production
-/// 12-argument line launch or its `out` allocation.
-pub const H0_PAIR_DIAGNOSTIC_ABI_VERSION: usize = 1;
-pub const H0_PAIR_DIAGNOSTIC_HEADER_WORDS: usize = 24;
-pub const H0_PAIR_DIAGNOSTIC_NODE_WORDS: usize = 8;
-pub const H0_PAIR_DIAGNOSTIC_RECORD_WORDS: usize = 7;
-pub const H0_PAIR_DIAGNOSTIC_NODE_BASE: usize = 24;
-pub const H0_PAIR_DIAGNOSTIC_RECORD_BASE: usize = H0_PAIR_DIAGNOSTIC_NODE_BASE
-    + noise_compute::compute::element::H0_NODE_CAP * H0_PAIR_DIAGNOSTIC_NODE_WORDS;
-pub const H0_PAIR_DIAGNOSTIC_MAGIC: u64 = 0x514d_4830_5041_4952;
-
-/// Versioned surface metadata layout. Slot 14 carries the line-layer tag used
-/// to select the frozen road/rail H0 placement floor. Compact exact launches
-/// keep every metadata slot at its ordinary value; their receiver/control ABI
-/// is carried by separate explicit arrays.
-pub const SURFACE_META_ABI_VERSION: usize = 2;
-pub const SURFACE_META_SLOTS: usize = 15;
-pub const SURFACE_META_LAYER_SLOT: usize = 14;
+/// f64 slots in the surface kernel metadata buffer.
+pub const SURFACE_META_SLOTS: usize = 14;
 
 /// Per-tile non-halo buffers packed for the `line`/`line_binned_fused` kernels (the halo
 /// elev/cover are uploaded once per batch and shared; the line SOURCES are uploaded
 /// once per layer — see [`SourceBuffers`]). `meta` carries the SHARED halo geom +
 /// this tile's bbox + eta + swizzle width + barrier count. `barr` is the tile's
 /// vector noise-wall slice, nbarr×[`BARRIER_STRIDE`]
-/// `{start_lat, start_lon, end_lat, end_lon, height_m, dist_m, source_id_bits}` in
+/// `{start_lat, start_lon, end_lat, end_lon, height_m, dist_m}` in
 /// `BarrierData::for_tile` order (dist_m a conservative lower bound, sorted
 /// ascending — the kernel's early-break key). The kernel intersects the
 /// ENDPOINTS with each propagation ray, exactly as `path_effects` §1 does.
@@ -323,7 +262,6 @@ pub struct SurfaceKernelTileParameters {
     pub swizzle_width: f64,
     pub source_count: usize,
     pub output_slots: usize,
-    pub line_layer_tag: usize,
 }
 
 /// A layer's line sources, packed ONCE per (region, layer) and uploaded once, so
@@ -342,8 +280,7 @@ pub struct SourceBuffers {
     pub semis: Vec<f32>,
 }
 
-/// Pack a layer's line sources (tile-invariant): `seg` (4 coords + the exact
-/// source-frame longitude scale), `sp` (12 =
+/// Pack a layer's line sources (tile-invariant): `seg` (four coordinates), `sp` (12 =
 /// length/reach/height/bridge ++ 8 host-precomputed Lden band weights), `semis`
 /// (3 periods × 8 emission bands). The 8 `sp[4+i]` = `Σ_p LDEN_W[p]·emission_lin[p][i]`
 /// — the energy-budget-skip UB loop's per-band Lden weight, hoisted off the GPU
@@ -357,14 +294,7 @@ pub fn pack_sources(lines: &[LineRow]) -> SourceBuffers {
         Vec::with_capacity(lines.len() * 24),
     );
     for r in lines {
-        seg.extend_from_slice(&[
-            r.start_lat,
-            r.start_lon,
-            r.end_lat,
-            r.end_lon,
-            source_frame_mlon(r.start_lat, r.end_lat)
-                .expect("non-finite source geometry cannot enter the GPU ABI"),
-        ]);
+        seg.extend_from_slice(&[r.start_lat, r.start_lon, r.end_lat, r.end_lon]);
         sp.extend_from_slice(&[
             r.length_m as f64,
             r.max_distance_m,
@@ -387,11 +317,9 @@ pub fn pack_sources(lines: &[LineRow]) -> SourceBuffers {
     SourceBuffers { seg, sp, semis }
 }
 
-/// Pack one physical barrier slice with the versioned stride and mandatory
-/// zero-count dummy row. Exposed for the actual-store H0 diagnostic so it
-/// launches the same bytes as [`pack_tile`].
-pub fn pack_barrier_rows(barriers: &[Barrier]) -> Vec<f64> {
-    let physical_slots = barrier_candidate_tail_slot_offset(barriers.len());
+/// Pack one physical barrier slice with a mandatory zero-count dummy row.
+fn pack_barrier_rows(barriers: &[Barrier]) -> Vec<f64> {
+    let physical_slots = barriers.len().max(1) * BARRIER_STRIDE;
     let mut packed = Vec::with_capacity(physical_slots);
     for barrier in barriers {
         packed.extend_from_slice(&[
@@ -401,9 +329,6 @@ pub fn pack_barrier_rows(barriers: &[Barrier]) -> Vec<f64> {
             barrier.end_lon,
             barrier.height_m as f64,
             barrier.dist_m,
-            SourceId64::wall(barrier.osm_id, barrier.segment_idx)
-                .expect("barrier provenience outside the GPU ABI")
-                .as_f64_bits(),
         ]);
     }
     if packed.is_empty() {
@@ -442,10 +367,6 @@ pub fn pack_tile(
     // only when this proves the room exists, so the buffer size and the writes
     // to it cannot drift apart — the shape of bug that let a counter build write
     // 10 MiB past the end of the production painter's buffer.
-    assert!(
-        parameters.line_layer_tag <= 1,
-        "surface line-layer tag must be road=0 or rail=1"
-    );
     let meta = vec![
         rows as f64,
         cols as f64,
@@ -461,7 +382,6 @@ pub fn pack_tile(
         barriers.len() as f64,
         parameters.source_count as f64,
         parameters.output_slots as f64,
-        parameters.line_layer_tag as f64,
     ];
     debug_assert_eq!(meta.len(), SURFACE_META_SLOTS);
     let mut rxll = Vec::with_capacity(2 * TILE_PX);
@@ -749,32 +669,12 @@ pub fn flatten_obstacles(
     flat
 }
 
-/// Barrier layout version injected into every CUDA translation unit.
-pub const BARRIER_ABI_VERSION: usize = 2;
 /// f64 slots per barrier in the `barr` buffer.
-pub const BARRIER_STRIDE: usize = 7;
-/// Source-segment layout version injected into every CUDA translation unit.
-pub const SOURCE_SEGMENT_ABI_VERSION: usize = 2;
-/// f64 slots per source segment: four coordinates plus authoritative `mlon`.
-pub const SOURCE_SEGMENT_STRIDE: usize = 5;
+pub const BARRIER_STRIDE: usize = 6;
+/// f64 slots per source segment: start and end coordinates.
+pub const SOURCE_SEGMENT_STRIDE: usize = 4;
 /// Cudarc's physical tuple remains frozen at twelve kernel arguments.
 pub const LINE_KERNEL_ARGUMENT_COUNT: usize = 12;
-
-/// First f64 slot after the physical barrier rows, including the mandatory
-/// dummy row for `barrier_count == 0`. Indexed replay must append here.
-pub fn barrier_candidate_tail_slot_offset(barrier_count: usize) -> usize {
-    barrier_count
-        .max(1)
-        .checked_mul(BARRIER_STRIDE)
-        .expect("barrier candidate-tail slot offset overflow")
-}
-
-/// Byte form of [`barrier_candidate_tail_slot_offset`].
-pub fn barrier_candidate_tail_byte_offset(barrier_count: usize) -> usize {
-    barrier_candidate_tail_slot_offset(barrier_count)
-        .checked_mul(std::mem::size_of::<f64>())
-        .expect("barrier candidate-tail byte offset overflow")
-}
 
 /// f64 slots per index in [`ObstacleFlat::metas`].
 pub const META_STRIDE: usize = 19;
@@ -851,7 +751,7 @@ pub fn ensure_no_cpu_only_arc_levers() -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
-mod streaming_abi_tests {
+mod surface_layout_tests {
     use super::*;
 
     #[test]
@@ -867,43 +767,7 @@ mod streaming_abi_tests {
     }
 
     #[test]
-    fn abi_tail_offsets_are_exact_for_0_1_2_17_barriers() {
-        for barrier_count in [0_usize, 1, 2, 17] {
-            let rows = barrier_count.max(1);
-            assert_eq!(
-                barrier_candidate_tail_slot_offset(barrier_count),
-                rows * BARRIER_STRIDE
-            );
-            assert_eq!(
-                barrier_candidate_tail_byte_offset(barrier_count),
-                rows * BARRIER_STRIDE * std::mem::size_of::<f64>()
-            );
-        }
-    }
-
-    #[test]
-    fn h0_exact_counters_are_aligned_and_disjoint_from_candidate_tail() {
-        assert_eq!(H0_OUTPUT_ABI_VERSION, 1);
-        assert_eq!(OUT_H0_COUNTER_BYTE_OFFSET % std::mem::size_of::<u64>(), 0);
-        assert!(OUT_H0_COUNTER_BYTE_OFFSET >= OUT_SLOTS_PROD * std::mem::size_of::<f32>());
-        assert_eq!(OUT_H0_COUNTERS, 8);
-        assert_eq!(
-            OUT_SLOTS_H0 * std::mem::size_of::<f32>(),
-            OUT_H0_COUNTER_BYTE_OFFSET + OUT_H0_COUNTERS * std::mem::size_of::<u64>()
-        );
-        assert_eq!(SURFACE_META_ABI_VERSION, 2);
-        assert_eq!(SURFACE_META_LAYER_SLOT, 14);
-        assert_eq!(SURFACE_META_SLOTS, SURFACE_META_LAYER_SLOT + 1);
-        for barrier_count in [0_usize, 1, 2, 17] {
-            assert_eq!(
-                barrier_candidate_tail_byte_offset(barrier_count),
-                barrier_candidate_tail_slot_offset(barrier_count) * std::mem::size_of::<f64>()
-            );
-        }
-    }
-
-    #[test]
-    fn source_stride_five_preserves_the_first_four_coordinate_lanes() {
+    fn source_layout_preserves_coordinate_bits() {
         let row = |start_lat, start_lon, end_lat, end_lon| LineRow {
             start_lat,
             start_lon,
@@ -931,23 +795,17 @@ mod streaming_abi_tests {
             .zip(packed.seg.chunks_exact(SOURCE_SEGMENT_STRIDE))
         {
             let actual_coordinate_bits: Vec<_> =
-                actual[..4].iter().map(|value| value.to_bits()).collect();
+                actual.iter().map(|value| value.to_bits()).collect();
             assert_eq!(
                 actual_coordinate_bits.as_slice(),
                 &expected.map(f64::to_bits),
                 "coordinate bits changed during packing"
             );
-            assert_eq!(
-                actual[4].to_bits(),
-                source_frame_mlon(expected[0], expected[2])
-                    .unwrap()
-                    .to_bits()
-            );
         }
     }
 
     #[test]
-    fn barrier_stride_seven_preserves_the_first_six_numeric_lanes() {
+    fn barrier_layout_preserves_numeric_lanes() {
         let barrier = Barrier {
             osm_id: 42,
             segment_idx: -7,
@@ -960,11 +818,7 @@ mod streaming_abi_tests {
         };
         let packed = pack_barrier_rows(&[barrier]);
         assert_eq!(packed.len(), BARRIER_STRIDE);
-        assert_eq!(&packed[..6], &[50.0, 14.0, 50.001, 14.002, 3.5, 123.0]);
-        assert_eq!(
-            packed[6].to_bits(),
-            SourceId64::wall(42, -7).unwrap().bits()
-        );
+        assert_eq!(&packed, &[50.0, 14.0, 50.001, 14.002, 3.5, 123.0]);
         assert_eq!(pack_barrier_rows(&[]).len(), BARRIER_STRIDE);
     }
 }
@@ -1159,9 +1013,7 @@ mod obstacle_upload {
         upload_obstacle_flat(dev, flat)
     }
 
-    /// Upload one already flattened store. The H0 diagnostic first walks these
-    /// exact host bytes for its CPU authority, then moves the same vectors to
-    /// CUDA; production uses [`upload_obstacles`] and remains unchanged.
+    /// Upload one already flattened obstacle store.
     pub fn upload_obstacle_flat(
         dev: &Arc<CudaDevice>,
         flat: crate::ObstacleFlat,

@@ -178,7 +178,7 @@ use super::obstacle_index::{
     origin_to_segment_dist, wrap_pi, CellPrune, CrossingCandidate, ObstacleSet, SkylineArc,
 };
 use super::path_effects::{screening_attenuation, terrain_attenuation, ObstacleInput};
-use super::streaming_reduction::SourceId64;
+use super::screening_source_id::ScreeningSourceId;
 use super::PathProfile;
 use crate::constants::{m_per_deg_lon, M_PER_DEG_LAT};
 use crate::types::{Barrier, RasterSampler, BARRIER_PATH_HORIZON_M, NUM_BANDS};
@@ -1017,7 +1017,7 @@ impl ArcSkyline {
                 arcs,
                 cap,
                 SkylineArc {
-                    source_id: SourceId64::wall(b.osm_id, b.segment_idx)
+                    source_id: ScreeningSourceId::wall(b.osm_id, b.segment_idx)
                         .expect("barrier provenience outside the packed ABI"),
                     lo: a0.min(r1),
                     hi: a0.max(r1),
@@ -2168,7 +2168,7 @@ mod tests {
     fn arc_capacity_overflow_merges_the_smallest_gap() {
         let mut v: Vec<MergedArc> = Vec::new();
         let mk = |lo: f64, hi: f64| SkylineArc {
-            source_id: SourceId64::from_bits(0),
+            source_id: ScreeningSourceId::obstacle(0).unwrap(),
             lo,
             hi,
             near_m: 10.0,
@@ -2190,7 +2190,7 @@ mod tests {
     #[test]
     fn overlapping_arcs_of_one_stratum_union() {
         let mk = |lo: f64, hi: f64, near: f32| SkylineArc {
-            source_id: SourceId64::from_bits(0),
+            source_id: ScreeningSourceId::obstacle(0).unwrap(),
             lo,
             hi,
             near_m: near,
@@ -2228,7 +2228,7 @@ mod tests {
     #[test]
     fn overlapping_arcs_of_different_strata_stay_apart() {
         let mk = |lo: f64, hi: f64, near: f32| SkylineArc {
-            source_id: SourceId64::from_bits(0),
+            source_id: ScreeningSourceId::obstacle(0).unwrap(),
             lo,
             hi,
             near_m: near,

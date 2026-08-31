@@ -12,7 +12,7 @@ use arrow::datatypes::DataType;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use memmap2::Mmap;
-use noise_compute::propagation::streaming_reduction::SourceId64;
+use noise_compute::propagation::screening_source_id::ScreeningSourceId;
 use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
@@ -877,7 +877,7 @@ pub fn query_barriers_from_batches(
             .ok_or_else(|| "barriers.arrow missing required end_lon column".to_string())?;
 
         for i in 0..n {
-            SourceId64::wall(osm_id.value(i), segment_idx.value(i)).map_err(|error| {
+            ScreeningSourceId::wall(osm_id.value(i), segment_idx.value(i)).map_err(|error| {
                 format!(
                     "invalid barriers.arrow provenience ({}, {}): {error:?}",
                     osm_id.value(i),
@@ -916,7 +916,7 @@ pub fn canonicalize_barrier_results(
     let mut seen = std::collections::BTreeMap::new();
     let mut unique = Vec::with_capacity(results.len());
     for result in results {
-        let source_id = SourceId64::wall(result.osm_id, result.segment_idx)
+        let source_id = ScreeningSourceId::wall(result.osm_id, result.segment_idx)
             .map_err(|error| format!("invalid barrier provenience: {error:?}"))?;
         let geometry_bits = [
             result.start_lat.to_bits(),

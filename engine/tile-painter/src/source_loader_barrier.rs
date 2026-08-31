@@ -28,7 +28,7 @@ use anyhow::Result;
 use arrow::array::{Float32Array, Float64Array, Int16Array, Int64Array};
 use arrow::record_batch::RecordBatch;
 use noise_compute::propagation::geo::flat_dist;
-use noise_compute::propagation::streaming_reduction::SourceId64;
+use noise_compute::propagation::screening_source_id::ScreeningSourceId;
 use noise_compute::types::{Barrier, BARRIER_SEGMENT_MAX_HALF_LEN_M};
 use raster_reader::fused_tile_z13::TileBbox;
 
@@ -165,7 +165,7 @@ fn canonicalize_barrier_provenience(segs: &mut Vec<BarrierSeg>) -> Result<()> {
     let mut seen = HashMap::with_capacity(segs.len());
     let mut unique = Vec::with_capacity(segs.len());
     for segment in segs.drain(..) {
-        let source_id = SourceId64::wall(segment.osm_id, segment.segment_idx)
+        let source_id = ScreeningSourceId::wall(segment.osm_id, segment.segment_idx)
             .map_err(|error| anyhow::anyhow!("invalid barrier provenience: {error:?}"))?;
         let geometry_bits = [
             segment.start_lat.to_bits(),

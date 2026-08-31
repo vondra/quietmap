@@ -104,18 +104,20 @@ assert_define_set_reaches_nvcc() {
   echo "GPU_DEFINE_ALLOWLIST=PASS label=$label reached_nvcc=1"
 }
 
-assert_rejected_before_nvcc '-DV2_THETA_MAX_RAD=0' theta
-assert_rejected_before_nvcc '-DV2_H0_NODE_CAP=1' node-cap
-assert_rejected_before_nvcc '-DV2_H0=0' role
-assert_rejected_before_nvcc '-DOUT_SLOTS_H0=1' output-layout
-assert_rejected_before_nvcc '-DBARRIER_ABI_VERSION=1' barrier-abi
-assert_rejected_before_nvcc '-DSOURCE_SEGMENT_ABI_VERSION=1' segment-abi
+assert_rejected_before_nvcc '-DBARRIER_STRIDE=1' barrier-stride
+assert_rejected_before_nvcc '-DSOURCE_SEGMENT_STRIDE=1' segment-stride
+assert_rejected_before_nvcc '-DLINE_KERNEL_ARGUMENT_COUNT=1' argument-count
+assert_rejected_before_nvcc '-DSURFACE_META_SLOTS=1' surface-meta-slots
+assert_rejected_before_nvcc '-DM_LAT=1' latitude-scale
+assert_rejected_before_nvcc '-DOUT_ARCSTAT_COUNTERS=1' output-layout
 assert_rejected_before_nvcc '-DMULTIFIDELITY_COMPACT_ABI_VERSION=1' compact-abi
 assert_rejected_before_nvcc '-DTPX=1' architecture
+assert_rejected_before_nvcc '-DBIN_W=1' bin-width
+assert_rejected_before_nvcc '-DNPD_NC=1' npd-classes
 assert_rejected_before_nvcc '-DUNKNOWN_SWITCH=1' unknown
 assert_rejected_before_nvcc '-UARC_TRI_WALK' undefine
 assert_rejected_before_nvcc '@defines.rsp' response-file
-assert_rejected_before_nvcc '--compiler-options=-DV2_H0=0' compiler-option
+assert_rejected_before_nvcc '--compiler-options=-DTPX=1' compiler-option
 assert_rejected_before_nvcc '-D ARC_TRI_WALK=0' split-define
 assert_rejected_before_nvcc '-DARC_TRI_WALK=0 -DARC_TRI_WALK=1' duplicate
 assert_define_set_reaches_nvcc '' production-empty
@@ -145,4 +147,4 @@ print("GPU_DEFINE_VERIFIER=PASS production_experimental=0 reviewed_experimental=
 PY
 echo "GPU_DEFINE_RECEIPT=PASS production_empty=1 reviewed_experiment=2"
 
-echo "GPU_DEFINE_MUTATIONS=PASS mutations=14 rejected_nvcc_invocations=0"
+echo "GPU_DEFINE_MUTATIONS=PASS mutations=16 rejected_nvcc_invocations=0"

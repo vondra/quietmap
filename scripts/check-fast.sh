@@ -47,11 +47,11 @@ if [ "$HALF" != "node" ]; then
   step "engine: optimized ground-hoist exactness"
   (cd engine && cargo test --locked --release -p noise-compute --test ground_hoist_exact)
 
-  step "engine: CUDA compile-only role matrix"
+  step "engine: CUDA compile-only production role"
   if command -v nvcc >/dev/null 2>&1; then
     "$ROOT/scripts/check-nvcc-roles-local.sh"
   else
-    echo "NVCC_ROLE_MATRIX=SKIP reason=nvcc-not-found"
+    echo "NVCC_ROLE_CHECK=SKIP reason=nvcc-not-found"
   fi
 fi
 

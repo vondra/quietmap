@@ -96,21 +96,15 @@ fn is_canonical_define_name(name: &str) -> bool {
 }
 
 fn is_build_generated_define(name: &str) -> bool {
-    name.starts_with("V2_")
-        || name.starts_with("OUT_")
-        || name.starts_with("PROF_H0_")
-        || name.starts_with("H0_PAIR_DIAGNOSTIC_")
+    name.starts_with("OUT_")
         || matches!(
             name,
             "NPD_NC"
                 | "TPX"
                 | "BIN_W"
-                | "BARRIER_ABI_VERSION"
                 | "BARRIER_STRIDE"
-                | "SOURCE_SEGMENT_ABI_VERSION"
                 | "SOURCE_SEGMENT_STRIDE"
                 | "LINE_KERNEL_ARGUMENT_COUNT"
-                | "SURFACE_META_ABI_VERSION"
                 | "SURFACE_META_SLOTS"
                 | "M_LAT"
                 | "MULTIFIDELITY_COMPACT_ABI_VERSION"
@@ -161,16 +155,14 @@ mod tests {
     }
 
     #[test]
-    fn generated_constants_and_abi_defines_are_reserved() {
+    fn generated_constants_are_reserved() {
         for name in [
-            "V2_THETA_MAX_RAD",
-            "V2_H0_NODE_CAP",
-            "V2_H0",
-            "OUT_SLOTS_H0",
-            "OUT_H0_COUNTERS",
-            "BARRIER_ABI_VERSION",
-            "SOURCE_SEGMENT_ABI_VERSION",
-            "SURFACE_META_ABI_VERSION",
+            "OUT_ARCSTAT_COUNTERS",
+            "BARRIER_STRIDE",
+            "SOURCE_SEGMENT_STRIDE",
+            "LINE_KERNEL_ARGUMENT_COUNT",
+            "SURFACE_META_SLOTS",
+            "M_LAT",
             "TPX",
             "BIN_W",
             "MULTIFIDELITY_COMPACT_ABI_VERSION",
@@ -186,7 +178,7 @@ mod tests {
         for raw in [
             "-UARC_TRI_WALK",
             "@defines.rsp",
-            "--compiler-options=-DV2_H0=0",
+            "--compiler-options=-DTPX=1",
             "-D ARC_TRI_WALK=0",
             "-DUNKNOWN_SWITCH=1",
             "-DARC_TRI_WALK=",

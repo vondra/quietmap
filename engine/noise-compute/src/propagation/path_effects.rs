@@ -314,38 +314,11 @@ fn barrier_crossing_candidates(
                 t,
                 height_m: barrier.height_m,
                 kind: ObstacleKind::Barrier,
-                // Current world OSM way ids fit u32; stable V2 identity remains
-                // the separate bit-preserving `(osm_id, segment_idx)` ABI.
+                // Current world OSM way ids fit u32; full screening provenience
+                // remains the separate `(osm_id, segment_idx)` identity.
                 id: barrier.osm_id as u32,
             })
         })
-}
-
-/// Whether a V2 H0 line-node ray owns the vector composite in N-11.
-///
-/// This reports existence of an exact building/wall crossing, not whether its
-/// rounded screening increment is positive. It shares the barrier constructor
-/// with [`screening_attenuation_with_meta`], so the CPU H0 reference cannot
-/// drift from the production path while deciding the composite branch.
-#[must_use]
-pub fn line_vector_path_present(
-    profile: &PathProfile,
-    barriers: &[Barrier],
-    obstacle_candidates: &[CrossingCandidate],
-) -> bool {
-    profile.t.len() >= 3
-        && profile.dist_m >= 30.0
-        && (!obstacle_candidates.is_empty()
-            || barrier_crossing_candidates(
-                barriers,
-                profile.src_lat,
-                profile.src_lon,
-                profile.rcv_lat,
-                profile.rcv_lon,
-                profile.dist_m,
-            )
-            .next()
-            .is_some())
 }
 
 /// Screening attenuation + obstacle trace for popup tooltips.
@@ -1124,35 +1097,6 @@ mod tests {
             None,
         );
         assert_eq!(bands, atten, "band-only wrapper == _with_meta bands");
-    }
-
-    #[test]
-    fn h0_vector_presence_is_crossing_existence_not_screening_magnitude() {
-        let dist_m = 200.0;
-        let crossing = wall(100.0, -30.0, 100.0, 30.0, 0.01, dist_m / 2.0);
-        let miss = wall(100.0, 20.0, 100.0, 30.0, 20.0, dist_m / 2.0);
-        let profile = build_flat_profile(dist_m, 0.0);
-        assert!(line_vector_path_present(
-            &profile,
-            std::slice::from_ref(&crossing),
-            &[]
-        ));
-        assert!(!line_vector_path_present(
-            &profile,
-            std::slice::from_ref(&miss),
-            &[]
-        ));
-        let candidate = CrossingCandidate {
-            t: 0.5,
-            height_m: 0.01,
-            kind: ObstacleKind::Building,
-            id: 7,
-        };
-        assert!(line_vector_path_present(
-            &profile,
-            &[],
-            std::slice::from_ref(&candidate)
-        ));
     }
 
     /// Early-out refinement: with no buildings and every (sorted, lower-bound

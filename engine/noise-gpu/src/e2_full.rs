@@ -14,9 +14,10 @@ use anyhow::{Context, Result};
 use cudarc::driver::{CudaDevice, LaunchAsync, LaunchConfig};
 use cudarc::nvrtc::Ptx;
 use h3o::CellIndex;
-use noise_compute::propagation::streaming_reduction::source_frame_mlon;
 use noise_compute::types::Barrier;
-use noise_gpu::{BIN_W, N_BINS, SOURCE_SEGMENT_STRIDE};
+use noise_gpu::{
+    pack_sources, pack_tile, SourceBuffers, SurfaceKernelTileParameters, TileBuffers, BIN_W, N_BINS,
+};
 use raster_reader::fused_tile_z13::{default_batch_size, TileBatch, TILE_PX};
 use raster_reader::RealRasters;
 use tile_painter::accumulator::TileAccumulator;
@@ -130,15 +131,16 @@ fn main() -> Result<()> {
         let batch = TileBatch::build(z, bx, by, bn, halo_m, &rasters);
         let tile = &batch.tiles[((y - by) * bn + (x - bx)) as usize];
         let bb = &tile.bbox;
-        let (mut n_edges, mut n_foot, mut occ, mut cells) = (0usize, 0usize, 0usize, 0usize);
-        {
+        let (n_edges, n_foot, cells, occ) = {
             let set = obstacle_data.set();
             let flat = noise_gpu::flatten_obstacles(set);
-            n_edges = flat.edges.len() / 5;
-            n_foot = flat.foot_box.len() / noise_gpu::FOOT_BOX_STRIDE;
-            cells = flat.cell_max_h.len();
-            occ = flat.cell_max_h.iter().filter(|&&h| h > 0.0).count();
-        }
+            (
+                flat.edges.len() / 5,
+                flat.foot_box.len() / noise_gpu::FOOT_BOX_STRIDE,
+                flat.cell_max_h.len(),
+                flat.cell_max_h.iter().filter(|&&h| h > 0.0).count(),
+            )
+        };
         // Footprints NEAR this tile — the a-priori proxy for obstacle work per
         // ray. Ring-level counts cannot discriminate between tiles of the same
         // R4 cell (they share the ring), so this is deliberately tile-local: the
@@ -213,77 +215,31 @@ fn main() -> Result<()> {
     }
     let tile = &batch.tiles[((y - by) * bn + (x - bx)) as usize];
     let halo = &tile.halo;
-    let (lat_min, lon_min, inv, rows, cols) = halo.geom();
+    let (_, _, _, rows, cols) = halo.geom();
     let nsrc = rail.len();
     eprintln!("tile {x}/{y} R4 {r4:015x} | rail rows {nsrc} | halo {rows}×{cols}");
 
     // ---- packed device buffers ----
     let n = TILE_PX * TILE_PX;
-    let meta: Vec<f64> = vec![
-        rows as f64,
-        cols as f64,
-        lat_min,
-        lon_min,
-        inv,
-        tile.bbox.north_lat,
-        tile.bbox.south_lat,
-        tile.bbox.west_lon,
-        tile.bbox.east_lon,
-        eta,
-        tw,
-        0.0, // nbarr — the e2 CPU reference below is barrier-free (`no_barriers`)
-        nsrc as f64,
-        // meta[13] = the `out` length allocated below. This validator takes the
-        // PROF_COUNTERS block, so a counter-instrumented PTX writes it here and
-        // writes nothing of it under the production painter (`OUT_SLOTS_PROD`).
-        noise_gpu::OUT_SLOTS_PROF as f64,
-        1.0, // meta[14] = rail H0 placement-floor tag
-    ];
-    // sp = 12/source: length/reach/height/bridge ++ 8 host-precomputed Lden band
-    // weights (Σ_p LDEN_W[p]·emission_lin[p][i]) — mirrors pack_sources so the shared
-    // `line`/`line_binned_fused` kernels read sp[4+i] for the energy-budget UB.
-    const LDEN_W: [f64; 3] = [12.0, 12.649110640673518, 80.0];
-    let mut seg = Vec::with_capacity(nsrc * SOURCE_SEGMENT_STRIDE);
-    let mut sp = Vec::with_capacity(nsrc * 12);
-    let mut semis = Vec::with_capacity(nsrc * 24);
-    for r in &rail {
-        seg.extend_from_slice(&[
-            r.start_lat,
-            r.start_lon,
-            r.end_lat,
-            r.end_lon,
-            source_frame_mlon(r.start_lat, r.end_lat)
-                .expect("non-finite source geometry cannot enter the GPU ABI"),
-        ]);
-        sp.extend_from_slice(&[
-            r.length_m as f64,
-            r.max_distance_m,
-            r.source_height_m,
-            if r.bridge { 1.0 } else { 0.0 },
-        ]);
-        for i in 0..8 {
-            sp.push(
-                LDEN_W[0] * r.emission_lin[0][i] as f64
-                    + LDEN_W[1] * r.emission_lin[1][i] as f64
-                    + LDEN_W[2] * r.emission_lin[2][i] as f64,
-            );
-        }
-        for p in 0..3 {
-            for i in 0..8 {
-                semis.push(r.emission_lin[p][i]);
-            }
-        }
-    }
-    let mut rxll = Vec::with_capacity(2 * TILE_PX);
-    rxll.extend_from_slice(&tile.rx_lat);
-    rxll.extend_from_slice(&tile.rx_lon);
-    let mut rxar = Vec::with_capacity(n * 2);
-    for i in 0..n {
-        rxar.push(tile.rx_alt_m[i]);
-        rxar.push(tile.rx_refl_db[i]);
-    }
+    let TileBuffers {
+        inner,
+        meta,
+        rxll,
+        rxar,
+        barr,
+    } = pack_tile(
+        tile,
+        halo.geom(),
+        &[],
+        SurfaceKernelTileParameters {
+            byte_stop_control: eta,
+            swizzle_width: tw,
+            source_count: nsrc,
+            output_slots: noise_gpu::OUT_SLOTS_PROF,
+        },
+    );
+    let SourceBuffers { seg, sp, semis } = pack_sources(&rail);
     let elev: Vec<f32> = halo.pixels().iter().map(|p| p.elevation).collect();
-    let inner: Vec<f32> = tile.inner_elev_m.clone();
     // cover = halo [forest, imd] per cell, interleaved
     let mut cover = Vec::with_capacity(rows * cols * 2);
     for p in halo.pixels() {
@@ -388,11 +344,7 @@ fn main() -> Result<()> {
     let d_semis = dev.htod_copy(semis).expect("semis");
     let d_rxll = dev.htod_copy(rxll).expect("rxll");
     let d_rxar = dev.htod_copy(rxar).expect("rxar");
-    // One zero row — meta nbarr = 0, the kernel never reads it (cuMemAlloc
-    // rejects 0-byte buffers).
-    let d_barr = dev
-        .htod_copy(vec![0.0f64; noise_gpu::BARRIER_STRIDE])
-        .expect("barr");
+    let d_barr = dev.htod_copy(barr).expect("barr");
     let obst = noise_gpu::upload_obstacles(&dev, obstacle_data.set()).expect("obstacles");
     // Energies + the ARC FAULT slot + TEN per-pixel counters the kernel fills
     // only when built with -DPROF_COUNTERS=1: quadrature pairs, pairs with an

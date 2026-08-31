@@ -6,41 +6,48 @@
 // cull, LoS diffraction gate + δ*/fit_plane cancellation, profiles, cadence, budgets.
 // Args are packed into a few buffers (cudarc's tuple launch caps at ~12 args).
 
-// Bare-nvcc syntax-check fallback. Production build.rs injects the Rust value;
-// the shared header rejects a missing authority in every other translation unit.
+// Production build.rs injects M_LAT; this fallback is only for a bare-nvcc
+// syntax check.
 #ifndef M_LAT
 #define M_LAT 110540.0
 #endif
-#include "qm_streaming_reduction.cuh"
-
-#ifndef V2_H0
-#define V2_H0 0
-#endif
-#if V2_H0
-#include "qm_h0_node_generator.cuh"
-#endif
 
 #define NB 8
-// TPX (tile side in receiver px) and OBST_META_STRIDE are INJECTED by build.rs
-// from raster_reader::TILE_PX and noise_gpu::META_STRIDE. They decide how far
-// this kernel writes into `out` and how it strides the obstacle metas, so a
-// hand-copied value that drifts is a silent out-of-bounds device write. The
+// Layout constants are injected by build.rs from their Rust authorities. The
 // fallbacks exist only for a bare `nvcc kernels/scatter.cu` syntax check.
 #ifndef TPX
 #define TPX 512
+#endif
+#ifndef BARRIER_STRIDE
+#define BARRIER_STRIDE 6
+#endif
+#ifndef SOURCE_SEGMENT_STRIDE
+#define SOURCE_SEGMENT_STRIDE 4
+#endif
+#ifndef LINE_KERNEL_ARGUMENT_COUNT
+#define LINE_KERNEL_ARGUMENT_COUNT 12
+#endif
+#ifndef SURFACE_META_SLOTS
+#define SURFACE_META_SLOTS 14
+#endif
+#if BARRIER_STRIDE != 6
+#error "barrier layout changed; update the barrier indices in this kernel"
+#endif
+#if SOURCE_SEGMENT_STRIDE != 4
+#error "source segment layout changed; update the segment indices in this kernel"
+#endif
+#if LINE_KERNEL_ARGUMENT_COUNT != 12
+#error "surface launch changed; update the kernel signatures"
+#endif
+#if SURFACE_META_SLOTS != 14
+#error "surface metadata changed; update the meta indices in this kernel"
 #endif
 #define M_LON_EQ 111320.0       // M_PER_DEG_LON_EQ
 #define LN10 2.302585092994046
 #define PI_D 3.141592653589793
 
 __constant__ double A_W[NB]       = {-26.2,-16.1,-8.6,-3.2,0.0,1.2,1.0,-1.1};
-#if V2_H0
-__constant__ double ALPHA_ATM[NB] = {
-    V2_ALPHA_ATM_0, V2_ALPHA_ATM_1, V2_ALPHA_ATM_2, V2_ALPHA_ATM_3,
-    V2_ALPHA_ATM_4, V2_ALPHA_ATM_5, V2_ALPHA_ATM_6, V2_ALPHA_ATM_7};
-#else
 __constant__ double ALPHA_ATM[NB] = {0.1,0.4,1.0,1.9,3.7,8.7,22.0,58.4};
-#endif
 __constant__ double BAND_FREQ[NB] = {63.0,125.0,250.0,500.0,1000.0,2000.0,4000.0,8000.0};
 // CNOSSOS-EU 2015/996 (2.5.15) hard-ground floor, INJECTED by build.rs from
 // noise-compute's GROUND_HARD_FLOOR_DB. This fallback exists only for a bare
@@ -76,9 +83,8 @@ __constant__ double BAND_FREQ[NB] = {63.0,125.0,250.0,500.0,1000.0,2000.0,4000.0
 // Literal CNOSSOS direct-ground core, mirroring iso9613's homogeneous
 // §2.5.15 / favourable §2.5.20 pair including §2.5.14 G' correction. Every
 // numeric constant comes through noise-gpu/build.rs -D from Rust; CUDA keeps
-// no hand-maintained physics value.  The existing arc transport carries one
-// characteristic-point vector for the fan; node_eval will carry one full
-// composite per ray and remove that compatibility seam.
+// no hand-maintained physics value. The angular buckets independently carry
+// their screening paths while the ground term uses the characteristic point.
 __device__ __forceinline__ double ground_state_d(
     int i, double dp, double zs_h, double zr_h, double g_path, double g_source, int favourable)
 {
@@ -444,32 +450,6 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #error "the reviewed arc-stat counter layout has ten channels"
 #endif
 #define OUT_SLOTS_PROF    (OUT_ARCSTAT_BASE + TPX * TPX * OUT_ARCSTAT_COUNTERS)
-#if V2_H0
-#ifndef V2_H0_OUTPUT_ABI_VERSION
-#error "V2_H0_OUTPUT_ABI_VERSION must be generated from noise-gpu/src/lib.rs"
-#endif
-#ifndef OUT_H0_COUNTER_BYTE_OFFSET
-#error "OUT_H0_COUNTER_BYTE_OFFSET must be generated from noise-gpu/src/lib.rs"
-#endif
-#ifndef OUT_H0_COUNTERS
-#error "OUT_H0_COUNTERS must be generated from noise-gpu/src/lib.rs"
-#endif
-#ifndef OUT_SLOTS_H0
-#error "OUT_SLOTS_H0 must be generated from noise-gpu/src/lib.rs"
-#endif
-#if OUT_H0_COUNTERS != 8
-#error "the reviewed H0 exact-counter layout has eight u64 channels"
-#endif
-#if V2_H0_OUTPUT_ABI_VERSION != 1
-#error "the H0 output counter ABI changed without a reviewed version update"
-#endif
-#ifndef PROF_H0_COUNTERS
-#define PROF_H0_COUNTERS 0
-#endif
-#ifndef PROF_H0_PAIR_DIAGNOSTIC
-#define PROF_H0_PAIR_DIAGNOSTIC 0
-#endif
-#endif
 // -DPROF_COUNTERS=1 reports quadrature pairs, pairs with an escalating bucket,
 // marched bucket rays, escalating buckets, then six arc-walk diagnostics. The
 // first four independently prove the port shape: buckets/pair ≈5 and honest raw
@@ -499,9 +479,6 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 // the plain build's instead of running off the end of its own allocation.
 #ifndef PROF_COUNTERS
 #define PROF_COUNTERS 0
-#endif
-#if V2_H0 && PROF_COUNTERS
-#error "V2_H0 and PROF_COUNTERS overlap optional out regions; build separate arms"
 #endif
 // -DPROF_BLOCK_MOD=<K> runs only every K-th swizzle TILE of the `line` kernel
 // (`line_binned_fused` ignores it — its launch is not tile-major), so a tile
@@ -543,8 +520,8 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #ifndef CP_SCREEN_DELETE
 #define CP_SCREEN_DELETE 1
 #endif
-// Vector noise walls are SEGMENTS on the GPU too (fix-pack Fix 3): 7 f64 each,
-// {start_lat, start_lon, end_lat, end_lon, height_m, dist_m, source_id_bits}. Mirrors
+// Vector noise walls are segments on the GPU too: six f64 values each,
+// {start_lat, start_lon, end_lat, end_lon, height_m, dist_m}. Mirrors
 // `noise_gpu::BARRIER_STRIDE` and `types::BARRIER_PATH_HORIZON_M`.
 #define BARR_STRIDE BARRIER_STRIDE
 #define BARR_HORIZON_M 175.0
@@ -631,9 +608,6 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #endif
 #ifndef MULTIFIDELITY_COMPACT_BYTE_STOP
 #define MULTIFIDELITY_COMPACT_BYTE_STOP 1
-#endif
-#if MULTIFIDELITY_LINE && V2_H0
-#error "MULTIFIDELITY_LINE is defined only for the stock line model"
 #endif
 
 // ---- DEV-ONLY candidate END-WINDOW (-DCAND_END_WINDOW_M=<metres>, 0 = exact,
@@ -1882,14 +1856,8 @@ __device__ int ray_path_bands(
     double* tprof, double* ed, double* comp,
     unsigned char* forr, unsigned char* imdp,
     float* terr, float* screen, int need_cover, int need_screening
-#if V2_H0
-    , int need_vector, int *vector_path_present
-#endif
 )
 {
-#if V2_H0
-    if (vector_path_present != 0) *vector_path_present = 0;
-#endif
     // halo-RELATIVE ray coords (source → receiver). The per-sample ray delta
     // `d_rf` is ≲326 cells/10 km; the absolute `src_rf` is ≤~8000 cells even for a
     // 4×4-tile + 10 km batch, where fp32 ULP is ~1.5 cm ≪ the 30 m cell — so the lerp
@@ -1945,11 +1913,7 @@ __device__ int ray_path_bands(
     // buildings have no raster channel to enter, and a wall never had one.
     int have_cand = 0;
     double cand_t = 0.0, cand_top = 0.0;
-#if V2_H0
-    if (need_vector && n >= 3 && dist >= 30.0) {
-#else
     if (n >= 3 && dist >= 30.0) {
-#endif
         double src_h = fmax(salt - ed[0], 0.05);
         double rcv_h = fmax(ralt - ed[n - 1], 0.5);
         double se = ed[0] + src_h, re = ed[n - 1] + rcv_h;
@@ -1966,14 +1930,8 @@ __device__ int ray_path_bands(
     // candidate means nothing to screen on, and the screening increment over
     // bare terrain is exactly zero.
     bool anyb =
-#if V2_H0
-        need_vector &&
-#endif
         have_cand;
     if (anyb && n >= 3 && dist >= 30.0) {
-#if V2_H0
-        if (vector_path_present != 0) *vector_path_present = 1;
-#endif
         // The sample profile IS bare earth: every obstacle reaches the race as
         // an exact crossing. `comp` stays as the API's second profile so the
         // candidate's own δ still competes against the terrain edge.
@@ -2031,301 +1989,6 @@ __device__ __forceinline__ bool tri_row_x_span(
     return true;
 }
 
-#if V2_H0
-#if PROF_H0_PAIR_DIAGNOSTIC
-typedef struct {
-    unsigned long long *words;
-    unsigned long long capacity;
-    unsigned long long raw_count;
-    unsigned long long overflow_count;
-    unsigned long long hard_fault_count;
-    unsigned long long guarded_count;
-    qm_metric_vector source0;
-    qm_metric_vector source1;
-} h0_pair_diagnostic_writer;
-
-__device__ __forceinline__ int h0_pair_diagnostic_record(
-    h0_pair_diagnostic_writer *writer, qm_metric_vector candidate_a,
-    qm_metric_vector candidate_b, float height_f32,
-    unsigned long long source_id)
-{
-    if (writer == 0) return 1;
-    float near_f32 = 0.0f;
-    if (!isfinite(height_f32) ||
-        !qm_origin_to_segment_distance_f32(candidate_a, candidate_b, &near_f32)) {
-        writer->hard_fault_count++;
-        return 0;
-    }
-    const int span = qm_candidate_overlaps_source_span(
-        writer->source0, writer->source1, candidate_a, candidate_b, near_f32);
-    if (span == QM_SPAN_HARD_FAULT) writer->hard_fault_count++;
-    if (span == QM_SPAN_NEAR_GUARDED_DEGENERATE) writer->guarded_count++;
-    const unsigned long long index = writer->raw_count++;
-    if (index >= writer->capacity) {
-        writer->overflow_count++;
-        return span != QM_SPAN_HARD_FAULT;
-    }
-    unsigned long long *record = &writer->words[
-        H0_PAIR_DIAGNOSTIC_RECORD_BASE + index * H0_PAIR_DIAGNOSTIC_RECORD_WORDS];
-    record[0] = source_id;
-    record[1] = QM_BITS(candidate_a.x);
-    record[2] = QM_BITS(candidate_a.y);
-    record[3] = QM_BITS(candidate_b.x);
-    record[4] = QM_BITS(candidate_b.y);
-    record[5] = (unsigned long long)__float_as_uint(near_f32) |
-                ((unsigned long long)__float_as_uint(height_f32) << 32);
-    record[6] = (unsigned long long)span;
-    return span != QM_SPAN_HARD_FAULT;
-}
-#endif
-
-// Validate one raw-store record, then use the sole shared candidate/node mask
-// loop from qm_h0_node_generator.cuh. Duplicate acceleration-cell references
-// remain harmless because OR is idempotent and no candidate state survives.
-__device__ __forceinline__ int h0_mask_candidate(
-    qm_metric_vector candidate_a, qm_metric_vector candidate_b, float height_f32,
-    unsigned long long source_id, int expect_wall, const double *node_x,
-    const double *node_distance, int node_count, qm_metric_vector foot_vector,
-    qm_metric_vector line_unit, unsigned long long *mask,
-    unsigned long long *candidate_visits, unsigned long long *guarded_candidates)
-{
-    (*candidate_visits)++;
-    if (!isfinite(height_f32) ||
-        (((source_id & SR_WALL_SOURCE_TAG) != 0ull) != (expect_wall != 0)))
-        return 0;
-    float near_f32 = 0.0f;
-    if (!qm_origin_to_segment_distance_f32(candidate_a, candidate_b, &near_f32))
-        return 0;
-    return qm_h0_mask_candidate_nodes(
-        candidate_a, candidate_b, near_f32, node_x, node_distance, node_count,
-        foot_vector, line_unit, mask, guarded_candidates);
-}
-
-__device__ int h0_stream_candidate_mask(
-    const unsigned long long *obst, const double *barr, int nbarr,
-    double rlat, double rlon, const double *seg, const double *node_x,
-    const double *node_distance, int node_count, qm_metric_vector foot_vector,
-    qm_metric_vector line_unit, unsigned long long *mask,
-    unsigned long long *candidate_visits, unsigned long long *guarded_candidates
-#if PROF_H0_PAIR_DIAGNOSTIC
-    , h0_pair_diagnostic_writer *diagnostic_writer
-#endif
-    )
-{
-    const double source_mlon = seg[4];
-    if (!isfinite(source_mlon) || !(source_mlon > 0.0) || node_count < 0 ||
-        node_count > V2_H0_NODE_CAP)
-        return 0;
-    mask[0] = 0ull;
-    mask[1] = 0ull;
-    *candidate_visits = 0ull;
-    *guarded_candidates = 0ull;
-
-    const int n_idx = (int)obst[0];
-    if (n_idx < 0) return 0;
-    if (n_idx == 0) {
-        // Raster fallback has no semantic vector-candidate authority. It must
-        // fail open to the complete path walk, where raster buildings and all
-        // walls are evaluated; an empty mask here would silently erase every
-        // raster building screen in a partially prepared world region.
-        for (int node_index = 0; node_index < node_count; node_index++)
-            mask[node_index / 64] |= 1ull << (node_index % 64);
-        return 1;
-    }
-    const double *metas = (const double *)obst[1];
-    const unsigned int *starts = (const unsigned int *)obst[2];
-    const unsigned int *refs = (const unsigned int *)obst[3];
-    const float *edges = (const float *)obst[4];
-    for (int gi = 0; gi < n_idx; gi++) {
-        const double *m = &metas[gi * OBST_META_STRIDE];
-        const double index_mlon = m[2], cell = m[3], minx = m[4], miny = m[5];
-        const int cols_i = (int)m[6], rows_i = (int)m[7];
-        const size_t starts_offset = (size_t)m[8];
-        const size_t refs_offset = (size_t)m[9];
-        const size_t edges_offset = (size_t)m[10];
-        if (!isfinite(index_mlon) || !(index_mlon > 0.0) || !(cell > 0.0) ||
-            cols_i <= 0 || rows_i <= 0)
-            return 0;
-        const double rx = (rlon - m[1]) * index_mlon;
-        const double ry = (rlat - m[0]) * M_LAT;
-        const double ax = (seg[1] - m[1]) * index_mlon;
-        const double ay = (seg[0] - m[0]) * M_LAT;
-        const double bx = (seg[3] - m[1]) * index_mlon;
-        const double by = (seg[2] - m[0]) * M_LAT;
-        const double inv_cell = 1.0 / cell;
-        const double cx0d = floor((fmin(fmin(rx, ax), bx) - minx) * inv_cell);
-        const double cx1d = floor((fmax(fmax(rx, ax), bx) - minx) * inv_cell);
-        const double cy0d = floor((fmin(fmin(ry, ay), by) - miny) * inv_cell);
-        const double cy1d = floor((fmax(fmax(ry, ay), by) - miny) * inv_cell);
-        if (cx1d < 0.0 || cx0d > (double)(cols_i - 1) || cy1d < 0.0 ||
-            cy0d > (double)(rows_i - 1))
-            continue;
-        const int cx0 = (int)fmax(cx0d, 0.0);
-        const int cx1 = (int)fmin(cx1d, (double)(cols_i - 1));
-        const int cy0 = (int)fmax(cy0d, 0.0);
-        const int cy1 = (int)fmin(cy1d, (double)(rows_i - 1));
-        for (int cy = cy0; cy <= cy1; cy++) {
-            double xs_lo = 0.0, xs_hi = -1.0;
-            const double y_lo = miny + (double)cy * cell;
-            if (!tri_row_x_span(rx, ry, ax, ay, bx, by, y_lo, y_lo + cell,
-                                &xs_lo, &xs_hi))
-                continue;
-            const int row_cx0 =
-                (int)fmax(floor((xs_lo - minx) * inv_cell), (double)cx0);
-            const int row_cx1 =
-                (int)fmin(floor((xs_hi - minx) * inv_cell), (double)cx1);
-            const size_t row = (size_t)cy * (size_t)cols_i;
-            for (int cx = row_cx0; cx <= row_cx1; cx++) {
-                const size_t cell_index = row + (size_t)cx;
-                const unsigned int first = starts[starts_offset + cell_index];
-                const unsigned int last = starts[starts_offset + cell_index + 1];
-                for (unsigned int ref_index = first; ref_index < last; ref_index++) {
-                    const unsigned int edge_ref = refs[refs_offset + ref_index];
-                    const unsigned long long source_id =
-                        (unsigned long long)edges_offset + (unsigned long long)edge_ref;
-                    const float *edge = &edges[(edges_offset + edge_ref) * 5];
-                    const double lat0 = m[0] + (double)edge[1] / M_LAT;
-                    const double lon0 = m[1] + (double)edge[0] / index_mlon;
-                    const double lat1 = m[0] + (double)edge[3] / M_LAT;
-                    const double lon1 = m[1] + (double)edge[2] / index_mlon;
-                    qm_metric_vector candidate_a, candidate_b;
-                    if (!qm_source_frame_vector_from_world(
-                            lat0, lon0, rlat, rlon, source_mlon, &candidate_a) ||
-                        !qm_source_frame_vector_from_world(
-                            lat1, lon1, rlat, rlon, source_mlon, &candidate_b))
-                        return 0;
-#if PROF_H0_PAIR_DIAGNOSTIC
-                    if (!h0_pair_diagnostic_record(
-                            diagnostic_writer, candidate_a, candidate_b, edge[4], source_id))
-                        return 0;
-#endif
-                    if (!h0_mask_candidate(
-                            candidate_a, candidate_b, edge[4], source_id, 0,
-                            node_x, node_distance, node_count, foot_vector,
-                            line_unit, mask, candidate_visits, guarded_candidates))
-                        return 0;
-                }
-            }
-        }
-    }
-
-    for (int wall_index = 0; wall_index < nbarr; wall_index++) {
-        const double *wall = &barr[wall_index * BARR_STRIDE];
-        qm_metric_vector candidate_a, candidate_b;
-        if (!qm_source_frame_vector_from_world(
-                wall[0], wall[1], rlat, rlon, source_mlon, &candidate_a) ||
-            !qm_source_frame_vector_from_world(
-                wall[2], wall[3], rlat, rlon, source_mlon, &candidate_b))
-            return 0;
-#if PROF_H0_PAIR_DIAGNOSTIC
-        if (!h0_pair_diagnostic_record(
-                diagnostic_writer, candidate_a, candidate_b, (float)wall[4], QM_BITS(wall[6])))
-            return 0;
-#endif
-        if (!h0_mask_candidate(
-                candidate_a, candidate_b, (float)wall[4], QM_BITS(wall[6]), 1,
-                node_x, node_distance, node_count, foot_vector, line_unit, mask,
-                candidate_visits, guarded_candidates))
-            return 0;
-    }
-    return 1;
-}
-
-#if PROF_H0_PAIR_DIAGNOSTIC
-// Evidence-only single-pair walk over the exact packed production stores.
-// It shares h0_stream_candidate_mask with the hot H0 path, but its retained
-// records exist only in this separately compiled diagnostic role.
-extern "C" __global__ void h0_pair_diagnostic(
-    const unsigned long long *obst, const double *barr, int nbarr,
-    const double *seg, double rlat, double rlon, double d_floor_m,
-    unsigned long long *out, unsigned long long record_capacity)
-{
-    if (blockIdx.x != 0 || threadIdx.x != 0) return;
-    for (int index = 0; index < H0_PAIR_DIAGNOSTIC_HEADER_WORDS; index++) out[index] = 0ull;
-    out[0] = H0_PAIR_DIAGNOSTIC_MAGIC;
-    out[1] = H0_PAIR_DIAGNOSTIC_ABI_VERSION;
-    out[23] = record_capacity;
-
-    const double source_mlon = seg[4];
-    qm_metric_vector source0, source1;
-    if (!qm_source_frame_vector_from_world(
-            seg[0], seg[1], rlat, rlon, source_mlon, &source0) ||
-        !qm_source_frame_vector_from_world(
-            seg[2], seg[3], rlat, rlon, source_mlon, &source1)) {
-        out[5] = 1ull;
-        return;
-    }
-    qm_h0_iterator iterator;
-    if (!qm_h0_iterator_init(&iterator, source0, source1, 1.0, d_floor_m)) {
-        out[5] = 1ull;
-        out[21] = (unsigned long long)iterator.fault_bits;
-        return;
-    }
-
-    double node_x[V2_H0_NODE_CAP];
-    double node_distance[V2_H0_NODE_CAP];
-    int node_count = 0;
-    qm_h0_node node;
-    for (;;) {
-        const int status = qm_h0_iterator_next(&iterator, &node);
-        if (status == 0) break;
-        if (status < 0 || node_count >= V2_H0_NODE_CAP) {
-            out[5] = 1ull;
-            out[21] = (unsigned long long)iterator.fault_bits;
-            return;
-        }
-        node_x[node_count] = node.node_x_m;
-        node_distance[node_count] = node.node_distance_m;
-        unsigned long long *node_record = &out[
-            H0_PAIR_DIAGNOSTIC_NODE_BASE + node_count * H0_PAIR_DIAGNOSTIC_NODE_WORDS];
-        node_record[0] = QM_BITS(node.position_m.x);
-        node_record[1] = QM_BITS(node.position_m.y);
-        node_record[2] = QM_BITS(node.piece_fraction);
-        node_record[3] = QM_BITS(node.weight);
-        node_record[4] = QM_BITS(node.placement_distance_m);
-        node_record[5] = QM_BITS(node.node_x_m);
-        node_record[6] = QM_BITS(node.node_distance_m);
-        node_record[7] = (unsigned long long)(long long)node.arm;
-        node_count++;
-    }
-
-    h0_pair_diagnostic_writer writer = {
-        out, record_capacity, 0ull, 0ull, 0ull, 0ull, source0, source1};
-    unsigned long long mask[2] = {0ull, 0ull};
-    unsigned long long candidate_visits = 0ull;
-    unsigned long long mask_guarded = 0ull;
-    const int stream_ok = h0_stream_candidate_mask(
-        obst, barr, nbarr, rlat, rlon, seg, node_x, node_distance,
-        node_count, iterator.foot_m, iterator.direction, mask,
-        &candidate_visits, &mask_guarded, &writer);
-
-    out[2] = writer.raw_count;
-    out[3] = writer.raw_count < record_capacity ? writer.raw_count : record_capacity;
-    out[4] = writer.overflow_count;
-    out[5] = writer.hard_fault_count + (stream_ok ? 0ull : 1ull);
-    out[6] = writer.guarded_count;
-    out[7] = (unsigned long long)node_count;
-    out[8] = mask[0];
-    out[9] = mask[1];
-    out[10] = QM_BITS(source0.x);
-    out[11] = QM_BITS(source0.y);
-    out[12] = QM_BITS(source1.x);
-    out[13] = QM_BITS(source1.y);
-    out[14] = QM_BITS(iterator.foot_m.x);
-    out[15] = QM_BITS(iterator.foot_m.y);
-    out[16] = QM_BITS(iterator.direction.x);
-    out[17] = QM_BITS(iterator.direction.y);
-    out[18] = QM_BITS(source_mlon);
-    out[19] = candidate_visits;
-    out[20] = mask_guarded;
-    out[21] = (unsigned long long)iterator.fault_bits;
-    out[22] = stream_ok && writer.hard_fault_count == 0ull &&
-                      writer.overflow_count == 0ull
-                  ? 1ull
-                  : 0ull;
-}
-#endif
-#endif
 
 // ---- Clip an angular arc to the segment's span. A hull can sit one turn away
 // from it (base near ±π), hence the three shifts.
@@ -3311,9 +2974,6 @@ __device__ void arc_screen_bands(
                                        slat, slon, isalt, rlat, rlon, ralt, idist,
                                        barr, nbarr, obst, tprof, ed, comp,
                                        forr, imdp, iterr, bands, 0, 1
-#if V2_H0
-                                       , 1, (int *)0
-#endif
                                        );
                         have = true;
                     }
@@ -3419,277 +3079,6 @@ __device__ __forceinline__ bool bs_decided(double p_lo, double p_hi, double marg
 // it) and return without marching anything. One function rather than two so the
 // geometry the bound is built on cannot drift from the geometry the exact path
 // uses — that identity is what makes `ub ≥ exact` true per pair.
-#if V2_H0
-typedef struct {
-    unsigned long long node_overflow;
-    unsigned long long hard_geometry;
-    unsigned long long abi_layout;
-    unsigned long long guarded_legal;
-    unsigned long long completed_pairs;
-    unsigned long long candidate_visits;
-    unsigned long long generated_nodes;
-    unsigned long long admitted_nodes;
-} h0_local_faults;
-
-__device__ __forceinline__ void line_source_h0(
-    const float *elev, const float *inner, const unsigned char *cover,
-    int rows, int cols, double lat_min, double lon_min, double inv,
-    const double *bb, double rlat, double rlon, double ralt, double refl,
-    bool ub_only, const double *seg, const double *sp, const float *em,
-    const double *barr, int nbarr, const unsigned long long *obst,
-    double d_floor_m, double *tprof, double *ed, double *comp,
-    unsigned char *forr, unsigned char *imdp,
-    float &e0, float &e1, float &e2, double &kept, int &npair,
-    h0_local_faults *faults
-#if PROF_H0_PAIR_DIAGNOSTIC
-    , double *diagnostic_period_band_power
-#endif
-    )
-{
-    double dend, dperp, cplat, cplon, fraction;
-    p2s(rlat, rlon, seg[0], seg[1], seg[2], seg[3],
-        &dend, &dperp, &cplat, &cplon, &fraction);
-    if (dend > sp[1]) return;
-    if (ub_only) {
-        // H0 has no reviewed byte-stop upper bound yet. The compile-time arm
-        // therefore prices no residual and the callers force the exact walk.
-        npair++;
-        return;
-    }
-
-    const double source_mlon = seg[4];
-    qm_metric_vector start_m, end_m;
-    if (!qm_source_frame_vector_from_world(
-            seg[0], seg[1], rlat, rlon, source_mlon, &start_m) ||
-        !qm_source_frame_vector_from_world(
-            seg[2], seg[3], rlat, rlon, source_mlon, &end_m)) {
-        faults->hard_geometry++;
-        return;
-    }
-    qm_h0_iterator iterator;
-    if (!qm_h0_iterator_init(&iterator, start_m, end_m, 1.0, d_floor_m)) {
-        if ((iterator.fault_bits & QM_H0_FAULT_NODE_CAP) != 0u)
-            faults->node_overflow++;
-        else
-            faults->hard_geometry++;
-        return;
-    }
-    double node_x[V2_H0_NODE_CAP];
-    double node_distance[V2_H0_NODE_CAP];
-    int node_count = 0;
-    qm_h0_node node;
-    for (;;) {
-        const int status = qm_h0_iterator_next(&iterator, &node);
-        if (status == 0) break;
-        if (status < 0) {
-            if ((iterator.fault_bits & QM_H0_FAULT_NODE_CAP) != 0u)
-                faults->node_overflow++;
-            else
-                faults->hard_geometry++;
-            return;
-        }
-        if (node_count >= V2_H0_NODE_CAP) {
-            faults->node_overflow++;
-            return;
-        }
-        node_x[node_count] = node.node_x_m;
-        node_distance[node_count] = node.node_distance_m;
-        node_count++;
-    }
-    const qm_metric_vector foot_vector = iterator.foot_m;
-    const qm_metric_vector line_unit = iterator.direction;
-    unsigned long long admitted_mask[2] = {0ull, 0ull};
-    unsigned long long candidate_visits = 0ull;
-    unsigned long long guarded_candidates = 0ull;
-    if (!h0_stream_candidate_mask(
-            obst, barr, nbarr, rlat, rlon, seg, node_x, node_distance,
-            node_count, foot_vector, line_unit, admitted_mask,
-            &candidate_visits, &guarded_candidates
-#if PROF_H0_PAIR_DIAGNOSTIC
-            , (h0_pair_diagnostic_writer *)0
-#endif
-            )) {
-        faults->hard_geometry++;
-        return;
-    }
-    faults->guarded_legal += guarded_candidates;
-#if PROF_H0_COUNTERS
-    faults->completed_pairs++;
-    faults->candidate_visits += candidate_visits;
-    faults->generated_nodes += (unsigned long long)node_count;
-    faults->admitted_nodes +=
-        (unsigned long long)__popcll(admitted_mask[0]) +
-        (unsigned long long)__popcll(admitted_mask[1]);
-#endif
-
-    qm_h0_iterator evaluation_iterator;
-    if (!qm_h0_iterator_init(
-            &evaluation_iterator, start_m, end_m, 1.0, d_floor_m)) {
-        faults->hard_geometry++;
-        return;
-    }
-    double pair_power[3] = {0.0, 0.0, 0.0};
-    int node_index = 0;
-    for (;;) {
-        const int status = qm_h0_iterator_next(&evaluation_iterator, &node);
-        if (status == 0) break;
-        if (status < 0 || node_index >= node_count ||
-            QM_BITS(node.node_x_m) != QM_BITS(node_x[node_index]) ||
-            QM_BITS(node.node_distance_m) != QM_BITS(node_distance[node_index])) {
-            faults->hard_geometry++;
-            return;
-        }
-        const double slat = QM_ADD(rlat, QM_DIV(node.position_m.y, M_LAT));
-        const double slon = QM_ADD(rlon, QM_DIV(node.position_m.x, source_mlon));
-        const double salt = tile_elev(
-            inner, elev, rows, cols, lat_min, lon_min, inv, bb, slat, slon) + sp[2];
-        const double dz = salt - ralt;
-        const double exact_slant = sqrt(
-            node.node_distance_m * node.node_distance_m + dz * dz);
-        if (!isfinite(exact_slant)) {
-            faults->hard_geometry++;
-            return;
-        }
-        const int admitted =
-            (admitted_mask[node_index / 64] & (1ull << (node_index % 64))) != 0ull;
-        float terrain[NB], screening[NB], vegetation[NB];
-        int vector_path_present = 0;
-        const int sample_count = ray_path_bands(
-            elev, cover, rows, cols, lat_min, lon_min, inv,
-            slat, slon, salt, rlat, rlon, ralt, node.node_distance_m,
-            barr, nbarr, obst, tprof, ed, comp, forr, imdp,
-            terrain, screening, 1, 1, admitted, &vector_path_present);
-        const float mean_imd = path_integral_imd(tprof, imdp, sample_count);
-        const float ground_g = sp[3] != 0.0
-            ? 0.0f
-            : fminf(fmaxf(1.0f - mean_imd / 100.0f, 0.0f), 1.0f);
-        const float source_ground_g = sp[3] != 0.0
-            ? 0.0f
-            : fminf(fmaxf(1.0f - (float)imdp[0] / 100.0f, 0.0f), 1.0f);
-        double plane_a, plane_b;
-        fit_plane(tprof, ed, 0, sample_count - 1, 0.0,
-                  node.node_distance_m, &plane_a, &plane_b);
-        const double zs_h = fmax(fabs(salt - plane_b), 0.05);
-        const double zr_h = fmax(
-            fabs(ralt - (plane_a * node.node_distance_m + plane_b)), 0.05);
-        const double ground_dp = fmax(node.node_distance_m, 1e-6);
-        double ground[NB];
-        for (int band = 0; band < NB; band++)
-            ground[band] = ground_atten_d(
-                band, ground_dp, zs_h, zr_h,
-                (double)ground_g, (double)source_ground_g);
-        veg_bands(
-            veg_run_length(tprof, forr, sample_count, (float)node.node_distance_m),
-            vegetation);
-        const double divergence_db = 20.0 * log10(fmax(exact_slant, 1.0)) + 11.0;
-        for (int band = 0; band < NB; band++) {
-            // N-11 COMPOSITE: the vector path's existence owns the branch,
-            // not whether its rounded screening increment happens to exceed 0.
-            const double ground_or_barrier = vector_path_present
-                ? fmax(ground[band], (double)terrain[band] + (double)screening[band])
-                : ground[band];
-            const double attenuation = divergence_db
-                + ALPHA_ATM[band] * exact_slant / 1000.0
-                + ground_or_barrier + (double)vegetation[band]
-                - A_W[band] - refl;  // N-10: receiver reflection is negative A_meteo
-            const double transfer = exp(-attenuation * LN10 * 0.1);
-            for (int period = 0; period < 3; period++) {
-                const double contribution =
-                    (double)em[period * NB + band] * node.weight * transfer;
-                pair_power[period] += contribution;
-#if PROF_H0_PAIR_DIAGNOSTIC
-                if (diagnostic_period_band_power != 0)
-                    diagnostic_period_band_power[period * NB + band] += contribution;
-#endif
-            }
-        }
-        node_index++;
-    }
-    if (node_index != node_count) {
-        faults->hard_geometry++;
-        return;
-    }
-    double kept_add = 0.0;
-    for (int period = 0; period < 3; period++) {
-        if (!isfinite(pair_power[period]) || !(pair_power[period] > 0.0)) continue;
-        const float power_f32 = (float)pair_power[period];
-        if (period == 0) e0 += power_f32;
-        else if (period == 1) e1 += power_f32;
-        else e2 += power_f32;
-        kept_add += pair_power[period] * LDEN_W[period];
-    }
-    kept += kept_add;
-}
-
-#if PROF_H0_PAIR_DIAGNOSTIC
-// Evidence-only full physical evaluation of one actual prepared-store pair.
-// The production H0 body above owns every path equation; this entry only
-// supplies one source/receiver and exposes its per-band contributions.
-extern "C" __global__ void h0_pair_path_diagnostic(
-    const float *elev, const float *inner, const unsigned char *cover,
-    const double *meta, const double *seg, const double *sp, const float *semis,
-    const double *rxll, const float *rxar, const double *barr,
-    const unsigned long long *obst, unsigned long long *out)
-{
-    if (blockIdx.x != 0 || threadIdx.x != 0) return;
-    for (int index = 0; index < 40; index++) out[index] = 0ull;
-    out[0] = H0_PAIR_DIAGNOSTIC_MAGIC;
-    out[1] = 2ull;
-    h0_local_faults faults = {0ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull};
-    const int rows = (int)meta[0], cols = (int)meta[1];
-    const int nbarr = (int)meta[11], nsrc = (int)meta[12];
-    const int line_layer_tag = (int)meta[14];
-    const int source_index = (int)meta[15];
-    const int pixel_y = (int)meta[16], pixel_x = (int)meta[17];
-    if (source_index < 0 || source_index >= nsrc || pixel_y < 0 || pixel_y >= TPX ||
-        pixel_x < 0 || pixel_x >= TPX ||
-        !qm_h0_layout_valid(
-            line_layer_tag, (unsigned long long)OUT_SLOTS_H0,
-            (long long)nbarr,
-            qm_barrier_candidate_tail_slot_offset((unsigned long long)nbarr))) {
-        faults.abi_layout++;
-    } else {
-        const int pixel = pixel_y * TPX + pixel_x;
-        const double receiver_latitude = rxll[pixel_y];
-        const double receiver_longitude = rxll[TPX + pixel_x];
-        const double receiver_altitude = (double)rxar[pixel * 2];
-        const double receiver_reflection = (double)rxar[pixel * 2 + 1];
-        double tprof[MAXT], ed[MAXT], comp[MAXT];
-        unsigned char forr[MAXT], imdp[MAXT];
-        float e0 = 0.0f, e1 = 0.0f, e2 = 0.0f;
-        double kept = 0.0;
-        int npair = 0;
-        double period_band_power[3 * NB] = {0.0};
-        line_source_h0(
-            elev, inner, cover, rows, cols, meta[2], meta[3], meta[4], &meta[5],
-            receiver_latitude, receiver_longitude, receiver_altitude,
-            receiver_reflection, false,
-            &seg[source_index * SOURCE_SEGMENT_STRIDE], &sp[source_index * 12],
-            &semis[source_index * 24], barr, nbarr, obst,
-            line_layer_tag == 0 ? V2_ROAD_D_FLOOR_M : V2_RAIL_D_FLOOR_M,
-            tprof, ed, comp, forr, imdp, e0, e1, e2, kept, npair, &faults,
-            period_band_power);
-        for (int index = 0; index < 3 * NB; index++)
-            out[10 + index] = QM_BITS(period_band_power[index]);
-        out[34] = (unsigned long long)__float_as_uint(e0);
-        out[35] = (unsigned long long)__float_as_uint(e1);
-        out[36] = (unsigned long long)__float_as_uint(e2);
-        out[37] = QM_BITS(kept);
-        out[38] = (unsigned long long)npair;
-    }
-    out[2] = faults.node_overflow;
-    out[3] = faults.hard_geometry;
-    out[4] = faults.abi_layout;
-    out[5] = faults.guarded_legal;
-    out[6] = faults.completed_pairs;
-    out[7] = faults.candidate_visits;
-    out[8] = faults.generated_nodes;
-    out[9] = faults.admitted_nodes;
-    out[39] = (faults.node_overflow == 0ull && faults.hard_geometry == 0ull &&
-               faults.abi_layout == 0ull) ? 1ull : 0ull;
-}
-#endif
-#endif
 
 // ---- seg_sampling::SegFan::at — the point on the segment the receiver sees at
 // fraction `f` of the fan: ray at azimuth az0 + f·span × the segment line, the
@@ -3831,18 +3220,6 @@ __device__ __noinline__ void line_source(
     float* arcstat,
     unsigned int* hc_key, double* hc_lo, double* hc_hi, unsigned int* arc_drops)
 {
-#if V2_H0
-    // The H0 arm is called through a dedicated wrapper below; reaching the
-    // stock source body would silently mix the two physical models.
-    (void)elev; (void)inner; (void)cover; (void)rows; (void)cols;
-    (void)lat_min; (void)lon_min; (void)inv; (void)bb; (void)rlat;
-    (void)rlon; (void)ralt; (void)refl; (void)ub_only; (void)seg; (void)sp;
-    (void)em; (void)barr; (void)nbarr; (void)obst; (void)tprof; (void)ed;
-    (void)comp; (void)forr; (void)imdp; (void)e0; (void)e1;
-    (void)e2; (void)kept; (void)resid; (void)npair; (void)arcstat;
-    (void)hc_key; (void)hc_lo; (void)hc_hi; (void)arc_drops;
-    return;
-#else
     double dend, dperp, cplat, cplon, frac;
     p2s(rlat, rlon, seg[0], seg[1], seg[2], seg[3], &dend, &dperp, &cplat, &cplon, &frac);
     if (dend > sp[1]) return;   // exact per-pixel reach cull (matches scatter_band)
@@ -3898,9 +3275,6 @@ __device__ __noinline__ void line_source(
                            barr, nbarr, obst, tprof, ed, comp, forr, imdp,
                            terr, screen, 1,
                            !CP_SCREEN_DELETE || !has_complete_fan
-#if V2_H0
-                           , 1, (int *)0
-#endif
                            );
     // Ground G and vegetation ride the cp ray (they vary slowly along the
     // segment, DECISION 2026-08-03) — read them out BEFORE the arc pass.
@@ -4011,9 +3385,6 @@ __device__ __noinline__ void line_source(
                            slat, slon, salt_k, rlat, rlon, ralt, sdist,
                            barr, nbarr, obst, tprof, ed, comp, forr, imdp,
                            terr_k, screen_k, 0, 1
-#if V2_H0
-                           , 1, (int *)0
-#endif
                            );
             // The 3° gate, per BUCKET (segment_can_span at sub-span
             // granularity): chord of the sub-span in the receiver frame — exact,
@@ -4111,7 +3482,6 @@ __device__ __noinline__ void line_source(
     // the ground at its most favourable, times UB_SAFETY).
     kept += kept_add;
     resid -= ub;   // this pair is now known EXACTLY — it leaves the bound
-#endif  // V2_H0
 }
 
 // RAIL scatter: free-field + terrain diffraction + building screening + ground +
@@ -4123,14 +3493,14 @@ __device__ __noinline__ void line_source(
 // variant. Per-period energy in f32 (matching TileAccumulator), kept in f64.
 //   meta = [rows, cols, lat_min, lon_min, inv, north, south, west, east,
 //           byte_stop_on (the old η slot: 0 = off/exact, non-zero = on),
-//           tile_width, nbarr, nsrc, out_slots, line_layer_tag]  (out_slots = f32 slots the host
+//           tile_width, nbarr, nsrc, out_slots]  (out_slots = f32 slots the host
 //           allocated in `out` — see the `out` LAYOUT block near the top)
 //   inner = TPX×TPX tile DEM; cover = halo [building,forest,imd] u8.
 //   sp = nsrc×12 {length_m, max_distance_m, source_height_m, bridge, then the 8
 //   host-precomputed Lden band energies} — see `line_buffers` in
 //   noise-gpu/src/lib.rs, which writes it.
-//   barr = max(nbarr,1)×BARR_STRIDE (7) {start_lat, start_lon, end_lat, end_lon,
-//   height_m, dist_m, source_id_bits} — this tile's sorted for_tile()
+//   barr = max(nbarr,1)×BARRIER_STRIDE (6) {start_lat, start_lon, end_lat,
+//   end_lon, height_m, dist_m} — this tile's sorted for_tile()
 //   barrier slice (nbarr in meta[11]). obst = the 14-slot vector-obstacle
 //   pointer table (slot map above `obstacle_best_candidate`; obst[0]==0 ⇒
 //   raster mode); nsrc rides in meta[12] because cudarc's tuple launch caps at
@@ -4160,9 +3530,6 @@ extern "C" __global__ void line(
     // what a disabled byte-stop is. Non-zero (the shipped 0.40) = stop on. So no
     // host change, and `SURFACE_BUDGET_ETA=0` still means what it always meant.
     bool stop_on = meta[9] != 0.0;
-#if V2_H0
-    stop_on = false;  // no H0 byte-stop bound has been reviewed
-#endif
     int nsrc = (int)meta[12];
     // Tiled (swizzled) pixel mapping: consecutive threads fill a 16×16 pixel tile
     // before the next, so each warp/block covers a COMPACT 2D region — its rays to a
@@ -4192,34 +3559,11 @@ extern "C" __global__ void line(
                          ? &out[OUT_ARCSTAT_BASE + opix * OUT_ARCSTAT_COUNTERS] : (float*)0;
     float* fault = (out_slots > OUT_FAULT_SLOT) ? &out[OUT_FAULT_SLOT] : (float*)0;
     unsigned int arc_drops = 0;
-#if V2_H0
-    const int line_layer_tag = (int)meta[14];
-    const double h0_d_floor_m = line_layer_tag == 0
-        ? V2_ROAD_D_FLOOR_M : V2_RAIL_D_FLOOR_M;
-    h0_local_faults h0_faults = {0ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull};
-    unsigned long long *h0_counters = out_slots >= OUT_SLOTS_H0
-        ? (unsigned long long *)((unsigned char *)out + OUT_H0_COUNTER_BYTE_OFFSET)
-        : (unsigned long long *)0;
-    const int h0_layout_ok = qm_h0_layout_valid(
-            line_layer_tag, (unsigned long long)out_slots,
-            (long long)nbarr,
-            qm_barrier_candidate_tail_slot_offset((unsigned long long)nbarr)) &&
-        h0_counters != 0;
-    if (!h0_layout_ok) {
-        // The exact-counter tail may itself be absent, so the always-present
-        // production fault slot is the only trustworthy channel. No energy is
-        // written from an ABI-invalid invocation.
-        if (fault != 0) atomicAdd(fault, 1.0f);
-        return;
-    }
-#endif
-#if !V2_H0
     unsigned int hc_key[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
     double hc_lo[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
     double hc_hi[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
     for (int i = 0; i < (ARC_HULL_CACHE ? ARC_HULL_CACHE : 1); i++)
         hc_key[i] = 0xFFFFFFFFu;
-#endif
 
     // CHEAP PASS: price every pair, so `resid` is a bound over the WHOLE tail
     // before any of it is computed. This is the bound the superseded budget skip
@@ -4228,7 +3572,6 @@ extern "C" __global__ void line(
     // resid — the cheap pass is then a second full nsrc scan that writes
     // nothing the exact pass reads. Compact already skips it under
     // COMPACT_BYTE_STOP=0; unbinned `line` must too.
-#if !V2_H0
     double margin = 0.0;
     if (stop_on) {
         for (int s = 0; s < nsrc; s++)
@@ -4239,52 +3582,21 @@ extern "C" __global__ void line(
                         hc_key, hc_lo, hc_hi, &arc_drops);
         margin = bs_margin(npair);
     }
-#endif
     // THE WALK: exact per pair until [kept, kept+resid] pins one byte. No
     // barriers in this kernel, so a plain break is safe (line_binned_fused below
     // must use a per-thread flag instead).
     for (int s = 0; s < nsrc; s++) {
-#if !V2_H0
         if (stop_on && bs_decided(kept, kept + resid, margin)) break;
-#endif
-#if V2_H0
-        line_source_h0(
-            elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
-            rlat, rlon, ralt, refl, false,
-            &seg[s * SOURCE_SEGMENT_STRIDE], &sp[s * 12], &semis[s * 24],
-            barr, nbarr, obst, h0_d_floor_m,
-            tprof, ed, comp, forr, imdp,
-            e0, e1, e2, kept, npair, &h0_faults
-#if PROF_H0_PAIR_DIAGNOSTIC
-            , (double *)0
-#endif
-            );
-#else
         line_source(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
                     rlat, rlon, ralt, refl, false, &seg[s * SOURCE_SEGMENT_STRIDE], &sp[s * 12], &semis[s * 24],
                     barr, nbarr, obst,
                     tprof, ed, comp, forr, imdp, e0, e1, e2, kept, resid, npair, arcstat,
                     hc_key, hc_lo, hc_hi, &arc_drops);
-#endif
     }
     out[opix * 3 + 0] = e0;
     out[opix * 3 + 1] = e1;
     out[opix * 3 + 2] = e2;
     if (fault && arc_drops) atomicAdd(fault, (float)arc_drops);
-#if V2_H0
-    if (h0_counters != 0) {
-        if (h0_faults.node_overflow) atomicAdd(&h0_counters[0], h0_faults.node_overflow);
-        if (h0_faults.hard_geometry) atomicAdd(&h0_counters[1], h0_faults.hard_geometry);
-        if (h0_faults.abi_layout) atomicAdd(&h0_counters[2], h0_faults.abi_layout);
-        if (h0_faults.guarded_legal) atomicAdd(&h0_counters[3], h0_faults.guarded_legal);
-#if PROF_H0_COUNTERS
-        if (h0_faults.completed_pairs) atomicAdd(&h0_counters[4], h0_faults.completed_pairs);
-        if (h0_faults.candidate_visits) atomicAdd(&h0_counters[5], h0_faults.candidate_visits);
-        if (h0_faults.generated_nodes) atomicAdd(&h0_counters[6], h0_faults.generated_nodes);
-        if (h0_faults.admitted_nodes) atomicAdd(&h0_counters[7], h0_faults.admitted_nodes);
-#endif
-    }
-#endif
 }
 
 #if MULTIFIDELITY_LINE
@@ -4476,13 +3788,11 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_multifidelit
     float e0 = 0.0f, e1 = 0.0f, e2 = 0.0f;
     float* arcstat = (float*)0;
     unsigned int arc_drops = 0;
-#if !V2_H0
     unsigned int hc_key[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
     double hc_lo[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
     double hc_hi[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
     for (int i = 0; i < (ARC_HULL_CACHE ? ARC_HULL_CACHE : 1); ++i)
         hc_key[i] = 0xFFFFFFFFu;
-#endif
 
     __shared__ unsigned char keep[BIN_W * BIN_W];
     // TWO PASSES over the same chunked source scan. Pass 0 prices every pair into
@@ -4800,9 +4110,6 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
     double lat_min = meta[2], lon_min = meta[3], inv = meta[4];
     const double* bb = &meta[5];
     bool stop_on = meta[9] != 0.0;   // see `line` for why the η slot carries this
-#if V2_H0
-    stop_on = false;
-#endif
     int nsrc = (int)meta[12];
     int by = bid / BIN_TILES, bx = bid % BIN_TILES;
     int py0 = by * BIN_W, py1 = by * BIN_W + BIN_W - 1;
@@ -4825,31 +4132,11 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
                          ? &out[OUT_ARCSTAT_BASE + opix * OUT_ARCSTAT_COUNTERS] : (float*)0;
     float* fault = (out_slots > OUT_FAULT_SLOT) ? &out[OUT_FAULT_SLOT] : (float*)0;
     unsigned int arc_drops = 0;
-#if V2_H0
-    const int line_layer_tag = (int)meta[14];
-    const double h0_d_floor_m = line_layer_tag == 0
-        ? V2_ROAD_D_FLOOR_M : V2_RAIL_D_FLOOR_M;
-    h0_local_faults h0_faults = {0ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull};
-    unsigned long long *h0_counters = out_slots >= OUT_SLOTS_H0
-        ? (unsigned long long *)((unsigned char *)out + OUT_H0_COUNTER_BYTE_OFFSET)
-        : (unsigned long long *)0;
-    const int h0_layout_ok = qm_h0_layout_valid(
-            line_layer_tag, (unsigned long long)out_slots,
-            (long long)nbarr,
-            qm_barrier_candidate_tail_slot_offset((unsigned long long)nbarr)) &&
-        h0_counters != 0;
-    if (!h0_layout_ok) {
-        if (fault != 0) atomicAdd(fault, 1.0f);
-        return;
-    }
-#endif
-#if !V2_H0
     unsigned int hc_key[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
     double hc_lo[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
     double hc_hi[ARC_HULL_CACHE ? ARC_HULL_CACHE : 1];
     for (int i = 0; i < (ARC_HULL_CACHE ? ARC_HULL_CACHE : 1); i++)
         hc_key[i] = 0xFFFFFFFFu;
-#endif
 
     // Block centre + cos=1 radius UB — once per thread (all lanes agree, no divergence).
     double clat = 0.5 * (rxll[py0] + rxll[py1]);
@@ -4866,11 +4153,8 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
     // `__syncthreads()`, so a thread that left it early would strand the rest of
     // its block at the barrier. The flag costs a predicated branch per pair and
     // keeps every lane on the same barrier schedule.
-    // Stock needs price+exact passes for byte-stop. H0 has no bound and starts
-    // directly at the exact pass; retaining the dead price scan would double
-    // source culls without changing one bit. Byte-stop off (meta[9]=0) is the
-    // same situation: resid is never consulted, so skip the cheap pass.
-    for (int pass = (V2_H0 || !stop_on) ? 1 : 0; pass < 2; ++pass) {
+    // Byte-stop off (meta[9]=0) never consults resid, so skip the cheap pass.
+    for (int pass = stop_on ? 0 : 1; pass < 2; ++pass) {
         bool ub_only = (pass == 0);
         if (!ub_only) margin = bs_margin(npair);
         for (int base = 0; base < nsrc; base += BIN_W * BIN_W) {
@@ -4893,20 +4177,6 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
                     if (stop_on && !done && bs_decided(kept, kept + resid, margin)) done = true;
                     if (done) continue;
                 }
-#if V2_H0
-                line_source_h0(
-                            elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
-                            rlat, rlon, ralt, refl, ub_only,
-                            &seg[(base + j) * SOURCE_SEGMENT_STRIDE],
-                            &sp[(base + j) * 12], &semis[(base + j) * 24],
-                            barr, nbarr, obst, h0_d_floor_m,
-                            tprof, ed, comp, forr, imdp,
-                            e0, e1, e2, kept, npair, &h0_faults
-#if PROF_H0_PAIR_DIAGNOSTIC
-                            , (double *)0
-#endif
-                            );
-#else
                 line_source(elev, inner, cover, rows, cols, lat_min, lon_min, inv, bb,
                             rlat, rlon, ralt, refl, ub_only,
                             &seg[(base + j) * SOURCE_SEGMENT_STRIDE],
@@ -4914,7 +4184,6 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
                             barr, nbarr, obst,
                             tprof, ed, comp, forr, imdp, e0, e1, e2, kept, resid, npair,
                             arcstat, hc_key, hc_lo, hc_hi, &arc_drops);
-#endif
             }
             __syncthreads();
         }
@@ -4923,18 +4192,4 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused
     out[opix * 3 + 1] = e1;
     out[opix * 3 + 2] = e2;
     if (fault && arc_drops) atomicAdd(fault, (float)arc_drops);
-#if V2_H0
-    if (h0_counters != 0) {
-        if (h0_faults.node_overflow) atomicAdd(&h0_counters[0], h0_faults.node_overflow);
-        if (h0_faults.hard_geometry) atomicAdd(&h0_counters[1], h0_faults.hard_geometry);
-        if (h0_faults.abi_layout) atomicAdd(&h0_counters[2], h0_faults.abi_layout);
-        if (h0_faults.guarded_legal) atomicAdd(&h0_counters[3], h0_faults.guarded_legal);
-#if PROF_H0_COUNTERS
-        if (h0_faults.completed_pairs) atomicAdd(&h0_counters[4], h0_faults.completed_pairs);
-        if (h0_faults.candidate_visits) atomicAdd(&h0_counters[5], h0_faults.candidate_visits);
-        if (h0_faults.generated_nodes) atomicAdd(&h0_counters[6], h0_faults.generated_nodes);
-        if (h0_faults.admitted_nodes) atomicAdd(&h0_counters[7], h0_faults.admitted_nodes);
-#endif
-    }
-#endif
 }

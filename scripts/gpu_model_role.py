@@ -78,7 +78,6 @@ GENERATED_DEFINE_NAMES = frozenset(
         "ARC_FUSE_RANGE_RATIO_LN",
         "ARC_PENUMBRA_FLOOR_M",
         "ARC_QUADRATURE_MIN_RAD",
-        "BARRIER_ABI_VERSION",
         "BARRIER_STRIDE",
         "BIN_W",
         "CNOSSOS_GROUND_ALPHA0",
@@ -102,9 +101,7 @@ GENERATED_DEFINE_NAMES = frozenset(
         "P_FAV",
         "SEG_ARC_MIN_SPAN_RAD",
         "SEG_SAMPLES",
-        "SOURCE_SEGMENT_ABI_VERSION",
         "SOURCE_SEGMENT_STRIDE",
-        "SURFACE_META_ABI_VERSION",
         "SURFACE_META_SLOTS",
         "TPX",
     }
@@ -336,13 +333,7 @@ def parse_nvcc_define_receipt(path: Path) -> tuple[list[str], list[str]]:
         seen.add(name)
         if name in reviewed_define_names():
             experimental.append(token)
-        elif not (
-            name in GENERATED_DEFINE_NAMES
-            or name.startswith("V2_")
-            or name.startswith("OUT_")
-            or name.startswith("PROF_H0_")
-            or name.startswith("H0_PAIR_DIAGNOSTIC_")
-        ):
+        elif name not in GENERATED_DEFINE_NAMES:
             raise ContractError(f"unknown nvcc define receipt macro {name}")
     return lines, experimental
 
@@ -507,10 +498,6 @@ def load_and_validate_spec(path: Path) -> dict[str, Any]:
                     raise ContractError(
                         "the W1 role must be the exact non-selected accepted z12 candidate"
                     )
-            elif model_role == "h0":
-                raise ContractError(
-                    f"H0 role {role_name} requires the pending numerical selection contract"
-                )
             else:
                 raise ContractError(f"role {role_name} has unknown model_role")
 
@@ -1012,8 +999,7 @@ def verify_artifact(root: Path, expected_role_spec: Path) -> dict[str, Any]:
         if not all(entry in ptxas_log for entry in resolved["required_ptx_entries"]):
             raise ContractError(f"ptxas receipt lacks a required entry: {ptx_name}")
 
-    expected_v2_h0 = "1" if resolved["model_role"] == "h0" else "0"
-    define_lines, experimental_defines = parse_nvcc_define_receipt(
+    _, experimental_defines = parse_nvcc_define_receipt(
         root / "receipts/nvcc-defines.txt"
     )
     derived_noise_gpu_defines = " ".join(experimental_defines)
@@ -1024,15 +1010,8 @@ def verify_artifact(root: Path, expected_role_spec: Path) -> dict[str, Any]:
         raise ContractError(
             "build environment NOISE_GPU_DEFINES disagrees with the nvcc define receipt"
         )
-    if resolved["model_role"] in {"stock", "h0"} and experimental_defines:
+    if resolved["model_role"] == "stock" and experimental_defines:
         raise ContractError("production role contains an experimental nvcc define")
-    if define_lines.count(f"-DV2_H0={expected_v2_h0}") != 1:
-        raise ContractError("nvcc define receipt disagrees with the model role")
-    header_lines = (
-        root / "receipts/qm_streaming_abi_generated.h"
-    ).read_text(encoding="utf-8").splitlines()
-    if header_lines.count(f"#define V2_H0 {expected_v2_h0}") != 1:
-        raise ContractError("generated host/device header disagrees with the model role")
 
     aot = receipt.get("aot")
     if resolved["binary"] == "gpu-surface":

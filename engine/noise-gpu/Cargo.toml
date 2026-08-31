@@ -30,15 +30,6 @@ clap = { version = "4", features = ["derive"], optional = true }
 # All four bins require this feature; it pulls in cudarc and triggers the
 # nvcc PTX build. OFF by default so the lib builds without any CUDA on the host.
 gpu = ["dep:cudarc", "dep:clap"]
-# Review-only model-v2 H0 vertical slice. This is a separate compile-time arm:
-# the stock production binary has neither its code nor a runtime branch.
-v2-h0 = ["gpu", "noise-compute/h0-production-selection"]
-# Full-counter evidence role. Cargo owns this compile-time switch so a free-form
-# nvcc define cannot produce PTX whose Rust host believes is the timed role.
-v2-h0-counters = ["v2-h0"]
-# Evidence-only actual prepared-store pair collector. Its retained diagnostic
-# records are compiled into a separate binary and never into the timed H0 arm.
-v2-h0-diagnostic = ["v2-h0", "tile-painter/h0-diagnostic"]
 
 [lib]
 name = "noise_gpu"
@@ -71,13 +62,3 @@ required-features = ["gpu"]
 name = "gpu-airborne"
 path = "src/gpu_airborne.rs"
 required-features = ["gpu"]
-
-[[bin]]
-name = "h0-pair-diagnostic"
-path = "src/h0_pair_diagnostic.rs"
-required-features = ["v2-h0-diagnostic"]
-
-[[bin]]
-name = "h0-actual-store-census"
-path = "src/h0_actual_store_census.rs"
-# Intentionally CPU-only: no required feature and no CUDA build/context.

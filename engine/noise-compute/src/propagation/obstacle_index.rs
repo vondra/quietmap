@@ -14,7 +14,7 @@ use crate::constants::{m_per_deg_lon, BUILDING_HEIGHT_MAX_M, M_PER_DEG_LAT};
 use crate::envelope::EnvelopeClass;
 
 use super::obstacle_index_file::IndexArray;
-use super::streaming_reduction::SourceId64;
+use super::screening_source_id::ScreeningSourceId;
 
 /// One obstacle edge in the index's local metric frame.
 ///
@@ -100,7 +100,7 @@ pub struct CrossingCandidate {
 #[derive(Clone, Copy, Debug)]
 pub struct SkylineArc {
     /// Stable flattened edge identity; repeated cell emissions keep this ID.
-    pub source_id: SourceId64,
+    pub source_id: ScreeningSourceId,
     pub lo: f64,
     pub hi: f64,
     pub near_m: f32,
@@ -499,7 +499,7 @@ impl ObstacleIndex {
                     // origin hits a closed ring iff it hits one of its edges.
                     let r1 = a0 + wrap_pi(a1 - a0);
                     visit(SkylineArc {
-                        source_id: SourceId64::obstacle(
+                        source_id: ScreeningSourceId::obstacle(
                             edge_ordinal_base
                                 .checked_add(u64::from(eref))
                                 .expect("flattened obstacle edge ordinal overflow"),

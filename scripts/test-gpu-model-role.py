@@ -135,14 +135,6 @@ class ModelRoleSpecTests(unittest.TestCase):
             resolve_role(spec, "popup-production", "popup-stock-v1")["cargo_features"],
             ["node"],
         )
-        self.assertFalse(
-            any(
-                role["model_role"] == "h0"
-                for family in spec["families"].values()
-                for role in family["roles"].values()
-            ),
-            "an H0 role requires the still-pending numerical selection record",
-        )
 
     def test_every_layer_worker_resolves_one_selected_artifact_family(self) -> None:
         contract = deployment_contract(SPEC_PATH, ROOT / "scripts/layer-spec.json")
@@ -342,7 +334,7 @@ class ModelRoleSpecTests(unittest.TestCase):
         self.validate_mutation(
             lambda spec: spec["families"]["surface-production"]["roles"][
                 "surface-stock-v1"
-            ].update(cargo_features=["gpu", "v2-h0"])
+            ].update(cargo_features=["gpu", "unknown-feature"])
         )
 
     def test_w2_stride4_role_cannot_be_selected_or_change_one_define(self) -> None:
@@ -395,15 +387,6 @@ class ModelRoleSpecTests(unittest.TestCase):
                 "surface-w1-z12-accepted-v1"
             ]["required_ptx_entries"].pop()
         )
-
-    def test_h0_role_without_selected_epoch_is_rejected(self) -> None:
-        def mutate(spec) -> None:
-            role = spec["families"]["surface-production"]["roles"].pop("surface-stock-v1")
-            role.update(model_role="h0", cargo_features=["v2-h0"])
-            spec["families"]["surface-production"]["roles"] = {"surface-h0-e0": role}
-            spec["families"]["surface-production"]["selected_role"] = "surface-h0-e0"
-
-        self.validate_mutation(mutate)
 
     def test_role_cannot_move_between_binary_families(self) -> None:
         self.validate_mutation(
@@ -514,8 +497,7 @@ printf '.version 8.8\n.target sm_120\n.address_size 64\n%s\n' "$entries" > "$out
 printf '#!/bin/sh\nembedded PTX follows\n' > "$CARGO_TARGET_DIR/release/$binary"
 cat "$out/$ptx" >> "$CARGO_TARGET_DIR/release/$binary"
 chmod +x "$CARGO_TARGET_DIR/release/$binary"
-printf '#define V2_H0 0\n#define BARRIER_ABI_VERSION 2\n' > "$out/qm_streaming_abi_generated.h"
-printf '%s\n' '-DV2_H0=0' '-DBARRIER_ABI_VERSION=2' > "$out/nvcc-defines.txt"
+printf '%s\n' '-DTPX=512' '-DBARRIER_STRIDE=6' '-DSOURCE_SEGMENT_STRIDE=4' '-DSURFACE_META_SLOTS=14' '-DOUT_ARCSTAT_COUNTERS=10' > "$out/nvcc-defines.txt"
 for token in $NOISE_GPU_DEFINES; do printf '%s\n' "$token" >> "$out/nvcc-defines.txt"; done
 if [ "$binary" = gpu-surface ]; then
   printf 'fake build-bound scatter cubin\n%s\n' "$NOISE_GPU_DEFINES" > "$out/scatter.cubin"
@@ -793,10 +775,10 @@ echo 'ptxas info : Function properties for line line_binned_fused line_multifide
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.artifacts.exists())
 
-        unknown = self.command("surface-h0-e1")
+        unknown = self.command("surface-invalid-e1")
         result = self.run_builder(unknown)
         self.assertNotEqual(result.returncode, 0)
-        self.assertFalse((self.artifacts / "surface-h0-e1").exists())
+        self.assertFalse((self.artifacts / "surface-invalid-e1").exists())
 
     def test_archive_rejects_unsafe_or_noncanonical_symlink_targets(self) -> None:
         for sequence, linkname in enumerate(
@@ -828,7 +810,7 @@ echo 'ptxas info : Function properties for line line_binned_fused line_multifide
                 self.assertIn("source archive contains non-file entry", result.stderr)
 
     def test_nonempty_caller_define_is_rejected(self) -> None:
-        result = self.run_builder(self.command(), NOISE_GPU_DEFINES="-DV2_H0=1")
+        result = self.run_builder(self.command(), NOISE_GPU_DEFINES="-DPROF_COUNTERS=1")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("caller NOISE_GPU_DEFINES must be empty", result.stderr)
 
@@ -992,23 +974,10 @@ class FakeArtifactMutationTests(FakeArtifactBuildTests):
         with self.assertRaises(ContractError):
             verify_artifact(artifact, SPEC_PATH)
 
-    def test_resealed_define_and_embedded_ptx_mutations_are_rejected(self) -> None:
+    def test_resealed_embedded_ptx_mutation_is_rejected(self) -> None:
         result = self.run_builder(self.command())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         artifact = self.artifacts / "surface-stock-v1"
-        define_receipt = artifact / "receipts/nvcc-defines.txt"
-        define_receipt.write_text(
-            define_receipt.read_text(encoding="utf-8").replace("-DV2_H0=0", "-DV2_H0=1"),
-            encoding="utf-8",
-        )
-        reseal_artifact(artifact)
-        with self.assertRaises(ContractError):
-            verify_artifact(artifact, SPEC_PATH)
-
-        define_receipt.write_text(
-            define_receipt.read_text(encoding="utf-8").replace("-DV2_H0=1", "-DV2_H0=0"),
-            encoding="utf-8",
-        )
         binary = artifact / "gpu-surface"
         binary.write_bytes(
             binary.read_bytes().replace(b"line_binned_fused", b"line_binned_mutant")

@@ -234,7 +234,6 @@ def build(args: argparse.Namespace) -> Path:
             binary = target_root / "release" / role["binary"]
             if not binary.is_file() or not os.access(binary, os.X_OK):
                 fail("Cargo build did not produce the exact executable role")
-            generated_header = find_one(target_root / "release/build", "qm_streaming_abi_generated.h")
             define_receipt = find_one(target_root / "release/build", "nvcc-defines.txt")
             _, experimental_defines = parse_nvcc_define_receipt(define_receipt)
             if experimental_defines != role.get("noise_gpu_defines", []):
@@ -247,11 +246,6 @@ def build(args: argparse.Namespace) -> Path:
             copy_payload(contract_path, staging_root / "input/gpu_model_role.py", 0o755)
             write_text(staging_root / "input/source-files.sha256", source_before)
             write_text(staging_root / "logs/cargo-build.log", cargo_result.stdout)
-            copy_payload(
-                generated_header,
-                staging_root / "receipts/qm_streaming_abi_generated.h",
-                0o644,
-            )
             copy_payload(define_receipt, staging_root / "receipts/nvcc-defines.txt", 0o644)
 
             binary_bytes = binary.read_bytes()
