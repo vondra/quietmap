@@ -94,6 +94,10 @@ enum SurfaceRows {
 }
 
 impl SurfaceRows {
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     fn len(&self) -> usize {
         match self {
             SurfaceRows::Line(rows) => rows.len(),
@@ -347,6 +351,31 @@ pub fn process_surface_region(
     stats.t_load += t_l.elapsed();
     for (rows, _, dir_name) in &layer_rows {
         stats.by_layer.entry(*dir_name).or_default().loaded_rows += rows.len() as u64;
+    }
+
+    // Reach census: no requested layer has a single source row in the
+    // region's ring — the scatter's own input is empty, so every owned tile
+    // paints all-NO_DATA. Most of the world is this cell; skip the halo build
+    // and the receiver loops entirely, unlinking stale tiles exactly as the
+    // `write_tile == 0` path does so a rebuild cannot leave an old tile behind.
+    if !ctx.write_empty && layer_rows.iter().all(|(rows, _, _)| rows.is_empty()) {
+        for &(x, y) in tiles {
+            for (_, _, dir_name) in &layer_rows {
+                let out = ctx
+                    .output
+                    .join(dir_name)
+                    .join(ctx.zoom.to_string())
+                    .join(x.to_string())
+                    .join(format!("{y}.bin"));
+                if out.exists() {
+                    std::fs::remove_file(&out)
+                        .with_context(|| format!("rm stale {}", out.display()))?;
+                }
+                stats.skipped += 1;
+            }
+            heartbeat.tick(region_r4);
+        }
+        return Ok(stats);
     }
 
     let mut batches: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
