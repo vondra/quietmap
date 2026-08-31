@@ -1,7 +1,7 @@
 // The /a/stats browser view — one self-contained dark HTML document (no build
 // step, no framework, no external assets) that polls /a/api/stats/summary
 // (60 s) and /a/api/stats/live (10 s) and renders the anonymous web analytics
-// for quietmap.org. Design: docs/dev/web-stats-dashboard.md. The world map is a
+// for quietmap.org. The world map is a
 // zero-dependency canvas scatter over the embedded 0.5° land mask
 // (web-stats-land-grid.ts) — deliberately NOT MapLibre for an admin page.
 // Clicking a country row filters the page to that country's slice (live

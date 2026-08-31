@@ -11,7 +11,7 @@ use crate::*;
 /// 1. **Gates + growth chain** (sequential): per-segment admission gates, and
 ///    the EXACT skyline-ensure sequence the sequential kernel would run — the
 ///    one piece that cannot parallelize, because a receiver's [`ArcSkyline`]
-///    grows on demand and later segments read the grown result (SPEC §3.5c
+///    grows on demand and later segments read the grown result (SPEC §4.7
 ///    REPRODUCIBILITY). Between two growth steps the skyline is frozen; each
 ///    segment records a [`SkylineSnapshot`] of the state its sequential twin
 ///    would have read.
@@ -176,7 +176,7 @@ pub(crate) fn compute_roads(
         }
 
         // Arc pre-gate + growth-chain replay: growth ORDER is part of the
-        // answer (SPEC §3.5c REPRODUCIBILITY), so the ensure its sequential
+        // answer (SPEC §4.7 reproducibility), so the ensure its sequential
         // twin would run happens right here, on this thread, in segment order
         // (shared step — see `crate::arc_growth_chain_step`).
         let snapshot = crate::arc_growth_chain_step(
@@ -212,7 +212,7 @@ pub(crate) fn compute_roads(
         seg_variants: [PropagationVariants; 3],
         day_emission_energy: f64,
         ground_g: f64,
-        /// Tallest raster building on the cp path (group obstacle histogram).
+        /// Tallest vector obstacle on the characteristic-point path.
         seg_max_bh: f64,
         /// Ref inherited from the nearest refed mainline (orphan mainlines
         /// and their links) — the O(segments) scan, off the sequential path.

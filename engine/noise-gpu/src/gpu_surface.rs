@@ -3535,8 +3535,8 @@ fn run_stream(
     // Stdin is a cell queue (Morton order from the orchestrator). The coordinator
     // loads each cell once and enqueues its halo-blocks; GPU workers pull from
     // that shared queue (cells overlap up to the inflight watermark). The
-    // optional `Vec<String>` is the stdin line's `layers=` token
-    // (paint-pipeline-v4 PR#1 §3) — `None` = build every configured layer.
+    // optional `Vec<String>` is the stdin line's `layers=` token; `None`
+    // builds every configured layer.
     let work: StreamCellQueue = Arc::new((Mutex::new((VecDeque::new(), false)), Condvar::new()));
     let out = Arc::new(Mutex::new(std::io::stdout()));
 
@@ -3802,7 +3802,7 @@ fn main() -> Result<()> {
         .collect::<Result<_>>()?;
 
     // 512px tiles: z12 is the world base (same lattice as the old z13@256);
-    // higher zooms build refinement tiers (city-z13 plan). Block/tile math
+    // higher zooms build refinement tiers. Block/tile math
     // downstream is zoom-parametric already; the bound matches tile-painter's.
     let z: u8 = match zoom_s.as_deref() {
         Some(s) => {

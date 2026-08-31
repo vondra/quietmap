@@ -3,9 +3,9 @@
 # after OSM finishes (Stage 2C needs airport_areas.arrow).
 #
 # Usage:
-#   ./scripts/run-extraction.sh              # all steps
+#   ADSB_CACHE=/path ./scripts/run-extraction.sh  # all steps; ADS-B cache is required
 #   ./scripts/run-extraction.sh rasters      # only rasters
-#   ./scripts/run-extraction.sh aircraft     # only ADS-B
+#   ADSB_CACHE=/path ./scripts/run-extraction.sh aircraft
 #   ./scripts/run-extraction.sh osm          # only OSM
 set -euo pipefail
 
@@ -24,6 +24,17 @@ case "$STEP" in
     all|rasters|aircraft|osm) ;;
     *) echo "Usage: $0 [all|rasters|aircraft|osm]" >&2; exit 1 ;;
 esac
+
+# Fail before starting the multi-hour raster/OSM work. The aircraft child
+# validates these too, but for `all` that would happen only after OSM finished.
+if [ "$STEP" = "all" ] || [ "$STEP" = "aircraft" ]; then
+    if [ "${HYBRID:-0}" = "1" ]; then
+        [ -n "${AIRLINE_CACHE:-}" ] || { echo "HYBRID=1 requires AIRLINE_CACHE= with an explicit cache directory" >&2; exit 1; }
+        [ -n "${GA_CACHE:-}" ] || { echo "HYBRID=1 requires GA_CACHE= with an explicit cache directory" >&2; exit 1; }
+    else
+        [ -n "${ADSB_CACHE:-}" ] || { echo "requires ADSB_CACHE= with an explicit cache directory" >&2; exit 1; }
+    fi
+fi
 
 log "========================================"
 log "  Extraction: step=$STEP"

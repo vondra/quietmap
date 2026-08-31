@@ -126,12 +126,11 @@ def file_sig(f):
 
 
 def set_hash(files, repo):
-    """Hash keys are REPO-RELATIVE paths — the cv must be identical on every checkout. The old
-    literal-path keys made GLOBAL_BUILD entries (joined onto the absolute repo root) differ per
-    host (/home/vondra/0db-app vs ~/qmap), so every box computed a DIFFERENT cv from byte-identical
-    sources and the v2 hub's cv gate refused all its claims (found live at cutover, 2026-07-02).
-    cv values change ONCE with this fix, identically everywhere; OUTPUT_VER blessing keeps every
-    already-sealed stamp current (cv-only mismatch + seal-utc ≥ cutoff)."""
+    """Hash repository-relative paths so identical sources produce one code version.
+
+    Absolute paths made byte-identical 2026-07-02 checkouts disagree, so the Hub rejected every
+    worker claim. Output-version blessing keeps seals current across this one path-key correction.
+    """
     rel = lambda f: os.path.relpath(f, repo)   # noqa: E731 — tiny local key fn
     return hashlib.sha1("\n".join(f"{rel(f)}\t{file_sig(f)}" for f in sorted(files, key=rel)).encode()).hexdigest()[:16]
 

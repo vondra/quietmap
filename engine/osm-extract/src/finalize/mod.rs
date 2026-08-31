@@ -234,7 +234,7 @@ fn schema_with_contract(fields: Vec<Field>, key: &str, value: &str) -> Schema {
 /// The ONE arrow-write path for all 8 layer writers: rows are spatially
 /// sorted, chunked into record batches, and per-batch bboxes stamped into
 /// schema metadata so the popup reader can skip out-of-reach batches without
-/// decoding them (docs/dev/popup-batch-pruning.md). `row_bboxes` MUST be
+/// decoding them. `row_bboxes` MUST be
 /// parallel to the APPENDED rows — a writer that `continue`s a malformed TSV
 /// row pushes no bbox for it.
 pub(super) fn write_arrow_spatially_batched(

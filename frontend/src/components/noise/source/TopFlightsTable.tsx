@@ -21,7 +21,7 @@ export function TopFlightsTable({ flights, detailed }: { flights: AircraftTopFli
         <thead>
           <tr className="text-muted-foreground/60 [&_th]:font-normal [&_th]:pb-0.5">
             <th className="text-right">
-              {detailed ? <HoverText title={"Peak A-weighted SPL during this flyover.\n\nLooked up from per-class LAmax NPD tables — EASA ANP v2.3 LAmax curves where available, generated SEL−12 fallback otherwise (manual GA / helicopter profiles, ANP entries without LAmax). Informational display only — the Lden total uses SEL, not Lmax.\n\nFull Doc 29 Eq. 4-12 also applies ΔI / Λ per segment; we skip those (< 2 dB residual). See engine/noise-compute/SPEC.md §5.1."}>Lmax</HoverText> : 'Lmax'}
+              {detailed ? <HoverText title={"Peak A-weighted SPL during this flyover.\n\nLooked up from per-class LAmax NPD tables — EASA ANP v2.3 LAmax curves where available, generated SEL−12 fallback otherwise (manual GA / helicopter profiles, ANP entries without LAmax). Informational display only — the Lden total uses SEL, not Lmax.\n\nFull Doc 29 Eq. 4-12 also applies ΔI / Λ per segment; this display estimate skips those (< 2 dB residual)."}>Lmax</HoverText> : 'Lmax'}
             </th>
             <th className="text-right">
               {detailed ? <HoverText title={"Closest Point of Approach — shortest 3D slant distance from the flight track to this receiver.\nComputed on the infinite line extension of the segment (Doc 29 §4.4.1).\nSmaller CPA = louder."}>CPA(km)</HoverText> : 'CPA(km)'}

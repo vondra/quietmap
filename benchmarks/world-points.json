@@ -2337,7 +2337,7 @@
    64.5
   ],
   "known_gap": "rail-R9-pre-retrofit-freight-spectrum",
-  "tolerance_note": "SHM Ln 60-65; band per C1 plan §4 | v2 2026-07-09: band=live 61.49 +/-2 (inside SHM Ln band post-C1 night split)",
+  "tolerance_note": "SHM Ln 60-65 | v2 2026-07-09: band=live 61.49 +/-2 (inside SHM Ln band post-C1 night split)",
   "caveats": "63 m from track; audit Ln agreed only because Lden overshoot cancelled night undershoot (R1)"
  },
  {
@@ -2385,7 +2385,7 @@
    48.06
   ],
   "known_gap": "rail-freight-R2",
-  "tolerance_note": "SHM Ln 45-50; C1 plan §4 — clear/retag per live value | v2 2026-07-09: band=live 41.50 +/-2; -3.5 below SHM Ln = the R2 residual (C1 closed 37.3->41.5) | v2 2026-08-09: band=live 46.06 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal)",
+  "tolerance_note": "SHM Ln 45-50 | v2 2026-07-09: band=live 41.50 +/-2; -3.5 below SHM Ln = the R2 residual (C1 closed 37.3->41.5) | v2 2026-08-09: band=live 46.06 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal)",
   "caveats": "screened site (buildings, forest); 358 m from track"
  },
  {

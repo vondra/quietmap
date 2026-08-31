@@ -489,7 +489,6 @@ export function coastShapeGroupsWithin(lat: number, lon: number, distM: number):
  * borders stay strict (a neighbour-side point is `inAnyCountry`) and narrow straits
  * don't double-claim. Road enrichers use THIS; `makeCountryGate` stays land-only for
  * negative-gate callers (e.g. enrich-industrial-kr `!inNK && !inJP`).
- * See `.claude/plans/coastal-gate-sea-buffer.md`.
  */
 export function makeCoastalCountryGate(iso2: string, bufferM = 2000): (lat: number, lon: number) => boolean {
   // A sea buffer is a few km; reject misuse loudly — an unbounded bufferM would blow

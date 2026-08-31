@@ -1,7 +1,6 @@
 //! Measurement census for the tile sampling rule and the receiver skyline —
-//! the counters behind `docs/dev/gpu-gather-redesign-2026-08-09.md` §8 task 0
-//! (milestone zero), kept as a permanent instrument because task 9 of that plan
-//! decomposes any future benchmark gap with exactly these numbers.
+//! the counters behind the tile-sampling and receiver-skyline instrumentation,
+//! kept permanently because these numbers decompose future benchmark gaps.
 //!
 //! Everything is OFF unless `QM_TILE_CENSUS=1`: the hot paths pay one
 //! `OnceLock` bool read, and only census runs pay the relaxed atomics. The
@@ -11,9 +10,8 @@
 //!
 //! `QM_ARC_NEED_CLIP_M=<metres>` additionally CLIPS every skyline gather need
 //! (an output-changing DEV lever, census runs only): with the eligibility gate
-//! of SPEC §3.5e all needs should already be near-field, and the clipped run
-//! measures the merged-arc demand a bounded-radius per-receiver skyline (plan
-//! §6, increment D) would hold.
+//! of SPEC §4.7 all needs should already be near-field, and the clipped run
+//! measures the merged-arc demand a bounded-radius per-receiver skyline would hold.
 
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::OnceLock;
@@ -80,8 +78,8 @@ pub fn pair_walked() {
     }
 }
 
-/// One nondegenerate pair that ran the §3.5d uniform quadrature: `buckets`
-/// rays marched, of which `escalated` ran the §3.5e nested arc query. The
+/// One nondegenerate pair that ran the five-bucket line quadrature: `buckets`
+/// rays marched, of which `escalated` ran the nested arc query (SPEC §4.7). The
 /// eligibility fraction of the gather redesign is `pairs_escalated /
 /// pairs_quad` (a pair is ELIGIBLE when ≥1 of its buckets clears the 3° gate).
 #[inline]

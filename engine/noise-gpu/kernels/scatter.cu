@@ -1,9 +1,8 @@
-// Surface scatter GPU kernels (grows into the full rail kernel per
-// docs/dev/gpu-ground-hybrid-plan.md). Ports of the noise-compute CPU path,
+// Surface scatter GPU kernels. Ports of the noise-compute CPU path,
 // each validated GPU-vs-CPU before the next piece is added. The hot path is already
 // fp32 — ray-march rc lerp, bilinear_elev_rc, flc, base/atm_km, fexp; the remaining
 // f64 is precision-critical and STAYS (fp32 there flips the LoS gate / reach cull or
-// regresses speed — two measured NO-GOs, docs/dev/road-rail-gpu-ledger.md): the reach
+// regresses speed — two measured NO-GOs): the reach
 // cull, LoS diffraction gate + δ*/fit_plane cancellation, profiles, cadence, budgets.
 // Args are packed into a few buffers (cudarc's tuple launch caps at ~12 args).
 
@@ -360,7 +359,7 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 #ifndef ARC_TRI_WALK
 #define ARC_TRI_WALK 1
 #endif
-// Minimum angular width that gets the arc treatment at all — THE §3.5e GATE.
+// Minimum angular width that gets the arc treatment at all (SPEC §4.7).
 // Since the 2026-08-19 port the kernel paints the CPU tile painter's rule
 // (`seg_sampling::sampled_gob_bands_with_ground`): the fan is quadratured in
 // buckets and this gate decides, per BUCKET (chord law), whether
@@ -658,7 +657,7 @@ __constant__ double LDEN_W[3]     = {12.0, 12.649110640673518, 80.0};  // 4·√
 // exact for all geometry — one tall mid-path building is exactly what it throws
 // away — against the model invariant that path effects are computed at every
 // distance inside a source's reach. The error is not literally unbounded: it is
-// capped by the §3.5 per-band screening ceiling of 20 dB, which is far too
+// capped by the SPEC §4.6 per-band diffraction ceiling of 20 dB, which is far too
 // coarse to serve as a bound. Measured cost of getting W wrong, 2026-08-10 on a
 // dense rail tile: W=100 moved 2 202 cells over 1.0 dB with a +7.5 dB worst
 // cell (mid-path tall buildings), while W=600 moved ~nothing over the arc gate
@@ -735,7 +734,7 @@ __device__ __forceinline__ void p2s(
 // (M_LON_EQ·cos(seg_mid)), so reach >= |centre−corner| in the per-pixel cull's OWN
 // metric at all latitudes ⇒ the GPU block-bin is a conservative superset everywhere
 // (no floor, no per-source recompute). +1 m guards fp ULP. Provenance: path_dist_m
-// geometry with cos→1 (docs/dev/gpu-binning-plan.md). dlat in meters, dlon in degrees.
+// geometry with cos→1. dlat in meters, dlon in degrees.
 __device__ __forceinline__ double block_reach_ub(double dlat_half_m, double dlon_half_deg) {
     double dlon_m = dlon_half_deg * M_LON_EQ;
     return sqrt(dlat_half_m * dlat_half_m + dlon_m * dlon_m) + 1.0;
@@ -989,7 +988,7 @@ __device__ void fit_plane(const double* t, const double* prof, int lo, int hi,
 }
 
 // ---- diffraction::fit_plane_with_point — fit_plane + the diffraction point D
-// folded into the regression (the explicit-edge δ* fits, SPEC §3.5b: D
+// folded into the regression (the explicit-edge δ* fits, SPEC §4.7: D
 // joins BOTH mean planes exactly once).
 __device__ void fit_plane_pt(const double* t, const double* prof, int lo, int hi,
                              double extra_t, double extra_z,
@@ -1805,7 +1804,7 @@ __device__ void barrier_best_candidate(
     }
 }
 
-// ---- path_profile::clamp_source_platform (SPEC §3.5.1): within one DEM cell
+// ---- path_profile::clamp_source_platform (SPEC §4.2): within one DEM cell
 // of the source, bare-earth samples may not exceed the source cell's own
 // elevation — CNOSSOS puts the point source 0.05 m above the ROAD SURFACE, so
 // the road body (bench, embankment shoulder) is no diffraction obstacle, and a
@@ -1824,7 +1823,7 @@ __device__ void clamp_source_platform(const double* t, double* e, int n, double 
 
 // Undo only the temporary diffraction carve before a caller fits its physical
 // ground plane. Shared by the screened and screening-deleted ray exits so the
-// Candidate-4 arm cannot drift from §3.5.1 restoration.
+// Candidate-4 arm cannot drift from the source-platform restoration (SPEC §4.2).
 __device__ __forceinline__ void restore_source_platform_samples(
     const float* elev, int rows, int cols,
     float src_rf, float src_cf, float d_rf, float d_cf,
@@ -1921,7 +1920,7 @@ __device__ int ray_path_bands(
         }
     }
 
-    // Source-platform clamp (SPEC §3.5.1) on the shared scratch: the terrain
+    // Source-platform clamp (SPEC §4.2) on the shared scratch: the terrain
     // march, the composite base and the candidate LERPs below all read the
     // carved profile, exactly as the CPU's clamped scratch; the raw profile is
     // restored before return for the caller's ground mean-plane.
@@ -1984,7 +1983,7 @@ __device__ int ray_path_bands(
                                have_cand, cand_t, cand_top, comb);
         for (int i = 0; i < NB; i++) screen[i] = fmaxf(comb[i] - terr[i], 0.0f);
     }
-    // SPEC §3.5.1 isolation: restore the raw near-source samples so the
+    // SPEC §4.2 isolation: restore the raw near-source samples so the
     // caller's ground mean-plane OLS (over `ed`) and vegetation keep the
     // uncarved earth — the clamp applies at the diffraction/screening
     // evaluation points only. Deterministic re-read, ≤ the CELL_M zone.
@@ -3925,7 +3924,7 @@ __device__ __noinline__ void line_source(
     veg_bands(veg_run_length(tprof, forr, n, (float)dend), veg);
 
     // ---- The ground/barrier term `max(A_ground, A_terrain + A_screen)` of a
-    // LINE microsegment, ISO 9613-2 §7.3.1 — the §3.5e port (2026-08-19), with
+    // LINE microsegment, ISO 9613-2 §7.3.1 — the SPEC §4.7 port, with
     // the L3 span-adaptive bucket count layered on (2026-08-20, n_buck below).
     // `seg_sampling::sampled_gob_bands_with_ground` in kernel form: the segment
     // subtends a FAN at this receiver, the fan is cut into equal angular
@@ -4781,7 +4780,6 @@ extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_multifidelit
 // tails it has proven immaterial — but keeping it means the two kernels remain
 // comparable pair for pair, which is how a divergence gets localised.) One cull
 // per source (not once per pixel), fixed BIN_W²-byte shared, no atomics.
-// See docs/dev/gpu-binning-plan.md.
 extern "C" __global__ void __launch_bounds__(BIN_W * BIN_W, 2) line_binned_fused(
     const float*  __restrict__ elev,
     const float*  __restrict__ inner,

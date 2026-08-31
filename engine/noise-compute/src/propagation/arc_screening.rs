@@ -379,7 +379,7 @@ pub const ARC_BOUNDS_DEFAULT: ArcBounds = ArcBounds {
     // A SAFETY CAP, not the working radius: the skyline grows to whatever the
     // receiver's own segments need (`ArcSkyline::ensure`), and this only stops a
     // pathological source reach from walking a whole region. Above every layer's
-    // audibility radius (SPEC §3.13), so it never binds in practice.
+    // audibility radius (SPEC §4.11), so it never binds in practice.
     radius_m: 12_000.0,
     // OFF (0.0) — the 0.01 rad value was MEASURED on the GPU lane and DOES NOT
     // HOLD on this one. Swept here against the exact (0.0) arm on receiver
@@ -1643,7 +1643,7 @@ fn arc_screened_eval(
         // noise is the safe failure for this product — but it is a real
         // residual, and closing it needs a signed screening term plus an
         // explicit "barrier present" flag on both the CPU and CUDA lanes
-        // (SPEC §3.5c). Do not restate the invariant without that change.
+        // (SPEC §4.7). Do not restate the invariant without that change.
         out[b] = (mean_db - q.cp_terrain[b]).max(0.0);
     }
     out
@@ -1949,7 +1949,7 @@ mod tests {
         // 14 %-blocked fan averages to ≈ −2.6 dB — a net boost, below the 0 dB
         // the non-negative handback can express. It saturates, and the caller
         // keeps the full floor: conservative (louder than the exact mean by
-        // ≤ 3 dB), documented at `arc_screened_bands` and in SPEC §3.5c. Was
+        // ≤ 3 dB), documented at `arc_screened_bands` and in SPEC §4.7. Was
         // ≈0.6 dB per band while `A_ground` wrongly read 0 dB at G = 0.
         let hard = query(&obstacles, &cp, 145.0);
         let out_hard = buf.run(&hard);

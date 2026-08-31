@@ -480,8 +480,7 @@ pub fn compute_path_effects(
             profile_points: terrain_profile_points,
         },
         ScreeningBreakdown {
-            building_path_m: (obstacle_trace.height_m * 10.0).round() / 10.0,
-            obstacle: if obstacle_trace.kind == "none" {
+            obstacle: if obstacle_trace.edge.is_none() {
                 None
             } else {
                 Some(obstacle_trace)
@@ -495,8 +494,7 @@ pub fn compute_path_effects(
 }
 
 /// Exact vector-obstacle crossings for one source→receiver ray, as an
-/// [`path_effects::ObstacleInput`]. With no index (raster mode) this is
-/// an empty candidate slice.
+/// [`path_effects::ObstacleInput`]. An empty index yields an empty candidate slice.
 fn obstacle_input_for_ray<'a>(
     obstacles: &crate::propagation::obstacle_index::ObstacleSet,
     scratch: &'a mut Vec<crate::propagation::obstacle_index::CrossingCandidate>,

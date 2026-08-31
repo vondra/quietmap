@@ -110,7 +110,7 @@ impl PathProfile {
     }
 }
 
-/// Source-platform clamp (SPEC §3.5.1, 2026-08-20): within ONE DEM cell of the
+/// Source-platform clamp (SPEC §4.2): within ONE DEM cell of the
 /// source, bare-earth elevation may not exceed the source cell's own value.
 ///
 /// WHY: CNOSSOS puts the point source 0.05 m above the ROAD SURFACE — the road

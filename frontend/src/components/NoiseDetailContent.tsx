@@ -173,7 +173,6 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
 
 function getIndoorCalculation(data: NoiseComputeData): IndoorCalculation | null {
   if (
-    !data.indoor_estimate ||
     data.facade_lden == null ||
     data.envelope_delta_db == null ||
     data.indoor_lden == null

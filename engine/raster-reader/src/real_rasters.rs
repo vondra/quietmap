@@ -1,7 +1,7 @@
 //! [`RealRasters`] — lazy mmap'd 1°×1° raster tiles, the popup + extract sampler.
 //!
-//! Implements [`noise_compute::types::RasterSampler`] over four [`TileStore`]s
-//! (DEM, building, forest, IMD), each an LRU cache of mmap'd 1° tiles loaded on
+//! Implements [`noise_compute::types::RasterSampler`] over three [`TileStore`]s
+//! (DEM, forest, IMD), each an LRU cache of mmap'd 1° tiles loaded on
 //! first access. This is the global-scale reader the per-point popup and the
 //! aircraft extract sample directly; the pipeline crops it into a
 //! [`crate::fused_grid::FusedGrid`] for L3-resident batch compute.
@@ -92,7 +92,7 @@ impl RealRasters {
     }
 
     /// Pre-load only DEM tiles covering a bounding box. NPD aircraft heatmap paths need receiver altitude
-    /// and terrain AGL gates, but do not consume building, forest, or IMD rasters.
+    /// and terrain AGL gates, but do not consume forest or IMD rasters.
     pub fn preload_dem_bbox(&self, lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) {
         self.dem.preload_bbox(lat_min, lat_max, lon_min, lon_max);
     }
@@ -110,9 +110,8 @@ impl RealRasters {
     /// Stage 2A only. ~3-4× cheaper per lookup than `elevation()`
     /// because it skips the 4-pixel bilinear blend. Acoustically safe
     /// for the AGL-gate path: gates have 15-30 m slack everywhere
-    /// except three documented edge cases (phase seed at 7 620 m,
-    /// GROUND_STALE_MAX_AGL_M, RAW_GROUND_FLAG_MAX_AGL_M) — full
-    /// error model in `.claude/plans/stage1-nn-dem.md`.
+    /// except the phase seed at 7 620 m, GROUND_STALE_MAX_AGL_M, and
+    /// RAW_GROUND_FLAG_MAX_AGL_M.
     ///
     /// Deliberately NOT on the `RasterSampler` trait — the trait is
     /// the popup contract and stays bilinear for terrain profile

@@ -1,5 +1,4 @@
-// Routes for the /a/stats web-analytics dashboard (design: docs/dev/
-// web-stats-dashboard.md). Registered inside the /a admin scope (Caddy
+// Routes for the /a/stats web-analytics dashboard. Registered inside the /a admin scope (Caddy
 // basic_auth + requireLocalPeer), so it inherits both access layers.
 // `compress:false` mirrors cluster.ts: @fastify/compress streaming hit a
 // "premature close" that delivered EMPTY bodies to gzip clients.

@@ -1,7 +1,6 @@
 /**
  * Enrich BE railways.arrow with urban metro/tram GTFS feeds — migrated onto
- * the shared graph-walk driver (2026-07-16 Phase 4 point 2 rewrite, plan
- * `pro-e-sd-zaj-m-wobbly-liskov`, following `enrich-railway-dk.ts`'s pattern).
+ * the shared graph-walk driver following `enrich-railway-dk.ts`'s pattern.
  *
  * Continental SNCB national HEAVY rail is already applied via
  * `enrich-railway-europe.ts`. This script ADDS Brussels (STIB), Flanders (De

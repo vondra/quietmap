@@ -1,5 +1,5 @@
-// Shared per-environment pmtiles manifest reader (docs/dev/checkout-restructure-plan.md
-// Track 2). ONE tile CDN origin serves every archive by build id — heatmap-pmtiles.ts is
+// Shared per-environment pmtiles manifest reader. ONE tile CDN origin serves every archive
+// by build id — heatmap-pmtiles.ts is
 // URL-addressed (`/api/tiles/:build/:layer/...`) and MUST NEVER import this module: gating the
 // byte-serving route by environment would 404 a pin the instant another environment published
 // something newer. What IS per-environment is the PIN itself — which build counts as "current"
@@ -26,15 +26,15 @@ export function resolveTileEnv(envOverride?: string): TileEnv {
   if (!isAllowedTileEnv(raw)) {
     throw new Error(
       `TILE_ENV must be one of ${ALLOWED_TILE_ENVS.join('|')} (got ${JSON.stringify(raw ?? '')}) `
-      + '— set it in .env/systemd (docs/dev/checkout-restructure-plan.md Track 2)',
+      + '— set it in the service environment',
     )
   }
   return raw
 }
 
 /**
- * The manifest path this environment must read: `current.{env}.json`. Back-compat during the
- * Track 2 rollout: a MISSING per-env pointer while the legacy plain `current.json` still
+ * The manifest path this environment must read: `current.{env}.json`. A missing
+ * per-environment pointer while the legacy plain `current.json` still
  * exists means this checkout was never seeded — a configuration gap, not "nothing published
  * yet" — so this fails loud with the exact fix instead of silently falling back to the shared
  * pointer (a silent fallback would defeat per-env pins the moment any one checkout forgot to

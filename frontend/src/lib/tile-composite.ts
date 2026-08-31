@@ -2,7 +2,7 @@
 // HeatmapOverlay's ≥OVERZOOM_FROM mode: fetch the base-zoom tiles under the
 // viewport, energy-sum + palette-map them into ONE seamless ImageData (no
 // internal tile borders when magnified). Extracted verbatim from
-// HeatmapOverlay.tsx per docs/dev/heatmap-overlay-split-plan.md. Sources are
+// HeatmapOverlay.tsx. Sources are
 // plain strings here — importing the component's HeatmapSource union back
 // would create a type cycle (buildKey/tileUrl accept strings anyway).
 

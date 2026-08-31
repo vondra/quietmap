@@ -287,7 +287,7 @@ function longitudinalOverlapM(a: SegGeom, b: SegGeom): { overlapM: number; aSpan
   return { overlapM, aSpanM: aMax - aMin }
 }
 
-/** Sibling probe (plan Phase 1 point 6 + 2026-07-15 review round 2): does
+/** Sibling probe: does
  *  `b` run alongside `a` at a's midpoint? Returns the LATERAL distance
  *  (metres, a-midpoint -> BODY of b) when every gate passes, else null.
  *

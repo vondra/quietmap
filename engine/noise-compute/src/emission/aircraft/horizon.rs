@@ -9,7 +9,7 @@
 //! exclusive with lateral attenuation, never summed; Berton, AIAA 2021).
 //! The insertion-loss form here is ISO 9613-2 §7.4 single-edge
 //! `Dz = 10·log10(3 + (C2/λ)·C3·δ)` — the same form the surface layers
-//! use (SPEC §3.5) — with λ_eff = 0.685 m (500 Hz broadband-
+//! use (SPEC §4.6) — with λ_eff = 0.685 m (500 Hz broadband-
 //! representative aircraft spectrum, audit §F.2): 20/0.685 ≈ 29.2.
 //!
 //! Input is the DEM terrain surface (DSM-biased: GLO-30 includes canopy
@@ -435,7 +435,7 @@ mod tests {
         );
     }
 
-    /// Signed horizons (plan §9): a hilltop receiver above a downslope
+    /// Signed horizons: a hilltop receiver above a downslope
     /// stores negative tans; an aircraft below the receiver is blocked
     /// only when its (negative) β drops under the (negative) horizon.
     /// Also covers the negative-rel_alt path: no NaN / no squaring trap.

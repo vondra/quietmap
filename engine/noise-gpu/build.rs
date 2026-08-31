@@ -574,7 +574,7 @@ fn main() {
         "../noise-compute/src/propagation/arc_screening.rs",
         "const DEGENERATE_SPAN_RAD: f64 = ",
     );
-    // The §3.5e quadrature's two constants, injected so the kernel cannot drift
+    // The line-screening quadrature's two constants, injected so the kernel cannot drift
     // from the CPU rule it paints: the bucket count (the tile painter's
     // SEG_SAMPLES_DEFAULT) and the per-bucket arc gate. The gate is SPELLED
     // `<deg>_f64.to_radians()` in seg_sampling.rs and the spelling is

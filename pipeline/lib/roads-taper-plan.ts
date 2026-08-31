@@ -5,8 +5,7 @@
  * Finds junction-free boundaries where the RESOLVED emission inputs (speed,
  * AADT — enriched value or engine class default) step between adjacent
  * segments of one physical road, and plans graded ramps over a short window:
- * a car decelerates over distance, it does not step (owner 2026-07-10;
- * docs/dev/roads-traffic-model-audit.md §6 R7).
+ * a car decelerates over distance, it does not step.
  *
  * Anchoring is eligibility-driven: a side the taper cannot write (census
  * AADT, OSM-tagged speed, out-of-coverage class, restricted access) keeps its

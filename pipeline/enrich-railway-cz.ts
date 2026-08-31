@@ -1,8 +1,7 @@
 /**
  * Enrich CZ railways.arrow with real train counts from CZPTT timetable —
- * a thin adapter onto the shared graph-walk driver (2026-07-15 railway
- * enrichment fix, `pro-e-sd-zaj-m-wobbly-liskov` plan §Phase 3; completes
- * migration #26, CZ off its bespoke chord matcher).
+ * a thin adapter onto the shared graph-walk driver; CZ no longer has a
+ * bespoke chord matcher.
  *
  * Downloads JR2026.zip (national timetable, 13k+ train XMLs), parses each
  * running train's ORDERED location sequence + passenger/freight
@@ -52,11 +51,10 @@
  *   DATA_YEAR=2026 npx tsx pipeline/enrich-railway-cz.ts --enrich-only
  *   DATA_YEAR=2026 npx tsx pipeline/enrich-railway-cz.ts --stamp-only
  *
- * --stamp-only: Phase-3 Step A rollout control (plan §Phase 3) — passes
+ * --stamp-only is the inspection-safe mode: it passes
  * `enableDestructive: false` to the driver: the run walk-stamps train counts
  * incl. divisors (a graph-walk stamp's divisor rides in the SAME atomic
- * write as its pax/frt/sourceId, in every mode — see railways-arrow.ts
- * module doc invariant 3); NO retract (incl. the country-bleed heal) and NO
+ * write as its pax/frt/sourceId, in every mode); no retract (including the country-bleed heal) and no
  * silent residual. Use it to inspect a live run's failure-taxonomy/component
  * health before trusting it with destructive ops. KEPT permanently, not a
  * one-shot flag — a later re-run (fresh CZPTT parse, rail-graph change)
@@ -348,7 +346,7 @@ function buildCodeToGPS(
   return codeToGPS
 }
 
-// ── Pair formation AFTER GPS resolution — the core fix (plan §Phase 3 point 2) ──
+// ── Pair formation after GPS resolution ──
 
 /**
  * Resolves each train's ordered CZPTT location sequence to its GPS-KNOWN

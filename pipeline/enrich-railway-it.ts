@@ -1,8 +1,7 @@
 /**
  * Enrich IT railways.arrow with Italian regional GTFS feeds — migrated onto
- * the shared graph-walk driver (2026-07-16 Phase 4 point 2 rewrite, plan
- * `pro-e-sd-zaj-m-wobbly-liskov`, following `enrich-railway-dk.ts`'s pattern
- * extended to multiple feeds like `enrich-railway-europe.ts`).
+ * the shared graph-walk driver, following `enrich-railway-dk.ts`'s pattern
+ * extended to multiple feeds like `enrich-railway-europe.ts`.
  *
  * Italy has no single national rail GTFS, so this stitches together 5 regional
  * feeds from Mobility Database (mdb-*): Trenitalia (Toscana/Marche/Umbria/Lazio),

@@ -47,8 +47,8 @@ function publicManifest(manifest: PmtilesManifest) {
 }
 
 /**
- * Serve `current.{TILE_ENV}.json` (docs/dev/checkout-restructure-plan.md Track 2 — per-env
- * pmtiles pins, resolved by `tile-manifest-reader.ts`), which the Rust packer's fan-out /
+ * Serve `current.{TILE_ENV}.json` (the per-environment pmtiles pin resolved by
+ * `tile-manifest-reader.ts`), which the Rust packer's fan-out /
  * `worldctl promote` write atomically. The shared boot-readiness validator rejects a torn,
  * malformed, or semantically invalid manifest with a 500; this route then projects only the
  * fields needed to fetch tiles. Internal generation, model-role, quality, scorer, hash, and

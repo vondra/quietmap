@@ -212,8 +212,8 @@ if ! $COMBINE_ONLY; then
       # heavy raster reads share the OS page cache (and CPU L3). GPU = throughput
       # on the dominant line scatter; CPU = the cheaper point/ground layers.
       $is_scoped || { log "ERROR: --gpu requires --bbox or --tile-x/--tile-y"; exit 1; }
-      # S-3 GPU dense/sparse routing gate: rural road on GPU is a measured 0.82× loss
-      # (docs/dev/gpu-benchmark-results.md). Gate by total roads.arrow + railways.arrow
+      # S-3 GPU dense/sparse routing gate: rural road on GPU is a measured 0.82× loss.
+      # Gate by total roads.arrow + railways.arrow
       # bytes over the R4 cells COVERING the bbox (~2 km sampling, the cluster
       # master's polyfill idiom — a whole-tree scan would always read "dense" and
       # walk 121k dirs on the world host). GPU_LINE_MIN_MB default = 2 MB matches

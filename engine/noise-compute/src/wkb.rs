@@ -431,7 +431,7 @@ pub(crate) fn point_in_any_polygon(lat: f64, lon: f64, polys: &[WkbPoly]) -> boo
 /// A parsed building/area footprint with a cached bbox, for the osm-extract
 /// POI-in-footprint spatial join (settlement v2 phase 2). `osm-extract` indexes
 /// buildings by `bbox()` (a centroid-only grid misses a POI inside a large
-/// footprint — plan §B4 Codex note), then `contains()` is the exact
+/// footprint), then `contains()` is the exact
 /// point-in-polygon test. Parsing once and reusing keeps the per-POI test cheap.
 pub struct WkbFootprint {
     polys: Vec<WkbPoly>,

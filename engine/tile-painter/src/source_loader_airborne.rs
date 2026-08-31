@@ -39,7 +39,7 @@ struct OwnedRow {
     sub_flags: Vec<u8>,
     /// Only start/end terrain elevations are stored. Heatmap and popup feed
     /// `SegmentTerrain` with zeroed q1/mid/q3 and retain the endpoint-based
-    /// checks; the removed chord check remains the SPEC §5 known gap.
+    /// checks; the removed chord check remains the SPEC §6.1 known gap.
     sub_terrain_start_elev_m: Vec<f32>,
     sub_terrain_end_elev_m: Vec<f32>,
 }

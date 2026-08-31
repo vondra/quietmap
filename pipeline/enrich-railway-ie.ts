@@ -1,8 +1,6 @@
 /**
  * Enrich IE railways.arrow with NTA unified GTFS — migrated onto the shared
- * graph-walk driver (2026-07-16 Phase 4 rewrite, plan
- * `pro-e-sd-zaj-m-wobbly-liskov`, following `enrich-railway-dk.ts`'s
- * per-country pattern).
+ * graph-walk driver following `enrich-railway-dk.ts`'s per-country pattern.
  *
  * Source: NTA (National Transport Authority) Transport for Ireland publishes
  * a unified GTFS feed containing ALL Irish public transport — Iarnród Éireann

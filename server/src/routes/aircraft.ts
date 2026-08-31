@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 /**
@@ -24,7 +25,7 @@ import { dirname, join } from 'node:path'
  * when 10+ flights show up in one query.
  */
 
-const CACHE_ROOT = process.env.AIRCRAFT_CACHE_DIR ?? '/tmp/quietmap-v4/aircraft-cache'
+const CACHE_ROOT = process.env.AIRCRAFT_CACHE_DIR ?? join(tmpdir(), 'quietmap-aircraft-cache')
 const HEXDB_BASE = 'https://hexdb.io/api/v1/aircraft'
 const REQUEST_TIMEOUT_MS = 5_000
 

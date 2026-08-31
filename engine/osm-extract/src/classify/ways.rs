@@ -71,7 +71,7 @@ fn classify_way_unscoped(way: &Way) -> Option<FeatureType> {
 
     // Leisure AREA (settlement v2 phase 2) — open-air activity sources with no
     // building tag. `swimming_pool` is gated to public/large because the key is
-    // dominated by private back-yard pools (plan §B.1 footnote).
+    // dominated by roughly 3 million private back-yard pools.
     if is_leisure_area(&tags) {
         return Some(FeatureType::Leisure);
     }
@@ -159,7 +159,7 @@ pub fn fallthrough_reason(way: &Way) -> Option<String> {
 
 /// True if a tag set describes an open-air leisure AREA source (no `building`).
 /// `swimming_pool` is gated to `access=public/yes` or `sport=swimming`/
-/// `swimming_area` to drop the ~3 M private back-yard pools (plan §B.1).
+/// `swimming_area` to drop the roughly 3 million private back-yard pools.
 pub(super) fn is_leisure_area(tags: &[(&str, &str)]) -> bool {
     let tag = |k: &str| tags.iter().find(|(key, _)| *key == k).map(|(_, v)| *v);
     if tag("amenity") == Some("biergarten") {

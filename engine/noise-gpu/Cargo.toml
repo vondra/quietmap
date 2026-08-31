@@ -3,7 +3,7 @@ name = "noise-gpu"
 version = "0.1.0"
 edition = "2021"
 
-# GPU backend for the surface scatter (docs/dev/gpu-ground-hybrid-plan.md).
+# GPU backend for the surface scatter.
 # cudarc + the nvcc kernel build live behind the `gpu` feature (required by all four
 # bins below, and by nothing else). Default build = the CPU-side lib alone, so a host with no CUDA toolkit (e.g.
 # a CPU-only box) builds noise-gpu cleanly; the GPU path is `--features gpu` on a GPU host.
@@ -52,14 +52,14 @@ path = "src/gpu_surface.rs"
 required-features = ["gpu"]
 
 # E2 acceptance: GPU-vs-CPU byte-exact parity on the full surface path. Run by
-# hand on a GPU host before a --gpu world build (see docs/dev/gpu-fp32-dda-plan.md).
+# hand on a GPU host before a --gpu world build.
 [[bin]]
 name = "e2-full"
 path = "src/e2_full.rs"
 required-features = ["gpu"]
 
 # E2 airborne: fp32 airborne NPD kernel vs the f64 `QM_AIRBORNE_FORCE_EXACT=1`
-# oracle on one tile (docs/dev/gpu-airborne-plan.md). The make-or-break parity proof.
+# oracle on one tile. The make-or-break parity proof.
 [[bin]]
 name = "e2-airborne"
 path = "src/e2_airborne.rs"

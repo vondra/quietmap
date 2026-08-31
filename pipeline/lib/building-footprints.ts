@@ -37,8 +37,8 @@
  * received ≥1 footprint, so "no shard" is ambiguous between covered-and-empty
  * and never-staged (see `noise-compute::propagation::obstacle_ingest_coverage`
  * for the same rule on the engine side). The manifest lists 1° tiles and the
- * raster was one file per 1° tile, so the two probes agree on WHERE they know
- * anything: the two tile sets are identical (13 694 tiles, verified 2026-08-30).
+ * retired raster was one file per 1° tile, so the manifest preserves the same
+ * covered-versus-unknown distinction without retaining that raster.
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
@@ -55,15 +55,14 @@ export const BUILT_UP_URBAN = 2
  *  8.5 and not 8: the raster's window was 17 PIXELS across (centre ±8), and a
  *  pixel is an area, not a point — the ground it covered spans 17/3600°, half
  *  a pixel past the outermost node on each side. Sampling ±8/3600° instead
- *  measures a window 13 % smaller in area and reads ~11 % low, which showed up
- *  as the calibration optimum drifting from 8 built pixels to 7 (campaign
- *  2026-08-built-up-vector). */
+ *  measures a window 13 % smaller in area and reads ~11 % low, shifting the
+ *  calibrated decision threshold. */
 export const BUILT_UP_WINDOW_HALF_DEG = 8.5 / 3600
 
 /** Kept from the raster calibration (2026-07-03, cells 841942dffffffff GB +
  *  841e309ffffffff CZ against tagged maxspeed) — the unit is still the
- *  raster's, so the number keeps its provenance. RE-DERIVED against the vector
- *  store on 2026-08-30 (campaign 2026-08-built-up-vector): a grid search over
+ *  raster's, so the number keeps its provenance. Re-derived against the vector
+ *  store on 2026-08-30: a grid search over
  *  2…24 on 27 951 road segments in CZ/DE/FR/GB/US/BR reproduces the raster's
  *  own answer best at exactly 8 (97.30 %; 7 → 97.23 %, 9 → 96.83 %). Two
  *  rejected statistics, same sample: footprint COUNT peaks at 92.39 % (th=30)
@@ -325,21 +324,17 @@ export class BuildingFootprintSampler {
   }
 
   /**
-   * How many footprints have their CENTROID within
-   * [`BUILT_UP_WINDOW_HALF_DEG`] of the point in both axes, and how much
-   * ground area they carry, or `null` when a 1° tile the window touches was
-   * never ingested.
+   * Total ground area of footprints whose CENTROID is within
+   * [`BUILT_UP_WINDOW_HALF_DEG`] of the point in both axes, or `null` when a
+   * 1° tile the window touches was never ingested.
    *
    * Centroid attribution rather than clipped overlap: a footprint is metres
    * across and the window is hundreds, so which side of the border its area
    * lands on is noise next to the pixel this feeds — and centroid ownership is
    * also how the store assigns footprints to cells in the first place.
    *
-   * `count` is not part of the decision: it was the rival statistic the
-   * calibration rejected, and `research/2026-08-built-up-vector` still reads it
-   * to re-derive that comparison.
    */
-  windowFootprints(lat: number, lon: number): { count: number; areaM2: number } | null {
+  windowFootprintAreaM2(lat: number, lon: number): number | null {
     const tiles = this.ingestedTiles()
     if (!tiles) return null
     const h = BUILT_UP_WINDOW_HALF_DEG
@@ -368,7 +363,6 @@ export class BuildingFootprintSampler {
     }
 
     let area = 0
-    let count = 0
     for (const cell of cells) {
       const fp = this.cellFootprints(cell)
       if (!fp) continue // ingested and empty — proven by the manifest above
@@ -386,13 +380,12 @@ export class BuildingFootprintSampler {
             const lo = fp.lon[i]
             if (la >= latLo && la <= latHi && lo >= lonLo && lo <= lonHi) {
               area += fp.areaM2[i]
-              count++
             }
           }
         }
       }
     }
-    return { count, areaM2: area }
+    return area
   }
 
   /**
@@ -400,8 +393,8 @@ export class BuildingFootprintSampler {
    * 1/3600° pixels of the window would carry a building. `null` ⇒ no coverage.
    */
   estimatedBuiltPixels(lat: number, lon: number): number | null {
-    const w = this.windowFootprints(lat, lon)
-    return w === null ? null : w.areaM2 / rasterPixelAreaM2(lat)
+    const areaM2 = this.windowFootprintAreaM2(lat, lon)
+    return areaM2 === null ? null : areaM2 / rasterPixelAreaM2(lat)
   }
 
   /** The calibrated urban/rural decision for one point (a road-segment midpoint). */

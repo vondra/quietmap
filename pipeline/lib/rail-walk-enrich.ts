@@ -1,7 +1,6 @@
 /**
  * Rail graph-walk enrichment DRIVER — the I/O half of the rail-walk matcher
- * (2026-07-15 railway enrichment fix, `pro-e-sd-zaj-m-wobbly-liskov` plan
- * §Phase 1). `rail-graph.ts` + `rail-graph-metrics.ts` are the pure
+ * matcher. `rail-graph.ts` + `rail-graph-metrics.ts` are the pure
  * topology/routing SSOT (no file I/O); this module owns everything they
  * deliberately don't: enumerating hexes, reading `railways.arrow`, building
  * the ONE cross-hex graph for a scope, running `writeRailTrains` per hex
@@ -28,7 +27,7 @@
  * sub-arm below) AND the silent residual — divisors ride with every accepted
  * `match` (walk-stamped or silent) in EVERY mode, since `RailTrains.divisor`
  * is part of the atomic counts+divisor write `writeRailTrains` itself now
- * owns (railways-arrow.ts module doc invariant 3). In stamp-only
+ * owns. In stamp-only
  * (`enableDestructive=false`), NO `RailRetract` object is even constructed —
  * country-bleed healing there is deferred to `heal-rail-country-bleed.ts` or
  * the next destructive run of this same driver (2026-07-16 /gg review item
@@ -287,9 +286,8 @@ function sidecarPathFor(h3r4Dir: string, scope: string): string {
  *
  *  TODO(2026-07-16): hard extract-identity invalidation (compare the
  *  sidecar's `extractFingerprint` against the CURRENT run's and expire a
- *  mismatch) lands with the osm-extract stations layer (planned for the next
- *  Planet re-extract) — see the `pro-e-sd-zaj-m-wobbly-liskov` plan's later
- *  phase. Until then this is a loud warning, not an automatic fix. */
+ *  mismatch) belongs with the osm-extract stations layer. Until then this is
+ *  a loud warning, not an automatic fix. */
 function warnZeroSnappedStops(h3r4Dir: string, scope: string, diagnosticsWillBeWritten: boolean): void {
   const path = sidecarPathFor(h3r4Dir, scope)
   if (diagnosticsWillBeWritten) {
@@ -391,8 +389,8 @@ export async function enrichRailwaysByGraphWalk(opts: RailWalkEnrichOptions): Pr
     const candidateFor = (row: RailRow, i: number, key: string): { trains: RailTrains; branch: 'walk' | 'silent' | 'extra' } | null => {
       const stamp = walk.stampsBySegmentKey.get(key)
       if (stamp) {
-        // Divisor rides with the stamp in the SAME atomic write (railways-arrow.ts
-        // module doc invariant 3) — no separate writeRailParallelDivisor pass, and
+        // Divisor rides with the stamp in the same atomic write: there is no
+        // separate writeRailParallelDivisor pass, and
         // this fires regardless of enableDestructive (stamp-only still gets the
         // walk's own divisor, never an undivided count next to a divided sibling).
         return { trains: { pax: Math.round(stamp.pax), frt: Math.round(stamp.frt), sourceId: opts.sourceId, divisor: stamp.divisor }, branch: 'walk' }

@@ -1,5 +1,5 @@
-//! The accuracy contract of `docs/dev/accuracy-contract.md` (owner, 2026-08-10) as a
-//! scorer: the complete ordered HM3 benchmark in, one PASS/FAIL verdict out. A single
+//! The accuracy contract enforced by this scorer: the complete ordered HM3 benchmark
+//! in, one PASS/FAIL verdict out. A single
 //! pair remains diagnostic and cannot qualify a release.
 //!
 //! Error is `candidate − reference` per cell, banded by the REFERENCE cell's level —

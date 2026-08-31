@@ -9,10 +9,9 @@
 //! - **Bounded cost.** Per-cell indexes are built ONCE per process and
 //!   LRU-cached (`CELL_CACHE_CAP`); a query only Arc-clones ≤7 of them.
 //!   The naive per-query rebuild measured 448 MB RSS / 0.47 s per popup.
-//! - **All-or-raster.** Any shard read/parse error, and by default any
-//!   MISSING ring-1 cell, aborts the whole load → the query keeps the
-//!   legacy raster path (loudly, via stderr). A partial index would delete
-//!   raster buildings where coverage is absent — silent under-screening.
+//! - **All-or-error.** Any shard read/parse error, and by default any
+//!   unproven missing ring-1 cell, aborts the whole load. A partial index
+//!   would silently under-screen the path.
 //!   `QM_OBSTACLES_ALLOW_PARTIAL=1` relaxes ONLY the missing-cell rule for
 //!   dev A/B runs inside a partially staged world; shard errors always abort.
 //!   EXCEPTION (ingested-empty proof): a shard-less cell whose every
@@ -421,9 +420,8 @@ fn shard_paths(dir: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(out)
 }
 
-/// Assemble the query's [`ObstacleSet`]. `None` ⇒ caller keeps the raster
-/// path (not ingested here, incomplete ring coverage under the strict
-/// default, or any shard error).
+/// Assemble the query's [`ObstacleSet`], or fail when vector coverage cannot
+/// be proved complete.
 pub fn load_obstacle_set(
     h3r4_dir: Option<&Path>,
     data_dir: &Path,
@@ -433,9 +431,7 @@ pub fn load_obstacle_set(
     load_obstacle_set_with_logging(h3r4_dir, data_dir, lat, lon)
 }
 
-/// Assemble an obstacle set without logging expected raster fallback paths.
-/// The building-height hover endpoint calls this variant because a moving
-/// pointer can otherwise print one fallback line per debounced request.
+/// Shared implementation for popup and building-height hover queries.
 fn load_obstacle_set_with_logging(
     h3r4_dir: Option<&Path>,
     data_dir: &Path,
@@ -495,8 +491,8 @@ fn load_obstacle_set_with_logging(
 }
 
 /// The world-ingest manifest next to the staging tree, when present (the
-/// tile-painter loader's twin). Absent ⇒ coverage unknown ⇒ the strict
-/// all-or-raster fallback keeps today's behavior.
+/// tile-painter loader's twin). Absent means coverage is unknown, so strict
+/// loading fails on any shard-less cell.
 fn ingest_manifest(
     h3r4_dir: Option<&Path>,
     data_dir: &Path,
@@ -1484,8 +1480,8 @@ mod tests {
         assert_eq!(edges(&dir_a), 8, "a shard added under us must be picked up");
     }
 
-    /// Strict default: a missing ring cell aborts to the raster path; the dev
-    /// override admits the partial disk.
+    /// Strict default: a missing ring cell fails; the dev override admits the
+    /// partial vector set.
     ///
     /// Runs strict → partial → strict on ONE process and one disk, which is
     /// the question "does `QM_OBSTACLES_ALLOW_PARTIAL` belong in the cache

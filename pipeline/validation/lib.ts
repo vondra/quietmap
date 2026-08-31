@@ -1,6 +1,5 @@
 /**
- * Shared plumbing for validation-v2 Leg A snapshot adapters
- * (docs/dev/validation-v2-plan.md §Leg A): per-network agent-run pulls that
+ * Shared plumbing for Leg A snapshot adapters. Per-network agent-run pulls
  * write (a) raw+normalized SQLite under data/validation/ (gitignored,
  * re-fetchable) and (b) compact per-station annual JSON snapshots committed
  * under benchmarks/validation/snapshots/. No cron until a network has two

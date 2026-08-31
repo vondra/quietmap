@@ -1,8 +1,7 @@
 /**
  * Enrich TH railways.arrow with Namtang GTFS — migrated onto the shared
- * graph-walk driver (2026-07-16 Phase 4 point 2 rewrite, plan
- * `pro-e-sd-zaj-m-wobbly-liskov`, following `enrich-railway-dk.ts`'s
- * single-national-file pattern).
+ * graph-walk driver following `enrich-railway-dk.ts`'s single-national-file
+ * pattern.
  *
  * Namtang (นามทาง) is the unified Thai transit feed published by the Office of
  * Transport and Traffic Policy and Planning (OTP / สนข., Ministry of

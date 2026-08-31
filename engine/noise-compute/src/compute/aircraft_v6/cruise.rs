@@ -406,8 +406,8 @@ fn round1(v: f64) -> f64 {
 /// bucket). v14: walks `cruise_flight_stats` which is keyed on real fid
 /// and populated from each row's `top_candidates` slice — so a fid
 /// touching multiple R7 buckets dedupes naturally via HashMap insert.
-/// Tail fids outside the per-row top-K cap silently undercount per
-/// plan §4.4 / §9; documented regression.
+/// Tail fids outside the per-row top-K cap silently undercount; this is a
+/// documented display-only regression.
 pub fn band_stats(cruise_flight_stats: &HashMap<u64, CruiseFlightStats>) -> [BandStats; 3] {
     let mut out = [BandStats::new(), BandStats::new(), BandStats::new()];
     // Ascending fid: `add_event` sums `alt_sum` in f64, so HashMap order

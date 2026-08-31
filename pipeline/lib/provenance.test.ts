@@ -76,7 +76,7 @@ test('withArrowWrite round-trips a table and atomically replaces it', async () =
 })
 
 // ─── withArrowWrite shape preservation (popup batch pruning) ────────────────
-// docs/dev/popup-batch-pruning.md: a bare-makeTable callback must not destroy
+// A bare-makeTable callback must not destroy
 // schema metadata (contract stamps) nor collapse the extractors' record-batch
 // boundaries; a stale qm_batch_bboxes must be DELETED when the shape changed.
 

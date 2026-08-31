@@ -29,6 +29,8 @@ Ship the smallest complete design; never speculative scaffolding.
   irreplaceable data; it never blocks a dev preview, measurement, or packaging an experiment.
 - One correctness fact lives in one place. A hash verifies bytes only against
   an independently anchored expected identity; a file never proves itself.
+- Delete completed plans and stale research after moving any lasting invariant
+  into code or the current specification; git history is the archive.
 
 ## Code style
 

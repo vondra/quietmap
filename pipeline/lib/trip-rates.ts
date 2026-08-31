@@ -80,7 +80,7 @@ export const BUILDING_TRIP_RATES: Readonly<Record<number, TripRateArm>> = {
   8: { kind: 'trips', basis: 'gfa', per100m2: 1.84, minTrips: 2, capTrips: 184 },
   // 9 civic/public — office-grade day traffic, restated (divisor 300).
   9: { kind: 'trips', basis: 'gfa', per100m2: 1.23, minTrips: 2, capTrips: 368 },
-  // 10 SILENT — sheds/roofs/huts/greenhouses (settlement.rs plan §C′). NEW:
+  // 10 SILENT — sheds/roofs/huts/greenhouses. New:
   // previously fell into the residential default arm — ~18 M uninhabited
   // footprints worldwide each generating ~3.7 phantom trips/day.
   10: { kind: 'none' },

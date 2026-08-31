@@ -139,56 +139,33 @@ pub struct TerrainBreakdown {
     pub profile_points: u32,
 }
 
-/// The single max-δ edge the surface kernel picked inside the combined terrain +
-/// building + barrier composite (see `horizon::single_edge_atten`). Kind `"terrain"`
-/// means the edge sits on a bare-earth hill — the composite top at that sample
-/// equals the DEM elevation (no building or barrier on top).
+/// The single exact vector crossing that beat the terrain edge on signed δ.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ObstacleEdge {
-    pub kind: &'static str, // "terrain" | "building" | "barrier"
+    pub kind: &'static str, // "building" | "barrier"
     pub t: f64,             // fractional position along path (0..1)
-    pub height_m: f64,      // building or barrier height above ground; 0.0 for "terrain"
+    pub height_m: f64,      // building or barrier height above ground
     pub screen_h_m: f64,    // edge-top minus line-of-sight (excess above LOS)
-    /// QUERY-LOCAL ordinal of the crossing's obstacle (geodata-v2) —
-    /// deterministic for one on-disk state (sorted shard iteration) but NOT
-    /// a store identity; do not join on it. `None` for raster-sample edges;
-    /// omitted from JSON when absent.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub obstacle_id: Option<u32>,
+    /// Query-local ordinal, deterministic for one on-disk state but not a
+    /// durable store identity.
+    pub obstacle_id: u32,
 }
 
-/// Screening obstacle trace — the dominant obstacle (by LOS excess) that the
-/// engine chose as representative for the composite diffraction. `edges` lists
-/// every diffraction edge the engine actually used (`n_edges` ∈ {1, 2, 3}),
-/// including pure-terrain edges. Popup displays this verbatim; no fabricated
-/// aggregates.
+/// Screening trace for the one vector crossing that beat bare terrain.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ScreeningObstacleTrace {
-    pub kind: &'static str, // "building" | "barrier" | "none"
-    pub height_m: f64,      // obstacle height of the DOMINANT sample
-    pub t: f64,             // fractional position of the DOMINANT sample (0..1)
-    pub screen_h_m: f64,    // dominant excess above line-of-sight
-    pub delta_m: f64,       // 3D Fresnel path difference for the combined result
-    // Transparency metadata: how the engine scanned the building raster
-    pub step_m: f64, // sampling step (raster cell × adaptive factor)
-    /// Number of diffraction edges in the combined result (0..=3).
-    pub n_edges: u8,
-    /// Per-edge detail when `n_edges > 0`. First entry is the leftmost edge
-    /// (smallest `t`); the dominant edge by LOS excess is whichever has the
-    /// largest `screen_h_m` — UI should not assume `edges[0]` is dominant.
-    pub edges: Vec<ObstacleEdge>,
-    /// Query-local ordinal of the DOMINANT obstacle when it was an exact
-    /// crossing (geodata-v2) — debug tag, not a store identity. Omitted from
-    /// JSON when absent.
+    pub delta_m: f64,
+    /// Median terrain-profile sampling step used to interpolate ground under
+    /// the exact crossing.
+    pub step_m: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub obstacle_id: Option<u32>,
+    pub edge: Option<ObstacleEdge>,
 }
 
 /// Building screening metadata. The A-weighted impact scalar lives on
 /// [`Contributor::screening_impact_db`].
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ScreeningBreakdown {
-    pub building_path_m: f64, // max building height on path (meters) — kept for tile back-compat
     /// Engine-internal obstacle trace. Populated on popup path (compute_path_effects),
     /// not on pipeline hot path (screening_attenuation). Serialized only when Some.
     #[serde(skip_serializing_if = "Option::is_none")]

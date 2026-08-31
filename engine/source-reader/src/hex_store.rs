@@ -1,9 +1,8 @@
 //! Load Arrow IPC File-format files via mmap, decoding record batches LAZILY.
 //!
-//! Files written after the popup-batch-pruning change (commit 70a1bd2c) carry
-//! `qm_batch_bboxes` schema metadata: queries decode only the batches whose
-//! bbox lies within the source class's audibility radius of the click
-//! (docs/dev/popup-batch-pruning.md). Old single-batch files have no key and
+//! Files carrying `qm_batch_bboxes` schema metadata let queries decode only the
+//! batches whose bbox lies within the source class's audibility radius of the click.
+//! Legacy single-batch files have no key and
 //! decode in full — same rows as before, just on first touch instead of at
 //! load time. Decoded batches are cached per slot (OnceLock), so the shared
 //! store's warm path is unchanged and RAM is strictly <= the old eager load.

@@ -522,7 +522,7 @@ pub fn airport_summary_schema() -> Arc<Schema> {
 
 /// Verify metadata on `airport_summary.arrow`. Missing or stale →
 /// hard error (popup MUST refuse to compute airport arr/dep counts
-/// without a current sidecar; per-row sum is forbidden, see plan §4.3).
+/// without a current sidecar; per-row summation is forbidden).
 pub fn assert_airport_summary_contract_v2(
     metadata: &HashMap<String, String>,
 ) -> anyhow::Result<()> {

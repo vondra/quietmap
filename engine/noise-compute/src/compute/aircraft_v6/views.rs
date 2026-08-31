@@ -130,7 +130,7 @@ pub struct AirportTrafficRowView<'a> {
 /// `&'a [u8; 4]`: the source-reader / heatmap loaders read it via
 /// `FixedSizeBinaryArray::value(i)` (which yields `&[u8]` without
 /// fixed-size typing), so storing inline avoids a self-borrowing
-/// `Vec<[u8; 4]>` shim in the accumulator. Per Opt C (plan §3).
+/// `Vec<[u8; 4]>` shim in the accumulator.
 #[derive(Clone, Copy, Debug)]
 pub struct AirborneRowView<'a> {
     pub flight_id: u64,

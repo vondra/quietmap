@@ -1,8 +1,7 @@
 /**
  * Enrich MX railways.arrow with Mexican GTFS feeds — migrated onto the shared
- * graph-walk driver (2026-07-16 Phase 4 rewrite, plan
- * `pro-e-sd-zaj-m-wobbly-liskov`, following `enrich-railway-dk.ts`'s
- * single-national-file pattern).
+ * graph-walk driver, following `enrich-railway-dk.ts`'s single-national-file
+ * pattern.
  *
  * CDMX SEMOVI publishes a unified GTFS containing Metro, Metrobús, Trolebús,
  * Tren Ligero, Cablebús, Tren Suburbano, Pumabús, RTP, and concession

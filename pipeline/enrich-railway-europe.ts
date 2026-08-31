@@ -1,7 +1,6 @@
 /**
  * Enrich railways.arrow with real train frequencies from GTFS feeds — the
- * continental multi-country aggregate (2026-07-16 Phase 4 rewrite, plan
- * `pro-e-sd-zaj-m-wobbly-liskov`).
+ * continental multi-country aggregate.
  *
  * HEAVY RAIL (rail_type 0) now runs on the shared graph-walk driver
  * (`lib/rail-walk-enrich.ts`): per feed, `computeStopPairFrequenciesForFeed`
@@ -13,12 +12,12 @@
  * deleted on the 7-shared-keys data verdict documented there).
  * TRAM/light-rail (rail_type 1/2) keeps the pre-Phase-4
  * `nearestGridStop` 500 m stop-join (stop spacing is well under the radius —
- * banding was a heavy-rail-only bug, plan Key decisions), wired in as the
+ * banding was a heavy-rail-only bug), wired in as the
  * walk driver's `extraMatch` fallback arm via `buildTramExtraMatch` — hoisted
  * to `lib/gtfs-enrich-core.ts` so every national `enrich-railway-{cc}.ts`
  * enricher shares the SAME implementation (2026-07-16 Phase 4 point 2).
  *
- * PER-COUNTRY EXECUTION (plan Phase 4 point 2 / /gg review item 7): `--country
+ * PER-COUNTRY EXECUTION: `--country
  * CC` processes ONLY that country's own feed(s) against a border-buffered
  * rail graph (union of its feeds' `boundingBox`, padded 0.5°) — fixes
  * `country:XX` chain scope silently mutating ALL of Europe. No argument runs
@@ -50,8 +49,7 @@
  *
  * --stamp-only: Phase-3/4 Step A rollout control (same semantics as
  * enrich-railway-cz.ts) — enableDestructive=false: the run still walk-stamps
- * heavy-rail counts AND divisors (atomic with the stamp, railways-arrow.ts
- * module doc invariant 3) and still runs the tram stop-join, but NO retract
+ * heavy-rail counts AND divisors atomically and still runs the tram stop-join, but NO retract
  * (per-country or the world CRITICAL-2 sweep) and NO country-bleed heal fire.
  */
 
@@ -954,7 +952,7 @@ export async function computeStopFrequencies(
 // Retract signature for stamps the pre-2026-07-10 fallback design wrote: the deleted
 // class-default table, verbatim. A row still owned by MY_SOURCE_ID whose counts exactly
 // equal its class tuple was filled by that fallback, not measured — exact-tuple + family
-// ambiguity is negligible (/tmp/quietmap-v4/gtfs-rail-misjoin.md §3), and the retract's
+// ambiguity is negligible, and the retract's
 // `when` additionally re-runs today's stop join, so a live-covered row is re-stamped by
 // `match`, never disowned. No-match rows now return null: source_id stays 0 and the
 // ENGINE default table (engine/noise-compute/src/emission/railway.rs::default_traffic)
@@ -1000,8 +998,8 @@ interface CountryProcessResult {
   denom: number
 }
 
-/** Country bbox for the per-country border-buffer graph (plan Phase 4 point
- *  2): the UNION of this country's own feed(s) `boundingBox` — already
+/** Country bbox for the per-country border-buffer graph: the union of this
+ *  country's own feed `boundingBox` values — already
  *  hand-curated per feed for the stops.txt sanity check — padded 0.5° so the
  *  rail graph can bridge a station just across the border. Derived from data
  *  the registry already carries: no separate hand-authored per-country bbox
@@ -1129,8 +1127,7 @@ function buildSharedIdUnionBleedGate(): (lat: number, lon: number) => boolean {
  *  `enrichRailwaysByGraphWalk` call scoped to a border-buffered country
  *  bbox. This is the SAME function `--country CC` and the all-countries loop
  *  both call — a `country:XX` chain scope and a full run touch identical
- *  code, never two paths that can drift (plan Phase 4 point 2 / /gg review
- *  item 7). Returns `null` when FEEDS carries no feed for `cc` at all
+ *  code, never two paths that can drift. Returns `null` when FEEDS carries no feed for `cc` at all
  *  (nothing to do — not an error, since not every country has a europe feed).
  *
  *  `bleedGate` (item 1): geometry-evidence gate for the driver's bleed
@@ -1237,9 +1234,7 @@ async function processCountry(cc: string, bleedGate?: (lat: number, lon: number)
  *  per-country walk visits those, since a country's own bbox only reaches
  *  hexes ITS OWN feeds cover. Retract-only pass (`match` is `() => null`)
  *  over every railways.arrow hex NOT already visited this run; runs ONLY in
- *  all-countries mode (never under `--country` — plan Phase 4: "the
- *  world-wide legacy retract sweep... stays but runs ONLY in the
- *  all-countries mode") and only when every country this run processed was
+ *  all-countries mode, never under `--country`, and only when every country this run processed was
  *  itself retract-safe (see main()). */
 async function runLegacyFallbackSweep(alreadyVisitedHexIds: ReadonlySet<string>): Promise<void> {
   let sweepScanned = 0, sweepUpdated = 0, sweepRetracted = 0
@@ -1289,8 +1284,8 @@ async function main() {
   }
 
   // ALL-COUNTRIES MODE: every country FEEDS carries, SEQUENTIALLY, through the
-  // exact same processCountry() a --country invocation uses (plan Phase 4
-  // point 2). The world-wide CRITICAL-2 legacy sweep runs ONLY here.
+  // exact same processCountry() a --country invocation uses. The world-wide
+  // legacy sweep runs only here.
   const countries = [...new Set(FEEDS.map(f => f.country))]
   console.log(`  Processing ${countries.length} countries sequentially: ${countries.join(' ')}\n`)
 

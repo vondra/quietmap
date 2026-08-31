@@ -35,7 +35,7 @@ fn main() -> Result<()> {
     // This binary IS the lane-parity gate, so it is the one place a CPU-only
     // lever must never pass silently — it would compare two different kernels.
     //
-    // Since the 2026-08-19 §3.5e port the kernel paints the CPU painter's OWN
+    // The kernel paints the CPU painter's own SPEC §4.7 rule:
     // rule — 5 uniform buckets per microsegment fan, the 3° bucket gate on the
     // nested arc query, both compiled in from the CPU's own constants — so the
     // honest comparison runs the CPU reference at its production DEFAULTS, with

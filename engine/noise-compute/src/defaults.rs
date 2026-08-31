@@ -272,9 +272,9 @@ fn continent_default(continent: Continent, class: u8) -> Option<Aadt> {
 
 use crate::country_speed_defaults_generated::COUNTRY_SPEEDS;
 
-/// `built_up` comes from the roads.arrow column of the same name, sampled from the
-/// building raster at extract/migration time: 0 = unknown (column absent or raster
-/// missing — NEVER guess rural, fall back to the legacy table), 1 = rural, 2 = urban.
+/// `built_up` comes from the roads.arrow column of the same name, classified
+/// from vector-footprint density: 0 = unknown (coverage missing — never guess
+/// rural), 1 = rural, 2 = urban.
 pub const BUILT_UP_UNKNOWN: u8 = 0;
 pub const BUILT_UP_RURAL: u8 = 1;
 pub const BUILT_UP_URBAN: u8 = 2;
@@ -676,7 +676,7 @@ mod tests {
         assert_eq!(th.continent, Continent::Asia);
         assert_eq!(th.city_id, 0);
         // A present 0 (`\0\0`) is Admin::UNKNOWN — WORLD defaults, NO receiver
-        // fallback (the fallback switch is the column's ABSENCE, per plan §1).
+        // fallback (column absence is the switch).
         assert_eq!(baked_admin(0, 0, 0), Admin::UNKNOWN);
         // City id rides along (Bangkok metro, gated by the resolved country).
         let bkk = baked_admin(u16::from_le_bytes(*b"TH"), CITY_BANGKOK, 4);

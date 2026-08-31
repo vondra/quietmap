@@ -213,8 +213,8 @@ pub fn region_tiles(r4: u64, zoom: u8) -> Vec<(u32, u32)> {
 }
 
 /// Split one `--stream` worker's stdin line into its R4 hex token and an OPTIONAL trailing
-/// `layers=a,b,c` restriction (paint-pipeline-v4 PR#1 §3, the per-layer worker fix: a rail-only
-/// dv change must not force a road repaint). The second token is deliberately optional — its
+/// `layers=a,b,c` restriction. A rail-only data-version change must not force a road repaint.
+/// The second token is deliberately optional — its
 /// absence means "no restriction", i.e. build every layer this process was configured with,
 /// TODAY'S behavior. The box agent sends the token ONLY for a STRICT SUBSET of a multi-layer
 /// group (a full set stays bare hex), so single-layer engines (`gpu-airborne`,
@@ -255,7 +255,7 @@ pub fn announce_stream_cell_started(r4: u64) {
 }
 
 /// Narrow a `--stream` worker's CONFIGURED layers down to the subset a per-cell `layers=`
-/// request named (paint-pipeline-v4 PR#1 §3) — `requested = None` (the token was absent) keeps
+/// request named. `requested = None` (the token was absent) keeps
 /// everything, unchanged from before this feature shipped. Returns `(effective, skipped)`:
 /// `effective` is what to actually build for this cell; `skipped` is the configured layers'
 /// NAMES that were excluded, for the `done` line's trailing `skipped=<layer,…>` token. Generic
@@ -534,7 +534,7 @@ mod tests {
         assert_eq!(block_batch_origin(7, 7, 1, 3), (7, 7));
     }
 
-    // ── paint-pipeline-v4 PR#1 §3: per-layer worker builds ──
+    // Per-layer worker builds.
 
     #[test]
     fn split_stream_line_bare_hex_has_no_layers_request() {

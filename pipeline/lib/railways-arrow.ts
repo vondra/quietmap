@@ -57,7 +57,7 @@ export interface RailTrains {
   frt: number
   sourceId: number
   /** Optional parallel-track divisor to SET on this row in the SAME write as
-   *  pax/frt/sourceId (module doc invariant 3 — atomic counts+divisor).
+   *  pax/frt/sourceId (the atomic counts+divisor invariant).
    *  Must be a positive integer (1-255) when given; validated with the same
    *  fail-loud contract as pax/frt/sourceId (a bad value throws, file
    *  untouched). Omit to leave the row's existing divisor byte-for-byte
@@ -114,7 +114,7 @@ export interface WriteRailResult {
   /** Rows this dataset previously owned and has now disowned via `retract`
    *  (stamp + train counts reset to zero, open for lower-priority enrichers).
    *  Every retracted row also has its `parallel_divisor` reset to 1 in the
-   *  same write (module doc invariant 3) — a disowned row must not stay
+   *  same write — a disowned row must not stay
    *  wrongly quiet under a stale ÷N, unless a same-pass `match` reclaim sets
    *  a new divisor of its own (retract-then-match order). */
   retracted: number
@@ -136,7 +136,7 @@ export interface WriteRailResult {
  *  the legacy class-default stamps are recognized. A retract
  *  zeroes trains_passenger/trains_freight and the stamp AND resets the row's
  *  parallel_divisor to 1 in the same write (divisor is void without its stamp
- *  — see module doc invariant 3; other rows' divisors are left untouched, and
+ *  under the atomic counts+divisor invariant; other rows' divisors are left untouched, and
  *  a hex whose `parallel_divisor` column is absent stays absent since an
  *  implicit-1 row has nothing to reset); `match` STILL runs on
  *  the row in the same pass and may immediately re-claim it (a real count that
@@ -228,7 +228,7 @@ export async function writeRailTrains(
     const pax = new Int32Array(n)
     const frt = new Int32Array(n)
     const src = new Uint16Array(n)
-    // Divisor rides atomically with pax/frt/src (module doc invariant 3) —
+    // Divisor rides atomically with pax/frt/src —
     // seeded verbatim (default 1 when the column is absent) exactly like the
     // other three, so an untouched row's value survives unchanged whether or
     // not the column pre-existed.
@@ -287,7 +287,7 @@ export async function writeRailTrains(
         pax[i] = 0
         frt[i] = 0
         src[i] = 0
-        // Divisor void without its stamp (module doc invariant 3) — reset to
+        // Divisor void without its stamp — reset to
         // 1 IN THE SAME retract arm, not a separate pass. A same-pass `match`
         // reclaim below (if any) may immediately overwrite this with its own
         // divisor — retract-then-match order.

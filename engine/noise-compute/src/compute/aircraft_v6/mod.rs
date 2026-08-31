@@ -159,11 +159,9 @@ pub fn compute_aircraft_v6(
             distance_m: 0.0,
             periods: airborne_periods.clone(),
             // free == received was EXACT pre-C2 (airborne had no path
-            // effects). Under QM_AIRBORNE_HORIZON=1 this now includes
-            // the screening; the honest split needs a second period
-            // accumulation through the scatter — deferred to C2 P2
-            // (default-ON). P1 measures screening via flag on/off A/B
-            // instead (plan §"P0 implementation review" carry-overs).
+            // effects). The optional QM_AIRBORNE_HORIZON=1 development path
+            // changes received periods but does not compute a separate free-field
+            // accumulation, so this display field remains identical to received.
             periods_free: airborne_periods.clone(),
             emission_db: airborne_periods.lden_db,
             received_bands: [0.0; NUM_BANDS],

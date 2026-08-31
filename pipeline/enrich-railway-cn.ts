@@ -227,7 +227,7 @@ function trainsFromFeature(feat: RailFeat): { pax: number; frt: number } {
 // enrichers' `defaultTrains`, purged with them under task #26). A row still owned by
 // MY_SOURCE_ID whose counts exactly equal its class tuple was filled by that fallback,
 // not matched to a Mainland polyline — exact-tuple + family ambiguity is negligible
-// (/tmp/quietmap-v4/gtfs-rail-misjoin.md §3), and the retract's `when` re-runs today's
+// and the retract's `when` re-runs today's
 // polyline join, so a live-covered row (e.g. a Streetcar at a real 200/0) is re-stamped
 // by `match`, never disowned. No-match rows now return null: source_id stays 0 and the
 // ENGINE default table (engine/noise-compute/src/emission/railway.rs::default_traffic)

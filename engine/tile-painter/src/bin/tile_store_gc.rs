@@ -1,5 +1,4 @@
-//! tile-store-gc — mark-and-sweep retention for the published pmtiles tree
-//! (docs/dev/checkout-restructure-plan.md Track 2).
+//! tile-store-gc — mark-and-sweep retention for the published pmtiles tree.
 //!
 //! `tile-store-pack` no longer deletes anything (2026-07-16 rewrite): with per-environment
 //! pins (`current.{env}.json`) a prod pointer can legitimately lag dev by many publishes,

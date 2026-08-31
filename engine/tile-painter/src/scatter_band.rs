@@ -760,7 +760,7 @@ impl BandScratch {
 /// ## Lane divergence — read before comparing against CUDA
 ///
 /// The CUDA surface kernel (`engine/noise-gpu/kernels/scatter.cu`) paints the
-/// same rule: since the 2026-08-19 §3.5e port it compiles this default in
+/// same SPEC §4.7 rule: it compiles this default in
 /// (SEG_SAMPLES buckets + the 3° bucket gate, injected by build.rs from
 /// `SEG_SAMPLES_DEFAULT` and `seg_sampling::SEG_ARC_MIN_SPAN_RAD`).
 /// A CPU-vs-GPU tile comparison therefore runs BOTH lanes at defaults;

@@ -12,8 +12,8 @@ Free samples cover the 1st of each month. Resumable: a day whose subset.tar
 exists is skipped; a day with mass transient failures is left as `.part`
 (not finalized) so a re-run retries it.
 
-  download-adsbexchange.py --last-12 --anchor 2026-06
-  download-adsbexchange.py --days 2026-05-01,2026-04-01
+  download-adsbexchange.py --last-12 --anchor 2026-06 --out /data/adsbexchange
+  download-adsbexchange.py --days 2026-05-01,2026-04-01 --out /data/adsbexchange
 """
 from __future__ import annotations
 import argparse, os, sys, io, gzip, json, time, tarfile
@@ -129,9 +129,12 @@ def main() -> int:
                     help="last 12 firsts-of-month ending at --anchor")
     ap.add_argument("--anchor", default=None,
                     help="YYYY-MM — most recent first-of-month to include (with --last-12)")
-    ap.add_argument("--out", default="/storagebox/adsbexchange")
+    ap.add_argument("--out", required=True,
+                    help="explicit cache directory for downloaded TAR files")
     ap.add_argument("--workers", type=int, default=12)
     a = ap.parse_args()
+    if not a.out.strip():
+        ap.error("--out must be a non-empty explicit cache directory")
 
     if a.last_12:
         if not a.anchor:

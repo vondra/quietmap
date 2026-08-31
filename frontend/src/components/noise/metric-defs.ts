@@ -80,7 +80,7 @@ export const METRIC_DEFS: Record<string, MetricDef> = {
   terrain: {
     label: "Terrain",
     description:
-      "Terrain diffraction via Maekawa/Fresnel (ISO 9613-2 §7.3/7.4), up to 3 edges from the upper convex hull of the DEM profile above line-of-sight. CNOSSOS §2.5.6(c) Rayleigh δ* gate zeroes bands where δ ≤ λ/4 − δ*. Combined with building/barrier screening in a single Fresnel pass (SPEC §3.5b, anti-double-count).",
+      "Terrain diffraction via Maekawa/Fresnel (ISO 9613-2 §7.3/7.4), using the dominant edge above line of sight. CNOSSOS §2.5.6(c) Rayleigh δ* gate zeroes bands where δ ≤ λ/4 − δ*. Combined with building/barrier screening in a single Fresnel pass (SPEC §4.6–4.7, anti-double-count).",
     descriptionPublic:
       "Terrain diffraction (ISO 9613-2 §7.4 / CNOSSOS §2.5.6). Hills or embankments between source and receiver bend sound over the top — taller and closer to the path means more reduction.",
     standard: "ISO 9613-2 §7.3/7.4 + CNOSSOS-EU §2.5.6(c)",
@@ -88,7 +88,7 @@ export const METRIC_DEFS: Record<string, MetricDef> = {
   screening: {
     label: "Screening",
     description:
-      "Increment of the combined terrain + building + barrier diffraction over pure-terrain (A_terrain + A_screen ≡ A_combined, SPEC §3.5b — not a second independent Fresnel). The engine scans the Overture building raster + any explicit noise barriers along the path and merges the tallest top into the composite profile. One edge in the composite may be a bare-earth hill — UI labels it 'terrain' then.",
+      "Increment of the combined terrain + building + barrier diffraction over pure terrain (A_terrain + A_screen ≡ A_combined, SPEC §4.7 — not a second independent Fresnel pass). The engine intersects exact Overture building footprints and explicit noise barriers with the path. One winning edge may be a bare-earth hill — UI labels it 'terrain' then.",
     descriptionPublic:
       "Building / barrier screening (ISO 9613-2 §7.4 + CNOSSOS §2.5.6). Buildings and noise barriers on the path block the direct line of sight; engine combines with terrain in a single diffraction model.",
     standard: "ISO 9613-2 §7.3 + CNOSSOS-EU §2.5.6(c)",

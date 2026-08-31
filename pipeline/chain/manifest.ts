@@ -1,6 +1,6 @@
 //! R8.1 enrichment-chain manifest — THE declarative order of every enrichment
 //! step that must re-run after a fresh OSM planet extract, with per-step cache
-//! semantics and the footguns encoded as data (docs/dev/roads-traffic-model-audit.md §8).
+//! semantics and the footguns encoded as data.
 //!
 //! Steps are ENUMERATED FROM THE FILESYSTEM (pipeline/enrich-*.ts) and joined
 //! against the per-country spec tables below; a file this manifest cannot

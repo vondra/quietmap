@@ -39,17 +39,14 @@
 # Stage 2 against the existing hybrid shuffle). DAYS is rejected in
 # hybrid mode — set AIRLINE_DAYS / GA_DAYS instead (both default to
 # every day present in their cache). Hybrid env knobs: AIRLINE_FEED
-# (default adsbexchange), AIRLINE_CACHE (the airline feed cache on the ops
-# storage host), AIRLINE_DAYS, GA_CACHE (the raw adsb.lol archive on
-# the ADS-B archive host), GA_DAYS, FAIL_ON_GA_CRUISE=1
+# (default adsbexchange), AIRLINE_CACHE (required cache path), AIRLINE_DAYS,
+# GA_CACHE (required cache path), GA_DAYS, FAIL_ON_GA_CRUISE=1
 # (merge hard-fails if GA classes leak into cruise).
-# Cross-host runbook (plan §4.2): run pass G on the ADS-B archive host
-# (data-local), rsync $WORK_DIR/ga/segments to the compute host, run
-# pass J + merge there.
+# Hybrid passes may run on different hosts; synchronize `$WORK_DIR/ga/segments`
+# to the merge host before starting the airline pass and merge.
 #
-# Single-feed defaults: --feed adsblol reads the raw adsb.lol archive
-# on the ADS-B archive host (release naming v{Y.M.D}-planes-readsb-prod-0
-# is resolved by the binary). The old Praha dev subset stays reachable
+# Single-feed mode: --feed selects the source format and provenance; ADSB_CACHE
+# is always an explicit cache path. The old Praha dev subset stays reachable
 # via ADSB_CACHE=data/source/flights-cache/radius/praha-150km plus
 # SCOPE_BBOX=48.65,12.00,51.55,16.90 (subset caches REQUIRE a scope).
 set -euo pipefail
@@ -61,11 +58,10 @@ cd "$PROJECT_DIR"
 DATA_YEAR="${DATA_YEAR:-$(python3 -c 'import json;print(json.load(open("scripts/dataset-year.json"))["current_year"])')}"  # default from committed ./DATA_YEAR (bump there yearly); env overrides
 DATA_ROOT="${DATA_ROOT:-data}"
 # Which ADS-B network to read. adsb.lol and adsbexchange ship the identical
-# readsb trace_full TAR format, so --feed only picks the default cache path +
-# scope and stamps provenance. ADSB_CACHE / SCOPE_BBOX (if set) win over the
-# per-feed defaults resolved after arg parsing.
+# readsb trace_full TAR format, so --feed only selects the format and stamps
+# provenance. SCOPE_BBOX is optional; the cache path is not.
 FEED="${FEED:-adsblol}"
-ADSB_CACHE="${ADSB_CACHE-__PER_FEED__}"
+ADSB_CACHE="${ADSB_CACHE:-}"
 H3R4_DIR="${H3R4_DIR:-$DATA_ROOT/prepared/$DATA_YEAR/h3r4}"
 PREPARED_DIR="${PREPARED_DIR:-$DATA_ROOT/prepared}"
 WORK_DIR="${WORK_DIR:-/tmp/aircraft-extract-work}"
@@ -75,16 +71,14 @@ DAYS="${DAYS:-}"
 # global R4 files. The aircraft-extract binary hard-fails when
 # --adsb-cache contains /bbox/ or /radius/ AND --scope-bbox is unset.
 #
-# Resolved per --feed below (both feeds default global). An explicit
-# SCOPE_BBOX env (even empty) wins.
-SCOPE_BBOX="${SCOPE_BBOX-__PER_FEED__}"
+SCOPE_BBOX="${SCOPE_BBOX:-}"
 FROM_STAGE="${FROM_STAGE:-}"
 # Hybrid two-window extract — see the HYBRID header section.
 HYBRID="${HYBRID:-}"
 AIRLINE_FEED="${AIRLINE_FEED:-adsbexchange}"
-AIRLINE_CACHE="${AIRLINE_CACHE:-/storagebox/adsbexchange}"
+AIRLINE_CACHE="${AIRLINE_CACHE:-}"
 AIRLINE_DAYS="${AIRLINE_DAYS:-}"
-GA_CACHE="${GA_CACHE:-/mnt/data/adsb}"
+GA_CACHE="${GA_CACHE:-}"
 GA_DAYS="${GA_DAYS:-}"
 FAIL_ON_GA_CRUISE="${FAIL_ON_GA_CRUISE:-}"
 # OOM guard. Stage 2B/2C load multi-million-segment mega-hub R4s; an
@@ -150,14 +144,17 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Per-feed defaults — applied only where ADSB_CACHE / SCOPE_BBOX weren't set.
+# The feed name is metadata; all cache locations are operator-provided.
 case "$FEED" in
-    adsblol)      FEED_CACHE="/mnt/data/adsb";          FEED_SCOPE="" ;;
-    adsbexchange) FEED_CACHE="/storagebox/adsbexchange"; FEED_SCOPE="" ;;
+    adsblol|adsbexchange) ;;
     *)            die "unknown --feed: $FEED (adsblol|adsbexchange)" ;;
 esac
-[ "$ADSB_CACHE" = "__PER_FEED__" ] && ADSB_CACHE="$FEED_CACHE"
-[ "$SCOPE_BBOX" = "__PER_FEED__" ] && SCOPE_BBOX="$FEED_SCOPE"
+if [ -n "$HYBRID" ]; then
+    [ -n "$AIRLINE_CACHE" ] || die "HYBRID=1 requires AIRLINE_CACHE= with an explicit cache directory"
+    [ -n "$GA_CACHE" ] || die "HYBRID=1 requires GA_CACHE= with an explicit cache directory"
+else
+    [ -n "$ADSB_CACHE" ] || die "requires ADSB_CACHE= with an explicit cache directory"
+fi
 
 # Day list from a cache dir: every day holding a .tar (or .tar.aa —
 # summer adsb.lol days ship ONLY split parts, a bare-.tar find skips

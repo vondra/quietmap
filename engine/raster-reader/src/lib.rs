@@ -1,7 +1,7 @@
 //! Real raster reader — raw 1°×1° tiles, mmap'd, global scale.
 //!
 //! Implements noise_compute::types::RasterSampler for both popup (lazy) and pipeline (pre-loaded).
-//! Reads Copernicus GLO-30 / SRTM DEM, Overture building height, WorldCover forest, IMD ground type.
+//! Reads Copernicus GLO-30 / SRTM DEM, WorldCover forest, and IMD ground type.
 //!
 //! Submodules:
 //! - [`real_rasters`] — [`RealRasters`]: lazy mmap'd 1° tiles, the popup + extract sampler.

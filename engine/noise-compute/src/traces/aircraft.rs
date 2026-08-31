@@ -13,7 +13,7 @@ use super::variants_to_lden;
 
 /// Path-effect / band slots stay zero because aircraft propagation
 /// (Doc 29 SEL chain) doesn't expose them at the per-event level — see
-/// SPEC.md §5.4. Frontend gates Section 4/5/6 detail rows for
+/// SPEC.md §6. Frontend gates Section 4/5/6 detail rows for
 /// `aircraft_subtype` 2 / 3 to avoid showing the resulting `−∞ dB`.
 fn aircraft_period_variants(period_energies: [f64; 3], n_days: f64) -> [PropagationVariants; 3] {
     std::array::from_fn(|i| {

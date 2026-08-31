@@ -2,7 +2,8 @@
 
 Global environmental noise atlas: computed sound levels (Lden) from roads,
 railways, aircraft, industry, buildings and settlements, for the whole world
-at ~25 m resolution, served as an interactive web map with per-point source
+at about 12 m base resolution (with an optional ~6 m detail tier), served as an
+interactive web map with per-point source
 breakdowns. The acoustic model follows CNOSSOS-EU for surface sources with
 ISO 9613-2 propagation and a Doc 29-inspired aircraft NPD; formulas, constants
 and intentional simplifications are specified in `engine/noise-compute/SPEC.md`.
@@ -71,8 +72,8 @@ produces and the server reads.
 
 ```
 data/prepared/dem/             1°×1° DEM rasters, 30 m (shared across years)
-data/prepared/rasters/         building/forest/IMD rasters (shared)
-data/prepared/<year>/h3r4/     H3-res-4 arrow extracts
+data/prepared/rasters/         forest/IMD rasters (shared)
+data/prepared/<year>/h3r4/     H3-res-4 source + vector-obstacle Arrow extracts
 data/tiles/<year>/pmtiles/     built tile pyramids + manifest
 ```
 
@@ -90,4 +91,4 @@ a separate private repository.
 ## License & contact
 
 See `docs/about/credits.md` for data-source attribution (OSM, GLO-30, SRTM,
-Overture, WorldCover, IMD, ADS-B) and terms. hello@quietmap.org.
+Overture, WorldCover, IMD, ADS-B) and terms. info@quietmap.org.

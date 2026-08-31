@@ -437,7 +437,7 @@ mod tests {
         );
     }
 
-    /// The SPEC §3.5c hole, CLOSED on the tile path — and this test is the
+    /// The SPEC §4.7 increment-saturation hole, closed on the tile path — this test is the
     /// tripwire that was written to fail on the day it was.
     ///
     /// The same scene over HARD ground (the missing-IMD default of 100 ⇒ G = 0)
@@ -452,7 +452,7 @@ mod tests {
     /// COMPOSITE `max(A_ground, A_terrain + A_screen)` instead of an increment,
     /// so there is no channel to saturate and the boost survives: the box now
     /// screens 2.2 dB here. The popup lane still goes through the increment and
-    /// still has the hole — SPEC §3.5c stays open for it — which is why this
+    /// still has the hole documented in SPEC §4.7 — which is why this
     /// test pins the TILE number specifically.
     #[test]
     fn hard_ground_keeps_its_partial_screening() {
@@ -464,7 +464,7 @@ mod tests {
         assert!(
             loss > 0.2,
             "hard ground must keep the arc the box covers, got {loss:.2} dB \
-             (0.00 dB was the increment channel saturating — SPEC §3.5c)"
+             (0.00 dB was the increment channel saturating — SPEC §4.7)"
         );
         assert!(loss < 3.0, "…but still not the whole segment: {loss:.2} dB");
     }

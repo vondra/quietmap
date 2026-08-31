@@ -40,7 +40,7 @@ const MANIFEST_POLL_MS = 10 * 60 * 1000
  *  OWN build — a partial republish (e.g. road-only b3 over a b2 world) flips
  *  only that layer's URLs, and the untouched layers re-fetch straight from
  *  the browser's immutable cache. */
-/** One published zoom-tier pack (city-z13 plan §D): its R4 coverage plus the
+/** One published zoom-tier pack: its R4 coverage plus the
  *  layer tokens its archives serve. Packs are immutable; LATER packs own an
  *  R4 they share with an earlier one. */
 export interface TierPack {
@@ -157,7 +157,7 @@ export function tierTokenFor(
   return null
 }
 
-/** The ONE fetch-plan contract (city-z13 plan §D) shared by the tile layer,
+/** The ONE fetch-plan contract shared by the tile layer,
  *  the over-zoom composite and the hover readout: either a native archive
  *  URL, or the z12 parent URL plus which quadrant of it this tile magnifies. */
 export type TileFetchSpec =

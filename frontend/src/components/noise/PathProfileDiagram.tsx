@@ -53,14 +53,14 @@ export interface PathProfileDiagramProps {
   /** Engine-detected diffraction edge (single-edge model: at most the one
    * max-δ dominant edge). When undefined / empty no apex marker is drawn. */
   terrainEdges?: EdgePoint[]
-  /** The exact obstacle crossings the screening pass raced. */
-  obstacleEdges?: ObstacleEdge[]
+  /** The exact vector crossing that beat the terrain edge. */
+  obstacleEdge?: ObstacleEdge
 }
 
 export function PathProfileDiagram({
   trace,
   terrainEdges,
-  obstacleEdges,
+  obstacleEdge,
 }: PathProfileDiagramProps) {
   const n = trace.t.length
   const dist = Math.max(trace.dist_m, 1)
@@ -71,10 +71,7 @@ export function PathProfileDiagram({
       const elevs = trace.elevation_m
       // Fold, don't spread: elevation_m can be 10k+ samples at airport points,
       // and Math.max(...bigArray) overflows the call stack.
-      const maxBld = (obstacleEdges ?? []).reduce(
-        (m, e) => Math.max(m, Number(e.height_m) || 0),
-        0,
-      )
+      const maxBld = Number(obstacleEdge?.height_m) || 0
       let rawMin = trace.src_alt_m - maxBld
       let rawMax = Math.max(trace.src_alt_m, trace.rcv_alt_m)
       for (const v of elevs) {
@@ -103,7 +100,7 @@ export function PathProfileDiagram({
       }
 
       return { elevMin: eMin, elevMax: eMax, xOf, yOf, xAxisTicks: ticks }
-    }, [trace, dist, obstacleEdges])
+    }, [trace, dist, obstacleEdge])
 
   // Runs of consecutive segments sharing a ground-hardness bucket share
   // one polyline, so the dash pattern accumulates along the combined
@@ -153,11 +150,9 @@ export function PathProfileDiagram({
     return out
   }, [n])
 
-  // One rectangle per EXACT obstacle crossing, at its own t — not a bar chart
-  // of 30 m raster samples. Buildings are polygons now, so the diagram can show
-  // where the screening edge actually stands instead of which cells were lit.
+  // One rectangle for the exact obstacle crossing — not a raster sample.
   const buildingRects = useMemo(() => {
-    const rects: { x: number; y: number; w: number; h: number }[] = []
+    if (!obstacleEdge || obstacleEdge.height_m <= 0) return []
     const groundAt = (t: number) => {
       if (n === 0) return 0
       let lo = 0
@@ -167,17 +162,12 @@ export function PathProfileDiagram({
       const f = span > 0 ? (t - trace.t[lo]) / span : 0
       return trace.elevation_m[lo] + f * (trace.elevation_m[hi] - trace.elevation_m[lo])
     }
-    for (const e of obstacleEdges ?? []) {
-      const h = Number(e.height_m) || 0
-      if (h <= 0) continue
-      const base = groundAt(e.t)
-      const baseY = yOf(base)
-      const hPx = Math.max(baseY - yOf(base + h), MIN_BUILDING_PX)
-      const x = xOf(e.t)
-      rects.push({ x: x - MIN_BUILDING_W / 2, y: baseY - hPx, w: MIN_BUILDING_W, h: hPx })
-    }
-    return rects
-  }, [trace, n, xOf, yOf, obstacleEdges])
+    const base = groundAt(obstacleEdge.t)
+    const baseY = yOf(base)
+    const hPx = Math.max(baseY - yOf(base + obstacleEdge.height_m), MIN_BUILDING_PX)
+    const x = xOf(obstacleEdge.t)
+    return [{ x: x - MIN_BUILDING_W / 2, y: baseY - hPx, w: MIN_BUILDING_W, h: hPx }]
+  }, [trace, n, xOf, yOf, obstacleEdge])
 
   const svgRef = useRef<SVGSVGElement | null>(null)
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
@@ -272,9 +262,7 @@ export function PathProfileDiagram({
       w: 'w-[8ch]',
       label: 'Building',
       tabular: true,
-      value: obstacleEdges?.length
-        ? `${obstacleEdges.map((e) => (Number(e.height_m) || 0).toFixed(0)).join(', ')} m`
-        : '—',
+      value: obstacleEdge ? `${obstacleEdge.height_m.toFixed(0)} m` : '—',
     },
     {
       w: 'w-[6ch]',

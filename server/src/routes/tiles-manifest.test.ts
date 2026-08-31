@@ -1,5 +1,5 @@
-// Contract test for GET /api/tiles-manifest — Track 2 (docs/dev/checkout-restructure-plan.md):
-// the route now serves THIS environment's per-env pin (current.{TILE_ENV}.json), selected via
+// Contract test for GET /api/tiles-manifest: the route serves THIS environment's per-env pin
+// (current.{TILE_ENV}.json), selected via
 // the shared tile-manifest-reader.ts, instead of the packer's shared current.json merge head.
 // Run: cd server && npx tsx --test src/routes/tiles-manifest.test.ts
 

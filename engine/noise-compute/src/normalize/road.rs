@@ -36,8 +36,8 @@ pub struct RawRoadInput {
     pub tunnel: bool,
     pub access: u8,
     pub junction: u8,
-    /// Building-raster flag for the LEGAL speed default of untagged roads
-    /// (defaults.rs: 0 unknown → legacy table, 1 rural, 2 urban).
+    /// Vector-footprint density for the legal speed default of untagged roads:
+    /// 0 unknown, 1 rural, 2 urban.
     pub built_up: u8,
 }
 
@@ -131,10 +131,10 @@ pub fn normalize_road_with_cache(
     // The aadt_light > 0 guard is load-bearing: a measured-tier stamp with
     // zero light traffic would otherwise fall through to CLASS DEFAULTS
     // downstream (has_enriched_traffic is false) — full mainline noise on an
-    // empty closed road. Known residual (shared with access_factor's bypass):
-    // `measurement='derived'` registry ids mix counts and estimates under one
-    // measured-tier id, so a derived ESTIMATE can pass this gate — the R1b
-    // registry batch splits those ids (docs/dev/roads-traffic-model-audit.md §8).
+    // empty closed road. `is_measured` currently describes the provenience
+    // tier, not the row's counted-vs-derived method: mixed high-priority
+    // datasets may therefore pass this exception. Splitting that distinction
+    // belongs in the registry/writer contract, not in this engine gate.
     // Tunnels stay dropped unconditionally (the emission is underground).
     if input.tunnel
         || (matches!(input.access, 2 | 4)
@@ -179,10 +179,10 @@ pub fn normalize_road_with_cache(
         // between the OSM tag (real law) and the legal/class default.
         input.speed_taper as f64
     } else {
-        // Untagged: the country's LEGAL implicit limit (urban/rural via the built_up
-        // raster flag) beats the one-global-number table — a tagged/untagged boundary
-        // mid-road painted a ±5-6 dB colour seam (Wetherby, task #15). Falls back to
-        // the legacy table when the country or the built-up flag is unknown.
+        // Untagged: the country's legal implicit limit, selected by vector-footprint
+        // density, beats the global class default. A tagged/untagged boundary
+        // mid-road otherwise painted a ±5–6 dB colour seam (Wetherby, task #15).
+        // Unknown country or density uses the class default.
         resolve_speed_default(input.road_class, admin, input.built_up)
             .unwrap_or_else(|| default_road_speed(class_idx))
     };

@@ -86,12 +86,12 @@
 //! plane for the path S → R is calculated, and Aground is calculated with no
 //! diffraction*" versus two split planes with
 //! `Adif = Δdif(S,R) + Δground(S,O) + Δground(O,R)` (2.5.30) — a switch this
-//! engine does not implement (SPEC §3.3 keeps
+//! engine does not implement (SPEC §4.10 keeps
 //! `max(A_ground, A_terrain + A_screen)`). It is bounded, it sits ONLY on the
 //! sight line — a shadow boundary, not an obstacle-height contour — and
 //! closing it means implementing the Δground split, not another gate. Pinned
-//! by `the_sight_line_step_is_the_standards_own_and_bounded`; SPEC §3.5 carries
-//! it as the open item.
+//! by `the_sight_line_step_is_the_standards_own_and_bounded`; closing it means
+//! changing the shared received-level contract.
 
 use crate::constants::*;
 use crate::types::NUM_BANDS;
@@ -241,7 +241,7 @@ pub(super) fn compute_single_edge(
 
 /// δ + Rayleigh δ\* over an EXPLICIT edge point `(t_e, top_e)` that need not
 /// coincide with any profile sample — the vector-obstacle candidate path
-/// (geodata-v2 1.3). Same geometry as [`compute_single_edge`]. Per SPEC §3.5b
+/// (geodata-v2 1.3). Same geometry as [`compute_single_edge`]. Per SPEC §4.7
 /// (and the sample path at [`compute_delta_star`]), the diffraction point D —
 /// the bare ground LERPed at `t_e` — belongs to BOTH §2.5.6(c) mean-ground
 /// fits: source side = samples with `t < t_e` plus D, receiver side = D plus
@@ -468,7 +468,7 @@ pub(crate) fn fit_mean_ground_plane(
 ///   `(40/λ)·C″·δ = −2` ⟺ δ = −λ/20 and is not computed below it. The steeper
 ///   40/λ slope IS the standard's negative branch; without it an edge a
 ///   millimetre below the sight line drops from 4.8 dB to nothing, the hard
-///   shadow edge SPEC §3.5 carried as a known gap (fix-pack Fix 2).
+///   shadow edge remains a known gap.
 ///
 /// The Rayleigh criterion of 2021/1226 point (9)(c), per band: **is this edge a
 /// diffractor at all?** Two things pin where it may be asked.

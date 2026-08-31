@@ -1,8 +1,6 @@
 /**
  * Enrich IL railways.arrow with Israeli MoT unified GTFS — migrated onto the
- * shared graph-walk driver (2026-07-16 Phase 4 rewrite, plan
- * `pro-e-sd-zaj-m-wobbly-liskov`, following `enrich-railway-dk.ts`'s
- * per-country pattern).
+ * shared graph-walk driver following `enrich-railway-dk.ts`'s per-country pattern.
  *
  * Source: Israeli Ministry of Transport publishes a single unified GTFS containing
  * ALL Israeli public transport (Israel Railways, Tel Aviv LRT Red Line, Jerusalem

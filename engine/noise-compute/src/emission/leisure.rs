@@ -8,12 +8,11 @@
 //! (~1.5 m, voices/rackets, not roof plant) with no floors. Per-sport spectrum +
 //! day/evening/night pattern below.
 //!
-//! Calibration is the plan §A/§C anchors (dual /gg-reviewed; per-sport source
-//! cited inline). All `lw` are HONEST radiated dB(A) (`a_weighted_total(bands)
-//! == lw`) and bake the duty cycle / seasonality into a single annualized level
-//! (the engine has no month axis — plan §C "Seasonality handling").
+//! Per-sport calibration sources are cited inline. All `lw` are radiated dB(A)
+//! (`a_weighted_total(bands) == lw`) and bake the duty cycle / seasonality into a single annualized level
+//! because the engine has no month axis.
 //! PROP-MEAS = no clean measured value found; a conservative placeholder ships
-//! flagged, queued for measurement (plan §D) — never presented as measured.
+//! flagged and is never presented as measured.
 
 use crate::types::NUM_BANDS;
 
@@ -31,7 +30,7 @@ pub const POOL: u8 = 5;
 /// `leisure=outdoor_seating`) — patron voices, area-scaled like everything else.
 pub const OUTDOOR_SEATING: u8 = 6;
 /// Stadium / large sports ground — pitch + crowd + PA; rare match-day events,
-/// kept at pitch level (do NOT over-weight, plan §A "Stadium").
+/// kept at pitch level because rare match days must not be over-weighted.
 pub const STADIUM: u8 = 7;
 
 /// Map an OSM `sport=*` value (lower-cased) to a leisure class id. `leisure=*`

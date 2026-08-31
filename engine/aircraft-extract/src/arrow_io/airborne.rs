@@ -40,7 +40,7 @@ pub fn write_airborne(
     let mut bb_min_lo = Float32Builder::with_capacity(n);
     let mut bb_max_lo = Float32Builder::with_capacity(n);
     // Popup batch pruning: the per-event bbox doubles as the spatial-sort key
-    // (docs/dev/popup-batch-pruning.md); f32→f64 is exact, so the batch bbox
+    // f32→f64 is exact, so the batch bbox
     // bounds the f32 coordinates the reader tests against.
     let mut row_bboxes = Vec::with_capacity(n);
 
@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(cs.value(0), "TVS100P");
         assert_eq!(at.value(0), b"A320");
         // The current shape keeps only start/end terrain elevations; the
-        // removed q1/mid/q3 chord check is the SPEC §5 known gap.
+        // removed q1/mid/q3 chord check is the SPEC §6.1 known gap.
         let sub_list = batches[0]
             .column_by_name("sub_segments")
             .unwrap()

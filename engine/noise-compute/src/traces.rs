@@ -164,7 +164,7 @@ pub fn screening_trace(
 ) -> ScreeningTrace {
     ScreeningTrace {
         attenuation_bands: atten_bands,
-        obstacle: if obstacle.kind == "none" {
+        obstacle: if obstacle.edge.is_none() {
             None
         } else {
             Some(obstacle)
@@ -689,10 +689,7 @@ mod tests {
 
     #[test]
     fn screening_trace_shape() {
-        let obstacle = ScreeningObstacleTrace {
-            kind: "none",
-            ..Default::default()
-        };
+        let obstacle = ScreeningObstacleTrace::default();
         assert_bands_no_scalar(&screening_trace([0.0; NUM_BANDS], obstacle));
     }
 

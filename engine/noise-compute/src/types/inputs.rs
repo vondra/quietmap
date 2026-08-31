@@ -86,9 +86,9 @@ pub struct RoadSegment {
     pub road_ref: String, // OSM ref tag (D1, E55, I/35)
     pub bridge: bool,   // road on bridge/viaduct
     pub tunnel: bool,   // road in tunnel
-    pub access: u8, // 0=default, 1=private, 2=no, 3=destination, 4=motor_vehicle=no (legacy), 5=permissive, 6=customers, 7=agricultural, 8=forestry
+    pub access: u8, // 0=default, 1=private, 2=no, 3=destination, 4=motor_vehicle=no, 5=permissive, 6=customers, 7=agricultural, 8=forestry
     pub junction: u8, // 0=default, 1=roundabout
-    pub built_up: u8, // building-raster flag for untagged-speed legal defaults: 0=unknown, 1=rural, 2=urban
+    pub built_up: u8, // vector-footprint density for untagged-speed defaults: 0=unknown, 1=rural, 2=urban
     // Pre-computed by source-reader:
     pub dist_m: f64, // horizontal distance to receiver
     pub cp_lat: f64, // closest point on segment

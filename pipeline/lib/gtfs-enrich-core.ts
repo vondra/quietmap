@@ -20,8 +20,8 @@
  * services on the target date now yields zero trips instead of silently counting every
  * trip — see the BUG FIX comment on `computeActiveTripFamiliesForFeed` below.
  *
- * `dedupeStopsByLocation` + `buildTramExtraMatch` (2026-07-16 Phase 4 hoist from
- * `enrich-railway-europe.ts`, plan `pro-e-sd-zaj-m-wobbly-liskov` Phase 4 point 2):
+ * `dedupeStopsByLocation` + `buildTramExtraMatch`, hoisted from
+ * `enrich-railway-europe.ts`:
  * the tram/light-rail `nearestGridStop` join every national enricher wires in as
  * `enrichRailwaysByGraphWalk`'s `extraMatch` fallback arm — ONE implementation shared
  * by `enrich-railway-europe.ts` and every `enrich-railway-{cc}.ts`, never 17 copies.
@@ -498,7 +498,7 @@ export async function computeActiveTripFamiliesForFeed<F extends string>(
     // counted EVERY trip as running instead of none. Correct semantics: calendar data
     // present means the (possibly empty) active set is authoritative; only when there is
     // NO calendar data at all do we fall back to "count everything". Changes counts for
-    // broken feeds only — intended, see /gg review item 2 (plan pro-e-sd-zaj-m-wobbly-liskov).
+    // broken feeds only — intentional.
     if (calendarPresent && !activeServiceIds.has(r['service_id'])) continue
     tripFam.set(r['trip_id'], fam)
   }

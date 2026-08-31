@@ -1,7 +1,6 @@
 /**
  * Enrich AU railways.arrow with state-level Australian GTFS feeds — migrated
- * onto the shared graph-walk driver (2026-07-16 Phase 4 point 2 rewrite, plan
- * `pro-e-sd-zaj-m-wobbly-liskov`, following `enrich-railway-dk.ts`'s pattern).
+ * onto the shared graph-walk driver following `enrich-railway-dk.ts`'s pattern.
  *
  * Sources (3 feeds, geographically disjoint by state — no cross-feed
  * heavy-rail overlap to narrow, unlike europe's fr-idf):

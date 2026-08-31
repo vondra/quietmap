@@ -1,8 +1,7 @@
 /**
  * Enrich ES railways.arrow with real train frequencies from 3 complementary
- * Spanish rail GTFS feeds — migrated onto the shared graph-walk driver
- * (2026-07-16 Phase 4 rewrite, plan `pro-e-sd-zaj-m-wobbly-liskov`, following
- * `enrich-railway-dk.ts`'s single-file multi-feed pattern).
+ * Spanish rail GTFS feeds — migrated onto the shared graph-walk driver following
+ * `enrich-railway-dk.ts`'s single-file multi-feed pattern.
  *
  * Feeds (all Spain-national/regional in scope — unlike
  * `enrich-railway-europe.ts`'s per-COUNTRY feeds, all three of these describe

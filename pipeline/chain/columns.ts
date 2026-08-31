@@ -262,8 +262,8 @@ export const COLUMN_PARENTS: Readonly<Record<string, Readonly<Record<string, Col
     width_m: EXTRACT_AIRPORT,
   },
   // Aircraft-lane files: produced by engine/aircraft-extract stages, NOT by this
-  // chain (docs/dev/aircraft-extract-pipeline.md; scripts/run-extraction.sh runs
-  // them after the OSM extract). Listed so the inventory can prove they are
+  // chain; scripts/run-extraction.sh runs them after the OSM extract. Listed so
+  // the inventory can prove they are
   // parented — orphan detection must cover every file a hex dir carries.
   'airborne.arrow': {
     flight_id: AIRBORNE,

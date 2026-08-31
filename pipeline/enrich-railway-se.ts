@@ -1,8 +1,7 @@
 /**
  * Enrich SE railways.arrow with GTFS Sverige 2 unified train/tram/metro
- * frequencies — migrated onto the shared graph-walk driver (2026-07-16 Phase 4
- * point 2 rewrite, plan `pro-e-sd-zaj-m-wobbly-liskov`, following
- * `enrich-railway-dk.ts`'s single-feed pattern).
+ * frequencies — migrated onto the shared graph-walk driver following
+ * `enrich-railway-dk.ts`'s single-feed pattern.
  *
  * Source: api.resrobot.se/gtfs/sweden.zip — Trafiklab/Samtrafiken aggregated
  * national feed containing ALL Swedish public transport: SJ, SL Stockholm

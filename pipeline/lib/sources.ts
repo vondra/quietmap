@@ -26,8 +26,7 @@ import { DATASETS, type Dataset, type Provenance } from './enrichment-datasets.j
  * DECLARE its tier; it is re-exported here, the historical import site.)
  *
  * - `city-measured` — per-segment match against a municipal traffic counter
- *   inside a city polygon; denser/newer than the national census it overrides
- *   (city-enrichment-plan §2.3).
+ *   inside a city polygon; denser/newer than the national census it overrides.
  *   - `national-measured`     — per-segment spatial or ref match against a
  *                               national authority's published measurement
  *                               (ŘSD, BASt, MITMA, DNIT, FHWA HPMS, DOH, …).
@@ -62,8 +61,8 @@ export type { Provenance }
  */
 export const PROVENANCE_RANK: Record<Provenance, number> = {
   // Municipal counters beat national census INSIDE the city polygon: they
-  // cover the same streets plus locals with denser, newer measurements
-  // (city-enrichment-plan §2.3; rank guarded by polygon + coverage gates).
+  // cover the same streets plus locals with denser, newer measurements;
+  // polygon and coverage gates protect the rank.
   'city-measured': 7,
   'national-measured': 6,
   'continental-measured': 5,
@@ -101,7 +100,7 @@ export interface Source {
  * ladder decides.
  *
  * Mapping:
- *   priority 90 → city-measured (municipal counters; city-enrichment-plan)
+ *   priority 90 → city-measured (municipal counters)
  *   priority 80 → national-measured, EXCEPT measurement:'proxy' → national-proxy
  *                 (a national-scale estimate, not a real count — see Provenance)
  *   priority 70 → continental-measured

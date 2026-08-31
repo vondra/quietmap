@@ -431,7 +431,7 @@ pub fn prepare_leisure_points(input: RawLeisureInput<'_>) -> Vec<PreparedPoint> 
             area_m2: area,
             grid_threshold_m2: INDUSTRIAL_AREA_THRESHOLD_M2,
             cell_m: INDUSTRIAL_AREA_CELL_M,
-            source_height_m: crate::constants::SOURCE_HEIGHT_INDUSTRIAL_OPEN as f32,
+            source_height_m: crate::constants::SOURCE_HEIGHT_LEISURE as f32,
             reach: PointReach::Fixed(max_radius_m),
             floors: 0,
             hub_height_m: None,

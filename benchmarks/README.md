@@ -3,8 +3,8 @@
 Tracked fixtures for popup, world, and network-snapshot validation.
 
 - **`popup-points.json`** — 115 curated points (Dobříš and LKPR/Ruzyně).
-- **`world-points.json`** — external-validation points anchored to
-  measured/published reality.
+- **`world-points.json`** — external-validation points anchored to measured or
+  published reality; the runner derives the current count from this file.
 - **`validation/approved-snapshots.v1.json`** — allowlist of reviewed
   network snapshots that may enter validation reports or product views.
 - **`validation/factor-tags.json`** — tag vocabulary for world-points and

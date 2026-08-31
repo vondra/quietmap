@@ -373,9 +373,8 @@ pub fn run(
     class_weights: &crate::emission::aircraft::ClassWeights,
     rasters: &dyn RasterSampler,
     barriers: &[Barrier],
-    // Vector obstacles (geodata-v2): ground-ops screening takes the same
-    // exact building crossings as every other popup surface kernel; `None`
-    // keeps the raster path byte-identical.
+    // Ground-ops screening uses the same exact vector-obstacle crossings as
+    // every other popup surface kernel.
     obstacles: &crate::propagation::obstacle_index::ObstacleSet,
     osm_ref_lookup: &HashMap<u64, String>,
     airport_summary: Option<&AirportSummaryLookup>,
@@ -444,7 +443,7 @@ pub fn run(
         // A_refl reuses the per-receiver value sampled once above —
         // CNOSSOS-EU §2.5 multi-bounce approximation, the same
         // sampler-backed 0/1.5/3 dB receiver value every surface kernel
-        // applies (SPEC §3.8; raster probe, or exact footprints under
+        // applies (SPEC §4.9; raster probe, or exact footprints under
         // the 1.4b wrapper).
 
         // Per-microsegment path effects, cached. Apply at ALL

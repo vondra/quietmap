@@ -160,7 +160,7 @@ export function ContributorDetail({ c }: { c: Contributor }) {
         '',
         'ISO 9613-2 §7.3 + C₃ frequency term',
         'Copernicus GLO-30 DEM (30 m raster).',
-        'Unified bilateral sampler — SPEC §3.5a.',
+        'Shared bilateral terrain profile — SPEC §4.2.',
       ], 18, 14)
     : txtTable([
         'No terrain obstruction.',
@@ -174,12 +174,13 @@ export function ContributorDetail({ c }: { c: Contributor }) {
   const screeningText = (() => {
     const rows: Array<[string, string] | { sep: true } | string> = []
     rows.push('At closest segment:')
-    if (c.screening.obstacle && c.screening.obstacle.kind !== 'none') {
+    if (c.screening.obstacle) {
+      const edge = c.screening.obstacle.edge
       rows.push(
-        ['  Obstacle kind', c.screening.obstacle.kind],
-        ['  Height', `${c.screening.obstacle.height_m.toFixed(1)} m`],
-        ['  Position', `${(c.screening.obstacle.t * 100).toFixed(0)}% of path`],
-        ['  Above LoS', `${c.screening.obstacle.screen_h_m.toFixed(1)} m`],
+        ['  Obstacle kind', edge.kind],
+        ['  Height', `${edge.height_m.toFixed(1)} m`],
+        ['  Position', `${(edge.t * 100).toFixed(0)}% of path`],
+        ['  Above LoS', `${edge.screen_h_m.toFixed(1)} m`],
         ['  Fresnel δ', `${c.screening.obstacle.delta_m.toFixed(2)} m`],
         ['  Path cadence', `${c.screening.obstacle.step_m.toFixed(0)} m`],
       )
@@ -200,7 +201,7 @@ export function ContributorDetail({ c }: { c: Contributor }) {
       }
     }
     rows.push({ sep: true }, ['A-weighted ΔL_A', `${fmt(c.screening_impact_db)} dB`])
-    rows.push('', 'Overture 30 m building raster,', 'sampled via unified bilateral path', 'profile (SPEC §3.5a).')
+    rows.push('', 'Exact Overture building footprints', 'intersected with the source path', '(SPEC §4.7).')
     return txtTable(rows, 22, 14)
   })()
 
@@ -214,7 +215,7 @@ export function ContributorDetail({ c }: { c: Contributor }) {
         'WorldCover 30 m raster, sampled via',
         'unified bilateral path profile; forest',
         'runs <10 m discarded (ISO 9613-2 §A.2.2,',
-        'capped 200 m). SPEC §3.5a.',
+        'capped 200 m). SPEC §4.8.',
       ], 18, 14)
     : "Vegetation skipped\n(segment beyond model's applicable distance)."
 

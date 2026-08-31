@@ -73,7 +73,7 @@ impl From<ScatterStats> for PointScatterStats {
 /// `source_loader_barrier::BarrierData::for_tile` (sorted ascending,
 /// conservative `dist_m` — see the `types::Barrier` contract). Barriers are
 /// real obstacles even inside the source's exclusion radius (the radius only
-/// suppresses the footprint's own raster buildings).
+/// suppresses the source's own vector footprint).
 pub fn scatter_tile(
     tile: &FusedTileZ13,
     points: &[PointRow],

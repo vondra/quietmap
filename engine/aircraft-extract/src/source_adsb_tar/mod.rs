@@ -52,8 +52,7 @@ impl ClassWindowFilter {
             return false;
         }
         // GSE (GND) routes by vehicle kind, not by what `profile_idx`
-        // makes of the "GND" string — it belongs to the airline pass
-        // (plan §3).
+        // makes of the "GND" string — it belongs to the airline pass.
         let is_gse = trimmed.eq_ignore_ascii_case("GND");
         let ga_sampled =
             !is_gse && profile::is_ga_sampled_profile(profile::profile_idx(raw_typecode));

@@ -688,7 +688,7 @@ const railContinuity = (() => {
   }
 
   // Missing/empty sidecar is NOT a violation and NOT an IO error — it means
-  // walk-based sources (plan Phase 1) have not run in this tree yet. R15/R16
+  // walk-based sources have not run in this tree yet. R15/R16
   // still run, just with the junction-only exemption (a real stop boundary
   // without a sidecar entry will over-fire until the sidecar lands).
   const stopsIndex = loadRailStopsIndex(H3R4_DIR)

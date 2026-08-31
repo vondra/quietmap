@@ -92,15 +92,13 @@ fn stage_1_one_flight(flight: &Flight, rasters: &RealRasters, date_id: i16) -> V
     let mut elev_m: Vec<f32> = Vec::with_capacity(points.len());
     // Caller-threaded DEM cache across the per-point sweep. One flight
     // typically stays in 1-2 DEM tiles (1° × 1°), so >99 % of lookups
-    // hit the cache and skip the per-tile mutex + global use_counter
-    // atomic. Plan: `.claude/plans/stage1-quickwins.md` lever #1.
+    // hit the cache and skip the per-tile mutex + global use_counter atomic.
     let mut dem_key = (i32::MIN, i32::MIN);
     let mut dem_tile: Option<std::sync::Arc<raster_reader::RawTile>> = None;
     for p in &points {
         // NN DEM lookup — Stage 1 only ever consumes elevation through
         // hard AGL gates (HARD_AGL_FLOOR_M = -300, 7 620 m phase seed,
-        // etc.) with 15-30 m slack. Bilinear blend is acoustic-grade
-        // overkill here. Plan: `.claude/plans/stage1-nn-dem.md`.
+        // etc.) with 15-30 m slack. Bilinear blend is unnecessary here.
         let elev = rasters.elevation_nearest_cached(
             p.lat as f64,
             p.lon as f64,

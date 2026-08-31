@@ -1,7 +1,5 @@
 //! `screening_fixture` — synthetic validation harness for the CNOSSOS
-//! screening fix-pack (`0db-private/docs/dev/cnossos-screening-fixpack.md`,
-//! §"DECISION 2026-08-03" / §"Validation protocol"; the shipped TILE line
-//! model is SPEC §3.5e).
+//! screening behavior; the shipped tile line model is specified in §4.7.
 //!
 //! It answers ONE question with numbers instead of eyeballed tiles: how much
 //! does a ONE-RAY-PER-SEGMENT screening evaluation err behind a small
@@ -41,7 +39,7 @@
 //! 6 m behind the near block row; every other row is ≤0.41 dB. That is the
 //! noise floor the G/H verdicts have to clear, and they clear it by 5×.
 //!
-//! `v4` — the CUDA lane's CURRENT §3.5e rule, ported to CPU from
+//! `v4` — the CUDA lane's current line-screening rule (SPEC §4.7), ported to CPU from
 //! `engine/noise-gpu/kernels/scatter.cu`: five equal angular buckets, one full
 //! path ray at each centre, and the kernel's own `arc_screen_bands` mirror only
 //! for buckets wider than 3°. This lets the same 33-point reference judge the
@@ -1150,7 +1148,7 @@ impl Probe<'_> {
     }
 }
 
-// ── v4: the CURRENT CUDA §3.5e line rule, ported to CPU ────────────────────
+// ── v4: the current CUDA line-screening rule, ported to CPU ───────────────
 //
 // Authority: `engine/noise-gpu/kernels/scatter.cu`, branch (1) of
 // `line_source`: five equal angular buckets and the bucket-width 3° gate,
@@ -1188,7 +1186,7 @@ const GPU_ARC_QUADRATURE_MIN_RAD: f64 = 0.005;
 /// Characteristic-point ownership tolerance at interval boundaries.
 const GPU_ARC_CP_EPS: f64 = 1e-9;
 /// Maximum rule-level Lden difference between the independent CUDA mirror and
-/// the shipped CPU §3.5e arm. One fifth of an HM3 byte: a port transcription
+/// the shipped CPU line-screening arm. One fifth of an HM3 byte: a port transcription
 /// must agree below the product's 0.5 dB storage quantum on every probe.
 const GPU_PORT_PARITY_MAX_DB: f64 = 0.1;
 /// `ARC_FUSE_HEIGHT_TOL_M` (scatter.cu) = `arc_screening::ARC_FUSE_HEIGHT_TOL_M`
@@ -2539,7 +2537,7 @@ fn main() {
         seg_arc_bounds().min_span_rad
     );
     println!(
-        "# v4 = current noise-gpu kernels/scatter.cu §3.5e port: {GPU_SEG_SAMPLES} angular \
+        "# v4 = current noise-gpu kernels/scatter.cu SPEC §4.7 port: {GPU_SEG_SAMPLES} angular \
          buckets, per-bucket min_span {GPU_SEG_ARC_MIN_SPAN_RAD} rad, fuse tol \
          {GPU_ARC_FUSE_HEIGHT_TOL_M} m, interval resolution {GPU_ARC_ESCALATE_SPAN} rad \
          x<={GPU_ARC_ESCALATE_MAX_PARTS}, max merged {GPU_ARC_MAX_MERGED}"
@@ -2662,8 +2660,8 @@ fn main() {
     // gated. Both are fixed here: the limits are versioned next to the scenes,
     // and a breach exits non-zero.
     //
-    // The limits are the OWNER's line (night plan §4b: anything over 1.0 dB is a
-    // hard fail, 0.5 dB is the target), NOT "measured v3 plus headroom". Two
+    // The limits are the owner's line: anything over 1.0 dB is a hard fail and
+    // 0.5 dB is the target, not "measured v3 plus headroom". Two
     // corrections to the scratch script they came from: scene I carried 1.25,
     // which is exactly the measured-plus-headroom the ruling forbids — it is
     // 1.00 here and scene I therefore FAILS at 1.01 dB, which is the truth and

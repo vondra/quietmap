@@ -1,8 +1,8 @@
 //! Enrichment status — THE entry point answering "what does country X have and
 //! where is it weak" per layer (roads / railways): provenance-tier shares per
 //! class band / rail family, top sources by rows, speed + timetable coverage,
-//! and an actionable GAPS list (src=0 concentrations, undeclared registry
-//! fields, next timetable-acquisition step). Read-only over the country's
+//! and an actionable GAPS list (src=0 concentrations and undeclared registry
+//! fields). Read-only over the country's
 //! h3r4 arrows; the hex set comes from prepared/h3r4-admin.bin (the engine's
 //! own receiver-country approximation, so border hexes carry some neighbour
 //! rows). Powers owner questions and contributor onboarding walkthroughs.
@@ -31,10 +31,6 @@ import { DATA_YEAR as YEAR } from './lib/data-year.js'
 import { collectRailEndpointRows, loadRailStopsIndex, RAIL_STOPS_UNAVAILABLE_WARNING } from './lib/rail-endpoint-rows.js'
 import { findRailFlowJumps, findRailContinuityGaps } from './lib/rail-graph-metrics.js'
 import { makeOwnershipGate, hasCountryPolygon } from './lib/country-polygon.js'
-
-// Optional research artifacts — their sections appear only when the files exist.
-const DISCONTINUITY_REPORT = '/tmp/quietmap-v4/disc-world-merged.json'
-const RAIL_TIMETABLE_MATRIX = '/tmp/quietmap-v4/rail-timetable-sources.md'
 
 // ── Provenance tiers ──
 // Tier index 0 none · 1 baseline (roads: R7 taper 9862, rail: timetable-silent
@@ -194,7 +190,7 @@ function printBlock(indent: string, label: string, lines: string[]): void {
 
 // ── Report sections ──
 
-function printRoads(agg: RoadsAgg, disc: Record<string, number> | null): void {
+function printRoads(agg: RoadsAgg): void {
   console.log(`\nROADS  ${fmtInt(agg.majors.segs + agg.locals.segs)} seg · ${kmOf(agg.majors.meters + agg.locals.meters)} km`)
   for (const [label, b] of [['majors 0-4+links', agg.majors], ['locals 5-9', agg.locals]] as const) {
     console.log(`  ${label.padEnd(16)}  ${fmtInt(b.segs)} seg · ${kmOf(b.meters)} km`)
@@ -203,10 +199,6 @@ function printRoads(agg: RoadsAgg, disc: Record<string, number> | null): void {
     console.log(`    speed       tagged ${pct(b.speedTagged, b.segs).padStart(6)} · taper ${pct(b.speedTaper, b.segs).padStart(6)} · default ${pct(dflt, b.segs).padStart(6)}`)
     const top = topSourceRows(b.srcRows)
     printBlock('    ', 'sources  ', top.length ? top.map((t) => sourceLine(t.id, t.rows, b.segs)) : ['every row src=0'])
-  }
-  if (disc) {
-    const kinds = Object.entries(disc).filter(([k]) => k !== 'roads').sort((a, b) => b[1] - a[1])
-    console.log(`  discontinuities   ${fmtInt(disc['roads'] ?? 0)} boundaries · ${kinds.map(([k, v]) => `${k} ${fmtInt(v)}`).join(' · ')}`)
   }
 }
 
@@ -357,7 +349,7 @@ const railContinuityBandJson = (b: RailContinuityBand) => ({
   jump_endpoints: b.jumpEndpoints,
 })
 
-function printGaps(roads: RoadsAgg | null, rail: RailAgg | null, undeclared: string[], acquisition: string | null): void {
+function printGaps(roads: RoadsAgg | null, rail: RailAgg | null, undeclared: string[]): void {
   console.log('\nGAPS')
   if (roads) {
     const worst: Array<{ ci: number; rows: number; src0: number }> = []
@@ -376,10 +368,6 @@ function printGaps(roads: RoadsAgg | null, rail: RailAgg | null, undeclared: str
     console.log(`  rail src=0    ${parts.join(' · ')} seg`)
   }
   printBlock('  ', 'undeclared    ', undeclared.length ? undeclared : ['none — every country source declares roadCoverage/railFamilies'])
-  if (rail) {
-    if (acquisition) console.log(`  next acquisition  ${acquisition}`)
-    else console.log(`  next acquisition  ${RAIL_TIMETABLE_MATRIX} not present — run the rail-timetable research to fill this`)
-  }
 }
 
 /** Registry entries lacking the declaration the invariant scanner keys on:
@@ -402,17 +390,6 @@ function undeclaredSourceLines(roads: RoadsAgg | null, rail: RailAgg | null, ccP
   if (roads) check('roads', (id) => roads.majors.srcRows[id] + roads.locals.srcRows[id])
   if (rail) check('railways', (id) => rail.srcRows[id])
   return out
-}
-
-/** The country's row in the timetable acquisition matrix
- *  (| # | CC | Best source | Type | Format | License | Operators | Freight | Cadence | Verdict |). */
-function acquisitionStep(country: string): string | null {
-  if (!existsSync(RAIL_TIMETABLE_MATRIX)) return null
-  const row = readFileSync(RAIL_TIMETABLE_MATRIX, 'utf8').split('\n')
-    .find((l) => new RegExp(`^\\|\\s*\\d+\\s*\\|\\s*${country}\\s*\\|`).test(l))
-  if (!row) return `${country} has no row in the acquisition matrix (${RAIL_TIMETABLE_MATRIX})`
-  const c = row.split('|').map((x) => x.trim())
-  return `${c[3]} · ${c[5]} · operators ${c[7]} · freight ${c[8]} → verdict ${c[10]}`
 }
 
 // ── JSON mirror ──
@@ -469,23 +446,19 @@ function main(): void {
     if (rail && existsSync(railPath)) scanRailwaysHex(railPath, rail)
   }
 
-  const disc = roads && existsSync(DISCONTINUITY_REPORT)
-    ? ((JSON.parse(readFileSync(DISCONTINUITY_REPORT, 'utf8')) as { byCountry?: Record<string, Record<string, number>> }).byCountry?.[country] ?? null)
-    : null
   const ccPrefix = country.toLowerCase() + '-'
   const railRegistry = rail
     ? DATASETS.filter((d) => d.layer === 'railways' && (d.key.startsWith(ccPrefix) || rail.srcRows[d.id] > 0))
         .sort((a, b) => a.id - b.id)
     : []
   const undeclared = undeclaredSourceLines(roads, rail, ccPrefix)
-  const acquisition = rail ? acquisitionStep(country) : null
   const railContinuity = rail ? computeRailContinuity(h3r4Dir, hexes, country) : null
 
   console.log(`ENRICHMENT STATUS  ${country} · year ${YEAR} · ${hexes.length} hexes`)
-  if (roads) printRoads(roads, disc)
+  if (roads) printRoads(roads)
   if (rail) printRailways(rail, railRegistry)
   if (railContinuity) printRailContinuity(railContinuity)
-  printGaps(roads, rail, undeclared, acquisition)
+  printGaps(roads, rail, undeclared)
   const elapsedS = (Date.now() - t0) / 1000
   console.log(`\nscan  roads ${roads ? roads.files : '—'} files · railways ${rail ? rail.files : '—'} files · ${elapsedS.toFixed(1)} s · ${h3r4Dir}`)
 
@@ -502,7 +475,6 @@ function main(): void {
         locals: roadBandJson(roads.locals),
         src0ByClass: [...roads.classRows].map((rows, ci) => ({ class: ROAD_CLASS_NAMES[ci] ?? `class ${ci}`, rows, src0: roads.classSrc0[ci] }))
           .filter((e) => e.rows > 0),
-        discontinuities: disc,
       },
       railways: rail && {
         segs: rail.segs,
@@ -531,7 +503,7 @@ function main(): void {
           branch: railContinuityBandJson(railContinuity.bands.branch),
         },
       },
-      gaps: { undeclared, nextAcquisition: rail ? acquisition : null },
+      gaps: { undeclared },
     }, null, 1))
     console.log(`json  ${jsonPath}`)
   }

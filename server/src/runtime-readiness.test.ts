@@ -24,7 +24,7 @@ import { createReadinessCheck } from './runtime-readiness.js'
 const REFERENCE_HEX = '841e309ffffffff'
 // This checkout's own env for the fixture — arbitrary but fixed, so every test that rewrites
 // the manifest writes to the SAME per-env pointer the readiness check under test also reads
-// (docs/dev/checkout-restructure-plan.md Track 2: current.{TILE_ENV}.json, not the shared
+// (current.{TILE_ENV}.json, not the shared
 // current.json merge head).
 const TEST_TILE_ENV = 'dev2'
 
@@ -1056,7 +1056,7 @@ test('readiness never opens PMTiles archive content (stat-only, always)', async 
   assert.deepEqual(result, { ready: true, failed: [], errors: {} })
 })
 
-// Track 2 (docs/dev/checkout-restructure-plan.md): readiness now gates on THIS deployment's
+// Readiness gates on THIS deployment's
 // own per-environment pin (current.{TILE_ENV}.json), selected via the shared
 // tile-manifest-reader.ts, rather than the packer's shared current.json merge head.
 
@@ -1122,7 +1122,7 @@ test('readiness reads THIS environment pin, never the legacy current.json, when 
   const fixture = await readinessFixture()
   t.after(async () => rm(fixture.root, { recursive: true, force: true }))
   // A stale/foreign legacy current.json sitting next to a valid per-env pin must be
-  // completely ignored — this is the exact drift Track 2 exists to prevent (prod must never
+  // completely ignored — production must never
   // read what dev's shared merge head happens to say).
   await writeFile(join(fixture.pmtilesDir, 'current.json'), 'not even valid JSON')
 

@@ -1,8 +1,7 @@
 /**
  * Enrich AE railways.arrow with Dubai RTA's unified GTFS — migrated onto the
- * shared graph-walk driver (2026-07-16 Phase 4 rewrite, plan
- * `pro-e-sd-zaj-m-wobbly-liskov`, following `enrich-railway-dk.ts`'s
- * single-national-file pattern).
+ * shared graph-walk driver, following `enrich-railway-dk.ts`'s
+ * single-national-file pattern.
  *
  * Dubai Roads & Transport Authority publishes ONE unified GTFS (7z archive)
  * via Dubai Pulse containing Metro (Red 1, Red 2, Green), Tram (T1), Water

@@ -9,7 +9,7 @@
 //! worker owns its R4's segments + accumulator, no global merge.
 //!
 //! Each sub-segment retains the start/end terrain elevations sampled in Stage 1.
-//! Intermediate chord terrain is not stored; see SPEC §5's post-K3 gating gap.
+//! Intermediate chord terrain is not stored; see SPEC §6.1's filtering contract.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -169,7 +169,7 @@ impl AirborneEventBuilder {
         self.total_length_m += seg.length_m;
         // Only Stage 1's start/end terrain elevations are stored. Runtime
         // consumers use them for stale-ground and Filter D checks; the removed
-        // q1/mid/q3 chord check remains the documented SPEC §5 gap.
+        // q1/mid/q3 chord check remains the documented SPEC §6.1 gap.
         self.sub_segments.push(AirborneSubSegment {
             start_lat: seg.start_lat,
             start_lon: seg.start_lon,

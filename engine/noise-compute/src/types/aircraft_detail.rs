@@ -54,8 +54,7 @@ pub struct AircraftAirborneDetail {
     /// populated from each cruise row's top-K `top_candidates`
     /// (K=`CRUISE_TOP_K`=50). Fids that rank outside the top-K cut
     /// in every R7 bucket they crossed are silently UNDERCOUNTED
-    /// here — same regression as band_stats (plan §4.4 +
-    /// `cruise-ground-top-n-v5.md` §9). At busy LKPR-style hubs the
+    /// here — the same regression as band_stats. At busy LKPR-style hubs the
     /// regression on this number is small (<5% per quick mental
     /// model: tail fids are quiet and rare); at quieter R7s the
     /// undercount approaches zero since per-bucket fid counts are

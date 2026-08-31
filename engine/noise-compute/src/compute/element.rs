@@ -10,6 +10,7 @@ pub const THETA_MAX_RAD: f64 = H0_V3_THETA_3_RAD;
 #[cfg(feature = "h0-production-selection")]
 pub const THETA_MAX_RAD: f64 =
     f64::from_bits(crate::h0_production_selection_record::H0_PRODUCTION_THETA_RADIANS_BITS);
+/// Legacy hinted generator's bounded refinement allowance; H0 admits no hints.
 pub const H_MAX: usize = 32;
 /// H0 node cap: ceil(pi/theta) + H_MAX(0) + floor(L_max/(theta R)) + 2.
 #[cfg(not(feature = "h0-production-selection"))]
@@ -17,10 +18,16 @@ pub const H0_NODE_CAP: usize = 66;
 #[cfg(feature = "h0-production-selection")]
 pub const H0_NODE_CAP: usize = crate::h0_production_selection_record::H0_PRODUCTION_NODE_CAP;
 const _: () = assert!(H0_NODE_CAP <= 128);
+/// Converts angular cell width to distance on atmospheric-loss bands, whose
+/// coefficients are expressed per kilometre.
 pub const R_ATM_BASE_M_PER_RAD: f64 = 1_000.0;
+/// Bands attenuated by more than 25 dB cannot control node placement.
 pub const A_LIVE_DB: f64 = 25.0;
+/// A 0.05 m road source plus half a 7 m two-lane carriageway.
 pub const ROAD_D_FLOOR_M: f64 = 3.55;
+/// A 0.5 m rail source plus half the standard 1.435 m gauge.
 pub const RAIL_D_FLOOR_M: f64 = 1.2175;
+/// Source loaders split longer road and rail rows before node generation.
 pub const LINE_MAX_LENGTH_M: f64 = 250.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

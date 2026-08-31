@@ -38,7 +38,7 @@
 //! keeps the cp verdict. Narrow vector-backed spans also keep a plain cp verdict
 //! they did not keep before. Restoring the old vector-backed bytes takes
 //! `QM_SEG_SAMPLES=1 QM_ARC_MIN_SPAN_DEG=0` together, which until 2026-08-19 was
-//! also the pairing the CPU-vs-GPU tile comparison pinned (SPEC §3.5d) — the
+//! also the pairing the CPU-vs-GPU tile comparison pinned (SPEC §4.7) — the
 //! kernel then had no quadrature and arc-screened every pair; it now paints this
 //! rule (5 buckets + the 3° gate, compiled in).
 //!
@@ -160,7 +160,7 @@ const DB_TO_ENERGY_EXP: f64 = std::f64::consts::LN_10 / 10.0;
 /// 3 km out has a 0.08 rad fan, one bucket of which is 0.017 rad, so it never
 /// asks, and pairs like that are what a tile's cost is made of. Re-confirmed on a
 /// later tree state that re-prices every short ray: +6.2 % / +1.3 % on the two
-/// tiles re-run. SPEC §3.5e carries the arms and the converged-reference accuracy.
+/// tiles re-run. SPEC §4.7 carries the production policy.
 /// Spelled `to_radians` and not `3·π/180` on purpose: the two differ by 1 ULP
 /// (`…bebd6` vs `…bebd5`), and `QM_ARC_MIN_SPAN_DEG=3` — the spelling the cost and
 /// accuracy above were MEASURED through — goes via `to_radians`. Same bits, same
@@ -208,7 +208,7 @@ pub struct SegSampleCost {
     /// Raster cadence samples those rays took.
     pub raster_samples: u64,
     /// Buckets that cleared [`SEG_ARC_MIN_SPAN_RAD`] and ran the nested arc
-    /// query (§3.5e) — `> 0` marks this pair ELIGIBLE in the gather-redesign
+    /// query (SPEC §4.7) — `> 0` marks this pair ELIGIBLE in the gather-redesign
     /// census ([`census`](super::census)).
     pub escalated: u64,
 }

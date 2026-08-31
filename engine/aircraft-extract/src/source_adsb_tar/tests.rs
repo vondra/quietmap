@@ -98,13 +98,13 @@ fn class_window_filter_complementarity() {
     let cases: &[(&str, Lands)] = &[
         ("B738", AirlinePass),   // jet
         ("AT72", AirlinePass),   // airline turboprop — PROP_DH8D stays 12-day
-        ("PC12", AirlinePass),   // GA turbine single → DH8D residual (plan §3)
+        ("PC12", AirlinePass),   // GA turbine single → DH8D residual
         ("GLF4", AirlinePass),   // bizjet shares FUSE_CRJ9 with regional jets
         ("C172", GaPass),        // GA piston
         ("WT9", GaPass),         // ultralight → PROP_C172 class
         ("R44", GaPass),         // helicopter
         ("GYRO", GaPass),        // rotorcraft special designator
-        ("GND", AirlinePass),    // GSE belongs to the airline pass (plan §3)
+        ("GND", AirlinePass),    // GSE belongs to the airline pass
         ("TWR", DroppedByBoth),  // control-tower transponder
         ("GLID", DroppedByBoth), // sailplane
         ("", AirlinePass),       // blank = FALLBACK, non-GA by design

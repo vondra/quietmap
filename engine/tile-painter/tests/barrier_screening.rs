@@ -23,7 +23,7 @@
 //!    raster sampled at ≥ cell-size cadence — so the BURN is rejected; the GPU
 //!    line kernel instead screens the same VECTOR slice behind `QM_GPU_BARRIERS`
 //!    (the `w2_gpu_vector_crossings_match_cpu_oracle` arm below pins its
-//!    crossings to the CPU oracle; divergence documented in SPEC §3.6 and
+//!    crossings to the CPU oracle; divergence documented in SPEC §4.7 and
 //!    gpu_surface.rs). The arm itself was deleted with the building raster on
 //!    2026-08-30: it burned into a channel that no longer exists, and reviving
 //!    the burn would mean reviving the raster the measurement rejected. The

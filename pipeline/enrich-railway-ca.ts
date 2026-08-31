@@ -1,8 +1,7 @@
 /**
  * Enrich CA railways.arrow with real train frequencies from Canadian GTFS feeds —
- * migrated onto the shared graph-walk driver (2026-07-16 Phase 4 rewrite, plan
- * `pro-e-sd-zaj-m-wobbly-liskov`, following `enrich-railway-dk.ts`'s single-feed
- * pattern, extended here for 8 city/national feeds: via-rail, go-transit,
+ * migrated onto the shared graph-walk driver following `enrich-railway-dk.ts`'s
+ * single-feed pattern, extended here for eight city/national feeds: via-rail, go-transit,
  * ttc-toronto, stm-montreal, translink-vancouver, oc-transpo, calgary-transit,
  * edmonton-ets.
  *

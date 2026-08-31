@@ -69,7 +69,7 @@ pub struct EdgePoint {
 /// Per-segment terrain diffraction trace (engine's `path_effects` output).
 /// Scalar summary lives on [`Contributor::terrain_impact_db`] as A-weighted ΔL_A.
 ///
-/// Single-edge model (SPEC §3.5, 2026-06-01 rewrite): the algorithm picks ONE
+/// Single-edge model (SPEC §4.6): the algorithm picks ONE
 /// edge — the candidate with the largest path-length difference δ — so
 /// `n_edges` is 0 or 1 and `edges` holds at most that dominant edge.
 #[derive(Debug, Clone, Serialize)]

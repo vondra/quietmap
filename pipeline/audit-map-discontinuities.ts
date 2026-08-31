@@ -210,7 +210,7 @@ async function main() {
   }
   console.log('\n=== top steps ===')
   for (const e of top.slice(0, 15)) {
-    console.log(`  ${e.db.toFixed(1)} dB ${e.kind.padEnd(14)} ${e.iso} https://dev1.quietmap.org/#lat=${e.lat}&lng=${e.lon}&z=15`)
+    console.log(`  ${e.db.toFixed(1)} dB ${e.kind.padEnd(14)} ${e.iso} #lat=${e.lat}&lng=${e.lon}&z=15`)
   }
 }
 

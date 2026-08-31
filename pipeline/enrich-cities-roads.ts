@@ -6,7 +6,7 @@
  * rerun-measured.sh` launches that glob CONCURRENTLY (xargs -P) and a city
  * driver racing national enrichers over the same hex arrows would fight the
  * per-hex lock — this driver runs as the runner's sequential Phase 3
- * instead (city-enrichment-plan §2.4, Gemini /gg CRITICAL).
+ * instead.
  *
  * Per city: adapter loads normalized per-street records (cached download) →
  * rows inside the municipal ADM2 polygon (`makeCityGate` — real boundary,

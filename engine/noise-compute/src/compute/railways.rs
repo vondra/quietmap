@@ -267,7 +267,7 @@ pub(crate) fn compute_railways(
         seg_variants: [PropagationVariants; 3],
         day_emission_energy: f64,
         ground_g: f64,
-        /// Tallest raster building on the cp path (group obstacle histogram).
+        /// Tallest vector obstacle on the characteristic-point path.
         seg_max_bh: f64,
         trace: Option<SegmentTrace>,
     }

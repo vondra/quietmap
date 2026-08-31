@@ -14,7 +14,7 @@
 // unlink+copy then dlopen same path does NOT re-run constructors, 60×; the
 // distinct-path variant is what exhausted TLS live in production). The size/mtime
 // parent-side size/mtime check keeps that copy current for the NEXT server
-// process without racing pool startup. Details: docs/dev/binary-rebuild.md.
+// process without racing pool startup.
 
 import { parentPort, workerData } from 'node:worker_threads'
 import { existsSync, statSync } from 'node:fs'

@@ -1,8 +1,7 @@
 /**
  * Enrich PL railways.arrow with train frequencies from Polish GTFS feeds —
- * migrated onto the shared graph-walk driver (2026-07-16 Phase 4 point 2
- * rewrite, plan `pro-e-sd-zaj-m-wobbly-liskov`, following
- * `enrich-railway-dk.ts`'s pattern extended to multiple feeds like
+ * migrated onto the shared graph-walk driver following `enrich-railway-dk.ts`'s
+ * pattern extended to multiple feeds like
  * `enrich-railway-europe.ts`).
  *
  * Sources:

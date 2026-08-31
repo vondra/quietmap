@@ -326,7 +326,7 @@ async function validateManifestQualificationClosure(
   }
 }
 
-/** Referential integrity of the zoom-tier index (city-z13 plan §D): a torn
+/** Referential integrity of the zoom-tier index: a torn
  *  `tiers` object must fail readiness, not silently mis-serve — the serving
  *  resolver decides authoritative silence from it. Keep in lockstep with the
  *  private ops copy (validate-manifest.mjs). */
@@ -486,8 +486,8 @@ export async function readValidatedPmtilesManifest(
   pmtilesDir: string,
   tileEnv?: string,
 ): Promise<PmtilesManifest> {
-  // Per-environment pin (docs/dev/checkout-restructure-plan.md Track 2): boot readiness and the
-  // route both gate on THIS deployment's pin, never the packer's shared merge head.
+  // Boot readiness and the route both gate on THIS deployment's pin, never the packer's
+  // shared merge head.
   const resolvedTileEnv = resolveTileEnv(tileEnv)
   const manifestPath = resolveManifestPath(pmtilesDir, resolvedTileEnv)
   const opened = await openManifestPinNoFollow(manifestPath)

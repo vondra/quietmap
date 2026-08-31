@@ -460,7 +460,7 @@ fn halltal_class_valley_screens_above_15_degrees() {
     );
 }
 
-/// Kytín guard (plan §6): a near low overflight (β ≈ 27°, lateral
+/// Kytín guard: a near low overflight (β ≈ 27°, lateral
 /// 100 m) in front of a steep hillside at ~600 m must stay
 /// UNSCREENED — the stored edge lies beyond the aircraft, so the
 /// r_edge ≤ lateral bucket rule rejects it. Bit-identical to None.
@@ -560,7 +560,7 @@ fn screening_is_branch_aware_cffk_vs_full() {
     );
 }
 
-/// Cruise-β geometry never screens (plan §1 structural exemption):
+/// Cruise-β geometry never screens:
 /// the cruise phase floor (AGL ≥ 7 200 m, slant ≤ 16 km) puts
 /// β ≥ 26.6°, above any terrain horizon outside cliff faces — so a
 /// strong-but-realistic 21.8° horizon must leave a cruise-floor pair

@@ -1,8 +1,7 @@
 /**
  * Enrich FI railways.arrow with multi-feed Finnish GTFS — migrated onto the
- * shared graph-walk driver (2026-07-16 Phase 4 rewrite, plan
- * `pro-e-sd-zaj-m-wobbly-liskov`, following `enrich-railway-dk.ts`'s
- * per-country pattern, extended for FI's 4-feed roster).
+ * shared graph-walk driver, following `enrich-railway-dk.ts`'s per-country
+ * pattern and extended for FI's four-feed roster.
  *
  * Sources: rata.digitraffic.fi (Fintraffic VR national rail),
  * infopalvelut.storage.hsldev.com (HSL Helsinki commuter + metro + tram),

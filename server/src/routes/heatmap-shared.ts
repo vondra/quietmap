@@ -34,7 +34,7 @@ export interface TileParams {
 }
 
 /**
- * Zoom-tier layer token `{base}-z{tier}-p{N}` (city-z13 plan §D): a tier pack's
+ * Zoom-tier layer token `{base}-z{tier}-p{N}`: a tier pack's
  * archive served as an ordinary layer whose only legal zoom is the tier's own.
  * Mirrors the Rust packer's `parse_tier_token` — keep the two in lockstep.
  */

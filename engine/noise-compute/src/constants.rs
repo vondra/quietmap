@@ -122,9 +122,8 @@ pub const DEFAULT_RECEIVER_HEIGHT: f64 = 4.0;
 pub const P_FAV: f64 = 0.5;
 
 /// Master switch for CNOSSOS long-term favourable/homogeneous mixing
-/// (2015/996 formulas (2.5.9), (2.5.24), (2.5.25)); see
-/// docs/dev/favourable-propagation-plan.md (0db-private). FLIPPED ON
-/// 2026-07-28 after the plan's gates passed (G3: 7 anchors moved toward
+/// (2015/996 formulas (2.5.9), (2.5.24), (2.5.25)). FLIPPED ON
+/// 2026-07-28 after the gates passed (G3: 7 anchors moved toward
 /// external truth, none regressed beyond pre-existing near-barrier
 /// overshoots; G6: r9950 gate pass, drift mean 0.004 dB). Flipping raises
 /// every terrain/building screened receiver, so any future change here
@@ -143,7 +142,7 @@ pub const SINGLE_DIFF_CAP: f64 = 20.0;
 /// Source heights [m].
 pub const SOURCE_HEIGHT_ROAD: f64 = 0.05; // CNOSSOS-EU §2.4.1
 pub const SOURCE_HEIGHT_RAIL: f64 = 0.5; // CNOSSOS-EU §2.7.1
-pub const SOURCE_HEIGHT_INDUSTRIAL_OPEN: f64 = 1.5;
+pub const SOURCE_HEIGHT_LEISURE: f64 = 1.5;
 
 /// Meters per degree of latitude (spherical approximation).
 pub const M_PER_DEG_LAT: f64 = 110_540.0;
@@ -162,13 +161,9 @@ pub const M_PER_DEG_LON_EQ: f64 = 111_320.0;
 pub fn m_per_deg_lon(lat_rad: f64) -> f64 {
     M_PER_DEG_LON_EQ * lat_rad.cos().max(0.01)
 }
-pub const SOURCE_HEIGHT_INDUSTRIAL_ENCLOSED: f64 = 4.0;
-
 /// Fallback building height (m) when a footprint has neither a mapped height
 /// nor a floor count — the last rung of the building height ladder
-/// (`height` → `floors × BUILDING_FLOOR_HEIGHT_M` → this). The shell
-/// rasterizer that used to mirror this value in a second place is gone with
-/// the building raster (2026-08-30), so this is now the ONLY definition.
+/// (`height` → `floors × BUILDING_FLOOR_HEIGHT_M` → this).
 /// 8 m ≈ 2–3 storeys at `BUILDING_FLOOR_HEIGHT_M`, the dominant residential
 /// building form, and matches the engine's long-standing emission fallback so
 /// screening and emission agree on unmapped buildings.

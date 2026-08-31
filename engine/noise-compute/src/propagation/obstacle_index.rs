@@ -1238,7 +1238,7 @@ pub fn enclosure_db(set: &ObstacleSet, lat: f64, lon: f64, radius_m: f64) -> f64
 /// via [`enclosure_db`], every other lookup delegates to the raster sampler
 /// unchanged. Wrapping at the sampler keeps ALL popup kernels (roads, rail,
 /// points, airport ground) on one reflection source with zero signature
-/// churn — SPEC §3.8 semantics on both paths.
+/// churn — SPEC §4.9 semantics on both paths.
 pub struct VectorReflectionSampler<'a> {
     pub inner: &'a dyn crate::types::RasterSampler,
     pub set: &'a ObstacleSet,

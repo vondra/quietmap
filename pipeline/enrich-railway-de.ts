@@ -1,8 +1,7 @@
 /**
  * Enrich DE railways.arrow with train frequencies from the gtfs.de national GTFS
  * (task #30.2 — data half of the EBA trackside-hot finding) — migrated onto
- * the shared graph-walk driver (2026-07-16 Phase 4 point 2 rewrite, plan
- * `pro-e-sd-zaj-m-wobbly-liskov`, following `enrich-railway-dk.ts`'s pattern).
+ * the shared graph-walk driver following `enrich-railway-dk.ts`'s pattern.
  *
  * Source: download.gtfs.de/germany/free/latest.zip — the gtfs.de "de_full"
  *   aggregate: DELFI NAP NeTEx dataset flattened to plain GTFS (feed_info:

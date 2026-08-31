@@ -412,9 +412,8 @@ impl TileStore {
     /// path-effects get a continuous terrain profile; Stage 1 + 2A in
     /// aircraft-extract use this entry point with [`Interp::Nearest`]
     /// to skip the bilinear blend (3-4× cheaper per lookup) on the
-    /// AGL-gate path, which only ever consumes elevation through
-    /// hard thresholds with 15-30 m slack — see
-    /// `.claude/plans/stage1-nn-dem.md` for the error model.
+    /// AGL-gate path, which only consumes elevation through hard thresholds
+    /// with 15-30 m slack.
     pub fn sample_with(&self, lat: f64, lon: f64, interp: Interp) -> f64 {
         let (lat_int, lon_int, frac_lat, frac_lon) = Self::to_tile_key(lat, lon);
         let tile = self

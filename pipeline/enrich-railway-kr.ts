@@ -77,8 +77,7 @@ async function main() {
       // could fake "no coverage" (the failure mode the gate exists for elsewhere).
       // Tuple-only retraction is the intended signature: nothing real can carry the
       // KORAIL source id + the exact OLD_FALLBACK tuple — every such row is a legacy
-      // class-default stamp (misjoin analysis /tmp/quietmap-v4/gtfs-rail-misjoin.md §3;
-      // no measured KR count was ever written, see header).
+      // class-default stamp; no measured KR count was ever written, see header.
       {
         sourceId: MY_SOURCE_ID,
         when: (row) => {

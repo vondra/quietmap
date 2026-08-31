@@ -9,7 +9,7 @@ use osmpbf::{DenseNode, Node};
 
 /// Keys that make a NODE a function POI for the finalize footprint join, or a
 /// standalone leisure-area node. Detection is value-aware (only noise-relevant
-/// values) to avoid keeping all 33.8 M amenity nodes (plan §B.2) — the class is
+/// values) to avoid keeping all 33.8 M amenity nodes — the class is
 /// resolved later from the spilled tags.
 fn node_settlement_kind<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> Option<FeatureType> {
     let mut amenity = None;

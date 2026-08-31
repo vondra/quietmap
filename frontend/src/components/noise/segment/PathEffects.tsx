@@ -1,6 +1,5 @@
 import type { SegmentTrace } from '../../../types/noise'
 import { HoverText } from '../../ui/info-tip'
-import { EDGE_SUBSCRIPTS } from '../shared'
 import { BAND_LABELS, Section, InlineTable, bandsTooltip, fmtDbSigned } from './display'
 
 export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
@@ -111,7 +110,7 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
         title={
           'A_refl — Urban reflection boost (ISO 9613-2 §7.5).\n\n' +
           'Per-receiver 0..3 dB boost from local building enclosure\n' +
-          '(3×3 raster around the receiver). Reflected energy adds to\n' +
+          '(nine exact-footprint probes around the receiver). Reflected energy adds to\n' +
           'the direct path — always positive, same scalar for every\n' +
           'segment at this receiver.'
         }
@@ -122,7 +121,7 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
         title={
           `baseline.reflection_boost_db = +${baseline.reflection_boost_db.toFixed(2)} dB (engine scalar).\n\n` +
           'Computed once per receiver from the local building_enclosure()\n' +
-          'raster probe (0 / 1.5 / 3 dB). Not a variant delta — the\n' +
+          'vector-footprint probe (0 / 1.5 / 3 dB). Not a variant delta — the\n' +
           'same value appears on every segment at this point.'
         }
       >
@@ -188,35 +187,26 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
     })(),
     (() => {
       const obs = screening.obstacle
-      const edgeCount = obs?.n_edges ?? 0
       const screenLabel = obs
-        ? edgeCount > 1
-          ? `${edgeCount} diffraction edges`
-          : `${obs.kind} ${obs.height_m.toFixed(1)} m`
+        ? `${obs.edge.kind} ${obs.edge.height_m.toFixed(1)} m`
         : isScalarOnly
           ? ''
           : 'none'
       const labelTooltip =
-        'A_bar — Building / barrier screening component (SPEC §3.5b).\n\n' +
+        'A_bar — Building / barrier screening component (SPEC §4.7).\n\n' +
         'Engine runs ONE combined diffraction over a composite top\n' +
         'profile = elevation + max(building, barrier). This row is the\n' +
         'increment of that combined A_bar over the pure-terrain\n' +
         'component above. A_terrain + A_screen ≡ A_combined — the two\n' +
         'rows are engine decomposition, not two independent Fresnels.'
-      const edgesDetail = obs && obs.edges.length > 0
-        ? '\n\nEdges:' + obs.edges
-            .map((e: typeof obs.edges[number], i: number) => {
-              const kind = e.kind
-              const h = kind === 'terrain' ? 'hill peak' : `${kind} ${e.height_m.toFixed(1)} m`
-              return `\n  E${EDGE_SUBSCRIPTS[i] ?? i + 1}  ${h}  @ t=${e.t.toFixed(2)}  (+${e.screen_h_m.toFixed(1)} m above LOS)`
-            })
-            .join('')
+      const edgeDetail = obs
+        ? `\n\nEdge: ${obs.edge.kind} ${obs.edge.height_m.toFixed(1)} m @ t=${obs.edge.t.toFixed(2)} (+${obs.edge.screen_h_m.toFixed(1)} m above LOS)`
         : ''
       const valueTooltip =
-        (obs ? `Representative: ${obs.kind} ${obs.height_m.toFixed(1)} m @ t=${obs.t.toFixed(2)}.\n\n` : '') +
+        (obs ? `Obstacle: ${obs.edge.kind} ${obs.edge.height_m.toFixed(1)} m @ t=${obs.edge.t.toFixed(2)}.\n\n` : '') +
         'Per-band increment below.\n' +
         'Scalar = A-weighted ΔL_A (full − no_screening Lden).' +
-        edgesDetail
+        edgeDetail
       return [
         <HoverText title={labelTooltip}>
           Building/barrier{screenLabel ? ` (${screenLabel})` : ''}

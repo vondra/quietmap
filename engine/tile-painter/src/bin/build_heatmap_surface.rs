@@ -301,8 +301,8 @@ fn run_stream(args: &Args, layers: &[Source], halo_m: f64) -> Result<()> {
                     spans.metric_bool("cuda_event_timing_enabled", false);
                     let tiles = region_tiles(r4, ctx.zoom);
                     // Narrow this process's configured layers down to the requested (stale)
-                    // subset for THIS cell — absent request = build every configured layer,
-                    // today's behavior (paint-pipeline-v4 PR#1 §3). The agent only sends
+                    // subset for THIS cell — absent request = build every configured layer.
+                    // The agent only sends
                     // `layers=` for a strict subset of the group, so an EMPTY effective set
                     // means worker-config↔plan drift — fail LOUD (/fail → parked), never a
                     // hollow `done` that would let the hub seal an unbuilt stale layer.

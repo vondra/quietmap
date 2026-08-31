@@ -17,7 +17,7 @@ map: { center: [15.5, 49.8], zoom: 7 }
 - **Result**: 528,123 Czech railway segments enriched with real passenger train counts (34.7% coverage on segments in matched hexes)
 - **Busiest**: Praha hl.n. ↔ Pha hl.n. Lc105-102 at 276 trains/day, Brno hl.n. přednádr. ↔ Brno hl.n. at 246/day
 - **[SŽ maximum line speeds](https://provoz.spravazeleznic.cz/portal/Show.aspx?path=/Data/Mapy/rychlosti.pdf)** — "Největší traťové rychlosti" map, used alongside OSM `maxspeed` tags
-- **Speed-dependent emission** using CNOSSOS-EU Annex IV / RMR: `Lw'/m = Lw0 + 10·log₁₀(Q / (T·1000·v)) + 30·log₁₀(v/v_ref)` where `Q` = trains in the period (mainline passenger counts split 70/20/10 day/evening/night, trams 70/25/5; freight is night-heavy at ≈34/11/55), `T` = period hours, `v` = line speed in km/h. See `engine/noise-compute/SPEC.md §2` for the full derivation.
+- **Speed-dependent emission** using CNOSSOS-EU Annex IV / RMR: `Lw'/m = Lw0 + 10·log₁₀(Q / (T·1000·v)) + 30·log₁₀(v/v_ref)` where `Q` = trains in the period (mainline passenger counts split 70/20/10 day/evening/night, trams 70/25/5; freight is night-heavy at ≈34/11/55), `T` = period hours, `v` = line speed in km/h. See `engine/noise-compute/SPEC.md §3.2` for the current contract.
 - Typical Czech corridor speeds: I. corridor (Praha–Brno) up to 160 km/h, regional lines 80–100 km/h, tram 25 km/h (enrichment to measured line speeds is a follow-up)
 - Vehicle mapping: four emission-coefficient families — passenger (disc-braked, v_ref 100 km/h), freight (cast-iron block brakes, v_ref 80 km/h, ~10 dB louder), tram (v_ref 50 km/h), and light rail (v_ref 80 km/h)
 

@@ -182,12 +182,12 @@ pub fn is_helicopter_profile(profile_idx: u8) -> bool {
 /// those classes over `ga_n_days` makes a one-off contribute exactly
 /// `1/ga_n_days` of its energy while genuinely daily patterns are unchanged.
 ///
-/// Deliberately NOT included (plan §3):
+/// Deliberately not included:
 /// - `PROP_DH8D` — the *airline turboprop* class (AT72/76, DH8x, SF34,
 ///   L410…): scheduled traffic that the 12-day window samples well; a
 ///   plain `!is_jet` predicate would wrongly move it. GA turbine
-///   singles routed there by fallback (PC12/TBM/C208) stay 12-day —
-///   mostly commercial ops, accepted residual.
+///   singles routed there by fallback (PC12/TBM/C208) stay 12-day because
+///   they share the airline turboprop profile.
 /// - `FUSE_C56X` / `FUSE_CRJ9` — bizjets share these classes with
 ///   scheduled regional jets (CRJ2/7/9, E-jets fallback, B712,
 ///   BAe146); not separable at class level. Documented residual.
@@ -234,7 +234,7 @@ pub const SAMPLE_DAYS_BY_CLASS_KEY: &str = "sample_days_by_class";
 ///
 /// `veh_kind = 1` (GSE) rows MUST keep weight `1.0` — their `class_idx`
 /// indexes the GSE class space, not the aircraft classes, and GSE is an
-/// airline-pass-only artifact (plan §2). Callers branch on `veh_kind`.
+/// airline-pass-only artifact. Callers branch on `veh_kind`.
 #[derive(Clone, Copy, Debug)]
 pub struct ClassWeights {
     w: [f64; NUM_CLASSES],

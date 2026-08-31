@@ -1,8 +1,7 @@
 /**
  * Enrich DK railways.arrow with Rejseplanen unified Danish GTFS — migrated onto
- * the shared graph-walk driver (2026-07-16 Phase 4 point 2 rewrite, plan
- * `pro-e-sd-zaj-m-wobbly-liskov`, following `enrich-railway-europe.ts`'s
- * per-country pattern).
+ * the shared graph-walk driver, following `enrich-railway-europe.ts`'s
+ * per-country pattern.
  *
  * Source: rejseplanen.info/labs/GTFS.zip — single ~55 MB feed covering all
  * Danish public transport (DSB national rail, S-tog Copenhagen suburban,

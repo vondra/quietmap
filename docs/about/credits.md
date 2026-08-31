@@ -10,7 +10,7 @@ nav: hidden
 - **Terrain basemap:** © [OpenTopoMap](https://opentopomap.org/)
 - **Satellite imagery:** © [Esri](https://www.esri.com/), Maxar, Earthstar Geographics
 - **Elevation data:** [Copernicus GLO-30 DEM](https://spacedata.copernicus.eu/collections/copernicus-digital-elevation-model) (ESA/Copernicus, primary), [SRTM](https://www.usgs.gov/centers/eros/science/usgs-eros-archive-digital-elevation-shuttle-radar-topography-mission-srtm-1) (NASA/USGS, fallback)
-- **Building height:** [Overture Maps](https://overturemaps.org/) building raster (30m), derived from Overture building footprints and height tags
+- **Building footprints and heights:** [Overture Maps](https://overturemaps.org/) vectors, used directly as propagation obstacles
 - **Land cover & vegetation:** [ESA WorldCover 2021](https://worldcover2021.esa.int/) (ESA, CC BY 4.0)
 - **Ground imperviousness:** [ESA WorldCover](https://worldcover2021.esa.int/) land-cover proxy (global), refined by [Copernicus Imperviousness Density](https://land.copernicus.eu/en/products/high-resolution-layer-imperviousness) (EEA) where sourced
 - **Road, railway & airport geometry:** © [OpenStreetMap](https://www.openstreetmap.org/) contributors (ODbL)
@@ -26,13 +26,11 @@ The map, tiles and API are provided as a **service**, free to use and embed with
 
 - **You may** link to quietmap.org, embed the map or screenshots in your articles, apps and projects — with a visible attribution "**quietmap.org**" linking back here, plus "© OpenStreetMap contributors" (our models build on OpenStreetMap and other open data).
 - **You may not** bulk-download tiles, scrape or mirror the dataset, or republish a copy of the map as your own service.
-- **Commercial or high-volume use** (resale, white-label, heavy API traffic): [contact us](mailto:hello@quietmap.org) — we're friendly.
+- **Commercial or high-volume use** (resale, white-label, heavy API traffic): [contact us](mailto:info@quietmap.org) — we're friendly.
 
 Raw model data is not distributed. Noise values are model estimates (CNOSSOS-EU / ISO 9613-2 based), not measurements — see the [methodology](/about/methodology) for accuracy and limitations.
 
 **No warranty.** quietmap.org is offered as-is, for information and orientation — please don't rely on it alone for legal, health, safety, or property decisions.
-
-**Affiliate disclosure.** Some links we may add in future (property, stays, travel) can be affiliate links that earn us a small commission at no extra cost to you. They never influence the noise numbers — the map is computed identically for everyone.
 
 <details>
 <summary><strong>Privacy</strong></summary>
@@ -43,6 +41,6 @@ Like almost every website, our server keeps a standard technical **access log** 
 
 To open the map in your part of the world, the first view is approximated to **country level** from your IP address using an offline GeoIP database running on our own server ([IP Geolocation by DB-IP](https://db-ip.com)). The lookup happens in memory, the result is not stored, and your IP is never sent to any third party for this. Precise location is used only if you tap the locate button, via your browser's standard permission prompt.
 
-Questions or requests: [hello@quietmap.org](mailto:hello@quietmap.org).
+Questions or requests: [info@quietmap.org](mailto:info@quietmap.org).
 
 </details>

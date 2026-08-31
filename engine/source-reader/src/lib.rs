@@ -602,9 +602,9 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         winner
             .effective_class
             .delta_db()
-            .map(|delta| (winner.stored_class, winner.height_m, delta))
+            .map(|delta| (winner.stored_class, delta))
     });
-    if let Some((_, _, delta)) = indoor {
+    if let Some((_, delta)) = indoor {
         wire::attenuate_total_for_indoor_display(&mut result, delta);
     }
     let wire_result = wire::build_wire_result(
@@ -612,7 +612,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         lat,
         lng,
         elevation,
-        indoor.map(|(class, height, delta)| (class, height, delta, facade_lden)),
+        indoor.map(|(class, delta)| (class, delta, facade_lden)),
     );
     let json = serde_json::to_string(&wire_result).unwrap();
     let t_total = t_start.elapsed();

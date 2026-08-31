@@ -1,4 +1,4 @@
-//! POI-in-footprint spatial join (settlement v2 phase 2, plan §B4).
+//! POI-in-footprint spatial join for settlement source classification.
 //!
 //! Standalone `amenity=`/`shop=`/`tourism=`/`healthcare=` NODES that fall inside
 //! a `building=yes` footprint carry the building's real function (a supermarket
@@ -7,7 +7,7 @@
 //! POIs, indexes them by hex, and — for every building it writes — reclassifies
 //! the footprint when a POI sits inside it.
 //!
-//! Rule (plan §B4): a POI NEVER downgrades an explicitly-typed building — only
+//! A POI never downgrades an explicitly typed building — only
 //! the residential default (`building_type == 0`, i.e. `building=yes`/
 //! apartments) is eligible. Among multiple interior POIs the highest
 //! [`poi_priority`] wins (school > hospital > food-retail > hospitality >

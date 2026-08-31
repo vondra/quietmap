@@ -220,8 +220,8 @@ impl SurfaceStats {
 
 /// Immutable per-build settings shared (read-only) across every region/worker. The layer SET to
 /// build is deliberately NOT a field here — it is passed explicitly to `process_surface_region`
-/// instead (see that function's own doc), so `--stream` can narrow it per cell (paint-pipeline-v4
-/// PR#1 §3) without rebuilding this otherwise-shared, read-only struct for every cell.
+/// instead (see that function's own doc), so `--stream` can narrow it per cell without rebuilding
+/// this otherwise-shared, read-only struct for every cell.
 pub struct SurfaceCtx<'a> {
     pub zoom: u8,
     pub halo_m: f64,

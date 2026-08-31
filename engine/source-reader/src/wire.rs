@@ -54,8 +54,8 @@ pub struct WireSource {
     pub lden_free: f64,
     /// Per-source `L_day` (END 07:00–19:00, no penalty). Together with `le`
     /// this completes the period split on the wire — validation v2 ingests
-    /// networks publishing ld/le/ln and must band each period directly
-    /// (validation-v2-plan.md build order §1). `null` when silent.
+    /// networks publishing ld/le/ln and must band each period directly.
+    /// `null` when silent.
     #[serde(serialize_with = "noise_compute::types::serialize_lden_db_opt")]
     pub ld: f64,
     /// Per-source `L_evening` (END 19:00–23:00, no penalty). `null` when silent.
@@ -179,9 +179,6 @@ impl From<noise_compute::types::LayerTimings> for WireTimings {
 
 #[derive(Serialize)]
 pub struct WireResult {
-    /// Always empty string. Reserved for future use; frontend interface
-    /// declares it but display code never reads it.
-    pub h3_index: String,
     pub h3_center: [f64; 2],
     pub elevation_m: f64,
     #[serde(serialize_with = "noise_compute::types::serialize_lden_db_opt")]
@@ -195,17 +192,6 @@ pub struct WireResult {
     pub top_contributors: Vec<WireContributor>,
     #[serde(serialize_with = "noise_compute::types::serialize_lden_db_opt")]
     pub other_sources_lden: f64,
-    /// The clicked point sits inside an enclosed building footprint.
-    /// Vector-obstacle regions only; `false` on the raster fallback.
-    ///
-    /// `sources`, `top_contributors`, `other_sources_lden`, and `segments`
-    /// remain the façade values from the outdoor donor query. Only the
-    /// aggregate display total applies the indoor product estimate.
-    pub inside_building: bool,
-    /// Height (m) of the tallest footprint containing the point. Absent when
-    /// [`Self::inside_building`] is false.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub inside_building_height_m: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub envelope_class: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -216,8 +202,6 @@ pub struct WireResult {
     pub indoor_lden: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indoor_lden_tilted: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub indoor_estimate: Option<bool>,
     /// Unique string sentinel — Node route replaces this with the
     /// wall-time `Date.now() - t0` measurement. See
     /// [`COMPUTE_TIME_MS_SENTINEL`].
@@ -230,18 +214,16 @@ pub struct WireResult {
     pub timings: Option<WireTimings>,
 }
 
-/// `indoor`: the winning enclosed footprint, its effective delta, and the
-/// outdoor façade total; `None` outdoors or on the raster fallback.
+/// `indoor`: the winning envelope class, its effective delta, and the
+/// outdoor façade total; `None` outdoors.
 pub fn build_wire_result(
     result: NoiseResult,
     lat: f64,
     lng: f64,
     elevation: f64,
-    indoor: Option<(noise_compute::envelope::EnvelopeClass, f32, f64, f64)>,
+    indoor: Option<(noise_compute::envelope::EnvelopeClass, f64, f64)>,
 ) -> WireResult {
-    let inside_building_m = indoor.map(|(_, height, _, _)| height);
     WireResult {
-        h3_index: String::new(),
         h3_center: [lat, lng],
         elevation_m: round1(elevation),
         total_lden: result.total.lden_db,
@@ -253,20 +235,17 @@ pub fn build_wire_result(
             .map(WireContributor::from)
             .collect(),
         other_sources_lden: result.other_sources_lden,
-        inside_building: inside_building_m.is_some(),
-        inside_building_height_m: inside_building_m.map(|h| round1(h as f64)),
-        envelope_class: indoor.map(|(class, _, _, _)| class.name()),
-        envelope_delta_db: indoor.map(|(_, _, delta, _)| delta),
-        facade_lden: indoor.map(|(_, _, _, facade)| round1(facade)),
-        indoor_lden: indoor.and_then(|(_, _, delta, facade)| {
+        envelope_class: indoor.map(|(class, _, _)| class.name()),
+        envelope_delta_db: indoor.map(|(_, delta, _)| delta),
+        facade_lden: indoor.map(|(_, _, facade)| round1(facade)),
+        indoor_lden: indoor.and_then(|(_, delta, facade)| {
             facade
                 .is_finite()
                 .then(|| round1((facade - delta).max(0.0)))
         }),
-        indoor_lden_tilted: indoor.and_then(|(_, _, _, facade)| {
+        indoor_lden_tilted: indoor.and_then(|(_, _, facade)| {
             facade.is_finite().then(|| round1((facade - 15.0).max(0.0)))
         }),
-        indoor_estimate: indoor.map(|_| true),
         compute_time_ms: COMPUTE_TIME_MS_SENTINEL,
         segments: result.segments,
         segments_meta: result.segments_meta,

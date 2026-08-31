@@ -295,7 +295,7 @@ mod tests {
                 "period {p} band energy"
             );
         }
-        // C1 (plan §3.5): this freight-heavy EU mainline (100 pax + 40 freight,
+        // This freight-heavy EU mainline (100 pax + 40 freight,
         // freight +9.6 dB/train) now has NIGHT hourly Leq density exceeding day —
         // EU freight runs 54.6 % at night over only 8 h vs 34 % over 12 h. The
         // pre-C1 flat 65/20/15 split made day always exceed night; the flip is

@@ -675,7 +675,7 @@ fn validate_manifest_layers(
     Ok(())
 }
 
-/// Parse a tier layer token `{base}-z{tier}-p{N}` (city-z13 plan §D) into
+/// Parse a tier layer token `{base}-z{tier}-p{N}` into
 /// (base, tier, pack). Tier archives are ORDINARY manifest layer entries —
 /// that is what makes GC keep-sets, transaction recovery, publisher proofs
 /// and readiness apply to them with zero new machinery — so the layer-set
@@ -1136,7 +1136,7 @@ fn with_validated_store_snapshots<T>(
     with_store_snapshots_after_capture(store_root, only, timeout, validate_snapshots, body)
 }
 
-/// One immutable pack of a tier store (city-z13 plan §D): its zoom, pack id
+/// One immutable pack of a tier store: its zoom, pack id
 /// and the R4 cells whose z{tier} tiles this pack authoritatively covers.
 struct TierPack {
     tier: u8,
@@ -1382,7 +1382,7 @@ fn main() -> Result<()> {
     // With --layer, only the named layers are packed and the manifest MERGES:
     // untouched layers keep their previous archive + build id — a road-only
     // republish costs one layer's Brotli, not all eight (owner ask 2026-07-09).
-    // With --tier (city-z13 plan §D), the root is a TIER root (zoom band
+    // With --tier, the root is a tier root (zoom band
     // exactly [tier]); every published layer packs into an immutable PACK —
     // archives named `{layer}-z{tier}-{pack}.{build}.pmtiles`, manifest layer
     // entries under those tokens (ordinary entries: GC/recovery/readiness
@@ -1495,8 +1495,7 @@ fn main() -> Result<()> {
             &generation,
             &tier_mode,
         )?;
-        // Deletion no longer happens here (2026-07-16 Track 2 rewrite — docs/dev/
-        // checkout-restructure-plan.md). Per-environment pins (`current.{env}.json`) mean a
+        // Deletion no longer happens here. Per-environment pins (`current.{env}.json`) mean a
         // prod pointer can legitimately lag dev by many publishes; this pack's old
         // "keep new+previous" retention would 404 a stale-but-still-live pin the moment TWO
         // publishes happened after it. Retention is now `tile-store-gc`'s job.
@@ -3039,8 +3038,8 @@ mod tests {
         Ok(())
     }
 
-    /// Rewritten retention test (2026-07-16 Track 2 — replaces the old `prune_*` tests, which
-    /// exercised a `prune_superseded` function that no longer exists): running a REAL pack
+    /// Retention test replacing the old `prune_*` tests, which exercised a
+    /// `prune_superseded` function that no longer exists. Running a real pack
     /// (`pack_snapshots_transactionally`, which is what `main()` calls and which owns the
     /// `stage_layer` + `write_manifest` pair) must leave every other
     /// `.pmtiles` file in `out_dir` untouched — old generations of the SAME layer, a sibling

@@ -1,4 +1,4 @@
-// Zoom-tier serving contract (city-z13 plan §D): the token grammar, the
+// Zoom-tier serving contract: the token grammar, the
 // per-tier zoom bound, and the tiers-index referential validation — the
 // server side is the contract most likely to rot (the Rust packer and the
 // frontend resolver both carry their own tests; gg z13 impl review, Kimi #6).

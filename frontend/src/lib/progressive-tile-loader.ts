@@ -1,9 +1,7 @@
 // Progressive multi-layer tile loading — the React/deck-independent state
 // machine behind HeatmapOverlay's getTileData (head-start race, memoized
 // ancestor preview with grace, complete-for-complete swap, per-frame
-// recompose tail). Extracted verbatim from HeatmapOverlay.tsx per
-// docs/dev/heatmap-overlay-split-plan.md — timing constants live here, next
-// to the races they govern.
+// recompose tail). Timing constants live here, next to the races they govern.
 
 import { fetchAndDecodeHM3, TILE_PX } from './hm3-decoder'
 import { composeOffThread } from './compose-off-thread'
@@ -80,8 +78,8 @@ export function fetchAncestor(url: string): Promise<{ cells: Uint8Array } | null
   return entry.promise
 }
 
-/** Nearest-neighbour 2× upscale of one parent quadrant onto a full tile grid
- *  — the client half of the zoom-tier fetch plan (city-z13 plan §D): display
+/** Nearest-neighbour 2× upscale of one parent quadrant onto a full tile grid:
+ *  display
  *  tiles OUTSIDE tier coverage magnify their z12 parent's quadrant, exactly
  *  like deck's own overzoom, but on the byte grid so the energy sum and
  *  palette stay identical to the base band. NO_DATA passes through. */

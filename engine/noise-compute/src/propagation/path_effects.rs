@@ -1,9 +1,8 @@
 //! Shared path effect computation for popup and pipeline.
 //!
-//! All four path-effect rasters (DEM, Overture building, WorldCover forest,
-//! IMD imperviousness) are sampled by [`RasterSampler::build_path_profile`]
-//! into a single [`PathProfile`]. The six entry points in this module read
-//! from that profile; they never walk the path again.
+//! DEM, WorldCover forest, and IMD imperviousness are sampled by
+//! [`RasterSampler::build_path_profile`] into one [`PathProfile`]. Exact vector
+//! building and barrier crossings are evaluated separately against that profile.
 //!
 //! See [`super::path_profile`] for the canonical cadence and docs.
 
@@ -114,7 +113,7 @@ fn compute_terrain_diffraction<'a>(
     } = profile;
     let prof_f64 = PathProfile::elevation_f64_from_mut(elevation_f64_scratch, elevation_m);
     // Source-platform clamp: the phantom near-source hump must not diffract
-    // (SPEC §3.5.1). The scratch is shared with the screening pass below, so a
+    // (SPEC §4.2). The scratch is shared with the screening pass below, so a
     // candidate's LERPed terrain inherits the same carved earth by construction.
     clamp_source_platform(t, prof_f64, dist_m);
     // Single-edge δ over bare-earth (was the multi-edge hull compute_path_difference).
@@ -134,7 +133,7 @@ fn compute_terrain_diffraction<'a>(
 ///
 /// `t`/`elevation_m` must be samples of the SAME ray the exact march would
 /// walk (bit-identical elevation values at shared `t` — the caller samples
-/// them through the same raster path), with BOTH endpoints included so
+/// them through the same sampling path), with BOTH endpoints included so
 /// `src_h`/`rcv_h` (and hence `dsr`) match the exact evaluation exactly. A
 /// subset's max-δ edge can only be ≤ the full cadence's max-δ edge, so with
 /// `dsr` the caller derives both δ lower bounds the sound mixed-band bound
@@ -156,7 +155,7 @@ pub fn terrain_subset_delta_lower_bound(
     }
     let dz_total = rcv_alt - src_elev;
     let e0 = elevation_m[0] as f64;
-    // Source-platform clamp, read-time form (SPEC §3.5.1): the exact march
+    // Source-platform clamp, read-time form (SPEC §4.2): the exact march
     // carves the same samples, so a subset clamped by the same rule stays a
     // sound lower bound of the carved full march (subset-of-carved =
     // carved-of-subset — the rule is pointwise in (t, e) given shared e0).
@@ -384,15 +383,9 @@ pub fn screening_attenuation_with_meta(
     let step_m_med = profile.step_m_med as f64;
 
     let make_empty = || ScreeningObstacleTrace {
-        kind: "none",
-        height_m: 0.0,
-        t: 0.0,
-        screen_h_m: 0.0,
         delta_m: 0.0,
         step_m: step_m_med,
-        n_edges: 0,
-        edges: Vec::new(),
-        obstacle_id: None,
+        edge: None,
     };
 
     if n < 3 || dist_m < 30.0 {
@@ -436,7 +429,7 @@ pub fn screening_attenuation_with_meta(
     // Same source-platform clamp as the terrain pass (idempotent when that pass
     // already ran on this profile — the shared scratch stays carved): a
     // candidate's terrain is LERPed from these samples, so a phantom hump the
-    // terrain pass carved away must not re-enter under an obstacle (SPEC §3.5.1).
+    // terrain pass carved away must not re-enter under an obstacle (SPEC §4.2).
     clamp_source_platform(t, elevation_f64_mut, dist_m);
     let elevation_f64: &[f64] = elevation_f64_mut;
 
@@ -551,21 +544,15 @@ pub fn screening_attenuation_with_meta(
         };
         let los_edge = src_e + (rcv_e - src_e) * cand.t;
         let trace = ScreeningObstacleTrace {
-            kind,
-            height_m: cand.height_m as f64,
-            t: cand.t,
-            screen_h_m: top - los_edge,
             delta_m: cres.delta,
             step_m: step_m_med,
-            n_edges: 1,
-            edges: vec![ObstacleEdge {
+            edge: Some(ObstacleEdge {
                 kind,
                 t: cand.t,
                 height_m: cand.height_m as f64,
                 screen_h_m: top - los_edge,
-                obstacle_id: Some(cand.id),
-            }],
-            obstacle_id: Some(cand.id),
+                obstacle_id: cand.id,
+            }),
         };
         return (atten_screen, trace);
     }
@@ -574,11 +561,6 @@ pub fn screening_attenuation_with_meta(
     //    `terrain_attenuation` already owns. The screening increment over it is
     //    exactly zero, and a terrain hill is not an obstacle to report: listing
     //    one would show the visitor a barrier that does not exist.
-    //
-    //    This used to be arithmetic (combined minus terrain, then "is the edge
-    //    above bare earth?"). Both questions had a constant answer once the
-    //    raster building channel left the composite: the composite IS bare
-    //    earth, so the difference is zero and the edge is never above it.
     ([0.0; NUM_BANDS], make_empty())
 }
 
@@ -635,7 +617,7 @@ pub fn cnossos_ground_path_from_profile(
         ..
     } = profile;
     // FORCE-REFILL, never the amortized reuse: the terrain/screening passes
-    // carve this scratch with the source-platform clamp (SPEC §3.5.1), and the
+    // carve this scratch with the source-platform clamp (SPEC §4.2), and the
     // ground mean-plane must fit the RAW profile. Those passes re-apply their
     // clamp unconditionally after every refill, so any call order stays
     // correct (ground → terrain or terrain → ground).
@@ -677,6 +659,10 @@ mod tests {
             0.0
         };
         p
+    }
+
+    fn screening_edge(trace: &ScreeningObstacleTrace) -> &ObstacleEdge {
+        trace.edge.as_ref().expect("expected a screening obstacle")
     }
 
     #[test]
@@ -741,7 +727,7 @@ mod tests {
     }
 
     /// The ground mean-plane must read the RAW profile even after the
-    /// terrain pass carved the shared scratch (SPEC §3.5.1): ground result is
+    /// terrain pass carved the shared scratch (SPEC §4.2): ground result is
     /// identical whether or not terrain ran first, and repeats are stable.
     #[test]
     fn ground_path_is_blind_to_the_platform_clamp() {
@@ -766,7 +752,7 @@ mod tests {
         assert_eq!(raw.zs_h_m, after_repeat.zs_h_m, "repeat not stable");
     }
 
-    /// THE defect SPEC §3.5.1 exists for: a phantom shoulder hump one sample
+    /// The defect SPEC §4.2 prevents: a phantom shoulder hump one sample
     /// (~10 m) from the source on a downhill embankment path must NOT dominate
     /// the terrain term — after the platform clamp, only the genuine plateau
     /// edge (source cell's own elevation) may diffract. Geometry measured on
@@ -1065,13 +1051,8 @@ mod tests {
             &terrain_atten,
             None,
         );
-        assert_eq!(trace.kind, "building");
-        assert!(trace.height_m == 20.0);
-        assert_eq!(
-            trace.edges.len(),
-            trace.n_edges as usize,
-            "edges vec must match n_edges"
-        );
+        assert_eq!(screening_edge(&trace).kind, "building");
+        assert_eq!(screening_edge(&trace).height_m, 20.0);
         assert!(
             atten.iter().any(|&a| a > 0.0),
             "building at t=0.4 should produce screening"
@@ -1126,7 +1107,7 @@ mod tests {
             &terrain_atten,
             None,
         );
-        assert_eq!(trace.kind, "barrier");
+        assert_eq!(screening_edge(&trace).kind, "barrier");
         assert!(
             atten.iter().any(|&a| a > 0.0),
             "3 m wall above the 0.05→1.5 m LOS must screen"
@@ -1239,12 +1220,12 @@ mod tests {
             &terrain_atten,
             None,
         );
-        assert_eq!(trace.kind, "barrier");
-        assert_eq!(trace.obstacle_id, Some(1_390_017_809));
+        assert_eq!(screening_edge(&trace).kind, "barrier");
+        assert_eq!(screening_edge(&trace).obstacle_id, 1_390_017_809);
         assert!(
-            (trace.t - 103.3333 / dist_m).abs() < 1e-6,
+            (screening_edge(&trace).t - 103.3333 / dist_m).abs() < 1e-6,
             "t = {}",
-            trace.t
+            screening_edge(&trace).t
         );
         assert!(
             atten.iter().any(|&a| a > 0.0),
@@ -1272,8 +1253,8 @@ mod tests {
             &terrain_atten,
             None,
         );
-        assert_eq!(
-            trace.kind, "none",
+        assert!(
+            trace.edge.is_none(),
             "a wall the path passes BY is not a screen"
         );
         assert!(atten.iter().all(|&a| a == 0.0), "{atten:?}");
@@ -1306,7 +1287,7 @@ mod tests {
             &terrain_atten,
             None,
         );
-        assert_eq!(trace.kind, "barrier");
+        assert_eq!(screening_edge(&trace).kind, "barrier");
         assert!(atten.iter().any(|&a| a > 0.0), "{atten:?}");
     }
 
@@ -1343,8 +1324,12 @@ mod tests {
             &terrain_atten,
             None,
         );
-        assert_eq!(trace.kind, "barrier");
-        assert!((trace.t - 0.95).abs() < 1e-9, "t = {}", trace.t);
+        assert_eq!(screening_edge(&trace).kind, "barrier");
+        assert!(
+            (screening_edge(&trace).t - 0.95).abs() < 1e-9,
+            "t = {}",
+            screening_edge(&trace).t
+        );
         assert!(atten.iter().any(|&a| a > 0.0));
     }
 
@@ -1373,11 +1358,10 @@ mod tests {
             &terrain_trace.attenuation_bands,
             terrain_trace.dominant_delta_m(),
         );
-        assert_eq!(
-            screening_trace.kind, "none",
+        assert!(
+            screening_trace.edge.is_none(),
             "bare hill is not a screening obstacle"
         );
-        assert_eq!(screening_trace.n_edges, 0);
         assert!(
             atten.iter().all(|&a| a == 0.0),
             "no screening increment over terrain"
@@ -1484,11 +1468,11 @@ mod tests {
             &terrain,
             terrain_delta_m,
         );
-        assert_eq!(trace.kind, "building");
+        assert_eq!(screening_edge(&trace).kind, "building");
         assert!(
-            (trace.t - t_c).abs() < 1e-12,
+            (screening_edge(&trace).t - t_c).abs() < 1e-12,
             "candidate edge must win: trace.t {} vs t_c {}",
-            trace.t,
+            screening_edge(&trace).t,
             t_c
         );
     }
@@ -1551,8 +1535,8 @@ mod tests {
             None,
         );
         assert!(atten.iter().any(|&a| a > 0.0), "candidate must screen");
-        assert_eq!(trace.kind, "building");
-        assert!((trace.t - 0.7).abs() < 1e-12);
+        assert_eq!(screening_edge(&trace).kind, "building");
+        assert!((screening_edge(&trace).t - 0.7).abs() < 1e-12);
     }
 
     /// δ* continuity: two candidates straddling a cadence sample by ±ε yield
@@ -1647,7 +1631,7 @@ mod tests {
         for (i, &a) in atten.iter().enumerate().take(6) {
             assert_eq!(a, 0.0, "band {i} stays gated by δ*: {atten:?}");
         }
-        assert_eq!(trace.kind, "building");
+        assert_eq!(screening_edge(&trace).kind, "building");
         assert!(trace.delta_m < 0.0, "near miss carries a negative δ");
     }
 
@@ -1675,7 +1659,7 @@ mod tests {
             None,
         );
         assert!(atten.iter().all(|&a| a == 0.0), "{atten:?}");
-        assert_eq!(trace.kind, "none", "nothing to report to the popup");
+        assert!(trace.edge.is_none(), "nothing to report to the popup");
     }
 
     /// A real blocker beats a near miss: signed-δ ranking must not let a
@@ -1708,7 +1692,7 @@ mod tests {
             &terrain,
             None,
         );
-        assert_eq!(trace.obstacle_id, Some(2));
+        assert_eq!(screening_edge(&trace).obstacle_id, 2);
         assert!(trace.delta_m > 0.0);
     }
 
@@ -1749,7 +1733,7 @@ mod tests {
             None,
         );
         assert!(
-            (trace.t - 0.9).abs() < 1e-12,
+            (screening_edge(&trace).t - 0.9).abs() < 1e-12,
             "near-receiver max-δ candidate must win"
         );
     }

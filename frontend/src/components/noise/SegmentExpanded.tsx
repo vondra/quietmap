@@ -39,7 +39,7 @@ export function SegmentExpanded({ trace }: { trace: SegmentTrace }) {
           <PathProfileDiagram
             trace={trace.propagation.path_profile}
             terrainEdges={trace.propagation.terrain.edges}
-            obstacleEdges={trace.propagation.screening.obstacle?.edges}
+            obstacleEdge={trace.propagation.screening.obstacle?.edge}
           />
           <HoverText
             title={

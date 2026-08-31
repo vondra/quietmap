@@ -40,7 +40,6 @@ interface TerrainBreakdownData {
 }
 
 interface ScreeningBreakdownData {
-  building_path_m: number
   obstacle: ScreeningObstacleTrace | null
 }
 
@@ -50,36 +49,21 @@ interface VegetationBreakdownData {
 }
 
 interface ScreeningObstacleTrace {
-  kind: 'building' | 'barrier' | 'none'
-  /** Height of the DOMINANT (max LOS excess) sample — not the leftmost. */
-  height_m: number
-  /** Fractional position (0..1) of the dominant sample along the path. */
-  t: number
-  screen_h_m: number
   delta_m: number
-  /** Vector-store id of the dominant obstacle: its exact
-   * crossing; every obstacle is one. */
-  obstacle_id?: number
+  /** Median terrain-profile cadence used to interpolate ground at the crossing. */
   step_m: number
-  /** Number of diffraction edges in the combined terrain+building+barrier
-   * result (0..=3). When > 1 the popup should label "N diffraction edges",
-   * NOT "N obstacles" — one edge may be a bare-earth hill (kind: 'terrain'). */
-  n_edges: number
-  /** Per-edge detail when `n_edges > 0`. Leftmost-first by t.
-   * Dominant edge (popup highlights) = whichever has max `screen_h_m`. */
-  edges: ObstacleEdge[]
+  edge: ObstacleEdge
 }
 
 export interface ObstacleEdge {
-  /** 'terrain' = bare-earth hill (no building/barrier on top at this edge). */
-  kind: 'terrain' | 'building' | 'barrier'
+  kind: 'building' | 'barrier'
   t: number
   /** Building or barrier height above ground; 0 for 'terrain' kind. */
   height_m: number
   /** Edge-top minus line-of-sight (excess above LOS). */
   screen_h_m: number
-  /** Exact-crossing obstacle id (geodata-v2); absent on the raster path. */
-  obstacle_id?: number
+  /** Query-local exact-crossing id; not a durable store identity. */
+  obstacle_id: number
 }
 
 export interface EdgePoint {
@@ -405,7 +389,6 @@ export interface Contributor {
 }
 
 export interface NoiseComputeData {
-  h3_index: string
   h3_center: [number, number]
   elevation_m: number
   total_lden: number | null
@@ -413,14 +396,11 @@ export interface NoiseComputeData {
   sources: SourceSummary[]
   top_contributors: Contributor[]
   other_sources_lden: number | null
-  inside_building?: boolean
-  inside_building_height_m?: number
   envelope_class?: 'residential' | 'commercial' | 'industrial' | 'historic' | 'default'
   envelope_delta_db?: number
   facade_lden?: number
   indoor_lden?: number
   indoor_lden_tilted?: number
-  indoor_estimate?: boolean
   compute_time_ms: number
   segments?: SegmentTrace[]
   segments_meta?: SegmentTracesSummary | null

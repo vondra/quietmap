@@ -790,7 +790,7 @@ mod settlement_class_tests {
             assert_eq!(building_type(v), st::SILENT, "{v} must be SILENT");
         }
         // The default for genuinely-unknown small footprints stays residential
-        // (only the ENUMERATED silent values flip — plan §C′).
+        // (only the enumerated silent values flip).
         assert_eq!(building_type("some_unknown_value"), 0);
     }
 

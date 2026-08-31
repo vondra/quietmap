@@ -1,5 +1,5 @@
 /**
- * City traffic-enrichment registry (city-enrichment-plan §2.2).
+ * City traffic-enrichment registry.
  *
  * One entry per city adapter. The DRIVER (`pipeline/enrich-cities-roads.ts`)
  * iterates enabled cities, calls the adapter for normalized per-street

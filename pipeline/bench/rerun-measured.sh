@@ -79,7 +79,7 @@ echo "$ROADS $RAILWAYS $BUILDINGS $INDUSTRIAL" | tr ' ' '\n' | grep -v '^$' | \
 # after it on purpose: the city driver writes the same hex arrows national
 # enrichers touch; racing them in the xargs pool would fight the per-hex
 # lock. Rank ordering makes the result identical either way; running last
-# just avoids wasted writes. city-enrichment-plan §2.4.) ──
+# just avoids wasted writes.) ──
 log ""
 log "Phase 3: City enrichers (sequential)"
 run_one pipeline/enrich-cities-roads.ts

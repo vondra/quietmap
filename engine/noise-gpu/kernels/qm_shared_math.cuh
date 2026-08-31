@@ -3,12 +3,12 @@
 // lane.
 //
 // WHY. Node COUNTS must agree between lanes exactly (the e2-full validator makes
-// a count mismatch a hard failure, plan §6.3), and neither CUDA's nor glibc's
+// a count mismatch a hard failure), and neither CUDA's nor glibc's
 // f64 atan/tan is correctly rounded — CUDA documents <= 2 ulp — so a cell
 // boundary can land on different sides of a ceil() on the two lanes. This header
 // and shared_math.rs are ONE implementation written twice: same reduction, same
 // constants, same expression tree under the same QM-ATAN-n / QM-TAN-n labels
-// (plan §6.2 label discipline). A diff that touches a labelled expression on one
+// under the same equation-label discipline. A diff that touches a labelled expression on one
 // lane must show the matching hunk on the other. The Rust file carries the full
 // provenance note (FreeBSD/fdlibm s_atan.c + k_tan.c + e_rem_pio2.c in their
 // musl form); read it first.

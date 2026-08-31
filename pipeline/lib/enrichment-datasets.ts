@@ -19,7 +19,7 @@
  *     Higher priority wins. Ties broken by higher id (deterministic).
  *   - ID = 0 is reserved for "unspecified" — pre-provenance legacy rows.
  *
- * See plan at /home/vondra/.claude/plans/cached-gliding-kettle.md for rationale.
+ * Source IDs are generated once and kept stable so persisted rows remain readable.
  */
 
 /**
@@ -185,8 +185,7 @@ export const DATASETS: Dataset[] = [
     // decelerates over distance, it does not step. Writes ONLY onto rows with
     // source_id=0 AND untagged speed; declared BASELINE so every real
     // enricher (census, continental, service-tree, continuity) freely
-    // overwrites taper rows on its next run. See enrich-roads-taper.ts +
-    // docs/dev/roads-traffic-model-audit.md §6 R7.
+    // overwrites taper rows on its next run; the taper pass runs last in the chain.
     id: 9862,
     layer: 'roads',
     key: 'osm-transition-taper',
@@ -204,9 +203,8 @@ export const DATASETS: Dataset[] = [
     roadCoverage: [2, 3, 4, 9],
   },
   {
-    // Timetable-silent residual (owner decision 2026-07-11, option b of
-    // /tmp/quietmap-v4/gtfs-silent-decision.md): in a country whose rail
-    // enricher has full national timetable coverage, a line the timetable
+    // Timetable-silent residual (owner decision 2026-07-11): in a country
+    // whose rail enricher has full national timetable coverage, a line the timetable
     // does NOT know gets a small explicit residual (2 pax + 1 frt/day —
     // occasional special/freight runs) instead of the engine branch default
     // (30+5). Dead branches drop ~9 dB out of the red (Trať 162: 75→66 dB)
@@ -266,7 +264,7 @@ export const DATASETS: Dataset[] = [
      * 415 streets, whole administrative Prague; mix of loop detectors, mobile
      * counters and manual surveys). 'derived', not 'counted': values are
      * WORKING-DAY 0-24h totals — TSK's TP-189 weekday→AADT expansion table
-     * is not published with the file, so per plan §2.6 the unexpanded proxy
+     * is not published with the file, so the unexpanded proxy
      * must not enter counted-only consumers (~+5-8% vs true AADT,
      * conservative). Matched inside the Prague ADM2 polygon. */
     roadCoverage: [1, 2, 3, 4, 5, 11, 12], // mirrors city-datasets.ts coverage (R1b bucket B)

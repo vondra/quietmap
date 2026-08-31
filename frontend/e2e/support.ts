@@ -60,7 +60,6 @@ export function popupFixture(
   sourceLevels: Record<string, number> = { road: db },
 ) {
   return {
-    h3_index: '',
     h3_center: [lat, lng],
     elevation_m: 350,
     total_lden: db,

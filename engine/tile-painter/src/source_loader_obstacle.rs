@@ -9,20 +9,19 @@
 //! PROMOTED tree (`h3r4_dir/<cell>/`, post-Wave-1) then the enrichment
 //! staging tree; `QM_OBSTACLES_DIR` overrides (tests).
 //!
-//! ALL-OR-RASTER (gg review 2026-07-28): a MISSING ring cell (strict
-//! default) disables vector obstacles for the WHOLE region — a partial index
-//! would silently delete raster buildings where coverage is absent;
+//! ALL-OR-ERROR: a missing ring cell fails the whole region because a partial
+//! index would silently omit buildings where coverage is absent;
 //! `QM_OBSTACLES_ALLOW_PARTIAL=1` admits missing halo NEIGHBOURS at staging
 //! frontiers for dev A/B, but never the region's own cell (popup's
 //! query-cell rule). A shard READ/PARSE error — including a failed
 //! directory listing — is a hard `Err` that fails the region build: a
 //! pipeline must never silently paint with different physics than requested
-//! (the popup, facing users, soft-falls to raster instead).
+//! (the popup has its own visitor-facing loading policy).
 //! EXCEPTION (ingested-empty proof): a shard-less cell whose every
 //! overlapped 1-degree tile is listed in the world ingest manifest
 //! (`.ingested-tiles`, see `obstacle_ingest_coverage`) was provably swept
-//! by the same Overture release our raster derives from and contributed
-//! zero footprints — it is EMPTY, not missing, and vector mode proceeds
+//! by the current Overture ingest and contributed zero footprints — it is
+//! EMPTY, not missing, and vector mode proceeds
 //! without it.
 
 use std::io::Cursor;
@@ -143,9 +142,8 @@ fn renderer_evidence_requires_vector_mode() -> bool {
     std::env::var(crate::renderer_evidence::RENDERER_EVIDENCE_FLAG).as_deref() == Ok("1")
 }
 
-/// Overwrite one tile's pre-baked `rx_refl_db` with the VECTOR enclosure —
-/// the SAME 150 × 150 m nine-probe footprint as the raster 3×3
-/// (`noise_compute::…::enclosure_db`; SPEC §3.8). The single bake shared by
+/// Pre-bake one tile's `rx_refl_db` from the 150 × 150 m nine-probe vector
+/// enclosure (`noise_compute::…::enclosure_db`; SPEC §4.9). The single bake shared by
 /// the CPU builder, the GPU runner, and e2-full (gg review 2026-07-28:
 /// three hand-copies drift).
 pub fn bake_tile_vector_rx_refl(
@@ -182,10 +180,9 @@ const INTERIOR_MASK_MIN_HEIGHT_M: f32 = 0.0;
 /// FACADES, never indoors. A receiver inside a footprint must therefore use a
 /// façade donor and an explicit display estimate, not its self-screened value.
 ///
-/// VECTOR-ONLY by construction: a raster-fallback region has no
-/// [`ObstacleSet`] and keeps today's behavior. The 30 m building raster
-/// cannot answer "inside THIS footprint" — only "some building in this
-/// cell" — so masking off it would blank a 30 m block around every house.
+/// Vector-only by construction: every painted region has an [`ObstacleSet`].
+/// A coarse raster could not answer "inside this footprint" and would blank
+/// an entire cell around every house.
 ///
 /// A footprint smaller than one pixel (~12 m at the base zoom) rarely covers
 /// a pixel centre and so rarely masks anything. Accepted, no special
@@ -695,8 +692,8 @@ mod tests {
 
     /// The whole pipeline loading policy in ONE test (env vars are process
     /// globals; a single body keeps the assertions order-independent):
-    /// full ring loads; a missing halo neighbour → raster-off strict but
-    /// loads under partial; a missing REGION cell → raster-off EVEN under
+    /// full ring loads; a missing halo neighbour fails strict mode but loads
+    /// under partial; a missing region cell fails even under
     /// partial (the popup's query-cell rule); a corrupt shard → hard Err.
     /// Fix 4's decision matrix on a REAL base-zoom receiver lattice (z12/512 px
     /// over Praha, ~12 m/px) with synthetic footprints: a 200 m block with a
@@ -981,7 +978,7 @@ mod tests {
             "a missing REGION cell must fail even in partial mode"
         );
 
-        // Corrupt shard in an ingested cell: hard Err, not a silent fallback.
+        // Corrupt shard in an ingested cell: hard error.
         let centre = LatLng::from(region);
         write_shard(&tmp.join(region.to_string()), centre.lat(), centre.lng());
         std::fs::write(
@@ -995,8 +992,8 @@ mod tests {
         );
 
         // ── Ingested-empty proof: a shard-less halo cell whose degree tiles
-        // are ALL listed in the world ingest manifest keeps vector mode even
-        // STRICT; remove the manifest and the same ring falls back to raster.
+        // are all listed in the world ingest manifest passes strict mode;
+        // remove the manifest and the same ring fails.
         // Isolated root so its manifest can never collide with the matrix's
         // own (the manifest sits in the PARENT of QM_OBSTACLES_DIR).
         std::env::remove_var("QM_OBSTACLES_ALLOW_PARTIAL");

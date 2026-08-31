@@ -7,7 +7,7 @@
 //! `RecordBatch` are Arc-backed, so cloning batches is a refcount bump
 //! and the underlying f32/u8 slices stay resident for the whole call.
 //!
-//! Per Opt C (plan §3): at LKPR ~21 k rows × 11 columns × avg 200
+//! At LKPR, roughly 21 k rows × 11 columns × avg 200
 //! sub-segs/row = ~46 M f32 copies eliminated per popup. `aircraft_type`
 //! is now `[u8; 4]` by value on `AirborneRowView` (4 bytes vs an `&[u8; 4]`
 //! borrow that would otherwise need to alias into a self-owned Vec).

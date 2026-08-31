@@ -4,13 +4,13 @@
 //! pair through the projective angle `u(s) = atan((s − f)/h)` and cutting `u`
 //! into equal cells. The node COUNT is `ceil((u_hi − u_lo)/THETA_MAX)`, so one
 //! ulp of disagreement at a cell boundary turns a count of 4 into 5 — and the
-//! e2-full GPU-vs-CPU validator treats a count mismatch as a HARD failure, not
-//! a tolerance (plan §6.3). Neither glibc's nor CUDA's f64 `atan`/`tan` is
+//! e2-full GPU-vs-CPU validator treats a count mismatch as a hard failure.
+//! Neither glibc's nor CUDA's f64 `atan`/`tan` is
 //! correctly rounded (CUDA documents ≤ 2 ulp), so the lanes cannot both call
 //! "the platform atan" and expect the same bits. This module is the ONE
 //! implementation; `engine/noise-gpu/kernels/qm_shared_math.cuh` is its device
 //! mirror, expression-for-expression, under the same QM-ATAN-n / QM-TAN-n
-//! equation labels (plan §6.2 label discipline). A diff touching a labelled
+//! equation labels. A diff touching a labelled
 //! expression here must show the matching hunk there.
 //!
 //! WHY A PORT AND NOT FRESH MINIMAX COEFFICIENTS. The requirement is

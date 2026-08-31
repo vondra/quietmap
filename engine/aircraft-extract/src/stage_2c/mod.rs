@@ -35,7 +35,7 @@ pub const AIRPORT_SUMMARY_FILENAME: &str = "airport_summary.arrow";
 /// [`run_stage_2a`](crate::stage_2a::run_stage_2a) for rationale.
 ///
 /// `aircraft_summary_dir` is where the global `airport_summary.arrow`
-/// sidecar is written after the per-R4 pass. Per plan §1.3 the popup
+/// sidecar is written after the per-R4 pass. The popup
 /// reads from a single canonical location instead of merging per-R4
 /// duplicates. When `None`, defaults to `<h3r4_dir>/../aircraft/`.
 pub fn run_stage_2c(

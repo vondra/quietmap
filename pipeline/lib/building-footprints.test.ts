@@ -5,7 +5,7 @@
  * Builds a synthetic obstacle store (one H3 R4 cell dir + an `.ingested-tiles`
  * manifest) so the tests pin the window geometry, the WKB area arithmetic and
  * — the one that decides whether a country silently loses its legal speeds —
- * the three-state coverage contract, without touching the 309 GB real store.
+ * the three-state coverage contract, without touching the real store.
  */
 
 import { test } from 'node:test'
@@ -114,7 +114,7 @@ test('building-footprints probe', async (t) => {
       [at(0, 0), at(inside, 0), at(0, inside), at(outside, 0), at(0, outside)],
       [TILE],
     )
-    assert.equal(sampler.windowFootprints(LAT, LON)!.count, 3)
+    assert.ok(Math.abs(sampler.windowFootprintAreaM2(LAT, LON)! - 1200) < 30)
     rmSync(root, { recursive: true, force: true })
   })
 
@@ -122,11 +122,11 @@ test('building-footprints probe', async (t) => {
     // 100 m square with a 50 m courtyard = 10 000 − 2 500 = 7 500 m².
     const wkb = polygonWkb([squareRing(LAT, LON, 100), squareRing(LAT, LON, 50)])
     const { root, sampler } = makeStore([{ lat: LAT, lon: LON, wkb }], [TILE])
-    const w = sampler.windowFootprints(LAT, LON)!
-    assert.ok(Math.abs(w.areaM2 - 7500) < 50, `expected ~7500 m², got ${w.areaM2}`)
+    const areaM2 = sampler.windowFootprintAreaM2(LAT, LON)!
+    assert.ok(Math.abs(areaM2 - 7500) < 50, `expected ~7500 m², got ${areaM2}`)
     // One raster pixel at 49.5° N is (111132/3600) × (111320·cos49.5/3600) ≈ 620 m².
     const px = sampler.estimatedBuiltPixels(LAT, LON)!
-    assert.ok(Math.abs(px - w.areaM2 / 620) < 0.5, `pixel estimate off: ${px}`)
+    assert.ok(Math.abs(px - areaM2 / 620) < 0.5, `pixel estimate off: ${px}`)
     rmSync(root, { recursive: true, force: true })
   })
 

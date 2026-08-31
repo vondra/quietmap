@@ -13,14 +13,14 @@
 //! BUILT_UP_MIN_BUILT_PIXELS pixels' worth of area on the retired 30 m raster
 //! grid.
 //!
-//! WHY it no longer reads the building raster: the 166 GB raster was only ever
-//! an urban-density proxy for this one flag, and it is being deleted. The
+//! WHY it no longer reads the building raster: that raster was only ever an
+//! urban-density proxy for this one flag and has been deleted. The
 //! vector obstacle store the engine already screens against carries the same
-//! Overture footprints, so the probe reads those instead. Measured on 27 951
-//! road segments across CZ/DE/FR/GB/US/BR (campaign 2026-08-built-up-vector):
+//! Overture footprints, so the probe reads those instead. Cutover validation
+//! measured 27 951 road segments across CZ/DE/FR/GB/US/BR:
 //! the two probes give the same answer for 97.30 % of segments, no segment
-//! changes to or from UNKNOWN (the ingest manifest lists exactly the 13 694
-//! degree tiles the raster covered), and of the 5 483 segments that actually
+//! changes to or from UNKNOWN because the same manifest defines coverage, and
+//! of the 5 483 segments that actually
 //! consult the flag — class 2/3/4/9 with no OSM maxspeed and no taper — 2.48 %
 //! resolve a different default speed.
 //!

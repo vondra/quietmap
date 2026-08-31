@@ -1,10 +1,10 @@
 //! [`FusedGrid`] + [`FusedPixel`] — L3-cache-resident cropped raster grid for
 //! pipeline compute.
 //!
-//! Pre-reads DEM + building + forest + IMD for a bbox out of
+//! Pre-reads DEM + forest + IMD for a bbox out of
 //! [`crate::real_rasters::RealRasters`] into one contiguous `Vec<FusedPixel>`,
 //! then implements [`noise_compute::types::RasterSampler`] over it with the SAME
-//! per-raster interpolation config (DEM/IMD bilinear, building/forest nearest) so
+//! per-raster interpolation config (DEM/IMD bilinear, forest nearest) so
 //! pipeline output matches mmap-based [`RealRasters`] to ~0 dB.
 
 use std::cell::RefCell;
@@ -23,7 +23,7 @@ fn next_grid_id() -> u64 {
 
 /// L3-cache-resident cropped raster grid for pipeline compute.
 ///
-/// Pre-reads DEM + building + forest + IMD for the hex bbox into ONE contiguous
+/// Pre-reads DEM + forest + IMD for the hex bbox into ONE contiguous
 /// Vec, cropped to just the needed area (~22 MB for a typical R4 hex + ring).
 /// Implements RasterSampler so all existing path_effects code works unchanged.
 /// Zero algorithmic change = zero dB error vs mmap-based RealRasters.
@@ -68,7 +68,7 @@ pub struct FusedPixel {
     pub elevation: f32, // DEM (meters, full precision bilinear)
     pub forest: u8,     // forest cover (0 or 100)
     pub imd: u8,        // imperviousness 0-100
-    pub _pad: u8,       // total: 4+1+1+1+1 = 8 bytes per pixel
+    pub _pad: u8,       // alignment padding; total 8 bytes per pixel
 }
 
 /// The C7.1 locality receipt measured 77.7775% exact hits at this capacity.
@@ -180,13 +180,8 @@ impl FusedGrid {
     /// DEM at sub-cell-shifted positions, introducing a persistent
     /// half-cell phase error that `lookup_fused` / `pixel` cannot correct.
     ///
-    /// Margin sized to cover `building_enclosure`'s metric 3×3 probe
-    /// (ENCLOSURE_RADIUS_M = 75 m) plus the `pixel()` nearest-neighbour
-    /// half-cell rounding. Probe footprint in DEM cells (~30.7 m):
-    /// lat ≈ 2.4 cells; lon ≈ 2.4/cos(lat), reaching ~7.1 cells at
-    /// 70°N. 8 cells stays safe through ~71°N (cos(lat) ≥ 0.32) —
-    /// covers every populated Arctic city; above that the probe
-    /// clamps to edge pixels exactly like the pre-fix code did.
+    /// Keep a conservative eight-cell sampling margin around the requested
+    /// bbox so endpoint interpolation stays inside the cropped grid.
     pub fn grid_dims(
         lat_min: f64,
         lat_max: f64,
@@ -354,7 +349,7 @@ impl FusedGrid {
         self.fill_profile_rasters(src_lat, src_lon, rcv_lat, rcv_lon, dist_m, out);
     }
 
-    /// Sample the four surface rasters at the t-values already in `out.t`,
+    /// Sample the three surface rasters at the t-values already in `out.t`,
     /// populating the profile. Shared by the exact + coarse-middle cadences
     /// (only the `out.t` fill differs); keeps the ray-march loop in one place.
     fn fill_profile_rasters(
@@ -477,11 +472,11 @@ impl FusedGrid {
         )
     }
 
-    /// Bilinear elevation + IMD, nearest-neighbour building + forest.
+    /// Bilinear elevation + IMD, nearest-neighbour forest.
     ///
     /// Matches `RealRasters` per-raster `Interp` config: DEM bilinear, IMD
-    /// bilinear, building/forest nearest. Earlier versions used `px00`
-    /// (top-left of the bilinear quad) for all three categoricals, biasing
+    /// bilinear, forest nearest. Earlier versions used `px00`
+    /// (top-left of the bilinear quad) for both categorical rasters, biasing
     /// up-left by half a cell and producing up to 6+ dB divergence from
     /// `RealRasters` wherever a raster edge passed through the quad.
     /// `(elev_bilinear, forest_nearest, imd_bilinear)` — the three surface
@@ -513,7 +508,7 @@ impl FusedGrid {
         let v0e = px00.elevation as f64 + fc * (px01.elevation as f64 - px00.elevation as f64);
         let v1e = px10.elevation as f64 + fc * (px11.elevation as f64 - px10.elevation as f64);
         let elev = (v0e + fr * (v1e - v0e)) as f32;
-        // Nearest-neighbor for building + forest (discrete categoricals).
+        // Nearest-neighbor for forest (a discrete categorical).
         let near = match (fr >= 0.5, fc >= 0.5) {
             (false, false) => px00,
             (false, true) => px01,
@@ -645,11 +640,10 @@ mod tests {
         ] {
             let g_real = real.ground_g(*lat, *lon);
             let g_fused = fg.ground_g(*lat, *lon);
-            // Fused samples IMD nearest-neighbour at ITS cell centre; the real reader
-            // interpolates bilinearly at the query point. On an IMD gradient the half-cell
-            // offset legitimately diverges by a few percent (first seen as 0.49 vs 0.50
-            // after the 2026-06 IMD water re-extract). 0.05 still catches the bugs this
-            // parity test exists for (off-by-tile, scale, axis swap), which are ≥0.1.
+            // Both paths interpolate IMD bilinearly. FusedGrid stores source
+            // samples as u8 and rounds the interpolated value back to u8, so a
+            // small quantisation difference is legitimate; coordinate or
+            // interpolation mistakes remain well outside this bound.
             assert!(
                 (g_real - g_fused).abs() < 0.05,
                 "ground_g divergence at ({}, {}): real={g_real:.4} fused={g_fused:.4}",

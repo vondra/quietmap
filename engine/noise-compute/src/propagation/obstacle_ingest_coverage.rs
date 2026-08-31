@@ -1,10 +1,6 @@
-//! Proof that a shard-less H3 R4 cell is INGESTED-EMPTY rather than
-//! never-staged — the fact that lets the vector-building loaders keep
-//! vector mode for rings containing such cells instead of silently
-//! falling back to the building raster (the all-or-raster policy,
-//! gg review 2026-07-28).
+//! Proof that a shard-less H3 R4 cell is ingested-empty rather than missing.
 //!
-//! WHY a manifest and not the shards: the world ingest
+//! The world ingest
 //! (`scripts/obstacles/ingest-overture-obstacles.py`) writes a shard only
 //! for cells that received ≥1 footprint — an empty cell leaves NO trace,
 //! so "no shards" is ambiguous between "covered and empty" (the common
@@ -13,31 +9,16 @@
 //! `.ingested-tiles` (one `N50E014`-form name per ingested 1-degree
 //! Overture tile), is exactly the missing evidence: a cell whose every
 //! overlapped degree tile is listed has been provably swept and contributed
-//! zero footprints. Our building raster derives from the SAME Overture
-//! release, so the raster fallback for such a cell would add nothing —
-//! vector mode with no index for it is acoustically identical and reads no
-//! raster at all.
+//! zero footprints.
 //!
 //! Coverage is CONSERVATIVE by construction: the tile set comes from the
 //! cell boundary's bounding box (may include tiles the hexagon never
 //! touches), polar pentagons are refused outright (their vertex bbox spans
 //! only part of the longitudes that belong to the cell), and ANY unlisted
 //! tile — including ocean tiles that carry no Overture parquet at all, so
-//! coast-hugging cells often stay unproven — keeps the old raster fallback.
+//! coast-hugging cells often stay unproven — keeps coverage unknown.
 //! A manifest that is absent or unreadable (e.g. a Vast worker that staged
-//! only the h3r4 tree) means coverage UNKNOWN: the loaders keep today's
-//! behavior there.
-//!
-//! OPERATIONAL INVARIANT (unverified at load time, /gg both-reviewer
-//! finding): the raster-building pipeline and this ingest must stay on the
-//! SAME Overture release. A building-raster restage from a NEWER release
-//! MUST delete `.ingested-tiles` (and re-run the ingest) in the same
-//! change — otherwise a cell empty in the old release and built-up in the
-//! new one would read manifest-proven-empty while the raster channel has
-//! buildings. Re-ingesting a tile keeps this safe by removing its manifest
-//! line before unlinking shards (ingest-overture-obstacles.py reconcile
-//! step); full release-id pinning of the manifest against the raster
-//! provenance stamp is the recommended follow-up.
+//! only the h3r4 tree) means coverage UNKNOWN and strict loaders fail there.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -94,9 +75,8 @@ fn cache() -> &'static Mutex<std::collections::HashMap<PathBuf, &'static IngestM
 }
 
 impl IngestManifest {
-    /// Parse the manifest at `path`. `None` ⇒ absent or unreadable ⇒
-    /// coverage unknown (callers keep the raster fallback for shard-less
-    /// cells); malformed lines are skipped loudly on stderr, never guessed
+    /// Parse the manifest at `path`. `None` means absent or unreadable and
+    /// therefore unknown coverage; malformed lines are skipped loudly, never guessed
     /// around — a half-parsed manifest must not claim coverage it lost.
     pub fn load_cached(path: &Path) -> Option<&'static IngestManifest> {
         if !path.is_file() {
@@ -135,8 +115,7 @@ impl IngestManifest {
         // listing just the vertex-span tiles would wrongly prove coverage
         // (/gg Codex finding 2 vs Kimi's fail-safe read; Codex is right).
         // Guard by latitude: beyond ±89° the only R4 cells are the polar
-        // pentagons; refuse coverage there (raster fallback — ice/ocean,
-        // zero buildings, no cost).
+        // pentagons, whose vertex bbox cannot prove complete coverage.
         if lat_max > 89.0 || lat_min < -89.0 {
             return false;
         }

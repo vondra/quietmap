@@ -12,11 +12,9 @@ quietmap.org shows how loud the world really is — and helps you find the quiet
 
 1. **Find quiet places** — search any address, explore the map, discover where to live, work, or relax without noise
 2. **Understand noise** — see which sources contribute (roads, railways, aircraft, industry) and how terrain, buildings, and forests reduce it
-3. **Track change over time** — regular updates make noise measurable, so communities and governments can see whether things are getting quieter
+3. **Build a comparable record** — each published dataset generation is frozen, so later generations can be compared honestly
 
 Human-made noise is not the same as natural sound. A forest at 50 dB with birdsong feels quiet. A road at 50 dB with traffic feels loud. quietmap.org measures environmental noise from human sources — transport, industry, and urban activity — not nature.
-
-→ **[What's new](/about/news)** — recent improvements and what we are working on.
 
 ## How the map works
 
@@ -30,7 +28,8 @@ Each of the five source layers — roads, railways, aircraft, industrial, buildi
 
 ![quietmap.org — noise visualization](map-overview.jpg)
 
-→ **[Read the full methodology](/about/methodology)** — per-layer emission standards (CNOSSOS-EU, Doc 29, IEC 61400-11), the propagation physics, where the model simplifies vs the standards, and the ongoing accuracy validation against real measurement stations.
+→ **[Read the full methodology](/about/methodology)** — source layers, propagation,
+the standards they use, known limits, and validation against real measurements.
 
 ## Click anywhere
 
@@ -47,30 +46,27 @@ Every point on the map can explain itself. Click, and a panel shows the total Ld
 
 Nothing on the map is a black box — if a number surprises you, two clicks show where it came from.
 
-## Defaults and enrichment
+## Data and enrichment
 
-Each layer's [methodology](/about/methodology) page lists **fallback defaults** — what we assume when no measured data exists. Where real data is available it overrides them, resolved through a four-tier cascade: **city → country → continent → world**. A place with a local traffic survey uses it; otherwise it inherits its country's value, then its continent's, then a global default.
+The map combines OpenStreetMap geometry with public traffic, rail, flight, building,
+terrain, land-cover, and industrial-registry data. Local measurements and registries
+override class defaults where they exist; otherwise a source inherits a documented
+default for its class. Matching is class-aware: a motorway count does not become a
+residential-street count, and a tram timetable does not become a mainline estimate.
 
-**Enrichment is class-aware.** A measured motorway count is matched only to motorway-class segments — a residential street never inherits a neighbouring highway's traffic, and a tram siding never inherits a mainline's train count. Coverage today (and growing):
-
-- **Roads** — 53 countries with national traffic data (US HPMS, EU 36-city harmonized AADT, national surveys), plus the global service-tree estimate for minor roads.
-- **Railways** — ~50 countries from GTFS passenger timetables + national freight-corridor estimates, family-aware (tram / siding / mainline kept separate).
-- **Industrial** — ~124 countries with industrial enrichment: the EU-wide E-PRTR pollution registry (~85,600 registered facilities, 50,488 reporting year 2024), the Global Power Plant Database, and national wind-turbine and power-plant registries; wind turbines from a global turbine inventory.
-
-Everything else falls back to the class-defaults. Each country page lists exactly which extra data its country uses — explore by region:
+The [methodology](/about/methodology) explains the model and its limits. Country pages
+describe local sources and gaps; use the region list below to explore them.
 
 <!-- REGION_CHILDREN -->
 
-## How fresh is the data
+## Dataset generations
 
-The current map is the **2026 dataset** — one worldwide computation generation, built from:
-
-- **OpenStreetMap** — planet extract from May 2026 (roads, railways, buildings, industrial sites, airports)
-- **Airline traffic** — [ADSBExchange](https://www.adsbexchange.com/) samples: the 1st of every month, July 2025 – June 2026 (12 days)
-- **General aviation & helicopters** — [adsb.lol](https://adsb.lol/) community feeds: every day from 2 June 2025 through 1 June 2026 (364 days — one day was never published upstream). A full year of days, aligned with the airline window, because occasional flights need a whole year to be weighted honestly; our archive already spans 2024–2026 for future datasets
-- **Traffic counts & registries** — the latest published national data at build time (per-country details on the country pages)
-
-The plan is one frozen dataset per year: when the 2027 map arrives, you'll be able to compare — did your street get quieter?
+The public map is published as a frozen worldwide dataset generation. Each generation
+combines a planet extract, flight observations, and the latest available public
+traffic and registry data at build time. Source coverage changes by country and layer;
+the country pages record important exceptions. Once multiple generations are published,
+their frozen inputs will make comparison possible without pretending that every source
+was measured on the same day.
 
 ## What you see on the map
 
@@ -118,10 +114,6 @@ Below 30 dB the map is transparent (the scheme's "no color"); 80 dB is the termi
 
 ## Overlays
 
-### Real estate — in preparation
-
-Property listings on the map, filtered by noise: each listing will carry the computed Lden at its location — sampled from the same tiles the map shows — with a noise slider to hide everything above your threshold. We are preparing data partnerships with listing portals; a prototype of the feature already works end-to-end.
-
 ### Quiet zones
 
 Shades every map pixel below a configurable noise threshold (default 35 dB, slider 20–45) green. Useful for identifying quiet retreats, parks, and areas suitable for noise-sensitive development.
@@ -135,7 +127,7 @@ Computed — a physics model (CNOSSOS-EU emission, ISO 9613-2 propagation) over 
 It's an engineering estimate, not a certificate. A gap against a measurement or official map is first attributed to better input data, a justified methodology difference, or a model defect; only defects become fixes. For a single address, read the value as "around X dB" — and click the point to see exactly what the number is built from.
 
 **Why does my quiet street show 50 dB?**
-Click it. Most surprises have a visible cause: a road with no measured traffic falls back to class defaults, a nearby factory is classified by registry sector, or the dominant source is something you've tuned out. If the inputs are genuinely wrong for your street, [tell us](mailto:hello@quietmap.org) — reports with an address are how the map gets better.
+Click it. Most surprises have a visible cause: a road with no measured traffic falls back to class defaults, a nearby factory is classified by registry sector, or the dominant source is something you've tuned out. If the inputs are genuinely wrong for your street, [tell us](mailto:info@quietmap.org) — reports with an address are how the map gets better.
 
 **Why are there no low-flying aircraft where I live?**
 The aircraft layer sees what volunteer ADS-B receivers see. Where no feeder is nearby, low-altitude flights aren't received and only high-altitude cruise noise (~20 dB) appears — a limit of the data source, not the model. Hosting a receiver in a blank spot fixes it for everyone.
@@ -148,7 +140,7 @@ Yes, free, with visible "quietmap.org" attribution — details in [credits & ter
 
 ## Help us make it better
 
-**See something wrong on your street?** Write to [hello@quietmap.org](mailto:hello@quietmap.org) with the address. Every confirmed report feeds the validation loop — real-world corrections are the most valuable data we get.
+**See something wrong on your street?** Write to [info@quietmap.org](mailto:info@quietmap.org) with the address. Every confirmed report feeds the validation loop — real-world corrections are the most valuable data we get.
 
 **Have data? We're looking for** (in order of impact):
 
@@ -159,13 +151,9 @@ Yes, free, with visible "quietmap.org" attribution — details in [credits & ter
 5. **Better national data for any country** — traffic censuses, facility registries, turbine inventories.
 6. **Shipping** — vessel traffic and port operations, for a future marine layer.
 
-If you work somewhere that has this data — or know who does — [we'd love to talk](mailto:hello@quietmap.org).
+If you work somewhere that has this data — or know who does — [we'd love to talk](mailto:info@quietmap.org).
 
 ## Who builds this
-
-quietmap.org is built by one person working with three AI coding agents: **Claude** as lead developer, **Codex** as second developer and code reviewer, and **Gemini** for an independent second opinion and review — with promising open-source models tried along the way as they appear. Development started in June 2025 on Opus 4; every major Opus, GPT, and Gemini release since has been tried on this codebase — progress accelerated markedly with [OpenClaw](https://openclaw.ai/) and Opus 4.6, and it's kept getting better since.
-
-Some of it was built while hiking the forests of La Palma — changes discussed with the models over Telegram through OpenClaw, on a mobile signal that kept cutting out. It worked surprisingly well. Fitting, for a map about quiet.
 
 quietmap.org is an internal project of [Miton](https://www.miton.cz/en/).
 
@@ -173,11 +161,9 @@ The [product code is open source](https://github.com/vondra/quietmap), and the c
 
 ## Credits & terms
 
-quietmap.org builds on the open geodata ecosystem — OpenStreetMap, Copernicus, ESA WorldCover, ADS-B community feeds, and more — and is free to use and embed with attribution, no cookies or trackers.
-
 → **[Data credits, usage terms & privacy](/about/credits)**
 
 ## Contact & status
 
-- **Email:** [hello@quietmap.org](mailto:hello@quietmap.org)
+- **Email:** [info@quietmap.org](mailto:info@quietmap.org)
 - **Service status:** [status.quietmap.org](https://status.quietmap.org) — live uptime of the map and tiles

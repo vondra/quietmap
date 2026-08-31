@@ -14,8 +14,8 @@
 //!                0 Unknown, 1 Europe, 2 NorthAmerica, 3 SouthAmerica,
 //!                4 Asia, 5 Africa, 6 Oceania.
 //!
-//! Resolution (plan §1: country/city/continent are static geography — resolve
-//! once, offline, per segment; the runtime reads a column, never guesses):
+//! Country, city, and continent are static geography, so resolve them once,
+//! offline, per segment; the runtime reads a column and never guesses:
 //! antimeridian-safe midpoint of (start,end) → `adminAt` (lib/admin-at.ts, M2 —
 //! exact CGAZ PIP + uniquely-attributable 2 km coastal fallback) → `cityAt`
 //! (metro PIP gated by the resolved country) → `continentForIso` (the ONE

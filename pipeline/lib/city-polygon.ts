@@ -7,8 +7,7 @@
  * what keeps that rank honest: only rows whose midpoint lies inside the
  * city's real municipal boundary are eligible. Rectangle bboxes are NOT
  * acceptable here (a bbox + rank-above-national would overwrite neighbouring
- * towns' valid national data — city-enrichment-plan §2.2, Gemini /gg
- * CRITICAL).
+ * towns' valid national data.
  *
  * Deliberately polygon-only — no ADM0/`makeCountryGate` dependency — so
  * city-state and territory adapters (Singapore, Hong Kong) can gate on their

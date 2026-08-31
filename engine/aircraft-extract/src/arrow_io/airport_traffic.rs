@@ -144,8 +144,7 @@ pub fn write_airport_traffic(
     let mut band_values: Vec<f32> = Vec::with_capacity(n * NUM_BANDS);
     let mut gse_values: Vec<u32> = Vec::with_capacity(n * NUM_GSE_CLASSES);
     let mut microseg_gse_values: Vec<u32> = Vec::with_capacity(n * NUM_GSE_CLASSES);
-    // Popup batch pruning (docs/dev/popup-batch-pruning.md): microsegment
-    // endpoint box per row; f32→f64 is exact.
+    // Each microsegment gets an endpoint box; f32→f64 is exact.
     let mut row_bboxes = Vec::with_capacity(n);
 
     for r in rows {

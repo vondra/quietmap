@@ -1,7 +1,6 @@
 /**
  * Rail-segment graph — the ONE topology SSOT for the rail graph-walk matcher,
- * the R15/R16 continuity auditors and enrichment-status metrics (2026-07-15
- * railway enrichment fix, see the `pro-e-sd-zaj-m-wobbly-liskov` plan §Phase 1).
+ * the R15/R16 continuity auditors and enrichment-status metrics.
  * Pure, no file I/O — callers own reading Arrow/GTFS and writing stamps.
  *
  * `buildRailGraph` interns segment endpoints via `nodeKey()` (spatial.ts) and

@@ -185,7 +185,7 @@ async function main() {
     (WRITE ? `, stamped ${sum.stamped}` : ''))
   console.log(`  top steps:`)
   for (const t of sum.top.slice(0, 15)) {
-    console.log(`    ${t.db.toFixed(1)} dB  ${t.kind.padEnd(14)} https://dev1.quietmap.org/#lat=${t.lat}&lng=${t.lon}&z=15&ro=road`)
+    console.log(`    ${t.db.toFixed(1)} dB  ${t.kind.padEnd(14)} #lat=${t.lat}&lng=${t.lon}&z=15&ro=road`)
   }
 }
 

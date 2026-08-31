@@ -195,7 +195,7 @@ pub const MULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT: usize = 4;
 /// output allocation, so the stock output ABI is not widened or aliased.
 pub const OUT_SLOTS_MULTIFIDELITY: usize = OUT_SLOTS_PROD;
 
-/// Ratios from the reviewed §3.5e rail work census.
+/// Ratios from the reviewed production line-screening census (SPEC §4.7).
 pub struct RailPortArcstatCensus {
     pub buckets_per_gpu_pair: f64,
     pub gpu_pair_escalation_frac: f64,
@@ -204,7 +204,7 @@ pub struct RailPortArcstatCensus {
     pub gpu_escalating_buckets_per_authority_bucket_ray: f64,
 }
 
-/// Validate the reviewed §3.5e work shape on the rail acceptance tile
+/// Validate the reviewed production line-screening work shape on the rail acceptance tile
 /// z12/2206/1391.
 ///
 /// The CPU authority measured 90,385,255 pairs, 451,925,193 usable bucket rays
@@ -823,7 +823,7 @@ fn ensure_no_cpu_only_arc_levers_with(mut is_set: impl FnMut(&str) -> bool) -> a
     // 2026-08-08 `CellPrune::max_delta` was found underbounding the below-sight-
     // line branch, i.e. the prune WAS changing levels, which is why the lever
     // stays even though nothing else reads it.
-    // Since the 2026-08-19 §3.5e port the kernel paints the CPU painter's own
+    // The kernel paints the CPU painter's own SPEC §4.7 defaults.
     // defaults. Unset is therefore the only accepted state. Accepting a copied
     // numeric "pin" would recreate a second source of truth; accepting malformed
     // whitespace is worse because the guard could parse it while the CPU falls

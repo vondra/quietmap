@@ -7,19 +7,15 @@
 //! Buildings pre-discretized at import (centroid or facade points).
 //! This module computes emission for a single point source.
 //!
-//! Calibration (settlement v2 phase 1, 2026-06-12): constants are HONEST
-//! radiated dB(A) — `a_weighted_total(building_emission_bands(p, lw)) == lw`.
-//! Values anchored to measured plant/activity literature collected in
-//! `.claude/plans/audit-2026-06/settlement-noise-v2-plan.md` §A/§C (dual
-//! /gg-reviewed; per-class provenance inline below). The pre-v2 constants were
-//! an uncalibrated heuristic kept alive by the C7 net-zero `AW_*` compensation;
-//! that compensation is gone — do NOT reintroduce offsets here, band
-//! normalization happens in `spectrum::normalized_emission_bands`.
+//! Constants are radiated dB(A):
+//! `a_weighted_total(building_emission_bands(p, lw)) == lw`. Per-class
+//! provenance is inline below. Band normalization happens once in
+//! `spectrum::normalized_emission_bands`; do not add compensating offsets here.
 //!
 //! Phase 2 (2026-06-12, re-extract) added four classes the coarse phase-1 u8
 //! could not carry: [`SILENT`] (sheds/roofs/huts — the ~18 M phantom
-//! residential emitters from enumeration §C′, now Lw 0), [`HOUSE`] (split from
-//! apartments — same heat-pump floor, gentler plan §C night cut), [`FOOD_RETAIL`]
+//! residential emitters, now Lw 0), [`HOUSE`] (split from apartments with the
+//! same heat-pump floor and a gentler night cut), [`FOOD_RETAIL`]
 //! (24/7 refrigeration, night −2 not −20), and [`HOSPITALITY`] (kitchen extract
 //! plus evening voices). Classes 0–9 stay byte-stable; the spill `building_type()`
 //! enumerates the new u8s, the finalize POI join reclassifies `building=yes`.
@@ -33,15 +29,15 @@ use crate::types::NUM_BANDS;
 /// silently re-profile every cached building.
 pub const SILENT: u8 = 10;
 /// Residential house (detached/terrace/bungalow) — heat-pump floor, split from
-/// apartments (class 0) so the gentler plan §C night cut (−8, not −10) applies.
-/// The day garden-maintenance event is a deferred separate overlay (plan §A/§C).
+/// apartments (class 0) so the gentler night cut (−8, not −10) applies.
+/// Daytime garden maintenance is not part of this source.
 pub const HOUSE: u8 = 11;
 /// Food retail (supermarket / convenience / food shop) — rooftop refrigeration
 /// condensers run 24/7, so the night cut is only −2 dB (audit B2, the single
-/// worst phase-1 finding). Plan §A row "food-retail".
+/// worst phase-1 finding).
 pub const FOOD_RETAIL: u8 = 12;
 /// Hospitality (restaurant / café / pub / bar / fast_food) — continuous kitchen
-/// canopy-extract fan + evening patron voices. Plan §A row "restaurant/café".
+/// canopy-extract fan + evening patron voices.
 pub const HOSPITALITY: u8 = 13;
 
 /// FOOTPRINT-scaled classes: noise scales with the ground footprint, NOT
@@ -69,8 +65,8 @@ pub struct BuildingProfile {
 
 /// Get emission profile by building type.
 ///
-/// Spectra: "LF" plant/HVAC peaks 63–250 Hz (diffracts well → carries far,
-/// plan B10 — real building-services plant is LF-dominant, not the old
+/// Spectra: "LF" plant/HVAC peaks 63–250 Hz (diffracts well → carries far;
+/// real building-services plant is LF-dominant, not the old
 /// 500 Hz–2 kHz voice band); voices peak mid; bells/whistles HF.
 pub fn building_profile(building_type: u8) -> BuildingProfile {
     match building_type {
@@ -78,7 +74,7 @@ pub fn building_profile(building_type: u8) -> BuildingProfile {
             // residential (houses AND apartment blocks until phase 2 splits them)
             // Anchor: 1 ASHP outdoor unit Lw 54–62 (Daikin EN14825; EU 813/2013
             // cap 65) running day+night → whole-house fixed term ≈ 57; night cut
-            // −10 not −15 (heat pumps run hardest on winter nights; plan §A/§C).
+            // −10 not −15 because heat pumps run hardest on winter nights.
             // settlement v3 (gg2): per_m² 21→25 — a big AC/HP-heavy block scales
             // up GENTLY (20k m² → Lw ~68), NOT the full ~35 size-law (that gives
             // 78, unrealistic where district/gas heating has no outdoor plant).
@@ -117,7 +113,7 @@ pub fn building_profile(building_type: u8) -> BuildingProfile {
         },
         3 => BuildingProfile {
             // school — yard shouting dominates (just-outside-yard 71.7 dB
-            // during breaks, ~190 d/yr → 57 Leq annual at the fence, plan §A).
+            // during breaks, ~190 d/yr → 57 Leq annual at the fence).
             // Term-time day-weekday source; deep evening/night cuts stay.
             lw_fixed: 66.0,
             lw_per_m2: 28.0,
@@ -137,8 +133,8 @@ pub fn building_profile(building_type: u8) -> BuildingProfile {
         5 => BuildingProfile {
             // church/worship — bells: ~110–125 dB at tower, annualized −20.8
             // (12 min/day) → ≈ Lw 89 IF the tower rings; many OSM churches
-            // don't → fleet-average 72 fixed, PROP-MEAS (plan §A corrected
-            // derivation; confirm bell share + Lw by measurement).
+            // don't → fleet-average 72 fixed, PROP-MEAS; confirm bell share and
+            // Lw by measurement.
             lw_fixed: 72.0,
             lw_per_m2: 26.0,
             spectrum: [-3.0, -2.0, -1.0, 0.0, 1.0, 1.0, 0.0, -2.0],
