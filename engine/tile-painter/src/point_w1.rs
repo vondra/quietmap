@@ -278,10 +278,6 @@ fn combine_stats(a: PointScatterStats, b: PointScatterStats, rows: usize) -> Poi
     }
 }
 
-/// Apply the ordinary AREA median fill only to exact receivers.
-///
-/// Numeric interpolated cells already use a final-field surrogate and must
-/// not be raised a second time. Exact cells are the only cells that still
 fn anchor_axis() -> Vec<usize> {
     let mut axis = (0..TILE_PX).step_by(STRIDE).collect::<Vec<_>>();
     if axis.last().copied() != Some(TILE_PX - 1) {
@@ -576,14 +572,6 @@ fn block_mask(flags: &[bool], axis: &[usize]) -> Vec<bool> {
     mask
 }
 
-/// Whole stride-blocks near any point source are always exact. Façade fields
-/// change by many dB per pixel next to their own sources, so no anchor
-/// interpolation is admissible there regardless of how benign the anchors
-/// look — the same principle as the line layers' selected exact tail (a
-/// source-adjacent block cannot be certified from outside). The radius scales
-/// with the source's own footprint (`exclusion_radius_m`, the self-screening
-/// disc): a large building's steep zone spans its footprint, not a fixed few
-/// pixels, plus a fixed margin so small façades are covered too.
 /// Mask of every pixel that is the façade donor of at least one enclosed
 /// pixel in `interior` — the exact set `interior.apply` reads its values from.
 fn interior_donor_mask(interior: &crate::source_loader_obstacle::InteriorEstimate) -> Vec<bool> {
@@ -596,6 +584,10 @@ fn interior_donor_mask(interior: &crate::source_loader_obstacle::InteriorEstimat
     mask
 }
 
+/// Whole stride-blocks near any point source are always exact. Façade fields
+/// change by many dB per pixel next to their own sources, so no anchor
+/// interpolation is admissible there regardless of how benign the anchors.
+/// The radius scales with the source footprint plus the area-fill margin.
 fn source_proximity_block_flags(
     tile: &FusedTileZ13,
     points: &[PointRow],
