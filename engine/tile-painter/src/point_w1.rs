@@ -1,9 +1,8 @@
 //! W1-only point-layer sparse receiver reconstruction (industrial, building).
 //!
-//! This module is deliberately opt-in through `QM_W1_INDUSTRIAL_POLICY`
-//! (`adaptive-stride5`); the machinery is layer-agnostic and a building port
-//! exists, but its switch is UNLISTED in the gate until that port passes the
-//! drift contract — nothing can activate it. It renders a direct-local
+//! This module is deliberately opt-in through `QM_W1_INDUSTRIAL_POLICY` /
+//! `QM_W1_BUILDING_POLICY` (`adaptive-stride5`); both point layers pass their
+//! drift contracts with it (building: 0.000 % on every amplitude rung). It renders a direct-local
 //! surrogate over the whole tile, computes exact physics only at a stride-5
 //! anchor lattice, derives the whole-block refinement mask from anchor
 //! tri-state, raw-anchor residual range, and surrogate-predicted numeric
@@ -36,6 +35,7 @@ fn policy_enabled(layer: &str) -> bool {
     // for it until that rung passes.
     let var = match layer {
         "industrial" => "QM_W1_INDUSTRIAL_POLICY",
+        "building" => "QM_W1_BUILDING_POLICY",
         _ => return false,
     };
     matches!(std::env::var(var).as_deref(), Ok("adaptive-stride5"))
@@ -204,21 +204,21 @@ pub(crate) fn render(
         .enumerate()
         .map(|(idx, value)| quantise_candidate(*value, predicted_state(&anchor_state, &axis, idx)))
         .collect::<Vec<_>>();
-    // The exact receiver UNION — selected blocks AND anchors — pins the numeric
-    // field: the residual interpolation must never speak at a pixel whose
-    // exact byte is known (measured: anchors left to interpolation were the
-    // >6 dB tail, one-sided to silence at sharp façade gradients).
+    // The exact receiver UNION — selected blocks AND anchors — takes its
+    // DISPLAY value from legacy_presence, not from the raw exact byte: the
+    // legacy field is exact-pinned then run through the stock whole-tile
+    // area-median and interior transforms, which is exactly what the stock
+    // path displays at those pixels (measured: legacy == reference at every
+    // debugged tail pixel; pinning raw bytes left façade ripple valleys
+    // un-raised — the >6 dB tail). The numeric surrogate keeps speaking only
+    // where no exact receiver exists.
     let mut exact_union_mask = refine_mask.clone();
     for (union_cell, anchor) in exact_union_mask.iter_mut().zip(anchor_mask.iter()) {
         *union_cell |= *anchor;
     }
     for (idx, exact) in exact_union_mask.iter().enumerate() {
         if *exact {
-            candidate[idx] = if anchor_mask[idx] {
-                exact_anchor_cells[idx]
-            } else {
-                exact_cells[idx]
-            };
+            candidate[idx] = legacy_presence[idx];
         }
     }
     for (candidate_cell, &presence_cell) in candidate.iter_mut().zip(legacy_presence.iter()) {
@@ -228,16 +228,6 @@ pub(crate) fn render(
             _ => (*candidate_cell).max(PAINT_FLOOR_BYTE),
         };
     }
-    // The numeric field was already median-filled above, so the caller must
-    // not fill it again. Exact cells still need the same display smoothing as
-    // the stock point path; restrict the operation to the exact receiver
-    // union so it cannot perturb sparse numeric interpolation.
-    fill_selected_area_median(
-        &mut candidate,
-        &exact_union_mask,
-        crate::wire_hm3::AREA_FILL_RADIUS_PX,
-    );
-    apply_selected_interior(interior, &mut candidate, &exact_union_mask);
     // Median fill can cross the presence threshold or fill an exact NO_DATA
     // cell. Re-apply the preserved runtime presence state after smoothing.
     for (candidate_cell, &presence_cell) in candidate.iter_mut().zip(legacy_presence.iter()) {
@@ -293,89 +283,10 @@ fn combine_stats(a: PointScatterStats, b: PointScatterStats, rows: usize) -> Poi
 /// Numeric interpolated cells already use a final-field surrogate and must
 /// not be raised a second time. Exact cells are the only cells that still
 /// need the stock point-path smoothing before the tile is written.
-fn fill_selected_area_median(cells: &mut [u8], selected: &[bool], radius: usize) {
-    debug_assert_eq!(cells.len(), TILE_PX * TILE_PX);
-    debug_assert_eq!(selected.len(), TILE_PX * TILE_PX);
-    let src = cells.to_vec();
-    let side = 2 * radius + 1;
-    let mut window = Vec::with_capacity(side * side);
-    for py in 0..TILE_PX {
-        let y0 = py.saturating_sub(radius);
-        let y1 = (py + radius).min(TILE_PX - 1);
-        for px in 0..TILE_PX {
-            let idx = py * TILE_PX + px;
-            if !selected[idx] {
-                continue;
-            }
-            let x0 = px.saturating_sub(radius);
-            let x1 = (px + radius).min(TILE_PX - 1);
-            window.clear();
-            let mut window_cells = 0usize;
-            for wy in y0..=y1 {
-                let row = wy * TILE_PX;
-                for wx in x0..=x1 {
-                    window_cells += 1;
-                    let value = src[row + wx];
-                    if value != NO_DATA {
-                        window.push(value);
-                    }
-                }
-            }
-            if window.len() < 2 {
-                continue;
-            }
-            window.sort_unstable();
-            let median = window[window.len() / 2];
-            if (src[idx] != NO_DATA && median > src[idx])
-                || (src[idx] == NO_DATA && window.len() * 4 >= window_cells * 3)
-            {
-                cells[idx] = median;
-            }
-        }
-    }
-}
 
 /// Apply the building-envelope transform only to exact cells. The numeric
 /// surrogate has already been transformed; applying it to every cell would
 /// subtract the façade delta twice from enclosed interpolation.
-fn apply_selected_interior(
-    interior: &crate::source_loader_obstacle::InteriorEstimate,
-    cells: &mut [u8],
-    selected: &[bool],
-) {
-    use noise_compute::envelope::EnvelopeClass;
-
-    debug_assert_eq!(cells.len(), TILE_PX * TILE_PX);
-    debug_assert_eq!(selected.len(), TILE_PX * TILE_PX);
-    for (index, class) in interior.classes().iter().copied().enumerate() {
-        let raw_donor = interior.donors()[index];
-        let donor = if raw_donor == crate::source_loader_obstacle::NO_DONOR {
-            // No reachable donor: an exact enclosed pixel mirrors the stock
-            // path's NO_DATA; a non-exact one keeps its interpolated value.
-            if selected[index] {
-                cells[index] = NO_DATA;
-            }
-            continue;
-        } else {
-            raw_donor as usize
-        };
-        // Transform when the enclosed pixel is exact OR ITS DONOR is: a
-        // non-exact enclosed pixel still inherits its donor's value, so an
-        // exact donor must propagate through it.
-        if !selected[index] && !selected[donor] {
-            continue;
-        }
-        let Some(delta) = EnvelopeClass::from_u8(class).delta_db() else {
-            continue;
-        };
-        let facade = crate::wire_hm3::dequantise_lden(cells[donor]);
-        cells[index] = if facade.is_finite() {
-            crate::wire_hm3::quantise_lden((facade - delta).max(0.0))
-        } else {
-            NO_DATA
-        };
-    }
-}
 
 fn anchor_axis() -> Vec<usize> {
     let mut axis = (0..TILE_PX).step_by(STRIDE).collect::<Vec<_>>();
