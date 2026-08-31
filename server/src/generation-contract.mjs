@@ -40,6 +40,7 @@ const W2_SPATIAL_PRODUCER_ROLES = Object.freeze({
 })
 const W1_ACCEPTED_NUMERICAL_ENVIRONMENT = Object.freeze({
   QM_W1_INDUSTRIAL_POLICY: 'adaptive-stride5',
+  QM_W1_BUILDING_POLICY: 'adaptive-stride5',
 })
 const W1_ACCEPTED_SCORER_CONTRACT = Object.freeze({
   bias_db_max: 0.5,
@@ -74,6 +75,7 @@ const ALLOWED_NUMERICAL_ENVIRONMENT = new Set([
   'QM_OBSTACLES_DIR',
   'QM_SEG_SAMPLES',
   'QM_W1_INDUSTRIAL_POLICY',
+  'QM_W1_BUILDING_POLICY',
   'SURFACE_BLOCK_PX',
   'SURFACE_BOUND_M3',
   'SURFACE_BUDGET_ETA',
