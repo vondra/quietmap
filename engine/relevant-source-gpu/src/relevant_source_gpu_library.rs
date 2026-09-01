@@ -1,4 +1,4 @@
-//! Relevant-source GPU painter: source encoding, persisted block partitions, and W1 runner.
+//! Relevant-source GPU painter: source encoding, persisted block partitions, and the wave runner.
 
 #[cfg(feature = "gpu")]
 pub mod cuda_bridge;

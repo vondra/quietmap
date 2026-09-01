@@ -1,4 +1,4 @@
-//! Fixed W1 road/rail runner and phase/pair measurement for relevant-source painting.
+//! Road/rail runner over one wave's zoom and phase/pair measurement for relevant-source painting.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -24,14 +24,15 @@ use crate::relevant_source_tile::{
 };
 use crate::source_frame::{source_identity_fingerprint, DeviceLineSource, RegionMetricFrame};
 
-const W1_ZOOM: u8 = 12;
 const REGION_TILE_BATCH_SIDE: u32 = 4;
 const LINE_HALO_M: f64 = 10_000.0;
 
-pub struct RelevantSourceW1Configuration {
+pub struct RelevantSourceRunConfiguration {
     pub prepared_directory: PathBuf,
     pub h3r4_directory: PathBuf,
     pub output_directory: PathBuf,
+    /// Web-Mercator zoom of the painted tiles: 12 for W1, 13 for W2.
+    pub zoom: u8,
     pub regions: Vec<u64>,
 }
 
@@ -60,7 +61,7 @@ impl LayerMeasurement {
 }
 
 #[derive(Debug, Default)]
-pub struct RelevantSourceW1Measurement {
+pub struct RelevantSourceRunMeasurement {
     pub road: LayerMeasurement,
     pub rail: LayerMeasurement,
     pub wall_seconds: f64,
@@ -70,7 +71,7 @@ pub struct RelevantSourceW1Measurement {
     pub host_tile_seconds: f64,
 }
 
-impl RelevantSourceW1Measurement {
+impl RelevantSourceRunMeasurement {
     pub fn gpu_seconds(&self) -> f64 {
         (self.road.corner_gpu_milliseconds
             + self.road.paint_gpu_milliseconds
@@ -95,16 +96,16 @@ struct EncodedLineLayer {
     device_sources: RegionDeviceLineSources,
 }
 
-pub fn run_relevant_source_w1(
-    configuration: &RelevantSourceW1Configuration,
-) -> Result<RelevantSourceW1Measurement> {
+pub fn run_relevant_source_wave(
+    configuration: &RelevantSourceRunConfiguration,
+) -> Result<RelevantSourceRunMeasurement> {
     let started = Instant::now();
     let starting_usage = ProcessUsage::read();
     admin::init_admin_table(&admin::default_admin_path(&configuration.h3r4_directory))
         .context("load the road/rail admin table")?;
     let rasters = RealRasters::new(&configuration.prepared_directory);
     let cuda = RelevantSourceCuda::initialize()?;
-    let mut measurement = RelevantSourceW1Measurement::default();
+    let mut measurement = RelevantSourceRunMeasurement::default();
 
     for &region_r4 in &configuration.regions {
         process_region(configuration, region_r4, &rasters, &cuda, &mut measurement)?;
@@ -115,14 +116,15 @@ pub fn run_relevant_source_w1(
 }
 
 fn process_region(
-    configuration: &RelevantSourceW1Configuration,
+    configuration: &RelevantSourceRunConfiguration,
     region_r4: u64,
     rasters: &RealRasters,
     cuda: &RelevantSourceCuda,
-    measurement: &mut RelevantSourceW1Measurement,
+    measurement: &mut RelevantSourceRunMeasurement,
 ) -> Result<()> {
     let cell = CellIndex::try_from(region_r4).context("invalid R4 region")?;
-    let tiles = region_tiles(region_r4, W1_ZOOM);
+    let zoom = configuration.zoom;
+    let tiles = region_tiles(region_r4, zoom);
     let ring: Vec<u64> = cell
         .grid_disk::<Vec<_>>(1)
         .into_iter()
@@ -161,10 +163,9 @@ fn process_region(
     }
     for ((block_x, block_y), requested_tiles) in batches {
         let raster_started = Instant::now();
-        let (base_x, base_y) =
-            block_batch_origin(block_x, block_y, REGION_TILE_BATCH_SIDE, W1_ZOOM);
+        let (base_x, base_y) = block_batch_origin(block_x, block_y, REGION_TILE_BATCH_SIDE, zoom);
         let mut batch = TileBatch::build_opt_rx_refl(
-            W1_ZOOM,
+            zoom,
             base_x,
             base_y,
             REGION_TILE_BATCH_SIDE,
@@ -186,11 +187,17 @@ fn process_region(
             let barriers = barrier_data.for_tile(&tile.bbox, LINE_HALO_M);
             measurement.raster_and_receiver_seconds += receiver_started.elapsed().as_secs_f64();
             for layer in &layers {
-                let output_path =
-                    output_tile_path(&configuration.output_directory, layer.directory_name, x, y);
+                let output_path = output_tile_path(
+                    &configuration.output_directory,
+                    layer.directory_name,
+                    zoom,
+                    x,
+                    y,
+                );
                 let partition_path = partition_tile_path(
                     &configuration.output_directory,
                     layer.directory_name,
+                    zoom,
                     x,
                     y,
                 );
@@ -243,17 +250,17 @@ fn encode_line_layer(
     })
 }
 
-fn output_tile_path(root: &Path, layer: &str, x: u32, y: u32) -> PathBuf {
+fn output_tile_path(root: &Path, layer: &str, zoom: u8, x: u32, y: u32) -> PathBuf {
     root.join(layer)
-        .join(W1_ZOOM.to_string())
+        .join(zoom.to_string())
         .join(x.to_string())
         .join(format!("{y}.bin"))
 }
 
-fn partition_tile_path(root: &Path, layer: &str, x: u32, y: u32) -> PathBuf {
+fn partition_tile_path(root: &Path, layer: &str, zoom: u8, x: u32, y: u32) -> PathBuf {
     root.join("relevant-source-partitions")
         .join(layer)
-        .join(W1_ZOOM.to_string())
+        .join(zoom.to_string())
         .join(x.to_string())
         .join(format!("{y}.rsp"))
 }
