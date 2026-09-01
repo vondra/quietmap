@@ -10,6 +10,7 @@ const NOISE_CONSTANTS_SOURCE: &str = include_str!("../noise-compute/src/constant
 const PATH_PROFILE_SOURCE: &str = include_str!("../noise-compute/src/propagation/path_profile.rs");
 const SEGMENT_SAMPLING_SOURCE: &str =
     include_str!("../noise-compute/src/propagation/seg_sampling.rs");
+const SOURCE_FRAME_SOURCE: &str = include_str!("src/source_frame.rs");
 
 fn constant_initializer<'a>(source: &'a str, constant_name: &str) -> &'a str {
     let declaration = format!("pub const {constant_name}:");
@@ -204,6 +205,12 @@ fn generated_physics_header() -> String {
         canonical_usize(SEGMENT_SAMPLING_SOURCE, "SEG_SAMPLES_DEFAULT")
     )
     .unwrap();
+    writeln!(
+        header,
+        "constexpr int QUIETMAP_BLOCK_PIXEL_SIDE = {};",
+        canonical_usize(SOURCE_FRAME_SOURCE, "BLOCK_PIXEL_SIDE")
+    )
+    .unwrap();
     header
 }
 
@@ -224,6 +231,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../noise-compute/src/constants.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/path_profile.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/seg_sampling.rs");
+    println!("cargo:rerun-if-changed=src/source_frame.rs");
     if env::var_os("CARGO_FEATURE_GPU").is_none() {
         return;
     }
@@ -281,6 +289,7 @@ mod tests {
         let header = generated_physics_header();
         assert!(header.contains("constexpr float QUIETMAP_DEFAULT_RECEIVER_HEIGHT_M = 4.0f;"));
         assert!(header.contains("constexpr int QUIETMAP_LINE_DIRECTION_COUNT = 5;"));
+        assert!(header.contains("constexpr int QUIETMAP_BLOCK_PIXEL_SIDE = "));
         assert!(header.contains("constexpr float QUIETMAP_PENUMBRA_DELTA_FLOOR_M ="));
     }
 }

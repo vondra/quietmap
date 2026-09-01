@@ -9,10 +9,13 @@
 constexpr int QUIETMAP_PERIOD_COUNT = 3;
 constexpr int QUIETMAP_BAND_COUNT = 8;
 constexpr int QUIETMAP_TILE_PIXEL_SIDE = 512;
-constexpr int QUIETMAP_BLOCK_PIXEL_SIDE = 16;
-constexpr int QUIETMAP_BLOCKS_PER_TILE_SIDE = 32;
 
 #include "relevant_source_physics_constants.cuh"
+
+constexpr int QUIETMAP_BLOCKS_PER_TILE_SIDE = QUIETMAP_TILE_PIXEL_SIDE / QUIETMAP_BLOCK_PIXEL_SIDE;
+constexpr int QUIETMAP_CORNER_COUNT =
+    (QUIETMAP_BLOCKS_PER_TILE_SIDE + 1) * (QUIETMAP_BLOCKS_PER_TILE_SIDE + 1);
+static_assert(QUIETMAP_TILE_PIXEL_SIDE % QUIETMAP_BLOCK_PIXEL_SIDE == 0, "block tiles the tile");
 
 struct DeviceLineSource {
     float start_x_m;

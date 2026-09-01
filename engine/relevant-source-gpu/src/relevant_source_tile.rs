@@ -218,5 +218,5 @@ pub fn partition_paint_and_write_tile(
 }
 
 const BLOCK_PIXEL_COUNT: usize = TILE_PIXEL_SIDE * TILE_PIXEL_SIDE / BLOCK_COUNT;
-const _: () = assert!(BLOCK_PIXEL_COUNT == 256);
+const _: () = assert!(TILE_PIXEL_SIDE.is_multiple_of(crate::source_frame::BLOCK_PIXEL_SIDE));
 const _: () = assert!(PERIOD_COUNT == 3);

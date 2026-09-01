@@ -159,7 +159,7 @@ extern "C" int relevant_source_cuda_evaluate_corners(
     float* elapsed_milliseconds
 ) {
     return timed_cuda_launch([&] {
-        evaluate_corner_source_pairs_kernel<<<1089, 256>>>(
+        evaluate_corner_source_pairs_kernel<<<QUIETMAP_CORNER_COUNT, 256>>>(
             *scene, corner_offsets, corner_source_indices, corner_x_m, corner_y_m,
             corner_reflection_db, pair_period_energy);
     }, elapsed_milliseconds);
