@@ -13,7 +13,13 @@
 //! Equivalence to the old sequential per-region build: a tile is owned by its
 //! CENTRE R4, the kernels sum commutatively onto a fresh per-tile accumulator,
 //! and each region writes only its own tiles — so region order never changes a
-//! byte of any tile (bit-identical; verified by an A/B byte-diff).
+//! byte of any tile (bit-identical; verified by an A/B byte-diff). The same
+//! argument covers the (tile × layer) parallelism INSIDE a batch: every
+//! pipeline owns its accumulator and output file, so only scheduling moves —
+//! it exists to overlap the per-tile single-threaded stages (W1 point
+//! reconstruction, collapse, median fill, interior apply, encode) that
+//! otherwise leave the pool idle between scatter phases (measured 2026-09-01
+//! on the W1 rest lane: ~37 s of 373 s wall exposed as 1-core segments).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -23,15 +29,16 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use h3o::{CellIndex, LatLng};
-use raster_reader::fused_tile_z13::TileBatch;
+use raster_reader::fused_tile_z13::{FusedTileZ13, TileBatch};
 use raster_reader::{FusedPixel, RealRasters};
+use rayon::prelude::*;
 
 use crate::accumulator::TileAccumulator;
 use crate::source_line::LineRow;
 use crate::source_loader_barrier::BarrierData;
 use crate::source_loader_building::BuildingData;
 use crate::source_loader_industrial::IndustrialData;
-use crate::source_loader_obstacle::ObstacleData;
+use crate::source_loader_obstacle::{InteriorEstimate, ObstacleData};
 use crate::source_loader_rail::RailData;
 use crate::source_loader_road::RoadData;
 use crate::source_loader_traffic::AirportTrafficData;
@@ -45,6 +52,8 @@ use noise_compute::admin;
 use noise_compute::constants::{
     GROUND_OPS_RUNWAY_MAX_RADIUS, INDUSTRIAL_MAX_RADIUS, RAILWAY_REACH_CEILING,
 };
+use noise_compute::propagation::obstacle_index::ObstacleSet;
+use noise_compute::types::Barrier;
 
 /// Per-layer halo: covers the source→receiver ray at the layer's max reach.
 /// Road = motorway-class cap (10 km); rail + industrial reference the single
@@ -187,7 +196,9 @@ impl LayerStats {
 
 /// All telemetry one worker accumulates over its chunk of regions; merged into
 /// the build total after the parallel section. Phase durations sum across
-/// regions (CPU-like under outer rayon), as with the aircraft builder.
+/// regions AND across the (tile × layer) pipelines of a batch, which run
+/// concurrently on the shared pool: a per-layer `scatter` or `t_write` is
+/// contended wall-clock, not CPU time, and only the totals are exact.
 #[derive(Default)]
 pub struct SurfaceStats {
     pub written: usize,
@@ -435,176 +446,229 @@ pub fn process_surface_region(
             stats.halo_logged = true;
         }
 
-        for &(x, y) in batch_tiles {
-            let tile = &batch.tiles[crate::region_runner::batch_slot(&batch, x, y)];
-            // One sorted, conservative-distance barrier slice per tile, shared by
-            // every layer (contract: types::Barrier docs).
-            let tile_barriers = barrier_data.for_tile(&tile.bbox, ctx.halo_m);
-            // Building interiors: ONE class raster + façade donor map per tile,
-            // shared by every layer (they all ride the same receiver lattice).
-            // Vector regions only — a raster-fallback region keeps its physics.
-            let t_m = Instant::now();
-            let interior = obstacle_data.interior_estimate(tile);
-            stats.t_raster += t_m.elapsed();
-            for (rows, source_id, dir_name) in &layer_rows {
-                let mut accum = TileAccumulator::new();
-                let t_s = Instant::now();
-                let (
-                    walked,
-                    sk,
-                    npr,
-                    walked_pairs,
-                    rs,
-                    ground_rows,
-                    ground_microsegs,
-                    time_divided,
-                    precomputed_cells,
-                    postprocess_applied,
-                ) = match rows {
-                    SurfaceRows::Line(r) => {
-                        let st = scatter_line::scatter_tile(
+        // Tiles × layers run in PARALLEL inside the batch (see the module doc's
+        // equivalence note): each pipeline owns its accumulator and output file,
+        // so this changes no byte — it overlaps the per-tile single-threaded
+        // stages across pipelines. Counters fold sequentially after the join;
+        // they are u64/Duration sums, so fold order cannot move a total.
+        let tile_outcomes: Vec<(Duration, Vec<LayerOutcome>)> = batch_tiles
+            .par_iter()
+            .map(|&(x, y)| -> Result<(Duration, Vec<LayerOutcome>)> {
+                let tile = &batch.tiles[crate::region_runner::batch_slot(&batch, x, y)];
+                // One sorted, conservative-distance barrier slice per tile, shared by
+                // every layer (contract: types::Barrier docs).
+                let tile_barriers = barrier_data.for_tile(&tile.bbox, ctx.halo_m);
+                // Building interiors: ONE class raster + façade donor map per tile,
+                // shared by every layer (they all ride the same receiver lattice).
+                // Vector regions only — a raster-fallback region keeps its physics.
+                let t_m = Instant::now();
+                let interior = obstacle_data.interior_estimate(tile);
+                let t_interior = t_m.elapsed();
+                let layer_outcomes = layer_rows
+                    .par_iter()
+                    .map(|(rows, source_id, dir_name)| {
+                        paint_tile_layer(
+                            ctx,
                             tile,
-                            r,
+                            rows,
+                            *source_id,
+                            dir_name,
                             &tile_barriers,
                             obstacle_data.set(),
-                            &mut accum,
-                        );
-                        (
-                            st.path_calls,
-                            st.skipped_calls,
-                            st.pairs,
-                            st.walked_pairs,
-                            st.raster_samples,
-                            0,
-                            0,
-                            false,
-                            None,
-                            false,
+                            &interior,
                         )
-                    }
-                    SurfaceRows::Point(r) => {
-                        if crate::point_w1::enabled_for_zoom(ctx.zoom, dir_name) {
-                            let (cells, st, reconstruction) = crate::point_w1::render(
-                                dir_name,
-                                tile,
-                                r,
-                                &tile_barriers,
-                                obstacle_data.set(),
-                                &interior,
-                            );
-                            (
-                                st.path_calls,
-                                st.skipped_calls,
-                                st.pairs,
-                                st.walked_pairs,
-                                st.raster_samples,
-                                0,
-                                0,
-                                false,
-                                Some(cells),
-                                reconstruction.postprocess_applied,
-                            )
-                        } else {
-                            let st = scatter_point::scatter_tile(
-                                tile,
-                                r,
-                                &tile_barriers,
-                                obstacle_data.set(),
-                                &mut accum,
-                            );
-                            (
-                                st.path_calls,
-                                st.skipped_calls,
-                                st.pairs,
-                                st.walked_pairs,
-                                st.raster_samples,
-                                0,
-                                0,
-                                false,
-                                None,
-                                false,
-                            )
-                        }
-                    }
-                    SurfaceRows::GroundOps(data) => {
-                        let views = data.views();
-                        let st = ground_ops::scatter_tile(
-                            tile,
-                            &views,
-                            &tile_barriers,
-                            obstacle_data.set(),
-                            &ctx.class_weights,
-                            ctx.n_days,
-                            &mut accum,
-                        );
-                        (
-                            st.path_calls,
-                            st.skipped_calls,
-                            st.pairs,
-                            // Ground-ops has 1 path per pair (no angular quadrature), so st.path_calls is the walked pair count.
-                            st.path_calls,
-                            0,
-                            st.rows_in_reach as u64,
-                            st.unique_microsegs as u64,
-                            true,
-                            None,
-                            false,
-                        )
-                    }
-                };
-                stats.raster_samples += rs;
-                let e = stats.by_layer.entry(*dir_name).or_default();
-                e.scatter += t_s.elapsed();
-                e.path_calls += walked;
-                e.skipped_calls += sk;
-                e.pairs += npr;
-                e.walked_pairs += walked_pairs;
-                e.raster_samples += rs;
-                e.ground_rows_in_reach += ground_rows;
-                e.ground_unique_microsegs += ground_microsegs;
-
-                let t_w = Instant::now();
-                // Ground ops sum event energy ÷ n_days; the surface layers are
-                // steady-power (no time division).
-                let mut cells = precomputed_cells.unwrap_or_else(|| {
-                    if time_divided {
-                        collapse_lden_u8(&accum, ctx.n_days)
-                    } else {
-                        collapse_lden_surface_u8(&accum)
-                    }
-                });
-                // AREA sources (building / industrial / leisure) discretise into a
-                // point grid that leaves an inter-point ripple; smooth it into a
-                // solid footprint. Line + ground-ops layers are already continuous.
-                if matches!(rows, SurfaceRows::Point(_)) && !postprocess_applied {
-                    fill_area_median(&mut cells, AREA_FILL_RADIUS_PX);
-                }
-                // Interior estimate LAST so the area fill can't paint a façade
-                // value back over an enclosed footprint.
-                if !postprocess_applied {
-                    interior.apply(&mut cells);
-                }
-                let out = ctx
-                    .output
-                    .join(*dir_name)
-                    .join(ctx.zoom.to_string())
-                    .join(x.to_string())
-                    .join(format!("{y}.bin"));
-                let n = write_tile(&out, &cells, *source_id, !ctx.write_empty)?;
-                if n == 0 {
-                    if out.exists() {
-                        std::fs::remove_file(&out)
-                            .with_context(|| format!("rm stale {}", out.display()))?;
-                    }
-                    stats.skipped += 1;
-                } else {
-                    stats.written += 1;
-                    stats.bytes += n;
-                }
-                stats.t_write += t_w.elapsed();
+                        .with_context(|| format!("layer {dir_name} tile {x}/{y}"))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                heartbeat.tick(region_r4);
+                Ok((t_interior, layer_outcomes))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (t_interior, layer_outcomes) in tile_outcomes {
+            stats.t_raster += t_interior;
+            for outcome in layer_outcomes {
+                stats.raster_samples += outcome.layer.raster_samples;
+                stats.written += outcome.written;
+                stats.skipped += outcome.skipped;
+                stats.bytes += outcome.bytes;
+                stats.t_write += outcome.t_write;
+                stats
+                    .by_layer
+                    .entry(outcome.dir_name)
+                    .or_default()
+                    .merge(&outcome.layer);
             }
-            heartbeat.tick(region_r4);
         }
     }
     Ok(stats)
+}
+
+/// One (tile, layer) pipeline's complete result, produced inside the batch's
+/// parallel section and folded into [`SurfaceStats`] after the join.
+struct LayerOutcome {
+    dir_name: &'static str,
+    layer: LayerStats,
+    written: usize,
+    skipped: usize,
+    bytes: usize,
+    t_write: Duration,
+}
+
+/// Scatter + collapse + post-process + write ONE layer of ONE tile — the body
+/// of the batch's (tile × layer) parallel section. Byte-identical to the old
+/// sequential loop: same inputs, same order inside the pipeline; only the
+/// scheduling across pipelines moved.
+fn paint_tile_layer(
+    ctx: &SurfaceCtx,
+    tile: &FusedTileZ13,
+    rows: &SurfaceRows,
+    source_id: u8,
+    dir_name: &'static str,
+    tile_barriers: &[Barrier],
+    obstacles: &ObstacleSet,
+    interior: &InteriorEstimate,
+) -> Result<LayerOutcome> {
+    let mut accum = TileAccumulator::new();
+    let t_s = Instant::now();
+    let (
+        walked,
+        sk,
+        npr,
+        walked_pairs,
+        rs,
+        ground_rows,
+        ground_microsegs,
+        time_divided,
+        precomputed_cells,
+        postprocess_applied,
+    ) = match rows {
+        SurfaceRows::Line(r) => {
+            let st = scatter_line::scatter_tile(tile, r, tile_barriers, obstacles, &mut accum);
+            (
+                st.path_calls,
+                st.skipped_calls,
+                st.pairs,
+                st.walked_pairs,
+                st.raster_samples,
+                0,
+                0,
+                false,
+                None,
+                false,
+            )
+        }
+        SurfaceRows::Point(r) => {
+            if crate::point_w1::enabled_for_zoom(ctx.zoom, dir_name) {
+                let (cells, st, reconstruction) =
+                    crate::point_w1::render(dir_name, tile, r, tile_barriers, obstacles, interior);
+                (
+                    st.path_calls,
+                    st.skipped_calls,
+                    st.pairs,
+                    st.walked_pairs,
+                    st.raster_samples,
+                    0,
+                    0,
+                    false,
+                    Some(cells),
+                    reconstruction.postprocess_applied,
+                )
+            } else {
+                let st = scatter_point::scatter_tile(tile, r, tile_barriers, obstacles, &mut accum);
+                (
+                    st.path_calls,
+                    st.skipped_calls,
+                    st.pairs,
+                    st.walked_pairs,
+                    st.raster_samples,
+                    0,
+                    0,
+                    false,
+                    None,
+                    false,
+                )
+            }
+        }
+        SurfaceRows::GroundOps(data) => {
+            let views = data.views();
+            let st = ground_ops::scatter_tile(
+                tile,
+                &views,
+                tile_barriers,
+                obstacles,
+                &ctx.class_weights,
+                ctx.n_days,
+                &mut accum,
+            );
+            (
+                st.path_calls,
+                st.skipped_calls,
+                st.pairs,
+                // Ground-ops has 1 path per pair (no angular quadrature), so st.path_calls is the walked pair count.
+                st.path_calls,
+                0,
+                st.rows_in_reach as u64,
+                st.unique_microsegs as u64,
+                true,
+                None,
+                false,
+            )
+        }
+    };
+    let layer = LayerStats {
+        loaded_rows: 0, // counted once per region load, not per tile
+        scatter: t_s.elapsed(),
+        path_calls: walked,
+        skipped_calls: sk,
+        pairs: npr,
+        walked_pairs,
+        raster_samples: rs,
+        ground_rows_in_reach: ground_rows,
+        ground_unique_microsegs: ground_microsegs,
+    };
+
+    let t_w = Instant::now();
+    // Ground ops sum event energy ÷ n_days; the surface layers are
+    // steady-power (no time division).
+    let mut cells = precomputed_cells.unwrap_or_else(|| {
+        if time_divided {
+            collapse_lden_u8(&accum, ctx.n_days)
+        } else {
+            collapse_lden_surface_u8(&accum)
+        }
+    });
+    // AREA sources (building / industrial / leisure) discretise into a
+    // point grid that leaves an inter-point ripple; smooth it into a
+    // solid footprint. Line + ground-ops layers are already continuous.
+    if matches!(rows, SurfaceRows::Point(_)) && !postprocess_applied {
+        fill_area_median(&mut cells, AREA_FILL_RADIUS_PX);
+    }
+    // Interior estimate LAST so the area fill can't paint a façade
+    // value back over an enclosed footprint.
+    if !postprocess_applied {
+        interior.apply(&mut cells);
+    }
+    let out = ctx
+        .output
+        .join(dir_name)
+        .join(ctx.zoom.to_string())
+        .join(tile.tile_x.to_string())
+        .join(format!("{}.bin", tile.tile_y));
+    let n = write_tile(&out, &cells, source_id, !ctx.write_empty)?;
+    let (written, skipped, bytes) = if n == 0 {
+        if out.exists() {
+            std::fs::remove_file(&out).with_context(|| format!("rm stale {}", out.display()))?;
+        }
+        (0, 1, 0)
+    } else {
+        (1, 0, n)
+    };
+    Ok(LayerOutcome {
+        dir_name,
+        layer,
+        written,
+        skipped,
+        bytes,
+        t_write: t_w.elapsed(),
+    })
 }

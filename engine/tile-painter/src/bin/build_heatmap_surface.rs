@@ -61,6 +61,15 @@ const FALLBACK_REGION_CONCURRENCY: usize = 16;
 /// **1.16 GB**; a typical/empty cell 0.3–0.4 GB. Budget 2 GB (≈1.7× the worst) so N
 /// concurrent cells fit the box's memcap. The old halo-only estimate greenlit 16 dense
 /// cells ≈ 18 GB and OOM-SIGKILLed the ~12 GB-memcap workers.
+///
+/// Re-measured 2026-09-02 (he84, Osaka z12 rest lane, concurrency 1, 16 rayon
+/// threads, `/usr/bin/time -v`): the painter at `4289a9f2` peaks at **2.33 GB**
+/// and the (tile × layer) overlap adds 10 % (2.57 GB) — the 1.16 GB figure above
+/// predates vector buildings. Peak RSS also grows with the thread count (scatter
+/// scratch is per thread). The budget below therefore no longer carries its 1.7×
+/// margin: at 4 regions per 12 GB memcap it sits at ~10.3 GB. Raising it to keep
+/// the margin halves the CPU lane's concurrency, so that is an owner decision;
+/// until then treat 12 GB memcap workers as full at concurrency 4.
 const PER_REGION_PEAK_BYTES: f64 = 2.0 * 1024.0 * 1024.0 * 1024.0;
 
 #[derive(Parser, Debug)]
