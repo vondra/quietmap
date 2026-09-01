@@ -1,4 +1,4 @@
-//! Railway compute kernel — groups rail segments by osm_id, emits per-period
+//! Railway compute kernel — groups rail segments by (ref, name, type), emits per-period
 //! power and propagates to the receiver (CNOSSOS rail). Shared by popup + heatmap.
 use crate::*;
 
@@ -14,7 +14,7 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// Compute railway noise — grouped by osm_id with geometry.
+/// Compute railway noise — grouped by (ref, name, type) with geometry.
 ///
 /// Same three-pass parallel structure as `compute_roads` (see its docstring):
 /// sequential gates + skyline growth chain, parallel per-segment evaluation
@@ -42,28 +42,14 @@ pub(crate) fn compute_railways(
         name: String,
         rail_type: RailType,
         rail_type_u8: u8,
-        usage_u8: u8,
-        first_osm_id: i64,
+        dominant_usage_u8: u8,
+        dominant_osm_id: i64,
         min_dist: f64,
         min_d_slant: f64,
         min_ground_g: f64,
         cp_lat: f64,
         cp_lon: f64,
         src_height: f64,
-        // Closest-segment metadata (for popup)
-        closest_trains_passenger_raw: f64,
-        closest_trains_freight_raw: f64,
-        closest_trains_passenger_effective: f64,
-        closest_trains_freight_effective: f64,
-        closest_trains_passenger_source: &'static str,
-        closest_trains_freight_source: &'static str,
-        closest_source_id: u16,
-        closest_maxspeed_posted: u16,
-        closest_speed_used: f64,
-        closest_speed_source: &'static str,
-        closest_service: bool,
-        closest_highspeed: bool,
-        closest_parallel_divisor: u8,
         // Dominant-segment metadata — highest received-energy segment drives the
         // popup display, mirroring the road pattern. Earlier rail surfaced the
         // closest-segment fields, which misled whenever a busy/fast mainline
@@ -97,11 +83,11 @@ pub(crate) fn compute_railways(
         variants: [PropagationVariants; 3],
         emission_energy: f64,
         line_coords: Vec<[[f64; 2]; 2]>,
-        has_bridge: bool,
+        dominant_bridge: bool,
         dominant_energy: f64,
         dominant_trace_idx: Option<usize>,
     }
-    let mut rails_by_key: HashMap<(String, u8), RailAccum> = HashMap::new();
+    let mut rails_by_key: HashMap<(String, String, u8), RailAccum> = HashMap::new();
 
     // Admin resolved once per call — the receiver position is constant across
     // segments. Drives the C1 per-region day/evening/night split (EU freight
@@ -487,14 +473,11 @@ pub(crate) fn compute_railways(
         let (src_alt, d_slant) = (p.src_alt, p.d_slant);
         let (seg_variants, ground_g) = (out.seg_variants, out.ground_g);
 
-        // Group by (ref, name, type). When both ref+name empty, group by osm_id
-        // (each OSM way is a logical track segment — avoids merging entire city tram network).
-        let key_str = if !seg.rail_ref.is_empty() || !seg.name.is_empty() {
-            format!("{}|{}", seg.rail_ref, seg.name)
-        } else {
-            format!("osm:{}", seg.osm_id)
-        };
-        let key = (key_str, seg.rail_type);
+        // Group by (ref, name, type). Unnamed tracks (no ref, no name) group by
+        // type alone: a tram street is two or three OSM ways, and "Noise sources"
+        // names things the way a visitor would ("Tram", not six anonymous rows
+        // at 73–98 m); the Segments tab keeps every way (owner 2026-09-01).
+        let key = (seg.rail_ref.clone(), seg.name.clone(), seg.rail_type);
         let acc = rails_by_key.entry(key).or_insert_with(|| RailAccum {
             name: {
                 // Build display name: "trať 250 — Brno–Havlíčkův Brod" or "trať 250" or name or "Rail"
@@ -510,27 +493,14 @@ pub(crate) fn compute_railways(
             },
             rail_type,
             rail_type_u8: seg.rail_type,
-            usage_u8: seg.usage,
-            first_osm_id: seg.osm_id,
+            dominant_usage_u8: seg.usage,
+            dominant_osm_id: seg.osm_id,
             min_dist: f64::MAX,
             min_d_slant: 0.0,
             min_ground_g: 0.5,
             cp_lat: seg.cp_lat,
             cp_lon: seg.cp_lon,
             src_height: src_alt,
-            closest_trains_passenger_raw: 0.0,
-            closest_trains_freight_raw: 0.0,
-            closest_trains_passenger_effective: 0.0,
-            closest_trains_freight_effective: 0.0,
-            closest_trains_passenger_source: "default_by_type",
-            closest_trains_freight_source: "default_by_type",
-            closest_source_id: 0,
-            closest_maxspeed_posted: 0,
-            closest_speed_used: 0.0,
-            closest_speed_source: "type_default",
-            closest_service: false,
-            closest_highspeed: false,
-            closest_parallel_divisor: 1,
             dominant_segment_idx: 0,
             dominant_distance_m: 0.0,
             dominant_trains_passenger_raw: 0.0,
@@ -559,7 +529,7 @@ pub(crate) fn compute_railways(
             ],
             emission_energy: 0.0,
             line_coords: Vec::new(),
-            has_bridge: false,
+            dominant_bridge: false,
             dominant_energy: 0.0,
             dominant_trace_idx: None,
         });
@@ -584,9 +554,6 @@ pub(crate) fn compute_railways(
             acc.variants[pi].add(&seg_variants[pi]);
         }
         acc.emission_energy += out.day_emission_energy;
-        if seg.bridge {
-            acc.has_bridge = true;
-        }
         if seg.dist_m < acc.min_dist {
             acc.min_dist = seg.dist_m;
             acc.min_d_slant = d_slant;
@@ -594,30 +561,6 @@ pub(crate) fn compute_railways(
             acc.cp_lat = seg.cp_lat;
             acc.cp_lon = seg.cp_lon;
             acc.src_height = src_alt;
-            // Closest-segment metadata for popup
-            acc.closest_trains_passenger_raw = seg.trains_passenger;
-            acc.closest_trains_freight_raw = seg.trains_freight;
-            acc.closest_trains_passenger_effective = q_pax;
-            acc.closest_trains_freight_effective = q_frt;
-            acc.closest_trains_passenger_source = match seg.trains_passenger_source {
-                0 => "arrow",
-                _ => "default_by_type",
-            };
-            acc.closest_trains_freight_source = match seg.trains_freight_source {
-                0 => "arrow",
-                _ => "default_by_type",
-            };
-            acc.closest_source_id = seg.source_id;
-            acc.closest_maxspeed_posted = seg.maxspeed;
-            acc.closest_speed_used = speed;
-            acc.closest_speed_source = match seg.speed_source {
-                0 => "osm_maxspeed",
-                1 => "highspeed_default",
-                _ => "type_default",
-            };
-            acc.closest_service = seg.service;
-            acc.closest_highspeed = seg.highspeed;
-            acc.closest_parallel_divisor = seg.parallel_divisor.max(1);
         }
         acc.line_coords
             .push([[seg.start_lon, seg.start_lat], [seg.end_lon, seg.end_lat]]);
@@ -656,6 +599,10 @@ pub(crate) fn compute_railways(
             };
             acc.dominant_service = seg.service;
             acc.dominant_highspeed = seg.highspeed;
+            // A merged row's identity, usage and "(bridge)" follow its loudest way.
+            acc.dominant_osm_id = seg.osm_id;
+            acc.dominant_usage_u8 = seg.usage;
+            acc.dominant_bridge = seg.bridge;
             acc.dominant_parallel_divisor = seg.parallel_divisor.max(1);
         }
 
@@ -735,14 +682,14 @@ pub(crate) fn compute_railways(
             speed_kmh: acc.dominant_speed_used,
             speed_source: acc.dominant_speed_source,
             rail_type: rail_type_name(acc.rail_type_u8),
-            usage: rail_usage_name(acc.usage_u8),
+            usage: rail_usage_name(acc.dominant_usage_u8),
             service: acc.dominant_service,
             highspeed: acc.dominant_highspeed,
             parallel_divisor: acc.dominant_parallel_divisor,
             dominant_segment_idx: acc.dominant_segment_idx,
             dominant_distance_m: acc.dominant_distance_m,
             closest_distance_m: acc.min_dist,
-            bridge: acc.has_bridge,
+            bridge: acc.dominant_bridge,
             segment_count: acc.segment_count,
             total_length_m: acc.total_length_m,
             obstacle_segment_count: acc.obstacle_segment_count,
@@ -757,7 +704,7 @@ pub(crate) fn compute_railways(
         };
 
         contributors.push(Contributor {
-            osm_id: Some(acc.first_osm_id),
+            osm_id: Some(acc.dominant_osm_id),
             geometry,
             source_type: LayerKind::Railway,
             name: if acc.name.is_empty() {
@@ -767,7 +714,7 @@ pub(crate) fn compute_railways(
             },
             subtype: {
                 let base = format!("{:?}", acc.rail_type);
-                if acc.has_bridge {
+                if acc.dominant_bridge {
                     format!("{} (bridge)", base)
                 } else {
                     base
@@ -935,6 +882,49 @@ mod tests {
         assert_eq!(plain.le_db, channeled.le_db);
         assert_eq!(plain.ln_db, channeled.ln_db);
         assert_eq!(plain.lden_db, channeled.lden_db);
+    }
+
+    /// Unnamed tracks of one type are one "Noise sources" row: three tram
+    /// ways with no ref and no name collapse to one contributor, a fourth
+    /// (mainline) way stays separate, and the merged row's identity, distance
+    /// and "(bridge)" follow its loudest way. The Segments tab keeps every way.
+    #[test]
+    fn unnamed_tracks_of_one_type_share_a_row() {
+        use crate::constants::M_PER_DEG_LAT;
+        let mut segs = Vec::new();
+        for k in 0..4 {
+            let mut seg = mainline_segment();
+            seg.osm_id = 100 + k;
+            seg.segment_idx = k as i16;
+            seg.rail_type = if k == 3 { 0 } else { 1 };
+            if k == 1 {
+                // 200 m from the receiver instead of 500 m: the loudest tram way.
+                let dlat = 300.0 / M_PER_DEG_LAT;
+                seg.start_lat += dlat;
+                seg.end_lat += dlat;
+                seg.cp_lat += dlat;
+                seg.dist_m = 200.0;
+                seg.bridge = true;
+            }
+            segs.push(seg);
+        }
+        let (_, contribs) = compute_railways(
+            &receiver(),
+            &segs,
+            &[],
+            &ObstacleSet::empty(),
+            &FlatRasters,
+            None,
+        );
+        assert_eq!(contribs.len(), 2, "one row per rail type, not per OSM way");
+        let tram = contribs
+            .iter()
+            .find(|c| c.subtype.starts_with("Tram"))
+            .expect("a merged tram row");
+        assert!(tram.name.is_empty());
+        assert_eq!(tram.osm_id, Some(101));
+        assert_eq!(tram.distance_m, 200.0);
+        assert_eq!(tram.subtype, "Tram (bridge)");
     }
 
     /// THE PARALLELISM GATE (rail twin of roads'

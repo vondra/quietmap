@@ -103,8 +103,9 @@ pub(crate) fn compute_roads(
         dominant_trace_idx: Option<usize>,
     }
     // Group by (ref, name, class) — not osm_id — so "D1" becomes one contributor.
-    // For unnamed roads (ref="" && name=""): group per osm_id (like railway)
-    // to avoid merging all unnamed residential streets into one mega-contributor.
+    // For unnamed roads (ref="" && name=""): group per osm_id to avoid merging
+    // all unnamed residential streets into one mega-contributor (unnamed rail
+    // tracks, by contrast, merge per type — see compute/railways.rs).
     let mut roads_by_key: HashMap<(String, String, u8), RoadAccum> = HashMap::new();
 
     // Admin resolved once per compute_roads call — receiver position is
@@ -515,7 +516,7 @@ pub(crate) fn compute_roads(
         let (seg_variants, ground_g) = (out.seg_variants, out.ground_g);
         let effective_ref = std::mem::take(&mut out.effective_ref);
 
-        // For unnamed roads: group per osm_id (like railway), not catch-all
+        // For unnamed roads: group per osm_id, not catch-all
         let key_ref = if effective_ref.is_empty() && seg.name.is_empty() {
             format!("osm:{}", seg.osm_id)
         } else {
