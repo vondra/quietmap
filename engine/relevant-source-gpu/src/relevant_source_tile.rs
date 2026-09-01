@@ -77,11 +77,13 @@ impl BatchDeviceRaster {
 }
 
 /// Measured work and CUDA event time for one tile/layer pair.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct TilePaintMeasurement {
     pub corner_pairs: u64,
     pub pixel_pairs: u64,
     pub relevant_source_references: u64,
+    /// Relevant sources of every block, in block order.
+    pub block_source_counts: Vec<u32>,
     pub corner_gpu_milliseconds: f64,
     pub paint_gpu_milliseconds: f64,
     pub output_bytes: u64,
@@ -207,10 +209,16 @@ pub fn partition_paint_and_write_tile(
     interior.apply(&mut cells);
     let output_bytes = write_tile(output_path, &cells, source_id, false)? as u64;
     let relevant_source_references = partition.relevant_source_indices.len() as u64;
+    let block_source_counts = partition
+        .block_offsets
+        .windows(2)
+        .map(|window| window[1] - window[0])
+        .collect();
     Ok(TilePaintMeasurement {
         corner_pairs: incidence.corner_source_indices.len() as u64,
         pixel_pairs: relevant_source_references * (BLOCK_PIXEL_COUNT as u64),
         relevant_source_references,
+        block_source_counts,
         corner_gpu_milliseconds: f64::from(corner_gpu_milliseconds),
         paint_gpu_milliseconds: f64::from(paint_gpu_milliseconds),
         output_bytes,

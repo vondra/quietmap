@@ -55,14 +55,14 @@ fn main() -> Result<()> {
         measurement.raster_and_receiver_seconds,
         measurement.host_tile_seconds,
     );
-    print_layer("road", measurement.road);
-    print_layer("rail", measurement.rail);
+    print_layer("road", &measurement.road);
+    print_layer("rail", &measurement.rail);
     Ok(())
 }
 
 fn print_layer(
     name: &str,
-    measurement: relevant_source_gpu::relevant_source_runner::LayerMeasurement,
+    measurement: &relevant_source_gpu::relevant_source_runner::LayerMeasurement,
 ) {
     let blocks = measurement.tiles * BLOCK_COUNT as u64;
     let relevant_per_block = if blocks == 0 {
@@ -70,9 +70,12 @@ fn print_layer(
     } else {
         measurement.relevant_source_references as f64 / blocks as f64
     };
+    let (minimum, median, p99, maximum) = measurement.block_source_quantiles();
     eprintln!(
         "relevant-source-layer name={name} loaded_sources={} tiles={} corner_pairs={} \
-         pixel_pairs={} relevant_per_block={:.3} corner_gpu_s={:.6} paint_gpu_s={:.6} bytes={}",
+         pixel_pairs={} relevant_per_block={:.3} block_sources_min={minimum} \
+         block_sources_median={median} block_sources_p99={p99} block_sources_max={maximum} \
+         corner_gpu_s={:.6} paint_gpu_s={:.6} bytes={}",
         measurement.loaded_sources,
         measurement.tiles,
         measurement.corner_pairs,

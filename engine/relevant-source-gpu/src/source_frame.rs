@@ -13,7 +13,6 @@ pub const CORNERS_PER_TILE_SIDE: usize = BLOCKS_PER_TILE_SIDE + 1;
 pub const CORNER_COUNT: usize = CORNERS_PER_TILE_SIDE * CORNERS_PER_TILE_SIDE;
 pub const PERIOD_COUNT: usize = 3;
 pub const BAND_COUNT: usize = 8;
-pub const RANKED_SOURCES_PER_CORNER: usize = 32;
 
 /// One line encoded once in the metric frame shared by a region's tiles and CUDA scene.
 #[derive(Clone, Copy, Debug, Default)]

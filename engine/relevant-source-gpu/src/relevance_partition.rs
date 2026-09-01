@@ -1,5 +1,6 @@
-//! Boolean corner-union selection with a persisted per-block linear-energy background.
+//! Energy-budget corner-union selection with a persisted per-block linear-energy background.
 
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
@@ -8,13 +9,18 @@ use anyhow::{bail, Context, Result};
 
 use crate::source_frame::{
     BLOCKS_PER_TILE_SIDE, BLOCK_COUNT, CORNERS_PER_TILE_SIDE, CORNER_COUNT, PERIOD_COUNT,
-    RANKED_SOURCES_PER_CORNER,
 };
 use crate::tile_source_incidence::TileSourceIncidence;
 
 const FILE_MAGIC: [u8; 8] = *b"QMRSP001";
 const FILE_VERSION: u32 = 2;
 const LDEN_PERIOD_WEIGHTS: [f64; PERIOD_COUNT] = [12.0, 12.649_110_640_7, 80.0];
+
+/// A corner admits its ranked sources until the Lden energy it has NOT admitted is
+/// at most this fraction of the corner's total; the rest becomes the background
+/// constant. Energy, not a count: a motorway block stops after a few sources, a
+/// block where twenty comparable streets meet keeps all twenty.
+pub const DROP_BUDGET_FRACTION: f64 = 0.10;
 
 /// The complete reusable source partition for one fixed geographic z12 tile.
 #[derive(Clone, Debug, PartialEq)]
@@ -142,25 +148,32 @@ pub fn build_relevant_source_partition(
     let mut relevant_source_indices = Vec::new();
     let mut background_corner_energy = Vec::with_capacity(BLOCK_COUNT);
     block_offsets.push(0);
+    let mut admitted = HashSet::new();
 
     for block in 0..BLOCK_COUNT {
         let local_sources = &incidence.local_source_indices_by_block[block];
         let mut relevant_sources = local_sources.clone();
+        admitted.clear();
+        admitted.extend(local_sources.iter().copied());
         for corner in block_corner_indices(block) {
-            let mut nonlocal_kept = 0;
-            for &source_index in &ranked_sources[corner] {
-                if local_sources.binary_search(&source_index).is_ok() {
-                    continue;
-                }
-                relevant_sources.push(source_index);
-                nonlocal_kept += 1;
-                if nonlocal_kept == RANKED_SOURCES_PER_CORNER {
+            let ranked = &ranked_sources[corner];
+            let corner_total: f64 = ranked.iter().map(|&(_, score)| score).sum();
+            let mut unadmitted = ranked
+                .iter()
+                .filter(|(source_index, _)| !admitted.contains(source_index))
+                .map(|&(_, score)| score)
+                .sum::<f64>();
+            for &(source_index, score) in ranked {
+                if unadmitted <= DROP_BUDGET_FRACTION * corner_total {
                     break;
+                }
+                if admitted.insert(source_index) {
+                    relevant_sources.push(source_index);
+                    unadmitted -= score;
                 }
             }
         }
         relevant_sources.sort_unstable();
-        relevant_sources.dedup();
 
         let mut block_background = [[0.0_f32; PERIOD_COUNT]; 4];
         for (block_corner, corner) in block_corner_indices(block).into_iter().enumerate() {
@@ -190,10 +203,11 @@ pub fn build_relevant_source_partition(
     })
 }
 
+/// Every corner's candidates as `(source, Lden-weighted energy)`, loudest first.
 fn rank_sources_at_corners(
     incidence: &TileSourceIncidence,
     pair_energy: &[[f32; PERIOD_COUNT]],
-) -> Vec<Vec<u32>> {
+) -> Vec<Vec<(u32, f64)>> {
     (0..CORNER_COUNT)
         .map(|corner| {
             let range = corner_pair_range(incidence, corner);
@@ -214,7 +228,7 @@ fn rank_sources_at_corners(
                     .total_cmp(&left.1)
                     .then_with(|| left.0.cmp(&right.0))
             });
-            ranked.into_iter().map(|(source, _)| source).collect()
+            ranked
         })
         .collect()
 }
@@ -347,8 +361,10 @@ mod tests {
 
     use super::*;
 
+    const TEST_SOURCE_COUNT: u32 = 34;
+
     fn compact_incidence() -> TileSourceIncidence {
-        let source_count = RANKED_SOURCES_PER_CORNER as u32 + 2;
+        let source_count = TEST_SOURCE_COUNT;
         let mut corner_offsets = Vec::with_capacity(CORNER_COUNT + 1);
         let mut corner_source_indices = Vec::with_capacity(CORNER_COUNT * source_count as usize);
         corner_offsets.push(0);
@@ -365,8 +381,12 @@ mod tests {
         }
     }
 
+    /// Energies 1..=34 (source k carries k + 1) at every corner: the total is
+    /// 595, so a corner keeps admitting from the loudest down until the
+    /// un-admitted rest is at most 59.5 — sources 34..=11 leave 1+2+...+10 = 55
+    /// behind. Block 0 also holds the local source 33 (energy 34).
     #[test]
-    fn corner_union_keeps_local_source_and_each_corner_background_energy() {
+    fn corner_union_admits_until_the_dropped_energy_is_within_budget() {
         let incidence = compact_incidence();
         let energies: Vec<[f32; PERIOD_COUNT]> = incidence
             .corner_source_indices
@@ -374,14 +394,17 @@ mod tests {
             .map(|&source| [source as f32 + 1.0; PERIOD_COUNT])
             .collect();
         let partition = build_relevant_source_partition(&incidence, &energies, 7).unwrap();
-        let first = partition.source_indices_for_block(0);
         assert_eq!(
-            first,
-            &(1..RANKED_SOURCES_PER_CORNER as u32 + 2).collect::<Vec<_>>()
+            partition.source_indices_for_block(0),
+            &(10..TEST_SOURCE_COUNT).collect::<Vec<_>>()
         );
         assert_eq!(
             partition.background_corner_energy[0],
-            [[1.0; PERIOD_COUNT]; 4]
+            [[55.0; PERIOD_COUNT]; 4]
+        );
+        assert_eq!(
+            partition.source_indices_for_block(1),
+            &(10..TEST_SOURCE_COUNT).collect::<Vec<_>>()
         );
     }
 

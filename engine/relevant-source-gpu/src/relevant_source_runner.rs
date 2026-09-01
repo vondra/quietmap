@@ -36,13 +36,15 @@ pub struct RelevantSourceRunConfiguration {
     pub regions: Vec<u64>,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct LayerMeasurement {
     pub loaded_sources: u64,
     pub tiles: u64,
     pub corner_pairs: u64,
     pub pixel_pairs: u64,
     pub relevant_source_references: u64,
+    /// Relevant sources of every painted block, in paint order.
+    pub block_source_counts: Vec<u32>,
     pub corner_gpu_milliseconds: f64,
     pub paint_gpu_milliseconds: f64,
     pub output_bytes: u64,
@@ -54,9 +56,21 @@ impl LayerMeasurement {
         self.corner_pairs += tile.corner_pairs;
         self.pixel_pairs += tile.pixel_pairs;
         self.relevant_source_references += tile.relevant_source_references;
+        self.block_source_counts.extend(tile.block_source_counts);
         self.corner_gpu_milliseconds += tile.corner_gpu_milliseconds;
         self.paint_gpu_milliseconds += tile.paint_gpu_milliseconds;
         self.output_bytes += tile.output_bytes;
+    }
+
+    /// `(min, median, p99, max)` of relevant sources per block.
+    pub fn block_source_quantiles(&self) -> (u32, u32, u32, u32) {
+        let mut counts = self.block_source_counts.clone();
+        if counts.is_empty() {
+            return (0, 0, 0, 0);
+        }
+        counts.sort_unstable();
+        let at = |fraction: f64| counts[((counts.len() - 1) as f64 * fraction).round() as usize];
+        (counts[0], at(0.5), at(0.99), counts[counts.len() - 1])
     }
 }
 
