@@ -260,6 +260,11 @@ fn generated_physics_header() -> String {
         "QUIETMAP_ARC_CP_AZIMUTH_EPS",
         canonical_f64(ARC_SCREENING_SOURCE, "CP_AZIMUTH_EPS"),
     );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_ARC_QUADRATURE_MIN_RAD",
+        canonical_f64(ARC_SCREENING_SOURCE, "ARC_QUADRATURE_MIN_RAD"),
+    );
     writeln!(
         header,
         "constexpr int QUIETMAP_ARC_ESCALATE_MAX_PARTS = {};",

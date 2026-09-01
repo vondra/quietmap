@@ -15,6 +15,12 @@
 
 constexpr int QUIETMAP_ARC_MASK_BINS = 128;
 constexpr int QUIETMAP_ARC_MASK_WORDS = QUIETMAP_ARC_MASK_BINS / 32;
+// A bucket spans at most pi / bucket count, so a bin is never wider than the
+// window the CPU itself coalesces away.
+static_assert(
+    QUIETMAP_ARC_MASK_BINS * QUIETMAP_ARC_QUADRATURE_MIN_RAD
+        >= CUDART_PI_F / QUIETMAP_LINE_DIRECTION_COUNT,
+    "arc mask bins coarser than the CPU quadrature floor");
 
 struct ArcMask {
     uint32_t bits[QUIETMAP_ARC_MASK_WORDS];
