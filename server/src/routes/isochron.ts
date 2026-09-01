@@ -1,10 +1,10 @@
 import { FastifyInstance } from 'fastify'
 import { EXPENSIVE_ROUTE_RATE_LIMIT } from '../rate-limit.js'
 
-// The isochrone router backend. Nothing local was ever deployed here — the route 502'd in
-// dev AND prod (2026-07-20). Default to the public FOSSGIS demo instance, same pattern as the
-// search route's photon.komoot.io geocoder; VALHALLA_URL overrides for a self-hosted graph.
-// Read per request (not at import) so tests and config reloads take effect.
+// The isochrone router backend: VALHALLA_URL names the deployment's own Valhalla (the
+// operator builds planet tiles from the extraction PBF); without it the route falls back to
+// the public FOSSGIS demo, which answered 502 for weeks in 2026. Read per request (not at
+// import) so tests and config reloads take effect.
 const valhallaUrl = () => process.env.VALHALLA_URL || 'https://valhalla1.openstreetmap.de'
 const VALHALLA_TIMEOUT_MS = 15_000
 
