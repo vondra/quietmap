@@ -42,17 +42,17 @@ __global__ void paint_relevant_sources_kernel(
     const float* receiver_reflection_db,
     float* output_period_energy
 ) {
-    const uint32_t pixel = blockIdx.x * blockDim.x + threadIdx.x;
-    if (pixel >= QUIETMAP_TILE_PIXEL_SIDE * QUIETMAP_TILE_PIXEL_SIDE) {
-        return;
-    }
-    const uint32_t row = pixel / QUIETMAP_TILE_PIXEL_SIDE;
-    const uint32_t column = pixel - row * QUIETMAP_TILE_PIXEL_SIDE;
-    const uint32_t block = (row / QUIETMAP_BLOCK_PIXEL_SIDE) * QUIETMAP_BLOCKS_PER_TILE_SIDE
-                           + column / QUIETMAP_BLOCK_PIXEL_SIDE;
-    const float block_x = (static_cast<float>(column % QUIETMAP_BLOCK_PIXEL_SIDE) + 0.5f)
+    const uint32_t block = blockIdx.x;
+    const uint32_t block_row = block / QUIETMAP_BLOCKS_PER_TILE_SIDE;
+    const uint32_t block_column = block - block_row * QUIETMAP_BLOCKS_PER_TILE_SIDE;
+    const uint32_t local_row = threadIdx.x / QUIETMAP_BLOCK_PIXEL_SIDE;
+    const uint32_t local_column = threadIdx.x - local_row * QUIETMAP_BLOCK_PIXEL_SIDE;
+    const uint32_t row = block_row * QUIETMAP_BLOCK_PIXEL_SIDE + local_row;
+    const uint32_t column = block_column * QUIETMAP_BLOCK_PIXEL_SIDE + local_column;
+    const uint32_t pixel = row * QUIETMAP_TILE_PIXEL_SIDE + column;
+    const float block_x = (static_cast<float>(local_column) + 0.5f)
                           / QUIETMAP_BLOCK_PIXEL_SIDE;
-    const float block_y = (static_cast<float>(row % QUIETMAP_BLOCK_PIXEL_SIDE) + 0.5f)
+    const float block_y = (static_cast<float>(local_row) + 0.5f)
                           / QUIETMAP_BLOCK_PIXEL_SIDE;
     float accumulated[QUIETMAP_PERIOD_COUNT];
     for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
@@ -177,10 +177,10 @@ extern "C" int relevant_source_cuda_paint_tile(
     float* output_period_energy,
     float* elapsed_milliseconds
 ) {
-    constexpr uint32_t threads = 256;
-    constexpr uint32_t pixels = QUIETMAP_TILE_PIXEL_SIDE * QUIETMAP_TILE_PIXEL_SIDE;
+    constexpr uint32_t threads = QUIETMAP_BLOCK_PIXEL_SIDE * QUIETMAP_BLOCK_PIXEL_SIDE;
+    constexpr uint32_t blocks = QUIETMAP_BLOCKS_PER_TILE_SIDE * QUIETMAP_BLOCKS_PER_TILE_SIDE;
     return timed_cuda_launch([&] {
-        paint_relevant_sources_kernel<<<(pixels + threads - 1) / threads, threads>>>(
+        paint_relevant_sources_kernel<<<blocks, threads>>>(
             *scene, block_offsets, relevant_source_indices, background_energy,
             receiver_x_m, receiver_y_m, receiver_altitude_m, receiver_reflection_db,
             output_period_energy);
