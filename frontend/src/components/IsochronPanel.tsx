@@ -12,7 +12,7 @@ interface IsochronRequest {
 
 interface IsochronPanelProps {
   location: { lat: number; lng: number } | null
-  onGo: (request: IsochronRequest) => void
+  onGo: (request: IsochronRequest) => Promise<void>
   active: boolean
 }
 
@@ -20,14 +20,24 @@ export default function IsochronPanel({ location, onGo, active }: IsochronPanelP
   const [walk, setWalk] = useState(true)
   const [car, setCar] = useState(true)
   const [time, setTime] = useState(60)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const handleGo = () => {
-    if (!location) return
+  const handleGo = async () => {
+    if (!location || busy) return
     const modes = []
     if (walk) modes.push('walk')
     if (car) modes.push('car')
     if (modes.length === 0) return
-    onGo({ lat: location.lat, lng: location.lng, time, modes })
+    setError(null)
+    setBusy(true)
+    try {
+      await onGo({ lat: location.lat, lng: location.lng, time, modes })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not draw the area.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   if (!active) return null
@@ -53,10 +63,13 @@ export default function IsochronPanel({ location, onGo, active }: IsochronPanelP
         <div className="flex items-center gap-2 ml-auto">
           <CheckChip checked={walk} label="Walk" onToggle={() => setWalk(!walk)} testId="isochron-walk" />
           <CheckChip checked={car} label="Car" onToggle={() => setCar(!car)} testId="isochron-car" />
-          <Button variant="default" size="sm" onClick={handleGo} disabled={!location || (!walk && !car)}><Radar />Show area</Button>
+          <Button variant="default" size="sm" onClick={() => void handleGo()} disabled={!location || (!walk && !car) || busy || time < 1}>
+            <Radar />{busy ? 'Drawing…' : 'Show area'}
+          </Button>
         </div>
       </div>
       {!location && <div className="text-xs text-muted-foreground mt-1">Search for a location first</div>}
+      {error && <div role="alert" className="text-xs text-destructive mt-1">{error}</div>}
     </div>
   )
 }

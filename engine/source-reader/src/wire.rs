@@ -234,7 +234,9 @@ pub fn build_wire_result(
             .into_iter()
             .map(WireContributor::from)
             .collect(),
-        other_sources_lden: result.other_sources_lden,
+        other_sources_lden: noise_compute::present::other_sources_for_display(
+            result.other_sources_lden,
+        ),
         envelope_class: indoor.map(|(class, _, _)| class.name()),
         envelope_delta_db: indoor.map(|(_, delta, _)| delta),
         facade_lden: indoor.map(|(_, _, facade)| round1(facade)),

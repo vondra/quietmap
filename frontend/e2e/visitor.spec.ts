@@ -81,6 +81,24 @@ test('isochron: search → panel → Show area calls the API and flies to the po
   await expect(page).toHaveURL(new RegExp(`lat=${TARGET.lat}`))
 })
 
+test('isochron: Show area names a downed router instead of leaving the map blank', async ({ page }) => {
+  await installHermeticMap(page, POINT)
+  await mockSearch(page)
+  await page.route('**/api/isochron?**', async route => {
+    await route.fulfill({
+      status: 502,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'Valhalla walk: 502' }),
+    })
+  })
+  await page.goto(mapUrl(POINT))
+  await page.getByRole('searchbox').fill('Ruzyně')
+  await page.getByRole('option', { name: new RegExp(TARGET.display_name) }).click()
+  await page.getByRole('button', { name: 'Toggle isochron' }).click()
+  await page.getByRole('button', { name: 'Show area' }).click()
+  await expect(page.getByRole('alert')).toHaveText('Could not draw the area. The routing service is down.')
+})
+
 test('desktop layers panel: toggling a layer rewrites the overlay URL state', async ({ page }) => {
   await installHermeticMap(page, POINT)
   const noise = deferred()

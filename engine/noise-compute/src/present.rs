@@ -2,8 +2,25 @@
 
 use crate::types::Contributor;
 
+/// Levels below this are not shown in the popup — neither as a contributor
+/// row nor as the "Other sources" leftover, which would otherwise read as a
+/// meaningless negative dB (Viitasaari: total 18.2 dB, leftover -2.5 dB).
+const DISPLAY_FLOOR_DB: f64 = 0.0;
+
 pub fn is_displayable(contributor: &Contributor) -> bool {
-    contributor.periods.lden_db >= 0.0
+    contributor.periods.lden_db >= DISPLAY_FLOOR_DB
+}
+
+/// The "Other sources" bucket as the popup shows it: NEG_INFINITY (null on the
+/// wire) below the display floor. Applied only at the wire boundary, because
+/// the aircraft merge (`source-reader::aircraft_v6`) still energy-sums the raw
+/// bucket with the re-finalized tail.
+pub fn other_sources_for_display(other_lden_db: f64) -> f64 {
+    if other_lden_db >= DISPLAY_FLOOR_DB {
+        other_lden_db
+    } else {
+        f64::NEG_INFINITY
+    }
 }
 
 pub fn display_count(contributors: &[Contributor]) -> usize {
@@ -43,14 +60,10 @@ pub fn finalize_popup_contributors(
             }
         }
     }
-    let other_lden_db = if other_energy > 0.0 {
-        10.0 * other_energy.log10()
-    } else {
-        f64::NEG_INFINITY
-    };
+    // log10(0) is already NEG_INFINITY, the "nothing to report" value.
     FinalizedContributors {
         shown,
-        other_lden_db,
+        other_lden_db: 10.0 * other_energy.log10(),
     }
 }
 
@@ -138,15 +151,22 @@ mod tests {
             vec![
                 contributor(LayerKind::Road, -5.0),
                 contributor(LayerKind::Road, -10.0),
-                contributor(LayerKind::Railway, -2.0),
+                contributor(LayerKind::Railway, -8.0),
             ],
             30,
         );
-        // All three below threshold → none shown, all aggregated.
+        // All three below threshold → none shown, all aggregated: the raw bucket
+        // keeps its -2.4 dB so a later aircraft merge can still add to it, and
+        // only the display projection hides it.
         assert_eq!(r.shown.len(), 0);
         let expect = 10.0
-            * (10f64.powf(-5.0 / 10.0) + 10f64.powf(-10.0 / 10.0) + 10f64.powf(-2.0 / 10.0))
+            * (10f64.powf(-5.0 / 10.0) + 10f64.powf(-10.0 / 10.0) + 10f64.powf(-8.0 / 10.0))
                 .log10();
         assert!((r.other_lden_db - expect).abs() < 1e-9);
+        assert_eq!(
+            other_sources_for_display(r.other_lden_db),
+            f64::NEG_INFINITY
+        );
+        assert_eq!(other_sources_for_display(0.0), 0.0);
     }
 }

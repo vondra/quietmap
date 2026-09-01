@@ -311,15 +311,15 @@ function MapApp() {
   }, [closeNoiseDetail, handleDetailPositionChange])
 
   const handleIsochronGo = useCallback(async (req: { lat: number; lng: number; time: number; modes: string[] }) => {
-    try {
-      const url = `/api/isochron?lat=${req.lat}&lng=${req.lng}&time=${req.time}&modes=${req.modes.join(',')}`
-      const res = await fetch(url)
-      if (!res.ok) throw new Error('Isochron fetch failed')
-      setIsochronGeojson(await res.json())
-    } catch (err) {
-      console.error('Isochron error:', err)
-      setIsochronGeojson(null)
-    }
+    // A previously drawn area goes first: the map must never show an older
+    // request's polygon next to this request's error line.
+    setIsochronGeojson(null)
+    const url = `/api/isochron?lat=${req.lat}&lng=${req.lng}&time=${req.time}&modes=${req.modes.join(',')}`
+    const res = await fetch(url).catch(() => null)
+    if (res?.status === 429) throw new Error('Too many requests. Try again in a minute.')
+    const geojson = res?.ok ? await res.json().catch(() => null) : null
+    if (!geojson) throw new Error('Could not draw the area. The routing service is down.')
+    setIsochronGeojson(geojson)
   }, [])
 
   const handleBasemapChange = useCallback((id: BasemapId) => {
