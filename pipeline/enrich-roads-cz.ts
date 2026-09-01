@@ -24,14 +24,13 @@ import {
 } from './lib/roads-arrow.js'
 import { pathToFileURL } from 'node:url'
 import { makeCoastalCountryGate } from './lib/country-polygon.js'
-import { DATA_YEAR as YEAR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
 const MY_SOURCE_ID = SOURCE_ID_CZ_RSD_SCITANI
 
 /** ŘSD surveys numbered roads only: majors 0-4 + their link classes. */
 const RSD_COVERAGE: ReadonlySet<number> = new Set([0, 1, 2, 3, 4, 10, 11, 12])
 
-const H3R4_DIR = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
 const CACHE_DIR = resolve(import.meta.dirname, `../data/enrichment/${YEAR}/cz`)
 const CACHE_FILE = resolve(CACHE_DIR, 'rsd-scitani.json')
 

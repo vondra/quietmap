@@ -18,14 +18,13 @@ import { writeBuildingEnrichment } from './lib/buildings-arrow.js'
 import { iterateCountryHexes } from './lib/roads-arrow.js'
 import { SOURCE_ID_CZ_RUIAN_VFR } from './lib/source-ids.generated.js'
 import { flatDist } from './lib/spatial.js'
-import { DATA_YEAR as YEAR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
 const MY_SOURCE_ID = SOURCE_ID_CZ_RUIAN_VFR
 
 // Define S-JTSK (EPSG:5514) projection
 proj4.defs('EPSG:5514', '+proj=krovak +lat_0=49.5 +lon_0=24.83333333333333 +alpha=30.28813975277778 +k=0.9999 +x_0=0 +y_0=0 +ellps=bessel +towgs84=570.8,85.7,462.8,4.998,1.587,5.261,3.56 +units=m +no_defs')
 
-const H3R4_DIR = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
 const CACHE_DIR = resolve(import.meta.dirname, `../data/enrichment/${YEAR}/cz`)
 const CACHE_FILE = resolve(CACHE_DIR, 'ruian-buildings.json')
 

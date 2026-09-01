@@ -25,9 +25,8 @@ import { DEFAULT_FUEL_TO_NACE, NATIONAL_MIX, stampOneWinner } from './lib/enrich
 import type { MatchFacility } from './lib/facility-match.js'
 import { inBbox } from './lib/spatial.js'
 import { makeCountryGate } from './lib/country-polygon.js'
-import { DATA_YEAR as YEAR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
-const H3R4_DIR = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
 const CACHE_DIR = resolve(import.meta.dirname, `../data/enrichment/${YEAR}/id`)
 
 const ID_BBOX: [number, number, number, number] = [-11.5, 94.0, 6.5, 141.5]

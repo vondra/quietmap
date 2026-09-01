@@ -28,9 +28,8 @@ import { makeCityGate } from './lib/city-polygon.js'
 import { iterateCountryHexes, writeRoadAadt, type RoadAadt, type RoadRow } from './lib/roads-arrow.js'
 import { shouldOverwrite } from './lib/sources.js'
 import { pointToPolylineDist } from './lib/spatial.js'
-import { DATA_YEAR as YEAR } from './lib/data-year.js'
+import { H3R4_DIR } from './lib/data-year.js'
 
-const H3R4_DIR = resolve(import.meta.dirname, '..', 'data', 'prepared', YEAR, 'h3r4')
 const argv = process.argv.slice(2)
 const ENRICH_ONLY = argv.includes('--enrich-only')
 const FORCE_DOWNLOAD = argv.includes('--force-download')

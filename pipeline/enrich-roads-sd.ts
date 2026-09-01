@@ -60,11 +60,10 @@ import { SOURCE_ID_SD_NATIONAL_ROADS } from './lib/source-ids.generated.js'
 import { inBbox, pointToPolylineDist } from './lib/spatial.js'
 import { writeRoadAadt, iterateCountryHexes } from './lib/roads-arrow.js'
 import { makeCoastalCountryGate } from './lib/country-polygon.js'
-import { DATA_YEAR as YEAR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
 const MY_SOURCE_ID = SOURCE_ID_SD_NATIONAL_ROADS
 
-const H3R4_DIR = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
 
 // SD coarse bbox [minLat,minLon,maxLat,maxLon] — cheap pre-scan over neighbours
 // (Egypt/Libya/Chad/CAR/South Sudan/Ethiopia/Eritrea); makeCoastalCountryGate('SD') is

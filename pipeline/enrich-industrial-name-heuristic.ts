@@ -26,9 +26,8 @@ import { makeTable, vectorFromArray, Uint16 } from 'apache-arrow'
 import { SOURCES_BY_KEY } from './lib/sources.js'
 import { shouldOverwrite, withArrowWrite } from './lib/provenance.js'
 import { SOURCE_ID_INDUSTRIAL_NAME_HEURISTIC } from './lib/source-ids.generated.js'
-import { DATA_YEAR as YEAR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
-const H3R4_DIR = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
 
 const PROGRESS_INTERVAL_MS = 10_000
 

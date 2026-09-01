@@ -47,11 +47,10 @@ import { inBbox, pointToPolylineDist } from './lib/spatial.js'
 import { writeRailTrains } from './lib/railways-arrow.js'
 import { iterateCountryHexes } from './lib/roads-arrow.js'
 import { makeCountryGate } from './lib/country-polygon.js'
-import { DATA_YEAR as YEAR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
 const MY_SOURCE_ID = SOURCE_ID_TR_NATIONAL_RAILWAY
 
-const H3R4_DIR = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
 
 const TR_HEX_BBOX: [number, number, number, number] = [35.8, 25.6, 42.2, 44.8]
 // Greater Istanbul (both banks) — urban-rail counts take a boost inside this box.

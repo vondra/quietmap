@@ -37,7 +37,7 @@ import {
   buildTaperPlan, TAPER_CLASSES, TRIGGER_DB,
   type CountrySpeeds, type Seg, type TaperStats,
 } from './lib/roads-taper-plan.js'
-import { DATA_YEAR as YEAR } from './lib/data-year.js'
+import { H3R4_DIR } from './lib/data-year.js'
 
 const MY_SOURCE_ID = SOURCE_ID_OSM_TRANSITION_TAPER
 const HEX_CONCURRENCY = 4
@@ -128,7 +128,6 @@ async function processHex(
 }
 
 async function main() {
-  const H3R4_DIR = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
   const bboxArg = process.argv.includes('--bbox') ? process.argv[process.argv.indexOf('--bbox') + 1] : ''
   const WRITE = process.argv.includes('--write')
   const BBOX = bboxArg.split(',').map(Number) as [number, number, number, number]

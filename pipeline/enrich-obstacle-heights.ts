@@ -39,7 +39,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { cellToBoundary } from 'h3-js'
-import { DATA_YEAR } from './lib/data-year.js'
+import { DATA_YEAR, H3R4_DIR } from './lib/data-year.js'
 import {
   OBSTACLE_HEIGHT_PROOF_FILENAME,
   obstacleHeightInputsSha256,
@@ -50,7 +50,6 @@ import {
 
 const REPO_ROOT = resolve(import.meta.dirname, '..')
 const ENRICH = resolve(REPO_ROOT, 'data', 'enrichment')
-const H3R4_DIR = resolve(REPO_ROOT, 'data', 'prepared', DATA_YEAR, 'h3r4')
 const STAGING_DIR = resolve(ENRICH, 'global', 'overture-obstacles', 'h3r4')
 const WORKER = resolve(REPO_ROOT, 'scripts', 'obstacles', 'enrich-obstacle-heights.py')
 const DOWNLOADER = resolve(REPO_ROOT, 'scripts', 'obstacles', 'download-height-rasters.sh')

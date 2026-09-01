@@ -44,11 +44,10 @@ import { SOURCE_ID_JP_NATIONAL_ROADS, SOURCE_ID_JP_CLASS_MEDIAN_FALLBACK } from 
 import { inBbox } from './lib/spatial.js'
 import { writeRoadAadt, iterateCountryHexes, type RoadRow } from './lib/roads-arrow.js'
 import { makeCoastalCountryGate } from './lib/country-polygon.js'
-import { DATA_YEAR as YEAR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
 const MY_SOURCE_ID = SOURCE_ID_JP_NATIONAL_ROADS
 const MEDIAN_FALLBACK_SOURCE_ID = SOURCE_ID_JP_CLASS_MEDIAN_FALLBACK
-const H3R4_DIR = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
 const CACHE_DIR = resolve(import.meta.dirname, `../data/enrichment/${YEAR}/jp`)
 
 // JP coarse bbox [minLat,minLon,maxLat,maxLon]: Yonaguni (24.4°N,123°E) → Hokkaido

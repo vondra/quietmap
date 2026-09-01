@@ -44,11 +44,10 @@ import { isMeasured } from './lib/sources.js'
 import { classDefaultTotal } from './lib/road-class-defaults.js'
 import { writeRoadAadt, iterateCountryHexes } from './lib/roads-arrow.js'
 import { nodeKey } from './lib/spatial.js'
-import { DATA_YEAR as YEAR } from './lib/data-year.js'
+import { H3R4_DIR } from './lib/data-year.js'
 
 const MY_SOURCE_ID = SOURCE_ID_ROAD_CONTINUITY_HEURISTIC
 
-const H3R4_DIR = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
 const PREFIX = process.argv.includes('--prefix') ? process.argv[process.argv.indexOf('--prefix') + 1] : ''
 const bboxArg = process.argv.includes('--bbox') ? process.argv[process.argv.indexOf('--bbox') + 1] : ''
 const BBOX = bboxArg ? (bboxArg.split(',').map(Number) as [number, number, number, number]) : null

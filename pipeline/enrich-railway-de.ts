@@ -74,11 +74,10 @@ import {
   describeIncompleteFeeds, logRetractSkippedIncompleteInputs, readMergedStopCache, writeMergedStopCache,
   parseRoutesTxtOrThrow, type StopTrainCount,
 } from './lib/gtfs-enrich-core.js'
-import { DATA_YEAR as YEAR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
 const MY_SOURCE_ID = SOURCE_ID_DE_NATIONAL_RAILWAY
 
-const H3R4_DIR = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
 const CACHE_DIR = resolve(import.meta.dirname, `../data/enrichment/${YEAR}/de`)
 const CACHE_FREQUENCIES = resolve(CACHE_DIR, 'gtfs-family-frequencies.json')
 

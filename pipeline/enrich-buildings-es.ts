@@ -25,11 +25,10 @@ import { writeBuildingEnrichment } from './lib/buildings-arrow.js'
 import { iterateCountryHexes } from './lib/roads-arrow.js'
 import { SOURCE_ID_ES_CATASTRO } from './lib/source-ids.generated.js'
 import { flatDist } from './lib/spatial.js'
-import { DATA_YEAR as YEAR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
 const MY_SOURCE_ID = SOURCE_ID_ES_CATASTRO
 
-const H3R4_DIR = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
 const CACHE_DIR = resolve(import.meta.dirname, `../data/enrichment/${YEAR}/es`)
 const CACHE_FILE = resolve(CACHE_DIR, 'catastro-buildings.json')
 

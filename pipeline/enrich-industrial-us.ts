@@ -17,9 +17,8 @@ import { resolve } from 'node:path'
 import { tableFromIPC, tableToIPC, vectorFromArray, makeTable, Float32 } from 'apache-arrow'
 import { cellToLatLng } from 'h3-js'
 import { haversineM } from './lib/spatial.js'
-import { DATA_YEAR as YEAR } from './lib/data-year.js'
+import { H3R4_DIR } from './lib/data-year.js'
 
-const H3R4_DIR = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
 const USWTDB_CSV = resolve(import.meta.dirname, `../data/enrichment/global/uswtdb.csv`)
 
 // US bbox

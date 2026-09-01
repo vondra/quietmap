@@ -17,11 +17,10 @@ import proj4 from 'proj4'
 import { SOURCE_ID_FR_CEREMA_TMJA } from './lib/source-ids.generated.js'
 import { pointToPolylineDist } from './lib/spatial.js'
 import { writeRoadAadt, iterateCountryHexes } from './lib/roads-arrow.js'
-import { DATA_YEAR as YEAR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
 const MY_SOURCE_ID = SOURCE_ID_FR_CEREMA_TMJA
 
-const H3R4_DIR = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
 const CACHE_DIR = resolve(import.meta.dirname, `../data/enrichment/${YEAR}/fr`)
 const CACHE_2024 = resolve(CACHE_DIR, 'tmja-2024.csv')
 const CACHE_2019 = resolve(CACHE_DIR, 'tmja-2019.csv')

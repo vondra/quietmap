@@ -18,9 +18,9 @@ import { readFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { tableFromIPC } from 'apache-arrow'
 import { latLngToCell, gridDisk } from 'h3-js'
+import { H3R4_DIR } from '../lib/data-year.js'
 
 const SNAP_PATH = resolve(import.meta.dirname, '../../benchmarks/validation/snapshots/eba-laermmonitoring.2023.json')
-const H3R4_DIR = process.env.H3R4_DIR || resolve(import.meta.dirname, '../../data/prepared/2026/h3r4')
 
 const snap = JSON.parse(readFileSync(SNAP_PATH, 'utf8'))
 const M_PER_DEG_LAT = 110_540
