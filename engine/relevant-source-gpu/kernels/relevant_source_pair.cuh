@@ -68,12 +68,12 @@ __device__ __forceinline__ int fan_ground_or_barrier_energy(
             continue;
         }
         build_path_profile(scene, centre.x_m, centre.y_m, receiver_x_m, receiver_y_m,
-                           centre.distance_m, source.bridge != 0, profile);
+                           centre.distance_m, source_is_bridge(source), profile);
         float terrain_db[QUIETMAP_BAND_COUNT];
         float screening_db[QUIETMAP_BAND_COUNT];
         ray_terrain_and_screening_bands(
             scene, centre.x_m, centre.y_m, receiver_x_m, receiver_y_m,
-            profile.elevation_m[0] + source.source_height_m, receiver_altitude_m, true,
+            profile.elevation_m[0] + source.source_height_m, receiver_altitude_m, true, 0.0f,
             profile, terrain_db, screening_db);
         if (low.valid && high.valid) {
             const float chord_m = sqrtf(fmaxf(
@@ -118,7 +118,7 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
     PathProfile profile;
     build_path_profile(scene, geometry.closest_x_m, geometry.closest_y_m,
                        receiver_x_m, receiver_y_m, geometry.endpoint_distance_m,
-                       source.bridge != 0, profile);
+                       source_is_bridge(source), profile);
     float ground_db[QUIETMAP_BAND_COUNT];
     ground_attenuation_bands(profile, geometry.source_altitude_m, receiver_altitude_m, ground_db);
     const float characteristic_forest_depth_m = profile.forest_depth_m;
@@ -136,12 +136,12 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
             // characteristic ray resolves to no screening — ground alone over its terrain.
             build_path_profile(scene, geometry.closest_x_m, geometry.closest_y_m,
                                receiver_x_m, receiver_y_m, geometry.endpoint_distance_m,
-                               source.bridge != 0, profile);
+                               source_is_bridge(source), profile);
             float terrain_db[QUIETMAP_BAND_COUNT];
             float screening_db[QUIETMAP_BAND_COUNT];
             ray_terrain_and_screening_bands(
                 scene, geometry.closest_x_m, geometry.closest_y_m, receiver_x_m, receiver_y_m,
-                geometry.source_altitude_m, receiver_altitude_m, false, profile,
+                geometry.source_altitude_m, receiver_altitude_m, false, 0.0f, profile,
                 terrain_db, screening_db);
             for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
                 ground_or_barrier_energy[band] = quietmap_energy_from_db(
@@ -154,8 +154,8 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
         float screening_db[QUIETMAP_BAND_COUNT];
         ray_terrain_and_screening_bands(
             scene, geometry.closest_x_m, geometry.closest_y_m, receiver_x_m, receiver_y_m,
-            geometry.source_altitude_m, receiver_altitude_m, true, profile,
-            terrain_db, screening_db);
+            geometry.source_altitude_m, receiver_altitude_m, true,
+            source_exclusion_radius_m(source), profile, terrain_db, screening_db);
         for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
             ground_or_barrier_energy[band] = quietmap_energy_from_db(
                 -ground_or_barrier_attenuation_db(

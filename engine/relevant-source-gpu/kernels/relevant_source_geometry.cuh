@@ -17,17 +17,35 @@ constexpr int QUIETMAP_CORNER_COUNT =
     (QUIETMAP_BLOCKS_PER_TILE_SIDE + 1) * (QUIETMAP_BLOCKS_PER_TILE_SIDE + 1);
 static_assert(QUIETMAP_TILE_PIXEL_SIDE % QUIETMAP_BLOCK_PIXEL_SIDE == 0, "block tiles the tile");
 
+constexpr uint32_t QUIETMAP_SOURCE_FLAG_BRIDGE = 1u;
+constexpr uint32_t QUIETMAP_SOURCE_FLAG_POINT = 2u;
+
 struct DeviceLineSource {
     float start_x_m;
     float start_y_m;
     float end_x_m;
     float end_y_m;
-    float length_m;
+    /// Segment length for a line; footprint exclusion radius for a point.
+    float extent_m;
     float max_distance_m;
     float source_height_m;
-    uint32_t bridge;
+    uint32_t flags;
     float emission_linear[QUIETMAP_PERIOD_COUNT * QUIETMAP_BAND_COUNT];
 };
+
+__device__ __forceinline__ bool source_is_point(const DeviceLineSource& source) {
+    return (source.flags & QUIETMAP_SOURCE_FLAG_POINT) != 0u;
+}
+
+__device__ __forceinline__ bool source_is_bridge(const DeviceLineSource& source) {
+    return (source.flags & QUIETMAP_SOURCE_FLAG_BRIDGE) != 0u;
+}
+
+/// A point source's footprint radius: buildings inside it are the source itself,
+/// not a barrier, and it floors the divergence distance (CPU scatter_point).
+__device__ __forceinline__ float source_exclusion_radius_m(const DeviceLineSource& source) {
+    return source_is_point(source) ? source.extent_m : 0.0f;
+}
 
 struct FusedPixel {
     float elevation;
@@ -182,6 +200,52 @@ __device__ __forceinline__ float finite_line_correction_db(
             * __logf(fmaxf(divergence_distance_m, perpendicular) / perpendicular);
 }
 
+/// The point-source pair: reach, the free-field audibility pre-gate on the loudest
+/// day band, the footprint-floored slant distance and ISO 9613-2 spherical
+/// divergence 20 log10 d + 11 (CPU scatter_point::pixel).
+__device__ __forceinline__ bool point_receiver_geometry(
+    const DeviceScenePointers& scene,
+    const DeviceLineSource& source,
+    float receiver_x_m,
+    float receiver_y_m,
+    float receiver_altitude_m,
+    float receiver_reflection_db,
+    LineReceiverGeometry& result
+) {
+    const float distance = hypotf(receiver_x_m - source.start_x_m,
+                                  receiver_y_m - source.start_y_m);
+    if (distance > source.max_distance_m) {
+        return false;
+    }
+    float loudest_day_band = 0.0f;
+    for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
+        loudest_day_band = fmaxf(loudest_day_band, source.emission_linear[band]);
+    }
+    const float loudest_day_db = 4.342944819032518f * __logf(fmaxf(loudest_day_band, 1.0e-20f));
+    const float free_field_db = loudest_day_db
+        - (8.685889638065036f * __logf(distance) + 11.0f)
+        - QUIETMAP_FREE_FIELD_ATMOSPHERE_DB_PER_M * distance;
+    if (free_field_db < 0.0f) {
+        return false;
+    }
+    const float source_altitude =
+        sample_scene_raster(scene, source.start_x_m, source.start_y_m).elevation_m
+        + source.source_height_m;
+    const float divergence_distance = fmaxf(distance, source.extent_m);
+    const float slant_distance = fmaxf(
+        hypotf(divergence_distance, source_altitude - receiver_altitude_m), 1.0f);
+    result.closest_x_m = source.start_x_m;
+    result.closest_y_m = source.start_y_m;
+    result.endpoint_distance_m = distance;
+    result.perpendicular_distance_m = distance;
+    result.signed_fraction = 0.0f;
+    result.slant_distance_m = slant_distance;
+    result.source_altitude_m = source_altitude;
+    result.base_level_db = receiver_reflection_db
+                           - (8.685889638065036f * __logf(slant_distance) + 11.0f);
+    return true;
+}
+
 __device__ __forceinline__ bool line_receiver_geometry(
     const DeviceScenePointers& scene,
     const DeviceLineSource& source,
@@ -191,6 +255,10 @@ __device__ __forceinline__ bool line_receiver_geometry(
     float receiver_reflection_db,
     LineReceiverGeometry& result
 ) {
+    if (source_is_point(source)) {
+        return point_receiver_geometry(scene, source, receiver_x_m, receiver_y_m,
+                                       receiver_altitude_m, receiver_reflection_db, result);
+    }
     const float segment_x = source.end_x_m - source.start_x_m;
     const float segment_y = source.end_y_m - source.start_y_m;
     const float receiver_from_start_x = receiver_x_m - source.start_x_m;
@@ -217,7 +285,7 @@ __device__ __forceinline__ bool line_receiver_geometry(
     const float slant_distance = fmaxf(
         hypotf(endpoint_distance, source_altitude - receiver_altitude_m), 1.0f);
     const float finite_correction = finite_line_correction_db(
-        source.length_m, perpendicular_distance, signed_fraction, endpoint_distance);
+        source.extent_m, perpendicular_distance, signed_fraction, endpoint_distance);
     result.closest_x_m = closest_x;
     result.closest_y_m = closest_y;
     result.endpoint_distance_m = endpoint_distance;

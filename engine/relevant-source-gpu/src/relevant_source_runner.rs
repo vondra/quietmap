@@ -1,4 +1,5 @@
-//! Road/rail runner over one wave's zoom: a streaming pipeline over cells (the host
+//! The surface-layer runner over one wave's zoom: road, rail, industrial and
+//! building from one preparation, as a streaming pipeline over cells (the host
 //! prepares cell N+1 while the card paints cell N) with the paint's own batch
 //! lookahead, and the phase/pair measurement of every step.
 
@@ -16,10 +17,14 @@ use raster_reader::fused_tile_z13::TileBatch;
 use raster_reader::RealRasters;
 use tile_painter::region_runner::{batch_slot, block_batch_origin, region_tiles};
 use tile_painter::source_loader_barrier::BarrierData;
+use tile_painter::source_loader_building::BuildingData;
+use tile_painter::source_loader_industrial::IndustrialData;
 use tile_painter::source_loader_obstacle::{bake_tile_vector_rx_refl, ObstacleData};
 use tile_painter::source_loader_rail::RailData;
 use tile_painter::source_loader_road::RoadData;
-use tile_painter::wire_hm3::{SOURCE_ID_RAIL, SOURCE_ID_ROAD};
+use tile_painter::wire_hm3::{
+    SOURCE_ID_BUILDING, SOURCE_ID_INDUSTRIAL, SOURCE_ID_RAIL, SOURCE_ID_ROAD,
+};
 
 use crate::cuda_bridge::RelevantSourceCuda;
 use crate::obstacle_transfer::FlattenedObstacleGeometry;
@@ -49,6 +54,18 @@ pub struct RelevantSourceRunConfiguration {
     pub zoom: u8,
     pub regions: Vec<u64>,
 }
+
+/// The surface layers one preparation paints, in output order.
+pub const LAYER_NAMES: [&str; LAYER_COUNT] = ["road", "rail", "industrial", "building"];
+pub const LAYER_COUNT: usize = 4;
+const LAYER_SOURCE_IDS: [u8; LAYER_COUNT] = [
+    SOURCE_ID_ROAD,
+    SOURCE_ID_RAIL,
+    SOURCE_ID_INDUSTRIAL,
+    SOURCE_ID_BUILDING,
+];
+/// Point-grid area sources get the CPU's median footprint fill before the write.
+const LAYER_AREA_SOURCE: [bool; LAYER_COUNT] = [false, false, true, true];
 
 #[derive(Clone, Debug, Default)]
 pub struct LayerMeasurement {
@@ -89,8 +106,8 @@ impl LayerMeasurement {
 
 #[derive(Debug, Default)]
 pub struct RelevantSourceRunMeasurement {
-    pub road: LayerMeasurement,
-    pub rail: LayerMeasurement,
+    /// One entry per [`LAYER_NAMES`] layer.
+    pub layers: Vec<LayerMeasurement>,
     pub wall_seconds: f64,
     pub cpu_seconds: f64,
     /// Source, barrier and obstacle loading plus the device uploads of every
@@ -112,18 +129,18 @@ pub struct RelevantSourceRunMeasurement {
 
 impl RelevantSourceRunMeasurement {
     pub fn gpu_seconds(&self) -> f64 {
-        (self.road.corner_gpu_milliseconds
-            + self.road.paint_gpu_milliseconds
-            + self.rail.corner_gpu_milliseconds
-            + self.rail.paint_gpu_milliseconds)
+        self.layers
+            .iter()
+            .map(|layer| layer.corner_gpu_milliseconds + layer.paint_gpu_milliseconds)
+            .sum::<f64>()
             / 1000.0
     }
 
     pub fn attempted_pairs(&self) -> u64 {
-        self.road.corner_pairs
-            + self.road.pixel_pairs
-            + self.rail.corner_pairs
-            + self.rail.pixel_pairs
+        self.layers
+            .iter()
+            .map(|layer| layer.corner_pairs + layer.pixel_pairs)
+            .sum()
     }
 }
 
@@ -141,7 +158,7 @@ struct PreparedRegion {
     region_r4: u64,
     frame: RegionMetricFrame,
     batches: BTreeMap<(u32, u32), Vec<(u32, u32)>>,
-    layers: [EncodedLineLayer; 2],
+    layers: Vec<EncodedLineLayer>,
     barrier_data: BarrierData,
     obstacle_data: ObstacleData,
     device_obstacles: RegionDeviceObstacles,
@@ -157,7 +174,10 @@ pub fn run_relevant_source_wave(
         .context("load the road/rail admin table")?;
     let rasters = RealRasters::new(&configuration.prepared_directory);
     let cuda = RelevantSourceCuda::initialize()?;
-    let mut measurement = RelevantSourceRunMeasurement::default();
+    let mut measurement = RelevantSourceRunMeasurement {
+        layers: vec![LayerMeasurement::default(); LAYER_COUNT],
+        ..RelevantSourceRunMeasurement::default()
+    };
 
     // The cell stream: one producer loads and uploads cell N+1 (and blocks on the
     // channel once it is one cell ahead, so at most two cells are resident on the
@@ -226,8 +246,27 @@ fn prepare_region(
         ObstacleData::load_for_r4s(&configuration.h3r4_directory, region_r4, &ring)?;
     let flattened_obstacles = FlattenedObstacleGeometry::from_set(&frame, obstacle_data.set());
     let device_obstacles = RegionDeviceObstacles::upload(&flattened_obstacles)?;
-    let road = encode_line_layer("road", SOURCE_ID_ROAD, &frame, &road_rows)?;
-    let rail = encode_line_layer("rail", SOURCE_ID_RAIL, &frame, &rail_rows)?;
+    let industrial_rows =
+        IndustrialData::load_for_r4s(&configuration.h3r4_directory, &ring)?.into_rows();
+    let building_rows =
+        BuildingData::load_for_r4s(&configuration.h3r4_directory, &ring)?.into_rows();
+    let encoded = [
+        road_rows.iter().map(|row| frame.encode_line(row)).collect(),
+        rail_rows.iter().map(|row| frame.encode_line(row)).collect(),
+        industrial_rows
+            .iter()
+            .map(|row| frame.encode_point(row))
+            .collect(),
+        building_rows
+            .iter()
+            .map(|row| frame.encode_point(row))
+            .collect(),
+    ];
+    let layers = encoded
+        .into_iter()
+        .enumerate()
+        .map(|(layer, sources)| encode_layer(layer, sources))
+        .collect::<Result<Vec<_>>>()?;
     let mut batches: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
     for &(x, y) in &tiles {
         batches
@@ -242,7 +281,7 @@ fn prepare_region(
         region_r4,
         frame,
         batches,
-        layers: [road, rail],
+        layers,
         barrier_data,
         obstacle_data,
         device_obstacles,
@@ -269,8 +308,9 @@ fn paint_region(
         device_obstacles,
         prepare_seconds,
     } = prepared;
-    measurement.road.loaded_sources += layers[0].sources.len() as u64;
-    measurement.rail.loaded_sources += layers[1].sources.len() as u64;
+    for (layer, encoded) in layers.iter().enumerate() {
+        measurement.layers[layer].loaded_sources += encoded.sources.len() as u64;
+    }
     measurement.source_load_seconds += prepare_seconds;
     // The terrain halo of the next batch is built while the GPU paints this one:
     // one producer thread, one batch of lookahead, the GPU never waits on a halo
@@ -282,11 +322,11 @@ fn paint_region(
     let (write_sender, write_receiver) = sync_channel::<PendingTileWrite>(PENDING_WRITES);
     let producer = thread::Builder::new().name("batch-rasters".into());
     let writer = thread::Builder::new().name("tile-writer".into());
-    let output_bytes = thread::scope(|scope| -> Result<[u64; 2]> {
-        let writer = writer.spawn_scoped(scope, move || -> Result<[u64; 2]> {
-            let mut bytes = [0_u64; 2];
+    let output_bytes = thread::scope(|scope| -> Result<[u64; LAYER_COUNT]> {
+        let writer = writer.spawn_scoped(scope, move || -> Result<[u64; LAYER_COUNT]> {
+            let mut bytes = [0_u64; LAYER_COUNT];
             for pending in write_receiver {
-                let layer = usize::from(pending.source_id == SOURCE_ID_RAIL);
+                let layer = pending.layer;
                 bytes[layer] += pending.write()?;
             }
             Ok(bytes)
@@ -337,8 +377,9 @@ fn paint_region(
         drop(write_sender);
         writer.join().expect("tile writer thread")
     })?;
-    measurement.road.output_bytes += output_bytes[0];
-    measurement.rail.output_bytes += output_bytes[1];
+    for (layer, bytes) in output_bytes.into_iter().enumerate() {
+        measurement.layers[layer].output_bytes += bytes;
+    }
     measurement.cells.push((
         region_r4,
         prepare_seconds,
@@ -356,7 +397,7 @@ fn paint_batch_tiles(
     batch: &TileBatch,
     requested_tiles: &[(u32, u32)],
     frame: &RegionMetricFrame,
-    layers: &[EncodedLineLayer; 2],
+    layers: &[EncodedLineLayer],
     obstacle_data: &ObstacleData,
     barrier_data: &BarrierData,
     device_obstacles: &RegionDeviceObstacles,
@@ -373,7 +414,7 @@ fn paint_batch_tiles(
         let interior = Arc::new(obstacle_data.interior_estimate(tile));
         let barriers = barrier_data.for_tile(&tile.bbox, LINE_HALO_M);
         measurement.receiver_seconds += receiver_started.elapsed().as_secs_f64();
-        for layer in layers {
+        for (layer_index, layer) in layers.iter().enumerate() {
             let output_path = output_tile_path(
                 &configuration.output_directory,
                 layer.directory_name,
@@ -406,6 +447,8 @@ fn paint_batch_tiles(
                 .send(PendingTileWrite {
                     energy,
                     interior: Arc::clone(&interior),
+                    layer: layer_index,
+                    area_source: LAYER_AREA_SOURCE[layer_index],
                     source_id: layer.source_id,
                     output_path,
                 })
@@ -414,28 +457,18 @@ fn paint_batch_tiles(
                 - (tile_measurement.corner_gpu_milliseconds
                     + tile_measurement.paint_gpu_milliseconds)
                     / 1000.0;
-            match layer.directory_name {
-                "road" => measurement.road.add_tile(tile_measurement),
-                "rail" => measurement.rail.add_tile(tile_measurement),
-                _ => unreachable!(),
-            }
+            measurement.layers[layer_index].add_tile(tile_measurement);
         }
     }
     Ok(())
 }
 
-fn encode_line_layer(
-    directory_name: &'static str,
-    source_id: u8,
-    frame: &RegionMetricFrame,
-    rows: &[tile_painter::source_line::LineRow],
-) -> Result<EncodedLineLayer> {
-    let sources: Vec<_> = rows.iter().map(|row| frame.encode_line(row)).collect();
+fn encode_layer(layer: usize, sources: Vec<DeviceLineSource>) -> Result<EncodedLineLayer> {
     let fingerprint = source_identity_fingerprint(&sources);
     let device_sources = RegionDeviceLineSources::upload(&sources)?;
     Ok(EncodedLineLayer {
-        directory_name,
-        source_id,
+        directory_name: LAYER_NAMES[layer],
+        source_id: LAYER_SOURCE_IDS[layer],
         sources,
         fingerprint,
         device_sources,

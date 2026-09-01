@@ -131,13 +131,14 @@ __device__ __forceinline__ void scan_vector_crossings(
     float receiver_y_m,
     float source_altitude_m,
     float receiver_altitude_m,
+    float exclusion_radius_m,
     const PathProfile& profile,
     DiffractionEdge& best
 ) {
     for (uint32_t grid_index = 0; grid_index < scene.obstacle_grid_count; ++grid_index) {
         scan_obstacle_grid(scene, scene.obstacle_grids[grid_index], source_x_m, source_y_m,
                            receiver_x_m, receiver_y_m, source_altitude_m,
-                           receiver_altitude_m, profile, best);
+                           receiver_altitude_m, exclusion_radius_m, profile, best);
     }
     const float ray_dx = receiver_x_m - source_x_m;
     const float ray_dy = receiver_y_m - source_y_m;
@@ -160,7 +161,8 @@ __device__ __forceinline__ void scan_vector_crossings(
 /// Terrain bands and the screening increment over them on one built profile: the
 /// bare-earth max-delta edge, then the exact-crossing race against it (CPU
 /// terrain_attenuation + screening_attenuation, A_screen = max(A_combined - A_terrain, 0)).
-/// Rays under 30 m or with fewer than three samples carry neither term.
+/// Rays under 30 m or with fewer than three samples carry neither term; building
+/// crossings inside `exclusion_radius_m` of the source are its own footprint.
 __device__ __forceinline__ void ray_terrain_and_screening_bands(
     const DeviceScenePointers& scene,
     float source_x_m,
@@ -170,6 +172,7 @@ __device__ __forceinline__ void ray_terrain_and_screening_bands(
     float source_altitude_m,
     float receiver_altitude_m,
     bool with_obstacles,
+    float exclusion_radius_m,
     PathProfile& profile,
     float terrain_db[QUIETMAP_BAND_COUNT],
     float screening_db[QUIETMAP_BAND_COUNT]
@@ -191,7 +194,8 @@ __device__ __forceinline__ void ray_terrain_and_screening_bands(
     }
     DiffractionEdge obstacle = {};
     scan_vector_crossings(scene, source_x_m, source_y_m, receiver_x_m, receiver_y_m,
-                          source_altitude_m, receiver_altitude_m, profile, obstacle);
+                          source_altitude_m, receiver_altitude_m, exclusion_radius_m,
+                          profile, obstacle);
     if (obstacle.present && (!terrain.present || obstacle.delta_m > terrain.delta_m)) {
         complete_explicit_edge_geometry(
             profile, source_altitude_m, receiver_altitude_m, obstacle);

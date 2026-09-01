@@ -15,6 +15,7 @@ const INPUT_TYPES_SOURCE: &str = include_str!("../noise-compute/src/types/inputs
 const SCATTER_BAND_SOURCE: &str = include_str!("../tile-painter/src/scatter_band.rs");
 const ARC_SCREENING_SOURCE: &str =
     include_str!("../noise-compute/src/propagation/arc_screening.rs");
+const GEO_SOURCE: &str = include_str!("../noise-compute/src/propagation/geo.rs");
 
 fn constant_initializer<'a>(source: &'a str, constant_name: &str) -> &'a str {
     let declaration = format!("const {constant_name}:");
@@ -265,6 +266,11 @@ fn generated_physics_header() -> String {
         "QUIETMAP_ARC_QUADRATURE_MIN_RAD",
         canonical_f64(ARC_SCREENING_SOURCE, "ARC_QUADRATURE_MIN_RAD"),
     );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_FREE_FIELD_ATMOSPHERE_DB_PER_M",
+        canonical_f64(GEO_SOURCE, "ATM_ALPHA_A_WEIGHTED"),
+    );
     writeln!(
         header,
         "constexpr int QUIETMAP_ARC_ESCALATE_MAX_PARTS = {};",
@@ -335,6 +341,7 @@ fn main() {
     println!("cargo:rerun-if-changed=kernels/relevant_source_arc.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_pair.cuh");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/arc_screening.rs");
+    println!("cargo:rerun-if-changed=../noise-compute/src/propagation/geo.rs");
     println!("cargo:rerun-if-changed=kernels/block_source_partition.cu");
     println!("cargo:rerun-if-changed=../noise-compute/src/constants.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/path_profile.rs");

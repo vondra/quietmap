@@ -276,11 +276,11 @@ __device__ __forceinline__ bool azimuth_ray_bands(
         return false;
     }
     build_path_profile(scene, point_x, point_y, receiver_x_m, receiver_y_m, distance_m,
-                       source.bridge != 0, profile);
+                       source_is_bridge(source), profile);
     ray_terrain_and_screening_bands(
         scene, point_x, point_y, receiver_x_m, receiver_y_m,
         profile.elevation_m[0] + source.source_height_m, receiver_altitude_m,
-        with_obstacles, profile, terrain_db, screening_db);
+        with_obstacles, 0.0f, profile, terrain_db, screening_db);
     return true;
 }
 

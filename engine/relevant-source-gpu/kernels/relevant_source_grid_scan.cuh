@@ -52,6 +52,7 @@ __device__ __forceinline__ void scan_obstacle_grid(
     float receiver_y_m,
     float source_altitude_m,
     float receiver_altitude_m,
+    float exclusion_radius_m,
     const PathProfile& profile,
     DiffractionEdge& best
 ) {
@@ -121,7 +122,8 @@ __device__ __forceinline__ void scan_obstacle_grid(
                     float crossing_t;
                     if (segment_crossing_fraction(
                             start_x, start_y, dx, dy, values[0], values[1],
-                            values[2], values[3], crossing_t)) {
+                            values[2], values[3], crossing_t)
+                        && crossing_t * profile.distance_m >= exclusion_radius_m) {
                         consider_crossing_candidate(
                             profile, source_altitude_m, receiver_altitude_m,
                             crossing_t, values[4], best);

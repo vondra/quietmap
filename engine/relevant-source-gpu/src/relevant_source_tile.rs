@@ -10,7 +10,9 @@ use noise_compute::propagation::obstacle_index::{enclosure_db, ObstacleSet};
 use raster_reader::fused_tile_z13::FusedTileZ13;
 use tile_painter::accumulator::TileAccumulator;
 use tile_painter::source_loader_obstacle::InteriorEstimate;
-use tile_painter::wire_hm3::{collapse_lden_surface_u8, write_tile};
+use tile_painter::wire_hm3::{
+    collapse_lden_surface_u8, fill_area_median, write_tile, AREA_FILL_RADIUS_PX,
+};
 
 use crate::cuda_bridge::{DeviceBuffer, DeviceScenePointers, RelevantSourceCuda};
 use crate::obstacle_transfer::{
@@ -91,10 +93,17 @@ pub struct TilePaintMeasurement {
 }
 
 /// One painted tile's period energies waiting for the writer thread: collapse to
-/// the Lden byte, fill enclosed pixels from their facade donors, brotli, write.
+/// the Lden byte, smooth an area source's point-grid ripple into its footprint,
+/// fill enclosed pixels from their facade donors, brotli, write (the CPU
+/// surface_region order).
 pub struct PendingTileWrite {
     pub energy: Vec<f32>,
     pub interior: Arc<InteriorEstimate>,
+    /// Index into the runner's layer list, for the per-layer byte total.
+    pub layer: usize,
+    /// Industrial and building discretise areas into point grids that the
+    /// median fill turns into solid footprints; lines are continuous already.
+    pub area_source: bool,
     pub source_id: u8,
     pub output_path: PathBuf,
 }
@@ -106,6 +115,9 @@ impl PendingTileWrite {
             energy: self.energy,
         };
         let mut cells = collapse_lden_surface_u8(&accumulator);
+        if self.area_source {
+            fill_area_median(&mut cells, AREA_FILL_RADIUS_PX);
+        }
         self.interior.apply(&mut cells);
         Ok(write_tile(&self.output_path, &cells, self.source_id, false)? as u64)
     }

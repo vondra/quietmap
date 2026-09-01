@@ -1,4 +1,5 @@
-//! Road/rail command for the persisted relevant-source block architecture at one wave's zoom.
+//! Surface-layer command (road, rail, industrial, building) for the persisted
+//! relevant-source block architecture at one wave's zoom.
 
 use std::fs;
 use std::path::PathBuf;
@@ -6,7 +7,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 use relevant_source_gpu::relevant_source_runner::{
-    run_relevant_source_wave, RelevantSourceRunConfiguration,
+    run_relevant_source_wave, RelevantSourceRunConfiguration, LAYER_NAMES,
 };
 use relevant_source_gpu::source_frame::BLOCK_COUNT;
 
@@ -65,8 +66,9 @@ fn main() -> Result<()> {
             "relevant-source-cell cell={cell:x} prepare_s={prepare_seconds:.6} paint_s={paint_seconds:.6}"
         );
     }
-    print_layer("road", &measurement.road);
-    print_layer("rail", &measurement.rail);
+    for (name, layer) in LAYER_NAMES.iter().zip(&measurement.layers) {
+        print_layer(name, layer);
+    }
     Ok(())
 }
 
