@@ -33,6 +33,11 @@ pub const CELL_M: f64 = crate::constants::M_PER_DEG_LAT / 3600.0;
 /// enough to be useful for edge detection.
 pub const NEAR_OFFSET_M: f64 = 10.0;
 
+/// Shortest PHYSICAL forest run (meters) that counts as a stand: a shorter run is
+/// scattered trees and adds no vegetation depth (the geodata-v2 2a gate in
+/// [`vegetation_run_length`]). The CUDA surface kernel mirrors it as a literal.
+pub const VEGETATION_MIN_RUN_M: f64 = 10.0;
+
 /// Unified path profile: one bilateral sample set, all four rasters.
 ///
 /// Per source→receiver path, built once by `RasterSampler::build_path_profile`
@@ -462,14 +467,14 @@ pub fn vegetation_run_length(t: &[f64], forest: &[u8], dist_m: f64) -> f64 {
             run_phys += len;
             run_weighted += len * (forest[i] as f64 / 100.0);
         } else {
-            if run_phys >= 10.0 {
+            if run_phys >= VEGETATION_MIN_RUN_M {
                 total += run_weighted;
             }
             run_phys = 0.0;
             run_weighted = 0.0;
         }
     }
-    if run_phys >= 10.0 {
+    if run_phys >= VEGETATION_MIN_RUN_M {
         total += run_weighted;
     }
     total
