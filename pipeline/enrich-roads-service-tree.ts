@@ -33,7 +33,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { SOURCES_BY_KEY } from './lib/sources.js'
 import { shouldOverwrite, withArrowWrite } from './lib/provenance.js'
 import { resolve } from 'node:path'
-import { tableFromIPC, vectorFromArray, makeTable, Int32, Uint8, Uint16 } from 'apache-arrow'
+import { tableFromIPC, makeTable, makeVector } from 'apache-arrow'
 import { SOURCE_ID_SERVICE_TREE_HEURISTIC } from './lib/source-ids.generated.js'
 import { iterateCountryHexes } from './lib/roads-arrow.js'
 import { nodeKey } from './lib/spatial.js'
@@ -930,12 +930,12 @@ async function processHex(
       if (rebuilt.includes(field.name)) continue
       columns[field.name] = roadTable.getChild(field.name)!
     }
-    columns['aadt_light'] = vectorFromArray(aadtLight, new Int32())
-    columns['aadt_medium'] = vectorFromArray(aadtMedium, new Int32())
-    columns['aadt_heavy'] = vectorFromArray(aadtHeavy, new Int32())
-    columns['aadt_moto'] = vectorFromArray(aadtMoto, new Int32())
-    columns['source_id'] = vectorFromArray(sourceId, new Uint16())
-    if (taperCol) columns['speed_taper'] = vectorFromArray(taperCol, new Uint8())
+    columns['aadt_light'] = makeVector(aadtLight)
+    columns['aadt_medium'] = makeVector(aadtMedium)
+    columns['aadt_heavy'] = makeVector(aadtHeavy)
+    columns['aadt_moto'] = makeVector(aadtMoto)
+    columns['source_id'] = makeVector(sourceId)
+    if (taperCol) columns['speed_taper'] = makeVector(taperCol)
     result = { enriched, totalResidential: eligibleCount }
     return makeTable(columns)
   })

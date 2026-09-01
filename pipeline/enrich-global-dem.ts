@@ -45,7 +45,7 @@ function run(cmd: string, args: string[]): void {
 
 async function main(): Promise<void> {
   console.log('=== Global DEM Enrichment (Copernicus GLO-30) ===\n')
-  console.log(`  Dataset:    ${DATASET.name} (id=${DATASET.id}, priority=${DATASET.priority})`)
+  console.log(`  Dataset:    ${DATASET.name} (id=${DATASET.id}, ${DATASET.provenance})`)
   console.log(`  Source:     ${SRC_DIR}`)
   console.log(`  Destination: ${DST_DIR}`)
   console.log(`  Existing .hgt tiles: ${countTiles(DST_DIR, '.hgt')}\n`)
@@ -81,7 +81,7 @@ async function main(): Promise<void> {
 ## Source
 - **Copernicus GLO-30 DEM** (${DATASET.year}), ${DATASET.license}
 - Bucket: s3://copernicus-dem-30m/ (public, no auth)
-- Registered as dataset id ${DATASET.id} key \`${DATASET.key}\` priority ${DATASET.priority}
+- Registered as dataset id ${DATASET.id} key \`${DATASET.key}\` provenance ${DATASET.provenance}
 
 ## Output
 - ${DST_DIR}

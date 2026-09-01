@@ -35,7 +35,7 @@
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { tableFromIPC, makeTable, vectorFromArray, Uint16 } from 'apache-arrow'
+import { tableFromIPC, makeTable, makeVector } from 'apache-arrow'
 import { SOURCES_BY_KEY } from './lib/sources.js'
 import { shouldOverwrite, withArrowWrite } from './lib/provenance.js'
 import { cellToLatLng } from 'h3-js'
@@ -266,8 +266,8 @@ async function main() {
           if (field.name === 'nace_4digit' || field.name === 'source_id') continue
           columns[field.name] = table.getChild(field.name)!
         }
-        columns['nace_4digit'] = vectorFromArray(newNace, new Uint16())
-        columns['source_id'] = vectorFromArray(newDatasetId, new Uint16())
+        columns['nace_4digit'] = makeVector(newNace)
+        columns['source_id'] = makeVector(newDatasetId)
         return makeTable(columns)
       })
     } catch (e: any) {

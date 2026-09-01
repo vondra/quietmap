@@ -1037,13 +1037,14 @@ export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCou
     // its own family's platform — snap distance is the gauge evidence GTFS
     // lacks), and every search of an attempt (best path, ambiguity probe,
     // path-union widening) is filtered to that ONE family + crossovers.
+    type FamilySnap = NonNullable<ReturnType<typeof snapToNearestFamilyNode>>
     const familyAttempts = WALK_FAMILY_MASKS
       .map((mask) => ({
         mask,
         from: snapToNearestFamilyNode(graph, cp.fromLat, cp.fromLon, mask),
         to: snapToNearestFamilyNode(graph, cp.toLat, cp.toLon, mask),
       }))
-      .filter((a): a is { mask: number; from: { nodeId: number; distM: number }; to: { nodeId: number; distM: number } } =>
+      .filter((a): a is { mask: (typeof WALK_FAMILY_MASKS)[number]; from: FamilySnap; to: FamilySnap } =>
         a.from !== null && a.to !== null)
       .sort((a, b) => (a.from.distM + a.to.distM) - (b.from.distM + b.to.distM))
 

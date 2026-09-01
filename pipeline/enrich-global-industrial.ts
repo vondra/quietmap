@@ -24,7 +24,7 @@
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { makeTable, tableFromIPC, vectorFromArray, Uint16, Uint8 } from 'apache-arrow'
+import { makeTable, tableFromIPC, makeVector } from 'apache-arrow'
 import { latLngToCell, gridDisk } from 'h3-js'
 import { SOURCES_BY_ID, PROVENANCE_RANK } from './lib/sources.js'
 import { bestCandidate, contestBeats, readPolygons, overlapLosers, type MatchPolygon, type OverlapWinner } from './lib/facility-match.js'
@@ -629,9 +629,9 @@ async function enrichHexes(
           if (field.name === 'nace_4digit' || field.name === 'source_id' || field.name === 'suppressed') continue
           columns[field.name] = table.getChild(field.name)!
         }
-        columns['nace_4digit'] = vectorFromArray(Array.from(newNace), new Uint16())
-        columns['source_id'] = vectorFromArray(Array.from(newDatasetId), new Uint16())
-        columns['suppressed'] = vectorFromArray(Array.from(newSuppressed), new Uint8())
+        columns['nace_4digit'] = makeVector(newNace)
+        columns['source_id'] = makeVector(newDatasetId)
+        columns['suppressed'] = makeVector(newSuppressed)
         return makeTable(columns)
       })
     } catch (err: any) {

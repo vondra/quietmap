@@ -14,7 +14,7 @@
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { tableFromIPC, tableToIPC, vectorFromArray, makeTable, Float32 } from 'apache-arrow'
+import { tableFromIPC, tableToIPC, makeTable, makeVector } from 'apache-arrow'
 import { cellToLatLng } from 'h3-js'
 import { haversineM } from './lib/spatial.js'
 import { H3R4_DIR } from './lib/data-year.js'
@@ -173,8 +173,8 @@ async function main() {
         if (field.name === 'hub_height' || field.name === 'rated_power_kw') continue
         columns[field.name] = table.getChild(field.name)!
       }
-      columns['hub_height'] = vectorFromArray(hubHeights, new Float32())
-      columns['rated_power_kw'] = vectorFromArray(ratedPowers, new Float32())
+      columns['hub_height'] = makeVector(hubHeights)
+      columns['rated_power_kw'] = makeVector(ratedPowers)
       const enriched = makeTable(columns)
       writeFileSync(arrowPath, Buffer.from(tableToIPC(enriched, 'file')))
       hexesUpdated++

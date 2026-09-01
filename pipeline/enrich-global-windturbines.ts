@@ -18,7 +18,7 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { execSync } from 'node:child_process'
-import { tableFromIPC, tableToIPC, vectorFromArray, makeTable, Float32 } from 'apache-arrow'
+import { tableFromIPC, tableToIPC, makeTable, makeVector } from 'apache-arrow'
 import { latLngToCell } from 'h3-js'
 import { flatDist } from './lib/spatial.js'
 import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
@@ -199,7 +199,7 @@ function enrichHexes(turbines: Turbine[]): void {
     const existingRatedPower = table.getChild('rated_power_kw')
 
     // Build new Float32 arrays for hub_height and rated_power_kw
-    // Use NaN to represent null (will be converted to null in Arrow)
+    // NaN marks unknown here; it is written as the 0 sentinel below.
     const newHubHeight = new Float32Array(n)
     const newRatedPower = new Float32Array(n)
 
@@ -271,25 +271,14 @@ function enrichHexes(turbines: Turbine[]): void {
 
     if (hexMatched === 0) continue
 
-    // Build nullable Float32 vectors
-    // vectorFromArray with Float32 type; NaN values become the stored value.
-    // Rust tile-painter reads with .value(i) which returns 0.0 for null,
-    // and falls back to defaults (80m hub, 2000kW) for null/0.
-    // We store actual values where enriched, null where not.
-    const hubHeightNullBitmap = new Uint8Array(Math.ceil(n / 8))
-    const ratedPowerNullBitmap = new Uint8Array(Math.ceil(n / 8))
+    // Zero is the "unknown" sentinel: the columns carry no Arrow null bitmap,
+    // and the Rust reader treats 0 (or NaN) as unknown and falls back to its
+    // defaults (80 m hub, 2000 kW). Only positive values are kept.
     const cleanHubHeight = new Float32Array(n)
     const cleanRatedPower = new Float32Array(n)
-
     for (let i = 0; i < n; i++) {
-      if (!isNaN(newHubHeight[i]) && newHubHeight[i] > 0) {
-        cleanHubHeight[i] = newHubHeight[i]
-        hubHeightNullBitmap[i >> 3] |= (1 << (i & 7))
-      }
-      if (!isNaN(newRatedPower[i]) && newRatedPower[i] > 0) {
-        cleanRatedPower[i] = newRatedPower[i]
-        ratedPowerNullBitmap[i >> 3] |= (1 << (i & 7))
-      }
+      if (newHubHeight[i] > 0) cleanHubHeight[i] = newHubHeight[i]
+      if (newRatedPower[i] > 0) cleanRatedPower[i] = newRatedPower[i]
     }
 
     // Copy ALL existing columns by iterating schema (don't hardcode column list)
@@ -300,11 +289,8 @@ function enrichHexes(turbines: Turbine[]): void {
       columns[field.name] = table.getChild(field.name)!
     }
 
-    // Add enriched columns
-    // vectorFromArray handles Float32Array with Float32 type — nulls become 0.0 which
-    // Rust reads as "unknown" and falls back to default. Values > 0 are used directly.
-    columns['hub_height'] = vectorFromArray(cleanHubHeight, new Float32())
-    columns['rated_power_kw'] = vectorFromArray(cleanRatedPower, new Float32())
+    columns['hub_height'] = makeVector(cleanHubHeight)
+    columns['rated_power_kw'] = makeVector(cleanRatedPower)
 
     const newTable = makeTable(columns)
     // MUST use 'file' format — Rust FileReader requires ARROW1 magic bytes.

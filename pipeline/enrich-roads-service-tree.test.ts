@@ -41,6 +41,8 @@ interface RoadRow {
   /** Arrow Bool column — the mock returns real booleans like apache-arrow does. */
   tunnel?: boolean
   access?: number
+  /** The mock table reads rows by column name, like `getChild(name).get(i)`. */
+  [column: string]: number | boolean | undefined
 }
 
 const OPTIONAL_COLUMNS = new Set(['source_id', 'osm_id', 'tunnel', 'access'])
@@ -50,11 +52,11 @@ function mockRoadTable(rows: RoadRow[]): any {
     numRows: rows.length,
     getChild(name: string) {
       if (!rows.length) return undefined
-      const sample = rows[0] as Record<string, number | boolean | undefined>
+      const sample = rows[0]
       if (!(name in sample) && !OPTIONAL_COLUMNS.has(name)) return undefined
       return {
         get: (i: number) => {
-          const v = (rows[i] as Record<string, number | boolean | undefined>)[name]
+          const v = rows[i][name]
           if (name === 'tunnel') return v ?? false // Bool column: boolean, never 0/1
           return v ?? 0
         },

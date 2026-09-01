@@ -24,13 +24,13 @@ type Polygon = Ring[]
 
 interface CountryFeature {
   properties: { ISO_A2?: string; ISO_A2_EH?: string; NAME?: string }
-  geometry: { type: string; coordinates: number[][][] | number[][][][] }
+  geometry: { type: string; coordinates: Polygon | Polygon[] }
 }
 
 function polygonsOf(feature: CountryFeature): Polygon[] {
   const { type, coordinates } = feature.geometry
-  if (type === 'Polygon') return [coordinates as number[][][]]
-  if (type === 'MultiPolygon') return coordinates as number[][][][]
+  if (type === 'Polygon') return [coordinates as Polygon]
+  if (type === 'MultiPolygon') return coordinates as Polygon[]
   return []
 }
 

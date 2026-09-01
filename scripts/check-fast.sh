@@ -16,8 +16,8 @@ if [ "$HALF" != "rust" ]; then
   step "server: typecheck + tests"
   (cd server && npm ci --no-audit --no-fund && npx tsc --noEmit -p tsconfig.json && npm test)
 
-  step "pipeline: offline tests"
-  (cd pipeline && npm ci --no-audit --no-fund && npm test)
+  step "pipeline: typecheck + offline tests"
+  (cd pipeline && npm ci --no-audit --no-fund && npm run typecheck && npm test)
 
   step "layer topology metadata"
   node scripts/test-layer-spec.mjs

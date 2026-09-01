@@ -33,7 +33,7 @@
  */
 
 import { resolve } from 'node:path'
-import { Uint16, vectorFromArray, makeTable } from 'apache-arrow'
+import { makeTable, makeVector } from 'apache-arrow'
 import { withArrowWrite, shouldOverwrite } from './lib/provenance.js'
 import { iterateCountryHexes } from './lib/roads-arrow.js'
 import { makeCountryGate } from './lib/country-polygon.js'
@@ -143,8 +143,8 @@ async function main() {
         if (f.name === 'nace_4digit' || f.name === 'source_id') continue
         columns[f.name] = table.getChild(f.name)!
       }
-      columns['nace_4digit'] = vectorFromArray(Array.from(nace), new Uint16())
-      columns['source_id'] = vectorFromArray(Array.from(src), new Uint16())
+      columns['nace_4digit'] = makeVector(nace)
+      columns['source_id'] = makeVector(src)
       return makeTable(columns)
     })
     if (hi % 40 === 0 || hi === hexes.length - 1) {

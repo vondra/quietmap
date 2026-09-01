@@ -47,7 +47,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parse } from 'csv-parse/sync'
-import { Int32, Uint16, makeTable, vectorFromArray } from 'apache-arrow'
+import { makeTable, makeVector } from 'apache-arrow'
 import { shouldOverwrite, withArrowWrite } from './lib/provenance.js'
 import { SOURCE_ID_MX_NATIONAL_ROADS } from './lib/source-ids.generated.js'
 import { inBbox, pointToPolylineDist } from './lib/spatial.js'
@@ -235,9 +235,9 @@ async function clearStaleStamps(hexDirs: string[]): Promise<number> {
         if (['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'source_id'].includes(f.name)) continue
         cols[f.name] = table.getChild(f.name)!
       }
-      cols['aadt_light'] = vectorFromArray(Array.from(light), new Int32()); cols['aadt_medium'] = vectorFromArray(Array.from(medium), new Int32())
-      cols['aadt_heavy'] = vectorFromArray(Array.from(heavy), new Int32()); cols['aadt_moto'] = vectorFromArray(Array.from(moto), new Int32())
-      cols['source_id'] = vectorFromArray(Array.from(src), new Uint16())
+      cols['aadt_light'] = makeVector(light); cols['aadt_medium'] = makeVector(medium)
+      cols['aadt_heavy'] = makeVector(heavy); cols['aadt_moto'] = makeVector(moto)
+      cols['source_id'] = makeVector(src)
       return makeTable(cols)
     })
   }
