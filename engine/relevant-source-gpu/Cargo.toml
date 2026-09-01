@@ -1,0 +1,30 @@
+[package]
+name = "relevant-source-gpu"
+version = "0.1.0"
+edition = "2021"
+description = "Relevant-source block triage and exact-per-receiver CUDA surface painter"
+build = "relevant_source_build.rs"
+
+[features]
+default = []
+gpu = []
+
+[lib]
+path = "src/relevant_source_gpu_library.rs"
+
+[[bin]]
+name = "relevant-source-surface"
+path = "src/bin/relevant_source_surface.rs"
+required-features = ["gpu"]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+h3o = "0.7"
+libc = "0.2"
+noise-compute = { path = "../noise-compute" }
+raster-reader = { path = "../raster-reader" }
+tile-painter = { path = "../tile-painter" }
+
+[dev-dependencies]
+tempfile = "3"

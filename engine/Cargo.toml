@@ -1,4 +1,4 @@
-# One workspace for the eight engine crates. Rebuild with
+# One workspace for the nine engine crates. Rebuild with
 # `cargo build --release --manifest-path engine/Cargo.toml`; binaries land
 # in engine/target/release/.
 [workspace]
@@ -10,6 +10,7 @@ members = [
     "noise-gpu",
     "osm-extract",
     "raster-reader",
+    "relevant-source-gpu",
     "source-reader",
     "tile-painter",
 ]
