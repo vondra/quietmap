@@ -1,6 +1,6 @@
 //! CUDA entry points for shared-corner triage and exact retained-source pixel painting.
 
-#include "relevant_source_obstacles.cuh"
+#include "relevant_source_pair.cuh"
 
 #include <stdio.h>
 

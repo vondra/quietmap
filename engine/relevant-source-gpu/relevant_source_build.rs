@@ -13,6 +13,8 @@ const SEGMENT_SAMPLING_SOURCE: &str =
 const SOURCE_FRAME_SOURCE: &str = include_str!("src/source_frame.rs");
 const INPUT_TYPES_SOURCE: &str = include_str!("../noise-compute/src/types/inputs.rs");
 const SCATTER_BAND_SOURCE: &str = include_str!("../tile-painter/src/scatter_band.rs");
+const ARC_SCREENING_SOURCE: &str =
+    include_str!("../noise-compute/src/propagation/arc_screening.rs");
 
 fn constant_initializer<'a>(source: &'a str, constant_name: &str) -> &'a str {
     let declaration = format!("const {constant_name}:");
@@ -231,6 +233,39 @@ fn generated_physics_header() -> String {
         canonical_usize(SCATTER_BAND_SOURCE, "SHADOW_MID_STRIDE")
     )
     .unwrap();
+    // Spelled `<deg>_f64.to_radians()` in seg_sampling.rs; mirror the expression.
+    let arc_gate_degrees: f64 =
+        constant_initializer(SEGMENT_SAMPLING_SOURCE, "SEG_ARC_MIN_SPAN_RAD")
+            .strip_suffix("_f64.to_radians()")
+            .expect("SEG_ARC_MIN_SPAN_RAD keeps its `<deg>_f64.to_radians()` spelling")
+            .parse()
+            .expect("SEG_ARC_MIN_SPAN_RAD degree literal parses");
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_SEG_ARC_MIN_SPAN_RAD",
+        arc_gate_degrees.to_radians(),
+    );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_ARC_DEGENERATE_SPAN_RAD",
+        canonical_f64(ARC_SCREENING_SOURCE, "DEGENERATE_SPAN_RAD"),
+    );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_ARC_ESCALATE_SPAN_RAD",
+        canonical_f64(ARC_SCREENING_SOURCE, "ESCALATE_SPAN_RAD"),
+    );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_ARC_CP_AZIMUTH_EPS",
+        canonical_f64(ARC_SCREENING_SOURCE, "CP_AZIMUTH_EPS"),
+    );
+    writeln!(
+        header,
+        "constexpr int QUIETMAP_ARC_ESCALATE_MAX_PARTS = {};",
+        canonical_usize(ARC_SCREENING_SOURCE, "ESCALATE_MAX_PARTS")
+    )
+    .unwrap();
     writeln!(
         header,
         "constexpr int QUIETMAP_LINE_DIRECTION_COUNT = {};",
@@ -253,12 +288,48 @@ fn run_checked(command: &mut Command, label: &str) {
     assert!(status.success(), "{label} exited with {status}");
 }
 
+const NVCC_ARGUMENTS: [&str; 8] = [
+    "-std=c++17",
+    "-O3",
+    "--use_fast_math",
+    "-lineinfo",
+    "-arch=sm_120",
+    "-maxrregcount=40",
+    "-Xcompiler",
+    "-fPIC",
+];
+
+/// Owner ruling: no f64 in a production kernel (GeForce Blackwell runs it at 1/64).
+/// The PTX of the same translation unit is scanned for any `.f64` opcode; one
+/// promoted literal or libm call re-promotes a whole per-pair chain, so the build fails.
+fn assert_ptx_has_no_f64(output_directory: &std::path::Path) {
+    let ptx_path = output_directory.join("block_source_partition.ptx");
+    run_checked(
+        Command::new("nvcc")
+            .args(NVCC_ARGUMENTS)
+            .arg("-I")
+            .arg(output_directory)
+            .args(["-ptx", "kernels/block_source_partition.cu", "-o"])
+            .arg(&ptx_path),
+        "nvcc relevant-source PTX for the f64 gate",
+    );
+    let ptx = fs::read_to_string(&ptx_path).expect("read the relevant-source PTX");
+    let f64_opcodes = ptx.lines().filter(|line| line.contains(".f64")).count();
+    assert_eq!(
+        f64_opcodes, 0,
+        "relevant-source kernels use f64 in {f64_opcodes} PTX lines; production kernels stay f32"
+    );
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=kernels/relevant_source_geometry.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_path.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_attenuation.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_grid_scan.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_obstacles.cuh");
+    println!("cargo:rerun-if-changed=kernels/relevant_source_arc.cuh");
+    println!("cargo:rerun-if-changed=kernels/relevant_source_pair.cuh");
+    println!("cargo:rerun-if-changed=../noise-compute/src/propagation/arc_screening.rs");
     println!("cargo:rerun-if-changed=kernels/block_source_partition.cu");
     println!("cargo:rerun-if-changed=../noise-compute/src/constants.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/path_profile.rs");
@@ -280,22 +351,14 @@ fn main() {
     let archive_path = output_directory.join("librelevant_source_cuda.a");
     run_checked(
         Command::new("nvcc")
-            .args([
-                "-std=c++17",
-                "-O3",
-                "--use_fast_math",
-                "-lineinfo",
-                "-arch=sm_120",
-                "-maxrregcount=40",
-                "-Xcompiler",
-                "-fPIC",
-                "-I",
-            ])
+            .args(NVCC_ARGUMENTS)
+            .arg("-I")
             .arg(&output_directory)
             .args(["-c", "kernels/block_source_partition.cu", "-o"])
             .arg(&object_path),
         "nvcc relevant-source compilation",
     );
+    assert_ptx_has_no_f64(&output_directory);
     run_checked(
         Command::new("ar")
             .arg("crs")
@@ -326,6 +389,8 @@ mod tests {
         assert!(header.contains("constexpr int QUIETMAP_BLOCK_PIXEL_SIDE = "));
         assert!(header.contains("constexpr float QUIETMAP_BARRIER_PATH_HORIZON_M = 175.0f;"));
         assert!(header.contains("constexpr int QUIETMAP_COARSE_MIDDLE_STRIDE = 3;"));
+        assert!(header.contains("constexpr int QUIETMAP_ARC_ESCALATE_MAX_PARTS = 9;"));
+        assert!(header.contains("constexpr float QUIETMAP_SEG_ARC_MIN_SPAN_RAD = 0.05235988f;"));
         assert!(header.contains("constexpr float QUIETMAP_PENUMBRA_DELTA_FLOOR_M ="));
     }
 }
