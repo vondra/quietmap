@@ -6,6 +6,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
+use rayon::prelude::*;
 
 use crate::source_frame::{
     BLOCKS_PER_TILE_SIDE, BLOCK_COUNT, CORNERS_PER_TILE_SIDE, CORNER_COUNT, PERIOD_COUNT,
@@ -144,53 +145,56 @@ pub fn build_relevant_source_partition(
     validate_incidence(incidence, corner_pair_energy.len())?;
     let ranked_sources = rank_sources_at_corners(incidence, corner_pair_energy);
     let corner_total_energy = sum_corner_energy(incidence, corner_pair_energy);
+    let blocks: Vec<(Vec<u32>, [[f32; PERIOD_COUNT]; 4])> = (0..BLOCK_COUNT)
+        .into_par_iter()
+        .map(|block| {
+            let local_sources = &incidence.local_source_indices_by_block[block];
+            let mut relevant_sources = local_sources.clone();
+            let mut admitted: HashSet<u32> = local_sources.iter().copied().collect();
+            for corner in block_corner_indices(block) {
+                let ranked = &ranked_sources[corner];
+                let corner_total: f64 = ranked.iter().map(|&(_, score)| score).sum();
+                let mut unadmitted = ranked
+                    .iter()
+                    .filter(|(source_index, _)| !admitted.contains(source_index))
+                    .map(|&(_, score)| score)
+                    .sum::<f64>();
+                for &(source_index, score) in ranked {
+                    if unadmitted <= DROP_BUDGET_FRACTION * corner_total {
+                        break;
+                    }
+                    if admitted.insert(source_index) {
+                        relevant_sources.push(source_index);
+                        unadmitted -= score;
+                    }
+                }
+            }
+            relevant_sources.sort_unstable();
+
+            let mut block_background = [[0.0_f32; PERIOD_COUNT]; 4];
+            for (block_corner, corner) in block_corner_indices(block).into_iter().enumerate() {
+                for period in 0..PERIOD_COUNT {
+                    let mut dropped_energy = corner_total_energy[corner][period];
+                    for &source_index in &relevant_sources {
+                        dropped_energy -= lookup_pair_energy(
+                            incidence,
+                            corner_pair_energy,
+                            corner,
+                            source_index,
+                            period,
+                        ) as f64;
+                    }
+                    block_background[block_corner][period] = dropped_energy.max(0.0) as f32;
+                }
+            }
+            (relevant_sources, block_background)
+        })
+        .collect();
     let mut block_offsets = Vec::with_capacity(BLOCK_COUNT + 1);
     let mut relevant_source_indices = Vec::new();
     let mut background_corner_energy = Vec::with_capacity(BLOCK_COUNT);
     block_offsets.push(0);
-    let mut admitted = HashSet::new();
-
-    for block in 0..BLOCK_COUNT {
-        let local_sources = &incidence.local_source_indices_by_block[block];
-        let mut relevant_sources = local_sources.clone();
-        admitted.clear();
-        admitted.extend(local_sources.iter().copied());
-        for corner in block_corner_indices(block) {
-            let ranked = &ranked_sources[corner];
-            let corner_total: f64 = ranked.iter().map(|&(_, score)| score).sum();
-            let mut unadmitted = ranked
-                .iter()
-                .filter(|(source_index, _)| !admitted.contains(source_index))
-                .map(|&(_, score)| score)
-                .sum::<f64>();
-            for &(source_index, score) in ranked {
-                if unadmitted <= DROP_BUDGET_FRACTION * corner_total {
-                    break;
-                }
-                if admitted.insert(source_index) {
-                    relevant_sources.push(source_index);
-                    unadmitted -= score;
-                }
-            }
-        }
-        relevant_sources.sort_unstable();
-
-        let mut block_background = [[0.0_f32; PERIOD_COUNT]; 4];
-        for (block_corner, corner) in block_corner_indices(block).into_iter().enumerate() {
-            for period in 0..PERIOD_COUNT {
-                let mut dropped_energy = corner_total_energy[corner][period];
-                for &source_index in &relevant_sources {
-                    dropped_energy -= lookup_pair_energy(
-                        incidence,
-                        corner_pair_energy,
-                        corner,
-                        source_index,
-                        period,
-                    ) as f64;
-                }
-                block_background[block_corner][period] = dropped_energy.max(0.0) as f32;
-            }
-        }
+    for (relevant_sources, block_background) in blocks {
         relevant_source_indices.extend(relevant_sources);
         block_offsets.push(relevant_source_indices.len() as u32);
         background_corner_energy.push(block_background);
@@ -209,6 +213,7 @@ fn rank_sources_at_corners(
     pair_energy: &[[f32; PERIOD_COUNT]],
 ) -> Vec<Vec<(u32, f64)>> {
     (0..CORNER_COUNT)
+        .into_par_iter()
         .map(|corner| {
             let range = corner_pair_range(incidence, corner);
             let mut ranked: Vec<(u32, f64)> = range

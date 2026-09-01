@@ -1,5 +1,6 @@
 //! Metric tile lattice and clipped source incidence for corners and neighbouring blocks.
 
+use rayon::prelude::*;
 use tile_painter::grid::{tile_bbox, TileBbox};
 
 use crate::source_frame::{
@@ -106,29 +107,49 @@ impl TileMetricLattice {
     }
 }
 
+/// Sources per rayon chunk of the region's source list: every chunk gathers its
+/// own per-corner and per-block lists, and the chunks concatenate in index order,
+/// which keeps every list strictly ascending without a sort.
+const INCIDENCE_CHUNK_SOURCES: usize = 16_384;
+
+/// One chunk's `(per-corner candidates, per-block local sources)`.
+type IncidenceChunk = (Vec<Vec<u32>>, Vec<Vec<u32>>);
+
 pub fn build_tile_source_incidence(
     sources: &[DeviceLineSource],
     lattice: &TileMetricLattice,
 ) -> TileSourceIncidence {
-    let mut corner_lists = vec![Vec::new(); CORNER_COUNT];
-    let mut local_source_indices_by_block = vec![Vec::new(); BLOCK_COUNT];
-    for (source_index, source) in sources.iter().enumerate() {
-        let source_index = source_index as u32;
-        add_source_corner_candidates(source, source_index, lattice, &mut corner_lists);
-        add_source_local_blocks(
-            source,
-            source_index,
-            lattice,
-            &mut local_source_indices_by_block,
-        );
-    }
+    let chunks: Vec<IncidenceChunk> = sources
+        .par_chunks(INCIDENCE_CHUNK_SOURCES)
+        .enumerate()
+        .map(|(chunk_index, chunk)| {
+            let mut corner_lists = vec![Vec::new(); CORNER_COUNT];
+            let mut local_by_block = vec![Vec::new(); BLOCK_COUNT];
+            for (offset, source) in chunk.iter().enumerate() {
+                let source_index = (chunk_index * INCIDENCE_CHUNK_SOURCES + offset) as u32;
+                add_source_corner_candidates(source, source_index, lattice, &mut corner_lists);
+                add_source_local_blocks(source, source_index, lattice, &mut local_by_block);
+            }
+            (corner_lists, local_by_block)
+        })
+        .collect();
     let mut corner_offsets = Vec::with_capacity(CORNER_COUNT + 1);
     let mut corner_source_indices = Vec::new();
     corner_offsets.push(0);
-    for list in corner_lists {
-        corner_source_indices.extend(list);
+    for corner in 0..CORNER_COUNT {
+        for (corner_lists, _) in &chunks {
+            corner_source_indices.extend_from_slice(&corner_lists[corner]);
+        }
         corner_offsets.push(corner_source_indices.len() as u32);
     }
+    let local_source_indices_by_block = (0..BLOCK_COUNT)
+        .map(|block| {
+            chunks
+                .iter()
+                .flat_map(|(_, local_by_block)| local_by_block[block].iter().copied())
+                .collect()
+        })
+        .collect();
     TileSourceIncidence {
         corner_offsets,
         corner_source_indices,

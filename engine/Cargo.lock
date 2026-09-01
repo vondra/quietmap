@@ -1653,6 +1653,7 @@ dependencies = [
  "libc",
  "noise-compute",
  "raster-reader",
+ "rayon",
  "tempfile",
  "tile-painter",
 ]

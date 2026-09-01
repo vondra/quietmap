@@ -24,6 +24,7 @@ h3o = "0.7"
 libc = "0.2"
 noise-compute = { path = "../noise-compute" }
 raster-reader = { path = "../raster-reader" }
+rayon = "1"
 tile-painter = { path = "../tile-painter" }
 
 [dev-dependencies]
