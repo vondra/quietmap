@@ -143,7 +143,8 @@ __device__ __forceinline__ void scan_vector_crossings(
     const float ray_dy = receiver_y_m - source_y_m;
     for (uint32_t barrier_index = 0; barrier_index < scene.barrier_count; ++barrier_index) {
         const DeviceBarrier barrier = scene.barriers[barrier_index];
-        if (barrier.receiver_distance_lower_bound_m > profile.distance_m + 125.0f) {
+        if (barrier.receiver_distance_lower_bound_m
+            > profile.distance_m + QUIETMAP_BARRIER_PATH_HORIZON_M) {
             break;
         }
         float crossing_t;
