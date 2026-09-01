@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::sync_channel;
+use std::thread;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -90,7 +92,11 @@ pub struct RelevantSourceRunMeasurement {
     pub wall_seconds: f64,
     pub cpu_seconds: f64,
     pub source_load_seconds: f64,
-    pub raster_and_receiver_seconds: f64,
+    /// Terrain halo build and facade baking per 4x4 batch, on the producer
+    /// thread that runs one batch ahead of the GPU.
+    pub raster_prepare_seconds: f64,
+    /// Receiver, enclosure and barrier preparation per tile, serial with the GPU.
+    pub receiver_seconds: f64,
     pub host_tile_seconds: f64,
 }
 
@@ -184,72 +190,122 @@ fn process_region(
             .or_default()
             .push((x, y));
     }
-    for ((block_x, block_y), requested_tiles) in batches {
-        let raster_started = Instant::now();
-        let (base_x, base_y) = block_batch_origin(block_x, block_y, REGION_TILE_BATCH_SIDE, zoom);
-        let mut batch = TileBatch::build_opt_rx_refl(
-            zoom,
-            base_x,
-            base_y,
-            REGION_TILE_BATCH_SIDE,
-            LINE_HALO_M,
-            rasters,
-        );
-        for &(x, y) in &requested_tiles {
-            let slot = batch_slot(&batch, x, y);
-            bake_tile_vector_rx_refl(&mut batch.tiles[slot], obstacle_data.set());
-        }
-        let batch_raster = BatchDeviceRaster::upload(&frame, &batch.tiles[0])?;
-        measurement.raster_and_receiver_seconds += raster_started.elapsed().as_secs_f64();
-
-        for (x, y) in requested_tiles {
-            let tile = &batch.tiles[batch_slot(&batch, x, y)];
-            let receiver_started = Instant::now();
-            let receivers = TileDeviceReceivers::upload(&frame, tile, obstacle_data.set())?;
-            let interior = obstacle_data.interior_estimate(tile);
-            let barriers = barrier_data.for_tile(&tile.bbox, LINE_HALO_M);
-            measurement.raster_and_receiver_seconds += receiver_started.elapsed().as_secs_f64();
-            for layer in &layers {
-                let output_path = output_tile_path(
-                    &configuration.output_directory,
-                    layer.directory_name,
+    // The terrain halo of the next batch is built while the GPU paints this one:
+    // one producer thread, one batch of lookahead, the GPU never waits on a halo
+    // it could have had earlier and the host never runs more than two ahead.
+    let obstacle_set = obstacle_data.set();
+    let (sender, receiver) = sync_channel(1);
+    let producer = thread::Builder::new().name("batch-rasters".into());
+    thread::scope(|scope| -> Result<()> {
+        producer.spawn_scoped(scope, move || {
+            for ((block_x, block_y), requested_tiles) in batches {
+                let started = Instant::now();
+                let (base_x, base_y) =
+                    block_batch_origin(block_x, block_y, REGION_TILE_BATCH_SIDE, zoom);
+                let mut batch = TileBatch::build_opt_rx_refl(
                     zoom,
-                    x,
-                    y,
+                    base_x,
+                    base_y,
+                    REGION_TILE_BATCH_SIDE,
+                    LINE_HALO_M,
+                    rasters,
                 );
-                let partition_path = partition_tile_path(
-                    &configuration.output_directory,
-                    layer.directory_name,
-                    zoom,
-                    x,
-                    y,
-                );
-                let tile_started = Instant::now();
-                let tile_measurement = partition_paint_and_write_tile(
-                    cuda,
-                    &frame,
-                    &layer.sources,
-                    layer.fingerprint,
-                    &layer.device_sources,
-                    &device_obstacles,
-                    &batch_raster,
-                    &receivers,
-                    &barriers,
-                    &interior,
-                    coarse_middle_cadence(zoom),
-                    layer.source_id,
-                    &output_path,
-                    &partition_path,
-                )?;
-                measurement.host_tile_seconds += tile_started.elapsed().as_secs_f64()
-                    - (tile_measurement.corner_gpu_milliseconds
-                        + tile_measurement.paint_gpu_milliseconds)
-                        / 1000.0;
-                match layer.directory_name {
-                    "road" => measurement.road.add_tile(tile_measurement),
-                    "rail" => measurement.rail.add_tile(tile_measurement),
-                    _ => unreachable!(),
+                for &(x, y) in &requested_tiles {
+                    let slot = batch_slot(&batch, x, y);
+                    bake_tile_vector_rx_refl(&mut batch.tiles[slot], obstacle_set);
                 }
+                if sender
+                    .send((requested_tiles, batch, started.elapsed().as_secs_f64()))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })?;
+        for (requested_tiles, batch, prepare_seconds) in receiver {
+            measurement.raster_prepare_seconds += prepare_seconds;
+            let batch_raster = BatchDeviceRaster::upload(&frame, &batch.tiles[0])?;
+            paint_batch_tiles(
+                configuration,
+                &batch,
+                &requested_tiles,
+                &frame,
+                &layers,
+                &obstacle_data,
+                &barrier_data,
+                &device_obstacles,
+                &batch_raster,
+                cuda,
+                measurement,
+            )?;
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_batch_tiles(
+    configuration: &RelevantSourceRunConfiguration,
+    batch: &TileBatch,
+    requested_tiles: &[(u32, u32)],
+    frame: &RegionMetricFrame,
+    layers: &[EncodedLineLayer; 2],
+    obstacle_data: &ObstacleData,
+    barrier_data: &BarrierData,
+    device_obstacles: &RegionDeviceObstacles,
+    batch_raster: &BatchDeviceRaster,
+    cuda: &RelevantSourceCuda,
+    measurement: &mut RelevantSourceRunMeasurement,
+) -> Result<()> {
+    let zoom = configuration.zoom;
+    for &(x, y) in requested_tiles {
+        let tile = &batch.tiles[batch_slot(batch, x, y)];
+        let receiver_started = Instant::now();
+        let receivers = TileDeviceReceivers::upload(frame, tile, obstacle_data.set())?;
+        let interior = obstacle_data.interior_estimate(tile);
+        let barriers = barrier_data.for_tile(&tile.bbox, LINE_HALO_M);
+        measurement.receiver_seconds += receiver_started.elapsed().as_secs_f64();
+        for layer in layers {
+            let output_path = output_tile_path(
+                &configuration.output_directory,
+                layer.directory_name,
+                zoom,
+                x,
+                y,
+            );
+            let partition_path = partition_tile_path(
+                &configuration.output_directory,
+                layer.directory_name,
+                zoom,
+                x,
+                y,
+            );
+            let tile_started = Instant::now();
+            let tile_measurement = partition_paint_and_write_tile(
+                cuda,
+                frame,
+                &layer.sources,
+                layer.fingerprint,
+                &layer.device_sources,
+                device_obstacles,
+                batch_raster,
+                &receivers,
+                &barriers,
+                &interior,
+                coarse_middle_cadence(zoom),
+                layer.source_id,
+                &output_path,
+                &partition_path,
+            )?;
+            measurement.host_tile_seconds += tile_started.elapsed().as_secs_f64()
+                - (tile_measurement.corner_gpu_milliseconds
+                    + tile_measurement.paint_gpu_milliseconds)
+                    / 1000.0;
+            match layer.directory_name {
+                "road" => measurement.road.add_tile(tile_measurement),
+                "rail" => measurement.rail.add_tile(tile_measurement),
+                _ => unreachable!(),
             }
         }
     }

@@ -45,14 +45,15 @@ fn main() -> Result<()> {
     };
     eprintln!(
         "relevant-source-wave zoom={} wall_s={:.6} cpu_s={:.6} gpu_s={:.6} gpu_ns_per_pair={:.3} \
-         source_load_s={:.6} raster_receiver_s={:.6} host_tile_s={:.6}",
+         source_load_s={:.6} raster_prepare_overlapped_s={:.6} receiver_s={:.6} host_tile_s={:.6}",
         arguments.zoom,
         measurement.wall_seconds,
         measurement.cpu_seconds,
         gpu_seconds,
         gpu_nanoseconds_per_pair,
         measurement.source_load_seconds,
-        measurement.raster_and_receiver_seconds,
+        measurement.raster_prepare_seconds,
+        measurement.receiver_seconds,
         measurement.host_tile_seconds,
     );
     print_layer("road", &measurement.road);
