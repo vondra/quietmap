@@ -65,6 +65,8 @@ pub struct DeviceScenePointers {
     pub source_count: u32,
     pub obstacle_grid_count: u32,
     pub barrier_count: u32,
+    /// Non-zero: long rays take the surface heatmap's coarse-middle cadence.
+    pub coarse_middle_cadence: u32,
     pub raster_geometry: DeviceRasterGeometry,
 }
 

@@ -12,9 +12,10 @@ const SEGMENT_SAMPLING_SOURCE: &str =
     include_str!("../noise-compute/src/propagation/seg_sampling.rs");
 const SOURCE_FRAME_SOURCE: &str = include_str!("src/source_frame.rs");
 const INPUT_TYPES_SOURCE: &str = include_str!("../noise-compute/src/types/inputs.rs");
+const SCATTER_BAND_SOURCE: &str = include_str!("../tile-painter/src/scatter_band.rs");
 
 fn constant_initializer<'a>(source: &'a str, constant_name: &str) -> &'a str {
-    let declaration = format!("pub const {constant_name}:");
+    let declaration = format!("const {constant_name}:");
     let declaration_start = source
         .find(&declaration)
         .unwrap_or_else(|| panic!("canonical constant {constant_name} is absent"));
@@ -209,6 +210,27 @@ fn generated_physics_header() -> String {
         "QUIETMAP_BARRIER_PATH_HORIZON_M",
         canonical_f64(INPUT_TYPES_SOURCE, "BARRIER_SEGMENT_MAX_HALF_LEN_M") + 50.0,
     );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_EXACT_CADENCE_MAX_DISTANCE_M",
+        canonical_f64(SCATTER_BAND_SOURCE, "EXACT_CADENCE_MAX_DIST_M"),
+    );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_COARSE_MIDDLE_SOURCE_ZONE_M",
+        canonical_f64(SCATTER_BAND_SOURCE, "SHADOW_SRC_ZONE_M"),
+    );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_COARSE_MIDDLE_RECEIVER_ZONE_M",
+        canonical_f64(SCATTER_BAND_SOURCE, "SHADOW_RX_ZONE_M"),
+    );
+    writeln!(
+        header,
+        "constexpr int QUIETMAP_COARSE_MIDDLE_STRIDE = {};",
+        canonical_usize(SCATTER_BAND_SOURCE, "SHADOW_MID_STRIDE")
+    )
+    .unwrap();
     writeln!(
         header,
         "constexpr int QUIETMAP_LINE_DIRECTION_COUNT = {};",
@@ -243,6 +265,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/seg_sampling.rs");
     println!("cargo:rerun-if-changed=src/source_frame.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/types/inputs.rs");
+    println!("cargo:rerun-if-changed=../tile-painter/src/scatter_band.rs");
     if env::var_os("CARGO_FEATURE_GPU").is_none() {
         return;
     }
@@ -302,6 +325,7 @@ mod tests {
         assert!(header.contains("constexpr int QUIETMAP_LINE_DIRECTION_COUNT = 5;"));
         assert!(header.contains("constexpr int QUIETMAP_BLOCK_PIXEL_SIDE = "));
         assert!(header.contains("constexpr float QUIETMAP_BARRIER_PATH_HORIZON_M = 175.0f;"));
+        assert!(header.contains("constexpr int QUIETMAP_COARSE_MIDDLE_STRIDE = 3;"));
         assert!(header.contains("constexpr float QUIETMAP_PENUMBRA_DELTA_FLOOR_M ="));
     }
 }

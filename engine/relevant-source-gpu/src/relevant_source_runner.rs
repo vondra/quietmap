@@ -26,6 +26,15 @@ use crate::source_frame::{source_identity_fingerprint, DeviceLineSource, RegionM
 
 const REGION_TILE_BATCH_SIDE: u32 = 4;
 const LINE_HALO_M: f64 = 10_000.0;
+const W1_ZOOM: u8 = 12;
+
+/// The ray cadence each wave's etalon was painted with, as the production roles
+/// build it: W1 (z12) runs the surface heatmap's coarse middle (scatter_band's
+/// SHADOW_MID_STRIDE default), W2 (z13) the exact popup cadence
+/// (SURFACE_SHADOW_STRIDE=1, the stride4 role's -DSHADOW_MID_STRIDE=1).
+fn coarse_middle_cadence(zoom: u8) -> bool {
+    zoom <= W1_ZOOM
+}
 
 pub struct RelevantSourceRunConfiguration {
     pub prepared_directory: PathBuf,
@@ -227,6 +236,7 @@ fn process_region(
                     &receivers,
                     &barriers,
                     &interior,
+                    coarse_middle_cadence(zoom),
                     layer.source_id,
                     &output_path,
                     &partition_path,

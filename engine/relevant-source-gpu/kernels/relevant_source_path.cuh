@@ -1,12 +1,14 @@
 //! Bilateral raster profile, raw-ground fit, and vegetation depth on one CUDA ray.
+//!
+//! The chainages are noise-compute path_profile.rs `fill_t_values_inner`: the exact
+//! popup cadence, or the surface heatmap's coarse middle (the dense ramp truncated at
+//! the end zones and the far field strided) when the scene asks for it beyond
+//! EXACT_CADENCE_MAX_DIST_M, exactly as tile-painter scatter_band::cadence_for_ray.
 
 #pragma once
 
 #include "relevant_source_geometry.cuh"
 
-constexpr float QUIETMAP_EXACT_CADENCE_MAX_DISTANCE_M = 400.0f;
-constexpr float QUIETMAP_FULL_RESOLUTION_END_ZONE_M = 600.0f;
-constexpr int QUIETMAP_MIDDLE_CADENCE_STRIDE = 3;
 constexpr int QUIETMAP_MAXIMUM_PROFILE_POINTS = 96;
 
 struct PathProfile {
@@ -81,7 +83,11 @@ __device__ __forceinline__ void append_profile_t(PathProfile& profile, float val
     }
 }
 
-__device__ __forceinline__ void fill_profile_chainages(PathProfile& profile, float distance_m) {
+__device__ __forceinline__ void fill_profile_chainages(
+    PathProfile& profile,
+    float distance_m,
+    bool coarse_middle_cadence
+) {
     profile.count = 0;
     profile.distance_m = distance_m;
     const bool emit_near = distance_m >= 3.0f * QUIETMAP_NEAR_SAMPLE_M;
@@ -118,7 +124,8 @@ __device__ __forceinline__ void fill_profile_chainages(PathProfile& profile, flo
         QUIETMAP_RASTER_CELL_M * 4.0f,
         QUIETMAP_RASTER_CELL_M * 8.0f,
     };
-    const bool use_coarse_middle = distance_m > QUIETMAP_EXACT_CADENCE_MAX_DISTANCE_M;
+    const bool use_coarse_middle = coarse_middle_cadence
+        && distance_m > QUIETMAP_EXACT_CADENCE_MAX_DISTANCE_M;
     float position_m = emit_near ? QUIETMAP_NEAR_SAMPLE_M : 0.0f;
     float last_forward_position_m = position_m;
     bool forward_done = false;
@@ -127,7 +134,7 @@ __device__ __forceinline__ void fill_profile_chainages(PathProfile& profile, flo
             position_m += levels[level];
             if (position_m >= distance_m * 0.5f
                 || (use_coarse_middle
-                    && position_m > QUIETMAP_FULL_RESOLUTION_END_ZONE_M)) {
+                    && position_m > QUIETMAP_COARSE_MIDDLE_SOURCE_ZONE_M)) {
                 forward_done = true;
                 break;
             }
@@ -145,7 +152,7 @@ __device__ __forceinline__ void fill_profile_chainages(PathProfile& profile, flo
             const float next = backward_position_m + levels[level];
             if (next >= distance_m * 0.5f
                 || (use_coarse_middle
-                    && next > QUIETMAP_FULL_RESOLUTION_END_ZONE_M)) {
+                    && next > QUIETMAP_COARSE_MIDDLE_RECEIVER_ZONE_M)) {
                 backward_done = true;
                 break;
             }
@@ -154,7 +161,7 @@ __device__ __forceinline__ void fill_profile_chainages(PathProfile& profile, flo
     }
     const float backward_start = fmaxf(1.0f - backward_position_m / distance_m, 0.5f);
     const float coarse_step_m = fminf(
-        levels[3] * (use_coarse_middle ? QUIETMAP_MIDDLE_CADENCE_STRIDE : 1),
+        levels[3] * (use_coarse_middle ? QUIETMAP_COARSE_MIDDLE_STRIDE : 1),
         distance_m * 0.25f);
     float middle = forward_end;
     while (middle < backward_start - 0.0001f) {
@@ -173,7 +180,7 @@ __device__ __forceinline__ void fill_profile_chainages(PathProfile& profile, flo
             position_m += levels[level];
             if (position_m >= distance_m * 0.5f
                 || (use_coarse_middle
-                    && position_m > QUIETMAP_FULL_RESOLUTION_END_ZONE_M)) {
+                    && position_m > QUIETMAP_COARSE_MIDDLE_RECEIVER_ZONE_M)) {
                 backward_done = true;
                 break;
             }
@@ -199,7 +206,7 @@ __device__ __forceinline__ void build_path_profile(
     bool force_hard_ground,
     PathProfile& profile
 ) {
-    fill_profile_chainages(profile, distance_m);
+    fill_profile_chainages(profile, distance_m, scene.coarse_middle_cadence != 0);
     PlaneFitSums ground_fit;
     float imd_integral = 0.0f;
     float forest_total = 0.0f;

@@ -148,6 +148,7 @@ pub fn partition_paint_and_write_tile(
     receivers: &TileDeviceReceivers,
     barriers: &[noise_compute::types::Barrier],
     interior: &InteriorEstimate,
+    coarse_middle_cadence: bool,
     source_id: u8,
     output_path: &Path,
     partition_path: &Path,
@@ -170,6 +171,7 @@ pub fn partition_paint_and_write_tile(
         source_count: device_sources.source_count,
         obstacle_grid_count: device_obstacles.obstacle_grid_count,
         barrier_count: encoded_barriers.len() as u32,
+        coarse_middle_cadence: u32::from(coarse_middle_cadence),
         raster_geometry: batch_raster.geometry,
     };
     let (corner_energy, corner_gpu_milliseconds) = cuda.evaluate_corners(
