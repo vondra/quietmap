@@ -77,6 +77,10 @@ pub struct DeviceBuffer<T> {
     marker: PhantomData<T>,
 }
 
+// A device allocation belongs to the process's CUDA context, not to a host thread:
+// the cell producer uploads on its thread and the painter frees on its own.
+unsafe impl<T: Send> Send for DeviceBuffer<T> {}
+
 impl<T: Copy> DeviceBuffer<T> {
     pub fn from_slice(values: &[T]) -> Result<Self> {
         let buffer = Self::uninitialized(values.len())?;

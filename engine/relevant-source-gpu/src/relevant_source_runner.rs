@@ -1,4 +1,6 @@
-//! Road/rail runner over one wave's zoom and phase/pair measurement for relevant-source painting.
+//! Road/rail runner over one wave's zoom: a streaming pipeline over cells (the host
+//! prepares cell N+1 while the card paints cell N) with the paint's own batch
+//! lookahead, and the phase/pair measurement of every step.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -6,7 +8,7 @@ use std::sync::mpsc::sync_channel;
 use std::thread;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use h3o::{CellIndex, LatLng};
 use noise_compute::admin;
 use raster_reader::fused_tile_z13::TileBatch;
@@ -91,6 +93,8 @@ pub struct RelevantSourceRunMeasurement {
     pub rail: LayerMeasurement,
     pub wall_seconds: f64,
     pub cpu_seconds: f64,
+    /// Source, barrier and obstacle loading plus the device uploads of every
+    /// cell, on the cell producer thread (only the first cell's is on the wall).
     pub source_load_seconds: f64,
     /// Terrain halo build and facade baking per 4x4 batch, on the producer
     /// thread that runs one batch ahead of the GPU.
@@ -98,6 +102,12 @@ pub struct RelevantSourceRunMeasurement {
     /// Receiver, enclosure and barrier preparation per tile, serial with the GPU.
     pub receiver_seconds: f64,
     pub host_tile_seconds: f64,
+    /// Time the painter waited for the next prepared cell: the card idle on the host.
+    pub card_wait_seconds: f64,
+    /// Time the cell producer waited for the painter to take a cell: the host idle on the card.
+    pub host_wait_seconds: f64,
+    /// `(cell, prepare seconds, paint seconds)` in stream order.
+    pub cells: Vec<(u64, f64, f64)>,
 }
 
 impl RelevantSourceRunMeasurement {
@@ -125,6 +135,19 @@ struct EncodedLineLayer {
     device_sources: RegionDeviceLineSources,
 }
 
+/// One cell's sources, obstacles and barriers loaded, encoded and resident on the
+/// card, ready to paint: the unit the cell producer hands the painter.
+struct PreparedRegion {
+    region_r4: u64,
+    frame: RegionMetricFrame,
+    batches: BTreeMap<(u32, u32), Vec<(u32, u32)>>,
+    layers: [EncodedLineLayer; 2],
+    barrier_data: BarrierData,
+    obstacle_data: ObstacleData,
+    device_obstacles: RegionDeviceObstacles,
+    prepare_seconds: f64,
+}
+
 pub fn run_relevant_source_wave(
     configuration: &RelevantSourceRunConfiguration,
 ) -> Result<RelevantSourceRunMeasurement> {
@@ -136,21 +159,53 @@ pub fn run_relevant_source_wave(
     let cuda = RelevantSourceCuda::initialize()?;
     let mut measurement = RelevantSourceRunMeasurement::default();
 
-    for &region_r4 in &configuration.regions {
-        process_region(configuration, region_r4, &rasters, &cuda, &mut measurement)?;
+    // The cell stream: one producer loads and uploads cell N+1 (and blocks on the
+    // channel once it is one cell ahead, so at most two cells are resident on the
+    // card) while the painter works on cell N.
+    let (sender, receiver) = sync_channel(1);
+    let producer = thread::Builder::new().name("cell-prepare".into());
+    let (host_wait_seconds, cells_prepared) = thread::scope(|scope| -> Result<(f64, usize)> {
+        let handle = producer.spawn_scoped(scope, move || -> Result<(f64, usize)> {
+            let mut host_wait_seconds = 0.0;
+            let mut prepared_count = 0;
+            for &region_r4 in &configuration.regions {
+                let prepared = prepare_region(configuration, region_r4)?;
+                prepared_count += 1;
+                let wait_started = Instant::now();
+                if sender.send(prepared).is_err() {
+                    break;
+                }
+                host_wait_seconds += wait_started.elapsed().as_secs_f64();
+            }
+            Ok((host_wait_seconds, prepared_count))
+        })?;
+        loop {
+            let wait_started = Instant::now();
+            let Ok(prepared) = receiver.recv() else {
+                break;
+            };
+            measurement.card_wait_seconds += wait_started.elapsed().as_secs_f64();
+            paint_region(configuration, prepared, &rasters, &cuda, &mut measurement)?;
+        }
+        handle.join().expect("cell producer thread")
+    })?;
+    measurement.host_wait_seconds = host_wait_seconds;
+    if cells_prepared != configuration.regions.len() {
+        bail!(
+            "cell producer prepared {cells_prepared} of {} cells",
+            configuration.regions.len()
+        );
     }
     measurement.wall_seconds = started.elapsed().as_secs_f64();
     measurement.cpu_seconds = ProcessUsage::read().seconds() - starting_usage.seconds();
     Ok(measurement)
 }
 
-fn process_region(
+fn prepare_region(
     configuration: &RelevantSourceRunConfiguration,
     region_r4: u64,
-    rasters: &RealRasters,
-    cuda: &RelevantSourceCuda,
-    measurement: &mut RelevantSourceRunMeasurement,
-) -> Result<()> {
+) -> Result<PreparedRegion> {
+    let started = Instant::now();
     let cell = CellIndex::try_from(region_r4).context("invalid R4 region")?;
     let zoom = configuration.zoom;
     let tiles = region_tiles(region_r4, zoom);
@@ -160,8 +215,6 @@ fn process_region(
         .map(u64::from)
         .collect();
     let frame = RegionMetricFrame::for_cell(cell);
-
-    let load_started = Instant::now();
     let centre = LatLng::from(cell);
     let region_admin = admin::admin_for_latlng(centre.lat(), centre.lng());
     let road_rows =
@@ -175,11 +228,6 @@ fn process_region(
     let device_obstacles = RegionDeviceObstacles::upload(&flattened_obstacles)?;
     let road = encode_line_layer("road", SOURCE_ID_ROAD, &frame, &road_rows)?;
     let rail = encode_line_layer("rail", SOURCE_ID_RAIL, &frame, &rail_rows)?;
-    measurement.road.loaded_sources += road.sources.len() as u64;
-    measurement.rail.loaded_sources += rail.sources.len() as u64;
-    measurement.source_load_seconds += load_started.elapsed().as_secs_f64();
-    let layers = [road, rail];
-
     let mut batches: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
     for &(x, y) in &tiles {
         batches
@@ -190,6 +238,40 @@ fn process_region(
             .or_default()
             .push((x, y));
     }
+    Ok(PreparedRegion {
+        region_r4,
+        frame,
+        batches,
+        layers: [road, rail],
+        barrier_data,
+        obstacle_data,
+        device_obstacles,
+        prepare_seconds: started.elapsed().as_secs_f64(),
+    })
+}
+
+fn paint_region(
+    configuration: &RelevantSourceRunConfiguration,
+    prepared: PreparedRegion,
+    rasters: &RealRasters,
+    cuda: &RelevantSourceCuda,
+    measurement: &mut RelevantSourceRunMeasurement,
+) -> Result<()> {
+    let paint_started = Instant::now();
+    let zoom = configuration.zoom;
+    let PreparedRegion {
+        region_r4,
+        frame,
+        batches,
+        layers,
+        barrier_data,
+        obstacle_data,
+        device_obstacles,
+        prepare_seconds,
+    } = prepared;
+    measurement.road.loaded_sources += layers[0].sources.len() as u64;
+    measurement.rail.loaded_sources += layers[1].sources.len() as u64;
+    measurement.source_load_seconds += prepare_seconds;
     // The terrain halo of the next batch is built while the GPU paints this one:
     // one producer thread, one batch of lookahead, the GPU never waits on a halo
     // it could have had earlier and the host never runs more than two ahead.
@@ -241,6 +323,11 @@ fn process_region(
         }
         Ok(())
     })?;
+    measurement.cells.push((
+        region_r4,
+        prepare_seconds,
+        paint_started.elapsed().as_secs_f64(),
+    ));
     Ok(())
 }
 

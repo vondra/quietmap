@@ -45,7 +45,8 @@ fn main() -> Result<()> {
     };
     eprintln!(
         "relevant-source-wave zoom={} wall_s={:.6} cpu_s={:.6} gpu_s={:.6} gpu_ns_per_pair={:.3} \
-         source_load_s={:.6} raster_prepare_overlapped_s={:.6} receiver_s={:.6} host_tile_s={:.6}",
+         cell_prepare_s={:.6} raster_prepare_overlapped_s={:.6} receiver_s={:.6} host_tile_s={:.6} \
+         card_wait_s={:.6} host_wait_s={:.6} cells={}",
         arguments.zoom,
         measurement.wall_seconds,
         measurement.cpu_seconds,
@@ -55,7 +56,15 @@ fn main() -> Result<()> {
         measurement.raster_prepare_seconds,
         measurement.receiver_seconds,
         measurement.host_tile_seconds,
+        measurement.card_wait_seconds,
+        measurement.host_wait_seconds,
+        measurement.cells.len(),
     );
+    for (cell, prepare_seconds, paint_seconds) in &measurement.cells {
+        eprintln!(
+            "relevant-source-cell cell={cell:x} prepare_s={prepare_seconds:.6} paint_s={paint_seconds:.6}"
+        );
+    }
     print_layer("road", &measurement.road);
     print_layer("rail", &measurement.rail);
     Ok(())
