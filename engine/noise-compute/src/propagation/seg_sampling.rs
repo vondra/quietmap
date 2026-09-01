@@ -167,6 +167,12 @@ const DB_TO_ENERGY_EXP: f64 = std::f64::consts::LN_10 / 10.0;
 /// `segment_can_span` verdict on a pair that lands on the threshold.
 pub const SEG_ARC_MIN_SPAN_RAD: f64 = 3.0_f64.to_radians();
 
+/// Buckets per microsegment fan — the `n` the tile painter ships with and the
+/// CUDA surface kernel compiles in (`noise-gpu/build.rs` injects it). The
+/// module docs carry the four-tile measurement this comes from and why a bigger
+/// `n` is not a fix.
+pub const SEG_SAMPLES_DEFAULT: usize = 5;
+
 /// The arc bounds a bucket's nested query runs under: [`ArcBounds::shipped`] with
 /// the span gate raised to [`SEG_ARC_MIN_SPAN_RAD`], so only a wide bucket pays.
 ///

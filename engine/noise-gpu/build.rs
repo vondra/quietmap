@@ -362,7 +362,7 @@ fn main() {
         "const DEGENERATE_SPAN_RAD: f64 = ",
     );
     // The line-screening quadrature's two constants, injected so the kernel cannot drift
-    // from the CPU rule it paints: the bucket count (the tile painter's
+    // from the CPU rule it paints: the bucket count (seg_sampling's
     // SEG_SAMPLES_DEFAULT) and the per-bucket arc gate. The gate is SPELLED
     // `<deg>_f64.to_radians()` in seg_sampling.rs and the spelling is
     // load-bearing — `3·π/180` differs from `3.0_f64.to_radians()` by 1 ULP
@@ -370,8 +370,8 @@ fn main() {
     // through `to_radians` — so parse the degree literal out of the Rust source
     // and run the SAME `to_radians` here, in Rust, bit-for-bit.
     let seg_samples = const_from(
-        "../tile-painter/src/scatter_band.rs",
-        "const SEG_SAMPLES_DEFAULT: usize = ",
+        "../noise-compute/src/propagation/seg_sampling.rs",
+        "pub const SEG_SAMPLES_DEFAULT: usize = ",
     );
     let seg_arc_gate_expr = const_from(
         "../noise-compute/src/propagation/seg_sampling.rs",

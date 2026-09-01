@@ -153,7 +153,9 @@ use noise_compute::propagation::path_effects::{
     ground_g_from_profile, screening_attenuation, screening_attenuation_with_meta,
     terrain_attenuation, vegetation_attenuation_path, ObstacleInput,
 };
-use noise_compute::propagation::seg_sampling::{seg_arc_bounds, SegSampleScratch};
+use noise_compute::propagation::seg_sampling::{
+    seg_arc_bounds, SegSampleScratch, SEG_SAMPLES_DEFAULT,
+};
 use noise_compute::propagation::PathProfile;
 use noise_compute::types::{
     Barrier, PropagationVariants, RasterSampler, Receiver, BARRIER_PATH_HORIZON_M, NUM_BANDS,
@@ -636,12 +638,6 @@ impl SceneId {
         }
     }
 }
-
-/// Angular buckets per microsegment for `v5` unless `--seg-samples` says
-/// otherwise — the value the tile path ships with
-/// (`tile_painter::scatter_band::SEG_SAMPLES_DEFAULT`). Keep the two in step:
-/// the point of the arm is that the fixture gates what production paints.
-const SEG_SAMPLES_DEFAULT: usize = 5;
 
 /// `v5`'s arc bounds — literally the function
 /// `tile_painter::scatter_band::tile_arc_bounds` delegates to, so the arm gates

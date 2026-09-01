@@ -93,7 +93,7 @@ use noise_compute::propagation::obstacle_index::{
 use noise_compute::propagation::path_effects;
 use noise_compute::propagation::path_profile::CoarseMid;
 use noise_compute::propagation::seg_sampling::{
-    sampled_gob_bands_with_ground, seg_arc_bounds, SegSampleScratch,
+    sampled_gob_bands_with_ground, seg_arc_bounds, SegSampleScratch, SEG_SAMPLES_DEFAULT,
 };
 use noise_compute::propagation::PathProfile;
 use noise_compute::types::{Barrier, RasterSampler};
@@ -762,7 +762,7 @@ impl BandScratch {
 /// The CUDA surface kernel (`engine/noise-gpu/kernels/scatter.cu`) paints the
 /// same SPEC §4.7 rule: it compiles this default in
 /// (SEG_SAMPLES buckets + the 3° bucket gate, injected by build.rs from
-/// `SEG_SAMPLES_DEFAULT` and `seg_sampling::SEG_ARC_MIN_SPAN_RAD`).
+/// `seg_sampling::SEG_SAMPLES_DEFAULT` and `seg_sampling::SEG_ARC_MIN_SPAN_RAD`).
 /// A CPU-vs-GPU tile comparison therefore runs BOTH lanes at defaults;
 /// `noise_gpu::ensure_no_cpu_only_arc_levers` refuses every CPU-only override;
 /// accepting a copied numeric default would create a second source of truth.
@@ -776,10 +776,6 @@ pub(crate) fn seg_samples() -> usize {
             .unwrap_or(SEG_SAMPLES_DEFAULT)
     })
 }
-
-/// Buckets per microsegment fan when `QM_SEG_SAMPLES` is unset — see
-/// [`seg_samples`] for the four-tile measurement this comes from.
-const SEG_SAMPLES_DEFAULT: usize = 5;
 
 /// Arc-screening bounds for the TILE path — [`seg_arc_bounds`], cached.
 ///
