@@ -21,7 +21,7 @@ const LDEN_PERIOD_WEIGHTS: [f64; PERIOD_COUNT] = [12.0, 12.649_110_640_7, 80.0];
 /// at most this fraction of the corner's total; the rest becomes the background
 /// constant. Energy, not a count: a motorway block stops after a few sources, a
 /// block where twenty comparable streets meet keeps all twenty.
-pub const DROP_BUDGET_FRACTION: f64 = 0.10;
+pub const DROP_BUDGET_FRACTION: f64 = 0.15;
 
 /// The complete reusable source partition for one fixed geographic z12 tile.
 #[derive(Clone, Debug, PartialEq)]
@@ -388,8 +388,8 @@ mod tests {
 
     /// Energies 1..=34 (source k carries k + 1) at every corner: the total is
     /// 595, so a corner keeps admitting from the loudest down until the
-    /// un-admitted rest is at most 59.5 — sources 34..=11 leave 1+2+...+10 = 55
-    /// behind. Block 0 also holds the local source 33 (energy 34).
+    /// un-admitted rest is at most 89.25 — sources 34..=13 leave
+    /// 1+2+...+12 = 78 behind. Block 0 also holds source 33 (energy 34) locally.
     #[test]
     fn corner_union_admits_until_the_dropped_energy_is_within_budget() {
         let incidence = compact_incidence();
@@ -401,15 +401,15 @@ mod tests {
         let partition = build_relevant_source_partition(&incidence, &energies, 7).unwrap();
         assert_eq!(
             partition.source_indices_for_block(0),
-            &(10..TEST_SOURCE_COUNT).collect::<Vec<_>>()
+            &(12..TEST_SOURCE_COUNT).collect::<Vec<_>>()
         );
         assert_eq!(
             partition.background_corner_energy[0],
-            [[55.0; PERIOD_COUNT]; 4]
+            [[78.0; PERIOD_COUNT]; 4]
         );
         assert_eq!(
             partition.source_indices_for_block(1),
-            &(10..TEST_SOURCE_COUNT).collect::<Vec<_>>()
+            &(12..TEST_SOURCE_COUNT).collect::<Vec<_>>()
         );
     }
 
