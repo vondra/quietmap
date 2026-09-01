@@ -1,6 +1,8 @@
-//! Tile uploads, shared-corner partition construction, exact pixel paint, and HM3 write.
+//! Tile uploads, shared-corner partition construction, exact pixel paint, and the
+//! HM3 collapse-and-write handed to the region's writer thread.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use noise_compute::constants::ENCLOSURE_RADIUS_M;
@@ -86,7 +88,27 @@ pub struct TilePaintMeasurement {
     pub block_source_counts: Vec<u32>,
     pub corner_gpu_milliseconds: f64,
     pub paint_gpu_milliseconds: f64,
-    pub output_bytes: u64,
+}
+
+/// One painted tile's period energies waiting for the writer thread: collapse to
+/// the Lden byte, fill enclosed pixels from their facade donors, brotli, write.
+pub struct PendingTileWrite {
+    pub energy: Vec<f32>,
+    pub interior: Arc<InteriorEstimate>,
+    pub source_id: u8,
+    pub output_path: PathBuf,
+}
+
+impl PendingTileWrite {
+    /// Bytes written.
+    pub fn write(self) -> Result<u64> {
+        let accumulator = TileAccumulator {
+            energy: self.energy,
+        };
+        let mut cells = collapse_lden_surface_u8(&accumulator);
+        self.interior.apply(&mut cells);
+        Ok(write_tile(&self.output_path, &cells, self.source_id, false)? as u64)
+    }
 }
 
 /// Tile coordinates and receiver fields uploaded once, independent of the line layer.
@@ -137,7 +159,9 @@ impl TileDeviceReceivers {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn partition_paint_and_write_tile(
+/// Partition and paint one tile/layer; the per-period pixel energies come back
+/// for the writer thread together with the measurement.
+pub fn partition_and_paint_tile(
     cuda: &RelevantSourceCuda,
     frame: &RegionMetricFrame,
     sources: &[DeviceLineSource],
@@ -147,12 +171,9 @@ pub fn partition_paint_and_write_tile(
     batch_raster: &BatchDeviceRaster,
     receivers: &TileDeviceReceivers,
     barriers: &[noise_compute::types::Barrier],
-    interior: &InteriorEstimate,
     coarse_middle_cadence: bool,
-    source_id: u8,
-    output_path: &Path,
     partition_path: &Path,
-) -> Result<TilePaintMeasurement> {
+) -> Result<(TilePaintMeasurement, Vec<f32>)> {
     debug_assert_eq!(source_fingerprint, source_identity_fingerprint(sources));
     let incidence = build_tile_source_incidence(sources, &receivers.lattice);
     let corner_offsets = DeviceBuffer::from_slice(&incidence.corner_offsets)?;
@@ -206,25 +227,23 @@ pub fn partition_paint_and_write_tile(
         &receivers.receiver_altitude_m,
         &receivers.receiver_reflection_db,
     )?;
-    let accumulator = TileAccumulator { energy };
-    let mut cells = collapse_lden_surface_u8(&accumulator);
-    interior.apply(&mut cells);
-    let output_bytes = write_tile(output_path, &cells, source_id, false)? as u64;
     let relevant_source_references = partition.relevant_source_indices.len() as u64;
     let block_source_counts = partition
         .block_offsets
         .windows(2)
         .map(|window| window[1] - window[0])
         .collect();
-    Ok(TilePaintMeasurement {
-        corner_pairs: incidence.corner_source_indices.len() as u64,
-        pixel_pairs: relevant_source_references * (BLOCK_PIXEL_COUNT as u64),
-        relevant_source_references,
-        block_source_counts,
-        corner_gpu_milliseconds: f64::from(corner_gpu_milliseconds),
-        paint_gpu_milliseconds: f64::from(paint_gpu_milliseconds),
-        output_bytes,
-    })
+    Ok((
+        TilePaintMeasurement {
+            corner_pairs: incidence.corner_source_indices.len() as u64,
+            pixel_pairs: relevant_source_references * (BLOCK_PIXEL_COUNT as u64),
+            relevant_source_references,
+            block_source_counts,
+            corner_gpu_milliseconds: f64::from(corner_gpu_milliseconds),
+            paint_gpu_milliseconds: f64::from(paint_gpu_milliseconds),
+        },
+        energy,
+    ))
 }
 
 const BLOCK_PIXEL_COUNT: usize = TILE_PIXEL_SIDE * TILE_PIXEL_SIDE / BLOCK_COUNT;

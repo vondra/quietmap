@@ -4,7 +4,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::sync_channel;
+use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
@@ -23,7 +24,7 @@ use tile_painter::wire_hm3::{SOURCE_ID_RAIL, SOURCE_ID_ROAD};
 use crate::cuda_bridge::RelevantSourceCuda;
 use crate::obstacle_transfer::FlattenedObstacleGeometry;
 use crate::relevant_source_tile::{
-    partition_paint_and_write_tile, BatchDeviceRaster, RegionDeviceLineSources,
+    partition_and_paint_tile, BatchDeviceRaster, PendingTileWrite, RegionDeviceLineSources,
     RegionDeviceObstacles, TileDeviceReceivers, TilePaintMeasurement,
 };
 use crate::source_frame::{source_identity_fingerprint, DeviceLineSource, RegionMetricFrame};
@@ -72,7 +73,6 @@ impl LayerMeasurement {
         self.block_source_counts.extend(tile.block_source_counts);
         self.corner_gpu_milliseconds += tile.corner_gpu_milliseconds;
         self.paint_gpu_milliseconds += tile.paint_gpu_milliseconds;
-        self.output_bytes += tile.output_bytes;
     }
 
     /// `(min, median, p99, max)` of relevant sources per block.
@@ -274,11 +274,23 @@ fn paint_region(
     measurement.source_load_seconds += prepare_seconds;
     // The terrain halo of the next batch is built while the GPU paints this one:
     // one producer thread, one batch of lookahead, the GPU never waits on a halo
-    // it could have had earlier and the host never runs more than two ahead.
+    // it could have had earlier and the host never runs more than two ahead. The
+    // collapse and brotli write of every painted tile go to one writer thread
+    // behind a bounded channel, off the painter's critical path.
     let obstacle_set = obstacle_data.set();
     let (sender, receiver) = sync_channel(1);
+    let (write_sender, write_receiver) = sync_channel::<PendingTileWrite>(PENDING_WRITES);
     let producer = thread::Builder::new().name("batch-rasters".into());
-    thread::scope(|scope| -> Result<()> {
+    let writer = thread::Builder::new().name("tile-writer".into());
+    let output_bytes = thread::scope(|scope| -> Result<[u64; 2]> {
+        let writer = writer.spawn_scoped(scope, move || -> Result<[u64; 2]> {
+            let mut bytes = [0_u64; 2];
+            for pending in write_receiver {
+                let layer = usize::from(pending.source_id == SOURCE_ID_RAIL);
+                bytes[layer] += pending.write()?;
+            }
+            Ok(bytes)
+        })?;
         producer.spawn_scoped(scope, move || {
             for ((block_x, block_y), requested_tiles) in batches {
                 let started = Instant::now();
@@ -318,11 +330,15 @@ fn paint_region(
                 &device_obstacles,
                 &batch_raster,
                 cuda,
+                &write_sender,
                 measurement,
             )?;
         }
-        Ok(())
+        drop(write_sender);
+        writer.join().expect("tile writer thread")
     })?;
+    measurement.road.output_bytes += output_bytes[0];
+    measurement.rail.output_bytes += output_bytes[1];
     measurement.cells.push((
         region_r4,
         prepare_seconds,
@@ -330,6 +346,9 @@ fn paint_region(
     ));
     Ok(())
 }
+
+/// Painted tiles waiting for the writer before the painter blocks (3 MB each).
+const PENDING_WRITES: usize = 8;
 
 #[allow(clippy::too_many_arguments)]
 fn paint_batch_tiles(
@@ -343,6 +362,7 @@ fn paint_batch_tiles(
     device_obstacles: &RegionDeviceObstacles,
     batch_raster: &BatchDeviceRaster,
     cuda: &RelevantSourceCuda,
+    write_sender: &SyncSender<PendingTileWrite>,
     measurement: &mut RelevantSourceRunMeasurement,
 ) -> Result<()> {
     let zoom = configuration.zoom;
@@ -350,7 +370,7 @@ fn paint_batch_tiles(
         let tile = &batch.tiles[batch_slot(batch, x, y)];
         let receiver_started = Instant::now();
         let receivers = TileDeviceReceivers::upload(frame, tile, obstacle_data.set())?;
-        let interior = obstacle_data.interior_estimate(tile);
+        let interior = Arc::new(obstacle_data.interior_estimate(tile));
         let barriers = barrier_data.for_tile(&tile.bbox, LINE_HALO_M);
         measurement.receiver_seconds += receiver_started.elapsed().as_secs_f64();
         for layer in layers {
@@ -369,7 +389,7 @@ fn paint_batch_tiles(
                 y,
             );
             let tile_started = Instant::now();
-            let tile_measurement = partition_paint_and_write_tile(
+            let (tile_measurement, energy) = partition_and_paint_tile(
                 cuda,
                 frame,
                 &layer.sources,
@@ -379,12 +399,17 @@ fn paint_batch_tiles(
                 batch_raster,
                 &receivers,
                 &barriers,
-                &interior,
                 coarse_middle_cadence(zoom),
-                layer.source_id,
-                &output_path,
                 &partition_path,
             )?;
+            write_sender
+                .send(PendingTileWrite {
+                    energy,
+                    interior: Arc::clone(&interior),
+                    source_id: layer.source_id,
+                    output_path,
+                })
+                .context("the tile writer thread is gone")?;
             measurement.host_tile_seconds += tile_started.elapsed().as_secs_f64()
                 - (tile_measurement.corner_gpu_milliseconds
                     + tile_measurement.paint_gpu_milliseconds)
