@@ -26,4 +26,3 @@ noise-compute = { path = "../noise-compute" }
 raster-reader = { path = "../raster-reader" }
 rayon = "1"
 tile-painter = { path = "../tile-painter" }
-
