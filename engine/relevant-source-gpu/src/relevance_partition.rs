@@ -25,13 +25,25 @@ const FILE_VERSION: u32 = 2;
 /// Against the block's QUIETEST corner, not each corner's own total, because the
 /// background is four corner samples blended bilinearly over the block's 256
 /// pixels, and the damage it does is measured at the quietest pixel, not at the
-/// loudest corner. Source-weighted
-/// over the four W2 benchmark cells, a rail block's four corner totals stand a
-/// median 1.5 dB apart but 10.0 dB at the 95th percentile, and 15 % of the loud
-/// corner's energy is then more than the whole answer at the quiet one. Measured
-/// at W2: rail's >3 dB tail 4994 -> 1101 cells (limit 1379) and industrial's
-/// 1984 -> 48 (limit 921), every other rung of all five layers lower too, for
-/// +23.7 % of the wave's GPU seconds. At 0.20 rail loses the rung again (1738).
+/// loudest corner. Source-weighted over the four W2 benchmark cells, a rail
+/// block's four corner totals stand a median 1.5 dB apart but 10.0 dB at the
+/// 95th percentile, and 15 % of the loud corner's energy is then more than the
+/// whole answer at the quiet one.
+///
+/// THIS IS THE SPEED DIAL. It trades painted accuracy for GPU seconds and nothing
+/// else does so as directly; the owner chose 0.15 on 2026-09-02 because it is the
+/// only measured value that meets the whole accuracy contract. Measured on r9950
+/// (RTX 5070), the four wbench-orig cells, five surface layers in one process,
+/// seconds and drift from the same run:
+///
+///   fraction   W2 GPU s   W2 wall   rail >3 dB cells (limit 1379)   industrial (921)   W1 GPU s
+///   0.15       293.8      331.0     1101  passes                       48  passes       108.8
+///   0.20       257.1      294.8     1738  1.3x over                    73  passes        96.3
+///   0.30       209.7      247.1     3150  2.3x over                   187  passes        80.7
+///
+/// Every other rung of every layer passes at all three; W1 stays 15 of 15. The
+/// rule's own effect at 0.15 was rail 4994 -> 1101 and industrial 1984 -> 48 for
+/// +23.7 % of the wave's GPU seconds against the per-corner budget it replaced.
 pub const DROP_BUDGET_FRACTION: f64 = 0.15;
 
 /// The complete reusable source partition for one fixed geographic z12 tile.
