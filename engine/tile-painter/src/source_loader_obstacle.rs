@@ -308,8 +308,9 @@ impl InteriorEstimate {
             } else {
                 dequantise_lden(cells[donor as usize])
             };
-            cells[index] = if facade.is_finite() {
-                quantise_lden((facade - delta).max(0.0))
+            let indoor = noise_compute::envelope::indoor_level_db(facade, delta);
+            cells[index] = if indoor.is_finite() {
+                quantise_lden(indoor)
             } else {
                 NO_DATA
             };
@@ -898,7 +899,10 @@ mod tests {
             let expected = if before[donor] == NO_DATA {
                 NO_DATA
             } else {
-                quantise_lden((dequantise_lden(before[donor]) - delta).max(0.0))
+                quantise_lden(noise_compute::envelope::indoor_level_db(
+                    dequantise_lden(before[donor]),
+                    delta,
+                ))
             };
             assert_eq!(cells[i], expected, "enclosed pixel ({x}, {y})");
         }

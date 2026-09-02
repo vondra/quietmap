@@ -576,11 +576,10 @@ outdoor source-to-wall path or measure a different quantity, and one broadband c
 would misname them. The popup states that split in the line it prints above the rows.
 
 Implementation: the arithmetic is named in [src/envelope.rs](src/envelope.rs) as
-indoor_level_db, which the popup projection in [src/present.rs](src/present.rs) calls.
-The per-tile application in
+indoor_level_db, which both the popup projection in [src/present.rs](src/present.rs)
+and the per-tile application in
 [engine/tile-painter/src/source_loader_obstacle.rs](../tile-painter/src/source_loader_obstacle.rs)
-still restates the same expression inline; routing it through indoor_level_db is the
-open follow-up that leaves one statement of this fact.
+call.
 
 ## 10. Generated data, provenance, and ownership
 

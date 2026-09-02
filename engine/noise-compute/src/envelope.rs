@@ -76,9 +76,8 @@ pub const fn effective_envelope_class(class: EnvelopeClass, height_m: f32) -> En
 /// numbers. Silence (`NEG_INFINITY`) passes through unchanged: an envelope
 /// never makes an inaudible source audible.
 ///
-/// The popup calls this. `tile_painter::source_loader_obstacle::InteriorEstimate::apply`
-/// still restates the same expression inline; routing it through this function
-/// is the named follow-up that makes the arithmetic literally single-sourced.
+/// The popup and `tile_painter::source_loader_obstacle::InteriorEstimate::apply`
+/// call this, so indoor level arithmetic has one source.
 #[inline]
 pub fn indoor_level_db(facade_level_db: f64, delta_db: f64) -> f64 {
     if facade_level_db.is_finite() {
