@@ -33,6 +33,7 @@ use tile_painter::renderer_evidence::{
     maybe_run_static_attestation, DependencyProfile, RegionTerminalStatus, RendererEvidence,
     RuntimeParameters, StaticAttestationParameters,
 };
+use tile_painter::tile_store::PUBLISHED_BASE_ZOOM;
 use tile_painter::worklist::{any_source_arrow, resolve_n_days, WorkList};
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -88,7 +89,8 @@ struct Args {
     /// World mode — every populated R4 plus its grid_disk(1) ring.
     #[arg(long, default_value_t = false)]
     world: bool,
-    #[arg(long, default_value_t = 12)]
+    /// The zoom the world is painted at; every lower zoom is a pyramid level of this paint.
+    #[arg(long, default_value_t = PUBLISHED_BASE_ZOOM)]
     zoom: u8,
     #[arg(long)]
     h3r4_dir: PathBuf,

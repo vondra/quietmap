@@ -41,6 +41,12 @@
 //! is written last, tmp + atomic rename — a crash mid-pack leaves the previous
 //! build fully live.
 //!
+//! The manifest carries ONE generation PER LAYER, not one for the publication: a run that
+//! repacks a single layer carries every untouched layer forward by value, with the older
+//! run's archive AND that run's generation. The normative shape, and the only owner of the
+//! identity hashes inside a generation, is `server/src/generation-contract.mjs`; this packer
+//! copies the contract it is given verbatim into every layer it packs.
+//!
 //! Usage: tile-store-pack <store-root> <out-dir> <build-id> --generation-contract <file>
 //!   e.g.  tile-store-pack data/tiles/2026/store \
 //!                         data/tiles/2026/pmtiles  b0 --generation-contract generation.json
@@ -63,36 +69,32 @@ use tile_painter::tile_store::fsck::{validate_captured_store, CapturedTileRef};
 use tile_painter::tile_store::manifest::is_safe_archive_filename;
 use tile_painter::tile_store::{
     detect_layers, detect_zooms, expected_source_id, reject_incomplete_store_transactions,
-    zoom_store_lock_path, StoreFileLock, StoreFileLocks, StoreMasterIngestLocks, TileStore,
-    PUBLISHED_BASE_ZOOM, PUBLISHED_LAYERS, PUBLISHED_MIN_ZOOM, TOTAL_INPUT_LAYERS,
+    validate_zoom_band, zoom_store_lock_path, StoreFileLock, StoreFileLocks,
+    StoreMasterIngestLocks, TileStore, PUBLISHED_BASE_ZOOM, PUBLISHED_LAYERS, TOTAL_INPUT_LAYERS,
 };
 
 const STORE_LOCK_WAIT: Duration = Duration::from_secs(300);
 const GENERATION_ID_HEX_LENGTH: usize = 64;
 const RASTER_GENERATION_ID_HEX_LENGTH: usize = 16;
+/// `schema`, `zoom`, `dataset_year`, `raster_generation_id`, `quality_profile_name`,
+/// `quality_profile_id`, `generation_id`, `quality` — the exact set
+/// `validateGenerationContract` accepts, and every one of them is read below.
+const GENERATION_CONTRACT_FIELDS: usize = 8;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PublicationSlot {
-    Base,
-    Tier(u8),
-}
-
-/// The packer checks only the generation fields that decide where a payload may be written.
-/// The complete schema, profile semantics, and identity hashes remain the JS SSOT; preserving
-/// the parsed JSON value here keeps every additional quality field byte-for-byte represented in
-/// the resulting manifest.
+/// One layer generation, as `server/src/generation-contract.mjs` defines it.
+///
+/// The packer preflights only what it can anchor in something other than this file: the zoom
+/// must be the zoom of the world this binary knows how to pack, the dataset year must be one
+/// every carried-forward layer already agrees with, and the identity fields must be the right
+/// shape before an hours-long archive is written. It deliberately does NOT recompute
+/// `generation_id` or `quality_profile_id` — a file cannot prove itself, and the hashes have
+/// exactly one owner, `validateGenerationContract`, which recomputes both when the server
+/// reads the manifest. Keeping the parsed value whole means every quality field the publisher
+/// wrote reaches the manifest byte-for-byte.
 #[derive(Clone)]
-struct GenerationContract {
+struct LayerGeneration {
     value: serde_json::Value,
-    generation_id: String,
-    base_generation_id: String,
-    quality_profile_id: String,
-    base_quality_profile_id: String,
-    quality_profile_name: String,
-    base_quality_profile_name: String,
     dataset_year: u64,
-    raster_generation_id: String,
-    line_model_role_sha256: String,
 }
 
 /// Declares Brotli in the pmtiles header while passing bytes through verbatim —
@@ -323,7 +325,7 @@ impl PublisherProof {
     /// later. ctime is excluded: it advances on metadata operations that change no byte of
     /// content, and hardlinking an archive is exactly that. Since `validate_manifest_layers`
     /// re-validates every RETAINED layer, one hardlinked archive would otherwise permanently
-    /// refuse every later partial or tier pack over that manifest. Full struct equality (ctime
+    /// refuse every later partial pack over that manifest. Full struct equality (ctime
     /// included) is still the right test for "did this file change while I was reading it" —
     /// see `sha256_file`.
     fn identity(&self) -> (u64, u64, u64, i128) {
@@ -415,13 +417,14 @@ fn require_lower_hex(value: String, length: usize, label: &str) -> Result<String
     Ok(value)
 }
 
-/// Validate the small slot-binding subset of the full generation contract. Keeping this subset
-/// deliberately narrow avoids a second JS quality validator while making a crossed base/tier
-/// payload impossible to place in the wrong manifest location.
-fn validate_generation_contract_for_slot(
-    value: serde_json::Value,
-    slot: PublicationSlot,
-) -> Result<GenerationContract> {
+/// Preflight one layer generation before any immutable archive is written.
+///
+/// A deliberate subset of the server's `validateGenerationContract`: the identity hashes
+/// and the exact `quality` key set stay the server's (the publisher that writes
+/// generation.json validates it with the server's own module before a pack, and the server
+/// re-validates at boot). Reimplementing canonical-JSON hashing here would be a second
+/// truth that can drift; this checks only what the packer reads and can anchor itself.
+fn validate_layer_generation(value: serde_json::Value) -> Result<LayerGeneration> {
     let object = value
         .as_object()
         .context("generation contract must be a JSON object")?;
@@ -429,135 +432,62 @@ fn validate_generation_contract_for_slot(
     if required_u64(object, "schema", label)? != 1 {
         bail!("{label}.schema must be 1");
     }
-    let deployment = required_string(object, "deployment", label)?;
+    // The one number this binary can check against something it knows independently: the
+    // world it packs is a single paint at `PUBLISHED_BASE_ZOOM`, and `validate_snapshots`
+    // refuses any store whose zoom band says otherwise.
     let zoom = required_u64(object, "zoom", label)?;
-    let tier = object
-        .get("tier")
-        .and_then(serde_json::Value::as_str)
-        .context("generation contract.tier must be a string")?;
-    match slot {
-        PublicationSlot::Base => {
-            if deployment != "base" || zoom != 12 || !tier.is_empty() {
-                bail!("generation contract is not the exact base deployment shape (base/z12)");
-            }
-        }
-        PublicationSlot::Tier(expected_zoom) => {
-            let expected_tier = format!("z{expected_zoom}");
-            if deployment != expected_tier
-                || zoom != u64::from(expected_zoom)
-                || tier != expected_tier
-            {
-                bail!(
-                    "generation contract is not the exact tier deployment shape ({expected_tier}/z{expected_zoom})"
-                );
-            }
-        }
+    if zoom != u64::from(PUBLISHED_BASE_ZOOM) {
+        bail!("{label}.zoom is z{zoom}, but a publication is one z{PUBLISHED_BASE_ZOOM} paint");
     }
     let dataset_year = required_u64(object, "dataset_year", label)?;
     if !(2000..=2200).contains(&dataset_year) {
-        bail!("generation contract.dataset_year is outside 2000..=2200");
+        bail!("{label}.dataset_year is outside 2000..=2200");
     }
-    let generation_id = require_lower_hex(
-        required_string(object, "generation_id", label)?,
-        GENERATION_ID_HEX_LENGTH,
-        "generation contract.generation_id",
-    )?;
-    let base_generation_id = require_lower_hex(
-        required_string(object, "base_generation_id", label)?,
-        GENERATION_ID_HEX_LENGTH,
-        "generation contract.base_generation_id",
-    )?;
-    let quality_profile_id = require_lower_hex(
-        required_string(object, "quality_profile_id", label)?,
-        GENERATION_ID_HEX_LENGTH,
-        "generation contract.quality_profile_id",
-    )?;
-    let base_quality_profile_id = require_lower_hex(
-        required_string(object, "base_quality_profile_id", label)?,
-        GENERATION_ID_HEX_LENGTH,
-        "generation contract.base_quality_profile_id",
-    )?;
+    for (field, length) in [
+        ("generation_id", GENERATION_ID_HEX_LENGTH),
+        ("quality_profile_id", GENERATION_ID_HEX_LENGTH),
+        ("raster_generation_id", RASTER_GENERATION_ID_HEX_LENGTH),
+    ] {
+        require_lower_hex(
+            required_string(object, field, label)?,
+            length,
+            &format!("{label}.{field}"),
+        )?;
+    }
     let quality_profile_name = required_string(object, "quality_profile_name", label)?;
-    let base_quality_profile_name = required_string(object, "base_quality_profile_name", label)?;
-    let raster_generation_id = require_lower_hex(
-        required_string(object, "raster_generation_id", label)?,
-        RASTER_GENERATION_ID_HEX_LENGTH,
-        "generation contract.raster_generation_id",
-    )?;
-    if slot == PublicationSlot::Base
-        && (generation_id != base_generation_id
-            || quality_profile_id != base_quality_profile_id
-            || quality_profile_name != base_quality_profile_name)
-    {
-        bail!("base generation contract does not anchor itself");
-    }
     let quality = required_object(object, "quality", label)?;
-    let model_role_contract = required_object(
-        quality,
-        "model_role_contract",
-        "generation contract.quality",
-    )?;
-    let line_model_role_sha256 = require_lower_hex(
-        required_string(
-            model_role_contract,
-            "line_model_role_sha256",
-            "generation contract.quality.model_role_contract",
-        )?,
-        GENERATION_ID_HEX_LENGTH,
-        "generation contract.quality.model_role_contract.line_model_role_sha256",
-    )?;
-    Ok(GenerationContract {
+    // The packer consumes these two values: `dataset_year` is the year every carried-forward
+    // layer must agree with, and the profile names the quality this binary is about to carry
+    // into every new layer entry. The server requires each copy to agree, so reject a split
+    // contract before it burns a build id staging archives the server will refuse.
+    if required_string(quality, "profile_name", "generation contract.quality")?
+        != quality_profile_name
+    {
+        bail!("{label}.quality.profile_name differs from {label}.quality_profile_name");
+    }
+    if required_u64(quality, "dataset_year", "generation contract.quality")? != dataset_year {
+        bail!("{label}.quality.dataset_year differs from {label}.dataset_year");
+    }
+    // Nothing but the eight fields read above. The server's `validateGenerationContract`
+    // requires that exact key set, so a leftover field from the retired base-plus-tier
+    // contract (`deployment`, `tier`, `base_generation_id`, `base_quality_profile_*`) would
+    // pack a whole world into archives the server then refuses to serve.
+    if object.len() != GENERATION_CONTRACT_FIELDS {
+        bail!(
+            "{label} has {} fields, expected exactly {GENERATION_CONTRACT_FIELDS}",
+            object.len()
+        );
+    }
+    Ok(LayerGeneration {
         value,
-        generation_id,
-        base_generation_id,
-        quality_profile_id,
-        base_quality_profile_id,
-        quality_profile_name,
-        base_quality_profile_name,
         dataset_year,
-        raster_generation_id,
-        line_model_role_sha256,
     })
 }
 
-fn read_generation_contract(path: &Path, slot: PublicationSlot) -> Result<GenerationContract> {
+fn read_layer_generation(path: &Path) -> Result<LayerGeneration> {
     let value = read_json_object_without_following_symlink(path, "generation contract")?;
-    validate_generation_contract_for_slot(value, slot)
+    validate_layer_generation(value)
         .with_context(|| format!("validate generation contract {}", path.display()))
-}
-
-fn read_coverage_r4(path: &Path) -> Result<Vec<String>> {
-    let bytes = read_regular_file_without_following_symlink(path, "coverage file")?;
-    let text = String::from_utf8(bytes)
-        .with_context(|| format!("coverage file {} is not UTF-8", path.display()))?;
-    let mut coverage: Vec<String> = text
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .collect();
-    if coverage.is_empty() {
-        bail!("--coverage-r4 {} lists no cells", path.display());
-    }
-    for cell in &coverage {
-        let parsed = cell
-            .parse::<h3o::CellIndex>()
-            .with_context(|| format!("--coverage-r4: {cell:?} is not an H3 cell id"))?;
-        if parsed.resolution() != h3o::Resolution::Four {
-            bail!(
-                "--coverage-r4: {cell} is res {}, coverage must be res 4",
-                parsed.resolution()
-            );
-        }
-        if parsed.to_string() != *cell {
-            bail!("--coverage-r4: {cell:?} is not canonical (want {parsed})");
-        }
-    }
-    coverage.sort();
-    if coverage.windows(2).any(|pair| pair[0] == pair[1]) {
-        bail!("--coverage-r4 {} contains duplicate cells", path.display());
-    }
-    Ok(coverage)
 }
 
 fn proof_u64(proof: &serde_json::Map<String, serde_json::Value>, field: &str) -> Result<u64> {
@@ -675,40 +605,10 @@ fn validate_manifest_layers(
     Ok(())
 }
 
-/// Parse a tier layer token `{base}-z{tier}-p{N}` into
-/// (base, tier, pack). Tier archives are ORDINARY manifest layer entries —
-/// that is what makes GC keep-sets, transaction recovery, publisher proofs
-/// and readiness apply to them with zero new machinery — so the layer-set
-/// contract below must recognise the token shape.
-fn parse_tier_token(name: &str) -> Option<(&str, u8, &str)> {
-    let (rest, pack) = name.rsplit_once('-')?;
-    if !pack.starts_with('p') || pack.len() < 2 || !pack[1..].bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let (base, tier) = rest.rsplit_once('-')?;
-    let digits = tier.strip_prefix('z')?;
-    let tier_zoom: u8 = digits.parse().ok()?;
-    // Canonical digits only: `z013` must NOT parse — the TypeScript mirror
-    // (heatmap-shared.ts parseTierToken) rejects it, and a packer-accepted /
-    // server-refused manifest is the worst lockstep failure (gg z13 impl
-    // review). Round-trip equality pins the grammar to one spelling.
-    if digits != tier_zoom.to_string() {
-        return None;
-    }
-    if !(13..=18).contains(&tier_zoom) || !PUBLISHED_LAYERS.contains(&base) {
-        return None;
-    }
-    Some((base, tier_zoom, pack))
-}
-
 fn validate_manifest_layer_contract(
     layers: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<()> {
-    let actual: std::collections::BTreeSet<&str> = layers
-        .keys()
-        .map(String::as_str)
-        .filter(|name| parse_tier_token(name).is_none())
-        .collect();
+    let actual: std::collections::BTreeSet<&str> = layers.keys().map(String::as_str).collect();
     let expected: std::collections::BTreeSet<&str> = PUBLISHED_LAYERS.iter().copied().collect();
     if actual != expected {
         let missing: Vec<_> = expected.difference(&actual).copied().collect();
@@ -722,60 +622,37 @@ fn validate_manifest_layer_contract(
     Ok(())
 }
 
-fn validate_existing_base_generation(
-    manifest: &serde_json::Map<String, serde_json::Value>,
-) -> Result<GenerationContract> {
-    let value = manifest
-        .get("generation")
-        .cloned()
-        .context("tier pack requires an existing top-level base generation")?;
-    let generation = validate_generation_contract_for_slot(value, PublicationSlot::Base)
-        .context("existing top-level generation is not a valid base contract")?;
-    let line = manifest
-        .get("line_model_role_sha256")
-        .and_then(serde_json::Value::as_str)
-        .context("tier pack requires top-level line_model_role_sha256")?;
-    if line != generation.line_model_role_sha256 {
-        bail!("existing top-level line_model_role_sha256 differs from its base generation");
-    }
-    Ok(generation)
-}
-
-fn validate_tier_generation_anchor(
-    base: &GenerationContract,
-    tier: &GenerationContract,
+/// Every layer entry this publication carries forward unchanged must ALREADY carry a valid
+/// generation of the same dataset year — the same validation a new generation gets.
+///
+/// Both halves are readiness rules the server applies at boot
+/// (`server/src/runtime-readiness.ts`, `validateLayerGeneration`): fencing is all-or-none, so
+/// one fenced entry makes every entry's contract mandatory, and one manifest is one dataset
+/// year. Checking them here turns "the server refuses the manifest after the flip" into "the
+/// pack refuses before it writes an immutable archive".
+fn validate_carried_generations(
+    layers: &serde_json::Map<String, serde_json::Value>,
+    replacing: &[String],
+    dataset_year: u64,
 ) -> Result<()> {
-    if tier.base_generation_id != base.generation_id
-        || tier.base_quality_profile_id != base.quality_profile_id
-        || tier.base_quality_profile_name != base.quality_profile_name
-        || tier.dataset_year != base.dataset_year
-        || tier.raster_generation_id != base.raster_generation_id
-    {
-        bail!("tier generation is not anchored to the existing base generation/profile");
+    for (layer, entry) in layers {
+        if replacing.iter().any(|name| name == layer) {
+            continue;
+        }
+        let carried = entry
+            .get("generation")
+            .with_context(|| format!("carried-forward layer {layer} has no generation"))?;
+        let carried = validate_layer_generation(carried.clone())
+            .with_context(|| format!("carried-forward layer {layer}"))?;
+        if carried.dataset_year != dataset_year {
+            bail!(
+                "carried-forward layer {layer} publishes dataset year {} \
+                 into a {dataset_year} manifest",
+                carried.dataset_year
+            );
+        }
     }
     Ok(())
-}
-
-/// Decide whether a base publication may carry forward its refinement tiers. A partial base
-/// publish is only a byte-for-byte continuation of the same fenced generation; a full publish
-/// starts a new base epoch whenever the prior head is legacy or names a different generation.
-fn base_publication_preserves_tier_state(
-    previous: &serde_json::Map<String, serde_json::Value>,
-    generation: &GenerationContract,
-    partial: bool,
-) -> Result<bool> {
-    if previous.get("generation").is_none() {
-        if partial {
-            bail!("partial base publication cannot relabel a legacy manifest");
-        }
-        return Ok(false);
-    }
-    let existing = validate_existing_base_generation(previous)?;
-    let same_generation = existing.value == generation.value;
-    if partial && !same_generation {
-        bail!("partial base publication generation differs from the existing fenced base");
-    }
-    Ok(same_generation)
 }
 
 const PACK_TRANSACTION_PREFIX: &str = ".pack-transaction-";
@@ -1043,33 +920,20 @@ fn snapshot_layer(layer_dir: &Path, layer: &str, zooms: &[u8]) -> Result<LayerSn
     })
 }
 
+/// One publishable layer: the exact zoom band of the published world
+/// ([`validate_zoom_band`] at `PUBLISHED_BASE_ZOOM` — one z13 paint cascaded down to z2),
+/// then everything
+/// the band does not decide.
 fn validate_snapshots(snapshots: &[LayerSnapshot]) -> Result<()> {
-    validate_snapshots_for_base(snapshots, PUBLISHED_BASE_ZOOM)
-}
-
-fn validate_exact_zoom_band(layer: &str, actual_zooms: &[u8], base_zoom: u8) -> Result<()> {
-    let expected_zooms: Vec<u8> = (PUBLISHED_MIN_ZOOM..=base_zoom).collect();
-    if actual_zooms != expected_zooms {
-        bail!(
-            "{layer}: zoom set {:?}, expected exact {:?}",
-            actual_zooms,
-            expected_zooms
-        );
-    }
-    Ok(())
-}
-
-fn validate_snapshots_for_base(snapshots: &[LayerSnapshot], expected_base_zoom: u8) -> Result<()> {
     for layer in snapshots {
-        let actual_zooms: Vec<u8> = layer.stores.iter().map(|store| store.zoom).collect();
-        validate_exact_zoom_band(&layer.layer, &actual_zooms, expected_base_zoom)?;
+        let zooms: Vec<u8> = layer.stores.iter().map(|store| store.zoom).collect();
+        validate_zoom_band(&layer.layer, &zooms, PUBLISHED_BASE_ZOOM)?;
     }
     validate_snapshots_common(snapshots)
 }
 
-/// Everything band-independent: source_id agreement with the layer registry,
+/// Everything the zoom band does not decide: source_id agreement with the layer registry,
 /// tile_px consistency across zoom stores, and the captured-snapshot fsck.
-/// Shared by the z2..z12 base contract and tier packs (band exactly [tier]).
 fn validate_snapshots_common(snapshots: &[LayerSnapshot]) -> Result<()> {
     for layer in snapshots {
         let first = layer
@@ -1136,66 +1000,6 @@ fn with_validated_store_snapshots<T>(
     with_store_snapshots_after_capture(store_root, only, timeout, validate_snapshots, body)
 }
 
-/// One immutable pack of a tier store: its zoom, pack id
-/// and the R4 cells whose z{tier} tiles this pack authoritatively covers.
-struct TierPack {
-    tier: u8,
-    pack: String,
-    coverage_r4: Vec<String>,
-    generation: GenerationContract,
-}
-
-impl TierPack {
-    /// The manifest layer token (= archive name stem) for one base layer.
-    fn token(&self, base_layer: &str) -> String {
-        format!("{base_layer}-z{}-{}", self.tier, self.pack)
-    }
-}
-
-/// Tier-aware wrapper: a tier root validates against the tier's exact zoom
-/// band `[tier]` (a tier store has no pyramid below its own zoom), then the
-/// snapshots are re-labelled with the pack's layer tokens so staging, the
-/// transaction marker and the manifest all carry `{layer}-z{tier}-{pack}`
-/// names while source_id/fsck validation ran against the BASE layer names.
-fn with_tier_validated_store_snapshots<T>(
-    store_root: &Path,
-    only: &[String],
-    tier_mode: &Option<TierPack>,
-    body: impl FnOnce(Vec<LayerSnapshot>) -> Result<T>,
-) -> Result<T> {
-    match tier_mode {
-        None => with_validated_store_snapshots(store_root, only, STORE_LOCK_WAIT, body),
-        Some(tier_pack) => {
-            let tier = tier_pack.tier;
-            with_store_snapshots_after_capture(
-                store_root,
-                only,
-                STORE_LOCK_WAIT,
-                move |snapshots| {
-                    for layer in snapshots {
-                        let actual_zooms: Vec<u8> =
-                            layer.stores.iter().map(|store| store.zoom).collect();
-                        if actual_zooms != [tier] {
-                            bail!(
-                                "{}: tier root zoom set {:?}, expected exactly [{tier}]",
-                                layer.layer,
-                                actual_zooms
-                            );
-                        }
-                    }
-                    validate_snapshots_common(snapshots)
-                },
-                |mut snapshots| {
-                    for snapshot in &mut snapshots {
-                        snapshot.layer = tier_pack.token(&snapshot.layer);
-                    }
-                    body(snapshots)
-                },
-            )
-        }
-    }
-}
-
 /// Testable phase boundary: `body` is unreachable unless validation succeeds, and every writer
 /// domain remains excluded until both callbacks return.
 fn with_store_snapshots_after_capture<T>(
@@ -1254,9 +1058,6 @@ struct CliArguments {
     out_dir: PathBuf,
     build: String,
     layers: Vec<String>,
-    tier: Option<u8>,
-    pack: Option<String>,
-    coverage_r4: Option<PathBuf>,
     generation_contract: PathBuf,
 }
 
@@ -1273,40 +1074,12 @@ fn next_cli_value(arguments: &mut impl Iterator<Item = String>, flag: &str) -> R
 fn parse_cli_arguments(arguments: impl IntoIterator<Item = String>) -> Result<CliArguments> {
     let mut positional = Vec::new();
     let mut layers = Vec::new();
-    let mut tier = None;
-    let mut pack = None;
-    let mut coverage_r4 = None;
     let mut generation_contract = None;
     let mut arguments = arguments.into_iter();
 
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--layer" => layers.push(next_cli_value(&mut arguments, "--layer")?),
-            "--tier" => {
-                if tier.is_some() {
-                    bail!("--tier may be supplied only once");
-                }
-                tier = Some(
-                    next_cli_value(&mut arguments, "--tier")?
-                        .parse()
-                        .context("--tier must be an integer zoom")?,
-                );
-            }
-            "--pack" => {
-                if pack.is_some() {
-                    bail!("--pack may be supplied only once");
-                }
-                pack = Some(next_cli_value(&mut arguments, "--pack")?);
-            }
-            "--coverage-r4" => {
-                if coverage_r4.is_some() {
-                    bail!("--coverage-r4 may be supplied only once");
-                }
-                coverage_r4 = Some(PathBuf::from(next_cli_value(
-                    &mut arguments,
-                    "--coverage-r4",
-                )?));
-            }
             "--generation-contract" => {
                 if generation_contract.is_some() {
                     bail!("--generation-contract may be supplied only once");
@@ -1324,8 +1097,7 @@ fn parse_cli_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Cl
     let [store_root, out_dir, build]: [String; 3] = positional.try_into().map_err(|_| {
         anyhow::anyhow!(
             "usage: tile-store-pack <store-root> <out-dir> <build-id (b<N>)> \
-             --generation-contract <file> [--layer L]... \
-             [--tier <zoom> --pack p<N> --coverage-r4 <file>]"
+             --generation-contract <file> [--layer L]..."
         )
     })?;
     if !build.starts_with('b')
@@ -1339,37 +1111,11 @@ fn parse_cli_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Cl
     let generation_contract =
         generation_contract.context("--generation-contract is mandatory for publication")?;
 
-    let tier_shape = (tier.is_some(), pack.is_some(), coverage_r4.is_some());
-    let tier = match tier_shape {
-        (false, false, false) => None,
-        (true, true, true) => {
-            let tier_zoom = tier.expect("tier shape says tier is present");
-            if !(13..=18).contains(&tier_zoom) {
-                bail!("--tier {tier_zoom} out of range 13..=18");
-            }
-            let pack_id = pack.as_ref().expect("tier shape says pack is present");
-            if !pack_id.starts_with('p')
-                || pack_id.len() < 2
-                || !pack_id[1..].bytes().all(|byte| byte.is_ascii_digit())
-            {
-                bail!("--pack must be p<N>, got {pack_id:?}");
-            }
-            if !layers.is_empty() {
-                bail!("--tier packs the whole tier store set; --layer is not combinable");
-            }
-            Some(tier_zoom)
-        }
-        _ => bail!("--tier, --pack and --coverage-r4 must be given together"),
-    };
-
     Ok(CliArguments {
         store_root: PathBuf::from(store_root),
         out_dir: PathBuf::from(out_dir),
         build,
         layers,
-        tier,
-        pack,
-        coverage_r4,
         generation_contract,
     })
 }
@@ -1377,32 +1123,13 @@ fn parse_cli_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Cl
 fn main() -> Result<()> {
     // usage: tile-store-pack <store-root> <out-dir> <build-id>
     //        --generation-contract <file> [--layer L]...
-    //        tile-store-pack <tier-root> <out-dir> <build-id> --tier 13
-    //        --pack p001 --coverage-r4 <file> --generation-contract <file>
     // With --layer, only the named layers are packed and the manifest MERGES:
-    // untouched layers keep their previous archive + build id — a road-only
-    // republish costs one layer's Brotli, not all eight (owner ask 2026-07-09).
-    // With --tier, the root is a tier root (zoom band
-    // exactly [tier]); every published layer packs into an immutable PACK —
-    // archives named `{layer}-z{tier}-{pack}.{build}.pmtiles`, manifest layer
-    // entries under those tokens (ordinary entries: GC/recovery/readiness
-    // apply unchanged) plus one `tiers.z{tier}.packs[]` index entry carrying
-    // the pack's R4 coverage for the serving resolver.
+    // untouched layers keep their previous archive, build id AND generation —
+    // a road-only republish costs one layer's Brotli, not all eight (owner ask
+    // 2026-07-09), and the seven it did not repaint keep saying which run
+    // painted them.
     let cli = parse_cli_arguments(std::env::args().skip(1))?;
-    let slot = cli
-        .tier
-        .map_or(PublicationSlot::Base, PublicationSlot::Tier);
-    let generation = read_generation_contract(&cli.generation_contract, slot)?;
-    let tier_mode = match (cli.tier, cli.pack.as_ref(), cli.coverage_r4.as_ref()) {
-        (None, None, None) => None,
-        (Some(tier), Some(pack), Some(coverage)) => Some(TierPack {
-            tier,
-            pack: pack.clone(),
-            coverage_r4: read_coverage_r4(coverage)?,
-            generation: generation.clone(),
-        }),
-        _ => bail!("invalid publication argument combination"),
-    };
+    let generation = read_layer_generation(&cli.generation_contract)?;
     let store_root = cli.store_root;
     let out_dir = cli.out_dir;
     let build = cli.build;
@@ -1418,15 +1145,14 @@ fn main() -> Result<()> {
     let _pack_lock = acquire_pack_lock(&out_dir, STORE_LOCK_WAIT)?;
     recover_pack_transactions(&out_dir)?;
     cleanup_orphan_pack_temps(&out_dir)?;
-    if partial || tier_mode.is_some() {
+    if partial {
         // Preflight the merge base BEFORE any (immutable) archive is written —
         // discovering a missing manifest after the pack leaves undeletable
         // {layer}.{build}.pmtiles behind and burns the build id (/gg Codex).
-        // A tier pack always merges (it never retires base layers).
         let manifest = out_dir.join("current.json");
         if !manifest.exists() {
             bail!(
-                "partial/tier pack needs an existing {} to merge over — run a full pack first",
+                "partial pack needs an existing {} to merge over — run a full pack first",
                 manifest.display()
             );
         }
@@ -1439,62 +1165,22 @@ fn main() -> Result<()> {
         // hours writing a new immutable archive. Selected layers are replaced
         // by fresh, post-hash proofs below.
         validate_manifest_layers(&out_dir, previous_layers, Some(&only))?;
-        if partial && tier_mode.is_none() {
-            base_publication_preserves_tier_state(
-                previous
-                    .as_object()
-                    .context("current.json is not an object")?,
-                &generation,
-                true,
-            )?;
-        }
-        if let Some(tier_pack) = &tier_mode {
-            let base_generation = validate_existing_base_generation(
-                previous
-                    .as_object()
-                    .context("current.json is not an object")?,
-            )?;
-            validate_tier_generation_anchor(&base_generation, &tier_pack.generation)?;
-            // Pack ids are immutable like archives: re-publishing p001 must
-            // fail loudly, never replace coverage in place.
-            let existing = previous
-                .get("tiers")
-                .and_then(|tiers| tiers.get(format!("z{}", tier_pack.tier)))
-                .and_then(|entry| entry.get("packs"))
-                .and_then(|packs| packs.as_array());
-            if existing.is_some_and(|packs| {
-                packs.iter().any(|pack| {
-                    pack.get("pack").and_then(|id| id.as_str()) == Some(&tier_pack.pack)
-                })
-            }) {
-                bail!(
-                    "tier z{} pack {} already published — packs are immutable, pick the next id",
-                    tier_pack.tier,
-                    tier_pack.pack
-                );
-            }
-        }
+        validate_carried_generations(previous_layers, &only, generation.dataset_year)?;
     }
-    with_tier_validated_store_snapshots(&store_root, &only, &tier_mode, |snapshots| {
+    with_validated_store_snapshots(&store_root, &only, STORE_LOCK_WAIT, |snapshots| {
         eprintln!(
             "pack {build}: {} layers{} → {}",
             snapshots.len(),
-            match (&tier_mode, partial) {
-                (Some(t), _) => format!(" (tier z{} pack {})", t.tier, t.pack),
-                (None, true) => " (partial — manifest merges)".to_string(),
-                (None, false) => String::new(),
+            if partial {
+                " (partial — manifest merges)"
+            } else {
+                ""
             },
             out_dir.display()
         );
 
-        let results = pack_snapshots_transactionally(
-            snapshots,
-            &out_dir,
-            &build,
-            partial,
-            &generation,
-            &tier_mode,
-        )?;
+        let results =
+            pack_snapshots_transactionally(snapshots, &out_dir, &build, partial, &generation)?;
         // Deletion no longer happens here. Per-environment pins (`current.{env}.json`) mean a
         // prod pointer can legitimately lag dev by many publishes; this pack's old
         // "keep new+previous" retention would 404 a stale-but-still-live pin the moment TWO
@@ -1515,8 +1201,7 @@ fn pack_snapshots_transactionally(
     out_dir: &Path,
     build: &str,
     partial: bool,
-    generation: &GenerationContract,
-    tier_mode: &Option<TierPack>,
+    generation: &LayerGeneration,
 ) -> Result<Vec<LayerResult>> {
     // Finish every expensive archive under a hidden name before exposing even the first final
     // name. Nesting layer fan-out and each layer's Rayon prefetch deadlocks at one pool thread,
@@ -1534,7 +1219,7 @@ fn pack_snapshots_transactionally(
             .map(StagedLayerResult::publish)
             .collect::<Result<_>>()?;
         results.sort_by(|left, right| left.layer.cmp(&right.layer));
-        write_manifest(out_dir, build, &results, partial, generation, tier_mode)?;
+        write_manifest(out_dir, build, &results, partial, generation)?;
         Ok(results)
     })();
 
@@ -1724,84 +1409,60 @@ fn sha256_file(path: &Path) -> Result<(String, u64, PublisherProof)> {
 
 /// `current.json`, written last, tmp + atomic rename: the pointer flip. Readers
 /// (Fastify, publish/rsync tooling, rollback) treat THIS as the single truth.
-/// Every layer entry carries its OWN `build` — a partial pack merges over the
-/// previous manifest, so untouched layers keep serving their existing archives
-/// (the per-layer split finally pays off: one-layer republish, one-layer cost).
+///
+/// The manifest has exactly three top-level keys — `build`, `created_unix`, `layers` — and is
+/// rebuilt from scratch on every publish rather than merged key-by-key over the previous one.
+/// That is what retires the base-plus-tier top level for good: a `generation`,
+/// `line_model_role_sha256`, `tiers` or `qualification_closure` left by an older publisher is
+/// dropped instead of carried forward, and the server refuses any manifest that still has one
+/// (`server/src/runtime-readiness.ts`, RETIRED_MANIFEST_FIELDS).
+///
+/// Identity lives one level down, in the layer entries: each carries its own `build` and its
+/// own `generation`. A partial pack merges over the previous manifest, so untouched layers
+/// keep serving their existing archives, painted by an older run, described by that run's
+/// generation — the mixed publication is the steady state, and it is what makes a one-layer
+/// republish cost one layer.
 fn write_manifest(
     out_dir: &Path,
     build: &str,
     results: &[LayerResult],
     partial: bool,
-    generation: &GenerationContract,
-    tier_mode: &Option<TierPack>,
+    generation: &LayerGeneration,
 ) -> Result<()> {
     let created_unix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let path = out_dir.join("current.json");
 
-    // The previous manifest, when one exists. Unknown top-level keys are carried forward, but
-    // refinement state belongs to one exact base generation and is removed atomically when a
-    // full base publish starts another generation (including legacy -> fenced migration).
-    let previous: Option<serde_json::Map<String, serde_json::Value>> = if path.exists() {
-        Some(
-            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&path)?)?
-                .as_object()
-                .cloned()
-                .context("current.json is not an object")?,
-        )
+    // A FULL pack retires every previous entry (a dropped layer cannot linger); a PARTIAL
+    // pack seeds from the previous entries and overwrites only what it repacked.
+    let mut layers: serde_json::Map<String, serde_json::Value> = if partial {
+        let previous: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).with_context(|| {
+                format!(
+                    "partial pack needs an existing {} to merge over",
+                    path.display()
+                )
+            })?)?;
+        previous
+            .get("layers")
+            .and_then(|value| value.as_object())
+            .context("current.json has no layers object")?
+            .clone()
     } else {
-        None
+        serde_json::Map::new()
     };
-    if (partial || tier_mode.is_some()) && previous.is_none() {
-        bail!("partial/tier pack needs an existing current.json to merge over");
-    }
-    let slot = tier_mode
-        .as_ref()
-        .map_or(PublicationSlot::Base, |tier_pack| {
-            PublicationSlot::Tier(tier_pack.tier)
-        });
-    validate_generation_contract_for_slot(generation.value.clone(), slot)
-        .context("publication generation contract does not match its manifest slot")?;
-    let preserve_tier_state = match (&previous, tier_mode) {
-        (Some(previous), None) => {
-            base_publication_preserves_tier_state(previous, generation, partial)?
-        }
-        (Some(_), Some(_)) => true,
-        (None, _) => false,
-    };
-
-    // Seed layer entries: a FULL z12 pack retires the base layers it rebuilds
-    // (so a dropped layer cannot linger). It retains tier tokens only for the exact same base
-    // generation. Partial and tier packs seed everything after their generation preflight.
-    let mut layers: serde_json::Map<String, serde_json::Value> = match &previous {
-        Some(prev) => {
-            let prev_layers = prev
-                .get("layers")
-                .and_then(|l| l.as_object())
-                .context("current.json has no layers object")?;
-            if partial || tier_mode.is_some() {
-                prev_layers.clone()
-            } else if preserve_tier_state {
-                prev_layers
-                    .iter()
-                    .filter(|(name, _)| parse_tier_token(name).is_some())
-                    .map(|(name, value)| (name.clone(), value.clone()))
-                    .collect()
-            } else {
-                serde_json::Map::new()
-            }
-        }
-        None => serde_json::Map::new(),
-    };
-    for r in results {
-        let proof = &r.publisher_proof;
+    let repacked: Vec<String> = results.iter().map(|result| result.layer.clone()).collect();
+    validate_carried_generations(&layers, &repacked, generation.dataset_year)?;
+    for result in results {
+        let proof = &result.publisher_proof;
         layers.insert(
-            r.layer.clone(),
+            result.layer.clone(),
             serde_json::json!({
-                "file": r.file, "build": build, "sha256": r.sha256,
-                "tiles": r.tiles, "bytes": r.bytes,
+                "file": result.file, "build": build, "sha256": result.sha256,
+                "tiles": result.tiles, "bytes": result.bytes,
+                "generation": generation.value,
                 "publisher_proof": {
                     "schema": PUBLISHER_PROOF_SCHEMA,
-                    "sha256": r.sha256,
+                    "sha256": result.sha256,
                     "dev": proof.dev.to_string(),
                     "ino": proof.ino.to_string(),
                     "size": proof.size.to_string(),
@@ -1815,74 +1476,12 @@ fn write_manifest(
     // atomic manifest flip. This closes the partial-pack preflight race.
     validate_manifest_layers(out_dir, &layers, None)?;
 
-    // The manifest object: previous unknown keys first, then the keys this
-    // packer owns. A tier pack additionally upserts its index entry under
-    // `tiers.z{N}.packs[]` — coverage for the serving resolver; the archives
-    // themselves are protected by their ordinary `layers` entries above.
-    let mut manifest = previous.unwrap_or_default();
-    if tier_mode.is_none() {
-        if !preserve_tier_state {
-            manifest.remove("tiers");
-            manifest.remove("qualification_closure");
-        }
-        manifest.insert("generation".into(), generation.value.clone());
-        manifest.insert(
-            "line_model_role_sha256".into(),
-            serde_json::json!(generation.line_model_role_sha256),
-        );
-    }
-    manifest.insert("build".into(), serde_json::json!(build));
-    manifest.insert("created_unix".into(), serde_json::json!(created_unix));
-    manifest.insert("layers".into(), serde_json::Value::Object(layers));
-    if let Some(tier_pack) = tier_mode {
-        let base_generation = validate_existing_base_generation(&manifest)?;
-        validate_tier_generation_anchor(&base_generation, &tier_pack.generation)?;
-        if tier_pack.generation.value != generation.value {
-            bail!("tier generation differs from the publication generation input");
-        }
-        if tier_pack.coverage_r4.is_empty()
-            || tier_pack
-                .coverage_r4
-                .windows(2)
-                .any(|pair| pair[0] >= pair[1])
-        {
-            bail!("tier coverage must be non-empty, sorted, and unique");
-        }
-        let tiers = manifest
-            .entry("tiers")
-            .or_insert_with(|| serde_json::json!({}))
-            .as_object_mut()
-            .context("current.json tiers is not an object")?;
-        let tier_entry = tiers
-            .entry(format!("z{}", tier_pack.tier))
-            .or_insert_with(|| serde_json::json!({ "packs": [] }))
-            .as_object_mut()
-            .context("tier entry is not an object")?;
-        let packs = tier_entry
-            .entry("packs")
-            .or_insert_with(|| serde_json::json!([]))
-            .as_array_mut()
-            .context("tier packs is not an array")?;
-        if packs
-            .iter()
-            .any(|p| p.get("pack").and_then(|id| id.as_str()) == Some(&tier_pack.pack))
-        {
-            bail!(
-                "tier z{} pack {} already in manifest — packs are immutable",
-                tier_pack.tier,
-                tier_pack.pack
-            );
-        }
-        packs.push(serde_json::json!({
-            "pack": tier_pack.pack,
-            "build": build,
-            "created_unix": created_unix,
-            "coverage_r4": tier_pack.coverage_r4,
-            "layers": results.iter().map(|r| r.layer.clone()).collect::<Vec<_>>(),
-            "generation": tier_pack.generation.value,
-        }));
-    }
-    let json = serde_json::Value::Object(manifest).to_string();
+    let manifest = serde_json::json!({
+        "build": build,
+        "created_unix": created_unix,
+        "layers": layers,
+    });
+    let json = manifest.to_string();
 
     // Build-unique temp name: two concurrent packers must not clobber each
     // other's staged manifest (the rename itself is last-writer-wins, atomic).
@@ -1905,11 +1504,20 @@ mod tests {
     use tile_painter::grid::TILE_PX;
     use tile_painter::tile_store::{
         ingest_store_lock_path, master_store_lock_path, zoom_store_lock_path, StoreFileLock,
-        TileCodec, TileStore, REBUILD_INCOMPLETE_MARKER,
+        TileCodec, TileStore, PUBLISHED_MIN_ZOOM, REBUILD_INCOMPLETE_MARKER,
     };
     use tile_painter::wire_hm3::{self, NO_DATA, SOURCE_ID_RAIL, SOURCE_ID_ROAD};
 
     static PACK_TEST_SCRATCH_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Base zoom of the synthetic stores below. Deliberately NOT `PUBLISHED_BASE_ZOOM`:
+    /// a z13 store's dense index alone is 1 GiB per layer to create and scan, and what
+    /// these tests exercise — staging, locks, transaction recovery, the manifest merge —
+    /// is band-independent, so they call `validate_snapshots_common`. The published band
+    /// itself is proven by `tile_store::validate_zoom_band`'s own test, and one
+    /// end-to-end publication at the real z13 band lives in
+    /// `packed_manifest_is_accepted_by_the_server_serving_contract`.
+    const TEST_BASE_ZOOM: u8 = 6;
 
     /// Owns one unique scratch tree while preventing production-sized store
     /// preallocation from exhausting the shared test filesystem. Every first
@@ -1965,9 +1573,9 @@ mod tests {
         let mut cells = vec![NO_DATA; TILE_PX * TILE_PX];
         cells[10] = value;
         let blob = wire_hm3::encode_tile_bytes(&cells, source_id)?;
-        for zoom in PUBLISHED_MIN_ZOOM..=6 {
+        for zoom in PUBLISHED_MIN_ZOOM..=TEST_BASE_ZOOM {
             let store = TileStore::create(&layer_dir, zoom, source_id, TILE_PX as u16)?;
-            if zoom == 6 {
+            if zoom == TEST_BASE_ZOOM {
                 store.put_blob(1, 1, TileCodec::BrotliHm3, &blob)?;
             }
             store.sync_all()?;
@@ -1981,87 +1589,30 @@ mod tests {
         create_one_tile_layer_store(store_root, "road", SOURCE_ID_ROAD, value)
     }
 
-    /// A tier layer store: exactly one z{tier} container (no pyramid band).
-    fn create_one_tile_tier_store(
-        tier_root: &Path,
-        layer: &str,
-        source_id: u8,
-        tier: u8,
-        value: u8,
-    ) -> Result<PathBuf> {
-        let layer_dir = tier_root.join(layer);
-        let mut cells = vec![NO_DATA; TILE_PX * TILE_PX];
-        cells[10] = value;
-        let blob = wire_hm3::encode_tile_bytes(&cells, source_id)?;
-        let store = TileStore::create(&layer_dir, tier, source_id, TILE_PX as u16)?;
-        store.put_blob(4424, 2774, TileCodec::BrotliHm3, &blob)?;
-        store.sync_all()?;
-        drop(store);
-        release_test_store_extent_reservation(&layer_dir, tier)?;
-        Ok(layer_dir)
-    }
-
-    fn generation_fixture(slot: PublicationSlot) -> GenerationContract {
-        let base_generation_id = "1".repeat(GENERATION_ID_HEX_LENGTH);
-        let base_quality_profile_id = "2".repeat(GENERATION_ID_HEX_LENGTH);
-        let (
-            deployment,
-            zoom,
-            tier,
-            generation_id,
-            quality_profile_id,
-            quality_profile_name,
-            line_model_role_sha256,
-        ) = match slot {
-            PublicationSlot::Base => (
-                "base".to_string(),
-                12u64,
-                String::new(),
-                base_generation_id.clone(),
-                base_quality_profile_id.clone(),
-                "base-profile".to_string(),
-                "4".repeat(GENERATION_ID_HEX_LENGTH),
-            ),
-            PublicationSlot::Tier(tier) => {
-                let tier_name = format!("z{tier}");
-                (
-                    tier_name.clone(),
-                    u64::from(tier),
-                    tier_name,
-                    "5".repeat(GENERATION_ID_HEX_LENGTH),
-                    "6".repeat(GENERATION_ID_HEX_LENGTH),
-                    "tier-profile".to_string(),
-                    "7".repeat(GENERATION_ID_HEX_LENGTH),
-                )
-            }
-        };
+    /// One layer generation in the shape `server/src/generation-contract.mjs` defines.
+    /// The identity hashes are placeholders: nothing in the packer derives anything from
+    /// them, and `packed_manifest_is_accepted_by_the_server_serving_contract` covers the
+    /// real ones. `extra_quality_evidence` proves the value reaches the manifest verbatim.
+    fn generation_fixture(dataset_year: u64) -> LayerGeneration {
         let value = serde_json::json!({
             "schema": 1,
-            "deployment": deployment,
-            "zoom": zoom,
-            "tier": tier,
-            "dataset_year": 2026,
-            "generation_id": generation_id,
-            "base_generation_id": base_generation_id,
+            "zoom": PUBLISHED_BASE_ZOOM,
+            "dataset_year": dataset_year,
+            "generation_id": "1".repeat(GENERATION_ID_HEX_LENGTH),
+            "quality_profile_id": "2".repeat(GENERATION_ID_HEX_LENGTH),
+            "quality_profile_name": "w2-z13-accepted-v1",
             "raster_generation_id": "3".repeat(RASTER_GENERATION_ID_HEX_LENGTH),
-            "quality_profile_id": quality_profile_id,
-            "quality_profile_name": quality_profile_name,
-            "base_quality_profile_id": base_quality_profile_id,
-            "base_quality_profile_name": "base-profile",
             "quality": {
-                "model_role_contract": {
-                    "line_model_role_sha256": line_model_role_sha256,
-                },
-            },
-            "extra_quality_evidence": {
-                "must_be_preserved": true,
+                "profile_name": "w2-z13-accepted-v1",
+                "dataset_year": dataset_year,
+                "extra_quality_evidence": { "must_be_preserved": true },
             },
         });
-        validate_generation_contract_for_slot(value, slot).expect("fixture is valid")
+        validate_layer_generation(value).expect("fixture is valid")
     }
 
     #[test]
-    fn publication_cli_requires_fence_and_rejects_crossed_shapes() {
+    fn publication_cli_requires_a_generation_and_nothing_else() {
         let parse = |arguments: &[&str]| {
             parse_cli_arguments(arguments.iter().map(|argument| (*argument).to_string()))
         };
@@ -2075,210 +1626,188 @@ mod tests {
                 "out",
                 "b1",
                 "--generation-contract",
-                "tier.json",
-                "--tier",
-                "13",
-                "--pack",
-                "p001",
-            ])
-            .is_err(),
-            "a tier publication must include coverage"
-        );
-        assert!(
-            parse(&[
-                "store",
-                "out",
-                "b1",
-                "--generation-contract",
-                "tier.json",
-                "--tier",
-                "13",
-                "--pack",
-                "p001",
-                "--coverage-r4",
-                "coverage.txt",
-                "--layer",
-                "road",
-            ])
-            .is_err(),
-            "tier publication cannot be narrowed to one layer"
-        );
-        assert!(
-            parse(&[
-                "store",
-                "out",
-                "b1",
-                "--generation-contract",
-                "base.json",
+                "generation.json",
                 "--unknown",
             ])
             .is_err(),
             "unknown options must not become positional paths"
         );
-        let base = parse(&[
+        assert!(
+            parse(&[
+                "store",
+                "out",
+                "b1",
+                "--generation-contract",
+                "generation.json",
+                "--tier",
+                "13",
+            ])
+            .is_err(),
+            "the retired tier flags are refused, not ignored"
+        );
+        let partial = parse(&[
             "store",
             "out",
             "b1",
             "--generation-contract",
-            "base.json",
+            "generation.json",
             "--layer",
             "road",
         ])
-        .expect("fenced base CLI shape");
-        assert_eq!(base.tier, None);
-        assert_eq!(base.layers, ["road"]);
-        let tier = parse(&[
-            "store",
-            "out",
-            "b2",
-            "--tier",
-            "13",
-            "--pack",
-            "p001",
-            "--coverage-r4",
-            "coverage.txt",
-            "--generation-contract",
-            "tier.json",
-        ])
-        .expect("tier CLI shape");
-        assert_eq!(tier.tier, Some(13));
-        assert_eq!(tier.pack.as_deref(), Some("p001"));
+        .expect("partial publication CLI shape");
+        assert_eq!(partial.layers, ["road"]);
+        assert_eq!(partial.build, "b1");
     }
 
     #[test]
-    fn generation_contract_slot_binding_rejects_crossed_payloads() {
-        let base = generation_fixture(PublicationSlot::Base);
-        let tier = generation_fixture(PublicationSlot::Tier(13));
-        assert!(
-            validate_generation_contract_for_slot(base.value.clone(), PublicationSlot::Tier(13))
-                .is_err(),
-            "base contract cannot enter a tier pack"
+    fn generation_contract_is_pinned_to_the_world_zoom() {
+        let valid = generation_fixture(2026);
+        assert_eq!(valid.dataset_year, 2026);
+        assert_eq!(
+            valid.value["quality"]["extra_quality_evidence"]["must_be_preserved"],
+            true
         );
-        assert!(
-            validate_generation_contract_for_slot(tier.value.clone(), PublicationSlot::Base)
-                .is_err(),
-            "tier contract cannot become the top-level base generation"
-        );
-        let mut crossed_tier = tier.value.clone();
-        crossed_tier
-            .as_object_mut()
-            .expect("fixture object")
-            .insert(
-                "base_generation_id".to_string(),
-                serde_json::json!("8".repeat(GENERATION_ID_HEX_LENGTH)),
+
+        // The retired base-plus-tier publisher painted a tier at its own zoom; a contract
+        // that names any zoom but the world's cannot describe what this packer just packed.
+        for zoom in [12, 14] {
+            let mut other_zoom = valid.value.clone();
+            other_zoom["zoom"] = serde_json::json!(zoom);
+            assert!(
+                validate_layer_generation(other_zoom).is_err(),
+                "z{zoom} is not the zoom the world is painted at"
             );
-        let crossed_tier =
-            validate_generation_contract_for_slot(crossed_tier, PublicationSlot::Tier(13))
-                .expect("crossed fixture still has a valid tier shape");
-        assert!(
-            validate_tier_generation_anchor(&base, &crossed_tier).is_err(),
-            "tier contract cannot replace the current base anchor"
-        );
-        let mut missing_line = base.value.clone();
-        missing_line
+        }
+
+        let mut short_raster = valid.value.clone();
+        short_raster["raster_generation_id"] = serde_json::json!("abc");
+        assert!(validate_layer_generation(short_raster).is_err());
+
+        // The packer consumes these two duplicated values before staging: both must agree
+        // with their quality-payload copy, or it would write archives the server refuses.
+        let mut split_profile = valid.value.clone();
+        split_profile["quality"]["profile_name"] = serde_json::json!("another-profile");
+        assert!(validate_layer_generation(split_profile).is_err());
+
+        let mut split_year = valid.value.clone();
+        split_year["quality"]["dataset_year"] = serde_json::json!(2025);
+        assert!(validate_layer_generation(split_year).is_err());
+
+        let mut no_quality = valid.value.clone();
+        no_quality
             .as_object_mut()
             .expect("fixture object")
-            .get_mut("quality")
-            .and_then(serde_json::Value::as_object_mut)
-            .expect("quality object")
-            .get_mut("model_role_contract")
-            .and_then(serde_json::Value::as_object_mut)
-            .expect("model-role object")
-            .remove("line_model_role_sha256");
+            .remove("quality");
+        assert!(validate_layer_generation(no_quality).is_err());
+
+        // A leftover field of the retired base-plus-tier contract. The server requires an
+        // exact key set, so accepting it here would pack a world it then refuses to serve.
+        let mut with_base_anchor = valid.value.clone();
+        with_base_anchor["base_generation_id"] =
+            serde_json::json!("4".repeat(GENERATION_ID_HEX_LENGTH));
+        let error = validate_layer_generation(with_base_anchor)
+            .err()
+            .expect("a retired anchor field must be refused");
         assert!(
-            validate_generation_contract_for_slot(missing_line, PublicationSlot::Base).is_err(),
-            "the nested line role identity is required"
+            error.to_string().contains("expected exactly 8"),
+            "unexpected error: {error:#}"
         );
     }
 
     #[test]
-    fn base_generation_transition_preserves_only_exact_same_epoch() -> Result<()> {
-        let current = generation_fixture(PublicationSlot::Base);
-        let mut manifest = serde_json::json!({
-            "generation": current.value,
-            "line_model_role_sha256": current.line_model_role_sha256,
-            "layers": {},
-            "tiers": { "z13": { "packs": [] } },
-            "qualification_closure": {
-                "file": format!("qualification-{}.json", "a".repeat(64)),
-                "sha256": "a".repeat(64),
-            },
-        })
-        .as_object()
-        .cloned()
-        .context("fixture manifest is an object")?;
-        assert!(base_publication_preserves_tier_state(
-            &manifest, &current, false
-        )?);
-        assert!(base_publication_preserves_tier_state(
-            &manifest, &current, true
-        )?);
+    fn carry_forward_requires_a_fenced_entry_of_the_same_dataset_year() {
+        let generation = generation_fixture(2026);
+        let fenced =
+            |year: u64| serde_json::json!({ "generation": generation_fixture(year).value });
+        let layers: serde_json::Map<String, serde_json::Value> = [
+            ("road".to_string(), fenced(2026)),
+            ("rail".to_string(), fenced(2026)),
+        ]
+        .into_iter()
+        .collect();
+        validate_carried_generations(&layers, &[], generation.dataset_year).unwrap();
 
-        let mut next = current.clone();
-        next.generation_id = "9".repeat(GENERATION_ID_HEX_LENGTH);
-        next.base_generation_id = next.generation_id.clone();
-        next.value["generation_id"] = serde_json::json!(next.generation_id);
-        next.value["base_generation_id"] = serde_json::json!(next.base_generation_id);
-        assert!(!base_publication_preserves_tier_state(
-            &manifest, &next, false
-        )?);
-        assert!(base_publication_preserves_tier_state(&manifest, &next, true).is_err());
+        // A legacy entry has no generation at all. Readiness fences all-or-none, so merging
+        // one repacked layer over it would publish a manifest the server refuses.
+        let mut legacy = layers.clone();
+        legacy.insert(
+            "rail".to_string(),
+            serde_json::json!({ "file": "rail.b1.pmtiles" }),
+        );
+        assert!(
+            validate_carried_generations(&legacy, &[], generation.dataset_year)
+                .unwrap_err()
+                .to_string()
+                .contains("rail has no generation")
+        );
+        // …unless this very publication replaces it.
+        validate_carried_generations(&legacy, &["rail".to_string()], generation.dataset_year)
+            .unwrap();
 
-        manifest.remove("generation");
-        assert!(!base_publication_preserves_tier_state(
-            &manifest, &next, false
-        )?);
-        assert!(base_publication_preserves_tier_state(&manifest, &next, true).is_err());
-        Ok(())
+        let mut other_year = layers;
+        other_year.insert("rail".to_string(), fenced(2025));
+        assert!(
+            validate_carried_generations(&other_year, &[], generation.dataset_year)
+                .unwrap_err()
+                .to_string()
+                .contains("dataset year 2025")
+        );
     }
 
     #[test]
-    fn publication_inputs_are_safe_and_coverage_is_canonical() -> Result<()> {
+    fn publication_inputs_are_safe() -> Result<()> {
         let dir = tempdir()?;
         let generation_path = dir.path().join("generation.json");
         fs::write(
             &generation_path,
-            serde_json::to_vec(&generation_fixture(PublicationSlot::Base).value)?,
+            serde_json::to_vec(&generation_fixture(2026).value)?,
         )?;
-        assert!(read_generation_contract(&generation_path, PublicationSlot::Base).is_ok());
+        assert!(read_layer_generation(&generation_path).is_ok());
 
         let malformed = dir.path().join("malformed.json");
         fs::write(&malformed, b"{")?;
-        assert!(read_generation_contract(&malformed, PublicationSlot::Base).is_err());
+        assert!(read_layer_generation(&malformed).is_err());
         let array = dir.path().join("array.json");
         fs::write(&array, b"[]")?;
-        assert!(read_generation_contract(&array, PublicationSlot::Base).is_err());
+        assert!(read_layer_generation(&array).is_err());
         let directory = dir.path().join("directory.json");
         fs::create_dir(&directory)?;
-        assert!(read_generation_contract(&directory, PublicationSlot::Base).is_err());
+        assert!(read_layer_generation(&directory).is_err());
         #[cfg(unix)]
         {
             let symlink = dir.path().join("symlink.json");
             std::os::unix::fs::symlink(&generation_path, &symlink)?;
-            assert!(read_generation_contract(&symlink, PublicationSlot::Base).is_err());
+            assert!(read_layer_generation(&symlink).is_err());
         }
-
-        let coverage = dir.path().join("coverage.txt");
-        fs::write(&coverage, "841e355ffffffff\n841e309ffffffff\n")?;
-        assert_eq!(
-            read_coverage_r4(&coverage)?,
-            ["841e309ffffffff", "841e355ffffffff"]
-        );
-        fs::write(&coverage, "841e309ffffffff\n841e309ffffffff\n")?;
-        assert!(read_coverage_r4(&coverage).is_err());
         Ok(())
     }
 
+    /// The publication shape the server accepts, exercised through the real pack path:
+    /// a full pack fences all eight layers with the run's generation and owns the whole top
+    /// level, and a partial pack repacks one layer while carrying the other seven forward
+    /// with THEIR build and THEIR generation.
     #[test]
-    fn tier_pack_tokens_index_and_full_pack_preservation() -> Result<()> {
+    fn partial_pack_carries_untouched_layers_and_their_generations_forward() -> Result<()> {
         let dir = pack_test_scratch()?;
         let store_root = dir.path().join("store");
-        let tier_root = dir.path().join("z13").join("store");
         let out_dir = dir.path().join("pmtiles");
         fs::create_dir_all(&out_dir)?;
-        let base_generation = generation_fixture(PublicationSlot::Base);
 
-        // Base full pack b1 establishes the manifest a tier pack merges over.
+        // A manifest from the retired base-plus-tier publisher, in the way of the first pack.
+        fs::write(
+            out_dir.join("current.json"),
+            serde_json::json!({
+                "build": "b0",
+                "generation": { "zoom": 12 },
+                "line_model_role_sha256": "a".repeat(GENERATION_ID_HEX_LENGTH),
+                "tiers": { "z13": { "packs": [] } },
+                "qualification_closure": { "sha256": "b".repeat(GENERATION_ID_HEX_LENGTH) },
+                "layers": {},
+            })
+            .to_string(),
+        )?;
+
+        let first = generation_fixture(2026);
         let mut snapshots = Vec::new();
         for layer in PUBLISHED_LAYERS {
             let layer_dir = create_one_tile_layer_store(
@@ -2289,164 +1818,309 @@ mod tests {
             )?;
             snapshots.push(snapshot_test_layer(&layer_dir, layer)?);
         }
-        validate_snapshots_for_base(&snapshots, 6)?;
-        pack_snapshots_transactionally(snapshots, &out_dir, "b1", false, &base_generation, &None)?;
+        validate_snapshots_common(&snapshots)?;
+        pack_snapshots_transactionally(snapshots, &out_dir, "b1", false, &first)?;
 
-        // Tier pack b2: token archives + the tiers index entry.
-        let tier_generation = generation_fixture(PublicationSlot::Tier(13));
-        let tier_pack = TierPack {
-            tier: 13,
-            pack: "p001".to_string(),
-            coverage_r4: vec!["841e309ffffffff".to_string(), "841e355ffffffff".to_string()],
-            generation: tier_generation.clone(),
+        let read_manifest = || -> Result<serde_json::Value> {
+            Ok(serde_json::from_str(&fs::read_to_string(
+                out_dir.join("current.json"),
+            )?)?)
         };
-        let mut tier_snapshots = Vec::new();
+        let manifest = read_manifest()?;
+        let mut top_level: Vec<&str> = manifest
+            .as_object()
+            .context("manifest object")?
+            .keys()
+            .map(String::as_str)
+            .collect();
+        top_level.sort_unstable();
+        assert_eq!(
+            top_level,
+            ["build", "created_unix", "layers"],
+            "the retired top-level fields are dropped, not carried forward"
+        );
         for layer in PUBLISHED_LAYERS {
-            let layer_dir = create_one_tile_tier_store(
-                &tier_root,
-                layer,
-                expected_source_id(layer).context("published layer has a source id")?,
-                13,
-                41,
-            )?;
-            let mut snapshot = snapshot_test_layer(&layer_dir, layer)?;
-            let zooms: Vec<u8> = snapshot.stores.iter().map(|store| store.zoom).collect();
-            assert_eq!(zooms, [13], "tier store band is exactly [13]");
-            snapshot.layer = tier_pack.token(&snapshot.layer);
-            tier_snapshots.push(snapshot);
+            let entry = &manifest["layers"][layer];
+            assert_eq!(entry["build"], "b1");
+            assert_eq!(entry["generation"], first.value, "{layer} is fenced by b1");
+            assert_eq!(
+                entry["generation"]["quality"]["extra_quality_evidence"]["must_be_preserved"], true,
+                "{layer} carries the whole contract verbatim"
+            );
         }
+
+        // A partial republish of one layer against a NEWER generation.
+        let mut second = generation_fixture(2026);
+        second.value["generation_id"] = serde_json::json!("9".repeat(GENERATION_ID_HEX_LENGTH));
+        let second = validate_layer_generation(second.value)?;
         pack_snapshots_transactionally(
-            tier_snapshots,
+            vec![snapshot_test_layer(&store_root.join("road"), "road")?],
             &out_dir,
             "b2",
-            false,
-            &tier_generation,
-            &Some(tier_pack),
+            true,
+            &second,
         )?;
-
-        assert!(
-            out_dir.join("road-z13-p001.b2.pmtiles").exists(),
-            "tier archive published under the token name"
-        );
-        let manifest: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(out_dir.join("current.json"))?)?;
-        assert_eq!(manifest["generation"], base_generation.value);
-        assert_eq!(
-            manifest["generation"]["extra_quality_evidence"]["must_be_preserved"],
-            true
-        );
-        assert_eq!(
-            manifest["line_model_role_sha256"],
-            base_generation.line_model_role_sha256
-        );
-        assert_eq!(
-            manifest["layers"]["road-z13-p001"]["build"], "b2",
-            "tier token is an ordinary layers entry"
-        );
-        assert_eq!(
-            manifest["layers"]["road"]["build"], "b1",
-            "base layers untouched by the tier pack"
-        );
-        let pack0 = &manifest["tiers"]["z13"]["packs"][0];
-        assert_eq!(pack0["pack"], "p001");
-        assert_eq!(pack0["coverage_r4"][0], "841e309ffffffff");
-        assert_eq!(pack0["coverage_r4"][1], "841e355ffffffff");
-        assert_eq!(pack0["generation"], tier_generation.value);
-        assert_eq!(
-            pack0["generation"]["extra_quality_evidence"]["must_be_preserved"],
-            true
-        );
-        assert_eq!(
-            pack0["layers"].as_array().map(|l| l.len()),
-            Some(PUBLISHED_LAYERS.len()),
-            "index lists every packed token"
-        );
-
-        // Full base pack b3 must RETAIN tier entries and the tiers index.
-        let mut base_again = Vec::new();
-        for layer in PUBLISHED_LAYERS {
-            base_again.push(snapshot_test_layer(&store_root.join(layer), layer)?);
+        let manifest = read_manifest()?;
+        assert_eq!(manifest["build"], "b2");
+        assert_eq!(manifest["layers"]["road"]["build"], "b2");
+        assert_eq!(manifest["layers"]["road"]["generation"], second.value);
+        for layer in PUBLISHED_LAYERS.iter().filter(|layer| **layer != "road") {
+            let entry = &manifest["layers"][layer];
+            assert_eq!(entry["build"], "b1", "{layer} was not repacked");
+            assert_eq!(
+                entry["generation"], first.value,
+                "{layer} keeps the generation of the run that painted it"
+            );
+            assert_eq!(entry["file"], format!("{layer}.b1.pmtiles"));
         }
-        pack_snapshots_transactionally(base_again, &out_dir, "b3", false, &base_generation, &None)?;
-        let manifest: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(out_dir.join("current.json"))?)?;
-        assert_eq!(manifest["layers"]["road"]["build"], "b3");
-        assert_eq!(
-            manifest["layers"]["road-z13-p001"]["build"], "b2",
-            "full z12 pack preserves tier layer entries"
-        );
-        assert_eq!(
-            manifest["tiers"]["z13"]["packs"][0]["pack"], "p001",
-            "full z12 pack preserves the tiers index"
-        );
 
-        // A duplicate pack id is refused (packs are immutable).
-        let tier_dup = TierPack {
-            tier: 13,
-            pack: "p001".to_string(),
-            coverage_r4: vec!["841e309ffffffff".to_string()],
-            generation: tier_generation,
-        };
-        let mut dup_snapshots = Vec::new();
-        for layer in PUBLISHED_LAYERS {
-            let mut snapshot = snapshot_test_layer(&tier_root.join(layer), layer)?;
-            snapshot.layer = tier_dup.token(&snapshot.layer);
-            dup_snapshots.push(snapshot);
-        }
-        let err = pack_snapshots_transactionally(
-            dup_snapshots,
+        // One manifest is one dataset year: a partial pack cannot mix years.
+        let next_year = generation_fixture(2027);
+        let error = pack_snapshots_transactionally(
+            vec![snapshot_test_layer(&store_root.join("road"), "road")?],
             &out_dir,
-            "b4",
-            false,
-            &generation_fixture(PublicationSlot::Tier(13)),
-            &Some(tier_dup),
+            "b3",
+            true,
+            &next_year,
+        )
+        .err()
+        .context("a mixed-year partial pack must fail")?;
+        assert!(
+            error.to_string().contains("dataset year 2026"),
+            "unexpected error: {error:#}"
         );
-        assert!(err.is_err(), "duplicate tier pack id must fail");
-
-        // A full pack for a different base generation atomically retires every tier token
-        // and the index instead of relabeling old W2 bytes.
-        let mut next_base = base_generation.clone();
-        next_base.generation_id = "9".repeat(GENERATION_ID_HEX_LENGTH);
-        next_base.base_generation_id = next_base.generation_id.clone();
-        next_base.value["generation_id"] = serde_json::json!(next_base.generation_id);
-        next_base.value["base_generation_id"] = serde_json::json!(next_base.base_generation_id);
-        let mut next_snapshots = Vec::new();
-        for layer in PUBLISHED_LAYERS {
-            next_snapshots.push(snapshot_test_layer(&store_root.join(layer), layer)?);
-        }
-        pack_snapshots_transactionally(next_snapshots, &out_dir, "b5", false, &next_base, &None)?;
-        let manifest: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(out_dir.join("current.json"))?)?;
-        assert_eq!(manifest["generation"], next_base.value);
-        assert!(manifest.get("tiers").is_none());
-        assert!(manifest.get("qualification_closure").is_none());
-        assert!(manifest["layers"].get("road-z13-p001").is_none());
         Ok(())
     }
 
+    /// The one end-to-end publication in this suite: a synthetic store at the REAL published
+    /// band (z2..z13, one tile per layer) is packed, and the manifest it produces is handed
+    /// back to the serving contract that has to accept it.
+    ///
+    /// The per-layer generations are checked by the server's own module — `node` runs
+    /// `server/src/generation-contract.mjs` — so the zoom, the two identity hashes and the
+    /// published-profile semantics have exactly ONE owner and this packer cannot drift from
+    /// it silently. The manifest-level rules are asserted here, because their owner
+    /// (`server/src/runtime-readiness.ts`, `validatePmtilesManifest`) is TypeScript and not
+    /// importable by a bare `node`: all eight ALLOWED_LAYERS present, `<layer>.<build>.pmtiles`
+    /// file names agreeing with `entry.build`, `bytes` equal to the archive on disk, one
+    /// dataset year, and none of the four RETIRED_MANIFEST_FIELDS at the top level.
     #[test]
-    fn tier_token_parse_round_trip_and_rejects() {
+    fn packed_manifest_is_accepted_by_the_server_serving_contract() -> Result<()> {
+        let dir = pack_test_scratch()?;
+        let store_root = dir.path().join("store");
+        let out_dir = dir.path().join("pmtiles");
+        fs::create_dir_all(&out_dir)?;
+
+        let generation = server_generation_contract(dir.path(), 2026)?;
+        fs::write(
+            dir.path().join("generation.json"),
+            serde_json::to_vec(&generation)?,
+        )?;
+        let generation = read_layer_generation(&dir.path().join("generation.json"))?;
+
+        let mut snapshots = Vec::new();
+        for layer in PUBLISHED_LAYERS {
+            let layer_dir = create_published_band_layer_store(
+                &store_root,
+                layer,
+                expected_source_id(layer).context("published layer has a source id")?,
+            )?;
+            snapshots.push(snapshot_test_layer(&layer_dir, layer)?);
+        }
+        // The production validation path, band included — this is the z13 store contract.
+        validate_snapshots(&snapshots)?;
+        pack_snapshots_transactionally(snapshots, &out_dir, "b1", false, &generation)?;
+
+        let manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(out_dir.join("current.json"))?)?;
+        let manifest_object = manifest.as_object().context("manifest object")?;
+        assert_eq!(manifest_object["build"], "b1");
+        for retired in [
+            "generation",
+            "line_model_role_sha256",
+            "qualification_closure",
+            "tiers",
+        ] {
+            assert!(
+                !manifest_object.contains_key(retired),
+                "retired top-level field {retired} would make the server refuse the manifest"
+            );
+        }
+        let layers = manifest_object["layers"]
+            .as_object()
+            .context("manifest layers object")?;
+        assert_eq!(layers.len(), PUBLISHED_LAYERS.len());
+        for layer in PUBLISHED_LAYERS {
+            let entry = layers.get(*layer).context("every published layer")?;
+            assert_eq!(entry["file"], format!("{layer}.b1.pmtiles"));
+            assert_eq!(entry["build"], "b1");
+            assert_eq!(
+                entry["bytes"].as_u64(),
+                Some(fs::metadata(out_dir.join(format!("{layer}.b1.pmtiles")))?.len()),
+                "{layer} bytes must equal the archive on disk"
+            );
+            assert_eq!(
+                entry["generation"]["dataset_year"], 2026,
+                "one dataset year"
+            );
+            assert!(
+                entry["publisher_proof"]["schema"] == PUBLISHER_PROOF_SCHEMA,
+                "{layer} keeps the proof tile-store-fsck consumes"
+            );
+        }
+        // The server's own module reports back the zoom it accepted, so this asserts the
+        // Rust and JS world constants are the same number — no literal in between.
+        let verdict = validate_generations_with_server(dir.path(), &manifest)?;
         assert_eq!(
-            parse_tier_token("road-z13-p001"),
-            Some(("road", 13u8, "p001"))
+            verdict,
+            format!("VALID z{PUBLISHED_BASE_ZOOM}"),
+            "every layer generation must satisfy validatePublishedGenerationContract"
         );
-        assert_eq!(
-            parse_tier_token("aircraft-ground-z14-p2"),
-            Some(("aircraft-ground", 14u8, "p2"))
-        );
-        assert_eq!(parse_tier_token("road"), None, "base names are not tokens");
-        assert_eq!(
-            parse_tier_token("road-z12-p1"),
-            None,
-            "z12 is the base, never a tier"
-        );
-        assert_eq!(parse_tier_token("bogus-z13-p1"), None, "unknown base layer");
-        assert_eq!(
-            parse_tier_token("road-z13-q1"),
-            None,
-            "pack id must be p<N>"
-        );
-        assert_eq!(parse_tier_token("road-z13-p"), None, "pack id needs digits");
+        Ok(())
+    }
+
+    /// One layer store holding exactly the published band, one tile at the base paint.
+    fn create_published_band_layer_store(
+        store_root: &Path,
+        layer: &str,
+        source_id: u8,
+    ) -> Result<PathBuf> {
+        let layer_dir = store_root.join(layer);
+        let mut cells = vec![NO_DATA; TILE_PX * TILE_PX];
+        cells[10] = 44;
+        let blob = wire_hm3::encode_tile_bytes(&cells, source_id)?;
+        for zoom in PUBLISHED_MIN_ZOOM..=PUBLISHED_BASE_ZOOM {
+            let store = TileStore::create(&layer_dir, zoom, source_id, TILE_PX as u16)?;
+            if zoom == PUBLISHED_BASE_ZOOM {
+                store.put_blob(4424, 2774, TileCodec::BrotliHm3, &blob)?;
+            }
+            store.sync_all()?;
+            drop(store);
+            release_test_store_extent_reservation(&layer_dir, zoom)?;
+        }
+        Ok(layer_dir)
+    }
+
+    /// Absolute path of the serving contract module, from this crate's own location.
+    fn server_generation_contract_module() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../server/src/generation-contract.mjs")
+    }
+
+    fn run_node(script: &Path) -> Result<String> {
+        let output = std::process::Command::new("node")
+            .arg(script)
+            .output()
+            .context("run node over the server generation contract module")?;
+        if !output.status.success() {
+            bail!(
+                "node {} failed: {}",
+                script.display(),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    }
+
+    /// Build one publishable layer generation with the server's own code: `zoom` is its
+    /// exported `WORLD_BASE_ZOOM` and both identities are its `sha256Identity`, so nothing
+    /// about the identity rule is restated here. Only the `quality` payload is written by
+    /// this test, and its scorer ladder is the one `generation-contract.mjs` pins for
+    /// `w2-z13-accepted-v1` — a divergence fails this test rather than a production publish.
+    fn server_generation_contract(scratch: &Path, dataset_year: u64) -> Result<serde_json::Value> {
+        let quality = serde_json::json!({
+            "schema": 1,
+            "profile_name": "w2-z13-accepted-v1",
+            "product_commit": "1".repeat(40),
+            "dataset_year": dataset_year,
+            "model_role_contract": {
+                "schema": 1,
+                "line_model_role_sha256": "a".repeat(64),
+                "model_source_recipe_sha256": "b".repeat(64),
+                "numerical_selection_record_sha256": null,
+                "output_abi_version": 3,
+                "role_spec_sha256": "c".repeat(64),
+                "workers": {
+                    "gpu-surface": {
+                        "artifact_family": "surface-production",
+                        "binary": "gpu-surface",
+                        "model_role": "w2-merged",
+                        "resolved_role": "surface-w2-z13-accepted-v1",
+                        "selection_epoch": null,
+                    },
+                },
+            },
+            "numerical_environment": {},
+            "producer_requirements": { "worker_model_roles": { "gpu-surface": "w2-merged" } },
+            "scorer_contract": {
+                "bias_db_max": 0.5,
+                "presence_mismatch_percent_max": 0.25,
+                "quiet_floor_db": 10,
+                "threshold_percent_max": { "0.5": 20, "1": 1, "3": 0.01, "6": 0.001 },
+                "unified_threshold_db": 6,
+            },
+            "wave": "w2",
+        });
+        let script = scratch.join("build-generation.mjs");
+        fs::write(
+            &script,
+            format!(
+                r#"import {{ WORLD_BASE_ZOOM, sha256Identity, validatePublishedGenerationContract }}
+  from {module};
+const quality = {quality};
+const contract = {{
+  schema: 1,
+  zoom: WORLD_BASE_ZOOM,
+  dataset_year: {dataset_year},
+  raster_generation_id: '9fbc7172d03a8b94',
+  quality_profile_name: quality.profile_name,
+  quality_profile_id: sha256Identity(quality),
+  generation_id: '',
+  quality,
+}};
+contract.generation_id = sha256Identity({{
+  schema: contract.schema,
+  zoom: contract.zoom,
+  dataset_year: contract.dataset_year,
+  raster_generation_id: contract.raster_generation_id,
+  quality_profile_id: contract.quality_profile_id,
+  quality_profile_name: contract.quality_profile_name,
+}});
+validatePublishedGenerationContract(contract);
+process.stdout.write(JSON.stringify(contract));
+"#,
+                module = serde_json::to_string(&server_generation_contract_module())?,
+                quality = quality,
+            ),
+        )?;
+        Ok(serde_json::from_str(&run_node(&script)?)?)
+    }
+
+    /// Hand every layer entry's generation back to the server's published-contract
+    /// validator. Prints `VALID z<the server's own WORLD_BASE_ZOOM>`, or the first refusal.
+    fn validate_generations_with_server(
+        scratch: &Path,
+        manifest: &serde_json::Value,
+    ) -> Result<String> {
+        let script = scratch.join("validate-generations.mjs");
+        fs::write(
+            &script,
+            format!(
+                r#"import {{ WORLD_BASE_ZOOM, validatePublishedGenerationContract }} from {module};
+const manifest = {manifest};
+try {{
+  for (const [layer, entry] of Object.entries(manifest.layers)) {{
+    validatePublishedGenerationContract(entry.generation);
+  }}
+  process.stdout.write('VALID z' + WORLD_BASE_ZOOM);
+}} catch (error) {{
+  process.stdout.write(error.message);
+}}
+"#,
+                module = serde_json::to_string(&server_generation_contract_module())?,
+                manifest = manifest,
+            ),
+        )?;
+        run_node(&script)
     }
 
     fn snapshot_test_layer(layer_dir: &Path, layer: &str) -> Result<LayerSnapshot> {
@@ -2547,7 +2221,7 @@ mod tests {
         validate_manifest_entry(dir.path(), "total", &manifest_entry)?;
 
         // Hardlinking bumps ctime and nothing else. The proof must still validate, or one linked
-        // archive would block every later partial/tier pack that retains this layer.
+        // archive would block every later partial pack that retains this layer.
         fs::hard_link(&path, dir.path().join("total.b1.pmtiles.link"))?;
         validate_manifest_entry(dir.path(), "total", &manifest_entry)?;
 
@@ -2594,22 +2268,19 @@ mod tests {
     }
 
     #[test]
-    fn layer_shape_rejects_a_zoom_gap_and_cross_zoom_source_mismatch() -> Result<()> {
+    fn layer_shape_rejects_a_cross_zoom_source_mismatch() -> Result<()> {
         let dir = pack_test_scratch()?;
         let store_root = dir.path().join("tiles/2026/store");
         let layer_dir = create_one_tile_road_store(&store_root, 42)?;
 
+        // One level of the cascade belongs to another layer entirely. The zoom band alone
+        // cannot see this (it is proven separately by
+        // `tile_store::validate_zoom_band`); the source_id agreement can.
         fs::remove_file(layer_dir.join("z4.qtsi"))?;
         fs::remove_file(layer_dir.join("z4.qtsd"))?;
-        let gap = snapshot_test_layer(&layer_dir, "road")?;
-        assert!(validate_snapshots_for_base(&[gap], 6)
-            .unwrap_err()
-            .to_string()
-            .contains("expected exact"));
-
         TileStore::create(&layer_dir, 4, SOURCE_ID_RAIL, TILE_PX as u16)?.sync_all()?;
         let mixed = snapshot_test_layer(&layer_dir, "road")?;
-        assert!(validate_snapshots_for_base(&[mixed], 6)
+        assert!(validate_snapshots_common(&[mixed])
             .unwrap_err()
             .to_string()
             .contains("source_id"));
@@ -2620,12 +2291,12 @@ mod tests {
     fn layer_shape_rejects_an_internally_consistent_wrong_source_id() -> Result<()> {
         let dir = pack_test_scratch()?;
         let layer_dir = dir.path().join("tiles/2026/store/road");
-        for zoom in PUBLISHED_MIN_ZOOM..=6 {
+        for zoom in PUBLISHED_MIN_ZOOM..=TEST_BASE_ZOOM {
             TileStore::create(&layer_dir, zoom, SOURCE_ID_RAIL, TILE_PX as u16)?.sync_all()?;
         }
 
         let snapshot = snapshot_test_layer(&layer_dir, "road")?;
-        let error = validate_snapshots_for_base(&[snapshot], 6).unwrap_err();
+        let error = validate_snapshots_common(&[snapshot]).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -2700,7 +2371,7 @@ mod tests {
             Duration::from_secs(1),
             |snapshots| {
                 assert_eq!(snapshots.len(), 1 + TOTAL_INPUT_LAYERS.len());
-                validate_snapshots_for_base(snapshots, 6)
+                validate_snapshots_common(snapshots)
             },
             |_| {
                 body_called.set(true);
@@ -2729,7 +2400,7 @@ mod tests {
             &store_root,
             &only,
             Duration::from_secs(1),
-            |snapshots| validate_snapshots_for_base(snapshots, 6),
+            validate_snapshots_common,
             |snapshots| {
                 assert_eq!(snapshots.len(), 1);
                 assert_eq!(snapshots[0].layer, "total");
@@ -2737,19 +2408,6 @@ mod tests {
             },
         )?;
         Ok(())
-    }
-
-    #[test]
-    fn production_zoom_band_is_exactly_z2_through_z12() {
-        let exact: Vec<u8> = (PUBLISHED_MIN_ZOOM..=PUBLISHED_BASE_ZOOM).collect();
-        validate_exact_zoom_band("road", &exact, PUBLISHED_BASE_ZOOM).unwrap();
-
-        let missing_base: Vec<u8> = (PUBLISHED_MIN_ZOOM..PUBLISHED_BASE_ZOOM).collect();
-        assert!(validate_exact_zoom_band("road", &missing_base, PUBLISHED_BASE_ZOOM).is_err());
-
-        let mut stale_extra = exact.clone();
-        stale_extra.push(PUBLISHED_BASE_ZOOM + 1);
-        assert!(validate_exact_zoom_band("road", &stale_extra, PUBLISHED_BASE_ZOOM).is_err());
     }
 
     #[test]
@@ -2904,7 +2562,7 @@ mod tests {
                     .is_err(),
                     "a direct create/truncate must stay excluded during validation"
                 );
-                validate_snapshots_for_base(snapshots, 6)?;
+                validate_snapshots_common(snapshots)?;
                 validation_observed.set(true);
                 Ok(())
             },
@@ -2967,7 +2625,7 @@ mod tests {
             &store_root,
             &["road".to_string()],
             Duration::ZERO,
-            |snapshots| validate_snapshots_for_base(snapshots, 6),
+            validate_snapshots_common,
             |_| Ok(()),
         )?;
         Ok(())
@@ -2996,7 +2654,7 @@ mod tests {
         writer.sync_all()?;
         drop(writer);
 
-        validate_snapshots_for_base(std::slice::from_ref(&snapshot), 6)?;
+        validate_snapshots_common(std::slice::from_ref(&snapshot))?;
         let captured_blob = z6.store.get_hm3_by_entry(&entry)?;
         assert_eq!(wire_hm3::read_tile_bytes(&captured_blob)?[10], 42);
         let current = TileStore::open(&layer_dir, 6, false)?;
@@ -3024,7 +2682,7 @@ mod tests {
             &store_root,
             &["road".to_string()],
             Duration::from_secs(1),
-            |snapshots| validate_snapshots_for_base(snapshots, 6),
+            validate_snapshots_common,
             |mut snapshots| {
                 body_called.set(true);
                 stage_layer(snapshots.pop().unwrap(), &out_dir, "b1")?;
@@ -3074,14 +2732,13 @@ mod tests {
             )?;
             snapshots.push(snapshot_test_layer(&layer_dir, layer)?);
         }
-        validate_snapshots_for_base(&snapshots, 6)?;
+        validate_snapshots_common(&snapshots)?;
         pack_snapshots_transactionally(
             snapshots,
             &out_dir,
             "b7",
             false,
-            &generation_fixture(PublicationSlot::Base),
-            &None,
+            &generation_fixture(2026),
         )?;
 
         let exists = |f: &str| out_dir.join(f).exists();
@@ -3117,16 +2774,16 @@ mod tests {
         let mut cells = vec![NO_DATA; TILE_PX * TILE_PX];
         cells[10] = 70;
         let blob = wire_hm3::encode_tile_bytes(&cells, SOURCE_ID_ROAD)?;
-        for zoom in PUBLISHED_MIN_ZOOM..=6 {
+        for zoom in PUBLISHED_MIN_ZOOM..=TEST_BASE_ZOOM {
             let store = TileStore::create(&layer_dir, zoom, SOURCE_ID_ROAD, TILE_PX as u16)?;
-            if zoom >= 5 {
+            if zoom >= TEST_BASE_ZOOM - 1 {
                 store.put_blob(1, 1, TileCodec::BrotliHm3, &blob)?;
             }
             store.sync_all()?;
         }
 
         let snapshot = snapshot_test_layer(&layer_dir, "road")?;
-        validate_snapshots_for_base(std::slice::from_ref(&snapshot), 6)?;
+        validate_snapshots_common(std::slice::from_ref(&snapshot))?;
         let result = stage_layer(snapshot, &out_dir, "b1")?.publish()?;
         assert_eq!(result.tiles, 2);
         assert!(out_dir.join("road.b1.pmtiles").exists());
@@ -3148,10 +2805,10 @@ mod tests {
         let out_dir = dir.path().join("pmtiles");
         fs::create_dir_all(&out_dir)?;
 
-        for zoom in PUBLISHED_MIN_ZOOM..6 {
+        for zoom in PUBLISHED_MIN_ZOOM..TEST_BASE_ZOOM {
             TileStore::create(&layer_dir, zoom, SOURCE_ID_ROAD, TILE_PX as u16)?.sync_all()?;
         }
-        let store = TileStore::create(&layer_dir, 6, SOURCE_ID_ROAD, TILE_PX as u16)?;
+        let store = TileStore::create(&layer_dir, TEST_BASE_ZOOM, SOURCE_ID_ROAD, TILE_PX as u16)?;
         let mut cells_new = vec![NO_DATA; TILE_PX * TILE_PX];
         cells_new[10] = 88;
         let blob_new = wire_hm3::encode_tile_bytes(&cells_new, SOURCE_ID_ROAD)?;
@@ -3164,14 +2821,14 @@ mod tests {
         drop(store);
 
         let snapshot = snapshot_test_layer(&layer_dir, "road")?;
-        validate_snapshots_for_base(std::slice::from_ref(&snapshot), 6)?;
+        validate_snapshots_common(std::slice::from_ref(&snapshot))?;
         let result = stage_layer(snapshot, &out_dir, "b1")?.publish()?;
         assert_eq!(result.tiles, 2, "both codecs must ship");
         assert!(out_dir.join("road.b1.pmtiles").exists());
 
         // `stage_layer`'s own ship-out call is `TileStore::get_hm3_by_entry` — reopen the store
         // and call it the same way to confirm what actually got fed to the pmtiles writer.
-        let reopened = TileStore::open(&layer_dir, 6, false)?;
+        let reopened = TileStore::open(&layer_dir, TEST_BASE_ZOOM, false)?;
         assert_eq!(
             reopened.get_hm3(3, 4)?.unwrap(),
             blob_new,

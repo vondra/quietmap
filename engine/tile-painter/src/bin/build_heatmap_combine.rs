@@ -42,7 +42,9 @@ use tile_painter::pyramid::{
     build_pyramid_with_existing_rebuild_fence, get_cells_lenient, rebuild_scope_fingerprint,
     require_incremental_pyramid_levels, scope_from_args, RebuildScope,
 };
-use tile_painter::tile_store::{StoreRebuildFence, TileStore, TOTAL_INPUT_LAYERS};
+use tile_painter::tile_store::{
+    StoreRebuildFence, TileStore, PUBLISHED_MIN_ZOOM, TOTAL_INPUT_LAYERS,
+};
 use tile_painter::wire_hm3::{dequantise_lden, quantise_lden, NO_DATA, SOURCE_ID_TOTAL};
 
 #[derive(Parser, Debug)]
@@ -51,11 +53,13 @@ struct Args {
     /// alongside them.
     #[arg(long)]
     store_root: PathBuf,
-    /// Lowest pyramid level to build for `total/`. Defaults to z2 — the zoom
-    /// the serving stack starts `total` at (server MIN_ZOOM in
-    /// heatmap-shared.ts; combine-loop.sh passes the same), so a defaulted
-    /// full combine can never leave the packer a hole at the world view.
-    #[arg(long, default_value_t = 2)]
+    /// Lowest pyramid level to build for `total/`. Defaults to
+    /// `tile_store::PUBLISHED_MIN_ZOOM` — the zoom the serving stack starts `total` at
+    /// (server MIN_ZOOM in heatmap-shared.ts), so a defaulted full combine can never leave
+    /// the packer a hole at the world view. The base it folds down FROM is not a flag: it
+    /// is the finest zoom every layer store actually holds (`finest_common_zoom`), which
+    /// for a publishable store is `tile_store::PUBLISHED_BASE_ZOOM`.
+    #[arg(long, default_value_t = PUBLISHED_MIN_ZOOM)]
     dst_zoom: u8,
     /// `south_lat,west_lon,north_lat,east_lon` — limit the combine to this
     /// bbox; default is every tile present in any layer. Mutually exclusive

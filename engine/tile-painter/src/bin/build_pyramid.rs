@@ -1,9 +1,9 @@
 //! Pyramid-downsample an HM3 layer's tile STORE from a base zoom down.
 //!
-//! Usage (z12 base — the 512@z12 world):
+//! Usage (the published world: one 512-pixel paint at z13, cascaded to z2):
 //!
 //!   build-pyramid --store-dir data/tiles/2026/store/road \
-//!     --base-zoom 12 --dst-zoom 2
+//!     --base-zoom 13 --dst-zoom 2
 //!
 //! Each level reads four `2×2` source tiles from the `z{N}` store pair,
 //! energy-mean-pools each `2×2` block of source pixels into one destination
@@ -17,20 +17,22 @@ use anyhow::Result;
 use clap::Parser;
 
 use tile_painter::pyramid::{build_pyramid, scope_from_args};
+use tile_painter::tile_store::{PUBLISHED_BASE_ZOOM, PUBLISHED_MIN_ZOOM};
 
 #[derive(Parser, Debug)]
 struct Args {
     #[arg(long)]
     store_dir: PathBuf,
-    /// Base (source) Mercator zoom — the finest level in the store (z12 for current
-    /// 512-pixel tiles).
-    #[arg(long, default_value_t = 12)]
+    /// Base (source) Mercator zoom — the finest level in the store. Defaults to the one
+    /// zoom the world is painted at (`tile_store::PUBLISHED_BASE_ZOOM`); every level this
+    /// binary writes below it is a pyramid level of that same paint.
+    #[arg(long, default_value_t = PUBLISHED_BASE_ZOOM)]
     base_zoom: u8,
-    /// Lowest pyramid level to generate (inclusive). Defaults to z=2 — the
-    /// serving floor for EVERY layer (frontend MIN_ZOOM): a single-layer view
-    /// at world zoom is a first-class use case, and deck's TileLayer renders
-    /// nothing below its minZoom (owner report 2026-07-09).
-    #[arg(long, default_value_t = 2)]
+    /// Lowest pyramid level to generate (inclusive). Defaults to
+    /// `tile_store::PUBLISHED_MIN_ZOOM` — the serving floor for EVERY layer (frontend
+    /// MIN_ZOOM): a single-layer view at world zoom is a first-class use case, and deck's
+    /// TileLayer renders nothing below its minZoom (owner report 2026-07-09).
+    #[arg(long, default_value_t = PUBLISHED_MIN_ZOOM)]
     dst_zoom: u8,
     /// `south,west,north,east` — rebuild only the ancestors of the tiles this
     /// bbox covers. Mutually exclusive with `--tiles-from`. Omit both for a

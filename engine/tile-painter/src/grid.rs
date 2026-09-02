@@ -1,10 +1,10 @@
 //! Web Mercator (EPSG:3857) XYZ tile geometry.
 //!
 //! Compute and output share the same Mercator pixel lattice: a receiver
-//! is the centre of one tile pixel at the build zoom (z12 base with 512-px
-//! tiles — the SAME physical lattice as the pre-2026-07 z13@256, ~12 m at
-//! Praha lat), the tile pixel is the receiver, and there is no projection
-//! or resampling step between them.
+//! is the centre of one tile pixel at the build zoom ([`tile_store::PUBLISHED_BASE_ZOOM`]
+//! with 512-px tiles — 6.1 m at Praha lat, half the 12.3 m of the retired z12 base),
+//! the tile pixel is the receiver, and there is no projection or resampling step
+//! between them.
 
 use std::f64::consts::PI;
 

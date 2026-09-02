@@ -123,10 +123,40 @@ pub fn expected_source_id(layer: &str) -> Option<u8> {
     }
 }
 
-/// Lowest zoom present in every complete, publishable heatmap layer.
+/// Lowest zoom present in every complete, publishable heatmap layer, and the floor every
+/// pyramid cascade stops at — a single-layer view at world zoom is a first-class use case.
 pub const PUBLISHED_MIN_ZOOM: u8 = 2;
-/// Finest zoom present in every complete, publishable 512-pixel heatmap layer.
-pub const PUBLISHED_BASE_ZOOM: u8 = 12;
+
+/// The ONE zoom the world is painted at.
+///
+/// The publish contract in one sentence: **the world is painted once, at
+/// `PUBLISHED_BASE_ZOOM`, and every zoom from `PUBLISHED_MIN_ZOOM` up to it is a plain
+/// pyramid level of that same paint** (`build-pyramid --tiles-from` cascades z13 → z2,
+/// `build_heatmap_combine` folds `total` the same way). There is no refinement tier and no
+/// second base: a publishable layer store holds the exact zoom band
+/// `PUBLISHED_MIN_ZOOM..=PUBLISHED_BASE_ZOOM`, no more and no less, which is what
+/// `tile_store_pack` asserts before it writes an immutable archive.
+///
+/// This number is the Rust side of `WORLD_BASE_ZOOM` in
+/// `server/src/generation-contract.mjs`; the two must be equal, because every layer
+/// generation the packer publishes declares this zoom and the server refuses any other.
+/// Moving it repaints the whole world — an owner decision, never a publication parameter.
+pub const PUBLISHED_BASE_ZOOM: u8 = 13;
+/// The zoom band a complete layer store must hold, exactly: the base paint plus every pyramid
+/// level cascaded from it down to `PUBLISHED_MIN_ZOOM`. Anything else is a half-built or stale
+/// store — a missing base means the paint never finished, a missing level means the cascade
+/// did not reach the serving floor, and an extra level above the base is a leftover from
+/// another world zoom whose bytes no generation describes. Publication (`base_zoom` =
+/// `PUBLISHED_BASE_ZOOM`) and the transcode's final check refuse all three rather than
+/// shipping a hole into an immutable archive.
+pub fn validate_zoom_band(layer: &str, zooms: &[u8], base_zoom: u8) -> anyhow::Result<()> {
+    let expected: Vec<u8> = (PUBLISHED_MIN_ZOOM..=base_zoom).collect();
+    if zooms != expected {
+        anyhow::bail!("{layer}: zoom set {zooms:?}, expected exact {expected:?}");
+    }
+    Ok(())
+}
+
 /// Durable fence left by an interrupted destructive whole-layer rebuild. Packers must refuse
 /// the layer until the same rebuild path completes and removes this marker after fsync.
 pub const REBUILD_INCOMPLETE_MARKER: &str = ".rebuild-incomplete";
@@ -158,5 +188,25 @@ mod tests {
         assert!(TOTAL_INPUT_LAYERS
             .iter()
             .all(|layer| PUBLISHED_LAYERS.contains(layer)));
+    }
+
+    #[test]
+    fn published_band_is_one_z13_paint_cascaded_down_to_z2() {
+        let band: Vec<u8> = (PUBLISHED_MIN_ZOOM..=PUBLISHED_BASE_ZOOM).collect();
+        assert_eq!(band, (2..=13).collect::<Vec<u8>>());
+        validate_zoom_band("road", &band, PUBLISHED_BASE_ZOOM).unwrap();
+
+        // A store still holding the retired z12 base: the cascade never reached z13.
+        let previous_world: Vec<u8> = (PUBLISHED_MIN_ZOOM..PUBLISHED_BASE_ZOOM).collect();
+        assert!(validate_zoom_band("road", &previous_world, PUBLISHED_BASE_ZOOM).is_err());
+
+        // A refinement level above the base: bytes no layer generation describes.
+        let mut above_base = band.clone();
+        above_base.push(PUBLISHED_BASE_ZOOM + 1);
+        assert!(validate_zoom_band("road", &above_base, PUBLISHED_BASE_ZOOM).is_err());
+
+        // A hole in the middle of the cascade.
+        let gapped: Vec<u8> = band.iter().copied().filter(|zoom| *zoom != 7).collect();
+        assert!(validate_zoom_band("road", &gapped, PUBLISHED_BASE_ZOOM).is_err());
     }
 }

@@ -1,6 +1,7 @@
 //! tile-painter: produces Web Mercator Lden raster tiles for every heatmap
-//! layer (road/rail/industrial/building/aircraft), with z12 as the published
-//! base and optional finer tiers.
+//! layer (road/rail/industrial/building/aircraft). The world is painted ONCE, at
+//! [`tile_store::PUBLISHED_BASE_ZOOM`]; every lower zoom is a pyramid level of that same
+//! paint. There is no refinement tier and no second base.
 //!
 //! Architecture: tile-first iteration. The outer loop groups tiles
 //! into N×N batches that share one halo

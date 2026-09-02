@@ -51,6 +51,7 @@ use tile_painter::renderer_evidence::{
 use tile_painter::source_line::LineRow;
 use tile_painter::source_loader_barrier::BarrierData;
 use tile_painter::source_loader_obstacle::{InteriorEstimate, ObstacleData};
+use tile_painter::tile_store::PUBLISHED_BASE_ZOOM;
 use tile_painter::wire_hm3::{collapse_lden_surface_u8, read_tile, write_tile};
 
 // One-time GPU/layer setup lives in the sibling `gpu_init` module; the hot
@@ -3728,9 +3729,10 @@ fn main() -> Result<()> {
         .map(LineLayer::parse)
         .collect::<Result<_>>()?;
 
-    // 512px tiles: z12 is the world base (same lattice as the old z13@256);
-    // higher zooms build refinement tiers. Block/tile math
-    // downstream is zoom-parametric already; the bound matches tile-painter's.
+    // 512px tiles: the world is painted once, at `PUBLISHED_BASE_ZOOM`, and every lower
+    // zoom is a pyramid level of that same paint — there are no refinement tiers. Wider
+    // zooms stay accepted for dev A/B work; block/tile math downstream is zoom-parametric
+    // already, and the bound matches tile-painter's.
     let z: u8 = match zoom_s.as_deref() {
         Some(s) => {
             let z: u8 = s.parse().context("--zoom must be an integer")?;
@@ -3739,7 +3741,7 @@ fn main() -> Result<()> {
             }
             z
         }
-        None => 12,
+        None => PUBLISHED_BASE_ZOOM,
     };
     let z13_profile = multifidelity_z13_profile()?;
     let stock_cartesian_anchor = multifidelity_cartesian_unbinned_anchor_enabled();

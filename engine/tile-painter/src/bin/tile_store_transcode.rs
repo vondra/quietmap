@@ -48,8 +48,9 @@ use rayon::prelude::*;
 use tile_painter::grid::{tile_range, TILE_PX};
 use tile_painter::pyramid::{build_pyramid_with_existing_rebuild_fence, RebuildScope};
 use tile_painter::tile_store::{
-    detect_zooms as detect_store_zooms, expected_source_id, LooseTree, StoreMasterIngestLocks,
-    StoreRebuildFence, TileCodec, TileStore, PUBLISHED_BASE_ZOOM, PUBLISHED_MIN_ZOOM,
+    detect_zooms as detect_store_zooms, expected_source_id, validate_zoom_band, LooseTree,
+    StoreMasterIngestLocks, StoreRebuildFence, TileCodec, TileStore, PUBLISHED_BASE_ZOOM,
+    PUBLISHED_MIN_ZOOM,
 };
 use tile_painter::wire_hm3::read_tile_bytes_source_id;
 
@@ -308,16 +309,8 @@ fn remove_store_levels_outside(layer_dir: &Path, min_zoom: u8, max_zoom: u8) -> 
 
 fn validate_complete_layer(layer_dir: &Path, base_zoom: u8, expected_source_id: u8) -> Result<()> {
     let actual = detect_store_zooms(layer_dir)?;
-    let expected: Vec<u8> = (PUBLISHED_MIN_ZOOM..=base_zoom).collect();
-    if actual != expected {
-        bail!(
-            "{}: final zoom set {:?} ≠ expected {:?}",
-            layer_dir.display(),
-            actual,
-            expected
-        );
-    }
-    for zoom in expected {
+    validate_zoom_band(&layer_dir.display().to_string(), &actual, base_zoom)?;
+    for zoom in actual {
         let store = TileStore::open(layer_dir, zoom, false)?;
         if store.source_id() != expected_source_id {
             bail!(

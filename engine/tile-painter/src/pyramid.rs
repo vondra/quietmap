@@ -205,11 +205,11 @@ pub fn build_pyramid_with_existing_rebuild_fence(
 }
 
 fn validate_zoom_range(base_zoom: u8, dst_zoom: u8) -> Result<()> {
-    // Equality is a legitimate NO-OP, not an error: a zoom-tier root builds
-    // its total at the tier's own zoom and has no pyramid below it.
-    // build_pyramid_levels over an empty level range writes nothing.
-    if base_zoom < dst_zoom {
-        anyhow::bail!("base_zoom {} must be >= dst_zoom {}", base_zoom, dst_zoom);
+    // A pyramid descends at least one level. Equality used to be a legal no-op for a
+    // refinement-tier root, which had no pyramid below its own zoom; the world is now one
+    // paint cascaded down to `PUBLISHED_MIN_ZOOM`, so an empty level range is a caller bug.
+    if base_zoom <= dst_zoom {
+        anyhow::bail!("base_zoom {} must be > dst_zoom {}", base_zoom, dst_zoom);
     }
     Ok(())
 }
@@ -245,10 +245,8 @@ fn build_pyramid_managing_fence(
     after_level: &mut dyn FnMut(u8) -> Result<()>,
 ) -> Result<usize> {
     validate_zoom_range(base_zoom, dst_zoom)?;
-    // The base level must exist even when the level range is EMPTY
-    // (dst == base, the zoom-tier no-op): the per-level "requires source"
-    // check never runs then, and a silent success over a missing store would
-    // hide a broken tier root.
+    // Name the missing base explicitly instead of letting the first fold report a missing
+    // source level: this is the paint the whole cascade is derived from.
     let base_path = layer_dir.join(format!("z{base_zoom}.qtsi"));
     if !base_path.exists() {
         anyhow::bail!(
@@ -573,25 +571,26 @@ mod tests {
         );
     }
 
-    /// `dst_zoom == base_zoom` is a legal NO-OP: a zoom-tier root has no
-    /// pyramid below its own zoom, so with the base present
-    /// nothing is written and nothing errors; a missing base still fails via
-    /// the source-level requirement, exactly like any Full rebuild.
+    /// A pyramid always descends. An empty level range was the refinement tier's no-op and
+    /// is now a caller bug, and a missing base paint fails before any level is folded.
     #[test]
-    fn equal_base_and_dst_zoom_is_a_noop_with_base_present_and_fails_without() {
+    fn a_pyramid_must_descend_from_an_existing_base() {
         let dir = tempfile::tempdir().unwrap();
         let base = TileStore::create(dir.path(), 13, SOURCE_ID_ROAD, TILE_PX as u16).unwrap();
         let cells = vec![quantise_lden(60.0); TILE_PX * TILE_PX];
         base.put_cells(4424, 2774, &cells).unwrap();
         base.sync_all().unwrap();
         drop(base);
-        let written = build_pyramid(dir.path(), 13, 13, RebuildScope::Full).unwrap();
-        assert_eq!(written, 0, "no levels below the tier zoom to build");
+        let error = build_pyramid(dir.path(), 13, 13, RebuildScope::Full).unwrap_err();
+        assert!(
+            error.to_string().contains("must be > dst_zoom"),
+            "unexpected error: {error:#}"
+        );
 
         let missing = tempfile::tempdir().unwrap();
         assert!(
-            build_pyramid(missing.path(), 13, 13, RebuildScope::Full).is_err(),
-            "a missing base store must still fail loudly at equality"
+            build_pyramid(missing.path(), 13, 2, RebuildScope::Full).is_err(),
+            "a missing base store must fail loudly"
         );
     }
 

@@ -40,6 +40,7 @@ use rayon::prelude::*;
 use tile_painter::grid::tile_range;
 use tile_painter::r4_source_cache::{R4SourceCache, SourceSel};
 use tile_painter::region_runner::{morton_order, region_tiles, tile_centre_r4};
+use tile_painter::tile_store::PUBLISHED_BASE_ZOOM;
 use tile_painter::worklist::{any_source_arrow, resolve_n_days};
 
 use crate::build::process_region_gpu;
@@ -66,7 +67,8 @@ pub(crate) struct Args {
     tile_x: Option<u32>,
     #[arg(long)]
     tile_y: Option<u32>,
-    #[arg(long, default_value_t = 12)]
+    /// The zoom the world is painted at; every lower zoom is a pyramid level of this paint.
+    #[arg(long, default_value_t = PUBLISHED_BASE_ZOOM)]
     pub(crate) zoom: u8,
     #[arg(long)]
     pub(crate) h3r4_dir: PathBuf,

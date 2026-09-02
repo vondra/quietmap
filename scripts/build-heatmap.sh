@@ -1,6 +1,6 @@
 #!/bin/bash
 # build-heatmap.sh — orchestrate the whole noise heatmap: build each requested
-# layer's z12 tiles + zoom pyramid (z2-11), then the precomputed `total/`
+# layer's z13 tiles + zoom pyramid (z2-12), then the precomputed `total/`
 # (energy-sum of every layer, the default all-layers-on view).
 #
 # Each layer is its own loose staging tree under build/{layer}/ with a distinct
@@ -17,7 +17,7 @@
 #   ./scripts/build-heatmap.sh --source all --world                      # aircraft world-scale (surface skipped)
 #   ./scripts/build-heatmap.sh --combine-only                            # just rebuild total/ from existing layers
 #
-# Env: DATA_YEAR=2026  DATA_ROOT=data  OUTPUT=$DATA_ROOT/tiles/$DATA_YEAR/build  ZOOM=12
+# Env: DATA_YEAR=2026  DATA_ROOT=data  OUTPUT=$DATA_ROOT/tiles/$DATA_YEAR/build
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -28,7 +28,11 @@ PREP="$DATA_ROOT/prepared"
 OUTPUT="${OUTPUT:-$DATA_ROOT/tiles/$DATA_YEAR/build}"
 # The tile store root is configured independently from the loose staging root.
 STORE_ROOT="${STORE_ROOT:-$DATA_ROOT/tiles/$DATA_YEAR/store}"
-ZOOM="${ZOOM:-12}"
+# The one zoom the world is painted at; every level below it is a pyramid level of that
+# same paint. Not configurable: it is the number every published layer generation declares
+# (tile_store::PUBLISHED_BASE_ZOOM, server WORLD_BASE_ZOOM), and the packer refuses a store
+# whose band is anything but z2..z13.
+ZOOM=13
 TARGET=engine/target/release
 SURFACE="$TARGET/build-heatmap-surface"
 AIRCRAFT="$TARGET/build-heatmap-aircraft"

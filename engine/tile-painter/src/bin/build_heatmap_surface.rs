@@ -48,6 +48,7 @@ use tile_painter::surface_region::{
 use tile_painter::surface_stream_scheduler::{
     SurfaceStreamQueue, SURFACE_STREAM_MAX_REGIONS_PER_CLAIM,
 };
+use tile_painter::tile_store::PUBLISHED_BASE_ZOOM;
 use tile_painter::worklist::resolve_n_days;
 
 /// Region concurrency when neither `--region-concurrency`/the env knob is set
@@ -85,7 +86,8 @@ struct Args {
     /// `south_lat,west_lon,north_lat,east_lon`.
     #[arg(long, value_parser = parse_bbox)]
     bbox: Option<[f64; 4]>,
-    #[arg(long, default_value_t = 12)]
+    /// The zoom the world is painted at; every lower zoom is a pyramid level of this paint.
+    #[arg(long, default_value_t = PUBLISHED_BASE_ZOOM)]
     zoom: u8,
     #[arg(long)]
     h3r4_dir: PathBuf,
