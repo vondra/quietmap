@@ -121,15 +121,17 @@ extern "C" int relevant_source_cuda_copy_to_host(void* destination, const void* 
 template <typename Launch>
 int timed_cuda_launch(Launch launch, float* elapsed_milliseconds) {
     cudaEvent_t started;
-    cudaEvent_t finished;
     cudaError_t status = cudaEventCreate(&started);
     if (status != cudaSuccess) {
         return status;
     }
+    cudaEvent_t finished;
     status = cudaEventCreate(&finished);
-    if (status == cudaSuccess) {
-        status = cudaEventRecord(started);
+    if (status != cudaSuccess) {
+        cudaEventDestroy(started);
+        return status;
     }
+    status = cudaEventRecord(started);
     if (status == cudaSuccess) {
         launch();
         status = cudaGetLastError();
