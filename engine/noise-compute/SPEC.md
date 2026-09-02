@@ -181,6 +181,11 @@ Settlement and leisure emission laws and profile selection are specified in sect
 
 ## 4. Shared propagation
 
+The rules in this section are the shared definitions. Where the heatmap painters
+deliberately depart from them for speed (ray cadence, the z12 point-layer stride, and
+the production block partition), section 12 states each departure, its measured cost,
+and where it is disabled.
+
 ### 4.1 Geometry and divergence
 
 The shared slant distance is geo::slant_dist. Point-source divergence is
@@ -604,3 +609,150 @@ The production path must preserve deterministic accumulation, the shared PathPro
 cadence, exact vector intersections, source provenance, and the single annualisation
 contract. Any future model proposal belongs in the private future-plans documentation
 until it is implemented, tested, and promoted into this contract.
+
+## 12. Heatmap painter approximations
+
+Section 1 says the tile and the popup share source normalization and propagation
+definitions. Three shipped rules depart from that on the tile side only. Each is
+recorded here with what it changes, what it was measured to cost, and where it is off.
+None of them touches the popup.
+
+### 12.1 The coarse-middle surface ray cadence
+
+The CPU surface painter marches each source-receiver terrain ray at a reduced cadence in
+the deep middle of a long ray. Beyond the near-end zones the deep-middle ray is stepped
+at 3x the 245 m coarse step (about 737 m): `SHADOW_MID_STRIDE = 3`
+([engine/tile-painter/src/scatter_band.rs:258](../tile-painter/src/scatter_band.rs)).
+The dense 10/30/60/120 m bilateral ramp is kept within 600 m of each endpoint
+(`SHADOW_SRC_ZONE_M` / `SHADOW_RX_ZONE_M`, `scatter_band.rs:270-271`), which is where
+berms and near-receiver walls make the shadow sharp.
+
+Short rays are exempt structurally. At or below `EXACT_CADENCE_MAX_DIST_M = 400 m`
+(`scatter_band.rs:319`) the tile samples exactly where the popup samples
+(`cadence_for_ray`, `:336-338`): the near field is where a screening error lives and
+where tile and popup are compared point for point, so the approximation is confined to
+the long rays it was measured on.
+
+`coarse_mid_cfg()` (`scatter_band.rs:277-303`) resolves the configuration once per
+process. `SURFACE_SHADOW_STRIDE` overrides the stride and the value `1` disables the
+rule entirely (`None` = the exact cadence); `SURFACE_SHADOW_SRC_ZONE_M` and
+`SURFACE_SHADOW_RX_ZONE_M` move the zones. One configuration feeds all three surface
+kernels, line (`scatter_line.rs:92`), point (`scatter_point.rs:84`, `:128`) and airport
+ground operations (`scatter_band.rs:1012`), through the single profile builder
+`build_surface_profile` (`scatter_band.rs:345`), so the cadence cannot differ between
+them.
+
+Measured provenance of the two constants is in the code (`scatter_band.rs:249-257`,
+`:262-271`): with the 600 m zones, stride 3 against stride 2 buys 11 points more
+deep-middle reduction at essentially the same error (exceeding on at most 4.5 % of
+cells, DEV p99 at most 0.8 dB against the method's own 2.6-5.2 dB raster-phase noise
+floor), while a 200 m zone exceeded that floor on 20-38 % of cells. The near-field
+guarantee is pinned by `near_field_cadence_matches_the_popup_beyond_it_stays_coarse`
+(`scatter_band.rs:2298`).
+
+The exact z13 reference tiles were painted with `SURFACE_SHADOW_STRIDE=1`, so the
+reference the accuracy contract scores against carries the exact cadence while the
+shipped CPU painter does not.
+
+### 12.2 Point-layer adaptive stride at z12
+
+[engine/tile-painter/src/point_w1.rs](../tile-painter/src/point_w1.rs) reconstructs the
+industrial and building layers from a sparse receiver set instead of painting every
+pixel exactly. It renders a direct-local surrogate over the whole tile, computes exact
+physics only at a stride-5 anchor lattice (`STRIDE = 5`, `point_w1.rs:25`), derives a
+whole-block refinement mask from anchor tri-state, raw-anchor residual range and
+surrogate-predicted numeric tri-state, then computes the selected blocks exactly
+(`point_w1.rs:1-11`, `render` at `:81`). Most pixels therefore never run a terrain or
+obstacle query: they carry the surrogate plus the anchor residual.
+
+It is opt-in and zoom-fenced. The switches are `QM_W1_INDUSTRIAL_POLICY` and
+`QM_W1_BUILDING_POLICY`, each accepted only with the value `adaptive-stride5`
+(`point_w1.rs:36-41`), and the policy is structurally restricted to zoom 12
+(`policy_applies_at_zoom`, `:44-46`; `enabled_for_zoom`, `:51-53`). Every other zoom,
+the line layers, and the popup keep the exact path.
+
+Where it is accepted. The serving contract publishes two quality profiles: the z12 base
+`w1-z12-accepted-v1`, whose numerical environment is exactly these two switches
+(`W1_ACCEPTED_NUMERICAL_ENVIRONMENT`,
+[server/src/generation-contract.mjs:41-44](../../server/src/generation-contract.mjs)),
+and the z13 tier `w2-z13-spatial-v1`, whose numerical environment must be empty
+(`validateNamedQualitySemantics`, `:245-247`). A z13 generation therefore cannot be
+painted with this policy, and the engine gate agrees with the contract because the
+module refuses every zoom but 12.
+
+One contradiction is worth naming rather than resolving here. The serving contract
+accepts both switches on the z12 base, and the module header states that both point
+layers pass their drift contracts with the policy, building at 0.000 % on every
+amplitude rung (`point_w1.rs:2-6`); the gate's own comment inside the same module says
+building "is ported but not yet accepted" and that its switch "stays unlisted"
+(`:33-35`), which its own code contradicts, since `policy_enabled` maps `building` to
+`QM_W1_BUILDING_POLICY` (`:36-41`). The code and the serving contract agree with each
+other: both switches exist, both are z12-only, and that comment is the outlier.
+
+### 12.3 Relevant-source block partition
+
+[engine/relevant-source-gpu](../relevant-source-gpu) is the production GPU painter for
+the five surface layers, road, rail, industrial, building and airport ground operations
+(`src/relevant_source_runner.rs:71-73`). Its approximation is one rule: per 16-pixel
+block, evaluate the sources that matter at every pixel exactly, and carry the rest as a
+smooth background.
+
+**Blocks and corners.** A tile is partitioned into fixed 16x16-pixel blocks
+(`BLOCK_PIXEL_SIDE = 16`, `src/source_frame.rs:21`), so a 512 px tile holds 32x32 = 1024
+blocks over a shared lattice of 33x33 = 1089 corners (`source_frame.rs:23-26`); one CUDA
+thread block is one block of 256 threads (`kernels/block_source_partition.cu:182-183`).
+Each corner's per-source, per-period energy is evaluated on the card first
+(`evaluate_corner_source_pairs_kernel`, `block_source_partition.cu:7-32`).
+
+**Admission.** A block always keeps every source in its own 3x3 block neighbourhood
+exactly, unconditionally and outside the budget (`src/relevance_partition.rs:139-141`;
+the neighbourhood is built in `src/tile_source_incidence.rs:85-107`, `:189-232`, and at a
+tile edge uses the adjacent tile's exact block edges, `:60-75`). Beyond that, each of the
+block's four corners admits its remaining sources in descending Lden-weighted energy
+order (`relevance_partition.rs:204-233`) until the energy it has NOT admitted is at most
+`DROP_BUDGET_FRACTION = 0.15` (`:47`) of the SMALLEST of the block's four corner totals
+(`:142-147`, admission loop `:148-165`). The retained set is the union over the four
+corners plus the neighbourhood set.
+
+The budget is measured against the block's quietest corner rather than each corner's own
+total because the damage is done at the quietest pixel: source-weighted over the four
+benchmark cells, a rail block's four corner totals stand a median 1.5 dB apart but
+10.0 dB at the 95th percentile, so 15 % of the loud corner's energy can exceed the whole
+answer at the quiet one (`relevance_partition.rs:25-31`).
+
+**The dropped tail.** For each corner and period, the energy of everything not retained
+is accumulated as one linear-energy constant, floored at zero
+(`relevance_partition.rs:167-182`, field doc `:55-65`). The paint kernel seeds every
+pixel's accumulator by blending those four corner constants bilinearly at the pixel
+centre, lerp in x along the top and bottom corner pairs, then lerp in y
+(`block_source_partition.cu:53-70`), and then adds each retained source evaluated at
+that pixel's own receiver position, altitude and reflection (`:71-81`). Only the tail is
+approximated; the retained physics is the exact kernel.
+
+Two rejected alternatives are recorded with their cost: refining the background lattice
+to 8 pixels still leaves 2605 of rail's 4994 cells over 3 dB and costs +50 GPU s of a
+237 s wave, and giving every pixel its block's quietest corner leaves 1867 against a
+limit of 1379 (`relevance_partition.rs:58-64`). The blend was therefore left alone and
+the budget made to keep the dropped tail below the quietest answer in the block.
+
+**Cadence by zoom.** The painter reproduces each wave's cadence: z12 runs the surface
+heatmap's coarse middle of section 12.1 and z13 runs the exact popup cadence
+(`coarse_middle_cadence`, `src/relevant_source_runner.rs:49`, `:53-59`; applied at
+`kernels/relevant_source_path.cuh:127-128`, `:163-165`). Airport ground-operation
+sources keep the exact cadence at both zooms (`kernels/relevant_source_pair.cuh:126`).
+The CUDA constants are generated from the CPU constants rather than re-declared, with a
+build-time assertion that the generated stride is 3
+(`relevant_source_build.rs:279-299`, `:480`). Any zoom other than 12 or 13 is refused
+(`src/bin/relevant_source_surface.rs:32-37`).
+
+**Measured contract status.** On r9950 (RTX 5070), the four benchmark cells, five
+surface layers in one process, with seconds and drift read from the same run
+(`relevance_partition.rs:33-46`): at fraction 0.15 the wave costs 293.8 GPU s (331.0 s
+wall) and rail lands 1101 cells over 3 dB against a limit of 1379 with industrial at 48
+against 921, both pass; at 0.20 rail is 1.3x over the limit and at 0.30 it is 2.3x
+over. Every other rung of every layer passes at all three fractions. The rule's own
+effect at 0.15 was rail 4994 -> 1101 and industrial 1984 -> 48, bought with +23.7 % of
+the wave's GPU seconds against the per-corner budget it replaced (which is why the 237 s
+wave quoted for the rejected alternatives above is the pre-budget wave, not this one).
+The owner chose 0.15 on 2026-09-02 as the only measured value that meets the whole
+accuracy contract.

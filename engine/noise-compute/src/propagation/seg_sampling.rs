@@ -38,9 +38,9 @@
 //! keeps the cp verdict. Narrow vector-backed spans also keep a plain cp verdict
 //! they did not keep before. Restoring the old vector-backed bytes takes
 //! `QM_SEG_SAMPLES=1 QM_ARC_MIN_SPAN_DEG=0` together, which until 2026-08-19 was
-//! also the pairing the CPU-vs-GPU tile comparison pinned (SPEC §4.7) — the
-//! kernel then had no quadrature and arc-screened every pair; it now paints this
-//! rule (5 buckets + the 3° gate, compiled in).
+//! also the pairing the CPU-vs-GPU tile comparison pinned — the kernel then had
+//! no quadrature and arc-screened every pair; it now paints this rule (5 buckets
+//! + the 3° gate, compiled in), which is the production policy SPEC §4.7 states.
 //!
 //! ## CLEAR IS NOT TERRAIN-FREE, and neither is a bucket
 //!
