@@ -56,21 +56,23 @@ const FALLBACK_REGION_CONCURRENCY: usize = 16;
 
 /// Per-region peak-RAM budget for the concurrency cap — the MEASURED peak RSS of one
 /// cell's rest build (source `Vec` + terrain halo + scatter scratch), which
-/// `region_concurrency` copies of run at once. Measured single-cell (concurrency 1):
-/// Osaka `842e611`, the world's densest building R4 (4.1 M `PointRow`s), peaks at
-/// **1.16 GB**; a typical/empty cell 0.3–0.4 GB. Budget 2 GB (≈1.7× the worst) so N
-/// concurrent cells fit the box's memcap. The old halo-only estimate greenlit 16 dense
-/// cells ≈ 18 GB and OOM-SIGKILLed the ~12 GB-memcap workers.
+/// `region_concurrency` copies of run at once. The rule is **1.7 × the measured
+/// worst cell**; the old halo-only estimate carried no such margin, greenlit 16
+/// dense cells ≈ 18 GB and OOM-SIGKILLed the ~12 GB-memcap workers.
 ///
-/// Re-measured 2026-09-02 (he84, Osaka z12 rest lane, concurrency 1, 16 rayon
-/// threads, `/usr/bin/time -v`): the painter at `4289a9f2` peaks at **2.33 GB**
-/// and the (tile × layer) overlap adds 10 % (2.57 GB) — the 1.16 GB figure above
-/// predates vector buildings. Peak RSS also grows with the thread count (scatter
-/// scratch is per thread). The budget below therefore no longer carries its 1.7×
-/// margin: at 4 regions per 12 GB memcap it sits at ~10.3 GB. Raising it to keep
-/// the margin halves the CPU lane's concurrency, so that is an owner decision;
-/// until then treat 12 GB memcap workers as full at concurrency 4.
-const PER_REGION_PEAK_BYTES: f64 = 2.0 * 1024.0 * 1024.0 * 1024.0;
+/// Measured 2026-09-02 on he84 (Osaka `842e611`, the world's densest building R4 at
+/// 4.1 M `PointRow`s, z12 rest lane, `--region-concurrency 1`, 16 rayon threads,
+/// `/usr/bin/time -v`, painter `4289a9f2`): **2.33 GB** stock and **2.57 GB** with the
+/// (tile × layer) overlap. A typical or empty cell stays at 0.3–0.5 GB, and peak RSS
+/// grows with the thread count because scatter scratch is per thread. The earlier
+/// 1.16 GB figure predates vector buildings.
+///
+/// 1.7 × 2.57 GB = 4.37 GB, rounded up to the 4.4 GB below (owner, 2026-09-02: "do
+/// what is correct"). The consequence is deliberate and paid: `region_concurrency`
+/// budgets `memory.max × 0.8`, so a 12 GB-memcap worker now runs **2 regions instead
+/// of 4** (9.6 / 4.4 = 2.18) — the four it used to run needed ~10.3 GB of a 9.6 GB
+/// working budget, which is the shape that OOMs rather than the shape that is slow.
+const PER_REGION_PEAK_BYTES: f64 = 4.4 * 1024.0 * 1024.0 * 1024.0;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -151,11 +153,11 @@ fn parse_bbox(s: &str) -> Result<[f64; 4], String> {
 
 /// How many regions may build at once. Capped because each concurrent region
 /// holds its OWN loaded `grid_disk(1)` source set + scatter scratch for the
-/// lifetime of its batches, and that drives peak RAM: the world's densest building
-/// R4 (Osaka `842e611`, 4.1 M `PointRow`s) peaks at 1.16 GB per cell (MEASURED
-/// single-cell); most cells 0.3–0.5 GB. Aircraft fans out one region per thread
-/// (0-halo, bounded emitters); surface can't, or 16 dense megacity cells at once ≈
-/// 18 GB → OOM-SIGKILL on a ~12 GB-memcap worker (32 GB box, 20 GB memcap reserve).
+/// lifetime of its batches, and that drives peak RAM — see
+/// [`PER_REGION_PEAK_BYTES`] for the measured per-cell peak and its margin.
+/// Aircraft fans out one region per thread (0-halo, bounded emitters); surface
+/// can't, or 16 dense megacity cells at once → OOM-SIGKILL on a ~12 GB-memcap
+/// worker (32 GB box, 20 GB memcap reserve).
 ///
 /// Priority: `--region-concurrency` > `QUIETMAP_SURFACE_REGION_CONCURRENCY` >
 /// RAM-derived > a fallback constant. Always clamped to the pool size — more
