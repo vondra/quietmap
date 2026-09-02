@@ -7,11 +7,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use noise_compute::constants::ENCLOSURE_RADIUS_M;
 use noise_compute::propagation::obstacle_index::{enclosure_db, ObstacleSet};
-use raster_reader::fused_tile_z13::FusedTileZ13;
+use raster_reader::fused_tile_z13::{tile_pixel_size_m, FusedTileZ13};
 use tile_painter::accumulator::TileAccumulator;
 use tile_painter::source_loader_obstacle::InteriorEstimate;
 use tile_painter::wire_hm3::{
-    collapse_lden_surface_u8, fill_area_median, write_tile, AREA_FILL_RADIUS_PX,
+    collapse_lden_surface_u8, collapse_lden_u8, fill_area_median, write_tile, AREA_FILL_RADIUS_PX,
 };
 
 use crate::cuda_bridge::{DeviceBuffer, DeviceScenePointers, RelevantSourceCuda};
@@ -104,6 +104,9 @@ pub struct PendingTileWrite {
     /// Industrial and building discretise areas into point grids that the
     /// median fill turns into solid footprints; lines are continuous already.
     pub area_source: bool,
+    /// Airport ground ops accumulate EVENT energy over this many days; the
+    /// surface layers (None) are steady power.
+    pub event_days: Option<f64>,
     pub source_id: u8,
     pub output_path: PathBuf,
 }
@@ -114,7 +117,10 @@ impl PendingTileWrite {
         let accumulator = TileAccumulator {
             energy: self.energy,
         };
-        let mut cells = collapse_lden_surface_u8(&accumulator);
+        let mut cells = match self.event_days {
+            Some(n_days) => collapse_lden_u8(&accumulator, n_days),
+            None => collapse_lden_surface_u8(&accumulator),
+        };
         if self.area_source {
             fill_area_median(&mut cells, AREA_FILL_RADIUS_PX);
         }
@@ -126,6 +132,8 @@ impl PendingTileWrite {
 /// Tile coordinates and receiver fields uploaded once, independent of the line layer.
 pub struct TileDeviceReceivers {
     lattice: TileMetricLattice,
+    /// Half a pixel of this tile in metres at its centre latitude.
+    pixel_floor_m: f32,
     receiver_x_m: DeviceBuffer<f32>,
     receiver_y_m: DeviceBuffer<f32>,
     receiver_altitude_m: DeviceBuffer<f32>,
@@ -142,6 +150,8 @@ impl TileDeviceReceivers {
         obstacles: &ObstacleSet,
     ) -> Result<Self> {
         let lattice = TileMetricLattice::for_tile(frame, tile.zoom, tile.tile_x, tile.tile_y);
+        let centre_latitude = (tile.bbox.north_lat + tile.bbox.south_lat) * 0.5;
+        let pixel_floor_m = (tile_pixel_size_m(tile.zoom, centre_latitude) * 0.5) as f32;
         let mut corner_x_m = Vec::with_capacity(CORNER_COUNT);
         let mut corner_y_m = Vec::with_capacity(CORNER_COUNT);
         let mut corner_reflection_db = Vec::with_capacity(CORNER_COUNT);
@@ -166,6 +176,7 @@ impl TileDeviceReceivers {
             corner_y_m: DeviceBuffer::from_slice(&corner_y_m)?,
             corner_reflection_db: DeviceBuffer::from_slice(&corner_reflection_db)?,
             lattice,
+            pixel_floor_m,
         })
     }
 }
@@ -184,6 +195,7 @@ pub fn partition_and_paint_tile(
     receivers: &TileDeviceReceivers,
     barriers: &[noise_compute::types::Barrier],
     coarse_middle_cadence: bool,
+    lden_weights: [f64; PERIOD_COUNT],
     partition_path: &Path,
 ) -> Result<(TilePaintMeasurement, Vec<f32>)> {
     debug_assert_eq!(source_fingerprint, source_identity_fingerprint(sources));
@@ -205,6 +217,7 @@ pub fn partition_and_paint_tile(
         obstacle_grid_count: device_obstacles.obstacle_grid_count,
         barrier_count: encoded_barriers.len() as u32,
         coarse_middle_cadence: u32::from(coarse_middle_cadence),
+        pixel_floor_m: receivers.pixel_floor_m,
         raster_geometry: batch_raster.geometry,
     };
     let (corner_energy, corner_gpu_milliseconds) = cuda.evaluate_corners(
@@ -215,8 +228,12 @@ pub fn partition_and_paint_tile(
         &receivers.corner_y_m,
         &receivers.corner_reflection_db,
     )?;
-    let partition =
-        build_relevant_source_partition(&incidence, &corner_energy, source_fingerprint)?;
+    let partition = build_relevant_source_partition(
+        &incidence,
+        &corner_energy,
+        lden_weights,
+        source_fingerprint,
+    )?;
     partition
         .write_to(partition_path)
         .with_context(|| format!("persist {}", partition_path.display()))?;

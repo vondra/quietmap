@@ -7,7 +7,6 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use rayon::prelude::*;
-use tile_painter::scatter_band::LDEN_WEIGHTS;
 
 use crate::source_frame::{
     BLOCKS_PER_TILE_SIDE, BLOCK_COUNT, CORNERS_PER_TILE_SIDE, CORNER_COUNT, PERIOD_COUNT,
@@ -88,10 +87,11 @@ impl RelevantSourcePartition {
 pub fn build_relevant_source_partition(
     incidence: &TileSourceIncidence,
     corner_pair_energy: &[[f32; PERIOD_COUNT]],
+    lden_weights: [f64; PERIOD_COUNT],
     source_fingerprint: u64,
 ) -> Result<RelevantSourcePartition> {
     validate_incidence(incidence, corner_pair_energy.len())?;
-    let ranked_sources = rank_sources_at_corners(incidence, corner_pair_energy);
+    let ranked_sources = rank_sources_at_corners(incidence, corner_pair_energy, lden_weights);
     let corner_total_energy = sum_corner_energy(incidence, corner_pair_energy);
     let blocks: Vec<(Vec<u32>, [[f32; PERIOD_COUNT]; 4])> = (0..BLOCK_COUNT)
         .into_par_iter()
@@ -159,6 +159,7 @@ pub fn build_relevant_source_partition(
 fn rank_sources_at_corners(
     incidence: &TileSourceIncidence,
     pair_energy: &[[f32; PERIOD_COUNT]],
+    lden_weights: [f64; PERIOD_COUNT],
 ) -> Vec<Vec<(u32, f64)>> {
     (0..CORNER_COUNT)
         .into_par_iter()
@@ -169,7 +170,7 @@ fn rank_sources_at_corners(
                 .map(|pair| {
                     let score = pair_energy[pair]
                         .iter()
-                        .zip(LDEN_WEIGHTS)
+                        .zip(lden_weights)
                         .map(|(&energy, weight)| f64::from(energy) * weight)
                         .sum();
                     (incidence.corner_source_indices[pair], score)
@@ -326,7 +327,13 @@ mod tests {
             .iter()
             .map(|&source| [source as f32 + 1.0; PERIOD_COUNT])
             .collect();
-        let partition = build_relevant_source_partition(&incidence, &energies, 7).unwrap();
+        let partition = build_relevant_source_partition(
+            &incidence,
+            &energies,
+            tile_painter::scatter_band::LDEN_WEIGHTS,
+            7,
+        )
+        .unwrap();
         assert_eq!(
             partition.source_indices_for_block(0),
             &(12..TEST_SOURCE_COUNT).collect::<Vec<_>>()

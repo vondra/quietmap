@@ -1,9 +1,9 @@
-//! The surface-layer runner over one wave's zoom: road, rail, industrial and
-//! building from one preparation, as a streaming pipeline over cells (the host
-//! prepares cell N+1 while the card paints cell N) with the paint's own batch
-//! lookahead, and the phase/pair measurement of every step.
+//! The surface-layer runner over one wave's zoom: road, rail, industrial,
+//! building and airport ground ops from one preparation, as a streaming pipeline
+//! over cells (the host prepares cell N+1 while the card paints cell N) with the
+//! paint's own batch lookahead, and the phase/pair measurement of every step.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Arc;
@@ -13,18 +13,25 @@ use std::time::Instant;
 use anyhow::{bail, Context, Result};
 use h3o::{CellIndex, LatLng};
 use noise_compute::admin;
+use noise_compute::constants::ground_ops_max_radius;
+use noise_compute::emission::aircraft::ClassWeights;
 use raster_reader::fused_tile_z13::TileBatch;
 use raster_reader::RealRasters;
+use tile_painter::ground_ops::GROUND_LDEN_WEIGHTS;
+use tile_painter::r4_source_cache::SourceSel;
 use tile_painter::region_runner::{batch_slot, block_batch_origin, region_tiles};
+use tile_painter::scatter_band::LDEN_WEIGHTS;
 use tile_painter::source_loader_barrier::BarrierData;
 use tile_painter::source_loader_building::BuildingData;
 use tile_painter::source_loader_industrial::IndustrialData;
 use tile_painter::source_loader_obstacle::{bake_tile_vector_rx_refl, ObstacleData};
 use tile_painter::source_loader_rail::RailData;
 use tile_painter::source_loader_road::RoadData;
+use tile_painter::source_loader_traffic::AirportTrafficData;
 use tile_painter::wire_hm3::{
-    SOURCE_ID_BUILDING, SOURCE_ID_INDUSTRIAL, SOURCE_ID_RAIL, SOURCE_ID_ROAD,
+    SOURCE_ID_AIRCRAFT, SOURCE_ID_BUILDING, SOURCE_ID_INDUSTRIAL, SOURCE_ID_RAIL, SOURCE_ID_ROAD,
 };
+use tile_painter::worklist::{resolve_class_weights, resolve_n_days};
 
 use crate::cuda_bridge::RelevantSourceCuda;
 use crate::obstacle_transfer::FlattenedObstacleGeometry;
@@ -32,11 +39,16 @@ use crate::relevant_source_tile::{
     partition_and_paint_tile, BatchDeviceRaster, PendingTileWrite, RegionDeviceLineSources,
     RegionDeviceObstacles, TileDeviceReceivers, TilePaintMeasurement,
 };
-use crate::source_frame::{source_identity_fingerprint, DeviceLineSource, RegionMetricFrame};
+use crate::source_frame::{
+    source_identity_fingerprint, DeviceLineSource, RegionMetricFrame, BAND_COUNT, PERIOD_COUNT,
+    SOURCE_FLAG_GROUND_OPS_AIRCRAFT, SOURCE_FLAG_GROUND_OPS_GSE,
+};
 
 const REGION_TILE_BATCH_SIDE: u32 = 4;
 const LINE_HALO_M: f64 = 10_000.0;
 const W1_ZOOM: u8 = 12;
+/// Airport ground-ops sources radiate from this height (ground_ops.rs).
+const GROUND_OPS_SOURCE_HEIGHT_M: f64 = 4.0;
 
 /// The ray cadence each wave's etalon was painted with, as the production roles
 /// build it: W1 (z12) runs the surface heatmap's coarse middle (scatter_band's
@@ -56,16 +68,27 @@ pub struct RelevantSourceRunConfiguration {
 }
 
 /// The surface layers one preparation paints, in output order.
-pub const LAYER_NAMES: [&str; LAYER_COUNT] = ["road", "rail", "industrial", "building"];
-pub const LAYER_COUNT: usize = 4;
+pub const LAYER_NAMES: [&str; LAYER_COUNT] =
+    ["road", "rail", "industrial", "building", "aircraft-ground"];
+pub const LAYER_COUNT: usize = 5;
 const LAYER_SOURCE_IDS: [u8; LAYER_COUNT] = [
     SOURCE_ID_ROAD,
     SOURCE_ID_RAIL,
     SOURCE_ID_INDUSTRIAL,
     SOURCE_ID_BUILDING,
+    SOURCE_ID_AIRCRAFT,
 ];
 /// Point-grid area sources get the CPU's median footprint fill before the write.
-const LAYER_AREA_SOURCE: [bool; LAYER_COUNT] = [false, false, true, true];
+const LAYER_AREA_SOURCE: [bool; LAYER_COUNT] = [false, false, true, true, false];
+/// Airport ground ops accumulate event energy over n_days; the rest is steady power.
+const LAYER_EVENT_ENERGY: [bool; LAYER_COUNT] = [false, false, false, false, true];
+const LAYER_LDEN_WEIGHTS: [[f64; PERIOD_COUNT]; LAYER_COUNT] = [
+    LDEN_WEIGHTS,
+    LDEN_WEIGHTS,
+    LDEN_WEIGHTS,
+    LDEN_WEIGHTS,
+    GROUND_LDEN_WEIGHTS,
+];
 
 #[derive(Clone, Debug, Default)]
 pub struct LayerMeasurement {
@@ -217,6 +240,8 @@ pub fn run_relevant_source_wave(
         layers: vec![LayerMeasurement::default(); LAYER_COUNT],
         ..RelevantSourceRunMeasurement::default()
     };
+    let ground_ops = GroundOpsCalendar::resolve(configuration)?;
+    let ground_ops = &ground_ops;
 
     // The cell stream: one producer loads and encodes cell N+1 on the host while
     // the painter works on cell N, and uploads it only after taking one of the
@@ -236,7 +261,7 @@ pub fn run_relevant_source_wave(
             let mut host_wait_seconds = 0.0;
             let mut prepared_count = 0;
             for &region_r4 in &configuration.regions {
-                let host_prepared = prepare_region(configuration, region_r4)?;
+                let host_prepared = prepare_region(configuration, region_r4, ground_ops)?;
                 let wait_started = Instant::now();
                 if permit_receiver.recv().is_err() {
                     break;
@@ -256,7 +281,14 @@ pub fn run_relevant_source_wave(
                 break;
             };
             measurement.card_wait_seconds += wait_started.elapsed().as_secs_f64();
-            paint_region(configuration, prepared, &rasters, &cuda, &mut measurement)?;
+            paint_region(
+                configuration,
+                prepared,
+                ground_ops.n_days,
+                &rasters,
+                &cuda,
+                &mut measurement,
+            )?;
             // The painted cell's device buffers are dropped: hand its permit back.
             let _ = permit_sender.send(());
         }
@@ -274,9 +306,140 @@ pub fn run_relevant_source_wave(
     Ok(measurement)
 }
 
+/// The build-wide ground-ops calendar: ONE n_days and one GA class-weight
+/// vector over every source cell of the run (the CPU surface builder's
+/// resolve_surface_n_days / resolve_surface_class_weights), so no two cells can
+/// divide their event energies differently.
+struct GroundOpsCalendar {
+    n_days: f64,
+    class_weights: ClassWeights,
+}
+
+impl GroundOpsCalendar {
+    fn resolve(configuration: &RelevantSourceRunConfiguration) -> Result<Self> {
+        let mut source_cells = BTreeSet::new();
+        for &region_r4 in &configuration.regions {
+            let cell = CellIndex::try_from(region_r4).context("invalid R4 region")?;
+            source_cells.extend(cell.grid_disk::<Vec<_>>(1).into_iter().map(u64::from));
+        }
+        let source_cells: Vec<u64> = source_cells.into_iter().collect();
+        let has_traffic = source_cells.iter().any(|&r4| {
+            configuration
+                .h3r4_directory
+                .join(format!("{r4:015x}"))
+                .join("airport_traffic.arrow")
+                .exists()
+        });
+        if !has_traffic {
+            return Ok(Self {
+                n_days: 1.0,
+                class_weights: ClassWeights::uniform(),
+            });
+        }
+        let traffic = SourceSel {
+            cruise: false,
+            airborne: false,
+            traffic: true,
+        };
+        let n_days = resolve_n_days(&configuration.h3r4_directory, &source_cells, traffic)?;
+        let class_weights = resolve_class_weights(
+            &configuration.h3r4_directory,
+            &source_cells,
+            traffic,
+            n_days,
+        )?;
+        Ok(Self {
+            n_days: f64::from(n_days),
+            class_weights,
+        })
+    }
+}
+
+/// One airport ground-ops microsegment's event energies summed per period and
+/// vehicle kind (aircraft rows class-weighted), as the CPU prepare_microsegs does.
+fn encode_ground_ops_sources(
+    frame: &RegionMetricFrame,
+    traffic: &AirportTrafficData,
+    class_weights: &ClassWeights,
+) -> Vec<DeviceLineSource> {
+    struct Microsegment {
+        start_lat: f64,
+        start_lon: f64,
+        end_lat: f64,
+        end_lon: f64,
+        length_m: f32,
+        max_radius_m: f64,
+        aircraft: [[f32; BAND_COUNT]; PERIOD_COUNT],
+        gse: [[f32; BAND_COUNT]; PERIOD_COUNT],
+        has_aircraft: bool,
+        has_gse: bool,
+    }
+    let mut by_microsegment: BTreeMap<(u64, u16), Microsegment> = BTreeMap::new();
+    for row in traffic.views() {
+        let microsegment = by_microsegment
+            .entry((row.osm_id, row.segment_idx))
+            .or_insert_with(|| Microsegment {
+                start_lat: f64::from(row.start_lat),
+                start_lon: f64::from(row.start_lon),
+                end_lat: f64::from(row.end_lat),
+                end_lon: f64::from(row.end_lon),
+                length_m: row.length_m,
+                max_radius_m: ground_ops_max_radius(row.ops_kind),
+                aircraft: [[0.0; BAND_COUNT]; PERIOD_COUNT],
+                gse: [[0.0; BAND_COUNT]; PERIOD_COUNT],
+                has_aircraft: false,
+                has_gse: false,
+            });
+        let period = usize::from(row.period.min(2));
+        if row.veh_kind == 0 {
+            let weight = class_weights.get(row.class_idx) as f32;
+            for band in 0..BAND_COUNT {
+                microsegment.aircraft[period][band] += row.band_energy_lin[band] * weight;
+            }
+            microsegment.has_aircraft = true;
+        } else {
+            for band in 0..BAND_COUNT {
+                microsegment.gse[period][band] += row.band_energy_lin[band];
+            }
+            microsegment.has_gse = true;
+        }
+    }
+    let mut sources = Vec::new();
+    for microsegment in by_microsegment.values() {
+        for (present, flag, emission) in [
+            (
+                microsegment.has_aircraft,
+                SOURCE_FLAG_GROUND_OPS_AIRCRAFT,
+                &microsegment.aircraft,
+            ),
+            (
+                microsegment.has_gse,
+                SOURCE_FLAG_GROUND_OPS_GSE,
+                &microsegment.gse,
+            ),
+        ] {
+            if present {
+                sources.push(frame.encode_ground_ops(
+                    microsegment.start_lat,
+                    microsegment.start_lon,
+                    microsegment.end_lat,
+                    microsegment.end_lon,
+                    microsegment.length_m,
+                    microsegment.max_radius_m,
+                    GROUND_OPS_SOURCE_HEIGHT_M,
+                    flag,
+                    emission,
+                ));
+            }
+        }
+    }
+    sources
+}
+
 fn prepare_region(
     configuration: &RelevantSourceRunConfiguration,
     region_r4: u64,
+    ground_ops: &GroundOpsCalendar,
 ) -> Result<HostPreparedRegion> {
     let started = Instant::now();
     let cell = CellIndex::try_from(region_r4).context("invalid R4 region")?;
@@ -302,6 +465,7 @@ fn prepare_region(
         IndustrialData::load_for_r4s(&configuration.h3r4_directory, &ring)?.into_rows();
     let building_rows =
         BuildingData::load_for_r4s(&configuration.h3r4_directory, &ring)?.into_rows();
+    let traffic = AirportTrafficData::load_for_r4s(&configuration.h3r4_directory, &ring)?;
     let encoded = [
         road_rows.iter().map(|row| frame.encode_line(row)).collect(),
         rail_rows.iter().map(|row| frame.encode_line(row)).collect(),
@@ -313,6 +477,7 @@ fn prepare_region(
             .iter()
             .map(|row| frame.encode_point(row))
             .collect(),
+        encode_ground_ops_sources(&frame, &traffic, &ground_ops.class_weights),
     ];
     let mut batches: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
     for &(x, y) in &tiles {
@@ -339,6 +504,7 @@ fn prepare_region(
 fn paint_region(
     configuration: &RelevantSourceRunConfiguration,
     prepared: PreparedRegion,
+    n_days: f64,
     rasters: &RealRasters,
     cuda: &RelevantSourceCuda,
     measurement: &mut RelevantSourceRunMeasurement,
@@ -418,6 +584,7 @@ fn paint_region(
                 &batch_raster,
                 cuda,
                 &write_sender,
+                n_days,
                 measurement,
             )?;
         }
@@ -451,6 +618,7 @@ fn paint_batch_tiles(
     batch_raster: &BatchDeviceRaster,
     cuda: &RelevantSourceCuda,
     write_sender: &SyncSender<PendingTileWrite>,
+    n_days: f64,
     measurement: &mut RelevantSourceRunMeasurement,
 ) -> Result<()> {
     let zoom = configuration.zoom;
@@ -488,6 +656,7 @@ fn paint_batch_tiles(
                 &receivers,
                 &barriers,
                 coarse_middle_cadence(zoom),
+                LAYER_LDEN_WEIGHTS[layer_index],
                 &partition_path,
             )?;
             write_sender
@@ -496,6 +665,7 @@ fn paint_batch_tiles(
                     interior: Arc::clone(&interior),
                     layer: layer_index,
                     area_source: LAYER_AREA_SOURCE[layer_index],
+                    event_days: LAYER_EVENT_ENERGY[layer_index].then_some(n_days),
                     source_id: layer.source_id,
                     output_path,
                 })

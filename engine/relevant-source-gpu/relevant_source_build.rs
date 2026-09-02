@@ -16,6 +16,7 @@ const SCATTER_BAND_SOURCE: &str = include_str!("../tile-painter/src/scatter_band
 const ARC_SCREENING_SOURCE: &str =
     include_str!("../noise-compute/src/propagation/arc_screening.rs");
 const GEO_SOURCE: &str = include_str!("../noise-compute/src/propagation/geo.rs");
+const GROUND_OPS_SOURCE: &str = include_str!("../tile-painter/src/ground_ops.rs");
 const PATH_EFFECTS_SOURCE: &str = include_str!("../noise-compute/src/propagation/path_effects.rs");
 const ISO9613_SOURCE: &str = include_str!("../noise-compute/src/propagation/iso9613.rs");
 const FUSED_TILE_SOURCE: &str = include_str!("../raster-reader/src/fused_tile_z13.rs");
@@ -333,6 +334,16 @@ fn generated_physics_header() -> String {
         "QUIETMAP_FREE_FIELD_ATMOSPHERE_DB_PER_M",
         canonical_f64(GEO_SOURCE, "ATM_ALPHA_A_WEIGHTED"),
     );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_GROUND_OPS_REFERENCE_OFFSET_M",
+        canonical_f64(GROUND_OPS_SOURCE, "GROUND_OPS_REF_OFFSET_M"),
+    );
+    write_cuda_array(
+        &mut header,
+        "QUIETMAP_GROUND_BAND_MEAN_CF",
+        canonical_f64_array::<8>(NOISE_CONSTANTS_SOURCE, "GROUND_CF"),
+    );
     writeln!(
         header,
         "constexpr int QUIETMAP_ARC_ESCALATE_MAX_PARTS = {};",
@@ -404,6 +415,7 @@ fn main() {
     println!("cargo:rerun-if-changed=kernels/relevant_source_pair.cuh");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/arc_screening.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/geo.rs");
+    println!("cargo:rerun-if-changed=../tile-painter/src/ground_ops.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/path_effects.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/iso9613.rs");
     println!("cargo:rerun-if-changed=../raster-reader/src/fused_tile_z13.rs");

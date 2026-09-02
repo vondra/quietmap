@@ -323,6 +323,18 @@ __device__ __forceinline__ void ground_attenuation_bands(
     }
 }
 
+/// The band-mean ground surrogate airport ground ops keep (iso9613
+/// aircraft_ground_atten_db): GROUND_CF * G floored at 0 plus the hard floor's share.
+__device__ __forceinline__ void ground_ops_ground_bands(
+    float ground_g,
+    float attenuation_db[QUIETMAP_BAND_COUNT]
+) {
+    for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
+        attenuation_db[band] = fmaxf(QUIETMAP_GROUND_BAND_MEAN_CF[band] * ground_g, 0.0f)
+                               + QUIETMAP_GROUND_HARD_FLOOR_DB * (1.0f - ground_g);
+    }
+}
+
 __device__ __forceinline__ float vegetation_attenuation_db(
     const PathProfile& profile,
     int band

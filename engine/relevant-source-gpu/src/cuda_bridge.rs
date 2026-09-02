@@ -67,6 +67,8 @@ pub struct DeviceScenePointers {
     pub barrier_count: u32,
     /// Non-zero: long rays take the surface heatmap's coarse-middle cadence.
     pub coarse_middle_cadence: u32,
+    /// Half a pixel of this tile in metres: the ground-ops divergence floor.
+    pub pixel_floor_m: f32,
     pub raster_geometry: DeviceRasterGeometry,
 }
 
@@ -250,6 +252,6 @@ mod tests {
 
     #[test]
     fn scene_pointer_layout_matches_cuda() {
-        assert_eq!(size_of::<DeviceScenePointers>(), 104);
+        assert_eq!(size_of::<DeviceScenePointers>(), 112);
     }
 }

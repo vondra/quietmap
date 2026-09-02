@@ -204,9 +204,10 @@ __device__ __forceinline__ void build_path_profile(
     float receiver_y_m,
     float distance_m,
     bool force_hard_ground,
+    bool coarse_middle_cadence,
     PathProfile& profile
 ) {
-    fill_profile_chainages(profile, distance_m, scene.coarse_middle_cadence != 0);
+    fill_profile_chainages(profile, distance_m, coarse_middle_cadence);
     PlaneFitSums ground_fit;
     float imd_integral = 0.0f;
     float forest_total = 0.0f;

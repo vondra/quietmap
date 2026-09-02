@@ -62,7 +62,7 @@ const GROUND_OPS_SOURCE_HEIGHT_M: f64 = 4.0;
 /// Per-period Lden-energy weights for ground-ops: `collapse_lden_u8` → `period_leq`
 /// divides each period's energy by `n_days × PERIOD_SECONDS[p]` ([43200, 14400, 28800]),
 /// so inside `compute_lden` the period weights factor to `[1, √10, 10]`.
-pub(crate) const GROUND_LDEN_WEIGHTS: [f64; NUM_PERIODS] = [1.0, 3.162_277_660_168_379_5, 10.0];
+pub const GROUND_LDEN_WEIGHTS: [f64; NUM_PERIODS] = [1.0, 3.162_277_660_168_379_5, 10.0];
 
 const A_WEIGHT_LIN: [f64; NUM_BANDS] = [
     0.002_398_832_919_019,

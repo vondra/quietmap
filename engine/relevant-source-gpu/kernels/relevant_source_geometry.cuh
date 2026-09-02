@@ -18,6 +18,8 @@ static_assert(QUIETMAP_TILE_PIXEL_SIDE % QUIETMAP_BLOCK_PIXEL_SIDE == 0, "block 
 
 constexpr uint32_t QUIETMAP_SOURCE_FLAG_BRIDGE = 1u;
 constexpr uint32_t QUIETMAP_SOURCE_FLAG_POINT = 2u;
+constexpr uint32_t QUIETMAP_SOURCE_FLAG_GROUND_OPS_AIRCRAFT = 4u;
+constexpr uint32_t QUIETMAP_SOURCE_FLAG_GROUND_OPS_GSE = 8u;
 
 struct DeviceLineSource {
     float start_x_m;
@@ -38,6 +40,12 @@ __device__ __forceinline__ bool source_is_point(const DeviceLineSource& source) 
 
 __device__ __forceinline__ bool source_is_bridge(const DeviceLineSource& source) {
     return (source.flags & QUIETMAP_SOURCE_FLAG_BRIDGE) != 0u;
+}
+
+__device__ __forceinline__ bool source_is_ground_ops(const DeviceLineSource& source) {
+    return (source.flags
+            & (QUIETMAP_SOURCE_FLAG_GROUND_OPS_AIRCRAFT | QUIETMAP_SOURCE_FLAG_GROUND_OPS_GSE))
+        != 0u;
 }
 
 /// A point source's footprint radius: buildings inside it are the source itself,
@@ -100,6 +108,8 @@ struct DeviceScenePointers {
     uint32_t barrier_count;
     /// Non-zero: long rays take the surface heatmap's coarse-middle cadence.
     uint32_t coarse_middle_cadence;
+    /// Half a pixel of this tile in metres: the ground-ops divergence floor.
+    float pixel_floor_m;
     DeviceRasterGeometry raster_geometry;
 };
 
@@ -125,7 +135,7 @@ static_assert(sizeof(FusedPixel) == 8, "raster pixel ABI");
 static_assert(sizeof(DeviceRasterGeometry) == 24, "raster geometry ABI");
 static_assert(sizeof(DeviceObstacleGrid) == 48, "obstacle grid ABI");
 static_assert(sizeof(DeviceBarrier) == 24, "barrier ABI");
-static_assert(sizeof(DeviceScenePointers) == 104, "scene ABI");
+static_assert(sizeof(DeviceScenePointers) == 112, "scene ABI");
 
 __device__ __forceinline__ float quietmap_clamp(float value, float minimum, float maximum) {
     return fminf(fmaxf(value, minimum), maximum);
@@ -246,6 +256,63 @@ __device__ __forceinline__ bool point_receiver_geometry(
     return true;
 }
 
+/// The airport ground-ops pair (CPU ground_ops::scatter_band): the closest-point
+/// distance floored at half a pixel is the reach, profile and atmosphere distance
+/// (atmosphere from GROUND_OPS_REF_OFFSET_M on); aircraft rows diverge as
+/// theta / d_perp, ground-support rows as the reference offset over the distance,
+/// both consumed in linear form.
+__device__ __forceinline__ bool ground_ops_receiver_geometry(
+    const DeviceScenePointers& scene,
+    const DeviceLineSource& source,
+    float receiver_x_m,
+    float receiver_y_m,
+    float receiver_reflection_db,
+    LineReceiverGeometry& result
+) {
+    const float segment_x = source.end_x_m - source.start_x_m;
+    const float segment_y = source.end_y_m - source.start_y_m;
+    const float receiver_from_start_x = receiver_x_m - source.start_x_m;
+    const float receiver_from_start_y = receiver_y_m - source.start_y_m;
+    const float segment_length_squared = fmaf(segment_x, segment_x, segment_y * segment_y);
+    // The unclamped projection: the foot on the EXTENDED line gives d_perp and the
+    // signed along-station of the subtended angle; the clamped one the nearest point.
+    const float signed_fraction = segment_length_squared > 1.0e-10f
+        ? (receiver_from_start_x * segment_x + receiver_from_start_y * segment_y)
+            / segment_length_squared
+        : 0.0f;
+    const float fraction = quietmap_clamp(signed_fraction, 0.0f, 1.0f);
+    const float closest_x = fmaf(fraction, segment_x, source.start_x_m);
+    const float closest_y = fmaf(fraction, segment_y, source.start_y_m);
+    const float distance = fmaxf(
+        hypotf(receiver_x_m - closest_x, receiver_y_m - closest_y), scene.pixel_floor_m);
+    if (distance > source.max_distance_m) {
+        return false;
+    }
+    float divergence_linear;
+    if ((source.flags & QUIETMAP_SOURCE_FLAG_GROUND_OPS_GSE) != 0u) {
+        divergence_linear = QUIETMAP_GROUND_OPS_REFERENCE_OFFSET_M / distance;
+    } else {
+        const float perpendicular_x = receiver_from_start_x - signed_fraction * segment_x;
+        const float perpendicular_y = receiver_from_start_y - signed_fraction * segment_y;
+        const float perpendicular = fmaxf(
+            hypotf(perpendicular_x, perpendicular_y), scene.pixel_floor_m);
+        const float along = signed_fraction * source.extent_m;
+        const float theta = atanf((source.extent_m - along) / perpendicular)
+                            + atanf(along / perpendicular);
+        divergence_linear = fmaxf(theta, 1.0e-12f) / perpendicular;
+    }
+    result.closest_x_m = closest_x;
+    result.closest_y_m = closest_y;
+    result.endpoint_distance_m = distance;
+    result.perpendicular_distance_m = distance;
+    result.signed_fraction = fraction;
+    result.slant_distance_m = fmaxf(distance - QUIETMAP_GROUND_OPS_REFERENCE_OFFSET_M, 0.0f);
+    result.source_altitude_m = sample_scene_raster(scene, closest_x, closest_y).elevation_m
+                               + source.source_height_m;
+    result.base_level_db = receiver_reflection_db + 4.342944819032518f * __logf(divergence_linear);
+    return true;
+}
+
 __device__ __forceinline__ bool line_receiver_geometry(
     const DeviceScenePointers& scene,
     const DeviceLineSource& source,
@@ -255,6 +322,10 @@ __device__ __forceinline__ bool line_receiver_geometry(
     float receiver_reflection_db,
     LineReceiverGeometry& result
 ) {
+    if (source_is_ground_ops(source)) {
+        return ground_ops_receiver_geometry(scene, source, receiver_x_m, receiver_y_m,
+                                            receiver_reflection_db, result);
+    }
     if (source_is_point(source)) {
         return point_receiver_geometry(scene, source, receiver_x_m, receiver_y_m,
                                        receiver_altitude_m, receiver_reflection_db, result);

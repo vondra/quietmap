@@ -68,7 +68,8 @@ __device__ __forceinline__ int fan_ground_or_barrier_energy(
             continue;
         }
         build_path_profile(scene, centre.x_m, centre.y_m, receiver_x_m, receiver_y_m,
-                           centre.distance_m, source_is_bridge(source), profile);
+                           centre.distance_m, source_is_bridge(source),
+                           scene.coarse_middle_cadence != 0, profile);
         float terrain_db[QUIETMAP_BAND_COUNT];
         float screening_db[QUIETMAP_BAND_COUNT];
         ray_terrain_and_screening_bands(
@@ -115,18 +116,28 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
                                 receiver_altitude_m, receiver_reflection_db, geometry)) {
         return false;
     }
+    // Ground ops always march the exact popup cadence (CPU ground_ops calls
+    // tile.build_path_profile) and keep the band-mean ground surrogate.
+    const bool ground_ops = source_is_ground_ops(source);
     PathProfile profile;
     build_path_profile(scene, geometry.closest_x_m, geometry.closest_y_m,
                        receiver_x_m, receiver_y_m, geometry.endpoint_distance_m,
-                       source_is_bridge(source), profile);
+                       source_is_bridge(source),
+                       scene.coarse_middle_cadence != 0 && !ground_ops, profile);
     float ground_db[QUIETMAP_BAND_COUNT];
-    ground_attenuation_bands(profile, geometry.source_altitude_m, receiver_altitude_m, ground_db);
+    if (ground_ops) {
+        ground_ops_ground_bands(profile.ground_path_g, ground_db);
+    } else {
+        ground_attenuation_bands(profile, geometry.source_altitude_m, receiver_altitude_m,
+                                 ground_db);
+    }
     const float characteristic_forest_depth_m = profile.forest_depth_m;
     float ground_or_barrier_energy[QUIETMAP_BAND_COUNT] = {};
     int used_directions = 0;
     const float segment_x = source.end_x_m - source.start_x_m;
     const float segment_y = source.end_y_m - source.start_y_m;
-    const bool fan_exists = fmaf(segment_x, segment_x, segment_y * segment_y) >= 1.0e-6f;
+    const bool fan_exists = fmaf(segment_x, segment_x, segment_y * segment_y) >= 1.0e-6f
+                            && !ground_ops;
     if (scene.obstacle_grid_count > 0 && fan_exists) {
         used_directions = fan_ground_or_barrier_energy(
             scene, source, receiver_x_m, receiver_y_m, receiver_altitude_m, ground_db,
@@ -136,7 +147,8 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
             // characteristic ray resolves to no screening — ground alone over its terrain.
             build_path_profile(scene, geometry.closest_x_m, geometry.closest_y_m,
                                receiver_x_m, receiver_y_m, geometry.endpoint_distance_m,
-                               source_is_bridge(source), profile);
+                               source_is_bridge(source), scene.coarse_middle_cadence != 0,
+                               profile);
             float terrain_db[QUIETMAP_BAND_COUNT];
             float screening_db[QUIETMAP_BAND_COUNT];
             ray_terrain_and_screening_bands(

@@ -11,6 +11,12 @@ pub const SOURCE_FLAG_BRIDGE: u32 = 1;
 /// `DeviceLineSource::flags`: a point source (industrial, building): start == end,
 /// spherical divergence, `extent_m` is its footprint exclusion radius.
 pub const SOURCE_FLAG_POINT: u32 = 2;
+/// `DeviceLineSource::flags`: an airport ground-ops microsegment's aircraft rows:
+/// event energy over n_days, `theta / d_perp` divergence, band-mean ground, exact cadence.
+pub const SOURCE_FLAG_GROUND_OPS_AIRCRAFT: u32 = 4;
+/// `DeviceLineSource::flags`: the same microsegment's ground-support rows,
+/// `GROUND_OPS_REF_OFFSET_M / d` divergence.
+pub const SOURCE_FLAG_GROUND_OPS_GSE: u32 = 8;
 
 pub const BLOCK_PIXEL_SIDE: usize = 16;
 pub const TILE_PIXEL_SIDE: usize = TILE_PX;
@@ -89,6 +95,36 @@ impl RegionMetricFrame {
             source_height_m: row.source_height_m as f32,
             flags: if row.bridge { SOURCE_FLAG_BRIDGE } else { 0 },
             emission_linear: flatten_emission(&row.emission_lin),
+        }
+    }
+
+    /// One airport ground-ops microsegment for one vehicle kind, its rows' event
+    /// energies already summed per period (class-weighted for aircraft).
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_ground_ops(
+        &self,
+        start_lat: f64,
+        start_lon: f64,
+        end_lat: f64,
+        end_lon: f64,
+        length_m: f32,
+        max_distance_m: f64,
+        source_height_m: f64,
+        flag: u32,
+        emission: &[[f32; BAND_COUNT]; PERIOD_COUNT],
+    ) -> DeviceLineSource {
+        let start = self.encode(start_lat, start_lon);
+        let end = self.encode(end_lat, end_lon);
+        DeviceLineSource {
+            start_x_m: start[0],
+            start_y_m: start[1],
+            end_x_m: end[0],
+            end_y_m: end[1],
+            extent_m: length_m,
+            max_distance_m: max_distance_m as f32,
+            source_height_m: source_height_m as f32,
+            flags: flag,
+            emission_linear: flatten_emission(emission),
         }
     }
 
