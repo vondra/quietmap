@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
@@ -25,10 +26,12 @@ from gpu_model_role import (
     W2_STRIDE4_REQUIRED_PTX_ENTRIES,
     ContractError,
     artifact_set,
+    cuda_fatbin_images,
     deployment_contract,
     load_and_validate_spec,
     model_source_recipe_sha256,
     model_role_sha256,
+    relevant_source_fleet_cuda_archs,
     resolve_role,
     verify_artifact,
     verify_rust_artifact,
@@ -43,6 +46,64 @@ RUST_BUILDER = ROOT / "scripts/build-rust-model-role.py"
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+# Fake CUDA executable: a minimal ELF64 whose `.nv_fatbin` carries fake SASS and
+# PTX entries in the measured CUDA 13.3 layout. The fake toolchain runs this file
+# as a program; the tests here exec it for the same function.
+FAKE_CUDA_EXECUTABLE_SOURCE = '''\
+import struct
+import sys
+
+FATBIN_MAGIC = 0xBA55ED50
+
+
+def fatbin_entry(kind, arch):
+    payload = b"fake image %d %d" % (kind, arch)
+    payload += b"\\0" * (-len(payload) % 8)
+    header = struct.pack("<HHIQ", kind, 0x0101, 64, len(payload))
+    header += b"\\0" * 12 + struct.pack("<I", arch)
+    return header + b"\\0" * (64 - len(header)) + payload
+
+
+def fatbin_section(sass, ptx):
+    entries = b"".join(fatbin_entry(2, arch) for arch in sass)
+    entries += b"".join(fatbin_entry(1, arch) for arch in ptx)
+    return struct.pack("<IHHQ", FATBIN_MAGIC, 1, 16, len(entries)) + entries
+
+
+def fake_cuda_executable(sass, ptx, *more_fatbins):
+    """One `.nv_fatbin` section, plus one more per extra (sass, ptx) pair."""
+    fatbins = [fatbin_section(sass, ptx)] + [fatbin_section(s, p) for s, p in more_fatbins]
+    names = b"\\0.nv_fatbin\\0.shstrtab\\0"
+
+    def section(name, offset, size, kind=1):
+        return struct.pack("<IIQQQQIIQQ", name, kind, 0, 0, offset, size, 0, 0, 1, 0)
+
+    body = b""
+    sections = b"\\0" * 64
+    for fatbin in fatbins:
+        sections += section(1, 64 + len(body), len(fatbin))
+        body += fatbin
+    names_offset = 64 + len(body)
+    headers_offset = names_offset + len(names)
+    count = 2 + len(fatbins)
+    header = b"\\x7fELF\\x02\\x01\\x01" + b"\\0" * 9
+    header += struct.pack(
+        "<HHIQQQIHHHHHH", 2, 62, 1, 0, 0, headers_offset, 0, 64, 0, 0, 64, count, count - 1
+    )
+    sections += section(12, names_offset, len(names), 3)
+    return header + body + names + sections
+
+
+if __name__ == "__main__":
+    archs = lambda text: [int(arch.removeprefix("sm_")) for arch in text.split(",") if arch]
+    with open(sys.argv[1], "wb") as out:
+        out.write(fake_cuda_executable(archs(sys.argv[2]), archs(sys.argv[3])))
+'''
+_fake_namespace: dict[str, object] = {}
+exec(FAKE_CUDA_EXECUTABLE_SOURCE, _fake_namespace)
+fake_cuda_executable = _fake_namespace["fake_cuda_executable"]
 
 
 def write_executable(path: Path, content: str) -> None:
@@ -167,6 +228,12 @@ class ModelRoleSpecTests(unittest.TestCase):
             r"^[0-9a-f]{64}$",
         )
         self.assertEqual(airborne["cargo_features"], ["gpu"])
+        relevant_source = resolve_role(
+            spec, "relevant-source-production", "relevant-source-stock-v1"
+        )
+        self.assertEqual(relevant_source["cuda_image"], "FLEET_CUDA_ARCHS-fatbin")
+        fleet_archs = relevant_source_fleet_cuda_archs(ROOT)
+        self.assertTrue(all(re.fullmatch(r"sm_[0-9]{2,3}", arch) for arch in fleet_archs))
         self.assertEqual(
             resolve_role(spec, "surface-cpu-production", "surface-cpu-stock-v1")[
                 "binary"
@@ -389,6 +456,41 @@ class ModelRoleSpecTests(unittest.TestCase):
         self.assertTrue(reviewed_define_names())
 
 
+class CudaFatbinTests(unittest.TestCase):
+    def test_fatbin_parser_reads_images_and_refuses_damaged_executables(self) -> None:
+        executable = fake_cuda_executable([75, 120], [120])
+        self.assertEqual(cuda_fatbin_images(executable), (["sm_75", "sm_120"], ["sm_120"]))
+        self.assertEqual(cuda_fatbin_images(fake_cuda_executable([], [])), ([], []))
+        with self.assertRaisesRegex(ContractError, "extended ELF section numbering"):
+            cuda_fatbin_images(executable[:0x3C] + struct.pack("<H", 0) + executable[0x3E:])
+        # Every fatbin section counts: a second `.nv_fatbin` cannot hide the first.
+        self.assertEqual(
+            cuda_fatbin_images(fake_cuda_executable([75], [], ([120], [120]))),
+            (["sm_75", "sm_120"], ["sm_120"]),
+        )
+        container = executable.index(struct.pack("<I", 0xBA55ED50))
+        entry = container + 16
+        # The `.nv_fatbin` section header is the second table row; sh_size sits at byte 32.
+        (table,) = struct.unpack_from("<Q", executable, 0x28)
+        size_field = table + 64 + 32
+        damaged = (
+            ("not ELF", b"#!/bin/sh\nsm_75,sm_120\n"),
+            ("no fatbin section", executable.replace(b".nv_fatbin", b".nv_fatbix")),
+            ("wrong magic", executable.replace(struct.pack("<I", 0xBA55ED50), b"\0\0\0\0", 1)),
+            ("zero container header", executable[: container + 6] + b"\0\0" + executable[container + 8 :]),
+            ("zero entry header", executable[: entry + 4] + b"\0" * 4 + executable[entry + 8 :]),
+            ("section past the file", executable[:size_field] + b"\xff" * 8 + executable[size_field + 8 :]),
+            ("section header size 32", executable[:0x3A] + struct.pack("<H", 32) + executable[0x3C:]),
+            ("names not a string table", executable[: table + 128 + 4] + b"\1\0\0\0" + executable[table + 128 + 8 :]),
+            ("empty image", executable[: entry + 8] + b"\0" * 8 + executable[entry + 16 :]),
+            ("truncated", executable[:-40]),
+        )
+        for label, binary_bytes in damaged:
+            with self.subTest(label=label):
+                with self.assertRaises(ContractError):
+                    cuda_fatbin_images(binary_bytes)
+
+
 class FakeArtifactBuildTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -397,6 +499,7 @@ class FakeArtifactBuildTests(unittest.TestCase):
         self.source.mkdir()
         (self.source / "scripts").mkdir()
         (self.source / "engine/noise-gpu").mkdir(parents=True)
+        (self.source / "engine/relevant-source-gpu").mkdir(parents=True)
         (self.source / ".cargo").mkdir()
         shutil.copyfile(SPEC_PATH, self.source / "scripts/model-role-spec.json")
         shutil.copyfile(BUILDER, self.source / "scripts/build-gpu-model-role.py")
@@ -405,6 +508,16 @@ class FakeArtifactBuildTests(unittest.TestCase):
         )
         (self.source / "engine/noise-gpu/Cargo.toml").write_text(
             '[package]\nname="noise-gpu"\nversion="0.0.0"\n', encoding="utf-8"
+        )
+        (self.source / "engine/relevant-source-gpu/Cargo.toml").write_text(
+            '[package]\nname="relevant-source-gpu"\nversion="0.0.0"\n', encoding="utf-8"
+        )
+        fleet_archs = relevant_source_fleet_cuda_archs(ROOT)
+        (self.source / "engine/relevant-source-gpu/relevant_source_build.rs").write_text(
+            'const FLEET_CUDA_ARCHS: &[&str] = &['
+            + ", ".join(f'"{arch}"' for arch in fleet_archs)
+            + "];\n",
+            encoding="utf-8",
         )
         (self.source / "engine/Cargo.lock").write_text(
             "# fake locked source\n", encoding="utf-8"
@@ -477,9 +590,14 @@ else
 .visible .entry airborne_coarse_batched() { ret; }
 .visible .entry airborne_exact_batched() { ret; }'
 fi
-printf '.version 8.8\n.target sm_120\n.address_size 64\n%s\n' "$entries" > "$out/$ptx"
 printf '#!/bin/sh\nembedded PTX follows\n' > "$CARGO_TARGET_DIR/release/$binary"
-cat "$out/$ptx" >> "$CARGO_TARGET_DIR/release/$binary"
+if [ "$binary" = relevant-source-surface ]; then
+  [ -z "$NOISE_GPU_ARCH" ]
+  python3 "$(dirname "$0")/fake-cuda-executable.py" "$CARGO_TARGET_DIR/release/$binary" '__FAKE_FLEET_CUDA_ARCHS__' ''
+else
+  printf '.version 8.8\n.target sm_120\n.address_size 64\n%s\n' "$entries" > "$out/$ptx"
+  cat "$out/$ptx" >> "$CARGO_TARGET_DIR/release/$binary"
+fi
 chmod +x "$CARGO_TARGET_DIR/release/$binary"
 printf '%s\n' '-DTPX=512' '-DBARRIER_STRIDE=6' '-DSOURCE_SEGMENT_STRIDE=4' '-DSURFACE_META_SLOTS=14' '-DOUT_ARCSTAT_COUNTERS=10' > "$out/nvcc-defines.txt"
 for token in $NOISE_GPU_DEFINES; do printf '%s\n' "$token" >> "$out/nvcc-defines.txt"; done
@@ -501,6 +619,18 @@ if [ "$binary" = gpu-surface ]; then
   fi
 fi
 """,
+        )
+        fake_cargo = self.tools / "cargo"
+        fake_cargo.write_text(
+            fake_cargo.read_text(encoding="utf-8").replace(
+                "__FAKE_FLEET_CUDA_ARCHS__",
+                ",".join(relevant_source_fleet_cuda_archs(self.source)),
+            ),
+            encoding="utf-8",
+        )
+        fake_cargo.chmod(0o755)
+        (self.tools / "fake-cuda-executable.py").write_text(
+            FAKE_CUDA_EXECUTABLE_SOURCE, encoding="utf-8"
         )
         write_executable(
             self.cuda / "bin/nvcc",
@@ -530,8 +660,9 @@ echo 'ptxas info : Function properties for line line_binned_fused line_multifide
         self,
         role: str = "surface-stock-v1",
         family: str = "surface-production",
+        arch: str | None = "sm_120",
     ) -> list[str]:
-        return [
+        command = [
             sys.executable,
             str(BUILDER),
             "--source-archive",
@@ -554,9 +685,10 @@ echo 'ptxas info : Function properties for line line_binned_fused line_multifide
             str(self.artifacts),
             "--cuda-root",
             str(self.cuda),
-            "--arch",
-            "sm_120",
         ]
+        if arch is not None:
+            command.extend(["--arch", arch])
+        return command
 
     def run_builder(self, command: list[str], **environment) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
@@ -627,6 +759,29 @@ echo 'ptxas info : Function properties for line line_binned_fused line_multifide
         repeated = self.run_builder(self.command())
         self.assertNotEqual(repeated.returncode, 0)
         self.assertIn("already exists", repeated.stderr)
+
+    def test_fleet_role_builds_all_images_without_a_single_arch_pin(self) -> None:
+        role = "relevant-source-stock-v1"
+        result = self.run_builder(self.command(role, "relevant-source-production", None))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        artifact = self.artifacts / role
+        receipt = verify_artifact(artifact, SPEC_PATH)
+        self.assertIsNone(receipt["build"]["arch"])
+        self.assertEqual(receipt["build"]["environment"]["NOISE_GPU_ARCH"], "")
+        fleet_archs = relevant_source_fleet_cuda_archs(ROOT)
+        binary = artifact / "relevant-source-surface"
+        self.assertEqual(cuda_fatbin_images(binary.read_bytes()), (fleet_archs, []))
+        self.assertFalse((artifact / "receipts/cuda-images.txt").exists())
+
+    def test_fleet_role_rejects_a_single_arch_pin_and_ptx_roles_require_one(self) -> None:
+        fleet = self.run_builder(
+            self.command("relevant-source-stock-v1", "relevant-source-production")
+        )
+        self.assertNotEqual(fleet.returncode, 0)
+        self.assertIn("fleet CUDA image roles do not accept --arch", fleet.stderr)
+        ptx = self.run_builder(self.command(arch=None))
+        self.assertNotEqual(ptx.returncode, 0)
+        self.assertIn("single-arch GPU roles require --arch", ptx.stderr)
 
     def test_w2_stride4_artifact_binds_declared_defines_role_and_scatter_cubin(self) -> None:
         role = "surface-w2-z13-stride4-v1"
@@ -968,6 +1123,30 @@ class FakeArtifactMutationTests(FakeArtifactBuildTests):
         binary.chmod(0o755)
         reseal_artifact(artifact)
         with self.assertRaises(ContractError):
+            verify_artifact(artifact, SPEC_PATH)
+
+    def test_resealed_single_image_binary_is_rejected(self) -> None:
+        role = "relevant-source-stock-v1"
+        result = self.run_builder(self.command(role, "relevant-source-production", None))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        artifact = self.artifacts / role
+        (artifact / "relevant-source-surface").write_bytes(fake_cuda_executable([120], []))
+        reseal_artifact(artifact)
+        with self.assertRaisesRegex(ContractError, "embeds SASS sm_120 and PTX none"):
+            verify_artifact(artifact, SPEC_PATH)
+
+    def test_resealed_fatbin_carrying_ptx_is_rejected(self) -> None:
+        role = "relevant-source-stock-v1"
+        result = self.run_builder(self.command(role, "relevant-source-production", None))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        artifact = self.artifacts / role
+        fleet = [int(arch.removeprefix("sm_")) for arch in relevant_source_fleet_cuda_archs(ROOT)]
+        (artifact / "relevant-source-surface").write_bytes(fake_cuda_executable(fleet[::-1], []))
+        reseal_artifact(artifact)
+        verify_artifact(artifact, SPEC_PATH)  # the image SET is the fact, not nvcc's order
+        (artifact / "relevant-source-surface").write_bytes(fake_cuda_executable(fleet, [120]))
+        reseal_artifact(artifact)
+        with self.assertRaisesRegex(ContractError, "and PTX sm_120;"):
             verify_artifact(artifact, SPEC_PATH)
 
     def test_resealed_experimental_define_is_rejected_even_if_environment_agrees(

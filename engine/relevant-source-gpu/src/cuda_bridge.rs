@@ -141,9 +141,8 @@ impl<T> Drop for DeviceBuffer<T> {
     }
 }
 
-/// The architecture the linked CUDA archive was compiled for, from the build
-/// script's own detection of this host's card.
-const COMPILED_CUDA_ARCH: &str = env!("RELEVANT_SOURCE_CUDA_ARCH");
+/// The comma-separated SASS images embedded in the linked CUDA archive.
+const COMPILED_CUDA_ARCHS: &str = env!("RELEVANT_SOURCE_CUDA_ARCHS");
 
 /// Process-wide device initialization and the two architecture-specific launches.
 pub struct RelevantSourceCuda;
@@ -153,13 +152,11 @@ impl RelevantSourceCuda {
         let mut compute_capability: c_int = 0;
         check_cuda(unsafe { relevant_source_cuda_initialize(&mut compute_capability) })?;
         let card_arch = format!("sm_{compute_capability}");
-        if card_arch != COMPILED_CUDA_ARCH {
-            // Never silent: the old painter's mismatched image cost a PTX JIT of
-            // 57.2 s in every process (measured 2026-08-28, cold CUDA cache),
-            // and an image newer than the card cannot load at all.
-            eprintln!(
-                "relevant-source-cuda: kernels compiled for {COMPILED_CUDA_ARCH}, this card is \
-                 {card_arch}: launches JIT the embedded PTX or fail outright. Rebuild here."
+        if !COMPILED_CUDA_ARCHS.split(',').any(|arch| arch == card_arch) {
+            bail!(
+                "relevant-source-cuda: this card is {card_arch}, but the SASS fatbin embeds \
+                 {COMPILED_CUDA_ARCHS}; add it to FLEET_CUDA_ARCHS for a release, or build \
+                 with NOISE_GPU_ARCH={card_arch} for this card alone"
             );
         }
         Ok(Self)

@@ -19,6 +19,7 @@ from pathlib import Path
 import gpu_model_role
 from gpu_model_role import (
     ContractError,
+    require_fleet_fatbin,
     extract_git_archive,
     file_record,
     load_and_validate_spec,
@@ -140,7 +141,7 @@ def build_environment(cuda_root: Path, target: Path) -> tuple[dict[str, str], di
 def build(args: argparse.Namespace) -> Path:
     if os.environ.get("NOISE_GPU_DEFINES", ""):
         fail("caller NOISE_GPU_DEFINES must be empty for a role artifact")
-    if not ARCH.fullmatch(args.arch):
+    if args.arch is not None and not ARCH.fullmatch(args.arch):
         fail("arch must have the canonical sm_NN form")
     archive = args.source_archive.resolve(strict=True)
     if not archive.is_file():
@@ -182,6 +183,11 @@ def build(args: argparse.Namespace) -> Path:
                 fail("extracted role spec SHA-256 mismatch")
             spec = load_and_validate_spec(spec_path)
             role = resolve_role(spec, args.family, args.role)
+            fleet_cuda_image = role.get("cuda_image") == "FLEET_CUDA_ARCHS-fatbin"
+            if fleet_cuda_image and args.arch is not None:
+                fail("fleet CUDA image roles do not accept --arch")
+            if not fleet_cuda_image and args.arch is None:
+                fail("single-arch GPU roles require --arch")
             if sha256_file(source_root / "scripts/build-gpu-model-role.py") != builder_sha:
                 fail("invoked builder does not match the immutable source archive")
             if sha256_file(source_root / "scripts/gpu_model_role.py") != contract_sha:
@@ -191,7 +197,8 @@ def build(args: argparse.Namespace) -> Path:
                 fail("role Cargo manifest is absent from the source archive")
 
             environment, tools = build_environment(cuda_root, target_root)
-            environment["NOISE_GPU_ARCH"] = args.arch
+            if not fleet_cuda_image:
+                environment["NOISE_GPU_ARCH"] = args.arch
             role_noise_gpu_defines = " ".join(role.get("noise_gpu_defines", []))
             environment["NOISE_GPU_DEFINES"] = role_noise_gpu_defines
             versions = {
@@ -249,6 +256,11 @@ def build(args: argparse.Namespace) -> Path:
             copy_payload(define_receipt, staging_root / "receipts/nvcc-defines.txt", 0o644)
 
             binary_bytes = binary.read_bytes()
+            if fleet_cuda_image:
+                try:
+                    require_fleet_fatbin(binary_bytes, source_root)
+                except ContractError as error:
+                    fail(str(error))
             ptx_receipts: dict[str, dict[str, object]] = {}
             for ptx_name in role["ptx"]:
                 generated_ptx = find_one(target_root / "release/build", ptx_name)
@@ -367,7 +379,7 @@ def build(args: argparse.Namespace) -> Path:
                         "HOME": environment["HOME"],
                         "LC_ALL": environment["LC_ALL"],
                         "LD_LIBRARY_PATH": environment.get("LD_LIBRARY_PATH", ""),
-                        "NOISE_GPU_ARCH": args.arch,
+                        "NOISE_GPU_ARCH": environment["NOISE_GPU_ARCH"],
                         "NOISE_GPU_DEFINES": role_noise_gpu_defines,
                         "PATH": environment["PATH"],
                         "RUSTUP_HOME": environment["RUSTUP_HOME"],
@@ -446,7 +458,7 @@ def main() -> None:
     parser.add_argument("--role", required=True)
     parser.add_argument("--artifact-root", required=True, type=Path)
     parser.add_argument("--cuda-root", required=True, type=Path)
-    parser.add_argument("--arch", required=True)
+    parser.add_argument("--arch", help="single-arch PTX target; fleet-fatbin roles omit it")
     args = parser.parse_args()
     try:
         artifact = build(args)

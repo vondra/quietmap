@@ -108,6 +108,7 @@
           "cargo_features": [
             "gpu"
           ],
+          "cuda_image": "FLEET_CUDA_ARCHS-fatbin",
           "manifest": "engine/relevant-source-gpu/Cargo.toml",
           "model_role": "stock",
           "package": "relevant-source-gpu",

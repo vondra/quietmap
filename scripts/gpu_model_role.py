@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
@@ -23,6 +24,9 @@ HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9-]*$")
 ARCH = re.compile(r"^sm_[0-9]{2,3}$")
+FLEET_CUDA_ARCHS_CONSTANT = re.compile(
+    r'const FLEET_CUDA_ARCHS: &\[&str\] = &\[(?P<archs>.*?)\];', re.DOTALL
+)
 PTX_ENTRY = re.compile(r"\.visible\s+\.entry\s+([A-Za-z0-9_$]+)\s*\(")
 PTX_TARGET = re.compile(r"(?m)^\s*\.target\s+(sm_[0-9]{2,3})(?:\s*,|\s*$)")
 DEFINE_TOKEN = re.compile(r"^-D([A-Z][A-Z0-9_]*)(?:=(.+))?$")
@@ -138,6 +142,7 @@ ROLE_SHAPES = {
         "package": "relevant-source-gpu",
         "ptx": [],
         "entries": [],
+        "cuda_image": "FLEET_CUDA_ARCHS-fatbin",
     },
     "build-heatmap-surface": {
         "family": "surface-cpu-production",
@@ -164,6 +169,134 @@ ROLE_SHAPES = {
         "entries": [],
     },
 }
+
+
+def relevant_source_fleet_cuda_archs(root: Path) -> list[str]:
+    """Read the relevant-source fatbin's one architecture list from its build script."""
+    source = (root / "engine/relevant-source-gpu/relevant_source_build.rs").read_text(
+        encoding="utf-8"
+    )
+    matched = FLEET_CUDA_ARCHS_CONSTANT.search(source)
+    if matched is None:
+        raise ContractError("relevant-source build has no FLEET_CUDA_ARCHS constant")
+    archs = re.findall(r'"(sm_[0-9]{2,3})"', matched.group("archs"))
+    if not archs or len(archs) != len(set(archs)):
+        raise ContractError("FLEET_CUDA_ARCHS must contain unique sm_NN architectures")
+    return archs
+
+
+ELF_SECTION_STRTAB = 3
+ELF_SECTION_NOBITS = 8
+ELF64_SECTION_HEADER_SIZE = 64
+ELF_SECTION_INDEX_RESERVED = 0xFF00
+NV_FATBIN_MAGIC = 0xBA55ED50
+NV_FATBIN_SECTIONS = (".nv_fatbin", "__nv_relfatbin")
+NV_FATBIN_CONTAINER_HEADER_MIN = 16
+NV_FATBIN_ENTRY_HEADER_MIN = 32
+CUDA_IMAGE_KIND_PTX = 1
+CUDA_IMAGE_KIND_SASS = 2
+
+
+def elf64_sections(binary_bytes: bytes) -> list[tuple[str, bytes]]:
+    """Every file-backed section of a little-endian ELF64 executable, in table order,
+    as (name, bytes) — a list, so a repeated name cannot hide an earlier section."""
+    if binary_bytes[:6] != b"\x7fELF\x02\x01":
+        raise ContractError("binary is not a little-endian ELF64 executable")
+    try:
+        (table_offset,) = struct.unpack_from("<Q", binary_bytes, 0x28)
+        entry_size, count, names_index = struct.unpack_from("<HHH", binary_bytes, 0x3A)
+        if entry_size != ELF64_SECTION_HEADER_SIZE:
+            raise ContractError("binary ELF section header size is not 64")
+        if count == 0 or names_index >= ELF_SECTION_INDEX_RESERVED:
+            raise ContractError("binary uses extended ELF section numbering, which is unsupported")
+        if table_offset + count * entry_size > len(binary_bytes):
+            raise ContractError("binary ELF section table overruns the file")
+        headers = [
+            struct.unpack_from("<IIQQQQ", binary_bytes, table_offset + index * entry_size)
+            for index in range(count)
+        ]
+        _, names_kind, _, _, names_offset, names_size = headers[names_index]
+        if names_kind != ELF_SECTION_STRTAB or names_offset + names_size > len(binary_bytes):
+            raise ContractError("binary ELF section names are not a bounded string table")
+        names = binary_bytes[names_offset : names_offset + names_size]
+        sections = []
+        for name_offset, kind, _, _, offset, size in headers:
+            if kind == ELF_SECTION_NOBITS:
+                continue
+            if offset + size > len(binary_bytes):
+                raise ContractError("binary ELF section overruns the file")
+            name = names[name_offset : names.index(b"\0", name_offset)].decode("ascii")
+            sections.append((name, binary_bytes[offset : offset + size]))
+    except (struct.error, IndexError, ValueError, OverflowError, UnicodeDecodeError) as error:
+        raise ContractError(f"binary ELF section table is malformed: {error}") from error
+    return sections
+
+
+def cuda_fatbin_images(binary_bytes: bytes) -> tuple[list[str], list[str]]:
+    """Read the SASS and PTX images a CUDA executable embeds, straight from its bytes.
+
+    Layout measured on CUDA 13.3 output (r9950, 2026-09-03; identical on the
+    six-image release and a single-image build): each fatbin section is a run of
+    containers — u32 magic 0xBA55ED50, u16 version, u16 header size, u64 payload
+    size — whose payload is a run of entries — u16 kind (1 PTX, 2 SASS cubin),
+    u16 version, u32 header size, u64 padded payload size, the SM number as a
+    u32 at byte 28 — each followed by its image.
+    """
+    fatbins = [data for name, data in elf64_sections(binary_bytes) if name in NV_FATBIN_SECTIONS]
+    if not fatbins:
+        raise ContractError("binary embeds no CUDA fatbin section")
+    sass: list[str] = []
+    ptx: list[str] = []
+    for fatbin in fatbins:
+        position = 0
+        while position < len(fatbin):
+            try:
+                magic, _, header_size, size = struct.unpack_from("<IHHQ", fatbin, position)
+            except struct.error as error:
+                raise ContractError("CUDA fatbin container is truncated") from error
+            if magic != NV_FATBIN_MAGIC:
+                raise ContractError("CUDA fatbin container has the wrong magic")
+            if header_size < NV_FATBIN_CONTAINER_HEADER_MIN:
+                raise ContractError("CUDA fatbin container header is too small")
+            entry = position + header_size
+            end = entry + size
+            if end > len(fatbin):
+                raise ContractError("CUDA fatbin container overruns its section")
+            while entry < end:
+                try:
+                    kind, _, entry_header_size, payload_size = struct.unpack_from(
+                        "<HHIQ", fatbin, entry
+                    )
+                    (arch,) = struct.unpack_from("<I", fatbin, entry + 28)
+                except struct.error as error:
+                    raise ContractError("CUDA fatbin entry is truncated") from error
+                if entry_header_size < NV_FATBIN_ENTRY_HEADER_MIN or payload_size == 0:
+                    raise ContractError("CUDA fatbin entry has no image or a header too small")
+                if kind == CUDA_IMAGE_KIND_SASS:
+                    sass.append(f"sm_{arch}")
+                elif kind == CUDA_IMAGE_KIND_PTX:
+                    ptx.append(f"sm_{arch}")
+                else:
+                    raise ContractError(f"CUDA fatbin entry has unknown kind {kind}")
+                entry += entry_header_size + payload_size
+            if entry != end:
+                raise ContractError("CUDA fatbin entries do not tile their container")
+            position = end
+    return sass, ptx
+
+
+def require_fleet_fatbin(binary_bytes: bytes, source_root: Path) -> None:
+    """The one fleet-image fact, read from the executable itself: exactly the
+    `FLEET_CUDA_ARCHS` SASS images and no PTX (a receipt could only repeat it)."""
+    expected = relevant_source_fleet_cuda_archs(source_root)
+    sass, ptx = cuda_fatbin_images(binary_bytes)
+    # The fact is the image SET; nvcc's entry order is not part of it.
+    if sorted(sass) != sorted(expected) or ptx:
+        raise ContractError(
+            f"binary embeds SASS {','.join(sass) or 'none'} and PTX {','.join(ptx) or 'none'}; "
+            f"the fleet role requires SASS {','.join(expected)} and no PTX"
+        )
+
 
 REQUIRED_FAMILIES = frozenset(shape["family"] for shape in ROLE_SHAPES.values())
 LINE_ROLE_FAMILIES = (
@@ -443,6 +576,7 @@ def load_and_validate_spec(path: Path) -> dict[str, Any]:
             if family["kind"] == "gpu":
                 required_keys |= {"ptx", "required_ptx_entries"}
             optional_keys = {
+                "cuda_image",
                 "noise_gpu_defines",
                 "selection_epoch",
             }
@@ -458,6 +592,8 @@ def load_and_validate_spec(path: Path) -> dict[str, Any]:
                 raise ContractError(f"role {role_name} binary does not belong to {family_name}")
             if role["package"] != shape["package"]:
                 raise ContractError(f"role {role_name} names the wrong Cargo package")
+            if role.get("cuda_image") != shape.get("cuda_image"):
+                raise ContractError(f"role {role_name} has the wrong CUDA image contract")
             if _safe_relative_path(role["manifest"], f"{role_name}.manifest") != shape["manifest"]:
                 raise ContractError(f"role {role_name} names the wrong Cargo manifest")
             if role.get("ptx", []) != shape["ptx"]:
@@ -887,6 +1023,7 @@ def verify_artifact(root: Path, expected_role_spec: Path) -> dict[str, Any]:
     )
     if receipt.get("role_sha256") != expected_role_sha256:
         raise ContractError("artifact receipt role digest disagrees with role spec")
+    fleet_cuda_image = resolved.get("cuda_image") == "FLEET_CUDA_ARCHS-fatbin"
     build = receipt.get("build")
     if not isinstance(build, dict) or build.get("cuda_context") != "not_opened":
         raise ContractError("artifact receipt does not prove a compile-only CUDA build")
@@ -906,8 +1043,13 @@ def verify_artifact(root: Path, expected_role_spec: Path) -> dict[str, Any]:
         },
         "artifact build receipt",
     )
+    build_arch = build.get("arch")
     if (
-        not ARCH.fullmatch(build.get("arch", ""))
+        (fleet_cuda_image and build_arch is not None)
+        or (
+            not fleet_cuda_image
+            and (not isinstance(build_arch, str) or not ARCH.fullmatch(build_arch))
+        )
         or build.get("cuda_release") != "13.3"
         or build.get("fresh_target") is not True
         or not HEX64.fullmatch(build.get("builder_sha256", ""))
@@ -954,7 +1096,7 @@ def verify_artifact(root: Path, expected_role_spec: Path) -> dict[str, Any]:
         "artifact build environment",
     )
     if (
-        environment.get("NOISE_GPU_ARCH") != build["arch"]
+        environment.get("NOISE_GPU_ARCH") != ("" if fleet_cuda_image else build["arch"])
         or environment.get("CARGO_INCREMENTAL") != "0"
         or environment.get("LC_ALL") != "C"
         or environment.get("TERM") != "dumb"
@@ -982,6 +1124,8 @@ def verify_artifact(root: Path, expected_role_spec: Path) -> dict[str, Any]:
     if not binary_path.is_file() or not os.access(binary_path, os.X_OK):
         raise ContractError("role binary is absent or not executable")
     binary_bytes = binary_path.read_bytes()
+    if fleet_cuda_image:
+        require_fleet_fatbin(binary_bytes, expected_role_spec.parent.parent)
     ptx_receipt = receipt.get("ptx")
     if not isinstance(ptx_receipt, dict) or set(ptx_receipt) != set(resolved["ptx"]):
         raise ContractError("artifact receipt has the wrong PTX set")

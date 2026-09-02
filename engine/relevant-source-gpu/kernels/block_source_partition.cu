@@ -89,8 +89,8 @@ extern "C" const char* relevant_source_cuda_error_string(int status) {
 }
 
 // Reports the opened card's compute capability as major * 10 + minor (an RTX
-// 5070 answers 120), which the host compares with the arch this archive was
-// compiled for.
+// 5070 answers 120), which the host compares with the SASS images in this
+// archive's fatbin.
 extern "C" int relevant_source_cuda_initialize(int* compute_capability) {
     int device_count = 0;
     cudaError_t status = cudaGetDeviceCount(&device_count);

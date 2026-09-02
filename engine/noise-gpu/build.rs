@@ -5,8 +5,8 @@
 // benchmark/deploy path already rebuilds on each GPU role.
 // nvcc is isolated from Cargo's rustflags, so target-cpu=native parity is
 // untouched. The arch defaults to this host's own card and NOISE_GPU_ARCH
-// overrides it, both in `build_cuda_arch.rs`, which relevant-source-gpu's
-// build script includes from here so the two engines target one card.
+// overrides it, both in `build_cuda_arch.rs`. The relevant-source release
+// builder independently embeds its supported fleet as a SASS fatbin.
 //
 // Only the `gpu` feature (the gpu-surface/e2-full bins) needs CUDA. Without it the
 // crate is the CPU-side lib alone, so skip nvcc entirely — a host with no CUDA

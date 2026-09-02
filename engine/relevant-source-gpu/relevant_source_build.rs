@@ -1,13 +1,12 @@
 //! Compile the fixed relevant-source CUDA program into its statically linked host bridge.
 
-#[path = "../noise-gpu/build_cuda_arch.rs"]
-mod build_cuda_arch;
-
 use std::env;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+
+const FLEET_CUDA_ARCHS: &[&str] = &["sm_75", "sm_80", "sm_86", "sm_89", "sm_90", "sm_120"];
 
 const NOISE_CONSTANTS_SOURCE: &str = include_str!("../noise-compute/src/constants.rs");
 const PATH_PROFILE_SOURCE: &str = include_str!("../noise-compute/src/propagation/path_profile.rs");
@@ -375,28 +374,53 @@ fn run_checked(command: &mut Command, label: &str) {
     assert!(status.success(), "{label} exited with {status}");
 }
 
-fn nvcc_arguments(arch: &str) -> [String; 8] {
-    [
+fn common_nvcc_arguments() -> Vec<String> {
+    vec![
         "-std=c++17".to_owned(),
         "-O3".to_owned(),
         "--use_fast_math".to_owned(),
         "-lineinfo".to_owned(),
-        format!("-arch={arch}"),
         "-maxrregcount=40".to_owned(),
         "-Xcompiler".to_owned(),
         "-fPIC".to_owned(),
     ]
 }
 
+fn nvcc_arguments(archs: &[String]) -> Vec<String> {
+    let mut arguments = common_nvcc_arguments();
+    for arch in archs {
+        let compute = arch.strip_prefix("sm_").unwrap_or_else(|| {
+            panic!("CUDA arch must be sm_NN (NOISE_GPU_ARCH or FLEET_CUDA_ARCHS), got {arch}")
+        });
+        arguments.push("-gencode".to_owned());
+        arguments.push(format!("arch=compute_{compute},code={arch}"));
+    }
+    arguments
+}
+
+fn ptx_arguments(arch: &str) -> Vec<String> {
+    let mut arguments = common_nvcc_arguments();
+    arguments.push(format!("-arch={arch}"));
+    arguments
+}
+
+fn cuda_archs() -> Vec<String> {
+    env::var("NOISE_GPU_ARCH")
+        .ok()
+        .filter(|arch| !arch.is_empty())
+        .map(|arch| vec![arch])
+        .unwrap_or_else(|| FLEET_CUDA_ARCHS.iter().map(ToString::to_string).collect())
+}
+
 /// Owner ruling: no f64 in a production kernel (GeForce Blackwell runs it at 1/64).
 /// The PTX of the same translation unit is scanned for any `.f64` opcode; one
 /// promoted literal or libm call re-promotes a whole per-pair chain, so the build fails.
-/// The gate runs at whatever arch this host builds, never at a fixed one.
+/// The gate runs for every embedded architecture; the linked archive has no PTX.
 fn assert_ptx_has_no_f64(output_directory: &std::path::Path, arch: &str) {
-    let ptx_path = output_directory.join("block_source_partition.ptx");
+    let ptx_path = output_directory.join(format!("block_source_partition_{arch}.ptx"));
     run_checked(
         Command::new("nvcc")
-            .args(nvcc_arguments(arch))
+            .args(ptx_arguments(arch))
             .arg("-I")
             .arg(output_directory)
             .args(["-ptx", "kernels/block_source_partition.cu", "-o"])
@@ -413,7 +437,6 @@ fn assert_ptx_has_no_f64(output_directory: &std::path::Path, arch: &str) {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=NOISE_GPU_ARCH");
-    println!("cargo:rerun-if-changed=../noise-gpu/build_cuda_arch.rs");
     println!("cargo:rerun-if-changed=kernels/relevant_source_geometry.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_path.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_attenuation.cuh");
@@ -449,22 +472,25 @@ fn main() {
     // built role — an empty one is this crate's honest answer.
     fs::write(output_directory.join("nvcc-defines.txt"), "")
         .expect("write the empty relevant-source nvcc define receipt");
-    let arch = build_cuda_arch::cuda_arch("relevant-source-gpu");
-    // The linked archive is SASS for exactly this arch; the runtime compares it
-    // with the card it opens and says so when they differ.
-    println!("cargo:rustc-env=RELEVANT_SOURCE_CUDA_ARCH={arch}");
+    let archs = cuda_archs();
+    println!(
+        "cargo:rustc-env=RELEVANT_SOURCE_CUDA_ARCHS={}",
+        archs.join(",")
+    );
     let object_path = output_directory.join("block_source_partition.o");
     let archive_path = output_directory.join("librelevant_source_cuda.a");
     run_checked(
         Command::new("nvcc")
-            .args(nvcc_arguments(&arch))
+            .args(nvcc_arguments(&archs))
             .arg("-I")
             .arg(&output_directory)
             .args(["-c", "kernels/block_source_partition.cu", "-o"])
             .arg(&object_path),
         "nvcc relevant-source compilation",
     );
-    assert_ptx_has_no_f64(&output_directory, &arch);
+    for arch in &archs {
+        assert_ptx_has_no_f64(&output_directory, arch);
+    }
     run_checked(
         Command::new("ar")
             .arg("crs")

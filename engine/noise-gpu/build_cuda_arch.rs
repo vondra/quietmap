@@ -2,9 +2,8 @@
 //! native build (`.cargo/config.toml` pins `target-cpu=native`), so the card in
 //! this host is the card that will run the binary.
 //!
-//! Both CUDA build scripts include this file by `#[path]` — `noise-gpu` and
-//! `relevant-source-gpu` — so one machine cannot end up with two engines
-//! compiled for two different cards. Build scripts are never compiled under
+//! `noise-gpu` includes this file by `#[path]`; `relevant-source-gpu` instead
+//! builds its release fatbin for the whole fleet. Build scripts are never compiled under
 //! `cfg(test)`, so `noise-gpu`'s lib includes it once more, test-only, to run
 //! the parser tests below.
 

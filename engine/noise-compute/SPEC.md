@@ -709,6 +709,18 @@ the five surface layers, road, rail, industrial, building and airport ground ope
 block, evaluate the sources that matter at every pixel exactly, and carry the rest as a
 smooth background.
 
+**Device image.** Release builds embed one SASS-only fatbin for the architectures in
+`FLEET_CUDA_ARCHS` (`relevant_source_build.rs`); `NOISE_GPU_ARCH` deliberately reduces
+compile-only and development builds to one image. The host refuses a card outside that
+embedded set rather than relying on PTX JIT.
+
+The role artifact builder omits `--arch` for this fleet role, so it cannot turn the
+release image into a focused build. The builder and artifact admission both read the
+executable's `.nv_fatbin` section themselves (`gpu_model_role.cuda_fatbin_images`) and
+require exactly the `FLEET_CUDA_ARCHS` SASS images and no PTX image; no receipt is
+trusted for this fact, so a swapped single-image binary is refused by its own bytes.
+PTX roles keep their required `--arch` target.
+
 **Blocks and corners.** A tile is partitioned into fixed 16x16-pixel blocks
 (`BLOCK_PIXEL_SIDE = 16`, `src/source_frame.rs:21`), so a 512 px tile holds 32x32 = 1024
 blocks over a shared lattice of 33x33 = 1089 corners (`source_frame.rs:23-26`); one CUDA
