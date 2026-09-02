@@ -152,6 +152,45 @@ struct EncodedLineLayer {
     device_sources: RegionDeviceLineSources,
 }
 
+/// Cells resident on the card at once: the one painting and the next one.
+const RESIDENT_CELLS: usize = 2;
+
+/// One cell's sources, obstacles and barriers loaded and encoded on the host,
+/// nothing on the card yet.
+struct HostPreparedRegion {
+    region_r4: u64,
+    frame: RegionMetricFrame,
+    batches: BTreeMap<(u32, u32), Vec<(u32, u32)>>,
+    layers: Vec<Vec<DeviceLineSource>>,
+    barrier_data: BarrierData,
+    obstacle_data: ObstacleData,
+    flattened_obstacles: FlattenedObstacleGeometry,
+    started: Instant,
+}
+
+impl HostPreparedRegion {
+    /// Put the cell on the card: called only once a residency permit is held.
+    fn upload(self) -> Result<PreparedRegion> {
+        let device_obstacles = RegionDeviceObstacles::upload(&self.flattened_obstacles)?;
+        let layers = self
+            .layers
+            .into_iter()
+            .enumerate()
+            .map(|(layer, sources)| encode_layer(layer, sources))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(PreparedRegion {
+            region_r4: self.region_r4,
+            frame: self.frame,
+            batches: self.batches,
+            layers,
+            barrier_data: self.barrier_data,
+            obstacle_data: self.obstacle_data,
+            device_obstacles,
+            prepare_seconds: self.started.elapsed().as_secs_f64(),
+        })
+    }
+}
+
 /// One cell's sources, obstacles and barriers loaded, encoded and resident on the
 /// card, ready to paint: the unit the cell producer hands the painter.
 struct PreparedRegion {
@@ -179,23 +218,35 @@ pub fn run_relevant_source_wave(
         ..RelevantSourceRunMeasurement::default()
     };
 
-    // The cell stream: one producer loads and uploads cell N+1 (and blocks on the
-    // channel once it is one cell ahead, so at most two cells are resident on the
-    // card) while the painter works on cell N.
+    // The cell stream: one producer loads and encodes cell N+1 on the host while
+    // the painter works on cell N, and uploads it only after taking one of the
+    // RESIDENT_CELLS permits (the painting cell holds the other), so no third
+    // cell is ever on the card; the painter returns the permit once a cell's
+    // device buffers are dropped.
     let (sender, receiver) = sync_channel(1);
+    let (permit_sender, permit_receiver) = sync_channel::<()>(RESIDENT_CELLS);
+    for _ in 0..RESIDENT_CELLS {
+        permit_sender
+            .send(())
+            .expect("the permit channel holds every permit");
+    }
     let producer = thread::Builder::new().name("cell-prepare".into());
     let (host_wait_seconds, cells_prepared) = thread::scope(|scope| -> Result<(f64, usize)> {
         let handle = producer.spawn_scoped(scope, move || -> Result<(f64, usize)> {
             let mut host_wait_seconds = 0.0;
             let mut prepared_count = 0;
             for &region_r4 in &configuration.regions {
-                let prepared = prepare_region(configuration, region_r4)?;
-                prepared_count += 1;
+                let host_prepared = prepare_region(configuration, region_r4)?;
                 let wait_started = Instant::now();
-                if sender.send(prepared).is_err() {
+                if permit_receiver.recv().is_err() {
                     break;
                 }
                 host_wait_seconds += wait_started.elapsed().as_secs_f64();
+                let prepared = host_prepared.upload()?;
+                prepared_count += 1;
+                if sender.send(prepared).is_err() {
+                    break;
+                }
             }
             Ok((host_wait_seconds, prepared_count))
         })?;
@@ -206,6 +257,8 @@ pub fn run_relevant_source_wave(
             };
             measurement.card_wait_seconds += wait_started.elapsed().as_secs_f64();
             paint_region(configuration, prepared, &rasters, &cuda, &mut measurement)?;
+            // The painted cell's device buffers are dropped: hand its permit back.
+            let _ = permit_sender.send(());
         }
         handle.join().expect("cell producer thread")
     })?;
@@ -224,7 +277,7 @@ pub fn run_relevant_source_wave(
 fn prepare_region(
     configuration: &RelevantSourceRunConfiguration,
     region_r4: u64,
-) -> Result<PreparedRegion> {
+) -> Result<HostPreparedRegion> {
     let started = Instant::now();
     let cell = CellIndex::try_from(region_r4).context("invalid R4 region")?;
     let zoom = configuration.zoom;
@@ -245,7 +298,6 @@ fn prepare_region(
     let obstacle_data =
         ObstacleData::load_for_r4s(&configuration.h3r4_directory, region_r4, &ring)?;
     let flattened_obstacles = FlattenedObstacleGeometry::from_set(&frame, obstacle_data.set());
-    let device_obstacles = RegionDeviceObstacles::upload(&flattened_obstacles)?;
     let industrial_rows =
         IndustrialData::load_for_r4s(&configuration.h3r4_directory, &ring)?.into_rows();
     let building_rows =
@@ -262,11 +314,6 @@ fn prepare_region(
             .map(|row| frame.encode_point(row))
             .collect(),
     ];
-    let layers = encoded
-        .into_iter()
-        .enumerate()
-        .map(|(layer, sources)| encode_layer(layer, sources))
-        .collect::<Result<Vec<_>>>()?;
     let mut batches: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
     for &(x, y) in &tiles {
         batches
@@ -277,15 +324,15 @@ fn prepare_region(
             .or_default()
             .push((x, y));
     }
-    Ok(PreparedRegion {
+    Ok(HostPreparedRegion {
         region_r4,
         frame,
         batches,
-        layers,
+        layers: encoded.into(),
         barrier_data,
         obstacle_data,
-        device_obstacles,
-        prepare_seconds: started.elapsed().as_secs_f64(),
+        flattened_obstacles,
+        started,
     })
 }
 
