@@ -685,23 +685,22 @@ It is opt-in and zoom-fenced. The switches are `QM_W1_INDUSTRIAL_POLICY` and
 (`policy_applies_at_zoom`, `:44-46`; `enabled_for_zoom`, `:51-53`). Every other zoom,
 the line layers, and the popup keep the exact path.
 
-Where it is accepted. The serving contract publishes two quality profiles: the z12 base
-`w1-z12-accepted-v1`, whose numerical environment is exactly these two switches
-(`W1_ACCEPTED_NUMERICAL_ENVIRONMENT`,
-[server/src/generation-contract.mjs:41-44](../../server/src/generation-contract.mjs)),
-and the z13 tier `w2-z13-spatial-v1`, whose numerical environment must be empty
-(`validateNamedQualitySemantics`, `:245-247`). A z13 generation therefore cannot be
-painted with this policy, and the engine gate agrees with the contract because the
-module refuses every zoom but 12.
+The published world cannot carry it. Since the tier split was retired the world is one
+generation per layer at `WORLD_BASE_ZOOM = 13`
+([server/src/generation-contract.mjs:98](../../server/src/generation-contract.mjs)), the
+only published quality profile is `w2-z13-accepted-v1` (`:100-101`), its numerical
+environment must be empty (`validateNamedQualitySemantics`, `:271-278`), and neither
+switch appears in `ALLOWED_NUMERICAL_ENVIRONMENT` (`:123-143`). So this policy can no
+longer reach a published tile from either side: the serving contract refuses the
+environment and the module refuses every zoom but 12.
 
-One contradiction is worth naming rather than resolving here. The serving contract
-accepts both switches on the z12 base, and the module header states that both point
-layers pass their drift contracts with the policy, building at 0.000 % on every
-amplitude rung (`point_w1.rs:2-6`); the gate's own comment inside the same module says
+One in-module contradiction is worth naming rather than resolving here: the header
+states that both point layers pass their drift contracts with the policy, building at
+0.000 % on every amplitude rung (`point_w1.rs:2-6`), while the gate's own comment says
 building "is ported but not yet accepted" and that its switch "stays unlisted"
 (`:33-35`), which its own code contradicts, since `policy_enabled` maps `building` to
-`QM_W1_BUILDING_POLICY` (`:36-41`). The code and the serving contract agree with each
-other: both switches exist, both are z12-only, and that comment is the outlier.
+`QM_W1_BUILDING_POLICY` (`:36-41`). What the code does is what this section describes:
+both switches exist, both are z12-only.
 
 ### 12.3 Relevant-source block partition
 
