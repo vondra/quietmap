@@ -43,9 +43,10 @@ __device__ __forceinline__ float signed_candidate_delta(
     const float source_elevation = profile.elevation_m[0]
         + fmaxf(
             source_altitude_m - profile.elevation_m[0],
-            QUIETMAP_MINIMUM_SOURCE_HEIGHT_M);
+            QUIETMAP_SOURCE_HEIGHT_FLOOR_M);
     const float receiver_elevation = profile.elevation_m[profile.count - 1]
-        + fmaxf(receiver_altitude_m - profile.elevation_m[profile.count - 1], 0.5f);
+        + fmaxf(receiver_altitude_m - profile.elevation_m[profile.count - 1],
+                QUIETMAP_RECEIVER_HEIGHT_FLOOR_M);
     const float direct = hypotf(profile.distance_m, receiver_elevation - source_elevation);
     const float sight = fmaf(t, receiver_elevation - source_elevation, source_elevation);
     const float detour = hypotf(t * profile.distance_m, top_m - source_elevation)
@@ -181,7 +182,7 @@ __device__ __forceinline__ void ray_terrain_and_screening_bands(
         terrain_db[band] = 0.0f;
         screening_db[band] = 0.0f;
     }
-    if (profile.count < 3 || profile.distance_m < 30.0f) {
+    if (profile.count < 3 || profile.distance_m < QUIETMAP_SCREENING_MIN_PATH_M) {
         return;
     }
     const float raw_receiver_ground_m = profile.elevation_m[profile.count - 1];

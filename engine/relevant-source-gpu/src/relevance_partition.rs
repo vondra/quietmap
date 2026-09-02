@@ -7,6 +7,7 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use rayon::prelude::*;
+use tile_painter::scatter_band::LDEN_WEIGHTS;
 
 use crate::source_frame::{
     BLOCKS_PER_TILE_SIDE, BLOCK_COUNT, CORNERS_PER_TILE_SIDE, CORNER_COUNT, PERIOD_COUNT,
@@ -15,7 +16,6 @@ use crate::tile_source_incidence::TileSourceIncidence;
 
 const FILE_MAGIC: [u8; 8] = *b"QMRSP001";
 const FILE_VERSION: u32 = 2;
-const LDEN_PERIOD_WEIGHTS: [f64; PERIOD_COUNT] = [12.0, 12.649_110_640_7, 80.0];
 
 /// A corner admits its ranked sources until the Lden energy it has NOT admitted is
 /// at most this fraction of the corner's total; the rest becomes the background
@@ -221,7 +221,7 @@ fn rank_sources_at_corners(
                 .map(|pair| {
                     let score = pair_energy[pair]
                         .iter()
-                        .zip(LDEN_PERIOD_WEIGHTS)
+                        .zip(LDEN_WEIGHTS)
                         .map(|(&energy, weight)| f64::from(energy) * weight)
                         .sum();
                     (incidence.corner_source_indices[pair], score)

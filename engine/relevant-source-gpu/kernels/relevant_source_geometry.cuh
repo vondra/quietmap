@@ -8,7 +8,6 @@
 
 constexpr int QUIETMAP_PERIOD_COUNT = 3;
 constexpr int QUIETMAP_BAND_COUNT = 8;
-constexpr int QUIETMAP_TILE_PIXEL_SIDE = 512;
 
 #include "relevant_source_physics_constants.cuh"
 
@@ -186,7 +185,8 @@ __device__ __forceinline__ float finite_line_correction_db(
     if (segment_length_m < 0.1f) {
         return 0.0f;
     }
-    const float perpendicular = fmaxf(perpendicular_distance_m, 0.5f);
+    const float perpendicular = fmaxf(perpendicular_distance_m,
+                                      QUIETMAP_FINITE_LINE_MIN_PERPENDICULAR_M);
     const float first = signed_fraction * segment_length_m / perpendicular;
     const float second = (1.0f - signed_fraction) * segment_length_m / perpendicular;
     const float product = first * second;

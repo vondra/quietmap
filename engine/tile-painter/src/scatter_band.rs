@@ -403,7 +403,7 @@ impl RasterSampler for SurfaceCadenceRasters<'_> {
 /// penalties (`10^(penalty/10)`): collapse a pair's per-period power to the one
 /// scalar the budget compares. The shared `/24` cancels in the skip RATIO, so
 /// it's dropped (√10 = 3.162… for the +5 dB evening penalty).
-pub(crate) const LDEN_WEIGHTS: [f64; NUM_PERIODS] = [12.0, 4.0 * 3.1622776601683795, 80.0];
+pub const LDEN_WEIGHTS: [f64; NUM_PERIODS] = [12.0, 4.0 * 3.1622776601683795, 80.0];
 
 /// dB path level → linear A-weighted band energy. The hot loop's innermost op,
 /// shared by the budget bound and the exact path factor — keep the expression

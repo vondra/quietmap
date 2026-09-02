@@ -1,12 +1,11 @@
 //! Flatten obstacle indexes and tile barriers into the relevant-source metric scene.
 
+use noise_compute::constants::M_PER_DEG_LAT;
 use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_compute::types::Barrier;
 use raster_reader::FusedGrid;
 
 use crate::source_frame::RegionMetricFrame;
-
-const METRES_PER_LATITUDE_DEGREE: f64 = 110_540.0;
 
 /// Region coordinates to the cells of one fused terrain/land-cover halo.
 #[derive(Clone, Copy, Debug, Default)]
@@ -24,7 +23,7 @@ impl DeviceRasterGeometry {
     pub fn for_grid(frame: &RegionMetricFrame, grid: &FusedGrid) -> Self {
         let (latitude_min, longitude_min, inverse_cell_degrees, rows, columns) = grid.geom();
         Self {
-            row_scale_per_metre: (inverse_cell_degrees / METRES_PER_LATITUDE_DEGREE) as f32,
+            row_scale_per_metre: (inverse_cell_degrees / M_PER_DEG_LAT) as f32,
             row_offset: ((frame.reference_latitude() - latitude_min) * inverse_cell_degrees) as f32,
             column_scale_per_metre: (inverse_cell_degrees / frame.metres_per_longitude_degree())
                 as f32,
@@ -85,8 +84,8 @@ impl FlattenedObstacleGeometry {
                 query_x_scale: (view.m_per_deg_lon / frame.metres_per_longitude_degree()) as f32,
                 query_x_offset_m: ((frame.reference_longitude() - view.origin_lon)
                     * view.m_per_deg_lon) as f32,
-                query_y_offset_m: ((frame.reference_latitude() - view.origin_lat)
-                    * METRES_PER_LATITUDE_DEGREE) as f32,
+                query_y_offset_m: ((frame.reference_latitude() - view.origin_lat) * M_PER_DEG_LAT)
+                    as f32,
                 cell_m: view.cell_m as f32,
                 minimum_x_m: view.min_x as f32,
                 minimum_y_m: view.min_y as f32,

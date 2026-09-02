@@ -16,6 +16,9 @@ const SCATTER_BAND_SOURCE: &str = include_str!("../tile-painter/src/scatter_band
 const ARC_SCREENING_SOURCE: &str =
     include_str!("../noise-compute/src/propagation/arc_screening.rs");
 const GEO_SOURCE: &str = include_str!("../noise-compute/src/propagation/geo.rs");
+const PATH_EFFECTS_SOURCE: &str = include_str!("../noise-compute/src/propagation/path_effects.rs");
+const ISO9613_SOURCE: &str = include_str!("../noise-compute/src/propagation/iso9613.rs");
+const FUSED_TILE_SOURCE: &str = include_str!("../raster-reader/src/fused_tile_z13.rs");
 
 fn constant_initializer<'a>(source: &'a str, constant_name: &str) -> &'a str {
     let declaration = format!("const {constant_name}:");
@@ -170,9 +173,50 @@ fn generated_physics_header() -> String {
     );
     write_cuda_float(
         &mut header,
-        "QUIETMAP_MINIMUM_SOURCE_HEIGHT_M",
-        canonical_f64(NOISE_CONSTANTS_SOURCE, "SOURCE_HEIGHT_ROAD"),
+        "QUIETMAP_SCREENING_MIN_PATH_M",
+        canonical_f64(PATH_EFFECTS_SOURCE, "SCREENING_MIN_PATH_M"),
     );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_SOURCE_HEIGHT_FLOOR_M",
+        canonical_f64(PATH_EFFECTS_SOURCE, "SOURCE_HEIGHT_FLOOR_M"),
+    );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_RECEIVER_HEIGHT_FLOOR_M",
+        canonical_f64(PATH_EFFECTS_SOURCE, "RECEIVER_HEIGHT_FLOOR_M"),
+    );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_GROUND_PATH_HEIGHT_FLOOR_M",
+        canonical_f64(ISO9613_SOURCE, "GROUND_PATH_HEIGHT_FLOOR_M"),
+    );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_GROUND_SHORT_PATH_FACTOR",
+        canonical_f64(ISO9613_SOURCE, "CNOSSOS_GROUND_SHORT_PATH_FACTOR"),
+    );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_GROUND_FAVOURABLE_ALPHA0",
+        canonical_f64(ISO9613_SOURCE, "CNOSSOS_GROUND_ALPHA0"),
+    );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_GROUND_FAVOURABLE_DELTA_ZT",
+        canonical_f64(ISO9613_SOURCE, "CNOSSOS_GROUND_DELTA_ZT_COEFF"),
+    );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_FINITE_LINE_MIN_PERPENDICULAR_M",
+        canonical_f64(GEO_SOURCE, "FLC_MIN_PERP_M"),
+    );
+    writeln!(
+        header,
+        "constexpr int QUIETMAP_TILE_PIXEL_SIDE = {};",
+        canonical_usize(FUSED_TILE_SOURCE, "TILE_PX")
+    )
+    .unwrap();
     write_cuda_float(
         &mut header,
         "QUIETMAP_FAVOURABLE_PROBABILITY",
@@ -342,6 +386,9 @@ fn main() {
     println!("cargo:rerun-if-changed=kernels/relevant_source_pair.cuh");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/arc_screening.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/geo.rs");
+    println!("cargo:rerun-if-changed=../noise-compute/src/propagation/path_effects.rs");
+    println!("cargo:rerun-if-changed=../noise-compute/src/propagation/iso9613.rs");
+    println!("cargo:rerun-if-changed=../raster-reader/src/fused_tile_z13.rs");
     println!("cargo:rerun-if-changed=kernels/block_source_partition.cu");
     println!("cargo:rerun-if-changed=../noise-compute/src/constants.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/path_profile.rs");
@@ -402,6 +449,8 @@ mod tests {
         assert!(header.contains("constexpr float QUIETMAP_BARRIER_PATH_HORIZON_M = 175.0f;"));
         assert!(header.contains("constexpr int QUIETMAP_COARSE_MIDDLE_STRIDE = 3;"));
         assert!(header.contains("constexpr int QUIETMAP_ARC_ESCALATE_MAX_PARTS = 9;"));
+        assert!(header.contains("constexpr int QUIETMAP_TILE_PIXEL_SIDE = 512;"));
+        assert!(header.contains("constexpr float QUIETMAP_RECEIVER_HEIGHT_FLOOR_M = 0.5f;"));
         assert!(header.contains("constexpr float QUIETMAP_SEG_ARC_MIN_SPAN_RAD = 0.05235988f;"));
         assert!(header.contains("constexpr float QUIETMAP_PENUMBRA_DELTA_FLOOR_M ="));
     }

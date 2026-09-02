@@ -109,13 +109,14 @@ __device__ __forceinline__ DiffractionEdge terrain_diffraction_edge(
     float raw_receiver_ground_m
 ) {
     DiffractionEdge best = {};
-    if (profile.count < 3 || profile.distance_m < 30.0f) {
+    if (profile.count < 3 || profile.distance_m < QUIETMAP_SCREENING_MIN_PATH_M) {
         return best;
     }
     const float source_ground = profile.elevation_m[0];
     const float source_height = fmaxf(
-        source_altitude_m - source_ground, QUIETMAP_MINIMUM_SOURCE_HEIGHT_M);
-    const float receiver_height = fmaxf(receiver_altitude_m - raw_receiver_ground_m, 0.5f);
+        source_altitude_m - source_ground, QUIETMAP_SOURCE_HEIGHT_FLOOR_M);
+    const float receiver_height = fmaxf(
+        receiver_altitude_m - raw_receiver_ground_m, QUIETMAP_RECEIVER_HEIGHT_FLOOR_M);
     const float source_elevation = source_ground + source_height;
     const float receiver_elevation = profile.elevation_m[profile.count - 1] + receiver_height;
     const float direct_distance = hypotf(
@@ -162,9 +163,10 @@ __device__ __forceinline__ void complete_explicit_edge_geometry(
     DiffractionEdge& edge
 ) {
     const float source_height = fmaxf(
-        source_altitude_m - profile.elevation_m[0], QUIETMAP_MINIMUM_SOURCE_HEIGHT_M);
+        source_altitude_m - profile.elevation_m[0], QUIETMAP_SOURCE_HEIGHT_FLOOR_M);
     const float receiver_height = fmaxf(
-        receiver_altitude_m - profile.elevation_m[profile.count - 1], 0.5f);
+        receiver_altitude_m - profile.elevation_m[profile.count - 1],
+        QUIETMAP_RECEIVER_HEIGHT_FLOOR_M);
     const float source_elevation = profile.elevation_m[0] + source_height;
     const float receiver_elevation = profile.elevation_m[profile.count - 1] + receiver_height;
     const float direct_distance = hypotf(profile.distance_m,
@@ -286,24 +288,27 @@ __device__ __forceinline__ void ground_attenuation_bands(
     }
     const float source_height = fmaxf(
         fabsf(source_altitude_m - profile.mean_ground_intercept_m),
-        QUIETMAP_MINIMUM_SOURCE_HEIGHT_M);
+        QUIETMAP_GROUND_PATH_HEIGHT_FLOOR_M);
     const float receiver_plane = fmaf(
         profile.mean_ground_slope, profile.distance_m, profile.mean_ground_intercept_m);
-    const float receiver_height = fmaxf(fabsf(receiver_altitude_m - receiver_plane), 0.05f);
+    const float receiver_height = fmaxf(
+        fabsf(receiver_altitude_m - receiver_plane), QUIETMAP_GROUND_PATH_HEIGHT_FLOOR_M);
     const float height_sum = source_height + receiver_height;
-    const float short_path_form = profile.distance_m / (30.0f * height_sum);
+    const float short_path_form = profile.distance_m
+                                  / (QUIETMAP_GROUND_SHORT_PATH_FACTOR * height_sum);
     const float ground_prime = short_path_form <= 1.0f
         ? profile.ground_path_g * short_path_form
             + profile.source_ground_g * (1.0f - short_path_form)
         : profile.ground_path_g;
-    const float delta_height = 6.0e-3f * profile.distance_m / height_sum;
+    const float delta_height = QUIETMAP_GROUND_FAVOURABLE_DELTA_ZT * profile.distance_m
+                               / height_sum;
     const float distance_squared_half = 0.5f * profile.distance_m * profile.distance_m;
     const float favourable_source_height = source_height
-        + 2.0e-4f * (source_height / height_sum) * (source_height / height_sum)
-            * distance_squared_half + delta_height;
+        + QUIETMAP_GROUND_FAVOURABLE_ALPHA0 * (source_height / height_sum)
+            * (source_height / height_sum) * distance_squared_half + delta_height;
     const float favourable_receiver_height = receiver_height
-        + 2.0e-4f * (receiver_height / height_sum) * (receiver_height / height_sum)
-            * distance_squared_half + delta_height;
+        + QUIETMAP_GROUND_FAVOURABLE_ALPHA0 * (receiver_height / height_sum)
+            * (receiver_height / height_sum) * distance_squared_half + delta_height;
     for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
         const float homogeneous = ground_state_attenuation_db(
             QUIETMAP_BAND_FREQUENCIES[band], profile.distance_m, source_height,
