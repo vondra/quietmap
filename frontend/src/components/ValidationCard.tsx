@@ -1,6 +1,6 @@
 // Right-column card for a clicked validation anchor on the single React QA
-// map: model vs measured, both bands, what the
-// external source measures, provenance, tags. Clicking a dot also opens the
+// map: model vs external truth, both bands, the external value's kind,
+// provenance, tags. Clicking a dot also opens the
 // ordinary noise DetailCard for the same spot, so this card deliberately
 // repeats no live-model breakdown.
 import type { ValidationArtifactMeta, ValidationPayload, ValidationSelection } from './ValidationLayer'
@@ -20,6 +20,11 @@ const band = (b: [number | null, number | null] | null | undefined) =>
   b ? `[${b[0] ?? '·'}, ${b[1] ?? '·'}]` : '—'
 const safeUrl = (u: string | null | undefined) => (typeof u === 'string' && /^https?:\/\//i.test(u) ? u : null)
 const shortCohort = (id: string | null | undefined) => id ? id.slice(0, 12) : 'unavailable'
+const EXTERNAL_VALUE_LABEL: Record<string, string> = {
+  measurement: 'they measure',
+  official_map: 'official map/model',
+}
+const externalValueLabel = (anchorType: string) => EXTERNAL_VALUE_LABEL[anchorType] ?? 'external value'
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -100,7 +105,7 @@ function FixtureBody({ f }: { f: Extract<ValidationSelection, { kind: 'fixture' 
           <Row label="external band">
             {band(f.external?.band)}{f.ext ? <> → Δ {f.ext.delta > 0 ? '+' : ''}{fmt(f.ext.delta)} ({f.ext.side})</> : null}
           </Row>
-          <Row label="they measure">{f.external?.value ?? '—'}</Row>
+          <Row label={externalValueLabel(f.anchor_type)}>{f.external?.value ?? '—'}</Row>
           <Row label="source">
             {f.external?.metric ?? ''} ({f.external?.year ?? '—'}, {f.external?.months_covered ?? '?'} mo)
             {url && <> · <a href={url} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">link</a></>}
