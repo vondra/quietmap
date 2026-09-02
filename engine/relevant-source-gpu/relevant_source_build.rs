@@ -20,12 +20,30 @@ const PATH_EFFECTS_SOURCE: &str = include_str!("../noise-compute/src/propagation
 const ISO9613_SOURCE: &str = include_str!("../noise-compute/src/propagation/iso9613.rs");
 const FUSED_TILE_SOURCE: &str = include_str!("../raster-reader/src/fused_tile_z13.rs");
 
+/// The initializer of the ONE `const NAME:` declaration in `source`: a line that
+/// starts (after indentation and an optional `pub` / `pub(crate)`) with the
+/// declaration, so a mention in a comment or a string never matches, and a
+/// second declaration fails the build instead of silently winning.
 fn constant_initializer<'a>(source: &'a str, constant_name: &str) -> &'a str {
     let declaration = format!("const {constant_name}:");
-    let declaration_start = source
-        .find(&declaration)
+    let mut declarations = source.lines().filter(|line| {
+        let line = line.trim_start();
+        line.strip_prefix("pub(crate) ")
+            .or_else(|| line.strip_prefix("pub "))
+            .unwrap_or(line)
+            .starts_with(&declaration)
+    });
+    let line = declarations
+        .next()
         .unwrap_or_else(|| panic!("canonical constant {constant_name} is absent"));
-    let declaration_tail = &source[declaration_start + declaration.len()..];
+    assert!(
+        declarations.next().is_none(),
+        "canonical constant {constant_name} is declared more than once"
+    );
+    let declaration_start = line
+        .find(&declaration)
+        .expect("the declaration is on its own line");
+    let declaration_tail = &line[declaration_start + declaration.len()..];
     let equals = declaration_tail
         .find('=')
         .unwrap_or_else(|| panic!("canonical constant {constant_name} has no initializer"));
