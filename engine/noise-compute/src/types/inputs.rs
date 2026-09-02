@@ -126,6 +126,8 @@ pub struct RailSegment {
     pub trains_freight_source: u8,   // 0=arrow, 1=default_by_type
     pub source_id: u16,              // single source-of-truth stamp — see pipeline/lib/sources.ts
     // Pre-computed:
+    /// Receiver-to-closest-point distance from `geo::point_to_segment_full` (longitude
+    /// scaled at the segment's midpoint); the way-collapse in `compute::railways` ranks by it.
     pub dist_m: f64,
     pub cp_lat: f64,
     pub cp_lon: f64,

@@ -1,6 +1,18 @@
-//! Railway compute kernel — groups rail segments by (ref, name, type), emits per-period
-//! power and propagates to the receiver (CNOSSOS rail). Shared by popup + heatmap.
+//! Railway compute kernel — groups named rail segments by (ref, name, type) and unnamed
+//! ways by nearby tracks, then emits per-period power and propagates to the receiver
+//! (CNOSSOS rail). Shared by popup + heatmap.
 use crate::*;
+
+/// Link radius for unnamed ways of one rail type: the prepared-data checks measured
+/// a 136.638665 m widest closest-point span across the six nearest Vinohrady tram
+/// ways, while the nearest same-type unnamed railway pair kept apart at Prague
+/// centre is 150.013705 m (ways 97825895 and 911542434). Both measurements use
+/// `data/prepared/2026/h3r4/841e355ffffffff/railways.arrow` (Vinohrady
+/// `50.0755,14.4378`; Prague centre `50.0850,14.4234`, measured 2026-09-03).
+/// The receiver-local bucket grid below keeps the exact distance predicate while
+/// avoiding the old O(W²) scan; in the measured Prague-centre run it reduced
+/// clustering from 58.208 ms to 8.125 ms.
+const RAIL_TRACK_LINK_M: f64 = 150.0;
 
 /// Memo key for `REACH_CACHE`: `(rail_type, admin ISO, city_id, continent, speed bits, pax bits, frt bits)`.
 type ReachKey = (u8, [u8; 2], u16, u8, u64, u64, u64);
@@ -14,7 +26,130 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// Compute railway noise — grouped by (ref, name, type) with geometry.
+fn is_unnamed_track(segment: &RailSegment) -> bool {
+    segment.rail_ref.is_empty() && segment.name.is_empty()
+}
+
+#[derive(Clone, Copy)]
+struct UnnamedWayClosestPoint {
+    rail_type: u8,
+    osm_id: i64,
+    dist_m: f64,
+    lat: f64,
+    lon: f64,
+}
+
+fn unnamed_way_closest_points<'a>(
+    segments: impl Iterator<Item = &'a RailSegment>,
+) -> Vec<UnnamedWayClosestPoint> {
+    let mut closest_by_way = std::collections::HashMap::new();
+    for segment in segments.filter(|segment| is_unnamed_track(segment)) {
+        let point = UnnamedWayClosestPoint {
+            rail_type: segment.rail_type,
+            osm_id: segment.osm_id,
+            dist_m: segment.dist_m,
+            lat: segment.cp_lat,
+            lon: segment.cp_lon,
+        };
+        closest_by_way
+            .entry((segment.rail_type, segment.osm_id))
+            .and_modify(|current: &mut UnnamedWayClosestPoint| {
+                if point.dist_m < current.dist_m {
+                    *current = point;
+                }
+            })
+            .or_insert(point);
+    }
+
+    let mut ways: Vec<_> = closest_by_way.into_values().collect();
+    ways.sort_unstable_by_key(|way| (way.rail_type, way.osm_id));
+    ways
+}
+
+#[inline]
+fn union_find_root(parents: &mut [usize], mut index: usize) -> usize {
+    while parents[index] != index {
+        parents[index] = parents[parents[index]];
+        index = parents[index];
+    }
+    index
+}
+
+#[inline]
+fn union_toward_smaller(parents: &mut [usize], left: usize, right: usize) {
+    let left_root = union_find_root(parents, left);
+    let right_root = union_find_root(parents, right);
+    parents[left_root.max(right_root)] = left_root.min(right_root);
+}
+
+/// Assign every kept unnamed OSM way to a proximity track.
+///
+/// Each way contributes only the microsegment nearest the receiver. Sorting by
+/// `(type, osm_id)` and always unioning toward the smaller index keep a component's
+/// root at its smallest index, so the smallest OSM id is the component identity
+/// whatever the edge order. Candidate pairs come from the same rail type's 3×3
+/// neighbouring `RAIL_TRACK_LINK_M` grid cells; the linking predicate is
+/// `geo::flat_dist` alone. The grid scales longitude at the highest |latitude| among
+/// the ways, never more than `flat_dist` scales it at any pair's mid-latitude, so a
+/// linkable pair is at most one cell apart on each axis at every latitude.
+fn unnamed_track_cluster_ids<'a>(
+    segments: impl Iterator<Item = &'a RailSegment>,
+) -> std::collections::HashMap<(u8, i64), i64> {
+    let ways = unnamed_way_closest_points(segments);
+    let mut parents: Vec<_> = (0..ways.len()).collect();
+
+    let widest_lat = ways.iter().map(|way| way.lat.abs()).fold(0.0, f64::max);
+    let m_per_deg_lon = crate::constants::m_per_deg_lon(widest_lat.to_radians());
+    let cell_of = |way: &UnnamedWayClosestPoint| {
+        (
+            way.rail_type,
+            (way.lat * crate::constants::M_PER_DEG_LAT / RAIL_TRACK_LINK_M).floor() as i64,
+            (way.lon * m_per_deg_lon / RAIL_TRACK_LINK_M).floor() as i64,
+        )
+    };
+    let mut cells: std::collections::HashMap<(u8, i64, i64), Vec<usize>> =
+        std::collections::HashMap::new();
+    for (index, way) in ways.iter().enumerate() {
+        cells.entry(cell_of(way)).or_default().push(index);
+    }
+
+    for (index, way) in ways.iter().enumerate() {
+        let (rail_type, cell_y, cell_x) = cell_of(way);
+        for dy in -1i64..=1 {
+            for dx in -1i64..=1 {
+                let Some(neighbours) = cells.get(&(rail_type, cell_y + dy, cell_x + dx)) else {
+                    continue;
+                };
+                for &candidate in neighbours.iter().filter(|&&candidate| candidate > index) {
+                    let other = &ways[candidate];
+                    if geo::flat_dist(way.lat, way.lon, other.lat, other.lon) <= RAIL_TRACK_LINK_M {
+                        union_toward_smaller(&mut parents, index, candidate);
+                    }
+                }
+            }
+        }
+    }
+
+    ways.iter()
+        .enumerate()
+        .map(|(index, way)| {
+            let component = union_find_root(&mut parents, index);
+            ((way.rail_type, way.osm_id), ways[component].osm_id)
+        })
+        .collect()
+}
+
+/// The total is intentionally folded in kept-segment order, not reconstructed
+/// from contributor accumulators. Grouping can split or merge those accumulators;
+/// this per-segment fold keeps the layer total bit-identical across key layouts.
+fn add_segment_to_total(total_energy: &mut [f64; 3], variants: &[PropagationVariants; 3]) {
+    for (total, variant) in total_energy.iter_mut().zip(variants) {
+        *total += variant.full_energy;
+    }
+}
+
+/// Compute railway noise — named tracks keep (ref, name, type); unnamed ways use
+/// proximity-connected track clusters. Contributor geometry contains every segment.
 ///
 /// Same three-pass parallel structure as `compute_roads` (see its docstring):
 /// sequential gates + skyline growth chain, parallel per-segment evaluation
@@ -87,7 +222,7 @@ pub(crate) fn compute_railways(
         dominant_energy: f64,
         dominant_trace_idx: Option<usize>,
     }
-    let mut rails_by_key: HashMap<(String, String, u8), RailAccum> = HashMap::new();
+    let mut rails_by_key: HashMap<(String, String, u8, Option<i64>), RailAccum> = HashMap::new();
 
     // Admin resolved once per call — the receiver position is constant across
     // segments. Drives the C1 per-region day/evening/night split (EU freight
@@ -466,18 +601,36 @@ pub(crate) fn compute_railways(
         )
         .collect();
 
+    let unnamed_cluster_ids =
+        unnamed_track_cluster_ids(pre.iter().map(|(seg_i, _)| &railways[*seg_i]));
+    let mut total_energy = [0.0f64; 3];
+
     // ── Pass 3: accumulation, in segment order (sequential) ──
     for ((seg_i, p), mut out) in pre.iter().zip(outs) {
         let seg = &railways[*seg_i];
         let (rail_type, speed, q_pax, q_frt) = (p.rail_type, p.speed, p.q_pax, p.q_frt);
         let (src_alt, d_slant) = (p.src_alt, p.d_slant);
         let (seg_variants, ground_g) = (out.seg_variants, out.ground_g);
+        add_segment_to_total(&mut total_energy, &seg_variants);
 
-        // Group by (ref, name, type). Unnamed tracks (no ref, no name) group by
-        // type alone: a tram street is two or three OSM ways, and "Noise sources"
-        // names things the way a visitor would ("Tram", not six anonymous rows
-        // at 73–98 m); the Segments tab keeps every way (owner 2026-09-01).
-        let key = (seg.rail_ref.clone(), seg.name.clone(), seg.rail_type);
+        // Named/ref'd tracks keep the exact historical tuple. Unnamed ways use
+        // the precomputed transitive proximity component; accumulation below is
+        // otherwise unchanged, including dominant/closest metadata and geometry.
+        let cluster_id = if is_unnamed_track(seg) {
+            Some(
+                *unnamed_cluster_ids
+                    .get(&(seg.rail_type, seg.osm_id))
+                    .expect("every kept unnamed rail way is clustered"),
+            )
+        } else {
+            None
+        };
+        let key = (
+            seg.rail_ref.clone(),
+            seg.name.clone(),
+            seg.rail_type,
+            cluster_id,
+        );
         let acc = rails_by_key.entry(key).or_insert_with(|| RailAccum {
             name: {
                 // Build display name: "trať 250 — Brno–Havlíčkův Brod" or "trať 250" or name or "Rail"
@@ -744,14 +897,6 @@ pub(crate) fn compute_railways(
         });
     }
 
-    let mut total_energy = [0.0f64; 3];
-    // f64 addition is not associative: ascending key order, not HashMap
-    // order, or this total moves ±1 ULP per query.
-    for (_, acc) in crate::compute::key_sorted(&rails_by_key) {
-        total_energy[0] += acc.variants[0].full_energy;
-        total_energy[1] += acc.variants[1].full_energy;
-        total_energy[2] += acc.variants[2].full_energy;
-    }
     let ld = 10.0 * total_energy[0].max(1e-12).log10();
     let le = 10.0 * total_energy[1].max(1e-12).log10();
     let ln = 10.0 * total_energy[2].max(1e-12).log10();
@@ -833,6 +978,22 @@ mod tests {
         Receiver::new(50.004523, 14.0035, 200.0)
     }
 
+    fn segment_at_receiver_distance(osm_id: i64, rail_type: u8, distance_m: f64) -> RailSegment {
+        use crate::constants::M_PER_DEG_LAT;
+
+        let mut segment = mainline_segment();
+        let northward_shift_m = 500.0 - distance_m;
+        let latitude_shift = northward_shift_m / M_PER_DEG_LAT;
+        segment.osm_id = osm_id;
+        segment.segment_idx = osm_id as i16;
+        segment.rail_type = rail_type;
+        segment.start_lat += latitude_shift;
+        segment.end_lat += latitude_shift;
+        segment.cp_lat += latitude_shift;
+        segment.dist_m = distance_m;
+        segment
+    }
+
     fn periods_for(segs: &[RailSegment]) -> NoisePeriods {
         compute_railways(
             &receiver(),
@@ -843,6 +1004,139 @@ mod tests {
             None,
         )
         .0
+    }
+
+    fn contributors_for(segs: &[RailSegment]) -> Vec<Contributor> {
+        compute_railways(
+            &receiver(),
+            segs,
+            &[],
+            &ObstacleSet::empty(),
+            &FlatRasters,
+            None,
+        )
+        .1
+    }
+
+    /// Test-only reference implementation of the former all-pairs scan. It
+    /// shares the way collapse and union semantics with production, so the
+    /// 10,000-way test isolates candidate enumeration rather than comparing
+    /// two subtly different clustering rules.
+    fn brute_force_cluster_ids<'a>(
+        segments: impl Iterator<Item = &'a RailSegment>,
+    ) -> std::collections::HashMap<(u8, i64), i64> {
+        let ways = unnamed_way_closest_points(segments);
+        let mut parents: Vec<_> = (0..ways.len()).collect();
+        for left in 0..ways.len() {
+            for right in (left + 1)..ways.len() {
+                if ways[left].rail_type != ways[right].rail_type {
+                    break;
+                }
+                if geo::flat_dist(
+                    ways[left].lat,
+                    ways[left].lon,
+                    ways[right].lat,
+                    ways[right].lon,
+                ) <= RAIL_TRACK_LINK_M
+                {
+                    union_toward_smaller(&mut parents, left, right);
+                }
+            }
+        }
+        ways.iter()
+            .enumerate()
+            .map(|(index, way)| {
+                (
+                    (way.rail_type, way.osm_id),
+                    ways[union_find_root(&mut parents, index)].osm_id,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn bucketed_clustering_matches_bruteforce_for_10000_ways() {
+        use crate::constants::{m_per_deg_lon, M_PER_DEG_LAT};
+
+        let receiver = Receiver::new(50.0850, 14.4234, 200.0);
+        let m_lon = m_per_deg_lon(receiver.lat.to_radians());
+        let mut segments = Vec::with_capacity(10_000);
+        for index in 0..10_000 {
+            let row = index / 100;
+            let column = index % 100;
+            let x_m = (column as f64 - 49.5) * 100.0;
+            let y_m = (row as f64 - 49.5) * 100.0;
+            let mut segment = mainline_segment();
+            segment.osm_id = 1_000_000 + index as i64;
+            segment.segment_idx = index as i16;
+            segment.rail_type = (index % 5) as u8;
+            segment.dist_m = 1_000.0;
+            segment.cp_lat = receiver.lat + y_m / M_PER_DEG_LAT;
+            segment.cp_lon = receiver.lon + x_m / m_lon;
+            segments.push(segment);
+        }
+
+        let bucketed = unnamed_track_cluster_ids(segments.iter());
+        let brute_force = brute_force_cluster_ids(segments.iter());
+        assert_eq!(bucketed, brute_force);
+    }
+
+    /// The grid is only a candidate filter and must not be coarser than `flat_dist`:
+    /// a pair `flat_dist` links at 149.9 m sits 150.04 m apart in a frame scaled at a
+    /// receiver 5 km south of it, which with 150 m cells in that frame put the two
+    /// ways two cells apart, never tested, never linked (found 2026-09-03).
+    #[test]
+    fn bucket_cells_keep_flat_dist_linked_pairs_adjacent() {
+        use crate::constants::{m_per_deg_lon, M_PER_DEG_LAT};
+
+        let receiver = Receiver::new(50.0850, 14.4234, 200.0);
+        let m_lon = m_per_deg_lon(receiver.lat.to_radians());
+        let y_m = 5_000.0;
+        let mut ways = Vec::new();
+        for (osm_id, x_m) in [(700, 149.99), (701, 300.01)] {
+            let mut segment = mainline_segment();
+            segment.osm_id = osm_id;
+            segment.segment_idx = (osm_id - 700) as i16;
+            segment.dist_m = y_m;
+            segment.cp_lat = receiver.lat + y_m / M_PER_DEG_LAT;
+            segment.cp_lon = receiver.lon + x_m / m_lon;
+            ways.push(segment);
+        }
+        let linked = geo::flat_dist(
+            ways[0].cp_lat,
+            ways[0].cp_lon,
+            ways[1].cp_lat,
+            ways[1].cp_lon,
+        );
+        assert!(
+            linked <= RAIL_TRACK_LINK_M,
+            "fixture must be linkable: {linked} m"
+        );
+        let bucketed = unnamed_track_cluster_ids(ways.iter());
+        assert_eq!(bucketed, brute_force_cluster_ids(ways.iter()));
+        assert_eq!(bucketed[&(0, 700)], bucketed[&(0, 701)]);
+    }
+
+    #[test]
+    fn rail_total_is_bit_equal_when_group_key_changes() {
+        // The same physical segments model the old unnamed single-group key
+        // when given one shared name; their deliberately shuffled IDs force
+        // the new proximity keys into a different group-fold order.
+        let segments = vec![
+            segment_at_receiver_distance(900, 0, 700.0),
+            segment_at_receiver_distance(100, 0, 100.0),
+            segment_at_receiver_distance(500, 0, 220.0),
+        ];
+        let clustered = periods_for(&segments);
+        let mut single_group = segments.clone();
+        for segment in &mut single_group {
+            segment.name = "legacy single group".to_owned();
+        }
+        let single_group = periods_for(&single_group);
+        let bits = |periods: NoisePeriods| {
+            [periods.ld_db, periods.le_db, periods.ln_db, periods.lden_db].map(f64::to_bits)
+        };
+        assert_eq!(bits(clustered), bits(single_group));
     }
 
     /// Gate (d) popup: the EU vs world period split follows the SEGMENT's
@@ -884,47 +1178,154 @@ mod tests {
         assert_eq!(plain.lden_db, channeled.lden_db);
     }
 
-    /// Unnamed tracks of one type are one "Noise sources" row: three tram
-    /// ways with no ref and no name collapse to one contributor, a fourth
-    /// (mainline) way stays separate, and the merged row's identity, distance
-    /// and "(bridge)" follow its loudest way. The Segments tab keeps every way.
+    /// Six ways across one tram street stay one visitor-facing source row.
     #[test]
-    fn unnamed_tracks_of_one_type_share_a_row() {
-        use crate::constants::M_PER_DEG_LAT;
-        let mut segs = Vec::new();
-        for k in 0..4 {
-            let mut seg = mainline_segment();
-            seg.osm_id = 100 + k;
-            seg.segment_idx = k as i16;
-            seg.rail_type = if k == 3 { 0 } else { 1 };
-            if k == 1 {
-                // 200 m from the receiver instead of 500 m: the loudest tram way.
-                let dlat = 300.0 / M_PER_DEG_LAT;
-                seg.start_lat += dlat;
-                seg.end_lat += dlat;
-                seg.cp_lat += dlat;
-                seg.dist_m = 200.0;
-                seg.bridge = true;
-            }
-            segs.push(seg);
-        }
-        let (_, contribs) = compute_railways(
-            &receiver(),
-            &segs,
-            &[],
-            &ObstacleSet::empty(),
-            &FlatRasters,
-            None,
-        );
-        assert_eq!(contribs.len(), 2, "one row per rail type, not per OSM way");
-        let tram = contribs
-            .iter()
-            .find(|c| c.subtype.starts_with("Tram"))
-            .expect("a merged tram row");
+    fn six_nearby_unnamed_tram_ways_share_a_row() {
+        let mut segs: Vec<_> = (0..6)
+            .map(|index| segment_at_receiver_distance(100 + index, 1, 80.0 + 18.0 * index as f64))
+            .collect();
+        // The closest points span 90 m. The closest/loudest way owns the
+        // identity and bridge label while the row keeps all six geometries.
+        segs[0].bridge = true;
+        let contribs = contributors_for(&segs);
+        assert_eq!(contribs.len(), 1);
+        let tram = &contribs[0];
         assert!(tram.name.is_empty());
-        assert_eq!(tram.osm_id, Some(101));
-        assert_eq!(tram.distance_m, 200.0);
+        assert_eq!(tram.osm_id, Some(100));
+        assert_eq!(tram.distance_m, 80.0);
         assert_eq!(tram.subtype, "Tram (bridge)");
+        let Some(SourceMetadata::Rail(metadata)) = &tram.metadata else {
+            panic!("tram contributor must carry rail metadata");
+        };
+        assert_eq!(metadata.segment_count, 6);
+    }
+
+    /// Any name or ref keeps the historical (ref, name, type) identity.
+    #[test]
+    fn named_or_refd_tracks_keep_the_historical_key() {
+        let mut same_name_far_apart = vec![
+            segment_at_receiver_distance(150, 0, 100.0),
+            segment_at_receiver_distance(151, 0, 700.0),
+        ];
+        for segment in &mut same_name_far_apart {
+            segment.name = "Corridor A".to_owned();
+        }
+        assert_eq!(contributors_for(&same_name_far_apart).len(), 1);
+
+        let mut different_names_nearby = vec![
+            segment_at_receiver_distance(160, 0, 100.0),
+            segment_at_receiver_distance(161, 0, 120.0),
+        ];
+        different_names_nearby[0].name = "Corridor A".to_owned();
+        different_names_nearby[1].name = "Corridor B".to_owned();
+        assert_eq!(contributors_for(&different_names_nearby).len(), 2);
+
+        let mut same_ref_far_apart = vec![
+            segment_at_receiver_distance(170, 0, 100.0),
+            segment_at_receiver_distance(171, 0, 700.0),
+        ];
+        for segment in &mut same_ref_far_apart {
+            segment.rail_ref = "120".to_owned();
+        }
+        assert_eq!(contributors_for(&same_ref_far_apart).len(), 1);
+    }
+
+    /// Rail type remains an identity boundary even when both ways are unnamed.
+    #[test]
+    fn nearby_unnamed_tram_and_distant_railway_stay_separate() {
+        let segs = vec![
+            segment_at_receiver_distance(200, 1, 85.0),
+            segment_at_receiver_distance(201, 0, 784.0),
+        ];
+        let contribs = contributors_for(&segs);
+        assert_eq!(contribs.len(), 2);
+        assert!(contribs
+            .iter()
+            .any(|contributor| contributor.subtype == "Tram" && contributor.distance_m == 85.0));
+        assert!(contribs.iter().any(|contributor| {
+            contributor.subtype == "Rail" && contributor.distance_m == 784.0
+        }));
+
+        // A railway between two tram closest points must not bridge those
+        // trams into one component through the union-find.
+        let cross_type_bridge = vec![
+            segment_at_receiver_distance(210, 1, 100.0),
+            segment_at_receiver_distance(211, 0, 200.0),
+            segment_at_receiver_distance(212, 1, 300.0),
+        ];
+        assert_eq!(contributors_for(&cross_type_bridge).len(), 3);
+    }
+
+    /// Proximity splits distant same-type corridors and closes transitively.
+    #[test]
+    fn unnamed_railway_tracks_use_transitive_proximity_clusters() {
+        let separated = vec![
+            segment_at_receiver_distance(300, 0, 100.0),
+            segment_at_receiver_distance(301, 0, 700.0),
+        ];
+        let separated_contribs = contributors_for(&separated);
+        assert_eq!(
+            separated_contribs.len(),
+            2,
+            "closest points 600 m apart are different tracks"
+        );
+
+        // Relative closest-point positions are 0 / 120 / 240 m. The endpoints
+        // do not link directly, so one row proves that closure is transitive.
+        let chained = vec![
+            segment_at_receiver_distance(400, 0, 100.0),
+            segment_at_receiver_distance(401, 0, 220.0),
+            segment_at_receiver_distance(402, 0, 340.0),
+        ];
+        let chained_contribs = contributors_for(&chained);
+        assert_eq!(chained_contribs.len(), 1);
+        let Some(SourceMetadata::Rail(metadata)) = &chained_contribs[0].metadata else {
+            panic!("rail contributor must carry rail metadata");
+        };
+        assert_eq!(metadata.segment_count, 3);
+
+        // The far microsegment comes first. Clustering per microsegment, or
+        // taking a way's first segment instead of its closest, would merge the
+        // two OSM ways through the 100 m far-segment gap.
+        let mut far_first = segment_at_receiver_distance(500, 0, 900.0);
+        far_first.segment_idx = 0;
+        let mut near_second = segment_at_receiver_distance(500, 0, 100.0);
+        near_second.segment_idx = 1;
+        let closest_other_way = segment_at_receiver_distance(501, 0, 800.0);
+        let per_way = contributors_for(&[far_first, near_second, closest_other_way]);
+        assert_eq!(per_way.len(), 2);
+        let two_segment_way = per_way
+            .iter()
+            .find(|contributor| contributor.osm_id == Some(500))
+            .expect("the two-microsegment way keeps its own row");
+        let Some(SourceMetadata::Rail(metadata)) = &two_segment_way.metadata else {
+            panic!("rail contributor must carry rail metadata");
+        };
+        assert_eq!(metadata.segment_count, 2);
+
+        let cluster_receiver = receiver();
+        let mut at_limit = vec![
+            segment_at_receiver_distance(600, 0, 100.0),
+            segment_at_receiver_distance(601, 0, 250.0),
+        ];
+        at_limit[0].cp_lat = cluster_receiver.lat;
+        at_limit[0].cp_lon = cluster_receiver.lon;
+        at_limit[1].cp_lat =
+            cluster_receiver.lat + RAIL_TRACK_LINK_M / crate::constants::M_PER_DEG_LAT;
+        at_limit[1].cp_lon = cluster_receiver.lon;
+        let at_limit_clusters = unnamed_track_cluster_ids(at_limit.iter());
+        assert_eq!(at_limit_clusters[&(0, 600)], at_limit_clusters[&(0, 601)]);
+
+        let mut above_limit = at_limit;
+        above_limit[0].osm_id = 610;
+        above_limit[1].osm_id = 611;
+        above_limit[1].cp_lat =
+            cluster_receiver.lat + (RAIL_TRACK_LINK_M + 0.01) / crate::constants::M_PER_DEG_LAT;
+        let above_limit_clusters = unnamed_track_cluster_ids(above_limit.iter());
+        assert_ne!(
+            above_limit_clusters[&(0, 610)],
+            above_limit_clusters[&(0, 611)]
+        );
     }
 
     /// THE PARALLELISM GATE (rail twin of roads'
