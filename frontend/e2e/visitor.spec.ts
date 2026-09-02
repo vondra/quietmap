@@ -99,6 +99,16 @@ test('isochron: Show area names a downed router instead of leaving the map blank
   await expect(page.getByRole('alert')).toHaveText('Could not draw the area. The routing service is down.')
 })
 
+test('narrow desktop: the layers card does not swallow the isochron toggle', async ({ page }) => {
+  // 1024x768 — iPad landscape, small laptops, a half-screen window. Below ~1096 px
+  // the centred search bar slides under the 320 px card column on its right.
+  await page.setViewportSize({ width: 1024, height: 768 })
+  await installHermeticMap(page, POINT)
+  await page.goto(mapUrl(POINT))
+  await page.getByRole('button', { name: 'Toggle isochron' }).click()
+  await expect(page.getByText('Reachable in')).toBeVisible()
+})
+
 test('desktop layers panel: toggling a layer rewrites the overlay URL state', async ({ page }) => {
   await installHermeticMap(page, POINT)
   const noise = deferred()

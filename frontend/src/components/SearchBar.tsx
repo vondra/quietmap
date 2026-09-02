@@ -99,8 +99,13 @@ export default function SearchBar({ onSelect, onIsochronToggle, isochronActive, 
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  // z-1003 puts the bar above the z-1002 card column: below ~1096 px the centred
+  // search bar slides under the 320 px column, and at z-1000 the layers card
+  // swallowed clicks on the isochron toggle — the reachability panel could not be
+  // opened at all on a 1024 px window. A control the visitor is aiming at outranks
+  // a passive card.
   return (
-    <div ref={containerRef} className="fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[1000] w-[calc(100%-1.5rem)] max-w-md left-1/2 -translate-x-1/2">
+    <div ref={containerRef} className="fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[1003] w-[calc(100%-1.5rem)] max-w-md left-1/2 -translate-x-1/2">
       <div className="relative">
         <input
           id="search"
