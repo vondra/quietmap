@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use noise_compute::admin;
 use raster_reader::fused_tile_z13::TileBatch;
 use raster_reader::RealRasters;
@@ -43,10 +43,6 @@ const W1_ZOOM: u8 = 12;
 const RESIDENT_CELLS: usize = 2;
 /// Painted tiles waiting for the writer before the painter blocks (3 MB each).
 const PENDING_WRITES: usize = 8;
-/// The year the prepared tree lays its h3r4 arrows out under, declared once in
-/// `scripts/dataset-year.json` and read by every engine that opens that tree.
-const PREPARED_DATASET_YEAR: &str = "2026";
-
 pub struct RelevantSourceRunConfiguration {
     pub prepared_directory: PathBuf,
     pub h3r4_directory: PathBuf,
@@ -57,19 +53,34 @@ pub struct RelevantSourceRunConfiguration {
 
 impl RelevantSourceRunConfiguration {
     /// Everything the painter reads hangs off the one prepared root the worker
-    /// is given, so the h3r4 tree is derived here and never named twice.
+    /// is given, so the h3r4 tree is derived here and never named twice. The
+    /// dataset year is the tree's own `<year>/h3r4` child — one truth, declared
+    /// by `scripts/dataset-year.json` when the tree was prepared — unless the
+    /// caller names one (`DATA_YEAR`, the project-wide override that file
+    /// documents), which then must exist.
     pub fn for_prepared_root(
         prepared_directory: PathBuf,
         output_directory: PathBuf,
         zoom: u8,
-    ) -> Self {
-        let h3r4_directory = prepared_directory.join(PREPARED_DATASET_YEAR).join("h3r4");
-        Self {
+        dataset_year: Option<&str>,
+    ) -> Result<Self> {
+        let year = match dataset_year {
+            Some(year) => year.to_owned(),
+            None => crate::cell_stream::prepared_dataset_year(&prepared_directory)?,
+        };
+        let h3r4_directory = prepared_directory.join(&year).join("h3r4");
+        if !h3r4_directory.is_dir() {
+            bail!(
+                "prepared root {} has no {year}/h3r4 tree",
+                prepared_directory.display()
+            );
+        }
+        Ok(Self {
             prepared_directory,
             h3r4_directory,
             output_directory,
             zoom,
-        }
+        })
     }
 }
 

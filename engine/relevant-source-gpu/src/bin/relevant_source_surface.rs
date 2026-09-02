@@ -57,18 +57,25 @@ fn main() -> Result<ExitCode> {
     let prepared = std::env::var_os(PREPARED_ROOT_VARIABLE).with_context(|| {
         format!("{PREPARED_ROOT_VARIABLE} must name the prepared root this painter reads")
     })?;
+    let dataset_year = std::env::var("DATA_YEAR")
+        .ok()
+        .filter(|year| !year.is_empty());
     let configuration = RelevantSourceRunConfiguration::for_prepared_root(
         PathBuf::from(prepared),
         arguments.output,
         arguments.zoom,
-    );
+        dataset_year.as_deref(),
+    )?;
     let failed_cells = run_relevant_source_stream(
         &configuration,
         cell_requests(BufReader::new(std::io::stdin())),
     )?;
     if failed_cells > 0 {
         eprintln!("relevant-source-surface: {failed_cells} cell(s) failed");
-        return Ok(ExitCode::FAILURE);
     }
-    Ok(ExitCode::SUCCESS)
+    // The count itself, saturated: any failure is non-zero, and a supervisor
+    // that reads the status learns how many cells it must re-queue.
+    Ok(ExitCode::from(
+        u8::try_from(failed_cells).unwrap_or(u8::MAX),
+    ))
 }

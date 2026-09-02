@@ -4,7 +4,9 @@
 //!
 //! Both CUDA build scripts include this file by `#[path]` — `noise-gpu` and
 //! `relevant-source-gpu` — so one machine cannot end up with two engines
-//! compiled for two different cards.
+//! compiled for two different cards. Build scripts are never compiled under
+//! `cfg(test)`, so `noise-gpu`'s lib includes it once more, test-only, to run
+//! the parser tests below.
 
 use std::env;
 use std::process::Command;

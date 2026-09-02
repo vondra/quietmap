@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use h3o::{CellIndex, LatLng};
 use noise_compute::admin;
 use noise_compute::constants::ground_ops_max_radius;
-use noise_compute::emission::aircraft::ClassWeights;
+use noise_compute::emission::aircraft::{ClassWeights, GROUND_OPS_SOURCE_HEIGHT_M};
 use tile_painter::r4_source_cache::SourceSel;
 use tile_painter::region_runner::region_tiles;
 use tile_painter::source_loader_barrier::BarrierData;
@@ -30,9 +30,6 @@ use crate::source_frame::{
     SOURCE_FLAG_GROUND_OPS_AIRCRAFT, SOURCE_FLAG_GROUND_OPS_GSE,
 };
 use crate::surface_layers::{GROUND_OPS_LAYER, LAYER_NAMES, LAYER_SOURCE_IDS};
-
-/// Airport ground-ops sources radiate from this height (ground_ops.rs).
-const GROUND_OPS_SOURCE_HEIGHT_M: f64 = 4.0;
 
 /// One layer's encoded sources, on the host and on the card.
 pub struct EncodedLineLayer {
@@ -188,10 +185,10 @@ fn encode_layer(layer: usize, sources: Vec<DeviceLineSource>) -> Result<EncodedL
 }
 
 /// One cell's ground-ops calendar: the n_days divisor and the GA class-weight
-/// vector resolved from THIS cell's `grid_disk(1)` traffic arrows (the CPU
-/// builder's resolve_surface_n_days / resolve_surface_class_weights over the
-/// same ring). Keyed on the cell alone, never on the run: a cell's bytes must
-/// not depend on which other cells a worker happened to be given.
+/// vector resolved from THIS cell's `grid_disk(1)` traffic arrows. Keyed on the
+/// cell alone, never on the run (the CPU builder resolves one calendar over its
+/// whole run's region union): a cell's bytes must not depend on which other
+/// cells a worker happened to be given.
 struct GroundOpsCalendar {
     n_days: f64,
     class_weights: ClassWeights,

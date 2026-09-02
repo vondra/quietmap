@@ -3,6 +3,11 @@
 //! and the `e2-full` / `e2-airborne` parity validators. Surface geometry and
 //! obstacle upload live here; the airborne path is [`airborne`].
 
+/// The arch detector both CUDA build scripts include; here only so its tests run.
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../build_cuda_arch.rs"]
+mod build_cuda_arch;
 #[cfg(feature = "gpu")]
 mod embedded_cubin;
 #[cfg(feature = "gpu")]

@@ -9,7 +9,9 @@
 //! line here is one line: a `fail` message is collapsed to single spaces
 //! before it is written.
 
+use anyhow::{bail, Context, Result};
 use std::io::{BufRead, Write};
+use std::path::Path;
 
 use h3o::{CellIndex, Resolution};
 use tile_painter::region_runner::{split_stream_line, stream_cell_started_line};
@@ -69,15 +71,17 @@ pub fn parse_cell_line(line: &str) -> Option<CellRequest> {
         return None;
     }
     let (hex, requested) = split_stream_line(line);
-    // A second token that is not `layers=` is a plan the painter cannot obey:
-    // the shared tokenizer ignores it, which would paint all five layers for a
-    // cell whose sender meant one of them — a whole wasted repaint that reads
-    // as success. Refuse it here rather than widen the tokenizer, which the CPU
-    // painter deliberately keeps tolerant.
-    if requested.is_none() && line.split_whitespace().nth(1).is_some() {
+    // A second token that is not `layers=`, or any third token, is a plan the
+    // painter cannot obey: the shared tokenizer ignores what it does not know,
+    // which would paint a cell whose sender meant something else — a wasted
+    // repaint that reads as success. Refuse it here rather than widen the
+    // tokenizer, which the CPU painter deliberately keeps tolerant.
+    let mut tokens = line.split_whitespace().skip(1);
+    let second = tokens.next();
+    if (requested.is_none() && second.is_some()) || tokens.next().is_some() {
         return Some(rejected(
             hex,
-            "a second token that is not layers=<csv>; nothing else is understood",
+            "only `<cell>` or `<cell> layers=<csv>` is understood; nothing else",
         ));
     }
     let Ok(region_r4) = u64::from_str_radix(hex, 16) else {
@@ -188,6 +192,32 @@ fn single_line(message: &str) -> String {
     message.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// The one `<year>/h3r4` child of a prepared root. Two years side by side is a
+/// tree this painter cannot choose from: the caller must name the year.
+pub fn prepared_dataset_year(prepared_directory: &Path) -> Result<String> {
+    let mut years: Vec<String> = std::fs::read_dir(prepared_directory)
+        .with_context(|| format!("read prepared root {}", prepared_directory.display()))?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().join("h3r4").is_dir())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.len() == 4 && name.bytes().all(|byte| byte.is_ascii_digit()))
+        .collect();
+    years.sort_unstable();
+    match years.as_slice() {
+        [year] => Ok(year.clone()),
+        [] => bail!(
+            "prepared root {} holds no <year>/h3r4 tree",
+            prepared_directory.display()
+        ),
+        many => bail!(
+            "prepared root {} holds {} dataset years ({}); set DATA_YEAR",
+            prepared_directory.display(),
+            many.len(),
+            many.join(", ")
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,7 +269,9 @@ mod tests {
     fn unpaintable_lines_are_rejected_with_their_cell() {
         assert!(rejection("zzz").contains("hexadecimal"));
         assert!(rejection("841e309ffffffff layers=noise").contains("does not paint"));
-        assert!(rejection("841e309ffffffff layer=road").contains("second token"));
+        assert!(rejection("841e309ffffffff layer=road").contains("nothing else"));
+        assert!(rejection("841e309ffffffff layers=road extra").contains("nothing else"));
+        assert!(rejection("841e309ffffffff layers=road layers=rail").contains("nothing else"));
         let finer = CellIndex::try_from(DOBRIS)
             .unwrap()
             .center_child(Resolution::Five)
@@ -294,5 +326,28 @@ mod tests {
             single_line("load\n  the arrows: no such file"),
             "load the arrows: no such file"
         );
+    }
+
+    /// One bug class: the dataset year comes from the prepared tree itself,
+    /// never from a literal a dataset transition would leave behind.
+    #[test]
+    fn the_prepared_tree_names_its_own_dataset_year() {
+        let root_with_years = |years: &[&str]| {
+            let root = tempfile::tempdir().unwrap();
+            for year in years {
+                std::fs::create_dir_all(root.path().join(year).join("h3r4")).unwrap();
+            }
+            root
+        };
+        let one = root_with_years(&["2026"]);
+        assert_eq!(prepared_dataset_year(one.path()).unwrap(), "2026");
+        let two = root_with_years(&["2026", "2027"]);
+        let ambiguous = prepared_dataset_year(two.path()).unwrap_err().to_string();
+        assert!(ambiguous.contains("2026, 2027") && ambiguous.contains("set DATA_YEAR"));
+        let none = root_with_years(&[]);
+        assert!(prepared_dataset_year(none.path()).is_err());
+        // A stray four-digit directory without an h3r4 tree is not a dataset year.
+        std::fs::create_dir_all(one.path().join("2027")).unwrap();
+        assert_eq!(prepared_dataset_year(one.path()).unwrap(), "2026");
     }
 }

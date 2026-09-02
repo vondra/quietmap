@@ -101,6 +101,7 @@
   },
   "worker_types": {
     "gpu-surface": {
+      "_doc": "Worker type name (the orchestrator's profile key), not a binary: it runs relevant-source-surface. The benchmark painter binary also called gpu-surface is a different renderer and is not deployed.",
       "group": "surface",
       "gpu": true,
       "artifact_family": "relevant-source-production",
