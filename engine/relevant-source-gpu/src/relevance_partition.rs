@@ -16,10 +16,22 @@ use crate::tile_source_incidence::TileSourceIncidence;
 const FILE_MAGIC: [u8; 8] = *b"QMRSP001";
 const FILE_VERSION: u32 = 2;
 
-/// A corner admits its ranked sources until the Lden energy it has NOT admitted is
-/// at most this fraction of the corner's total; the rest becomes the background
-/// constant. Energy, not a count: a motorway block stops after a few sources, a
-/// block where twenty comparable streets meet keeps all twenty.
+/// A corner admits its ranked sources until the Lden energy it has NOT admitted
+/// is at most this fraction of the SMALLEST corner total in its block; the rest
+/// becomes that block's background constant. Energy, not a count: a motorway
+/// block stops after a few sources, a block where twenty comparable streets meet
+/// keeps all twenty.
+///
+/// Against the block's QUIETEST corner, not each corner's own total, because the
+/// background is four corner samples blended bilinearly over the block's 256
+/// pixels, and the damage it does is measured at the quietest pixel, not at the
+/// loudest corner. Source-weighted
+/// over the four W2 benchmark cells, a rail block's four corner totals stand a
+/// median 1.5 dB apart but 10.0 dB at the 95th percentile, and 15 % of the loud
+/// corner's energy is then more than the whole answer at the quiet one. Measured
+/// at W2: rail's >3 dB tail 4994 -> 1101 cells (limit 1379) and industrial's
+/// 1984 -> 48 (limit 921), every other rung of all five layers lower too, for
+/// +23.7 % of the wave's GPU seconds. At 0.20 rail loses the rung again (1738).
 pub const DROP_BUDGET_FRACTION: f64 = 0.15;
 
 /// The complete reusable source partition for one fixed geographic z12 tile.
@@ -31,17 +43,13 @@ pub struct RelevantSourcePartition {
     /// The dropped energy at each block's four corners, which the paint kernel
     /// blends bilinearly into every pixel of the block.
     ///
-    /// That blend, not the per-pair kernel, is where the W2 >3 dB tail lives.
-    /// Measured on the four benchmark cells against the exact CPU reference: of
-    /// the 4953 rail cells over 3 dB, 4857 have this background ALONE more than
-    /// 1 dB above the exact answer, and subtracting it leaves 13 — Lden energy
-    /// is linear in the period energies, so that subtraction is exact.
-    /// Industrial goes 1929 -> 66 the same way. The four corners of a failing
-    /// block already disagree by a median 8.0 dB (rail) / 18.3 dB (industrial)
-    /// across the block's 16 pixels, so no blend of them can be right: the
-    /// dropped field has to be resolved, not interpolated. Giving each pixel
-    /// its block's quietest corner instead bounds the tail at 1465 (rail, limit
-    /// 1379) and 154 (industrial, limit 921) cells.
+    /// A screening edge inside a block is a step in this field, and four samples
+    /// cannot hold a step: measured against the exact CPU reference, refining the
+    /// lattice to 8 pixels still leaves 2605 of rail's 4994 W2 cells over 3 dB
+    /// and costs +50 GPU s of a 237 s wave, and giving every pixel its block's
+    /// quietest corner leaves 1867 against a limit of 1379. So the blend is left
+    /// alone and [`DROP_BUDGET_FRACTION`] keeps what it carries below the
+    /// quietest answer in the block instead.
     pub background_corner_energy: Vec<[[f32; PERIOD_COUNT]; 4]>,
 }
 
@@ -107,22 +115,33 @@ pub fn build_relevant_source_partition(
     validate_incidence(incidence, corner_pair_energy.len())?;
     let ranked_sources = rank_sources_at_corners(incidence, corner_pair_energy, lden_weights);
     let corner_total_energy = sum_corner_energy(incidence, corner_pair_energy);
+    // The same Lden scores the ranking is ordered by, so budget and ranking are
+    // in one unit by construction.
+    let corner_lden_total: Vec<f64> = ranked_sources
+        .iter()
+        .map(|ranked| ranked.iter().map(|&(_, score)| score).sum())
+        .collect();
     let blocks: Vec<(Vec<u32>, [[f32; PERIOD_COUNT]; 4])> = (0..BLOCK_COUNT)
         .into_par_iter()
         .map(|block| {
             let local_sources = &incidence.local_source_indices_by_block[block];
             let mut relevant_sources = local_sources.clone();
             let mut admitted: HashSet<u32> = local_sources.iter().copied().collect();
-            for corner in block_corner_indices(block) {
+            let corners = block_corner_indices(block);
+            let block_budget = DROP_BUDGET_FRACTION
+                * corners
+                    .iter()
+                    .map(|&corner| corner_lden_total[corner])
+                    .fold(f64::INFINITY, f64::min);
+            for corner in corners {
                 let ranked = &ranked_sources[corner];
-                let corner_total: f64 = ranked.iter().map(|&(_, score)| score).sum();
                 let mut unadmitted = ranked
                     .iter()
                     .filter(|(source_index, _)| !admitted.contains(source_index))
                     .map(|&(_, score)| score)
                     .sum::<f64>();
                 for &(source_index, score) in ranked {
-                    if unadmitted <= DROP_BUDGET_FRACTION * corner_total {
+                    if unadmitted <= block_budget {
                         break;
                     }
                     if admitted.insert(source_index) {
@@ -134,7 +153,7 @@ pub fn build_relevant_source_partition(
             relevant_sources.sort_unstable();
 
             let mut block_background = [[0.0_f32; PERIOD_COUNT]; 4];
-            for (block_corner, corner) in block_corner_indices(block).into_iter().enumerate() {
+            for (block_corner, corner) in corners.into_iter().enumerate() {
                 for period in 0..PERIOD_COUNT {
                     let mut dropped_energy = corner_total_energy[corner][period];
                     for &source_index in &relevant_sources {
@@ -355,6 +374,46 @@ mod tests {
         assert_eq!(
             partition.background_corner_energy[0],
             [[78.0; PERIOD_COUNT]; 4]
+        );
+        assert_eq!(
+            partition.source_indices_for_block(1),
+            &(12..TEST_SOURCE_COUNT).collect::<Vec<_>>()
+        );
+    }
+
+    /// One quiet corner rules its whole block. Corner 0 hears a hundredth of what
+    /// the others hear, so block 0 (the only block that owns corner 0) may leave
+    /// at most 0.15 * 5.95 = 0.8925 behind at EVERY one of its corners — less
+    /// than the weakest source carries, so it admits all 34. Block 1 does not
+    /// touch corner 0 and keeps the 22 sources the budget allowed before. The
+    /// numbers are in unweighted energy: the test's period energies are equal,
+    /// so the Lden weight sum multiplies both sides and cancels.
+    #[test]
+    fn the_budget_is_spent_against_the_blocks_quietest_corner() {
+        let incidence = compact_incidence();
+        let energies: Vec<[f32; PERIOD_COUNT]> = incidence
+            .corner_source_indices
+            .iter()
+            .enumerate()
+            .map(|(pair, &source)| {
+                let corner_scale = if pair < TEST_SOURCE_COUNT as usize {
+                    0.01
+                } else {
+                    1.0
+                };
+                [(source as f32 + 1.0) * corner_scale; PERIOD_COUNT]
+            })
+            .collect();
+        let partition = build_relevant_source_partition(
+            &incidence,
+            &energies,
+            tile_painter::scatter_band::LDEN_WEIGHTS,
+            7,
+        )
+        .unwrap();
+        assert_eq!(
+            partition.source_indices_for_block(0),
+            &(0..TEST_SOURCE_COUNT).collect::<Vec<_>>()
         );
         assert_eq!(
             partition.source_indices_for_block(1),
