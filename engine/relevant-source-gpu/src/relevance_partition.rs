@@ -28,6 +28,20 @@ pub struct RelevantSourcePartition {
     pub source_fingerprint: u64,
     pub block_offsets: Vec<u32>,
     pub relevant_source_indices: Vec<u32>,
+    /// The dropped energy at each block's four corners, which the paint kernel
+    /// blends bilinearly into every pixel of the block.
+    ///
+    /// That blend, not the per-pair kernel, is where the W2 >3 dB tail lives.
+    /// Measured on the four benchmark cells against the exact CPU reference: of
+    /// the 4953 rail cells over 3 dB, 4857 have this background ALONE more than
+    /// 1 dB above the exact answer, and subtracting it leaves 13 — Lden energy
+    /// is linear in the period energies, so that subtraction is exact.
+    /// Industrial goes 1929 -> 66 the same way. The four corners of a failing
+    /// block already disagree by a median 8.0 dB (rail) / 18.3 dB (industrial)
+    /// across the block's 16 pixels, so no blend of them can be right: the
+    /// dropped field has to be resolved, not interpolated. Giving each pixel
+    /// its block's quietest corner instead bounds the tail at 1465 (rail, limit
+    /// 1379) and 154 (industrial, limit 921) cells.
     pub background_corner_energy: Vec<[[f32; PERIOD_COUNT]; 4]>,
 }
 
