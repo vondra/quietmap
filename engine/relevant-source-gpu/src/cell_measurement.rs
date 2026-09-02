@@ -89,7 +89,6 @@ pub struct CellMeasurement {
     pub host_tile_seconds: f64,
     pub paint_seconds: f64,
     pub wall_seconds: f64,
-    pub cpu_seconds: f64,
 }
 
 impl CellMeasurement {
@@ -105,7 +104,6 @@ impl CellMeasurement {
             host_tile_seconds: 0.0,
             paint_seconds: 0.0,
             wall_seconds: 0.0,
-            cpu_seconds: 0.0,
         }
     }
 
@@ -140,11 +138,10 @@ impl CellMeasurement {
             .map(|&layer| &self.layers[layer])
             .collect();
         let mut line = format!(
-            "zoom={zoom} wall_s={:.6} cpu_s={:.6} prepare_s={:.6} paint_s={:.6} gpu_s={gpu_seconds:.6} \
+            "zoom={zoom} wall_s={:.6} prepare_s={:.6} paint_s={:.6} gpu_s={gpu_seconds:.6} \
              gpu_ns_per_pair={gpu_nanoseconds_per_pair:.3} raster_prepare_s={:.6} receiver_s={:.6} \
              host_tile_s={:.6} card_wait_s={:.6} permit_wait_s={:.6} tiles={} bytes={} layers={}",
             self.wall_seconds,
-            self.cpu_seconds,
             self.prepare_seconds,
             self.paint_seconds,
             self.raster_prepare_seconds,
@@ -166,32 +163,4 @@ impl CellMeasurement {
         }
         line
     }
-}
-
-/// This process's own CPU seconds, differenced across one cell's wall window.
-#[derive(Clone, Copy)]
-pub struct ProcessUsage {
-    user_seconds: f64,
-    system_seconds: f64,
-}
-
-impl ProcessUsage {
-    pub fn read() -> Self {
-        let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
-        let status = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
-        assert_eq!(status, 0, "getrusage failed");
-        let usage = unsafe { usage.assume_init() };
-        Self {
-            user_seconds: timeval_seconds(usage.ru_utime),
-            system_seconds: timeval_seconds(usage.ru_stime),
-        }
-    }
-
-    pub fn seconds(self) -> f64 {
-        self.user_seconds + self.system_seconds
-    }
-}
-
-fn timeval_seconds(value: libc::timeval) -> f64 {
-    value.tv_sec as f64 + value.tv_usec as f64 * 1.0e-6
 }

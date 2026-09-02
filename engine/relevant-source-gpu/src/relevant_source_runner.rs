@@ -3,8 +3,10 @@
 //! as the stream delivers them (the host prepares cell N+1 while the card
 //! paints cell N) with the paint's own batch lookahead.
 //!
-//! One cell's failure ends that cell and nothing else: it is reported as
-//! `fail`, counted into the exit status, and the next cell starts.
+//! An ERROR on one cell ends that cell and nothing else: it is reported as
+//! `fail`, counted into the exit status, and the next cell starts. A panic is
+//! not caught here — it ends the process, and the worker that owns the engine
+//! restarts it, as the orchestrator contract has it.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -21,7 +23,7 @@ use tile_painter::region_runner::{batch_slot, block_batch_origin};
 use tile_painter::source_loader_barrier::BarrierData;
 use tile_painter::source_loader_obstacle::{bake_tile_vector_rx_refl, ObstacleData};
 
-use crate::cell_measurement::{CellMeasurement, ProcessUsage};
+use crate::cell_measurement::CellMeasurement;
 use crate::cell_preparation::{prepare_region, EncodedLineLayer, PreparedRegion};
 use crate::cell_stream::{report_cell_done, report_cell_failed, report_cell_started, CellRequest};
 use crate::cuda_bridge::RelevantSourceCuda;
@@ -112,7 +114,10 @@ pub fn run_relevant_source_stream(
     let abandoned_permits = permit_sender.clone();
     let producer = thread::Builder::new().name("cell-prepare".into());
     thread::scope(|scope| -> Result<usize> {
-        producer.spawn_scoped(scope, move || {
+        // The producer returns the faults of the STREAM itself, which name no
+        // cell and so are never `fail` lines; the painter counts the cells.
+        let handle = producer.spawn_scoped(scope, move || -> usize {
+            let mut stream_faults = 0;
             for request in cells {
                 let cell = match request {
                     CellRequest::Cell(cell) => cell,
@@ -121,8 +126,13 @@ pub fn run_relevant_source_stream(
                             .send(StreamedRegion::Failed { cell, message })
                             .is_err()
                         {
-                            return;
+                            return stream_faults;
                         }
+                        continue;
+                    }
+                    CellRequest::Unreadable { message } => {
+                        eprintln!("relevant-source-surface: {message}");
+                        stream_faults += 1;
                         continue;
                     }
                 };
@@ -131,14 +141,14 @@ pub fn run_relevant_source_stream(
                     Ok(host_prepared) => host_prepared,
                     Err(error) => {
                         if sender.send(failed(label, &error)).is_err() {
-                            return;
+                            return stream_faults;
                         }
                         continue;
                     }
                 };
                 let permit_wait = Instant::now();
                 if permit_receiver.recv().is_err() {
-                    return;
+                    return stream_faults;
                 }
                 let message = match host_prepared.upload(permit_wait.elapsed().as_secs_f64()) {
                     Ok(prepared) => StreamedRegion::Prepared(Box::new(prepared)),
@@ -151,9 +161,10 @@ pub fn run_relevant_source_stream(
                     }
                 };
                 if sender.send(message).is_err() {
-                    return;
+                    return stream_faults;
                 }
             }
+            stream_faults
         })?;
         let mut failures = 0;
         loop {
@@ -173,7 +184,6 @@ pub fn run_relevant_source_stream(
             let region_r4 = prepared.region_r4;
             report_cell_started(region_r4);
             let started = Instant::now();
-            let usage_before = ProcessUsage::read();
             let painted =
                 paint_region(configuration, *prepared, &rasters, &cuda, card_wait_seconds);
             // The painted cell's device buffers are dropped: hand its permit back.
@@ -181,8 +191,6 @@ pub fn run_relevant_source_stream(
             match painted {
                 Ok(mut measurement) => {
                     measurement.wall_seconds = started.elapsed().as_secs_f64();
-                    measurement.cpu_seconds =
-                        ProcessUsage::read().seconds() - usage_before.seconds();
                     report_cell_done(region_r4, &measurement.statistics(configuration.zoom));
                 }
                 Err(error) => {
@@ -191,7 +199,7 @@ pub fn run_relevant_source_stream(
                 }
             }
         }
-        Ok(failures)
+        Ok(failures + handle.join().expect("cell producer thread"))
     })
 }
 

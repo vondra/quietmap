@@ -37,7 +37,17 @@ impl StreamedCell {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CellRequest {
     Cell(StreamedCell),
-    Rejected { cell: String, message: String },
+    Rejected {
+        cell: String,
+        message: String,
+    },
+    /// The stream itself broke — a read error or a byte that is not UTF-8.
+    /// No cell can be named, so this is never a `fail` line; it is a plain
+    /// diagnostic and a non-zero exit status, because ending the stream
+    /// quietly would report success for every cell still queued behind it.
+    Unreadable {
+        message: String,
+    },
 }
 
 fn rejected(cell: &str, message: impl Into<String>) -> CellRequest {
@@ -59,6 +69,17 @@ pub fn parse_cell_line(line: &str) -> Option<CellRequest> {
         return None;
     }
     let (hex, requested) = split_stream_line(line);
+    // A second token that is not `layers=` is a plan the painter cannot obey:
+    // the shared tokenizer ignores it, which would paint all five layers for a
+    // cell whose sender meant one of them — a whole wasted repaint that reads
+    // as success. Refuse it here rather than widen the tokenizer, which the CPU
+    // painter deliberately keeps tolerant.
+    if requested.is_none() && line.split_whitespace().nth(1).is_some() {
+        return Some(rejected(
+            hex,
+            "a second token that is not layers=<csv>; nothing else is understood",
+        ));
+    }
     let Ok(region_r4) = u64::from_str_radix(hex, 16) else {
         return Some(rejected(hex, "not a hexadecimal H3 cell"));
     };
@@ -105,13 +126,30 @@ pub fn parse_cell_line(line: &str) -> Option<CellRequest> {
 
 /// The cells as they arrive. The reader is consumed line by line and never
 /// drained ahead, so a world run that feeds cells over hours paints the first
-/// one immediately. A read error on the pipe ends the stream like EOF: the
-/// orchestrator's own supervision owns a broken pipe, the painter just stops.
+/// one immediately. A read error yields one [`CellRequest::Unreadable`] and
+/// then ends the stream: a broken pipe must not look like a clean EOF, or
+/// every cell still queued behind it would be reported as painted.
 pub fn cell_requests<R: BufRead>(reader: R) -> impl Iterator<Item = CellRequest> {
-    reader
-        .lines()
-        .map_while(Result::ok)
-        .filter_map(|line| parse_cell_line(&line))
+    let mut lines = reader.lines();
+    let mut broken = false;
+    std::iter::from_fn(move || loop {
+        if broken {
+            return None;
+        }
+        match lines.next()? {
+            Ok(line) => {
+                if let Some(request) = parse_cell_line(&line) {
+                    return Some(request);
+                }
+            }
+            Err(error) => {
+                broken = true;
+                return Some(CellRequest::Unreadable {
+                    message: format!("stdin is unreadable: {error}"),
+                });
+            }
+        }
+    })
 }
 
 /// `start <cell> <unix_ms>`: this cell's painting begins now. Every write here
@@ -201,6 +239,7 @@ mod tests {
     fn unpaintable_lines_are_rejected_with_their_cell() {
         assert!(rejection("zzz").contains("hexadecimal"));
         assert!(rejection("841e309ffffffff layers=noise").contains("does not paint"));
+        assert!(rejection("841e309ffffffff layer=road").contains("second token"));
         let finer = CellIndex::try_from(DOBRIS)
             .unwrap()
             .center_child(Resolution::Five)
@@ -209,6 +248,20 @@ mod tests {
         assert!(rejection("0").contains("invalid H3 cell"));
         match parse_cell_line("zzz") {
             Some(CellRequest::Rejected { cell, .. }) => assert_eq!(cell, "zzz"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// One bug class: a broken pipe must not read as a clean end of work, or
+    /// the cells behind it are reported painted when nothing painted them.
+    #[test]
+    fn an_unreadable_stream_is_reported_and_ends_the_stream() {
+        let requests: Vec<CellRequest> =
+            cell_requests(b"841e309ffffffff\n\xff\xfe\n".as_slice()).collect();
+        assert_eq!(requests.len(), 2);
+        assert!(matches!(requests[0], CellRequest::Cell(_)));
+        match &requests[1] {
+            CellRequest::Unreadable { message } => assert!(message.contains("unreadable")),
             other => panic!("{other:?}"),
         }
     }
