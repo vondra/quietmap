@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use relevant_source_gpu::relevant_source_runner::{
     run_relevant_source_wave, RelevantSourceRunConfiguration, LAYER_NAMES,
@@ -29,6 +29,12 @@ struct Arguments {
 
 fn main() -> Result<()> {
     let arguments = Arguments::parse();
+    if !matches!(arguments.zoom, 12 | 13) {
+        bail!(
+            "--zoom {} is neither W1 (12) nor W2 (13); the cadence contract is defined for those two",
+            arguments.zoom
+        );
+    }
     let regions = read_regions(&arguments.regions_file)?;
     let measurement = run_relevant_source_wave(&RelevantSourceRunConfiguration {
         prepared_directory: arguments.prepared_dir,
