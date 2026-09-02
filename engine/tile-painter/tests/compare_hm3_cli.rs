@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+use tile_painter::accuracy_contract::WAVE_TWO_BENCHMARK_ROWS;
 use tile_painter::grid::TILE_PX;
 use tile_painter::wire_hm3::{quantise_lden, write_tile, NO_DATA, SOURCE_ID_RAIL, SOURCE_ID_ROAD};
 
@@ -28,28 +29,14 @@ fn run_owned(args: &[String]) -> Output {
         .expect("run compare_hm3")
 }
 
-fn aggregate_args(
-    reference: &str,
-    candidates: &[&str],
-    wave: &str,
-    scoring: Option<&str>,
-) -> Vec<String> {
+/// `rows` copies of one reference/candidate pair, scored as the contract.
+fn aggregate_args(reference: &str, candidate: &str, rows: usize) -> Vec<String> {
     let mut args = vec!["--aggregate".to_string()];
-    for candidate in candidates {
+    for _ in 0..rows {
         args.push(reference.to_string());
-        args.push((*candidate).to_string());
+        args.push(candidate.to_string());
     }
-    args.extend(["--wave".to_string(), wave.to_string()]);
-    if let Some(scoring) = scoring {
-        args.extend(["--scoring".to_string(), scoring.to_string()]);
-    }
-    args
-}
-
-fn release_layer_args(reference: &str, candidate: &str, rows: usize, layer: &str) -> Vec<String> {
-    let candidates = vec![candidate; rows];
-    let mut args = aggregate_args(reference, &candidates, "1", None);
-    args.extend(["--release-layer".to_string(), layer.to_string()]);
+    args.extend(["--wave".to_string(), "2".to_string()]);
     args
 }
 
@@ -76,6 +63,50 @@ fn cli_reads_hm3_and_keeps_legacy_output_shape() {
 }
 
 #[test]
+fn the_release_verdict_needs_the_complete_benchmark_and_fails_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let reference_path = dir.path().join("reference.bin");
+    let identical_path = dir.path().join("identical.bin");
+    let reference = vec![quantise_lden(60.0); TILE_PX * TILE_PX];
+    write_fixture(&reference_path, &reference);
+    write_fixture(&identical_path, &reference);
+    let reference_arg = reference_path.to_str().unwrap();
+    let identical_arg = identical_path.to_str().unwrap();
+
+    let output = run_owned(&aggregate_args(
+        reference_arg,
+        identical_arg,
+        WAVE_TWO_BENCHMARK_ROWS,
+    ));
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(&format!(
+        "contract aggregate wave=2 (accurate) scoring=absolute rows={WAVE_TWO_BENCHMARK_ROWS}"
+    )));
+    assert!(stdout.contains("verdict=PASS"));
+
+    let short = run_owned(&aggregate_args(
+        reference_arg,
+        identical_arg,
+        WAVE_TWO_BENCHMARK_ROWS - 1,
+    ));
+    assert!(short.status.success(), "a short workset stays diagnostic");
+    let stdout = String::from_utf8(short.stdout).unwrap();
+    assert!(stdout.contains("contract aggregate diagnostic_only wave=2 (accurate)"));
+    assert!(stdout.contains(&format!(
+        "expected_benchmark_rows={WAVE_TWO_BENCHMARK_ROWS}"
+    )));
+    assert!(!stdout.lines().any(|line| line.starts_with("verdict=")));
+
+    // The retired draft wave is refused by name rather than silently rescored.
+    let retired = run(&[reference_arg, identical_arg, "--wave", "1"]);
+    assert_eq!(retired.status.code(), Some(2));
+    assert!(String::from_utf8(retired.stderr)
+        .unwrap()
+        .contains("retired"));
+}
+
+#[test]
 fn failed_release_verdict_maps_to_exit_one() {
     let dir = tempfile::tempdir().unwrap();
     let reference_path = dir.path().join("reference.bin");
@@ -84,11 +115,10 @@ fn failed_release_verdict_maps_to_exit_one() {
     write_fixture(&reference_path, &vec![quantise_lden(60.0); cells]);
     write_fixture(&erased_path, &vec![NO_DATA; cells]);
 
-    let output = run_owned(&release_layer_args(
+    let output = run_owned(&aggregate_args(
         reference_path.to_str().unwrap(),
         erased_path.to_str().unwrap(),
-        125,
-        "road",
+        WAVE_TWO_BENCHMARK_ROWS,
     ));
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8(output.stdout)
@@ -97,117 +127,20 @@ fn failed_release_verdict_maps_to_exit_one() {
 }
 
 #[test]
-fn per_layer_release_gate_is_125_rows_fail_closed_and_provenance_checked() {
+fn a_pair_of_two_different_layers_is_refused_before_it_is_scored() {
+    // Scoring road against rail measures nothing, and the HM3 source discriminator is
+    // the only thing that can catch a mis-wired pair, so it is checked on every pair.
     let dir = tempfile::tempdir().unwrap();
-    let reference_path = dir.path().join("reference.bin");
-    let identical_path = dir.path().join("identical.bin");
-    let wrong_reference_path = dir.path().join("wrong-reference.bin");
-    let wrong_candidate_path = dir.path().join("wrong-candidate.bin");
-    let cells = TILE_PX * TILE_PX;
-    let reference = vec![quantise_lden(60.0); cells];
-    write_fixture(&reference_path, &reference);
-    write_fixture(&identical_path, &reference);
-    write_fixture_with_source_id(&wrong_reference_path, &reference, SOURCE_ID_RAIL);
-    write_fixture_with_source_id(&wrong_candidate_path, &reference, SOURCE_ID_RAIL);
+    let road_path = dir.path().join("road.bin");
+    let rail_path = dir.path().join("rail.bin");
+    let cells = vec![quantise_lden(60.0); TILE_PX * TILE_PX];
+    write_fixture_with_source_id(&road_path, &cells, SOURCE_ID_ROAD);
+    write_fixture_with_source_id(&rail_path, &cells, SOURCE_ID_RAIL);
 
-    let reference_arg = reference_path.to_str().unwrap();
-    let identical_arg = identical_path.to_str().unwrap();
-
-    let output = run_owned(&release_layer_args(
-        reference_arg,
-        identical_arg,
-        125,
-        "road",
-    ));
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains(
-        "contract aggregate layer=road scope=release-layer expected_rows=125 wave=1 (draft)"
-    ));
-    assert!(stdout.contains("verdict=PASS"));
-    assert!(stdout.contains("layer=road scope=release-layer expected_rows=125"));
-
-    let rows = 124;
-    let output = run_owned(&release_layer_args(
-        reference_arg,
-        identical_arg,
-        rows,
-        "road",
-    ));
-    assert!(output.status.success(), "{rows} rows must stay diagnostic");
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains(
-        "contract aggregate diagnostic_only layer=road scope=release-layer expected_rows=125"
-    ));
-    assert!(stdout.contains("expected_benchmark_rows=125"));
-    assert!(!stdout.lines().any(|line| line.starts_with("verdict=")));
-
-    assert_eq!(
-        run(&[
-            "--aggregate",
-            reference_arg,
-            identical_arg,
-            "--wave",
-            "2",
-            "--release-layer",
-            "road",
-        ])
-        .status
-        .code(),
-        Some(2)
-    );
-    assert_eq!(
-        run(&[
-            reference_arg,
-            identical_arg,
-            "--wave",
-            "1",
-            "--release-layer",
-            "road",
-        ])
-        .status
-        .code(),
-        Some(2)
-    );
-    for layer in ["total", "unknown"] {
-        assert_eq!(
-            run(&[
-                "--aggregate",
-                reference_arg,
-                identical_arg,
-                "--wave",
-                "1",
-                "--release-layer",
-                layer,
-            ])
-            .status
-            .code(),
-            Some(2),
-            "{layer} is outside the per-layer release allow-list"
-        );
-    }
-
-    let wrong_reference_arg = wrong_reference_path.to_str().unwrap();
-    let output = run_owned(&release_layer_args(
-        wrong_reference_arg,
-        identical_arg,
-        1,
-        "road",
-    ));
+    let output = run(&[road_path.to_str().unwrap(), rail_path.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("reference"));
-    assert!(stderr.contains("source_id 2, expected 1"));
-
-    let wrong_candidate_arg = wrong_candidate_path.to_str().unwrap();
-    let output = run_owned(&release_layer_args(
-        reference_arg,
-        wrong_candidate_arg,
-        1,
-        "road",
-    ));
-    assert_eq!(output.status.code(), Some(2));
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("candidate"));
-    assert!(stderr.contains("source_id 2, expected 1"));
+    assert!(stderr.contains("source_id"), "{stderr}");
+    assert!(stderr.contains(&format!("{SOURCE_ID_ROAD}")));
+    assert!(stderr.contains(&format!("{SOURCE_ID_RAIL}")));
 }

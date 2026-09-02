@@ -5,39 +5,36 @@
 //! Used to gate approximations (coarse-grid, 1 Hz aggregation) against an exact
 //! baseline under the aggregate accuracy contract.
 //!
-//! With `--wave` it also prints one pair's contract diagnostics. Only `--aggregate`
-//! emits a PASS/FAIL release verdict; a single row or probe never qualifies a wave.
+//! With `--wave 2` it also prints one pair's contract diagnostics. Only `--aggregate`
+//! emits a PASS/FAIL release verdict; a single row or probe never qualifies a release.
 //! Scoring lives in [`tile_painter::accuracy_contract`]; this binary is the driver.
 //!
 //! Aggregate scoring accepts any number of pairs, but emits a release verdict only at
-//! the fixed 250/980-row Wave-1/Wave-2 benchmark sizes, or at 125 rows for the
-//! explicitly named Wave-1 `--release-layer` scope. Amplitude and presence use
+//! the fixed [`WAVE_TWO_BENCHMARK_ROWS`]-row benchmark size. Amplitude and presence use
 //! reference-painted cells; bias uses the numerically comparable painted subset.
 //! Per-row rates are diagnostics:
-//! `compare_hm3 --aggregate <ref> <cand> [<ref> <cand> ...] --wave 1|2`.
+//! `compare_hm3 --aggregate <ref> <cand> [<ref> <cand> ...] --wave 2`.
 
 use std::path::Path;
 use std::process::ExitCode;
 
 use tile_painter::accuracy_contract::{
-    allowance, score, AggregateScore, Score, Scoring, Verdict, Wave, DIAGNOSTIC_EXTREME_OVER_DB,
+    allowance, score, AggregateScore, Score, Scoring, Verdict, DIAGNOSTIC_EXTREME_OVER_DB,
     MAX_AGGREGATE_SIGNED_MEAN_DB, ROW_ANTI_DILUTION_MULTIPLIER, ROW_EYEBALL_PRESENCE_FRACTION,
-    ROW_EYEBALL_SIGNED_MEAN_DB,
+    ROW_EYEBALL_SIGNED_MEAN_DB, WAVE_TWO_BENCHMARK_ROWS, WAVE_TWO_QUIET_MAX_DB, WAVE_TWO_RUNGS,
 };
-use tile_painter::tile_store::{expected_source_id, TOTAL_INPUT_LAYERS};
 use tile_painter::wire_hm3;
 
-// Sealed exact W1 reference `90a7da1d...` contains 875 canonical HM3 keys:
-// one 125-key slice for each of the seven input layers. The older 250-row W1
-// aggregate is the road+rail pair of those same per-layer slices.
-const WAVE_ONE_REFERENCE_KEYS: usize = 875;
-const PER_LAYER_WAVE_ONE_ROWS: usize = WAVE_ONE_REFERENCE_KEYS / TOTAL_INPUT_LAYERS.len();
-const _: () = assert!(WAVE_ONE_REFERENCE_KEYS.is_multiple_of(TOTAL_INPUT_LAYERS.len()));
+/// The wave field this scorer prints, kept because the experiment harness pins an
+/// older scorer build and parses this exact header; the wire format therefore outlives
+/// the retired draft wave. `--wave 2` selects contract output; wave 1 was retired with
+/// its reference on 2026-09-02 and is refused.
+const CONTRACT_WAVE_LABEL: &str = "2 (accurate)";
 
 const USAGE: &str = "usage: compare_hm3 <reference.bin> <candidate.bin> \
-[--wave 1|2] [--scoring absolute|marginal]\n       compare_hm3 --aggregate \
+[--wave 2] [--scoring absolute|marginal]\n       compare_hm3 --aggregate \
 <reference.bin> <candidate.bin> [<reference.bin> <candidate.bin> ...] \
---wave 1|2 [--scoring absolute|marginal] [--release-layer <layer>]";
+--wave 2 [--scoring absolute|marginal]";
 
 struct PairPaths {
     reference: String,
@@ -47,9 +44,9 @@ struct PairPaths {
 struct Args {
     pairs: Vec<PairPaths>,
     aggregate: bool,
-    wave: Option<Wave>,
+    /// `--wave 2` was given: print contract diagnostics, not only the statistics line.
+    contract: bool,
     scoring: Scoring,
-    release_layer: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -60,15 +57,20 @@ fn parse_args() -> Result<Args, String> {
 fn parse_args_from(argv: &[String]) -> Result<Args, String> {
     let mut positional: Vec<String> = Vec::new();
     let mut aggregate = false;
-    let mut wave = None;
+    let mut contract = false;
     let mut scoring = Scoring::Absolute;
-    let mut release_layer = None;
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
             "--wave" => {
-                let v = argv.get(i + 1).ok_or("--wave needs 1 or 2")?;
-                wave = Some(Wave::parse(v).ok_or_else(|| format!("bad --wave {v}"))?);
+                let v = argv.get(i + 1).ok_or("--wave needs 2")?;
+                if v != "2" {
+                    return Err(format!(
+                        "bad --wave {v}: the draft z12 wave was retired with its reference \
+                         on 2026-09-02 and only the accurate z13 contract remains"
+                    ));
+                }
+                contract = true;
                 i += 2;
             }
             "--scoring" => {
@@ -79,15 +81,6 @@ fn parse_args_from(argv: &[String]) -> Result<Args, String> {
             "--aggregate" => {
                 aggregate = true;
                 i += 1;
-            }
-            "--release-layer" => {
-                let layer = argv
-                    .get(i + 1)
-                    .ok_or("--release-layer needs a canonical layer")?;
-                if release_layer.replace(layer.clone()).is_some() {
-                    return Err("--release-layer may be specified only once".to_string());
-                }
-                i += 2;
             }
             other if other.starts_with('-') => {
                 return Err(format!("unknown option {other}\n{USAGE}"));
@@ -104,27 +97,8 @@ fn parse_args_from(argv: &[String]) -> Result<Args, String> {
     {
         return Err(USAGE.to_string());
     }
-    if aggregate && wave.is_none() {
-        return Err(format!("--aggregate requires --wave\n{USAGE}"));
-    }
-    if let Some(layer) = release_layer.as_deref() {
-        if !aggregate {
-            return Err(format!("--release-layer requires --aggregate\n{USAGE}"));
-        }
-        if wave != Some(Wave::One) {
-            return Err(format!("--release-layer requires --wave 1\n{USAGE}"));
-        }
-        if scoring != Scoring::Absolute {
-            return Err(format!(
-                "--release-layer requires --scoring absolute\n{USAGE}"
-            ));
-        }
-        if !TOTAL_INPUT_LAYERS.contains(&layer) {
-            return Err(format!(
-                "bad --release-layer {layer}; expected one of {}\n{USAGE}",
-                TOTAL_INPUT_LAYERS.join(", ")
-            ));
-        }
+    if aggregate && !contract {
+        return Err(format!("--aggregate requires --wave 2\n{USAGE}"));
     }
     let pairs = positional
         .chunks_exact(2)
@@ -136,9 +110,8 @@ fn parse_args_from(argv: &[String]) -> Result<Args, String> {
     Ok(Args {
         pairs,
         aggregate,
-        wave,
+        contract,
         scoring,
-        release_layer,
     })
 }
 
@@ -198,8 +171,8 @@ fn format_percentage(count: usize, denominator: usize) -> String {
     }
 }
 
-fn format_rung_counts(wave: Wave, counts: &[usize]) -> String {
-    wave.rungs()
+fn format_rung_counts(counts: &[usize]) -> String {
+    WAVE_TWO_RUNGS
         .iter()
         .zip(counts)
         .map(|(rung, count)| format!("{:.1}:{count}", rung.over_db))
@@ -207,12 +180,12 @@ fn format_rung_counts(wave: Wave, counts: &[usize]) -> String {
         .join(",")
 }
 
-fn print_row_diagnostics(s: &Score, wave: Wave, scoring: Scoring) {
-    let counts = s.count_rungs(wave);
-    let overshoots = s.amplitude_overshoots(wave);
+fn print_row_diagnostics(s: &Score, scoring: Scoring) {
+    let counts = s.count_rungs();
+    let overshoots = s.amplitude_overshoots();
     println!(
         "contract diagnostic_only wave={} scoring={} cells={}",
-        wave.label(),
+        CONTRACT_WAVE_LABEL,
         scoring.label(),
         s.cells
     );
@@ -224,7 +197,7 @@ fn print_row_diagnostics(s: &Score, wave: Wave, scoring: Scoring) {
         s.loud.signed_mean_db(),
         s.loud.cand_louder_pct()
     );
-    for (i, rung) in wave.rungs().iter().enumerate() {
+    for (i, rung) in WAVE_TWO_RUNGS.iter().enumerate() {
         let allowed = allowance(s.cells, rung.max_fraction);
         let budget = format!("{:.4}% of tile", rung.max_fraction * 100.0);
         println!(
@@ -238,19 +211,12 @@ fn print_row_diagnostics(s: &Score, wave: Wave, scoring: Scoring) {
             rung.population_label(),
         );
     }
-    if wave == Wave::One {
-        println!(
-            "    >{:>4.1} dB {:>9} cells   allowed=none diagnostic_only",
-            DIAGNOSTIC_EXTREME_OVER_DB,
-            s.loud.cells_over(DIAGNOSTIC_EXTREME_OVER_DB),
-        );
-    }
     println!(
         "  ref<30dB  compared={} max_abs_db={:.3}   aggregate_reference {:.1} dB  {} diagnostic_only",
         s.quiet.cells,
         s.quiet.max_abs_db,
-        wave.quiet_band_max_db(),
-        mark(!s.quiet_band_over(wave)),
+        WAVE_TWO_QUIET_MAX_DB,
+        mark(!s.quiet_band_over()),
     );
     println!(
         "  paint-edge crossings {}   (all, including the rounding band)",
@@ -262,7 +228,7 @@ fn print_row_diagnostics(s: &Score, wave: Wave, scoring: Scoring) {
         s.qualifying_flips,
         s.flips_newly_silent,
         s.flips_newly_painted,
-        s.presence_allowance(wave),
+        s.presence_allowance(),
     );
     let bias = s.loud.signed_mean_db().abs();
     println!(
@@ -274,13 +240,13 @@ fn print_row_diagnostics(s: &Score, wave: Wave, scoring: Scoring) {
         "diagnostic_only wave={} scoring={} rung_counts={} extreme_over_12db={} flips={} \
          presence_gate_cells={} presence_reference={} quiet_max_db={:.1} \
          wave2_unified_tail={}",
-        wave.label(),
+        CONTRACT_WAVE_LABEL,
         scoring.label(),
-        format_rung_counts(wave, &counts),
+        format_rung_counts(&counts),
         s.loud.cells_over(DIAGNOSTIC_EXTREME_OVER_DB),
         s.qualifying_flips,
         s.gated_presence_changes,
-        s.presence_allowance(wave),
+        s.presence_allowance(),
         s.quiet.max_abs_db,
         s.wave_two_unified_tail,
     );
@@ -297,22 +263,11 @@ fn percentage(count: usize, denominator: usize) -> f64 {
 fn print_aggregate_score(
     scores: &[Score],
     paths: &[PairPaths],
-    wave: Wave,
     scoring: Scoring,
-    release_layer: Option<&str>,
 ) -> Option<Verdict> {
     let aggregate = AggregateScore::new(scores);
-    let expected_rows = release_layer
-        .map(|_| PER_LAYER_WAVE_ONE_ROWS)
-        .unwrap_or_else(|| wave.benchmark_rows());
-    let verdict = match release_layer {
-        Some(_) => aggregate.verdict_for_expected_rows(wave, expected_rows),
-        None => aggregate.verdict(wave),
-    };
+    let verdict = aggregate.verdict();
     let release_eligible = verdict.is_some();
-    let scope_fields = release_layer
-        .map(|layer| format!("layer={layer} scope=release-layer expected_rows={expected_rows} "))
-        .unwrap_or_default();
     let decision_mark = |ok| {
         if release_eligible {
             hard_mark(ok)
@@ -320,21 +275,20 @@ fn print_aggregate_score(
             mark(ok)
         }
     };
-    let counts = aggregate.count_rungs(wave);
-    let aggregate_overshoots = aggregate.amplitude_overshoots(wave);
-    let row_overshoots = aggregate.row_amplitude_overshoots(wave);
-    let row_presence_overshoots = aggregate.row_presence_diagnostic_overshoots(wave);
+    let counts = aggregate.count_rungs();
+    let aggregate_overshoots = aggregate.amplitude_overshoots();
+    let row_overshoots = aggregate.row_amplitude_overshoots();
+    let row_presence_overshoots = aggregate.row_presence_diagnostic_overshoots();
     let painted = aggregate.painted_cells();
 
     println!(
-        "contract aggregate{} {}wave={} scoring={} rows={} painted_cells={}",
+        "contract aggregate{} wave={} scoring={} rows={} painted_cells={}",
         if release_eligible {
             ""
         } else {
             " diagnostic_only"
         },
-        scope_fields,
-        wave.label(),
+        CONTRACT_WAVE_LABEL,
         scoring.label(),
         scores.len(),
         painted,
@@ -348,8 +302,7 @@ fn print_aggregate_score(
         aggregate.presence_changed(),
         aggregate.paint_edge_crossings(),
     );
-    let rungs = wave.rungs();
-    for (rung_index, rung) in rungs.iter().enumerate() {
+    for (rung_index, rung) in WAVE_TWO_RUNGS.iter().enumerate() {
         let allowed = allowance(painted, rung.max_fraction);
         let rows_over = row_overshoots
             .iter()
@@ -374,16 +327,8 @@ fn print_aggregate_score(
             },
         );
     }
-    if wave == Wave::One {
-        println!(
-            "    >{:>4.1} dB {:>9} cells   aggregate_allowed=none diagnostic_only",
-            DIAGNOSTIC_EXTREME_OVER_DB,
-            aggregate.diagnostic_extreme_count(),
-        );
-    }
-
     for (row_index, (row, pair)) in aggregate.rows().iter().zip(paths).enumerate() {
-        let row_counts = row.count_rungs(wave);
+        let row_counts = row.count_rungs();
         let presence_row_over = row_presence_overshoots.contains(&row_index);
         println!(
             "  row={} painted={} compared={} presence_changed={} presence_gate_cells={} silenced={} \
@@ -398,14 +343,14 @@ fn print_aggregate_score(
             row.gated_presence_changes,
             row.flips_newly_silent,
             row.paint_edge_crossings,
-            format_rung_counts(wave, &row_counts),
+            format_rung_counts(&row_counts),
             row.loud.max_abs_db,
             row.quiet.max_abs_db,
             row.loud.cells_over(DIAGNOSTIC_EXTREME_OVER_DB),
             row.loud.signed_mean_db(),
             row.qualifying_flips,
             format_percentage(row.gated_presence_changes, row.reference_painted_cells),
-            aggregate.row_presence_diagnostic_allowance(row_index, wave),
+            aggregate.row_presence_diagnostic_allowance(row_index),
             mark(!presence_row_over),
             row.wave_two_unified_tail,
             pair.reference,
@@ -416,8 +361,8 @@ fn print_aggregate_score(
     println!(
         "  ref<30dB max_abs_db={:.3}   limit {:.1} dB  aggregate_gate={}",
         aggregate.quiet_max_abs_db(),
-        wave.quiet_band_max_db(),
-        decision_mark(!aggregate.quiet_band_over(wave)),
+        WAVE_TWO_QUIET_MAX_DB,
+        decision_mark(!aggregate.quiet_band_over()),
     );
     println!(
         "  aggregate presence gate cells {}   qualifying flips {}   raw NO_DATA mismatches {}   \
@@ -429,8 +374,8 @@ fn print_aggregate_score(
         aggregate.presence_changed(),
         aggregate.flips_newly_silent(),
         aggregate.flips_newly_painted(),
-        aggregate.presence_allowance(wave),
-        decision_mark(!aggregate.presence_over_budget(wave)),
+        aggregate.presence_allowance(),
+        decision_mark(!aggregate.presence_over_budget()),
         ROW_ANTI_DILUTION_MULTIPLIER,
         if row_presence_overshoots.is_empty() {
             "none".to_string()
@@ -481,23 +426,23 @@ fn print_aggregate_score(
         format_rows(&eyeball_rows),
     );
     let summary = format!(
-        "{scope_fields}wave={} scoring={} aggregate_rows={} painted_cells={} aggregate_bias={:+.4} \
+        "wave={} scoring={} aggregate_rows={} painted_cells={} aggregate_bias={:+.4} \
          paint_edge_crossings={} rung_counts={} extreme_over_12db={} flips={} \
          presence_gate_cells={} \
          aggregate_presence_allowed={} \
          quiet_max_db={:.1} wave2_unified_tail={} \
          diagnostic_presence_rows_over_3x={} eyeball_rows={}",
-        wave.label(),
+        CONTRACT_WAVE_LABEL,
         scoring.label(),
         scores.len(),
         painted,
         aggregate.signed_mean_db(),
         aggregate.paint_edge_crossings(),
-        format_rung_counts(wave, &counts),
+        format_rung_counts(&counts),
         aggregate.diagnostic_extreme_count(),
         aggregate.qualifying_flips(),
         aggregate.gated_presence_changes(),
-        aggregate.presence_allowance(wave),
+        aggregate.presence_allowance(),
         aggregate.quiet_max_abs_db(),
         aggregate.wave_two_unified_tail(),
         format_rows(&row_presence_overshoots),
@@ -507,34 +452,21 @@ fn print_aggregate_score(
         println!("verdict={} {summary}", verdict.label());
         Some(verdict)
     } else {
-        println!(
-            "diagnostic_only {summary} expected_benchmark_rows={}",
-            expected_rows
-        );
+        println!("diagnostic_only {summary} expected_benchmark_rows={WAVE_TWO_BENCHMARK_ROWS}");
         None
     }
 }
 
-fn read_score(pair: &PairPaths, release_layer: Option<&str>) -> Result<Score, String> {
+fn read_score(pair: &PairPaths) -> Result<Score, String> {
     let reference = wire_hm3::read_tile_decoded(Path::new(&pair.reference))
         .map_err(|error| format!("reading {}: {error}", pair.reference))?;
     let candidate = wire_hm3::read_tile_decoded(Path::new(&pair.candidate))
         .map_err(|error| format!("reading {}: {error}", pair.candidate))?;
-    if let Some(layer) = release_layer {
-        let expected = expected_source_id(layer).ok_or_else(|| {
-            format!("release layer {layer} has no canonical HM3 source_id mapping")
-        })?;
-        for (side, path, actual) in [
-            ("reference", &pair.reference, reference.source_id),
-            ("candidate", &pair.candidate, candidate.source_id),
-        ] {
-            if actual != expected {
-                return Err(format!(
-                    "HM3 provenance mismatch for release layer {layer}: {side} {path} has \
-                     source_id {actual}, expected {expected}"
-                ));
-            }
-        }
+    if reference.source_id != candidate.source_id {
+        return Err(format!(
+            "layer mismatch: reference {} has source_id {}, candidate {} has source_id {}",
+            pair.reference, reference.source_id, pair.candidate, candidate.source_id
+        ));
     }
     if reference.cells.len() != candidate.cells.len() {
         return Err(format!(
@@ -558,7 +490,7 @@ fn main() -> ExitCode {
     };
     let mut scores = Vec::with_capacity(args.pairs.len());
     for pair in &args.pairs {
-        match read_score(pair, args.release_layer.as_deref()) {
+        match read_score(pair) {
             Ok(scored) => scores.push(scored),
             Err(error) => {
                 eprintln!("{error}");
@@ -568,21 +500,15 @@ fn main() -> ExitCode {
     }
 
     if args.aggregate {
-        let verdict = print_aggregate_score(
-            &scores,
-            &args.pairs,
-            args.wave.expect("aggregate requires wave"),
-            args.scoring,
-            args.release_layer.as_deref(),
-        );
+        let verdict = print_aggregate_score(&scores, &args.pairs, args.scoring);
         return match verdict {
             Some(Verdict::Fail) => ExitCode::FAILURE,
             Some(Verdict::Pass) | None => ExitCode::SUCCESS,
         };
     } else {
         print_statistics(&scores[0]);
-        if let Some(wave) = args.wave {
-            print_row_diagnostics(&scores[0], wave, args.scoring);
+        if args.contract {
+            print_row_diagnostics(&scores[0], args.scoring);
         }
     }
     ExitCode::SUCCESS
@@ -591,72 +517,40 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tile_painter::wire_hm3::{
-        SOURCE_ID_AIRCRAFT, SOURCE_ID_BUILDING, SOURCE_ID_INDUSTRIAL, SOURCE_ID_RAIL,
-        SOURCE_ID_ROAD,
-    };
 
-    fn release_args(layer: &str) -> Vec<String> {
-        [
-            "--aggregate",
-            "reference.bin",
-            "candidate.bin",
-            "--wave",
-            "1",
-            "--release-layer",
-            layer,
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect()
+    fn args_of(argv: &[&str]) -> Vec<String> {
+        argv.iter().map(|a| a.to_string()).collect()
     }
 
     #[test]
     fn parser_requires_a_pair_and_an_aggregate_wave() {
         assert!(parse_args_from(&[]).is_err());
-        let aggregate_without_wave = ["--aggregate", "reference.bin", "candidate.bin"]
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        assert!(parse_args_from(&aggregate_without_wave).is_err());
+        assert!(
+            parse_args_from(&args_of(&["--aggregate", "reference.bin", "candidate.bin"])).is_err()
+        );
+        let parsed = parse_args_from(&args_of(&[
+            "--aggregate",
+            "reference.bin",
+            "candidate.bin",
+            "--wave",
+            "2",
+        ]))
+        .expect("wave 2 parses");
+        assert!(parsed.aggregate && parsed.contract);
     }
 
     #[test]
-    fn release_layer_parser_accepts_exact_canonical_mapping() {
-        let expected = [
-            ("road", SOURCE_ID_ROAD),
-            ("rail", SOURCE_ID_RAIL),
-            ("industrial", SOURCE_ID_INDUSTRIAL),
-            ("building", SOURCE_ID_BUILDING),
-            ("aircraft-airborne", SOURCE_ID_AIRCRAFT),
-            ("aircraft-cruise", SOURCE_ID_AIRCRAFT),
-            ("aircraft-ground", SOURCE_ID_AIRCRAFT),
-        ];
-        assert_eq!(TOTAL_INPUT_LAYERS, expected.map(|(layer, _)| layer));
-        for (layer, source_id) in expected {
-            let parsed = parse_args_from(&release_args(layer)).expect("canonical layer parses");
-            assert_eq!(parsed.release_layer.as_deref(), Some(layer));
-            assert_eq!(expected_source_id(layer), Some(source_id));
-        }
-    }
-
-    #[test]
-    fn release_layer_parser_rejects_wrong_scope_and_names() {
-        let mut nonaggregate = release_args("road");
-        nonaggregate[0] = "reference.bin".to_string();
-        nonaggregate.remove(1);
-        assert!(parse_args_from(&nonaggregate).is_err());
-
-        let mut wave_two = release_args("road");
-        wave_two[4] = "2".to_string();
-        assert!(parse_args_from(&wave_two).is_err());
-
-        let mut marginal = release_args("road");
-        marginal.extend(["--scoring".to_string(), "marginal".to_string()]);
-        assert!(parse_args_from(&marginal).is_err());
-
-        for layer in ["total", "unknown"] {
-            assert!(parse_args_from(&release_args(layer)).is_err());
-        }
+    fn the_retired_draft_wave_is_refused_by_name() {
+        let Err(error) = parse_args_from(&args_of(&[
+            "--aggregate",
+            "reference.bin",
+            "candidate.bin",
+            "--wave",
+            "1",
+        ])) else {
+            panic!("the retired draft wave must be refused");
+        };
+        assert!(error.contains("retired"), "{error}");
+        assert!(parse_args_from(&args_of(&["a.bin", "b.bin", "--wave", "3"])).is_err());
     }
 }
