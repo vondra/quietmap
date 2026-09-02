@@ -36,6 +36,15 @@ use crate::types::{
 ///
 /// Fast path: no trace metadata built, no `Vec<EdgePoint>` allocation.
 /// Pipeline-worker's hot loop uses this; popup uses `_with_meta`.
+/// Shortest path (m) that carries a terrain or screening term: below it the
+/// diffraction geometry has no samples to stand on and both passes return zero.
+/// The CUDA lane mirrors the generated copy.
+pub const SCREENING_MIN_PATH_M: f64 = 30.0;
+/// Floor on the source height above bare earth (m) in the diffraction geometry.
+pub const SOURCE_HEIGHT_FLOOR_M: f64 = 0.05;
+/// Floor on the receiver height above bare earth (m) in the diffraction geometry.
+pub const RECEIVER_HEIGHT_FLOOR_M: f64 = 0.5;
+
 /// Bare-earth terrain diffraction: the bands, and the δ of the dominant edge
 /// (`None` when no sample rises above the line of sight).
 ///
@@ -83,7 +92,7 @@ fn compute_terrain_diffraction<'a>(
     src_elev: f64,
     rcv_alt: f64,
 ) -> Option<TerrainDiffraction<'a>> {
-    if profile.t.len() < 3 || profile.dist_m < 30.0 {
+    if profile.t.len() < 3 || profile.dist_m < SCREENING_MIN_PATH_M {
         return None;
     }
     let dz_total = rcv_alt - src_elev;
@@ -100,9 +109,10 @@ fn compute_terrain_diffraction<'a>(
     // heights above ground feed the mirror-fit δ* computation.
     let n = profile.t.len();
     let src_ground = profile.elevation_m[0] as f64;
-    let src_h = (src_elev - src_ground).max(0.05);
+    let src_h = (src_elev - src_ground).max(SOURCE_HEIGHT_FLOOR_M);
     let rcv_ground = profile.elevation_m[n - 1] as f64;
-    let rcv_h = (rcv_alt - rcv_ground).max(crate::constants::DEFAULT_RECEIVER_HEIGHT.min(0.5));
+    let rcv_h = (rcv_alt - rcv_ground)
+        .max(crate::constants::DEFAULT_RECEIVER_HEIGHT.min(RECEIVER_HEIGHT_FLOOR_M));
     let dist_m = profile.dist_m;
 
     let PathProfile {
@@ -150,7 +160,7 @@ pub fn terrain_subset_delta_lower_bound(
     rcv_alt: f64,
 ) -> Option<(f64, f64)> {
     let n = t.len();
-    if n < 3 || dist_m < 30.0 || elevation_m.len() != n {
+    if n < 3 || dist_m < SCREENING_MIN_PATH_M || elevation_m.len() != n {
         return None;
     }
     let dz_total = rcv_alt - src_elev;
@@ -164,9 +174,9 @@ pub fn terrain_subset_delta_lower_bound(
     }) {
         return None;
     }
-    let src_h = (src_elev - e0).max(0.05);
+    let src_h = (src_elev - e0).max(SOURCE_HEIGHT_FLOOR_M);
     let rcv_h = (rcv_alt - elevation_m[n - 1] as f64)
-        .max(crate::constants::DEFAULT_RECEIVER_HEIGHT.min(0.5));
+        .max(crate::constants::DEFAULT_RECEIVER_HEIGHT.min(RECEIVER_HEIGHT_FLOOR_M));
     let src_e = e0 + src_h;
     let rcv_e = elevation_m[n - 1] as f64 + rcv_h;
     let dsr = (dist_m * dist_m + (rcv_e - src_e).powi(2)).sqrt();
@@ -361,7 +371,7 @@ pub fn screening_attenuation_with_meta(
         edge: None,
     };
 
-    if n < 3 || dist_m < 30.0 {
+    if n < 3 || dist_m < SCREENING_MIN_PATH_M {
         return ([0.0; NUM_BANDS], make_empty());
     }
 
@@ -409,8 +419,8 @@ pub fn screening_attenuation_with_meta(
     // 3. Per-end heights above bare-earth for the diffraction API. Nothing is
     //    folded onto the sample profile any more: buildings and barriers alike
     //    are exact crossings competing in the §5b candidate race.
-    let src_h = (src_elev - elevation_f64[0]).max(0.05);
-    let rcv_h = (rcv_alt - elevation_f64[n - 1]).max(0.5);
+    let src_h = (src_elev - elevation_f64[0]).max(SOURCE_HEIGHT_FLOOR_M);
+    let rcv_h = (rcv_alt - elevation_f64[n - 1]).max(RECEIVER_HEIGHT_FLOOR_M);
 
     // 5b. Exact-crossing candidates — vector building edges AND noise-barrier
     //     segments, one race — compete with the cadence composite edge on δ,

@@ -100,6 +100,14 @@ pub struct GroundPath {
     pub source_ground_g: f64,
 }
 
+/// Floor (m) on both mean-plane heights of a direct ground path: keeps the
+/// zero-impedance intermediates finite at degenerate geometry. The CUDA lane
+/// mirrors the generated copy.
+pub const GROUND_PATH_HEIGHT_FLOOR_M: f64 = 0.05;
+/// CNOSSOS-EU 2015/996 section 2.5.14: a path shorter than this many times the
+/// height sum blends the path ground with the source ground.
+pub const CNOSSOS_GROUND_SHORT_PATH_FACTOR: f64 = 30.0;
+
 impl GroundPath {
     /// Construct a numerically safe direct path.  The production profile
     /// builder supplies positive receiver/source heights; this constructor
@@ -114,8 +122,8 @@ impl GroundPath {
     ) -> Self {
         Self {
             dp_m: dp_m.max(1e-6),
-            zs_h_m: zs_h_m.abs().max(0.05),
-            zr_h_m: zr_h_m.abs().max(0.05),
+            zs_h_m: zs_h_m.abs().max(GROUND_PATH_HEIGHT_FLOOR_M),
+            zr_h_m: zr_h_m.abs().max(GROUND_PATH_HEIGHT_FLOOR_M),
             ground_path_g: ground_path_g.clamp(0.0, 1.0),
             source_ground_g: source_ground_g.clamp(0.0, 1.0),
         }
@@ -191,7 +199,7 @@ fn prepare_ground_path(path: GroundPath) -> Option<PreparedGroundPath> {
     }
 
     let height_sum_m = path.zs_h_m + path.zr_h_m;
-    let test_form_h = path.dp_m / (30.0 * height_sum_m);
+    let test_form_h = path.dp_m / (CNOSSOS_GROUND_SHORT_PATH_FACTOR * height_sum_m);
     // §2.5.14: at short paths blend the path ground with source ground.
     let g_prime = if test_form_h <= 1.0 {
         g_path * test_form_h + path.source_ground_g * (1.0 - test_form_h)
