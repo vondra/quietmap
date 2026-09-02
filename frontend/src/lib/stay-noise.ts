@@ -1,20 +1,20 @@
 import { fetchAndDecodeHM3, TILE_PX, NO_DATA } from './hm3-decoder'
 import { lngLatToTileFloat } from './tile-math'
-import { BASE_ZOOM, tileUrl, WORLD_EXTENT, type TileBuilds } from './tile-urls'
+import { tileUrl, WORLD_EXTENT, type TileBuilds } from './tile-urls'
 
 // Sample the computed total Lden at arbitrary points by reading the same
 // precomputed HM3 tiles the heatmap renders — no server round-trip per point,
 // and the browser's HTTP cache already holds most tiles for the viewport.
 // One tile covers 512×512 cells, so a screenful of markers usually costs
-// zero to two extra fetches. Always samples at BASE_ZOOM: this is a value
-// readout at the raster's native resolution, not a rendered-pixel match
+// zero to two extra fetches. Always samples at the published base zoom: this is
+// a value readout at the raster's native resolution, not a rendered-pixel match
 // (unlike HoverTooltip, which reads the pyramid level actually displayed).
 
 const tileCache = new Map<string, Promise<Uint8Array | null>>()
 const TILE_CACHE_MAX = 64
 
 function getTileCells(build: TileBuilds, x: number, y: number): Promise<Uint8Array | null> {
-  const url = tileUrl(build, 'total', BASE_ZOOM, x, y)
+  const url = tileUrl(build, 'total', build.zoom, x, y)
   let p = tileCache.get(url)
   if (!p) {
     p = fetchAndDecodeHM3(url)
@@ -33,10 +33,10 @@ export async function sampleNoiseAt(
   build: TileBuilds,
   points: { lat: number; lng: number }[],
 ): Promise<(number | null)[]> {
-  const n = 1 << BASE_ZOOM
+  const n = 1 << build.zoom
   return Promise.all(points.map(async ({ lat, lng }) => {
     if (!Number.isFinite(lat) || Math.abs(lat) > WORLD_EXTENT[3]) return null
-    const [xf, yf] = lngLatToTileFloat(lng, lat, BASE_ZOOM)
+    const [xf, yf] = lngLatToTileFloat(lng, lat, build.zoom)
     const tx = Math.floor(xf)
     const ty = Math.floor(yf)
     if (ty < 0 || ty >= n) return null

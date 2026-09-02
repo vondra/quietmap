@@ -21,13 +21,20 @@ test('rejects unknown layers with the allowlist message', () => {
 })
 
 test('rejects out-of-range and non-integer zoom', () => {
-  // 512@z12 world: valid zooms are 2..=12.
-  for (const z of ['1', '13', '6.5', 'abc', '']) {
+  // The world is painted at z13 and pyramids to z2: valid zooms are 2..=13.
+  for (const z of ['1', '14', '6.5', 'abc', '']) {
     assert.equal(parseTileParams({ layer: 'total', z, x: '0', y: '0' }), 'bad zoom')
   }
   // Bounds themselves are valid.
   assert.deepEqual(parseTileParams({ layer: 'total', z: '2', x: '0', y: '0' }), { layer: 'total', z: 2, x: 0, y: 0 })
-  assert.deepEqual(parseTileParams({ layer: 'total', z: '12', x: '0', y: '0' }), { layer: 'total', z: 12, x: 0, y: 0 })
+  assert.deepEqual(parseTileParams({ layer: 'total', z: '13', x: '4424', y: '2774' }),
+    { layer: 'total', z: 13, x: 4424, y: 2774 })
+})
+
+test('a retired zoom-tier token is just an unknown layer now', () => {
+  const err = parseTileParams({ layer: 'road-z13-p001', z: '13', x: '4424', y: '2774' })
+  assert.equal(typeof err, 'string')
+  assert.match(err as string, /^layer must be one of /)
 })
 
 test('bounds x and y by 2^z', () => {

@@ -9,10 +9,7 @@ import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import {
-  W2_SPATIAL_SCORER_CONTRACT,
-  sha256Identity,
-} from '../generation-contract.mjs'
+import { WORLD_BASE_ZOOM, sha256Identity } from '../generation-contract.mjs'
 
 // PMTILES_BASE and TILE_ENV are captured from the env when heatmap-shared/tile-manifest-reader
 // load — point them at the fixture dir BEFORE importing (mirrors heatmap-pmtiles.test.ts's
@@ -38,14 +35,7 @@ const legacyPath = join(dir, 'current.json')
 const clearFixture = () => {
   for (const name of readdirSync(dir)) rmSync(join(dir, name), { force: true, recursive: true })
 }
-const stockProducerRoles = {
-  'cpu-airborne': 'stock',
-  'cpu-building': 'stock',
-  'cpu-cruise': 'stock',
-  'cpu-ground': 'stock',
-  'cpu-industrial': 'stock',
-  'gpu-airborne': 'stock',
-}
+const ACCEPTED_PROFILE = 'w2-z13-accepted-v1'
 const worker = (
   artifactFamily: string,
   binary: string,
@@ -58,93 +48,73 @@ const worker = (
   resolved_role: resolvedRole,
   selection_epoch: null,
 })
-const modelRoleContract = (
-  lineModelRole: 'w1' | 'w2-stride4',
-  lineModelRoleSha256 = '1'.repeat(64),
-) => ({
-  schema: 1,
-  line_model_role_sha256: lineModelRoleSha256,
-  model_source_recipe_sha256: '2'.repeat(64),
-  numerical_selection_record_sha256: null,
-  output_abi_version: 3,
-  role_spec_sha256: '3'.repeat(64),
-  workers: {
-    'cpu-airborne': worker(
-      'aircraft-cpu-production', 'build-heatmap-aircraft', 'stock', 'aircraft-cpu-stock-v1',
-    ),
-    'cpu-building': worker(
-      'surface-cpu-production', 'build-heatmap-surface', 'stock', 'surface-cpu-stock-v1',
-    ),
-    'cpu-cruise': worker(
-      'aircraft-cpu-production', 'build-heatmap-aircraft', 'stock', 'aircraft-cpu-stock-v1',
-    ),
-    'cpu-ground': worker(
-      'surface-cpu-production', 'build-heatmap-surface', 'stock', 'surface-cpu-stock-v1',
-    ),
-    'cpu-industrial': worker(
-      'surface-cpu-production', 'build-heatmap-surface', 'stock', 'surface-cpu-stock-v1',
-    ),
-    'gpu-airborne': worker(
-      'airborne-production', 'gpu-airborne', 'stock', 'airborne-stock-v1',
-    ),
-    'gpu-line': worker(
-      'surface-production',
-      'gpu-surface',
-      lineModelRole,
-      lineModelRole === 'w1'
-        ? 'surface-w1-z12-accepted-v1'
-        : 'surface-w2-z13-stride4-v1',
-    ),
-  },
-})
-function baseGeneration(lineModelRoleSha256 = '1'.repeat(64)) {
+/** One painting run's identity; two of these in one manifest is an ordinary partial publish. */
+function acceptedGeneration(rasterGenerationId = 'b'.repeat(16)) {
   const quality = {
     schema: 1,
-    profile_name: 'w1-z12-accepted-v1',
+    profile_name: ACCEPTED_PROFILE,
     product_commit: 'a'.repeat(40),
     dataset_year: 2026,
-    model_role_contract: modelRoleContract('w1', lineModelRoleSha256),
-    numerical_environment: {
-        QM_W1_INDUSTRIAL_POLICY: 'adaptive-stride5',
-        QM_W1_BUILDING_POLICY: 'adaptive-stride5',
+    model_role_contract: {
+      schema: 1,
+      line_model_role_sha256: '1'.repeat(64),
+      model_source_recipe_sha256: '2'.repeat(64),
+      numerical_selection_record_sha256: null,
+      output_abi_version: 3,
+      role_spec_sha256: '3'.repeat(64),
+      workers: {
+        'cpu-cruise': worker(
+          'aircraft-cpu-production', 'build-heatmap-aircraft', 'stock', 'aircraft-cpu-stock-v1',
+        ),
+        'gpu-airborne': worker(
+          'airborne-production', 'gpu-airborne', 'stock', 'airborne-stock-v1',
+        ),
+        'gpu-surface': worker(
+          'surface-production', 'gpu-surface', 'w2-merged', 'surface-w2-z13-accepted-v1',
+        ),
       },
+    },
+    numerical_environment: {},
     producer_requirements: {
-      worker_model_roles: { ...stockProducerRoles, 'gpu-line': 'w1' },
+      worker_model_roles: {
+        'cpu-cruise': 'stock',
+        'gpu-airborne': 'stock',
+        'gpu-surface': 'w2-merged',
+      },
     },
     scorer_contract: {
       bias_db_max: 0.5,
-      presence_mismatch_percent_max: 6,
-      quiet_floor_db: 26,
-      threshold_percent_max: { 1: 30, 2: 15, 6: 1.5 },
+      presence_mismatch_percent_max: 0.25,
+      quiet_floor_db: 10,
+      threshold_percent_max: { 0.5: 20, 1: 1, 3: 0.01, 6: 0.001 },
+      unified_threshold_db: 6,
     },
-    wave: 'w1',
+    wave: 'w2',
   }
   const qualityProfileId = sha256Identity(quality)
   const identity = {
     schema: 1,
-    deployment: 'base',
-    zoom: 12,
-    tier: '',
+    zoom: WORLD_BASE_ZOOM,
     dataset_year: 2026,
-    raster_generation_id: 'b'.repeat(16),
+    raster_generation_id: rasterGenerationId,
     quality_profile_id: qualityProfileId,
-    quality_profile_name: quality.profile_name,
-    base_generation_id: null,
-    base_quality_profile_id: null,
-    base_quality_profile_name: null,
+    quality_profile_name: ACCEPTED_PROFILE,
   }
-  const generationId = sha256Identity(identity)
   return {
     ...identity,
-    generation_id: generationId,
-    base_generation_id: generationId,
-    base_quality_profile_id: qualityProfileId,
-    base_quality_profile_name: quality.profile_name,
+    generation_id: sha256Identity(identity),
     quality,
   }
 }
 function validManifest(build = 'b3') {
-  const layers: Record<string, { file: string; build: string; bytes: number; sha256: string }> = {}
+  const layers: Record<string, {
+    file: string
+    build: string
+    bytes: number
+    sha256: string
+    generation: unknown
+  }> = {}
+  const generation = acceptedGeneration()
   for (const layer of ALLOWED_LAYERS) {
     const file = `${layer}.${build}.pmtiles`
     const content = `archive-${layer}-${build}`
@@ -154,46 +124,10 @@ function validManifest(build = 'b3') {
       build,
       bytes: Buffer.byteLength(content),
       sha256: createHash('sha256').update(content).digest('hex'),
+      generation,
     }
   }
-  const generation = baseGeneration()
-  return {
-    build,
-    generation,
-    line_model_role_sha256: generation.quality.model_role_contract.line_model_role_sha256,
-    layers,
-  }
-}
-
-function tierGeneration(base: ReturnType<typeof baseGeneration>) {
-  const quality = {
-    schema: 1,
-    profile_name: 'w2-z13-spatial-v1',
-    product_commit: 'b'.repeat(40),
-    dataset_year: 2026,
-    model_role_contract: modelRoleContract('w2-stride4'),
-    numerical_environment: {},
-    producer_requirements: {
-      worker_model_roles: { ...stockProducerRoles, 'gpu-line': 'w2-stride4' },
-    },
-    scorer_contract: structuredClone(W2_SPATIAL_SCORER_CONTRACT),
-    wave: 'w2',
-  }
-  const qualityProfileId = sha256Identity(quality)
-  const identity = {
-    schema: 1,
-    deployment: 'z13',
-    zoom: 13,
-    tier: 'z13',
-    dataset_year: base.dataset_year,
-    raster_generation_id: base.raster_generation_id,
-    quality_profile_id: qualityProfileId,
-    quality_profile_name: quality.profile_name,
-    base_generation_id: base.generation_id,
-    base_quality_profile_id: base.quality_profile_id,
-    base_quality_profile_name: base.quality_profile_name,
-  }
-  return { ...identity, generation_id: sha256Identity(identity), quality }
+  return { build, layers }
 }
 
 test('serves this environment pin, with tile_base attached', async () => {
@@ -203,62 +137,41 @@ test('serves this environment pin, with tile_base attached', async () => {
   const res = await app.inject('/api/tiles-manifest')
   assert.equal(res.statusCode, 200)
   assert.equal(res.json().build, 'b3')
+  assert.equal(res.json().zoom, WORLD_BASE_ZOOM)
   assert.equal(res.json().layers.total.file, 'total.b3.pmtiles')
   assert.equal(res.json().tile_base, null)
   assert.equal(res.json().generation, undefined)
-  assert.equal(res.json().line_model_role_sha256, undefined)
   assert.equal(res.headers['cache-control'], 'no-cache')
   await app.close()
 })
 
-test('projects tier metadata without exposing generation or publisher attestations', async () => {
+test('projects a mixed publication without exposing any generation payload', async () => {
   clearFixture()
   const manifest = validManifest('b7')
-  const tierTokens = [...ALLOWED_LAYERS].map(layer => `${layer}-z13-p001`)
-  for (const token of tierTokens) {
-    const content = `archive-${token}-b7`
-    writeFileSync(join(dir, `${token}.b7.pmtiles`), content)
-    manifest.layers[token] = {
-      file: `${token}.b7.pmtiles`,
-      build: 'b7',
-      bytes: Buffer.byteLength(content),
-      sha256: createHash('sha256').update(content).digest('hex'),
-      publisher_proof: { secret: 'internal' },
-    } as typeof manifest.layers[string]
+  // industrial was repainted in b7; road was carried forward from b5 with its own older
+  // generation. Both are ordinary layer entries to the frontend.
+  const carried = 'archive-road-b5'
+  writeFileSync(join(dir, 'road.b5.pmtiles'), carried)
+  manifest.layers.road = {
+    file: 'road.b5.pmtiles',
+    build: 'b5',
+    bytes: Buffer.byteLength(carried),
+    sha256: createHash('sha256').update(carried).digest('hex'),
+    generation: acceptedGeneration('c'.repeat(16)),
   }
-  const qualificationBytes = Buffer.from('{"schema":"test-qualified-tier"}')
-  const qualificationSha256 = createHash('sha256').update(qualificationBytes).digest('hex')
-  const qualificationFile = `qualification-${qualificationSha256}.json`
-  writeFileSync(join(dir, qualificationFile), qualificationBytes)
-  chmodSync(join(dir, qualificationFile), 0o444)
-  const tiered = { ...manifest, qualification_closure: {
-    file: qualificationFile,
-    sha256: qualificationSha256,
-  }, tiers: {
-    z13: {
-      packs: [{
-        pack: 'p001',
-        coverage_r4: ['841e355ffffffff'],
-        layers: tierTokens,
-        generation: tierGeneration(manifest.generation),
-      }],
-    },
-  } }
-  writeFileSync(pinPath, JSON.stringify(tiered))
+  ;(manifest.layers.industrial as { publisher_proof?: unknown }).publisher_proof = {
+    secret: 'internal',
+  }
+  writeFileSync(pinPath, JSON.stringify(manifest))
   const app = await buildApp()
   const res = await app.inject('/api/tiles-manifest')
   assert.equal(res.statusCode, 200)
-  assert.deepEqual(res.json().layers[tierTokens[0]], {
-    file: `${tierTokens[0]}.b7.pmtiles`,
-    build: 'b7',
-  })
-  assert.deepEqual(res.json().tiers.z13.packs, [{
-    pack: 'p001',
-    coverage_r4: ['841e355ffffffff'],
-    layers: tierTokens,
-  }])
-  assert.equal(res.json().qualification_closure, undefined)
-  assert.doesNotMatch(res.body, /quality|scorer|model_role|publisher_proof|secret/)
+  assert.equal(res.json().build, 'b7')
+  assert.equal(res.json().zoom, WORLD_BASE_ZOOM)
+  assert.deepEqual(res.json().layers.road, { file: 'road.b5.pmtiles', build: 'b5' })
+  assert.deepEqual(res.json().layers.industrial,
+    { file: 'industrial.b7.pmtiles', build: 'b7' })
+  assert.doesNotMatch(res.body, /quality|scorer|model_role|publisher_proof|secret|generation/)
   await app.close()
 })
 

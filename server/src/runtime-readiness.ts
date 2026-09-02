@@ -7,13 +7,11 @@ import { constants } from 'node:fs'
 import { lstat, open, readFile, stat, type FileHandle } from 'node:fs/promises'
 import { basename, join, relative, resolve, sep } from 'node:path'
 import {
-  lineModelRoleSha256ForGeneration,
   validateGenerationContract,
   validatePublishedGenerationContract,
-  validateQualificationClosureReference,
-  validateTierGenerationAnchor,
+  WORLD_BASE_ZOOM,
 } from './generation-contract.mjs'
-import { ALLOWED_LAYERS, parseTierToken, PMTILES_BASE } from './routes/heatmap-shared.js'
+import { ALLOWED_LAYERS, PMTILES_BASE } from './routes/heatmap-shared.js'
 import { FRONTEND_DIST, H3R4_DIR, SOURCE_READER_PATH } from './runtime-paths.js'
 import { resolveManifestPath, resolveTileEnv, type TileEnv } from './tile-manifest-reader.js'
 
@@ -56,7 +54,6 @@ async function requireNonEmptyFile(filePath: string): Promise<void> {
 
 const FRONTEND_ASSET_MANIFEST = 'asset-manifest.json'
 const SHA256 = /^[a-f0-9]{64}$/
-const MAX_QUALIFICATION_CLOSURE_BYTES = 32 * 1024 * 1024
 
 type OpenedRegularFile = {
   descriptor: FileHandle
@@ -155,31 +152,90 @@ async function checkPreparedData(h3r4Dir: string): Promise<void> {
 
 // publisher_proof still EXISTS in manifests (tile-store-pack writes it; fsck and
 // --rebind-verified consume it) — this reader just no longer judges it, so it has
-// no type here. See the decision comment inside checkPmtiles().
+// no type here. See the decision comment inside validatePmtilesManifest().
 export type ManifestLayer = {
   file?: unknown
   bytes?: unknown
   build?: unknown
   sha256?: unknown
+  generation?: unknown
 }
 
 const BUILD_ID = /^b[0-9]+$/
 export type PmtilesManifest = {
     build?: unknown
-    generation?: unknown
     layers?: Record<string, ManifestLayer>
-    qualification_closure?: unknown
     [key: string]: unknown
 }
 
-/** A generation is never valid without its matching top-level line identity. */
-function generationFencedManifest(manifest: PmtilesManifest, manifestPath: string): boolean {
-  const hasGeneration = manifest.generation !== undefined
-  const hasLineIdentity = manifest.line_model_role_sha256 !== undefined
-  if (hasGeneration && !hasLineIdentity) {
-    throw new Error(`${manifestPath} mixes legacy and generation-fenced manifest fields`)
+/** A pre-generation publication: the world it points at was painted before layer
+ *  generations existed, so it is served at the zoom that packer painted. This is the ONE
+ *  transition shim left in the serving path (the live prod pin is still such a manifest);
+ *  it disappears when every environment pin has been republished with generations. */
+export const LEGACY_BASE_ZOOM = 12
+
+/** Manifest-level fields of the retired base-plus-tier contract. A manifest carrying one
+ *  was written by a publisher that predates the per-layer generation, so its archives may
+ *  have been painted at another zoom entirely: refuse it rather than mistake it for a
+ *  pre-generation manifest and serve it at LEGACY_BASE_ZOOM. */
+const RETIRED_MANIFEST_FIELDS = [
+  'generation',
+  'line_model_role_sha256',
+  'qualification_closure',
+  'tiers',
+]
+
+/** Whether this publication carries layer generations at all. Fencing is all-or-none:
+ *  one fenced entry makes every entry's contract mandatory. */
+function generationFenced(manifest: PmtilesManifest): boolean {
+  return Object.values(manifest.layers ?? {}).some((entry) => entry?.generation !== undefined)
+}
+
+/** The zoom every archive in this manifest was painted at — the deepest zoom the tile
+ *  routes may serve from it, and the number the frontend receives with the manifest. */
+export function manifestBaseZoom(manifest: PmtilesManifest): number {
+  return generationFenced(manifest) ? WORLD_BASE_ZOOM : LEGACY_BASE_ZOOM
+}
+
+/**
+ * One layer archive's own generation. A partial publish carries every untouched layer
+ * forward verbatim, so entries legitimately disagree about generation_id, quality profile
+ * and raster generation — but never about the dataset year, because one manifest is one
+ * dataset year (its store path already says which). Returns the year seen so far, so the
+ * caller can compare the next entry against it.
+ */
+function validateLayerGeneration(
+  entry: ManifestLayer,
+  layer: string,
+  manifestPath: string,
+  tileEnv: TileEnv,
+  fenced: boolean,
+  datasetYear: number | null,
+): number | null {
+  if (!fenced) {
+    if (entry.generation !== undefined) {
+      throw new Error(`${manifestPath} layer ${layer} mixes a generation into a legacy manifest`)
+    }
+    return datasetYear
   }
-  return hasGeneration
+  let generation
+  try {
+    // Development serves structurally valid experiments; production accepts only the
+    // published quality profiles.
+    generation = tileEnv === 'prod'
+      ? validatePublishedGenerationContract(entry.generation)
+      : validateGenerationContract(entry.generation)
+  } catch (error) {
+    throw new Error(`${manifestPath} layer ${layer} has an invalid generation contract: `
+      + (error as Error).message)
+  }
+  if (datasetYear !== null && generation.dataset_year !== datasetYear) {
+    throw new Error(
+      `${manifestPath} layer ${layer} publishes dataset year ${generation.dataset_year} `
+      + `into a ${datasetYear} manifest`,
+    )
+  }
+  return generation.dataset_year
 }
 
 /** Validate one already-parsed environment pin with the exact boot-readiness contract. */
@@ -195,30 +251,21 @@ export async function validatePmtilesManifest(
   if (!manifest.layers || typeof manifest.layers !== 'object') {
     throw new Error(`${manifestPath} has no layers object`)
   }
-  if (generationFencedManifest(manifest, manifestPath)) {
-    try {
-      const generation = tileEnv === 'prod'
-        ? validatePublishedGenerationContract(manifest.generation)
-        : validateGenerationContract(manifest.generation)
-      if (generation.tier !== '') {
-        throw new Error('top-level generation must be a base contract')
-      }
-      if (manifest.line_model_role_sha256
-          !== lineModelRoleSha256ForGeneration(generation)) {
-        throw new Error('line_model_role_sha256 differs from the base generation')
-      }
-    } catch (error) {
-      throw new Error(`${manifestPath} has an invalid generation contract: ${(error as Error).message}`)
+  for (const retired of RETIRED_MANIFEST_FIELDS) {
+    if (manifest[retired] !== undefined) {
+      throw new Error(`${manifestPath} carries the retired top-level field ${retired}`)
     }
   }
-
   for (const layer of ALLOWED_LAYERS) {
     if (!(layer in manifest.layers)) {
       throw new Error(`${manifestPath} is missing layer ${layer}`)
     }
   }
+  // A half-migrated manifest fails instead of serving unattested archives.
+  const fenced = generationFenced(manifest)
+  let datasetYear: number | null = null
   for (const [layer, entry] of Object.entries(manifest.layers)) {
-    if (!ALLOWED_LAYERS.has(layer) && parseTierToken(layer) === null) {
+    if (!ALLOWED_LAYERS.has(layer)) {
       throw new Error(`${manifestPath} has unexpected layer ${layer}`)
     }
     if (!entry || typeof entry.file !== 'string' || basename(entry.file) !== entry.file) {
@@ -231,6 +278,8 @@ export async function validatePmtilesManifest(
     if (!BUILD_ID.test(filenameBuild)) {
       throw new Error(`${manifestPath} layer ${layer} file does not match the served archive name`)
     }
+    // A per-layer build OLDER than the manifest's own is the carry-forward case a partial
+    // publish depends on; only disagreement with its OWN archive name is a fault.
     if (entry.build !== undefined) {
       if (typeof entry.build !== 'string' || !BUILD_ID.test(entry.build)) {
         throw new Error(`${manifestPath} layer ${layer} has an invalid build id`)
@@ -245,6 +294,7 @@ export async function validatePmtilesManifest(
     if (typeof entry.sha256 !== 'string' || !SHA256.test(entry.sha256)) {
       throw new Error(`${manifestPath} layer ${layer} has invalid sha256`)
     }
+    datasetYear = validateLayerGeneration(entry, layer, manifestPath, tileEnv, fenced, datasetYear)
     // DELIBERATELY NO stat-identity (dev/ino/ctime) verification here any more (owner call,
     // 2026-07-15). The strict identity gate ("sha256-posix-stat-v1" proof ↔ live stat) shipped
     // 2026-07-14 and its production record was: real faults caught 0, deploys broken 1 — the
@@ -263,183 +313,6 @@ export async function validatePmtilesManifest(
     const archive = await statRegularFileNoFollow(archivePath)
     if (archive.size !== BigInt(entry.bytes as number)) {
       throw new Error(`${archivePath} size ${archive.size} does not match manifest ${entry.bytes}`)
-    }
-  }
-  validateTiersIndex(manifest, manifestPath)
-  validateTierGenerationProfiles(manifest, manifestPath, tileEnv)
-  await validateManifestQualificationClosure(manifest, pmtilesDir, manifestPath)
-}
-
-async function validateManifestQualificationClosure(
-  manifest: PmtilesManifest,
-  pmtilesDir: string,
-  manifestPath: string,
-): Promise<void> {
-  const generationFenced = manifest.generation !== undefined
-  const tiered = manifest.tiers !== undefined
-  if (!generationFenced || !tiered) {
-    if (manifest.qualification_closure !== undefined) {
-      throw new Error(`${manifestPath} must not carry a qualification closure without fenced tiers`)
-    }
-    return
-  }
-  // Qualification closures are legacy campaign evidence (removed from the packer
-  // 2026-08-28): new tier packs carry none, old archives still do. Validate one only
-  // when it is present; its absence on a tiered manifest is not a readiness error.
-  if (manifest.qualification_closure === undefined) {
-    return
-  }
-  let reference: { file: string; sha256: string }
-  try {
-    reference = validateQualificationClosureReference(manifest.qualification_closure)
-  } catch (error) {
-    throw new Error(`${manifestPath} has an invalid qualification closure: ${(error as Error).message}`)
-  }
-  const closurePath = join(pmtilesDir, reference.file)
-  let descriptor
-  try {
-    descriptor = await open(
-      closurePath,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    )
-    const info = await descriptor.stat({ bigint: true })
-    if (!info.isFile()) {
-      throw new Error(`${closurePath} is not a regular file`)
-    }
-    if (info.size <= 0n || info.size > BigInt(MAX_QUALIFICATION_CLOSURE_BYTES)) {
-      throw new Error(`${closurePath} has an invalid byte count`)
-    }
-    if ((info.mode & 0o222n) !== 0n) {
-      throw new Error(`${closurePath} is writable`)
-    }
-    const bytes = await descriptor.readFile()
-    if (createHash('sha256').update(bytes).digest('hex') !== reference.sha256) {
-      throw new Error(`${closurePath} sha256 differs from the manifest`)
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
-      throw new Error(`${closurePath} is not a regular file`)
-    }
-    throw error
-  } finally {
-    await descriptor?.close()
-  }
-}
-
-/** Referential integrity of the zoom-tier index: a torn
- *  `tiers` object must fail readiness, not silently mis-serve — the serving
- *  resolver decides authoritative silence from it. Keep in lockstep with the
- *  private ops copy (validate-manifest.mjs). */
-export function validateTiersIndex(
-  manifest: PmtilesManifest,
-  manifestPath: string,
-): void {
-  const tiers = manifest.tiers
-  if (tiers === undefined) {
-    for (const layer of Object.keys(manifest.layers || {})) {
-      if (parseTierToken(layer) !== null) {
-        throw new Error(`${manifestPath} tier token ${layer} is absent from the tiers index`)
-      }
-    }
-    return
-  }
-  if (!tiers || typeof tiers !== 'object' || Array.isArray(tiers)) {
-    throw new Error(`${manifestPath} tiers is not an object`)
-  }
-  const generationFenced = generationFencedManifest(manifest, manifestPath)
-  let baseGeneration: ReturnType<typeof validateGenerationContract> | null = null
-  if (generationFenced) {
-    try {
-      baseGeneration = validateGenerationContract(manifest.generation)
-    } catch (error) {
-      throw new Error(`${manifestPath} tiers has an invalid base generation: ${(error as Error).message}`)
-    }
-  }
-  const indexedTierTokens = new Set<string>()
-  for (const [zoom, entry] of Object.entries(tiers as Record<string, { packs?: unknown }>)) {
-    const zoomNum = /^z(1[3-8])$/.exec(zoom)?.[1]
-    if (!zoomNum) throw new Error(`${manifestPath} tiers has invalid zoom key ${zoom}`)
-    if (!Array.isArray(entry?.packs)) throw new Error(`${manifestPath} tiers.${zoom} has no packs array`)
-    const seen = new Set<string>()
-    for (const p of entry.packs as Array<Record<string, unknown>>) {
-      if (typeof p?.pack !== 'string' || !/^p[0-9]+$/.test(p.pack)) {
-        throw new Error(`${manifestPath} tiers.${zoom} has a non-canonical pack id`)
-      }
-      if (seen.has(p.pack)) throw new Error(`${manifestPath} tiers.${zoom} pack ${p.pack} is duplicated`)
-      seen.add(p.pack)
-      if (generationFenced) {
-        try {
-          validateTierGenerationAnchor(baseGeneration, p.generation, zoom)
-        } catch (error) {
-          throw new Error(
-            `${manifestPath} tiers.${zoom} pack ${p.pack} has an invalid generation: ${(error as Error).message}`,
-          )
-        }
-      } else if (p.generation !== undefined) {
-        throw new Error(`${manifestPath} legacy tier pack ${p.pack} carries a generation identity`)
-      }
-      if (!Array.isArray(p.coverage_r4) || p.coverage_r4.length === 0
-        || !p.coverage_r4.every((c) => typeof c === 'string' && /^84[0-9a-f]{5}ffffffff$/.test(c))) {
-        throw new Error(`${manifestPath} tiers.${zoom} pack ${p.pack} has invalid coverage_r4`)
-      }
-      if (!Array.isArray(p.layers) || p.layers.length === 0) {
-        throw new Error(`${manifestPath} tiers.${zoom} pack ${p.pack} has no layers list`)
-      }
-      const expectedTokens = [...ALLOWED_LAYERS]
-        .map(layer => `${layer}-${zoom}-${p.pack}`)
-        .sort()
-      const observedTokens = p.layers.every(token => typeof token === 'string')
-        ? [...p.layers as string[]].sort()
-        : []
-      for (const token of p.layers) {
-        const parsed = typeof token === 'string' ? parseTierToken(token) : null
-        if (!parsed || String(parsed.tier) !== zoomNum || parsed.pack !== p.pack) {
-          throw new Error(`${manifestPath} tiers.${zoom} pack ${p.pack} lists foreign token ${String(token)}`)
-        }
-      }
-      if (observedTokens.length !== expectedTokens.length
-        || observedTokens.some((token, index) => token !== expectedTokens[index])) {
-        throw new Error(
-          `${manifestPath} tiers.${zoom} pack ${p.pack} does not contain the exact 8-layer bundle`,
-        )
-      }
-      for (const token of p.layers) {
-        if (!manifest.layers || typeof manifest.layers[token as string] !== 'object') {
-          throw new Error(`${manifestPath} tiers.${zoom} pack ${p.pack} token ${String(token)} has no layers entry`)
-        }
-        if (indexedTierTokens.has(token as string)) {
-          throw new Error(`${manifestPath} tier token ${String(token)} is indexed more than once`)
-        }
-        indexedTierTokens.add(token as string)
-      }
-    }
-  }
-  for (const layer of Object.keys(manifest.layers || {})) {
-    if (parseTierToken(layer) !== null && !indexedTierTokens.has(layer)) {
-      throw new Error(`${manifestPath} tier token ${layer} is absent from the tiers index`)
-    }
-  }
-}
-
-/** Development serves structurally valid experiments; production accepts only selected profiles. */
-function validateTierGenerationProfiles(
-  manifest: PmtilesManifest,
-  manifestPath: string,
-  tileEnv: TileEnv,
-): void {
-  if (manifest.generation === undefined || manifest.tiers === undefined) return
-  for (const [zoom, entry] of Object.entries(
-    manifest.tiers as Record<string, { packs: Array<Record<string, unknown>> }>,
-  )) {
-    for (const pack of entry.packs) {
-      try {
-        if (tileEnv === 'prod') validatePublishedGenerationContract(pack.generation)
-        else validateGenerationContract(pack.generation)
-      } catch (error) {
-        throw new Error(
-          `${manifestPath} tiers.${zoom} pack ${String(pack.pack)} has an unsupported published generation: ${(error as Error).message}`,
-        )
-      }
     }
   }
 }

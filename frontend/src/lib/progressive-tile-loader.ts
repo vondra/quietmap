@@ -5,7 +5,6 @@
 
 import { fetchAndDecodeHM3, TILE_PX } from './hm3-decoder'
 import { composeOffThread } from './compose-off-thread'
-import type { TileFetchSpec } from './tile-urls'
 
 export type HeatTile = {
   image: ImageData
@@ -78,52 +77,6 @@ export function fetchAncestor(url: string): Promise<{ cells: Uint8Array } | null
   return entry.promise
 }
 
-/** Nearest-neighbour 2× upscale of one parent quadrant onto a full tile grid:
- *  display
- *  tiles OUTSIDE tier coverage magnify their z12 parent's quadrant, exactly
- *  like deck's own overzoom, but on the byte grid so the energy sum and
- *  palette stay identical to the base band. NO_DATA passes through. */
-export function upscaleQuadrant(
-  cells: Uint8Array,
-  quadrant: { dx: 0 | 1; dy: 0 | 1 },
-): Uint8Array {
-  const half = TILE_PX / 2
-  const out = new Uint8Array(TILE_PX * TILE_PX)
-  const ox = quadrant.dx * half
-  const oy = quadrant.dy * half
-  for (let y = 0; y < TILE_PX; y++) {
-    const srcRow = (oy + (y >> 1)) * TILE_PX
-    const outRow = y * TILE_PX
-    for (let x = 0; x < TILE_PX; x++) {
-      out[outRow + x] = cells[srcRow + ox + (x >> 1)]
-    }
-  }
-  return out
-}
-
-/** Execute one fetch-plan entry: a native archive tile, or the z12 parent
- *  crop-upscaled. Shared by the tile layer and the over-zoom composite.
- *  Parent fetches go through the ancestor memo: four uncovered z13 siblings
- *  share ONE z12 parent, and the browser does not coalesce concurrent
- *  same-URL fetches (the memo's own rationale) — without this the composite
- *  fires 4× duplicate parent fetch+decodes (gg z13 impl review). The memo's
- *  'low' priority is acceptable: the parent is almost always browser-cached
- *  from the z12 view the user just zoomed through. Known trade-off: the
- *  memo's failure shape is `null` (it never negative-caches — a failed
- *  fetch evicts itself), so a hard PARENT failure renders as empty until
- *  the next request rather than failing the tile; typed errors matter most
- *  for NATIVE tier tiles (inside coverage), which keep the throwing path. */
-export async function fetchSpecGrid(
-  spec: TileFetchSpec,
-  signal: AbortSignal | undefined,
-  priority: 'high' | 'low',
-): Promise<{ cells: Uint8Array } | null> {
-  if ('url' in spec) return fetchAndDecodeHM3(spec.url, signal, priority)
-  const parent = await fetchAncestor(spec.parentUrl)
-  if (!parent?.cells) return null
-  return { cells: upscaleQuadrant(parent.cells, spec.quadrant) }
-}
-
 /**
  * Progressive multi-layer tile load: give the full set a short head start;
  * past it, resolve with whatever landed FIRST so the tile paints at the
@@ -150,7 +103,7 @@ export async function fetchSpecGrid(
  * or by the component when the tile layer itself is swapped out.
  */
 export async function loadTileProgressively(
-  specs: readonly TileFetchSpec[],
+  urls: readonly string[],
   deckSignal: AbortSignal | undefined,
   onRefined: () => void,
   tails: Set<() => void>,
@@ -176,8 +129,8 @@ export async function loadTileProgressively(
   let firstError: unknown = null
   // 'high': sharp tiles outrank basemap assets and the 'low' ancestor
   // previews in Chromium's network queue.
-  const perFetch = specs.map((spec) =>
-    fetchSpecGrid(spec, ctl.signal, 'high')
+  const perFetch = urls.map((url) =>
+    fetchAndDecodeHM3(url, ctl.signal, 'high')
       .then((d) => {
         if (d?.cells) {
           grids.push(d.cells)
@@ -254,7 +207,7 @@ export async function loadTileProgressively(
       // so deck marks the tile failed and can refetch, instead of caching
       // transparent "silence" for the session. All-authoritative-empty
       // (hardErrors == 0) stays a legitimate empty tile.
-      if (hardErrors === specs.length && firstError !== null) throw firstError
+      if (hardErrors === urls.length && firstError !== null) throw firstError
       return null
     }
     const image = await composeOffThread(grids, TILE_PX, TILE_PX)

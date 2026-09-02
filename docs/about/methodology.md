@@ -12,9 +12,8 @@ The map computes environmental noise in three steps:
    buildings, and leisure areas use public geometry and source data.
 2. **Sound travels and fades** — distance, air, ground, terrain, vegetation,
    buildings, and barriers change the received level.
-3. **You see the result** — the base atlas samples about every 12 m; selected
-   areas can publish an optional z13 tier at about 6 m. Each source layer is
-   independent and can be toggled in the map.
+3. **You see the result** — the atlas samples about every 12 m. Each source
+   layer is independent and can be toggled in the map.
 
 ![quietmap.org — noise visualization](map-overview.jpg)
 

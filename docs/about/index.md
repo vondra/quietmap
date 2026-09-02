@@ -86,7 +86,7 @@ Day: 07:00–19:00, evening: 19:00–23:00, night: 23:00–07:00.
 
 ### Grid
 
-A Web-Mercator raster at zoom 12 (512-pixel tiles, ~12 m per pixel at 50°N, varies with latitude) — fine enough to distinguish the street-facing vs garden side of a building. A zoom pyramid (z2–12) serves coarser tiles when zoomed out; selected areas can publish z13 detail at half the pixel spacing.
+A Web-Mercator raster at zoom 12 (512-pixel tiles, ~12 m per pixel at 50°N, varies with latitude) — fine enough to distinguish the street-facing vs garden side of a building. A zoom pyramid (z2–12) serves coarser tiles when zoomed out.
 
 ### Color scale
 

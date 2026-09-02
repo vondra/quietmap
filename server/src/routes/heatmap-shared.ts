@@ -4,12 +4,15 @@
 // z/x/y bounds so the two serving paths can never drift apart.
 
 import { resolve } from 'node:path'
+import { WORLD_BASE_ZOOM } from '../generation-contract.mjs'
 import { DATA_YEAR as YEAR } from '../data-year.js'
 
-// 512@z12 world (2026-07 shift): the base level is z12 (512-px tiles carry the
-// old z13-pixel lattice); total/'s pyramid reaches z2, per-layer archives z5.
+// The world is painted once at WORLD_BASE_ZOOM (512-px tiles); every zoom below it is a
+// pyramid level of that same paint, down to z2. A manifest published before layer
+// generations existed stops at z12 — see runtime-readiness.ts's LEGACY_BASE_ZOOM — but the
+// route band is the deepest zoom any published archive can hold.
 export const MIN_ZOOM = 2
-export const MAX_ZOOM = 12
+export const MAX_ZOOM = WORLD_BASE_ZOOM
 
 // Each ID is its own tile tree / pmtiles archive with a distinct HM3
 // `source_id` byte in the header. `total` is the precomputed energy-sum of
@@ -34,38 +37,18 @@ export interface TileParams {
 }
 
 /**
- * Zoom-tier layer token `{base}-z{tier}-p{N}`: a tier pack's
- * archive served as an ordinary layer whose only legal zoom is the tier's own.
- * Mirrors the Rust packer's `parse_tier_token` — keep the two in lockstep.
- */
-export function parseTierToken(
-  layer: string,
-): { base: string; tier: number; pack: string } | null {
-  const m = /^([a-z][a-z-]*[a-z])-z(1[3-8])-(p[0-9]+)$/.exec(layer)
-  if (!m) return null
-  if (!ALLOWED_LAYERS.has(m[1])) return null
-  return { base: m[1], tier: Number(m[2]), pack: m[3] }
-}
-
-/**
  * Validate the `:layer/:z/:x/:y` route params shared by both tile routes.
  * Returns the parsed params, or a human-readable error string the route
- * replies 400 with. Base layers serve the z2..z12 band; a tier token serves
- * EXACTLY its tier zoom (a tier archive has no pyramid).
+ * replies 400 with.
  */
 export function parseTileParams(p: { layer: string; z: string; x: string; y: string }):
   | TileParams
   | string {
-  const tier = parseTierToken(p.layer)
-  if (!ALLOWED_LAYERS.has(p.layer) && tier === null) {
-    return `layer must be one of ${[...ALLOWED_LAYERS].join(', ')} or a tier token`
+  if (!ALLOWED_LAYERS.has(p.layer)) {
+    return `layer must be one of ${[...ALLOWED_LAYERS].join(', ')}`
   }
   const z = Number(p.z); const x = Number(p.x); const y = Number(p.y)
-  if (tier === null) {
-    if (!Number.isInteger(z) || z < MIN_ZOOM || z > MAX_ZOOM) return 'bad zoom'
-  } else if (z !== tier.tier) {
-    return 'bad zoom'
-  }
+  if (!Number.isInteger(z) || z < MIN_ZOOM || z > MAX_ZOOM) return 'bad zoom'
   const max = 2 ** z
   if (!Number.isInteger(x) || x < 0 || x >= max) return 'bad x'
   if (!Number.isInteger(y) || y < 0 || y >= max) return 'bad y'

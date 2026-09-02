@@ -2,20 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMap } from 'react-map-gl/maplibre'
 import maplibregl from 'maplibre-gl'
 
-import { NO_DATA, TILE_PX } from '../lib/hm3-decoder'
+import { fetchAndDecodeHM3, NO_DATA, TILE_PX } from '../lib/hm3-decoder'
 import type { HeatmapSource } from './HeatmapOverlay'
-import { fetchSpecGrid } from '../lib/progressive-tile-loader'
 import { lngLatToTileFloat } from '../lib/tile-math'
-import { BASE_ZOOM, MIN_ZOOM, hasTierCoverage, resolveTileFetch, useTileBuild } from '../lib/tile-urls'
+import { MIN_ZOOM, tileUrl, useTileBuild } from '../lib/tile-urls'
 
 const TILE_CACHE_MAX = 64
 
 type TileEntry = Uint8Array | 'loading' | 'failed'
-
-/** Cache key for one fetch-plan entry — parent crops key on parent+quadrant. */
-function specCacheKey(spec: ReturnType<typeof resolveTileFetch>): string {
-  return 'url' in spec ? spec.url : `${spec.parentUrl}#q${spec.quadrant.dx}${spec.quadrant.dy}`
-}
 
 interface Props {
   /** Layers to read: the active subset, or `['total']` when all are on. */
@@ -31,7 +25,7 @@ interface Props {
  * Reads at the DISPLAYED tile zoom (deck fetches `round(viewport)` clamped
  * to the layer band): the screen paints a z5 pyramid pixel at world zoom,
  * so reading z5 both matches that pixel exactly AND costs a ~15 KB tile
- * instead of the ~100-200 KB base tile a fixed-BASE_ZOOM read pulled on
+ * instead of the ~100-200 KB base-zoom tile a fixed read pulled on
  * every hover region (slow-connection report, 2026-07-09).
  */
 export default function HoverTooltip({ sources }: Props) {
@@ -73,21 +67,17 @@ export default function HoverTooltip({ sources }: Props) {
   // clamped to the layer band) so the byte we read is the same byte the
   // renderer painted — and past OVERZOOM the base tile is what's magnified.
   const tileInfo = useMemo(() => {
-    if (!hover) return null
+    if (!hover || build === null) return null
     // Below MIN_ZOOM the heat layer itself is invisible (deck renders nothing
     // under a layer's minZoom) — the tooltip goes silent too, instead of
     // clamping up and quoting pixels that aren't painted (/gg Gemini).
     if (Math.round(hover.zoom) < MIN_ZOOM) return null
-    // Published z13 tier packs raise the readable ceiling with the renderer
-    // (covered tiles read natively; uncovered ones read their upscaled z12
-    // parent via the same fetch plan — byte-identical to what's painted).
-    // Mirror the renderer's HiDPI zoomOffset too: deck requests z+1 on
-    // DPR ≥ 1.5, so reading round(zoom) alone would quote a different byte
-    // than the painted pixel wherever the finer level exists (gg z13 impl
-    // review, Codex #6).
-    const zTop = build !== null && hasTierCoverage(build, 'z13') ? BASE_ZOOM + 1 : BASE_ZOOM
+    // Mirror the renderer's HiDPI zoomOffset: deck requests z+1 on DPR ≥ 1.5,
+    // so reading round(zoom) alone would quote a different byte than the
+    // painted pixel wherever the finer level exists (gg z13 impl review,
+    // Codex #6). The published base zoom is the shared ceiling.
     const zoomOffset = window.devicePixelRatio >= 1.5 ? 1 : 0
-    const z = Math.min(zTop, Math.round(hover.zoom) + zoomOffset)
+    const z = Math.min(build.zoom, Math.round(hover.zoom) + zoomOffset)
     const [xFloat, yFloat] = lngLatToTileFloat(hover.lng, hover.lat, z)
     const tx = Math.floor(xFloat)
     const ty = Math.floor(yFloat)
@@ -103,13 +93,12 @@ export default function HoverTooltip({ sources }: Props) {
     if (!tileInfo || build === null) return
     const { z, tx, ty } = tileInfo
     for (const source of sources) {
-      const spec = resolveTileFetch(build, source, z, tx, ty)
-      const key = specCacheKey(spec)
+      const key = tileUrl(build, source, z, tx, ty)
       if (tileCache.current.has(key)) continue
       tileCache.current.set(key, 'loading')
       ;(async () => {
         try {
-          const decoded = await fetchSpecGrid(spec, undefined, 'low')
+          const decoded = await fetchAndDecodeHM3(key, undefined, 'low')
           tileCache.current.set(key, decoded?.cells ?? 'failed')
         } catch {
           // Transient (network/5xx) — DROP the entry so the next hover
@@ -144,7 +133,7 @@ export default function HoverTooltip({ sources }: Props) {
     let anyData = false
     let anyLoading = false
     for (const source of sources) {
-      const entry = tileCache.current.get(specCacheKey(resolveTileFetch(build, source, z, tx, ty)))
+      const entry = tileCache.current.get(tileUrl(build, source, z, tx, ty))
       if (entry instanceof Uint8Array) {
         const byte = entry[py * TILE_PX + px]
         if (byte !== NO_DATA) {

@@ -7,7 +7,7 @@ import { useMap } from 'react-map-gl/maplibre'
 import { TILE_PX } from '../lib/hm3-decoder'
 import { PREVIEW_DELTA } from '../lib/hm3-compose'
 import { lngLatToTileFloat } from '../lib/tile-math'
-import { BASE_ZOOM, MIN_ZOOM, WORLD_EXTENT, buildKey, hasTierCoverage, resolveTileFetch, tileUrl, useTileBuild, type TileBuilds } from '../lib/tile-urls'
+import { MIN_ZOOM, WORLD_EXTENT, buildKey, tileUrl, useTileBuild, type TileBuilds } from '../lib/tile-urls'
 import { loadTileProgressively, fetchAncestor, type HeatTile } from '../lib/progressive-tile-loader'
 import { compositeSig, baseRange, buildComposite, type Composite } from '../lib/tile-composite'
 
@@ -35,12 +35,16 @@ interface Props {
 }
 
 // Display zoom at/above which we stitch ONE composite image (no internal tile
-// borders → no seam) instead of the per-tile TileLayer. deck already over-zooms
-// the base tiles from ~half a zoom up (tileSize 512), so a faint seam exists below this too
-// — but it only gets objectionable when magnified further, and only this deep
-// does the viewport span few enough base tiles for the stitch to stay cheap (the
+// borders → no seam) instead of the per-tile TileLayer: one level past the
+// published base zoom, so it starts exactly where deck runs out of native
+// levels. deck already over-zooms the base tiles from ~half a zoom up
+// (tileSize 512), so a faint seam exists below this too — but it only gets
+// objectionable when magnified further, and only this deep does the viewport
+// span few enough base tiles for the stitch to stay cheap (the
 // MAX_COMPOSITE_TILES cap). Tuned by eye.
-const OVERZOOM_FROM = BASE_ZOOM + 1
+function overzoomFrom(build: TileBuilds): number {
+  return build.zoom + 1
+}
 // Decoded-tile cache bound. Each cached tile holds a TILE_PX² RGBA ImageData
 // (~1 MiB CPU heap) plus its GPU texture, so 192 ≈ 192 MiB decoded heap and
 // comparable GPU memory; deck may transiently exceed it for visible/selected
@@ -54,10 +58,10 @@ const MAX_CACHE_TILES = 192
 /**
  * Render the noise heatmap with TWO modes, switched by zoom:
  *
- *  - **Normal zoom (< z14):** deck.gl `TileLayer` of per-tile `BitmapLayer`s.
- *    deck owns viewport tile selection, fetch, cache and parent-tile fallback —
- *    fast and native. At native resolution the per-tile seam is sub-pixel.
- *  - **Over-zoom (≥ z14):** ONE stitched composite `BitmapLayer` over the few
+ *  - **Normal zoom (up to the published base zoom):** deck.gl `TileLayer` of
+ *    per-tile `BitmapLayer`s. deck owns viewport tile selection, fetch, cache and
+ *    parent-tile fallback — fast and native. At native resolution the per-tile seam is sub-pixel.
+ *  - **Over-zoom (one level past it):** ONE stitched composite `BitmapLayer` over the few
  *    base-zoom tiles under the viewport. A single texture has no internal borders, so
  *    the seam that per-tile clamp-to-edge sampling shows when magnified is gone.
  *    Few tiles at this zoom, so the stitch is cheap.
@@ -75,7 +79,7 @@ export default function HeatmapOverlay({ sources, highlightGeometry }: Props): n
   const build = useTileBuild()
   const [overlay, setOverlay] = useState<MapboxOverlay | null>(null)
   const labelAnchor = useRef<string | undefined>(undefined)
-  // The stitched over-zoom composite (≥ z14). `sig` is the source + z13-range key
+  // The stitched over-zoom composite. `sig` is the source + base-zoom-range key
   // it was built for, so a pan within the same tiles skips the rebuild.
   const composite = useRef<(Composite & { sig: string }) | null>(null)
   // Bumped before each build so a slow stitch can't overwrite a newer one.
@@ -167,7 +171,7 @@ export default function HeatmapOverlay({ sources, highlightGeometry }: Props): n
     // store notification re-renders us the moment it lands.
     if (sources.length > 0 && build !== null) {
       const c = composite.current
-      const overzoom = map.getZoom() >= OVERZOOM_FROM
+      const overzoom = map.getZoom() >= overzoomFrom(build)
       // Paint the stitched composite ONLY while its `sig` matches the live view.
       // After a layer toggle (or a pan/zoom that out-raced its rebuild) the cached
       // composite is for the wrong source/range — fall back to the per-tile
@@ -201,8 +205,8 @@ export default function HeatmapOverlay({ sources, highlightGeometry }: Props): n
   }, [overlay, mapRef, build, sources, highlightGeometry, onRefined, dropTileTails, dpr])
   applyRef.current = apply
 
-  // Rebuild the over-zoom composite (only past OVERZOOM_FROM, only when the base range/sources
-  // changed) then re-apply. Coalesced to one run per frame. Below OVERZOOM_FROM it's
+  // Rebuild the over-zoom composite (only past the composite threshold, only when the base
+  // range/sources changed) then re-apply. Coalesced to one run per frame. Below it this is
   // just a re-apply (deck drives the TileLayer itself).
   const update = useCallback(() => {
     if (pending.current) return
@@ -211,7 +215,7 @@ export default function HeatmapOverlay({ sources, highlightGeometry }: Props): n
       pending.current = false
       const map = mapRef?.getMap()
       if (!map || !mounted.current) return
-      if (map.getZoom() >= OVERZOOM_FROM && sources.length > 0 && build !== null) {
+      if (build !== null && sources.length > 0 && map.getZoom() >= overzoomFrom(build)) {
         const range = baseRange(map.getBounds(), build)
         const sig = compositeSig(build, sources, range)
         if (composite.current?.sig !== sig) {
@@ -260,7 +264,7 @@ export default function HeatmapOverlay({ sources, highlightGeometry }: Props): n
     const prefetchRing = () => {
       window.clearTimeout(prefetchTimer.current)
       prefetchTimer.current = window.setTimeout(() => {
-        const z = Math.round(Math.min(Math.max(map.getZoom(), MIN_ZOOM), BASE_ZOOM))
+        const z = Math.round(Math.min(Math.max(map.getZoom(), MIN_ZOOM), build.zoom))
         const pz = z - PREVIEW_DELTA
         if (pz < MIN_ZOOM) return
         const center = map.getCenter()
@@ -278,7 +282,7 @@ export default function HeatmapOverlay({ sources, highlightGeometry }: Props): n
         // first wheel step also finds its preview waiting (zoom-out ancestors
         // are already cached from the way down). moveend fires after zooms
         // too, so the ring itself re-targets on every zoom change.
-        if (pz + 1 <= BASE_ZOOM - PREVIEW_DELTA) {
+        if (pz + 1 <= build.zoom - PREVIEW_DELTA) {
           const deepSpan = 2 ** (pz + 1)
           const [zx, zy] = lngLatToTileFloat(center.lng, center.lat, pz + 1)
           const ax = ((Math.floor(zx) % deepSpan) + deepSpan) % deepSpan
@@ -344,14 +348,11 @@ function makeHeatmapTileLayer(
     // _TileLayerProps doesn't type beforeId though MapboxOverlay reads it at runtime.
     ...(beforeId ? { beforeId } : {}),
     minZoom: MIN_ZOOM,
-    // Published z13 tier packs raise the native tile ceiling: deck then
-    // requests z13 indices where the display (or HiDPI zoomOffset) reaches
-    // them, and resolveTileFetch routes each source to the pack's native
-    // tile (covered) or its z12 parent quadrant (uncovered). Without tiers
-    // this is exactly the old BASE_ZOOM clamp.
-    maxZoom: hasTierCoverage(build, 'z13') ? BASE_ZOOM + 1 : BASE_ZOOM,
+    // The published base zoom is the native tile ceiling: deck requests no
+    // index below it and over-zooms the deepest level itself past it.
+    maxZoom: build.zoom,
     // +1 on HiDPI screens: one data cell ≈ one device pixel wherever a finer
-    // pyramid level exists (maxZoom still clamps at the z12 data floor).
+    // pyramid level exists (maxZoom still clamps at the published data floor).
     zoomOffset,
     // Without an extent deck renders NOTHING once the computed tile zoom drops
     // below minZoom (world views under z≈1.5 were blank — owner report
@@ -370,7 +371,7 @@ function makeHeatmapTileLayer(
       const { x, y, z } = index
       const span = 2 ** z
       const wx = ((x % span) + span) % span // wrap x across the antimeridian
-      const specs = sources.map((s) => resolveTileFetch(build, s, z, wx, y))
+      const urls = sources.map((s) => tileUrl(build, s, z, wx, y))
       // Owner fallback policy 2026-07-16: exact zoom > deck's cached z−1 >
       // z−2 > … > coarse preview > blank. If ANY nearby ancestor is already
       // session-loaded, skip the preview — deck's no-overlap refinement keeps
@@ -397,7 +398,7 @@ function makeHeatmapTileLayer(
       const key = `${z}/${wx}/${y}`
       const token = Symbol(key)
       inFlight.set(key, token)
-      return loadTileProgressively(specs, signal, onRefined, tails, preview, deckFallback).then((data) => {
+      return loadTileProgressively(urls, signal, onRefined, tails, preview, deckFallback).then((data) => {
         // Register only while THIS request is still the current one for the
         // key — a tile evicted while pending (or superseded by a newer
         // request) must not become a ghost ancestor.

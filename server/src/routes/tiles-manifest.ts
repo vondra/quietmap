@@ -3,13 +3,13 @@
 import type { FastifyInstance } from 'fastify'
 import { PMTILES_BASE } from './heatmap-shared.js'
 import {
+  manifestBaseZoom,
   PmtilesManifestPinMissingError,
   readCachedValidatedPmtilesManifest,
   type PmtilesManifest,
 } from '../runtime-readiness.js'
 
 type PublicManifestLayer = { file: string; build?: string }
-type PublicTierPack = { pack: string; coverage_r4: string[]; layers: string[] }
 
 /** Keep generation, scorer, model-role, hashes, and publisher proofs server-side. */
 function publicManifest(manifest: PmtilesManifest) {
@@ -21,29 +21,7 @@ function publicManifest(manifest: PmtilesManifest) {
       ...(typeof value.build === 'string' ? { build: value.build } : {}),
     }
   }
-  const tiers: Record<string, { packs: PublicTierPack[] }> = {}
-  if (manifest.tiers && typeof manifest.tiers === 'object' && !Array.isArray(manifest.tiers)) {
-    for (const [zoom, value] of Object.entries(
-      manifest.tiers as Record<string, { packs?: unknown }>,
-    )) {
-      if (!Array.isArray(value?.packs)) continue
-      tiers[zoom] = {
-        packs: value.packs.map((pack) => {
-          const entry = pack as Record<string, unknown>
-          return {
-            pack: entry.pack as string,
-            coverage_r4: [...entry.coverage_r4 as string[]],
-            layers: [...entry.layers as string[]],
-          }
-        }),
-      }
-    }
-  }
-  return {
-    build: manifest.build,
-    layers,
-    ...(Object.keys(tiers).length > 0 ? { tiers } : {}),
-  }
+  return { build: manifest.build, zoom: manifestBaseZoom(manifest), layers }
 }
 
 /**
@@ -52,9 +30,10 @@ function publicManifest(manifest: PmtilesManifest) {
  * `worldctl promote` write atomically. The shared boot-readiness validator rejects a torn,
  * malformed, or semantically invalid manifest with a 500; this route then projects only the
  * fields needed to fetch tiles. Internal generation, model-role, quality, scorer, hash, and
- * publisher-proof data never crosses the public boundary. ONE deployment field is added on
- * top: `tile_base` (env PUBLIC_TILE_BASE) tells
- * the frontend which HOSTNAME serves the tiles — that is serving
+ * publisher-proof data never crosses the public boundary. `zoom` is derived from the
+ * manifest itself: the zoom every archive was painted at, which is the deepest zoom the
+ * frontend may request natively. ONE deployment field is added on top: `tile_base` (env
+ * PUBLIC_TILE_BASE) tells the frontend which HOSTNAME serves the tiles — that is serving
  * topology, which the packer can't know and which must be changeable per checkout/host
  * without a frontend rebuild. Absent env = null = same-origin (devex, localhost, canaries).
  * `no-cache` so the frontend's 10-minute re-poll revalidates instead of pinning an old

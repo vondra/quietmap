@@ -1,22 +1,21 @@
 // Over-zoom composite stitching — the React/deck-independent half of
-// HeatmapOverlay's ≥OVERZOOM_FROM mode: fetch the base-zoom tiles under the
+// HeatmapOverlay's over-zoom mode (see its overzoomFrom): fetch the base-zoom tiles under the
 // viewport, energy-sum + palette-map them into ONE seamless ImageData (no
 // internal tile borders when magnified). Extracted verbatim from
 // HeatmapOverlay.tsx. Sources are
 // plain strings here — importing the component's HeatmapSource union back
 // would create a type cycle (buildKey/tileUrl accept strings anyway).
 
-import { TILE_PX, NO_DATA } from './hm3-decoder'
+import { fetchAndDecodeHM3, TILE_PX, NO_DATA } from './hm3-decoder'
 import { composeOffThread } from './compose-off-thread'
-import { fetchSpecGrid } from './progressive-tile-loader'
 import { lngLatToTileFloat, tileXToLng, tileYToLat } from './tile-math'
-import { BASE_ZOOM, buildKey, hasTierCoverage, resolveTileFetch, type TileBuilds } from './tile-urls'
+import { buildKey, tileUrl, type TileBuilds } from './tile-urls'
 
 // One base tile of margin around the viewport so a small pan at deep zoom stays
 // covered without an immediate rebuild (a base tile is magnified 2-8x here).
 const COMPOSITE_MARGIN = 1
-// Safety cap — never stitch a pathologically large composite (only trips if
-// OVERZOOM_FROM is lowered toward normal zoom).
+// Safety cap — never stitch a pathologically large composite (only trips if the
+// over-zoom threshold is lowered toward normal zoom).
 const MAX_COMPOSITE_TILES = 96
 
 export type Range = { z: number; span: number; x0: number; x1: number; y0: number; y1: number; cols: number; rows: number }
@@ -34,12 +33,11 @@ export function compositeSig(build: TileBuilds, sources: readonly string[], rang
 }
 
 /** The composite's tile range covering `bounds` (+ a 1-tile margin), clamped
- *  to the world. With published z13 tier packs the composite stitches at z13 —
- *  covered tiles land natively, the rest as upscaled z12 parent quadrants
- *  (resolveTileFetch) — so over-zoom never paints a coarser image than the
- *  per-tile path it replaces. */
+ *  to the world. It stitches at the published base zoom — the finest level that
+ *  exists — so over-zoom never paints a coarser image than the per-tile path it
+ *  replaces. */
 export function baseRange(bounds: LngLatBounds, build: TileBuilds): Range {
-  const z = hasTierCoverage(build, 'z13') ? BASE_ZOOM + 1 : BASE_ZOOM
+  const z = build.zoom
   const span = 2 ** z
   const [xWest, yNorth] = lngLatToTileFloat(bounds.getWest(), bounds.getNorth(), z)
   const [xEast, ySouth] = lngLatToTileFloat(bounds.getEast(), bounds.getSouth(), z)
@@ -75,7 +73,7 @@ export async function buildComposite(
       // 'low' priority: composite fetches carry no abort and a superseded
       // batch (up to 96×|sources| requests) must not outrank the fresh
       // view's sharp tiles.
-      return fetchSpecGrid(resolveTileFetch(build, source, z, wx, ty), undefined, 'low')
+      return fetchAndDecodeHM3(tileUrl(build, source, z, wx, ty), undefined, 'low')
         .catch(() => null)
     }),
   )
