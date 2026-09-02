@@ -1,118 +1,66 @@
-//! Surface-layer command (road, rail, industrial, building) for the persisted
-//! relevant-source block architecture at one wave's zoom.
+//! Surface-layer stream worker — road, rail, industrial, building and airport
+//! ground ops from one preparation, at one wave's zoom.
+//!
+//! Cells arrive one per stdin line and each one answers with `start`, then
+//! `done` or `fail`, on stderr:
+//!
+//!   printf '841e309ffffffff\n843e191ffffffff layers=road,rail\n' | \
+//!     NOISE_GPU_PREPARED=/…/prepared relevant-source-surface \
+//!       --stream --zoom 13 --output /…/tiles
 
-use std::fs;
+use std::io::BufReader;
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use relevant_source_gpu::cell_stream::cell_requests;
 use relevant_source_gpu::relevant_source_runner::{
-    run_relevant_source_wave, RelevantSourceRunConfiguration, LAYER_NAMES,
+    run_relevant_source_stream, RelevantSourceRunConfiguration,
 };
-use relevant_source_gpu::source_frame::BLOCK_COUNT;
+
+/// The prepared root every GPU engine of the fleet is handed by its worker.
+const PREPARED_ROOT_VARIABLE: &str = "NOISE_GPU_PREPARED";
 
 #[derive(Debug, Parser)]
 struct Arguments {
-    #[arg(long)]
-    prepared_dir: PathBuf,
-    #[arg(long)]
-    h3r4_dir: PathBuf,
+    /// Tile root: every painted tile lands at `<output>/<layer>/{z}/{x}/{y}.bin`.
     #[arg(long)]
     output: PathBuf,
     /// Web-Mercator zoom of the painted tiles: 12 for W1, 13 for W2.
     #[arg(long)]
     zoom: u8,
-    /// One hexadecimal H3 R4 cell per line; every owned tile is painted.
+    /// Read cells from stdin: `<r4hex>` or `<r4hex> layers=<csv>`, one per line.
     #[arg(long)]
-    regions_file: PathBuf,
+    stream: bool,
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<ExitCode> {
     let arguments = Arguments::parse();
+    if !arguments.stream {
+        bail!("--stream is this painter's only mode: cells arrive one per stdin line");
+    }
     if !matches!(arguments.zoom, 12 | 13) {
         bail!(
             "--zoom {} is neither W1 (12) nor W2 (13); the cadence contract is defined for those two",
             arguments.zoom
         );
     }
-    let regions = read_regions(&arguments.regions_file)?;
-    let measurement = run_relevant_source_wave(&RelevantSourceRunConfiguration {
-        prepared_directory: arguments.prepared_dir,
-        h3r4_directory: arguments.h3r4_dir,
-        output_directory: arguments.output,
-        zoom: arguments.zoom,
-        regions,
+    let prepared = std::env::var_os(PREPARED_ROOT_VARIABLE).with_context(|| {
+        format!("{PREPARED_ROOT_VARIABLE} must name the prepared root this painter reads")
     })?;
-    let attempted_pairs = measurement.attempted_pairs();
-    let gpu_seconds = measurement.gpu_seconds();
-    let gpu_nanoseconds_per_pair = if attempted_pairs == 0 {
-        0.0
-    } else {
-        gpu_seconds * 1.0e9 / attempted_pairs as f64
-    };
-    eprintln!(
-        "relevant-source-wave zoom={} wall_s={:.6} cpu_s={:.6} gpu_s={:.6} gpu_ns_per_pair={:.3} \
-         cell_prepare_s={:.6} raster_prepare_overlapped_s={:.6} receiver_s={:.6} host_tile_s={:.6} \
-         card_wait_s={:.6} host_wait_s={:.6} cells={}",
+    let configuration = RelevantSourceRunConfiguration::for_prepared_root(
+        PathBuf::from(prepared),
+        arguments.output,
         arguments.zoom,
-        measurement.wall_seconds,
-        measurement.cpu_seconds,
-        gpu_seconds,
-        gpu_nanoseconds_per_pair,
-        measurement.source_load_seconds,
-        measurement.raster_prepare_seconds,
-        measurement.receiver_seconds,
-        measurement.host_tile_seconds,
-        measurement.card_wait_seconds,
-        measurement.host_wait_seconds,
-        measurement.cells.len(),
     );
-    for (cell, prepare_seconds, paint_seconds) in &measurement.cells {
-        eprintln!(
-            "relevant-source-cell cell={cell:x} prepare_s={prepare_seconds:.6} paint_s={paint_seconds:.6}"
-        );
+    let failed_cells = run_relevant_source_stream(
+        &configuration,
+        cell_requests(BufReader::new(std::io::stdin())),
+    )?;
+    if failed_cells > 0 {
+        eprintln!("relevant-source-surface: {failed_cells} cell(s) failed");
+        return Ok(ExitCode::FAILURE);
     }
-    for (name, layer) in LAYER_NAMES.iter().zip(&measurement.layers) {
-        print_layer(name, layer);
-    }
-    Ok(())
-}
-
-fn print_layer(
-    name: &str,
-    measurement: &relevant_source_gpu::relevant_source_runner::LayerMeasurement,
-) {
-    let blocks = measurement.tiles * BLOCK_COUNT as u64;
-    let relevant_per_block = if blocks == 0 {
-        0.0
-    } else {
-        measurement.relevant_source_references as f64 / blocks as f64
-    };
-    let (minimum, median, p99, maximum) = measurement.block_source_quantiles();
-    eprintln!(
-        "relevant-source-layer name={name} loaded_sources={} tiles={} corner_pairs={} \
-         pixel_pairs={} relevant_per_block={:.3} block_sources_min={minimum} \
-         block_sources_median={median} block_sources_p99={p99} block_sources_max={maximum} \
-         corner_gpu_s={:.6} paint_gpu_s={:.6} bytes={}",
-        measurement.loaded_sources,
-        measurement.tiles,
-        measurement.corner_pairs,
-        measurement.pixel_pairs,
-        relevant_per_block,
-        measurement.corner_gpu_milliseconds / 1000.0,
-        measurement.paint_gpu_milliseconds / 1000.0,
-        measurement.output_bytes,
-    );
-}
-
-fn read_regions(path: &PathBuf) -> Result<Vec<u64>> {
-    let text =
-        fs::read_to_string(path).with_context(|| format!("read region list {}", path.display()))?;
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(|line| {
-            u64::from_str_radix(line, 16).with_context(|| format!("invalid H3 R4 cell {line:?}"))
-        })
-        .collect()
+    Ok(ExitCode::SUCCESS)
 }
