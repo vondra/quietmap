@@ -149,7 +149,9 @@ test('desktop: segment screening fan shows angular intervals and the characteris
 
   const fanValue = page.getByText('5 intervals · 22 % blocked', { exact: true })
   await expect(fanValue).toBeVisible()
-  await fanValue.click()
+  // Hover, not click: a click first fires mouseenter (opens) and then toggles the
+  // tooltip closed once React has committed that open state — a CI-timing race.
+  await fanValue.hover()
   const tooltip = page.getByRole('tooltip')
   await expect(tooltip).toContainText('Arc quadrature · span 50.0° · 22.0 % blocked.')
   await expect(tooltip).toContainText(
@@ -158,7 +160,7 @@ test('desktop: segment screening fan shows angular intervals and the characteris
   await expect(tooltip).toContainText('-8.0–-3.0° · blocked · barrier 3.5 m · terrain -1.3 dB · ΔL -7.2 dB')
 
   await page.keyboard.press('Escape')
-  await page.getByText(/Building\/barrier \(building 8\.0 m\)/).click()
+  await page.getByText(/Building\/barrier \(building 8\.0 m\)/).hover()
   await expect(page.getByRole('tooltip')).toContainText(
     'evaluates one exact source-point ray per interval, then energy-averages',
   )
