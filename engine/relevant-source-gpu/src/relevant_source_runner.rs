@@ -188,12 +188,14 @@ struct HostPreparedRegion {
     barrier_data: BarrierData,
     obstacle_data: ObstacleData,
     flattened_obstacles: FlattenedObstacleGeometry,
-    started: Instant,
+    /// Host seconds of the load and encode, before any permit wait.
+    host_seconds: f64,
 }
 
 impl HostPreparedRegion {
     /// Put the cell on the card: called only once a residency permit is held.
     fn upload(self) -> Result<PreparedRegion> {
+        let upload_started = Instant::now();
         let device_obstacles = RegionDeviceObstacles::upload(&self.flattened_obstacles)?;
         let layers = self
             .layers
@@ -209,7 +211,7 @@ impl HostPreparedRegion {
             barrier_data: self.barrier_data,
             obstacle_data: self.obstacle_data,
             device_obstacles,
-            prepare_seconds: self.started.elapsed().as_secs_f64(),
+            prepare_seconds: self.host_seconds + upload_started.elapsed().as_secs_f64(),
         })
     }
 }
@@ -497,7 +499,7 @@ fn prepare_region(
         barrier_data,
         obstacle_data,
         flattened_obstacles,
-        started,
+        host_seconds: started.elapsed().as_secs_f64(),
     })
 }
 
