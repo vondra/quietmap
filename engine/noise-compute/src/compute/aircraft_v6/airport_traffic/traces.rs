@@ -387,6 +387,7 @@ pub(super) fn emit_segment_traces(
                 screening: ScreeningTrace {
                     attenuation_bands: screening_bands,
                     obstacle: None,
+                    fan: None,
                 },
                 vegetation: VegetationTrace {
                     forest_depth_m: 0.0,

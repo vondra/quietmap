@@ -256,27 +256,12 @@ pub fn screening_attenuation(
     terrain_atten: &[f64; NUM_BANDS],
     terrain_delta_m: Option<f64>,
 ) -> [f64; NUM_BANDS] {
-    // No obstacle crossing and no barrier in reach ⇒ nothing can out-δ the
-    // terrain edge ⇒ the screening increment over terrain is exactly zero.
-    // Skip the candidate race and its OLS Fresnel fit (the dominant screening
-    // cost) for the rural majority.
-    //
-    // Barrier arm: `dist_m` is sorted-ascending and a lower bound on the
-    // receiver→midpoint distance (`types::Barrier` contract), so when even the
-    // NEAREST barrier is past the `path_len + BARRIER_PATH_HORIZON_M` horizon
-    // the crossing loop below would break on its first iteration and find
-    // nothing — result-identical to an empty slice, minus the wasted full
-    // screening pass. This keeps the rural fast path alive for the majority of
-    // pixels in a tile that carries a wall somewhere (heatmap passes one slice
-    // per tile). Vector-obstacle candidates count as obstacles too: a non-empty
-    // candidate slice must never take this bypass.
-    let barriers_in_reach = barriers
-        .first()
-        .is_some_and(|b| b.dist_m <= profile.dist_m + BARRIER_PATH_HORIZON_M);
-    if !barriers_in_reach && obstacles.candidates.is_empty() {
+    // Keep the tile-hot band-only path on its small return ABI instead of
+    // entering the much larger metadata routine for the rural majority.
+    if no_screening_candidate_in_reach(profile, barriers, obstacles) {
         return [0.0; NUM_BANDS];
     }
-    let (atten, _) = screening_attenuation_with_meta(
+    screening_attenuation_with_meta(
         profile,
         barriers,
         obstacles,
@@ -285,8 +270,8 @@ pub fn screening_attenuation(
         exclusion_radius_m,
         terrain_atten,
         terrain_delta_m,
-    );
-    atten
+    )
+    .0
 }
 
 /// Vector-obstacle input for screening: the exact ray×obstacle crossings.
@@ -297,6 +282,23 @@ pub fn screening_attenuation(
 #[derive(Clone, Copy)]
 pub struct ObstacleInput<'a> {
     pub candidates: &'a [CrossingCandidate],
+}
+
+/// Proves the candidate race and its OLS Fresnel fit cannot change the terrain
+/// result, preserving the rural fast return in both band-only and traced callers.
+#[inline]
+fn no_screening_candidate_in_reach(
+    profile: &PathProfile,
+    barriers: &[Barrier],
+    obstacles: ObstacleInput<'_>,
+) -> bool {
+    // `Barrier::dist_m` is a sorted lower bound on receiver→midpoint distance.
+    // If the nearest wall is beyond this path's crossing horizon, the exact
+    // wall scan would stop on its first item and find nothing.
+    let barriers_in_reach = barriers
+        .first()
+        .is_some_and(|b| b.dist_m <= profile.dist_m + BARRIER_PATH_HORIZON_M);
+    !barriers_in_reach && obstacles.candidates.is_empty()
 }
 
 fn barrier_crossing_candidates(
@@ -372,6 +374,10 @@ pub fn screening_attenuation_with_meta(
     };
 
     if n < 3 || dist_m < SCREENING_MIN_PATH_M {
+        return ([0.0; NUM_BANDS], make_empty());
+    }
+
+    if no_screening_candidate_in_reach(profile, barriers, obstacles) {
         return ([0.0; NUM_BANDS], make_empty());
     }
 
@@ -1111,9 +1117,9 @@ mod tests {
 
     /// Early-out refinement: with no buildings and every (sorted, lower-bound
     /// dist) barrier past the `path_len + BARRIER_PATH_HORIZON_M` horizon, the
-    /// wrapper must return exactly the empty-slice result (the crossing scan
-    /// stops on its first item) — this is what keeps the rural fast path alive
-    /// on heatmap tiles that carry a wall somewhere else in the tile.
+    /// both screening entry points must return exactly the empty-slice result
+    /// (the crossing scan stops on its first item) — this keeps the rural fast
+    /// path alive for heatmaps and traced popup fan rays alike.
     #[test]
     fn far_barriers_hit_the_early_out_unchanged() {
         let dist_m = 200.0;
@@ -1150,6 +1156,20 @@ mod tests {
         );
         assert_eq!(bands, empty);
         assert!(bands.iter().all(|&a| a == 0.0));
+
+        let mut p3 = build_flat_profile(dist_m, 0.0);
+        let (traced, trace) = screening_attenuation_with_meta(
+            &mut p3,
+            std::slice::from_ref(&far),
+            ObstacleInput { candidates: &[] },
+            0.05,
+            1.5,
+            0.0,
+            &terrain_atten,
+            None,
+        );
+        assert_eq!(traced, empty);
+        assert!(trace.edge.is_none());
     }
 
     /// FIX 3, the miss: a long wall crossing the path 100 m away from its own

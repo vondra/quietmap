@@ -177,11 +177,16 @@ use super::iso9613::ground_or_barrier_db;
 use super::obstacle_index::{
     origin_to_segment_dist, wrap_pi, CellPrune, CrossingCandidate, ObstacleSet, SkylineArc,
 };
-use super::path_effects::{screening_attenuation, terrain_attenuation, ObstacleInput};
+use super::path_effects::{
+    screening_attenuation, screening_attenuation_with_meta, terrain_attenuation, ObstacleInput,
+};
 use super::screening_source_id::ScreeningSourceId;
 use super::PathProfile;
-use crate::constants::{m_per_deg_lon, M_PER_DEG_LAT};
-use crate::types::{Barrier, RasterSampler, BARRIER_PATH_HORIZON_M, NUM_BANDS};
+use crate::constants::{m_per_deg_lon, BAND_FREQ, M_PER_DEG_LAT};
+use crate::types::{
+    Barrier, RasterSampler, ScreeningFanIntervalTrace, ScreeningFanObstacleTrace,
+    ScreeningFanTrace, ScreeningObstacleTrace, BARRIER_PATH_HORIZON_M, NUM_BANDS,
+};
 
 use std::f64::consts::TAU;
 
@@ -332,6 +337,11 @@ const SECTOR_RAD: f64 = TAU / SECTORS as f64;
 /// boundary, where the interval edges and the cp azimuth are the same number
 /// computed two ways.
 const CP_AZIMUTH_EPS: f64 = 1e-9;
+/// One real octave-band value avoids inventing a source-spectrum-dependent
+/// scalar for a geometric interval trace.
+const SCREENING_FAN_TRACE_BAND: usize = 4;
+const _: () = assert!(BAND_FREQ[SCREENING_FAN_TRACE_BAND] == 1000.0);
+const SCREENING_FAN_TRACE_LARGEST_INTERVALS: usize = 32;
 
 /// The bounds that turn the exact arc kernel into the shipped one. Read once
 /// per process ([`ArcBounds::from_env`]); the defaults are the derived values
@@ -1204,6 +1214,93 @@ struct BlockedInterval {
     end: f64,
 }
 
+/// Slices arrive in walk (ascending azimuth) order; the first one holding the
+/// cp azimuth under the walk's own `CP_AZIMUTH_EPS` rule carries the cp badge,
+/// so the badge sits on the slice whose value the walk took from the cp ray.
+struct FanTraceCollector {
+    cp_azimuth: f64,
+    cp_marked: bool,
+    intervals: Vec<ScreeningFanIntervalTrace>,
+}
+
+impl FanTraceCollector {
+    fn new(cp_azimuth: f64) -> Self {
+        Self {
+            cp_azimuth,
+            cp_marked: false,
+            intervals: Vec::with_capacity(SCREENING_FAN_TRACE_LARGEST_INTERVALS),
+        }
+    }
+
+    fn push(
+        &mut self,
+        start: f64,
+        end: f64,
+        blocked: bool,
+        obstacle: Option<ScreeningFanObstacleTrace>,
+        terrain_db: f64,
+        screen_db: f64,
+    ) {
+        let contains_cp = !self.cp_marked
+            && self.cp_azimuth >= start - CP_AZIMUTH_EPS
+            && self.cp_azimuth <= end + CP_AZIMUTH_EPS;
+        self.cp_marked |= contains_cp;
+        self.intervals.push(ScreeningFanIntervalTrace {
+            from_deg: (start - self.cp_azimuth).to_degrees(),
+            to_deg: (end - self.cp_azimuth).to_degrees(),
+            blocked,
+            obstacle,
+            terrain_db,
+            screen_db,
+            contains_cp,
+        });
+    }
+
+    fn finish(mut self, span: f64, blocked_fraction: f64) -> ScreeningFanTrace {
+        let width = |interval: &ScreeningFanIntervalTrace| interval.to_deg - interval.from_deg;
+        let interval_count = self.intervals.len();
+        let full_width: f64 = self.intervals.iter().map(width).sum();
+        if interval_count > SCREENING_FAN_TRACE_LARGEST_INTERVALS {
+            let cp_interval = self
+                .intervals
+                .iter()
+                .find(|interval| interval.contains_cp)
+                .cloned();
+            self.intervals.sort_by(|a, b| {
+                (b.to_deg - b.from_deg)
+                    .total_cmp(&(a.to_deg - a.from_deg))
+                    .then_with(|| a.from_deg.total_cmp(&b.from_deg))
+            });
+            self.intervals
+                .truncate(SCREENING_FAN_TRACE_LARGEST_INTERVALS);
+            if let Some(cp_interval) = cp_interval {
+                if !self.intervals.iter().any(|interval| interval.contains_cp) {
+                    self.intervals.push(cp_interval);
+                }
+            }
+            self.intervals
+                .sort_by(|a, b| a.from_deg.total_cmp(&b.from_deg));
+        }
+        let kept_width: f64 = self.intervals.iter().map(width).sum();
+
+        ScreeningFanTrace {
+            span_deg: span.to_degrees(),
+            blocked_fraction: blocked_fraction.clamp(0.0, 1.0),
+            intervals_omitted: interval_count.saturating_sub(self.intervals.len()),
+            omitted_fraction: ((full_width - kept_width) / span.to_degrees()).max(0.0),
+            intervals: self.intervals,
+            quadrature: "arc",
+        }
+    }
+}
+
+fn fan_obstacle(trace: &ScreeningObstacleTrace) -> Option<ScreeningFanObstacleTrace> {
+    trace.edge.as_ref().map(|edge| ScreeningFanObstacleTrace {
+        kind: edge.kind,
+        height_m: edge.height_m,
+    })
+}
+
 /// Receiver-centred flat-earth frame (x east, y north, metres) — the same
 /// equirectangular model as `geo` and `obstacle_index`.
 struct Frame {
@@ -1285,7 +1382,7 @@ pub fn arc_screened_attenuation_with_ground(
         q.source_height_m,
         q.bounds,
     );
-    arc_screened_eval(q, rasters, &skyline.arcs, ground_bands, scratch)
+    arc_screened_eval(q, rasters, &skyline.arcs, ground_bands, scratch, None).0
 }
 
 /// [`arc_screened_attenuation`] against a [`SkylineSnapshot`] instead of the
@@ -1301,7 +1398,7 @@ pub fn arc_screened_attenuation_prepared(
     scratch: &mut ArcScreeningScratch,
 ) -> [f64; NUM_BANDS] {
     let ground_bands = crate::propagation::iso9613::legacy_ground_atten_bands(q.ground_g);
-    arc_screened_eval(q, rasters, &snapshot.arcs, &ground_bands, scratch)
+    arc_screened_eval(q, rasters, &snapshot.arcs, &ground_bands, scratch, None).0
 }
 
 /// Prepared arc evaluation with the caller's already-formed CP ground vector.
@@ -1309,15 +1406,24 @@ pub fn arc_screened_attenuation_prepared(
 /// This keeps the current increment-return architecture's one-ground-vector
 /// convention while allowing the surface callers to replace the CF surrogate
 /// without changing the arc's screening payload.  Node evaluation removes this
-/// compatibility seam by carrying every ray's full composite directly.
+/// compatibility seam by carrying every ray's full composite directly. When
+/// `cp_obstacle` is present, the same walk also returns its popup fan trace.
 pub fn arc_screened_attenuation_prepared_with_ground(
     q: &ArcScreening<'_>,
     rasters: &dyn RasterSampler,
     snapshot: &SkylineSnapshot,
     ground_bands: &[f64; NUM_BANDS],
     scratch: &mut ArcScreeningScratch,
-) -> [f64; NUM_BANDS] {
-    arc_screened_eval(q, rasters, &snapshot.arcs, ground_bands, scratch)
+    cp_obstacle: Option<&ScreeningObstacleTrace>,
+) -> ([f64; NUM_BANDS], Option<ScreeningFanTrace>) {
+    arc_screened_eval(
+        q,
+        rasters,
+        &snapshot.arcs,
+        ground_bands,
+        scratch,
+        cp_obstacle,
+    )
 }
 
 /// The evaluation half: clip `arcs` to the span, quadrate the blocked fan,
@@ -1328,7 +1434,8 @@ fn arc_screened_eval(
     arcs: &[MergedArc],
     ground: &[f64; NUM_BANDS],
     scratch: &mut ArcScreeningScratch,
-) -> [f64; NUM_BANDS] {
+    cp_obstacle: Option<&ScreeningObstacleTrace>,
+) -> ([f64; NUM_BANDS], Option<ScreeningFanTrace>) {
     let frame = Frame::at(q.receiver_lat, q.receiver_lon);
     let base = frame.azimuth(q.start_lat, q.start_lon);
     let delta = wrap_pi(frame.azimuth(q.end_lat, q.end_lon) - base);
@@ -1338,7 +1445,7 @@ fn arc_screened_eval(
     // same expressions `planned_ensure` ran — identical bits, and the prepared
     // path needs the span anyway.)
     if span < DEGENERATE_SPAN_RAD || span < q.bounds.min_span_rad {
-        return *q.cp_screening;
+        return (*q.cp_screening, None);
     }
     // Span in absolute azimuth; a segment subtends at most π at a receiver off
     // its line, so the short arc between the endpoints IS it.
@@ -1356,7 +1463,7 @@ fn arc_screened_eval(
         presplit,
     } = scratch;
     if arcs.is_empty() {
-        return *q.cp_screening;
+        return (*q.cp_screening, None);
     }
 
     // 1. Clip the receiver's skyline to this segment's span, then keep the arcs
@@ -1429,7 +1536,7 @@ fn arc_screened_eval(
         }
     }
     if intervals.is_empty() {
-        return *q.cp_screening;
+        return (*q.cp_screening, None);
     }
     // The skyline is disjoint on the circle, but an obstacle straddling the ±π
     // seam lands in it as two arcs that the ±2π clip shift can bring back
@@ -1508,6 +1615,7 @@ fn arc_screened_eval(
     // Clamp it in so the "which interval owns the cp evaluation" question has
     // the same answer on both lanes.
     let cp_rel = clamp_into_span(frame.azimuth(q.cp_lat, q.cp_lon), lo, hi).clamp(lo, hi);
+    let mut fan_trace = cp_obstacle.map(|_| FanTraceCollector::new(cp_rel));
     let mut blocked_fraction = 0.0_f64;
     let mut clear_fraction = 0.0_f64;
     let mut energy = [0.0_f64; NUM_BANDS];
@@ -1532,6 +1640,7 @@ fn arc_screened_eval(
                 span,
                 profile,
                 &mut energy,
+                fan_trace.as_mut(),
             );
         }
         let width = iv.end - iv.start;
@@ -1540,18 +1649,48 @@ fn arc_screened_eval(
         for p in 0..parts {
             let start = iv.start + p as f64 * step;
             let end = start + step;
-            let (terrain, bands) =
-                if cp_rel >= start - CP_AZIMUTH_EPS && cp_rel <= end + CP_AZIMUTH_EPS {
+            let mut obstacle = None;
+            let contains_cp = cp_rel >= start - CP_AZIMUTH_EPS && cp_rel <= end + CP_AZIMUTH_EPS;
+            let evaluated = if contains_cp {
+                None
+            } else {
+                let collect_obstacle = fan_trace.is_some().then_some(&mut obstacle);
+                interval_screening(
+                    q,
+                    rasters,
+                    &frame,
+                    0.5 * (start + end),
+                    profile,
+                    candidates,
+                    collect_obstacle,
+                )
+            };
+            let (terrain, bands) = match evaluated {
+                Some(result) => result,
+                None => {
+                    // A slice whose own ray failed borrows the cp VALUE, not
+                    // the cp ray's obstacle identity.
+                    if contains_cp {
+                        obstacle = cp_obstacle.and_then(fan_obstacle);
+                    }
                     (*q.cp_terrain, *q.cp_screening)
-                } else {
-                    interval_screening(q, rasters, &frame, 0.5 * (start + end), profile, candidates)
-                        .unwrap_or((*q.cp_terrain, *q.cp_screening))
-                };
+                }
+            };
             let fraction = step / span;
             blocked_fraction += fraction;
             for b in 0..NUM_BANDS {
                 energy[b] +=
                     fraction * db_to_energy(-ground_or_barrier_db(ground[b], terrain[b], bands[b]));
+            }
+            if let Some(trace) = fan_trace.as_mut() {
+                trace.push(
+                    start,
+                    end,
+                    true,
+                    obstacle,
+                    terrain[SCREENING_FAN_TRACE_BAND],
+                    bands[SCREENING_FAN_TRACE_BAND],
+                );
             }
         }
         cursor = cursor.max(iv.end);
@@ -1599,6 +1738,7 @@ fn arc_screened_eval(
             span,
             profile,
             &mut energy,
+            fan_trace.as_mut(),
         );
     }
     // The walk covers `[lo, hi]`, so the two fractions sum to 1 up to rounding;
@@ -1646,7 +1786,8 @@ fn arc_screened_eval(
         // (SPEC §4.7). Do not restate the invariant without that change.
         out[b] = (mean_db - q.cp_terrain[b]).max(0.0);
     }
-    out
+    let fan = fan_trace.map(|trace| trace.finish(span, blocked_fraction));
+    (out, fan)
 }
 
 /// The cp azimuth folded into `[lo, hi]`'s turn (the span can straddle ±π, in
@@ -1681,6 +1822,7 @@ fn accumulate_clear(
     span: f64,
     profile: &mut PathProfile,
     energy: &mut [f64; NUM_BANDS],
+    mut trace: Option<&mut FanTraceCollector>,
 ) -> f64 {
     let width = end - start;
     let parts = ((width / ESCALATE_SPAN_RAD).ceil() as usize).clamp(1, ESCALATE_MAX_PARTS);
@@ -1694,6 +1836,16 @@ fn accumulate_clear(
         covered += fraction;
         for b in 0..NUM_BANDS {
             energy[b] += fraction * db_to_energy(-ground_or_barrier_db(ground[b], terrain[b], 0.0));
+        }
+        if let Some(trace) = trace.as_deref_mut() {
+            trace.push(
+                s,
+                s + step,
+                false,
+                None,
+                terrain[SCREENING_FAN_TRACE_BAND],
+                0.0,
+            );
         }
     }
     covered
@@ -1771,6 +1923,7 @@ fn interval_screening(
     azimuth: f64,
     profile: &mut PathProfile,
     candidates: &mut Vec<CrossingCandidate>,
+    trace_obstacle: Option<&mut Option<ScreeningFanObstacleTrace>>,
 ) -> Option<([f64; NUM_BANDS], [f64; NUM_BANDS])> {
     let (src_lat, src_lon) = source_point_at(frame, q, azimuth)?;
     let dist_m = geo::flat_dist(src_lat, src_lon, q.receiver_lat, q.receiver_lon);
@@ -1795,16 +1948,31 @@ fn interval_screening(
         &CellPrune::for_profile(profile, src_alt, q.receiver_alt_m),
         candidates,
     );
-    let screening = screening_attenuation(
-        profile,
-        q.barriers,
-        ObstacleInput { candidates },
-        src_alt,
-        q.receiver_alt_m,
-        q.exclusion_radius_m,
-        &terrain,
-        terrain_delta_m,
-    );
+    let screening = if let Some(out) = trace_obstacle {
+        let (bands, trace) = screening_attenuation_with_meta(
+            profile,
+            q.barriers,
+            ObstacleInput { candidates },
+            src_alt,
+            q.receiver_alt_m,
+            q.exclusion_radius_m,
+            &terrain,
+            terrain_delta_m,
+        );
+        *out = fan_obstacle(&trace);
+        bands
+    } else {
+        screening_attenuation(
+            profile,
+            q.barriers,
+            ObstacleInput { candidates },
+            src_alt,
+            q.receiver_alt_m,
+            q.exclusion_radius_m,
+            &terrain,
+            terrain_delta_m,
+        )
+    };
     Some((terrain, screening))
 }
 
@@ -1989,6 +2157,41 @@ mod tests {
         let cp = [3.5_f64; NUM_BANDS];
         let q = query(&obstacles, &cp, 145.0);
         assert_eq!(Buffers::default().run(&q), cp);
+    }
+
+    #[test]
+    fn fan_trace_keeps_the_32_largest_slices_and_the_cp_slice() {
+        let mut collector = FanTraceCollector::new(0.0005);
+        let mut start = 0.0;
+        for i in 0..40 {
+            let width = (i + 1) as f64 * 0.001;
+            collector.push(start, start + width, true, None, 0.0, i as f64);
+            start += width;
+        }
+
+        let fan = collector.finish(0.82, 0.5);
+        assert_eq!(fan.intervals.len(), 33);
+        assert_eq!(fan.intervals_omitted, 7);
+        // Dropped: the seven narrowest slices after the cp slice (i = 1..=7).
+        let omitted_rad: f64 = (2..=8).map(|w| w as f64 * 0.001).sum();
+        assert!((fan.omitted_fraction - omitted_rad / 0.82).abs() < 1e-9);
+        assert!(fan.intervals[0].contains_cp, "the cp slice is kept first");
+        assert_eq!(
+            fan.intervals
+                .iter()
+                .filter(|interval| interval.contains_cp)
+                .count(),
+            1
+        );
+        assert!(fan
+            .intervals
+            .iter()
+            .filter(|interval| !interval.contains_cp)
+            .all(|interval| interval.screen_db >= 8.0));
+        assert!(fan
+            .intervals
+            .windows(2)
+            .all(|pair| pair[0].from_deg < pair[1].from_deg));
     }
 
     /// A degenerate span (both endpoints at one azimuth) falls back to the cp
@@ -2388,6 +2591,7 @@ mod tests {
             frame.azimuth(cplat, cplon),
             &mut prof,
             &mut cands,
+            None,
         )
         .expect("cp ray must evaluate")
         .1;
@@ -2595,7 +2799,7 @@ mod tests {
         let az = frame.azimuth(cplat, cplon);
         let mut prof = PathProfile::new();
         let mut cands: Vec<CrossingCandidate> = Vec::new();
-        let cp = interval_screening(&q, &FlatGround, &frame, az, &mut prof, &mut cands)
+        let cp = interval_screening(&q, &FlatGround, &frame, az, &mut prof, &mut cands, None)
             .map_or(NO_TERRAIN, |(_terrain, screening)| screening);
         q.cp_screening = &cp;
         buf.run(&q)
@@ -2865,7 +3069,7 @@ mod tests {
         let az = frame.azimuth(cplat, cplon);
         let mut prof = PathProfile::new();
         let mut cands: Vec<CrossingCandidate> = Vec::new();
-        let cp = interval_screening(&q, &FlatGround, &frame, az, &mut prof, &mut cands)
+        let cp = interval_screening(&q, &FlatGround, &frame, az, &mut prof, &mut cands, None)
             .map_or(NO_TERRAIN, |(_terrain, screening)| screening);
         q.cp_screening = &cp;
         let via_mut =

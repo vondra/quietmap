@@ -513,6 +513,29 @@ interface TerrainTrace {
 interface ScreeningTrace {
   attenuation_bands: number[]
   obstacle: ScreeningObstacleTrace | null
+  fan?: ScreeningFanTrace
+}
+
+export interface ScreeningFanTrace {
+  span_deg: number
+  blocked_fraction: number
+  intervals: ScreeningFanIntervalTrace[]
+  intervals_omitted?: number
+  /** Angle share of the omitted intervals (absent when nothing was omitted). */
+  omitted_fraction?: number
+  quadrature: 'arc'
+}
+
+interface ScreeningFanIntervalTrace {
+  /** Signed receiver-centred angles relative to the characteristic-point ray. */
+  from_deg: number
+  to_deg: number
+  blocked: boolean
+  obstacle?: Pick<ObstacleEdge, 'kind' | 'height_m'>
+  /** This slice ray's A_terrain and A_screen at 1 kHz. */
+  terrain_db: number
+  screen_db: number
+  contains_cp: boolean
 }
 
 interface VegetationTrace {

@@ -110,6 +110,57 @@ pub struct ScreeningTrace {
     pub attenuation_bands: [f64; NUM_BANDS],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub obstacle: Option<ScreeningObstacleTrace>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fan: Option<ScreeningFanTrace>,
+}
+
+/// The popup's angular quadrature for one road or railway microsegment. The
+/// engine's 1 kHz average is the fraction-weighted energy mean of
+/// max(A_ground, terrain_db + screen_db) over the slices; it is exact only when
+/// nothing was omitted — `omitted_fraction` is the angle share the wire dropped.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScreeningFanTrace {
+    pub span_deg: f64,
+    pub blocked_fraction: f64,
+    pub intervals: Vec<ScreeningFanIntervalTrace>,
+    #[serde(skip_serializing_if = "is_zero_usize")]
+    pub intervals_omitted: usize,
+    #[serde(skip_serializing_if = "is_zero_f64")]
+    pub omitted_fraction: f64,
+    pub quadrature: &'static str,
+}
+
+/// One evaluated angular slice, expressed as offsets from the characteristic
+/// point ray. `terrain_db` and `screen_db` are the slice ray's 1 kHz A_terrain
+/// and A_screen.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScreeningFanIntervalTrace {
+    pub from_deg: f64,
+    pub to_deg: f64,
+    pub blocked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub obstacle: Option<ScreeningFanObstacleTrace>,
+    pub terrain_db: f64,
+    pub screen_db: f64,
+    pub contains_cp: bool,
+}
+
+/// Obstacle identity useful in the fan tooltip without duplicating the full
+/// characteristic-point edge trace for every interval.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScreeningFanObstacleTrace {
+    pub kind: &'static str,
+    pub height_m: f64,
+}
+
+#[inline]
+fn is_zero_usize(value: &usize) -> bool {
+    *value == 0
+}
+
+#[inline]
+fn is_zero_f64(value: &f64) -> bool {
+    *value == 0.0
 }
 
 /// Per-segment vegetation trace (forest depth + run intervals). Scalar summary

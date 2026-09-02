@@ -484,8 +484,8 @@ pub(crate) fn compute_railways(
                 // Arc screening (fix-pack Fix 1) — the snapshot is pass 1's
                 // verdict on whether (and against which growth state) this
                 // segment is arc-screened; see the twin block in roads.rs.
-                let screening_atten = match &p.snapshot {
-                    None => cp_screening_atten,
+                let (screening_atten, screening_fan) = match &p.snapshot {
+                    None => (cp_screening_atten, None),
                     Some(snap) => crate::arc_screened_line_segment_prepared(
                         &crate::LineSegmentScreening {
                             receiver,
@@ -509,6 +509,7 @@ pub(crate) fn compute_railways(
                         rasters,
                         snap,
                         arc_scratch,
+                        collect_traces.then_some(&obstacle_trace),
                     ),
                 };
                 let veg_atten =
@@ -583,6 +584,7 @@ pub(crate) fn compute_railways(
                         path_profile: std::mem::take(path_profile),
                         terrain,
                         screening_atten,
+                        screening_fan,
                         obstacle_trace,
                         veg_atten,
                         seg_variants,

@@ -331,8 +331,8 @@ pub(crate) fn compute_roads(
                 // interval it falls in. `snapshot` is pass 1's verdict on
                 // whether (and against which growth state) this segment is
                 // arc-screened.
-                let screening_atten = match &p.snapshot {
-                    None => cp_screening_atten,
+                let (screening_atten, screening_fan) = match &p.snapshot {
+                    None => (cp_screening_atten, None),
                     Some(snap) => crate::arc_screened_line_segment_prepared(
                         &crate::LineSegmentScreening {
                             receiver,
@@ -356,6 +356,7 @@ pub(crate) fn compute_roads(
                         rasters,
                         snap,
                         arc_scratch,
+                        collect_traces.then_some(&obstacle_trace),
                     ),
                 };
                 let veg_atten =
@@ -475,6 +476,7 @@ pub(crate) fn compute_roads(
                         path_profile: std::mem::take(path_profile),
                         terrain,
                         screening_atten,
+                        screening_fan,
                         obstacle_trace,
                         veg_atten,
                         seg_variants,
@@ -1080,6 +1082,21 @@ mod tests {
         let screened = compute_roads(&receiver(), &roads, &[], &obstacles, &FlatRasters, None)
             .0
             .lden_db;
+        let mut traces = TraceCollector::new();
+        let traced = compute_roads(
+            &receiver(),
+            &roads,
+            &[],
+            &obstacles,
+            &FlatRasters,
+            Some(&mut traces),
+        )
+        .0
+        .lden_db;
+        assert_eq!(
+            traced, screened,
+            "collecting the fan must not move the level"
+        );
         let loss = clear - screened;
         assert!(
             loss > 0.2,
@@ -1088,6 +1105,82 @@ mod tests {
         assert!(
             loss < 3.0,
             "…but not the whole segment: {loss:.2} dB (cp-ray verdict was ~15 dB)"
+        );
+
+        let PropagationBreakdown::Cnossos(propagation) = &traces.segments[0].propagation else {
+            panic!("road trace must use CNOSSOS propagation")
+        };
+        let fan = propagation
+            .screening
+            .fan
+            .as_ref()
+            .expect("wide line segment with a partial skyline must carry its fan");
+        let wire = serde_json::to_value(&traces.segments[0]).unwrap();
+        assert_eq!(wire["propagation"]["screening"]["fan"]["quadrature"], "arc");
+        let receiver = receiver();
+        let azimuth = |lat: f64, lon: f64| {
+            let east =
+                (lon - receiver.lon) * crate::constants::m_per_deg_lon(receiver.lat.to_radians());
+            let north = (lat - receiver.lat) * crate::constants::M_PER_DEG_LAT;
+            north.atan2(east)
+        };
+        let segment_span = propagation::obstacle_index::wrap_pi(
+            azimuth(roads[0].end_lat, roads[0].end_lon)
+                - azimuth(roads[0].start_lat, roads[0].start_lon),
+        )
+        .abs();
+        let box_span = propagation::obstacle_index::wrap_pi(
+            azimuth(lat_of(60.0), lon_of(122.0)) - azimuth(lat_of(60.0), lon_of(92.0)),
+        )
+        .abs();
+        let expected_blocked_fraction = box_span / segment_span;
+        assert!(
+            (fan.blocked_fraction - expected_blocked_fraction).abs() < 2e-5,
+            "trace blocked fraction {:.12} != box angular share {:.12}",
+            fan.blocked_fraction,
+            expected_blocked_fraction
+        );
+        assert_eq!(fan.intervals_omitted, 0);
+        assert_eq!(fan.omitted_fraction, 0.0);
+        assert_eq!(
+            fan.intervals
+                .iter()
+                .filter(|interval| interval.contains_cp)
+                .count(),
+            1
+        );
+        assert!(fan
+            .intervals
+            .iter()
+            .filter(|interval| interval.blocked)
+            .all(|interval| {
+                interval
+                    .obstacle
+                    .as_ref()
+                    .is_some_and(|obstacle| obstacle.kind == "building" && obstacle.height_m == 8.0)
+            }));
+
+        let band = 4;
+        let ground_db = propagation.ground.attenuation_bands[band];
+        let terrain_db = propagation.terrain.attenuation_bands[band];
+        let energy: f64 = fan
+            .intervals
+            .iter()
+            .map(|interval| {
+                let fraction = (interval.to_deg - interval.from_deg) / fan.span_deg;
+                let applied = iso9613::ground_or_barrier_db(
+                    ground_db,
+                    interval.terrain_db,
+                    interval.screen_db,
+                );
+                fraction * iso9613::fast_exp_f64(-applied * std::f64::consts::LN_10 * 0.1)
+            })
+            .sum();
+        let reconstructed = (-10.0 * energy.max(1e-12).log10() - terrain_db).max(0.0);
+        assert!(
+            (reconstructed - propagation.screening.attenuation_bands[band]).abs() < 1e-9,
+            "flat-ground interval A_screen reconstructed {reconstructed:.12} dB, engine returned {:.12} dB",
+            propagation.screening.attenuation_bands[band]
         );
     }
 

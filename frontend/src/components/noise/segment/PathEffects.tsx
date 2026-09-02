@@ -1,6 +1,7 @@
 import type { SegmentTrace } from '../../../types/noise'
 import { HoverText } from '../../ui/info-tip'
 import { BAND_LABELS, Section, InlineTable, bandsTooltip, fmtDbSigned } from './display'
+import { ScreeningFanRow } from './ScreeningFanRow'
 
 export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
   // Doc 29 aircraft (airborne / cruise) doesn't have CNOSSOS path effects.
@@ -157,96 +158,97 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
 
   // Obstruction rows — terrain + screening + vegetation. Compose totalPathDelta.
   // Same split rule: LABEL concept, VALUE computation details.
-  const obstructionRows: [React.ReactNode, React.ReactNode][] = [
-    (() => {
-      const labelTooltip =
-        'A_bar — Terrain diffraction (ISO 9613-2 §7.3 / CNOSSOS §2.5.6).\n\n' +
-        'Sound bending over hills, cuttings, berms — any DEM feature\n' +
-        'above the line-of-sight. Maekawa formula per band, capped at\n' +
-        '20 dB. The engine picks the single edge with the largest\n' +
-        'path-length difference δ (max-δ selection).'
-      const deltaStr = terrain.delta_m > 0
-        ? `δ = ${terrain.delta_m.toFixed(2)} m, single edge`
-        : 'no obstruction'
-      const valueTooltip =
-        `${deltaStr}.\n\n` +
-        'Maekawa per-band output below.\n' +
-        'Scalar = A-weighted ΔL_A (full − no_terrain Lden).\n' +
-        'Rayleigh δ* gate is reported on its own row when it zeroes any band.'
-      const terrainParens = terrain.delta_m > 0
-        ? ` (δ ${terrain.delta_m.toFixed(2)} m, single edge)`
+  const terrainRow: [React.ReactNode, React.ReactNode] = (() => {
+    const labelTooltip =
+      'A_bar — Terrain diffraction (ISO 9613-2 §7.3 / CNOSSOS §2.5.6).\n\n' +
+      'Sound bending over hills, cuttings, berms — any DEM feature\n' +
+      'above the line-of-sight. Maekawa formula per band, capped at\n' +
+      '20 dB. The engine picks the single edge with the largest\n' +
+      'path-length difference δ (max-δ selection).'
+    const deltaStr = terrain.delta_m > 0
+      ? `δ = ${terrain.delta_m.toFixed(2)} m, single edge`
+      : 'no obstruction'
+    const valueTooltip =
+      `${deltaStr}.\n\n` +
+      'Maekawa per-band output below.\n' +
+      'Scalar = A-weighted ΔL_A (full − no_terrain Lden).\n' +
+      'Rayleigh δ* gate is reported on its own row when it zeroes any band.'
+    const terrainParens = terrain.delta_m > 0
+      ? ` (δ ${terrain.delta_m.toFixed(2)} m, single edge)`
+      : isScalarOnly
+        ? ''
+        : ' (none)'
+    return [
+      <HoverText title={labelTooltip}>Terrain diffraction{terrainParens}</HoverText>,
+      <HoverText title={bandsTooltip(terrain.attenuation_bands, { title: valueTooltip })}>
+        {fmtDbSigned(terrainDelta)}
+      </HoverText>,
+    ]
+  })()
+  const screeningRow: [React.ReactNode, React.ReactNode] = (() => {
+    const obs = screening.obstacle
+    const screenLabel = obs
+      ? `${obs.edge.kind} ${obs.edge.height_m.toFixed(1)} m`
+      : isScalarOnly
+        ? ''
+        : 'none'
+    const labelTooltip =
+      'A_bar — Building / barrier screening component (SPEC §4.7).\n\n' +
+      'For a road or railway segment that carries a Screening fan row, the\n' +
+      'engine clips its angular fan against the receiver skyline,\n' +
+      'evaluates one exact source-point ray per interval, then energy-averages\n' +
+      'max(A_ground, A_terrain + A_screen). Narrow spans, empty skylines and\n' +
+      'point sources use the characteristic-point/source ray alone. This row\n' +
+      'is the resulting increment over pure terrain; the listed obstacle is\n' +
+      'the characteristic-point/source ray\'s winning edge.'
+    const edgeDetail = obs
+      ? `\n\nEdge: ${obs.edge.kind} ${obs.edge.height_m.toFixed(1)} m @ t=${obs.edge.t.toFixed(2)} (+${obs.edge.screen_h_m.toFixed(1)} m above LOS)`
+      : ''
+    const valueTooltip =
+      (obs ? `Obstacle: ${obs.edge.kind} ${obs.edge.height_m.toFixed(1)} m @ t=${obs.edge.t.toFixed(2)}.\n\n` : '') +
+      'Per-band increment below.\n' +
+      'Scalar = A-weighted ΔL_A (full − no_screening Lden).' +
+      edgeDetail
+    return [
+      <HoverText title={labelTooltip}>
+        Building/barrier{screenLabel ? ` (${screenLabel})` : ''}
+      </HoverText>,
+      <HoverText title={bandsTooltip(screening.attenuation_bands, { title: valueTooltip })}>
+        {fmtDbSigned(screeningDelta)}
+      </HoverText>,
+    ]
+  })()
+  const foliageRow: [React.ReactNode, React.ReactNode] = [
+    <HoverText
+      title={
+        'A_fol — Foliage / vegetation (ISO 9613-2:2024 Annex A.2.2).\n\n' +
+        'Forest along the path absorbs mid-to-high frequencies; depth\n' +
+        'is weighted by canopy density where the data carries it.\n' +
+        'Capped at ~200 m effective depth. Project applies a ×0.5\n' +
+        'Central-Europe calibration against over-counting sparse\n' +
+        'canopy as dense foliage.'
+      }
+    >
+      Foliage
+      {vegetation.forest_depth_m > 0
+        ? ` (${vegetation.forest_depth_m.toFixed(0)} m forest, 0.5× adj.)`
         : isScalarOnly
           ? ''
-          : ' (none)'
-      return [
-        <HoverText title={labelTooltip}>Terrain diffraction{terrainParens}</HoverText>,
-        <HoverText title={bandsTooltip(terrain.attenuation_bands, { title: valueTooltip })}>
-          {fmtDbSigned(terrainDelta)}
-        </HoverText>,
-      ]
-    })(),
-    (() => {
-      const obs = screening.obstacle
-      const screenLabel = obs
-        ? `${obs.edge.kind} ${obs.edge.height_m.toFixed(1)} m`
-        : isScalarOnly
-          ? ''
-          : 'none'
-      const labelTooltip =
-        'A_bar — Building / barrier screening component (SPEC §4.7).\n\n' +
-        'Engine runs ONE combined diffraction over a composite top\n' +
-        'profile = elevation + max(building, barrier). This row is the\n' +
-        'increment of that combined A_bar over the pure-terrain\n' +
-        'component above. A_terrain + A_screen ≡ A_combined — the two\n' +
-        'rows are engine decomposition, not two independent Fresnels.'
-      const edgeDetail = obs
-        ? `\n\nEdge: ${obs.edge.kind} ${obs.edge.height_m.toFixed(1)} m @ t=${obs.edge.t.toFixed(2)} (+${obs.edge.screen_h_m.toFixed(1)} m above LOS)`
-        : ''
-      const valueTooltip =
-        (obs ? `Obstacle: ${obs.edge.kind} ${obs.edge.height_m.toFixed(1)} m @ t=${obs.edge.t.toFixed(2)}.\n\n` : '') +
-        'Per-band increment below.\n' +
-        'Scalar = A-weighted ΔL_A (full − no_screening Lden).' +
-        edgeDetail
-      return [
-        <HoverText title={labelTooltip}>
-          Building/barrier{screenLabel ? ` (${screenLabel})` : ''}
-        </HoverText>,
-        <HoverText title={bandsTooltip(screening.attenuation_bands, { title: valueTooltip })}>
-          {fmtDbSigned(screeningDelta)}
-        </HoverText>,
-      ]
-    })(),
-    [
-      <HoverText
-        title={
-          'A_fol — Foliage / vegetation (ISO 9613-2:2024 Annex A.2.2).\n\n' +
-          'Forest along the path absorbs mid-to-high frequencies; depth\n' +
-          'is weighted by canopy density where the data carries it.\n' +
-          'Capped at ~200 m effective depth. Project applies a ×0.5\n' +
-          'Central-Europe calibration against over-counting sparse\n' +
-          'canopy as dense foliage.'
-        }
-      >
-        Foliage
-        {vegetation.forest_depth_m > 0
-          ? ` (${vegetation.forest_depth_m.toFixed(0)} m forest, 0.5× adj.)`
-          : isScalarOnly
-            ? ''
-            : ' (none)'}
-      </HoverText>,
-      <HoverText
-        title={bandsTooltip(vegetation.attenuation_bands, {
-          title: `A_fol per band — α_veg[i] × min(depth, 200 m)`,
-          note:
-            `Forest depth: ${vegetation.forest_depth_m.toFixed(0)} m across ${vegetation.forest_runs.length} run${vegetation.forest_runs.length === 1 ? '' : 's'}.\n` +
-            'Already includes the ×0.5 Central-Europe calibration.\n' +
-            'Scalar = A-weighted ΔL_A (full − no_vegetation Lden).',
-        })}
-      >
-        {fmtDbSigned(vegetationDelta)}
-      </HoverText>,
-    ],
+          : ' (none)'}
+    </HoverText>,
+    <HoverText
+      title={bandsTooltip(vegetation.attenuation_bands, {
+        title: `A_fol per band — α_veg[i] × min(depth, 200 m)`,
+        note:
+          `Forest depth: ${vegetation.forest_depth_m.toFixed(0)} m across ${vegetation.forest_runs.length} run${vegetation.forest_runs.length === 1 ? '' : 's'}.\n` +
+          'Already includes the ×0.5 Central-Europe calibration.\n' +
+          'Scalar = A-weighted ΔL_A (full − no_vegetation Lden).',
+      })}
+    >
+      {fmtDbSigned(vegetationDelta)}
+    </HoverText>,
   ]
+  const fan = screening.fan
 
   // Rayleigh criterion indicator: which bands the engine zeroed by the
   // 2021/1226 point (9)(c) δ ≤ λ/4 − δ* rule. Read from the engine's zeroed
@@ -273,7 +275,17 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
       </div>
       <InlineTable rows={baselineRows} />
       <div className="h-2" aria-hidden="true" />
-      <InlineTable rows={obstructionRows} />
+      {fan ? (
+        <>
+          <InlineTable rows={[terrainRow, screeningRow]} />
+          {/* The existing obstacle label can be wider than 200 px; a separate
+              grid leaves the required fan value readable in the 320 px popup. */}
+          <ScreeningFanRow fan={fan} />
+          <InlineTable rows={[foliageRow]} />
+        </>
+      ) : (
+        <InlineTable rows={[terrainRow, screeningRow, foliageRow]} />
+      )}
       {gatedBands.length > 0 && (
         <HoverText
           title={

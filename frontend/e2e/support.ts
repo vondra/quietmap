@@ -1,4 +1,5 @@
 import { expect, type Page } from '@playwright/test'
+import type { NoiseComputeData } from '../src/types/noise'
 
 export const FIXTURE_DB = 63
 export const SOURCE_DB = 60
@@ -67,7 +68,7 @@ export function popupFixture(
   db = FIXTURE_DB,
   sourceLevels: Record<string, number> = { road: db },
   indoor?: IndoorEnvelope,
-) {
+): NoiseComputeData {
   return {
     ...indoor,
     h3_center: [lat, lng],

@@ -8,8 +8,8 @@ use crate::propagation::PathProfile;
 use crate::types::{
     BaselineTrace, CnossosBreakdown, EmissionTrace, ForestRun, GroundTrace, LayerKind,
     LdenVariants, PathProfileTrace, PerPeriod, PointSource, PropagationBreakdown,
-    PropagationVariants, RailSegment, RoadSegment, ScreeningObstacleTrace, ScreeningTrace,
-    SegmentTrace, TerrainTrace, VegetationTrace, NUM_BANDS,
+    PropagationVariants, RailSegment, RoadSegment, ScreeningFanTrace, ScreeningObstacleTrace,
+    ScreeningTrace, SegmentTrace, TerrainTrace, VegetationTrace, NUM_BANDS,
 };
 use crate::{building_type_name, industrial_type_name, rail_type_name};
 
@@ -161,6 +161,7 @@ pub fn vegetation_runs_and_depth(t: &[f64], forest: &[u8], dist_m: f64) -> (Vec<
 pub fn screening_trace(
     atten_bands: [f64; NUM_BANDS],
     obstacle: ScreeningObstacleTrace,
+    fan: Option<ScreeningFanTrace>,
 ) -> ScreeningTrace {
     ScreeningTrace {
         attenuation_bands: atten_bands,
@@ -169,6 +170,7 @@ pub fn screening_trace(
         } else {
             Some(obstacle)
         },
+        fan,
     }
 }
 
@@ -244,6 +246,7 @@ struct BuildCnossosPropagation {
     path_profile: PathProfile,
     terrain: TerrainTrace,
     screening_atten: [f64; NUM_BANDS],
+    screening_fan: Option<ScreeningFanTrace>,
     obstacle_trace: ScreeningObstacleTrace,
     veg_atten: [f64; NUM_BANDS],
     variants: [PropagationVariants; 3],
@@ -265,6 +268,7 @@ fn build_cnossos_propagation(inputs: BuildCnossosPropagation) -> PropagationBrea
         path_profile,
         terrain,
         screening_atten,
+        screening_fan,
         obstacle_trace,
         veg_atten,
         variants,
@@ -287,7 +291,7 @@ fn build_cnossos_propagation(inputs: BuildCnossosPropagation) -> PropagationBrea
         ),
         path_profile: path_profile_into_trace(path_profile, src_alt_m, rcv_alt_m),
         terrain,
-        screening: screening_trace(screening_atten, obstacle_trace),
+        screening: screening_trace(screening_atten, obstacle_trace, screening_fan),
         vegetation,
         ground: ground_trace(ground_g, ground_bands),
         lw_bands: PerPeriod {
@@ -326,6 +330,7 @@ pub(crate) struct BuildRoadTrace<'a> {
     pub path_profile: PathProfile,
     pub terrain: TerrainTrace,
     pub screening_atten: [f64; NUM_BANDS],
+    pub screening_fan: Option<ScreeningFanTrace>,
     pub obstacle_trace: ScreeningObstacleTrace,
     pub veg_atten: [f64; NUM_BANDS],
     pub seg_variants: [PropagationVariants; 3],
@@ -438,6 +443,7 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
             terrain,
             ground_bands,
             screening_atten,
+            screening_fan: None,
             obstacle_trace,
             veg_atten,
             variants: seg_variants,
@@ -468,6 +474,7 @@ pub(crate) struct BuildRailTrace<'a> {
     pub path_profile: PathProfile,
     pub terrain: TerrainTrace,
     pub screening_atten: [f64; NUM_BANDS],
+    pub screening_fan: Option<ScreeningFanTrace>,
     pub obstacle_trace: ScreeningObstacleTrace,
     pub veg_atten: [f64; NUM_BANDS],
     pub seg_variants: [PropagationVariants; 3],
@@ -490,6 +497,7 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
         path_profile,
         terrain,
         screening_atten,
+        screening_fan,
         obstacle_trace,
         veg_atten,
         seg_variants,
@@ -550,6 +558,7 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
             terrain,
             ground_bands,
             screening_atten,
+            screening_fan,
             obstacle_trace,
             veg_atten,
             variants: seg_variants,
@@ -585,6 +594,7 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
         path_profile,
         terrain,
         screening_atten,
+        screening_fan,
         obstacle_trace,
         veg_atten,
         seg_variants,
@@ -648,6 +658,7 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
             terrain,
             ground_bands,
             screening_atten,
+            screening_fan,
             obstacle_trace,
             veg_atten,
             variants: seg_variants,
@@ -690,7 +701,53 @@ mod tests {
     #[test]
     fn screening_trace_shape() {
         let obstacle = ScreeningObstacleTrace::default();
-        assert_bands_no_scalar(&screening_trace([0.0; NUM_BANDS], obstacle));
+        assert_bands_no_scalar(&screening_trace([0.0; NUM_BANDS], obstacle, None));
+    }
+
+    #[test]
+    fn screening_fan_round_trips_through_json_wire() {
+        let fan = ScreeningFanTrace {
+            span_deg: 42.0,
+            blocked_fraction: 0.25,
+            intervals: vec![crate::types::ScreeningFanIntervalTrace {
+                from_deg: -4.0,
+                to_deg: 6.5,
+                blocked: true,
+                obstacle: Some(crate::types::ScreeningFanObstacleTrace {
+                    kind: "building",
+                    height_m: 8.0,
+                }),
+                terrain_db: 0.0,
+                screen_db: 12.5,
+                contains_cp: true,
+            }],
+            intervals_omitted: 0,
+            omitted_fraction: 0.0,
+            quadrature: "arc",
+        };
+        let encoded = serde_json::to_string(&screening_trace(
+            [1.0; NUM_BANDS],
+            ScreeningObstacleTrace::default(),
+            Some(fan),
+        ))
+        .unwrap();
+        let decoded: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded["fan"]["quadrature"], "arc");
+        assert_eq!(
+            decoded["fan"]["intervals"][0]["obstacle"]["kind"],
+            "building"
+        );
+        assert_eq!(decoded["fan"]["intervals"][0]["contains_cp"], true);
+        assert!(decoded["fan"].get("intervals_omitted").is_none());
+        assert!(decoded["fan"].get("omitted_fraction").is_none());
+
+        let without_fan = serde_json::to_value(screening_trace(
+            [0.0; NUM_BANDS],
+            ScreeningObstacleTrace::default(),
+            None,
+        ))
+        .unwrap();
+        assert!(without_fan.get("fan").is_none());
     }
 
     #[test]

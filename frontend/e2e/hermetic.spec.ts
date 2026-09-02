@@ -12,6 +12,7 @@ import {
   pngCenterPixel,
   popupFixture,
 } from './support'
+import { screeningFanPopupFixture } from './screening-fan-fixture'
 
 const POINT = hm3PixelCenter(49.8486, 14.1639)
 
@@ -127,6 +128,40 @@ test('desktop: an enclosed point reads as indoors, naming the facade level and t
   await expect(notice).toContainText('Inside a building')
   await expect(notice).toContainText(`${FIXTURE_DB.toFixed(1)} dB fa\u00e7ade`)
   await expect(notice).toContainText(`${ENVELOPE_DELTA_DB} dB`)
+})
+
+test('desktop: segment screening fan shows angular intervals and the characteristic ray', async ({ page }) => {
+  await installHermeticMap(page, POINT, 58.5)
+  await page.route('**/api/noise-onfly-v2?**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(screeningFanPopupFixture(POINT.lat, POINT.lng)),
+  }))
+
+  await page.goto(mapUrl(POINT))
+  const { x, y } = await canvasCenter(page)
+  await page.mouse.click(x, y)
+  await expect(page.locator('[data-testid="noise-badge"]:visible')).toHaveText('58.5 dB')
+
+  await page.getByRole('button', { name: 'Segments (1)' }).click()
+  await page.getByRole('button', { name: /Fan fixture road/ }).click()
+  await expect(page.getByText('Screening fan', { exact: true })).toBeVisible()
+
+  const fanValue = page.getByText('5 intervals · 22 % blocked', { exact: true })
+  await expect(fanValue).toBeVisible()
+  await fanValue.click()
+  const tooltip = page.getByRole('tooltip')
+  await expect(tooltip).toContainText('Arc quadrature · span 50.0° · 22.0 % blocked.')
+  await expect(tooltip).toContainText(
+    '-3.0–3.0° · blocked · building 8.0 m · ΔL -10.4 dB · characteristic point',
+  )
+  await expect(tooltip).toContainText('-8.0–-3.0° · blocked · barrier 3.5 m · terrain -1.3 dB · ΔL -7.2 dB')
+
+  await page.keyboard.press('Escape')
+  await page.getByText(/Building\/barrier \(building 8\.0 m\)/).click()
+  await expect(page.getByRole('tooltip')).toContainText(
+    'evaluates one exact source-point ray per interval, then energy-averages',
+  )
 })
 
 test.describe('mobile', () => {

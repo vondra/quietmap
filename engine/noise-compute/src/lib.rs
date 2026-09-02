@@ -631,13 +631,16 @@ pub(crate) fn arc_screened_line_segment_prepared(
     rasters: &dyn RasterSampler,
     snapshot: &propagation::arc_screening::SkylineSnapshot,
     scratch: &mut propagation::arc_screening::ArcScreeningScratch,
-) -> [f64; NUM_BANDS] {
+    cp_obstacle: Option<&ScreeningObstacleTrace>,
+) -> ([f64; NUM_BANDS], Option<ScreeningFanTrace>) {
+    let query = line_segment_arc_query(q, q.obstacles);
     propagation::arc_screening::arc_screened_attenuation_prepared_with_ground(
-        &line_segment_arc_query(q, q.obstacles),
+        &query,
         rasters,
         snapshot,
         q.ground_bands,
         scratch,
+        cp_obstacle,
     )
 }
 
