@@ -27,5 +27,3 @@ raster-reader = { path = "../raster-reader" }
 rayon = "1"
 tile-painter = { path = "../tile-painter" }
 
-[dev-dependencies]
-tempfile = "3"

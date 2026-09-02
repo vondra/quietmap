@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
@@ -81,58 +81,6 @@ impl RelevantSourcePartition {
             )
         })?;
         Ok(())
-    }
-
-    pub fn read_from(path: &Path, expected_source_fingerprint: u64) -> Result<Self> {
-        let mut reader = BufReader::new(
-            File::open(path).with_context(|| format!("open partition {}", path.display()))?,
-        );
-        let mut magic = [0_u8; 8];
-        reader.read_exact(&mut magic)?;
-        if magic != FILE_MAGIC {
-            bail!("{} is not a relevant-source partition", path.display());
-        }
-        let version = read_u32(&mut reader)?;
-        let block_side = read_u32(&mut reader)? as usize;
-        let period_count = read_u32(&mut reader)? as usize;
-        let block_count = read_u32(&mut reader)? as usize;
-        let source_fingerprint = read_u64(&mut reader)?;
-        let relevant_count = read_u32(&mut reader)? as usize;
-        let reserved = read_u32(&mut reader)?;
-        if version != FILE_VERSION
-            || block_side != crate::source_frame::BLOCK_PIXEL_SIDE
-            || period_count != PERIOD_COUNT
-            || block_count != BLOCK_COUNT
-            || reserved != 0
-        {
-            bail!("{} has an incompatible partition header", path.display());
-        }
-        if source_fingerprint != expected_source_fingerprint {
-            bail!("{} belongs to a different source ordering", path.display());
-        }
-
-        let block_offsets = read_u32_vector(&mut reader, BLOCK_COUNT + 1)?;
-        let mut background_corner_energy = vec![[[0.0; PERIOD_COUNT]; 4]; BLOCK_COUNT];
-        for corners in &mut background_corner_energy {
-            for periods in corners {
-                for energy in periods {
-                    *energy = f32::from_le_bytes(read_array::<4>(&mut reader)?);
-                }
-            }
-        }
-        let relevant_source_indices = read_u32_vector(&mut reader, relevant_count)?;
-        let mut trailing_byte = [0_u8; 1];
-        if reader.read(&mut trailing_byte)? != 0 {
-            bail!("{} has trailing bytes", path.display());
-        }
-        let partition = Self {
-            source_fingerprint,
-            block_offsets,
-            relevant_source_indices,
-            background_corner_energy,
-        };
-        validate_partition_shape(&partition)?;
-        Ok(partition)
     }
 }
 
@@ -342,28 +290,8 @@ fn write_u64(writer: &mut impl Write, value: u64) -> Result<()> {
     Ok(())
 }
 
-fn read_u32(reader: &mut impl Read) -> Result<u32> {
-    Ok(u32::from_le_bytes(read_array::<4>(reader)?))
-}
-
-fn read_u64(reader: &mut impl Read) -> Result<u64> {
-    Ok(u64::from_le_bytes(read_array::<8>(reader)?))
-}
-
-fn read_u32_vector(reader: &mut impl Read, length: usize) -> Result<Vec<u32>> {
-    (0..length).map(|_| read_u32(reader)).collect()
-}
-
-fn read_array<const LENGTH: usize>(reader: &mut impl Read) -> Result<[u8; LENGTH]> {
-    let mut bytes = [0_u8; LENGTH];
-    reader.read_exact(&mut bytes)?;
-    Ok(bytes)
-}
-
 #[cfg(test)]
 mod tests {
-    use tempfile::tempdir;
-
     use super::*;
 
     const TEST_SOURCE_COUNT: u32 = 34;
@@ -411,20 +339,5 @@ mod tests {
             partition.source_indices_for_block(1),
             &(12..TEST_SOURCE_COUNT).collect::<Vec<_>>()
         );
-    }
-
-    #[test]
-    fn persisted_partition_round_trips_and_rejects_another_source_order() {
-        let incidence = compact_incidence();
-        let energies = vec![[1.0; PERIOD_COUNT]; incidence.corner_source_indices.len()];
-        let partition = build_relevant_source_partition(&incidence, &energies, 91).unwrap();
-        let directory = tempdir().unwrap();
-        let path = directory.path().join("tile.rsp");
-        partition.write_to(&path).unwrap();
-        assert_eq!(
-            RelevantSourcePartition::read_from(&path, 91).unwrap(),
-            partition
-        );
-        assert!(RelevantSourcePartition::read_from(&path, 92).is_err());
     }
 }
