@@ -1,8 +1,8 @@
 //! Surface-layer stream worker — road, rail, industrial, building and airport
 //! ground ops from one preparation, at one wave's zoom.
 //!
-//! Cells arrive one per stdin line and each one answers with `start`, then
-//! `done` or `fail`, on stderr:
+//! Cells arrive one per stdin line and each one answers on stderr with `start`,
+//! then `done` or `fail`; stdout stays empty:
 //!
 //!   printf '841e309ffffffff\n843e191ffffffff layers=road,rail\n' | \
 //!     NOISE_GPU_PREPARED=/…/prepared relevant-source-surface \
@@ -22,6 +22,14 @@ use relevant_source_gpu::relevant_source_runner::{
 /// The prepared root every GPU engine of the fleet is handed by its worker.
 const PREPARED_ROOT_VARIABLE: &str = "NOISE_GPU_PREPARED";
 
+/// Paint the surface layers of the H3 R4 cells arriving on stdin.
+///
+/// The lifecycle lines — `start <cell> <unix_ms>` when the card starts a cell,
+/// then `done <cell> <statistics>` or `fail <cell> <message>` — are written to
+/// STDERR, one per cell, and STDOUT stays empty. That is this painter's stated
+/// contract, not a habit inherited from another binary: a supervisor can read
+/// the protocol off one stream, and everything the engine's libraries print
+/// arrives on that same stream in order with it.
 #[derive(Debug, Parser)]
 struct Arguments {
     /// Tile root: every painted tile lands at `<output>/<layer>/{z}/{x}/{y}.bin`.

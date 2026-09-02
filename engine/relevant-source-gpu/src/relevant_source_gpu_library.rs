@@ -1,6 +1,7 @@
 //! Relevant-source GPU painter: source encoding, persisted block partitions, and the cell stream.
 //!
-//! `cell_stream` is the `--stream` wire (cells in, `start`/`done`/`fail` out),
+//! `cell_stream` is the `--stream` wire: cells in on stdin, `start`/`done`/`fail`
+//! out on stderr with stdout left empty,
 //! `surface_layers` the five-layer table every module indexes,
 //! `cell_preparation` one cell's sources on the host and on the card,
 //! `relevant_source_runner` the producer/painter pipeline over the stream, and

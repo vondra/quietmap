@@ -1,6 +1,10 @@
 //! The `--stream` wire of the surface painter: one cell per stdin line in, one
 //! `start` / `done` / `fail` line per cell out on stderr.
 //!
+//! STDERR is the protocol's stream and stdout carries nothing at all, so a
+//! supervisor reads one stream and sees the engine's own library output
+//! interleaved with the lifecycle lines in the order it happened.
+//!
 //! The orchestrator parses those three prefixes and nothing else, so every
 //! line here is one line: a `fail` message is collapsed to single spaces
 //! before it is written.
