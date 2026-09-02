@@ -37,7 +37,7 @@ if [ "$HALF" != "node" ]; then
 
   step "engine: rustfmt + clippy + tests"
   cargo fmt --manifest-path engine/Cargo.toml --all -- --check
-  for crate in noise-compute source-reader tile-painter; do
+  for crate in noise-compute source-reader tile-painter relevant-source-gpu; do
     (cd engine && cargo clippy --locked -p "$crate" --all-targets -- -D warnings \
       && cargo test --locked -p "$crate" --all-targets)
   done

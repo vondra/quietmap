@@ -34,4 +34,27 @@ env \
     --no-default-features --features gpu \
     --bin gpu-surface --bin gpu-airborne
 echo "NVCC_ROLE_COMPILE=PASS role=stock"
+# The relevant-source painter: its build script compiles the kernel, generates
+# every physics constant from the CPU sources and fails on any .f64 PTX opcode
+# (the f64 gate), and its gpu-feature tests run without opening a CUDA context.
+echo "NVCC_ROLE_COMPILE=BEGIN role=relevant-source features=gpu arch=sm_120"
+env \
+  CARGO_TARGET_DIR="$target_root/relevant-source" \
+  PATH="$(dirname "$NVCC"):$PATH" \
+  cargo build --release --locked \
+    --manifest-path "$ROOT/engine/relevant-source-gpu/Cargo.toml" \
+    --features gpu --bin relevant-source-surface
+env \
+  CARGO_TARGET_DIR="$target_root/relevant-source" \
+  PATH="$(dirname "$NVCC"):$PATH" \
+  cargo clippy --release --locked \
+    --manifest-path "$ROOT/engine/relevant-source-gpu/Cargo.toml" \
+    --features gpu --all-targets -- -D warnings
+env \
+  CARGO_TARGET_DIR="$target_root/relevant-source" \
+  PATH="$(dirname "$NVCC"):$PATH" \
+  cargo test --release --locked \
+    --manifest-path "$ROOT/engine/relevant-source-gpu/Cargo.toml" \
+    --features gpu
+echo "NVCC_ROLE_COMPILE=PASS role=relevant-source f64_gate=passed"
 echo "NVCC_ROLE_CHECK=PASS role=stock arch=sm_120 cuda_context=not_opened"
