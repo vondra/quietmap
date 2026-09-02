@@ -100,6 +100,23 @@
       },
       "selected_role": "surface-stock-v1"
     },
+    "relevant-source-production": {
+      "kind": "gpu",
+      "roles": {
+        "relevant-source-stock-v1": {
+          "binary": "relevant-source-surface",
+          "cargo_features": [
+            "gpu"
+          ],
+          "manifest": "engine/relevant-source-gpu/Cargo.toml",
+          "model_role": "stock",
+          "package": "relevant-source-gpu",
+          "ptx": [],
+          "required_ptx_entries": []
+        }
+      },
+      "selected_role": "relevant-source-stock-v1"
+    },
     "surface-cpu-production": {
       "kind": "cpu",
       "roles": {

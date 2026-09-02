@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const spec = JSON.parse(readFileSync(join(root, 'scripts', 'layer-spec.json'), 'utf8'))
+const eras = JSON.parse(readFileSync(join(root, 'scripts', 'output-versions.json'), 'utf8'))
 
 const roleContract = join(root, 'scripts', 'gpu_model_role.py')
 const roleContractResult = spawnSync('python3', [
@@ -59,8 +60,55 @@ for (const [groupName, group] of Object.entries(spec.groups)) {
       `groups.${groupName}.layers references unknown layer ${layerName}`)
     for (const arrow of buildableArrowsByLayer[layerName]) buildableArrows.add(arrow)
   }
-  assert(buildableArrows.has(group.seed_arrow),
-    `groups.${groupName}.seed_arrow ${group.seed_arrow} is not buildable for the group`)
+  // A seed arrow exists to fill a worker's {SEED} placeholder and for nothing
+  // else, so a group whose workers take no {SEED} must not carry one.
+  const seedsAWorker = Object.values(spec.worker_types)
+    .some(worker => worker.group === groupName && worker.flags.includes('{SEED}'))
+  if (seedsAWorker) {
+    assert(buildableArrows.has(group.seed_arrow),
+      `groups.${groupName}.seed_arrow ${group.seed_arrow} is not buildable for the group`)
+  } else {
+    assert(group.seed_arrow === undefined,
+      `groups.${groupName} has no worker taking {SEED}, so its seed_arrow is read by nobody`)
+  }
+}
+
+// The layer -> renderer binding: exactly the worker type the orchestrator picks
+// for the layer's group (its GPU worker when it has one, else its only CPU one).
+function productionBinary(layerName) {
+  const groups = Object.entries(spec.groups).filter(([, group]) => group.layers.includes(layerName))
+  assert(groups.length === 1,
+    `layer ${layerName} is in ${groups.length} groups; one layer is painted by one renderer`)
+  const workers = Object.values(spec.worker_types).filter(worker => worker.group === groups[0][0])
+  assert(workers.length > 0, `group ${groups[0][0]} has no worker type`)
+  const selected = workers.some(worker => worker.gpu) ? workers.filter(worker => worker.gpu) : workers
+  const binaries = new Set(selected.map(worker => worker.binary))
+  assert(binaries.size === 1,
+    `group ${groups[0][0]} selects ${binaries.size} binaries; the orchestrator picks one`)
+  return [...binaries][0]
+}
+
+const ERA = /^[0-9a-f]{7,40}(-[a-z0-9]+)*$/
+const layerNames = Object.keys(spec.layers)
+for (const table of ['base', 'renderers']) {
+  assert([...Object.keys(eras[table])].sort().join(',') === [...layerNames].sort().join(','),
+    `output-versions.${table} must cover exactly the spec's layers`)
+}
+for (const [layerName, era] of Object.entries(eras.base)) {
+  assert(ERA.test(era), `output-versions.base.${layerName} is not a commit era: ${era}`)
+}
+for (const [zoom, table] of Object.entries(eras.zoom)) {
+  assert(/^[0-9]+$/.test(zoom), `output-versions.zoom.${zoom} is not a zoom`)
+  for (const [layerName, era] of Object.entries(table)) {
+    assert(eras.base[layerName], `output-versions.zoom.${zoom} names unknown layer ${layerName}`)
+    assert(ERA.test(era), `output-versions.zoom.${zoom}.${layerName} is not a commit era: ${era}`)
+  }
+}
+for (const layerName of layerNames) {
+  const painter = productionBinary(layerName)
+  assert(eras.renderers[layerName] === painter,
+    `output-versions.renderers.${layerName} says ${eras.renderers[layerName]} but layer-spec paints `
+    + `${layerName} with ${painter}: bump that layer's era in the same commit`)
 }
 
 assert(Object.keys(selectedArtifacts.workers).length === Object.keys(spec.worker_types).length,
@@ -88,4 +136,5 @@ assert(exclusiveMutation.status !== 0
       'GLOBAL input classified exclusive: scripts/model-role-spec.json (layer road)'),
 'layer-codever accepted the model-role spec as a layer-exclusive input')
 
-console.log(`layer-spec: ${Object.keys(spec.layers).length} layers and ${Object.keys(spec.groups).length} groups OK`)
+console.log(`layer-spec: ${Object.keys(spec.layers).length} layers, ${Object.keys(spec.groups).length} groups`
+  + ` and ${Object.keys(eras.base).length} painted-byte eras OK`)

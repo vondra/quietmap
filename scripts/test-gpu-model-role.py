@@ -18,6 +18,7 @@ from pathlib import Path
 
 from gpu_model_role import (
     reviewed_define_names,
+    MODEL_SOURCE_DIRS,
     W1_ACCEPTED_NOISE_GPU_DEFINES,
     W1_ACCEPTED_REQUIRED_PTX_ENTRIES,
     W2_STRIDE4_NOISE_GPU_DEFINES,
@@ -47,6 +48,47 @@ def sha256(path: Path) -> str:
 def write_executable(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
     path.chmod(0o755)
+
+
+def write_model_source_fixture(root: Path) -> Path:
+    """A minimal product tree covering the whole model-source closure, derived
+    from MODEL_SOURCE_DIRS so a new model crate cannot leave the fixture behind.
+    Returns the CUDA header the digest tests mutate."""
+    for relative in MODEL_SOURCE_DIRS:
+        (root / relative).mkdir(parents=True, exist_ok=True)
+        (root / relative / "Cargo.toml").write_text(
+            "[package]\nname='fixture'\n", encoding="utf-8"
+        )
+    header = root / "engine/noise-gpu/kernels/qm_fixture.cuh"
+    header.parent.mkdir(parents=True, exist_ok=True)
+    header.write_text("#define FIXTURE 1\n", encoding="utf-8")
+    (root / ".cargo").mkdir(parents=True, exist_ok=True)
+    (root / ".cargo/config.toml").write_text("[build]\n", encoding="utf-8")
+    (root / "rust-toolchain.toml").write_text("[toolchain]\n", encoding="utf-8")
+    return header
+
+
+# The W1 and W2 candidate roles belong to gpu-surface, the benchmark painter
+# layer-spec.json no longer deploys — production surface tiles come from
+# relevant-source-surface. The profile mechanism they exercise is still the one
+# a future candidate will use, so these tests bind two workers to their family
+# in a copy of the real layer spec.
+CANDIDATE_WORKERS = ("gpu-surface-candidate", "gpu-surface-candidate-pair")
+
+
+def layer_spec_with_candidate_workers(directory: Path) -> Path:
+    spec = json.loads((ROOT / "scripts/layer-spec.json").read_text(encoding="utf-8"))
+    for worker in CANDIDATE_WORKERS:
+        spec["worker_types"][worker] = {
+            "group": "surface",
+            "gpu": True,
+            "artifact_family": "surface-production",
+            "binary": "gpu-surface",
+            "flags": "--stream --layers road,rail --zoom {ZOOM} --output {OUTPUT}",
+        }
+    path = directory / "layer-spec.json"
+    path.write_text(json.dumps(spec), encoding="utf-8")
+    return path
 
 
 def reseal_artifact(artifact: Path) -> None:
@@ -145,39 +187,36 @@ class ModelRoleSpecTests(unittest.TestCase):
         self.assertEqual(contract["output_abi_version"], 3)
 
     def test_profile_requirements_resolve_w1_and_w2_without_selecting_them(self) -> None:
-        selected = deployment_contract(SPEC_PATH, ROOT / "scripts/layer-spec.json")
-        w1 = deployment_contract(
-            SPEC_PATH, ROOT / "scripts/layer-spec.json", {"gpu-line": "w1"}
-        )
-        w2 = deployment_contract(
-            SPEC_PATH,
-            ROOT / "scripts/layer-spec.json",
-            {"gpu-line": "w2-stride4"},
-        )
-        self.assertEqual(selected["workers"]["gpu-line"]["model_role"], "stock")
-        self.assertEqual(w1["workers"]["gpu-line"]["resolved_role"],
+        first, second = CANDIDATE_WORKERS
+        with tempfile.TemporaryDirectory() as temporary:
+            layer_spec = layer_spec_with_candidate_workers(Path(temporary))
+            selected = deployment_contract(SPEC_PATH, layer_spec)
+            w1 = deployment_contract(SPEC_PATH, layer_spec, {first: "w1"})
+            w2 = deployment_contract(SPEC_PATH, layer_spec, {first: "w2-stride4"})
+        self.assertEqual(selected["workers"][first]["model_role"], "stock")
+        self.assertEqual(w1["workers"][first]["resolved_role"],
                          "surface-w1-z12-accepted-v1")
-        self.assertEqual(w2["workers"]["gpu-line"]["resolved_role"],
+        self.assertEqual(w2["workers"][first]["resolved_role"],
                          "surface-w2-z13-stride4-v1")
-        self.assertEqual(w1["workers"]["gpu-road"], w1["workers"]["gpu-line"])
-        self.assertEqual(w2["workers"]["gpu-rail"], w2["workers"]["gpu-line"])
+        # One requirement moves every worker of that family, and no other.
+        self.assertEqual(w1["workers"][second], w1["workers"][first])
+        self.assertEqual(w2["workers"][second], w2["workers"][first])
+        self.assertEqual(w1["workers"]["gpu-surface"], selected["workers"]["gpu-surface"])
         self.assertNotEqual(selected["line_model_role_sha256"],
                             w1["line_model_role_sha256"])
         self.assertNotEqual(w1["line_model_role_sha256"],
                             w2["line_model_role_sha256"])
 
     def test_profile_requirements_reject_unknown_ambiguous_and_conflicting_roles(self) -> None:
-        with self.assertRaisesRegex(ContractError, "has 0 roles"):
-            deployment_contract(
-                SPEC_PATH, ROOT / "scripts/layer-spec.json", {"gpu-line": "unknown"}
-            )
-        with self.assertRaisesRegex(ContractError, "conflicting model roles"):
-            deployment_contract(
-                SPEC_PATH,
-                ROOT / "scripts/layer-spec.json",
-                {"gpu-line": "w1", "gpu-road": "w2-stride4"},
-            )
+        first, second = CANDIDATE_WORKERS
         with tempfile.TemporaryDirectory() as temporary:
+            layer_spec = layer_spec_with_candidate_workers(Path(temporary))
+            with self.assertRaisesRegex(ContractError, "has 0 roles"):
+                deployment_contract(SPEC_PATH, layer_spec, {first: "unknown"})
+            with self.assertRaisesRegex(ContractError, "conflicting model roles"):
+                deployment_contract(
+                    SPEC_PATH, layer_spec, {first: "w1", second: "w2-stride4"}
+                )
             duplicate_spec = copy.deepcopy(self.spec)
             duplicate_spec["families"]["surface-production"]["roles"][
                 "surface-alternative-stock-v1"
@@ -189,9 +228,7 @@ class ModelRoleSpecTests(unittest.TestCase):
             path = Path(temporary) / "ambiguous-spec.json"
             path.write_text(json.dumps(duplicate_spec), encoding="utf-8")
             with self.assertRaisesRegex(ContractError, "has 2 roles"):
-                deployment_contract(
-                    path, ROOT / "scripts/layer-spec.json", {"gpu-line": "stock"}
-                )
+                deployment_contract(path, layer_spec, {first: "stock"})
 
     def test_profile_requirements_reject_falsy_non_objects_in_api_and_cli(self) -> None:
         for invalid in ([], False, 0, ""):
@@ -225,7 +262,7 @@ class ModelRoleSpecTests(unittest.TestCase):
         layer_spec = json.loads((ROOT / "scripts/layer-spec.json").read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "layer-spec.json"
-            layer_spec["worker_types"]["cpu-road"]["artifact_family"] = "aircraft-cpu-production"
+            layer_spec["worker_types"]["cpu-cruise"]["artifact_family"] = "surface-cpu-production"
             path.write_text(json.dumps(layer_spec), encoding="utf-8")
             with self.assertRaises(ContractError):
                 deployment_contract(SPEC_PATH, path)
@@ -233,19 +270,7 @@ class ModelRoleSpecTests(unittest.TestCase):
     def test_cuda_header_changes_the_shared_model_source_digest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            for directory in (
-                "engine/noise-compute", "engine/noise-gpu/kernels",
-                "engine/source-reader", "engine/tile-painter", ".cargo",
-            ):
-                (root / directory).mkdir(parents=True, exist_ok=True)
-            for crate in ("noise-compute", "noise-gpu", "source-reader", "tile-painter"):
-                (root / f"engine/{crate}/Cargo.toml").write_text(
-                    "[package]\nname='fixture'\n", encoding="utf-8"
-                )
-            header = root / "engine/noise-gpu/kernels/qm_fixture.cuh"
-            header.write_text("#define FIXTURE 1\n", encoding="utf-8")
-            (root / ".cargo/config.toml").write_text("[build]\n", encoding="utf-8")
-            (root / "rust-toolchain.toml").write_text("[toolchain]\n", encoding="utf-8")
+            header = write_model_source_fixture(root)
             before = model_source_recipe_sha256(root)
             header.write_text("#define FIXTURE 2\n", encoding="utf-8")
             self.assertNotEqual(before, model_source_recipe_sha256(root))
@@ -254,22 +279,7 @@ class ModelRoleSpecTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             scratch = Path(temporary)
             product = scratch / "product"
-            for directory in (
-                "engine/noise-compute", "engine/noise-gpu/kernels",
-                "engine/source-reader", "engine/tile-painter", ".cargo",
-            ):
-                (product / directory).mkdir(parents=True, exist_ok=True)
-            for crate in ("noise-compute", "noise-gpu", "source-reader", "tile-painter"):
-                (product / f"engine/{crate}/Cargo.toml").write_text(
-                    "[package]\nname='fixture'\n", encoding="utf-8"
-                )
-            (product / "engine/noise-gpu/kernels/qm_fixture.cuh").write_text(
-                "#define FIXTURE 1\n", encoding="utf-8"
-            )
-            (product / ".cargo/config.toml").write_text("[build]\n", encoding="utf-8")
-            (product / "rust-toolchain.toml").write_text(
-                "[toolchain]\n", encoding="utf-8"
-            )
+            write_model_source_fixture(product)
             expected = model_source_recipe_sha256(product)
             nested = scratch / "tests/target/quietmap"
             shutil.copytree(product, nested)
@@ -278,20 +288,7 @@ class ModelRoleSpecTests(unittest.TestCase):
     def test_model_source_digest_ignores_crate_target_directories(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            for directory in (
-                "engine/noise-compute", "engine/noise-gpu/kernels",
-                "engine/source-reader", "engine/tile-painter", ".cargo",
-            ):
-                (root / directory).mkdir(parents=True, exist_ok=True)
-            for crate in ("noise-compute", "noise-gpu", "source-reader", "tile-painter"):
-                (root / f"engine/{crate}/Cargo.toml").write_text(
-                    "[package]\nname='fixture'\n", encoding="utf-8"
-                )
-            (root / "engine/noise-gpu/kernels/qm_fixture.cuh").write_text(
-                "#define FIXTURE 1\n", encoding="utf-8"
-            )
-            (root / ".cargo/config.toml").write_text("[build]\n", encoding="utf-8")
-            (root / "rust-toolchain.toml").write_text("[toolchain]\n", encoding="utf-8")
+            write_model_source_fixture(root)
             before = model_source_recipe_sha256(root)
             crate_target = root / "engine/noise-compute/target/debug"
             crate_target.mkdir(parents=True)
@@ -306,20 +303,7 @@ class ModelRoleSpecTests(unittest.TestCase):
     def test_model_source_digest_rejects_unpruned_directory_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            for directory in (
-                "engine/noise-compute", "engine/noise-gpu/kernels",
-                "engine/source-reader", "engine/tile-painter", ".cargo",
-            ):
-                (root / directory).mkdir(parents=True, exist_ok=True)
-            for crate in ("noise-compute", "noise-gpu", "source-reader", "tile-painter"):
-                (root / f"engine/{crate}/Cargo.toml").write_text(
-                    "[package]\nname='fixture'\n", encoding="utf-8"
-                )
-            (root / "engine/noise-gpu/kernels/qm_fixture.cuh").write_text(
-                "#define FIXTURE 1\n", encoding="utf-8"
-            )
-            (root / ".cargo/config.toml").write_text("[build]\n", encoding="utf-8")
-            (root / "rust-toolchain.toml").write_text("[toolchain]\n", encoding="utf-8")
+            write_model_source_fixture(root)
             elsewhere = root / "elsewhere"
             elsewhere.mkdir()
             (elsewhere / "sneaky.rs").write_text("fn sneaky() {}\n", encoding="utf-8")
@@ -686,17 +670,16 @@ echo 'ptxas info : Function properties for line line_binned_fused line_multifide
         for model_role, role_name in expected_roles.items():
             result = self.run_builder(self.command(role_name))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            requirements = {"gpu-line": model_role}
+            requirements = {CANDIDATE_WORKERS[0]: model_role}
+            layer_spec = layer_spec_with_candidate_workers(self.root)
             identity = artifact_set(
                 SPEC_PATH,
-                ROOT / "scripts/layer-spec.json",
+                layer_spec,
                 self.artifacts,
                 ["surface-production"],
                 requirements,
             )
-            expected_contract = deployment_contract(
-                SPEC_PATH, ROOT / "scripts/layer-spec.json", requirements
-            )
+            expected_contract = deployment_contract(SPEC_PATH, layer_spec, requirements)
             artifact = identity["artifacts"]["surface-production"]
             self.assertEqual(artifact["resolved_role"], role_name)
             self.assertEqual(artifact["model_role"], model_role)
@@ -713,7 +696,7 @@ echo 'ptxas info : Function properties for line line_binned_fused line_multifide
                     str(ROOT / "scripts/gpu_model_role.py"),
                     "artifact-set",
                     str(SPEC_PATH),
-                    str(ROOT / "scripts/layer-spec.json"),
+                    str(layer_spec),
                     str(self.artifacts),
                     "surface-production",
                     "--worker-model-roles-json",

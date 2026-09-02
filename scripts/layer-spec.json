@@ -1,5 +1,5 @@
 {
-  "_doc": "SINGLE SOURCE OF TRUTH for the cluster's layer/group topology. hub.mjs (JSON.parse), world-stamps.py (json.load), provision.sh + stream-region-to-box.sh (jq) all DERIVE from this \u2014 never re-encode a group's layers/arrows/seed/binary by hand (that is the fix-one-miss-the-rest drift this file removes). A layer's arrows is the orchestration read set currently consumed for data-version invalidation, region transport and stage inclusion; this documentation-only change neither changes nor certifies that set's composition. dependency_arrows documents the subset of those declared arrows whose presence alone must not create a task; every dependency arrow is also in arrows. This field is classification metadata only: current readers intentionally continue to consume arrows unchanged, and the planner still over-approximates buildability from arrows until the pending dual-reviewed read-set/buildability split lands. Derived, NOT stored: a group's stage-excludes = every layer arrow NOT in its own layers; the tile-layer set = the union of all groups' layers. NOT covered here: layer-codever.py's per-layer engine-source-file partition (DEFAULT_EXCL) \u2014 that is code-versioning, not topology, and stays its own authority. Placeholders {OUTPUT} {SEED} {H3R4} {PREP} {ZOOM} in worker_types.flags are substituted at launch (provision.sh / worker.py).",
+  "_doc": "SINGLE SOURCE OF TRUTH for the cluster's layer/group topology. The orchestrator, world-stamps.py (json.load), provision.sh + stream-region-to-box.sh (jq) all DERIVE from this — never re-encode a group's layers/arrows/seed/binary by hand (that is the fix-one-miss-the-rest drift this file removes). Its SIBLING SSOT is scripts/output-versions.json, the painted-byte era per layer: a layer whose worker binary changes here needs its era bumped there in the SAME commit, which scripts/test-layer-spec.mjs enforces. A layer's arrows is the orchestration read set currently consumed for data-version invalidation, region transport and stage inclusion; this documentation-only change neither changes nor certifies that set's composition. dependency_arrows documents the subset of those declared arrows whose presence alone must not create a task; every dependency arrow is also in arrows. This field is classification metadata only: current readers intentionally continue to consume arrows unchanged, and the planner still over-approximates buildability from arrows until the pending dual-reviewed read-set/buildability split lands. Derived, NOT stored: a group's stage-excludes = every layer arrow NOT in its own layers; the tile-layer set = the union of all groups' layers. NOT covered here: layer-codever.py's per-layer engine-source-file partition (DEFAULT_EXCL) — that is code-versioning, not topology, and stays its own authority. Placeholders {OUTPUT} {SEED} {H3R4} {PREP} {ZOOM} in worker_types.flags are substituted at launch. relevant-source-surface takes its prepared root from the environment variable NOISE_GPU_PREPARED and derives its h3r4 tree from it, so its flags carry none of {PREP} {H3R4} {SEED}; seed_arrow exists exactly for the groups whose flags still carry {SEED}.",
   "layers": {
     "road": {
       "arrows": [
@@ -71,62 +71,16 @@
     }
   },
   "groups": {
-    "line": {
+    "surface": {
+      "_doc": "The five ground layers one relevant-source-surface process paints from ONE preparation of a cell: it loads the cell's ring once, builds each 4x4 batch's terrain halo once, and paints whatever subset the cell line's layers= names. GPU-ONLY BY CONSTRUCTION — there is deliberately no CPU worker type here, and a planner reads the absence of one as 'this group needs a card'. build-heatmap-surface stays in the tree as the etalon producer for parity work; it is a DIFFERENT renderer and must never paint production tiles for these layers.",
       "layers": [
         "road",
-        "rail"
-      ],
-      "seed_arrow": "roads.arrow",
-      "rasters": "surface"
-    },
-    "rest": {
-      "layers": [
+        "rail",
         "industrial",
         "building",
         "aircraft-ground"
       ],
-      "seed_arrow": "airport_traffic.arrow",
       "rasters": "surface"
-    },
-    "industrial": {
-      "layers": [
-        "industrial"
-      ],
-      "seed_arrow": "industrial.arrow",
-      "rasters": "surface",
-      "on_demand": true
-    },
-    "ground": {
-      "layers": [
-        "aircraft-ground"
-      ],
-      "seed_arrow": "airport_traffic.arrow",
-      "rasters": "surface",
-      "on_demand": true
-    },
-    "building": {
-      "layers": [
-        "building"
-      ],
-      "seed_arrow": "buildings.arrow",
-      "rasters": "surface",
-      "on_demand": true
-    },
-    "road": {
-      "layers": [
-        "road"
-      ],
-      "seed_arrow": "roads.arrow",
-      "rasters": "surface",
-      "on_demand": true
-    },
-    "rail": {
-      "layers": [
-        "rail"
-      ],
-      "seed_arrow": "railways.arrow",
-      "rasters": "surface",
-      "on_demand": true
     },
     "cruise": {
       "layers": [
@@ -146,61 +100,12 @@
     }
   },
   "worker_types": {
-    "gpu-line": {
-      "group": "line",
+    "gpu-surface": {
+      "group": "surface",
       "gpu": true,
-      "artifact_family": "surface-production",
-      "binary": "gpu-surface",
-      "flags": "--stream --layers road,rail --zoom {ZOOM} --output {OUTPUT}"
-    },
-    "cpu-line": {
-      "group": "line",
-      "gpu": false,
-      "artifact_family": "surface-cpu-production",
-      "binary": "build-heatmap-surface",
-      "flags": "--stream --source ground --exclude industrial --exclude building --exclude aircraft-ground --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}"
-    },
-    "cpu-rest": {
-      "group": "rest",
-      "gpu": false,
-      "artifact_family": "surface-cpu-production",
-      "binary": "build-heatmap-surface",
-      "flags": "--stream --source ground --exclude road --exclude rail --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}"
-    },
-    "cpu-industrial": {
-      "group": "industrial",
-      "gpu": false,
-      "artifact_family": "surface-cpu-production",
-      "binary": "build-heatmap-surface",
-      "flags": "--stream --source ground --exclude road --exclude rail --exclude building --exclude aircraft-ground --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}"
-    },
-    "cpu-ground": {
-      "group": "ground",
-      "gpu": false,
-      "artifact_family": "surface-cpu-production",
-      "binary": "build-heatmap-surface",
-      "flags": "--stream --source ground --exclude road --exclude rail --exclude industrial --exclude building --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}"
-    },
-    "cpu-building": {
-      "group": "building",
-      "gpu": false,
-      "artifact_family": "surface-cpu-production",
-      "binary": "build-heatmap-surface",
-      "flags": "--stream --source ground --exclude road --exclude rail --exclude industrial --exclude aircraft-ground --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}"
-    },
-    "cpu-road": {
-      "group": "road",
-      "gpu": false,
-      "artifact_family": "surface-cpu-production",
-      "binary": "build-heatmap-surface",
-      "flags": "--stream --source ground --exclude rail --exclude industrial --exclude building --exclude aircraft-ground --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}"
-    },
-    "cpu-rail": {
-      "group": "rail",
-      "gpu": false,
-      "artifact_family": "surface-cpu-production",
-      "binary": "build-heatmap-surface",
-      "flags": "--stream --source ground --exclude road --exclude industrial --exclude building --exclude aircraft-ground --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}"
+      "artifact_family": "relevant-source-production",
+      "binary": "relevant-source-surface",
+      "flags": "--stream --zoom {ZOOM} --output {OUTPUT}"
     },
     "cpu-cruise": {
       "group": "cruise",
@@ -222,20 +127,6 @@
       "artifact_family": "aircraft-cpu-production",
       "binary": "build-heatmap-aircraft",
       "flags": "--stream --source airborne --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}/aircraft-airborne"
-    },
-    "gpu-road": {
-      "group": "road",
-      "gpu": true,
-      "artifact_family": "surface-production",
-      "binary": "gpu-surface",
-      "flags": "--stream --layers road --zoom {ZOOM} --output {OUTPUT}"
-    },
-    "gpu-rail": {
-      "group": "rail",
-      "gpu": true,
-      "artifact_family": "surface-production",
-      "binary": "gpu-surface",
-      "flags": "--stream --layers rail --zoom {ZOOM} --output {OUTPUT}"
     }
   }
 }

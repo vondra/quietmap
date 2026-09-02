@@ -128,6 +128,17 @@ ROLE_SHAPES = {
         "ptx": ["scatter.ptx"],
         "entries": ["line_binned_fused"],
     },
+    # The production surface painter. Its CUDA is compiled to one static
+    # archive linked into the binary, so it publishes no PTX of its own: the
+    # binary's hash covers its whole device image.
+    "relevant-source-surface": {
+        "family": "relevant-source-production",
+        "kind": "gpu",
+        "manifest": "engine/relevant-source-gpu/Cargo.toml",
+        "package": "relevant-source-gpu",
+        "ptx": [],
+        "entries": [],
+    },
     "build-heatmap-surface": {
         "family": "surface-cpu-production",
         "kind": "cpu",
@@ -156,6 +167,7 @@ ROLE_SHAPES = {
 
 REQUIRED_FAMILIES = frozenset(shape["family"] for shape in ROLE_SHAPES.values())
 LINE_ROLE_FAMILIES = (
+    "relevant-source-production",
     "surface-production",
     "surface-cpu-production",
     "popup-production",
@@ -163,6 +175,7 @@ LINE_ROLE_FAMILIES = (
 MODEL_SOURCE_DIRS = (
     "engine/noise-compute",
     "engine/noise-gpu",
+    "engine/relevant-source-gpu",
     "engine/source-reader",
     "engine/tile-painter",
 )
