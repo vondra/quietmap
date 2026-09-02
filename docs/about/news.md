@@ -13,9 +13,10 @@ and real heights. In Prague we replaced a flat "eight metres" guess with over
 174,000 buildings measured from aerial survey data, so the tenement blocks of
 Žižkov finally stand at their true 19 to 27 metres. Where screening decides the
 answer, the change is large: at a receiver 120 m from the M25 motorway in
-England our estimate used to sit about ten decibels above the official English
-noise map, because the road's cutting and its noise wall were missing from our
-data. It now sits about two decibels above it.
+England our last estimate before the fix (28 July 2026) was 70.09 dB, 12.9 dB
+above the official English noise map's 57.22 dB at that spot, because the
+road's cutting and its noise wall were missing from our data. It now sits about
+two decibels above it.
 
 A physics review also turned up several errors we have since fixed — ground
 attenuation was disappearing over paved surfaces, and the shadow behind a

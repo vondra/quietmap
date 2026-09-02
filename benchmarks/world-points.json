@@ -254,7 +254,7 @@
    72.1
   ],
   "known_gap": "road-R26-missing-barrier-data",
-  "tolerance_note": "audit model 66.9 (+9.7): no noise barriers in our data (8 segments in the whole NW-London hex) + 30 m DEM smooths the cutting (road-report R26); band = Defra ±3; heals only via barrier-data import (backlog F4), not B8 code wiring | v2 2026-07-09: band=live 67.96 +/-2; Defra pixel stays external.band -> +8.8 EXTERNAL-GAP until barrier-data import (backlog F4)",
+  "tolerance_note": "audit model 66.9 (+9.7): no noise barriers in our data (8 segments in the whole NW-London hex) + 30 m DEM smooths the cutting (road-report R26); band = Defra ±3; heals only via barrier-data import (backlog F4), not B8 code wiring | v2 2026-07-09: band=live 67.96 +/-2; Defra pixel stays external.band -> +8.8 EXTERNAL-GAP until barrier-data import (backlog F4) | v3 2026-07-28: band=live 70.09 ±2",
   "caveats": "share between missing barriers / DEM-smoothed cutting / Defra modeling differences unquantified"
  },
  {
