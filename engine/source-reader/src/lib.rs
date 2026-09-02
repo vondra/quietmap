@@ -604,9 +604,12 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
             .delta_db()
             .map(|delta| (winner.stored_class, delta))
     });
-    if let Some((_, delta)) = indoor {
-        wire::attenuate_total_for_indoor_display(&mut result, delta);
-    }
+    // Inside a building the popup publishes the indoor estimate in every level
+    // row, the same quantity the painted tile stores per layer.
+    noise_compute::present::project_result_to_indoor_display(
+        &mut result,
+        indoor.map(|(_, delta)| delta),
+    );
     let wire_result = wire::build_wire_result(
         result,
         lat,

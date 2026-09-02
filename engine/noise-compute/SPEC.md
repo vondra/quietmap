@@ -564,9 +564,23 @@ cells and their donors; outdoor cells are unchanged. If no donor exists, the val
 NO_DATA. It is applied after collapse and area fill to all supported layers by the CPU,
 GPU-host, and aircraft runners.
 
-Implementation:
-[src/envelope.rs](src/envelope.rs) and
-[engine/tile-painter/src/source_loader_obstacle.rs](../tile-painter/src/source_loader_obstacle.rs).
+The popup publishes the same quantity for the same receivers (owner decision
+2026-09-02). When the query point is inside an enclosed footprint, max(0, L_facade -
+envelope_delta) is applied to every received Lden LEVEL the response carries: the
+totals, the per-layer source rows, the contributor rows with the aircraft period
+triples they carry, and the Other-sources leftover. The facade total stays on the wire
+as facade_lden so the popup can name the step it took. Per-effect attenuations are
+differences and are unchanged. Emission, per-band spectra, the per-segment traces and
+the aircraft peak-event (Lmax) statistics stay at the facade: they decompose the
+outdoor source-to-wall path or measure a different quantity, and one broadband constant
+would misname them. The popup states that split in the line it prints above the rows.
+
+Implementation: the arithmetic is named in [src/envelope.rs](src/envelope.rs) as
+indoor_level_db, which the popup projection in [src/present.rs](src/present.rs) calls.
+The per-tile application in
+[engine/tile-painter/src/source_loader_obstacle.rs](../tile-painter/src/source_loader_obstacle.rs)
+still restates the same expression inline; routing it through indoor_level_db is the
+open follow-up that leaves one statement of this fact.
 
 ## 10. Generated data, provenance, and ownership
 

@@ -20,11 +20,14 @@ export interface NoiseDetailContentProps {
   maxSources?: number
 }
 
-interface IndoorCalculation {
+// Present only when the query point is inside an enclosed building. Every LEVEL
+// the popup then shows — the badge, the per-layer breakdown and each contributor
+// row's dB — is already the indoor estimate; these fields say where it came
+// from. The per-source detail panels keep their outdoor path figures.
+interface IndoorEstimate {
   buildingType: string
   facadeLden: number
   reductionDb: number
-  indoorLden: number
   tiltedLden: number | null
 }
 
@@ -34,7 +37,12 @@ interface IndoorCalculation {
 // DetailSkeleton until both the ~1.5 s noise compute AND this chunk land.
 export default function NoiseDetailContent({ data, onHighlight, maxSources }: NoiseDetailContentProps) {
   const [centerLat, centerLng] = data.h3_center
-  const indoorCalculation = getIndoorCalculation(data)
+  const indoorEstimate = getIndoorEstimate(data)
+  // The popup's 0 dB display floor, applied to this list the way the per-layer
+  // rows already apply it. The engine keeps a contributor at exactly 0 dB, which
+  // indoors is every source quieter than the envelope step — at LKPR that was
+  // 16 of 30 rows, all of them inaudible.
+  const audibleContributors = data.top_contributors.filter(c => c.received_lden > 0)
   // Hide silence-sentinel values (sources with no audible contribution at this point).
   // The Rust engine returns periods even for empty source classes; their Lden falls
   // to ~−113 dB (silence) which is meaningless to display in the breakdown.
@@ -44,12 +52,8 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
           .filter(s => s.lden != null && s.lden > 0)
           .map(s => [SOURCE_LABELS[s.source_type] ?? s.source_type, `${s.lden!.toFixed(1)} dB`] as [string, string]),
         { sep: true },
-        ...(indoorCalculation ? [
-          ['Indoors', `~${indoorCalculation.indoorLden.toFixed(1)} dB (estimate)`] as [string, string],
-          indoorCalculationDetail(indoorCalculation),
-        ] : []),
-        ...(indoorCalculation ? [{ sep: true } as const] : []),
         ['Total Lden', `${data.total_lden.toFixed(1)} dB`],
+        ...(indoorEstimate ? ['', indoorEstimateDetail(indoorEstimate)] : []),
       ], 14, 9)
     : ''
 
@@ -114,18 +118,18 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
               )}
             </div>
           </div>
-          <IndoorCalculationBreakdown calculation={indoorCalculation} />
+          <IndoorEstimateNotice estimate={indoorEstimate} />
           {hasSegmentsTab ? (
             <TabStrip
               active={tab}
-              sourceCount={data.top_contributors.length}
+              sourceCount={audibleContributors.length}
               segmentCount={segmentsTotal}
               onChange={(t) => { setTab(t); if (t === 'segments') setSegmentsMounted(true) }}
             />
           ) : (
             <div className="border-b border-border pb-0.5 mb-0.5">
               <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                Noise sources ({data.top_contributors.length})
+                Noise sources ({audibleContributors.length})
               </span>
             </div>
           )}
@@ -134,10 +138,12 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
                 visit. Once mounted, both toggle via display so expanded-row state
                 survives tab switches. */}
             <div style={{ display: showSegments ? 'none' : 'block' }}>
-              {(maxSources ? data.top_contributors.slice(0, maxSources) : data.top_contributors).map((c, i) => (
+              {(maxSources ? audibleContributors.slice(0, maxSources) : audibleContributors).map((c, i) => (
                 <ContributorRow key={`${c.source_type}-${c.osm_id}-${i}`} c={c} onToggle={onHighlight} />
               ))}
-              {data.other_sources_lden !== null && Number.isFinite(data.other_sources_lden) && (
+              {/* Same display floor as the per-layer rows: indoors the leftover
+                  bucket often clamps to 0 dB, which is not worth a row. */}
+              {data.other_sources_lden !== null && data.other_sources_lden > 0 && (
                 <div className="flex items-baseline gap-1.5 px-0 py-1.5 border-t border-border/40 text-xs italic text-muted-foreground/70">
                   <span className="truncate flex-1">Other sources</span>
                   {/* Distance-column placeholder — keeps dB aligned with contributor rows above. */}
@@ -171,19 +177,12 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
   )
 }
 
-function getIndoorCalculation(data: NoiseComputeData): IndoorCalculation | null {
-  if (
-    data.facade_lden == null ||
-    data.envelope_delta_db == null ||
-    data.indoor_lden == null
-  ) {
-    return null
-  }
+function getIndoorEstimate(data: NoiseComputeData): IndoorEstimate | null {
+  if (data.facade_lden == null || data.envelope_delta_db == null) return null
   return {
     buildingType: buildingTypeLabel(data.envelope_class),
     facadeLden: data.facade_lden,
     reductionDb: data.envelope_delta_db,
-    indoorLden: data.indoor_lden,
     tiltedLden: data.indoor_lden_tilted ?? null,
   }
 }
@@ -198,15 +197,18 @@ function buildingTypeLabel(envelopeClass: NoiseComputeData['envelope_class']): s
   }
 }
 
-function IndoorCalculationBreakdown({ calculation }: { calculation: IndoorCalculation | null }) {
-  if (!calculation) return null
+// One line, above the source rows: says that this point is inside a building
+// and that every dB below it is therefore an indoor estimate, with the envelope
+// step and the façade level it was taken from. Hover carries the full wording.
+function IndoorEstimateNotice({ estimate }: { estimate: IndoorEstimate | null }) {
+  if (!estimate) return null
   return (
     <div data-testid="indoor-calculation" className="mb-1 border-b border-border/50">
-      <HoverText title={indoorCalculationDetail(calculation)} className="block" focusable>
+      <HoverText title={indoorEstimateDetail(estimate)} className="block" focusable>
         <span className="flex items-baseline gap-1.5 px-0 py-1 text-xs font-medium">
-          <span className="truncate flex-1">Indoors:</span>
-          <span className="shrink-0 text-right tabular-nums">
-            ~{calculation.indoorLden.toFixed(1)} dB <span className="font-normal text-muted-foreground/70">(estimate)</span>
+          <span className="truncate flex-1">Inside a building — indoor estimates</span>
+          <span className="shrink-0 text-right tabular-nums font-normal text-muted-foreground/70">
+            {estimate.facadeLden.toFixed(1)} dB façade − {estimate.reductionDb.toFixed(0)} dB
           </span>
         </span>
       </HoverText>
@@ -214,11 +216,11 @@ function IndoorCalculationBreakdown({ calculation }: { calculation: IndoorCalcul
   )
 }
 
-function indoorCalculationDetail(calculation: IndoorCalculation): string {
-  const openWindow = calculation.tiltedLden == null
+function indoorEstimateDetail(estimate: IndoorEstimate): string {
+  const openWindow = estimate.tiltedLden == null
     ? ''
-    : ` With an open window: ~${calculation.tiltedLden.toFixed(1)} dB.`
-  return `Outside at the wall: ${calculation.facadeLden.toFixed(1)} dB. A ${calculation.buildingType} typically reduces noise by ~${calculation.reductionDb.toFixed(1)} dB with windows closed.${openWindow} Uncertainty ±8–12 dB; occupant behaviour dominates.`
+    : ` With an open window: ~${estimate.tiltedLden.toFixed(1)} dB.`
+  return `This point is inside a building, so the total and every source row are indoor estimates — the same value the map paints here. Outside at the wall: ${estimate.facadeLden.toFixed(1)} dB. A ${estimate.buildingType} typically reduces noise by ~${estimate.reductionDb.toFixed(1)} dB with windows closed.${openWindow} Uncertainty ±8–12 dB; occupant behaviour dominates. The detail behind each source stays at the wall — what it emits, its octave bands, its per-segment figures and, for aircraft, the peak level of a single flyover: those explain the path from the source to the outside of this building.`
 }
 
 function TimingsOverlay({ timings }: { timings: NoiseComputeData['timings'] }) {

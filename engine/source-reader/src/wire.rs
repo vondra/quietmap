@@ -16,6 +16,7 @@
 //! .send(finalJson)`) after a single `String.replace` for the
 //! `compute_time_ms` placeholder.
 
+use noise_compute::envelope::indoor_level_db;
 use noise_compute::types::{
     Contributor, LayerKind, NoiseResult, PropagationBaseline, ScreeningBreakdown, SegmentTrace,
     SegmentTracesSummary, SourceMetadata, SourceResult, TerrainBreakdown, VegetationBreakdown,
@@ -28,6 +29,12 @@ use serde::Serialize;
 /// (not numeric placeholder) so it cannot collide with any dB value
 /// elsewhere in the response.
 pub const COMPUTE_TIME_MS_SENTINEL: &str = "__QM_COMPUTE_TIME_MS__";
+
+/// Envelope step for a tilted/open window, used instead of the closed-window
+/// class delta. It arrived with the interior implementation (`ea101899`) with
+/// no source cited and is not one of `EnvelopeClass`'s deltas; naming it here
+/// at least makes the unsourced value greppable.
+const OPEN_WINDOW_DELTA_DB: f64 = 15.0;
 
 #[inline]
 fn round1(v: f64) -> f64 {
@@ -182,9 +189,9 @@ pub struct WireResult {
     pub h3_center: [f64; 2],
     pub elevation_m: f64,
     #[serde(serialize_with = "noise_compute::types::serialize_lden_db_opt")]
-    /// Aggregate display total. When the receiver is inside an enclosed
-    /// footprint, this carries the indoor estimate; source, contributor and
-    /// segment values below remain the façade values that produced it.
+    /// Aggregate display total. Inside an enclosed footprint this is the indoor
+    /// estimate, and so are `sources` and `top_contributors`; `facade_lden`
+    /// carries the outdoor level the envelope step was taken from.
     pub total_lden: f64,
     #[serde(serialize_with = "noise_compute::types::serialize_lden_db_opt")]
     pub total_lden_free: f64,
@@ -196,10 +203,15 @@ pub struct WireResult {
     pub envelope_class: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub envelope_delta_db: Option<f64>,
+    /// Outdoor level at the wall, before the envelope step, and what the
+    /// frontend's "facade to indoor" explanation is built from. The indoor
+    /// counterpart is `total_lden` itself, so it is not repeated here. Emission,
+    /// per-effect and per-band figures, `segments` and the aircraft peak-event
+    /// levels also stay outdoors; see `present::project_result_to_indoor_display`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub facade_lden: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub indoor_lden: Option<f64>,
+    /// The same estimate with a tilted/open window instead of the envelope's
+    /// closed-window class delta.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indoor_lden_tilted: Option<f64>,
     /// Unique string sentinel — Node route replaces this with the
@@ -240,36 +252,14 @@ pub fn build_wire_result(
         envelope_class: indoor.map(|(class, _, _)| class.name()),
         envelope_delta_db: indoor.map(|(_, delta, _)| delta),
         facade_lden: indoor.map(|(_, _, facade)| round1(facade)),
-        indoor_lden: indoor.and_then(|(_, delta, facade)| {
+        indoor_lden_tilted: indoor.and_then(|(_, _, facade)| {
             facade
                 .is_finite()
-                .then(|| round1((facade - delta).max(0.0)))
-        }),
-        indoor_lden_tilted: indoor.and_then(|(_, _, facade)| {
-            facade.is_finite().then(|| round1((facade - 15.0).max(0.0)))
+                .then(|| round1(indoor_level_db(facade, OPEN_WINDOW_DELTA_DB)))
         }),
         compute_time_ms: COMPUTE_TIME_MS_SENTINEL,
         segments: result.segments,
         segments_meta: result.segments_meta,
         timings: result.timings.map(WireTimings::from),
-    }
-}
-
-/// Apply the façade-to-indoor product estimate only to aggregate display totals.
-///
-/// Source rows and segment traces are deliberately left at their façade
-/// values: they describe the actual source-to-receiver computation, while the
-/// indoor estimate is a display-level transformation of the final total.
-pub fn attenuate_total_for_indoor_display(result: &mut NoiseResult, delta: f64) {
-    let attenuate = |value: &mut f64| {
-        if value.is_finite() {
-            *value = (*value - delta).max(0.0)
-        }
-    };
-    for periods in [&mut result.total, &mut result.total_free] {
-        attenuate(&mut periods.ld_db);
-        attenuate(&mut periods.le_db);
-        attenuate(&mut periods.ln_db);
-        attenuate(&mut periods.lden_db);
     }
 }

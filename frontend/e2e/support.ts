@@ -53,13 +53,23 @@ export function hm3Tile(point?: PixelCenter, db?: number): Buffer {
   return tile
 }
 
+/** The enclosed-receiver half of the popup payload; omitted outdoors. */
+export type IndoorEnvelope = {
+  envelope_class: 'residential' | 'commercial' | 'industrial' | 'historic' | 'default'
+  envelope_delta_db: number
+  facade_lden: number
+  indoor_lden_tilted: number
+}
+
 export function popupFixture(
   lat: number,
   lng: number,
   db = FIXTURE_DB,
   sourceLevels: Record<string, number> = { road: db },
+  indoor?: IndoorEnvelope,
 ) {
   return {
+    ...indoor,
     h3_center: [lat, lng],
     elevation_m: 350,
     total_lden: db,
@@ -86,13 +96,23 @@ export async function mockTerrainBasemap(page: Page): Promise<void> {
   }))
 }
 
-export async function installHermeticMap(page: Page, point: PixelCenter): Promise<void> {
+/** `paintedDb` is the level the road/rail tiles carry at `point` — pass the
+ *  popup's own level when the test asserts that map and popup agree. */
+export async function installHermeticMap(
+  page: Page,
+  point: PixelCenter,
+  paintedDb = SOURCE_DB,
+): Promise<void> {
   await mockTerrainBasemap(page)
   await page.route('**/api/tiles-manifest', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
+      // A z12 world on purpose, while the code's WORLD_BASE_ZOOM is 13: the
+      // frontend must take its native tile ceiling from the manifest, never
+      // from a compiled-in constant. Every tile assertion below is at TILE_Z.
       build: 'b1',
+      zoom: TILE_Z,
       layers: {
         road: { build: 'b1', file: 'road.b1.pmtiles' },
         rail: { build: 'b1', file: 'rail.b1.pmtiles' },
@@ -105,7 +125,7 @@ export async function installHermeticMap(page: Page, point: PixelCenter): Promis
     const source = match?.[1]
     const atPoint = match != null
       && Number(match[2]) === TILE_Z && Number(match[3]) === point.tx && Number(match[4]) === point.ty
-    const level = source === 'road' || source === 'rail' ? SOURCE_DB : undefined
+    const level = source === 'road' || source === 'rail' ? paintedDb : undefined
     return route.fulfill({
       status: 200,
       contentType: 'application/octet-stream',

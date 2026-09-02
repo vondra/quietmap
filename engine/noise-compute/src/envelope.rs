@@ -68,9 +68,29 @@ pub const fn effective_envelope_class(class: EnvelopeClass, height_m: f32) -> En
     }
 }
 
+/// Indoor display level of an enclosed receiver: `max(0, L_facade − ΔL)`.
+///
+/// The painted tile stores exactly this quantity in every enclosed pixel of
+/// every layer, and the popup publishes it in every level row it shows for such
+/// a point, so the map and the popup answer the same question with the same
+/// numbers. Silence (`NEG_INFINITY`) passes through unchanged: an envelope
+/// never makes an inaudible source audible.
+///
+/// The popup calls this. `tile_painter::source_loader_obstacle::InteriorEstimate::apply`
+/// still restates the same expression inline; routing it through this function
+/// is the named follow-up that makes the arithmetic literally single-sourced.
+#[inline]
+pub fn indoor_level_db(facade_level_db: f64, delta_db: f64) -> f64 {
+    if facade_level_db.is_finite() {
+        (facade_level_db - delta_db).max(0.0)
+    } else {
+        facade_level_db
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{effective_envelope_class, EnvelopeClass};
+    use super::{effective_envelope_class, indoor_level_db, EnvelopeClass};
 
     #[test]
     fn effective_envelope_class_height_matrix() {
@@ -116,5 +136,18 @@ mod tests {
             assert_eq!(effective_envelope_class(class, 5.0), class);
             assert_eq!(effective_envelope_class(class, 7.0), class);
         }
+    }
+
+    #[test]
+    fn indoor_level_subtracts_delta_and_floors_at_zero() {
+        // The report's worked point: tile 13/4415/2784 pixel (402, 256), an
+        // unclassified 3 m footprint, road facade 56.076 dB, delta 20 dB.
+        assert!((indoor_level_db(56.076, 20.0) - 36.076).abs() < 1e-12);
+        // Below the envelope step the estimate floors at 0 dB rather than
+        // going negative — the same clamp the painter applies per pixel.
+        assert_eq!(indoor_level_db(4.546, 20.0), 0.0);
+        assert_eq!(indoor_level_db(20.0, 20.0), 0.0);
+        // Silence stays silence.
+        assert_eq!(indoor_level_db(f64::NEG_INFINITY, 20.0), f64::NEG_INFINITY);
     }
 }
