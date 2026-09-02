@@ -4,13 +4,16 @@
 // zero-JIT surface workers. The cubin targets exactly one arch; the
 // benchmark/deploy path already rebuilds on each GPU role.
 // nvcc is isolated from Cargo's rustflags, so target-cpu=native parity is
-// untouched. The arch defaults to this host's own card (see `detect_arch`);
-// NOISE_GPU_ARCH overrides it.
+// untouched. The arch defaults to this host's own card and NOISE_GPU_ARCH
+// overrides it, both in `build_cuda_arch.rs`, which relevant-source-gpu's
+// build script includes from here so the two engines target one card.
 //
 // Only the `gpu` feature (the gpu-surface/e2-full bins) needs CUDA. Without it the
 // crate is the CPU-side lib alone, so skip nvcc entirely — a host with no CUDA
 // toolkit (e.g. a CPU-only box) then builds noise-gpu cleanly. nvcc is required only when you
 // explicitly build `--features gpu`, which only happens on a GPU host.
+#[path = "build_cuda_arch.rs"]
+mod build_cuda_arch;
 mod build_defines;
 
 use build_defines::parse_experimental_defines;
@@ -20,150 +23,9 @@ use std::{
     process::Command,
 };
 
-/// Arch used when this host's own card cannot be determined: Ada (4060/4070).
-const DEFAULT_ARCH: &str = "sm_89";
-
-/// Announce the fallback and take `DEFAULT_ARCH`.
-fn fall_back(reason: &str) -> String {
-    println!(
-        "cargo:warning=noise-gpu: {reason}; the AOT cubin targets {DEFAULT_ARCH}. \
-         Set NOISE_GPU_ARCH if that is not this card: a rejected cubin costs a \
-         PTX JIT in every W1 process, and the W2 exact path refuses to load."
-    );
-    DEFAULT_ARCH.to_owned()
-}
-
-/// `sm_NN` for the first card `nvidia-smi --query-gpu=compute_cap` reports.
-///
-/// The first row, not a unanimous one, because that is the card CUDA opens as
-/// device 0 and is what the fleet's own provisioning picks. `caps_disagree`
-/// reports the ambiguity separately so the caller can say so.
-fn arch_from_compute_caps(listing: &str) -> Result<String, &'static str> {
-    let first = listing
-        .lines()
-        .map(str::trim)
-        .find(|row| !row.is_empty())
-        .ok_or("nvidia-smi listed no GPU")?;
-    let digits = first.replace('.', "");
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err("nvidia-smi returned an unparsable compute capability");
-    }
-    Ok(format!("sm_{digits}"))
-}
-
-/// Whether the reported cards differ, so that no one cubin fits all of them.
-fn caps_disagree(listing: &str) -> bool {
-    let mut rows = listing.lines().map(str::trim).filter(|row| !row.is_empty());
-    rows.next()
-        .is_some_and(|first| rows.any(|other| other != first))
-}
-
-/// Whether this host's nvcc can emit `arch` at all.
-///
-/// A toolkit older than the card would otherwise turn a build that used to work
-/// into `nvcc fatal: Unsupported gpu architecture` — the fixed default merely
-/// JIT-ed. Verified both ways: CUDA 11.5 lists sm_75 but not sm_89, CUDA 13.3
-/// lists sm_120 but not sm_70. An nvcc too old to answer is left to the compile
-/// step, which reports the real error.
-fn nvcc_can_emit(arch: &str) -> bool {
-    let Ok(listing) = Command::new("nvcc").arg("--list-gpu-code").output() else {
-        return true;
-    };
-    !listing.status.success()
-        || String::from_utf8_lossy(&listing.stdout)
-            .lines()
-            .any(|row| row.trim() == arch)
-}
-
-/// This host's own compute capability as `sm_NN`, for the AOT cubin.
-///
-/// Every fleet build is a per-box native build — `.cargo/config.toml` pins
-/// `target-cpu=native`, so a binary is never shared between machines — which
-/// makes the local card the card that runs this binary. A fixed default was
-/// therefore wrong on every non-Ada box, and wrong silently: a 5070 (sm_120)
-/// rejects an sm_89 image, so each W1 process JIT-compiled the embedded PTX at
-/// startup (measured 2026-08-28, cold CUDA cache, road z12: 57.2 s against
-/// 0.2 s, byte-identical tiles). Only W1 fails open; the W2 exact anchors load
-/// through `load_embedded_cubin_exact`, which refuses the recompile.
-///
-/// Never fails the build: an unreadable card, an unparsable answer, or an nvcc
-/// that cannot emit the detected arch all fall back to `DEFAULT_ARCH` — the old
-/// unconditional default, so no build that worked stops working. Cargo cannot
-/// watch a card, so only the tracked `NOISE_GPU_ARCH` forces a rebuild; set it
-/// if you reuse a target dir across a GPU swap.
-fn detect_arch() -> String {
-    let Ok(probe) = Command::new("nvidia-smi")
-        .args(["--query-gpu=compute_cap", "--format=csv,noheader,nounits"])
-        .output()
-    else {
-        return fall_back("nvidia-smi is not on PATH");
-    };
-    if !probe.status.success() {
-        return fall_back("nvidia-smi reported no usable GPU");
-    }
-    let listing = String::from_utf8_lossy(&probe.stdout);
-    let arch = match arch_from_compute_caps(&listing) {
-        Ok(arch) => arch,
-        Err(reason) => return fall_back(reason),
-    };
-    if !nvcc_can_emit(&arch) {
-        return fall_back("this host's nvcc is too old to emit its own card's arch");
-    }
-    if caps_disagree(&listing) {
-        println!(
-            "cargo:warning=noise-gpu: this host mixes GPU compute capabilities; \
-             the cubin targets {arch} (the first card). Set NOISE_GPU_ARCH to choose another."
-        );
-    }
-    arch
-}
-
-#[cfg(test)]
-mod arch_tests {
-    use super::{arch_from_compute_caps, caps_disagree};
-
-    #[test]
-    fn one_card_of_each_fleet_generation_maps_to_its_arch() {
-        for (listing, arch) in [
-            ("12.0\n", "sm_120"),
-            ("7.5\n", "sm_75"),
-            ("8.9\n", "sm_89"),
-            ("7.0\n", "sm_70"),
-            (" 12.0 \r\n", "sm_120"),
-            ("7.5\n\n", "sm_75"),
-        ] {
-            assert_eq!(
-                arch_from_compute_caps(listing).unwrap(),
-                arch,
-                "{listing:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn identical_cards_are_not_a_disagreement() {
-        let listing = "12.0\n12.0\n12.0\n12.0\n";
-        assert_eq!(arch_from_compute_caps(listing).unwrap(), "sm_120");
-        assert!(!caps_disagree(listing));
-    }
-
-    #[test]
-    fn a_mixed_host_takes_the_first_card_and_is_flagged() {
-        let listing = "12.0\n7.5\n";
-        assert_eq!(arch_from_compute_caps(listing).unwrap(), "sm_120");
-        assert!(caps_disagree(listing));
-    }
-
-    #[test]
-    fn an_unreadable_listing_is_an_error_never_a_bogus_arch() {
-        for listing in ["", "\n  \n", "N/A\n", "[N/A]\n", ".\n"] {
-            assert!(arch_from_compute_caps(listing).is_err(), "{listing:?}");
-        }
-    }
-}
-
 fn main() {
     println!("cargo:rerun-if-env-changed=NOISE_GPU_ARCH");
+    println!("cargo:rerun-if-changed=build_cuda_arch.rs");
     println!("cargo:rerun-if-env-changed=NOISE_GPU_DEFINES");
     println!("cargo:rerun-if-env-changed=NOISE_GPU_SKIP_NVCC");
     println!("cargo:rerun-if-changed=build_defines.rs");
@@ -268,10 +130,7 @@ fn main() {
         }
         return;
     }
-    let arch = env::var("NOISE_GPU_ARCH")
-        .ok()
-        .filter(|arch| !arch.is_empty())
-        .unwrap_or_else(detect_arch);
+    let arch = build_cuda_arch::cuda_arch("noise-gpu");
     // NUM_CLASSES is parsed from the generated profiles table and injected as
     // -DNPD_NC so the kernel's NPD LUT stride can never drift from the Rust
     // upload (hardcoded 14 corrupted departures when the pinned 15th class

@@ -13,7 +13,7 @@ use crate::source_frame::{DeviceLineSource, CORNER_COUNT, PERIOD_COUNT, TILE_PIX
 
 unsafe extern "C" {
     fn relevant_source_cuda_error_string(status: c_int) -> *const c_char;
-    fn relevant_source_cuda_initialize() -> c_int;
+    fn relevant_source_cuda_initialize(compute_capability: *mut c_int) -> c_int;
     fn relevant_source_cuda_allocate(pointer: *mut *mut c_void, bytes: usize) -> c_int;
     fn relevant_source_cuda_free(pointer: *mut c_void) -> c_int;
     fn relevant_source_cuda_copy_to_device(
@@ -141,12 +141,27 @@ impl<T> Drop for DeviceBuffer<T> {
     }
 }
 
+/// The architecture the linked CUDA archive was compiled for, from the build
+/// script's own detection of this host's card.
+const COMPILED_CUDA_ARCH: &str = env!("RELEVANT_SOURCE_CUDA_ARCH");
+
 /// Process-wide device initialization and the two architecture-specific launches.
 pub struct RelevantSourceCuda;
 
 impl RelevantSourceCuda {
     pub fn initialize() -> Result<Self> {
-        check_cuda(unsafe { relevant_source_cuda_initialize() })?;
+        let mut compute_capability: c_int = 0;
+        check_cuda(unsafe { relevant_source_cuda_initialize(&mut compute_capability) })?;
+        let card_arch = format!("sm_{compute_capability}");
+        if card_arch != COMPILED_CUDA_ARCH {
+            // Never silent: the old painter's mismatched image cost a PTX JIT of
+            // 57.2 s in every process (measured 2026-08-28, cold CUDA cache),
+            // and an image newer than the card cannot load at all.
+            eprintln!(
+                "relevant-source-cuda: kernels compiled for {COMPILED_CUDA_ARCH}, this card is \
+                 {card_arch}: launches JIT the embedded PTX or fail outright. Rebuild here."
+            );
+        }
         Ok(Self)
     }
 

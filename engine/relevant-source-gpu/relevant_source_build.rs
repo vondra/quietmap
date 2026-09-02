@@ -1,5 +1,8 @@
 //! Compile the fixed relevant-source CUDA program into its statically linked host bridge.
 
+#[path = "../noise-gpu/build_cuda_arch.rs"]
+mod build_cuda_arch;
+
 use std::env;
 use std::fmt::Write as _;
 use std::fs;
@@ -372,25 +375,28 @@ fn run_checked(command: &mut Command, label: &str) {
     assert!(status.success(), "{label} exited with {status}");
 }
 
-const NVCC_ARGUMENTS: [&str; 8] = [
-    "-std=c++17",
-    "-O3",
-    "--use_fast_math",
-    "-lineinfo",
-    "-arch=sm_120",
-    "-maxrregcount=40",
-    "-Xcompiler",
-    "-fPIC",
-];
+fn nvcc_arguments(arch: &str) -> [String; 8] {
+    [
+        "-std=c++17".to_owned(),
+        "-O3".to_owned(),
+        "--use_fast_math".to_owned(),
+        "-lineinfo".to_owned(),
+        format!("-arch={arch}"),
+        "-maxrregcount=40".to_owned(),
+        "-Xcompiler".to_owned(),
+        "-fPIC".to_owned(),
+    ]
+}
 
 /// Owner ruling: no f64 in a production kernel (GeForce Blackwell runs it at 1/64).
 /// The PTX of the same translation unit is scanned for any `.f64` opcode; one
 /// promoted literal or libm call re-promotes a whole per-pair chain, so the build fails.
-fn assert_ptx_has_no_f64(output_directory: &std::path::Path) {
+/// The gate runs at whatever arch this host builds, never at a fixed one.
+fn assert_ptx_has_no_f64(output_directory: &std::path::Path, arch: &str) {
     let ptx_path = output_directory.join("block_source_partition.ptx");
     run_checked(
         Command::new("nvcc")
-            .args(NVCC_ARGUMENTS)
+            .args(nvcc_arguments(arch))
             .arg("-I")
             .arg(output_directory)
             .args(["-ptx", "kernels/block_source_partition.cu", "-o"])
@@ -406,6 +412,8 @@ fn assert_ptx_has_no_f64(output_directory: &std::path::Path) {
 }
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=NOISE_GPU_ARCH");
+    println!("cargo:rerun-if-changed=../noise-gpu/build_cuda_arch.rs");
     println!("cargo:rerun-if-changed=kernels/relevant_source_geometry.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_path.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_attenuation.cuh");
@@ -436,18 +444,27 @@ fn main() {
         generated_physics_header(),
     )
     .expect("write generated relevant-source physics constants");
+    // The kernels take no -D at all (every constant is generated into the header
+    // above), but the model-role artifact builder reads one define receipt per
+    // built role — an empty one is this crate's honest answer.
+    fs::write(output_directory.join("nvcc-defines.txt"), "")
+        .expect("write the empty relevant-source nvcc define receipt");
+    let arch = build_cuda_arch::cuda_arch("relevant-source-gpu");
+    // The linked archive is SASS for exactly this arch; the runtime compares it
+    // with the card it opens and says so when they differ.
+    println!("cargo:rustc-env=RELEVANT_SOURCE_CUDA_ARCH={arch}");
     let object_path = output_directory.join("block_source_partition.o");
     let archive_path = output_directory.join("librelevant_source_cuda.a");
     run_checked(
         Command::new("nvcc")
-            .args(NVCC_ARGUMENTS)
+            .args(nvcc_arguments(&arch))
             .arg("-I")
             .arg(&output_directory)
             .args(["-c", "kernels/block_source_partition.cu", "-o"])
             .arg(&object_path),
         "nvcc relevant-source compilation",
     );
-    assert_ptx_has_no_f64(&output_directory);
+    assert_ptx_has_no_f64(&output_directory, &arch);
     run_checked(
         Command::new("ar")
             .arg("crs")

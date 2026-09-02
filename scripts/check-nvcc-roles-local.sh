@@ -37,9 +37,13 @@ echo "NVCC_ROLE_COMPILE=PASS role=stock"
 # The relevant-source painter: its build script compiles the kernel, generates
 # every physics constant from the CPU sources and fails on any .f64 PTX opcode
 # (the f64 gate), and its gpu-feature tests run without opening a CUDA context.
+# NOISE_GPU_ARCH pins the arch here exactly as it does for the stock role: this
+# check must compile the same image on any card, while a fleet build detects
+# the host's own (engine/noise-gpu/build_cuda_arch.rs).
 echo "NVCC_ROLE_COMPILE=BEGIN role=relevant-source features=gpu arch=sm_120"
 env \
   CARGO_TARGET_DIR="$target_root/relevant-source" \
+  NOISE_GPU_ARCH=sm_120 \
   PATH="$(dirname "$NVCC"):$PATH" \
   cargo build --release --locked \
     --manifest-path "$ROOT/engine/relevant-source-gpu/Cargo.toml" \

@@ -88,7 +88,10 @@ extern "C" const char* relevant_source_cuda_error_string(int status) {
     return cudaGetErrorString(static_cast<cudaError_t>(status));
 }
 
-extern "C" int relevant_source_cuda_initialize() {
+// Reports the opened card's compute capability as major * 10 + minor (an RTX
+// 5070 answers 120), which the host compares with the arch this archive was
+// compiled for.
+extern "C" int relevant_source_cuda_initialize(int* compute_capability) {
     int device_count = 0;
     cudaError_t status = cudaGetDeviceCount(&device_count);
     if (status != cudaSuccess) {
@@ -97,7 +100,22 @@ extern "C" int relevant_source_cuda_initialize() {
     if (device_count < 1) {
         return cudaErrorNoDevice;
     }
-    return cudaSetDevice(0);
+    status = cudaSetDevice(0);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    int major = 0;
+    int minor = 0;
+    status = cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, 0);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, 0);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    *compute_capability = major * 10 + minor;
+    return cudaSuccess;
 }
 
 extern "C" int relevant_source_cuda_allocate(void** pointer, size_t bytes) {
