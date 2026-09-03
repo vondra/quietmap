@@ -637,19 +637,19 @@ mod tests {
             r > 10_000.0 && r < crate::constants::RAILWAY_REACH_CLAMP_MAX,
             "HS reach {r:.0} m, want (10 km, 11 km ceiling)"
         );
-        // …and it is the CEILING that caps it, not a coincidence: the free-field
-        // Lden at the ceiling is still above the 25 dB target.
-        let lden = free_field_lden_at(
-            Admin::UNKNOWN,
-            RailType::Rail,
-            300.0,
-            80.0,
-            0.0,
-            crate::constants::RAILWAY_REACH_CLAMP_MAX,
-        );
+        // …and the old 10 km cap really clipped it: the free-field Lden there is
+        // still above the 25 dB target, while at the solved reach it has fallen
+        // to the target.
+        let at_old_cap =
+            free_field_lden_at(Admin::UNKNOWN, RailType::Rail, 300.0, 80.0, 0.0, 10_000.0);
         assert!(
-            lden > crate::constants::RAILWAY_REACH_TARGET_LDEN_DB,
-            "HS Lden at the ceiling is {lden:.2} dB, must still exceed the 25 dB target"
+            at_old_cap > crate::constants::RAILWAY_REACH_TARGET_LDEN_DB,
+            "HS Lden at the old 10 km cap is {at_old_cap:.2} dB, must still exceed the 25 dB target"
+        );
+        let at_reach = free_field_lden_at(Admin::UNKNOWN, RailType::Rail, 300.0, 80.0, 0.0, r);
+        assert!(
+            (at_reach - crate::constants::RAILWAY_REACH_TARGET_LDEN_DB).abs() < 0.1,
+            "HS Lden at its solved reach is {at_reach:.2} dB, want the 25 dB target"
         );
     }
 
