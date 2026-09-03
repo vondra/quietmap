@@ -22,6 +22,15 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 [[ "$JOBS" =~ ^([1-9]|[1-5][0-9]|6[0-4])$ ]] || { echo "jobs must be 1..64" >&2; exit 2; }
+# Every `overturemaps download` process holds 3-4 GB (it reads the theme's parquet footers
+# from S3 on its own); 64 jobs put he84 (125 GB) into swap and the OOM killer took the world
+# controller with them on 2026-09-03. The job count never exceeds the memory free right now.
+JOB_MEM_KB=$((4 * 1024 * 1024))
+mem_jobs=$(( $(awk '/^MemAvailable:/ {print $2}' /proc/meminfo) / JOB_MEM_KB ))
+if [ "$JOBS" -gt "$mem_jobs" ]; then
+    echo "[overture-world] $JOBS jobs exceed free memory; running $mem_jobs (4 GB each)" >&2
+    JOBS=$(( mem_jobs > 0 ? mem_jobs : 1 ))
+fi
 
 command -v overturemaps > /dev/null || { echo "overturemaps CLI missing" >&2; exit 1; }
 mkdir -p "$PARQUET_DIR"
@@ -54,10 +63,11 @@ fetch_one() {
     if timeout 1800 overturemaps download \
         --bbox "$lon,$lat,$((lon + 1)),$((lat + 1))" \
         -f geoparquet --type building -o "$tmp" 2>> "$PARQUET_DIR/.errors.log"; then
-        mv "$tmp" "$out"
+        # The CLI leaves a resume-state file next to every output; nothing reads it again.
+        mv "$tmp" "$out"; rm -f "$tmp.state"
         echo "[overture-world] $tile ($(stat -c%s "$out" | numfmt --to=iec))"
     else
-        rm -f "$tmp"
+        rm -f "$tmp" "$tmp.state"
         echo "[overture-world] $tile FAILED (will retry on next run)" >&2
         return 1
     fi
