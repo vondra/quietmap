@@ -55,7 +55,8 @@ export -f ingest_one
 export STATE
 
 while true; do
-    ls "$PARQUET_DIR"/*.parquet 2>/dev/null | sed 's/.*\///; s/\.parquet$//' | sort > /tmp/world-ingest-have.txt
+    # find, not ls: an empty cache dir made ls exit 2 and pipefail abort the loop.
+    find "$PARQUET_DIR" -maxdepth 1 -name '*.parquet' -printf '%f\n' | sed 's/\.parquet$//' | sort > /tmp/world-ingest-have.txt
     sort "$STATE" > /tmp/world-ingest-done.txt
     if [ -s "$SELECTED" ]; then
         comm -12 "$SELECTED" /tmp/world-ingest-have.txt > /tmp/world-ingest-candidates.txt

@@ -69,11 +69,11 @@ INGESTED_LIST="$(pwd)/$SOURCE_ROOT/overture-obstacles/.ingested-tiles"
 export INGESTED_LIST
 
 total=$(wc -l < "$TILES")
-done_n=$(ls "$PARQUET_DIR"/*.parquet 2>/dev/null | wc -l)
+done_n=$(find "$PARQUET_DIR" -maxdepth 1 -name "*.parquet" | wc -l)
 echo "[overture-world] $total selected tiles, $done_n cached → $PARQUET_DIR"
 
 fail=0
 xargs -P "$JOBS" -I{} bash -c 'fetch_one "$1"' _ {} < "$TILES" || fail=1
-done_n=$(ls "$PARQUET_DIR"/*.parquet 2>/dev/null | wc -l)
+done_n=$(find "$PARQUET_DIR" -maxdepth 1 -name "*.parquet" | wc -l)
 echo "[overture-world] finished: $done_n/$total parquets (fail=$fail)"
 exit "$fail"
