@@ -47,8 +47,14 @@ done_n=$(find "$PARQUET_DIR" -maxdepth 1 -name "*.parquet" | wc -l)
 echo "[overture-world] $total selected tiles, $done_n cached → $PARQUET_DIR"
 
 fail=0
-nice -n 10 python3 scripts/obstacles/download-overture-tiles.py "$TILES" "$PARQUET_DIR" \
-    "$INGESTED_LIST" 2>> "$PARQUET_DIR/.errors.log" || fail=1
+while :; do
+    nice -n 10 python3 scripts/obstacles/download-overture-tiles.py "$TILES" "$PARQUET_DIR" \
+        "$INGESTED_LIST" 2>> "$PARQUET_DIR/.errors.log"
+    rc=$?
+    [ "$rc" -eq 3 ] && continue   # the fetcher restarts itself at its memory cap; nothing is lost
+    [ "$rc" -eq 0 ] || fail=1
+    break
+done
 done_n=$(find "$PARQUET_DIR" -maxdepth 1 -name "*.parquet" | wc -l)
 echo "[overture-world] finished: $done_n/$total parquets (fail=$fail)"
 exit "$fail"

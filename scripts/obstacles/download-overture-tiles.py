@@ -15,6 +15,7 @@ per-scan cost (a statistics pass over every row group) is paid once per strip.""
 import os
 import sys
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -29,6 +30,13 @@ DATASET_PATH = f"overturemaps-us-west-2/release/{RELEASE}/theme=buildings/type=b
 # Strip width: a dense European tile is ~100 MB in Arrow, so ten of them stay well under
 # 2 GB in memory while an empty polar row still amortises the scan tenfold.
 BATCH_TILES = 10
+# One strip waits on S3 round trips per row group: measured 2026-09-03 at 21 MB/s of a 55 MB/s
+# link and 61 % of one core; three strips in flight fill the link.
+STRIP_WORKERS = 3
+# pyarrow's pool keeps strip buffers: 26 GB RSS after 800 tiles (measured). Past this the run
+# ends with exit 3 and the caller starts a fresh process; cached tiles are skipped, nothing is lost.
+RSS_RESTART_BYTES = 16 << 30
+EXIT_RESTART = 3
 
 
 def tile_bbox(tile):
@@ -75,18 +83,16 @@ def main(list_path, parquet_dir, ingested_path=None):
     print(f"[overture-tiles] footers of {len(fragments)} files read in "
           f"{time.time() - started:.0f} s", flush=True)
     indexed = ds.FileSystemDataset(fragments, dataset.schema, dataset.format, s3)
-    failed = 0
-    for strip in strips(todo):
+    def fetch_strip(strip):
         boxes = [tile_bbox(t) for t in strip]
         try:
             rows = indexed.to_table(filter=bbox_filter(
                 min(b[0] for b in boxes), min(b[1] for b in boxes),
                 max(b[2] for b in boxes), max(b[3] for b in boxes)))
         except Exception as error:  # one strip must not end the pass; the next run retries
-            failed += len(strip)
             print(f"[overture-tiles] {strip[0]}..{strip[-1]} FAILED: {error}",
                   file=sys.stderr, flush=True)
-            continue
+            return len(strip)
         for tile, box in zip(strip, boxes):
             out = f"{parquet_dir}/{tile}.parquet"
             tmp = out + ".dl"
@@ -95,8 +101,32 @@ def main(list_path, parquet_dir, ingested_path=None):
             os.replace(tmp, out)
             print(f"[overture-tiles] {tile} ({table.num_rows} rows, "
                   f"{os.path.getsize(out) // 1024} KiB)", flush=True)
-    print(f"[overture-tiles] finished: {len(todo) - failed}/{len(todo)} fetched, "
-          f"{failed} failed, {time.time() - started:.0f} s", flush=True)
+        return 0
+
+    def rss_bytes():
+        return int(open("/proc/self/statm").read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+
+    failed = 0
+    pending = list(strips(todo))
+    restart = False
+    with ThreadPoolExecutor(max_workers=STRIP_WORKERS) as executor:
+        inflight = set()
+        while inflight or (pending and not restart):
+            while pending and not restart and len(inflight) < STRIP_WORKERS:
+                inflight.add(executor.submit(fetch_strip, pending.pop(0)))
+            done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
+            failed += sum(future.result() for future in done)
+            pa.default_memory_pool().release_unused()
+            if not restart and rss_bytes() > RSS_RESTART_BYTES:
+                restart = True
+                print(f"[overture-tiles] {rss_bytes() >> 30} GiB resident, restarting after the "
+                      f"strips in flight ({sum(len(s) for s in pending)} tiles left)", flush=True)
+    left = sum(len(s) for s in pending)
+    print(f"[overture-tiles] finished: {len(todo) - failed - left}/{len(todo)} fetched, "
+          f"{failed} failed, {left} left for a fresh process, {time.time() - started:.0f} s",
+          flush=True)
+    if left:
+        return EXIT_RESTART
     return 1 if failed else 0
 
 
