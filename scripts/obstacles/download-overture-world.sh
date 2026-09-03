@@ -18,10 +18,10 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --jobs) JOBS="${2:?need job count}"; shift 2 ;;
         --tiles) TILE_LIST="${2:?need tile list}"; shift 2 ;;
-        *) echo "usage: $0 [--jobs 1..16] [--tiles FILE]" >&2; exit 2 ;;
+        *) echo "usage: $0 [--jobs 1..64] [--tiles FILE]" >&2; exit 2 ;;
     esac
 done
-[[ "$JOBS" =~ ^([1-9]|1[0-6])$ ]] || { echo "jobs must be 1..16" >&2; exit 2; }
+[[ "$JOBS" =~ ^([1-9]|[1-5][0-9]|6[0-4])$ ]] || { echo "jobs must be 1..64" >&2; exit 2; }
 
 command -v overturemaps > /dev/null || { echo "overturemaps CLI missing" >&2; exit 1; }
 mkdir -p "$PARQUET_DIR"
