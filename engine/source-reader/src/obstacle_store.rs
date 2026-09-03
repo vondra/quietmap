@@ -9,21 +9,12 @@
 //! - **Bounded cost.** Per-cell indexes are built ONCE per process and
 //!   LRU-cached (`CELL_CACHE_CAP`); a query only Arc-clones ≤7 of them.
 //!   The naive per-query rebuild measured 448 MB RSS / 0.47 s per popup.
-//! - **All-or-error.** Any shard read/parse error, and by default any
-//!   unproven missing ring-1 cell, aborts the whole load. A partial index
-//!   would silently under-screen the path.
-//!   `QM_OBSTACLES_ALLOW_PARTIAL=1` relaxes ONLY the missing-cell rule for
-//!   dev A/B runs inside a partially staged world; shard errors always abort.
-//!   EXCEPTION (ingested-empty proof): a shard-less cell whose every
-//!   overlapped 1-degree tile is listed in the world ingest manifest
-//!   (`.ingested-tiles`) was provably swept and contributed zero footprints
-//!   — it is EMPTY, not missing, and vector mode proceeds without it
-//!   (`propagation::obstacle_ingest_coverage`).
-//!
-//! Shard roots, per cell, first hit wins: the PROMOTED tree
-//! (`…/prepared/{year}/h3r4/<cell>/obstacles*.arrow`, post-Wave-1) and the
-//! ENRICHMENT staging tree the ingest writes today. `QM_OBSTACLES_DIR`
-//! overrides both (tests).
+//! - **All-or-error.** Any read/parse error, and any ring-1 cell of the
+//!   prepared world whose `obstacles.arrow` is missing, aborts the whole load.
+//!   A partial index would silently under-screen the path. Emptiness is not a
+//!   gap: a 0-row table is the answer "no buildings here"
+//!   (`noise_compute::propagation::obstacle_cell_file` carries the rule and the
+//!   third case, a cell outside the prepared world).
 //!
 //! Built indexes are also kept ON DISK (`noise_compute::propagation::obstacle_index_file`)
 //! and mapped back on the next cold start — a São Paulo popup indexes 40 M
@@ -34,14 +25,12 @@
 //!
 //! **Both caches key on [`cell_data_ver`], the full identity of the index** —
 //! never on the cell. The memo in front of the disk cache once keyed on the
-//! cell alone and so answered a query about one shard root with an index built
-//! from another (2026-08-05); the popup is the project's acoustic reference, and
-//! a cache that returns the answer to a different question is worse than no
-//! cache. The ring and `QM_OBSTACLES_ALLOW_PARTIAL` are deliberately NOT in that
-//! key: they decide which cells are assembled into a set, per query, in
-//! [`load_obstacle_set`] — a cache entry is one cell's index built from that
-//! cell's own shards, so no dev A/B run can leave a file a strict query would
-//! use (`missing_ring_cell_falls_back_unless_partial_allowed` asserts it).
+//! cell alone and so answered a query about one obstacle tree with an index
+//! built from another (2026-08-05); the popup is the project's acoustic
+//! reference, and a cache that returns the answer to a different question is
+//! worse than no cache. The ring is deliberately NOT in that key: it decides
+//! which cells are assembled into a set, per query, in [`load_obstacle_set`],
+//! while a cache entry is one cell's index built from that cell's own file.
 
 use std::collections::HashMap;
 use std::io::{Cursor, Write};
@@ -53,6 +42,7 @@ use arrow::ipc::reader::FileReader;
 use h3o::{CellIndex, LatLng, Resolution};
 use noise_compute::envelope::{effective_envelope_class, EnvelopeClass};
 use noise_compute::low_profile::LowProfileLookup;
+use noise_compute::propagation::obstacle_cell_file::locate_cell_obstacles;
 use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind, ObstacleSet};
 use noise_compute::propagation::obstacle_index_file::{fnv1a64, IndexBlob, BUILDER_CODE_VER};
 
@@ -128,14 +118,14 @@ fn index_cache_root(data_dir: &Path) -> Option<PathBuf> {
 /// * [`CACHE_CODE_VER`] — the builder, the grid, this loader's own rules;
 /// * the CELL, whose centre is the index's metric origin (and which is the
 ///   only thing the file name would otherwise bind);
-/// * every shard the index is built from, plus the `buildings.arrow` the
-///   low-profile cap reads, as (path, length, mtime) — the path because two
-///   shard ROOTS (a staging A/B, `QM_OBSTACLES_DIR`, a moved mount) hold
-///   different obstacles for the same cell.
+/// * the cell's `obstacles.arrow`, plus the `buildings.arrow` the low-profile
+///   cap reads, as (path, length, mtime) — the path because two prepared
+///   TREES (a moved mount, a second checkout's data node) hold different
+///   obstacles for the same cell.
 ///
 /// That list is closed by construction: `build_cell_index` reads its cell, its
-/// shards and that one arrow, and nothing else — no env, no clock, no map
-/// iteration order (`ObstacleIndex::build` is a Vec walk). Whatever a future
+/// obstacle table and that one arrow, and nothing else — no env, no clock, no
+/// map iteration order (`ObstacleIndex::build` is a Vec walk). Whatever a future
 /// edit adds to it lands in THIS file, and this file's content is already in
 /// `CACHE_CODE_VER`, so an unfingerprinted input cannot be introduced without
 /// also rotating the version.
@@ -150,7 +140,7 @@ fn index_cache_root(data_dir: &Path) -> Option<PathBuf> {
 /// query, let alone the process.
 fn cell_data_ver(
     cell: CellIndex,
-    shards: &[PathBuf],
+    obstacles_arrow: &Path,
     buildings_arrow: Option<&Path>,
 ) -> Option<u64> {
     let mut h = fnv1a64(CACHE_CODE_VER, b"obstacle-index-inputs-v2");
@@ -170,9 +160,7 @@ fn cell_data_ver(
         h = fnv1a64(h, &since_epoch.as_nanos().to_le_bytes());
         Some(())
     };
-    for p in shards {
-        fold(p, 1)?;
-    }
+    fold(obstacles_arrow, 1)?;
     // A missing buildings.arrow means "no capping" — a DIFFERENT index from the
     // same shards with one present, so absence has to hash differently.
     if let Some(p) = buildings_arrow {
@@ -319,11 +307,11 @@ fn store_cached_index(root: &Path, cell: CellIndex, index: &ObstacleIndex, data_
 /// file carries ([`cell_data_ver`]) — not on the cell.
 ///
 /// Keying it on the cell alone was a live defect (2026-08-05): the second
-/// query for a cell got the first query's index no matter which shard root it
-/// asked about, so an A/B run against a second staging tree, or a
-/// `QM_OBSTACLES_DIR` switch, screened the popup against obstacles that are not
-/// there. The disk cache never had this hole — its header carries the
-/// fingerprint — which is exactly why the memo in front of it had to grow one.
+/// query for a cell got the first query's index no matter which obstacle tree
+/// it asked about, so a run against a second prepared root screened the popup
+/// against obstacles that are not there. The disk cache never had this hole —
+/// its header carries the fingerprint — which is exactly why the memo in front
+/// of it had to grow one.
 struct CellCache {
     /// (cell, identity) → (index, LRU stamp). Failed builds are NOT cached —
     /// transient IO must stay retryable; missing cells stay a per-query
@@ -364,164 +352,41 @@ fn memo_put(cell: CellIndex, ver: u64, idx: &Arc<ObstacleIndex>) {
     c.map.insert((cell, ver), (Arc::clone(idx), stamp));
 }
 
-fn staging_root(data_dir: &Path) -> PathBuf {
-    if let Ok(dir) = std::env::var("QM_OBSTACLES_DIR") {
-        return PathBuf::from(dir);
-    }
-    data_dir
-        .parent()
-        .map(|d| d.join("enrichment/global/overture-obstacles/h3r4"))
-        .unwrap_or_else(|| PathBuf::from("data/enrichment/global/overture-obstacles/h3r4"))
-}
-
-/// The cell's shard directory: promoted tree first (post-Wave-1 layout),
-/// staging second. `Ok(None)` when the cell is nowhere ingested; `Err` on
-/// any listing failure other than absence.
-fn cell_dir(
-    h3r4_dir: Option<&Path>,
-    data_dir: &Path,
-    cell: CellIndex,
-) -> Result<Option<PathBuf>, String> {
-    if std::env::var("QM_OBSTACLES_DIR").is_err() {
-        if let Some(h3r4) = h3r4_dir {
-            let promoted = h3r4.join(cell.to_string());
-            if !shard_paths(&promoted)?.is_empty() {
-                return Ok(Some(promoted));
-            }
-        }
-    }
-    let staged = staging_root(data_dir).join(cell.to_string());
-    Ok((!shard_paths(&staged)?.is_empty()).then_some(staged))
-}
-
-/// Sorted shard listing — deterministic iteration keeps the query-local
-/// obstacle ordinals stable for one on-disk state. A missing directory is a
-/// legitimate "not ingested" (`Ok(empty)`); any OTHER I/O failure is an
-/// error — a permission or disk fault must not read as "cell missing" and
-/// admit an incomplete index under partial mode.
-fn shard_paths(dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(format!("read_dir {}: {e}", dir.display())),
-    };
-    let mut out = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("read_dir entry in {}: {e}", dir.display()))?;
-        let p = entry.path();
-        if p.file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with("obstacles") && n.ends_with(".arrow"))
-        {
-            out.push(p);
-        }
-    }
-    out.sort();
-    Ok(out)
-}
-
 /// Assemble the query's [`ObstacleSet`], or fail when vector coverage cannot
 /// be proved complete.
 pub fn load_obstacle_set(
-    h3r4_dir: Option<&Path>,
+    h3r4_dir: &Path,
     data_dir: &Path,
     lat: f64,
     lon: f64,
 ) -> Result<ObstacleSet, String> {
-    load_obstacle_set_with_logging(h3r4_dir, data_dir, lat, lon)
-}
-
-/// Shared implementation for popup and building-height hover queries.
-fn load_obstacle_set_with_logging(
-    h3r4_dir: Option<&Path>,
-    data_dir: &Path,
-    lat: f64,
-    lon: f64,
-) -> Result<ObstacleSet, String> {
-    let allow_partial = std::env::var("QM_OBSTACLES_ALLOW_PARTIAL").is_ok_and(|v| v == "1");
     let cell = LatLng::new(lat, lon)
         .map_err(|e| format!("obstacle_store: {lat},{lon} is not a point on earth: {e}"))?
         .to_cell(Resolution::Four);
-    let manifest = ingest_manifest(h3r4_dir, data_dir);
     let mut indexes = Vec::new();
     for c in cell.grid_disk::<Vec<_>>(1) {
-        let dir = match cell_dir(h3r4_dir, data_dir, c) {
-            Err(e) => return Err(format!("obstacle_store: {e}")),
-            Ok(Some(dir)) => dir,
-            Ok(None) => {
-                if manifest.is_some_and(|m| m.covers_cell(c)) {
-                    // INGESTED-EMPTY, proven by the world ingest manifest: the
-                    // Overture sweep reached this cell and it contributed no
-                    // footprints. Empty is an answer; missing is not.
-                    continue;
-                }
-                if c == cell {
-                    return Err(format!(
-                        "obstacle_store: cell {c} has no obstacle shard and the ingest \
-                         manifest does not prove it empty — buildings are vector-only, \
-                         so this query cannot be answered"
-                    ));
-                }
-                if allow_partial {
-                    // Never silent — the same rule as the pipeline loader.
-                    eprintln!(
-                        "obstacle_store: QM_OBSTACLES_ALLOW_PARTIAL: answering without \
-                         ring cell {c} — incomplete screening, dev A/B only"
-                    );
-                    continue;
-                }
-                return Err(format!(
-                    "obstacle_store: ring cell {c} not ingested (set \
-                     QM_OBSTACLES_ALLOW_PARTIAL=1 only for dev A/B)"
-                ));
-            }
+        let located = locate_cell_obstacles(h3r4_dir, c).map_err(|e| {
+            format!(
+                "obstacle_store: {e} — buildings are vector-only, so this query cannot be answered"
+            )
+        })?;
+        let Some(obstacles_arrow) = located else {
+            // Outside the prepared world: no cell directory at all, so it holds
+            // no buildings for the same reason it holds no roads.
+            continue;
         };
-        let buildings_arrow = h3r4_dir.map(|h| h.join(c.to_string()).join("buildings.arrow"));
-        match cell_index(c, &dir, buildings_arrow.as_deref(), data_dir) {
+        let buildings_arrow = h3r4_dir.join(c.to_string()).join("buildings.arrow");
+        match cell_index(c, &obstacles_arrow, Some(&buildings_arrow), data_dir) {
             Ok(idx) => indexes.push(idx),
             Err(e) => return Err(format!("obstacle_store: {e}")),
         }
     }
-    // Zero edges is a legitimate answer, whether it came from manifest-proven
-    // empty cells or from a staged shard that indexed no footprint. A shard
-    // that exists HAS been asked and HAS answered; treating its emptiness as a
-    // fault would take whole countries silent the moment an Overture release
-    // rejects their heights (raised in review, 2026-08-30).
+    // Zero edges is a legitimate answer: a 0-row table is the finished sweep
+    // saying there is nothing here. A file that exists HAS been asked and HAS
+    // answered; treating its emptiness as a fault would take whole countries
+    // silent the moment an Overture release rejects their heights (raised in
+    // review, 2026-08-30).
     Ok(ObstacleSet { indexes })
-}
-
-/// The world-ingest manifest next to the staging tree, when present (the
-/// tile-painter loader's twin). Absent means coverage is unknown, so strict
-/// loading fails on any shard-less cell.
-fn ingest_manifest(
-    h3r4_dir: Option<&Path>,
-    data_dir: &Path,
-) -> Option<&'static noise_compute::propagation::obstacle_ingest_coverage::IngestManifest> {
-    // The tile-painter staging_root derivation (h3r4 ancestors) and the
-    // popup's (data_dir parent) meet at the same tree; prefer whichever
-    // resolves with the manifest file actually present.
-    let mut candidates = Vec::new();
-    if let Some(h3r4) = h3r4_dir {
-        if std::env::var("QM_OBSTACLES_DIR").is_err() {
-            candidates.extend(
-                noise_compute::propagation::obstacle_ingest_coverage::ingested_tiles_paths(h3r4),
-            );
-        }
-    }
-    candidates.push(
-        staging_root(data_dir)
-            .parent()
-            .map(|p| p.join(".ingested-tiles"))
-            .unwrap_or_else(|| std::path::PathBuf::from(".ingested-tiles")),
-    );
-    for path in candidates {
-        if let Some(m) =
-            noise_compute::propagation::obstacle_ingest_coverage::IngestManifest::load_cached(&path)
-        {
-            return Some(m);
-        }
-    }
-    None
 }
 
 /// Tallest structure the height probe will report (m) — comfortably above the
@@ -634,27 +499,22 @@ pub fn point_inside_footprint(
 }
 
 /// One cell's index, from the nearest source that still holds it: the process
-/// memo, then the on-disk index cache, then a rebuild from the Arrow shards
-/// (which is also written back). Build errors are not cached; successful
+/// memo, then the on-disk index cache, then a rebuild from the cell's Arrow
+/// table (which is also written back). Build errors are not cached; successful
 /// builds are immutable and shared.
 ///
-/// The inputs are listed and fingerprinted BEFORE either cache is consulted:
-/// both are keyed on that fingerprint, so a hit is only ever the index this
-/// process would have built from these very files. The listing costs one
-/// `read_dir` and a handful of `stat`s per cell per query — three orders below
-/// the rebuild it guards, and the price of a cache that answers the question it
-/// was asked.
+/// The inputs are fingerprinted BEFORE either cache is consulted: both are
+/// keyed on that fingerprint, so a hit is only ever the index this process
+/// would have built from these very files. Two `stat`s per cell per query —
+/// three orders below the rebuild they guard, and the price of a cache that
+/// answers the question it was asked.
 fn cell_index(
     cell: CellIndex,
-    dir: &Path,
+    obstacles_arrow: &Path,
     buildings_arrow: Option<&Path>,
     data_dir: &Path,
 ) -> Result<Arc<ObstacleIndex>, String> {
-    let shards = shard_paths(dir)?;
-    if shards.is_empty() {
-        return Err(format!("shard dir emptied under us: {}", dir.display()));
-    }
-    let ver = cell_data_ver(cell, &shards, buildings_arrow);
+    let ver = cell_data_ver(cell, obstacles_arrow, buildings_arrow);
     let t0 = std::time::Instant::now();
     if let Some(ver) = ver {
         if let Some(idx) = memo_get(cell, ver) {
@@ -670,7 +530,7 @@ fn cell_index(
         }
     }
 
-    let built = Arc::new(build_cell_index(cell, &shards, buildings_arrow)?);
+    let built = Arc::new(build_cell_index(cell, obstacles_arrow, buildings_arrow)?);
     // No fingerprint ⇒ no memo and no file. An index whose inputs could not be
     // pinned is used for THIS query and forgotten.
     if let Some(ver) = ver {
@@ -751,76 +611,68 @@ fn load_low_profile(buildings_arrow: Option<&Path>) -> Result<LowProfileLookup, 
     Ok(lookup)
 }
 
-/// Build one cell's index from its sorted shards. The index origin is the
+/// Build one cell's index from its obstacle table. The index origin is the
 /// CELL CENTRE (not the query point) so the cache entry is query-independent;
 /// crossings project the ray per call, so mixed origins across a set are fine.
 ///
-/// `shards` is the caller's listing, not a fresh one: the same list must decide
-/// the cache fingerprint AND the obstacle ordinals, or a shard appearing between
-/// the two reads would key an index under the wrong inputs.
+/// `obstacles_arrow` is the path the caller fingerprinted, not a fresh lookup:
+/// the same file must decide the cache identity AND the obstacle ordinals.
 fn build_cell_index(
     cell: CellIndex,
-    shards: &[PathBuf],
+    obstacles_arrow: &Path,
     buildings_arrow: Option<&Path>,
 ) -> Result<ObstacleIndex, String> {
     let centre = LatLng::from(cell);
     let mut builder = ObstacleIndex::builder(centre.lat(), centre.lng());
     let mut next_id: u32 = 0;
     let low_profile = load_low_profile(buildings_arrow)?;
-    for path in shards {
-        let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-        let reader = FileReader::try_new(Cursor::new(bytes), None)
-            .map_err(|e| format!("arrow open {}: {e}", path.display()))?;
-        for batch in reader {
-            let batch = batch.map_err(|e| format!("arrow batch {}: {e}", path.display()))?;
-            let wkb = batch
-                .column_by_name("polygon_wkb")
-                .and_then(|c| c.as_any().downcast_ref::<BinaryArray>())
-                .ok_or_else(|| format!("{}: missing polygon_wkb", path.display()))?;
-            let heights = batch
-                .column_by_name("height_m")
-                .and_then(|c| c.as_any().downcast_ref::<Float32Array>())
-                .ok_or_else(|| format!("{}: missing height_m", path.display()))?;
-            let tiers = batch
-                .column_by_name("height_tier")
-                .and_then(|c| c.as_any().downcast_ref::<UInt8Array>());
-            let clats = batch
-                .column_by_name("centroid_lat")
-                .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
-            let clons = batch
-                .column_by_name("centroid_lon")
-                .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
-            for i in 0..batch.num_rows() {
-                if wkb.is_null(i) || heights.is_null(i) {
-                    return Err(format!("{}: null row {i}", path.display()));
-                }
-                let mut height = heights.value(i);
-                if let (Some(tiers), Some(clats), Some(clons)) = (tiers, clats, clons) {
-                    if !tiers.is_null(i) && !clats.is_null(i) && !clons.is_null(i) {
-                        height = low_profile.capped_height(
-                            height,
-                            tiers.value(i),
-                            clats.value(i),
-                            clons.value(i),
-                            noise_compute::wkb::outer_ring_area_m2(wkb.value(i)),
-                        );
-                    }
-                }
-                let class = batch
-                    .column_by_name("envelope_class")
-                    .and_then(|c| c.as_any().downcast_ref::<UInt8Array>())
-                    .filter(|a| !a.is_null(i))
-                    .map(|a| EnvelopeClass::from_u8(a.value(i)))
-                    .unwrap_or(EnvelopeClass::Default);
-                builder.add_polygon_wkb(
-                    wkb.value(i),
-                    height,
-                    ObstacleKind::Building,
-                    next_id,
-                    class,
-                );
-                next_id = next_id.wrapping_add(1);
+    let bytes = std::fs::read(obstacles_arrow)
+        .map_err(|e| format!("read {}: {e}", obstacles_arrow.display()))?;
+    let reader = FileReader::try_new(Cursor::new(bytes), None)
+        .map_err(|e| format!("arrow open {}: {e}", obstacles_arrow.display()))?;
+    for batch in reader {
+        let batch = batch.map_err(|e| format!("arrow batch {}: {e}", obstacles_arrow.display()))?;
+        let wkb = batch
+            .column_by_name("polygon_wkb")
+            .and_then(|c| c.as_any().downcast_ref::<BinaryArray>())
+            .ok_or_else(|| format!("{}: missing polygon_wkb", obstacles_arrow.display()))?;
+        let heights = batch
+            .column_by_name("height_m")
+            .and_then(|c| c.as_any().downcast_ref::<Float32Array>())
+            .ok_or_else(|| format!("{}: missing height_m", obstacles_arrow.display()))?;
+        let tiers = batch
+            .column_by_name("height_tier")
+            .and_then(|c| c.as_any().downcast_ref::<UInt8Array>());
+        let clats = batch
+            .column_by_name("centroid_lat")
+            .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
+        let clons = batch
+            .column_by_name("centroid_lon")
+            .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
+        for i in 0..batch.num_rows() {
+            if wkb.is_null(i) || heights.is_null(i) {
+                return Err(format!("{}: null row {i}", obstacles_arrow.display()));
             }
+            let mut height = heights.value(i);
+            if let (Some(tiers), Some(clats), Some(clons)) = (tiers, clats, clons) {
+                if !tiers.is_null(i) && !clats.is_null(i) && !clons.is_null(i) {
+                    height = low_profile.capped_height(
+                        height,
+                        tiers.value(i),
+                        clats.value(i),
+                        clons.value(i),
+                        noise_compute::wkb::outer_ring_area_m2(wkb.value(i)),
+                    );
+                }
+            }
+            let class = batch
+                .column_by_name("envelope_class")
+                .and_then(|c| c.as_any().downcast_ref::<UInt8Array>())
+                .filter(|a| !a.is_null(i))
+                .map(|a| EnvelopeClass::from_u8(a.value(i)))
+                .unwrap_or(EnvelopeClass::Default);
+            builder.add_polygon_wkb(wkb.value(i), height, ObstacleKind::Building, next_id, class);
+            next_id = next_id.wrapping_add(1);
         }
     }
     Ok(builder.build())
@@ -850,8 +702,7 @@ pub struct FootprintView {
 /// and on a noise map an absent building is indistinguishable from a quiet
 /// place (raised in review, 2026-08-30).
 pub fn footprints_in_bbox(
-    h3r4_dir: Option<&Path>,
-    data_dir: &Path,
+    h3r4_dir: &Path,
     south: f64,
     west: f64,
     north: f64,
@@ -875,86 +726,70 @@ pub fn footprints_in_bbox(
     }
     let pad = 0.01;
     let mut out = Vec::new();
-    let manifest = ingest_manifest(h3r4_dir, data_dir);
     for cell in cells {
-        let dir = match cell_dir(h3r4_dir, data_dir, cell) {
-            Err(e) => return Err(format!("obstacle_store: {e}")),
-            Ok(Some(dir)) => dir,
-            Ok(None) => {
-                if manifest.is_some_and(|m| m.covers_cell(cell)) {
-                    continue; // proven ingested-empty — nothing to draw here
-                }
-                return Err(format!(
-                    "obstacle_store: cell {cell} has no obstacle shard and the ingest \
-                     manifest does not prove it empty"
-                ));
-            }
+        let Some(path) =
+            locate_cell_obstacles(h3r4_dir, cell).map_err(|e| format!("obstacle_store: {e}"))?
+        else {
+            continue; // outside the prepared world — nothing to draw here
         };
-        let buildings_arrow = h3r4_dir.map(|h| h.join(cell.to_string()).join("buildings.arrow"));
+        let buildings_arrow = h3r4_dir.join(cell.to_string()).join("buildings.arrow");
         // A cell whose cap cannot be read must not contribute footprints at
         // their uncapped height: a wrong number here is worse than an error.
-        let low_profile = load_low_profile(buildings_arrow.as_deref())
+        let low_profile = load_low_profile(Some(&buildings_arrow))
             .map_err(|e| format!("obstacle_store: low-profile cap for {cell}: {e}"))?;
-        let shards = shard_paths(&dir).map_err(|e| format!("obstacle_store: {cell}: {e}"))?;
-        for path in shards {
-            let bytes = std::fs::read(&path)
-                .map_err(|e| format!("obstacle_store: {}: {e}", path.display()))?;
-            let reader = FileReader::try_new(Cursor::new(bytes), None)
-                .map_err(|e| format!("obstacle_store: {}: {e}", path.display()))?;
-            for batch in reader {
-                let batch =
-                    batch.map_err(|e| format!("obstacle_store: {}: {e}", path.display()))?;
-                let (Some(wkb), Some(heights), Some(clats), Some(clons)) = (
-                    batch
-                        .column_by_name("polygon_wkb")
-                        .and_then(|c| c.as_any().downcast_ref::<BinaryArray>()),
-                    batch
-                        .column_by_name("height_m")
-                        .and_then(|c| c.as_any().downcast_ref::<Float32Array>()),
-                    batch
-                        .column_by_name("centroid_lat")
-                        .and_then(|c| c.as_any().downcast_ref::<Float64Array>()),
-                    batch
-                        .column_by_name("centroid_lon")
-                        .and_then(|c| c.as_any().downcast_ref::<Float64Array>()),
-                ) else {
+        let bytes =
+            std::fs::read(&path).map_err(|e| format!("obstacle_store: {}: {e}", path.display()))?;
+        let reader = FileReader::try_new(Cursor::new(bytes), None)
+            .map_err(|e| format!("obstacle_store: {}: {e}", path.display()))?;
+        for batch in reader {
+            let batch = batch.map_err(|e| format!("obstacle_store: {}: {e}", path.display()))?;
+            let (Some(wkb), Some(heights), Some(clats), Some(clons)) = (
+                batch
+                    .column_by_name("polygon_wkb")
+                    .and_then(|c| c.as_any().downcast_ref::<BinaryArray>()),
+                batch
+                    .column_by_name("height_m")
+                    .and_then(|c| c.as_any().downcast_ref::<Float32Array>()),
+                batch
+                    .column_by_name("centroid_lat")
+                    .and_then(|c| c.as_any().downcast_ref::<Float64Array>()),
+                batch
+                    .column_by_name("centroid_lon")
+                    .and_then(|c| c.as_any().downcast_ref::<Float64Array>()),
+            ) else {
+                continue;
+            };
+            let tiers = batch
+                .column_by_name("height_tier")
+                .and_then(|c| c.as_any().downcast_ref::<UInt8Array>());
+            for i in 0..batch.num_rows() {
+                if wkb.is_null(i) || heights.is_null(i) || clats.is_null(i) || clons.is_null(i) {
                     continue;
-                };
-                let tiers = batch
-                    .column_by_name("height_tier")
-                    .and_then(|c| c.as_any().downcast_ref::<UInt8Array>());
-                for i in 0..batch.num_rows() {
-                    if wkb.is_null(i) || heights.is_null(i) || clats.is_null(i) || clons.is_null(i)
-                    {
-                        continue;
-                    }
-                    let (clat, clon) = (clats.value(i), clons.value(i));
-                    if clat < south - pad
-                        || clat > north + pad
-                        || clon < west - pad
-                        || clon > east + pad
-                    {
-                        continue;
-                    }
-                    let raw = heights.value(i);
-                    let tier = tiers.map(|t| t.value(i)).unwrap_or(0);
-                    let height = low_profile.capped_height(
-                        raw,
+                }
+                let (clat, clon) = (clats.value(i), clons.value(i));
+                if clat < south - pad
+                    || clat > north + pad
+                    || clon < west - pad
+                    || clon > east + pad
+                {
+                    continue;
+                }
+                let raw = heights.value(i);
+                let tier = tiers.map(|t| t.value(i)).unwrap_or(0);
+                let height = low_profile.capped_height(
+                    raw,
+                    tier,
+                    clat,
+                    clon,
+                    noise_compute::wkb::outer_ring_area_m2(wkb.value(i)),
+                );
+                for (outer, _holes) in noise_compute::wkb::parse_wkb_polygons_bytes(wkb.value(i)) {
+                    out.push(FootprintView {
+                        outer: outer.clone(),
+                        height_m: height,
                         tier,
-                        clat,
-                        clon,
-                        noise_compute::wkb::outer_ring_area_m2(wkb.value(i)),
-                    );
-                    for (outer, _holes) in
-                        noise_compute::wkb::parse_wkb_polygons_bytes(wkb.value(i))
-                    {
-                        out.push(FootprintView {
-                            outer: outer.clone(),
-                            height_m: height,
-                            tier,
-                            capped: height < raw,
-                        });
-                    }
+                        capped: height < raw,
+                    });
                 }
             }
         }
@@ -968,10 +803,10 @@ mod tests {
     use tempfile::TempDir;
 
     /// Environment variables are PROCESS-global and `cargo test` runs tests in
-    /// parallel threads, so two tests setting `QM_OBSTACLES_DIR` read each
+    /// parallel threads, so two tests setting `QM_OBSTACLE_INDEX_DIR` read each
     /// other's value. Every test below that touches the environment takes this
-    /// lock and restores what it found, and every one of them points the two
-    /// caches at its OWN temp dirs — the suite's answer must not depend on its
+    /// lock and restores what it found, and every one of them points the index
+    /// cache at its OWN temp dir — the suite's answer must not depend on its
     /// order (2026-08-05: it did, in both directions).
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -1012,30 +847,41 @@ mod tests {
         dir.path().to_str().expect("utf-8 temp path").to_string()
     }
 
-    /// Runs only where the Praha obstacle staging exists (dev boxes after the
-    /// geodata-v2 night-1 ingest); hermetic CI skips silently. Asserts the
-    /// real scale and that the second load is a cache hit, not a rebuild.
+    /// The newest `…/data/prepared/<year>/h3r4` on this box, or `None` on a
+    /// hermetic checkout. The year is the product's own pin
+    /// (`scripts/dataset-year.json`), so it is read off the disk rather than
+    /// written here twice.
+    fn live_h3r4_dir() -> Option<PathBuf> {
+        let prepared = Path::new("../../data/prepared");
+        std::fs::read_dir(prepared)
+            .ok()?
+            .flatten()
+            .map(|entry| entry.file_name())
+            .filter(|name| {
+                name.as_encoded_bytes().len() == 4
+                    && name.as_encoded_bytes().iter().all(u8::is_ascii_digit)
+            })
+            .max()
+            .map(|year| prepared.join(year).join("h3r4"))
+            .filter(|dir| dir.is_dir())
+    }
+
+    /// Runs only where the world obstacle store exists (dev boxes with the
+    /// prepared tree); hermetic CI skips silently. Asserts the real scale and
+    /// that the second load is a cache hit, not a rebuild.
     #[test]
     fn loads_praha_set_and_caches_cells() {
-        let data_dir = Path::new("../../data/prepared");
-        let staged = data_dir
-            .parent()
-            .map(|d| d.join("enrichment/global/overture-obstacles/h3r4"))
-            .is_some_and(|d| d.is_dir());
-        if !staged {
+        let Some(h3r4) = live_h3r4_dir() else {
             return;
-        }
+        };
+        let data_dir = Path::new("../../data/prepared");
         // Its own index dir: this test must exercise the COLD build, and it
         // must not read (or evict) the box's production cache.
         let index_dir = TempDir::new().expect("temp index dir");
-        let _env = EnvGuard::set(&[
-            ("QM_OBSTACLES_DIR", None),
-            ("QM_OBSTACLES_ALLOW_PARTIAL", Some("1")),
-            ("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir))),
-        ]);
+        let _env = EnvGuard::set(&[("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir)))]);
         let t0 = std::time::Instant::now();
-        let Ok(set) = load_obstacle_set(None, data_dir, 50.08, 14.43) else {
-            return; // cell not ingested on this box — skip
+        let Ok(set) = load_obstacle_set(&h3r4, data_dir, 50.08, 14.43) else {
+            return; // this box's ring is not materialized yet — skip
         };
         let cold = t0.elapsed();
         assert!(
@@ -1052,14 +898,13 @@ mod tests {
         assert!(out.windows(2).all(|w| w[0].t <= w[1].t));
 
         let t1 = std::time::Instant::now();
-        let set2 = load_obstacle_set(None, data_dir, 50.08, 14.43).expect("cached reload");
+        let set2 = load_obstacle_set(&h3r4, data_dir, 50.08, 14.43).expect("cached reload");
         let warm = t1.elapsed();
         assert_eq!(set2.edge_count(), set.edge_count());
         assert!(
             warm < cold / 5,
             "second load must be a cache hit: cold {cold:?}, warm {warm:?}"
         );
-        std::env::remove_var("QM_OBSTACLES_ALLOW_PARTIAL");
     }
 
     /// Fix 4 popup half, on synthetic footprints so it runs everywhere: a
@@ -1204,35 +1049,44 @@ mod tests {
         assert!(point_inside_enclosed(&set, OLAT, OLON).is_none());
     }
 
-    /// One tiny valid shard: a single closed square footprint (~20 m) whose
-    /// south-west corner sits at `(lat, lon)`, WKB little-endian Polygon with
-    /// 1 ring × 5 points.
-    fn write_test_shard(dir: &Path, name: &str, lat: f64, lon: f64) -> PathBuf {
-        std::fs::create_dir_all(dir).unwrap();
+    /// One cell's obstacle table: a closed ~20 m square footprint per entry,
+    /// each with its south-west corner at the given `(lat, lon)`. An empty
+    /// `squares` writes the 0-row table a swept-and-empty cell carries.
+    fn write_obstacle_table(h3r4_dir: &Path, cell: CellIndex, squares: &[(f64, f64)]) -> PathBuf {
+        let dir = h3r4_dir.join(cell.to_string());
+        std::fs::create_dir_all(&dir).unwrap();
         let schema = arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("polygon_wkb", arrow::datatypes::DataType::Binary, false),
             arrow::datatypes::Field::new("height_m", arrow::datatypes::DataType::Float32, false),
         ]);
-        let mut wkb: Vec<u8> = vec![1, 3, 0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0];
-        for (dlon, dlat) in [
-            (0.0, 0.0),
-            (0.0003, 0.0),
-            (0.0003, 0.0002),
-            (0.0, 0.0002),
-            (0.0, 0.0),
-        ] {
-            wkb.extend_from_slice(&f64::to_le_bytes(lon + dlon));
-            wkb.extend_from_slice(&f64::to_le_bytes(lat + dlat));
-        }
+        let wkbs: Vec<Vec<u8>> = squares
+            .iter()
+            .map(|&(lat, lon)| {
+                let mut wkb: Vec<u8> = vec![1, 3, 0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0];
+                for (dlon, dlat) in [
+                    (0.0, 0.0),
+                    (0.0003, 0.0),
+                    (0.0003, 0.0002),
+                    (0.0, 0.0002),
+                    (0.0, 0.0),
+                ] {
+                    wkb.extend_from_slice(&f64::to_le_bytes(lon + dlon));
+                    wkb.extend_from_slice(&f64::to_le_bytes(lat + dlat));
+                }
+                wkb
+            })
+            .collect();
         let batch = arrow::record_batch::RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![
-                Arc::new(BinaryArray::from_vec(vec![&wkb])),
-                Arc::new(Float32Array::from(vec![9.0_f32])),
+                Arc::new(BinaryArray::from_vec(
+                    wkbs.iter().map(|w| w.as_slice()).collect(),
+                )),
+                Arc::new(Float32Array::from(vec![9.0_f32; squares.len()])),
             ],
         )
         .unwrap();
-        let path = dir.join(name);
+        let path = dir.join("obstacles.arrow");
         let file = std::fs::File::create(&path).unwrap();
         let mut w = arrow::ipc::writer::FileWriter::try_new(file, &schema).unwrap();
         w.write(&batch).unwrap();
@@ -1249,13 +1103,11 @@ mod tests {
         let tmp = TempDir::new().expect("temp dir");
         let tmp = tmp.path();
         let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
-        let dir = tmp.join(cell.to_string());
-        let shard = write_test_shard(&dir, "obstacles-TEST.arrow", 50.08, 14.43);
+        let table = write_obstacle_table(tmp, cell, &[(50.08, 14.43)]);
         let root = tmp.join("index-cache");
 
-        let shards = shard_paths(&dir).unwrap();
-        let data_ver = cell_data_ver(cell, &shards, None).expect("input fingerprint");
-        let built = build_cell_index(cell, &shards, None).unwrap();
+        let data_ver = cell_data_ver(cell, &table, None).expect("input fingerprint");
+        let built = build_cell_index(cell, &table, None).unwrap();
         store_cached_index(&root, cell, &built, data_ver);
 
         let path = cache_file_path(&root, cell);
@@ -1276,16 +1128,16 @@ mod tests {
             assert_eq!(x.id, y.id);
         }
 
-        // A shard that moved under us must not be served from cache — and the
+        // A table that moved under us must not be served from cache — and the
         // refused file is dropped so it cannot sit in the budget forever.
         let touched = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
         std::fs::File::options()
             .write(true)
-            .open(&shard)
+            .open(&table)
             .unwrap()
             .set_times(std::fs::FileTimes::new().set_modified(touched))
             .unwrap();
-        let moved = cell_data_ver(cell, &shards, None).expect("input fingerprint");
+        let moved = cell_data_ver(cell, &table, None).expect("input fingerprint");
         assert_ne!(
             moved, data_ver,
             "an input mtime must rotate the fingerprint"
@@ -1293,11 +1145,9 @@ mod tests {
         assert!(load_cached_index(&path, moved).is_none(), "stale file used");
         assert!(!path.exists(), "a refused cache file must be removed");
 
-        // A second shard is a different input SET, hence a different index.
-        write_test_shard(&dir, "obstacles-TEST2.arrow", 50.081, 14.431);
-        let two = shard_paths(&dir).unwrap();
-        assert_eq!(two.len(), 2);
-        assert_ne!(cell_data_ver(cell, &two, None).unwrap(), moved);
+        // A second footprint is a different table, hence a different index.
+        write_obstacle_table(tmp, cell, &[(50.08, 14.43), (50.081, 14.431)]);
+        assert_ne!(cell_data_ver(cell, &table, None).unwrap(), moved);
     }
 
     /// EVERY input that shapes a cell's index must move its identity, and a
@@ -1307,12 +1157,12 @@ mod tests {
     /// answer to a different question. It is written as an ENUMERATION rather
     /// than one case on purpose: the defect class is "the key forgot
     /// something", so the test walks the closed list [`cell_data_ver`] actually
-    /// folds — cell, shard ROOT, shard set, per-shard LENGTH and mtime, the
+    /// folds — cell, obstacle TREE, the table's LENGTH and mtime, the
     /// `buildings.arrow` the low-profile cap reads, and [`CACHE_CODE_VER`].
     /// Adding an input to `build_cell_index` without a case here leaves the same
     /// hole, so the list is the review surface.
     ///
-    /// NOT in the list, deliberately: shard CONTENT. Rewriting a shard to the
+    /// NOT in the list, deliberately: table CONTENT. Rewriting the table to the
     /// same length while forcing the same mtime keeps the identity — that is the
     /// `world-stamps.py` staleness contract (mtime is the change signal), not an
     /// oversight, and hashing hundreds of MB per cell per query to close it would
@@ -1324,15 +1174,14 @@ mod tests {
         let other_cell = LatLng::new(-23.5505, -46.6333)
             .unwrap()
             .to_cell(Resolution::Four);
+        let table = write_obstacle_table(tmp.path(), cell, &[(50.08, 14.43)]);
         let dir = tmp.path().join(cell.to_string());
-        let shard = write_test_shard(&dir, "obstacles-TEST.arrow", 50.08, 14.43);
         let root = tmp.path().join("index-cache");
-        let shards = shard_paths(&dir).unwrap();
-        let base = cell_data_ver(cell, &shards, None).expect("input fingerprint");
+        let base = cell_data_ver(cell, &table, None).expect("input fingerprint");
 
         // Positive control FIRST: without it every `is_none()` below would
         // also pass on a key that is simply always wrong.
-        let built = build_cell_index(cell, &shards, None).unwrap();
+        let built = build_cell_index(cell, &table, None).unwrap();
         let path = cache_file_path(&root, cell);
         store_cached_index(&root, cell, &built, base);
         assert!(
@@ -1353,40 +1202,39 @@ mod tests {
         };
 
         // 1. The cell — its centre is the index's metric origin, so the same
-        //    shards under another cell are a different index.
+        //    table under another cell is a different index.
         refuses(
-            cell_data_ver(other_cell, &shards, None).unwrap(),
+            cell_data_ver(other_cell, &table, None).unwrap(),
             "a different cell",
         );
 
-        // 2. The shard ROOT: identical bytes at another path are another
-        //    staging tree (`QM_OBSTACLES_DIR`, an A/B mount) and may hold
+        // 2. The obstacle TREE: identical bytes at another path are another
+        //    prepared root (a moved mount, a second data node) and may hold
         //    entirely different obstacles for this cell tomorrow.
         let root_b = TempDir::new().expect("temp dir");
-        let dir_b = root_b.path().join(cell.to_string());
-        write_test_shard(&dir_b, "obstacles-TEST.arrow", 50.08, 14.43);
+        let table_b = write_obstacle_table(root_b.path(), cell, &[(50.08, 14.43)]);
         refuses(
-            cell_data_ver(cell, &shard_paths(&dir_b).unwrap(), None).unwrap(),
-            "another shard root",
+            cell_data_ver(cell, &table_b, None).unwrap(),
+            "another obstacle tree",
         );
 
-        // 3. A shard's mtime (the world-stamps.py staleness contract).
+        // 3. The table's mtime (the world-stamps.py staleness contract).
         let touched = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
         std::fs::File::options()
             .write(true)
-            .open(&shard)
+            .open(&table)
             .unwrap()
             .set_times(std::fs::FileTimes::new().set_modified(touched))
             .unwrap();
         refuses(
-            cell_data_ver(cell, &shards, None).unwrap(),
-            "a shard's mtime",
+            cell_data_ver(cell, &table, None).unwrap(),
+            "the table's mtime",
         );
 
         // 4. `buildings.arrow` appearing — the low-profile cap reads it, so
         //    the very same shards yield different HEIGHTS with it present.
         let b_arrow = dir.join("buildings.arrow");
-        let absent = cell_data_ver(cell, &shards, Some(&b_arrow)).unwrap();
+        let absent = cell_data_ver(cell, &table, Some(&b_arrow)).unwrap();
         assert_ne!(
             absent, base,
             "asking about a buildings.arrow at all is a different question \
@@ -1394,35 +1242,29 @@ mod tests {
         );
         std::fs::write(&b_arrow, b"not-arrow-but-present").unwrap();
         refuses(
-            cell_data_ver(cell, &shards, Some(&b_arrow)).unwrap(),
+            cell_data_ver(cell, &table, Some(&b_arrow)).unwrap(),
             "a buildings.arrow appearing",
         );
 
-        // 5. A shard's LENGTH — the one content signal the key carries, folded
-        //    per shard next to the mtime. Pinned at a FIXED mtime so it is the
+        // 5. The table's LENGTH — the one content signal the key carries,
+        //    folded next to the mtime. Pinned at a FIXED mtime so it is the
         //    length alone doing the work, not case 3 again.
-        let before_len = cell_data_ver(cell, &shards, None).unwrap();
-        std::fs::write(&shard, b"a-shard-of-a-very-different-length").unwrap();
+        let before_len = cell_data_ver(cell, &table, None).unwrap();
+        std::fs::write(&table, b"a-table-of-a-very-different-length").unwrap();
         std::fs::File::options()
             .write(true)
-            .open(&shard)
+            .open(&table)
             .unwrap()
             .set_times(std::fs::FileTimes::new().set_modified(touched))
             .unwrap();
-        let after_len = cell_data_ver(cell, &shards, None).unwrap();
+        let after_len = cell_data_ver(cell, &table, None).unwrap();
         assert_ne!(
             after_len, before_len,
-            "a shard's length must rotate the identity at an unchanged mtime"
+            "the table's length must rotate the identity at an unchanged mtime"
         );
-        refuses(after_len, "a shard's length");
+        refuses(after_len, "the table's length");
 
-        // 6. A shard SET that grew.
-        write_test_shard(&dir, "obstacles-TEST2.arrow", 50.081, 14.431);
-        let two = shard_paths(&dir).unwrap();
-        assert_eq!(two.len(), 2);
-        refuses(cell_data_ver(cell, &two, None).unwrap(), "an extra shard");
-
-        // 7. This file's own decisions (id ordering, shard order, the capping
+        // 6. This file's own decisions (id ordering, shard order, the capping
         //    call) are in the version, on top of the builder's chain — which is
         //    what carries the low-profile rule now that it lives in
         //    `noise_compute::low_profile`.
@@ -1439,88 +1281,90 @@ mod tests {
     /// The process memo in front of the disk cache must key on the same
     /// identity the file does — 2026-08-05's live defect, where it keyed on the
     /// CELL alone and handed the second query the first query's index no matter
-    /// which shard root it asked about.
+    /// which obstacle tree it asked about.
     ///
     /// Runs entirely through `cell_index`, the function the query path calls,
     /// because that is the layer that was wrong: the disk file always carried
     /// its fingerprint and would have refused these.
     #[test]
-    fn process_memo_never_answers_for_another_shard_root() {
+    fn process_memo_never_answers_for_another_obstacle_tree() {
         let index_dir = TempDir::new().expect("temp index dir");
         let _env = EnvGuard::set(&[("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir)))]);
         let one = TempDir::new().expect("temp dir");
         let two = TempDir::new().expect("temp dir");
         let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
 
-        // Same cell, two staging trees: one square in A, two in B.
-        let dir_a = one.path().join(cell.to_string());
-        let dir_b = two.path().join(cell.to_string());
-        write_test_shard(&dir_a, "obstacles-TEST.arrow", 50.08, 14.43);
-        write_test_shard(&dir_b, "obstacles-TEST.arrow", 50.08, 14.43);
-        write_test_shard(&dir_b, "obstacles-TEST2.arrow", 50.081, 14.431);
+        // Same cell, two prepared trees: one square in A, two in B.
+        let table_a = write_obstacle_table(one.path(), cell, &[(50.08, 14.43)]);
+        let table_b = write_obstacle_table(two.path(), cell, &[(50.08, 14.43), (50.081, 14.431)]);
 
         let data_dir = one.path().join("prepared");
-        let edges = |dir: &Path| {
-            cell_index(cell, dir, None, &data_dir)
-                .expect("test shards build")
+        let edges = |table: &Path| {
+            cell_index(cell, table, None, &data_dir)
+                .expect("test table builds")
                 .edge_count()
         };
-        assert_eq!(edges(&dir_a), 4, "one square is four edges");
+        assert_eq!(edges(&table_a), 4, "one square is four edges");
         assert_eq!(
-            edges(&dir_b),
+            edges(&table_b),
             8,
-            "the memo served A's index for B's shards — it is keyed on the \
+            "the memo served A's index for B's table — it is keyed on the \
              cell, not on the inputs"
         );
-        assert_eq!(edges(&dir_a), 4, "and back, without either poisoning");
+        assert_eq!(edges(&table_a), 4, "and back, without either poisoning");
 
-        // A shard changing under a LIVE process is the same hole with one
-        // root: the memo must notice, not hold yesterday's obstacles.
-        write_test_shard(&dir_a, "obstacles-TEST2.arrow", 50.081, 14.431);
-        assert_eq!(edges(&dir_a), 8, "a shard added under us must be picked up");
+        // A table changing under a LIVE process is the same hole with one
+        // tree: the memo must notice, not hold yesterday's obstacles.
+        write_obstacle_table(one.path(), cell, &[(50.08, 14.43), (50.081, 14.431)]);
+        assert_eq!(edges(&table_a), 8, "a rewritten table must be picked up");
     }
 
-    /// Strict default: a missing ring cell fails; the dev override admits the
-    /// partial vector set.
-    ///
-    /// Runs strict → partial → strict on ONE process and one disk, which is
-    /// the question "does `QM_OBSTACLES_ALLOW_PARTIAL` belong in the cache
-    /// key?" asked as a test. It does not: the flag is re-read per query in
-    /// `load_obstacle_set` and only ever decides which CELLS are assembled
-    /// into the set; a cache entry is one cell's index, built from that cell's
-    /// shards alone, so no dev A/B run can leave a file that answers a strict
-    /// query differently. The final strict pass is what would catch it if that
-    /// ever stopped being true.
+    /// The three answers a ring cell can give, on the loader the popup calls.
+    /// Conflating any two of them is the bug class this whole design exists to
+    /// remove: an empty table is "no buildings here", a missing table is
+    /// undelivered data, and a cell the extract never produced is outside the
+    /// world.
     #[test]
-    fn missing_ring_cell_fails_unless_partial_allowed() {
+    fn empty_table_answers_no_buildings_and_a_missing_one_is_an_error() {
         let tmp = TempDir::new().expect("temp dir");
         let index_dir = TempDir::new().expect("temp index dir");
-        let _env = EnvGuard::set(&[
-            ("QM_OBSTACLES_DIR", Some(&path_str(&tmp))),
-            ("QM_OBSTACLES_ALLOW_PARTIAL", None),
-            ("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir))),
-        ]);
-        let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
-        let dir = tmp.path().join(cell.to_string());
-        write_test_shard(&dir, "obstacles-TEST.arrow", 50.08, 14.43);
+        let _env = EnvGuard::set(&[("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir)))]);
+        let h3r4 = tmp.path().join("h3r4");
         let data_dir = tmp.path().join("prepared");
+        let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
+        let ring: Vec<CellIndex> = cell.grid_disk(1);
 
+        write_obstacle_table(&h3r4, cell, &[(50.08, 14.43)]);
+        for &neighbour in ring.iter().filter(|&&c| c != cell) {
+            write_obstacle_table(&h3r4, neighbour, &[]);
+        }
+        let set = load_obstacle_set(&h3r4, &data_dir, 50.08, 14.43)
+            .expect("empty neighbours are an answer, not a gap");
+        assert_eq!(set.indexes.len(), ring.len());
+        assert_eq!(set.edge_count(), 4, "only the query cell holds a footprint");
+
+        // A prepared cell whose table was not delivered must fail the query.
+        let victim = *ring.iter().find(|&&c| c != cell).unwrap();
+        std::fs::remove_file(h3r4.join(victim.to_string()).join("obstacles.arrow")).unwrap();
         assert!(
-            load_obstacle_set(None, &data_dir, 50.08, 14.43).is_err(),
-            "missing ring cells must fail the query: buildings are vector-only"
+            load_obstacle_set(&h3r4, &data_dir, 50.08, 14.43).is_err(),
+            "a ring cell without its obstacle table is missing data, not empty"
         );
 
-        std::env::set_var("QM_OBSTACLES_ALLOW_PARTIAL", "1");
-        let partial = load_obstacle_set(None, &data_dir, 50.08, 14.43)
-            .expect("dev override must admit the partial disk");
+        // A cell the extract never produced has no directory: outside the
+        // world, contributing nothing, exactly as it contributes no roads.
+        std::fs::remove_dir_all(h3r4.join(victim.to_string())).unwrap();
+        let partial = load_obstacle_set(&h3r4, &data_dir, 50.08, 14.43)
+            .expect("a cell outside the prepared world is not an error");
+        assert_eq!(partial.indexes.len(), ring.len() - 1);
         assert_eq!(partial.edge_count(), 4);
 
-        // The A/B run just cached this cell, in memory and on disk. The strict
-        // query must still refuse the incomplete ring.
-        std::env::remove_var("QM_OBSTACLES_ALLOW_PARTIAL");
+        // The query cell itself is always prepared: without its table there is
+        // no answer to give.
+        std::fs::remove_file(h3r4.join(cell.to_string()).join("obstacles.arrow")).unwrap();
         assert!(
-            load_obstacle_set(None, &data_dir, 50.08, 14.43).is_err(),
-            "a partial-mode run must not leave anything that answers a strict query"
+            load_obstacle_set(&h3r4, &data_dir, 50.08, 14.43).is_err(),
+            "the query cell's own table cannot be optional"
         );
     }
 }

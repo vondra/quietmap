@@ -2,30 +2,23 @@
 //! pipeline twin of `source-reader::obstacle_store`; keep loading policy in
 //! lockstep (the barrier loader ↔ popup precedent).
 //!
-//! Reads per-H3R4-cell `obstacles*.arrow` shards (Overture footprints +
-//! heights, `scripts/obstacles/ingest-overture-obstacles.py`) into per-cell
-//! [`ObstacleIndex`]es (origin = cell centre) shared across the region's
-//! tile batches as an [`ObstacleSet`]. Roots per cell, first hit wins: the
-//! PROMOTED tree (`h3r4_dir/<cell>/`, post-Wave-1) then the enrichment
-//! staging tree; `QM_OBSTACLES_DIR` overrides (tests).
+//! Reads each H3R4 cell's `obstacles.arrow` (Overture footprints + heights,
+//! `scripts/obstacles/enrich-obstacle-heights.py`) into per-cell
+//! [`ObstacleIndex`]es (origin = cell centre) shared across the region's tile
+//! batches as an [`ObstacleSet`]. One file per cell under `h3r4_dir/<cell>/`,
+//! so a region needs its cell and its ring and nothing else.
 //!
-//! ALL-OR-ERROR: a missing ring cell fails the whole region because a partial
-//! index would silently omit buildings where coverage is absent;
-//! `QM_OBSTACLES_ALLOW_PARTIAL=1` admits missing halo NEIGHBOURS at staging
-//! frontiers for dev A/B, but never the region's own cell (popup's
-//! query-cell rule). A shard READ/PARSE error — including a failed
-//! directory listing — is a hard `Err` that fails the region build: a
-//! pipeline must never silently paint with different physics than requested
-//! (the popup has its own visitor-facing loading policy).
-//! EXCEPTION (ingested-empty proof): a shard-less cell whose every
-//! overlapped 1-degree tile is listed in the world ingest manifest
-//! (`.ingested-tiles`, see `obstacle_ingest_coverage`) was provably swept
-//! by the current Overture ingest and contributed zero footprints — it is
-//! EMPTY, not missing, and vector mode proceeds
-//! without it.
+//! ALL-OR-ERROR: a ring cell of the prepared world whose `obstacles.arrow` is
+//! missing fails the whole region, because a partial index would silently omit
+//! buildings where coverage is absent. A READ/PARSE error is the same hard
+//! `Err`: a pipeline must never silently paint with different physics than
+//! requested (the popup has its own visitor-facing loading policy).
+//! Emptiness is not absence — a 0-row table is the finished sweep answering
+//! "no buildings here", and a cell with no directory at all is outside the
+//! prepared world (`noise_compute::propagation::obstacle_cell_file`).
 
 use std::io::Cursor;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
@@ -34,6 +27,7 @@ use arrow::ipc::reader::FileReader;
 use h3o::{CellIndex, LatLng};
 use noise_compute::envelope::{effective_envelope_class, EnvelopeClass};
 use noise_compute::low_profile::LowProfileLookup;
+use noise_compute::propagation::obstacle_cell_file::locate_cell_obstacles;
 use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind, ObstacleSet};
 use noise_compute::wkb;
 
@@ -61,52 +55,36 @@ impl ObstacleData {
     /// paint this region" — painting it anyway would publish a quiet map of a
     /// loud place, and nothing downstream could tell the difference.
     ///
-    /// `region_r4` is the cell being PAINTED: even under
-    /// `QM_OBSTACLES_ALLOW_PARTIAL=1` it must be ingested — partial mode
-    /// admits a missing halo NEIGHBOUR at a staging frontier, never a missing
-    /// centre. Same rule as the popup store's query-cell requirement.
+    /// `region_r4` is the cell being PAINTED: it is by definition part of the
+    /// prepared world, so its own table must be there. Same rule as the popup
+    /// store's query-cell requirement.
     pub fn load_for_r4s(h3r4_dir: &Path, region_r4: u64, r4_hexes: &[u64]) -> Result<Self> {
-        let allow_partial = std::env::var("QM_OBSTACLES_ALLOW_PARTIAL").is_ok_and(|v| v == "1");
-        if renderer_evidence_requires_vector_mode() && allow_partial {
-            bail!("renderer evidence forbids QM_OBSTACLES_ALLOW_PARTIAL");
-        }
-        if renderer_evidence_requires_vector_mode()
-            && std::env::var_os("QM_OBSTACLES_DIR").is_some()
-        {
-            bail!("renderer evidence requires canonical promoted obstacles, not QM_OBSTACLES_DIR");
-        }
-        let manifest = ingest_manifest(h3r4_dir);
         let mut indexes = Vec::new();
         for &r4 in r4_hexes {
             let cell = CellIndex::try_from(r4).context("invalid r4 hex")?;
-            let Some(dir) = cell_dir(h3r4_dir, cell)? else {
-                if allow_partial && r4 != region_r4 {
-                    // Never silent: this is the one path that paints with
-                    // KNOWN-incomplete geometry, so it must leave a trace an
-                    // operator can find in a log they already read.
-                    eprintln!(
-                        "[obstacles] QM_OBSTACLES_ALLOW_PARTIAL: painting {region_r4:015x} \
-                         WITHOUT halo cell {cell} — incomplete screening, dev A/B only"
+            let located = locate_cell_obstacles(h3r4_dir, cell).map_err(|e| {
+                anyhow::anyhow!(
+                    "[obstacles] {e} — buildings are vector-only, so this region cannot be painted"
+                )
+            })?;
+            let Some(obstacles_arrow) = located else {
+                if r4 == region_r4 {
+                    bail!(
+                        "[obstacles] REGION cell {cell} is not in the prepared world \
+                         ({}) — it cannot be painted",
+                        h3r4_dir.display()
                     );
-                    continue;
                 }
-                if manifest.is_some_and(|m| m.covers_cell(cell)) {
-                    // INGESTED-EMPTY, proven by the world ingest manifest: the
-                    // sweep covered this cell and it contributed zero
-                    // footprints. Empty is an answer; missing is not, and this
-                    // manifest is the only thing that tells them apart.
-                    continue;
-                }
-                bail!(
-                    "[obstacles] {} cell {cell} has no shard and the ingest manifest does not \
-                     prove it empty — buildings are vector-only, so this region cannot be \
-                     painted (QM_OBSTACLES_ALLOW_PARTIAL=1 admits missing halo neighbours \
-                     for dev A/B)",
-                    if r4 == region_r4 { "REGION" } else { "ring" },
-                );
+                // Outside the prepared world: no cell directory at all, so it
+                // holds no buildings for the same reason it holds no roads.
+                continue;
             };
             let low_profile = load_low_profile(h3r4_dir, cell)?;
-            indexes.push(Arc::new(build_cell_index(cell, &dir, &low_profile)?));
+            indexes.push(Arc::new(build_cell_index(
+                cell,
+                &obstacles_arrow,
+                &low_profile,
+            )?));
         }
         let set = ObstacleSet { indexes };
         if set.edge_count() == 0 {
@@ -114,9 +92,9 @@ impl ObstacleData {
                 bail!("renderer evidence requires positive vector mode; obstacle ring is empty");
             }
             // Zero edges is a legitimate answer: ocean, desert, and any cell
-            // whose staged shard indexed no footprint. A shard that exists HAS
-            // answered, and calling its emptiness a fault would black out whole
-            // countries the day an Overture release rejects their heights.
+            // whose table holds no footprint. A table that exists HAS answered,
+            // and calling its emptiness a fault would black out whole countries
+            // the day an Overture release rejects their heights.
             eprintln!(
                 "[obstacles] vector mode: 0 edges across {} cells",
                 r4_hexes.len()
@@ -505,149 +483,76 @@ fn load_low_profile(h3r4_dir: &Path, cell: CellIndex) -> Result<LowProfileLookup
     Ok(lookup)
 }
 
-fn staging_root(h3r4_dir: &Path) -> PathBuf {
-    if let Ok(dir) = std::env::var("QM_OBSTACLES_DIR") {
-        return PathBuf::from(dir);
-    }
-    // h3r4_dir = <root>/data/prepared/{year}/h3r4 → <root>/data/enrichment/…
-    h3r4_dir
-        .ancestors()
-        .nth(3)
-        .map(|d| d.join("enrichment/global/overture-obstacles/h3r4"))
-        .unwrap_or_else(|| PathBuf::from("data/enrichment/global/overture-obstacles/h3r4"))
-}
-
-/// World ingest proof for shard-less cells. `QM_OBSTACLES_DIR` keeps the
-/// manifest next to that override (tests); otherwise walk he84 / NAS layouts.
-fn ingest_manifest(
-    h3r4_dir: &Path,
-) -> Option<&'static noise_compute::propagation::obstacle_ingest_coverage::IngestManifest> {
-    if std::env::var("QM_OBSTACLES_DIR").is_ok() {
-        return noise_compute::propagation::obstacle_ingest_coverage::IngestManifest::load_cached(
-            &staging_root(h3r4_dir)
-                .parent()
-                .map(|p| p.join(".ingested-tiles"))
-                .unwrap_or_else(|| PathBuf::from(".ingested-tiles")),
-        );
-    }
-    noise_compute::propagation::obstacle_ingest_coverage::load_for_h3r4(h3r4_dir)
-}
-
-fn cell_dir(h3r4_dir: &Path, cell: CellIndex) -> Result<Option<PathBuf>> {
-    if std::env::var("QM_OBSTACLES_DIR").is_err() {
-        let promoted = h3r4_dir.join(cell.to_string());
-        if !shard_paths(&promoted)?.is_empty() {
-            return Ok(Some(promoted));
-        }
-    }
-    let staged = staging_root(h3r4_dir).join(cell.to_string());
-    Ok((!shard_paths(&staged)?.is_empty()).then_some(staged))
-}
-
-/// Sorted shard listing — deterministic obstacle ordinals per on-disk state.
-/// A missing directory is a legitimate "not ingested" (`Ok(empty)`); any
-/// OTHER I/O failure is a hard error — a permission or disk fault must not
-/// read as "cell missing" and silently activate an incomplete index
-/// (gg review 2026-07-28).
-fn shard_paths(dir: &Path) -> Result<Vec<PathBuf>> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e).with_context(|| format!("read_dir {}", dir.display())),
-    };
-    let mut out = Vec::new();
-    for entry in entries {
-        let entry = entry.with_context(|| format!("read_dir entry in {}", dir.display()))?;
-        let p = entry.path();
-        if p.file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with("obstacles") && n.ends_with(".arrow"))
-        {
-            out.push(p);
-        }
-    }
-    out.sort();
-    Ok(out)
-}
-
 /// Outer-ring area (m², shoelace on a local equirectangular projection) —
 /// the low-profile cap's footprint-comparability check. Uses the SAME parser
 /// the index builder consumes, so the two can never disagree on geometry.
 fn build_cell_index(
     cell: CellIndex,
-    dir: &Path,
+    obstacles_arrow: &Path,
     low_profile: &LowProfileLookup,
 ) -> Result<ObstacleIndex> {
     let centre = LatLng::from(cell);
     let mut builder = ObstacleIndex::builder(centre.lat(), centre.lng());
     let mut next_id: u32 = 0;
     let mut capped = 0usize;
-    let shards = shard_paths(dir)?;
-    if shards.is_empty() {
-        bail!("shard dir emptied under us: {}", dir.display());
-    }
-    for path in shards {
-        let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-        let reader = FileReader::try_new(Cursor::new(bytes), None)
-            .with_context(|| format!("arrow open {}", path.display()))?;
-        for batch in reader {
-            let batch = batch.with_context(|| format!("arrow batch {}", path.display()))?;
-            let (Some(wkb), Some(heights)) = (
-                batch
-                    .column_by_name("polygon_wkb")
-                    .and_then(|c| c.as_any().downcast_ref::<BinaryArray>()),
-                batch
-                    .column_by_name("height_m")
-                    .and_then(|c| c.as_any().downcast_ref::<Float32Array>()),
-            ) else {
-                bail!("{}: missing polygon_wkb/height_m", path.display());
-            };
-            // Older staging shards lack tier/centroid — then nothing is
-            // capped (tier unknowable), matching pre-fix behavior.
-            let tiers = batch
-                .column_by_name("height_tier")
-                .and_then(|c| c.as_any().downcast_ref::<UInt8Array>());
-            let clats = batch
-                .column_by_name("centroid_lat")
-                .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
-            let clons = batch
-                .column_by_name("centroid_lon")
-                .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
-            for i in 0..batch.num_rows() {
-                if wkb.is_null(i) || heights.is_null(i) {
-                    bail!("{}: null row {i}", path.display());
-                }
-                let mut height = heights.value(i);
-                if let (Some(tiers), Some(clats), Some(clons)) = (tiers, clats, clons) {
-                    if !tiers.is_null(i) && !clats.is_null(i) && !clons.is_null(i) {
-                        let capped_h = low_profile.capped_height(
-                            height,
-                            tiers.value(i),
-                            clats.value(i),
-                            clons.value(i),
-                            wkb::outer_ring_area_m2(wkb.value(i)),
-                        );
-                        if capped_h < height {
-                            capped += 1;
-                        }
-                        height = capped_h;
-                    }
-                }
-                let class = batch
-                    .column_by_name("envelope_class")
-                    .and_then(|c| c.as_any().downcast_ref::<UInt8Array>())
-                    .filter(|a| !a.is_null(i))
-                    .map(|a| EnvelopeClass::from_u8(a.value(i)))
-                    .unwrap_or(EnvelopeClass::Default);
-                builder.add_polygon_wkb(
-                    wkb.value(i),
-                    height,
-                    ObstacleKind::Building,
-                    next_id,
-                    class,
-                );
-                next_id = next_id.wrapping_add(1);
+    let bytes = std::fs::read(obstacles_arrow)
+        .with_context(|| format!("read {}", obstacles_arrow.display()))?;
+    let reader = FileReader::try_new(Cursor::new(bytes), None)
+        .with_context(|| format!("arrow open {}", obstacles_arrow.display()))?;
+    for batch in reader {
+        let batch = batch.with_context(|| format!("arrow batch {}", obstacles_arrow.display()))?;
+        let (Some(wkb), Some(heights)) = (
+            batch
+                .column_by_name("polygon_wkb")
+                .and_then(|c| c.as_any().downcast_ref::<BinaryArray>()),
+            batch
+                .column_by_name("height_m")
+                .and_then(|c| c.as_any().downcast_ref::<Float32Array>()),
+        ) else {
+            bail!(
+                "{}: missing polygon_wkb/height_m",
+                obstacles_arrow.display()
+            );
+        };
+        // Older staging shards lack tier/centroid — then nothing is
+        // capped (tier unknowable), matching pre-fix behavior.
+        let tiers = batch
+            .column_by_name("height_tier")
+            .and_then(|c| c.as_any().downcast_ref::<UInt8Array>());
+        let clats = batch
+            .column_by_name("centroid_lat")
+            .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
+        let clons = batch
+            .column_by_name("centroid_lon")
+            .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
+        for i in 0..batch.num_rows() {
+            if wkb.is_null(i) || heights.is_null(i) {
+                bail!("{}: null row {i}", obstacles_arrow.display());
             }
+            let mut height = heights.value(i);
+            if let (Some(tiers), Some(clats), Some(clons)) = (tiers, clats, clons) {
+                if !tiers.is_null(i) && !clats.is_null(i) && !clons.is_null(i) {
+                    let capped_h = low_profile.capped_height(
+                        height,
+                        tiers.value(i),
+                        clats.value(i),
+                        clons.value(i),
+                        wkb::outer_ring_area_m2(wkb.value(i)),
+                    );
+                    if capped_h < height {
+                        capped += 1;
+                    }
+                    height = capped_h;
+                }
+            }
+            let class = batch
+                .column_by_name("envelope_class")
+                .and_then(|c| c.as_any().downcast_ref::<UInt8Array>())
+                .filter(|a| !a.is_null(i))
+                .map(|a| EnvelopeClass::from_u8(a.value(i)))
+                .unwrap_or(EnvelopeClass::Default);
+            builder.add_polygon_wkb(wkb.value(i), height, ObstacleKind::Building, next_id, class);
+            next_id = next_id.wrapping_add(1);
         }
     }
     if capped > 0 {
@@ -664,12 +569,17 @@ mod tests {
 
     /// One tiny valid shard: a single closed ~20 m square footprint at
     /// (lat, lon), WKB little-endian Polygon, 1 ring × 5 points.
-    fn write_shard(dir: &Path, lat: f64, lon: f64) {
-        std::fs::create_dir_all(dir).unwrap();
+    /// One cell's obstacle table in `h3r4_dir`: one ~20 m square footprint at
+    /// the cell centre, or the 0-row table a swept-and-empty cell carries.
+    fn write_cell_obstacles(h3r4_dir: &Path, cell: CellIndex, footprints: usize) {
+        let dir = h3r4_dir.join(cell.to_string());
+        std::fs::create_dir_all(&dir).unwrap();
         let schema = arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("polygon_wkb", arrow::datatypes::DataType::Binary, false),
             arrow::datatypes::Field::new("height_m", arrow::datatypes::DataType::Float32, false),
         ]);
+        let centre = LatLng::from(cell);
+        let (lat, lon) = (centre.lat(), centre.lng());
         let mut wkb: Vec<u8> = vec![1, 3, 0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0];
         for (dlon, dlat) in [
             (0.0, 0.0),
@@ -684,12 +594,12 @@ mod tests {
         let batch = arrow::record_batch::RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![
-                Arc::new(arrow::array::BinaryArray::from_vec(vec![&wkb])),
-                Arc::new(Float32Array::from(vec![9.0_f32])),
+                Arc::new(arrow::array::BinaryArray::from_vec(vec![&wkb; footprints])),
+                Arc::new(Float32Array::from(vec![9.0_f32; footprints])),
             ],
         )
         .unwrap();
-        let file = std::fs::File::create(dir.join("obstacles-TEST.arrow")).unwrap();
+        let file = std::fs::File::create(dir.join("obstacles.arrow")).unwrap();
         let mut w = arrow::ipc::writer::FileWriter::try_new(file, &schema).unwrap();
         w.write(&batch).unwrap();
         w.finish().unwrap();
@@ -940,12 +850,15 @@ mod tests {
         assert!(cells.iter().all(|&c| c == NO_DATA));
     }
 
+    /// The loading policy, as the three answers a ring cell can give plus the
+    /// two that must always fail. Conflating an EMPTY table with a MISSING one
+    /// is the bug this design removes: before per-cell emptiness a rented box
+    /// that received no shard painted the cell without buildings, silently.
     #[test]
     fn loading_policy_matrix() {
         let tmp = std::env::temp_dir().join(format!("qm-obst-pipe-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        std::env::set_var("QM_OBSTACLES_DIR", tmp.to_str().unwrap());
-        std::env::remove_var("QM_OBSTACLES_ALLOW_PARTIAL");
+        let h3r4 = tmp.join("h3r4");
 
         let region = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
         let ring: Vec<u64> = region
@@ -953,121 +866,58 @@ mod tests {
             .into_iter()
             .map(u64::from)
             .collect();
-        let h3r4 = tmp.join("unused-h3r4");
         let last = *ring.last().unwrap(); // a halo neighbour (grid_disk puts the centre first)
         assert_ne!(last, u64::from(region));
 
-        // All but one halo cell ingested.
+        // Region with a footprint, every halo neighbour swept and EMPTY.
+        write_cell_obstacles(&h3r4, region, 1);
         for &r4 in &ring {
-            if r4 == last {
-                continue;
+            if r4 != u64::from(region) {
+                write_cell_obstacles(&h3r4, CellIndex::try_from(r4).unwrap(), 0);
             }
-            let c = CellIndex::try_from(r4).unwrap();
-            let centre = LatLng::from(c);
-            write_shard(&tmp.join(c.to_string()), centre.lat(), centre.lng());
         }
-
-        assert!(
-            ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).is_err(),
-            "a missing halo neighbour must fail the region: there is no second \
-             building representation to fall back to"
+        let loaded = ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).unwrap();
+        assert_eq!(loaded.set().indexes.len(), ring.len());
+        assert_eq!(
+            loaded.set().edge_count(),
+            4,
+            "an empty table is an answer, not a gap"
         );
 
-        std::env::set_var("QM_OBSTACLES_ALLOW_PARTIAL", "1");
-        let partial = ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).unwrap();
-        let set = partial.set(); // partial mode admits a staging frontier
-        assert_eq!(set.indexes.len(), ring.len() - 1);
-        assert!(set.edge_count() >= 4 * (ring.len() - 1));
-
-        // Missing REGION cell: even partial mode must refuse.
-        std::fs::remove_dir_all(tmp.join(region.to_string())).unwrap();
+        // A prepared halo cell whose table was not delivered fails the region:
+        // there is no second building representation to fall back to.
+        let missing = CellIndex::try_from(last).unwrap();
+        std::fs::remove_file(h3r4.join(missing.to_string()).join("obstacles.arrow")).unwrap();
         assert!(
             ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).is_err(),
-            "a missing REGION cell must fail even in partial mode"
+            "a halo cell without its obstacle table must fail the region"
         );
 
-        // Corrupt shard in an ingested cell: hard error.
-        let centre = LatLng::from(region);
-        write_shard(&tmp.join(region.to_string()), centre.lat(), centre.lng());
+        // A cell the extract never produced has no directory at all: outside
+        // the prepared world, contributing nothing, exactly as it contributes
+        // no roads.
+        std::fs::remove_dir_all(h3r4.join(missing.to_string())).unwrap();
+        let outside = ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).unwrap();
+        assert_eq!(outside.set().indexes.len(), ring.len() - 1);
+
+        // Missing REGION cell: never admissible.
+        std::fs::remove_file(h3r4.join(region.to_string()).join("obstacles.arrow")).unwrap();
+        assert!(
+            ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).is_err(),
+            "a missing REGION table must fail the region"
+        );
+
+        // Corrupt table in a present cell: hard error.
         std::fs::write(
-            tmp.join(region.to_string()).join("obstacles-BAD.arrow"),
+            h3r4.join(region.to_string()).join("obstacles.arrow"),
             b"garbage",
         )
         .unwrap();
         assert!(
             ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).is_err(),
-            "corrupt shard must fail the region build"
+            "a corrupt table must fail the region build"
         );
 
-        // ── Ingested-empty proof: a shard-less halo cell whose degree tiles
-        // are all listed in the world ingest manifest passes strict mode;
-        // remove the manifest and the same ring fails.
-        // Isolated root so its manifest can never collide with the matrix's
-        // own (the manifest sits in the PARENT of QM_OBSTACLES_DIR).
-        std::env::remove_var("QM_OBSTACLES_ALLOW_PARTIAL");
-        let mroot = std::env::temp_dir().join(format!(
-            "qm-obst-manifest-test-{}-{region}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&mroot);
-        let obst_root = mroot.join("obst");
-        std::fs::create_dir_all(&obst_root).unwrap();
-        for &r4 in &ring {
-            if r4 == last {
-                continue;
-            }
-            let c = CellIndex::try_from(r4).unwrap();
-            let centre = LatLng::from(c);
-            write_shard(&obst_root.join(c.to_string()), centre.lat(), centre.lng());
-        }
-        let missing = CellIndex::try_from(last).unwrap();
-        let mut names = String::new();
-        let (lat_min, lat_max, lon_min, lon_max) = missing_boundary_bbox(missing);
-        for lat in lat_min.floor() as i32..=(lat_max - f64::EPSILON).floor() as i32 {
-            for lon in lon_min.floor() as i32..=(lon_max - f64::EPSILON).floor() as i32 {
-                names.push_str(&format!(
-                    "{}{:02}{}{:03}\n",
-                    if lat >= 0 { 'N' } else { 'S' },
-                    lat.abs(),
-                    if lon >= 0 { 'E' } else { 'W' },
-                    lon.abs()
-                ));
-            }
-        }
-        std::fs::write(mroot.join(".ingested-tiles"), names).unwrap();
-        std::env::set_var("QM_OBSTACLES_DIR", obst_root.to_str().unwrap());
-        let covered = ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).unwrap();
-        // A manifest-proven empty halo cell is EMPTY, not missing: the region loads.
-        assert_eq!(covered.set().indexes.len(), ring.len() - 1);
-        // Manifest gone → the same absent cell is no longer provably empty, and
-        // nothing else can answer for it.
-        std::fs::remove_file(mroot.join(".ingested-tiles")).unwrap();
-        assert!(
-            ObstacleData::load_for_r4s(&h3r4, u64::from(region), &ring).is_err(),
-            "without the manifest a missing halo neighbour is unproven, so the region fails"
-        );
-
-        std::env::remove_var("QM_OBSTACLES_DIR");
-        std::env::remove_var("QM_OBSTACLES_ALLOW_PARTIAL");
         let _ = std::fs::remove_dir_all(&tmp);
-        let _ = std::fs::remove_dir_all(&mroot);
-    }
-
-    /// Lat/lon bbox of a cell boundary — test twin of the private helper in
-    /// `obstacle_ingest_coverage` (kept local so the fixture cannot silently
-    /// diverge from the unit under test).
-    fn missing_boundary_bbox(cell: CellIndex) -> (f64, f64, f64, f64) {
-        let mut lat_min = f64::MAX;
-        let mut lat_max = f64::MIN;
-        let mut lon_min = f64::MAX;
-        let mut lon_max = f64::MIN;
-        for ll in cell.boundary().iter() {
-            let (lat, lon) = (ll.lat_radians().to_degrees(), ll.lng_radians().to_degrees());
-            lat_min = lat_min.min(lat);
-            lat_max = lat_max.max(lat);
-            lon_min = lon_min.min(lon);
-            lon_max = lon_max.max(lon);
-        }
-        (lat_min, lat_max, lon_min, lon_max)
     }
 }

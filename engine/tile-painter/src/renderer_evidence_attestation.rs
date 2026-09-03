@@ -137,19 +137,6 @@ pub fn maybe_run_static_attestation(
         }
         "runtime-shape" => emit_json(&runtime_shape_from_env(role, parameters.runtime)?)?,
         "workset" | "dependency-plan" => {
-            let vector_buildings = matches!(parameters.profile, DependencyProfile::Surface)
-                || parameters.layers.iter().any(|layer| {
-                    matches!(layer.as_str(), "aircraft-airborne" | "aircraft-combined")
-                });
-            if mode == "dependency-plan"
-                && vector_buildings
-                && (std::env::var_os("QM_OBSTACLES_ALLOW_PARTIAL").is_some()
-                    || std::env::var_os("QM_OBSTACLES_DIR").is_some())
-            {
-                bail!(
-                    "vector-building dependency attestation requires canonical complete obstacles"
-                );
-            }
             let cells_path = required_env("QM_RENDERER_ATTEST_CELLS")?;
             let mut cells = crate::region_runner::read_r4_file(Path::new(&cells_path))?;
             cells.sort_unstable();

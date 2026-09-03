@@ -46,11 +46,21 @@ static STORE: std::sync::LazyLock<RwLock<HexStore>> =
 #[cfg(feature = "node")]
 static RASTERS: std::sync::OnceLock<raster_reader::RealRasters> = std::sync::OnceLock::new();
 /// Data root (`…/data/prepared`) captured at `source_init` — the vector
-/// obstacle loader resolves its staging tree relative to it (geodata-v2 1.4).
+/// obstacle loader keeps its on-disk index cache under it (geodata-v2 1.4).
 static DATA_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-/// The live `…/prepared/{year}/h3r4` dir — the PROMOTED obstacle root
-/// (post-Wave-1 shards live beside each cell's arrows).
+/// The live `…/prepared/{year}/h3r4` dir — the obstacle root: every prepared
+/// cell carries its own `obstacles.arrow` beside its other arrows.
 static H3R4_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// The obstacle root, or the one error that explains an unset one. Buildings
+/// are vector-only, so a query without this root has no answer to give.
+#[cfg(feature = "node")]
+fn h3r4_dir() -> napi::Result<&'static std::path::Path> {
+    H3R4_DIR
+        .get()
+        .map(|p| p.as_path())
+        .ok_or_else(|| Error::new(Status::GenericFailure, "source_init was never called"))
+}
 
 // NACE codes are now baked into industrial.arrow (nace_4digit UInt16 column).
 // No global lookup needed at runtime.
@@ -260,12 +270,7 @@ pub fn query_obstacle_footprints(
     north: f64,
     east: f64,
 ) -> napi::Result<String> {
-    let h3r4 = H3R4_DIR.get().map(|p| p.as_path());
-    let data_dir = DATA_DIR
-        .get()
-        .map(|p| p.as_path())
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let fps = obstacle_store::footprints_in_bbox(h3r4, data_dir, south, west, north, east)
+    let fps = obstacle_store::footprints_in_bbox(h3r4_dir()?, south, west, north, east)
         .map_err(|e| Error::new(Status::GenericFailure, e))?;
     let rows: Vec<serde_json::Value> = fps
         .iter()
@@ -302,7 +307,6 @@ fn building_type_from_envelope(class: noise_compute::envelope::EnvelopeClass) ->
 #[cfg(feature = "node")]
 #[napi]
 pub fn query_building_at(lat: f64, lng: f64) -> napi::Result<String> {
-    let h3r4 = H3R4_DIR.get().map(|p| p.as_path());
     let data_dir = DATA_DIR
         .get()
         .map(|p| p.as_path())
@@ -310,7 +314,7 @@ pub fn query_building_at(lat: f64, lng: f64) -> napi::Result<String> {
     // A missing obstacle store is an error, not an empty answer. It used to
     // return {"status":"unavailable"} inside an HTTP 200, which reads to a
     // visitor exactly like "there is no building here".
-    let set = obstacle_store::load_obstacle_set(h3r4, data_dir, lat, lng)
+    let set = obstacle_store::load_obstacle_set(h3r4_dir()?, data_dir, lat, lng)
         .map_err(|e| Error::new(Status::GenericFailure, e))?;
     let result = match obstacle_store::point_inside_footprint(&set, lat, lng) {
         None => serde_json::Value::Null,
@@ -489,9 +493,8 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     let data_dir = DATA_DIR
         .get()
         .ok_or_else(|| Error::new(Status::GenericFailure, "source_init was never called"))?;
-    let obstacle_set =
-        obstacle_store::load_obstacle_set(H3R4_DIR.get().map(|p| p.as_path()), data_dir, lat, lng)
-            .map_err(|e| Error::new(Status::GenericFailure, e))?;
+    let obstacle_set = obstacle_store::load_obstacle_set(h3r4_dir()?, data_dir, lat, lng)
+        .map_err(|e| Error::new(Status::GenericFailure, e))?;
     // Select the enclosed footprint winner once; it supplies the effective
     // envelope delta for the aggregate indoor estimate while traces stay at
     // façade values.

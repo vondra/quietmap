@@ -666,8 +666,8 @@ mod tests {
     /// An ABSENT vector obstacle store must behave exactly like an EMPTY one.
     /// Walls do not live in the obstacle index — they reach the skyline through
     /// their own slice — so an early return on `obstacles: None` silently denied
-    /// every noise wall its angular treatment wherever the vector store has not
-    /// been ingested, which is most of the world. The wall below covers part of
+    /// every noise wall its angular treatment wherever the vector store holds no
+    /// footprint, which is most of the world. The wall below covers part of
     /// the span and must move the bands away from the caller's cp verdict in
     /// BOTH configurations, identically. (Review 2026-08-04.)
     #[test]

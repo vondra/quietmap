@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Pure Rust noise computation engine — CNOSSOS-EU emission + ISO 9613-2 propagation"
 
-# This is a LIBRARY crate — no I/O, no napi, no files.
+# This is a LIBRARY crate — no napi. Its one filesystem rule is
+# propagation::obstacle_cell_file, shared so the popup and the painter cannot
+# disagree about what a missing obstacle table means.
 # Used by source-reader (popup) and tile-painter (batch).
 [lib]
 name = "noise_compute"

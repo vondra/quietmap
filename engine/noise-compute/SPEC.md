@@ -302,9 +302,11 @@ primitive. An untagged barrier defaults to 3 m. Obstacle kinds are Building and 
 
 ObstacleSet indexes vector polygon edges. crossings and crossings_pruned use exact
 segment_intersection_t, then sort candidates by the conservative lower-bound
-distance. Missing obstacle shards fail the loader unless the .ingested-tiles
-manifest proves that the shard is empty. This prevents absent data from silently
-becoming clear terrain.
+distance. Every prepared cell carries its own obstacles.arrow, empty where the
+finished Overture sweep found no footprint, so emptiness is data: a 0-row table
+means no buildings, a missing table fails the loader, and a cell with no prepared
+directory is outside the world. This prevents absent data from silently becoming
+clear terrain.
 
 For a candidate obstacle, its signed delta competes with the terrain edge delta.
 The terrain candidate is linearly interpolated between profile samples. A source's
