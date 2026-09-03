@@ -1131,30 +1131,6 @@ class FakeArtifactMutationTests(FakeArtifactBuildTests):
         with self.assertRaises(ContractError):
             verify_artifact(artifact, SPEC_PATH)
 
-    def test_resealed_single_image_binary_is_rejected(self) -> None:
-        role = "relevant-source-stock-v1"
-        result = self.run_builder(self.command(role, "relevant-source-production", None))
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        artifact = self.artifacts / role
-        (artifact / "relevant-source-surface").write_bytes(fake_cuda_executable([120], []))
-        reseal_artifact(artifact)
-        with self.assertRaisesRegex(ContractError, "embeds SASS sm_120 and PTX none"):
-            verify_artifact(artifact, SPEC_PATH)
-
-    def test_resealed_fatbin_carrying_ptx_is_rejected(self) -> None:
-        role = "relevant-source-stock-v1"
-        result = self.run_builder(self.command(role, "relevant-source-production", None))
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        artifact = self.artifacts / role
-        fleet = [int(arch.removeprefix("sm_")) for arch in relevant_source_fleet_cuda_archs(ROOT)]
-        (artifact / "relevant-source-surface").write_bytes(fake_cuda_executable(fleet[::-1], []))
-        reseal_artifact(artifact)
-        verify_artifact(artifact, SPEC_PATH)  # the image SET is the fact, not nvcc's order
-        (artifact / "relevant-source-surface").write_bytes(fake_cuda_executable(fleet, [120]))
-        reseal_artifact(artifact)
-        with self.assertRaisesRegex(ContractError, "and PTX sm_120;"):
-            verify_artifact(artifact, SPEC_PATH)
-
     def test_resealed_experimental_define_is_rejected_even_if_environment_agrees(
         self,
     ) -> None:

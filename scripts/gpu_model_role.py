@@ -339,8 +339,10 @@ def cuda_fatbin_images(binary_bytes: bytes) -> tuple[list[str], list[str]]:
 
 
 def require_fleet_fatbin(binary_bytes: bytes, source_root: Path) -> None:
-    """The one fleet-image fact, read from the executable itself: exactly the
-    `FLEET_CUDA_ARCHS` SASS images and no PTX (a receipt could only repeat it)."""
+    """The role builder's check of what it just built: exactly the `FLEET_CUDA_ARCHS`
+    SASS images and no PTX, read from the executable itself. Admission does not
+    repeat it — a wrong binary in a release is caught by the box qualification,
+    which runs the painter on the card before any task (owner 2026-09-03)."""
     expected = relevant_source_fleet_cuda_archs(source_root)
     sass, ptx = cuda_fatbin_images(binary_bytes)
     # The fact is the image SET; nvcc's entry order is not part of it.
@@ -1177,8 +1179,6 @@ def verify_artifact(root: Path, expected_role_spec: Path) -> dict[str, Any]:
     if not binary_path.is_file() or not os.access(binary_path, os.X_OK):
         raise ContractError("role binary is absent or not executable")
     binary_bytes = binary_path.read_bytes()
-    if fleet_cuda_image:
-        require_fleet_fatbin(binary_bytes, expected_role_spec.parent.parent)
     ptx_receipt = receipt.get("ptx")
     if not isinstance(ptx_receipt, dict) or set(ptx_receipt) != set(resolved["ptx"]):
         raise ContractError("artifact receipt has the wrong PTX set")
