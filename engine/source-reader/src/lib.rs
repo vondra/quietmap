@@ -181,17 +181,13 @@ pub fn source_init(h3r4_dir: String) -> napi::Result<String> {
 
     // NACE codes are baked into industrial.arrow — no global JSON needed
 
-    // Admin table for the defaults cascade (plan v5 §F.3). File lives
-    // at data/prepared/h3r4-admin.bin (year-independent, like rasters/DEM).
-    // Soft-fail — missing file just leaves the cascade in WORLD arm.
-    let admin_bin = noise_compute::admin::default_admin_path(h3r4_path);
-    let admin_status = match noise_compute::admin::init_admin_table(&admin_bin) {
-        Ok(n) => format!("loaded {n} entries"),
-        Err(e) => format!("unavailable ({e})"),
-    };
+    // Admin for the defaults cascade (plan v5 §F.3): each queried cell's own
+    // prepared/{year}/h3r4/<cell>/admin.bin, read on first use. A cell without
+    // one simply leaves the cascade in its WORLD arm.
+    noise_compute::admin::set_admin_h3r4_directory(h3r4_path);
 
     Ok(format!(
-        "source-reader initialized: {h3r4_dir} (DEM: {}; admin: {admin_status})",
+        "source-reader initialized: {h3r4_dir} (DEM: {})",
         if has_dem { "loaded" } else { "stub" },
     ))
 }

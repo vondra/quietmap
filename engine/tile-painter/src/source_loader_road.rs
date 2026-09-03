@@ -597,8 +597,7 @@ mod tests {
             eprintln!("skipping: {} not found", dir.display());
             return;
         }
-        let _ =
-            noise_compute::admin::init_admin_table(&noise_compute::admin::default_admin_path(dir));
+        noise_compute::admin::set_admin_h3r4_directory(dir);
         // Hlučínsko — the CZ wedge into PL (plan anchor for border cells).
         let (lat, lon) = (50.02, 18.08);
         let cell = h3o::LatLng::new(lat, lon)

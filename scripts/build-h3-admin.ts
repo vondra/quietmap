@@ -1,10 +1,13 @@
 /**
- * Build the H3R4 → admin lookup table (`data/prepared/h3r4-admin.bin`).
+ * Write each prepared H3R4 cell's admin record
+ * (`data/prepared/{YEAR}/h3r4/<cell>/admin.bin`).
  *
  * For every land H3R4 hex present in `data/prepared/{YEAR}/h3r4/`, assign
- * (continent, country, metro_city). Engine loads this binary at startup and
- * uses it to select per-country / per-city defaults in the hierarchical
- * traffic cascade (see `engine/noise-compute/src/defaults.rs`).
+ * (continent, country, metro_city) and store it beside that cell's arrows, so
+ * a paint task reads admin for exactly its own read ring and nothing
+ * world-wide has to travel with it. The engine reads a cell's record on first
+ * use and selects per-country / per-city defaults in the hierarchical traffic
+ * cascade (see `engine/noise-compute/src/defaults.rs`).
  *
  * Resolution (plan M2 §1 — ONE polygon authority): AdminAt, the global CGAZ
  * point resolver (`pipeline/lib/admin-at.ts`). Natural Earth is RETIRED — its
@@ -33,18 +36,19 @@
  * documented project policy: the assignment is a best-effort approximation,
  * regenerable without touching arrow data.
  *
- * Output binary format (little-endian, byte-identical to the NE era):
- *   bytes 0-7:     magic "H3ADMIN1"
- *   bytes 8-11:    u32 count (number of entries)
- *   bytes 12..:    [u64 hex_id, u8 continent, u8 country, u16 city] × count
- *                  sorted ascending by hex_id.
+ * Output record (13 bytes, little-endian), one file per cell:
+ *   [u64 hex_id, u8 continent, u8 country, u16 city]
+ * The hex id repeats the directory name so a record copied into another cell
+ * is caught by the reader (engine/noise-compute/src/admin.rs) instead of
+ * believed. Additive and idempotent: it replaces each cell's own record by
+ * rename and touches no other file.
  *
  * Usage:
  *   cd scripts && npm i    # one-time (needs tsx)
- *   DATA_YEAR=2026 npx tsx build-h3-admin.ts [--out /tmp/h3r4-admin.v2.bin]
+ *   DATA_YEAR=2026 npx tsx build-h3-admin.ts
  */
 
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, renameSync, existsSync, readdirSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { cellToLatLng, cellToBoundary } from 'h3-js'
@@ -53,10 +57,9 @@ import { adminAt, antimeridianLerp, cityAt, continentForIso } from '../pipeline/
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const YEAR = process.env.DATA_YEAR || JSON.parse(readFileSync(resolve(__dirname, 'dataset-year.json'), 'utf8')).current_year
 const H3R4_DIR = resolve(__dirname, `../data/prepared/${YEAR}/h3r4`)
-const outIdx = process.argv.indexOf('--out')
-const OUTPUT_BIN = outIdx !== -1
-  ? resolve(process.argv[outIdx + 1])
-  : resolve(__dirname, '../data/prepared/h3r4-admin.bin')
+/** Mirrors engine/noise-compute/src/admin.rs::ADMIN_FILE_NAME and RECORD_SIZE. */
+const ADMIN_FILE_NAME = 'admin.bin'
+const RECORD_SIZE = 8 + 1 + 2 + 2
 
 // ─── Continent ids (mirror engine/noise-compute/src/admin.rs::Continent) ────
 
@@ -151,8 +154,6 @@ async function main() {
   let sampledResolved = 0
   const stillUnknown: string[] = []
   const records: {
-    hexIdHigh: number
-    hexIdLow: number
     hexStr: string
     continent: number
     iso: string        // two-letter or "" if unknown
@@ -173,14 +174,7 @@ async function main() {
     const continent = iso !== undefined ? continentIdForIso(iso) : CONTINENT_ID.UNKNOWN
     const city = cityAt(lat, lon, iso)
 
-    // H3 id is a 64-bit integer represented as a 15-char hex string (60 bits,
-    // top nibble is always 0). Parse via BigInt to sidestep JS's 32-bit bit
-    // ops, then split to low/high u32 for little-endian writing.
-    const hexIdBig = BigInt('0x' + hexStr)
-    const hexIdLow = Number(hexIdBig & 0xffffffffn)
-    const hexIdHigh = Number(hexIdBig >> 32n)
-
-    records.push({ hexIdHigh, hexIdLow, hexStr, continent, iso: iso ?? '', city })
+    records.push({ hexStr, continent, iso: iso ?? '', city })
 
     if (++processed % 10_000 === 0) {
       const dt = ((Date.now() - t0) / 1000).toFixed(0)
@@ -193,33 +187,28 @@ async function main() {
     console.log(`  UNKNOWN hexes (first 50): ${stillUnknown.slice(0, 50).join(' ')}`)
   }
 
-  // Sort by hex id (lexicographic on 15-char hex == numeric on u64)
-  records.sort((a, b) => a.hexStr.localeCompare(b.hexStr))
-
-  // ─── Binary serialization ───────────────────────────────────────────────
-  // Format: "H3ADMIN1" (8 bytes) + u32 count + records[count].
-  // Each record: u64 hex_id + u8 continent + [u8; 2] iso + u16 city = 13 bytes.
-  // ISO bytes are ASCII (A-Z); "\0\0" means unknown. No ID allocation needed —
-  // defaults.rs can match on iso directly without a lookup table.
-  const HEADER_SIZE = 8 + 4
-  const RECORD_SIZE = 8 + 1 + 2 + 2
-  const buf = Buffer.alloc(HEADER_SIZE + RECORD_SIZE * records.length)
-  buf.write('H3ADMIN1', 0, 'ascii')
-  buf.writeUInt32LE(records.length, 8)
-  let off = HEADER_SIZE
+  // ─── Per-cell serialization ─────────────────────────────────────────────
+  // One 13-byte record per cell: u64 hex_id + u8 continent + [u8; 2] iso +
+  // u16 city. ISO bytes are ASCII (A-Z); "\0\0" means unknown. No ID
+  // allocation needed — defaults.rs matches on iso directly. Written to a
+  // sibling temp name and renamed, so a reader mid-run sees either the whole
+  // old record or the whole new one, never a torn file.
+  const buf = Buffer.alloc(RECORD_SIZE)
   for (const r of records) {
-    buf.writeUInt32LE(r.hexIdLow, off)
-    buf.writeUInt32LE(r.hexIdHigh, off + 4)
-    buf.writeUInt8(r.continent, off + 8)
-    buf.writeUInt8(r.iso.charCodeAt(0) || 0, off + 9)
-    buf.writeUInt8(r.iso.charCodeAt(1) || 0, off + 10)
-    buf.writeUInt16LE(r.city, off + 11)
-    off += RECORD_SIZE
+    // The H3 id is a 64-bit integer written as a 15-char hex string (60 bits,
+    // top nibble always 0); BigInt sidesteps JS's 32-bit bit operations.
+    buf.writeBigUInt64LE(BigInt('0x' + r.hexStr), 0)
+    buf.writeUInt8(r.continent, 8)
+    buf.writeUInt8(r.iso.charCodeAt(0) || 0, 9)
+    buf.writeUInt8(r.iso.charCodeAt(1) || 0, 10)
+    buf.writeUInt16LE(r.city, 11)
+    const path = resolve(H3R4_DIR, r.hexStr, ADMIN_FILE_NAME)
+    const temporary = `${path}.tmp`
+    writeFileSync(temporary, buf)
+    renameSync(temporary, path)
   }
-
-  writeFileSync(OUTPUT_BIN, buf)
   console.log(
-    `✓ wrote ${OUTPUT_BIN} (${(buf.length / 1_000_000).toFixed(2)} MB, ${records.length} hexes)`,
+    `✓ wrote ${records.length} × ${ADMIN_FILE_NAME} (${RECORD_SIZE} B each) under ${H3R4_DIR}`,
   )
 
   // ─── Distribution summary ───────────────────────────────────────────────

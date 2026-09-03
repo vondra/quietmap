@@ -7,42 +7,35 @@
  * calls AdminAt; a border sliver through a hex corner fools k=1 centroid
  * agreement).
  *
- * Hermetic: the resolver reads a SYNTHETIC H3ADMIN1 bin written to tmp by
- * this test (the live bin is gitignored data). CGAZ is still required
- * (network test, same as admin-at.test.ts).
+ * Hermetic: the resolver reads a SYNTHETIC h3r4 tree written to tmp by this
+ * test (the live tree is gitignored data). CGAZ is still required (network
+ * test, same as admin-at.test.ts).
  *
  * Run: `cd pipeline && npx tsx --test lib/hex-country.test.ts`
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { latLngToCell } from 'h3-js'
 import { createHexCountryResolver } from './hex-country.js'
 
-function h3u(hex: string): bigint {
-  return BigInt(`0x${hex}`)
-}
-
-/** Minimal H3ADMIN1 writer: header (8 B magic) + u32 count + 13 B records. */
-function writeSyntheticBin(rows: Array<[string, number, string, number]>): string {
-  const buf = Buffer.alloc(12 + rows.length * 13)
-  buf.write('H3ADMIN1', 0, 'latin1')
-  buf.writeUInt32LE(rows.length, 8)
-  rows.forEach(([hex, continent, iso2, city], i) => {
-    const off = 12 + i * 13
-    buf.writeBigUInt64LE(h3u(hex), off)
-    buf.writeUInt8(continent, off + 8)
-    buf.writeUInt8(iso2.charCodeAt(0), off + 9)
-    buf.writeUInt8(iso2.charCodeAt(1), off + 10)
-    buf.writeUInt16LE(city, off + 11)
-  })
-  const dir = mkdtempSync(join(tmpdir(), 'hex-country-test-'))
-  const p = join(dir, 'admin.bin')
-  writeFileSync(p, buf)
-  return p
+/** Minimal per-cell admin writer: one 13-byte record per cell directory. */
+function writeSyntheticTree(rows: Array<[string, number, string, number]>): string {
+  const h3r4Dir = mkdtempSync(join(tmpdir(), 'hex-country-test-'))
+  for (const [hex, continent, iso2, city] of rows) {
+    const record = Buffer.alloc(13)
+    record.writeBigUInt64LE(BigInt(`0x${hex}`), 0)
+    record.writeUInt8(continent, 8)
+    record.writeUInt8(iso2.charCodeAt(0), 9)
+    record.writeUInt8(iso2.charCodeAt(1), 10)
+    record.writeUInt16LE(city, 11)
+    mkdirSync(join(h3r4Dir, hex), { recursive: true })
+    writeFileSync(join(h3r4Dir, hex, 'admin.bin'), record)
+  }
+  return h3r4Dir
 }
 
 const VATICAN_HEX = latLngToCell(41.9029, 12.4534, 4)
@@ -50,13 +43,13 @@ const SANMARINO_HEX = latLngToCell(43.9424, 12.4578, 4)
 const MONACO_HEX = latLngToCell(43.7384, 7.4246, 4)
 const LI_HEX = latLngToCell(47.166, 9.512, 4)
 
-const binPath = writeSyntheticBin([
+const h3r4Dir = writeSyntheticTree([
   [VATICAN_HEX, 1, 'IT', 0],
   [SANMARINO_HEX, 1, 'IT', 0],
   [MONACO_HEX, 1, 'FR', 0],
   [LI_HEX, 1, 'CH', 0],
 ])
-const resolver = createHexCountryResolver(binPath)
+const resolver = createHexCountryResolver(h3r4Dir)
 
 test('enclave hexes classify border and resolve the enclave country', () => {
   assert.equal(resolver.isBorderHex(VATICAN_HEX), true, 'Vatican hex')

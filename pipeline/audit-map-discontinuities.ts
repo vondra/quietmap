@@ -7,7 +7,7 @@
 //! R1b/R2/R4/#26 fixes.
 //!
 //! Country legal speeds come from the same generated table the engine uses;
-//! the hex's country comes from prepared/h3r4-admin.bin (the engine's own
+//! the hex's country comes from each cell's prepared admin.bin (the engine's own
 //! receiver-country approximation). A country absent from the speed table
 //! degrades to the legacy world speeds — exactly what the engine does.
 //!
@@ -145,7 +145,7 @@ async function main() {
     console.error('Usage: audit-map-discontinuities.ts --bbox minLat,minLon,maxLat,maxLon [--out report.json]')
     process.exit(1)
   }
-  const adminIso = readAdminIso(resolve(import.meta.dirname, '../data/prepared/h3r4-admin.bin'))
+  const adminIso = readAdminIso(H3R4_DIR)
 
   let hexes = iterateCountryHexes(H3R4_DIR, BBOX).sort()
   if (process.env.SHARD) {

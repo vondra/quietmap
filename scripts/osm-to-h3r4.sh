@@ -103,7 +103,7 @@ rm -rf "$SPILL_DIR"
 # CRITICAL, trip-generators plan). Needs only the hex dir listing + Natural
 # Earth polygons, so right after extraction is the earliest correct slot.
 log ""
-log "Building H3R4 → admin lookup table (data/prepared/h3r4-admin.bin) ..."
+log "Writing each cell's H3R4 admin record (data/prepared/$YEAR/h3r4/<cell>/admin.bin) ..."
 (
     cd "$SCRIPT_DIR"
     if [ ! -d node_modules ]; then

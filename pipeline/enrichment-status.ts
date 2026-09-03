@@ -3,7 +3,7 @@
 //! class band / rail family, top sources by rows, speed + timetable coverage,
 //! and an actionable GAPS list (src=0 concentrations and undeclared registry
 //! fields). Read-only over the country's
-//! h3r4 arrows; the hex set comes from prepared/h3r4-admin.bin (the engine's
+//! h3r4 arrows; the hex set comes from each cell's prepared admin.bin (the engine's
 //! own receiver-country approximation, so border hexes carry some neighbour
 //! rows). Powers owner questions and contributor onboarding walkthroughs.
 //!
@@ -265,7 +265,7 @@ function computeRailContinuity(h3r4Dir: string, hexes: string[], country: string
   }
 
   // Row-level CGAZ ownership gate — the hex set above comes from
-  // h3r4-admin.bin (H3-centroid country approximation), which bleeds a
+  // the per-cell admin record (H3-centroid country approximation), which bleeds a
   // border hex's neighbour rows into this country's totals; gating each
   // row's own midpoint is the same fix R9/the auditor use for segments.
   const countryGateAvailable = hasCountryPolygon(country)
@@ -422,10 +422,10 @@ function main(): void {
   }
   const t0 = Date.now()
   const h3r4Dir = resolve(import.meta.dirname, `../data/prepared/${YEAR}/h3r4`)
-  const adminIso = readAdminIso(resolve(import.meta.dirname, '../data/prepared/h3r4-admin.bin'))
+  const adminIso = readAdminIso(h3r4Dir)
   const hexes = [...adminIso].filter(([, iso]) => iso === country).map(([hex]) => hex).sort()
   if (hexes.length === 0) {
-    console.error(`no hexes for ${country} in h3r4-admin.bin (${adminIso.size} total)`)
+    console.error(`no hexes for ${country} in the prepared admin records (${adminIso.size} total)`)
     process.exit(1)
   }
 

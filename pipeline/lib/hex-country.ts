@@ -2,20 +2,21 @@
  * Per-hex country resolution for enrichment WRITERS (service-tree national
  * vehicle mix / trip rates).
  *
- * h3r4-admin.bin assigns one country per ~22 km res-4 hex (build-h3-admin.ts:
- * centroid PIP + interior max-share sampling, CGAZ) — fine for diagnostics,
+ * Each cell's admin.bin assigns one country per ~22 km res-4 hex
+ * (build-h3-admin.ts: centroid PIP + interior max-share sampling, CGAZ) — fine
+ * for diagnostics,
  * forbidden for traffic-data writes at borders (a Czech road in the Hlučínsko
  * salient got Polish AADT that way; see country-polygon.ts). The split here:
- * INTERIOR hexes (own ISO defined AND every bin-resolved k=1 neighbour agrees)
- * take the cheap admin-bin answer; everything else resolves each query point
+ * INTERIOR hexes (own ISO defined AND every resolved k=1 neighbour agrees)
+ * take the cheap per-cell answer; everything else resolves each query point
  * through AdminAt, the ONE global CGAZ point resolver (plan M2 §1).
  *
- * An own-undefined hex is NEVER interior: with no bin ISO of its own the k=1
+ * An own-undefined hex is NEVER interior: with no ISO of its own the k=1
  * ring can never nominate a country — the Koh Phangan sea-cluster trap, where
  * the whole ring is UNKNOWN and the nearest TH hex is at k=2, classified
  * "interior" and stamped WORLD over every segment without one PIP test.
  *
- * Construction fails loud when the admin bin is missing/empty
+ * Construction fails loud when the admin records are missing/empty
  * (requireAdminIso) — a silent WORLD fallback across a whole extract is the
  * exact failure the 2026-07 /gg review caught.
  */
@@ -26,10 +27,10 @@ import { adminAt } from './admin-at.js'
 import { allCountryPolygonBboxes } from './country-polygon.js'
 
 export interface HexCountryResolver {
-  /** admin-bin ISO2 of the hex itself (undefined when the bin has no row —
-   *  ocean/unassigned hexes). */
+  /** admin-record ISO2 of the hex itself (undefined when the cell carries no
+   *  country — ocean/unassigned hexes). */
   hexIso(hexId: string): string | undefined
-  /** True when the hex is NOT interior: own ISO undefined, or any bin-resolved
+  /** True when the hex is NOT interior: own ISO undefined, or any resolved
    *  k=1 neighbour carries a different country. */
   isBorderHex(hexId: string): boolean
   /** Country at a point: the hex ISO for interior hexes; otherwise AdminAt's
@@ -38,8 +39,8 @@ export interface HexCountryResolver {
   isoAt(hexId: string, lat: number, lon: number): string | undefined
 }
 
-export function createHexCountryResolver(adminBinPath: string): HexCountryResolver {
-  const adminIso = requireAdminIso(adminBinPath)
+export function createHexCountryResolver(h3r4Dir: string): HexCountryResolver {
+  const adminIso = requireAdminIso(h3r4Dir)
 
   // Interior status + own ISO, cached per hex (each hex is queried once per
   // segment otherwise).
@@ -52,7 +53,7 @@ export function createHexCountryResolver(adminBinPath: string): HexCountryResolv
       if (interior) {
         for (const neighbour of gridDisk(hexId, 1)) {
           const iso = adminIso.get(neighbour)
-          // Neighbours absent from the bin (open ocean) don't disagree —
+          // Neighbours with no country record (open ocean) don't disagree —
           // coastal hexes stay interior and keep the zero-PIP fast path.
           if (iso !== undefined && iso !== own) {
             interior = false
