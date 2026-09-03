@@ -48,9 +48,9 @@ echo "[overture-world] $total selected tiles, $done_n cached → $PARQUET_DIR"
 
 fail=0
 while :; do
+    rc=0
     nice -n 10 python3 scripts/obstacles/download-overture-tiles.py "$TILES" "$PARQUET_DIR" \
-        "$INGESTED_LIST" 2>> "$PARQUET_DIR/.errors.log"
-    rc=$?
+        "$INGESTED_LIST" 2>> "$PARQUET_DIR/.errors.log" || rc=$?
     [ "$rc" -eq 3 ] && continue   # the fetcher restarts itself at its memory cap; nothing is lost
     [ "$rc" -eq 0 ] || fail=1
     break
