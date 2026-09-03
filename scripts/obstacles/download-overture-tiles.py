@@ -37,6 +37,9 @@ STRIP_WORKERS = 3
 # ends with exit 3 and the caller starts a fresh process; cached tiles are skipped, nothing is lost.
 RSS_RESTART_BYTES = 16 << 30
 EXIT_RESTART = 3
+# The columns ingest-overture-obstacles.py reads (plus id for audits); the theme's other 16
+# columns (names, sources, roof attributes) were 90 % of a strip's memory and transfer.
+COLUMNS = ["id", "geometry", "bbox", "height", "num_floors", "class", "subtype", "is_underground"]
 
 
 def tile_bbox(tile):
@@ -86,7 +89,7 @@ def main(list_path, parquet_dir, ingested_path=None):
     def fetch_strip(strip):
         boxes = [tile_bbox(t) for t in strip]
         try:
-            rows = indexed.to_table(filter=bbox_filter(
+            rows = indexed.to_table(columns=COLUMNS, filter=bbox_filter(
                 min(b[0] for b in boxes), min(b[1] for b in boxes),
                 max(b[2] for b in boxes), max(b[3] for b in boxes)))
         except Exception as error:  # one strip must not end the pass; the next run retries
