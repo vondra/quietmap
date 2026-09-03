@@ -2,22 +2,41 @@
 # Download the WORLD Overture buildings parquet cache for the vector obstacle
 # ingest (geodata-v2 1.1 world extension).
 #
-#   scripts/obstacles/download-overture-world.sh [--jobs 6]
+#   scripts/obstacles/download-overture-world.sh [--jobs 6] [--tiles FILE]
 #
-# Tile list comes from the VECTOR source itself (scripts/obstacles/world-tile-census.py
-# over overture-obstacles/h3r4) — it used to be `ls prepared/rasters/building/*.raw`,
-# which made the raster the source of truth for the vector ingest and blocked
-# deleting it. Resumable: a tile whose parquet exists non-empty is skipped; overturemaps writes via a temp file so partials never
-# count. ~80 GB total into data/enrichment/global/overture-buildings/parquet.
+# The default comes from the Planet-extracted R4 inventory, not the obstacle
+# tree: a shard-less land cell is precisely the empty case this job must ingest.
+# --tiles is the additive recovery path for a measured gap.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-PARQUET_DIR="data/enrichment/global/overture-buildings/parquet"
+SOURCE_ROOT="data/source/enrichment/global"
+PARQUET_DIR="$SOURCE_ROOT/overture-buildings/parquet"
 JOBS=6
-[ "${1:-}" = "--jobs" ] && JOBS="$2"
+TILE_LIST=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --jobs) JOBS="${2:?need job count}"; shift 2 ;;
+        --tiles) TILE_LIST="${2:?need tile list}"; shift 2 ;;
+        *) echo "usage: $0 [--jobs 1..16] [--tiles FILE]" >&2; exit 2 ;;
+    esac
+done
+[[ "$JOBS" =~ ^([1-9]|1[0-6])$ ]] || { echo "jobs must be 1..16" >&2; exit 2; }
 
 command -v overturemaps > /dev/null || { echo "overturemaps CLI missing" >&2; exit 1; }
 mkdir -p "$PARQUET_DIR"
+TILES=$(mktemp)
+trap 'rm -f "$TILES"' EXIT
+if [ -n "$TILE_LIST" ]; then
+    [ -r "$TILE_LIST" ] || { echo "tile list is unreadable: $TILE_LIST" >&2; exit 2; }
+    if grep -Ev '^[NS][0-9]{2}[EW][0-9]{3}$' "$TILE_LIST" > /dev/null; then
+        echo "tile list contains an invalid tile name: $TILE_LIST" >&2; exit 2
+    fi
+    sort -u "$TILE_LIST" > "$TILES"
+else
+    python3 scripts/obstacles/world-tile-census.py > "$TILES"
+fi
+[ -s "$TILES" ] || { echo "tile list is empty" >&2; exit 2; }
 
 fetch_one() {
     local tile="$1"
@@ -45,17 +64,16 @@ fetch_one() {
 }
 export -f fetch_one
 export PARQUET_DIR
-INGESTED_LIST="$(pwd)/data/enrichment/global/overture-obstacles/.ingested-tiles"
+INGESTED_LIST="$(pwd)/$SOURCE_ROOT/overture-obstacles/.ingested-tiles"
 [ -f "$INGESTED_LIST" ] || INGESTED_LIST=""
 export INGESTED_LIST
 
-python3 scripts/obstacles/world-tile-census.py > /tmp/overture-world-tiles.txt
-total=$(wc -l < /tmp/overture-world-tiles.txt)
+total=$(wc -l < "$TILES")
 done_n=$(ls "$PARQUET_DIR"/*.parquet 2>/dev/null | wc -l)
-echo "[overture-world] $total tiles in census, $done_n cached → $PARQUET_DIR"
+echo "[overture-world] $total selected tiles, $done_n cached → $PARQUET_DIR"
 
 fail=0
-xargs -P "$JOBS" -I{} bash -c 'fetch_one "$1"' _ {} < /tmp/overture-world-tiles.txt || fail=1
+xargs -P "$JOBS" -I{} bash -c 'fetch_one "$1"' _ {} < "$TILES" || fail=1
 done_n=$(ls "$PARQUET_DIR"/*.parquet 2>/dev/null | wc -l)
 echo "[overture-world] finished: $done_n/$total parquets (fail=$fail)"
 exit "$fail"

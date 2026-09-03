@@ -19,9 +19,9 @@
 #     grid_disk(1) — a border-straddling footprint lives in its centroid's
 #     cell only.
 #
-# Reads:  data/enrichment/global/overture-buildings/parquet/<TILE>.parquet
-# Writes: data/enrichment/global/overture-obstacles/h3r4/<cell>/obstacles-<TILE>.arrow
-#         (staging tree; promotion into data/prepared/{year}/h3r4 happens at
+# Reads:  data/source/enrichment/global/overture-buildings/parquet/<TILE>.parquet
+# Writes: data/source/enrichment/global/overture-obstacles/h3r4/<cell>/obstacles-<TILE>.arrow
+#         (source staging tree; promotion into data/prepared/{year}/h3r4 happens at
 #          the Wave-1 cutover, never here). Re-running a tile first removes
 #          that tile's existing shards so moved/vanished rows can't go stale.
 #
@@ -41,8 +41,8 @@ from osgeo import ogr
 FLOOR_HEIGHT = 3.0    # = BUILDING_FLOOR_HEIGHT_M
 DEFAULT_HEIGHT = 8.0  # = BUILDING_DEFAULT_HEIGHT_M
 
-PARQUET_DIR = "data/enrichment/global/overture-buildings/parquet"
-OUT_DIR = "data/enrichment/global/overture-obstacles/h3r4"
+PARQUET_DIR = "data/source/enrichment/global/overture-buildings/parquet"
+OUT_DIR = "data/source/enrichment/global/overture-obstacles/h3r4"
 
 SCHEMA = pa.schema(
     [
@@ -203,7 +203,7 @@ def process_tile(name: str) -> None:
     # rewritten, a shard-less cell must read "not ingested" (raster fallback),
     # never manifest-proven-empty — ingest-world-incremental.sh re-appends the
     # tile on success (engine obstacle_ingest_coverage.rs, /gg finding).
-    manifest = "data/enrichment/global/overture-obstacles/.ingested-tiles"
+    manifest = "data/source/enrichment/global/overture-obstacles/.ingested-tiles"
     if os.path.exists(manifest):
         with open(manifest) as f:
             lines = f.readlines()

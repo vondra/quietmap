@@ -1,28 +1,19 @@
 #!/usr/bin/env python3
-"""The world tile census: which 1-degree tiles the Overture building download covers.
+"""The whole-world land tile census for the Overture building download.
 
-This used to be `ls data/prepared/rasters/building/*.raw` — the vector ingest asked
-the RASTER which tiles had ever seen a building. That made the worse representation
-the source of truth for the better one, and it blocked deleting the raster at all.
+The Planet-extracted H3 R4 inventory is the source of truth. The obstacle tree
+contains only cells with at least one vector footprint, so deriving a download
+list from it permanently excludes empty land. Each H3 R4 cell contributes every
+1-degree tile its bounding box touches.
 
-The census now comes from the vector source itself (`overture-obstacles/h3r4/`), so
-it maintains itself as new cells are ingested and needs no checked-in list. Each H3
-R4 cell contributes every 1-degree tile its bounding box touches; the bbox, not the
-boundary vertices, because a cell can cross a tile without putting a vertex in it
-(measured: vertices alone missed S23W041).
-
-Verified 2026-08-30 against the raster it replaces: 15 185 tiles derived, covering
-all 13 694 raster tiles with zero gaps.
+The dataset year comes from the product contract, so a Planet re-extract stays
+aligned without an edited latitude bound.
 """
+import json
 import math
 import os
 import sys
-
-SOURCE = os.environ.get(
-    "QM_OBSTACLE_SOURCE",
-    "data/enrichment/global/overture-obstacles/h3r4",
-)
-
+from pathlib import Path
 
 def tile_name(lat_floor: int, lon_floor: int) -> str:
     ns = "S" if lat_floor < 0 else "N"
@@ -30,14 +21,21 @@ def tile_name(lat_floor: int, lon_floor: int) -> str:
     return f"{ns}{abs(lat_floor):02d}{ew}{abs(lon_floor):03d}"
 
 
-def census(source: str) -> list[str]:
-    import h3
+def default_source() -> Path:
+    root = Path(__file__).resolve().parents[2]
+    year = json.loads((root / "scripts/dataset-year.json").read_text())["current_year"]
+    return Path(os.environ.get("QM_WORLD_TILE_SOURCE", root / "data/prepared" / year / "h3r4"))
+
+
+def census(source: str, h3_module=None) -> list[str]:
+    if h3_module is None:
+        import h3 as h3_module
 
     tiles: set[str] = set()
     for cell in os.listdir(source):
-        if len(cell) != 15:
+        if not h3_module.is_valid_cell(cell) or h3_module.get_resolution(cell) != 4:
             continue
-        boundary = h3.cell_to_boundary(cell)
+        boundary = h3_module.cell_to_boundary(cell)
         lats = [p[0] for p in boundary]
         lons = [p[1] for p in boundary]
         # An antimeridian-straddling cell reports a ~360 degree span; unwrap it so the
@@ -51,7 +49,7 @@ def census(source: str) -> list[str]:
 
 
 if __name__ == "__main__":
-    source = sys.argv[1] if len(sys.argv) > 1 else SOURCE
+    source = sys.argv[1] if len(sys.argv) > 1 else default_source()
     if not os.path.isdir(source):
         sys.exit(f"obstacle source missing: {source}")
     print("\n".join(census(source)))
