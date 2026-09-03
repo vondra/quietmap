@@ -281,7 +281,9 @@ mod tests {
             "loader reach must equal the row's solved reach"
         );
         assert!(
-            (2_000.0..=10_000.0).contains(&r.max_distance_m),
+            (noise_compute::constants::RAILWAY_REACH_CLAMP_MIN
+                ..=noise_compute::constants::RAILWAY_REACH_CLAMP_MAX)
+                .contains(&r.max_distance_m),
             "reach {} m out of clamp band",
             r.max_distance_m
         );
