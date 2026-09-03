@@ -7,6 +7,33 @@
 #error "airborne terrain horizon constants must be injected by build.rs"
 #endif
 
+#define TERRAIN_SAMPLES_PER_RECEIVER (TERRAIN_SECTORS * TERRAIN_MARCH_SAMPLES)
+
+// Per receiver row and sample, everything the march derives from the row alone: the
+// longitude offset in degrees (east metres over the row's metres per degree), the sample
+// latitude's halo lattice row, and its inner pixel row inside the tile bbox (or -1). The
+// same f64 expressions the march evaluated per sample, formed once per row and shared by
+// its 512 receivers.
+extern "C" __global__ void airborne_terrain_sample_tables(
+    const unsigned long long* __restrict__ environment,
+    const double* __restrict__ receiver_lat_lon,
+    const double* __restrict__ tile_bbox,
+    double* __restrict__ east_deg,
+    double* __restrict__ row_rf,
+    int* __restrict__ row_idx)
+{
+    long long item = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (item >= (long long)TPX * TERRAIN_SAMPLES_PER_RECEIVER) return;
+    int py = (int)(item / TERRAIN_SAMPLES_PER_RECEIVER);
+    int sample = (int)(item % TERRAIN_SAMPLES_PER_RECEIVER);
+    const double* samples =
+        reinterpret_cast<const double*>(environment[BUILDING_ENV_TERRAIN_SAMPLES]);
+    east_deg[item] = samples[sample * 4 + 2] / receiver_lat_lon[2 * TPX + py];
+    double sample_lat = fmin(fmax(receiver_lat_lon[py] + samples[sample * 4 + 1], -90.0), 90.0);
+    row_rf[item] = building_dem_lattice_row(environment, sample_lat);
+    row_idx[item] = building_tile_row(tile_bbox, sample_lat);
+}
+
 extern "C" __global__ void airborne_terrain_horizon_build(
     const unsigned long long* __restrict__ environment,
     const double* __restrict__ receiver_lat_lon,
@@ -14,6 +41,9 @@ extern "C" __global__ void airborne_terrain_horizon_build(
     const float* __restrict__ inner_elevation,
     const double* __restrict__ tile_bbox,
     const unsigned int* __restrict__ pixel_of_record,
+    const double* __restrict__ east_deg,
+    const double* __restrict__ row_rf,
+    const int* __restrict__ row_idx,
     int records,
     unsigned int* __restrict__ entries)
 {
@@ -25,12 +55,14 @@ extern "C" __global__ void airborne_terrain_horizon_build(
     unsigned int pixel = pixel_of_record[record];
     int py = pixel >> TPX_SHIFT;
     int px = pixel & TPX_MASK;
-    double receiver_lat = receiver_lat_lon[py];
     double receiver_lon = receiver_lat_lon[TPX + px];
-    double m_per_deg_lon = receiver_lat_lon[2 * TPX + py];
     double receiver_alt_m = (double)receiver_altitude[pixel];
     const double* samples =
         reinterpret_cast<const double*>(environment[BUILDING_ENV_TERRAIN_SAMPLES]);
+    long long row_base = (long long)py * TERRAIN_SAMPLES_PER_RECEIVER + sector * TERRAIN_MARCH_SAMPLES;
+    const double* row_east_deg = east_deg + row_base;
+    const double* sector_row_rf = row_rf + row_base;
+    const int* sector_row_idx = row_idx + row_base;
     double best_tangent[TERRAIN_BANDS];
     unsigned short best_range_m[TERRAIN_BANDS];
     for (int band = 0; band < TERRAIN_BANDS; band++) {
@@ -42,13 +74,22 @@ extern "C" __global__ void airborne_terrain_horizon_build(
         (unsigned long long)sector * TERRAIN_MARCH_SAMPLES * 4;
     for (int sample_index = 0; sample_index < TERRAIN_MARCH_SAMPLES; sample_index++) {
         const double* sample = samples + sample_base + sample_index * 4;
-        double sample_lat = fmin(fmax(receiver_lat + sample[1] / AIRCRAFT_M_LAT, -90.0), 90.0);
-        double sample_lon = receiver_lon + sample[2] / m_per_deg_lon;
+        double sample_lon = receiver_lon + row_east_deg[sample_index];
         if (sample_lon >= 180.0) sample_lon -= 360.0;
         if (sample_lon < -180.0) sample_lon += 360.0;
-        double tangent = (building_tile_elevation(
-            environment, inner_elevation, tile_bbox, sample_lat, sample_lon) - receiver_alt_m)
-            / sample[0];
+        // `building_tile_elevation` with its latitude half read from the row tables.
+        int inner_row = sector_row_idx[sample_index];
+        double elevation_m;
+        if (inner_row >= 0 && sample_lon >= tile_bbox[2] && sample_lon <= tile_bbox[3]) {
+            double lon_fraction = (sample_lon - tile_bbox[2]) / (tile_bbox[3] - tile_bbox[2]);
+            int inner_col = (int)floor(fmin(fmax(lon_fraction * TPX, 0.0), (double)(TPX - 1)));
+            elevation_m = (double)inner_elevation[inner_row * TPX + inner_col];
+        } else {
+            elevation_m = building_dem_elevation_at(
+                environment, sector_row_rf[sample_index],
+                building_dem_lattice_col(environment, sample_lon));
+        }
+        double tangent = (elevation_m - receiver_alt_m) / sample[0];
         int band = (int)sample[3];
         if (tangent > best_tangent[band]) {
             best_tangent[band] = tangent;

@@ -48,16 +48,15 @@ __device__ __forceinline__ float building_intersection_range(
     return t * (float)BUILDING_LOCAL_MAX_M_D;
 }
 
-__device__ __forceinline__ double building_dem_elevation(
-    const unsigned long long* environment, double lat, double lon)
+// Halo bilinear at clamped lattice coordinates (`rf`, `cf`), the second half of
+// `building_dem_elevation`; the terrain march tables its rows' `rf` per sample.
+__device__ __forceinline__ double building_dem_elevation_at(
+    const unsigned long long* environment, double rf, double cf)
 {
-    const double* meta = reinterpret_cast<const double*>(environment[BUILDING_ENV_DEM_META]);
     const float* elevation =
         reinterpret_cast<const float*>(environment[BUILDING_ENV_DEM_ELEVATION]);
     unsigned long long cols = environment[BUILDING_ENV_DEM_COLS];
     unsigned long long rows = environment[BUILDING_ENV_DEM_ROWS];
-    double rf = fmin(fmax((lat - meta[0]) * meta[2], 0.0), (double)(rows - 1));
-    double cf = fmin(fmax((lon - meta[1]) * meta[2], 0.0), (double)(cols - 1));
     unsigned long long r0 = min((unsigned long long)floor(rf), rows - 2);
     unsigned long long c0 = min((unsigned long long)floor(cf), cols - 2);
     double fr = rf - (double)r0;
@@ -68,6 +67,38 @@ __device__ __forceinline__ double building_dem_elevation(
     double v1 = (double)elevation[base + cols]
         + fc * ((double)elevation[base + cols + 1] - (double)elevation[base + cols]);
     return v0 + fr * (v1 - v0);
+}
+
+__device__ __forceinline__ double building_dem_lattice_row(
+    const unsigned long long* environment, double lat)
+{
+    const double* meta = reinterpret_cast<const double*>(environment[BUILDING_ENV_DEM_META]);
+    unsigned long long rows = environment[BUILDING_ENV_DEM_ROWS];
+    return fmin(fmax((lat - meta[0]) * meta[2], 0.0), (double)(rows - 1));
+}
+
+__device__ __forceinline__ double building_dem_lattice_col(
+    const unsigned long long* environment, double lon)
+{
+    const double* meta = reinterpret_cast<const double*>(environment[BUILDING_ENV_DEM_META]);
+    unsigned long long cols = environment[BUILDING_ENV_DEM_COLS];
+    return fmin(fmax((lon - meta[1]) * meta[2], 0.0), (double)(cols - 1));
+}
+
+__device__ __forceinline__ double building_dem_elevation(
+    const unsigned long long* environment, double lat, double lon)
+{
+    return building_dem_elevation_at(environment,
+                                     building_dem_lattice_row(environment, lat),
+                                     building_dem_lattice_col(environment, lon));
+}
+
+// The inner pixel row a latitude inside the tile bbox reads, else -1: the latitude half of
+// `building_tile_elevation`, which the terrain march tables per receiver row.
+__device__ __forceinline__ int building_tile_row(const double* bbox, double lat) {
+    if (!(lat >= bbox[0] && lat <= bbox[1])) return -1;
+    double lat_fraction = (bbox[1] - lat) / (bbox[1] - bbox[0]);
+    return (int)floor(fmin(fmax(lat_fraction * TPX, 0.0), (double)(TPX - 1)));
 }
 
 __device__ __forceinline__ double building_tile_elevation(

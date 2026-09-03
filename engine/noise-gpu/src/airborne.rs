@@ -352,6 +352,7 @@ impl AirborneGpu {
                 "airborne_classify_count",
                 "airborne_classify_chunk_offsets",
                 "airborne_classify_scatter",
+                "airborne_terrain_sample_tables",
                 "airborne_terrain_horizon_build",
                 "airborne_terrain_horizon_global_max",
                 "airborne_terrain_horizon_range_quantization_probe",
@@ -437,6 +438,7 @@ impl AirborneGpu {
             .range_quantization_probe(true_range_m, source_range_m)
     }
 
+    /// Build one tile's receiver horizons and the pointer table the physics kernels read.
     #[allow(clippy::too_many_arguments)]
     fn upload_receiver_screening(
         &self,
@@ -456,9 +458,14 @@ impl AirborneGpu {
             .dev
             .htod_sync_copy(&packed.record_of_pixel)
             .context("screen pixel records")?;
+        let pixel_of_record = self
+            .dev
+            .htod_copy(packed.pixel_of_record.clone())
+            .context("screen record pixels")?;
         let terrain = self.terrain_horizon.build(
             environment,
             packed,
+            &pixel_of_record,
             receiver_lat_lon,
             receiver_altitude,
             inner_elevation,
@@ -467,6 +474,7 @@ impl AirborneGpu {
         let buildings = self.building_horizon.build(
             environment,
             packed,
+            &pixel_of_record,
             receiver_lat_lon,
             receiver_altitude,
             inner_elevation,

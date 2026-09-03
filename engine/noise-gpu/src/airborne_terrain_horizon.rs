@@ -7,6 +7,7 @@ use cudarc::driver::{CudaDevice, CudaFunction, CudaSlice, LaunchAsync, LaunchCon
 use noise_compute::emission::aircraft::{
     HORIZON_SECTORS, RECEIVER_HORIZON_ENTRY_COUNT, RECEIVER_HORIZON_MARCH_SAMPLES,
 };
+use raster_reader::fused_tile_z13::TILE_PX;
 use tile_painter::airborne_screening::PackedReceiverScreening;
 
 use crate::airborne_building_horizon::AirborneScreeningEnvironment;
@@ -18,6 +19,7 @@ pub(crate) struct TerrainHorizonDev {
 
 pub(crate) struct AirborneTerrainHorizonGpu {
     dev: Arc<CudaDevice>,
+    sample_tables: CudaFunction,
     build: CudaFunction,
     global_max: CudaFunction,
     range_quantization_probe: CudaFunction,
@@ -30,6 +32,7 @@ impl AirborneTerrainHorizonGpu {
                 .unwrap_or_else(|| panic!("fn {name}"))
         };
         Self {
+            sample_tables: function("airborne_terrain_sample_tables"),
             build: function("airborne_terrain_horizon_build"),
             global_max: function("airborne_terrain_horizon_global_max"),
             range_quantization_probe: function("airborne_terrain_horizon_range_quantization_probe"),
@@ -37,20 +40,18 @@ impl AirborneTerrainHorizonGpu {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build(
         &self,
         environment: &AirborneScreeningEnvironment,
         packed: &PackedReceiverScreening,
+        pixel_of_record: &CudaSlice<u32>,
         receiver_lat_lon: &CudaSlice<f64>,
         receiver_altitude: &CudaSlice<f32>,
         inner_elevation: &CudaSlice<f32>,
         tile_bbox: &CudaSlice<f64>,
     ) -> Result<TerrainHorizonDev> {
         let records = packed.records;
-        let pixel_of_record = self
-            .dev
-            .htod_copy(packed.pixel_of_record.clone())
-            .context("terrain receiver pixels")?;
         let mut entries = self
             .dev
             .alloc_zeros::<u32>(records * RECEIVER_HORIZON_ENTRY_COUNT)
@@ -59,7 +60,34 @@ impl AirborneTerrainHorizonGpu {
             .dev
             .alloc_zeros::<f32>(records)
             .context("terrain horizon maxima")?;
+        let samples_per_receiver = HORIZON_SECTORS * RECEIVER_HORIZON_MARCH_SAMPLES;
+        let mut east_deg = self
+            .dev
+            .alloc_zeros::<f64>(TILE_PX * samples_per_receiver)
+            .context("terrain sample longitude offsets")?;
+        let mut row_rf = self
+            .dev
+            .alloc_zeros::<f64>(TILE_PX * samples_per_receiver)
+            .context("terrain sample lattice rows")?;
+        let mut row_idx = self
+            .dev
+            .alloc_zeros::<i32>(TILE_PX * samples_per_receiver)
+            .context("terrain sample inner rows")?;
         unsafe {
+            self.sample_tables
+                .clone()
+                .launch(
+                    launch_config(TILE_PX * samples_per_receiver),
+                    (
+                        &environment.table,
+                        receiver_lat_lon,
+                        tile_bbox,
+                        &mut east_deg,
+                        &mut row_rf,
+                        &mut row_idx,
+                    ),
+                )
+                .context("launch terrain sample tables")?;
             self.build
                 .clone()
                 .launch(
@@ -70,7 +98,10 @@ impl AirborneTerrainHorizonGpu {
                         receiver_altitude,
                         inner_elevation,
                         tile_bbox,
-                        &pixel_of_record,
+                        pixel_of_record,
+                        &east_deg,
+                        &row_rf,
+                        &row_idx,
                         records as i32,
                         &mut entries,
                     ),

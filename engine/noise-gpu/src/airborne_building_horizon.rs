@@ -7,6 +7,7 @@ use cudarc::driver::{CudaDevice, CudaFunction, CudaSlice, DevicePtr, LaunchAsync
 use noise_compute::emission::aircraft::{
     building_local_directions, receiver_horizon_samples, BUILDING_LOCAL_HORIZON_BANDS,
     BUILDING_LOCAL_HORIZON_ENTRY_COUNT, BUILDING_LOCAL_HORIZON_SECTORS,
+    M_PER_DEG_LAT as AIRCRAFT_M_PER_DEG_LAT,
 };
 use noise_compute::propagation::obstacle_index::ObstacleSet;
 use raster_reader::fused_grid::FusedGrid;
@@ -123,13 +124,16 @@ impl AirborneBuildingHorizonGpu {
             .iter()
             .flat_map(|&(sin_angle, cos_angle)| [sin_angle, cos_angle])
             .collect();
+        // The march kernel adds each sample's latitude offset in degrees; dividing by the
+        // Doc 29 metres per degree here is the same IEEE f64 quotient the CPU march forms
+        // per sample, so the device saves that division without changing a bit.
         let terrain_samples: Vec<f64> = receiver_horizon_samples()
             .iter()
             .flatten()
             .flat_map(|sample| {
                 [
                     sample.range_m,
-                    sample.north_m,
+                    sample.north_m / AIRCRAFT_M_PER_DEG_LAT,
                     sample.east_m,
                     sample.band as f64,
                 ]
@@ -212,10 +216,12 @@ impl AirborneBuildingHorizonGpu {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build(
         &self,
         environment: &AirborneScreeningEnvironment,
         packed: &PackedReceiverScreening,
+        pixel_of_record: &CudaSlice<u32>,
         receiver_lat_lon: &CudaSlice<f64>,
         receiver_altitude: &CudaSlice<f32>,
         inner_elevation: &CudaSlice<f32>,
@@ -263,10 +269,6 @@ impl AirborneBuildingHorizonGpu {
         }
 
         let entries = records * BUILDING_LOCAL_HORIZON_ENTRY_COUNT;
-        let pixel_of_record = self
-            .dev
-            .htod_copy(packed.pixel_of_record.clone())
-            .context("building receiver pixels")?;
         let building_enabled = self
             .dev
             .htod_copy(packed.building_enabled.clone())
@@ -290,7 +292,7 @@ impl AirborneBuildingHorizonGpu {
                         receiver_altitude,
                         inner_elevation,
                         tile_bbox,
-                        &pixel_of_record,
+                        pixel_of_record,
                         &building_enabled,
                         records as i32,
                         &mut best_tangent,
