@@ -12,6 +12,7 @@ intersects the tile's degree square); skips tiles already cached or listed in IN
 (an ingested tile's parquet is deleted on purpose and never re-fetched). Tiles of one
 latitude row are scanned as one strip of up to BATCH_TILES and split in memory, so the
 per-scan cost (a statistics pass over every row group) is paid once per strip."""
+import ctypes
 import os
 import sys
 import time
@@ -27,15 +28,17 @@ import pyarrow.parquet as pq
 # releases inside one manifest would make neighbouring tiles disagree.
 RELEASE = "2026-08-19.0"
 DATASET_PATH = f"overturemaps-us-west-2/release/{RELEASE}/theme=buildings/type=building/"
-# Strip width: a dense European tile is ~100 MB in Arrow, so ten of them stay well under
-# 2 GB in memory while an empty polar row still amortises the scan tenfold.
-BATCH_TILES = 10
+# Strip width: a dense tile is hundreds of MB in Arrow (three strips of ten reached 16 GiB after
+# 123 tiles on 2026-09-04); four tiles per strip keep three strips in flight under a few GB
+# while an empty polar row still amortises the statistics pass fourfold.
+BATCH_TILES = 4
 # One strip waits on S3 round trips per row group: measured 2026-09-03 at 21 MB/s of a 55 MB/s
 # link and 61 % of one core; three strips in flight fill the link.
 STRIP_WORKERS = 3
-# pyarrow's pool keeps strip buffers: 26 GB RSS after 800 tiles (measured). Past this the run
-# ends with exit 3 and the caller starts a fresh process; cached tiles are skipped, nothing is lost.
-RSS_RESTART_BYTES = 16 << 30
+# Arrow's default (jemalloc) pool kept strip buffers: 26 GB RSS after 800 tiles (measured), so
+# the process uses the system allocator and trims it after every strip. Past this size the run
+# still ends with exit 3 and the caller starts a fresh process; cached tiles are skipped.
+RSS_RESTART_BYTES = 24 << 30
 EXIT_RESTART = 3
 # The columns ingest-overture-obstacles.py reads (plus id for audits); the theme's other 16
 # columns (names, sources, roof attributes) were 90 % of a strip's memory and transfer.
@@ -78,6 +81,7 @@ def main(list_path, parquet_dir, ingested_path=None):
     if not todo:
         return 0
     started = time.time()
+    pa.set_memory_pool(pa.system_memory_pool())
     s3 = pafs.S3FileSystem(anonymous=True, region="us-west-2")
     dataset = ds.dataset(DATASET_PATH, filesystem=s3, format="parquet")
     fragments = list(dataset.get_fragments())
@@ -120,6 +124,7 @@ def main(list_path, parquet_dir, ingested_path=None):
             done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
             failed += sum(future.result() for future in done)
             pa.default_memory_pool().release_unused()
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
             if not restart and rss_bytes() > RSS_RESTART_BYTES:
                 restart = True
                 print(f"[overture-tiles] {rss_bytes() >> 30} GiB resident, restarting after the "
