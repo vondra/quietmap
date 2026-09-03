@@ -52,7 +52,7 @@ ingest_one() {
     fi
 }
 export -f ingest_one
-export STATE
+export STATE SOURCE_ROOT
 
 while true; do
     # find, not ls: an empty cache dir made ls exit 2 and pipefail abort the loop.
