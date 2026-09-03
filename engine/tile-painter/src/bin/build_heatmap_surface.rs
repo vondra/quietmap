@@ -40,7 +40,7 @@ use tile_painter::region_runner::{
 };
 use tile_painter::renderer_evidence::{
     maybe_run_static_attestation, DependencyProfile, RegionTerminalStatus, RendererEvidence,
-    RuntimeParameters, StaticAttestationParameters, RENDERER_EVIDENCE_FLAG,
+    RuntimeParameters, StaticAttestationParameters,
 };
 use tile_painter::surface_region::{
     layer_meta, process_surface_region, Heartbeat, Source, SurfaceCtx, SurfaceStats,
@@ -583,20 +583,15 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Admin table drives road default-AADT AND the C1 rail per-region period
-    // split (EU freight ~55 % at night) — init when EITHER line layer is built,
-    // else a rail-only run resolves Admin::UNKNOWN → world split while popup uses
-    // real admin → parity break. Best-effort; filled ONCE here
-    // before the parallel region loop — a process-wide OnceLock the per-region
-    // loads only READ (concurrency-safe).
-    if layers.contains(&Source::Road) || layers.contains(&Source::Rail) {
-        let result = admin::init_admin_table(&admin::default_admin_path(&args.h3r4_dir));
-        if std::env::var(RENDERER_EVIDENCE_FLAG).as_deref() == Ok("1") {
-            result.context("renderer evidence requires the physical admin table")?;
-        }
-    }
+    // Admin drives road default-AADT AND the C1 rail per-region period split
+    // (EU freight ~55 % at night), so both line layers resolve it from the
+    // cell's own admin.bin; a rail-only run that resolved Admin::UNKNOWN would
+    // take the world split while the popup used real admin — a parity break.
+    // Recorded ONCE here, before the parallel region loop; the renderer
+    // evidence plan is what requires each ring cell's record to exist.
+    admin::set_admin_h3r4_directory(&args.h3r4_dir);
 
-    // Cell-stream worker: a warm process fed R4 cell IDs on stdin (admin table above is live;
+    // Cell-stream worker: a warm process fed R4 cell IDs on stdin (admin is live;
     // mutually exclusive with the --tile/--bbox/--regions-file batch modes below).
     if args.stream {
         return run_stream(&args, &layers, halo_m);

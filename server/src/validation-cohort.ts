@@ -228,11 +228,11 @@ export function createValidationCohortProvider(options: ValidationCohortOptions 
   ]
   const preparedRoot = resolve(h3r4Dir, '..', '..')
   const yearRoot = resolve(h3r4Dir, '..')
+  // Admin needs no entry of its own: each cell's admin.bin lives inside the
+  // h3r4 tree, which the `h3r4` input already fingerprints file by file.
   const preparedAuxiliaryInputs = options.preparedAuxiliaryInputs ?? [
     { label: 'dem', path: resolve(preparedRoot, 'dem') },
     { label: 'rasters', path: resolve(preparedRoot, 'rasters') },
-    { label: 'admin-global', path: resolve(preparedRoot, 'h3r4-admin.bin') },
-    { label: 'admin-year', path: resolve(yearRoot, 'h3r4-admin.bin') },
     { label: 'airport-summary', path: resolve(yearRoot, 'aircraft', 'airport_summary.arrow') },
   ]
   let establishedCohortId: string | null = null

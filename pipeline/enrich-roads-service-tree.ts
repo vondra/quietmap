@@ -10,7 +10,7 @@
  * for all building_type 0–13); the vehicle split and the residential
  * trips/dwelling multiplier are COUNTRY-dependent via the generated
  * lib/country-fleet.generated.ts table — interior hexes resolve their country
- * from h3r4-admin.bin, border hexes per segment midpoint through CGAZ
+ * from the cell's admin record, border hexes per segment midpoint through CGAZ
  * polygons (lib/hex-country.ts). The admin table is REQUIRED (fail-closed):
  * a missing table would silently stamp WORLD mix over the whole extract.
  *
@@ -985,19 +985,20 @@ async function main() {
   else if (START_INDEX > 0) rangeSuffix = ` (resume from #${START_INDEX})`
 
   // FAIL-CLOSED: national fleet mix + trips/dwelling depend on the hex→country
-  // table; running without it would silently stamp WORLD values over the whole
-  // extract (/gg Codex CRITICAL). osm-to-h3r4.sh builds it before this pass.
-  const countryResolver = createHexCountryResolver(resolve(H3R4_DIR, '..', '..', 'h3r4-admin.bin'))
+  // records; running without them would silently stamp WORLD values over the
+  // whole extract (/gg Codex CRITICAL). osm-to-h3r4.sh writes them before this
+  // pass.
+  const countryResolver = createHexCountryResolver(H3R4_DIR)
 
-  // Staleness guard: a WORLD-scope run against an admin table from an older
-  // extract would leave every hex the old table doesn't know on WORLD fleet.
+  // Staleness guard: a WORLD-scope run against admin records from an older
+  // extract would leave every hex they don't know on WORLD fleet.
   // Coastal hexes legitimately miss centroids (their centre is over water),
   // so the gate is a coverage share, and scoped runs (--bbox/--prefix over
   // coastal regions like Krabi) only warn.
   const covered = hexDirs.reduce((acc, h) => acc + (countryResolver.hexIso(h) !== undefined ? 1 : 0), 0)
   if (hexDirs.length > 0 && covered / hexDirs.length < 0.5) {
-    const msg = `h3r4-admin.bin covers only ${covered}/${hexDirs.length} hexes in scope — stale or foreign table?`
-    if (!BBOX && !PREFIX) throw new Error(`${msg} Rebuild it: cd scripts && DATA_YEAR=${YEAR} npm run build:h3-admin`)
+    const msg = `admin records cover only ${covered}/${hexDirs.length} hexes in scope — stale or foreign tree?`
+    if (!BBOX && !PREFIX) throw new Error(`${msg} Rebuild them: cd scripts && DATA_YEAR=${YEAR} npm run build:h3-admin`)
     console.error(`WARNING: ${msg}`)
   }
 

@@ -32,3 +32,5 @@ rayon = "1"
 [dev-dependencies]
 # For unit tests
 approx = "0.5"
+# Hermetic h3r4 trees for the per-cell admin reader
+tempfile = "3"

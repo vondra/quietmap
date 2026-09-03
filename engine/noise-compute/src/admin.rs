@@ -1,43 +1,48 @@
-//! H3R4 → (continent, country, city) lookup.
+//! H3R4 → (continent, country, city) lookup, one record per prepared cell.
 //!
-//! Loads `data/prepared/h3r4-admin.bin` (produced by
-//! `scripts/build-h3-admin.ts`) into a `HashMap<u64, Admin>`. Engine callers
-//! use `hex_admin(hex, &table)` to resolve the admin triplet for a single
-//! H3R4 cell.
+//! Every prepared cell carries its own admin record beside its arrows, at
+//! `prepared/{year}/h3r4/<cell>/admin.bin` (written by
+//! `scripts/build-h3-admin.ts`), so a paint task reads admin for exactly the
+//! cells in its read ring and nothing world-wide has to travel with it.
 //!
-//! Policy: admin assignment uses H3R4 hex **centroid** point-in-polygon
-//! against Natural Earth 1:10 m country polygons and hand-curated metro
-//! polygons. At ~24 km hex resolution:
+//! Record (13 bytes, little-endian):
+//!
+//! ```text
+//! [u64 hex_id, u8 continent, u8 iso0, u8 iso1, u16 city]
+//! ```
+//!
+//! `hex_id` repeats the directory name on purpose: the path anchors the
+//! identity and the record proves the file was not copied in from another
+//! cell.
+//!
+//! Policy: admin assignment uses the H3R4 hex **centroid** point-in-polygon
+//! against the global CGAZ ADM0 boundaries, with interior sampling for
+//! sea-centroid hexes and hand-curated metro polygons. At ~24 km hex
+//! resolution:
 //!
 //!   - Interior hexes (~72 % globally) fall cleanly inside one country.
-//!   - Border hexes pick up whichever polygon ray-casts first in Natural
-//!     Earth's feature ordering — acceptable approximation at H3R4
-//!     granularity.
+//!   - Border hexes pick up whichever polygon claims the centroid —
+//!     acceptable approximation at H3R4 granularity.
 //!   - Micro-states (Vatican, Monaco, ...) are absorbed into the
 //!     surrounding country's polygon.
 //!   - Metros tag only hexes whose centroid falls inside the bounding
 //!     polygon — suburbs outside the polygon correctly fall back to the
 //!     country-level default.
 //!
-//! See `scripts/build-h3-admin.ts` header for geopolitical caveats
-//! (Natural Earth encodes a specific view of contested boundaries).
-//!
-//! Binary format (little-endian):
-//!
-//! ```text
-//! bytes 0-7   : "H3ADMIN1" magic
-//! bytes 8-11  : u32 count
-//! records     : [u64 hex_id, u8 continent, u8 iso0, u8 iso1, u16 city] × count
-//! ```
+//! See `scripts/build-h3-admin.ts` header for geopolitical caveats (CGAZ
+//! encodes a specific view of contested boundaries).
 
 use std::collections::HashMap;
 use std::fs;
 use std::io;
-use std::path::Path;
-use std::sync::OnceLock;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, RwLock};
 
-pub const MAGIC: &[u8; 8] = b"H3ADMIN1";
-pub const RECORD_SIZE: usize = 8 + 1 + 2 + 2; // 13 bytes
+/// `[u64 hex_id, u8 continent, u8 iso0, u8 iso1, u16 city]`.
+pub const RECORD_SIZE: usize = 8 + 1 + 2 + 2;
+
+/// The admin record's file name inside `prepared/{year}/h3r4/<cell>/`.
+pub const ADMIN_FILE_NAME: &str = "admin.bin";
 
 /// Six major continents. Hand-coded ids must match
 /// `scripts/build-h3-admin.ts::CONTINENT_ID`.
@@ -83,8 +88,8 @@ impl Continent {
 ///
 /// `country_iso` holds the 2-letter ISO-3166 alpha-2 code as raw bytes
 /// (e.g. `*b"CZ"`, `*b"BR"`). `b"\0\0"` is the "unknown" sentinel — hexes
-/// whose centroid fell outside every Natural Earth country polygon (mostly
-/// oceanic or small-island hexes).
+/// whose centroid fell outside every country polygon (mostly oceanic or
+/// small-island hexes).
 ///
 /// `city_id` is the `id` field from `scripts/h3-admin-metros.json`; `0`
 /// means the centroid did not fall inside any metro polygon.
@@ -113,100 +118,111 @@ impl Admin {
     }
 }
 
-/// Load the admin table produced by `scripts/build-h3-admin.ts`.
-///
-/// Returns a `HashMap<u64 h3_index, Admin>`. Typical size: ~90 k entries,
-/// ~3 MB heap. Loaded once at process startup.
-pub fn load_admin_table(path: &Path) -> io::Result<HashMap<u64, Admin>> {
-    let bytes = fs::read(path)?;
-    if bytes.len() < 12 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "file too short for H3ADMIN header",
-        ));
-    }
-    if &bytes[0..8] != MAGIC {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("bad magic: expected {:?}, got {:?}", MAGIC, &bytes[0..8]),
-        ));
-    }
-    let count = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
-    let expected_len = 12 + count * RECORD_SIZE;
-    if bytes.len() != expected_len {
+/// The path of one cell's admin record inside an h3r4 tree.
+pub fn cell_admin_path(h3r4_directory: &Path, cell: u64) -> PathBuf {
+    h3r4_directory
+        .join(format!("{cell:015x}"))
+        .join(ADMIN_FILE_NAME)
+}
+
+/// Read one cell's admin record. `io::ErrorKind::NotFound` means the cell is
+/// outside the prepared world; every other error is a real fault (a truncated
+/// record, or one copied in from another cell).
+pub fn read_cell_admin(h3r4_directory: &Path, cell: u64) -> io::Result<Admin> {
+    let path = cell_admin_path(h3r4_directory, cell);
+    let bytes = fs::read(&path)?;
+    if bytes.len() != RECORD_SIZE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "file length {} ≠ expected {} (count={}, record_size={})",
-                bytes.len(),
-                expected_len,
-                count,
-                RECORD_SIZE
+                "{} holds {} bytes, expected exactly {RECORD_SIZE}",
+                path.display(),
+                bytes.len()
             ),
         ));
     }
-
-    let mut table = HashMap::with_capacity(count);
-    let mut off = 12usize;
-    for _ in 0..count {
-        let hex_id = u64::from_le_bytes(bytes[off..off + 8].try_into().unwrap());
-        let continent = Continent::from_u8(bytes[off + 8]);
-        let country_iso = [bytes[off + 9], bytes[off + 10]];
-        let city_id = u16::from_le_bytes([bytes[off + 11], bytes[off + 12]]);
-        table.insert(
-            hex_id,
-            Admin {
-                continent,
-                country_iso,
-                city_id,
-            },
-        );
-        off += RECORD_SIZE;
+    let stored = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+    if stored != cell {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{} holds cell {stored:015x}, not {cell:015x}",
+                path.display()
+            ),
+        ));
     }
-    Ok(table)
+    Ok(Admin {
+        continent: Continent::from_u8(bytes[8]),
+        country_iso: [bytes[9], bytes[10]],
+        city_id: u16::from_le_bytes([bytes[11], bytes[12]]),
+    })
 }
 
-/// Resolve admin for a single hex. Returns `Admin::UNKNOWN` if the hex is
-/// not in the table (new hex after admin build, or the table was not loaded).
-pub fn hex_admin(hex: u64, table: &HashMap<u64, Admin>) -> Admin {
-    table.get(&hex).copied().unwrap_or(Admin::UNKNOWN)
+// ─── Process-wide per-cell cache ─────────────────────────────────────────
+//
+// tile-painter, source-reader and point-debug all benefit from the defaults
+// cascade. Rather than plumb admin by reference through the ~6-deep call
+// chain (entry point → compute_at_point → compute_roads →
+// normalize_road_segment), the process records its h3r4 tree once at startup
+// and each cell's record is read on first use and then kept.
+//
+// A process that never records a tree — lib tests, point-debug — resolves
+// `Admin::UNKNOWN` everywhere and keeps the WORLD defaults arm, so lib tests
+// may assume no admin is ever visible to them. That assumption is why the
+// wiring test lives in its own integration binary
+// (`tests/admin_process_directory.rs`): filling this cache inside the lib test
+// binary flipped `none_channel_is_receiver_path_bit_identical` between the
+// WORLD and the country arm depending on when the fill landed.
+
+#[derive(Default)]
+struct AdminCache {
+    h3r4_directory: Option<PathBuf>,
+    by_cell: HashMap<u64, Admin>,
 }
 
-// ─── Process-wide singleton ──────────────────────────────────────────────
-//
-// tile-painter, source-reader and point-debug all benefit from the
-// defaults cascade. Rather than plumb the table by reference through the
-// ~6-deep call chain (entry point → compute_at_point → compute_roads →
-// normalize_road_segment), we keep it in a process-wide OnceLock and
-// provide tiny lookup helpers. Callers MUST call `init` once at startup.
-//
-// OnceLock rather than Lazy so initialisation failure (missing admin.bin)
-// is an explicit caller concern — tests and point-debug default to
-// `Admin::UNKNOWN` and observable behaviour is unchanged.
+static ADMIN_CACHE: LazyLock<RwLock<AdminCache>> = LazyLock::new(RwLock::default);
 
-static ADMIN_TABLE: OnceLock<HashMap<u64, Admin>> = OnceLock::new();
+const POISONED: &str = "a thread panicked while holding the admin cache";
 
-/// Initialise the process-wide admin table. Idempotent: subsequent calls
-/// short-circuit before touching the disk and return the already-loaded
-/// entry count. Recommended path: `data/prepared/h3r4-admin.bin` (built
-/// by `scripts/build-h3-admin.ts`).
-pub fn init_admin_table(path: &Path) -> io::Result<usize> {
-    if let Some(existing) = ADMIN_TABLE.get() {
-        return Ok(existing.len());
+/// Point the process at the h3r4 tree admin is read from. Switching trees
+/// drops every cached record, so a re-initialised source-reader can never
+/// answer from the tree it just left.
+pub fn set_admin_h3r4_directory(h3r4_directory: &Path) {
+    let mut cache = ADMIN_CACHE.write().expect(POISONED);
+    if cache.h3r4_directory.as_deref() == Some(h3r4_directory) {
+        return;
     }
-    let table = load_admin_table(path)?;
-    let n = table.len();
-    let _ = ADMIN_TABLE.set(table);
-    Ok(n)
+    cache.h3r4_directory = Some(h3r4_directory.to_path_buf());
+    cache.by_cell.clear();
 }
 
-/// Resolve admin for a given H3R4 cell id (u64). Returns `Admin::UNKNOWN`
-/// when the table is not initialised or the cell is oceanic.
-pub fn admin_for_hex(hex: u64) -> Admin {
-    ADMIN_TABLE
-        .get()
-        .map(|t| t.get(&hex).copied().unwrap_or(Admin::UNKNOWN))
-        .unwrap_or(Admin::UNKNOWN)
+/// Resolve admin for a given H3R4 cell id (u64). `Admin::UNKNOWN` when no
+/// h3r4 tree was recorded or the cell is outside the prepared world.
+pub fn admin_for_hex(cell: u64) -> Admin {
+    {
+        let cache = ADMIN_CACHE.read().expect(POISONED);
+        if let Some(admin) = cache.by_cell.get(&cell) {
+            return *admin;
+        }
+        if cache.h3r4_directory.is_none() {
+            return Admin::UNKNOWN;
+        }
+    }
+    let mut cache = ADMIN_CACHE.write().expect(POISONED);
+    let Some(h3r4_directory) = cache.h3r4_directory.clone() else {
+        return Admin::UNKNOWN;
+    };
+    let admin = match read_cell_admin(&h3r4_directory, cell) {
+        Ok(admin) => admin,
+        // A cell outside the prepared world has no directory at all: that is
+        // the ocean answer, not a fault. A record that exists but does not
+        // read IS a fault — painting WORLD defaults over a real country
+        // because a file is torn must never pass silently.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Admin::UNKNOWN,
+        Err(error) => panic!("{error}"),
+    };
+    cache.by_cell.insert(cell, admin);
+    admin
 }
 
 /// Resolve admin for a lat/lng by projecting to the enclosing H3R4 cell.
@@ -216,49 +232,24 @@ pub fn admin_for_latlng(lat: f64, lng: f64) -> Admin {
     let Ok(ll) = LatLng::new(lat, lng) else {
         return Admin::UNKNOWN;
     };
-    let cell = u64::from(ll.to_cell(Resolution::Four));
-    admin_for_hex(cell)
-}
-
-/// Whether the process-wide table has been initialised. Useful in
-/// `normalize_road` to debug the "every default is WORLD" symptom.
-pub fn is_initialised() -> bool {
-    ADMIN_TABLE.get().is_some()
-}
-
-/// Resolve the admin.bin path for an h3r4 input directory.
-///
-/// Per CLAUDE.md, admin.bin is year-independent (like rasters/DEM) and lives
-/// at `data/prepared/h3r4-admin.bin`. Callers pass the year-scoped h3r4 dir
-/// (e.g. `data/prepared/2026/h3r4`); we walk up two levels to land on
-/// `data/prepared`. Falls back to the immediate parent for non-year-scoped
-/// layouts (legacy / tests). Returns the first existing path; if none
-/// exists, returns the year-independent location (caller logs the
-/// soft-fail).
-pub fn default_admin_path(h3r4_dir: &Path) -> std::path::PathBuf {
-    let year_independent = h3r4_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.join("h3r4-admin.bin"));
-    let year_scoped = h3r4_dir.parent().map(|p| p.join("h3r4-admin.bin"));
-    if let Some(p) = &year_independent {
-        if p.exists() {
-            return p.clone();
-        }
-    }
-    if let Some(p) = &year_scoped {
-        if p.exists() {
-            return p.clone();
-        }
-    }
-    year_independent
-        .or(year_scoped)
-        .unwrap_or_else(|| Path::new("data/prepared/h3r4-admin.bin").to_path_buf())
+    admin_for_hex(u64::from(ll.to_cell(Resolution::Four)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Write one cell's admin record into an h3r4 tree.
+    fn write_cell_admin(h3r4_directory: &Path, cell: u64, iso: &[u8; 2], city: u16) {
+        let path = cell_admin_path(h3r4_directory, cell);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut record = Vec::with_capacity(RECORD_SIZE);
+        record.extend_from_slice(&cell.to_le_bytes());
+        record.push(Continent::Europe as u8);
+        record.extend_from_slice(iso);
+        record.extend_from_slice(&city.to_le_bytes());
+        fs::write(path, record).unwrap();
+    }
 
     #[test]
     fn continent_roundtrip() {
@@ -293,75 +284,40 @@ mod tests {
     }
 
     #[test]
-    fn load_admin_table_reads_real_file() {
-        // Best-effort test: the file only exists after `npm run build:h3-admin`
-        // has been run at least once. Skip silently otherwise so clean-checkout
-        // CI does not fail.
-        let path = Path::new("../../data/prepared/h3r4-admin.bin");
-        if !path.exists() {
-            eprintln!(
-                "skipping: {} not found — run `npm run build:h3-admin`",
-                path.display()
-            );
-            return;
-        }
-        let table = load_admin_table(path).expect("failed to load admin table");
-        assert!(!table.is_empty(), "table should have entries");
-        let known = table
-            .values()
-            .filter(|a| a.country_code().is_some())
-            .count();
-        assert!(known > 0, "at least some hexes must classify to a country");
-    }
-
-    #[test]
-    fn dobris_hex_lands_in_czechia() {
-        // 49.78 N, 14.17 E — a known Dobříš hex used for benchmarks.
-        // H3 res-4 id "841e309ffffffff" is 15 hex chars → u64 with a leading 0.
-        let path = Path::new("../../data/prepared/h3r4-admin.bin");
-        if !path.exists() {
-            return;
-        }
-        let table = load_admin_table(path).unwrap();
+    fn read_cell_admin_returns_the_written_record() {
+        let tree = tempfile::tempdir().unwrap();
         let dobris: u64 = 0x0841_e309_ffff_ffff;
-        let a = hex_admin(dobris, &table);
-        assert_eq!(a.country_code(), Some("CZ"), "Dobris should land in CZ");
-        assert_eq!(a.continent, Continent::Europe);
-    }
-
-    // The OnceLock singleton wiring test lives in tests/admin_singleton.rs —
-    // an integration binary, i.e. its OWN process. In here it would initialise
-    // the process-wide ADMIN_TABLE for every concurrently-running lib test,
-    // and any test computing with an admin-dependent default (the road/rail
-    // kernels' receiver fallback) would flip arms depending on WHEN this
-    // test's init landed — a real observed flake: the rail none-channel
-    // bit-identity test lost the race between its two compute calls on
-    // data-carrying boxes (CI never saw it — the init test is data-gated and
-    // skips there). Lib tests may assume the table is NEVER initialised.
-
-    #[test]
-    fn prague_hex_tagged_as_metro() {
-        // Prague city-centre H3R4 cell — should be tagged city_id=31
-        // (Prague entry in scripts/h3-admin-metros.json).
-        let path = Path::new("../../data/prepared/h3r4-admin.bin");
-        if !path.exists() {
-            return;
-        }
-        let table = load_admin_table(path).unwrap();
-
-        // Walk table and confirm at least one CZ hex has city_id == 31.
-        let prague_tagged = table
-            .values()
-            .any(|a| a.country_code() == Some("CZ") && a.city_id == 31);
-        assert!(
-            prague_tagged,
-            "expected at least one CZ hex tagged as city_id=31 (Prague)"
-        );
+        write_cell_admin(tree.path(), dobris, b"CZ", 31);
+        let admin = read_cell_admin(tree.path(), dobris).unwrap();
+        assert_eq!(admin.country_code(), Some("CZ"));
+        assert_eq!(admin.continent, Continent::Europe);
+        assert_eq!(admin.city_id, 31);
     }
 
     #[test]
-    fn hex_admin_returns_unknown_for_missing_hex() {
-        let table = HashMap::new();
-        assert_eq!(hex_admin(0xdead_beef_cafe, &table), Admin::UNKNOWN);
+    fn read_cell_admin_rejects_a_record_from_another_cell() {
+        let tree = tempfile::tempdir().unwrap();
+        let dobris: u64 = 0x0841_e309_ffff_ffff;
+        let neighbour: u64 = 0x0841_e30b_ffff_ffff;
+        write_cell_admin(tree.path(), dobris, b"CZ", 0);
+        fs::create_dir_all(tree.path().join(format!("{neighbour:015x}"))).unwrap();
+        fs::copy(
+            cell_admin_path(tree.path(), dobris),
+            cell_admin_path(tree.path(), neighbour),
+        )
+        .unwrap();
+        let error = read_cell_admin(tree.path(), neighbour).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
+
+    #[test]
+    fn read_cell_admin_reports_an_absent_cell_as_not_found() {
+        let tree = tempfile::tempdir().unwrap();
+        let error = read_cell_admin(tree.path(), 0x0841_e309_ffff_ffff).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    // The process-wide wiring test lives in tests/admin_process_directory.rs —
+    // its own process, so the lib tests keep their "no admin is visible"
+    // assumption (see the cache header above).
 }

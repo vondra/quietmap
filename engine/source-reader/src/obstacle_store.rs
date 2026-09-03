@@ -99,7 +99,7 @@ fn index_cache_enabled() -> bool {
 }
 
 /// Where cached indexes live: beside the other derived, year-independent
-/// prepared artifacts (`prepared/dem`, `prepared/rasters`, `h3r4-admin.bin`).
+/// prepared artifacts (`prepared/dem`, `prepared/rasters`).
 /// `QM_OBSTACLE_INDEX_DIR` moves them to another volume.
 fn index_cache_root(data_dir: &Path) -> Option<PathBuf> {
     if !index_cache_enabled() {

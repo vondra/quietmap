@@ -36,7 +36,7 @@
  * silently ungated national enricher writes one country's counts onto another
  * country's roads, the exact bug the gate exists to prevent.
  *
- * This is an actual-polygon gate — NOT `h3r4-admin.bin`, which is H3 res-4
+ * This is an actual-polygon gate — NOT the per-cell `admin.bin`, which is H3 res-4
  * (~22 km, centroid-based) and far too coarse to separate roads at a border.
  */
 import { readFileSync, mkdirSync } from 'node:fs'

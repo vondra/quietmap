@@ -102,8 +102,7 @@ pub fn run_relevant_source_stream(
     configuration: &RelevantSourceRunConfiguration,
     cells: impl Iterator<Item = CellRequest> + Send,
 ) -> Result<usize> {
-    admin::init_admin_table(&admin::default_admin_path(&configuration.h3r4_directory))
-        .context("load the road/rail admin table")?;
+    admin::set_admin_h3r4_directory(&configuration.h3r4_directory);
     let rasters = RealRasters::new(&configuration.prepared_directory);
     let cuda = RelevantSourceCuda::initialize()?;
     let (sender, receiver) = sync_channel(1);

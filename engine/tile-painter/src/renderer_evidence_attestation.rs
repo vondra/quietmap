@@ -220,8 +220,22 @@ fn collect_region_dependencies(
     let airborne_buildings = layers
         .iter()
         .any(|layer| matches!(*layer, "aircraft-airborne" | "aircraft-combined"));
+    // Road default-AADT and the rail period split read the cell's own admin
+    // record; a line layer painted without one silently falls to WORLD.
+    let line_admin = layers.iter().any(|layer| matches!(*layer, "road" | "rail"));
     for ring_cell in ring {
         let cell_hex = format!("{:015x}", u64::from(ring_cell));
+        if line_admin {
+            collect_resolved_path(
+                &mut dependencies,
+                prepared_root,
+                "physical-admin",
+                &h3r4_relative
+                    .join(&cell_hex)
+                    .join(noise_compute::admin::ADMIN_FILE_NAME),
+                true,
+            )?;
+        }
         for file in &source_files {
             collect_resolved_path(
                 &mut dependencies,
@@ -256,21 +270,6 @@ fn collect_region_dependencies(
                 false,
             )?;
         }
-    }
-    if matches!(profile, DependencyProfile::Surface)
-        && layers.iter().any(|layer| matches!(*layer, "road" | "rail"))
-    {
-        let admin = noise_compute::admin::default_admin_path(h3r4_dir);
-        let relative = admin
-            .strip_prefix(prepared_root)
-            .context("physical admin path is outside prepared root")?;
-        collect_resolved_path(
-            &mut dependencies,
-            prepared_root,
-            "physical-admin",
-            relative,
-            true,
-        )?;
     }
     collect_raster_dependencies(
         &mut dependencies,
@@ -411,6 +410,34 @@ mod tests {
         assert!(dependencies.iter().any(|item| {
             item.role == "dem-fallback" && item.required && item.resolution == "absent"
         }));
+    }
+
+    #[test]
+    fn line_plan_requires_one_admin_record_per_ring_cell() {
+        let root = tempdir().unwrap();
+        let h3r4 = root.path().join("2026/h3r4");
+        std::fs::create_dir_all(&h3r4).unwrap();
+        let cell = 0x841e309ffffffff;
+        let dependencies = collect_region_dependencies(
+            cell,
+            root.path(),
+            &h3r4,
+            &[],
+            13,
+            10_000.0,
+            &["road"],
+            DependencyProfile::Surface,
+        )
+        .unwrap();
+
+        let admin: Vec<&DependencyRecord> = dependencies
+            .iter()
+            .filter(|item| item.role == "physical-admin")
+            .collect();
+        assert_eq!(admin.len(), 7, "one record per grid_disk(1) ring cell");
+        assert!(admin
+            .iter()
+            .all(|item| item.required && item.relative_path.ends_with("/admin.bin")));
     }
 
     #[test]
