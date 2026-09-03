@@ -195,6 +195,7 @@ fn main() {
         ),
     ]
     .map(|(name, prefix)| (name, const_from("src/airborne_building_horizon.rs", prefix)));
+    let coarse_target_blocks = const_from("src/airborne.rs", "const COARSE_TARGET_BLOCKS: usize = ");
     let building_grid_geometry_stride = const_from(
         "src/airborne_building_horizon.rs",
         "const BUILDING_GRID_GEOMETRY_STRIDE: usize = ",
@@ -221,6 +222,7 @@ fn main() {
         format!("-DBUILDING_FIRST_RANGE_BREAK_M_D={building_first_range_break_m}"),
         format!("-DBUILDING_RANGE_GROWTH_D={building_range_growth}"),
         format!("-DBUILDING_MIN_EDGE_RANGE_M_D={building_min_edge_range_m}"),
+        format!("-DCOARSE_TARGET_BLOCKS={coarse_target_blocks}"),
         format!("-DBUILDING_GRID_GEOMETRY_STRIDE={building_grid_geometry_stride}"),
         format!("-DBUILDING_GRID_LAYOUT_STRIDE={building_grid_layout_stride}"),
         format!("-DDIFFRACTION_SLOPE_D={diffraction_slope}"),

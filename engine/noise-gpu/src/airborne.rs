@@ -55,6 +55,9 @@ const SCREEN_BUILDING_GLOBAL_MAX_TAN_Q: usize = 13;
 const SCREEN_BUILDING_LOCAL_ENTRIES: usize = 14;
 const SCREEN_BUILDING_LOCAL_MAX_TAN_Q: usize = 15;
 const SCREEN_TABLE_WORDS: usize = 16;
+/// (node, part) blocks the coarse kernel aims for per launch; `airborne.cu` derives the
+/// same part count from it, so the partial-sum buffer and the grid agree.
+const COARSE_TARGET_BLOCKS: usize = 4096;
 
 /// A region whose per-block far-list crosses `i32::MAX` entries — unbuildable in a single GPU pass
 /// (it would overflow the device offsets / need ~16 GB of VRAM). Surfaced as a per-cell skip, the
@@ -278,7 +281,9 @@ pub struct AirborneGpu {
     f_coarse_screened: CudaFunction,
     /// GPU classify (counting-sort the per-tile near/far gate on device) → device-built CSR.
     f_classify_count: CudaFunction,
+    f_classify_chunk_offsets: CudaFunction,
     f_classify_scatter: CudaFunction,
+    f_coarse_reduce_parts: CudaFunction,
     terrain_horizon: AirborneTerrainHorizonGpu,
     building_horizon: AirborneBuildingHorizonGpu,
     d_npd: CudaSlice<f32>,
@@ -343,7 +348,9 @@ impl AirborneGpu {
             &[
                 "airborne_exact_screened",
                 "airborne_coarse_screened",
+                "airborne_coarse_reduce_parts",
                 "airborne_classify_count",
+                "airborne_classify_chunk_offsets",
                 "airborne_classify_scatter",
                 "airborne_terrain_horizon_build",
                 "airborne_terrain_horizon_global_max",
@@ -365,9 +372,15 @@ impl AirborneGpu {
         let f_classify_count = dev
             .get_func("air", "airborne_classify_count")
             .expect("fn classify_count");
+        let f_classify_chunk_offsets = dev
+            .get_func("air", "airborne_classify_chunk_offsets")
+            .expect("fn classify_chunk_offsets");
         let f_classify_scatter = dev
             .get_func("air", "airborne_classify_scatter")
             .expect("fn classify_scatter");
+        let f_coarse_reduce_parts = dev
+            .get_func("air", "airborne_coarse_reduce_parts")
+            .expect("fn coarse_reduce_parts");
         let terrain_horizon = AirborneTerrainHorizonGpu::new(Arc::clone(&dev));
         let building_horizon = AirborneBuildingHorizonGpu::new(Arc::clone(&dev));
         let d_npd = dev
@@ -394,7 +407,9 @@ impl AirborneGpu {
             f_near_screened,
             f_coarse_screened,
             f_classify_count,
+            f_classify_chunk_offsets,
             f_classify_scatter,
+            f_coarse_reduce_parts,
             terrain_horizon,
             building_horizon,
             d_npd,
@@ -422,6 +437,7 @@ impl AirborneGpu {
             .range_quantization_probe(true_range_m, source_range_m)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn upload_receiver_screening(
         &self,
         packed: &PackedReceiverScreening,
@@ -599,13 +615,20 @@ impl AirborneGpu {
         }
         let d_meta = self.dev.htod_copy(meta).context("meta")?;
 
-        // 2. Pass 1 (count): thread per (tile, seg) → counts[tile*4 + bucket].
-        let threads = (t as u64) * (nreg as u64);
+        // 2. Pass 1 (count): one block per (tile, chunk of CLASSIFY_CHUNK segs) → per-chunk
+        //    bucket counts plus counts[tile*4 + bucket]. Slots are then ranks in seg order, so
+        //    the lists — and every f32 sum over them — come out the same bits every run.
+        const CLASSIFY_CHUNK: usize = 512;
+        let nchunks = nreg.div_ceil(CLASSIFY_CHUNK);
         let cfg_classify = LaunchConfig {
-            grid_dim: (threads.div_ceil(block as u64) as u32, 1, 1),
-            block_dim: (block, 1, 1),
+            grid_dim: ((t * nchunks) as u32, 1, 1),
+            block_dim: (CLASSIFY_CHUNK as u32, 1, 1),
             shared_mem_bytes: 0,
         };
+        let mut d_chunk_counts = self
+            .dev
+            .alloc_zeros::<i32>(t * 4 * nchunks)
+            .context("chunk counts")?;
         let mut d_counts = self.dev.alloc_zeros::<i32>(t * 4).context("counts")?;
         unsafe {
             self.f_classify_count
@@ -618,10 +641,23 @@ impl AirborneGpu {
                         &region.d_sf,
                         nreg_i,
                         t as i32,
+                        nchunks as i32,
+                        &mut d_chunk_counts,
                         &mut d_counts,
                     ),
                 )
                 .context("launch classify_count")?;
+            self.f_classify_chunk_offsets
+                .clone()
+                .launch(
+                    LaunchConfig {
+                        grid_dim: (((t * 4) as u32).div_ceil(block), 1, 1),
+                        block_dim: (block, 1, 1),
+                        shared_mem_bytes: 0,
+                    },
+                    (t as i32, nchunks as i32, &mut d_chunk_counts),
+                )
+                .context("launch classify_chunk_offsets")?;
         }
         self.dev.synchronize().context("count sync")?;
         let counts = self.dev.dtoh_sync_copy(&d_counts).context("dtoh counts")?;
@@ -659,7 +695,6 @@ impl AirborneGpu {
 
         // 4. Pass 2 (scatter): fill near_idx + per-level far (seg,tile) lists on device.
         //    alloc_zeros rejects 0 bytes → dummy-size empty buckets; the kernel never writes them.
-        let mut d_fill = self.dev.alloc_zeros::<i32>(t * 4).context("fill")?;
         let mut d_near_idx = self
             .dev
             .alloc_zeros::<i32>(total[0].max(1))
@@ -686,9 +721,10 @@ impl AirborneGpu {
                         &region.d_sll,
                         &region.d_sf,
                         &d_off,
-                        &mut d_fill,
+                        &d_chunk_counts,
                         nreg_i,
                         t as i32,
+                        nchunks as i32,
                         &mut d_near_idx,
                         &mut d_far0,
                         &mut d_far1,
@@ -744,9 +780,10 @@ impl AirborneGpu {
                 .dev
                 .alloc_zeros::<f32>(npix * 3)
                 .context("screened exact output")?;
+            // EXACT_BLOCK threads per block (airborne.cu): a block must stay inside one row.
             let cfg_near = LaunchConfig {
-                grid_dim: ((npix as u32).div_ceil(block), 1, 1),
-                block_dim: (block, 1, 1),
+                grid_dim: ((npix as u32).div_ceil(256), 1, 1),
+                block_dim: (256, 1, 1),
                 shared_mem_bytes: 0,
             };
             unsafe {
@@ -776,20 +813,27 @@ impl AirborneGpu {
                     continue;
                 }
                 let nn = COARSE_LEVELS_N[level];
+                let nodes = nn * nn;
+                // One COARSE_BLOCK block per (lattice row, part): enough blocks to fill the
+                // device even on the 5×5 lattice, each part a fixed range of the far list.
+                let parts = COARSE_TARGET_BLOCKS.div_ceil(nn);
+                let mut d_partial = self
+                    .dev
+                    .alloc_zeros::<f32>(nodes * parts * 3)
+                    .context("screened coarse partial sums")?;
                 let mut d_coarse = self
                     .dev
-                    .alloc_zeros::<f32>(nn * nn * 3)
+                    .alloc_zeros::<f32>(nodes * 3)
                     .context("screened coarse output")?;
-                let cfg = LaunchConfig {
-                    grid_dim: ((far[level].1 as u32).div_ceil(block), 1, 1),
-                    block_dim: (block, 1, 1),
-                    shared_mem_bytes: 0,
-                };
                 unsafe {
                     self.f_coarse_screened
                         .clone()
                         .launch(
-                            cfg,
+                            LaunchConfig {
+                                grid_dim: ((nn * parts) as u32, 1, 1),
+                                block_dim: (256, 1, 1),
+                                shared_mem_bytes: 0,
+                            },
                             (
                                 &d_rll,
                                 &d_rxa,
@@ -802,10 +846,21 @@ impl AirborneGpu {
                                 level as i32,
                                 nn as i32,
                                 &screening.table,
-                                &mut d_coarse,
+                                &mut d_partial,
                             ),
                         )
                         .context("launch screened coarse")?;
+                    self.f_coarse_reduce_parts
+                        .clone()
+                        .launch(
+                            LaunchConfig {
+                                grid_dim: (((nodes * 3) as u32).div_ceil(block), 1, 1),
+                                block_dim: (block, 1, 1),
+                                shared_mem_bytes: 0,
+                            },
+                            (&d_partial, nodes as i32, parts as i32, &mut d_coarse),
+                        )
+                        .context("launch coarse reduce")?;
                 }
                 coarse_device.push((nn, d_coarse));
             }

@@ -145,18 +145,28 @@ __device__ __forceinline__ float npd_lookup(const float* lut_base, int cls, floa
     return lut[idx] + frac * (lut[idx + 1] - lut[idx]);
 }
 
+// The receiver-relative start offsets and the projected segment direction: the ONLY f64
+// arithmetic, one lat/lon → metre subtraction and the row's metres-per-degree product,
+// rounded to f32 exactly as `prepare_row`/`segment_sel_at_pixel` do on the CPU. `ay` and
+// `sdx` depend on the receiver ROW alone, so the callers form them once per row and share.
+__device__ __forceinline__ float airborne_row_offset_north(double start_lat, double rx_lat) {
+    return (float)((start_lat - rx_lat) * MLAT);
+}
+__device__ __forceinline__ float airborne_row_segment_dx(float d_lon, double mpdl) {
+    return (float)((double)d_lon * mpdl);
+}
+__device__ __forceinline__ float airborne_offset_east(double start_lon, double rx_lon, double mpdl) {
+    return (float)((start_lon - rx_lon) * mpdl);
+}
+
 // Shared per-(sub-seg, receiver) physics — the body of segment_energy_kernel<false>.
 // Returns true + the SEL (dB) if the seg contributes at the receiver, false if any
-// gate rejects. `f` = sf + s*12; the ONLY f64 is the lat/lon → metre subtraction.
+// gate rejects. `f` = sf + s*12; `ax`/`ay`/`sdx` come from the row helpers above.
 __device__ __forceinline__ bool airborne_sel(
-    double start_lat, double start_lon, const float* f, int cls, int is_dep, int inst,
-    double rx_lat, double rx_lon, double mpdl, float rx_elev,
-    const float* npd, const float* npd_dep, int pixel,
+    float ax, float ay, float sdx, const float* f, int cls, int is_dep, int inst,
+    float rx_elev, const float* npd, const float* npd_dep, int pixel,
     const unsigned long long* screen, float* sel_out)
 {
-    float ax = (float)((start_lon - rx_lon) * mpdl);
-    float ay = (float)((start_lat - rx_lat) * MLAT);
-    float sdx = (float)((double)f[1] * mpdl);            // d_lon
     float sdy = f[2], sdz = f[3], sz1 = f[0];
     float seg_len_sq = sdx * sdx + sdy * sdy;
     float inv_lsq = (seg_len_sq > 1e-6f) ? (1.0f / seg_len_sq) : 0.0f;
@@ -222,9 +232,19 @@ __device__ __forceinline__ int coarse_pixel(int n, int i) {
     return (i * (TPX - 1) + (n - 1) / 2) / (n - 1);
 }
 
+// Threads per exact-kernel block: a block is one run of a receiver row, so every thread
+// shares `rx_lat`/`mpdl` and the row-only f64 values are staged once per block, not per pixel.
+#define EXACT_BLOCK 256
+#if TPX % EXACT_BLOCK != 0
+#error "an exact-kernel block must stay inside one receiver row"
+#endif
+
 // Screened production NEAR: one tile per launch, thread per receiver pixel.
 // The table supplies nreg + this tile's slice of the GPU-classified near CSR,
-// as well as every receiver-horizon array used by `airborne_sel`.
+// as well as every receiver-horizon array used by `airborne_sel`. Launched with
+// EXACT_BLOCK threads: each block stages the row-constant `ay`/`sdx` of a chunk of
+// sub-segments cooperatively, then every thread only forms its own `ax` in f64 — three of
+// the five f64 operations per pair gone, bit for bit the same operands and results.
 extern "C" __global__ void airborne_exact_screened(
     const double* __restrict__ rll, const float* __restrict__ rxa,
     const double* __restrict__ sll, const float* __restrict__ sf, const int* __restrict__ si,
@@ -232,8 +252,9 @@ extern "C" __global__ void airborne_exact_screened(
     const int* __restrict__ near_idx, const unsigned long long* __restrict__ screen,
     float* __restrict__ out)
 {
-    int pix = blockIdx.x * blockDim.x + threadIdx.x;
-    if (pix >= TPX * TPX) return;
+    __shared__ float row_ay[EXACT_BLOCK];
+    __shared__ float row_sdx[EXACT_BLOCK];
+    int pix = blockIdx.x * EXACT_BLOCK + threadIdx.x;
     int py = pix >> TPX_SHIFT, px = pix & TPX_MASK;
     double rx_lat = rll[py], rx_lon = rll[TPX + px], mpdl = rll[2 * TPX + py];
     float rx_elev = rxa[pix];
@@ -242,59 +263,135 @@ extern "C" __global__ void airborne_exact_screened(
     int nreg = (int)screen[SCREEN_NREG];
     int base = (int)screen[SCREEN_NEAR_BASE];
     int count = (int)screen[SCREEN_NEAR_COUNT];
-    for (int j = 0; j < count; j++) {
-        int s = near_idx[base + j];
-        int cls = si[s * 4 + 1];
-        float sel;
-        if (airborne_sel(sll[s], sll[nreg + s], sf + s * 12, cls, si[s*4+2], si[s*4+0],
-                         rx_lat, rx_lon, mpdl, rx_elev, npd, npd_dep, pix, screen, &sel)) {
-            e[si[s * 4 + 3]] += fexpf_nc(sel * (float)LN10 * 0.1f) * w[cls];
+    for (int chunk = 0; chunk < count; chunk += EXACT_BLOCK) {
+        int n = min(EXACT_BLOCK, count - chunk);
+        __syncthreads();
+        if ((int)threadIdx.x < n) {
+            int s = near_idx[base + chunk + threadIdx.x];
+            row_ay[threadIdx.x] = airborne_row_offset_north(sll[s], rx_lat);
+            row_sdx[threadIdx.x] = airborne_row_segment_dx(sf[s * 12 + 1], mpdl);
+        }
+        __syncthreads();
+        for (int j = 0; j < n; j++) {
+            int s = near_idx[base + chunk + j];
+            int cls = si[s * 4 + 1];
+            float ax = airborne_offset_east(sll[nreg + s], rx_lon, mpdl);
+            float sel;
+            if (airborne_sel(ax, row_ay[j], row_sdx[j], sf + s * 12, cls, si[s*4+2], si[s*4+0],
+                             rx_elev, npd, npd_dep, pix, screen, &sel)) {
+                e[si[s * 4 + 3]] += fexpf_nc(sel * (float)LN10 * 0.1f) * w[cls];
+            }
         }
     }
     out[pix * 3 + 0] = e[0]; out[pix * 3 + 1] = e[1]; out[pix * 3 + 2] = e[2];
 }
 
-// Screened production FAR: one tile + level per launch, thread per classified
-// far entry. `far_st` remains the classify pass's interleaved (segment,tile)
-// array; this tile's base/count comes from the table and the tile word is skipped.
+// Coarse kernel shape: one block per (lattice row, part). The block stages the row-constant
+// `ay`/`sdx` of a chunk of far sub-segments in shared memory exactly like the exact kernel,
+// then thread (node j, lane l) folds the chunk's sub-segments l, l+lanes, … onto node j;
+// the lanes of a node are summed in fixed order at the end. No atomics: run-to-run the same
+// bits, one row projection per sub-segment instead of one per (sub-segment, node).
+#define COARSE_BLOCK 256
+#ifndef COARSE_TARGET_BLOCKS
+#error "COARSE_TARGET_BLOCKS must be injected by build.rs (airborne.rs)"
+#endif
+// Parts each row's far list is cut into: enough (row, part) blocks to fill the device even on
+// the 5×5 lattice. The host sizes the partial buffer with the same rule.
+__device__ __forceinline__ int coarse_parts(int n) {
+    return (COARSE_TARGET_BLOCKS + n - 1) / n;
+}
+
+// Screened production FAR: one tile + level per launch. `far_st` remains the classify pass's
+// interleaved (segment,tile) array; this tile's base/count comes from the table and the tile
+// word is skipped. `partial[(node * parts + part) * 3 + period]` is folded by
+// `airborne_coarse_reduce_parts`.
 extern "C" __global__ void airborne_coarse_screened(
     const double* __restrict__ rll, const float* __restrict__ rxa,
     const double* __restrict__ sll, const float* __restrict__ sf, const int* __restrict__ si,
     const float* __restrict__ npd, const float* __restrict__ w,
     const int* __restrict__ far_st, int level, int n,
-    const unsigned long long* __restrict__ screen, float* __restrict__ out_coarse)
+    const unsigned long long* __restrict__ screen, float* __restrict__ partial)
 {
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    __shared__ float row_ay[COARSE_BLOCK];
+    __shared__ float row_sdx[COARSE_BLOCK];
+    __shared__ float sum[3][COARSE_BLOCK];
+    int parts = coarse_parts(n);
+    int ci = blockIdx.x / parts;
+    int part = blockIdx.x % parts;
+    int lanes = COARSE_BLOCK / n;
+    int t = (int)threadIdx.x;
+    int cj = t % n, lane = t / n;
+    bool active = t < n * lanes;
     int base_slot = (level == 0) ? SCREEN_FAR0_BASE
                   : (level == 1) ? SCREEN_FAR1_BASE : SCREEN_FAR2_BASE;
     int count_slot = (level == 0) ? SCREEN_FAR0_COUNT
                    : (level == 1) ? SCREEN_FAR1_COUNT : SCREEN_FAR2_COUNT;
     int count = (int)screen[count_slot];
-    if (j >= count) return;
     int base = (int)screen[base_slot];
-    int s = far_st[2 * (base + j)];
     int nreg = (int)screen[SCREEN_NREG];
     const float* npd_dep = npd + NPD_NC * (NPD_NB + 1);
-    double start_lat = sll[s], start_lon = sll[nreg + s];
-    const float* f = sf + s * 12;
-    int cls = si[s*4+1], is_dep = si[s*4+2], inst = si[s*4+0], period = si[s*4+3];
-    float gw = w[cls];
-    for (int ci = 0; ci < n; ci++) {
-        int py = coarse_pixel(n, ci);
-        double rx_lat = rll[py], mpdl = rll[2 * TPX + py];
-        for (int cj = 0; cj < n; cj++) {
-            int px = coarse_pixel(n, cj);
-            double rx_lon = rll[TPX + px];
-            float rx_elev = rxa[py * TPX + px];
+    int py = coarse_pixel(n, ci);
+    int px = coarse_pixel(n, cj);
+    int pixel = py * TPX + px;
+    double rx_lat = rll[py], rx_lon = rll[TPX + px], mpdl = rll[2 * TPX + py];
+    float rx_elev = rxa[pixel];
+    int j_begin = (int)((long long)count * part / parts);
+    int j_end = (int)((long long)count * (part + 1) / parts);
+    float e0 = 0.0f, e1 = 0.0f, e2 = 0.0f;
+    for (int chunk = j_begin; chunk < j_end; chunk += COARSE_BLOCK) {
+        int chunk_n = min(COARSE_BLOCK, j_end - chunk);
+        __syncthreads();
+        if (t < chunk_n) {
+            int s = far_st[2 * (base + chunk + t)];
+            row_ay[t] = airborne_row_offset_north(sll[s], rx_lat);
+            row_sdx[t] = airborne_row_segment_dx(sf[s * 12 + 1], mpdl);
+        }
+        __syncthreads();
+        if (!active) continue;
+        for (int k = lane; k < chunk_n; k += lanes) {
+            int s = far_st[2 * (base + chunk + k)];
+            const float* f = sf + s * 12;
+            int cls = si[s*4+1], is_dep = si[s*4+2], inst = si[s*4+0], period = si[s*4+3];
+            float ax = airborne_offset_east(sll[nreg + s], rx_lon, mpdl);
             float sel;
-            if (airborne_sel(start_lat, start_lon, f, cls, is_dep, inst,
-                             rx_lat, rx_lon, mpdl, rx_elev, npd, npd_dep,
-                             py * TPX + px, screen, &sel)) {
-                float energy = fexpf_nc(sel * (float)LN10 * 0.1f) * gw;
-                atomicAdd(&out_coarse[(ci * n + cj) * 3 + period], energy);
+            if (airborne_sel(ax, row_ay[k], row_sdx[k], f, cls, is_dep, inst, rx_elev, npd,
+                             npd_dep, pixel, screen, &sel)) {
+                // The original kernel's `atomicAdd` could not fuse the weight multiply into its
+                // add, so the energy stays a rounded product (`__fmul_rn` never contracts) and
+                // the node sum adds it: the same per-pair rounding, only in a fixed order.
+                float energy = __fmul_rn(fexpf_nc(sel * (float)LN10 * 0.1f), w[cls]);
+                if (period == 0) e0 += energy; else if (period == 1) e1 += energy; else e2 += energy;
             }
         }
     }
+    sum[0][t] = e0;
+    sum[1][t] = e1;
+    sum[2][t] = e2;
+    __syncthreads();
+    if (t < n) {
+        float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f;
+        for (int l = 0; l < lanes; l++) {
+            s0 += sum[0][l * n + t];
+            s1 += sum[1][l * n + t];
+            s2 += sum[2][l * n + t];
+        }
+        long long slot = ((long long)(ci * n + t) * parts + part) * 3;
+        partial[slot] = s0;
+        partial[slot + 1] = s1;
+        partial[slot + 2] = s2;
+    }
+}
+
+// Fold the per-part sums of every node in part order.
+extern "C" __global__ void airborne_coarse_reduce_parts(
+    const float* __restrict__ partial, int nodes, int parts, float* __restrict__ out_coarse)
+{
+    int item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item >= nodes * 3) return;
+    int node = item / 3, period = item % 3;
+    float total = 0.0f;
+    for (int part = 0; part < parts; part++) total += partial[(node * parts + part) * 3 + period];
+    out_coarse[item] = total;
 }
 
 // ─── M4 classify on the GPU: replace the per-tile O(nreg) candidate gate that ran
@@ -307,6 +404,7 @@ extern "C" __global__ void airborne_coarse_screened(
 //
 // Two passes (count then scatter) is the standard counting-sort: the gate is ~20 flops, cheap
 // to recompute, and a per-thread temp would need tile·nreg ints (impossible at world scale).
+// Slots are ranks, not atomic cursors, so the lists are in sub-segment order every run.
 //
 // meta_b f64[5*ntiles] per tile = [centre_lat, centre_lon, m_per_deg_lon, half_diag,
 // tile_max_rx_alt]. Seg start_lat/lon from sll (f64 — the catastrophic-cancellation site);
@@ -360,41 +458,105 @@ __device__ __forceinline__ int airborne_classify_bucket(
     return 3;
 }
 
-// Pass 1: count each tile's near / far[level] candidates → counts[ntiles*4] (pre-zeroed).
-extern "C" __global__ void airborne_classify_count(
-    const double* __restrict__ meta_b, const double* __restrict__ sll,
-    const float* __restrict__ sf, int nreg, int ntiles, int* __restrict__ counts)
+// Both classify passes run one block per (tile, chunk of CLASSIFY_CHUNK consecutive
+// sub-segments). A sub-segment's slot is its rank among the accepted ones of its bucket —
+// warp ballots inside the block, per-chunk offsets across chunks — so the near CSR and the
+// far lists come out in ascending sub-segment order every run, which is what makes the
+// per-pixel and per-node f32 sums bit-reproducible. No fill cursors, no atomics on slots.
+#define CLASSIFY_CHUNK 512
+#define CLASSIFY_WARPS (CLASSIFY_CHUNK / 32)
+
+// This thread's rank within its bucket in the block, and (in `bucket_total`) the block's
+// accepted count per bucket. Uniform control flow: every lane joins every ballot.
+__device__ __forceinline__ int classify_rank_in_block(
+    int b, int bucket_total[4], int (*warp_count)[CLASSIFY_WARPS])
 {
-    long gid = (long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (gid >= (long)ntiles * nreg) return;
-    int ti = (int)(gid / nreg);
-    int s = (int)(gid % nreg);
-    int b = airborne_classify_bucket(meta_b + (long)ti * 5, sll[s], sll[nreg + s], sf + (long)s * 12);
-    if (b >= 0) atomicAdd(&counts[ti * 4 + b], 1);
+    int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+    unsigned int lanes_before = (1u << lane) - 1u;
+    int rank = 0;
+    for (int bb = 0; bb < 4; bb++) {
+        unsigned int mask = __ballot_sync(0xffffffffu, b == bb);
+        if (lane == 0) warp_count[bb][warp] = __popc(mask);
+        if (b == bb) rank = __popc(mask & lanes_before);
+    }
+    __syncthreads();
+    int before = 0;
+    for (int bb = 0; bb < 4; bb++) {
+        int total = 0;
+        for (int wv = 0; wv < CLASSIFY_WARPS; wv++) {
+            int c = warp_count[bb][wv];
+            if (bb == b && wv < warp) before += c;
+            total += c;
+        }
+        bucket_total[bb] = total;
+    }
+    return before + rank;
 }
 
-// Pass 2: scatter each seg into the screened kernels' buffers. `off` = 4 blocks of (ntiles+1):
-// block 0 = near CSR (off[ti..ti+1]), blocks 1/2/3 =
-// far level base offset per tile. `fill[ntiles*4]` = per-(tile,bucket) atomic cursor (pre-zeroed).
+// Pass 1: per (tile, chunk) block, count each bucket → chunk_counts[(ti*4+b)*nchunks+chunk]
+// and the tile totals counts[ti*4+b] (pre-zeroed).
+extern "C" __global__ void airborne_classify_count(
+    const double* __restrict__ meta_b, const double* __restrict__ sll,
+    const float* __restrict__ sf, int nreg, int ntiles, int nchunks,
+    int* __restrict__ chunk_counts, int* __restrict__ counts)
+{
+    __shared__ int warp_count[4][CLASSIFY_WARPS];
+    int ti = blockIdx.x / nchunks;
+    int chunk = blockIdx.x % nchunks;
+    int s = chunk * CLASSIFY_CHUNK + (int)threadIdx.x;
+    int b = (s < nreg && ti < ntiles)
+        ? airborne_classify_bucket(meta_b + (long)ti * 5, sll[s], sll[nreg + s], sf + (long)s * 12)
+        : -1;
+    int bucket_total[4];
+    classify_rank_in_block(b, bucket_total, warp_count);
+    if (threadIdx.x < 4) {
+        chunk_counts[(ti * 4 + threadIdx.x) * nchunks + chunk] = bucket_total[threadIdx.x];
+        atomicAdd(&counts[ti * 4 + threadIdx.x], bucket_total[threadIdx.x]);
+    }
+}
+
+// Exclusive prefix over each (tile, bucket)'s chunk counts, in place.
+extern "C" __global__ void airborne_classify_chunk_offsets(
+    int ntiles, int nchunks, int* __restrict__ chunk_counts)
+{
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= ntiles * 4) return;
+    int* counts = chunk_counts + (long)row * nchunks;
+    int running = 0;
+    for (int chunk = 0; chunk < nchunks; chunk++) {
+        int c = counts[chunk];
+        counts[chunk] = running;
+        running += c;
+    }
+}
+
+// Pass 2: scatter each seg into the screened kernels' buffers at its deterministic slot.
+// `off` = 4 blocks of (ntiles+1): block 0 = near CSR (off[ti..ti+1]), blocks 1/2/3 =
+// far level base offset per tile; `chunk_counts` now holds the per-chunk offsets.
 extern "C" __global__ void airborne_classify_scatter(
     const double* __restrict__ meta_b, const double* __restrict__ sll,
-    const float* __restrict__ sf, const int* __restrict__ off, int* __restrict__ fill,
-    int nreg, int ntiles, int* __restrict__ near_idx,
+    const float* __restrict__ sf, const int* __restrict__ off,
+    const int* __restrict__ chunk_counts, int nreg, int ntiles, int nchunks,
+    int* __restrict__ near_idx,
     int* __restrict__ far_st0, int* __restrict__ far_st1, int* __restrict__ far_st2)
 {
-    long gid = (long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (gid >= (long)ntiles * nreg) return;
-    int ti = (int)(gid / nreg);
-    int s = (int)(gid % nreg);
-    int b = airborne_classify_bucket(meta_b + (long)ti * 5, sll[s], sll[nreg + s], sf + (long)s * 12);
+    __shared__ int warp_count[4][CLASSIFY_WARPS];
+    int ti = blockIdx.x / nchunks;
+    int chunk = blockIdx.x % nchunks;
+    int s = chunk * CLASSIFY_CHUNK + (int)threadIdx.x;
+    int b = (s < nreg && ti < ntiles)
+        ? airborne_classify_bucket(meta_b + (long)ti * 5, sll[s], sll[nreg + s], sf + (long)s * 12)
+        : -1;
+    int bucket_total[4];
+    int rank = classify_rank_in_block(b, bucket_total, warp_count);
     if (b < 0) return;
+    int pos = chunk_counts[(ti * 4 + b) * nchunks + chunk] + rank;
     if (b == 0) {
-        int pos = off[ti] + atomicAdd(&fill[ti * 4], 1);
-        near_idx[pos] = s;
+        near_idx[off[ti] + pos] = s;
     } else {
         int lvl = b - 1;
         int t1 = ntiles + 1;
-        int pos = off[(lvl + 1) * t1 + ti] + atomicAdd(&fill[ti * 4 + 1 + lvl], 1);
+        pos += off[(lvl + 1) * t1 + ti];
         int* fst = (lvl == 0) ? far_st0 : (lvl == 1) ? far_st1 : far_st2;
         fst[2 * pos] = s;
         fst[2 * pos + 1] = ti;
