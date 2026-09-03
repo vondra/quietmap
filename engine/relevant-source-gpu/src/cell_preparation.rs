@@ -108,7 +108,12 @@ pub fn prepare_region(
     let started = Instant::now();
     let region_r4 = cell.region_r4;
     let index = CellIndex::try_from(region_r4).context("invalid R4 region")?;
-    let tiles = region_tiles(region_r4, configuration.zoom);
+    let tiles = match cell.tile_window {
+        Some(window) => window
+            .select(region_tiles(region_r4, configuration.zoom))
+            .context("select the requested tile window")?,
+        None => region_tiles(region_r4, configuration.zoom),
+    };
     let ring: Vec<u64> = index
         .grid_disk::<Vec<_>>(1)
         .into_iter()

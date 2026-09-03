@@ -4,7 +4,7 @@
 //! Cells arrive one per stdin line and each one answers on stderr with `start`,
 //! then `done` or `fail`; stdout stays empty:
 //!
-//!   printf '841e309ffffffff\n843e191ffffffff layers=road,rail\n' | \
+//!   printf '841e309ffffffff tiles=4414,2786,4\n843e191ffffffff layers=road,rail\n' | \
 //!     NOISE_GPU_PREPARED=/…/prepared relevant-source-surface \
 //!       --stream --zoom 13 --output /…/tiles
 
@@ -39,7 +39,8 @@ struct Arguments {
     /// use the same exact ray cadence.
     #[arg(long)]
     zoom: u8,
-    /// Read cells from stdin: `<r4hex>` or `<r4hex> layers=<csv>`, one per line.
+    /// Read cells from stdin, optionally followed by `layers=<csv>` and/or
+    /// `tiles=x,y,side`, one cell per line.
     #[arg(long)]
     stream: bool,
 }

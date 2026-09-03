@@ -12,9 +12,10 @@
 use anyhow::{bail, Context, Result};
 use std::io::{BufRead, Write};
 use std::path::Path;
+use std::str::FromStr;
 
 use h3o::{CellIndex, Resolution};
-use tile_painter::region_runner::{split_stream_line, stream_cell_started_line};
+use tile_painter::region_runner::stream_cell_started_line;
 
 use crate::surface_layers::{LAYER_COUNT, LAYER_NAMES};
 
@@ -24,6 +25,67 @@ use crate::surface_layers::{LAYER_COUNT, LAYER_NAMES};
 pub struct StreamedCell {
     pub region_r4: u64,
     pub layers: Vec<usize>,
+    pub tile_window: Option<TileWindow>,
+}
+
+/// A square Web-Mercator tile window used by short release checks. The
+/// streamed cell still owns the source read set; this only narrows its writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TileWindow {
+    pub x: u32,
+    pub y: u32,
+    pub side: u32,
+}
+
+impl TileWindow {
+    pub fn select(self, tiles: Vec<(u32, u32)>) -> Result<Vec<(u32, u32)>> {
+        let x_end = self
+            .x
+            .checked_add(self.side)
+            .context("tile-window x range overflows")?;
+        let y_end = self
+            .y
+            .checked_add(self.side)
+            .context("tile-window y range overflows")?;
+        let selected: Vec<_> = tiles
+            .into_iter()
+            .filter(|(x, y)| *x >= self.x && *x < x_end && *y >= self.y && *y < y_end)
+            .collect();
+        if selected.is_empty() {
+            bail!(
+                "tile-window {},{},{} selects no tiles owned by this cell",
+                self.x,
+                self.y,
+                self.side
+            );
+        }
+        Ok(selected)
+    }
+}
+
+impl FromStr for TileWindow {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        let coordinates: Vec<_> = value.split(',').collect();
+        if coordinates.len() != 3 {
+            bail!("tile-window must be x,y,side");
+        }
+        let parse = |field: &str, name: &str| {
+            field
+                .parse::<u32>()
+                .with_context(|| format!("tile-window {name} is not an unsigned integer"))
+        };
+        let window = Self {
+            x: parse(coordinates[0], "x")?,
+            y: parse(coordinates[1], "y")?,
+            side: parse(coordinates[2], "side")?,
+        };
+        if window.side == 0 {
+            bail!("tile-window side must be positive");
+        }
+        Ok(window)
+    }
 }
 
 impl StreamedCell {
@@ -59,8 +121,11 @@ fn rejected(cell: &str, message: impl Into<String>) -> CellRequest {
     }
 }
 
-/// Parse one stdin line: `<r4hex>` or `<r4hex> layers=<csv>`. Blank lines and
-/// `#` comments carry no work at all, so they are neither painted nor failed.
+/// Parse one stdin line: `<r4hex>`, followed optionally by `layers=<csv>` and
+/// `tiles=x,y,side`. Blank lines and `#` comments carry no work at all, so
+/// they are neither painted nor failed. A tile window belongs to its one cell;
+/// this lets a release gate paint a bounded multi-cell window without starting
+/// a second process and paying CUDA's cold initialisation twice.
 ///
 /// An unknown layer name is refused rather than ignored: silently painting the
 /// names it did recognise would report `done` for a cell whose missing layer
@@ -70,19 +135,32 @@ pub fn parse_cell_line(line: &str) -> Option<CellRequest> {
     if line.is_empty() || line.starts_with('#') {
         return None;
     }
-    let (hex, requested) = split_stream_line(line);
-    // A second token that is not `layers=`, or any third token, is a plan the
-    // painter cannot obey: the shared tokenizer ignores what it does not know,
-    // which would paint a cell whose sender meant something else — a wasted
-    // repaint that reads as success. Refuse it here rather than widen the
-    // tokenizer, which the CPU painter deliberately keeps tolerant.
-    let mut tokens = line.split_whitespace().skip(1);
-    let second = tokens.next();
-    if (requested.is_none() && second.is_some()) || tokens.next().is_some() {
-        return Some(rejected(
-            hex,
-            "only `<cell>` or `<cell> layers=<csv>` is understood; nothing else",
-        ));
+    let mut tokens = line.split_whitespace();
+    let hex = tokens.next().expect("a non-empty line has a first token");
+    let mut requested = None;
+    let mut tile_window = None;
+    for token in tokens {
+        if let Some(value) = token.strip_prefix("layers=") {
+            if requested
+                .replace(value.split(',').collect::<Vec<_>>())
+                .is_some()
+            {
+                return Some(rejected(hex, "layers= may be given only once"));
+            }
+        } else if let Some(value) = token.strip_prefix("tiles=") {
+            if tile_window.is_some() {
+                return Some(rejected(hex, "tiles= may be given only once"));
+            }
+            match value.parse() {
+                Ok(window) => tile_window = Some(window),
+                Err(error) => return Some(rejected(hex, format!("invalid tiles=: {error}"))),
+            }
+        } else {
+            return Some(rejected(
+                hex,
+                "only layers=<csv> and tiles=x,y,side are understood; nothing else",
+            ));
+        }
     }
     let Ok(region_r4) = u64::from_str_radix(hex, 16) else {
         return Some(rejected(hex, "not a hexadecimal H3 cell"));
@@ -125,7 +203,11 @@ pub fn parse_cell_line(line: &str) -> Option<CellRequest> {
             "layers= selected none of this painter's layers",
         ));
     }
-    Some(CellRequest::Cell(StreamedCell { region_r4, layers }))
+    Some(CellRequest::Cell(StreamedCell {
+        region_r4,
+        layers,
+        tile_window,
+    }))
 }
 
 /// The cells as they arrive. The reader is consumed line by line and never
@@ -243,6 +325,7 @@ mod tests {
         let cell = cell("841e309ffffffff");
         assert_eq!(cell.region_r4, DOBRIS);
         assert_eq!(cell.layers, vec![0, 1, 2, 3, 4]);
+        assert_eq!(cell.tile_window, None);
         assert_eq!(cell.label(), "841e309ffffffff");
     }
 
@@ -271,7 +354,9 @@ mod tests {
         assert!(rejection("841e309ffffffff layers=noise").contains("does not paint"));
         assert!(rejection("841e309ffffffff layer=road").contains("nothing else"));
         assert!(rejection("841e309ffffffff layers=road extra").contains("nothing else"));
-        assert!(rejection("841e309ffffffff layers=road layers=rail").contains("nothing else"));
+        assert!(rejection("841e309ffffffff layers=road layers=rail").contains("only once"));
+        assert!(rejection("841e309ffffffff tiles=4414,2786,0").contains("positive"));
+        assert!(rejection("841e309ffffffff tiles=4414,2786,4 tiles=1,2,3").contains("only once"));
         let finer = CellIndex::try_from(DOBRIS)
             .unwrap()
             .center_child(Resolution::Five)
@@ -308,6 +393,7 @@ mod tests {
             CellRequest::Cell(StreamedCell {
                 region_r4: DOBRIS,
                 layers: vec![0, 1, 2, 3, 4],
+                tile_window: None,
             })
         );
         assert_eq!(
@@ -315,6 +401,7 @@ mod tests {
             CellRequest::Cell(StreamedCell {
                 region_r4: 0x843e191ffffffff,
                 layers: vec![0, 1],
+                tile_window: None,
             })
         );
         assert!(matches!(requests[2], CellRequest::Rejected { .. }));
@@ -326,6 +413,35 @@ mod tests {
             single_line("load\n  the arrows: no such file"),
             "load the arrows: no such file"
         );
+    }
+
+    #[test]
+    fn a_tile_window_selects_each_streamed_cells_owned_intersection() {
+        use tile_painter::region_runner::region_tiles;
+
+        let window: TileWindow = "4414,2786,4".parse().unwrap();
+        assert_eq!(
+            cell("841e309ffffffff layers=road,rail tiles=4414,2786,4").tile_window,
+            Some(window)
+        );
+        assert_eq!(
+            cell("841e301ffffffff tiles=4414,2786,4 layers=road").tile_window,
+            Some(window)
+        );
+        let dobris = window.select(region_tiles(DOBRIS, 13)).unwrap();
+        let neighbour = window.select(region_tiles(0x841e301ffffffff, 13)).unwrap();
+        assert_eq!(dobris.len(), 13);
+        assert_eq!(neighbour, vec![(4415, 2789), (4416, 2789), (4417, 2789)]);
+        let mut selected = dobris;
+        selected.extend(neighbour);
+        selected.sort_unstable();
+        selected.dedup();
+        assert_eq!(selected.len(), 16);
+        assert!(selected.contains(&(4414, 2789)));
+        assert!(selected.contains(&(4417, 2789)));
+        assert!("4414,2786,0".parse::<TileWindow>().is_err());
+        assert!("4414,2786".parse::<TileWindow>().is_err());
+        assert!(window.select(vec![(4412, 2780)]).is_err());
     }
 
     /// One bug class: the dataset year comes from the prepared tree itself,
