@@ -19,6 +19,7 @@ from pathlib import Path
 
 from gpu_model_role import (
     MODEL_SOURCE_DIRS,
+    MODEL_SOURCE_GLOBALS,
     ContractError,
     artifact_set,
     cuda_fatbin_images,
@@ -26,7 +27,7 @@ from gpu_model_role import (
     load_and_validate_spec,
     model_source_recipe_sha256,
     model_role_sha256,
-    relevant_source_fleet_cuda_archs,
+    fleet_cuda_archs,
     resolve_role,
     verify_artifact,
     verify_rust_artifact,
@@ -118,9 +119,10 @@ def write_model_source_fixture(root: Path) -> Path:
     header = root / "engine/noise-gpu/kernels/qm_fixture.cuh"
     header.parent.mkdir(parents=True, exist_ok=True)
     header.write_text("#define FIXTURE 1\n", encoding="utf-8")
-    (root / ".cargo").mkdir(parents=True, exist_ok=True)
-    (root / ".cargo/config.toml").write_text("[build]\n", encoding="utf-8")
-    (root / "rust-toolchain.toml").write_text("[toolchain]\n", encoding="utf-8")
+    for relative in MODEL_SOURCE_GLOBALS:
+        global_input = root / relative
+        global_input.parent.mkdir(parents=True, exist_ok=True)
+        global_input.write_text(f"// fixture {relative}\n", encoding="utf-8")
     return header
 
 
@@ -181,7 +183,7 @@ class ModelRoleSpecTests(unittest.TestCase):
         )
         self.assertEqual(airborne["cargo_features"], ["gpu"])
         self.assertEqual(relevant_source["cuda_image"], "FLEET_CUDA_ARCHS-fatbin")
-        fleet_archs = relevant_source_fleet_cuda_archs(ROOT)
+        fleet_archs = fleet_cuda_archs(ROOT)
         self.assertTrue(all(re.fullmatch(r"sm_[0-9]{2,3}", arch) for arch in fleet_archs))
         self.assertEqual(
             resolve_role(spec, "surface-cpu-production", "surface-cpu-stock-v1")[
@@ -364,9 +366,9 @@ class FakeArtifactBuildTests(unittest.TestCase):
         (self.source / "engine/relevant-source-gpu/Cargo.toml").write_text(
             '[package]\nname="relevant-source-gpu"\nversion="0.0.0"\n', encoding="utf-8"
         )
-        fleet_archs = relevant_source_fleet_cuda_archs(ROOT)
-        (self.source / "engine/relevant-source-gpu/relevant_source_build.rs").write_text(
-            'const FLEET_CUDA_ARCHS: &[&str] = &['
+        fleet_archs = fleet_cuda_archs(ROOT)
+        (self.source / "engine/cuda_archs.rs").write_text(
+            'pub const FLEET_CUDA_ARCHS: &[&str] = &['
             + ", ".join(f'"{arch}"' for arch in fleet_archs)
             + "];\n",
             encoding="utf-8",
@@ -458,7 +460,7 @@ printf '%s\n' '-DTPX=512' > "$out/nvcc-defines.txt"
         fake_cargo.write_text(
             fake_cargo.read_text(encoding="utf-8").replace(
                 "__FAKE_FLEET_CUDA_ARCHS__",
-                ",".join(relevant_source_fleet_cuda_archs(self.source)),
+                ",".join(fleet_cuda_archs(self.source)),
             ),
             encoding="utf-8",
         )
@@ -603,7 +605,7 @@ echo 'ptxas info : Function properties for airborne kernels airborne_classify_co
         receipt = verify_artifact(artifact, SPEC_PATH)
         self.assertIsNone(receipt["build"]["arch"])
         self.assertEqual(receipt["build"]["environment"]["NOISE_GPU_ARCH"], "")
-        fleet_archs = relevant_source_fleet_cuda_archs(ROOT)
+        fleet_archs = fleet_cuda_archs(ROOT)
         binary = artifact / "relevant-source-surface"
         self.assertEqual(cuda_fatbin_images(binary.read_bytes()), (fleet_archs, []))
         self.assertFalse((artifact / "receipts/cuda-images.txt").exists())
@@ -750,6 +752,9 @@ class FakeRustArtifactBuildTests(unittest.TestCase):
             '[toolchain]\nchannel="1.99.0"\n', encoding="utf-8"
         )
         (self.source / ".cargo/config.toml").write_text("[build]\n", encoding="utf-8")
+        (self.source / "engine/cuda_archs.rs").write_text(
+            'pub const FLEET_CUDA_ARCHS: &[&str] = &["sm_120"];\n', encoding="utf-8"
+        )
         (self.source / "AGENTS.md").write_text("# Fake source instructions\n", encoding="utf-8")
         (self.source / "CLAUDE.md").symlink_to("AGENTS.md")
         subprocess.run(["git", "init", "-q"], cwd=self.source, check=True)

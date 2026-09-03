@@ -1,12 +1,13 @@
 //! Compile the fixed relevant-source CUDA program into its statically linked host bridge.
 
+#[path = "../cuda_archs.rs"]
+mod cuda_archs;
+
 use std::env;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-
-const FLEET_CUDA_ARCHS: &[&str] = &["sm_75", "sm_80", "sm_86", "sm_89", "sm_90", "sm_120"];
 
 const NOISE_CONSTANTS_SOURCE: &str = include_str!("../noise-compute/src/constants.rs");
 const PATH_PROFILE_SOURCE: &str = include_str!("../noise-compute/src/propagation/path_profile.rs");
@@ -367,11 +368,8 @@ fn common_nvcc_arguments() -> Vec<String> {
 fn nvcc_arguments(archs: &[String]) -> Vec<String> {
     let mut arguments = common_nvcc_arguments();
     for arch in archs {
-        let compute = arch.strip_prefix("sm_").unwrap_or_else(|| {
-            panic!("CUDA arch must be sm_NN (NOISE_GPU_ARCH or FLEET_CUDA_ARCHS), got {arch}")
-        });
         arguments.push("-gencode".to_owned());
-        arguments.push(format!("arch=compute_{compute},code={arch}"));
+        arguments.push(format!("arch={},code={arch}", cuda_archs::compute_arch(arch)));
     }
     arguments
 }
@@ -380,14 +378,6 @@ fn ptx_arguments(arch: &str) -> Vec<String> {
     let mut arguments = common_nvcc_arguments();
     arguments.push(format!("-arch={arch}"));
     arguments
-}
-
-fn cuda_archs() -> Vec<String> {
-    env::var("NOISE_GPU_ARCH")
-        .ok()
-        .filter(|arch| !arch.is_empty())
-        .map(|arch| vec![arch])
-        .unwrap_or_else(|| FLEET_CUDA_ARCHS.iter().map(ToString::to_string).collect())
 }
 
 /// Owner ruling: no f64 in a production kernel (GeForce Blackwell runs it at 1/64).
@@ -415,6 +405,7 @@ fn assert_ptx_has_no_f64(output_directory: &std::path::Path, arch: &str) {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=NOISE_GPU_ARCH");
+    println!("cargo:rerun-if-changed=../cuda_archs.rs");
     println!("cargo:rerun-if-changed=kernels/relevant_source_geometry.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_path.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_attenuation.cuh");
@@ -450,7 +441,7 @@ fn main() {
     // built role — an empty one is this crate's honest answer.
     fs::write(output_directory.join("nvcc-defines.txt"), "")
         .expect("write the empty relevant-source nvcc define receipt");
-    let archs = cuda_archs();
+    let archs = cuda_archs::cuda_archs();
     println!(
         "cargo:rustc-env=RELEVANT_SOURCE_CUDA_ARCHS={}",
         archs.join(",")

@@ -144,14 +144,12 @@ ROLE_SHAPES = {
 }
 
 
-def relevant_source_fleet_cuda_archs(root: Path) -> list[str]:
-    """Read the relevant-source fatbin's one architecture list from its build script."""
-    source = (root / "engine/relevant-source-gpu/relevant_source_build.rs").read_text(
-        encoding="utf-8"
-    )
+def fleet_cuda_archs(root: Path) -> list[str]:
+    """Read the fleet fatbin's one architecture list from the shared build module."""
+    source = (root / "engine/cuda_archs.rs").read_text(encoding="utf-8")
     matched = FLEET_CUDA_ARCHS_CONSTANT.search(source)
     if matched is None:
-        raise ContractError("relevant-source build has no FLEET_CUDA_ARCHS constant")
+        raise ContractError("engine/cuda_archs.rs has no FLEET_CUDA_ARCHS constant")
     archs = re.findall(r'"(sm_[0-9]{2,3})"', matched.group("archs"))
     if not archs or len(archs) != len(set(archs)):
         raise ContractError("FLEET_CUDA_ARCHS must contain unique sm_NN architectures")
@@ -263,7 +261,7 @@ def require_fleet_fatbin(binary_bytes: bytes, source_root: Path) -> None:
     SASS images and no PTX, read from the executable itself. Admission does not
     repeat it — a wrong binary in a release is caught by the box qualification,
     which runs the painter on the card before any task (owner 2026-09-03)."""
-    expected = relevant_source_fleet_cuda_archs(source_root)
+    expected = fleet_cuda_archs(source_root)
     sass, ptx = cuda_fatbin_images(binary_bytes)
     # The fact is the image SET; nvcc's entry order is not part of it.
     if sorted(sass) != sorted(expected) or ptx:
@@ -293,6 +291,7 @@ MODEL_SOURCE_PRUNED_DIRS = frozenset({"target", "tests"})
 # profile-only edit.
 MODEL_SOURCE_GLOBALS = (
     ".cargo/config.toml",
+    "engine/cuda_archs.rs",
     "rust-toolchain.toml",
 )
 

@@ -1,25 +1,25 @@
-//! Build script for `noise-gpu` — compile the airborne CUDA kernels to PTX.
+//! Build script for `noise-gpu` — compile the airborne CUDA kernels into one fatbin.
 //!
 //! CUDA is needed only for the `gpu` feature. The default build keeps the
 //! shared Rust helpers available on hosts without a CUDA toolkit.
 
-#[path = "build_cuda_arch.rs"]
-mod build_cuda_arch;
+#[path = "../cuda_archs.rs"]
+mod cuda_archs;
 
 use std::{env, fs, path::PathBuf, process::Command};
 
 fn main() {
     println!("cargo:rerun-if-env-changed=NOISE_GPU_ARCH");
-    println!("cargo:rerun-if-changed=build_cuda_arch.rs");
+    println!("cargo:rerun-if-changed=../cuda_archs.rs");
     // Watch the directory, not only the files currently in it: adding an
-    // airborne kernel must rebuild its PTX.
+    // airborne kernel must rebuild its device image.
     println!("cargo:rerun-if-changed=kernels");
     if env::var_os("CARGO_FEATURE_GPU").is_none() {
         return;
     }
 
     let out = PathBuf::from(env::var("OUT_DIR").expect("Cargo always sets OUT_DIR"));
-    let arch = build_cuda_arch::cuda_arch("noise-gpu");
+    let archs = cuda_archs::cuda_archs();
     let num_classes = const_from(
         "../noise-compute/src/emission/profiles_generated.rs",
         "pub const NUM_CLASSES: usize = ",
@@ -253,34 +253,55 @@ fn main() {
                 .expect("kernel file stem")
                 .to_string_lossy();
             println!("cargo:rerun-if-changed={}", path.display());
-            // The PTX is the model-role receipt (scripts/gpu_model_role.py proves its bytes
-            // are embedded); the fatbin is what the binary loads: `arch` SASS plus that same
-            // PTX, stored uncompressed so the receipt still finds it. The pinned card runs the
-            // ahead-of-time image and never JIT-compiles; a driver older than the toolkit cannot
-            // JIT this PTX at all (CUDA_ERROR_UNSUPPORTED_PTX_VERSION), which is exactly the
+            // The fatbin is what the binary loads: SASS for every architecture of this
+            // build plus the PTX of the lowest one, so a card the fleet list does not
+            // name still JITs (PTX is forward compatible, cubins are not). The card we
+            // do rent runs its ahead-of-time image and never JIT-compiles; a driver
+            // older than the toolkit cannot JIT this PTX at all
+            // (CUDA_ERROR_UNSUPPORTED_PTX_VERSION), which is exactly the
             // minor-version-compatible case the SASS covers.
-            let compute = arch
-                .strip_prefix("sm_")
-                .unwrap_or_else(|| panic!("CUDA arch must be sm_NN, got {arch}"));
-            for (kind, output) in [
-                ("-ptx", out.join(format!("{stem}.ptx"))),
-                ("-fatbin", out.join(format!("{stem}.fatbin"))),
+            //
+            // The separate `.ptx` is the model-role receipt of a single-architecture
+            // build (scripts/gpu_model_role.py proves its bytes are embedded), which is
+            // why the fatbin stays uncompressed.
+            let jit = cuda_archs::compute_arch(&archs[0]);
+            let mut fatbin_arguments = vec![
+                "-fatbin".to_owned(),
+                "--compress-mode=none".to_owned(),
+                "-O3".to_owned(),
+                "-gencode".to_owned(),
+                format!("arch={jit},code=[{},{jit}]", archs[0]),
+            ];
+            for arch in &archs[1..] {
+                fatbin_arguments.push("-gencode".to_owned());
+                fatbin_arguments.push(format!(
+                    "arch={},code={arch}",
+                    cuda_archs::compute_arch(arch)
+                ));
+            }
+            let ptx_arguments = vec![
+                "-ptx".to_owned(),
+                "--compress-mode=none".to_owned(),
+                "-O3".to_owned(),
+                format!("-arch={}", archs[0]),
+            ];
+            for (arguments, output) in [
+                (ptx_arguments, out.join(format!("{stem}.ptx"))),
+                (fatbin_arguments, out.join(format!("{stem}.fatbin"))),
             ] {
                 let status = Command::new("nvcc")
-                    .args([
-                        kind,
-                        "--compress-mode=none",
-                        "-gencode",
-                        &format!("arch=compute_{compute},code=[sm_{compute},compute_{compute}]"),
-                        "-O3",
-                    ])
+                    .args(&arguments)
                     .args(&nvcc_defines)
                     .arg(&path)
                     .arg("-o")
                     .arg(&output)
                     .status()
                     .expect("nvcc not found — `--features gpu` needs the CUDA toolkit");
-                assert!(status.success(), "nvcc {kind} failed to compile {path:?}");
+                assert!(
+                    status.success(),
+                    "nvcc {} failed to compile {path:?}",
+                    arguments[0]
+                );
             }
         }
     }
