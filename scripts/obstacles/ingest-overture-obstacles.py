@@ -21,9 +21,16 @@
 #
 # Reads:  data/source/enrichment/global/overture-buildings/parquet/<TILE>.parquet
 # Writes: data/source/enrichment/global/overture-obstacles/h3r4/<cell>/obstacles-<TILE>.arrow
-#         (source staging tree; promotion into data/prepared/{year}/h3r4 happens at
-#          the Wave-1 cutover, never here). Re-running a tile first removes
-#          that tile's existing shards so moved/vanished rows can't go stale.
+#         (source staging tree). Re-running a tile first removes that tile's
+#         existing shards so moved/vanished rows can't go stale.
+#         scripts/obstacles/enrich-obstacle-heights.py merges these shards into
+#         each prepared cell's obstacles.arrow, and writes an EMPTY one where the
+#         finished sweep found nothing — emptiness is per cell, so no painter
+#         reads anything world-wide.
+#
+# .ingested-tiles is this ingest's own resume bookkeeping (which 1-degree tiles
+# are done). Its ONE other consumer is that promotion, which uses it to tell a
+# swept-and-empty cell from an unswept one; nothing at paint time reads it.
 #
 # Usage: ingest-overture-obstacles.py N50E014 [N49E014 ...]
 
@@ -199,10 +206,10 @@ def process_tile(name: str) -> None:
 
     # Reconcile before writing: a re-ingest after an upstream re-extract may
     # move rows between cells — this tile's old shards must not survive it.
-    # The ingest-coverage manifest entry goes FIRST: while shards are being
-    # rewritten, a shard-less cell must read "not ingested" (raster fallback),
-    # never manifest-proven-empty — ingest-world-incremental.sh re-appends the
-    # tile on success (engine obstacle_ingest_coverage.rs, /gg finding).
+    # The resume entry goes FIRST: while this tile's shards are being rewritten,
+    # a shard-less cell must read "unswept", so the promotion leaves it alone
+    # instead of materializing it EMPTY from a half-written tile.
+    # ingest-world-incremental.sh re-appends the tile on success.
     manifest = "data/source/enrichment/global/overture-obstacles/.ingested-tiles"
     if os.path.exists(manifest):
         with open(manifest) as f:

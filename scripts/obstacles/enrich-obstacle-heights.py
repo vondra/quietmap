@@ -26,23 +26,42 @@
 # the low-profile 3 m shed cap exactly like tier 2 (noise_compute::low_profile)
 # — an areal average knows nothing about the individual shed under it.
 #
-# Merge order = sorted shard filenames, the same order the Wave-1 promotion
-# used and the loaders' shard_paths() sort — regenerating a never-enriched
-# cell reproduces the promoted file byte-for-byte except enriched rows.
-# A promoted cell with no staging FAILS loudly: leaving its old output while a
-# chain step exits zero would falsely certify it. Cells staged but never
-# promoted are skipped — promotion policy stays with the world cutover; this
-# tool only re-materializes already-promoted cells.
+# Merge order = sorted shard filenames, the same order the loaders read, so a
+# never-enriched cell's materialization is reproducible from staging alone.
+# Shards staged before the envelope_class column existed are merged as the
+# documented enclosed DEFAULT: one cell can hold shards from two ingest eras.
+#
+# EMPTINESS IS PER CELL — what makes a cell paintable from the cell and its ring
+# alone. Every prepared R4 cell gets an obstacles.arrow: merged and enriched
+# where staging shards exist, an EMPTY table with this schema where the finished
+# sweep found no footprint, so the loaders read "missing = error, empty = empty"
+# and need no world-wide file.
+#
+# A shard-less cell is materialized empty ONLY when the sweep is provably
+# complete for it: every 1-degree tile its bbox touches
+# (world-tile-census.cell_degree_tiles, the function that built the download
+# list) is in the ingest's .ingested-tiles — and the download writes a parquet
+# for every census tile even with zero Overture rows, so that is reachable
+# everywhere. That list is the ingest's resume bookkeeping and this is its ONE
+# consumer; nothing at paint time reads it. A cell whose sweep is unfinished is
+# left alone and this worker exits NON-ZERO, because a chain step exiting zero
+# would certify a world that is still missing buildings.
+#
+# An already-materialized cell is regenerated, but its row count must match
+# staging: a mismatch means output and staging visibly disagree, so stop and
+# let a human decide. A materialized cell with rows and no staging at all is
+# that same mismatch, against zero.
 #
 # An OSM planet re-extract does NOT touch obstacles.arrow (osm-to-h3r4.sh
-# rewrites only its own per-file arrows). The manifest runs the TS face on every
-# chain pass. It selects only cells whose adjacent proof no longer matches the
-# output, staging, raster, or worker identity; this worker seals the exact
-# output inode it published.
+# rewrites only its own per-file arrows). The TS face runs on every chain pass;
+# it selects only cells whose adjacent proof no longer matches the output,
+# staging, raster, or worker identity, and this worker seals the exact output
+# inode it published.
 #
 # Usage:
 #   enrich-obstacle-heights.py --h3r4-dir data/prepared/2026/h3r4 \
 #     --staging-dir data/enrichment/global/overture-obstacles/h3r4 \
+#     --ingested-tiles data/enrichment/global/overture-obstacles/.ingested-tiles \
 #     --ghsl <ANBH .tif> [--regional <mosaic .vrt|.tif>] \
 #     (--cells hex1,hex2,... | --cells-file <one hex per line>)
 #     [--proof-manifest <JSON object mapping cell to input SHA-256>]
@@ -53,11 +72,13 @@
 
 import argparse
 import glob
+import importlib.util
 import json
 import math
 import os
 import sys
 
+import h3
 import numpy as np
 import pyarrow as pa
 import pyarrow.ipc as ipc
@@ -70,6 +91,16 @@ from shapely import wkb as shapely_wkb
 gdal.UseExceptions()
 gdal.SetCacheMax(512 * 1024 * 1024)  # ANBH point reads cluster; keep blocks hot
 
+# The download census and the sweep-completeness test are one question asked in
+# two directions, so they share one bbox->tiles function (hyphenated filename;
+# the census test loads it the same way).
+_CENSUS_SPEC = importlib.util.spec_from_file_location(
+    "world_tile_census",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "world-tile-census.py"),
+)
+world_tile_census = importlib.util.module_from_spec(_CENSUS_SPEC)
+_CENSUS_SPEC.loader.exec_module(world_tile_census)
+
 MEASURED_MIN_M = 2.0      # zonal pixels below this are "not a building surface here"
 COVERAGE_MIN_FRAC = 0.30  # measured pixels must cover this share of the footprint
 COVERAGE_MIN_PX = 3
@@ -79,6 +110,7 @@ ANBH_MAX_VALID = 250.0    # GHSL NoData sentinel is 255 — belt for a missing t
 TIER4_CLAMP = (3.0, 100.0)
 HEIGHT_PROOF_FILENAME = "obstacles.height-materialization.json"
 HEIGHT_PROOF_VERSION = 1
+ENVELOPE_CLASS_DEFAULT = 5  # = noise_compute::envelope::EnvelopeClass::Default
 
 SCHEMA = pa.schema(
     [
@@ -179,14 +211,52 @@ class RegionalHeights:
 
 
 def read_staging(staging_cell_dir):
-    """Merge the cell's staging shards in sorted-filename order — the same
-    order promotion used and shard_paths() sorts, so an unenriched regeneration
-    reproduces the promoted row order."""
+    """Merge the cell's staging shards in sorted-filename order — the order the
+    loaders read, so a regeneration reproduces the row order. `None` means the
+    cell has no shards at all, which the caller resolves against the sweep.
+
+    A shard staged before envelope_class existed is a supported degraded mode:
+    it merges as the enclosed DEFAULT, because one cell's shards can come from
+    two ingest eras (measured 2026-09-03: ~1 in 150 staged cells) and Arrow
+    refuses to concatenate tables of different schemas.
+    """
     shards = sorted(glob.glob(os.path.join(staging_cell_dir, "obstacles-*.arrow")))
     if not shards:
         return None
-    tables = [ipc.open_file(s).read_all() for s in shards]
+    tables = []
+    for shard in shards:
+        table = ipc.open_file(shard).read_all()
+        if "envelope_class" not in table.column_names:
+            table = table.append_column(
+                "envelope_class",
+                pa.array([ENVELOPE_CLASS_DEFAULT] * table.num_rows, pa.uint8()),
+            )
+        tables.append(table.select(SCHEMA.names).cast(SCHEMA))
     return pa.concat_tables(tables).combine_chunks()
+
+
+class SweptCells:
+    """Which cells the Overture sweep provably finished, from the ingest's
+    .ingested-tiles resume list (header: this is its only consumer).
+
+    A cell whose boundary bbox spans a pole is under-covered by the bbox tile
+    set — but by the SAME function that built the download list, so the sweep it
+    is measured against never fetched more than these tiles either. That caveat
+    belongs to the census, not to a second rule here.
+    """
+
+    def __init__(self, path, h3_module):
+        with open(path, encoding="utf-8") as f:
+            self.tiles = {line.strip() for line in f if line.strip()}
+        if not self.tiles:
+            raise SystemExit(f"{path}: the ingest tile list is empty")
+        self.h3 = h3_module
+
+    def covers(self, cell):
+        return all(
+            tile in self.tiles
+            for tile in world_tile_census.cell_degree_tiles(cell, self.h3)
+        )
 
 
 def stable_file_identity(stat_result):
@@ -236,26 +306,42 @@ def write_height_proof(cell, out_path, output_stat, inputs_sha256, before, after
     fsync_directory(os.path.dirname(proof_path))
 
 
-def enrich_cell(cell, h3r4_dir, staging_dir, ghsl, regional, proof_inputs_sha256=None):
+def enrich_cell(cell, h3r4_dir, staging_dir, ghsl, regional, swept, proof_inputs_sha256=None):
+    """Materialize one cell's obstacles.arrow. True when it was written, False
+    when the cell has no staging and the sweep has not finished there."""
     out_path = os.path.join(h3r4_dir, cell, "obstacles.arrow")
-    if not os.path.exists(out_path):
-        print(f"{cell}: not promoted — skipped (promotion stays with the world cutover)", file=sys.stderr)
-        return
     staged = read_staging(os.path.join(staging_dir, cell))
     if staged is None:
-        raise RuntimeError(f"{cell}: NO STAGING SHARDS — refusing to leave a promoted cell unmaterialized")
+        if not swept.covers(cell):
+            print(
+                f"{cell}: no staging shards and the sweep is unfinished here — "
+                f"left alone (empty and never-swept are not the same answer)",
+                file=sys.stderr,
+            )
+            return False
+        staged = SCHEMA.empty_table()
     # Row-count TRIPWIRE, not proof: same-count re-ingested staging passes and
     # is regenerated from — which is the desired refresh after a re-ingest. A
-    # count mismatch means promotion and staging visibly disagree; stop and let
-    # a human decide which is current.
-    n_before = ipc.open_file(out_path).read_all().num_rows
-    if staged.num_rows != n_before:
-        print(
-            f"{cell}: staging rows {staged.num_rows} != promoted rows {n_before} — "
-            f"staging and promotion have diverged; refusing to regenerate",
-            file=sys.stderr,
+    # count mismatch means output and staging visibly disagree; stop and let a
+    # human decide which is current. Rows against an empty staging is that same
+    # disagreement.
+    if os.path.exists(out_path):
+        n_before = ipc.open_file(out_path).read_all().num_rows
+        if staged.num_rows != n_before:
+            print(
+                f"{cell}: staging rows {staged.num_rows} != materialized rows {n_before} — "
+                f"staging and output have diverged; refusing to regenerate",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    elif not os.path.isdir(os.path.dirname(out_path)):
+        # The obstacle store follows the prepared inventory exactly. Creating a
+        # cell directory here would add a cell to the world the orchestrator
+        # plans over, so a cell the Planet extract never produced is refused.
+        raise SystemExit(
+            f"{cell}: no prepared cell directory {os.path.dirname(out_path)} — "
+            f"the obstacle store follows the prepared inventory and must not extend it"
         )
-        sys.exit(1)
 
     heights = staged.column("height_m").to_numpy(zero_copy_only=False).copy()
     tiers = staged.column("height_tier").to_numpy(zero_copy_only=False).copy()
@@ -265,7 +351,7 @@ def enrich_cell(cell, h3r4_dir, staging_dir, ghsl, regional, proof_inputs_sha256
     assert before[3] == 0 and before[4] == 0, "staging must be pristine tiers 0-2"
 
     in_regional = np.zeros(len(heights), dtype=bool)
-    if regional is not None:
+    if regional is not None and len(heights):
         rx, ry = regional.tr.transform(lons, lats)
         for i in range(len(heights)):
             in_regional[i] = regional.covers(rx[i], ry[i])
@@ -305,9 +391,7 @@ def enrich_cell(cell, h3r4_dir, staging_dir, ghsl, regional, proof_inputs_sha256
             "centroid_lat": staged.column("centroid_lat"),
             "centroid_lon": staged.column("centroid_lon"),
             "height_tier": pa.array(tiers, pa.uint8()),
-            # Pre-envelope staging remains a supported degraded mode: preserve
-            # its geometry but materialize the documented enclosed DEFAULT.
-            "envelope_class": staged.column("envelope_class") if "envelope_class" in staged.column_names else pa.array([5] * len(heights), pa.uint8()),
+            "envelope_class": staged.column("envelope_class"),
         },
         schema=SCHEMA,
     )
@@ -328,16 +412,21 @@ def enrich_cell(cell, h3r4_dir, staging_dir, ghsl, regional, proof_inputs_sha256
             write_height_proof(cell, out_path, os.fstat(output_fd), proof_inputs_sha256, before, after)
     finally:
         os.close(output_fd)
-    print(
-        f"{cell}: {len(heights)} rows; tiers {list(before)} -> {list(after)}; "
-        f"tier3 {stats['tier3']}, tier4 {stats['tier4']}, regional-abstain {stats['abstain']}"
-    )
+    # An empty cell says nothing worth a line of its own — the periodic summary
+    # in main() counts them; a world pass materializes tens of thousands.
+    if len(heights):
+        print(
+            f"{cell}: {len(heights)} rows; tiers {list(before)} -> {list(after)}; "
+            f"tier3 {stats['tier3']}, tier4 {stats['tier4']}, regional-abstain {stats['abstain']}"
+        )
+    return True
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--h3r4-dir", required=True)
     ap.add_argument("--staging-dir", required=True)
+    ap.add_argument("--ingested-tiles", required=True)
     ap.add_argument("--ghsl", required=True)
     ap.add_argument("--regional")
     group = ap.add_mutually_exclusive_group(required=True)
@@ -359,16 +448,35 @@ def main():
         for cell, digest in proof_inputs.items():
             if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
                 raise SystemExit(f"{cell}: invalid proof input SHA-256")
+    swept = SweptCells(args.ingested_tiles, h3)
     ghsl = GlobalPrior(args.ghsl)
     regional = RegionalHeights(args.regional) if args.regional else None
-    for cell in cells:
-        enrich_cell(
+    written = 0
+    unfinished = 0
+    for done, cell in enumerate(cells, start=1):
+        if enrich_cell(
             cell,
             args.h3r4_dir,
             args.staging_dir,
             ghsl,
             regional,
+            swept,
             proof_inputs[cell] if proof_inputs is not None else None,
+        ):
+            written += 1
+        else:
+            unfinished += 1
+        if done % 1000 == 0 or done == len(cells):
+            print(
+                f"[obstacle-heights] {done}/{len(cells)} cells: {written} materialized, "
+                f"{unfinished} sweep-unfinished",
+                flush=True,
+            )
+    if unfinished:
+        sys.exit(
+            f"{unfinished} of {len(cells)} cell(s) have no staging shards and an unfinished "
+            f"sweep, so they hold no obstacles.arrow and no loader may paint them; finish the "
+            f"Overture ingest (scripts/obstacles/ingest-world-incremental.sh) and re-run"
         )
 
 

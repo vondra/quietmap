@@ -27,6 +27,27 @@ def default_source() -> Path:
     return Path(os.environ.get("QM_WORLD_TILE_SOURCE", root / "data/prepared" / year / "h3r4"))
 
 
+def cell_degree_tiles(cell: str, h3_module) -> list[str]:
+    """Every 1-degree tile the cell's boundary bounding box touches.
+
+    The download census and the promotion's sweep-completeness test are the same
+    question asked in two directions ("which tiles must be fetched for this cell"
+    and "has every tile of this cell been ingested"), so they share this list.
+    """
+    boundary = h3_module.cell_to_boundary(cell)
+    lats = [p[0] for p in boundary]
+    lons = [p[1] for p in boundary]
+    # An antimeridian-straddling cell reports a ~360 degree span; unwrap it so the
+    # range below walks the few tiles it really touches, not the whole globe.
+    if max(lons) - min(lons) > 180:
+        lons = [lon if lon >= 0 else lon + 360 for lon in lons]
+    tiles = []
+    for lat_floor in range(math.floor(min(lats)), math.floor(max(lats)) + 1):
+        for lon_floor in range(math.floor(min(lons)), math.floor(max(lons)) + 1):
+            tiles.append(tile_name(lat_floor, ((lon_floor + 180) % 360) - 180))
+    return tiles
+
+
 def census(source: str, h3_module=None) -> list[str]:
     if h3_module is None:
         import h3 as h3_module
@@ -35,16 +56,7 @@ def census(source: str, h3_module=None) -> list[str]:
     for cell in os.listdir(source):
         if not h3_module.is_valid_cell(cell) or h3_module.get_resolution(cell) != 4:
             continue
-        boundary = h3_module.cell_to_boundary(cell)
-        lats = [p[0] for p in boundary]
-        lons = [p[1] for p in boundary]
-        # An antimeridian-straddling cell reports a ~360 degree span; unwrap it so the
-        # range below walks the few tiles it really touches, not the whole globe.
-        if max(lons) - min(lons) > 180:
-            lons = [lon if lon >= 0 else lon + 360 for lon in lons]
-        for lat_floor in range(math.floor(min(lats)), math.floor(max(lats)) + 1):
-            for lon_floor in range(math.floor(min(lons)), math.floor(max(lons)) + 1):
-                tiles.add(tile_name(lat_floor, ((lon_floor + 180) % 360) - 180))
+        tiles.update(cell_degree_tiles(cell, h3_module))
     return sorted(tiles)
 
 

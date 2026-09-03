@@ -9,11 +9,13 @@
  *   tier 3  city/national measured per-building zonal (regional 1 m raster; now IPR Praha)
  *   tier 4  areal prior — GHS-BUILT-H ANBH 100 m at the centroid (replaces flat 8 m only)
  *
- * Scope: `--bbox S,W,N,E` selects PROMOTED cells (obstacles.arrow present)
- * whose H3 BOUNDARY overlaps the bbox — centre-only tests silently drop the
- * cells a regional raster clips (gg finding); `--cells hex,...` is
- * verification isolation (never in a chain run). Cells staged but never
- * promoted are skipped loudly — promotion policy stays with the world cutover.
+ * Scope: `--bbox S,W,N,E` selects PREPARED cells whose H3 BOUNDARY overlaps the
+ * bbox — centre-only tests silently drop the cells a regional raster clips (gg
+ * finding); `--cells hex,...` is verification isolation (never in a chain run).
+ * EVERY prepared cell is in scope, staged or not: emptiness is per cell, so a
+ * cell the finished sweep found empty gets an empty obstacles.arrow rather than
+ * no file (worker header). A cell the sweep has not finished is left alone and
+ * the worker exits non-zero.
  *
  * `--enrich-only` skips the cache download (`scripts/obstacles/download-height-rasters.sh`:
  * GHSL ANBH GeoTIFF + the IPR Praha exportImage tiles stamped EPSG:5514 +
@@ -25,9 +27,9 @@
  * Freshness contract: every materialized cell carries an adjacent proof bound
  * to the output inode, staging shards, height rasters, and worker source. The
  * enrichment chain invokes this face on every run; current cells are a cheap
- * no-op, while an Overture re-promotion or input change selects only stale
- * cells. Missing staging or a required height raster is fatal rather than a
- * sync-safe skip that could certify a reverted output.
+ * no-op, while an Overture re-ingest or input change selects only stale cells.
+ * A missing output or a required height raster is fatal rather than a sync-safe
+ * skip that could certify a reverted output.
  *
  * Registry: `global-ghsl-built-h` (9866) + `cz-ipr-praha-vysky` (9867) in
  * enrichment-datasets.ts — obstacle rows carry `height_tier`, not `source_id`;
@@ -51,6 +53,9 @@ import {
 const REPO_ROOT = resolve(import.meta.dirname, '..')
 const ENRICH = resolve(REPO_ROOT, 'data', 'enrichment')
 const STAGING_DIR = resolve(ENRICH, 'global', 'overture-obstacles', 'h3r4')
+/** The ingest's own resume list, and the worker's proof that a shard-less cell
+ *  is empty rather than unswept. Promotion is its ONE consumer. */
+const INGESTED_TILES = resolve(ENRICH, 'global', 'overture-obstacles', '.ingested-tiles')
 const WORKER = resolve(REPO_ROOT, 'scripts', 'obstacles', 'enrich-obstacle-heights.py')
 const DOWNLOADER = resolve(REPO_ROOT, 'scripts', 'obstacles', 'download-height-rasters.sh')
 
@@ -110,29 +115,28 @@ function overlaps(a: readonly number[], b: readonly number[]): boolean {
   return a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
 }
 
+/** The cell's staging shards, or none — a cell with no footprint stages no
+ *  shard, and the worker resolves that against the sweep. An empty list is part
+ *  of the input digest, so shards appearing later restale the cell. */
 function stagingShardPaths(hex: string): string[] {
   const dir = resolve(STAGING_DIR, hex)
-  if (!existsSync(dir)) throw new Error(`promoted cell ${hex} has no staging directory ${dir}`)
-  const shards = readdirSync(dir)
+  if (!existsSync(dir)) return []
+  return readdirSync(dir)
     .filter((name) => name.startsWith('obstacles-') && name.endsWith('.arrow'))
     .sort()
     .map((name) => resolve(dir, name))
-  if (shards.length === 0) throw new Error(`promoted cell ${hex} has no staging obstacle shards in ${dir}`)
-  return shards
 }
 
 function regionalRasterForCell(hex: string): (typeof REGIONAL_RASTERS)[number] | undefined {
   return REGIONAL_RASTERS.find((r) => overlaps(cellEnvelope(hex), r.bbox))
 }
 
-/** Promoted cells in scope: hex dirs carrying obstacles.arrow whose boundary
- *  envelope overlaps the bbox. (Antimeridian-straddling cells are the usual
- *  envelope caveat — none of the promoted store's cells wrap today.) */
-function promotedCellsInScope(bbox: number[] | null): string[] {
+/** Prepared cells in scope: every hex dir whose boundary envelope overlaps the
+ *  bbox. (Antimeridian-straddling cells are the usual envelope caveat.) */
+function preparedCellsInScope(bbox: number[] | null): string[] {
   const out: string[] = []
   for (const hex of readdirSync(H3R4_DIR)) {
     if (!/^[0-9a-f]{15}$/.test(hex)) continue
-    if (!existsSync(resolve(H3R4_DIR, hex, 'obstacles.arrow'))) continue
     if (bbox && !overlaps(cellEnvelope(hex), bbox)) continue
     out.push(hex)
   }
@@ -147,9 +151,6 @@ function currentInputCandidate(
 ): HeightCandidate {
   if (!/^[0-9a-f]{15}$/.test(hex)) throw new Error(`invalid H3R4 cell '${hex}'`)
   const outputPath = resolve(H3R4_DIR, hex, 'obstacles.arrow')
-  if (!existsSync(outputPath)) {
-    throw new Error(`requested cell ${hex} is not promoted (${outputPath} is missing)`)
-  }
   const region = regionalRasterForCell(hex)
   if (region && !existsSync(region.vrt)) {
     // NEVER silently degrade to ANBH-only: regenerating a regional cell
@@ -182,9 +183,9 @@ function currentInputCandidate(
 function main(): void {
   const { enrichOnly, bbox, cells } = parseArgs(process.argv)
 
-  const requested = [...new Set(cells ?? promotedCellsInScope(bbox))].sort()
+  const requested = [...new Set(cells ?? preparedCellsInScope(bbox))].sort()
   if (requested.length === 0) {
-    console.log('no promoted cells in scope — nothing to enrich')
+    console.log('no prepared cells in scope — nothing to materialize')
     return
   }
 
@@ -202,6 +203,12 @@ function main(): void {
       `GHSL ANBH raster missing (${GHSL_TIF}) — run scripts/obstacles/download-height-rasters.sh once`,
     )
   }
+  if (!existsSync(INGESTED_TILES)) {
+    throw new Error(
+      `Overture ingest tile list missing (${INGESTED_TILES}) — without it an empty cell cannot ` +
+        `be told from an unswept one; run scripts/obstacles/ingest-world-incremental.sh`,
+    )
+  }
 
   const sharedContracts = new Map<string, ReturnType<typeof obstacleHeightSharedInputContract>>()
   const candidates: HeightCandidate[] = []
@@ -215,11 +222,11 @@ function main(): void {
     }
   }
   if (candidates.length === 0) {
-    console.log(`[obstacle-heights] ${requested.length} promoted cell(s); every height proof is current`)
+    console.log(`[obstacle-heights] ${requested.length} prepared cell(s); every height proof is current`)
     return
   }
   console.log(
-    `[obstacle-heights] ${requested.length} promoted cell(s); ${candidates.length} stale (` +
+    `[obstacle-heights] ${requested.length} prepared cell(s); ${candidates.length} stale (` +
       [...staleReasons].map(([reason, count]) => `${reason}=${count}`).join(', ') + ')',
   )
 
@@ -251,6 +258,7 @@ function main(): void {
         WORKER,
         '--h3r4-dir', H3R4_DIR,
         '--staging-dir', STAGING_DIR,
+        '--ingested-tiles', INGESTED_TILES,
         '--ghsl', GHSL_TIF,
         '--cells-file', cellsFile,
         '--proof-manifest', proofManifest,

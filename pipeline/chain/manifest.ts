@@ -451,7 +451,7 @@ export function buildPlan(scope: ResolvedScope): { steps: PlanStep[]; excludedBy
       layer: 'buildings',
       country: null,
       notes:
-        'height-tier ladder for prepared obstacles.arrow SCREENING heights (tier 3 city-measured zonal — IPR Praha; tier 4 GHS-BUILT-H ANBH prior replacing the flat 8 m default; ladder table in the enricher headers + noise_compute::low_profile). Every promoted cell carries an adjacent proof bound to its output inode, immutable Overture staging shards, height rasters, and worker source. Current cells are a cheap no-op; Overture re-promotion, raster replacement, staging change, or worker change makes the cell provably stale and regenerates it. Missing staging or a required height raster fails the chain rather than certifying a reverted cell.',
+        'height-tier ladder for prepared obstacles.arrow SCREENING heights (tier 3 city-measured zonal — IPR Praha; tier 4 GHS-BUILT-H ANBH prior replacing the flat 8 m default; ladder table in the enricher headers + noise_compute::low_profile). Emptiness is per cell: every prepared cell gets an obstacles.arrow, empty where the finished Overture sweep found no footprint, so a painter needs no world-wide file. Each materialized cell carries an adjacent proof bound to its output inode, its Overture staging shards, the height rasters, and the worker source. Current cells are a cheap no-op; a raster replacement, a staging change, or a worker change makes the cell provably stale and regenerates it. A cell whose sweep is unfinished, or a missing height raster, fails the chain rather than certifying a world that is still missing buildings.',
       skipReason: null,
     },
     (b) => (b ? ['--enrich-only', '--bbox', serializeBbox(b)] : ['--enrich-only']),

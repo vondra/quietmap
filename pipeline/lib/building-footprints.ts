@@ -35,10 +35,15 @@
  * Coverage is decided by the WORLD INGEST MANIFEST (`.ingested-tiles`), not by
  * the presence of shards: the ingest writes a shard only for cells that
  * received ≥1 footprint, so "no shard" is ambiguous between covered-and-empty
- * and never-staged (see `noise-compute::propagation::obstacle_ingest_coverage`
- * for the same rule on the engine side). The manifest lists 1° tiles and the
- * retired raster was one file per 1° tile, so the manifest preserves the same
- * covered-versus-unknown distinction without retaining that raster.
+ * and never-staged. The manifest lists 1° tiles and the retired raster was one
+ * file per 1° tile, so it preserves the same covered-versus-unknown distinction
+ * without retaining that raster.
+ *
+ * This sampler reads the STAGING tree at PREPARE time on the data node, beside
+ * the ingest that writes both — the same place and time as the promotion, which
+ * is the manifest's other consumer. Nothing at PAINT time reads it: a painter
+ * gets its emptiness per cell from `prepared/{year}/h3r4/<cell>/obstacles.arrow`
+ * (`noise-compute::propagation::obstacle_cell_file`).
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
