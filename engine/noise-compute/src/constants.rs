@@ -243,12 +243,15 @@ pub const ROAD_MAX_RADIUS: [f64; 13] = [
 ///   *display* convention (the renderer floor sits at 30 dB), not a physics
 ///   cutoff — never let the solver cull a row before its audible field is
 ///   drawn.
-/// - **Ceiling 10 km**: the halo budget. In a shared surface build the road
-///   10 km halo already ray-marches terrain this far, so capping rail reach at
-///   10 km costs no extra halo; beyond 10 km the cumulative Lden is < ~19 dB
-///   (well under the renderer floor) for any realistic corridor.
+/// - **Ceiling 11 km**: the owner's decided rail ceiling (SPEC 2026-08-15,
+///   `[2 km, 11 km]`), landed 2026-09-03. The V2 ground-aware solve puts a plain
+///   mainline row at 10,178.8 m and a 300 km/h corridor at 10.06-11.1 km
+///   (measured 2026-06-01 three ways), so a 10 km cap clipped every loud
+///   corridor; the rail halo follows this ceiling and costs x1.21 over 10 km.
+///   Cutting the reach instead was refuted on 2026-08-18: at 5 km painted rail
+///   tiles disappear from the map.
 pub const RAILWAY_REACH_CLAMP_MIN: f64 = 2_000.0;
-pub const RAILWAY_REACH_CLAMP_MAX: f64 = 10_000.0;
+pub const RAILWAY_REACH_CLAMP_MAX: f64 = 11_000.0;
 
 /// Lden boundary the per-row rail reach solves to. Mirrors the ~25 dB
 /// road/rail boundary convention (road's per-class `ROAD_MAX_RADIUS` caps sit

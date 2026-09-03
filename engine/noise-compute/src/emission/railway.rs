@@ -626,18 +626,16 @@ mod tests {
     /// 5.8 dB louder than the boundary. Pax-only, so the EU
     /// vs world freight split is irrelevant (pax night 0.10 both).
     ///
-    /// Its unclamped crossing was ≈9.3 km and is ≈11.9 km since the CNOSSOS
-    /// hard-ground floor put the G = 0 free-field limit at −3 dB, so the class
-    /// now sits ON the 10 km halo ceiling rather than just under it. The
-    /// ceiling — a rendering-budget number, not an acoustic one — is what caps
-    /// this class from here, and that is the assertion worth pinning.
+    /// Its unclamped crossing is 10,866.8 m (measured 2026-09-03): the old 10 km
+    /// ceiling clipped it, the decided 11 km ceiling lets the class end where its
+    /// own 25 dB crossing is. The assertion worth pinning is that the class is
+    /// solved acoustically again, between the old cap and the new ceiling.
     #[test]
-    fn highspeed_reach_hits_the_halo_ceiling() {
+    fn highspeed_reach_is_solved_below_the_ceiling() {
         let r = rail_reach_m(Admin::UNKNOWN, RailType::Rail, 300.0, 80.0, 0.0);
-        assert_eq!(
-            r,
-            crate::constants::RAILWAY_REACH_CLAMP_MAX,
-            "HS reach {r:.0} m, want the 10 km ceiling"
+        assert!(
+            r > 10_000.0 && r < crate::constants::RAILWAY_REACH_CLAMP_MAX,
+            "HS reach {r:.0} m, want (10 km, 11 km ceiling)"
         );
         // …and it is the CEILING that caps it, not a coincidence: the free-field
         // Lden at the ceiling is still above the 25 dB target.
@@ -684,7 +682,7 @@ mod tests {
     /// Clamp floor: a near-silent stub (one passenger train/day @ 80 km/h
     /// solves to ~900 m) must still clamp UP to the 2 km floor so its near
     /// field stays drawn. Clamp ceiling: a very loud, fast, freight-heavy
-    /// corridor solves past 10 km and must clamp DOWN to the halo budget.
+    /// corridor solves past 11 km and must clamp DOWN to the halo budget.
     #[test]
     fn reach_clamps_at_floor_and_ceiling() {
         let admin = Admin::UNKNOWN;
@@ -695,8 +693,9 @@ mod tests {
         );
         let loud = rail_reach_m(admin, RailType::Rail, 250.0, 200.0, 80.0);
         assert_eq!(
-            loud, 10_000.0,
-            "loud HS-freight corridor must clamp to the 10 km ceiling"
+            loud,
+            crate::constants::RAILWAY_REACH_CLAMP_MAX,
+            "loud HS-freight corridor must clamp to the 11 km ceiling"
         );
     }
 

@@ -61,8 +61,9 @@ The following constants affect painted output:
   [0, 4, 4, 1, 2] dB on the rolling component.
 - ROAD_MAX_RADIUS by road class is
   [10000, 7000, 5000, 3000, 1600, 800, 400, 500, 300, 2000, 1200, 900, 600] m.
-- RAILWAY_REACH_CLAMP_MIN = 2000 m, RAILWAY_REACH_CLAMP_MAX = 10000 m,
-  RAILWAY_REACH_TARGET_LDEN = 25 dB, and RAILWAY_REACH_CEILING = 10000 m.
+- RAILWAY_REACH_CLAMP_MIN = 2000 m, RAILWAY_REACH_CLAMP_MAX = 11000 m (the decided
+  rail ceiling: a mainline row solves to 10,178.8 m, a high-speed corridor to
+  10.06-11.1 km), RAILWAY_REACH_TARGET_LDEN = 25 dB, and RAILWAY_REACH_CEILING = 11000 m.
 - Industrial non-wind point reach is 4000 m; building and leisure reach is 2000 m.
 - Aircraft NPD reach is 16000 m; ground-operation reach is 5000 m for runway,
   3000 m for taxiway, and 1500 m for apron.
