@@ -35,7 +35,9 @@ use crate::airborne_building_horizon::{AirborneBuildingHorizonGpu, BuildingHoriz
 use crate::airborne_terrain_horizon::{AirborneTerrainHorizonGpu, TerrainHorizonDev};
 use crate::{pack_airborne_receivers, pack_airborne_segs};
 
-const AIRBORNE_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/airborne.ptx"));
+/// The kernels as an ahead-of-time fatbin (this build's `NOISE_GPU_ARCH` SASS plus its PTX),
+/// so the pinned card never JIT-compiles and a driver older than the toolkit still loads it.
+const AIRBORNE_FATBIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/airborne.fatbin"));
 const SCREEN_RECORDS: usize = 0;
 const SCREEN_NREG: usize = 1;
 const SCREEN_NEAR_BASE: usize = 2;
@@ -330,8 +332,13 @@ impl AirborneGpu {
         // launches + copies overlap instead of serializing device-wide on the null stream
         // across workers. Each worker holds its own CudaDevice instance ⇒ no shared-event hazard.
         let dev = CudaDevice::new_with_stream(0).expect("open cuda device 0");
-        dev.load_ptx(
-            Ptx::from_src(AIRBORNE_PTX),
+        // cudarc 0.12 loads a binary image only through `cuModuleLoad` on a path (`from_src`
+        // takes NUL-free PTX text), so the embedded fatbin goes through a per-process temp file.
+        let fatbin_path =
+            std::env::temp_dir().join(format!("quietmap-airborne-{}.fatbin", std::process::id()));
+        std::fs::write(&fatbin_path, AIRBORNE_FATBIN).expect("write airborne fatbin");
+        let loaded = dev.load_ptx(
+            Ptx::from_file(&fatbin_path),
             "air",
             &[
                 "airborne_exact_screened",
@@ -346,8 +353,9 @@ impl AirborneGpu {
                 "airborne_building_horizon_global_max",
                 "airborne_building_horizon_mark_empty",
             ],
-        )
-        .expect("load airborne ptx");
+        );
+        let _ = std::fs::remove_file(&fatbin_path);
+        loaded.expect("load airborne fatbin");
         let f_near_screened = dev
             .get_func("air", "airborne_exact_screened")
             .expect("fn near_screened");

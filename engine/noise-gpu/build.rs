@@ -251,16 +251,35 @@ fn main() {
                 .expect("kernel file stem")
                 .to_string_lossy();
             println!("cargo:rerun-if-changed={}", path.display());
-            let output = out.join(format!("{stem}.ptx"));
-            let status = Command::new("nvcc")
-                .args(["-ptx", &format!("-arch={arch}"), "-O3"])
-                .args(&nvcc_defines)
-                .arg(&path)
-                .arg("-o")
-                .arg(&output)
-                .status()
-                .expect("nvcc not found — `--features gpu` needs the CUDA toolkit");
-            assert!(status.success(), "nvcc -ptx failed to compile {path:?}");
+            // The PTX is the model-role receipt (scripts/gpu_model_role.py proves its bytes
+            // are embedded); the fatbin is what the binary loads: `arch` SASS plus that same
+            // PTX, stored uncompressed so the receipt still finds it. The pinned card runs the
+            // ahead-of-time image and never JIT-compiles; a driver older than the toolkit cannot
+            // JIT this PTX at all (CUDA_ERROR_UNSUPPORTED_PTX_VERSION), which is exactly the
+            // minor-version-compatible case the SASS covers.
+            let compute = arch
+                .strip_prefix("sm_")
+                .unwrap_or_else(|| panic!("CUDA arch must be sm_NN, got {arch}"));
+            for (kind, output) in [
+                ("-ptx", out.join(format!("{stem}.ptx"))),
+                ("-fatbin", out.join(format!("{stem}.fatbin"))),
+            ] {
+                let status = Command::new("nvcc")
+                    .args([
+                        kind,
+                        "--compress-mode=none",
+                        "-gencode",
+                        &format!("arch=compute_{compute},code=[sm_{compute},compute_{compute}]"),
+                        "-O3",
+                    ])
+                    .args(&nvcc_defines)
+                    .arg(&path)
+                    .arg("-o")
+                    .arg(&output)
+                    .status()
+                    .expect("nvcc not found — `--features gpu` needs the CUDA toolkit");
+                assert!(status.success(), "nvcc {kind} failed to compile {path:?}");
+            }
         }
     }
 }
