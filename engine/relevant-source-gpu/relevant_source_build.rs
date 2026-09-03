@@ -369,7 +369,10 @@ fn nvcc_arguments(archs: &[String]) -> Vec<String> {
     let mut arguments = common_nvcc_arguments();
     for arch in archs {
         arguments.push("-gencode".to_owned());
-        arguments.push(format!("arch={},code={arch}", cuda_archs::compute_arch(arch)));
+        arguments.push(format!(
+            "arch={},code={arch}",
+            cuda_archs::compute_arch(arch)
+        ));
     }
     arguments
 }

@@ -195,7 +195,8 @@ fn main() {
         ),
     ]
     .map(|(name, prefix)| (name, const_from("src/airborne_building_horizon.rs", prefix)));
-    let coarse_target_blocks = const_from("src/airborne.rs", "const COARSE_TARGET_BLOCKS: usize = ");
+    let coarse_target_blocks =
+        const_from("src/airborne.rs", "const COARSE_TARGET_BLOCKS: usize = ");
     let building_grid_geometry_stride = const_from(
         "src/airborne_building_horizon.rs",
         "const BUILDING_GRID_GEOMETRY_STRIDE: usize = ",
