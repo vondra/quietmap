@@ -4,12 +4,17 @@
 
 use crate::emission::aircraft;
 
-/// Per-flight scatter state. `period_energy` carries Doc 29 SEL ×
+/// Per-flight scatter state. `period_energy` carries screened Doc 29 SEL ×
 /// count_weight per period; the popup divides by `n_days × period_seconds`
-/// at write time. Peak fields track the loudest single segment so the
-/// popup can render `top_flights` with realistic `Lmax` and CPA distance.
+/// at write time. The three companion sums retain the pre-screen and
+/// one-effect-removed energies for aircraft's popup variants. Peak fields
+/// track the loudest single segment so the popup can render `top_flights` with
+/// realistic `Lmax` and CPA distance.
 pub struct FlightAccum {
     pub period_energy: [f64; 3],
+    pub free_period_energy: [f64; 3],
+    pub no_terrain_period_energy: [f64; 3],
+    pub no_screening_period_energy: [f64; 3],
     pub peak_lmax: f64,
     pub peak_sel: f64,
     pub min_dist_m: f64,
@@ -41,6 +46,9 @@ impl FlightAccum {
     ) -> Self {
         Self {
             period_energy: [0.0; 3],
+            free_period_energy: [0.0; 3],
+            no_terrain_period_energy: [0.0; 3],
+            no_screening_period_energy: [0.0; 3],
             peak_lmax: -999.0,
             peak_sel: -999.0,
             min_dist_m: f64::MAX,

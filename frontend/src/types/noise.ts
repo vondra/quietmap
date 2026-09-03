@@ -694,6 +694,8 @@ interface Doc29Breakdown {
   d_bar_m: number
   installation: 'wing' | 'fuselage' | 'propeller'
   cffk_fast_path: boolean
+  screening_kind: 'none' | 'terrain' | 'building'
+  screening_db: number
 }
 
 interface CruiseBucketBreakdown {

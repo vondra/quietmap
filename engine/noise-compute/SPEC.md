@@ -426,8 +426,51 @@ terrain. Stage 2 stores endpoint terrain only; the removed quarter-, midpoint-, 
 three-quarter-chord terrain check is not applied. Terrain cuts are precomputed for
 accepted airborne paths.
 
-Airborne sources use Doc29 geometry and NPD emission; surface terrain, vegetation, and
-building screening are not applied to airborne broadband levels.
+Low airborne sources add receiver-side line-of-sight screening after the Doc 29
+segment level. Terrain uses the C2 horizon: 32 azimuth sectors, 48 exponential
+DEM samples from 30 m to 8 km, and six independent range-max bands. Only an edge
+between receiver and the Doc 29 CPA foot can screen. The kernel ranks edges by
+exact two-dimensional path difference and converts the winner with the anchored
+ISO 9613-2 §7.4 single-edge broadband form, capped at the FAA AEDT 3f
+Technical Manual §4.3.6 line-of-sight-blockage value of 18 dB. Doc 29's empirical lateral and
+installation terms already represent its prescribed ground/terrain and engine
+installation effects; neither term represents an individual building.
+
+Mapped buildings deliberately extend Doc 29, which has no individual-building
+term. Each outdoor receiver gets a vector roof horizon with 256 directions and
+six range-max bands through 512 m; roof distance is retained to one centimetre.
+Sector-centre sampling and the 512 m roof-edge
+limit, and applying one closest-physical-point loss to the finite segment SEL
+rather than integrating visibility over the moving segment, are Quiet Map's
+approximations. ISO 9613-2:2024 explicitly excludes aircraft in flight, and its
+obstacle-screening method and the CNOSSOS barrier method cover surface-source
+propagation rather than this aircraft geometry. The resolution and range were selected
+from the staged LKPR loudest-path census:
+all 23 exactly shadowed outdoor receivers were retained, none of 42,529 exactly
+clear receivers became shadowed, mean absolute blocked-ray loss error was 0.066 dB,
+maximum blocked-ray loss error was 0.569 dB, and the farthest shadowed source
+point was 178.589 m away. Every blocking roof lies before its source, so 512 m
+gives at least a measured 2.9× edge-range margin for those material paths;
+more distant building edges are deliberately unrepresented. A single
+neighbourhood traversal projects each nearby vector edge onto the sector centres
+it crosses, then uses the exact segment-intersection primitive to retain the
+winning roof in each range band.
+Roof height is vector height above DEM ground, barriers are excluded, and enclosed
+receiver pixels retain the façade-donor rule instead of self-screening. The popup
+uses `point_inside_enclosed` for that enclosure decision; the painter uses the
+equivalent `EnvelopeClass::Outdoor` rule.
+
+Terrain and building losses never add: the stronger diffraction edge wins. In
+the full Doc 29 arm that loss also competes with empirical lateral attenuation
+Λ, so the already-applied Λ is credited back and only
+`(diffraction - Λ).max(0)` is subtracted. The CFFK arm has no Λ and subtracts
+the winning diffraction directly. Doc 29's separate ΔI source-directivity term
+is retained: changing the source's installation pattern is not a second
+receiver-side obstacle loss. Building rays end at the closest physical point on
+the finite observed subsegment; in the full Doc 29 arm, credited Λ is evaluated
+at the infinite-line CPA while building Dz uses that clamped physical point. Doc
+29's infinite-line CPA remains in its energy integral. Cruise remains
+structurally exempt.
 
 ### 6.2 Airport ground operations
 
@@ -616,7 +659,18 @@ These tests are the executable acceptance points for the contract:
 - A-weighted spectrum normalization in src/emission/spectrum.rs.
 - Vector obstacle and clear-terrain cases in src/propagation/path_effects.rs.
 - Exact barrier screening in ../../tile-painter/tests/barrier_screening.rs.
+- Airborne terrain/building screening in
+  src/emission/aircraft/{horizon.rs,screening/tests.rs,segment_sel/tests.rs}:
+  clear line of sight and grazing are 0 dB, a deep blocked path reaches the
+  AEDT 18 dB cap, terrain/building alternatives do not add, and building rays
+  stop at the finite observed subsegment.
 - Indoor envelope height matrix in src/envelope.rs.
+
+The airborne GPU acceptance gate in `../noise-gpu/src/e2_airborne.rs` exits
+nonzero when the worst CPU-production difference is at least 0.5 dB or any
+one-sided audible cell occurs; `QM_E2_EXACT=1` applies the same failing gate to
+the exact-oracle comparison. Release evidence applies the same 0.5 dB tolerance
+to every encoded HM3 tile with `compare_hm3 --aggregate --wave 2 --scoring absolute`.
 
 The production path must preserve deterministic accumulation, the shared PathProfile
 cadence, exact vector intersections, source provenance, and the single annualisation

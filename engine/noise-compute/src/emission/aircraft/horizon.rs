@@ -1,27 +1,32 @@
 //! C2 receiver terrain horizon for airborne Doc 29 screening.
 //!
-//! Doc 29 has no terrain term (Λ §4.5.4 assumes flat soft ground), so a
-//! low aircraft behind a ridge keeps its full free-field SEL — the audit
-//! A2 "+10..+15 dB per shadowed event" phantom. Precedent for a terrain
-//! correction on an NPD kernel: FAA AEDT Technical Manual (3f),
+//! Doc 29 has no explicit terrain-horizon or barrier term: its empirical
+//! lateral attenuation already covers prescribed ground/terrain effects, so a
+//! low aircraft behind an individual ridge otherwise keeps the same SEL as an
+//! unobstructed path. Precedent for a terrain correction on an NPD kernel:
+//! FAA AEDT 3f Technical Manual §4.3.6,
 //! "Line-of-Sight Blockage" — terrain path-length difference δ → barrier
 //! theory, capped at 18 dB, applied as max(LOS_adj, Λ) (mutually
 //! exclusive with lateral attenuation, never summed; Berton, AIAA 2021).
-//! The insertion-loss form here is ISO 9613-2 §7.4 single-edge
+//! The insertion-loss form here is the ISO 9613-2 §7.4 single-edge
 //! `Dz = 10·log10(3 + (C2/λ)·C3·δ)` — the same form the surface layers
 //! use (SPEC §4.6) — with λ_eff = 0.685 m (500 Hz broadband-
 //! representative aircraft spectrum, audit §F.2): 20/0.685 ≈ 29.2.
+//! ISO 9613-2:2024 explicitly excludes aircraft in flight; using its
+//! diffraction shape here is Quiet Map's approximation, not ISO compliance.
 //!
 //! Input is the DEM terrain surface (DSM-biased: GLO-30 includes canopy
 //! and buildings), NOT bare-earth — forested ridges screen slightly
-//! high; P1 checks a forested-ridge fixture for over-screening.
-//! `build` is sampler-agnostic so the popup (`RealRasters` bilinear) and
-//! the future heatmap horizon grid (P3, `FusedTileZ13`) share one build —
-//! horizon-input parity by construction.
+//! high. `build` is sampler-agnostic so the popup (`RealRasters` bilinear)
+//! and heatmap receiver grids (`FusedTileZ13`) share one implementation.
 
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
+use std::sync::OnceLock;
 
 use super::doc29::{fast_atan, M_PER_DEG_LAT};
+use super::screening::single_edge_diffraction_db;
+#[cfg(test)]
+use super::screening::DIFFRACTION_CAP_DB;
 
 /// Azimuth sectors (11.25° each).
 pub const HORIZON_SECTORS: usize = 32;
@@ -41,15 +46,64 @@ pub const HORIZON_SECTORS: usize = 32;
 /// larger exact path difference wins over a near low lip even at a
 /// smaller horizon angle. Within-band erasure remains only when both
 /// ridges fall in ONE band — bands are sized to keep that rare.
-const NUM_BUCKETS: usize = 6;
-const BUCKET_BREAK_M: [f64; NUM_BUCKETS] = [500.0, 1_000.0, 2_000.0, 3_500.0, 5_500.0, 8_000.0];
+pub const RECEIVER_HORIZON_BANDS: usize = 6;
+pub const RECEIVER_HORIZON_MAX_M: f64 = 8_000.0;
+pub const RECEIVER_HORIZON_TANGENT_SCALE: f64 = 4096.0;
+/// Stored terrain ranges are whole metres. Ceiling the range moves a packed
+/// edge away from the receiver, so quantization cannot make an edge screen an
+/// aircraft that is physically in front of it. The GPU receives this same
+/// scale from `build.rs` and applies the same ceiling rule.
+pub const RECEIVER_HORIZON_RANGE_SCALE: f64 = 1.0;
+const BUCKET_BREAK_M: [f64; RECEIVER_HORIZON_BANDS] =
+    [500.0, 1_000.0, 2_000.0, 3_500.0, 5_500.0, 8_000.0];
+const _: () = assert!(BUCKET_BREAK_M[RECEIVER_HORIZON_BANDS - 1] == RECEIVER_HORIZON_MAX_M);
 
 /// Exponential radial march 30 m → 8 km, 48 samples/sector (~1.5 k
 /// DEM reads per receiver) — matches the surface bilateral-cadence
 /// philosophy (dense near the receiver where angular resolution
 /// matters, coarse far out where the horizon changes slowly).
 const MARCH_START_M: f64 = 30.0;
-const MARCH_SAMPLES: usize = 48;
+pub const RECEIVER_HORIZON_MARCH_SAMPLES: usize = 48;
+
+/// One immutable point in the radial terrain march. The CPU and CUDA builders
+/// consume this table so radii, directions, and range-band assignment cannot
+/// drift between painters.
+#[derive(Clone, Copy)]
+pub struct ReceiverHorizonSample {
+    pub range_m: f64,
+    pub north_m: f64,
+    pub east_m: f64,
+    pub band: usize,
+}
+
+pub fn receiver_horizon_samples(
+) -> &'static [[ReceiverHorizonSample; RECEIVER_HORIZON_MARCH_SAMPLES]; HORIZON_SECTORS] {
+    static SAMPLES: OnceLock<
+        [[ReceiverHorizonSample; RECEIVER_HORIZON_MARCH_SAMPLES]; HORIZON_SECTORS],
+    > = OnceLock::new();
+    SAMPLES.get_or_init(|| {
+        let growth = (RECEIVER_HORIZON_MAX_M / MARCH_START_M)
+            .powf(1.0 / (RECEIVER_HORIZON_MARCH_SAMPLES - 1) as f64);
+        std::array::from_fn(|sector| {
+            let azimuth = (sector as f64 + 0.5) * (TAU / HORIZON_SECTORS as f64);
+            let (sin_azimuth, cos_azimuth) = azimuth.sin_cos();
+            let mut range_m = MARCH_START_M;
+            std::array::from_fn(|_| {
+                let sample = ReceiverHorizonSample {
+                    range_m,
+                    north_m: range_m * sin_azimuth,
+                    east_m: range_m * cos_azimuth,
+                    band: BUCKET_BREAK_M
+                        .iter()
+                        .position(|&break_m| range_m <= break_m + 0.5)
+                        .unwrap_or(RECEIVER_HORIZON_BANDS - 1),
+                };
+                range_m *= growth;
+                sample
+            })
+        })
+    })
+}
 
 /// Fixed-point tan quantization: i16 × 1/4096.
 ///
@@ -59,38 +113,29 @@ const MARCH_SAMPLES: usize = 48;
 /// the simplest correct encoding. Step 2^-12 ≈ 0.014° near horizontal
 /// (finer at steep angles); range ±8.0 tan ≈ ±82.9°, clamped beyond
 /// (slot-canyon horizons above 82.9° under-screen — acceptably rare).
-/// WHY quantize at all in P0: 4 B/entry → 776 B/receiver is the P3
-/// heatmap budget driver (262 144 px × 768 B ≈ 200 MB/tile; P3 can halve
-/// via u8 r at 64 m steps if it bites); the popup shares the struct so
-/// popup ≡ heatmap stays parity-by-construction.
-const TAN_SCALE: f64 = 4096.0;
+/// WHY quantize: 4 B/entry keeps per-tile CPU and GPU storage bounded;
+/// the popup shares the struct so its query is the same calculation.
+/// Number of packed `(tangent, range)` entries in one receiver horizon.
+pub const RECEIVER_HORIZON_ENTRY_COUNT: usize = HORIZON_SECTORS * RECEIVER_HORIZON_BANDS;
 
-/// ISO 9613-2 §7.4 slope C2/λ_eff · C3 = 20/0.685 m · 1 ≈ 29.2 per m.
-const DZ_SLOPE_PER_M: f64 = 29.2;
-
-/// 10·log10(3) — the §7.4 form's value at δ = 0. Subtracted so Dz → 0
+/// The §7.4 form's value at δ = 0 is removed so Dz → 0
 /// exactly at the shadow boundary: the raw form lands at 4.77 dB when
 /// the ray grazes the edge, and applying it blocked-only would step
 /// 4.77 dB across one pixel (the hard cut the plan rejects). Anchoring
 /// at 0 also makes the `max_sin_sq` kernel precheck EXACT — every pair
 /// above every stored horizon gets Dz = 0 whether prechecked away or
 /// fully evaluated. Deep shadow still reaches the full 18 dB cap.
-const DZ_ANCHOR_DB: f64 = 4.771212547196624;
-
-/// AEDT LOS-blockage cap (AEDT 3f Technical Manual, "Line-of-Sight
-/// Blockage" adjustment) — tighter than the surface layers' 20 dB.
-const DZ_CAP_DB: f64 = 18.0;
-
 /// Per-receiver terrain horizon: 32 azimuth sectors × 6 range-max
 /// radial bands of (quantized horizon tangent, edge distance of the
-/// band's maximum). 776 B. Built once per popup query (P3: once per
-/// heatmap pixel) and queried inside `segment_energy_kernel`.
+/// band's maximum). Built once per popup receiver or selected heatmap
+/// receiver node and queried inside `segment_energy_kernel`.
 pub struct ReceiverHorizon {
     /// `[sector][band] = (tan_q, r_q)`; `tan_q` = horizon tangent ×
-    /// `TAN_SCALE` (i16, signed — see above), `r_q` = edge distance in
-    /// whole meters (u16, ≤ 8 000) of the band's own maximum; `r_q = 0`
+    /// `RECEIVER_HORIZON_TANGENT_SCALE` (i16, signed — see above), `r_q` = ceil(edge distance ×
+    /// `RECEIVER_HORIZON_RANGE_SCALE`) in whole metres (u16, ≤ 8 000) of the band's own maximum;
+    /// ceiling keeps a packed edge away from the receiver; `r_q = 0`
     /// marks a band the march never sampled (skipped at query).
-    sectors: [[(i16, u16); NUM_BUCKETS]; HORIZON_SECTORS],
+    sectors: [[(i16, u16); RECEIVER_HORIZON_BANDS]; HORIZON_SECTORS],
     /// sin² of the highest stored horizon across all sectors/buckets,
     /// clamped to 0 when every horizon is below horizontal. Kernel
     /// precheck: `rel_alt <= 0 || rel_alt² < slant_sq · max_sin_sq`
@@ -102,7 +147,7 @@ pub struct ReceiverHorizon {
 
 impl ReceiverHorizon {
     /// March the DEM terrain surface (DSM-biased) outward from the
-    /// receiver and record per-sector cumulative-max horizons.
+    /// receiver and record per-sector range-max horizons.
     /// `receiver_alt_m` must be the same datum the kernel's `rel_alt`
     /// uses (popup: `Receiver::altitude_m()`, terrain + mast height).
     /// The radial geometry uses the kernel's receiver-local
@@ -116,17 +161,11 @@ impl ReceiverHorizon {
     ) -> Self {
         let cos_lat = lat.to_radians().cos().max(0.2);
         let m_per_deg_lon = M_PER_DEG_LAT * cos_lat;
-        let growth = (BUCKET_BREAK_M[NUM_BUCKETS - 1] / MARCH_START_M)
-            .powf(1.0 / (MARCH_SAMPLES - 1) as f64);
-
-        let mut sectors = [[(0i16, 0u16); NUM_BUCKETS]; HORIZON_SECTORS];
+        let mut sectors = [[(0i16, 0u16); RECEIVER_HORIZON_BANDS]; HORIZON_SECTORS];
         let mut max_tan_q = i16::MIN;
-        for (s, buckets) in sectors.iter_mut().enumerate() {
-            let az = (s as f64 + 0.5) * (TAU / HORIZON_SECTORS as f64);
-            let (sin_az, cos_az) = az.sin_cos();
-            let mut best = [(f64::NEG_INFINITY, 0.0_f64); NUM_BUCKETS];
-            let mut r = MARCH_START_M;
-            for _ in 0..MARCH_SAMPLES {
+        for (samples, buckets) in receiver_horizon_samples().iter().zip(&mut sectors) {
+            let mut best = [(f64::NEG_INFINITY, 0.0_f64); RECEIVER_HORIZON_BANDS];
+            for sample in samples {
                 // Antimeridian wrap + pole clamp keep the DEM SAMPLING
                 // valid near ±180°/the poles. NOTE: the kernel-side
                 // aircraft projections (segment_sel) are dateline-naive
@@ -134,35 +173,30 @@ impl ReceiverHorizon {
                 // the kernel; their raw lon delta fails every bbox
                 // prefilter), so this wrap is about sane sampling, not
                 // end-to-end dateline support.
-                let sample_lat = (lat + r * sin_az / M_PER_DEG_LAT).clamp(-90.0, 90.0);
+                let sample_lat = (lat + sample.north_m / M_PER_DEG_LAT).clamp(-90.0, 90.0);
                 let sample_lon =
-                    (lon + r * cos_az / m_per_deg_lon + 540.0).rem_euclid(360.0) - 180.0;
-                let tan = (sampler(sample_lat, sample_lon) - receiver_alt_m) / r;
-                // Assign the sample to ITS band — range-max, see above.
-                // +0.5 m slop absorbs FP drift of the multiplicative
-                // march at the exact band-edge radii.
-                let b = BUCKET_BREAK_M
-                    .iter()
-                    .position(|&break_m| r <= break_m + 0.5)
-                    .unwrap_or(NUM_BUCKETS - 1);
-                if tan > best[b].0 {
-                    best[b] = (tan, r);
+                    (lon + sample.east_m / m_per_deg_lon + 540.0).rem_euclid(360.0) - 180.0;
+                let tangent = (sampler(sample_lat, sample_lon) - receiver_alt_m) / sample.range_m;
+                if tangent > best[sample.band].0 {
+                    best[sample.band] = (tangent, sample.range_m);
                 }
-                r *= growth;
             }
             for (b, &(tan, r_edge)) in best.iter().enumerate() {
                 if r_edge == 0.0 {
                     continue; // band never sampled — stays (0, 0), skipped at query
                 }
-                let tan_q = (tan * TAN_SCALE)
+                let tan_q = (tan * RECEIVER_HORIZON_TANGENT_SCALE)
                     .round()
                     .clamp(i16::MIN as f64, i16::MAX as f64) as i16;
-                buckets[b] = (tan_q, r_edge.round() as u16);
+                let range_q = (r_edge * RECEIVER_HORIZON_RANGE_SCALE)
+                    .ceil()
+                    .min(u16::MAX as f64) as u16;
+                buckets[b] = (tan_q, range_q);
                 max_tan_q = max_tan_q.max(tan_q);
             }
         }
 
-        let max_tan = max_tan_q as f64 / TAN_SCALE;
+        let max_tan = max_tan_q as f64 / RECEIVER_HORIZON_TANGENT_SCALE;
         let max_sin_sq = if max_tan > 0.0 {
             (max_tan * max_tan) / (1.0 + max_tan * max_tan)
         } else {
@@ -212,7 +246,7 @@ impl ReceiverHorizon {
             if r_q == 0 || (r_q as f64) > lateral_m {
                 continue;
             }
-            let tan_h = tan_q as f64 / TAN_SCALE;
+            let tan_h = tan_q as f64 / RECEIVER_HORIZON_TANGENT_SCALE;
             // `!(a < b)` NOT `a >= b`: a NaN `tan_beta` (vertical / zero lateral)
             // must take the `continue` branch (edge does not block), which only the
             // negated strict `<` gives — `>=` would be false for NaN and wrongly
@@ -221,15 +255,27 @@ impl ReceiverHorizon {
             if !(tan_beta < tan_h) {
                 continue; // this edge does not break the line of sight
             }
-            let r = r_q as f64;
-            let edge_z = r * tan_h;
-            let re = (r * r + edge_z * edge_z).sqrt();
-            let dx = lateral_m - r;
-            let dz = rel_alt_m - edge_z;
-            let es = (dx * dx + dz * dz).sqrt();
-            let delta = (re + es - rs).max(0.0);
-            let raw = 10.0 * (3.0 + DZ_SLOPE_PER_M * delta).log10();
-            best_dz = best_dz.max((raw - DZ_ANCHOR_DB).clamp(0.0, DZ_CAP_DB));
+            // The packed ceiling range is the conservative eligibility edge:
+            // an edge whose true range falls between the source and `r_q` is
+            // rejected above. The old nearest-metre representation could have
+            // been either end of this one-quantum interval, so use the smaller
+            // diffraction of both endpoints. It is no greater than the old
+            // value whichever endpoint nearest rounding selected, while the
+            // CPU/GPU eligibility decision shares this ceiling-packed rule.
+            let edge_dz = [(r_q - 1) as f64, r_q as f64]
+                .into_iter()
+                .map(|r_q| {
+                    let r = r_q / RECEIVER_HORIZON_RANGE_SCALE;
+                    let edge_z = r * tan_h;
+                    let re = (r * r + edge_z * edge_z).sqrt();
+                    let dx = lateral_m - r;
+                    let dz = rel_alt_m - edge_z;
+                    let es = (dx * dx + dz * dz).sqrt();
+                    let delta = (re + es - rs).max(0.0);
+                    single_edge_diffraction_db(delta)
+                })
+                .fold(f64::INFINITY, f64::min);
+            best_dz = best_dz.max(edge_dz);
         }
         best_dz
     }
@@ -319,7 +365,7 @@ mod tests {
         // (1 km, 2 km] band holds the ridge (range-max — bands beyond
         // it stay flat, unlike the rejected cumulative carry).
         let ridge_band = hz.sectors[0][2];
-        let t = ridge_band.0 as f64 / TAN_SCALE;
+        let t = ridge_band.0 as f64 / RECEIVER_HORIZON_TANGENT_SCALE;
         assert!(
             (0.095..0.110).contains(&t),
             "(1,2] km band tan = {t} (expected ≈ 200 m / ~1.9-2.0 km)"
@@ -435,6 +481,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn range_ceiling_cannot_move_a_terrain_edge_in_front_of_source() {
+        // Pick a march sample whose true range would round DOWN under the old
+        // nearest-metre pack. Put the source between that old packed range and
+        // the true edge: nearest packing would admit it, while conservative
+        // ceiling must leave the edge beyond the source and return no Dz.
+        let sample = receiver_horizon_samples()[0]
+            .iter()
+            .find(|sample| sample.range_m > 500.0 && (0.1..0.4).contains(&sample.range_m.fract()))
+            .expect("march table must contain a fractional range below half a metre");
+        let true_range = sample.range_m;
+        let old_nearest_range = true_range.floor();
+        let source_lateral = (old_nearest_range + true_range) * 0.5;
+        let (sin_azimuth, cos_azimuth) = (TAU * 0.5 / HORIZON_SECTORS as f64).sin_cos();
+        let hz = ReceiverHorizon::build(
+            local_sampler(move |east, north| {
+                if (east - sample.east_m).hypot(north - sample.north_m) < 0.5 {
+                    800.0
+                } else {
+                    300.0
+                }
+            }),
+            RX_LAT,
+            RX_LON,
+            300.0,
+        );
+
+        let range_q = hz.sectors[0][sample.band].1 as f64 / RECEIVER_HORIZON_RANGE_SCALE;
+        assert!(
+            range_q > source_lateral,
+            "ceiling must keep edge beyond source: true={true_range}, packed={range_q}, source={source_lateral}"
+        );
+        assert_eq!(
+            hz.screening_dz(
+                source_lateral * cos_azimuth,
+                source_lateral * sin_azimuth,
+                source_lateral,
+                0.0,
+            ),
+            0.0,
+            "a terrain edge beyond the source must not screen"
+        );
+    }
+
     /// Signed horizons: a hilltop receiver above a downslope
     /// stores negative tans; an aircraft below the receiver is blocked
     /// only when its (negative) β drops under the (negative) horizon.
@@ -468,7 +558,7 @@ mod tests {
             300.0,
         );
         let dz = hz.screening_dz(3_000.0, 0.0, 3_000.0, 0.0);
-        assert_eq!(dz, DZ_CAP_DB);
+        assert_eq!(dz, DIFFRACTION_CAP_DB);
     }
 
     /// Maekawa-smooth boundary: sweeping β in 0.1° steps across the

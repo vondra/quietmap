@@ -107,6 +107,53 @@ fn is_build_generated_define(name: &str) -> bool {
                 | "LINE_KERNEL_ARGUMENT_COUNT"
                 | "SURFACE_META_SLOTS"
                 | "M_LAT"
+                | "AIRCRAFT_M_LAT"
+                | "TERRAIN_SECTORS"
+                | "TERRAIN_BANDS"
+                | "TERRAIN_MARCH_SAMPLES"
+                | "BUILDING_LOCAL_SECTORS"
+                | "BUILDING_LOCAL_BANDS"
+                | "TAN_SCALE_D"
+                | "TERRAIN_RANGE_SCALE_D"
+                | "BUILDING_RANGE_SCALE_D"
+                | "BUILDING_LOCAL_MAX_M_D"
+                | "BUILDING_FIRST_RANGE_BREAK_M_D"
+                | "BUILDING_RANGE_GROWTH_D"
+                | "BUILDING_MIN_EDGE_RANGE_M_D"
+                | "BUILDING_GRID_GEOMETRY_STRIDE"
+                | "BUILDING_GRID_LAYOUT_STRIDE"
+                | "DIFFRACTION_SLOPE_D"
+                | "DIFFRACTION_GRAZING_DB_D"
+                | "DIFFRACTION_CAP_DB_D"
+                | "SCREEN_RECORDS"
+                | "SCREEN_NREG"
+                | "SCREEN_NEAR_BASE"
+                | "SCREEN_NEAR_COUNT"
+                | "SCREEN_FAR0_BASE"
+                | "SCREEN_FAR0_COUNT"
+                | "SCREEN_FAR1_BASE"
+                | "SCREEN_FAR1_COUNT"
+                | "SCREEN_FAR2_BASE"
+                | "SCREEN_FAR2_COUNT"
+                | "SCREEN_RECORD_OF_PIXEL"
+                | "SCREEN_TERRAIN_ENTRIES"
+                | "SCREEN_TERRAIN_MAX_SIN_SQ"
+                | "SCREEN_BUILDING_GLOBAL_MAX_TAN_Q"
+                | "SCREEN_BUILDING_LOCAL_ENTRIES"
+                | "SCREEN_BUILDING_LOCAL_MAX_TAN_Q"
+                | "BUILDING_ENV_INDEX_COUNT"
+                | "BUILDING_ENV_GRID_GEOMETRY"
+                | "BUILDING_ENV_GRID_LAYOUT"
+                | "BUILDING_ENV_CELL_STARTS"
+                | "BUILDING_ENV_EDGE_REFS"
+                | "BUILDING_ENV_EDGES"
+                | "BUILDING_ENV_EDGE_IS_BUILDING"
+                | "BUILDING_ENV_DEM_META"
+                | "BUILDING_ENV_DEM_ELEVATION"
+                | "BUILDING_ENV_DEM_COLS"
+                | "BUILDING_ENV_DEM_ROWS"
+                | "BUILDING_ENV_DIRECTIONS"
+                | "BUILDING_ENV_TERRAIN_SAMPLES"
                 | "MULTIFIDELITY_COMPACT_ABI_VERSION"
                 | "MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS"
                 | "MULTIFIDELITY_COMPACT_CONTROL_WORDS"
@@ -163,6 +210,12 @@ mod tests {
             "LINE_KERNEL_ARGUMENT_COUNT",
             "SURFACE_META_SLOTS",
             "M_LAT",
+            "AIRCRAFT_M_LAT",
+            "TERRAIN_SECTORS",
+            "BUILDING_LOCAL_SECTORS",
+            "BUILDING_RANGE_GROWTH_D",
+            "SCREEN_RECORDS",
+            "BUILDING_ENV_INDEX_COUNT",
             "TPX",
             "BIN_W",
             "MULTIFIDELITY_COMPACT_ABI_VERSION",

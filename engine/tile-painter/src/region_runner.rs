@@ -366,18 +366,28 @@ pub fn process_region(
     }
 
     for ((bx, by), batch_tiles) in &batches {
-        // Airborne/cruise are NPD and never ray-march the tile halo (cruise reads
-        // the full raster store, airborne is pre-sampled at extract), so build with
-        // a 0 halo — only the inner FusedTileZ13 (receiver lattice + rx_alt) is read.
+        // Cruise needs only receiver altitude. Airborne additionally samples a
+        // shared DEM halo for receiver horizons and building-edge elevations.
         let (base_x, base_y) = block_batch_origin(*bx, *by, ctx.batch_n, ctx.zoom);
         let t_batch = Instant::now();
-        let batch = TileBatch::build_receiver_altitude_only(
-            ctx.zoom,
-            base_x,
-            base_y,
-            ctx.batch_n,
-            ctx.rasters,
-        );
+        let batch = if ctx.sel.airborne {
+            TileBatch::build_receiver_altitude_with_halo(
+                ctx.zoom,
+                base_x,
+                base_y,
+                ctx.batch_n,
+                noise_compute::emission::aircraft::RECEIVER_HORIZON_MAX_M,
+                ctx.rasters,
+            )
+        } else {
+            TileBatch::build_receiver_altitude_only(
+                ctx.zoom,
+                base_x,
+                base_y,
+                ctx.batch_n,
+                ctx.rasters,
+            )
+        };
         stats.t_raster += t_batch.elapsed();
 
         for &(x, y) in batch_tiles {
@@ -402,6 +412,8 @@ pub fn process_region(
                     tile,
                     &airborne_views,
                     &ctx.class_weights,
+                    obstacle_data.set(),
+                    &interior,
                     &mut accum,
                 ));
                 let dt = t_airborne.elapsed();

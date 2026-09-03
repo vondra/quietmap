@@ -20,8 +20,14 @@
           "required_ptx_entries": [
             "airborne_classify_count",
             "airborne_classify_scatter",
-            "airborne_coarse_batched",
-            "airborne_exact_batched"
+            "airborne_coarse_screened",
+            "airborne_exact_screened",
+            "airborne_terrain_horizon_build",
+            "airborne_terrain_horizon_global_max",
+            "airborne_building_horizon_build",
+            "airborne_building_horizon_pack",
+            "airborne_building_horizon_global_max",
+            "airborne_building_horizon_mark_empty"
           ]
         }
       },

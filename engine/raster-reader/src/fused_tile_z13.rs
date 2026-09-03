@@ -1,6 +1,6 @@
 //! Per-tile raster cache aligned with the Mercator receiver lattice (z12
 //! base with 512-px tiles — the same physical lattice as the pre-2026-07
-//! z13@256) plus a WGS84 30 m halo extending the bbox by `HALO_M`.
+//! z13@256) plus an optional WGS84 30 m halo sized by the caller.
 //!
 //! The inner core (`TILE_PX × TILE_PX` Mercator-aligned cells) matches the
 //! output HM tile lattice 1:1 — receiver `(py, px)` indexes every layer
@@ -25,15 +25,6 @@ use crate::{FusedGrid, RealRasters};
 /// Side length of one output tile in receiver pixels. 512 since the 2026-07
 /// shift — lockstep with tile-painter grid.rs and the CUDA TPX.
 pub const TILE_PX: usize = 512;
-
-/// Halo extension on each side of the tile bbox, in metres. Conservative
-/// upper bound covering the airborne `AIRCRAFT_MAX_HORIZONTAL_REACH_M` =
-/// 16 km. Ground-ops reach is now per-ops_kind (≤ 5 km RUNWAY), so the
-/// halo is over-fetched ~3× for ground-only tiles — perf opportunity for
-/// a future ground-specific tile build (out of scope for the per-ops_kind
-/// reach commit). Cruise/airborne path profiles still need the full 16 km
-/// halo.
-pub const HALO_M: f64 = 16_000.0;
 
 /// Equatorial m/px at zoom 0. = 2 π R / TILE_PX with R = 6 378 137 — the
 /// divisor IS the tile side (512), so the physical pixel size at the base
@@ -112,7 +103,7 @@ pub fn tile_pixel_size_m(zoom: u8, lat: f64) -> f64 {
 ///
 /// `inner_*` arrays are row-major `TILE_PX × TILE_PX` cells aligned with
 /// the Mercator receiver lattice at `zoom`. `halo` is the WGS84
-/// `FusedGrid` covering the tile bbox extended by `HALO_M`.
+/// `FusedGrid` covering the tile bbox by the caller-selected reach.
 pub struct FusedTileZ13 {
     pub zoom: u8,
     pub tile_x: u32,
@@ -136,7 +127,7 @@ pub struct FusedTileZ13 {
     /// Pre-baked receiver-side `building_enclosure` reflection bonus.
     pub rx_refl_db: Vec<f32>,
 
-    /// Halo covering tile bbox + `HALO_M` extension on each side.
+    /// Halo covering the tile bbox plus the caller-selected extension.
     /// `Arc`-wrapped so one [`TileBatch::build`] can share the same
     /// halo across N×N adjacent tiles instead of rebuilding it
     /// N² times — the halo dominates per-tile build cost.
@@ -145,12 +136,25 @@ pub struct FusedTileZ13 {
 
 impl FusedTileZ13 {
     /// Build a standalone tile with its own freshly built halo extended
-    /// by `halo_m` (use [`HALO_M`] for aircraft; a smaller per-layer reach
-    /// for surface sources).
+    /// by `halo_m`.
     pub fn build(zoom: u8, tile_x: u32, tile_y: u32, halo_m: f64, rasters: &RealRasters) -> Self {
         let bbox = TileBbox::from_xyz(zoom, tile_x, tile_y);
         let halo = Arc::new(build_halo_for(rasters, &bbox, halo_m));
         Self::build_with_halo(zoom, tile_x, tile_y, rasters, halo)
+    }
+
+    /// One DEM-only halo for any receiver bbox plus the airborne horizon
+    /// reach. Its lattice and interpolation are identical to a full halo;
+    /// only channels that aircraft never read are left zero.
+    pub fn build_elevation_halo(
+        receiver_bbox: &TileBbox,
+        halo_m: f64,
+        rasters: &RealRasters,
+    ) -> Arc<FusedGrid> {
+        let (lat_min, lat_max, lon_min, lon_max) = halo_bbox_for(receiver_bbox, halo_m);
+        Arc::new(FusedGrid::build_elevation_only(
+            rasters, lat_min, lat_max, lon_min, lon_max,
+        ))
     }
 
     /// [`Self::build_with_halo`] leaving `rx_refl_db` zeroed for the caller to
@@ -219,9 +223,8 @@ impl FusedTileZ13 {
 
     /// Build only the inner core; reuse an externally provided halo.
     ///
-    /// The halo's bbox must cover the tile bbox extended by [`HALO_M`]
-    /// on every side — usually because the halo was built once for the
-    /// enclosing [`TileBatch`].
+    /// The halo's bbox must cover every propagation query the caller will
+    /// make, usually because it was built once for the enclosing [`TileBatch`].
     pub fn build_with_halo(
         zoom: u8,
         tile_x: u32,
@@ -362,16 +365,16 @@ impl RasterSampler for FusedTileZ13 {
 
     fn building_enclosure(&self, lat: f64, lon: f64) -> f64 {
         // The 75 m metric probe spans cells beyond the inner core for
-        // edge receivers. Halo covers tile + 16 km, so the probe always
+        // edge receivers. Every non-empty halo covers the 75 m probe, so it
         // sees real building data regardless of receiver position.
         self.halo.building_enclosure(lat, lon)
     }
 
     /// Without this override, `build_default` (trait fallback) zeroes
     /// `forest_u8` per sample — biased +3 dB vs popup in M8 parity. The halo
-    /// runs the canonical bilateral walk and covers every source→receiver ray
-    /// (radius = `HALO_M`). The heatmap profile omits the popup's P3 peak
-    /// augmentation — see `FusedGrid::build_path_profile`.
+    /// runs the canonical bilateral walk over the caller-sized reach. The
+    /// heatmap profile omits the popup's P3 peak augmentation — see
+    /// `FusedGrid::build_path_profile`.
     fn build_path_profile(
         &self,
         src_lat: f64,
@@ -407,9 +410,8 @@ impl FusedTileZ13 {
 }
 
 /// Compute the halo bbox covering `inner_bbox` extended by `halo_m` on
-/// each side. [`HALO_M`] is the aircraft default; surface layers pass
-/// their (smaller) per-layer reach so the halo — and thus the L3 working
-/// set — shrinks to what each source type actually needs.
+/// each side. Production layers pass their own reach so the halo — and thus
+/// the L3 working set — shrinks to what each source type actually needs.
 fn halo_bbox_for(inner_bbox: &TileBbox, halo_m: f64) -> (f64, f64, f64, f64) {
     let centre_lat = (inner_bbox.north_lat + inner_bbox.south_lat) * 0.5;
     let halo_lat_deg = halo_m / M_PER_DEG_LAT;
@@ -428,7 +430,7 @@ fn build_halo_for(rasters: &RealRasters, inner_bbox: &TileBbox, halo_m: f64) -> 
 }
 
 /// A `batch_n × batch_n` block of [`FusedTileZ13`] tiles that share one
-/// halo [`FusedGrid`] covering the entire block + [`HALO_M`] on each
+/// halo [`FusedGrid`] covering the entire block plus the requested reach on each
 /// side. The shared halo is built once and reused across all tiles in
 /// the block — the dominant cost saving versus N² per-tile halo builds.
 ///
@@ -587,6 +589,55 @@ impl TileBatch {
             tiles,
         }
     }
+
+    /// Build the NPD receiver lattice while sharing a DEM halo for airborne
+    /// receiver horizons and vector-building edge elevations.
+    pub fn build_receiver_altitude_with_halo(
+        zoom: u8,
+        base_x: u32,
+        base_y: u32,
+        batch_n: u32,
+        halo_m: f64,
+        rasters: &RealRasters,
+    ) -> Self {
+        assert!(batch_n >= 1, "batch_n must be ≥ 1");
+        let batch_bbox = Self::batch_bbox(zoom, base_x, base_y, batch_n);
+        let halo = FusedTileZ13::build_elevation_halo(&batch_bbox, halo_m, rasters);
+        Self::build_receiver_altitude_with_shared_halo(zoom, base_x, base_y, batch_n, rasters, halo)
+    }
+
+    /// Build NPD receiver tiles against an already-covered elevation halo.
+    /// Region painters use this to share one 8 km grid across every block.
+    pub fn build_receiver_altitude_with_shared_halo(
+        zoom: u8,
+        base_x: u32,
+        base_y: u32,
+        batch_n: u32,
+        rasters: &RealRasters,
+        halo: Arc<FusedGrid>,
+    ) -> Self {
+        assert!(batch_n >= 1, "batch_n must be ≥ 1");
+        let mut tiles = Vec::with_capacity((batch_n * batch_n) as usize);
+        for dy in 0..batch_n {
+            for dx in 0..batch_n {
+                let mut tile = FusedTileZ13::build_receiver_altitude_only(
+                    zoom,
+                    base_x + dx,
+                    base_y + dy,
+                    rasters,
+                );
+                tile.halo = halo.clone();
+                tiles.push(tile);
+            }
+        }
+        TileBatch {
+            zoom,
+            base_x,
+            base_y,
+            batch_n,
+            tiles,
+        }
+    }
 }
 
 /// Read /sys L3 size and pick a default batch dimension N.
@@ -627,6 +678,8 @@ fn parse_cache_size_mb(s: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_HALO_M: f64 = 8_000.0;
     use std::path::PathBuf;
 
     struct TempPreparedRaster {
@@ -730,7 +783,7 @@ mod tests {
             return;
         };
         let rasters = RealRasters::new(&root);
-        let tile = FusedTileZ13::build(12, 2246, 1411, HALO_M, &rasters);
+        let tile = FusedTileZ13::build(12, 2246, 1411, TEST_HALO_M, &rasters);
         assert_eq!(tile.zoom, 12);
         assert_eq!(tile.inner_elev_m.len(), TILE_PX * TILE_PX);
         assert_eq!(tile.rx_alt_m.len(), TILE_PX * TILE_PX);
@@ -798,7 +851,7 @@ mod tests {
             return;
         };
         let rasters = RealRasters::new(&root);
-        let batch = TileBatch::build(12, 2210, 1386, 2, HALO_M, &rasters);
+        let batch = TileBatch::build(12, 2210, 1386, 2, TEST_HALO_M, &rasters);
         assert_eq!(batch.tiles.len(), 4);
         // All four tiles must point at the same FusedGrid allocation.
         let halo0 = Arc::as_ptr(&batch.tiles[0].halo);

@@ -6,11 +6,12 @@ use super::*;
 #[derive(Debug, Clone, Serialize)]
 pub struct NoiseResult {
     pub total: NoisePeriods,
-    /// Energy sum across all sources without path effects (free-field, no
-    /// terrain / screening / vegetation / ground). Was previously absent;
-    /// the popup wire shape exposed `total_lden_free` as the diff and it
-    /// always read `null`. Now populated from the `periods_free` on each
-    /// `SourceResult`.
+    /// Energy sum across all sources without terrain / screening / vegetation
+    /// path effects. Airborne aircraft use their retained pre-screen Doc 29
+    /// energy; source types whose kernels do not expose a second sum retain
+    /// their existing received-equivalent value. Was previously absent; the
+    /// popup wire shape exposed `total_lden_free` as the diff and it always
+    /// read `null`. Now populated from each `SourceResult`.
     pub total_free: NoisePeriods,
     pub sources: Vec<SourceResult>,
     pub contributors: Vec<Contributor>,

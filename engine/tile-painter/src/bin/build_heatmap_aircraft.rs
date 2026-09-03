@@ -520,7 +520,11 @@ fn main() -> Result<()> {
             .collect(),
             prepared_root: args.prepared_dir.clone(),
             h3r4_dir: args.h3r4_dir.clone(),
-            halo_m: 0.0,
+            halo_m: if sel.airborne {
+                noise_compute::emission::aircraft::RECEIVER_HORIZON_MAX_M
+            } else {
+                0.0
+            },
             layers: static_layers,
             profile: DependencyProfile::Aircraft,
         },

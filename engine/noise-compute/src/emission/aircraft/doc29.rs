@@ -13,6 +13,7 @@ use crate::propagation::iso9613::fast_exp_f64;
 use crate::types::AircraftSegment;
 
 use super::horizon::ReceiverHorizon;
+use super::screening::BuildingHorizon;
 
 use super::npd::{Installation, NpdLuts, NpdProfile, AIRCRAFT_FAR_FIELD_THRESHOLD_M, FT_PER_M};
 
@@ -298,6 +299,28 @@ pub fn delta_i_constants(installation: Installation) -> (Installation, f64, f64,
 pub struct AircraftKernelResult {
     /// SEL in dB after Doc 29 master Eq. 4-8b.
     pub sel: f64,
+    /// SEL before receiver-side terrain/building screening. This is retained
+    /// for popup aggregation; the heatmap still consumes `sel` only.
+    pub free_sel: f64,
+    /// Screened SEL with only terrain removed, and with only buildings
+    /// removed. These retain Doc 29's lateral attenuation/Lambda treatment;
+    /// they are popup-only effect variants, not alternate heatmap paths.
+    pub sel_no_terrain: f64,
+    pub sel_no_screening: f64,
+    /// Terrain and building diffraction values before the mutually-exclusive
+    /// winner is applied. The popup uses them for the no-effect variants and
+    /// the trace's winning-edge summary.
+    pub terrain_dz: f64,
+    pub building_dz: f64,
+    /// Doc 29 Eq. 4-8b terms, retained for the popup segment trace.
+    pub sel_npd_db: f64,
+    pub delta_v_db: f64,
+    pub delta_i_db: f64,
+    pub lambda_db: f64,
+    pub delta_f_db: f64,
+    pub d_bar_m: f64,
+    pub installation: Installation,
+    pub cffk_fast_path: bool,
     /// Slant distance from receiver to CPA foot.
     pub d_p_m: f64,
     /// Signed altitude at CPA foot relative to `rcv_elev`.
@@ -347,11 +370,16 @@ pub struct AircraftKernelResult {
 ///
 /// **C2 terrain-horizon screening** (`horizon: Some(..)`): per-pair
 /// `ReceiverHorizon::screening_dz` insertion loss for real geometry
-/// below the receiver's terrain horizon. `None` ⇒ byte-identical to the
-/// pre-C2 kernel (hard invariant — popup/heatmap default until P2/P3).
+/// below the receiver's terrain horizon. `None` remains byte-identical to the
+/// pre-C2 kernel for regression tests and non-airborne callers; production
+/// airborne popup and heatmap paths always pass a horizon.
 /// No double-count with Filter D: D drops 100 %-fictional sub-terrain
 /// extrapolations (`t ∉ [0, 1]` only) and never attenuates; the horizon
 /// attenuates real above-terrain geometry — both can act on one pair.
+///
+/// **Vector-building screening** uses the closest physical point on the finite
+/// subsegment. Terrain and roof diffraction compete by maximum; in the full
+/// arm only their excess over the already-applied lateral attenuation is new.
 // Flat signature, not a param struct: per `clippy.toml` (threshold 13) this
 // acoustic kernel takes its segment-geometry + Doc 29 emission inputs as
 // hoisted scalars — bundling them into a struct would add indirection without
@@ -383,6 +411,122 @@ pub fn segment_energy_kernel<const WANT_CPA: bool>(
     terrain_start_cut_m: f64,
     terrain_end_cut_m: f64,
     horizon: Option<&ReceiverHorizon>,
+    buildings: Option<&BuildingHorizon>,
+) -> Option<AircraftKernelResult> {
+    segment_energy_kernel_inner::<WANT_CPA, false>(
+        ax,
+        ay,
+        sdx,
+        sdy,
+        sdz,
+        sz1,
+        inv_lsq,
+        slen,
+        rcv_elev,
+        npd_luts,
+        noise_class,
+        is_dep,
+        seg_dv,
+        d_bar_m,
+        inst,
+        di_a,
+        di_b,
+        di_c,
+        airport_ground,
+        reach_sq,
+        terrain_start_cut_m,
+        terrain_end_cut_m,
+        horizon,
+        buildings,
+    )
+}
+
+/// Popup-only twin of [`segment_energy_kernel`]. It returns a screened
+/// segment even when the received SEL falls below the 20 dB display floor so
+/// the caller can retain the pre-screen energy and report a real impact.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn segment_energy_kernel_with_screening<const WANT_CPA: bool>(
+    ax: f64,
+    ay: f64,
+    sdx: f64,
+    sdy: f64,
+    sdz: f64,
+    sz1: f64,
+    inv_lsq: f64,
+    slen: f64,
+    rcv_elev: f64,
+    npd_luts: &NpdLuts,
+    noise_class: usize,
+    is_dep: bool,
+    seg_dv: f64,
+    d_bar_m: f64,
+    inst: Installation,
+    di_a: f64,
+    di_b: f64,
+    di_c: f64,
+    airport_ground: bool,
+    reach_sq: f64,
+    terrain_start_cut_m: f64,
+    terrain_end_cut_m: f64,
+    horizon: Option<&ReceiverHorizon>,
+    buildings: Option<&BuildingHorizon>,
+) -> Option<AircraftKernelResult> {
+    segment_energy_kernel_inner::<WANT_CPA, true>(
+        ax,
+        ay,
+        sdx,
+        sdy,
+        sdz,
+        sz1,
+        inv_lsq,
+        slen,
+        rcv_elev,
+        npd_luts,
+        noise_class,
+        is_dep,
+        seg_dv,
+        d_bar_m,
+        inst,
+        di_a,
+        di_b,
+        di_c,
+        airport_ground,
+        reach_sq,
+        terrain_start_cut_m,
+        terrain_end_cut_m,
+        horizon,
+        buildings,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn segment_energy_kernel_inner<const WANT_CPA: bool, const RETAIN_SCREENED: bool>(
+    ax: f64,
+    ay: f64,
+    sdx: f64,
+    sdy: f64,
+    sdz: f64,
+    sz1: f64,
+    inv_lsq: f64,
+    slen: f64,
+    rcv_elev: f64,
+    npd_luts: &NpdLuts,
+    noise_class: usize,
+    is_dep: bool,
+    seg_dv: f64,
+    d_bar_m: f64,
+    inst: Installation,
+    di_a: f64,
+    di_b: f64,
+    di_c: f64,
+    airport_ground: bool,
+    reach_sq: f64,
+    terrain_start_cut_m: f64,
+    terrain_end_cut_m: f64,
+    horizon: Option<&ReceiverHorizon>,
+    buildings: Option<&BuildingHorizon>,
 ) -> Option<AircraftKernelResult> {
     let t = -(ax * sdx + ay * sdy) * inv_lsq;
     let cpx = ax + t * sdx;
@@ -439,7 +583,11 @@ pub fn segment_energy_kernel<const WANT_CPA: bool>(
         }
         let q_m = t * slen;
         let df = fast_delta_f(q_m, slen, d_bar_m);
-        let mut sel = sel_npd + seg_dv + df;
+        let free_sel = sel_npd + seg_dv + df;
+        let mut sel = free_sel;
+        if sel < 20.0 {
+            return None;
+        }
         // C2 terrain-horizon screening, CFFK arm. Precheck (delta 3):
         // `rel_alt <= 0` routes receiver-above-aircraft geometry to the
         // full check (squaring alone would silently pass it); otherwise
@@ -447,25 +595,52 @@ pub fn segment_energy_kernel<const WANT_CPA: bool>(
         // `lateral` sqrt is paid only after the precheck passes (delta 1
         // perf note). This branch subtracts Dz alone — CFFK never
         // computes Λ (premise: Λ negligible above 7.62 km slant), so
-        // there is no Λ to credit back; if P1 shows screened CFFK pairs
-        // with non-negligible Λ (low-β long-slant wing jets), compute
-        // `fast_lateral_attenuation` inside this blocked arm only —
-        // decide on data, not upfront (plan delta 1).
-        if let Some(hz) = horizon {
+        // there is no Λ to credit back. CFFK's premise is that the omitted
+        // installation/lateral terms are negligible at this slant.
+        let terrain_dz = if let Some(hz) = horizon {
             if rel_alt <= 0.0 || rel_alt * rel_alt < slant_sq * hz.max_sin_sq {
                 let lateral = lateral_sq.sqrt();
-                sel -= hz.screening_dz(cpx, cpy, lateral, rel_alt);
+                hz.screening_dz(cpx, cpy, lateral, rel_alt)
+            } else {
+                0.0
             }
-        }
+        } else {
+            0.0
+        };
+        let building_dz = if let Some(buildings) = buildings {
+            let physical_t = t.clamp(0.0, 1.0);
+            buildings.screening_dz(
+                ax + physical_t * sdx,
+                ay + physical_t * sdy,
+                sz1 + physical_t * sdz - rcv_elev,
+            )
+        } else {
+            0.0
+        };
+        let diffraction_db = terrain_dz.max(building_dz);
+        sel -= diffraction_db;
         // Floor check runs AFTER screening: a screened segment that
         // drops below 20 dB is inaudible and must be culled exactly like
         // an unscreened one (the pre-ΔF ceiling check above is an upper
         // bound that screening only tightens, so it stays valid).
-        if sel < 20.0 {
+        if !RETAIN_SCREENED && sel < 20.0 {
             return None;
         }
         return Some(AircraftKernelResult {
             sel,
+            free_sel,
+            sel_no_terrain: free_sel - building_dz,
+            sel_no_screening: free_sel - terrain_dz,
+            terrain_dz,
+            building_dz,
+            sel_npd_db: sel_npd,
+            delta_v_db: seg_dv,
+            delta_i_db: 0.0,
+            lambda_db: 0.0,
+            delta_f_db: df,
+            d_bar_m,
+            installation: inst,
+            cffk_fast_path: true,
             d_p_m,
             rel_alt_m: rel_alt,
             q_m,
@@ -504,21 +679,40 @@ pub fn segment_energy_kernel<const WANT_CPA: bool>(
         }
     };
 
-    let mut sel = sel_npd + seg_dv + di - lambda + df;
+    let free_sel = sel_npd + seg_dv + di - lambda + df;
+    let mut sel = free_sel;
+    if sel < 20.0 {
+        return None;
+    }
     // C2 terrain-horizon screening, full arm (same delta-3 precheck as
     // the CFFK arm above). AEDT LOS-blockage bookkeeping: barrier loss
     // and lateral attenuation are mutually exclusive, never summed —
     // SEL −= max(Dz, Λ) − Λ ≡ (Dz − Λ).max(0) with the kernel's Λ
     // already inside `sel` (AEDT 3f TM "Line-of-Sight Blockage";
     // rationale Berton, AIAA 2021).
-    if let Some(hz) = horizon {
+    let terrain_dz = if let Some(hz) = horizon {
         if rel_alt <= 0.0 || rel_alt * rel_alt < slant_sq * hz.max_sin_sq {
-            let dz = hz.screening_dz(cpx, cpy, lateral_m, rel_alt);
-            sel -= (dz - lambda).max(0.0);
+            hz.screening_dz(cpx, cpy, lateral_m, rel_alt)
+        } else {
+            0.0
         }
-    }
+    } else {
+        0.0
+    };
+    let building_dz = if let Some(buildings) = buildings {
+        let physical_t = t.clamp(0.0, 1.0);
+        buildings.screening_dz(
+            ax + physical_t * sdx,
+            ay + physical_t * sdy,
+            sz1 + physical_t * sdz - rcv_elev,
+        )
+    } else {
+        0.0
+    };
+    let diffraction_db = terrain_dz.max(building_dz);
+    sel -= (diffraction_db - lambda).max(0.0);
     // Post-screening floor, same rationale as the CFFK arm.
-    if sel < 20.0 {
+    if !RETAIN_SCREENED && sel < 20.0 {
         return None;
     }
     // CPA-only — `beta_deg` never feeds `sel` (ΔI uses u² above). Skipped on the
@@ -531,6 +725,19 @@ pub fn segment_energy_kernel<const WANT_CPA: bool>(
 
     Some(AircraftKernelResult {
         sel,
+        free_sel,
+        sel_no_terrain: free_sel - (building_dz - lambda).max(0.0),
+        sel_no_screening: free_sel - (terrain_dz - lambda).max(0.0),
+        terrain_dz,
+        building_dz,
+        sel_npd_db: sel_npd,
+        delta_v_db: seg_dv,
+        delta_i_db: di,
+        lambda_db: lambda,
+        delta_f_db: df,
+        d_bar_m,
+        installation: inst,
+        cffk_fast_path: false,
         d_p_m,
         rel_alt_m: rel_alt,
         q_m,
@@ -837,6 +1044,7 @@ mod tests {
                 reach_sq,
                 f64::MIN,
                 f64::MIN,
+                None,
                 None,
             )
         };

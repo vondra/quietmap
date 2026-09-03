@@ -9,11 +9,10 @@ pub struct SourceResult {
     pub periods: NoisePeriods,
     /// Free-field counterpart of `periods` (no terrain / screening / vegetation
     /// applied). Populated for road / rail / industrial from
-    /// `free_field_energy` in their per-source kernels; for aircraft airborne
-    /// equals `periods` (kernel has no terrain/screening); for aircraft ground
-    /// ops currently equals `periods` (TODO: real free-field path from
-    /// airport_traffic variants — Codex /gg #80). Was missing until 2026-05-24,
-    /// causing wire field `lden_free` to always read `null`.
+    /// `free_field_energy` in their per-source kernels and for airborne
+    /// aircraft from its retained pre-screen Doc 29 sum. Aircraft ground ops
+    /// still equals `periods` until its separate kernel retains both sums. Was
+    /// missing until 2026-05-24, causing wire field `lden_free` to read `null`.
     pub periods_free: NoisePeriods,
     pub segment_count: usize,
     pub displayed_count: usize,

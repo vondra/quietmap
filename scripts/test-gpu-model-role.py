@@ -587,8 +587,14 @@ else
   ptx=airborne.ptx
   entries='.visible .entry airborne_classify_count() { ret; }
 .visible .entry airborne_classify_scatter() { ret; }
-.visible .entry airborne_coarse_batched() { ret; }
-.visible .entry airborne_exact_batched() { ret; }'
+.visible .entry airborne_coarse_screened() { ret; }
+.visible .entry airborne_exact_screened() { ret; }
+.visible .entry airborne_terrain_horizon_build() { ret; }
+.visible .entry airborne_terrain_horizon_global_max() { ret; }
+.visible .entry airborne_building_horizon_build() { ret; }
+.visible .entry airborne_building_horizon_pack() { ret; }
+.visible .entry airborne_building_horizon_global_max() { ret; }
+.visible .entry airborne_building_horizon_mark_empty() { ret; }'
 fi
 printf '#!/bin/sh\nembedded PTX follows\n' > "$CARGO_TARGET_DIR/release/$binary"
 if [ "$binary" = relevant-source-surface ]; then
@@ -648,7 +654,7 @@ done
 [ -n "$out" ]
 : > "$out"
 echo 'ptxas info : 0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads' >&2
-echo 'ptxas info : Function properties for line line_binned_fused line_multifidelity_cheap_w1 line_multifidelity_compact_packed_w1 line_multifidelity_compact_w1 airborne_classify_count airborne_classify_scatter airborne_coarse_batched airborne_exact_batched' >&2
+echo 'ptxas info : Function properties for line line_binned_fused line_multifidelity_cheap_w1 line_multifidelity_compact_packed_w1 line_multifidelity_compact_w1 airborne_classify_count airborne_classify_scatter airborne_coarse_screened airborne_exact_screened airborne_terrain_horizon_build airborne_terrain_horizon_global_max airborne_building_horizon_build airborne_building_horizon_pack airborne_building_horizon_global_max airborne_building_horizon_mark_empty' >&2
 """,
         )
         self.artifacts = self.root / "artifacts"

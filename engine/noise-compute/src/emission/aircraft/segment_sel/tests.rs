@@ -2,6 +2,12 @@ use super::super::segment_filters::{
     GROUND_CONTEXT_AIRPORT_LINE, GROUND_CONTEXT_NONE, GROUND_OPS_KIND_NONE,
 };
 use super::*;
+use std::sync::Arc;
+
+use crate::emission::aircraft::BuildingHorizon;
+use crate::propagation::obstacle_index::{
+    CrossingScratch, ObstacleIndex, ObstacleKind, ObstacleSet,
+};
 use crate::sources::AIRCRAFT_ADSB_SOURCE_ID;
 use crate::types::default_receiver_altitude_m;
 
@@ -358,6 +364,30 @@ fn c2_east_ridge_horizon(
     )
 }
 
+fn c2_building_at(east_m: f64, north_m: f64, height_m: f32) -> ObstacleSet {
+    let point = |east: f64, north: f64| {
+        (
+            C2_RX_LAT + north / M_PER_DEG_LAT,
+            C2_RX_LON + east / c2_m_per_deg_lon(),
+        )
+    };
+    let mut builder = ObstacleIndex::builder(C2_RX_LAT, C2_RX_LON);
+    builder.add_ring(
+        &[
+            point(east_m - 10.0, north_m - 10.0),
+            point(east_m + 10.0, north_m - 10.0),
+            point(east_m + 10.0, north_m + 10.0),
+            point(east_m - 10.0, north_m + 10.0),
+        ],
+        height_m,
+        ObstacleKind::Building,
+        0,
+    );
+    ObstacleSet {
+        indexes: vec![Arc::new(builder.build())],
+    }
+}
+
 /// Hard invariant: `horizon = None` and a flat-terrain horizon
 /// (max_sin_sq = 0 ⇒ precheck skips every positive-rel_alt pair)
 /// produce BIT-identical SEL across the hoisted parity grid.
@@ -409,6 +439,175 @@ fn flat_horizon_is_bit_identical_to_none() {
     assert!(
         compared >= 10,
         "expected ≥ 10 paired samples, got {compared}"
+    );
+}
+
+#[test]
+fn empty_building_set_is_bit_identical_to_terrain_only() {
+    let seg = c2_level_segment(2_000.0, 1_500.0);
+    let npd_luts = NpdLuts::shared();
+    let rx_alt = 300.0;
+    let horizon = ReceiverHorizon::build(|_, _| rx_alt - 4.0, C2_RX_LAT, C2_RX_LON, rx_alt);
+    let terrain_only = segment_sel_with_cuts(
+        &seg,
+        C2_RX_LAT,
+        C2_RX_LON,
+        rx_alt,
+        270.0,
+        270.0,
+        npd_luts,
+        Some(&horizon),
+    )
+    .expect("terrain-only segment");
+    let obstacles = crate::propagation::obstacle_index::ObstacleSet::empty();
+    let mut crossings = CrossingScratch::default();
+    let buildings = crate::emission::aircraft::BuildingHorizon::build(
+        &obstacles,
+        &FlatGround,
+        C2_RX_LAT,
+        C2_RX_LON,
+        rx_alt,
+        &mut crossings,
+    );
+    let screened = segment_sel_with_screening(
+        &seg, C2_RX_LAT, C2_RX_LON, rx_alt, 270.0, 270.0, npd_luts, &horizon, &buildings,
+    )
+    .expect("empty-building segment");
+    assert_eq!(terrain_only.0.to_bits(), screened.0.to_bits());
+    assert_eq!(terrain_only.1.d_p_m.to_bits(), screened.1.d_p_m.to_bits());
+    assert_eq!(terrain_only.1.t.to_bits(), screened.1.t.to_bits());
+
+    let off_ray_obstacles = c2_building_at(0.0, 100.0, 100.0);
+    let off_ray_buildings = BuildingHorizon::build(
+        &off_ray_obstacles,
+        &FlatGround,
+        C2_RX_LAT,
+        C2_RX_LON,
+        rx_alt,
+        &mut crossings,
+    );
+    assert!(!off_ray_buildings.is_empty());
+    let clear = segment_sel_with_screening(
+        &seg,
+        C2_RX_LAT,
+        C2_RX_LON,
+        rx_alt,
+        270.0,
+        270.0,
+        npd_luts,
+        &horizon,
+        &off_ray_buildings,
+    )
+    .expect("off-ray building segment");
+    assert_eq!(terrain_only.0.to_bits(), clear.0.to_bits());
+    assert_eq!(terrain_only.1.d_p_m.to_bits(), clear.1.d_p_m.to_bits());
+    assert_eq!(terrain_only.1.t.to_bits(), clear.1.t.to_bits());
+}
+
+#[test]
+fn building_ray_stops_at_the_finite_subsegment_endpoint() {
+    let east_lon = C2_RX_LON + 200.0 / c2_m_per_deg_lon();
+    let seg = AircraftSegment {
+        flight_id: 1,
+        profile_idx: 0,
+        is_departure: true,
+        on_ground: false,
+        period: 0,
+        date_id: 0,
+        start_lat: C2_RX_LAT + 1_000.0 / M_PER_DEG_LAT,
+        start_lon: east_lon,
+        start_alt_m: 330.0,
+        end_lat: C2_RX_LAT + 2_000.0 / M_PER_DEG_LAT,
+        end_lon: east_lon,
+        end_alt_m: 330.0,
+        speed_kt: 160.0,
+        segment_length_m: 1_000.0,
+        ground_context: GROUND_CONTEXT_NONE,
+        ground_ops_kind: GROUND_OPS_KIND_NONE,
+        count_weight: 1.0,
+        surface_model: false,
+        source_id: AIRCRAFT_ADSB_SOURCE_ID,
+    };
+    let rx_alt = 300.0;
+    let terrain = ReceiverHorizon::build(|_, _| 250.0, C2_RX_LAT, C2_RX_LON, rx_alt);
+    let obstacles = c2_building_at(100.0, 0.0, 100.0);
+    let mut crossings = CrossingScratch::default();
+    let buildings = BuildingHorizon::build(
+        &obstacles,
+        &FlatGround,
+        C2_RX_LAT,
+        C2_RX_LON,
+        rx_alt,
+        &mut crossings,
+    );
+    let npd_luts = NpdLuts::shared();
+    let terrain_only = segment_sel_with_cuts(
+        &seg,
+        C2_RX_LAT,
+        C2_RX_LON,
+        rx_alt,
+        220.0,
+        220.0,
+        npd_luts,
+        Some(&terrain),
+    )
+    .expect("extrapolated Doc 29 segment");
+    assert!(
+        terrain_only.1.t < 0.0,
+        "fixture must put CPA before the segment"
+    );
+    let screened = segment_sel_with_screening(
+        &seg, C2_RX_LAT, C2_RX_LON, rx_alt, 220.0, 220.0, npd_luts, &terrain, &buildings,
+    )
+    .expect("finite-endpoint segment");
+    assert_eq!(terrain_only.0.to_bits(), screened.0.to_bits());
+}
+
+#[test]
+fn terrain_and_building_diffraction_take_the_maximum() {
+    let seg = c2_level_segment(200.0, 20.0);
+    let receiver_alt_m = 4.0;
+    let terrain = c2_east_ridge_horizon(40.0, 80.0, 100.0, 0.0, receiver_alt_m);
+    let obstacles = c2_building_at(100.0, 0.0, 100.0);
+    let mut crossings = CrossingScratch::default();
+    let buildings = BuildingHorizon::build(
+        &obstacles,
+        &FlatGround,
+        C2_RX_LAT,
+        C2_RX_LON,
+        receiver_alt_m,
+        &mut crossings,
+    );
+    assert_eq!(terrain.screening_dz(200.0, 0.0, 200.0, 16.0), 18.0);
+    assert_eq!(buildings.screening_dz(200.0, 0.0, 16.0), 18.0);
+    let npd_luts = NpdLuts::shared();
+    let terrain_only = segment_sel_with_cuts(
+        &seg,
+        C2_RX_LAT,
+        C2_RX_LON,
+        receiver_alt_m,
+        -30.0,
+        -30.0,
+        npd_luts,
+        Some(&terrain),
+    )
+    .expect("terrain-screened segment");
+    let both = segment_sel_with_screening(
+        &seg,
+        C2_RX_LAT,
+        C2_RX_LON,
+        receiver_alt_m,
+        -30.0,
+        -30.0,
+        npd_luts,
+        &terrain,
+        &buildings,
+    )
+    .expect("terrain-and-building-screened segment");
+    assert_eq!(
+        terrain_only.0.to_bits(),
+        both.0.to_bits(),
+        "two independently capped edges must not add"
     );
 }
 

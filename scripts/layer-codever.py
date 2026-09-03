@@ -67,9 +67,18 @@ DEFAULT_EXCL = {
     # directory so future files cannot repeat the omission. Existing stamps survive this one-time
     # partition hash rotation through their exact per-layer OUTPUT_VER proof in world-stamps.py.
     "aircraft-airborne": "tile-painter/src/source_loader_airborne.rs tile-painter/src/airborne.rs"
+                         " tile-painter/src/airborne_screening.rs"
                          " noise-compute/src/compute/aircraft_v6/airborne"
+                         " noise-compute/src/emission/aircraft/horizon.rs"
+                         " noise-compute/src/emission/aircraft/screening.rs"
+                         " noise-compute/src/emission/aircraft/screening"
                          " noise-gpu/src/airborne.rs noise-gpu/src/gpu_airborne.rs"
-                         " noise-gpu/src/gpu_airborne noise-gpu/kernels/airborne.cu",
+                         " noise-gpu/src/airborne_building_horizon.rs"
+                         " noise-gpu/src/airborne_terrain_horizon.rs"
+                         " noise-gpu/src/gpu_airborne noise-gpu/kernels/airborne.cu"
+                         " noise-gpu/kernels/airborne_screening.cuh"
+                         " noise-gpu/kernels/airborne_building_horizon.cuh"
+                         " noise-gpu/kernels/airborne_terrain_horizon.cuh",
     "aircraft-cruise": "tile-painter/src/cruise.rs noise-compute/src/compute/aircraft_v6/cruise.rs",
 }
 

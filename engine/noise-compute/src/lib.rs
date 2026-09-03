@@ -1084,11 +1084,18 @@ mod tests {
                 },
             });
         }
+        let horizon = emission::aircraft::ReceiverHorizon::build(
+            |lat, lon| MockRasters.elevation(lat, lon),
+            receiver.lat,
+            receiver.lon,
+            receiver.altitude_m(),
+        );
         let (periods, _contribs, _band) = compute_aircraft_v6(
             &receiver,
             &row_views,
             &[],
             &MockRasters,
+            Some(&horizon),
             None,
             365,
             &crate::emission::aircraft::ClassWeights::uniform(),

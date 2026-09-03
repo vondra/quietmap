@@ -97,6 +97,9 @@ fn make_flight(
     acc.peak_lmax = peak_lmax;
     acc.peak_sel = peak_lmax - 5.0;
     acc.period_energy[0] = period_energy_total;
+    acc.free_period_energy = acc.period_energy;
+    acc.no_terrain_period_energy = acc.period_energy;
+    acc.no_screening_period_energy = acc.period_energy;
     acc.peak_altitude_m = 200.0;
     acc.min_dist_m = 500.0;
     acc.peak_seg_start = [14.26, 50.10];
@@ -347,6 +350,12 @@ impl crate::types::RasterSampler for FlatGround {
 #[test]
 fn mixed_window_ga_weighted_airline_unchanged() {
     let receiver = Receiver::new(50.100, 14.250, 0.0);
+    let horizon = aircraft::ReceiverHorizon::build(
+        |_, _| 0.0,
+        receiver.lat,
+        receiver.lon,
+        receiver.altitude_m(),
+    );
     // Build the hybrid LUT: GA classes → 365, airline classes → 12.
     let vec: String = (0..aircraft::NUM_CLASSES)
         .map(|c| {
@@ -368,8 +377,8 @@ fn mixed_window_ga_weighted_airline_unchanged() {
             typecode,
             &cols,
         )];
-        let uni = scatter(&receiver, &row, 12.0, &uniform, None, 0, None);
-        let hyb = scatter(&receiver, &row, 12.0, &hybrid, None, 0, None);
+        let uni = scatter(&receiver, &row, 12.0, &uniform, &horizon, None, 0, None);
+        let hyb = scatter(&receiver, &row, 12.0, &hybrid, &horizon, None, 0, None);
         let e_uni: f64 = uni
             .values()
             .map(|a| a.period_energy.iter().sum::<f64>())
@@ -398,12 +407,12 @@ fn mixed_window_ga_weighted_airline_unchanged() {
     }
 }
 
-/// `compute_aircraft_v6_separable` carries the GA weight end-to-end:
-/// the airborne periods of a lone GA flight drop ~10·log10(365/12) ≈
-/// 14.8 dB vs the uniform window (the Kytín correction).
+/// The popup aggregation carries the GA weight end-to-end: the aircraft
+/// periods of a lone GA flight drop ~10·log10(365/12) ≈ 14.8 dB vs the
+/// uniform window (the Kytín correction).
 #[test]
 fn ga_hybrid_drops_airborne_lden_by_14_8_db() {
-    use crate::compute::aircraft_v6::compute_aircraft_v6_separable;
+    use crate::compute::aircraft_v6::compute_aircraft_v6;
     let receiver = Receiver::new(50.100, 14.250, 0.0);
     let cols = one_subseg("R44");
     let row = [one_subseg_row(
@@ -423,14 +432,100 @@ fn ga_hybrid_drops_airborne_lden_by_14_8_db() {
         .join(",");
     let hybrid = aircraft::ClassWeights::parse(Some(&vec), 12).unwrap();
     let uniform = aircraft::ClassWeights::uniform();
-    let uni = compute_aircraft_v6_separable(&receiver, &row, &[], &FlatGround, 12, &uniform);
-    let hyb = compute_aircraft_v6_separable(&receiver, &row, &[], &FlatGround, 12, &hybrid);
-    let drop = uni.airborne.lden_db - hyb.airborne.lden_db;
+    let horizon = aircraft::ReceiverHorizon::build(
+        |_, _| 0.0,
+        receiver.lat,
+        receiver.lon,
+        receiver.altitude_m(),
+    );
+    let uni = compute_aircraft_v6(
+        &receiver,
+        &row,
+        &[],
+        &FlatGround,
+        Some(&horizon),
+        None,
+        12,
+        &uniform,
+        0,
+        None,
+        None,
+    )
+    .0;
+    let hyb = compute_aircraft_v6(
+        &receiver,
+        &row,
+        &[],
+        &FlatGround,
+        Some(&horizon),
+        None,
+        12,
+        &hybrid,
+        0,
+        None,
+        None,
+    )
+    .0;
+    let drop = uni.lden_db - hyb.lden_db;
     let expected = 10.0 * (365.0f64 / 12.0).log10(); // ≈ 14.83 dB
     assert!(
         (drop - expected).abs() < 0.05,
         "GA hybrid airborne Lden drop {drop:.2} dB != {expected:.2} dB"
     );
+}
+
+#[test]
+fn blocked_popup_retains_free_field_above_received() {
+    let receiver = Receiver::new(50.100, 14.250, 0.0);
+    let horizon = aircraft::ReceiverHorizon::build(
+        |_, _| 100.0,
+        receiver.lat,
+        receiver.lon,
+        receiver.altitude_m(),
+    );
+    let cols = one_subseg("R44");
+    let row = [one_subseg_row(
+        flight_id::pack_real(0xBEEF03, 1_700_000_000).unwrap(),
+        "R44",
+        &cols,
+    )];
+    let flights = scatter(
+        &receiver,
+        &row,
+        1.0,
+        &aircraft::ClassWeights::uniform(),
+        &horizon,
+        None,
+        0,
+        None,
+    );
+    let acc = flights.values().next().expect("blocked flight retained");
+    assert!(
+        acc.free_period_energy[0] > acc.period_energy[0],
+        "screened aircraft must retain pre-screen energy: free={} received={}",
+        acc.free_period_energy[0],
+        acc.period_energy[0]
+    );
+
+    let cruise_flights = HashMap::new();
+    let candidates = HashMap::new();
+    let cruise_bands = std::array::from_fn(|_| BandStats::new());
+    let (received, free, impacts, _) = build_detail(
+        &flights,
+        &cruise_flights,
+        0,
+        &candidates,
+        &cruise_bands,
+        1.0,
+        1.0,
+    );
+    assert!(
+        free.lden_db > received.lden_db,
+        "blocked popup must show free-field above received: free={} received={}",
+        free.lden_db,
+        received.lden_db
+    );
+    assert!(impacts.terrain < 0.0, "terrain impact must be negative");
 }
 
 /// Every f64 total the popup's aircraft detail exposes must be a function
@@ -486,6 +581,9 @@ fn aircraft_detail_ignores_map_iteration_order() {
                 spread(i, 3.0) * 1e-5,
                 spread(i, 4.0) * 1e-5,
             ];
+            acc.free_period_energy = acc.period_energy;
+            acc.no_terrain_period_energy = acc.period_energy;
+            acc.no_screening_period_energy = acc.period_energy;
             // 12 airborne flights sit on ONE Lmax value and everything else
             // is strictly below it. The cruise side (below) puts a much
             // larger wall on the SAME value, so the 20-row cut is filled by
@@ -513,6 +611,9 @@ fn aircraft_detail_ignores_map_iteration_order() {
                 spread(i, 10.0) * mag,
                 spread(i, 11.0) * mag,
             ];
+            cacc.free_period_energy = cacc.period_energy;
+            cacc.no_terrain_period_energy = cacc.period_energy;
+            cacc.no_screening_period_energy = cacc.period_energy;
             cacc.peak_lmax = 30.0 + spread(i, 12.0) * 30.0;
             cruise_flights.insert(synth, cacc);
 
@@ -554,7 +655,7 @@ fn aircraft_detail_ignores_map_iteration_order() {
     let run = || {
         let (flights, cruise_flights, stats, cands) = build();
         let bands = band_stats(&stats);
-        let (periods, detail) = build_detail(
+        let (periods, periods_free, _impacts, detail) = build_detail(
             &flights,
             &cruise_flights,
             stats.len(),
@@ -565,7 +666,7 @@ fn aircraft_detail_ignores_map_iteration_order() {
         );
         // JSON round-trips f64 as shortest-roundtrip decimal, which is
         // injective on f64 — equal strings mean equal bits.
-        serde_json::to_string(&(&periods, &detail)).unwrap()
+        serde_json::to_string(&(&periods, &periods_free, &detail)).unwrap()
     };
 
     let first = run();

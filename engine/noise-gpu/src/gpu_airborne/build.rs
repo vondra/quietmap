@@ -6,7 +6,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use h3o::CellIndex;
-use noise_gpu::airborne::{for_each_region_chunk, is_cell_unbuildable, AirborneGpu};
+use noise_compute::propagation::obstacle_index::ObstacleSet;
+use noise_gpu::airborne::{
+    for_each_region_chunk, is_cell_unbuildable, AirborneGpu, AirborneScreeningEnvironment,
+};
 use noise_gpu::pack_airborne_segs;
 use raster_reader::RealRasters;
 use tile_painter::accumulator::TileAccumulator;
@@ -107,21 +110,21 @@ fn aircraft_tile_cells(
 /// so it painted the airborne layer 20–35 dB louder than road/rail inside every footprint. Measured
 /// against the W2 exact-CPU etalon on 2026-08-28: 1 921 cells at exactly +20.0 dB (unclassified
 /// footprints ≤ 6 m, `EnvelopeClass::Industrial`) and 72 at exactly +25.0 dB (> 6 m, `Default`) on
-/// tile 13/4406/2782 alone. `None` = a raster-fallback region with no footprints to classify.
+/// tile 13/4406/2782 alone.
 fn write_tile_accumulator(
     args: &Args,
     n_days: u16,
     tx: u32,
     ty: u32,
     accum: &TileAccumulator,
-    interior: Option<&InteriorEstimate>,
+    interior: &InteriorEstimate,
 ) -> Result<usize> {
     let out = args
         .output
         .join(args.zoom.to_string())
         .join(tx.to_string())
         .join(format!("{ty}.bin"));
-    let cells = aircraft_tile_cells(accum, n_days, interior);
+    let cells = aircraft_tile_cells(accum, n_days, Some(interior));
     let written = write_tile(&out, &cells, SOURCE_ID_AIRCRAFT, !args.write_empty)?;
     if written > 0 {
         Ok(written)
@@ -142,14 +145,32 @@ fn new_running(blocks: &[PrepBlock]) -> Vec<Vec<TileAccumulator>> {
         .collect()
 }
 
+fn upload_cell_screening_environment(
+    gpu: &AirborneGpu,
+    blocks: &[PrepBlock],
+    obstacles: &ObstacleSet,
+) -> Result<AirborneScreeningEnvironment> {
+    let shared_halo = &blocks[0].batch.tiles[0].halo;
+    assert!(
+        blocks.iter().all(|block| block
+            .batch
+            .tiles
+            .iter()
+            .all(|tile| std::sync::Arc::ptr_eq(&tile.halo, shared_halo))),
+        "prepared airborne cell must share one elevation halo"
+    );
+    gpu.upload_screening_environment(obstacles, shared_halo)
+}
+
 /// Upload ONE candidate chunk's SoA, scatter every block against it, and ADD each block's per-tile
 /// energy into `running` (`merge_from` — additive in the linear domain). `resident` drops at function
 /// end, freeing the chunk's VRAM before the caller's next chunk. THE shared scatter core: the
 /// one-pass build folds a single whole-region chunk; the M2 chunked build folds many. An empty SoA is
-/// fine — `scatter_region` fast-paths it to zeros (which still stale-unlink at write).
+/// fine — the absent environment takes the zero-output path (which still stale-unlinks at write).
 fn scatter_chunk_into_running(
     gpu: &AirborneGpu,
     blocks: &[PrepBlock],
+    environment: Option<&AirborneScreeningEnvironment>,
     running: &mut [Vec<TileAccumulator>],
     sll: Vec<f64>,
     sf: Vec<f32>,
@@ -160,8 +181,22 @@ fn scatter_chunk_into_running(
     let resident = gpu.upload_region(sll, sf, si, nreg)?;
     let upload = upload_started.elapsed();
     let scatter_started = Instant::now();
+    assert_eq!(environment.is_none(), resident.is_empty());
     for (block, run) in blocks.iter().zip(running.iter_mut()) {
-        let accums = gpu.scatter_region(&resident, &block.tile_refs())?;
+        let accums = if let Some(environment) = environment {
+            gpu.scatter_region_with_environment(
+                &resident,
+                &block.tile_refs(),
+                environment,
+                &block.interiors,
+            )?
+        } else {
+            block
+                .btiles
+                .iter()
+                .map(|_| TileAccumulator::new())
+                .collect()
+        };
         for (acc_run, acc_chunk) in run.iter_mut().zip(accums.iter()) {
             acc_run.merge_from(acc_chunk);
         }
@@ -180,7 +215,7 @@ fn write_running(
     let (mut written, mut skipped, mut output_bytes) = (0usize, 0usize, 0usize);
     for (block, run) in blocks.iter().zip(running.iter()) {
         for (slot, &(tx, ty)) in block.btiles.iter().enumerate() {
-            let interior = block.interiors[slot].as_ref();
+            let interior = &block.interiors[slot];
             let bytes = write_tile_accumulator(args, n_days, tx, ty, &run[slot], interior)?;
             if bytes > 0 {
                 written += 1;
@@ -213,8 +248,28 @@ pub(crate) fn gpu_build_cell_one_pass(
     let accumulator_started = Instant::now();
     let mut running = new_running(&p.blocks);
     let accumulator_init = accumulator_started.elapsed();
-    let (upload, scatter) =
-        scatter_chunk_into_running(gpu, &p.blocks, &mut running, p.sll, p.sf, p.si, p.nreg)?;
+    let obstacles = p
+        .obstacles
+        .as_deref()
+        .expect("non-empty prepared cell has vector obstacles");
+    let (environment, environment_upload) = if p.nreg > 0 {
+        let started = Instant::now();
+        let environment = upload_cell_screening_environment(gpu, &p.blocks, obstacles)?;
+        (Some(environment), started.elapsed())
+    } else {
+        (None, Duration::ZERO)
+    };
+    let (candidate_upload, scatter) = scatter_chunk_into_running(
+        gpu,
+        &p.blocks,
+        environment.as_ref(),
+        &mut running,
+        p.sll,
+        p.sf,
+        p.si,
+        p.nreg,
+    )?;
+    let upload = environment_upload + candidate_upload;
     let seal_started = Instant::now();
     let (written, skipped, output_bytes) = write_running(args, n_days, &p.blocks, &running)?;
     Ok(BuiltCell {
@@ -274,13 +329,16 @@ pub(crate) fn gpu_build_cell_chunked(
     // DEM tile-blocks + interior estimates (same topology and stamp as the one-pass prep, built
     // ONCE, reused across chunks) + a zeroed running accumulator per owned tile.
     let raster_started = Instant::now();
-    let blocks = build_dem_blocks(rasters, &args.h3r4_dir, z, bn, r4, tiles)?;
+    let (blocks, obstacles) = build_dem_blocks(rasters, &args.h3r4_dir, z, bn, r4, tiles)?;
     let raster = raster_started.elapsed();
     let accumulator_started = Instant::now();
     let mut running = new_running(&blocks);
     let accumulator_init = accumulator_started.elapsed();
     let mut pack = Duration::ZERO;
-    let mut upload = Duration::ZERO;
+    let environment_started = Instant::now();
+    let environment = upload_cell_screening_environment(gpu, &blocks, &obstacles)?;
+    let environment_upload = environment_started.elapsed();
+    let mut candidate_upload = Duration::ZERO;
     let mut scatter = Duration::ZERO;
     // Fold each VRAM-sized candidate chunk into the running accumulators — the SAME scatter core the
     // one-pass build runs once, here run once per chunk (additive, so the sum = the one-pass result).
@@ -296,9 +354,17 @@ pub(crate) fn gpu_build_cell_chunked(
             let (sll, sf, si) = pack_airborne_segs(&chunk);
             pack += pack_started.elapsed();
             drop(chunk);
-            let (chunk_upload, chunk_scatter) =
-                scatter_chunk_into_running(gpu, &blocks, &mut running, sll, sf, si, nreg)?;
-            upload += chunk_upload;
+            let (chunk_upload, chunk_scatter) = scatter_chunk_into_running(
+                gpu,
+                &blocks,
+                Some(&environment),
+                &mut running,
+                sll,
+                sf,
+                si,
+                nreg,
+            )?;
+            candidate_upload += chunk_upload;
             scatter += chunk_scatter;
             Ok(())
         },
@@ -308,7 +374,8 @@ pub(crate) fn gpu_build_cell_chunked(
     // the honest remainder is candidate preparation plus small loop/callback bookkeeping.
     let candidate_prepare_composite = candidate_loop_started
         .elapsed()
-        .saturating_sub(pack + upload + scatter);
+        .saturating_sub(pack + candidate_upload + scatter);
+    let upload = environment_upload + candidate_upload;
     let seal_started = Instant::now();
     let (written, skipped, output_bytes) = write_running(args, n_days, &blocks, &running)?;
     Ok(BuiltCell {

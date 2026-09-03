@@ -49,15 +49,11 @@ impl Default for TileAccumulator {
 }
 
 /// One coarse receiver lattice (`n × n` nodes spanning the tile) for
-/// far-field airborne segments. The airborne kernel applies no per-pixel
-/// terrain screening or diffraction (its only terrain coupling is the
-/// receiver elevation entering the slant), so the field is a smooth
-/// function of slant and look angle. A segment whose nearest tile pixel is
-/// already far varies only slowly across the 3 km tile and is evaluated on
-/// this lattice instead of all 512², then bilinearly expanded into the
-/// fine [`TileAccumulator`] in the linear-energy domain — summation
-/// commutes with the linear interpolation, so expanding the per-thread sum
-/// once equals expanding every segment.
+/// far-field airborne segments. Receiver terrain and building screening are
+/// sampled at these same nodes; the resulting screened energy field is then
+/// bilinearly expanded instead of evaluating all 512² receivers. Summation
+/// commutes with linear interpolation, so expanding the per-thread sum once
+/// equals expanding every segment.
 ///
 /// `n` is kept runtime (not a const generic) so the [`CoarseLevels`] ladder
 /// is a plain array and the scatter hot path picks a level from a runtime
@@ -185,7 +181,7 @@ impl CoarseLattice {
 /// level here — it bypasses the lattices entirely. Single source of truth
 /// for the lattice sizes; the matching slant band edges live next to the
 /// airborne kernel's `NEAR_SLANT_M`.
-/// 512@z12 shift: node counts doubled ([33, 9, 3] at 256 px) so the pixel
+/// 512@z12 shift: node counts doubled from [33, 9, 3] so the pixel
 /// strides — and with them the PHYSICAL node spacing and the bilinear error
 /// budget per band — stay exactly as validated (docs/validation).
 pub const COARSE_LEVELS_N: [usize; 3] = [65, 17, 5];
@@ -246,7 +242,7 @@ impl Default for CoarseLevels {
 mod tests {
     use super::*;
 
-    /// Sizes the ladder uses (33/9/3) plus the degenerate-but-valid n=2
+    /// The historical 256-pixel ladder plus the degenerate-but-valid n=2
     /// (whole-tile corners) — exercised so the type stays future-safe.
     const NS: [usize; 4] = [33, 9, 3, 2];
 

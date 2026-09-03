@@ -1,20 +1,13 @@
-//! Region-resident GPU airborne scatter. Two entry points share the `airborne_sel` physics:
-//!   - [`AirborneGpu::scatter_tile`] — per-tile, CPU classify → near (exact per-pixel) + far
-//!     (coarse lattice). The `e2-airborne` validator checks THIS against the CPU
-//!     `airborne::scatter_tile` (byte-exact: LKPR 0.0090 dB, LOWI 0.0065 dB, 0 zero-sided).
-//!   - [`AirborneGpu::scatter_region`] — the production builder's path (M3+M4): GPU classify
-//!     (counting-sort) + batched near/coarse over a whole tile-block. Same gate + physics, so
-//!     parity holds at the dB level (compare_hm3 over Ruzyně: 0 cells > 0.5 dB) — but NOT
-//!     byte-identical run-to-run: the device atomic-scatter cursors order the near/far lists
-//!     nondeterministically, injecting ≪0.5 dB float-reduction jitter.
+//! Region-resident GPU airborne scatter. The production path classifies candidates on the GPU,
+//! then runs the shared Doc 29, terrain-horizon, and vector-building physics for each tile's
+//! exact pixels and coarse nodes. Production exposes only the screened scatter path.
 //!
 //! Lifecycle, mirroring `airborne::scatter_tile`'s adaptive near/far split but on the GPU:
 //!   1. [`AirborneGpu::new`] — load the PTX + upload the NPD LUTs ONCE (device-global).
 //!   2. [`AirborneGpu::upload_region`] (production: SoA packed on the prep thread) or [`load_region`]
 //!      (the `e2-airborne` validator: packs on-device) — candidates → device SoA, ONCE per R4.
-//!   3. [`AirborneGpu::scatter_region`] (production, whole tile-block) / [`AirborneGpu::scatter_tile`]
-//!      (validator, per-tile byte-exact reference) — classify → near +
-//!      far kernels → host bilinear expand → one `TileAccumulator` per tile.
+//!   3. [`AirborneGpu::scatter_region`] — classify, upload terrain, build roof horizons on-device,
+//!      run near/far kernels, then host-bilinear-expand to one `TileAccumulator` per tile.
 
 use std::sync::Arc;
 
@@ -28,16 +21,38 @@ use noise_compute::emission::aircraft::{
     self, is_ground_stale_with_terrain, prepare_segment, NpdLuts, SegmentPrepared, SegmentTerrain,
     AIRCRAFT_MAX_HORIZONTAL_REACH_M, GROUND_CONTEXT_NONE, GROUND_OPS_KIND_NONE, M_PER_DEG_LAT,
 };
+use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_compute::types::AircraftSegment;
+use raster_reader::fused_grid::FusedGrid;
 use raster_reader::fused_tile_z13::{tile_pixel_size_m, FusedTileZ13, TILE_PX};
 use rayon::prelude::*;
 use tile_painter::accumulator::{CoarseLattice, TileAccumulator, COARSE_LEVELS_N};
+use tile_painter::airborne_screening::PackedReceiverScreening;
+use tile_painter::source_loader_obstacle::InteriorEstimate;
 
-use crate::{pack_airborne_receivers, pack_airborne_receivers_batch, pack_airborne_segs};
+pub use crate::airborne_building_horizon::AirborneScreeningEnvironment;
+use crate::airborne_building_horizon::{AirborneBuildingHorizonGpu, BuildingHorizonDev};
+use crate::airborne_terrain_horizon::{AirborneTerrainHorizonGpu, TerrainHorizonDev};
+use crate::{pack_airborne_receivers, pack_airborne_segs};
 
 const AIRBORNE_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/airborne.ptx"));
-const NEAR_SLANT_SQ: f64 = 500.0 * 500.0; // NEAR_SLANT_M² (airborne.rs:48)
-const COARSE_BAND_M: [f64; 2] = [2_000.0, 8_000.0]; // airborne.rs:96
+const SCREEN_RECORDS: usize = 0;
+const SCREEN_NREG: usize = 1;
+const SCREEN_NEAR_BASE: usize = 2;
+const SCREEN_NEAR_COUNT: usize = 3;
+const SCREEN_FAR0_BASE: usize = 4;
+const SCREEN_FAR0_COUNT: usize = 5;
+const SCREEN_FAR1_BASE: usize = 6;
+const SCREEN_FAR1_COUNT: usize = 7;
+const SCREEN_FAR2_BASE: usize = 8;
+const SCREEN_FAR2_COUNT: usize = 9;
+const SCREEN_RECORD_OF_PIXEL: usize = 10;
+const SCREEN_TERRAIN_ENTRIES: usize = 11;
+const SCREEN_TERRAIN_MAX_SIN_SQ: usize = 12;
+const SCREEN_BUILDING_GLOBAL_MAX_TAN_Q: usize = 13;
+const SCREEN_BUILDING_LOCAL_ENTRIES: usize = 14;
+const SCREEN_BUILDING_LOCAL_MAX_TAN_Q: usize = 15;
+const SCREEN_TABLE_WORDS: usize = 16;
 
 /// A region whose per-block far-list crosses `i32::MAX` entries — unbuildable in a single GPU pass
 /// (it would overflow the device offsets / need ~16 GB of VRAM). Surfaced as a per-cell skip, the
@@ -69,7 +84,7 @@ pub fn is_cell_unbuildable(e: &anyhow::Error) -> bool {
 
 /// Region-prep (ONCE per R4): every candidate sub-seg in the region's admit envelope,
 /// ground-stale filtered, with `prepare_segment` applied — the expensive CPU work, done
-/// region-wide. The per-tile near/far slant gate is deferred to [`classify_tile`].
+/// region-wide. The per-tile near/far slant gate is deferred to the device classifier.
 ///
 /// The envelope is the R4 hexagon's vertex bbox (a superset of every region tile's centre —
 /// `region_tiles` keeps only centre-in-hexagon tiles) padded by the per-tile admit reach:
@@ -252,87 +267,18 @@ pub fn for_each_region_chunk(
     Ok(())
 }
 
-/// Per-tile classify (CHEAP — no prepare_segment): which region candidates are near / far[level]
-/// for THIS tile. The slant gate subsumes the per-tile envelope + clamped-CPA (slant-pass ⟹
-/// clamped-pass), so it reproduces `scatter_tile`'s admit exactly. Emits index lists into the
-/// region SoA. Reads the prepared `d_lon`/`sdy` directly — no AircraftSegment / endpoint rebuild.
-fn classify_tile(
-    tile: &FusedTileZ13,
-    region: &[(SegmentPrepared, u8)],
-) -> (Vec<i32>, [Vec<i32>; 3]) {
-    let b = &tile.bbox;
-    let centre_lat = (b.north_lat + b.south_lat) * 0.5;
-    let centre_lon = (b.east_lon + b.west_lon) * 0.5;
-    let px_m = tile_pixel_size_m(tile.zoom, centre_lat);
-    let half_diag = (TILE_PX as f64) * px_m * std::f64::consts::SQRT_2 * 0.5;
-    let m_per_deg_lon = M_PER_DEG_LAT * centre_lat.to_radians().cos().max(0.2);
-    let tile_max_rx_alt = tile
-        .rx_alt_m
-        .iter()
-        .copied()
-        .fold(f32::NEG_INFINITY, f32::max) as f64;
-
-    let mut near = Vec::new();
-    let mut far: [Vec<i32>; 3] = [Vec::new(), Vec::new(), Vec::new()];
-    for (idx, (p, _)) in region.iter().enumerate() {
-        // dx,dy expand exactly to d_lon·m and sdy (x2−x1, y2−y1 in `scatter_tile`,
-        // airborne.rs:228) — skip rebuilding the endpoint, which only added an f64 roundtrip.
-        let x1 = (p.start_lon - centre_lon) * m_per_deg_lon;
-        let y1 = (p.start_lat - centre_lat) * M_PER_DEG_LAT;
-        let dx = p.d_lon * m_per_deg_lon;
-        let dy = p.sdy;
-        let len_sq = dx * dx + dy * dy;
-        let min_d_sq = if len_sq < 1.0 {
-            x1 * x1 + y1 * y1
-        } else {
-            let t_num = -(x1 * dx + y1 * dy);
-            if t_num <= 0.0 {
-                x1 * x1 + y1 * y1
-            } else if t_num >= len_sq {
-                (x1 + dx) * (x1 + dx) + (y1 + dy) * (y1 + dy)
-            } else {
-                let cross = dx * y1 - dy * x1;
-                (cross * cross) / len_sq
-            }
-        };
-        let horiz = (min_d_sq.sqrt() - half_diag).max(0.0);
-        let seg_min_alt = p.start_alt_m.min(p.start_alt_m + p.sdz);
-        let rel_alt = (seg_min_alt - tile_max_rx_alt).max(0.0);
-        let best_slant_sq = horiz * horiz + rel_alt * rel_alt;
-        if best_slant_sq > p.reach_sq {
-            continue;
-        }
-        if best_slant_sq < NEAR_SLANT_SQ {
-            near.push(idx as i32);
-        } else {
-            let best_slant = best_slant_sq.sqrt();
-            let lvl = if best_slant < COARSE_BAND_M[0] {
-                0
-            } else if best_slant < COARSE_BAND_M[1] {
-                1
-            } else {
-                2
-            };
-            far[lvl].push(idx as i32);
-        }
-    }
-    (near, far)
-}
-
-/// GPU handle: the device, the two airborne kernels, the NPD LUTs, and the
+/// GPU handle: the device, airborne kernels, the NPD LUTs, and the
 /// GA full-year hybrid per-class weight LUT (all uploaded once, device-global).
 /// Construct once per build; reuse across every region and tile.
 pub struct AirborneGpu {
     dev: Arc<CudaDevice>,
-    f_near: CudaFunction,
-    f_coarse: CudaFunction,
-    /// M3 batched variants (one launch per block of tiles); same physics as f_near/f_coarse.
-    f_near_batched: CudaFunction,
-    f_coarse_batched: CudaFunction,
-    /// M4 GPU classify (counting-sort the per-tile near/far gate on device, replacing the
-    /// single-threaded CPU `classify_tile` wall) → device-built CSR for the M3 batched kernels.
+    f_near_screened: CudaFunction,
+    f_coarse_screened: CudaFunction,
+    /// GPU classify (counting-sort the per-tile near/far gate on device) → device-built CSR.
     f_classify_count: CudaFunction,
     f_classify_scatter: CudaFunction,
+    terrain_horizon: AirborneTerrainHorizonGpu,
+    building_horizon: AirborneBuildingHorizonGpu,
     d_npd: CudaSlice<f32>,
     /// `NUM_CLASSES`-length GA hybrid weight LUT (f32). The kernel scales
     /// each sub-segment's energy by `d_w[class]`.
@@ -342,14 +288,19 @@ pub struct AirborneGpu {
     vram_total: u64,
 }
 
-/// One R4's candidate sub-segs, resident on the device (the expensive `prepare_segment` +
-/// pack + upload done once). `region` is kept host-side for the per-tile [`classify_tile`].
+/// One R4's candidate sub-segments resident on the device.
 pub struct RegionResident {
-    region: Vec<(SegmentPrepared, u8)>,
     d_sll: CudaSlice<f64>,
     d_sf: CudaSlice<f32>,
     d_si: CudaSlice<i32>,
     nreg: usize,
+}
+
+struct ReceiverScreeningDev {
+    table: CudaSlice<u64>,
+    _record_of_pixel: CudaSlice<u32>,
+    _terrain: TerrainHorizonDev,
+    _buildings: BuildingHorizonDev,
 }
 
 impl RegionResident {
@@ -383,29 +334,34 @@ impl AirborneGpu {
             Ptx::from_src(AIRBORNE_PTX),
             "air",
             &[
-                "airborne_exact",
-                "airborne_coarse",
-                "airborne_exact_batched",
-                "airborne_coarse_batched",
+                "airborne_exact_screened",
+                "airborne_coarse_screened",
                 "airborne_classify_count",
                 "airborne_classify_scatter",
+                "airborne_terrain_horizon_build",
+                "airborne_terrain_horizon_global_max",
+                "airborne_terrain_horizon_range_quantization_probe",
+                "airborne_building_horizon_build",
+                "airborne_building_horizon_pack",
+                "airborne_building_horizon_global_max",
+                "airborne_building_horizon_mark_empty",
             ],
         )
         .expect("load airborne ptx");
-        let f_near = dev.get_func("air", "airborne_exact").expect("fn near");
-        let f_coarse = dev.get_func("air", "airborne_coarse").expect("fn coarse");
-        let f_near_batched = dev
-            .get_func("air", "airborne_exact_batched")
-            .expect("fn near_batched");
-        let f_coarse_batched = dev
-            .get_func("air", "airborne_coarse_batched")
-            .expect("fn coarse_batched");
+        let f_near_screened = dev
+            .get_func("air", "airborne_exact_screened")
+            .expect("fn near_screened");
+        let f_coarse_screened = dev
+            .get_func("air", "airborne_coarse_screened")
+            .expect("fn coarse_screened");
         let f_classify_count = dev
             .get_func("air", "airborne_classify_count")
             .expect("fn classify_count");
         let f_classify_scatter = dev
             .get_func("air", "airborne_classify_scatter")
             .expect("fn classify_scatter");
+        let terrain_horizon = AirborneTerrainHorizonGpu::new(Arc::clone(&dev));
+        let building_horizon = AirborneBuildingHorizonGpu::new(Arc::clone(&dev));
         let d_npd = dev
             .htod_copy(NpdLuts::shared().sel_luts_flat_f32())
             .expect("upload npd");
@@ -427,12 +383,12 @@ impl AirborneGpu {
             .unwrap_or(11 << 30);
         Self {
             dev,
-            f_near,
-            f_coarse,
-            f_near_batched,
-            f_coarse_batched,
+            f_near_screened,
+            f_coarse_screened,
             f_classify_count,
             f_classify_scatter,
+            terrain_horizon,
+            building_horizon,
             d_npd,
             d_w,
             vram_total,
@@ -446,21 +402,102 @@ impl AirborneGpu {
         self.vram_total
     }
 
-    /// Pack + upload a region's candidate sub-segs to the device (ONCE per R4). The returned
-    /// handle is reused by every [`scatter_tile`] of that region. Delegates the device upload to
-    /// [`upload_region`] (the GPU half) and keeps `region` host-side for [`scatter_tile`].
+    /// Run the CUDA range-packing acceptance probe. It exercises the same
+    /// packed terrain query used by production screening with a source placed
+    /// between the true edge and the old nearest-range value.
+    pub fn terrain_range_quantization_probe(
+        &self,
+        true_range_m: f32,
+        source_range_m: f32,
+    ) -> Result<f32> {
+        self.terrain_horizon
+            .range_quantization_probe(true_range_m, source_range_m)
+    }
+
+    fn upload_receiver_screening(
+        &self,
+        packed: &PackedReceiverScreening,
+        environment: &AirborneScreeningEnvironment,
+        receiver_lat_lon: &CudaSlice<f64>,
+        receiver_altitude: &CudaSlice<f32>,
+        inner_elevation: &CudaSlice<f32>,
+        tile_bbox: &CudaSlice<f64>,
+        nreg: usize,
+        near: (usize, usize),
+        far: [(usize, usize); 3],
+    ) -> Result<ReceiverScreeningDev> {
+        use cudarc::driver::DevicePtr;
+
+        let record_of_pixel = self
+            .dev
+            .htod_sync_copy(&packed.record_of_pixel)
+            .context("screen pixel records")?;
+        let terrain = self.terrain_horizon.build(
+            environment,
+            packed,
+            receiver_lat_lon,
+            receiver_altitude,
+            inner_elevation,
+            tile_bbox,
+        )?;
+        let buildings = self.building_horizon.build(
+            environment,
+            packed,
+            receiver_lat_lon,
+            receiver_altitude,
+            inner_elevation,
+            tile_bbox,
+        )?;
+        let mut host_table = [0u64; SCREEN_TABLE_WORDS];
+        host_table[SCREEN_RECORDS] = packed.records as u64;
+        host_table[SCREEN_NREG] = nreg as u64;
+        host_table[SCREEN_NEAR_BASE] = near.0 as u64;
+        host_table[SCREEN_NEAR_COUNT] = near.1 as u64;
+        host_table[SCREEN_FAR0_BASE] = far[0].0 as u64;
+        host_table[SCREEN_FAR0_COUNT] = far[0].1 as u64;
+        host_table[SCREEN_FAR1_BASE] = far[1].0 as u64;
+        host_table[SCREEN_FAR1_COUNT] = far[1].1 as u64;
+        host_table[SCREEN_FAR2_BASE] = far[2].0 as u64;
+        host_table[SCREEN_FAR2_COUNT] = far[2].1 as u64;
+        host_table[SCREEN_RECORD_OF_PIXEL] = *record_of_pixel.device_ptr();
+        host_table[SCREEN_TERRAIN_ENTRIES] = *terrain.entries.device_ptr();
+        host_table[SCREEN_TERRAIN_MAX_SIN_SQ] = *terrain.max_sin_sq.device_ptr();
+        host_table[SCREEN_BUILDING_GLOBAL_MAX_TAN_Q] =
+            *buildings.global_max_tangent_bits.device_ptr();
+        host_table[SCREEN_BUILDING_LOCAL_ENTRIES] = *buildings.local_entries.device_ptr();
+        host_table[SCREEN_BUILDING_LOCAL_MAX_TAN_Q] =
+            *buildings.local_max_tangent_bits.device_ptr();
+        let table = self
+            .dev
+            .htod_copy(host_table.to_vec())
+            .context("screen pointer table")?;
+        Ok(ReceiverScreeningDev {
+            table,
+            _record_of_pixel: record_of_pixel,
+            _terrain: terrain,
+            _buildings: buildings,
+        })
+    }
+
+    /// Upload the region's obstacle CSR and its shared DEM halo once for every
+    /// tile block scattered against that cell.
+    pub fn upload_screening_environment(
+        &self,
+        obstacles: &ObstacleSet,
+        halo: &FusedGrid,
+    ) -> Result<AirborneScreeningEnvironment> {
+        self.building_horizon.upload_environment(obstacles, halo)
+    }
+
+    /// Pack + upload a region's candidate sub-segments to the device once per R4.
     pub fn load_region(&self, region: Vec<(SegmentPrepared, u8)>) -> Result<RegionResident> {
         let (sll, sf, si) = pack_airborne_segs(&region);
         let nreg = region.len();
-        let mut r = self.upload_region(sll, sf, si, nreg)?;
-        r.region = region;
-        Ok(r)
+        self.upload_region(sll, sf, si, nreg)
     }
 
-    /// htod-upload pre-packed region SoA (the GPU half of [`load_region`]). `region` stays
-    /// host-side only for [`scatter_tile`] (the e2 validator path); the stream / `scatter_region`
-    /// path never reads it, so the A2 pipeline packs on the CPU prep thread and only this upload
-    /// touches the device — letting CPU prep of the NEXT cell overlap this cell's GPU build.
+    /// Upload a pre-packed region SoA. The pipeline packs on the CPU prep thread so only this
+    /// transfer touches the device, letting prep of the next cell overlap this cell's build.
     pub fn upload_region(
         &self,
         sll: Vec<f64>,
@@ -473,7 +510,6 @@ impl AirborneGpu {
         let d_si = self.dev.htod_copy(si).context("upload si")?;
         self.dev.synchronize().context("region upload sync")?;
         Ok(RegionResident {
-            region: Vec::new(),
             d_sll,
             d_sf,
             d_si,
@@ -481,124 +517,15 @@ impl AirborneGpu {
         })
     }
 
-    /// Scatter one tile against the resident region: classify into near/far[3] index lists,
-    /// launch the near (exact per-pixel) + far (coarse lattice) kernels, bilinear-expand each
-    /// far level on the host, and return the fused `TileAccumulator` (3 periods × TILE_PX² cells).
-    pub fn scatter_tile(&self, region: &RegionResident, tile: &FusedTileZ13) -> TileAccumulator {
-        // Empty region → silent tile; skip all device work (common for rural R4s at world scale).
-        if region.nreg == 0 {
-            return TileAccumulator::new();
-        }
-        let n = TILE_PX * TILE_PX;
-        let block: u32 = 256;
-        let nreg_i = region.nreg as i32;
-
-        let (near_idx, far_idx) = classify_tile(tile, &region.region);
-        let near_len = near_idx.len();
-        let (rll, rxa) = pack_airborne_receivers(tile);
-        let d_rll = self.dev.htod_copy(rll).expect("upload rll");
-        let d_rxa = self.dev.htod_copy(rxa).expect("upload rxa");
-        let d_nidx = self.dev.htod_copy(near_idx).expect("upload near idx");
-        let mut d_near = self.dev.alloc_zeros::<f32>(n * 3).expect("alloc near out");
-        // (far index list, nidx, lattice side n, coarse out) per level.
-        let mut fardev: Vec<(CudaSlice<i32>, usize, usize, CudaSlice<f32>)> =
-            Vec::with_capacity(far_idx.len());
-        for (lvl, idxs) in far_idx.into_iter().enumerate() {
-            let nn = COARSE_LEVELS_N[lvl];
-            let nidx = idxs.len();
-            fardev.push((
-                self.dev.htod_copy(idxs).expect("upload far idx"),
-                nidx,
-                nn,
-                self.dev
-                    .alloc_zeros::<f32>(nn * nn * 3)
-                    .expect("alloc coarse"),
-            ));
-        }
-
-        let cfg_near = LaunchConfig {
-            grid_dim: ((n as u32).div_ceil(block), 1, 1),
-            block_dim: (block, 1, 1),
-            shared_mem_bytes: 0,
-        };
-        unsafe {
-            self.f_near
-                .clone()
-                .launch(
-                    cfg_near,
-                    (
-                        &d_rll,
-                        &d_rxa,
-                        &region.d_sll,
-                        &region.d_sf,
-                        &region.d_si,
-                        &self.d_npd,
-                        &self.d_w,
-                        &d_nidx,
-                        near_len as i32,
-                        nreg_i,
-                        &mut d_near,
-                    ),
-                )
-                .expect("launch near");
-        }
-        for (d_idx, nidx, nn, d_coarse) in fardev.iter_mut() {
-            if *nidx == 0 {
-                continue;
-            }
-            let cfg = LaunchConfig {
-                grid_dim: ((*nidx as u32).div_ceil(block), 1, 1),
-                block_dim: (block, 1, 1),
-                shared_mem_bytes: 0,
-            };
-            unsafe {
-                self.f_coarse
-                    .clone()
-                    .launch(
-                        cfg,
-                        (
-                            &d_rll,
-                            &d_rxa,
-                            &region.d_sll,
-                            &region.d_sf,
-                            &region.d_si,
-                            &self.d_npd,
-                            &self.d_w,
-                            &*d_idx,
-                            *nidx as i32,
-                            nreg_i,
-                            *nn as i32,
-                            &mut *d_coarse,
-                        ),
-                    )
-                    .expect("launch coarse");
-            }
-        }
-        self.dev.synchronize().expect("kernel sync");
-
-        let gpu_near = self.dev.dtoh_sync_copy(&d_near).expect("dtoh near");
-        let mut fine = TileAccumulator::new();
-        fine.energy.copy_from_slice(&gpu_near);
-        for (_, nidx, nn, d_coarse) in fardev.iter() {
-            if *nidx == 0 {
-                continue;
-            }
-            let coarse = self.dev.dtoh_sync_copy(d_coarse).expect("dtoh coarse");
-            CoarseLattice::from_energy(*nn, coarse).expand_into(&mut fine);
-        }
-        fine
-    }
-
-    /// M3+M4 batched scatter over a BLOCK of tiles: the per-tile near/far candidate gate
-    /// (`classify_tile`'s O(nreg) loop — the single-threaded CPU wall that capped airborne GPU
-    /// util) now runs ON the device as a counting-sort, then the M3 batched kernels consume the
-    /// device-built CSR with ~1 sync + 1 copyback for the whole block. Per block:
+    /// Screened production scatter over a block of tiles. Candidate classification remains one
+    /// device counting-sort for the whole block; each tile builds its terrain and vector-building
+    /// horizons on-device, then runs the screened exact/coarse kernels.
     ///   1. host packs a tiny per-tile `meta` (centre, m/deg lon, half-diag, max rx alt);
     ///   2. `airborne_classify_count` → per-(tile,bucket) counts (only tile×4 ints cross PCIe);
     ///   3. host prefix-sums counts → near CSR + far base offsets;
     ///   4. `airborne_classify_scatter` fills near_idx + far (seg,tile) lists on device;
-    ///   5. `airborne_exact_batched` + ≤3 `airborne_coarse_batched` → ONE sync → ONE dtoh →
-    ///      host bilinear-expand per tile.
+    ///   5. build only the receiver horizons that tile's exact/coarse paths read;
+    ///   6. `airborne_exact_screened` + ≤3 `airborne_coarse_screened`, then host expansion.
     ///
     /// Returns one `TileAccumulator` per input tile, in order. Same `airborne_sel` physics and
     /// same gate as the CPU `scatter_tile`, so parity holds by construction (dB-level: the
@@ -607,8 +534,36 @@ impl AirborneGpu {
         &self,
         region: &RegionResident,
         tiles: &[&FusedTileZ13],
+        obstacles: &ObstacleSet,
+        interiors: &[InteriorEstimate],
+    ) -> Result<Vec<TileAccumulator>> {
+        if region.nreg == 0 || tiles.is_empty() {
+            return Ok((0..tiles.len()).map(|_| TileAccumulator::new()).collect());
+        }
+        let halo = &tiles[0].halo;
+        assert!(
+            tiles.iter().all(|tile| Arc::ptr_eq(&tile.halo, halo)),
+            "one airborne scatter call must share one elevation halo"
+        );
+        let environment = self.upload_screening_environment(obstacles, halo)?;
+        self.scatter_region_with_environment(region, tiles, &environment, interiors)
+    }
+
+    /// Scatter with a previously uploaded region environment. The production
+    /// builder uses this entry point across all grid-aligned tile blocks.
+    pub fn scatter_region_with_environment(
+        &self,
+        region: &RegionResident,
+        tiles: &[&FusedTileZ13],
+        environment: &AirborneScreeningEnvironment,
+        interiors: &[InteriorEstimate],
     ) -> Result<Vec<TileAccumulator>> {
         let t = tiles.len();
+        assert_eq!(
+            interiors.len(),
+            t,
+            "one interior estimate per airborne tile"
+        );
         if region.nreg == 0 || t == 0 {
             return Ok((0..t).map(|_| TileAccumulator::new()).collect());
         }
@@ -663,8 +618,8 @@ impl AirborneGpu {
         self.dev.synchronize().context("count sync")?;
         let counts = self.dev.dtoh_sync_copy(&d_counts).context("dtoh counts")?;
 
-        // 3. Prefix-sum → off[4*(t+1)]: block 0 = near CSR (also the batched near kernel's
-        //    near_off), blocks 1/2/3 = per-tile far-level base offset. Totals size the buffers.
+        // 3. Prefix-sum → off[4*(t+1)]: block 0 = near CSR, blocks 1/2/3 = per-tile
+        //    far-level base offsets. Totals size the buffers.
         //    Accumulate in i64 and assert each block-wide total stays < i32::MAX: that keeps
         //    every device-side offset / scatter `pos` / far-entry `nfar` (all i32) sound — a
         //    dense megaregion whose far[2] list crosses 2^31 entries (and ~16 GB of VRAM) is what the
@@ -692,7 +647,7 @@ impl AirborneGpu {
             }
             total[bucket] = acc as usize;
         }
-        let d_off = self.dev.htod_copy(off).context("off")?;
+        let d_off = self.dev.htod_sync_copy(&off).context("off")?;
 
         // 4. Pass 2 (scatter): fill near_idx + per-level far (seg,tile) lists on device.
         //    alloc_zeros rejects 0 bytes → dummy-size empty buckets; the kernel never writes them.
@@ -735,64 +690,62 @@ impl AirborneGpu {
                 .context("launch classify_scatter")?;
         }
 
-        // 5. Physics: receivers (concatenated) → batched near (reads off block 0 as near CSR)
-        //    + ≤3 batched coarse levels (each over its far (seg,tile) list).
-        let (rll_b, rxa_b) = pack_airborne_receivers_batch(tiles);
-        let d_rll = self.dev.htod_copy(rll_b).context("rll_b")?;
-        let d_rxa = self.dev.htod_copy(rxa_b).context("rxa_b")?;
-        let mut d_out = self.dev.alloc_zeros::<f32>(npix * 3 * t).context("out_b")?;
-        let cfg_near = LaunchConfig {
-            grid_dim: (((t * npix) as u32).div_ceil(block), 1, 1),
-            block_dim: (block, 1, 1),
-            shared_mem_bytes: 0,
-        };
-        unsafe {
-            self.f_near_batched
-                .clone()
-                .launch(
-                    cfg_near,
-                    (
-                        &d_rll,
-                        &d_rxa,
-                        &region.d_sll,
-                        &region.d_sf,
-                        &region.d_si,
-                        &self.d_npd,
-                        &self.d_w,
-                        &d_off,
-                        &d_near_idx,
-                        nreg_i,
-                        t as i32,
-                        &mut d_out,
-                    ),
+        // 5. Receiver horizons and screened physics. Terrain and roof horizons are constructed
+        //    from the shared DEM halo and region-resident vector CSR on-device.
+        //    The classify scatter precedes every following copy/launch on this GPU's stream.
+        let far_device = [&d_far0, &d_far1, &d_far2];
+        let mut output = Vec::with_capacity(t);
+        for (ti, &tile) in tiles.iter().enumerate() {
+            let near = (off[ti] as usize, counts[ti * 4] as usize);
+            let far: [(usize, usize); 3] = std::array::from_fn(|level| {
+                (
+                    off[(level + 1) * t1 + ti] as usize,
+                    counts[ti * 4 + level + 1] as usize,
                 )
-                .context("launch near_batched")?;
-        }
-        // (far (seg,tile) device buf, nfar, lattice side n, coarse out) per level.
-        let mut fardev: Vec<(&CudaSlice<i32>, usize, usize, CudaSlice<f32>)> =
-            Vec::with_capacity(3);
-        for (lvl, d_far) in [&d_far0, &d_far1, &d_far2].into_iter().enumerate() {
-            let nn = COARSE_LEVELS_N[lvl];
-            let d_coarse = self
+            });
+            let (rll, rxa) = pack_airborne_receivers(tile);
+            let d_rll = self.dev.htod_copy(rll).context("screened rll")?;
+            let d_rxa = self.dev.htod_copy(rxa).context("screened rxa")?;
+            let d_inner_elevation = self
                 .dev
-                .alloc_zeros::<f32>(nn * nn * 3 * t)
-                .context("coarse_b")?;
-            fardev.push((d_far, total[lvl + 1], nn, d_coarse));
-        }
-        for (d_far, nfar, nn, d_coarse) in fardev.iter_mut() {
-            if *nfar == 0 {
-                continue;
-            }
-            let cfg = LaunchConfig {
-                grid_dim: ((*nfar as u32).div_ceil(block), 1, 1),
+                .htod_copy(tile.inner_elev_m.clone())
+                .context("screened inner elevation")?;
+            let d_tile_bbox = self
+                .dev
+                .htod_copy(vec![
+                    tile.bbox.south_lat,
+                    tile.bbox.north_lat,
+                    tile.bbox.west_lon,
+                    tile.bbox.east_lon,
+                ])
+                .context("screened tile bbox")?;
+            let packed = PackedReceiverScreening::select(&interiors[ti], near.1 > 0);
+            let screening = self.upload_receiver_screening(
+                &packed,
+                environment,
+                &d_rll,
+                &d_rxa,
+                &d_inner_elevation,
+                &d_tile_bbox,
+                nreg,
+                near,
+                far,
+            )?;
+            drop(packed);
+            let mut d_near = self
+                .dev
+                .alloc_zeros::<f32>(npix * 3)
+                .context("screened exact output")?;
+            let cfg_near = LaunchConfig {
+                grid_dim: ((npix as u32).div_ceil(block), 1, 1),
                 block_dim: (block, 1, 1),
                 shared_mem_bytes: 0,
             };
             unsafe {
-                self.f_coarse_batched
+                self.f_near_screened
                     .clone()
                     .launch(
-                        cfg,
+                        cfg_near,
                         (
                             &d_rll,
                             &d_rxa,
@@ -801,48 +754,70 @@ impl AirborneGpu {
                             &region.d_si,
                             &self.d_npd,
                             &self.d_w,
-                            *d_far,
-                            *nfar as i32,
-                            nreg_i,
-                            *nn as i32,
-                            &mut *d_coarse,
+                            &d_near_idx,
+                            &screening.table,
+                            &mut d_near,
                         ),
                     )
-                    .context("launch coarse_batched")?;
+                    .context("launch screened exact")?;
             }
+
+            let mut coarse_device: Vec<(usize, CudaSlice<f32>)> = Vec::with_capacity(3);
+            for level in 0..3 {
+                if far[level].1 == 0 {
+                    continue;
+                }
+                let nn = COARSE_LEVELS_N[level];
+                let mut d_coarse = self
+                    .dev
+                    .alloc_zeros::<f32>(nn * nn * 3)
+                    .context("screened coarse output")?;
+                let cfg = LaunchConfig {
+                    grid_dim: ((far[level].1 as u32).div_ceil(block), 1, 1),
+                    block_dim: (block, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe {
+                    self.f_coarse_screened
+                        .clone()
+                        .launch(
+                            cfg,
+                            (
+                                &d_rll,
+                                &d_rxa,
+                                &region.d_sll,
+                                &region.d_sf,
+                                &region.d_si,
+                                &self.d_npd,
+                                &self.d_w,
+                                far_device[level],
+                                level as i32,
+                                nn as i32,
+                                &screening.table,
+                                &mut d_coarse,
+                            ),
+                        )
+                        .context("launch screened coarse")?;
+                }
+                coarse_device.push((nn, d_coarse));
+            }
+            self.dev.synchronize().context("screened kernel sync")?;
+
+            let near_energy = self
+                .dev
+                .dtoh_sync_copy(&d_near)
+                .context("dtoh screened exact")?;
+            let mut fine = TileAccumulator::new();
+            fine.energy.copy_from_slice(&near_energy);
+            for (nn, d_coarse) in &coarse_device {
+                let coarse = self
+                    .dev
+                    .dtoh_sync_copy(d_coarse)
+                    .context("dtoh screened coarse")?;
+                CoarseLattice::from_energy(*nn, coarse).expand_into(&mut fine);
+            }
+            output.push(fine);
         }
-        self.dev.synchronize().context("batched kernel sync")?;
-
-        let near_all = self.dev.dtoh_sync_copy(&d_out).context("dtoh near_b")?;
-        let coarse_all: Vec<(usize, Vec<f32>)> = fardev
-            .iter()
-            .map(|(_, nfar, nn, d_coarse)| -> Result<(usize, Vec<f32>)> {
-                if *nfar == 0 {
-                    Ok((*nn, Vec::new()))
-                } else {
-                    Ok((
-                        *nn,
-                        self.dev.dtoh_sync_copy(d_coarse).context("dtoh coarse_b")?,
-                    ))
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok((0..t)
-            .map(|ti| {
-                let mut fine = TileAccumulator::new();
-                fine.energy
-                    .copy_from_slice(&near_all[ti * npix * 3..(ti + 1) * npix * 3]);
-                for (nn, data) in &coarse_all {
-                    if data.is_empty() {
-                        continue;
-                    }
-                    let per = nn * nn * 3;
-                    CoarseLattice::from_energy(*nn, data[ti * per..(ti + 1) * per].to_vec())
-                        .expand_into(&mut fine);
-                }
-                fine
-            })
-            .collect())
+        Ok(output)
     }
 }

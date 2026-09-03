@@ -263,6 +263,9 @@ export function ContributorDetail({ c }: { c: Contributor }) {
             'Day/Evening/Night',
             `${fmtDbValue(aircraftAirborne.periods.ld_db)}/${fmtDbValue(aircraftAirborne.periods.le_db)}/${fmtDbValue(aircraftAirborne.periods.ln_db)} dB`,
           )}
+          {lineRow('Free field', `${fmtDbValue(c.received_lden_free)} dB`)}
+          {lineRow('Terrain', `${fmt(c.terrain_impact_db)} dB`)}
+          {lineRow('Screening', `${fmt(c.screening_impact_db)} dB`)}
           <table className="w-full text-[10px] mt-1 [&_th]:pl-2 [&_td]:pl-2 [&_:first-child]:pl-0">
             <thead>
               <tr className="text-muted-foreground/60 [&_th]:font-normal [&_th]:pb-0.5">

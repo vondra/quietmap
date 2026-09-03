@@ -15,7 +15,7 @@ use crate::emission::aircraft;
 use crate::propagation::iso9613::fast_exp_f64;
 use crate::types::{
     AircraftAirborneDetail, AircraftEventBandStats, AircraftSegment, AircraftTopFlight,
-    NoisePeriods, Receiver, SegmentTrace, TraceCollector,
+    ImpactDeltas, NoisePeriods, Receiver, SegmentTrace, TraceCollector,
 };
 
 /// Maximum number of `top_flights` rows the popup returns. Frontend
@@ -85,9 +85,8 @@ impl Ord for ScoredTrace {
 /// table. Caller passes the resulting flights map to `build_detail` for
 /// Doc 29 normalization (`n_days × period_seconds`).
 ///
-/// `horizon` enables C2 terrain screening inside the shared kernel
-/// (`Some` only on the popup path under `QM_AIRBORNE_HORIZON=1`);
-/// `None` is byte-identical to the pre-C2 scatter.
+/// The receiver terrain horizon is mandatory. The optional building horizon
+/// represents an empty local roof skyline, not an alternate propagation path.
 ///
 /// Per-sub-segment `SegmentTrace`s land in `traces.segments` so the
 /// Noise Segments popup tab can render one row per Doc 29 SEL call
@@ -101,7 +100,8 @@ pub fn scatter(
     // `class_weights.get(class)` so a GA one-off divides by `ga_n_days`, not
     // `n_days`. Uniform (all-1.0) for non-hybrid extracts.
     class_weights: &aircraft::ClassWeights,
-    horizon: Option<&aircraft::ReceiverHorizon>,
+    horizon: &aircraft::ReceiverHorizon,
+    buildings: Option<&aircraft::BuildingHorizon>,
     trace_cap: usize,
     mut traces: Option<&mut TraceCollector>,
 ) -> HashMap<u64, FlightAccum> {
@@ -296,7 +296,7 @@ pub fn scatter(
             if aircraft::is_ground_stale_with_terrain(&seg, &terrain) {
                 continue;
             }
-            let Some((sel, cpa)) = aircraft::segment_sel_with_cuts(
+            let Some(kernel) = aircraft::segment_kernel_with_cuts(
                 &seg,
                 receiver.lat,
                 receiver.lon,
@@ -305,6 +305,7 @@ pub fn scatter(
                 end_elev - 30.0,
                 npd_luts,
                 horizon,
+                buildings,
             ) else {
                 continue;
             };
@@ -315,8 +316,10 @@ pub fn scatter(
             // SAME factor through the count machinery (helicopter_flights_
             // per_day, observed_flights_per_day): weight/n_days = 1/ga_n_days
             // per one-off.
-            let energy = fast_exp_f64(sel * std::f64::consts::LN_10 * 0.1) * class_weight;
             let period = (seg.period.min(2)) as usize;
+            let energy_for_sel =
+                |sel: f64| fast_exp_f64(sel * std::f64::consts::LN_10 * 0.1) * class_weight;
+            let energy = energy_for_sel(kernel.sel);
             let acc = flights.entry(row.flight_id).or_insert_with(|| {
                 FlightAccum::new(
                     row.profile_idx,
@@ -326,7 +329,28 @@ pub fn scatter(
                     row.callsign.to_string(),
                 )
             });
+            acc.free_period_energy[period] += energy_for_sel(kernel.free_sel);
+            acc.no_terrain_period_energy[period] += energy_for_sel(kernel.sel_no_terrain);
+            acc.no_screening_period_energy[period] += energy_for_sel(kernel.sel_no_screening);
+            // Keep the received path's historical 20 dB event floor. The
+            // retained variants above deliberately run before this check so
+            // a strong aircraft hidden by a terrain/building edge still
+            // contributes to `periods_free` and its effect deltas.
+            if kernel.sel < 20.0 {
+                continue;
+            }
             acc.period_energy[period] += energy;
+
+            let cpa = aircraft::CpaResult {
+                q_m: kernel.q_m,
+                d_p_m: kernel.d_p_m,
+                lateral_m: kernel.lateral_m,
+                relative_alt_m: kernel.rel_alt_m,
+                beta_deg: kernel.beta_deg,
+                seg_len_m: kernel.seg_len_m,
+                t: kernel.t,
+            };
+            let sel = kernel.sel;
 
             let class_idx = aircraft::noise_class_of(seg.profile_idx) as usize;
             // Display metrics use the CLAMPED CPA — the closest the aircraft
@@ -369,30 +393,42 @@ pub fn scatter(
                         if should_build {
                             let mut period_energies = [0.0f64; 3];
                             period_energies[period] = energy;
-                            // TODO Tier 3: extend AircraftKernelResult with the
-                            // Doc 29 decomposition (sel_npd / ΔV / ΔI / Λ / ΔF)
-                            // computed inside segment_energy_kernel and pipe it
-                            // here. For now use a placeholder that records the
-                            // final SEL only — the popup-side Section4Doc29
-                            // displays it as a single-value bar until the
-                            // kernel split lands. `d_p_m` / `d_bar_m` below stay
-                            // on the UNCLAMPED `cpa.d_p_m` on purpose: this
-                            // breakdown describes the SEL/NPD energy computation
-                            // (infinite-line distance), not the clamped display
-                            // CPA carried in `cpa_distance_m` / `d_slant_m` above.
-                            let placeholder_doc29 = crate::types::Doc29Breakdown {
-                                sel_npd_db: sel,
-                                delta_v_db: 0.0,
-                                delta_i_db: 0.0,
-                                lambda_db: 0.0,
-                                delta_f_db: 0.0,
+                            let mut free_period_energies = [0.0f64; 3];
+                            free_period_energies[period] = energy_for_sel(kernel.free_sel);
+                            let mut no_terrain_period_energies = [0.0f64; 3];
+                            no_terrain_period_energies[period] =
+                                energy_for_sel(kernel.sel_no_terrain);
+                            let mut no_screening_period_energies = [0.0f64; 3];
+                            no_screening_period_energies[period] =
+                                energy_for_sel(kernel.sel_no_screening);
+                            let (screening_kind, screening_db) =
+                                if kernel.terrain_dz <= 0.0 && kernel.building_dz <= 0.0 {
+                                    ("none", 0.0)
+                                } else if kernel.terrain_dz >= kernel.building_dz {
+                                    ("terrain", kernel.terrain_dz)
+                                } else {
+                                    ("building", kernel.building_dz)
+                                };
+                            let installation = match kernel.installation {
+                                aircraft::Installation::Wing => "wing",
+                                aircraft::Installation::Fuselage => "fuselage",
+                                aircraft::Installation::Propeller => "propeller",
+                            };
+                            let doc29 = crate::types::Doc29Breakdown {
+                                sel_npd_db: kernel.sel_npd_db,
+                                delta_v_db: kernel.delta_v_db,
+                                delta_i_db: kernel.delta_i_db,
+                                lambda_db: kernel.lambda_db,
+                                delta_f_db: kernel.delta_f_db,
                                 d_p_m: cpa.d_p_m,
-                                lateral_m: 0.0,
-                                beta_deg: 90.0,
+                                lateral_m: cpa.lateral_m,
+                                beta_deg: cpa.beta_deg,
                                 seg_len_m: seg.segment_length_m as f64,
-                                d_bar_m: cpa.d_p_m,
-                                installation: "wing",
-                                cffk_fast_path: cpa.d_p_m > 7620.0,
+                                d_bar_m: kernel.d_bar_m,
+                                installation,
+                                cffk_fast_path: kernel.cffk_fast_path,
+                                screening_kind,
+                                screening_db,
                             };
                             let trace = crate::traces::build_aircraft_airborne_subsegment_trace(
                                 crate::traces::BuildAircraftAirborneSubSegmentTrace {
@@ -409,8 +445,11 @@ pub fn scatter(
                                     d_slant_m: disp_dist.max(1.0),
                                     is_departure: seg.is_departure,
                                     period_energies,
+                                    free_period_energies,
+                                    no_terrain_period_energies,
+                                    no_screening_period_energies,
                                     n_days: n_days_f,
-                                    doc29: placeholder_doc29,
+                                    doc29,
                                 },
                             );
                             let scored = ScoredTrace { rank_key, trace };
@@ -453,10 +492,18 @@ pub fn build_detail(
     // GA-class window for the popup's per-class "Data" row;
     // equals `n_days_f` for non-hybrid extracts.
     ga_n_days_f: f64,
-) -> (NoisePeriods, AircraftAirborneDetail) {
+) -> (
+    NoisePeriods,
+    NoisePeriods,
+    ImpactDeltas,
+    AircraftAirborneDetail,
+) {
     use crate::periods;
 
     let mut airborne_energy = [0.0f64; 3];
+    let mut free_airborne_energy = [0.0f64; 3];
+    let mut no_terrain_airborne_energy = [0.0f64; 3];
+    let mut no_screening_airborne_energy = [0.0f64; 3];
     let mut band_faint = BandStats::new();
     let mut band_audible = BandStats::new();
     let mut band_disruptive = BandStats::new();
@@ -476,6 +523,9 @@ pub fn build_detail(
         #[allow(clippy::needless_range_loop)]
         for p in 0..3 {
             airborne_energy[p] += acc.period_energy[p];
+            free_airborne_energy[p] += acc.free_period_energy[p];
+            no_terrain_airborne_energy[p] += acc.no_terrain_period_energy[p];
+            no_screening_airborne_energy[p] += acc.no_screening_period_energy[p];
         }
         if acc.peak_lmax > global_peak_lmax {
             global_peak_lmax = acc.peak_lmax;
@@ -502,6 +552,9 @@ pub fn build_detail(
         #[allow(clippy::needless_range_loop)]
         for p in 0..3 {
             airborne_energy[p] += acc.period_energy[p];
+            free_airborne_energy[p] += acc.free_period_energy[p];
+            no_terrain_airborne_energy[p] += acc.no_terrain_period_energy[p];
+            no_screening_airborne_energy[p] += acc.no_screening_period_energy[p];
         }
         let flight_energy: f64 = acc.period_energy.iter().sum();
         if flight_energy <= 0.0 {
@@ -554,13 +607,31 @@ pub fn build_detail(
         }
     }
 
-    let airborne_periods = if airborne_energy.iter().sum::<f64>() > 0.0 {
-        let ld = aircraft::period_leq(airborne_energy[0], n_days_f, aircraft::PERIOD_SECONDS[0]);
-        let le = aircraft::period_leq(airborne_energy[1], n_days_f, aircraft::PERIOD_SECONDS[1]);
-        let ln = aircraft::period_leq(airborne_energy[2], n_days_f, aircraft::PERIOD_SECONDS[2]);
-        periods::periods(ld, le, ln)
-    } else {
-        NoisePeriods::silence()
+    let periods_from_energy = |energy: [f64; 3]| {
+        if energy.iter().sum::<f64>() > 0.0 {
+            let ld = aircraft::period_leq(energy[0], n_days_f, aircraft::PERIOD_SECONDS[0]);
+            let le = aircraft::period_leq(energy[1], n_days_f, aircraft::PERIOD_SECONDS[1]);
+            let ln = aircraft::period_leq(energy[2], n_days_f, aircraft::PERIOD_SECONDS[2]);
+            periods::periods(ld, le, ln)
+        } else {
+            NoisePeriods::silence()
+        }
+    };
+    let airborne_periods = periods_from_energy(airborne_energy);
+    let airborne_periods_free = periods_from_energy(free_airborne_energy);
+    let periods_no_terrain = periods_from_energy(no_terrain_airborne_energy);
+    let periods_no_screening = periods_from_energy(no_screening_airborne_energy);
+    let impact = |variant: &NoisePeriods| {
+        if airborne_periods.lden_db.is_finite() && variant.lden_db.is_finite() {
+            (airborne_periods.lden_db - variant.lden_db).min(0.0)
+        } else {
+            0.0
+        }
+    };
+    let impacts = ImpactDeltas {
+        terrain: impact(&periods_no_terrain),
+        screening: impact(&periods_no_screening),
+        ..Default::default()
     };
 
     let observed_flights_per_day: f64 = flights_by_id
@@ -626,7 +697,7 @@ pub fn build_detail(
         top_flights,
     };
 
-    (airborne_periods, detail)
+    (airborne_periods, airborne_periods_free, impacts, detail)
 }
 
 /// Top-N flights by `peak_lmax` interleaving airborne (`flights`,

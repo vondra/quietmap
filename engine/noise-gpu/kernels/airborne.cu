@@ -1,19 +1,17 @@
-// GPU airborne aircraft-noise kernels (Doc 29 NPD). Port of the CPU per-pixel
-// path `aircraft::segment_sel_at_pixel_energy` → `segment_energy_kernel<false>`
-// (noise-compute/src/emission/aircraft/{segment_sel,doc29}.rs). Gather-free:
-// terrain is two pre-sampled endpoint elevations on the sub-seg, so the hot
-// loop touches NO raster — pure fp32 ALU/SFU, unlike the surface scatter.
+// GPU airborne aircraft-noise kernels (Doc 29 NPD plus receiver screening).
+// Port of the CPU per-pixel path `aircraft::segment_sel_at_pixel_energy` →
+// `segment_energy_kernel<false>` (noise-compute/src/emission/aircraft/).
 //
-// Two kernels share one per-(seg, receiver) physics fn `airborne_sel`:
-//   airborne_exact  — NEAR: thread per receiver pixel, loop near sub-segs (exact).
-//   airborne_coarse — FAR : thread per far sub-seg, accumulate onto an n×n coarse
-//                     receiver lattice via atomicAdd (host bilinear-expands it).
-// Mirrors `airborne::scatter_tile` (near per-pixel + far CoarseLevels, airborne.rs).
+// The kernels share one per-(seg, receiver) physics fn `airborne_sel`:
+//   airborne_exact_screened  — NEAR: one thread per receiver pixel.
+//   airborne_coarse_screened — FAR: one thread per far subsegment, accumulating
+//                              onto a host-expanded coarse receiver lattice.
+// Their compact pointer table supplies the device-built terrain and vector-
+// building horizons without exceeding cudarc's launch-argument limit.
 //
-// Precision: the ONLY f64 is the absolute lat/lon → local-metre subtraction
-// (catastrophic-cancellation site); the CPA, gates, NPD, ΔF/Λ/ΔI, energy are fp32.
-// There is NO second f64 cliff (slant² = lateral² + rel_alt² is a sum). Validated
-// E2/E3: max 0.0003 dB, 0 zero-sided vs the f64 QM_AIRBORNE_FORCE_EXACT oracle.
+// The inherited Doc 29 arithmetic and packed-horizon queries stay fp32 apart
+// from absolute lat/lon subtraction. CPU-reference parity is enforced on the
+// complete encoded tiles, where the accepted difference is one 0.5 dB quantum.
 //
 // cudarc tuple launch caps ~12 args, so inputs are packed into a few buffers:
 //   rll  f64[3*TPX]  = receiver lat[0..TPX] | lon[TPX..2TPX] | m_per_deg_lon[2TPX..3TPX]
@@ -36,7 +34,10 @@
 // log2(TPX). Derived, not copied: a mismatch would index the wrong receiver row.
 #define TPX_SHIFT (31 - __builtin_clz(TPX))
 #define TPX_MASK (TPX - 1)              // pix & TPX_MASK = px
-#define MLAT 111132.92                  // M_PER_DEG_LAT (Doc 29 value, doc29.rs:25)
+#ifndef AIRCRAFT_M_LAT
+#error "AIRCRAFT_M_LAT must be injected from aircraft/doc29.rs"
+#endif
+#define MLAT AIRCRAFT_M_LAT
 #define LN10 2.302585092994046
 #define LOG10_2 0.3010299956639812
 #define FT_PER_M 3.28084
@@ -54,6 +55,36 @@
 #define NPD_INV_STEP (128.0f / 3.5f)    // NPD_LUT_BINS / (LOG_MAX-LOG_MIN)
 #define INST_WING 0
 #define INST_PROP 2
+
+// Receiver-screening geometry and transfer slots are injected from their Rust
+// authorities by build.rs. A bare nvcc invocation must supply the same defines.
+#if !defined(TERRAIN_SECTORS) || !defined(TERRAIN_BANDS) || \
+    !defined(BUILDING_LOCAL_SECTORS) || !defined(BUILDING_LOCAL_BANDS) || \
+    !defined(TAN_SCALE_D) || !defined(TERRAIN_RANGE_SCALE_D) || \
+    !defined(BUILDING_RANGE_SCALE_D)
+#error "airborne horizon constants must be injected by build.rs"
+#endif
+#define PI_D 3.14159265358979323846264338327950288
+#define HALF_PI_D 1.57079632679489661923132169163975144
+#define TAU_D 6.28318530717958647692528676655900577
+#if !defined(DIFFRACTION_SLOPE_D) || !defined(DIFFRACTION_GRAZING_DB_D) || \
+    !defined(DIFFRACTION_CAP_DB_D)
+#error "airborne diffraction constants must be injected by build.rs"
+#endif
+
+// u64 screening table slots, built by AirborneGpu::upload_receiver_screening.
+#if !defined(SCREEN_RECORDS) || !defined(SCREEN_NREG) || \
+    !defined(SCREEN_NEAR_BASE) || !defined(SCREEN_NEAR_COUNT) || \
+    !defined(SCREEN_FAR0_BASE) || !defined(SCREEN_FAR0_COUNT) || \
+    !defined(SCREEN_FAR1_BASE) || !defined(SCREEN_FAR1_COUNT) || \
+    !defined(SCREEN_FAR2_BASE) || !defined(SCREEN_FAR2_COUNT) || \
+    !defined(SCREEN_RECORD_OF_PIXEL) || \
+    !defined(SCREEN_TERRAIN_ENTRIES) || !defined(SCREEN_TERRAIN_MAX_SIN_SQ) || \
+    !defined(SCREEN_BUILDING_GLOBAL_MAX_TAN_Q) || \
+    !defined(SCREEN_BUILDING_LOCAL_ENTRIES) || \
+    !defined(SCREEN_BUILDING_LOCAL_MAX_TAN_Q)
+#error "airborne screening ABI slots must be injected by build.rs"
+#endif
 
 // noise_compute fast_exp_f64, fp32 internals (copy of scatter.cu fexp). ~1e-6 drift.
 __device__ __forceinline__ float fexpf_nc(float x) {
@@ -77,6 +108,10 @@ __device__ __forceinline__ float fast_atan(float x) {
     }
     return fast_atan_small(x);
 }
+
+#include "airborne_screening.cuh"
+#include "airborne_building_horizon.cuh"
+#include "airborne_terrain_horizon.cuh"
 
 // doc29.rs fast_delta_f — ΔF finite-segment correction (Padé atan, log2 trick).
 __device__ __forceinline__ float fast_delta_f(float q_m, float slen, float d_bar) {
@@ -116,7 +151,8 @@ __device__ __forceinline__ float npd_lookup(const float* lut_base, int cls, floa
 __device__ __forceinline__ bool airborne_sel(
     double start_lat, double start_lon, const float* f, int cls, int is_dep, int inst,
     double rx_lat, double rx_lon, double mpdl, float rx_elev,
-    const float* npd, const float* npd_dep, float* sel_out)
+    const float* npd, const float* npd_dep, int pixel,
+    const unsigned long long* screen, float* sel_out)
 {
     float ax = (float)((start_lon - rx_lon) * mpdl);
     float ay = (float)((start_lat - rx_lat) * MLAT);
@@ -143,12 +179,14 @@ __device__ __forceinline__ bool airborne_sel(
     float dv = f[4];
 
     float sel;
+    float lambda = 0.0f;
     if (d_p_m > FARFIELD_M) {                            // CFFK fast path: only ΔF
         if (sel_npd + dv < SEL_FLOOR) return false;
         sel = sel_npd + dv + fast_delta_f(t * slen, slen, f[5]);
+        if (sel < SEL_FLOOR) return false;
     } else {
         float df = fast_delta_f(t * slen, slen, f[5]);
-        float lambda = fast_lat_atten(rel_alt, lateral_sq, inst);
+        lambda = fast_lat_atten(rel_alt, lateral_sq, inst);
         float di = 0.0f;
         if (inst != INST_PROP) {
             float ra = fmaxf(rel_alt, 0.0f);
@@ -160,6 +198,19 @@ __device__ __forceinline__ bool airborne_sel(
                 di = (10.0f * (float)LOG10_2) * (f[7] * log2f(x) - log2f(den));  // di_b
         }
         sel = sel_npd + dv + di - lambda + df;
+        if (sel < SEL_FLOOR) return false;
+    }
+
+    float physical_t = fminf(fmaxf(t, 0.0f), 1.0f);
+    float diffraction_db = receiver_screening_db(
+        screen, pixel,
+        cpx, cpy, rel_alt, slant_sq,
+        ax + physical_t * sdx, ay + physical_t * sdy,
+        sz1 + physical_t * sdz - rx_elev);
+    if (d_p_m > FARFIELD_M) {
+        sel -= diffraction_db;
+    } else {
+        sel -= fmaxf(diffraction_db - lambda, 0.0f);
     }
     if (sel < SEL_FLOOR) return false;
     *sel_out = sel;
@@ -171,17 +222,14 @@ __device__ __forceinline__ int coarse_pixel(int n, int i) {
     return (i * (TPX - 1) + (n - 1) / 2) / (n - 1);
 }
 
-// NEAR (exact): one thread per receiver pixel, loop this tile's near sub-segs via the
-// index list `idx[0..nidx]` into the REGION-resident SoA (E5: segs uploaded once per
-// region, `sll` lon half at offset `nreg`; per-tile only the index list changes).
-// `w` = NPD_NC-length GA hybrid per-class weight LUT:
-// each sub-seg's energy is scaled by w[class] so GA rows use ga_n_days rather than n_days
-// (uniform 1.0 for non-hybrid extracts → byte-identical to the pre-hybrid scatter).
-extern "C" __global__ void airborne_exact(
+// Screened production NEAR: one tile per launch, thread per receiver pixel.
+// The table supplies nreg + this tile's slice of the GPU-classified near CSR,
+// as well as every receiver-horizon array used by `airborne_sel`.
+extern "C" __global__ void airborne_exact_screened(
     const double* __restrict__ rll, const float* __restrict__ rxa,
     const double* __restrict__ sll, const float* __restrict__ sf, const int* __restrict__ si,
     const float* __restrict__ npd, const float* __restrict__ w,
-    const int* __restrict__ idx, int nidx, int nreg,
+    const int* __restrict__ near_idx, const unsigned long long* __restrict__ screen,
     float* __restrict__ out)
 {
     int pix = blockIdx.x * blockDim.x + threadIdx.x;
@@ -191,111 +239,41 @@ extern "C" __global__ void airborne_exact(
     float rx_elev = rxa[pix];
     const float* npd_dep = npd + NPD_NC * (NPD_NB + 1);
     float e[3] = {0.0f, 0.0f, 0.0f};
-    for (int j = 0; j < nidx; j++) {
-        int s = idx[j];
+    int nreg = (int)screen[SCREEN_NREG];
+    int base = (int)screen[SCREEN_NEAR_BASE];
+    int count = (int)screen[SCREEN_NEAR_COUNT];
+    for (int j = 0; j < count; j++) {
+        int s = near_idx[base + j];
         int cls = si[s * 4 + 1];
         float sel;
         if (airborne_sel(sll[s], sll[nreg + s], sf + s * 12, cls, si[s*4+2], si[s*4+0],
-                         rx_lat, rx_lon, mpdl, rx_elev, npd, npd_dep, &sel)) {
+                         rx_lat, rx_lon, mpdl, rx_elev, npd, npd_dep, pix, screen, &sel)) {
             e[si[s * 4 + 3]] += fexpf_nc(sel * (float)LN10 * 0.1f) * w[cls];
         }
     }
     out[pix * 3 + 0] = e[0]; out[pix * 3 + 1] = e[1]; out[pix * 3 + 2] = e[2];
 }
 
-// FAR (coarse lattice): one thread per far sub-seg, accumulating onto an n×n receiver
-// lattice via atomicAdd (the field is smooth at far slant, so n² ≪ TPX² nodes suffice;
-// the host bilinear-expands the lattice into the fine grid). Mirrors the CPU CoarseLattice
-// path (airborne.rs:362-404). Thread-per-seg keeps full occupancy even where most far
-// segs land (level 2 = 3×3 nodes, hundreds-of-thousands of segs).
-extern "C" __global__ void airborne_coarse(
+// Screened production FAR: one tile + level per launch, thread per classified
+// far entry. `far_st` remains the classify pass's interleaved (segment,tile)
+// array; this tile's base/count comes from the table and the tile word is skipped.
+extern "C" __global__ void airborne_coarse_screened(
     const double* __restrict__ rll, const float* __restrict__ rxa,
     const double* __restrict__ sll, const float* __restrict__ sf, const int* __restrict__ si,
     const float* __restrict__ npd, const float* __restrict__ w,
-    const int* __restrict__ idx, int nidx, int nreg,
-    int n, float* __restrict__ out_coarse)
+    const int* __restrict__ far_st, int level, int n,
+    const unsigned long long* __restrict__ screen, float* __restrict__ out_coarse)
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (j >= nidx) return;
-    int s = idx[j];
-    const float* npd_dep = npd + NPD_NC * (NPD_NB + 1);
-    double start_lat = sll[s], start_lon = sll[nreg + s];
-    const float* f = sf + s * 12;
-    int cls = si[s*4+1], is_dep = si[s*4+2], inst = si[s*4+0], period = si[s*4+3];
-    float gw = w[cls];   // Per-class hybrid weight (segment-constant).
-    for (int ci = 0; ci < n; ci++) {
-        int py = coarse_pixel(n, ci);
-        double rx_lat = rll[py], mpdl = rll[2 * TPX + py];
-        for (int cj = 0; cj < n; cj++) {
-            int px = coarse_pixel(n, cj);
-            double rx_lon = rll[TPX + px];
-            float rx_elev = rxa[py * TPX + px];
-            float sel;
-            if (airborne_sel(start_lat, start_lon, f, cls, is_dep, inst,
-                             rx_lat, rx_lon, mpdl, rx_elev, npd, npd_dep, &sel)) {
-                float energy = fexpf_nc(sel * (float)LN10 * 0.1f) * gw;
-                atomicAdd(&out_coarse[(ci * n + cj) * 3 + period], energy);
-            }
-        }
-    }
-}
-
-// ─── M3 batched kernels: one launch over a whole BLOCK of tiles instead of per-tile,
-// so a region needs ~1 sync + 1 copyback rather than O(tiles)×. The per-(seg,receiver)
-// `airborne_sel` physics is reused UNCHANGED → parity with the per-tile path by
-// construction; only the indexing gains a `tile` dimension. Receiver + output buffers
-// are concatenated per tile (stride by tile); the region SoA (sll/sf/si) stays shared.
-// `ntiles` = tiles in this block. cudarc's launch tuple caps ~12 args, so the coarse
-// kernel packs (seg,tile) interleaved into one `far_st` array (far_st[2g]=seg, [2g+1]=tile).
-
-// NEAR batched: thread per (tile, pixel). Near list per tile via CSR near_off[ti..ti+1].
-extern "C" __global__ void airborne_exact_batched(
-    const double* __restrict__ rll_b, const float* __restrict__ rxa_b,
-    const double* __restrict__ sll, const float* __restrict__ sf, const int* __restrict__ si,
-    const float* __restrict__ npd, const float* __restrict__ w,
-    const int* __restrict__ near_off, const int* __restrict__ near_idx, int nreg, int ntiles,
-    float* __restrict__ out_b)
-{
-    long gid = (long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (gid >= (long)ntiles * TPX * TPX) return;
-    int ti = (int)(gid / (TPX * TPX));
-    int pix = (int)(gid % (TPX * TPX));
-    int py = pix >> TPX_SHIFT, px = pix & TPX_MASK;
-    const double* rll = rll_b + (long)ti * 3 * TPX;
-    double rx_lat = rll[py], rx_lon = rll[TPX + px], mpdl = rll[2 * TPX + py];
-    float rx_elev = rxa_b[(long)ti * TPX * TPX + pix];
-    const float* npd_dep = npd + NPD_NC * (NPD_NB + 1);
-    float e[3] = {0.0f, 0.0f, 0.0f};
-    int lo = near_off[ti], hi = near_off[ti + 1];
-    for (int j = lo; j < hi; j++) {
-        int s = near_idx[j];
-        int cls = si[s * 4 + 1];
-        float sel;
-        if (airborne_sel(sll[s], sll[nreg + s], sf + s * 12, cls, si[s*4+2], si[s*4+0],
-                         rx_lat, rx_lon, mpdl, rx_elev, npd, npd_dep, &sel)) {
-            e[si[s * 4 + 3]] += fexpf_nc(sel * (float)LN10 * 0.1f) * w[cls];
-        }
-    }
-    float* out = out_b + (long)ti * TPX * TPX * 3;
-    out[pix * 3 + 0] = e[0]; out[pix * 3 + 1] = e[1]; out[pix * 3 + 2] = e[2];
-}
-
-// FAR batched (one level): thread per far-entry g; far_st[2g]=seg, far_st[2g+1]=tile.
-// out_coarse_b strides by tile (n*n*3 each).
-extern "C" __global__ void airborne_coarse_batched(
-    const double* __restrict__ rll_b, const float* __restrict__ rxa_b,
-    const double* __restrict__ sll, const float* __restrict__ sf, const int* __restrict__ si,
-    const float* __restrict__ npd, const float* __restrict__ w,
-    const int* __restrict__ far_st, int nfar, int nreg, int n,
-    float* __restrict__ out_coarse_b)
-{
-    int g = blockIdx.x * blockDim.x + threadIdx.x;
-    if (g >= nfar) return;
-    int s = far_st[2 * g];
-    int ti = far_st[2 * g + 1];
-    const double* rll = rll_b + (long)ti * 3 * TPX;
-    const float* rxa = rxa_b + (long)ti * TPX * TPX;
-    float* out_coarse = out_coarse_b + (long)ti * n * n * 3;
+    int base_slot = (level == 0) ? SCREEN_FAR0_BASE
+                  : (level == 1) ? SCREEN_FAR1_BASE : SCREEN_FAR2_BASE;
+    int count_slot = (level == 0) ? SCREEN_FAR0_COUNT
+                   : (level == 1) ? SCREEN_FAR1_COUNT : SCREEN_FAR2_COUNT;
+    int count = (int)screen[count_slot];
+    if (j >= count) return;
+    int base = (int)screen[base_slot];
+    int s = far_st[2 * (base + j)];
+    int nreg = (int)screen[SCREEN_NREG];
     const float* npd_dep = npd + NPD_NC * (NPD_NB + 1);
     double start_lat = sll[s], start_lon = sll[nreg + s];
     const float* f = sf + s * 12;
@@ -310,7 +288,8 @@ extern "C" __global__ void airborne_coarse_batched(
             float rx_elev = rxa[py * TPX + px];
             float sel;
             if (airborne_sel(start_lat, start_lon, f, cls, is_dep, inst,
-                             rx_lat, rx_lon, mpdl, rx_elev, npd, npd_dep, &sel)) {
+                             rx_lat, rx_lon, mpdl, rx_elev, npd, npd_dep,
+                             py * TPX + px, screen, &sel)) {
                 float energy = fexpf_nc(sel * (float)LN10 * 0.1f) * gw;
                 atomicAdd(&out_coarse[(ci * n + cj) * 3 + period], energy);
             }
@@ -323,8 +302,8 @@ extern "C" __global__ void airborne_coarse_batched(
 // device sat idle waiting for the CPU to decide near/far per seg). Thread per (tile,seg):
 // recompute the SAME best-case-slant gate as `classify_tile` (airborne.rs) and counting-sort
 // each seg into its tile's near / far[level] bucket entirely on device, so the O(nreg) loop
-// never touches the CPU — only a tile×4 counts array crosses PCIe. The M3 batched near/coarse
-// kernels then consume the GPU-built CSR (near_off+near_idx) and far (seg,tile) lists unchanged.
+// never touches the CPU — only a tile×4 counts array crosses PCIe. The screened near/coarse
+// kernels consume one tile's GPU-built CSR / far (seg,tile) slices at a time.
 //
 // Two passes (count then scatter) is the standard counting-sort: the gate is ~20 flops, cheap
 // to recompute, and a per-thread temp would need tile·nreg ints (impossible at world scale).
@@ -394,8 +373,8 @@ extern "C" __global__ void airborne_classify_count(
     if (b >= 0) atomicAdd(&counts[ti * 4 + b], 1);
 }
 
-// Pass 2: scatter each seg into the buffers the M3 kernels read. `off` = 4 blocks of (ntiles+1):
-// block 0 = near CSR (off[ti..ti+1], consumed directly by airborne_exact_batched), blocks 1/2/3 =
+// Pass 2: scatter each seg into the screened kernels' buffers. `off` = 4 blocks of (ntiles+1):
+// block 0 = near CSR (off[ti..ti+1]), blocks 1/2/3 =
 // far level base offset per tile. `fill[ntiles*4]` = per-(tile,bucket) atomic cursor (pre-zeroed).
 extern "C" __global__ void airborne_classify_scatter(
     const double* __restrict__ meta_b, const double* __restrict__ sll,

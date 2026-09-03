@@ -59,9 +59,14 @@
     },
     "aircraft-airborne": {
       "arrows": [
-        "airborne.arrow"
+        "airborne.arrow",
+        "obstacles.arrow",
+        "buildings.arrow"
       ],
-      "dependency_arrows": []
+      "dependency_arrows": [
+        "obstacles.arrow",
+        "buildings.arrow"
+      ]
     },
     "aircraft-cruise": {
       "arrows": [

@@ -137,12 +137,18 @@ pub fn maybe_run_static_attestation(
         }
         "runtime-shape" => emit_json(&runtime_shape_from_env(role, parameters.runtime)?)?,
         "workset" | "dependency-plan" => {
+            let vector_buildings = matches!(parameters.profile, DependencyProfile::Surface)
+                || parameters.layers.iter().any(|layer| {
+                    matches!(layer.as_str(), "aircraft-airborne" | "aircraft-combined")
+                });
             if mode == "dependency-plan"
-                && matches!(parameters.profile, DependencyProfile::Surface)
+                && vector_buildings
                 && (std::env::var_os("QM_OBSTACLES_ALLOW_PARTIAL").is_some()
                     || std::env::var_os("QM_OBSTACLES_DIR").is_some())
             {
-                bail!("surface dependency attestation requires canonical complete obstacles");
+                bail!(
+                    "vector-building dependency attestation requires canonical complete obstacles"
+                );
             }
             let cells_path = required_env("QM_RENDERER_ATTEST_CELLS")?;
             let mut cells = crate::region_runner::read_r4_file(Path::new(&cells_path))?;
@@ -224,6 +230,9 @@ fn collect_region_dependencies(
             other => bail!("unsupported renderer evidence layer {other:?}"),
         }
     }
+    let airborne_buildings = layers
+        .iter()
+        .any(|layer| matches!(*layer, "aircraft-airborne" | "aircraft-combined"));
     for ring_cell in ring {
         let cell_hex = format!("{:015x}", u64::from(ring_cell));
         for file in &source_files {
@@ -243,6 +252,8 @@ fn collect_region_dependencies(
                 &h3r4_relative.join(&cell_hex).join("barriers.arrow"),
                 false,
             )?;
+        }
+        if matches!(profile, DependencyProfile::Surface) || airborne_buildings {
             collect_resolved_path(
                 &mut dependencies,
                 prepared_root,
@@ -434,5 +445,33 @@ mod tests {
         assert!(error
             .to_string()
             .contains("unsupported renderer evidence layer"));
+    }
+
+    #[test]
+    fn airborne_plan_requires_obstacles_and_tracks_optional_low_profile_roofs() {
+        let root = tempdir().unwrap();
+        let h3r4 = root.path().join("2026/h3r4");
+        std::fs::create_dir_all(&h3r4).unwrap();
+        let dependencies = collect_region_dependencies(
+            0x841e309ffffffff,
+            root.path(),
+            &h3r4,
+            &[],
+            13,
+            noise_compute::emission::aircraft::RECEIVER_HORIZON_MAX_M,
+            &["aircraft-airborne"],
+            DependencyProfile::Aircraft,
+        )
+        .unwrap();
+
+        assert!(dependencies.iter().any(|item| {
+            item.role == "obstacle-arrow" && item.required && item.resolution == "absent"
+        }));
+        assert!(dependencies.iter().any(|item| {
+            item.role == "low-profile-arrow" && !item.required && item.resolution == "absent"
+        }));
+        assert!(!dependencies
+            .iter()
+            .any(|item| matches!(item.role.as_str(), "forest-raster" | "imd-raster")));
     }
 }

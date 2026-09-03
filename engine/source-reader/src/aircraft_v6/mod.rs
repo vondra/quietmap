@@ -142,9 +142,8 @@ pub fn add_v6_aircraft_to_result(
     airport_summary_path: Option<&Path>,
     rasters: &dyn RasterSampler,
     barriers: &[noise_compute::types::Barrier],
-    // Vector obstacles: threads into ground-ops screening
-    // (`compute_airport_traffic::run`) so airport ground shares the popup's
-    // physics; airborne/cruise are structurally exempt (no ground rays).
+    // Vector obstacles feed airborne building diffraction and ground-ops
+    // screening. Cruise remains structurally exempt.
     obstacles: &noise_compute::propagation::obstacle_index::ObstacleSet,
     n_days: u16,
     // Per-kind top-K cap for airborne sub-segment traces — passed to
@@ -222,22 +221,36 @@ pub fn add_v6_aircraft_to_result(
         return Ok(());
     }
 
-    // C2 terrain screening (P0, default OFF): one receiver horizon per
-    // popup query, built from the DEM terrain surface (DSM-biased:
-    // GLO-30 includes canopy/buildings) via the same tile-cached
-    // bilinear sampler the rest of the popup uses. ~1.5 k samples
-    // ≈ 0.1-0.3 ms. Env-gated like POPUP_TIMING until P1 measurement /
-    // P2 default-flip; unset ⇒ `None` ⇒ byte-identical popup output.
-    let horizon = if std::env::var("QM_AIRBORNE_HORIZON").as_deref() == Ok("1") {
+    // One C2 terrain horizon per receiver whenever airborne rows exist.
+    // Cruise never receives it. The former popup-only environment switch is
+    // deliberately gone: published tiles and clicks use the same physics.
+    let horizon = if airborne_views.is_empty() {
+        None
+    } else {
         Some(noise_compute::emission::aircraft::ReceiverHorizon::build(
             |lat, lon| rasters.elevation(lat, lon),
             receiver.lat,
             receiver.lon,
             receiver.altitude_m(),
         ))
-    } else {
-        None
     };
+    let mut crossing_scratch =
+        noise_compute::propagation::obstacle_index::CrossingScratch::default();
+    let receiver_is_enclosed =
+        crate::obstacle_store::point_inside_enclosed(obstacles, receiver.lat, receiver.lon)
+            .is_some();
+    let building_horizon = (!airborne_views.is_empty() && !receiver_is_enclosed)
+        .then(|| {
+            noise_compute::emission::aircraft::BuildingHorizon::build(
+                obstacles,
+                rasters,
+                receiver.lat,
+                receiver.lon,
+                receiver.altitude_m(),
+                &mut crossing_scratch,
+            )
+        })
+        .filter(|horizon| !horizon.is_empty());
 
     let (mut air_periods, mut air_contribs, band_data) = compute_aircraft_v6(
         receiver,
@@ -245,6 +258,7 @@ pub fn add_v6_aircraft_to_result(
         &cruise_views,
         rasters,
         horizon.as_ref(),
+        building_horizon.as_ref(),
         n_days,
         &class_weights,
         trace_cap,
@@ -313,13 +327,10 @@ pub fn add_v6_aircraft_to_result(
         .notes
         .retain(|n| !n.starts_with("Aircraft:"));
 
-    // Compute aircraft `periods_free` from the contributors before we
-    // hand them off. Airborne and cruise kernels apply no terrain /
-    // screening (Doc 29 free-field NPD), so each contributor's
-    // `periods_free == periods`. Ground ops sets the same — see TODO on
-    // `SourceResult.periods_free` doc in noise-compute/src/types/propagation.rs
-    // to pull real free-field periods out of the airport_traffic kernel
-    // variants. This remains an explicit approximation until then.
+    // Compute aircraft `periods_free` from the contributors before we hand
+    // them off. Airborne popup contributors retain pre-screen Doc 29 energy;
+    // ground ops still reports its received sum because its separate kernel
+    // has no free-field variant yet.
     let aircraft_periods_free = noise_compute::periods::sum_periods(
         &air_contribs
             .iter()

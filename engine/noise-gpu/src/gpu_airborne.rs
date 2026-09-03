@@ -11,7 +11,7 @@
 //!       --h3r4-dir <h3r4> --prepared-dir <prep> --zoom <z> --output <dir>
 //!   gpu-airborne --bbox S,W,N,E …      gpu-airborne --tile-x X --tile-y Y …   (dev modes)
 //!
-//! Submodules: `prep` (CPU prep stage — pack a cell's candidate SoA + DEM tile-blocks),
+//! Submodules: `prep` (CPU prep stage — pack candidates, receiver lattices, and obstacle data),
 //! `build` (GPU build stage — scatter the SoA into per-tile accumulators + write tiles),
 //! `stream` (the persistent `--stream` parallel-prep/GPU double buffer).
 
@@ -187,7 +187,7 @@ fn main() -> Result<()> {
             .collect(),
             prepared_root: args.prepared_dir.clone(),
             h3r4_dir: args.h3r4_dir.clone(),
-            halo_m: 0.0,
+            halo_m: noise_compute::emission::aircraft::RECEIVER_HORIZON_MAX_M,
             layers: vec!["aircraft-airborne".to_string()],
             profile: tile_painter::renderer_evidence::DependencyProfile::Aircraft,
         },

@@ -47,6 +47,16 @@ pub struct FusedGrid {
     imd_pyramid: ImdMaxPyramid,
 }
 
+/// Contiguous DEM view for device-side receiver-horizon construction.
+pub struct PackedElevationGrid {
+    pub lat_min: f64,
+    pub lon_min: f64,
+    pub inv_cell_deg: f64,
+    pub cols: usize,
+    pub rows: usize,
+    pub elevation_m: Vec<f32>,
+}
+
 impl Clone for FusedGrid {
     fn clone(&self) -> Self {
         Self {
@@ -145,6 +155,20 @@ thread_local! {
 }
 
 impl FusedGrid {
+    /// Copy the interleaved fused grid's DEM channel into a device-friendly
+    /// plane. Region airborne batches share one halo, so this happens once per
+    /// cell rather than once per tile.
+    pub fn packed_elevation_grid(&self) -> PackedElevationGrid {
+        PackedElevationGrid {
+            lat_min: self.lat_min,
+            lon_min: self.lon_min,
+            inv_cell_deg: self.inv_cell_deg,
+            cols: self.cols,
+            rows: self.rows,
+            elevation_m: self.data.iter().map(|pixel| pixel.elevation).collect(),
+        }
+    }
+
     #[inline]
     fn pixel_quad(&self, base: usize) -> [FusedPixel; 4] {
         WORKER_PIXEL_QUAD_CACHE.with(|cache| {
@@ -218,6 +242,38 @@ impl FusedGrid {
         lon_min: f64,
         lon_max: f64,
     ) -> Self {
+        Self::build_with_pixel_sampler(lat_min, lat_max, lon_min, lon_max, |lat, lon| FusedPixel {
+            elevation: rasters.dem.sample(lat, lon) as f32,
+            forest: rasters.forest.sample(lat, lon) as u8,
+            imd: rasters.imd.sample(lat, lon) as u8,
+            _pad: 0,
+        })
+    }
+
+    /// Build the same globally aligned grid with only its DEM channel.
+    /// Aircraft terrain and roof horizons read elevation exclusively, so
+    /// sampling forest/IMD and retaining their real values would be wasted
+    /// work. The zero channels must not be used for surface propagation.
+    pub fn build_elevation_only(
+        rasters: &RealRasters,
+        lat_min: f64,
+        lat_max: f64,
+        lon_min: f64,
+        lon_max: f64,
+    ) -> Self {
+        Self::build_with_pixel_sampler(lat_min, lat_max, lon_min, lon_max, |lat, lon| FusedPixel {
+            elevation: rasters.dem.sample(lat, lon) as f32,
+            ..FusedPixel::default()
+        })
+    }
+
+    fn build_with_pixel_sampler(
+        lat_min: f64,
+        lat_max: f64,
+        lon_min: f64,
+        lon_max: f64,
+        mut sample: impl FnMut(f64, f64) -> FusedPixel,
+    ) -> Self {
         let cell_deg = 1.0 / 3600.0;
         let inv_cell_deg = 3600.0;
         let (rows, cols, lat_lo, lon_lo) = Self::grid_dims(lat_min, lat_max, lon_min, lon_max);
@@ -228,14 +284,7 @@ impl FusedGrid {
             let lat = lat_lo + r as f64 * cell_deg;
             for co in 0..cols {
                 let lon = lon_lo + co as f64 * cell_deg;
-                let idx = r * cols + co;
-                let elev = rasters.dem.sample(lat, lon);
-                data[idx] = FusedPixel {
-                    elevation: elev as f32,
-                    forest: rasters.forest.sample(lat, lon) as u8,
-                    imd: rasters.imd.sample(lat, lon) as u8,
-                    _pad: 0,
-                };
+                data[r * cols + co] = sample(lat, lon);
             }
         }
 
@@ -669,6 +718,37 @@ mod tests {
                 lon
             );
         }
+    }
+
+    #[test]
+    fn elevation_only_grid_preserves_the_full_grid_dem_plane() {
+        if !prepared_available() {
+            return;
+        }
+        let rasters = test_rasters();
+        let full = FusedGrid::build(&rasters, 49.18, 49.22, 16.58, 16.63);
+        let elevation_only = FusedGrid::build_elevation_only(&rasters, 49.18, 49.22, 16.58, 16.63);
+        assert_eq!(elevation_only.rows, full.rows);
+        assert_eq!(elevation_only.cols, full.cols);
+        assert_eq!(elevation_only.lat_min.to_bits(), full.lat_min.to_bits());
+        assert_eq!(elevation_only.lon_min.to_bits(), full.lon_min.to_bits());
+        for (index, (elevation_pixel, full_pixel)) in
+            elevation_only.data.iter().zip(&full.data).enumerate()
+        {
+            assert_eq!(
+                elevation_pixel.elevation.to_bits(),
+                full_pixel.elevation.to_bits(),
+                "DEM plane changed at grid cell {index}"
+            );
+            assert_eq!((elevation_pixel.forest, elevation_pixel.imd), (0, 0));
+        }
+        let packed = elevation_only.packed_elevation_grid();
+        assert_eq!(packed.elevation_m.len(), packed.rows * packed.cols);
+        assert!(packed
+            .elevation_m
+            .iter()
+            .zip(&elevation_only.data)
+            .all(|(&packed, pixel)| packed.to_bits() == pixel.elevation.to_bits()));
     }
 
     #[test]

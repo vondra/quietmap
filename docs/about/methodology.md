@@ -39,10 +39,7 @@ being presented as measurements.
 
 ### Aircraft
 
-Airborne aircraft use an NPD-based approach informed by ECAC Doc 29. Flight traces
-come from community ADS-B sources, so coverage is strongest where receivers are
-dense. Ground operations are modelled from observed movements and airport
-geometry. This is an engineering estimate, not a certified airport study.
+Airborne aircraft use an NPD-based approach informed by ECAC Doc 29, with observed flight traces from community ADS-B sources. Quiet Map screens low-flying aircraft when terrain or a mapped building blocks the line of sight to the flight path. Doc 29 accounts for the ground and engine installation but not individual buildings, so leaving that gap would make a receiver behind a house look as loud as one in front of it. We compare the aircraft's elevation with the local terrain and roofline, calculate diffraction around the strongest blocking edge, and avoid adding that loss twice to Doc 29's existing lateral correction; high cruise traffic is unchanged. Ground operations are modelled separately from observed movements and airport geometry. This is an engineering estimate, not a certified airport study.
 
 ### Industrial sources
 

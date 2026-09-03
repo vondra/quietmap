@@ -11,19 +11,36 @@ use crate::types::{
 
 use super::variants_to_lden;
 
-/// Path-effect / band slots stay zero because aircraft propagation
-/// (Doc 29 SEL chain) doesn't expose them at the per-event level — see
-/// SPEC.md §6. Frontend gates Section 4/5/6 detail rows for
-/// `aircraft_subtype` 2 / 3 to avoid showing the resulting `−∞ dB`.
 fn aircraft_period_variants(period_energies: [f64; 3], n_days: f64) -> [PropagationVariants; 3] {
+    aircraft_period_variants_with_effects(
+        period_energies,
+        period_energies,
+        period_energies,
+        period_energies,
+        n_days,
+    )
+}
+
+fn aircraft_period_variants_with_effects(
+    period_energies: [f64; 3],
+    free_period_energies: [f64; 3],
+    no_terrain_period_energies: [f64; 3],
+    no_screening_period_energies: [f64; 3],
+    n_days: f64,
+) -> [PropagationVariants; 3] {
     std::array::from_fn(|i| {
-        let normed = if n_days > 0.0 {
-            period_energies[i] / (n_days * PERIOD_SECONDS[i])
-        } else {
-            0.0
+        let normalize = |energy: f64| {
+            if n_days > 0.0 {
+                energy / (n_days * PERIOD_SECONDS[i])
+            } else {
+                0.0
+            }
         };
         PropagationVariants {
-            full_energy: normed,
+            full_energy: normalize(period_energies[i]),
+            free_field_energy: normalize(free_period_energies[i]),
+            no_terrain_energy: normalize(no_terrain_period_energies[i]),
+            no_screening_energy: normalize(no_screening_period_energies[i]),
             ..Default::default()
         }
     })
@@ -47,6 +64,12 @@ pub struct BuildAircraftAirborneSubSegmentTrace<'a> {
     /// Linear-domain event energy per period `[day, evening, night]`
     /// (active period holds `10^(SEL/10)`, others zero).
     pub period_energies: [f64; 3],
+    /// Same energy before receiver-side terrain/building screening.
+    pub free_period_energies: [f64; 3],
+    /// Same energy with terrain screening removed.
+    pub no_terrain_period_energies: [f64; 3],
+    /// Same energy with building screening removed.
+    pub no_screening_period_energies: [f64; 3],
     pub n_days: f64,
     /// Doc 29 Eq. 4-8b decomposition from the kernel evaluation. CFFK
     /// fast path (slant > 7.62 km) populates `lambda_db = 0.0` and
@@ -58,7 +81,13 @@ pub fn build_aircraft_airborne_subsegment_trace(
     inputs: BuildAircraftAirborneSubSegmentTrace<'_>,
 ) -> SegmentTrace {
     let typecode_str = typecode_to_string(inputs.aircraft_type);
-    let variants = aircraft_period_variants(inputs.period_energies, inputs.n_days);
+    let variants = aircraft_period_variants_with_effects(
+        inputs.period_energies,
+        inputs.free_period_energies,
+        inputs.no_terrain_period_energies,
+        inputs.no_screening_period_energies,
+        inputs.n_days,
+    );
     let (icao_hex, start_unix) = crate::flight_id::icao_hex_and_start_unix(inputs.flight_id);
     // Title identity preference: airline callsign → ICAO hex →
     // typecode-only. Callsign-less broadcasts (general aviation,
@@ -219,6 +248,9 @@ mod tests {
             d_slant_m: 943.4,
             is_departure: false,
             period_energies,
+            free_period_energies: period_energies,
+            no_terrain_period_energies: period_energies,
+            no_screening_period_energies: period_energies,
             n_days,
             doc29: crate::types::Doc29Breakdown {
                 sel_npd_db: 0.0,
@@ -233,6 +265,8 @@ mod tests {
                 d_bar_m: 500.0,
                 installation: "wing",
                 cffk_fast_path: false,
+                screening_kind: "none",
+                screening_db: 0.0,
             },
         })
     }

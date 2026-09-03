@@ -49,6 +49,11 @@ impl ObstacleData {
         &self.set
     }
 
+    /// Retain the region geometry beyond this loader value's lifetime.
+    pub fn shared_set(&self) -> Arc<ObstacleSet> {
+        Arc::clone(&self.set)
+    }
+
     /// Load per-cell indexes for the region's ring.
     ///
     /// Every failure is an `Err`. There is no second building representation to
@@ -128,7 +133,6 @@ impl ObstacleData {
 }
 
 impl ObstacleData {
-    /// The one entry point the three writers share: a tile's interior
     /// The tile's interior estimate, baked from this region's footprints.
     pub fn interior_estimate(
         &self,

@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use crate::compute::aircraft_v6::state::{FlightAccum, TopFlightCandidate};
-use crate::emission::aircraft::ReceiverHorizon;
+use crate::emission::aircraft::{BuildingHorizon, ReceiverHorizon};
 use crate::types::{
     AircraftBandData, AircraftMetadata, Contributor, LayerKind, NoisePeriods, PropagationBaseline,
     RasterSampler, Receiver, ScreeningBreakdown, SourceMetadata, TerrainBreakdown, TraceCollector,
@@ -44,10 +44,11 @@ pub fn compute_aircraft_v6(
     airborne_rows: &[AirborneRowView<'_>],
     cruise_rows: &[CruiseRowView<'_>],
     rasters: &dyn RasterSampler,
-    // C2 receiver terrain horizon — `Some` only on the popup path under
-    // `QM_AIRBORNE_HORIZON=1`. Threads into the AIRBORNE scatter only;
-    // cruise is structurally exempt (β ≥ 26.6°, see segment_sel).
+    // Production airborne screening, built once for this receiver. `None` is
+    // valid only when `airborne_rows` is empty. Cruise is structurally exempt
+    // (β ≥ 26.6°, see segment_sel).
     horizon: Option<&ReceiverHorizon>,
+    buildings: Option<&BuildingHorizon>,
     n_days: u16,
     // GA hybrid per-class weight LUT, built from the arrows'
     // `sample_days_by_class` metadata by the caller.
@@ -71,15 +72,21 @@ pub fn compute_aircraft_v6(
     let t_start = std::time::Instant::now();
 
     let mut traces = traces;
-    let flights = airborne::scatter(
-        receiver,
-        airborne_rows,
-        n_days_f,
-        class_weights,
-        horizon,
-        trace_cap,
-        traces.as_deref_mut(),
-    );
+    let flights = if airborne_rows.is_empty() {
+        HashMap::new()
+    } else {
+        let horizon = horizon.expect("non-empty airborne rows require a receiver terrain horizon");
+        airborne::scatter(
+            receiver,
+            airborne_rows,
+            n_days_f,
+            class_weights,
+            horizon,
+            buildings,
+            trace_cap,
+            traces.as_deref_mut(),
+        )
+    };
     let t_airborne_scatter = t_start.elapsed();
     let mut cruise_flight_stats = HashMap::new();
     // Cruise gets its own FlightAccum table — the cruise synth fids
@@ -108,15 +115,16 @@ pub fn compute_aircraft_v6(
     let t_cruise_scatter = t_start.elapsed() - t_airborne_scatter;
 
     let cruise_band = cruise::band_stats(&cruise_flight_stats);
-    let (airborne_periods, airborne_detail) = airborne::build_detail(
-        &flights,
-        &cruise_flights,
-        cruise_flight_stats.len(),
-        &top_flight_candidates,
-        &cruise_band,
-        n_days_f,
-        (class_weights.ga_n_days() as f64).max(1.0),
-    );
+    let (airborne_periods, airborne_periods_free, airborne_impacts, airborne_detail) =
+        airborne::build_detail(
+            &flights,
+            &cruise_flights,
+            cruise_flight_stats.len(),
+            &top_flight_candidates,
+            &cruise_band,
+            n_days_f,
+            (class_weights.ga_n_days() as f64).max(1.0),
+        );
     let t_airborne_detail = t_start.elapsed() - t_airborne_scatter - t_cruise_scatter;
 
     let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
@@ -148,8 +156,8 @@ pub fn compute_aircraft_v6(
             terrain: TerrainBreakdown::default(),
             screening: ScreeningBreakdown::default(),
             vegetation: VegetationBreakdown::default(),
-            terrain_impact_db: 0.0,
-            screening_impact_db: 0.0,
+            terrain_impact_db: airborne_impacts.terrain,
+            screening_impact_db: airborne_impacts.screening,
             vegetation_impact_db: 0.0,
             atmospheric_impact_db: 0.0,
             ground_impact_db: 0.0,
@@ -158,11 +166,9 @@ pub fn compute_aircraft_v6(
             subtype: "airborne".to_string(),
             distance_m: 0.0,
             periods: airborne_periods.clone(),
-            // free == received was EXACT pre-C2 (airborne had no path
-            // effects). The optional QM_AIRBORNE_HORIZON=1 development path
-            // changes received periods but does not compute a separate free-field
-            // accumulation, so this display field remains identical to received.
-            periods_free: airborne_periods.clone(),
+            // Pre-screen Doc 29 energy is retained by the popup accumulator;
+            // the painter remains received-only for the GPU/CPU tile path.
+            periods_free: airborne_periods_free.clone(),
             emission_db: airborne_periods.lden_db,
             received_bands: [0.0; NUM_BANDS],
             metadata: Some(SourceMetadata::Aircraft(Box::new(AircraftMetadata {
@@ -181,100 +187,6 @@ pub fn compute_aircraft_v6(
     };
 
     (airborne_periods, contributors, band_data)
-}
-
-/// Per-phase aircraft periods, separated for heatmap validation.
-///
-/// The popup entrypoint [`compute_aircraft_v6`] folds airborne + cruise
-/// energy into one `airborne_periods` (matches the single "Aircraft Lden"
-/// shown in the popup contributor). The heatmap pipeline computes
-/// cruise / airborne / ground ops separately and needs to validate each
-/// phase against popup-equivalent numbers — that requires the unfolded
-/// values this struct exposes.
-///
-/// `ground_ops` is None here because ground ops lives in the parallel
-/// `airport_traffic::run` path invoked by source-reader, not in
-/// `compute_aircraft_v6`. The heatmap validator calls that path directly
-/// when it needs ground-only periods.
-#[derive(Debug, Clone)]
-pub struct AircraftPeriodsBreakdown {
-    pub airborne: NoisePeriods,
-    pub cruise: NoisePeriods,
-}
-
-/// Test-only / validation-only variant of [`compute_aircraft_v6`] that
-/// returns airborne and cruise period totals separately instead of
-/// folding cruise into airborne.
-///
-/// Use this from heatmap-v2 validation harnesses to compare per-source
-/// heatmap output against the popup-equivalent per-source Lden. The
-/// popup contract ([`compute_aircraft_v6`]) is unchanged — production
-/// callers must continue to use that entry point.
-pub fn compute_aircraft_v6_separable(
-    receiver: &Receiver,
-    airborne_rows: &[AirborneRowView<'_>],
-    cruise_rows: &[CruiseRowView<'_>],
-    rasters: &dyn RasterSampler,
-    n_days: u16,
-    // GA full-year hybrid per-class weight LUT — same as `compute_aircraft_v6`.
-    class_weights: &crate::emission::aircraft::ClassWeights,
-) -> AircraftPeriodsBreakdown {
-    use crate::emission::aircraft;
-    use crate::periods;
-
-    let n_days_f = (n_days as f64).max(1.0);
-
-    let flights = airborne::scatter(
-        receiver,
-        airborne_rows,
-        n_days_f,
-        class_weights,
-        // Validation harness compares against pre-C2 heatmap output —
-        // no horizon until P3 wires the heatmap side.
-        None,
-        // No traces collected on this path → cap is irrelevant; pass 0.
-        0,
-        None,
-    );
-
-    let mut cruise_flight_stats: HashMap<u64, state::CruiseFlightStats> = HashMap::new();
-    let mut cruise_flights: HashMap<u64, FlightAccum> = HashMap::new();
-    let mut top_flight_candidates: HashMap<u64, TopFlightCandidate> = HashMap::new();
-    cruise::scatter(
-        receiver,
-        cruise_rows,
-        rasters,
-        n_days_f,
-        &mut cruise_flights,
-        &mut cruise_flight_stats,
-        &mut top_flight_candidates,
-        None,
-    );
-
-    let collapse = |accums: &HashMap<u64, FlightAccum>| -> NoisePeriods {
-        let mut e = [0.0f64; 3];
-        // Ascending flight_id, not HashMap order — see `key_sorted`.
-        for (_, acc) in crate::compute::key_sorted(accums) {
-            // Period accumulation — `p` indexes both sides; f64 sum order is parity.
-            #[allow(clippy::needless_range_loop)]
-            for p in 0..3 {
-                e[p] += acc.period_energy[p];
-            }
-        }
-        if e.iter().sum::<f64>() > 0.0 {
-            let ld = aircraft::period_leq(e[0], n_days_f, aircraft::PERIOD_SECONDS[0]);
-            let le = aircraft::period_leq(e[1], n_days_f, aircraft::PERIOD_SECONDS[1]);
-            let ln = aircraft::period_leq(e[2], n_days_f, aircraft::PERIOD_SECONDS[2]);
-            periods::periods(ld, le, ln)
-        } else {
-            NoisePeriods::silence()
-        }
-    };
-
-    AircraftPeriodsBreakdown {
-        airborne: collapse(&flights),
-        cruise: collapse(&cruise_flights),
-    }
 }
 
 #[cfg(test)]
@@ -298,8 +210,19 @@ mod tests {
     fn silence_when_no_data() {
         let receiver = Receiver::new(50.10, 14.262, 0.0);
         let w = crate::emission::aircraft::ClassWeights::uniform();
-        let (periods, contribs, _band) =
-            compute_aircraft_v6(&receiver, &[], &[], &FlatGround, None, 1, &w, 0, None, None);
+        let (periods, contribs, _band) = compute_aircraft_v6(
+            &receiver,
+            &[],
+            &[],
+            &FlatGround,
+            None,
+            None,
+            1,
+            &w,
+            0,
+            None,
+            None,
+        );
         assert!(!periods.lden_db.is_finite());
         assert!(contribs.is_empty());
     }
@@ -330,6 +253,12 @@ mod tests {
         const N_FLIGHTS: usize = 300;
         let receiver = Receiver::new(50.0, 14.0, 300.0);
         let w = crate::emission::aircraft::ClassWeights::uniform();
+        let horizon = ReceiverHorizon::build(
+            |_, _| 300.0,
+            receiver.lat,
+            receiver.lon,
+            receiver.altitude_m(),
+        );
 
         // Airborne: one two-sub-segment flight per row. The flights must
         // land at COMPARABLE energies with differing low bits — a wide
@@ -462,6 +391,7 @@ mod tests {
                 &airborne,
                 &cruise,
                 &FlatGround,
+                Some(&horizon),
                 None,
                 7,
                 &w,
@@ -502,14 +432,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn separable_silence_when_no_data() {
-        let receiver = Receiver::new(50.10, 14.262, 0.0);
-        let w = crate::emission::aircraft::ClassWeights::uniform();
-        let breakdown = compute_aircraft_v6_separable(&receiver, &[], &[], &FlatGround, 1, &w);
-        assert!(!breakdown.airborne.lden_db.is_finite());
-        assert!(!breakdown.cruise.lden_db.is_finite());
     }
 }

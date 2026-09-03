@@ -1,5 +1,4 @@
-//! E2-E5 airborne GPU validation + benchmark.
-//! Reference = the REAL `airborne::scatter_tile` (near per-pixel + far CoarseLevels).
+//! Airborne GPU validation + benchmark against the CPU painter's shared screened path.
 //!
 //! The GPU compute lives in `noise_gpu::airborne` (shared with the `gpu-airborne` production
 //! builder); this bin only drives it over an R4's tiles and checks parity + times it. E5
@@ -13,6 +12,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use h3o::CellIndex;
+use noise_compute::emission::aircraft::{RECEIVER_HORIZON_MAX_M, RECEIVER_HORIZON_RANGE_SCALE};
 use noise_gpu::airborne::{region_candidates, AirborneGpu};
 use raster_reader::fused_tile_z13::{default_batch_size, TileBatch, TILE_PX};
 use raster_reader::RealRasters;
@@ -20,6 +20,7 @@ use tile_painter::accumulator::TileAccumulator;
 use tile_painter::airborne::scatter_tile;
 use tile_painter::region_runner::{region_tiles, tile_centre_r4};
 use tile_painter::source_loader_airborne::AirborneData;
+use tile_painter::source_loader_obstacle::ObstacleData;
 
 fn env(k: &str, d: &str) -> String {
     std::env::var(k).unwrap_or_else(|_| d.to_string())
@@ -41,6 +42,7 @@ fn main() -> Result<()> {
         .collect();
     let rasters = RealRasters::new(Path::new(&prepared));
     let air = AirborneData::load_for_r4s(Path::new(&h3r4), &ring)?;
+    let obstacles = ObstacleData::load_for_r4s(Path::new(&h3r4), r4, &ring)?;
     let views = air.views();
     let bn = default_batch_size();
     let n = TILE_PX * TILE_PX;
@@ -51,6 +53,27 @@ fn main() -> Result<()> {
     let cw = noise_compute::emission::aircraft::ClassWeights::uniform();
     // Device + kernels + NPD: one-time startup, excluded from the per-region prep cost below.
     let gpu = AirborneGpu::new(&cw);
+    // Regression for conservative range packing: with the old nearest-metre
+    // rule, 123.25 m stored as 123 m would put this source in front of the
+    // edge. The shared CPU/GPU ceiling must keep the edge out of the query.
+    let probe_true_range_m = 123.25_f32;
+    let probe_source_range_m = 123.125_f32;
+    let probe_packed_range = (f64::from(probe_true_range_m) * RECEIVER_HORIZON_RANGE_SCALE).ceil();
+    if probe_packed_range <= f64::from(probe_source_range_m) {
+        anyhow::bail!(
+            "CPU terrain range probe did not pack away from source: packed={probe_packed_range}, source={probe_source_range_m}"
+        );
+    }
+    let probe_dz =
+        gpu.terrain_range_quantization_probe(probe_true_range_m, probe_source_range_m)?;
+    if probe_dz != 0.0 {
+        anyhow::bail!(
+            "GPU terrain range probe screened a source in front of the edge: Dz={probe_dz} dB"
+        );
+    }
+    eprintln!(
+        "GPU terrain range quantization probe: true={probe_true_range_m:.3} m, source={probe_source_range_m:.3} m, packed={probe_packed_range:.0} m, Dz={probe_dz:.3} dB — PASS"
+    );
 
     // ---- region-prep ONCE: candidates + prepare_segment + pack + upload (the amortised wall) ----
     // The envelope is derived from the R4 geometry (see `region_candidates`), so it is a safe
@@ -78,6 +101,7 @@ fn main() -> Result<()> {
     let e2_exact = env("QM_E2_EXACT", "0") == "1";
     let (mut tot_cpu, mut tot_gpu) = (0.0f64, 0.0f64);
     let (mut worst_db, mut tot_zero, mut n_done) = (0.0f64, 0usize, 0usize);
+    let mut tot_non_finite = 0usize;
     let (mut worst_gx, mut zero_gx) = (0.0f64, 0usize); // GPU vs exact (the mountain gate)
     let (mut worst_ax, mut zero_ax) = (0.0f64, 0usize); // adaptive vs exact (coarse error alone)
                                                         // Severity of the GPU-vs-exact drift: how localised is it (cells over 0.5/1.0 dB, tiles
@@ -85,24 +109,49 @@ fn main() -> Result<()> {
     let (mut n_gx_over_half, mut n_gx_over_1, mut n_tiles_over_half) = (0usize, 0usize, 0usize);
     let mut worst_gx_tile = (0u32, 0u32);
     for ((bx, by), btiles) in &batches {
-        let batch = TileBatch::build(z, *bx, *by, bn, 0.0, &rasters);
+        let batch = TileBatch::build_receiver_altitude_with_halo(
+            z,
+            *bx,
+            *by,
+            bn,
+            RECEIVER_HORIZON_MAX_M,
+            &rasters,
+        );
         for &(tx, ty) in btiles {
             let tile = &batch.tiles[((ty - by) * bn + (tx - bx)) as usize];
+            let interiors = [obstacles.interior_estimate(tile)];
+            let interior = &interiors[0];
 
             // CPU-prod (the real CPU result + baseline)
             std::env::remove_var("QM_AIRBORNE_FORCE_EXACT");
             let mut accum_prod = TileAccumulator::new();
             let tc = std::time::Instant::now();
-            let _ = scatter_tile(tile, &views, &cw, &mut accum_prod);
+            let _ = scatter_tile(
+                tile,
+                &views,
+                &cw,
+                obstacles.set(),
+                interior,
+                &mut accum_prod,
+            );
             tot_cpu += tc.elapsed().as_secs_f64() * 1e3;
 
-            // GPU per-tile: classify (cheap) → near + far kernels → expand (shared module)
+            // GPU production path: classify → receiver horizons → near/far → expand.
             let tg = std::time::Instant::now();
-            let fine = gpu.scatter_tile(&resident, tile);
+            let fine = gpu
+                .scatter_region(&resident, &[tile], obstacles.set(), &interiors)?
+                .pop()
+                .expect("one GPU tile");
             tot_gpu += tg.elapsed().as_secs_f64() * 1e3;
 
-            // parity vs CPU-prod (both buffers are n*3 = TileAccumulator energy len)
+            // parity vs CPU-prod (both buffers are n*3 = TileAccumulator energy len).
+            // A NaN or infinite cell would slip past both comparisons (NaN compares
+            // false, `f64::max` ignores it), so it is counted as its own failure.
             for (&g, &c) in fine.energy.iter().zip(accum_prod.energy.iter()) {
+                if !g.is_finite() || !c.is_finite() {
+                    tot_non_finite += 1;
+                    continue;
+                }
                 if (g > 0.0) != (c > 0.0) {
                     tot_zero += 1;
                 }
@@ -118,7 +167,14 @@ fn main() -> Result<()> {
             if e2_exact {
                 std::env::set_var("QM_AIRBORNE_FORCE_EXACT", "1");
                 let mut accum_exact = TileAccumulator::new();
-                let _ = scatter_tile(tile, &views, &cw, &mut accum_exact);
+                let _ = scatter_tile(
+                    tile,
+                    &views,
+                    &cw,
+                    obstacles.set(),
+                    interior,
+                    &mut accum_exact,
+                );
                 std::env::remove_var("QM_AIRBORNE_FORCE_EXACT");
                 let mut tile_worst = 0.0f64;
                 for ((&g, &a), &x) in fine
@@ -127,6 +183,10 @@ fn main() -> Result<()> {
                     .zip(accum_prod.energy.iter())
                     .zip(accum_exact.energy.iter())
                 {
+                    if !g.is_finite() || !a.is_finite() || !x.is_finite() {
+                        tot_non_finite += 1;
+                        continue;
+                    }
                     if (g > 0.0) != (x > 0.0) {
                         zero_gx += 1;
                     }
@@ -164,10 +224,14 @@ fn main() -> Result<()> {
         "region R4 {r4:015x} | {n_done} tiles | {nreg} region candidates (prepare_segment ONCE)"
     );
     eprintln!("GPU vs CPU-adaptive: worst max {worst_db:.4} dB, {tot_zero} zero-sided total");
-    if worst_db < 0.5 && tot_zero == 0 {
+    let production_failed =
+        !worst_db.is_finite() || worst_db >= 0.5 || tot_zero != 0 || tot_non_finite != 0;
+    if !production_failed {
         eprintln!("✓ region GPU airborne within 0.5 dB, 0 zero-sided across {n_done} tiles");
     } else {
-        eprintln!("✗ parity FAILED (worst {worst_db:.3} dB, {tot_zero} zero-sided)");
+        eprintln!(
+            "✗ parity FAILED (worst {worst_db:.3} dB, {tot_zero} zero-sided, {tot_non_finite} non-finite)"
+        );
     }
     if e2_exact {
         let cells = (n_done * n * 3).max(1);
@@ -178,11 +242,18 @@ fn main() -> Result<()> {
         eprintln!(
             "  adaptive vs exact: worst {worst_ax:.4} dB, {zero_ax} zero-sided — the coarse-lattice error; GPU≈adaptive ({worst_db:.4} dB) so GPU inherits it, does not introduce it"
         );
-        if worst_gx < 0.5 && zero_gx == 0 {
+        let exact_failed =
+            !worst_gx.is_finite() || worst_gx >= 0.5 || zero_gx != 0 || tot_non_finite != 0;
+        if !exact_failed {
             eprintln!("✓ MOUNTAIN GATE PASS — GPU within 0.5 dB of exact across {n_done} tiles");
         } else {
             eprintln!(
                 "✗ MOUNTAIN GATE over 0.5 dB — worst {worst_gx:.3} dB on {n_gx_over_half} cell(s); pre-existing CPU coarse-lattice limit, not a GPU-port defect"
+            );
+        }
+        if exact_failed {
+            anyhow::bail!(
+                "airborne exact-oracle parity gate failed: worst={worst_gx:.4} dB, zero-sided={zero_gx}, non-finite={tot_non_finite}"
             );
         }
     }
@@ -199,5 +270,10 @@ fn main() -> Result<()> {
         "  → region speedup (amortised): {:.1}×",
         tot_cpu / gpu_total.max(0.001)
     );
+    if production_failed {
+        anyhow::bail!(
+            "airborne production parity gate failed: worst={worst_db:.4} dB, zero-sided={tot_zero}, non-finite={tot_non_finite}"
+        );
+    }
     Ok(())
 }

@@ -18,6 +18,10 @@ export function ContributorRow({ c, onToggle }: { c: Contributor; onToggle?: (ge
   // ContributorDetail, which mounts only when the row is expanded.
   const ldenBreakdownText = aircraftAirborne
     ? txtTable([
+        ['Free field', `${c.received_lden_free.toFixed(1)} dB`],
+        ['Terrain', `${fmt(c.terrain_impact_db)} dB`],
+        ['Screening', `${fmt(c.screening_impact_db)} dB`],
+        { sep: true },
         ['Day (07–19)', fmtDb(aircraftAirborne.periods.ld_db)],
         ['Evening (19–23)', fmtDb(aircraftAirborne.periods.le_db)],
         ['Night (23–07)', fmtDb(aircraftAirborne.periods.ln_db)],

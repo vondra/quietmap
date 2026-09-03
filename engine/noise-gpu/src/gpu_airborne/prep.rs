@@ -1,17 +1,17 @@
-//! CPU prep stage for the gpu-airborne bin: load + pack a cell's candidate SoA, build its
-//! DEM tile-blocks (no GPU/device touch). The output (`PreparedCell`) crosses the A2 channel
-//! to the `build` stage; `build_dem_blocks` is shared with the M2 chunked build there.
+//! CPU prep for gpu-airborne: pack candidates and build receiver/terrain inputs.
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use h3o::CellIndex;
-use noise_compute::emission::aircraft::SegmentPrepared;
+use noise_compute::emission::aircraft::{SegmentPrepared, RECEIVER_HORIZON_MAX_M};
+use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_gpu::airborne::region_candidates;
 use noise_gpu::pack_airborne_segs;
-use raster_reader::fused_tile_z13::{FusedTileZ13, TileBatch};
+use raster_reader::fused_tile_z13::{FusedTileZ13, TileBatch, TileBbox};
 use raster_reader::RealRasters;
 use rayon::prelude::*;
 use tile_painter::grid::tile_bbox;
@@ -19,17 +19,17 @@ use tile_painter::r4_source_cache::R4SourceCache;
 use tile_painter::source_loader_obstacle::{InteriorEstimate, ObstacleData};
 
 /// One grid-aligned tile-block, CPU-prepped: its NW corner `(bx,by)`, the owned tiles in it,
-/// the DEM-only `TileBatch`, and one building-interior estimate per owned tile.
+/// the receiver-altitude `TileBatch` with its 8 km DEM halo, and one building-interior
+/// estimate per owned tile.
 pub(crate) struct PrepBlock {
     pub(crate) bx: u32,
     pub(crate) by: u32,
     pub(crate) btiles: Vec<(u32, u32)>,
     pub(crate) batch: TileBatch,
     /// Per owned tile, in `btiles` order: the façade-donor map `write_tile_accumulator` stamps
-    /// onto the collapsed tile. `None` where the region has no vector footprints. Baked HERE, on
-    /// the CPU prep thread, so the bake overlaps GPU scatter instead of serialising behind it —
-    /// the same placement `gpu_surface` uses.
-    pub(crate) interiors: Vec<Option<InteriorEstimate>>,
+    /// onto the collapsed tile. Baked HERE so the work overlaps GPU scatter, the same placement
+    /// `gpu_surface` uses.
+    pub(crate) interiors: Vec<InteriorEstimate>,
 }
 
 impl PrepBlock {
@@ -60,6 +60,7 @@ pub(crate) struct PreparedCell {
     pub(crate) si: Vec<i32>,
     pub(crate) nreg: usize,
     pub(crate) blocks: Vec<PrepBlock>,
+    pub(crate) obstacles: Option<Arc<ObstacleSet>>,
     pub(crate) t_start: Instant,
     pub(crate) timings: PrepTimings,
     /// M2: the region's full candidate Vec wouldn't fit one host/VRAM pass, so prep produced NO SoA
@@ -129,10 +130,9 @@ fn host_mem_budget() -> Option<(u64, u64)> {
     Some((total, total.saturating_sub(avail)))
 }
 
-/// Pre-fault the tile DEM footprints, then batch them into grid-aligned DEM-only blocks and bake
-/// each owned tile's building-interior estimate against the region's vector footprints.
-/// `build_receiver_altitude_only` reads only `rx_alt_m`, skipping building/forest/IMD and
-/// the halo a full build computes. Requested-zoom tile batching, the receiver-altitude grid and
+/// Pre-fault the tile DEM footprints, then batch them into grid-aligned receiver blocks with the
+/// terrain-horizon reach and bake each tile's building-interior estimate against the region's
+/// vector footprints. Requested-zoom tile batching, the receiver-altitude grid and
 /// the interior bake use one path for both one-pass prep (`prep_cell`) and the M2 chunked build
 /// (`gpu_build_cell_chunked`); a divergence would scatter megahubs against a different receiver
 /// grid than one-pass cells, or stamp only one of the two paths. The footprints load HERE rather
@@ -144,7 +144,7 @@ pub(crate) fn build_dem_blocks(
     bn: u32,
     r4: u64,
     tiles: &[(u32, u32)],
-) -> Result<Vec<PrepBlock>> {
+) -> Result<(Vec<PrepBlock>, Arc<ObstacleSet>)> {
     let obstacles = load_region_obstacles(h3r4_dir, r4)?;
     let (mut ps, mut pn, mut pw, mut pe) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
     for &(tx, ty) in tiles {
@@ -155,6 +155,16 @@ pub(crate) fn build_dem_blocks(
         pe = pe.max(bb.east_lon);
     }
     rasters.preload_dem_bbox(ps, pn, pw, pe);
+    let region_halo = FusedTileZ13::build_elevation_halo(
+        &TileBbox {
+            west_lon: pw,
+            east_lon: pe,
+            north_lat: pn,
+            south_lat: ps,
+        },
+        RECEIVER_HORIZON_MAX_M,
+        rasters,
+    );
     let mut batches: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
     for &(tx, ty) in tiles {
         batches
@@ -162,12 +172,12 @@ pub(crate) fn build_dem_blocks(
             .or_default()
             .push((tx, ty));
     }
-    // Parallel across blocks: `build_receiver_altitude_only` is sequential by design ("the caller
+    // Parallel across blocks: receiver-altitude construction is sequential by design ("the caller
     // usually parallelises across batches, not within them") and the interior bake adds a
     // point-in-footprint classify + an exact distance transform over all 512² receivers per tile.
     // Left serial, a 120-tile cell would put that whole cost on the ONE prep thread that has to
     // stay ahead of the device workers. Same shape as `gpu_surface`'s `par_iter` block prep.
-    Ok(batches
+    let blocks = batches
         .into_iter()
         .collect::<Vec<_>>()
         .into_par_iter()
@@ -176,39 +186,34 @@ pub(crate) fn build_dem_blocks(
                 bx,
                 by,
                 btiles,
-                batch: TileBatch::build_receiver_altitude_only(z, bx, by, bn, rasters),
+                batch: TileBatch::build_receiver_altitude_with_shared_halo(
+                    z,
+                    bx,
+                    by,
+                    bn,
+                    rasters,
+                    Arc::clone(&region_halo),
+                ),
                 interiors: Vec::new(),
             };
             let interiors = block
                 .tile_refs()
                 .into_iter()
-                .map(|tile| Some(obstacles.interior_estimate(tile)))
+                .map(|tile| obstacles.interior_estimate(tile))
                 .collect();
             block.interiors = interiors;
             block
         })
-        .collect())
+        .collect();
+    Ok((blocks, obstacles.shared_set()))
 }
 
 /// The region's vector building footprints — the SAME `grid_disk(1)` load the CPU aircraft
 /// builder does (`region_runner::process_region`, which likewise re-derives the ring next to its
 /// consumer so the painted cell is always inside it), so both writers stamp the identical
-/// estimate. Returns `ObstacleData::off()` (every bake `None`) in a raster-fallback region.
-///
-/// CLUSTER CAVEAT: a typed remote worker is shipped only the arrows its group's layers declare in
-/// `scripts/layer-spec.json`, and `aircraft-airborne` declares none of the obstacle set — so on
-/// those hosts this returns `off()` (it says so on stderr) and the stamp is inert until the
-/// pending read-set/buildability split declares BOTH `obstacles.arrow` and `buildings.arrow` for
-/// the aircraft layers. Declaring only the former would be worse than neither: without
-/// `buildings.arrow` the low-profile 3 m cap never fires, and every defaulted-height footprint
-/// crosses the 6 m boundary into the 25 dB class instead of 20 dB; the loader's ingested-empty
-/// escape also needs the store-wide `.ingested-tiles` proof, which staging does not ship either.
-///
-/// The same split leaves a trap for renderer evidence: under `QM_RENDERER_EVIDENCE_V1=1` this
-/// call FAILS the region instead of falling back to raster, while the `Aircraft` dependency
-/// profile still declares only the airborne/cruise arrows and the DEM. No production airborne
-/// worker sets that flag today; the profile has to gain the obstacle + `buildings.arrow`
-/// dependencies before one does.
+/// estimate. The airborne layer declares both `obstacles.arrow` and `buildings.arrow` in its read
+/// set: the latter supplies the low-profile cap when present, while its absence is the loader's
+/// explicit empty-lookup state for cells with no low-profile OSM buildings.
 fn load_region_obstacles(h3r4_dir: &Path, r4: u64) -> Result<ObstacleData> {
     let cell = CellIndex::try_from(r4)?;
     let ring: Vec<u64> = cell
@@ -221,8 +226,8 @@ fn load_region_obstacles(h3r4_dir: &Path, r4: u64) -> Result<ObstacleData> {
 }
 
 /// CPU prep stage for one cell (no GPU/device touch): load its grid_disk(1) airborne sources
-/// through `cache`, `region_candidates` + pack the region SoA, then build the DEM-only tile
-/// batches — and their building-interior estimates — for `tiles` (the cell's owned tiles:
+/// through `cache`, `region_candidates` + pack the region SoA, then build receiver tiles with a
+/// shared terrain halo and their building-interior estimates for `tiles` (the cell's owned tiles:
 /// `region_tiles(r4,z)` on the stream/production path, a bbox/single-tile subset on the dev
 /// paths). The packed SoA is uploaded later by
 /// `gpu_build_cell_one_pass` via `upload_region`. `region` is dropped right after packing — only the SoA
@@ -248,6 +253,7 @@ pub(crate) fn prep_cell(
             si: Vec::new(),
             nreg: 0,
             blocks: Vec::new(),
+            obstacles: None,
             t_start,
             timings: PrepTimings::default(),
             too_big: false,
@@ -275,9 +281,9 @@ pub(crate) fn prep_cell(
     // skipping a borderline cell, since a skipped cell is uncomputed (accepted) but an OOM crashes.
     // The tile blocks are DELIBERATELY outside this estimate: `build_dem_blocks` runs on BOTH
     // routes, so counting them could only push a cell to the chunked path that pays the same bytes
-    // there. They live in the +4 GiB allowance instead — at the W2 z13 shape (~122 owned tiles per
-    // R4) a `TileBatch` is ~3.75 MB/tile and its `InteriorEstimate` 512²·(1 B class + 4 B donor) =
-    // 1.25 MiB/tile, ≈ 610 MB per cell, and the depth-1 stream channel keeps ~4 cells resident.
+    // there. Receiver cores, shared 8 km horizon halos, interior estimates, and the depth-1 stream
+    // overlap live in the +4 GiB fixed allowance instead; none scales with candidate count, so it
+    // cannot decide between the one-pass and chunked candidate paths.
     if let Some((max, cur)) = host_mem_budget() {
         let n_sub: usize = views.iter().map(|v| v.sub_segments.start_lat.len()).sum();
         let est = (n_sub as u64)
@@ -302,6 +308,7 @@ pub(crate) fn prep_cell(
                 si: Vec::new(),
                 nreg: 0,
                 blocks: Vec::new(),
+                obstacles: None,
                 t_start,
                 timings: PrepTimings {
                     candidates: candidates_start.elapsed(),
@@ -323,12 +330,12 @@ pub(crate) fn prep_cell(
     drop(views);
     drop(arcs);
 
-    // Pre-fault the DEM footprint + batch the tiles into DEM-only blocks and bake their interior
+    // Pre-fault the DEM footprint + batch the tiles with their horizon halo and bake their interior
     // estimates (shared with the M2 chunked build — one source of truth for the block topology and
     // the stamp, see `build_dem_blocks`). Timed as part of `dem`: it is per-tile receiver-lattice
     // prep, and it runs here rather than at write time so it overlaps the GPU scatter.
     let dem_start = Instant::now();
-    let blocks = build_dem_blocks(rasters, h3r4_dir, z, bn, r4, tiles)?;
+    let (blocks, obstacles) = build_dem_blocks(rasters, h3r4_dir, z, bn, r4, tiles)?;
     let dem = dem_start.elapsed();
     Ok(PreparedCell {
         sll,
@@ -336,6 +343,7 @@ pub(crate) fn prep_cell(
         si,
         nreg,
         blocks,
+        obstacles: Some(obstacles),
         t_start,
         timings: PrepTimings {
             candidates,

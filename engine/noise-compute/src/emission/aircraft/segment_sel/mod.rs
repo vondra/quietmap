@@ -8,8 +8,8 @@
 use crate::types::{AircraftSegment, RasterSampler};
 
 use super::doc29::{
-    delta_i_constants, delta_v, segment_energy_kernel, AircraftKernelResult, CpaResult,
-    M_PER_DEG_LAT,
+    delta_i_constants, delta_v, segment_energy_kernel, segment_energy_kernel_with_screening,
+    AircraftKernelResult, CpaResult, M_PER_DEG_LAT,
 };
 use super::horizon::ReceiverHorizon;
 use super::npd::{
@@ -45,6 +45,7 @@ pub fn segment_sel(
         terrain_end_cut_m,
         NpdLuts::shared(),
         None,
+        None,
     )
 }
 
@@ -72,6 +73,7 @@ pub fn segment_sel_with_luts(
         terrain_start_cut_m,
         terrain_end_cut_m,
         npd_luts,
+        None,
         None,
     )
 }
@@ -104,6 +106,7 @@ pub fn segment_sel_with_terrain(
         terrain.start_elev - 30.0,
         terrain.end_elev - 30.0,
         npd_luts,
+        None,
         None,
     )
 }
@@ -187,6 +190,7 @@ pub fn segment_sel_with_terrain_energy(
         terrain.end_elev - 30.0,
         npd_luts,
         None,
+        None,
     )
     .map(|(sel, _cpa)| sel)
 }
@@ -197,8 +201,8 @@ pub fn segment_sel_with_terrain_energy(
 /// columns or any other pre-sampled source). Skips the `SegmentTerrain`
 /// construct entirely — used by the airborne popup + heatmap hot paths
 /// once Stage 1 / Stage 2A have absorbed the mountain-peak validity
-/// check. `horizon` enables C2 terrain screening (airborne popup,
-/// `QM_AIRBORNE_HORIZON=1`); `None` is byte-identical to pre-C2.
+/// check. `horizon` enables C2 terrain screening; production airborne callers
+/// always pass one, while `None` preserves the unscreened regression API.
 pub fn segment_sel_with_cuts(
     seg: &AircraftSegment,
     rx_lat: f64,
@@ -221,6 +225,36 @@ pub fn segment_sel_with_cuts(
         terrain_end_cut_m,
         npd_luts,
         horizon,
+        None,
+    )
+}
+
+/// Airborne-only twin of [`segment_sel_with_cuts`] with vector-building
+/// screening. Cruise and airport ground paths cannot call this entry point.
+pub fn segment_sel_with_screening(
+    seg: &AircraftSegment,
+    rx_lat: f64,
+    rx_lon: f64,
+    rx_elev_m: f64,
+    terrain_start_cut_m: f64,
+    terrain_end_cut_m: f64,
+    npd_luts: &NpdLuts,
+    horizon: &ReceiverHorizon,
+    buildings: &super::BuildingHorizon,
+) -> Option<(f64, CpaResult)> {
+    segment_sel_with_overrides::<true>(
+        seg,
+        rx_lat,
+        rx_lon,
+        rx_elev_m,
+        seg.start_alt_m as f64,
+        seg.end_alt_m as f64,
+        false,
+        terrain_start_cut_m,
+        terrain_end_cut_m,
+        npd_luts,
+        Some(horizon),
+        Some(buildings),
     )
 }
 
@@ -250,9 +284,11 @@ pub fn segment_sel_airport_ground(
         f64::MIN,
         NpdLuts::shared(),
         None,
+        None,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn segment_sel_with_overrides<const WANT_CPA: bool>(
     seg: &AircraftSegment,
     rx_lat: f64,
@@ -265,7 +301,82 @@ fn segment_sel_with_overrides<const WANT_CPA: bool>(
     terrain_end_cut_m: f64,
     npd_luts: &NpdLuts,
     horizon: Option<&ReceiverHorizon>,
+    buildings: Option<&super::BuildingHorizon>,
 ) -> Option<(f64, CpaResult)> {
+    let kernel = segment_kernel_with_overrides::<WANT_CPA, false>(
+        seg,
+        rx_lat,
+        rx_lon,
+        rx_elev_m,
+        start_alt_m,
+        end_alt_m,
+        airport_ground_mode,
+        terrain_start_cut_m,
+        terrain_end_cut_m,
+        npd_luts,
+        horizon,
+        buildings,
+    )?;
+
+    let cpa = CpaResult {
+        q_m: kernel.q_m,
+        d_p_m: kernel.d_p_m,
+        lateral_m: kernel.lateral_m,
+        relative_alt_m: kernel.rel_alt_m,
+        beta_deg: kernel.beta_deg,
+        seg_len_m: kernel.seg_len_m,
+        t: kernel.t,
+    };
+
+    Some((kernel.sel, cpa))
+}
+
+/// Popup-only detailed result. It retains a segment whose screened SEL falls
+/// below the 20 dB display floor so the caller can keep its pre-screen energy;
+/// production wrappers still reject that segment before exposing it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn segment_kernel_with_cuts(
+    seg: &AircraftSegment,
+    rx_lat: f64,
+    rx_lon: f64,
+    rx_elev_m: f64,
+    terrain_start_cut_m: f64,
+    terrain_end_cut_m: f64,
+    npd_luts: &NpdLuts,
+    horizon: &ReceiverHorizon,
+    buildings: Option<&super::BuildingHorizon>,
+) -> Option<AircraftKernelResult> {
+    segment_kernel_with_overrides::<true, true>(
+        seg,
+        rx_lat,
+        rx_lon,
+        rx_elev_m,
+        seg.start_alt_m as f64,
+        seg.end_alt_m as f64,
+        false,
+        terrain_start_cut_m,
+        terrain_end_cut_m,
+        npd_luts,
+        Some(horizon),
+        buildings,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn segment_kernel_with_overrides<const WANT_CPA: bool, const RETAIN_SCREENED: bool>(
+    seg: &AircraftSegment,
+    rx_lat: f64,
+    rx_lon: f64,
+    rx_elev_m: f64,
+    start_alt_m: f64,
+    end_alt_m: f64,
+    airport_ground_mode: bool,
+    terrain_start_cut_m: f64,
+    terrain_end_cut_m: f64,
+    npd_luts: &NpdLuts,
+    horizon: Option<&ReceiverHorizon>,
+    buildings: Option<&super::BuildingHorizon>,
+) -> Option<AircraftKernelResult> {
     // SEL/v_ref/d_bar/installation come from the class's Voronoi anchor.
     // Per-segment acoustic error vs the segment's own per-typecode profile
     // is bounded by class spread (avg 0.76 dB across global traffic).
@@ -298,43 +409,61 @@ fn segment_sel_with_overrides<const WANT_CPA: bool>(
     // dropped at long range before the kernel sees it.
     let reach_sq = REACH_SQ_TABLE[class_idx][seg.is_departure as usize];
 
-    let kernel: AircraftKernelResult = segment_energy_kernel::<WANT_CPA>(
-        ax,
-        ay,
-        sdx,
-        sdy,
-        sdz,
-        start_alt_m,
-        inv_lsq,
-        slen,
-        rx_elev_m,
-        npd_luts,
-        class_idx,
-        seg.is_departure,
-        dv,
-        anchor_profile.d_bar_m,
-        inst_code,
-        di_a,
-        di_b,
-        di_c,
-        airport_ground_mode,
-        reach_sq,
-        terrain_start_cut_m,
-        terrain_end_cut_m,
-        horizon,
-    )?;
-
-    let cpa = CpaResult {
-        q_m: kernel.q_m,
-        d_p_m: kernel.d_p_m,
-        lateral_m: kernel.lateral_m,
-        relative_alt_m: kernel.rel_alt_m,
-        beta_deg: kernel.beta_deg,
-        seg_len_m: kernel.seg_len_m,
-        t: kernel.t,
-    };
-
-    Some((kernel.sel, cpa))
+    if RETAIN_SCREENED {
+        segment_energy_kernel_with_screening::<WANT_CPA>(
+            ax,
+            ay,
+            sdx,
+            sdy,
+            sdz,
+            start_alt_m,
+            inv_lsq,
+            slen,
+            rx_elev_m,
+            npd_luts,
+            class_idx,
+            seg.is_departure,
+            dv,
+            anchor_profile.d_bar_m,
+            inst_code,
+            di_a,
+            di_b,
+            di_c,
+            airport_ground_mode,
+            reach_sq,
+            terrain_start_cut_m,
+            terrain_end_cut_m,
+            horizon,
+            buildings,
+        )
+    } else {
+        segment_energy_kernel::<WANT_CPA>(
+            ax,
+            ay,
+            sdx,
+            sdy,
+            sdz,
+            start_alt_m,
+            inv_lsq,
+            slen,
+            rx_elev_m,
+            npd_luts,
+            class_idx,
+            seg.is_departure,
+            dv,
+            anchor_profile.d_bar_m,
+            inst_code,
+            di_a,
+            di_b,
+            di_c,
+            airport_ground_mode,
+            reach_sq,
+            terrain_start_cut_m,
+            terrain_end_cut_m,
+            horizon,
+            buildings,
+        )
+    }
 }
 
 // Hoisted three-stage variant of `segment_sel_with_cuts` for the heatmap
@@ -444,9 +573,8 @@ pub fn prepare_row(prepared: &SegmentPrepared, rx_lat: f64, m_per_deg_lon: f64) 
 
 /// Per-pixel call. Returns the same `(sel, CpaResult)` as
 /// `segment_sel_with_cuts` would for the same inputs, modulo a few ULPs
-/// of f64 non-associative drift (see the parity test). `horizon`: all
-/// current heatmap callers pass `None`; P3 wires the per-pixel horizon
-/// grid through here.
+/// of f64 non-associative drift (see the parity test). The optional
+/// horizon keeps the unscreened regression API explicit.
 #[inline]
 pub fn segment_sel_at_pixel(
     prepared: &SegmentPrepared,
@@ -481,6 +609,7 @@ pub fn segment_sel_at_pixel(
         prepared.terrain_start_cut_m,
         prepared.terrain_end_cut_m,
         horizon,
+        None,
     )?;
 
     let cpa = CpaResult {
@@ -499,8 +628,8 @@ pub fn segment_sel_at_pixel(
 /// is bit-for-bit identical to `segment_sel_at_pixel().0` — `WANT_CPA = false`
 /// only skips the CPA-only `beta_deg` atan (full path) and `lateral_m` sqrt
 /// (fast path), neither of which feeds `sel`. Returns just the SEL and skips the
-/// `CpaResult` build. `horizon`: all current heatmap callers pass `None`;
-/// P3 wires the per-pixel horizon grid through here.
+/// `CpaResult` build. Production heatmaps pass a terrain horizon here;
+/// [`segment_sel_at_pixel_energy_screened`] adds the building horizon.
 #[inline]
 pub fn segment_sel_at_pixel_energy(
     prepared: &SegmentPrepared,
@@ -509,6 +638,44 @@ pub fn segment_sel_at_pixel_energy(
     rx_elev_m: f64,
     npd_luts: &NpdLuts,
     horizon: Option<&ReceiverHorizon>,
+) -> Option<f64> {
+    segment_sel_at_pixel_energy_inner(
+        prepared, row_state, rx_lon, rx_elev_m, npd_luts, horizon, None,
+    )
+}
+
+/// Heatmap energy call with the same terrain and vector-building screening as
+/// [`segment_sel_with_screening`].
+#[inline]
+pub fn segment_sel_at_pixel_energy_screened(
+    prepared: &SegmentPrepared,
+    row_state: &SegmentRowState,
+    rx_lon: f64,
+    rx_elev_m: f64,
+    npd_luts: &NpdLuts,
+    horizon: &ReceiverHorizon,
+    buildings: &super::BuildingHorizon,
+) -> Option<f64> {
+    segment_sel_at_pixel_energy_inner(
+        prepared,
+        row_state,
+        rx_lon,
+        rx_elev_m,
+        npd_luts,
+        Some(horizon),
+        Some(buildings),
+    )
+}
+
+#[inline]
+fn segment_sel_at_pixel_energy_inner(
+    prepared: &SegmentPrepared,
+    row_state: &SegmentRowState,
+    rx_lon: f64,
+    rx_elev_m: f64,
+    npd_luts: &NpdLuts,
+    horizon: Option<&ReceiverHorizon>,
+    buildings: Option<&super::BuildingHorizon>,
 ) -> Option<f64> {
     let ax = (prepared.start_lon - rx_lon) * row_state.m_per_deg_lon;
     let kernel = segment_energy_kernel::<false>(
@@ -535,6 +702,7 @@ pub fn segment_sel_at_pixel_energy(
         prepared.terrain_start_cut_m,
         prepared.terrain_end_cut_m,
         horizon,
+        buildings,
     )?;
     Some(kernel.sel)
 }

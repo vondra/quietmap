@@ -200,6 +200,11 @@ pub fn scatter(
             FlightAccum::new(row.rep_profile_idx, density, true, [0; 4], String::new())
         });
         acc.period_energy[period] += energy;
+        // Cruise is structurally above the terrain/building screening
+        // envelope, so all popup variants are the same received energy.
+        acc.free_period_energy[period] += energy;
+        acc.no_terrain_period_energy[period] += energy;
+        acc.no_screening_period_energy[period] += energy;
         acc.flight_weight = acc.flight_weight.max(density);
 
         let class_idx = aircraft::noise_class_of(seg.profile_idx) as usize;
@@ -344,6 +349,8 @@ pub fn scatter(
                 d_bar_m: acc.d_slant_m,
                 installation: "wing",
                 cffk_fast_path: true,
+                screening_kind: "none",
+                screening_db: 0.0,
             };
             t.segments
                 .push(crate::traces::build_aircraft_cruise_r7_trace(

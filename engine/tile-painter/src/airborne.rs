@@ -17,12 +17,15 @@ use noise_compute::emission::aircraft::{
     self, NpdLuts, SegmentTerrain, AIRCRAFT_MAX_HORIZONTAL_REACH_M, GROUND_CONTEXT_NONE,
     GROUND_OPS_KIND_NONE, M_PER_DEG_LAT,
 };
+use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_compute::types::AircraftSegment;
 use raster_reader::fused_tile_z13::{tile_pixel_size_m, FusedTileZ13};
 use rayon::prelude::*;
 
 use crate::accumulator::{CoarseLevels, TileAccumulator};
+use crate::airborne_screening::ReceiverScreeningGrid;
 use crate::grid::TILE_PX;
+use crate::source_loader_obstacle::InteriorEstimate;
 
 /// Slant cutoff between the exact per-pixel path and the coarse lattice.
 /// A segment whose nearest tile pixel is closer than this is evaluated at
@@ -38,8 +41,8 @@ use crate::grid::TILE_PX;
 /// single-segment bilinear error (≈ 8.69·(cell/2)²/slant²) reaches 0.5 dB.
 ///
 /// Caveat — validated only on gentle Prague terrain. The coarse lattice
-/// samples receiver elevation at its 33² nodes and interpolates *energy*,
-/// so terrain curvature inside a ~96 m cell is unmodelled. On rugged tiles
+/// samples receiver elevation at its 65² nodes and interpolates *energy*,
+/// so terrain curvature inside a ~48 m cell is unmodelled. On rugged tiles
 /// (Alpine / fjord approaches) ~15-20 m of un-sampled sub-cell relief under
 /// a near-floor far segment could exceed 0.5 dB. Before trusting this on
 /// mountainous regions, re-validate with `compare_hm3` exact-vs-coarse on
@@ -47,11 +50,11 @@ use crate::grid::TILE_PX;
 /// terrain roughness (`max(500, k·(max-min rx_alt))`).
 const NEAR_SLANT_M: f64 = 500.0;
 
-/// Parity escape hatch: with `QM_AIRBORNE_FORCE_EXACT=1` every admitted
+/// Diagnostic escape hatch: with `QM_AIRBORNE_FORCE_EXACT=1` every admitted
 /// sub-segment takes the exact per-pixel path (the coarse lattice is
 /// bypassed), producing the ground-truth oracle that `compare_hm3` diffs the
 /// adaptive build against. Read once per tile (not per segment); unset in all
-/// production builds. Kept as the regression oracle for future stride retunes.
+/// production builds. Kept as the regression oracle for coarse-lattice drift.
 fn force_exact() -> bool {
     std::env::var("QM_AIRBORNE_FORCE_EXACT").is_ok_and(|v| v == "1")
 }
@@ -67,12 +70,12 @@ fn force_exact() -> bool {
 /// `≈ 8.69·(cell/2)²/slant²` dB (the relation that also sets `NEAR_SLANT_M`).
 /// Holding error fixed, the cell may grow ∝ slant — a dyadic ladder where
 /// slant ×4 lets stride ×4 (nodes ÷16) at ~constant error. At Praha
-/// (~12.3 m/px) each band lands at ~0.08 dB at its NEAR (worst, binding)
+/// (~6.1 m/px) each band lands at ~0.08 dB at its NEAR (worst, binding)
 /// edge, a ~6× margin under the 0.5 dB HM3 step. That formula only describes
 /// the smooth spreading term; the full kernel also has the NPD tail, ΔF,
 /// lateral/ΔI (< 7.62 km) and the SEL floor, so these edges are EMPIRICAL
-/// parameters — the real guard is the adaptive-vs-trusted-33-grid parity
-/// gate (Tier-1 plan), not this arithmetic.
+/// parameters — the real guard is the adaptive-vs-exact `e2-airborne`
+/// diagnostic, not this arithmetic.
 ///
 /// Routing on the MINIMUM slant over the tile is the conservative choice
 /// (the nearest pixel sets the fineness; farther pixels only want it
@@ -80,23 +83,57 @@ fn force_exact() -> bool {
 /// `best_slant` can overestimate, but that geometry is exactly where ΔF
 /// suppresses the contribution 3–10 dB.
 ///
-/// Coarse cell, blunt terrain — why >8 km stays safe: the airborne kernel
-/// applies NO per-pixel terrain shadow/screening; aside from the two endpoint
-/// Filter-D cuts (constant per segment), terrain enters only via the receiver
-/// elevation in the slant. So there is no sharp terrain shadow for a 1.5 km
-/// cell to alias. Airborne is altitude-capped near FL250,
+/// Terrain and roof screening are evaluated at the same lattice nodes as the
+/// far segment energy, then bilinearly expanded. Local low-overflight segments
+/// inside 500 m take the exact 6 m receiver lattice—the visitor-visible house
+/// shadows this wave targets. A far segment's shadow inherits the established
+/// coarse interpolation and is therefore intentionally no sharper than its
+/// smooth NPD field. Airborne is altitude-capped near FL250,
 /// so a >8 km-slant segment is usually a distant LOW segment (slant from
 /// horizontal distance); the level is then insensitive to receiver-elevation
 /// variation (d(level)/d(rx_alt) is tiny at large slant) and the field stays
 /// near-linear across the cell. The near-floor-over-rugged-relief danger
-/// lives in the NEAR (exact) path and the <2 km band (unchanged n=33),
-/// neither coarsened here. FUTURE (not built): if a mountainous region shows
-/// 2–8 km drift, make the edges terrain-roughness-adaptive and re-validate
-/// (e.g. LOWI) via the `QM_AIRBORNE_FORCE_EXACT` oracle.
+/// lives in the NEAR (exact) path and the <2 km band (unchanged n=65),
+/// neither coarsened here.
 const COARSE_BAND_M: [f64; 2] = [2_000.0, 8_000.0];
 
 // One coarser CoarseLevels lattice per band, plus one below the first edge.
 const _: () = assert!(crate::accumulator::COARSE_LEVELS_N.len() == COARSE_BAND_M.len() + 1);
+
+/// The painter's one production entry into the acoustic kernel: terrain is
+/// mandatory, while an empty roof horizon takes the bit-stable terrain-only
+/// path. Exact pixels and every coarse lattice call this same wrapper.
+#[inline]
+fn screened_segment_energy(
+    prepared: &aircraft::SegmentPrepared,
+    row_state: &aircraft::SegmentRowState,
+    receiver_lon: f64,
+    receiver_alt_m: f64,
+    npd_luts: &NpdLuts,
+    terrain: &aircraft::ReceiverHorizon,
+    buildings: Option<&aircraft::BuildingHorizon>,
+) -> Option<f64> {
+    if let Some(buildings) = buildings {
+        aircraft::segment_sel_at_pixel_energy_screened(
+            prepared,
+            row_state,
+            receiver_lon,
+            receiver_alt_m,
+            npd_luts,
+            terrain,
+            buildings,
+        )
+    } else {
+        aircraft::segment_sel_at_pixel_energy(
+            prepared,
+            row_state,
+            receiver_lon,
+            receiver_alt_m,
+            npd_luts,
+            Some(terrain),
+        )
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AirborneStats {
@@ -138,6 +175,89 @@ impl AirborneStats {
     }
 }
 
+#[derive(Clone, Copy)]
+struct TileDistanceContext {
+    centre_lat: f64,
+    centre_lon: f64,
+    m_per_deg_lon: f64,
+    half_diag_m: f64,
+    max_receiver_alt_m: f64,
+    near_min_lat: f64,
+    near_max_lat: f64,
+    near_min_lon: f64,
+    near_max_lon: f64,
+    near_lon_prune_active: bool,
+}
+
+impl TileDistanceContext {
+    fn minimum_horizontal_distance_sq(
+        self,
+        start_lat: f64,
+        start_lon: f64,
+        end_lat: f64,
+        end_lon: f64,
+    ) -> f64 {
+        let x1 = (start_lon - self.centre_lon) * self.m_per_deg_lon;
+        let y1 = (start_lat - self.centre_lat) * M_PER_DEG_LAT;
+        let x2 = (end_lon - self.centre_lon) * self.m_per_deg_lon;
+        let y2 = (end_lat - self.centre_lat) * M_PER_DEG_LAT;
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+        let len_sq = dx * dx + dy * dy;
+        if len_sq < 1.0 {
+            x1 * x1 + y1 * y1
+        } else {
+            let t_num = -(x1 * dx + y1 * dy);
+            if t_num <= 0.0 {
+                x1 * x1 + y1 * y1
+            } else if t_num >= len_sq {
+                x2 * x2 + y2 * y2
+            } else {
+                let cross = dx * y1 - dy * x1;
+                (cross * cross) / len_sq
+            }
+        }
+    }
+
+    fn best_slant_sq(self, horizontal_sq: f64, start_alt_m: f64, end_alt_m: f64) -> f64 {
+        let horizontal_m = (horizontal_sq.sqrt() - self.half_diag_m).max(0.0);
+        let relative_alt_m = (start_alt_m.min(end_alt_m) - self.max_receiver_alt_m).max(0.0);
+        horizontal_m * horizontal_m + relative_alt_m * relative_alt_m
+    }
+
+    /// Conservative prepass: a false positive only builds extra horizons;
+    /// every segment that can enter the exact path must make this return true.
+    fn has_exact_candidate(self, airborne: &[AirborneRowView<'_>]) -> bool {
+        airborne.par_iter().any(|row| {
+            let bbox = &row.bbox;
+            if f64::from(bbox.max_lat) < self.near_min_lat
+                || f64::from(bbox.min_lat) > self.near_max_lat
+            {
+                return false;
+            }
+            if self.near_lon_prune_active
+                && (f64::from(bbox.max_lon) < self.near_min_lon
+                    || f64::from(bbox.min_lon) > self.near_max_lon)
+            {
+                return false;
+            }
+            (0..row.sub_segments.len()).any(|i| {
+                let horizontal_sq = self.minimum_horizontal_distance_sq(
+                    row.sub_segments.start_lat[i] as f64,
+                    row.sub_segments.start_lon[i] as f64,
+                    row.sub_segments.end_lat[i] as f64,
+                    row.sub_segments.end_lon[i] as f64,
+                );
+                self.best_slant_sq(
+                    horizontal_sq,
+                    row.sub_segments.start_alt_m[i] as f64,
+                    row.sub_segments.end_alt_m[i] as f64,
+                ) < NEAR_SLANT_M * NEAR_SLANT_M
+            })
+        })
+    }
+}
+
 pub fn scatter_tile(
     tile: &FusedTileZ13,
     airborne: &[AirborneRowView<'_>],
@@ -146,6 +266,8 @@ pub fn scatter_tile(
     // GA one-off divides by `ga_n_days`, not `n_days`. Uniform for non-hybrid
     // extracts (byte-identical to the pre-hybrid scatter).
     class_weights: &aircraft::ClassWeights,
+    obstacles: &ObstacleSet,
+    interior: &InteriorEstimate,
     accum: &mut TileAccumulator,
 ) -> AirborneStats {
     let npd_luts = NpdLuts::shared();
@@ -194,9 +316,38 @@ pub fn scatter_tile(
         .iter()
         .copied()
         .fold(f32::NEG_INFINITY, f32::max) as f64;
+    let near_centre_radius_m = NEAR_SLANT_M + half_diag_m;
+    let near_lat_deg = aircraft::meters_to_lat_deg(near_centre_radius_m);
+    let near_lon_deg = aircraft::meters_to_lon_deg(tile_centre_lat, near_centre_radius_m);
+    let near_min_lon_raw = tile_centre_lon - near_lon_deg;
+    let near_max_lon_raw = tile_centre_lon + near_lon_deg;
+
+    let tile_distance = TileDistanceContext {
+        centre_lat: tile_centre_lat,
+        centre_lon: tile_centre_lon,
+        m_per_deg_lon,
+        half_diag_m,
+        max_receiver_alt_m: tile_max_rx_alt,
+        near_min_lat: tile_centre_lat - near_lat_deg,
+        near_max_lat: tile_centre_lat + near_lat_deg,
+        near_min_lon: near_min_lon_raw,
+        near_max_lon: near_max_lon_raw,
+        near_lon_prune_active: near_min_lon_raw >= -180.0 && near_max_lon_raw <= 180.0,
+    };
 
     let near_slant_sq = NEAR_SLANT_M * NEAR_SLANT_M;
     let force_exact = force_exact();
+    // Receiver-scoped screening is built in pixel order before the
+    // segment-parallel scatter. Initialising lazily inside that scatter makes
+    // every worker reach the same cold pixel together and serialize behind a
+    // once-lock; this prepass has no locks and reuses one crossing buffer per
+    // Rayon worker.
+    let receiver_screening = ReceiverScreeningGrid::build(
+        tile,
+        obstacles,
+        interior,
+        force_exact || tile_distance.has_exact_candidate(airborne),
+    );
 
     let (mut local, coarse, mut st) = airborne
         .par_iter()
@@ -240,26 +391,8 @@ pub fn scatter_tile(
                     // per-pixel kernel then rejected them 262 144× via its own
                     // CPA gate. Strictly more conservative; one decision per
                     // sub-seg. Degenerate (<1 m) → start-endpoint distance.
-                    let x1 = (start_lon - tile_centre_lon) * m_per_deg_lon;
-                    let y1 = (start_lat - tile_centre_lat) * M_PER_DEG_LAT;
-                    let x2 = (end_lon - tile_centre_lon) * m_per_deg_lon;
-                    let y2 = (end_lat - tile_centre_lat) * M_PER_DEG_LAT;
-                    let dx = x2 - x1;
-                    let dy = y2 - y1;
-                    let len_sq = dx * dx + dy * dy;
-                    let min_d_sq = if len_sq < 1.0 {
-                        x1 * x1 + y1 * y1
-                    } else {
-                        let t_num = -(x1 * dx + y1 * dy);
-                        if t_num <= 0.0 {
-                            x1 * x1 + y1 * y1
-                        } else if t_num >= len_sq {
-                            x2 * x2 + y2 * y2
-                        } else {
-                            let cross = dx * y1 - dy * x1;
-                            (cross * cross) / len_sq
-                        }
-                    };
+                    let min_d_sq = tile_distance
+                        .minimum_horizontal_distance_sq(start_lat, start_lon, end_lat, end_lon);
                     if min_d_sq > prune_radius_sq {
                         st.sub_segments_outside_tile += 1;
                         continue;
@@ -330,12 +463,11 @@ pub fn scatter_tile(
                     // the tallest receiver. `reach_sq` is per-class, so this
                     // rejects only what the kernel already rejects everywhere — a
                     // provable lower bound, exact rather than a heuristic.
-                    let horiz = (min_d_sq.sqrt() - half_diag_m).max(0.0);
-                    let seg_min_alt = prepared
-                        .start_alt_m
-                        .min(prepared.start_alt_m + prepared.sdz);
-                    let rel_alt = (seg_min_alt - tile_max_rx_alt).max(0.0);
-                    let best_slant_sq = horiz * horiz + rel_alt * rel_alt;
+                    let best_slant_sq = tile_distance.best_slant_sq(
+                        min_d_sq,
+                        prepared.start_alt_m,
+                        prepared.start_alt_m + prepared.sdz,
+                    );
                     if best_slant_sq > prepared.reach_sq {
                         st.sub_segments_slant_pruned += 1;
                         continue;
@@ -363,12 +495,15 @@ pub fn scatter_tile(
                             let row_base = (py as usize) * TILE_PX;
                             for px in 0..TILE_PX as u32 {
                                 let rx_lon = tile.rx_lon[px as usize];
-                                let rx_alt = tile.rx_alt_m[row_base + px as usize] as f64;
+                                let pixel = row_base + px as usize;
+                                let rx_alt = tile.rx_alt_m[pixel] as f64;
                                 local_eval += 1;
-                                // C2 horizon: P3 wires the per-pixel grid; None until then.
-                                let Some(sel) = aircraft::segment_sel_at_pixel_energy(
-                                    &prepared, &row_state, rx_lon, rx_alt, npd_luts, None,
-                                ) else {
+                                let (horizon, buildings) = receiver_screening.at(pixel);
+                                let screened = screened_segment_energy(
+                                    &prepared, &row_state, rx_lon, rx_alt, npd_luts, horizon,
+                                    buildings,
+                                );
+                                let Some(sel) = screened else {
                                     local_below += 1;
                                     continue;
                                 };
@@ -407,12 +542,15 @@ pub fn scatter_tile(
                             for cj in 0..cn {
                                 let px = coarse.coarse_pixel(level, cj);
                                 let rx_lon = tile.rx_lon[px];
-                                let rx_alt = tile.rx_alt_m[row_base + px] as f64;
+                                let pixel = row_base + px;
+                                let rx_alt = tile.rx_alt_m[pixel] as f64;
                                 local_eval += 1;
-                                // C2 horizon: P3 wires the per-pixel grid; None until then.
-                                let Some(sel) = aircraft::segment_sel_at_pixel_energy(
-                                    &prepared, &row_state, rx_lon, rx_alt, npd_luts, None,
-                                ) else {
+                                let (horizon, buildings) = receiver_screening.at(pixel);
+                                let screened = screened_segment_energy(
+                                    &prepared, &row_state, rx_lon, rx_alt, npd_luts, horizon,
+                                    buildings,
+                                );
+                                let Some(sel) = screened else {
                                     local_below += 1;
                                     continue;
                                 };

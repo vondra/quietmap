@@ -270,6 +270,10 @@ pub struct Doc29Breakdown {
     /// `wing` | `fuselage` | `propeller` — engine installation per Doc 29 §A.3.
     pub installation: &'static str,
     pub cffk_fast_path: bool,
+    /// Receiver-side winner before the mutually-exclusive Lambda credit.
+    /// `none` | `terrain` | `building`.
+    pub screening_kind: &'static str,
+    pub screening_db: f64,
 }
 
 /// Kind-specific emission inputs for trace visibility. Mirrors the raw inputs

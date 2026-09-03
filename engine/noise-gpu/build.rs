@@ -206,6 +206,181 @@ fn main() {
         "../noise-compute/src/constants.rs",
         "pub const M_PER_DEG_LAT: f64 = ",
     );
+    let aircraft_metres_per_degree_latitude = numeric_f64_const(
+        "../noise-compute/src/emission/aircraft/doc29.rs",
+        "pub const M_PER_DEG_LAT: f64 = ",
+    );
+    // Airborne screening's quantized horizon ABI and diffraction constants.
+    // These values decide sectors, memory strides, and dB loss, so CUDA takes
+    // them from the Rust authorities instead of maintaining a second table.
+    let terrain_sectors = const_from(
+        "../noise-compute/src/emission/aircraft/horizon.rs",
+        "pub const HORIZON_SECTORS: usize = ",
+    );
+    let terrain_bands = const_from(
+        "../noise-compute/src/emission/aircraft/horizon.rs",
+        "pub const RECEIVER_HORIZON_BANDS: usize = ",
+    );
+    let terrain_march_samples = const_from(
+        "../noise-compute/src/emission/aircraft/horizon.rs",
+        "pub const RECEIVER_HORIZON_MARCH_SAMPLES: usize = ",
+    );
+    let building_local_sectors = const_from(
+        "../noise-compute/src/emission/aircraft/screening.rs",
+        "pub const BUILDING_LOCAL_HORIZON_SECTORS: usize = ",
+    );
+    let building_local_bands = const_from(
+        "../noise-compute/src/emission/aircraft/screening.rs",
+        "pub const BUILDING_LOCAL_HORIZON_BANDS: usize = ",
+    );
+    let horizon_tangent_scale = numeric_f64_const(
+        "../noise-compute/src/emission/aircraft/horizon.rs",
+        "pub const RECEIVER_HORIZON_TANGENT_SCALE: f64 = ",
+    );
+    let terrain_range_scale = numeric_f64_const(
+        "../noise-compute/src/emission/aircraft/horizon.rs",
+        "pub const RECEIVER_HORIZON_RANGE_SCALE: f64 = ",
+    );
+    let building_range_scale = numeric_f64_const(
+        "../noise-compute/src/emission/aircraft/screening.rs",
+        "pub const BUILDING_HORIZON_RANGE_SCALE: f64 = ",
+    );
+    let building_local_max_m = numeric_f64_const(
+        "../noise-compute/src/emission/aircraft/screening.rs",
+        "pub const BUILDING_LOCAL_MAX_M: f64 = ",
+    );
+    let building_range_growth = numeric_f64_const(
+        "../noise-compute/src/emission/aircraft/screening.rs",
+        "pub const BUILDING_LOCAL_RANGE_GROWTH: f64 = ",
+    );
+    // The far cutoff is the single literal range authority. Derive the first
+    // dyadic break exactly as Rust does instead of requiring a duplicate
+    // numeric literal solely for CUDA's preprocessor.
+    let building_first_range_break_m = {
+        let max_m = building_local_max_m
+            .parse::<f64>()
+            .expect("BUILDING_LOCAL_MAX_M parses as f64");
+        let growth = building_range_growth
+            .parse::<f64>()
+            .expect("BUILDING_LOCAL_RANGE_GROWTH parses as f64");
+        let bands = building_local_bands
+            .parse::<i32>()
+            .expect("BUILDING_LOCAL_HORIZON_BANDS parses as i32");
+        c_f64(max_m / growth.powi(bands - 1))
+    };
+    let building_min_edge_range_m = numeric_f64_const(
+        "../noise-compute/src/emission/aircraft/screening.rs",
+        "pub const BUILDING_MIN_EDGE_RANGE_M: f64 = ",
+    );
+    let diffraction_slope = numeric_f64_const(
+        "../noise-compute/src/emission/aircraft/screening.rs",
+        "const DIFFRACTION_SLOPE_PER_M: f64 = ",
+    );
+    let diffraction_grazing_db = numeric_f64_const(
+        "../noise-compute/src/emission/aircraft/screening.rs",
+        "const DIFFRACTION_GRAZING_DB: f64 = ",
+    );
+    let diffraction_cap_db = numeric_f64_const(
+        "../noise-compute/src/emission/aircraft/screening.rs",
+        "pub(super) const DIFFRACTION_CAP_DB: f64 = ",
+    );
+    let screening_slots = [
+        ("SCREEN_RECORDS", "const SCREEN_RECORDS: usize = "),
+        ("SCREEN_NREG", "const SCREEN_NREG: usize = "),
+        ("SCREEN_NEAR_BASE", "const SCREEN_NEAR_BASE: usize = "),
+        ("SCREEN_NEAR_COUNT", "const SCREEN_NEAR_COUNT: usize = "),
+        ("SCREEN_FAR0_BASE", "const SCREEN_FAR0_BASE: usize = "),
+        ("SCREEN_FAR0_COUNT", "const SCREEN_FAR0_COUNT: usize = "),
+        ("SCREEN_FAR1_BASE", "const SCREEN_FAR1_BASE: usize = "),
+        ("SCREEN_FAR1_COUNT", "const SCREEN_FAR1_COUNT: usize = "),
+        ("SCREEN_FAR2_BASE", "const SCREEN_FAR2_BASE: usize = "),
+        ("SCREEN_FAR2_COUNT", "const SCREEN_FAR2_COUNT: usize = "),
+        (
+            "SCREEN_RECORD_OF_PIXEL",
+            "const SCREEN_RECORD_OF_PIXEL: usize = ",
+        ),
+        (
+            "SCREEN_TERRAIN_ENTRIES",
+            "const SCREEN_TERRAIN_ENTRIES: usize = ",
+        ),
+        (
+            "SCREEN_TERRAIN_MAX_SIN_SQ",
+            "const SCREEN_TERRAIN_MAX_SIN_SQ: usize = ",
+        ),
+        (
+            "SCREEN_BUILDING_GLOBAL_MAX_TAN_Q",
+            "const SCREEN_BUILDING_GLOBAL_MAX_TAN_Q: usize = ",
+        ),
+        (
+            "SCREEN_BUILDING_LOCAL_ENTRIES",
+            "const SCREEN_BUILDING_LOCAL_ENTRIES: usize = ",
+        ),
+        (
+            "SCREEN_BUILDING_LOCAL_MAX_TAN_Q",
+            "const SCREEN_BUILDING_LOCAL_MAX_TAN_Q: usize = ",
+        ),
+    ]
+    .map(|(name, prefix)| (name, const_from("src/airborne.rs", prefix)));
+    let building_environment_slots = [
+        (
+            "BUILDING_ENV_INDEX_COUNT",
+            "const BUILDING_ENV_INDEX_COUNT: usize = ",
+        ),
+        (
+            "BUILDING_ENV_GRID_GEOMETRY",
+            "const BUILDING_ENV_GRID_GEOMETRY: usize = ",
+        ),
+        (
+            "BUILDING_ENV_GRID_LAYOUT",
+            "const BUILDING_ENV_GRID_LAYOUT: usize = ",
+        ),
+        (
+            "BUILDING_ENV_CELL_STARTS",
+            "const BUILDING_ENV_CELL_STARTS: usize = ",
+        ),
+        (
+            "BUILDING_ENV_EDGE_REFS",
+            "const BUILDING_ENV_EDGE_REFS: usize = ",
+        ),
+        ("BUILDING_ENV_EDGES", "const BUILDING_ENV_EDGES: usize = "),
+        (
+            "BUILDING_ENV_EDGE_IS_BUILDING",
+            "const BUILDING_ENV_EDGE_IS_BUILDING: usize = ",
+        ),
+        (
+            "BUILDING_ENV_DEM_META",
+            "const BUILDING_ENV_DEM_META: usize = ",
+        ),
+        (
+            "BUILDING_ENV_DEM_ELEVATION",
+            "const BUILDING_ENV_DEM_ELEVATION: usize = ",
+        ),
+        (
+            "BUILDING_ENV_DEM_COLS",
+            "const BUILDING_ENV_DEM_COLS: usize = ",
+        ),
+        (
+            "BUILDING_ENV_DEM_ROWS",
+            "const BUILDING_ENV_DEM_ROWS: usize = ",
+        ),
+        (
+            "BUILDING_ENV_DIRECTIONS",
+            "const BUILDING_ENV_DIRECTIONS: usize = ",
+        ),
+        (
+            "BUILDING_ENV_TERRAIN_SAMPLES",
+            "const BUILDING_ENV_TERRAIN_SAMPLES: usize = ",
+        ),
+    ]
+    .map(|(name, prefix)| (name, const_from("src/airborne_building_horizon.rs", prefix)));
+    let building_grid_geometry_stride = const_from(
+        "src/airborne_building_horizon.rs",
+        "const BUILDING_GRID_GEOMETRY_STRIDE: usize = ",
+    );
+    let building_grid_layout_stride = const_from(
+        "src/airborne_building_horizon.rs",
+        "const BUILDING_GRID_LAYOUT_STRIDE: usize = ",
+    );
     // Same contract for the two constants the footprint-CSR arc walk added: a
     // drifted stride walks a neighbouring index's grid or mis-reads foot_box.
     let meta_stride = const_from("src/lib.rs", "pub const META_STRIDE: usize = ");
@@ -366,6 +541,24 @@ fn main() {
         format!("-DMULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT={compact_output_fault_slot}"),
         format!("-DOUT_ARCSTAT_COUNTERS={out_arcstat_counters}"),
         format!("-DM_LAT={metres_per_degree_latitude}"),
+        format!("-DAIRCRAFT_M_LAT={aircraft_metres_per_degree_latitude}"),
+        format!("-DTERRAIN_SECTORS={terrain_sectors}"),
+        format!("-DTERRAIN_BANDS={terrain_bands}"),
+        format!("-DTERRAIN_MARCH_SAMPLES={terrain_march_samples}"),
+        format!("-DBUILDING_LOCAL_SECTORS={building_local_sectors}"),
+        format!("-DBUILDING_LOCAL_BANDS={building_local_bands}"),
+        format!("-DTAN_SCALE_D={horizon_tangent_scale}"),
+        format!("-DTERRAIN_RANGE_SCALE_D={terrain_range_scale}"),
+        format!("-DBUILDING_RANGE_SCALE_D={building_range_scale}"),
+        format!("-DBUILDING_LOCAL_MAX_M_D={building_local_max_m}"),
+        format!("-DBUILDING_FIRST_RANGE_BREAK_M_D={building_first_range_break_m}"),
+        format!("-DBUILDING_RANGE_GROWTH_D={building_range_growth}"),
+        format!("-DBUILDING_MIN_EDGE_RANGE_M_D={building_min_edge_range_m}"),
+        format!("-DBUILDING_GRID_GEOMETRY_STRIDE={building_grid_geometry_stride}"),
+        format!("-DBUILDING_GRID_LAYOUT_STRIDE={building_grid_layout_stride}"),
+        format!("-DDIFFRACTION_SLOPE_D={diffraction_slope}"),
+        format!("-DDIFFRACTION_GRAZING_DB_D={diffraction_grazing_db}"),
+        format!("-DDIFFRACTION_CAP_DB_D={diffraction_cap_db}"),
         format!("-DOBST_META_STRIDE={meta_stride}"),
         format!("-DFOOT_BOX_STRIDE={foot_box_stride}"),
         format!("-DARC_DEGENERATE_SPAN={degenerate_span}"),
@@ -382,6 +575,16 @@ fn main() {
         format!("-DARC_FUSE_HEIGHT_TOL_M={fuse_height_tol}"),
         format!("-DARC_FUSE_RANGE_RATIO_LN={fuse_ratio_ln}"),
     ];
+    nvcc_defines.extend(
+        screening_slots
+            .into_iter()
+            .map(|(name, value)| format!("-D{name}={value}")),
+    );
+    nvcc_defines.extend(
+        building_environment_slots
+            .into_iter()
+            .map(|(name, value)| format!("-D{name}={value}")),
+    );
     nvcc_defines.extend(extra_defines);
     fs::write(
         out.join("nvcc-defines.txt"),
