@@ -70,9 +70,12 @@
     },
     "aircraft-cruise": {
       "arrows": [
-        "cruise.arrow"
+        "cruise.arrow",
+        "obstacles.arrow"
       ],
-      "dependency_arrows": []
+      "dependency_arrows": [
+        "obstacles.arrow"
+      ]
     }
   },
   "groups": {
