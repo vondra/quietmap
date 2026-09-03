@@ -25,7 +25,7 @@ import os, sys, hashlib
 # bumping data_ver via arrow mtimes, not code). Validator-only bins are dropped (not production output).
 CRATES = ("tile-painter", "noise-compute", "noise-gpu", "raster-reader")
 EXCLUDE_BINS = {
-    "compare_floats.rs", "compare_hm3.rs", "e2_airborne.rs", "e2_full.rs",
+    "compare_floats.rs", "compare_hm3.rs", "e2_airborne.rs",
     "tile_store_fsck.rs",
 }
 # Global build inputs OUTSIDE the crates that still change produced tiles (e.g. rustflags=target-cpu).
@@ -93,7 +93,7 @@ def closure_files(engine):
                 if fn in EXCLUDE_BINS:
                     continue
                 # Cargo.lock is DELIBERATELY excluded (2026-07-13): it is not source, and it is
-                # host/feature-dependent — a gpu-feature build (gpu-surface on noise-gpu) resolves
+                # host/feature-dependent — a gpu-feature build on noise-gpu resolves
                 # extra CUDA deps into noise-gpu/Cargo.lock, so every gpu-line box hashed a DIFFERENT
                 # cv than the (cpu-only) planner and the hub cv-gate refused ALL its claims — the fast
                 # GPU boxes could never build. The recipe (source) is what changes output; a dep pin is

@@ -1526,7 +1526,7 @@ fn arc_screened_eval(
             // lane clips to the span BEFORE its union, so its `b` is a min over the
             // in-span subset and is therefore >= this one. Same floors, different
             // `b`, so the two lanes can disagree on an arc whose nearest member is
-            // out-of-span — see the KNOWN RESIDUAL FORK note in `scatter.cu`'s
+            // out-of-span — see the KNOWN RESIDUAL FORK note in the CUDA surface kernel's
             // admission block. This lane is the more permissive of the two, which
             // is the safe direction: it costs a march that returns ~0 dB.
             intervals.push(BlockedInterval { start, end });

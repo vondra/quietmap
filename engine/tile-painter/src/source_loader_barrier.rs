@@ -14,7 +14,7 @@
 //! * The GPU runner takes the SAME vector form behind the `QM_GPU_BARRIERS`
 //!   gate (engine default ON since 2026-08-02): the per-tile [`BarrierData::for_tile`] slice is uploaded
 //!   and the scatter kernel runs the identical ray×segment intersection
-//!   (`ray_path_bands` in scatter.cu). The raster burn was the rejected alternative —
+//!   (`ray_path_bands` in the CUDA surface kernel). The raster burn was the rejected alternative —
 //!   it failed the W2 gate (3.7–13.8 dB under-screening in wall shadow;
 //!   decision-record test in tests/barrier_screening.rs); the burn helper
 //!   (`FusedGrid::burn_building_max`) survives only as that gate-test apparatus.

@@ -38,7 +38,6 @@ use crate::surface_layers::{
 
 const REGION_TILE_BATCH_SIDE: u32 = 4;
 const LINE_HALO_M: f64 = 10_000.0;
-const W1_ZOOM: u8 = 12;
 /// Cells resident on the card at once: the one painting and the next one.
 const RESIDENT_CELLS: usize = 2;
 /// Painted tiles waiting for the writer before the painter blocks (3 MB each).
@@ -47,7 +46,7 @@ pub struct RelevantSourceRunConfiguration {
     pub prepared_directory: PathBuf,
     pub h3r4_directory: PathBuf,
     pub output_directory: PathBuf,
-    /// Web-Mercator zoom of the painted tiles: 12 for W1, 13 for W2.
+    /// Web-Mercator zoom of the painted tiles.
     pub zoom: u8,
 }
 
@@ -82,14 +81,6 @@ impl RelevantSourceRunConfiguration {
             zoom,
         })
     }
-}
-
-/// The ray cadence each wave's etalon was painted with, as the production roles
-/// build it: W1 (z12) runs the surface heatmap's coarse middle (scatter_band's
-/// SHADOW_MID_STRIDE default), W2 (z13) the exact popup cadence
-/// (SURFACE_SHADOW_STRIDE=1, the stride4 role's -DSHADOW_MID_STRIDE=1).
-fn coarse_middle_cadence(zoom: u8) -> bool {
-    zoom <= W1_ZOOM
 }
 
 /// What the cell producer hands the painter: a cell on the card holding one of
@@ -386,7 +377,6 @@ fn paint_batch_tiles(
                 batch_raster,
                 &receivers,
                 &barriers,
-                coarse_middle_cadence(zoom),
                 LAYER_LDEN_WEIGHTS[layer],
                 &partition_path,
             )?;

@@ -45,7 +45,4 @@ In practice you will see the difference behind buildings: a more realistic
 noise shadow with sharp edges at the real corners of the building, instead
 of today's blurry transition. No dates promised — accuracy gates come first.
 
-As yearly datasets accumulate, we also want every visitor to switch between
-years and compare two noise maps directly.
-
 *Last updated 3 September 2026.*

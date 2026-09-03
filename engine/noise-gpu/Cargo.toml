@@ -3,9 +3,9 @@ name = "noise-gpu"
 version = "0.1.0"
 edition = "2021"
 
-# GPU backend for the surface scatter.
-# cudarc + the nvcc kernel build live behind the `gpu` feature (required by all four
-# bins below, and by nothing else). Default build = the CPU-side lib alone, so a host with no CUDA toolkit (e.g.
+# GPU backend for airborne scatter.
+# cudarc + the nvcc kernel build live behind the `gpu` feature (required by the two
+# airborne bins below, and by nothing else). Default build = the CPU-side lib alone, so a host with no CUDA toolkit (e.g.
 # a CPU-only box) builds noise-gpu cleanly; the GPU path is `--features gpu` on a GPU host.
 # cuda-12060 = highest bindings cudarc 0.12 ships; the 12.x driver API is
 # forward-compatible with the box's 12.8. `std` re-enables DriverError's Display + Error impls
@@ -19,35 +19,18 @@ noise-compute = { path = "../noise-compute" }
 h3o = "0.7"
 anyhow = "1"
 rayon = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.11.0"
 # Only the gpu-airborne production bin parses a CLI; gated with cudarc so the CPU-only lib
-# build stays dependency-light (gpu-surface/e2 hand-parse their few args).
+# build stays dependency-light.
 clap = { version = "4", features = ["derive"], optional = true }
 
 [features]
-# All four bins require this feature; it pulls in cudarc and triggers the
+# Both airborne bins require this feature; it pulls in cudarc and triggers the
 # nvcc PTX build. OFF by default so the lib builds without any CUDA on the host.
 gpu = ["dep:cudarc", "dep:clap"]
 
 [lib]
 name = "noise_gpu"
 path = "src/lib.rs"
-
-# Production batch runner: build a tile block's rail HM3 on the GPU (shared halo
-# + binned kernel), validate vs baseline / write output, report throughput.
-[[bin]]
-name = "gpu-surface"
-path = "src/gpu_surface.rs"
-required-features = ["gpu"]
-
-# E2 acceptance: GPU-vs-CPU byte-exact parity on the full surface path. Run by
-# hand on a GPU host before a --gpu world build.
-[[bin]]
-name = "e2-full"
-path = "src/e2_full.rs"
-required-features = ["gpu"]
 
 # E2 airborne: fp32 airborne NPD kernel vs the f64 `QM_AIRBORNE_FORCE_EXACT=1`
 # oracle on one tile. The make-or-break parity proof.

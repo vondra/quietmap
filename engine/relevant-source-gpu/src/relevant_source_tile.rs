@@ -194,7 +194,6 @@ pub fn partition_and_paint_tile(
     batch_raster: &BatchDeviceRaster,
     receivers: &TileDeviceReceivers,
     barriers: &[noise_compute::types::Barrier],
-    coarse_middle_cadence: bool,
     lden_weights: [f64; PERIOD_COUNT],
     partition_path: &Path,
 ) -> Result<(TilePaintMeasurement, Vec<f32>)> {
@@ -216,7 +215,6 @@ pub fn partition_and_paint_tile(
         source_count: device_sources.source_count,
         obstacle_grid_count: device_obstacles.obstacle_grid_count,
         barrier_count: encoded_barriers.len() as u32,
-        coarse_middle_cadence: u32::from(coarse_middle_cadence),
         pixel_floor_m: receivers.pixel_floor_m,
         raster_geometry: batch_raster.geometry,
     };

@@ -28,7 +28,7 @@ pub(crate) struct PrepBlock {
     pub(crate) batch: TileBatch,
     /// Per owned tile, in `btiles` order: the façade-donor map `write_tile_accumulator` stamps
     /// onto the collapsed tile. Baked HERE so the work overlaps GPU scatter, the same placement
-    /// `gpu_surface` uses.
+    /// the surface runner uses.
     pub(crate) interiors: Vec<InteriorEstimate>,
 }
 
@@ -176,7 +176,7 @@ pub(crate) fn build_dem_blocks(
     // usually parallelises across batches, not within them") and the interior bake adds a
     // point-in-footprint classify + an exact distance transform over all 512² receivers per tile.
     // Left serial, a 120-tile cell would put that whole cost on the ONE prep thread that has to
-    // stay ahead of the device workers. Same shape as `gpu_surface`'s `par_iter` block prep.
+    // stay ahead of the device workers. Same shape as the surface runner's `par_iter` block prep.
     let blocks = batches
         .into_iter()
         .collect::<Vec<_>>()

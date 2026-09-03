@@ -102,7 +102,7 @@ pub const SPEED_OF_SOUND: f64 = 340.0;
 ///
 /// # THE definition — every other appearance derives from this line
 ///
-/// * `scatter.cu`'s `ARC_PENUMBRA_FLOOR_M` and `ARC_DELTA_REJECT` come from
+/// * The CUDA surface kernel's `ARC_PENUMBRA_FLOOR_M` and `ARC_DELTA_REJECT` come from
 ///   `noise-gpu/build.rs`, which mirrors THIS EXPRESSION (reading
 ///   [`SPEED_OF_SOUND`] and dividing) and injects the result via `-D`.
 /// * `obstacle_index::cell_prune_floor_m` reads it directly.
@@ -128,7 +128,7 @@ pub const P_FAV: f64 = 0.5;
 /// overshoots; G6: r9950 gate pass, drift mean 0.004 dB). Flipping raises
 /// every terrain/building screened receiver, so any future change here
 /// travels with a surface-layer OUTPUT_VER bump + world repaint + the
-/// scatter.cu #define mirror — never alone.
+/// CUDA surface-kernel #define mirror — never alone.
 pub const FAVOURABLE_MIXING: bool = true;
 
 /// CNOSSOS-EU (2.5.24) favourable-ray curvature Γ = max(Γ_MIN, Γ_PER_DSR·d),
@@ -262,7 +262,7 @@ pub const RAILWAY_REACH_CLAMP_MAX: f64 = 10_000.0;
 pub const RAILWAY_REACH_TARGET_LDEN_DB: f64 = 25.0;
 
 /// Widest rail reach the clamp can return — used to size the rail-only
-/// ray-march halo (`build_heatmap_surface` / `gpu_surface`) so a row extended
+/// ray-march halo (`build_heatmap_surface` / `relevant-source-surface`) so a row extended
 /// to the ceiling still ray-marches terrain along its whole path. Equals
 /// [`RAILWAY_REACH_CLAMP_MAX`]; named separately so the halo's intent reads at
 /// the call site.

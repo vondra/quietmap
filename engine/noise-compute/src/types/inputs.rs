@@ -316,5 +316,5 @@ pub const BARRIER_SEGMENT_MAX_HALF_LEN_M: f64 = 125.0;
 /// scale mismatch between the loaders' `geo::flat_dist` (pair mid-latitude) and
 /// the kernel's ray frame (path mid-latitude). Exceeding this bound is what
 /// silently drops a real crossing, so it is a correctness constant, not a tuning
-/// knob — the mirrored CUDA literal in `scatter.cu` must move with it.
+/// knob — the mirrored CUDA literal must move with it.
 pub const BARRIER_PATH_HORIZON_M: f64 = BARRIER_SEGMENT_MAX_HALF_LEN_M + 50.0;

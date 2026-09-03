@@ -27,12 +27,11 @@ echo "NVCC_ROLE_COMPILE=BEGIN role=stock features=gpu arch=sm_120"
 env \
   CARGO_TARGET_DIR="$target_root/stock" \
   NOISE_GPU_ARCH=sm_120 \
-  NOISE_GPU_DEFINES= \
   PATH="$(dirname "$NVCC"):$PATH" \
   cargo build --release --locked \
     --manifest-path "$ROOT/engine/noise-gpu/Cargo.toml" \
     --no-default-features --features gpu \
-    --bin gpu-surface --bin gpu-airborne
+    --bin gpu-airborne
 echo "NVCC_ROLE_COMPILE=PASS role=stock"
 # The relevant-source painter: its build script compiles the kernel, generates
 # every physics constant from the CPU sources and fails on any .f64 PTX opcode

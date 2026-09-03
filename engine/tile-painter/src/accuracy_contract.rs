@@ -150,7 +150,8 @@ pub const WAVE_TWO_RUNGS: [Rung; 4] = [
     },
 ];
 
-/// Exact `(tile, layer)` rows in the fixed complete benchmark. qexp is the mandatory
+/// Exact `(tile, layer)` rows in the fixed complete benchmark. The HM3 exact-reference
+/// manager is the mandatory
 /// trust boundary that separately attests the ordered key set; this count prevents a
 /// probe or historical subset from being mislabeled as a release verdict by the
 /// scorer alone.
@@ -707,7 +708,8 @@ impl<'a> AggregateScore<'a> {
     }
 
     /// Release verdict only at exactly [`WAVE_TWO_BENCHMARK_ROWS`] rows, so a short or overfull
-    /// workset can never receive one. Exact ordered key identity is qexp's separate
+    /// workset can never receive one. Exact ordered key identity is the HM3 exact-reference
+    /// manager's separate
     /// responsibility.
     pub fn verdict(&self) -> Option<Verdict> {
         (self.rows.len() == WAVE_TWO_BENCHMARK_ROWS).then(|| self.computed_verdict())

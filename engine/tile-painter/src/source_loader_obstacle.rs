@@ -148,7 +148,7 @@ fn renderer_evidence_requires_vector_mode() -> bool {
 
 /// Pre-bake one tile's `rx_refl_db` from the 150 × 150 m nine-probe vector
 /// enclosure (`noise_compute::…::enclosure_db`; SPEC §4.9). The single bake shared by
-/// the CPU builder, the GPU runner, and e2-full (gg review 2026-07-28:
+/// the CPU builder, the GPU runner, and the independent parity fixture (gg review 2026-07-28:
 /// three hand-copies drift).
 pub fn bake_tile_vector_rx_refl(
     tile: &mut raster_reader::fused_tile_z13::FusedTileZ13,

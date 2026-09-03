@@ -36,17 +36,17 @@ const FILE_VERSION: u32 = 2;
 /// (RTX 5070), the four wbench-orig cells, five surface layers in one process,
 /// seconds and drift from the same run:
 ///
-///   fraction   W2 GPU s   W2 wall   rail >3 dB cells (limit 1379)   industrial (921)   W1 GPU s
-///   0.15       293.8      331.0     1101  passes                       48  passes       108.8
-///   0.20       257.1      294.8     1738  1.3x over                    73  passes        96.3
-///   0.30       209.7      247.1     3150  2.3x over                   187  passes        80.7
+///   fraction   W2 GPU s   W2 wall   rail >3 dB cells (limit 1379)   industrial (921)
+///   0.15       293.8      331.0     1101  passes                       48  passes
+///   0.20       257.1      294.8     1738  1.3x over                    73  passes
+///   0.30       209.7      247.1     3150  2.3x over                   187  passes
 ///
-/// Every other rung of every layer passes at all three; W1 stays 15 of 15. The
-/// rule's own effect at 0.15 was rail 4994 -> 1101 and industrial 1984 -> 48 for
+/// Every other rung of every layer passes at all three. The rule's own effect at
+/// 0.15 was rail 4994 -> 1101 and industrial 1984 -> 48 for
 /// +23.7 % of the wave's GPU seconds against the per-corner budget it replaced.
 pub const DROP_BUDGET_FRACTION: f64 = 0.15;
 
-/// The complete reusable source partition for one fixed geographic z12 tile.
+/// The complete reusable source partition for one fixed geographic tile.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RelevantSourcePartition {
     pub source_fingerprint: u64,

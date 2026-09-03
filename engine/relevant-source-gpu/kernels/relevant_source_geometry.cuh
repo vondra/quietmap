@@ -106,8 +106,6 @@ struct DeviceScenePointers {
     uint32_t source_count;
     uint32_t obstacle_grid_count;
     uint32_t barrier_count;
-    /// Non-zero: long rays take the surface heatmap's coarse-middle cadence.
-    uint32_t coarse_middle_cadence;
     /// Half a pixel of this tile in metres: the ground-ops divergence floor.
     float pixel_floor_m;
     DeviceRasterGeometry raster_geometry;
@@ -135,7 +133,7 @@ static_assert(sizeof(FusedPixel) == 8, "raster pixel ABI");
 static_assert(sizeof(DeviceRasterGeometry) == 24, "raster geometry ABI");
 static_assert(sizeof(DeviceObstacleGrid) == 48, "obstacle grid ABI");
 static_assert(sizeof(DeviceBarrier) == 24, "barrier ABI");
-static_assert(sizeof(DeviceScenePointers) == 112, "scene ABI");
+static_assert(sizeof(DeviceScenePointers) == 104, "scene ABI");
 
 __device__ __forceinline__ float quietmap_clamp(float value, float minimum, float maximum) {
     return fminf(fmaxf(value, minimum), maximum);

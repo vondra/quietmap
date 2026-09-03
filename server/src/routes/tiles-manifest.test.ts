@@ -69,8 +69,8 @@ function acceptedGeneration(rasterGenerationId = 'b'.repeat(16)) {
         'gpu-airborne': worker(
           'airborne-production', 'gpu-airborne', 'stock', 'airborne-stock-v1',
         ),
-        'gpu-surface': worker(
-          'surface-production', 'gpu-surface', 'w2-merged', 'surface-w2-z13-accepted-v1',
+      'gpu-surface': worker(
+        'relevant-source-production', 'relevant-source-surface', 'stock', 'relevant-source-stock-v1',
         ),
       },
     },
@@ -79,7 +79,7 @@ function acceptedGeneration(rasterGenerationId = 'b'.repeat(16)) {
       worker_model_roles: {
         'cpu-cruise': 'stock',
         'gpu-airborne': 'stock',
-        'gpu-surface': 'w2-merged',
+        'gpu-surface': 'stock',
       },
     },
     scorer_contract: {

@@ -319,7 +319,7 @@ impl RegionResident {
 impl AirborneGpu {
     /// Open CUDA device 0, load the airborne PTX, and upload the NPD LUTs + the GA full-year
     /// hybrid per-class weight LUT once. CUDA failures `expect`-panic (the codebase convention
-    /// — see `gpu_surface`): a dead device or missing kernel is fatal to the whole build, so
+    /// — see the surface runner): a dead device or missing kernel is fatal to the whole build, so
     /// the worker dies loudly and the chunk re-dispatches. `class_weights` is build-wide
     /// (resolved from the source arrows' `sample_days_by_class`); the weight LUT is constant
     /// across every region + tile, so it uploads here, not per-tile.

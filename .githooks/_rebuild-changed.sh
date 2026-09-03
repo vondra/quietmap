@@ -99,9 +99,9 @@ if [ -n "$ENGINE_CHANGED" ]; then
     FAIL=0
     for crate in engine/*; do
         [ -f "$crate/Cargo.toml" ] || continue
-        # noise-gpu's gpu-surface/e2-full bins live behind --features gpu (which needs
-        # nvcc); add it only on a CUDA host so a CPU-only box still rebuilds the lib
-        # without erroring, and a GPU box rebuilds the bins after a pull as before.
+        # noise-gpu's airborne production bin lives behind --features gpu (which
+        # needs nvcc); add it only on a CUDA host so a CPU-only box still rebuilds
+        # the lib without erroring, and a GPU box rebuilds the bin after a pull.
         feats=()
         if [ "$crate" = engine/noise-gpu ] && command -v nvcc >/dev/null 2>&1; then
             feats=(--features gpu)

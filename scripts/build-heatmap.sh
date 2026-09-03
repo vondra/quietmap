@@ -40,7 +40,6 @@ PYR="$TARGET/build-pyramid"
 COMBINE="$TARGET/build-heatmap-combine"
 TRANSCODE="$TARGET/tile-store-transcode"
 TRANSACTION="$TARGET/tile-store-transaction"
-GPU_SURFACE="engine/target/release/gpu-surface"  # --gpu: line layers on GPU
 
 log() { echo "[build-heatmap] $(date '+%H:%M:%S') $*"; }
 
@@ -83,7 +82,6 @@ INGEST="$TARGET/tile-store-ingest"
 # --bbox / --tile-x/--tile-y / --world / --shard) verbatim to the builders.
 SOURCE=all
 COMBINE_ONLY=false
-USE_GPU=false
 SEL_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -92,7 +90,6 @@ while [ $# -gt 0 ]; do
     --no-combine)
       log "ERROR: --no-combine was removed because it leaves total/ stale; every repaint is one source→pyramid→total transaction"
       exit 2 ;;
-    --gpu) USE_GPU=true; shift ;;   # line layers (road/rail) → GPU, point layers ∥ on CPU
     *) SEL_ARGS+=("$1"); shift ;;
   esac
 done
@@ -210,104 +207,6 @@ if ! $COMBINE_ONLY; then
   if [ ${#SURFACE_LAYERS[@]} -gt 0 ]; then
     if $is_world || $is_shard; then
       log "skip surface (${SURFACE_LAYERS[*]}) — surface kernels are bbox/tile only (use --bbox)"
-    elif $USE_GPU; then
-      # HYBRID: the line layers (road/rail) go to the GPU while the CPU builds the
-      # point/ground layers IN PARALLEL — both mmap the same tmpfs rasters, so the
-      # heavy raster reads share the OS page cache (and CPU L3). GPU = throughput
-      # on the dominant line scatter; CPU = the cheaper point/ground layers.
-      $is_scoped || { log "ERROR: --gpu requires --bbox or --tile-x/--tile-y"; exit 1; }
-      # S-3 GPU dense/sparse routing gate: rural road on GPU is a measured 0.82× loss.
-      # Gate by total roads.arrow + railways.arrow
-      # bytes over the R4 cells COVERING the bbox (~2 km sampling, the cluster
-      # master's polyfill idiom — a whole-tree scan would always read "dense" and
-      # walk 121k dirs on the world host). GPU_LINE_MIN_MB default = 2 MB matches
-      # the cluster's DENSE_LINE_MB — the same measured dense/sparse boundary.
-      # The same R4 set feeds the barrier gate. GPU vector barriers default on;
-      # QM_GPU_BARRIERS=0 demotes any barrier-bearing bbox to the CPU vector path.
-      # `e2-full` is the current GPU/CPU parity authority.
-      GPU_LINE_MIN_MB="${GPU_LINE_MIN_MB:-2}"
-      QM_GPU_BARRIERS="${QM_GPU_BARRIERS:-1}"
-      bbox_line_bytes=0
-      bbox_has_barriers=0
-      while read -r r4; do
-        [ -d "$H3R4/$r4" ] || continue
-        for f in "$H3R4/$r4/roads.arrow" "$H3R4/$r4/railways.arrow"; do
-          [ -f "$f" ] && bbox_line_bytes=$((bbox_line_bytes + $(stat -c%s "$f" 2>/dev/null || echo 0)))
-        done
-        [ -s "$H3R4/$r4/barriers.arrow" ] && bbox_has_barriers=1
-      done < <(python3 - "$scope_bbox" <<'PY'
-import sys, h3
-s, w, n, e = (float(x) for x in sys.argv[1].split(","))
-s, n = min(s, n), max(s, n); w, e = min(w, e), max(w, e)
-cells = set()
-lat = s
-while lat <= n + 1e-9:
-    lon = w
-    while lon <= e + 1e-9:
-        cells.add(h3.latlng_to_cell(lat, lon, 4))
-        lon += 0.02
-    lat += 0.02
-# grid_disk(1) union: the builders load RING sources per output cell, so both
-# the barrier check (correctness — 1,868 world cells have a neighbour-only
-# barrier) and the byte sum (a ring-dense border bbox is NOT sparse) must see
-# the ring, not just the covering cells.
-ring = set()
-for c in cells:
-    ring.update(h3.grid_disk(c, 1))
-for c in sorted(ring):
-    print(c)
-PY
-)
-      # Gate ON: the GPU kernel screens vector barriers, so don't demote on their
-      # presence (S-3 sparse demotion below still applies). gpu-surface gets
-      # QM_GPU_BARRIERS=1 in its env to actually upload + screen them.
-      if [ "$QM_GPU_BARRIERS" = 1 ] && [ "$bbox_has_barriers" -eq 1 ]; then
-        log "QM_GPU_BARRIERS=1 — barriers in bbox stay on GPU (kernel screens vector walls)"
-        bbox_has_barriers=0
-      fi
-      gpu_layers=(); cpu_layers=()
-      for L in "${SURFACE_LAYERS[@]}"; do
-        case "$L" in
-          road | rail)
-            if [ "$bbox_has_barriers" -eq 1 ] \
-              || [ "$bbox_line_bytes" -lt "$((GPU_LINE_MIN_MB * 1000000))" ]; then
-              cpu_layers+=("$L")
-            else
-              gpu_layers+=("$L")
-            fi ;;
-          *) cpu_layers+=("$L") ;;
-        esac
-      done
-      if [ "${#gpu_layers[@]}" -eq 0 ]; then
-        if [ "$bbox_has_barriers" -eq 1 ]; then
-          log "barriers in bbox — line layers on CPU (GPU kernel is barrier-blind, C9)"
-        else
-          log "sparse bbox (${bbox_line_bytes} B < ${GPU_LINE_MIN_MB} MB) — road/rail on CPU (GPU 0.82× rural loss, S-3)"
-        fi
-      fi
-      # --features gpu pulls in cudarc + the nvcc PTX build; build.rs fails with a
-      # clear message if nvcc is missing, so this build is the single GPU-host gate.
-      log "rebuilding gpu-surface (needs nvcc on this host)"
-      cargo build --release --manifest-path engine/noise-gpu/Cargo.toml --features gpu --bin gpu-surface
-      gpu_pid=""; cpu_pid=""
-      if [ ${#gpu_layers[@]} -gt 0 ]; then
-        log "GPU surface: ${gpu_layers[*]} → $OUTPUT/{layer}"
-        ( IFS=,; NOISE_GPU_PREPARED="$PREP" DATA_YEAR="$DATA_YEAR" QM_GPU_BARRIERS="$QM_GPU_BARRIERS" \
-            scripts/memcap "$GPU_SURFACE" --layers "${gpu_layers[*]}" --bbox "$scope_bbox" --output "$OUTPUT" ) 2>&1 | stamp &
-        gpu_pid=$!
-      fi
-      if [ ${#cpu_layers[@]} -gt 0 ]; then
-        # Build exactly cpu_layers via `ground` minus everything not requested.
-        excl=(); for L in road rail industrial building aircraft-ground; do
-          [[ " ${cpu_layers[*]} " == *" $L "* ]] || excl+=(--exclude "$L")
-        done
-        log "CPU surface: ${cpu_layers[*]} → $OUTPUT/{layer}"
-        scripts/memcap "$SURFACE" --source ground "${excl[@]}" --zoom "$ZOOM" --h3r4-dir "$H3R4" \
-          --prepared-dir "$PREP" --output "$OUTPUT" "${SEL_ARGS[@]}" 2>&1 | stamp &
-        cpu_pid=$!
-      fi
-      [ -n "$gpu_pid" ] && wait "$gpu_pid"
-      [ -n "$cpu_pid" ] && wait "$cpu_pid"
     else
       # The full surface set (all / ground) → one shared-halo `ground` pass; a
       # single requested layer → its own `--source`. Either way --output is the

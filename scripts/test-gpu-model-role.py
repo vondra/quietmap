@@ -18,12 +18,7 @@ import unittest
 from pathlib import Path
 
 from gpu_model_role import (
-    reviewed_define_names,
     MODEL_SOURCE_DIRS,
-    W1_ACCEPTED_NOISE_GPU_DEFINES,
-    W1_ACCEPTED_REQUIRED_PTX_ENTRIES,
-    W2_STRIDE4_NOISE_GPU_DEFINES,
-    W2_STRIDE4_REQUIRED_PTX_ENTRIES,
     ContractError,
     artifact_set,
     cuda_fatbin_images,
@@ -129,29 +124,6 @@ def write_model_source_fixture(root: Path) -> Path:
     return header
 
 
-# The W1 and W2 candidate roles belong to gpu-surface, the benchmark painter
-# layer-spec.json no longer deploys — production surface tiles come from
-# relevant-source-surface. The profile mechanism they exercise is still the one
-# a future candidate will use, so these tests bind two workers to their family
-# in a copy of the real layer spec.
-CANDIDATE_WORKERS = ("gpu-surface-candidate", "gpu-surface-candidate-pair")
-
-
-def layer_spec_with_candidate_workers(directory: Path) -> Path:
-    spec = json.loads((ROOT / "scripts/layer-spec.json").read_text(encoding="utf-8"))
-    for worker in CANDIDATE_WORKERS:
-        spec["worker_types"][worker] = {
-            "group": "surface",
-            "gpu": True,
-            "artifact_family": "surface-production",
-            "binary": "gpu-surface",
-            "flags": "--stream --layers road,rail --zoom {ZOOM} --output {OUTPUT}",
-        }
-    path = directory / "layer-spec.json"
-    path.write_text(json.dumps(spec), encoding="utf-8")
-    return path
-
-
 def reseal_artifact(artifact: Path) -> None:
     receipt_path = artifact / "artifact-receipt.json"
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -194,43 +166,20 @@ class ModelRoleSpecTests(unittest.TestCase):
             with self.assertRaises(ContractError):
                 load_and_validate_spec(path)
 
-    def test_production_stays_stock_and_accepted_candidates_are_explicitly_unselected(self) -> None:
+    def test_production_roles_are_stock_and_surface_uses_relevant_source(self) -> None:
         spec = load_and_validate_spec(SPEC_PATH)
-        surface = resolve_role(spec, "surface-production", "surface-stock-v1")
-        w1 = resolve_role(spec, "surface-production", "surface-w1-z12-accepted-v1")
-        candidate = resolve_role(
-            spec, "surface-production", "surface-w2-z13-stride4-v1"
-        )
         airborne = resolve_role(spec, "airborne-production", "airborne-stock-v1")
-        self.assertTrue(surface["selected"])
         self.assertTrue(airborne["selected"])
-        self.assertFalse(w1["selected"])
-        self.assertEqual(w1["model_role"], "w1")
-        self.assertEqual(
-            w1["noise_gpu_defines"], list(W1_ACCEPTED_NOISE_GPU_DEFINES)
-        )
-        self.assertEqual(
-            w1["required_ptx_entries"], list(W1_ACCEPTED_REQUIRED_PTX_ENTRIES)
-        )
-        self.assertEqual(surface["cargo_features"], ["gpu"])
-        self.assertFalse(candidate["selected"])
-        self.assertEqual(candidate["model_role"], "w2-stride4")
-        self.assertEqual(
-            candidate["noise_gpu_defines"], list(W2_STRIDE4_NOISE_GPU_DEFINES)
-        )
-        self.assertEqual(
-            candidate["required_ptx_entries"], list(W2_STRIDE4_REQUIRED_PTX_ENTRIES)
-        )
-        self.assertRegex(
-            model_role_sha256(
-                SPEC_PATH, spec, "surface-production", candidate["role"]
-            ),
-            r"^[0-9a-f]{64}$",
-        )
-        self.assertEqual(airborne["cargo_features"], ["gpu"])
         relevant_source = resolve_role(
             spec, "relevant-source-production", "relevant-source-stock-v1"
         )
+        self.assertTrue(relevant_source["selected"])
+        self.assertEqual(relevant_source["binary"], "relevant-source-surface")
+        self.assertRegex(
+            model_role_sha256(SPEC_PATH, spec, relevant_source["family"], relevant_source["role"]),
+            r"^[0-9a-f]{64}$",
+        )
+        self.assertEqual(airborne["cargo_features"], ["gpu"])
         self.assertEqual(relevant_source["cuda_image"], "FLEET_CUDA_ARCHS-fatbin")
         fleet_archs = relevant_source_fleet_cuda_archs(ROOT)
         self.assertTrue(all(re.fullmatch(r"sm_[0-9]{2,3}", arch) for arch in fleet_archs))
@@ -252,50 +201,6 @@ class ModelRoleSpecTests(unittest.TestCase):
         self.assertRegex(contract["line_model_role_sha256"], r"^[0-9a-f]{64}$")
         self.assertRegex(contract["model_source_recipe_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(contract["output_abi_version"], 3)
-
-    def test_profile_requirements_resolve_w1_and_w2_without_selecting_them(self) -> None:
-        first, second = CANDIDATE_WORKERS
-        with tempfile.TemporaryDirectory() as temporary:
-            layer_spec = layer_spec_with_candidate_workers(Path(temporary))
-            selected = deployment_contract(SPEC_PATH, layer_spec)
-            w1 = deployment_contract(SPEC_PATH, layer_spec, {first: "w1"})
-            w2 = deployment_contract(SPEC_PATH, layer_spec, {first: "w2-stride4"})
-        self.assertEqual(selected["workers"][first]["model_role"], "stock")
-        self.assertEqual(w1["workers"][first]["resolved_role"],
-                         "surface-w1-z12-accepted-v1")
-        self.assertEqual(w2["workers"][first]["resolved_role"],
-                         "surface-w2-z13-stride4-v1")
-        # One requirement moves every worker of that family, and no other.
-        self.assertEqual(w1["workers"][second], w1["workers"][first])
-        self.assertEqual(w2["workers"][second], w2["workers"][first])
-        self.assertEqual(w1["workers"]["gpu-surface"], selected["workers"]["gpu-surface"])
-        self.assertNotEqual(selected["line_model_role_sha256"],
-                            w1["line_model_role_sha256"])
-        self.assertNotEqual(w1["line_model_role_sha256"],
-                            w2["line_model_role_sha256"])
-
-    def test_profile_requirements_reject_unknown_ambiguous_and_conflicting_roles(self) -> None:
-        first, second = CANDIDATE_WORKERS
-        with tempfile.TemporaryDirectory() as temporary:
-            layer_spec = layer_spec_with_candidate_workers(Path(temporary))
-            with self.assertRaisesRegex(ContractError, "has 0 roles"):
-                deployment_contract(SPEC_PATH, layer_spec, {first: "unknown"})
-            with self.assertRaisesRegex(ContractError, "conflicting model roles"):
-                deployment_contract(
-                    SPEC_PATH, layer_spec, {first: "w1", second: "w2-stride4"}
-                )
-            duplicate_spec = copy.deepcopy(self.spec)
-            duplicate_spec["families"]["surface-production"]["roles"][
-                "surface-alternative-stock-v1"
-            ] = copy.deepcopy(
-                duplicate_spec["families"]["surface-production"]["roles"][
-                    "surface-stock-v1"
-                ]
-            )
-            path = Path(temporary) / "ambiguous-spec.json"
-            path.write_text(json.dumps(duplicate_spec), encoding="utf-8")
-            with self.assertRaisesRegex(ContractError, "has 2 roles"):
-                deployment_contract(path, layer_spec, {first: "stock"})
 
     def test_profile_requirements_reject_falsy_non_objects_in_api_and_cli(self) -> None:
         for invalid in ([], False, 0, ""):
@@ -379,81 +284,28 @@ class ModelRoleSpecTests(unittest.TestCase):
                 model_source_recipe_sha256(root)
 
     def test_unknown_family_field_is_rejected(self) -> None:
-        self.validate_mutation(lambda spec: spec["families"]["surface-production"].update(foo=1))
+        self.validate_mutation(lambda spec: spec["families"]["airborne-production"].update(foo=1))
 
     def test_feature_unification_is_rejected(self) -> None:
         self.validate_mutation(
-            lambda spec: spec["families"]["surface-production"]["roles"][
-                "surface-stock-v1"
+            lambda spec: spec["families"]["airborne-production"]["roles"][
+                "airborne-stock-v1"
             ].update(cargo_features=["gpu", "unknown-feature"])
         )
 
-    def test_w2_stride4_role_cannot_be_selected_or_change_one_define(self) -> None:
+    def test_airborne_role_cannot_change_its_ptx_contract(self) -> None:
         self.validate_mutation(
-            lambda spec: spec["families"]["surface-production"].update(
-                selected_role="surface-w2-z13-stride4-v1"
-            )
-        )
-        self.validate_mutation(
-            lambda spec: spec["families"]["surface-production"]["roles"][
-                "surface-w2-z13-stride4-v1"
-            ]["noise_gpu_defines"].__setitem__(
-                4, "-DMULTIFIDELITY_Z13_STRIDE=8"
-            )
-        )
-        self.validate_mutation(
-            lambda spec: spec["families"]["surface-production"]["roles"][
-                "surface-w2-z13-stride4-v1"
-            ]["noise_gpu_defines"].reverse()
-        )
-        self.validate_mutation(
-            lambda spec: spec["families"]["surface-production"]["roles"][
-                "surface-w2-z13-stride4-v1"
-            ]["noise_gpu_defines"].__setitem__(
-                spec["families"]["surface-production"]["roles"][
-                    "surface-w2-z13-stride4-v1"
-                ]["noise_gpu_defines"].index("-DARC_UNION_BEFORE_SPAN_CLIP=1"),
-                "-DARC_UNION_BEFORE_SPAN_CLIP=0",
-            )
-        )
-        self.validate_mutation(
-            lambda spec: spec["families"]["surface-production"]["roles"][
-                "surface-w2-z13-stride4-v1"
-            ]["required_ptx_entries"].pop()
-        )
-
-    def test_w1_role_cannot_be_selected_or_drift_from_accepted_evidence(self) -> None:
-        self.validate_mutation(
-            lambda spec: spec["families"]["surface-production"].update(
-                selected_role="surface-w1-z12-accepted-v1"
-            )
-        )
-        self.validate_mutation(
-            lambda spec: spec["families"]["surface-production"]["roles"][
-                "surface-w1-z12-accepted-v1"
-        ].update(noise_gpu_defines=["-DMULTIFIDELITY_LINE=1"])
-        )
-        self.validate_mutation(
-            lambda spec: spec["families"]["surface-production"]["roles"][
-                "surface-w1-z12-accepted-v1"
+            lambda spec: spec["families"]["airborne-production"]["roles"][
+                "airborne-stock-v1"
             ]["required_ptx_entries"].pop()
         )
 
     def test_role_cannot_move_between_binary_families(self) -> None:
         self.validate_mutation(
-            lambda spec: spec["families"]["surface-production"]["roles"][
-                "surface-stock-v1"
-            ].update(binary="gpu-airborne", ptx=["airborne.ptx"])
+            lambda spec: spec["families"]["airborne-production"]["roles"][
+                "airborne-stock-v1"
+            ].update(binary="relevant-source-surface", ptx=[])
         )
-
-    def test_the_rust_build_gate_reads_the_same_allowlist_file(self) -> None:
-        # The two hand-kept copies this used to compare are gone: both sides now
-        # read engine/noise-gpu/reviewed-defines.txt, so the drift class it
-        # guarded cannot occur. What is left to check is that the Rust side
-        # still compiles that file in rather than reintroducing a literal list.
-        source = (ROOT / "engine/noise-gpu/build_defines.rs").read_text(encoding="utf-8")
-        self.assertIn('include_str!("../../scripts/reviewed-defines.txt")', source)
-        self.assertTrue(reviewed_define_names())
 
 
 class CudaFatbinTests(unittest.TestCase):
@@ -576,14 +428,11 @@ done
 [ -n "$binary" ]
 out="$CARGO_TARGET_DIR/release/build/noise-gpu-fake/out"
 mkdir -p "$out" "$CARGO_TARGET_DIR/release"
-if [ "$binary" = gpu-surface ]; then
-  ptx=scatter.ptx
-  entries='.visible .entry line() { ret; }
-.visible .entry line_binned_fused() { ret; }
-.visible .entry line_multifidelity_cheap_w1() { ret; }
-.visible .entry line_multifidelity_compact_packed_w1() { ret; }
-.visible .entry line_multifidelity_compact_w1() { ret; }'
+if [ "$binary" = relevant-source-surface ]; then
+  [ -z "$NOISE_GPU_ARCH" ]
+  python3 "$(dirname "$0")/fake-cuda-executable.py" "$CARGO_TARGET_DIR/release/$binary" '__FAKE_FLEET_CUDA_ARCHS__' ''
 else
+  [ "$binary" = gpu-airborne ]
   ptx=airborne.ptx
   entries='.visible .entry airborne_classify_count() { ret; }
 .visible .entry airborne_classify_scatter() { ret; }
@@ -596,34 +445,13 @@ else
 .visible .entry airborne_building_horizon_global_max() { ret; }
 .visible .entry airborne_building_horizon_mark_empty() { ret; }'
 fi
-printf '#!/bin/sh\nembedded PTX follows\n' > "$CARGO_TARGET_DIR/release/$binary"
-if [ "$binary" = relevant-source-surface ]; then
-  [ -z "$NOISE_GPU_ARCH" ]
-  python3 "$(dirname "$0")/fake-cuda-executable.py" "$CARGO_TARGET_DIR/release/$binary" '__FAKE_FLEET_CUDA_ARCHS__' ''
-else
+if [ "$binary" != relevant-source-surface ]; then
+  printf '#!/bin/sh\nembedded PTX follows\n' > "$CARGO_TARGET_DIR/release/$binary"
   printf '.version 8.8\n.target sm_120\n.address_size 64\n%s\n' "$entries" > "$out/$ptx"
   cat "$out/$ptx" >> "$CARGO_TARGET_DIR/release/$binary"
 fi
 chmod +x "$CARGO_TARGET_DIR/release/$binary"
-printf '%s\n' '-DTPX=512' '-DBARRIER_STRIDE=6' '-DSOURCE_SEGMENT_STRIDE=4' '-DSURFACE_META_SLOTS=14' '-DOUT_ARCSTAT_COUNTERS=10' > "$out/nvcc-defines.txt"
-for token in $NOISE_GPU_DEFINES; do printf '%s\n' "$token" >> "$out/nvcc-defines.txt"; done
-if [ "$binary" = gpu-surface ]; then
-  printf 'fake build-bound scatter cubin\n%s\n' "$NOISE_GPU_DEFINES" > "$out/scatter.cubin"
-  cat "$out/scatter.cubin" >> "$CARGO_TARGET_DIR/release/$binary"
-  cubin_sha=$(sha256sum "$out/scatter.cubin" | awk '{print $1}')
-  printf 'cargo:rustc-env=NOISE_GPU_SCATTER_CUBIN_SHA256=%s\n' "$cubin_sha" > "${out%/out}/output"
-  if [ -n "$NOISE_GPU_DEFINES" ]; then
-    printf '%s\n' 'cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_LINE=1' >> "${out%/out}/output"
-    if printf '%s' "$NOISE_GPU_DEFINES" | grep -q MULTIFIDELITY_Z13_STRIDE; then
-      printf '%s\n' \
-        'cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_CARTESIAN_UNBINNED_ANCHOR=1' \
-        'cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_Z13_STRIDE=4' \
-        'cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_Z13_ADAPTIVE=0' >> "${out%/out}/output"
-    else
-      printf '%s\n' 'cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_CARTESIAN_UNBINNED_ANCHOR=0' >> "${out%/out}/output"
-    fi
-  fi
-fi
+printf '%s\n' '-DTPX=512' > "$out/nvcc-defines.txt"
 """,
         )
         fake_cargo = self.tools / "cargo"
@@ -654,7 +482,7 @@ done
 [ -n "$out" ]
 : > "$out"
 echo 'ptxas info : 0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads' >&2
-echo 'ptxas info : Function properties for line line_binned_fused line_multifidelity_cheap_w1 line_multifidelity_compact_packed_w1 line_multifidelity_compact_w1 airborne_classify_count airborne_classify_scatter airborne_coarse_screened airborne_exact_screened airborne_terrain_horizon_build airborne_terrain_horizon_global_max airborne_building_horizon_build airborne_building_horizon_pack airborne_building_horizon_global_max airborne_building_horizon_mark_empty' >&2
+echo 'ptxas info : Function properties for airborne kernels airborne_classify_count airborne_classify_scatter airborne_coarse_screened airborne_exact_screened airborne_terrain_horizon_build airborne_terrain_horizon_global_max airborne_building_horizon_build airborne_building_horizon_pack airborne_building_horizon_global_max airborne_building_horizon_mark_empty' >&2
 """,
         )
         self.artifacts = self.root / "artifacts"
@@ -664,8 +492,8 @@ echo 'ptxas info : Function properties for line line_binned_fused line_multifide
 
     def command(
         self,
-        role: str = "surface-stock-v1",
-        family: str = "surface-production",
+        role: str = "airborne-stock-v1",
+        family: str = "airborne-production",
         arch: str | None = "sm_120",
     ) -> list[str]:
         command = [
@@ -740,11 +568,12 @@ echo 'ptxas info : Function properties for line line_binned_fused line_multifide
     def test_fake_toolchain_builds_and_replays_one_immutable_role(self) -> None:
         result = self.run_builder(self.command())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        artifact = self.artifacts / "surface-stock-v1"
+        artifact = self.artifacts / "airborne-stock-v1"
         receipt = verify_artifact(artifact, SPEC_PATH)
         self.assertEqual(receipt["build"]["cuda_context"], "not_opened")
-        self.assertEqual(receipt["build"]["environment"]["NOISE_GPU_DEFINES"], "")
-        self.assertIn("line_binned_fused", receipt["ptx"]["scatter.ptx"]["entries"])
+        self.assertIn(
+            "airborne_classify_scatter", receipt["ptx"]["airborne.ptx"]["entries"]
+        )
         self.assertTrue((artifact / "BUILD_TERMINAL").is_file())
         self.assertFalse((artifact / "receipts/feature-receipt.txt").exists())
         source_manifest = (artifact / "input/source-files.sha256").read_text(encoding="utf-8")
@@ -789,115 +618,38 @@ echo 'ptxas info : Function properties for line line_binned_fused line_multifide
         self.assertNotEqual(ptx.returncode, 0)
         self.assertIn("single-arch GPU roles require --arch", ptx.stderr)
 
-    def test_w2_stride4_artifact_binds_declared_defines_role_and_scatter_cubin(self) -> None:
-        role = "surface-w2-z13-stride4-v1"
-        result = self.run_builder(self.command(role))
+    def test_artifact_set_uses_the_selected_relevant_source_role(self) -> None:
+        result = self.run_builder(
+            self.command("relevant-source-stock-v1", "relevant-source-production", None)
+        )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        artifact = self.artifacts / role
-        receipt = verify_artifact(artifact, SPEC_PATH)
-        spec = load_and_validate_spec(SPEC_PATH)
-        self.assertFalse(receipt["selected"])
-        self.assertEqual(receipt["model_role"], "w2-stride4")
+        layer_spec = ROOT / "scripts/layer-spec.json"
+        identity = artifact_set(
+            SPEC_PATH, layer_spec, self.artifacts, ["relevant-source-production"]
+        )
+        artifact = identity["artifacts"]["relevant-source-production"]
+        self.assertEqual(artifact["resolved_role"], "relevant-source-stock-v1")
+        self.assertEqual(artifact["binary"], "relevant-source-surface")
+        expected_contract = deployment_contract(SPEC_PATH, layer_spec)
         self.assertEqual(
-            receipt["build"]["environment"]["NOISE_GPU_DEFINES"],
-            " ".join(W2_STRIDE4_NOISE_GPU_DEFINES),
+            identity["line_model_role_sha256"], expected_contract["line_model_role_sha256"]
         )
-        self.assertEqual(
-            receipt["role_sha256"],
-            model_role_sha256(SPEC_PATH, spec, "surface-production", role),
+        cli = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/gpu_model_role.py"),
+                "artifact-set",
+                str(SPEC_PATH),
+                str(layer_spec),
+                str(self.artifacts),
+                "relevant-source-production",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
         )
-        cubin = artifact / "cubin/scatter.cubin"
-        self.assertEqual(receipt["aot"]["sha256"], sha256(cubin))
-        self.assertIn(cubin.read_bytes(), (artifact / "gpu-surface").read_bytes())
-
-    def test_w1_artifact_binds_accepted_defines_and_evidence(self) -> None:
-        role = "surface-w1-z12-accepted-v1"
-        result = self.run_builder(self.command(role))
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        receipt = verify_artifact(self.artifacts / role, SPEC_PATH)
-        self.assertFalse(receipt["selected"])
-        self.assertEqual(receipt["model_role"], "w1")
-        self.assertEqual(
-            receipt["build"]["environment"]["NOISE_GPU_DEFINES"],
-            " ".join(W1_ACCEPTED_NOISE_GPU_DEFINES),
-        )
-
-    def test_artifact_set_uses_effective_w1_and_w2_profile_identities(self) -> None:
-        expected_roles = {
-            "w1": "surface-w1-z12-accepted-v1",
-            "w2-stride4": "surface-w2-z13-stride4-v1",
-        }
-        identities = {}
-        for model_role, role_name in expected_roles.items():
-            result = self.run_builder(self.command(role_name))
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            requirements = {CANDIDATE_WORKERS[0]: model_role}
-            layer_spec = layer_spec_with_candidate_workers(self.root)
-            identity = artifact_set(
-                SPEC_PATH,
-                layer_spec,
-                self.artifacts,
-                ["surface-production"],
-                requirements,
-            )
-            expected_contract = deployment_contract(SPEC_PATH, layer_spec, requirements)
-            artifact = identity["artifacts"]["surface-production"]
-            self.assertEqual(artifact["resolved_role"], role_name)
-            self.assertEqual(artifact["model_role"], model_role)
-            self.assertEqual(
-                artifact["relative_binary_path"], f"{role_name}/gpu-surface"
-            )
-            self.assertEqual(
-                identity["line_model_role_sha256"],
-                expected_contract["line_model_role_sha256"],
-            )
-            cli = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts/gpu_model_role.py"),
-                    "artifact-set",
-                    str(SPEC_PATH),
-                    str(layer_spec),
-                    str(self.artifacts),
-                    "surface-production",
-                    "--worker-model-roles-json",
-                    json.dumps(requirements),
-                ],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(cli.returncode, 0, cli.stdout + cli.stderr)
-            self.assertEqual(json.loads(cli.stdout), identity)
-            identities[model_role] = identity
-        self.assertNotEqual(
-            identities["w1"]["line_model_role_sha256"],
-            identities["w2-stride4"]["line_model_role_sha256"],
-        )
-
-    def test_resealed_w2_stride4_cubin_substitution_is_rejected(self) -> None:
-        role = "surface-w2-z13-stride4-v1"
-        result = self.run_builder(self.command(role))
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        artifact = self.artifacts / role
-        cubin = artifact / "cubin/scatter.cubin"
-        cubin.write_bytes(b"substituted build-bound cubin")
-        receipt_path = artifact / "artifact-receipt.json"
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        old_sha = receipt["aot"]["sha256"]
-        receipt["aot"].update(bytes=cubin.stat().st_size, sha256=sha256(cubin))
-        receipt_path.write_text(
-            json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
-            encoding="utf-8",
-        )
-        build_output = artifact / "receipts/noise-gpu-build-script.output"
-        build_output.write_text(
-            build_output.read_text(encoding="utf-8").replace(old_sha, sha256(cubin)),
-            encoding="utf-8",
-        )
-        reseal_artifact(artifact)
-        with self.assertRaises(ContractError):
-            verify_artifact(artifact, SPEC_PATH)
+        self.assertEqual(cli.returncode, 0, cli.stdout + cli.stderr)
+        self.assertEqual(json.loads(cli.stdout), identity)
 
     def test_airborne_role_builds_only_its_declared_binary_and_ptx(self) -> None:
         result = self.run_builder(
@@ -908,8 +660,6 @@ echo 'ptxas info : Function properties for line line_binned_fused line_multifide
         receipt = verify_artifact(artifact, SPEC_PATH)
         self.assertEqual(receipt["binary"], "gpu-airborne")
         self.assertEqual(set(receipt["ptx"]), {"airborne.ptx"})
-        self.assertFalse((artifact / "gpu-surface").exists())
-        self.assertFalse((artifact / "ptx/scatter.ptx").exists())
 
     def test_archive_hash_and_unknown_role_fail_before_artifact_creation(self) -> None:
         bad_hash = self.command()
@@ -919,10 +669,10 @@ echo 'ptxas info : Function properties for line line_binned_fused line_multifide
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.artifacts.exists())
 
-        unknown = self.command("surface-invalid-e1")
+        unknown = self.command("airborne-invalid-e1")
         result = self.run_builder(unknown)
         self.assertNotEqual(result.returncode, 0)
-        self.assertFalse((self.artifacts / "surface-invalid-e1").exists())
+        self.assertFalse((self.artifacts / "airborne-invalid-e1").exists())
 
     def test_archive_rejects_unsafe_or_noncanonical_symlink_targets(self) -> None:
         for sequence, linkname in enumerate(
@@ -953,16 +703,11 @@ echo 'ptxas info : Function properties for line line_binned_fused line_multifide
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("source archive contains non-file entry", result.stderr)
 
-    def test_nonempty_caller_define_is_rejected(self) -> None:
-        result = self.run_builder(self.command(), NOISE_GPU_DEFINES="-DPROF_COUNTERS=1")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("caller NOISE_GPU_DEFINES must be empty", result.stderr)
-
     def test_tampered_payload_is_rejected(self) -> None:
         result = self.run_builder(self.command())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        artifact = self.artifacts / "surface-stock-v1"
-        with (artifact / "gpu-surface").open("ab") as output:
+        artifact = self.artifacts / "airborne-stock-v1"
+        with (artifact / "gpu-airborne").open("ab") as output:
             output.write(b"tampered")
         with self.assertRaises(ContractError):
             verify_artifact(artifact, SPEC_PATH)
@@ -1106,7 +851,7 @@ class FakeArtifactMutationTests(FakeArtifactBuildTests):
     def test_resealed_semantic_role_mutation_is_rejected(self) -> None:
         result = self.run_builder(self.command())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        artifact = self.artifacts / "surface-stock-v1"
+        artifact = self.artifacts / "airborne-stock-v1"
         receipt_path = artifact / "artifact-receipt.json"
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         receipt["selected"] = False
@@ -1121,47 +866,14 @@ class FakeArtifactMutationTests(FakeArtifactBuildTests):
     def test_resealed_embedded_ptx_mutation_is_rejected(self) -> None:
         result = self.run_builder(self.command())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        artifact = self.artifacts / "surface-stock-v1"
-        binary = artifact / "gpu-surface"
+        artifact = self.artifacts / "airborne-stock-v1"
+        binary = artifact / "gpu-airborne"
         binary.write_bytes(
-            binary.read_bytes().replace(b"line_binned_fused", b"line_binned_mutant")
+            binary.read_bytes().replace(
+                b"airborne_classify_scatter", b"airborne_classify_mutant"
+            )
         )
         binary.chmod(0o755)
-        reseal_artifact(artifact)
-        with self.assertRaises(ContractError):
-            verify_artifact(artifact, SPEC_PATH)
-
-    def test_resealed_experimental_define_is_rejected_even_if_environment_agrees(
-        self,
-    ) -> None:
-        result = self.run_builder(self.command())
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        artifact = self.artifacts / "surface-stock-v1"
-        define_receipt = artifact / "receipts/nvcc-defines.txt"
-        with define_receipt.open("a", encoding="utf-8") as output:
-            output.write("-DPROF_COUNTERS=1\n")
-        receipt_path = artifact / "artifact-receipt.json"
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        receipt["build"]["environment"]["NOISE_GPU_DEFINES"] = "-DPROF_COUNTERS=1"
-        receipt_path.write_text(
-            json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
-            encoding="utf-8",
-        )
-        reseal_artifact(artifact)
-        with self.assertRaises(ContractError):
-            verify_artifact(artifact, SPEC_PATH)
-
-    def test_resealed_environment_define_without_receipt_is_rejected(self) -> None:
-        result = self.run_builder(self.command())
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        artifact = self.artifacts / "surface-stock-v1"
-        receipt_path = artifact / "artifact-receipt.json"
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        receipt["build"]["environment"]["NOISE_GPU_DEFINES"] = "-DPROF_COUNTERS=1"
-        receipt_path.write_text(
-            json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
-            encoding="utf-8",
-        )
         reseal_artifact(artifact)
         with self.assertRaises(ContractError):
             verify_artifact(artifact, SPEC_PATH)
@@ -1169,7 +881,7 @@ class FakeArtifactMutationTests(FakeArtifactBuildTests):
     def test_resealed_arch_must_match_the_ptx_target(self) -> None:
         result = self.run_builder(self.command())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        artifact = self.artifacts / "surface-stock-v1"
+        artifact = self.artifacts / "airborne-stock-v1"
         receipt_path = artifact / "artifact-receipt.json"
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         receipt["build"]["arch"] = "sm_89"

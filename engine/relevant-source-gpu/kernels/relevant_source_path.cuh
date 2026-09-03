@@ -1,9 +1,7 @@
 //! Bilateral raster profile, raw-ground fit, and vegetation depth on one CUDA ray.
 //!
-//! The chainages are noise-compute path_profile.rs `fill_t_values_inner`: the exact
-//! popup cadence, or the surface heatmap's coarse middle (the dense ramp truncated at
-//! the end zones and the far field strided) when the scene asks for it beyond
-//! EXACT_CADENCE_MAX_DIST_M, exactly as tile-painter scatter_band::cadence_for_ray.
+//! The chainages mirror noise-compute path_profile.rs `fill_t_values_inner` at
+//! the exact production cadence.
 
 #pragma once
 
@@ -85,8 +83,7 @@ __device__ __forceinline__ void append_profile_t(PathProfile& profile, float val
 
 __device__ __forceinline__ void fill_profile_chainages(
     PathProfile& profile,
-    float distance_m,
-    bool coarse_middle_cadence
+    float distance_m
 ) {
     profile.count = 0;
     profile.distance_m = distance_m;
@@ -124,35 +121,26 @@ __device__ __forceinline__ void fill_profile_chainages(
         QUIETMAP_RASTER_CELL_M * 4.0f,
         QUIETMAP_RASTER_CELL_M * 8.0f,
     };
-    const bool use_coarse_middle = coarse_middle_cadence
-        && distance_m > QUIETMAP_EXACT_CADENCE_MAX_DISTANCE_M;
     float position_m = emit_near ? QUIETMAP_NEAR_SAMPLE_M : 0.0f;
-    float last_forward_position_m = position_m;
     bool forward_done = false;
     for (int level = 0; level < 4 && !forward_done; ++level) {
         for (int repetition = 0; repetition < 3; ++repetition) {
             position_m += levels[level];
-            if (position_m >= distance_m * 0.5f
-                || (use_coarse_middle
-                    && position_m > QUIETMAP_COARSE_MIDDLE_SOURCE_ZONE_M)) {
+            if (position_m >= distance_m * 0.5f) {
                 forward_done = true;
                 break;
             }
             append_profile_t(profile, position_m / distance_m);
-            last_forward_position_m = position_m;
         }
     }
-    const float forward_end = (use_coarse_middle
-        ? last_forward_position_m : fminf(position_m, distance_m * 0.5f)) / distance_m;
+    const float forward_end = fminf(position_m, distance_m * 0.5f) / distance_m;
 
     float backward_position_m = emit_near ? QUIETMAP_NEAR_SAMPLE_M : 0.0f;
     bool backward_done = false;
     for (int level = 0; level < 4 && !backward_done; ++level) {
         for (int repetition = 0; repetition < 3; ++repetition) {
             const float next = backward_position_m + levels[level];
-            if (next >= distance_m * 0.5f
-                || (use_coarse_middle
-                    && next > QUIETMAP_COARSE_MIDDLE_RECEIVER_ZONE_M)) {
+            if (next >= distance_m * 0.5f) {
                 backward_done = true;
                 break;
             }
@@ -160,9 +148,7 @@ __device__ __forceinline__ void fill_profile_chainages(
         }
     }
     const float backward_start = fmaxf(1.0f - backward_position_m / distance_m, 0.5f);
-    const float coarse_step_m = fminf(
-        levels[3] * (use_coarse_middle ? QUIETMAP_COARSE_MIDDLE_STRIDE : 1),
-        distance_m * 0.25f);
+    const float coarse_step_m = fminf(levels[3], distance_m * 0.25f);
     float middle = forward_end;
     while (middle < backward_start - 0.0001f) {
         middle += coarse_step_m / distance_m;
@@ -178,9 +164,7 @@ __device__ __forceinline__ void fill_profile_chainages(
     for (int level = 0; level < 4 && !backward_done; ++level) {
         for (int repetition = 0; repetition < 3; ++repetition) {
             position_m += levels[level];
-            if (position_m >= distance_m * 0.5f
-                || (use_coarse_middle
-                    && position_m > QUIETMAP_COARSE_MIDDLE_RECEIVER_ZONE_M)) {
+            if (position_m >= distance_m * 0.5f) {
                 backward_done = true;
                 break;
             }
@@ -204,10 +188,9 @@ __device__ __forceinline__ void build_path_profile(
     float receiver_y_m,
     float distance_m,
     bool force_hard_ground,
-    bool coarse_middle_cadence,
     PathProfile& profile
 ) {
-    fill_profile_chainages(profile, distance_m, coarse_middle_cadence);
+    fill_profile_chainages(profile, distance_m);
     PlaneFitSums ground_fit;
     float imd_integral = 0.0f;
     float forest_total = 0.0f;

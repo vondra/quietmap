@@ -37,7 +37,7 @@ function worker(artifactFamily, binary, modelRole, resolvedRole) {
 const producerRoles = {
   'cpu-cruise': 'stock',
   'gpu-airborne': 'stock',
-  'gpu-surface': 'w2-merged',
+  'gpu-surface': 'stock',
 }
 
 function modelRoleContract() {
@@ -54,7 +54,7 @@ function modelRoleContract() {
       ),
       'gpu-airborne': worker('airborne-production', 'gpu-airborne', 'stock', 'airborne-stock-v1'),
       'gpu-surface': worker(
-        'surface-production', 'gpu-surface', 'w2-merged', 'surface-w2-z13-accepted-v1',
+        'relevant-source-production', 'relevant-source-surface', 'stock', 'relevant-source-stock-v1',
       ),
     },
   }
@@ -138,7 +138,7 @@ test('the accepted name cannot carry a spoofed payload, even resealed', () => {
       contract.quality.scorer_contract.presence_mismatch_percent_max = 1.5
     }],
     ['unselected role', (contract) => {
-      contract.quality.producer_requirements.worker_model_roles['gpu-surface'] = 'stock'
+      contract.quality.producer_requirements.worker_model_roles['gpu-surface'] = 'candidate'
     }],
     ['absent worker', (contract) => {
       delete contract.quality.model_role_contract.workers['gpu-airborne']

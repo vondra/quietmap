@@ -33,7 +33,7 @@ impl ReceiverScreeningGrid {
             .map_init(CrossingScratch::default, |crossings, pixel| {
                 let py = pixel / TILE_PX;
                 let px = pixel % TILE_PX;
-                if !(exact_receiver_path || coarse_axis[py] && coarse_axis[px]) {
+                if !pixel_is_selected(pixel, exact_receiver_path, &coarse_axis) {
                     return None;
                 }
                 let rx_lat = tile.rx_lat[py];
@@ -82,10 +82,7 @@ impl PackedReceiverScreening {
     pub fn select(interior: &InteriorEstimate, exact_receiver_path: bool) -> Self {
         let coarse_axis = coarse_receiver_axis();
         let records = (0..TILE_PX * TILE_PX)
-            .filter(|&pixel| {
-                exact_receiver_path
-                    || (coarse_axis[pixel / TILE_PX] && coarse_axis[pixel % TILE_PX])
-            })
+            .filter(|&pixel| pixel_is_selected(pixel, exact_receiver_path, &coarse_axis))
             .count();
         let mut packed = PackedReceiverScreening {
             record_of_pixel: vec![u32::MAX; TILE_PX * TILE_PX],
@@ -95,9 +92,7 @@ impl PackedReceiverScreening {
         };
         let mut record = 0usize;
         for pixel in 0..TILE_PX * TILE_PX {
-            if !(exact_receiver_path
-                || coarse_axis[pixel / TILE_PX] && coarse_axis[pixel % TILE_PX])
-            {
+            if !pixel_is_selected(pixel, exact_receiver_path, &coarse_axis) {
                 continue;
             }
             packed.record_of_pixel[pixel] = record as u32;
@@ -109,6 +104,15 @@ impl PackedReceiverScreening {
         }
         packed
     }
+}
+
+#[inline]
+fn pixel_is_selected(
+    pixel: usize,
+    exact_receiver_path: bool,
+    coarse_axis: &[bool; TILE_PX],
+) -> bool {
+    exact_receiver_path || (coarse_axis[pixel / TILE_PX] && coarse_axis[pixel % TILE_PX])
 }
 
 /// Union of the three coarse axes. The current ladders are nested, but taking

@@ -32,12 +32,9 @@ if [ "$HALF" != "rust" ]; then
 fi
 
 if [ "$HALF" != "node" ]; then
-  step "engine: GPU define contract"
-  "$ROOT/scripts/test-noise-gpu-defines.sh"
-
   step "engine: rustfmt + clippy + tests"
   cargo fmt --manifest-path engine/Cargo.toml --all -- --check
-  for crate in noise-compute source-reader tile-painter relevant-source-gpu; do
+  for crate in noise-compute source-reader tile-painter relevant-source-gpu noise-gpu; do
     (cd engine && cargo clippy --locked -p "$crate" --all-targets -- -D warnings \
       && cargo test --locked -p "$crate" --all-targets)
   done

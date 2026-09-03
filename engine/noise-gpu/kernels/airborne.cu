@@ -23,10 +23,10 @@
 //   npd  f32[2*NC*(NB+1)] = NPD SEL LUT, approach[0..] | departure[NC*(NB+1)..]
 
 // `build.rs` passes -DTPX from raster_reader::TILE_PX, exactly as it does for
-// scatter.cu. This guard is what makes that injection WIN: unguarded, the
+// surface CUDA kernel. This guard is what makes that injection WIN: unguarded, the
 // hand-copied 512 below silently shadowed it, so a TILE_PX change would have
 // forked the two kernels with no compile error — the same silent-out-of-bounds
-// hazard the 2026-08-04 audit fixed on scatter.cu and missed here. The fallback
+// hazard the 2026-08-04 audit fixed in the surface kernel and missed here. The fallback
 // exists only for a bare `nvcc kernels/airborne.cu` syntax check.
 #ifndef TPX
 #define TPX 512
@@ -86,7 +86,7 @@
 #error "airborne screening ABI slots must be injected by build.rs"
 #endif
 
-// noise_compute fast_exp_f64, fp32 internals (copy of scatter.cu fexp). ~1e-6 drift.
+// noise_compute fast_exp_f64, fp32 internals (copy of the surface-kernel fexp). ~1e-6 drift.
 __device__ __forceinline__ float fexpf_nc(float x) {
     x = fminf(fmaxf(x, -87.0f), 88.0f);
     float n = roundf(x * 1.4426950408889634f);          // 1/ln2

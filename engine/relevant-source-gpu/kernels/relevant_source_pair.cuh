@@ -68,8 +68,7 @@ __device__ __forceinline__ int fan_ground_or_barrier_energy(
             continue;
         }
         build_path_profile(scene, centre.x_m, centre.y_m, receiver_x_m, receiver_y_m,
-                           centre.distance_m, source_is_bridge(source),
-                           scene.coarse_middle_cadence != 0, profile);
+                           centre.distance_m, source_is_bridge(source), profile);
         float terrain_db[QUIETMAP_BAND_COUNT];
         float screening_db[QUIETMAP_BAND_COUNT];
         ray_terrain_and_screening_bands(
@@ -122,8 +121,7 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
     PathProfile profile;
     build_path_profile(scene, geometry.closest_x_m, geometry.closest_y_m,
                        receiver_x_m, receiver_y_m, geometry.endpoint_distance_m,
-                       source_is_bridge(source),
-                       scene.coarse_middle_cadence != 0 && !ground_ops, profile);
+                       source_is_bridge(source), profile);
     float ground_db[QUIETMAP_BAND_COUNT];
     if (ground_ops) {
         ground_ops_ground_bands(profile.ground_path_g, ground_db);
@@ -147,8 +145,7 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
             // characteristic ray resolves to no screening — ground alone over its terrain.
             build_path_profile(scene, geometry.closest_x_m, geometry.closest_y_m,
                                receiver_x_m, receiver_y_m, geometry.endpoint_distance_m,
-                               source_is_bridge(source), scene.coarse_middle_cadence != 0,
-                               profile);
+                               source_is_bridge(source), profile);
             float terrain_db[QUIETMAP_BAND_COUNT];
             float screening_db[QUIETMAP_BAND_COUNT];
             ray_terrain_and_screening_bands(

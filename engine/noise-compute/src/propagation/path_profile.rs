@@ -20,7 +20,7 @@ use crate::types::RasterSampler;
 
 /// Raster cell size in meters (~30.7 m) — 1 arc-second of latitude. THE
 /// canonical definition: `RasterSampler` defaults and `raster-reader` import
-/// it, and the CUDA kernel mirrors it as a literal (`scatter.cu` `CELL_M`,
+/// it, and the CUDA kernel mirrors it as a literal (`CELL_M`,
 /// resync + PTX rebuild on change).
 pub const CELL_M: f64 = crate::constants::M_PER_DEG_LAT / 3600.0;
 

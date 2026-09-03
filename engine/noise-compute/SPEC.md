@@ -813,15 +813,11 @@ to 8 pixels still leaves 2605 of rail's 4994 cells over 3 dB and costs +50 GPU s
 limit of 1379 (`relevance_partition.rs:58-64`). The blend was therefore left alone and
 the budget made to keep the dropped tail below the quietest answer in the block.
 
-**Cadence by zoom.** The painter reproduces each wave's cadence: z12 runs the surface
-heatmap's coarse middle of section 12.1 and z13 runs the exact popup cadence
-(`coarse_middle_cadence`, `src/relevant_source_runner.rs:49`, `:53-59`; applied at
-`kernels/relevant_source_path.cuh:127-128`, `:163-165`). Airport ground-operation
-sources keep the exact cadence at both zooms (`kernels/relevant_source_pair.cuh:126`).
-The CUDA constants are generated from the CPU constants rather than re-declared, with a
-build-time assertion that the generated stride is 3
-(`relevant_source_build.rs:279-299`, `:480`). Any zoom other than 12 or 13 is refused
-(`src/bin/relevant_source_surface.rs:32-37`).
+**Cadence by zoom.** The deployed CUDA surface painter uses the exact path cadence at
+both z12 and z13. The CPU surface reference retains its coarse-middle optimization from
+section 12.1; that CPU-only option is not part of the CUDA painter's path. Airport
+ground-operation sources likewise use the exact cadence at both zooms. Any zoom other
+than 12 or 13 is refused (`src/bin/relevant_source_surface.rs:32-37`).
 
 **Measured contract status.** On r9950 (RTX 5070), the four benchmark cells, five
 surface layers in one process, with seconds and drift read from the same run

@@ -30,61 +30,9 @@ FLEET_CUDA_ARCHS_CONSTANT = re.compile(
 PTX_ENTRY = re.compile(r"\.visible\s+\.entry\s+([A-Za-z0-9_$]+)\s*\(")
 PTX_TARGET = re.compile(r"(?m)^\s*\.target\s+(sm_[0-9]{2,3})(?:\s*,|\s*$)")
 DEFINE_TOKEN = re.compile(r"^-D([A-Z][A-Z0-9_]*)(?:=(.+))?$")
-# The reviewed CUDA switch names live in ONE file, which the Rust build gate
-# compiles in and this module reads. They used to be two hand-kept copies and
-# drifted the day a new switch was added to one of them.
-#
-# Two placements are supported because callers stage this module differently:
-# the product checkout has the engine tree beside `scripts/`, while the worker
-# provisioner copies `scripts/` alone into a staging repo and carries the file
-# next to it.
-REVIEWED_DEFINES_FILENAME = "reviewed-defines.txt"
-
-
-def reviewed_define_names() -> frozenset[str]:
-    """The reviewed CUDA switch names. Read on demand, never at import time."""
-    path = Path(__file__).resolve().parent / REVIEWED_DEFINES_FILENAME
-    return frozenset(
-        line.strip()
-        for line in path.read_text().splitlines()
-        if line.strip() and not line.startswith("#")
-    )
-W2_STRIDE4_NOISE_GPU_DEFINES = (
-    "-DMULTIFIDELITY_LINE",
-    "-DMULTIFIDELITY_CHEAP_GROUND_DB=5.0",
-    "-DMULTIFIDELITY_COMPACT_BYTE_STOP=0",
-    "-DARC_UNION_BEFORE_SPAN_CLIP=1",
-    "-DMULTIFIDELITY_Z13_STRIDE=4",
-    "-DMULTIFIDELITY_Z13_ADAPTIVE=0",
-    "-DSHADOW_MID_STRIDE=1",
-)
-W1_ACCEPTED_NOISE_GPU_DEFINES = (
-    "-DMULTIFIDELITY_LINE=1",
-    "-DMULTIFIDELITY_CHEAP_GROUND_DB=5.0",
-    "-DMULTIFIDELITY_COMPACT_BYTE_STOP=0",
-    "-DMULTIFIDELITY_CHEAP_TERRAIN=1",
-)
-W1_ACCEPTED_REQUIRED_PTX_ENTRIES = (
-    "line_binned_fused",
-    "line_multifidelity_cheap_w1",
-    "line_multifidelity_compact_packed_w1",
-    "line_multifidelity_compact_w1",
-)
-W2_STRIDE4_REQUIRED_PTX_ENTRIES = (
-    "line",
-    *W1_ACCEPTED_REQUIRED_PTX_ENTRIES,
-)
 GENERATED_DEFINE_NAMES = frozenset(
     {
-        "ARC_CP_EPS",
-        "ARC_DEGENERATE_SPAN",
-        "ARC_FUSE_HEIGHT_TOL_M",
-        "ARC_FUSE_RANGE_RATIO_LN",
-        "ARC_PENUMBRA_FLOOR_M",
-        "ARC_QUADRATURE_MIN_RAD",
         "AIRCRAFT_M_LAT",
-        "BARRIER_STRIDE",
-        "BIN_W",
         "BUILDING_ENV_CELL_STARTS",
         "BUILDING_ENV_DEM_COLS",
         "BUILDING_ENV_DEM_ELEVATION",
@@ -107,30 +55,11 @@ GENERATED_DEFINE_NAMES = frozenset(
         "BUILDING_MIN_EDGE_RANGE_M_D",
         "BUILDING_RANGE_GROWTH_D",
         "BUILDING_RANGE_SCALE_D",
-        "CNOSSOS_GROUND_ALPHA0",
-        "CNOSSOS_GROUND_DELTA_ZT_COEFF",
         "DIFFRACTION_CAP_DB_D",
         "DIFFRACTION_GRAZING_DB_D",
         "DIFFRACTION_SLOPE_D",
-        "FOOT_BOX_STRIDE",
-        "GROUND_HARD_FLOOR_DB",
-        "GROUND_SOUND_SPEED",
-        "LINE_KERNEL_ARGUMENT_COUNT",
         "M_LAT",
-        "MULTIFIDELITY_COMPACT_ABI_VERSION",
-        "MULTIFIDELITY_COMPACT_CONTROL_BLOCK_WORDS",
-        "MULTIFIDELITY_COMPACT_CONTROL_WORDS",
-        "MULTIFIDELITY_COMPACT_OUTPUT_ENERGY_BASE",
-        "MULTIFIDELITY_COMPACT_OUTPUT_FAULT_SLOT",
-        "MULTIFIDELITY_COMPACT_OUTPUT_INDEX_SLOT",
-        "MULTIFIDELITY_COMPACT_OUTPUT_STRIDE",
-        "MULTIFIDELITY_COMPACT_RECEIVER_RECORD_WORDS",
         "NPD_NC",
-        "OBST_META_STRIDE",
-        "OUT_ARCSTAT_COUNTERS",
-        "P_FAV",
-        "SEG_ARC_MIN_SPAN_RAD",
-        "SEG_SAMPLES",
         "SCREEN_BUILDING_LOCAL_ENTRIES",
         "SCREEN_BUILDING_LOCAL_MAX_TAN_Q",
         "SCREEN_BUILDING_GLOBAL_MAX_TAN_Q",
@@ -147,8 +76,6 @@ GENERATED_DEFINE_NAMES = frozenset(
         "SCREEN_RECORD_OF_PIXEL",
         "SCREEN_TERRAIN_ENTRIES",
         "SCREEN_TERRAIN_MAX_SIN_SQ",
-        "SOURCE_SEGMENT_STRIDE",
-        "SURFACE_META_SLOTS",
         "TAN_SCALE_D",
         "TERRAIN_BANDS",
         "TERRAIN_MARCH_SAMPLES",
@@ -176,14 +103,6 @@ ROLE_SHAPES = {
             "airborne_building_horizon_global_max",
             "airborne_building_horizon_mark_empty",
         ],
-    },
-    "gpu-surface": {
-        "family": "surface-production",
-        "kind": "gpu",
-        "manifest": "engine/noise-gpu/Cargo.toml",
-        "package": "noise-gpu",
-        "ptx": ["scatter.ptx"],
-        "entries": ["line_binned_fused"],
     },
     # The production surface painter. Its CUDA is compiled to one static
     # archive linked into the binary, so it publishes no PTX of its own: the
@@ -356,7 +275,6 @@ def require_fleet_fatbin(binary_bytes: bytes, source_root: Path) -> None:
 REQUIRED_FAMILIES = frozenset(shape["family"] for shape in ROLE_SHAPES.values())
 LINE_ROLE_FAMILIES = (
     "relevant-source-production",
-    "surface-production",
     "surface-cpu-production",
     "popup-production",
 )
@@ -517,13 +435,12 @@ def parse_ptx(ptx_bytes: bytes, label: str) -> tuple[str, list[str]]:
     return targets[0], sorted(set(PTX_ENTRY.findall(text)))
 
 
-def parse_nvcc_define_receipt(path: Path) -> tuple[list[str], list[str]]:
+def parse_nvcc_define_receipt(path: Path) -> list[str]:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError) as error:
         raise ContractError(f"cannot read nvcc define receipt: {error}") from error
     seen: set[str] = set()
-    experimental: list[str] = []
     for token in lines:
         matched = DEFINE_TOKEN.fullmatch(token)
         if matched is None:
@@ -532,27 +449,9 @@ def parse_nvcc_define_receipt(path: Path) -> tuple[list[str], list[str]]:
         if name in seen:
             raise ContractError(f"duplicate nvcc define receipt macro {name}")
         seen.add(name)
-        if name in reviewed_define_names():
-            experimental.append(token)
-        elif name not in GENERATED_DEFINE_NAMES:
+        if name not in GENERATED_DEFINE_NAMES:
             raise ContractError(f"unknown nvcc define receipt macro {name}")
-    return lines, experimental
-
-
-def validate_declared_noise_gpu_defines(value: Any, where: str) -> list[str]:
-    """Validate the exact ordered experimental define vector declared by one role."""
-    if not isinstance(value, list) or not all(isinstance(token, str) for token in value):
-        raise ContractError(f"{where} must be an array of define tokens")
-    seen: set[str] = set()
-    for token in value:
-        matched = DEFINE_TOKEN.fullmatch(token)
-        if matched is None or matched.group(1) not in reviewed_define_names():
-            raise ContractError(f"{where} contains an unreviewed define token {token!r}")
-        name = matched.group(1)
-        if name in seen:
-            raise ContractError(f"{where} contains duplicate macro {name}")
-        seen.add(name)
-    return value
+    return lines
 
 
 def _exact_keys(value: dict[str, Any], expected: set[str], where: str) -> None:
@@ -632,7 +531,6 @@ def load_and_validate_spec(path: Path) -> dict[str, Any]:
                 required_keys |= {"ptx", "required_ptx_entries"}
             optional_keys = {
                 "cuda_image",
-                "noise_gpu_defines",
                 "selection_epoch",
             }
             if not required_keys <= set(role) or not set(role) <= required_keys | optional_keys:
@@ -653,17 +551,11 @@ def load_and_validate_spec(path: Path) -> dict[str, Any]:
                 raise ContractError(f"role {role_name} names the wrong Cargo manifest")
             if role.get("ptx", []) != shape["ptx"]:
                 raise ContractError(f"role {role_name} has the wrong PTX set")
-            expected_entries = {
-                "w1": list(W1_ACCEPTED_REQUIRED_PTX_ENTRIES),
-                "w2-stride4": list(W2_STRIDE4_REQUIRED_PTX_ENTRIES),
-            }.get(role.get("model_role"), shape["entries"])
+            expected_entries = shape["entries"]
             if role.get("required_ptx_entries", []) != expected_entries:
                 raise ContractError(f"role {role_name} has the wrong PTX entry contract")
 
             model_role = role["model_role"]
-            role_defines = validate_declared_noise_gpu_defines(
-                role.get("noise_gpu_defines", []), f"{role_name}.noise_gpu_defines"
-            )
             if model_role == "stock":
                 expected_features = {
                     "gpu": ["gpu"],
@@ -673,35 +565,10 @@ def load_and_validate_spec(path: Path) -> dict[str, Any]:
                 if (
                     role["cargo_features"] != expected_features
                     or "selection_epoch" in role
-                    or role_defines
                 ):
                     raise ContractError(f"stock role {role_name} has non-stock features or epoch")
                 if not role_name.endswith("-stock-v1"):
                     raise ContractError(f"stock role {role_name} lacks its versioned stock suffix")
-            elif model_role == "w2-stride4":
-                if (
-                    family_name != "surface-production"
-                    or role_name != "surface-w2-z13-stride4-v1"
-                    or selected == role_name
-                    or role["cargo_features"] != ["gpu"]
-                    or "selection_epoch" in role
-                    or tuple(role_defines) != W2_STRIDE4_NOISE_GPU_DEFINES
-                ):
-                    raise ContractError(
-                        "the W2 stride4 role must be the exact non-selected surface candidate"
-                    )
-            elif model_role == "w1":
-                if (
-                    family_name != "surface-production"
-                    or role_name != "surface-w1-z12-accepted-v1"
-                    or selected == role_name
-                    or role["cargo_features"] != ["gpu"]
-                    or "selection_epoch" in role
-                    or tuple(role_defines) != W1_ACCEPTED_NOISE_GPU_DEFINES
-                ):
-                    raise ContractError(
-                        "the W1 role must be the exact non-selected accepted z12 candidate"
-                    )
             else:
                 raise ContractError(f"role {role_name} has unknown model_role")
 
@@ -1001,22 +868,21 @@ def verify_artifact(root: Path, expected_role_spec: Path) -> dict[str, Any]:
     if receipt.get("schema") != 1 or receipt.get("artifact_kind") != "gpu-model-role":
         raise ContractError("invalid GPU artifact receipt schema")
     receipt_fields = {
-            "artifact_kind",
-            "aot",
-            "binary",
-            "build",
-            "cargo_features",
-            "created_at",
-            "family",
-            "model_role",
-            "package",
-            "payload",
-            "ptx",
-            "role",
-            "role_sha256",
-            "schema",
-            "selected",
-            "source",
+        "artifact_kind",
+        "binary",
+        "build",
+        "cargo_features",
+        "created_at",
+        "family",
+        "model_role",
+        "package",
+        "payload",
+        "ptx",
+        "role",
+        "role_sha256",
+        "schema",
+        "selected",
+        "source",
     }
     _exact_keys(receipt, receipt_fields, "artifact receipt")
     source = receipt.get("source")
@@ -1143,7 +1009,6 @@ def verify_artifact(root: Path, expected_role_spec: Path) -> dict[str, Any]:
             "LC_ALL",
             "LD_LIBRARY_PATH",
             "NOISE_GPU_ARCH",
-            "NOISE_GPU_DEFINES",
             "PATH",
             "RUSTUP_HOME",
             "TERM",
@@ -1209,61 +1074,7 @@ def verify_artifact(root: Path, expected_role_spec: Path) -> dict[str, Any]:
         if not all(entry in ptxas_log for entry in resolved["required_ptx_entries"]):
             raise ContractError(f"ptxas receipt lacks a required entry: {ptx_name}")
 
-    _, experimental_defines = parse_nvcc_define_receipt(
-        root / "receipts/nvcc-defines.txt"
-    )
-    derived_noise_gpu_defines = " ".join(experimental_defines)
-    declared_noise_gpu_defines = resolved.get("noise_gpu_defines", [])
-    if experimental_defines != declared_noise_gpu_defines:
-        raise ContractError("nvcc define receipt disagrees with the declared role defines")
-    if environment["NOISE_GPU_DEFINES"] != derived_noise_gpu_defines:
-        raise ContractError(
-            "build environment NOISE_GPU_DEFINES disagrees with the nvcc define receipt"
-        )
-    if resolved["model_role"] == "stock" and experimental_defines:
-        raise ContractError("production role contains an experimental nvcc define")
-
-    aot = receipt.get("aot")
-    if resolved["binary"] == "gpu-surface":
-        if not isinstance(aot, dict):
-            raise ContractError("surface role artifact has no build-bound scatter cubin")
-        _exact_keys(aot, {"bytes", "embedded_offset", "sha256"}, "surface AOT receipt")
-        cubin_path = root / "cubin/scatter.cubin"
-        cubin_bytes = cubin_path.read_bytes()
-        offset = aot.get("embedded_offset")
-        if (
-            aot.get("bytes") != len(cubin_bytes)
-            or aot.get("sha256") != sha256_file(cubin_path)
-            or not isinstance(offset, int)
-            or offset < 0
-            or binary_bytes[offset : offset + len(cubin_bytes)] != cubin_bytes
-        ):
-            raise ContractError("build-bound scatter cubin receipt or embedded bytes differ")
-        build_output = (root / "receipts/noise-gpu-build-script.output").read_text(
-            encoding="utf-8"
-        ).splitlines()
-        if build_output.count(
-            f"cargo:rustc-env=NOISE_GPU_SCATTER_CUBIN_SHA256={aot['sha256']}"
-        ) != 1:
-            raise ContractError("build script output does not bind the scatter cubin SHA")
-        if resolved["model_role"] == "w2-stride4":
-            for marker in (
-                "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_LINE=1",
-                "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_CARTESIAN_UNBINNED_ANCHOR=1",
-                "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_Z13_STRIDE=4",
-                "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_Z13_ADAPTIVE=0",
-            ):
-                if build_output.count(marker) != 1:
-                    raise ContractError(f"W2 stride4 build output omits {marker}")
-        elif resolved["model_role"] == "w1":
-            for marker in (
-                "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_LINE=1",
-                "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_CARTESIAN_UNBINNED_ANCHOR=0",
-            ):
-                if build_output.count(marker) != 1:
-                    raise ContractError(f"W1 accepted build output omits {marker}")
-    elif aot is not None:
-        raise ContractError("non-surface GPU role unexpectedly carries a line AOT receipt")
+    parse_nvcc_define_receipt(root / "receipts/nvcc-defines.txt")
 
     payload = receipt.get("payload")
     if not isinstance(payload, dict) or not payload:

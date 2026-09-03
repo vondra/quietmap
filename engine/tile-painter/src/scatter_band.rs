@@ -157,7 +157,7 @@ pub(crate) fn recv_block_regions() -> Vec<(usize, usize, usize, usize)> {
 /// that is to paint both arms with one build and diff the bytes. It rides the η
 /// env rather than getting one of its own because one variable has to put both
 /// lanes on the exact path: the CUDA twin reads ON/OFF out of `meta[9]`, the old
-/// η slot (`scatter.cu`'s `line`). With two envs the CPU↔GPU parity gate could
+/// η slot (the surface kernel's `line`). With two envs the CPU↔GPU parity gate could
 /// compare a stopped kernel against an unstopped one and blame the difference
 /// on the GPU. There is nothing to tune either way — an interval in byte space
 /// has no tolerance, so an on/off is the whole knob.
@@ -602,7 +602,7 @@ pub(crate) struct BandScratch {
 /// grows its per-sector radius on demand and is mildly order-sensitive by its own
 /// module's measurement. With the stop OFF and ON, loudest-first paints the same
 /// FILE byte for byte on both tiles. It does mean the CPU no longer walks pairs in
-/// the order `scatter.cu` does, so a CPU↔GPU comparison is a >0.5 dB / max-dB one
+/// the order the surface kernel does, so a CPU↔GPU comparison is a >0.5 dB / max-dB one
 /// until that skyline bookkeeping is order-free.
 #[derive(Clone, Copy)]
 struct PairBound {
@@ -756,16 +756,6 @@ impl BandScratch {
 /// full sweep for both that lever and a disagreement-driven refinement, and the
 /// reason neither reaches the tail. What closed it is
 /// [`tile_arc_bounds`] — geometry-placed nodes, per bucket, gated on width.
-///
-/// ## Lane divergence — read before comparing against CUDA
-///
-/// The CUDA surface kernel (`engine/noise-gpu/kernels/scatter.cu`) paints the
-/// same SPEC §4.7 rule: it compiles this default in
-/// (SEG_SAMPLES buckets + the 3° bucket gate, injected by build.rs from
-/// `seg_sampling::SEG_SAMPLES_DEFAULT` and `seg_sampling::SEG_ARC_MIN_SPAN_RAD`).
-/// A CPU-vs-GPU tile comparison therefore runs BOTH lanes at defaults;
-/// `noise_gpu::ensure_no_cpu_only_arc_levers` refuses every CPU-only override;
-/// accepting a copied numeric default would create a second source of truth.
 pub(crate) fn seg_samples() -> usize {
     static N: OnceLock<usize> = OnceLock::new();
     *N.get_or_init(|| {

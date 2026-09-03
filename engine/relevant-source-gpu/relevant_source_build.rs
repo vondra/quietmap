@@ -14,7 +14,6 @@ const SEGMENT_SAMPLING_SOURCE: &str =
     include_str!("../noise-compute/src/propagation/seg_sampling.rs");
 const SOURCE_FRAME_SOURCE: &str = include_str!("src/source_frame.rs");
 const INPUT_TYPES_SOURCE: &str = include_str!("../noise-compute/src/types/inputs.rs");
-const SCATTER_BAND_SOURCE: &str = include_str!("../tile-painter/src/scatter_band.rs");
 const ARC_SCREENING_SOURCE: &str =
     include_str!("../noise-compute/src/propagation/arc_screening.rs");
 const GEO_SOURCE: &str = include_str!("../noise-compute/src/propagation/geo.rs");
@@ -278,27 +277,6 @@ fn generated_physics_header() -> String {
         "QUIETMAP_BARRIER_PATH_HORIZON_M",
         canonical_f64(INPUT_TYPES_SOURCE, "BARRIER_SEGMENT_MAX_HALF_LEN_M") + 50.0,
     );
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_EXACT_CADENCE_MAX_DISTANCE_M",
-        canonical_f64(SCATTER_BAND_SOURCE, "EXACT_CADENCE_MAX_DIST_M"),
-    );
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_COARSE_MIDDLE_SOURCE_ZONE_M",
-        canonical_f64(SCATTER_BAND_SOURCE, "SHADOW_SRC_ZONE_M"),
-    );
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_COARSE_MIDDLE_RECEIVER_ZONE_M",
-        canonical_f64(SCATTER_BAND_SOURCE, "SHADOW_RX_ZONE_M"),
-    );
-    writeln!(
-        header,
-        "constexpr int QUIETMAP_COARSE_MIDDLE_STRIDE = {};",
-        canonical_usize(SCATTER_BAND_SOURCE, "SHADOW_MID_STRIDE")
-    )
-    .unwrap();
     // Spelled `<deg>_f64.to_radians()` in seg_sampling.rs; mirror the expression.
     let arc_gate_degrees: f64 =
         constant_initializer(SEGMENT_SAMPLING_SOURCE, "SEG_ARC_MIN_SPAN_RAD")
@@ -520,7 +498,6 @@ mod tests {
         assert!(header.contains("constexpr int QUIETMAP_LINE_DIRECTION_COUNT = 5;"));
         assert!(header.contains("constexpr int QUIETMAP_BLOCK_PIXEL_SIDE = "));
         assert!(header.contains("constexpr float QUIETMAP_BARRIER_PATH_HORIZON_M = 175.0f;"));
-        assert!(header.contains("constexpr int QUIETMAP_COARSE_MIDDLE_STRIDE = 3;"));
         assert!(header.contains("constexpr int QUIETMAP_ARC_ESCALATE_MAX_PARTS = 9;"));
         assert!(header.contains("constexpr int QUIETMAP_TILE_PIXEL_SIDE = 512;"));
         assert!(header.contains("constexpr float QUIETMAP_RECEIVER_HEIGHT_FLOOR_M = 0.5f;"));

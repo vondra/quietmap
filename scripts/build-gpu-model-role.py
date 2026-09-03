@@ -24,7 +24,6 @@ from gpu_model_role import (
     file_record,
     load_and_validate_spec,
     model_role_sha256,
-    parse_nvcc_define_receipt,
     parse_ptx,
     resolve_role,
     sha256_file,
@@ -78,13 +77,6 @@ def find_one(root: Path, name: str) -> Path:
     return matches[0]
 
 
-def find_noise_gpu_build_output(root: Path) -> Path:
-    matches = [path for path in root.glob("noise-gpu-*/output") if path.is_file()]
-    if len(matches) != 1:
-        fail(f"expected one noise-gpu build-script output, found {len(matches)}")
-    return matches[0]
-
-
 def write_text(path: Path, text: str, mode: int = 0o644) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
@@ -127,7 +119,6 @@ def build_environment(cuda_root: Path, target: Path) -> tuple[dict[str, str], di
         "HOME": home,
         "LC_ALL": "C",
         "NOISE_GPU_ARCH": "",
-        "NOISE_GPU_DEFINES": "",
         "PATH": path,
         "RUSTUP_HOME": os.environ.get("RUSTUP_HOME", str(Path(home) / ".rustup")),
         "TERM": "dumb",
@@ -139,8 +130,6 @@ def build_environment(cuda_root: Path, target: Path) -> tuple[dict[str, str], di
 
 
 def build(args: argparse.Namespace) -> Path:
-    if os.environ.get("NOISE_GPU_DEFINES", ""):
-        fail("caller NOISE_GPU_DEFINES must be empty for a role artifact")
     if args.arch is not None and not ARCH.fullmatch(args.arch):
         fail("arch must have the canonical sm_NN form")
     archive = args.source_archive.resolve(strict=True)
@@ -199,8 +188,6 @@ def build(args: argparse.Namespace) -> Path:
             environment, tools = build_environment(cuda_root, target_root)
             if not fleet_cuda_image:
                 environment["NOISE_GPU_ARCH"] = args.arch
-            role_noise_gpu_defines = " ".join(role.get("noise_gpu_defines", []))
-            environment["NOISE_GPU_DEFINES"] = role_noise_gpu_defines
             versions = {
                 "cargo": run_text([tools["cargo"], "-vV"], environment).strip(),
                 "rustc": run_text([tools["rustc"], "-vV"], environment).strip(),
@@ -242,9 +229,6 @@ def build(args: argparse.Namespace) -> Path:
             if not binary.is_file() or not os.access(binary, os.X_OK):
                 fail("Cargo build did not produce the exact executable role")
             define_receipt = find_one(target_root / "release/build", "nvcc-defines.txt")
-            _, experimental_defines = parse_nvcc_define_receipt(define_receipt)
-            if experimental_defines != role.get("noise_gpu_defines", []):
-                fail("nvcc define receipt disagrees with the declared role defines")
 
             staging_root.mkdir(mode=0o755)
             copy_payload(binary, staging_root / role["binary"], 0o755)
@@ -299,41 +283,6 @@ def build(args: argparse.Namespace) -> Path:
                     "sha256": sha256_file(generated_ptx),
                 }
 
-            aot_receipt: dict[str, int | str] | None = None
-            if role["binary"] == "gpu-surface":
-                scatter_cubin = find_one(target_root / "release/build", "scatter.cubin")
-                scatter_cubin_bytes = scatter_cubin.read_bytes()
-                embedded_offset = binary_bytes.find(scatter_cubin_bytes)
-                if not scatter_cubin_bytes or embedded_offset < 0:
-                    fail("build-bound scatter cubin is not embedded byte-for-byte in gpu-surface")
-                build_script_output = find_noise_gpu_build_output(target_root / "release/build")
-                cubin_sha256 = sha256_file(scatter_cubin)
-                build_script_lines = build_script_output.read_text(encoding="utf-8").splitlines()
-                if build_script_lines.count(
-                    f"cargo:rustc-env=NOISE_GPU_SCATTER_CUBIN_SHA256={cubin_sha256}"
-                ) != 1:
-                    fail("noise-gpu build output does not bind the scatter cubin SHA")
-                if role["model_role"] == "w2-stride4":
-                    for marker in (
-                        "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_LINE=1",
-                        "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_CARTESIAN_UNBINNED_ANCHOR=1",
-                        "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_Z13_STRIDE=4",
-                        "cargo:rustc-env=NOISE_GPU_MULTIFIDELITY_Z13_ADAPTIVE=0",
-                    ):
-                        if build_script_lines.count(marker) != 1:
-                            fail(f"W2 stride4 build output omits {marker}")
-                copy_payload(scatter_cubin, staging_root / "cubin/scatter.cubin", 0o644)
-                copy_payload(
-                    build_script_output,
-                    staging_root / "receipts/noise-gpu-build-script.output",
-                    0o644,
-                )
-                aot_receipt = {
-                    "bytes": len(scatter_cubin_bytes),
-                    "embedded_offset": embedded_offset,
-                    "sha256": cubin_sha256,
-                }
-
             if source_manifest(source_root) != source_before:
                 fail("the immutable extracted source changed during the build")
             lock_path = source_root / gpu_model_role.ENGINE_CARGO_LOCK
@@ -350,7 +299,6 @@ def build(args: argparse.Namespace) -> Path:
                     payload[path.relative_to(staging_root).as_posix()] = file_record(path)
             receipt = {
                 "artifact_kind": "gpu-model-role",
-                "aot": aot_receipt,
                 "binary": role["binary"],
                 "build": {
                     "arch": args.arch,
@@ -380,7 +328,6 @@ def build(args: argparse.Namespace) -> Path:
                         "LC_ALL": environment["LC_ALL"],
                         "LD_LIBRARY_PATH": environment.get("LD_LIBRARY_PATH", ""),
                         "NOISE_GPU_ARCH": environment["NOISE_GPU_ARCH"],
-                        "NOISE_GPU_DEFINES": role_noise_gpu_defines,
                         "PATH": environment["PATH"],
                         "RUSTUP_HOME": environment["RUSTUP_HOME"],
                         "TERM": environment["TERM"],

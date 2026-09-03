@@ -35,7 +35,8 @@ struct Arguments {
     /// Tile root: every painted tile lands at `<output>/<layer>/{z}/{x}/{y}.bin`.
     #[arg(long)]
     output: PathBuf,
-    /// Web-Mercator zoom of the painted tiles: 12 for W1, 13 for W2.
+    /// Web-Mercator zoom of the painted tiles. Both launcher-supported zooms
+    /// use the same exact ray cadence.
     #[arg(long)]
     zoom: u8,
     /// Read cells from stdin: `<r4hex>` or `<r4hex> layers=<csv>`, one per line.
@@ -50,7 +51,7 @@ fn main() -> Result<ExitCode> {
     }
     if !matches!(arguments.zoom, 12 | 13) {
         bail!(
-            "--zoom {} is neither W1 (12) nor W2 (13); the cadence contract is defined for those two",
+            "--zoom {} is not a supported launcher zoom (12 or 13)",
             arguments.zoom
         );
     }

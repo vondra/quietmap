@@ -352,7 +352,12 @@ mod tests {
         let cell_started = Instant::now();
         let stage_started = cell_started + Duration::from_millis(2);
         let stage_ended = stage_started + Duration::from_millis(3);
-        let mut report = EngineCellSpans::new(0x841e309ffffffff, "gpu-surface", 0, cell_started);
+        let mut report = EngineCellSpans::new(
+            0x841e309ffffffff,
+            "relevant-source-surface",
+            0,
+            cell_started,
+        );
         report.push_host_span("raster", stage_started, stage_ended, Some(1), None, None);
         report.push_cuda_span("gpu_kernel", Duration::from_micros(750), Some(2), None);
         let value = parse(&report.line());
@@ -367,8 +372,9 @@ mod tests {
     #[test]
     fn worst_case_supported_line_stays_below_archive_limit_and_parses() {
         let started = Instant::now();
-        let mut report = EngineCellSpans::new(0x841e309ffffffff, "gpu-surface", 1, started);
-        // More intervals than today's engines emit, including the two-layer GPU surface path.
+        let mut report =
+            EngineCellSpans::new(0x841e309ffffffff, "relevant-source-surface", 1, started);
+        // More intervals than today's engines emit, including the two-layer source path.
         for stage in ENGINE_STAGE_NAMES {
             for i in 0..64 {
                 let a = started + Duration::from_micros(i * 20);

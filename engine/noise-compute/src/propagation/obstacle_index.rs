@@ -227,7 +227,7 @@ impl CellPrune<'_> {
     /// Evaluating `{t_lo, t_hi, t*}` therefore attains the true max of both
     /// branches, and the bound is exact rather than merely sound.
     ///
-    /// This mirrors `scatter.cu`'s `tstar` line for line, and that is the point:
+    /// This mirrors the CUDA surface kernel's `tstar` line for line, and that is the point:
     /// until 2026-08-08 this used the point where the SIGHT LINE crosses `top`
     /// instead. Those two agree exactly whenever the crossing is inside the
     /// window — `h_s` and `h_r` then have opposite signs and
@@ -256,7 +256,7 @@ impl CellPrune<'_> {
             }
         };
         // The reflection point — where `detour` is stationary, hence the
-        // negative branch's peak. Same expression as `scatter.cu`'s `tstar`
+        // negative branch's peak. Same expression as the CUDA surface kernel's `tstar`
         // inside `obstacle_best_candidate`'s below-sight-line branch.
         let (ahs, ahr) = ((top - self.src_e).abs(), (top - self.rcv_e).abs());
         let t_star = if ahs + ahr > 0.0 {
@@ -705,8 +705,8 @@ impl ObstacleIndex {
     /// — arc screening groups edges by footprint, so the kernel reads
     /// [`GpuGridView::edge_ids`] (`obst` slot 6) and the "never an identity"
     /// rule this doc used to state has not held since TRACK C (2026-08-03).
-    /// The kernel walk must mirror [`Self::crossings`] cell-for-cell; e2-full
-    /// is the parity gate.
+    /// The kernel walk must mirror [`Self::crossings`] cell-for-cell; the
+    /// independent surface parity fixture is the gate.
     pub fn gpu_view(&self) -> GpuGridView<'_> {
         let mut edges_xyxyh = Vec::with_capacity(self.edges.len() * 5);
         let mut edge_ids = Vec::with_capacity(self.edges.len());

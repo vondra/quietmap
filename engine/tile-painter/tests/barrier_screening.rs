@@ -24,7 +24,7 @@
 //!    line kernel instead screens the same VECTOR slice behind `QM_GPU_BARRIERS`
 //!    (the `w2_gpu_vector_crossings_match_cpu_oracle` arm below pins its
 //!    crossings to the CPU oracle; divergence documented in SPEC §4.7 and
-//!    gpu_surface.rs). The arm itself was deleted with the building raster on
+//!    the former surface renderer). The arm itself was deleted with the building raster on
 //!    2026-08-30: it burned into a channel that no longer exists, and reviving
 //!    the burn would mean reviving the raster the measurement rejected. The
 //!    must be revisited. Run with `--nocapture` for the stats table.
@@ -357,7 +357,7 @@ fn cpu_crossings(
     out
 }
 
-/// GPU arm: replica of the scatter.cu `barrier_best_candidate` scan — the SAME
+/// GPU arm: replica of the CUDA surface kernel's `barrier_best_candidate` scan — the SAME
 /// intersection with the kernel's one deviation: an f32 midpoint cosine clamped
 /// at 0.01 (`__cosf` house style).
 fn gpu_crossings(
@@ -391,7 +391,7 @@ fn gpu_crossings(
     out
 }
 
-/// `obstacle_index::segment_intersection_t` / scatter.cu `seg_isect_t` with the
+/// `obstacle_index::segment_intersection_t` / CUDA surface `seg_isect_t` with the
 /// ray anchored at the origin — the one primitive both lanes run on a wall.
 fn ray_segment_t(dx: f64, dy: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> Option<f64> {
     let (ex, ey) = (x1 - x0, y1 - y0);

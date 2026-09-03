@@ -219,7 +219,7 @@ pub fn region_tiles(r4: u64, zoom: u8) -> Vec<(u32, u32)> {
 /// TODAY'S behavior. The box agent sends the token ONLY for a STRICT SUBSET of a multi-layer
 /// group (a full set stays bare hex), so single-layer engines (`gpu-airborne`,
 /// `build_heatmap_aircraft`) never see it and keep their bare-hex readers. Both MULTI-layer
-/// `--stream` readers (`build_heatmap_surface`, `gpu-surface`) call this SAME function so the
+/// `--stream` readers call this SAME function so the
 /// wire tokenizer has one definition, not two hand-rolled copies. The caller still owns
 /// `u64::from_str_radix` on the hex token (and its own "skip non-hex line" logging) — this
 /// only tokenizes.
@@ -260,7 +260,7 @@ pub fn announce_stream_cell_started(r4: u64) {
 /// `effective` is what to actually build for this cell; `skipped` is the configured layers'
 /// NAMES that were excluded, for the `done` line's trailing `skipped=<layer,…>` token. Generic
 /// over each binary's own concrete layer type (`Source` for build-heatmap-surface, `LineLayer`
-/// for gpu-surface) via a `name` projection, so the one filtering RULE is shared instead of
+/// for each stream reader) via a `name` projection, so the one filtering RULE is shared instead of
 /// re-implemented per binary — only the layer enum and its name differ.
 pub fn split_configured_layers<L: Copy>(
     configured: &[L],

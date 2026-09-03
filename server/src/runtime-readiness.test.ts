@@ -38,7 +38,7 @@ const ACCEPTED_SCORER = {
 const PRODUCER_ROLES = {
   'cpu-cruise': 'stock',
   'gpu-airborne': 'stock',
-  'gpu-surface': 'w2-merged',
+  'gpu-surface': 'stock',
 }
 
 function worker(artifactFamily: string, binary: string, modelRole: string, resolvedRole: string) {
@@ -65,7 +65,7 @@ function makeModelRoleContract() {
       ),
       'gpu-airborne': worker('airborne-production', 'gpu-airborne', 'stock', 'airborne-stock-v1'),
       'gpu-surface': worker(
-        'surface-production', 'gpu-surface', 'w2-merged', 'surface-w2-z13-accepted-v1',
+        'relevant-source-production', 'relevant-source-surface', 'stock', 'relevant-source-stock-v1',
       ),
     },
   }

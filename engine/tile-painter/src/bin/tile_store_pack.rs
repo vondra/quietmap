@@ -2041,16 +2041,16 @@ mod tests {
                 "role_spec_sha256": "c".repeat(64),
                 "workers": {
                     "gpu-surface": {
-                        "artifact_family": "surface-production",
-                        "binary": "gpu-surface",
-                        "model_role": "w2-merged",
-                        "resolved_role": "surface-w2-z13-accepted-v1",
+                        "artifact_family": "relevant-source-production",
+                        "binary": "relevant-source-surface",
+                        "model_role": "stock",
+                        "resolved_role": "relevant-source-stock-v1",
                         "selection_epoch": null,
                     },
                 },
             },
             "numerical_environment": {},
-            "producer_requirements": { "worker_model_roles": { "gpu-surface": "w2-merged" } },
+            "producer_requirements": { "worker_model_roles": { "gpu-surface": "stock" } },
             "scorer_contract": {
                 "bias_db_max": 0.5,
                 "presence_mismatch_percent_max": 0.25,

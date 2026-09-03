@@ -40,7 +40,7 @@
 //! noise floor the G/H verdicts have to clear, and they clear it by 5×.
 //!
 //! `v4` — the CUDA lane's current line-screening rule (SPEC §4.7), ported to CPU from
-//! `engine/noise-gpu/kernels/scatter.cu`: five equal angular buckets, one full
+//! the CUDA surface kernel: five equal angular buckets, one full
 //! path ray at each centre, and the kernel's own `arc_screen_bands` mirror only
 //! for buckets wider than 3°. This lets the same 33-point reference judge the
 //! port's rule rather than only its tile output. Fixture-only: it never touches
@@ -1146,7 +1146,7 @@ impl Probe<'_> {
 
 // ── v4: the current CUDA line-screening rule, ported to CPU ───────────────
 //
-// Authority: `engine/noise-gpu/kernels/scatter.cu`, branch (1) of
+// Authority: the CUDA surface kernel, branch (1) of
 // `line_source`: five equal angular buckets and the bucket-width 3° gate,
 // followed by `arc_screen_bands` for each eligible sub-span. The inner mirror
 // emits one arc per obstacle edge with that edge's own range and height, fuses
@@ -1168,7 +1168,7 @@ impl Probe<'_> {
 // matching the acceptance census's fail-closed overflow policy.
 
 /// f32 slots per footprint in [`FootprintIndex::foot_box`]:
-/// `(min_x, min_y, max_x, max_y)`, matching `noise_gpu::FOOT_BOX_STRIDE`.
+/// `(min_x, min_y, max_x, max_y)`, matching the CUDA footprint-index layout.
 const FOOT_BOX_STRIDE: usize = 4;
 /// CUDA's compiled `SEG_SAMPLES`, independently mirrored from the Rust SSOT.
 const GPU_SEG_SAMPLES: usize = 5;
@@ -1185,28 +1185,28 @@ const GPU_ARC_CP_EPS: f64 = 1e-9;
 /// the shipped CPU line-screening arm. One fifth of an HM3 byte: a port transcription
 /// must agree below the product's 0.5 dB storage quantum on every probe.
 const GPU_PORT_PARITY_MAX_DB: f64 = 0.1;
-/// `ARC_FUSE_HEIGHT_TOL_M` (scatter.cu) = `arc_screening::ARC_FUSE_HEIGHT_TOL_M`
+/// `ARC_FUSE_HEIGHT_TOL_M` (CUDA surface kernel) = `arc_screening::ARC_FUSE_HEIGHT_TOL_M`
 /// — now the width of a height STRATUM rather than a pairwise tolerance. Since
 /// 2026-08-08 `noise-gpu/build.rs` INJECTS the kernel's copy from the Rust const,
 /// so this mirror is the only remaining hand copy — kept on purpose: the whole
 /// point of these `GPU_*` constants is to state what the kernel says
 /// independently, so a divergence shows up as a fixture failure.
 const GPU_ARC_FUSE_HEIGHT_TOL_M: f64 = 3.0;
-/// `ARC_FUSE_RANGE_RATIO` (scatter.cu) = `arc_screening::ARC_FUSE_RANGE_RATIO`.
+/// `ARC_FUSE_RANGE_RATIO` (CUDA surface kernel) = `arc_screening::ARC_FUSE_RANGE_RATIO`.
 const GPU_ARC_FUSE_RANGE_RATIO: f64 = 1.5;
 
-/// `arc_fuse_key` (scatter.cu) = `arc_screening::fuse_key`: the (height, range)
+/// `arc_fuse_key` (CUDA surface kernel) = `arc_screening::fuse_key`: the (height, range)
 /// stratum, the equivalence class inside which a fusion is honest.
 fn gpu_fuse_key(near_m: f64, height_m: f64) -> i64 {
     let h = (height_m.max(0.0) / GPU_ARC_FUSE_HEIGHT_TOL_M).floor() as i64;
     let r = (near_m.max(1e-3).ln() / GPU_ARC_FUSE_RANGE_RATIO.ln()).floor() as i64;
     (h << 20) | ((r + 0x4_0000) & 0xf_ffff)
 }
-/// `ARC_ESCALATE_SPAN` (scatter.cu:80) = `arc_screening::ESCALATE_SPAN_RAD`.
+/// `ARC_ESCALATE_SPAN` (CUDA surface kernel) = `arc_screening::ESCALATE_SPAN_RAD`.
 const GPU_ARC_ESCALATE_SPAN: f64 = 0.26;
 /// `ESCALATE_MAX_PARTS` — the ceiling on that split, mirroring `arc_screening`.
 const GPU_ARC_ESCALATE_MAX_PARTS: usize = 9;
-/// `ARC_MAX_MERGED` (scatter.cu:127) — merged blocked arcs per (segment,
+/// `ARC_MAX_MERGED` (CUDA surface kernel) — merged blocked arcs per (segment,
 /// receiver). The CPU is uncapped (`ArcBounds::max_arcs = usize::MAX`).
 const GPU_ARC_MAX_MERGED: usize = 160;
 
@@ -1424,7 +1424,7 @@ fn triangle_row_x_span(
     (x_hi >= x_lo).then_some((x_lo, x_hi))
 }
 
-/// `arc_iv_union` (scatter.cu) — union-insert one blocked arc into the list
+/// `arc_iv_union` (CUDA surface kernel) — union-insert one blocked arc into the list
 /// sorted by `(height-and-range stratum, start)`.
 ///
 /// NOT globally disjoint: only neighbours in the same height-and-range stratum
@@ -1474,7 +1474,7 @@ fn absorb(into: &mut GpuArc, other: GpuArc) {
     into.height_m = into.height_m.max(other.height_m);
 }
 
-/// `arc_clip_span` (scatter.cu:1271) — clip an arc to the segment's span. A hull
+/// `arc_clip_span` (CUDA surface kernel) — clip an arc to the segment's span. A hull
 /// can sit one turn away from it (base near ±π), hence the three shifts.
 #[inline]
 fn arc_clip_span(a_lo: f64, a_hi: f64, lo: f64, hi: f64) -> Option<(f64, f64)> {
@@ -1487,7 +1487,7 @@ fn arc_clip_span(a_lo: f64, a_hi: f64, lo: f64, hi: f64) -> Option<(f64, f64)> {
     None
 }
 
-/// scatter.cu `arc_source_point` — the point ON the segment the receiver
+/// CUDA surface `arc_source_point` — the point ON the segment the receiver
 /// sees at `azimuth`, by exact ray×line intersection. `None` when the ray runs
 /// parallel to the segment.
 fn gpu_source_point_at(q: &ArcScreening<'_>, m_lon: f64, azimuth: f64) -> Option<(f64, f64)> {
@@ -1512,7 +1512,7 @@ fn gpu_source_point_at(q: &ArcScreening<'_>, m_lon: f64, azimuth: f64) -> Option
     ))
 }
 
-/// `arc_gob` (scatter.cu:1347) — the kernel's ISO 9613-2 §7.3.1 term for one
+/// `arc_gob` (CUDA surface kernel) — the kernel's ISO 9613-2 §7.3.1 term for one
 /// band, identical to `arc_screening::ground_or_barrier`.
 #[inline]
 fn gpu_ground_or_barrier(terrain_db: f64, ground_db: f64, screening_db: f64) -> f64 {
@@ -1973,7 +1973,7 @@ fn gpu_arc_screened_attenuation(
     //
     // The walk covers the WHOLE fan, `lo` to `hi`, not just the arcs' own hull:
     // an uncovered piece is a CLEAR direction and now takes its own terrain ray
-    // (scatter.cu's clear arm), so it is enumerated like any other.
+    // (the CUDA surface kernel's clear arm), so it is enumerated like any other.
     bounds.clear();
     bounds.push(lo);
     bounds.push(hi);
@@ -2013,7 +2013,7 @@ fn gpu_arc_screened_attenuation(
     let mut evaluated_fraction = 0.0f64;
     let mut energy = [0.0f64; NUM_BANDS];
     for &(piece_start, piece_end, covered) in pieces.iter() {
-        // ---- CLEAR ARM (scatter.cu `ray_terrain_bands`). CLEAR IS NOT
+        // ---- CLEAR ARM (CUDA surface kernel `ray_terrain_bands`). CLEAR IS NOT
         // TERRAIN-FREE: these directions used to fall through to the lumped
         // remainder below, carrying the CP ray's `A_terrain` — right only over
         // level ground. Scene I is where that shows: 1.51 dB against the
@@ -2112,7 +2112,7 @@ fn edge_arc(
 }
 
 /// Distance from the ORIGIN to the segment `(x0,y0)-(x1,y1)` — the kernel's
-/// inline `near_m` form (scatter.cu:1553-1561).
+/// inline `near_m` form in the CUDA surface kernel.
 #[inline]
 fn point_to_segment_dist(x0: f64, y0: f64, x1: f64, y1: f64) -> f64 {
     let (vx, vy) = (x1 - x0, y1 - y0);
@@ -2128,7 +2128,7 @@ fn point_to_segment_dist(x0: f64, y0: f64, x1: f64, y1: f64) -> f64 {
 
 /// Screening bands on the ray from the receiver to the source point at
 /// `azimuth` — the CPU entry points standing in for the kernel's
-/// `ray_path_bands` (scatter.cu:1142), which is that same path ported. Fresh
+/// `ray_path_bands` in the CUDA surface kernel, which is that same path ported. Fresh
 /// profile, that ray's own terrain as the increment base, its own crossings,
 /// and the caller's barrier slice.
 fn gpu_interval_screening(
@@ -2533,7 +2533,7 @@ fn main() {
         seg_arc_bounds().min_span_rad
     );
     println!(
-        "# v4 = current noise-gpu kernels/scatter.cu SPEC §4.7 port: {GPU_SEG_SAMPLES} angular \
+        "# v4 = current CUDA surface-kernel SPEC §4.7 port: {GPU_SEG_SAMPLES} angular \
          buckets, per-bucket min_span {GPU_SEG_ARC_MIN_SPAN_RAD} rad, fuse tol \
          {GPU_ARC_FUSE_HEIGHT_TOL_M} m, interval resolution {GPU_ARC_ESCALATE_SPAN} rad \
          x<={GPU_ARC_ESCALATE_MAX_PARTS}, max merged {GPU_ARC_MAX_MERGED}"
