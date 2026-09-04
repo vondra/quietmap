@@ -71,7 +71,7 @@ airport_areas,airport_lines}.arrow` (3–6 h). Then structures, per square
 qm_venv_python scripts/structures/build-structures.py \
   --prepared-dir <work>/prepared/2026 \
   --overture-parquet <src>/overture/parquet \
-  --ghsl <src>/buildings/ghsl/<height-tif> --validate
+  --ghsl <src>/buildings/ghsl/<height-tif> --squares-file <work>/structures-squares.txt
 ```
 
 ## 4. Enrichment — NOT YET PORTED
