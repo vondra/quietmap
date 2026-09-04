@@ -1048,6 +1048,64 @@ mod tests {
     }
 
     #[test]
+    fn dateline_wall_stays_local_after_structures_v2_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let square = grid::square_of(0.0, -180.0);
+        fx::write_square_structures(
+            tmp.path(),
+            square,
+            &[fx::StructureRow {
+                kind: STRUCTURE_KIND_BARRIER,
+                ring_lonlat: Some(vec![(179.999, 0.0), (-179.999, 0.0)]),
+                height_m: 3.0,
+                height_tier: 0,
+                envelope_class: 0,
+                centroid_lonlat: Some((-180.0, 0.0)),
+                osm_id: Some(11),
+                segment_idx: Some(0),
+                ..Default::default()
+            }],
+        );
+
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let set = load_obstacle_set(tmp.path(), tmp.path(), 0.0, 179.8).unwrap();
+        assert_eq!(set.edge_count(), 1);
+        let view = set
+            .indexes
+            .iter()
+            .map(|index| index.gpu_view())
+            .find(|view| !view.edges_xyxyh.is_empty())
+            .expect("wall index");
+        let wall_length_m = f64::from((view.edges_xyxyh[2] - view.edges_xyxyh[0]).abs());
+        assert!(
+            (wall_length_m - 222.64).abs() < 0.5,
+            "wall length {wall_length_m} m"
+        );
+        assert!(
+            view.cols <= 4,
+            "short wall grew to {} grid columns",
+            view.cols
+        );
+
+        for lon in [179.8, -179.8] {
+            let mut hits = Vec::new();
+            set.crossings(-0.01, lon, 0.01, lon, &mut hits);
+            assert!(
+                hits.is_empty(),
+                "phantom world-spanning wall at {lon}: {hits:?}"
+            );
+        }
+        for lon in [179.9995, -179.9995] {
+            let mut hits = Vec::new();
+            set.crossings(-0.01, lon, 0.01, lon, &mut hits);
+            assert_eq!(hits.len(), 1, "seam wall missing at {lon}: {hits:?}");
+            assert_eq!(hits[0].kind, ObstacleKind::Barrier);
+            assert_eq!(hits[0].height_m, 3.0);
+            assert!((hits[0].t - 0.5).abs() < 0.001, "t={}", hits[0].t);
+        }
+    }
+
+    #[test]
     fn footprints_carry_as_used_height_and_ring() {
         let tmp = TempDir::new().unwrap();
         fx::write_square_structures(tmp.path(), prague(), &[house_row()]);

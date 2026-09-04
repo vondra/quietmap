@@ -239,9 +239,9 @@ impl SegFan {
     /// there is no fan to quadrature and the caller keeps the cp verdict.
     fn new(rx_lat: f64, rx_lon: f64, start: (f64, f64), end: (f64, f64)) -> Option<Self> {
         let mlon = grid::geo::m_per_deg_lon(rx_lat.to_radians());
-        let ax = (start.1 - rx_lon) * mlon;
+        let ax = grid::geo::wrapped_longitude_delta(rx_lon, start.1) * mlon;
         let ay = (start.0 - rx_lat) * grid::geo::M_PER_DEG_LAT;
-        let bx = (end.1 - rx_lon) * mlon;
+        let bx = grid::geo::wrapped_longitude_delta(rx_lon, end.1) * mlon;
         let by = (end.0 - rx_lat) * grid::geo::M_PER_DEG_LAT;
         let (ex, ey) = (bx - ax, by - ay);
         if ex * ex + ey * ey < 1e-6 {
@@ -289,7 +289,7 @@ impl SegFan {
         }
         Some((
             rx_lat + sy / grid::geo::M_PER_DEG_LAT,
-            rx_lon + sx / self.m_per_deg_lon,
+            grid::geo::normalize_longitude(rx_lon + sx / self.m_per_deg_lon),
             d,
         ))
     }
@@ -571,6 +571,22 @@ mod tests {
         let mut skyline = ArcSkyline::default();
         let mut scratch = SegSampleScratch::new();
         assert!(sampled_gob_bands(&q, &FlatGround, 5, &mut skyline, &mut scratch).is_none());
+    }
+
+    #[test]
+    fn dateline_fan_stays_short_and_returns_canonical_points() {
+        let fan = SegFan::new(0.0, 179.999, (0.001, 179.999), (0.001, -179.999))
+            .expect("short dateline fan");
+        assert!((fan.ex - 222.64).abs() < 0.5, "fan width {} m", fan.ex);
+
+        let (lat, lon, distance_m) = fan.at(0.0, 179.999, 0.9).expect("fan point");
+        assert!((-180.0..180.0).contains(&lon), "non-canonical lon {lon}");
+        assert!(lon < 0.0, "the point should cross E180: {lon}");
+        let roundtrip_m = grid::geo::flat_dist(0.0, 179.999, lat, lon);
+        assert!(
+            (roundtrip_m - distance_m).abs() < 0.1,
+            "fan distance {distance_m} != lon/lat roundtrip {roundtrip_m}"
+        );
     }
 
     /// Each BUCKET's own terrain — not the cp ray's — is what the composite is

@@ -12,7 +12,7 @@
 
 use crate::constants::BUILDING_HEIGHT_MAX_M;
 use crate::envelope::EnvelopeClass;
-use grid::geo::{m_per_deg_lon, M_PER_DEG_LAT};
+use grid::geo::{m_per_deg_lon, wrapped_longitude_delta, M_PER_DEG_LAT};
 
 use super::obstacle_index_file::IndexArray;
 use super::screening_source_id::ScreeningSourceId;
@@ -363,7 +363,7 @@ impl ObstacleIndex {
     #[inline]
     fn to_local(&self, lat: f64, lon: f64) -> (f64, f64) {
         (
-            (lon - self.origin_lon) * self.m_per_deg_lon,
+            wrapped_longitude_delta(self.origin_lon, lon) * self.m_per_deg_lon,
             (lat - self.origin_lat) * M_PER_DEG_LAT,
         )
     }
@@ -420,7 +420,8 @@ impl ObstacleIndex {
         let generation = scratch.begin_ray();
         let longitude_scale = query_m_per_deg_lon / self.m_per_deg_lon;
         let latitude_scale = query_m_per_deg_lat / M_PER_DEG_LAT;
-        let origin_east_m = (self.origin_lon - receiver_lon) * query_m_per_deg_lon;
+        let origin_east_m =
+            wrapped_longitude_delta(receiver_lon, self.origin_lon) * query_m_per_deg_lon;
         let origin_north_m = (self.origin_lat - receiver_lat) * query_m_per_deg_lat;
         let sector_width = std::f64::consts::TAU / SECTORS as f64;
         for cy in cy0..=cy1 {
@@ -1544,7 +1545,7 @@ impl Builder {
     #[inline]
     fn to_local(&self, lat: f64, lon: f64) -> (f64, f64) {
         (
-            (lon - self.origin_lon) * self.m_per_deg_lon,
+            wrapped_longitude_delta(self.origin_lon, lon) * self.m_per_deg_lon,
             (lat - self.origin_lat) * M_PER_DEG_LAT,
         )
     }
@@ -1854,6 +1855,62 @@ mod tests {
         let idx = ObstacleIndex::builder(OLAT, OLON).build();
         assert_eq!(idx.edge_count(), 0);
         assert!(run(&idx, ll(0.0, 0.0), ll(1000.0, 0.0)).is_empty());
+    }
+
+    #[test]
+    fn dateline_sector_scan_uses_the_short_receiver_frame() {
+        const SECTORS: usize = 8;
+        const RECEIVER_LON: f64 = 179.999;
+        let m_lon = m_per_deg_lon(0.0);
+        let at_receiver_offset = |east_m: f64, north_m: f64| {
+            (
+                north_m / M_PER_DEG_LAT,
+                grid::geo::normalize_longitude(RECEIVER_LON + east_m / m_lon),
+            )
+        };
+
+        // The box sits 180-230 m east of a receiver on the other canonical
+        // side of E180. Sector 0 is centred at 22.5 degrees and crosses both
+        // its near and far faces.
+        let mut builder = ObstacleIndex::builder(0.0, -179.7);
+        builder.add_ring(
+            &[
+                at_receiver_offset(180.0, 65.0),
+                at_receiver_offset(230.0, 65.0),
+                at_receiver_offset(230.0, 105.0),
+                at_receiver_offset(180.0, 105.0),
+            ],
+            10.0,
+            ObstacleKind::Building,
+            0,
+        );
+        let set = ObstacleSet {
+            indexes: vec![std::sync::Arc::new(builder.build())],
+        };
+        let directions: [(f64, f64); SECTORS] = std::array::from_fn(|sector| {
+            let angle = (sector as f64 + 0.5) * std::f64::consts::TAU / SECTORS as f64;
+            (angle.sin(), angle.cos())
+        });
+        let mut scratch = CrossingScratch::default();
+        let mut hits = Vec::new();
+        set.visit_building_sector_crossings(
+            0.0,
+            RECEIVER_LON,
+            M_PER_DEG_LAT,
+            m_lon,
+            500.0,
+            &directions,
+            &mut scratch,
+            &mut |sector, range_m, height_m| hits.push((sector, range_m, height_m)),
+        );
+
+        let sector_zero: Vec<_> = hits.iter().filter(|(sector, _, _)| *sector == 0).collect();
+        assert_eq!(sector_zero.len(), 2, "sector hits: {hits:?}");
+        assert!(
+            sector_zero.iter().all(|(_, range_m, height_m)|
+                (190.0..255.0).contains(range_m) && *height_m == 10.0),
+            "sector hits: {hits:?}"
+        );
     }
 
     /// Skyline walk: the box inside the radius reports its four edges (repeats

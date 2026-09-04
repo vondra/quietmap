@@ -9,6 +9,24 @@ pub const M_PER_DEG_LAT: f64 = 110_540.0;
 /// Metres per degree longitude at the equator.
 pub const M_PER_DEG_LON_EQ: f64 = 111_320.0;
 
+/// Fold a longitude into the one canonical interval used by stored points.
+#[inline]
+pub fn normalize_longitude(lon_deg: f64) -> f64 {
+    (lon_deg + 180.0).rem_euclid(360.0) - 180.0
+}
+
+/// Signed shortest longitude delta from `from_deg` to `to_deg`.
+#[inline]
+pub fn wrapped_longitude_delta(from_deg: f64, to_deg: f64) -> f64 {
+    normalize_longitude(to_deg - from_deg)
+}
+
+/// Midpoint longitude on the short arc, including across the antimeridian.
+#[inline]
+pub fn wrapped_longitude_midpoint(a_deg: f64, b_deg: f64) -> f64 {
+    normalize_longitude(a_deg + wrapped_longitude_delta(a_deg, b_deg) / 2.0)
+}
+
 /// Metres per degree longitude at `lat_rad` radians.
 pub fn m_per_deg_lon(lat_rad: f64) -> f64 {
     M_PER_DEG_LON_EQ * lat_rad.cos().max(0.01)
@@ -17,7 +35,7 @@ pub fn m_per_deg_lon(lat_rad: f64) -> f64 {
 /// Flat-earth distance in meters (accurate <0.3% at <50km).
 pub fn flat_dist(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let mid_lat = ((lat1 + lat2) / 2.0).to_radians();
-    let dx = (lon2 - lon1) * m_per_deg_lon(mid_lat);
+    let dx = wrapped_longitude_delta(lon1, lon2) * m_per_deg_lon(mid_lat);
     let dy = (lat2 - lat1) * M_PER_DEG_LAT;
     (dx * dx + dy * dy).sqrt()
 }
@@ -120,9 +138,10 @@ pub fn point_to_segment_full(
     let m_lon = m_per_deg_lon(mid_lat);
 
     // Project to local meters (A at origin).
-    let bx = (b_lon - a_lon) * m_lon;
+    let segment_lon_delta = wrapped_longitude_delta(a_lon, b_lon);
+    let bx = segment_lon_delta * m_lon;
     let by = (b_lat - a_lat) * M_PER_DEG_LAT;
-    let px = (p_lon - a_lon) * m_lon;
+    let px = wrapped_longitude_delta(a_lon, p_lon) * m_lon;
     let py = (p_lat - a_lat) * M_PER_DEG_LAT;
 
     let ab_len_sq = bx * bx + by * by;
@@ -144,7 +163,7 @@ pub fn point_to_segment_full(
     let d_endpoint_m = ((px - cp_x).powi(2) + (py - cp_y).powi(2)).sqrt();
 
     let cp_lat = a_lat + t_clamped * (b_lat - a_lat);
-    let cp_lon = a_lon + t_clamped * (b_lon - a_lon);
+    let cp_lon = normalize_longitude(a_lon + t_clamped * segment_lon_delta);
 
     PointToSegment {
         d_perp_m,
@@ -403,6 +422,22 @@ mod tests {
     fn test_flat_dist() {
         let d = flat_dist(50.08, 14.42, 50.08, 14.434);
         assert!((d - 1000.0).abs() < 50.0, "d={d}");
+    }
+
+    #[test]
+    fn antimeridian_geometry_uses_the_short_arc() {
+        let distance = flat_dist(0.0, 179.999, 0.0, -179.999);
+        assert!((distance - 222.64).abs() < 0.5, "distance={distance}");
+        assert_eq!(wrapped_longitude_midpoint(179.0, -179.0), -180.0);
+
+        let point = point_to_segment_full(0.001, -180.0, 0.0, 179.999, 0.0, -179.999);
+        assert!(
+            (point.fraction - 0.5).abs() < 1e-9,
+            "fraction={}",
+            point.fraction
+        );
+        assert!((point.cp_lon + 180.0).abs() < 1e-9, "lon={}", point.cp_lon);
+        assert!((point.d_endpoint_m - M_PER_DEG_LAT * 0.001).abs() < 0.1);
     }
 
     #[test]

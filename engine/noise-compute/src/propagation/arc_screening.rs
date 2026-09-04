@@ -1272,7 +1272,7 @@ impl Frame {
     #[inline]
     fn xy(&self, lat: f64, lon: f64) -> (f64, f64) {
         (
-            (lon - self.lon) * self.m_per_deg_lon,
+            geo::wrapped_longitude_delta(self.lon, lon) * self.m_per_deg_lon,
             (lat - self.lat) * M_PER_DEG_LAT,
         )
     }
@@ -1824,7 +1824,9 @@ fn source_point_at(frame: &Frame, q: &ArcScreening<'_>, azimuth: f64) -> Option<
     let u = ((dy * ax - dx * ay) / denom).clamp(0.0, 1.0);
     Some((
         q.start_lat + u * (q.end_lat - q.start_lat),
-        q.start_lon + u * (q.end_lon - q.start_lon),
+        geo::normalize_longitude(
+            q.start_lon + u * geo::wrapped_longitude_delta(q.start_lon, q.end_lon),
+        ),
     ))
 }
 
@@ -2304,6 +2306,31 @@ mod tests {
         let (x, y) = frame.xy(lat, lon);
         assert!((x + 100.0).abs() < 0.5, "x offset {x}");
         assert!((y - 100.0).abs() < 0.5, "y offset {y}");
+    }
+
+    #[test]
+    fn source_point_uses_a_short_canonical_dateline_frame() {
+        let obstacles = ObstacleSet { indexes: vec![] };
+        let cp = [0.0_f64; NUM_BANDS];
+        let mut q = query(&obstacles, &cp, 100.0);
+        q.receiver_lat = 0.0;
+        q.receiver_lon = 179.999;
+        q.start_lat = 0.001;
+        q.start_lon = 179.999;
+        q.end_lat = 0.001;
+        q.end_lon = -179.999;
+        let frame = Frame::at(q.receiver_lat, q.receiver_lon);
+
+        let (end_x, _) = frame.xy(q.end_lat, q.end_lon);
+        assert!((end_x - 222.64).abs() < 0.5, "end x {end_x} m");
+        let target = (0.001, -179.9995);
+        let (lat, lon) = source_point_at(&frame, &q, frame.azimuth(target.0, target.1)).unwrap();
+        assert!((lat - target.0).abs() < 1e-9, "lat {lat}");
+        assert!(
+            geo::wrapped_longitude_delta(target.1, lon).abs() < 1e-9,
+            "lon {lon}"
+        );
+        assert!((-180.0..180.0).contains(&lon), "non-canonical lon {lon}");
     }
 
     /// Arc capacity: overflow merges the SMALLEST gap, so the list stays a

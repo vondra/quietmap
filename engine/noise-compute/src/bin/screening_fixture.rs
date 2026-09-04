@@ -1450,11 +1450,11 @@ fn arc_clip_span(a_lo: f64, a_hi: f64, lo: f64, hi: f64) -> Option<(f64, f64)> {
 /// parallel to the segment.
 fn gpu_source_point_at(q: &ArcScreening<'_>, m_lon: f64, azimuth: f64) -> Option<(f64, f64)> {
     let (ax, ay) = (
-        (q.start_lon - q.receiver_lon) * m_lon,
+        geo::wrapped_longitude_delta(q.receiver_lon, q.start_lon) * m_lon,
         (q.start_lat - q.receiver_lat) * M_PER_DEG_LAT,
     );
     let (bx, by) = (
-        (q.end_lon - q.receiver_lon) * m_lon,
+        geo::wrapped_longitude_delta(q.receiver_lon, q.end_lon) * m_lon,
         (q.end_lat - q.receiver_lat) * M_PER_DEG_LAT,
     );
     let (dx, dy) = (azimuth.cos(), azimuth.sin());
@@ -1466,7 +1466,9 @@ fn gpu_source_point_at(q: &ArcScreening<'_>, m_lon: f64, azimuth: f64) -> Option
     let u = ((dy * ax - dx * ay) / denom).clamp(0.0, 1.0);
     Some((
         q.start_lat + u * (q.end_lat - q.start_lat),
-        q.start_lon + u * (q.end_lon - q.start_lon),
+        geo::normalize_longitude(
+            q.start_lon + u * geo::wrapped_longitude_delta(q.start_lon, q.end_lon),
+        ),
     ))
 }
 
@@ -1500,9 +1502,9 @@ fn gpu_sampled_gob_bands(
     scratch: &mut GpuArcScratch,
 ) -> Option<[f64; NUM_BANDS]> {
     let m_lon = M_PER_DEG_LON_EQ * q.receiver_lat.to_radians().cos().max(0.01);
-    let ax = (q.start_lon - q.receiver_lon) * m_lon;
+    let ax = geo::wrapped_longitude_delta(q.receiver_lon, q.start_lon) * m_lon;
     let ay = (q.start_lat - q.receiver_lat) * M_PER_DEG_LAT;
-    let bx = (q.end_lon - q.receiver_lon) * m_lon;
+    let bx = geo::wrapped_longitude_delta(q.receiver_lon, q.end_lon) * m_lon;
     let by = (q.end_lat - q.receiver_lat) * M_PER_DEG_LAT;
     let (ex, ey) = (bx - ax, by - ay);
     if ex * ex + ey * ey < 1e-6 {
@@ -1524,7 +1526,7 @@ fn gpu_sampled_gob_bands(
         let distance_m = (sx * sx + sy * sy).sqrt();
         (distance_m.is_finite() && distance_m >= 1.0).then_some((
             q.receiver_lat + sy / M_PER_DEG_LAT,
-            q.receiver_lon + sx / m_lon,
+            geo::normalize_longitude(q.receiver_lon + sx / m_lon),
             distance_m,
         ))
     };
@@ -1639,7 +1641,8 @@ fn gpu_arc_screened_attenuation(
 ) -> [f64; NUM_BANDS] {
     let m_lon = M_PER_DEG_LON_EQ * q.receiver_lat.to_radians().cos().max(0.01);
     let azimuth = |lat: f64, lon: f64| {
-        ((lat - q.receiver_lat) * M_PER_DEG_LAT).atan2((lon - q.receiver_lon) * m_lon)
+        ((lat - q.receiver_lat) * M_PER_DEG_LAT)
+            .atan2(geo::wrapped_longitude_delta(q.receiver_lon, lon) * m_lon)
     };
     let base = azimuth(q.start_lat, q.start_lon);
     let delta = wrap_pi(azimuth(q.end_lat, q.end_lon) - base);
@@ -1675,7 +1678,8 @@ fn gpu_arc_screened_attenuation(
             continue;
         }
         let imlon = index.m_per_deg_lon;
-        let rxl = (q.receiver_lon - index.origin_lon) * imlon;
+        let project_x = |lon| geo::wrapped_longitude_delta(index.origin_lon, lon) * imlon;
+        let rxl = project_x(q.receiver_lon);
         let ryl = (q.receiver_lat - index.origin_lat) * M_PER_DEG_LAT;
         // Only x rescales between the receiver metric and this index's; a
         // positive x-scale multiplies every 2D cross product by the same
@@ -1689,15 +1693,15 @@ fn gpu_arc_screened_attenuation(
         // therefore mirrored here rather than widened to every footprint.
         let q_min_lat = q.receiver_lat.min(q.start_lat).min(q.end_lat);
         let q_max_lat = q.receiver_lat.max(q.start_lat).max(q.end_lat);
-        let q_min_lon = q.receiver_lon.min(q.start_lon).min(q.end_lon);
-        let q_max_lon = q.receiver_lon.max(q.start_lon).max(q.end_lon);
-        let xa = (q_min_lon - index.origin_lon) * imlon;
-        let xb = (q_max_lon - index.origin_lon) * imlon;
+        let start_x = project_x(q.start_lon);
+        let end_x = project_x(q.end_lon);
+        let q_min_x = rxl.min(start_x).min(end_x);
+        let q_max_x = rxl.max(start_x).max(end_x);
         let ya = (q_min_lat - index.origin_lat) * M_PER_DEG_LAT;
         let yb = (q_max_lat - index.origin_lat) * M_PER_DEG_LAT;
         let inverse_cell = 1.0 / index.cell_m;
-        let cx0_unclamped = ((xa.min(xb) - index.min_x) * inverse_cell).floor();
-        let cx1_unclamped = ((xa.max(xb) - index.min_x) * inverse_cell).floor();
+        let cx0_unclamped = ((q_min_x - index.min_x) * inverse_cell).floor();
+        let cx1_unclamped = ((q_max_x - index.min_x) * inverse_cell).floor();
         let cy0_unclamped = ((ya.min(yb) - index.min_y) * inverse_cell).floor();
         let cy1_unclamped = ((ya.max(yb) - index.min_y) * inverse_cell).floor();
         if cx1_unclamped < 0.0
@@ -1711,9 +1715,7 @@ fn gpu_arc_screened_attenuation(
         let cx1 = cx1_unclamped.min((index.cols - 1) as f64) as usize;
         let cy0 = cy0_unclamped.max(0.0) as usize;
         let cy1 = cy1_unclamped.min((index.rows - 1) as f64) as usize;
-        let start_x = (q.start_lon - index.origin_lon) * imlon;
         let start_y = (q.start_lat - index.origin_lat) * M_PER_DEG_LAT;
-        let end_x = (q.end_lon - index.origin_lon) * imlon;
         let end_y = (q.end_lat - index.origin_lat) * M_PER_DEG_LAT;
         footprint_candidates.clear();
         footprint_seen.clear();
@@ -1834,7 +1836,7 @@ fn gpu_arc_screened_attenuation(
         let Some((source_lat, source_lon)) = gpu_source_point_at(q, m_lon, centre_azimuth) else {
             return false;
         };
-        let dx = (source_lon - q.receiver_lon) * m_lon;
+        let dx = geo::wrapped_longitude_delta(q.receiver_lon, source_lon) * m_lon;
         let dy = (source_lat - q.receiver_lat) * M_PER_DEG_LAT;
         let source_distance_m = (dx * dx + dy * dy).sqrt();
         source_distance_m - arc.near_m > 1.0 && arc.near_m >= 1.0
@@ -1996,11 +1998,11 @@ fn edge_arc(
     let g = index.edge(k);
     let a0 = azimuth(
         index.origin_lat + g[1] / M_PER_DEG_LAT,
-        index.origin_lon + g[0] / imlon,
+        geo::normalize_longitude(index.origin_lon + g[0] / imlon),
     );
     let a1 = azimuth(
         index.origin_lat + g[3] / M_PER_DEG_LAT,
-        index.origin_lon + g[2] / imlon,
+        geo::normalize_longitude(index.origin_lon + g[2] / imlon),
     );
     let r0 = wrap_pi(a0 - base);
     (r0, r0 + wrap_pi(a1 - a0))

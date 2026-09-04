@@ -73,7 +73,7 @@ pub fn grid_to_meters(gx: i32, gy: i32) -> (f64, f64) {
 /// z9 unit containing lon/lat. Longitude wraps at the antimeridian;
 /// latitude clamps with the projection.
 pub fn square_of(lat_deg: f64, lon_deg: f64) -> Square {
-    let wrapped = ((lon_deg + 180.0) % 360.0 + 360.0) % 360.0 - 180.0;
+    let wrapped = geo::normalize_longitude(lon_deg);
     let x = ((wrapped + 180.0) / 360.0 * f64::from(Z9_TILES_PER_AXIS)) as u16;
     let (_, y_m) = lonlat_to_meters(0.0, lat_deg);
     let half = EARTH_CIRCUMFERENCE_M / 2.0;
