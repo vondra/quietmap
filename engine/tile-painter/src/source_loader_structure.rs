@@ -1242,6 +1242,70 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// A matched row UNDER the grid-split threshold stores no emission polygon,
+    /// so the loader hands `prepare_building_points` the screening polygon —
+    /// Overture's, several hundred metres from the OSM building. That is sound
+    /// only because below the threshold the point stream is polygon-independent:
+    /// one point at the emission centroid, whatever polygon comes with it. The
+    /// whole sparse emission-polygon rule (1.79 % of polygon bytes) rests on
+    /// this, so pin it against the polygon actually stored.
+    #[test]
+    fn a_small_matched_row_emits_one_point_at_the_osm_centroid() {
+        let tmp =
+            std::env::temp_dir().join(format!("qm-structures-small-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let h3r4 = tmp.join("h3r4");
+        let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
+        let centre = LatLng::from(cell);
+        let (clat, clon) = (centre.lat(), centre.lng());
+        let d_lon = |m: f64| m / m_per_deg_lon(clat.to_radians());
+
+        let screening_polygon = square_wkb(clat, clon - d_lon(300.0), 6.0);
+        let rows = vec![TestStructureRow {
+            kind: KIND_BUILDING,
+            geometry_wkb: Some(screening_polygon),
+            height_m: 12.0,
+            height_tier: 4,
+            envelope_class: 1,
+            centroid: (clat, clon - d_lon(300.0)),
+            osm_id: Some(303),
+            building_type: Some(0),
+            height: Some(9.0),
+            area_m2: Some(120.0),
+            emission_polygon_wkb: None,
+            emission_centroid: Some((clat, clon)),
+            ..Default::default()
+        }];
+        write_cell_structures(&h3r4, cell, &rows);
+        let mut data =
+            StructureData::load_for_r4s(&h3r4, u64::from(cell), &[u64::from(cell)]).unwrap();
+        let merged = data
+            .take_building_layer_rows(LeisureData::load_for_r4s(&h3r4, &[u64::from(cell)]).unwrap())
+            .unwrap();
+
+        // One point, at the OSM centroid — not at the Overture polygon 300 m west.
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].lat.to_bits(), clat.to_bits());
+        assert_eq!(merged[0].lon.to_bits(), clon.to_bits());
+        // …and the same stream an UNRELATED polygon produces: below the
+        // threshold `discretize_area_source` never reads it.
+        let elsewhere = hex_encode(&square_wkb(clat, clon + d_lon(900.0), 3.0));
+        let expected: Vec<PointRow> = prepare_building_points(RawBuildingInput {
+            centroid_lat: clat,
+            centroid_lon: clon,
+            height_m: 9.0,
+            floors: 0,
+            building_type: 0,
+            area_m2: Some(120.0),
+            polygon_wkb: &elsewhere,
+        })
+        .iter()
+        .map(PointRow::from_prepared)
+        .collect();
+        assert_point_rows_eq(&merged, &expected);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// The low-profile lookup is built from the SAME file's OSM rows (at the
     /// OSM emission centroid where the merge moved the screening centroid off
     /// it), caps only kind=0 rows on the non-per-building tiers, and never
