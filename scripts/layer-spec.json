@@ -120,13 +120,6 @@
       "artifact_family": "airborne-production",
       "binary": "gpu-airborne",
       "flags": "--stream --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}/aircraft-airborne"
-    },
-    "cpu-airborne": {
-      "group": "airborne",
-      "gpu": false,
-      "artifact_family": "aircraft-cpu-production",
-      "binary": "build-heatmap-aircraft",
-      "flags": "--stream --source airborne --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}/aircraft-airborne"
     }
   }
 }
