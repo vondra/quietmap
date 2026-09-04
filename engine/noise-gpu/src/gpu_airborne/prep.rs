@@ -11,11 +11,13 @@ use noise_compute::emission::aircraft::{SegmentPrepared, RECEIVER_HORIZON_MAX_M}
 use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_gpu::airborne::region_candidates;
 use noise_gpu::pack_airborne_segs;
+use raster_reader::fused_grid::FusedGrid;
 use raster_reader::fused_tile_z13::{FusedTileZ13, TileBatch, TileBbox};
 use raster_reader::RealRasters;
 use rayon::prelude::*;
 use tile_painter::grid::tile_bbox;
 use tile_painter::r4_source_cache::R4SourceCache;
+use tile_painter::region_runner::region_tiles;
 use tile_painter::source_loader_structure::{InteriorEstimate, StructureData};
 
 /// One grid-aligned tile-block, CPU-prepped: its NW corner `(bx,by)`, the owned tiles in it,
@@ -146,25 +148,7 @@ pub(crate) fn build_dem_blocks(
     tiles: &[(u32, u32)],
 ) -> Result<(Vec<PrepBlock>, Arc<ObstacleSet>)> {
     let obstacles = load_region_structures(h3r4_dir, r4)?;
-    let (mut ps, mut pn, mut pw, mut pe) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
-    for &(tx, ty) in tiles {
-        let bb = tile_bbox(z, tx, ty);
-        ps = ps.min(bb.south_lat);
-        pn = pn.max(bb.north_lat);
-        pw = pw.min(bb.west_lon);
-        pe = pe.max(bb.east_lon);
-    }
-    rasters.preload_dem_bbox(ps, pn, pw, pe);
-    let region_halo = FusedTileZ13::build_elevation_halo(
-        &TileBbox {
-            west_lon: pw,
-            east_lon: pe,
-            north_lat: pn,
-            south_lat: ps,
-        },
-        RECEIVER_HORIZON_MAX_M,
-        rasters,
-    );
+    let region_halo = cell_horizon_halo(rasters, z, r4);
     let mut batches: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
     for &(tx, ty) in tiles {
         batches
@@ -206,6 +190,42 @@ pub(crate) fn build_dem_blocks(
         })
         .collect();
     Ok((blocks, obstacles.shared_set()))
+}
+
+/// The elevation halo every block of one cell shares: the bbox of the tiles the CELL owns plus
+/// the receiver horizon reach. It takes the cell, never the tiles a single request paints, and
+/// that signature is the whole invariant: a `FusedGrid` reconstructs each sample's lat/lon from
+/// its own origin, so a halo narrowed to a subset of the cell would move every DEM sample by an
+/// ULP, and a request that paints part of a cell could no longer be compared byte for byte
+/// against the whole-cell paint. That is what a bounded release check needs, and it also makes
+/// the dev `--bbox` / `--tile-x` paths read the terrain production reads.
+fn cell_horizon_halo(rasters: &RealRasters, z: u8, r4: u64) -> Arc<FusedGrid> {
+    let receivers = tiles_bbox(z, &region_tiles(r4, z));
+    rasters.preload_dem_bbox(
+        receivers.south_lat,
+        receivers.north_lat,
+        receivers.west_lon,
+        receivers.east_lon,
+    );
+    FusedTileZ13::build_elevation_halo(&receivers, RECEIVER_HORIZON_MAX_M, rasters)
+}
+
+/// The bounding box of a tile set at `z`.
+fn tiles_bbox(z: u8, tiles: &[(u32, u32)]) -> TileBbox {
+    let (mut south, mut north, mut west, mut east) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+    for &(tx, ty) in tiles {
+        let bbox = tile_bbox(z, tx, ty);
+        south = south.min(bbox.south_lat);
+        north = north.max(bbox.north_lat);
+        west = west.min(bbox.west_lon);
+        east = east.max(bbox.east_lon);
+    }
+    TileBbox {
+        west_lon: west,
+        east_lon: east,
+        north_lat: north,
+        south_lat: south,
+    }
 }
 
 /// The region's vector building footprints — the SAME `grid_disk(1)` load the CPU aircraft
@@ -353,4 +373,58 @@ pub(crate) fn prep_cell(
         },
         too_big: false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Dobris and the 4x4 z13 window the release check paints inside it.
+    const DOBRIS: u64 = 0x841e309ffffffff;
+    const ZOOM: u8 = 13;
+    const WINDOW: [(u32, u32); 4] = [(4414, 2786), (4415, 2786), (4414, 2787), (4415, 2787)];
+
+    /// One bug class: a paint narrowed by a `tiles=` window differs from the whole-cell paint.
+    /// Every block of a cell marches its receiver horizons over ONE shared elevation halo. A halo
+    /// anchored to the tiles a request paints would start on a different lattice origin, and a
+    /// `FusedGrid` reconstructs each sample's lat/lon from its own origin — so every sample of a
+    /// windowed paint would move by an ULP and its tiles could no longer be compared, byte for
+    /// byte, against the whole-cell reference. Pin that the cell's halo is strictly the larger
+    /// grid and that a window-anchored one really would sit somewhere else.
+    #[test]
+    fn the_shared_horizon_halo_spans_the_cell_not_the_painted_window() {
+        // No raster tree: elevations read as sea level, which leaves the grid GEOMETRY —
+        // the whole subject of this test — exactly as production builds it.
+        let rasters = RealRasters::new(&std::env::temp_dir().join("quietmap-absent-rasters"));
+        let owned = region_tiles(DOBRIS, ZOOM);
+        assert!(WINDOW.iter().all(|tile| owned.contains(tile)));
+
+        let cell = cell_horizon_halo(&rasters, ZOOM, DOBRIS).packed_elevation_grid();
+        let window_anchored = FusedTileZ13::build_elevation_halo(
+            &tiles_bbox(ZOOM, &WINDOW),
+            RECEIVER_HORIZON_MAX_M,
+            &rasters,
+        )
+        .packed_elevation_grid();
+
+        assert!(
+            cell.rows > window_anchored.rows && cell.cols > window_anchored.cols,
+            "the cell's halo must be the larger grid: {}x{} against {}x{}",
+            cell.rows,
+            cell.cols,
+            window_anchored.rows,
+            window_anchored.cols
+        );
+        assert!(
+            cell.lat_min <= window_anchored.lat_min && cell.lon_min <= window_anchored.lon_min,
+            "the cell's halo must start south and west of any window inside it"
+        );
+        assert_ne!(
+            (cell.lat_min, cell.lon_min),
+            (window_anchored.lat_min, window_anchored.lon_min),
+            "a window-anchored halo starts on a different lattice origin, which is exactly \
+             the difference that would move every sample of a windowed paint"
+        );
+        assert_eq!(cell.inv_cell_deg, window_anchored.inv_cell_deg);
+    }
 }
