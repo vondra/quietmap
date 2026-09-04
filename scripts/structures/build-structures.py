@@ -118,7 +118,11 @@ ENVELOPE_RESIDENTIAL = 1
 ENVELOPE_COMMERCIAL = 2
 ENVELOPE_INDUSTRIAL = 3
 ENVELOPE_DEFAULT = 5
-# OSM building_use (osm-extract spill.rs): 0 residential, 1 commercial, 2 industrial
+# OSM building_use (osm-extract spill.rs): 0 residential, 1 commercial, 2 industrial.
+# 0 is the extract's RESIDENTIAL code, not a missing value: write_buildings.rs
+# declares the column non-nullable, so an untagged building arrives as 0 and the
+# residential envelope is the extract's own answer (measured 2026-09-04: 0 nulls
+# and 118,140 of 118,141 Dobris rows at 0).
 ENVELOPE_FROM_BUILDING_USE = {
     0: ENVELOPE_RESIDENTIAL,
     1: ENVELOPE_COMMERCIAL,
@@ -734,7 +738,7 @@ def build_cell(cell, h3r4_dir, overture_rows, overture_mtime, ghsl, regional, va
             r = osm_only[i_osm]  # every unmatched OSM row laddered above
             height_m, tier = r["height_m"], r["tier"]
             envelope = ENVELOPE_FROM_BUILDING_USE.get(
-                osm["building_use"][i_osm] or 0, ENVELOPE_DEFAULT
+                osm["building_use"][i_osm], ENVELOPE_DEFAULT
             )
             clat, clon = osm["centroid_lat"][i_osm], osm["centroid_lon"][i_osm]
         out["kind"].append(KIND_BUILDING)
