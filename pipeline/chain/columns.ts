@@ -184,6 +184,10 @@ export const COLUMN_PARENTS: Readonly<Record<string, Readonly<Record<string, Col
   },
   'structures.arrow': {
     kind: { parents: [STRUCTURES], note: '0 building / 1 barrier — written by the builder for every row' },
+    screening_ordinal: {
+      parents: [STRUCTURES],
+      note: 'the builder\'s screening insertion order: Overture-stock rows keep their source position, OSM-only rows with geometry follow in buildings.arrow order, walls last',
+    },
     geometry_wkb: {
       parents: [OVERTURE_PARQUETS, 'extract:write_buildings.rs', 'extract:write_barriers.rs', STRUCTURES],
       note: 'screening polygon: Overture WKB on matched/Overture-only rows (a matched pair keeps the Overture geometry — census: 0 of 2.83 M matched pairs share WKB), OSM polygon on OSM-only rows; barrier rows carry the builder-encoded 2-point wall WKB',
