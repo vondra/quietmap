@@ -1,0 +1,18 @@
+[package]
+name = "osm-extract"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+osmpbf = "0.3"
+arrow = { version = "54", features = ["ipc"] }
+memmap2 = "0.9"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+rayon = "1"
+grid = { path = "../grid" }
+arrow-batching = { path = "../arrow-batching" }
+
+[[bin]]
+name = "osm-extract"
+path = "src/main.rs"

@@ -4,7 +4,9 @@
 [workspace]
 resolver = "2"
 members = [
+    "arrow-batching",
     "grid",
+    "osm-extract",
 ]
 
 # Member [profile.release] tables are ignored in a workspace. Keep the
