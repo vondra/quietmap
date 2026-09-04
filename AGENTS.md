@@ -64,6 +64,18 @@ details in product files, including comments and docs.
 `data/` is gitignored and may be irreplaceable. Inspect contents before any
 `rm -rf`; compute numbers from data, never estimate them.
 
+## Disks (this box)
+
+- `readmostly1` = finished sources, read-only inputs (`r260904/source`).
+  `readmostly2` = finished web data (`r260904/prepared`), written once as a
+  bulk promotion, then only read.
+- All work happens on mixeduse: heavy temp/spill on `mixeduse1` (shares its
+  disk with `/tmp`), intermediates on `mixeduse2/r260904/work`. Split reads
+  and writes across disks for throughput: sources on one, temp on another,
+  output on a third where the job allows.
+- Never write intermediates to a readmostly disk. Keep the finished tree on
+  mixeduse2 as the backup copy; readmostly2 is the served copy.
+
 ## Grid and releases
 
 - The compute unit is the Web-Mercator z9 tile (`engine/grid` owns the math).

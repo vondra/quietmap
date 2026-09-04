@@ -395,9 +395,9 @@ pub enum EmissionTrace {
 /// no dB threshold. The popup renders one row per trace.
 ///
 /// Aircraft-specific extensions: `aircraft_subtype` discriminates
-/// 1 = ground path, 2 = airborne sub-segment, 3 = cruise R7 hex
+/// 1 = ground path, 2 = airborne sub-segment, 3 = cruise cell
 /// (0 = non-aircraft / unset). `polyline` carries the ADS-B trajectory
-/// for ground paths (`MultiLineString`-friendly); `hex_polygon` carries
+/// for ground paths (`MultiLineString`-friendly); `cell_polygon` carries
 /// the closed boundary ring for cruise hexes; `cruise_buckets` carries
 /// the per-bucket breakdown inside a cruise hex; `length_m_per_kind`
 /// carries `[runway, taxi, apron]` lengths for ground paths.
@@ -445,7 +445,7 @@ pub struct SegmentTrace {
     /// cruise (subtype 3) where we don't track per-band path effects.
     pub received_lden: LdenVariants,
     /// 0 = non-aircraft / unset, 1 = aircraft ground path, 2 = aircraft
-    /// airborne sub-segment, 3 = aircraft cruise R7 hex. Allows the
+    /// airborne sub-segment, 3 = aircraft cruise cell. Allows the
     /// frontend to dispatch geometry rendering without inspecting `kind`
     /// + sniffing other fields.
     #[serde(default, skip_serializing_if = "is_zero_u8")]
@@ -454,18 +454,18 @@ pub struct SegmentTrace {
     /// airborne sub-segments and cruise hexes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub polyline: Option<Vec<(f64, f64)>>,
-    /// Closed polygon ring (last vertex = first vertex) for cruise R7
+    /// Closed polygon ring (last vertex = first vertex) for a cruise cell
     /// hexes. `None` for ground paths and airborne sub-segments.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hex_polygon: Option<Vec<(f64, f64)>>,
-    /// Per-bucket breakdown of a cruise R7 hex (FL × class × period).
+    pub cell_polygon: Option<Vec<(f64, f64)>>,
+    /// Per-bucket breakdown of a cruise cell (FL × class × period).
     /// Sorted by `received_lden` desc. `None` for ground / airborne traces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cruise_buckets: Option<Vec<CruiseBucketBreakdown>>,
-    /// Top contributing flights inside a cruise R7 hex, descending by
+    /// Top contributing flights inside a cruise cell, descending by
     /// peak Lmax. Capped at 5; only present for cruise traces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cruise_top_flights: Option<Vec<CruiseHexTopFlight>>,
+    pub cruise_top_flights: Option<Vec<CruiseCellTopFlight>>,
     /// Ground path length breakdown: `[runway, taxi, apron]` in meters.
     /// `None` for airborne / cruise rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -477,7 +477,7 @@ fn is_zero_u8(v: &u8) -> bool {
     *v == 0
 }
 
-/// One bucket inside a cruise R7 hex aggregate trace.
+/// One bucket inside a cruise-cell aggregate trace.
 ///
 /// `is_dep` was dropped in v16 — it was always `true` per Doc 29 §A.3.2
 /// (en-route flights use the Departure NPD family; no cruise NPD set
@@ -492,11 +492,11 @@ pub struct CruiseBucketBreakdown {
     pub received_lden: f64,
 }
 
-/// One contributing flight inside a cruise R7 hex aggregate trace.
+/// One contributing flight inside a cruise-cell aggregate trace.
 /// Carries the peak encounter (loudest cell crossing of this fid in
 /// this hex) plus per-fid metadata captured at extract time.
 #[derive(Debug, Clone, Serialize)]
-pub struct CruiseHexTopFlight {
+pub struct CruiseCellTopFlight {
     pub lmax_db: f64,
     pub altitude_m: f64,
     pub date: String,
@@ -512,7 +512,7 @@ pub struct CruiseHexTopFlight {
 /// and inspect the filled Vec after the call. Pipeline callers pass `None`
 /// and the branch predictor elides the push-site overhead.
 ///
-/// Aircraft sub-types (ground path / airborne sub-segment / cruise R7 hex)
+/// Aircraft sub-types (ground path / airborne sub-segment / cruise cell)
 /// all live in `segments`, discriminated by `SegmentTrace.aircraft_subtype`.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct TraceCollector {
@@ -547,7 +547,7 @@ impl TraceCollector {
 /// "shown / total" so users see how aggressively the response was truncated;
 /// the Lden values themselves always reflect the full set.
 /// Aircraft splits into three sub-buckets: ground path / airborne
-/// sub-segment / cruise R7 hex. Each is capped separately by
+/// sub-segment / cruise cell. Each is capped separately by
 /// `apply_segment_top_k_with_cap` so a busy airport doesn't drown one
 /// tab in another's truncation. The frontend renders three sub-tabs
 /// keyed off these counters directly — no fold-out re-derivation.

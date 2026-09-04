@@ -15,8 +15,8 @@ use crate::{building_type_name, industrial_type_name, rail_type_name};
 
 mod aircraft;
 pub use aircraft::{
-    build_aircraft_airborne_subsegment_trace, build_aircraft_cruise_r7_trace,
-    BuildAircraftAirborneSubSegmentTrace, BuildAircraftCruiseR7Trace,
+    build_aircraft_airborne_subsegment_trace, build_aircraft_cruise_cell_trace,
+    BuildAircraftAirborneSubSegmentTrace, BuildAircraftCruiseCellTrace,
 };
 
 /// Convert band-energies (linear, A-weighted) to band levels in dB(A).
@@ -452,7 +452,7 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
         received_lden: variants_to_lden(&seg_variants),
         aircraft_subtype: 0,
         polyline: None,
-        hex_polygon: None,
+        cell_polygon: None,
         cruise_buckets: None,
         cruise_top_flights: None,
         length_m_per_kind: None,
@@ -567,7 +567,7 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
         received_lden: variants_to_lden(&seg_variants),
         aircraft_subtype: 0,
         polyline: None,
-        hex_polygon: None,
+        cell_polygon: None,
         cruise_buckets: None,
         cruise_top_flights: None,
         length_m_per_kind: None,
@@ -667,7 +667,7 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
         received_lden: variants_to_lden(&seg_variants),
         aircraft_subtype: 0,
         polyline: None,
-        hex_polygon: None,
+        cell_polygon: None,
         cruise_buckets: None,
         cruise_top_flights: None,
         length_m_per_kind: None,

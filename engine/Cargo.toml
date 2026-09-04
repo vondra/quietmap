@@ -8,6 +8,8 @@ members = [
     "grid",
     "noise-compute",
     "osm-extract",
+    "raster-reader",
+    "source-reader",
     "square-store",
 ]
 

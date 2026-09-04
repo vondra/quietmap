@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="quietmap.org">
+  <!-- Organic blob (deliberately irregular, not a regular polygon) filled with
+       a true radial gradient built from the SAME stops as the map's heatmap
+       ramp (frontend/src/lib/heatmap-palette.ts) — quiet (white, "0 dB") at
+       the center where the 0 sits, escalating outward through the palette to
+       loud at the edge. The logo is quietmap.org's own idea in miniature: a quiet
+       center found amid rising noise, not a source radiating outward. -->
+  <defs>
+    <radialGradient id="g" cx="32" cy="32" r="30" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.28" stop-color="#FFFFFF"/>
+      <stop offset="0.28" stop-color="#A0BABF"/>
+      <stop offset="0.36" stop-color="#B8D6D1"/>
+      <stop offset="0.44" stop-color="#CEE4CC"/>
+      <stop offset="0.52" stop-color="#E2F2BF"/>
+      <stop offset="0.60" stop-color="#F3C683"/>
+      <stop offset="0.68" stop-color="#E87E4D"/>
+      <stop offset="0.76" stop-color="#CD463E"/>
+      <stop offset="0.84" stop-color="#A11A4D"/>
+      <stop offset="0.92" stop-color="#75085C"/>
+      <stop offset="1" stop-color="#430A4A"/>
+    </radialGradient>
+  </defs>
+  <path fill="url(#g)" stroke="rgba(0,0,0,.12)" stroke-width="0.6" d="M26.31,3.35 Q32.0,2.15 36.84,5.4 Q41.67,8.65 44.25,12.91 Q46.83,17.17 49.66,20.34 Q52.5,23.51 53.8,27.76 Q55.1,32.0 53.54,36.14 Q51.98,40.28 49.63,43.78 Q47.29,47.29 43.72,49.48 Q40.15,51.67 36.08,52.41 Q32.0,53.15 27.07,54.46 Q22.15,55.77 16.46,54.5 Q10.77,53.23 8.07,48.13 Q5.38,43.03 4.74,37.52 Q4.1,32.0 4.48,26.38 Q4.86,20.76 8.04,16.0 Q11.23,11.23 15.93,7.89 Q20.63,4.56 26.31,3.35 Z"/>
+  <path fill="#171717" fill-rule="evenodd" d="M32 23C26.8 23 24 26.5 24 32.5S26.8 42 32 42S40 38.5 40 32.5S37.2 23 32 23ZM32 27C34.6 27 35.75 28.8 35.75 32.5S34.6 38 32 38S28.25 36.2 28.25 32.5S29.4 27 32 27Z"/>
+</svg>

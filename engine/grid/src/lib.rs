@@ -99,6 +99,41 @@ pub fn parse_square_name(name: &str) -> Option<Square> {
     })
 }
 
+/// Bits per z9 axis: 512 tiles per axis, so x/y are 9-bit values and the
+/// Morton id fits in 18 bits.
+const SQUARE_BITS_PER_AXIS: u32 = 9;
+
+/// Largest valid z-order square id: both axes at 511 interleave to 18 one-bits.
+pub const MAX_SQUARE_ID: i64 = (1 << (2 * SQUARE_BITS_PER_AXIS)) - 1;
+
+/// Morton z-order id of a z9 square: bit `i` of `x` goes to bit `2i`, bit `i`
+/// of `y` to bit `2i + 1`. THE integer square id — the prepared admin tree
+/// is keyed by it. (Spill/sort partitioning inside osm-extract is a different,
+/// row-major transient key and must not share this name.)
+pub fn square_id(square: Square) -> i64 {
+    let mut id: i64 = 0;
+    for i in 0..SQUARE_BITS_PER_AXIS {
+        id |= (((u32::from(square.x) >> i) & 1) as i64) << (2 * i);
+        id |= (((u32::from(square.y) >> i) & 1) as i64) << (2 * i + 1);
+    }
+    id
+}
+
+/// Inverse of [`square_id`]: `None` when the id is not a z9 Morton code
+/// (negative or past [`MAX_SQUARE_ID`]).
+pub fn square_from_id(id: i64) -> Option<Square> {
+    if !(0..=MAX_SQUARE_ID).contains(&id) {
+        return None;
+    }
+    let mut x: u16 = 0;
+    let mut y: u16 = 0;
+    for i in 0..SQUARE_BITS_PER_AXIS {
+        x |= (((id >> (2 * i)) & 1) as u16) << i;
+        y |= (((id >> (2 * i + 1)) & 1) as u16) << i;
+    }
+    Some(Square { x, y })
+}
+
 /// Halo ring radius in units for a latitude: 1 square to
 /// [`WIDE_RING_LAT_DEG`], 2 beyond (north-Greenland class, still computed).
 pub fn ring_radius(lat_deg: f64) -> u32 {
@@ -149,6 +184,33 @@ mod tests {
         assert_eq!(parse_square_name("z9/276/173"), Some(sq));
         assert_eq!(parse_square_name("z9/276"), None);
         assert_eq!(parse_square_name("841e309ffffffff"), None);
+    }
+
+    #[test]
+    fn square_id_roundtrips_through_morton_bits() {
+        for (x, y) in [(0, 0), (511, 511), (276, 173), (1, 0), (0, 1)] {
+            let square = Square { x, y };
+            assert_eq!(square_from_id(square_id(square)), Some(square));
+        }
+        assert_eq!(square_id(Square { x: 276, y: 173 }), 100_786);
+        assert_eq!(square_from_id(-1), None);
+        assert_eq!(square_from_id(MAX_SQUARE_ID + 1), None);
+    }
+
+    #[test]
+    fn arg_order_lat_lon_square_vs_lon_lat_grid() {
+        // square_of takes (lat, lon), lonlat_to_grid takes (lon, lat) — a
+        // swap must fail loudly here, not silently serve another square.
+        let sq = square_of(50.0, 14.25);
+        assert_eq!(sq, Square { x: 276, y: 173 });
+        assert_ne!(square_of(14.25, 50.0), sq);
+        // The z30 cell of the same point sits inside that square: x matches
+        // directly (z9→z30 is 21 bits), y is flipped (grid origin south,
+        // square origin north). Swapped grid args land on another continent.
+        let (gx, gy) = lonlat_to_grid(14.25, 50.0);
+        assert_eq!((gx >> 21, 511 - (gy >> 21)), (276, 173));
+        let (sx, sy) = lonlat_to_grid(50.0, 14.25);
+        assert_ne!((sx >> 21, 511 - (sy >> 21)), (276, 173));
     }
 
     #[test]

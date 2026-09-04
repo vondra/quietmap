@@ -26,7 +26,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use crate::poi_join::{JoinStats, PoiIndex};
-use crate::spill::{parse_ring_text, square_from_id};
+use crate::spill::{parse_ring_text, square_from_spill_key};
 
 mod write_airport;
 mod write_barriers;
@@ -211,14 +211,14 @@ fn load_poi_bucket(spill_dir: &Path, bucket: usize) -> Result<PoiIndex> {
 /// z9 range is skipped loud (never misfiled).
 fn flush_square(
     source: &str,
-    square_id: u32,
+    spill_key: u32,
     rows: &[Vec<String>],
     output_dir: &Path,
     poi_index: &PoiIndex,
     join_stats: &JoinStats,
 ) -> Result<String> {
-    let Some(square) = square_from_id(square_id) else {
-        anyhow::bail!("spill square id {square_id} outside the z9 range");
+    let Some(square) = square_from_spill_key(spill_key) else {
+        anyhow::bail!("spill key {spill_key} outside the z9 range");
     };
     let name = grid::square_name(square);
     let dir = output_dir
@@ -431,7 +431,7 @@ mod roundtrip_tests {
         write_buildings(
             &rows,
             &path,
-            crate::spill::square_from_id(100).unwrap(),
+            crate::spill::square_from_spill_key(100).unwrap(),
             &PoiIndex::default(),
             &stats,
         )

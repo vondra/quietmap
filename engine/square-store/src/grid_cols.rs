@@ -49,7 +49,8 @@ pub fn grid_cell_lonlat(gx: i32, gy: i32) -> (f64, f64) {
 }
 
 /// Decode a `geom` column value to its ring. `None` = null or truncated
-/// (caller stores null geometry, same as a point).
+/// (caller stores null geometry, same as a point). A 2-point value is a
+/// wall segment, not a ring — only barrier readers use it.
 pub fn decode_geom(bytes: Option<&[u8]>) -> Option<Vec<(i32, i32)>> {
     poly::decode_grid_poly(bytes?)
 }

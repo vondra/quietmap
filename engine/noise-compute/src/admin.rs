@@ -44,39 +44,9 @@ pub const RECORD_SIZE: usize = 8 + 1 + 2 + 2;
 /// The admin record's file name inside `<squares>/<square>/`.
 pub const ADMIN_FILE_NAME: &str = "admin.bin";
 
-/// Bits per z9 axis: 512 tiles per axis, so x/y are 9-bit values and the
-/// Morton id fits in 18 bits.
-const SQUARE_BITS_PER_AXIS: u32 = 9;
-
-/// Largest valid z-order square id: both axes at 511 interleave to 18 one-bits.
-pub const MAX_SQUARE_ID: i64 = (1 << (2 * SQUARE_BITS_PER_AXIS)) - 1;
-
-/// Morton z-order id of a z9 square: bit `i` of `x` goes to bit `2i`, bit `i`
-/// of `y` to bit `2i + 1`. The grid crate names the unit ([`grid::Square`],
-/// [`grid::square_of`); the integer id is what the prepared tree is keyed by.
-pub fn square_id(square: grid::Square) -> i64 {
-    let mut id: i64 = 0;
-    for i in 0..SQUARE_BITS_PER_AXIS {
-        id |= (((u32::from(square.x) >> i) & 1) as i64) << (2 * i);
-        id |= (((u32::from(square.y) >> i) & 1) as i64) << (2 * i + 1);
-    }
-    id
-}
-
-/// Inverse of [`square_id`]: `None` when the id is not a z9 Morton code
-/// (negative or past [`MAX_SQUARE_ID`]).
-pub fn square_from_id(id: i64) -> Option<grid::Square> {
-    if !(0..=MAX_SQUARE_ID).contains(&id) {
-        return None;
-    }
-    let mut x: u16 = 0;
-    let mut y: u16 = 0;
-    for i in 0..SQUARE_BITS_PER_AXIS {
-        x |= (((id >> (2 * i)) & 1) as u16) << i;
-        y |= (((id >> (2 * i + 1)) & 1) as u16) << i;
-    }
-    Some(grid::Square { x, y })
-}
+/// Integer square ids live in one place ([`grid::square_id`]); re-exported
+/// here so `admin::` paths keep working.
+pub use grid::{square_from_id, square_id, MAX_SQUARE_ID};
 
 /// Six major continents. Hand-coded ids must match the admin build script.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -316,16 +286,6 @@ mod tests {
         record.extend_from_slice(iso);
         record.extend_from_slice(&city.to_le_bytes());
         fs::write(path, record).unwrap();
-    }
-
-    #[test]
-    fn square_id_roundtrips_through_morton_bits() {
-        for (x, y) in [(0, 0), (511, 511), (276, 173), (1, 0), (0, 1)] {
-            let square = grid::Square { x, y };
-            assert_eq!(square_from_id(square_id(square)), Some(square));
-        }
-        assert_eq!(square_from_id(-1), None);
-        assert_eq!(square_from_id(MAX_SQUARE_ID + 1), None);
     }
 
     #[test]

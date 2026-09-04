@@ -5,7 +5,7 @@
 
 use crate::emission::aircraft::{typecode_to_string, PERIOD_SECONDS};
 use crate::types::{
-    CruiseBucketBreakdown, CruiseHexTopFlight, EmissionTrace, LayerKind, PropagationVariants,
+    CruiseBucketBreakdown, CruiseCellTopFlight, EmissionTrace, LayerKind, PropagationVariants,
     SegmentTrace,
 };
 
@@ -138,7 +138,7 @@ pub fn build_aircraft_airborne_subsegment_trace(
         received_lden: variants_to_lden(&variants),
         aircraft_subtype: 2,
         polyline: None,
-        hex_polygon: None,
+        cell_polygon: None,
         cruise_buckets: None,
         cruise_top_flights: None,
         length_m_per_kind: None,
@@ -146,22 +146,19 @@ pub fn build_aircraft_airborne_subsegment_trace(
 }
 
 /// Inputs for a cruise grid-cell aggregate trace.
-pub struct BuildAircraftCruiseR7Trace {
-    /// Explicit centroid (degrees) — the grid transfer replaced the old
-    /// R7 hex id with plain coordinates.
+pub struct BuildAircraftCruiseCellTrace {
+    /// Explicit centroid (degrees) of the aggregated cell.
     pub lon: f64,
     pub lat: f64,
     pub n_unique_flights: u32,
     pub rep_alt_m: f32,
-    pub centroid_lat: f64,
-    pub centroid_lon: f64,
     pub d_slant_m: f64,
     /// Linear-domain event-energy sum per period `[day, evening, night]`
     /// across every cruise row contributing to this grid cell.
     pub period_energies: [f64; 3],
     pub n_days: f64,
     pub cruise_buckets: Vec<CruiseBucketBreakdown>,
-    pub cruise_top_flights: Vec<CruiseHexTopFlight>,
+    pub cruise_top_flights: Vec<CruiseCellTopFlight>,
     /// Doc 29 breakdown for the representative sub-segment (loudest
     /// contributor to this cell's slant). CFFK fast path at cruise
     /// altitudes — `lambda_db` and `delta_i_db` are typically 0.0 since
@@ -169,10 +166,9 @@ pub struct BuildAircraftCruiseR7Trace {
     pub doc29: crate::types::Doc29Breakdown,
 }
 
-pub fn build_aircraft_cruise_r7_trace(inputs: BuildAircraftCruiseR7Trace) -> SegmentTrace {
+pub fn build_aircraft_cruise_cell_trace(inputs: BuildAircraftCruiseCellTrace) -> SegmentTrace {
     // Display + emission label is the z9 square name of the centroid
-    // (e.g. `z9/276/173`) — the grid-transfer replacement for the old
-    // R7 hex prefix.
+    // (e.g. `z9/276/173`).
     let square = grid::square_name(grid::square_of(inputs.lat, inputs.lon));
     let display_name = format!("Cruise over {square}");
     let cell_polygon = cruise_cell_polygon(inputs.lat, inputs.lon);
@@ -185,12 +181,12 @@ pub fn build_aircraft_cruise_r7_trace(inputs: BuildAircraftCruiseR7Trace) -> Seg
         name: display_name,
         subtype: "cruise".to_string(),
         is_dominant_of_group: false,
-        start_lat: inputs.centroid_lat,
-        start_lon: inputs.centroid_lon,
-        end_lat: inputs.centroid_lat,
-        end_lon: inputs.centroid_lon,
-        cp_lat: inputs.centroid_lat,
-        cp_lon: inputs.centroid_lon,
+        start_lat: inputs.lat,
+        start_lon: inputs.lon,
+        end_lat: inputs.lat,
+        end_lon: inputs.lon,
+        cp_lat: inputs.lat,
+        cp_lon: inputs.lon,
         length_m: 0.0,
         dist_m: 0.0,
         d_slant_m: inputs.d_slant_m,
@@ -205,7 +201,7 @@ pub fn build_aircraft_cruise_r7_trace(inputs: BuildAircraftCruiseR7Trace) -> Seg
         received_lden: variants_to_lden(&variants),
         aircraft_subtype: 3,
         polyline: None,
-        hex_polygon: Some(cell_polygon),
+        cell_polygon: Some(cell_polygon),
         cruise_buckets: Some(inputs.cruise_buckets),
         cruise_top_flights: Some(inputs.cruise_top_flights),
         length_m_per_kind: None,
@@ -213,9 +209,8 @@ pub fn build_aircraft_cruise_r7_trace(inputs: BuildAircraftCruiseR7Trace) -> Seg
 }
 
 /// Display polygon for a cruise grid-cell aggregate: small axis-aligned
-/// box around the centroid. Half-side is 2 km — the same scale as the old
-/// R7 cell boundary this replaced. Last vertex equals the first to close
-/// the GeoJSON ring. Display-only; the kernel never reads it.
+/// box around the centroid with 2 km half-side. Last vertex equals the
+/// first to close the GeoJSON ring. Display-only; the kernel never reads it.
 fn cruise_cell_polygon(lat: f64, lon: f64) -> Vec<(f64, f64)> {
     const HALF_SIDE_M: f64 = 2000.0;
     let d_lat = HALF_SIDE_M / crate::constants::M_PER_DEG_LAT;

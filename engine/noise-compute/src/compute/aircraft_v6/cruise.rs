@@ -18,7 +18,7 @@ use crate::emission::aircraft;
 use crate::flight_id::pack_synth;
 use crate::propagation::iso9613::fast_exp_f64;
 use crate::types::{
-    AircraftSegment, CruiseBucketBreakdown, CruiseHexTopFlight, RasterSampler, Receiver,
+    AircraftSegment, CruiseBucketBreakdown, CruiseCellTopFlight, RasterSampler, Receiver,
     TraceCollector,
 };
 
@@ -82,8 +82,7 @@ pub fn scatter(
     let rx_elev = receiver.altitude_m();
     let npd_luts = aircraft::NpdLuts::shared();
     // Trace aggregates keyed by the (i32, i32) z30 cell pair of the
-    // bucket centroid via the grid crate — the grid-transfer replacement
-    // for the old R7 hex id.
+    // bucket centroid via the grid crate.
     let mut cell_accums: HashMap<(i32, i32), CellAccum> = HashMap::new();
 
     // Centroid prefilter constants. rep_len_m is typically ~50 km
@@ -359,14 +358,12 @@ pub fn scatter(
                 screening_db: 0.0,
             };
             t.segments
-                .push(crate::traces::build_aircraft_cruise_r7_trace(
-                    crate::traces::BuildAircraftCruiseR7Trace {
+                .push(crate::traces::build_aircraft_cruise_cell_trace(
+                    crate::traces::BuildAircraftCruiseCellTrace {
                         lon: acc.centroid_lon,
                         lat: acc.centroid_lat,
                         n_unique_flights: acc.n_unique_flights.len() as u32,
                         rep_alt_m: acc.rep_alt_m,
-                        centroid_lat: acc.centroid_lat,
-                        centroid_lon: acc.centroid_lon,
                         d_slant_m: acc.d_slant_m,
                         period_energies: acc.period_energy,
                         n_days: n_days_f,
@@ -381,7 +378,7 @@ pub fn scatter(
 
 const TOP_FLIGHTS_PER_CELL: usize = 5;
 
-fn top_flights_for_cell(top_fids: &HashMap<u64, CellTopFlight>) -> Vec<CruiseHexTopFlight> {
+fn top_flights_for_cell(top_fids: &HashMap<u64, CellTopFlight>) -> Vec<CruiseCellTopFlight> {
     let mut entries: Vec<(u64, &CellTopFlight)> = top_fids.iter().map(|(f, t)| (*f, t)).collect();
     entries.sort_by(|a, b| {
         b.1.peak_lmax
@@ -396,7 +393,7 @@ fn top_flights_for_cell(top_fids: &HashMap<u64, CellTopFlight>) -> Vec<CruiseHex
             let (icao_hex, start_unix) = crate::flight_id::icao_hex_and_start_unix(fid);
             let date = start_unix.map(date_from_unix).unwrap_or_default();
             let time_utc = start_unix.map(time_from_unix).unwrap_or_default();
-            CruiseHexTopFlight {
+            CruiseCellTopFlight {
                 lmax_db: round1(t.peak_lmax),
                 altitude_m: round1(t.altitude_m),
                 date,

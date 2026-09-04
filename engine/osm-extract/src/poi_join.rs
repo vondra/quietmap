@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ids;
-use crate::spill::square_id;
+use crate::spill::spill_key;
 use grid::Square;
 
 /// Per-square POI points `(gx, gy, class)`, keyed by the numeric square id the
@@ -51,7 +51,7 @@ impl PoiIndex {
 
     fn square_pois(&self, square: Square) -> &[(i32, i32, u8)] {
         self.by_square
-            .get(&square_id(square))
+            .get(&spill_key(square))
             .map_or(&[], |v| v.as_slice())
     }
 }

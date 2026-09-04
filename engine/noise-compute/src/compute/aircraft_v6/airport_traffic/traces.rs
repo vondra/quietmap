@@ -417,7 +417,7 @@ pub(super) fn emit_segment_traces(
                 (acc.start_lat, acc.start_lon),
                 (acc.end_lat, acc.end_lon),
             ]),
-            hex_polygon: None,
+            cell_polygon: None,
             cruise_buckets: None,
             cruise_top_flights: None,
             length_m_per_kind: None,

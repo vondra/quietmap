@@ -17,13 +17,14 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-/// Numeric square id for spill/sort: `y * 512 + x`, fits u32.
-pub fn square_id(square: Square) -> u32 {
+/// Transient row-major partition key for spill/sort: `y * 512 + x`, fits u32.
+/// Scratch-only (spill text + bucketing) — never the persistent [`grid::square_id`].
+pub fn spill_key(square: Square) -> u32 {
     u32::from(square.y) * 512 + u32::from(square.x)
 }
 
-/// Square back from a spill id. `None` on out-of-range (stale spill guard).
-pub fn square_from_id(id: u32) -> Option<Square> {
+/// Square back from a [`spill_key`]. `None` on out-of-range (stale spill guard).
+pub fn square_from_spill_key(id: u32) -> Option<Square> {
     if id >= 512 * 512 {
         return None;
     }
@@ -106,7 +107,7 @@ impl Spiller {
     }
 
     fn bucket(&self, square: Square) -> usize {
-        square_id(square) as usize % self.num_buckets
+        spill_key(square) as usize % self.num_buckets
     }
 
     /// Emit a linear segment (road, railway, barrier). Endpoints snap to grid
@@ -131,7 +132,7 @@ impl Spiller {
         let _ = write!(
             w,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.1}",
-            square_id(square),
+            spill_key(square),
             osm_id,
             seg_idx,
             sgx,
@@ -322,7 +323,7 @@ impl Spiller {
             .unwrap_or_default();
 
         let w = &mut self.get_writer(name, bucket).writer;
-        let _ = write!(w, "{}\t{}\t{}\t{}", square_id(square), osm_id, cgx, cgy);
+        let _ = write!(w, "{}\t{}\t{}\t{}", spill_key(square), osm_id, cgx, cgy);
 
         match ftype {
             FeatureType::Building => {
@@ -423,11 +424,11 @@ impl Spiller {
         let bucket = self.bucket(square);
         let (gx, gy) = lonlat_to_grid(clon, clat);
         let w = &mut self.get_writer(FeatureType::Poi.name(), bucket).writer;
-        let _ = writeln!(w, "{}\t{}\t{}\t{}", square_id(square), gx, gy, class);
+        let _ = writeln!(w, "{}\t{}\t{}\t{}", spill_key(square), gx, gy, class);
     }
 
     pub fn flush_all(&mut self) -> Result<()> {
-        for (_, bf) in self.writers.iter_mut() {
+        for bf in self.writers.values_mut() {
             bf.writer.flush()?;
         }
         Ok(())
@@ -866,11 +867,11 @@ mod settlement_class_tests {
     }
 
     #[test]
-    fn square_id_roundtrip() {
+    fn spill_key_roundtrip() {
         let sq = Square { x: 276, y: 173 };
-        assert_eq!(square_id(sq), 173 * 512 + 276);
-        assert_eq!(square_from_id(173 * 512 + 276), Some(sq));
-        assert_eq!(square_from_id(512 * 512), None);
+        assert_eq!(spill_key(sq), 173 * 512 + 276);
+        assert_eq!(square_from_spill_key(173 * 512 + 276), Some(sq));
+        assert_eq!(square_from_spill_key(512 * 512), None);
     }
 
     #[test]

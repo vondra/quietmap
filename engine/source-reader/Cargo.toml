@@ -1,0 +1,32 @@
+[package]
+name = "source-reader"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["node"]
+node = ["dep:napi", "dep:napi-derive"]
+
+[lib]
+name = "source_reader"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+napi = { version = "2", features = ["serde-json"], optional = true }
+napi-derive = { version = "2", optional = true }
+arrow = { version = "54", default-features = false, features = ["ipc", "ffi"] }
+memmap2 = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+grid = { path = "../grid" }
+noise-compute = { path = "../noise-compute" }
+arrow-batching = { path = "../arrow-batching" }
+raster-reader = { path = "../raster-reader" }
+square-store = { path = "../square-store" }
+mimalloc = { version = "0.1", default-features = false }
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+napi-build = "2"

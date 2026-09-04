@@ -1,0 +1,14 @@
+[package]
+name = "raster-reader"
+version = "0.1.0"
+edition = "2021"
+description = "Raw 1°×1° raster tile reader — mmap'd, lazy/preloaded, global scale"
+
+[lib]
+name = "raster_reader"
+path = "src/lib.rs"
+
+[dependencies]
+grid = { path = "../grid" }
+memmap2 = "0.9"
+noise-compute = { path = "../noise-compute" }

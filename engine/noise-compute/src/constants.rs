@@ -149,8 +149,9 @@ pub const SOURCE_HEIGHT_LEISURE: f64 = 1.5;
 pub use grid::geo::{m_per_deg_lon, M_PER_DEG_LAT};
 
 /// Meters per degree of longitude at the equator (multiply by `cos(lat)` for
-/// a given latitude via [`m_per_deg_lon`]).
-pub const M_PER_DEG_LON_EQ: f64 = 111_320.0;
+/// a given latitude via [`m_per_deg_lon`]) — re-exported, single home is
+/// `grid::geo`.
+pub use grid::geo::M_PER_DEG_LON_EQ;
 /// Fallback building height (m) when a footprint has neither a mapped height
 /// nor a floor count — the last rung of the building height ladder
 /// (`height` → `floors × BUILDING_FLOOR_HEIGHT_M` → this).
