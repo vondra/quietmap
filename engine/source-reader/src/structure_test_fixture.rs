@@ -1,5 +1,5 @@
 //! Test double for `scripts/structures/build-structures.py` + the osm-extract
-//! finalizers: writes the structures_v2 per-square table (kind-tagged
+//! finalizers: writes the structures_v3 per-square table (kind-tagged
 //! buildings ∪ walls) and tiny road/rail/leisure/industrial arrows that the
 //! popup readers under test consume, with the contract metadata
 //! `square_store::store::load_square` gates on. Coordinates are lon/lat floats
@@ -23,7 +23,7 @@ use arrow::record_batch::RecordBatch;
 pub struct StructureRow {
     pub kind: u8, // square_store::store::STRUCTURE_KIND_*
     pub ring_lonlat: Option<Vec<(f64, f64)>>,
-    pub height_m: f32,
+    pub height_m: i16,
     pub height_tier: u8,
     pub envelope_class: u8,
     pub centroid_lonlat: Option<(f64, f64)>,
@@ -60,7 +60,7 @@ fn structure_schema(with_contract: bool) -> Schema {
     let fields = vec![
         Field::new("kind", DataType::UInt8, false),
         Field::new("geom", DataType::Binary, true),
-        Field::new("height_m", DataType::Float32, false),
+        Field::new("height_m", DataType::Int16, false),
         Field::new("height_tier", DataType::UInt8, false),
         Field::new("envelope_class", DataType::UInt8, false),
         Field::new("centroid_gx", DataType::Int32, false),
@@ -86,7 +86,7 @@ fn structure_schema(with_contract: bool) -> Schema {
     if with_contract {
         metadata.insert(
             "structures_contract".to_string(),
-            square_store::store::STRUCTURES_CONTRACT_V2.to_string(),
+            square_store::structure_contract::CONTRACT.to_string(),
         );
         metadata.insert(
             "grid".to_string(),
@@ -118,7 +118,7 @@ fn structure_columns(rows: &[StructureRow]) -> Vec<ArrayRef> {
             rows.iter()
                 .map(|r| r.ring_lonlat.as_ref().map(|ring| encode_ring(ring))),
         )),
-        Arc::new(Float32Array::from_iter_values(
+        Arc::new(Int16Array::from_iter_values(
             rows.iter().map(|r| r.height_m),
         )),
         Arc::new(UInt8Array::from_iter_values(
@@ -170,7 +170,7 @@ fn structure_columns(rows: &[StructureRow]) -> Vec<ArrayRef> {
     ]
 }
 
-/// One batch in the v2 layout — the readers' own batching is orthogonal to
+/// One batch in the current layout — the readers' own batching is orthogonal to
 /// what the tests assert, so a single batch is the honest shape.
 pub fn structure_batch(rows: &[StructureRow]) -> RecordBatch {
     RecordBatch::try_new(Arc::new(structure_schema(true)), structure_columns(rows)).unwrap()

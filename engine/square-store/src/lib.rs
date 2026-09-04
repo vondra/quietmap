@@ -4,6 +4,7 @@
 //! earth math), [`grid_cols`] (typed column + grid decoders), [`barriers`]
 //! (wall listing off the merged structure table), [`aircraft_contract`]
 //! (shared producer/runtime schema stamps).
+//! [`structure_contract`] validates the prepared screening-height boundary.
 //!
 //! Query kernels (roads/buildings/…) transfer with `noise-compute` — they
 //! need normalize/admin/envelope. This crate only opens files and decodes
@@ -14,3 +15,4 @@ pub mod barriers;
 pub mod geo;
 pub mod grid_cols;
 pub mod store;
+pub mod structure_contract;

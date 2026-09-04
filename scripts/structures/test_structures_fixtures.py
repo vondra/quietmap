@@ -60,7 +60,7 @@ def barriers_arrow(path, rows):
 
 class FakeGlobalPrior:
     def __init__(self, mtime=0.0):
-        self.mtime = mtime
+        self.input_identity = ("fake-ghsl", mtime)
 
     def sample(self, _lon, _lat):
         return 12.5
@@ -98,3 +98,16 @@ def ovt_row(polygon, h=8.0, tier=2, envelope=1):
     centroid = polygon.centroid
     return {"wkb": shapely.to_wkb(polygon), "height_m": h, "tier": tier,
             "clat": centroid.y, "clon": centroid.x, "envelope": envelope}
+
+
+def write_prepared_roundtrip(root):
+    root = Path(root)
+    square = root / SQUARE
+    square.mkdir(parents=True)
+    buildings_arrow(square / "buildings.arrow",
+                    [osm_row(0, OSM_POLY, 32.0, height=4.5)])
+    barriers_arrow(square / "barriers.arrow", [{
+        "osm_id": 77, "segment_idx": 0, "start_lat": 49.78, "start_lon": 14.17,
+        "end_lat": 49.7801, "end_lon": 14.1701, "height": 2.5, "height_tier": 0}])
+    BUILDER.build_square(SQUARE, root, [ovt_row(OVT_LONELY)], 0,
+                         FakeGlobalPrior(), None)

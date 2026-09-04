@@ -1,9 +1,10 @@
-"""The structures_v2 Arrow contract, source decoding, and emission preservation proof."""
+"""The structures_v3 Arrow contract, source decoding, and emission preservation proof."""
 
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.ipc as ipc
 import os
+import math
 
 import qmgrid
 from structure_inputs import grid_ring_to_shapely
@@ -13,14 +14,14 @@ KIND_BARRIER = 1
 EMISSION_GRID_THRESHOLD_M2 = 2000.0  # normalize/points.rs building grid threshold.
 
 CONTRACT_KEY = "structures_contract"
-CONTRACT_VERSION = "structures_v2"  # v1 was float lat/lon + WKB; v2 is int32 grid
+CONTRACT_VERSION = "structures_v3"  # z30 geometry and Int16 screening metres.
 
 SCHEMA = pa.schema(
     [
         pa.field("kind", pa.uint8(), nullable=False),
         # Snapped grid polygon (qmgrid.encode_grid_poly form), screening stock.
         pa.field("geom", pa.binary()),
-        pa.field("height_m", pa.float32(), nullable=False),
+        pa.field("height_m", pa.int16(), nullable=False),
         pa.field("height_tier", pa.uint8(), nullable=False),
         pa.field("envelope_class", pa.uint8(), nullable=False),
         pa.field("centroid_gx", pa.int32(), nullable=False),
@@ -61,6 +62,13 @@ EMISSION_COMPARE = [
     "addr_street", "addr_housenumber", "area_m2", "opening_hours_frac",
     "source_id",
 ]
+
+
+def screening_height_metres(value):
+    if not math.isfinite(value) or not 0 <= value <= 32767:
+        raise ValueError(f"screening height outside Int16 metres: {value!r}")
+    # Match Rust's round for nonnegative physical heights; never truncate.
+    return math.floor(value + 0.5)
 
 def require_column(table, path, name, dtype):
     if name not in table.column_names:

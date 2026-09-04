@@ -12,11 +12,13 @@ from shapely import STRtree
 import qmgrid
 import structure_contract
 import structure_inputs
+import structure_freshness
+from structure_freshness import input_fingerprint
 from structure_contract import (
     SCHEMA, CONTRACT_KEY, CONTRACT_VERSION, KIND_BUILDING, KIND_BARRIER,
     EMISSION_GRID_THRESHOLD_M2,
     load_osm_buildings, load_barriers, wall_grid_poly, wall_centroid_grid,
-    validate_square,
+    validate_square, screening_height_metres,
 )
 from structure_inputs import (
     ENVELOPE_FROM_BUILDING_USE, ENVELOPE_DEFAULT, ENVELOPE_OUTDOOR,
@@ -28,7 +30,7 @@ IOU_MATCH_THRESHOLD = 0.5
 def builder_version():
     """A source-code correction invalidates resume even with frozen inputs."""
     digest = sha256()
-    for module in (qmgrid, structure_contract, structure_inputs):
+    for module in (qmgrid, structure_contract, structure_inputs, structure_freshness):
         assert module.__file__ is not None
         digest.update(Path(module.__file__).read_bytes())
     for name in ("build-structures.py", "structure_merge.py"):
@@ -79,7 +81,7 @@ def match_pairs(osm_geoms, osm_geom_idx, overture_rows):
         pairs[j] = i
     return pairs
 
-def build_square(name, prepared_dir, overture_rows, overture_mtime, ghsl, regional):
+def build_square(name, prepared_dir, overture_rows, overture_inputs, ghsl, regional):
     """Write one square's structures.arrow; return the census dict, or None
     when the square is up to date (idempotent skip)."""
     square = qmgrid.parse_square_name(name)
@@ -94,22 +96,15 @@ def build_square(name, prepared_dir, overture_rows, overture_mtime, ghsl, region
         )
     overture_rows = overture_rows or []
     out_path = os.path.join(square_dir, "structures.arrow")
+    inputs = input_fingerprint(square_dir, overture_inputs, ghsl, regional)
     if os.path.exists(out_path):
-        out_mtime = os.path.getmtime(out_path)
-        inputs = [os.path.join(square_dir, n) for n in ("buildings.arrow", "barriers.arrow")]
-        mtimes = [os.path.getmtime(p) for p in inputs if os.path.exists(p)]
-        if overture_mtime is not None:
-            mtimes.append(overture_mtime)
-        mtimes.append(ghsl.mtime)
-        if regional is not None:
-            mtimes.append(regional.mtime)
         with ipc.open_file(out_path) as output_file:
             output_meta = output_file.schema.metadata or {}
-        if (max(mtimes) <= out_mtime
+        if (output_meta.get(b"input_fingerprint") == inputs.encode()
                 and output_meta.get(b"builder_version") == BUILDER_VERSION.encode()
                 and output_meta.get(CONTRACT_KEY.encode()) == CONTRACT_VERSION.encode()
                 and output_meta.get(b"grid") == b"z30"):
-            return None  # idempotent: no input is newer than the output
+            return None
     osm = load_osm_buildings(os.path.join(square_dir, "buildings.arrow"))
     barriers = load_barriers(os.path.join(square_dir, "barriers.arrow"))
 
@@ -175,7 +170,7 @@ def build_square(name, prepared_dir, overture_rows, overture_mtime, ghsl, region
             cgx, cgy = osm["centroid_gx"][i_osm], osm["centroid_gy"][i_osm]
         out["kind"].append(KIND_BUILDING)
         out["geom"].append(geom_blob)
-        out["height_m"].append(height_m)
+        out["height_m"].append(screening_height_metres(height_m))
         out["height_tier"].append(tier)
         out["envelope_class"].append(envelope)
         out["centroid_gx"].append(cgx)
@@ -237,7 +232,7 @@ def build_square(name, prepared_dir, overture_rows, overture_mtime, ghsl, region
         out["geom"].append(wall_grid_poly(
             b["start_gx"], b["start_gy"], b["end_gx"], b["end_gy"]))
         h = b["height"]
-        out["height_m"].append(h)
+        out["height_m"].append(screening_height_metres(h))
         out["height_tier"].append(b["height_tier"])
         out["envelope_class"].append(ENVELOPE_OUTDOOR)
         cgx, cgy = wall_centroid_grid(
@@ -260,6 +255,7 @@ def build_square(name, prepared_dir, overture_rows, overture_mtime, ghsl, region
     meta[CONTRACT_KEY] = CONTRACT_VERSION
     meta["grid"] = "z30"
     meta["builder_version"] = BUILDER_VERSION
+    meta["input_fingerprint"] = inputs
     meta["building_rows"] = str(n_osm + n_ovt_only)
     meta["barrier_rows"] = str(len(barriers))
     schema = SCHEMA.with_metadata(meta)

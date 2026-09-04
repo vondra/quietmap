@@ -55,8 +55,7 @@ pub fn query_barriers_from_batches(
             .ok_or_else(|| "structures.arrow missing required osm_id column".to_string())?;
         let segment_idx = col_i16(batch, "segment_idx")
             .ok_or_else(|| "structures.arrow missing required segment_idx column".to_string())?;
-        let height = col_f32(batch, "height_m")
-            .ok_or_else(|| "structures.arrow missing required height_m column".to_string())?;
+        let height = crate::structure_contract::heights(batch)?;
         let geometry = col_binary(batch, "geom")
             .ok_or_else(|| "structures.arrow missing required geom column".to_string())?;
         let cgx = col_i32(batch, "centroid_gx")
@@ -96,7 +95,7 @@ pub fn query_barriers_from_batches(
             results.push(BarrierResult {
                 osm_id: osm_id.value(i),
                 segment_idx: segment_idx.value(i),
-                height: height.value(i),
+                height: f32::from(height.value(i)),
                 lat: mid_lat,
                 lon: mid_lon,
                 start_lat: s_lat,
@@ -169,7 +168,7 @@ mod tests {
             kind.push(STRUCTURE_KIND_BARRIER);
             osm_id.push(id);
             seg.push(idx);
-            height.push(3.0);
+            height.push(3);
             geom.push(Some(grid::poly::encode_grid_poly(&[
                 (s_gx, s_gy),
                 (e_gx, e_gy),
@@ -181,7 +180,7 @@ mod tests {
             kind.push(0);
             osm_id.push(42);
             seg.push(0);
-            height.push(8.0);
+            height.push(8);
             geom.push(None);
             cgx.push(0);
             cgy.push(0);
@@ -190,18 +189,28 @@ mod tests {
             Field::new("kind", DataType::UInt8, false),
             Field::new("osm_id", DataType::Int64, true),
             Field::new("segment_idx", DataType::Int16, true),
-            Field::new("height_m", DataType::Float32, false),
+            Field::new("height_m", DataType::Int16, false),
             Field::new("geom", DataType::Binary, true),
             Field::new("centroid_gx", DataType::Int32, false),
             Field::new("centroid_gy", DataType::Int32, false),
-        ]);
+        ])
+        .with_metadata(std::collections::HashMap::from([
+            (
+                "structures_contract".to_string(),
+                crate::structure_contract::CONTRACT.to_string(),
+            ),
+            (
+                "grid".to_string(),
+                crate::store::GRID_CONTRACT_Z30.to_string(),
+            ),
+        ]));
         RecordBatch::try_new(
             Arc::new(schema),
             vec![
                 Arc::new(UInt8Array::from(kind)),
                 Arc::new(Int64Array::from(osm_id)),
                 Arc::new(Int16Array::from(seg)),
-                Arc::new(Float32Array::from(height)),
+                Arc::new(Int16Array::from(height)),
                 Arc::new(BinaryArray::from_opt_vec(
                     geom.iter().map(|g| g.as_deref()).collect(),
                 )),

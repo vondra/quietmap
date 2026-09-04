@@ -36,8 +36,8 @@ def main():
         if square is None:
             ap.error(f"not a square name: {name}")
         x, y = square
-        ovt, ovt_mtime = read_overture_parquet(args.overture_parquet, (x, y))
-        census = build_square(name, args.prepared_dir, ovt, ovt_mtime, ghsl, regional)
+        ovt, ovt_inputs = read_overture_parquet(args.overture_parquet, (x, y))
+        census = build_square(name, args.prepared_dir, ovt, ovt_inputs, ghsl, regional)
         if census is None:
             totals["fresh_skip"] += 1
         else:

@@ -160,12 +160,9 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
 
     let structures = LazyArrow::open(&dir.join("structures.arrow"));
     let leisure = LazyArrow::open(&dir.join("leisure.arrow"));
-    check_contract(
-        &structures,
-        "structures_contract",
-        STRUCTURES_CONTRACT_V2,
-        "structures.arrow",
-    )?;
+    if let Some(schema) = structures.schema() {
+        crate::structure_contract::validate_schema(schema)?;
+    }
     check_contract(
         &leisure,
         "leisure_contract",
@@ -207,7 +204,6 @@ pub const STRUCTURE_KIND_BARRIER: u8 = 1;
 /// Per-file contract stamps (sources of truth: `osm-extract::finalize`,
 /// `scripts/structures/build-structures.py`). Mirrored here so the popup
 /// rejects a stale file whose semantics predate the current schema.
-pub const STRUCTURES_CONTRACT_V2: &str = "structures_v2";
 pub const LEISURE_CONTRACT_V2: &str = "leisure_v2";
 pub const GRID_CONTRACT_Z30: &str = "z30";
 

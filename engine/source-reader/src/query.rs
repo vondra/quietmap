@@ -1381,7 +1381,7 @@ mod square_query_tests {
         fx::StructureRow {
             kind: square_store::store::STRUCTURE_KIND_BUILDING,
             ring_lonlat: Some(fx::square_ring_lonlat(LAT, LON)),
-            height_m: 12.0,
+            height_m: 12,
             height_tier: 0,
             envelope_class: 1,
             centroid_lonlat: Some((LON + 0.0001, LAT + 0.0001)),
@@ -1404,7 +1404,7 @@ mod square_query_tests {
                 fx::StructureRow {
                     kind: square_store::store::STRUCTURE_KIND_BARRIER,
                     ring_lonlat: Some(vec![(LON, LAT), (LON + 0.001, LAT + 0.001)]),
-                    height_m: 3.0,
+                    height_m: 3,
                     height_tier: 0,
                     envelope_class: 0,
                     centroid_lonlat: Some((LON + 0.0005, LAT + 0.0005)),
@@ -1416,7 +1416,7 @@ mod square_query_tests {
                 fx::StructureRow {
                     kind: square_store::store::STRUCTURE_KIND_BUILDING,
                     ring_lonlat: Some(fx::square_ring_lonlat(LAT + 0.001, LON + 0.001)),
-                    height_m: 8.0,
+                    height_m: 8,
                     height_tier: 2,
                     envelope_class: 5,
                     centroid_lonlat: Some((LON + 0.001, LAT + 0.001)),
@@ -1506,7 +1506,7 @@ mod square_query_tests {
         fx::StructureRow {
             kind: square_store::store::STRUCTURE_KIND_BARRIER,
             ring_lonlat: Some(vec![(lon, lat), (lon + 0.001, lat + 0.001)]),
-            height_m: 3.0,
+            height_m: 3,
             height_tier: 0,
             envelope_class: 0,
             centroid_lonlat: Some((lon + 0.0005, lat + 0.0005)),

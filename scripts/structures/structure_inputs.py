@@ -12,6 +12,7 @@ import shapely.ops
 from pyproj import Transformer
 
 import qmgrid
+from structure_freshness import file_identity
 
 MEASURED_MIN_M = 2.0      # zonal pixels below this are "not a building surface here"
 COVERAGE_MIN_FRAC = 0.30  # measured pixels must cover this share of the footprint
@@ -28,11 +29,6 @@ ENVELOPE_OUTDOOR = 0
 ENVELOPE_DEFAULT = 5
 ENVELOPE_FROM_BUILDING_USE = {0: 1, 1: 2, 2: 3}
 
-def raster_mtime(ds):
-    """Newest mtime over every file the raster is made of."""
-    return max(os.path.getmtime(f) for f in ds.files)
-
-
 class GlobalPrior:
     """GHS-BUILT-H ANBH: nearest-pixel value at a WGS84 point (windowed reads)."""
 
@@ -44,7 +40,7 @@ class GlobalPrior:
         if self.crs is None:
             raise SystemExit(f"{path}: raster is not georeferenced — re-fetch it")
         self.tr = Transformer.from_crs("EPSG:4326", self.crs, always_xy=True)
-        self.mtime = raster_mtime(self.ds)
+        self.input_identity = [file_identity(f) for f in sorted(self.ds.files)]
 
     def sample(self, lon, lat):
         x, y = self.tr.transform(lon, lat)
@@ -69,7 +65,7 @@ class RegionalHeights:
         self.gt = ds.transform
         self.w, self.h = ds.width, ds.height
         self.tr = Transformer.from_crs("EPSG:4326", ds.crs, always_xy=True)
-        self.mtime = raster_mtime(ds)
+        self.input_identity = [file_identity(f) for f in sorted(ds.files)]
         self.arr = ds.read(1).astype(np.float32, copy=False)
         nodata = ds.nodata
         if nodata is not None:
@@ -212,13 +208,13 @@ def read_overture_parquet(parquet_dir, square):
     rule, then assigned to this square by GEOS centroid. A z9 square never
     straddles the antimeridian (spans slice [-180, 180)), so no unwrapping.
 
-    Returns (rows, newest parquet mtime)."""
+    Returns (rows, identities of every contributing parquet)."""
     from shapely import wkb as shapely_wkb
 
     x, y = square
     lon0, lat_top, lon1, lat_bot = qmgrid.square_lonlat_span(x, y)
     rows = []
-    newest_mtime = None
+    inputs = []
     for lat in range(math.floor(lat_bot), math.floor(lat_top) + 1):
         for lon in range(math.floor(lon0), math.ceil(lon1)):
             name = f"{'N' if lat >= 0 else 'S'}{abs(lat):02d}{'E' if lon >= 0 else 'W'}{abs(lon):03d}"
@@ -228,8 +224,7 @@ def read_overture_parquet(parquet_dir, square):
                     f"{qmgrid.square_name(x, y)}: Overture parquet {src} is missing — run "
                     f"scripts/overture/download-overture-world.sh first"
                 )
-            mtime = os.path.getmtime(src)
-            newest_mtime = mtime if newest_mtime is None else max(newest_mtime, mtime)
+            inputs.append(file_identity(src))
             pf = pq.ParquetFile(src)
             have = set(pf.schema_arrow.names)
             cols = [c for c in ("geometry", "height", "num_floors", "class",
@@ -262,7 +257,7 @@ def read_overture_parquet(parquet_dir, square):
                          "clat": clat, "clon": clon,
                          "envelope": envelope_class(bc, st, ug)}
                     )
-    return rows, newest_mtime
+    return rows, inputs
 
 def apply_raster_tiers(rows, regional, ghsl, stats):
     """Tiers 3/4 over row dicts keyed (tier, height_m, clat, clon, geom): the

@@ -52,6 +52,7 @@ use noise_compute::propagation::obstacle_index_file::{fnv1a64, IndexBlob, BUILDE
 use crate::query::squares_within_reach;
 use square_store::grid_cols::{decode_geom, ring_lonlat};
 use square_store::store::{STRUCTURE_KIND_BARRIER, STRUCTURE_KIND_BUILDING};
+use square_store::structure_contract;
 
 /// Per-square index cache capacity. A dense metro square's index runs to low
 /// hundreds of MB; popups cluster spatially, so a small LRU covers the
@@ -571,19 +572,10 @@ fn log_square_load(square: Square, how: &str, edges: usize, t0: std::time::Insta
 /// centroid. The rule itself lives in [`noise_compute::low_profile`] (shared
 /// with the tile painter's loader, so popup and tiles cap the same footprints).
 ///
-/// A table without the OSM attribute columns is a pre-merge file: nothing to
-/// cap against, so an empty lookup is the right answer — a correction layer
-/// that cannot be applied is not an error. A parse failure of the in-memory
-/// bytes IS an error: swallowing it would cap NOTHING and [`square_index`] would
-/// write that uncapped index to disk AND to the memo under the NORMAL
-/// fingerprint, so every later query reports garages at 8 m instead of 3 m
-/// until the file's mtime happens to move (2026-08-08 review; the tile
-/// painter's twin has always failed loud here, and popup ≠ tiles at every capped
-/// footprint is exactly what this rule exists to prevent).
 fn low_profile_from_structures(bytes: &[u8], label: &Path) -> Result<LowProfileLookup, String> {
-    let empty = || Ok(LowProfileLookup::default());
     let reader = FileReader::try_new(Cursor::new(bytes), None)
         .map_err(|e| format!("arrow open {}: {e}", label.display()))?;
+    structure_contract::validate_schema(reader.schema().as_ref())?;
     let mut lookup = LowProfileLookup::default();
     for batch in reader {
         let batch = batch.map_err(|e| format!("arrow batch {}: {e}", label.display()))?;
@@ -607,7 +599,10 @@ fn low_profile_from_structures(bytes: &[u8], label: &Path) -> Result<LowProfileL
                 .column_by_name("area_m2")
                 .and_then(|c| c.as_any().downcast_ref::<Float32Array>()),
         ) else {
-            return empty(); // pre-merge schema → no capping, never an error
+            return Err(format!(
+                "{}: missing current structure emission columns",
+                label.display()
+            ));
         };
         // The merge moves an OSM-matched row's screening centroid to the
         // Overture footprint's; the OSM one survives as emission_centroid_*.
@@ -676,21 +671,10 @@ fn build_square_index(square: Square, structures_arrow: &Path) -> Result<Obstacl
         batches
             .push(batch.map_err(|e| format!("arrow batch {}: {e}", structures_arrow.display()))?);
     }
-    for (idx, batch) in batches.iter().enumerate() {
-        let c = batch
-            .schema_ref()
-            .metadata()
-            .get("structures_contract")
-            .map(String::as_str);
-        if c != Some(square_store::store::STRUCTURES_CONTRACT_V2) {
-            return Err(format!(
-                "{}[batch {idx}]: structures_contract mismatch (expected {}, got {c:?}) — \
-                 rebuild the square with scripts/structures/build-structures.py",
-                structures_arrow.display(),
-                square_store::store::STRUCTURES_CONTRACT_V2,
-            ));
-        }
-    }
+    let batch_heights: Vec<_> = batches
+        .iter()
+        .map(structure_contract::heights)
+        .collect::<Result<_, _>>()?;
     // The index inserts rows in `screening_ordinal` order (its dense ids follow
     // the sort): the engine's exact-δ tie resolution is scan-order sensitive,
     // and the migration's ordinals reproduce the legacy obstacles.arrow order.
@@ -729,10 +713,7 @@ fn build_square_index(square: Square, structures_arrow: &Path) -> Result<Obstacl
             .column_by_name("geom")
             .and_then(|c| c.as_any().downcast_ref::<BinaryArray>())
             .ok_or_else(|| format!("{}: missing geom", structures_arrow.display()))?;
-        let heights = batch
-            .column_by_name("height_m")
-            .and_then(|c| c.as_any().downcast_ref::<Float32Array>())
-            .ok_or_else(|| format!("{}: missing height_m", structures_arrow.display()))?;
+        let heights = batch_heights[batch_idx];
         let tiers = batch
             .column_by_name("height_tier")
             .and_then(|c| c.as_any().downcast_ref::<UInt8Array>());
@@ -745,12 +726,6 @@ fn build_square_index(square: Square, structures_arrow: &Path) -> Result<Obstacl
         let area_col = batch
             .column_by_name("area_m2")
             .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
-        if heights.is_null(i) {
-            return Err(format!(
-                "{}: null height_m at row {i}",
-                structures_arrow.display()
-            ));
-        }
         let ring = decode_geom(Some(geom.value(i))).ok_or_else(|| {
             format!(
                 "{}: row {i} geom is not a grid ring",
@@ -760,7 +735,7 @@ fn build_square_index(square: Square, structures_arrow: &Path) -> Result<Obstacl
         let id = next_id;
         match kinds.value(i) {
             STRUCTURE_KIND_BUILDING => {
-                let mut height = heights.value(i);
+                let mut height = f32::from(heights.value(i));
                 if let (Some(tiers), Some(cgxs), Some(cgys)) = (tiers, cgxs, cgys) {
                     if !tiers.is_null(i) && !cgxs.is_null(i) && !cgys.is_null(i) {
                         let (clon, clat) =
@@ -800,7 +775,7 @@ fn build_square_index(square: Square, structures_arrow: &Path) -> Result<Obstacl
                     .into_iter()
                     .map(|(lon, lat)| (lat, lon))
                     .collect();
-                builder.add_polyline(&pts, heights.value(i), ObstacleKind::Barrier, id);
+                builder.add_polyline(&pts, f32::from(heights.value(i)), ObstacleKind::Barrier, id);
             }
             other => {
                 return Err(format!(
@@ -878,16 +853,14 @@ pub fn footprints_in_bbox(
             .map_err(|e| format!("structure_store: {}: {e}", path.display()))?;
         for batch in reader {
             let batch = batch.map_err(|e| format!("structure_store: {}: {e}", path.display()))?;
-            let (Some(kinds), Some(geom), Some(heights), Some(cgxs), Some(cgys)) = (
+            let heights = structure_contract::heights(&batch)?;
+            let (Some(kinds), Some(geom), Some(cgxs), Some(cgys)) = (
                 batch
                     .column_by_name("kind")
                     .and_then(|c| c.as_any().downcast_ref::<UInt8Array>()),
                 batch
                     .column_by_name("geom")
                     .and_then(|c| c.as_any().downcast_ref::<BinaryArray>()),
-                batch
-                    .column_by_name("height_m")
-                    .and_then(|c| c.as_any().downcast_ref::<Float32Array>()),
                 batch
                     .column_by_name("centroid_gx")
                     .and_then(|c| c.as_any().downcast_ref::<Int32Array>()),
@@ -923,7 +896,7 @@ pub fn footprints_in_bbox(
                 let Some(ring) = decode_geom(Some(geom.value(i))) else {
                     continue;
                 };
-                let raw = heights.value(i);
+                let raw = f32::from(heights.value(i));
                 let tier = tiers.map(|t| t.value(i)).unwrap_or(0);
                 let area = area_col
                     .filter(|a| !a.is_null(i))
@@ -945,6 +918,10 @@ pub fn footprints_in_bbox(
     }
     Ok(out)
 }
+
+#[cfg(test)]
+#[path = "structure_producer_tests.rs"]
+mod producer_tests;
 
 #[cfg(test)]
 mod tests {
@@ -970,7 +947,7 @@ mod tests {
         fx::StructureRow {
             kind: STRUCTURE_KIND_BUILDING,
             ring_lonlat: Some(fx::square_ring_lonlat(LAT, LON)),
-            height_m: 12.0,
+            height_m: 12,
             height_tier: 0,
             envelope_class: 1, // Residential
             centroid_lonlat: Some((LON + 0.0001, LAT + 0.0001)),
@@ -1029,7 +1006,7 @@ mod tests {
             &[fx::StructureRow {
                 kind: STRUCTURE_KIND_BARRIER,
                 ring_lonlat: Some(vec![(LON, LAT), (LON + 0.001, LAT + 0.001)]),
-                height_m: 3.0,
+                height_m: 3,
                 height_tier: 0,
                 envelope_class: 0,
                 centroid_lonlat: Some((LON + 0.0005, LAT + 0.0005)),
@@ -1048,7 +1025,7 @@ mod tests {
     }
 
     #[test]
-    fn dateline_wall_stays_local_after_structures_v2_roundtrip() {
+    fn dateline_wall_stays_local_after_structures_roundtrip() {
         let tmp = TempDir::new().unwrap();
         let square = grid::square_of(0.0, -180.0);
         fx::write_square_structures(
@@ -1057,7 +1034,7 @@ mod tests {
             &[fx::StructureRow {
                 kind: STRUCTURE_KIND_BARRIER,
                 ring_lonlat: Some(vec![(179.999, 0.0), (-179.999, 0.0)]),
-                height_m: 3.0,
+                height_m: 3,
                 height_tier: 0,
                 envelope_class: 0,
                 centroid_lonlat: Some((-180.0, 0.0)),

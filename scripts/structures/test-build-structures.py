@@ -44,7 +44,7 @@ class BuildStructuresTests(unittest.TestCase):
         # Matched: Overture ladder height (tier 2 -> GHSL 12.5 -> tier 4), the
         # raw OSM height stays the emission input.
         self.assertEqual(row["height_tier"], 4)
-        self.assertAlmostEqual(row["height_m"], 12.5)
+        self.assertEqual(row["height_m"], 13)
         self.assertIsNone(row["height"])
         # The screening centroid is the Overture one; the OSM centroid rides the
         # emission override.
@@ -110,7 +110,7 @@ class BuildStructuresTests(unittest.TestCase):
         census, t = self.build([])
         self.assertEqual(t.num_rows, 3)
         self.assertEqual(t.column("height_tier").to_pylist(), [0, 1, 2])
-        self.assertEqual(t.column("height_m").to_pylist(), [4.5, 15.0, 8.0])
+        self.assertEqual(t.column("height_m").to_pylist(), [5, 15, 8])
         # The node row has no geometry; the others do.
         self.assertIsNone(t.column("geom")[2].as_py())
 
@@ -135,9 +135,9 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertEqual(ring[0], GRID.lonlat_to_grid(14.17, 49.78))
         # Unmapped buildings use GHSL; walls retain the extractor's explicit tiers.
         self.assertEqual(t.column("height_tier").to_pylist(), [4, 4, 4, 2, 0])
-        self.assertEqual(t.column("height_m").to_pylist()[-2:], [3.0, 4.5])
+        self.assertEqual(t.column("height_m").to_pylist()[-2:], [3, 5])
         meta = t.schema.metadata
-        self.assertEqual(meta[b"structures_contract"], b"structures_v2")
+        self.assertEqual(meta[b"structures_contract"], b"structures_v3")
         self.assertEqual(meta[b"building_rows"], b"3")
         self.assertEqual(meta[b"barrier_rows"], b"2")
 
