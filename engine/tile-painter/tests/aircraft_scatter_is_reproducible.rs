@@ -11,8 +11,8 @@
 
 use std::sync::Arc;
 
-use noise_compute::compute::aircraft_v6::views::{BBox, SubSegmentSlice};
-use noise_compute::compute::aircraft_v6::{AirborneRowView, CruiseRowView};
+use noise_compute::compute::aircraft_v6::views::BBox;
+use noise_compute::compute::aircraft_v6::CruiseRowView;
 use noise_compute::emission::aircraft::{ClassWeights, SegmentTerrain};
 use noise_compute::propagation::obstacle_index::ObstacleSet;
 use raster_reader::fused_grid::FusedGrid;
@@ -21,12 +21,16 @@ use tile_painter::accumulator::TileAccumulator;
 use tile_painter::grid::{pixel_lat, pixel_lon, tile_bbox, TILE_PX};
 use tile_painter::source_loader_structure::InteriorEstimate;
 
+mod aircraft_source_fixture;
+use aircraft_source_fixture::{
+    airborne_rows, cruise_row, flight_columns, jitter, SubSegmentScalars, TERRAIN_M,
+};
+
 /// A z13 tile over central Bohemia, flat terrain — the receiver lattice is all the
 /// NPD aircraft painters read.
 const ZOOM: u8 = 13;
 const TILE_X: u32 = 4415;
 const TILE_Y: u32 = 2787;
-const TERRAIN_M: f32 = 300.0;
 
 fn flat_tile() -> FusedTileZ13 {
     // `tile_painter::grid` and `raster_reader::fused_tile_z13` each carry a `TileBbox`;
@@ -59,11 +63,18 @@ fn flat_tile() -> FusedTileZ13 {
     }
 }
 
-/// A reproducible per-source offset. The sources have to land at COMPARABLE energies
-/// with differing low bits — a wide spread would be order-independent for the opposite
-/// reason (a term below `max * 2^-24` is a no-op wherever it is added).
-fn jitter(i: usize, salt: u64) -> f64 {
-    ((i as u64).wrapping_mul(2_654_435_761).wrapping_add(salt) % 997) as f64 * 1.0e-5
+/// Flat terrain under every cruise row, in row order.
+fn flat_cruise_terrain(rows: usize) -> Vec<Option<SegmentTerrain>> {
+    vec![
+        Some(SegmentTerrain {
+            start_elev: TERRAIN_M as f64,
+            q1_elev: TERRAIN_M as f64,
+            mid_elev: TERRAIN_M as f64,
+            q3_elev: TERRAIN_M as f64,
+            end_elev: TERRAIN_M as f64,
+        });
+        rows
+    ]
 }
 
 fn paint<F>(threads: usize, paint_tile: F) -> Vec<u32>
@@ -110,39 +121,15 @@ fn cruise_tile_bytes_do_not_depend_on_the_core_count() {
     const BUCKETS: usize = 2_048;
     let rows: Vec<CruiseRowView<'static>> = (0..BUCKETS)
         .map(|i| {
-            let lat = centre_lat + 0.06 * (jitter(i, 11) * 1.0e5 / 997.0 - 0.5);
-            let lon = centre_lon + 0.09 * (jitter(i, 23) * 1.0e5 / 997.0 - 0.5);
-            let cell = h3o::LatLng::new(lat, lon)
-                .expect("fixture lat/lon")
-                .to_cell(h3o::Resolution::Seven);
-            let near = i % 1_024 == 0;
-            CruiseRowView {
-                r7_hex: u64::from(cell),
-                class: 0,
-                rep_profile_idx: 0,
-                fl_bin: 0,
-                period: (i % 3) as u8,
-                sum_length_m: 40_000.0 + (i % 97) as f32,
-                rep_len_m: 900.0 + (i % 31) as f32,
-                rep_alt_m: if near { 4_000.0 } else { 11_000.0 },
-                rep_speed_kt: 430.0 + (i % 41) as f32,
-                source_id: 0,
-                origin: 0,
-                unique_count: 1,
-                top_candidates: &[],
-            }
+            cruise_row(
+                i,
+                centre_lat + 0.06 * (jitter(i, 11) * 1.0e5 / 997.0 - 0.5),
+                centre_lon + 0.09 * (jitter(i, 23) * 1.0e5 / 997.0 - 0.5),
+                i % 1_024 == 0,
+            )
         })
         .collect();
-    let terrain = vec![
-        Some(SegmentTerrain {
-            start_elev: TERRAIN_M as f64,
-            q1_elev: TERRAIN_M as f64,
-            mid_elev: TERRAIN_M as f64,
-            q3_elev: TERRAIN_M as f64,
-            end_elev: TERRAIN_M as f64,
-        });
-        rows.len()
-    ];
+    let terrain = flat_cruise_terrain(rows.len());
 
     let scatter = |accum: &mut TileAccumulator| {
         let stats = tile_painter::cruise::scatter_tile(&tile, &rows, &terrain, accum);
@@ -154,100 +141,6 @@ fn cruise_tile_bytes_do_not_depend_on_the_core_count() {
         );
     };
     assert_bit_identical(&paint(1, scatter), &paint(8, scatter), "cruise");
-}
-
-/// Per-flight sub-segment columns, in `SubSegmentSlice` order:
-/// `[start_lat, start_lon, start_alt_m, end_lat, end_lon, end_alt_m]`. Owned by the test
-/// because the row views borrow them.
-type FlightColumns = [Vec<f32>; 6];
-
-/// One flight per index, one sub-segment per entry of `offset_deg` — the sub-segment starts
-/// that far north-east of the tile centre and runs 0.01° further, at `altitude_m`.
-fn flight_columns(
-    flights: usize,
-    offset_deg: &[f64],
-    altitude_m: impl Fn(usize, usize) -> f32,
-    centre_lat: f64,
-    centre_lon: f64,
-) -> Vec<FlightColumns> {
-    (0..flights)
-        .map(|i| {
-            let axis = |base: f64, extra: f64, salt: u64| -> Vec<f32> {
-                offset_deg
-                    .iter()
-                    .map(|d| (base + d + extra + jitter(i, salt)) as f32)
-                    .collect()
-            };
-            let alt: Vec<f32> = (0..offset_deg.len()).map(|b| altitude_m(i, b)).collect();
-            [
-                axis(centre_lat, 0.0, 11),
-                axis(centre_lon, 0.0, 23),
-                alt.clone(),
-                axis(centre_lat, 0.01, 17),
-                axis(centre_lon, 0.01, 29),
-                alt,
-            ]
-        })
-        .collect()
-}
-
-/// The per-sub-segment scalar columns every fixture shares. `flags & 1` = departure; the
-/// terrain elevations are the tile's, so the endpoint ground-stale gate passes.
-struct SubSegmentScalars {
-    period: Vec<u8>,
-    date_id: Vec<i16>,
-    flags: Vec<u8>,
-    speed_kt: Vec<f32>,
-    length_m: Vec<f32>,
-    terrain_elev_m: Vec<f32>,
-}
-
-impl SubSegmentScalars {
-    fn new(sub_segments: usize) -> Self {
-        Self {
-            period: (0..sub_segments).map(|i| (i % 3) as u8).collect(),
-            date_id: vec![10; sub_segments],
-            flags: vec![1; sub_segments],
-            speed_kt: vec![220.0; sub_segments],
-            length_m: vec![1_500.0; sub_segments],
-            terrain_elev_m: vec![TERRAIN_M; sub_segments],
-        }
-    }
-}
-
-fn airborne_rows<'a>(
-    columns: &'a [FlightColumns],
-    scalars: &'a SubSegmentScalars,
-    bbox: BBox,
-) -> Vec<AirborneRowView<'a>> {
-    columns
-        .iter()
-        .enumerate()
-        .map(|(i, flight)| AirborneRowView {
-            flight_id: noise_compute::flight_id::pack_synth(i as u64),
-            callsign: "TEST",
-            aircraft_type: *b"A320",
-            profile_idx: (i % 8) as u8,
-            source_id: 0,
-            origin: 0,
-            sub_segments: SubSegmentSlice {
-                start_lat: &flight[0],
-                start_lon: &flight[1],
-                start_alt_m: &flight[2],
-                end_lat: &flight[3],
-                end_lon: &flight[4],
-                end_alt_m: &flight[5],
-                speed_kt: &scalars.speed_kt,
-                length_m: &scalars.length_m,
-                period: &scalars.period,
-                date_id: &scalars.date_id,
-                flags: &scalars.flags,
-                terrain_start_elev_m: &scalars.terrain_elev_m,
-                terrain_end_elev_m: &scalars.terrain_elev_m,
-            },
-            bbox,
-        })
-        .collect()
 }
 
 #[test]

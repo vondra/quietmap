@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use h3o::CellIndex;
 use noise_compute::emission::aircraft::{SegmentPrepared, RECEIVER_HORIZON_MAX_M};
 use noise_compute::propagation::obstacle_index::ObstacleSet;
@@ -146,15 +146,33 @@ pub(crate) fn build_dem_blocks(
     r4: u64,
     tiles: &[(u32, u32)],
 ) -> Result<(Vec<PrepBlock>, Arc<ObstacleSet>)> {
-    let obstacles = load_region_structures(h3r4_dir, r4)?;
-    let region_halo = cell_horizon_halo(rasters, z, r4);
+    let obstacles = load_region_structures(h3r4_dir, r4)?.shared_set();
+    let blocks = prepare_receiver_blocks(rasters, z, bn, r4, tiles, &obstacles)?;
+    Ok((blocks, obstacles))
+}
+
+/// The tile-dependent half of [`build_dem_blocks`], split out so it can be exercised for a
+/// whole-cell and a windowed request side by side without a prepared structure table.
+///
+/// Everything a tile reads here is a function of the TILE and the CELL, never of the other
+/// tiles in the request: its block comes from [`group_tiles_into_batches`], its terrain halo
+/// from [`cell_horizon_halo`], and its receiver lattice and interior stamp from the tile alone.
+fn prepare_receiver_blocks(
+    rasters: &RealRasters,
+    z: u8,
+    bn: u32,
+    r4: u64,
+    tiles: &[(u32, u32)],
+    obstacles: &ObstacleSet,
+) -> Result<Vec<PrepBlock>> {
+    let region_halo = cell_horizon_halo(rasters, z, r4)?;
     let batches = group_tiles_into_batches(tiles, bn);
     // Parallel across blocks: receiver-altitude construction is sequential by design ("the caller
     // usually parallelises across batches, not within them") and the interior bake adds a
     // point-in-footprint classify + an exact distance transform over all 512² receivers per tile.
     // Left serial, a 120-tile cell would put that whole cost on the ONE prep thread that has to
     // stay ahead of the device workers. Same shape as the surface runner's `par_iter` block prep.
-    let blocks = batches
+    Ok(batches
         .into_iter()
         .collect::<Vec<_>>()
         .into_par_iter()
@@ -176,13 +194,12 @@ pub(crate) fn build_dem_blocks(
             let interiors = block
                 .tile_refs()
                 .into_iter()
-                .map(|tile| obstacles.interior_estimate(tile))
+                .map(|tile| InteriorEstimate::bake(tile, obstacles))
                 .collect();
             block.interiors = interiors;
             block
         })
-        .collect();
-    Ok((blocks, obstacles.shared_set()))
+        .collect())
 }
 
 /// The elevation halo every block of one cell shares: the bbox of the tiles the CELL owns plus
@@ -192,19 +209,36 @@ pub(crate) fn build_dem_blocks(
 /// ULP, and a request that paints part of a cell could no longer be compared byte for byte
 /// against the whole-cell paint. That is what a bounded release check needs, and it also makes
 /// the dev `--bbox` / `--tile-x` paths read the terrain production reads.
-fn cell_horizon_halo(rasters: &RealRasters, z: u8, r4: u64) -> Arc<FusedGrid> {
-    let receivers = tiles_bbox(z, &region_tiles(r4, z));
+fn cell_horizon_halo(rasters: &RealRasters, z: u8, r4: u64) -> Result<Arc<FusedGrid>> {
+    let receivers = tiles_bbox(z, &region_tiles(r4, z))
+        .with_context(|| format!("horizon halo of R4 {r4:015x}"))?;
     rasters.preload_dem_bbox(
         receivers.south_lat,
         receivers.north_lat,
         receivers.west_lon,
         receivers.east_lon,
     );
-    FusedTileZ13::build_elevation_halo(&receivers, RECEIVER_HORIZON_MAX_M, rasters)
+    Ok(FusedTileZ13::build_elevation_halo(
+        &receivers,
+        RECEIVER_HORIZON_MAX_M,
+        rasters,
+    ))
 }
 
-/// The bounding box of a tile set at `z`.
-fn tiles_bbox(z: u8, tiles: &[(u32, u32)]) -> TileBbox {
+/// The bounding box of a tile set at `z`, as one un-wrapped Mercator rectangle.
+///
+/// Refuses the two tile sets that have no such rectangle, so neither reaches `FusedGrid` as a
+/// silent monster:
+///   * empty — a cell with no tile at this zoom (an R4 above Mercator's +-85 degree cut owns
+///     none). Both callers already return before an empty tile list, so this is a named
+///     impossibility rather than a live path.
+///   * straddling the antimeridian — `region_tiles` scans every column for such a cell and
+///     returns tiles at both seam strips (measured: R4 8422591ffffffff owns 197 tiles spanning
+///     the full 360 degrees), so min/max describes the whole globe. A grid that wide is ~31 GB
+///     of `FusedPixel` and would abort the process; one named `fail` parks the cell instead and
+///     leaves the worker its queue. Nothing regresses: this is what the whole-cell production
+///     path has always handed `build_dem_blocks`. `region_tiles` carries the matching caveat.
+fn tiles_bbox(z: u8, tiles: &[(u32, u32)]) -> Result<TileBbox> {
     let (mut south, mut north, mut west, mut east) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
     for &(tx, ty) in tiles {
         let bbox = tile_bbox(z, tx, ty);
@@ -213,12 +247,22 @@ fn tiles_bbox(z: u8, tiles: &[(u32, u32)]) -> TileBbox {
         west = west.min(bbox.west_lon);
         east = east.max(bbox.east_lon);
     }
-    TileBbox {
+    if tiles.is_empty() {
+        bail!("no tile at z{z} to bound");
+    }
+    if east - west > 180.0 {
+        bail!(
+            "tiles span {:.1} degrees of longitude: this cell straddles the antimeridian and has \
+             no single Mercator bounding box",
+            east - west
+        );
+    }
+    Ok(TileBbox {
         west_lon: west,
         east_lon: east,
         north_lat: north,
         south_lat: south,
-    }
+    })
 }
 
 /// The region's vector building footprints — the SAME `grid_disk(1)` load the CPU aircraft
@@ -377,6 +421,219 @@ mod tests {
     const ZOOM: u8 = 13;
     const WINDOW: [(u32, u32); 4] = [(4414, 2786), (4415, 2786), (4414, 2787), (4415, 2787)];
 
+    /// One bug class: a tile set with no single Mercator rectangle silently becomes a monster
+    /// grid. Measured over the prepared world on 2026-09-04 (121 790 R4 cells under
+    /// `<prepared>/2026/h3r4`): 65 cells' boundaries span more than 180 degrees of longitude, and
+    /// five of those carry an `airborne.arrow` — so this is live work, not a hypothetical. Such a
+    /// cell owns z13 tiles at BOTH seam strips, its bbox is the whole globe, and the halo would
+    /// be ~31 GB of `FusedPixel`; a cell above Mercator's cut owns no tile at all and the min/max
+    /// sentinels would survive into the grid. Both are named refusals — one `fail` parks the cell
+    /// and leaves the worker its queue, where the whole-cell production path has always handed
+    /// `build_dem_blocks` the same impossible box. A high-latitude cell that IS one rectangle
+    /// must keep working.
+    #[test]
+    fn a_cell_without_one_mercator_rectangle_is_refused_by_name() {
+        // All three are cells of the prepared world. 84bb005ffffffff (-41.4, 179.8) carries
+        // airborne.arrow and owns 129 z13 tiles spanning the full 360 degrees; 8403205ffffffff
+        // (89.5 N) is above the Mercator cut and owns none; 8401515ffffffff (Svalbard, 78 N)
+        // owns 1527 tiles inside one 2.07-degree-wide rectangle.
+        const ANTIMERIDIAN: u64 = 0x84bb005ffffffff;
+        const ABOVE_MERCATOR: u64 = 0x8403205ffffffff;
+        const HIGH_LATITUDE: u64 = 0x8401515ffffffff;
+
+        let seam_tiles = region_tiles(ANTIMERIDIAN, ZOOM);
+        assert_eq!(seam_tiles.len(), 129);
+        let straddling =
+            tiles_bbox(ZOOM, &seam_tiles).expect_err("an antimeridian cell has no single bbox");
+        assert!(format!("{straddling:#}").contains("antimeridian"));
+
+        let polar = tiles_bbox(ZOOM, &region_tiles(ABOVE_MERCATOR, ZOOM))
+            .expect_err("a cell above the Mercator cut owns no tile");
+        assert!(format!("{polar:#}").contains("no tile"));
+
+        let arctic = tiles_bbox(ZOOM, &region_tiles(HIGH_LATITUDE, ZOOM))
+            .expect("a high-latitude cell away from the seam is one rectangle");
+        assert!(arctic.north_lat > 77.0 && arctic.east_lon - arctic.west_lon < 5.0);
+    }
+
+    /// One bug class, at the CALL SITE: a windowed request prepares different receivers than the
+    /// whole-cell request it was carved out of. This runs the production block builder twice for
+    /// one cell — once with every tile the cell owns, once with a window of them — and demands
+    /// that each kept tile come back in the same block, at the same batch origin, over the same
+    /// terrain halo, with a bit-identical receiver lattice and the same interior stamp. z11 keeps
+    /// the whole-cell side to nine tiles; the code path is the one z13 production runs.
+    #[test]
+    fn a_windowed_request_prepares_the_same_receivers_as_the_whole_cell() {
+        use tile_painter::stream_tile_window::TileWindow;
+
+        const COARSE_ZOOM: u8 = 11;
+        const BATCH_N: u32 = 3;
+        let rasters = RealRasters::new(&std::env::temp_dir().join("quietmap-absent-rasters"));
+        let obstacles = ObstacleSet::empty();
+        let owned = region_tiles(DOBRIS, COARSE_ZOOM);
+        assert_eq!(owned.len(), 9, "the fixture cell must own a small tile set");
+        let window = TileWindow {
+            x: owned.iter().map(|tile| tile.0).min().unwrap(),
+            y: owned.iter().map(|tile| tile.1).min().unwrap(),
+            side: 2,
+        };
+        let windowed = window.select(owned.clone()).unwrap();
+        assert!(windowed.len() < owned.len() && !windowed.is_empty());
+
+        let whole_blocks =
+            prepare_receiver_blocks(&rasters, COARSE_ZOOM, BATCH_N, DOBRIS, &owned, &obstacles)
+                .unwrap();
+        let windowed_blocks = prepare_receiver_blocks(
+            &rasters,
+            COARSE_ZOOM,
+            BATCH_N,
+            DOBRIS,
+            &windowed,
+            &obstacles,
+        )
+        .unwrap();
+        assert!(windowed_blocks.len() < whole_blocks.len());
+
+        let stamped = |interior: &InteriorEstimate| {
+            use raster_reader::fused_tile_z13::TILE_PX;
+            let mut cells = vec![200u8; TILE_PX * TILE_PX];
+            interior.apply(&mut cells);
+            cells
+        };
+        let find = |blocks: &[PrepBlock], tile: (u32, u32)| {
+            let block = blocks
+                .iter()
+                .find(|block| block.btiles.contains(&tile))
+                .expect("every requested tile is prepared exactly once");
+            let slot = block.btiles.iter().position(|&t| t == tile).unwrap();
+            let receivers = block.tile_refs()[slot];
+            (
+                (block.bx, block.by),
+                (block.batch.base_x, block.batch.base_y),
+                receivers.rx_lat,
+                receivers.rx_lon,
+                receivers.rx_alt_m.clone(),
+                receivers.inner_elev_m.clone(),
+                stamped(&block.interiors[slot]),
+                block.batch.tiles[0].halo.packed_elevation_grid(),
+            )
+        };
+        for &tile in &windowed {
+            let whole = find(&whole_blocks, tile);
+            let narrowed = find(&windowed_blocks, tile);
+            assert_eq!(whole.0, narrowed.0, "tile {tile:?} changed block");
+            assert_eq!(whole.1, narrowed.1, "tile {tile:?} changed batch origin");
+            assert_eq!(
+                whole.2, narrowed.2,
+                "tile {tile:?} changed receiver latitudes"
+            );
+            assert_eq!(
+                whole.3, narrowed.3,
+                "tile {tile:?} changed receiver longitudes"
+            );
+            assert_eq!(
+                whole.4, narrowed.4,
+                "tile {tile:?} changed receiver altitudes"
+            );
+            assert_eq!(whole.5, narrowed.5, "tile {tile:?} changed terrain");
+            assert_eq!(
+                whole.6, narrowed.6,
+                "tile {tile:?} changed its interior stamp"
+            );
+            let (whole_halo, narrowed_halo) = (&whole.7, &narrowed.7);
+            assert_eq!(
+                (
+                    whole_halo.lat_min,
+                    whole_halo.lon_min,
+                    whole_halo.rows,
+                    whole_halo.cols
+                ),
+                (
+                    narrowed_halo.lat_min,
+                    narrowed_halo.lon_min,
+                    narrowed_halo.rows,
+                    narrowed_halo.cols
+                ),
+                "tile {tile:?} marched its horizon over a different halo lattice"
+            );
+        }
+        // Every tile the window dropped is still prepared by the whole-cell request, so the
+        // narrowing removed receivers and nothing else.
+        for tile in owned.iter().filter(|tile| !windowed.contains(tile)) {
+            assert!(whole_blocks.iter().any(|block| block.btiles.contains(tile)));
+        }
+    }
+
+    /// One bug class: the painted tile set leaks into ADMISSION. `region_candidates` builds its
+    /// admit envelope from the CELL, so a windowed paint must still admit every source the whole
+    /// cell admits — including one that sits outside the painted window entirely. If the envelope
+    /// were ever re-derived from the tiles a request paints, this flight would vanish from a
+    /// windowed cell and its tiles would go quiet against the whole-cell reference.
+    #[test]
+    fn admission_comes_from_the_cell_and_never_from_the_painted_window() {
+        use noise_compute::compute::aircraft_v6::views::{BBox, SubSegmentSlice};
+        use noise_compute::compute::aircraft_v6::AirborneRowView;
+        use noise_gpu::airborne::region_candidates;
+
+        // The window's own bbox, and a flight one tile-width north-east of its corner — inside
+        // the cell and inside the admit reach, outside everything the window paints.
+        let window = tiles_bbox(ZOOM, &WINDOW).unwrap();
+        let far_lat = (window.north_lat + 0.05) as f32;
+        let far_lon = (window.east_lon + 0.06) as f32;
+        assert!(
+            f64::from(far_lat) > window.north_lat && f64::from(far_lon) > window.east_lon,
+            "the fixture flight must lie outside the painted window"
+        );
+        let columns: [Vec<f32>; 6] = [
+            vec![far_lat],
+            vec![far_lon],
+            vec![900.0],
+            vec![far_lat + 0.01],
+            vec![far_lon + 0.01],
+            vec![900.0],
+        ];
+        let speed = vec![220.0f32];
+        let length = vec![1_500.0f32];
+        let period = vec![0u8];
+        let date = vec![10i16];
+        let flags = vec![1u8];
+        let terrain = vec![300.0f32];
+        let views = vec![AirborneRowView {
+            flight_id: noise_compute::flight_id::pack_synth(1),
+            callsign: "TEST",
+            aircraft_type: *b"A320",
+            profile_idx: 0,
+            source_id: 0,
+            origin: 0,
+            sub_segments: SubSegmentSlice {
+                start_lat: &columns[0],
+                start_lon: &columns[1],
+                start_alt_m: &columns[2],
+                end_lat: &columns[3],
+                end_lon: &columns[4],
+                end_alt_m: &columns[5],
+                speed_kt: &speed,
+                length_m: &length,
+                period: &period,
+                date_id: &date,
+                flags: &flags,
+                terrain_start_elev_m: &terrain,
+                terrain_end_elev_m: &terrain,
+            },
+            bbox: BBox {
+                min_lat: far_lat,
+                max_lat: far_lat + 0.01,
+                min_lon: far_lon,
+                max_lon: far_lon + 0.01,
+            },
+        }];
+        assert_eq!(
+            region_candidates(&views, DOBRIS, ZOOM).len(),
+            1,
+            "the cell must admit a source outside the window it happens to paint"
+        );
+    }
+
     /// One bug class: a paint narrowed by a `tiles=` window differs from the whole-cell paint.
     /// Every block of a cell marches its receiver horizons over ONE shared elevation halo. A halo
     /// anchored to the tiles a request paints would start on a different lattice origin, and a
@@ -392,9 +649,11 @@ mod tests {
         let owned = region_tiles(DOBRIS, ZOOM);
         assert!(WINDOW.iter().all(|tile| owned.contains(tile)));
 
-        let cell = cell_horizon_halo(&rasters, ZOOM, DOBRIS).packed_elevation_grid();
+        let cell = cell_horizon_halo(&rasters, ZOOM, DOBRIS)
+            .unwrap()
+            .packed_elevation_grid();
         let window_anchored = FusedTileZ13::build_elevation_halo(
-            &tiles_bbox(ZOOM, &WINDOW),
+            &tiles_bbox(ZOOM, &WINDOW).unwrap(),
             RECEIVER_HORIZON_MAX_M,
             &rasters,
         )

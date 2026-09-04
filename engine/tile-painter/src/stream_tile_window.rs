@@ -96,9 +96,16 @@ pub fn parse_r4_cell_hex(hex: &str) -> Result<u64> {
     Ok(region_r4)
 }
 
-/// The tiles one streamed cell writes: everything the cell owns, narrowed to `window` when
-/// the line carried one. Every stream painter resolves its write set through this one rule,
-/// so a windowed cell and a whole-cell run can never disagree about which tiles are its own.
+/// The tiles one streamed cell writes: everything the cell owns, INTERSECTED with `window`
+/// when the line carried one. Every stream painter resolves its write set through this one
+/// rule, so a windowed cell and a whole-cell run can never disagree about which tiles are its
+/// own.
+///
+/// A window is a square in tile space, not a cell selector, so it usually overlaps several
+/// cells and each of them paints only its own share — that is how the release check's 4x4
+/// square is painted exactly once by the two cells that own it. An empty intersection is a
+/// refusal, never a whole-cell paint: the caller named a cell that owns nothing it asked for,
+/// and painting the whole cell would silently deliver a hundredfold of the work it budgeted.
 pub fn streamed_cell_tiles(
     region_r4: u64,
     zoom: u8,
@@ -123,11 +130,13 @@ pub struct StreamedAircraftCell {
 
 /// Parse one aircraft `--stream` line: `<r4hex>`, optionally followed by `tiles=x,y,side` —
 /// the same token the surface painter reads. Blank and `#` comment lines carry no work
-/// (`Ok(None)`).
+/// (`Ok(None)`). Without the token the cell paints every tile it owns, which is what a world
+/// task sends (`scripts/world/worker.py` in the ops repository writes bare cell ids).
 ///
-/// A malformed window is an error, never a silently whole-cell paint: the caller asked for a
-/// bounded area and would otherwise get every tile the cell owns — a hundredfold of the work
-/// it budgeted, written over tiles it never named.
+/// The window is INTERSECTED with the cell's own tiles ([`streamed_cell_tiles`]); a cell whose
+/// share of the square is empty fails by name. A malformed window is an error too, never a
+/// silently whole-cell paint: the caller asked for a bounded area and would otherwise get every
+/// tile the cell owns — a hundredfold of the work it budgeted, over tiles it never named.
 pub fn parse_aircraft_stream_line(line: &str) -> Result<Option<StreamedAircraftCell>> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
@@ -215,16 +224,19 @@ mod tests {
         assert!(refusal("841e309ffffffff tiles=4414,2786,0").contains("positive"));
         assert!(refusal("841e309ffffffff tiles=4414,2786,x").contains("unsigned integer"));
         assert!(refusal("841e309ffffffff tiles=4414,2786,4 tiles=1,2,3").contains("only once"));
-        assert!(streamed_cell_tiles(
+        // A window that overlaps no tile of this cell fails by name; it must never fall back
+        // to painting the whole cell.
+        let empty = streamed_cell_tiles(
             DOBRIS,
             ZOOM,
             Some(TileWindow {
                 x: 0,
                 y: 0,
-                side: 4
-            })
+                side: 4,
+            }),
         )
-        .is_err());
+        .expect_err("a window this cell owns nothing in must be refused");
+        assert!(format!("{empty:#}").contains("selects no tiles owned by this cell"));
     }
 
     /// The window the release check paints: 13 of its 16 tiles belong to Dobris and the
