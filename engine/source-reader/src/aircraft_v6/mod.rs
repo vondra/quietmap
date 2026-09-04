@@ -164,7 +164,7 @@ pub fn add_v6_aircraft_to_result(
     // already reject such files above; this is the in-kernel safety net.
     let class_weights = build_class_weights(airborne_batches, airport_traffic_batches, n_days)?;
     let airborne_rows = AirborneRowAccum::new(airborne_batches);
-    let cruise_rows = CruiseRowAccum::new(cruise_batches);
+    let cruise_rows = CruiseRowAccum::new(cruise_batches)?;
     let traffic_rows = AirportTrafficRowAccum::new(airport_traffic_batches);
     // Only the `!traffic_views.is_empty()` branch below ever consults the
     // summary lookup, so when this popup's 7-hex ring holds no airport_traffic
@@ -458,11 +458,10 @@ pub(super) const EXPECTED_AIRPORT_TRAFFIC_CONTRACT: &str = "airport_traffic_v9";
 /// at `1/ga_n_days`. A v3 reader ignores it and ships the +14.8 dB phantom.
 pub(super) const EXPECTED_AIRBORNE_CONTRACT: &str = "airborne_v4";
 
-/// Expected `cruise_contract` metadata. v16 drops the tautological
-/// `flags` column (always IS_DEPARTURE per Doc 29 §A.3.2). Older
-/// cruise.arrow files lack columns the popup expects; silent skip
-/// would zero out cruise contributions at every receiver.
-pub(super) const EXPECTED_CRUISE_CONTRACT: &str = "cruise_v17";
+/// Expected `cruise_contract` metadata for z9-local files. Dev1's
+/// `cruise_v17` stores a legacy spatial cell id; accepting that stamp while reading
+/// explicit `lon`/`lat` silently zeroed cruise at every receiver.
+pub(super) const EXPECTED_CRUISE_CONTRACT: &str = "cruise_z9_v1";
 
 fn assert_metadata_value(
     label: &str,
@@ -536,9 +535,8 @@ pub(super) fn assert_airborne_contract(label: &str, batches: &[RecordBatch]) -> 
     )
 }
 
-/// Guard the `cruise.arrow` spatial-resolution contract. Pre-v15 files
-/// stored an `r8_hex` column; the popup/heatmap readers silently skip
-/// batches whose cruise-bucket column is missing, hiding the version skew.
+/// Guard the z9 `cruise.arrow` spatial contract. The z9 producer stores
+/// explicit `lon`/`lat`; dev1 contracts store a legacy cell id instead.
 pub(super) fn assert_cruise_contract(label: &str, batches: &[RecordBatch]) -> Result<(), String> {
     assert_schema_version(label, batches)?;
     assert_metadata_value(
@@ -546,6 +544,6 @@ pub(super) fn assert_cruise_contract(label: &str, batches: &[RecordBatch]) -> Re
         batches,
         "cruise_contract",
         EXPECTED_CRUISE_CONTRACT,
-        "re-extract cruise stage 2B",
+        "rebuild the cruise z9 data",
     )
 }

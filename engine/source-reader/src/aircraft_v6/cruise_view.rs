@@ -13,7 +13,24 @@
 use arrow::array::*;
 use noise_compute::compute::aircraft_v6::{CruiseRowView, CruiseTopCandidateView};
 
-use super::columns::{col_f32, col_f64, col_list, col_u32, col_u8};
+fn required_column<'a, T: Array + 'static>(
+    column: Option<&'a ArrayRef>,
+    batch_index: usize,
+    name: &str,
+) -> Result<&'a T, String> {
+    column
+        .and_then(|array| array.as_any().downcast_ref::<T>())
+        .ok_or_else(|| {
+            let expected = std::any::type_name::<T>()
+                .rsplit("::")
+                .next()
+                .unwrap_or("expected Arrow array");
+            format!(
+                "cruise.arrow[batch {batch_index}] `{name}` is missing or has the wrong \
+                 Arrow type (expected {expected}) — rebuild the cruise z9 data"
+            )
+        })
+}
 
 pub struct CruiseRowAccum {
     rows: Vec<OwnedCruiseRow>,
@@ -44,82 +61,107 @@ struct OwnedCruiseRow {
 }
 
 impl CruiseRowAccum {
-    pub fn new(batches: &[arrow::record_batch::RecordBatch]) -> Self {
+    pub fn new(batches: &[arrow::record_batch::RecordBatch]) -> Result<Self, String> {
         let mut rows = Vec::new();
-        for batch in batches {
+        for (batch_index, batch) in batches.iter().enumerate() {
             let n = batch.num_rows();
-            if n == 0 {
-                continue;
+            let lon =
+                required_column::<Float64Array>(batch.column_by_name("lon"), batch_index, "lon")?;
+            let lat =
+                required_column::<Float64Array>(batch.column_by_name("lat"), batch_index, "lat")?;
+            let class =
+                required_column::<UInt8Array>(batch.column_by_name("class"), batch_index, "class")?;
+            let rep_pi = required_column::<UInt8Array>(
+                batch.column_by_name("rep_profile_idx"),
+                batch_index,
+                "rep_profile_idx",
+            )?;
+            let fl_bin = required_column::<UInt8Array>(
+                batch.column_by_name("fl_bin"),
+                batch_index,
+                "fl_bin",
+            )?;
+            let period = required_column::<UInt8Array>(
+                batch.column_by_name("period"),
+                batch_index,
+                "period",
+            )?;
+            let sum_len = required_column::<Float32Array>(
+                batch.column_by_name("sum_length_m"),
+                batch_index,
+                "sum_length_m",
+            )?;
+            let rep_len = required_column::<Float32Array>(
+                batch.column_by_name("rep_len_m"),
+                batch_index,
+                "rep_len_m",
+            )?;
+            let rep_alt = required_column::<Float32Array>(
+                batch.column_by_name("rep_alt_m"),
+                batch_index,
+                "rep_alt_m",
+            )?;
+            let rep_speed = required_column::<Float32Array>(
+                batch.column_by_name("rep_speed_kt"),
+                batch_index,
+                "rep_speed_kt",
+            )?;
+            let unique_count = required_column::<UInt32Array>(
+                batch.column_by_name("unique_count"),
+                batch_index,
+                "unique_count",
+            )?;
+            let source_id = required_column::<UInt8Array>(
+                batch.column_by_name("source_id"),
+                batch_index,
+                "source_id",
+            )?;
+            let origin = required_column::<UInt8Array>(
+                batch.column_by_name("origin"),
+                batch_index,
+                "origin",
+            )?;
+            let cand_list = required_column::<ListArray>(
+                batch.column_by_name("top_candidates"),
+                batch_index,
+                "top_candidates",
+            )?;
+            let cand_struct = required_column::<StructArray>(
+                Some(cand_list.values()),
+                batch_index,
+                "top_candidates.item",
+            )?;
+            let cand_fid_arr = required_column::<UInt64Array>(
+                cand_struct.column_by_name("flight_id"),
+                batch_index,
+                "top_candidates.flight_id",
+            )?;
+            let cand_callsign_arr = required_column::<StringArray>(
+                cand_struct.column_by_name("callsign"),
+                batch_index,
+                "top_candidates.callsign",
+            )?;
+            let cand_tc_arr = required_column::<FixedSizeBinaryArray>(
+                cand_struct.column_by_name("aircraft_type"),
+                batch_index,
+                "top_candidates.aircraft_type",
+            )?;
+            if cand_tc_arr.value_length() != 4 {
+                return Err(format!(
+                    "cruise.arrow[batch {batch_index}] `top_candidates.aircraft_type` \
+                     must be FixedSizeBinary(4) — rebuild the cruise z9 data"
+                ));
             }
-            let (Some(lon), Some(lat)) = (col_f64(batch, "lon"), col_f64(batch, "lat")) else {
-                continue;
-            };
-            let Some(class) = col_u8(batch, "class") else {
-                continue;
-            };
-            let Some(rep_pi) = col_u8(batch, "rep_profile_idx") else {
-                continue;
-            };
-            let Some(fl_bin) = col_u8(batch, "fl_bin") else {
-                continue;
-            };
-            let Some(period) = col_u8(batch, "period") else {
-                continue;
-            };
-            let Some(sum_len) = col_f32(batch, "sum_length_m") else {
-                continue;
-            };
-            let Some(rep_len) = col_f32(batch, "rep_len_m") else {
-                continue;
-            };
-            let Some(rep_alt) = col_f32(batch, "rep_alt_m") else {
-                continue;
-            };
-            let Some(rep_speed) = col_f32(batch, "rep_speed_kt") else {
-                continue;
-            };
-            let Some(unique_count) = col_u32(batch, "unique_count") else {
-                continue;
-            };
-            let source_id = col_u8(batch, "source_id");
-            let origin = col_u8(batch, "origin");
-            let Some(cand_list) = col_list(batch, "top_candidates") else {
-                continue;
-            };
-            let Some(cand_struct) = cand_list.values().as_any().downcast_ref::<StructArray>()
-            else {
-                continue;
-            };
-            let Some(cand_fid_arr) = cand_struct
-                .column_by_name("flight_id")
-                .and_then(|a| a.as_any().downcast_ref::<UInt64Array>())
-            else {
-                continue;
-            };
-            let Some(cand_callsign_arr) = cand_struct
-                .column_by_name("callsign")
-                .and_then(|a| a.as_any().downcast_ref::<StringArray>())
-            else {
-                continue;
-            };
-            let Some(cand_tc_arr) = cand_struct
-                .column_by_name("aircraft_type")
-                .and_then(|a| a.as_any().downcast_ref::<FixedSizeBinaryArray>())
-            else {
-                continue;
-            };
-            let Some(cand_lmax_arr) = cand_struct
-                .column_by_name("peak_lmax_25m_db")
-                .and_then(|a| a.as_any().downcast_ref::<Float32Array>())
-            else {
-                continue;
-            };
-            let Some(cand_alt_arr) = cand_struct
-                .column_by_name("altitude_m")
-                .and_then(|a| a.as_any().downcast_ref::<Float32Array>())
-            else {
-                continue;
-            };
+            let cand_lmax_arr = required_column::<Float32Array>(
+                cand_struct.column_by_name("peak_lmax_25m_db"),
+                batch_index,
+                "top_candidates.peak_lmax_25m_db",
+            )?;
+            let cand_alt_arr = required_column::<Float32Array>(
+                cand_struct.column_by_name("altitude_m"),
+                batch_index,
+                "top_candidates.altitude_m",
+            )?;
             let cand_offsets = cand_list.value_offsets();
             for i in 0..n {
                 let lo = cand_offsets[i] as usize;
@@ -150,8 +192,8 @@ impl CruiseRowAccum {
                     rep_len_m: rep_len.value(i),
                     rep_alt_m: rep_alt.value(i),
                     rep_speed_kt: rep_speed.value(i),
-                    source_id: source_id.map(|a| a.value(i)).unwrap_or(0),
-                    origin: origin.map(|a| a.value(i)).unwrap_or(0),
+                    source_id: source_id.value(i),
+                    origin: origin.value(i),
                     unique_count: unique_count.value(i),
                     cand_fid,
                     cand_callsign,
@@ -161,7 +203,7 @@ impl CruiseRowAccum {
                 });
             }
         }
-        Self { rows }
+        Ok(Self { rows })
     }
 
     /// Returns the owned candidate slice per row. Caller borrows
@@ -225,5 +267,47 @@ impl<'a> CruiseViewSlices<'a> {
                 top_candidates: self.cand_views[i].as_slice(),
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use arrow::{datatypes::Schema, record_batch::RecordBatch};
+
+    use super::super::{assert_cruise_contract, EXPECTED_CRUISE_CONTRACT, EXPECTED_SCHEMA_VERSION};
+    use super::*;
+
+    fn empty_batch(cruise_contract: &str) -> RecordBatch {
+        let metadata = HashMap::from([
+            (
+                "schema_version".to_string(),
+                EXPECTED_SCHEMA_VERSION.to_string(),
+            ),
+            ("cruise_contract".to_string(), cruise_contract.to_string()),
+        ]);
+        RecordBatch::new_empty(Arc::new(Schema::new_with_metadata(
+            Vec::<arrow::datatypes::Field>::new(),
+            metadata,
+        )))
+    }
+
+    #[test]
+    fn dev1_cruise_contract_is_not_accepted_as_z9() {
+        let error = assert_cruise_contract("cruise.arrow", &[empty_batch("cruise_v17")])
+            .expect_err("dev1 legacy schema must not pass the z9 contract gate");
+        assert!(error.contains(EXPECTED_CRUISE_CONTRACT));
+    }
+
+    #[test]
+    fn current_contract_with_missing_columns_fails_loudly() {
+        let batch = empty_batch(EXPECTED_CRUISE_CONTRACT);
+        assert_cruise_contract("cruise.arrow", std::slice::from_ref(&batch)).unwrap();
+        let error = CruiseRowAccum::new(&[batch])
+            .err()
+            .expect("missing lon must fail");
+        assert!(error.contains("`lon`"));
+        assert!(error.contains("Float64"));
     }
 }
