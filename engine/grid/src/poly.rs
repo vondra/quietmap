@@ -29,7 +29,8 @@ pub fn decode_grid_poly(bytes: &[u8]) -> Option<GridRing> {
         return None;
     }
     let n = u32::from_le_bytes(bytes[0..4].try_into().ok()?) as usize;
-    if n < 3 || bytes.len() != 4 + n * 8 {
+    // Two points = a wall segment; rings need three (area/contains guard that).
+    if n < 2 || bytes.len() != 4 + n * 8 {
         return None;
     }
     let mut ring = Vec::with_capacity(n);

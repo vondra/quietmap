@@ -160,8 +160,18 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
 
     let structures = LazyArrow::open(&dir.join("structures.arrow"));
     let leisure = LazyArrow::open(&dir.join("leisure.arrow"));
-    check_contract(&structures, "structures_contract", STRUCTURES_CONTRACT_V2, "structures.arrow")?;
-    check_contract(&leisure, "leisure_contract", LEISURE_CONTRACT_V2, "leisure.arrow")?;
+    check_contract(
+        &structures,
+        "structures_contract",
+        STRUCTURES_CONTRACT_V2,
+        "structures.arrow",
+    )?;
+    check_contract(
+        &leisure,
+        "leisure_contract",
+        LEISURE_CONTRACT_V2,
+        "leisure.arrow",
+    )?;
     // Every extract-written file pins its coordinate grid; readers that do
     // not know integer grids must refuse the file, never misread it.
     for (arrow, label) in [

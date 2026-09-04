@@ -8,9 +8,7 @@ use grid::poly::{encode_grid_poly, ring_area_m2};
 use std::path::Path;
 use std::sync::Arc;
 
-use super::{
-    decode_tsv_ring, parse_grid_cell, polygon_row_bbox, write_arrow_spatially_batched,
-};
+use super::{decode_tsv_ring, parse_grid_cell, polygon_row_bbox, write_arrow_spatially_batched};
 
 pub(super) fn write_industrial(rows: &[Vec<String>], path: &Path) -> Result<()> {
     let n = rows.len();

@@ -3,8 +3,10 @@
 //! The compute unit is the Web-Mercator z9 tile — never H3. Vectors on disk use
 //! global int32 z30-pixel coordinates; use i64 for their differences.
 //!
-//! Map of submodules: [`poly`] (integer footprint rings).
+//! Map of submodules: [`poly`] (integer footprint rings), [`geo`] (flat-earth
+//! propagation math).
 
+pub mod geo;
 pub mod poly;
 
 use std::f64::consts::PI;
@@ -42,8 +44,7 @@ pub struct Square {
 pub fn lonlat_to_meters(lon_deg: f64, lat_deg: f64) -> (f64, f64) {
     let lat = lat_deg.clamp(-MAX_MERCATOR_LAT_DEG, MAX_MERCATOR_LAT_DEG);
     let x = WEB_MERCATOR_RADIUS_M * lon_deg.to_radians();
-    let y = WEB_MERCATOR_RADIUS_M
-        * ((PI / 4.0 + lat.to_radians() / 2.0).tan().ln());
+    let y = WEB_MERCATOR_RADIUS_M * ((PI / 4.0 + lat.to_radians() / 2.0).tan().ln());
     (x, y)
 }
 

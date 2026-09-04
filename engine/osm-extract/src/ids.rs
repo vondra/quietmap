@@ -48,10 +48,8 @@ pub fn leisure_sport_class_id(sport: &str) -> Option<u8> {
         "padel" => LEISURE_PADEL,
         "tennis" => LEISURE_TENNIS,
         "basketball" | "netball" | "handball" => LEISURE_BASKETBALL,
-        "soccer" | "football" | "american_football" | "rugby" | "rugby_union"
-        | "rugby_league" | "field_hockey" | "hockey" | "baseball" | "cricket" | "multi" => {
-            LEISURE_PITCH
-        }
+        "soccer" | "football" | "american_football" | "rugby" | "rugby_union" | "rugby_league"
+        | "field_hockey" | "hockey" | "baseball" | "cricket" | "multi" => LEISURE_PITCH,
         "swimming" => LEISURE_POOL,
         _ => return None,
     })

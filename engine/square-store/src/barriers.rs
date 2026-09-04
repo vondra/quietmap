@@ -170,7 +170,10 @@ mod tests {
             osm_id.push(id);
             seg.push(idx);
             height.push(3.0);
-            geom.push(Some(grid::poly::encode_grid_poly(&[(s_gx, s_gy), (e_gx, e_gy)])));
+            geom.push(Some(grid::poly::encode_grid_poly(&[
+                (s_gx, s_gy),
+                (e_gx, e_gy),
+            ])));
             cgx.push((s_gx + e_gx) / 2);
             cgy.push((s_gy + e_gy) / 2);
         }
@@ -199,7 +202,9 @@ mod tests {
                 Arc::new(Int64Array::from(osm_id)),
                 Arc::new(Int16Array::from(seg)),
                 Arc::new(Float32Array::from(height)),
-                Arc::new(BinaryArray::from_opt_vec(geom.iter().map(|g| g.as_deref()).collect())),
+                Arc::new(BinaryArray::from_opt_vec(
+                    geom.iter().map(|g| g.as_deref()).collect(),
+                )),
                 Arc::new(Int32Array::from(cgx)),
                 Arc::new(Int32Array::from(cgy)),
             ],
@@ -209,9 +214,16 @@ mod tests {
 
     #[test]
     fn wall_listing_preserves_provenance_and_ignores_buildings() {
-        let results =
-            query_barriers_from_batches(&[wall_batch(&[(7, -3, 50.0, 14.0), (7, 4, 50.01, 14.01)], true)], 50.0, 14.0, 200_000.0)
-                .unwrap();
+        let results = query_barriers_from_batches(
+            &[wall_batch(
+                &[(7, -3, 50.0, 14.0), (7, 4, 50.01, 14.01)],
+                true,
+            )],
+            50.0,
+            14.0,
+            200_000.0,
+        )
+        .unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].segment_idx, -3);
         assert_eq!(results[1].segment_idx, 4);
@@ -220,14 +232,24 @@ mod tests {
 
     #[test]
     fn identical_dupes_merge_conflicting_geometry_fails() {
-        let identical =
-            query_barriers_from_batches(&[wall_batch(&[(7, -3, 50.0, 14.0), (7, -3, 50.0, 14.0)], false)], 50.0, 14.0, 200_000.0)
-                .unwrap();
+        let identical = query_barriers_from_batches(
+            &[wall_batch(
+                &[(7, -3, 50.0, 14.0), (7, -3, 50.0, 14.0)],
+                false,
+            )],
+            50.0,
+            14.0,
+            200_000.0,
+        )
+        .unwrap();
         assert_eq!(identical.len(), 1);
 
         // Same provenance rebuilt from identical inputs merges fine.
         let rebuilt_identical = query_barriers_from_batches(
-            &[wall_batch(&[(7, -3, 50.0, 14.0)], false), wall_batch(&[(7, -3, 50.0, 14.0)], false)],
+            &[
+                wall_batch(&[(7, -3, 50.0, 14.0)], false),
+                wall_batch(&[(7, -3, 50.0, 14.0)], false),
+            ],
             50.0,
             14.0,
             200_000.0,
@@ -270,8 +292,7 @@ mod tests {
             .filter(|(i, _)| *i != idx)
             .map(|(_, f)| f.as_ref().clone())
             .collect();
-        let rebuilt =
-            RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
+        let rebuilt = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
         let error = query_barriers_from_batches(&[rebuilt], 50.0, 14.0, 1_000.0).unwrap_err();
         assert!(error.contains("missing required segment_idx"));
     }
@@ -293,7 +314,10 @@ mod tests {
         let error = super::super::store::load_square(&dir)
             .err()
             .expect("unstamped table must fail");
-        assert!(error.contains("structures_contract mismatch"), "got: {error}");
+        assert!(
+            error.contains("structures_contract mismatch"),
+            "got: {error}"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 }

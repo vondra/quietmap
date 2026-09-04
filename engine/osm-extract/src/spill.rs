@@ -51,7 +51,11 @@ pub fn parse_ring_text(s: &str) -> Option<Vec<(i32, i32)>> {
         let (gx, gy) = pt.split_once(',')?;
         out.push((gx.parse().ok()?, gy.parse().ok()?));
     }
-    if out.len() < 3 { None } else { Some(out) }
+    if out.len() < 3 {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 /// Per-feature-type, per-bucket writer.
@@ -314,22 +318,11 @@ impl Spiller {
 
         let (cgx, cgy) = lonlat_to_grid(clon, clat);
         let snapped: Vec<(i32, i32)> = ring
-            .map(|r| {
-                r.iter()
-                    .map(|c| lonlat_to_grid(c[1], c[0]))
-                    .collect()
-            })
+            .map(|r| r.iter().map(|c| lonlat_to_grid(c[1], c[0])).collect())
             .unwrap_or_default();
 
         let w = &mut self.get_writer(name, bucket).writer;
-        let _ = write!(
-            w,
-            "{}\t{}\t{}\t{}",
-            square_id(square),
-            osm_id,
-            cgx,
-            cgy
-        );
+        let _ = write!(w, "{}\t{}\t{}\t{}", square_id(square), osm_id, cgx, cgy);
 
         match ftype {
             FeatureType::Building => {
@@ -623,10 +616,9 @@ fn building_type(val: &str) -> u8 {
         | "carport_roof" | "ruins" | "ruin" | "construction" | "collapsed" | "service"
         | "allotment_house" | "boathouse" | "bunker" | "tent" | "container" | "storage_tank"
         | "silo" | "hangar" | "conservatory" | "ger" | "farm_auxiliary" | "transformer_tower"
-        | "water_tower" | "no"
-        | "bridge" | "tower" | "toilets" | "elevator" | "tech_cab" | "guardhouse"
-        | "gatehouse" | "pavilion" | "abandoned" | "stairs" | "staircase" | "chimney"
-        | "demolished" | "forestry" | "signal_box" | "security_booth" | "shelter"
+        | "water_tower" | "no" | "bridge" | "tower" | "toilets" | "elevator" | "tech_cab"
+        | "guardhouse" | "gatehouse" | "pavilion" | "abandoned" | "stairs" | "staircase"
+        | "chimney" | "demolished" | "forestry" | "signal_box" | "security_booth" | "shelter"
         | "proposed" | "ship" => ids::SETTLEMENT_SILENT,
         "yes" | "" => 0, // default to residential-apartments
         _ => 0,
@@ -811,7 +803,11 @@ mod settlement_class_tests {
             "construction",
             "carport_roof",
         ] {
-            assert_eq!(building_type(v), st::SETTLEMENT_SILENT, "{v} must be SILENT");
+            assert_eq!(
+                building_type(v),
+                st::SETTLEMENT_SILENT,
+                "{v} must be SILENT"
+            );
         }
         assert_eq!(building_type("some_unknown_value"), 0);
     }

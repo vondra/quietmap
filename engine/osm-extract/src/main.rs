@@ -305,15 +305,7 @@ fn main() -> Result<()> {
                         } else {
                             None
                         };
-                        spiller.emit_polygon(
-                            &ftype,
-                            square,
-                            way.id(),
-                            clat,
-                            clon,
-                            &tags,
-                            ring,
-                        );
+                        spiller.emit_polygon(&ftype, square, way.id(), clat, clon, &tags, ring);
                         features_total += 1;
                     }
                 }

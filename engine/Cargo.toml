@@ -6,6 +6,7 @@ resolver = "2"
 members = [
     "arrow-batching",
     "grid",
+    "noise-compute",
     "osm-extract",
     "square-store",
 ]

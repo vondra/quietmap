@@ -16,8 +16,8 @@ use anyhow::Result;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema};
 use arrow::ipc::writer::FileWriter;
-use grid::poly::{meters_to_lonlat, ring_bbox_lonlat};
 use grid::grid_to_meters;
+use grid::poly::{meters_to_lonlat, ring_bbox_lonlat};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -288,7 +288,12 @@ pub(super) fn write_arrow_spatially_batched(
 
 /// Row envelope of a microsegment from snapped endpoints, as lon/lat degrees
 /// for the batch-prune metadata.
-pub(super) fn segment_row_bbox(s_gx: i32, s_gy: i32, e_gx: i32, e_gy: i32) -> arrow_batching::RowBbox {
+pub(super) fn segment_row_bbox(
+    s_gx: i32,
+    s_gy: i32,
+    e_gx: i32,
+    e_gy: i32,
+) -> arrow_batching::RowBbox {
     let (sx, sy) = grid_to_meters(s_gx, s_gy);
     let (ex, ey) = grid_to_meters(e_gx, e_gy);
     let (s_lon, s_lat) = meters_to_lonlat(sx, sy);
@@ -348,10 +353,8 @@ mod roundtrip_tests {
     }
 
     fn scratch_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "osm-extract-test-{}-{name}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("osm-extract-test-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -382,15 +385,27 @@ mod roundtrip_tests {
         let batch = &batches[0];
         let f = |n: &str| batch.column(schema.index_of(n).unwrap());
         assert_eq!(
-            f("start_gx").as_any().downcast_ref::<Int32Array>().unwrap().value(0),
+            f("start_gx")
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0),
             1000
         );
         assert_eq!(
-            f("end_gy").as_any().downcast_ref::<Int32Array>().unwrap().value(0),
+            f("end_gy")
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0),
             4000
         );
         assert_eq!(
-            f("name").as_any().downcast_ref::<StringArray>().unwrap().value(0),
+            f("name")
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .value(0),
             "Main"
         );
         assert_eq!(
@@ -440,7 +455,10 @@ mod roundtrip_tests {
             .value(0);
         assert!((9_000.0..11_000.0).contains(&area), "area={area}");
         assert_eq!(
-            schema.metadata().get("buildings_contract").map(String::as_str),
+            schema
+                .metadata()
+                .get("buildings_contract")
+                .map(String::as_str),
             Some(BUILDINGS_CONTRACT_V3)
         );
         std::fs::remove_dir_all(&dir).ok();

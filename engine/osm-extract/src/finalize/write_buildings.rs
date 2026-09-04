@@ -29,7 +29,8 @@ const MAX_RESTAURANT_FOOTPRINT_M2: f64 = 4000.0;
 /// hypermarkets legitimately reach 5–15 k m².
 fn downgrade_oversized_restaurant(bt: u8, area_m2: Option<f64>) -> u8 {
     use crate::ids as st;
-    if bt == st::SETTLEMENT_HOSPITALITY && area_m2.is_some_and(|a| a > MAX_RESTAURANT_FOOTPRINT_M2) {
+    if bt == st::SETTLEMENT_HOSPITALITY && area_m2.is_some_and(|a| a > MAX_RESTAURANT_FOOTPRINT_M2)
+    {
         return 1; // commercial — generic HVAC envelope
     }
     bt
