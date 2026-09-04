@@ -365,15 +365,6 @@ pub fn median_step_m(t: &[f64], dist_m: f64) -> f32 {
     steps[mid] as f32
 }
 
-/// Horizontal path length in meters from (lat1, lon1) to (lat2, lon2)
-/// using the equirectangular approximation (matches pipeline convention).
-pub fn path_dist_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
-    let mid_lat_rad = ((lat1 + lat2) * 0.5).to_radians();
-    let dlat = (lat2 - lat1) * grid::geo::M_PER_DEG_LAT;
-    let dlon = (lon2 - lon1) * crate::constants::M_PER_DEG_LON_EQ * mid_lat_rad.cos();
-    (dlat * dlat + dlon * dlon).sqrt()
-}
-
 /// Build a `PathProfile` using the default (per-point) sampler — calls
 /// `elevation`/`ground_g` at each t individually. Overridden
 /// by `RealRasters` and `FusedGrid` with tile-cache-friendly fused loops.
@@ -405,7 +396,7 @@ pub fn build_default<R: RasterSampler + ?Sized>(
 
     for &t in &out.t {
         let lat = src_lat + t * (rcv_lat - src_lat);
-        let lon = src_lon + t * (rcv_lon - src_lon);
+        let lon = grid::geo::interpolate_longitude_short_arc(src_lon, rcv_lon, t);
         out.elevation_m.push(rasters.elevation(lat, lon) as f32);
         // ground_g is in 0..=1 range (1 − imd/100). Invert for imd_u8 storage.
         let imd = ((1.0 - rasters.ground_g(lat, lon).clamp(0.0, 1.0)) * 100.0).round() as u8;

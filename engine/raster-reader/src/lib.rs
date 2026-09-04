@@ -18,3 +18,6 @@ pub mod tile;
 pub use fused_grid::{FusedGrid, FusedPixel};
 pub use real_rasters::RealRasters;
 pub use tile::RawTile;
+
+#[cfg(test)]
+mod antimeridian_tests;

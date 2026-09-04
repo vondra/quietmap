@@ -3,6 +3,7 @@
 //! Mmap'd on demand (lazy) or pre-loaded for pipeline.
 //! Thread-safe: mmap is read-only, slot cache is bounded to avoid unbounded global growth.
 
+use grid::geo::{normalize_longitude, wrapped_longitude_delta};
 use memmap2::Mmap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -145,7 +146,6 @@ enum TileSlot {
 
 pub struct TileStore {
     dir: PathBuf,
-    fallback_dirs: Vec<(PathBuf, &'static str)>,
     grid_size: u32,
     dtype: DType,
     interp: Interp,
@@ -176,7 +176,6 @@ impl TileStore {
         }
         TileStore {
             dir,
-            fallback_dirs: Vec::new(),
             grid_size,
             dtype,
             interp,
@@ -194,31 +193,24 @@ impl TileStore {
     /// A plain [`TileStore::sample`] still locks its cache slot and updates LRU state per call;
     /// sequential raster walks should retain an mmap through [`TileStore::sample_cached`].
     pub fn preload_bbox(&self, lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) {
-        let lat0 = lat_min.floor() as i32;
-        let lat1 = lat_max.floor() as i32;
+        let lat0 = (lat_min.floor() as i32).max(-90);
+        let lat1 = (lat_max.floor() as i32).min(89);
         let lon0 = lon_min.floor() as i32;
-        let lon1 = lon_max.floor() as i32;
+        let lon1 = (lon_min + wrapped_longitude_delta(lon_min, lon_max)).floor() as i32;
         for lat in lat0..=lat1 {
             for lon in lon0..=lon1 {
-                self.get_tile(lat, lon); // loads + caches
+                self.get_tile(lat, normalize_longitude(f64::from(lon)) as i32);
             }
         }
     }
 
-    /// Append a fallback directory, tried in order after the primary (for
-    /// SRTM: try .raw first, then .hgt; for the dev4 DEM move: try
-    /// `rasters/dem`, then `dem/copernicus`, then `dem/srtm`).
-    pub fn with_alt_dir(mut self, dir: PathBuf, ext: &'static str) -> Self {
-        self.fallback_dirs.push((dir, ext));
-        self
-    }
-
-    /// Flat index into tile array: (lat+90)*360 + (lon+180)
+    /// Invalid keys must never alias a valid tile's cached Loaded/Missing state.
     #[inline]
-    fn tile_idx(lat_int: i32, lon_int: i32) -> usize {
-        let lat = (lat_int + 90).clamp(0, 179) as usize;
-        let lon = (lon_int + 180).clamp(0, 359) as usize;
-        lat * 360 + lon
+    fn tile_idx(lat_int: i32, lon_int: i32) -> Option<usize> {
+        if !(-90..90).contains(&lat_int) || !(-180..180).contains(&lon_int) {
+            return None;
+        }
+        Some((lat_int + 90) as usize * 360 + (lon_int + 180) as usize)
     }
 
     #[inline]
@@ -259,7 +251,7 @@ impl TileStore {
     /// Get or load a tile. Returns an Arc so the caller can keep using the tile
     /// even if the cache later evicts that slot.
     fn get_tile(&self, lat_int: i32, lon_int: i32) -> Option<Arc<RawTile>> {
-        let idx = Self::tile_idx(lat_int, lon_int);
+        let idx = Self::tile_idx(lat_int, lon_int)?;
         {
             let slot = self.tiles[idx].lock().unwrap_or_else(|e| e.into_inner());
             match &*slot {
@@ -292,34 +284,12 @@ impl TileStore {
                 // truncated) must not masquerade as ocean. One line per slot
                 // per process — the slot latches Missing below.
                 eprintln!(
-                    "raster-reader: REFUSED {} (expected {}² grid) — falling back to alt dir if configured",
+                    "raster-reader: REFUSED {} (expected {}² grid)",
                     primary.display(),
                     self.grid_size
                 );
             }
         }
-        // Fallback dirs are tried in order whenever the primary did not yield
-        // a tile — absent OR refused. A corrupt Copernicus tile must not
-        // suppress a valid SRTM fallback (gg review 2026-07-28).
-        if loaded.is_none() {
-            for (alt_dir, alt_ext) in &self.fallback_dirs {
-                let alt = alt_dir.join(format!("{}{}", base, alt_ext));
-                if alt.exists() {
-                    loaded = RawTile::load(&alt, self.grid_size, self.dtype);
-                    if loaded.is_none() {
-                        eprintln!(
-                            "raster-reader: REFUSED alt {} (expected {}² grid or SRTM 1201²)",
-                            alt.display(),
-                            self.grid_size
-                        );
-                    }
-                }
-                if loaded.is_some() {
-                    break;
-                }
-            }
-        }
-
         let mut slot = self.tiles[idx].lock().unwrap_or_else(|e| e.into_inner());
         match &*slot {
             TileSlot::Loaded(tile) => {
@@ -352,6 +322,7 @@ impl TileStore {
     /// Convert (lat, lon) to tile key.
     #[inline]
     fn to_tile_key(lat: f64, lon: f64) -> (i32, i32, f64, f64) {
+        let lon = normalize_longitude(lon);
         let lat_int = lat.floor() as i32;
         let lon_int = lon.floor() as i32;
         let frac_lat = lat - lat_int as f64; // 0..1 within tile
@@ -370,7 +341,7 @@ impl TileStore {
     /// Fast tile lookup for pre-loaded tiles (skips init path).
     #[inline]
     fn get_tile_fast(&self, lat_int: i32, lon_int: i32) -> Option<Arc<RawTile>> {
-        let idx = Self::tile_idx(lat_int, lon_int);
+        let idx = Self::tile_idx(lat_int, lon_int)?;
         let slot = self.tiles[idx].lock().unwrap_or_else(|e| e.into_inner());
         match &*slot {
             TileSlot::Loaded(tile) => {
@@ -601,80 +572,6 @@ mod tests {
         let store = TileStore::new(dir.clone(), 4, DType::U8, Interp::Nearest, 7.0, ".raw", 2);
         assert_eq!(store.sample(0.5, 0.5), 42.0);
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Fallbacks are tried in order: a missing first fallback falls through
-    /// to the second (dev4 `rasters/dem` → dev1 `dem/copernicus` → `dem/srtm`).
-    #[test]
-    fn fallback_chain_falls_through_to_second_alt_dir() {
-        let primary = tile_test_dir("chain-primary");
-        let alt1 = tile_test_dir("chain-alt1");
-        let alt2 = tile_test_dir("chain-alt2");
-        write_tile(&alt2, ".hgt", 4, DType::I16BE); // only the last dir has a tile
-        let store = TileStore::new(
-            primary.clone(),
-            4,
-            DType::I16BE,
-            Interp::Nearest,
-            0.0,
-            ".hgt",
-            2,
-        )
-        .with_alt_dir(alt1.clone(), ".hgt")
-        .with_alt_dir(alt2.clone(), ".hgt");
-        assert_eq!(store.sample(0.5, 0.5), 42.0);
-        let _ = std::fs::remove_dir_all(&primary);
-        let _ = std::fs::remove_dir_all(&alt1);
-        let _ = std::fs::remove_dir_all(&alt2);
-    }
-
-    /// The primary wins when both it and a fallback hold the tile.
-    #[test]
-    fn primary_wins_over_fallback_dir() {
-        let primary = tile_test_dir("primary-wins");
-        let alt = tile_test_dir("primary-wins-alt");
-        write_tile(&primary, ".raw", 4, DType::U8);
-        std::fs::write(alt.join("N00E000.raw"), vec![7u8; 4 * 4]).unwrap();
-        let store = TileStore::new(
-            primary.clone(),
-            4,
-            DType::U8,
-            Interp::Nearest,
-            0.0,
-            ".raw",
-            2,
-        )
-        .with_alt_dir(alt.clone(), ".raw");
-        assert_eq!(store.sample(0.5, 0.5), 42.0);
-        let _ = std::fs::remove_dir_all(&primary);
-        let _ = std::fs::remove_dir_all(&alt);
-    }
-
-    /// A refused PRIMARY must not suppress a valid alt-dir fallback — the
-    /// corrupt-Copernicus-hides-SRTM case (gg review 2026-07-28).
-    #[test]
-    fn refused_primary_falls_back_to_alt_dir() {
-        let primary = tile_test_dir("fallback-primary");
-        let alt = tile_test_dir("fallback-alt");
-        write_tile(&primary, ".hgt", 5, DType::I16BE); // wrong grid, present
-        write_tile(&alt, ".hgt", 4, DType::I16BE); // valid fallback
-        let store = TileStore::new(
-            primary.clone(),
-            4,
-            DType::I16BE,
-            Interp::Nearest,
-            0.0,
-            ".hgt",
-            2,
-        )
-        .with_alt_dir(alt.clone(), ".hgt");
-        assert_eq!(
-            store.sample(0.5, 0.5),
-            42.0,
-            "alt tile must load when the primary is refused"
-        );
-        let _ = std::fs::remove_dir_all(&primary);
-        let _ = std::fs::remove_dir_all(&alt);
     }
 
     /// Legacy SRTM 3-arcsec (1201²) stays accepted for elevation stores; the

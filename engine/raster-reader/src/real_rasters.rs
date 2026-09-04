@@ -29,11 +29,9 @@ pub struct RealRasters {
 impl RealRasters {
     /// Create from a release root. Tiles loaded lazily on first access.
     ///
-    /// `data_dir` is the dev4 prepared release year dir (`<prepared>/2026`):
+    /// `data_dir` is the prepared release year directory:
     /// DEM at `rasters/dem/*.hgt`, forest at `rasters/forest/*.raw`, IMD at
-    /// `rasters/imd/*.raw` (all 1°×1° 3601² node-registered, same bytes as
-    /// dev1). The dev1 `dem/copernicus` (+ `dem/srtm` fallback) tree is kept
-    /// as DEM fallbacks so old checkouts keep reading.
+    /// `rasters/imd/*.raw` (all 1°×1° 3601² node-registered).
     pub fn new(data_dir: &Path) -> Self {
         // Defaults to 32 not 12: 12 is below the working-set size of
         // any realistic extract bbox (Praha alone is ~20 1°×1° DEM
@@ -45,8 +43,6 @@ impl RealRasters {
         let forest_cache_tiles = env_usize("QUIETMAP_CACHE_FOREST_TILES", 64);
         let imd_cache_tiles = env_usize("QUIETMAP_CACHE_IMD_TILES", 128);
 
-        // DEM: Copernicus GLO-30 primary (.hgt) from the dev4 release tree,
-        // dev1 `dem/copernicus` tree then SRTM fallback (.hgt) after it.
         let dem = TileStore::new(
             data_dir.join("rasters/dem"),
             3601,
@@ -55,9 +51,7 @@ impl RealRasters {
             0.0,
             ".hgt",
             dem_cache_tiles,
-        )
-        .with_alt_dir(data_dir.join("dem/copernicus"), ".hgt")
-        .with_alt_dir(data_dir.join("dem/srtm"), ".hgt");
+        );
 
         // Forest cover: u8 (0/100%), 3601×3601 (WorldCover 30m), nearest-neighbor
         let forest = TileStore::new(
@@ -199,7 +193,7 @@ impl RasterSampler for RealRasters {
 
         for &t in &out.t {
             let lat = src_lat + t * (rcv_lat - src_lat);
-            let lon = src_lon + t * (rcv_lon - src_lon);
+            let lon = grid::geo::interpolate_longitude_short_arc(src_lon, rcv_lon, t);
             let elev = self
                 .dem
                 .sample_cached(lat, lon, &mut dem_key, &mut dem_tile);
@@ -261,18 +255,6 @@ mod tests {
         assert_eq!(r.elevation(0.5, 0.5), 42.0);
         assert_eq!(r.forest.sample(0.5, 0.5), 0.0);
         assert_eq!(r.ground_g(0.5, 0.5), 1.0);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// The dev1 `dem/copernicus` tree still serves DEM when the dev4
-    /// `rasters/dem` dir has no tile; absent forest/IMD read as defaults.
-    #[test]
-    fn dev1_dem_copernicus_layout_is_fallback() {
-        let root = test_root("dev1");
-        write_dem_tile(&root.join("dem/copernicus"), 42);
-        let r = RealRasters::new(&root);
-        assert_eq!(r.elevation(0.5, 0.5), 42.0);
-        assert_eq!(r.ground_g(0.5, 0.5), 0.0);
         let _ = std::fs::remove_dir_all(&root);
     }
 

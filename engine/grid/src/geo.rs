@@ -12,7 +12,11 @@ pub const M_PER_DEG_LON_EQ: f64 = 111_320.0;
 /// Fold a longitude into the one canonical interval used by stored points.
 #[inline]
 pub fn normalize_longitude(lon_deg: f64) -> f64 {
-    (lon_deg + 180.0).rem_euclid(360.0) - 180.0
+    if (-180.0..180.0).contains(&lon_deg) {
+        lon_deg
+    } else {
+        (lon_deg + 180.0).rem_euclid(360.0) - 180.0
+    }
 }
 
 /// Signed shortest longitude delta from `from_deg` to `to_deg`.
@@ -24,7 +28,13 @@ pub fn wrapped_longitude_delta(from_deg: f64, to_deg: f64) -> f64 {
 /// Midpoint longitude on the short arc, including across the antimeridian.
 #[inline]
 pub fn wrapped_longitude_midpoint(a_deg: f64, b_deg: f64) -> f64 {
-    normalize_longitude(a_deg + wrapped_longitude_delta(a_deg, b_deg) / 2.0)
+    interpolate_longitude_short_arc(a_deg, b_deg, 0.5)
+}
+
+/// Canonical longitude at fraction `t` along the short source–receiver arc.
+#[inline]
+pub fn interpolate_longitude_short_arc(from_deg: f64, to_deg: f64, t: f64) -> f64 {
+    normalize_longitude(from_deg + t * wrapped_longitude_delta(from_deg, to_deg))
 }
 
 /// Metres per degree longitude at `lat_rad` radians.
@@ -426,6 +436,13 @@ mod tests {
 
     #[test]
     fn antimeridian_geometry_uses_the_short_arc() {
+        for t in (0..=10).map(|step| f64::from(step) / 10.0) {
+            let ordinary = 14.9 + t * (15.1 - 14.9);
+            assert_eq!(
+                interpolate_longitude_short_arc(14.9, 15.1, t).to_bits(),
+                ordinary.to_bits()
+            );
+        }
         let distance = flat_dist(0.0, 179.999, 0.0, -179.999);
         assert!((distance - 222.64).abs() < 0.5, "distance={distance}");
         assert_eq!(wrapped_longitude_midpoint(179.0, -179.0), -180.0);
@@ -436,7 +453,11 @@ mod tests {
             "fraction={}",
             point.fraction
         );
-        assert!((point.cp_lon + 180.0).abs() < 1e-9, "lon={}", point.cp_lon);
+        assert!(
+            wrapped_longitude_delta(point.cp_lon, -180.0).abs() < 1e-9,
+            "lon={}",
+            point.cp_lon
+        );
         assert!((point.d_endpoint_m - M_PER_DEG_LAT * 0.001).abs() < 0.1);
     }
 

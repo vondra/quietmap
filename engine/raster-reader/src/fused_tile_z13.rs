@@ -702,46 +702,41 @@ mod tests {
             "quiet-map-receiver-dem-{}-{unique}",
             std::process::id()
         ));
-        let dem = root.join("dem/copernicus");
+        let dem = root.join("rasters/dem");
         std::fs::create_dir_all(&dem).expect("create DEM fixture directory");
         for (name, values) in [
             ("N49E015.hgt", [100_i16, 120, 140, 160]),
             ("N49E016.hgt", [200_i16, 220, 240, 260]),
         ] {
-            let bytes: Vec<u8> = values.into_iter().flat_map(i16::to_be_bytes).collect();
+            let bytes: Vec<u8> = (0..1201)
+                .flat_map(|row| {
+                    (0..1201).flat_map(move |column| {
+                        values[usize::from(row >= 600) * 2 + usize::from(column >= 600)]
+                            .to_be_bytes()
+                    })
+                })
+                .collect();
             std::fs::write(dem.join(name), bytes).expect("write DEM fixture");
         }
         TempPreparedRaster { root }
     }
 
     fn dir_has_dem_tiles(root: &std::path::Path) -> bool {
-        ["rasters/dem", "dem/copernicus", "dem/srtm"]
-            .iter()
-            .any(|rel| {
-                std::fs::read_dir(root.join(rel))
-                    .map(|mut iter| {
-                        iter.any(|e| {
-                            e.ok()
-                                .is_some_and(|e| e.path().extension().is_some_and(|x| x == "hgt"))
-                        })
-                    })
-                    .unwrap_or(false)
+        std::fs::read_dir(root.join("rasters/dem"))
+            .map(|mut iter| {
+                iter.any(|e| {
+                    e.ok()
+                        .is_some_and(|e| e.path().extension().is_some_and(|x| x == "hgt"))
+                })
             })
+            .unwrap_or(false)
     }
 
     fn data_root() -> Option<PathBuf> {
         // Cargo runs tests from the crate root, so resolve relative to it.
-        // Dev4 year dir first (`<prepared>/2026`), then the legacy dev1
-        // `<prepared>` root. Returns None (callers skip) when no DEM tiles
-        // are on disk — an empty checkout dir is not usable data.
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        for rel in ["../../data/prepared/2026", "../../data/prepared"] {
-            let p = PathBuf::from(manifest_dir).join(rel);
-            if dir_has_dem_tiles(&p) {
-                return Some(p);
-            }
-        }
-        None
+        let root = PathBuf::from(manifest_dir).join("../../data/prepared/2026");
+        dir_has_dem_tiles(&root).then_some(root)
     }
 
     #[test]
@@ -824,6 +819,7 @@ mod tests {
         let cache_touches_before = rasters.dem.cache_touch_count();
         let cached_started = std::time::Instant::now();
         let tile = FusedTileZ13::build_receiver_altitude_only(12, 2230, 1403, &rasters);
+        assert!(tile.inner_elev_m.iter().all(|&height| height >= 100.0));
         let cached_elapsed = cached_started.elapsed();
         let cache_touches = rasters.dem.cache_touch_count() - cache_touches_before;
         assert!(

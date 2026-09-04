@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::imd_max_pyramid::ImdMaxPyramid;
 use crate::RealRasters;
+use grid::geo::wrapped_longitude_delta;
 
 /// Each FusedGrid allocation/mutation gets a new id so worker-local cached
 /// pixels can never survive into a distinct halo that reused an allocator slot.
@@ -23,8 +24,8 @@ fn next_grid_id() -> u64 {
 
 /// L3-cache-resident cropped raster grid for pipeline compute.
 ///
-/// Pre-reads DEM + forest + IMD for the hex bbox into ONE contiguous
-/// Vec, cropped to just the needed area (~22 MB for a typical R4 hex + ring).
+/// Pre-reads DEM + forest + IMD for a local bbox into ONE contiguous
+/// Vec, cropped to the receiver region and its propagation halo.
 /// Implements RasterSampler so all existing path_effects code works unchanged.
 /// Zero algorithmic change = zero dB error vs mmap-based RealRasters.
 ///
@@ -199,6 +200,7 @@ impl FusedGrid {
     /// pipeline gate reserves a block's bytes BEFORE building it; an estimate
     /// derived anywhere else would drift from the real allocation).
     ///
+    /// Longitude bounds describe the short arc, including west > east at E180.
     /// Snap origin to the 1/3600° DEM pixel lattice (integer-lattice
     /// arithmetic avoids float edge slop). Without this, `build` samples
     /// DEM at sub-cell-shifted positions, introducing a persistent
@@ -212,6 +214,7 @@ impl FusedGrid {
         lon_min: f64,
         lon_max: f64,
     ) -> (usize, usize, f64, f64) {
+        let lon_max = lon_min + wrapped_longitude_delta(lon_min, lon_max);
         let cell_deg = 1.0 / 3600.0;
         let inv_cell_deg = 3600.0;
         const MARGIN_CELLS: i32 = 8;
@@ -234,7 +237,7 @@ impl FusedGrid {
         (self.data.capacity() * std::mem::size_of::<FusedPixel>()) as u64
     }
 
-    /// Build from RealRasters, cropping to bbox. ~0.2-0.5s for typical hex.
+    /// Build from RealRasters, cropping to the requested local bbox.
     pub fn build(
         rasters: &RealRasters,
         lat_min: f64,
@@ -308,7 +311,7 @@ impl FusedGrid {
     #[inline]
     fn imd_bilinear(&self, lat: f64, lon: f64) -> f64 {
         let rf = (lat - self.lat_min) * self.inv_cell_deg;
-        let cf = (lon - self.lon_min) * self.inv_cell_deg;
+        let cf = wrapped_longitude_delta(self.lon_min, lon) * self.inv_cell_deg;
         let rf = rf.clamp(0.0, (self.rows - 1) as f64);
         let cf = cf.clamp(0.0, (self.cols - 1) as f64);
         let r0 = (rf.floor() as usize).min(self.rows - 2);
@@ -328,7 +331,7 @@ impl FusedGrid {
     #[inline]
     fn elevation_bilinear(&self, lat: f64, lon: f64) -> f64 {
         let rf = (lat - self.lat_min) * self.inv_cell_deg;
-        let cf = (lon - self.lon_min) * self.inv_cell_deg;
+        let cf = wrapped_longitude_delta(self.lon_min, lon) * self.inv_cell_deg;
         // Clamp BEFORE floor — prevents negative wrap and OOB linear
         // extrapolation (the prior form left `fr = rf - r0` negative for
         // points west/south of bbox, silently extrapolating elevation
@@ -430,9 +433,9 @@ impl FusedGrid {
         // Raster coords are affine in lat/lon, which are affine in t, so walk
         // (rf, cf) as a plain lerp instead of re-deriving them inside every lookup.
         let src_rf = (src_lat - self.lat_min) * self.inv_cell_deg;
-        let src_cf = (src_lon - self.lon_min) * self.inv_cell_deg;
+        let src_cf = wrapped_longitude_delta(self.lon_min, src_lon) * self.inv_cell_deg;
         let d_rf = (rcv_lat - src_lat) * self.inv_cell_deg;
-        let d_cf = (rcv_lon - src_lon) * self.inv_cell_deg;
+        let d_cf = wrapped_longitude_delta(src_lon, rcv_lon) * self.inv_cell_deg;
         for &t in &out.t {
             let (elev, fr_u8, imd_u8) = self.lookup_fused_rc(src_rf + t * d_rf, src_cf + t * d_cf);
             out.elevation_m.push(elev);
@@ -533,7 +536,7 @@ impl FusedGrid {
     #[inline]
     pub fn lookup_fused(&self, lat: f64, lon: f64) -> (f32, u8, u8) {
         let rf = (lat - self.lat_min) * self.inv_cell_deg;
-        let cf = (lon - self.lon_min) * self.inv_cell_deg;
+        let cf = wrapped_longitude_delta(self.lon_min, lon) * self.inv_cell_deg;
         self.lookup_fused_rc(rf, cf)
     }
 
@@ -581,58 +584,18 @@ mod tests {
     use std::path::Path;
 
     fn test_rasters() -> RealRasters {
-        // Prepared rasters under data/prepared (dev4 `<prepared>/2026` tree)
-        // — 1° tiles for CZ + surroundings are populated by
-        // scripts/rasters/*.sh. Tests auto-ignore when missing (see
-        // `prepared_available` helper below).
-        for root in ["../../data/prepared/2026", "../../data/prepared"] {
-            let p = Path::new(root);
-            if prepared_dir_has_dem(p) {
-                return RealRasters::new(p);
-            }
-        }
         RealRasters::new(Path::new("../../data/prepared/2026"))
     }
 
-    fn prepared_dir_has_dem(root: &Path) -> bool {
-        ["rasters/dem", "dem/copernicus", "dem/srtm"]
-            .iter()
-            .any(|rel| {
-                std::fs::read_dir(root.join(rel))
-                    .map(|mut iter| {
-                        iter.any(|e| {
-                            e.ok()
-                                .is_some_and(|e| e.path().extension().is_some_and(|x| x == "hgt"))
-                        })
-                    })
-                    .unwrap_or(false)
-            })
-    }
-
-    /// Skip test body if no prepared rasters on disk (e.g., hermetic CI
-    /// without data/prepared populated). Checks the dev4 `rasters/dem` dir
-    /// then the dev1 Copernicus DEM dir rather than a specific tile so the
-    /// guard survives tile rotation.
+    /// These optional real-data tests sample only the Brno source tile.
     fn prepared_available() -> bool {
-        for dir in [
-            "../../data/prepared/2026/rasters/dem",
-            "../../data/prepared/rasters/dem",
-            "../../data/prepared/2026/dem/copernicus",
-            "../../data/prepared/dem/copernicus",
-        ] {
-            let has_hgt = std::fs::read_dir(dir)
-                .map(|mut iter| {
-                    iter.any(|e| {
-                        e.ok()
-                            .is_some_and(|e| e.path().extension().is_some_and(|x| x == "hgt"))
-                    })
-                })
-                .unwrap_or(false);
-            if has_hgt {
-                return true;
-            }
-        }
-        false
+        ["dem/N49E016.hgt", "forest/N49E016.raw", "imd/N49E016.raw"]
+            .iter()
+            .all(|tile| {
+                Path::new("../../data/prepared/2026/rasters")
+                    .join(tile)
+                    .is_file()
+            })
     }
 
     #[test]
@@ -712,7 +675,7 @@ mod tests {
         let Some((real, fg)) = test_fused() else {
             return;
         };
-        // Grid of points across the Brno bbox including hex-edge cases.
+        // Grid of points across the Brno bbox including its edges.
         for (lat, lon) in &[
             (49.20, 16.60),
             (49.195, 16.608),
