@@ -58,7 +58,9 @@
 #                           (download-overture-tiles.py; they are kept now).
 #
 # Per cell: deterministic, idempotent (rebuild iff an input is newer than the
-# output), re-runnable in any order, atomic (tmp+fsync+rename, dir fsync), never
+# output — the cell's two arrows, the Overture source and both ladder rasters,
+# so neither a new Overture release nor a refreshed raster tile is served
+# stale), re-runnable in any order, atomic (tmp+fsync+rename, dir fsync), never
 # creates a prepared cell directory (the table follows the prepared inventory).
 # --retire-inputs (chain mode) removes the pre-merge files after a verified
 # write so a finished cell holds only structures.arrow; the migration does NOT
@@ -197,6 +199,13 @@ def transformer_for(ds, path):
     return Transformer.from_crs("EPSG:4326", crs, always_xy=True)
 
 
+def raster_mtime(ds):
+    """Newest mtime over every file the raster is made of — the height ladder is
+    an input to every cell, so a refreshed tile behind a VRT mosaic has to
+    invalidate the built tables just as the .vrt itself does."""
+    return max(os.path.getmtime(f) for f in ds.GetFileList())
+
+
 class GlobalPrior:
     """GHS-BUILT-H ANBH: nearest-pixel value at a WGS84 point (windowed reads)."""
 
@@ -207,6 +216,7 @@ class GlobalPrior:
         self.nodata = self.band.GetNoDataValue()
         self.w, self.h = self.ds.RasterXSize, self.ds.RasterYSize
         self.tr = transformer_for(self.ds, path)
+        self.mtime = raster_mtime(self.ds)
 
     def sample(self, lon, lat):
         x, y = self.tr.transform(lon, lat)
@@ -232,6 +242,7 @@ class RegionalHeights:
         self.gt = ds.GetGeoTransform()
         self.w, self.h = ds.RasterXSize, ds.RasterYSize
         self.tr = transformer_for(ds, path)
+        self.mtime = raster_mtime(ds)
         band = ds.GetRasterBand(1)
         self.arr = band.ReadAsArray().astype(np.float32, copy=False)
         nodata = band.GetNoDataValue()
@@ -425,12 +436,16 @@ def read_overture_parquet(parquet_dir, cell):
     tile the cell's boundary bbox touches, rows kept by the ingest's half-open
     tile-ownership rule (a bbox-overlapping row staged by a neighbouring tile is
     skipped here exactly as the ingest skipped it), then assigned to this cell
-    by GEOS centroid — the ingest's ownership rule evaluated per cell."""
+    by GEOS centroid — the ingest's ownership rule evaluated per cell.
+
+    Returns (rows, newest parquet mtime) — the freshness stamp of the Overture
+    release this cell was built from."""
     boundary = h3.cell_to_boundary(cell)
     lats = [p[0] for p in boundary]
     lat0, lat1 = math.floor(min(lats)), math.floor(max(lats))
     columns = cell_tile_columns(cell, [p[1] for p in boundary])
     rows = []
+    newest_mtime = None
     for lat in range(lat0, lat1 + 1):
         for tile_column in columns:
             lon = int(normalize_lon(tile_column))
@@ -441,6 +456,8 @@ def read_overture_parquet(parquet_dir, cell):
                     f"{cell}: Overture parquet {src} is missing — run "
                     f"scripts/obstacles/download-overture-tiles.py first"
                 )
+            mtime = os.path.getmtime(src)
+            newest_mtime = mtime if newest_mtime is None else max(newest_mtime, mtime)
             pf = pq.ParquetFile(src)
             have = set(pf.schema_arrow.names)
             cols = [c for c in ("geometry", "height", "num_floors", "class",
@@ -481,7 +498,7 @@ def read_overture_parquet(parquet_dir, cell):
                          "clat": clat, "clon": clon,
                          "envelope": envelope_class(bc, st, ug)}
                     )
-    return rows
+    return rows, newest_mtime
 
 
 # ── The merge ─────────────────────────────────────────────────────────────────
@@ -642,13 +659,16 @@ def build_cell(cell, h3r4_dir, overture_rows, overture_mtime, ghsl, regional, va
     if os.path.exists(out_path):
         out_mtime = os.path.getmtime(out_path)
         inputs = [os.path.join(cell_dir, n) for n in ("buildings.arrow", "barriers.arrow")]
+        # EVERY input the row values are computed from, or a refreshed one is
+        # served stale for ever: the two per-cell arrows, the Overture source
+        # (shard tree or parquet release) and the height-ladder rasters.
         mtimes = [os.path.getmtime(p) for p in inputs if os.path.exists(p)]
-        # The Overture input's own mtime travels with the rows.
         if overture_mtime is not None:
             mtimes.append(overture_mtime)
-        # No inputs at all (an empty-stocked cell): the existing table is the
-        # answer until an input appears.
-        if not mtimes or max(mtimes) <= out_mtime:
+        mtimes.append(ghsl.mtime)
+        if regional is not None:
+            mtimes.append(regional.mtime)
+        if max(mtimes) <= out_mtime:
             return None  # idempotent: no input is newer than the output
     osm = load_osm_buildings(os.path.join(cell_dir, "buildings.arrow"))
     barriers = load_barriers(os.path.join(cell_dir, "barriers.arrow"))
@@ -979,8 +999,7 @@ def main():
         if args.overture_shards:
             ovt, ovt_mtime = read_overture_shards(os.path.join(args.overture_shards, cell))
         else:
-            ovt = read_overture_parquet(args.overture_parquet, cell)
-            ovt_mtime = None  # parquet inputs are pinned release artifacts, not per-cell
+            ovt, ovt_mtime = read_overture_parquet(args.overture_parquet, cell)
         census = build_cell(cell, args.h3r4_dir, ovt, ovt_mtime, ghsl, regional,
                             args.validate_obstacles, args.retire_inputs)
         if census is None:

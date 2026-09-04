@@ -6,8 +6,8 @@ the match (centroid-in / IoU>=0.5, one-to-one over the complete qualifying pair
 set), the ladder provenance per row kind (Overture side wins on matched rows,
 OSM tags ladder OSM-only rows), the sparse emission-polygon rule (area >
 2000 m2), the emission view's equality with buildings.arrow, the wall row shape
-(LineString WKB, midpoint centroid), the idempotent skip, the empty-cell table,
-and antimeridian tile discovery and centroid ownership.
+(LineString WKB, midpoint centroid), the idempotent skip over every input, the
+empty-cell table, and antimeridian tile discovery and centroid ownership.
 """
 
 import importlib.util
@@ -86,7 +86,11 @@ def shard(path, rows):
 
 
 class FakeGlobalPrior:
-    """Every centroid samples as 12.5 m of ANBH (tier-2 rows upgrade to 4)."""
+    """Every centroid samples as 12.5 m of ANBH (tier-2 rows upgrade to 4).
+    `mtime` is the ladder raster's freshness stamp the build folds in."""
+
+    def __init__(self, mtime=0.0):
+        self.mtime = mtime
 
     def sample(self, _lon, _lat):
         return 12.5
@@ -279,7 +283,16 @@ class BuildStructuresTests(unittest.TestCase):
                                    BUILDER.read_overture_shards(str(self.staging / CELL))[1],
                                    FakeGlobalPrior(), None, False, False)
         self.assertIsNone(again)  # fresh: nothing rebuilt
-        # Touching an input rebuilds.
+        # A newer height raster is an input like any other: the ladder feeds
+        # every row, so a re-sampled raster that never invalidates would serve a
+        # stale table for ever (the parquet mode has no per-cell input at all).
+        newer = os.path.getmtime(self.h3r4 / CELL / "structures.arrow") + 5
+        rebuilt_for_the_raster = BUILDER.build_cell(
+            CELL, str(self.h3r4),
+            *BUILDER.read_overture_shards(str(self.staging / CELL)),
+            FakeGlobalPrior(mtime=newer), None, False, False)
+        self.assertIsNotNone(rebuilt_for_the_raster)
+        # Touching a per-cell input rebuilds too.
         os.utime(self.h3r4 / CELL / "buildings.arrow",
                  (os.path.getmtime(self.h3r4 / CELL / "structures.arrow") + 5,) * 2)
         refreshed = BUILDER.build_cell(
@@ -374,11 +387,13 @@ class AntimeridianTests(unittest.TestCase):
         # tiles the cell touches; the half-open rule must keep it exactly once.
         overture_parquet(root / "N71E179.parquet", [crossing])
         overture_parquet(root / "N71W180.parquet", [crossing])
-        rows = BUILDER.read_overture_parquet(str(root), DATELINE_CELL)
+        rows, mtime = BUILDER.read_overture_parquet(str(root), DATELINE_CELL)
         self.assertEqual(len(rows), 1)
         self.assertAlmostEqual(rows[0]["clon"], 179.997, places=9)
         self.assertEqual(h3.latlng_to_cell(rows[0]["clat"], rows[0]["clon"], 4),
                          DATELINE_CELL)
+        self.assertEqual(mtime, max(os.path.getmtime(str(root / name))
+                                    for name in ("N71E179.parquet", "N71W180.parquet")))
 
 
 if __name__ == "__main__":
