@@ -2,11 +2,12 @@
 """Regression for build-structures.py — the per-cell merge rule.
 
 Locks the bug classes the world migration cannot rediscover cell by cell:
-the match (centroid-in / IoU>=0.5, one-to-one), the ladder provenance per row
-kind (Overture side wins on matched rows, OSM tags ladder OSM-only rows), the
-sparse emission-polygon rule (area > 2000 m2), the emission view's equality
-with buildings.arrow, the wall row shape (LineString WKB, midpoint centroid),
-the idempotent skip, and the empty-cell table.
+the match (centroid-in / IoU>=0.5, one-to-one over the complete qualifying pair
+set), the ladder provenance per row kind (Overture side wins on matched rows,
+OSM tags ladder OSM-only rows), the sparse emission-polygon rule (area >
+2000 m2), the emission view's equality with buildings.arrow, the wall row shape
+(LineString WKB, midpoint centroid), the idempotent skip, and the empty-cell
+table.
 """
 
 import importlib.util
@@ -97,6 +98,13 @@ OSM_SHED = shapely.box(14.17500, 49.78500, 14.17504, 49.78504)
 OSM_HALL = shapely.box(14.17600, 49.78600, 14.17640, 49.78620)  # ~1500 m2 at this lat... set area explicitly
 OVT_LONELY = shapely.box(14.17800, 49.78700, 14.17810, 49.78710)
 
+# A contested first choice: a warehouse outline with a separately mapped annex
+# inside it (overlapping OSM polygons are ordinary — building plus building
+# part), and two Overture footprints that both rank the annex first.
+OSM_WAREHOUSE = shapely.box(14.17100, 49.78100, 14.17200, 49.78180)
+OSM_ANNEX = shapely.box(14.17130, 49.78120, 14.17150, 49.78140)
+OVT_ANNEX_TWIN = shapely.box(14.171302, 49.781202, 14.171502, 49.781402)  # IoU 0.961
+OVT_ANNEX_LOOSE = shapely.box(14.171260, 49.781160, 14.171460, 49.781360)  # IoU 0.471
 
 def osm_row(i, poly, area, height=None, floors=0, use=0, btype=11):
     centroid = poly.centroid if poly is not None else shapely.Point(14.174, 49.784)
@@ -158,6 +166,30 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertAlmostEqual(row["emission_centroid_lat"], OSM_POLY.centroid.y)
         # Small footprint: emission never grids it, so no emission polygon.
         self.assertIsNone(row["emission_polygon_wkb"])
+
+    def test_a_contested_first_choice_falls_through_to_the_next_twin(self):
+        """Both Overture footprints rank the annex first; the loser must take the
+        warehouse it also qualifies against instead of becoming Overture-only.
+        Keeping each row's local best alone dropped it, and the annex's twin then
+        screened twice — once as the OSM warehouse outline, once as the Overture
+        footprint standing in the same place."""
+        buildings_arrow(self.h3r4 / CELL / "buildings.arrow", [
+            osm_row(0, OSM_WAREHOUSE, 6392.0),
+            osm_row(1, OSM_ANNEX, 320.0),
+        ])
+        census, t = self.build([ovt_row(OVT_ANNEX_TWIN), ovt_row(OVT_ANNEX_LOOSE)])
+        self.assertEqual((census["both"], census["osm_only"], census["overture_only"]),
+                         (2, 0, 0))
+        self.assertEqual(t.num_rows, 2)
+        # OSM file order: the warehouse takes the loose footprint (its only
+        # remaining qualifying pair), the annex keeps its near twin.
+        self.assertEqual(t.column("osm_id").to_pylist(), [1000, 1001])
+        self.assertEqual(t.column("geometry_wkb").to_pylist(),
+                         [wkb_of(OVT_ANNEX_LOOSE), wkb_of(OVT_ANNEX_TWIN)])
+        # Screening moved to the Overture polygons; emission keeps the OSM one
+        # wherever it can read it (the warehouse is over the 2000 m2 threshold).
+        self.assertEqual(t.column("emission_polygon_wkb").to_pylist(),
+                         [wkb_of(OSM_WAREHOUSE), None])
 
     def test_big_matched_row_carries_the_osm_emission_polygon(self):
         buildings_arrow(self.h3r4 / CELL / "buildings.arrow",

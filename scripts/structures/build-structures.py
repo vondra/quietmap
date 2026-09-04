@@ -32,10 +32,12 @@
 # deep 0.1..0.9 valley, so any threshold in [0.3, 0.8] separates identically up to
 # ±0.5 % of matches): an Overture footprint matches an OSM building iff the
 # Overture centroid lies in the OSM polygon OR IoU >= 0.5. Assignment is
-# one-to-one, greedy by (iou desc, centroid_in desc, overture row asc, osm row
-# asc) — deterministic. Leftover Overture rows of a split building become
-# Overture-only rows (screening then sees exactly today's Overture set);
-# leftover OSM rows stay OSM-only.
+# one-to-one, greedy over the COMPLETE qualifying pair set by (iou desc,
+# centroid_in desc, overture row asc, osm row asc) — deterministic, and a row
+# whose first choice is taken falls through to its next qualifying twin instead
+# of screening the same structure twice. Leftover Overture rows of a split
+# building become Overture-only rows (screening then sees exactly today's
+# Overture set); leftover OSM rows stay OSM-only.
 #
 # Height ladder (moved here from the deleted enrich-obstacle-heights.py; tier
 # semantics are load-time contract in noise_compute::low_profile, which caps
@@ -415,14 +417,15 @@ def read_overture_parquet(parquet_dir, cell):
                     geom = shapely_wkb.loads(bytes(g))
                     if geom.is_empty or geom.geom_type not in ("Polygon", "MultiPolygon"):
                         continue
-                    c = geom.centroid
-                    if not (math.isfinite(c.y) and math.isfinite(c.x)):
+                    centroid = geom.centroid
+                    clat, clon = centroid.y, centroid.x
+                    if not (math.isfinite(clat) and math.isfinite(clon)):
                         continue
                     # Half-open tile ownership: border footprints appear in both
                     # tiles' downloads; exactly one tile owns them.
-                    if not (lat <= c.y < lat + 1 and lon <= c.x < lon + 1):
+                    if not (lat <= clat < lat + 1 and lon <= clon < lon + 1):
                         continue
-                    if h3.latlng_to_cell(c.y, c.x, 4) != cell:
+                    if h3.latlng_to_cell(clat, clon, 4) != cell:
                         continue
                     # The ingest ladder, evaluated here instead of staged.
                     if h is not None and math.isfinite(h) and h > 0:
@@ -433,7 +436,7 @@ def read_overture_parquet(parquet_dir, cell):
                         hh, tier = DEFAULT_HEIGHT, 2
                     rows.append(
                         {"wkb": bytes(g), "height_m": hh, "tier": tier,
-                         "clat": c.y, "clon": c.x,
+                         "clat": clat, "clon": clon,
                          "envelope": envelope_class(bc, st, ug)}
                     )
     return rows
@@ -488,18 +491,26 @@ def match_pairs(osm_geoms, osm_geom_idx, overture_rows):
 
     Rule: the Overture centroid lies in the OSM polygon OR IoU >= 0.5; greedy by
     (iou desc, centroid_in desc, overture row asc, osm row asc). Deterministic:
-    the STRtree is built once in file order and every tie-break is explicit."""
+    the STRtree is built once in file order and every tie-break is explicit.
+
+    EVERY qualifying pair enters the assignment, not just each Overture row's
+    own best candidate: a row whose first choice is taken by a higher-ranked
+    pair must fall through to its next qualifying OSM twin. Keeping only the
+    local best dropped such a row to Overture-only while its twin stayed
+    OSM-only, and one physical structure then screened TWICE — once as the OSM
+    polygon, once as the Overture one. Skipping an edge whose Overture row is
+    already matched keeps the greedy result identical wherever nothing is
+    contested."""
     if not overture_rows or not osm_geoms:
         return {}
     tree = STRtree(osm_geoms)
-    candidates = []  # (iou, centroid_in, ovt_idx, osm_row)
+    edges = []  # (iou, centroid_in, ovt_row, osm_row) — the COMPLETE qualifying set
     for j, row in enumerate(overture_rows):
         g = row.get("geom")
         if g is None:
             g = shapely_wkb.loads(row["wkb"])
             row["geom"] = g
         c = g.centroid
-        best = None  # (iou, centroid_in, osm_row)
         for k in tree.query(g, predicate="intersects"):
             og = osm_geoms[k]
             contains = og.covers(c)
@@ -516,15 +527,11 @@ def match_pairs(osm_geoms, osm_geom_idx, overture_rows):
                 union = g.area + og.area - inter
                 iou = inter / union if union > 0 else 0.0
             if contains or iou >= IOU_MATCH_THRESHOLD:
-                cand = (iou, 1 if contains else 0, osm_geom_idx[k])
-                if best is None or (cand[0], cand[1], -cand[2]) > (best[0], best[1], -best[2]):
-                    best = cand
-        if best is not None:
-            candidates.append((best[0], best[1], j, best[2]))
+                edges.append((iou, 1 if contains else 0, j, osm_geom_idx[k]))
     # Greedy one-to-one: best pairs first; explicit row-order tie-breaks.
-    candidates.sort(key=lambda c: (-c[0], -c[1], c[2], c[3]))
+    edges.sort(key=lambda e: (-e[0], -e[1], e[2], e[3]))
     matched_ovt, matched_osm, pairs = set(), set(), {}
-    for iou, _cin, j, i in candidates:
+    for _iou, _centroid_in, j, i in edges:
         if j in matched_ovt or i in matched_osm:
             continue
         matched_ovt.add(j)
