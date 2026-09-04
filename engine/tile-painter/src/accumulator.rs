@@ -6,9 +6,19 @@
 //! [`crate::wire_hm3::collapse_lden_u8`] which reads the `energy`
 //! field directly.
 
+use rayon::prelude::*;
+
 use crate::grid::TILE_PX;
 
 pub const NUM_PERIODS: usize = 3;
+
+/// Parts a far-field lattice scatter is split into. The part boundaries depend only on
+/// the source count, so a tile's bytes are the same however many cores paint it —
+/// splitting on `current_num_threads()` (or letting rayon's work stealing choose, as a
+/// `fold` + `reduce` does) merges partial f32 sums in a scheduling-dependent order and
+/// moves cells across the 0.5 dB quantisation step run to run. 64 keeps a world box's
+/// cores busy while holding at most 64 lattices (≤ 50 KB each) live at once.
+const SCATTER_PARTS: usize = 64;
 
 pub struct TileAccumulator {
     /// Row-major: `[py][px][period]`. Linear A-weighted energy, summed
@@ -30,10 +40,12 @@ impl TileAccumulator {
         self.energy[idx] += e;
     }
 
-    /// Add `other`'s energy element-wise into `self`. Used by the
-    /// rayon `fold + reduce` parallelisation — per-thread accumulators
-    /// merge into one before collapse. Energy sums commute in the
-    /// linear domain, so order of merge is irrelevant.
+    /// Add `other`'s energy element-wise into `self`. The surface painters give each
+    /// rayon task a DISJOINT block of receivers, so a cell is written by one task and
+    /// every other partial contributes an exact `+ 0.0` — that, not commutativity, is
+    /// what makes the merged tile reproducible. Merging partials that touched the same
+    /// cell would not be: f32 addition is commutative but not associative, and the
+    /// order decides the cell's quantised byte at the 0.5 dB step.
     pub fn merge_from(&mut self, other: &TileAccumulator) {
         debug_assert_eq!(self.energy.len(), other.energy.len());
         for (dst, src) in self.energy.iter_mut().zip(other.energy.iter()) {
@@ -111,9 +123,39 @@ impl CoarseLattice {
         self.energy[idx] += e;
     }
 
-    pub fn merge_from(&mut self, other: &CoarseLattice) {
+    /// Sum `sources` onto this lattice in [`SCATTER_PARTS`] parts merged in index
+    /// order, returning the summed `(kernel evals, evals below the floor)` the part
+    /// function reports. This is the aircraft painters' far-field parallel split; the
+    /// fine [`TileAccumulator`] is far too large to copy per part and is split over
+    /// receiver rows instead.
+    pub fn scatter_in_fixed_parts<S: Sync>(
+        &mut self,
+        sources: &[S],
+        part: impl Fn(&[S], &mut CoarseLattice) -> (u64, u64) + Sync,
+    ) -> (u64, u64) {
+        if sources.is_empty() {
+            return (0, 0);
+        }
+        let parts: Vec<(CoarseLattice, (u64, u64))> = sources
+            .par_chunks(sources.len().div_ceil(SCATTER_PARTS))
+            .map(|chunk| {
+                let mut lattice = CoarseLattice::new(self.n);
+                let counts = part(chunk, &mut lattice);
+                (lattice, counts)
+            })
+            .collect();
+        let mut evaluated = 0;
+        let mut below = 0;
+        for (lattice, (part_evaluated, part_below)) in &parts {
+            self.merge_from(lattice);
+            evaluated += part_evaluated;
+            below += part_below;
+        }
+        (evaluated, below)
+    }
+
+    fn merge_from(&mut self, other: &CoarseLattice) {
         debug_assert_eq!(self.n, other.n);
-        debug_assert_eq!(self.energy.len(), other.energy.len());
         for (dst, src) in self.energy.iter_mut().zip(other.energy.iter()) {
             *dst += *src;
         }
@@ -200,27 +242,11 @@ impl CoarseLevels {
         Self(COARSE_LEVELS_N.map(CoarseLattice::new))
     }
 
+    /// The band's own lattice — the scatter reads its `n` / `coarse_pixel` and sums
+    /// onto it through [`CoarseLattice::scatter_in_fixed_parts`].
     #[inline]
-    pub fn add_energy_at(&mut self, level: usize, ci: usize, cj: usize, period: u8, e: f32) {
-        self.0[level].add_energy_at(ci, cj, period, e);
-    }
-
-    /// Nodes per side of `level` — the scatter loop bound.
-    #[inline]
-    pub fn n(&self, level: usize) -> usize {
-        self.0[level].n
-    }
-
-    /// Fine pixel sampled by node `i` of `level`.
-    #[inline]
-    pub fn coarse_pixel(&self, level: usize, i: usize) -> usize {
-        self.0[level].coarse_pixel(i)
-    }
-
-    pub fn merge_from(&mut self, other: &CoarseLevels) {
-        for (a, b) in self.0.iter_mut().zip(other.0.iter()) {
-            a.merge_from(b);
-        }
+    pub fn level_mut(&mut self, level: usize) -> &mut CoarseLattice {
+        &mut self.0[level]
     }
 
     /// Expand every level into `fine` and sum. One pass per level (3×),
@@ -359,10 +385,11 @@ mod tests {
         // sum everywhere — proves per-level expand-and-sum is additive.
         let mut levels = CoarseLevels::new();
         for (lvl, val) in [(0usize, 1.0f32), (1, 2.0), (2, 4.0)] {
-            let n = levels.n(lvl);
+            let lattice = levels.level_mut(lvl);
+            let n = lattice.n();
             for ci in 0..n {
                 for cj in 0..n {
-                    levels.add_energy_at(lvl, ci, cj, 2, val);
+                    lattice.add_energy_at(ci, cj, 2, val);
                 }
             }
         }

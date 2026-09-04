@@ -179,7 +179,10 @@ impl FusedGrid {
         })
     }
 
-    pub(crate) fn empty() -> Self {
+    /// The halo of a receiver-only tile: the NPD aircraft painters read `rx_lat` /
+    /// `rx_lon` / `rx_alt_m` and never ray-march a path profile, so they carry this
+    /// instead of a real grid (and so may a synthetic tile in a test).
+    pub fn empty() -> Self {
         let data = vec![FusedPixel::default(); 4];
         let imd_pyramid = ImdMaxPyramid::from_imd_plane(&data, 2, 2);
         FusedGrid {
