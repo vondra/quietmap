@@ -102,7 +102,7 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
           <div className="flex items-center justify-between mb-1">
             <span
               data-testid="noise-badge"
-              className="text-2xl font-bold leading-none shrink-0"
+              className="text-2xl font-bold leading-none shrink-0 whitespace-nowrap"
               style={{ color: ldenToColor(data.total_lden) }}
             >
               <DataPoint title="Total Lden — energy sum across all sources" text={totalLdenText}>
@@ -133,7 +133,7 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
               </span>
             </div>
           )}
-          <div className="overflow-y-auto" style={{ maxHeight: 'max(100dvh - 400px, 160px)' }}>
+          <div className="overflow-y-auto overflow-x-clip" style={{ maxHeight: 'max(100dvh - 400px, 160px)' }}>
             {/* Sources is always mounted; Segments mounts lazily (below) on first
                 visit. Once mounted, both toggle via display so expanded-row state
                 survives tab switches. */}

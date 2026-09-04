@@ -147,7 +147,7 @@ test('desktop: segment screening fan shows angular intervals and the characteris
   await page.getByRole('button', { name: /Fan fixture road/ }).click()
   await expect(page.getByText('Screening fan', { exact: true })).toBeVisible()
 
-  const fanValue = page.getByText('5 intervals · 22 % blocked', { exact: true })
+  const fanValue = page.getByText('5 int. · 22 % blocked', { exact: true })
   await expect(fanValue).toBeVisible()
   // Hover, not click: a click first fires mouseenter (opens) and then toggles the
   // tooltip closed once React has committed that open state — a CI-timing race.
@@ -160,10 +160,36 @@ test('desktop: segment screening fan shows angular intervals and the characteris
   await expect(tooltip).toContainText('-8.0–-3.0° · blocked · barrier 3.5 m · terrain -1.3 dB · ΔL -7.2 dB')
 
   await page.keyboard.press('Escape')
-  await page.getByText(/Building\/barrier \(building 8\.0 m\)/).hover()
+  await page.getByText('Building 8.0\u00A0m', { exact: true }).hover()
   await expect(page.getByRole('tooltip')).toContainText(
     'evaluates one exact source-point ray per interval, then energy-averages',
   )
+
+  // The map fan legend shows exactly the slice causes present in the fixture:
+  // open, building/barrier, and building + terrain (the barrier slice also
+  // carries 1.3 dB of terrain on its own ray).
+  await page.keyboard.press('Escape')
+  await expect(page.getByText('Map:', { exact: true })).toBeVisible()
+  await expect(page.getByText('building / barrier')).toBeVisible()
+  await expect(page.getByText('building + terrain')).toBeVisible()
+
+  // Layout regression: nothing inside the popup may overflow horizontally —
+  // a 4 px bleed once made vertical scrolling pan the card sideways.
+  // Allowlist: the kind-filter strip scrolls by design, truncated names
+  // ellipsis by design.
+  const overflow = await page.evaluate(() => {
+    const bad: string[] = []
+    for (const el of document.querySelectorAll('[data-testid="detail-popup"] *')) {
+      const h = el as HTMLElement
+      if (h.scrollWidth > h.clientWidth + 2) {
+        const cls = typeof h.className === 'string' ? h.className : ''
+        if (cls.includes('overflow-x-auto') || cls.includes('truncate')) continue
+        bad.push(`${el.tagName}.${cls.slice(0, 50)}:${(h.textContent ?? '').trim().slice(0, 40)}`)
+      }
+    }
+    return bad
+  })
+  expect(overflow).toEqual([])
 })
 
 test.describe('mobile', () => {

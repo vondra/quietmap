@@ -15,7 +15,9 @@ const PLOT_H = VB_H - PAD_T - PAD_B
 const MIN_BUILDING_PX = 4
 // An exact crossing is a point, not a cell: draw it a fixed narrow bar so a
 // 6 m shed and a 60 m block differ in HEIGHT, which is what screens sound.
-const MIN_BUILDING_W = 5
+// Wide enough to read as a building at popup scale — the earlier 5-unit bar
+// looked like just another sample tick next to the ridge rings.
+const MIN_BUILDING_W = 9
 
 // Forest shades used only here (canopy + highlight). The shared
 // DIAGRAM_COLORS.forest is a mid-green; we also need a lighter shade
@@ -166,7 +168,15 @@ export function PathProfileDiagram({
     const baseY = yOf(base)
     const hPx = Math.max(baseY - yOf(base + obstacleEdge.height_m), MIN_BUILDING_PX)
     const x = xOf(obstacleEdge.t)
-    return [{ x: x - MIN_BUILDING_W / 2, y: baseY - hPx, w: MIN_BUILDING_W, h: hPx }]
+    return [
+      {
+        x: x - MIN_BUILDING_W / 2,
+        y: baseY - hPx,
+        w: MIN_BUILDING_W,
+        h: hPx,
+        label: `${obstacleEdge.height_m.toFixed(0)} m`,
+      },
+    ]
   }, [trace, n, xOf, yOf, obstacleEdge])
 
   const svgRef = useRef<SVGSVGElement | null>(null)
@@ -344,7 +354,8 @@ export function PathProfileDiagram({
 
         {buildingRects.map((r, i) => (
           <g key={`b-${i}`}>
-            <rect x={r.x} y={r.y} width={r.w} height={r.h} fill="rgba(120,120,120,0.7)" />
+            <title>{`building ${r.label}`}</title>
+            <rect x={r.x} y={r.y} width={r.w} height={r.h} fill="rgba(70,70,70,0.9)" />
             {r.h >= 8 && (
               <line
                 x1={r.x}

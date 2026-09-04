@@ -35,11 +35,15 @@ export function bandsTooltip(
  * Distinct from utils/formatters.fmtDb (unsigned, nullable, for absolute Lden):
  * this one prefixes "+" for positive deltas — path-effect / surface corrections
  * read as "+2.3 dB" / "−1.5 dB".
+ *
+ * Number and unit join with a NON-BREAKING space (spelled \u00A0 so the
+ * character stays visible and greppable): in the 320 px popup the value
+ * cell is narrow and a plain space let "−14.4 / dB" split across two lines.
  */
 export function fmtDbSigned(v: number, { signed = true, digits = 1 } = {}): string {
   if (!Number.isFinite(v)) return '—'
   const sign = signed && v > 0 ? '+' : ''
-  return `${sign}${v.toFixed(digits)} dB`
+  return `${sign}${v.toFixed(digits)}\u00A0dB`
 }
 
 /** Bare visual block — no header. Spacing alone separates the §1…§6 sections. */
@@ -47,18 +51,22 @@ export function Section({ children }: { children: ReactNode }) {
   return <div className="mt-3">{children}</div>
 }
 
-/** Two-column key/value grid used by the source + path-effect sections. */
+/** Two-column key/value grid used by the source + path-effect sections.
+ *
+ * Value track is `auto`, not `1fr`: a long label must squeeze the LABEL
+ * (which wraps), never the value. With `1fr` + `min-w-0` a wrapped label
+ * could shrink the value track below its content, and the overflowing
+ * right-aligned number then stuck out past the other rows' dB units.
+ * VALUES never split either — "−14.4 / dB" misreads. The one value that
+ * must keep wrapping (aircraft "Top types" class mix) opts back out with
+ * its own `whitespace-normal`. */
 export function InlineTable({ rows }: { rows: [string | ReactNode, ReactNode][] }) {
   return (
-    <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5">
       {rows.map(([k, v], i) => (
         <div key={i} className="contents">
-          <span className="text-muted-foreground/70 whitespace-nowrap">{k}</span>
-          {/* `min-w-0` makes the 1fr cell honour its grid track size when the
-             content includes long unbreakable runs ("Average NPD 42% · B738
-             28% · A320 13%"). Without it the cell expands and overflows the
-             320 px side panel. */}
-          <span className="min-w-0 text-foreground text-right tabular-nums break-words">{v}</span>
+          <span className="min-w-0 text-muted-foreground/70">{k}</span>
+          <span className="text-foreground text-right tabular-nums whitespace-nowrap">{v}</span>
         </div>
       ))}
     </div>

@@ -117,7 +117,10 @@ export function SegmentList({
 
   return (
     <div>
-      <div className="flex mt-1 mb-1.5 whitespace-nowrap text-[11px] bg-muted/30 rounded py-1 -mx-1 divide-x divide-foreground/25 overflow-x-auto">
+      {/* No -mx bleed: negative margins widened the scroll container's
+          scrollWidth past its clientWidth, so vertical scrolling also panned
+          the card sideways. */}
+      <div className="flex mt-1 mb-1.5 whitespace-nowrap text-[11px] bg-muted/30 rounded py-1 divide-x divide-foreground/25 overflow-x-auto">
         {KIND_FILTERS.map(({ key, label, longName }) => {
           const kindCount = metaCount(meta, key, 'count')
           const kindTotal = metaCount(meta, key, 'total')

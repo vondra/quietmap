@@ -38,8 +38,10 @@ export default function DetailCard({ noiseData, position, error, onNoiseClose, o
   if (!position) return null
   const showSkeleton = !noiseData
 
+  // overflow-x-clip: nothing inside may pan sideways — a child wider than
+  // the card used to drag the whole popup left on vertical scroll.
   return (
-    <FloatingCard className="relative p-0 max-h-[50vh] overflow-y-auto" ref={scrollRef}>
+    <FloatingCard className="relative p-0 max-h-[50vh] overflow-y-auto overflow-x-clip" ref={scrollRef}>
       <button
         onClick={onNoiseClose}
         className="absolute top-1 right-1.5 z-10 p-1 rounded-md hover:bg-black/5 text-muted-foreground hover:text-foreground"

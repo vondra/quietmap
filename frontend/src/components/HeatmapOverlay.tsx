@@ -10,6 +10,7 @@ import { lngLatToTileFloat } from '../lib/tile-math'
 import { MIN_ZOOM, WORLD_EXTENT, buildKey, tileUrl, useTileBuild, type TileBuilds } from '../lib/tile-urls'
 import { loadTileProgressively, fetchAncestor, type HeatTile } from '../lib/progressive-tile-loader'
 import { compositeSig, baseRange, buildComposite, type Composite } from '../lib/tile-composite'
+import { FAN_SLICE_RGBA, type FanSliceKind } from './noise/fanGeometry'
 
 // The seven toggleable noise layers. All share the same HM3 format + palette
 // (Lden), so the tile fetch/decode/energy-sum loop is layer-agnostic.
@@ -31,7 +32,7 @@ export type HeatmapSource = HeatmapLayer | 'total'
 
 interface Props {
   sources: readonly HeatmapSource[]
-  highlightGeometry?: GeoJSON.Geometry | null
+  highlightGeometry?: GeoJSON.Geometry | GeoJSON.FeatureCollection | null
 }
 
 // Display zoom at/above which we stitch ONE composite image (no internal tile
@@ -449,29 +450,67 @@ function makeHeatmapTileLayer(
 /**
  * Contributor-highlight casing + core pair: a wider black stroke under a thinner
  * white one (readable on any basemap). No `beforeId` → drawn last, above labels.
+ *
+ * A road/railway segment with an engine screening fan arrives as a
+ * FeatureCollection: one triangle per fan slice (properties.fanKind colors the
+ * slice by its cause — open / building / terrain / both) plus the
+ * characteristic ray and segment LineStrings. Anything else is a single
+ * geometry as before.
  */
-function makeHighlightLayers(geometry: GeoJSON.Geometry | null | undefined) {
+function makeHighlightLayers(geometry: GeoJSON.Geometry | GeoJSON.FeatureCollection | null | undefined) {
   if (!geometry) return []
-  const data: GeoJSON.Feature = { type: 'Feature', geometry, properties: {} }
+  const features: GeoJSON.Feature[] =
+    geometry.type === 'FeatureCollection'
+      ? geometry.features
+      : [{ type: 'Feature', geometry: geometry as GeoJSON.Geometry, properties: {} }]
+  // Fan slices only: plain polygons without fanKind (cruise hexes) keep the
+  // old white highlight instead of a cause color.
+  const slices = features.filter(f => f.geometry?.type === 'Polygon' && f.properties?.fanKind != null)
+  const rest = features.filter(f => !(f.geometry?.type === 'Polygon' && f.properties?.fanKind != null))
+  const restData: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: rest }
+  const sliceFill = (f: { properties?: Record<string, unknown> }): [number, number, number, number] => {
+    const c = FAN_SLICE_RGBA[(f.properties?.fanKind ?? 'clear') as FanSliceKind]
+    return c ?? FAN_SLICE_RGBA.clear
+  }
   return [
-    new GeoJsonLayer({
-      id: 'contributor-highlight-casing',
-      data,
-      stroked: true, filled: true,
-      getLineColor: [0, 0, 0, 255],
-      getLineWidth: 5, lineWidthMinPixels: 5, lineWidthUnits: 'pixels',
-      getFillColor: [255, 255, 255, 76],
-      getPointRadius: 5, pointRadiusUnits: 'pixels',
-      pickable: false,
-    }),
-    new GeoJsonLayer({
-      id: 'contributor-highlight-core',
-      data,
-      stroked: true, filled: false,
-      getLineColor: [255, 255, 255, 255],
-      getLineWidth: 2, lineWidthMinPixels: 2, lineWidthUnits: 'pixels',
-      getPointRadius: 3, pointRadiusUnits: 'pixels',
-      pickable: false,
-    }),
+    ...(slices.length > 0
+      ? [
+          new GeoJsonLayer({
+            id: 'segment-fan-slices',
+            data: slices,
+            stroked: true, filled: true,
+            getLineColor: (f: { properties?: Record<string, unknown> }): [number, number, number, number] => {
+              const c = sliceFill(f)
+              return [c[0], c[1], c[2], 220]
+            },
+            getLineWidth: 1, lineWidthMinPixels: 1, lineWidthUnits: 'pixels',
+            getFillColor: sliceFill,
+            pickable: false,
+          }),
+        ]
+      : []),
+    ...(rest.length > 0
+      ? [
+          new GeoJsonLayer({
+            id: 'contributor-highlight-casing',
+            data: restData,
+            stroked: true, filled: true,
+            getLineColor: [0, 0, 0, 255],
+            getLineWidth: 5, lineWidthMinPixels: 5, lineWidthUnits: 'pixels',
+            getFillColor: [255, 255, 255, 76],
+            getPointRadius: 5, pointRadiusUnits: 'pixels',
+            pickable: false,
+          }),
+          new GeoJsonLayer({
+            id: 'contributor-highlight-core',
+            data: restData,
+            stroked: true, filled: false,
+            getLineColor: [255, 255, 255, 255],
+            getLineWidth: 2, lineWidthMinPixels: 2, lineWidthUnits: 'pixels',
+            getPointRadius: 3, pointRadiusUnits: 'pixels',
+            pickable: false,
+          }),
+        ]
+      : []),
   ]
 }

@@ -43,7 +43,7 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
           'sources: spherical spreading plus a source-geometry adapter.'
         }
       >
-        Geometric divergence
+        Divergence
       </HoverText>,
       <HoverText
         title={
@@ -66,7 +66,7 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
           'per kilometre than low frequencies.'
         }
       >
-        Atmospheric absorption
+        Atmosphere
       </HoverText>,
       <HoverText
         title={bandsTooltip(baseline.atmospheric_bands, {
@@ -89,7 +89,7 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
           'soft ground (G → 1) the 63/125 Hz bands can BOOST energy.'
         }
       >
-        Ground effect (G={ground.factor_g.toFixed(2)})
+        Ground (G={ground.factor_g.toFixed(1)})
       </HoverText>,
       <HoverText
         title={bandsTooltip(ground.attenuation_bands, {
@@ -126,7 +126,7 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
           'same value appears on every segment at this point.'
         }
       >
-        +{baseline.reflection_boost_db.toFixed(1)} dB
+        +{baseline.reflection_boost_db.toFixed(1)}{'\u00A0'}dB
       </HoverText>,
     ])
   }
@@ -141,7 +141,7 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
           'Standard practice in NMPB / NoiseModelling / CNOSSOS.'
         }
       >
-        Finite-line correction
+        Finite line
       </HoverText>,
       <HoverText
         title={
@@ -174,12 +174,12 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
       'Scalar = A-weighted ΔL_A (full − no_terrain Lden).\n' +
       'Rayleigh δ* gate is reported on its own row when it zeroes any band.'
     const terrainParens = terrain.delta_m > 0
-      ? ` (δ ${terrain.delta_m.toFixed(2)} m, single edge)`
+      ? ` (δ ${terrain.delta_m.toFixed(2)}\u00A0m)`
       : isScalarOnly
         ? ''
         : ' (none)'
     return [
-      <HoverText title={labelTooltip}>Terrain diffraction{terrainParens}</HoverText>,
+      <HoverText title={labelTooltip}>Terrain{terrainParens}</HoverText>,
       <HoverText title={bandsTooltip(terrain.attenuation_bands, { title: valueTooltip })}>
         {fmtDbSigned(terrainDelta)}
       </HoverText>,
@@ -187,11 +187,14 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
   })()
   const screeningRow: [React.ReactNode, React.ReactNode] = (() => {
     const obs = screening.obstacle
+    // One-line label: short kind + height ("Building 8.0 m") — the full
+    // "Building/barrier screening" term lives in the tooltip. Non-breaking
+    // space before the unit so "8.0 m" never splits across lines.
     const screenLabel = obs
-      ? `${obs.edge.kind} ${obs.edge.height_m.toFixed(1)} m`
+      ? `${obs.edge.kind === 'barrier' ? 'Barrier' : 'Building'} ${obs.edge.height_m.toFixed(1)}\u00A0m`
       : isScalarOnly
-        ? ''
-        : 'none'
+        ? 'Building/barrier'
+        : 'Building/barrier (none)'
     const labelTooltip =
       'A_bar — Building / barrier screening component (SPEC §4.7).\n\n' +
       'For a road or railway segment that carries a Screening fan row, the\n' +
@@ -211,7 +214,7 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
       edgeDetail
     return [
       <HoverText title={labelTooltip}>
-        Building/barrier{screenLabel ? ` (${screenLabel})` : ''}
+        {screenLabel}
       </HoverText>,
       <HoverText title={bandsTooltip(screening.attenuation_bands, { title: valueTooltip })}>
         {fmtDbSigned(screeningDelta)}
@@ -231,7 +234,7 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
     >
       Foliage
       {vegetation.forest_depth_m > 0
-        ? ` (${vegetation.forest_depth_m.toFixed(0)} m forest, 0.5× adj.)`
+        ? ` (${vegetation.forest_depth_m.toFixed(0)}\u00A0m)`
         : isScalarOnly
           ? ''
           : ' (none)'}
@@ -281,7 +284,11 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
           {/* The existing obstacle label can be wider than 200 px; a separate
               grid leaves the required fan value readable in the 320 px popup. */}
           <ScreeningFanRow fan={fan} />
-          <InlineTable rows={[foliageRow]} />
+          {/* Breathing room after the indented map key — without it the
+              Foliage row reads as another legend entry. */}
+          <div className="mt-1.5">
+            <InlineTable rows={[foliageRow]} />
+          </div>
         </>
       ) : (
         <InlineTable rows={[terrainRow, screeningRow, foliageRow]} />
