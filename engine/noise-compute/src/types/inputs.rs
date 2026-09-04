@@ -246,15 +246,3 @@ impl AirportArea {
         }
     }
 }
-
-/// Half the longest barrier microsegment `osm-extract` can emit: every linear
-/// feature is split at 250 m (`microsegment::split(&coords, 250.0)`), so a wall
-/// microsegment's midpoint sits at most this far from any point of it.
-///
-/// A data-layout fact about the wall rows in the per-cell structures store —
-/// the loaders' wall reach prefilters (source-reader's per-hex merge,
-/// tile-painter's `BarrierData::for_tile`) add it as slack around a query
-/// region. The engine's own screening needs no such horizon: walls are ordinary
-/// `ObstacleKind::Barrier` polyline edges in the obstacle index, and an exact
-/// ray walk either crosses them or does not.
-pub const BARRIER_SEGMENT_MAX_HALF_LEN_M: f64 = 125.0;

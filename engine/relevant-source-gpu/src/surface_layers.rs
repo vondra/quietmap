@@ -17,6 +17,8 @@ pub const LAYER_NAMES: [&str; LAYER_COUNT] =
 pub const LAYER_COUNT: usize = 5;
 /// Airport ground ops: the one layer whose sources are dated events.
 pub const GROUND_OPS_LAYER: usize = 4;
+/// Building emission: the layer whose points come out of the structure table.
+pub const BUILDING_LAYER: usize = 3;
 
 pub const LAYER_SOURCE_IDS: [u8; LAYER_COUNT] = [
     SOURCE_ID_ROAD,

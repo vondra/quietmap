@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cache-fill for the obstacle height-ladder rasters (enrich-obstacle-heights.ts):
+# Cache-fill for the structure height-ladder rasters (scripts/structures/build-structures.py):
 #   1. GHS-BUILT-H R2023A ANBH 100 m global GeoTIFF (JRC, CC-BY 4.0, ~2 GB zip)
 #      -> data/enrichment/global/ghsl-built-h/
 #   2. IPR Praha "Relativni vysky budov" (DSM-DTM, 1 m, F32, S-JTSK, CC BY)

@@ -27,11 +27,11 @@ interface PlanIndex {
  *  the world plan. Returns an error string, or null when the token is valid. */
 function resolveParentToken(token: string, plan: PlanIndex): string | null {
   if (token.startsWith('extract:') || token.startsWith('aircraft-extract:')) return null
-  if (token.startsWith('overture-ingest:')) {
-    const script = token.slice('overture-ingest:'.length)
+  if (token.startsWith('overture-parquet:')) {
+    const script = token.slice('overture-parquet:'.length)
     return existsSync(resolve(REPO_ROOT, script))
       ? null
-      : `overture ingest producer '${script}' does not exist`
+      : `overture parquet producer '${script}' does not exist`
   }
   const family = /^(national|city):([a-z]+)$/.exec(token)
   if (family) {
@@ -39,7 +39,7 @@ function resolveParentToken(token: string, plan: PlanIndex): string | null {
     return `family '${token}' matches NO manifest step (phase ${family[1]}, layer ${family[2]})`
   }
   if (plan.stepIds.has(token)) return null
-  return `'${token}' is not a manifest step id (nor extract:/aircraft-extract:/overture-ingest:/national:/city: token)`
+  return `'${token}' is not a manifest step id (nor extract:/aircraft-extract:/overture-parquet:/national:/city: token)`
 }
 
 export function runInventory(): number {

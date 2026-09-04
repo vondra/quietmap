@@ -85,15 +85,6 @@ struct DeviceObstacleGrid {
     uint32_t cell_maximum_height_offset;
 };
 
-struct DeviceBarrier {
-    float start_x_m;
-    float start_y_m;
-    float end_x_m;
-    float end_y_m;
-    float height_m;
-    float receiver_distance_lower_bound_m;
-};
-
 struct DeviceScenePointers {
     const DeviceLineSource* sources;
     const FusedPixel* raster_pixels;
@@ -102,10 +93,9 @@ struct DeviceScenePointers {
     const uint32_t* obstacle_edge_references;
     const float* obstacle_edge_values_xyxyh;
     const float* obstacle_cell_maximum_heights;
-    const DeviceBarrier* barriers;
+    const uint8_t* obstacle_edge_is_building;
     uint32_t source_count;
     uint32_t obstacle_grid_count;
-    uint32_t barrier_count;
     /// Half a pixel of this tile in metres: the ground-ops divergence floor.
     float pixel_floor_m;
     DeviceRasterGeometry raster_geometry;
@@ -132,7 +122,6 @@ static_assert(sizeof(DeviceLineSource) == 128, "source ABI");
 static_assert(sizeof(FusedPixel) == 8, "raster pixel ABI");
 static_assert(sizeof(DeviceRasterGeometry) == 24, "raster geometry ABI");
 static_assert(sizeof(DeviceObstacleGrid) == 48, "obstacle grid ABI");
-static_assert(sizeof(DeviceBarrier) == 24, "barrier ABI");
 static_assert(sizeof(DeviceScenePointers) == 104, "scene ABI");
 
 __device__ __forceinline__ float quietmap_clamp(float value, float minimum, float maximum) {

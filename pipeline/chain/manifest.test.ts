@@ -38,8 +38,8 @@ function railwayEuropeSteps(scope: ResolvedScope): PlanStep[] {
   return buildPlan(scope).steps.filter((s) => s.script === 'enrich-railway-europe.ts')
 }
 
-function obstacleHeightSteps(scope: ResolvedScope): PlanStep[] {
-  return buildPlan(scope).steps.filter((s) => s.script === 'enrich-obstacle-heights.ts')
+function structureSteps(scope: ResolvedScope): PlanStep[] {
+  return buildPlan(scope).steps.filter((s) => s.script === 'enrich-structures.ts')
 }
 
 test('world scope: ONE railway-europe step, no --country, expectMinInputs DERIVED from the FEEDS registry (item 7: the hand-written 23 is dead)', () => {
@@ -86,15 +86,28 @@ test('country scope steps never carry the world-mode note about the enricher\'s 
   assert.doesNotMatch(steps[0].notes, /all-countries SEQUENTIAL loop/)
 })
 
-test('obstacle heights stays world-scoped and is never downgraded to a sync-safe cache skip', () => {
-  const steps = obstacleHeightSteps(parseScope('world'))
+test('the structures step stays world-scoped and is never downgraded to a sync-safe cache skip', () => {
+  const steps = structureSteps(parseScope('world'))
   assert.equal(steps.length, 1)
-  assert.equal(steps[0].id, 'obstacle-heights')
+  assert.equal(steps[0].id, 'structures')
   assert.equal(steps[0].skipReason, null)
-  assert.deepEqual(steps[0].args, ['--enrich-only'])
+  assert.deepEqual(steps[0].args, ['--enrich-only', '--retire-inputs'])
 })
 
-test('obstacle heights receives the exact bbox under a scoped chain run', () => {
+test('the structures step is terminal: every pre-merge buildings.arrow reader/writer runs before it', () => {
+  // The builder retires buildings.arrow after consuming it, so buildings-cz/es
+  // (national), roads-service-tree (heuristics) and the gate auditor must all
+  // sit earlier in the plan (they read — two of them write — the pre-merge file).
+  const steps = buildPlan(parseScope('world')).steps
+  const at = (id: string) => steps.findIndex((s) => s.id === id)
+  assert.ok(at('structures') > 0, 'the structures step exists')
+  assert.equal(steps[at('structures')].phase, 'structures')
+  for (const earlier of ['buildings-cz', 'buildings-es', 'roads-service-tree', 'roads-taper', 'gate-invariants']) {
+    assert.ok(at(earlier) >= 0 && at(earlier) < at('structures'), `${earlier} must precede structures`)
+  }
+})
+
+test('the structures step receives the exact bbox under a scoped chain run', () => {
   const scope: ResolvedScope = {
     kind: 'bbox',
     iso2: null,
@@ -102,8 +115,8 @@ test('obstacle heights receives the exact bbox under a scoped chain run', () => 
     label: 'bbox:test',
     canonical: 'bbox:49.7,13.9,50.4,15',
   }
-  const steps = obstacleHeightSteps(scope)
+  const steps = structureSteps(scope)
   assert.equal(steps.length, 1)
   assert.equal(steps[0].skipReason, null)
-  assert.deepEqual(steps[0].args, ['--enrich-only', '--bbox', '49.7,13.9,50.4,15'])
+  assert.deepEqual(steps[0].args, ['--enrich-only', '--retire-inputs', '--bbox', '49.7,13.9,50.4,15'])
 })

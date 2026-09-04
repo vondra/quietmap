@@ -1502,9 +1502,10 @@ export const DATASETS: Dataset[] = [
     priority: 50,
     provenance: 'baseline', // global raster baseline, not a measurement
   },
-  // Obstacle-store height ladder (enrich-obstacle-heights.ts): obstacle rows
-  // carry `height_tier`, not `source_id` — these entries document the rasters'
-  // license/URL/rank for docs + attribution (tier 4 = ANBH, tier 3 = city DSM).
+  // Structure-table height ladder (scripts/structures/build-structures.py):
+  // structure rows carry `height_tier`, not `source_id` — these entries
+  // document the rasters' license/URL/rank for docs + attribution (tier 4 =
+  // ANBH, tier 3 = city DSM).
   {
     id: 9866,
     layer: 'buildings',

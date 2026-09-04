@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """The whole-world land tile census for the Overture building download.
 
-The Planet-extracted H3 R4 inventory is the source of truth. The obstacle tree
-contains only cells with at least one vector footprint, so deriving a download
-list from it permanently excludes empty land. Each H3 R4 cell contributes every
+The Planet-extracted H3 R4 inventory is the source of truth: every prepared
+cell gets a structures.arrow (empty where nothing stands), so the download list
+must cover every prepared cell — deriving it from a footprint-bearing subset
+would permanently exclude empty land. Each H3 R4 cell contributes every
 1-degree tile its bounding box touches.
 
 The dataset year comes from the product contract, so a Planet re-extract stays
@@ -28,12 +29,8 @@ def default_source() -> Path:
 
 
 def cell_degree_tiles(cell: str, h3_module) -> list[str]:
-    """Every 1-degree tile the cell's boundary bounding box touches.
-
-    The download census and the promotion's sweep-completeness test are the same
-    question asked in two directions ("which tiles must be fetched for this cell"
-    and "has every tile of this cell been ingested"), so they share this list.
-    """
+    """Every 1-degree tile the cell's boundary bounding box touches — the set
+    whose parquets build-structures.py reads for this cell."""
     boundary = h3_module.cell_to_boundary(cell)
     lats = [p[0] for p in boundary]
     lons = [p[1] for p in boundary]
@@ -63,5 +60,5 @@ def census(source: str, h3_module=None) -> list[str]:
 if __name__ == "__main__":
     source = sys.argv[1] if len(sys.argv) > 1 else default_source()
     if not os.path.isdir(source):
-        sys.exit(f"obstacle source missing: {source}")
+        sys.exit(f"prepared cell tree missing: {source}")
     print("\n".join(census(source)))

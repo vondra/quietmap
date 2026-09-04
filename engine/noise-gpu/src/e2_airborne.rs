@@ -20,7 +20,7 @@ use tile_painter::accumulator::TileAccumulator;
 use tile_painter::airborne::scatter_tile;
 use tile_painter::region_runner::{region_tiles, tile_centre_r4};
 use tile_painter::source_loader_airborne::AirborneData;
-use tile_painter::source_loader_obstacle::ObstacleData;
+use tile_painter::source_loader_structure::StructureData;
 
 fn env(k: &str, d: &str) -> String {
     std::env::var(k).unwrap_or_else(|_| d.to_string())
@@ -42,7 +42,7 @@ fn main() -> Result<()> {
         .collect();
     let rasters = RealRasters::new(Path::new(&prepared));
     let air = AirborneData::load_for_r4s(Path::new(&h3r4), &ring)?;
-    let obstacles = ObstacleData::load_for_r4s(Path::new(&h3r4), r4, &ring)?;
+    let obstacles = StructureData::load_screening_for_r4s(Path::new(&h3r4), r4, &ring)?;
     let views = air.views();
     let bn = default_batch_size();
     let n = TILE_PX * TILE_PX;

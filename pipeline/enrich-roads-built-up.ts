@@ -1,10 +1,11 @@
-//! Road `built_up` flag from the Overture building footprints (task #15).
+//! Road `built_up` flag from the per-cell structure table (task #15).
 //!
 //! Writes a u8 `built_up` column into every roads.arrow: 1 = rural, 2 = urban,
-//! 0 = unknown ONLY when a 1° tile the sampling window touches was never
-//! ingested into the obstacle store. The engine
-//! (`noise-compute::defaults::resolve_speed_default`) uses it to pick the
-//! country's legal urban/rural implicit speed for UNTAGGED roads of classes
+//! 0 = unknown ONLY when a cell the sampling window touches has no
+//! structures.arrow (the builder writes one into every prepared cell — empty
+//! where nothing stands — so a missing file means coverage never arrived). The
+//! engine (`noise-compute::defaults::resolve_speed_default`) uses it to pick
+//! the country's legal urban/rural implicit speed for UNTAGGED roads of classes
 //! 2/3/4/9; 0 falls back to the legacy world speed table. The column is written
 //! for every row regardless of class — the engine decides what consumes it.
 //!
@@ -14,12 +15,13 @@
 //! grid.
 //!
 //! WHY it no longer reads the building raster: that raster was only ever an
-//! urban-density proxy for this one flag and has been deleted. The
-//! vector obstacle store the engine already screens against carries the same
-//! Overture footprints, so the probe reads those instead. Cutover validation
-//! measured 27 951 road segments across CZ/DE/FR/GB/US/BR:
+//! urban-density proxy for this one flag and has been deleted. The structure
+//! table the engine already screens against carries the same Overture
+//! footprints (plus OSM-only rows, which the sampler deliberately excludes —
+//! the calibrated threshold was fitted to the Overture-only stock). Cutover
+//! validation measured 27 951 road segments across CZ/DE/FR/GB/US/BR:
 //! the two probes give the same answer for 97.30 % of segments, no segment
-//! changes to or from UNKNOWN because the same manifest defines coverage, and
+//! changes to or from UNKNOWN because the same coverage defines it, and
 //! of the 5 483 segments that actually
 //! consult the flag — class 2/3/4/9 with no OSM maxspeed and no taper — 2.48 %
 //! resolve a different default speed.
@@ -41,12 +43,7 @@ import { resolve } from 'node:path'
 import { makeVector, makeTable, type Table } from 'apache-arrow'
 import { withArrowWrite } from './lib/provenance.js'
 import { iterateCountryHexes } from './lib/roads-arrow.js'
-import {
-  BuildingFootprintSampler,
-  OBSTACLE_STORE_DIR,
-  OBSTACLE_INGEST_MANIFEST,
-  BUILT_UP_UNKNOWN,
-} from './lib/building-footprints.js'
+import { BuildingFootprintSampler, BUILT_UP_UNKNOWN } from './lib/building-footprints.js'
 import { H3R4_DIR } from './lib/data-year.js'
 
 const PREFIX = process.argv.includes('--prefix') ? process.argv[process.argv.indexOf('--prefix') + 1] : ''
@@ -61,7 +58,7 @@ const sampler = new BuildingFootprintSampler()
 
 interface HexResult {
   rows: number
-  unknown: number // built_up=0 (a 1° tile the window touches was never ingested)
+  unknown: number // built_up=0 (a window-touched cell has no structures.arrow)
   rural: number
   urban: number
   changed: boolean
@@ -120,19 +117,6 @@ async function main() {
     console.error(`ERROR: H3R4 directory not found: ${H3R4_DIR}`)
     process.exit(1)
   }
-  // Fail loud if the obstacle store or its ingest manifest is absent —
-  // otherwise every segment world-wide would silently get built_up=0 and the
-  // engine would never see an urban/rural signal. The manifest is the one that
-  // decides UNKNOWN, so its absence is just as fatal as an empty store.
-  if (!existsSync(OBSTACLE_STORE_DIR) || readdirSync(OBSTACLE_STORE_DIR).length === 0) {
-    console.error(`ERROR: obstacle store missing or empty: ${OBSTACLE_STORE_DIR}`)
-    process.exit(1)
-  }
-  if (!existsSync(OBSTACLE_INGEST_MANIFEST)) {
-    console.error(`ERROR: obstacle ingest manifest missing: ${OBSTACLE_INGEST_MANIFEST}`)
-    process.exit(1)
-  }
-
   // Same enumeration shape as continuity-fill/service-tree: --bbox → region,
   // else full tree (optionally --prefix), sorted so SHARD slices reproduce.
   let hexDirs = (
@@ -140,6 +124,19 @@ async function main() {
       ? iterateCountryHexes(H3R4_DIR, BBOX)
       : readdirSync(H3R4_DIR).filter((d) => !d.startsWith('.') && (!PREFIX || d.startsWith(PREFIX)))
   ).sort()
+
+  // Fail loud when NO in-scope cell carries the structure table:
+  // build-structures.py writes one into every prepared cell, so a scope with
+  // none means the builder has not run — continuing would stamp built_up=0
+  // everywhere and the engine would lose the urban/rural signal world-wide.
+  // (Partial coverage is not fatal: those segments classify UNKNOWN per cell.)
+  if (!hexDirs.some((hex) => existsSync(resolve(H3R4_DIR, hex, 'structures.arrow')))) {
+    console.error(
+      `ERROR: no structures.arrow in any in-scope cell of ${H3R4_DIR} — ` +
+        `run scripts/structures/build-structures.py first (it writes every prepared cell's table)`,
+    )
+    process.exit(1)
+  }
 
   if (process.env.SHARD) {
     const m = /^(\d+)\/(\d+)$/.exec(process.env.SHARD)
@@ -176,8 +173,8 @@ async function main() {
 
   console.log(`\n=== Results ===`)
   console.log(`  ${hexes} hexes scanned, ${changedHexes} rewritten`)
-  console.log(`  ${totals.rows} segments: ${totals.urban} urban (2), ${totals.rural} rural (1), ${totals.unknown} unknown (0, 1° tile never ingested)`)
-  if (missingTileHexes > 0) console.log(`  WARNING: ${missingTileHexes} hex(es) had segments over never-ingested tiles`)
+  console.log(`  ${totals.rows} segments: ${totals.urban} urban (2), ${totals.rural} rural (1), ${totals.unknown} unknown (0, a window-touched cell has no structures.arrow)`)
+  if (missingTileHexes > 0) console.log(`  WARNING: ${missingTileHexes} hex(es) had segments over cells without structures.arrow`)
 }
 
 main().catch((err) => {

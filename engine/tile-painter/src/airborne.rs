@@ -25,7 +25,7 @@ use rayon::prelude::*;
 use crate::accumulator::{CoarseLevels, TileAccumulator};
 use crate::airborne_screening::ReceiverScreeningGrid;
 use crate::grid::TILE_PX;
-use crate::source_loader_obstacle::InteriorEstimate;
+use crate::source_loader_structure::InteriorEstimate;
 
 /// Slant cutoff between the exact per-pixel path and the coarse lattice.
 /// A segment whose nearest tile pixel is closer than this is evaluated at

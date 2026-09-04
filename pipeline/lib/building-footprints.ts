@@ -1,13 +1,12 @@
 /**
  * Vector building-footprint probe for the road `built_up` flag (task #15).
  *
- * Replaces the 166 GB building RASTER sampler with a read of the Overture
- * obstacle store the engine already screens against
- * (`data/enrichment/global/overture-obstacles/h3r4/<cell>/obstacles-<TILE>.arrow`,
- * written by `scripts/obstacles/ingest-overture-obstacles.py`). Nothing here is
- * acoustics: `built_up` only decides whether an UNTAGGED road of class 2/3/4/9
- * gets the country's legal urban or rural speed (CZ 50 vs 90), and the raster
- * was never more than an urban-density proxy that happened to be lying around.
+ * Reads the per-cell structure table the engine screens against
+ * (`data/prepared/{year}/h3r4/<cell>/structures.arrow`, written by
+ * `scripts/structures/build-structures.py`). Nothing here is acoustics:
+ * `built_up` only decides whether an UNTAGGED road of class 2/3/4/9 gets the
+ * country's legal urban or rural speed (CZ 50 vs 90), and the raster this
+ * probe replaced was never more than an urban-density proxy.
  *
  * The ONE consumer that writes the flag is `enrich-roads-built-up.ts`; the
  * engine reads the resulting `built_up` column in
@@ -32,26 +31,27 @@
  * raster's own statistic, latitude effect included, and the calibrated
  * threshold [`BUILT_UP_MIN_BUILT_PIXELS`] keeps the meaning it was fitted with.
  *
- * Coverage is decided by the WORLD INGEST MANIFEST (`.ingested-tiles`), not by
- * the presence of shards: the ingest writes a shard only for cells that
- * received ≥1 footprint, so "no shard" is ambiguous between covered-and-empty
- * and never-staged. The manifest lists 1° tiles and the retired raster was one
- * file per 1° tile, so it preserves the same covered-versus-unknown distinction
- * without retaining that raster.
+ * Coverage is per cell: a cell's structures.arrow EXISTS in every prepared cell
+ * (the builder writes a 0-row table where nothing stands), so "file missing"
+ * means the builder has not reached that cell and the window's answer is
+ * UNKNOWN. An empty table is swept-empty knowledge, never UNKNOWN.
  *
- * This sampler reads the STAGING tree at PREPARE time on the data node, beside
- * the ingest that writes both — the same place and time as the promotion, which
- * is the manifest's other consumer. Nothing at PAINT time reads it: a painter
- * gets its emptiness per cell from `prepared/{year}/h3r4/<cell>/obstacles.arrow`
- * (`noise-compute::propagation::obstacle_cell_file`).
+ * The sampled row set is exactly the pre-merge Overture screening stock —
+ * kind=0 rows with osm_id NULL or the emission-centroid override set (the same
+ * predicate the builder's validate_cell uses to prove stock equality):
+ * Overture footprints with Overture geometry, matched or not. OSM-only rows
+ * are deliberately OUT: the calibrated threshold was fitted to the
+ * Overture-only stock (2026-08-30, below), so folding them in would silently
+ * shift the urban/rural line — that is a recalibration, not a rewire.
  */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { tableFromIPC } from 'apache-arrow'
 import { latLngToCell } from 'h3-js'
+import { H3R4_DIR } from './data-year.js'
 
-export const BUILT_UP_UNKNOWN = 0 // covering 1° tile never ingested — engine falls back to the legacy speed table
+export const BUILT_UP_UNKNOWN = 0 // a cell the window touches has no structures.arrow — engine falls back to the legacy speed table
 export const BUILT_UP_RURAL = 1
 export const BUILT_UP_URBAN = 2
 
@@ -82,17 +82,9 @@ const M_PER_DEG_LON_EQ = 111_320.0
 /** Pixels per degree of the retired 30 m building raster (3601² node grid). */
 const RASTER_PIXELS_PER_DEG = 3600
 
-/** The staged Overture obstacle store and the world-ingest manifest beside it.
- *  Exported so the enricher can fail loud when the store is absent — a silent
- *  world of `built_up = 0` would drop the urban/rural signal everywhere. */
-export const OBSTACLE_STORE_DIR = resolve(
-  import.meta.dirname,
-  '../../data/enrichment/global/overture-obstacles/h3r4',
-)
-export const OBSTACLE_INGEST_MANIFEST = resolve(
-  import.meta.dirname,
-  '../../data/enrichment/global/overture-obstacles/.ingested-tiles',
-)
+const STRUCTURES_FILENAME = 'structures.arrow'
+/** kind=0 — a building row (ObstacleKind::Building; barriers are 1). */
+const KIND_BUILDING = 0
 
 /** Area of one raster pixel at this latitude (m²) — the divisor that turns
  *  built area into the raster's built-pixel count. */
@@ -138,7 +130,7 @@ function bucketKey(latIdx: number, lonIdx: number): number {
  *  which answers a different question (emission scales with a source's
  *  footprint, whereas gdal_rasterize did not burn a courtyard and neither does
  *  this). Type codes match the engine's parser: anything but 3 or 6 is not a
- *  polygon, which the ingest contract says cannot occur. */
+ *  polygon, which the ingest contract says cannot happen. */
 function wkbFootprintAreaM2(wkb: Uint8Array): number {
   const view = new DataView(wkb.buffer, wkb.byteOffset, wkb.byteLength)
   let p = 0
@@ -207,44 +199,18 @@ function wkbFootprintAreaM2(wkb: Uint8Array): number {
 }
 
 /**
- * Reads the staged obstacle store and answers the urban/rural question for a
- * point. Cells are loaded once and LRU-cached; the enricher walks one H3R4 hex
- * at a time, so the working set is that hex plus whatever its border segments
- * reach into.
+ * Reads the per-cell structure tables and answers the urban/rural question for
+ * a point. Cells are loaded once and LRU-cached; the enricher walks one H3R4
+ * hex at a time, so the working set is that hex plus whatever its border
+ * segments reach into.
  */
 export class BuildingFootprintSampler {
   private cells = new Map<string, CellFootprints | null>()
-  private manifest: Set<string> | null | undefined
 
   constructor(
-    private storeDir: string = OBSTACLE_STORE_DIR,
-    private manifestPath: string = OBSTACLE_INGEST_MANIFEST,
+    private h3r4Dir: string = H3R4_DIR,
     private maxCachedCells = 8,
   ) {}
-
-  /** SW-corner 1° tile name, e.g. (49.78, 14.17) → "N49E014" — the manifest's
-   *  form, and the retired raster's file name. */
-  static tileNameFor(lat: number, lon: number): string {
-    const la = Math.floor(lat)
-    const lo = Math.floor(lon)
-    const ns = la >= 0 ? 'N' : 'S'
-    const ew = lo >= 0 ? 'E' : 'W'
-    return `${ns}${String(Math.abs(la)).padStart(2, '0')}${ew}${String(Math.abs(lo)).padStart(3, '0')}`
-  }
-
-  private ingestedTiles(): Set<string> | null {
-    if (this.manifest === undefined) {
-      this.manifest = existsSync(this.manifestPath)
-        ? new Set(
-            readFileSync(this.manifestPath, 'utf8')
-              .split('\n')
-              .map((l) => l.trim())
-              .filter((l) => l.length > 0),
-          )
-        : null
-    }
-    return this.manifest
-  }
 
   private cellFootprints(cell: string): CellFootprints | null {
     const hit = this.cells.get(cell)
@@ -262,39 +228,43 @@ export class BuildingFootprintSampler {
     return loaded
   }
 
+  /** The cell's footprints, or null when it has no structures.arrow — the file
+   *  IS the coverage proof (a present 0-row table loads as an empty index). */
   private loadCell(cell: string): CellFootprints | null {
-    const dir = resolve(this.storeDir, cell)
-    let shards: string[]
+    const path = resolve(this.h3r4Dir, cell, STRUCTURES_FILENAME)
+    let table: ReturnType<typeof tableFromIPC>
     try {
-      shards = readdirSync(dir)
-        .filter((f) => f.startsWith('obstacles') && f.endsWith('.arrow'))
-        .sort()
+      table = tableFromIPC(readFileSync(path))
     } catch (err) {
-      // Absence is a legitimate "this cell received no footprint"; the
-      // manifest — not the shard tree — decides whether that is knowledge.
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
       throw err
     }
-    if (shards.length === 0) return null
+    const kind = table.getChild('kind')
+    const clat = table.getChild('centroid_lat')
+    const clon = table.getChild('centroid_lon')
+    const wkb = table.getChild('geometry_wkb')
+    const osmId = table.getChild('osm_id')
+    const emissionClat = table.getChild('emission_centroid_lat')
+    if (!kind || !clat || !clon || !wkb || !osmId || !emissionClat) {
+      throw new Error(`structures.arrow missing columns: ${path}`)
+    }
 
     const lats: number[] = []
     const lons: number[] = []
     const areas: number[] = []
-    for (const shard of shards) {
-      const table = tableFromIPC(readFileSync(resolve(dir, shard)))
-      const clat = table.getChild('centroid_lat')
-      const clon = table.getChild('centroid_lon')
-      const wkb = table.getChild('polygon_wkb')
-      if (!clat || !clon || !wkb) throw new Error(`obstacle shard missing columns: ${dir}/${shard}`)
-      for (let i = 0; i < table.numRows; i++) {
-        const la = clat.get(i) as number | null
-        const lo = clon.get(i) as number | null
-        const geom = wkb.get(i) as Uint8Array | null
-        if (la === null || lo === null || geom === null) continue
-        lats.push(la)
-        lons.push(lo)
-        areas.push(wkbFootprintAreaM2(geom))
-      }
+    for (let i = 0; i < table.numRows; i++) {
+      if ((kind.get(i) as number) !== KIND_BUILDING) continue
+      // The pre-merge Overture stock: Overture-only rows (no osm_id) and
+      // matched rows (their geometry/centroid are the Overture ones, proven by
+      // the emission-centroid override). OSM-only rows are out (module doc).
+      if (osmId.get(i) !== null && emissionClat.get(i) === null) continue
+      const la = clat.get(i) as number | null
+      const lo = clon.get(i) as number | null
+      const geom = wkb.get(i) as Uint8Array | null
+      if (la === null || lo === null || geom === null) continue
+      lats.push(la)
+      lons.push(lo)
+      areas.push(wkbFootprintAreaM2(geom))
     }
 
     const n = lats.length
@@ -331,30 +301,19 @@ export class BuildingFootprintSampler {
   /**
    * Total ground area of footprints whose CENTROID is within
    * [`BUILT_UP_WINDOW_HALF_DEG`] of the point in both axes, or `null` when a
-   * 1° tile the window touches was never ingested.
+   * cell the window touches has no structures.arrow (coverage absent).
    *
    * Centroid attribution rather than clipped overlap: a footprint is metres
    * across and the window is hundreds, so which side of the border its area
    * lands on is noise next to the pixel this feeds — and centroid ownership is
-   * also how the store assigns footprints to cells in the first place.
-   *
+   * also how the table assigns footprints to cells in the first place.
    */
   windowFootprintAreaM2(lat: number, lon: number): number | null {
-    const tiles = this.ingestedTiles()
-    if (!tiles) return null
     const h = BUILT_UP_WINDOW_HALF_DEG
     const latLo = lat - h
     const latHi = lat + h
     const lonLo = lon - h
     const lonHi = lon + h
-    for (const [tLat, tLon] of [
-      [latLo, lonLo],
-      [latLo, lonHi],
-      [latHi, lonLo],
-      [latHi, lonHi],
-    ]) {
-      if (!tiles.has(BuildingFootprintSampler.tileNameFor(tLat, tLon))) return null
-    }
 
     // Every R4 cell the window overlaps. Sampled on a 3×3 grid of the window
     // rather than via grid_disk(1): an R4 cell is ~22 km across and the window
@@ -370,7 +329,7 @@ export class BuildingFootprintSampler {
     let area = 0
     for (const cell of cells) {
       const fp = this.cellFootprints(cell)
-      if (!fp) continue // ingested and empty — proven by the manifest above
+      if (!fp) return null // no structures.arrow → coverage unknown, never a guessed rural
       const latIdx0 = Math.floor(latLo / BUCKET_DEG)
       const latIdx1 = Math.floor(latHi / BUCKET_DEG)
       const lonIdx0 = Math.floor(lonLo / BUCKET_DEG)

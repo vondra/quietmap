@@ -14,7 +14,6 @@ pub mod cell_preparation;
 pub mod cell_stream;
 #[cfg(feature = "gpu")]
 pub mod cuda_bridge;
-#[cfg(feature = "gpu")]
 pub mod obstacle_transfer;
 pub mod relevance_partition;
 #[cfg(feature = "gpu")]

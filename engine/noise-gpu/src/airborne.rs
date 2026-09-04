@@ -28,7 +28,7 @@ use raster_reader::fused_tile_z13::{tile_pixel_size_m, FusedTileZ13, TILE_PX};
 use rayon::prelude::*;
 use tile_painter::accumulator::{CoarseLattice, TileAccumulator, COARSE_LEVELS_N};
 use tile_painter::airborne_screening::PackedReceiverScreening;
-use tile_painter::source_loader_obstacle::InteriorEstimate;
+use tile_painter::source_loader_structure::InteriorEstimate;
 
 pub use crate::airborne_building_horizon::AirborneScreeningEnvironment;
 use crate::airborne_building_horizon::{AirborneBuildingHorizonGpu, BuildingHorizonDev};

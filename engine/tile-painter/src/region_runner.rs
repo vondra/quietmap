@@ -335,9 +335,12 @@ pub fn process_region(
         .into_iter()
         .map(u64::from)
         .collect();
-    let obstacle_data =
-        crate::source_loader_obstacle::ObstacleData::load_for_r4s(ctx.h3r4_dir, region_r4, &ring)
-            .with_context(|| format!("load obstacles R4 {region_r4:015x}"))?;
+    let structure_data = crate::source_loader_structure::StructureData::load_screening_for_r4s(
+        ctx.h3r4_dir,
+        region_r4,
+        &ring,
+    )
+    .with_context(|| format!("load structures R4 {region_r4:015x}"))?;
 
     let mut stats = RegionStats {
         t_load: t0.elapsed(),
@@ -395,7 +398,7 @@ pub fn process_region(
             // Building interiors (vector regions only): the same per-tile class
             // raster + façade donor map the surface painters bake for this tile.
             let t_class = Instant::now();
-            let interior = obstacle_data.interior_estimate(tile);
+            let interior = structure_data.interior_estimate(tile);
             stats.t_raster += t_class.elapsed();
 
             let mut accum = TileAccumulator::new();
@@ -412,7 +415,7 @@ pub fn process_region(
                     tile,
                     &airborne_views,
                     &ctx.class_weights,
-                    obstacle_data.set(),
+                    structure_data.set(),
                     &interior,
                     &mut accum,
                 ));

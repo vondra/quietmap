@@ -23,7 +23,7 @@
 //! individual shed under it). Tiers 0/1/3 are per-building and never cap.
 //!
 //! The rule lives HERE because two loaders apply it — the tile painter's
-//! `source_loader_obstacle` and the popup's `obstacle_store` — and they must
+//! `source_loader_structure` and the popup's `structure_store` — and they must
 //! apply it identically or popup ≠ tiles at every capped footprint. Only the
 //! Arrow plumbing differs between them, and that stays in each crate; the class
 //! list, the match geometry and the cap are one definition.

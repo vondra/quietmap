@@ -75,7 +75,7 @@ impl LayerMeasurement {
 pub struct CellMeasurement {
     pub painted_layers: Vec<usize>,
     pub layers: Vec<LayerMeasurement>,
-    /// Source, barrier and obstacle loading plus the device uploads, on the
+    /// Source and structure loading plus the device uploads, on the
     /// cell producer thread (only the first cell's is on the wall).
     pub prepare_seconds: f64,
     /// Time the producer waited for a residency permit: the host idle on the card.
@@ -84,7 +84,7 @@ pub struct CellMeasurement {
     pub card_wait_seconds: f64,
     /// Terrain halo build and facade baking per 4x4 batch, one batch ahead of the card.
     pub raster_prepare_seconds: f64,
-    /// Receiver, enclosure and barrier preparation per tile, serial with the card.
+    /// Receiver and enclosure preparation per tile, serial with the card.
     pub receiver_seconds: f64,
     pub host_tile_seconds: f64,
     pub paint_seconds: f64,

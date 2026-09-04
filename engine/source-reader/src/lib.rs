@@ -13,8 +13,10 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 pub mod aircraft_v6;
 pub mod geo;
 pub mod hex_store;
-pub mod obstacle_store;
 pub mod query;
+pub mod structure_store;
+#[cfg(test)]
+mod structure_test_fixture;
 #[cfg(feature = "node")]
 pub mod wire;
 
@@ -48,8 +50,8 @@ static RASTERS: std::sync::OnceLock<raster_reader::RealRasters> = std::sync::Onc
 /// Data root (`…/data/prepared`) captured at `source_init` — the vector
 /// obstacle loader keeps its on-disk index cache under it (geodata-v2 1.4).
 static DATA_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-/// The live `…/prepared/{year}/h3r4` dir — the obstacle root: every prepared
-/// cell carries its own `obstacles.arrow` beside its other arrows.
+/// The live `…/prepared/{year}/h3r4` dir — the structure root: every prepared
+/// cell carries its own `structures.arrow` beside its other arrows.
 static H3R4_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 /// The obstacle root, or the one error that explains an unset one. Buildings
@@ -244,7 +246,7 @@ pub fn query_buildings(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<St
         let Some(data) = store.hexes.get(hex_id.as_str()) else {
             continue;
         };
-        let building_batches = data.buildings.batches_within(lat, lng, max_radius_m);
+        let building_batches = data.structures.batches_within(lat, lng, max_radius_m);
         let mut results = query_buildings_from_batches(&building_batches, lat, lng, max_radius_m);
         all_results.append(&mut results);
     }
@@ -266,7 +268,7 @@ pub fn query_obstacle_footprints(
     north: f64,
     east: f64,
 ) -> napi::Result<String> {
-    let fps = obstacle_store::footprints_in_bbox(h3r4_dir()?, south, west, north, east)
+    let fps = structure_store::footprints_in_bbox(h3r4_dir()?, south, west, north, east)
         .map_err(|e| Error::new(Status::GenericFailure, e))?;
     let rows: Vec<serde_json::Value> = fps
         .iter()
@@ -283,7 +285,7 @@ pub fn query_obstacle_footprints(
 }
 
 /// Map the engine's envelope class to the small plain-language vocabulary
-/// used by the building hover tooltip. Kept outside `obstacle_store.rs` so
+/// used by the building hover tooltip. Kept outside `structure_store.rs` so
 /// changing display wording does not rotate its disk-index cache version.
 fn building_type_from_envelope(class: noise_compute::envelope::EnvelopeClass) -> &'static str {
     match class {
@@ -310,9 +312,9 @@ pub fn query_building_at(lat: f64, lng: f64) -> napi::Result<String> {
     // A missing obstacle store is an error, not an empty answer. It used to
     // return {"status":"unavailable"} inside an HTTP 200, which reads to a
     // visitor exactly like "there is no building here".
-    let set = obstacle_store::load_obstacle_set(h3r4_dir()?, data_dir, lat, lng)
+    let set = structure_store::load_obstacle_set(h3r4_dir()?, data_dir, lat, lng)
         .map_err(|e| Error::new(Status::GenericFailure, e))?;
-    let result = match obstacle_store::point_inside_footprint(&set, lat, lng) {
+    let result = match structure_store::point_inside_footprint(&set, lat, lng) {
         None => serde_json::Value::Null,
         Some((class, height)) => serde_json::json!({
             "height_m": height,
@@ -370,7 +372,7 @@ pub fn query_barriers(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<Str
         let Some(data) = store.hexes.get(hex_id.as_str()) else {
             continue;
         };
-        let barrier_batches = data.barriers.batches_within(lat, lng, max_radius_m);
+        let barrier_batches = data.structures.batches_within(lat, lng, max_radius_m);
         let mut results = query_barriers_from_batches(&barrier_batches, lat, lng, max_radius_m)
             .map_err(|error| Error::new(Status::GenericFailure, error))?;
         all_results.append(&mut results);
@@ -489,12 +491,12 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     let data_dir = DATA_DIR
         .get()
         .ok_or_else(|| Error::new(Status::GenericFailure, "source_init was never called"))?;
-    let obstacle_set = obstacle_store::load_obstacle_set(h3r4_dir()?, data_dir, lat, lng)
+    let obstacle_set = structure_store::load_obstacle_set(h3r4_dir()?, data_dir, lat, lng)
         .map_err(|e| Error::new(Status::GenericFailure, e))?;
     // Select the enclosed footprint winner once; it supplies the effective
     // envelope delta for the aggregate indoor estimate while traces stay at
     // façade values.
-    let inside_envelope = obstacle_store::point_inside_enclosed(&obstacle_set, lat, lng);
+    let inside_envelope = structure_store::point_inside_enclosed(&obstacle_set, lat, lng);
     // Search outward in one-metre cardinal steps using the same containment
     // rule. The ≤100 m shift stays inside the loaded R4 ring, so sources need
     // no reload.
@@ -510,7 +512,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
                         lat + dy * distance as f64 * step_lat,
                         lng + dx * distance as f64 * step_lon,
                     );
-                    if obstacle_store::point_inside_enclosed(set, candidate.0, candidate.1)
+                    if structure_store::point_inside_enclosed(set, candidate.0, candidate.1)
                         .is_none()
                     {
                         outside = Some(candidate);
@@ -561,7 +563,6 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         &sources.railways,
         &sources.buildings,
         &sources.industrial,
-        &sources.barriers,
         &obstacle_set,
         rasters,
         &config,
@@ -578,7 +579,6 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         &sources.airport_lines_batches,
         airport_summary_pathbuf.as_deref(),
         rasters,
-        &sources.barriers,
         &obstacle_set,
         sources.n_days,
         top_k_per_kind,

@@ -57,7 +57,10 @@ DEFAULT_EXCL = {
     # emission/leisure.rs is building-only (grep-proven 2026-07-16: its callers are
     # normalize/points.rs' LEISURE rows — which land in the building tile, layer-spec folds
     # leisure.arrow into building — and popup labels in source_names.rs, not painted output).
-    "building": "tile-painter/src/source_loader_building.rs noise-compute/src/emission/settlement.rs"
+    # The building emission read folded into the SHARED source_loader_structure.rs (the
+    # 2026-09 structures merge: every surface layer reads the same structures.arrow), so
+    # building's exclusive loader is just the leisure one.
+    "building": "tile-painter/src/source_loader_leisure.rs noise-compute/src/emission/settlement.rs"
                 " noise-compute/src/emission/leisure.rs",
     "aircraft-ground": "tile-painter/src/source_loader_traffic.rs tile-painter/src/ground_ops.rs noise-compute/src/emission/airport_traffic.rs noise-compute/src/emission/gse.rs noise-compute/src/emission/aircraft/ground_ops.rs noise-compute/src/compute/aircraft_v6/airport_traffic",
     # `gpu_airborne.rs` was split into the gpu_airborne/ submodules in b7322f93, but the

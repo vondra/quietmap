@@ -1,19 +1,23 @@
-//! Vector obstacle loading for the popup (geodata-v2 1.4).
+//! Vector structure loading for the popup.
 //!
 //! Each query assembles an
 //! [`ObstacleSet`] from PER-CELL [`ObstacleIndex`]es covering the query
 //! cell's `grid_disk(1)` — the halo the ingest contract requires
-//! (centroid-assigned footprints; `scripts/obstacles/ingest-overture-obstacles.py`).
+//! (centroid-assigned footprints; `scripts/structures/build-structures.py`).
+//! One `structures.arrow` per cell carries BOTH screening stocks — buildings
+//! (kind 0, polygons) and noise walls (kind 1, polyline microsegments, indexed
+//! as [`ObstacleKind::Barrier`] edges) — and, in its OSM-attributed rows, the
+//! input of the low-profile height cap's lookup. One table, one read.
 //!
 //! Two hard rules:
 //! - **Bounded cost.** Per-cell indexes are built ONCE per process and
 //!   LRU-cached (`CELL_CACHE_CAP`); a query only Arc-clones ≤7 of them.
 //!   The naive per-query rebuild measured 448 MB RSS / 0.47 s per popup.
 //! - **All-or-error.** Any read/parse error, and any ring-1 cell of the
-//!   prepared world whose `obstacles.arrow` is missing, aborts the whole load.
+//!   prepared world whose `structures.arrow` is missing, aborts the whole load.
 //!   A partial index would silently under-screen the path. Emptiness is not a
-//!   gap: a 0-row table is the answer "no buildings here"
-//!   (`noise_compute::propagation::obstacle_cell_file` carries the rule and the
+//!   gap: a 0-row table is the answer "nothing stands here"
+//!   (`noise_compute::propagation::structure_cell_file` carries the rule and the
 //!   third case, a cell outside the prepared world).
 //!
 //! Built indexes are also kept ON DISK (`noise_compute::propagation::obstacle_index_file`)
@@ -37,14 +41,18 @@ use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use arrow::array::{Array, BinaryArray, Float32Array, Float64Array, UInt8Array};
+use arrow::array::{
+    Array, BinaryArray, Float32Array, Float64Array, Int64Array, UInt32Array, UInt8Array,
+};
 use arrow::ipc::reader::FileReader;
 use h3o::{CellIndex, LatLng, Resolution};
 use noise_compute::envelope::{effective_envelope_class, EnvelopeClass};
 use noise_compute::low_profile::LowProfileLookup;
-use noise_compute::propagation::obstacle_cell_file::locate_cell_obstacles;
 use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind, ObstacleSet};
 use noise_compute::propagation::obstacle_index_file::{fnv1a64, IndexBlob, BUILDER_CODE_VER};
+use noise_compute::propagation::structure_cell_file::locate_cell_structures;
+
+use crate::hex_store::{STRUCTURE_KIND_BARRIER, STRUCTURE_KIND_BUILDING};
 
 /// Per-cell index cache capacity. A dense metro cell's index runs to low
 /// hundreds of MB; popups cluster spatially, so a small LRU covers the
@@ -53,8 +61,8 @@ const CELL_CACHE_CAP: usize = 8;
 
 /// Everything that decides a cached index's BYTES: the engine's builder and
 /// grid (`BUILDER_CODE_VER`) folded with THIS file, which owns the loader's own
-/// decisions — the obstacle id ordering, the shard order, and which rows are
-/// offered to the height cap. Editing either side rotates the version and every file written by the
+/// decisions — the obstacle id ordering (dense, by file order), and which rows
+/// are offered to the height cap. Editing either side rotates the version and every file written by the
 /// old code is refused, exactly as `scripts/layer-codever.py` re-stales tiles on
 /// a source change. Over-invalidating costs a rebuild; under-invalidating puts a
 /// silently wrong screen in the map.
@@ -63,7 +71,7 @@ const CELL_CACHE_CAP: usize = 8;
 /// `noise_compute::low_profile`, which [`BUILDER_CODE_VER`] hashes — so a change
 /// to its class list, its match geometry or its cap rotates this version without
 /// anyone naming the constants here.
-const CACHE_CODE_VER: u64 = fnv1a64(BUILDER_CODE_VER, include_bytes!("obstacle_store.rs"));
+const CACHE_CODE_VER: u64 = fnv1a64(BUILDER_CODE_VER, include_bytes!("structure_store.rs"));
 
 /// Disk budget for the cached indexes. One dense metro cell is a few hundred
 /// MB, so this holds tens of cities' worth — far more than a popup session
@@ -118,15 +126,15 @@ fn index_cache_root(data_dir: &Path) -> Option<PathBuf> {
 /// * [`CACHE_CODE_VER`] — the builder, the grid, this loader's own rules;
 /// * the CELL, whose centre is the index's metric origin (and which is the
 ///   only thing the file name would otherwise bind);
-/// * the cell's `obstacles.arrow`, plus the `buildings.arrow` the low-profile
-///   cap reads, as (path, length, mtime) — the path because two prepared
-///   TREES (a moved mount, a second checkout's data node) hold different
-///   obstacles for the same cell.
+/// * the cell's `structures.arrow` as (path, length, mtime) — the path because
+///   two prepared TREES (a moved mount, a second checkout's data node) hold
+///   different structures for the same cell. The low-profile cap reads the
+///   SAME file, so it needs no fold of its own.
 ///
-/// That list is closed by construction: `build_cell_index` reads its cell, its
-/// obstacle table and that one arrow, and nothing else — no env, no clock, no
-/// map iteration order (`ObstacleIndex::build` is a Vec walk). Whatever a future
-/// edit adds to it lands in THIS file, and this file's content is already in
+/// That list is closed by construction: `build_cell_index` reads its cell and
+/// that one table, and nothing else — no env, no clock, no map iteration order
+/// (`ObstacleIndex::build` is a Vec walk). Whatever a future edit adds to it
+/// lands in THIS file, and this file's content is already in
 /// `CACHE_CODE_VER`, so an unfingerprinted input cannot be introduced without
 /// also rotating the version.
 ///
@@ -138,35 +146,18 @@ fn index_cache_root(data_dir: &Path) -> Option<PathBuf> {
 /// `None` ⇒ some input's metadata is unreadable, so nothing may be cached at
 /// all: an index whose provenance cannot be pinned must never outlive the
 /// query, let alone the process.
-fn cell_data_ver(
-    cell: CellIndex,
-    obstacles_arrow: &Path,
-    buildings_arrow: Option<&Path>,
-) -> Option<u64> {
-    let mut h = fnv1a64(CACHE_CODE_VER, b"obstacle-index-inputs-v2");
+fn cell_data_ver(cell: CellIndex, structures_arrow: &Path) -> Option<u64> {
+    let mut h = fnv1a64(CACHE_CODE_VER, b"structure-index-inputs-v1");
     h = fnv1a64(h, &u64::from(cell).to_le_bytes());
-    let mut fold = |path: &Path, present_marker: u8| -> Option<()> {
-        h = fnv1a64(h, path.as_os_str().as_encoded_bytes());
-        h = fnv1a64(h, &[present_marker]);
-        if present_marker == 0 {
-            return Some(());
-        }
-        let meta = std::fs::metadata(path).ok()?;
-        h = fnv1a64(h, &meta.len().to_le_bytes());
-        let mtime = meta.modified().ok()?;
-        let since_epoch = mtime
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .ok()?;
-        h = fnv1a64(h, &since_epoch.as_nanos().to_le_bytes());
-        Some(())
-    };
-    fold(obstacles_arrow, 1)?;
-    // A missing buildings.arrow means "no capping" — a DIFFERENT index from the
-    // same shards with one present, so absence has to hash differently.
-    if let Some(p) = buildings_arrow {
-        let marker = u8::from(p.exists());
-        fold(p, marker)?;
-    }
+    h = fnv1a64(h, structures_arrow.as_os_str().as_encoded_bytes());
+    h = fnv1a64(h, &[1]); // present: the locator handed us an existing file
+    let meta = std::fs::metadata(structures_arrow).ok()?;
+    h = fnv1a64(h, &meta.len().to_le_bytes());
+    let mtime = meta.modified().ok()?;
+    let since_epoch = mtime
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .ok()?;
+    h = fnv1a64(h, &since_epoch.as_nanos().to_le_bytes());
     Some(h)
 }
 
@@ -196,7 +187,7 @@ fn load_cached_index(path: &Path, data_ver: u64) -> Option<ObstacleIndex> {
             Some(idx)
         }
         Err(e) => {
-            eprintln!("obstacle_store: ignoring cached {}: {e}", path.display());
+            eprintln!("structure_store: ignoring cached {}: {e}", path.display());
             let _ = std::fs::remove_file(path);
             None
         }
@@ -271,7 +262,7 @@ fn store_cached_index(root: &Path, cell: CellIndex, index: &ObstacleIndex, data_
     let parts = index.file_parts(CACHE_CODE_VER, data_ver);
     let total = parts.total_len() as u64;
     if let Err(e) = std::fs::create_dir_all(root) {
-        eprintln!("obstacle_store: no index cache at {}: {e}", root.display());
+        eprintln!("structure_store: no index cache at {}: {e}", root.display());
         return;
     }
     evict_to_budget(root, total);
@@ -296,7 +287,7 @@ fn store_cached_index(root: &Path, cell: CellIndex, index: &ObstacleIndex, data_
     };
     if let Err(e) = write() {
         eprintln!(
-            "obstacle_store: could not cache index {}: {e}",
+            "structure_store: could not cache index {}: {e}",
             final_path.display()
         );
         let _ = std::fs::remove_file(&tmp);
@@ -361,24 +352,23 @@ pub fn load_obstacle_set(
     lon: f64,
 ) -> Result<ObstacleSet, String> {
     let cell = LatLng::new(lat, lon)
-        .map_err(|e| format!("obstacle_store: {lat},{lon} is not a point on earth: {e}"))?
+        .map_err(|e| format!("structure_store: {lat},{lon} is not a point on earth: {e}"))?
         .to_cell(Resolution::Four);
     let mut indexes = Vec::new();
     for c in cell.grid_disk::<Vec<_>>(1) {
-        let located = locate_cell_obstacles(h3r4_dir, c).map_err(|e| {
+        let located = locate_cell_structures(h3r4_dir, c).map_err(|e| {
             format!(
-                "obstacle_store: {e} — buildings are vector-only, so this query cannot be answered"
+                "structure_store: {e} — buildings are vector-only, so this query cannot be answered"
             )
         })?;
-        let Some(obstacles_arrow) = located else {
+        let Some(structures_arrow) = located else {
             // Outside the prepared world: no cell directory at all, so it holds
-            // no buildings for the same reason it holds no roads.
+            // no structures for the same reason it holds no roads.
             continue;
         };
-        let buildings_arrow = h3r4_dir.join(c.to_string()).join("buildings.arrow");
-        match cell_index(c, &obstacles_arrow, Some(&buildings_arrow), data_dir) {
+        match cell_index(c, &structures_arrow, data_dir) {
             Ok(idx) => indexes.push(idx),
-            Err(e) => return Err(format!("obstacle_store: {e}")),
+            Err(e) => return Err(format!("structure_store: {e}")),
         }
     }
     // Zero edges is a legitimate answer: a 0-row table is the finished sweep
@@ -510,11 +500,10 @@ pub fn point_inside_footprint(
 /// answers the question it was asked.
 fn cell_index(
     cell: CellIndex,
-    obstacles_arrow: &Path,
-    buildings_arrow: Option<&Path>,
+    structures_arrow: &Path,
     data_dir: &Path,
 ) -> Result<Arc<ObstacleIndex>, String> {
-    let ver = cell_data_ver(cell, obstacles_arrow, buildings_arrow);
+    let ver = cell_data_ver(cell, structures_arrow);
     let t0 = std::time::Instant::now();
     if let Some(ver) = ver {
         if let Some(idx) = memo_get(cell, ver) {
@@ -530,7 +519,7 @@ fn cell_index(
         }
     }
 
-    let built = Arc::new(build_cell_index(cell, obstacles_arrow, buildings_arrow)?);
+    let built = Arc::new(build_cell_index(cell, structures_arrow)?);
     // No fingerprint ⇒ no memo and no file. An index whose inputs could not be
     // pinned is used for THIS query and forgotten.
     if let Some(ver) = ver {
@@ -556,36 +545,36 @@ fn log_cell_load(cell: CellIndex, how: &str, edges: usize, t0: std::time::Instan
     }
 }
 
-/// Read a cell's `buildings.arrow` into the low-profile cap's lookup — the Arrow
-/// half of [`noise_compute::low_profile`], which carries the rule itself (shared
+/// The low-profile cap's lookup, read from the SAME structures.arrow the index
+/// is built from: kind=0 rows with a valid `osm_id` are the OSM building stock
+/// (the merge's emission rows — the old buildings.arrow subsequence), matched
+/// at their emission centroid where the merge kept one, else the screening
+/// centroid. The rule itself lives in [`noise_compute::low_profile`] (shared
 /// with the tile painter's loader, so popup and tiles cap the same footprints).
 ///
-/// ABSENT is not the same as UNREADABLE. No file (`NotFound`, or no path at all)
-/// means the cell has ML-only coverage: nothing to cap against, so an empty
-/// lookup is the right answer. An older schema without the four columns is the
-/// same story — a correction layer that cannot be applied is not an error. But a
-/// transient read/parse failure is: swallowing it caps NOTHING, and
-/// [`cell_index`] then writes that uncapped index to disk AND to the memo under
-/// the NORMAL fingerprint, so every later query reports garages at 8 m instead
-/// of 3 m until the file's mtime happens to move (2026-08-08 review; the tile
+/// A table without the OSM attribute columns is a pre-merge file: nothing to
+/// cap against, so an empty lookup is the right answer — a correction layer
+/// that cannot be applied is not an error. A parse failure of the in-memory
+/// bytes IS an error: swallowing it would cap NOTHING and [`cell_index`] would
+/// write that uncapped index to disk AND to the memo under the NORMAL
+/// fingerprint, so every later query reports garages at 8 m instead of 3 m
+/// until the file's mtime happens to move (2026-08-08 review; the tile
 /// painter's twin has always failed loud here, and popup ≠ tiles at every capped
 /// footprint is exactly what this rule exists to prevent).
-fn load_low_profile(buildings_arrow: Option<&Path>) -> Result<LowProfileLookup, String> {
+fn low_profile_from_structures(bytes: &[u8], label: &Path) -> Result<LowProfileLookup, String> {
     let empty = || Ok(LowProfileLookup::default());
-    let Some(path) = buildings_arrow else {
-        return empty();
-    };
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return empty(),
-        Err(e) => return Err(format!("read {}: {e}", path.display())),
-    };
     let reader = FileReader::try_new(Cursor::new(bytes), None)
-        .map_err(|e| format!("arrow open {}: {e}", path.display()))?;
+        .map_err(|e| format!("arrow open {}: {e}", label.display()))?;
     let mut lookup = LowProfileLookup::default();
     for batch in reader {
-        let batch = batch.map_err(|e| format!("arrow batch {}: {e}", path.display()))?;
-        let (Some(lats), Some(lons), Some(types), Some(areas)) = (
+        let batch = batch.map_err(|e| format!("arrow batch {}: {e}", label.display()))?;
+        let (Some(kinds), Some(osm_ids), Some(lats), Some(lons), Some(types), Some(areas)) = (
+            batch
+                .column_by_name("kind")
+                .and_then(|c| c.as_any().downcast_ref::<UInt8Array>()),
+            batch
+                .column_by_name("osm_id")
+                .and_then(|c| c.as_any().downcast_ref::<Int64Array>()),
             batch
                 .column_by_name("centroid_lat")
                 .and_then(|c| c.as_any().downcast_ref::<Float64Array>()),
@@ -599,47 +588,119 @@ fn load_low_profile(buildings_arrow: Option<&Path>) -> Result<LowProfileLookup, 
                 .column_by_name("area_m2")
                 .and_then(|c| c.as_any().downcast_ref::<Float32Array>()),
         ) else {
-            return empty(); // older schema → no capping, never an error
+            return empty(); // pre-merge schema → no capping, never an error
         };
+        // The merge moves an OSM-matched row's screening centroid to the
+        // Overture footprint's; the OSM one survives as emission_centroid_*.
+        let elats = batch
+            .column_by_name("emission_centroid_lat")
+            .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
+        let elons = batch
+            .column_by_name("emission_centroid_lon")
+            .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
         for i in 0..batch.num_rows() {
-            if lats.is_null(i) || lons.is_null(i) || types.is_null(i) || areas.is_null(i) {
+            if kinds.value(i) != STRUCTURE_KIND_BUILDING
+                || osm_ids.is_null(i)
+                || types.is_null(i)
+                || areas.is_null(i)
+            {
                 continue;
             }
-            lookup.insert_if_low(types.value(i), lats.value(i), lons.value(i), areas.value(i));
+            let (lat, lon) = match (elats, elons) {
+                (Some(elats), Some(elons)) if !elats.is_null(i) && !elons.is_null(i) => {
+                    (elats.value(i), elons.value(i))
+                }
+                _ if !lats.is_null(i) && !lons.is_null(i) => (lats.value(i), lons.value(i)),
+                _ => continue,
+            };
+            lookup.insert_if_low(types.value(i), lat, lon, areas.value(i));
         }
     }
     Ok(lookup)
 }
 
-/// Build one cell's index from its obstacle table. The index origin is the
+/// Build one cell's index from its structure table. The index origin is the
 /// CELL CENTRE (not the query point) so the cache entry is query-independent;
 /// crossings project the ray per call, so mixed origins across a set are fine.
 ///
-/// `obstacles_arrow` is the path the caller fingerprinted, not a fresh lookup:
+/// `structures_arrow` is the path the caller fingerprinted, not a fresh lookup:
 /// the same file must decide the cache identity AND the obstacle ordinals.
-fn build_cell_index(
-    cell: CellIndex,
-    obstacles_arrow: &Path,
-    buildings_arrow: Option<&Path>,
-) -> Result<ObstacleIndex, String> {
+/// Ids are dense in file order, one per geometry-carrying row, buildings and
+/// walls sharing the one counter.
+fn build_cell_index(cell: CellIndex, structures_arrow: &Path) -> Result<ObstacleIndex, String> {
     let centre = LatLng::from(cell);
     let mut builder = ObstacleIndex::builder(centre.lat(), centre.lng());
-    let mut next_id: u32 = 0;
-    let low_profile = load_low_profile(buildings_arrow)?;
-    let bytes = std::fs::read(obstacles_arrow)
-        .map_err(|e| format!("read {}: {e}", obstacles_arrow.display()))?;
-    let reader = FileReader::try_new(Cursor::new(bytes), None)
-        .map_err(|e| format!("arrow open {}: {e}", obstacles_arrow.display()))?;
+    let bytes = std::fs::read(structures_arrow)
+        .map_err(|e| format!("read {}: {e}", structures_arrow.display()))?;
+    // The cap lookup must be complete before ANY row is capped: the match is
+    // spatial, so a first-rows-only lookup would miss neighbours further down
+    // the file. Two streaming passes over the one in-memory read keep the old
+    // loader's memory shape (a dense metro cell's table runs to ~1 GB).
+    let low_profile = low_profile_from_structures(&bytes, structures_arrow)?;
+    let reader = FileReader::try_new(Cursor::new(&bytes), None)
+        .map_err(|e| format!("arrow open {}: {e}", structures_arrow.display()))?;
+    let mut batches = Vec::new();
     for batch in reader {
-        let batch = batch.map_err(|e| format!("arrow batch {}: {e}", obstacles_arrow.display()))?;
+        batches
+            .push(batch.map_err(|e| format!("arrow batch {}: {e}", structures_arrow.display()))?);
+    }
+    for (idx, batch) in batches.iter().enumerate() {
+        let c = batch
+            .schema_ref()
+            .metadata()
+            .get("structures_contract")
+            .map(String::as_str);
+        if c != Some(crate::hex_store::STRUCTURES_CONTRACT_V1) {
+            return Err(format!(
+                "{}[batch {idx}]: structures_contract mismatch (expected {}, got {c:?}) — \
+                 rebuild the cell with scripts/structures/build-structures.py",
+                structures_arrow.display(),
+                crate::hex_store::STRUCTURES_CONTRACT_V1,
+            ));
+        }
+    }
+    // The index inserts rows in `screening_ordinal` order (its dense ids follow
+    // the sort): the engine's exact-δ tie resolution is scan-order sensitive,
+    // and the migration's ordinals reproduce the legacy obstacles.arrow order.
+    let mut index_rows: Vec<(u32, usize, usize)> = Vec::new();
+    for (batch_idx, batch) in batches.iter().enumerate() {
         let wkb = batch
-            .column_by_name("polygon_wkb")
+            .column_by_name("geometry_wkb")
             .and_then(|c| c.as_any().downcast_ref::<BinaryArray>())
-            .ok_or_else(|| format!("{}: missing polygon_wkb", obstacles_arrow.display()))?;
+            .ok_or_else(|| format!("{}: missing geometry_wkb", structures_arrow.display()))?;
+        let ordinals = batch
+            .column_by_name("screening_ordinal")
+            .and_then(|c| c.as_any().downcast_ref::<UInt32Array>())
+            .ok_or_else(|| format!("{}: missing screening_ordinal", structures_arrow.display()))?;
+        for i in 0..batch.num_rows() {
+            if wkb.is_null(i) {
+                continue; // a geometry-less row screens nothing (the schema allows null)
+            }
+            if ordinals.is_null(i) {
+                return Err(format!(
+                    "{}: row {i} has geometry but no screening_ordinal",
+                    structures_arrow.display()
+                ));
+            }
+            index_rows.push((ordinals.value(i), batch_idx, i));
+        }
+    }
+    index_rows.sort_unstable_by_key(|&(ordinal, _, _)| ordinal);
+    let mut next_id: u32 = 0;
+    for &(_, batch_idx, i) in &index_rows {
+        let batch = &batches[batch_idx];
+        let kinds = batch
+            .column_by_name("kind")
+            .and_then(|c| c.as_any().downcast_ref::<UInt8Array>())
+            .ok_or_else(|| format!("{}: missing kind", structures_arrow.display()))?;
+        let wkb = batch
+            .column_by_name("geometry_wkb")
+            .and_then(|c| c.as_any().downcast_ref::<BinaryArray>())
+            .ok_or_else(|| format!("{}: missing geometry_wkb", structures_arrow.display()))?;
         let heights = batch
             .column_by_name("height_m")
             .and_then(|c| c.as_any().downcast_ref::<Float32Array>())
-            .ok_or_else(|| format!("{}: missing height_m", obstacles_arrow.display()))?;
+            .ok_or_else(|| format!("{}: missing height_m", structures_arrow.display()))?;
         let tiers = batch
             .column_by_name("height_tier")
             .and_then(|c| c.as_any().downcast_ref::<UInt8Array>());
@@ -649,31 +710,52 @@ fn build_cell_index(
         let clons = batch
             .column_by_name("centroid_lon")
             .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
-        for i in 0..batch.num_rows() {
-            if wkb.is_null(i) || heights.is_null(i) {
-                return Err(format!("{}: null row {i}", obstacles_arrow.display()));
-            }
-            let mut height = heights.value(i);
-            if let (Some(tiers), Some(clats), Some(clons)) = (tiers, clats, clons) {
-                if !tiers.is_null(i) && !clats.is_null(i) && !clons.is_null(i) {
-                    height = low_profile.capped_height(
-                        height,
-                        tiers.value(i),
-                        clats.value(i),
-                        clons.value(i),
-                        noise_compute::wkb::outer_ring_area_m2(wkb.value(i)),
-                    );
-                }
-            }
-            let class = batch
-                .column_by_name("envelope_class")
-                .and_then(|c| c.as_any().downcast_ref::<UInt8Array>())
-                .filter(|a| !a.is_null(i))
-                .map(|a| EnvelopeClass::from_u8(a.value(i)))
-                .unwrap_or(EnvelopeClass::Default);
-            builder.add_polygon_wkb(wkb.value(i), height, ObstacleKind::Building, next_id, class);
-            next_id = next_id.wrapping_add(1);
+        if heights.is_null(i) {
+            return Err(format!(
+                "{}: null height_m at row {i}",
+                structures_arrow.display()
+            ));
         }
+        let id = next_id;
+        match kinds.value(i) {
+            STRUCTURE_KIND_BUILDING => {
+                let mut height = heights.value(i);
+                if let (Some(tiers), Some(clats), Some(clons)) = (tiers, clats, clons) {
+                    if !tiers.is_null(i) && !clats.is_null(i) && !clons.is_null(i) {
+                        height = low_profile.capped_height(
+                            height,
+                            tiers.value(i),
+                            clats.value(i),
+                            clons.value(i),
+                            noise_compute::wkb::outer_ring_area_m2(wkb.value(i)),
+                        );
+                    }
+                }
+                let class = batch
+                    .column_by_name("envelope_class")
+                    .and_then(|c| c.as_any().downcast_ref::<UInt8Array>())
+                    .filter(|a| !a.is_null(i))
+                    .map(|a| EnvelopeClass::from_u8(a.value(i)))
+                    .unwrap_or(EnvelopeClass::Default);
+                builder.add_polygon_wkb(wkb.value(i), height, ObstacleKind::Building, id, class);
+            }
+            // Walls keep their mapped height: the cap is a building-only
+            // correction (noise_compute::low_profile caps tiers 2/4), and
+            // add_polyline never clamps to the building height ceiling.
+            STRUCTURE_KIND_BARRIER => builder.add_polyline(
+                &noise_compute::wkb::parse_wkb_linestring_bytes(wkb.value(i)),
+                heights.value(i),
+                ObstacleKind::Barrier,
+                id,
+            ),
+            other => {
+                return Err(format!(
+                    "{}: unknown structure kind {other} at row {i}",
+                    structures_arrow.display()
+                ));
+            }
+        }
+        next_id = next_id.wrapping_add(1);
     }
     Ok(builder.build())
 }
@@ -728,24 +810,26 @@ pub fn footprints_in_bbox(
     let mut out = Vec::new();
     for cell in cells {
         let Some(path) =
-            locate_cell_obstacles(h3r4_dir, cell).map_err(|e| format!("obstacle_store: {e}"))?
+            locate_cell_structures(h3r4_dir, cell).map_err(|e| format!("structure_store: {e}"))?
         else {
             continue; // outside the prepared world — nothing to draw here
         };
-        let buildings_arrow = h3r4_dir.join(cell.to_string()).join("buildings.arrow");
+        let bytes = std::fs::read(&path)
+            .map_err(|e| format!("structure_store: {}: {e}", path.display()))?;
         // A cell whose cap cannot be read must not contribute footprints at
         // their uncapped height: a wrong number here is worse than an error.
-        let low_profile = load_low_profile(Some(&buildings_arrow))
-            .map_err(|e| format!("obstacle_store: low-profile cap for {cell}: {e}"))?;
-        let bytes =
-            std::fs::read(&path).map_err(|e| format!("obstacle_store: {}: {e}", path.display()))?;
-        let reader = FileReader::try_new(Cursor::new(bytes), None)
-            .map_err(|e| format!("obstacle_store: {}: {e}", path.display()))?;
+        let low_profile = low_profile_from_structures(&bytes, &path)
+            .map_err(|e| format!("structure_store: low-profile cap for {cell}: {e}"))?;
+        let reader = FileReader::try_new(Cursor::new(&bytes), None)
+            .map_err(|e| format!("structure_store: {}: {e}", path.display()))?;
         for batch in reader {
-            let batch = batch.map_err(|e| format!("obstacle_store: {}: {e}", path.display()))?;
-            let (Some(wkb), Some(heights), Some(clats), Some(clons)) = (
+            let batch = batch.map_err(|e| format!("structure_store: {}: {e}", path.display()))?;
+            let (Some(kinds), Some(wkb), Some(heights), Some(clats), Some(clons)) = (
                 batch
-                    .column_by_name("polygon_wkb")
+                    .column_by_name("kind")
+                    .and_then(|c| c.as_any().downcast_ref::<UInt8Array>()),
+                batch
+                    .column_by_name("geometry_wkb")
                     .and_then(|c| c.as_any().downcast_ref::<BinaryArray>()),
                 batch
                     .column_by_name("height_m")
@@ -763,6 +847,10 @@ pub fn footprints_in_bbox(
                 .column_by_name("height_tier")
                 .and_then(|c| c.as_any().downcast_ref::<UInt8Array>());
             for i in 0..batch.num_rows() {
+                // Walls are not footprints; the overlay draws buildings only.
+                if kinds.value(i) != STRUCTURE_KIND_BUILDING {
+                    continue;
+                }
                 if wkb.is_null(i) || heights.is_null(i) || clats.is_null(i) || clons.is_null(i) {
                     continue;
                 }
@@ -800,6 +888,7 @@ pub fn footprints_in_bbox(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::structure_test_fixture::{square_polygon_wkb, wall_linestring_wkb, StructureRow};
     use tempfile::TempDir;
 
     /// Environment variables are PROCESS-global and `cargo test` runs tests in
@@ -1049,49 +1138,22 @@ mod tests {
         assert!(point_inside_enclosed(&set, OLAT, OLON).is_none());
     }
 
-    /// One cell's obstacle table: a closed ~20 m square footprint per entry,
-    /// each with its south-west corner at the given `(lat, lon)`. An empty
-    /// `squares` writes the 0-row table a swept-and-empty cell carries.
-    fn write_obstacle_table(h3r4_dir: &Path, cell: CellIndex, squares: &[(f64, f64)]) -> PathBuf {
-        let dir = h3r4_dir.join(cell.to_string());
-        std::fs::create_dir_all(&dir).unwrap();
-        let schema = arrow::datatypes::Schema::new(vec![
-            arrow::datatypes::Field::new("polygon_wkb", arrow::datatypes::DataType::Binary, false),
-            arrow::datatypes::Field::new("height_m", arrow::datatypes::DataType::Float32, false),
-        ]);
-        let wkbs: Vec<Vec<u8>> = squares
+    /// One cell's structure table: a closed ~20 m square building footprint
+    /// per entry, each with its south-west corner at the given `(lat, lon)`.
+    /// An empty `squares` writes the 0-row table a swept-and-empty cell carries.
+    fn write_structure_table(h3r4_dir: &Path, cell: CellIndex, squares: &[(f64, f64)]) -> PathBuf {
+        let rows: Vec<StructureRow> = squares
             .iter()
-            .map(|&(lat, lon)| {
-                let mut wkb: Vec<u8> = vec![1, 3, 0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0];
-                for (dlon, dlat) in [
-                    (0.0, 0.0),
-                    (0.0003, 0.0),
-                    (0.0003, 0.0002),
-                    (0.0, 0.0002),
-                    (0.0, 0.0),
-                ] {
-                    wkb.extend_from_slice(&f64::to_le_bytes(lon + dlon));
-                    wkb.extend_from_slice(&f64::to_le_bytes(lat + dlat));
-                }
-                wkb
+            .map(|&(lat, lon)| StructureRow {
+                kind: STRUCTURE_KIND_BUILDING,
+                geometry_wkb: Some(square_polygon_wkb(lat, lon)),
+                height_m: 9.0,
+                centroid_lat: lat + 0.0001,
+                centroid_lon: lon + 0.00015,
+                ..Default::default()
             })
             .collect();
-        let batch = arrow::record_batch::RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![
-                Arc::new(BinaryArray::from_vec(
-                    wkbs.iter().map(|w| w.as_slice()).collect(),
-                )),
-                Arc::new(Float32Array::from(vec![9.0_f32; squares.len()])),
-            ],
-        )
-        .unwrap();
-        let path = dir.join("obstacles.arrow");
-        let file = std::fs::File::create(&path).unwrap();
-        let mut w = arrow::ipc::writer::FileWriter::try_new(file, &schema).unwrap();
-        w.write(&batch).unwrap();
-        w.finish().unwrap();
-        path
+        crate::structure_test_fixture::write_structure_table(h3r4_dir, cell, &rows)
     }
 
     /// The disk cache must give back exactly the index that was built, and must
@@ -1103,11 +1165,11 @@ mod tests {
         let tmp = TempDir::new().expect("temp dir");
         let tmp = tmp.path();
         let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
-        let table = write_obstacle_table(tmp, cell, &[(50.08, 14.43)]);
+        let table = write_structure_table(tmp, cell, &[(50.08, 14.43)]);
         let root = tmp.join("index-cache");
 
-        let data_ver = cell_data_ver(cell, &table, None).expect("input fingerprint");
-        let built = build_cell_index(cell, &table, None).unwrap();
+        let data_ver = cell_data_ver(cell, &table).expect("input fingerprint");
+        let built = build_cell_index(cell, &table).unwrap();
         store_cached_index(&root, cell, &built, data_ver);
 
         let path = cache_file_path(&root, cell);
@@ -1137,7 +1199,7 @@ mod tests {
             .unwrap()
             .set_times(std::fs::FileTimes::new().set_modified(touched))
             .unwrap();
-        let moved = cell_data_ver(cell, &table, None).expect("input fingerprint");
+        let moved = cell_data_ver(cell, &table).expect("input fingerprint");
         assert_ne!(
             moved, data_ver,
             "an input mtime must rotate the fingerprint"
@@ -1146,8 +1208,8 @@ mod tests {
         assert!(!path.exists(), "a refused cache file must be removed");
 
         // A second footprint is a different table, hence a different index.
-        write_obstacle_table(tmp, cell, &[(50.08, 14.43), (50.081, 14.431)]);
-        assert_ne!(cell_data_ver(cell, &table, None).unwrap(), moved);
+        write_structure_table(tmp, cell, &[(50.08, 14.43), (50.081, 14.431)]);
+        assert_ne!(cell_data_ver(cell, &table).unwrap(), moved);
     }
 
     /// EVERY input that shapes a cell's index must move its identity, and a
@@ -1157,8 +1219,9 @@ mod tests {
     /// answer to a different question. It is written as an ENUMERATION rather
     /// than one case on purpose: the defect class is "the key forgot
     /// something", so the test walks the closed list [`cell_data_ver`] actually
-    /// folds — cell, obstacle TREE, the table's LENGTH and mtime, the
-    /// `buildings.arrow` the low-profile cap reads, and [`CACHE_CODE_VER`].
+    /// folds — cell, structure TREE, the table's LENGTH and mtime, and
+    /// [`CACHE_CODE_VER`]. The low-profile cap reads the same `structures.arrow`,
+    /// so it needs no fold of its own.
     /// Adding an input to `build_cell_index` without a case here leaves the same
     /// hole, so the list is the review surface.
     ///
@@ -1174,14 +1237,13 @@ mod tests {
         let other_cell = LatLng::new(-23.5505, -46.6333)
             .unwrap()
             .to_cell(Resolution::Four);
-        let table = write_obstacle_table(tmp.path(), cell, &[(50.08, 14.43)]);
-        let dir = tmp.path().join(cell.to_string());
+        let table = write_structure_table(tmp.path(), cell, &[(50.08, 14.43)]);
         let root = tmp.path().join("index-cache");
-        let base = cell_data_ver(cell, &table, None).expect("input fingerprint");
+        let base = cell_data_ver(cell, &table).expect("input fingerprint");
 
         // Positive control FIRST: without it every `is_none()` below would
         // also pass on a key that is simply always wrong.
-        let built = build_cell_index(cell, &table, None).unwrap();
+        let built = build_cell_index(cell, &table).unwrap();
         let path = cache_file_path(&root, cell);
         store_cached_index(&root, cell, &built, base);
         assert!(
@@ -1204,18 +1266,18 @@ mod tests {
         // 1. The cell — its centre is the index's metric origin, so the same
         //    table under another cell is a different index.
         refuses(
-            cell_data_ver(other_cell, &table, None).unwrap(),
+            cell_data_ver(other_cell, &table).unwrap(),
             "a different cell",
         );
 
-        // 2. The obstacle TREE: identical bytes at another path are another
+        // 2. The structure TREE: identical bytes at another path are another
         //    prepared root (a moved mount, a second data node) and may hold
-        //    entirely different obstacles for this cell tomorrow.
+        //    entirely different structures for this cell tomorrow.
         let root_b = TempDir::new().expect("temp dir");
-        let table_b = write_obstacle_table(root_b.path(), cell, &[(50.08, 14.43)]);
+        let table_b = write_structure_table(root_b.path(), cell, &[(50.08, 14.43)]);
         refuses(
-            cell_data_ver(cell, &table_b, None).unwrap(),
-            "another obstacle tree",
+            cell_data_ver(cell, &table_b).unwrap(),
+            "another structure tree",
         );
 
         // 3. The table's mtime (the world-stamps.py staleness contract).
@@ -1226,30 +1288,12 @@ mod tests {
             .unwrap()
             .set_times(std::fs::FileTimes::new().set_modified(touched))
             .unwrap();
-        refuses(
-            cell_data_ver(cell, &table, None).unwrap(),
-            "the table's mtime",
-        );
+        refuses(cell_data_ver(cell, &table).unwrap(), "the table's mtime");
 
-        // 4. `buildings.arrow` appearing — the low-profile cap reads it, so
-        //    the very same shards yield different HEIGHTS with it present.
-        let b_arrow = dir.join("buildings.arrow");
-        let absent = cell_data_ver(cell, &table, Some(&b_arrow)).unwrap();
-        assert_ne!(
-            absent, base,
-            "asking about a buildings.arrow at all is a different question \
-             from not consulting one"
-        );
-        std::fs::write(&b_arrow, b"not-arrow-but-present").unwrap();
-        refuses(
-            cell_data_ver(cell, &table, Some(&b_arrow)).unwrap(),
-            "a buildings.arrow appearing",
-        );
-
-        // 5. The table's LENGTH — the one content signal the key carries,
+        // 4. The table's LENGTH — the one content signal the key carries,
         //    folded next to the mtime. Pinned at a FIXED mtime so it is the
         //    length alone doing the work, not case 3 again.
-        let before_len = cell_data_ver(cell, &table, None).unwrap();
+        let before_len = cell_data_ver(cell, &table).unwrap();
         std::fs::write(&table, b"a-table-of-a-very-different-length").unwrap();
         std::fs::File::options()
             .write(true)
@@ -1257,20 +1301,20 @@ mod tests {
             .unwrap()
             .set_times(std::fs::FileTimes::new().set_modified(touched))
             .unwrap();
-        let after_len = cell_data_ver(cell, &table, None).unwrap();
+        let after_len = cell_data_ver(cell, &table).unwrap();
         assert_ne!(
             after_len, before_len,
             "the table's length must rotate the identity at an unchanged mtime"
         );
         refuses(after_len, "the table's length");
 
-        // 6. This file's own decisions (id ordering, shard order, the capping
-        //    call) are in the version, on top of the builder's chain — which is
-        //    what carries the low-profile rule now that it lives in
+        // 5. This file's own decisions (id ordering, the kind routing, the
+        //    capping call) are in the version, on top of the builder's chain —
+        //    which is what carries the low-profile rule now that it lives in
         //    `noise_compute::low_profile`.
         assert_eq!(
             CACHE_CODE_VER,
-            fnv1a64(BUILDER_CODE_VER, include_bytes!("obstacle_store.rs"))
+            fnv1a64(BUILDER_CODE_VER, include_bytes!("structure_store.rs"))
         );
         assert_ne!(
             CACHE_CODE_VER, BUILDER_CODE_VER,
@@ -1295,12 +1339,12 @@ mod tests {
         let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
 
         // Same cell, two prepared trees: one square in A, two in B.
-        let table_a = write_obstacle_table(one.path(), cell, &[(50.08, 14.43)]);
-        let table_b = write_obstacle_table(two.path(), cell, &[(50.08, 14.43), (50.081, 14.431)]);
+        let table_a = write_structure_table(one.path(), cell, &[(50.08, 14.43)]);
+        let table_b = write_structure_table(two.path(), cell, &[(50.08, 14.43), (50.081, 14.431)]);
 
         let data_dir = one.path().join("prepared");
         let edges = |table: &Path| {
-            cell_index(cell, table, None, &data_dir)
+            cell_index(cell, table, &data_dir)
                 .expect("test table builds")
                 .edge_count()
         };
@@ -1315,17 +1359,17 @@ mod tests {
 
         // A table changing under a LIVE process is the same hole with one
         // tree: the memo must notice, not hold yesterday's obstacles.
-        write_obstacle_table(one.path(), cell, &[(50.08, 14.43), (50.081, 14.431)]);
+        write_structure_table(one.path(), cell, &[(50.08, 14.43), (50.081, 14.431)]);
         assert_eq!(edges(&table_a), 8, "a rewritten table must be picked up");
     }
 
     /// The three answers a ring cell can give, on the loader the popup calls.
     /// Conflating any two of them is the bug class this whole design exists to
-    /// remove: an empty table is "no buildings here", a missing table is
+    /// remove: an empty table is "nothing stands here", a missing table is
     /// undelivered data, and a cell the extract never produced is outside the
     /// world.
     #[test]
-    fn empty_table_answers_no_buildings_and_a_missing_one_is_an_error() {
+    fn empty_table_answers_nothing_stands_here_and_a_missing_one_is_an_error() {
         let tmp = TempDir::new().expect("temp dir");
         let index_dir = TempDir::new().expect("temp index dir");
         let _env = EnvGuard::set(&[("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir)))]);
@@ -1334,9 +1378,9 @@ mod tests {
         let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
         let ring: Vec<CellIndex> = cell.grid_disk(1);
 
-        write_obstacle_table(&h3r4, cell, &[(50.08, 14.43)]);
+        write_structure_table(&h3r4, cell, &[(50.08, 14.43)]);
         for &neighbour in ring.iter().filter(|&&c| c != cell) {
-            write_obstacle_table(&h3r4, neighbour, &[]);
+            write_structure_table(&h3r4, neighbour, &[]);
         }
         let set = load_obstacle_set(&h3r4, &data_dir, 50.08, 14.43)
             .expect("empty neighbours are an answer, not a gap");
@@ -1345,10 +1389,10 @@ mod tests {
 
         // A prepared cell whose table was not delivered must fail the query.
         let victim = *ring.iter().find(|&&c| c != cell).unwrap();
-        std::fs::remove_file(h3r4.join(victim.to_string()).join("obstacles.arrow")).unwrap();
+        std::fs::remove_file(h3r4.join(victim.to_string()).join("structures.arrow")).unwrap();
         assert!(
             load_obstacle_set(&h3r4, &data_dir, 50.08, 14.43).is_err(),
-            "a ring cell without its obstacle table is missing data, not empty"
+            "a ring cell without its structure table is missing data, not empty"
         );
 
         // A cell the extract never produced has no directory: outside the
@@ -1361,10 +1405,129 @@ mod tests {
 
         // The query cell itself is always prepared: without its table there is
         // no answer to give.
-        std::fs::remove_file(h3r4.join(cell.to_string()).join("obstacles.arrow")).unwrap();
+        std::fs::remove_file(h3r4.join(cell.to_string()).join("structures.arrow")).unwrap();
         assert!(
             load_obstacle_set(&h3r4, &data_dir, 50.08, 14.43).is_err(),
             "the query cell's own table cannot be optional"
+        );
+    }
+
+    /// The low-profile cap reads the SAME structures.arrow the index is built
+    /// from: an OSM-attributed low-class row (building_type 7 = garage) caps a
+    /// tier-2 defaulted 8 m footprint at its spot to 3 m, while a tier-0
+    /// (mapped) 8 m footprint is per-building knowledge and never caps.
+    #[test]
+    fn build_applies_low_profile_cap_from_the_same_table() {
+        let tmp = TempDir::new().expect("temp dir");
+        let index_dir = TempDir::new().expect("temp index dir");
+        let _env = EnvGuard::set(&[("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir)))]);
+        let h3r4 = tmp.path().join("h3r4");
+        let data_dir = tmp.path().join("prepared");
+        let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
+        let square_area = noise_compute::wkb::outer_ring_area_m2(&square_polygon_wkb(50.08, 14.43));
+
+        let garage = StructureRow {
+            kind: STRUCTURE_KIND_BUILDING,
+            geometry_wkb: Some(square_polygon_wkb(50.08, 14.43)),
+            height_m: 3.0,
+            height_tier: 0,
+            centroid_lat: 50.0801,
+            centroid_lon: 14.43015,
+            osm_id: Some(101),
+            building_type: Some(7),
+            area_m2: Some(square_area),
+            ..Default::default()
+        };
+        // The Overture-only twin at the same spot: tier 2 default, no osm_id.
+        let defaulted = StructureRow {
+            kind: STRUCTURE_KIND_BUILDING,
+            geometry_wkb: Some(square_polygon_wkb(50.08, 14.43)),
+            height_m: 8.0,
+            height_tier: 2,
+            centroid_lat: 50.0801,
+            centroid_lon: 14.43015,
+            ..Default::default()
+        };
+        // A mapped height (tier 0) is per-building knowledge: never capped,
+        // even with a low-profile neighbour 400 m away being irrelevant here.
+        let mapped = StructureRow {
+            kind: STRUCTURE_KIND_BUILDING,
+            geometry_wkb: Some(square_polygon_wkb(50.08, 14.4356)),
+            height_m: 8.0,
+            height_tier: 0,
+            centroid_lat: 50.0801,
+            centroid_lon: 14.43575,
+            ..Default::default()
+        };
+        crate::structure_test_fixture::write_structure_table(
+            &h3r4,
+            cell,
+            &[garage, defaulted, mapped],
+        );
+        let set = load_obstacle_set(&h3r4, &data_dir, 50.08, 14.43).expect("set loads");
+
+        let capped = point_inside_obstacle(&set, 50.0801, 14.43015).expect("inside the twin pair");
+        assert!(
+            (capped - 3.0).abs() < 0.1,
+            "tier-2 default next to a garage must cap to 3 m, got {capped}"
+        );
+        let kept = point_inside_obstacle(&set, 50.0801, 14.43575).expect("inside the mapped row");
+        assert!(
+            (kept - 8.0).abs() < 0.1,
+            "a tier-0 height never caps, got {kept}"
+        );
+    }
+
+    /// Wall rows (kind=1) index as Barrier polylines from the SAME table, at
+    /// their stored height — the low-profile cap is building-only, so a tier-2
+    /// wall beside a garage keeps its 8 m.
+    #[test]
+    fn walls_index_as_uncapped_barrier_edges() {
+        let tmp = TempDir::new().expect("temp dir");
+        let index_dir = TempDir::new().expect("temp index dir");
+        let _env = EnvGuard::set(&[("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir)))]);
+        let h3r4 = tmp.path().join("h3r4");
+        let data_dir = tmp.path().join("prepared");
+        let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
+
+        let garage = StructureRow {
+            kind: STRUCTURE_KIND_BUILDING,
+            geometry_wkb: Some(square_polygon_wkb(50.08, 14.43)),
+            height_m: 3.0,
+            centroid_lat: 50.0801,
+            centroid_lon: 14.43015,
+            osm_id: Some(101),
+            building_type: Some(7),
+            area_m2: Some(100.0),
+            ..Default::default()
+        };
+        // A north-south wall at lon 14.4301, tier 2 and 8 m: kind-1 rows route
+        // to add_polyline at their stored height, never through the
+        // building-only low-profile cap.
+        let wall = StructureRow {
+            kind: STRUCTURE_KIND_BARRIER,
+            geometry_wkb: Some(wall_linestring_wkb((50.0798, 14.4301), (50.0802, 14.4301))),
+            height_m: 8.0,
+            height_tier: 2,
+            centroid_lat: 50.08,
+            centroid_lon: 14.4301,
+            osm_id: Some(555),
+            segment_idx: Some(0),
+            ..Default::default()
+        };
+        crate::structure_test_fixture::write_structure_table(&h3r4, cell, &[garage, wall]);
+        let set = load_obstacle_set(&h3r4, &data_dir, 50.08, 14.43).expect("set loads");
+
+        let mut out = Vec::new();
+        set.crossings(50.0801, 14.4295, 50.0801, 14.4310, &mut out);
+        let wall_hit = out
+            .iter()
+            .find(|c| c.kind == ObstacleKind::Barrier)
+            .expect("the wall must screen as a barrier edge");
+        assert_eq!(wall_hit.height_m, 8.0, "walls are never low-profile capped");
+        assert!(
+            out.iter().any(|c| c.kind == ObstacleKind::Building),
+            "the building crosses the same ray as a building"
         );
     }
 }

@@ -10,7 +10,6 @@
 //! paths, line layers, popup, and W2 remain outside this module and are
 //! unchanged when the switch is absent.
 
-use noise_compute::types::Barrier;
 use raster_reader::fused_tile_z13::{FusedTileZ13, TILE_PX};
 use std::time::Instant;
 
@@ -82,9 +81,8 @@ pub(crate) fn render(
     layer: &str,
     tile: &FusedTileZ13,
     points: &[PointRow],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
-    interior: &crate::source_loader_obstacle::InteriorEstimate,
+    interior: &crate::source_loader_structure::InteriorEstimate,
 ) -> (Vec<u8>, PointScatterStats, ReconstructionStats) {
     let axis = anchor_axis();
     let anchor_mask = lattice_mask(&axis);
@@ -94,8 +92,7 @@ pub(crate) fn render(
     // surrogate arm; it never consults a sealed/reference output.
     let direct_started = Instant::now();
     let mut surrogate_accum = TileAccumulator::new();
-    let direct_stats =
-        scatter_tile_point_direct(tile, points, barriers, obstacles, &mut surrogate_accum);
+    let direct_stats = scatter_tile_point_direct(tile, points, obstacles, &mut surrogate_accum);
     let direct_elapsed = direct_started.elapsed();
     let surrogate_raw = collapse_lden_surface_u8(&surrogate_accum);
     let mut surrogate_cells = surrogate_raw.clone();
@@ -109,7 +106,6 @@ pub(crate) fn render(
     let anchor_stats = scatter_tile_point_exact_receivers(
         tile,
         points,
-        barriers,
         obstacles,
         &mut exact_accum,
         &anchor_receivers,
@@ -166,7 +162,6 @@ pub(crate) fn render(
     let refine_stats = scatter_tile_point_exact_receivers(
         tile,
         points,
-        barriers,
         obstacles,
         &mut exact_accum,
         &refine_receivers,
@@ -574,10 +569,10 @@ fn block_mask(flags: &[bool], axis: &[usize]) -> Vec<bool> {
 
 /// Mask of every pixel that is the façade donor of at least one enclosed
 /// pixel in `interior` — the exact set `interior.apply` reads its values from.
-fn interior_donor_mask(interior: &crate::source_loader_obstacle::InteriorEstimate) -> Vec<bool> {
+fn interior_donor_mask(interior: &crate::source_loader_structure::InteriorEstimate) -> Vec<bool> {
     let mut mask = vec![false; TILE_PX * TILE_PX];
     for &donor in interior.donors() {
-        if donor != crate::source_loader_obstacle::NO_DONOR {
+        if donor != crate::source_loader_structure::NO_DONOR {
             mask[donor as usize] = true;
         }
     }

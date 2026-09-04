@@ -11,11 +11,13 @@
 //! time, so no backfill step is needed.
 //!
 //! Phase order (extract → global prior → national census → city → heuristics →
-//! taper → gate):
+//! taper → gate → structures):
 //!   column-parents  enrich-roads-built-up — built_up has NO extractor parent;
 //!                   the engine reads it for untagged-road speeds, taper reads
 //!                   it for ramp targets. Runs first so every later road pass
-//!                   sees it. (osm-to-h3r4.sh tail also runs it when
+//!                   sees it; samples the ring cells' structures.arrow, so on a
+//!                   fresh extract build-structures.py runs before it.
+//!                   (osm-to-h3r4.sh tail also runs it when
 //!                   RUN_SERVICE_TREE=1 — the re-run is a byte-identical no-op.)
 //!                   enrich-roads-country — the M3 per-segment
 //!                   country_iso/city_id/continent bake into roads+railways;
@@ -45,6 +47,14 @@
 //!                   against pipeline/chain/gate-baselines/{year}.{scope}.json
 //!                   (NEW fingerprints fail; pre-existing pass with a warning;
 //!                   crash/signal/exit-3 always fails).
+//!   structures      build-structures.py (via the enrich-structures.ts face) —
+//!                   ABSOLUTELY LAST: merges the pre-merge buildings.arrow (as
+//!                   osm-extract + the buildings enrichers + every earlier phase
+//!                   left it), barriers.arrow and the Overture parquet stock into
+//!                   the per-cell structures.arrow and RETIRES the pre-merge
+//!                   files, so it can only run once every buildings.arrow
+//!                   reader/writer (buildings-cz/es, service-tree, the gate) is
+//!                   done. The builder is the only structures.arrow writer.
 //!
 //! Chain-wide footguns (enforced by run.ts, documented here as the SSOT):
 //!   • NEVER run `npm run gen:sources` mid-chain: it rewrites source ids in
@@ -70,8 +80,8 @@ export const PIPELINE_DIR = resolve(import.meta.dirname, '..')
 export const REPO_ROOT = resolve(PIPELINE_DIR, '..')
 const ENRICH_DIR = resolve(REPO_ROOT, 'data', 'enrichment')
 
-export type Phase = 'column-parents' | 'global-priors' | 'national' | 'city' | 'heuristics' | 'taper' | 'gate'
-export const PHASES: readonly Phase[] = ['column-parents', 'global-priors', 'national', 'city', 'heuristics', 'taper', 'gate']
+export type Phase = 'column-parents' | 'global-priors' | 'national' | 'city' | 'heuristics' | 'taper' | 'gate' | 'structures'
+export const PHASES: readonly Phase[] = ['column-parents', 'global-priors', 'national', 'city', 'heuristics', 'taper', 'gate', 'structures']
 
 export type Layer = 'roads' | 'railways' | 'buildings' | 'industrial' | 'rasters' | 'all'
 
@@ -356,7 +366,7 @@ export function buildPlan(scope: ResolvedScope): { steps: PlanStep[]; excludedBy
       layer: 'roads',
       country: null,
       notes:
-        'built_up (u8 rural/urban) has NO extractor parent — first step always, engine + taper consume it. Fails loud when the Overture obstacle store or its .ingested-tiles manifest is absent. Idempotent: re-run over an osm-to-h3r4.sh-tail run is byte-identical.',
+        'built_up (u8 rural/urban) has NO extractor parent — first step always, engine + taper consume it. Reads the ring cells\' per-cell structures.arrow (lib/building-footprints.ts): a cell without the file means the builder has not reached it and the segment classifies UNKNOWN, so a world with no structures.arrow at all fails loud (run scripts/structures/build-structures.py first — on a fresh extract it precedes this pass). Idempotent: re-run over an osm-to-h3r4.sh-tail run is byte-identical.',
       skipReason: null,
       // The osm-to-h3r4.sh tail (RUN_SERVICE_TREE=1) already ran it on a fresh
       // extract — --assume-fresh-extract skips the byte-identical re-run.
@@ -443,19 +453,6 @@ export function buildPlan(scope: ResolvedScope): { steps: PlanStep[]; excludedBy
     notes: 'Copernicus GLO-30 DEM under prepared/dem/copernicus.',
     skipReason: 'raster-side one-time global enrichment — DEM is year-shared and survives an OSM re-extract; run manually via /enrich-global',
   })
-  pushPerBbox(
-    {
-      id: 'obstacle-heights',
-      script: 'enrich-obstacle-heights.ts',
-      phase: 'global-priors',
-      layer: 'buildings',
-      country: null,
-      notes:
-        'height-tier ladder for prepared obstacles.arrow SCREENING heights (tier 3 city-measured zonal — IPR Praha; tier 4 GHS-BUILT-H ANBH prior replacing the flat 8 m default; ladder table in the enricher headers + noise_compute::low_profile). Emptiness is per cell: every prepared cell gets an obstacles.arrow, empty where the finished Overture sweep found no footprint, so a painter needs no world-wide file. Each materialized cell carries an adjacent proof bound to its output inode, its Overture staging shards, the height rasters, and the worker source. Current cells are a cheap no-op; a raster replacement, a staging change, or a worker change makes the cell provably stale and regenerates it. A cell whose sweep is unfinished, or a missing height raster, fails the chain rather than certifying a world that is still missing buildings.',
-      skipReason: null,
-    },
-    (b) => (b ? ['--enrich-only', '--bbox', serializeBbox(b)] : ['--enrich-only']),
-  )
   // PRE-heal, deliberately BEFORE every ROAD claimer incl. roads-europe (/gg
   // #33 Codex CRITICAL — same one-cycle hole flagged for rail): a legacy
   // foreign/zero stamp outranks the EU continental claimer via shouldOverwrite,
@@ -779,6 +776,26 @@ export function buildPlan(scope: ResolvedScope): { steps: PlanStep[]; excludedBy
       'READ-ONLY acceptance gate (rules R0-R16, incl. the rail continuity R15 flow-jump / R16 continuity-gap detectors). run.ts diffs the per-violation fingerprint MULTISET against pipeline/chain/gate-baselines/{year}.{scope}.json (one file per DATA_YEAR + exact scope): any fingerprint above its baseline count FAILS the chain; pre-existing ones pass with a warning; exit 3 (I/O damage) always fails.',
     skipReason: null,
   })
+
+  // ── structures ─────────────────────────────────────────────────────────────
+  // Terminal BY CONTRACT: the builder merges the pre-merge buildings.arrow +
+  // barriers.arrow + the Overture parquet stock into structures.arrow and then
+  // RETIRES its inputs, so every pre-merge reader/writer (national
+  // buildings-cz/es, heuristics service-tree, the gate auditor) must sit in an
+  // earlier phase — moving this step up voids their input.
+  pushPerBbox(
+    {
+      id: 'structures',
+      script: 'enrich-structures.ts',
+      phase: 'structures',
+      layer: 'buildings',
+      country: null,
+      notes:
+        'writes the ONE per-cell structures.arrow (scripts/structures/build-structures.py: OSM buildings as enriched above + OSM walls + Overture parquet stock, matched and height-laddered; schema metadata structures_contract=structures_v1, building_rows, barrier_rows) and retires the pre-merge inputs so a finished cell holds only structures.arrow. Idempotent (a cell rebuilds iff an input is newer than the table); a missing GHSL raster, regional raster, or Overture parquet fails the chain rather than certifying a world that is still missing buildings.',
+      skipReason: null,
+    },
+    (b) => (b ? ['--enrich-only', '--retire-inputs', '--bbox', serializeBbox(b)] : ['--enrich-only', '--retire-inputs']),
+  )
 
   // ── completeness: no enrich-*.ts may stay unclassified ─────────────────────
   const all = readdirSync(PIPELINE_DIR).filter((f) => /^enrich-.+\.ts$/.test(f) && !f.endsWith('.test.ts'))

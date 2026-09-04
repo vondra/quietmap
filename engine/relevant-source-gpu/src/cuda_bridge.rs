@@ -8,7 +8,7 @@ use std::ptr::NonNull;
 use anyhow::{bail, Result};
 use raster_reader::FusedPixel;
 
-use crate::obstacle_transfer::{DeviceBarrier, DeviceObstacleGrid, DeviceRasterGeometry};
+use crate::obstacle_transfer::{DeviceObstacleGrid, DeviceRasterGeometry};
 use crate::source_frame::{DeviceLineSource, CORNER_COUNT, PERIOD_COUNT, TILE_PIXEL_SIDE};
 
 unsafe extern "C" {
@@ -61,10 +61,9 @@ pub struct DeviceScenePointers {
     pub obstacle_edge_references: *const u32,
     pub obstacle_edge_values_xyxyh: *const f32,
     pub obstacle_cell_maximum_heights: *const f32,
-    pub barriers: *const DeviceBarrier,
+    pub obstacle_edge_is_building: *const u8,
     pub source_count: u32,
     pub obstacle_grid_count: u32,
-    pub barrier_count: u32,
     /// Half a pixel of this tile in metres: the ground-ops divergence floor.
     pub pixel_floor_m: f32,
     pub raster_geometry: DeviceRasterGeometry,

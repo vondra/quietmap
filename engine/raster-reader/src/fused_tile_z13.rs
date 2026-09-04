@@ -158,7 +158,7 @@ impl FusedTileZ13 {
     }
 
     /// [`Self::build_with_halo`] leaving `rx_refl_db` zeroed for the caller to
-    /// vector-bake (`source_loader_obstacle::bake_tile_vector_rx_refl`). Zero is
+    /// vector-bake (`source_loader_structure::bake_tile_vector_rx_refl`). Zero is
     /// the neutral value: an unpainted tile never reads it.
     pub fn build_with_halo_opt_rx_refl(
         zoom: u8,

@@ -330,10 +330,14 @@ delta prune, and no output-dependent candidate cap. Segment buckets apply the
 3 degree minimum-span gate. These are production policies, not caller options.
 
 Canonical code:
-[engine/tile-painter/src/source_loader_obstacle.rs](../tile-painter/src/source_loader_obstacle.rs),
-[engine/tile-painter/src/source_loader_barrier.rs](../tile-painter/src/source_loader_barrier.rs),
+[engine/tile-painter/src/source_loader_structure.rs](../tile-painter/src/source_loader_structure.rs),
+[engine/source-reader/src/structure_store.rs](../source-reader/src/structure_store.rs),
 [src/propagation/arc_screening.rs](src/propagation/arc_screening.rs), and
 [src/propagation/seg_sampling.rs](src/propagation/seg_sampling.rs).
+
+The index inserts rows in the table's `screening_ordinal` order (dense ids follow
+the sort): the candidate race's exact-δ ties resolve by scan order, so insertion
+order is load-bearing for painted bytes. The builder owns the assignment.
 
 ### 4.8 Vegetation
 

@@ -145,9 +145,10 @@ __device__ __forceinline__ void admit_skyline_arc(
     }
 }
 
-/// The blocked mask of the bucket span from every obstacle grid and wall within
-/// `need_radius_m` (CPU `skyline_arcs_within` + the wall half of `ensure`): a cell
-/// is pruned on its tallest edge against the sight-line floor, an edge is not.
+/// The blocked mask of the bucket span from every obstacle edge — buildings and
+/// walls alike, both carried by the grids — within `need_radius_m` (CPU
+/// `skyline_arcs_within`): a cell is pruned on its tallest edge against the
+/// sight-line floor, an edge is not.
 __device__ void gather_blocked_mask(
     const DeviceScenePointers& scene,
     const DeviceLineSource& source,
@@ -235,21 +236,6 @@ __device__ void gather_blocked_mask(
                 }
             }
         }
-    }
-    for (uint32_t barrier_index = 0; barrier_index < scene.barrier_count; ++barrier_index) {
-        const DeviceBarrier barrier = scene.barriers[barrier_index];
-        if (barrier.receiver_distance_lower_bound_m
-            > need_radius_m + QUIETMAP_BARRIER_PATH_HORIZON_M) {
-            break;
-        }
-        if (barrier.height_m <= sight_line_floor_m) {
-            continue;
-        }
-        admit_skyline_arc(
-            source, receiver_x_m, receiver_y_m,
-            barrier.start_x_m - receiver_x_m, barrier.start_y_m - receiver_y_m,
-            barrier.end_x_m - receiver_x_m, barrier.end_y_m - receiver_y_m,
-            need_radius_m, span_lo, span_hi, bin_width, mask);
     }
 }
 

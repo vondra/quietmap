@@ -14,7 +14,7 @@ use noise_gpu::pack_airborne_segs;
 use raster_reader::RealRasters;
 use tile_painter::accumulator::TileAccumulator;
 use tile_painter::r4_source_cache::R4SourceCache;
-use tile_painter::source_loader_obstacle::InteriorEstimate;
+use tile_painter::source_loader_structure::InteriorEstimate;
 use tile_painter::wire_hm3::{collapse_lden_u8, write_tile, SOURCE_ID_AIRCRAFT};
 
 use crate::prep::{build_dem_blocks, prep_cell, PrepBlock, PreparedCell};

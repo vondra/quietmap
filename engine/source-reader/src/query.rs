@@ -9,9 +9,8 @@ use std::path::Path;
 
 use crate::geo;
 use crate::hex_store::{
-    self, canonicalize_barrier_results, hex_encode, load_hex, query_barriers_from_batches,
-    query_buildings_from_batches, query_leisure_from_batches, query_railways_from_batches,
-    query_roads_from_batches, BarrierResult,
+    self, hex_encode, load_hex, query_buildings_from_batches, query_leisure_from_batches,
+    query_railways_from_batches, query_roads_from_batches,
 };
 
 const BUILDING_QUERY_RADIUS_M: f64 = 2_000.0;
@@ -39,7 +38,6 @@ pub struct PointQueryData {
     /// `airport_lines.arrow` OSM ids and refs used to label runway and
     /// taxiway segment traces.
     pub airport_lines_batches: Vec<arrow::record_batch::RecordBatch>,
-    pub barriers: Vec<noise_compute::types::Barrier>,
     pub n_days: u16,
 }
 
@@ -75,7 +73,6 @@ pub fn collect_from_hex_data(
     let mut all_rail_admins = Vec::new();
     let mut all_buildings = Vec::new();
     let mut all_industrial = Vec::new();
-    let mut all_barrier_results: Vec<BarrierResult> = Vec::new();
     let mut all_airborne_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
     let mut all_cruise_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
     let mut all_airport_traffic_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
@@ -293,7 +290,7 @@ pub fn collect_from_hex_data(
         }
 
         let building_batches = data
-            .buildings
+            .structures
             .batches_within(lat, lng, BUILDING_QUERY_RADIUS_M);
         let buildings =
             query_buildings_from_batches(&building_batches, lat, lng, BUILDING_QUERY_RADIUS_M);
@@ -492,17 +489,6 @@ pub fn collect_from_hex_data(
             }
         }
 
-        // 10 km matches the road source radius — barriers along the full source→receiver
-        // path are needed for screening, not just near the receiver. The
-        // half-segment slack keeps a wall that CROSSES a 10 km path near its far
-        // end in the set: the crossing is inside 10 km, its midpoint (what the
-        // radius filters on) can be a half-segment beyond.
-        const BARRIER_RADIUS_M: f64 =
-            10_000.0 + noise_compute::types::BARRIER_SEGMENT_MAX_HALF_LEN_M;
-        let barrier_batches = data.barriers.batches_within(lat, lng, BARRIER_RADIUS_M);
-        let barriers = query_barriers_from_batches(&barrier_batches, lat, lng, BARRIER_RADIUS_M)?;
-        all_barrier_results.extend(barriers);
-
         // Aircraft popup arrows: bbox-gated above (per_hex_aircraft);
         // per-row reach prune + emission contract live inside
         // compute_aircraft_v6. RecordBatch clones are refcount bumps on
@@ -511,26 +497,6 @@ pub fn collect_from_hex_data(
         all_cruise_batches.extend(cruise_batches);
         all_airport_traffic_batches.extend(airport_traffic_batches);
     }
-
-    let mut all_barriers: Vec<_> = canonicalize_barrier_results(all_barrier_results)?
-        .into_iter()
-        .map(|b| noise_compute::types::Barrier {
-            osm_id: b.osm_id,
-            segment_idx: b.segment_idx,
-            height_m: b.height,
-            start_lat: b.start_lat,
-            start_lon: b.start_lon,
-            end_lat: b.end_lat,
-            end_lon: b.end_lon,
-            dist_m: b.dist_m,
-        })
-        .collect();
-
-    all_barriers.sort_unstable_by(|a, b| {
-        a.dist_m
-            .partial_cmp(&b.dist_m)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
 
     Ok(PointQueryData {
         roads: all_roads,
@@ -543,7 +509,6 @@ pub fn collect_from_hex_data(
         aircraft_cruise_batches: all_cruise_batches,
         aircraft_airport_traffic_batches: all_airport_traffic_batches,
         airport_lines_batches: all_airport_lines_batches,
-        barriers: all_barriers,
         n_days,
     })
 }

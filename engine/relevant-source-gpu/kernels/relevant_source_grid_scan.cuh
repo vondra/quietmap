@@ -120,10 +120,14 @@ __device__ __forceinline__ void scan_obstacle_grid(
                     const uint32_t edge = grid.edge_values_offset + local_edge;
                     const float* values = scene.obstacle_edge_values_xyxyh + edge * 5;
                     float crossing_t;
+                    // The exclusion radius shields only the source's own BUILDING
+                    // footprint; a barrier edge is an explicit wall and always
+                    // admits (CPU path_effects.rs §5b kind rule).
                     if (segment_crossing_fraction(
                             start_x, start_y, dx, dy, values[0], values[1],
                             values[2], values[3], crossing_t)
-                        && crossing_t * profile.distance_m >= exclusion_radius_m) {
+                        && (scene.obstacle_edge_is_building[edge] == 0u
+                            || crossing_t * profile.distance_m >= exclusion_radius_m)) {
                         consider_crossing_candidate(
                             profile, source_altitude_m, receiver_altitude_m,
                             crossing_t, values[4], best);

@@ -35,12 +35,11 @@ use rayon::prelude::*;
 
 use crate::accumulator::TileAccumulator;
 use crate::source_line::LineRow;
-use crate::source_loader_barrier::BarrierData;
-use crate::source_loader_building::BuildingData;
 use crate::source_loader_industrial::IndustrialData;
-use crate::source_loader_obstacle::{InteriorEstimate, ObstacleData};
+use crate::source_loader_leisure::LeisureData;
 use crate::source_loader_rail::RailData;
 use crate::source_loader_road::RoadData;
+use crate::source_loader_structure::{InteriorEstimate, StructureData};
 use crate::source_loader_traffic::AirportTrafficData;
 use crate::source_point::PointRow;
 use crate::wire_hm3::{
@@ -53,7 +52,6 @@ use noise_compute::constants::{
     GROUND_OPS_RUNWAY_MAX_RADIUS, INDUSTRIAL_MAX_RADIUS, RAILWAY_REACH_CEILING,
 };
 use noise_compute::propagation::obstacle_index::ObstacleSet;
-use noise_compute::types::Barrier;
 
 /// Per-layer halo: covers the source→receiver ray at the layer's max reach.
 /// Road = motorway-class cap (10 km); rail + industrial reference the single
@@ -120,12 +118,15 @@ impl SurfaceRows {
 /// for default-AADT; rail needs it for the C1 per-region day/evening/night split
 /// (EU freight runs ~55 % at night); the other layers have no admin dependency.
 /// The admin table is a process-wide `OnceLock` filled ONCE before the parallel
-/// section, so this read-only lookup is concurrency-safe.
+/// section, so this read-only lookup is concurrency-safe. The building layer's
+/// emission rows come OUT of the region's structure load (structures.arrow) and
+/// are merged with the leisure rows here.
 fn load_layer_rows(
     s: Source,
     h3r4_dir: &Path,
     ring: &[u64],
     cell: CellIndex,
+    structure_data: &mut StructureData,
 ) -> Result<SurfaceRows> {
     // Region admin (centre-R4 centroid) — shared by road's default-AADT cascade
     // and rail's period split. Resolved on demand; cheap OnceLock read.
@@ -149,11 +150,14 @@ fn load_layer_rows(
                 .context("load industrial")?
                 .into_rows(),
         ),
-        Source::Building => SurfaceRows::Point(
-            BuildingData::load_for_r4s(h3r4_dir, ring)
-                .context("load buildings")?
-                .into_rows(),
-        ),
+        Source::Building => {
+            let leisure = LeisureData::load_for_r4s(h3r4_dir, ring).context("load leisure")?;
+            SurfaceRows::Point(
+                structure_data
+                    .take_building_layer_rows(leisure)
+                    .context("load buildings")?,
+            )
+        }
         Source::AircraftGround => SurfaceRows::GroundOps(
             AirportTrafficData::load_for_r4s(h3r4_dir, ring).context("load airport traffic")?,
         ),
@@ -308,8 +312,9 @@ impl Heartbeat {
     }
 }
 
-/// Build every tile of one output region: load its `grid_disk(1)` rows for each
-/// requested layer + the barrier slice, batch its tiles (one shared halo per
+/// Build every tile of one output region: load its `grid_disk(1)` structure
+/// table (screening for every layer + the building layer's emission rows) and
+/// source rows for each requested layer, batch its tiles (one shared halo per
 /// batch), scatter each layer, collapse to the Lden byte, write the tiles, and
 /// unlink any now-silent stale tile. Returns this region's telemetry.
 ///
@@ -337,28 +342,32 @@ pub fn process_surface_region(
         .map(u64::from)
         .collect();
 
+    // ONE structure load per region: the ring's screening world (buildings +
+    // noise walls in one ObstacleSet) and, only when the building layer is
+    // being painted, its emission point rows. The buildings half replaces the
+    // old obstacles+barriers+buildings trio of per-cell reads.
+    let t_l = Instant::now();
+    let mut structure_data = if layers.contains(&Source::Building) {
+        StructureData::load_for_r4s(ctx.h3r4_dir, region_r4, &ring)
+    } else {
+        StructureData::load_screening_for_r4s(ctx.h3r4_dir, region_r4, &ring)
+    }
+    .with_context(|| format!("load structures R4 {region_r4:015x}"))?;
     // Load every requested layer's rows for this region, held across all the
     // region's batches so the shared halo is built once, not once per layer;
     // resolve (source_id, output subdir) here so the per-tile loop is bare.
-    let t_l = Instant::now();
     let layer_rows: Vec<(SurfaceRows, u8, &'static str)> = layers
         .iter()
         .map(|&s| {
             let (source_id, _, dir_name) = layer_meta(s);
             Ok((
-                load_layer_rows(s, ctx.h3r4_dir, &ring, cell)?,
+                load_layer_rows(s, ctx.h3r4_dir, &ring, cell, &mut structure_data)?,
                 source_id,
                 dir_name,
             ))
         })
         .collect::<Result<_>>()
         .with_context(|| format!("region R4 {region_r4:015x}"))?;
-    // Noise walls screen every layer (B8/C9): load the region's barriers.arrow
-    // once (absent in 98.5% of regions → empty, zero cost), then slice per tile.
-    let barrier_data = BarrierData::load_for_r4s(ctx.h3r4_dir, &ring)
-        .with_context(|| format!("load barriers R4 {region_r4:015x}"))?;
-    let obstacle_data = ObstacleData::load_for_r4s(ctx.h3r4_dir, region_r4, &ring)
-        .with_context(|| format!("load obstacles R4 {region_r4:015x}"))?;
     stats.t_load += t_l.elapsed();
     for (rows, _, dir_name) in &layer_rows {
         stats.by_layer.entry(*dir_name).or_default().loaded_rows += rows.len() as u64;
@@ -420,12 +429,12 @@ pub fn process_surface_region(
         // carries it unchanged. The popup reads vector reflection too
         // (VectorReflectionSampler), so pipeline and popup agree on one source.
         {
-            let set = obstacle_data.set();
+            let set = structure_data.set();
             // Only the REQUESTED tiles are painted — rebaking the whole
             // batch_n² grid would triple the bake cost for nothing.
             for &(x, y) in batch_tiles {
                 let slot = crate::region_runner::batch_slot(&batch, x, y);
-                crate::source_loader_obstacle::bake_tile_vector_rx_refl(
+                crate::source_loader_structure::bake_tile_vector_rx_refl(
                     &mut batch.tiles[slot],
                     set,
                 );
@@ -455,14 +464,10 @@ pub fn process_surface_region(
             .par_iter()
             .map(|&(x, y)| -> Result<(Duration, Vec<LayerOutcome>)> {
                 let tile = &batch.tiles[crate::region_runner::batch_slot(&batch, x, y)];
-                // One sorted, conservative-distance barrier slice per tile, shared by
-                // every layer (contract: types::Barrier docs).
-                let tile_barriers = barrier_data.for_tile(&tile.bbox, ctx.halo_m);
                 // Building interiors: ONE class raster + façade donor map per tile,
                 // shared by every layer (they all ride the same receiver lattice).
-                // Vector regions only — a raster-fallback region keeps its physics.
                 let t_m = Instant::now();
-                let interior = obstacle_data.interior_estimate(tile);
+                let interior = structure_data.interior_estimate(tile);
                 let t_interior = t_m.elapsed();
                 let layer_outcomes = layer_rows
                     .par_iter()
@@ -473,8 +478,7 @@ pub fn process_surface_region(
                             rows,
                             *source_id,
                             dir_name,
-                            &tile_barriers,
-                            obstacle_data.set(),
+                            structure_data.set(),
                             &interior,
                         )
                         .with_context(|| format!("layer {dir_name} tile {x}/{y}"))
@@ -524,7 +528,6 @@ fn paint_tile_layer(
     rows: &SurfaceRows,
     source_id: u8,
     dir_name: &'static str,
-    tile_barriers: &[Barrier],
     obstacles: &ObstacleSet,
     interior: &InteriorEstimate,
 ) -> Result<LayerOutcome> {
@@ -543,7 +546,7 @@ fn paint_tile_layer(
         postprocess_applied,
     ) = match rows {
         SurfaceRows::Line(r) => {
-            let st = scatter_line::scatter_tile(tile, r, tile_barriers, obstacles, &mut accum);
+            let st = scatter_line::scatter_tile(tile, r, obstacles, &mut accum);
             (
                 st.path_calls,
                 st.skipped_calls,
@@ -560,7 +563,7 @@ fn paint_tile_layer(
         SurfaceRows::Point(r) => {
             if crate::point_w1::enabled_for_zoom(ctx.zoom, dir_name) {
                 let (cells, st, reconstruction) =
-                    crate::point_w1::render(dir_name, tile, r, tile_barriers, obstacles, interior);
+                    crate::point_w1::render(dir_name, tile, r, obstacles, interior);
                 (
                     st.path_calls,
                     st.skipped_calls,
@@ -574,7 +577,7 @@ fn paint_tile_layer(
                     reconstruction.postprocess_applied,
                 )
             } else {
-                let st = scatter_point::scatter_tile(tile, r, tile_barriers, obstacles, &mut accum);
+                let st = scatter_point::scatter_tile(tile, r, obstacles, &mut accum);
                 (
                     st.path_calls,
                     st.skipped_calls,
@@ -594,7 +597,6 @@ fn paint_tile_layer(
             let st = ground_ops::scatter_tile(
                 tile,
                 &views,
-                tile_barriers,
                 obstacles,
                 &ctx.class_weights,
                 ctx.n_days,

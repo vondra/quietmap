@@ -9,14 +9,14 @@ use noise_compute::constants::ENCLOSURE_RADIUS_M;
 use noise_compute::propagation::obstacle_index::{enclosure_db, ObstacleSet};
 use raster_reader::fused_tile_z13::{tile_pixel_size_m, FusedTileZ13};
 use tile_painter::accumulator::TileAccumulator;
-use tile_painter::source_loader_obstacle::InteriorEstimate;
+use tile_painter::source_loader_structure::InteriorEstimate;
 use tile_painter::wire_hm3::{
     collapse_lden_surface_u8, collapse_lden_u8, fill_area_median, write_tile, AREA_FILL_RADIUS_PX,
 };
 
 use crate::cuda_bridge::{DeviceBuffer, DeviceScenePointers, RelevantSourceCuda};
 use crate::obstacle_transfer::{
-    encode_barriers, DeviceObstacleGrid, DeviceRasterGeometry, FlattenedObstacleGeometry,
+    DeviceObstacleGrid, DeviceRasterGeometry, FlattenedObstacleGeometry,
 };
 use crate::relevance_partition::build_relevant_source_partition;
 use crate::source_frame::{
@@ -31,6 +31,7 @@ pub struct RegionDeviceObstacles {
     obstacle_cell_starts: DeviceBuffer<u32>,
     obstacle_edge_references: DeviceBuffer<u32>,
     obstacle_edge_values: DeviceBuffer<f32>,
+    obstacle_edge_is_building: DeviceBuffer<u8>,
     obstacle_cell_maximum_heights: DeviceBuffer<f32>,
     obstacle_grid_count: u32,
 }
@@ -42,6 +43,7 @@ impl RegionDeviceObstacles {
             obstacle_cell_starts: DeviceBuffer::from_slice(&obstacles.cell_starts)?,
             obstacle_edge_references: DeviceBuffer::from_slice(&obstacles.edge_references)?,
             obstacle_edge_values: DeviceBuffer::from_slice(&obstacles.edge_values_xyxyh)?,
+            obstacle_edge_is_building: DeviceBuffer::from_slice(&obstacles.edge_is_building)?,
             obstacle_cell_maximum_heights: DeviceBuffer::from_slice(
                 &obstacles.cell_maximum_heights,
             )?,
@@ -186,14 +188,12 @@ impl TileDeviceReceivers {
 /// for the writer thread together with the measurement.
 pub fn partition_and_paint_tile(
     cuda: &RelevantSourceCuda,
-    frame: &RegionMetricFrame,
     sources: &[DeviceLineSource],
     source_fingerprint: u64,
     device_sources: &RegionDeviceLineSources,
     device_obstacles: &RegionDeviceObstacles,
     batch_raster: &BatchDeviceRaster,
     receivers: &TileDeviceReceivers,
-    barriers: &[noise_compute::types::Barrier],
     lden_weights: [f64; PERIOD_COUNT],
     partition_path: &Path,
 ) -> Result<(TilePaintMeasurement, Vec<f32>)> {
@@ -201,8 +201,6 @@ pub fn partition_and_paint_tile(
     let incidence = build_tile_source_incidence(sources, &receivers.lattice);
     let corner_offsets = DeviceBuffer::from_slice(&incidence.corner_offsets)?;
     let corner_sources = DeviceBuffer::from_slice(&incidence.corner_source_indices)?;
-    let encoded_barriers = encode_barriers(frame, barriers);
-    let device_barriers = DeviceBuffer::from_slice(&encoded_barriers)?;
     let scene = DeviceScenePointers {
         sources: device_sources.sources.as_ptr(),
         raster_pixels: batch_raster.pixels.as_ptr(),
@@ -211,10 +209,9 @@ pub fn partition_and_paint_tile(
         obstacle_edge_references: device_obstacles.obstacle_edge_references.as_ptr(),
         obstacle_edge_values_xyxyh: device_obstacles.obstacle_edge_values.as_ptr(),
         obstacle_cell_maximum_heights: device_obstacles.obstacle_cell_maximum_heights.as_ptr(),
-        barriers: device_barriers.as_ptr(),
+        obstacle_edge_is_building: device_obstacles.obstacle_edge_is_building.as_ptr(),
         source_count: device_sources.source_count,
         obstacle_grid_count: device_obstacles.obstacle_grid_count,
-        barrier_count: encoded_barriers.len() as u32,
         pixel_floor_m: receivers.pixel_floor_m,
         raster_geometry: batch_raster.geometry,
     };

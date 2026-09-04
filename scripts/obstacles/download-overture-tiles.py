@@ -5,11 +5,11 @@ statistics intersect it, so an empty tile costs a statistics check instead of th
 ~1-2 GB of footers `overturemaps download` fetched per tile (2026-09-03: 5 tiles/min,
 55 MB/s, for the mostly empty polar list).
 
-    download-overture-tiles.py TILE_LIST PARQUET_DIR [INGESTED_LIST]
+    download-overture-tiles.py TILE_LIST PARQUET_DIR
 
 Writes PARQUET_DIR/<tile>.parquet (same rows and columns as the CLI wrote: rows whose bbox
-intersects the tile's degree square); skips tiles already cached or listed in INGESTED_LIST
-(an ingested tile's parquet is deleted on purpose and never re-fetched). Tiles of one
+intersects the tile's degree square); skips tiles already cached — the cache on disk is
+the only resume truth. Tiles of one
 latitude row are scanned as one strip of up to BATCH_TILES and split in memory, so the
 per-scan cost (a statistics pass over every row group) is paid once per strip."""
 import ctypes
@@ -24,8 +24,8 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 
-# Every tile of the obstacle manifest was ingested from this release (2026-09-03); mixing
-# releases inside one manifest would make neighbouring tiles disagree.
+# The whole parquet cache comes from this one release so neighbouring tiles never
+# disagree; a release bump is a full refetch, never a mix.
 RELEASE = "2026-08-19.0"
 DATASET_PATH = f"overturemaps-us-west-2/release/{RELEASE}/theme=buildings/type=building/"
 # Strip width: a dense tile is hundreds of MB in Arrow (three strips of ten reached 16 GiB after
@@ -40,7 +40,7 @@ STRIP_WORKERS = 3
 # still ends with exit 3 and the caller starts a fresh process; cached tiles are skipped.
 RSS_RESTART_BYTES = 24 << 30
 EXIT_RESTART = 3
-# The columns ingest-overture-obstacles.py reads (plus id for audits); the theme's other 16
+# The columns build-structures.py reads (plus id for audits); the theme's other 16
 # columns (names, sources, roof attributes) were 90 % of a strip's memory and transfer.
 COLUMNS = ["id", "geometry", "bbox", "height", "num_floors", "class", "subtype", "is_underground"]
 
@@ -69,14 +69,11 @@ def strips(tiles):
         yield strip
 
 
-def main(list_path, parquet_dir, ingested_path=None):
+def main(list_path, parquet_dir):
     tiles = [line.strip() for line in open(list_path) if line.strip()]
-    ingested = set()
-    if ingested_path and os.path.exists(ingested_path):
-        ingested = {line.strip() for line in open(ingested_path)}
-    todo = [t for t in tiles if t not in ingested
-            and not (os.path.exists(f"{parquet_dir}/{t}.parquet")
-                     and os.path.getsize(f"{parquet_dir}/{t}.parquet") > 0)]
+    todo = [t for t in tiles
+            if not (os.path.exists(f"{parquet_dir}/{t}.parquet")
+                    and os.path.getsize(f"{parquet_dir}/{t}.parquet") > 0)]
     print(f"[overture-tiles] {len(tiles)} selected, {len(todo)} to fetch", flush=True)
     if not todo:
         return 0
@@ -139,6 +136,6 @@ def main(list_path, parquet_dir, ingested_path=None):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) not in (3, 4):
+    if len(sys.argv) != 3:
         sys.exit(__doc__)
     sys.exit(main(*sys.argv[1:]))

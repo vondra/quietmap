@@ -162,7 +162,7 @@ function forestColor(v: number): [number, number, number, number] {
   return [0x2d, 0x6a, 0x4f, Math.max(alpha, 40)]
 }
 
-// --- Barrier data (vector lines from Arrow files) ---
+// --- Barrier data (wall micro-segments from the per-cell structure table) ---
 
 interface BarrierSegment {
   startLat: number; startLon: number
@@ -178,6 +178,19 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, 0))
 }
 
+/** A barrier row's geometry: the 2-point little-endian WKB LineString
+ *  build-structures.py writes (byte 0 = 1 for LE, u32 type 2 at [1..5], u32
+ *  npoints=2 at [5..9], then four f64 LE as lon/lat, lon/lat — 41 bytes). */
+function wallSegmentFromWkb(wkb: Uint8Array): { startLat: number; startLon: number; endLat: number; endLon: number } | null {
+  if (wkb.byteLength !== 41) return null
+  const view = new DataView(wkb.buffer, wkb.byteOffset, wkb.byteLength)
+  if (view.getUint8(0) !== 1 || view.getUint32(1, true) !== 2 || view.getUint32(5, true) !== 2) return null
+  return {
+    startLon: view.getFloat64(9, true), startLat: view.getFloat64(17, true),
+    endLon: view.getFloat64(25, true), endLat: view.getFloat64(33, true),
+  }
+}
+
 async function loadAllBarriersAsync(): Promise<BarrierSegment[]> {
   if (barrierSegments) return barrierSegments
   const h3r4Dir = join(DATA_DIR, DATA_YEAR, 'h3r4')
@@ -186,23 +199,21 @@ async function loadAllBarriersAsync(): Promise<BarrierSegment[]> {
   const hexDirs = readdirSync(h3r4Dir)
   let filesProcessed = 0
   for (const hex of hexDirs) {
-    const fp = join(h3r4Dir, hex, 'barriers.arrow')
+    const fp = join(h3r4Dir, hex, 'structures.arrow')
     if (!existsSync(fp)) continue
     try {
       const buf = await readFile(fp)
       const table = tableFromIPC(buf)
-      const slat = table.getChild('start_lat')
-      const slon = table.getChild('start_lon')
-      const elat = table.getChild('end_lat')
-      const elon = table.getChild('end_lon')
-      const height = table.getChild('height')
-      if (!slat || !slon || !elat || !elon) continue
+      const kind = table.getChild('kind')
+      const geom = table.getChild('geometry_wkb')
+      const height = table.getChild('height_m')
+      if (!kind || !geom) continue
       for (let i = 0; i < table.numRows; i++) {
-        result.push({
-          startLat: slat.get(i), startLon: slon.get(i),
-          endLat: elat.get(i), endLon: elon.get(i),
-          height: height?.get(i) ?? 3.0,
-        })
+        if ((kind.get(i) as number) !== 1) continue // walls only (ObstacleKind::Barrier)
+        const wkb = geom.get(i) as Uint8Array | null
+        const seg = wkb ? wallSegmentFromWkb(wkb) : null
+        if (!seg) continue
+        result.push({ ...seg, height: (height?.get(i) as number | null) ?? 3.0 })
       }
     } catch { /* skip corrupt files */ }
     // Yield to event loop every 50 files so server stays responsive

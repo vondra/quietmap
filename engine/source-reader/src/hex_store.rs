@@ -141,8 +141,10 @@ impl LazyArrow {
 pub struct HexData {
     pub roads: LazyArrow,
     pub railways: LazyArrow,
-    pub buildings: LazyArrow,
-    pub barriers: LazyArrow,
+    /// The merged per-cell structure table (`structures.arrow`,
+    /// `scripts/structures/build-structures.py`): kind=0 building rows feed
+    /// the emission read, kind=1 wall microsegments the popup's wall listing.
+    pub structures: LazyArrow,
     pub industrial: LazyArrow,
     /// Leisure AREA sources (`leisure.arrow`, settlement v2 phase 2) — sports
     /// pitch / playground / pool / beer garden. Folded into the building
@@ -163,8 +165,7 @@ impl HexData {
         HexData {
             roads: LazyArrow::empty(),
             railways: LazyArrow::empty(),
-            buildings: LazyArrow::empty(),
-            barriers: LazyArrow::empty(),
+            structures: LazyArrow::empty(),
             industrial: LazyArrow::empty(),
             leisure: LazyArrow::empty(),
             aircraft_airborne: LazyArrow::empty(),
@@ -183,18 +184,18 @@ pub fn load_hex(dir: &str) -> Result<HexData, String> {
         return Ok(HexData::empty());
     }
 
-    let buildings = LazyArrow::open(&path.join("buildings.arrow"));
+    let structures = LazyArrow::open(&path.join("structures.arrow"));
     let leisure = LazyArrow::open(&path.join("leisure.arrow"));
-    // settlement v2 phase 2: buildings re-numbered building_type + added columns,
-    // leisure is a NEW file. A stale v1 buildings.arrow would feed OLD type ids
-    // through the NEW emission profiles → silently wrong popup numbers. Fail loud
-    // (Convention-B per-file contract); the fix is re-extract. Schema-level —
-    // no batch decode needed.
+    // A present source file carries its contract stamp; a stale one would feed
+    // OLD semantics through the NEW readers (a pre-merge extract's
+    // building_type ids, an older wall layout) → silently wrong popup numbers.
+    // Fail loud (Convention-B per-file contract); the fix is re-extract.
+    // Schema-level — no batch decode needed.
     check_contract(
-        &buildings,
-        "buildings_contract",
-        BUILDINGS_CONTRACT_V2,
-        "buildings.arrow",
+        &structures,
+        "structures_contract",
+        STRUCTURES_CONTRACT_V1,
+        "structures.arrow",
     )?;
     check_contract(
         &leisure,
@@ -209,8 +210,7 @@ pub fn load_hex(dir: &str) -> Result<HexData, String> {
     Ok(HexData {
         roads: LazyArrow::open(&path.join("roads.arrow")),
         railways,
-        buildings,
-        barriers: LazyArrow::open(&path.join("barriers.arrow")),
+        structures,
         industrial: LazyArrow::open(&path.join("industrial.arrow")),
         leisure,
         aircraft_airborne: LazyArrow::open(&path.join("airborne.arrow")),
@@ -220,15 +220,22 @@ pub fn load_hex(dir: &str) -> Result<HexData, String> {
     })
 }
 
-/// settlement v2 phase 2 per-file contracts (source of truth:
-/// `osm-extract::finalize`). Mirrored here so the popup rejects a stale
-/// buildings.arrow whose `building_type` ids predate the re-numbering.
-pub const BUILDINGS_CONTRACT_V2: &str = "buildings_v2";
+/// Per-file contract stamps (sources of truth: `osm-extract::finalize` for
+/// leisure, `scripts/structures/build-structures.py` for the merged structure
+/// table). Mirrored here so the popup rejects a stale file whose semantics
+/// predate the current schema.
+pub const STRUCTURES_CONTRACT_V1: &str = "structures_v1";
 pub const LEISURE_CONTRACT_V1: &str = "leisure_v1";
 
-/// Verify a settlement arrow's file-level schema carries the expected
-/// per-file contract stamp (Convention-B). Missing file passes. Fails loud
-/// on mismatch so `load_hex` never serves mis-profiled buildings.
+/// `structures.arrow` row routing (source of truth: `KIND_*` in
+/// `scripts/structures/build-structures.py`; the codes equal
+/// `ObstacleKind::Building`/`Barrier`'s stored codes).
+pub const STRUCTURE_KIND_BUILDING: u8 = 0;
+pub const STRUCTURE_KIND_BARRIER: u8 = 1;
+
+/// Verify a source arrow's file-level schema carries the expected per-file
+/// contract stamp (Convention-B). Missing file passes. Fails loud on mismatch
+/// so `load_hex` never serves stale-semantics rows.
 fn check_contract(arrow: &LazyArrow, key: &str, expected: &str, label: &str) -> Result<(), String> {
     let Some(schema) = arrow.schema() else {
         return Ok(());
@@ -237,7 +244,7 @@ fn check_contract(arrow: &LazyArrow, key: &str, expected: &str, label: &str) -> 
     if c != Some(expected) {
         return Err(format!(
             "{label} {key} mismatch (expected {expected}, got {c:?}) — \
-             re-extract OSM (settlement v2 phase 2)"
+             re-extract the source store"
         ));
     }
     Ok(())
@@ -720,6 +727,12 @@ pub fn query_railways_from_batches(
     results
 }
 
+/// Building emission rows of the merged structure table: kind=0 rows with a
+/// valid `osm_id`, in file order — the old buildings.arrow subsequence with
+/// the same values. The emission position is `emission_centroid_*` where the
+/// merge kept the OSM centroid (matched rows screen at the Overture one), else
+/// `centroid_*`; the emission polygon likewise is `emission_polygon_wkb` where
+/// stored, else `geometry_wkb`.
 pub fn query_buildings_from_batches(
     batches: &[RecordBatch],
     lat: f64,
@@ -730,14 +743,17 @@ pub fn query_buildings_from_batches(
 
     for batch in batches {
         let n = batch.num_rows();
+        let kind = col_u8(batch, "kind");
         let osm_id = col_i64(batch, "osm_id");
         let clat = col_f64(batch, "centroid_lat");
         let clon = col_f64(batch, "centroid_lon");
 
-        let (Some(osm_id), Some(clat), Some(clon)) = (osm_id, clat, clon) else {
+        let (Some(kind), Some(osm_id), Some(clat), Some(clon)) = (kind, osm_id, clat, clon) else {
             continue;
         };
 
+        let elat = col_f64(batch, "emission_centroid_lat");
+        let elon = col_f64(batch, "emission_centroid_lon");
         let height = col_f32(batch, "height");
         let floors = col_u8(batch, "floors");
         let area = col_f32(batch, "area_m2");
@@ -746,11 +762,18 @@ pub fn query_buildings_from_batches(
         let name = col_str(batch, "name");
         let street = col_str(batch, "addr_street");
         let house = col_str(batch, "addr_housenumber");
-        let wkb = col_binary(batch, "polygon_wkb");
+        let emission_wkb = col_binary(batch, "emission_polygon_wkb");
+        let geometry_wkb = col_binary(batch, "geometry_wkb");
 
         for i in 0..n {
-            let c_lat = clat.value(i);
-            let c_lon = clon.value(i);
+            if kind.value(i) != STRUCTURE_KIND_BUILDING || osm_id.is_null(i) {
+                continue;
+            }
+            let present = |col: Option<&Float64Array>, i: usize| {
+                col.filter(|a| !a.is_null(i)).map(|a| a.value(i))
+            };
+            let c_lat = present(elat, i).unwrap_or(clat.value(i));
+            let c_lon = present(elon, i).unwrap_or(clon.value(i));
             let dist = crate::geo::flat_dist(lat, lon, c_lat, c_lon);
             if dist > max_radius {
                 continue;
@@ -760,15 +783,43 @@ pub fn query_buildings_from_batches(
                 osm_id: osm_id.value(i),
                 centroid_lat: c_lat,
                 centroid_lon: c_lon,
-                height: height.map(|a| a.value(i)).unwrap_or(0.0),
-                floors: floors.map(|a| a.value(i)).unwrap_or(0),
-                area_m2: area.map(|a| a.value(i)).unwrap_or(0.0),
-                building_type: btype.map(|a| a.value(i)).unwrap_or(0),
-                building_use: buse.map(|a| a.value(i)).unwrap_or(0),
-                name: name.map(|a| a.value(i).to_string()).unwrap_or_default(),
-                addr_street: street.map(|a| a.value(i).to_string()).unwrap_or_default(),
-                addr_housenumber: house.map(|a| a.value(i).to_string()).unwrap_or_default(),
-                polygon_wkb: wkb.map(|a| hex_encode(a.value(i))).unwrap_or_default(),
+                height: height
+                    .filter(|a| !a.is_null(i))
+                    .map(|a| a.value(i))
+                    .unwrap_or(0.0),
+                floors: floors
+                    .filter(|a| !a.is_null(i))
+                    .map(|a| a.value(i))
+                    .unwrap_or(0),
+                area_m2: area
+                    .filter(|a| !a.is_null(i))
+                    .map(|a| a.value(i))
+                    .unwrap_or(0.0),
+                building_type: btype
+                    .filter(|a| !a.is_null(i))
+                    .map(|a| a.value(i))
+                    .unwrap_or(0),
+                building_use: buse
+                    .filter(|a| !a.is_null(i))
+                    .map(|a| a.value(i))
+                    .unwrap_or(0),
+                name: name
+                    .filter(|a| !a.is_null(i))
+                    .map(|a| a.value(i).to_string())
+                    .unwrap_or_default(),
+                addr_street: street
+                    .filter(|a| !a.is_null(i))
+                    .map(|a| a.value(i).to_string())
+                    .unwrap_or_default(),
+                addr_housenumber: house
+                    .filter(|a| !a.is_null(i))
+                    .map(|a| a.value(i).to_string())
+                    .unwrap_or_default(),
+                polygon_wkb: emission_wkb
+                    .filter(|a| !a.is_null(i))
+                    .or(geometry_wkb.filter(|a| !a.is_null(i)))
+                    .map(|a| hex_encode(a.value(i)))
+                    .unwrap_or_default(),
                 dist_m: dist,
             });
         }
@@ -834,9 +885,11 @@ pub fn query_leisure_from_batches(
     results
 }
 
-/// One `barriers.arrow` row for the popup lane: the wall microsegment's
-/// geometry (both endpoints — what `path_effects` intersects the ray with) plus
-/// its midpoint, which is the point `dist_m` is measured to.
+/// One wall microsegment (`structures.arrow` kind=1 row) for the popup lane:
+/// the wall's geometry (both endpoints — what the obstacle index screens with)
+/// plus its midpoint (the row's `centroid_*`), which is the point `dist_m` is
+/// measured to. The response fields are the old barriers.arrow row's, so the
+/// visitor's popup JSON keeps its shape.
 #[derive(Debug, serde::Serialize)]
 pub struct BarrierResult {
     pub osm_id: i64,
@@ -862,45 +915,65 @@ pub fn query_barriers_from_batches(
     let mut results = Vec::new();
     for batch in batches {
         let n = batch.num_rows();
+        let kind = col_u8(batch, "kind")
+            .ok_or_else(|| "structures.arrow missing required kind column".to_string())?;
         let osm_id = col_i64(batch, "osm_id")
-            .ok_or_else(|| "barriers.arrow missing required osm_id column".to_string())?;
+            .ok_or_else(|| "structures.arrow missing required osm_id column".to_string())?;
         let segment_idx = col_i16(batch, "segment_idx")
-            .ok_or_else(|| "barriers.arrow missing required segment_idx column".to_string())?;
-        let height = col_f32(batch, "height");
-        let slat = col_f64(batch, "start_lat")
-            .ok_or_else(|| "barriers.arrow missing required start_lat column".to_string())?;
-        let slon = col_f64(batch, "start_lon")
-            .ok_or_else(|| "barriers.arrow missing required start_lon column".to_string())?;
-        let elat = col_f64(batch, "end_lat")
-            .ok_or_else(|| "barriers.arrow missing required end_lat column".to_string())?;
-        let elon = col_f64(batch, "end_lon")
-            .ok_or_else(|| "barriers.arrow missing required end_lon column".to_string())?;
+            .ok_or_else(|| "structures.arrow missing required segment_idx column".to_string())?;
+        let height = col_f32(batch, "height_m")
+            .ok_or_else(|| "structures.arrow missing required height_m column".to_string())?;
+        let geometry = col_binary(batch, "geometry_wkb")
+            .ok_or_else(|| "structures.arrow missing required geometry_wkb column".to_string())?;
+        let clat = col_f64(batch, "centroid_lat")
+            .ok_or_else(|| "structures.arrow missing required centroid_lat column".to_string())?;
+        let clon = col_f64(batch, "centroid_lon")
+            .ok_or_else(|| "structures.arrow missing required centroid_lon column".to_string())?;
 
         for i in 0..n {
+            if kind.value(i) != STRUCTURE_KIND_BARRIER {
+                continue;
+            }
+            // A wall without its provenance or shape cannot be listed: nulls
+            // here are a broken extract, and `value(i)` on a null slot would
+            // silently read the identity of wall (0, 0).
+            if osm_id.is_null(i) || segment_idx.is_null(i) || geometry.is_null(i) {
+                return Err(format!(
+                    "structures.arrow barrier row {i} lacks osm_id, segment_idx or geometry_wkb"
+                ));
+            }
             ScreeningSourceId::wall(osm_id.value(i), segment_idx.value(i)).map_err(|error| {
                 format!(
-                    "invalid barriers.arrow provenience ({}, {}): {error:?}",
+                    "invalid structures.arrow provenience ({}, {}): {error:?}",
                     osm_id.value(i),
                     segment_idx.value(i)
                 )
             })?;
-            let mid_lat = (slat.value(i) + elat.value(i)) / 2.0;
-            let mid_lon = (slon.value(i) + elon.value(i)) / 2.0;
+            let mid_lat = clat.value(i);
+            let mid_lon = clon.value(i);
             let dist = crate::geo::flat_dist(lat, lon, mid_lat, mid_lon);
             if dist > max_radius {
                 continue;
             }
+            let points = noise_compute::wkb::parse_wkb_linestring_bytes(geometry.value(i));
+            if points.len() < 2 {
+                return Err(format!(
+                    "structures.arrow barrier row {i}: geometry_wkb is not a wall microsegment"
+                ));
+            }
+            let (start_lat, start_lon) = points[0];
+            let (end_lat, end_lon) = points[points.len() - 1];
 
             results.push(BarrierResult {
                 osm_id: osm_id.value(i),
                 segment_idx: segment_idx.value(i),
-                height: height.map(|a| a.value(i)).unwrap_or(3.0),
+                height: height.value(i),
                 lat: mid_lat,
                 lon: mid_lon,
-                start_lat: slat.value(i),
-                start_lon: slon.value(i),
-                end_lat: elat.value(i),
-                end_lon: elon.value(i),
+                start_lat,
+                start_lon,
+                end_lat,
+                end_lon,
                 dist_m: dist,
             });
         }
@@ -991,34 +1064,35 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod barrier_provenance_tests {
     use super::*;
-    use arrow::datatypes::{Field, Schema};
+    use crate::structure_test_fixture::{structure_batch, wall_linestring_wkb, StructureRow};
 
+    /// One wall row per (osm_id, segment_idx, start_lat): a ~110 m microsegment
+    /// running NE from (start_lat, 14.0). `dist_m` is measured to its centroid
+    /// (the midpoint the builder writes).
     fn batch(
         osm_ids: Vec<i64>,
         segment_indices: Vec<i16>,
         start_latitudes: Vec<f64>,
     ) -> RecordBatch {
-        let rows = osm_ids.len();
-        let end_latitudes: Vec<_> = start_latitudes.iter().map(|value| value + 0.001).collect();
-        RecordBatch::try_new(
-            Arc::new(Schema::new(vec![
-                Field::new("osm_id", DataType::Int64, false),
-                Field::new("segment_idx", DataType::Int16, false),
-                Field::new("start_lat", DataType::Float64, false),
-                Field::new("start_lon", DataType::Float64, false),
-                Field::new("end_lat", DataType::Float64, false),
-                Field::new("end_lon", DataType::Float64, false),
-            ])),
-            vec![
-                Arc::new(Int64Array::from(osm_ids)),
-                Arc::new(Int16Array::from(segment_indices)),
-                Arc::new(Float64Array::from(start_latitudes)),
-                Arc::new(Float64Array::from(vec![14.0; rows])),
-                Arc::new(Float64Array::from(end_latitudes)),
-                Arc::new(Float64Array::from(vec![14.001; rows])),
-            ],
-        )
-        .unwrap()
+        let rows: Vec<StructureRow> = osm_ids
+            .into_iter()
+            .zip(segment_indices)
+            .zip(start_latitudes)
+            .map(|((osm_id, segment_idx), start_lat)| {
+                let end = (start_lat + 0.001, 14.001);
+                StructureRow {
+                    kind: STRUCTURE_KIND_BARRIER,
+                    geometry_wkb: Some(wall_linestring_wkb((start_lat, 14.0), end)),
+                    height_m: 3.0,
+                    centroid_lat: (start_lat + end.0) / 2.0,
+                    centroid_lon: (14.0 + end.1) / 2.0,
+                    osm_id: Some(osm_id),
+                    segment_idx: Some(segment_idx),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        structure_batch(&rows)
     }
 
     #[test]
@@ -1059,9 +1133,177 @@ mod barrier_provenance_tests {
     #[test]
     fn missing_barrier_segment_idx_fails_closed() {
         let mut missing = batch(vec![7], vec![-3], vec![50.0]);
-        missing.remove_column(1);
+        missing.remove_column(missing.schema().index_of("segment_idx").unwrap());
         let error = query_barriers_from_batches(&[missing], 50.0, 14.0, 1_000.0).unwrap_err();
         assert!(error.contains("missing required segment_idx"));
+    }
+
+    /// The wall listing reads kind=1 rows out of the merged table: building
+    /// rows of the same batch never list as walls, and the wire fields come
+    /// from the LineString, `height_m`, and the row centroid.
+    #[test]
+    fn wall_listing_reads_barrier_rows_of_the_merged_table() {
+        let wall = StructureRow {
+            kind: STRUCTURE_KIND_BARRIER,
+            geometry_wkb: Some(wall_linestring_wkb((50.0, 14.0), (50.001, 14.001))),
+            height_m: 4.5,
+            centroid_lat: 50.0005,
+            centroid_lon: 14.0005,
+            osm_id: Some(9),
+            segment_idx: Some(2),
+            ..Default::default()
+        };
+        let building = StructureRow {
+            kind: STRUCTURE_KIND_BUILDING,
+            geometry_wkb: Some(crate::structure_test_fixture::square_polygon_wkb(
+                50.0, 14.0,
+            )),
+            height_m: 12.0,
+            centroid_lat: 50.0001,
+            centroid_lon: 14.00015,
+            osm_id: Some(42),
+            ..Default::default()
+        };
+        let results =
+            query_barriers_from_batches(&[structure_batch(&[wall, building])], 50.0, 14.0, 1_000.0)
+                .unwrap();
+        assert_eq!(results.len(), 1, "building rows must not list as walls");
+        let w = &results[0];
+        assert_eq!(w.osm_id, 9);
+        assert_eq!(w.segment_idx, 2);
+        assert_eq!(w.height, 4.5);
+        assert_eq!((w.lat, w.lon), (50.0005, 14.0005));
+        assert_eq!((w.start_lat, w.start_lon), (50.0, 14.0));
+        assert_eq!((w.end_lat, w.end_lon), (50.001, 14.001));
+    }
+}
+
+/// The building emission read off the merged table: only kind=0 rows with a
+/// valid `osm_id` (the old buildings.arrow subsequence), at the EMISSION
+/// centroid and with the EMISSION polygon where the merge stored one.
+#[cfg(test)]
+mod structure_emission_tests {
+    use super::*;
+    use crate::structure_test_fixture::{square_polygon_wkb, structure_batch, StructureRow};
+
+    #[test]
+    fn building_read_filters_to_osm_rows_and_applies_emission_overrides() {
+        let override_wkb = square_polygon_wkb(50.05, 14.05);
+        let osm = StructureRow {
+            kind: STRUCTURE_KIND_BUILDING,
+            geometry_wkb: Some(square_polygon_wkb(50.0, 14.0)),
+            height_m: 8.0,
+            centroid_lat: 50.0,
+            centroid_lon: 14.0,
+            osm_id: Some(42),
+            building_type: Some(1),
+            building_use: Some(2),
+            height: Some(12.0),
+            floors: Some(4),
+            name: Some("Hall".to_string()),
+            addr_street: Some("Main".to_string()),
+            addr_housenumber: Some("7".to_string()),
+            area_m2: Some(120.0),
+            emission_polygon_wkb: Some(override_wkb.clone()),
+            emission_centroid_lat: Some(50.0002),
+            emission_centroid_lon: Some(14.0003),
+            ..Default::default()
+        };
+        // Overture-only screening stock: no osm_id, so never an emission row.
+        let overture_only = StructureRow {
+            kind: STRUCTURE_KIND_BUILDING,
+            geometry_wkb: Some(square_polygon_wkb(50.0, 14.0)),
+            height_m: 8.0,
+            centroid_lat: 50.0,
+            centroid_lon: 14.0,
+            ..Default::default()
+        };
+        let wall = StructureRow {
+            kind: STRUCTURE_KIND_BARRIER,
+            geometry_wkb: Some(crate::structure_test_fixture::wall_linestring_wkb(
+                (50.0, 14.0),
+                (50.001, 14.001),
+            )),
+            height_m: 3.0,
+            centroid_lat: 50.0005,
+            centroid_lon: 14.0005,
+            osm_id: Some(9),
+            segment_idx: Some(0),
+            ..Default::default()
+        };
+        // An OSM row without overrides emits at its screening centroid with
+        // its screening polygon.
+        let plain = StructureRow {
+            kind: STRUCTURE_KIND_BUILDING,
+            geometry_wkb: Some(square_polygon_wkb(50.0, 14.0)),
+            height_m: 9.0,
+            centroid_lat: 50.0,
+            centroid_lon: 14.0,
+            osm_id: Some(43),
+            ..Default::default()
+        };
+
+        let results = query_buildings_from_batches(
+            &[structure_batch(&[osm.clone(), overture_only, wall, plain])],
+            50.0002,
+            14.0003,
+            100.0,
+        );
+        assert_eq!(results.len(), 2, "only kind=0 rows with an osm_id emit");
+        let (overridden, plain) = (&results[0], &results[1]);
+        assert_eq!(overridden.osm_id, 42);
+        assert_eq!(
+            (overridden.centroid_lat, overridden.centroid_lon),
+            (50.0002, 14.0003)
+        );
+        assert_eq!(overridden.polygon_wkb, hex_encode(&override_wkb));
+        assert_eq!(overridden.height, 12.0);
+        assert_eq!(overridden.floors, 4);
+        assert_eq!(overridden.building_type, 1);
+        assert_eq!(overridden.building_use, 2);
+        assert_eq!(overridden.area_m2, 120.0);
+        assert_eq!(overridden.name, "Hall");
+        assert_eq!(overridden.addr_street, "Main");
+        assert_eq!(overridden.addr_housenumber, "7");
+        assert_eq!(plain.osm_id, 43);
+        assert_eq!((plain.centroid_lat, plain.centroid_lon), (50.0, 14.0));
+        assert_eq!(
+            plain.polygon_wkb,
+            hex_encode(&square_polygon_wkb(50.0, 14.0))
+        );
+        assert_eq!(plain.height, 0.0, "a null raw height reads 0.0");
+        assert_eq!(plain.floors, 0, "null floors read 0");
+
+        // The override is positional too: at the SCREENING centroid the
+        // overridden row is ~30 m out, outside a 5 m query.
+        let at_screening =
+            query_buildings_from_batches(&[structure_batch(&[osm])], 50.0, 14.0, 5.0);
+        assert!(
+            at_screening.is_empty(),
+            "emission reads the emission centroid"
+        );
+    }
+
+    /// The merged file is contract-gated: an unstamped structures.arrow is a
+    /// stale extract and must fail `load_hex` loud, not serve old semantics.
+    #[test]
+    fn load_hex_rejects_an_unstamped_structures_table() {
+        let root = tempfile::tempdir().unwrap();
+        let hex_dir = root.path().join("841e309ffffffff");
+        std::fs::create_dir(&hex_dir).unwrap();
+        let table = hex_dir.join("structures.arrow");
+        crate::structure_test_fixture::write_structure_file(&table, &[], false);
+        let error = load_hex(hex_dir.to_str().unwrap())
+            .err()
+            .expect("unstamped table must fail");
+        assert!(
+            error.contains("structures_contract mismatch"),
+            "got: {error}"
+        );
+
+        crate::structure_test_fixture::write_structure_file(&table, &[], true);
+        let data = load_hex(hex_dir.to_str().unwrap()).expect("stamped table loads");
+        assert!(data.structures.schema().is_some());
     }
 }
 

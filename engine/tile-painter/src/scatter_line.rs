@@ -38,7 +38,7 @@ use noise_compute::propagation::geo::{
 };
 use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_compute::propagation::path_profile::CoarseMid;
-use noise_compute::types::{Barrier, RasterSampler};
+use noise_compute::types::RasterSampler;
 use raster_reader::fused_tile_z13::FusedTileZ13;
 
 use crate::accumulator::{TileAccumulator, NUM_PERIODS};
@@ -78,18 +78,16 @@ impl From<ScatterStats> for LineScatterStats {
 /// power. `accum` is collapsed by the caller with the surface (no
 /// time-division) Lden collapse.
 ///
-/// `barriers` is the tile's noise-wall slice prepared by
-/// `source_loader_barrier::BarrierData::for_tile` (sorted ascending,
-/// conservative `dist_m` — see the `types::Barrier` contract). Empty for
-/// the 98.5% of regions without a `barriers.arrow`.
+/// Noise walls screen through the region's [`ObstacleSet`]
+/// (`ObstacleKind::Barrier` polyline edges — the structures.arrow kind=1
+/// rows), never through a parallel slice.
 pub fn scatter_tile(
     tile: &FusedTileZ13,
     lines: &[LineRow],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     accum: &mut TileAccumulator,
 ) -> LineScatterStats {
-    scatter_tile_with_cfg(tile, lines, barriers, obstacles, accum, coarse_mid_cfg())
+    scatter_tile_with_cfg(tile, lines, obstacles, accum, coarse_mid_cfg())
 }
 
 /// [`scatter_tile`] with the coarse-middle cadence passed EXPLICITLY (bypassing
@@ -99,7 +97,6 @@ pub fn scatter_tile(
 pub fn scatter_tile_with_cfg(
     tile: &FusedTileZ13,
     lines: &[LineRow],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     accum: &mut TileAccumulator,
     cfg: Option<CoarseMid>,
@@ -107,7 +104,6 @@ pub fn scatter_tile_with_cfg(
     band_scatter_tile_with_cfg(
         &LineGeometry { lines },
         tile,
-        barriers,
         obstacles,
         lines.len(),
         accum,
@@ -400,7 +396,7 @@ mod tests {
         let px = lon_to_px(&tile.bbox, c_lon);
         let run = |set: &ObstacleSet| {
             let mut accum = TileAccumulator::new();
-            scatter_tile(tile, std::slice::from_ref(&line), &[], set, &mut accum);
+            scatter_tile(tile, std::slice::from_ref(&line), set, &mut accum);
             pixel_db(&accum, py, px)
         };
         (run(&ObstacleSet::empty()), run(&obstacles))

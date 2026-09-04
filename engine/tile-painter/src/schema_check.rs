@@ -141,12 +141,17 @@ pub fn read_surface_arrow_for_r4(
     read_arrow_core(h3r4_dir, r4, filename, |_label, _batches| Ok(()), absorb)
 }
 
-/// settlement v2 phase 2 per-file contracts (source of truth:
-/// `osm-extract::finalize`). The buildings re-numbering (new SILENT/HOUSE/
-/// FOOD_RETAIL/HOSPITALITY classes) silently re-profiles a v1 arrow, so the
-/// loader must reject a stale buildings.arrow loud — re-extract is the fix.
-pub const BUILDINGS_CONTRACT_V2: &str = "buildings_v2";
+/// settlement v2 phase 2 per-file contract for the leisure table (source of
+/// truth: `osm-extract::finalize`). The buildings table is merged into
+/// `structures.arrow` now — the structure loader gates on
+/// [`STRUCTURES_CONTRACT_V1`] instead.
 pub const LEISURE_CONTRACT_V1: &str = "leisure_v1";
+
+/// The per-cell structure table's contract (source of truth:
+/// `scripts/structures/build-structures.py`): the merged buildings ∪ walls
+/// table every prepared cell carries. A stale or missing stamp fails the
+/// region load — rebuilding the cell with the structures builder is the fix.
+pub const STRUCTURES_CONTRACT_V1: &str = "structures_v1";
 
 /// Surface-arrow read that ALSO enforces a per-file `<key>` contract stamp
 /// (Convention-B). Missing files are skipped (no contract to check); a present

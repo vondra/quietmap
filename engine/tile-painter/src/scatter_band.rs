@@ -88,7 +88,7 @@ use noise_compute::propagation::arc_screening::{
 use noise_compute::propagation::census;
 use noise_compute::propagation::iso9613::{fast_exp_f64, ground_atten_bands, ground_or_barrier_db};
 use noise_compute::propagation::obstacle_index::{
-    CellPrune, CrossingCandidate, CrossingScratch, ObstacleSet,
+    CellPrune, CrossingCandidate, CrossingScratch, ObstacleKind, ObstacleSet,
 };
 use noise_compute::propagation::path_effects;
 use noise_compute::propagation::path_profile::CoarseMid;
@@ -96,7 +96,7 @@ use noise_compute::propagation::seg_sampling::{
     sampled_gob_bands_with_ground, seg_arc_bounds, SegSampleScratch, SEG_SAMPLES_DEFAULT,
 };
 use noise_compute::propagation::PathProfile;
-use noise_compute::types::{Barrier, RasterSampler};
+use noise_compute::types::RasterSampler;
 use raster_reader::fused_tile_z13::{FusedTileZ13, TileBbox, TILE_PX};
 use rayon::prelude::*;
 
@@ -814,7 +814,6 @@ fn arc_query<'a>(
     cp_screening: &'a [f64; NUM_BANDS],
     cp_terrain: &'a [f64; NUM_BANDS],
     ground_g: f64,
-    barriers: &'a [Barrier],
     obstacles: &'a ObstacleSet,
     bounds: ArcBounds,
 ) -> ArcScreening<'a> {
@@ -833,7 +832,6 @@ fn arc_query<'a>(
         cp_screening,
         cp_terrain,
         ground_g,
-        barriers,
         obstacles,
         length_m: arc.length_m,
         dist_m: arc.dist_m,
@@ -987,20 +985,11 @@ pub(crate) struct ScatterStats {
 pub(crate) fn scatter_tile<G: PixelGeometry>(
     geo: &G,
     tile: &FusedTileZ13,
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     n_rows: usize,
     accum: &mut TileAccumulator,
 ) -> ScatterStats {
-    scatter_tile_with_cfg(
-        geo,
-        tile,
-        barriers,
-        obstacles,
-        n_rows,
-        accum,
-        coarse_mid_cfg(),
-    )
+    scatter_tile_with_cfg(geo, tile, obstacles, n_rows, accum, coarse_mid_cfg())
 }
 
 /// [`scatter_tile`] with the coarse-middle cadence passed EXPLICITLY (bypassing
@@ -1010,15 +999,12 @@ pub(crate) fn scatter_tile<G: PixelGeometry>(
 pub(crate) fn scatter_tile_with_cfg<G: PixelGeometry>(
     geo: &G,
     tile: &FusedTileZ13,
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     n_rows: usize,
     accum: &mut TileAccumulator,
     cfg: Option<CoarseMid>,
 ) -> ScatterStats {
-    scatter_tile_with_cfg_and_options(
-        geo, tile, barriers, obstacles, n_rows, accum, cfg, None, None, None,
-    )
+    scatter_tile_with_cfg_and_options(geo, tile, obstacles, n_rows, accum, cfg, None, None, None)
 }
 
 /// [`scatter_tile_with_cfg`] with an optional receiver mask and direct
@@ -1031,7 +1017,6 @@ pub(crate) fn scatter_tile_with_cfg<G: PixelGeometry>(
 pub(crate) fn scatter_tile_with_cfg_and_options<G: PixelGeometry>(
     geo: &G,
     tile: &FusedTileZ13,
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     n_rows: usize,
     accum: &mut TileAccumulator,
@@ -1061,7 +1046,7 @@ pub(crate) fn scatter_tile_with_cfg_and_options<G: PixelGeometry>(
     if let Some(receivers) = selected_receivers {
         assert!(receiver_mask.is_none() && direct_extra_db.is_none());
         return scatter_selected_receivers(
-            geo, tile, &prep, barriers, obstacles, n_rows, accum, cfg, receivers,
+            geo, tile, &prep, obstacles, n_rows, accum, cfg, receivers,
         );
     }
 
@@ -1088,7 +1073,6 @@ pub(crate) fn scatter_tile_with_cfg_and_options<G: PixelGeometry>(
                         geo,
                         tile,
                         &prep,
-                        barriers,
                         obstacles,
                         py_lo,
                         py_hi,
@@ -1182,7 +1166,6 @@ fn scatter_selected_receivers<G: PixelGeometry>(
     geo: &G,
     tile: &FusedTileZ13,
     prep: &[G::Prep],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     n_rows: usize,
     accum: &mut TileAccumulator,
@@ -1225,7 +1208,6 @@ fn scatter_selected_receivers<G: PixelGeometry>(
                         geo,
                         tile,
                         prep,
-                        barriers,
                         obstacles,
                         py_lo,
                         py_hi,
@@ -1291,7 +1273,6 @@ struct ExactPairEvaluation {
 #[allow(clippy::too_many_arguments)]
 fn evaluate_exact_pair(
     tile: &FusedTileZ13,
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     cfg: Option<CoarseMid>,
     t: &PixelTerms,
@@ -1352,7 +1333,6 @@ fn evaluate_exact_pair(
                 &ZERO_BANDS,
                 &terrain_bands,
                 ground_g,
-                barriers,
                 obstacles,
                 s.arc_bounds,
             );
@@ -1391,7 +1371,6 @@ fn evaluate_exact_pair(
             };
             let cp_screening = path_effects::screening_attenuation(
                 &mut s.profile,
-                barriers,
                 obstacle_input,
                 t.src_alt,
                 rx_alt,
@@ -1413,7 +1392,6 @@ fn evaluate_exact_pair(
                         &cp_screening,
                         &terrain_bands,
                         ground_g,
-                        barriers,
                         obstacles,
                         s.arc_bounds,
                     );
@@ -1427,7 +1405,12 @@ fn evaluate_exact_pair(
                 }
                 _ => cp_screening,
             };
-            if !barriers.is_empty() {
+            // Walls screen through the index now: a Barrier-kind candidate in
+            // the crossing set is the explicit wall path this counter watches.
+            if s.cand_scratch
+                .iter()
+                .any(|c| c.kind == ObstacleKind::Barrier)
+            {
                 note_barrier_path();
             }
             let mut gob = [0.0f64; NUM_BANDS];
@@ -1479,7 +1462,6 @@ fn scatter_exact_point_source_major<G: PixelGeometry>(
     geo: &G,
     tile: &FusedTileZ13,
     prep: &[G::Prep],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     py_lo: usize,
     py_hi: usize,
@@ -1522,7 +1504,6 @@ fn scatter_exact_point_source_major<G: PixelGeometry>(
 
                 let evaluated = evaluate_exact_pair(
                     tile,
-                    barriers,
                     obstacles,
                     cfg,
                     &t,
@@ -1553,7 +1534,6 @@ fn scatter_band<G: PixelGeometry>(
     geo: &G,
     tile: &FusedTileZ13,
     prep: &[G::Prep],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     py_lo: usize,
     py_hi: usize,
@@ -1595,7 +1575,7 @@ fn scatter_band<G: PixelGeometry>(
     let cache_terms = geo.cache_pixel_terms();
     if load_order_exact {
         scatter_exact_point_source_major(
-            geo, tile, prep, barriers, obstacles, py_lo, py_hi, px_lo, px_hi, cfg, n_seg, s,
+            geo, tile, prep, obstacles, py_lo, py_hi, px_lo, px_hi, cfg, n_seg, s,
         );
         return;
     }
@@ -1782,7 +1762,6 @@ fn scatter_band<G: PixelGeometry>(
 
                 let evaluated = evaluate_exact_pair(
                     tile,
-                    barriers,
                     obstacles,
                     cfg,
                     &t,
@@ -1936,7 +1915,6 @@ mod tests {
             let stats = crate::scatter_line::scatter_tile(
                 &tile,
                 rows,
-                &[],
                 &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
                 &mut accum,
             );
@@ -2077,16 +2055,6 @@ mod tests {
             })
             .collect();
 
-        let barriers = [Barrier {
-            osm_id: 71,
-            segment_idx: 0,
-            height_m: 4.5,
-            start_lat: c_lat + d_lat(-160.0),
-            start_lon: c_lon,
-            end_lat: c_lat + d_lat(160.0),
-            end_lon: c_lon,
-            dist_m: 0.0,
-        }];
         let mut obstacle_builder = ObstacleIndex::builder(c_lat, c_lon);
         obstacle_builder.add_ring(
             &[
@@ -2099,10 +2067,20 @@ mod tests {
             ObstacleKind::Building,
             19,
         );
+        // The wall as it reaches the kernels since e57941d3: an
+        // ObstacleKind::Barrier polyline inside the same index, never a slice.
+        obstacle_builder.add_polyline(
+            &[
+                (c_lat + d_lat(-160.0), c_lon),
+                (c_lat + d_lat(160.0), c_lon),
+            ],
+            4.5,
+            ObstacleKind::Barrier,
+            20,
+        );
         let obstacles = ObstacleSet {
             indexes: vec![Arc::new(obstacle_builder.build())],
         };
-        assert!(!barriers.is_empty());
         assert!(obstacles.edge_count() > 0);
 
         struct HistoricalPointGeometry<'a> {
@@ -2141,7 +2119,6 @@ mod tests {
         let candidate_stats = scatter_tile_with_cfg(
             &candidate,
             &tile,
-            &barriers,
             &obstacles,
             TILE_PX,
             &mut candidate_accum,
@@ -2155,7 +2132,6 @@ mod tests {
         let historical_stats = scatter_tile_with_cfg(
             &historical,
             &tile,
-            &barriers,
             &obstacles,
             TILE_PX,
             &mut historical_accum,

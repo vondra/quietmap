@@ -9,7 +9,7 @@ use rayon::prelude::*;
 
 use crate::accumulator::{CoarseLattice, COARSE_LEVELS_N};
 use crate::grid::TILE_PX;
-use crate::source_loader_obstacle::InteriorEstimate;
+use crate::source_loader_structure::InteriorEstimate;
 
 struct ReceiverScreening {
     terrain: ReceiverHorizon,

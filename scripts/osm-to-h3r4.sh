@@ -128,7 +128,19 @@ if [ "$RUN_SERVICE_TREE" = "1" ]; then
     CTRY_LOG_DIR="$SCRATCH_ROOT/country-bake-logs"
     export SVC_SHARDS SVC_LOG_DIR BUP_LOG_DIR CTRY_LOG_DIR YEAR
 
-    # built_up flag (urban/rural from the building raster, task #15) BEFORE
+    # The per-cell structure table (structures.arrow) BEFORE built-up: the
+    # built-up sampler reads it, and every painter's screening stock comes from
+    # it. The face owns the builder invocation (cell enumeration, regional
+    # raster grouping, fail-loud raster/parquet guards). Runs here on the raw
+    # extract WITHOUT retiring inputs — the enrich chain refines buildings.arrow
+    # later and its terminal structures step rebuilds + retires.
+    log "Building the per-cell structure tables (structures.arrow) ..."
+    (
+        cd "$PROJECT_DIR/pipeline"
+        DATA_YEAR="$YEAR" node_modules/.bin/tsx enrich-structures.ts
+    ) 2>&1 | while IFS= read -r line; do log "  $line"; done
+
+    # built_up flag (urban/rural from the structure table, task #15) BEFORE
     # service-tree — order between the two is irrelevant for correctness (this
     # pass only writes the built_up column), it just belongs with the other
     # fresh-extract road passes. Same per-hex SHARD parallelism as service-tree.

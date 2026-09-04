@@ -14,7 +14,6 @@ const PATH_PROFILE_SOURCE: &str = include_str!("../noise-compute/src/propagation
 const SEGMENT_SAMPLING_SOURCE: &str =
     include_str!("../noise-compute/src/propagation/seg_sampling.rs");
 const SOURCE_FRAME_SOURCE: &str = include_str!("src/source_frame.rs");
-const INPUT_TYPES_SOURCE: &str = include_str!("../noise-compute/src/types/inputs.rs");
 const ARC_SCREENING_SOURCE: &str =
     include_str!("../noise-compute/src/propagation/arc_screening.rs");
 const GEO_SOURCE: &str = include_str!("../noise-compute/src/propagation/geo.rs");
@@ -138,10 +137,6 @@ fn generated_physics_header() -> String {
     assert_eq!(
         constant_initializer(PATH_PROFILE_SOURCE, "CELL_M"),
         "crate::constants::M_PER_DEG_LAT / 3600.0"
-    );
-    assert_eq!(
-        constant_initializer(INPUT_TYPES_SOURCE, "BARRIER_PATH_HORIZON_M"),
-        "BARRIER_SEGMENT_MAX_HALF_LEN_M + 50.0"
     );
     let favourable_probability = if canonical_bool(NOISE_CONSTANTS_SOURCE, "FAVOURABLE_MIXING") {
         canonical_f64(NOISE_CONSTANTS_SOURCE, "P_FAV")
@@ -272,11 +267,6 @@ fn generated_physics_header() -> String {
         &mut header,
         "QUIETMAP_MINIMUM_FOREST_RUN_M",
         canonical_f64(PATH_PROFILE_SOURCE, "VEGETATION_MIN_RUN_M"),
-    );
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_BARRIER_PATH_HORIZON_M",
-        canonical_f64(INPUT_TYPES_SOURCE, "BARRIER_SEGMENT_MAX_HALF_LEN_M") + 50.0,
     );
     // Spelled `<deg>_f64.to_radians()` in seg_sampling.rs; mirror the expression.
     let arc_gate_degrees: f64 =
@@ -427,7 +417,6 @@ fn main() {
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/path_profile.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/seg_sampling.rs");
     println!("cargo:rerun-if-changed=src/source_frame.rs");
-    println!("cargo:rerun-if-changed=../noise-compute/src/types/inputs.rs");
     println!("cargo:rerun-if-changed=../tile-painter/src/scatter_band.rs");
     if env::var_os("CARGO_FEATURE_GPU").is_none() {
         return;
@@ -491,7 +480,6 @@ mod tests {
         assert!(header.contains("constexpr float QUIETMAP_DEFAULT_RECEIVER_HEIGHT_M = 4.0f;"));
         assert!(header.contains("constexpr int QUIETMAP_LINE_DIRECTION_COUNT = 5;"));
         assert!(header.contains("constexpr int QUIETMAP_BLOCK_PIXEL_SIDE = "));
-        assert!(header.contains("constexpr float QUIETMAP_BARRIER_PATH_HORIZON_M = 175.0f;"));
         assert!(header.contains("constexpr int QUIETMAP_ARC_ESCALATE_MAX_PARTS = 9;"));
         assert!(header.contains("constexpr int QUIETMAP_TILE_PIXEL_SIDE = 512;"));
         assert!(header.contains("constexpr float QUIETMAP_RECEIVER_HEIGHT_FLOOR_M = 0.5f;"));

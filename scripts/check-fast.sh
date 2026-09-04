@@ -28,8 +28,8 @@ if [ "$HALF" != "rust" ]; then
   step "obstacle world tile census"
   python3 scripts/obstacles/test-world-tile-census.py
 
-  step "obstacle per-cell promotion"
-  python3 scripts/obstacles/test-obstacle-promotion.py
+  step "per-cell structure table builder"
+  python3 scripts/structures/test-build-structures.py
 
   step "shell scripts"
   bash -n scripts/run-extraction.sh scripts/build-heatmap.sh scripts/osm-to-h3r4.sh \

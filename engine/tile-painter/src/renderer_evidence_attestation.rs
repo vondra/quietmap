@@ -209,7 +209,7 @@ fn collect_region_dependencies(
             "road" => source_files.push("roads.arrow"),
             "rail" => source_files.push("railways.arrow"),
             "industrial" => source_files.push("industrial.arrow"),
-            "building" => source_files.extend(["buildings.arrow", "leisure.arrow"]),
+            "building" => source_files.extend(["structures.arrow", "leisure.arrow"]),
             "aircraft-ground" => source_files.push("airport_traffic.arrow"),
             "aircraft-airborne" => source_files.push("airborne.arrow"),
             "aircraft-cruise" => source_files.push("cruise.arrow"),
@@ -245,29 +245,16 @@ fn collect_region_dependencies(
                 false,
             )?;
         }
-        if matches!(profile, DependencyProfile::Surface) {
-            collect_resolved_path(
-                &mut dependencies,
-                prepared_root,
-                "barrier-arrow",
-                &h3r4_relative.join(&cell_hex).join("barriers.arrow"),
-                false,
-            )?;
-        }
+        // The per-cell structure table carries buildings AND noise walls (and
+        // the OSM rows feeding the low-profile cap): the old barrier /
+        // obstacle / low-profile triple collapsed into this one required file.
         if matches!(profile, DependencyProfile::Surface) || airborne_buildings {
             collect_resolved_path(
                 &mut dependencies,
                 prepared_root,
-                "obstacle-arrow",
-                &h3r4_relative.join(&cell_hex).join("obstacles.arrow"),
+                "structure-arrow",
+                &h3r4_relative.join(&cell_hex).join("structures.arrow"),
                 true,
-            )?;
-            collect_resolved_path(
-                &mut dependencies,
-                prepared_root,
-                "low-profile-arrow",
-                &h3r4_relative.join(&cell_hex).join("buildings.arrow"),
-                false,
             )?;
         }
     }
@@ -400,12 +387,12 @@ mod tests {
 
         assert!(dependencies
             .iter()
-            .any(|item| item.relative_path.ends_with("/buildings.arrow")));
+            .any(|item| item.relative_path.ends_with("/structures.arrow")));
         assert!(dependencies
             .iter()
             .any(|item| item.relative_path.ends_with("/leisure.arrow")));
         assert!(dependencies.iter().any(|item| {
-            item.role == "obstacle-arrow" && item.required && item.resolution == "absent"
+            item.role == "structure-arrow" && item.required && item.resolution == "absent"
         }));
         assert!(dependencies.iter().any(|item| {
             item.role == "dem-fallback" && item.required && item.resolution == "absent"
@@ -462,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn airborne_plan_requires_obstacles_and_tracks_optional_low_profile_roofs() {
+    fn airborne_plan_requires_the_structure_table() {
         let root = tempdir().unwrap();
         let h3r4 = root.path().join("2026/h3r4");
         std::fs::create_dir_all(&h3r4).unwrap();
@@ -479,10 +466,10 @@ mod tests {
         .unwrap();
 
         assert!(dependencies.iter().any(|item| {
-            item.role == "obstacle-arrow" && item.required && item.resolution == "absent"
-        }));
-        assert!(dependencies.iter().any(|item| {
-            item.role == "low-profile-arrow" && !item.required && item.resolution == "absent"
+            item.role == "structure-arrow"
+                && item.required
+                && item.resolution == "absent"
+                && item.relative_path.ends_with("/structures.arrow")
         }));
         assert!(!dependencies
             .iter()

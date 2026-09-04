@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Download the WORLD Overture buildings parquet cache for the vector obstacle
-# ingest (geodata-v2 1.1 world extension).
+# Download the WORLD Overture buildings parquet cache — the one-degree tiles
+# scripts/structures/build-structures.py reads its screening stock from.
 #
 #   scripts/obstacles/download-overture-world.sh [--tiles FILE]
 #
-# The default comes from the Planet-extracted R4 inventory, not the obstacle
-# tree: a shard-less land cell is precisely the empty case this job must ingest.
-# --tiles is the additive recovery path for a measured gap. One process fetches
-# every tile (download-overture-tiles.py): the theme's parquet footers are read
-# once instead of per tile, which is what made the per-tile CLI cost 1-2 GB of
+# The default comes from the Planet-extracted R4 inventory: every prepared cell
+# gets a structures.arrow, so a land cell with no footprint anywhere is
+# precisely a tile this job must have fetched. --tiles is the additive recovery
+# path for a measured gap. One process fetches every tile
+# (download-overture-tiles.py): the theme's parquet footers are read once
+# instead of per tile, which is what made the per-tile CLI cost 1-2 GB of
 # transfer and 3-4 GB of RAM per tile (2026-09-03).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -38,9 +39,8 @@ else
 fi
 [ -s "$TILES" ] || { echo "tile list is empty" >&2; exit 2; }
 
-# An INGESTED tile's parquet is deliberately deleted (space hygiene) — never re-download
-# spent tiles.
-INGESTED_LIST="$SOURCE_ROOT/overture-obstacles/.ingested-tiles"
+# A tile whose parquet is cached is never re-fetched — the parquet cache itself
+# is the resume truth.
 
 total=$(wc -l < "$TILES")
 done_n=$(find "$PARQUET_DIR" -maxdepth 1 -name "*.parquet" | wc -l)
@@ -50,7 +50,7 @@ fail=0
 while :; do
     rc=0
     nice -n 10 python3 scripts/obstacles/download-overture-tiles.py "$TILES" "$PARQUET_DIR" \
-        "$INGESTED_LIST" 2>> "$PARQUET_DIR/.errors.log" || rc=$?
+        2>> "$PARQUET_DIR/.errors.log" || rc=$?
     [ "$rc" -eq 3 ] && continue   # the fetcher restarts itself at its memory cap; nothing is lost
     [ "$rc" -eq 0 ] || fail=1
     break

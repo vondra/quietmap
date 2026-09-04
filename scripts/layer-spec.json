@@ -4,81 +4,68 @@
     "road": {
       "arrows": [
         "roads.arrow",
-        "obstacles.arrow",
-        "barriers.arrow",
+        "structures.arrow",
         "admin.bin"
       ],
       "dependency_arrows": [
-        "obstacles.arrow",
-        "barriers.arrow",
+        "structures.arrow",
         "admin.bin"
       ]
     },
     "rail": {
       "arrows": [
         "railways.arrow",
-        "obstacles.arrow",
-        "barriers.arrow",
+        "structures.arrow",
         "admin.bin"
       ],
       "dependency_arrows": [
-        "obstacles.arrow",
-        "barriers.arrow",
+        "structures.arrow",
         "admin.bin"
       ]
     },
     "industrial": {
       "arrows": [
         "industrial.arrow",
-        "obstacles.arrow",
-        "barriers.arrow"
+        "structures.arrow"
       ],
       "dependency_arrows": [
-        "obstacles.arrow",
-        "barriers.arrow"
+        "structures.arrow"
       ]
     },
     "building": {
       "arrows": [
-        "buildings.arrow",
-        "leisure.arrow",
-        "obstacles.arrow",
-        "barriers.arrow"
+        "structures.arrow",
+        "leisure.arrow"
       ],
       "dependency_arrows": [
-        "obstacles.arrow",
-        "barriers.arrow"
+        "structures.arrow"
       ]
     },
     "aircraft-ground": {
       "arrows": [
         "airport_traffic.arrow",
-        "obstacles.arrow",
-        "barriers.arrow"
+        "structures.arrow"
       ],
       "dependency_arrows": [
-        "obstacles.arrow",
-        "barriers.arrow"
+        "structures.arrow"
       ]
     },
     "aircraft-airborne": {
       "arrows": [
         "airborne.arrow",
-        "obstacles.arrow",
-        "buildings.arrow"
+        "structures.arrow"
       ],
       "dependency_arrows": [
-        "obstacles.arrow",
-        "buildings.arrow"
+        "structures.arrow"
       ]
     },
     "aircraft-cruise": {
       "arrows": [
         "cruise.arrow",
-        "obstacles.arrow"
+        "structures.arrow"
       ],
       "dependency_arrows": [
-        "obstacles.arrow"
+        "structures.arrow"
       ]
     }
   },

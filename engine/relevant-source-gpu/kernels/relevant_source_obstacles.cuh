@@ -124,41 +124,6 @@ __device__ __forceinline__ bool ray_may_enter_grid(
 
 #include "relevant_source_grid_scan.cuh"
 
-__device__ __forceinline__ void scan_vector_crossings(
-    const DeviceScenePointers& scene,
-    float source_x_m,
-    float source_y_m,
-    float receiver_x_m,
-    float receiver_y_m,
-    float source_altitude_m,
-    float receiver_altitude_m,
-    float exclusion_radius_m,
-    const PathProfile& profile,
-    DiffractionEdge& best
-) {
-    for (uint32_t grid_index = 0; grid_index < scene.obstacle_grid_count; ++grid_index) {
-        scan_obstacle_grid(scene, scene.obstacle_grids[grid_index], source_x_m, source_y_m,
-                           receiver_x_m, receiver_y_m, source_altitude_m,
-                           receiver_altitude_m, exclusion_radius_m, profile, best);
-    }
-    const float ray_dx = receiver_x_m - source_x_m;
-    const float ray_dy = receiver_y_m - source_y_m;
-    for (uint32_t barrier_index = 0; barrier_index < scene.barrier_count; ++barrier_index) {
-        const DeviceBarrier barrier = scene.barriers[barrier_index];
-        if (barrier.receiver_distance_lower_bound_m
-            > profile.distance_m + QUIETMAP_BARRIER_PATH_HORIZON_M) {
-            break;
-        }
-        float crossing_t;
-        if (segment_crossing_fraction(source_x_m, source_y_m, ray_dx, ray_dy,
-                                      barrier.start_x_m, barrier.start_y_m,
-                                      barrier.end_x_m, barrier.end_y_m, crossing_t)) {
-            consider_crossing_candidate(profile, source_altitude_m, receiver_altitude_m,
-                                        crossing_t, barrier.height_m, best);
-        }
-    }
-}
-
 /// Terrain bands and the screening increment over them on one built profile: the
 /// bare-earth max-delta edge, then the exact-crossing race against it (CPU
 /// terrain_attenuation + screening_attenuation, A_screen = max(A_combined - A_terrain, 0)).
@@ -194,9 +159,11 @@ __device__ __forceinline__ void ray_terrain_and_screening_bands(
         return;
     }
     DiffractionEdge obstacle = {};
-    scan_vector_crossings(scene, source_x_m, source_y_m, receiver_x_m, receiver_y_m,
-                          source_altitude_m, receiver_altitude_m, exclusion_radius_m,
-                          profile, obstacle);
+    for (uint32_t grid_index = 0; grid_index < scene.obstacle_grid_count; ++grid_index) {
+        scan_obstacle_grid(scene, scene.obstacle_grids[grid_index], source_x_m, source_y_m,
+                           receiver_x_m, receiver_y_m, source_altitude_m,
+                           receiver_altitude_m, exclusion_radius_m, profile, obstacle);
+    }
     if (obstacle.present && (!terrain.present || obstacle.delta_m > terrain.delta_m)) {
         complete_explicit_edge_geometry(
             profile, source_altitude_m, receiver_altitude_m, obstacle);

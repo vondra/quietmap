@@ -20,8 +20,7 @@ use noise_compute::admin;
 use raster_reader::fused_tile_z13::TileBatch;
 use raster_reader::RealRasters;
 use tile_painter::region_runner::{batch_slot, block_batch_origin};
-use tile_painter::source_loader_barrier::BarrierData;
-use tile_painter::source_loader_obstacle::{bake_tile_vector_rx_refl, ObstacleData};
+use tile_painter::source_loader_structure::{bake_tile_vector_rx_refl, StructureData};
 
 use crate::cell_measurement::CellMeasurement;
 use crate::cell_preparation::{prepare_region, EncodedLineLayer, PreparedRegion};
@@ -226,8 +225,7 @@ fn paint_region(
         tiles,
         frame,
         layers,
-        barrier_data,
-        obstacle_data,
+        structure_data,
         device_obstacles,
         n_days,
         prepare_seconds,
@@ -257,7 +255,7 @@ fn paint_region(
             .or_default()
             .push((x, y));
     }
-    let obstacle_set = obstacle_data.set();
+    let obstacle_set = structure_data.set();
     let (sender, receiver) = sync_channel(1);
     let (write_sender, write_receiver) = sync_channel::<PendingTileWrite>(PENDING_WRITES);
     let producer = thread::Builder::new().name("batch-rasters".into());
@@ -305,8 +303,7 @@ fn paint_region(
                 &requested_tiles,
                 &frame,
                 &layers,
-                &obstacle_data,
-                &barrier_data,
+                &structure_data,
                 &device_obstacles,
                 &batch_raster,
                 cuda,
@@ -332,8 +329,7 @@ fn paint_batch_tiles(
     requested_tiles: &[(u32, u32)],
     frame: &RegionMetricFrame,
     layers: &[EncodedLineLayer],
-    obstacle_data: &ObstacleData,
-    barrier_data: &BarrierData,
+    structure_data: &StructureData,
     device_obstacles: &RegionDeviceObstacles,
     batch_raster: &BatchDeviceRaster,
     cuda: &RelevantSourceCuda,
@@ -345,9 +341,8 @@ fn paint_batch_tiles(
     for &(x, y) in requested_tiles {
         let tile = &batch.tiles[batch_slot(batch, x, y)];
         let receiver_started = Instant::now();
-        let receivers = TileDeviceReceivers::upload(frame, tile, obstacle_data.set())?;
-        let interior = Arc::new(obstacle_data.interior_estimate(tile));
-        let barriers = barrier_data.for_tile(&tile.bbox, LINE_HALO_M);
+        let receivers = TileDeviceReceivers::upload(frame, tile, structure_data.set())?;
+        let interior = Arc::new(structure_data.interior_estimate(tile));
         measurement.receiver_seconds += receiver_started.elapsed().as_secs_f64();
         for encoded in layers {
             let layer = encoded.layer;
@@ -368,14 +363,12 @@ fn paint_batch_tiles(
             let tile_started = Instant::now();
             let (tile_measurement, energy) = partition_and_paint_tile(
                 cuda,
-                frame,
                 &encoded.sources,
                 encoded.fingerprint,
                 &encoded.device_sources,
                 device_obstacles,
                 batch_raster,
                 &receivers,
-                &barriers,
                 LAYER_LDEN_WEIGHTS[layer],
                 &partition_path,
             )?;

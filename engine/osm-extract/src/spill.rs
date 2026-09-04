@@ -187,13 +187,16 @@ impl Spiller {
                 );
             }
             FeatureType::Barrier => {
+                // height_tier mirrors the structure-table ladder: 0 = mapped
+                // height tag, 2 = the 3.0 m default (the merged structures.arrow
+                // carries the tier per wall; the builder reads it from here).
+                let mapped = tags.get("height").and_then(|s| parse_height(s));
                 let _ = write!(
                     w,
-                    "\t{}\t{}",
-                    tags.get("height")
-                        .and_then(|s| parse_height(s))
-                        .unwrap_or(3.0),
+                    "\t{}\t{}\t{}",
+                    mapped.unwrap_or(3.0),
                     classify::barrier_material_type(tags.get("material").map(|s| s.as_str())),
+                    if mapped.is_some() { 0 } else { 2 },
                 );
             }
             FeatureType::AirportLine => {

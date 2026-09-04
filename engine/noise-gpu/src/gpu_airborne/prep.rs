@@ -16,7 +16,7 @@ use raster_reader::RealRasters;
 use rayon::prelude::*;
 use tile_painter::grid::tile_bbox;
 use tile_painter::r4_source_cache::R4SourceCache;
-use tile_painter::source_loader_obstacle::{InteriorEstimate, ObstacleData};
+use tile_painter::source_loader_structure::{InteriorEstimate, StructureData};
 
 /// One grid-aligned tile-block, CPU-prepped: its NW corner `(bx,by)`, the owned tiles in it,
 /// the receiver-altitude `TileBatch` with its 8 km DEM halo, and one building-interior
@@ -145,7 +145,7 @@ pub(crate) fn build_dem_blocks(
     r4: u64,
     tiles: &[(u32, u32)],
 ) -> Result<(Vec<PrepBlock>, Arc<ObstacleSet>)> {
-    let obstacles = load_region_obstacles(h3r4_dir, r4)?;
+    let obstacles = load_region_structures(h3r4_dir, r4)?;
     let (mut ps, mut pn, mut pw, mut pe) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
     for &(tx, ty) in tiles {
         let bb = tile_bbox(z, tx, ty);
@@ -211,18 +211,19 @@ pub(crate) fn build_dem_blocks(
 /// The region's vector building footprints — the SAME `grid_disk(1)` load the CPU aircraft
 /// builder does (`region_runner::process_region`, which likewise re-derives the ring next to its
 /// consumer so the painted cell is always inside it), so both writers stamp the identical
-/// estimate. The airborne layer declares both `obstacles.arrow` and `buildings.arrow` in its read
-/// set: the latter supplies the low-profile cap when present, while its absence is the loader's
-/// explicit empty-lookup state for cells with no low-profile OSM buildings.
-fn load_region_obstacles(h3r4_dir: &Path, r4: u64) -> Result<ObstacleData> {
+/// estimate. The airborne layer declares the per-cell `structures.arrow` in its read set: the
+/// merged buildings ∪ walls table carries both the screening polygons and the OSM rows feeding
+/// the low-profile cap. Screening only — the airborne layer never consumes the building
+/// emission point stream.
+fn load_region_structures(h3r4_dir: &Path, r4: u64) -> Result<StructureData> {
     let cell = CellIndex::try_from(r4)?;
     let ring: Vec<u64> = cell
         .grid_disk::<Vec<_>>(1)
         .into_iter()
         .map(u64::from)
         .collect();
-    ObstacleData::load_for_r4s(h3r4_dir, r4, &ring)
-        .with_context(|| format!("load obstacles R4 {r4:015x}"))
+    StructureData::load_screening_for_r4s(h3r4_dir, r4, &ring)
+        .with_context(|| format!("load structures R4 {r4:015x}"))
 }
 
 /// CPU prep stage for one cell (no GPU/device touch): load its grid_disk(1) airborne sources

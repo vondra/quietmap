@@ -45,7 +45,7 @@ use noise_compute::propagation::geo::{
 use noise_compute::propagation::iso9613::{aircraft_ground_atten_db, fast_exp_f64};
 use noise_compute::propagation::obstacle_index::{CrossingCandidate, ObstacleSet};
 use noise_compute::propagation::{path_effects, PathProfile};
-use noise_compute::types::{Barrier, RasterSampler};
+use noise_compute::types::RasterSampler;
 use raster_reader::fused_tile_z13::{tile_pixel_size_m, FusedTileZ13, TILE_PX};
 use rayon::prelude::*;
 
@@ -163,7 +163,6 @@ impl GroundOpsScratch {
 pub fn scatter_tile(
     tile: &FusedTileZ13,
     traffic: &[AirportTrafficRowView<'_>],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     // GA hybrid per-class weight LUT. Applied to `veh_kind == 0` (aircraft)
     // rows
@@ -175,7 +174,6 @@ pub fn scatter_tile(
     scatter_tile_impl(
         tile,
         traffic,
-        barriers,
         obstacles,
         class_weights,
         n_days,
@@ -187,7 +185,6 @@ pub fn scatter_tile(
 pub(crate) fn scatter_tile_impl(
     tile: &FusedTileZ13,
     traffic: &[AirportTrafficRowView<'_>],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     class_weights: &noise_compute::emission::aircraft::ClassWeights,
     n_days: f64,
@@ -226,7 +223,6 @@ pub(crate) fn scatter_tile_impl(
                         tile,
                         &prep,
                         traffic,
-                        barriers,
                         obstacles,
                         class_weights,
                         py_lo,
@@ -343,7 +339,6 @@ fn scatter_band(
     tile: &FusedTileZ13,
     prep: &[PreparedMicroseg],
     traffic: &[AirportTrafficRowView<'_>],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     class_weights: &noise_compute::emission::aircraft::ClassWeights,
     py_lo: usize,
@@ -487,7 +482,6 @@ fn scatter_band(
                 };
                 let screening = path_effects::screening_attenuation(
                     &mut s.profile,
-                    barriers,
                     obstacle_input,
                     src_alt,
                     rx_alt,
@@ -686,7 +680,6 @@ mod tests {
         let st_stopped = scatter_tile_impl(
             &tile,
             &traffic,
-            &[],
             &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
             &class_weights,
             n_days,
@@ -697,7 +690,6 @@ mod tests {
         let st_unstopped = scatter_tile_impl(
             &tile,
             &traffic,
-            &[],
             &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
             &class_weights,
             n_days,
@@ -762,7 +754,6 @@ mod tests {
         scatter_tile(
             &tile,
             &traffic1,
-            &[],
             &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
             &class_weights,
             n_days,
@@ -771,7 +762,6 @@ mod tests {
         scatter_tile(
             &tile,
             &traffic2,
-            &[],
             &noise_compute::propagation::obstacle_index::ObstacleSet::empty(),
             &class_weights,
             n_days,

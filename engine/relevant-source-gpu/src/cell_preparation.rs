@@ -1,6 +1,7 @@
 //! One streamed cell's sources on the host and then on the card: the arrows of
-//! its `grid_disk(1)` ring encoded into device sources, its obstacles flattened,
-//! and — for airport ground ops — the event calendar its own ring declares.
+//! its `grid_disk(1)` ring encoded into device sources, its structures
+//! flattened, and — for airport ground ops — the event calendar its own ring
+//! declares.
 
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -12,12 +13,11 @@ use noise_compute::constants::ground_ops_max_radius;
 use noise_compute::emission::aircraft::{ClassWeights, GROUND_OPS_SOURCE_HEIGHT_M};
 use tile_painter::r4_source_cache::SourceSel;
 use tile_painter::region_runner::region_tiles;
-use tile_painter::source_loader_barrier::BarrierData;
-use tile_painter::source_loader_building::BuildingData;
 use tile_painter::source_loader_industrial::IndustrialData;
-use tile_painter::source_loader_obstacle::ObstacleData;
+use tile_painter::source_loader_leisure::LeisureData;
 use tile_painter::source_loader_rail::RailData;
 use tile_painter::source_loader_road::RoadData;
+use tile_painter::source_loader_structure::StructureData;
 use tile_painter::source_loader_traffic::AirportTrafficData;
 use tile_painter::worklist::{resolve_class_weights, resolve_n_days};
 
@@ -29,7 +29,7 @@ use crate::source_frame::{
     source_identity_fingerprint, DeviceLineSource, RegionMetricFrame, BAND_COUNT, PERIOD_COUNT,
     SOURCE_FLAG_GROUND_OPS_AIRCRAFT, SOURCE_FLAG_GROUND_OPS_GSE,
 };
-use crate::surface_layers::{GROUND_OPS_LAYER, LAYER_NAMES, LAYER_SOURCE_IDS};
+use crate::surface_layers::{BUILDING_LAYER, GROUND_OPS_LAYER, LAYER_NAMES, LAYER_SOURCE_IDS};
 
 /// One layer's encoded sources, on the host and on the card.
 pub struct EncodedLineLayer {
@@ -41,15 +41,14 @@ pub struct EncodedLineLayer {
     pub device_sources: RegionDeviceLineSources,
 }
 
-/// One cell's sources, obstacles and barriers loaded and encoded on the host,
-/// nothing on the card yet.
+/// One cell's sources and structures (buildings + walls in one obstacle set)
+/// loaded and encoded on the host, nothing on the card yet.
 pub struct HostPreparedRegion {
     pub region_r4: u64,
     pub tiles: Vec<(u32, u32)>,
     pub frame: RegionMetricFrame,
     pub layers: Vec<(usize, Vec<DeviceLineSource>)>,
-    pub barrier_data: BarrierData,
-    pub obstacle_data: ObstacleData,
+    pub structure_data: StructureData,
     pub flattened_obstacles: FlattenedObstacleGeometry,
     /// Event days this cell's ground-ops energies are divided by.
     pub n_days: f64,
@@ -72,8 +71,7 @@ impl HostPreparedRegion {
             tiles: self.tiles,
             frame: self.frame,
             layers,
-            barrier_data: self.barrier_data,
-            obstacle_data: self.obstacle_data,
+            structure_data: self.structure_data,
             device_obstacles,
             n_days: self.n_days,
             prepare_seconds: self.host_seconds + upload_started.elapsed().as_secs_f64(),
@@ -82,15 +80,14 @@ impl HostPreparedRegion {
     }
 }
 
-/// One cell's sources, obstacles and barriers loaded, encoded and resident on
+/// One cell's sources and structures loaded, encoded and resident on
 /// the card, ready to paint: the unit the cell producer hands the painter.
 pub struct PreparedRegion {
     pub region_r4: u64,
     pub tiles: Vec<(u32, u32)>,
     pub frame: RegionMetricFrame,
     pub layers: Vec<EncodedLineLayer>,
-    pub barrier_data: BarrierData,
-    pub obstacle_data: ObstacleData,
+    pub structure_data: StructureData,
     pub device_obstacles: RegionDeviceObstacles,
     pub n_days: f64,
     pub prepare_seconds: f64,
@@ -123,9 +120,14 @@ pub fn prepare_region(
     let centre = LatLng::from(index);
     let region_admin = admin::admin_for_latlng(centre.lat(), centre.lng());
     let h3r4 = &configuration.h3r4_directory;
-    let barrier_data = BarrierData::load_for_r4s(h3r4, &ring)?;
-    let obstacle_data = ObstacleData::load_for_r4s(h3r4, region_r4, &ring)?;
-    let flattened_obstacles = FlattenedObstacleGeometry::from_set(&frame, obstacle_data.set());
+    // The building layer's emission rows ride the same structure table; cells
+    // painting no building layer skip the per-row emission prep.
+    let mut structure_data = if cell.layers.contains(&BUILDING_LAYER) {
+        StructureData::load_for_r4s(h3r4, region_r4, &ring)?
+    } else {
+        StructureData::load_screening_for_r4s(h3r4, region_r4, &ring)?
+    };
+    let flattened_obstacles = FlattenedObstacleGeometry::from_set(&frame, structure_data.set());
     let ground_ops = if cell.layers.contains(&GROUND_OPS_LAYER) {
         GroundOpsCalendar::resolve(h3r4, &ring)?
     } else {
@@ -149,8 +151,8 @@ pub fn prepare_region(
                 .iter()
                 .map(|row| frame.encode_point(row))
                 .collect(),
-            3 => BuildingData::load_for_r4s(h3r4, &ring)?
-                .into_rows()
+            BUILDING_LAYER => structure_data
+                .take_building_layer_rows(LeisureData::load_for_r4s(h3r4, &ring)?)?
                 .iter()
                 .map(|row| frame.encode_point(row))
                 .collect(),
@@ -168,8 +170,7 @@ pub fn prepare_region(
         tiles,
         frame,
         layers,
-        barrier_data,
-        obstacle_data,
+        structure_data,
         flattened_obstacles,
         n_days: ground_ops.n_days,
         host_seconds: started.elapsed().as_secs_f64(),

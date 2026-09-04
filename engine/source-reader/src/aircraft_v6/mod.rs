@@ -128,7 +128,7 @@ fn build_class_weights(
 /// check (`v15` for airborne/cruise, `airport_traffic_v8` for the
 /// ground-ops arrow), so the popup HTTP path can map the failure to a
 /// structured 500 response with an operator-actionable message.
-// 13 args: the popup aircraft entry accretes one param per physics input.
+// 12 args: the popup aircraft entry accretes one param per physics input.
 // Bundle into a context struct when another input is added.
 #[allow(clippy::too_many_arguments)]
 pub fn add_v6_aircraft_to_result(
@@ -141,7 +141,6 @@ pub fn add_v6_aircraft_to_result(
     airport_lines_batches: &[RecordBatch],
     airport_summary_path: Option<&Path>,
     rasters: &dyn RasterSampler,
-    barriers: &[noise_compute::types::Barrier],
     // Vector obstacles feed airborne building diffraction and ground-ops
     // screening. Cruise remains structurally exempt.
     obstacles: &noise_compute::propagation::obstacle_index::ObstacleSet,
@@ -237,7 +236,7 @@ pub fn add_v6_aircraft_to_result(
     let mut crossing_scratch =
         noise_compute::propagation::obstacle_index::CrossingScratch::default();
     let receiver_is_enclosed =
-        crate::obstacle_store::point_inside_enclosed(obstacles, receiver.lat, receiver.lon)
+        crate::structure_store::point_inside_enclosed(obstacles, receiver.lat, receiver.lon)
             .is_some();
     let building_horizon = (!airborne_views.is_empty() && !receiver_is_enclosed)
         .then(|| {
@@ -286,7 +285,6 @@ pub fn add_v6_aircraft_to_result(
             n_days,
             &class_weights,
             rasters,
-            barriers,
             obstacles,
             &osm_ref_lookup,
             airport_summary_lookup,

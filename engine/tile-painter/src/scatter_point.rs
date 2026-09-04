@@ -30,7 +30,7 @@ use noise_compute::propagation::geo::{
 };
 use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_compute::propagation::path_profile::CoarseMid;
-use noise_compute::types::{Barrier, RasterSampler};
+use noise_compute::types::RasterSampler;
 use raster_reader::fused_tile_z13::FusedTileZ13;
 
 use crate::accumulator::{TileAccumulator, NUM_PERIODS};
@@ -69,19 +69,19 @@ impl From<ScatterStats> for PointScatterStats {
 
 /// Scatter every point source onto `tile`, accumulating per-period steady power.
 ///
-/// `barriers` is the tile's noise-wall slice prepared by
-/// `source_loader_barrier::BarrierData::for_tile` (sorted ascending,
-/// conservative `dist_m` — see the `types::Barrier` contract). Barriers are
-/// real obstacles even inside the source's exclusion radius (the radius only
-/// suppresses the source's own vector footprint).
+/// Noise walls screen through the region's [`ObstacleSet`]
+/// (`ObstacleKind::Barrier` polyline edges — the structures.arrow kind=1
+/// rows), never through a parallel slice. Barriers are real obstacles even
+/// inside the source's exclusion radius (the radius only suppresses the
+/// source's own vector footprint — the exclusion gate keys on the candidate's
+/// kind).
 pub fn scatter_tile(
     tile: &FusedTileZ13,
     points: &[PointRow],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     accum: &mut TileAccumulator,
 ) -> PointScatterStats {
-    scatter_tile_with_cfg(tile, points, barriers, obstacles, accum, coarse_mid_cfg())
+    scatter_tile_with_cfg(tile, points, obstacles, accum, coarse_mid_cfg())
 }
 
 /// [`scatter_tile`] with the coarse-middle cadence passed EXPLICITLY (bypassing
@@ -90,7 +90,6 @@ pub fn scatter_tile(
 pub fn scatter_tile_with_cfg(
     tile: &FusedTileZ13,
     points: &[PointRow],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     accum: &mut TileAccumulator,
     cfg: Option<CoarseMid>,
@@ -98,7 +97,6 @@ pub fn scatter_tile_with_cfg(
     band_scatter_tile_with_cfg(
         &PointGeometry { points },
         tile,
-        barriers,
         obstacles,
         points.len(),
         accum,
@@ -114,14 +112,12 @@ pub fn scatter_tile_with_cfg(
 pub(crate) fn scatter_tile_point_direct(
     tile: &FusedTileZ13,
     points: &[PointRow],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     accum: &mut TileAccumulator,
 ) -> PointScatterStats {
     band_scatter_tile_with_cfg_and_options(
         &PointGeometry { points },
         tile,
-        barriers,
         obstacles,
         points.len(),
         accum,
@@ -139,7 +135,6 @@ pub(crate) fn scatter_tile_point_direct(
 pub(crate) fn scatter_tile_point_exact_receivers(
     tile: &FusedTileZ13,
     points: &[PointRow],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     accum: &mut TileAccumulator,
     receivers: &[usize],
@@ -147,7 +142,6 @@ pub(crate) fn scatter_tile_point_exact_receivers(
     band_scatter_tile_with_cfg_and_options(
         &PointGeometry { points },
         tile,
-        barriers,
         obstacles,
         points.len(),
         accum,
