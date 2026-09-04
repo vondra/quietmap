@@ -460,6 +460,15 @@ receiver pixels retain the façade-donor rule instead of self-screening. The pop
 uses `point_inside_enclosed` for that enclosure decision; the painter uses the
 equivalent `EnvelopeClass::Outdoor` rule.
 
+The GPU heatmap additionally avoids building-horizon work by obstacle HEIGHT, never
+by substituting a smaller fixed radius. For roof top `h` above the receiver ear at
+horizontal range `d`, a roof is eligible only when `h/d` exceeds the lowest aircraft
+tangent in its azimuth group. The floor is formed over the physical closest point of
+the finite subsegment, separately for each 16-pixel receiver block and each group of
+four building-horizon sectors. Coarse-lattice receivers keep their full horizon because
+far subsegments also query them. The popup and CPU production path remain unchanged;
+the heatmap-only exact cell proof and its measured output evidence are in section 12.4.
+
 Terrain and building losses never add: the stronger diffraction edge wins. In
 the full Doc 29 arm that loss also competes with empirical lateral attenuation
 Λ, so the already-applied Λ is credited back and only
@@ -830,3 +839,48 @@ the wave's GPU seconds against the per-corner budget it replaced (which is why t
 wave quoted for the rejected alternatives above is the pre-budget wave, not this one).
 The owner chose 0.15 on 2026-09-02 as the only measured value that meets the whole
 accuracy contract.
+
+### 12.4 Airborne building-height horizon prune
+
+The airborne GPU heatmap retains the 512 m vector-roof model from section 6.1, but it
+does not walk every indexed roof within that disk. A roof top `h` metres above the
+receiver ear at range `d` can screen a source only when
+
+  `h > d * tan(theta_source)`.
+
+[`screening_bounds.rs`](src/emission/aircraft/screening_bounds.rs) owns that criterion
+and its numerical margins. The device takes the lowest source tangent per 16x16-pixel
+receiver block and per 64 azimuth groups (four of the 256 roof-query sectors). For each
+finite subsegment it bounds the physical closest-point parameter over the receiver
+block. For each actual receiver-row/centre longitude-scale ratio `q`, the sharp
+anisotropic projection coefficient is `|q - 1/q| / 2`; the maximum over the block's
+rows covers the extra along-segment shift, using centre-to-segment distance plus the
+block half-diagonal to cover the displaced receiver's line distance. The bound then
+uses the lowest altitude in that interval; a remote low endpoint therefore does not
+flatten the floor when no receiver in the block can query that endpoint. The
+millimetre-scale band around the physics kernel's degenerate-segment cutoff contributes
+to every azimuth group because its start-point direction is not a sufficient block bound.
+The coarse receiver lattice is excluded because it is also queried by far subsegments.
+
+The fast cell test uses the maximum DEM around an obstacle CSR cell plus that cell's
+maximum referenced building height and the cell's nearest receiver range. This remains
+height-dependent—3 m roofs disappear much sooner than 100 m roofs—and is exact despite
+the neighbourhood scan's duplicate edge references. An edge is binned into every
+supercover cell it crosses. For each ray/edge intersection, at least the cell containing
+that crossing therefore tests the edge with a DEM maximum covering the crossing, a
+height maximum covering the edge, a range no greater than the crossing range, and an
+azimuth arc covering its sector. Copies named by other cells may be pruned more loosely,
+but the crossing-cell copy survives whenever the edge can screen. The popup and CPU
+horizon do not use this prune. A conservative alternative using the maximum terrain over
+the whole receiver tile plus the 512 m roof reach was byte-exact over all 159 Ghent tiles, but
+took 200.49 s against the 203.81 s reference (1.63 %) on the cell most favourable to
+roof pruning, so it was rejected under the 3 % rule. The analogous terrain-sample prune
+is absent: its exact campaign skipped 0 of 48 samples and improved the five-cell wall by
+only 0.6–0.8 %.
+
+The accepted local-cell rule was measured on 2026-09-04 over the five airborne cells,
+784 z13 tiles and 182,866,799 reference-painted HM3 cells. Wall time on the campaign RTX
+2080 Ti was 646.59 s versus 709.52 s (8.87 %). All 784 encoded tiles were byte-identical,
+so maximum drift, every threshold count, presence changes, and bias were zero. Any change
+to the block size, group count, roof proxy, or margins must repeat both the wall and
+byte-domain campaign.

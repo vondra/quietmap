@@ -18,6 +18,9 @@
 //!   the airborne kernel.
 //! * [`screening`] — receiver-local vector-building horizon and the shared
 //!   anchored single-edge diffraction rule.
+//! * [`screening_bounds`] — the obstacle-height criterion used by the GPU
+//!   building-horizon prune: a roof screens only aircraft below its own
+//!   elevation angle, taken per azimuth group.
 //! * [`segment_filters`] — per-segment validity gates (airborne / ground
 //!   stale / airport ground), `SegmentTerrain` cache, ground-ops kind /
 //!   context constants.
@@ -32,6 +35,7 @@ mod ground_ops;
 mod horizon;
 mod npd;
 mod screening;
+mod screening_bounds;
 mod segment_filters;
 mod segment_sel;
 
@@ -40,5 +44,6 @@ pub(crate) use ground_ops::*;
 pub use horizon::*;
 pub use npd::*;
 pub use screening::*;
+pub use screening_bounds::*;
 pub use segment_filters::*;
 pub use segment_sel::*;

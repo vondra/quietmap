@@ -93,6 +93,30 @@ fn main() {
         "../noise-compute/src/emission/aircraft/screening.rs",
         "pub const BUILDING_MIN_EDGE_RANGE_M: f64 = ",
     );
+    let lowest_source_tangent_block_px = const_from(
+        "../tile-painter/src/airborne_screening.rs",
+        "pub const LOWEST_SOURCE_TANGENT_BLOCK_PX: usize = ",
+    );
+    let lowest_source_tangent_groups = const_from(
+        "../noise-compute/src/emission/aircraft/screening_bounds.rs",
+        "pub const LOWEST_SOURCE_TANGENT_SECTOR_GROUPS: usize = ",
+    );
+    let lowest_source_tangent_margin_rel = numeric_f64_const(
+        "../noise-compute/src/emission/aircraft/screening_bounds.rs",
+        "pub const LOWEST_SOURCE_TANGENT_MARGIN_REL: f64 = ",
+    );
+    let lowest_source_tangent_margin_abs = numeric_f64_const(
+        "../noise-compute/src/emission/aircraft/screening_bounds.rs",
+        "pub const LOWEST_SOURCE_TANGENT_MARGIN_ABS: f64 = ",
+    );
+    let lowest_source_tangent_range_margin_m = numeric_f64_const(
+        "../noise-compute/src/emission/aircraft/screening_bounds.rs",
+        "pub const LOWEST_SOURCE_TANGENT_RANGE_MARGIN_M: f64 = ",
+    );
+    let lowest_source_tangent_angle_margin_rad = numeric_f64_const(
+        "../noise-compute/src/emission/aircraft/screening_bounds.rs",
+        "pub const LOWEST_SOURCE_TANGENT_ANGLE_MARGIN_RAD: f64 = ",
+    );
     let diffraction_slope = numeric_f64_const(
         "../noise-compute/src/emission/aircraft/screening.rs",
         "const DIFFRACTION_SLOPE_PER_M: f64 = ",
@@ -193,9 +217,14 @@ fn main() {
             "BUILDING_ENV_TERRAIN_SAMPLES",
             "const BUILDING_ENV_TERRAIN_SAMPLES: usize = ",
         ),
+        (
+            "BUILDING_ENV_CELL_MAX_H",
+            "const BUILDING_ENV_CELL_MAX_H: usize = ",
+        ),
     ]
     .map(|(name, prefix)| (name, const_from("src/airborne_building_horizon.rs", prefix)));
-    let coarse_target_blocks = const_from("src/airborne.rs", "const COARSE_TARGET_BLOCKS: usize = ");
+    let coarse_target_blocks =
+        const_from("src/airborne.rs", "const COARSE_TARGET_BLOCKS: usize = ");
     let building_grid_geometry_stride = const_from(
         "src/airborne_building_horizon.rs",
         "const BUILDING_GRID_GEOMETRY_STRIDE: usize = ",
@@ -225,6 +254,14 @@ fn main() {
         format!("-DCOARSE_TARGET_BLOCKS={coarse_target_blocks}"),
         format!("-DBUILDING_GRID_GEOMETRY_STRIDE={building_grid_geometry_stride}"),
         format!("-DBUILDING_GRID_LAYOUT_STRIDE={building_grid_layout_stride}"),
+        format!("-DLOWEST_SOURCE_TANGENT_BLOCK_PX={lowest_source_tangent_block_px}"),
+        format!("-DLOWEST_SOURCE_TANGENT_GROUPS={lowest_source_tangent_groups}"),
+        format!("-DLOWEST_SOURCE_TANGENT_MARGIN_REL_D={lowest_source_tangent_margin_rel}"),
+        format!("-DLOWEST_SOURCE_TANGENT_MARGIN_ABS_D={lowest_source_tangent_margin_abs}"),
+        format!("-DLOWEST_SOURCE_TANGENT_RANGE_MARGIN_M_D={lowest_source_tangent_range_margin_m}"),
+        format!(
+            "-DLOWEST_SOURCE_TANGENT_ANGLE_MARGIN_RAD_D={lowest_source_tangent_angle_margin_rad}"
+        ),
         format!("-DDIFFRACTION_SLOPE_D={diffraction_slope}"),
         format!("-DDIFFRACTION_GRAZING_DB_D={diffraction_grazing_db}"),
         format!("-DDIFFRACTION_CAP_DB_D={diffraction_cap_db}"),

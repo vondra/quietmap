@@ -110,6 +110,7 @@ __device__ __forceinline__ float fast_atan(float x) {
 }
 
 #include "airborne_screening.cuh"
+#include "airborne_screening_bounds.cuh"
 #include "airborne_building_horizon.cuh"
 #include "airborne_terrain_horizon.cuh"
 

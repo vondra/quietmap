@@ -32,6 +32,7 @@ use tile_painter::source_loader_obstacle::InteriorEstimate;
 
 pub use crate::airborne_building_horizon::AirborneScreeningEnvironment;
 use crate::airborne_building_horizon::{AirborneBuildingHorizonGpu, BuildingHorizonDev};
+use crate::airborne_screening_bounds::{AirborneScreeningBoundsGpu, ScreeningBoundsScratch};
 use crate::airborne_terrain_horizon::{AirborneTerrainHorizonGpu, TerrainHorizonDev};
 use crate::{pack_airborne_receivers, pack_airborne_segs};
 
@@ -286,6 +287,7 @@ pub struct AirborneGpu {
     f_coarse_reduce_parts: CudaFunction,
     terrain_horizon: AirborneTerrainHorizonGpu,
     building_horizon: AirborneBuildingHorizonGpu,
+    screening_bounds: AirborneScreeningBoundsGpu,
     d_npd: CudaSlice<f32>,
     /// `NUM_CLASSES`-length GA hybrid weight LUT (f32). The kernel scales
     /// each sub-segment's energy by `d_w[class]`.
@@ -360,6 +362,11 @@ impl AirborneGpu {
                 "airborne_building_horizon_pack",
                 "airborne_building_horizon_global_max",
                 "airborne_building_horizon_mark_empty",
+                "airborne_dem_pyramid_level0",
+                "airborne_dem_pyramid_reduce",
+                "airborne_lowest_source_tangent",
+                "airborne_screening_floor",
+                "airborne_building_cell_tops",
             ],
         );
         let _ = std::fs::remove_file(&fatbin_path);
@@ -384,6 +391,7 @@ impl AirborneGpu {
             .expect("fn coarse_reduce_parts");
         let terrain_horizon = AirborneTerrainHorizonGpu::new(Arc::clone(&dev));
         let building_horizon = AirborneBuildingHorizonGpu::new(Arc::clone(&dev));
+        let screening_bounds = AirborneScreeningBoundsGpu::new(Arc::clone(&dev));
         let d_npd = dev
             .htod_copy(NpdLuts::shared().sel_luts_flat_f32())
             .expect("upload npd");
@@ -413,6 +421,7 @@ impl AirborneGpu {
             f_coarse_reduce_parts,
             terrain_horizon,
             building_horizon,
+            screening_bounds,
             d_npd,
             d_w,
             vram_total,
@@ -439,21 +448,27 @@ impl AirborneGpu {
     }
 
     /// Build one tile's receiver horizons and the pointer table the physics kernels read.
+    /// The height-conditioned screening inputs come first: they tell the roof scan which
+    /// obstacle cells are too low to shade the aircraft seen in their direction.
     #[allow(clippy::too_many_arguments)]
     fn upload_receiver_screening(
         &self,
         packed: &PackedReceiverScreening,
         environment: &AirborneScreeningEnvironment,
+        bounds_scratch: &mut ScreeningBoundsScratch,
+        tile: &FusedTileZ13,
+        region: &RegionResident,
+        near_idx: &CudaSlice<i32>,
         receiver_lat_lon: &CudaSlice<f64>,
         receiver_altitude: &CudaSlice<f32>,
         inner_elevation: &CudaSlice<f32>,
         tile_bbox: &CudaSlice<f64>,
-        nreg: usize,
         near: (usize, usize),
         far: [(usize, usize); 3],
     ) -> Result<ReceiverScreeningDev> {
         use cudarc::driver::DevicePtr;
 
+        let nreg = region.nreg;
         let record_of_pixel = self
             .dev
             .htod_sync_copy(&packed.record_of_pixel)
@@ -462,6 +477,22 @@ impl AirborneGpu {
             .dev
             .htod_copy(packed.pixel_of_record.clone())
             .context("screen record pixels")?;
+        let bounds = self.screening_bounds.build(
+            environment,
+            bounds_scratch,
+            tile,
+            packed,
+            &pixel_of_record,
+            receiver_lat_lon,
+            receiver_altitude,
+            inner_elevation,
+            tile_bbox,
+            &region.d_sll,
+            &region.d_sf,
+            near_idx,
+            nreg,
+            near,
+        )?;
         let terrain = self.terrain_horizon.build(
             environment,
             packed,
@@ -479,6 +510,7 @@ impl AirborneGpu {
             receiver_altitude,
             inner_elevation,
             tile_bbox,
+            &bounds,
         )?;
         let mut host_table = [0u64; SCREEN_TABLE_WORDS];
         host_table[SCREEN_RECORDS] = packed.records as u64;
@@ -746,6 +778,7 @@ impl AirborneGpu {
         //    from the shared DEM halo and region-resident vector CSR on-device.
         //    The classify scatter precedes every following copy/launch on this GPU's stream.
         let far_device = [&d_far0, &d_far1, &d_far2];
+        let mut bounds_scratch = self.screening_bounds.scratch(environment)?;
         let mut output = Vec::with_capacity(t);
         for (ti, &tile) in tiles.iter().enumerate() {
             let near = (off[ti] as usize, counts[ti * 4] as usize);
@@ -775,11 +808,14 @@ impl AirborneGpu {
             let screening = self.upload_receiver_screening(
                 &packed,
                 environment,
+                &mut bounds_scratch,
+                tile,
+                region,
+                &d_near_idx,
                 &d_rll,
                 &d_rxa,
                 &d_inner_elevation,
                 &d_tile_bbox,
-                nreg,
                 near,
                 far,
             )?;

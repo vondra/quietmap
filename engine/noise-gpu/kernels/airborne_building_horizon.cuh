@@ -138,6 +138,39 @@ __device__ __forceinline__ unsigned short building_tangent_floor(double tangent)
     return bits;
 }
 
+// The direction arc an obstacle grid cell occupies from the receiver, and with it the lowest
+// aircraft tangent in that local-cell proxy. The cell lies inside the disk around its centre,
+// so one `atan2` and one `asin` bound the arc; a cell that wraps the receiver falls back to the
+// record's minimum over all directions.
+__device__ __forceinline__ bool building_cell_cannot_screen(
+    float cell_top_rel_alt_m, const float* group_floor, float record_floor,
+    float x_lo, float y_lo, float step_x, float step_y)
+{
+    float gap_x = fmaxf(fmaxf(x_lo, -(x_lo + step_x)), 0.0f);
+    float gap_y = fmaxf(fmaxf(y_lo, -(y_lo + step_y)), 0.0f);
+    float nearest_m = fmaxf(hypotf(gap_x, gap_y) - CELL_RANGE_MARGIN_M, 0.0f);
+    float centre_x = x_lo + 0.5f * step_x;
+    float centre_y = y_lo + 0.5f * step_y;
+    float centre_m = hypotf(centre_x, centre_y);
+    float circumradius_m = 0.5f * hypotf(step_x, step_y);
+    float lowest = record_floor;
+    if (centre_m > circumradius_m) {
+        float delta = asinf(fminf(circumradius_m / centre_m, 1.0f)) + BOUND_ANGLE_MARGIN;
+        float angle = atan2f(centre_y, centre_x);
+        int first = (int)floorf((angle - delta) * BOUND_GROUPS_PER_TAU);
+        int last = (int)floorf((angle + delta) * BOUND_GROUPS_PER_TAU);
+        if (last - first <= BOUND_GROUPS - 1) {
+            lowest = BOUND_FLOAT_MAX;
+            for (int g = first; g <= last; g++) {
+                int group = g % BOUND_GROUPS;
+                lowest = fminf(lowest, group_floor[(group < 0) ? group + BOUND_GROUPS : group]);
+            }
+        }
+    }
+    return lowest >= 0.0f
+        && horizon_edge_cannot_screen(cell_top_rel_alt_m, nearest_m, lowest);
+}
+
 // Absolute coordinates and DEM addressing stay f64. Local metre geometry is
 // f32 because the emitted roofline is bfloat16 plus centimetre range; the tile
 // parity contract guards this deliberate reduction on complete encoded output.
@@ -149,12 +182,25 @@ extern "C" __global__ void airborne_building_horizon_build(
     const double* __restrict__ tile_bbox,
     const unsigned int* __restrict__ pixel_of_record,
     const unsigned char* __restrict__ enabled,
+    const unsigned long long* __restrict__ bounds,
     int records,
     float* __restrict__ best_tangent,
     unsigned int* __restrict__ entries)
 {
     int record = (int)((long long)blockIdx.x * blockDim.x + threadIdx.x);
     if (record >= records || enabled[record] == 0) return;
+    // Roofs below the lowest aircraft this receiver sees IN THEIR OWN DIRECTION are skipped a
+    // grid cell at a time (`horizon_edge_cannot_screen`, nearest local-cell point and tallest
+    // referenced roof; non-negative floors only). An edge may be named from several
+    // supercover cells, but its copy in the cell containing the actual ray crossing has the
+    // necessary terrain, height, range and direction bounds. Pruning another copy cannot
+    // remove that one; SPEC §12.4 gives the proof and complete byte-domain evidence.
+    const float* floor_of_record = reinterpret_cast<const float*>(bounds[BOUNDS_FLOOR_OF_RECORD]);
+    const float* all_group_floor = reinterpret_cast<const float*>(bounds[BOUNDS_GROUP_FLOOR]);
+    const float* cell_top = reinterpret_cast<const float*>(bounds[BOUNDS_CELL_TOP]);
+    const long long* cell_top_rect = reinterpret_cast<const long long*>(bounds[BOUNDS_CELL_TOP_RECT]);
+    float record_floor = floor_of_record[record];
+    bool prune = record_floor > BOUND_NO_FLOOR;
     unsigned int pixel = pixel_of_record[record];
     int py = pixel >> TPX_SHIFT;
     int px = pixel & TPX_MASK;
@@ -162,6 +208,10 @@ extern "C" __global__ void airborne_building_horizon_build(
     double receiver_lon = receiver_lat_lon[TPX + px];
     double query_m_per_deg_lon = receiver_lat_lon[2 * TPX + py];
     double receiver_alt_m = (double)receiver_altitude[pixel];
+    float receiver_alt = (float)receiver_alt_m;
+    const float* group_floor = all_group_floor
+        + ((long long)(py / LOWEST_SOURCE_TANGENT_BLOCK_PX) * BOUND_BLOCKS_PER_AXIS
+           + px / LOWEST_SOURCE_TANGENT_BLOCK_PX) * BOUND_GROUPS;
     const double* directions =
         reinterpret_cast<const double*>(environment[BUILDING_ENV_DIRECTIONS]);
     const double* grid_geometry =
@@ -202,6 +252,11 @@ extern "C" __global__ void airborne_building_horizon_build(
         unsigned long long starts_base = layout[2];
         unsigned long long refs_base = layout[3];
         unsigned long long edges_base = layout[4];
+        const long long* rect = cell_top_rect + index * 4;
+        float rect_x0 = (float)((geometry[4] - receiver_x) * longitude_scale);
+        float rect_y0 = (float)((geometry[5] - receiver_y) * latitude_scale);
+        float step_x = (float)(cell_m * longitude_scale);
+        float step_y = (float)(cell_m * latitude_scale);
 
         for (long long cy = cy0; cy <= cy1; cy++) {
             unsigned long long row = (unsigned long long)cy * (unsigned long long)cols;
@@ -209,6 +264,19 @@ extern "C" __global__ void airborne_building_horizon_build(
                 unsigned long long cell = row + (unsigned long long)cx;
                 unsigned int lo = cell_starts[starts_base + cell];
                 unsigned int hi = cell_starts[starts_base + cell + 1];
+                // An empty cell already costs one compare; the direction bound is only worth
+                // forming for a cell that would otherwise be walked edge by edge.
+                if (lo == hi) continue;
+                // Only cells the tops kernel covered carry a roof bound; the rectangle is the
+                // whole tile's roof reach, so this is every cell a receiver of it can visit.
+                bool cell_prune =
+                    prune && cx >= rect[0] && cx <= rect[1] && cy >= rect[2] && cy <= rect[3];
+                float cell_top_rel_alt_m =
+                    cell_prune ? cell_top[starts_base + cell] - receiver_alt : 0.0f;
+                if (cell_prune && building_cell_cannot_screen(
+                        cell_top_rel_alt_m, group_floor, record_floor,
+                        rect_x0 + (float)cx * step_x, rect_y0 + (float)cy * step_y,
+                        step_x, step_y)) continue;
                 for (unsigned int ref_slot = lo; ref_slot < hi; ref_slot++) {
                     unsigned long long edge = edges_base + edge_refs[refs_base + ref_slot];
                     if (edge_is_building[edge] == 0) continue;
@@ -237,6 +305,16 @@ extern "C" __global__ void airborne_building_horizon_build(
                             (float)sin_angle_d * (float)BUILDING_LOCAL_MAX_M_D,
                             x0, y0, x1, y1);
                         if (range_m <= (float)BUILDING_MIN_EDGE_RANGE_M_D) continue;
+                        // The crossing's own range and sector make the same test sharper than
+                        // the cell rectangle could: it spares the DEM read behind every roof
+                        // that is still below the lowest aircraft in exactly its direction.
+                        if (cell_prune) {
+                            float crossing_floor =
+                                group_floor[sector / (BUILDING_LOCAL_SECTORS / BOUND_GROUPS)];
+                            if (crossing_floor >= 0.0f
+                                && horizon_edge_cannot_screen(
+                                    cell_top_rel_alt_m, range_m, crossing_floor)) continue;
+                        }
                         double edge_lat = receiver_lat
                             + sin_angle_d * (double)range_m / AIRCRAFT_M_LAT;
                         double edge_lon = receiver_lon
@@ -272,7 +350,7 @@ extern "C" __global__ void airborne_building_horizon_pack(
     if (item >= count) return;
     int record = (int)(item % records);
     int sector = (int)(item / records);
-    float best = -3.4028234663852886e38f;
+    float best = -BOUND_FLOAT_MAX;
     bool found = false;
     for (int band = 0; band < BUILDING_LOCAL_BANDS; band++) {
         unsigned long long entry =
@@ -296,7 +374,7 @@ extern "C" __global__ void airborne_building_horizon_global_max(
 {
     int record = (int)((long long)blockIdx.x * blockDim.x + threadIdx.x);
     if (record >= records) return;
-    float best = -3.4028234663852886e38f;
+    float best = -BOUND_FLOAT_MAX;
     bool found = false;
     for (int sector = 0; sector < BUILDING_LOCAL_SECTORS; sector++) {
         unsigned short bits = local_max_tangent_bits[(long long)sector * records + record];
