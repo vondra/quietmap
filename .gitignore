@@ -61,3 +61,6 @@ scripts/world/workers.sqlite*
 .gemini/
 # Bruitparif Rumeur licence unverified for the API (adapter header) — local-only until confirmed
 benchmarks/validation/snapshots/bruitparif-*.json
+
+# cargo target dirs are symlinks to /data2 scratch on the dev hosts; a trailing-slash pattern skips symlinks
+engine/*/target
