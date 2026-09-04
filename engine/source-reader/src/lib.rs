@@ -101,9 +101,10 @@ impl SquareStore {
 /// point of a shared store (all pool workers read one cache since
 /// 2026-07-10) is that one visitor's cold load must neither serialize with
 /// nor block everyone else's warm queries. First insert wins on a race —
-/// the duplicate load is dropped, which is rare and harmless.
+/// the duplicate load is dropped, which is rare and harmless. The requested
+/// set is one cache transaction: a load error fails the query and inserts none.
 #[cfg(feature = "node")]
-fn ensure_squares_parallel(square_names: &[String]) {
+fn ensure_squares_parallel(square_names: &[String]) -> napi::Result<()> {
     let missing: Vec<String> = {
         let store = STORE.read().expect("square store poisoned");
         square_names
@@ -113,42 +114,86 @@ fn ensure_squares_parallel(square_names: &[String]) {
             .collect()
     };
     if missing.is_empty() {
-        return;
+        return Ok(());
     }
     let prepared_dir = STORE
         .read()
         .expect("square store poisoned")
         .prepared_dir
         .clone();
-    let loaded: Vec<(String, SquareData)> = std::thread::scope(|scope| {
+    let loaded: Result<Vec<(String, SquareData)>, String> = std::thread::scope(|scope| {
         let handles: Vec<_> = missing
             .iter()
             .map(|name| {
                 let dir = format!("{prepared_dir}/{}", name_to_rel(name));
                 scope.spawn(move || {
-                    match square_store::store::load_square(std::path::Path::new(&dir)) {
-                        Ok(data) => data,
-                        Err(e) => {
-                            eprintln!("  source-reader: failed to load square {name}: {e}");
-                            SquareData::empty()
-                        }
-                    }
+                    square_store::store::load_square(std::path::Path::new(&dir))
+                        .map_err(|error| format!("failed to load square {name}: {error}"))
                 })
             })
             .collect();
         missing
             .iter()
             .cloned()
-            .zip(
-                handles
-                    .into_iter()
-                    .map(|h| h.join().expect("square load panicked")),
-            )
+            .zip(handles)
+            .map(|(name, handle)| {
+                handle
+                    .join()
+                    .expect("square load panicked")
+                    .map(|data| (name, data))
+            })
             .collect()
     });
+    let loaded = loaded.map_err(|error| Error::new(Status::GenericFailure, error))?;
     let mut store = STORE.write().expect("square store poisoned");
     for (id, data) in loaded {
         store.squares.entry(id).or_insert(data);
+    }
+    Ok(())
+}
+
+#[cfg(all(test, feature = "node"))]
+mod square_cache_tests {
+    use super::{ensure_squares_parallel, STORE};
+    use crate::structure_test_fixture as fx;
+
+    #[test]
+    fn parallel_square_load_error_leaves_cache_unchanged() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let valid_empty_name = "z9/0/0".to_string();
+        let invalid_name = "z9/0/1".to_string();
+        let invalid_dir = tmp.path().join(&invalid_name);
+        std::fs::create_dir_all(&invalid_dir).unwrap();
+        fx::write_structure_file(
+            &invalid_dir.join("structures.arrow"),
+            &[fx::StructureRow::default()],
+            false,
+        );
+        {
+            let mut store = STORE.write().expect("square store poisoned");
+            store.prepared_dir = tmp.path().display().to_string();
+            store.squares.clear();
+        }
+
+        let result = ensure_squares_parallel(&[valid_empty_name, invalid_name]);
+        let cached_count = STORE.read().expect("square store poisoned").squares.len();
+        {
+            let mut store = STORE.write().expect("square store poisoned");
+            store.prepared_dir.clear();
+            store.squares.clear();
+        }
+
+        let error = result.expect_err("invalid square must fail the whole load");
+        let message = error.to_string();
+        assert!(
+            message.contains("failed to load square z9/0/1"),
+            "{message}"
+        );
+        assert!(
+            message.contains("structures_contract mismatch"),
+            "{message}"
+        );
+        assert_eq!(cached_count, 0, "a failed load must not populate the cache");
     }
 }
 
@@ -233,7 +278,7 @@ fn reach_square_names(lat: f64, lng: f64) -> Vec<String> {
 #[napi]
 pub fn query_roads(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String> {
     let square_names = reach_square_names(lat, lng);
-    ensure_squares_parallel(&square_names);
+    ensure_squares_parallel(&square_names)?;
     let store = STORE
         .read()
         .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
@@ -255,7 +300,7 @@ pub fn query_roads(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String
 #[napi]
 pub fn query_buildings(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String> {
     let square_names = reach_square_names(lat, lng);
-    ensure_squares_parallel(&square_names);
+    ensure_squares_parallel(&square_names)?;
     let store = STORE
         .read()
         .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
@@ -381,7 +426,7 @@ mod building_type_tests {
 #[napi]
 pub fn query_barriers(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String> {
     let square_names = reach_square_names(lat, lng);
-    ensure_squares_parallel(&square_names);
+    ensure_squares_parallel(&square_names)?;
     let store = STORE
         .read()
         .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
@@ -453,7 +498,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     // Load missing squares in parallel WITHOUT holding the store lock, then
     // collect under a read lock — concurrent popups on other workers keep
     // running against the shared cache during a cold load.
-    ensure_squares_parallel(&square_names);
+    ensure_squares_parallel(&square_names)?;
     let store = STORE
         .read()
         .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
