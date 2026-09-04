@@ -511,18 +511,27 @@ def read_overture_parquet(parquet_dir, cell):
 
 # ── The merge ─────────────────────────────────────────────────────────────────
 
-def load_osm_buildings(path):
-    # ABSENT IS NOT EMPTY. Every prepared cell carries its OSM pair, 0-row where
-    # nothing stands (finalize writes it), so a missing file is a broken or
-    # unmounted extract tree. Reading it as "this cell has no OSM buildings"
-    # would write a valid-looking Overture-only table and drop the cell's whole
-    # emission stock — the building layer would go quiet and nothing would say so.
+def require_osm_cell_table(cell, path):
+    """ABSENT IS NOT EMPTY, in ONE place. Every prepared cell carries its OSM pair,
+    0-row where nothing stands (finalize writes it), so a missing file is a broken
+    or unmounted extract tree. Read as "this cell has no OSM buildings" it would
+    write a valid-looking Overture-only table and drop the cell's whole emission
+    stock — the building layer would go quiet and nothing would say so.
+
+    Called before ANY use of the path, the freshness probe included: `getmtime` on
+    a missing file raises FileNotFoundError, which names the path but not the
+    reason and does not tell an operator what to do."""
     if not os.path.exists(path):
         raise SystemExit(
-            f"{path}: missing — every prepared cell carries its OSM building table, "
-            f"0-row where nothing stands. Re-run scripts/osm-to-h3r4.sh; the merge "
-            f"must not treat an absent file as a cell without buildings"
+            f"{cell}: {path} is missing — every prepared cell carries its OSM "
+            f"building and barrier tables, 0-row where nothing stands. Re-run "
+            f"scripts/osm-to-h3r4.sh; the merge must not treat an absent file as a "
+            f"cell without buildings"
         )
+    return path
+
+
+def load_osm_buildings(path):
     t = ipc.open_file(path).read_all()
     # The builder propagates building_type ids into the merged table, and the
     # engine gates structures.arrow on structures_contract — so a stale
@@ -541,12 +550,6 @@ def load_osm_buildings(path):
 
 
 def load_barriers(path):
-    # Absent is not empty, exactly as for buildings above.
-    if not os.path.exists(path):
-        raise SystemExit(
-            f"{path}: missing — every prepared cell carries its OSM barrier table, "
-            f"0-row where nothing stands. Re-run scripts/osm-to-h3r4.sh"
-        )
     t = ipc.open_file(path).read_all()
     cols = {c: t.column(c).to_pylist()
             for c in ("osm_id", "segment_idx", "start_lat", "start_lon",
@@ -699,16 +702,20 @@ def build_cell(cell, h3r4_dir, osm_dir, overture_rows, overture_mtime, ghsl,
             f"follows the prepared inventory and must not extend it"
         )
     osm_cell_dir = os.path.join(osm_dir, cell)
+    # Before anything reads or stats them, on the fresh path and the rebuild path
+    # alike: an absent table is a broken tree, and it says so.
+    buildings_path = require_osm_cell_table(
+        cell, os.path.join(osm_cell_dir, "buildings.arrow"))
+    barriers_path = require_osm_cell_table(
+        cell, os.path.join(osm_cell_dir, "barriers.arrow"))
     overture_rows = overture_rows or []
     out_path = os.path.join(cell_dir, "structures.arrow")
     if os.path.exists(out_path):
         out_mtime = os.path.getmtime(out_path)
         # EVERY input the row values are computed from, or a refreshed one is
-        # served stale for ever: the two per-cell arrows (always present — the
-        # loaders below refuse an absent one), the Overture source (shard tree or
-        # parquet release) and the height-ladder rasters.
-        mtimes = [os.path.getmtime(os.path.join(osm_cell_dir, n))
-                  for n in ("buildings.arrow", "barriers.arrow")]
+        # served stale for ever: the two per-cell arrows, the Overture source
+        # (shard tree or parquet release) and the height-ladder rasters.
+        mtimes = [os.path.getmtime(p) for p in (buildings_path, barriers_path)]
         if overture_mtime is not None:
             mtimes.append(overture_mtime)
         mtimes.append(ghsl.mtime)
@@ -716,8 +723,8 @@ def build_cell(cell, h3r4_dir, osm_dir, overture_rows, overture_mtime, ghsl,
             mtimes.append(regional.mtime)
         if max(mtimes) <= out_mtime:
             return None  # idempotent: no input is newer than the output
-    osm = load_osm_buildings(os.path.join(osm_cell_dir, "buildings.arrow"))
-    barriers = load_barriers(os.path.join(osm_cell_dir, "barriers.arrow"))
+    osm = load_osm_buildings(buildings_path)
+    barriers = load_barriers(barriers_path)
 
     # OSM geometry index for matching (rows with a polygon only).
     osm_geoms, osm_geom_idx, osm_geom_by_row = [], [], {}

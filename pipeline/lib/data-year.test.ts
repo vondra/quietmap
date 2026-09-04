@@ -3,10 +3,12 @@
  * Run: `npx tsx --test pipeline/lib/data-year.test.ts`
  *
  * Two bug classes, both silent-degradation:
- *   1. A missing or bare OSM extract tree read as "this world has no buildings":
- *      every reader selects cells by the presence of buildings.arrow, so an
- *      unmounted disk makes the buildings enrichers report 0 hexes and the
- *      structure builder write Overture-only tables over the emission stock.
+ *   1. A missing, bare, or HALF-migrated OSM extract tree read as "this world has
+ *      no buildings": every reader selects cells by the presence of
+ *      buildings.arrow, so an unmounted disk makes the buildings enrichers report
+ *      0 hexes and the structure builder write Overture-only tables over the
+ *      emission stock — and one absent cell among valid ones is skipped in
+ *      silence.
  *   2. Two roots: the extract writing where the chain does not read. The shell
  *      driver and this module must resolve the SAME <repo>/data, and neither may
  *      take a root override — the TypeScript half never had one, so a shell knob
@@ -15,10 +17,16 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { DATA_YEAR, H3R4_DIR, OSM_EXTRACT_DIR, requireOsmExtractTree } from './data-year.ts'
+import {
+  DATA_YEAR,
+  H3R4_DIR,
+  OSM_EXTRACT_DIR,
+  requireOsmExtractCells,
+  requireOsmExtractTree,
+} from './data-year.ts'
 
 const REPO_ROOT = resolve(import.meta.dirname, '..', '..')
 
@@ -55,4 +63,31 @@ test('both trees hang from the one repository data root, in shell and in TypeScr
   assert.match(driver, /^OUTPUT_DIR="\$DATA_DIR\/prepared\/\$\{YEAR\}\/h3r4"/m)
   assert.match(driver, /^OSM_EXTRACT_DIR="\$DATA_DIR\/source\/osm-extract\/\$\{YEAR\}\/h3r4"/m)
   assert.doesNotMatch(driver, /\$\{(DATA_ROOT|DATA_DIR|OUTPUT_DIR|OSM_EXTRACT_DIR):-/)
+})
+
+test('one prepared cell missing its tables among valid ones is refused, not skipped', () => {
+  const root = mkdtempSync(join(tmpdir(), 'osm-extract-cells-'))
+  try {
+    const cells = ['841e309ffffffff', '840b26bffffffff', '8407603ffffffff']
+    for (const cell of cells) {
+      mkdirSync(join(root, cell))
+      writeFileSync(join(root, cell, 'buildings.arrow'), '')
+      writeFileSync(join(root, cell, 'barriers.arrow'), '')
+    }
+    requireOsmExtractCells(cells, root)
+
+    // One table gone out of six: the readers discover work by presence, so this
+    // cell would otherwise be skipped without a word.
+    rmSync(join(root, cells[1], 'barriers.arrow'))
+    assert.throws(
+      () => requireOsmExtractCells(cells, root),
+      /1 OSM extract table\(s\) missing[\s\S]*840b26bffffffff\/barriers\.arrow/,
+    )
+
+    // A whole cell gone counts both of its tables.
+    rmSync(join(root, cells[2]), { recursive: true })
+    assert.throws(() => requireOsmExtractCells(cells, root), /3 OSM extract table\(s\) missing/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

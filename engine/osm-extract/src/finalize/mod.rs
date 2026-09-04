@@ -83,19 +83,20 @@ pub fn finalize(
 
     // Shared across the parallel building buckets (settlement v2 phase 2).
     let join_stats = JoinStats::default();
-    let dir_sets = units
+    let unit_sets = units
         .par_iter()
         .map(|(source, bucket)| {
-            finalize_bucket(
+            let hexes = finalize_bucket(
                 source,
                 *bucket,
                 spill_dir,
                 prepared_dir,
                 osm_extract_dir,
                 &join_stats,
-            )
+            )?;
+            Ok((*source, hexes))
         })
-        .collect::<Result<Vec<HashSet<String>>>>()?;
+        .collect::<Result<Vec<(&str, HashSet<String>)>>>()?;
 
     let (checked, reclassified) = join_stats.report();
     if checked > 0 {
@@ -108,8 +109,20 @@ pub fn finalize(
 
     // Distinct hexes across all sources — a hex with both roads and buildings appears
     // in two bucket sets, so union before counting (matches the old shared-set count).
-    let hex_dirs: HashSet<String> = dir_sets.into_iter().flatten().collect();
-    write_missing_osm_tables(osm_extract_dir, &hex_dirs)?;
+    // Per source as well as unioned: the fill below has to know which cells THIS run
+    // gave rows to, not merely which files happen to exist.
+    let mut written_by_source: HashMap<&str, HashSet<String>> = HashMap::new();
+    let mut hex_dirs: HashSet<String> = HashSet::new();
+    for (source, hexes) in unit_sets {
+        hex_dirs.extend(hexes.iter().cloned());
+        written_by_source.entry(source).or_default().extend(hexes);
+    }
+    let filled = write_empty_osm_tables_where_the_run_had_no_rows(
+        osm_extract_dir,
+        &hex_dirs,
+        &written_by_source,
+    )?;
+    eprintln!("  {filled} empty OSM table(s) for cells this run gave no rows");
     Ok(hex_dirs.len())
 }
 
@@ -120,34 +133,55 @@ pub fn finalize(
 /// tell them apart: it would write a valid-looking Overture-only table and erase
 /// the emission stock. With it, absent means broken, and the builder fails.
 ///
+/// The pair is RE-DERIVED from this run, never inherited: a cell the run gave no
+/// building rows gets the empty table even when a previous extract left a
+/// populated one there. Gap-filling alone could not express "these buildings were
+/// demolished" — a wall or a house dropped from a newer OSM snapshot would
+/// outlive every re-extract, because both output trees are reused in place.
+///
 /// The empty tables come from the SAME writers as the populated ones, so the
 /// schema, the `buildings_v2` contract stamp and the metadata cannot drift; an
 /// empty file is byte-identical for every cell (`spatially_batched` returns one
-/// empty batch and no bbox key).
-fn write_missing_osm_tables(osm_extract_dir: &Path, hex_dirs: &HashSet<String>) -> Result<()> {
+/// empty batch and no bbox key) and lands through the writers' tmp+rename, so a
+/// reader never sees a half-written table.
+fn write_empty_osm_tables_where_the_run_had_no_rows(
+    osm_extract_dir: &Path,
+    hex_dirs: &HashSet<String>,
+    written_by_source: &HashMap<&str, HashSet<String>>,
+) -> Result<usize> {
     let join_stats = JoinStats::default();
+    let wrote = |source: &str, hex: &String| {
+        written_by_source
+            .get(source)
+            .is_some_and(|hexes| hexes.contains(hex))
+    };
     let mut written = 0usize;
     for hex_str in hex_dirs {
-        let dir = osm_extract_dir.join(hex_str);
-        let buildings = dir.join("buildings.arrow");
-        let barriers = dir.join("barriers.arrow");
-        if buildings.exists() && barriers.exists() {
+        let has_buildings = wrote("buildings", hex_str);
+        let has_barriers = wrote("barriers", hex_str);
+        if has_buildings && has_barriers {
             continue;
         }
+        let dir = osm_extract_dir.join(hex_str);
         fs::create_dir_all(&dir)?;
-        if !buildings.exists() {
+        if !has_buildings {
             let hex = u64::from_str_radix(hex_str, 16)
                 .map_err(|e| anyhow::anyhow!("hex dir {hex_str} is not hexadecimal: {e}"))?;
-            write_buildings(&[], &buildings, hex, &PoiIndex::default(), &join_stats)?;
+            write_buildings(
+                &[],
+                &dir.join("buildings.arrow"),
+                hex,
+                &PoiIndex::default(),
+                &join_stats,
+            )?;
             written += 1;
         }
-        if !barriers.exists() {
-            write_barriers(&[], &barriers)?;
+        if !has_barriers {
+            write_barriers(&[], &dir.join("barriers.arrow"))?;
             written += 1;
         }
     }
-    eprintln!("  {written} empty OSM table(s) written for cells with none");
-    Ok(())
+    Ok(written)
 }
 
 /// Sort one spill bucket by hex_id, group consecutive rows, and write one
@@ -466,11 +500,12 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
-    /// Every extracted cell carries BOTH OSM tables, 0-row where nothing stands,
-    /// so an absent file means a broken tree and never "no buildings here" — the
-    /// distinction the structure builder fails on.
+    /// The pair is re-derived from the run, not inherited: a source that gave a
+    /// cell no rows this time leaves the canonical EMPTY table there, replacing
+    /// whatever a previous extract wrote. A source that DID write the cell this
+    /// run is left exactly as it wrote it.
     #[test]
-    fn every_extracted_cell_gets_both_osm_tables_even_when_empty() {
+    fn a_source_with_no_rows_this_run_replaces_the_table_a_previous_run_left() {
         let root = std::env::temp_dir().join("osm-extract-finalize-empty-pair");
         let _ = fs::remove_dir_all(&root);
         let osm = root.join("osm-extract");
@@ -480,28 +515,41 @@ mod tests {
         for cell in cells {
             let id = u64::from_str_radix(cell, 16).unwrap();
             assert_eq!(parse_res4_hex_id(&id.to_string()), Some(id));
+            fs::create_dir_all(osm.join(cell)).unwrap();
         }
-        // A cell that already has a populated table must never be clobbered.
-        fs::create_dir_all(osm.join(cells[0])).unwrap();
-        fs::write(osm.join(cells[0]).join("barriers.arrow"), b"populated").unwrap();
+        // cells[0]: this run wrote its barriers; a STALE buildings table from an
+        // older extract is still on disk. cells[1]: nothing written this run.
+        fs::write(
+            osm.join(cells[0]).join("barriers.arrow"),
+            b"written this run",
+        )
+        .unwrap();
+        fs::write(
+            osm.join(cells[0]).join("buildings.arrow"),
+            b"last run's houses",
+        )
+        .unwrap();
 
         let hex_dirs: HashSet<String> = cells.iter().map(|c| c.to_string()).collect();
-        write_missing_osm_tables(&osm, &hex_dirs).unwrap();
+        let mut written_by_source: HashMap<&str, HashSet<String>> = HashMap::new();
+        written_by_source.insert("barriers", HashSet::from([cells[0].to_string()]));
+        let filled =
+            write_empty_osm_tables_where_the_run_had_no_rows(&osm, &hex_dirs, &written_by_source)
+                .unwrap();
+        assert_eq!(filled, 3); // both cells' buildings + cells[1]'s barriers
 
-        for cell in cells {
-            assert!(osm.join(cell).join("buildings.arrow").exists(), "{cell}");
-            assert!(osm.join(cell).join("barriers.arrow").exists(), "{cell}");
-        }
+        // What the run wrote stays untouched.
         assert_eq!(
             fs::read(osm.join(cells[0]).join("barriers.arrow")).unwrap(),
-            b"populated",
-            "the fill overwrote a table that already had rows"
+            b"written this run"
         );
+        // What it did not write is the canonical empty table, stale bytes gone.
+        let replaced = fs::read(osm.join(cells[0]).join("buildings.arrow")).unwrap();
+        let fresh = fs::read(osm.join(cells[1]).join("buildings.arrow")).unwrap();
+        assert_ne!(replaced, b"last run's houses");
+        assert_eq!(replaced, fresh, "an empty table must not vary cell to cell");
+        assert!(osm.join(cells[1]).join("barriers.arrow").exists());
 
-        // An empty table is byte-identical cell to cell, 0 rows, contract stamped.
-        let first = fs::read(osm.join(cells[0]).join("buildings.arrow")).unwrap();
-        let second = fs::read(osm.join(cells[1]).join("buildings.arrow")).unwrap();
-        assert_eq!(first, second);
         let reader = arrow::ipc::reader::FileReader::try_new(
             File::open(osm.join(cells[1]).join("buildings.arrow")).unwrap(),
             None,
@@ -519,6 +567,84 @@ mod tests {
             reader.map(|b| b.unwrap().num_rows()).sum::<usize>(),
             0,
             "the empty table is not empty"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// End to end over the real `finalize`: a building demolished between two OSM
+    /// snapshots must disappear from the extract tree. Both output trees are reused
+    /// in place across runs, so a fill that only closed gaps would have kept the
+    /// old house for ever — and the structure builder would keep painting it.
+    #[test]
+    fn a_re_extract_can_say_a_cell_lost_its_buildings_and_get_them_back() {
+        let root = std::env::temp_dir().join("osm-extract-finalize-re-extract");
+        let _ = fs::remove_dir_all(&root);
+        let prepared = root.join("prepared");
+        let osm = root.join("osm-extract");
+        let cell = "841e309ffffffff";
+        let id = u64::from_str_radix(cell, 16).unwrap();
+
+        // TSV layouts per write_buildings / write_barriers / write_roads.
+        let building = format!("{id}\t7\t49.7800\t14.1700\t11\t0\t9.5\t3\thouse\t\t\t0\t0\t\n");
+        let barrier = format!("{id}\t55\t0\t49.7800\t14.1700\t49.7801\t14.1702\t20.0\t3.0\t0\t2\n");
+        let road = format!("{id}\t9\t0\t49.7800\t14.1700\t49.7801\t14.1702\t20.0\n");
+
+        let run = |name: &str, files: &[(&str, &String)]| {
+            let spill = root.join(name);
+            fs::create_dir_all(&spill).unwrap();
+            for (source, body) in files {
+                fs::write(spill.join(format!("{source}_000.tsv")), body.as_str()).unwrap();
+            }
+            finalize(&spill, &prepared, &osm, 1).unwrap()
+        };
+
+        // Snapshot 1: the cell has a house and a wall.
+        assert_eq!(
+            run(
+                "spill1",
+                &[("buildings", &building), ("barriers", &barrier)]
+            ),
+            1
+        );
+        let with_house = fs::read(osm.join(cell).join("buildings.arrow")).unwrap();
+        let with_wall = fs::read(osm.join(cell).join("barriers.arrow")).unwrap();
+
+        // Snapshot 2: both are gone from OSM; only a road is left in the cell.
+        assert_eq!(run("spill2", &[("roads", &road)]), 1);
+        let after = fs::read(osm.join(cell).join("buildings.arrow")).unwrap();
+        assert_ne!(
+            after, with_house,
+            "a demolished building survived the re-extract"
+        );
+        assert_ne!(
+            fs::read(osm.join(cell).join("barriers.arrow")).unwrap(),
+            with_wall,
+            "a removed wall survived the re-extract"
+        );
+        let reader = arrow::ipc::reader::FileReader::try_new(
+            File::open(osm.join(cell).join("buildings.arrow")).unwrap(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(reader.map(|b| b.unwrap().num_rows()).sum::<usize>(), 0);
+
+        // Snapshot 3: the house and the wall are mapped again — byte for byte what
+        // snapshot 1 produced, which is also the unchanged-re-extract case.
+        assert_eq!(
+            run(
+                "spill3",
+                &[("buildings", &building), ("barriers", &barrier)]
+            ),
+            1
+        );
+        assert_eq!(
+            fs::read(osm.join(cell).join("buildings.arrow")).unwrap(),
+            with_house
+        );
+        assert_eq!(
+            fs::read(osm.join(cell).join("barriers.arrow")).unwrap(),
+            with_wall
         );
 
         fs::remove_dir_all(&root).ok();

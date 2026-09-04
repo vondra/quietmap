@@ -322,13 +322,30 @@ class BuildStructuresTests(unittest.TestCase):
     def test_an_absent_per_cell_table_is_an_error_not_an_empty_cell(self):
         """Every prepared cell carries both tables, 0-row where nothing stands, so
         an absent one is a broken tree. Read as "no buildings here" it would write
-        a valid-looking Overture-only table and drop the cell's emission stock."""
+        a valid-looking Overture-only table and drop the cell's emission stock.
+
+        Both entry paths: the fresh build (which loads the tables) and the REBUILD
+        path, whose freshness probe used to stat them first and die with a bare
+        FileNotFoundError naming neither the cell nor what to do about it."""
         for name in ("buildings.arrow", "barriers.arrow"):
             path = self.osm / CELL / name
             kept = path.read_bytes()
+
             path.unlink()
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(SystemExit) as fresh:
                 self.build([ovt_row(OVT_LONELY)], validate=False)
+            self.assertIn(CELL, str(fresh.exception))
+            self.assertIn(name, str(fresh.exception))
+
+            # Now with a table already on disk, so the mtime probe runs first.
+            path.write_bytes(kept)
+            self.build([ovt_row(OVT_LONELY)], validate=False)
+            self.assertTrue((self.h3r4 / CELL / "structures.arrow").exists())
+            path.unlink()
+            with self.assertRaises(SystemExit) as rebuild:
+                self.build([ovt_row(OVT_LONELY)], validate=False)
+            self.assertIn(CELL, str(rebuild.exception))
+            self.assertIn(name, str(rebuild.exception))
             path.write_bytes(kept)
 
     def test_a_missing_or_bare_osm_tree_is_refused(self):

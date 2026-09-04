@@ -18,7 +18,7 @@ import { writeBuildingEnrichment } from './lib/buildings-arrow.js'
 import { iterateCountryHexes } from './lib/roads-arrow.js'
 import { SOURCE_ID_CZ_RUIAN_VFR } from './lib/source-ids.generated.js'
 import { flatDist } from './lib/spatial.js'
-import { DATA_YEAR as YEAR, OSM_EXTRACT_DIR, requireOsmExtractTree } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, H3R4_DIR, OSM_EXTRACT_DIR, requireOsmExtractCells, requireOsmExtractTree } from './lib/data-year.js'
 
 const MY_SOURCE_ID = SOURCE_ID_CZ_RUIAN_VFR
 
@@ -253,6 +253,9 @@ async function enrichHexes(ruianBuildings: RuianBuilding[]): Promise<void> {
   }
   console.log(`  Spatial grid: ${grid.size} cells`)
 
+  // Discovery is by PRESENCE, so a cell whose table is missing would be skipped
+  // without a word. Every prepared cell in the box must have both first.
+  requireOsmExtractCells(iterateCountryHexes(H3R4_DIR, CZ_HEX_BBOX, 'structures.arrow'))
   const hexDirs = iterateCountryHexes(OSM_EXTRACT_DIR, CZ_HEX_BBOX, 'buildings.arrow')
 
   let totalBuildings = 0, totalEnriched = 0, floorsAdded = 0, typeRefined = 0, hexesUpdated = 0, typeDowngradesBlocked = 0

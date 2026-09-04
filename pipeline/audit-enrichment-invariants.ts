@@ -109,7 +109,7 @@ import { iterateCountryHexes } from './lib/roads-arrow.js'
 import { makeOwnershipGate, segmentWhollyOutside, makeAnyCountryGate } from './lib/country-polygon.js'
 import { SOURCE_ID_GLOBAL_INDUSTRIAL_NATIONAL_MIX } from './lib/source-ids.generated.js'
 import { MAX_BUILDING_TYPE, V2_SPECIFIC_TYPE_MIN } from './lib/buildings-arrow.js'
-import { DATA_YEAR as YEAR, H3R4_DIR, OSM_EXTRACT_DIR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, H3R4_DIR, OSM_EXTRACT_DIR, requireOsmExtractCells, requireOsmExtractTree } from './lib/data-year.js'
 import { collectRailEndpointRows, loadRailStopsIndex, RAIL_STOPS_UNAVAILABLE_WARNING } from './lib/rail-endpoint-rows.js'
 import { findRailFlowJumps, findRailContinuityGaps } from './lib/rail-graph-metrics.js'
 import type { RailContinuityViolation } from './lib/rail-graph.js'
@@ -621,6 +621,13 @@ const industrial = scanLayer(H3R4_DIR, 'industrial.arrow', (t, hex) => {
 // asserted by `tile-painter::schema_check::BUILDINGS_CONTRACT_V2`
 // (branch settlement-phase2). Value is the contract — never edit casually.
 const BUILDINGS_CONTRACT_V2 = 'buildings_v2'
+
+// The buildings block discovers its hexes by the PRESENCE of buildings.arrow, so
+// a missing tree (or a half-migrated one) would report "0 hexes, 0 rows checked" —
+// a clean gate over a world nobody looked at. Every prepared cell in scope must
+// have both tables before a single row is judged.
+requireOsmExtractTree()
+requireOsmExtractCells(hexesInScope(H3R4_DIR, 'structures.arrow'))
 
 const buildings = scanLayer(OSM_EXTRACT_DIR, 'buildings.arrow', (t, hex) => {
   const btype = t.getChild('building_type')

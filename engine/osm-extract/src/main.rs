@@ -26,8 +26,11 @@ use std::time::Instant;
 struct Cli {
     #[arg(short, long)]
     input: PathBuf,
-    /// Prepared cell tree: every painter layer's `{source}.arrow`.
-    #[arg(short, long, default_value = "source-data/h3r4")]
+    /// Prepared cell tree: every painter layer's `{source}.arrow`. Required, like
+    /// `--osm-extract-output`: the two halves of one extract must be named
+    /// together, and a default for only one of them would let a direct
+    /// invocation write the pair into a tree nobody reads.
+    #[arg(short, long)]
     output: PathBuf,
     /// OSM extract source tree: the per-cell `buildings.arrow` / `barriers.arrow`
     /// the structure builder consumes. Kept out of the prepared cell so a cell

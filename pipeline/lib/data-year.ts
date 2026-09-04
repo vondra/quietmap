@@ -50,3 +50,29 @@ export function requireOsmExtractTree(root: string = OSM_EXTRACT_DIR): void {
     )
   }
 }
+
+/**
+ * Every prepared cell in scope carries BOTH OSM tables. `requireOsmExtractTree`
+ * catches an unmounted disk; this catches a HALF-migrated or half-written tree,
+ * where the readers that discover their work by the PRESENCE of buildings.arrow
+ * — the invariant auditor, the country buildings enrichers — would silently skip
+ * exactly the cells that are missing and report a clean run over them.
+ */
+export function requireOsmExtractCells(
+  cells: readonly string[],
+  root: string = OSM_EXTRACT_DIR,
+): void {
+  const missing: string[] = []
+  for (const cell of cells) {
+    for (const name of ['buildings.arrow', 'barriers.arrow']) {
+      if (!existsSync(resolve(root, cell, name))) missing.push(`${cell}/${name}`)
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `${missing.length} OSM extract table(s) missing under ${root} for prepared cells in ` +
+        `scope (first: ${missing.slice(0, 5).join(', ')}) — every prepared cell carries both, ` +
+        `0-row where nothing stands; re-run scripts/osm-to-h3r4.sh rather than skip them`,
+    )
+  }
+}
