@@ -1,0 +1,7 @@
+# Pin the toolchain so clippy/rustfmt/rustc rules are reproducible across every build
+# host and CI worker — a lint or format rule change is then a reviewed toolchain bump,
+# not silent drift in a future quality gate.
+[toolchain]
+channel = "1.96.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
