@@ -11,21 +11,48 @@
 # steps after this; see the pipeline transfers.
 set -euo pipefail
 
+log() { echo "[osm] $(date '+%H:%M:%S') $*"; }
+
 : "${PBF_FILE:?set PBF_FILE to the planet .osm.pbf}"
 : "${OUTPUT_DIR:?set OUTPUT_DIR to the release prepared dir}"
-SCRATCH_ROOT="${SCRATCH_ROOT:-/data/mixeduse2/scratch}"
+SCRATCH_ROOT="${SCRATCH_ROOT:-${TMPDIR:-/tmp}/quietmap-osm}"
 NUM_BUCKETS="${NUM_BUCKETS:-256}"
+if ! [[ "$NUM_BUCKETS" =~ ^[1-9][0-9]*$ ]]; then
+    log "ERROR: NUM_BUCKETS must be a positive integer, got: $NUM_BUCKETS"
+    exit 1
+fi
+
+# Nine spill streams keep one writer per bucket open. Raise only the soft
+# limit to the derived requirement; changing the process hard limit is neither
+# necessary nor guaranteed to be permitted.
+REQUIRED_OPEN_FILES=$((9 * NUM_BUCKETS + 64))
+HARD_OPEN_FILES=$(ulimit -Hn)
+if [ "$HARD_OPEN_FILES" != "unlimited" ] && [ "$REQUIRED_OPEN_FILES" -gt "$HARD_OPEN_FILES" ]; then
+    log "ERROR: extraction needs $REQUIRED_OPEN_FILES open files for $NUM_BUCKETS buckets; hard limit is $HARD_OPEN_FILES"
+    exit 1
+fi
+SOFT_OPEN_FILES=$(ulimit -Sn)
+if [ "$SOFT_OPEN_FILES" != "unlimited" ] && [ "$SOFT_OPEN_FILES" -lt "$REQUIRED_OPEN_FILES" ]; then
+    ulimit -Sn "$REQUIRED_OPEN_FILES"
+fi
 
 NODE_CACHE="$SCRATCH_ROOT/osm_nodes.cache"
 SPILL_DIR="$SCRATCH_ROOT/osm_spill"
-BINARY="$(cd "$(dirname "$0")/.." && pwd)/engine/target/release/osm-extract"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BINARY="$REPO_ROOT/engine/target/release/osm-extract"
 
-log() { echo "[osm] $(date '+%H:%M:%S') $*"; }
+MONITOR_PID=""
+stop_monitor() {
+    if [ -n "$MONITOR_PID" ]; then
+        kill "$MONITOR_PID" 2>/dev/null || true
+        wait "$MONITOR_PID" 2>/dev/null || true
+        MONITOR_PID=""
+    fi
+}
+trap stop_monitor EXIT
 
-if [ ! -f "$BINARY" ]; then
-    log "building osm-extract ..."
-    cargo build --release --manifest-path "$(dirname "$BINARY")/../Cargo.toml"
-fi
+log "building osm-extract (incremental) ..."
+cargo build --release --manifest-path "$REPO_ROOT/engine/Cargo.toml" --bin osm-extract
 if [ ! -f "$PBF_FILE" ]; then
     log "ERROR: Planet PBF not found: $PBF_FILE"
     exit 1
@@ -66,8 +93,7 @@ MONITOR_PID=$!
     --num-buckets "$NUM_BUCKETS" \
     2>&1 | while IFS= read -r line; do log "  $line"; done
 
-kill "$MONITOR_PID" 2>/dev/null || true
-wait "$MONITOR_PID" 2>/dev/null || true
+stop_monitor
 
 # Reclaim scratch the moment the binary is done with it: the node cache and
 # the sort spill are useless after finalize.

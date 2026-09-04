@@ -13,6 +13,7 @@ use crate::microsegment;
 use anyhow::Result;
 use grid::{lonlat_to_grid, Square};
 use std::collections::HashMap;
+use std::fmt::{self, Write as _};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -57,6 +58,28 @@ pub fn parse_ring_text(s: &str) -> Option<Vec<(i32, i32)>> {
     } else {
         Some(out)
     }
+}
+
+/// OSM strings at the TSV boundary. Tabs and record separators are data in
+/// PBF tags but structural in the transient spill format, so render them as
+/// spaces while preserving every other Unicode scalar verbatim.
+struct TsvText<'a>(&'a str);
+
+impl fmt::Display for TsvText<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for character in self.0.chars() {
+            formatter.write_char(if matches!(character, '\t' | '\n' | '\r') {
+                ' '
+            } else {
+                character
+            })?;
+        }
+        Ok(())
+    }
+}
+
+fn tsv_tag<'a>(tags: &'a Tags, key: &str) -> TsvText<'a> {
+    TsvText(tags.get(key).map(String::as_str).unwrap_or(""))
 }
 
 /// Per-feature-type, per-bucket writer.
@@ -188,8 +211,8 @@ impl Spiller {
                     tags.get("lanes")
                         .and_then(|s| s.parse::<u8>().ok())
                         .unwrap_or(0),
-                    tags.get("name").unwrap_or(&String::new()),
-                    tags.get("ref").unwrap_or(&String::new()),
+                    tsv_tag(tags, "name"),
+                    tsv_tag(tags, "ref"),
                     if bridge { 1 } else { 0 },
                     if tunnel { 1 } else { 0 },
                     if toll { 1 } else { 0 },
@@ -233,8 +256,8 @@ impl Spiller {
                         .map(|s| classify::parse_maxspeed_kmh(s))
                         .filter(|&v| v != classify::MAXSPEED_NONE)
                         .unwrap_or(0u16),
-                    tags.get("name").unwrap_or(&String::new()),
-                    tags.get("ref").unwrap_or(&String::new()),
+                    tsv_tag(tags, "name"),
+                    tsv_tag(tags, "ref"),
                     electrified,
                     gauge,
                     if bridge { 1 } else { 0 },
@@ -267,8 +290,8 @@ impl Spiller {
                     "\t{:.1}\t{}\t{}\t{}\t",
                     heading,
                     classify::aeroway_type(tags),
-                    tags.get("ref").map(String::as_str).unwrap_or(""),
-                    tags.get("surface").map(String::as_str).unwrap_or(""),
+                    tsv_tag(tags, "ref"),
+                    tsv_tag(tags, "surface"),
                 );
                 if let Some(v) = classify::parse_width_m(tags.get("width").map(|s| s.as_str())) {
                     let _ = write!(w, "{v:.1}");
@@ -343,9 +366,9 @@ impl Spiller {
                     tags.get("building:levels")
                         .and_then(|s| s.parse::<u8>().ok())
                         .unwrap_or(0),
-                    tags.get("name").unwrap_or(&String::new()),
-                    tags.get("addr:street").unwrap_or(&String::new()),
-                    tags.get("addr:housenumber").unwrap_or(&String::new()),
+                    tsv_tag(tags, "name"),
+                    tsv_tag(tags, "addr:street"),
+                    tsv_tag(tags, "addr:housenumber"),
                     // settlement v2 phase 2: opening_hours → day-fraction u8.
                     classify::opening_hours_fraction(tags.get("opening_hours").map(|s| s.as_str())),
                     is_area_source as u8,
@@ -359,7 +382,7 @@ impl Spiller {
                     "\t{}\t{}\t{}",
                     classify::leisure_sport_class(tags),
                     classify::opening_hours_fraction(tags.get("opening_hours").map(|s| s.as_str())),
-                    tags.get("name").unwrap_or(&String::new()),
+                    tsv_tag(tags, "name"),
                 );
             }
             FeatureType::Industrial | FeatureType::WindTurbine => {
@@ -375,7 +398,7 @@ impl Spiller {
                     "\t{}\t{}\t{}\t{}\t{}",
                     src_type,
                     site_subtype_from_tags(tags),
-                    tags.get("name").unwrap_or(&String::new()),
+                    tsv_tag(tags, "name"),
                     tags.get("height")
                         .and_then(|s| parse_height(s))
                         .unwrap_or(0.0),
@@ -395,15 +418,15 @@ impl Spiller {
                     w,
                     "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     classify::aeroway_type(tags),
-                    tags.get("name").map(|s| s.as_str()).unwrap_or(""),
-                    airport_ref,
-                    tags.get("icao").map(|s| s.as_str()).unwrap_or(""),
-                    tags.get("iata").map(|s| s.as_str()).unwrap_or(""),
-                    tags.get("operator").map(|s| s.as_str()).unwrap_or(""),
-                    tags.get("surface").map(|s| s.as_str()).unwrap_or(""),
+                    tsv_tag(tags, "name"),
+                    TsvText(airport_ref),
+                    tsv_tag(tags, "icao"),
+                    tsv_tag(tags, "iata"),
+                    tsv_tag(tags, "operator"),
+                    tsv_tag(tags, "surface"),
                     width_m,
-                    tags.get("aerodrome:type").map(|s| s.as_str()).unwrap_or(""),
-                    tags.get("access").map(|s| s.as_str()).unwrap_or(""),
+                    tsv_tag(tags, "aerodrome:type"),
+                    tsv_tag(tags, "access"),
                 );
             }
             _ => {}
@@ -882,5 +905,10 @@ mod settlement_class_tests {
         assert_eq!(parse_ring_text(""), None);
         assert_eq!(parse_ring_text("1,2"), None);
         assert_eq!(parse_ring_text("a,b;c,d;e,f"), None);
+    }
+
+    #[test]
+    fn tsv_text_cannot_create_columns_or_records() {
+        assert_eq!(TsvText("A\tB\r\nŽluťoučký").to_string(), "A B  Žluťoučký");
     }
 }

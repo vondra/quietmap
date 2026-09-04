@@ -19,22 +19,9 @@
 //! (`Σ θᵢ = θ_total`). Row count typically drops 30-50 % on dense
 //! airport polylines (LKPR taxiway median was 5.3 m before merging).
 
-/// Flat-earth distance in meters (accurate to <0.3% at <50km).
-/// Handles antimeridian wrapping: lon 179.9→-179.9 = 0.2°, not 359.8°.
-fn flat_dist(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
-    let mid_lat = (lat1 + lat2) / 2.0;
-    let cos_lat = mid_lat.to_radians().cos();
-    let mut dlon = lon2 - lon1;
-    if dlon > 180.0 {
-        dlon -= 360.0;
-    }
-    if dlon < -180.0 {
-        dlon += 360.0;
-    }
-    let dx = dlon * 111_320.0 * cos_lat;
-    let dy = (lat2 - lat1) * 110_540.0;
-    (dx * dx + dy * dy).sqrt()
-}
+use grid::geo::{
+    flat_dist, m_per_deg_lon, normalize_longitude, wrapped_longitude_delta, M_PER_DEG_LAT,
+};
 
 /// Flat-earth bearing in degrees (0..360), 0 = North, 90 = East.
 /// Scales longitude by cos(mid_lat) so LKPR's 60° runway reads 60°,
@@ -43,13 +30,7 @@ fn flat_dist(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 pub fn bearing_deg(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f32 {
     let mid_lat = (lat1 + lat2) / 2.0;
     let cos_lat = mid_lat.to_radians().cos();
-    let mut dlon = lon2 - lon1;
-    if dlon > 180.0 {
-        dlon -= 360.0;
-    }
-    if dlon < -180.0 {
-        dlon += 360.0;
-    }
+    let dlon = wrapped_longitude_delta(lon1, lon2);
     let dx = dlon * cos_lat;
     let dy = lat2 - lat1;
     let bearing = dx.atan2(dy).to_degrees();
@@ -72,27 +53,13 @@ const CHORD_EPS_M: f64 = 1.0;
 /// [`flat_dist`].
 fn perp_distance_to_chord(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     let mid_lat = (a[0] + b[0]) / 2.0;
-    let cos_lat = mid_lat.to_radians().cos();
-    let m_lon = 111_320.0 * cos_lat;
-    let m_lat = 110_540.0;
-    let mut bdlon = b[1] - a[1];
-    if bdlon > 180.0 {
-        bdlon -= 360.0;
-    }
-    if bdlon < -180.0 {
-        bdlon += 360.0;
-    }
-    let mut pdlon = p[1] - a[1];
-    if pdlon > 180.0 {
-        pdlon -= 360.0;
-    }
-    if pdlon < -180.0 {
-        pdlon += 360.0;
-    }
+    let m_lon = m_per_deg_lon(mid_lat.to_radians());
+    let bdlon = wrapped_longitude_delta(a[1], b[1]);
+    let pdlon = wrapped_longitude_delta(a[1], p[1]);
     let bx = bdlon * m_lon;
-    let by = (b[0] - a[0]) * m_lat;
+    let by = (b[0] - a[0]) * M_PER_DEG_LAT;
     let px = pdlon * m_lon;
-    let py = (p[0] - a[0]) * m_lat;
+    let py = (p[0] - a[0]) * M_PER_DEG_LAT;
     let ab_len_sq = bx * bx + by * by;
     if ab_len_sq < 1e-9 {
         return (px * px + py * py).sqrt();
@@ -176,19 +143,19 @@ fn interpolate_pair(
     segments: &mut Vec<([f64; 2], [f64; 2], f32)>,
 ) {
     let n = (dist / max_length_m).ceil() as usize;
-    let mut dlon = b[1] - a[1];
-    if dlon > 180.0 {
-        dlon -= 360.0;
-    }
-    if dlon < -180.0 {
-        dlon += 360.0;
-    }
+    let dlon = wrapped_longitude_delta(a[1], b[1]);
     let seg_len = dist / n as f64;
     for j in 0..n {
         let t0 = j as f64 / n as f64;
         let t1 = (j + 1) as f64 / n as f64;
-        let p0 = [a[0] + (b[0] - a[0]) * t0, a[1] + dlon * t0];
-        let p1 = [a[0] + (b[0] - a[0]) * t1, a[1] + dlon * t1];
+        let p0 = [
+            a[0] + (b[0] - a[0]) * t0,
+            normalize_longitude(a[1] + dlon * t0),
+        ];
+        let p1 = [
+            a[0] + (b[0] - a[0]) * t1,
+            normalize_longitude(a[1] + dlon * t1),
+        ];
         segments.push((p0, p1, seg_len as f32));
     }
 }
@@ -196,6 +163,7 @@ fn interpolate_pair(
 #[cfg(test)]
 mod tests {
     use super::{bearing_deg, split};
+    use grid::geo::flat_dist;
 
     fn near(a: f32, b: f32) -> bool {
         let diff = (a - b).abs();
@@ -295,6 +263,20 @@ mod tests {
                 s.2 <= 250.0 + 0.5,
                 "interpolated seg length should be ≤ 250 m, got {}",
                 s.2
+            );
+        }
+    }
+
+    #[test]
+    fn antimeridian_interpolation_stays_short_and_canonical() {
+        let segments = split(&[[0.0, 179.997], [0.0, -179.997]], 250.0);
+        assert_eq!(segments.len(), 3);
+        for (start, end, length_m) in segments {
+            assert!((-180.0..180.0).contains(&start[1]), "lon={}", start[1]);
+            assert!((-180.0..180.0).contains(&end[1]), "lon={}", end[1]);
+            assert!(length_m <= 250.0);
+            assert!(
+                (flat_dist(start[0], start[1], end[0], end[1]) - f64::from(length_m)).abs() < 0.1
             );
         }
     }

@@ -99,6 +99,7 @@ fn main() -> Result<()> {
     let mut ways_total = 0u64;
     let mut features_total = 0u64;
     let mut rels_assembled = 0u64;
+    let mut antimeridian_rings_omitted = 0u64;
     // Observability: noise-relevant ways that classified to None and vanished
     // (a functional AREA with no building wrapper). Reported after Pass 2.
     let mut fallthrough_tags: HashMap<String, u64> = HashMap::new();
@@ -213,6 +214,7 @@ fn main() -> Result<()> {
 
                             let (clat, clon) = centroid(&ring);
                             let square = grid::square_of(clat, clon);
+                            let safe_ring = ring_for_spill(&ring, &mut antimeridian_rings_omitted);
                             spiller.emit_polygon(
                                 &ftype,
                                 square,
@@ -220,7 +222,7 @@ fn main() -> Result<()> {
                                 clat,
                                 clon,
                                 &extracted_tags,
-                                Some(&ring),
+                                safe_ring,
                             );
                             features_total += 1;
                             rels_assembled += 1;
@@ -292,7 +294,7 @@ fn main() -> Result<()> {
                         let segs = microsegment::split(&coords, max_len);
                         for (idx, seg) in segs.iter().enumerate() {
                             let mid_lat = (seg.0[0] + seg.1[0]) / 2.0;
-                            let mid_lon = (seg.0[1] + seg.1[1]) / 2.0;
+                            let mid_lon = grid::geo::wrapped_longitude_midpoint(seg.0[1], seg.1[1]);
                             let square = grid::square_of(mid_lat, mid_lon);
                             spiller.emit_segment(&ftype, square, way.id(), idx as i16, seg, &tags);
                             features_total += 1;
@@ -300,11 +302,7 @@ fn main() -> Result<()> {
                     } else {
                         let (clat, clon) = centroid(&coords);
                         let square = grid::square_of(clat, clon);
-                        let ring = if coords.len() >= 3 {
-                            Some(coords.as_slice())
-                        } else {
-                            None
-                        };
+                        let ring = ring_for_spill(&coords, &mut antimeridian_rings_omitted);
                         spiller.emit_polygon(&ftype, square, way.id(), clat, clon, &tags, ring);
                         features_total += 1;
                     }
@@ -406,6 +404,10 @@ fn main() -> Result<()> {
         &fallthrough_tags,
         12,
     );
+    eprintln!("  antimeridian polygon rings omitted (centroid-only): {antimeridian_rings_omitted}");
+
+    // Finalize opens its own readers and writers; close all spill writers first.
+    drop(spiller);
 
     // Free node cache before finalize (saves ~64 GB disk for planet)
     drop(cache);
@@ -506,9 +508,66 @@ fn emit_settlement_node(
 }
 
 fn centroid(coords: &[[f64; 2]]) -> (f64, f64) {
+    let coords = if coords.len() > 1 && coords.first() == coords.last() {
+        &coords[..coords.len() - 1]
+    } else {
+        coords
+    };
     let n = coords.len() as f64;
+    let reference_lon = coords[0][1];
     (
         coords.iter().map(|c| c[0]).sum::<f64>() / n,
-        coords.iter().map(|c| c[1]).sum::<f64>() / n,
+        grid::geo::normalize_longitude(
+            reference_lon
+                + coords
+                    .iter()
+                    .map(|c| grid::geo::wrapped_longitude_delta(reference_lon, c[1]))
+                    .sum::<f64>()
+                    / n,
+        ),
     )
+}
+
+/// Canonical longitudes make a dateline-crossing ring look almost world-wide
+/// to current polygon consumers. Preserve its correct centroid but omit the
+/// unsafe ring until the shared polygon format can represent wrapped geometry.
+fn ring_for_spill<'a>(
+    coords: &'a [[f64; 2]],
+    antimeridian_rings_omitted: &mut u64,
+) -> Option<&'a [[f64; 2]]> {
+    if coords.len() < 3 {
+        return None;
+    }
+    let (min_lon, max_lon) = coords.iter().fold(
+        (f64::INFINITY, f64::NEG_INFINITY),
+        |(min_lon, max_lon), coord| (min_lon.min(coord[1]), max_lon.max(coord[1])),
+    );
+    if max_lon - min_lon > 180.0 {
+        *antimeridian_rings_omitted += 1;
+        None
+    } else {
+        Some(coords)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{centroid, ring_for_spill};
+
+    #[test]
+    fn antimeridian_ring_keeps_its_centroid_but_not_unsafe_geometry() {
+        let ring = [
+            [10.0, 179.99],
+            [10.0, -179.99],
+            [10.01, -179.99],
+            [10.01, 179.99],
+            [10.0, 179.99],
+        ];
+        let (lat, lon) = centroid(&ring);
+        assert!((lat - 10.005).abs() < 1e-12);
+        assert!((lon + 180.0).abs() < 1e-12, "lon={lon}");
+        let mut omitted = 0;
+        assert!(ring_for_spill(&ring, &mut omitted).is_none());
+        assert_eq!(omitted, 1);
+    }
 }
