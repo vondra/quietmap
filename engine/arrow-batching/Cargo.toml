@@ -1,0 +1,9 @@
+[package]
+name = "arrow-batching"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# default-features off: a bare "54" would drag arrow-csv/arrow-json into
+# every dependent's lockfile.
+arrow = { version = "54", default-features = false }
