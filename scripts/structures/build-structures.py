@@ -10,7 +10,7 @@
 #     shares one row; an Overture footprint with no OSM twin is attribute-less;
 #   * OSM noise walls (barriers.arrow) as kind=barrier polyline micro-segments.
 #
-# Semantics contract (engine readers rely on it; the migration's byte proofs pin it):
+# Semantics contract (engine readers rely on it):
 #   * emission reads kind=0 rows with osm_id present, in file order — exactly
 #     today's buildings.arrow subsequence with the same values, so the building
 #     layer is unchanged; the emission polygon is emission_polygon_wkb ??
@@ -39,16 +39,13 @@
 # building become Overture-only rows (screening then sees exactly today's
 # Overture set); leftover OSM rows stay OSM-only.
 #
-# Height ladder (moved here from the deleted enrich-obstacle-heights.py; tier
-# semantics are load-time contract in noise_compute::low_profile, which caps
-# tiers 2/4 to 3 m next to small OSM buildings — kind=0 rows only):
+# Height ladder (tier semantics are load-time contract in
+# noise_compute::low_profile, which caps tiers 2/4 to 3 m next to small OSM
+# buildings — kind=0 rows only):
 #   tier 0 mapped height · 1 floors x 3 m · 2 flat 8 m default ·
 #   3 regional measured zonal (replaces 1/2) · 4 GHSL ANBH prior (replaces 2 only)
-# Tier 3/4 sampling reuses the enrich step's exact raster code, so the rebuilt
-# Overture stock is byte-equal to the enriched obstacles.arrow — the migration's
-# --validate-obstacles pass proves it per cell (multiset equality on
-# geometry/height bits/tier/envelope), and validates the emission view against
-# buildings.arrow row by row.
+# --validate proves the emission view against buildings.arrow row by row, so a
+# merge that would move the building layer fails the cell instead of painting it.
 #
 # Overture source, two modes:
 #   --overture-shards DIR   migration bridge: the per-cell staging shard tree
@@ -70,7 +67,7 @@
 #   build-structures.py --h3r4-dir data/prepared/2026/h3r4 \
 #     (--overture-shards DIR | --overture-parquet DIR) \
 #     --ghsl <ANBH.tif> [--regional <mosaic.vrt>] \
-#     (--cells hex,... | --cells-file F) [--validate-obstacles] [--retire-inputs]
+#     (--cells hex,... | --cells-file F) [--validate] [--retire-inputs]
 
 import argparse
 import glob
@@ -96,7 +93,7 @@ from shapely import wkb as shapely_wkb
 gdal.UseExceptions()
 gdal.SetCacheMax(512 * 1024 * 1024)  # ANBH point reads cluster; keep blocks hot
 
-# ── Height ladder constants (verbatim from the deleted enrich step) ──────────
+# ── Height ladder constants ──────────────────────────────────────────────────
 MEASURED_MIN_M = 2.0      # zonal pixels below this are "not a building surface here"
 COVERAGE_MIN_FRAC = 0.30  # measured pixels must cover this share of the footprint
 COVERAGE_MIN_PX = 3
@@ -166,11 +163,11 @@ SCHEMA = pa.schema(
         pa.field("segment_idx", pa.int16()),
         # Obstacle-index insertion order: the index's dense edge ids follow the
         # file's physical row order unless the loader sorts by this column —
-        # the engine's crossing races resolve exact δ ties by scan order, and
-        # the 2026 migration must reproduce the legacy obstacles.arrow order to
-        # keep painted bytes identical (measured: order drives 89 of 90
-        # differing tiles). Builders assign it; loaders sort by it; null =
-        # never indexed (geometry-less emission-only rows).
+        # the engine's crossing races resolve exact δ ties by scan order, so the
+        # order the painted world was produced in has to survive every rebuild
+        # (measured: order drives 89 of 90 differing tiles). Builders assign it;
+        # loaders sort by it; null = never indexed (geometry-less
+        # emission-only rows).
         pa.field("screening_ordinal", pa.uint32()),
     ]
 )
@@ -189,7 +186,7 @@ EMISSION_COMPARE = [
 ]
 
 
-# ── Raster height sources (verbatim from the deleted enrich-obstacle-heights.py) ──
+# ── Raster height sources ────────────────────────────────────────────────────
 
 def transformer_for(ds, path):
     """WGS84 -> the raster's own CRS. Hard-fails on an unreferenced raster —
@@ -322,9 +319,8 @@ def read_overture_shards(cell_dir):
     return rows, max(os.path.getmtime(s) for s in shards)
 
 
-# Overture class/subtype -> envelope_class (moved verbatim from the deleted
-# ingest-overture-obstacles.py: the builder owns the whole ingest+ladder+merge
-# for the final parquet mode, so the mapping lives here, once).
+# Overture class/subtype -> envelope_class: the builder owns the whole
+# ingest+ladder+merge, so the mapping lives here, once.
 OUTDOOR_CLASSES = {
     "carport", "roof", "greenhouse", "glasshouse", "bridge_structure", "grandstand",
 }
@@ -613,8 +609,8 @@ def ladder_osm_only(height_tag, floors):
 
 
 def apply_raster_tiers(rows, regional, ghsl, stats):
-    """Tiers 3/4 over row dicts keyed (tier, height_m, clat, clon, geom) — the
-    deleted enrich step's per-row order and clamps, verbatim."""
+    """Tiers 3/4 over row dicts keyed (tier, height_m, clat, clon, geom): the
+    regional zonal mean replaces tiers 1/2, the ANBH prior only tier 2."""
     n = len(rows)
     if n == 0:
         return
@@ -719,8 +715,8 @@ def build_cell(cell, h3r4_dir, overture_rows, overture_mtime, ghsl, regional, va
     out = {f: [] for f in SCHEMA.names}
     n_both = 0
     # Index insertion order (screening_ordinal): Overture-stock rows keep their
-    # shard-merge position j (= the legacy obstacles.arrow order); OSM-only rows
-    # with geometry follow in buildings.arrow order; walls last, in file order.
+    # source position j (the Overture stock's own order); OSM-only rows with
+    # geometry follow in buildings.arrow order; walls last, in file order.
     n_osm_only_geom = sum(
         1 for i in osm_only if osm["polygon_wkb"][i] is not None
     )
@@ -832,7 +828,7 @@ def build_cell(cell, h3r4_dir, overture_rows, overture_mtime, ghsl, regional, va
     table = pa.table(out, schema=schema)
 
     if validate:
-        validate_cell(cell, cell_dir, osm, table)
+        validate_cell(cell, osm, table)
 
     tmp = f"{out_path}.tmp.{os.getpid()}"
     with ipc.new_file(tmp, schema) as w:
@@ -873,68 +869,11 @@ def build_cell(cell, h3r4_dir, overture_rows, overture_mtime, ghsl, regional, va
     }
 
 
-def validate_cell(cell, cell_dir, osm, table):
-    """Migration proof for one cell (raises, never warns):
-    (1) the rebuilt Overture screening stock equals the enriched obstacles.arrow
-        as a multiset of (geometry bytes, height f32 bits, tier, envelope);
-    (2) the emission view (kind=0, osm_id present, file order) equals
-        buildings.arrow row by row on every emission column, with the emission
-        polygon = emission_polygon_wkb ?? geometry_wkb and the emission centroid
-        = emission_centroid_* ?? centroid_*."""
-    obstacles = os.path.join(cell_dir, "obstacles.arrow")
-    if os.path.exists(obstacles):
-        old = ipc.open_file(obstacles).read_all()
-        n_old = old.num_rows
-        # A pre-envelope-era promoted file has no envelope_class column: the
-        # loader reads every row as the enclosed DEFAULT, so that is the stock
-        # this validation must see.
-        if "envelope_class" in old.column_names:
-            old_env = old.column("envelope_class").to_pylist()
-        else:
-            old_env = [ENVELOPE_DEFAULT] * n_old
-        if "height_tier" in old.column_names:
-            old_tier = old.column("height_tier").to_pylist()
-        else:
-            old_tier = [2] * n_old
-
-        def keys(wkbs, hs, ts, es):
-            out = {}
-            for wkb, h, t, e in zip(wkbs, hs, ts, es):
-                key = (bytes(wkb), np.float32(h).tobytes(), int(t), int(e))
-                out[key] = out.get(key, 0) + 1
-            return out
-
-        want = keys(
-            old.column("polygon_wkb").to_pylist(),
-            old.column("height_m").to_pylist(),
-            old_tier,
-            old_env,
-        )
-        # Overture stock in the new table = kind=0 rows that are Overture-only
-        # (osm_id null) or matched (their emission centroid override is set).
-        mask = pc.and_(
-            pc.equal(table.column("kind"), KIND_BUILDING),
-            pc.or_(
-                pc.is_null(table.column("osm_id")),
-                pc.is_valid(table.column("emission_centroid_lat")),
-            ),
-        )
-        stock = table.filter(mask)
-        got = keys(
-            stock.column("geometry_wkb").to_pylist(),
-            stock.column("height_m").to_pylist(),
-            stock.column("height_tier").to_pylist(),
-            stock.column("envelope_class").to_pylist(),
-        )
-        if want != got:
-            missing = {k: v for k, v in want.items() if got.get(k, 0) < v}
-            extra = {k: v for k, v in got.items() if want.get(k, 0) < v}
-            raise SystemExit(
-                f"{cell}: rebuilt Overture stock != obstacles.arrow "
-                f"(old {sum(want.values())} rows, new {sum(got.values())}; "
-                f"{len(missing)} missing keys, {len(extra)} extra keys)"
-            )
-    # (2) emission view vs buildings.arrow.
+def validate_cell(cell, osm, table):
+    """Emission-view proof for one cell (raises, never warns): the emission view
+    (kind=0, osm_id present, file order) equals buildings.arrow row by row on
+    every emission column, with the emission polygon = emission_polygon_wkb ??
+    geometry_wkb and the emission centroid = emission_centroid_* ?? centroid_*."""
     if osm is not None:
         mask = pc.and_(
             pc.equal(table.column("kind"), KIND_BUILDING),
@@ -987,7 +926,8 @@ def main():
     group = ap.add_mutually_exclusive_group(required=True)
     group.add_argument("--cells")
     group.add_argument("--cells-file")
-    ap.add_argument("--validate-obstacles", action="store_true")
+    ap.add_argument("--validate", action="store_true",
+                    help="prove the emission view against buildings.arrow, cell by cell")
     ap.add_argument("--retire-inputs", action="store_true")
     ap.add_argument("--census-log", help="append one JSON line per built cell (the world migration's count proof)")
     args = ap.parse_args()
@@ -1005,7 +945,7 @@ def main():
         else:
             ovt, ovt_mtime = read_overture_parquet(args.overture_parquet, cell)
         census = build_cell(cell, args.h3r4_dir, ovt, ovt_mtime, ghsl, regional,
-                            args.validate_obstacles, args.retire_inputs)
+                            args.validate, args.retire_inputs)
         if census is None:
             totals["fresh_skip"] += 1
         else:
