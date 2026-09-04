@@ -454,12 +454,15 @@ pub fn scatter_tile(
     );
 
     // One admitted sub-segment per surviving (row, sub-segment), materialised in INPUT
-    // order; every scatter pass below then parallelises over RECEIVERS, so each
-    // accumulator cell is summed by exactly one task over one fixed sub-segment order.
-    // That is what makes the painted tile bit-reproducible — a rayon `fold` + `reduce`
-    // over sub-segments merges partial f32 sums in work-stealing order instead, and the
-    // sibling cruise painter measurably flipped cells across the 0.5 dB quantisation
-    // step between two runs of one binary on one host (2026-09-04).
+    // order — rayon's `collect` into a `Vec` yields "the same order as a sequential
+    // iterator would produce" (see `cruise::scatter_tile` for the full note), so
+    // `flat_map_iter` concatenates the rows in row order whatever the schedule. Every
+    // scatter pass below then parallelises over RECEIVERS, so each accumulator cell is
+    // summed by exactly one task over that one fixed sub-segment order. That is what makes
+    // the painted tile bit-reproducible — a rayon `fold` + `reduce` over sub-segments
+    // merges partial f32 sums in work-stealing order instead, and the sibling cruise
+    // painter measurably flipped cells across the 0.5 dB quantisation step between two runs
+    // of one binary on one host (2026-09-04).
     let counters = AdmissionCounters::default();
     let admitted: Vec<AdmittedSubSegment> = airborne
         .par_iter()

@@ -57,7 +57,8 @@ pub struct ScatterStats {
     pub buckets_seen: usize,
     pub buckets_in_reach: usize,
     pub buckets_terrain_rejected: usize,
-    /// Buckets routed to the broadcast lattice (segment above the far-field gate).
+    /// Broadcast-routed buckets that lit at least one lattice node above the SEL floor —
+    /// contribution, not routing, which is what this counter has always reported.
     pub buckets_broadcast: usize,
     pub pairs_evaluated: u64,
     pub pairs_below_threshold: u64,
@@ -158,9 +159,14 @@ pub fn scatter_tile(
 
     let in_reach = AtomicUsize::new(0);
     let terrain_rejected = AtomicUsize::new(0);
+    let buckets_above_floor = AtomicUsize::new(0);
 
-    // Admission is bucket-parallel, but `collect` keeps the input order, so the two
-    // receiver-parallel passes below sum every cell over one fixed bucket sequence.
+    // Admission is bucket-parallel, but rayon's `collect` into a `Vec` yields "the same
+    // order as a sequential iterator would produce" (`ParallelIterator::collect` /
+    // `FromParallelIterator for Vec`: the per-thread runs are concatenated in split order,
+    // not completion order), so the admitted sequence is fixed and the two receiver-parallel
+    // passes below sum every cell over that one sequence. The reproducibility test paints the
+    // same tile at 1 and at 8 threads, which is what pins this end to end.
     let admitted: Vec<AdmittedBucket<'_>> = cruise
         .par_iter()
         .zip(row_terrain.par_iter())
@@ -185,7 +191,13 @@ pub fn scatter_tile(
     // store-buffer pressure that regressed the old pipeline-worker by 25 s
     // (`81bd15ca`).
     let mut broadcast = CoarseLattice::new(far_lattice_n((TILE_PX as f64) * px_m));
-    let far_evals = scatter_broadcast_lattice(&broadcast_buckets, tile, npd_luts, &mut broadcast);
+    let far_evals = scatter_broadcast_lattice(
+        &broadcast_buckets,
+        tile,
+        npd_luts,
+        &mut broadcast,
+        &buckets_above_floor,
+    );
     let near_evals = scatter_near_pixels(&near_buckets, tile, npd_luts, accum);
     broadcast.expand_into(accum);
 
@@ -193,7 +205,7 @@ pub fn scatter_tile(
         buckets_seen: cruise.len(),
         buckets_in_reach: in_reach.load(Ordering::Relaxed),
         buckets_terrain_rejected: terrain_rejected.load(Ordering::Relaxed),
-        buckets_broadcast: broadcast_buckets.len(),
+        buckets_broadcast: buckets_above_floor.load(Ordering::Relaxed),
         pairs_evaluated: far_evals.0 + near_evals.0,
         pairs_below_threshold: far_evals.1 + near_evals.1,
     }
@@ -337,11 +349,16 @@ fn scatter_broadcast_lattice(
     tile: &FusedTileZ13,
     npd_luts: &NpdLuts,
     lattice: &mut CoarseLattice,
+    buckets_above_floor: &AtomicUsize,
 ) -> (u64, u64) {
     lattice.scatter_in_fixed_parts(buckets, |chunk, part| {
         let n = part.n();
         let mut below = 0u64;
+        let mut above_floor = 0usize;
         for bucket in chunk {
+            // A bucket lies wholly inside one part, so its own below-floor tally — and with
+            // it `buckets_broadcast` — survives the split.
+            let mut bucket_below = 0u64;
             for ci in 0..n {
                 let py = part.coarse_pixel(ci);
                 let rx_lat = tile.rx_lat[py];
@@ -363,11 +380,14 @@ fn scatter_broadcast_lattice(
                             bucket.period_idx,
                             bucket_energy(sel, bucket.density),
                         ),
-                        None => below += 1,
+                        None => bucket_below += 1,
                     }
                 }
             }
+            above_floor += usize::from(bucket_below < (n * n) as u64);
+            below += bucket_below;
         }
+        buckets_above_floor.fetch_add(above_floor, Ordering::Relaxed);
         ((chunk.len() * n * n) as u64, below)
     })
 }

@@ -156,50 +156,74 @@ fn cruise_tile_bytes_do_not_depend_on_the_core_count() {
     assert_bit_identical(&paint(1, scatter), &paint(8, scatter), "cruise");
 }
 
-#[test]
-fn airborne_coarse_bands_do_not_depend_on_the_core_count() {
-    let tile = flat_tile();
-    let centre_lat = (tile.bbox.north_lat + tile.bbox.south_lat) * 0.5;
-    let centre_lon = (tile.bbox.east_lon + tile.bbox.west_lon) * 0.5;
+/// Per-flight sub-segment columns, in `SubSegmentSlice` order:
+/// `[start_lat, start_lon, start_alt_m, end_lat, end_lon, end_alt_m]`. Owned by the test
+/// because the row views borrow them.
+type FlightColumns = [Vec<f32>; 6];
 
-    // Three sub-segments per flight, one per far-field stride band: ~1 km, ~4 km and
-    // ~11 km of best slant from the tile. The exact per-pixel path is deliberately not
-    // exercised here — it would make the test build all 262 144 receiver horizons —
-    // and it shares its receiver-row split with the cruise painter's, tested above.
-    const FLIGHTS: usize = 512;
-    const BAND_OFFSET_DEG: [f64; 3] = [0.010, 0.040, 0.110];
-    let columns: Vec<Vec<Vec<f32>>> = (0..FLIGHTS)
+/// One flight per index, one sub-segment per entry of `offset_deg` — the sub-segment starts
+/// that far north-east of the tile centre and runs 0.01° further, at `altitude_m`.
+fn flight_columns(
+    flights: usize,
+    offset_deg: &[f64],
+    altitude_m: impl Fn(usize, usize) -> f32,
+    centre_lat: f64,
+    centre_lon: f64,
+) -> Vec<FlightColumns> {
+    (0..flights)
         .map(|i| {
-            let start_lat: Vec<f32> = BAND_OFFSET_DEG
-                .iter()
-                .map(|d| (centre_lat + d + jitter(i, 11)) as f32)
-                .collect();
-            let end_lat: Vec<f32> = BAND_OFFSET_DEG
-                .iter()
-                .map(|d| (centre_lat + d + 0.01 + jitter(i, 17)) as f32)
-                .collect();
-            let start_lon: Vec<f32> = BAND_OFFSET_DEG
-                .iter()
-                .map(|d| (centre_lon + d + jitter(i, 23)) as f32)
-                .collect();
-            let end_lon: Vec<f32> = BAND_OFFSET_DEG
-                .iter()
-                .map(|d| (centre_lon + d + 0.01 + jitter(i, 29)) as f32)
-                .collect();
-            let alt: Vec<f32> = (0..3)
-                .map(|b| 900.0 + 200.0 * b as f32 + (jitter(i, 31) * 1.0e4) as f32)
-                .collect();
-            vec![start_lat, start_lon, alt.clone(), end_lat, end_lon, alt]
+            let axis = |base: f64, extra: f64, salt: u64| -> Vec<f32> {
+                offset_deg
+                    .iter()
+                    .map(|d| (base + d + extra + jitter(i, salt)) as f32)
+                    .collect()
+            };
+            let alt: Vec<f32> = (0..offset_deg.len()).map(|b| altitude_m(i, b)).collect();
+            [
+                axis(centre_lat, 0.0, 11),
+                axis(centre_lon, 0.0, 23),
+                alt.clone(),
+                axis(centre_lat, 0.01, 17),
+                axis(centre_lon, 0.01, 29),
+                alt,
+            ]
         })
-        .collect();
-    let period = [0u8, 1, 2];
-    let date_id = [10i16; 3];
-    let flags = [1u8; 3];
-    let speed_kt = [220.0f32; 3];
-    let length_m = [1_500.0f32; 3];
-    let terrain_elev = [TERRAIN_M; 3];
-    let rows: Vec<AirborneRowView<'_>> = (0..FLIGHTS)
-        .map(|i| AirborneRowView {
+        .collect()
+}
+
+/// The per-sub-segment scalar columns every fixture shares. `flags & 1` = departure; the
+/// terrain elevations are the tile's, so the endpoint ground-stale gate passes.
+struct SubSegmentScalars {
+    period: Vec<u8>,
+    date_id: Vec<i16>,
+    flags: Vec<u8>,
+    speed_kt: Vec<f32>,
+    length_m: Vec<f32>,
+    terrain_elev_m: Vec<f32>,
+}
+
+impl SubSegmentScalars {
+    fn new(sub_segments: usize) -> Self {
+        Self {
+            period: (0..sub_segments).map(|i| (i % 3) as u8).collect(),
+            date_id: vec![10; sub_segments],
+            flags: vec![1; sub_segments],
+            speed_kt: vec![220.0; sub_segments],
+            length_m: vec![1_500.0; sub_segments],
+            terrain_elev_m: vec![TERRAIN_M; sub_segments],
+        }
+    }
+}
+
+fn airborne_rows<'a>(
+    columns: &'a [FlightColumns],
+    scalars: &'a SubSegmentScalars,
+    bbox: BBox,
+) -> Vec<AirborneRowView<'a>> {
+    columns
+        .iter()
+        .enumerate()
+        .map(|(i, flight)| AirborneRowView {
             flight_id: noise_compute::flight_id::pack_synth(i as u64),
             callsign: "TEST",
             aircraft_type: *b"A320",
@@ -207,28 +231,53 @@ fn airborne_coarse_bands_do_not_depend_on_the_core_count() {
             source_id: 0,
             origin: 0,
             sub_segments: SubSegmentSlice {
-                start_lat: &columns[i][0],
-                start_lon: &columns[i][1],
-                start_alt_m: &columns[i][2],
-                end_lat: &columns[i][3],
-                end_lon: &columns[i][4],
-                end_alt_m: &columns[i][5],
-                speed_kt: &speed_kt,
-                length_m: &length_m,
-                period: &period,
-                date_id: &date_id,
-                flags: &flags,
-                terrain_start_elev_m: &terrain_elev,
-                terrain_end_elev_m: &terrain_elev,
+                start_lat: &flight[0],
+                start_lon: &flight[1],
+                start_alt_m: &flight[2],
+                end_lat: &flight[3],
+                end_lon: &flight[4],
+                end_alt_m: &flight[5],
+                speed_kt: &scalars.speed_kt,
+                length_m: &scalars.length_m,
+                period: &scalars.period,
+                date_id: &scalars.date_id,
+                flags: &scalars.flags,
+                terrain_start_elev_m: &scalars.terrain_elev_m,
+                terrain_end_elev_m: &scalars.terrain_elev_m,
             },
-            bbox: BBox {
-                min_lat: (centre_lat - 0.2) as f32,
-                max_lat: (centre_lat + 0.2) as f32,
-                min_lon: (centre_lon - 0.3) as f32,
-                max_lon: (centre_lon + 0.3) as f32,
-            },
+            bbox,
         })
-        .collect();
+        .collect()
+}
+
+#[test]
+fn airborne_coarse_bands_do_not_depend_on_the_core_count() {
+    let tile = flat_tile();
+    let centre_lat = (tile.bbox.north_lat + tile.bbox.south_lat) * 0.5;
+    let centre_lon = (tile.bbox.east_lon + tile.bbox.west_lon) * 0.5;
+
+    // Three sub-segments per flight, one per far-field stride band: ~1 km, ~4 km and ~11 km
+    // of best slant from the tile.
+    const FLIGHTS: usize = 512;
+    const BAND_OFFSET_DEG: [f64; 3] = [0.010, 0.040, 0.110];
+    let columns = flight_columns(
+        FLIGHTS,
+        &BAND_OFFSET_DEG,
+        |i, band| 900.0 + 200.0 * band as f32 + (jitter(i, 31) * 1.0e4) as f32,
+        centre_lat,
+        centre_lon,
+    );
+    let scalars = SubSegmentScalars::new(BAND_OFFSET_DEG.len());
+    let rows = airborne_rows(
+        &columns,
+        &scalars,
+        BBox {
+            min_lat: (centre_lat - 0.2) as f32,
+            max_lat: (centre_lat + 0.2) as f32,
+            min_lon: (centre_lon - 0.3) as f32,
+            max_lon: (centre_lon + 0.3) as f32,
+        },
+    );
 
     let obstacles = ObstacleSet::empty();
     let interior = InteriorEstimate::bake(&tile, &obstacles);
@@ -248,5 +297,63 @@ fn airborne_coarse_bands_do_not_depend_on_the_core_count() {
             "fixture must exercise every far-field stride band: {stats:?}"
         );
     };
-    assert_bit_identical(&paint(1, scatter), &paint(8, scatter), "airborne");
+    assert_bit_identical(&paint(1, scatter), &paint(8, scatter), "airborne coarse");
+}
+
+#[test]
+fn airborne_exact_path_does_not_depend_on_the_core_count() {
+    let tile = flat_tile();
+    let centre_lat = (tile.bbox.north_lat + tile.bbox.south_lat) * 0.5;
+    let centre_lon = (tile.bbox.east_lon + tile.bbox.west_lon) * 0.5;
+
+    // Low overflights right across the tile: the clamped CPA is inside the half-diagonal and
+    // the segments clear the receivers by ~300 m, so every one is under NEAR_SLANT_M and takes
+    // the exact 262 144-pixel path — the receiver-row split the coarse fixture cannot reach.
+    // Few flights on purpose. The cost of this test is the screening grid — the exact path
+    // makes it build a horizon at all 262 144 receivers, twice, which is ~70 s of the debug
+    // gate and does not move with the flight count (measured: 1 flight 70.6 s, 8 flights
+    // 71.2 s). Eight is enough to make a cell's sum order-sensitive.
+    const FLIGHTS: usize = 8;
+    const OVERHEAD_DEG: [f64; 1] = [0.0];
+    let columns = flight_columns(
+        FLIGHTS,
+        &OVERHEAD_DEG,
+        |i, _| 600.0 + (jitter(i, 41) * 1.0e4) as f32,
+        centre_lat,
+        centre_lon,
+    );
+    let scalars = SubSegmentScalars::new(OVERHEAD_DEG.len());
+    let rows = airborne_rows(
+        &columns,
+        &scalars,
+        BBox {
+            min_lat: (centre_lat - 0.02) as f32,
+            max_lat: (centre_lat + 0.02) as f32,
+            min_lon: (centre_lon - 0.02) as f32,
+            max_lon: (centre_lon + 0.02) as f32,
+        },
+    );
+
+    let obstacles = ObstacleSet::empty();
+    let interior = InteriorEstimate::bake(&tile, &obstacles);
+    let class_weights = ClassWeights::uniform();
+    let scatter = |accum: &mut TileAccumulator| {
+        let stats = tile_painter::airborne::scatter_tile(
+            &tile,
+            &rows,
+            &class_weights,
+            &obstacles,
+            &interior,
+            accum,
+        );
+        assert_eq!(
+            stats.sub_near, FLIGHTS as u64,
+            "fixture must put every sub-segment on the exact per-pixel path: {stats:?}"
+        );
+        assert!(
+            stats.pairs_evaluated > stats.pairs_below_threshold,
+            "fixture must paint energy, not only floor rejections: {stats:?}"
+        );
+    };
+    assert_bit_identical(&paint(1, scatter), &paint(8, scatter), "airborne exact");
 }
