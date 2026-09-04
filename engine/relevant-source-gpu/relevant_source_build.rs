@@ -343,6 +343,20 @@ fn run_checked(command: &mut Command, label: &str) {
     assert!(status.success(), "{label} exited with {status}");
 }
 
+/// `lib64` of the CUDA toolkit whose `nvcc` is first on PATH, so the linked runtime always
+/// belongs to the compiler that produced the device code.
+fn cuda_library_directory() -> PathBuf {
+    let path = env::var_os("PATH").expect("PATH is set for a cargo build");
+    let bin = env::split_paths(&path)
+        .find(|directory| directory.join("nvcc").is_file())
+        .expect("nvcc is on PATH — `--features gpu` needs a CUDA toolkit");
+    bin.canonicalize()
+        .expect("the directory holding nvcc resolves")
+        .parent()
+        .expect("nvcc lives in <toolkit>/bin")
+        .join("lib64")
+}
+
 fn common_nvcc_arguments() -> Vec<String> {
     vec![
         "-std=c++17".to_owned(),
@@ -464,7 +478,14 @@ fn main() {
         "cargo:rustc-link-search=native={}",
         output_directory.display()
     );
-    println!("cargo:rustc-link-search=native=/usr/local/cuda/lib64");
+    // The runtime of the nvcc that just compiled the kernel, not whatever /usr/local/cuda
+    // points at: a build host carries two toolkits (13.x for the fleet fatbin, 12.9 for the
+    // Volta sm_70 twin), and linking the Volta build against libcudart.so.13 would ship a
+    // painter whose runtime dropped sm_70.
+    println!(
+        "cargo:rustc-link-search=native={}",
+        cuda_library_directory().display()
+    );
     println!("cargo:rustc-link-lib=static=relevant_source_cuda");
     println!("cargo:rustc-link-lib=dylib=cudart");
     println!("cargo:rustc-link-lib=dylib=stdc++");
