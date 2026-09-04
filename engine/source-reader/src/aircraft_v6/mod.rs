@@ -1,14 +1,4 @@
-//! Run `compute_aircraft_v6` over the popup arrows and merge its output
-//! into the `NoiseResult` returned by `compute_at_point_with_traces`.
-//!
-//! Lifetime story: `RecordBatch` arrays are `Arc<dyn Array>`-backed, so
-//! source-reader's hex store can clone the batches cheaply and drop its
-//! `RwLock`. `AirborneRowAccum<'a>` (Opt C) is now zero-copy — it borrows
-//! `&[f32]` / `&str` directly out of the live arrow buffers tied to
-//! the caller's `&[RecordBatch]` Vec. `CruiseRowAccum` and
-//! `AirportTrafficRowAccum` still snapshot columns into owned
-//! `Vec<T>` / `String` (Tier 3 to convert; small batches make the
-//! savings less load-bearing for those layers).
+//! Decode current aircraft popup artifacts and merge observed noise into the result.
 
 mod airborne_view;
 pub mod airport_summary_view;
@@ -69,19 +59,9 @@ fn build_osm_ref_lookup(batches: &[RecordBatch]) -> HashMap<u64, String> {
     out
 }
 
-/// Build the GA full-year hybrid per-class weight LUT from the
-/// `sample_days_by_class` metadata stamped on the airborne and
-/// airport_traffic arrows. Mirrors the
-/// heatmap's `worklist::resolve_class_weights` strictness: every loaded
-/// airborne/airport_traffic batch MUST carry the stamp and they must all
-/// AGREE — a missing stamp or a disagreement across the grid_disk(1)
-/// hexes (mixed/stale shards) FAILS LOUD (owner directive 2026-06-12; no
-/// uniform fallback), since the first-stamp-wins shortcut could silently
-/// apply one window's LUT to rows from another and re-introduce the GA
-/// +14.8 dB phantom. Because the vector embeds both windows, this also
-/// catches the case where `n_days` (the divisor) differs across hexes.
-/// When there are no aircraft batches at all (rural receiver), returns
-/// the uniform LUT — there is nothing to weight.
+/// Every loaded aircraft batch must agree on both class windows; otherwise
+/// a mixed release can amplify full-year GA energy by the airline divisor.
+/// An empty receiver has no rows to weight.
 fn build_class_weights(
     airborne_batches: &[RecordBatch],
     airport_traffic_batches: &[RecordBatch],
@@ -106,30 +86,16 @@ fn build_class_weights(
                 ));
             }
             (Some(_), Some(_)) => {}
-            // A batch passed the v4/v9 contract gate but lacks the stamp:
-            // impossible for current writers, so treat as a loud error.
+            // Current writers always carry the required normalization stamp.
             (None, _) => return ClassWeights::parse(None, n_days),
         }
     }
     ClassWeights::parse(stamp.as_deref(), n_days)
 }
 
-/// Run `compute_aircraft_v6` over the popup arrows and merge its output
-/// into an existing `NoiseResult`. Caller is expected to have invoked
-/// `compute_at_point_with_traces` first.
-///
-/// `airport_summary_path` points at the global `airport_summary.arrow`
-/// sidecar (typically `<prepared>/aircraft/airport_summary.arrow`).
-/// When the file is absent OR an airport is missing from it, popup
-/// arr/dep/observed counts return zero; there is no fallback to per-row
-/// sums, which over-count by 4-8×.
-///
-/// Returns `Err(String)` when any of the popup arrows fails its schema
-/// check (`v15` for airborne/cruise, `airport_traffic_v8` for the
-/// ground-ops arrow), so the popup HTTP path can map the failure to a
-/// structured 500 response with an operator-actionable message.
-// 12 args: the popup aircraft entry accretes one param per physics input.
-// Bundle into a context struct when another input is added.
+/// Add observed aircraft noise after the non-aircraft point computation.
+/// Traffic batches require the global summary sidecar; missing or incompatible
+/// data returns an actionable error instead of zero movement counts.
 #[allow(clippy::too_many_arguments)]
 pub fn add_v6_aircraft_to_result(
     result: &mut NoiseResult,
@@ -155,31 +121,13 @@ pub fn add_v6_aircraft_to_result(
     assert_airborne_contract("airborne.arrow", airborne_batches)?;
     assert_cruise_contract("cruise.arrow", cruise_batches)?;
     assert_airport_traffic_contract("airport_traffic.arrow", airport_traffic_batches)?;
-    // GA full-year hybrid per-class weight LUT — built from the
-    // `sample_days_by_class` metadata the airborne / airport_traffic
-    // arrows stamp. FAILS LOUD when rows
-    // exist but the stamp is missing (owner directive 2026-06-12 — no
-    // compat shim): the arrows predate the hybrid contract and must be
-    // re-extracted. The contract bumps (airborne v4 / airport_traffic v9)
-    // already reject such files above; this is the in-kernel safety net.
+    // Contracts guard geometry; the shared window stamp guards normalization.
     let class_weights = build_class_weights(airborne_batches, airport_traffic_batches, n_days)?;
-    let airborne_rows = AirborneRowAccum::new(airborne_batches);
+    let airborne_rows = AirborneRowAccum::new(airborne_batches)?;
     let cruise_rows = CruiseRowAccum::new(cruise_batches)?;
-    let traffic_rows = AirportTrafficRowAccum::new(airport_traffic_batches);
-    // Only the `!traffic_views.is_empty()` branch below ever consults the
-    // summary lookup, so when this popup's 7-hex ring holds no airport_traffic
-    // rows the whole-world ~11 MB airport_summary.arrow is never used. Gate the
-    // load on `has_traffic_rows` so an empty-desert / no-airport click skips the
-    // open + Arrow parse + ~50k-row HashMap build entirely. Before this gate
-    // EVERY popup (incl. rural clicks with zero nearby aircraft) paid the full
-    // load one line before the `total_rows == 0` bail-out below — and, uncached,
-    // re-paid it on every request, which is a real CPU wall at popup scale.
-    //
-    // When traffic rows DO exist the sidecar is MANDATORY: a missing sidecar
-    // or unwired path is a fatal pipeline
-    // state (Stage 2C reduce did not run, or operator forgot to copy it), raised
-    // as a loud `eprintln!` + `Err` so the popup HTTP path returns 500 instead of
-    // silently showing zero arr/dep counts (indistinguishable from "no ADS-B data").
+    let traffic_rows = AirportTrafficRowAccum::new(airport_traffic_batches)?;
+    // Rural clicks need no global summary decode. Traffic clicks require it:
+    // summing per-microsegment counts would count the same movement repeatedly.
     let has_traffic_rows = !airport_traffic_batches.is_empty();
     let airport_summary_accum = if !has_traffic_rows {
         None
@@ -220,9 +168,7 @@ pub fn add_v6_aircraft_to_result(
         return Ok(());
     }
 
-    // One C2 terrain horizon per receiver whenever airborne rows exist.
-    // Cruise never receives it. The former popup-only environment switch is
-    // deliberately gone: published tiles and clicks use the same physics.
+    // Airborne screens against one receiver horizon; cruise is exempt.
     let horizon = if airborne_views.is_empty() {
         None
     } else {
@@ -253,7 +199,7 @@ pub fn add_v6_aircraft_to_result(
 
     let (mut air_periods, mut air_contribs, band_data) = compute_aircraft_v6(
         receiver,
-        airborne_views,
+        &airborne_views,
         &cruise_views,
         rasters,
         horizon.as_ref(),
@@ -426,42 +372,9 @@ fn sum_periods_linear(sources: &[SourceResult]) -> NoisePeriods {
     noise_compute::periods::periods(to_db(day), to_db(eve), to_db(night))
 }
 
-/// Stamp written by every aircraft-extract Arrow file. Inline copy
-/// (not a build-dep) keeps arrow IPC / parquet / anyhow out of the
-/// popup runtime; must move in lock-step with `aircraft-extract::SCHEMA_VERSION`.
-/// v15 adds mandatory endpoint terrain elevations to airborne sub-segments
-/// and Stage 1. Earlier files cannot supply them and must be rejected.
-pub(super) const EXPECTED_SCHEMA_VERSION: &str = "v15";
-
-/// The `airport_traffic.arrow` semantic contract. `schema_version`
-/// only guards column types/order; this guards what those columns
-/// mean today: `band_energy_lin` = raw Σ over n_days of Z-weighted
-/// energy at 25 m perpendicular (v6 convention; consumer divides via
-/// `period_leq(_, n_days_f, _)`); per-row scalar `unique_*_count` +
-/// per-microseg UNION `microseg_unique_*` replace the v4 `flight_ids`
-/// list. Airport-level UNION across R4s lives in the separate
-/// `airport_summary.arrow` sidecar.
-/// v9 (GA full-year hybrid): the microseg UNIONs split into non-GA +
-/// `microseg_unique_ga_*`, and the file stamps `sample_days_by_class`
-/// so the consumer weights GA energy at `1/ga_n_days`. A v8 reader would
-/// double-weight GA at 1/12 — the bump refuses it.
-pub(super) const EXPECTED_AIRPORT_TRAFFIC_CONTRACT: &str = "airport_traffic_v9";
-
-/// `airborne.arrow` sub-segment column-shape contract. v2 (K3) keeps
-/// only `terrain_start_elev_m` / `terrain_end_elev_m`; v1 stored five
-/// elevs (start / q1 / mid / q3 / end). Popup reader hard-fails on a
-/// v1 file because the 13-col offset shifts every read past
-/// `flags` — silent decoding would alias `terrain_q1_elev_m` slice
-/// over what v2 treats as `terrain_end_elev_m`.
-/// v4 (GA full-year hybrid): no column change, but the file carries the
-/// `sample_days_by_class` vector the consumer REQUIRES to weight GA rows
-/// at `1/ga_n_days`. A v3 reader ignores it and ships the +14.8 dB phantom.
-pub(super) const EXPECTED_AIRBORNE_CONTRACT: &str = "airborne_v4";
-
-/// Expected `cruise_contract` metadata for z9-local files. Dev1's
-/// `cruise_v17` stores a legacy spatial cell id; accepting that stamp while reading
-/// explicit `lon`/`lat` silently zeroed cruise at every receiver.
-pub(super) const EXPECTED_CRUISE_CONTRACT: &str = "cruise_z9_v1";
+use square_store::aircraft_contract::{
+    AIRBORNE_CONTRACT, AIRPORT_TRAFFIC_CONTRACT, CRUISE_CONTRACT, SCHEMA_VERSION,
+};
 
 fn assert_metadata_value(
     label: &str,
@@ -482,17 +395,13 @@ fn assert_metadata_value(
     Ok(())
 }
 
-/// Verify `schema_version` on every batch in the slice — the caller
-/// merges batches across R4 cells, so one hex's current batches and a
-/// sibling's stale batches can land in the same slice. Wrong-schema
-/// readers silently drop rows via `col_list(...)` → `continue`; this
-/// is the loud safety net.
+/// A receiver can load many squares; every batch must belong to this release.
 pub(super) fn assert_schema_version(label: &str, batches: &[RecordBatch]) -> Result<(), String> {
     assert_metadata_value(
         label,
         batches,
         "schema_version",
-        EXPECTED_SCHEMA_VERSION,
+        SCHEMA_VERSION,
         "re-extract aircraft pipeline",
     )
 }
@@ -501,7 +410,7 @@ pub(super) fn assert_schema_version(label: &str, batches: &[RecordBatch]) -> Res
 /// [`assert_schema_version`] but checks the orthogonal
 /// `airport_traffic_contract` metadata key, which encodes the
 /// quantity stored in `band_energy_lin` (see
-/// [`EXPECTED_AIRPORT_TRAFFIC_CONTRACT`]).
+/// [`AIRPORT_TRAFFIC_CONTRACT`]).
 pub(super) fn assert_airport_traffic_contract(
     label: &str,
     batches: &[RecordBatch],
@@ -513,24 +422,19 @@ pub(super) fn assert_airport_traffic_contract(
         label,
         batches,
         "airport_traffic_contract",
-        EXPECTED_AIRPORT_TRAFFIC_CONTRACT,
+        AIRPORT_TRAFFIC_CONTRACT,
         "re-extract aircraft pipeline",
     )
 }
 
-/// Guard the `airborne.arrow` sub-segment column-shape contract.
-/// Mirrors [`assert_airport_traffic_contract`] but checks the
-/// `airborne_contract` metadata key set by Stage 2A. Pre-K3 (v1) files
-/// have three extra terrain columns the v2 popup reader would silently
-/// alias over `terrain_end_elev_m`, producing wrong Filter D cuts on
-/// every airborne sub-segment.
+/// Geometry stamps distinguish z30/Int16 data from incompatible float artifacts.
 pub(super) fn assert_airborne_contract(label: &str, batches: &[RecordBatch]) -> Result<(), String> {
     assert_schema_version(label, batches)?;
     assert_metadata_value(
         label,
         batches,
         "airborne_contract",
-        EXPECTED_AIRBORNE_CONTRACT,
+        AIRBORNE_CONTRACT,
         "re-extract aircraft pipeline",
     )
 }
@@ -543,7 +447,10 @@ pub(super) fn assert_cruise_contract(label: &str, batches: &[RecordBatch]) -> Re
         label,
         batches,
         "cruise_contract",
-        EXPECTED_CRUISE_CONTRACT,
+        CRUISE_CONTRACT,
         "rebuild the cruise z9 data",
     )
 }
+
+#[cfg(test)]
+mod producer_roundtrip_tests;

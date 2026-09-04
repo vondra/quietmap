@@ -26,6 +26,7 @@ square-store = { path = "../square-store" }
 mimalloc = { version = "0.1", default-features = false }
 
 [dev-dependencies]
+aircraft-extract = { path = "../aircraft-extract" }
 tempfile = "3"
 
 [build-dependencies]

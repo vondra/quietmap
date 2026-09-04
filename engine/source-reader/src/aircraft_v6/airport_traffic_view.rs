@@ -1,15 +1,10 @@
-//! `AirportTrafficRowView<'_>` builder over `airport_traffic.arrow` v5
-//! batches. v5 swap: drops the per-row `flight_ids: List<UInt64>` and
-//! captures the scalar `unique_*_count` + row-replicated
-//! `microseg_unique_*` columns instead. Per Codex C4 + Claude W1
-//! airport-level UNIONs come from the separate
-//! `airport_summary.arrow` sidecar.
+//! Strict z30 airport traffic decoding for popup physics.
 
-use arrow::array::Array;
+use arrow::array::*;
 use arrow::record_batch::RecordBatch;
 use noise_compute::compute::aircraft_v6::{AirportTrafficRowView, NUM_GSE_CLASSES};
 
-use super::columns::{col_f32, col_fixed_size_list, col_str, col_u16, col_u32, col_u64, col_u8};
+use super::columns::required_array;
 
 const NUM_BANDS: usize = 8;
 
@@ -45,7 +40,7 @@ pub struct AirportTrafficRowAccum {
 }
 
 impl AirportTrafficRowAccum {
-    pub fn new(batches: &[RecordBatch]) -> Self {
+    pub fn new(batches: &[RecordBatch]) -> Result<Self, String> {
         let mut out = AirportTrafficRowAccum {
             airport_key: Vec::new(),
             osm_id: Vec::new(),
@@ -75,103 +70,98 @@ impl AirportTrafficRowAccum {
             microseg_unique_ga_dep_count: Vec::new(),
         };
         for batch in batches {
-            out.absorb(batch);
+            out.absorb(batch)?;
         }
-        out
+        Ok(out)
     }
 
-    fn absorb(&mut self, batch: &RecordBatch) {
+    fn absorb(&mut self, batch: &RecordBatch) -> Result<(), String> {
         let n = batch.num_rows();
-        let (
-            Some(airport_key),
-            Some(osm_id),
-            Some(seg_idx),
-            Some(geom_kind),
-            Some(sla),
-            Some(slo),
-            Some(ela),
-            Some(elo),
-            Some(len_m),
-            Some(ops_kind),
-            Some(is_dep),
-            Some(veh_kind),
-            Some(class_idx),
-            Some(period),
-            Some(bands),
-            Some(unique_mov),
-            Some(unique_arr),
-            Some(unique_dep),
-            Some(gse_list),
-            Some(microseg_unique),
-            Some(microseg_unique_arr),
-            Some(microseg_unique_dep),
-            Some(microseg_gse_list),
-            Some(microseg_unique_ga),
-            Some(microseg_unique_ga_arr),
-            Some(microseg_unique_ga_dep),
-        ) = (
-            col_str(batch, "airport_key"),
-            col_u64(batch, "osm_id"),
-            col_u16(batch, "segment_idx"),
-            col_u8(batch, "geometry_kind"),
-            col_f32(batch, "start_lat"),
-            col_f32(batch, "start_lon"),
-            col_f32(batch, "end_lat"),
-            col_f32(batch, "end_lon"),
-            col_f32(batch, "length_m"),
-            col_u8(batch, "ops_kind"),
-            col_u8(batch, "is_departure"),
-            col_u8(batch, "veh_kind"),
-            col_u8(batch, "class_idx"),
-            col_u8(batch, "period"),
-            col_fixed_size_list(batch, "band_energy_lin"),
-            col_u32(batch, "unique_movement_count"),
-            col_u32(batch, "unique_arr_count"),
-            col_u32(batch, "unique_dep_count"),
-            col_fixed_size_list(batch, "unique_gse_count_per_class"),
-            col_u32(batch, "microseg_unique_count"),
-            col_u32(batch, "microseg_unique_arr_count"),
-            col_u32(batch, "microseg_unique_dep_count"),
-            col_fixed_size_list(batch, "microseg_unique_gse_count_per_class"),
-            col_u32(batch, "microseg_unique_ga_count"),
-            col_u32(batch, "microseg_unique_ga_arr_count"),
-            col_u32(batch, "microseg_unique_ga_dep_count"),
-        )
-        else {
-            return;
-        };
-        if bands.value_length() != NUM_BANDS as i32 {
-            return;
-        }
-        if gse_list.value_length() != NUM_GSE_CLASSES as i32
+        let airport_key =
+            required_array::<StringArray>(batch.column_by_name("airport_key"), "airport_key")?;
+        let osm_id = required_array::<UInt64Array>(batch.column_by_name("osm_id"), "osm_id")?;
+        let seg_idx =
+            required_array::<UInt16Array>(batch.column_by_name("segment_idx"), "segment_idx")?;
+        let geom_kind =
+            required_array::<UInt8Array>(batch.column_by_name("geometry_kind"), "geometry_kind")?;
+        let sgx = required_array::<Int32Array>(batch.column_by_name("start_gx"), "start_gx")?;
+        let sgy = required_array::<Int32Array>(batch.column_by_name("start_gy"), "start_gy")?;
+        let egx = required_array::<Int32Array>(batch.column_by_name("end_gx"), "end_gx")?;
+        let egy = required_array::<Int32Array>(batch.column_by_name("end_gy"), "end_gy")?;
+        let len_m = required_array::<Float32Array>(batch.column_by_name("length_m"), "length_m")?;
+        let ops_kind = required_array::<UInt8Array>(batch.column_by_name("ops_kind"), "ops_kind")?;
+        let is_dep =
+            required_array::<UInt8Array>(batch.column_by_name("is_departure"), "is_departure")?;
+        let veh_kind = required_array::<UInt8Array>(batch.column_by_name("veh_kind"), "veh_kind")?;
+        let class_idx =
+            required_array::<UInt8Array>(batch.column_by_name("class_idx"), "class_idx")?;
+        let period = required_array::<UInt8Array>(batch.column_by_name("period"), "period")?;
+        let bands = required_array::<FixedSizeListArray>(
+            batch.column_by_name("band_energy_lin"),
+            "band_energy_lin",
+        )?;
+        let unique_mov = required_array::<UInt32Array>(
+            batch.column_by_name("unique_movement_count"),
+            "unique_movement_count",
+        )?;
+        let unique_arr = required_array::<UInt32Array>(
+            batch.column_by_name("unique_arr_count"),
+            "unique_arr_count",
+        )?;
+        let unique_dep = required_array::<UInt32Array>(
+            batch.column_by_name("unique_dep_count"),
+            "unique_dep_count",
+        )?;
+        let gse_list = required_array::<FixedSizeListArray>(
+            batch.column_by_name("unique_gse_count_per_class"),
+            "unique_gse_count_per_class",
+        )?;
+        let microseg_unique = required_array::<UInt32Array>(
+            batch.column_by_name("microseg_unique_count"),
+            "microseg_unique_count",
+        )?;
+        let microseg_unique_arr = required_array::<UInt32Array>(
+            batch.column_by_name("microseg_unique_arr_count"),
+            "microseg_unique_arr_count",
+        )?;
+        let microseg_unique_dep = required_array::<UInt32Array>(
+            batch.column_by_name("microseg_unique_dep_count"),
+            "microseg_unique_dep_count",
+        )?;
+        let microseg_gse_list = required_array::<FixedSizeListArray>(
+            batch.column_by_name("microseg_unique_gse_count_per_class"),
+            "microseg_unique_gse_count_per_class",
+        )?;
+        let microseg_unique_ga = required_array::<UInt32Array>(
+            batch.column_by_name("microseg_unique_ga_count"),
+            "microseg_unique_ga_count",
+        )?;
+        let microseg_unique_ga_arr = required_array::<UInt32Array>(
+            batch.column_by_name("microseg_unique_ga_arr_count"),
+            "microseg_unique_ga_arr_count",
+        )?;
+        let microseg_unique_ga_dep = required_array::<UInt32Array>(
+            batch.column_by_name("microseg_unique_ga_dep_count"),
+            "microseg_unique_ga_dep_count",
+        )?;
+        if bands.value_length() != NUM_BANDS as i32
+            || gse_list.value_length() != NUM_GSE_CLASSES as i32
             || microseg_gse_list.value_length() != NUM_GSE_CLASSES as i32
         {
-            return;
+            return Err("airport_traffic fixed-size list width mismatch".into());
         }
-        let band_values = bands.values();
-        let Some(band_f32) = band_values
-            .as_any()
-            .downcast_ref::<arrow::array::Float32Array>()
-        else {
-            return;
-        };
-        let band_buf = band_f32.values();
-        let Some(gse_u32) = gse_list
-            .values()
-            .as_any()
-            .downcast_ref::<arrow::array::UInt32Array>()
-        else {
-            return;
-        };
-        let gse_buf = gse_u32.values();
-        let Some(microseg_gse_u32) = microseg_gse_list
-            .values()
-            .as_any()
-            .downcast_ref::<arrow::array::UInt32Array>()
-        else {
-            return;
-        };
-        let microseg_gse_buf = microseg_gse_u32.values();
+        let band_buf =
+            required_array::<Float32Array>(Some(bands.values()), "band_energy_lin.item")?.values();
+        let gse_buf = required_array::<UInt32Array>(
+            Some(gse_list.values()),
+            "unique_gse_count_per_class.item",
+        )?
+        .values();
+        let microseg_gse_buf = required_array::<UInt32Array>(
+            Some(microseg_gse_list.values()),
+            "microseg_unique_gse_count_per_class.item",
+        )?
+        .values();
         self.airport_key.reserve(n);
         self.band_energy_lin.reserve(n);
         for i in 0..n {
@@ -179,10 +169,14 @@ impl AirportTrafficRowAccum {
             self.osm_id.push(osm_id.value(i));
             self.segment_idx.push(seg_idx.value(i));
             self.geometry_kind.push(geom_kind.value(i));
-            self.start_lat.push(sla.value(i));
-            self.start_lon.push(slo.value(i));
-            self.end_lat.push(ela.value(i));
-            self.end_lon.push(elo.value(i));
+            let (start_lon, start_lat) =
+                square_store::grid_cols::grid_cell_lonlat(sgx.value(i), sgy.value(i));
+            let (end_lon, end_lat) =
+                square_store::grid_cols::grid_cell_lonlat(egx.value(i), egy.value(i));
+            self.start_lat.push(start_lat as f32);
+            self.start_lon.push(start_lon as f32);
+            self.end_lat.push(end_lat as f32);
+            self.end_lon.push(end_lon as f32);
             self.length_m.push(len_m.value(i));
             self.ops_kind.push(ops_kind.value(i));
             self.is_departure.push(is_dep.value(i));
@@ -216,6 +210,7 @@ impl AirportTrafficRowAccum {
             self.microseg_unique_ga_dep_count
                 .push(microseg_unique_ga_dep.value(i));
         }
+        Ok(())
     }
 
     pub fn views(&self) -> Vec<AirportTrafficRowView<'_>> {

@@ -1,179 +1,192 @@
-//! Zero-copy airborne row views. `AirborneRowAccum<'a>` borrows
-//! directly into the `Arc<RecordBatch>` arrow buffers passed in — no
-//! per-row `Vec<f32>` clones, no per-row `String::from(callsign)`. The
-//! lifetime `'a` is tied to the caller's `&[RecordBatch]`, which the
-//! popup path keeps alive across `add_v6_aircraft_to_result` via the
-//! `PointQueryData` struct (lib.rs:444). Arrow buffers behind
-//! `RecordBatch` are Arc-backed, so cloning batches is a refcount bump
-//! and the underlying f32/u8 slices stay resident for the whole call.
-//!
-//! At LKPR, roughly 21 k rows × 11 columns × avg 200
-//! sub-segs/row = ~46 M f32 copies eliminated per popup. `aircraft_type`
-//! is now `[u8; 4]` by value on `AirborneRowView` (4 bytes vs an `&[u8; 4]`
-//! borrow that would otherwise need to alias into a self-owned Vec).
+//! Decode integer aircraft geometry once per Arrow batch and borrow flight metadata.
 
-use arrow::array::*;
+use super::columns::required_array;
+use arrow::{array::*, record_batch::RecordBatch};
 use noise_compute::compute::aircraft_v6::{AirborneRowView, BBox, SubSegmentSlice};
 
-use super::columns::{col_f32, col_fixed_size_binary, col_list, col_str, col_u64, col_u8};
-
 pub struct AirborneRowAccum<'a> {
-    rows: Vec<AirborneRowView<'a>>,
+    batches: Vec<DecodedBatch<'a>>,
 }
 
-struct SubSegmentColumns<'a> {
-    start_lat: &'a [f32],
-    start_lon: &'a [f32],
-    start_alt_m: &'a [f32],
-    end_lat: &'a [f32],
-    end_lon: &'a [f32],
-    end_alt_m: &'a [f32],
-    speed_kt: &'a [f32],
-    length_m: &'a [f32],
+struct DecodedBatch<'a> {
+    flight_id: &'a UInt64Array,
+    callsign: &'a StringArray,
+    aircraft_type: &'a FixedSizeBinaryArray,
+    profile: &'a UInt8Array,
+    source: &'a UInt8Array,
+    origin: &'a UInt8Array,
+    offsets: &'a [i32],
+    start_lat: Vec<f32>,
+    start_lon: Vec<f32>,
+    end_lat: Vec<f32>,
+    end_lon: Vec<f32>,
+    start_alt: Vec<f32>,
+    end_alt: Vec<f32>,
+    start_terrain: Vec<f32>,
+    end_terrain: Vec<f32>,
+    speed: &'a [f32],
+    length: &'a [f32],
     period: &'a [u8],
-    date_id: &'a [i16],
+    date: &'a [i16],
     flags: &'a [u8],
-    terrain_start_elev_m: &'a [f32],
-    terrain_end_elev_m: &'a [f32],
 }
 
-impl<'a> SubSegmentColumns<'a> {
-    fn from_struct(s: &'a StructArray) -> Option<Self> {
-        let f32_col = |name: &str| -> Option<&'a [f32]> {
-            s.column_by_name(name)?
-                .as_any()
-                .downcast_ref::<Float32Array>()
-                .map(|a| a.values().as_ref())
-        };
-        let u8_col = |name: &str| -> Option<&'a [u8]> {
-            s.column_by_name(name)?
-                .as_any()
-                .downcast_ref::<UInt8Array>()
-                .map(|a| a.values().as_ref())
-        };
-        let i16_col = |name: &str| -> Option<&'a [i16]> {
-            s.column_by_name(name)?
-                .as_any()
-                .downcast_ref::<Int16Array>()
-                .map(|a| a.values().as_ref())
-        };
-        Some(SubSegmentColumns {
-            start_lat: f32_col("start_lat")?,
-            start_lon: f32_col("start_lon")?,
-            start_alt_m: f32_col("start_alt_m")?,
-            end_lat: f32_col("end_lat")?,
-            end_lon: f32_col("end_lon")?,
-            end_alt_m: f32_col("end_alt_m")?,
-            speed_kt: f32_col("speed_kt")?,
-            length_m: f32_col("length_m")?,
-            period: u8_col("period")?,
-            date_id: i16_col("date_id")?,
-            flags: u8_col("flags")?,
-            terrain_start_elev_m: f32_col("terrain_start_elev_m")?,
-            terrain_end_elev_m: f32_col("terrain_end_elev_m")?,
+fn coordinates(values: &StructArray, prefix: &str) -> Result<(Vec<f32>, Vec<f32>), String> {
+    let x_name = format!("{prefix}_gx");
+    let y_name = format!("{prefix}_gy");
+    let xs = required_array::<Int32Array>(values.column_by_name(&x_name), &x_name)?;
+    let ys = required_array::<Int32Array>(values.column_by_name(&y_name), &y_name)?;
+    Ok(xs
+        .values()
+        .iter()
+        .zip(ys.values())
+        .map(|(&gx, &gy)| {
+            let (lon, lat) = square_store::grid_cols::grid_cell_lonlat(gx, gy);
+            (lat as f32, lon as f32)
         })
-    }
+        .unzip())
+}
+
+fn heights(values: &StructArray, name: &str) -> Result<Vec<f32>, String> {
+    let values = required_array::<Int16Array>(values.column_by_name(name), name)?;
+    Ok(values
+        .values()
+        .iter()
+        .map(|&height| f32::from(height))
+        .collect())
 }
 
 impl<'a> AirborneRowAccum<'a> {
-    pub fn new(batches: &'a [arrow::record_batch::RecordBatch]) -> Self {
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-        let mut rows: Vec<AirborneRowView<'a>> = Vec::with_capacity(total_rows);
+    pub fn new(batches: &'a [RecordBatch]) -> Result<Self, String> {
+        let mut decoded = Vec::with_capacity(batches.len());
         for batch in batches {
-            let n = batch.num_rows();
-            if n == 0 {
-                continue;
+            let list =
+                required_array::<ListArray>(batch.column_by_name("sub_segments"), "sub_segments")?;
+            if list
+                .value_offsets()
+                .windows(2)
+                .any(|pair| pair[0] == pair[1])
+            {
+                return Err("airborne event has no sub-segment geometry".into());
             }
-            let Some(flight_id) = col_u64(batch, "flight_id") else {
-                continue;
-            };
-            let Some(callsign) = col_str(batch, "callsign") else {
-                continue;
-            };
-            let Some(aircraft_type) = col_fixed_size_binary(batch, "aircraft_type", 4) else {
-                continue;
-            };
-            let Some(profile_idx) = col_u8(batch, "profile_idx") else {
-                continue;
-            };
-            let Some(source_id) = col_u8(batch, "source_id") else {
-                continue;
-            };
-            let origin = col_u8(batch, "origin");
-            let Some(bb_min_lat) = col_f32(batch, "bbox_min_lat") else {
-                continue;
-            };
-            let Some(bb_max_lat) = col_f32(batch, "bbox_max_lat") else {
-                continue;
-            };
-            let Some(bb_min_lon) = col_f32(batch, "bbox_min_lon") else {
-                continue;
-            };
-            let Some(bb_max_lon) = col_f32(batch, "bbox_max_lon") else {
-                continue;
-            };
-            let Some(sub_list) = col_list(batch, "sub_segments") else {
-                continue;
-            };
-            let Some(sub_struct) = sub_list.values().as_any().downcast_ref::<StructArray>() else {
-                continue;
-            };
-            // Fail-loud on schema mismatch: `assert_schema_version` has
-            // already gated v15, so any missing column here is a
-            // corrupt batch (post-deploy file truncation, dev override,
-            // …). Print the batch's column names + drop the batch
-            // rather than silently zero-out the popup. Mirrors the
-            // heatmap loader's expect-style panic on malformed batches.
-            let Some(s) = SubSegmentColumns::from_struct(sub_struct) else {
-                eprintln!(
-                    "WARN: airborne.arrow sub_segments struct missing v15 \
-                     terrain columns at batch with {} rows; dropping batch. \
-                     Re-run `./scripts/run-aircraft-extract.sh` to refresh.",
-                    n
-                );
-                continue;
-            };
-            let offsets = sub_list.value_offsets();
-            for i in 0..n {
-                let lo = offsets[i] as usize;
-                let hi = offsets[i + 1] as usize;
-                let mut typecode = [0u8; 4];
-                typecode.copy_from_slice(aircraft_type.value(i));
-                rows.push(AirborneRowView {
-                    flight_id: flight_id.value(i),
-                    callsign: callsign.value(i),
-                    aircraft_type: typecode,
-                    profile_idx: profile_idx.value(i),
-                    source_id: source_id.value(i),
-                    origin: origin.map(|a| a.value(i)).unwrap_or(0),
-                    bbox: BBox {
-                        min_lat: bb_min_lat.value(i),
-                        max_lat: bb_max_lat.value(i),
-                        min_lon: bb_min_lon.value(i),
-                        max_lon: bb_max_lon.value(i),
-                    },
-                    sub_segments: SubSegmentSlice {
-                        start_lat: &s.start_lat[lo..hi],
-                        start_lon: &s.start_lon[lo..hi],
-                        start_alt_m: &s.start_alt_m[lo..hi],
-                        end_lat: &s.end_lat[lo..hi],
-                        end_lon: &s.end_lon[lo..hi],
-                        end_alt_m: &s.end_alt_m[lo..hi],
-                        speed_kt: &s.speed_kt[lo..hi],
-                        length_m: &s.length_m[lo..hi],
-                        period: &s.period[lo..hi],
-                        date_id: &s.date_id[lo..hi],
-                        flags: &s.flags[lo..hi],
-                        terrain_start_elev_m: &s.terrain_start_elev_m[lo..hi],
-                        terrain_end_elev_m: &s.terrain_end_elev_m[lo..hi],
-                    },
-                });
+            let values = required_array::<StructArray>(Some(list.values()), "sub_segments.item")?;
+            let flight_id =
+                required_array::<UInt64Array>(batch.column_by_name("flight_id"), "flight_id")?;
+            let callsign =
+                required_array::<StringArray>(batch.column_by_name("callsign"), "callsign")?;
+            let aircraft_type = required_array::<FixedSizeBinaryArray>(
+                batch.column_by_name("aircraft_type"),
+                "aircraft_type",
+            )?;
+            if aircraft_type.value_length() != 4 {
+                return Err("airborne aircraft_type must be FixedSizeBinary(4)".into());
             }
+            let profile =
+                required_array::<UInt8Array>(batch.column_by_name("profile_idx"), "profile_idx")?;
+            let source =
+                required_array::<UInt8Array>(batch.column_by_name("source_id"), "source_id")?;
+            let origin = required_array::<UInt8Array>(batch.column_by_name("origin"), "origin")?;
+            let (start_lat, start_lon) = coordinates(values, "start")?;
+            let (end_lat, end_lon) = coordinates(values, "end")?;
+            decoded.push(DecodedBatch {
+                flight_id,
+                callsign,
+                aircraft_type,
+                profile,
+                source,
+                origin,
+                offsets: list.value_offsets(),
+                start_lat,
+                start_lon,
+                end_lat,
+                end_lon,
+                start_alt: heights(values, "start_alt_m")?,
+                end_alt: heights(values, "end_alt_m")?,
+                start_terrain: heights(values, "terrain_start_elev_m")?,
+                end_terrain: heights(values, "terrain_end_elev_m")?,
+                speed: required_array::<Float32Array>(
+                    values.column_by_name("speed_kt"),
+                    "speed_kt",
+                )?
+                .values(),
+                length: required_array::<Float32Array>(
+                    values.column_by_name("length_m"),
+                    "length_m",
+                )?
+                .values(),
+                period: required_array::<UInt8Array>(values.column_by_name("period"), "period")?
+                    .values(),
+                date: required_array::<Int16Array>(values.column_by_name("date_id"), "date_id")?
+                    .values(),
+                flags: required_array::<UInt8Array>(values.column_by_name("flags"), "flags")?
+                    .values(),
+            });
         }
-        Self { rows }
+        Ok(Self { batches: decoded })
     }
 
-    pub fn views(&self) -> &[AirborneRowView<'a>] {
-        &self.rows
+    pub fn views(&self) -> Vec<AirborneRowView<'_>> {
+        self.batches
+            .iter()
+            .flat_map(|batch| (0..batch.flight_id.len()).map(|row| batch.view(row)))
+            .collect()
+    }
+}
+
+impl DecodedBatch<'_> {
+    fn view(&self, row: usize) -> AirborneRowView<'_> {
+        let range = self.offsets[row] as usize..self.offsets[row + 1] as usize;
+        let mut bbox = BBox {
+            min_lat: f32::INFINITY,
+            max_lat: f32::NEG_INFINITY,
+            min_lon: f32::INFINITY,
+            max_lon: f32::NEG_INFINITY,
+        };
+        for index in range.clone() {
+            bbox.min_lat = bbox
+                .min_lat
+                .min(self.start_lat[index])
+                .min(self.end_lat[index]);
+            bbox.max_lat = bbox
+                .max_lat
+                .max(self.start_lat[index])
+                .max(self.end_lat[index]);
+            bbox.min_lon = bbox
+                .min_lon
+                .min(self.start_lon[index])
+                .min(self.end_lon[index]);
+            bbox.max_lon = bbox
+                .max_lon
+                .max(self.start_lon[index])
+                .max(self.end_lon[index]);
+        }
+        AirborneRowView {
+            flight_id: self.flight_id.value(row),
+            callsign: self.callsign.value(row),
+            aircraft_type: self
+                .aircraft_type
+                .value(row)
+                .try_into()
+                .expect("checked width"),
+            profile_idx: self.profile.value(row),
+            source_id: self.source.value(row),
+            origin: self.origin.value(row),
+            bbox,
+            sub_segments: SubSegmentSlice {
+                start_lat: &self.start_lat[range.clone()],
+                start_lon: &self.start_lon[range.clone()],
+                end_lat: &self.end_lat[range.clone()],
+                end_lon: &self.end_lon[range.clone()],
+                start_alt_m: &self.start_alt[range.clone()],
+                end_alt_m: &self.end_alt[range.clone()],
+                terrain_start_elev_m: &self.start_terrain[range.clone()],
+                terrain_end_elev_m: &self.end_terrain[range.clone()],
+                speed_kt: &self.speed[range.clone()],
+                length_m: &self.length[range.clone()],
+                period: &self.period[range.clone()],
+                date_id: &self.date[range.clone()],
+                flags: &self.flags[range],
+            },
+        }
     }
 }

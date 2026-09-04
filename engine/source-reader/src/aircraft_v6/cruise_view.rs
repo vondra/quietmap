@@ -6,7 +6,7 @@
 //! `cruise_aircraft_types` / `cruise_callsigns`) and stores the bounded
 //! top-K `top_candidates` struct list + scalar `unique_count` instead.
 //!
-//! Grid transfer: the old `r7_hex` bucket id is gone — the row carries its
+//! The row carries its
 //! explicit `lon`/`lat` centroid (Float64 degrees), which is what
 //! noise-compute's `CruiseRowView` consumes.
 
@@ -18,18 +18,8 @@ fn required_column<'a, T: Array + 'static>(
     batch_index: usize,
     name: &str,
 ) -> Result<&'a T, String> {
-    column
-        .and_then(|array| array.as_any().downcast_ref::<T>())
-        .ok_or_else(|| {
-            let expected = std::any::type_name::<T>()
-                .rsplit("::")
-                .next()
-                .unwrap_or("expected Arrow array");
-            format!(
-                "cruise.arrow[batch {batch_index}] `{name}` is missing or has the wrong \
-                 Arrow type (expected {expected}) — rebuild the cruise z9 data"
-            )
-        })
+    super::columns::required_array::<T>(column, name)
+        .map_err(|error| format!("cruise.arrow[batch {batch_index}] {error}"))
 }
 
 pub struct CruiseRowAccum {
@@ -276,15 +266,12 @@ mod tests {
 
     use arrow::{datatypes::Schema, record_batch::RecordBatch};
 
-    use super::super::{assert_cruise_contract, EXPECTED_CRUISE_CONTRACT, EXPECTED_SCHEMA_VERSION};
+    use super::super::{assert_cruise_contract, CRUISE_CONTRACT, SCHEMA_VERSION};
     use super::*;
 
     fn empty_batch(cruise_contract: &str) -> RecordBatch {
         let metadata = HashMap::from([
-            (
-                "schema_version".to_string(),
-                EXPECTED_SCHEMA_VERSION.to_string(),
-            ),
+            ("schema_version".to_string(), SCHEMA_VERSION.to_string()),
             ("cruise_contract".to_string(), cruise_contract.to_string()),
         ]);
         RecordBatch::new_empty(Arc::new(Schema::new_with_metadata(
@@ -297,12 +284,12 @@ mod tests {
     fn dev1_cruise_contract_is_not_accepted_as_z9() {
         let error = assert_cruise_contract("cruise.arrow", &[empty_batch("cruise_v17")])
             .expect_err("dev1 legacy schema must not pass the z9 contract gate");
-        assert!(error.contains(EXPECTED_CRUISE_CONTRACT));
+        assert!(error.contains(CRUISE_CONTRACT));
     }
 
     #[test]
     fn current_contract_with_missing_columns_fails_loudly() {
-        let batch = empty_batch(EXPECTED_CRUISE_CONTRACT);
+        let batch = empty_batch(CRUISE_CONTRACT);
         assert_cruise_contract("cruise.arrow", std::slice::from_ref(&batch)).unwrap();
         let error = CruiseRowAccum::new(&[batch])
             .err()

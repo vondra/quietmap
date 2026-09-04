@@ -1,0 +1,34 @@
+[package]
+name = "aircraft-extract"
+version = "0.1.0"
+edition = "2021"
+description = "Observed aircraft flights to z9 popup data"
+
+[lib]
+name = "aircraft_extract"
+path = "src/lib.rs"
+
+[[bin]]
+name = "aircraft-extract"
+path = "src/bin/aircraft_extract.rs"
+
+[dependencies]
+noise-compute = { path = "../noise-compute" }
+arrow-batching = { path = "../arrow-batching" }
+raster-reader = { path = "../raster-reader" }
+grid = { path = "../grid" }
+square-store = { path = "../square-store" }
+arrow = { version = "54", features = ["ipc"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+flate2 = "1"
+tar = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+chrono-tz = { version = "0.10", default-features = false }
+tzf-rs = { version = "=1.2.0", default-features = false }
+rayon = "1"
+
+[dev-dependencies]
+tempfile = "3"
+approx = "0.5"
