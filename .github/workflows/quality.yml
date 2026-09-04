@@ -55,15 +55,13 @@ jobs:
       - name: Install pipeline system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install --yes --no-install-recommends gdal-bin
+          sudo apt-get install --yes --no-install-recommends gdal-bin python3-gdal
           ogr2ogr --version
-          # The worker-agent committer (scripts/world/agent.py region_tiles)
-          # imports Python h3 v4; without it the committer swallows a
-          # ModuleNotFoundError and silently drops every commit, so the
-          # enospc regression's /tiles-push check can never pass (main red
-          # 2026-07-16→17 until this landed). Same major as the fleet boxes.
-          python3 -m pip install --quiet 'h3>=4,<5'
-          python3 -c 'import h3; print("h3", h3.__version__)'
+          # The obstacle/structure builders and their tests (scripts/obstacles,
+          # scripts/structures) read Arrow, Overture parquet, GHSL rasters and
+          # polygons; h3 stays on the same major as the fleet boxes.
+          python3 -m pip install --quiet 'h3>=4,<5' numpy pyarrow shapely pyproj
+          python3 -c 'import h3, numpy, pyarrow, shapely, pyproj; from osgeo import gdal; print("h3", h3.__version__, "pyarrow", pyarrow.__version__)'
       - run: npm ci
         working-directory: server
       - run: npm ci
