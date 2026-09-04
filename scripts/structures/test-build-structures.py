@@ -6,19 +6,22 @@ the match (centroid-in / IoU>=0.5, one-to-one over the complete qualifying pair
 set), the ladder provenance per row kind (Overture side wins on matched rows,
 OSM tags ladder OSM-only rows), the sparse emission-polygon rule (area >
 2000 m2), the emission view's equality with buildings.arrow, the wall row shape
-(LineString WKB, midpoint centroid), the idempotent skip, and the empty-cell
-table.
+(LineString WKB, midpoint centroid), the idempotent skip, the empty-cell table,
+and antimeridian tile discovery and centroid ownership.
 """
 
 import importlib.util
+import math
 import os
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
+import h3
 import pyarrow as pa
 import pyarrow.ipc as ipc
+import pyarrow.parquet as pq
 import shapely
 from shapely import wkb as shapely_wkb
 
@@ -105,6 +108,11 @@ OSM_WAREHOUSE = shapely.box(14.17100, 49.78100, 14.17200, 49.78180)
 OSM_ANNEX = shapely.box(14.17130, 49.78120, 14.17150, 49.78140)
 OVT_ANNEX_TWIN = shapely.box(14.171302, 49.781202, 14.171502, 49.781402)  # IoU 0.961
 OVT_ANNEX_LOOSE = shapely.box(14.171260, 49.781160, 14.171460, 49.781360)  # IoU 0.471
+
+# The prepared R4 cell whose boundary crosses the antimeridian by the widest
+# margin (measured 2026-09-04 over the 121,790 prepared cells: 65 straddle it).
+DATELINE_CELL = "84045bbffffffff"
+
 
 def osm_row(i, poly, area, height=None, floors=0, use=0, btype=11):
     centroid = poly.centroid if poly is not None else shapely.Point(14.174, 49.784)
@@ -303,6 +311,74 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertFalse((self.h3r4 / CELL / "buildings.arrow").exists())
         self.assertFalse((self.h3r4 / CELL / "barriers.arrow").exists())
         self.assertTrue((self.h3r4 / CELL / "structures.arrow").exists())
+
+
+def overture_parquet(path, geoms):
+    """One 1-degree tile of the download cache: the columns the builder reads."""
+    n = len(geoms)
+    table = pa.table({
+        "geometry": pa.array([wkb_of(g) for g in geoms], pa.binary()),
+        "height": pa.array([None] * n, pa.float64()),
+        "num_floors": pa.array([None] * n, pa.int32()),
+        "class": pa.array(["house"] * n, pa.string()),
+        "subtype": pa.array(["residential"] * n, pa.string()),
+        "is_underground": pa.array([False] * n, pa.bool_()),
+    })
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, str(path))
+
+
+class AntimeridianTests(unittest.TestCase):
+    """Tile discovery and centroid ownership across the dateline. Plain min/max
+    longitudes turn one R4 cell into a scan of the whole planet, and a planar
+    centroid puts a footprint stored across +/-180 deg near 0 deg — the cell
+    that owns it never sees it, and a cell 100 deg away is asked for it."""
+
+    def test_tile_columns_unwrap_around_the_cell_centre(self):
+        boundary_lons = [p[1] for p in h3.cell_to_boundary(DATELINE_CELL)]
+        # What the plain box says: nearly every longitude on Earth.
+        self.assertGreater(max(boundary_lons) - min(boundary_lons), 180.0)
+        self.assertEqual(
+            list(BUILDER.cell_tile_columns(DATELINE_CELL, boundary_lons)), [179, 180]
+        )
+        # An ordinary cell keeps the plain range.
+        lons = [p[1] for p in h3.cell_to_boundary(CELL)]
+        self.assertEqual(
+            list(BUILDER.cell_tile_columns(CELL, lons)),
+            list(range(math.floor(min(lons)), math.floor(max(lons)) + 1)),
+        )
+
+    def test_footprint_centroid_crosses_the_dateline(self):
+        crossing = shapely.Polygon([
+            (179.99, 49.7800), (-179.996, 49.7800),
+            (-179.996, 49.7802), (179.99, 49.7802),
+        ])
+        lat, lon = BUILDER.footprint_centroid(crossing)
+        self.assertAlmostEqual(lon, 179.997, places=9)
+        self.assertAlmostEqual(lat, 49.7801, places=9)
+        # The planar centroid it replaces sits a third of the way round the world.
+        self.assertAlmostEqual(crossing.centroid.x, -0.003, places=9)
+        # An ordinary footprint takes the untouched centroid, value for value.
+        lat, lon = BUILDER.footprint_centroid(OSM_POLY)
+        self.assertEqual((lat, lon), (OSM_POLY.centroid.y, OSM_POLY.centroid.x))
+
+    def test_parquet_mode_reads_a_dateline_cell_once(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        centre_lat = h3.cell_to_latlng(DATELINE_CELL)[0]
+        crossing = shapely.Polygon([
+            (179.99, centre_lat), (-179.996, centre_lat),
+            (-179.996, centre_lat + 0.0002), (179.99, centre_lat + 0.0002),
+        ])
+        # The row's bbox spans the planet, so the downloader stored it in BOTH
+        # tiles the cell touches; the half-open rule must keep it exactly once.
+        overture_parquet(root / "N71E179.parquet", [crossing])
+        overture_parquet(root / "N71W180.parquet", [crossing])
+        rows = BUILDER.read_overture_parquet(str(root), DATELINE_CELL)
+        self.assertEqual(len(rows), 1)
+        self.assertAlmostEqual(rows[0]["clon"], 179.997, places=9)
+        self.assertEqual(h3.latlng_to_cell(rows[0]["clat"], rows[0]["clon"], 4),
+                         DATELINE_CELL)
 
 
 if __name__ == "__main__":

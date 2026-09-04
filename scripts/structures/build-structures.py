@@ -377,6 +377,49 @@ def envelope_class(building_class, subtype, underground):
     return ENVELOPE_DEFAULT
 
 
+def normalize_lon(lon):
+    """Fold a longitude into [-180, 180) — the range tile names, stored
+    coordinates and H3 lookups all speak."""
+    return ((lon + 180.0) % 360.0) - 180.0
+
+
+def cell_tile_columns(cell, boundary_lons):
+    """The 1-degree tile columns a cell covers, as integer longitudes unwrapped
+    around the cell centre. Plain min/max longitudes make an antimeridian cell
+    span nearly the whole planet: measured 2026-09-04 over the 121,790 prepared
+    R4 cells, 65 straddle it and the widest then enumerates 720 tiles instead of
+    2 — every one of them a missing-parquet hard fail. Unwrapping fixes 64; the
+    remaining one is the South Pole pentagon, which genuinely covers every
+    longitude and gets the whole range."""
+    centre_lon = h3.cell_to_latlng(cell)[1]
+    unwrapped = [lon - 360.0 * round((lon - centre_lon) / 360.0) for lon in boundary_lons]
+    if max(unwrapped) - min(unwrapped) > 180.0:
+        return range(-180, 180)
+    return range(math.floor(min(unwrapped)), math.floor(max(unwrapped)) + 1)
+
+
+def footprint_centroid(geom):
+    """The footprint's centroid as (lat, lon in [-180, 180)). Shapely's centroid
+    is planar, so a footprint stored across the antimeridian (+179.99 ..
+    -179.99) would centre near 0 deg and be assigned to the wrong tile and cell;
+    unwrapping its coordinates around the first one fixes that. A footprint
+    narrower than 180 deg — every real one — takes the untouched centroid, so
+    the world's rows keep their exact bytes."""
+    minimum_lon, _, maximum_lon, _ = geom.bounds
+    if maximum_lon - minimum_lon <= 180.0:
+        centroid = geom.centroid
+        return centroid.y, centroid.x
+    reference = float(shapely.get_coordinates(geom)[0][0])
+    unwrapped = shapely.transform(
+        geom,
+        lambda xy: np.column_stack(
+            (xy[:, 0] - 360.0 * np.round((xy[:, 0] - reference) / 360.0), xy[:, 1])
+        ),
+    )
+    centroid = unwrapped.centroid
+    return centroid.y, normalize_lon(centroid.x)
+
+
 def read_overture_parquet(parquet_dir, cell):
     """The cell's Overture rows from the one-degree parquets: every 1-degree
     tile the cell's boundary bbox touches, rows kept by the ingest's half-open
@@ -385,12 +428,12 @@ def read_overture_parquet(parquet_dir, cell):
     by GEOS centroid — the ingest's ownership rule evaluated per cell."""
     boundary = h3.cell_to_boundary(cell)
     lats = [p[0] for p in boundary]
-    lons = [p[1] for p in boundary]
     lat0, lat1 = math.floor(min(lats)), math.floor(max(lats))
-    lon0, lon1 = math.floor(min(lons)), math.floor(max(lons))
+    columns = cell_tile_columns(cell, [p[1] for p in boundary])
     rows = []
     for lat in range(lat0, lat1 + 1):
-        for lon in range(lon0, lon1 + 1):
+        for tile_column in columns:
+            lon = int(normalize_lon(tile_column))
             name = f"{'N' if lat >= 0 else 'S'}{abs(lat):02d}{'E' if lon >= 0 else 'W'}{abs(lon):03d}"
             src = os.path.join(parquet_dir, f"{name}.parquet")
             if not os.path.exists(src):
@@ -417,8 +460,7 @@ def read_overture_parquet(parquet_dir, cell):
                     geom = shapely_wkb.loads(bytes(g))
                     if geom.is_empty or geom.geom_type not in ("Polygon", "MultiPolygon"):
                         continue
-                    centroid = geom.centroid
-                    clat, clon = centroid.y, centroid.x
+                    clat, clon = footprint_centroid(geom)
                     if not (math.isfinite(clat) and math.isfinite(clon)):
                         continue
                     # Half-open tile ownership: border footprints appear in both
