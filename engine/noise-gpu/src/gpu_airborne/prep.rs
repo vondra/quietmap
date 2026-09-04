@@ -1,6 +1,5 @@
 //! CPU prep for gpu-airborne: pack candidates and build receiver/terrain inputs.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,7 +16,7 @@ use raster_reader::RealRasters;
 use rayon::prelude::*;
 use tile_painter::grid::tile_bbox;
 use tile_painter::r4_source_cache::R4SourceCache;
-use tile_painter::region_runner::region_tiles;
+use tile_painter::region_runner::{group_tiles_into_batches, region_tiles};
 use tile_painter::source_loader_structure::{InteriorEstimate, StructureData};
 
 /// One grid-aligned tile-block, CPU-prepped: its NW corner `(bx,by)`, the owned tiles in it,
@@ -149,13 +148,7 @@ pub(crate) fn build_dem_blocks(
 ) -> Result<(Vec<PrepBlock>, Arc<ObstacleSet>)> {
     let obstacles = load_region_structures(h3r4_dir, r4)?;
     let region_halo = cell_horizon_halo(rasters, z, r4);
-    let mut batches: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
-    for &(tx, ty) in tiles {
-        batches
-            .entry(((tx / bn) * bn, (ty / bn) * bn))
-            .or_default()
-            .push((tx, ty));
-    }
+    let batches = group_tiles_into_batches(tiles, bn);
     // Parallel across blocks: receiver-altitude construction is sequential by design ("the caller
     // usually parallelises across batches, not within them") and the interior bake adds a
     // point-in-footprint classify + an exact distance transform over all 512² receivers per tile.

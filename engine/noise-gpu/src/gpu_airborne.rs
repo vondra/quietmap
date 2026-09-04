@@ -9,6 +9,7 @@
 //!
 //!   NOISE_GPU_PREPARED=… DATA_YEAR=… gpu-airborne --regions-file <r4-list> --n-days N \
 //!       --h3r4-dir <h3r4> --prepared-dir <prep> --zoom <z> --output <dir>
+//!   printf '841e309ffffffff tiles=4414,2786,4\n' | gpu-airborne --stream …   (bounded window)
 //!   gpu-airborne --bbox S,W,N,E …      gpu-airborne --tile-x X --tile-y Y …   (dev modes)
 //!
 //! Submodules: `prep` (CPU prep stage — pack candidates, receiver lattices, and obstacle data),
@@ -92,11 +93,11 @@ pub(crate) struct Args {
     pub(crate) r4_cache: usize,
     #[arg(long, default_value_t = false)]
     pub(crate) write_empty: bool,
-    /// STREAM mode: read output R4 cell IDs (one hex/line) from stdin and build each in a warm
-    /// pipeline: parallel CPU candidate prep ahead of two VRAM-gated CUDA streams (large cells
-    /// automatically run alone). Prints `done <r4hex> <written> <skipped> <ms> ...` (or
-    /// `fail <r4hex> <err>`) per cell as it finishes. The persistent worker the cluster
-    /// orchestrator feeds. Requires --seed-regions (resolves n_days + class_weights once).
+    /// STREAM mode: read output R4 cells (one `<r4hex> [tiles=x,y,side]` per line) from stdin and
+    /// build each in a warm pipeline: parallel CPU candidate prep ahead of two VRAM-gated CUDA
+    /// streams (large cells automatically run alone). Prints `done <r4hex> <written> <skipped>
+    /// <ms> ...` (or `fail <r4hex> <err>`) per cell as it finishes. The persistent worker the
+    /// cluster orchestrator feeds. Requires --seed-regions (resolves n_days + class_weights once).
     #[arg(long, default_value_t = false)]
     stream: bool,
     /// STREAM mode: resolve the build-wide n_days + class_weights ONCE at startup from this seed

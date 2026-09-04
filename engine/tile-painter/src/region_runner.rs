@@ -84,6 +84,26 @@ pub fn block_batch_origin(block_x: u32, block_y: u32, batch_n: u32, zoom: u8) ->
     (block_x.min(limit - batch_n), block_y.min(limit - batch_n))
 }
 
+/// Group tiles into the grid-aligned `batch_n x batch_n` blocks that share one halo, keyed
+/// by the block's north-west corner. A tile's block is a function of the TILE alone, so a
+/// request narrowed by a `tiles=` window puts every tile it kept in the same block — with
+/// the same [`block_batch_origin`] and therefore the same shared halo and rasters — as the
+/// whole-cell request it was carved out of. Both aircraft painters group here, so neither
+/// can drift into a batching of its own.
+pub fn group_tiles_into_batches(
+    tiles: &[(u32, u32)],
+    batch_n: u32,
+) -> BTreeMap<(u32, u32), Vec<(u32, u32)>> {
+    let mut batches: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
+    for &(x, y) in tiles {
+        batches
+            .entry(((x / batch_n) * batch_n, (y / batch_n) * batch_n))
+            .or_default()
+            .push((x, y));
+    }
+    batches
+}
+
 /// Locate a tile in a contiguous [`TileBatch`] without duplicating its
 /// row-major indexing arithmetic in the CPU, GPU, and aircraft writers.
 pub fn batch_slot(batch: &TileBatch, x: u32, y: u32) -> usize {
@@ -361,13 +381,7 @@ pub fn process_region(
     preload_region(ctx, tiles);
     stats.t_raster += t_pre.elapsed();
 
-    let mut batches: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
-    for &(x, y) in tiles {
-        let bx = (x / ctx.batch_n) * ctx.batch_n;
-        let by = (y / ctx.batch_n) * ctx.batch_n;
-        batches.entry((bx, by)).or_default().push((x, y));
-    }
-
+    let batches = group_tiles_into_batches(tiles, ctx.batch_n);
     for ((bx, by), batch_tiles) in &batches {
         // Cruise needs only receiver altitude. Airborne additionally samples a
         // shared DEM halo for receiver horizons and building-edge elevations.
@@ -536,6 +550,51 @@ mod tests {
         assert!(tile_centre_r4(3, 7, 7).is_some());
         assert!(tile_centre_r4(3, 8, 0).is_none());
         assert!(tile_centre_r4(3, 0, 8).is_none());
+    }
+
+    /// One bug class: a paint narrowed by a `tiles=` window differs from the whole-cell paint.
+    /// Both aircraft painters read one shared terrain halo per batch, so a window that moved a
+    /// tile into a different batch would hand it a different halo and different bytes. Pin that
+    /// every tile a window keeps stays in the batch — and at the batch origin — it has when the
+    /// whole cell paints.
+    #[test]
+    fn a_windowed_request_keeps_every_tile_in_its_whole_cell_batch() {
+        use crate::stream_tile_window::TileWindow;
+
+        const DOBRIS: u64 = 0x841e309ffffffff;
+        const ZOOM: u8 = 13;
+        const BATCH_N: u32 = 3;
+        let owned = region_tiles(DOBRIS, ZOOM);
+        let window = TileWindow {
+            x: 4414,
+            y: 2786,
+            side: 4,
+        };
+        let windowed = window.select(owned.clone()).unwrap();
+        assert!(windowed.len() < owned.len() && !windowed.is_empty());
+
+        let whole_batches = group_tiles_into_batches(&owned, BATCH_N);
+        let windowed_batches = group_tiles_into_batches(&windowed, BATCH_N);
+        assert!(windowed_batches.len() < whole_batches.len());
+        for (&origin, tiles) in &windowed_batches {
+            let whole = whole_batches
+                .get(&origin)
+                .expect("a windowed batch is one of the whole cell's batches");
+            let kept: Vec<_> = whole
+                .iter()
+                .copied()
+                .filter(|tile| windowed.contains(tile))
+                .collect();
+            assert_eq!(
+                *tiles, kept,
+                "batch {origin:?} does not hold exactly the whole cell's tiles the window kept"
+            );
+            assert_eq!(
+                block_batch_origin(origin.0, origin.1, BATCH_N, ZOOM),
+                origin,
+                "an interior batch paints from its own grid origin, windowed or not"
+            );
+        }
     }
 
     #[test]

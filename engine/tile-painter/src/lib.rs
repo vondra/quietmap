@@ -51,6 +51,7 @@ pub mod source_loader_road;
 pub mod source_loader_structure;
 pub mod source_loader_traffic;
 pub mod source_point;
+pub mod stream_tile_window;
 pub mod surface_region;
 pub mod surface_stream_scheduler;
 pub mod tile_store;

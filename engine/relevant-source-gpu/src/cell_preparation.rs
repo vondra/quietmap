@@ -12,13 +12,13 @@ use noise_compute::admin;
 use noise_compute::constants::ground_ops_max_radius;
 use noise_compute::emission::aircraft::{ClassWeights, GROUND_OPS_SOURCE_HEIGHT_M};
 use tile_painter::r4_source_cache::SourceSel;
-use tile_painter::region_runner::region_tiles;
 use tile_painter::source_loader_industrial::IndustrialData;
 use tile_painter::source_loader_leisure::LeisureData;
 use tile_painter::source_loader_rail::RailData;
 use tile_painter::source_loader_road::RoadData;
 use tile_painter::source_loader_structure::StructureData;
 use tile_painter::source_loader_traffic::AirportTrafficData;
+use tile_painter::stream_tile_window::streamed_cell_tiles;
 use tile_painter::worklist::{resolve_class_weights, resolve_n_days};
 
 use crate::cell_stream::StreamedCell;
@@ -105,12 +105,7 @@ pub fn prepare_region(
     let started = Instant::now();
     let region_r4 = cell.region_r4;
     let index = CellIndex::try_from(region_r4).context("invalid R4 region")?;
-    let tiles = match cell.tile_window {
-        Some(window) => window
-            .select(region_tiles(region_r4, configuration.zoom))
-            .context("select the requested tile window")?,
-        None => region_tiles(region_r4, configuration.zoom),
-    };
+    let tiles = streamed_cell_tiles(region_r4, configuration.zoom, cell.tile_window)?;
     let ring: Vec<u64> = index
         .grid_disk::<Vec<_>>(1)
         .into_iter()

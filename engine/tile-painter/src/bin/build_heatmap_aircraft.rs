@@ -33,6 +33,9 @@ use tile_painter::renderer_evidence::{
     maybe_run_static_attestation, DependencyProfile, RegionTerminalStatus, RendererEvidence,
     RuntimeParameters, StaticAttestationParameters,
 };
+use tile_painter::stream_tile_window::{
+    parse_aircraft_stream_line, streamed_cell_tiles, StreamedAircraftCell,
+};
 use tile_painter::tile_store::PUBLISHED_BASE_ZOOM;
 use tile_painter::worklist::{any_source_arrow, resolve_n_days, WorkList};
 
@@ -133,12 +136,12 @@ struct Args {
     /// area, then passes `--n-days` to every chunk so they can't diverge.
     #[arg(long, default_value_t = false)]
     print_n_days: bool,
-    /// STREAM mode: read output R4 cell IDs (one hex/line) from stdin and build each on a warm
-    /// OS-thread pool — n_days + class_weights + RealRasters resident, each worker its own R4
-    /// source LRU reused across cells (no per-chunk process spawn). Prints `start <r4hex>
-    /// <unix_ms>` before work, one `engine-spans-v1 {json}` evidence line, and `done <r4hex>
-    /// <written> <skipped> <ms>` (or `fail <r4hex> <err>`) as it finishes. The persistent CPU
-    /// worker the cell-stream orchestrator feeds.
+    /// STREAM mode: read output R4 cells (one `<r4hex> [tiles=x,y,side]` per line) from stdin and
+    /// build each on a warm OS-thread pool — n_days + class_weights + RealRasters resident, each
+    /// worker its own R4 source LRU reused across cells (no per-chunk process spawn). Prints
+    /// `start <r4hex> <unix_ms>` before work, one `engine-spans-v1 {json}` evidence line, and
+    /// `done <r4hex> <written> <skipped> <ms>` (or `fail <r4hex> <err>`) as it finishes. The
+    /// persistent CPU worker the cell-stream orchestrator feeds.
     #[arg(long, default_value_t = false)]
     stream: bool,
     /// STREAM mode: resolve the build-wide n_days + class_weights ONCE from this seed regions-file
@@ -150,7 +153,7 @@ struct Args {
 /// Shared streaming work queue: (pending Morton-ordered cells, stream-closed flag) under a mutex +
 /// a condvar to park idle workers — identical to gpu-airborne's, so the box agent feeds either.
 type StreamQueue = std::sync::Arc<(
-    std::sync::Mutex<(std::collections::VecDeque<u64>, bool)>,
+    std::sync::Mutex<(std::collections::VecDeque<StreamedAircraftCell>, bool)>,
     std::sync::Condvar,
 )>;
 
@@ -201,8 +204,11 @@ fn ring_union(regions: impl Iterator<Item = u64>) -> Vec<u64> {
 
 /// STREAM mode (`--stream`): the warm CPU aircraft worker the cell-stream orchestrator feeds — one
 /// process with n_days + class_weights + RealRasters resident, R4 cell IDs read from stdin and each
-/// built on a warm OS-thread pool (each worker its own R4SourceCache, reused across cells). Per-cell
-/// output is IDENTICAL to the batch path (same region_tiles + process_region); only the scheduling
+/// built on a warm OS-thread pool (each worker its own R4SourceCache, reused across cells). An
+/// optional `tiles=x,y,side` window narrows what a cell WRITES while it still loads and screens
+/// against its whole source ring; each tile keeps the batch (and therefore the shared terrain halo)
+/// it has in a whole-cell paint, so a windowed tile carries the whole-cell bytes. Per-cell output is
+/// IDENTICAL to the batch path (same region_tiles + process_region); only the scheduling
 /// differs — the pool is OS threads while the per-tile kernels use the global rayon pool, so on a
 /// big box this oversubscribes differently than batch's outer-rayon par_chunks (throughput, not
 /// bytes). n_days + class_weights resolve ONCE from --seed-regions, as every chunk did in the batch.
@@ -283,7 +289,7 @@ fn run_stream(args: &Args, sel: SourceSel) -> Result<()> {
             scope.spawn(move || {
                 let mut cache = R4SourceCache::new(&args.h3r4_dir, args.r4_cache, ctx.sel);
                 loop {
-                    let batch: Vec<u64> = {
+                    let batch: Vec<StreamedAircraftCell> = {
                         let (lock, cv) = &*work;
                         let mut g = lock.lock().unwrap();
                         loop {
@@ -300,7 +306,8 @@ fn run_stream(args: &Args, sel: SourceSel) -> Result<()> {
                     if batch.is_empty() {
                         break;
                     }
-                    for r4 in batch {
+                    for cell in batch {
+                        let r4 = cell.region_r4;
                         let interval_id = evidence
                             .region_claim(r4, worker_slot)
                             .expect("emit aircraft region claim");
@@ -309,20 +316,6 @@ fn run_stream(args: &Args, sel: SourceSel) -> Result<()> {
                         let mut spans =
                             EngineCellSpans::new(r4, "build-heatmap-aircraft", worker_slot, t);
                         spans.metric_bool("cuda_event_timing_enabled", false);
-                        let tiles = region_tiles(r4, ctx.zoom);
-                        let evidence_layer_refs: Vec<&str> =
-                            evidence_layers.iter().map(String::as_str).collect();
-                        let dependencies = evidence.region_dependencies(
-                            r4,
-                            &args.prepared_dir,
-                            &args.h3r4_dir,
-                            &tiles,
-                            ctx.zoom,
-                            0.0,
-                            &evidence_layer_refs,
-                            DependencyProfile::Aircraft,
-                        );
-                        spans.metric("owned_tiles", serde_json::json!(tiles.len()));
                         spans.metric(
                             "sources",
                             serde_json::json!({
@@ -330,10 +323,28 @@ fn run_stream(args: &Args, sel: SourceSel) -> Result<()> {
                                 "airborne": ctx.sel.airborne,
                             }),
                         );
-                        let line = match dependencies
-                            .and_then(|()| process_region(ctx, &mut cache, r4, &tiles))
-                        {
-                            Ok(st) => {
+                        let evidence_layer_refs: Vec<&str> =
+                            evidence_layers.iter().map(String::as_str).collect();
+                        // A `tiles=` window that names no tile of this cell is a deterministic
+                        // input error and takes the same `fail` route as an absent dependency.
+                        let painted =
+                            streamed_cell_tiles(r4, ctx.zoom, cell.tile_window).and_then(|tiles| {
+                                evidence.region_dependencies(
+                                    r4,
+                                    &args.prepared_dir,
+                                    &args.h3r4_dir,
+                                    &tiles,
+                                    ctx.zoom,
+                                    0.0,
+                                    &evidence_layer_refs,
+                                    DependencyProfile::Aircraft,
+                                )?;
+                                let stats = process_region(ctx, &mut cache, r4, &tiles)?;
+                                Ok((tiles, stats))
+                            });
+                        let line = match painted {
+                            Ok((tiles, st)) => {
+                                spans.metric("painted_tiles", serde_json::json!(tiles.len()));
                                 spans.push_aggregate_span(
                                     "source_load",
                                     st.t_load,
@@ -441,22 +452,20 @@ fn run_stream(args: &Args, sel: SourceSel) -> Result<()> {
                 }
             });
         }
-        // Reader on the main scope thread (StdinLock is !Send): hex R4s onto the queue tail in
-        // arrival order, waking one worker each; on EOF flag done + wake all so they drain + exit.
+        // Reader on the main scope thread (StdinLock is !Send): `<r4hex> [tiles=x,y,side]` onto
+        // the queue tail in arrival order, waking one worker each; on EOF flag done + wake all so
+        // they drain + exit.
         let stdin = std::io::stdin();
         for line in stdin.lock().lines() {
             let Ok(line) = line else { break };
-            let s = line.trim();
-            if s.is_empty() {
-                continue;
-            }
-            match u64::from_str_radix(s, 16) {
-                Ok(r4) => {
+            match parse_aircraft_stream_line(&line) {
+                Ok(None) => {}
+                Ok(Some(cell)) => {
                     let (lock, cv) = &*work;
-                    lock.lock().unwrap().0.push_back(r4);
+                    lock.lock().unwrap().0.push_back(cell);
                     cv.notify_one();
                 }
-                Err(_) => eprintln!("stream: skip non-hex line: {s}"),
+                Err(error) => eprintln!("stream: skip unusable line {line:?}: {error:#}"),
             }
         }
         let (lock, cv) = &*work;

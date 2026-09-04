@@ -1,6 +1,11 @@
 //! STREAM mode (`--stream`) for the gpu-airborne bin: the persistent warm worker the cluster
 //! orchestrator feeds — parallel CPU prep ahead of a VRAM-gated two-stream GPU pool over R4 cells
 //! read from stdin, reusing CUDA contexts + LUTs + rasters across cells (no process churn).
+//!
+//! A stdin line is `<r4hex>` optionally followed by the surface painter's own
+//! `tiles=x,y,side` window (`tile_painter::stream_tile_window`); the window narrows what the
+//! cell WRITES while its screening still reads the whole `grid_disk(1)` source ring, so a
+//! windowed tile carries the whole-cell bytes.
 
 use anyhow::{bail, Context, Result};
 use noise_gpu::airborne::{is_cell_unbuildable, AirborneGpu};
@@ -8,9 +13,12 @@ use raster_reader::fused_tile_z13::default_batch_size;
 use raster_reader::RealRasters;
 use tile_painter::engine_spans::EngineCellSpans;
 use tile_painter::r4_source_cache::R4SourceCache;
-use tile_painter::region_runner::{announce_stream_cell_started, region_tiles};
+use tile_painter::region_runner::announce_stream_cell_started;
 use tile_painter::renderer_evidence::{
     DependencyProfile, RegionTerminalStatus, RendererEvidence, RuntimeParameters,
+};
+use tile_painter::stream_tile_window::{
+    parse_aircraft_stream_line, streamed_cell_tiles, StreamedAircraftCell,
 };
 use tile_painter::worklist::{any_source_arrow, resolve_n_days};
 
@@ -25,7 +33,7 @@ use crate::{ring_union, Args, SEL};
 /// reader pushes to the back and wakes one. (Factored to a type alias so the `let` below isn't a
 /// clippy `type_complexity` lint.)
 type StreamQueue = std::sync::Arc<(
-    std::sync::Mutex<(std::collections::VecDeque<u64>, bool)>,
+    std::sync::Mutex<(std::collections::VecDeque<StreamedAircraftCell>, bool)>,
     std::sync::Condvar,
 )>;
 
@@ -251,16 +259,20 @@ fn stream_cell_failure_line(r4: u64, error: &anyhow::Error) -> String {
     format!("fail {r4:x} {error}")
 }
 
-type PreparedReceiver = std::sync::Arc<
-    std::sync::Mutex<
-        std::sync::mpsc::Receiver<(
-            u64,
-            std::time::Instant,
-            std::time::Instant,
-            Result<PreparedCell>,
-        )>,
-    >,
->;
+/// One cell as it crosses the prep -> GPU handoff: its identity, the tiles it writes (already
+/// narrowed by any `tiles=` window), the pipeline clocks, and the prep result. The tile list
+/// travels WITH the cell rather than being re-derived on the device side, so the two stages
+/// cannot disagree about which tiles this cell owns.
+struct StreamedCellHandoff {
+    region_r4: u64,
+    tiles: Vec<(u32, u32)>,
+    cell_started: std::time::Instant,
+    prep_finished: std::time::Instant,
+    prepared: Result<PreparedCell>,
+}
+
+type PreparedReceiver =
+    std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<StreamedCellHandoff>>>;
 
 /// One warm CUDA stream. The shared receiver hands each prepared cell to exactly one worker; the
 /// weighted gate keeps large/fallback builds exclusive and lets only VRAM-small cells overlap.
@@ -295,7 +307,14 @@ fn run_gpu_worker(
         // Hold the receiver mutex only for `recv`: once a worker owns a message it releases the
         // lock and computes, so the peer can receive the next prepared cell concurrently.
         let message = receiver.lock().unwrap().recv();
-        let Ok((r4, cell_started, prep_finished, prepared)) = message else {
+        let Ok(StreamedCellHandoff {
+            region_r4: r4,
+            tiles,
+            cell_started,
+            prep_finished,
+            prepared,
+        }) = message
+        else {
             break;
         };
         let interval_id = evidence
@@ -334,7 +353,6 @@ fn run_gpu_worker(
         let mut used_chunked = prepared.as_ref().is_ok_and(|p| p.too_big);
         let mut chunked_reason = used_chunked.then_some("host-budget");
         let mut abandoned_one_pass_wall = std::time::Duration::ZERO;
-        let tiles = region_tiles(r4, z);
         let dependencies = evidence.region_dependencies(
             r4,
             &args.prepared_dir,
@@ -416,7 +434,7 @@ fn run_gpu_worker(
             None,
             Some("prepared-channel"),
         );
-        spans.metric_u64("owned_tiles", tiles.len() as u64);
+        spans.metric_u64("painted_tiles", tiles.len() as u64);
         spans.metric_bool("chunked", used_chunked);
         spans.metric_str("chunked_reason", chunked_reason.unwrap_or("not-chunked"));
         // Production does not enable CUDA events yet. The named host composite below is the
@@ -687,8 +705,9 @@ fn run_gpu_worker(
 /// stages are joined by a depth-1 channel, so prep cannot build an unbounded host-RAM backlog.
 /// A `start <r4hex> <unix_ms>` line opens each cell before CPU prep; one
 /// `engine-spans-v1 {json}` line records the engine-local facts, then its unchanged result closes
-/// it after GPU work. Stdout locking prevents interleave and the orchestrator may ACK out of order.
-/// n_days + class_weights resolve once from `--seed-regions`.
+/// it after GPU work — its `<written> <skipped>` counts cover exactly the tiles the line asked
+/// for, the whole cell or a `tiles=` window of it. Stdout locking prevents interleave and the
+/// orchestrator may ACK out of order. n_days + class_weights resolve once from `--seed-regions`.
 ///
 /// Termination / deadlock-freedom: the reader (main scope thread) parses stdin onto the Morton
 /// work queue; on EOF it sets the closed flag + `notify_all`. The prep thread drains contiguous
@@ -758,12 +777,7 @@ pub(crate) fn run_stream(args: &Args, z: u8) -> Result<()> {
     let work: StreamQueue = Arc::new((Mutex::new((VecDeque::new(), false)), Condvar::new()));
     // Depth-1: one prepared cell may wait behind the two device workers and the one being prepared.
     // Host RAM therefore stays bounded at roughly four ordinary cells.
-    let (gpu_tx, gpu_rx) = sync_channel::<(
-        u64,
-        std::time::Instant,
-        std::time::Instant,
-        Result<PreparedCell>,
-    )>(1);
+    let (gpu_tx, gpu_rx) = sync_channel::<StreamedCellHandoff>(1);
     let gpu_rx: PreparedReceiver = Arc::new(Mutex::new(gpu_rx));
     let vram_gate = VramGate::new(n_workers);
 
@@ -779,7 +793,7 @@ pub(crate) fn run_stream(args: &Args, z: u8) -> Result<()> {
             let rasters = RealRasters::new(&args.prepared_dir);
             let mut cache = R4SourceCache::new(&args.h3r4_dir, args.r4_cache.max(7), SEL);
             loop {
-                let batch: Vec<u64> = {
+                let batch: Vec<StreamedAircraftCell> = {
                     let (lock, cv) = &*prep_work;
                     let mut g = lock.lock().unwrap();
                     loop {
@@ -796,21 +810,35 @@ pub(crate) fn run_stream(args: &Args, z: u8) -> Result<()> {
                 if batch.is_empty() {
                     break; // → return → drop gpu_tx → channel closes → GPU thread's `for` ends
                 }
-                for r4 in batch {
+                for cell in batch {
                     // A GPU-airborne cell is active from CPU preparation through its final GPU
                     // result; the depth-1 handoff is part of that one bounded pipeline lifetime.
+                    let r4 = cell.region_r4;
                     let cell_started = std::time::Instant::now();
                     announce_stream_cell_started(r4);
-                    let tiles = region_tiles(r4, z);
-                    let prepared =
-                        prep_cell(&rasters, &mut cache, &args.h3r4_dir, z, bn, r4, &tiles);
+                    // A window that names no tile of this cell is a deterministic input error and
+                    // takes the same route as a prep error: one `fail`, then the next cell.
+                    let (tiles, prepared) = match streamed_cell_tiles(r4, z, cell.tile_window) {
+                        Ok(tiles) => {
+                            let prepared =
+                                prep_cell(&rasters, &mut cache, &args.h3r4_dir, z, bn, r4, &tiles);
+                            (tiles, prepared)
+                        }
+                        Err(error) => (Vec::new(), Err(error)),
+                    };
                     let prep_finished = std::time::Instant::now();
                     // A prep error (CPU/IO/source-load) is forwarded with the cell identity so the
                     // GPU thread emits `fail` and continues; otherwise a deterministic corrupt input
                     // could process-restart/TTL-requeue forever without ever reaching Hub parking.
                     // If the GPU thread has already gone (rx dropped), exit gracefully.
                     if gpu_tx
-                        .send((r4, cell_started, prep_finished, prepared))
+                        .send(StreamedCellHandoff {
+                            region_r4: r4,
+                            tiles,
+                            cell_started,
+                            prep_finished,
+                            prepared,
+                        })
                         .is_err()
                     {
                         return;
@@ -840,22 +868,20 @@ pub(crate) fn run_stream(args: &Args, z: u8) -> Result<()> {
             });
         }
 
-        // Reader on the main scope thread (StdinLock is !Send): parse hex R4s onto the queue tail in
-        // arrival order, waking the prep thread per cell. On EOF flag done + wake it so it drains + exits.
+        // Reader on the main scope thread (StdinLock is !Send): parse `<r4hex> [tiles=x,y,side]`
+        // onto the queue tail in arrival order, waking the prep thread per cell. On EOF flag done +
+        // wake it so it drains + exits.
         let stdin = std::io::stdin();
         for line in stdin.lock().lines() {
             let Ok(line) = line else { break };
-            let s = line.trim();
-            if s.is_empty() {
-                continue;
-            }
-            match u64::from_str_radix(s, 16) {
-                Ok(r4) => {
+            match parse_aircraft_stream_line(&line) {
+                Ok(None) => {}
+                Ok(Some(cell)) => {
                     let (lock, cv) = &*work;
-                    lock.lock().unwrap().0.push_back(r4);
+                    lock.lock().unwrap().0.push_back(cell);
                     cv.notify_one();
                 }
-                Err(_) => eprintln!("stream: skip non-hex line: {s}"),
+                Err(error) => eprintln!("stream: skip unusable line {line:?}: {error:#}"),
             }
         }
         let (lock, cv) = &*work;

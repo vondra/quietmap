@@ -12,10 +12,9 @@
 use anyhow::{bail, Context, Result};
 use std::io::{BufRead, Write};
 use std::path::Path;
-use std::str::FromStr;
 
-use h3o::{CellIndex, Resolution};
 use tile_painter::region_runner::stream_cell_started_line;
+use tile_painter::stream_tile_window::{parse_r4_cell_hex, TileWindow};
 
 use crate::surface_layers::{LAYER_COUNT, LAYER_NAMES};
 
@@ -26,66 +25,6 @@ pub struct StreamedCell {
     pub region_r4: u64,
     pub layers: Vec<usize>,
     pub tile_window: Option<TileWindow>,
-}
-
-/// A square Web-Mercator tile window used by short release checks. The
-/// streamed cell still owns the source read set; this only narrows its writes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TileWindow {
-    pub x: u32,
-    pub y: u32,
-    pub side: u32,
-}
-
-impl TileWindow {
-    pub fn select(self, tiles: Vec<(u32, u32)>) -> Result<Vec<(u32, u32)>> {
-        let x_end = self
-            .x
-            .checked_add(self.side)
-            .context("tile-window x range overflows")?;
-        let y_end = self
-            .y
-            .checked_add(self.side)
-            .context("tile-window y range overflows")?;
-        let selected: Vec<_> = tiles
-            .into_iter()
-            .filter(|(x, y)| *x >= self.x && *x < x_end && *y >= self.y && *y < y_end)
-            .collect();
-        if selected.is_empty() {
-            bail!(
-                "tile-window {},{},{} selects no tiles owned by this cell",
-                self.x,
-                self.y,
-                self.side
-            );
-        }
-        Ok(selected)
-    }
-}
-
-impl FromStr for TileWindow {
-    type Err = anyhow::Error;
-
-    fn from_str(value: &str) -> Result<Self> {
-        let coordinates: Vec<_> = value.split(',').collect();
-        if coordinates.len() != 3 {
-            bail!("tile-window must be x,y,side");
-        }
-        let parse = |field: &str, name: &str| {
-            field
-                .parse::<u32>()
-                .with_context(|| format!("tile-window {name} is not an unsigned integer"))
-        };
-        let window = Self {
-            x: parse(coordinates[0], "x")?,
-            y: parse(coordinates[1], "y")?,
-            side: parse(coordinates[2], "side")?,
-        };
-        if window.side == 0 {
-            bail!("tile-window side must be positive");
-        }
-        Ok(window)
-    }
 }
 
 impl StreamedCell {
@@ -162,22 +101,10 @@ pub fn parse_cell_line(line: &str) -> Option<CellRequest> {
             ));
         }
     }
-    let Ok(region_r4) = u64::from_str_radix(hex, 16) else {
-        return Some(rejected(hex, "not a hexadecimal H3 cell"));
+    let region_r4 = match parse_r4_cell_hex(hex) {
+        Ok(region_r4) => region_r4,
+        Err(error) => return Some(rejected(hex, format!("{error:#}"))),
     };
-    match CellIndex::try_from(region_r4) {
-        Ok(cell) if cell.resolution() == Resolution::Four => {}
-        Ok(cell) => {
-            return Some(rejected(
-                hex,
-                format!(
-                    "resolution {} is not the R4 the tile store owns",
-                    u8::from(cell.resolution())
-                ),
-            ))
-        }
-        Err(error) => return Some(rejected(hex, format!("invalid H3 cell: {error}"))),
-    }
     let layers = match requested {
         None => (0..LAYER_COUNT).collect(),
         Some(names) => {
@@ -304,6 +231,8 @@ pub fn prepared_dataset_year(prepared_directory: &Path) -> Result<String> {
 mod tests {
     use super::*;
 
+    use h3o::{CellIndex, Resolution};
+
     const DOBRIS: u64 = 0x841e309ffffffff;
 
     fn cell(line: &str) -> StreamedCell {
@@ -415,11 +344,16 @@ mod tests {
         );
     }
 
+    /// The window itself — its syntax and which tiles it selects — is
+    /// `tile_painter::stream_tile_window`'s, shared with the aircraft painters so all seven
+    /// layers can paint one area. This painter only has to attach it to its cell.
     #[test]
-    fn a_tile_window_selects_each_streamed_cells_owned_intersection() {
-        use tile_painter::region_runner::region_tiles;
-
-        let window: TileWindow = "4414,2786,4".parse().unwrap();
+    fn a_tiles_token_attaches_the_shared_window_to_its_cell() {
+        let window = TileWindow {
+            x: 4414,
+            y: 2786,
+            side: 4,
+        };
         assert_eq!(
             cell("841e309ffffffff layers=road,rail tiles=4414,2786,4").tile_window,
             Some(window)
@@ -428,20 +362,6 @@ mod tests {
             cell("841e301ffffffff tiles=4414,2786,4 layers=road").tile_window,
             Some(window)
         );
-        let dobris = window.select(region_tiles(DOBRIS, 13)).unwrap();
-        let neighbour = window.select(region_tiles(0x841e301ffffffff, 13)).unwrap();
-        assert_eq!(dobris.len(), 13);
-        assert_eq!(neighbour, vec![(4415, 2789), (4416, 2789), (4417, 2789)]);
-        let mut selected = dobris;
-        selected.extend(neighbour);
-        selected.sort_unstable();
-        selected.dedup();
-        assert_eq!(selected.len(), 16);
-        assert!(selected.contains(&(4414, 2789)));
-        assert!(selected.contains(&(4417, 2789)));
-        assert!("4414,2786,0".parse::<TileWindow>().is_err());
-        assert!("4414,2786".parse::<TileWindow>().is_err());
-        assert!(window.select(vec![(4412, 2780)]).is_err());
     }
 
     /// One bug class: the dataset year comes from the prepared tree itself,

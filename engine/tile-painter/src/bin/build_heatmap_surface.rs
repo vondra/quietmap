@@ -321,7 +321,7 @@ fn run_stream(args: &Args, layers: &[Source], halo_m: f64) -> Result<()> {
                     // hollow `done` that would let the hub seal an unbuilt stale layer.
                     let (effective, skipped) =
                         split_configured_layers(layers, req_layers.as_deref(), |s| layer_meta(s).2);
-                    spans.metric("owned_tiles", serde_json::json!(tiles.len()));
+                    spans.metric("painted_tiles", serde_json::json!(tiles.len()));
                     spans.metric(
                         "effective_layers",
                         serde_json::json!(effective
