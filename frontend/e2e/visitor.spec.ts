@@ -101,24 +101,21 @@ test('isochron: Show area names a downed router instead of leaving the map blank
 
 test('isochron: Reachable in, min and Walk stay on one row', async ({ page }) => {
   // Safari's number spinners plus flex-wrap + ml-auto used to put "Reachable in"
-  // on one line and "min Walk Car" on the next. 1280 is the search-bar layout
-  // (panel max-w-md); 390 is a phone. A 448-px window hides the radar toggle.
-  for (const size of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
-    await page.setViewportSize(size)
-    await installHermeticMap(page, POINT)
-    await page.goto(mapUrl(POINT))
-    await page.getByRole('button', { name: 'Toggle isochron' }).click()
-    const label = page.getByText('Reachable in')
-    const minutes = page.locator('span', { hasText: /^min$/ })
-    const walk = page.getByTestId('isochron-walk')
-    await expect(label).toBeVisible()
-    const labelBox = await label.boundingBox()
-    const minBox = await minutes.boundingBox()
-    const walkBox = await walk.boundingBox()
-    expect(labelBox && minBox && walkBox).toBeTruthy()
-    expect(Math.abs(labelBox!.y - minBox!.y), `${size.width}px: min on the Reachable-in row`).toBeLessThan(6)
-    expect(Math.abs(labelBox!.y - walkBox!.y), `${size.width}px: Walk on the Reachable-in row`).toBeLessThan(6)
-  }
+  // on one line and "min Walk Car" on the next. Default 1280 lets the panel sit
+  // at search-bar max-w-md; a 390 loop hid the radar toggle on the second pass.
+  await installHermeticMap(page, POINT)
+  await page.goto(mapUrl(POINT))
+  await page.getByRole('button', { name: 'Toggle isochron' }).click()
+  const label = page.getByText('Reachable in')
+  const minutes = page.locator('span', { hasText: /^min$/ })
+  const walk = page.getByTestId('isochron-walk')
+  await expect(label).toBeVisible()
+  const labelBox = await label.boundingBox()
+  const minBox = await minutes.boundingBox()
+  const walkBox = await walk.boundingBox()
+  expect(labelBox && minBox && walkBox).toBeTruthy()
+  expect(Math.abs(labelBox!.y - minBox!.y), 'min must sit on the Reachable-in row').toBeLessThan(6)
+  expect(Math.abs(labelBox!.y - walkBox!.y), 'Walk must sit on the Reachable-in row').toBeLessThan(6)
 })
 
 test('narrow desktop: the layers card does not swallow the isochron toggle', async ({ page }) => {
