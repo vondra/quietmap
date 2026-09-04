@@ -147,8 +147,8 @@ __device__ __forceinline__ void admit_skyline_arc(
 
 /// The blocked mask of the bucket span from every obstacle edge — buildings and
 /// walls alike, both carried by the grids — within `need_radius_m` (CPU
-/// `skyline_arcs_within`): a cell is pruned on its tallest edge against the
-/// sight-line floor, an edge is not.
+/// `skyline_arcs_within`): a building is pruned on its cell's tallest edge
+/// against the sight-line floor, a WALL on its own height.
 __device__ void gather_blocked_mask(
     const DeviceScenePointers& scene,
     const DeviceLineSource& source,
@@ -226,8 +226,15 @@ __device__ void gather_blocked_mask(
                 for (uint32_t position = first; position < end; ++position) {
                     const uint32_t local_edge = scene.obstacle_edge_references[
                         grid.edge_references_offset + position];
-                    const float* values = scene.obstacle_edge_values_xyxyh
-                        + (grid.edge_values_offset + local_edge) * 5;
+                    const uint32_t edge = grid.edge_values_offset + local_edge;
+                    const float* values = scene.obstacle_edge_values_xyxyh + edge * 5;
+                    // A wall under the sight line blocks nothing, and the cell's
+                    // tallest edge does not answer for it (CPU
+                    // `skyline_arcs_within`, third prune).
+                    if (scene.obstacle_edge_is_building[edge] == 0u
+                        && values[4] <= sight_line_floor_m) {
+                        continue;
+                    }
                     admit_skyline_arc(
                         source, receiver_x_m, receiver_y_m,
                         (values[0] - receiver_grid_x) * inverse_scale, values[1] - receiver_grid_y,

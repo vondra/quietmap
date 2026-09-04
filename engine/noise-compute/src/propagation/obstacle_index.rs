@@ -481,7 +481,8 @@ impl ObstacleIndex {
     /// then clips its own angular span against, instead of re-running an area
     /// query per (segment, receiver) pair.
     ///
-    /// TWO prunes, both O(1) per grid cell and both exact-by-construction:
+    /// THREE prunes, all exact-by-construction — two O(1) per grid cell, one
+    /// per BARRIER edge:
     ///
     /// * empty cells (`cell_max_h == 0`) cost one CSR compare;
     /// * the ISO 9613-2 §7.3 GRAZING prune — an obstacle rising `h` above the
@@ -496,6 +497,9 @@ impl ObstacleIndex {
     ///   obstacle only shorter than the receiver can still break it further
     ///   along. Gating on the receiver's height would silently drop every 3 m
     ///   noise wall and low building. `delta_min_m` is the caller's δ floor.
+    /// * a BARRIER edge no taller than `los_floor_m` — a wall standing entirely
+    ///   under the sight line blocks nothing, and it is admitted or not on its
+    ///   own height, never on the tallest edge sharing its cell.
     ///
     /// An edge listed in several cells is visited several times; the caller's
     /// merge is idempotent on repeats (identical arcs union to themselves), so
@@ -594,6 +598,16 @@ impl ObstacleIndex {
                 }
                 for &eref in &self.edge_refs[lo..hi] {
                     let e = self.edges[eref as usize];
+                    // A WALL is pruned on its OWN height, a building only on the
+                    // cell's tallest edge. The wall slice this index replaced
+                    // tested every wall against the sight-line floor, and the
+                    // cell maximum is no substitute: a 3 m wall sharing a cell
+                    // with a 20 m building would start blocking directions it
+                    // cannot reach. Buildings keep the cell prune alone — the
+                    // bound their footprints have always been screened by.
+                    if e.kind() == ObstacleKind::Barrier && f64::from(e.height_m) <= los_floor_m {
+                        continue;
+                    }
                     let (ex0, ey0) = (e.x0 as f64 - ox, e.y0 as f64 - oy);
                     let (ex1, ey1) = (e.x1 as f64 - ox, e.y1 as f64 - oy);
                     let near_m = origin_to_segment_dist(ex0, ey0, ex1, ey1);
@@ -1899,6 +1913,42 @@ mod tests {
         let mut n = 0;
         low.skyline_arcs_within(0, o.0, o.1, 0.0, 500.0, 4.0, 0.0, None, &mut |_| n += 1);
         assert_eq!(n, 0, "top below the 4 m sight line");
+    }
+
+    /// A WALL is admitted on its OWN height, never on its cell neighbours'.
+    /// A 3 m wall and a 20 m building inside one 64 m grid cell: the cell's
+    /// tallest edge clears a 4 m sight-line floor, so the cell is walked — and
+    /// the wall standing entirely under that floor must still contribute
+    /// nothing. The wall slice this index replaced tested every wall against the
+    /// floor; pruning on the cell maximum alone let a low wall block directions
+    /// it cannot reach.
+    #[test]
+    fn skyline_prunes_a_low_wall_on_its_own_height_not_its_cells() {
+        let mut b = ObstacleIndex::builder(OLAT, OLON);
+        b.add_ring(&square(200.0, 0.0, 20.0), 20.0, ObstacleKind::Building, 0);
+        b.add_polyline(
+            &[ll(190.0, 0.0), ll(210.0, 0.0)],
+            3.0,
+            ObstacleKind::Barrier,
+            1,
+        );
+        let idx = b.build();
+        let o = ll(0.0, 0.0);
+        let tops = |los_floor_m: f64| {
+            let mut heights = Vec::new();
+            idx.skyline_arcs_within(0, o.0, o.1, 0.0, 500.0, los_floor_m, 0.0, None, &mut |a| {
+                heights.push(a.height_m)
+            });
+            heights.sort_by(f32::total_cmp);
+            heights.dedup();
+            heights
+        };
+        assert_eq!(tops(0.0), vec![3.0, 20.0], "at ground level both stand");
+        assert_eq!(
+            tops(4.0),
+            vec![20.0],
+            "the 3 m wall is under a 4 m sight line"
+        );
     }
 
     /// A wall longer than the grid pitch spans many cells; every visit must
