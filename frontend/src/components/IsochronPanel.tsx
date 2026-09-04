@@ -48,23 +48,25 @@ export default function IsochronPanel({ location, onGo, active }: IsochronPanelP
       left-[calc(50%-50vw+0.75rem)] right-[calc(50%-50vw+0.75rem)] top-[58px]
       md:left-1/2 md:-translate-x-1/2 md:right-auto md:top-[58px] md:w-[calc(100%-1.5rem)] md:max-w-md
     ">
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="text-foreground whitespace-nowrap">Reachable in</span>
-        <input
-          type="number"
-          value={time}
-          onChange={(e) => setTime(parseInt(e.target.value, 10) || 0)}
-          min={1}
-          max={120}
-          className="w-14 rounded-md border border-input bg-background px-2 py-1 text-sm text-foreground text-center focus:border-ring focus:outline-none focus:ring-0"
-        />
-        <span className="text-muted-foreground">min</span>
-        {/* Group modes + action so they wrap together (right-aligned) on narrow screens. */}
-        <div className="flex items-center gap-2 ml-auto">
+      <div className="flex flex-wrap min-[360px]:flex-nowrap items-center gap-1 sm:gap-1.5 text-sm">
+        <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          <span className="text-foreground whitespace-nowrap">Reachable in</span>
+          <input
+            type="number"
+            value={time}
+            onChange={(e) => setTime(parseInt(e.target.value, 10) || 0)}
+            min={1}
+            max={120}
+            className="w-14 shrink-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none rounded-md border border-input bg-background px-2 py-1 text-sm text-foreground text-center tabular-nums focus:border-ring focus:outline-none focus:ring-0"
+          />
+          <span className="text-muted-foreground">min</span>
+        </div>
+        <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
           <CheckChip checked={walk} label="Walk" onToggle={() => setWalk(!walk)} testId="isochron-walk" />
           <CheckChip checked={car} label="Car" onToggle={() => setCar(!car)} testId="isochron-car" />
           <Button variant="default" size="sm" onClick={() => void handleGo()} disabled={!location || (!walk && !car) || busy || time < 1}>
-            <Radar />{busy ? 'Drawing…' : 'Show area'}
+            <Radar />
+            <span className="max-sm:sr-only">{busy ? 'Drawing…' : 'Show area'}</span>
           </Button>
         </div>
       </div>

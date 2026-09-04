@@ -99,6 +99,28 @@ test('isochron: Show area names a downed router instead of leaving the map blank
   await expect(page.getByRole('alert')).toHaveText('Could not draw the area. The routing service is down.')
 })
 
+test('isochron: Reachable in, min and Walk stay on one row', async ({ page }) => {
+  // Safari's number spinners plus flex-wrap + ml-auto used to put "Reachable in"
+  // on one line and "min Walk Car" on the next. 448 is the search-bar max-w-md;
+  // 390 is a phone.
+  for (const size of [{ width: 448, height: 800 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(size)
+    await installHermeticMap(page, POINT)
+    await page.goto(mapUrl(POINT))
+    await page.getByRole('button', { name: 'Toggle isochron' }).click()
+    const label = page.getByText('Reachable in')
+    const minutes = page.locator('span', { hasText: /^min$/ })
+    const walk = page.getByTestId('isochron-walk')
+    await expect(label).toBeVisible()
+    const labelBox = await label.boundingBox()
+    const minBox = await minutes.boundingBox()
+    const walkBox = await walk.boundingBox()
+    expect(labelBox && minBox && walkBox).toBeTruthy()
+    expect(Math.abs(labelBox!.y - minBox!.y), `${size.width}px: min on the Reachable-in row`).toBeLessThan(6)
+    expect(Math.abs(labelBox!.y - walkBox!.y), `${size.width}px: Walk on the Reachable-in row`).toBeLessThan(6)
+  }
+})
+
 test('narrow desktop: the layers card does not swallow the isochron toggle', async ({ page }) => {
   // 1024x768 — iPad landscape, small laptops, a half-screen window. Below ~1096 px
   // the centred search bar slides under the 320 px card column on its right.
