@@ -10,6 +10,7 @@
 
 node_extent() {
     local lon=$1 lat=$2 n=$3
-    python3 -c "hp=0.5/($n-1); print(f'{$lon-hp:.10f} {$lat-hp:.10f} {$lon+1+hp:.10f} {$lat+1+hp:.10f}')"
+    # Truncation can put a shared node on opposite sides of a source water pixel.
+    python3 -c "hp=0.5/($n-1); print($lon-hp, $lat-hp, $lon+1+hp, $lat+1+hp)"
 }
 export -f node_extent
