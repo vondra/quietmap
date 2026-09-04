@@ -793,7 +793,7 @@ export function buildPlan(scope: ResolvedScope): { steps: PlanStep[]; excludedBy
       layer: 'buildings',
       country: null,
       notes:
-        'writes the ONE per-cell structures.arrow (scripts/structures/build-structures.py: OSM buildings as enriched above + OSM walls + Overture parquet stock, matched and height-laddered; schema metadata structures_contract=structures_v1, building_rows, barrier_rows) — the only file the painters read, so it must be written after every buildings.arrow enricher. Idempotent (a cell rebuilds iff an input is newer than the table); a missing GHSL raster, regional raster, or Overture parquet fails the chain rather than certifying a world that is still missing buildings.',
+        'writes the ONE per-cell structures.arrow (scripts/structures/build-structures.py: OSM buildings as enriched above + OSM walls + Overture parquet stock, matched and height-laddered; schema metadata structures_contract=structures_v1, building_rows, barrier_rows) — the only file the painters read, so it must be written after every buildings.arrow enricher. Idempotent (a cell rebuilds iff an input is newer than the table); a missing GHSL raster, regional raster, Overture parquet, OSM extract tree or per-cell OSM table fails the chain rather than certifying a world that is still missing buildings. Every prepared cell carries its OSM pair 0-row where nothing stands, so an absent one is a broken tree and never "this cell has no buildings".',
       skipReason: null,
     },
     (b) => (b ? ['--enrich-only', '--bbox', serializeBbox(b)] : ['--enrich-only']),

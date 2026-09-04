@@ -140,9 +140,13 @@ class BuildStructuresTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp())
         self.h3r4 = self.root / "h3r4"
         (self.h3r4 / CELL).mkdir(parents=True)
-        # The OSM extracts are a SOURCE tree beside the prepared cell, never in it.
+        # The OSM extracts are a SOURCE tree beside the prepared cell, never in it,
+        # and EVERY cell carries both tables — 0-row where nothing stands. Tests
+        # with rows overwrite them; an absent one is a broken tree, not an empty cell.
         self.osm = self.root / "osm-extract"
         (self.osm / CELL).mkdir(parents=True)
+        buildings_arrow(self.osm / CELL / "buildings.arrow", [])
+        barriers_arrow(self.osm / CELL / "barriers.arrow", [])
         self.staging = self.root / "staging"
 
     def tearDown(self):
@@ -303,6 +307,40 @@ class BuildStructuresTests(unittest.TestCase):
             *BUILDER.read_overture_shards(str(self.staging / CELL)),
             FakeGlobalPrior(), None, False)
         self.assertIsNotNone(refreshed)
+
+    def test_a_stale_copy_in_the_prepared_cell_is_ignored(self):
+        """The OSM pair used to live in the prepared cell. A leftover there must
+        never reach the merge again — the builder reads --osm-dir and nothing
+        else, so an un-migrated cell cannot quietly resurrect its old buildings."""
+        buildings_arrow(self.osm / CELL / "buildings.arrow",
+                        [osm_row(0, OSM_POLY, 32.0)])
+        decoy = osm_row(500, OSM_SHED, 16.0)   # osm_id 1500, a different building
+        buildings_arrow(self.h3r4 / CELL / "buildings.arrow", [decoy])
+        _, t = self.build([ovt_row(OVT_TWIN)])
+        self.assertEqual(t.column("osm_id").to_pylist(), [1000])
+
+    def test_an_absent_per_cell_table_is_an_error_not_an_empty_cell(self):
+        """Every prepared cell carries both tables, 0-row where nothing stands, so
+        an absent one is a broken tree. Read as "no buildings here" it would write
+        a valid-looking Overture-only table and drop the cell's emission stock."""
+        for name in ("buildings.arrow", "barriers.arrow"):
+            path = self.osm / CELL / name
+            kept = path.read_bytes()
+            path.unlink()
+            with self.assertRaises(SystemExit):
+                self.build([ovt_row(OVT_LONELY)], validate=False)
+            path.write_bytes(kept)
+
+    def test_a_missing_or_bare_osm_tree_is_refused(self):
+        """The mistake a direct builder call makes: a typo or an unmounted disk.
+        Every cell would otherwise fail one by one on a per-file symptom."""
+        with self.assertRaises(SystemExit):
+            BUILDER.require_osm_tree(str(self.root / "not-here"))
+        bare = self.root / "bare"
+        (bare / "not-a-cell").mkdir(parents=True)
+        with self.assertRaises(SystemExit):
+            BUILDER.require_osm_tree(str(bare))
+        BUILDER.require_osm_tree(str(self.osm))  # the real tree passes
 
     def test_stale_buildings_contract_is_rejected(self):
         path = self.osm / CELL / "buildings.arrow"

@@ -5,7 +5,8 @@
 #         data/source/osm-extract/{year}/h3r4/{hex}/ with buildings.arrow, barriers.arrow
 #         (the structure builder's OSM input — never a painter's, so never in a prepared cell)
 #
-# Usage: ./scripts/osm-to-h3r4.sh   (all knobs are env vars — see below; PBF_FILE must exist)
+# Usage: ./scripts/osm-to-h3r4.sh   (env knobs: DATA_YEAR, PBF_FILE, SCRATCH_ROOT, NODE_CACHE,
+#        SPILL_DIR, RUN_SERVICE_TREE, STAMP_ROAD_METADATA — the two output roots are NOT knobs)
 # Called by run-extraction.sh (osm step); also run standalone for an OSM refresh.
 set -euo pipefail
 
@@ -14,7 +15,6 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
 YEAR="${DATA_YEAR:-$(python3 -c 'import json;print(json.load(open("scripts/dataset-year.json"))["current_year"])')}"  # default from committed ./DATA_YEAR (bump there yearly); env overrides
-DATA_ROOT="${DATA_ROOT:-$PROJECT_DIR/data}"
 RUN_SERVICE_TREE="${RUN_SERVICE_TREE:-1}"
 STAMP_ROAD_METADATA="${STAMP_ROAD_METADATA:-1}"
 if [[ -d /mnt/data ]]; then
@@ -23,9 +23,15 @@ else
     DEFAULT_SCRATCH_ROOT="/tmp/quietmap"
 fi
 SCRATCH_ROOT="${SCRATCH_ROOT:-$DEFAULT_SCRATCH_ROOT}"
-PBF_FILE="${PBF_FILE:-$DATA_ROOT/source/osm/${YEAR}/planet-latest.osm.pbf}"
-OUTPUT_DIR="${OUTPUT_DIR:-$DATA_ROOT/prepared/${YEAR}/h3r4}"
-OSM_EXTRACT_DIR="$DATA_ROOT/source/osm-extract/${YEAR}/h3r4"  # buildings/barriers: source, not prepared
+# ONE data root for both output trees, and the same directory pipeline/lib/data-year.ts
+# resolves (<repo>/data). Deliberately not overridable: the TypeScript half of the
+# chain has no such knob, so a second root here could only pair a fresh extract with
+# somebody else's cells — the enrich chain and the structure builder would read a
+# missing or stale tree and certify it.
+DATA_DIR="$PROJECT_DIR/data"
+PBF_FILE="${PBF_FILE:-$DATA_DIR/source/osm/${YEAR}/planet-latest.osm.pbf}"
+OUTPUT_DIR="$DATA_DIR/prepared/${YEAR}/h3r4"                  # painter inputs
+OSM_EXTRACT_DIR="$DATA_DIR/source/osm-extract/${YEAR}/h3r4"   # structure-builder inputs
 NODE_CACHE="${NODE_CACHE:-$SCRATCH_ROOT/osm_nodes.cache}"
 SPILL_DIR="${SPILL_DIR:-$SCRATCH_ROOT/osm_spill}"
 BINARY="engine/target/release/osm-to-h3r4"

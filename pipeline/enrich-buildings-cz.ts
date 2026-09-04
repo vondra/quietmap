@@ -18,7 +18,7 @@ import { writeBuildingEnrichment } from './lib/buildings-arrow.js'
 import { iterateCountryHexes } from './lib/roads-arrow.js'
 import { SOURCE_ID_CZ_RUIAN_VFR } from './lib/source-ids.generated.js'
 import { flatDist } from './lib/spatial.js'
-import { DATA_YEAR as YEAR, OSM_EXTRACT_DIR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, OSM_EXTRACT_DIR, requireOsmExtractTree } from './lib/data-year.js'
 
 const MY_SOURCE_ID = SOURCE_ID_CZ_RUIAN_VFR
 
@@ -319,10 +319,9 @@ async function main() {
   console.log(`  OSM extract dir: ${OSM_EXTRACT_DIR}`)
   console.log(`  Cache: ${CACHE_DIR}\n`)
 
-  if (!existsSync(OSM_EXTRACT_DIR)) {
-    console.error(`ERROR: OSM extract directory not found: ${OSM_EXTRACT_DIR}`)
-    process.exit(1)
-  }
+  // Missing OR empty: iterateCountryHexes returns [] for both, so without this
+  // the run would print "0 hexes, done" over a world that has buildings.
+  requireOsmExtractTree()
 
   const buildings = await downloadRuian()
   console.log(`\n  RÚIAN buildings: ${buildings.length.toLocaleString()}`)

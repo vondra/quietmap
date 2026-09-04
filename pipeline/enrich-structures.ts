@@ -40,7 +40,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { cellToBoundary } from 'h3-js'
-import { DATA_YEAR, H3R4_DIR, OSM_EXTRACT_DIR } from './lib/data-year.js'
+import { DATA_YEAR, H3R4_DIR, OSM_EXTRACT_DIR, requireOsmExtractTree } from './lib/data-year.js'
 
 const REPO_ROOT = resolve(import.meta.dirname, '..')
 const ENRICH = resolve(REPO_ROOT, 'data', 'enrichment')
@@ -151,14 +151,8 @@ function main(): void {
       `Overture parquet cache missing or empty (${OVERTURE_PARQUET_DIR}) — run scripts/obstacles/download-overture-world.sh first`,
     )
   }
-  // A missing OSM extract tree is NOT an empty one: the builder reads an absent
-  // buildings.arrow as "this cell has no OSM buildings" and would rewrite every
-  // table Overture-only, erasing the whole emission stock cell by cell.
-  if (!existsSync(OSM_EXTRACT_DIR)) {
-    throw new Error(
-      `OSM extract tree missing (${OSM_EXTRACT_DIR}) — every structures.arrow would lose its OSM buildings; run scripts/osm-to-h3r4.sh`,
-    )
-  }
+  // Absence is not emptiness — a bare mount point must not pass either.
+  requireOsmExtractTree()
 
   // Group by the regional raster overlapping the cell boundary (first match
   // wins); one builder run per group keeps the ~4 GB regional array loaded

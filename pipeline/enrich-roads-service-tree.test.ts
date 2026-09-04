@@ -14,11 +14,16 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   buildGraph,
+  cellInputState,
   findComponents,
   flowAccumulate,
   splitAADT,
+  OSM_TABLES_MISSING,
   SERVICE_TREE_CAP_PER_CLASS,
 } from './enrich-roads-service-tree.ts'
 import { WORLD_FLEET } from './lib/country-fleet.generated.ts'
@@ -207,4 +212,30 @@ test('splitAADT: conservation, clamp floor, and country moto share', () => {
     splitAADT(777.7, WORLD_FLEET),
     splitAADT(777.7, WORLD_FLEET),
   )
+})
+
+// ─── 4. a broken OSM extract tree is not an ordinary skip ──────────────────
+//
+// The pass used to fold "no buildings.arrow" into the same skip as "no roads",
+// so an unmounted or half-migrated extract tree made every shard finish
+// "0 enriched" and exit 0 — a whole world of building-driven AADT quietly gone.
+
+test('an absent buildings table is reported apart from an ordinary roadless cell', () => {
+  const root = mkdtempSync(join(tmpdir(), 'service-tree-inputs-'))
+  try {
+    const roads = join(root, 'roads.arrow')
+    const buildings = join(root, 'buildings.arrow')
+
+    // No roads: ordinary — an airborne-only or offshore cell.
+    assert.equal(cellInputState(roads, buildings), 'no-roads')
+
+    // Roads but no OSM building table: a broken tree, never "no houses here".
+    writeFileSync(roads, 'x')
+    assert.equal(cellInputState(roads, buildings), OSM_TABLES_MISSING)
+
+    writeFileSync(buildings, 'x')
+    assert.equal(cellInputState(roads, buildings), 'ready')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

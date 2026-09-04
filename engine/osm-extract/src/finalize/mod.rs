@@ -6,6 +6,7 @@ use anyhow::Result;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema};
 use arrow::ipc::writer::FileWriter;
+use h3o::{CellIndex, Resolution};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -108,7 +109,45 @@ pub fn finalize(
     // Distinct hexes across all sources — a hex with both roads and buildings appears
     // in two bucket sets, so union before counting (matches the old shared-set count).
     let hex_dirs: HashSet<String> = dir_sets.into_iter().flatten().collect();
+    write_missing_osm_tables(osm_extract_dir, &hex_dirs)?;
     Ok(hex_dirs.len())
+}
+
+/// Every cell this extract created carries BOTH OSM tables, 0-row where nothing
+/// stands — the rule `structures.arrow` already follows. Without it an absent
+/// `buildings.arrow` means two different things (this cell has no OSM buildings
+/// / this cell's tree is broken or unmounted) and the structure builder cannot
+/// tell them apart: it would write a valid-looking Overture-only table and erase
+/// the emission stock. With it, absent means broken, and the builder fails.
+///
+/// The empty tables come from the SAME writers as the populated ones, so the
+/// schema, the `buildings_v2` contract stamp and the metadata cannot drift; an
+/// empty file is byte-identical for every cell (`spatially_batched` returns one
+/// empty batch and no bbox key).
+fn write_missing_osm_tables(osm_extract_dir: &Path, hex_dirs: &HashSet<String>) -> Result<()> {
+    let join_stats = JoinStats::default();
+    let mut written = 0usize;
+    for hex_str in hex_dirs {
+        let dir = osm_extract_dir.join(hex_str);
+        let buildings = dir.join("buildings.arrow");
+        let barriers = dir.join("barriers.arrow");
+        if buildings.exists() && barriers.exists() {
+            continue;
+        }
+        fs::create_dir_all(&dir)?;
+        if !buildings.exists() {
+            let hex = u64::from_str_radix(hex_str, 16)
+                .map_err(|e| anyhow::anyhow!("hex dir {hex_str} is not hexadecimal: {e}"))?;
+            write_buildings(&[], &buildings, hex, &PoiIndex::default(), &join_stats)?;
+            written += 1;
+        }
+        if !barriers.exists() {
+            write_barriers(&[], &barriers)?;
+            written += 1;
+        }
+    }
+    eprintln!("  {written} empty OSM table(s) written for cells with none");
+    Ok(())
 }
 
 /// Sort one spill bucket by hex_id, group consecutive rows, and write one
@@ -160,6 +199,8 @@ fn finalize_bucket(
     let reader = BufReader::with_capacity(1 << 20, child.stdout.take().expect("sort stdout piped"));
     let mut current_hex: u64 = 0;
     let mut current_rows: Vec<Vec<String>> = Vec::new();
+    let mut corrupt_rows: u64 = 0;
+    let mut first_corrupt_id: Option<String> = None;
 
     for line in reader.lines() {
         let line = line?;
@@ -167,7 +208,14 @@ fn finalize_bucket(
         if fields.is_empty() {
             continue;
         }
-        let hex_id: u64 = fields[0].parse().unwrap_or(0);
+        // A row whose id is not an R4 cell is a torn spill line, never a feature:
+        // count it, drop it, and fail the bucket below. Never group it — the id
+        // it would be grouped under is fiction.
+        let Some(hex_id) = parse_res4_hex_id(&fields[0]) else {
+            corrupt_rows += 1;
+            first_corrupt_id.get_or_insert_with(|| fields[0].clone());
+            continue;
+        };
 
         if hex_id != current_hex && !current_rows.is_empty() {
             hex_dirs.insert(flush_hex(
@@ -198,6 +246,15 @@ fn finalize_bucket(
     if !status.success() {
         anyhow::bail!("sort failed for {source} bucket {bucket} ({status})");
     }
+    if corrupt_rows > 0 {
+        anyhow::bail!(
+            "{source} bucket {bucket}: {corrupt_rows} spilled row(s) carry a hex id that is not \
+             an H3 resolution-4 cell (first: {:?}). The spill is truncated or interleaved — \
+             re-run the extract for this input; finalize must not invent the cell those rows \
+             would land in.",
+            first_corrupt_id.unwrap_or_default()
+        );
+    }
 
     eprintln!("    {source} [{bucket:03}]: {} hexes", hex_dirs.len());
     Ok(hex_dirs)
@@ -212,6 +269,20 @@ fn load_poi_bucket(spill_dir: &Path, bucket: usize) -> Result<PoiIndex> {
     }
     let reader = BufReader::with_capacity(1 << 20, File::open(&path)?);
     Ok(PoiIndex::from_lines(reader.lines().map_while(Result::ok)))
+}
+
+/// A spilled hex id, accepted only when it really is an H3 resolution-4 cell.
+/// `spill.rs` writes nothing else — `h3_res4` drops a feature whose coordinates
+/// resolve to no cell — so anything else is a torn or interleaved spill line.
+/// The `parse().unwrap_or(0)` this replaces turned exactly that into cell
+/// directories `000000000000000`, `000000000000001` and `000000000000021` in the
+/// 2026-06-25 planet run: three inventions nothing downstream could tell from a
+/// real cell, and a truncated id that happens to parse would have silently moved
+/// real features into the wrong place.
+fn parse_res4_hex_id(field: &str) -> Option<u64> {
+    let raw: u64 = field.parse().ok()?;
+    let cell = CellIndex::try_from(raw).ok()?;
+    (cell.resolution() == Resolution::Four).then_some(raw)
 }
 
 /// The tree a source's `{source}.arrow` belongs in. Everything a painter reads
@@ -328,4 +399,128 @@ pub(super) fn polygon_row_bbox(
         }
     }
     [centroid_lat, centroid_lon, centroid_lat, centroid_lon]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// A spill row whose id is not an R4 cell must abort the bucket, never become
+    /// a cell directory. The 2026-06-25 planet run wrote three of them and every
+    /// consumer downstream — the structure builder, the cell inventory, the
+    /// prepared identity manifest — treated them as real cells.
+    #[test]
+    fn a_spill_row_whose_hex_id_is_not_a_resolution_4_cell_aborts_the_bucket() {
+        let root = std::env::temp_dir().join("osm-extract-finalize-hex-id-guard");
+        let _ = fs::remove_dir_all(&root);
+        let spill = root.join("spill");
+        let prepared = root.join("prepared");
+        let osm = root.join("osm-extract");
+        fs::create_dir_all(&spill).unwrap();
+
+        let dobris = u64::from_str_radix("841e309ffffffff", 16).unwrap();
+        // A real H3 cell at the WRONG resolution is corruption too: R4 is the one
+        // resolution spill.rs writes.
+        let res7 = u64::from(
+            CellIndex::try_from(dobris)
+                .unwrap()
+                .center_child(Resolution::Seven)
+                .unwrap(),
+        );
+        let barrier_row = |id: String| {
+            format!("{id}\t55\t0\t49.7800\t14.1700\t49.7801\t14.1702\t20.0\t3.0\t0\t2\n")
+        };
+        let mut tsv = File::create(spill.join("barriers_000.tsv")).unwrap();
+        for id in [dobris.to_string(), "1".to_string(), res7.to_string()] {
+            tsv.write_all(barrier_row(id).as_bytes()).unwrap();
+        }
+        drop(tsv);
+
+        let err = finalize_bucket(
+            "barriers",
+            0,
+            &spill,
+            &prepared,
+            &osm,
+            &JoinStats::default(),
+        )
+        .expect_err("a hex id that is not an R4 cell must fail the bucket");
+        let message = err.to_string();
+        assert!(message.contains("2 spilled row(s)"), "{message}");
+        assert!(message.contains("\"1\""), "{message}");
+        assert!(
+            !osm.join("000000000000001").exists(),
+            "a torn line invented a cell directory"
+        );
+        assert!(
+            !osm.join(format!("{res7:015x}")).exists(),
+            "a res-7 id invented a cell directory"
+        );
+        // The one real row still belongs where it always did.
+        assert!(osm.join("841e309ffffffff").join("barriers.arrow").exists());
+
+        assert_eq!(parse_res4_hex_id(&dobris.to_string()), Some(dobris));
+        assert_eq!(parse_res4_hex_id("not-a-number"), None);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Every extracted cell carries BOTH OSM tables, 0-row where nothing stands,
+    /// so an absent file means a broken tree and never "no buildings here" — the
+    /// distinction the structure builder fails on.
+    #[test]
+    fn every_extracted_cell_gets_both_osm_tables_even_when_empty() {
+        let root = std::env::temp_dir().join("osm-extract-finalize-empty-pair");
+        let _ = fs::remove_dir_all(&root);
+        let osm = root.join("osm-extract");
+
+        // Two real R4 cell ids, proven so by the same guard finalize uses.
+        let cells = ["841e309ffffffff", "840b26bffffffff"];
+        for cell in cells {
+            let id = u64::from_str_radix(cell, 16).unwrap();
+            assert_eq!(parse_res4_hex_id(&id.to_string()), Some(id));
+        }
+        // A cell that already has a populated table must never be clobbered.
+        fs::create_dir_all(osm.join(cells[0])).unwrap();
+        fs::write(osm.join(cells[0]).join("barriers.arrow"), b"populated").unwrap();
+
+        let hex_dirs: HashSet<String> = cells.iter().map(|c| c.to_string()).collect();
+        write_missing_osm_tables(&osm, &hex_dirs).unwrap();
+
+        for cell in cells {
+            assert!(osm.join(cell).join("buildings.arrow").exists(), "{cell}");
+            assert!(osm.join(cell).join("barriers.arrow").exists(), "{cell}");
+        }
+        assert_eq!(
+            fs::read(osm.join(cells[0]).join("barriers.arrow")).unwrap(),
+            b"populated",
+            "the fill overwrote a table that already had rows"
+        );
+
+        // An empty table is byte-identical cell to cell, 0 rows, contract stamped.
+        let first = fs::read(osm.join(cells[0]).join("buildings.arrow")).unwrap();
+        let second = fs::read(osm.join(cells[1]).join("buildings.arrow")).unwrap();
+        assert_eq!(first, second);
+        let reader = arrow::ipc::reader::FileReader::try_new(
+            File::open(osm.join(cells[1]).join("buildings.arrow")).unwrap(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            reader
+                .schema()
+                .metadata()
+                .get("buildings_contract")
+                .map(String::as_str),
+            Some(BUILDINGS_CONTRACT_V2)
+        );
+        assert_eq!(
+            reader.map(|b| b.unwrap().num_rows()).sum::<usize>(),
+            0,
+            "the empty table is not empty"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
 }

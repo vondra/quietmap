@@ -25,7 +25,7 @@ import { writeBuildingEnrichment } from './lib/buildings-arrow.js'
 import { iterateCountryHexes } from './lib/roads-arrow.js'
 import { SOURCE_ID_ES_CATASTRO } from './lib/source-ids.generated.js'
 import { flatDist } from './lib/spatial.js'
-import { DATA_YEAR as YEAR, OSM_EXTRACT_DIR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, OSM_EXTRACT_DIR, requireOsmExtractTree } from './lib/data-year.js'
 
 const MY_SOURCE_ID = SOURCE_ID_ES_CATASTRO
 
@@ -563,10 +563,9 @@ async function main() {
   console.log(`  Cache: ${CACHE_DIR}`)
   console.log(`  Target provinces: ${TARGET_PROVINCES.map(p => `${p.name} (${p.code})`).join(', ')}\n`)
 
-  if (!existsSync(OSM_EXTRACT_DIR)) {
-    console.error(`ERROR: OSM extract directory not found: ${OSM_EXTRACT_DIR}`)
-    process.exit(1)
-  }
+  // Missing OR empty: iterateCountryHexes returns [] for both, so without this
+  // the run would print "0 hexes, done" over a world that has buildings.
+  requireOsmExtractTree()
 
   const buildings = await downloadCatastro()
   console.log(`\n  Catastro buildings: ${buildings.length.toLocaleString()}`)

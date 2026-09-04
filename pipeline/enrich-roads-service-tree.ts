@@ -38,7 +38,7 @@ import { SOURCE_ID_SERVICE_TREE_HEURISTIC } from './lib/source-ids.generated.js'
 import { iterateCountryHexes } from './lib/roads-arrow.js'
 import { nodeKey } from './lib/spatial.js'
 import { MinHeap } from './lib/min-heap.js'
-import { DATA_YEAR as YEAR, H3R4_DIR, OSM_EXTRACT_DIR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, H3R4_DIR, OSM_EXTRACT_DIR, requireOsmExtractTree } from './lib/data-year.js'
 import { estimateBuildingLoad, type BuildingLoad } from './lib/trip-rates.js'
 import { fleetForIso, type CountryFleet } from './lib/country-fleet.generated.js'
 import { createHexCountryResolver, type HexCountryResolver } from './lib/hex-country.js'
@@ -740,6 +740,28 @@ function debugFlow(
 
 // ---------- Process one hex ----------
 
+/** A prepared cell whose OSM building table is absent — an incomplete extract
+ *  tree, reported apart from the ordinary "nothing to enrich here" skip. */
+export const OSM_TABLES_MISSING = 'osm-tables-missing'
+
+/**
+ * Which of a cell's two road inputs are on disk, and what each absence means.
+ *
+ * No `roads.arrow` is ordinary — an airborne-only or offshore cell — and the
+ * pass skips it. No `buildings.arrow` is NOT: every prepared cell carries its
+ * OSM pair, 0-row where nothing stands, so an absent one is a broken or
+ * unmounted extract tree. Folded into the same skip it would let a whole shard
+ * print "0 enriched" over a world full of buildings and exit 0.
+ */
+export function cellInputState(
+  roadsPath: string,
+  buildingsPath: string,
+): 'ready' | 'no-roads' | typeof OSM_TABLES_MISSING {
+  if (!existsSync(roadsPath)) return 'no-roads'
+  if (!existsSync(buildingsPath)) return OSM_TABLES_MISSING
+  return 'ready'
+}
+
 /** #31.5: the whole read→compute→write runs INSIDE `withArrowWrite` — the same
  *  advisory-lockfile (PID-liveness stale recovery) + tmp + rename + schema/batch-shape preservation every other road
  *  writer uses. The previous raw `writeFileSync(tableToIPC(...))` dropped
@@ -750,10 +772,12 @@ function debugFlow(
 async function processHex(
   hexId: string,
   countryResolver: HexCountryResolver,
-): Promise<{ enriched: number; totalResidential: number } | null> {
+): Promise<{ enriched: number; totalResidential: number } | null | typeof OSM_TABLES_MISSING> {
   const roadsPath = resolve(H3R4_DIR, hexId, 'roads.arrow')
   const buildingsPath = resolve(OSM_EXTRACT_DIR, hexId, 'buildings.arrow')
-  if (!existsSync(roadsPath) || !existsSync(buildingsPath)) return null
+  const state = cellInputState(roadsPath, buildingsPath)
+  if (state === OSM_TABLES_MISSING) return OSM_TABLES_MISSING
+  if (state === 'no-roads') return null
 
   let result: { enriched: number; totalResidential: number } | null = null
   await withArrowWrite(roadsPath, (roadTable) => {
@@ -949,6 +973,9 @@ async function main() {
     console.error(`ERROR: H3R4 directory not found: ${H3R4_DIR}`)
     process.exit(1)
   }
+  // Building-driven AADT is computed from the OSM extract tree; a missing or bare
+  // one would report "0 enriched" for every hex and exit 0.
+  requireOsmExtractTree()
 
   // --bbox scopes to one region via the shared iterateCountryHexes (cellToLatLng
   // + inBbox, hexes with roads.arrow inside the box) — used by the road re-stamp
@@ -1017,6 +1044,16 @@ async function main() {
     const hexId = hexDirs[hi]
     const result = await processHex(hexId, countryResolver)
 
+    if (result === OSM_TABLES_MISSING) {
+      // Fail on the FIRST one, naming it: finishing the shard would compute
+      // traffic for the rest of the world with no buildings at all and print a
+      // normal-looking "=== Results" line the extract driver counts as success.
+      throw new Error(
+        `prepared cell ${hexId} has no buildings.arrow in ${OSM_EXTRACT_DIR} — every prepared ` +
+          `cell must carry one (0-row where nothing stands); the OSM extract tree is ` +
+          `incomplete, re-run scripts/osm-to-h3r4.sh`,
+      )
+    }
     if (result) {
       hexesEnriched++
       totalSegmentsEnriched += result.enriched

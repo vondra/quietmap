@@ -62,7 +62,12 @@
 # creates a prepared cell directory (the table follows the prepared inventory)
 # and never removes one. buildings.arrow and barriers.arrow are the OSM inputs
 # every rebuild reads again; they live in the --osm-dir SOURCE tree, never in a
-# prepared cell, which holds only what the painters read.
+# prepared cell, which holds only what the painters read. EVERY prepared cell has
+# both, 0-row where nothing stands (the rule structures.arrow itself follows), so
+# an absent file means a broken tree and is an ERROR here — never "this cell has
+# no buildings", which would silently write an Overture-only table and drop the
+# cell's emission stock. A stale copy left in the prepared cell is ignored: the
+# merge reads --osm-dir and nothing else.
 #
 # Usage:
 #   build-structures.py --h3r4-dir data/prepared/2026/h3r4 \
@@ -76,6 +81,7 @@ import glob
 import json
 import math
 import os
+import re
 import struct
 import sys
 
@@ -506,8 +512,17 @@ def read_overture_parquet(parquet_dir, cell):
 # ── The merge ─────────────────────────────────────────────────────────────────
 
 def load_osm_buildings(path):
+    # ABSENT IS NOT EMPTY. Every prepared cell carries its OSM pair, 0-row where
+    # nothing stands (finalize writes it), so a missing file is a broken or
+    # unmounted extract tree. Reading it as "this cell has no OSM buildings"
+    # would write a valid-looking Overture-only table and drop the cell's whole
+    # emission stock — the building layer would go quiet and nothing would say so.
     if not os.path.exists(path):
-        return None
+        raise SystemExit(
+            f"{path}: missing — every prepared cell carries its OSM building table, "
+            f"0-row where nothing stands. Re-run scripts/osm-to-h3r4.sh; the merge "
+            f"must not treat an absent file as a cell without buildings"
+        )
     t = ipc.open_file(path).read_all()
     # The builder propagates building_type ids into the merged table, and the
     # engine gates structures.arrow on structures_contract — so a stale
@@ -526,8 +541,12 @@ def load_osm_buildings(path):
 
 
 def load_barriers(path):
+    # Absent is not empty, exactly as for buildings above.
     if not os.path.exists(path):
-        return []
+        raise SystemExit(
+            f"{path}: missing — every prepared cell carries its OSM barrier table, "
+            f"0-row where nothing stands. Re-run scripts/osm-to-h3r4.sh"
+        )
     t = ipc.open_file(path).read_all()
     cols = {c: t.column(c).to_pylist()
             for c in ("osm_id", "segment_idx", "start_lat", "start_lon",
@@ -647,6 +666,26 @@ def apply_raster_tiers(rows, regional, ghsl, stats):
                 stats["tier4"] += 1
 
 
+# An H3 res-4 cell directory name: every R4 index ends in `ffffffff`, so a stray
+# file or scratch directory cannot pass for a cell.
+R4_CELL_DIR = re.compile(r"^[0-9a-f]{7}ffffffff$")
+
+
+def require_osm_tree(osm_dir):
+    """The --osm-dir tree must exist AND hold cells. The per-cell loaders already
+    refuse an absent file, but a missing or bare ROOT deserves its own message:
+    it is the mistake a direct builder call actually makes (a typo, an unmounted
+    disk), and every cell would otherwise fail one by one on a symptom."""
+    if not os.path.isdir(osm_dir) or not any(
+        R4_CELL_DIR.match(name) for name in os.listdir(osm_dir)
+    ):
+        raise SystemExit(
+            f"{osm_dir}: OSM extract tree missing or holds no R4 cell — the merge "
+            f"would write Overture-only tables and erase every building's emission "
+            f"stock. Run scripts/osm-to-h3r4.sh"
+        )
+
+
 def build_cell(cell, h3r4_dir, osm_dir, overture_rows, overture_mtime, ghsl,
                regional, validate):
     """Write one cell's structures.arrow; return the per-cell census dict, or
@@ -664,12 +703,12 @@ def build_cell(cell, h3r4_dir, osm_dir, overture_rows, overture_mtime, ghsl,
     out_path = os.path.join(cell_dir, "structures.arrow")
     if os.path.exists(out_path):
         out_mtime = os.path.getmtime(out_path)
-        inputs = [os.path.join(osm_cell_dir, n)
-                  for n in ("buildings.arrow", "barriers.arrow")]
         # EVERY input the row values are computed from, or a refreshed one is
-        # served stale for ever: the two per-cell arrows, the Overture source
-        # (shard tree or parquet release) and the height-ladder rasters.
-        mtimes = [os.path.getmtime(p) for p in inputs if os.path.exists(p)]
+        # served stale for ever: the two per-cell arrows (always present — the
+        # loaders below refuse an absent one), the Overture source (shard tree or
+        # parquet release) and the height-ladder rasters.
+        mtimes = [os.path.getmtime(os.path.join(osm_cell_dir, n))
+                  for n in ("buildings.arrow", "barriers.arrow")]
         if overture_mtime is not None:
             mtimes.append(overture_mtime)
         mtimes.append(ghsl.mtime)
@@ -682,23 +721,22 @@ def build_cell(cell, h3r4_dir, osm_dir, overture_rows, overture_mtime, ghsl,
 
     # OSM geometry index for matching (rows with a polygon only).
     osm_geoms, osm_geom_idx, osm_geom_by_row = [], [], {}
-    if osm is not None:
-        for i, w in enumerate(osm["polygon_wkb"]):
-            if w is None:
-                continue
-            g = shapely_wkb.loads(w)
-            if g.is_empty:
-                continue
-            osm_geoms.append(g)
-            osm_geom_idx.append(i)
-            osm_geom_by_row[i] = g
+    for i, w in enumerate(osm["polygon_wkb"]):
+        if w is None:
+            continue
+        g = shapely_wkb.loads(w)
+        if g.is_empty:
+            continue
+        osm_geoms.append(g)
+        osm_geom_idx.append(i)
+        osm_geom_by_row[i] = g
     pairs = match_pairs(osm_geoms, osm_geom_idx, overture_rows)
     osm_to_ovt = {i: j for j, i in pairs.items()}
 
     # Ladder: Overture rows ladder from shard/parquet tags; OSM-only rows from
     # OSM tags. Matched rows keep the Overture-side result (module header).
     osm_only = {}
-    n_osm = len(osm["osm_id"]) if osm is not None else 0
+    n_osm = len(osm["osm_id"])
     matched_osm = set(pairs.values())
     raster_rows = list(overture_rows)
     for i in range(n_osm):
@@ -875,45 +913,44 @@ def validate_cell(cell, osm, table):
     (kind=0, osm_id present, file order) equals buildings.arrow row by row on
     every emission column, with the emission polygon = emission_polygon_wkb ??
     geometry_wkb and the emission centroid = emission_centroid_* ?? centroid_*."""
-    if osm is not None:
-        mask = pc.and_(
-            pc.equal(table.column("kind"), KIND_BUILDING),
-            pc.is_valid(table.column("osm_id")),
+    mask = pc.and_(
+        pc.equal(table.column("kind"), KIND_BUILDING),
+        pc.is_valid(table.column("osm_id")),
+    )
+    view = table.filter(mask)
+    n = len(osm["osm_id"])
+    if view.num_rows != n:
+        raise SystemExit(
+            f"{cell}: emission view rows {view.num_rows} != buildings.arrow {n}"
         )
-        view = table.filter(mask)
-        n = len(osm["osm_id"])
-        if view.num_rows != n:
-            raise SystemExit(
-                f"{cell}: emission view rows {view.num_rows} != buildings.arrow {n}"
-            )
-        cols = {c: view.column(c).to_pylist() for c in EMISSION_COMPARE}
-        epoly = view.column("emission_polygon_wkb").to_pylist()
-        geom = view.column("geometry_wkb").to_pylist()
-        eclat = view.column("emission_centroid_lat").to_pylist()
-        eclon = view.column("emission_centroid_lon").to_pylist()
-        clat = view.column("centroid_lat").to_pylist()
-        clon = view.column("centroid_lon").to_pylist()
-        for i in range(n):
-            for c in EMISSION_COMPARE:
-                if cols[c][i] != osm[c][i]:
-                    raise SystemExit(
-                        f"{cell}: emission row {i} column {c}: "
-                        f"{cols[c][i]!r} != {osm[c][i]!r}"
-                    )
-            # The polygon enters emission only where the loader can read it:
-            # area missing (shoelace fallback) or above the grid-split threshold
-            # (noise_compute::normalize::points). Below it the point stream is
-            # polygon-independent by construction, and the sparse
-            # emission_polygon_wkb stays null.
-            area = osm["area_m2"][i]
-            if (area is None or not (area > 0.0) or area > EMISSION_GRID_THRESHOLD_M2) and (
-                epoly[i] or geom[i]
-            ) != osm["polygon_wkb"][i]:
-                raise SystemExit(f"{cell}: emission row {i} polygon differs")
-            if (eclat[i] if eclat[i] is not None else clat[i]) != osm["centroid_lat"][i]:
-                raise SystemExit(f"{cell}: emission row {i} centroid_lat differs")
-            if (eclon[i] if eclon[i] is not None else clon[i]) != osm["centroid_lon"][i]:
-                raise SystemExit(f"{cell}: emission row {i} centroid_lon differs")
+    cols = {c: view.column(c).to_pylist() for c in EMISSION_COMPARE}
+    epoly = view.column("emission_polygon_wkb").to_pylist()
+    geom = view.column("geometry_wkb").to_pylist()
+    eclat = view.column("emission_centroid_lat").to_pylist()
+    eclon = view.column("emission_centroid_lon").to_pylist()
+    clat = view.column("centroid_lat").to_pylist()
+    clon = view.column("centroid_lon").to_pylist()
+    for i in range(n):
+        for c in EMISSION_COMPARE:
+            if cols[c][i] != osm[c][i]:
+                raise SystemExit(
+                    f"{cell}: emission row {i} column {c}: "
+                    f"{cols[c][i]!r} != {osm[c][i]!r}"
+                )
+        # The polygon enters emission only where the loader can read it:
+        # area missing (shoelace fallback) or above the grid-split threshold
+        # (noise_compute::normalize::points). Below it the point stream is
+        # polygon-independent by construction, and the sparse
+        # emission_polygon_wkb stays null.
+        area = osm["area_m2"][i]
+        if (area is None or not (area > 0.0) or area > EMISSION_GRID_THRESHOLD_M2) and (
+            epoly[i] or geom[i]
+        ) != osm["polygon_wkb"][i]:
+            raise SystemExit(f"{cell}: emission row {i} polygon differs")
+        if (eclat[i] if eclat[i] is not None else clat[i]) != osm["centroid_lat"][i]:
+            raise SystemExit(f"{cell}: emission row {i} centroid_lat differs")
+        if (eclon[i] if eclon[i] is not None else clon[i]) != osm["centroid_lon"][i]:
+            raise SystemExit(f"{cell}: emission row {i} centroid_lon differs")
 
 
 def main():
@@ -934,6 +971,7 @@ def main():
     ap.add_argument("--census-log", help="append one JSON line per built cell (the world migration's count proof)")
     args = ap.parse_args()
 
+    require_osm_tree(args.osm_dir)
     cells = ([line.strip() for line in open(args.cells_file) if line.strip()]
              if args.cells_file else args.cells.split(","))
     ghsl = GlobalPrior(args.ghsl)
