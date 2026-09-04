@@ -126,11 +126,33 @@ pub fn cell_admin_path(h3r4_directory: &Path, cell: u64) -> PathBuf {
 }
 
 /// Read one cell's admin record. `io::ErrorKind::NotFound` means the cell is
-/// outside the prepared world; every other error is a real fault (a truncated
-/// record, or one copied in from another cell).
+/// outside the prepared world (no cell directory at all); every other error is
+/// a real fault: a prepared cell directory without its record, a truncated
+/// record, or one copied in from another cell.
 pub fn read_cell_admin(h3r4_directory: &Path, cell: u64) -> io::Result<Admin> {
     let path = cell_admin_path(h3r4_directory, cell);
-    let bytes = fs::read(&path)?;
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            // The DIRECTORY separates the two absences, exactly as the obstacle
+            // table does: a cell the Planet extract never produced has no
+            // directory; a directory without the record is undelivered data.
+            let directory = path.parent().expect("record path has a parent");
+            return match fs::metadata(directory) {
+                Err(dir_error) if dir_error.kind() == io::ErrorKind::NotFound => Err(error),
+                Err(dir_error) => Err(dir_error),
+                Ok(_) => Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "cell {cell:015x} has no {} — every prepared cell carries one, so this \
+                         is undelivered data, not open sea",
+                        path.display()
+                    ),
+                )),
+            };
+        }
+        Err(error) => return Err(error),
+    };
     if bytes.len() != RECORD_SIZE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -238,6 +260,23 @@ pub fn admin_for_latlng(lat: f64, lng: f64) -> Admin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A prepared cell directory without its record is undelivered data, never
+    /// the ocean answer: the reader must fail, not fall back to WORLD defaults.
+    #[test]
+    fn missing_record_in_an_existing_cell_directory_is_a_fault() {
+        let root = std::env::temp_dir().join(format!("admin-missing-{}", std::process::id()));
+        let cell: u64 = 0x841e309ffffffff;
+        fs::create_dir_all(root.join(format!("{cell:015x}"))).unwrap();
+        let error = read_cell_admin(&root, cell).unwrap_err();
+        assert_ne!(error.kind(), io::ErrorKind::NotFound, "{error}");
+        let outside: u64 = 0x841e30bffffffff;
+        assert_eq!(
+            read_cell_admin(&root, outside).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
 
     /// Write one cell's admin record into an h3r4 tree.
     fn write_cell_admin(h3r4_directory: &Path, cell: u64, iso: &[u8; 2], city: u16) {
