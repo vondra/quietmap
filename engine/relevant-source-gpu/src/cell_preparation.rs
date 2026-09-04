@@ -26,8 +26,8 @@ use crate::obstacle_transfer::FlattenedObstacleGeometry;
 use crate::relevant_source_runner::RelevantSourceRunConfiguration;
 use crate::relevant_source_tile::{RegionDeviceLineSources, RegionDeviceObstacles};
 use crate::source_frame::{
-    source_identity_fingerprint, DeviceLineSource, RegionMetricFrame, BAND_COUNT, PERIOD_COUNT,
-    SOURCE_FLAG_GROUND_OPS_AIRCRAFT, SOURCE_FLAG_GROUND_OPS_GSE,
+    DeviceLineSource, RegionMetricFrame, BAND_COUNT, PERIOD_COUNT, SOURCE_FLAG_GROUND_OPS_AIRCRAFT,
+    SOURCE_FLAG_GROUND_OPS_GSE,
 };
 use crate::surface_layers::{BUILDING_LAYER, GROUND_OPS_LAYER, LAYER_NAMES, LAYER_SOURCE_IDS};
 
@@ -37,7 +37,6 @@ pub struct EncodedLineLayer {
     pub directory_name: &'static str,
     pub source_id: u8,
     pub sources: Vec<DeviceLineSource>,
-    pub fingerprint: u64,
     pub device_sources: RegionDeviceLineSources,
 }
 
@@ -173,14 +172,12 @@ pub fn prepare_region(
 }
 
 fn encode_layer(layer: usize, sources: Vec<DeviceLineSource>) -> Result<EncodedLineLayer> {
-    let fingerprint = source_identity_fingerprint(&sources);
     let device_sources = RegionDeviceLineSources::upload(&sources)?;
     Ok(EncodedLineLayer {
         layer,
         directory_name: LAYER_NAMES[layer],
         source_id: LAYER_SOURCE_IDS[layer],
         sources,
-        fingerprint,
         device_sources,
     })
 }

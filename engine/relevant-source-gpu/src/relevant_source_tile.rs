@@ -1,10 +1,10 @@
 //! Tile uploads, shared-corner partition construction, exact pixel paint, and the
 //! HM3 collapse-and-write handed to the region's writer thread.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use noise_compute::constants::ENCLOSURE_RADIUS_M;
 use noise_compute::propagation::obstacle_index::{enclosure_db, ObstacleSet};
 use raster_reader::fused_tile_z13::{tile_pixel_size_m, FusedTileZ13};
@@ -20,8 +20,7 @@ use crate::obstacle_transfer::{
 };
 use crate::relevance_partition::build_relevant_source_partition;
 use crate::source_frame::{
-    source_identity_fingerprint, DeviceLineSource, RegionMetricFrame, BLOCK_COUNT, CORNER_COUNT,
-    PERIOD_COUNT, TILE_PIXEL_SIDE,
+    DeviceLineSource, RegionMetricFrame, BLOCK_COUNT, CORNER_COUNT, PERIOD_COUNT, TILE_PIXEL_SIDE,
 };
 use crate::tile_source_incidence::{build_tile_source_incidence, TileMetricLattice};
 
@@ -189,15 +188,12 @@ impl TileDeviceReceivers {
 pub fn partition_and_paint_tile(
     cuda: &RelevantSourceCuda,
     sources: &[DeviceLineSource],
-    source_fingerprint: u64,
     device_sources: &RegionDeviceLineSources,
     device_obstacles: &RegionDeviceObstacles,
     batch_raster: &BatchDeviceRaster,
     receivers: &TileDeviceReceivers,
     lden_weights: [f64; PERIOD_COUNT],
-    partition_path: &Path,
 ) -> Result<(TilePaintMeasurement, Vec<f32>)> {
-    debug_assert_eq!(source_fingerprint, source_identity_fingerprint(sources));
     let incidence = build_tile_source_incidence(sources, &receivers.lattice);
     let corner_offsets = DeviceBuffer::from_slice(&incidence.corner_offsets)?;
     let corner_sources = DeviceBuffer::from_slice(&incidence.corner_source_indices)?;
@@ -223,16 +219,7 @@ pub fn partition_and_paint_tile(
         &receivers.corner_y_m,
         &receivers.corner_reflection_db,
     )?;
-    let partition = build_relevant_source_partition(
-        &incidence,
-        &corner_energy,
-        lden_weights,
-        source_fingerprint,
-    )?;
-    partition
-        .write_to(partition_path)
-        .with_context(|| format!("persist {}", partition_path.display()))?;
-
+    let partition = build_relevant_source_partition(&incidence, &corner_energy, lden_weights)?;
     let block_offsets = DeviceBuffer::from_slice(&partition.block_offsets)?;
     let relevant_sources = DeviceBuffer::from_slice(&partition.relevant_source_indices)?;
     let background_flat: Vec<f32> = partition

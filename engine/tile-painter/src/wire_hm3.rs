@@ -221,6 +221,11 @@ pub fn is_silent(cells: &[u8]) -> bool {
     cells.iter().all(|&b| b == NO_DATA)
 }
 
+/// Maximum encoded tile size, used to reserve output disk before painting.
+pub fn maximum_encoded_tile_bytes() -> usize {
+    brotli::enc::BrotliEncoderMaxCompressedSize(HEADER_BYTES + CELLS)
+}
+
 /// Compose + compress a complete HM3 file image in memory: ONE Brotli
 /// stream of `MAGIC + VERSION + source_id + cells` — exactly the bytes a loose
 /// `.bin` holds and the byte layout served with `Content-Encoding: br`.
@@ -246,6 +251,9 @@ pub fn encode_tile_bytes(cells: &[u8], source_id: u8) -> Result<Vec<u8>> {
     let mut payload = Vec::new();
     brotli::BrotliCompress(&mut Cursor::new(&raw), &mut payload, &params)
         .context("brotli encode")?;
+    if payload.len() > maximum_encoded_tile_bytes() {
+        bail!("encoded tile exceeds the declared output reservation");
+    }
     Ok(payload)
 }
 
@@ -339,6 +347,22 @@ fn decode_validated(compressed: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incompressible_tile_fits_the_declared_output_reservation() {
+        let mut state = 1_u32;
+        let cells: Vec<u8> = (0..CELLS)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            })
+            .collect();
+        let encoded = encode_tile_bytes(&cells, SOURCE_ID_ROAD).unwrap();
+        assert!(encoded.len() <= maximum_encoded_tile_bytes());
+        assert_eq!(read_tile_bytes(&encoded).unwrap(), cells);
+    }
 
     #[test]
     fn quantise_round_trip_inside_range() {

@@ -46,6 +46,13 @@ struct Arguments {
 }
 
 fn main() -> Result<ExitCode> {
+    if std::env::args().skip(1).eq(["--resource-limits"]) {
+        println!(
+            "{{\"maximum_tile_bytes\":{}}}",
+            tile_painter::wire_hm3::maximum_encoded_tile_bytes()
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
     let arguments = Arguments::parse();
     if !arguments.stream {
         bail!("--stream is this painter's only mode: cells arrive one per stdin line");

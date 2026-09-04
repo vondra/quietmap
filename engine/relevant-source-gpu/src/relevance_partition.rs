@@ -1,20 +1,14 @@
-//! Energy-budget corner-union selection with a persisted per-block linear-energy background.
+//! Energy-budget corner-union selection with a per-block linear-energy background.
 
 use std::collections::HashSet;
-use std::fs::{self, File};
-use std::io::{BufWriter, Write};
-use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use rayon::prelude::*;
 
 use crate::source_frame::{
     BLOCKS_PER_TILE_SIDE, BLOCK_COUNT, CORNERS_PER_TILE_SIDE, CORNER_COUNT, PERIOD_COUNT,
 };
 use crate::tile_source_incidence::TileSourceIncidence;
-
-const FILE_MAGIC: [u8; 8] = *b"QMRSP001";
-const FILE_VERSION: u32 = 2;
 
 /// A corner admits its ranked sources until the Lden energy it has NOT admitted
 /// is at most this fraction of the SMALLEST corner total in its block; the rest
@@ -49,7 +43,6 @@ pub const DROP_BUDGET_FRACTION: f64 = 0.15;
 /// The complete reusable source partition for one fixed geographic tile.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RelevantSourcePartition {
-    pub source_fingerprint: u64,
     pub block_offsets: Vec<u32>,
     pub relevant_source_indices: Vec<u32>,
     /// The dropped energy at each block's four corners, which the paint kernel
@@ -71,50 +64,6 @@ impl RelevantSourcePartition {
         let end = self.block_offsets[block + 1] as usize;
         &self.relevant_source_indices[start..end]
     }
-
-    pub fn write_to(&self, path: &Path) -> Result<()> {
-        validate_partition_shape(self)?;
-        let temporary_path = path.with_extension("relevant-source-partition.tmp");
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("create partition directory {}", parent.display()))?;
-        }
-        let mut writer = BufWriter::new(
-            File::create(&temporary_path)
-                .with_context(|| format!("create {}", temporary_path.display()))?,
-        );
-        writer.write_all(&FILE_MAGIC)?;
-        write_u32(&mut writer, FILE_VERSION)?;
-        write_u32(&mut writer, crate::source_frame::BLOCK_PIXEL_SIDE as u32)?;
-        write_u32(&mut writer, PERIOD_COUNT as u32)?;
-        write_u32(&mut writer, BLOCK_COUNT as u32)?;
-        write_u64(&mut writer, self.source_fingerprint)?;
-        write_u32(&mut writer, self.relevant_source_indices.len() as u32)?;
-        write_u32(&mut writer, 0)?;
-        for &offset in &self.block_offsets {
-            write_u32(&mut writer, offset)?;
-        }
-        for corners in &self.background_corner_energy {
-            for periods in corners {
-                for &energy in periods {
-                    writer.write_all(&energy.to_le_bytes())?;
-                }
-            }
-        }
-        for &source_index in &self.relevant_source_indices {
-            write_u32(&mut writer, source_index)?;
-        }
-        writer.flush()?;
-        drop(writer);
-        fs::rename(&temporary_path, path).with_context(|| {
-            format!(
-                "publish partition {} as {}",
-                temporary_path.display(),
-                path.display()
-            )
-        })?;
-        Ok(())
-    }
 }
 
 /// Build a partition from one full-physics result per corner/source candidate pair.
@@ -122,7 +71,6 @@ pub fn build_relevant_source_partition(
     incidence: &TileSourceIncidence,
     corner_pair_energy: &[[f32; PERIOD_COUNT]],
     lden_weights: [f64; PERIOD_COUNT],
-    source_fingerprint: u64,
 ) -> Result<RelevantSourcePartition> {
     validate_incidence(incidence, corner_pair_energy.len())?;
     let ranked_sources = rank_sources_at_corners(incidence, corner_pair_energy, lden_weights);
@@ -193,7 +141,6 @@ pub fn build_relevant_source_partition(
         background_corner_energy.push(block_background);
     }
     Ok(RelevantSourcePartition {
-        source_fingerprint,
         block_offsets,
         relevant_source_indices,
         background_corner_energy,
@@ -310,32 +257,6 @@ fn validate_incidence(incidence: &TileSourceIncidence, pair_count: usize) -> Res
     Ok(())
 }
 
-fn validate_partition_shape(partition: &RelevantSourcePartition) -> Result<()> {
-    if partition.block_offsets.len() != BLOCK_COUNT + 1
-        || partition.background_corner_energy.len() != BLOCK_COUNT
-        || partition.block_offsets.first() != Some(&0)
-        || partition.block_offsets.last().copied().unwrap_or_default() as usize
-            != partition.relevant_source_indices.len()
-        || partition
-            .block_offsets
-            .windows(2)
-            .any(|window| window[0] > window[1])
-    {
-        bail!("relevant-source partition has inconsistent dimensions");
-    }
-    Ok(())
-}
-
-fn write_u32(writer: &mut impl Write, value: u32) -> Result<()> {
-    writer.write_all(&value.to_le_bytes())?;
-    Ok(())
-}
-
-fn write_u64(writer: &mut impl Write, value: u64) -> Result<()> {
-    writer.write_all(&value.to_le_bytes())?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,7 +297,6 @@ mod tests {
             &incidence,
             &energies,
             tile_painter::scatter_band::LDEN_WEIGHTS,
-            7,
         )
         .unwrap();
         assert_eq!(
@@ -420,7 +340,6 @@ mod tests {
             &incidence,
             &energies,
             tile_painter::scatter_band::LDEN_WEIGHTS,
-            7,
         )
         .unwrap();
         assert_eq!(

@@ -353,24 +353,15 @@ fn paint_batch_tiles(
                 x,
                 y,
             );
-            let partition_path = partition_tile_path(
-                &configuration.output_directory,
-                encoded.directory_name,
-                zoom,
-                x,
-                y,
-            );
             let tile_started = Instant::now();
             let (tile_measurement, energy) = partition_and_paint_tile(
                 cuda,
                 &encoded.sources,
-                encoded.fingerprint,
                 &encoded.device_sources,
                 device_obstacles,
                 batch_raster,
                 &receivers,
                 LAYER_LDEN_WEIGHTS[layer],
-                &partition_path,
             )?;
             write_sender
                 .send(PendingTileWrite {
@@ -398,12 +389,4 @@ fn output_tile_path(root: &Path, layer: &str, zoom: u8, x: u32, y: u32) -> PathB
         .join(zoom.to_string())
         .join(x.to_string())
         .join(format!("{y}.bin"))
-}
-
-fn partition_tile_path(root: &Path, layer: &str, zoom: u8, x: u32, y: u32) -> PathBuf {
-    root.join("relevant-source-partitions")
-        .join(layer)
-        .join(zoom.to_string())
-        .join(x.to_string())
-        .join(format!("{y}.rsp"))
 }

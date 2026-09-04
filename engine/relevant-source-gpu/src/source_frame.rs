@@ -166,35 +166,6 @@ fn flatten_emission(
     flat
 }
 
-pub fn source_identity_fingerprint(sources: &[DeviceLineSource]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for source in sources {
-        for value in [
-            source.start_x_m,
-            source.start_y_m,
-            source.end_x_m,
-            source.end_y_m,
-            source.extent_m,
-            source.max_distance_m,
-            source.source_height_m,
-        ] {
-            update_hash(&mut hash, &value.to_bits().to_le_bytes());
-        }
-        update_hash(&mut hash, &source.flags.to_le_bytes());
-        for value in source.emission_linear {
-            update_hash(&mut hash, &value.to_bits().to_le_bytes());
-        }
-    }
-    hash
-}
-
-fn update_hash(hash: &mut u64, bytes: &[u8]) {
-    for &byte in bytes {
-        *hash ^= u64::from(byte);
-        *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,22 +173,5 @@ mod tests {
     #[test]
     fn device_source_layout_is_the_expected_four_cache_lines() {
         assert_eq!(std::mem::size_of::<DeviceLineSource>(), 128);
-    }
-
-    #[test]
-    fn source_fingerprint_changes_with_order_and_emission() {
-        let first = DeviceLineSource {
-            start_x_m: 1.0,
-            emission_linear: [2.0; PERIOD_COUNT * BAND_COUNT],
-            ..DeviceLineSource::default()
-        };
-        let second = DeviceLineSource {
-            start_x_m: 2.0,
-            ..DeviceLineSource::default()
-        };
-        assert_ne!(
-            source_identity_fingerprint(&[first, second]),
-            source_identity_fingerprint(&[second, first])
-        );
     }
 }

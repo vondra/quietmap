@@ -218,7 +218,7 @@ impl TileStore {
     #[inline]
     fn tile_idx(lat_int: i32, lon_int: i32) -> usize {
         let lat = (lat_int + 90).clamp(0, 179) as usize;
-        let lon = (lon_int + 180).clamp(0, 359) as usize;
+        let lon = (lon_int + 180).rem_euclid(360) as usize;
         lat * 360 + lon
     }
 
@@ -260,6 +260,7 @@ impl TileStore {
     /// Get or load a tile. Returns an Arc so the caller can keep using the tile
     /// even if the cache later evicts that slot.
     fn get_tile(&self, lat_int: i32, lon_int: i32) -> Option<Arc<RawTile>> {
+        let lon_int = (lon_int + 180).rem_euclid(360) - 180;
         let idx = Self::tile_idx(lat_int, lon_int);
         {
             let slot = self.tiles[idx].lock().unwrap_or_else(|e| e.into_inner());
@@ -354,7 +355,14 @@ impl TileStore {
         let lon_int = lon.floor() as i32;
         let frac_lat = lat - lat_int as f64; // 0..1 within tile
         let frac_lon = lon - lon_int as f64;
-        (lat_int, lon_int, frac_lat, frac_lon)
+        // Halo coordinates may cross the seam; retain the original fraction so
+        // canonical samples do not move by an extra floating-point subtraction.
+        (
+            lat_int,
+            (lon_int + 180).rem_euclid(360) - 180,
+            frac_lat,
+            frac_lon,
+        )
     }
 
     /// Convert frac (0..1) to pixel coords using tile's actual grid_size.
@@ -599,6 +607,30 @@ mod tests {
         let store = TileStore::new(dir.clone(), 4, DType::U8, Interp::Nearest, 7.0, ".raw", 2);
         assert_eq!(store.sample(0.5, 0.5), 42.0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn seam_halos_wrap_to_the_opposite_tile_without_aliasing_the_last_column() {
+        let dir = tile_test_dir("longitude-wrap");
+        std::fs::write(dir.join("N00W180.raw"), [17u8; 16]).unwrap();
+        std::fs::write(dir.join("N00E179.raw"), [93u8; 16]).unwrap();
+        let store = TileStore::new(dir.clone(), 4, DType::U8, Interp::Nearest, 0.0, ".raw", 4);
+        store.preload_bbox(0.0, 0.9, 179.0, 181.0);
+        let mut key = (i32::MIN, i32::MIN);
+        let mut tile = None;
+        for (longitude, expected) in [
+            (179.75, 93.0),
+            (180.25, 17.0),
+            (-180.25, 93.0),
+            (-179.75, 17.0),
+        ] {
+            assert_eq!(store.sample(0.5, longitude), expected);
+            assert_eq!(
+                store.sample_cached(0.5, longitude, &mut key, &mut tile),
+                expected
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A refused PRIMARY must not suppress a valid alt-dir fallback — the
