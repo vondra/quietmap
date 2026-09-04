@@ -14,7 +14,7 @@
 //!
 //! Staleness is decided by two u64s in the header, never by a comment:
 //! * [`BUILDER_CODE_VER`] — a content hash of every source file that decides
-//!   the bytes (the Rust twin of `scripts/layer-codever.py`'s per-layer content
+//!   the bytes (a compile-time per-input content
 //!   set-hash: over-invalidate rather than risk a stale artifact);
 //! * `data_ver` — the caller's fingerprint of the INPUT files (the twin of
 //!   `world-stamps.py`'s `_data_ver` mtime set-hash).
@@ -167,7 +167,7 @@ pub const FNV1A64_SEED: u64 = 0xcbf2_9ce4_8422_2325;
 /// low-profile height cap and the metric-frame constants. Editing any of them
 /// rotates the version, so every cached file written by the old code is refused
 /// on the next start — the same safe-over-invalidation rule
-/// `scripts/layer-codever.py` applies to tiles, enforced by the compiler instead
+/// a cached artifact needs, enforced by the compiler instead
 /// of by remembering to bump a number.
 ///
 /// Callers that add decisions of their OWN on top (id ordering, shard order)

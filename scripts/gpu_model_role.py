@@ -293,7 +293,7 @@ MODEL_SOURCE_DIRS = (
 )
 MODEL_SOURCE_PRUNED_DIRS = frozenset({"target", "tests"})
 # Recipe identity pinned in published generation contracts. Workspace
-# [profile.release] is CODE_VER's job (layer-codever GLOBAL_BUILD), not this
+# [profile.release] belongs to the release build, not this
 # digest — hashing it here would churn live line_model_role_sha256 on a
 # profile-only edit.
 MODEL_SOURCE_GLOBALS = (

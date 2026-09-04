@@ -23,7 +23,7 @@ pub struct PointQueryData {
     /// M4/M5 per-row baked admins, aligned by index with `roads`/`railways`
     /// (`None` entries = pre-bake rows → receiver fallback). Installed into
     /// the kernels' thread-local channels around `compute_at_point*` (see
-    /// `lib.rs::query_noise_impl`) — the segment structs are codever-SHARED
+    /// `lib.rs::query_noise_impl`) — the segment structs are shared by every layer
     /// and cannot carry the field.
     pub road_admins: Vec<Option<noise_compute::admin::Admin>>,
     pub rail_admins: Vec<Option<noise_compute::admin::Admin>>,

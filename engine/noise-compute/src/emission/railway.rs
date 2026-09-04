@@ -162,7 +162,7 @@ pub fn rail_time_dist(admin: Admin, rail_type: RailType) -> &'static RailTimeDis
 // receiver fallback.
 
 /// Decode one row's baked admin triplet — exact copy of
-/// `crate::defaults::baked_admin`. The two live in separate layer-codever
+/// `crate::defaults::baked_admin`. The two live in separate cache-version
 /// buckets (road vs rail), so neither may import from the other.
 pub fn baked_admin(country_iso: u16, city_id: u16, continent: u8) -> Admin {
     if country_iso == 0 {
@@ -178,7 +178,7 @@ pub fn baked_admin(country_iso: u16, city_id: u16, continent: u8) -> Admin {
 thread_local! {
     /// Per-row rail admins for the popup kernel, aligned by index with the
     /// `&[RailSegment]` slice handed to `compute_at_point*`. `RailSegment`
-    /// (`types/inputs.rs`) is codever-SHARED and cannot grow a field, so the
+    /// (`types/inputs.rs`) is shared by every layer and cannot grow a field, so the
     /// admins ride this thread-local: source-reader installs them right
     /// before the compute call and clears them right after; every other
     /// caller (parity bins, tests) leaves the channel unset and gets today's

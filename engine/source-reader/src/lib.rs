@@ -549,7 +549,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
 
     let mut traces = noise_compute::types::TraceCollector::new();
     // M4/M5: hand the per-row baked admins to the kernels through their
-    // thread-local channels (RoadSegment/RailSegment are codever-SHARED and
+    // thread-local channels (RoadSegment/RailSegment are shared by every layer and
     // cannot carry the field). The guard clears on scope exit INCLUDING a
     // kernel unwind — napi-rs turns a caught panic into a JS throw, and a
     // stale vec on the surviving worker thread would paint the previous

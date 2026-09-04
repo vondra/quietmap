@@ -63,7 +63,7 @@ const CELL_CACHE_CAP: usize = 8;
 /// grid (`BUILDER_CODE_VER`) folded with THIS file, which owns the loader's own
 /// decisions — the obstacle id ordering (dense, by file order), and which rows
 /// are offered to the height cap. Editing either side rotates the version and every file written by the
-/// old code is refused, exactly as `scripts/layer-codever.py` re-stales tiles on
+/// old code is refused, the same rule a repaint applies to tiles on
 /// a source change. Over-invalidating costs a rebuild; under-invalidating puts a
 /// silently wrong screen in the map.
 ///

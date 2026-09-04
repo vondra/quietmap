@@ -324,7 +324,7 @@ pub fn resolve_speed_default(class: u8, admin: Admin, built_up: u8) -> Option<f6
 /// Decode one row's baked admin triplet. The `country_iso` column's PRESENCE
 /// is the fallback switch (handled by callers); this only decodes a present
 /// row value. Rail keeps an exact copy in `emission::railway` — the two live
-/// in separate layer-codever buckets, so neither may import from the other.
+/// in separate cache-version buckets, so neither may import from the other.
 pub fn baked_admin(country_iso: u16, city_id: u16, continent: u8) -> Admin {
     if country_iso == 0 {
         return Admin::UNKNOWN;
@@ -339,7 +339,7 @@ pub fn baked_admin(country_iso: u16, city_id: u16, continent: u8) -> Admin {
 thread_local! {
     /// Per-row road admins for the popup kernel, aligned by index with the
     /// `&[RoadSegment]` slice handed to `compute_at_point*`. `RoadSegment`
-    /// (`types/inputs.rs`) is codever-SHARED and cannot grow a field, so the
+    /// (`types/inputs.rs`) is shared by every layer and cannot grow a field, so the
     /// admins ride this thread-local: source-reader installs them right
     /// before the compute call and clears them right after; every other
     /// caller (parity bins, tests) leaves the channel unset and gets today's
