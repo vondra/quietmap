@@ -16,6 +16,18 @@ WIDE_RING_LAT = 81.9
 MAX_HALO_KM = 11.0
 
 
+def normalize_longitude(lon):
+    return ((lon + 180.0) % 360.0) - 180.0
+
+
+def wrapped_longitude_delta(from_lon, to_lon):
+    return normalize_longitude(to_lon - from_lon)
+
+
+def wrapped_longitude_midpoint(a_lon, b_lon):
+    return normalize_longitude(a_lon + wrapped_longitude_delta(a_lon, b_lon) / 2.0)
+
+
 def clamp_lat(lat):
     return max(-MAX_MERCATOR_LAT, min(MAX_MERCATOR_LAT, lat))
 
@@ -53,7 +65,7 @@ def grid_to_lonlat(gx, gy):
 
 
 def square_of(lat, lon):
-    wrapped = ((lon + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
+    wrapped = normalize_longitude(lon)
     x = int((wrapped + 180.0) / 360.0 * Z9_AXIS)
     _, y_m = lonlat_to_meters(0.0, lat)
     half = CIRCUMFERENCE_M / 2.0
@@ -63,6 +75,14 @@ def square_of(lat, lon):
 
 def square_name(x, y):
     return f"z9/{x}/{y}"
+
+
+def square_id(x, y):
+    """Morton z9 identity, matching engine/grid::square_id."""
+    if not (0 <= x < Z9_AXIS and 0 <= y < Z9_AXIS):
+        raise ValueError("z9 coordinates must be in 0..511")
+    return sum(((x >> bit) & 1) << (2 * bit) | ((y >> bit) & 1) << (2 * bit + 1)
+               for bit in range(9))
 
 
 def parse_square_name(name):
