@@ -91,13 +91,14 @@ test('the structures step stays world-scoped and is never downgraded to a sync-s
   assert.equal(steps.length, 1)
   assert.equal(steps[0].id, 'structures')
   assert.equal(steps[0].skipReason, null)
-  assert.deepEqual(steps[0].args, ['--enrich-only', '--retire-inputs'])
+  assert.deepEqual(steps[0].args, ['--enrich-only'])
 })
 
 test('the structures step is terminal: every pre-merge buildings.arrow reader/writer runs before it', () => {
-  // The builder retires buildings.arrow after consuming it, so buildings-cz/es
-  // (national), roads-service-tree (heuristics) and the gate auditor must all
-  // sit earlier in the plan (they read — two of them write — the pre-merge file).
+  // The builder freezes buildings.arrow into structures.arrow, the only file
+  // the painters read, so buildings-cz/es (national), roads-service-tree
+  // (heuristics) and the gate auditor must all sit earlier in the plan (they
+  // read — two of them write — the pre-merge file).
   const steps = buildPlan(parseScope('world')).steps
   const at = (id: string) => steps.findIndex((s) => s.id === id)
   assert.ok(at('structures') > 0, 'the structures step exists')
@@ -118,5 +119,5 @@ test('the structures step receives the exact bbox under a scoped chain run', () 
   const steps = structureSteps(scope)
   assert.equal(steps.length, 1)
   assert.equal(steps[0].skipReason, null)
-  assert.deepEqual(steps[0].args, ['--enrich-only', '--retire-inputs', '--bbox', '49.7,13.9,50.4,15'])
+  assert.deepEqual(steps[0].args, ['--enrich-only', '--bbox', '49.7,13.9,50.4,15'])
 })

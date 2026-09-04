@@ -132,8 +132,8 @@ if [ "$RUN_SERVICE_TREE" = "1" ]; then
     # built-up sampler reads it, and every painter's screening stock comes from
     # it. The face owns the builder invocation (cell enumeration, regional
     # raster grouping, fail-loud raster/parquet guards). Runs here on the raw
-    # extract WITHOUT retiring inputs — the enrich chain refines buildings.arrow
-    # later and its terminal structures step rebuilds + retires.
+    # extract; the enrich chain refines buildings.arrow later and its terminal
+    # structures step rebuilds the table from the refined file.
     log "Building the per-cell structure tables (structures.arrow) ..."
     (
         cd "$PROJECT_DIR/pipeline"

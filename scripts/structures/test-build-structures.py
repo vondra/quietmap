@@ -150,8 +150,7 @@ class BuildStructuresTests(unittest.TestCase):
             shard(self.staging / CELL / "obstacles-N49E014.arrow", ovt_rows)
         with_env = BUILDER  # module alias for readability
         census = with_env.build_cell(
-            CELL, str(self.h3r4), ovt_rows, None, FakeGlobalPrior(), None,
-            validate, False,
+            CELL, str(self.h3r4), ovt_rows, None, FakeGlobalPrior(), None, validate,
         )
         table = ipc.open_file(str(self.h3r4 / CELL / "structures.arrow")).read_all()
         return census, table
@@ -281,7 +280,7 @@ class BuildStructuresTests(unittest.TestCase):
         again = BUILDER.build_cell(CELL, str(self.h3r4),
                                    BUILDER.read_overture_shards(str(self.staging / CELL))[0],
                                    BUILDER.read_overture_shards(str(self.staging / CELL))[1],
-                                   FakeGlobalPrior(), None, False, False)
+                                   FakeGlobalPrior(), None, False)
         self.assertIsNone(again)  # fresh: nothing rebuilt
         # A newer height raster is an input like any other: the ladder feeds
         # every row, so a re-sampled raster that never invalidates would serve a
@@ -290,7 +289,7 @@ class BuildStructuresTests(unittest.TestCase):
         rebuilt_for_the_raster = BUILDER.build_cell(
             CELL, str(self.h3r4),
             *BUILDER.read_overture_shards(str(self.staging / CELL)),
-            FakeGlobalPrior(mtime=newer), None, False, False)
+            FakeGlobalPrior(mtime=newer), None, False)
         self.assertIsNotNone(rebuilt_for_the_raster)
         # Touching a per-cell input rebuilds too.
         os.utime(self.h3r4 / CELL / "buildings.arrow",
@@ -298,7 +297,7 @@ class BuildStructuresTests(unittest.TestCase):
         refreshed = BUILDER.build_cell(
             CELL, str(self.h3r4),
             *BUILDER.read_overture_shards(str(self.staging / CELL)),
-            FakeGlobalPrior(), None, False, False)
+            FakeGlobalPrior(), None, False)
         self.assertIsNotNone(refreshed)
 
     def test_stale_buildings_contract_is_rejected(self):
@@ -311,19 +310,6 @@ class BuildStructuresTests(unittest.TestCase):
             w.write_table(t)
         with self.assertRaises(SystemExit):
             self.build([ovt_row(OVT_LONELY)])
-
-    def test_retire_inputs_removes_the_premerge_files(self):
-        buildings_arrow(self.h3r4 / CELL / "buildings.arrow", [osm_row(0, OSM_POLY, 32.0)])
-        barriers_arrow(self.h3r4 / CELL / "barriers.arrow", [
-            {"osm_id": 55, "segment_idx": 0, "start_lat": 49.78, "start_lon": 14.17,
-             "end_lat": 49.7801, "end_lon": 14.1702, "height": 3.0},
-        ])
-        census = BUILDER.build_cell(
-            CELL, str(self.h3r4), [], None, FakeGlobalPrior(), None, False, True,
-        )
-        self.assertFalse((self.h3r4 / CELL / "buildings.arrow").exists())
-        self.assertFalse((self.h3r4 / CELL / "barriers.arrow").exists())
-        self.assertTrue((self.h3r4 / CELL / "structures.arrow").exists())
 
 
 def overture_parquet(path, geoms):

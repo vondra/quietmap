@@ -51,10 +51,10 @@
 //!                   ABSOLUTELY LAST: merges the pre-merge buildings.arrow (as
 //!                   osm-extract + the buildings enrichers + every earlier phase
 //!                   left it), barriers.arrow and the Overture parquet stock into
-//!                   the per-cell structures.arrow and RETIRES the pre-merge
-//!                   files, so it can only run once every buildings.arrow
-//!                   reader/writer (buildings-cz/es, service-tree, the gate) is
-//!                   done. The builder is the only structures.arrow writer.
+//!                   the per-cell structures.arrow, so it must run after every
+//!                   buildings.arrow writer (buildings-cz/es, service-tree, the
+//!                   gate) — anything written later would never reach the table.
+//!                   The builder is the only structures.arrow writer.
 //!
 //! Chain-wide footguns (enforced by run.ts, documented here as the SSOT):
 //!   • NEVER run `npm run gen:sources` mid-chain: it rewrites source ids in
@@ -778,11 +778,11 @@ export function buildPlan(scope: ResolvedScope): { steps: PlanStep[]; excludedBy
   })
 
   // ── structures ─────────────────────────────────────────────────────────────
-  // Terminal BY CONTRACT: the builder merges the pre-merge buildings.arrow +
-  // barriers.arrow + the Overture parquet stock into structures.arrow and then
-  // RETIRES its inputs, so every pre-merge reader/writer (national
-  // buildings-cz/es, heuristics service-tree, the gate auditor) must sit in an
-  // earlier phase — moving this step up voids their input.
+  // Terminal BY CONTRACT: the builder freezes the pre-merge buildings.arrow +
+  // barriers.arrow + the Overture parquet stock into structures.arrow, the ONLY
+  // file the painters read, so every pre-merge writer (national buildings-cz/es,
+  // heuristics service-tree) must sit in an earlier phase — a write after this
+  // step reaches no painted tile until the next rebuild.
   pushPerBbox(
     {
       id: 'structures',
@@ -791,10 +791,10 @@ export function buildPlan(scope: ResolvedScope): { steps: PlanStep[]; excludedBy
       layer: 'buildings',
       country: null,
       notes:
-        'writes the ONE per-cell structures.arrow (scripts/structures/build-structures.py: OSM buildings as enriched above + OSM walls + Overture parquet stock, matched and height-laddered; schema metadata structures_contract=structures_v1, building_rows, barrier_rows) and retires the pre-merge inputs so a finished cell holds only structures.arrow. Idempotent (a cell rebuilds iff an input is newer than the table); a missing GHSL raster, regional raster, or Overture parquet fails the chain rather than certifying a world that is still missing buildings.',
+        'writes the ONE per-cell structures.arrow (scripts/structures/build-structures.py: OSM buildings as enriched above + OSM walls + Overture parquet stock, matched and height-laddered; schema metadata structures_contract=structures_v1, building_rows, barrier_rows) — the only file the painters read, so it must be written after every buildings.arrow enricher. Idempotent (a cell rebuilds iff an input is newer than the table); a missing GHSL raster, regional raster, or Overture parquet fails the chain rather than certifying a world that is still missing buildings.',
       skipReason: null,
     },
-    (b) => (b ? ['--enrich-only', '--retire-inputs', '--bbox', serializeBbox(b)] : ['--enrich-only', '--retire-inputs']),
+    (b) => (b ? ['--enrich-only', '--bbox', serializeBbox(b)] : ['--enrich-only']),
   )
 
   // ── completeness: no enrich-*.ts may stay unclassified ─────────────────────

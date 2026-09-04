@@ -6,10 +6,9 @@
  * Terminal chain phase: every pre-merge buildings.arrow reader/writer
  * (buildings-cz/es, service-tree, the gate auditor) sits in an earlier phase;
  * this step merges buildings.arrow + barriers.arrow + the Overture one-degree
- * parquet stock into each prepared cell's structures.arrow and passes
- * --retire-inputs, so a finished cell holds only structures.arrow. The
- * fresh-extract tail (osm-to-h3r4.sh) runs the same face WITHOUT
- * --retire-inputs — the enrichers still need the pre-merge files there.
+ * parquet stock into each prepared cell's structures.arrow, so it must see the
+ * FINAL state of buildings.arrow. The fresh-extract tail (osm-to-h3r4.sh) runs
+ * the same face on the raw extract; the chain rebuilds the table afterwards.
  *
  * Scope: `--bbox S,W,N,E` selects PREPARED cells whose H3 BOUNDARY overlaps the
  * bbox — centre-only tests silently drop the cells a regional raster clips;
@@ -31,7 +30,7 @@
  * the chain runs it as the terminal structures step with --enrich-only.
  *
  * Usage:
- *   DATA_YEAR=2026 npx tsx pipeline/enrich-structures.ts [--enrich-only] [--bbox S,W,N,E] [--retire-inputs]
+ *   DATA_YEAR=2026 npx tsx pipeline/enrich-structures.ts [--enrich-only] [--bbox S,W,N,E]
  */
 
 import { spawnSync } from 'node:child_process'
@@ -75,22 +74,20 @@ const REGIONAL_RASTERS: ReadonlyArray<{
   },
 ]
 
-function parseArgs(argv: string[]): { enrichOnly: boolean; bbox: number[] | null; cells: string[] | null; retireInputs: boolean } {
+function parseArgs(argv: string[]): { enrichOnly: boolean; bbox: number[] | null; cells: string[] | null } {
   let enrichOnly = false
   let bbox: number[] | null = null
   let cells: string[] | null = null
-  let retireInputs = false
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--enrich-only') enrichOnly = true
-    else if (a === '--retire-inputs') retireInputs = true
     else if (a === '--bbox') {
       bbox = argv[++i].split(',').map(Number)
       if (bbox.length !== 4 || bbox.some(Number.isNaN)) throw new Error(`bad --bbox ${argv[i]}`)
     } else if (a === '--cells') cells = argv[++i].split(',')
     else throw new Error(`unknown argument ${a}`)
   }
-  return { enrichOnly, bbox, cells, retireInputs }
+  return { enrichOnly, bbox, cells }
 }
 
 /** [S, W, N, E] envelope of a cell's H3 boundary. */
@@ -125,7 +122,7 @@ function preparedCellsInScope(bbox: number[] | null): string[] {
 }
 
 function main(): void {
-  const { enrichOnly, bbox, cells, retireInputs } = parseArgs(process.argv)
+  const { enrichOnly, bbox, cells } = parseArgs(process.argv)
 
   const requested = [...new Set(cells ?? preparedCellsInScope(bbox))].sort()
   if (requested.length === 0) {
@@ -190,9 +187,6 @@ function main(): void {
         '--ghsl', GHSL_TIF,
         '--cells-file', cellsFile,
       ]
-      // Chain mode retires the pre-merge inputs; the fresh-extract tail must not
-      // (the buildings enrichers run after it).
-      if (retireInputs) args.push('--retire-inputs')
       if (group.vrt) args.push('--regional', group.vrt)
       console.log(`[structures] ${group.cells.length} cell(s) ${group.vrt ? `with regional ${group.vrt}` : 'ANBH-only'}`)
       const run = spawnSync('python3', args, { stdio: 'inherit' })

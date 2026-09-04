@@ -58,16 +58,15 @@
 # output — the cell's two arrows, the Overture source and both ladder rasters,
 # so neither a new Overture release nor a refreshed raster tile is served
 # stale), re-runnable in any order, atomic (tmp+fsync+rename, dir fsync), never
-# creates a prepared cell directory (the table follows the prepared inventory).
-# --retire-inputs (chain mode) removes the pre-merge files after a verified
-# write so a finished cell holds only structures.arrow; the migration does NOT
-# use it (deletion is a separate wave after the byte proofs).
+# creates a prepared cell directory (the table follows the prepared inventory)
+# and never removes one: buildings.arrow and barriers.arrow are the OSM inputs
+# every rebuild reads again, so they stay in the cell.
 #
 # Usage:
 #   build-structures.py --h3r4-dir data/prepared/2026/h3r4 \
 #     (--overture-shards DIR | --overture-parquet DIR) \
 #     --ghsl <ANBH.tif> [--regional <mosaic.vrt>] \
-#     (--cells hex,... | --cells-file F) [--validate] [--retire-inputs]
+#     (--cells hex,... | --cells-file F) [--validate]
 
 import argparse
 import glob
@@ -645,7 +644,7 @@ def apply_raster_tiers(rows, regional, ghsl, stats):
                 stats["tier4"] += 1
 
 
-def build_cell(cell, h3r4_dir, overture_rows, overture_mtime, ghsl, regional, validate, retire):
+def build_cell(cell, h3r4_dir, overture_rows, overture_mtime, ghsl, regional, validate):
     """Write one cell's structures.arrow; return the per-cell census dict, or
     None when the cell is up to date (idempotent skip)."""
     cell_dir = os.path.join(h3r4_dir, cell)
@@ -847,12 +846,6 @@ def build_cell(cell, h3r4_dir, overture_rows, overture_mtime, ghsl, regional, va
             os.close(dir_fd)
     finally:
         os.close(fd)
-    if retire:
-        for name in ("buildings.arrow", "barriers.arrow", "obstacles.arrow",
-                     "obstacles.height-materialization.json"):
-            p = os.path.join(cell_dir, name)
-            if os.path.exists(p):
-                os.unlink(p)
     return {
         "cell": cell,
         "osm_rows": n_osm,
@@ -928,7 +921,6 @@ def main():
     group.add_argument("--cells-file")
     ap.add_argument("--validate", action="store_true",
                     help="prove the emission view against buildings.arrow, cell by cell")
-    ap.add_argument("--retire-inputs", action="store_true")
     ap.add_argument("--census-log", help="append one JSON line per built cell (the world migration's count proof)")
     args = ap.parse_args()
 
@@ -945,7 +937,7 @@ def main():
         else:
             ovt, ovt_mtime = read_overture_parquet(args.overture_parquet, cell)
         census = build_cell(cell, args.h3r4_dir, ovt, ovt_mtime, ghsl, regional,
-                            args.validate, args.retire_inputs)
+                            args.validate)
         if census is None:
             totals["fresh_skip"] += 1
         else:
