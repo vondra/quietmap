@@ -43,6 +43,23 @@ const AIRBORNE_FATBIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/airborn
 /// Serial number of the temp fatbin an `AirborneGpu` writes, so concurrently constructed
 /// instances never share a path. See [`AirborneGpu::new`] for the failures a shared one caused.
 static AIRBORNE_FATBIN_LOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Removes the instance's temp fatbin when `AirborneGpu::new` leaves its load block — on the
+/// panic path too, since `load_ptx` and every `get_func` below it `expect`-panic on a dead
+/// device. A worker that restarts on a live box would otherwise leave a 2 MB file in `/tmp`
+/// per attempt. A failed removal is reported, never swallowed: it means `/tmp` is filling up.
+struct TempFatbin(std::path::PathBuf);
+
+impl Drop for TempFatbin {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.0) {
+            eprintln!(
+                "gpu-airborne: could not remove the temp fatbin {}: {error}",
+                self.0.display()
+            );
+        }
+    }
+}
 const SCREEN_RECORDS: usize = 0;
 const SCREEN_NREG: usize = 1;
 const SCREEN_NEAR_BASE: usize = 2;
@@ -351,39 +368,40 @@ impl AirborneGpu {
         // other was still writing, `CUDA_ERROR_FILE_NOT_FOUND` when the other had already
         // unlinked it — 4 of 5 starts on an RTX 5070 — and a silent hang whenever both workers
         // died and the prep thread blocked forever on the depth-1 channel (measured 2026-09-04).
-        let fatbin_path = std::env::temp_dir().join(format!(
-            "quietmap-airborne-{}-{}.fatbin",
-            std::process::id(),
-            AIRBORNE_FATBIN_LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        std::fs::write(&fatbin_path, AIRBORNE_FATBIN).expect("write airborne fatbin");
-        let loaded = dev.load_ptx(
-            Ptx::from_file(&fatbin_path),
-            "air",
-            &[
-                "airborne_exact_screened",
-                "airborne_coarse_screened",
-                "airborne_coarse_reduce_parts",
-                "airborne_classify_count",
-                "airborne_classify_chunk_offsets",
-                "airborne_classify_scatter",
-                "airborne_terrain_sample_tables",
-                "airborne_terrain_horizon_build",
-                "airborne_terrain_horizon_global_max",
-                "airborne_terrain_horizon_range_quantization_probe",
-                "airborne_building_horizon_build",
-                "airborne_building_horizon_pack",
-                "airborne_building_horizon_global_max",
-                "airborne_building_horizon_mark_empty",
-                "airborne_dem_pyramid_level0",
-                "airborne_dem_pyramid_reduce",
-                "airborne_lowest_source_tangent",
-                "airborne_screening_floor",
-                "airborne_building_cell_tops",
-            ],
-        );
-        let _ = std::fs::remove_file(&fatbin_path);
-        loaded.expect("load airborne fatbin");
+        {
+            let fatbin = TempFatbin(std::env::temp_dir().join(format!(
+                "quietmap-airborne-{}-{}.fatbin",
+                std::process::id(),
+                AIRBORNE_FATBIN_LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            )));
+            std::fs::write(&fatbin.0, AIRBORNE_FATBIN).expect("write airborne fatbin");
+            dev.load_ptx(
+                Ptx::from_file(&fatbin.0),
+                "air",
+                &[
+                    "airborne_exact_screened",
+                    "airborne_coarse_screened",
+                    "airborne_coarse_reduce_parts",
+                    "airborne_classify_count",
+                    "airborne_classify_chunk_offsets",
+                    "airborne_classify_scatter",
+                    "airborne_terrain_sample_tables",
+                    "airborne_terrain_horizon_build",
+                    "airborne_terrain_horizon_global_max",
+                    "airborne_terrain_horizon_range_quantization_probe",
+                    "airborne_building_horizon_build",
+                    "airborne_building_horizon_pack",
+                    "airborne_building_horizon_global_max",
+                    "airborne_building_horizon_mark_empty",
+                    "airborne_dem_pyramid_level0",
+                    "airborne_dem_pyramid_reduce",
+                    "airborne_lowest_source_tangent",
+                    "airborne_screening_floor",
+                    "airborne_building_cell_tops",
+                ],
+            )
+            .expect("load airborne fatbin");
+        }
         let f_near_screened = dev
             .get_func("air", "airborne_exact_screened")
             .expect("fn near_screened");
