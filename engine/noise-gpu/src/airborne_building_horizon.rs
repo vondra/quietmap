@@ -13,6 +13,8 @@ use noise_compute::propagation::obstacle_index::ObstacleSet;
 use raster_reader::fused_grid::FusedGrid;
 use tile_painter::airborne_screening::PackedReceiverScreening;
 
+use crate::airborne_screening_bounds::ScreeningBoundsDev;
+
 const BUILDING_ENV_INDEX_COUNT: usize = 0;
 const BUILDING_ENV_GRID_GEOMETRY: usize = 1;
 const BUILDING_ENV_GRID_LAYOUT: usize = 2;
@@ -26,15 +28,34 @@ const BUILDING_ENV_DEM_COLS: usize = 9;
 const BUILDING_ENV_DEM_ROWS: usize = 10;
 const BUILDING_ENV_DIRECTIONS: usize = 11;
 const BUILDING_ENV_TERRAIN_SAMPLES: usize = 12;
-const BUILDING_ENV_WORDS: usize = 13;
+const BUILDING_ENV_CELL_MAX_H: usize = 13;
+const BUILDING_ENV_WORDS: usize = 14;
 const BUILDING_GRID_GEOMETRY_STRIDE: usize = 6;
 const BUILDING_GRID_LAYOUT_STRIDE: usize = 5;
+
+/// One member index's grid placement, the host half of `BUILDING_ENV_GRID_GEOMETRY`: the
+/// screening bounds need it to name the cells whose roof tops a tile can reach.
+pub(crate) struct IndexGeometry {
+    pub(crate) origin_lat: f64,
+    pub(crate) origin_lon: f64,
+    pub(crate) m_per_deg_lon: f64,
+    pub(crate) cell_m: f64,
+    pub(crate) min_x: f64,
+    pub(crate) min_y: f64,
+    pub(crate) cols: usize,
+    pub(crate) rows: usize,
+}
 
 /// Region-wide vector CSR and elevation halo resident for every tile block.
 pub struct AirborneScreeningEnvironment {
     pub(crate) table: CudaSlice<u64>,
     index_count: usize,
     building_edge_count: usize,
+    pub(crate) dem_rows: usize,
+    pub(crate) dem_cols: usize,
+    /// Total CSR cell slots over every member index — the `cell_top` scratch length.
+    pub(crate) cell_slots: usize,
+    pub(crate) index_geometry: Vec<IndexGeometry>,
     _grid_geometry: CudaSlice<f64>,
     _grid_layout: CudaSlice<u64>,
     _cell_starts: CudaSlice<u32>,
@@ -45,6 +66,7 @@ pub struct AirborneScreeningEnvironment {
     _dem_elevation: CudaSlice<f32>,
     _directions: CudaSlice<f64>,
     _terrain_samples: CudaSlice<f64>,
+    _cell_max_h: CudaSlice<f32>,
 }
 
 pub(crate) struct BuildingHorizonDev {
@@ -89,8 +111,20 @@ impl AirborneBuildingHorizonGpu {
         let mut edge_refs = Vec::new();
         let mut edges = Vec::new();
         let mut edge_is_building = Vec::new();
+        let mut cell_max_h = Vec::new();
+        let mut index_geometry = Vec::with_capacity(obstacles.indexes.len());
         for index in &obstacles.indexes {
             let view = index.gpu_view();
+            index_geometry.push(IndexGeometry {
+                origin_lat: view.origin_lat,
+                origin_lon: view.origin_lon,
+                m_per_deg_lon: view.m_per_deg_lon,
+                cell_m: view.cell_m,
+                min_x: view.min_x,
+                min_y: view.min_y,
+                cols: view.cols,
+                rows: view.rows,
+            });
             grid_geometry.extend_from_slice(&[
                 view.origin_lat,
                 view.origin_lon,
@@ -110,6 +144,11 @@ impl AirborneBuildingHorizonGpu {
             edge_refs.extend_from_slice(view.edge_refs);
             edges.extend_from_slice(&view.edges_xyxyh);
             edge_is_building.extend_from_slice(&view.edge_is_building);
+            cell_max_h.extend_from_slice(view.cell_max_h);
+            // `grid_layout` addresses cells through the corresponding `cell_starts` base.
+            // Keep the parallel height array on that same (cells + 1) stride; the terminal
+            // value is never read, but without it every later member index would be shifted.
+            cell_max_h.push(0.0);
         }
         let building_edge_count = edge_is_building.iter().filter(|&&value| value == 1).count();
         ensure_nonempty(&mut grid_geometry);
@@ -118,6 +157,9 @@ impl AirborneBuildingHorizonGpu {
         ensure_nonempty(&mut edge_refs);
         ensure_nonempty(&mut edges);
         ensure_nonempty(&mut edge_is_building);
+        ensure_nonempty(&mut cell_max_h);
+        assert_eq!(cell_starts.len(), cell_max_h.len());
+        let cell_slots = cell_starts.len();
 
         let elevation = halo.packed_elevation_grid();
         let directions: Vec<f64> = building_local_directions()
@@ -180,6 +222,10 @@ impl AirborneBuildingHorizonGpu {
             .dev
             .htod_copy(terrain_samples)
             .context("terrain horizon samples")?;
+        let d_cell_max_h = self
+            .dev
+            .htod_copy(cell_max_h)
+            .context("building cell max heights")?;
 
         let mut host_table = [0_u64; BUILDING_ENV_WORDS];
         host_table[BUILDING_ENV_INDEX_COUNT] = obstacles.indexes.len() as u64;
@@ -195,6 +241,7 @@ impl AirborneBuildingHorizonGpu {
         host_table[BUILDING_ENV_DEM_ROWS] = elevation.rows as u64;
         host_table[BUILDING_ENV_DIRECTIONS] = *d_directions.device_ptr();
         host_table[BUILDING_ENV_TERRAIN_SAMPLES] = *d_terrain_samples.device_ptr();
+        host_table[BUILDING_ENV_CELL_MAX_H] = *d_cell_max_h.device_ptr();
         let table = self
             .dev
             .htod_copy(host_table.to_vec())
@@ -203,6 +250,10 @@ impl AirborneBuildingHorizonGpu {
             table,
             index_count: obstacles.indexes.len(),
             building_edge_count,
+            dem_rows: elevation.rows,
+            dem_cols: elevation.cols,
+            cell_slots,
+            index_geometry,
             _grid_geometry: d_grid_geometry,
             _grid_layout: d_grid_layout,
             _cell_starts: d_cell_starts,
@@ -213,6 +264,7 @@ impl AirborneBuildingHorizonGpu {
             _dem_elevation: d_dem_elevation,
             _directions: d_directions,
             _terrain_samples: d_terrain_samples,
+            _cell_max_h: d_cell_max_h,
         })
     }
 
@@ -226,6 +278,7 @@ impl AirborneBuildingHorizonGpu {
         receiver_altitude: &CudaSlice<f32>,
         inner_elevation: &CudaSlice<f32>,
         tile_bbox: &CudaSlice<f64>,
+        bounds: &ScreeningBoundsDev,
     ) -> Result<BuildingHorizonDev> {
         let records = packed.records;
         let local_count = records * BUILDING_LOCAL_HORIZON_SECTORS;
@@ -294,6 +347,7 @@ impl AirborneBuildingHorizonGpu {
                         tile_bbox,
                         pixel_of_record,
                         &building_enabled,
+                        &bounds.table,
                         records as i32,
                         &mut best_tangent,
                         &mut local_entries,

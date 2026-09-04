@@ -115,9 +115,18 @@ fn pixel_is_selected(
     exact_receiver_path || (coarse_axis[pixel / TILE_PX] && coarse_axis[pixel % TILE_PX])
 }
 
+/// Edge, in pixels, of the receiver blocks the device bounds the lowest source tangent over
+/// (`airborne_lowest_source_tangent`): about 100 m at z13, small against the hundreds of
+/// metres to a sub-segment whose direction the bound has to keep, while 1 024 blocks per tile
+/// keep that pass far below the roof scan it prunes.
+pub const LOWEST_SOURCE_TANGENT_BLOCK_PX: usize = 16;
+const _: () = assert!(TILE_PX.is_multiple_of(LOWEST_SOURCE_TANGENT_BLOCK_PX));
+
 /// Union of the three coarse axes. The current ladders are nested, but taking
 /// their union makes horizon coverage stay correct if their sizes later change.
-fn coarse_receiver_axis() -> [bool; TILE_PX] {
+/// Pixels on this lattice are also queried by far sub-segments, which is why the
+/// device gives them no lowest-source-tangent floor.
+pub fn coarse_receiver_axis() -> [bool; TILE_PX] {
     let mut selected = [false; TILE_PX];
     for n in COARSE_LEVELS_N {
         let lattice = CoarseLattice::new(n);

@@ -7,6 +7,8 @@ pub mod airborne;
 #[cfg(feature = "gpu")]
 mod airborne_building_horizon;
 #[cfg(feature = "gpu")]
+mod airborne_screening_bounds;
+#[cfg(feature = "gpu")]
 mod airborne_terrain_horizon;
 
 use noise_compute::emission::aircraft::{Installation, SegmentPrepared, M_PER_DEG_LAT};
