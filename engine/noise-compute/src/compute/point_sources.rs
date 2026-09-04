@@ -7,7 +7,6 @@ use crate::*;
 pub(crate) fn compute_point_sources(
     receiver: &Receiver,
     sources: &[PointSource],
-    barriers: &[Barrier],
     obstacles: &crate::propagation::obstacle_index::ObstacleSet,
     rasters: &dyn RasterSampler,
     source_kind: LayerKind,
@@ -105,7 +104,6 @@ pub(crate) fn compute_point_sources(
         let (screening_atten, obstacle_trace) =
             propagation::path_effects::screening_attenuation_with_meta(
                 &mut path_profile,
-                barriers,
                 obstacle_input,
                 src_alt,
                 rcv_alt,
@@ -255,7 +253,6 @@ pub(crate) fn compute_point_sources(
 
         let pt_effects = compute_path_effects(
             rasters,
-            barriers,
             obstacles,
             acc.lat,
             acc.lon,

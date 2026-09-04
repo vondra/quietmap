@@ -27,7 +27,6 @@ use crate::*;
 pub(crate) fn compute_roads(
     receiver: &Receiver,
     roads: &[RoadSegment],
-    barriers: &[Barrier],
     obstacles: &crate::propagation::obstacle_index::ObstacleSet,
     rasters: &dyn RasterSampler,
     mut traces: Option<&mut TraceCollector>,
@@ -185,7 +184,6 @@ pub(crate) fn compute_roads(
             &mut epoch_snap,
             arc_set,
             receiver,
-            barriers,
             seg.start_lat,
             seg.start_lon,
             seg.end_lat,
@@ -315,7 +313,6 @@ pub(crate) fn compute_roads(
                 let (cp_screening_atten, obstacle_trace) =
                     propagation::path_effects::screening_attenuation_with_meta(
                         path_profile,
-                        barriers,
                         obstacle_input,
                         src_alt,
                         rcv_alt,
@@ -350,7 +347,6 @@ pub(crate) fn compute_roads(
                             source_height_m: norm.source_height_m,
                             length_m: seg.length_m as f64,
                             dist_m: seg.dist_m,
-                            barriers,
                             obstacles,
                         },
                         rasters,
@@ -793,7 +789,6 @@ pub(crate) fn compute_roads(
 
         let (nearest_terrain, nearest_screening, nearest_veg) = compute_path_effects(
             rasters,
-            barriers,
             obstacles,
             acc.closest_cp_lat,
             acc.closest_cp_lon,
@@ -973,7 +968,6 @@ mod tests {
         let (_periods, contribs) = compute_roads(
             &receiver(),
             roads,
-            &[],
             &ObstacleSet::empty(),
             &FlatRasters,
             None,
@@ -1016,7 +1010,6 @@ mod tests {
         let plain = compute_roads(
             &receiver(),
             &roads,
-            &[],
             &ObstacleSet::empty(),
             &FlatRasters,
             None,
@@ -1026,7 +1019,6 @@ mod tests {
         let channeled = compute_roads(
             &receiver(),
             &roads,
-            &[],
             &ObstacleSet::empty(),
             &FlatRasters,
             None,
@@ -1072,21 +1064,19 @@ mod tests {
         let clear = compute_roads(
             &receiver(),
             &roads,
-            &[],
             &ObstacleSet::empty(),
             &FlatRasters,
             None,
         )
         .0
         .lden_db;
-        let screened = compute_roads(&receiver(), &roads, &[], &obstacles, &FlatRasters, None)
+        let screened = compute_roads(&receiver(), &roads, &obstacles, &FlatRasters, None)
             .0
             .lden_db;
         let mut traces = TraceCollector::new();
         let traced = compute_roads(
             &receiver(),
             &roads,
-            &[],
             &obstacles,
             &FlatRasters,
             Some(&mut traces),
@@ -1199,9 +1189,9 @@ mod tests {
 
     /// A dense-ish scene for the pool-size gate: a fan of secondary segments
     /// at varying ranges and offsets (several wide enough to arc-screen), a
-    /// village of obstacle boxes, and one noise wall — every branch of the
-    /// three-pass kernel (cp verdict, arc snapshot, grouping, dominant,
-    /// traces) gets traffic.
+    /// village of obstacle boxes, and one noise wall (a Barrier-kind polyline
+    /// in the same index) — every branch of the three-pass kernel (cp verdict,
+    /// arc snapshot, grouping, dominant, traces) gets traffic.
     fn pool_gate_scene() -> (
         Vec<RoadSegment>,
         crate::propagation::obstacle_index::ObstacleSet,
@@ -1249,6 +1239,14 @@ mod tests {
                 );
             }
         }
+        // One noise wall: an east-west polyline 40 m north of the origin,
+        // crossing several segment rays — the next dense id after the boxes.
+        b.add_polyline(
+            &[(50.000_36, 13.998), (50.000_36, 14.003)],
+            4.0,
+            ObstacleKind::Barrier,
+            29,
+        );
         let obstacles = ObstacleSet {
             indexes: vec![std::sync::Arc::new(b.build())],
         };
@@ -1264,16 +1262,6 @@ mod tests {
     #[test]
     fn pool_size_never_changes_the_bits() {
         let (segs, obstacles) = pool_gate_scene();
-        let wall = [Barrier {
-            osm_id: 9,
-            segment_idx: 0,
-            height_m: 4.0,
-            start_lat: 50.000_36,
-            start_lon: 13.998,
-            end_lat: 50.000_36,
-            end_lon: 14.003,
-            dist_m: 40.0,
-        }];
         // FULL-output comparison: every period bit, the complete serialized
         // contributor list (all fields, exactly what the popup wire carries)
         // and the complete serialized trace list — in both trace modes, since
@@ -1288,7 +1276,6 @@ mod tests {
                     let (periods, contribs) = compute_roads(
                         &receiver(),
                         &segs,
-                        &wall,
                         &obstacles,
                         &FlatRasters,
                         with_traces.then_some(&mut traces),

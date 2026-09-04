@@ -296,22 +296,26 @@ Implementation: [src/propagation/diffraction.rs](src/propagation/diffraction.rs)
 
 ### 4.7 Vector obstacles and barriers
 
-Building screening is vector-only. Building footprints are polygon edges in
-ObstacleSet; building footprints are read from this vector index. Barrier rows from
-barriers.arrow carry endpoints and height and use the same exact segment-intersection
-primitive. An untagged barrier defaults to 3 m. Obstacle kinds are Building and Barrier.
+Obstacle screening is vector-only, over ONE per-cell obstacle store
+(structures.arrow): building footprints are closed polygon rings, noise walls are
+open polylines, and the `kind` column (0 = Building, 1 = Barrier) is all that
+distinguishes them. An untagged barrier defaults to 3 m. There is no separate
+barrier channel: a wall is added to the index as polyline edges and screens
+through the same exact segment-intersection primitive as a building edge.
 
-ObstacleSet indexes vector polygon edges. crossings and crossings_pruned use exact
-segment_intersection_t, then sort candidates by the conservative lower-bound
-distance. Every prepared cell carries its own obstacles.arrow, empty where the
-finished Overture sweep found no footprint, so emptiness is data: a 0-row table
-means no buildings, a missing table fails the loader, and a cell with no prepared
-directory is outside the world. This prevents absent data from silently becoming
-clear terrain.
+ObstacleSet indexes vector edges. crossings and crossings_pruned use exact
+segment_intersection_t, then sort candidates by chainage. Every prepared cell
+carries its own structures.arrow, empty where the
+finished sweep found no structure, so emptiness is data: a 0-row table
+means nothing stands there, a missing table fails the loader, and a cell with no
+prepared directory is outside the world. This prevents absent data from silently
+becoming clear terrain.
 
 For a candidate obstacle, its signed delta competes with the terrain edge delta.
 The terrain candidate is linearly interpolated between profile samples. A source's
-own containing footprint is excluded within exclusion_radius. The screen is
+own containing footprint is excluded within exclusion_radius — the exclusion gate
+matches Building candidates only; a barrier is an explicit wall and always a real
+obstacle. The screen is
 
   A_screen = max(0, A_combined - A_terrain).
 

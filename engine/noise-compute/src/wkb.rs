@@ -371,6 +371,59 @@ pub fn parse_wkb_polygons_bytes(bytes: &[u8]) -> Vec<WkbPoly> {
     }
 }
 
+/// Parse a WKB LineString (type 2) into its points as `(lat, lon)` pairs —
+/// the noise-wall micro-segment shape in `structures.arrow` (kind=barrier).
+/// Empty vec on invalid/unsupported WKB (a Polygon is NOT a valid wall row:
+/// the kind column routes, the parser refuses the wrong shape rather than
+/// guessing).
+///
+/// Shares the polygon parser's bounds discipline: the point count is checked
+/// against the remaining bytes before any allocation.
+pub fn parse_wkb_linestring_bytes(bytes: &[u8]) -> Vec<(f64, f64)> {
+    if bytes.len() < 9 {
+        return Vec::new();
+    }
+    let le = bytes[0] == 1;
+    let read_u32 = |off: usize| -> u32 {
+        if off + 4 > bytes.len() {
+            return 0;
+        }
+        if le {
+            u32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]])
+        } else {
+            u32::from_be_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]])
+        }
+    };
+    let read_f64 = |off: usize| -> f64 {
+        if off + 8 > bytes.len() {
+            return 0.0;
+        }
+        let mut b = [0u8; 8];
+        b.copy_from_slice(&bytes[off..off + 8]);
+        if le {
+            f64::from_le_bytes(b)
+        } else {
+            f64::from_be_bytes(b)
+        }
+    };
+    if read_u32(1) != 2 {
+        return Vec::new();
+    }
+    let np = read_u32(5) as usize;
+    if np > (bytes.len() - 9) / 16 {
+        return Vec::new();
+    }
+    let mut points = Vec::with_capacity(np);
+    let mut off = 9;
+    for _ in 0..np {
+        let lon = read_f64(off);
+        let lat = read_f64(off + 8);
+        points.push((lat, lon));
+        off += 16;
+    }
+    points
+}
+
 /// Parse one polygon's rings (outer + holes) starting at its ring-count offset;
 /// returns the polygon and the offset just past its last ring. Rings with <3 points
 /// are dropped but still advance the offset, so MultiPolygon iteration stays in sync.

@@ -115,8 +115,10 @@
 //! the whole obstacle store per receiver, which is exactly the cost this module
 //! exists to avoid.
 //!
-//! Blocked intervals come from the VECTOR obstacle store; a caller without one
-//! (`obstacles: None`) keeps today's cp-ray verdict unchanged.
+//! Blocked intervals come from the VECTOR obstacle store, noise walls included
+//! (they are `ObstacleKind::Barrier` polylines in the same index — the per-tile
+//! wall slice channel is deleted); an empty store keeps the caller's cp-ray
+//! verdict unchanged.
 //!
 //! ## Why the blocked test is geometry only
 //!
@@ -174,18 +176,15 @@
 
 use super::geo;
 use super::iso9613::ground_or_barrier_db;
-use super::obstacle_index::{
-    origin_to_segment_dist, wrap_pi, CellPrune, CrossingCandidate, ObstacleSet, SkylineArc,
-};
+use super::obstacle_index::{wrap_pi, CellPrune, CrossingCandidate, ObstacleSet, SkylineArc};
 use super::path_effects::{
     screening_attenuation, screening_attenuation_with_meta, terrain_attenuation, ObstacleInput,
 };
-use super::screening_source_id::ScreeningSourceId;
 use super::PathProfile;
 use crate::constants::{m_per_deg_lon, BAND_FREQ, M_PER_DEG_LAT};
 use crate::types::{
-    Barrier, RasterSampler, ScreeningFanIntervalTrace, ScreeningFanObstacleTrace,
-    ScreeningFanTrace, ScreeningObstacleTrace, BARRIER_PATH_HORIZON_M, NUM_BANDS,
+    RasterSampler, ScreeningFanIntervalTrace, ScreeningFanObstacleTrace, ScreeningFanTrace,
+    ScreeningObstacleTrace, NUM_BANDS,
 };
 
 use std::f64::consts::TAU;
@@ -510,7 +509,6 @@ pub struct ArcScreening<'a> {
     /// to average that term instead of the bare screening increment.
     pub cp_terrain: &'a [f64; NUM_BANDS],
     pub ground_g: f64,
-    pub barriers: &'a [Barrier],
     pub obstacles: &'a ObstacleSet,
     /// Segment length and the receiver's distance to its NEAREST point — the
     /// pre-gate's `span ≤ L/d`, and the radius the skyline must reach
@@ -826,14 +824,12 @@ impl ArcSkyline {
 
     /// [`Self::ensure`] with a precomputed [`PlannedEnsure`] — the form the
     /// popup's segment scheduler drives the growth chain with.
-    #[allow(clippy::too_many_arguments)]
     pub fn ensure_planned(
         &mut self,
         lat: f64,
         lon: f64,
         p: &PlannedEnsure,
         set: &ObstacleSet,
-        barriers: &[Barrier],
         source_height_m: f64,
         bounds: ArcBounds,
     ) {
@@ -844,7 +840,6 @@ impl ArcSkyline {
             p.span_hi,
             p.need_radius_m,
             set,
-            barriers,
             source_height_m,
             bounds,
         );
@@ -883,7 +878,6 @@ impl ArcSkyline {
     /// reaches the source reaches every screen. Growing on demand is what lets
     /// that be exact without walking a rail layer's whole 10 km reach for a
     /// receiver whose segments are all close.
-    #[allow(clippy::too_many_arguments)]
     fn ensure(
         &mut self,
         lat: f64,
@@ -892,7 +886,6 @@ impl ArcSkyline {
         span_hi: f64,
         need_radius_m: f64,
         set: &ObstacleSet,
-        barriers: &[Barrier],
         source_height_m: f64,
         bounds: ArcBounds,
     ) {
@@ -981,6 +974,8 @@ impl ArcSkyline {
         // falls back to the disk, which over-collects and is always sound.
         let (w_lo, w_hi) = (s0 as f64 * SECTOR_RAD, (s1 + 1) as f64 * SECTOR_RAD);
         let wedge = (w_hi - w_lo < 0.5 * TAU).then_some((w_lo, w_hi));
+        // Walls included: noise barriers are `ObstacleKind::Barrier` polyline
+        // edges in the same store, and `skyline_arcs_within` emits both kinds.
         set.skyline_arcs_within(
             lat,
             lon,
@@ -992,51 +987,6 @@ impl ArcSkyline {
             &mut |a: SkylineArc| overflows += insert_merged(arcs, cap, a, fuse),
         );
 
-        // Noise WALLS are the other half of the skyline. They are deliberately
-        // NOT in `ObstacleIndex` (three tracks are rewriting that index), so
-        // they arrive as the caller's own slice — but a wall IS a segment, so
-        // its arc is the same primitive a building edge produces: the short arc
-        // between its endpoint azimuths, at its nearest range. Without this a
-        // receiver behind a wall gets NO blocked interval, the cp verdict
-        // stands for the whole segment, and the constant-width shadow band
-        // survives exactly where a wall makes it most visible.
-        //
-        // Re-scanned on every growth step rather than annulus-clipped: the
-        // slice is a tile's worth of walls, and `insert_merged` is idempotent
-        // on a repeat (an arc unioned with itself is itself).
-        let m_lon = m_per_deg_lon(lat.to_radians());
-        for b in barriers {
-            // `dist_m` is a LOWER BOUND on the receiver→midpoint distance, and a
-            // wall reaches `BARRIER_SEGMENT_MAX_HALF_LEN_M` past its midpoint —
-            // hence the horizon slack. Everything after this is exact geometry.
-            if b.dist_m > need + BARRIER_PATH_HORIZON_M || b.height_m as f64 <= los_floor_m {
-                continue;
-            }
-            let (x0, y0) = (
-                (b.start_lon - lon) * m_lon,
-                (b.start_lat - lat) * M_PER_DEG_LAT,
-            );
-            let (x1, y1) = ((b.end_lon - lon) * m_lon, (b.end_lat - lat) * M_PER_DEG_LAT);
-            let near_m = origin_to_segment_dist(x0, y0, x1, y1);
-            if near_m > need || near_m < 1e-6 {
-                continue; // out of the walked radius, or the receiver is ON it
-            }
-            let a0 = y0.atan2(x0);
-            let r1 = a0 + wrap_pi(y1.atan2(x1) - a0);
-            overflows += insert_merged(
-                arcs,
-                cap,
-                SkylineArc {
-                    source_id: ScreeningSourceId::wall(b.osm_id, b.segment_idx)
-                        .expect("barrier provenience outside the packed ABI"),
-                    lo: a0.min(r1),
-                    hi: a0.max(r1),
-                    near_m: near_m as f32,
-                    height_m: b.height_m,
-                },
-                fuse,
-            );
-        }
         self.overflows = overflows;
         for k in s0..=s1 {
             let i = k.rem_euclid(SECTORS as i64) as usize;
@@ -1378,7 +1328,6 @@ pub fn arc_screened_attenuation_with_ground(
         q.receiver_lon,
         &p,
         q.obstacles,
-        q.barriers,
         q.source_height_m,
         q.bounds,
     );
@@ -1951,7 +1900,6 @@ fn interval_screening(
     let screening = if let Some(out) = trace_obstacle {
         let (bands, trace) = screening_attenuation_with_meta(
             profile,
-            q.barriers,
             ObstacleInput { candidates },
             src_alt,
             q.receiver_alt_m,
@@ -1964,7 +1912,6 @@ fn interval_screening(
     } else {
         screening_attenuation(
             profile,
-            q.barriers,
             ObstacleInput { candidates },
             src_alt,
             q.receiver_alt_m,
@@ -1982,6 +1929,7 @@ mod tests {
     use crate::constants::{M_PER_DEG_LAT, SOURCE_HEIGHT_ROAD};
     use crate::propagation::iso9613;
     use crate::propagation::obstacle_index::{ObstacleIndex, ObstacleKind};
+    use crate::propagation::screening_source_id::ScreeningSourceId;
     use std::f64::consts::PI;
     use std::sync::Arc;
 
@@ -2075,7 +2023,6 @@ mod tests {
             cp_screening,
             cp_terrain: &NO_TERRAIN,
             ground_g: 0.0,
-            barriers: &[],
             obstacles,
             length_m: 250.0,
             dist_m: rcv_x,
@@ -2263,30 +2210,26 @@ mod tests {
     }
 
     /// A NOISE WALL must produce blocked intervals like a building does. It
-    /// arrives by a different route (the `barriers` slice, deliberately not in
-    /// `ObstacleIndex`), and when it did not reach the skyline at all a receiver
+    /// arrives as `ObstacleKind::Barrier` polylines in the same index as the
+    /// buildings; when walls did not reach the skyline at all, a receiver
     /// behind a wall silently kept the cp verdict for the whole segment — the
     /// constant-width shadow band, surviving exactly where a wall makes it most
     /// visible (physics-suite P3, 0.63 dB against a 0.35 dB gate).
     #[test]
     fn a_wall_screens_its_angular_share() {
-        let obstacles = ObstacleSet { indexes: vec![] };
         let cp = [12.0_f64; NUM_BANDS];
         // A 6 m wall 30 m west of the receiver, spanning 40 m of the fan.
-        let (s_lat, s_lon) = ll(115.0, -20.0);
-        let (e_lat, e_lon) = ll(115.0, 20.0);
-        let wall = [Barrier {
-            osm_id: 1,
-            segment_idx: 0,
-            height_m: 6.0,
-            start_lat: s_lat,
-            start_lon: s_lon,
-            end_lat: e_lat,
-            end_lon: e_lon,
-            dist_m: 30.0,
-        }];
-        let mut q = query(&obstacles, &cp, 145.0);
-        q.barriers = &wall;
+        let mut wall_index = ObstacleIndex::builder(OLAT, OLON);
+        wall_index.add_polyline(
+            &[ll(115.0, -20.0), ll(115.0, 20.0)],
+            6.0,
+            ObstacleKind::Barrier,
+            0,
+        );
+        let with_wall = ObstacleSet {
+            indexes: vec![Arc::new(wall_index.build())],
+        };
+        let q = query(&with_wall, &cp, 145.0);
         let out = Buffers::default().run(&q);
         assert!(
             out.iter().all(|&a| (0.0..12.0).contains(&a)),
@@ -2303,8 +2246,7 @@ mod tests {
         );
         // Same wall over SOFT ground, where nothing saturates: every band is a
         // strict fraction of the cp verdict.
-        let mut soft = query(&obstacles, &cp, 145.0);
-        soft.barriers = &wall;
+        let mut soft = query(&with_wall, &cp, 145.0);
         soft.ground_g = 1.0;
         let out_soft = Buffers::default().run(&soft);
         for (b, &a) in out_soft.iter().enumerate() {
@@ -2314,9 +2256,10 @@ mod tests {
                 "band {b}: soft-ground wall share {a:.2} dB outside ({clear:.2}, 12)"
             );
         }
-        // …and with no wall in the slice there is nothing to clip, so the
+        // …and with no wall in the index there is nothing to clip, so the
         // caller's cp verdict stands untouched.
-        let bare = query(&obstacles, &cp, 145.0);
+        let empty = ObstacleSet { indexes: vec![] };
+        let bare = query(&empty, &cp, 145.0);
         assert_eq!(Buffers::default().run(&bare), cp);
     }
 
@@ -2325,23 +2268,19 @@ mod tests {
     /// own height would delete every 3 m noise wall.
     #[test]
     fn a_wall_below_receiver_height_still_reaches_the_skyline() {
-        let obstacles = ObstacleSet { indexes: vec![] };
         let cp = [9.0_f64; NUM_BANDS];
-        let (s_lat, s_lon) = ll(115.0, -60.0);
-        let (e_lat, e_lon) = ll(115.0, 60.0);
-        let wall = [Barrier {
-            osm_id: 2,
-            segment_idx: 0,
+        let mut wall_index = ObstacleIndex::builder(OLAT, OLON);
+        wall_index.add_polyline(
+            &[ll(115.0, -60.0), ll(115.0, 60.0)],
             // Below the 4 m receiver in `query`, above the 0.05 m source.
-            height_m: 3.0,
-            start_lat: s_lat,
-            start_lon: s_lon,
-            end_lat: e_lat,
-            end_lon: e_lon,
-            dist_m: 30.0,
-        }];
-        let mut q = query(&obstacles, &cp, 145.0);
-        q.barriers = &wall;
+            3.0,
+            ObstacleKind::Barrier,
+            0,
+        );
+        let with_wall = ObstacleSet {
+            indexes: vec![Arc::new(wall_index.build())],
+        };
+        let q = query(&with_wall, &cp, 145.0);
         let mut buf = Buffers::default();
         buf.run(&q);
         assert!(
@@ -2506,19 +2445,18 @@ mod tests {
     //     A-weighted, measured).
     // =====================================================================
 
-    /// A wall as a `types::Barrier`, parallel to the source line at `x_m`.
-    fn sweep_wall(x_m: f64, half_len_m: f64, h: f32) -> Barrier {
-        let (s_lat, s_lon) = ll(x_m, -half_len_m);
-        let (e_lat, e_lon) = ll(x_m, half_len_m);
-        Barrier {
-            osm_id: 1,
-            segment_idx: 0,
-            height_m: h,
-            start_lat: s_lat,
-            start_lon: s_lon,
-            end_lat: e_lat,
-            end_lon: e_lon,
-            dist_m: 0.0,
+    /// A wall as index polylines (kind Barrier — the only route walls take),
+    /// parallel to the source line at `x_m`.
+    fn sweep_wall_set(x_m: f64, half_len_m: f64, h: f32) -> ObstacleSet {
+        let mut b = ObstacleIndex::builder(OLAT, OLON);
+        b.add_polyline(
+            &[ll(x_m, -half_len_m), ll(x_m, half_len_m)],
+            h,
+            ObstacleKind::Barrier,
+            0,
+        );
+        ObstacleSet {
+            indexes: vec![Arc::new(b.build())],
         }
     }
 
@@ -2541,9 +2479,8 @@ mod tests {
         let (alat, alon) = ll(0.0, -seg_half);
         let (blat, blon) = ll(0.0, seg_half);
         let (cplat, cplon) = ll(0.0, 0.0);
-        let empty = ObstacleSet { indexes: vec![] };
         // An 8 m wall halfway, long enough to cross every ray in the fan.
-        let bars = [sweep_wall(0.5 * rcv_x, 400.0, 8.0)];
+        let wall_set = sweep_wall_set(0.5 * rcv_x, 400.0, 8.0);
         let mut q = ArcScreening {
             receiver_lat: rlat,
             receiver_lon: rlon,
@@ -2559,8 +2496,7 @@ mod tests {
             cp_screening: &NO_TERRAIN,
             cp_terrain: &NO_TERRAIN,
             ground_g: 0.0,
-            barriers: &bars,
-            obstacles: &empty,
+            obstacles: &wall_set,
             length_m: 2.0 * seg_half,
             dist_m: rcv_x,
             exclusion_radius_m: 0.0,
@@ -2690,7 +2626,6 @@ mod tests {
             // hard-ground clamp (`mean_db < 0 ⇒ 0`, documented in
             // `arc_screened_attenuation`) cannot mask the effect under test.
             ground_g: 1.0,
-            barriers: &[],
             obstacles: &obstacles,
             length_m: 2.0 * seg_half,
             dist_m: rcv_x,
@@ -2766,7 +2701,6 @@ mod tests {
         rcv_x: f64,
         rcv_alt: f64,
         obstacles: &ObstacleSet,
-        bars: &[Barrier],
         buf: &mut Buffers,
     ) -> [f64; NUM_BANDS] {
         let (rlat, rlon) = ll(rcv_x, 0.0);
@@ -2788,7 +2722,6 @@ mod tests {
             cp_screening: &NO_TERRAIN,
             cp_terrain: &NO_TERRAIN,
             ground_g: 0.0,
-            barriers: bars,
             obstacles,
             length_m: 250.0,
             dist_m: rcv_x,
@@ -2824,14 +2757,14 @@ mod tests {
                         let mut prev = f64::NAN;
                         let (mut bad, mut w, mut at) = (0usize, 0.0_f64, 0.0_f64);
                         for k in 0..=32 {
-                            let (obstacles, bars, h) = if family == "wall" {
+                            let (obstacles, h) = if family == "wall" {
                                 let h = 2.0 + k as f64 * 0.125; // 2 → 6 m
-                                let o = if with_ring {
-                                    sweep_ring(rcv_x, 10.0)
-                                } else {
-                                    ObstacleSet { indexes: vec![] }
-                                };
-                                (o, vec![sweep_wall(screen_x, half_len, h as f32)], h)
+                                let mut o = sweep_wall_set(screen_x, half_len, h as f32);
+                                if with_ring {
+                                    o.indexes
+                                        .extend(sweep_ring(rcv_x, 10.0).indexes.iter().cloned());
+                                }
+                                (o, h)
                             } else {
                                 let h = 3.0 + k as f64 * 0.25; // 3 → 11 m
                                 let mut o = sweep_block(screen_x, h as f32);
@@ -2839,11 +2772,10 @@ mod tests {
                                     o.indexes
                                         .extend(sweep_ring(rcv_x, 10.0).indexes.iter().cloned());
                                 }
-                                (o, vec![], h)
+                                (o, h)
                             };
-                            let lvl = residual_db(&sweep_screening(
-                                rcv_x, rcv_alt, &obstacles, &bars, &mut buf,
-                            ));
+                            let lvl =
+                                residual_db(&sweep_screening(rcv_x, rcv_alt, &obstacles, &mut buf));
                             // 0.05 dB of slack for f32 height/raster rounding; a
                             // real violation here is dB, not hundredths.
                             if prev.is_finite() && lvl - prev > 0.05 {
@@ -3035,7 +2967,6 @@ mod tests {
         dist_m: f64,
         off_m: f64,
         obstacles: &ObstacleSet,
-        bars: &[Barrier],
         state: &mut BothPaths,
     ) -> ([f64; NUM_BANDS], [f64; NUM_BANDS]) {
         let (rlat, rlon) = ll(rcv_x, 0.0);
@@ -3058,7 +2989,6 @@ mod tests {
             cp_screening: &NO_TERRAIN,
             cp_terrain: &NO_TERRAIN,
             ground_g: 0.5,
-            barriers: bars,
             obstacles,
             length_m: 250.0,
             dist_m,
@@ -3097,7 +3027,6 @@ mod tests {
                         q.receiver_lon,
                         &p,
                         q.obstacles,
-                        q.barriers,
                         q.source_height_m,
                         q.bounds,
                     );
@@ -3119,7 +3048,7 @@ mod tests {
     /// chain on production data (84.6 % of Praha's shading edges carry one of
     /// three literal heights), a HEIGHT LADDER whose 2.5 m steps each sit inside
     /// a 3 m tolerance so the whole street chains transitively, a village with a
-    /// noise wall in it (walls enter the skyline by a different route), and a
+    /// noise wall in it (a Barrier-kind polyline in the same index), and a
     /// shallow one with no far rows at all — each over 12 permutations of 9
     /// sources spread from 60 m to 3 km. The far sources are what grow the
     /// skyline past the near ones' needs, so a permutation that puts them first
@@ -3143,16 +3072,19 @@ mod tests {
         // own facade) out to 600 m, the spread measured on tile 2206/1391.
         let far_rows: Vec<f64> = (0..14).map(|k| -1.2 - k as f64 * 45.0).collect();
         let shallow_rows: Vec<f64> = (0..3).map(|k| -1.2 - k as f64 * 45.0).collect();
-        let wall = [sweep_wall(-40.0, 200.0, 4.0)];
-        let scenes: [(&str, ObstacleSet, &[Barrier]); 4] = [
-            ("one-height village", village(&far_rows, &[8.0]), &[]),
+        let village_with_wall = || {
+            let mut v = village(&far_rows, &[8.0]);
+            v.indexes.extend(sweep_wall_set(-40.0, 200.0, 4.0).indexes);
+            v
+        };
+        let scenes: [(&str, ObstacleSet); 4] = [
+            ("one-height village", village(&far_rows, &[8.0])),
             (
                 "height-ladder village",
                 village(&far_rows, &[3.0, 5.5, 8.0, 10.5]),
-                &[],
             ),
-            ("village + noise wall", village(&far_rows, &[8.0]), &wall),
-            ("shallow village", village(&shallow_rows, &[8.0]), &[]),
+            ("village + noise wall", village_with_wall()),
+            ("shallow village", village(&shallow_rows, &[8.0])),
         ];
         // (distance to the segment, along-track offset): near sources first in
         // the unshuffled list, so array order is the benign one and the shuffles
@@ -3171,7 +3103,7 @@ mod tests {
         let rcv_x = 0.0;
         let mut worst = 0.0_f64;
         let mut worst_desc = String::new();
-        for (name, obstacles, bars) in scenes.iter() {
+        for (name, obstacles) in scenes.iter() {
             let mut reference: Vec<[f64; NUM_BANDS]> = Vec::new();
             for p in 0..12u64 {
                 let order = if p == 0 {
@@ -3184,7 +3116,7 @@ mod tests {
                 for &s in order.iter() {
                     let (d, off) = sources[s];
                     let (via_mut, via_sched) =
-                        segment_bands_both(rcv_x, d, off, obstacles, bars, &mut state);
+                        segment_bands_both(rcv_x, d, off, obstacles, &mut state);
                     // The popup's scheduler replay (snapshot + prepared eval,
                     // no-op ensures elided) must reproduce the mutable kernel
                     // to the BIT, in every arrival order — the equivalence the
@@ -3365,7 +3297,6 @@ mod wedge_tests {
                 span.1,
                 need,
                 &set,
-                &[],
                 0.05,
                 ARC_BOUNDS_DEFAULT,
             );

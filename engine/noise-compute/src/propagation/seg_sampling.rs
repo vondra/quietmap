@@ -386,7 +386,6 @@ pub fn sampled_gob_bands_with_ground(
         );
         let mut scr = screening_attenuation(
             profile,
-            q.barriers,
             ObstacleInput { candidates },
             salt,
             q.receiver_alt_m,
@@ -502,12 +501,10 @@ mod tests {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn query<'a>(
         obstacles: &'a ObstacleSet,
         cp_screening: &'a [f64; NUM_BANDS],
         cp_terrain: &'a [f64; NUM_BANDS],
-        barriers: &'a [crate::types::Barrier],
         half_len_deg: f64,
     ) -> ArcScreening<'a> {
         ArcScreening {
@@ -525,7 +522,6 @@ mod tests {
             cp_screening,
             cp_terrain,
             ground_g: 0.5,
-            barriers,
             obstacles,
             length_m: 200.0,
             dist_m: 111.0,
@@ -542,8 +538,8 @@ mod tests {
     #[test]
     fn empty_world_is_ground_for_every_n() {
         let obstacles = empty_obstacles();
-        let (zero, barriers) = ([0.0f64; NUM_BANDS], Vec::new());
-        let q = query(&obstacles, &zero, &zero, &barriers, 0.0014);
+        let zero = [0.0f64; NUM_BANDS];
+        let q = query(&obstacles, &zero, &zero, 0.0014);
         let mut skyline = ArcSkyline::default();
         let mut scratch = SegSampleScratch::new();
         for n in [1usize, 2, 5, 9, 17] {
@@ -570,8 +566,8 @@ mod tests {
     #[test]
     fn degenerate_segment_has_no_fan() {
         let obstacles = empty_obstacles();
-        let (zero, barriers) = ([0.0f64; NUM_BANDS], Vec::new());
-        let q = query(&obstacles, &zero, &zero, &barriers, 0.0);
+        let zero = [0.0f64; NUM_BANDS];
+        let q = query(&obstacles, &zero, &zero, 0.0);
         let mut skyline = ArcSkyline::default();
         let mut scratch = SegSampleScratch::new();
         assert!(sampled_gob_bands(&q, &FlatGround, 5, &mut skyline, &mut scratch).is_none());
@@ -589,9 +585,9 @@ mod tests {
     #[test]
     fn composite_uses_each_buckets_own_terrain() {
         let obstacles = empty_obstacles();
-        let (zero, barriers) = ([0.0f64; NUM_BANDS], Vec::new());
+        let zero = [0.0f64; NUM_BANDS];
         let cp_terrain = [2.5f64; NUM_BANDS];
-        let q = query(&obstacles, &zero, &cp_terrain, &barriers, 0.0014);
+        let q = query(&obstacles, &zero, &cp_terrain, 0.0014);
         let mut skyline = ArcSkyline::default();
         let mut scratch = SegSampleScratch::new();
         let (gob, _) =

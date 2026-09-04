@@ -121,14 +121,12 @@ pub fn compute_at_point(
     railways: &[RailSegment],
     buildings: &[PointSource],
     industrial: &[PointSource],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     rasters: &dyn RasterSampler,
     config: &ComputeConfig,
 ) -> NoiseResult {
     compute_at_point_inner(
-        receiver, roads, railways, buildings, industrial, barriers, obstacles, rasters, config,
-        None,
+        receiver, roads, railways, buildings, industrial, obstacles, rasters, config, None,
     )
 }
 
@@ -141,15 +139,13 @@ pub fn compute_at_point_with_traces(
     railways: &[RailSegment],
     buildings: &[PointSource],
     industrial: &[PointSource],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     rasters: &dyn RasterSampler,
     config: &ComputeConfig,
     traces: Option<&mut TraceCollector>,
 ) -> NoiseResult {
     compute_at_point_inner(
-        receiver, roads, railways, buildings, industrial, barriers, obstacles, rasters, config,
-        traces,
+        receiver, roads, railways, buildings, industrial, obstacles, rasters, config, traces,
     )
 }
 
@@ -160,7 +156,6 @@ fn compute_at_point_inner(
     railways: &[RailSegment],
     buildings: &[PointSource],
     industrial: &[PointSource],
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     rasters: &dyn RasterSampler,
     _config: &ComputeConfig,
@@ -187,14 +182,8 @@ fn compute_at_point_inner(
 
     if !roads.is_empty() {
         let t = std::time::Instant::now();
-        let (road_periods, road_contributors) = compute_roads(
-            receiver,
-            roads,
-            barriers,
-            obstacles,
-            rasters,
-            traces.as_deref_mut(),
-        );
+        let (road_periods, road_contributors) =
+            compute_roads(receiver, roads, obstacles, rasters, traces.as_deref_mut());
         timings.road_ms = t.elapsed().as_secs_f64() * 1000.0;
         source_results.push(SourceResult {
             source_type: LayerKind::Road,
@@ -211,7 +200,6 @@ fn compute_at_point_inner(
         let (rail_periods, rail_contributors) = compute_railways(
             receiver,
             railways,
-            barriers,
             obstacles,
             rasters,
             traces.as_deref_mut(),
@@ -232,7 +220,6 @@ fn compute_at_point_inner(
         let (bld_periods, bld_contributors) = compute_point_sources(
             receiver,
             buildings,
-            barriers,
             obstacles,
             rasters,
             LayerKind::Building,
@@ -254,7 +241,6 @@ fn compute_at_point_inner(
         let (ind_periods, ind_contributors) = compute_point_sources(
             receiver,
             industrial,
-            barriers,
             obstacles,
             rasters,
             LayerKind::Industrial,
@@ -330,10 +316,9 @@ pub fn road_periods(
     receiver: &Receiver,
     obstacles: &ObstacleSet,
     roads: &[RoadSegment],
-    barriers: &[Barrier],
     rasters: &dyn RasterSampler,
 ) -> NoisePeriods {
-    compute_roads(receiver, roads, barriers, obstacles, rasters, None).0
+    compute_roads(receiver, roads, obstacles, rasters, None).0
 }
 
 /// Railway [`NoisePeriods`] at a receiver — the popup rail path without trace
@@ -345,10 +330,9 @@ pub fn rail_periods(
     receiver: &Receiver,
     obstacles: &ObstacleSet,
     railways: &[RailSegment],
-    barriers: &[Barrier],
     rasters: &dyn RasterSampler,
 ) -> NoisePeriods {
-    compute_railways(receiver, railways, barriers, obstacles, rasters, None).0
+    compute_railways(receiver, railways, obstacles, rasters, None).0
 }
 
 /// Industrial [`NoisePeriods`] at a receiver — the popup point-source path
@@ -360,13 +344,11 @@ pub fn industrial_periods(
     receiver: &Receiver,
     obstacles: &ObstacleSet,
     sources: &[PointSource],
-    barriers: &[Barrier],
     rasters: &dyn RasterSampler,
 ) -> NoisePeriods {
     compute_point_sources(
         receiver,
         sources,
-        barriers,
         obstacles,
         rasters,
         LayerKind::Industrial,
@@ -384,13 +366,11 @@ pub fn building_periods(
     receiver: &Receiver,
     obstacles: &ObstacleSet,
     sources: &[PointSource],
-    barriers: &[Barrier],
     rasters: &dyn RasterSampler,
 ) -> NoisePeriods {
     compute_point_sources(
         receiver,
         sources,
-        barriers,
         obstacles,
         rasters,
         LayerKind::Building,
@@ -403,7 +383,6 @@ pub fn building_periods(
 /// Returns (TerrainBreakdown, ScreeningBreakdown, VegetationBreakdown).
 pub fn compute_path_effects(
     rasters: &dyn RasterSampler,
-    barriers: &[Barrier],
     obstacles: &ObstacleSet,
     src_lat: f64,
     src_lon: f64,
@@ -448,7 +427,6 @@ pub fn compute_path_effects(
     let (_screening_atten, obstacle_trace) =
         propagation::path_effects::screening_attenuation_with_meta(
             &mut path_profile,
-            barriers,
             obstacle_input,
             src_height,
             rcv_alt,
@@ -527,7 +505,6 @@ pub(crate) struct LineSegmentScreening<'a> {
     /// Segment length and the receiver's distance to its nearest point.
     pub length_m: f64,
     pub dist_m: f64,
-    pub barriers: &'a [Barrier],
     pub obstacles: &'a ObstacleSet,
 }
 
@@ -537,14 +514,13 @@ pub(crate) struct LineSegmentScreening<'a> {
 /// segment's SEQUENTIAL twin would run — eliding the calls `needs_growth`
 /// proves to be no-ops — and hand back the frozen state its parallel
 /// evaluation must read. `None` = the segment is not arc-screened (span
-/// pre-gate, degenerate span, or no obstacle store and no walls).
+/// pre-gate or degenerate span).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn arc_growth_chain_step(
     skyline: &mut propagation::arc_screening::ArcSkyline,
     epoch_snap: &mut Option<propagation::arc_screening::SkylineSnapshot>,
     arc_set: &ObstacleSet,
     receiver: &Receiver,
-    barriers: &[Barrier],
     seg_start_lat: f64,
     seg_start_lon: f64,
     seg_end_lat: f64,
@@ -571,15 +547,7 @@ pub(crate) fn arc_growth_chain_step(
     )?;
     if skyline.needs_growth(receiver.lat, receiver.lon, &p, bounds) {
         *epoch_snap = None;
-        skyline.ensure_planned(
-            receiver.lat,
-            receiver.lon,
-            &p,
-            set,
-            barriers,
-            source_height_m,
-            bounds,
-        );
+        skyline.ensure_planned(receiver.lat, receiver.lon, &p, set, source_height_m, bounds);
     }
     Some(epoch_snap.get_or_insert_with(|| skyline.snapshot()).clone())
 }
@@ -607,7 +575,6 @@ fn line_segment_arc_query<'a>(
         cp_screening: q.cp_screening,
         cp_terrain: q.cp_terrain,
         ground_g: q.ground_g,
-        barriers: q.barriers,
         obstacles: set,
         length_m: q.length_m,
         dist_m: q.dist_m,
@@ -663,27 +630,29 @@ mod tests {
         }
     }
 
-    /// An ABSENT vector obstacle store must behave exactly like an EMPTY one.
-    /// Walls do not live in the obstacle index — they reach the skyline through
-    /// their own slice — so an early return on `obstacles: None` silently denied
-    /// every noise wall its angular treatment wherever the vector store holds no
-    /// footprint, which is most of the world. The wall below covers part of
-    /// the span and must move the bands away from the caller's cp verdict in
-    /// BOTH configurations, identically. (Review 2026-08-04.)
+    /// A noise wall screens through the SAME obstacle store as the buildings:
+    /// it is a `Barrier`-kind polyline in the index (there is no other wall
+    /// channel any more), and the line-kernel composition
+    /// (`line_segment_arc_query` + the mutable arc kernel, the pieces the
+    /// parallel kernels replay) must move the bands off the caller's cp verdict
+    /// — and leave them untouched when the store holds nothing. (Review
+    /// 2026-08-04 found the slice-era form of this defect: walls then arrived
+    /// by a side channel an absent store would silently skip.)
     #[test]
-    fn a_wall_is_screened_with_or_without_a_vector_store() {
+    fn a_wall_is_screened_through_the_obstacle_store() {
+        use propagation::obstacle_index::{ObstacleIndex, ObstacleKind};
         let receiver = Receiver::new(50.08, 14.42, 200.0);
         // Wall 60 m north of the receiver, running east-west across the span.
-        let barriers = [Barrier {
-            osm_id: 1,
-            segment_idx: 0,
-            height_m: 6.0,
-            start_lat: 50.08054,
-            start_lon: 14.4188,
-            end_lat: 50.08054,
-            end_lon: 14.4212,
-            dist_m: 60.0,
-        }];
+        let mut wall_index = ObstacleIndex::builder(50.08, 14.42);
+        wall_index.add_polyline(
+            &[(50.08054, 14.4188), (50.08054, 14.4212)],
+            6.0,
+            ObstacleKind::Barrier,
+            0,
+        );
+        let with_wall = propagation::obstacle_index::ObstacleSet {
+            indexes: vec![std::sync::Arc::new(wall_index.build())],
+        };
         let cp_screening = [0.0f64; NUM_BANDS];
         let cp_terrain = [0.0f64; NUM_BANDS];
         let ground_bands = propagation::iso9613::legacy_ground_atten_bands(0.5);
@@ -706,7 +675,6 @@ mod tests {
             source_height_m: 0.05,
             length_m: 285.0,
             dist_m: 133.0,
-            barriers: &barriers,
             obstacles,
         };
         // The sequential composition of the same pieces the parallel kernels
@@ -723,12 +691,15 @@ mod tests {
                 &mut scratch,
             )
         };
-        // An empty store is the only "no buildings here" there is — the absent
-        // store this used to compare against cannot be constructed any more.
-        let with_empty = run(&empty);
+        let screened = run(&with_wall);
         assert!(
-            with_empty.iter().any(|&b| b > 0.1),
-            "the wall must screen SOMETHING — got the untouched cp bands {with_empty:?}"
+            screened.iter().any(|&b| b > 0.1),
+            "the wall must screen SOMETHING — got the untouched cp bands {screened:?}"
+        );
+        let without = run(&empty);
+        assert_eq!(
+            without, cp_screening,
+            "an empty store leaves the caller's cp verdict untouched"
         );
     }
 
@@ -773,7 +744,6 @@ mod tests {
         let result = compute_at_point(
             &receiver,
             &roads,
-            &[],
             &[],
             &[],
             &[],
@@ -879,7 +849,6 @@ mod tests {
             &railways,
             &[],
             &[],
-            &[],
             &crate::propagation::obstacle_index::ObstacleSet::empty(),
             &MockRasters,
             &ComputeConfig::default(),
@@ -900,7 +869,6 @@ mod tests {
             &[],
             &[],
             &[],
-            &[],
             &crate::propagation::obstacle_index::ObstacleSet::empty(),
             &MockRasters,
             &ComputeConfig::default(),
@@ -909,7 +877,6 @@ mod tests {
             &receiver,
             &[],
             &railways,
-            &[],
             &[],
             &[],
             &crate::propagation::obstacle_index::ObstacleSet::empty(),
@@ -970,7 +937,6 @@ mod tests {
         let result = compute_at_point(
             &receiver,
             &roads,
-            &[],
             &[],
             &[],
             &[],
@@ -1190,7 +1156,6 @@ mod tests {
             &receiver,
             &roads,
             &railways,
-            &[],
             &[],
             &[],
             &crate::propagation::obstacle_index::ObstacleSet::empty(),

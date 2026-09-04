@@ -158,7 +158,6 @@ fn add_segment_to_total(total_energy: &mut [f64; 3], variants: &[PropagationVari
 pub(crate) fn compute_railways(
     receiver: &Receiver,
     railways: &[RailSegment],
-    barriers: &[Barrier],
     obstacles: &crate::propagation::obstacle_index::ObstacleSet,
     rasters: &dyn RasterSampler,
     mut traces: Option<&mut TraceCollector>,
@@ -357,7 +356,6 @@ pub(crate) fn compute_railways(
             &mut epoch_snap,
             arc_set,
             receiver,
-            barriers,
             seg.start_lat,
             seg.start_lon,
             seg.end_lat,
@@ -473,7 +471,6 @@ pub(crate) fn compute_railways(
                 let (cp_screening_atten, obstacle_trace) =
                     propagation::path_effects::screening_attenuation_with_meta(
                         path_profile,
-                        barriers,
                         obstacle_input,
                         src_alt,
                         rcv_alt,
@@ -503,7 +500,6 @@ pub(crate) fn compute_railways(
                             source_height_m: SOURCE_HEIGHT_RAIL,
                             length_m: seg.length_m as f64,
                             dist_m: seg.dist_m,
-                            barriers,
                             obstacles,
                         },
                         rasters,
@@ -807,7 +803,6 @@ pub(crate) fn compute_railways(
 
         let rail_effects = compute_path_effects(
             rasters,
-            barriers,
             obstacles,
             acc.cp_lat,
             acc.cp_lon,
@@ -997,27 +992,11 @@ mod tests {
     }
 
     fn periods_for(segs: &[RailSegment]) -> NoisePeriods {
-        compute_railways(
-            &receiver(),
-            segs,
-            &[],
-            &ObstacleSet::empty(),
-            &FlatRasters,
-            None,
-        )
-        .0
+        compute_railways(&receiver(), segs, &ObstacleSet::empty(), &FlatRasters, None).0
     }
 
     fn contributors_for(segs: &[RailSegment]) -> Vec<Contributor> {
-        compute_railways(
-            &receiver(),
-            segs,
-            &[],
-            &ObstacleSet::empty(),
-            &FlatRasters,
-            None,
-        )
-        .1
+        compute_railways(&receiver(), segs, &ObstacleSet::empty(), &FlatRasters, None).1
     }
 
     /// Test-only reference implementation of the former all-pairs scan. It
@@ -1382,7 +1361,6 @@ mod tests {
                     let (periods, contribs) = compute_railways(
                         &receiver(),
                         &segs,
-                        &[],
                         &obstacles,
                         &FlatRasters,
                         with_traces.then_some(&mut traces),

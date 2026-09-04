@@ -61,7 +61,7 @@ use crate::propagation::iso9613::aircraft_ground_atten_db;
 use crate::propagation::path_effects;
 use crate::propagation::PathProfile;
 use crate::types::{
-    AircraftGroundOpsClassDetail, AircraftGroundOpsDetail, AircraftMetadata, Barrier, Contributor,
+    AircraftGroundOpsClassDetail, AircraftGroundOpsDetail, AircraftMetadata, Contributor,
     LayerKind, NoisePeriods, ProfileMixEntry, PropagationBaseline, RasterSampler, Receiver,
     SourceMetadata,
 };
@@ -166,7 +166,6 @@ fn db_to_lin(db: f64) -> f64 {
 #[allow(clippy::too_many_arguments)]
 fn compute_microseg_path(
     rasters: &dyn RasterSampler,
-    barriers: &[Barrier],
     obstacles: &crate::propagation::obstacle_index::ObstacleSet,
     cand_scratch: &mut Vec<crate::propagation::obstacle_index::CrossingCandidate>,
     src_lat: f64,
@@ -202,7 +201,6 @@ fn compute_microseg_path(
     );
     let (screening_atten, _obstacle_trace) = path_effects::screening_attenuation_with_meta(
         &mut path_profile,
-        barriers,
         obstacle_input,
         src_alt,
         rcv_alt,
@@ -372,7 +370,6 @@ pub fn run(
     // unweighted — per-event physics, like the airborne SEL.
     class_weights: &crate::emission::aircraft::ClassWeights,
     rasters: &dyn RasterSampler,
-    barriers: &[Barrier],
     // Ground-ops screening uses the same exact vector-obstacle crossings as
     // every other popup surface kernel.
     obstacles: &crate::propagation::obstacle_index::ObstacleSet,
@@ -462,7 +459,6 @@ pub fn run(
             .or_insert_with(|| {
                 compute_microseg_path(
                     rasters,
-                    barriers,
                     obstacles,
                     &mut cand_scratch,
                     cp_lat,

@@ -1314,6 +1314,10 @@ impl ObstacleIndex {
             let hi = self.cell_starts[cell + 1] as usize;
             for &eref in &self.edge_refs[lo..hi] {
                 let e = self.edges[eref as usize];
+                if e.kind() != ObstacleKind::Building {
+                    continue; // a wall is an open chain — crossing parity is
+                              // meaningless on it; containment asks about FOOTPRINTS.
+                }
                 if e.height_m <= min_height_m {
                     continue;
                 }
@@ -1409,9 +1413,7 @@ impl crate::types::RasterSampler for VectorReflectionSampler<'_> {
 
 /// Distance from the ORIGIN to the segment `(x0,y0)-(x1,y1)` (both already
 /// origin-relative). The `near_m` of a [`SkylineArc`]: how far away the thing
-/// standing in those directions actually is. Shared with
-/// [`super::arc_screening`], which runs it on noise-wall endpoints — a wall IS
-/// a segment, so its skyline arc is the same primitive as a building edge's.
+/// standing in those directions actually is.
 #[inline]
 pub(crate) fn origin_to_segment_dist(x0: f64, y0: f64, x1: f64, y1: f64) -> f64 {
     let (ex, ey) = (x1 - x0, y1 - y0);
@@ -1483,9 +1485,9 @@ pub fn wrap_pi(a: f64) -> f64 {
 /// parametric form; collinear overlap returns `None` (a ray sliding along a
 /// wall face grazes it, it does not cross it).
 ///
-/// Shared with `path_effects`' noise-barrier crossings, which never enter this
-/// index (they arrive per-tile as `types::Barrier` segments) but must solve the
-/// identical geometry — one primitive, one rounding, one set of edge cases.
+/// One primitive serves both kinds in the index — building ring edges and
+/// noise-barrier polyline edges (`Builder::add_polyline`) — one rounding, one
+/// set of edge cases.
 #[inline]
 pub(crate) fn segment_intersection_t(
     sx: f64,

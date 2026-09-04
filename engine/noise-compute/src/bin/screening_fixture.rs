@@ -96,9 +96,9 @@
 //! primitive's structure below; they are not acceptance numbers for today's
 //! five-bucket v4 arm.
 //!
-//! The scenes carry NO raster obstacles. Buildings arrive through the
+//! The scenes carry NO raster obstacles. Buildings and walls arrive through the
 //! geodata-v2 vector lane (`obstacle_index::ObstacleSet` exact ray×edge
-//! crossings, vector crossings), so screening is
+//! crossings), so screening is
 //! exact and cadence-independent: neither integrator can win or lose on whether
 //! the bilateral profile cadence happened to drop a probe inside a 10 m deep box.
 //!
@@ -112,12 +112,12 @@
 //! one-second regression geometry that will fail if cross-range chaining ever
 //! returns.
 //!
-//! Scenes C and D are the SAME 3 m wall through the two different code paths a
-//! barrier can take: C puts it in the obstacle index (a path production never
-//! uses for walls), D hands it to the kernel as the `types::Barrier` slice the
-//! tiles and the popup actually build (`BarrierData::for_tile` /
-//! `source-reader::query`), which `path_effects` §1 intersects with each ray.
-//! Two paths, one wall, one answer — the pair is the proof.
+//! Scenes C and D are the SAME 3 m wall in the two segmentations a barrier
+//! takes through the ONE channel walls have — the obstacle index
+//! (`ObstacleKind::Barrier` polylines; the per-tile `types::Barrier` slice is
+//! deleted): C adds it as one polyline, D as the chained 60 m microsegments the
+//! extract's 250 m cap produces. Two shapes, one wall, one answer — the pair is
+//! the proof the wall screens exactly once via the index.
 //!
 //! Deterministic: no RNG, no clock, no I/O beyond stdout. NOT independent of
 //! the environment: `v3` and `v5` reach `ArcBounds::from_env` through the
@@ -157,9 +157,7 @@ use noise_compute::propagation::seg_sampling::{
     seg_arc_bounds, SegSampleScratch, SEG_SAMPLES_DEFAULT,
 };
 use noise_compute::propagation::PathProfile;
-use noise_compute::types::{
-    Barrier, PropagationVariants, RasterSampler, Receiver, BARRIER_PATH_HORIZON_M, NUM_BANDS,
-};
+use noise_compute::types::{PropagationVariants, RasterSampler, Receiver, NUM_BANDS};
 
 // ── Scene frame ───────────────────────────────────────────────────────────
 // Scenes are authored in local metres (x = east, y = north) around a fixed
@@ -192,8 +190,9 @@ const BOX_HEIGHT_M: f32 = 8.0;
 /// Scene C barrier polyline: a thin 3 m wall parallel to the source at x = 60.
 const BARRIER_XY: [(f64, f64); 2] = [(60.0, -150.0), (60.0, 150.0)];
 const BARRIER_HEIGHT_M: f32 = 3.0;
-/// Scene D splits the SAME wall into `barriers.arrow`-shaped microsegments
-/// (the extract caps linear features at 250 m; real walls come in chains).
+/// Scene D is the SAME wall as the chained microsegments the extract emits
+/// (linear features are capped at 250 m; real walls come in chains) — the wall
+/// must screen exactly once however it is segmented.
 const BARRIER_SEGMENT_LEN_M: f64 = 60.0;
 
 /// Scenes E/F: a ROW of separate blocks with real gaps between them, plus one
@@ -604,7 +603,7 @@ impl SceneId {
             SceneId::B => "line source only (no obstacle) — no-shadow parity control",
             SceneId::C => "line source + 3 m barrier polyline (60,-150)-(60,150)",
             SceneId::D => {
-                "same wall as PRODUCTION types::Barrier microsegments (the barriers.arrow lane)"
+                "the same wall as CHAINED 60 m microsegments in the obstacle index — screens exactly once"
             }
             SceneId::E => {
                 "5 blocks (4 rect + 1 L-shaped) 30x12x10 m at x=30..42 with 25 m GAPS —                  the first scene where an arc rule has to keep separate footprints separate"
@@ -696,13 +695,29 @@ fn build_obstacles(scene: SceneId) -> ObstacleSet {
                 .collect();
             builder.add_ring(&ring, BOX_HEIGHT_M, ObstacleKind::Building, 0);
         }
-        // B: nothing. D: the wall arrives as a `types::Barrier` slice instead
-        // (see `build_barriers`) — the index must stay EMPTY there or the wall
-        // would be screened twice over, by two different code paths.
-        SceneId::B | SceneId::D => {}
+        // B: nothing. C and D both carry the wall in the obstacle index — the
+        // ONLY channel a wall has — once as one polyline, once as the chained
+        // microsegments (see below); the deleted `types::Barrier` slice would
+        // have screened the same wall a second time.
+        SceneId::B => {}
         SceneId::C => {
             let line: Vec<(f64, f64)> = BARRIER_XY.iter().map(|&(x, y)| to_lat_lon(x, y)).collect();
             builder.add_polyline(&line, BARRIER_HEIGHT_M, ObstacleKind::Barrier, 0);
+        }
+        SceneId::D => {
+            // The wall chopped into extract-shaped microsegments, one polyline
+            // (one dense id) per piece — exactly what the loader adds per row
+            // of the merged per-cell structures store.
+            let (x, y0, y1) = (BARRIER_XY[0].0, BARRIER_XY[0].1, BARRIER_XY[1].1);
+            let n = ((y1 - y0) / BARRIER_SEGMENT_LEN_M).round() as usize;
+            for i in 0..n {
+                let a = y0 + i as f64 * BARRIER_SEGMENT_LEN_M;
+                let line: Vec<(f64, f64)> = [(x, a), (x, a + BARRIER_SEGMENT_LEN_M)]
+                    .iter()
+                    .map(|&(x, y)| to_lat_lon(x, y))
+                    .collect();
+                builder.add_polyline(&line, BARRIER_HEIGHT_M, ObstacleKind::Barrier, i as u32);
+            }
         }
         SceneId::E | SceneId::F | SceneId::I => {
             let pitch = BLOCK_W_Y + scene.block_gap_m();
@@ -801,39 +816,6 @@ fn build_obstacles(scene: SceneId) -> ObstacleSet {
     }
 }
 
-/// Scene D's wall as PRODUCTION barrier rows: the same polyline chopped into
-/// `barriers.arrow`-shaped microsegments, carried by `types::Barrier` exactly
-/// as `BarrierData::for_tile` / the popup's per-hex merge hand them to the
-/// kernel. This is the path the tiles and the popup actually run for walls —
-/// scene C's `ObstacleIndex` polyline is a DIFFERENT code path (production
-/// never puts a barrier in that index), so the pair is what proves the two
-/// agree.
-fn build_barriers(scene: SceneId) -> Vec<Barrier> {
-    if scene != SceneId::D {
-        return Vec::new();
-    }
-    let (x, y0, y1) = (BARRIER_XY[0].0, BARRIER_XY[0].1, BARRIER_XY[1].1);
-    let n = ((y1 - y0) / BARRIER_SEGMENT_LEN_M).round() as usize;
-    (0..n)
-        .map(|i| {
-            let a = y0 + i as f64 * BARRIER_SEGMENT_LEN_M;
-            let b = a + BARRIER_SEGMENT_LEN_M;
-            let (start_lat, start_lon) = to_lat_lon(x, a);
-            let (end_lat, end_lon) = to_lat_lon(x, b);
-            Barrier {
-                osm_id: 1_390_017_809 + i as i64,
-                segment_idx: i as i16,
-                height_m: BARRIER_HEIGHT_M,
-                start_lat,
-                start_lon,
-                end_lat,
-                end_lon,
-                dist_m: 0.0, // filled per receiver (popup semantics)
-            }
-        })
-        .collect()
-}
-
 /// Per-period line-source emission (dB/m per octave band) for a generic
 /// motorway: `defaults::WORLD_DEFAULT[0]` (30k AADT — 21600 light / 2400 medium
 /// / 5700 heavy / 300 moto) at 130 km/h on dense asphalt, split by
@@ -863,12 +845,6 @@ struct Probe<'a> {
     emission: &'a [[f64; NUM_BANDS]; 3],
     profile: PathProfile,
     candidates: Vec<CrossingCandidate>,
-    /// Scene D's wall rows, geometry only (`dist_m` unset).
-    barriers_scene: &'a [Barrier],
-    /// …and the per-receiver slice the kernel actually sees: exact
-    /// receiver→midpoint `dist_m`, ascending — the `types::Barrier` contract
-    /// as the popup lane builds it.
-    barriers: Vec<Barrier>,
     /// Arc-screening buffers, mirroring `compute_roads`' own locals.
     skyline: ArcSkyline,
     arc: ArcScreeningScratch,
@@ -968,7 +944,6 @@ impl Probe<'_> {
         };
         let (cp_screening, _trace) = screening_attenuation_with_meta(
             &mut self.profile,
-            &self.barriers,
             obstacle_input,
             src_alt,
             rcv_alt,
@@ -993,7 +968,6 @@ impl Probe<'_> {
             cp_screening: &cp_screening,
             cp_terrain: &terrain,
             ground_g,
-            barriers: &self.barriers,
             obstacles: self.obstacles,
             length_m,
             dist_m,
@@ -1075,22 +1049,6 @@ impl Probe<'_> {
             *slot = variants.full_energy;
         }
         energy
-    }
-
-    /// Rebuild the per-receiver barrier slice: exact receiver→midpoint
-    /// distance, sorted ascending — the `types::Barrier` contract as
-    /// `source-reader::query` builds it for one popup receiver.
-    fn prepare_barriers(&mut self, receiver: &Receiver) {
-        self.barriers.clear();
-        self.barriers.extend(self.barriers_scene.iter().map(|b| {
-            let (mid_lat, mid_lon) = b.midpoint();
-            Barrier {
-                dist_m: geo::flat_dist(receiver.lat, receiver.lon, mid_lat, mid_lon),
-                ..*b
-            }
-        }));
-        self.barriers
-            .sort_unstable_by(|a, b| a.dist_m.partial_cmp(&b.dist_m).unwrap());
     }
 
     /// Lden at one receiver from the whole line source under one integrator.
@@ -1665,13 +1623,14 @@ fn gpu_sampled_gob_bands(
 ///    [`GPU_ARC_ESCALATE_SPAN`] into exactly THREE parts however wide it was;
 ///    both lanes now split to that fixed angular RESOLUTION, capped at
 ///    [`GPU_ARC_ESCALATE_MAX_PARTS`]. Worth 0.15 dB on scene E, 0.03 on C.
-/// 5. **Noise walls** (CLOSED inside a complete skyline authority). The kernel
-///    built intervals from obstacle-index footprints only, so `barr` reached the
-///    interval RAYS but could never create one. Scene D isolates that arc
-///    primitive with an empty-but-complete fixture authority: v4 read the
-///    pre-fix-pack `current` verdict exactly (0.63 dB vs the CPU's 0.28) before
-///    the fix. Production raster fallback is a separate cp-only branch because
-///    it lacks the complete footprint skyline.
+/// 5. **Noise walls** (CLOSED). Walls are `ObstacleKind::Barrier` polylines in
+///    the same obstacle store, so they reach the interval walk through the
+///    footprint CSR like every other edge — scenes C and D cover the primitive
+///    (before the walls-by-index merge, the kernel built intervals from
+///    obstacle-index footprints only and the wall slice could never create one:
+///    scene D read the pre-fix-pack `current` verdict exactly, 0.63 dB against
+///    the CPU's 0.28). Production raster fallback is a separate cp-only branch
+///    because it lacks the complete footprint skyline.
 fn gpu_arc_screened_attenuation(
     q: &ArcScreening<'_>,
     rasters: &SceneGround,
@@ -1862,75 +1821,11 @@ fn gpu_arc_screened_attenuation(
             }
         }
     }
-    // ---- Noise WALLS are the other half of a complete skyline authority
-    // (fix-pack Fix 5). This fixture supplies that authority even when its
-    // footprint list is empty; production raster fallback deliberately does not
-    // call the arc integrator. A wall IS a segment, so its arc is the same
-    // primitive a building edge produces: the short arc between its endpoint
-    // azimuths, at its nearest range. Without this a receiver behind a wall gets NO blocked interval, the
-    // cp verdict stands for the whole segment, and the constant-width shadow
-    // band survives exactly where a wall makes it most visible. The CPU has
-    // carried this since the fix-pack (`ArcSkyline::ensure`'s barrier arm); the
-    // kernel walked obstacle-index footprints only, which is why scene D read
-    // `current` exactly (0.63 dB) until this was ported.
-    //
-    // No ray confirmation here, mirroring the CPU skyline: a wall arc is kept on
-    // the range test alone. `need` is the far end of the segment — nothing
-    // beyond it can stand between the receiver and any source point on it.
-    {
-        let (ax, ay) = (
-            (q.start_lon - q.receiver_lon) * m_lon,
-            (q.start_lat - q.receiver_lat) * M_PER_DEG_LAT,
-        );
-        let (bx, by) = (
-            (q.end_lon - q.receiver_lon) * m_lon,
-            (q.end_lat - q.receiver_lat) * M_PER_DEG_LAT,
-        );
-        let need = (ax * ax + ay * ay).sqrt().max((bx * bx + by * by).sqrt());
-        for w in q.barriers {
-            // `dist_m` is a LOWER BOUND on the receiver→midpoint distance and the
-            // slice is sorted by it, so this is a `break` on the kernel side too.
-            if w.dist_m > need + BARRIER_PATH_HORIZON_M {
-                break;
-            }
-            // The sight line never runs below the SOURCE height, so only a wall
-            // shorter than that can be ruled out a priori.
-            if w.height_m as f64 <= q.source_height_m.max(0.0) {
-                continue;
-            }
-            let (x0, y0) = (
-                (w.start_lon - q.receiver_lon) * m_lon,
-                (w.start_lat - q.receiver_lat) * M_PER_DEG_LAT,
-            );
-            let (x1, y1) = (
-                (w.end_lon - q.receiver_lon) * m_lon,
-                (w.end_lat - q.receiver_lat) * M_PER_DEG_LAT,
-            );
-            let near_m = point_to_segment_dist(x0, y0, x1, y1);
-            if near_m > need || near_m < 1e-6 {
-                continue;
-            }
-            let a0 = y0.atan2(x0);
-            let a1 = y1.atan2(x1);
-            let r0 = wrap_pi(a0 - base);
-            let r1 = r0 + wrap_pi(a1 - a0);
-            let Some((start, end)) = arc_clip_span(r0.min(r1), r0.max(r1), lo, hi) else {
-                continue;
-            };
-            assert!(
-                arc_iv_union(
-                    intervals,
-                    GpuArc {
-                        start,
-                        end,
-                        near_m,
-                        height_m: w.height_m as f64,
-                    },
-                ),
-                "CUDA fixture mirror dropped a wall arc at ARC_MAX_MERGED={GPU_ARC_MAX_MERGED}"
-            );
-        }
-    }
+
+    // Noise walls need no arm of their own here: they are `ObstacleKind::Barrier`
+    // polylines in the same store, so the footprint CSR walk above already emits
+    // their arcs (fix-pack Fix 5's separate wall scan died with the
+    // `types::Barrier` slice). Scenes C/D gate that coverage on the CPU side.
 
     // Current CUDA applies the geometry-only 1 m floors after the keyed union,
     // at the same merged-arc granularity the CPU skyline can share.
@@ -2129,8 +2024,8 @@ fn point_to_segment_dist(x0: f64, y0: f64, x1: f64, y1: f64) -> f64 {
 /// Screening bands on the ray from the receiver to the source point at
 /// `azimuth` — the CPU entry points standing in for the kernel's
 /// `ray_path_bands` in the CUDA surface kernel, which is that same path ported. Fresh
-/// profile, that ray's own terrain as the increment base, its own crossings,
-/// and the caller's barrier slice.
+/// profile, that ray's own terrain as the increment base, and its own
+/// crossings.
 fn gpu_interval_screening(
     q: &ArcScreening<'_>,
     rasters: &SceneGround,
@@ -2180,7 +2075,6 @@ fn gpu_path_screening(
     );
     let screening = screening_attenuation(
         profile,
-        q.barriers,
         ObstacleInput { candidates },
         src_alt,
         q.receiver_alt_m,
@@ -2245,7 +2139,6 @@ fn run_scene(
     };
     let obstacles = build_obstacles(scene);
     let footprints = build_footprint_indexes(&obstacles);
-    let barriers_scene = build_barriers(scene);
     let emission = motorway_emission();
     let mut probe = Probe {
         rasters: &rasters,
@@ -2253,8 +2146,6 @@ fn run_scene(
         emission: &emission,
         profile: PathProfile::new(),
         candidates: Vec::new(),
-        barriers_scene: &barriers_scene,
-        barriers: Vec::new(),
         reference_subdivisions: subdivisions.unwrap_or_else(|| scene.reference_subdivisions()),
         source_x_m: scene.source_x_m(),
         skyline: ArcSkyline::default(),
@@ -2278,7 +2169,6 @@ fn run_scene(
             // Receivers stand ON the scene's ground, which scene I tilts.
             let mut receiver = Receiver::new(lat, lon, rasters.elev(lat, lon));
             receiver.height_m = PROBE_HEIGHT_M;
-            probe.prepare_barriers(&receiver);
             let mut lden = [None; 5];
             for &i in &ALL_INTEGRATORS {
                 if !integrators.contains(&i) {
@@ -2664,7 +2554,8 @@ fn main() {
     // the open work item (fuse on absolute top, see arc_screening.rs). And scene
     // D was absent from the table altogether, so the barrier arc primitive used
     // by the complete-vector production lane was ungated; it now shares scene
-    // C's limits, since it is the same wall through the other path. BOTH arc
+    // C's limits, since it is the same wall in its extract-shaped segmentation.
+    // BOTH arc
     // integrators are gated: `v3` is the CPU arc rule, `v4` is the current CUDA
     // five-bucket port mirror, and `v5` is the production CPU five-bucket rule.
     // This does not exercise the separate raster-fallback branch, which keeps
