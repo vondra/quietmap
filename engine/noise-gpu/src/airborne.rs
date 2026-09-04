@@ -39,6 +39,10 @@ use crate::{pack_airborne_receivers, pack_airborne_segs};
 /// The kernels as an ahead-of-time fatbin (this build's `NOISE_GPU_ARCH` SASS plus its PTX),
 /// so the pinned card never JIT-compiles and a driver older than the toolkit still loads it.
 const AIRBORNE_FATBIN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/airborne.fatbin"));
+
+/// Serial number of the temp fatbin an `AirborneGpu` writes, so concurrently constructed
+/// instances never share a path. See [`AirborneGpu::new`] for the failures a shared one caused.
+static AIRBORNE_FATBIN_LOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 const SCREEN_RECORDS: usize = 0;
 const SCREEN_NREG: usize = 1;
 const SCREEN_NEAR_BASE: usize = 2;
@@ -340,9 +344,18 @@ impl AirborneGpu {
         // across workers. Each worker holds its own CudaDevice instance ⇒ no shared-event hazard.
         let dev = CudaDevice::new_with_stream(0).expect("open cuda device 0");
         // cudarc 0.12 loads a binary image only through `cuModuleLoad` on a path (`from_src`
-        // takes NUL-free PTX text), so the embedded fatbin goes through a per-process temp file.
-        let fatbin_path =
-            std::env::temp_dir().join(format!("quietmap-airborne-{}.fatbin", std::process::id()));
+        // takes NUL-free PTX text), so the embedded fatbin goes through a temp file — one per
+        // instance, never one per process. `stream.rs` builds an `AirborneGpu` per GPU stream
+        // worker (two by default), and a pid-keyed path had those workers writing, loading and
+        // unlinking the SAME file at once: `CUDA_ERROR_INVALID_IMAGE` when one read what the
+        // other was still writing, `CUDA_ERROR_FILE_NOT_FOUND` when the other had already
+        // unlinked it — 4 of 5 starts on an RTX 5070 — and a silent hang whenever both workers
+        // died and the prep thread blocked forever on the depth-1 channel (measured 2026-09-04).
+        let fatbin_path = std::env::temp_dir().join(format!(
+            "quietmap-airborne-{}-{}.fatbin",
+            std::process::id(),
+            AIRBORNE_FATBIN_LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::write(&fatbin_path, AIRBORNE_FATBIN).expect("write airborne fatbin");
         let loaded = dev.load_ptx(
             Ptx::from_file(&fatbin_path),
