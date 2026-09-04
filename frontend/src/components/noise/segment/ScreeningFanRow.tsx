@@ -33,6 +33,7 @@ export function ScreeningFanRow({ fan }: { fan: ScreeningFanTrace }) {
       title={
         `Arc quadrature · span ${fan.span_deg.toFixed(1)}° · ${(fan.blocked_fraction * 100).toFixed(1)} % blocked.\n` +
         'ΔL is each interval\'s A_screen at 1 kHz; terrain is its own ray\'s A_terrain where non-zero.\n' +
+        'Each listed obstacle is a representative edge; other edges may supply the 1 kHz band envelope.\n' +
         'The engine energy-averages max(A_ground, A_terrain + A_screen) over the interval shares.\n\n' +
         intervalLines.join('\n')
       }

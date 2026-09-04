@@ -173,7 +173,7 @@ export function ContributorDetail({ c }: { c: Contributor }) {
 
   const screeningText = (() => {
     const rows: Array<[string, string] | { sep: true } | string> = []
-    rows.push('At closest segment:')
+    rows.push('Representative propagation edge', 'on the closest-segment/source ray:')
     if (c.screening.obstacle) {
       const edge = c.screening.obstacle.edge
       rows.push(
@@ -185,7 +185,7 @@ export function ContributorDetail({ c }: { c: Contributor }) {
         ['  Path cadence', `${c.screening.obstacle.step_m.toFixed(0)} m`],
       )
     } else {
-      rows.push(['  Obstacle', 'none on path'])
+      rows.push(['  Screening', 'no increment'])
     }
     if (c.metadata && (c.metadata.kind === 'road' || c.metadata.kind === 'rail') && c.metadata.segment_count > 1) {
       rows.push('', `Across all ${c.metadata.segment_count} segments:`)
@@ -201,7 +201,9 @@ export function ContributorDetail({ c }: { c: Contributor }) {
       }
     }
     rows.push({ sep: true }, ['A-weighted ΔL_A', `${fmt(c.screening_impact_db)} dB`])
-    rows.push('', 'Exact Overture building footprints', 'intersected with the source path', '(SPEC §4.7).')
+    rows.push('', 'Each ray retains the maximum attenuation',
+      'per band across terrain and exact building', 'or barrier crossings. The edge above is',
+      'real, but other edges can supply other', 'bands; it does not explain the whole fan.', '(SPEC §4.7).')
     return txtTable(rows, 22, 14)
   })()
 

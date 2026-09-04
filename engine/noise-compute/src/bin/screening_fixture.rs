@@ -925,7 +925,7 @@ impl Probe<'_> {
             &mut self.profile,
         );
         let ground_g = ground_g_from_profile(&self.profile);
-        let (terrain, terrain_delta_m) = terrain_attenuation(&mut self.profile, src_alt, rcv_alt);
+        let terrain = terrain_attenuation(&mut self.profile, src_alt, rcv_alt);
 
         self.obstacles.crossings_pruned(
             cp_lat,
@@ -949,7 +949,6 @@ impl Probe<'_> {
             rcv_alt,
             0.0, // roads: no self-screening exclusion radius
             &terrain,
-            terrain_delta_m,
         );
         // The one line `compute_roads` adds for the fix: the cp verdict covers
         // only the directions that ray flies through.
@@ -2066,7 +2065,7 @@ fn gpu_path_screening(
         dist_m,
         profile,
     );
-    let (terrain, terrain_delta_m) = terrain_attenuation(profile, src_alt, q.receiver_alt_m);
+    let terrain = terrain_attenuation(profile, src_alt, q.receiver_alt_m);
     q.obstacles.crossings_pruned(
         src_lat,
         src_lon,
@@ -2082,7 +2081,6 @@ fn gpu_path_screening(
         q.receiver_alt_m,
         q.exclusion_radius_m,
         &terrain,
-        terrain_delta_m,
     );
     (terrain, screening)
 }
@@ -2110,7 +2108,7 @@ fn gpu_interval_terrain(
         dist_m,
         profile,
     );
-    Some(terrain_attenuation(profile, src_alt, q.receiver_alt_m).0)
+    Some(terrain_attenuation(profile, src_alt, q.receiver_alt_m))
 }
 
 /// Probe grid coordinates (deterministic integer stepping, no float accumulation).

@@ -53,7 +53,7 @@ export interface PathProfileDiagramProps {
   /** Engine-detected diffraction edge (single-edge model: at most the one
    * max-δ dominant edge). When undefined / empty no apex marker is drawn. */
   terrainEdges?: EdgePoint[]
-  /** The exact vector crossing that beat the terrain edge. */
+  /** Representative exact crossing; other edges can supply other bands. */
   obstacleEdge?: ObstacleEdge
 }
 
@@ -261,6 +261,7 @@ export function PathProfileDiagram({
     {
       w: 'w-[8ch]',
       label: 'Building',
+      labelTooltip: 'Representative propagation edge, not all obstacles or the cause of every attenuation band.',
       tabular: true,
       value: obstacleEdge ? `${obstacleEdge.height_m.toFixed(0)} m` : '—',
     },

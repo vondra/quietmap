@@ -477,7 +477,6 @@ pub(crate) fn compute_railways(
                         rcv_alt,
                         0.0, // railways: no exclusion radius
                         &terrain.attenuation_bands,
-                        terrain.dominant_delta_m(),
                     );
                 // Arc screening (fix-pack Fix 1) — the snapshot is pass 1's
                 // verdict on whether (and against which growth state) this

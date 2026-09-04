@@ -318,7 +318,6 @@ pub(crate) fn compute_roads(
                         rcv_alt,
                         0.0, // roads: no exclusion radius
                         &terrain.attenuation_bands,
-                        terrain.dominant_delta_m(),
                     );
                 // Arc screening (fix-pack Fix 1): the cp ray's verdict covers
                 // only the directions it flies through; the segment's other

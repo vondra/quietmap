@@ -439,7 +439,6 @@ pub fn compute_path_effects(
             rcv_alt,
             exclusion_radius_m,
             &terrain.attenuation_bands,
-            terrain.dominant_delta_m(),
         );
 
     let forest_depth = propagation::path_profile::vegetation_run_length(

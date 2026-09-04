@@ -138,7 +138,7 @@ pub struct TerrainBreakdown {
     pub profile_points: u32,
 }
 
-/// The single exact vector crossing that beat the terrain edge on signed δ.
+/// A real representative crossing, not the cause of the entire band envelope.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ObstacleEdge {
     pub kind: &'static str, // "building" | "barrier"
@@ -150,7 +150,8 @@ pub struct ObstacleEdge {
     pub obstacle_id: u32,
 }
 
-/// Screening trace for the one vector crossing that beat bare terrain.
+/// Geometry of the crossing with the largest incremental attenuation in any
+/// band (ties use larger δ). Other crossings may supply the other bands.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ScreeningObstacleTrace {
     pub delta_m: f64,

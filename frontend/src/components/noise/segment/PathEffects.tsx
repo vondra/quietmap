@@ -199,14 +199,16 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
       'evaluates one exact source-point ray per interval, then energy-averages\n' +
       'max(A_ground, A_terrain + A_screen). Narrow spans, empty skylines and\n' +
       'point sources use the characteristic-point/source ray alone. This row\n' +
-      'is the resulting increment over pure terrain; the listed obstacle is\n' +
-      'the characteristic-point/source ray\'s winning edge.'
+      'is the resulting increment over pure terrain. On each ray, each band\n' +
+      'retains the maximum attenuation across terrain and exact building /\n' +
+      'barrier crossings. The listed representative propagation edge is real,\n' +
+      'but does not alone explain every band or the whole fan.'
     const edgeDetail = obs
-      ? `\n\nEdge: ${obs.edge.kind} ${obs.edge.height_m.toFixed(1)} m @ t=${obs.edge.t.toFixed(2)} (+${obs.edge.screen_h_m.toFixed(1)} m above LOS)`
+      ? `\n\nRepresentative propagation edge: ${obs.edge.kind} ${obs.edge.height_m.toFixed(1)} m @ t=${obs.edge.t.toFixed(2)} (+${obs.edge.screen_h_m.toFixed(1)} m above LOS)`
       : ''
     const valueTooltip =
-      (obs ? `Obstacle: ${obs.edge.kind} ${obs.edge.height_m.toFixed(1)} m @ t=${obs.edge.t.toFixed(2)}.\n\n` : '') +
-      'Per-band increment below.\n' +
+      'Band envelope: per-band increment over terrain, energy-averaged\n' +
+      'across interval rays when a Screening fan is present.\n' +
       'Scalar = A-weighted ΔL_A (full − no_screening Lden).' +
       edgeDetail
     return [

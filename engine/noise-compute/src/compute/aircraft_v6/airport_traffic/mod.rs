@@ -237,7 +237,6 @@ fn compute_microseg_path(
         rcv_alt,
         0.0, // no exclusion radius — airport ground source is point-like
         &terrain.attenuation_bands,
-        terrain.dominant_delta_m(),
     );
     let vegetation_atten = path_effects::vegetation_attenuation_path(&path_profile);
 

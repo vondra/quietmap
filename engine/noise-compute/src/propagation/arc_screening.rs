@@ -1855,7 +1855,7 @@ fn interval_terrain(
     );
     // Terrain bands only: this helper feeds the quadrature's terrain average,
     // which never runs the obstacle race.
-    Some(terrain_attenuation(profile, src_alt, q.receiver_alt_m).0)
+    Some(terrain_attenuation(profile, src_alt, q.receiver_alt_m))
 }
 
 /// Terrain AND screening bands on the ray from the receiver to the source point
@@ -1891,7 +1891,7 @@ fn interval_screening(
         dist_m,
         profile,
     );
-    let (terrain, terrain_delta_m) = terrain_attenuation(profile, src_alt, q.receiver_alt_m);
+    let terrain = terrain_attenuation(profile, src_alt, q.receiver_alt_m);
     q.obstacles.crossings_pruned(
         src_lat,
         src_lon,
@@ -1908,7 +1908,6 @@ fn interval_screening(
             q.receiver_alt_m,
             q.exclusion_radius_m,
             &terrain,
-            terrain_delta_m,
         );
         *out = fan_obstacle(&trace);
         bands
@@ -1920,7 +1919,6 @@ fn interval_screening(
             q.receiver_alt_m,
             q.exclusion_radius_m,
             &terrain,
-            terrain_delta_m,
         )
     };
     Some((terrain, screening))
@@ -2862,32 +2860,11 @@ mod tests {
         assert!(failures.is_empty(), "{}", failures.join("; "));
     }
 
-    /// OPEN DEFECT, pinned so it cannot silently get worse: the single-edge
-    /// rule picks the crossing with the largest δ, but the attenuation that
-    /// crossing then earns is gated by its OWN Rayleigh δ\*, which depends on
-    /// where along the path it stands. Two candidates with nearly equal δ can
-    /// therefore attenuate very differently, and as a screen grows past its
-    /// rival's δ the evaluated edge SWAPS — a step of up to 3.2 dB, upward.
-    ///
-    /// Reproduced here by a receiver standing within a couple of metres of its
-    /// OWN roofline: the ring 6 m away is a rival edge whose δ is within a hair
-    /// of the screen's. Every violation this reports is at `rcv_alt = 10 m`
-    /// with a 10 m ring; no geometry with the receiver clear of its roof
-    /// violates. Fixing it means ranking candidates by attenuation rather than
-    /// δ, i.e. a δ\* fit per candidate instead of per winner — a hot-loop cost
-    /// change that needs its own measurement, so it is NOT part of the clip /
-    /// δ_F fix.
-    ///
-    /// Measured 2026-08-05: 15/108 walls and 33/108 buildings, worst +3.52 dB —
-    /// IDENTICAL before and after the CNOSSOS (2.5.27) δ_F fix, to the digit.
-    /// That is the useful part: the two defects are disjoint. Making δ_F
-    /// continuous took its own sweep (`taller_screen_never_makes_the_receiver_louder`,
-    /// same grid without the ring) from 47/108 + 18/108 to 0/108 + 0/108 and
-    /// left this one untouched, so everything remaining here is the edge SWAP
-    /// and nothing else. (The older "pre-fix 12/108, post-fix 5/108" note was
-    /// stale — it predated the rest of the fix-pack.)
+    /// The receiver's roof competes with the growing wall/building. Selecting
+    /// max δ before evaluating attenuation made 11/108 walls and 24/108 buildings
+    /// louder (up to 3.35 dB, reproduced 2026-09-04). Each band's envelope must
+    /// retain the stronger result when another edge overtakes its δ.
     #[test]
-    #[ignore = "open defect: max-δ edge selection is not max-attenuation selection"]
     fn max_delta_edge_can_pick_the_weaker_screen() {
         let mut failures: Vec<String> = Vec::new();
         for family in ["wall", "building"] {
