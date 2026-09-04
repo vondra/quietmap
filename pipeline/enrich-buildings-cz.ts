@@ -18,7 +18,7 @@ import { writeBuildingEnrichment } from './lib/buildings-arrow.js'
 import { iterateCountryHexes } from './lib/roads-arrow.js'
 import { SOURCE_ID_CZ_RUIAN_VFR } from './lib/source-ids.generated.js'
 import { flatDist } from './lib/spatial.js'
-import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, OSM_EXTRACT_DIR } from './lib/data-year.js'
 
 const MY_SOURCE_ID = SOURCE_ID_CZ_RUIAN_VFR
 
@@ -253,7 +253,7 @@ async function enrichHexes(ruianBuildings: RuianBuilding[]): Promise<void> {
   }
   console.log(`  Spatial grid: ${grid.size} cells`)
 
-  const hexDirs = iterateCountryHexes(H3R4_DIR, CZ_HEX_BBOX, 'buildings.arrow')
+  const hexDirs = iterateCountryHexes(OSM_EXTRACT_DIR, CZ_HEX_BBOX, 'buildings.arrow')
 
   let totalBuildings = 0, totalEnriched = 0, floorsAdded = 0, typeRefined = 0, hexesUpdated = 0, typeDowngradesBlocked = 0
 
@@ -261,7 +261,7 @@ async function enrichHexes(ruianBuildings: RuianBuilding[]): Promise<void> {
     // The shared writer owns metadata preservation (v2 `buildings_contract`
     // stamp survives), the priority gate and the type-specificity gate.
     const r = await writeBuildingEnrichment(
-      resolve(H3R4_DIR, hexId, 'buildings.arrow'),
+      resolve(OSM_EXTRACT_DIR, hexId, 'buildings.arrow'),
       (row) => {
         // Fast-exit before the spatial match when a higher-priority dataset
         // owns the row (the writer re-checks the gate — this only saves work).
@@ -316,11 +316,11 @@ async function enrichHexes(ruianBuildings: RuianBuilding[]): Promise<void> {
 
 async function main() {
   console.log(`=== CZ Building Enrichment — RÚIAN (${YEAR}) ===\n`)
-  console.log(`  H3R4 dir: ${H3R4_DIR}`)
+  console.log(`  OSM extract dir: ${OSM_EXTRACT_DIR}`)
   console.log(`  Cache: ${CACHE_DIR}\n`)
 
-  if (!existsSync(H3R4_DIR)) {
-    console.error(`ERROR: H3R4 directory not found: ${H3R4_DIR}`)
+  if (!existsSync(OSM_EXTRACT_DIR)) {
+    console.error(`ERROR: OSM extract directory not found: ${OSM_EXTRACT_DIR}`)
     process.exit(1)
   }
 

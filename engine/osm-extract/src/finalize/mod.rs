@@ -1,4 +1,6 @@
-//! Finalize: read spill buckets → group by hex_id → write Arrow IPC per hex directory.
+//! Finalize: read spill buckets → group by hex_id → write Arrow IPC per hex directory,
+//! into the PREPARED tree for every painter layer and into the OSM extract SOURCE tree
+//! for `buildings`/`barriers` (see `cell_dir_for_source`).
 
 use anyhow::Result;
 use arrow::array::ArrayRef;
@@ -39,7 +41,8 @@ pub const BUILDINGS_CONTRACT_V2: &str = "buildings_v2";
 pub const LEISURE_CONTRACT_V1: &str = "leisure_v1";
 
 /// Read all spill buckets and write final per-hex Arrow IPC files.
-/// Returns number of distinct hex directories created.
+/// Returns number of distinct hexes written (a hex counts once even when its
+/// painter layers and its OSM tables land in two different trees).
 ///
 /// Each `(source, bucket)` pair is an independent unit of work. `spill.rs` assigns
 /// every feature to `bucket = (hex_id >> 28) % num_buckets`, a pure function of
@@ -48,7 +51,12 @@ pub const LEISURE_CONTRACT_V1: &str = "leisure_v1";
 /// of one core (the per-row Arrow encode was the single-thread bottleneck). The only
 /// shared filesystem touch is `create_dir_all` when two sources hit the same hex dir,
 /// which tolerates the concurrent-create race.
-pub fn finalize(spill_dir: &Path, output_dir: &Path, num_buckets: usize) -> Result<usize> {
+pub fn finalize(
+    spill_dir: &Path,
+    prepared_dir: &Path,
+    osm_extract_dir: &Path,
+    num_buckets: usize,
+) -> Result<usize> {
     // `poi` is intentionally NOT a final source — it is the footprint-join
     // input consumed when finalizing `buildings` (settlement v2 phase 2).
     const SOURCES: [&str; 8] = [
@@ -77,7 +85,14 @@ pub fn finalize(spill_dir: &Path, output_dir: &Path, num_buckets: usize) -> Resu
     let dir_sets = units
         .par_iter()
         .map(|(source, bucket)| {
-            finalize_bucket(source, *bucket, spill_dir, output_dir, &join_stats)
+            finalize_bucket(
+                source,
+                *bucket,
+                spill_dir,
+                prepared_dir,
+                osm_extract_dir,
+                &join_stats,
+            )
         })
         .collect::<Result<Vec<HashSet<String>>>>()?;
 
@@ -111,10 +126,12 @@ fn finalize_bucket(
     source: &str,
     bucket: usize,
     spill_dir: &Path,
-    output_dir: &Path,
+    prepared_dir: &Path,
+    osm_extract_dir: &Path,
     join_stats: &JoinStats,
 ) -> Result<HashSet<String>> {
     let mut hex_dirs = HashSet::new();
+    let root_dir = cell_dir_for_source(source, prepared_dir, osm_extract_dir);
     let path = spill_dir.join(format!("{source}_{bucket:03}.tsv"));
 
     // Settlement v2 phase 2: the buildings unit consumes its bucket's POI nodes
@@ -157,7 +174,7 @@ fn finalize_bucket(
                 source,
                 current_hex,
                 &current_rows,
-                output_dir,
+                root_dir,
                 &poi_index,
                 join_stats,
             )?);
@@ -171,7 +188,7 @@ fn finalize_bucket(
             source,
             current_hex,
             &current_rows,
-            output_dir,
+            root_dir,
             &poi_index,
             join_stats,
         )?);
@@ -197,17 +214,35 @@ fn load_poi_bucket(spill_dir: &Path, bucket: usize) -> Result<PoiIndex> {
     Ok(PoiIndex::from_lines(reader.lines().map_while(Result::ok)))
 }
 
-/// Write one hex's accumulated rows to `{source}.arrow`; returns the hex dir name.
+/// The tree a source's `{source}.arrow` belongs in. Everything a painter reads
+/// lands in the PREPARED cell; `buildings` and `barriers` are the raw OSM tables
+/// only `scripts/structures/build-structures.py` consumes (it freezes them into
+/// the cell's `structures.arrow`), so they land in the OSM extract SOURCE tree
+/// instead — a prepared cell then holds exactly the painters' inputs, so the
+/// ~128 GB of OSM buildings never travel with the cells that are painted.
+fn cell_dir_for_source<'a>(
+    source: &str,
+    prepared_dir: &'a Path,
+    osm_extract_dir: &'a Path,
+) -> &'a Path {
+    match source {
+        "buildings" | "barriers" => osm_extract_dir,
+        _ => prepared_dir,
+    }
+}
+
+/// Write one hex's accumulated rows to `{source}.arrow` under `root_dir`;
+/// returns the hex dir name.
 fn flush_hex(
     source: &str,
     hex: u64,
     rows: &[Vec<String>],
-    output_dir: &Path,
+    root_dir: &Path,
     poi_index: &PoiIndex,
     join_stats: &JoinStats,
 ) -> Result<String> {
     let hex_str = format!("{hex:015x}");
-    let dir = output_dir.join(&hex_str);
+    let dir = root_dir.join(&hex_str);
     fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{source}.arrow"));
     match source {

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Extract noise-relevant features from OSM planet PBF → H3R4 Arrow IPC.
 #
-# Output: data/prepared/{year}/h3r4/{hex}/ with roads.arrow, railways.arrow, buildings.arrow, industrial.arrow
+# Output: data/prepared/{year}/h3r4/{hex}/ with roads.arrow, railways.arrow, industrial.arrow, ...
+#         data/source/osm-extract/{year}/h3r4/{hex}/ with buildings.arrow, barriers.arrow
+#         (the structure builder's OSM input — never a painter's, so never in a prepared cell)
 #
 # Usage: ./scripts/osm-to-h3r4.sh   (all knobs are env vars — see below; PBF_FILE must exist)
 # Called by run-extraction.sh (osm step); also run standalone for an OSM refresh.
@@ -23,6 +25,7 @@ fi
 SCRATCH_ROOT="${SCRATCH_ROOT:-$DEFAULT_SCRATCH_ROOT}"
 PBF_FILE="${PBF_FILE:-$DATA_ROOT/source/osm/${YEAR}/planet-latest.osm.pbf}"
 OUTPUT_DIR="${OUTPUT_DIR:-$DATA_ROOT/prepared/${YEAR}/h3r4}"
+OSM_EXTRACT_DIR="$DATA_ROOT/source/osm-extract/${YEAR}/h3r4"  # buildings/barriers: source, not prepared
 NODE_CACHE="${NODE_CACHE:-$SCRATCH_ROOT/osm_nodes.cache}"
 SPILL_DIR="${SPILL_DIR:-$SCRATCH_ROOT/osm_spill}"
 BINARY="engine/target/release/osm-to-h3r4"
@@ -43,11 +46,12 @@ fi
 PBF_SIZE=$(stat --printf='%s' "$PBF_FILE")
 PBF_SIZE_HR=$(numfmt --to=iec-i --suffix=B "$PBF_SIZE")
 
-mkdir -p "$OUTPUT_DIR" "$(dirname "$NODE_CACHE")" "$SPILL_DIR"
+mkdir -p "$OUTPUT_DIR" "$OSM_EXTRACT_DIR" "$(dirname "$NODE_CACHE")" "$SPILL_DIR"
 
 log "=== OSM extraction ==="
 log "  Input:      $PBF_FILE ($PBF_SIZE_HR)"
 log "  Output:     $OUTPUT_DIR"
+log "  OSM output: $OSM_EXTRACT_DIR"
 log "  Scratch:    $SCRATCH_ROOT"
 log "  Node cache: $NODE_CACHE"
 log "  Spill dir:  $SPILL_DIR"
@@ -76,6 +80,7 @@ MONITOR_PID=$!
 "$BINARY" \
     --input "$PBF_FILE" \
     --output "$OUTPUT_DIR" \
+    --osm-extract-output "$OSM_EXTRACT_DIR" \
     --node-cache "$NODE_CACHE" \
     --spill-dir "$SPILL_DIR" \
     2>&1 | while IFS= read -r line; do log "  $line"; done

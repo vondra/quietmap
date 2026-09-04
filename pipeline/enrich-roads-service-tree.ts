@@ -38,7 +38,7 @@ import { SOURCE_ID_SERVICE_TREE_HEURISTIC } from './lib/source-ids.generated.js'
 import { iterateCountryHexes } from './lib/roads-arrow.js'
 import { nodeKey } from './lib/spatial.js'
 import { MinHeap } from './lib/min-heap.js'
-import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, H3R4_DIR, OSM_EXTRACT_DIR } from './lib/data-year.js'
 import { estimateBuildingLoad, type BuildingLoad } from './lib/trip-rates.js'
 import { fleetForIso, type CountryFleet } from './lib/country-fleet.generated.js'
 import { createHexCountryResolver, type HexCountryResolver } from './lib/hex-country.js'
@@ -752,7 +752,7 @@ async function processHex(
   countryResolver: HexCountryResolver,
 ): Promise<{ enriched: number; totalResidential: number } | null> {
   const roadsPath = resolve(H3R4_DIR, hexId, 'roads.arrow')
-  const buildingsPath = resolve(H3R4_DIR, hexId, 'buildings.arrow')
+  const buildingsPath = resolve(OSM_EXTRACT_DIR, hexId, 'buildings.arrow')
   if (!existsSync(roadsPath) || !existsSync(buildingsPath)) return null
 
   let result: { enriched: number; totalResidential: number } | null = null

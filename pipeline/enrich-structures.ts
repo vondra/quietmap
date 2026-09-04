@@ -5,10 +5,12 @@
  *
  * Terminal chain phase: every pre-merge buildings.arrow reader/writer
  * (buildings-cz/es, service-tree, the gate auditor) sits in an earlier phase;
- * this step merges buildings.arrow + barriers.arrow + the Overture one-degree
- * parquet stock into each prepared cell's structures.arrow, so it must see the
- * FINAL state of buildings.arrow. The fresh-extract tail (osm-to-h3r4.sh) runs
- * the same face on the raw extract; the chain rebuilds the table afterwards.
+ * this step merges the OSM extract tree's buildings.arrow + barriers.arrow
+ * (data/source/osm-extract/{year}/h3r4 — a source tree, never a prepared cell)
+ * with the Overture one-degree parquet stock into each prepared cell's
+ * structures.arrow, so it must see the FINAL state of buildings.arrow. The
+ * fresh-extract tail (osm-to-h3r4.sh) runs the same face on the raw extract;
+ * the chain rebuilds the table afterwards.
  *
  * Scope: `--bbox S,W,N,E` selects PREPARED cells whose H3 BOUNDARY overlaps the
  * bbox — centre-only tests silently drop the cells a regional raster clips;
@@ -38,7 +40,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { cellToBoundary } from 'h3-js'
-import { DATA_YEAR, H3R4_DIR } from './lib/data-year.js'
+import { DATA_YEAR, H3R4_DIR, OSM_EXTRACT_DIR } from './lib/data-year.js'
 
 const REPO_ROOT = resolve(import.meta.dirname, '..')
 const ENRICH = resolve(REPO_ROOT, 'data', 'enrichment')
@@ -149,6 +151,14 @@ function main(): void {
       `Overture parquet cache missing or empty (${OVERTURE_PARQUET_DIR}) — run scripts/obstacles/download-overture-world.sh first`,
     )
   }
+  // A missing OSM extract tree is NOT an empty one: the builder reads an absent
+  // buildings.arrow as "this cell has no OSM buildings" and would rewrite every
+  // table Overture-only, erasing the whole emission stock cell by cell.
+  if (!existsSync(OSM_EXTRACT_DIR)) {
+    throw new Error(
+      `OSM extract tree missing (${OSM_EXTRACT_DIR}) — every structures.arrow would lose its OSM buildings; run scripts/osm-to-h3r4.sh`,
+    )
+  }
 
   // Group by the regional raster overlapping the cell boundary (first match
   // wins); one builder run per group keeps the ~4 GB regional array loaded
@@ -183,6 +193,7 @@ function main(): void {
       const args = [
         BUILDER,
         '--h3r4-dir', H3R4_DIR,
+        '--osm-dir', OSM_EXTRACT_DIR,
         '--overture-parquet', OVERTURE_PARQUET_DIR,
         '--ghsl', GHSL_TIF,
         '--cells-file', cellsFile,

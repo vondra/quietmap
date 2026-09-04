@@ -48,10 +48,12 @@
 //!                   (NEW fingerprints fail; pre-existing pass with a warning;
 //!                   crash/signal/exit-3 always fails).
 //!   structures      build-structures.py (via the enrich-structures.ts face) —
-//!                   ABSOLUTELY LAST: merges the pre-merge buildings.arrow (as
-//!                   osm-extract + the buildings enrichers + every earlier phase
-//!                   left it), barriers.arrow and the Overture parquet stock into
-//!                   the per-cell structures.arrow, so it must run after every
+//!                   ABSOLUTELY LAST: merges the OSM extract tree's pre-merge
+//!                   buildings.arrow (as osm-extract + the buildings enrichers +
+//!                   every earlier phase left it) and barriers.arrow with the
+//!                   Overture parquet stock into the per-cell structures.arrow —
+//!                   the OSM pair lives in data/source/osm-extract/{year}/h3r4,
+//!                   never in a prepared cell — so it must run after every
 //!                   buildings.arrow writer (buildings-cz/es, service-tree, the
 //!                   gate) — anything written later would never reach the table.
 //!                   The builder is the only structures.arrow writer.
@@ -778,11 +780,11 @@ export function buildPlan(scope: ResolvedScope): { steps: PlanStep[]; excludedBy
   })
 
   // ── structures ─────────────────────────────────────────────────────────────
-  // Terminal BY CONTRACT: the builder freezes the pre-merge buildings.arrow +
-  // barriers.arrow + the Overture parquet stock into structures.arrow, the ONLY
-  // file the painters read, so every pre-merge writer (national buildings-cz/es,
-  // heuristics service-tree) must sit in an earlier phase — a write after this
-  // step reaches no painted tile until the next rebuild.
+  // Terminal BY CONTRACT: the builder freezes the OSM extract tree's pre-merge
+  // buildings.arrow + barriers.arrow + the Overture parquet stock into
+  // structures.arrow, the ONLY file the painters read, so every pre-merge writer
+  // (national buildings-cz/es, heuristics service-tree) must sit in an earlier
+  // phase — a write after this step reaches no painted tile until the next rebuild.
   pushPerBbox(
     {
       id: 'structures',

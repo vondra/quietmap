@@ -140,6 +140,9 @@ class BuildStructuresTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp())
         self.h3r4 = self.root / "h3r4"
         (self.h3r4 / CELL).mkdir(parents=True)
+        # The OSM extracts are a SOURCE tree beside the prepared cell, never in it.
+        self.osm = self.root / "osm-extract"
+        (self.osm / CELL).mkdir(parents=True)
         self.staging = self.root / "staging"
 
     def tearDown(self):
@@ -150,13 +153,14 @@ class BuildStructuresTests(unittest.TestCase):
             shard(self.staging / CELL / "obstacles-N49E014.arrow", ovt_rows)
         with_env = BUILDER  # module alias for readability
         census = with_env.build_cell(
-            CELL, str(self.h3r4), ovt_rows, None, FakeGlobalPrior(), None, validate,
+            CELL, str(self.h3r4), str(self.osm), ovt_rows, None, FakeGlobalPrior(),
+            None, validate,
         )
         table = ipc.open_file(str(self.h3r4 / CELL / "structures.arrow")).read_all()
         return census, table
 
     def test_matched_row_keeps_overture_geometry_and_osm_attributes(self):
-        buildings_arrow(self.h3r4 / CELL / "buildings.arrow",
+        buildings_arrow(self.osm / CELL / "buildings.arrow",
                         [osm_row(0, OSM_POLY, 32.0)])
         census, t = self.build([ovt_row(OVT_TWIN, h=8.0, tier=2)])
         self.assertEqual(census["both"], 1)
@@ -184,7 +188,7 @@ class BuildStructuresTests(unittest.TestCase):
         Keeping each row's local best alone dropped it, and the annex's twin then
         screened twice — once as the OSM warehouse outline, once as the Overture
         footprint standing in the same place."""
-        buildings_arrow(self.h3r4 / CELL / "buildings.arrow", [
+        buildings_arrow(self.osm / CELL / "buildings.arrow", [
             osm_row(0, OSM_WAREHOUSE, 6392.0),
             osm_row(1, OSM_ANNEX, 320.0),
         ])
@@ -203,7 +207,7 @@ class BuildStructuresTests(unittest.TestCase):
                          [wkb_of(OSM_WAREHOUSE), None])
 
     def test_big_matched_row_carries_the_osm_emission_polygon(self):
-        buildings_arrow(self.h3r4 / CELL / "buildings.arrow",
+        buildings_arrow(self.osm / CELL / "buildings.arrow",
                         [osm_row(0, OSM_HALL, 5000.0)])
         census, t = self.build([ovt_row(OVT_TWIN, h=9.0, tier=1)])
         # The hall and the twin do not overlap: no match, two building rows.
@@ -218,7 +222,7 @@ class BuildStructuresTests(unittest.TestCase):
 
     def test_big_matched_row_stores_the_osm_polygon_for_emission(self):
         hall_twin = shapely.box(14.176004, 49.786003, 14.176404, 49.786203)
-        buildings_arrow(self.h3r4 / CELL / "buildings.arrow",
+        buildings_arrow(self.osm / CELL / "buildings.arrow",
                         [osm_row(0, OSM_HALL, 5000.0)])
         census, t = self.build([ovt_row(hall_twin, h=8.0, tier=2)])
         self.assertEqual(census["both"], 1)
@@ -227,7 +231,7 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertEqual(row["emission_polygon_wkb"], wkb_of(OSM_HALL))
 
     def test_osm_only_row_ladders_from_osm_tags(self):
-        buildings_arrow(self.h3r4 / CELL / "buildings.arrow", [
+        buildings_arrow(self.osm / CELL / "buildings.arrow", [
             osm_row(0, OSM_SHED, 16.0, height=4.5),       # mapped -> tier 0
             osm_row(1, OSM_HALL, 5000.0, floors=5),       # floors -> tier 1, 15 m
             osm_row(2, None, None),                       # node row, default 8 m
@@ -240,9 +244,9 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertIsNone(t.column("geometry_wkb")[2].as_py())
 
     def test_row_order_is_osm_then_overture_only_then_walls(self):
-        buildings_arrow(self.h3r4 / CELL / "buildings.arrow",
+        buildings_arrow(self.osm / CELL / "buildings.arrow",
                         [osm_row(0, OSM_POLY, 32.0), osm_row(1, OSM_SHED, 16.0)])
-        barriers_arrow(self.h3r4 / CELL / "barriers.arrow", [
+        barriers_arrow(self.osm / CELL / "barriers.arrow", [
             {"osm_id": 55, "segment_idx": 0, "start_lat": 49.78, "start_lon": 14.17,
              "end_lat": 49.7801, "end_lon": 14.1702, "height": 3.0},
             {"osm_id": 55, "segment_idx": 1, "start_lat": 49.7801, "start_lon": 14.1702,
@@ -274,10 +278,10 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertEqual(t.schema.metadata[b"building_rows"], b"0")
 
     def test_idempotent_skip_and_input_refresh(self):
-        buildings_arrow(self.h3r4 / CELL / "buildings.arrow", [osm_row(0, OSM_POLY, 32.0)])
+        buildings_arrow(self.osm / CELL / "buildings.arrow", [osm_row(0, OSM_POLY, 32.0)])
         census, _ = self.build([ovt_row(OVT_LONELY)])
         self.assertIsNotNone(census)
-        again = BUILDER.build_cell(CELL, str(self.h3r4),
+        again = BUILDER.build_cell(CELL, str(self.h3r4), str(self.osm),
                                    BUILDER.read_overture_shards(str(self.staging / CELL))[0],
                                    BUILDER.read_overture_shards(str(self.staging / CELL))[1],
                                    FakeGlobalPrior(), None, False)
@@ -287,21 +291,21 @@ class BuildStructuresTests(unittest.TestCase):
         # stale table for ever (the parquet mode has no per-cell input at all).
         newer = os.path.getmtime(self.h3r4 / CELL / "structures.arrow") + 5
         rebuilt_for_the_raster = BUILDER.build_cell(
-            CELL, str(self.h3r4),
+            CELL, str(self.h3r4), str(self.osm),
             *BUILDER.read_overture_shards(str(self.staging / CELL)),
             FakeGlobalPrior(mtime=newer), None, False)
         self.assertIsNotNone(rebuilt_for_the_raster)
         # Touching a per-cell input rebuilds too.
-        os.utime(self.h3r4 / CELL / "buildings.arrow",
+        os.utime(self.osm / CELL / "buildings.arrow",
                  (os.path.getmtime(self.h3r4 / CELL / "structures.arrow") + 5,) * 2)
         refreshed = BUILDER.build_cell(
-            CELL, str(self.h3r4),
+            CELL, str(self.h3r4), str(self.osm),
             *BUILDER.read_overture_shards(str(self.staging / CELL)),
             FakeGlobalPrior(), None, False)
         self.assertIsNotNone(refreshed)
 
     def test_stale_buildings_contract_is_rejected(self):
-        path = self.h3r4 / CELL / "buildings.arrow"
+        path = self.osm / CELL / "buildings.arrow"
         buildings_arrow(path, [osm_row(0, OSM_POLY, 32.0)])
         # Re-stamp with an outdated contract: the merge must refuse to certify it.
         t = ipc.open_file(str(path)).read_all()

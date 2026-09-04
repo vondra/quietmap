@@ -47,8 +47,9 @@ const OVERTURE_PARQUETS = 'overture-parquet:scripts/obstacles/download-overture-
 
 /** The ONE per-cell structure table's merge step (scripts/structures/build-structures.py,
  *  wrapped by the enrich-structures.ts face): consumes the pre-merge osm-extract files
- *  (buildings.arrow after its enrichers, barriers.arrow) + the Overture parquet cache +
- *  the GHSL/regional height rasters, writes structures.arrow. */
+ *  from data/source/osm-extract/{year}/h3r4 (buildings.arrow after its enrichers,
+ *  barriers.arrow) + the Overture parquet cache + the GHSL/regional height rasters,
+ *  writes structures.arrow into the prepared cell. */
 const STRUCTURES = 'structures'
 
 /** All four AADT columns share one producer set: writeRoadAadt, called by the

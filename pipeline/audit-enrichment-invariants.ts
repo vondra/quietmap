@@ -101,8 +101,7 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs'
-import { resolve, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
 import { tableFromIPC, type Table, type Vector } from 'apache-arrow'
 import { DATASETS } from './lib/enrichment-datasets.js'
 import { isMeasured } from './lib/sources.js'
@@ -110,13 +109,10 @@ import { iterateCountryHexes } from './lib/roads-arrow.js'
 import { makeOwnershipGate, segmentWhollyOutside, makeAnyCountryGate } from './lib/country-polygon.js'
 import { SOURCE_ID_GLOBAL_INDUSTRIAL_NATIONAL_MIX } from './lib/source-ids.generated.js'
 import { MAX_BUILDING_TYPE, V2_SPECIFIC_TYPE_MIN } from './lib/buildings-arrow.js'
-import { DATA_YEAR as YEAR } from './lib/data-year.js'
+import { DATA_YEAR as YEAR, H3R4_DIR, OSM_EXTRACT_DIR } from './lib/data-year.js'
 import { collectRailEndpointRows, loadRailStopsIndex, RAIL_STOPS_UNAVAILABLE_WARNING } from './lib/rail-endpoint-rows.js'
 import { findRailFlowJumps, findRailContinuityGaps } from './lib/rail-graph-metrics.js'
 import type { RailContinuityViolation } from './lib/rail-graph.js'
-
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const H3R4_DIR = resolve(__dirname, '..', 'data', 'prepared', YEAR, 'h3r4')
 
 // Wind keyword set — copied from NAME_RULES 'wind (skip)' in
 // enrich-industrial-name-heuristic.ts (not importable: that file runs main() on
@@ -309,23 +305,26 @@ function* sampleRows(numRows: number): Generator<number> {
 /** Hexes covered by ANY of the --bbox instances, deduped: country scopes pass
  *  a per-polygon padded bbox list and overlapping padded boxes must not
  *  double-count a hex's violations in the gate's fingerprint multiset. */
-function hexesInScope(layerFile: string): string[] {
+function hexesInScope(root: string, layerFile: string): string[] {
   const seen = new Set<string>()
-  for (const b of BBOXES) for (const h of iterateCountryHexes(H3R4_DIR, b, layerFile)) seen.add(h)
+  for (const b of BBOXES) for (const h of iterateCountryHexes(root, b, layerFile)) seen.add(h)
   return [...seen].sort()
 }
 
+/** `root` is the tree the layer lives in: the prepared cells for every painter
+ *  layer, the OSM extract source tree for `buildings.arrow`. */
 function scanLayer(
+  root: string,
   layerFile: string,
   checkTable: (t: Table, hex: string) => number,
 ): { hexes: number; rows: number; ms: number } {
   const t0 = Date.now()
-  const hexes = hexesInScope(layerFile)
+  const hexes = hexesInScope(root, layerFile)
   let rows = 0
   for (const hex of hexes) {
     let table: Table
     try {
-      table = tableFromIPC(readFileSync(resolve(H3R4_DIR, hex, layerFile)))
+      table = tableFromIPC(readFileSync(resolve(root, hex, layerFile)))
     } catch (err) {
       reportIoError(hex, layerFile, `unreadable arrow: ${err instanceof Error ? err.message : err}`)
       continue
@@ -363,7 +362,7 @@ function checkSourceRegistry(
 
 // ── R0/R1/R2/R5/R6/R7/R8/R9/R10: roads ───────────────────────────────────────
 
-const roads = scanLayer('roads.arrow', (t, hex) => {
+const roads = scanLayer(H3R4_DIR, 'roads.arrow', (t, hex) => {
   const cls = t.getChild('road_class')
   const light = t.getChild('aadt_light')
   const moto = t.getChild('aadt_moto')
@@ -537,7 +536,7 @@ const roads = scanLayer('roads.arrow', (t, hex) => {
 
 // ── R0/R3/R6/R9/R10: railways ────────────────────────────────────────────────
 
-const rails = scanLayer('railways.arrow', (t, hex) => {
+const rails = scanLayer(H3R4_DIR, 'railways.arrow', (t, hex) => {
   const rt = t.getChild('rail_type')
   const pax = t.getChild('trains_passenger')
   const frt = t.getChild('trains_freight')
@@ -581,7 +580,7 @@ const rails = scanLayer('railways.arrow', (t, hex) => {
 // with no shared-id stamps.
 const inAnyCountry = makeAnyCountryGate()
 
-const industrial = scanLayer('industrial.arrow', (t, hex) => {
+const industrial = scanLayer(H3R4_DIR, 'industrial.arrow', (t, hex) => {
   const name = t.getChild('name')
   const nace = t.getChild('nace_4digit')
   const src = t.getChild('source_id')
@@ -623,7 +622,7 @@ const industrial = scanLayer('industrial.arrow', (t, hex) => {
 // (branch settlement-phase2). Value is the contract — never edit casually.
 const BUILDINGS_CONTRACT_V2 = 'buildings_v2'
 
-const buildings = scanLayer('buildings.arrow', (t, hex) => {
+const buildings = scanLayer(OSM_EXTRACT_DIR, 'buildings.arrow', (t, hex) => {
   const btype = t.getChild('building_type')
   const src = t.getChild('source_id')
   const osm = t.getChild('osm_id')
@@ -667,14 +666,14 @@ const buildings = scanLayer('buildings.arrow', (t, hex) => {
 
 // ── R15/R16: rail continuity (2026-07-15 railway continuity plan, Phase 2) ──
 // A SEPARATE, full-row pass over the SAME hex set the railways scan above
-// used (hexesInScope('railways.arrow')) — deliberately outside scanLayer's
+// used (hexesInScope(H3R4_DIR, 'railways.arrow')) — deliberately outside scanLayer's
 // sampled loop, AFTER every per-layer scan (never inside the railways scan's
 // sampleRows loop: R5 already establishes that adjacency needs every
 // segment, and R15/R16 need the same full-row guarantee scope-wide, not just
 // per-hex — see the module doc and /gg item 10).
 const railContinuity = (() => {
   const t0 = Date.now()
-  const hexes = hexesInScope('railways.arrow')
+  const hexes = hexesInScope(H3R4_DIR, 'railways.arrow')
   const { rows, ioErrors: rowIoErrors } = collectRailEndpointRows(H3R4_DIR, hexes)
   // Dedup against ioErrors the sampled railways scan above already recorded
   // for the SAME hex (an unreadable file is unreadable either pass); a

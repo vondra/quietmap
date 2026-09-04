@@ -4,8 +4,9 @@
 # Every prepared H3 R4 cell holds structures.arrow — merged where anything stands,
 # a 0-row table with the schema below where nothing does. One row per physical
 # structure carries the union of:
-#   * OSM buildings (buildings.arrow as osm-extract + the enrich chain emit it) —
-#     the EMISSION stock: their attributes and polygons drive the building layer;
+#   * OSM buildings (buildings.arrow as osm-extract + the enrich chain emit it,
+#     in the --osm-dir source tree) — the EMISSION stock: their attributes and
+#     polygons drive the building layer;
 #   * Overture footprints (the screening stock) — a matched OSM<->Overture pair
 #     shares one row; an Overture footprint with no OSM twin is attribute-less;
 #   * OSM noise walls (barriers.arrow) as kind=barrier polyline micro-segments.
@@ -59,11 +60,13 @@
 # so neither a new Overture release nor a refreshed raster tile is served
 # stale), re-runnable in any order, atomic (tmp+fsync+rename, dir fsync), never
 # creates a prepared cell directory (the table follows the prepared inventory)
-# and never removes one: buildings.arrow and barriers.arrow are the OSM inputs
-# every rebuild reads again, so they stay in the cell.
+# and never removes one. buildings.arrow and barriers.arrow are the OSM inputs
+# every rebuild reads again; they live in the --osm-dir SOURCE tree, never in a
+# prepared cell, which holds only what the painters read.
 #
 # Usage:
 #   build-structures.py --h3r4-dir data/prepared/2026/h3r4 \
+#     --osm-dir data/source/osm-extract/2026/h3r4 \
 #     (--overture-shards DIR | --overture-parquet DIR) \
 #     --ghsl <ANBH.tif> [--regional <mosaic.vrt>] \
 #     (--cells hex,... | --cells-file F) [--validate]
@@ -644,20 +647,25 @@ def apply_raster_tiers(rows, regional, ghsl, stats):
                 stats["tier4"] += 1
 
 
-def build_cell(cell, h3r4_dir, overture_rows, overture_mtime, ghsl, regional, validate):
+def build_cell(cell, h3r4_dir, osm_dir, overture_rows, overture_mtime, ghsl,
+               regional, validate):
     """Write one cell's structures.arrow; return the per-cell census dict, or
-    None when the cell is up to date (idempotent skip)."""
+    None when the cell is up to date (idempotent skip). The two OSM inputs come
+    from `osm_dir/<cell>/` (the extract's source tree); the table is written into
+    the prepared cell."""
     cell_dir = os.path.join(h3r4_dir, cell)
     if not os.path.isdir(cell_dir):
         raise SystemExit(
             f"{cell}: no prepared cell directory {cell_dir} — the structure table "
             f"follows the prepared inventory and must not extend it"
         )
+    osm_cell_dir = os.path.join(osm_dir, cell)
     overture_rows = overture_rows or []
     out_path = os.path.join(cell_dir, "structures.arrow")
     if os.path.exists(out_path):
         out_mtime = os.path.getmtime(out_path)
-        inputs = [os.path.join(cell_dir, n) for n in ("buildings.arrow", "barriers.arrow")]
+        inputs = [os.path.join(osm_cell_dir, n)
+                  for n in ("buildings.arrow", "barriers.arrow")]
         # EVERY input the row values are computed from, or a refreshed one is
         # served stale for ever: the two per-cell arrows, the Overture source
         # (shard tree or parquet release) and the height-ladder rasters.
@@ -669,8 +677,8 @@ def build_cell(cell, h3r4_dir, overture_rows, overture_mtime, ghsl, regional, va
             mtimes.append(regional.mtime)
         if max(mtimes) <= out_mtime:
             return None  # idempotent: no input is newer than the output
-    osm = load_osm_buildings(os.path.join(cell_dir, "buildings.arrow"))
-    barriers = load_barriers(os.path.join(cell_dir, "barriers.arrow"))
+    osm = load_osm_buildings(os.path.join(osm_cell_dir, "buildings.arrow"))
+    barriers = load_barriers(os.path.join(osm_cell_dir, "barriers.arrow"))
 
     # OSM geometry index for matching (rows with a polygon only).
     osm_geoms, osm_geom_idx, osm_geom_by_row = [], [], {}
@@ -911,6 +919,8 @@ def validate_cell(cell, osm, table):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--h3r4-dir", required=True)
+    ap.add_argument("--osm-dir", required=True,
+                    help="OSM extract tree: <cell>/buildings.arrow + <cell>/barriers.arrow")
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--overture-shards")
     src.add_argument("--overture-parquet")
@@ -936,8 +946,8 @@ def main():
             ovt, ovt_mtime = read_overture_shards(os.path.join(args.overture_shards, cell))
         else:
             ovt, ovt_mtime = read_overture_parquet(args.overture_parquet, cell)
-        census = build_cell(cell, args.h3r4_dir, ovt, ovt_mtime, ghsl, regional,
-                            args.validate)
+        census = build_cell(cell, args.h3r4_dir, args.osm_dir, ovt, ovt_mtime,
+                            ghsl, regional, args.validate)
         if census is None:
             totals["fresh_skip"] += 1
         else:

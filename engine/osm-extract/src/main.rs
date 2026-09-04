@@ -26,8 +26,14 @@ use std::time::Instant;
 struct Cli {
     #[arg(short, long)]
     input: PathBuf,
+    /// Prepared cell tree: every painter layer's `{source}.arrow`.
     #[arg(short, long, default_value = "source-data/h3r4")]
     output: PathBuf,
+    /// OSM extract source tree: the per-cell `buildings.arrow` / `barriers.arrow`
+    /// the structure builder consumes. Kept out of the prepared cell so a cell
+    /// holds only what the painters read.
+    #[arg(long)]
+    osm_extract_output: PathBuf,
     #[arg(long, default_value = "/tmp/osm_nodes.cache")]
     node_cache: PathBuf,
     #[arg(long, default_value = "/tmp/osm_spill")]
@@ -52,9 +58,15 @@ fn main() -> Result<()> {
         eprintln!("  Finalize-only mode (skipping extraction)");
         eprintln!("  Spill dir: {}", cli.spill_dir.display());
         eprintln!("  Output: {}", cli.output.display());
+        eprintln!("  OSM extract output: {}", cli.osm_extract_output.display());
 
         let t_fin = Instant::now();
-        let hex_count = finalize::finalize(&cli.spill_dir, &cli.output, cli.num_buckets)?;
+        let hex_count = finalize::finalize(
+            &cli.spill_dir,
+            &cli.output,
+            &cli.osm_extract_output,
+            cli.num_buckets,
+        )?;
         eprintln!(
             "  {} hex dirs in {:.1}s",
             hex_count,
@@ -448,7 +460,12 @@ fn main() -> Result<()> {
     // ── Finalize ──
     eprintln!("\n── Finalize ──");
     let t3 = Instant::now();
-    let hex_count = finalize::finalize(&cli.spill_dir, &cli.output, cli.num_buckets)?;
+    let hex_count = finalize::finalize(
+        &cli.spill_dir,
+        &cli.output,
+        &cli.osm_extract_output,
+        cli.num_buckets,
+    )?;
     eprintln!(
         "  {} hex dirs in {:.1}s",
         hex_count,
