@@ -1,16 +1,4 @@
-//! WKB polygon utilities — area calculation from hex-encoded WKB.
-//!
-//! Used by both source-reader (popup) and tile-painter (tile generation)
-//! to compute real area from OSM polygon data instead of hardcoded defaults.
-//!
-//! WHY: Industrial area was hardcoded to 10000 m², building area to 100 m².
-//! This caused Spolana (500K m²) to have same emission as a recycling yard.
-//! Formula: Lw = base + 10×log₁₀(area/10000) per ISO 8297.
-//!
-//! APPROACH: Shoelace formula on WGS84 coordinates with cos(lat) correction.
-//! Gemini 3.1 Pro review noted this is approximate; EPSG:3035 projection is
-//! more accurate. For continental scale this is acceptable (<5% error).
-//! Future: osm-extract should pre-compute area_m2 in metric CRS.
+//! WKB polygon parsing, containment, footprint area and sampling.
 
 use crate::constants::{M_PER_DEG_LAT, M_PER_DEG_LON_EQ};
 
@@ -175,7 +163,7 @@ fn ring_area_offset(
         hole_area += (h_area / 2.0).abs() * M_PER_DEG_LAT * M_PER_DEG_LON_EQ;
     }
 
-    let area_m2 = (outer_area - hole_area).max(1.0);
+    let area_m2 = (outer_area - hole_area).max(grid::poly::MIN_FOOTPRINT_AREA_M2);
     Some((area_m2, off))
 }
 

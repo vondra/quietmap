@@ -9,6 +9,9 @@
 use super::{grid_to_meters, WEB_MERCATOR_RADIUS_M};
 use std::f64::consts::PI;
 
+/// Legacy WKB footprint floor: keeps area-source emission and splitting finite.
+pub const MIN_FOOTPRINT_AREA_M2: f64 = 1.0;
+
 /// One snapped ring: z30 cells in lon/lat order (closed or not).
 pub type GridRing = Vec<(i32, i32)>;
 
@@ -79,7 +82,7 @@ pub fn ring_area_m2(ring: &[(i32, i32)]) -> Option<f64> {
         let j = (i + 1) % n;
         shoelace += pts[i].0 * pts[j].1 - pts[j].0 * pts[i].1;
     }
-    Some((shoelace / 2.0).abs() * cos_lat * cos_lat)
+    Some(((shoelace / 2.0).abs() * cos_lat * cos_lat).max(MIN_FOOTPRINT_AREA_M2))
 }
 
 /// True if the grid cell is inside the ring (outer ring; the extract stores
