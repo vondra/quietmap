@@ -9,6 +9,8 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
 
+use grid::geo::wrapped_longitude_delta;
+
 use crate::compute::aircraft_v6::state::{BandStats, FlightAccum, TopFlightCandidate};
 use crate::compute::aircraft_v6::views::AirborneRowView;
 use crate::emission::aircraft;
@@ -225,11 +227,10 @@ pub fn scatter(
             // avoids a sqrt and a divide. For degenerate sub-segs
             // (seg_len ≈ 0) the bbox check above already covers the
             // endpoint-only case, so we skip the line test there.
-            let ax = (s_lon_f as f64 - receiver.lon) * rx_m_per_lon;
+            let ax = wrapped_longitude_delta(receiver.lon, s_lon_f as f64) * rx_m_per_lon;
             let ay = (s_lat_f as f64 - receiver.lat) * rx_m_per_lat;
-            let bx = (e_lon_f as f64 - receiver.lon) * rx_m_per_lon;
             let by = (e_lat_f as f64 - receiver.lat) * rx_m_per_lat;
-            let sdx = bx - ax;
+            let sdx = wrapped_longitude_delta(s_lon_f as f64, e_lon_f as f64) * rx_m_per_lon;
             let sdy = by - ay;
             let seg_len_sq = sdx * sdx + sdy * sdy;
             let flags = sub.flags[i];

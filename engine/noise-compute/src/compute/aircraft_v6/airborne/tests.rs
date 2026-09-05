@@ -1,6 +1,8 @@
 use super::*;
 use crate::flight_id;
 
+mod dateline;
+
 /// `rank_key = energy * AIRBORNE_RANK_W[period]` must produce the same
 /// ordering as the actual `received_lden.full` Lden computed by the
 /// trace builder. If this drifts (e.g. someone changes Lden weights

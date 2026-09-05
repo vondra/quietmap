@@ -5,6 +5,16 @@ current screening contract; it is not a claim of full CNOSSOS-EU compliance.
 The implementation and regressions live in `src/propagation/path_effects.rs`,
 `diffraction.rs` and `arc_screening.rs`.
 
+## Aircraft local geometry
+
+Doc 29 keeps its receiver-latitude scale and infinite-line CPA. Both the
+receiver-to-segment-start longitude and the segment's own longitude extent use
+the short arc from `grid::geo`; separately wrapping both endpoints would still
+stretch a short segment beside the receiver's opposite meridian. Popup pruning,
+CPA, reach gates and prepared-row kernels share this convention. Terrain-horizon
+samples use the same canonical longitude interval. Moving a flight and its ridge
+across ±180° must preserve the received SEL, screening and displayed CPA.
+
 ## 4.7 Vector screening
 
 One source-to-receiver ray shares its bare-earth raster profile between terrain

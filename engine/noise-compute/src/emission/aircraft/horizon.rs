@@ -23,6 +23,8 @@
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use std::sync::OnceLock;
 
+use grid::geo::normalize_longitude;
+
 use super::doc29::{fast_atan, M_PER_DEG_LAT};
 use super::screening::single_edge_diffraction_db;
 #[cfg(test)]
@@ -166,16 +168,8 @@ impl ReceiverHorizon {
         for (samples, buckets) in receiver_horizon_samples().iter().zip(&mut sectors) {
             let mut best = [(f64::NEG_INFINITY, 0.0_f64); RECEIVER_HORIZON_BANDS];
             for sample in samples {
-                // Antimeridian wrap + pole clamp keep the DEM SAMPLING
-                // valid near ±180°/the poles. NOTE: the kernel-side
-                // aircraft projections (segment_sel) are dateline-naive
-                // (pre-existing — dateline-crossing pairs never reach
-                // the kernel; their raw lon delta fails every bbox
-                // prefilter), so this wrap is about sane sampling, not
-                // end-to-end dateline support.
                 let sample_lat = (lat + sample.north_m / M_PER_DEG_LAT).clamp(-90.0, 90.0);
-                let sample_lon =
-                    (lon + sample.east_m / m_per_deg_lon + 540.0).rem_euclid(360.0) - 180.0;
+                let sample_lon = normalize_longitude(lon + sample.east_m / m_per_deg_lon);
                 let tangent = (sampler(sample_lat, sample_lon) - receiver_alt_m) / sample.range_m;
                 if tangent > best[sample.band].0 {
                     best[sample.band] = (tangent, sample.range_m);

@@ -6,6 +6,7 @@
 //! skip the per-call `OnceLock` Acquire load and raster lookups.
 
 use crate::types::{AircraftSegment, RasterSampler};
+use grid::geo::wrapped_longitude_delta;
 
 use super::doc29::{
     delta_i_constants, delta_v, segment_energy_kernel, segment_energy_kernel_with_screening,
@@ -142,11 +143,10 @@ pub fn within_kernel_reach(
     let reach_sq = REACH_SQ_TABLE[class_idx][seg.is_departure as usize];
     let cos_lat = rx_lat.to_radians().cos().max(0.2);
     let m_per_deg_lon = M_PER_DEG_LAT * cos_lat;
-    let ax = (seg.start_lon - rx_lon) * m_per_deg_lon;
+    let ax = wrapped_longitude_delta(rx_lon, seg.start_lon) * m_per_deg_lon;
     let ay = (seg.start_lat - rx_lat) * M_PER_DEG_LAT;
-    let bx = (seg.end_lon - rx_lon) * m_per_deg_lon;
     let by = (seg.end_lat - rx_lat) * M_PER_DEG_LAT;
-    let sdx = bx - ax;
+    let sdx = wrapped_longitude_delta(seg.start_lon, seg.end_lon) * m_per_deg_lon;
     let sdy = by - ay;
     let seg_len_sq = sdx * sdx + sdy * sdy;
     let inv_lsq = if seg_len_sq > 1e-6 {
@@ -385,11 +385,10 @@ fn segment_kernel_with_overrides<const WANT_CPA: bool, const RETAIN_SCREENED: bo
 
     let cos_lat = rx_lat.to_radians().cos().max(0.2);
     let m_per_deg_lon = M_PER_DEG_LAT * cos_lat;
-    let ax = (seg.start_lon - rx_lon) * m_per_deg_lon;
+    let ax = wrapped_longitude_delta(rx_lon, seg.start_lon) * m_per_deg_lon;
     let ay = (seg.start_lat - rx_lat) * M_PER_DEG_LAT;
-    let bx = (seg.end_lon - rx_lon) * m_per_deg_lon;
     let by = (seg.end_lat - rx_lat) * M_PER_DEG_LAT;
-    let sdx = bx - ax;
+    let sdx = wrapped_longitude_delta(seg.start_lon, seg.end_lon) * m_per_deg_lon;
     let sdy = by - ay;
     let seg_len_sq = sdx * sdx + sdy * sdy;
     let slen = seg_len_sq.sqrt().max(1.0);
@@ -524,7 +523,7 @@ pub fn prepare_segment(
     let (inst, di_a, di_b, di_c) = delta_i_constants(anchor_profile.installation);
     let dv = delta_v(seg.speed_kt as f64, anchor_profile);
     let reach_sq = REACH_SQ_TABLE[class_idx][seg.is_departure as usize];
-    let d_lon = seg.end_lon - seg.start_lon;
+    let d_lon = wrapped_longitude_delta(seg.start_lon, seg.end_lon);
     let sdy = (seg.end_lat - seg.start_lat) * M_PER_DEG_LAT;
     let sdz = (seg.end_alt_m as f64) - (seg.start_alt_m as f64);
 
@@ -584,7 +583,7 @@ pub fn segment_sel_at_pixel(
     npd_luts: &NpdLuts,
     horizon: Option<&ReceiverHorizon>,
 ) -> Option<(f64, CpaResult)> {
-    let ax = (prepared.start_lon - rx_lon) * row_state.m_per_deg_lon;
+    let ax = wrapped_longitude_delta(rx_lon, prepared.start_lon) * row_state.m_per_deg_lon;
     let kernel: AircraftKernelResult = segment_energy_kernel::<true>(
         ax,
         row_state.ay,
@@ -677,7 +676,7 @@ fn segment_sel_at_pixel_energy_inner(
     horizon: Option<&ReceiverHorizon>,
     buildings: Option<&super::BuildingHorizon>,
 ) -> Option<f64> {
-    let ax = (prepared.start_lon - rx_lon) * row_state.m_per_deg_lon;
+    let ax = wrapped_longitude_delta(rx_lon, prepared.start_lon) * row_state.m_per_deg_lon;
     let kernel = segment_energy_kernel::<false>(
         ax,
         row_state.ay,

@@ -9,6 +9,8 @@
 
 use std::f64::consts::LOG10_2;
 
+use grid::geo::wrapped_longitude_delta;
+
 use crate::propagation::iso9613::fast_exp_f64;
 use crate::types::AircraftSegment;
 
@@ -51,12 +53,11 @@ pub fn segment_min_slant_sq(
 ) -> f64 {
     let m_per_deg_lon = M_PER_DEG_LAT * cos_lat;
 
-    let x1 = (seg.start_lon - rx_lon) * m_per_deg_lon;
+    let x1 = wrapped_longitude_delta(rx_lon, seg.start_lon) * m_per_deg_lon;
     let y1 = (seg.start_lat - rx_lat) * M_PER_DEG_LAT;
-    let x2 = (seg.end_lon - rx_lon) * m_per_deg_lon;
     let y2 = (seg.end_lat - rx_lat) * M_PER_DEG_LAT;
 
-    let dx = x2 - x1;
+    let dx = wrapped_longitude_delta(seg.start_lon, seg.end_lon) * m_per_deg_lon;
     let dy = y2 - y1;
     let seg_len_sq = dx * dx + dy * dy;
     // Same `inv_lsq * ...` formulation the kernel uses (FP-equivalent to
@@ -109,12 +110,11 @@ pub fn compute_cpa(
     let cos_lat = rx_lat.to_radians().cos().max(0.2);
     let m_per_deg_lon = M_PER_DEG_LAT * cos_lat;
 
-    let x1 = (s1_lon - rx_lon) * m_per_deg_lon;
+    let x1 = wrapped_longitude_delta(rx_lon, s1_lon) * m_per_deg_lon;
     let y1 = (s1_lat - rx_lat) * M_PER_DEG_LAT;
-    let x2 = (s2_lon - rx_lon) * m_per_deg_lon;
     let y2 = (s2_lat - rx_lat) * M_PER_DEG_LAT;
 
-    let dx = x2 - x1;
+    let dx = wrapped_longitude_delta(s1_lon, s2_lon) * m_per_deg_lon;
     let dy = y2 - y1;
     let seg_len_sq = dx * dx + dy * dy;
     let seg_len = seg_len_sq.sqrt().max(1.0);
