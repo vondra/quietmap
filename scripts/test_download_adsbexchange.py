@@ -11,7 +11,8 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+from urllib.parse import urlsplit
 
 spec = importlib.util.spec_from_file_location('adsbe', Path(__file__).with_name('download-adsbexchange.py'))
 assert spec and spec.loader
@@ -175,6 +176,39 @@ class DownloadTest(unittest.TestCase):
             with patch.object(adsbe, 'fetch', side_effect=AssertionError('cached')):
                 adsbe.download_day(DAY, root, 4)
             self.assertGreater(target.stat().st_size, 1024)
+
+    def test_required_snapshot_rechecks_cached_absence_within_the_retry_budget(self):
+        snapshot = 'readsb-hist/2026/07/01/000000Z.json.gz'
+        trace = 'traces/2026/07/01/02/trace_full_a00002.json'
+        for path, statuses in [(snapshot, [404, 200]), (snapshot, [404, 404]),
+                               (snapshot, [503, 503, 503, 503, 404]), (trace, [404])]:
+            with self.subTest(path=path, statuses=statuses):
+                _, body, etag, modified = response(path)
+                replies = [Mock(status=status, data=body if status == 200 else b'absent',
+                    headers={'ETag': etag, 'Last-Modified': modified}) for status in statuses]
+                with patch.object(adsbe.HTTP, 'request', side_effect=replies) as request, \
+                        patch.object(adsbe.time, 'sleep'):
+                    result = adsbe.fetch(path)
+                self.assertEqual(request.call_count, len(statuses))
+                self.assertEqual(request.call_args_list[0].args, ('GET', adsbe.BASE + path))
+                for call in request.call_args_list:
+                    self.assertEqual(urlsplit(call.args[1]).path, '/' + path)
+                final_url = request.call_args.args[1]
+                if statuses[0] == 404 and path == snapshot:
+                    self.assertTrue(urlsplit(final_url).query)
+                else:
+                    self.assertEqual(final_url, adsbe.BASE + path)
+                if result[0] == 200:
+                    self.assertEqual(result, (200, body, etag, modified))
+                    self.assertEqual(adsbe.source_json(path, *result[:2], DAY)['aircraft'],
+                                     json.loads(gzip.decompress(body))['aircraft'])
+                elif path == snapshot:
+                    with self.assertRaisesRegex(ValueError, 'required snapshot HTTP 404'):
+                        adsbe.source_json(path, *result[:2], DAY)
+                else:
+                    self.assertIsNone(adsbe.source_json(path, *result[:2], DAY))
+                for reply in replies:
+                    reply.release_conn.assert_called_once()
 
     def test_transient_http_is_never_a_definitive_absence(self):
         class Response:

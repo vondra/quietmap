@@ -33,12 +33,19 @@ def log(message):
 
 def fetch(path):
     failure = 'no response'
+    request_url = BASE + path
     for attempt in range(5):
         try:
-            response = HTTP.request('GET', BASE + path, redirect=False)
+            response = HTTP.request('GET', request_url, redirect=False)
             status, body = response.status, response.data
             headers = response.headers
             response.release_conn()
+            if (status == 404 and path.startswith('readsb-hist/')
+                    and request_url == BASE + path and attempt < 4):
+                # A cached 404 can outlive publication of this required snapshot.
+                request_url = f'{BASE}{path}?quietmap_retry={time.time_ns()}'
+                log(f'{path}: HTTP 404; rechecking the same snapshot with a fresh cache key')
+                continue
             if status in (200, 404):
                 return status, body, headers.get('ETag'), headers.get('Last-Modified')
             failure = f'HTTP {status}'
