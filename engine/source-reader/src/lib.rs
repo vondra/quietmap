@@ -181,9 +181,8 @@ pub fn source_init(prepared_dir: String) -> napi::Result<String> {
     store.prepared_dir = prepared_dir.clone();
     store.squares.clear();
 
-    // Rasters live at `<prepared>/2026/rasters/`; admin records at
-    // `<prepared>/2026/admin/<square_id>/admin.bin`; squares at
-    // `<prepared>/2026/z9/<x>/<y>/`.
+    // Native raster windows share `<prepared>/2026/z9/<x>/<y>/` with
+    // vector shards; their per-channel publication authority is rasters.sqlite.
     let year_path = std::path::Path::new(&prepared_dir);
     let data_dir = year_path.parent().unwrap_or(std::path::Path::new("."));
     let rasters = raster_reader::RealRasters::new(year_path);
@@ -201,7 +200,11 @@ pub fn source_init(prepared_dir: String) -> napi::Result<String> {
 
     Ok(format!(
         "source-reader initialized: {prepared_dir} (DEM: {})",
-        if has_dem { "loaded" } else { "stub" },
+        if has_dem {
+            "published coverage"
+        } else {
+            "unavailable coverage"
+        },
     ))
 }
 
@@ -481,21 +484,21 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         .join("aircraft")
         .join("airport_summary.arrow");
 
-    let stub = StubRasters;
-    let real_rasters = RASTERS.get();
-    let rasters: &dyn noise_compute::types::RasterSampler = match real_rasters {
-        Some(r) => r,
-        None => &stub,
-    };
-    // Sample receiver elevation up-front so the aircraft kernels see a
-    // real ground reference. With the stub rasters (offline tests),
-    // elevation is 0.0.
-    let elevation = rasters.elevation(lat, lng);
     let t_load = t_start.elapsed();
     let sources = collect_from_square_data(&square_refs, lat, lng)
         .map_err(|error| Error::new(Status::GenericFailure, error))?;
     let t_collect = t_start.elapsed() - t_load;
     drop(store);
+
+    let real_rasters = RASTERS
+        .get()
+        .ok_or_else(|| Error::new(Status::GenericFailure, "source_init was never called"))?;
+    let checked = raster_reader::CheckedRasters::new(real_rasters);
+    let rasters: &dyn noise_compute::types::RasterSampler = &checked;
+    let elevation = rasters.elevation(lat, lng);
+    checked
+        .ensure_valid()
+        .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))?;
 
     let config = noise_compute::types::ComputeConfig {
         n_days: sources.n_days,
@@ -567,16 +570,11 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     // 1.4b: with a loaded store, the receiver reflection probe answers from
     // exact footprints too (the popup twin of the pipeline rx_refl pre-bake)
     // — one wrapped sampler serves EVERY popup kernel.
-    let vector_refl = Some(&obstacle_set).map(|set| {
-        noise_compute::propagation::obstacle_index::VectorReflectionSampler {
-            inner: rasters,
-            set,
-        }
-    });
-    let rasters: &dyn noise_compute::types::RasterSampler = match &vector_refl {
-        Some(w) => w,
-        None => rasters,
+    let vector_refl = noise_compute::propagation::obstacle_index::VectorReflectionSampler {
+        inner: rasters,
+        set: &obstacle_set,
     };
+    let rasters: &dyn noise_compute::types::RasterSampler = &vector_refl;
     let receiver = noise_compute::types::Receiver::new(
         facade_lat,
         facade_lng,
@@ -620,6 +618,9 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         top_k_per_kind,
     )
     .map_err(|e| Error::new(Status::GenericFailure, e))?;
+    checked
+        .ensure_valid()
+        .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))?;
     let t_compute = t_start.elapsed() - t_load - t_collect;
 
     let summary = apply_segment_top_k_with_cap(&mut traces, top_k_per_kind);
@@ -680,24 +681,3 @@ const SEGMENT_TOP_K_PER_KIND: usize = 150;
 /// (millions of segments) and browsers can't parse it either.
 #[cfg(feature = "node")]
 const SEGMENT_TOP_K_PER_KIND_FULL: usize = 1000;
-
-/// Stub raster sampler — flat terrain, no buildings, no vegetation.
-/// Used as fallback when DEM/raster tiles are not available on disk.
-#[cfg(feature = "node")]
-struct StubRasters;
-
-#[cfg(feature = "node")]
-use noise_compute::types::RasterSampler;
-
-#[cfg(feature = "node")]
-impl RasterSampler for StubRasters {
-    fn elevation(&self, _lat: f64, _lon: f64) -> f64 {
-        200.0
-    }
-    fn ground_g(&self, _: f64, _: f64) -> f64 {
-        0.5
-    }
-    fn building_enclosure(&self, _: f64, _: f64) -> f64 {
-        0.0
-    }
-}

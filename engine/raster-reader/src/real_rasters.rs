@@ -1,25 +1,18 @@
-//! [`RealRasters`] — lazy mmap'd 1°×1° raster tiles, the popup + extract sampler.
+//! [`RealRasters`] — lazy mmap'd native-lattice z9 windows for popup and aircraft sampling.
 //!
 //! Implements [`noise_compute::types::RasterSampler`] over three [`TileStore`]s
-//! (DEM, forest, IMD), each an LRU cache of mmap'd 1° tiles loaded on
+//! (DEM, forest, IMD), each a byte-bounded LRU cache of mmap'd windows loaded on
 //! first access. This is the global-scale reader the per-point popup and the
 //! aircraft extract sample directly; the pipeline crops it into a
 //! [`crate::fused_grid::FusedGrid`] for L3-resident batch compute.
 
-use crate::tile::{DType, Interp, TileStore};
+use crate::channel::Channel;
+use crate::tile::{Interp, TileStore};
 use crate::RawTile;
 use noise_compute::types::RasterSampler;
 use std::path::Path;
 
-fn env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&v| v > 0)
-        .unwrap_or(default)
-}
-
-/// Real raster data from 1°×1° tiles. Implements RasterSampler.
+/// Real raster data from native-lattice z9 windows. Implements RasterSampler.
 pub struct RealRasters {
     pub dem: TileStore,
     pub forest: TileStore,
@@ -27,61 +20,17 @@ pub struct RealRasters {
 }
 
 impl RealRasters {
-    /// Create from a release root. Tiles loaded lazily on first access.
-    ///
-    /// `data_dir` is the prepared release year directory:
-    /// DEM at `rasters/dem/*.hgt`, forest at `rasters/forest/*.raw`, IMD at
-    /// `rasters/imd/*.raw` (all 1°×1° 3601² node-registered).
+    /// Open channel publication coverage; mmap data only on first access.
+    /// Missing channels stay unavailable, independently, until they are consumed.
     pub fn new(data_dir: &Path) -> Self {
-        // Defaults to 32 not 12: 12 is below the working-set size of
-        // any realistic extract bbox (Praha alone is ~20 1°×1° DEM
-        // tiles), so the LRU evict path fires repeatedly and scans
-        // every tile slot each time. 32 covers most regional bboxes
-        // without code changes; operators override with the env-var
-        // for global runs.
-        let dem_cache_tiles = env_usize("QUIETMAP_CACHE_DEM_TILES", 32);
-        let forest_cache_tiles = env_usize("QUIETMAP_CACHE_FOREST_TILES", 64);
-        let imd_cache_tiles = env_usize("QUIETMAP_CACHE_IMD_TILES", 128);
-
-        let dem = TileStore::new(
-            data_dir.join("rasters/dem"),
-            3601,
-            DType::I16BE,
-            Interp::Bilinear,
-            0.0,
-            ".hgt",
-            dem_cache_tiles,
-        );
-
-        // Forest cover: u8 (0/100%), 3601×3601 (WorldCover 30m), nearest-neighbor
-        let forest = TileStore::new(
-            data_dir.join("rasters/forest"),
-            3601,
-            DType::U8,
-            Interp::Nearest,
-            0.0,
-            ".raw",
-            forest_cache_tiles,
-        );
-
-        // IMD ground type: u8 (0-100 imperviousness), 3601×3601 (30m), bilinear.
-        // Missing-tile default 100 = hard (G=0): the WorldCover converter emits
-        // an IMD tile for every land tile, so a tile absent from the complete
-        // set is open ocean — acoustically hard water (ISO 9613-2, audit B3).
-        // Caveat: on hosts with a partial tree (e.g. only 34–59°N plus
-        // synced Scandinavia) missing northern LAND tiles read hard too;
-        // the production host's complete tree is the truth.
-        let imd = TileStore::new(
-            data_dir.join("rasters/imd"),
-            3601,
-            DType::U8,
-            Interp::Bilinear,
-            100.0,
-            ".raw",
-            imd_cache_tiles,
-        );
-
-        RealRasters { dem, forest, imd }
+        // Byte bounds accommodate two 91 MB polar DEM windows without allowing
+        // a global flight sweep to retain every visited mmap (768 MiB total).
+        let cache_bytes = 256 * 1024 * 1024;
+        Self {
+            dem: TileStore::new(data_dir, Channel::Dem, cache_bytes),
+            forest: TileStore::new(data_dir, Channel::Forest, cache_bytes),
+            imd: TileStore::new(data_dir, Channel::Imd, cache_bytes),
+        }
     }
 
     /// Pre-load all tiles covering a bounding box. Call before rayon par_iter to avoid file opens;
@@ -99,11 +48,9 @@ impl RealRasters {
         self.dem.preload_bbox(lat_min, lat_max, lon_min, lon_max);
     }
 
-    /// Check if any real raster data is available.
+    /// A complete DEM channel can serve worldwide aircraft preprocessing independently.
     pub fn has_data(&self) -> bool {
-        // Quick check: try sampling a known CZ point
-        let elev = self.dem.sample(49.195, 16.608);
-        elev != 0.0
+        self.dem.has_complete_coverage()
     }
 }
 
@@ -125,7 +72,7 @@ impl RealRasters {
     /// Caller-threaded NN DEM lookup. Pairs with
     /// [`elevation_nearest`]: when a caller (Stage 1 per-flight loop,
     /// Stage 2A per-sub-segment) sweeps many points likely to fall in
-    /// the same 1° tile, threading a stack `(cached_key, cached_tile)`
+    /// the same z9 window, threading a stack `(cached_key, cached_tile)`
     /// pair across calls skips the per-tile mutex AND the global
     /// `use_counter` atomic on cache hits.
     ///
@@ -151,8 +98,7 @@ impl RasterSampler for RealRasters {
     fn ground_g(&self, lat: f64, lon: f64) -> f64 {
         // IMD 0=natural(soft), 100=impervious(hard)
         // G: 0=hard, 1=soft → G = 1.0 - IMD/100
-        // Missing-tile default is 100 (ocean → hard water, G=0), so no special
-        // case needed — land tiles always exist in the converted set.
+        // Only catalog-declared ocean is 100; unknown or corrupt data remains NaN.
         // WHY no conditional: IMD=0 means fully soft ground (forest, meadow) → G=1.0.
         // Old code returned 0.5 for IMD=0, halving ground attenuation in rural areas.
         let imd = self.imd.sample(lat, lon);
@@ -183,7 +129,7 @@ impl RasterSampler for RealRasters {
         out.imd_u8.reserve(n);
 
         // Per-raster tile caches — each warms on the first sample in a tile,
-        // stays warm while consecutive samples fall in the same 1° tile.
+        // stays warm while consecutive samples fall in the same z9 window.
         let mut dem_key = (i32::MIN, i32::MIN);
         let mut dem_tile = None;
         let mut for_key = (i32::MIN, i32::MIN);
@@ -203,9 +149,15 @@ impl RasterSampler for RealRasters {
             let imd = self
                 .imd
                 .sample_cached(lat, lon, &mut imd_key, &mut imd_tile);
-            out.elevation_m.push(elev as f32);
-            out.forest_u8.push(fr.clamp(0.0, 255.0) as u8);
-            out.imd_u8.push(imd.clamp(0.0, 255.0) as u8);
+            // PathProfile's byte channels cannot carry NaN. Preserve an invalid
+            // consumed channel in its floating plane for the operation guard.
+            out.elevation_m.push(if fr.is_finite() && imd.is_finite() {
+                elev as f32
+            } else {
+                f32::NAN
+            });
+            out.forest_u8.push(fr as u8);
+            out.imd_u8.push(imd as u8);
         }
 
         // The bilateral adaptive cadence (dense near endpoints, coarse mid-path)
@@ -214,59 +166,5 @@ impl RasterSampler for RealRasters {
         // terrain the cadence deliberately coarsens, undercutting the cadence's
         // purpose, for a refinement the cadence already largely captures.
         out.step_m_med = noise_compute::propagation::path_profile::median_step_m(&out.t, dist_m);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use noise_compute::types::RasterSampler;
-    use std::path::PathBuf;
-
-    fn test_root(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("qm-rasters-test-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
-    }
-
-    /// Uniform N00E000 DEM tile accepted by a 3601 store via the legacy
-    /// 1201² SRTM exception (2.9 MB, not 26 MB).
-    fn write_dem_tile(dir: &Path, value: i16) {
-        std::fs::create_dir_all(dir).unwrap();
-        let bytes: Vec<u8> = value.to_be_bytes().repeat(1201 * 1201);
-        std::fs::write(dir.join("N00E000.hgt"), bytes).unwrap();
-    }
-
-    fn write_u8_tile(dir: &Path, value: u8) {
-        std::fs::create_dir_all(dir).unwrap();
-        std::fs::write(dir.join("N00E000.raw"), vec![value; 3601 * 3601]).unwrap();
-    }
-
-    /// The dev4 release tree (`rasters/dem`, `rasters/forest`, `rasters/imd`
-    /// under `<prepared>/2026`) is read as the primary layout.
-    #[test]
-    fn dev4_rasters_layout_is_primary() {
-        let root = test_root("dev4");
-        write_dem_tile(&root.join("rasters/dem"), 42);
-        write_u8_tile(&root.join("rasters/forest"), 0);
-        write_u8_tile(&root.join("rasters/imd"), 0);
-        let r = RealRasters::new(&root);
-        assert_eq!(r.elevation(0.5, 0.5), 42.0);
-        assert_eq!(r.forest.sample(0.5, 0.5), 0.0);
-        assert_eq!(r.ground_g(0.5, 0.5), 1.0);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// A release root with no tiles at all reads as empty ocean (elev 0,
-    /// hard ground), never panics.
-    #[test]
-    fn missing_tiles_read_as_empty_ocean() {
-        let root = test_root("empty");
-        std::fs::create_dir_all(&root).unwrap();
-        let r = RealRasters::new(&root);
-        assert_eq!(r.elevation(0.5, 0.5), 0.0);
-        assert_eq!(r.ground_g(0.5, 0.5), 0.0);
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

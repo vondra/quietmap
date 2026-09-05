@@ -1,86 +1,38 @@
 //! One geographic fixture checks the default, mmap and fused sampler contracts.
 
-use crate::tile::{DType, Interp, TileStore};
+use crate::channel::Channel;
+use crate::test_fixture::write_square;
 use crate::{FusedGrid, RealRasters};
 use noise_compute::propagation::path_profile::fill_t_values;
 use noise_compute::propagation::PathProfile;
 use noise_compute::types::RasterSampler;
-use std::path::PathBuf;
 
 struct RasterFixture {
-    root: PathBuf,
+    _root: tempfile::TempDir,
     rasters: RealRasters,
 }
 
 impl RasterFixture {
-    fn new(name: &str) -> Self {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "qm-raster-antimeridian-{}-{name}-{unique}",
-            std::process::id()
-        ));
-        for layer in ["dem", "forest", "imd"] {
-            std::fs::create_dir_all(root.join(layer)).unwrap();
-        }
-        for (tile, first_elevation) in [
-            ("N00E179", 100_i16),
-            ("N00W180", 200),
-            ("N00E014", 100),
-            ("N00E015", 200),
-            ("N00E000", 900),
-        ] {
-            let elevation: Vec<u8> = (0..101)
-                .flat_map(|_| (0..101).flat_map(|column| (first_elevation + column).to_be_bytes()))
-                .collect();
-            std::fs::write(root.join("dem").join(format!("{tile}.hgt")), elevation).unwrap();
-            for (layer, value) in [("forest", 55), ("imd", 37)] {
-                let value = if first_elevation == 900 { 99 } else { value };
-                std::fs::write(
-                    root.join(layer).join(format!("{tile}.raw")),
-                    vec![value; 101 * 101],
-                )
-                .unwrap();
+    fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        for lon in [179.9, -179.9, 15.0] {
+            let square = grid::square_of(0.5, lon);
+            for channel in Channel::ALL {
+                write_square(root.path(), channel, square, |_, longitude| match channel {
+                    Channel::Dem => {
+                        let centre = if lon == 15.0 { 15 * 3600 } else { 180 * 3600 };
+                        (7200 + (longitude - centre + 648000).rem_euclid(1296000) - 648000) as i16
+                    }
+                    Channel::Forest => 55,
+                    Channel::Imd => 37,
+                });
             }
         }
-        let rasters = RealRasters {
-            dem: TileStore::new(
-                root.join("dem"),
-                101,
-                DType::I16BE,
-                Interp::Bilinear,
-                -1.0,
-                ".hgt",
-                4,
-            ),
-            forest: TileStore::new(
-                root.join("forest"),
-                101,
-                DType::U8,
-                Interp::Nearest,
-                0.0,
-                ".raw",
-                4,
-            ),
-            imd: TileStore::new(
-                root.join("imd"),
-                101,
-                DType::U8,
-                Interp::Bilinear,
-                100.0,
-                ".raw",
-                4,
-            ),
-        };
-        Self { root, rasters }
-    }
-}
-
-impl Drop for RasterFixture {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.root).unwrap();
+        let rasters = RealRasters::new(root.path());
+        Self {
+            _root: root,
+            rasters,
+        }
     }
 }
 
@@ -97,14 +49,14 @@ impl RasterSampler for DefaultSampler<'_> {
 
 #[test]
 fn every_profile_sampler_uses_the_same_short_arc_and_cadence() {
-    let fixture = RasterFixture::new("profiles");
+    let fixture = RasterFixture::new();
     let real = &fixture.rasters;
     let default = DefaultSampler(real);
     for (src_lon, rcv_lon, west, east, start_elevation, end_elevation) in [
-        (179.9, -179.9, 179.89, -179.89, 190.0, 210.0),
-        (-179.9, 179.9, -180.11, -179.89, 210.0, 190.0),
-        (14.9, 15.1, 14.89, 15.11, 190.0, 210.0),
-        (15.1, 14.9, 14.89, 15.11, 210.0, 190.0),
+        (179.9, -179.9, 179.89, -179.89, 6840.0, 7560.0),
+        (-179.9, 179.9, -180.11, -179.89, 7560.0, 6840.0),
+        (14.9, 15.1, 14.89, 15.11, 6840.0, 7560.0),
+        (15.1, 14.9, 14.89, 15.11, 7560.0, 6840.0),
     ] {
         let fused = FusedGrid::build(real, 0.49, 0.51, west, east);
         assert!(fused.geom().4 < 1000, "local halo must not span Greenwich");
@@ -130,7 +82,7 @@ fn every_profile_sampler_uses_the_same_short_arc_and_cadence() {
             for (&t, &actual) in expected_t.iter().zip(&profile.elevation_m) {
                 let expected = start_elevation + t * (end_elevation - start_elevation);
                 assert!(
-                    (f64::from(actual) - expected).abs() < 0.0001,
+                    (f64::from(actual) - expected).abs() < f64::from(f32::EPSILON) * expected * 2.0,
                     "{name}: {src_lon}→{rcv_lon}, t={t}, expected={expected}, actual={actual}"
                 );
             }
@@ -140,7 +92,7 @@ fn every_profile_sampler_uses_the_same_short_arc_and_cadence() {
 
 #[test]
 fn longitude_aliases_share_cache_keys_and_both_halo_sides() {
-    let fixture = RasterFixture::new("cache");
+    let fixture = RasterFixture::new();
     let real = &fixture.rasters;
     real.preload_bbox(0.49, 0.51, 179.89, -179.89);
     let east_halo = FusedGrid::build(real, 0.49, 0.51, 179.89, 180.11);
@@ -148,14 +100,14 @@ fn longitude_aliases_share_cache_keys_and_both_halo_sides() {
     let mut key = (i32::MIN, i32::MIN);
     let mut tile = None;
     for (lon, expected) in [
-        (180.0, 200.0),
-        (-180.0, 200.0),
-        (180.1, 210.0),
-        (-179.9, 210.0),
-        (-180.1, 190.0),
-        (179.9, 190.0),
-        (540.0, 200.0),
-        (-540.0, 200.0),
+        (180.0, 7200.0),
+        (-180.0, 7200.0),
+        (180.1, 7560.0),
+        (-179.9, 7560.0),
+        (-180.1, 6840.0),
+        (179.9, 6840.0),
+        (540.0, 7200.0),
+        (-540.0, 7200.0),
     ] {
         for actual in [
             real.elevation(0.5, lon),
@@ -171,7 +123,7 @@ fn longitude_aliases_share_cache_keys_and_both_halo_sides() {
                 "lon={lon}: {actual} != {expected}"
             );
         }
-        assert!((-180..180).contains(&key.1));
+        assert!((0..512).contains(&key.1));
         assert!((east_halo.ground_g(0.5, lon) - 0.63).abs() < 1e-12);
         assert!((west_halo.ground_g(0.5, lon) - 0.63).abs() < 1e-12);
     }

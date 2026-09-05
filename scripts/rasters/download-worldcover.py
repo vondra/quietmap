@@ -6,26 +6,25 @@ from botocore import UNSIGNED
 from botocore.config import Config
 from concurrent.futures import ThreadPoolExecutor
 import threading
+from pathlib import Path
+from worldcover_sources import BUCKET, fetch_catalog, validate_source_files
 
-BUCKET = "esa-worldcover"
-PREFIX = "v200/2021/map/"
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dest", required=True)
     ap.add_argument("--jobs", type=int, default=8)
+    ap.add_argument("--catalog-only", action="store_true", help="Refresh official coverage and verify existing source keys/sizes without downloading tiles")
     args = ap.parse_args()
     s3 = boto3.client("s3", region_name="eu-central-1",
                       config=Config(signature_version=UNSIGNED,
                                     retries={"max_attempts": 10}))
-    pag = s3.get_paginator("list_objects_v2")
-    keys = []
-    for page in pag.paginate(Bucket=BUCKET, Prefix=PREFIX):
-        for o in page.get("Contents", []):
-            if o["Key"].endswith("_Map.tif"):
-                keys.append((o["Key"], o["Size"]))
-    keys.sort()
+    inventory = fetch_catalog(Path(args.dest), s3)
+    keys = sorted(inventory.items())
     print(f"tiles: {len(keys)}", flush=True)
+    if args.catalog_only:
+        validate_source_files(Path(args.dest), inventory)
+        return 0
     lock = threading.Lock()
     done = [0]; skipped = [0]; bytes_dl = [0]
     def one(item):
@@ -45,6 +44,7 @@ def main() -> int:
                 print(f"dl={done[0]} skip={skipped[0]} GB={bytes_dl[0]/1e9:.1f}", flush=True)
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
         list(ex.map(one, keys))
+    validate_source_files(Path(args.dest), inventory)
     print(f"FINAL dl={done[0]} skip={skipped[0]} GB={bytes_dl[0]/1e9:.1f}", flush=True)
     return 0
 

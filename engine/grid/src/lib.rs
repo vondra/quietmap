@@ -4,11 +4,12 @@
 //! global int32 z30-pixel coordinates; use i64 for their differences.
 //!
 //! Map of submodules: [`poly`] (integer footprint rings), [`geo`] (flat-earth
-//! propagation math), [`cruise`] (aircraft aggregation cells).
+//! propagation math), [`cruise`] (aircraft aggregation cells), [`raster`] (native lattice).
 
 pub mod cruise;
 pub mod geo;
 pub mod poly;
+pub mod raster;
 
 use std::f64::consts::PI;
 

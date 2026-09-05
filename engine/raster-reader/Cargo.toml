@@ -2,7 +2,7 @@
 name = "raster-reader"
 version = "0.1.0"
 edition = "2021"
-description = "Raw 1°×1° raster tile reader — mmap'd, lazy/preloaded, global scale"
+description = "Native-lattice z9 raster publication and strict mmap sampling"
 
 [lib]
 name = "raster_reader"
@@ -12,3 +12,8 @@ path = "src/lib.rs"
 grid = { path = "../grid" }
 memmap2 = "0.9"
 noise-compute = { path = "../noise-compute" }
+rusqlite = { version = "0.37", features = ["bundled"] }
+sha2 = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"

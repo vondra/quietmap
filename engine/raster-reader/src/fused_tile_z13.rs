@@ -684,52 +684,26 @@ mod tests {
     use std::path::PathBuf;
 
     struct TempPreparedRaster {
-        root: PathBuf,
-    }
-
-    impl Drop for TempPreparedRaster {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.root);
-        }
+        root: tempfile::TempDir,
     }
 
     fn receiver_dem_fixture() -> TempPreparedRaster {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock after epoch")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "quiet-map-receiver-dem-{}-{unique}",
-            std::process::id()
-        ));
-        let dem = root.join("rasters/dem");
-        std::fs::create_dir_all(&dem).expect("create DEM fixture directory");
-        for (name, values) in [
-            ("N49E015.hgt", [100_i16, 120, 140, 160]),
-            ("N49E016.hgt", [200_i16, 220, 240, 260]),
-        ] {
-            let bytes: Vec<u8> = (0..1201)
-                .flat_map(|row| {
-                    (0..1201).flat_map(move |column| {
-                        values[usize::from(row >= 600) * 2 + usize::from(column >= 600)]
-                            .to_be_bytes()
-                    })
-                })
-                .collect();
-            std::fs::write(dem.join(name), bytes).expect("write DEM fixture");
-        }
+        let root = tempfile::tempdir().unwrap();
+        let square = grid::Square {
+            x: 2230 / 8,
+            y: 1403 / 8,
+        };
+        crate::test_fixture::write_square(
+            root.path(),
+            crate::channel::Channel::Dem,
+            square,
+            |lat, lon| (100 + lat.rem_euclid(100) + lon.rem_euclid(100)) as i16,
+        );
         TempPreparedRaster { root }
     }
 
     fn dir_has_dem_tiles(root: &std::path::Path) -> bool {
-        std::fs::read_dir(root.join("rasters/dem"))
-            .map(|mut iter| {
-                iter.any(|e| {
-                    e.ok()
-                        .is_some_and(|e| e.path().extension().is_some_and(|x| x == "hgt"))
-                })
-            })
-            .unwrap_or(false)
+        RealRasters::new(root).has_data()
     }
 
     fn data_root() -> Option<PathBuf> {
@@ -811,11 +785,10 @@ mod tests {
     }
 
     #[test]
-    fn receiver_altitude_cache_matches_direct_sampling_across_dem_boundary() {
+    fn receiver_altitude_cache_matches_direct_native_sampling() {
         let fixture = receiver_dem_fixture();
-        let rasters = RealRasters::new(&fixture.root);
-        // z12/x2230 straddles 16°E, exercising the cached sampler's key transition between
-        // N49E015 and N49E016 rather than validating only the common one-source-tile case.
+        let rasters = RealRasters::new(fixture.root.path());
+        // A z12 receiver grid lies inside one z9 native window.
         let cache_touches_before = rasters.dem.cache_touch_count();
         let cached_started = std::time::Instant::now();
         let tile = FusedTileZ13::build_receiver_altitude_only(12, 2230, 1403, &rasters);
@@ -823,9 +796,8 @@ mod tests {
         let cached_elapsed = cached_started.elapsed();
         let cache_touches = rasters.dem.cache_touch_count() - cache_touches_before;
         assert!(
-            cache_touches <= (2 * TILE_PX) as u64,
-            "receiver walk performed {cache_touches} cache-slot lookups; expected at most two \
-             1° DEM transitions per row"
+            cache_touches <= TILE_PX as u64,
+            "receiver walk performed {cache_touches} cache-slot lookups; expected one z9 lookup per row"
         );
         let direct_started = std::time::Instant::now();
         for py in 0..TILE_PX {

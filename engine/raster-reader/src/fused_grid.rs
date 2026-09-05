@@ -587,15 +587,12 @@ mod tests {
         RealRasters::new(Path::new("../../data/prepared/2026"))
     }
 
-    /// These optional real-data tests sample only the Brno source tile.
+    /// Optional real-data tests require published native z9 coverage.
     fn prepared_available() -> bool {
-        ["dem/N49E016.hgt", "forest/N49E016.raw", "imd/N49E016.raw"]
-            .iter()
-            .all(|tile| {
-                Path::new("../../data/prepared/2026/rasters")
-                    .join(tile)
-                    .is_file()
-            })
+        crate::channel::Channel::ALL.into_iter().all(|channel| {
+            crate::catalog::read_channel(Path::new("../../data/prepared/2026"), channel)
+                .is_ok_and(|coverage| coverage.len() == 512 * 512)
+        })
     }
 
     #[test]
@@ -619,27 +616,6 @@ mod tests {
         assert!(
             (e1 - e2).abs() > 10.0,
             "Should not be flat: e1={e1}, e2={e2}"
-        );
-    }
-
-    /// Audit B3: a coordinate with no IMD tile on disk is open ocean — the
-    /// missing-tile default must read fully hard (imd=100 → G=0). The
-    /// converter emits an IMD tile for every land tile, never for ocean,
-    /// so no mid-Atlantic tile exists on any host. (Partial-tree hosts —
-    /// e.g. a dev box carrying only 34–59°N + Scandinavia — make missing
-    /// northern LAND read hard too; the production host's complete tree is
-    /// the truth.)
-    /// Runs without `prepared_available()`: a missing data dir is the
-    /// same code path as a missing tile.
-    #[test]
-    fn imd_missing_tile_defaults_to_hard_ocean() {
-        let r = test_rasters();
-        let imd = r.imd.sample(30.0, -45.0);
-        assert_eq!(imd, 100.0, "missing IMD tile must default to 100 (hard)");
-        assert_eq!(
-            r.ground_g(30.0, -45.0),
-            0.0,
-            "ocean ground must be hard (G=0)"
         );
     }
 

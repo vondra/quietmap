@@ -17,7 +17,7 @@ use crate::ground_inference::ground_flags;
 use crate::period::parse_date_id;
 use crate::progress::{finished, started, Milestone};
 use crate::segment::{build_segments, SegmentMeta};
-use raster_reader::RealRasters;
+use raster_reader::{CheckedRasters, RealRasters};
 
 /// Run Stage 1 for one day. Reads `input_dir/<day>.arrow`, writes
 /// `output_dir/<day>.arrow`. Caller owns `rasters` so multi-day
@@ -38,14 +38,19 @@ pub fn run_stage_1(
     // Last-tile and shared raster caches serve sparse flight paths without a global bbox preload.
     // Heavy work: per-flight AGL + truncate + ground + classify + segments.
     let flight_counter = Milestone::new("stage1", "flights", 1_000);
+    let checked = CheckedRasters::new(rasters);
     let segments: Vec<FlightSegment> = flights
         .par_iter()
-        .flat_map_iter(|f| {
-            let out = stage_1_one_flight(f, rasters, date_id);
+        .try_fold(Vec::new, |mut segments, flight| {
+            segments.extend(stage_1_one_flight(flight, &checked, date_id)?);
             flight_counter.add(1);
-            out.into_iter()
+            Ok::<_, anyhow::Error>(segments)
         })
-        .collect();
+        .try_reduce(Vec::new, |mut segments, other| {
+            segments.extend(other);
+            Ok(segments)
+        })?;
+    checked.ensure_valid()?;
 
     let out_path = output_dir.join(format!("{day_str}.arrow"));
     write_segments(&out_path, &segments)?;
@@ -59,14 +64,16 @@ pub fn run_stage_1(
     Ok(segments.len())
 }
 
-fn stage_1_one_flight(flight: &Flight, rasters: &RealRasters, date_id: i16) -> Vec<FlightSegment> {
+fn stage_1_one_flight(
+    flight: &Flight,
+    rasters: &CheckedRasters<'_>,
+    date_id: i16,
+) -> Result<Vec<FlightSegment>> {
     if flight.points.len() < 2 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut points = flight.points.clone();
-    // Ground-flagged points pin AGL = 0 (and skip the DEM lookup); without
-    // this, `validate_flight_trajectory` would read `0 - elev` for any
-    // landing roll above ~300 m AMSL and truncate the whole tail.
+    // Ground-flagged points pin AGL = 0, but still need real terrain at segment endpoints.
     let mut agl_m: Vec<f32> = Vec::with_capacity(points.len());
     // Per-point terrain elevation in meters, sampled from `rasters.dem`.
     // For ground-flagged points we still sample the raster so v15
@@ -77,8 +84,7 @@ fn stage_1_one_flight(flight: &Flight, rasters: &RealRasters, date_id: i16) -> V
     // the raster lookup cost; one branch removed is essentially free.
     let mut elev_m: Vec<f32> = Vec::with_capacity(points.len());
     // Caller-threaded DEM cache across the per-point sweep. One flight
-    // typically stays in 1-2 DEM tiles (1° × 1°), so >99 % of lookups
-    // hit the cache and skip the per-tile mutex + global use_counter atomic.
+    // retains its current z9 mmap, skipping shared-cache work until the next window.
     let mut dem_key = (i32::MIN, i32::MIN);
     let mut dem_tile: Option<std::sync::Arc<raster_reader::RawTile>> = None;
     for p in &points {
@@ -90,7 +96,7 @@ fn stage_1_one_flight(flight: &Flight, rasters: &RealRasters, date_id: i16) -> V
             p.lon as f64,
             &mut dem_key,
             &mut dem_tile,
-        ) as f32;
+        )? as f32;
         elev_m.push(elev);
         match p.airborne_alt_ft() {
             None => agl_m.push(0.0),
@@ -100,7 +106,7 @@ fn stage_1_one_flight(flight: &Flight, rasters: &RealRasters, date_id: i16) -> V
 
     filters::validate_flight_trajectory(&mut points, &mut agl_m, &mut elev_m);
     if points.len() < 2 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let g_flags = ground_flags(&points, &agl_m);
@@ -131,10 +137,10 @@ fn stage_1_one_flight(flight: &Flight, rasters: &RealRasters, date_id: i16) -> V
     // jet 150 m AGL floor (popup `segment_filters.rs:252-255`) is
     // not at Stage 1 either — moves to Stage 2A where the resolved
     // aerodrome centroid is available.
-    segments
+    Ok(segments
         .into_iter()
         .filter(airborne_endpoints_above_terrain)
-        .collect()
+        .collect())
 }
 
 /// Endpoint AGL ≥ −30 m gate. Catches Mode-S altitude decode errors
