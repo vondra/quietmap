@@ -69,7 +69,7 @@ fn python_structure_producer_preserves_screening_and_emission_contracts() {
         String::from_utf8_lossy(&generated.stderr)
     );
     let square = square_store::store::load_square(&output.path().join("z9/276/174")).unwrap();
-    let batches = square.structures.batches_all();
+    let batches = square.structures.batches_all().unwrap();
     let buildings = crate::query::query_buildings_from_batches(&batches, 49.78, 14.17, 2000.0);
     assert_eq!(buildings.len(), 1);
     assert_eq!(buildings[0].height, 4.5);

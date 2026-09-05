@@ -116,17 +116,17 @@ pub fn collect_from_square_data(
     )> = square_data
         .iter()
         .map(|data| {
-            (
-                data.aircraft_airborne.batches_where(&airborne_gate),
-                data.aircraft_cruise.batches_where(&airborne_gate),
+            Ok((
+                data.aircraft_airborne.batches_where(&airborne_gate)?,
+                data.aircraft_cruise.batches_where(&airborne_gate)?,
                 data.aircraft_airport_traffic.batches_within(
                     lat,
                     lng,
                     noise_compute::constants::GROUND_OPS_RUNWAY_MAX_RADIUS,
-                ),
-            )
+                )?,
+            ))
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
     // The label lookup needs every airport-line row in the ring, but only
     // when nearby airport traffic exists. Keep the files footer-only for all
     // other clicks.
@@ -134,10 +134,11 @@ pub fn collect_from_square_data(
         .iter()
         .any(|(_, _, traffic)| !traffic.is_empty())
     {
-        square_data
-            .iter()
-            .flat_map(|data| data.airport_lines.batches_all())
-            .collect()
+        let mut batches = Vec::new();
+        for data in square_data {
+            batches.extend(data.airport_lines.batches_all()?);
+        }
+        batches
     } else {
         Vec::new()
     };
@@ -168,7 +169,7 @@ pub fn collect_from_square_data(
                 &data.aircraft_cruise,
                 &data.aircraft_airport_traffic,
             ] {
-                for batch in arrow.batches_all() {
+                for batch in arrow.batches_all()? {
                     if let Some(did) = batch
                         .column_by_name("date_id")
                         .and_then(|c| c.as_any().downcast_ref::<arrow::array::Int16Array>())
@@ -199,7 +200,7 @@ pub fn collect_from_square_data(
         // its honest reach could admit it. The batch gate uses the SAME ceiling.
         let railway_batches =
             data.railways
-                .batches_within(lat, lng, noise_compute::constants::RAILWAY_REACH_CEILING);
+                .batches_within(lat, lng, noise_compute::constants::RAILWAY_REACH_CEILING)?;
         let railways = query_railways_from_batches(
             &railway_batches,
             lat,
@@ -272,7 +273,7 @@ pub fn collect_from_square_data(
 
         let road_batches =
             data.roads
-                .batches_within(lat, lng, noise_compute::constants::ROAD_MAX_RADIUS[0]);
+                .batches_within(lat, lng, noise_compute::constants::ROAD_MAX_RADIUS[0])?;
         let roads = query_roads_from_batches(
             &road_batches,
             lat,
@@ -316,7 +317,7 @@ pub fn collect_from_square_data(
 
         let building_batches = data
             .structures
-            .batches_within(lat, lng, BUILDING_QUERY_RADIUS_M);
+            .batches_within(lat, lng, BUILDING_QUERY_RADIUS_M)?;
         let buildings =
             query_buildings_from_batches(&building_batches, lat, lng, BUILDING_QUERY_RADIUS_M);
         for b in buildings {
@@ -361,7 +362,7 @@ pub fn collect_from_square_data(
         // court correctly (see source_names::building_type_name).
         let leisure_batches = data
             .leisure
-            .batches_within(lat, lng, BUILDING_QUERY_RADIUS_M);
+            .batches_within(lat, lng, BUILDING_QUERY_RADIUS_M)?;
         let leisure =
             query_leisure_from_batches(&leisure_batches, lat, lng, BUILDING_QUERY_RADIUS_M);
         for lz in leisure {
@@ -389,7 +390,7 @@ pub fn collect_from_square_data(
 
         for batch in &data
             .industrial
-            .batches_within(lat, lng, INDUSTRIAL_QUERY_RADIUS_M)
+            .batches_within(lat, lng, INDUSTRIAL_QUERY_RADIUS_M)?
         {
             let n = batch.num_rows();
             let (Some(cgx), Some(cgy)) =

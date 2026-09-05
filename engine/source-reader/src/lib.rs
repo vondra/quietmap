@@ -153,49 +153,7 @@ fn ensure_squares_parallel(square_names: &[String]) -> napi::Result<()> {
 }
 
 #[cfg(all(test, feature = "node"))]
-mod square_cache_tests {
-    use super::{ensure_squares_parallel, STORE};
-    use crate::structure_test_fixture as fx;
-
-    #[test]
-    fn parallel_square_load_error_leaves_cache_unchanged() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let valid_empty_name = "z9/0/0".to_string();
-        let invalid_name = "z9/0/1".to_string();
-        let invalid_dir = tmp.path().join(&invalid_name);
-        std::fs::create_dir_all(&invalid_dir).unwrap();
-        fx::write_structure_file(
-            &invalid_dir.join("structures.arrow"),
-            &[fx::StructureRow::default()],
-            false,
-        );
-        {
-            let mut store = STORE.write().expect("square store poisoned");
-            store.prepared_dir = tmp.path().display().to_string();
-            store.squares.clear();
-        }
-
-        let result = ensure_squares_parallel(&[valid_empty_name, invalid_name]);
-        let cached_count = STORE.read().expect("square store poisoned").squares.len();
-        {
-            let mut store = STORE.write().expect("square store poisoned");
-            store.prepared_dir.clear();
-            store.squares.clear();
-        }
-
-        let error = result.expect_err("invalid square must fail the whole load");
-        let message = error.to_string();
-        assert!(
-            message.contains("failed to load square z9/0/1"),
-            "{message}"
-        );
-        assert!(
-            message.contains("structures_contract mismatch"),
-            "{message}"
-        );
-        assert_eq!(cached_count, 0, "a failed load must not populate the cache");
-    }
-}
+mod square_cache_tests;
 
 /// `z9/276/173` → `z9/276/173` (already the relative path under the prepared
 /// year dir). Kept as a function so a naming change lands in one place.
@@ -288,7 +246,10 @@ pub fn query_roads(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String
         let Some(data) = store.squares.get(name.as_str()) else {
             continue;
         };
-        let road_batches = data.roads.batches_within(lat, lng, max_radius_m);
+        let road_batches = data
+            .roads
+            .batches_within(lat, lng, max_radius_m)
+            .map_err(|error| Error::new(Status::GenericFailure, error))?;
         let mut results = query_roads_from_batches(&road_batches, lat, lng, max_radius_m);
         all_results.append(&mut results);
     }
@@ -310,7 +271,10 @@ pub fn query_buildings(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<St
         let Some(data) = store.squares.get(name.as_str()) else {
             continue;
         };
-        let building_batches = data.structures.batches_within(lat, lng, max_radius_m);
+        let building_batches = data
+            .structures
+            .batches_within(lat, lng, max_radius_m)
+            .map_err(|error| Error::new(Status::GenericFailure, error))?;
         let mut results = query_buildings_from_batches(&building_batches, lat, lng, max_radius_m);
         all_results.append(&mut results);
     }
@@ -436,7 +400,10 @@ pub fn query_barriers(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<Str
         let Some(data) = store.squares.get(name.as_str()) else {
             continue;
         };
-        let barrier_batches = data.structures.batches_within(lat, lng, max_radius_m);
+        let barrier_batches = data
+            .structures
+            .batches_within(lat, lng, max_radius_m)
+            .map_err(|error| Error::new(Status::GenericFailure, error))?;
         let mut results = square_store::barriers::query_barriers_from_batches(
             &barrier_batches,
             lat,
