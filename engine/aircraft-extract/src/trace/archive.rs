@@ -1,7 +1,7 @@
 //! TAR day validation and streaming archive traversal; corrupt or incomplete inputs fail loudly.
 
 use super::typecode_probe::probe_typecode_prefix;
-use super::{parse_trace, AircraftTrace};
+use super::{AircraftTrace, parse_trace};
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -105,7 +105,7 @@ pub fn read_day_traces_filtered(
             }
         }
     }
-    Ok((traces, stats))
+    Ok((super::selection::select_whole_traces(traces), stats))
 }
 
 /// Resolve every TAR stream and require contiguous split parts plus its end marker.
@@ -148,21 +148,30 @@ fn archive_parts(day_dir: &Path) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     for (stem, mut parts) in groups {
         parts.sort_by(|a, b| a.0.cmp(&b.0));
+        let complete = if parts.first().is_some_and(|(suffix, _)| suffix.is_empty()) {
+            Some(parts.remove(0).1)
+        } else {
+            None
+        };
         for (i, (suffix, _)) in parts.iter().enumerate() {
-            if suffix.is_empty() {
-                anyhow::ensure!(parts.len() == 1, "mixed complete and split archive: {stem}");
-            } else {
-                let expected = format!(
-                    ".{}{}",
-                    (b'a' + (i / 26) as u8) as char,
-                    (b'a' + (i % 26) as u8) as char
-                );
-                anyhow::ensure!(*suffix == expected, "missing TAR part {stem}.tar{expected}");
-            }
+            let expected = format!(
+                ".{}{}",
+                (b'a' + (i / 26) as u8) as char,
+                (b'a' + (i % 26) as u8) as char
+            );
+            anyhow::ensure!(*suffix == expected, "missing TAR part {stem}.tar{expected}");
         }
-        let part_paths: Vec<_> = parts.into_iter().map(|(_, p)| p).collect();
-        require_tar_end_marker(&part_paths)?;
-        paths.extend(part_paths);
+        if !parts.is_empty() {
+            let part_paths: Vec<_> = parts.into_iter().map(|(_, p)| p).collect();
+            require_tar_end_marker(&part_paths)?;
+            paths.extend(part_paths);
+        }
+        // Prefer the reassembled split export on equal trace quality.
+        // Validate every stream before parsing any trace.
+        if let Some(path) = complete {
+            require_tar_end_marker(std::slice::from_ref(&path))?;
+            paths.push(path);
+        }
     }
     Ok(paths)
 }

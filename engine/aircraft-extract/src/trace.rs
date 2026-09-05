@@ -5,8 +5,9 @@ use flate2::read::GzDecoder;
 use std::io::Read;
 
 mod archive;
+mod selection;
 mod typecode_probe;
-pub use archive::{read_day_traces, read_day_traces_filtered, TypecodeProbeStats};
+pub use archive::{TypecodeProbeStats, read_day_traces, read_day_traces_filtered};
 
 /// Trace-point bit 0 — `on_ground` set by the adsb.lol bitfield.
 pub const FLAG_ON_GROUND_RAW: u8 = 1 << 0;
@@ -184,5 +185,7 @@ fn parse_altitude_ft(value: &serde_json::Value) -> (f32, bool) {
     (f32::NAN, false)
 }
 
+#[cfg(test)]
+mod archive_tests;
 #[cfg(test)]
 mod tests;

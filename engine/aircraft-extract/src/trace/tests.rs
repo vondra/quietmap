@@ -3,12 +3,12 @@
 use super::archive::ConcatReader;
 use super::typecode_probe::*;
 use super::*;
-use flate2::{write::GzEncoder, Compression};
+use flate2::{Compression, write::GzEncoder};
 use std::io::BufReader;
 use std::io::Write;
 use std::path::Path;
 
-fn gz(json: &str) -> Vec<u8> {
+pub(super) fn gz(json: &str) -> Vec<u8> {
     let mut e = GzEncoder::new(Vec::new(), Compression::default());
     e.write_all(json.as_bytes()).unwrap();
     e.finish().unwrap()
@@ -168,7 +168,7 @@ fn probe_typecode_prefix_inflates_only_the_window() {
     assert_eq!(probe_typecode_prefix(b"plain bytes, not gzip"), None);
 }
 
-fn day_dir_with_tar(entries: &[(&str, &[u8])]) -> tempfile::TempDir {
+pub(super) fn day_dir_with_tar(entries: &[(&str, &[u8])]) -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     let file = std::fs::File::create(tmp.path().join("subset.tar")).unwrap();
     let mut builder = tar::Builder::new(file);
@@ -296,9 +296,9 @@ fn incomplete_archives_and_corrupt_traces_fail_loudly() {
 }
 
 #[test]
-fn multiple_complete_tar_files_are_all_read() {
+fn identical_trace_exports_are_selected_once() {
     let json = gz(&trace_json("abc123", ""));
     let dir = day_dir_with_tar(&[("trace_full_abc123.json", &json)]);
     std::fs::copy(dir.path().join("subset.tar"), dir.path().join("second.tar")).unwrap();
-    assert_eq!(read_day_traces(dir.path()).unwrap().len(), 2);
+    assert_eq!(read_day_traces(dir.path()).unwrap().len(), 1);
 }
