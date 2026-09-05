@@ -29,6 +29,7 @@
 //!   emission kernel.
 //! * [`segment_sel`] — single-shot per-segment SEL wrappers (popup +
 //!   tests).
+//! * [`support`] — publication envelopes derived from the popup's geometric gates.
 
 mod doc29;
 mod ground_ops;
@@ -38,6 +39,7 @@ mod screening;
 mod screening_bounds;
 mod segment_filters;
 mod segment_sel;
+mod support;
 
 pub use doc29::*;
 pub(crate) use ground_ops::*;
@@ -47,3 +49,4 @@ pub use screening::*;
 pub use screening_bounds::*;
 pub use segment_filters::*;
 pub use segment_sel::*;
+pub use support::*;

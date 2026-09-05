@@ -13,6 +13,9 @@ use square_store::store::load_square;
 use super::{ensure_squares_parallel, STORE};
 use crate::structure_test_fixture as fx;
 
+#[path = "native_receiver_tests.rs"]
+mod native_receiver_tests;
+
 fn parallel_square_load_error_leaves_cache_unchanged() {
     let tmp = tempfile::TempDir::new().unwrap();
     let valid_empty_name = "z9/0/0".to_string();
@@ -101,10 +104,12 @@ fn reset_store(root: &Path) {
 }
 
 #[test]
-fn broken_arrow_never_becomes_a_quiet_popup() {
+fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
     // One test owns STORE; no competing process-wide cache fixture.
     parallel_square_load_error_leaves_cache_unchanged();
     let tmp = tempfile::tempdir().unwrap();
+    super::YEAR_DIR.set(tmp.path().to_path_buf()).unwrap();
+    super::DATA_DIR.set(tmp.path().to_path_buf()).unwrap();
     let (lat, lon) = (60.0, 20.0);
     let dir = fx::square_dir(tmp.path(), grid::square_of(lat, lon));
     std::fs::create_dir_all(&dir).unwrap();
@@ -124,6 +129,9 @@ fn broken_arrow_never_becomes_a_quiet_popup() {
         "airport_traffic",
         "airport_lines",
     ] {
+        if name != "structures" {
+            fx::write_structure_file(&dir.join("structures.arrow"), &[], true);
+        }
         let path = dir.join(format!("{name}.arrow"));
         std::fs::write(&path, b"not Arrow").unwrap();
         reset_store(tmp.path());
@@ -166,7 +174,8 @@ fn broken_arrow_never_becomes_a_quiet_popup() {
             let error = data.roads.batches_all().unwrap_err();
             assert_eq!(data.roads.batches_all().unwrap_err(), error);
         }
-        let pure = super::collect_from_square_data(&[&data], lat, lon).unwrap_err();
+        let pure = super::collect_from_square_data(&[(grid::square_of(lat, lon), &data)], lat, lon)
+            .unwrap_err();
         assert!(pure.contains(&path.display().to_string()), "{pure}");
         assert!(pure.contains("batch 1"), "{pure}");
         reset_store(tmp.path());
@@ -176,7 +185,12 @@ fn broken_arrow_never_becomes_a_quiet_popup() {
                 native.reason.contains(&path.display().to_string()),
                 "{native}"
             );
-            assert!(native.reason.contains("batch 1"), "{native}");
+            let batch_error = if name == "structures" {
+                "arrow batch"
+            } else {
+                "batch 1"
+            };
+            assert!(native.reason.contains(batch_error), "{native}");
             let listing = match name {
                 "roads" => Some(super::query_roads(lat, lon, 1000.0)),
                 "structures" => Some(super::query_buildings(lat, lon, 1000.0)),
@@ -199,6 +213,7 @@ fn broken_arrow_never_becomes_a_quiet_popup() {
             std::fs::remove_file(dir.join("airport_traffic.arrow")).unwrap();
         }
     }
+    std::fs::remove_file(dir.join("structures.arrow")).unwrap();
     let path = dir.join("industrial.arrow");
     std::fs::write(&path, []).unwrap();
     assert!(
@@ -224,5 +239,7 @@ fn broken_arrow_never_becomes_a_quiet_popup() {
     fx::write_roads_file(&dir.join("roads.arrow"), &[]);
     reset_store(tmp.path());
     assert_eq!(super::query_roads(lat, lon, 1000.0).unwrap(), "[]");
+    native_receiver_tests::facade_popup_preserves_aircraft_and_observation_multiplicity(tmp.path());
+    native_receiver_tests::native_listings_honor_requested_radius(tmp.path());
     reset_store(Path::new(""));
 }

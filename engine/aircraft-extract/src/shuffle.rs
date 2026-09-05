@@ -1,26 +1,4 @@
-//! Two-pass shuffle from `segments/<day>.arrow` to per-z9 shards.
-//!
-//! Why two-pass: a naive single-pass approach would either open one
-//! writer per z9 per worker (10k z9s × 24 workers = FD exhaustion) or
-//! mutex-serialise writes through one writer per z9 (bottleneck).
-//!
-//! - **Pass A (scatter).** `par_iter` over `segments/<day>.arrow`. Each
-//!   worker decodes one day, partitions Airborne + Ground segments by
-//!   `(phase, hash(z9) % SHUFFLE_HASH_BUCKETS)` in RAM, then writes one
-//!   complete IPC file per non-empty bucket sequentially — 1 FD per
-//!   worker at a time. Paths embed the day so workers never collide.
-//!   Cruise is left in the per-day shards (Stage 2B reads them directly;
-//!   midpoint-shuffling cruise would lose cross-z9 cell routing).
-//! - **Pass B (gather).** `par_iter` over `2 × SHUFFLE_HASH_BUCKETS`
-//!   `(phase, hash)` pairs. Each worker reads every Pass A part file for
-//!   its pair, buckets exactly by z9 in RAM, writes
-//!   `<out_dir>/<z9>/<phase>.arrow` sequentially. Per-worker peak RAM
-//!   bounded by one (phase, hash) bucket's decoded segments.
-//!
-//! At full-year global scale, Pass A produces `days × 2 × 256` possible
-//! temp files (decode cost dominates write cost). Pass B's per-bucket
-//! decoded peak ≈ `total_segments / 256` ≈ ~6 GB per worker; `--max-threads`
-//! caps concurrent workers when the host's RAM is below that × cores.
+//! Two-pass destination shuffle: intact airborne support copies and midpoint-owned ground.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,18 +6,15 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 
-use crate::arrow_io::{read_segments, write_segments};
+use crate::arrow_io::{for_each_segment_batch, read_segments, write_segments};
 use crate::flight::{FlightSegment, Phase};
 use crate::geo::{midpoint, square_path};
-use crate::progress::{finished, human, started, Milestone};
+use crate::progress::{Milestone, finished, human, started};
 use crate::scope::ScopeBbox;
 use crate::spatial::{square_directories, square_id};
 
-/// Coarse hash buckets the shuffle is partitioned across. 256 is small
-/// enough that one Pass B worker holds one bucket's decoded segments in
-/// RAM (~6 GB at full-year global scale) without OOM on a 90-128 GB box, and
-/// large enough that Pass A's per-worker bucket count stays well under
-/// any FD limit (each writer opens one file at a time).
+/// Partition destination cells across 256 gather tasks; each worker writes
+/// one file at a time, independently of the number of supported cells.
 const SHUFFLE_HASH_BUCKETS: u64 = 256;
 
 fn shuffle_bucket(square: u64) -> u64 {
@@ -55,23 +30,34 @@ fn square_of_midpoint(seg: &FlightSegment) -> Option<u64> {
     square_id(mid_lat as f64, mid_lon as f64)
 }
 
+fn destination_squares<'a>(
+    segment: &FlightSegment,
+    scope: Option<&'a ScopeBbox>,
+) -> Result<impl Iterator<Item = u64> + 'a> {
+    let airborne = if segment.phase == Phase::Airborne {
+        Some(
+            crate::support::airborne_segment_support(segment)
+                .context("invalid airborne support")?,
+        )
+    } else {
+        None
+    };
+    let ground = (segment.phase == Phase::Ground)
+        .then(|| square_of_midpoint(segment))
+        .flatten();
+    Ok(airborne
+        .into_iter()
+        .flat_map(|support| support.iter().map(|square| grid::square_id(square) as u64))
+        .chain(ground)
+        .filter(move |&square| scope.is_none_or(|scope| scope.contains_square(square))))
+}
+
 fn phase_name(phase: Phase) -> Option<&'static str> {
     match phase {
         Phase::Airborne => Some("airborne"),
         Phase::Ground => Some("ground"),
         _ => None,
     }
-}
-
-/// Pass-A temp shard key carries a pass discriminator (`air_` / `ga_`)
-/// because the airline and GA hybrid passes share first-of-month day
-/// stems (`2025-07-01` …) — an undiscriminated `day_<stem>.arrow` path
-/// would race and silently overwrite one pass's segments.
-fn pass_a_path(temp_dir: &Path, phase: &str, hash: u64, pass: &str, day_stem: &str) -> PathBuf {
-    temp_dir
-        .join(phase)
-        .join(format!("hash_{hash:03x}"))
-        .join(format!("day_{pass}_{day_stem}.arrow"))
 }
 
 fn pass_a_bucket_dir(temp_dir: &Path, phase: &str, hash: u64) -> PathBuf {
@@ -87,14 +73,13 @@ fn pass_a_bucket_dir(temp_dir: &Path, phase: &str, hash: u64) -> PathBuf {
 /// ```
 ///
 /// `day_paths` is the primary (airline) window; `ga_day_paths` is the
-/// hybrid GA window's per-day shards (empty for plain single-window
-/// extracts — output is then byte-identical to the pre-hybrid shuffle).
+/// hybrid GA window's per-day shards (empty for single-window extracts).
 /// The two windows merge here because this is the last per-day stage;
 /// Stage 2 consumers read one per-z9 pool and weight rows per class.
 ///
-/// `scope`, when set, drops out-of-scope z9s during Pass A so they
-/// never hit disk. Cleanup of the temp scratch dir is best-effort —
-/// the next run's `if exists` wipe at start handles a crash mid-merge.
+/// `scope` filters destination cells in both passes, including support cells
+/// reached from an original segment whose midpoint is outside the scope.
+/// The next run removes temporary parts left by an interrupted gather.
 pub fn shuffle_per_square(
     day_paths: &[PathBuf],
     ga_day_paths: &[PathBuf],
@@ -131,20 +116,11 @@ pub fn shuffle_per_square(
         day_paths,
         "air",
         !ga_day_paths.is_empty(),
-        PASS_A_PEAK_PER_DAY_GB,
         &temp_dir,
         scope,
         &counter,
     )?;
-    pass_a(
-        ga_day_paths,
-        "ga",
-        true,
-        PASS_A_GA_PEAK_PER_DAY_GB,
-        &temp_dir,
-        scope,
-        &counter,
-    )?;
+    pass_a(ga_day_paths, "ga", true, &temp_dir, scope, &counter)?;
     let pass_a_total = counter.total();
     finished(
         "shuffle/passA",
@@ -168,7 +144,7 @@ pub fn shuffle_per_square(
         &format!("{} hash buckets", SHUFFLE_HASH_BUCKETS),
     );
     let pass_b_start = std::time::Instant::now();
-    let pass_b_shards = pass_b(&temp_dir, out_dir)?;
+    let pass_b_shards = pass_b(&temp_dir, out_dir, scope)?;
     finished(
         "shuffle/passB",
         &format!(
@@ -192,15 +168,9 @@ pub fn shuffle_per_square(
     Ok(())
 }
 
-/// Pass A per-day decode RAM estimate for full (airline-window) day
-/// shards — same 28 GB/day calibration as the Stage 0/1 day cap.
-const PASS_A_PEAK_PER_DAY_GB: f64 = 28.0;
-
-/// GA-filtered day shards decode to a small fraction of a full day
-/// (only PROP_C172 + HELICOPTER classes survive Stage 0); the full-day
-/// estimate would throttle the GA pass to 2-3 concurrent days for no
-/// RAM benefit.
-const PASS_A_GA_PEAK_PER_DAY_GB: f64 = 6.0;
+/// Bound routed row payload per scatter worker. Flush within a source row's
+/// support expansion so a long segment cannot multiply a whole decoded day.
+const PASS_A_SPILL_BYTES: usize = 512 * 1024 * 1024;
 
 /// Bail on duplicate day stems within one pass list: Pass A keys temp
 /// shards by `(pass, day_stem)`, so two same-stem inputs in one list
@@ -230,71 +200,116 @@ fn pass_a(
     day_paths: &[PathBuf],
     pass: &'static str,
     hybrid: bool,
-    peak_per_day_gb: f64,
     temp_dir: &Path,
     scope: Option<&ScopeBbox>,
     counter: &Milestone,
 ) -> Result<()> {
-    // Bound how many days are decoded into RAM at once. Each worker holds a
-    // full day's segments + per-bucket HashMaps (~16 GB); a naive par_iter over
-    // all 7 global days hit ~114 GB anon and was cgroup-OOM-killed. Chunk by the
-    // same ~28 GB/day budget as Stage 0/1 (sized to host RAM or the cgroup
-    // limit, whichever is smaller). Within a chunk par_iter still fills cores.
+    let mut largest_input_bytes = 0;
+    for path in day_paths {
+        largest_input_bytes = largest_input_bytes.max(path.metadata()?.len());
+    }
+    // The decoder retains one IPC batch, which can be a whole legacy file.
+    // Budget its file bytes and decoded slice at 2x, plus 4x routed payload
+    // for Vec capacity and the temporary Arrow buffers during a flush.
+    let peak_per_day_gb =
+        (largest_input_bytes as f64 * 2.0 + PASS_A_SPILL_BYTES as f64 * 4.0) / 1_000_000_000.0;
     for chunk in day_paths.chunks(crate::memory::max_concurrent_days(
         day_paths.len(),
         peak_per_day_gb,
     )) {
         chunk.par_iter().try_for_each(|day_path| -> Result<()> {
-            let segments =
-                read_segments(day_path).with_context(|| format!("read {}", day_path.display()))?;
-            let day_stem = day_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .ok_or_else(|| anyhow::anyhow!("missing file stem: {}", day_path.display()))?;
-
-            let expected_date = crate::period::parse_date_id(day_stem)?;
-            let mut buckets: HashMap<(&'static str, u64), Vec<FlightSegment>> = HashMap::new();
-            let mut kept = 0u64;
-            for seg in segments {
-                anyhow::ensure!(
-                    seg.date_id == expected_date,
-                    "segment date disagrees with {}",
-                    day_path.display()
-                );
-                let ga_class =
-                    seg.veh_kind == 0 && crate::profile::is_ga_sampled_profile(seg.profile_idx);
-                anyhow::ensure!(
-                    !hybrid || ga_class == (pass == "ga"),
-                    "{pass} hybrid pass contains a segment from the other sampling window: {}",
-                    day_path.display()
-                );
-                let Some(phase) = phase_name(seg.phase) else {
-                    continue;
-                };
-                let Some(square) = square_of_midpoint(&seg) else {
-                    continue;
-                };
-                if let Some(s) = scope {
-                    if !s.contains_square(square) {
-                        continue;
-                    }
-                }
-                buckets
-                    .entry((phase, shuffle_bucket(square)))
-                    .or_default()
-                    .push(seg);
-                kept += 1;
-            }
-
-            // Sequential per-bucket write — paths are unique per
-            // (phase, hash, pass, day) so no worker writes the same file.
-            for ((phase, hash), segs) in buckets {
-                write_segments(&pass_a_path(temp_dir, phase, hash, pass, day_stem), &segs)?;
-            }
-            counter.add(kept);
+            counter.add(scatter_day(
+                day_path,
+                pass,
+                hybrid,
+                temp_dir,
+                scope,
+                PASS_A_SPILL_BYTES,
+            )?);
             Ok(())
         })?;
     }
+    Ok(())
+}
+
+fn scatter_day(
+    day_path: &Path,
+    pass: &'static str,
+    hybrid: bool,
+    temp_dir: &Path,
+    scope: Option<&ScopeBbox>,
+    spill_bytes: usize,
+) -> Result<u64> {
+    let day_stem = day_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow::anyhow!("missing file stem: {}", day_path.display()))?;
+    let expected_date = crate::period::parse_date_id(day_stem)?;
+    let mut buckets = HashMap::new();
+    let mut buffered_bytes = 0;
+    let mut part = 0;
+    let mut kept = 0;
+    for_each_segment_batch(day_path, |segments| {
+        for seg in segments {
+            anyhow::ensure!(
+                seg.date_id == expected_date,
+                "segment date disagrees with {}",
+                day_path.display()
+            );
+            let ga_class =
+                seg.veh_kind == 0 && crate::profile::is_ga_sampled_profile(seg.profile_idx);
+            anyhow::ensure!(
+                !hybrid || ga_class == (pass == "ga"),
+                "{pass} hybrid pass contains a segment from the other sampling window: {}",
+                day_path.display()
+            );
+            let Some(phase) = phase_name(seg.phase) else {
+                continue;
+            };
+            let row_bytes = std::mem::size_of::<FlightSegment>() + seg.callsign.len();
+            // Keep this set across flushes inside one original observation.
+            // Gather expands each hash copy to its cells exactly once.
+            let mut hashes = [false; SHUFFLE_HASH_BUCKETS as usize];
+            for square in destination_squares(&seg, scope)? {
+                let hash = shuffle_bucket(square);
+                if !std::mem::replace(&mut hashes[hash as usize], true) {
+                    buckets
+                        .entry((phase, hash))
+                        .or_insert_with(Vec::new)
+                        .push(seg.clone());
+                    kept += 1;
+                    buffered_bytes += row_bytes;
+                    if buffered_bytes >= spill_bytes {
+                        flush_pass_a(&mut buckets, temp_dir, pass, day_stem, &mut part)?;
+                        buffered_bytes = 0;
+                    }
+                }
+            }
+        }
+        Ok(())
+    })
+    .with_context(|| format!("scatter {}", day_path.display()))?;
+    flush_pass_a(&mut buckets, temp_dir, pass, day_stem, &mut part)?;
+    Ok(kept)
+}
+
+/// Pass-A temp shard key carries a pass discriminator (`air_` / `ga_`)
+/// because the airline and GA hybrid passes share first-of-month day
+/// stems (`2025-07-01` …) — an undiscriminated `day_<stem>.arrow` path
+/// would race and silently overwrite one pass's segments.
+fn flush_pass_a(
+    buckets: &mut HashMap<(&'static str, u64), Vec<FlightSegment>>,
+    temp_dir: &Path,
+    pass: &str,
+    day_stem: &str,
+    part: &mut u64,
+) -> Result<()> {
+    for ((phase, hash), segments) in std::mem::take(buckets) {
+        let path = pass_a_bucket_dir(temp_dir, phase, hash)
+            .join(format!("day_{pass}_{day_stem}_part_{part:016x}.arrow"));
+        write_segments(&path, &segments)?;
+    }
+    *part += 1;
     Ok(())
 }
 
@@ -327,7 +342,7 @@ fn pass_b_concurrency(temp_dir: &Path) -> Result<usize> {
     ))
 }
 
-fn pass_b(temp_dir: &Path, out_dir: &Path) -> Result<u64> {
+fn pass_b(temp_dir: &Path, out_dir: &Path, scope: Option<&ScopeBbox>) -> Result<u64> {
     let phases = ["airborne", "ground"];
     let workers = pass_b_concurrency(temp_dir)?;
     started(
@@ -355,10 +370,11 @@ fn pass_b(temp_dir: &Path, out_dir: &Path) -> Result<u64> {
                         let segs = read_segments(part)
                             .with_context(|| format!("read {}", part.display()))?;
                         for seg in segs {
-                            let Some(square) = square_of_midpoint(&seg) else {
-                                continue;
-                            };
-                            by_square.entry(square).or_default().push(seg);
+                            for square in destination_squares(&seg, scope)? {
+                                if shuffle_bucket(square) == hash {
+                                    by_square.entry(square).or_default().push(seg.clone());
+                                }
+                            }
                         }
                     }
                     for (square, segs) in by_square {
@@ -413,6 +429,7 @@ fn list_pass_a_parts(dir: &Path) -> Result<Vec<PathBuf>> {
             out.push(path);
         }
     }
+    out.sort_unstable();
     Ok(out)
 }
 

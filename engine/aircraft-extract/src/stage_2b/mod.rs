@@ -2,24 +2,26 @@
 
 mod accum;
 mod spill;
+mod support;
 use accum::*;
 use spill::*;
+use support::*;
 
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
-use noise_compute::emission::aircraft::{NpdLuts, FT_PER_M};
+use noise_compute::emission::aircraft::{FT_PER_M, NpdLuts};
 use rayon::prelude::*;
 
-use crate::arrow_io::{read_cruise_spill, write_cruise, write_cruise_spill, CruiseSpillRow};
+use crate::arrow_io::{CruiseSpillRow, read_cruise_spill, write_cruise, write_cruise_spill};
 use crate::arrow_schemas::CRUISE_TOP_K;
-use crate::flight::{fl_bin_of, CruiseBucket, CruiseTopCandidate, FlightSegment, Phase};
+use crate::flight::{CruiseBucket, CruiseTopCandidate, FlightSegment, Phase, fl_bin_of};
 use crate::geo::square_path;
 use crate::profile::noise_class_of;
-use crate::progress::{finished, human, started, ts, Milestone};
+use crate::progress::{Milestone, finished, human, started, ts};
 use crate::scope::ScopeBbox;
 use crate::spatial::cruise_transits;
 use grid::cruise::cruise_parent;
@@ -127,7 +129,7 @@ pub fn run_stage_2b(
                     if crate::profile::is_ga_sampled_profile(seg.profile_idx) {
                         ga_class_cruise.fetch_add(1, Ordering::Relaxed);
                     }
-                    process_segment(seg, &mut local, scope, npd_luts);
+                    process_segment(seg, &mut local, npd_luts);
                     cruise_kept += 1;
                     segs_since_check += 1;
                     if segs_since_check >= SIZE_CHECK_INTERVAL {
@@ -163,10 +165,7 @@ pub fn run_stage_2b(
              (ga-365d-hybrid-plan.md delta 4)",
             ts()
         );
-        // Bailing here (before the fold) saves the merge cost; the
-        // in-scope cruise.arrow wipe already ran, which is acceptable —
-        // a firing guard means the input pool is wrong and must be
-        // re-extracted anyway.
+        // Reject a bad input pool before replacing any prepared destination.
         if fail_on_ga_cruise {
             anyhow::bail!(
                 "--fail-on-ga-cruise: {ga_cruise} GA-class cruise segment(s) in Stage 2B \
@@ -175,26 +174,14 @@ pub fn run_stage_2b(
         }
     }
 
-    // Wipe stale cruise.arrow from in-scope z9s before workers write
-    // fresh files. z9s that have no cruise activity this run would
-    // otherwise retain a prior-run file (possibly older schema) and
-    // the popup reader would fatal-fail on schema_version mismatch.
-    let wiped = crate::wipe::wipe_stale_arrows_for_scope(prepared_year_dir, "cruise.arrow", scope)?;
-    if wiped > 0 {
-        eprintln!(
-            "{} [stage2b] wiped {wiped} stale cruise.arrow file(s) before write",
-            ts()
-        );
-    }
-    // Phase 2: per coarse hash bucket, merge every spilled part into
-    // an z9-keyed accumulator, finalise, write `cruise.arrow`. The
-    // per-bucket map IS the merge-phase RAM ceiling.
+    // Each canonical key belongs to one fold worker. Finalize once, then
+    // spill intact copies by destination; only gather writes prepared cells.
     started(
         "stage2b/fold",
         &format!("{SPILL_HASH_BUCKETS} hash buckets"),
     );
     let merge_start = std::time::Instant::now();
-    let n_square = AtomicUsize::new(0);
+    let support_dir = spill_dir.join("support");
     let fold_bucket_counter = Milestone::new("stage2b/fold", "buckets", 10);
     let fold_row_counter = Milestone::new("stage2b/fold", "cruise rows", 100_000);
     (0..SPILL_HASH_BUCKETS)
@@ -208,8 +195,6 @@ pub fn run_stage_2b(
             let mut by_square: HashMap<u64, HashMap<CruiseKey, CruiseAccum>> = HashMap::new();
             for path in &parts {
                 for row in read_cruise_spill(path)? {
-                    // Scope filter ran in process_segment; spill never
-                    // received out-of-scope rows.
                     let key = CruiseKey {
                         cruise_cell_id: row.cruise_cell_id,
                         class: row.class,
@@ -226,45 +211,40 @@ pub fn run_stage_2b(
                     }
                 }
             }
-            let mut local_count = 0usize;
-            let mut local_rows = 0u64;
-            for (square, buckets_map) in by_square {
-                if buckets_map.is_empty() {
-                    continue;
-                }
-                let mut buckets: Vec<CruiseBucket> = buckets_map
-                    .into_iter()
-                    .map(|(k, a)| a.finalize(k))
-                    .collect();
-                buckets.sort_unstable_by_key(|bucket| {
-                    (
-                        bucket.cruise_cell_id,
-                        bucket.class,
-                        bucket.fl_bin,
-                        bucket.period,
-                    )
-                });
-                local_rows += buckets.len() as u64;
-                let dir = prepared_year_dir.join(square_path(square));
-                std::fs::create_dir_all(&dir)?;
-                write_cruise(&dir.join("cruise.arrow"), &buckets, n_days)?;
-                local_count += 1;
-            }
-            n_square.fetch_add(local_count, Ordering::Relaxed);
+            let canonical_rows = scatter_finalized_cruise(
+                by_square
+                    .into_values()
+                    .flat_map(|map| map.into_iter().map(|(key, accum)| accum.finalize(key))),
+                &support_dir,
+                &part_id,
+                n_days,
+                scope,
+            )?;
             fold_bucket_counter.add(1);
-            fold_row_counter.add(local_rows);
+            fold_row_counter.add(canonical_rows);
             Ok(())
         })?;
+    // Wipe stale cruise.arrow from in-scope z9s before workers write
+    // fresh files. z9s that have no cruise activity this run would
+    // otherwise retain a prior-run file (possibly older schema) and
+    // the popup reader would fatal-fail on schema_version mismatch.
+    let wiped = crate::wipe::wipe_stale_arrows_for_scope(prepared_year_dir, "cruise.arrow", scope)?;
+    if wiped > 0 {
+        eprintln!(
+            "{} [stage2b] wiped {wiped} stale cruise.arrow file(s) before write",
+            ts()
+        );
+    }
+    let (n, copied_rows) = gather_finalized_cruise(&support_dir, prepared_year_dir)?;
     let t_merge = merge_start.elapsed();
     // Best-effort cleanup — leaving the dir after a crash is fine, the
     // next run wipes it before writing.
     let _ = std::fs::remove_dir_all(&spill_dir);
 
-    let n = n_square.load(Ordering::Relaxed);
     finished(
         "stage2b/fold",
         &format!(
-            "{n} z9s, {} cruise rows (merge {t_merge:?}, total {:?})",
+            "{n} destination z9s, {} canonical cruise rows → {copied_rows} support copies (merge {t_merge:?}, total {:?})",
             human(fold_row_counter.total()),
             stage_start.elapsed()
         ),
@@ -275,7 +255,6 @@ pub fn run_stage_2b(
 fn process_segment(
     seg: &FlightSegment,
     by_square: &mut HashMap<u64, HashMap<CruiseKey, CruiseAccum>>,
-    scope: Option<&ScopeBbox>,
     npd_luts: &NpdLuts,
 ) {
     let class = noise_class_of(seg.profile_idx);
@@ -285,11 +264,6 @@ fn process_segment(
 
     for (cell, clip_m) in cruise_transits(seg.start_lat, seg.start_lon, seg.end_lat, seg.end_lon) {
         let square = cruise_parent(cell);
-        if let Some(s) = scope {
-            if !s.contains_square(square) {
-                continue;
-            }
-        }
         let key = CruiseKey {
             cruise_cell_id: cell,
             class,

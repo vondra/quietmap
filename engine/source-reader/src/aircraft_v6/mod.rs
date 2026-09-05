@@ -454,3 +454,5 @@ pub(super) fn assert_cruise_contract(label: &str, batches: &[RecordBatch]) -> Re
 
 #[cfg(test)]
 mod producer_roundtrip_tests;
+#[cfg(test)]
+mod periodic_selection_tests;

@@ -20,6 +20,7 @@ pub mod segment;
 pub mod shuffle;
 pub mod source;
 pub mod source_adsb_tar;
+pub mod support;
 pub mod spatial;
 pub mod stage_0;
 pub mod stage_1;

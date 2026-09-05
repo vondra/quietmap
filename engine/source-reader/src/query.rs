@@ -23,6 +23,8 @@ use square_store::store::{load_square, SquareData, STRUCTURE_KIND_BUILDING};
 
 const BUILDING_QUERY_RADIUS_M: f64 = 2_000.0;
 const INDUSTRIAL_QUERY_RADIUS_M: f64 = 5_000.0;
+// Existing row gates bound accepted line midpoints by 1.5 times their reach.
+pub(crate) const LINE_MIDPOINT_REACH_FACTOR: f64 = 1.5;
 
 #[derive(Debug)]
 pub struct PointQueryData {
@@ -51,13 +53,40 @@ pub struct PointQueryData {
 
 // NACE codes are written directly into industrial.arrow by enrichment scripts.
 
-/// Squares whose data can reach the click: the click's own square plus its
-/// halo ring (1 square to 81.9° latitude, 2 beyond). The ring is sized for
-/// the longest source reach (11 km rail halo), so every audible source's
-/// home square is loaded — the exact per-row accept stays downstream.
-pub fn squares_within_reach(lat: f64, lng: f64) -> Vec<grid::Square> {
-    let center = grid::square_of(lat, lng);
-    grid::ring_squares(center, lat)
+/// Select every owner in the existing surface-source midpoint gates.
+/// Airborne and cruise are support-copied and consumed only from the receiver cell.
+pub fn squares_within_reach(lat: f64, lng: f64) -> Result<Vec<grid::Square>, String> {
+    let radius = noise_compute::constants::RAILWAY_REACH_CEILING
+        .max(noise_compute::constants::ROAD_MAX_RADIUS[0])
+        .max(noise_compute::constants::GROUND_OPS_RUNWAY_MAX_RADIUS)
+        .max(BUILDING_QUERY_RADIUS_M)
+        .max(INDUSTRIAL_QUERY_RADIUS_M);
+    squares_within_radius(lat, lng, radius * LINE_MIDPOINT_REACH_FACTOR)
+}
+
+pub fn squares_within_radius(
+    lat: f64,
+    lng: f64,
+    radius_m: f64,
+) -> Result<Vec<grid::Square>, String> {
+    if !lat.is_finite()
+        || lat.abs() > 90.0
+        || !lng.is_finite()
+        || !radius_m.is_finite()
+        || radius_m < 0.0
+    {
+        return Err("invalid source query position or radius".to_string());
+    }
+    let lng = grid::geo::normalize_longitude(lng);
+    let (latitude_radius, longitude_radius) = grid::geo::reach_box_half_extents_deg(lat, radius_m);
+    let bounds = grid::bounds::BoundedSquares::from_degrees(
+        (lat - latitude_radius).next_down(),
+        (lng - longitude_radius).next_down(),
+        (lat + latitude_radius).next_up(),
+        (lng + longitude_radius).next_up(),
+    )
+    .ok_or_else(|| "invalid source query bounds".to_string())?;
+    Ok(bounds.iter().collect())
 }
 
 /// Directory `<prepared_year>/z9/<x>/<y>` for one square.
@@ -73,12 +102,12 @@ pub fn collect_sources_at_point(
     lat: f64,
     lng: f64,
 ) -> Result<PointQueryData, String> {
-    let squares = squares_within_reach(lat, lng);
+    let squares = squares_within_reach(lat, lng)?;
     let loaded: Vec<SquareData> = squares
         .iter()
         .map(|sq| load_square(&square_dir(prepared_year_dir, *sq)))
         .collect::<Result<_, _>>()?;
-    let refs: Vec<&SquareData> = loaded.iter().collect();
+    let refs: Vec<_> = squares.into_iter().zip(&loaded).collect();
 
     collect_from_square_data(&refs, lat, lng)
 }
@@ -88,7 +117,7 @@ pub fn collect_sources_at_point(
 ///
 /// NACE codes are read directly from industrial.arrow nace_4digit column.
 pub fn collect_from_square_data(
-    square_data: &[&SquareData],
+    square_data: &[(grid::Square, &SquareData)],
     lat: f64,
     lng: f64,
 ) -> Result<PointQueryData, String> {
@@ -101,13 +130,12 @@ pub fn collect_from_square_data(
     let mut all_airborne_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
     let mut all_cruise_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
     let mut all_airport_traffic_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
-    let mut date_ids = std::collections::HashSet::new();
+    let receiver_square = grid::square_of(lat, lng);
     let mut n_days_from_metadata: Option<u16> = None;
     // Prune aircraft batches per square ONCE; the collection below consumes the
-    // result. Airborne/cruise use the kernel-identical AXIS envelope (a
-    // circular gate is narrower and would drop corner batches the kernel's
-    // row prefilter accepts — Codex /gg 2026-07-10); airport_traffic's row
-    // accept is a planar circle, so the slack-carrying circular gate fits.
+    // result. Airborne shares the row/segment axis envelope. Cruise has a
+    // rep_len-dependent centroid radius, not the airborne envelope;
+    // airport traffic's row accept is a planar circle.
     let airborne_gate = airborne_envelope_gate(lat, lng);
     let per_square_aircraft: Vec<(
         Vec<arrow::record_batch::RecordBatch>,
@@ -115,10 +143,18 @@ pub fn collect_from_square_data(
         Vec<arrow::record_batch::RecordBatch>,
     )> = square_data
         .iter()
-        .map(|data| {
+        .map(|(square, data)| {
             Ok((
-                data.aircraft_airborne.batches_where(&airborne_gate)?,
-                data.aircraft_cruise.batches_where(&airborne_gate)?,
+                if *square == receiver_square {
+                    data.aircraft_airborne.batches_where(&airborne_gate)?
+                } else {
+                    Vec::new()
+                },
+                if *square == receiver_square {
+                    data.aircraft_cruise.batches_all()?
+                } else {
+                    Vec::new()
+                },
                 data.aircraft_airport_traffic.batches_within(
                     lat,
                     lng,
@@ -127,7 +163,7 @@ pub fn collect_from_square_data(
             ))
         })
         .collect::<Result<_, String>>()?;
-    // The label lookup needs every airport-line row in the ring, but only
+    // The label lookup needs every selected airport-line row, but only
     // when nearby airport traffic exists. Keep the files footer-only for all
     // other clicks.
     let all_airport_lines_batches = if per_square_aircraft
@@ -135,72 +171,50 @@ pub fn collect_from_square_data(
         .any(|(_, _, traffic)| !traffic.is_empty())
     {
         let mut batches = Vec::new();
-        for data in square_data {
+        for (_, data) in square_data {
             batches.extend(data.airport_lines.batches_all()?);
         }
         batches
     } else {
         Vec::new()
     };
-    // n_days is FILE-level schema metadata — read it without decoding any
-    // batch. The legacy date_id fallback (pre-metadata extracts) must scan
-    // the FULL files, never the pruned lists: a pruned scan would shrink the
-    // divisor to "days with flights near this click" and inflate Lden
-    // (Gemini /gg 2026-07-10; unreachable today — bboxes imply n_days — but
-    // the invariant must not live in two places).
-    for data in square_data {
+    // Support copies belong only to the receiver cell; ground rows retain their
+    // owner cells. The file stamp is the sampling window even when no row is near.
+    for (square, data) in square_data {
         for arrow in [
-            &data.aircraft_airborne,
-            &data.aircraft_cruise,
-            &data.aircraft_airport_traffic,
-        ] {
-            if let Some(md) = arrow.schema().and_then(|s| s.metadata().get("n_days")) {
-                if let Ok(v) = md.parse::<u16>() {
-                    n_days_from_metadata =
-                        Some(n_days_from_metadata.map(|m| m.max(v)).unwrap_or(v));
-                }
+            (*square == receiver_square).then_some(&data.aircraft_airborne),
+            (*square == receiver_square).then_some(&data.aircraft_cruise),
+            Some(&data.aircraft_airport_traffic),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(schema) = arrow.schema() {
+                let days = schema
+                    .metadata()
+                    .get("n_days")
+                    .and_then(|value| value.parse::<u16>().ok())
+                    .filter(|days| *days > 0)
+                    .ok_or_else(|| {
+                        "aircraft file has no valid n_days sampling window".to_string()
+                    })?;
+                n_days_from_metadata =
+                    Some(n_days_from_metadata.map_or(days, |value| value.max(days)));
             }
         }
     }
-    if n_days_from_metadata.is_none() {
-        for data in square_data {
-            for arrow in [
-                &data.aircraft_airborne,
-                &data.aircraft_cruise,
-                &data.aircraft_airport_traffic,
-            ] {
-                for batch in arrow.batches_all()? {
-                    if let Some(did) = batch
-                        .column_by_name("date_id")
-                        .and_then(|c| c.as_any().downcast_ref::<arrow::array::Int16Array>())
-                    {
-                        for i in 0..did.len() {
-                            date_ids.insert(did.value(i));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    let n_days = n_days_from_metadata.unwrap_or({
-        if date_ids.is_empty() {
-            365
-        } else {
-            date_ids.len() as u16
-        }
-    });
+    let n_days = n_days_from_metadata.unwrap_or(365);
 
-    for (data, (airborne_batches, cruise_batches, airport_traffic_batches)) in
+    for ((_, data), (airborne_batches, cruise_batches, airport_traffic_batches)) in
         square_data.iter().zip(per_square_aircraft)
     {
-        // Spatial candidate pre-filter: load every rail row within the WIDEST
-        // possible per-row reach (the clamp ceiling, 10 km), then `compute_railways`
-        // applies each row's exact `rail_reach_m` cutoff. Pre-filtering at the old
-        // 7 km blanket would silently drop a loud HS corridor 8-10 km out before
-        // its honest reach could admit it. The batch gate uses the SAME ceiling.
-        let railway_batches =
-            data.railways
-                .batches_within(lat, lng, noise_compute::constants::RAILWAY_REACH_CEILING)?;
+        // The batch gate must cover the configured railway ceiling; each row's
+        // exact reach is applied downstream after its emission is known.
+        let railway_batches = data.railways.batches_within(
+            lat,
+            lng,
+            noise_compute::constants::RAILWAY_REACH_CEILING,
+        )?;
         let railways = query_railways_from_batches(
             &railway_batches,
             lat,
@@ -640,13 +654,14 @@ pub fn query_roads_from_batches(
             // (~160 ms warm). max_radius is the upper bound — final accept
             // uses effective_radius after normalize.
             let mid_lat = (s_lat + e_lat) * 0.5;
-            let dlat = (lat - mid_lat).abs() * 110_540.0;
-            if dlat > max_radius * 1.5 {
+            let dlat = (lat - mid_lat).abs() * grid::geo::M_PER_DEG_LAT;
+            if dlat > max_radius * LINE_MIDPOINT_REACH_FACTOR {
                 continue;
             }
-            let mid_lon = (s_lon + e_lon) * 0.5;
-            let dlon = (lon - mid_lon).abs() * 111_320.0 * mid_lat.to_radians().cos();
-            if dlon > max_radius * 1.5 {
+            let mid_lon = grid::geo::wrapped_longitude_midpoint(s_lon, e_lon);
+            let dlon = grid::geo::wrapped_longitude_delta(mid_lon, lon).abs()
+                * grid::geo::m_per_deg_lon(mid_lat.to_radians());
+            if dlon > max_radius * LINE_MIDPOINT_REACH_FACTOR {
                 continue;
             }
 
@@ -685,7 +700,9 @@ pub fn query_roads_from_batches(
             let effective_radius = max_radius.min(norm.max_distance_m);
 
             // Tighter bbox reject using effective_radius (per-class).
-            if dlat > effective_radius * 1.5 || dlon > effective_radius * 1.5 {
+            if dlat > effective_radius * LINE_MIDPOINT_REACH_FACTOR
+                || dlon > effective_radius * LINE_MIDPOINT_REACH_FACTOR
+            {
                 continue;
             }
 
@@ -849,13 +866,14 @@ pub fn query_railways_from_batches(
             let (e_lon, e_lat) = grid_cell_lonlat(egx.value(i), egy.value(i));
 
             let mid_lat = (s_lat + e_lat) / 2.0;
-            let mid_lon = (s_lon + e_lon) / 2.0;
-            let dlat = (lat - mid_lat).abs() * 110_540.0;
-            if dlat > max_radius * 1.5 {
+            let mid_lon = grid::geo::wrapped_longitude_midpoint(s_lon, e_lon);
+            let dlat = (lat - mid_lat).abs() * grid::geo::M_PER_DEG_LAT;
+            if dlat > max_radius * LINE_MIDPOINT_REACH_FACTOR {
                 continue;
             }
-            let dlon = (lon - mid_lon).abs() * 111_320.0 * mid_lat.to_radians().cos();
-            if dlon > max_radius * 1.5 {
+            let dlon = grid::geo::wrapped_longitude_delta(mid_lon, lon).abs()
+                * grid::geo::m_per_deg_lon(mid_lat.to_radians());
+            if dlon > max_radius * LINE_MIDPOINT_REACH_FACTOR {
                 continue;
             }
 
@@ -1245,31 +1263,11 @@ pub(crate) fn apply_segment_top_k_with_cap(
 }
 
 /// Batch-level replica of the airborne kernel's row prefilter
-/// (`noise-compute/src/compute/aircraft_v6/airborne/mod.rs`): an AXIS-ALIGNED
-/// envelope at the 16 km reach cap with the antimeridian wrap guard. A
-/// circular gate would be strictly narrower — a bbox corner passes both axis
-/// tests at up to reach·√2 point distance, and the kernel keeps such rows
-/// (off-segment CPA on the unclamped extension) — so it would drop audible
-/// batches (Codex /gg 2026-07-10). Batch bbox ⊇ row bboxes, so envelope
-/// overlap here is implied whenever any contained row overlaps.
+/// (`noise-compute/src/compute/aircraft_v6/airborne/mod.rs`), including its
+/// f32 envelope rounding and conservative treatment of wide aggregate bounds.
 fn airborne_envelope_gate(lat: f64, lng: f64) -> impl Fn(&arrow_batching::RowBbox) -> bool {
-    use noise_compute::emission::aircraft;
-    let reach = aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M;
-    let radius_lat_deg = aircraft::meters_to_lat_deg(reach);
-    let radius_lon_deg = aircraft::meters_to_lon_deg(lat, reach);
-    let env_min_lat = lat - radius_lat_deg;
-    let env_max_lat = lat + radius_lat_deg;
-    let env_min_lon = lng - radius_lon_deg;
-    let env_max_lon = lng + radius_lon_deg;
-    // Same wrap rule as the kernel: an envelope reaching past ±180° turns
-    // the longitude prune off (stored bboxes are normalized to [-180, 180]).
-    let lon_prune_active = env_min_lon >= -180.0 && env_max_lon <= 180.0;
-    move |bb: &arrow_batching::RowBbox| {
-        if bb[2] < env_min_lat || bb[0] > env_max_lat {
-            return false;
-        }
-        !(lon_prune_active && (bb[3] < env_min_lon || bb[1] > env_max_lon))
-    }
+    let envelope = noise_compute::emission::aircraft::AirborneEnvelope::new(lat, lng);
+    move |bb| envelope.intersects_bbox(*bb)
 }
 
 #[cfg(test)]
@@ -1286,11 +1284,30 @@ mod square_query_tests {
     }
 
     #[test]
-    fn reach_ring_contains_own_square_nine_wide_at_mid_latitudes() {
-        let squares = squares_within_reach(LAT, LON);
-        assert_eq!(squares.len(), 9);
+    fn source_envelope_contains_own_square_and_high_latitude_rail() {
+        let squares = squares_within_reach(LAT, LON).unwrap();
         assert!(squares.contains(&prague()));
         assert_eq!(prague(), grid::Square { x: 276, y: 173 });
+        let receiver_lat = 81.82379430564337;
+        let source_lat = 81.92318633602197;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let source_square = grid::square_of(source_lat, 0.0);
+        let dir = fx::square_dir(tmp.path(), source_square);
+        std::fs::create_dir_all(&dir).unwrap();
+        fx::write_railways_file(
+            &dir.join("railways.arrow"),
+            &[fx::FixtureRail {
+                osm_id: 901,
+                start: (0.0, source_lat),
+                end: (0.001, source_lat),
+                rail_type: 0,
+                maxspeed: 160,
+            }],
+        );
+        let collected = collect_sources_at_point(tmp.path(), receiver_lat, 0.0).unwrap();
+        assert_eq!(collected.railways.len(), 1);
+        assert_eq!(collected.railways[0].osm_id, 901);
+        assert!(collected.railways[0].dist_m < noise_compute::constants::RAILWAY_REACH_CEILING);
     }
 
     #[test]
@@ -1376,6 +1393,40 @@ mod square_query_tests {
         assert_eq!(data.railways[0].osm_id, 77);
         assert_eq!(data.railways[0].maxspeed, 160);
         assert_eq!(data.rail_admins.len(), 1);
+    }
+
+    #[test]
+    fn antimeridian_road_and_rail_survive_the_midpoint_prefilter() {
+        let (lat, lon) = (0.0, -180.0);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = fx::square_dir(tmp.path(), grid::square_of(lat, lon));
+        std::fs::create_dir_all(&dir).unwrap();
+        fx::write_roads_file(
+            &dir.join("roads.arrow"),
+            &[fx::FixtureRoad {
+                osm_id: 1,
+                start: (179.999, lat),
+                end: (-179.999, lat),
+                road_class: 2,
+                speed_limit: 50,
+                lanes: 2,
+                name: "Dateline Road".to_string(),
+            }],
+        );
+        fx::write_railways_file(
+            &dir.join("railways.arrow"),
+            &[fx::FixtureRail {
+                osm_id: 2,
+                start: (179.999, lat),
+                end: (-179.999, lat),
+                rail_type: 0,
+                maxspeed: 80,
+            }],
+        );
+
+        let data = collect_sources_at_point(tmp.path(), lat, lon).unwrap();
+        assert_eq!(data.roads.len(), 1);
+        assert_eq!(data.railways.len(), 1);
     }
 
     fn building_row(osm_id: i64) -> fx::StructureRow {
@@ -1596,9 +1647,13 @@ mod airborne_gate_tests {
     }
 
     #[test]
-    fn antimeridian_receiver_disables_longitude_prune_keeps_latitude_prune() {
+    fn antimeridian_receiver_prunes_distant_longitudes_but_keeps_crossing_batches() {
         let keep = super::airborne_envelope_gate(0.0, 179.95);
-        assert!(keep(&[0.0, -179.9, 0.1, -179.8]));
-        assert!(!keep(&[5.0, -179.9, 5.1, -179.8]));
+        assert!(keep(&[0.0, -179.99, 0.1, -179.98]));
+        assert!(!keep(&[0.0, -81.0, 0.1, -80.0]));
+        assert!(!keep(&[5.0, -179.99, 5.1, -179.98]));
+        assert!(super::airborne_envelope_gate(0.001, 179.5)(&[
+            0.0, -179.0, 0.0, 179.0
+        ]));
     }
 }

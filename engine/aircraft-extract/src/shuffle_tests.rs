@@ -68,17 +68,25 @@ fn round_trip_airborne_and_ground() {
         std::fs::read_to_string(out_dir.join("ga_days")).unwrap(),
         ""
     );
-    // Exactly one z9 directory should contain both shards.
-    let square_dirs = square_directories(&out_dir).unwrap();
-    assert_eq!(square_dirs.len(), 1);
-    let dir = square_dirs[0].1.clone();
-    let airborne = read_segments(&dir.join("airborne.arrow")).unwrap();
-    let ground = read_segments(&dir.join("ground.arrow")).unwrap();
-    assert_eq!(airborne.len(), 1);
+    let airborne = list_square_shards(&out_dir, "airborne.arrow", None).unwrap();
+    let expected =
+        crate::support::airborne_segment_support(&seg(1, Phase::Airborne, 50.10, 14.26)).unwrap();
+    assert_eq!(airborne.len(), expected.cell_count());
+    for (square, path) in airborne {
+        assert!(expected.contains(grid::square_from_id(square as i64).unwrap()));
+        let rows = read_segments(&path).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].flight_id, 1);
+    }
+    let ground = list_square_shards(&out_dir, "ground.arrow", None).unwrap();
     assert_eq!(ground.len(), 1);
-    assert_eq!(airborne[0].flight_id, 1);
-    assert_eq!(ground[0].flight_id, 2);
-    // Cruise must NOT appear in either shard.
+    assert_eq!(
+        ground[0].0,
+        square_of_midpoint(&seg(2, Phase::Ground, 50.10, 14.26)).unwrap()
+    );
+    let rows = read_segments(&ground[0].1).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].flight_id, 2);
 }
 
 #[test]
@@ -100,12 +108,14 @@ fn scope_filters_out_of_scope_squares() {
     let scope = ScopeBbox::parse("48.65,12.00,51.55,16.90").unwrap();
     shuffle_per_square(&[day_path], &[], &out_dir, Some(&scope)).unwrap();
 
-    // Only the CZ z9 must appear.
-    let square_dirs = square_directories(&out_dir).unwrap();
-    assert_eq!(square_dirs.len(), 1);
-    let airborne = read_segments(&square_dirs[0].1.clone().join("airborne.arrow")).unwrap();
-    assert_eq!(airborne.len(), 1);
-    assert_eq!(airborne[0].flight_id, 1);
+    let airborne = list_square_shards(&out_dir, "airborne.arrow", None).unwrap();
+    assert!(!airborne.is_empty());
+    for (square, path) in airborne {
+        assert!(scope.contains_square(square));
+        let rows = read_segments(&path).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].flight_id, 1);
+    }
 }
 
 #[test]
@@ -161,19 +171,21 @@ fn hybrid_colliding_day_stems_merge_and_write_dual_manifests() {
         std::fs::read_to_string(out_dir.join("ga_days")).unwrap(),
         "2025-07-01"
     );
-    let square_dirs = square_directories(&out_dir).unwrap();
-    assert_eq!(square_dirs.len(), 1);
-    let mut fids: Vec<u64> = read_segments(&square_dirs[0].1.clone().join("airborne.arrow"))
-        .unwrap()
-        .iter()
-        .map(|s| s.flight_id)
-        .collect();
-    fids.sort_unstable();
-    assert_eq!(
-        fids,
-        [1, 2],
-        "both passes' segments must survive the stem collision"
-    );
+    let airborne = list_square_shards(&out_dir, "airborne.arrow", None).unwrap();
+    assert!(!airborne.is_empty());
+    for (_, path) in airborne {
+        let mut fids: Vec<u64> = read_segments(&path)
+            .unwrap()
+            .iter()
+            .map(|s| s.flight_id)
+            .collect();
+        fids.sort_unstable();
+        assert_eq!(
+            fids,
+            [1, 2],
+            "both sampling passes must survive in every support cell"
+        );
+    }
 }
 
 /// Duplicate day stems WITHIN one pass list would collide on one
@@ -209,10 +221,114 @@ fn hybrid_shuffle_rejects_class_or_date_window_leakage() {
     )
     .unwrap_err();
     assert!(
-        error.to_string().contains("other sampling window"),
+        format!("{error:#}").contains("other sampling window"),
         "{error:#}"
     );
     crate::arrow_io::write_segments(&air, &[seg(1, Phase::Airborne, 50.1, 14.2)]).unwrap();
     let error = shuffle_per_square(&[air], &[], &tmp.path().join("out"), None).unwrap_err();
-    assert!(error.to_string().contains("segment date"), "{error:#}");
+    assert!(format!("{error:#}").contains("segment date"), "{error:#}");
+}
+
+#[test]
+fn airborne_destination_hash_collisions_do_not_multiply_original_rows() {
+    let mut original = seg(42, Phase::Airborne, 82.0, 0.0);
+    original.end_lat = 80.0;
+    original.end_lon = 0.0;
+    let destinations: Vec<_> = destination_squares(&original, None).unwrap().collect();
+    let hashes: std::collections::HashSet<_> =
+        destinations.iter().map(|&id| shuffle_bucket(id)).collect();
+    assert!(
+        hashes.len() < destinations.len(),
+        "fixture must exercise shared destination hashes"
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let day = tmp.path().join("2025-07-01.arrow");
+    write_segments(&day, &[original.clone(), original]).unwrap();
+    let out = tmp.path().join("shuffled");
+    shuffle_per_square(&[day], &[], &out, None).unwrap();
+    let shards = list_square_shards(&out, "airborne.arrow", None).unwrap();
+    assert_eq!(shards.len(), destinations.len());
+    for (_, path) in shards {
+        assert_eq!(read_segments(&path).unwrap().len(), 2);
+    }
+}
+
+#[test]
+fn streamed_parts_preserve_order_and_fields_across_flushes_and_input_batches() {
+    use crate::arrow_io::{read_record_batches, write_record_batches};
+    let tmp = tempfile::tempdir().unwrap();
+    let day = tmp.path().join("2025-07-01.arrow");
+    let mut airborne = seg(42, Phase::Airborne, 82.0, 0.0);
+    airborne.end_lat = 80.0;
+    airborne.end_lon = 0.0;
+    let ground = seg(99, Phase::Ground, 50.1, 14.26);
+    let mut later = airborne.clone();
+    later.flight_id = 43;
+    write_segments(&day, &[airborne.clone(), ground, airborne, later]).unwrap();
+    let (schema, original) = read_record_batches(&day).unwrap();
+    write_record_batches(
+        &day,
+        &schema,
+        &[original[0].slice(0, 2), original[0].slice(2, 2)],
+    )
+    .unwrap();
+    let rows = read_segments(&day).unwrap();
+    let temp = tmp.path().join("parts");
+    let payload_limit = std::mem::size_of::<FlightSegment>() + rows[0].callsign.len();
+    let copies = scatter_day(&day, "air", false, &temp, None, payload_limit).unwrap();
+    let mut scattered_rows = 0;
+    let mut largest_part_count = 0;
+    for phase in ["airborne", "ground"] {
+        for hash in 0..SHUFFLE_HASH_BUCKETS {
+            let parts = list_pass_a_parts(&pass_a_bucket_dir(&temp, phase, hash)).unwrap();
+            largest_part_count = largest_part_count.max(parts.len());
+            for path in parts {
+                let part = read_segments(&path).unwrap();
+                assert_eq!(
+                    part.len(),
+                    1,
+                    "one-row budget must flush inside support expansion"
+                );
+                scattered_rows += part.len() as u64;
+            }
+        }
+    }
+    assert!(
+        largest_part_count >= 3,
+        "later batches must add parts instead of overwriting"
+    );
+    assert_eq!(copies, scattered_rows);
+    let gathered = tmp.path().join("gathered");
+    pass_b(&temp, &gathered, None).unwrap();
+    let mut expected: HashMap<(&str, u64), Vec<FlightSegment>> = HashMap::new();
+    for row in rows {
+        for square in destination_squares(&row, None).unwrap() {
+            expected
+                .entry((phase_name(row.phase).unwrap(), square))
+                .or_default()
+                .push(row.clone());
+        }
+    }
+    let mut actual_count = 0;
+    for phase in ["airborne", "ground"] {
+        actual_count += list_square_shards(&gathered, &format!("{phase}.arrow"), None)
+            .unwrap()
+            .len();
+    }
+    assert_eq!(actual_count, expected.len());
+    for ((phase, square), rows) in expected {
+        let reference = tmp.path().join("reference.arrow");
+        crate::arrow_io::write_segments(&reference, &rows).unwrap();
+        assert_eq!(
+            read_record_batches(
+                &gathered
+                    .join(square_path(square))
+                    .join(format!("{phase}.arrow"))
+            )
+            .unwrap(),
+            read_record_batches(&reference).unwrap(),
+            "all original fields, order, and repetitions in {phase}/{}",
+            square_path(square)
+        );
+    }
 }

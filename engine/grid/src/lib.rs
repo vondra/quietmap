@@ -4,8 +4,10 @@
 //! global int32 z30-pixel coordinates; use i64 for their differences.
 //!
 //! Map of submodules: [`poly`] (integer footprint rings), [`geo`] (flat-earth
-//! propagation math), [`cruise`] (aircraft aggregation cells), [`raster`] (native lattice).
+//! propagation math), [`cruise`] (aircraft aggregation cells), [`raster`] (native lattice),
+//! [`bounds`] (geographic coverage).
 
+pub mod bounds;
 pub mod cruise;
 pub mod geo;
 pub mod poly;

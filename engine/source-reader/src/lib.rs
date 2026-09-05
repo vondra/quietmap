@@ -95,14 +95,10 @@ impl SquareStore {
     }
 }
 
-/// Make every square in `square_names` resident, loading the missing ones IN
-/// PARALLEL and OUTSIDE the store lock. Cold loads used to run
-/// sequentially (9 squares × ~10 files) under a held write lock — the whole
-/// point of a shared store (all pool workers read one cache since
-/// 2026-07-10) is that one visitor's cold load must neither serialize with
-/// nor block everyone else's warm queries. First insert wins on a race —
-/// the duplicate load is dropped, which is rare and harmless. The requested
-/// set is one cache transaction: a load error fails the query and inserts none.
+/// Load outside the store lock so a cold query does not block warm readers.
+/// CPU-bounded workers also cover arbitrary listing radii without spawning
+/// one OS thread per square. First insert wins on a race; the requested set
+/// is one cache transaction: a load error fails the query and inserts none.
 #[cfg(feature = "node")]
 fn ensure_squares_parallel(square_names: &[String]) -> napi::Result<()> {
     let missing: Vec<String> = {
@@ -121,28 +117,30 @@ fn ensure_squares_parallel(square_names: &[String]) -> napi::Result<()> {
         .expect("square store poisoned")
         .prepared_dir
         .clone();
+    let workers = std::thread::available_parallelism().map_or(1, usize::from);
     let loaded: Result<Vec<(String, SquareData)>, String> = std::thread::scope(|scope| {
         let handles: Vec<_> = missing
-            .iter()
-            .map(|name| {
-                let dir = format!("{prepared_dir}/{}", name_to_rel(name));
+            .chunks(missing.len().div_ceil(workers))
+            .map(|names| {
+                let prepared_dir = &prepared_dir;
                 scope.spawn(move || {
-                    square_store::store::load_square(std::path::Path::new(&dir))
-                        .map_err(|error| format!("failed to load square {name}: {error}"))
+                    names
+                        .iter()
+                        .map(|name| {
+                            let dir = format!("{prepared_dir}/{name}");
+                            square_store::store::load_square(std::path::Path::new(&dir))
+                                .map(|data| (name.clone(), data))
+                                .map_err(|error| format!("failed to load square {name}: {error}"))
+                        })
+                        .collect::<Result<Vec<_>, _>>()
                 })
             })
             .collect();
-        missing
-            .iter()
-            .cloned()
-            .zip(handles)
-            .map(|(name, handle)| {
-                handle
-                    .join()
-                    .expect("square load panicked")
-                    .map(|data| (name, data))
-            })
-            .collect()
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("square load panicked"))
+            .collect::<Result<Vec<_>, _>>()
+            .map(|chunks| chunks.into_iter().flatten().collect())
     });
     let loaded = loaded.map_err(|error| Error::new(Status::GenericFailure, error))?;
     let mut store = STORE.write().expect("square store poisoned");
@@ -154,13 +152,6 @@ fn ensure_squares_parallel(square_names: &[String]) -> napi::Result<()> {
 
 #[cfg(all(test, feature = "node"))]
 mod square_cache_tests;
-
-/// `z9/276/173` → `z9/276/173` (already the relative path under the prepared
-/// year dir). Kept as a function so a naming change lands in one place.
-#[cfg(feature = "node")]
-fn name_to_rel(name: &str) -> &str {
-    name
-}
 
 #[cfg(feature = "node")]
 #[napi]
@@ -228,17 +219,20 @@ pub fn source_validate_reference(prepared_dir: String, square_name: String) -> n
 }
 
 #[cfg(feature = "node")]
-fn reach_square_names(lat: f64, lng: f64) -> Vec<String> {
-    squares_within_reach(lat, lng)
-        .iter()
-        .map(|sq| grid::square_name(*sq))
-        .collect()
+fn source_square_names(squares: Result<Vec<grid::Square>, String>) -> napi::Result<Vec<String>> {
+    squares
+        .map(|squares| squares.into_iter().map(grid::square_name).collect())
+        .map_err(|error| Error::new(Status::InvalidArg, error))
 }
 
 #[cfg(feature = "node")]
 #[napi]
 pub fn query_roads(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String> {
-    let square_names = reach_square_names(lat, lng);
+    let square_names = source_square_names(squares_within_radius(
+        lat,
+        lng,
+        max_radius_m * LINE_MIDPOINT_REACH_FACTOR,
+    ))?;
     ensure_squares_parallel(&square_names)?;
     let store = STORE
         .read()
@@ -263,7 +257,7 @@ pub fn query_roads(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String
 #[cfg(feature = "node")]
 #[napi]
 pub fn query_buildings(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String> {
-    let square_names = reach_square_names(lat, lng);
+    let square_names = source_square_names(squares_within_radius(lat, lng, max_radius_m))?;
     ensure_squares_parallel(&square_names)?;
     let store = STORE
         .read()
@@ -331,7 +325,7 @@ fn building_type_from_envelope(class: noise_compute::envelope::EnvelopeClass) ->
 
 /// Return the vector obstacle containing a point, if any. This is intentionally
 /// a containment-only query: it reuses the exact obstacle set and enclosed
-/// winner selection used by the popup and heatmap, without running noise
+/// winner selection used by the popup, without running noise
 /// collection or propagation.
 #[cfg(feature = "node")]
 #[napi]
@@ -392,7 +386,7 @@ mod building_type_tests {
 #[cfg(feature = "node")]
 #[napi]
 pub fn query_barriers(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String> {
-    let square_names = reach_square_names(lat, lng);
+    let square_names = source_square_names(squares_within_radius(lat, lng, max_radius_m))?;
     ensure_squares_parallel(&square_names)?;
     let store = STORE
         .read()
@@ -423,20 +417,6 @@ pub fn query_barriers(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<Str
     Ok(serde_json::to_string(&all_results).unwrap())
 }
 
-#[cfg(feature = "node")]
-#[napi]
-pub fn reload_hexes(hex_ids: Vec<String>) -> napi::Result<u32> {
-    let mut store = STORE
-        .write()
-        .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
-    let mut n = 0u32;
-    for hex_id in &hex_ids {
-        store.squares.remove(hex_id);
-        n += 1;
-    }
-    Ok(n)
-}
-
 /// Compute full noise at a point using noise-compute engine.
 /// Returns JSON with total Lden, per-source breakdown, top contributors.
 #[cfg(feature = "node")]
@@ -464,7 +444,20 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
     let t_start = std::time::Instant::now();
 
-    let square_names = reach_square_names(lat, lng);
+    let data_dir = DATA_DIR
+        .get()
+        .ok_or_else(|| Error::new(Status::GenericFailure, "source_init was never called"))?;
+    let mut obstacle_set = structure_store::load_obstacle_set(year_dir()?, data_dir, lat, lng)
+        .map_err(|error| Error::new(Status::GenericFailure, error))?;
+    let (facade_lat, facade_lng, inside_envelope) =
+        structure_store::locate_facade_receiver(&obstacle_set, lat, lng);
+    if (facade_lat, facade_lng) != (lat, lng) {
+        obstacle_set =
+            structure_store::load_obstacle_set(year_dir()?, data_dir, facade_lat, facade_lng)
+                .map_err(|error| Error::new(Status::GenericFailure, error))?;
+    }
+
+    let square_names = source_square_names(squares_within_reach(facade_lat, facade_lng))?;
     // Load missing squares in parallel WITHOUT holding the store lock, then
     // collect under a read lock — concurrent popups on other workers keep
     // running against the shared cache during a cold load.
@@ -472,9 +465,16 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     let store = STORE
         .read()
         .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
-    let square_refs: Vec<&square_store::store::SquareData> = square_names
+    let square_refs: Vec<_> = square_names
         .iter()
-        .filter_map(|id| store.squares.get(id.as_str()))
+        .filter_map(|id| {
+            store.squares.get(id.as_str()).map(|data| {
+                (
+                    grid::parse_square_name(id).expect("canonical square name"),
+                    data,
+                )
+            })
+        })
         .collect();
 
     // Resolve airport_summary.arrow path: sibling of the squares tree under
@@ -485,7 +485,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         .join("airport_summary.arrow");
 
     let t_load = t_start.elapsed();
-    let sources = collect_from_square_data(&square_refs, lat, lng)
+    let sources = collect_from_square_data(&square_refs, facade_lat, facade_lng)
         .map_err(|error| Error::new(Status::GenericFailure, error))?;
     let t_collect = t_start.elapsed() - t_load;
     drop(store);
@@ -524,49 +524,6 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     let n_roads = sources.roads.len();
     let n_railways = sources.railways.len();
 
-    // Vector obstacles: the exact building crossings screening runs on, built
-    // per query from the ring obstacle shards. There is no other building
-    // representation, so a store that will not load fails the query.
-    let data_dir = DATA_DIR
-        .get()
-        .ok_or_else(|| Error::new(Status::GenericFailure, "source_init was never called"))?;
-    let obstacle_set = structure_store::load_obstacle_set(year_dir()?, data_dir, lat, lng)
-        .map_err(|e| Error::new(Status::GenericFailure, e))?;
-    // Select the enclosed footprint winner once; it supplies the effective
-    // envelope delta for the aggregate indoor estimate while traces stay at
-    // façade values.
-    let inside_envelope = structure_store::point_inside_enclosed(&obstacle_set, lat, lng);
-    // Search outward in one-metre cardinal steps using the same containment
-    // rule. The ≤100 m shift stays inside the loaded ring, so sources need
-    // no reload.
-    let (facade_lat, facade_lng) = if inside_envelope.is_some() {
-        let step_lat = 1.0 / grid::geo::M_PER_DEG_LAT;
-        let step_lon = 1.0 / grid::geo::m_per_deg_lon(lat.to_radians());
-        let mut outside = None;
-        {
-            let set = &obstacle_set;
-            for distance in 1..=100 {
-                for (dy, dx) in [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)] {
-                    let candidate = (
-                        lat + dy * distance as f64 * step_lat,
-                        lng + dx * distance as f64 * step_lon,
-                    );
-                    if structure_store::point_inside_enclosed(set, candidate.0, candidate.1)
-                        .is_none()
-                    {
-                        outside = Some(candidate);
-                        break;
-                    }
-                }
-                if outside.is_some() {
-                    break;
-                }
-            }
-        }
-        outside.unwrap_or((lat, lng))
-    } else {
-        (lat, lng)
-    };
     // 1.4b: with a loaded store, the receiver reflection probe answers from
     // exact footprints too (the popup twin of the pipeline rx_refl pre-bake)
     // — one wrapped sampler serves EVERY popup kernel.
@@ -641,7 +598,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
             .map(|delta| (winner.stored_class, delta))
     });
     // Inside a building the popup publishes the indoor estimate in every level
-    // row, the same quantity the painted tile stores per layer.
+    // row, derived from the outdoor facade level.
     noise_compute::present::project_result_to_indoor_display(
         &mut result,
         indoor.map(|(_, delta)| delta),

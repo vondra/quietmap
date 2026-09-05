@@ -122,37 +122,9 @@ pub fn scatter(
         BinaryHeap::new()
     };
 
-    // Bbox prefilter at the conservative max-class reach (16 km) —
-    // drops rows whose stored bbox is fully outside the receiver
-    // envelope. Per v15 the row's sub-segments already carry pre-sampled
-    // terrain, so the savings from the prune are now segment-construction
-    // + NPD-lookup cost rather than raster I/O. Must stay at the global
-    // 16 km cap, not per-row noise-class reach: the kernel
-    // (`doc29.rs:359-366`) uses the UNCLAMPED foot of perpendicular for
-    // its slant test, so a row whose endpoints lie just outside a
-    // smaller class envelope can still have an unclamped foot inside
-    // class reach and survive ΔF. Tightening the bbox here would
-    // false-reject those rows.
-    // The per-class gate fires at the per-direction line-distance check
-    // below and inside `segment_sel_with_cuts`. At airport density a
-    // popup touches ~21 k rows (3 k/R4 × 7 R4); the prune drops 60-80 %
-    // of those rows before per-sub-seg work.
-    let radius_lat_deg = aircraft::meters_to_lat_deg(aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M);
-    let radius_lon_deg =
-        aircraft::meters_to_lon_deg(receiver.lat, aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M);
-    let env_min_lat = (receiver.lat - radius_lat_deg) as f32;
-    let env_max_lat = (receiver.lat + radius_lat_deg) as f32;
-    let env_min_lon_raw = receiver.lon - radius_lon_deg;
-    let env_max_lon_raw = receiver.lon + radius_lon_deg;
-    // Antimeridian-safe envelope: if the receiver's reach radius would
-    // wrap past ±180°, fall back to a no-op longitude prune. Stored
-    // bboxes are in [-180, 180]; the simple comparison `bb.max_lon <
-    // env_min_lon` would otherwise drop sources on the other side of
-    // the dateline. Latitude is bounded ±90 so it never
-    // wraps; only longitude gets the guard.
-    let lon_prune_active = env_min_lon_raw >= -180.0 && env_max_lon_raw <= 180.0;
-    let env_min_lon = env_min_lon_raw as f32;
-    let env_max_lon = env_max_lon_raw as f32;
+    // The geographic selection is a periodic 16 km axis envelope, not a
+    // circle or per-class reach: unclamped line CPA can retain corner rows.
+    let envelope = aircraft::AirborneEnvelope::new(receiver.lat, receiver.lon);
 
     // Sub-seg line-distance projection constants — receiver-relative
     // meters factors are computed ONCE outside the loops.
@@ -168,10 +140,12 @@ pub fn scatter(
 
     for row in rows {
         let bb = &row.bbox;
-        if bb.max_lat < env_min_lat || bb.min_lat > env_max_lat {
-            continue;
-        }
-        if lon_prune_active && (bb.max_lon < env_min_lon || bb.min_lon > env_max_lon) {
+        if !envelope.intersects_bbox([
+            f64::from(bb.min_lat),
+            f64::from(bb.min_lon),
+            f64::from(bb.max_lat),
+            f64::from(bb.max_lon),
+        ]) {
             continue;
         }
         // Per-class reach for the per-direction line-distance gate
@@ -191,36 +165,14 @@ pub fn scatter(
         let sub = row.sub_segments;
         let n = sub.len();
         for i in 0..n {
-            // Per-sub-seg prefilter, two layers:
-            // (a) cheap lat/lon endpoint bbox in the 16 km envelope —
-            //     rejects ~90 % of sub-segs whose endpoints sit fully
-            //     outside (~6 ns).
-            // (b) line-distance check on the unclamped extension at
-            //     the per-class per-direction reach — handles the
-            //     borderline case where both endpoints lie just outside
-            //     the bbox but the track points through the receiver.
-            //     Mirrors the kernel's CPA geometry (`doc29.rs:359`) so
-            //     a sub-seg the kernel would accept never gets pruned
-            //     here (~10 ns).
-            //
-            // The full kernel (`segment_sel_with_cuts`) is ~60 ns/sub-
-            // seg, so this two-layer prefilter is a clear net win even
-            // when both checks must run.
+            // Unlike aggregate min/max bounds, these endpoints identify the
+            // short arc used by the kernel and by publication support.
             let s_lat_f = sub.start_lat[i];
             let e_lat_f = sub.end_lat[i];
-            let sub_max_lat = s_lat_f.max(e_lat_f);
-            let sub_min_lat = s_lat_f.min(e_lat_f);
-            if sub_max_lat < env_min_lat || sub_min_lat > env_max_lat {
-                continue;
-            }
             let s_lon_f = sub.start_lon[i];
             let e_lon_f = sub.end_lon[i];
-            if lon_prune_active {
-                let sub_max_lon = s_lon_f.max(e_lon_f);
-                let sub_min_lon = s_lon_f.min(e_lon_f);
-                if sub_max_lon < env_min_lon || sub_min_lon > env_max_lon {
-                    continue;
-                }
+            if !envelope.intersects_segment([s_lat_f, s_lon_f], [e_lat_f, e_lon_f]) {
+                continue;
             }
             // Layer (b): line-distance to receiver, in receiver-local
             // meters. Cross product squared vs `reach² × seg_len²`

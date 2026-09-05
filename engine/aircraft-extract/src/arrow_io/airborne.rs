@@ -72,14 +72,10 @@ pub fn write_airborne(
                 (segment.start_lat, segment.start_lon),
                 (segment.end_lat, segment.end_lon),
             ] {
-                anyhow::ensure!(
-                    lat.is_finite() && lon.is_finite() && (-90.0..=90.0).contains(&lat),
-                    "invalid airborne endpoint"
-                );
-                let (gx, gy) = grid::lonlat_to_grid(f64::from(lon), f64::from(lat));
-                let (lon, lat) = square_store::grid_cols::grid_cell_lonlat(gx, gy);
                 // Reader physics consumes f32; prune against those exact decoded values.
-                let (lat, lon) = (f64::from(lat as f32), f64::from(lon as f32));
+                let [lat, lon] = crate::support::airborne_decoded_endpoint(lat, lon)
+                    .ok_or_else(|| anyhow::anyhow!("invalid airborne endpoint"))?;
+                let (lat, lon) = (f64::from(lat), f64::from(lon));
                 bounds[0] = bounds[0].min(lat);
                 bounds[1] = bounds[1].min(lon);
                 bounds[2] = bounds[2].max(lat);

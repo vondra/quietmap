@@ -2,8 +2,7 @@
 //!
 //! Each query assembles an
 //! [`ObstacleSet`] from per-square [`ObstacleIndex`]es covering the query
-//! square's halo ring — the ring the ingest contract requires
-//! (centroid-assigned footprints; `scripts/structures/build-structures.py`).
+//! source envelope, with centroid-assigned footprints from the structure builder.
 //! One `structures.arrow` per square carries BOTH screening stocks — buildings
 //! (kind 0, polygons) and noise walls (kind 1, polyline microsegments, indexed
 //! as [`ObstacleKind::Barrier`] edges) — and, in its OSM-attributed rows, the
@@ -11,9 +10,9 @@
 //!
 //! Two hard rules:
 //! - **Bounded cost.** Per-square indexes are built ONCE per process and
-//!   LRU-cached (`SQUARE_CACHE_CAP`); a query only Arc-clones ≤9 of them.
+//!   LRU-cached (`SQUARE_CACHE_CAP`); each query Arc-clones the selected indexes.
 //!   The naive per-query rebuild measured 448 MB RSS / 0.47 s per popup.
-//! - **All-or-error.** Any read/parse error, and any ring square of the
+//! - **All-or-error.** Any read/parse error, and any selected square of the
 //!   prepared world whose `structures.arrow` is missing, aborts the whole load.
 //!   A partial index would silently under-screen the path. Emptiness is not a
 //!   gap: a 0-row table is the answer "nothing stands here".
@@ -379,7 +378,7 @@ pub fn load_obstacle_set(
     lon: f64,
 ) -> Result<ObstacleSet, String> {
     let mut indexes = Vec::new();
-    for square in squares_within_reach(lat, lon) {
+    for square in squares_within_reach(lat, lon)? {
         let Some(structures_arrow) = locate_square_structures(prepared_year_dir, square) else {
             // Outside the prepared world: no square directory at all, so it holds
             // no structures for the same reason it holds no roads.
@@ -488,6 +487,39 @@ pub fn point_inside_enclosed(
             effective_class: effective_envelope_class(stored_class, height_m),
             height_m,
         })
+}
+
+/// Preserve clicked enclosure metadata while selecting the point used by every source gate.
+pub fn locate_facade_receiver(
+    obstacle_set: &ObstacleSet,
+    lat: f64,
+    lng: f64,
+) -> (f64, f64, Option<EnclosedEnvelopeWinner>) {
+    let inside_envelope = point_inside_enclosed(obstacle_set, lat, lng);
+    let (facade_lat, facade_lng) = if inside_envelope.is_some() {
+        let step_lat = 1.0 / grid::geo::M_PER_DEG_LAT;
+        let step_lon = 1.0 / grid::geo::m_per_deg_lon(lat.to_radians());
+        let mut outside = None;
+        for distance in 1..=100 {
+            for (dy, dx) in [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)] {
+                let candidate = (
+                    lat + dy * distance as f64 * step_lat,
+                    lng + dx * distance as f64 * step_lon,
+                );
+                if point_inside_enclosed(obstacle_set, candidate.0, candidate.1).is_none() {
+                    outside = Some(candidate);
+                    break;
+                }
+            }
+            if outside.is_some() {
+                break;
+            }
+        }
+        outside.unwrap_or((lat, lng))
+    } else {
+        (lat, lng)
+    };
+    (facade_lat, facade_lng, inside_envelope)
 }
 
 /// Hover-only winner over every visible footprint, including Outdoor-class
@@ -802,9 +834,8 @@ pub struct FootprintView {
     pub capped: bool,
 }
 
-/// Footprints intersecting the bbox (by centroid, padded one bucket) with
-/// as-used heights. Squares resolved exactly like a query: the squares of the
-/// bbox corners/centre plus their rings, deduped.
+/// Footprints within the existing padded-centroid display gate, at as-used heights.
+/// Enumerate every owner in that gate, including the viewport interior.
 ///
 /// This overlay draws what the engine screens with, so it follows the physics
 /// loader's rule rather than a softer one: a square that is provably empty
@@ -819,23 +850,22 @@ pub fn footprints_in_bbox(
     north: f64,
     east: f64,
 ) -> Result<Vec<FootprintView>, String> {
-    let mut squares: Vec<Square> = Vec::new();
-    for (la, lo) in [
-        (south, west),
-        (south, east),
-        (north, west),
-        (north, east),
-        ((south + north) / 2.0, (west + east) / 2.0),
-    ] {
-        for sq in squares_within_reach(la, lo) {
-            if !squares.contains(&sq) {
-                squares.push(sq);
-            }
-        }
-    }
+    let longitude_span = if west > east {
+        east + 360.0 - west
+    } else {
+        east - west
+    };
+    let center_lon = west + longitude_span / 2.0;
     let pad = 0.01;
+    let squares = grid::bounds::BoundedSquares::from_degrees(
+        south - pad,
+        west - pad,
+        north + pad,
+        west + longitude_span + pad,
+    )
+    .ok_or_else(|| "invalid footprint query bounds".to_string())?;
     let mut out = Vec::new();
-    for square in squares {
+    for square in squares.iter() {
         let Some(path) = locate_square_structures(prepared_year_dir, square) else {
             continue; // outside the prepared world — nothing to draw here
         };
@@ -888,8 +918,8 @@ pub fn footprints_in_bbox(
                     square_store::grid_cols::grid_cell_lonlat(cgxs.value(i), cgys.value(i));
                 if clat < south - pad
                     || clat > north + pad
-                    || clon < west - pad
-                    || clon > east + pad
+                    || grid::geo::wrapped_longitude_delta(center_lon, clon).abs()
+                        > longitude_span / 2.0 + pad
                 {
                     continue;
                 }
@@ -1045,7 +1075,7 @@ mod tests {
         );
 
         let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let set = load_obstacle_set(tmp.path(), tmp.path(), 0.0, 179.8).unwrap();
+        let set = load_obstacle_set(tmp.path(), tmp.path(), 0.0, 179.9).unwrap();
         assert_eq!(set.edge_count(), 1);
         let view = set
             .indexes
@@ -1099,6 +1129,54 @@ mod tests {
         assert_eq!(fps[0].outer.len(), 5);
         assert!((fps[0].outer[0].0 - LAT).abs() < 0.0001);
         assert!((fps[0].outer[0].1 - LON).abs() < 0.0001);
+    }
+
+    #[test]
+    fn viewport_interior_footprints_are_not_limited_to_corner_and_center_owners() {
+        let tmp = TempDir::new().unwrap();
+        let mut row = house_row();
+        row.ring_lonlat = Some(fx::square_ring_lonlat(2.0, 5.0));
+        row.centroid_lonlat = Some((5.0001, 2.0001));
+        fx::write_square_structures(tmp.path(), grid::square_of(2.0001, 5.0001), &[row]);
+        let footprints = footprints_in_bbox(tmp.path(), 0.0, 0.0, 10.0, 10.0).unwrap();
+        assert_eq!(footprints.len(), 1);
+        assert_eq!(footprints[0].height_m, 12.0);
+        assert!(footprints_in_bbox(tmp.path(), 0.0, 0.0, 1.0, 1.0)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn dateline_footprint_survives_both_overlay_tile_queries() {
+        for centroid_lon in [-179.9998, 179.9998] {
+            let tmp = TempDir::new().unwrap();
+            let mut row = house_row();
+            row.centroid_lonlat = Some((centroid_lon, 10.0005));
+            row.ring_lonlat = Some(vec![
+                (179.999, 10.0),
+                (-179.999, 10.0),
+                (-179.999, 10.001),
+                (179.999, 10.001),
+                (179.999, 10.0),
+            ]);
+            fx::write_square_structures(tmp.path(), grid::square_of(10.0005, centroid_lon), &[row]);
+            for (west, east) in [(179.99, 180.0), (-180.0, -179.99), (179.99, -179.99)] {
+                let footprints = footprints_in_bbox(tmp.path(), 9.99, west, 10.01, east).unwrap();
+                assert_eq!(
+                    footprints.len(),
+                    1,
+                    "centroid {centroid_lon}, bbox {west}..{east}"
+                );
+                assert_eq!(footprints[0].height_m, 12.0);
+                assert_eq!(footprints[0].outer.len(), 5);
+            }
+            assert!(
+                footprints_in_bbox(tmp.path(), 9.99, 179.96, 10.01, 179.97)
+                    .unwrap()
+                    .is_empty(),
+                "longitude padding must remain bounded"
+            );
+        }
     }
 
     #[test]

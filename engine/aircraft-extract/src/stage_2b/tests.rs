@@ -2,7 +2,7 @@
 use super::*;
 use crate::geo::flat_dist;
 
-fn cruise(flight_id: u64, lat0: f32, lon0: f32, lat1: f32, lon1: f32) -> FlightSegment {
+pub(super) fn cruise(flight_id: u64, lat0: f32, lon0: f32, lat1: f32, lon1: f32) -> FlightSegment {
     FlightSegment {
         callsign: String::new(),
         aircraft_type: [0u8; 4],
@@ -37,7 +37,7 @@ fn flight_id_dedup_per_cruise_bucket() {
     let seg = cruise(42, 50.10, 14.20, 50.10, 14.205);
     let mut by_square = HashMap::new();
     let luts = NpdLuts::shared();
-    process_segment(&seg, &mut by_square, None, luts);
+    process_segment(&seg, &mut by_square, luts);
     for buckets in by_square.values() {
         for accum in buckets.values() {
             assert_eq!(accum.fid_set.len(), 1);
@@ -55,7 +55,7 @@ fn top_k_caps_at_50_while_unique_count_tracks_full() {
     for i in 0..60u64 {
         // Same z15 cell, all distinct flight_ids → 60 fids in one bucket.
         let seg = cruise(i + 1, 50.10, 14.20, 50.10, 14.205);
-        process_segment(&seg, &mut by_square, None, luts);
+        process_segment(&seg, &mut by_square, luts);
     }
     // Take the largest bucket (the one with all 60 fids landing in
     // the same z15 cell).
@@ -96,15 +96,15 @@ fn merge_matches_sequential() {
     let luts = NpdLuts::shared();
     let mut seq: HashMap<u64, HashMap<CruiseKey, CruiseAccum>> = HashMap::new();
     for s in &segs {
-        process_segment(s, &mut seq, None, luts);
+        process_segment(s, &mut seq, luts);
     }
 
     let mut shard_a: HashMap<u64, HashMap<CruiseKey, CruiseAccum>> = HashMap::new();
     let mut shard_b: HashMap<u64, HashMap<CruiseKey, CruiseAccum>> = HashMap::new();
-    process_segment(&segs[0], &mut shard_a, None, luts);
-    process_segment(&segs[1], &mut shard_a, None, luts);
-    process_segment(&segs[2], &mut shard_b, None, luts);
-    process_segment(&segs[3], &mut shard_b, None, luts);
+    process_segment(&segs[0], &mut shard_a, luts);
+    process_segment(&segs[1], &mut shard_a, luts);
+    process_segment(&segs[2], &mut shard_b, luts);
+    process_segment(&segs[3], &mut shard_b, luts);
     let par = merge_by_square(shard_a, shard_b);
 
     // Same z9 cells produced; iterate in sorted-by-key order so
@@ -142,9 +142,7 @@ fn merge_matches_sequential() {
     }
 }
 
-/// Full `run_stage_2b` against a temp prepared_year_dir: 8 cruise segments
-/// distributed across one z9, expect a single cruise.arrow written
-/// and the spill scratch dir cleaned up.
+/// Finalized cruise rows reach their supported destinations and leave no spill scratch.
 #[test]
 fn run_stage_2b_spill_and_merge_one_square() {
     use crate::arrow_io::write_segments;
@@ -239,8 +237,8 @@ fn merge_dedup_same_flight_id_across_shards() {
     let mut shard_a: HashMap<u64, HashMap<CruiseKey, CruiseAccum>> = HashMap::new();
     let mut shard_b: HashMap<u64, HashMap<CruiseKey, CruiseAccum>> = HashMap::new();
     let luts = NpdLuts::shared();
-    process_segment(&s1, &mut shard_a, None, luts);
-    process_segment(&s2, &mut shard_b, None, luts);
+    process_segment(&s1, &mut shard_a, luts);
+    process_segment(&s2, &mut shard_b, luts);
     let merged = merge_by_square(shard_a, shard_b);
     for inner in merged.values() {
         for accum in inner.values() {

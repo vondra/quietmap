@@ -5,6 +5,26 @@ current screening contract; it is not a claim of full CNOSSOS-EU compliance.
 The implementation and regressions live in `src/propagation/path_effects.rs`,
 `diffraction.rs` and `arc_screening.rs`.
 
+## Receiver and prepared-source selection
+
+Inside an enclosed building, retain the clicked footprint's envelope class and
+clicked coordinates for presentation. The existing cardinal search, one-metre
+steps up to 100 metres, selects the facade receiver before any source gate.
+Reload obstacle indexes at that receiver, and use its position and elevation
+for source selection and propagation. Project the facade result to the indoor
+estimate only after computation. If that search finds no exterior point, retain
+the clicked position as before.
+
+Prepared airborne observations are copied once to each supported receiver cell;
+aircraft copies from neighboring cells are never added again. Equal original
+observations retain their multiplicity. Cruise aggregates canonical cells once,
+then copies complete final rows to their representative-length support cells.
+Ground sources retain their spatial owners. Surface owner selection enumerates
+the existing midpoint-gate envelope, including wrapped longitude and high
+latitudes; listing requests use their own radius with unchanged per-row gates.
+Present aircraft schemas must carry a positive sampling-window stamp, including
+empty files; selected rows cannot redefine the observation window.
+
 ## Aircraft local geometry
 
 Doc 29 keeps its receiver-latitude scale and infinite-line CPA. Both the
@@ -14,6 +34,15 @@ stretch a short segment beside the receiver's opposite meridian. Popup pruning,
 CPA, reach gates and prepared-row kernels share this convention. Terrain-horizon
 samples use the same canonical longitude interval. Moving a flight and its ridge
 across ±180° must preserve the received SEL, screening and displayed CPA.
+
+Airborne selection uses the periodic 16 km axis envelope, with the same f32
+receiver-bound rounding at batch, row and segment gates. A raw aggregate bbox
+at least 180° wide cannot identify its contained short arcs, so it retains the
+latitude gate but defers longitude pruning to individual segments. Publication
+support encloses those decoded segment arcs and the receiver rounding bins;
+it does not copy every flight to the dateline. This corrects the former seam
+selection bypass and false negatives; it is not universal output parity with
+that bypass. Cruise retains its separate representative-length centroid gate.
 
 ## 4.7 Vector screening
 
