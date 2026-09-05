@@ -8,9 +8,11 @@ use std::path::PathBuf;
 pub fn run_subcmd_shuffle(
     segments_dir: Vec<PathBuf>,
     ga_segments_dir: Vec<PathBuf>,
+    ga_adsb_cache: Option<PathBuf>,
     out_dir: PathBuf,
     scope_bbox: Option<String>,
 ) -> Result<()> {
+    crate::source_cache::validate_ga_merge(&ga_segments_dir, ga_adsb_cache.as_deref())?;
     let scope = parse_scope(scope_bbox.as_deref())?;
     let day_paths = list_segments_day_paths_multi(&segments_dir)?;
     let ga_day_paths = list_segments_day_paths_multi(&ga_segments_dir)?;

@@ -18,16 +18,22 @@ mod cli_runners;
 #[path = "aircraft_extract/cli_validate.rs"]
 mod cli_validate;
 
+#[path = "aircraft_extract/source_cache.rs"]
+mod source_cache;
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     init_rayon_pool(cli.max_threads)?;
     match cli.cmd {
         Cmd::ValidateSegments {
+            adsb_cache,
             segments_dir,
             days,
             class_filter,
             feed,
-        } => cli_validate::validate_segments(&segments_dir, &days, class_filter, feed)?,
+        } => {
+            cli_validate::validate_segments(&segments_dir, &days, class_filter, feed, &adsb_cache)?
+        }
         Cmd::Audit {
             prepared_year_dir,
             segments_by_square,
@@ -35,9 +41,16 @@ fn main() -> Result<()> {
         Cmd::Shuffle {
             segments_dir,
             ga_segments_dir,
+            ga_adsb_cache,
             out_dir,
             scope_bbox,
-        } => cli_runners::run_subcmd_shuffle(segments_dir, ga_segments_dir, out_dir, scope_bbox)?,
+        } => cli_runners::run_subcmd_shuffle(
+            segments_dir,
+            ga_segments_dir,
+            ga_adsb_cache,
+            out_dir,
+            scope_bbox,
+        )?,
         Cmd::RunAll {
             adsb_cache,
             prepared_year_dir,
@@ -50,6 +63,7 @@ fn main() -> Result<()> {
             feed,
             class_filter,
             ga_segments_dir,
+            ga_adsb_cache,
             fail_on_ga_cruise,
         } => cli_run_all::run_all(
             adsb_cache,
@@ -63,6 +77,7 @@ fn main() -> Result<()> {
             feed,
             class_filter,
             ga_segments_dir,
+            ga_adsb_cache,
             fail_on_ga_cruise,
         )?,
     }

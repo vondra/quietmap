@@ -8,16 +8,17 @@
 //! <root>/<year>/<day>/subset.tar.ab
 //! ```
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
 use crate::filters;
-use crate::flight::{origin, source_id, Flight};
+use crate::flight::{Flight, origin, source_id};
 use crate::profile;
 use crate::segment::split_flights;
 use crate::source::FlightSource;
-use crate::trace::{read_day_traces, read_day_traces_filtered, AircraftTrace, TracePoint};
+use crate::trace::{AircraftTrace, TracePoint, read_day_traces, read_day_traces_filtered};
 
 /// Stage-0 class-window routing for the hybrid GA/airline sampling. The GA
 /// pass observes only full-year-sampled classes (PROP_C172 + HELICOPTER);
@@ -66,6 +67,7 @@ impl ClassWindowFilter {
 
 pub struct AdsbTarSource {
     root: PathBuf,
+    selected_archives: Option<BTreeMap<String, Vec<PathBuf>>>,
     source_id: u8,
     class_filter: ClassWindowFilter,
 }
@@ -74,9 +76,36 @@ impl AdsbTarSource {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
+            selected_archives: None,
             source_id: source_id::ADSB_LOL_TAR,
             class_filter: ClassWindowFilter::All,
         }
+    }
+
+    /// Use the publisher-validated paths while retaining the native archive selector.
+    pub fn with_selected_archives(mut self, paths: BTreeMap<String, Vec<PathBuf>>) -> Self {
+        self.selected_archives = Some(paths);
+        self
+    }
+
+    fn selected_day_dir(&self, day: &str) -> Result<PathBuf> {
+        let Some(selected) = &self.selected_archives else {
+            return Ok(self.day_dir(day));
+        };
+        let paths = selected
+            .get(day)
+            .context("day absent from selected source inputs")?;
+        let dir = paths
+            .first()
+            .and_then(|p| p.parent())
+            .context("empty selected source day")?;
+        let expected: BTreeSet<_> = paths.iter().cloned().collect();
+        let actual: BTreeSet<_> = crate::trace::archive_parts(dir)?.into_iter().collect();
+        anyhow::ensure!(
+            expected.len() == paths.len() && expected == actual,
+            "{day}: native archive set differs from publisher-selected inputs"
+        );
+        Ok(dir.to_path_buf())
     }
 
     /// Tag the provenance `source_id` (default [`source_id::ADSB_LOL_TAR`]).
@@ -133,7 +162,7 @@ impl FlightSource for AdsbTarSource {
 
     fn read_day(&self, day_str: &str) -> Result<Vec<Flight>> {
         crate::period::parse_date_id(day_str)?;
-        let dir = self.day_dir(day_str);
+        let dir = self.selected_day_dir(day_str)?;
         anyhow::ensure!(
             dir.is_dir(),
             "missing ADS-B day {day_str}: {}",

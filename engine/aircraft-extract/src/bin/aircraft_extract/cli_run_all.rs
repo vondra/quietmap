@@ -1,11 +1,11 @@
 //! Ordered aircraft orchestration refuses partial day sets before downstream publication.
 
 use crate::{
-    cli_days::compute_ok_paths, cli_validate::*, from_stage_name, ClassFilterArg, Feed, FromStage,
+    ClassFilterArg, Feed, FromStage, cli_days::compute_ok_paths, cli_validate::*, from_stage_name,
 };
 use aircraft_extract::{
     airport_index::AerodromeIndex,
-    airport_io::{read_global_airport_lines, read_global_airports, AirportLineRow},
+    airport_io::{AirportLineRow, read_global_airport_lines, read_global_airports},
     progress::ts,
     stage_2a::run_stage_2a,
     stage_2b::run_stage_2b,
@@ -30,8 +30,13 @@ pub fn run_all(
     feed: Feed,
     class_filter: ClassFilterArg,
     ga_segments_dir: Option<PathBuf>,
+    ga_adsb_cache: Option<PathBuf>,
     fail_on_ga_cruise: bool,
 ) -> Result<()> {
+    crate::source_cache::validate_ga_merge(
+        &ga_segments_dir.iter().cloned().collect::<Vec<_>>(),
+        ga_adsb_cache.as_deref(),
+    )?;
     let scope = parse_scope(scope_bbox.as_deref())?;
     require_scope_for_subset_cache(&adsb_cache, scope.as_ref())?;
     if until_stage < from_stage {
@@ -49,8 +54,18 @@ pub fn run_all(
         );
     }
     if from_stage == FromStage::Stage0 {
-        bail_on_populated_work_dir(&work_dir)?;
+        let cache = matches!(feed, Feed::Adsblol)
+            .then(|| crate::source_cache::SourceCache::new(&adsb_cache, &work_dir, class_filter));
+        validate_fresh_stage0_work(&work_dir, &days, until_stage, cache.as_ref())?;
     }
+    let days = if matches!(feed, Feed::Adsblol) {
+        crate::source_cache::SourceCache::new(&adsb_cache, &work_dir, class_filter)
+            .validate(Some(&days), None)?
+            .into_keys()
+            .collect()
+    } else {
+        days
+    };
     if let Some(s) = scope.as_ref() {
         eprintln!(
             "{} [run-all] scope bbox: lat {}..{}, lon {}..{}",
@@ -86,6 +101,12 @@ pub fn run_all(
     let flights_dir = work_dir.join("flights");
     let segments_dir = work_dir.join("segments");
     let by_square_dir = work_dir.join("segments_by_square");
+    if from_stage > FromStage::Shuffle && !read_window_days(&by_square_dir, "ga_days")?.is_empty() {
+        anyhow::ensure!(
+            ga_adsb_cache.is_some(),
+            "hybrid stage reuse requires --ga-adsb-cache and --ga-segments-dir"
+        );
+    }
 
     let ga_day_paths: Vec<PathBuf> = match &ga_segments_dir {
         None => Vec::new(),

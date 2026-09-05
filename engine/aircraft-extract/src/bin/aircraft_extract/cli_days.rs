@@ -1,6 +1,6 @@
 //! RAM-bounded day extraction preserves successful work but fails if any requested day is missing.
 
-use crate::{cli_validate::*, ClassFilterArg, Feed, FromStage};
+use crate::{ClassFilterArg, Feed, FromStage, cli_validate::*};
 use aircraft_extract::memory::max_concurrent_days;
 use aircraft_extract::{
     progress::ts, source::FlightSource, source_adsb_tar::AdsbTarSource, stage_0::run_stage_0,
@@ -26,6 +26,16 @@ pub fn compute_ok_paths(
     class_filter: ClassFilterArg,
     runs: &impl Fn(FromStage) -> bool,
 ) -> Result<Vec<PathBuf>> {
+    let source_cache = matches!(feed, Feed::Adsblol)
+        .then(|| crate::source_cache::SourceCache::new(adsb_cache, work_dir, class_filter));
+    if let Some(cache) = &source_cache {
+        let stage = match from_stage {
+            FromStage::Stage0 => None,
+            FromStage::Stage1 => Some("flights"),
+            _ => Some("segments"),
+        };
+        cache.validate(Some(days), stage)?;
+    }
     let needs_ok_paths = runs(FromStage::Shuffle) || runs(FromStage::Stage2b);
     let ok_paths: Vec<PathBuf> = if from_stage <= FromStage::Stage1 {
         std::fs::create_dir_all(flights_dir)?;
@@ -57,6 +67,7 @@ pub fn compute_ok_paths(
                     match run_day(
                         day,
                         &sources,
+                        source_cache.as_ref(),
                         flights_dir,
                         segments_dir,
                         rasters,
@@ -94,7 +105,7 @@ pub fn compute_ok_paths(
         ok_paths
     } else if needs_ok_paths {
         require_input_dir_exists("--work-dir/segments (--from-stage)", segments_dir)?;
-        validate_segments(segments_dir, days, class_filter, feed)?;
+        validate_segments(segments_dir, days, class_filter, feed, adsb_cache)?;
         let paths = list_segments_day_paths(segments_dir)?;
         eprintln!(
             "{} [run-all] reusing {} segment shard(s) from {}",
@@ -112,6 +123,7 @@ pub fn compute_ok_paths(
 fn run_day(
     day: &str,
     sources: &[Box<dyn FlightSource>],
+    source_cache: Option<&crate::source_cache::SourceCache>,
     flights_dir: &Path,
     segments_dir: &Path,
     rasters: &RealRasters,
@@ -120,7 +132,21 @@ fn run_day(
 ) -> Result<()> {
     let t0 = Instant::now();
     let stage0_log = if from_stage <= FromStage::Stage0 {
+        let selected;
+        let sources = if let Some(cache) = source_cache {
+            selected = vec![Box::new(
+                AdsbTarSource::new("")
+                    .with_class_filter(cache.class_filter())
+                    .with_selected_archives(cache.begin(day, "flights")?),
+            ) as Box<dyn FlightSource>];
+            &selected
+        } else {
+            sources
+        };
         let n0 = run_stage_0(sources, day, flights_dir)?;
+        if let Some(cache) = source_cache {
+            cache.complete(day, "flights")?;
+        }
         format!("stage0={n0} ({:?})", t0.elapsed())
     } else {
         "stage0=skipped".to_string()
@@ -133,7 +159,13 @@ fn run_day(
         return Ok(());
     }
     let t_stage1 = Instant::now();
+    if let Some(cache) = source_cache {
+        cache.begin(day, "segments")?;
+    }
     let n1 = run_stage_1(flights_dir, segments_dir, day, rasters)?;
+    if let Some(cache) = source_cache {
+        cache.complete(day, "segments")?;
+    }
     eprintln!(
         "{} [run-all] {day}: {stage0_log} stage1={n1} ({:?})",
         ts(),
@@ -157,7 +189,7 @@ mod tests {
             callsign: "TEST".into(),
             aircraft_type: *b"B738",
             profile_idx: aircraft_extract::profile::profile_idx("B738"),
-            source_id: Feed::Adsblol.source_id(),
+            source_id: Feed::Adsbexchange.source_id(),
             origin: 0,
             veh_kind: 0,
             gse_class: 0,
@@ -183,8 +215,8 @@ mod tests {
         )
         .unwrap();
         for (feed, class, accepted) in [
-            (Feed::Adsblol, ClassFilterArg::NonGa, true),
-            (Feed::Adsbexchange, ClassFilterArg::NonGa, false),
+            (Feed::Adsbexchange, ClassFilterArg::NonGa, true),
+            (Feed::Adsblol, ClassFilterArg::NonGa, false),
             (Feed::Adsblol, ClassFilterArg::Ga, false),
         ] {
             let result = compute_ok_paths(

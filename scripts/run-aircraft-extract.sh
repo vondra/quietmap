@@ -3,11 +3,11 @@
 # Required: PREPARED_YEAR_DIR (the year directory), PREPARED_DIR (root containing rasters/),
 # ADSB_CACHE and optional DAYS (comma-separated YYYY-MM-DD; defaults to cache days).
 # HYBRID=1 selects the latest 12 completed first-of-month airline samples and
-# 365 GA days ending at the same monthly anchor. AIRCRAFT_ANCHOR=YYYY-MM pins a
+# complete GA source days within the 365-day calendar ending at that anchor. AIRCRAFT_ANCHOR=YYYY-MM pins a
 # historical run; otherwise the latest completed monthly sample is used.
 # AIRLINE_CACHE contains non-GA inputs (including GSE); GA_CACHE contains
 # adsb.lol inputs for piston GA and helicopters. Archive size never sets a window.
-# Existing passes are reused only after exact day, schema, class and feed checks.
+# Existing passes require exact typed days and publisher-bound GA completion receipts.
 # --from-stage controls the single pass or hybrid merge stage; successful
 # upstream work stays available after failure. MEMMAX= explicitly disables
 # the default 100G cgroup cap when the host does not offer user systemd.
@@ -87,6 +87,12 @@ case "$FEED" in
     adsblol|adsbexchange) ;;
     *)            die "unknown --feed: $FEED (adsblol|adsbexchange)" ;;
 esac
+selected_ga_days() {
+    local cache="$1"
+    shift
+    python3 "$SCRIPT_DIR/download-adsblol.py" validate --source-root "$cache" "$@" \
+        | python3 -c 'import sys; fields=sys.stdin.buffer.read().split(b"\0"); print(",".join(sorted({s.decode() for s in fields[:-1:2]})))'
+}
 if [ -n "$HYBRID" ]; then
     [ -n "$AIRLINE_CACHE" ] || die "HYBRID=1 requires AIRLINE_CACHE= with an explicit cache directory"
     [ -n "$GA_CACHE" ] || die "HYBRID=1 requires GA_CACHE= with an explicit cache directory"
@@ -98,6 +104,8 @@ if [ -n "$HYBRID" ]; then
         || die "invalid aircraft sampling window"
     AIRLINE_DAYS="${WINDOW_CSV%%$'\n'*}"
     GA_DAYS="${WINDOW_CSV#*$'\n'}"
+    GA_DAYS="$(selected_ga_days "$GA_CACHE" --days "$GA_DAYS")" \
+        || die "GA selected full-source assets are incomplete; requested 365-day calendar retained"
 else
     [ -n "$ADSB_CACHE" ] || die "requires ADSB_CACHE= with an explicit cache directory"
 fi
@@ -105,6 +113,10 @@ fi
 derive_days() {
     local cache="$1"
     [ -d "$cache" ] || die "$cache not found and no day list provided"
+    if [ "$FEED" = adsblol ]; then
+        selected_ga_days "$cache"
+        return
+    fi
     find "$cache" -mindepth 1 -maxdepth 4 \( -name '*.tar' -o -name '*.tar.aa' \) -printf '%h\n' \
         | awk -F/ '{print $NF}' \
         | sed -E 's/^v([0-9]{4})\.([0-9]{2})\.([0-9]{2})-planes-readsb-prod-0(tmp)?$/\1-\2-\3/' \
@@ -161,7 +173,7 @@ if [ -n "$HYBRID" ]; then
         local label="$1" feed="$2" cache="$3" days="$4" filter="$5" wd="$6"
         if [ -d "$wd/segments" ] && [ -n "$(find "$wd/segments" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
             "$BIN" validate-segments --segments-dir "$wd/segments" --days "$days" \
-                --class-filter "$filter" --feed "$feed" \
+                --class-filter "$filter" --feed "$feed" --adsb-cache "$cache" \
                 2>&1 | stdbuf -oL -eL tee -a "$LOG_FILE"
             log "pass $label: complete typed day set verified — reusing $wd/segments"
             return 0
@@ -184,7 +196,7 @@ if [ -n "$HYBRID" ]; then
     run_pass J "$AIRLINE_FEED" "$AIRLINE_CACHE" "$AIRLINE_DAYS" non-ga "$W_AIR"
     run_pass G adsblol "$GA_CACHE" "$GA_DAYS" ga "$W_GA"
 
-    MERGE_ARGS=(--from-stage "${FROM_STAGE:-shuffle}" --ga-segments-dir "$W_GA/segments")
+    MERGE_ARGS=(--from-stage "${FROM_STAGE:-shuffle}" --ga-segments-dir "$W_GA/segments" --ga-adsb-cache "$GA_CACHE" --class-filter non-ga)
     [ -n "$FAIL_ON_GA_CRUISE" ] && MERGE_ARGS+=(--fail-on-ga-cruise)
     log "merge: airline work-dir $W_AIR + GA segments $W_GA/segments (from-stage ${FROM_STAGE:-shuffle})"
     "${GUARD[@]}" "$BIN" run-all \

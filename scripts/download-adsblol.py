@@ -13,6 +13,7 @@ import re
 import shutil
 import sqlite3
 import stat
+import sys
 import tempfile
 import time
 import urllib.request
@@ -50,7 +51,8 @@ def response(database, url):
     return body
 
 
-def preferred_releases(database, days):
+def preferred_releases(database, days, preserved_response=None):
+    fetch = preserved_response if preserved_response is not None else lambda url: response(database, url)
     preferred, releases = {}, {}
     published = {}
     years = sorted({day.year for day in days})
@@ -59,8 +61,8 @@ def preferred_releases(database, days):
     for year in range(years[0], years[-1] + 2):
         if year > years[-1] and all(day.isoformat() in preferred for day in days):
             break
-        commit = json.loads(response(database, f'{API}{year}/commits/main'))
-        lines = response(database, f'{RAW}{year}/{commit["sha"]}/PREFERRED_RELEASES.txt').decode()
+        commit = json.loads(fetch(f'{API}{year}/commits/main'))
+        lines = fetch(f'{RAW}{year}/{commit["sha"]}/PREFERRED_RELEASES.txt').decode()
         for line in lines.splitlines():
             urls = line.split(',')
             match = re.search(r'/v(\d{4}\.\d{2}\.\d{2})-', urls[0])
@@ -73,7 +75,7 @@ def preferred_releases(database, days):
                 preferred[day.isoformat()] = urls
         page = 1
         while True:
-            batch = json.loads(response(database, f'{API}{year}/releases?per_page=100&page={page}'))
+            batch = json.loads(fetch(f'{API}{year}/releases?per_page=100&page={page}'))
             if not batch:
                 break
             for release in batch:
@@ -216,6 +218,129 @@ def acquire(asset, output, reserve_bytes):
     raise RuntimeError('unreachable download retry state')
 
 
+def validate_selected_sources(root, requested):
+    """Resolve only requested days against preserved publisher authority; never fetch or write."""
+    database = sqlite3.connect(f'{(root / "catalog.sqlite").resolve().as_uri()}?mode=ro', uri=True)
+    database.execute('PRAGMA query_only=ON')
+    try:
+        days = tuple(date.fromisoformat(row[0]) for row in database.execute('SELECT day FROM window ORDER BY day'))
+        if not days or not requested or not requested <= {day.isoformat() for day in days}:
+            raise ValueError('requested days are empty or outside the selected source catalog')
+        # A read-only connection alone would still allow a network request before
+        # response() tried to INSERT. A missing pinned response must fail first.
+        def preserved_response(url):
+            row = database.execute('SELECT body FROM responses WHERE url=?', (url,)).fetchone()
+            if row is None:
+                raise ValueError(f'missing preserved publisher response: {url}')
+            return row[0]
+        preferred, releases = preferred_releases(database, set(days), preserved_response)
+        assets = sorted(asset for day, urls in preferred.items() for asset in release_assets(day, urls, releases))
+        if assets != database.execute('SELECT day,name,url,size,sha256,tag FROM assets ORDER BY day,name').fetchall():
+            raise ValueError('catalog asset rows differ from preserved official responses')
+        selected = [asset for asset in assets if asset[0] in requested]
+        insufficient = sorted({a[0] for a in selected if 'mlatonly' in a[5]})
+        selected = [asset for asset in selected if 'mlatonly' not in asset[5]]
+        if not selected:
+            raise ValueError(f'no complete source days; omitted MLAT-only dates: {insufficient}')
+        resolved = []
+        for asset in selected:
+            path = verified_asset(database, asset)
+            if path is None:
+                raise ValueError(f'missing publisher-verified selected asset: {asset[0]} {asset[1]}')
+            resolved.append((asset, path, identity(Path(path))))
+        if insufficient:
+            print(f'GA source coverage: calendar_dates={len(requested)} sampled_days={len({asset[0] for asset in selected})} omitted_mlatonly_days={insufficient}', file=sys.stderr)
+        return resolved
+    finally:
+        database.close()
+
+
+def source_receipt(work, selected, stage, class_filter, action):
+    """A successful native write anchors output stats to the selected publisher assets."""
+    path = work / 'source-receipts.sqlite'
+    record = action == 'complete'
+    if action != 'check':
+        database = sqlite3.connect(path)
+        database.execute('CREATE TABLE IF NOT EXISTS sources (day, name, url, size, sha256, tag, source_id, class_filter, PRIMARY KEY(day,name))')
+        database.execute('CREATE TABLE IF NOT EXISTS pending (day, stage, inputs, PRIMARY KEY(day,stage))')
+        database.execute('CREATE TABLE IF NOT EXISTS artifacts (day, stage, path, dev, ino, size, mtime_ns, ctime_ns, PRIMARY KEY(day,stage))')
+    else:
+        database = sqlite3.connect(f'{path.resolve().as_uri()}?mode=ro', uri=True)
+    grouped = {}
+    for asset, _, _ in selected:
+        grouped.setdefault(asset[0], []).append((*asset, 0, class_filter))
+    try:
+        with database:
+            for day, expected in grouped.items():
+                stored = database.execute('SELECT * FROM sources WHERE day=? ORDER BY name', (day,)).fetchall()
+                if action == 'check' or stage == 'segments':
+                    if stored != expected:
+                        raise ValueError(f'{day}: selected source/feed/class differs from completed Stage0 receipt')
+                stages = ['flights', 'segments'] if stage == 'segments' and action == 'check' else ['flights']
+                if action == 'check' or stage == 'segments':
+                    for prerequisite in stages:
+                        artifact = work / prerequisite / f'{day}.arrow'
+                        actual = (day, prerequisite, str(artifact.resolve()), *identity(artifact))
+                        receipt = database.execute('SELECT * FROM artifacts WHERE day=? AND stage=?', (day, prerequisite)).fetchone()
+                        if receipt != actual:
+                            raise ValueError(f'{day}: missing or changed completed {prerequisite} receipt')
+                inputs = repr([(asset, source, before) for asset, source, before in selected if asset[0] == day])
+                if stage == 'segments':
+                    inputs += repr(identity(work / 'flights' / f'{day}.arrow'))
+                if action == 'begin':
+                    database.execute('INSERT OR REPLACE INTO pending VALUES (?,?,?)', (day, stage, inputs))
+                if record:
+                    pending = database.execute('SELECT inputs FROM pending WHERE day=? AND stage=?', (day, stage)).fetchone()
+                    if pending != (inputs,):
+                        raise ValueError(f'{day}: source or parent changed since {stage} began')
+                    artifact = work / stage / f'{day}.arrow'
+                    actual = (day, stage, str(artifact.resolve()), *identity(artifact))
+                    if stage == 'flights':
+                        database.execute('DELETE FROM sources WHERE day=?', (day,))
+                        database.execute('DELETE FROM artifacts WHERE day=?', (day,))
+                        database.executemany('INSERT INTO sources VALUES (?,?,?,?,?,?,?,?)', expected)
+                    database.execute('INSERT OR REPLACE INTO artifacts VALUES (?,?,?,?,?,?,?,?)', actual)
+                    database.execute('DELETE FROM pending WHERE day=? AND stage=?', (day, stage))
+            for _, source, before in selected:
+                if identity(Path(source)) != before:
+                    raise ValueError(f'selected source changed during validation: {source}')
+    finally:
+        database.close()
+
+
+def validate_main(arguments):
+    parser = argparse.ArgumentParser(description='Validate selected GA source identity without acquisition')
+    parser.add_argument('--source-root', type=Path, required=True)
+    parser.add_argument('--days', help='Requested dates; absent means the complete catalog calendar')
+    parser.add_argument('--work-dir', type=Path)
+    parser.add_argument('--stage', choices=['flights', 'segments'])
+    parser.add_argument('--class-filter', choices=['all', 'ga', 'non-ga'], default='ga')
+    parser.add_argument('--action', choices=['check', 'begin', 'complete'], default='check')
+    args = parser.parse_args(arguments)
+    if bool(args.work_dir) != bool(args.stage) or (args.action != 'check' and not args.stage):
+        parser.error('work directory and stage are required together for a completion receipt')
+    try:
+        if args.days is None:
+            with sqlite3.connect(f'{(args.source_root / "catalog.sqlite").resolve().as_uri()}?mode=ro', uri=True) as database:
+                requested = {row[0] for row in database.execute('SELECT day FROM window')}
+        else:
+            raw_days = args.days.split(',')
+            requested = {date.fromisoformat(day).isoformat() for day in raw_days}
+            if len(requested) != len(raw_days):
+                raise ValueError('duplicate requested source days')
+        selected = validate_selected_sources(args.source_root, requested)
+        if args.stage:
+            if {asset[0] for asset, _, _ in selected} != requested:
+                raise ValueError('work receipts require only selected complete-source days')
+            source_receipt(args.work_dir, selected, args.stage, args.class_filter, args.action)
+        # NUL-separated paths are transport for the native archive selector,
+        # not another source manifest or a replacement for the SQLite authority.
+        for asset, path, _ in selected:
+            sys.stdout.buffer.write(asset[0].encode() + b'\0' + os.fsencode(path) + b'\0')
+    except (OSError, ValueError, sqlite3.Error, KeyError) as error:
+        parser.exit(1, f'selected source/cache validation failed: {error}\n')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--anchor', help='YYYY-MM; shared completed monthly sample anchor')
@@ -262,4 +387,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == 'validate':
+        validate_main(sys.argv[2:])
+    else:
+        main()

@@ -70,6 +70,8 @@ pub enum Cmd {
     /// Check complete expected day files, class routing, provenance, and IPC payloads.
     ValidateSegments {
         #[arg(long)]
+        adsb_cache: PathBuf,
+        #[arg(long)]
         segments_dir: PathBuf,
         #[arg(long, value_delimiter = ',', required = true)]
         days: Vec<String>,
@@ -90,6 +92,8 @@ pub enum Cmd {
         segments_dir: Vec<PathBuf>,
         #[arg(long)]
         ga_segments_dir: Vec<PathBuf>,
+        #[arg(long)]
+        ga_adsb_cache: Option<PathBuf>,
         #[arg(long)]
         out_dir: PathBuf,
         #[arg(long)]
@@ -119,6 +123,8 @@ pub enum Cmd {
         class_filter: ClassFilterArg,
         #[arg(long)]
         ga_segments_dir: Option<PathBuf>,
+        #[arg(long)]
+        ga_adsb_cache: Option<PathBuf>,
         #[arg(long, default_value_t = false)]
         fail_on_ga_cruise: bool,
     },

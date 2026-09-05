@@ -48,6 +48,15 @@ class AircraftWindowTests(unittest.TestCase):
         scripts.mkdir()
         for name in ["run-aircraft-extract.sh", "aircraft_window.py"]:
             shutil.copyfile(Path(__file__).with_name(name), scripts / name)
+        validator = scripts / "download-adsblol.py"
+        validator.write_text("import os,sys\n"
+                             "if os.environ.get('SOURCE_INCOMPLETE'):\n"
+                             "    sys.exit('missing publisher-verified selected asset')\n"
+                             "days=sys.argv[sys.argv.index('--days')+1].split(',')\n"
+                             "omitted=os.environ.get('MLAT_DAY')\n"
+                             "for day in days:\n"
+                             "    if day != omitted: sys.stdout.buffer.write((day+'\\0/archive/'+day+'.tar\\0').encode())\n"
+                             "if omitted: print('omitted_mlatonly_days='+omitted,file=sys.stderr)\n")
         binary = root / "engine/target/release/aircraft-extract"
         binary.parent.mkdir(parents=True)
         binary.write_text("#!/usr/bin/env python3\nimport json,os,sys\n"
@@ -74,16 +83,34 @@ class AircraftWindowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runner, environment = self.runner_fixture(root)
+            airlines, ga = sampling_days(date(2024, 3, 1))
+            omitted = ga[10]
+            environment["MLAT_DAY"] = omitted.isoformat()
             result = subprocess.run(["bash", str(runner)], env=environment, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
             self.assertEqual([call[0] for call in calls], ["run-all", "run-all", "run-all", "audit"])
-            airlines, ga = sampling_days(date(2024, 3, 1))
+            ga = tuple(day for day in ga if day != omitted)
+            self.assertEqual((len(airlines), len(ga)), (12, 364))
+            self.assertIn(omitted.isoformat(), result.stderr)
             for call, days in zip(calls[:3], [airlines, ga, airlines]):
                 self.assertEqual(call[call.index("--days") + 1].split(","),
                                  [day.isoformat() for day in days])
             self.assertEqual(calls[0][calls[0].index("--class-filter") + 1], "non-ga")
             self.assertEqual(calls[1][calls[1].index("--class-filter") + 1], "ga")
+            self.assertEqual(calls[2][calls[2].index("--ga-adsb-cache") + 1], environment["GA_CACHE"])
+            self.assertEqual(calls[2][calls[2].index("--class-filter") + 1], "non-ga")
+
+    def test_missing_ga_source_stops_before_build_or_either_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner, environment = self.runner_fixture(root)
+            result = subprocess.run(["bash", str(runner)], env={**environment, "SOURCE_INCOMPLETE": "1"},
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("365-day calendar retained", result.stdout)
+            self.assertFalse((root / "calls.jsonl").exists())
+            self.assertFalse((root / "logs").exists())
 
     def test_manual_hybrid_day_lists_are_rejected_before_build_or_extract(self):
         with tempfile.TemporaryDirectory() as directory:

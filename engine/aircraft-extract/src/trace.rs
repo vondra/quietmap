@@ -5,6 +5,7 @@ use flate2::read::GzDecoder;
 use std::io::Read;
 
 mod archive;
+pub(crate) use archive::archive_parts;
 mod selection;
 mod typecode_probe;
 pub use archive::{TypecodeProbeStats, read_day_traces, read_day_traces_filtered};

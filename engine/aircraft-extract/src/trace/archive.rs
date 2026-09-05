@@ -109,7 +109,7 @@ pub fn read_day_traces_filtered(
 }
 
 /// Resolve every TAR stream and require contiguous split parts plus its end marker.
-fn archive_parts(day_dir: &Path) -> Result<Vec<PathBuf>> {
+pub(crate) fn archive_parts(day_dir: &Path) -> Result<Vec<PathBuf>> {
     let mut groups: BTreeMap<String, Vec<(String, PathBuf)>> = BTreeMap::new();
     for entry in std::fs::read_dir(day_dir)? {
         let entry = entry?;

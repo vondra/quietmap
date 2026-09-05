@@ -30,6 +30,35 @@ def release_fixture(day='2026-06-06', suffixes=('.aa', '.ab'), kind='staging'):
     return urls, {url: (release, asset) for url, asset in zip(urls, assets)}
 
 
+def create_selected_catalog(output, days=('2026-06-06',), kind='staging', mlat_days=()):
+    """Small valid native TARs and preserved publisher responses, with no network."""
+    output = Path(output)
+    exports = []
+    for index, day in enumerate(days):
+        urls, records = release_fixture(day=day, suffixes=('',), kind='mlatonly' if day in mlat_days else kind)
+        release, asset = records[urls[0]]
+        body = bytes(1024 + 512 * index)
+        asset['size'] = len(body)
+        asset['digest'] = 'sha256:' + hashlib.sha256(body).hexdigest()
+        exports.append((day, urls, records, release, body))
+    year = days[0][:4]
+    responses = {
+        MODULE.API + f'{year}/commits/main': json.dumps({'sha': 'a' * 40}).encode(),
+        MODULE.RAW + f'{year}/{"a" * 40}/PREFERRED_RELEASES.txt': '\n'.join(row[1][0] for row in exports).encode(),
+        MODULE.API + f'{year}/releases?per_page=100&page=1': json.dumps([row[3] for row in exports]).encode(),
+    }
+    with patch.object(MODULE, 'request', side_effect=lambda url: io.BytesIO(responses[url])):
+        with MODULE.open_catalog(output, tuple(date.fromisoformat(day) for day in days)) as database:
+            for day, urls, records, _, body in exports:
+                chosen = MODULE.release_assets(day, urls, records)[0]
+                source = MODULE.asset_target_path(chosen, output)
+                source.parent.mkdir(parents=True)
+                source.write_bytes(body)
+                database.execute('INSERT INTO verified VALUES (?,?,?,?,?,?,?)',
+                                 (str(source), chosen[4], *MODULE.identity(source)))
+    return source
+
+
 class PublisherIntegrity(unittest.TestCase):
     def test_preferred_catalog_pins_commit_not_tree_and_preserves_year_authority(self):
         urls, releases = release_fixture(day='2025-12-30', suffixes=('',))
@@ -186,6 +215,85 @@ class PublisherIntegrity(unittest.TestCase):
                 MODULE.main()
             self.assertEqual(MODULE.identity(Path(result[0])), before)
             self.assertEqual(database.execute('SELECT * FROM verified').fetchall(), [result])
+
+
+class SelectedSourceReuse(unittest.TestCase):
+    def test_read_only_selector_checks_only_requested_dates_and_never_fetches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = create_selected_catalog(root)
+            before = MODULE.identity(source)
+            with patch.object(MODULE, 'request', side_effect=AssertionError('validator must not fetch')):
+                selected = MODULE.validate_selected_sources(root, {'2026-06-06'})
+                self.assertEqual(selected[0][1], str(source))
+                with sqlite3.connect(root / 'catalog.sqlite') as db:
+                    db.execute('DELETE FROM responses')
+                with self.assertRaisesRegex(ValueError, 'missing preserved'):
+                    MODULE.validate_selected_sources(root, {'2026-06-06'})
+            self.assertEqual(before, MODULE.identity(source))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            create_selected_catalog(root, days=('2026-05-06',), kind='mlatonly')
+            with self.assertRaisesRegex(ValueError, 'no complete source days.*MLAT-only'):
+                MODULE.validate_selected_sources(root, {'2026-05-06'})
+
+    def test_only_catalog_mlat_days_are_omitted_not_missing_full_source_assets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            days = ('2026-06-06', '2026-06-07', '2026-06-08')
+            create_selected_catalog(root, days=days, mlat_days=(days[1],))
+            selected = MODULE.validate_selected_sources(root, set(days))
+            self.assertEqual([row[0][0] for row in selected], [days[0], days[2]])
+            with sqlite3.connect(root / 'catalog.sqlite') as database:
+                self.assertEqual(database.execute('SELECT COUNT(*) FROM window').fetchone()[0], 3)
+            Path(selected[1][1]).unlink()
+            with self.assertRaises(FileNotFoundError):
+                MODULE.validate_selected_sources(root, set(days))
+            with self.assertRaisesRegex(ValueError, 'outside the selected source catalog'):
+                MODULE.validate_selected_sources(root, {'2026-06-09'})
+
+    def test_empty_outputs_require_completed_matching_source_and_parent_receipts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = create_selected_catalog(root / 'source')
+            selected = MODULE.validate_selected_sources(root / 'source', {'2026-06-06'})
+            work = root / 'work'
+            (work / 'flights').mkdir(parents=True)
+            (work / 'segments').mkdir()
+            flights = work / 'flights/2026-06-06.arrow'
+            segments = work / 'segments/2026-06-06.arrow'
+            flights.write_bytes(b'empty typed output tested by native IPC regression')
+            def receipt(stage, action, chosen=selected, filter='ga'):
+                return MODULE.source_receipt(work, chosen, stage, filter, action)
+            with self.assertRaises(sqlite3.OperationalError):
+                receipt('flights', 'check')
+            receipt('flights', 'begin')
+            with self.assertRaisesRegex(ValueError, 'completed Stage0 receipt'):
+                receipt('flights', 'check')
+            receipt('flights', 'complete')
+            receipt('flights', 'check')
+            with self.assertRaisesRegex(ValueError, 'feed/class differs'):
+                receipt('flights', 'check', filter='non-ga')
+            receipt('segments', 'begin')
+            segments.write_bytes(b'new empty typed segment output')
+            receipt('segments', 'complete')
+            receipt('segments', 'check')
+            other = create_selected_catalog(root / 'other', kind='prod')
+            changed = MODULE.validate_selected_sources(root / 'other', {'2026-06-06'})
+            with self.assertRaisesRegex(ValueError, 'source/feed/class differs'):
+                receipt('segments', 'check', chosen=changed)
+            self.assertTrue(other.exists())
+            receipt('segments', 'begin')
+            flights.write_bytes(b'changed parent')
+            with self.assertRaisesRegex(ValueError, 'changed completed flights'):
+                receipt('segments', 'complete')
+            with self.assertRaisesRegex(ValueError, 'changed completed flights'):
+                receipt('segments', 'check')
+            receipt('flights', 'begin')
+            source.write_bytes(bytes(2048))
+            changed_stat = [(asset, path, MODULE.identity(Path(path))) for asset, path, _ in selected]
+            with self.assertRaisesRegex(ValueError, 'changed since flights began'):
+                receipt('flights', 'complete', chosen=changed_stat)
 
 
 if __name__ == '__main__':
