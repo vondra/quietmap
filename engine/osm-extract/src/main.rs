@@ -309,27 +309,23 @@ fn main() -> Result<()> {
                 }
             }
             Element::Node(node) => {
-                emit_node(
+                features_total += emit_node(
                     &mut spiller,
-                    &mut features_total,
                     classify::is_wind_turbine_node(&node),
-                    classify::extract_turbine_tags_node(&node),
+                    || classify::extract_turbine_tags_node(&node),
                     classify::FeatureType::WindTurbine,
                     node.id(),
                     node.lat(),
                     node.lon(),
-                    None,
                 );
-                emit_node(
+                features_total += emit_node(
                     &mut spiller,
-                    &mut features_total,
                     classify::is_airport_node(&node),
-                    classify::extract_airport_tags_node(&node),
+                    || classify::extract_airport_tags_node(&node),
                     classify::FeatureType::AirportArea,
                     node.id(),
                     node.lat(),
                     node.lon(),
-                    None,
                 );
                 if let Some(kind) = classify::node_kind_node(&node) {
                     let tags = classify::extract_node_settlement_tags_node(&node);
@@ -344,27 +340,23 @@ fn main() -> Result<()> {
                 }
             }
             Element::DenseNode(node) => {
-                emit_node(
+                features_total += emit_node(
                     &mut spiller,
-                    &mut features_total,
                     classify::is_wind_turbine_dense(&node),
-                    classify::extract_turbine_tags_dense(&node),
+                    || classify::extract_turbine_tags_dense(&node),
                     classify::FeatureType::WindTurbine,
                     node.id(),
                     node.lat(),
                     node.lon(),
-                    None,
                 );
-                emit_node(
+                features_total += emit_node(
                     &mut spiller,
-                    &mut features_total,
                     classify::is_airport_dense(&node),
-                    classify::extract_airport_tags_dense(&node),
+                    || classify::extract_airport_tags_dense(&node),
                     classify::FeatureType::AirportArea,
                     node.id(),
                     node.lat(),
                     node.lon(),
-                    None,
                 );
                 if let Some(kind) = classify::node_kind_dense(&node) {
                     let tags = classify::extract_node_settlement_tags_dense(&node);
@@ -432,29 +424,23 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Emit a point feature (wind turbine / airport node) into its square.
-/// No-op when the kind flag is false (keeps the match arms flat).
-/// Nine flat params, no bundle struct: each is one unrelated feature, and a
-/// struct would name a concept that exists nowhere else. (Follows the old
-/// repo's documented 13-arg ceiling rationale; reunites with clippy.toml.)
-#[allow(clippy::too_many_arguments)]
+/// Extract tags and spill only classified turbine/airport nodes, returning the count.
 fn emit_node(
     spiller: &mut spill::Spiller,
-    features_total: &mut u64,
     kind_match: bool,
-    tags: classify::Tags,
+    extract_tags: impl FnOnce() -> classify::Tags,
     ftype: classify::FeatureType,
     osm_id: i64,
     lat: f64,
     lon: f64,
-    ring: Option<&[[f64; 2]]>,
-) {
+) -> u64 {
     if !kind_match {
-        return;
+        return 0;
     }
+    let tags = extract_tags();
     let square = grid::square_of(lat, lon);
-    spiller.emit_polygon(&ftype, square, osm_id, lat, lon, &tags, ring);
-    *features_total += 1;
+    spiller.emit_polygon(&ftype, square, osm_id, lat, lon, &tags, None);
+    1
 }
 
 /// Print the top-N entries of a blind-spot counter (descending), or nothing if
@@ -552,7 +538,39 @@ fn ring_for_spill<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{centroid, ring_for_spill};
+    use super::{centroid, classify, emit_node, ring_for_spill, spill};
+
+    #[test]
+    fn point_source_tags_are_extracted_only_when_the_node_is_kept() {
+        let directory =
+            std::env::temp_dir().join(format!("osm-node-tag-laziness-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let mut spiller = spill::Spiller::new(&directory, 1).unwrap();
+        for kind_match in [false, true] {
+            let mut extracted = 0;
+            let written = emit_node(
+                &mut spiller,
+                kind_match,
+                || {
+                    extracted += 1;
+                    classify::Tags::from([("name".into(), "Kept turbine".into())])
+                },
+                classify::FeatureType::WindTurbine,
+                42,
+                50.0,
+                14.0,
+            );
+            assert_eq!(extracted, u64::from(kind_match));
+            assert_eq!(written, u64::from(kind_match));
+        }
+        spiller.flush_all().unwrap();
+        let row = std::fs::read_to_string(directory.join("industrial_000.tsv")).unwrap();
+        assert_eq!(row.lines().count(), 1);
+        assert!(row.contains("\t42\t"));
+        assert!(row.contains("\tKept turbine\t"));
+        drop(spiller);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn antimeridian_ring_keeps_its_centroid_but_not_unsafe_geometry() {
