@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use h3o::{CellIndex, LatLng};
+use h3o::CellIndex;
 use noise_compute::admin;
 use noise_compute::constants::ground_ops_max_radius;
 use noise_compute::emission::aircraft::{ClassWeights, GROUND_OPS_SOURCE_HEIGHT_M};
@@ -111,8 +111,7 @@ pub fn prepare_region(
         .map(u64::from)
         .collect();
     let frame = RegionMetricFrame::for_cell(index);
-    let centre = LatLng::from(index);
-    let region_admin = admin::admin_for_latlng(centre.lat(), centre.lng());
+    let region_admin = || admin::admin_for_hex(region_r4);
     let h3r4 = &configuration.h3r4_directory;
     // The building layer's emission rows ride the same structure table; cells
     // painting no building layer skip the per-row emission prep.
@@ -130,12 +129,12 @@ pub fn prepare_region(
     let mut layers = Vec::with_capacity(cell.layers.len());
     for &layer in &cell.layers {
         let sources = match layer {
-            0 => RoadData::load_for_r4s(h3r4, &ring, region_admin)?
+            0 => RoadData::load_for_r4s(h3r4, &ring, region_admin())?
                 .into_rows()
                 .iter()
                 .map(|row| frame.encode_line(row))
                 .collect(),
-            1 => RailData::load_for_r4s(h3r4, &ring, region_admin)?
+            1 => RailData::load_for_r4s(h3r4, &ring, region_admin())?
                 .into_rows()
                 .iter()
                 .map(|row| frame.encode_line(row))
