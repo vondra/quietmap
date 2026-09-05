@@ -346,7 +346,7 @@ pub enum EmissionTrace {
     },
     /// One square's cruise-bucket aggregate (per FL × class × period
     /// breakdown lives in `SegmentTrace.cruise_buckets`), keyed by
-    /// square name (`z9/x/y`).
+    /// aggregation-cell name (`z15/x/y`), not its z9 storage parent.
     AircraftCruise {
         square: String,
         n_unique_flights: u32,
@@ -380,8 +380,8 @@ pub enum EmissionTrace {
 /// 1 = ground path, 2 = airborne sub-segment, 3 = cruise cell
 /// (0 = non-aircraft / unset). `polyline` carries the ADS-B trajectory
 /// for ground paths (`MultiLineString`-friendly); `cell_polygon` carries
-/// the closed boundary ring for cruise hexes; `cruise_buckets` carries
-/// the per-bucket breakdown inside a cruise hex; `length_m_per_kind`
+/// the closed boundary ring for cruise cells; `cruise_buckets` carries
+/// the per-bucket breakdown inside a cruise cell; `length_m_per_kind`
 /// carries `[runway, taxi, apron]` lengths for ground paths.
 #[derive(Debug, Clone, Serialize)]
 pub struct SegmentTrace {
@@ -436,8 +436,8 @@ pub struct SegmentTrace {
     /// airborne sub-segments and cruise hexes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub polyline: Option<Vec<(f64, f64)>>,
-    /// Closed polygon ring (last vertex = first vertex) for a cruise cell
-    /// hexes. `None` for ground paths and airborne sub-segments.
+    /// Closed `(lat, lon)` boundary of the actual z15 aggregation cell.
+    /// `None` for ground paths and airborne sub-segments.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cell_polygon: Option<Vec<(f64, f64)>>,
     /// Per-bucket breakdown of a cruise cell (FL × class × period).

@@ -49,7 +49,7 @@ impl SquareCache {
                     .unwrap_or_else(|| {
                         format!(
                             "strip:z15:{}",
-                            crate::spatial::cruise_cell_id(lat as f64, lon as f64)
+                            grid::cruise::cruise_cell_id(lat as f64, lon as f64)
                         )
                     });
                 cache.insert(line, key, owner)?;

@@ -1,7 +1,7 @@
 //! Actual producer IPC files must decode into complete current popup views.
 
 use super::*;
-use aircraft_extract::{arrow_io::*, flight::*, spatial};
+use aircraft_extract::{arrow_io::*, flight::*};
 use arrow::{
     array::*,
     datatypes::{DataType, Field, Schema},
@@ -65,7 +65,7 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
     assert_eq!(row.sub_segments.start_lon, &[lon as f32]);
 
     let cruise = dir.path().join("cruise.arrow");
-    let id = spatial::cruise_cell_id(50.1, 14.26);
+    let id = grid::cruise::cruise_cell_id(50.1, 14.26);
     write_cruise(
         &cruise,
         &[CruiseBucket {
@@ -97,7 +97,10 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
     let accum = CruiseRowAccum::new(&batches).unwrap();
     let slices = accum.views();
     let views = slices.as_row_views();
-    assert_eq!((views[0].lon, views[0].lat), spatial::cruise_centroid(id));
+    assert_eq!(
+        (views[0].lon, views[0].lat),
+        grid::cruise::cruise_centroid(id)
+    );
     assert_eq!(views[0].unique_count, 20);
     assert_eq!(views[0].top_candidates[0].callsign, "TEST42");
     assert_eq!(views[0].sum_length_m, 10000.0);
@@ -223,4 +226,117 @@ fn current_stamps_never_turn_wrong_geometry_into_zero_rows() {
     assert!(AirportTrafficRowAccum::new(&[old_geometry]).is_err());
     let null = Arc::new(Int32Array::from(vec![None])) as ArrayRef;
     assert!(columns::required_array::<Int32Array>(Some(&null), "start_gx").is_err());
+}
+
+#[test]
+fn cruise_popup_names_and_highlights_the_actual_producer_cell() {
+    struct SeaLevel;
+    impl RasterSampler for SeaLevel {
+        fn elevation(&self, _: f64, _: f64) -> f64 {
+            0.0
+        }
+        fn ground_g(&self, _: f64, _: f64) -> f64 {
+            0.0
+        }
+        fn building_enclosure(&self, _: f64, _: f64) -> f64 {
+            0.0
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cruise.arrow");
+    // Adjacent cells share a z9 parent; edge columns must not wrap the polygon.
+    for (x, y) in [
+        (17680u64, 11120u64),
+        (17681, 11120),
+        (16384, 16384),
+        (0, 16384),
+        (32767, 16384),
+        (16384, 0),
+        (16384, 32767),
+    ] {
+        write_cruise(
+            &path,
+            &[CruiseBucket {
+                cruise_cell_id: (x << 15) | y,
+                class: 3,
+                rep_profile_idx: 2,
+                fl_bin: 4,
+                period: 1,
+                sum_length_m: 10000.0,
+                rep_len_m: 2000.0,
+                rep_alt_m: 11000.0,
+                rep_speed_kt: 450.0,
+                unique_count: 1,
+                source_id: 2,
+                origin: 0,
+                top_candidates: vec![CruiseTopCandidate {
+                    flight_id: 42,
+                    callsign: "TEST42".into(),
+                    aircraft_type: *b"A320",
+                    peak_lmax_25m_db: 95.0,
+                    altitude_m: 11000.0,
+                }],
+            }],
+            12,
+        )
+        .unwrap();
+        let (_, batches) = read_record_batches(&path).unwrap();
+        let accum = CruiseRowAccum::new(&batches).unwrap();
+        let slices = accum.views();
+        let rows = slices.as_row_views();
+        let mut traces = TraceCollector::default();
+        noise_compute::compute::aircraft_v6::cruise::scatter(
+            &Receiver::new(rows[0].lat, rows[0].lon, 0.0),
+            &rows,
+            &SeaLevel,
+            12.0,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+            Some(&mut traces),
+        );
+        assert_eq!(traces.segments.len(), 1);
+        let trace = &traces.segments[0];
+        eprintln!(
+            "cruise-cell {x}/{y} {}",
+            serde_json::to_string(trace).unwrap()
+        );
+        assert_eq!(trace.name, format!("Cruise over z15/{x}/{y}"));
+        let noise_compute::types::EmissionTrace::AircraftCruise { square, .. } = &trace.emission
+        else {
+            panic!("expected cruise emission");
+        };
+        assert_eq!(square, &format!("z15/{x}/{y}"));
+        // Independent slippy-map inverse, not the production grid helper.
+        let latitude = |row: u64| {
+            (std::f64::consts::PI * (1.0 - 2.0 * row as f64 / 32768.0))
+                .sinh()
+                .atan()
+                .to_degrees()
+        };
+        let west = x as f64 * 360.0 / 32768.0 - 180.0;
+        let east = (x + 1) as f64 * 360.0 / 32768.0 - 180.0;
+        let (south, north) = (latitude(y + 1), latitude(y));
+        let expected = [
+            (south, west),
+            (south, east),
+            (north, east),
+            (north, west),
+            (south, west),
+        ];
+        let polygon = trace.cell_polygon.as_ref().unwrap();
+        assert_eq!(polygon.len(), expected.len());
+        for ((lat, lon), (expected_lat, expected_lon)) in polygon.iter().zip(expected) {
+            assert!(
+                (lat - expected_lat).abs() < 1e-12,
+                "latitude {lat} vs {expected_lat}"
+            );
+            assert!(
+                (lon - expected_lon).abs() < 1e-12,
+                "longitude {lon} vs {expected_lon}"
+            );
+        }
+        assert_eq!(polygon.first(), polygon.last());
+        assert!(trace.received_lden.full.is_finite());
+    }
 }

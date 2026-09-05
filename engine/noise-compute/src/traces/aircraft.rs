@@ -167,11 +167,10 @@ pub struct BuildAircraftCruiseCellTrace {
 }
 
 pub fn build_aircraft_cruise_cell_trace(inputs: BuildAircraftCruiseCellTrace) -> SegmentTrace {
-    // Display + emission label is the z9 square name of the centroid
-    // (e.g. `z9/276/173`).
-    let square = grid::square_name(grid::square_of(inputs.lat, inputs.lon));
+    let cell = grid::cruise::cruise_cell_id(inputs.lat, inputs.lon);
+    let square = grid::cruise::cruise_cell_name(cell);
     let display_name = format!("Cruise over {square}");
-    let cell_polygon = cruise_cell_polygon(inputs.lat, inputs.lon);
+    let cell_polygon = grid::cruise::cruise_cell_polygon(cell);
     let variants = aircraft_period_variants(inputs.period_energies, inputs.n_days);
 
     SegmentTrace {
@@ -206,22 +205,6 @@ pub fn build_aircraft_cruise_cell_trace(inputs: BuildAircraftCruiseCellTrace) ->
         cruise_top_flights: Some(inputs.cruise_top_flights),
         length_m_per_kind: None,
     }
-}
-
-/// Display polygon for a cruise grid-cell aggregate: small axis-aligned
-/// box around the centroid with 2 km half-side. Last vertex equals the
-/// first to close the GeoJSON ring. Display-only; the kernel never reads it.
-fn cruise_cell_polygon(lat: f64, lon: f64) -> Vec<(f64, f64)> {
-    const HALF_SIDE_M: f64 = 2000.0;
-    let d_lat = HALF_SIDE_M / crate::constants::M_PER_DEG_LAT;
-    let d_lon = HALF_SIDE_M / crate::constants::m_per_deg_lon(lat.to_radians());
-    vec![
-        (lat - d_lat, lon - d_lon),
-        (lat - d_lat, lon + d_lon),
-        (lat + d_lat, lon + d_lon),
-        (lat + d_lat, lon - d_lon),
-        (lat - d_lat, lon - d_lon),
-    ]
 }
 
 #[cfg(test)]

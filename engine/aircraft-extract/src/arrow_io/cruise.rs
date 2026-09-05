@@ -51,7 +51,7 @@ pub fn write_cruise(path: &Path, rows: &[CruiseBucket], n_days: u16) -> Result<(
     let mut running = 0usize;
 
     for r in rows {
-        let center = crate::spatial::cruise_centroid(r.cruise_cell_id);
+        let center = grid::cruise::cruise_centroid(r.cruise_cell_id);
         lon.append_value(center.0);
         lat.append_value(center.1);
         class.append_value(r.class);

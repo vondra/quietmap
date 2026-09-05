@@ -3,12 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use grid::cruise::{cell_axes, cruise_cell_id, CRUISE_AXIS};
 use grid::{poly::meters_to_lonlat, Square, EARTH_CIRCUMFERENCE_M};
-
-/// At the equator a z15 cell is 1,223 m wide; its 865 m corner radius
-/// is smaller than the previous cruise aggregation's 1.22 km radius.
-const CRUISE_ZOOM: u32 = 15;
-const CRUISE_AXIS: u32 = 1 << CRUISE_ZOOM;
 
 pub fn square_id(lat: f64, lon: f64) -> Option<u64> {
     (lat.is_finite() && lon.is_finite() && (-90.0..=90.0).contains(&lat))
@@ -90,46 +86,6 @@ fn tile_latitude(y: u32, axis: u32) -> f64 {
     meters_to_lonlat(0.0, northing).1
 }
 
-fn cell_axes(lat: f64, lon: f64) -> (u32, u32) {
-    let lon = grid::geo::normalize_longitude(lon);
-    let x = ((lon + 180.0) / 360.0 * f64::from(CRUISE_AXIS)).floor();
-    let (_, northing) = grid::lonlat_to_meters(0.0, lat);
-    let y = ((0.5 - northing / EARTH_CIRCUMFERENCE_M) * f64::from(CRUISE_AXIS)).floor();
-    (
-        x.clamp(0.0, f64::from(CRUISE_AXIS - 1)) as u32,
-        y.clamp(0.0, f64::from(CRUISE_AXIS - 1)) as u32,
-    )
-}
-
-pub fn cruise_cell_id(lat: f64, lon: f64) -> u64 {
-    let (x, y) = cell_axes(lat, lon);
-    (u64::from(x) << CRUISE_ZOOM) | u64::from(y)
-}
-
-fn cruise_axes(id: u64) -> (u32, u32) {
-    (
-        (id >> CRUISE_ZOOM) as u32,
-        (id & u64::from(CRUISE_AXIS - 1)) as u32,
-    )
-}
-
-pub fn cruise_parent(id: u64) -> u64 {
-    let (x, y) = cruise_axes(id);
-    grid::square_id(Square {
-        x: (x >> (CRUISE_ZOOM - 9)) as u16,
-        y: (y >> (CRUISE_ZOOM - 9)) as u16,
-    }) as u64
-}
-
-pub fn cruise_centroid(id: u64) -> (f64, f64) {
-    let (x, y) = cruise_axes(id);
-    let scale = EARTH_CIRCUMFERENCE_M / f64::from(CRUISE_AXIS);
-    meters_to_lonlat(
-        (f64::from(x) + 0.5) * scale - EARTH_CIRCUMFERENCE_M / 2.0,
-        EARTH_CIRCUMFERENCE_M / 2.0 - (f64::from(y) + 0.5) * scale,
-    )
-}
-
 /// Each interval is bounded by the actual longitude/latitude tile edges.
 /// Fractions telescope to one, including dateline crossings and tiny corner
 /// intersections; sampling at fixed distances cannot provide this guarantee.
@@ -178,6 +134,7 @@ pub fn cruise_transits(lat0: f32, lon0: f32, lat1: f32, lon1: f32) -> Vec<(u64, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use grid::cruise::{cruise_centroid, cruise_parent};
 
     #[test]
     fn transit_conserves_distance_and_routes_centroids_worldwide() {

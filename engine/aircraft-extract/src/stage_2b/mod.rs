@@ -21,7 +21,8 @@ use crate::geo::square_path;
 use crate::profile::noise_class_of;
 use crate::progress::{finished, human, started, ts, Milestone};
 use crate::scope::ScopeBbox;
-use crate::spatial::{cruise_parent, cruise_transits};
+use crate::spatial::cruise_transits;
+use grid::cruise::cruise_parent;
 
 /// log10 of 25 m expressed in ft — popup's `lookup_lmax` indexes into a
 /// fixed log-d LUT. 25 m = 82.021 ft, log10(82.021) ≈ 1.9139. The popup
