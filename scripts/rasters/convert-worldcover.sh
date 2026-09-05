@@ -92,24 +92,27 @@ convert_one() {
     lon=$((10#$lon))
     [ "$ns" = "S" ] && lat=$((-lat))
     [ "$ew" = "W" ] && lon=$((-lon))
+    local -a tile_extent
+    read -r -a tile_extent <<< "$(node_extent "$lon" "$lat" 3601)"
 
     local TMP_FOREST="$VRT_DIR/wc_forest_${NAME}.tif"
     local TMP_IMD="$VRT_DIR/wc_imd_${NAME}.tif"
     # Leftovers from an interrupted run make gdalwarp fail ("output exists")
     rm -f "$TMP_FOREST" "$TMP_IMD"
 
+    # Read native classes: source overviews can turn grass/water into trees.
     # Warp for forest (3601×3601 = 30m, node-registered matching DEM)
     if [ "$NEED_FOREST" = "1" ]; then
-        gdalwarp -q -te $(node_extent $lon $lat 3601) \
-            -ts 3601 3601 -r near -ot Byte \
+        gdalwarp -q -te "${tile_extent[@]}" \
+            -ts 3601 3601 -r near -ovr NONE -ot Byte \
             "$VRT" "$TMP_FOREST" 2>/dev/null \
             || { rm -f "$TMP_FOREST"; echo "$NAME warp-forest" >> "$FAIL_LIST"; return 0; }
     fi
 
     # Warp for IMD (3601×3601 = 30m, node-registered matching DEM/forest/building)
     if [ "$NEED_IMD" = "1" ]; then
-        gdalwarp -q -te $(node_extent $lon $lat 3601) \
-            -ts 3601 3601 -r near -ot Byte \
+        gdalwarp -q -te "${tile_extent[@]}" \
+            -ts 3601 3601 -r near -ovr NONE -ot Byte \
             "$VRT" "$TMP_IMD" 2>/dev/null \
             || { rm -f "$TMP_IMD"; echo "$NAME warp-imd" >> "$FAIL_LIST"; return 0; }
     fi

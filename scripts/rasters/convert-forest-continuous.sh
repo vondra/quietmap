@@ -75,7 +75,7 @@ convert_one() (
     # EU lane: TCD where the mosaic has coverage for this tile.
     if [ -s "$TCD_VRT" ]; then
         gdalwarp -q -overwrite -t_srs EPSG:4326 -te "${tile_extent[@]}" -ts "$GRID" "$GRID" \
-            -r average -ot Byte -srcnodata 255 -dstnodata 255 \
+            -r average -ovr NONE -ot Byte -srcnodata 255 -dstnodata 255 \
             "$TCD_VRT" "$tmp/tcd.tif"
     fi
 
