@@ -57,14 +57,22 @@ class StructureInventoryTests(unittest.TestCase):
             # inventory because another layer can require its obstacle table.
             other = GRID.square_name(*GRID.square_of(-41.3, 174.8))
             (prepared / other).mkdir(parents=True)
-            args = ["build-structures.py", "--prepared-dir", str(prepared),
+            selected = BUILDER.world_squares(parquet)
+            self.assertEqual(len(selected), GRID.Z9_AXIS ** 2)
+            self.assertEqual(len(set(selected)), len(selected))
+            self.assertEqual(selected[0], GRID.square_name(0, 0))
+            self.assertEqual(selected[-1], GRID.square_name(GRID.Z9_AXIS - 1, GRID.Z9_AXIS - 1))
+            # Prove the full selection above; execute only these three real outputs.
+            empty_ocean = GRID.square_name(*GRID.square_of(0.0, -140.0))
+            args = ["build-structures.py", "--squares", ",".join([SQUARE, other, empty_ocean]),
+                    "--prepared-dir", str(prepared),
                     "--overture-parquet", str(parquet), "--ghsl", str(prior)]
             with patch("sys.argv", args), patch("sys.stdout", new_callable=io.StringIO):
                 BUILDER.main()
             self.assertEqual(ipc.open_file(prepared / other / "structures.arrow")
                              .read_all().num_rows, 0)
             outputs = list(prepared.glob("z9/*/*/structures.arrow"))
-            self.assertGreater(len(outputs), 2)
+            self.assertEqual(len(outputs), 3)
             before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in outputs}
             self.assertEqual(sum(ipc.open_file(path).read_all().num_rows for path in outputs), 1)
             with (patch("sys.argv", args), patch("sys.stdout", new_callable=io.StringIO),
@@ -73,12 +81,21 @@ class StructureInventoryTests(unittest.TestCase):
                 BUILDER.main()
             self.assertEqual(before, {path: (path.read_bytes(), path.stat().st_mtime_ns)
                                       for path in outputs})
+            world_args = [args[0], *args[3:]]  # Default CLI path, without --squares.
+            malformed = prepared / "z9/0276/173"
+            malformed.mkdir(parents=True)
+            with (patch("sys.argv", world_args),
+                  self.assertRaisesRegex(ValueError, "Noncanonical prepared square")):
+                BUILDER.main()
+            malformed.rmdir()
+            self.assertEqual(before, {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                                      for path in prepared.glob("z9/*/*/structures.arrow")})
             # Missing cached coverage is not certified as an empty ocean tile.
             (parquet / "N52W179.parquet").unlink()
-            with (patch("sys.argv", args), self.assertRaisesRegex(ValueError, "N52W179")):
+            with (patch("sys.argv", world_args), self.assertRaisesRegex(ValueError, "N52W179")):
                 BUILDER.main()
             self.assertEqual(before, {path: (path.read_bytes(), path.stat().st_mtime_ns)
-                                      for path in outputs})
+                                      for path in prepared.glob("z9/*/*/structures.arrow")})
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+from pathlib import Path
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
@@ -32,7 +33,15 @@ def main():
     elif args.squares:
         squares = args.squares.split(",")
     else:
-        squares = world_squares(args.prepared_dir, args.overture_parquet)
+        # Misnamed prepared inputs must not disappear behind complete output coverage.
+        for path in (Path(args.prepared_dir) / "z9").glob("*/*"):
+            if not path.is_dir():
+                continue
+            name = f"z9/{path.parent.name}/{path.name}"
+            square = qmgrid.parse_square_name(name)
+            if square is None or qmgrid.square_name(*square) != name:
+                raise ValueError(f"Noncanonical prepared square: {path}")
+        squares = world_squares(args.overture_parquet)
     ghsl = GlobalPrior(args.ghsl)
     regional = RegionalHeights(args.regional) if args.regional else None
     census_log = open(args.census_log, "a", encoding="utf-8") if args.census_log else None

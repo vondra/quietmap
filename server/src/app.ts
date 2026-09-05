@@ -10,6 +10,7 @@ import { isochronRoutes } from './routes/isochron.js'
 import { docsRoutes } from './routes/docs.js'
 import { propertiesRoutes } from './routes/properties.js'
 import { stayRoutes } from './routes/stay.js'
+import { rasterTileRoutes } from './routes/raster-tiles.js'
 import { aircraftRoutes } from './routes/aircraft.js'
 import { initialViewRoutes } from './routes/initial-view.js'
 import { validationViewRoutes } from './routes/validation-view.js'
@@ -103,10 +104,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(docsRoutes)
   await app.register(propertiesRoutes)
   await app.register(stayRoutes)
+  await app.register(rasterTileRoutes, { queryObstacleFootprints: engine.queryObstacleFootprints })
   await app.register(aircraftRoutes)
-  // The tile/heatmap surface (heatmap-pmtiles, tiles-manifest, raster-tiles)
-  // returns with the heatmap later; engine.queryObstacleFootprints stays
-  // available for it via the NoiseOnflyEngine return value.
   await app.register(initialViewRoutes)
   await app.register(validationViewRoutes)
   // Inbound-mail archive webhook (Cloudflare Email Worker → the ops mail host), ops-only:

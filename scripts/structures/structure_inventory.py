@@ -1,9 +1,7 @@
-"""Derive structure coverage from prepared squares and the complete Overture source cache."""
+"""Require complete Overture inputs and every z9 structure output."""
 
 import math
 from pathlib import Path
-
-import pyarrow.parquet as pq
 
 import qmgrid
 
@@ -28,31 +26,13 @@ def overture_sources(parquet_dir, square):
             yield lat, lon, source
 
 
-def world_squares(prepared_dir, parquet_dir):
-    sources = {degree_name(lat, lon): (lat, lon)
+def world_squares(parquet_dir):
+    sources = {degree_name(lat, lon)
                for lat in range(-90, 90) for lon in range(-180, 180)}
-    cached = {path.stem: path for path in Path(parquet_dir).glob("*.parquet")}
-    missing, extra = sources.keys() - cached.keys(), cached.keys() - sources.keys()
+    cached = {path.stem for path in Path(parquet_dir).glob("*.parquet")}
+    missing, extra = sources - cached, cached - sources
     if missing or extra:
         raise ValueError(f"Incomplete world Overture cache: {len(missing)} missing "
                          f"{sorted(missing)[:10]}, {len(extra)} unexpected {sorted(extra)[:10]}")
-    squares = set()
-    for path in (Path(prepared_dir) / "z9").glob("*/*"):
-        if not path.is_dir():
-            continue
-        name = f"z9/{path.parent.name}/{path.name}"
-        square = qmgrid.parse_square_name(name)
-        if square is None or qmgrid.square_name(*square) != name:
-            raise ValueError(f"Noncanonical prepared square: {path}")
-        squares.add(square)
-    for name, (lat, lon) in sources.items():
-        if pq.ParquetFile(cached[name]).metadata.num_rows == 0:
-            continue
-        # A degree tile's owner candidates also include empty squares; this
-        # conservative cover avoids decoding billions of footprints twice.
-        x0 = math.floor((lon + 180) / qmgrid.Z9_SPAN_DEG)
-        x1 = math.ceil((lon + 181) / qmgrid.Z9_SPAN_DEG)
-        y0 = qmgrid.square_of(math.nextafter(lat + 1, -math.inf), lon)[1]
-        y1 = qmgrid.square_of(lat, lon)[1]
-        squares.update((x, y) for x in range(x0, x1) for y in range(y0, y1 + 1))
-    return [qmgrid.square_name(x, y) for x, y in sorted(squares)]
+    return [qmgrid.square_name(x, y)
+            for x in range(qmgrid.Z9_AXIS) for y in range(qmgrid.Z9_AXIS)]
