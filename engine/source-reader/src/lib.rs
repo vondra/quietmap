@@ -284,7 +284,8 @@ pub fn query_buildings(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<St
 /// Obstacle footprints intersecting a bbox with their AS-USED heights (after
 /// the low-profile cap) — the building-height debug overlay's data source,
 /// so the map shows exactly what the propagation model screens with. JSON:
-/// [{o: [[lat,lon]…], h, t, c}] (o = outer ring, h = height m, t = height
+/// [{p: [polygon rings…], h, t, c}] (rings are [lat,lon] vertices, exterior
+/// first, then holes; h = height m, t = height
 /// tier 0 mapped/1 floors/2 default/3 city-measured zonal/4 ANBH areal prior
 /// — see noise_compute::low_profile, c = low-profile-capped).
 pub fn query_obstacle_footprints(
@@ -295,18 +296,7 @@ pub fn query_obstacle_footprints(
 ) -> napi::Result<String> {
     let fps = structure_store::footprints_in_bbox(year_dir()?, south, west, north, east)
         .map_err(|e| Error::new(Status::GenericFailure, e))?;
-    let rows: Vec<serde_json::Value> = fps
-        .iter()
-        .map(|f| {
-            serde_json::json!({
-                "o": f.outer.iter().map(|(la, lo)| [la, lo]).collect::<Vec<_>>(),
-                "h": f.height_m,
-                "t": f.tier,
-                "c": f.capped,
-            })
-        })
-        .collect();
-    Ok(serde_json::to_string(&rows).unwrap())
+    Ok(serde_json::to_string(&fps).unwrap())
 }
 
 /// Map the engine's envelope class to the small plain-language vocabulary

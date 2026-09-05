@@ -5,7 +5,7 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
 /// Mirrors the Python producer; actual IPC roundtrips protect this boundary.
-pub const CONTRACT: &str = "structures_v3";
+pub const CONTRACT: &str = "structures_v4";
 
 pub fn validate_schema(schema: &Schema) -> Result<(), String> {
     for (key, expected) in [

@@ -12,7 +12,7 @@ import shapely
 
 from test_structures_fixtures import (
     BUILDER, SOURCES, CONTRACT, GRID, SQUARE, FakeGlobalPrior, buildings_arrow, barriers_arrow,
-    grid_polygon, osm_row, ovt_row, OSM_POLY, OVT_TWIN, OSM_SHED, OSM_HALL,
+    grid_polygon, screening_polygons, write_topology_roundtrip, osm_row, ovt_row, OSM_POLY, OVT_TWIN, OSM_SHED, OSM_HALL,
     OVT_LONELY, OSM_WAREHOUSE, OSM_ANNEX, OVT_ANNEX_TWIN, OVT_ANNEX_LOOSE,
 )
 
@@ -38,7 +38,7 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertEqual(t.num_rows, 1)
         row = {name: t.column(name)[0].as_py() for name in t.column_names}
         self.assertEqual(row["kind"], 0)
-        self.assertEqual(row["geom"], grid_polygon(OVT_TWIN))  # screening geometry
+        self.assertEqual(row["geom"], screening_polygons(OVT_TWIN))  # screening geometry
         self.assertEqual(row["osm_id"], 1000)
         self.assertEqual(row["building_type"], 11)
         # Matched: Overture ladder height (tier 2 -> GHSL 12.5 -> tier 4), the
@@ -50,8 +50,7 @@ class BuildStructuresTests(unittest.TestCase):
         # emission override.
         self.assertEqual(row["centroid_gx"], GRID.lonlat_to_grid(OVT_TWIN.centroid.x, OVT_TWIN.centroid.y)[0])
         self.assertEqual(row["emission_centroid_gx"], GRID.lonlat_to_grid(OSM_POLY.centroid.x, OSM_POLY.centroid.y)[0])
-        # Small footprint: emission never grids it, so no emission polygon.
-        self.assertIsNone(row["emission_geom"])
+        self.assertEqual(row["emission_geom"], grid_polygon(OSM_POLY))
 
     def test_a_contested_first_choice_falls_through_to_the_next_twin(self):
         """Both Overture footprints rank the annex first; the loser must take the
@@ -71,13 +70,13 @@ class BuildStructuresTests(unittest.TestCase):
         # remaining qualifying pair), the annex keeps its near twin.
         self.assertEqual(t.column("osm_id").to_pylist(), [1000, 1001])
         self.assertEqual(t.column("geom").to_pylist(),
-                         [grid_polygon(OVT_ANNEX_LOOSE), grid_polygon(OVT_ANNEX_TWIN)])
+                         [screening_polygons(OVT_ANNEX_LOOSE), screening_polygons(OVT_ANNEX_TWIN)])
         # Screening moved to the Overture polygons; emission keeps the OSM one
         # wherever it can read it (the warehouse is over the 2000 m2 threshold).
         self.assertEqual(t.column("emission_geom").to_pylist(),
-                         [grid_polygon(OSM_WAREHOUSE), None])
+                         [grid_polygon(OSM_WAREHOUSE), grid_polygon(OSM_ANNEX)])
 
-    def test_big_osm_only_row_keeps_emission_override_null(self):
+    def test_big_osm_only_row_keeps_original_emission_ring(self):
         buildings_arrow(self.prepared / SQUARE / "buildings.arrow",
                         [osm_row(0, OSM_HALL, 5000.0)])
         census, t = self.build([ovt_row(OVT_TWIN, h=9.0, tier=1)])
@@ -86,10 +85,8 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertEqual(census["overture_only"], 1)
         self.assertEqual(t.num_rows, 2)
         hall = t.slice(0, 1)
-        self.assertEqual(hall.column("geom")[0].as_py(), grid_polygon(OSM_HALL))
-        # OSM-only big row: screening polygon IS the OSM polygon, so the
-        # emission override stays null.
-        self.assertIsNone(hall.column("emission_geom")[0].as_py())
+        self.assertEqual(hall.column("geom")[0].as_py(), screening_polygons(OSM_HALL))
+        self.assertEqual(hall.column("emission_geom")[0].as_py(), grid_polygon(OSM_HALL))
 
     def test_big_matched_row_stores_the_osm_polygon_for_emission(self):
         hall_twin = shapely.box(14.176004, 49.786003, 14.176404, 49.786203)
@@ -98,7 +95,7 @@ class BuildStructuresTests(unittest.TestCase):
         census, t = self.build([ovt_row(hall_twin, h=8.0, tier=2)])
         self.assertEqual(census["both"], 1)
         row = {name: t.column(name)[0].as_py() for name in t.column_names}
-        self.assertEqual(row["geom"], grid_polygon(hall_twin))
+        self.assertEqual(row["geom"], screening_polygons(hall_twin))
         self.assertEqual(row["emission_geom"], grid_polygon(OSM_HALL))
 
     def test_osm_only_row_ladders_from_osm_tags(self):
@@ -137,7 +134,7 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertEqual(t.column("height_tier").to_pylist(), [4, 4, 4, 2, 0])
         self.assertEqual(t.column("height_m").to_pylist()[-2:], [3, 5])
         meta = t.schema.metadata
-        self.assertEqual(meta[b"structures_contract"], b"structures_v3")
+        self.assertEqual(meta[b"structures_contract"], b"structures_v4")
         self.assertEqual(meta[b"building_rows"], b"3")
         self.assertEqual(meta[b"barrier_rows"], b"2")
 
@@ -222,6 +219,27 @@ class BuildStructuresTests(unittest.TestCase):
             self.build([])
 
 
+    def test_real_topology_survives_builder_and_periodic_matching(self):
+        for case in write_topology_roundtrip(self.prepared / "topology"):
+            table = ipc.open_file(Path(case["root"]) / case["square"] / "structures.arrow").read_all()
+            self.assertEqual(table.num_rows, 1, "one matched logical building")
+            self.assertEqual(table.column("emission_geom")[0].as_py().hex(), case["emission_geom"])
+            blob = table.column("geom")[0].as_py()
+            parts = GRID.decode_grid_polygons(blob)
+            self.assertEqual(len(parts), case["parts"])
+            self.assertEqual(sum(map(len, parts)), case["rings"])
+            geom = shapely.MultiPolygon([shapely.Polygon(GRID.ring_to_lonlat(rings[0]),
+                    [GRID.ring_to_lonlat(ring) for ring in rings[1:]]) for rings in parts])
+            geom = SOURCES.footprint_in_longitude_frame(geom, case["lon"])
+            for lat, lon, inside in case["points"]:
+                local_lon = case["lon"] + GRID.wrapped_longitude_delta(case["lon"], lon)
+                self.assertEqual(geom.contains(shapely.Point(local_lon, lat)), inside)
+            for length in range(len(blob)):
+                self.assertIsNone(GRID.decode_grid_polygons(blob[:length]))
+            self.assertIsNone(GRID.decode_grid_polygons(blob + b"x"))
+            self.assertIsNone(GRID.decode_grid_polygons(b"\xff" * 4))
+
+
 def overture_parquet(path, geometries):
     pq.write_table(pa.table({
         "geometry": pa.array([shapely.to_wkb(geometry) for geometry in geometries],
@@ -229,6 +247,34 @@ def overture_parquet(path, geometries):
 
 
 class AntimeridianTests(unittest.TestCase):
+    def test_periodic_matching_preserves_one_emission_and_original_geometry(self):
+        for centre, direction in ((14.0, 1), (180.0, 1), (180.0, -1)):
+            with self.subTest(centre=centre, direction=direction), tempfile.TemporaryDirectory() as directory:
+                def placed_box(west, south, east, north):
+                    return shapely.Polygon([
+                        (GRID.normalize_longitude(centre + direction * x), y)
+                        for x, y in shapely.box(west, south, east, north).exterior.coords])
+
+                osm = placed_box(-.0002, 10.0, .0003, 10.0002)
+                overture = placed_box(.00005, 10.00004, .00015, 10.00016)
+                osm_data = osm_row(0, osm, 3000.0, height=12.0)
+                lat, lon = SOURCES.footprint_centroid(osm)
+                osm_data["centroid_gx"], osm_data["centroid_gy"] = GRID.lonlat_to_grid(lon, lat)
+                overture_data = ovt_row(overture, h=12.0, tier=0)
+                overture_data["clat"], overture_data["clon"] = SOURCES.footprint_centroid(overture)
+                square = GRID.square_of(lat, lon)
+                self.assertEqual(square, GRID.square_of(overture_data["clat"], overture_data["clon"]))
+                name = GRID.square_name(*square)
+                prepared = Path(directory)
+                (prepared / name).mkdir(parents=True)
+                buildings_arrow(prepared / name / "buildings.arrow", [osm_data])
+                census = BUILDER.build_square(name, prepared, [overture_data], [], FakeGlobalPrior(), None)
+                table = ipc.open_file(prepared / name / "structures.arrow").read_all()
+                self.assertEqual((census["both"], table.num_rows), (1, 1))
+                self.assertEqual(table.column("osm_id").to_pylist(), [1000])
+                self.assertEqual(table.column("geom").to_pylist(), [screening_polygons(overture)])
+                self.assertEqual(table.column("emission_geom").to_pylist(), [grid_polygon(osm)])
+
     def test_footprint_centroid_crosses_the_dateline(self):
         # Same labelled footprint as the dev1 structure-builder regression.
         crossing = shapely.Polygon([

@@ -778,7 +778,7 @@ pub struct BuildingResult {
     pub addr_housenumber: String,
     pub polygon_wkb: String,
     pub dist_m: f64,
-    /// Decoded grid ring (`emission_geom ?? geom`); drives the emission
+    /// Original OSM grid ring (`emission_geom`); drives the emission
     /// compute. Never on the wire.
     #[serde(skip_serializing)]
     pub polygon_grid: grid::poly::GridRing,
@@ -937,8 +937,7 @@ pub fn query_railways_from_batches(
 /// valid `osm_id`, in file order — the old buildings.arrow subsequence with
 /// the same values. The emission position is `emission_centroid_*` where the
 /// merge kept the OSM centroid (matched rows screen at the Overture one), else
-/// `centroid_*`; the emission polygon likewise is `emission_geom` where
-/// stored, else `geom`.
+/// `centroid_*`; emission_geom always contains the original OSM ring or null.
 pub fn query_buildings_from_batches(
     batches: &[arrow::record_batch::RecordBatch],
     lat: f64,
@@ -969,7 +968,6 @@ pub fn query_buildings_from_batches(
         let street = col_str(batch, "addr_street");
         let house = col_str(batch, "addr_housenumber");
         let emission_geom = col_binary(batch, "emission_geom");
-        let geom = col_binary(batch, "geom");
 
         for i in 0..n {
             if kind.value(i) != STRUCTURE_KIND_BUILDING || osm_id.is_null(i) {
@@ -989,7 +987,6 @@ pub fn query_buildings_from_batches(
 
             let polygon_grid: grid::poly::GridRing = emission_geom
                 .filter(|a| !a.is_null(i))
-                .or(geom.filter(|a| !a.is_null(i)))
                 .and_then(|a| decode_geom(Some(a.value(i))))
                 .unwrap_or_default();
             let polygon_wkb = hex_encode(&grid_ring_to_wkb_polygon(&ring_lonlat(&polygon_grid)));
@@ -1094,10 +1091,6 @@ pub fn query_leisure_from_batches(
 /// Encode a lon/lat ring as little-endian WKB Polygon (single ring) so the
 /// debug `polygon_wkb` strings keep their contract while the compute path
 /// reads the grid ring directly.
-pub(crate) fn grid_ring_to_wkb_polygon_pub(ring_lonlat: &[(f64, f64)]) -> Vec<u8> {
-    grid_ring_to_wkb_polygon(ring_lonlat)
-}
-
 fn grid_ring_to_wkb_polygon(ring_lonlat: &[(f64, f64)]) -> Vec<u8> {
     let mut wkb = Vec::with_capacity(9 + 4 + ring_lonlat.len() * 16 + 16);
     wkb.push(1);

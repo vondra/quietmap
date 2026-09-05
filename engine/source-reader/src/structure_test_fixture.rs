@@ -1,5 +1,5 @@
 //! Test double for `scripts/structures/build-structures.py` + the osm-extract
-//! finalizers: writes the structures_v3 per-square table (kind-tagged
+//! finalizers: writes the structures_v4 per-square table (kind-tagged
 //! buildings ∪ walls) and tiny road/rail/leisure/industrial arrows that the
 //! popup readers under test consume, with the contract metadata
 //! `square_store::store::load_square` gates on. Coordinates are lon/lat floats
@@ -114,10 +114,16 @@ fn structure_columns(rows: &[StructureRow]) -> Vec<ArrayRef> {
         .collect();
     vec![
         Arc::new(UInt8Array::from_iter_values(rows.iter().map(|r| r.kind))),
-        Arc::new(BinaryArray::from_iter(
-            rows.iter()
-                .map(|r| r.ring_lonlat.as_ref().map(|ring| encode_ring(ring))),
-        )),
+        Arc::new(BinaryArray::from_iter(rows.iter().map(|r| {
+            r.ring_lonlat.as_ref().map(|ring| {
+                if r.kind == square_store::store::STRUCTURE_KIND_BARRIER {
+                    encode_ring(ring)
+                } else {
+                    let ring = ring.iter().map(|&(lon, lat)| grid_of(lon, lat)).collect();
+                    grid::poly::encode_grid_polygons(&[vec![ring]])
+                }
+            })
+        }))),
         Arc::new(Int16Array::from_iter_values(
             rows.iter().map(|r| r.height_m),
         )),
@@ -153,6 +159,7 @@ fn structure_columns(rows: &[StructureRow]) -> Vec<ArrayRef> {
         Arc::new(BinaryArray::from_iter(rows.iter().map(|r| {
             r.emission_ring_lonlat
                 .as_ref()
+                .or_else(|| r.osm_id.and(r.ring_lonlat.as_ref()))
                 .map(|ring| encode_ring(ring))
         }))),
         Arc::new(Int32Array::from_iter(

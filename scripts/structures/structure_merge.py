@@ -13,16 +13,16 @@ import qmgrid
 import structure_contract
 import structure_inputs
 import structure_freshness
+import structure_inventory
 from structure_freshness import input_fingerprint
 from structure_contract import (
     SCHEMA, CONTRACT_KEY, CONTRACT_VERSION, KIND_BUILDING, KIND_BARRIER,
-    EMISSION_GRID_THRESHOLD_M2,
     load_osm_buildings, load_barriers, wall_grid_poly, wall_centroid_grid,
     validate_square, screening_height_metres,
 )
 from structure_inputs import (
     ENVELOPE_FROM_BUILDING_USE, ENVELOPE_DEFAULT, ENVELOPE_OUTDOOR,
-    apply_raster_tiers, overture_height_ladder,
+    apply_raster_tiers, overture_height_ladder, footprint_in_longitude_frame,
 )
 
 IOU_MATCH_THRESHOLD = 0.5
@@ -30,7 +30,8 @@ IOU_MATCH_THRESHOLD = 0.5
 def builder_version():
     """A source-code correction invalidates resume even with frozen inputs."""
     digest = sha256()
-    for module in (qmgrid, structure_contract, structure_inputs, structure_freshness):
+    for module in (qmgrid, structure_contract, structure_inputs, structure_freshness,
+                   structure_inventory):
         assert module.__file__ is not None
         digest.update(Path(module.__file__).read_bytes())
     for name in ("build-structures.py", "structure_merge.py"):
@@ -40,14 +41,27 @@ def builder_version():
 
 BUILDER_VERSION = builder_version()
 
+
+def structure_is_fresh(out_path, inputs):
+    if not os.path.exists(out_path):
+        return False
+    with ipc.open_file(out_path) as output_file:
+        metadata = output_file.schema.metadata or {}
+    return (metadata.get(b"input_fingerprint") == inputs.encode()
+            and metadata.get(b"builder_version") == BUILDER_VERSION.encode()
+            and metadata.get(CONTRACT_KEY.encode()) == CONTRACT_VERSION.encode()
+            and metadata.get(b"grid") == b"z30")
+
+
 def match_pairs(osm_geoms, osm_geom_idx, overture_rows):
     """One-to-one OSM<->Overture assignment; returns {overture_row: osm_row}.
-    Proven form (complete qualifying set, greedy by iou/centroid/rows) — kept
-    verbatim, geometry source agnostic."""
+    Complete qualifying set, greedy by iou/centroid/rows, in one local frame."""
     from shapely import wkb as shapely_wkb
 
     if not overture_rows or not osm_geoms:
         return {}
+    reference = float(shapely.get_coordinates(osm_geoms[0])[0][0])
+    osm_geoms = [footprint_in_longitude_frame(geom, reference) for geom in osm_geoms]
     tree = STRtree(osm_geoms)
     edges = []
     for j, row in enumerate(overture_rows):
@@ -55,6 +69,7 @@ def match_pairs(osm_geoms, osm_geom_idx, overture_rows):
         if g is None:
             g = shapely_wkb.loads(row["wkb"])
             row["geom"] = g
+        g = footprint_in_longitude_frame(g, reference)
         c = g.centroid
         for k in tree.query(g, predicate="intersects"):
             og = osm_geoms[k]
@@ -89,22 +104,11 @@ def build_square(name, prepared_dir, overture_rows, overture_inputs, ghsl, regio
         raise ValueError(f"not a square name: {name}")
     x, y = square
     square_dir = os.path.join(prepared_dir, "z9", str(x), str(y))
-    if not os.path.isdir(square_dir):
-        raise SystemExit(
-            f"{name}: no prepared square directory {square_dir} — the structure table "
-            f"follows the prepared inventory and must not extend it"
-        )
     overture_rows = overture_rows or []
     out_path = os.path.join(square_dir, "structures.arrow")
     inputs = input_fingerprint(square_dir, overture_inputs, ghsl, regional)
-    if os.path.exists(out_path):
-        with ipc.open_file(out_path) as output_file:
-            output_meta = output_file.schema.metadata or {}
-        if (output_meta.get(b"input_fingerprint") == inputs.encode()
-                and output_meta.get(b"builder_version") == BUILDER_VERSION.encode()
-                and output_meta.get(CONTRACT_KEY.encode()) == CONTRACT_VERSION.encode()
-                and output_meta.get(b"grid") == b"z30"):
-            return None
+    if structure_is_fresh(out_path, inputs):
+        return None
     osm = load_osm_buildings(os.path.join(square_dir, "buildings.arrow"))
     barriers = load_barriers(os.path.join(square_dir, "barriers.arrow"))
 
@@ -146,22 +150,22 @@ def build_square(name, prepared_dir, overture_rows, overture_inputs, ghsl, regio
     wall_counter = 0
 
     def snap_geom(geom):
-        """Shapely polygon -> snapped grid ring (exterior of the largest part).
-        v2 stores one ring per row; holes were already dropped at extract."""
-        if geom.geom_type == "MultiPolygon":
-            geom = max(geom.geoms, key=lambda p: p.area)
-        return [qmgrid.lonlat_to_grid(x, y)
-                for x, y in shapely.get_coordinates(geom.exterior)]
+        parts = geom.geoms if geom.geom_type == "MultiPolygon" else [geom]
+        return qmgrid.encode_grid_polygons([
+            [[qmgrid.lonlat_to_grid(x, y) for x, y in ring.coords]
+             for ring in [part.exterior, *part.interiors]] for part in parts
+        ])
 
     def emit(i_osm, ovt, ordinal):
         if ovt is not None:
-            ring = snap_geom(ovt_geom(ovt))
-            geom_blob = qmgrid.encode_grid_poly(ring)
+            geom_blob = snap_geom(ovt_geom(ovt))
             height_m, tier = ovt["height_m"], ovt["tier"]
             envelope = ovt["envelope"]
             cgx, cgy = qmgrid.lonlat_to_grid(ovt["clon"], ovt["clat"])
         else:
-            geom_blob = osm["geom"][i_osm]
+            osm_blob = osm["geom"][i_osm]
+            geom_blob = (qmgrid.encode_grid_polygons([[qmgrid.decode_grid_poly(osm_blob)]])
+                         if osm_blob is not None else None)
             r = osm_only[i_osm]  # every unmatched OSM row laddered above
             height_m, tier = r["height_m"], r["tier"]
             envelope = ENVELOPE_FROM_BUILDING_USE.get(
@@ -179,16 +183,8 @@ def build_square(name, prepared_dir, overture_rows, overture_inputs, ghsl, regio
                   "name", "addr_street", "addr_housenumber", "area_m2",
                   "opening_hours_frac", "source_id"):
             out[c].append(osm[c][i_osm] if i_osm is not None else None)
-        emission_geom = None
-        if i_osm is not None:
-            osm_blob = osm["geom"][i_osm]
-            area = osm["area_m2"][i_osm]
-            needs_poly = osm_blob is not None and (
-                area is None or not (area > 0.0) or area > EMISSION_GRID_THRESHOLD_M2
-            )
-            if needs_poly and osm_blob != geom_blob:
-                emission_geom = osm_blob
-        out["emission_geom"].append(emission_geom)
+        # Screening topology can differ; emission always retains the original ring.
+        out["emission_geom"].append(osm["geom"][i_osm] if i_osm is not None else None)
         if i_osm is not None and ovt is not None:
             out["emission_centroid_gx"].append(osm["centroid_gx"][i_osm])
             out["emission_centroid_gy"].append(osm["centroid_gy"][i_osm])
@@ -263,6 +259,7 @@ def build_square(name, prepared_dir, overture_rows, overture_inputs, ghsl, regio
 
     validate_square(name, osm, table)
 
+    os.makedirs(square_dir, exist_ok=True)
     tmp = f"{out_path}.tmp.{os.getpid()}"
     with ipc.new_file(tmp, schema) as w:
         # Sequential 4096-row chunks, no spatial re-sort: the emission stream is

@@ -143,3 +143,50 @@ def decode_grid_poly(blob):
 
 def ring_to_lonlat(ring):
     return [grid_to_lonlat(gx, gy) for gx, gy in ring]
+
+
+def encode_grid_polygons(polygons):
+    """Parts -> rings (exterior first) -> int32 pairs; mirrors engine/grid."""
+    out = bytearray(len(polygons).to_bytes(4, "little"))
+    for rings in polygons:
+        out += len(rings).to_bytes(4, "little")
+        for ring in rings:
+            out += encode_grid_poly(ring)
+    return bytes(out)
+
+
+def decode_grid_polygons(blob):
+    """Return all parts/rings or reject the entire malformed topology."""
+    if blob is None:
+        return None
+    offset = 0
+
+    def count():
+        nonlocal offset
+        if offset + 4 > len(blob):
+            raise ValueError("truncated topology")
+        value = int.from_bytes(blob[offset:offset + 4], "little")
+        offset += 4
+        return value
+
+    try:
+        polygon_count = count()
+        if not 0 < polygon_count <= (len(blob) - offset) // 4:
+            return None
+        polygons = []
+        for _ in range(polygon_count):
+            ring_count = count()
+            if not 0 < ring_count <= (len(blob) - offset) // 4:
+                return None
+            rings = []
+            for _ in range(ring_count):
+                start = offset
+                points = count()
+                if not 3 <= points <= (len(blob) - offset) // 8:
+                    return None
+                offset += points * 8
+                rings.append(decode_grid_poly(blob[start:offset]))
+            polygons.append(rings)
+        return polygons if offset == len(blob) else None
+    except ValueError:
+        return None

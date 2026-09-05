@@ -1,4 +1,4 @@
-"""The structures_v3 Arrow contract, source decoding, and emission preservation proof."""
+"""The structures_v4 Arrow contract, source decoding, and emission preservation proof."""
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -11,15 +11,14 @@ from structure_inputs import grid_ring_to_shapely
 
 KIND_BUILDING = 0
 KIND_BARRIER = 1
-EMISSION_GRID_THRESHOLD_M2 = 2000.0  # normalize/points.rs building grid threshold.
 
 CONTRACT_KEY = "structures_contract"
-CONTRACT_VERSION = "structures_v3"  # z30 geometry and Int16 screening metres.
+CONTRACT_VERSION = "structures_v4"  # z30 geometry and Int16 screening metres.
 
 SCHEMA = pa.schema(
     [
         pa.field("kind", pa.uint8(), nullable=False),
-        # Snapped grid polygon (qmgrid.encode_grid_poly form), screening stock.
+        # Building parts/rings (encode_grid_polygons); barriers keep encode_grid_poly.
         pa.field("geom", pa.binary()),
         pa.field("height_m", pa.int16(), nullable=False),
         pa.field("height_tier", pa.uint8(), nullable=False),
@@ -38,7 +37,7 @@ SCHEMA = pa.schema(
         pa.field("area_m2", pa.float32()),
         pa.field("opening_hours_frac", pa.uint8()),
         pa.field("source_id", pa.uint16()),
-        # Emission overrides (null -> geom / centroid_*).
+        # Original OSM ring, including null; centroid overrides retain OSM positions.
         pa.field("emission_geom", pa.binary()),
         pa.field("emission_centroid_gx", pa.int32()),
         pa.field("emission_centroid_gy", pa.int32()),
@@ -136,8 +135,7 @@ def wall_centroid_grid(s_gx, s_gy, e_gx, e_gy):
 def validate_square(name, osm, table):
     """Emission-view proof for one square (raises, never warns): the emission
     view (kind=0, osm_id present, file order) equals buildings.arrow row by row
-    on every emission column, with the emission polygon = emission_geom ??
-    geom and the emission centroid = emission_centroid_* ?? centroid_*."""
+    on every emission column, original emission_geom and emission centroids."""
     mask = pc.call_function("and", [
         pc.call_function("equal", [table.column("kind"), KIND_BUILDING]),
         pc.call_function("is_valid", [table.column("osm_id")]),
@@ -150,7 +148,6 @@ def validate_square(name, osm, table):
         )
     cols = {c: view.column(c).to_pylist() for c in EMISSION_COMPARE}
     egeom = view.column("emission_geom").to_pylist()
-    geom = view.column("geom").to_pylist()
     egx = view.column("emission_centroid_gx").to_pylist()
     egy = view.column("emission_centroid_gy").to_pylist()
     cgx = view.column("centroid_gx").to_pylist()
@@ -162,10 +159,7 @@ def validate_square(name, osm, table):
                     f"{name}: emission row {i} column {c}: "
                     f"{cols[c][i]!r} != {osm[c][i]!r}"
                 )
-        area = osm["area_m2"][i]
-        if (area is None or not (area > 0.0) or area > EMISSION_GRID_THRESHOLD_M2) and (
-            egeom[i] or geom[i]
-        ) != osm["geom"][i]:
+        if egeom[i] != osm["geom"][i]:
             raise SystemExit(f"{name}: emission row {i} polygon differs")
         if (egx[i] if egx[i] is not None else cgx[i]) != osm["centroid_gx"][i]:
             raise SystemExit(f"{name}: emission row {i} centroid_gx differs")

@@ -9,7 +9,9 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
 import qmgrid
 from structure_inputs import GlobalPrior, RegionalHeights, read_overture_parquet
-from structure_merge import build_square
+from structure_freshness import file_identity, input_fingerprint
+from structure_inventory import overture_sources, world_squares
+from structure_merge import build_square, structure_is_fresh
 
 
 def main():
@@ -18,14 +20,19 @@ def main():
     ap.add_argument("--overture-parquet", required=True)
     ap.add_argument("--ghsl", required=True)
     ap.add_argument("--regional")
-    group = ap.add_mutually_exclusive_group(required=True)
+    group = ap.add_mutually_exclusive_group()
     group.add_argument("--squares")
     group.add_argument("--squares-file")
     ap.add_argument("--census-log", help="append one JSON line per built square")
     args = ap.parse_args()
 
-    squares = ([line.strip() for line in open(args.squares_file) if line.strip()]
-               if args.squares_file else args.squares.split(","))
+    if args.squares_file:
+        with open(args.squares_file) as source:
+            squares = [line.strip() for line in source if line.strip()]
+    elif args.squares:
+        squares = args.squares.split(",")
+    else:
+        squares = world_squares(args.prepared_dir, args.overture_parquet)
     ghsl = GlobalPrior(args.ghsl)
     regional = RegionalHeights(args.regional) if args.regional else None
     census_log = open(args.census_log, "a", encoding="utf-8") if args.census_log else None
@@ -35,9 +42,16 @@ def main():
         square = qmgrid.parse_square_name(name)
         if square is None:
             ap.error(f"not a square name: {name}")
-        x, y = square
-        ovt, ovt_inputs = read_overture_parquet(args.overture_parquet, (x, y))
-        census = build_square(name, args.prepared_dir, ovt, ovt_inputs, ghsl, regional)
+        name = qmgrid.square_name(*square)
+        square_dir = os.path.join(args.prepared_dir, name)
+        ovt_inputs = [file_identity(source)
+                      for _, _, source in overture_sources(args.overture_parquet, square)]
+        inputs = input_fingerprint(square_dir, ovt_inputs, ghsl, regional)
+        if structure_is_fresh(os.path.join(square_dir, "structures.arrow"), inputs):
+            census = None
+        else:
+            ovt, ovt_inputs = read_overture_parquet(args.overture_parquet, square)
+            census = build_square(name, args.prepared_dir, ovt, ovt_inputs, ghsl, regional)
         if census is None:
             totals["fresh_skip"] += 1
         else:

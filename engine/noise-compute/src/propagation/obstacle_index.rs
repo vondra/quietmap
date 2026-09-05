@@ -1283,6 +1283,7 @@ impl ObstacleIndex {
     ) -> Option<(EnvelopeClass, f32, u32)> {
         self.collect_containing_footprints(lat, lon, min_height_m, seen);
         seen.iter()
+            .filter(|(_, crossings, _)| crossings % 2 == 1)
             .map(|(id, _, height)| {
                 let class = EnvelopeClass::from_u8(self.footprint_class[*id as usize]);
                 (class, *height, *id)
@@ -2704,6 +2705,14 @@ mod tests {
         assert!(
             idx.contains_built(alat, alon, 5.0, &mut sc),
             "annulus between hole and outer wall"
+        );
+        assert!(
+            idx.containing_footprint(OLAT, OLON, 5.0, &mut sc).is_none(),
+            "hover must also leave the courtyard outdoors"
+        );
+        assert!(
+            idx.containing_footprint(alat, alon, 5.0, &mut sc).is_some(),
+            "hover must retain the annulus building"
         );
     }
 

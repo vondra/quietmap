@@ -1,10 +1,4 @@
-//! Integer footprint rings: the only polygon encoding in prepared data.
-//!
-//! A ring is snapped z30 grid cells; the column form is `u32 LE count +
-//! count × (i32 gx, i32 gy)`. Area and containment run the proven float
-//! formulas over grid→metre conversion (fixed op order ⇒ deterministic).
-//! Rings never cross the antimeridian as one ring — same behaviour as the
-//! float geometry they replace.
+//! Integer z30 rings and polygon topology for prepared geometry.
 
 use super::{grid_to_meters, WEB_MERCATOR_RADIUS_M};
 use std::f64::consts::PI;
@@ -14,6 +8,55 @@ pub const MIN_FOOTPRINT_AREA_M2: f64 = 1.0;
 
 /// One snapped ring: z30 cells in lon/lat order (closed or not).
 pub type GridRing = Vec<(i32, i32)>;
+
+/// Every polygon's rings, exterior first followed by its holes.
+pub type GridPolygons = Vec<Vec<GridRing>>;
+
+/// Polygon count, then each ring count and existing ring encoding, all LE.
+pub fn encode_grid_polygons(polygons: &[Vec<GridRing>]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(polygons.len() as u32).to_le_bytes());
+    for rings in polygons {
+        bytes.extend_from_slice(&(rings.len() as u32).to_le_bytes());
+        for ring in rings {
+            bytes.extend_from_slice(&encode_grid_poly(ring));
+        }
+    }
+    bytes
+}
+
+/// Reject incomplete topology before allocating or returning any of its parts.
+pub fn decode_grid_polygons(mut bytes: &[u8]) -> Option<GridPolygons> {
+    fn count(bytes: &mut &[u8]) -> Option<usize> {
+        let value = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?) as usize;
+        *bytes = &bytes[4..];
+        Some(value)
+    }
+    let polygon_count = count(&mut bytes)?;
+    if polygon_count == 0 || polygon_count > bytes.len() / 4 {
+        return None;
+    }
+    let mut polygons = Vec::with_capacity(polygon_count);
+    for _ in 0..polygon_count {
+        let ring_count = count(&mut bytes)?;
+        if ring_count == 0 || ring_count > bytes.len() / 4 {
+            return None;
+        }
+        let mut rings = Vec::with_capacity(ring_count);
+        for _ in 0..ring_count {
+            let mut points = bytes;
+            let point_count = count(&mut points)?;
+            if point_count < 3 || point_count > points.len() / 8 {
+                return None;
+            }
+            let ring_bytes = 4 + point_count * 8;
+            rings.push(decode_grid_poly(&bytes[..ring_bytes])?);
+            bytes = &bytes[ring_bytes..];
+        }
+        polygons.push(rings);
+    }
+    bytes.is_empty().then_some(polygons)
+}
 
 /// Encode a ring to the `geom` column form.
 pub fn encode_grid_poly(ring: &[(i32, i32)]) -> Vec<u8> {
@@ -171,6 +214,23 @@ mod tests {
         assert_eq!(decode_grid_poly(&bytes), Some(ring));
         assert_eq!(decode_grid_poly(&bytes[..7]), None);
         assert_eq!(decode_grid_poly(&[]), None);
+    }
+
+    #[test]
+    fn polygon_topology_is_complete_or_rejected() {
+        let ring = prague_square_ring();
+        let polygons = vec![vec![ring.clone(), ring.clone()], vec![ring]];
+        let bytes = encode_grid_polygons(&polygons);
+        assert_eq!(decode_grid_polygons(&bytes), Some(polygons));
+        for truncated in 0..bytes.len() {
+            assert!(decode_grid_polygons(&bytes[..truncated]).is_none());
+        }
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(decode_grid_polygons(&trailing).is_none());
+        for malformed in [vec![0; 4], u32::MAX.to_le_bytes().to_vec()] {
+            assert!(decode_grid_polygons(&malformed).is_none());
+        }
     }
 
     #[test]

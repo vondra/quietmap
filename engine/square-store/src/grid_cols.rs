@@ -64,3 +64,25 @@ pub fn ring_lonlat(ring: &[(i32, i32)]) -> Vec<(f64, f64)> {
         })
         .collect()
 }
+
+/// All parts and holes reach the existing obstacle kernel under one row identity.
+pub fn polygons_wkb(polygons: &poly::GridPolygons) -> Vec<u8> {
+    let mut wkb = vec![1];
+    wkb.extend_from_slice(&6u32.to_le_bytes());
+    wkb.extend_from_slice(&(polygons.len() as u32).to_le_bytes());
+    for rings in polygons {
+        wkb.push(1);
+        wkb.extend_from_slice(&3u32.to_le_bytes());
+        wkb.extend_from_slice(&(rings.len() as u32).to_le_bytes());
+        for ring in rings {
+            let close = ring.first() != ring.last();
+            wkb.extend_from_slice(&((ring.len() + usize::from(close)) as u32).to_le_bytes());
+            for &(gx, gy) in ring.iter().chain(ring.first().filter(|_| close)) {
+                let (lon, lat) = grid_cell_lonlat(gx, gy);
+                wkb.extend_from_slice(&lon.to_le_bytes());
+                wkb.extend_from_slice(&lat.to_le_bytes());
+            }
+        }
+    }
+    wkb
+}

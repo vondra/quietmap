@@ -49,7 +49,9 @@ use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind, Ob
 use noise_compute::propagation::obstacle_index_file::{fnv1a64, IndexBlob, BUILDER_CODE_VER};
 
 use crate::query::squares_within_reach;
-use square_store::grid_cols::{decode_geom, ring_lonlat};
+use square_store::grid_cols::{
+    col_binary, col_f32, col_i32, col_u8, decode_geom, polygons_wkb, ring_lonlat,
+};
 use square_store::store::{STRUCTURE_KIND_BARRIER, STRUCTURE_KIND_BUILDING};
 use square_store::structure_contract;
 
@@ -746,41 +748,16 @@ fn build_square_index(square: Square, structures_arrow: &Path) -> Result<Obstacl
             .and_then(|c| c.as_any().downcast_ref::<BinaryArray>())
             .ok_or_else(|| format!("{}: missing geom", structures_arrow.display()))?;
         let heights = batch_heights[batch_idx];
-        let tiers = batch
-            .column_by_name("height_tier")
-            .and_then(|c| c.as_any().downcast_ref::<UInt8Array>());
-        let cgxs = batch
-            .column_by_name("centroid_gx")
-            .and_then(|c| c.as_any().downcast_ref::<Int32Array>());
-        let cgys = batch
-            .column_by_name("centroid_gy")
-            .and_then(|c| c.as_any().downcast_ref::<Int32Array>());
-        let area_col = batch
-            .column_by_name("area_m2")
-            .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
-        let ring = decode_geom(Some(geom.value(i))).ok_or_else(|| {
-            format!(
-                "{}: row {i} geom is not a grid ring",
-                structures_arrow.display()
-            )
-        })?;
         let id = next_id;
         match kinds.value(i) {
             STRUCTURE_KIND_BUILDING => {
-                let mut height = f32::from(heights.value(i));
-                if let (Some(tiers), Some(cgxs), Some(cgys)) = (tiers, cgxs, cgys) {
-                    if !tiers.is_null(i) && !cgxs.is_null(i) && !cgys.is_null(i) {
-                        let (clon, clat) =
-                            square_store::grid_cols::grid_cell_lonlat(cgxs.value(i), cgys.value(i));
-                        let area = area_col
-                            .filter(|a| !a.is_null(i))
-                            .map(|a| a.value(i))
-                            .or_else(|| grid::poly::ring_area_m2(&ring).map(|a| a as f32))
-                            .unwrap_or(0.0);
-                        height =
-                            low_profile.capped_height(height, tiers.value(i), clat, clon, area);
-                    }
-                }
+                let (polygons, height, _, _) = building_geometry_and_height(
+                    batch,
+                    i,
+                    f32::from(heights.value(i)),
+                    &low_profile,
+                )
+                .map_err(|error| format!("{}: {error}", structures_arrow.display()))?;
                 let class = batch
                     .column_by_name("envelope_class")
                     .and_then(|c| c.as_any().downcast_ref::<UInt8Array>())
@@ -790,13 +767,19 @@ fn build_square_index(square: Square, structures_arrow: &Path) -> Result<Obstacl
                 // Grid rings reach the index through the same WKB ingestion
                 // every other loader uses, so the envelope class travels with
                 // the footprint exactly as before.
-                let wkb = crate::query::grid_ring_to_wkb_polygon_pub(&ring_lonlat(&ring));
+                let wkb = polygons_wkb(&polygons);
                 builder.add_polygon_wkb(&wkb, height, ObstacleKind::Building, id, class);
             }
             // Walls keep their mapped height: the cap is a building-only
             // correction (noise_compute::low_profile caps tiers 2/4), and
             // add_polyline never clamps to the building height ceiling.
             STRUCTURE_KIND_BARRIER => {
+                let ring = decode_geom(Some(geom.value(i))).ok_or_else(|| {
+                    format!(
+                        "{}: row {i} invalid wall geometry",
+                        structures_arrow.display()
+                    )
+                })?;
                 if ring.len() < 2 {
                     return Err(format!(
                         "{}: row {i} geom is not a wall microsegment",
@@ -821,16 +804,53 @@ fn build_square_index(square: Square, structures_arrow: &Path) -> Result<Obstacl
     Ok(builder.build())
 }
 
-/// One footprint as the MODEL uses it (display twin of `build_square_index`):
-/// the outer ring in lat/lon plus the AS-USED height — after the low-profile
-/// cap — its ingest tier, and whether the cap fired. Feeds the
-/// building-height debug overlay so the map shows exactly what the
-/// propagation engine screens with (owner ask 2026-08-02).
+/// Screening topology and height are identical for the index and display.
+fn building_geometry_and_height(
+    batch: &arrow::record_batch::RecordBatch,
+    row: usize,
+    raw_height: f32,
+    low_profile: &LowProfileLookup,
+) -> Result<(grid::poly::GridPolygons, f32, u8, bool), String> {
+    let polygons = col_binary(batch, "geom")
+        .filter(|column| !column.is_null(row))
+        .and_then(|column| grid::poly::decode_grid_polygons(column.value(row)))
+        .ok_or_else(|| format!("row {row} has invalid building topology"))?;
+    let tier = col_u8(batch, "height_tier")
+        .filter(|column| !column.is_null(row))
+        .map_or(0, |column| column.value(row));
+    let mut height = raw_height;
+    if let (Some(gx), Some(gy)) = (col_i32(batch, "centroid_gx"), col_i32(batch, "centroid_gy")) {
+        if !gx.is_null(row) && !gy.is_null(row) {
+            let (lon, lat) =
+                square_store::grid_cols::grid_cell_lonlat(gx.value(row), gy.value(row));
+            let area = col_f32(batch, "area_m2")
+                .filter(|column| !column.is_null(row))
+                .map(|column| column.value(row))
+                .unwrap_or_else(|| {
+                    // Preserve the existing cap's largest-exterior area fallback;
+                    // every part and hole still reaches containment and screening.
+                    polygons
+                        .iter()
+                        .filter_map(|rings| grid::poly::ring_area_m2(&rings[0]))
+                        .fold(0.0, f64::max) as f32
+                });
+            height = low_profile.capped_height(raw_height, tier, lat, lon, area);
+        }
+    }
+    Ok((polygons, height, tier, height < raw_height))
+}
+
+/// One logical footprint with all polygon rings in lat/lon and as-used height.
+#[derive(serde::Serialize)]
 pub struct FootprintView {
-    /// (lat, lon) outer-ring vertices (closed or open as stored).
-    pub outer: Vec<(f64, f64)>,
+    /// Polygon parts, each with exterior first and then holes.
+    #[serde(rename = "p")]
+    pub polygons: Vec<Vec<Vec<(f64, f64)>>>,
+    #[serde(rename = "h")]
     pub height_m: f32,
+    #[serde(rename = "t")]
     pub tier: u8,
+    #[serde(rename = "c")]
     pub capped: bool,
 }
 
@@ -900,12 +920,6 @@ pub fn footprints_in_bbox(
             ) else {
                 continue;
             };
-            let tiers = batch
-                .column_by_name("height_tier")
-                .and_then(|c| c.as_any().downcast_ref::<UInt8Array>());
-            let area_col = batch
-                .column_by_name("area_m2")
-                .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
             for i in 0..batch.num_rows() {
                 // Walls are not footprints; the overlay draws buildings only.
                 if kinds.value(i) != STRUCTURE_KIND_BUILDING {
@@ -923,25 +937,31 @@ pub fn footprints_in_bbox(
                 {
                     continue;
                 }
-                let Some(ring) = decode_geom(Some(geom.value(i))) else {
-                    continue;
-                };
-                let raw = f32::from(heights.value(i));
-                let tier = tiers.map(|t| t.value(i)).unwrap_or(0);
-                let area = area_col
-                    .filter(|a| !a.is_null(i))
-                    .map(|a| a.value(i))
-                    .or_else(|| grid::poly::ring_area_m2(&ring).map(|a| a as f32))
-                    .unwrap_or(0.0);
-                let height = low_profile.capped_height(raw, tier, clat, clon, area);
+                let (polygons, height_m, tier, capped) = building_geometry_and_height(
+                    &batch,
+                    i,
+                    f32::from(heights.value(i)),
+                    &low_profile,
+                )
+                .map_err(|error| format!("{}: {error}", path.display()))?;
                 out.push(FootprintView {
-                    outer: ring_lonlat(&ring)
-                        .into_iter()
-                        .map(|(lon, lat)| (lat, lon))
+                    polygons: polygons
+                        .iter()
+                        .map(|rings| {
+                            rings
+                                .iter()
+                                .map(|ring| {
+                                    ring_lonlat(ring)
+                                        .into_iter()
+                                        .map(|(lon, lat)| (lat, lon))
+                                        .collect()
+                                })
+                                .collect()
+                        })
                         .collect(),
-                    height_m: height,
+                    height_m,
                     tier,
-                    capped: height < raw,
+                    capped,
                 });
             }
         }
@@ -1126,9 +1146,9 @@ mod tests {
         );
         assert_eq!(fps[0].tier, 0);
         assert!(!fps[0].capped);
-        assert_eq!(fps[0].outer.len(), 5);
-        assert!((fps[0].outer[0].0 - LAT).abs() < 0.0001);
-        assert!((fps[0].outer[0].1 - LON).abs() < 0.0001);
+        assert_eq!(fps[0].polygons[0][0].len(), 5);
+        assert!((fps[0].polygons[0][0][0].0 - LAT).abs() < 0.0001);
+        assert!((fps[0].polygons[0][0][0].1 - LON).abs() < 0.0001);
     }
 
     #[test]
@@ -1168,7 +1188,7 @@ mod tests {
                     "centroid {centroid_lon}, bbox {west}..{east}"
                 );
                 assert_eq!(footprints[0].height_m, 12.0);
-                assert_eq!(footprints[0].outer.len(), 5);
+                assert_eq!(footprints[0].polygons[0][0].len(), 5);
             }
             assert!(
                 footprints_in_bbox(tmp.path(), 9.99, 179.96, 10.01, 179.97)

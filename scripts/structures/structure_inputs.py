@@ -1,7 +1,6 @@
 """Raster height sources and canonical Overture footprint ingestion."""
 
 import math
-import os
 
 import numpy as np
 import pyarrow as pa
@@ -13,6 +12,7 @@ from pyproj import Transformer
 
 import qmgrid
 from structure_freshness import file_identity
+from structure_inventory import overture_sources
 
 MEASURED_MIN_M = 2.0      # zonal pixels below this are "not a building surface here"
 COVERAGE_MIN_FRAC = 0.30  # measured pixels must cover this share of the footprint
@@ -170,21 +170,29 @@ def envelope_class(building_class, subtype, underground):
     return ENVELOPE_DEFAULT
 
 
+def footprint_in_longitude_frame(geom, reference):
+    """Move a working GEOS geometry to one shared short-arc longitude frame."""
+    minimum_lon, _, maximum_lon, _ = geom.bounds
+    if minimum_lon >= reference - 180.0 and maximum_lon < reference + 180.0:
+        return geom
+
+    def shift(xy):
+        delta = qmgrid.wrapped_longitude_delta(reference, xy[:, 0])
+        turns = np.rint((xy[:, 0] - reference - delta) / 360.0)
+        # Whole-turn shifts preserve ordinary vertex coordinates exactly.
+        return np.column_stack((xy[:, 0] - 360.0 * turns, xy[:, 1]))
+
+    return shapely.transform(geom, shift)
+
+
 def footprint_centroid(geom):
-    """The footprint's centroid as (lat, lon in [-180, 180)). Antimeridian
-    unwrap around the first coordinate (proven form — kept verbatim)."""
+    """Canonical (lat, lon) centroid using the same short arc as matching."""
     minimum_lon, _, maximum_lon, _ = geom.bounds
     if maximum_lon - minimum_lon <= 180.0:
         centroid = geom.centroid
         return centroid.y, centroid.x
     reference = float(shapely.get_coordinates(geom)[0][0])
-    unwrapped = shapely.transform(
-        geom,
-        lambda xy: np.column_stack(
-            (xy[:, 0] - 360.0 * np.round((xy[:, 0] - reference) / 360.0), xy[:, 1])
-        ),
-    )
-    centroid = unwrapped.centroid
+    centroid = footprint_in_longitude_frame(geom, reference).centroid
     return centroid.y, qmgrid.normalize_longitude(centroid.x)
 
 
@@ -211,52 +219,42 @@ def read_overture_parquet(parquet_dir, square):
     Returns (rows, identities of every contributing parquet)."""
     from shapely import wkb as shapely_wkb
 
-    x, y = square
-    lon0, lat_top, lon1, lat_bot = qmgrid.square_lonlat_span(x, y)
     rows = []
     inputs = []
-    for lat in range(math.floor(lat_bot), math.floor(lat_top) + 1):
-        for lon in range(math.floor(lon0), math.ceil(lon1)):
-            name = f"{'N' if lat >= 0 else 'S'}{abs(lat):02d}{'E' if lon >= 0 else 'W'}{abs(lon):03d}"
-            src = os.path.join(parquet_dir, f"{name}.parquet")
-            if not os.path.exists(src):
-                raise SystemExit(
-                    f"{qmgrid.square_name(x, y)}: Overture parquet {src} is missing — run "
-                    f"scripts/overture/download-overture-world.sh first"
+    for lat, lon, src in overture_sources(parquet_dir, square):
+        inputs.append(file_identity(src))
+        pf = pq.ParquetFile(src)
+        have = set(pf.schema_arrow.names)
+        cols = [c for c in ("geometry", "height", "num_floors", "class",
+                            "subtype", "is_underground") if c in have]
+        for batch in pf.iter_batches(columns=cols):
+            t = pa.Table.from_batches([batch])
+            geoms = t.column("geometry").to_pylist()
+            n = len(geoms)
+            heights = t.column("height").to_pylist() if "height" in have else [None] * n
+            floors = t.column("num_floors").to_pylist() if "num_floors" in have else [None] * n
+            classes = t.column("class").to_pylist() if "class" in have else [None] * n
+            subtypes = t.column("subtype").to_pylist() if "subtype" in have else [None] * n
+            und = t.column("is_underground").to_pylist() if "is_underground" in have else [False] * n
+            for g, h, f, bc, st, ug in zip(geoms, heights, floors, classes, subtypes, und):
+                if g is None:
+                    continue
+                geom = shapely_wkb.loads(bytes(g))
+                if geom.is_empty or geom.geom_type not in ("Polygon", "MultiPolygon"):
+                    continue
+                clat, clon = footprint_centroid(geom)
+                if not (math.isfinite(clat) and math.isfinite(clon)):
+                    continue
+                if not (lat <= clat < lat + 1 and lon <= clon < lon + 1):
+                    continue
+                if qmgrid.square_of(clat, clon) != square:
+                    continue
+                hh, tier = overture_height_ladder(h, f)
+                rows.append(
+                    {"wkb": bytes(g), "height_m": hh, "tier": tier,
+                     "clat": clat, "clon": clon,
+                     "envelope": envelope_class(bc, st, ug)}
                 )
-            inputs.append(file_identity(src))
-            pf = pq.ParquetFile(src)
-            have = set(pf.schema_arrow.names)
-            cols = [c for c in ("geometry", "height", "num_floors", "class",
-                                "subtype", "is_underground") if c in have]
-            for batch in pf.iter_batches(columns=cols):
-                t = pa.Table.from_batches([batch])
-                geoms = t.column("geometry").to_pylist()
-                n = len(geoms)
-                heights = t.column("height").to_pylist() if "height" in have else [None] * n
-                floors = t.column("num_floors").to_pylist() if "num_floors" in have else [None] * n
-                classes = t.column("class").to_pylist() if "class" in have else [None] * n
-                subtypes = t.column("subtype").to_pylist() if "subtype" in have else [None] * n
-                und = t.column("is_underground").to_pylist() if "is_underground" in have else [False] * n
-                for g, h, f, bc, st, ug in zip(geoms, heights, floors, classes, subtypes, und):
-                    if g is None:
-                        continue
-                    geom = shapely_wkb.loads(bytes(g))
-                    if geom.is_empty or geom.geom_type not in ("Polygon", "MultiPolygon"):
-                        continue
-                    clat, clon = footprint_centroid(geom)
-                    if not (math.isfinite(clat) and math.isfinite(clon)):
-                        continue
-                    if not (lat <= clat < lat + 1 and lon <= clon < lon + 1):
-                        continue
-                    if qmgrid.square_of(clat, clon) != (x, y):
-                        continue
-                    hh, tier = overture_height_ladder(h, f)
-                    rows.append(
-                        {"wkb": bytes(g), "height_m": hh, "tier": tier,
-                         "clat": clat, "clon": clon,
-                         "envelope": envelope_class(bc, st, ug)}
-                    )
     return rows, inputs
 
 def apply_raster_tiers(rows, regional, ghsl, stats):
