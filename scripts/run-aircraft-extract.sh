@@ -2,9 +2,11 @@
 # Build observed aircraft popup data under PREPARED_YEAR_DIR/z9/x/y.
 # Required: PREPARED_YEAR_DIR (the year directory), PREPARED_DIR (root containing rasters/),
 # ADSB_CACHE and optional DAYS (comma-separated YYYY-MM-DD; defaults to cache days).
-# HYBRID=1 uses AIRLINE_CACHE/AIRLINE_DAYS for non-GA (including GSE), and
-# GA_CACHE/GA_DAYS for piston GA and helicopters. Each pass preserves its own
-# sampling denominator; the merge follows the proven dev1 class routing.
+# HYBRID=1 selects the latest 12 completed first-of-month airline samples and
+# 365 GA days ending at the same monthly anchor. AIRCRAFT_ANCHOR=YYYY-MM pins a
+# historical run; otherwise the latest completed monthly sample is used.
+# AIRLINE_CACHE contains non-GA inputs (including GSE); GA_CACHE contains
+# adsb.lol inputs for piston GA and helicopters. Archive size never sets a window.
 # Existing passes are reused only after exact day, schema, class and feed checks.
 # --from-stage controls the single pass or hybrid merge stage; successful
 # upstream work stays available after failure. MEMMAX= explicitly disables
@@ -29,6 +31,7 @@ AIRLINE_CACHE="${AIRLINE_CACHE:-}"
 AIRLINE_DAYS="${AIRLINE_DAYS:-}"
 GA_CACHE="${GA_CACHE:-}"
 GA_DAYS="${GA_DAYS:-}"
+AIRCRAFT_ANCHOR="${AIRCRAFT_ANCHOR:-}"
 FAIL_ON_GA_CRUISE="${FAIL_ON_GA_CRUISE:-}"
 MEMMAX="${MEMMAX-100G}"
 MAX_THREADS="${MAX_THREADS:-}"
@@ -68,7 +71,7 @@ while [ $# -gt 0 ]; do
             echo "Usage: $0 [--feed <adsblol|adsbexchange>] [--from-stage <stage0|...|stage2c>]"
             echo "Env vars: FEED, ADSB_CACHE, PREPARED_YEAR_DIR (year directory containing z9/), PREPARED_DIR, WORK_DIR,"
             echo "          DAYS, SCOPE_BBOX, FROM_STAGE, LOG_DIR, MEMMAX, MAX_THREADS"
-            echo "Hybrid:   HYBRID=1, AIRLINE_FEED, AIRLINE_CACHE, AIRLINE_DAYS, GA_CACHE, GA_DAYS,"
+            echo "Hybrid:   HYBRID=1, AIRLINE_FEED, AIRLINE_CACHE, GA_CACHE, AIRCRAFT_ANCHOR,"
             echo "          FAIL_ON_GA_CRUISE=1"
             exit 0
             ;;
@@ -87,6 +90,14 @@ esac
 if [ -n "$HYBRID" ]; then
     [ -n "$AIRLINE_CACHE" ] || die "HYBRID=1 requires AIRLINE_CACHE= with an explicit cache directory"
     [ -n "$GA_CACHE" ] || die "HYBRID=1 requires GA_CACHE= with an explicit cache directory"
+    [ -z "$DAYS$AIRLINE_DAYS$GA_DAYS" ] \
+        || die "hybrid dates come from one AIRCRAFT_ANCHOR, not DAYS/AIRLINE_DAYS/GA_DAYS"
+    WINDOW_ARGS=()
+    [ -z "$AIRCRAFT_ANCHOR" ] || WINDOW_ARGS+=(--anchor "$AIRCRAFT_ANCHOR")
+    WINDOW_CSV="$(python3 "$SCRIPT_DIR/aircraft_window.py" "${WINDOW_ARGS[@]}")" \
+        || die "invalid aircraft sampling window"
+    AIRLINE_DAYS="${WINDOW_CSV%%$'\n'*}"
+    GA_DAYS="${WINDOW_CSV#*$'\n'}"
 else
     [ -n "$ADSB_CACHE" ] || die "requires ADSB_CACHE= with an explicit cache directory"
 fi
@@ -142,19 +153,8 @@ stamp_gate() {
 }
 
 if [ -n "$HYBRID" ]; then
-    [ -z "$DAYS" ] || die "HYBRID=1 ignores DAYS — set AIRLINE_DAYS / GA_DAYS instead"
     W_AIR="$WORK_DIR/airline"
     W_GA="$WORK_DIR/ga"
-    if [ -z "$AIRLINE_DAYS" ]; then
-        log "AIRLINE_DAYS not set; deriving from AIRLINE_CACHE=$AIRLINE_CACHE"
-        AIRLINE_DAYS="$(derive_days "$AIRLINE_CACHE")"
-    fi
-    if [ -z "$GA_DAYS" ]; then
-        log "GA_DAYS not set; deriving from GA_CACHE=$GA_CACHE"
-        GA_DAYS="$(derive_days "$GA_CACHE")"
-    fi
-    [ -n "$AIRLINE_DAYS" ] || die "no airline ADS-B TAR days resolved from $AIRLINE_CACHE"
-    [ -n "$GA_DAYS" ] || die "no GA ADS-B TAR days resolved from $GA_CACHE"
     log "hybrid: airline $(count_csv "$AIRLINE_DAYS") day(s) from $AIRLINE_CACHE (feed=$AIRLINE_FEED) + GA $(count_csv "$GA_DAYS") day(s) from $GA_CACHE (feed=adsblol)"
 
     run_pass() { # <label> <feed> <cache> <days> <class-filter> <work-dir>
