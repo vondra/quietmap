@@ -41,6 +41,7 @@ class ImdOverlayTests(unittest.TestCase):
             with rasterio.open(masked) as dataset:
                 np.testing.assert_array_equal(dataset.read(1),
                                               np.where(values > 100, 255, values))
+            with overlay.open_mosaic(masked, 5) as dataset:
                 actual = overlay.overlay_tile(np.full((5, 5), 5, dtype=np.uint8),
                                               [(dataset, {"N00E000"})], "N00E000")
             self.assertEqual(actual[0, 0], 5)
@@ -63,7 +64,7 @@ class ImdOverlayTests(unittest.TestCase):
             temporary.mkdir()
             mosaics = overlay.build_mosaics(root, temporary)
             self.assertEqual(len(mosaics), 2)
-            opened = [(stack.enter_context(rasterio.open(path)), coverage)
+            opened = [(stack.enter_context(overlay.open_mosaic(path, 11)), coverage)
                       for path, coverage in mosaics]
             base = np.full((11, 11), 5, dtype=np.uint8)
             base[5, 4] = 100
@@ -140,8 +141,48 @@ class ImdOverlayTests(unittest.TestCase):
                     overlay.build_mosaics(root, root)
             with mock.patch.object(overlay, "WarpedVRT", side_effect=RuntimeError("warp failed")):
                 with self.assertRaisesRegex(RuntimeError, "warp failed"):
-                    overlay.overlay_tile(np.zeros((3, 3), dtype=np.uint8),
-                                         [(None, {"N00E000"})], "N00E000")
+                    with overlay.open_mosaic(source, 3):
+                        pass
+
+    def test_projected_sampling_is_independent_of_tile_and_read_window(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.tif"
+            left, bottom, right, top = transform_bounds(
+                "EPSG:4326", "EPSG:3035", 13.9, 49.9, 16.1, 52.1)
+            values = np.random.default_rng(2024).integers(0, 101, (512, 512), dtype=np.uint8)
+            write_source(source, values, "EPSG:3035",
+                         Affine((right-left)/512, 0, left, 0, (bottom-top)/512, top))
+            names = ["N50E014", "N50E015", "N51E014"]
+            with overlay.open_mosaic(source, 101) as mosaic:
+                base = np.full((101, 101), 5, dtype=np.uint8)
+                first, east, north = [overlay.overlay_tile(base, [(mosaic, set(names))], name)
+                                      for name in names]
+                np.testing.assert_array_equal(first[:, -1], east[:, 0])
+                np.testing.assert_array_equal(first[0, :], north[-1, :])
+                pieces = np.vstack([
+                    mosaic.read(1, window=((3900+row, 3900+min(row+17, 101)),
+                                           (19400, 19501)))
+                    for row in range(0, 101, 17)
+                ])
+                np.testing.assert_array_equal(first, pieces)
+                self.assertGreater(np.count_nonzero(first != 5), 10000)
+                self.assertLessEqual(first.max(), 100)
+
+    def test_common_sampling_preserves_an_analytic_linear_field(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.tif"
+            cols = 13.95 + (np.arange(840)+0.5)*0.0025
+            rows = 52.05 - (np.arange(840)+0.5)*0.0025
+            values = np.rint(30+(cols[None, :]-14)*10+(rows[:, None]-50)*15).astype(np.uint8)
+            write_source(source, values, transform=Affine(0.0025, 0, 13.95, 0, -0.0025, 52.05))
+            with overlay.open_mosaic(source, 101) as mosaic:
+                actual = overlay.overlay_tile(np.full((101, 101), 5, dtype=np.uint8),
+                                              [(mosaic, {"N50E014"})], "N50E014")
+            longitude = 14 + np.arange(101)/100
+            latitude = 51 - np.arange(101)/100
+            expected = np.rint(30+(longitude[None, :]-14)*10+(latitude[:, None]-50)*15)
+            # Integer source and output quantization can straddle a rounding tie.
+            self.assertLessEqual(np.abs(actual.astype(np.int16)-expected).max(), 1)
 
 
 if __name__ == "__main__":

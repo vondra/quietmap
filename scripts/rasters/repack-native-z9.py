@@ -18,14 +18,9 @@ def source_coverage(channel: str, dem_source: Path, worldcover_source: Path | No
     if channel == "imd":
         if worldcover_source is None:
             raise ValueError("IMD requires the official WorldCover source catalog")
-        inventory = worldcover_sources.read_catalog(worldcover_source)
-        tiles = set().union(*(worldcover_sources.native_tiles(key) for key in inventory))
-        # ESA WorldCover PUM V2.0 §3.4.2 limits valid coverage to 82.75°N.
-        # At the native input's one-degree granularity, partial N82 land is
-        # deliberately unavailable until a source-backed per-node mask exists.
-        unknown = (land - tiles) | {tile for tile in land if tile[0] >= 82}
-        tiles -= unknown
-        authority["worldcover"] = sorted(inventory.items())
+        tiles, unknown, background_digest = worldcover_sources.complete_imd_coverage(worldcover_source, land)
+        authority["worldcover"] = sorted(worldcover_sources.read_catalog(worldcover_source).items())
+        authority["cci_background"] = background_digest
     else:
         tiles = land
     return {"channel": channel, "tiles": sorted(tiles), "unknown": sorted(unknown),

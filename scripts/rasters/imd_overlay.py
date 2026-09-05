@@ -1,7 +1,7 @@
 """Reproject valid chronological IMD measurements over immutable WorldCover tiles."""
 
 import argparse
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import errno
 import fcntl
 import filecmp
@@ -112,19 +112,30 @@ def read_base(path, grid=GRID):
     return values
 
 
+@contextmanager
+def open_mosaic(path, grid):
+    intervals = grid - 1
+    step = 1.0 / intervals
+    # Fixed global blocks keep GDAL's bilinear kernel independent of read windows.
+    with rasterio.Env(GDAL_FORCE_CACHING=True), rasterio.open(path) as mosaic:
+        with WarpedVRT(mosaic, crs="EPSG:4326",
+                       transform=Affine(step, 0, -180-step/2, 0, -step, 90+step/2),
+                       width=360*intervals+1, height=180*intervals+1,
+                       src_nodata=255, nodata=255, resampling=Resampling.bilinear) as warped:
+            yield warped
+
+
 def overlay_tile(base, mosaics, name):
     lat, lon = tile_coordinates(name)
     grid = base.shape[0]
-    step = 1.0 / (grid - 1)
-    transform = Affine(step, 0, lon - step / 2, 0, -step, lat + 1 + step / 2)
+    intervals = grid - 1
+    row, col = (89-lat)*intervals, (lon+180)*intervals
+    window = ((row, row+grid), (col, col+grid))
     result = base.copy()
     for mosaic, coverage in mosaics:
         if name not in coverage:
             continue
-        with WarpedVRT(mosaic, crs="EPSG:4326", transform=transform,
-                       width=grid, height=grid, src_nodata=255, nodata=255,
-                       resampling=Resampling.bilinear) as warped:
-            values = warped.read(1)
+        values = mosaic.read(1, window=window)
         # Only WorldCover knows water: earlier IMD=100 also means urban land.
         values[(base == 100) & (values == 0)] = 100
         valid = values <= 100
@@ -183,7 +194,7 @@ def convert(source_root, base_root, output_root, selected_tiles=()):
             targets = base_tiles | overlay_tiles | {p.stem for p in output_root.glob("*.raw")}
             if selected_tiles:
                 targets = set(selected_tiles)
-            opened = [(stack.enter_context(rasterio.open(path)), coverage)
+            opened = [(stack.enter_context(open_mosaic(path, GRID)), coverage)
                       for path, coverage in mosaics]
             changed = 0
             for index, name in enumerate(sorted(targets), 1):

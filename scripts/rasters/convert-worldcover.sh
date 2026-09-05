@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# Convert ESA WorldCover 2021 → forest .raw + IMD proxy .raw for ALL land tiles.
+# Convert native WorldCover classes and CCI gap classes to forest and complete IMD.
 # Each 3°×3° WorldCover tile produces up to 9 output 1°×1° tiles.
-# ~50 min with 16 parallel.
-#
 # --imd-force  regenerate IMD outputs even when they already exist (atomic
 #              in-place overwrite via tmp+rename — the old tile stays readable
 #              until the replace). Needed when the class→imperviousness LUT
 #              changes. Forest outputs are never touched — forest derives
 #              from class 10 alone.
 #
-# Required env: WC_SRC, FOREST_DST, IMD_DST (release dirs).
+# Required env: WC_SRC, DEM_SRC, FOREST_DST, IMD_DST (release dirs).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 source scripts/rasters/node-extent.sh
@@ -27,6 +25,9 @@ done
 : "${FOREST_DST:?set FOREST_DST to the release rasters/forest dir}"
 : "${IMD_DST:?set IMD_DST to the release rasters/imd dir}"
 JOBS="${JOBS:-16}"
+: "${DEM_SRC:?set DEM_SRC to the official Copernicus source catalog root}"
+export PYTHONPATH="$PWD/scripts/rasters${PYTHONPATH:+:$PYTHONPATH}"
+"$QM_VENV_PYTHON" -c 'import os; from pathlib import Path; from worldcover_sources import validate_cci_source; validate_cci_source(Path(os.environ["WC_SRC"]))'
 
 mkdir -p "$FOREST_DST" "$IMD_DST"
 
@@ -36,22 +37,38 @@ VRT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/worldcover-vrt.XXXXXX")
 trap 'rm -rf "$VRT_DIR"' EXIT
 VRT="$VRT_DIR/worldcover_global.vrt"
 echo "[worldcover] $(date '+%H:%M:%S') Building global VRT from $(find "$WC_SRC" -maxdepth 1 -name '*.tif' | wc -l) tiles..."
-gdalbuildvrt -q "$VRT" "$WC_SRC"/*.tif
+gdalbuildvrt -q "$VRT" "$WC_SRC"/*_Map.tif
 echo "[worldcover] $(date '+%H:%M:%S') VRT ready"
 
 # Generate list of all 1°×1° tiles to produce.
 # Parse WorldCover tile names (e.g., ESA_WorldCover_10m_2021_v200_N48E012_Map.tif)
 # Each covers 3°×3°, so N48E012 → produces tiles for lat 48-50, lon 12-14
 TILE_LIST="$VRT_DIR/tiles.txt"
-"$QM_VENV_PYTHON" - "$WC_SRC" "$TILE_LIST" << 'PYEOF'
-import os, re, sys
-src, out = sys.argv[1], sys.argv[2]
+"$QM_VENV_PYTHON" - "$WC_SRC" "$TILE_LIST" "$DEM_SRC" << 'PYEOF'
+import os, re, subprocess, sys
+from pathlib import Path
+import dem_sources
+import worldcover_sources
+src, out, dem = sys.argv[1:]
+worldcover_sources.validate_source_files(Path(src), worldcover_sources.read_catalog(Path(src)))
 tiles = set()
+dateline_sources = []
 for f in os.listdir(src):
     m = re.match(r'ESA_WorldCover_10m_2021_v200_([NS])(\d+)([EW])(\d+)_Map\.tif', f)
     if not m: continue
     lat = int(m.group(2)) * (1 if m.group(1) == 'N' else -1)
     lon = int(m.group(4)) * (1 if m.group(3) == 'E' else -1)
+    source_path = os.path.join(src, f)
+    if lon == 177:
+        dateline_sources.append(source_path)
+    elif lon == -180:
+        wrapped_source = os.path.join(os.path.dirname(out), f + '.vrt')
+        wrapped_west = lon + 360
+        # Relabel longitude only: source pixels stay 1:1 on their native lattice.
+        subprocess.run(['gdal_translate', '-q', '-of', 'VRT', '-a_ullr',
+                        str(wrapped_west), str(lat+3), str(wrapped_west+3), str(lat),
+                        source_path, wrapped_source], check=True)
+        dateline_sources.append(wrapped_source)
     for dlat in range(3):
         for dlon in range(3):
             t_lat = lat + dlat
@@ -59,8 +76,14 @@ for f in os.listdir(src):
             ns = 'N' if t_lat >= 0 else 'S'
             ew = 'E' if t_lon >= 0 else 'W'
             tiles.add(f'{ns}{abs(t_lat):02d}{ew}{abs(t_lon):03d}')
+Path(out).with_name('worldcover-tiles.txt').write_text('\n'.join(sorted(tiles)) + '\n')
+tiles.update(dem_sources.tile_name(tile) for tile in dem_sources.read_catalog(Path(dem))[90])
 with open(out, 'w') as fh:
     fh.write('\n'.join(sorted(tiles)) + '\n')
+if dateline_sources:
+    subprocess.run(['gdalbuildvrt', '-q', '-strict',
+                    os.path.join(os.path.dirname(out), 'worldcover_dateline.vrt'),
+                    *dateline_sources], check=True)
 PYEOF
 
 TOTAL=$(wc -l < "$TILE_LIST")
@@ -78,7 +101,7 @@ convert_one() {
     # and cache the miss (/gg 2026-06-11 CRITICAL). Forest never forced —
     # it derives from class 10 alone.
     local NEED_FOREST=0 NEED_IMD=0
-    [ -f "$FOREST_OUT" ] || NEED_FOREST=1
+    if grep -qx "$NAME" "$VRT_DIR/worldcover-tiles.txt" && [ ! -f "$FOREST_OUT" ]; then NEED_FOREST=1; fi
     if [ ! -f "$IMD_OUT" ] || [ "${IMD_FORCE:-0}" = "1" ]; then NEED_IMD=1; fi
     [ "$NEED_FOREST" = "0" ] && [ "$NEED_IMD" = "0" ] && return 0
 
@@ -95,41 +118,35 @@ convert_one() {
     local -a tile_extent
     read -r -a tile_extent <<< "$(node_extent "$lon" "$lat" 3601)"
 
-    local TMP_FOREST="$VRT_DIR/wc_forest_${NAME}.tif"
-    local TMP_IMD="$VRT_DIR/wc_imd_${NAME}.tif"
+    local TMP_CLASSES="$VRT_DIR/wc_classes_${NAME}.tif"
     # Leftovers from an interrupted run make gdalwarp fail ("output exists")
-    rm -f "$TMP_FOREST" "$TMP_IMD"
+    rm -f "$TMP_CLASSES"
 
     # Read native classes: source overviews can turn grass/water into trees.
-    # Warp for forest (3601×3601 = 30m, node-registered matching DEM)
-    if [ "$NEED_FOREST" = "1" ]; then
-        gdalwarp -q -te "${tile_extent[@]}" \
-            -ts 3601 3601 -r near -ovr NONE -ot Byte \
-            "$VRT" "$TMP_FOREST" 2>/dev/null \
-            || { rm -f "$TMP_FOREST"; echo "$NAME warp-forest" >> "$FAIL_LIST"; return 0; }
+    local tile_source="$VRT"
+    if [ "$lon" -eq 179 ] || [ "$lon" -eq -180 ]; then
+        tile_source="$VRT_DIR/worldcover_dateline.vrt"
     fi
-
-    # Warp for IMD (3601×3601 = 30m, node-registered matching DEM/forest/building)
-    if [ "$NEED_IMD" = "1" ]; then
-        gdalwarp -q -te "${tile_extent[@]}" \
-            -ts 3601 3601 -r near -ovr NONE -ot Byte \
-            "$VRT" "$TMP_IMD" 2>/dev/null \
-            || { rm -f "$TMP_IMD"; echo "$NAME warp-imd" >> "$FAIL_LIST"; return 0; }
-    fi
+    gdalwarp -q -te "${tile_extent[@]}" \
+        -ts 3601 3601 -r near -ovr NONE -ot Byte \
+        "$tile_source" "$TMP_CLASSES" 2>/dev/null \
+        || { rm -f "$TMP_CLASSES"; echo "$NAME warp" >> "$FAIL_LIST"; return 0; }
 
     # Reclassify with rasterio. Outputs land via tmp + os.replace so a reader
     # (popup mmap) never sees a torn tile and an interrupted run never leaves
     # a partial .raw that the exists-skip would treat as done.
     NEED_FOREST="$NEED_FOREST" NEED_IMD="$NEED_IMD" \
-    TMP_FOREST="$TMP_FOREST" TMP_IMD="$TMP_IMD" \
+    TMP_CLASSES="$TMP_CLASSES" TILE_NAME="$NAME" \
     FOREST_OUT="$FOREST_OUT" IMD_OUT="$IMD_OUT" \
     "$QM_VENV_PYTHON" << 'PYEOF' || { echo "$NAME reclass" >> "$FAIL_LIST"; return 0; }
 import numpy as np, os
+from pathlib import Path
 import rasterio
+from imd_overlay import tile_coordinates
+from worldcover_sources import WORLDCOVER_IMD, categorical_imd, cci_source_path, cci_tile_classes
 
-def read(path):
-    with rasterio.open(path) as ds:
-        return ds.read(1)
+with rasterio.open(os.environ['TMP_CLASSES']) as dataset:
+    arr = dataset.read(1)
 
 def write_atomic(arr, dst):
     tmp = f'{dst}.tmp.{os.getpid()}'
@@ -138,38 +155,22 @@ def write_atomic(arr, dst):
 
 # Forest: class 10 (tree cover) → 100, else → 0
 if os.environ['NEED_FOREST'] == '1':
-    arr = read(os.environ['TMP_FOREST'])
     write_atomic(np.where(arr == 10, np.uint8(100), np.uint8(0)),
                  os.environ['FOREST_OUT'])
 
 # IMD proxy: WorldCover class → imperviousness %
 if os.environ['NEED_IMD'] == '1':
-    arr = read(os.environ['TMP_IMD'])
-    lut = np.zeros(256, dtype=np.uint8)
-    lut[10] = 2    # tree cover
-    lut[20] = 5    # shrubland
-    lut[30] = 5    # grassland
-    lut[40] = 10   # cropland
-    lut[50] = 85   # built-up
-    lut[60] = 15   # bare/sparse
-    # Snow/ice stays soft (G=1): WorldCover 70 is permanent snow/firn
-    # (glaciers), and snow cover is acoustically porous. ISO 9613-2 lists
-    # bare ice as hard, but bare ice is a negligible sliver of class 70.
-    lut[70] = 0    # snow/ice
-    # Water is acoustically HARD, G=0 (ISO 9613-2 7.3.1 groups it with
-    # paving/concrete). Was 0 = fully soft, ~3 dB too quiet across
-    # lakes/rivers/sea (2026-06 audit B3).
-    lut[80] = 100  # water
-    lut[90] = 5    # wetland
-    lut[95] = 2    # mangroves
-    lut[100] = 5   # moss/lichen
-    write_atomic(lut[arr.flat].reshape(arr.shape), os.environ['IMD_OUT'])
+    background = None
+    if not np.all(np.isin(arr, tuple(WORLDCOVER_IMD))):
+        with rasterio.open(cci_source_path(Path(os.environ['WC_SRC']))) as source:
+            background = cci_tile_classes(source, tile_coordinates(os.environ['TILE_NAME']))
+    write_atomic(categorical_imd(arr, background), os.environ['IMD_OUT'])
 PYEOF
 
-    rm -f "$TMP_FOREST" "$TMP_IMD"
+    rm -f "$TMP_CLASSES"
 }
 export -f convert_one
-export VRT FOREST_DST IMD_DST IMD_FORCE VRT_DIR QM_VENV_PYTHON
+export VRT FOREST_DST IMD_DST IMD_FORCE VRT_DIR QM_VENV_PYTHON WC_SRC
 
 # Per-tile failures land here; any entry fails the whole run at the end —
 # a silent gap would otherwise surface as a phantom hard/soft ground strip.

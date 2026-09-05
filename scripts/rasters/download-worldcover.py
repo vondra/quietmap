@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sync ESA WorldCover v200 2021 3x3-degree Map.tif tiles (unsigned S3, resumable)."""
+"""Acquire official WorldCover maps and the pinned global CCI IMD background."""
 import argparse, os
 import boto3
 from botocore import UNSIGNED
@@ -7,7 +7,7 @@ from botocore.config import Config
 from concurrent.futures import ThreadPoolExecutor
 import threading
 from pathlib import Path
-from worldcover_sources import BUCKET, fetch_catalog, validate_source_files
+from worldcover_sources import BUCKET, fetch_catalog, validate_source_files, download_cci_source, validate_cci_source
 
 
 def main() -> int:
@@ -24,6 +24,7 @@ def main() -> int:
     print(f"tiles: {len(keys)}", flush=True)
     if args.catalog_only:
         validate_source_files(Path(args.dest), inventory)
+        validate_cci_source(Path(args.dest))
         return 0
     lock = threading.Lock()
     done = [0]; skipped = [0]; bytes_dl = [0]
@@ -45,6 +46,7 @@ def main() -> int:
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
         list(ex.map(one, keys))
     validate_source_files(Path(args.dest), inventory)
+    download_cci_source(Path(args.dest))
     print(f"FINAL dl={done[0]} skip={skipped[0]} GB={bytes_dl[0]/1e9:.1f}", flush=True)
     return 0
 

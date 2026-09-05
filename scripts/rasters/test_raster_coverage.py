@@ -5,6 +5,9 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
+
+import numpy as np
 
 import dem_sources
 import worldcover_sources
@@ -46,9 +49,29 @@ class CoverageTest(unittest.TestCase):
             for key in keys:
                 (wc / key.rsplit("/", 1)[-1]).write_bytes(b"TIFF")
             worldcover_sources.validate_source_files(wc, keys)
-            coverage = repack.source_coverage("imd", dem, wc)
-            self.assertEqual(set(coverage["unknown"]), {(40, 44), (82, -40), (83, -40)})
-            self.assertEqual(len(coverage["tiles"]), 16)
+            class Background:
+                width, height = 129600, 64800
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def read(self, band, window):
+                    (top, bottom), (left, right) = window
+                    values = np.full((bottom-top, right-left), 220, dtype=np.uint8)
+                    if top == (89-40)*360 and left == (44+180)*360:
+                        values[0, 0] = 0
+                    return values
+
+            with mock.patch.object(worldcover_sources, "validate_cci_source", return_value="reviewed"), \
+                    mock.patch.object(worldcover_sources.rasterio, "open", return_value=Background()):
+                coverage = repack.source_coverage("imd", dem, wc)
+            self.assertEqual(set(coverage["unknown"]), {(40, 44)})
+            self.assertEqual(len(coverage["tiles"]), 18)
+            self.assertIn((82, -40), coverage["tiles"])
+            self.assertIn((83, -40), coverage["tiles"])
             self.assertNotIn((40, 44), coverage["tiles"])
             for channel in ("dem", "forest"):
                 coverage = repack.source_coverage(channel, dem, None)
