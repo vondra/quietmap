@@ -4,9 +4,11 @@
 //! out on stderr with stdout left empty,
 //! `surface_layers` the five-layer table every module indexes,
 //! `cell_preparation` one cell's sources on the host and on the card,
-//! `relevant_source_runner` the producer/painter pipeline over the stream, and
+//! `relevant_source_runner` the producer/painter pipeline over the stream,
+//! `batch_raster_lookahead` the CPU threads that keep the card fed, and
 //! `cell_measurement` what a cell cost.
 
+pub mod batch_raster_lookahead;
 #[cfg(feature = "gpu")]
 pub mod cell_measurement;
 #[cfg(feature = "gpu")]

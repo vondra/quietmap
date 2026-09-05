@@ -185,10 +185,18 @@ impl FusedTileZ13 {
         // (possibly shared) halo: denser than the 3×3-on-mmap probe
         // and one fewer cache hop.
         //
+        // One retained mmap per raster, as in `FusedGrid::build`: a plain
+        // `sample` takes the tile-slot mutex, clones its `Arc` and bumps two
+        // LRU atomics per pixel, on cache lines every concurrent tile build
+        // shares.
+        //
         // Pixel-lattice loops: `py`/`px` index the receiver lat/lon vectors AND
         // compute the flat output offset `idx = py*TILE_PX + px`, so enumerate()
         // would not remove the manual indexing. Kept verbatim (raster sampling
         // feeds the byte-exact heatmap kernel).
+        let (mut dem_key, mut dem_tile) = ((i32::MIN, i32::MIN), None);
+        let (mut forest_key, mut forest_tile) = ((i32::MIN, i32::MIN), None);
+        let (mut imd_key, mut imd_tile) = ((i32::MIN, i32::MIN), None);
         #[allow(clippy::needless_range_loop)]
         for py in 0..TILE_PX {
             let lat = rx_lat[py];
@@ -197,10 +205,20 @@ impl FusedTileZ13 {
             for px in 0..TILE_PX {
                 let lon = rx_lon[px];
                 let idx = row_base + px;
-                let elev = rasters.dem.sample(lat, lon) as f32;
+                let elev = rasters
+                    .dem
+                    .sample_cached(lat, lon, &mut dem_key, &mut dem_tile)
+                    as f32;
                 inner_elev_m[idx] = elev;
-                inner_forest[idx] = rasters.forest.sample(lat, lon) as u8;
-                inner_imd[idx] = rasters.imd.sample(lat, lon).round() as u8;
+                inner_forest[idx] =
+                    rasters
+                        .forest
+                        .sample_cached(lat, lon, &mut forest_key, &mut forest_tile)
+                        as u8;
+                inner_imd[idx] = rasters
+                    .imd
+                    .sample_cached(lat, lon, &mut imd_key, &mut imd_tile)
+                    .round() as u8;
                 rx_alt_m[idx] = elev + DEFAULT_RECEIVER_HEIGHT as f32;
             }
         }

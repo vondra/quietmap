@@ -238,6 +238,12 @@ impl FusedGrid {
     }
 
     /// Build from RealRasters, cropping to bbox. ~0.2-0.5s for typical hex.
+    ///
+    /// One retained mmap per raster across the whole walk. A plain `sample`
+    /// takes the tile-slot mutex, clones its `Arc` and bumps two LRU atomics
+    /// for every one of the millions of cells, and those are cache lines every
+    /// concurrent halo build shares: measured 2026-09-06, three tile batches
+    /// built at once cost 3.3x the CPU of one and finished no sooner.
     pub fn build(
         rasters: &RealRasters,
         lat_min: f64,
@@ -245,10 +251,20 @@ impl FusedGrid {
         lon_min: f64,
         lon_max: f64,
     ) -> Self {
+        let (mut dem_key, mut dem_tile) = ((i32::MIN, i32::MIN), None);
+        let (mut forest_key, mut forest_tile) = ((i32::MIN, i32::MIN), None);
+        let (mut imd_key, mut imd_tile) = ((i32::MIN, i32::MIN), None);
         Self::build_with_pixel_sampler(lat_min, lat_max, lon_min, lon_max, |lat, lon| FusedPixel {
-            elevation: rasters.dem.sample(lat, lon) as f32,
-            forest: rasters.forest.sample(lat, lon) as u8,
-            imd: rasters.imd.sample(lat, lon) as u8,
+            elevation: rasters
+                .dem
+                .sample_cached(lat, lon, &mut dem_key, &mut dem_tile) as f32,
+            forest: rasters
+                .forest
+                .sample_cached(lat, lon, &mut forest_key, &mut forest_tile)
+                as u8,
+            imd: rasters
+                .imd
+                .sample_cached(lat, lon, &mut imd_key, &mut imd_tile) as u8,
             _pad: 0,
         })
     }
@@ -264,8 +280,11 @@ impl FusedGrid {
         lon_min: f64,
         lon_max: f64,
     ) -> Self {
+        let (mut dem_key, mut dem_tile) = ((i32::MIN, i32::MIN), None);
         Self::build_with_pixel_sampler(lat_min, lat_max, lon_min, lon_max, |lat, lon| FusedPixel {
-            elevation: rasters.dem.sample(lat, lon) as f32,
+            elevation: rasters
+                .dem
+                .sample_cached(lat, lon, &mut dem_key, &mut dem_tile) as f32,
             ..FusedPixel::default()
         })
     }

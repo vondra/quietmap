@@ -8,7 +8,6 @@
 //! not caught here — it ends the process, and the worker that owns the engine
 //! restarts it, as the orchestrator contract has it.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Arc;
@@ -19,9 +18,10 @@ use anyhow::{bail, Context, Result};
 use noise_compute::admin;
 use raster_reader::fused_tile_z13::TileBatch;
 use raster_reader::RealRasters;
-use tile_painter::region_runner::{batch_slot, block_batch_origin};
-use tile_painter::source_loader_structure::{bake_tile_vector_rx_refl, StructureData};
+use tile_painter::region_runner::{batch_slot, group_tiles_into_batches};
+use tile_painter::source_loader_structure::StructureData;
 
+use crate::batch_raster_lookahead::{spawn_batch_raster_builders, BatchRequest};
 use crate::cell_measurement::CellMeasurement;
 use crate::cell_preparation::{prepare_region, EncodedLineLayer, PreparedRegion};
 use crate::cell_stream::{report_cell_done, report_cell_failed, report_cell_started, CellRequest};
@@ -240,25 +240,16 @@ fn paint_region(
         measurement.layers[encoded.layer].loaded_sources += encoded.sources.len() as u64;
     }
     // The tiles this cell owns, grouped into the batches that share one terrain
-    // halo. The halo of the next batch is built while the GPU paints this one:
-    // one producer thread, one batch of lookahead, the GPU never waits on a halo
-    // it could have had earlier and the host never runs more than two ahead. The
-    // collapse and brotli write of every painted tile go to one writer thread
-    // behind a bounded channel, off the painter's critical path.
-    let mut batches: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
-    for &(x, y) in &tiles {
-        batches
-            .entry((
-                x / REGION_TILE_BATCH_SIDE * REGION_TILE_BATCH_SIDE,
-                y / REGION_TILE_BATCH_SIDE * REGION_TILE_BATCH_SIDE,
-            ))
-            .or_default()
-            .push((x, y));
-    }
+    // halo. Several builder threads prepare the batches ahead of the card and
+    // deliver them in batch order (`batch_raster_lookahead`), so a box with
+    // spare cores keeps the card fed. The collapse and brotli write of every
+    // painted tile go to one writer thread behind a bounded channel, off the
+    // painter's critical path.
+    let batches: Vec<BatchRequest> = group_tiles_into_batches(&tiles, REGION_TILE_BATCH_SIDE)
+        .into_iter()
+        .collect();
     let obstacle_set = structure_data.set();
-    let (sender, receiver) = sync_channel(1);
     let (write_sender, write_receiver) = sync_channel::<PendingTileWrite>(PENDING_WRITES);
-    let producer = thread::Builder::new().name("batch-rasters".into());
     let writer = thread::Builder::new().name("tile-writer".into());
     let output_bytes = thread::scope(|scope| -> Result<[u64; LAYER_COUNT]> {
         let writer = writer.spawn_scoped(scope, move || -> Result<[u64; LAYER_COUNT]> {
@@ -269,38 +260,25 @@ fn paint_region(
             }
             Ok(bytes)
         })?;
-        producer.spawn_scoped(scope, move || {
-            for ((block_x, block_y), requested_tiles) in batches {
-                let started = Instant::now();
-                let (base_x, base_y) =
-                    block_batch_origin(block_x, block_y, REGION_TILE_BATCH_SIDE, zoom);
-                let mut batch = TileBatch::build_opt_rx_refl(
-                    zoom,
-                    base_x,
-                    base_y,
-                    REGION_TILE_BATCH_SIDE,
-                    LINE_HALO_M,
-                    rasters,
-                );
-                for &(x, y) in &requested_tiles {
-                    let slot = batch_slot(&batch, x, y);
-                    bake_tile_vector_rx_refl(&mut batch.tiles[slot], obstacle_set);
-                }
-                if sender
-                    .send((requested_tiles, batch, started.elapsed().as_secs_f64()))
-                    .is_err()
-                {
-                    return;
-                }
-            }
-        })?;
-        for (requested_tiles, batch, prepare_seconds) in receiver {
-            measurement.raster_prepare_seconds += prepare_seconds;
-            let batch_raster = BatchDeviceRaster::upload(&frame, &batch.tiles[0])?;
+        let batch_channels = spawn_batch_raster_builders(
+            scope,
+            &batches,
+            zoom,
+            REGION_TILE_BATCH_SIDE,
+            LINE_HALO_M,
+            rasters,
+            obstacle_set,
+        )?;
+        for index in 0..batches.len() {
+            let ready = batch_channels[index % batch_channels.len()]
+                .recv()
+                .context("a batch raster builder ended before its batches did")?;
+            measurement.raster_prepare_seconds += ready.prepare_seconds;
+            let batch_raster = BatchDeviceRaster::upload(&frame, &ready.batch.tiles[0])?;
             paint_batch_tiles(
                 configuration,
-                &batch,
-                &requested_tiles,
+                &ready.batch,
+                &ready.requested_tiles,
                 &frame,
                 &layers,
                 &structure_data,

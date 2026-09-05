@@ -82,7 +82,9 @@ pub struct CellMeasurement {
     pub permit_wait_seconds: f64,
     /// Time the painter waited for this prepared cell: the card idle on the host.
     pub card_wait_seconds: f64,
-    /// Terrain halo build and facade baking per 4x4 batch, one batch ahead of the card.
+    /// Terrain halo build and facade baking per 4x4 batch, summed over the
+    /// builder threads: CPU time, so a cell whose lookahead ran several
+    /// batches at once reports more of it than the paint's own wall.
     pub raster_prepare_seconds: f64,
     /// Receiver and enclosure preparation per tile, serial with the card.
     pub receiver_seconds: f64,
