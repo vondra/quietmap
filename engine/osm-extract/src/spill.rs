@@ -82,6 +82,22 @@ fn tsv_tag<'a>(tags: &'a Tags, key: &str) -> TsvText<'a> {
     TsvText(tags.get(key).map(String::as_str).unwrap_or(""))
 }
 
+/// Road `ref` with `old_ref` fallback: renumbered motorways keep matching
+/// census sections cut against the old numbering. Proven by planet-260831
+/// way 100515391 (no `ref`, `int_ref=E 55;E 65`, `old_ref=D1`), whose empty
+/// ref dropped the direct RSD match to a continuity fill (-14.6 dB received
+/// on the Chodov point). `int_ref` is deliberately not consulted: census
+/// sections are cut against national numbering, not E-roads. Rail/airport
+/// refs keep the literal tag: no renumbering case is proven for them.
+fn tsv_road_ref(tags: &Tags) -> TsvText<'_> {
+    let direct = tags.get("ref").map(String::as_str).unwrap_or("");
+    TsvText(if direct.is_empty() {
+        tags.get("old_ref").map(String::as_str).unwrap_or("")
+    } else {
+        direct
+    })
+}
+
 /// Per-feature-type, per-bucket writer.
 struct BucketFile {
     writer: BufWriter<File>,
@@ -212,7 +228,7 @@ impl Spiller {
                         .and_then(|s| s.parse::<u8>().ok())
                         .unwrap_or(0),
                     tsv_tag(tags, "name"),
-                    tsv_tag(tags, "ref"),
+                    tsv_road_ref(tags),
                     if bridge { 1 } else { 0 },
                     if tunnel { 1 } else { 0 },
                     if toll { 1 } else { 0 },
@@ -910,5 +926,25 @@ mod settlement_class_tests {
     #[test]
     fn tsv_text_cannot_create_columns_or_records() {
         assert_eq!(TsvText("A\tB\r\nŽluťoučký").to_string(), "A B  Žluťoučký");
+    }
+
+    #[test]
+    fn road_ref_falls_back_to_old_ref_only_when_empty() {
+        let mut renumbered = Tags::new();
+        renumbered.insert("highway".into(), "trunk".into());
+        renumbered.insert("int_ref".into(), "E 55;E 65".into());
+        renumbered.insert("old_ref".into(), "D1".into());
+        assert_eq!(tsv_road_ref(&renumbered).to_string(), "D1");
+        let mut current = Tags::new();
+        current.insert("ref".into(), "D1".into());
+        current.insert("old_ref".into(), "D0".into());
+        assert_eq!(tsv_road_ref(&current).to_string(), "D1");
+        let mut unmarked = Tags::new();
+        unmarked.insert("highway".into(), "residential".into());
+        assert_eq!(tsv_road_ref(&unmarked).to_string(), "");
+        let mut empty_ref = Tags::new();
+        empty_ref.insert("ref".into(), "".into());
+        empty_ref.insert("old_ref".into(), "D1".into());
+        assert_eq!(tsv_road_ref(&empty_ref).to_string(), "D1");
     }
 }
