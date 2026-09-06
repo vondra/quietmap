@@ -55,9 +55,9 @@ __device__ __forceinline__ float maximum_cell_candidate_delta(
 
 /// Every obstacle crossing of one ray, keeping the one with the largest delta.
 ///
-/// `must_exceed_m` is the delta a crossing has to beat for the caller to read it at all,
-/// already lowered by the arithmetic's own error; a cell whose own bound cannot reach it is
-/// never opened.
+/// `must_exceed_m` is the delta a crossing has to beat for the caller to read it at all; the
+/// scan lowers it by the delta arithmetic's own error, raises it to the best delta it has
+/// already found, and a cell whose own bound cannot beat the floor is never opened.
 __device__ __forceinline__ void scan_obstacle_grid(
     const DeviceScenePointers& scene,
     const DeviceObstacleGrid& grid,
@@ -100,6 +100,18 @@ __device__ __forceinline__ void scan_obstacle_grid(
     const float next_y = grid.minimum_y_m + (cell_y + (dy >= 0.0f ? 1 : 0)) * grid.cell_m;
     float maximum_t_x = dx != 0.0f ? fabsf((next_x - start_x) / dx) : CUDART_INF_F;
     float maximum_t_y = dy != 0.0f ? fabsf((next_y - start_y) / dy) : CUDART_INF_F;
+    // Both floors below are lowered by what the delta itself cannot resolve. A delta is
+    // `d_sb + d_br - d_SR`, the difference of two ray-length hypotenuses, so it carries a few
+    // ulps of the ray's own length however exactly the geometry is bounded — a millimetre on
+    // a 8.75 km ray. A cell bound and the crossing it answers for land that cancellation at
+    // different `t` and different tops, so a bound that dominates in real arithmetic can come
+    // out one ulp below the crossing in f32, and the cell holding a grazing edge is closed
+    // against it. Eight ulps of the ray covers that, given that the bound and the candidate
+    // share their altitude basis: the bound reads the raw endpoint altitudes, the candidate the
+    // height-floored ones, and a floored endpoint only lowers a delta, so the raw bound stays
+    // the conservative side.
+    const float delta_tolerance_m = 8.0f * FLT_EPSILON * profile.distance_m;
+    const float caller_floor_m = must_exceed_m - delta_tolerance_m;
     int guard = static_cast<int>(grid.columns + grid.rows) + 4;
     float entry_t = 0.0f;
     int profile_window_start = 0;
@@ -132,11 +144,25 @@ __device__ __forceinline__ void scan_obstacle_grid(
             // band, and a cell that cannot out-diffract the terrain edge produces nothing
             // the caller reads: `ray_terrain_and_screening_bands` takes the obstacle edge
             // only where it beats the terrain one.
+            //
+            // The best delta the ray already holds raises that floor further, and it is the
+            // floor that pays for this scan: a dense metro ray finds its winning crossing
+            // early and then walks cell after cell of edges that cannot beat it. This is a
+            // bound, not a containment rule, so it is NOT byte-exact. The bound answers for
+            // the crossings that lie inside the cell, and the cell that does contain a
+            // crossing lists its edge too and is walked too, so no winner is lost in real
+            // arithmetic; but an edge is listed in every cell its segment crosses and is
+            // tested there against the whole ray, so one crossing is reached through
+            // several cells with different bounds, and which of two equal deltas is kept
+            // depends on which of those cells stayed open. The commit message carries the
+            // drift measured against the exact-CPU etalon.
             const float cell_bound_m = maximum_cell_candidate_delta(
                 profile, source_altitude_m, receiver_altitude_m, top_bound_m,
                 cell_minimum_t, cell_maximum_t);
-            if (cell_bound_m >= QUIETMAP_PENUMBRA_DELTA_FLOOR_M
-                && cell_bound_m > must_exceed_m) {
+            const float exceed_m = best.present
+                ? fmaxf(caller_floor_m, best.delta_m - delta_tolerance_m)
+                : caller_floor_m;
+            if (cell_bound_m >= QUIETMAP_PENUMBRA_DELTA_FLOOR_M && cell_bound_m > exceed_m) {
                 for (uint32_t position = first; position < end; ++position) {
                     const uint32_t local_edge = scene.obstacle_edge_references[
                         grid.edge_references_offset + position];

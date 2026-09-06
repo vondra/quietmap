@@ -164,19 +164,9 @@ __device__ __forceinline__ void ray_terrain_and_screening_bands(
     DiffractionEdge obstacle = {};
     // The obstacle edge is read only where it out-diffracts the terrain edge, so the
     // terrain's own delta is the floor every crossing has to clear; the scan takes it as
-    // the bound its cells must beat before it opens them.
-    //
-    // Lowered by what the delta itself cannot resolve. A delta is `d_sb + d_br - d_SR`,
-    // the difference of two ray-length hypotenuses, so it carries a few ulps of the ray's
-    // own length however exactly the geometry is bounded — a millimetre on a 8.75 km ray.
-    // The cell bound and the crossing it answers for land that cancellation at different
-    // `t` and different tops, so a bound that dominates in real arithmetic can come out
-    // one ulp below the crossing in f32, and the cell holding a grazing edge is closed
-    // against it. Eight ulps of the ray covers that; the commit message carries the counts.
-    const float delta_tolerance_m = 8.0f * FLT_EPSILON * profile.distance_m;
-    const float must_exceed_m = terrain.present
-        ? terrain.delta_m - delta_tolerance_m
-        : -CUDART_INF_F;
+    // the bound its cells must beat before it opens them, lowers it by the arithmetic's
+    // own error and raises it as it finds better crossings.
+    const float must_exceed_m = terrain.present ? terrain.delta_m : -CUDART_INF_F;
     for (uint32_t grid_index = 0; grid_index < scene.obstacle_grid_count; ++grid_index) {
         scan_obstacle_grid(scene, scene.obstacle_grids[grid_index], source_x_m, source_y_m,
                            receiver_x_m, receiver_y_m, source_altitude_m,
