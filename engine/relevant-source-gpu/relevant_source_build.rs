@@ -263,6 +263,14 @@ fn generated_physics_header() -> String {
         "QUIETMAP_NEAR_SAMPLE_M",
         canonical_f64(PATH_PROFILE_SOURCE, "NEAR_OFFSET_M"),
     );
+    // Read only by the static_assert that guards QUIETMAP_MAXIMUM_PROFILE_POINTS: the cap
+    // was measured for the longest ray this ceiling allows, so raising the ceiling must
+    // fail the build instead of silently truncating a profile.
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_RAILWAY_REACH_CEILING_M",
+        canonical_f64(NOISE_CONSTANTS_SOURCE, "RAILWAY_REACH_CLAMP_MAX"),
+    );
     write_cuda_float(
         &mut header,
         "QUIETMAP_MINIMUM_FOREST_RUN_M",
@@ -357,13 +365,20 @@ fn cuda_library_directory() -> PathBuf {
         .join("lib64")
 }
 
+/// The register budget is the paint kernel's occupancy dial: both kernels launch
+/// 256-thread blocks, so 64 registers a thread is four blocks resident on an SM's
+/// 65,536 registers. Swept on the kbench metro window on the reference RTX 5070
+/// (the 330-410 ns/pair regime a world pass actually spends its GPU seconds in),
+/// two runs each, GPU seconds: 32 -> 126.6, 40 -> 128.6, 48 -> 131.5, 64 -> 113.5,
+/// 72 -> 115.7, 80 -> 115.5, 96 -> 139.0, uncapped -> 209.9. `__launch_bounds__`
+/// on both kernels, with and without a cap, was 137 s and is not carried.
 fn common_nvcc_arguments() -> Vec<String> {
     vec![
         "-std=c++17".to_owned(),
         "-O3".to_owned(),
         "--use_fast_math".to_owned(),
         "-lineinfo".to_owned(),
-        "-maxrregcount=40".to_owned(),
+        "-maxrregcount=64".to_owned(),
         "-Xcompiler".to_owned(),
         "-fPIC".to_owned(),
     ]

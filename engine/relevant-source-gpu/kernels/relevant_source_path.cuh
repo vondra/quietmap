@@ -7,7 +7,21 @@
 
 #include "relevant_source_geometry.cuh"
 
-constexpr int QUIETMAP_MAXIMUM_PROFILE_POINTS = 96;
+/// Chainages one ray's profile holds; `append_profile_t` drops the rest.
+///
+/// The longest ray this kernel ever profiles is 11,250 m. The widest reach any
+/// source carries is the rail ceiling (`RAILWAY_REACH_CLAMP_MAX`, 11 km), and
+/// the characteristic ray is no longer than that; the fan and arc passes profile
+/// points that lie on the segment itself, which the triangle inequality puts at
+/// most one microsegment further than its closest point, and osm-extract splits
+/// every way at a hard 250 m — also the longest `length_m` in all 121,790
+/// prepared cells of the 2026 world. Running this exact cadence over 20 million
+/// distances from 0.01 m to 20 km on the reference card, an 11,000 m ray needs
+/// 61 chainages, an 11,250 m ray 62, and the cadence first needs a 65th at
+/// 11,872 m.
+constexpr int QUIETMAP_MAXIMUM_PROFILE_POINTS = 64;
+static_assert(QUIETMAP_RAILWAY_REACH_CEILING_M <= 11000.0f,
+              "the profile cap was measured for rays out to 11,872 m; re-measure it");
 
 struct PathProfile {
     int count;
