@@ -10,10 +10,12 @@
     "apache-arrow": "^21.1.0",
     "csv-parse": "^6.2.1",
     "proj4": "^2.20.8",
-    "read-excel-file": "^9.3.10"
+    "read-excel-file": "^9.3.10",
+    "shpjs": "^6.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/shpjs": "^3.4.7",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }
