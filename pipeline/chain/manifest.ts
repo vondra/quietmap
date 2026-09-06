@@ -192,7 +192,6 @@ const INDUSTRIAL_REQUIRED_CACHE: Record<string, string[]> = {
   za: [`${YEAR}/za/power-plants-eskom.geojson`],
   // wind matchers with no download path at all (exit 1 when cache absent).
   de: [`${YEAR}/de/mastr-wind.csv`],
-  us: [`global/uswtdb.csv`],
 }
 const INDUSTRIAL_CACHED_DOWNLOAD: Record<string, string[]> = {
   ca: [`${YEAR}/ca/wind-turbines-en.xlsx`],
@@ -437,7 +436,7 @@ export function buildPlan(scope: ResolvedScope): { steps: PlanStep[]; excludedBy
       layer: 'industrial',
       country: null,
       args: c.present ? ['--enrich-only'] : [],
-      notes: 'USWTDB hub_height + rated_power_kw onto source_type=10 rows (US-only data despite the global name).',
+      notes: 'USWTDB hub_height + rated_power_kw onto source_type=10 rows within 500 m (US-only data despite the global name). THE only USWTDB pass — the duplicate national industrial-us step was deleted 2026-09-06.',
       skipReason: !usRelevant
         ? 'USWTDB is US-only — a no-op under this scope'
         : c.present
@@ -592,7 +591,6 @@ export function buildPlan(scope: ResolvedScope): { steps: PlanStep[]; excludedBy
     'roads-ru': 'env RU_BBOX="S,W,N,E" can narrow a resume — chain runs it unset (full RU).',
     'roads-mx': 'runs its own clearStaleStamps() pre-pass (manual withArrowWrite) before matching.',
     'industrial-de': 'docstring advertises --enrich-only but the flag is dead code — script always reads the pre-staged cache, exits 1 without it.',
-    'industrial-us': 'docstring advertises --enrich-only but the flag is dead code — reads data/enrichment/global/uswtdb.csv (same file as global-windturbines), exits 1 without it.',
   }
   const families: Array<['roads' | 'railway' | 'buildings' | 'industrial', string, string]> = [
     ['roads', 'enrich-roads-', NOTE_ROADS_NATIONAL],

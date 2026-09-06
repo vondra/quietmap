@@ -2,7 +2,7 @@
  * Enrich industrial.arrow wind turbines with USWTDB (US Wind Turbine Database).
  *
  * Downloads USWTDB CSV from USGS, parses turbine records, matches to OSM wind
- * turbines (source_type=10) by proximity (<200m), updates hub_height and
+ * turbines (source_type=10) by proximity, updates hub_height and
  * rated_power_kw in industrial.arrow files.
  *
  * WHY: OSM wind turbines often lack hub_height and rated_power_kw. USWTDB has
@@ -17,10 +17,12 @@
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { execSync } from 'node:child_process'
+import { parse } from 'csv-parse/sync'
 import { tableFromIPC, tableToIPC, makeTable, makeVector } from 'apache-arrow'
 import { latLngToCell } from 'h3-js'
-import { flatDist } from './lib/spatial.js'
+import { flatDist, M_PER_DEG_LAT, M_PER_DEG_LON_EQ } from './lib/spatial.js'
 import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
 const CACHE_DIR = resolve(import.meta.dirname, '../data/enrichment/global')
@@ -28,6 +30,16 @@ const CACHE_CSV = resolve(CACHE_DIR, 'uswtdb.csv')
 
 const forceDownload = process.argv.includes('--force-download')
 const enrichOnly = process.argv.includes('--enrich-only')
+
+/** Match radius for a USWTDB record. USWTDB surveys the mast while the OSM
+ *  node can sit on the pad or an older survey point. USWTDB is US-only, so
+ *  this is the pass's ONLY radius. Widened from 200 m when the duplicate
+ *  national US pass was deleted (2026-09-06): the four US turbines only that
+ *  pass reached sit 276-423 m from their record — among them OSM
+ *  11798022164, which gains an 84 m hub and 4,200 kW. */
+const USWTDB_MATCH_RADIUS_M = 500
+/** Turbine grid cell — ~1.1 km of latitude, less of longitude further north. */
+const GRID_CELL_DEG = 0.01
 
 // USWTDB download — ZIP containing CSV
 const USWTDB_ZIP_URL = 'https://energy.usgs.gov/uswtdb/assets/data/uswtdbCSV.zip'
@@ -49,14 +61,14 @@ interface Turbine {
 async function downloadUswtdb(): Promise<Turbine[]> {
   if (!forceDownload && existsSync(CACHE_CSV)) {
     console.log(`  Using cached USWTDB: ${CACHE_CSV}`)
-    return await parseCsv(readFileSync(CACHE_CSV, 'utf-8'))
+    return parseUswtdbCsv(readFileSync(CACHE_CSV, 'utf-8'))
   }
   if (enrichOnly) {
     if (!existsSync(CACHE_CSV)) {
       console.error('ERROR: --enrich-only but no cache at', CACHE_CSV)
       process.exit(1)
     }
-    return await parseCsv(readFileSync(CACHE_CSV, 'utf-8'))
+    return parseUswtdbCsv(readFileSync(CACHE_CSV, 'utf-8'))
   }
 
   mkdirSync(CACHE_DIR, { recursive: true })
@@ -89,11 +101,13 @@ async function downloadUswtdb(): Promise<Turbine[]> {
   // Cleanup
   execSync(`rm -rf "${extractDir}" "${zipPath}"`, { timeout: 5000 })
 
-  return await parseCsv(csvContent)
+  return parseUswtdbCsv(csvContent)
 }
 
-async function parseCsv(text: string): Promise<Turbine[]> {
-  const { parse } = await import('csv-parse/sync')
+/** RFC4180 parse, not `split(',')`: 656 of the 75,727 rows quote a comma
+ *  inside `p_name` (case_id 3034117, "Adams Wind Generations, LLC", splits
+ *  into 29 columns instead of 28) and every field after it shifts. */
+export function parseUswtdbCsv(text: string): Turbine[] {
   const records = parse(text, {
     columns: true,
     skip_empty_lines: true,
@@ -211,10 +225,10 @@ function enrichHexes(turbines: Turbine[]): void {
 
     let hexMatched = 0
 
-    // Build spatial grid for this hex's USWTDB turbines (0.01 deg ~1km cells)
+    // Build the spatial grid for this hex's USWTDB turbines.
     const grid = new Map<string, Turbine[]>()
     for (const t of hexTurbines) {
-      const key = `${Math.floor(t.lat * 100)}_${Math.floor(t.lon * 100)}`
+      const key = `${Math.floor(t.lat / GRID_CELL_DEG)}_${Math.floor(t.lon / GRID_CELL_DEG)}`
       if (!grid.has(key)) grid.set(key, [])
       grid.get(key)!.push(t)
     }
@@ -227,16 +241,18 @@ function enrichHexes(turbines: Turbine[]): void {
       const lat = clat.get(i) as number
       const lon = clon.get(i) as number
 
-      // Find nearest USWTDB turbine within 200m
-      let bestDist = 200 // 200m max
+      let bestDist = USWTDB_MATCH_RADIUS_M
       let bestTurbine: Turbine | null = null
 
-      const gridKey = `${Math.floor(lat * 100)}_${Math.floor(lon * 100)}`
-      // Check 3x3 grid cells
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const k = `${Math.floor(lat * 100) + dy}_${Math.floor(lon * 100) + dx}`
-          const cell = grid.get(k)
+      // Block derived from the radius, not a fixed 3x3: 0.01 deg of longitude
+      // is 353 m at Alaska's 71.5 deg, so a fixed ring cannot reach 500 m.
+      const cellY = Math.floor(lat / GRID_CELL_DEG)
+      const cellX = Math.floor(lon / GRID_CELL_DEG)
+      const blockY = Math.ceil(USWTDB_MATCH_RADIUS_M / (M_PER_DEG_LAT * GRID_CELL_DEG))
+      const blockX = Math.ceil(USWTDB_MATCH_RADIUS_M / (M_PER_DEG_LON_EQ * Math.max(Math.cos(lat * Math.PI / 180), 0.01) * GRID_CELL_DEG))
+      for (let dy = -blockY; dy <= blockY; dy++) {
+        for (let dx = -blockX; dx <= blockX; dx++) {
+          const cell = grid.get(`${cellY + dy}_${cellX + dx}`)
           if (!cell) continue
           for (const t of cell) {
             const d = flatDist(lat, lon, t.lat, t.lon)
@@ -312,8 +328,6 @@ function enrichHexes(turbines: Turbine[]): void {
   console.log(`  Hexes updated: ${hexesUpdated}`)
 }
 
-// ── Helpers ──
-
 // ── Main ──
 
 async function main() {
@@ -337,4 +351,8 @@ async function main() {
   console.log(`\n=== Done ===`)
 }
 
-main().catch(err => { console.error('Error:', err); process.exit(1) })
+// Import-safe: run only when invoked directly — importing the exported parser
+// (tests) must never trigger a download/enrichment run.
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  main().catch(err => { console.error('Error:', err); process.exit(1) })
+}
