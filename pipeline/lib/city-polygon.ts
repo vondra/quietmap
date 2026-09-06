@@ -1,19 +1,11 @@
 /** Strict municipal ADM2 geometry; a rectangle only bounds iteration, never ownership. */
 
+import { pointInRing } from './spatial.js'
 import type { PreparedBbox } from './prepared-grid.js'
 import { inBbox } from './spatial.js'
 
 export type CityCoordinate = readonly [longitude: number, latitude: number]
 type Ring = readonly CityCoordinate[]
-
-function pointInRing(lon: number, lat: number, ring: Ring): boolean {
-  let inside = false
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const [xi, yi] = ring[i], [xj, yj] = ring[j]
-    if (yi > lat !== yj > lat && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside
-  }
-  return inside
-}
 
 export function municipalityFromGeoJson(text: string, name: string) {
   const json = JSON.parse(text) as { type?: unknown; features?: Array<{

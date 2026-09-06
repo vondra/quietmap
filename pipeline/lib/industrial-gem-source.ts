@@ -41,7 +41,7 @@ export function gemFuelNace(fuel: string): number | null {
   return 3511 // Original national GEM policy includes geothermal with thermal generation.
 }
 
-export function strictGemCountries(points: readonly GemPoint[], boundaries: string): number[] {
+export function strictGemCountries(points: readonly { lat: number; lon: number }[], boundaries: string): number[] {
   const root = fileURLToPath(new URL('../..', import.meta.url))
   const run = spawnSync(resolve(root, '.venv/bin/python'), [resolve(root, 'scripts/admin/industrial_countries.py'), boundaries], {
     input: JSON.stringify(points.map(({ lat, lon }) => [lat, lon])), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,

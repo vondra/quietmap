@@ -199,3 +199,12 @@ export function inBbox(
   return latitude >= bbox[0] && latitude <= bbox[2] &&
     longitude >= bbox[1] && longitude <= bbox[3]
 }
+
+export function pointInRing(lon: number, lat: number, ring: readonly (readonly [number, number])[]): boolean {
+  let inside = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j]
+    if (yi > lat !== yj > lat && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside
+  }
+  return inside
+}

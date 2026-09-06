@@ -177,3 +177,55 @@ test('shared330 scopes survive sibling reruns, foreign rows and retirement resto
     assert.deepEqual(readFileSync(path), missing)
   } finally { rmSync(work, { recursive: true, force: true }) }
 })
+
+test('national facility horizon reaches Paraguay border registry beyond the global default, without claiming foreign rows', async () => {
+  const work = mkdtempSync(resolve(tmpdir(), 'industrial-horizon-'))
+  try {
+    const gx = Math.round((-58 / 360 + .5) * 2 ** 30)
+    const gy = Math.round((Math.log(Math.tan(Math.PI / 4 - 25 * Math.PI / 360)) / (2 * Math.PI) + .5) * 2 ** 30)
+    const origin = facility(gx, gy, 330, 3512)
+    // 0.025 degrees longitude is between two and three kilometres here.
+    const targetGx = gx + Math.round(.025 / 360 * 2 ** 30)
+    const path = resolve(work, 'z9/173/292/industrial.arrow')
+    const before = stored(path, [{ gx: targetGx, gy, country: 'PY' }, { gx, gy, country: 'BR', source: 330, nace: 3511 }])
+    const scope = [{ country: 'PY', bbox: [-27.7, -62.7, -19.3, -54.2] as const }]
+    const ownership = gemIndustrialOwnership(scope, ['PY'])
+    await enrichIndustrialFacilities(work, [{ ...origin, searchRadiusM: 3000 }], [330], ownership)
+    assert.deepEqual(values(path, 'source_id'), [330, 330])
+    assert.deepEqual(values(path, 'nace_4digit'), [3512, 3511])
+    unchangedNative(before, tableFromIPC(readFileSync(path)))
+    const bytes = readFileSync(path)
+    assert.equal((await enrichIndustrialFacilities(work, [{ ...origin, searchRadiusM: 3000 }], [330], ownership)).squaresUpdated, 0)
+    assert.deepEqual(readFileSync(path), bytes)
+    await enrichIndustrialFacilities(work, [{ ...origin, searchRadiusM: 1500 }], [330], ownership)
+    assert.deepEqual(values(path, 'source_id'), [0, 330], 'each facility retains its own horizon and admitted retirement scope')
+  } finally { rmSync(work, { recursive: true, force: true }) }
+})
+
+test('final containment tier participates in one priority election and retirement without changing foreign or native rows', async () => {
+  const work = mkdtempSync(resolve(tmpdir(), 'industrial-tier-'))
+  try {
+    const gx = Math.round((-74 / 360 + .5) * 2 ** 30)
+    const gy = Math.round((Math.log(Math.tan(Math.PI / 4 + 5 * Math.PI / 360)) / (2 * Math.PI) + .5) * 2 ** 30)
+    const path = resolve(work, 'z9/150/248/industrial.arrow')
+    const original = stored(path, [{ gx, gy, country: 'CO', area: 1_200_000 },
+      { gx, gy: gy + 1500, country: 'CO', source: 320, nace: 2410, area: 1_200_000 },
+      { gx, gy, country: 'VE', source: 330, nace: 1900, suppressed: 1 },
+      { gx, gy, country: 'CO', sourceType: 10, source: 330, nace: 3511, suppressed: 1 }])
+    const scope = [{ country: 'CO', bbox: [-4.3, -82, 13.5, -66.8] as const }]
+    const ownership = gemIndustrialOwnership(scope, ['CO'])
+    ownership.rowClassification = (_country, polygon) => ({ ...facility(gx, gy, 330, 700), lat: polygon.lat, lon: polygon.lon })
+    const point = facility(gx, gy, 330, 3599)
+    await enrichIndustrialFacilities(work, [point], [330], ownership)
+    assert.deepEqual(values(path, 'source_id'), [330, 320, 330, 330])
+    assert.deepEqual(values(path, 'nace_4digit'), [700, 2410, 1900, 3511], 'final concession replaces point class; higher stored authority survives')
+    assert.deepEqual(values(path, 'suppressed'), [1, 0, 1, 1])
+    unchangedNative(original, tableFromIPC(readFileSync(path)))
+    const bytes = readFileSync(path)
+    assert.equal((await enrichIndustrialFacilities(work, [point], [330], ownership)).squaresUpdated, 0)
+    assert.deepEqual(readFileSync(path), bytes)
+    await enrichIndustrialFacilities(work, [], [330], gemIndustrialOwnership(scope, []))
+    assert.deepEqual(values(path, 'source_id'), [0, 320, 330, 330])
+    assert.deepEqual(values(path, 'suppressed'), [1, 0, 1, 1])
+  } finally { rmSync(work, { recursive: true, force: true }) }
+})

@@ -7,6 +7,7 @@ import { buildOneHundredthDegreePointGrid, flatDist, pointGridCandidates } from 
 export interface MatchFacility {
   lat: number
   lon: number
+  searchRadiusM?: number
   nace4: number
   id: number
   rank: number

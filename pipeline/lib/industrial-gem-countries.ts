@@ -7,6 +7,7 @@ export interface GemCountry {
   country: string
   bbox: PreparedBbox
   exclude?: readonly PreparedBbox[]
+  include?: readonly PreparedBbox[]
   sourceLand?: boolean
   knownEmpty?: boolean
 }
@@ -120,7 +121,8 @@ export const GEM_COUNTRIES: readonly GemCountry[] = [
 const inBox = (lat: number, lon: number, b: PreparedBbox) => lat >= b[0] && lat <= b[2] && lon >= b[1] && lon <= b[3]
 export function gemAreaContains(policy: GemCountry, lat: number, lon: number, landCountry: number): boolean {
   if (policy.sourceLand) return gemCountryOwns(policy, lat, lon, landCountry)
-  return inBox(lat, lon, policy.bbox) && !policy.exclude?.some(box => inBox(lat, lon, box))
+  return inBox(lat, lon, policy.bbox) && !policy.exclude?.some(box => inBox(lat, lon, box)) &&
+    (!policy.include || policy.include.some(box => inBox(lat, lon, box)))
 }
 export function gemCountryOwns(policy: GemCountry, lat: number, lon: number, landCountry: number): boolean {
   return policy.country === 'NC' ? inBox(lat, lon, policy.bbox)

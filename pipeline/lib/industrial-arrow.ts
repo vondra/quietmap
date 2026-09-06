@@ -10,12 +10,13 @@ import { buildOneHundredthDegreePointGrid, pointGridCandidates } from './spatial
 import { candidateEdgeM, contestBeats, overlapPairs, readPolygons, OVERLAP_MIN_AREA_M2,
   type MatchFacility, type MatchPolygon, type OverlapWinner } from './facility-match.js'
 
-const SEARCH_RADIUS_M = 2000 // Actual dev1 registry centroid search horizon.
+const SEARCH_RADIUS_M = 2000 // Default original registry centroid search horizon.
 export interface IndustrialOwnership {
   facilityCountries: readonly string[]
+  rowClassification?(country: string, polygon: MatchPolygon): MatchFacility | null
   countryAt(table: Table): (row: number, polygon: MatchPolygon) => string | null
 }
-interface Winner { country: string; facility: MatchFacility; square: string; row: number; edge: number; polygon: MatchPolygon; existingSourceId: number }
+interface Winner { country: string; facility: MatchFacility; square: string; row: number; edge?: number; polygon: MatchPolygon; existingSourceId: number }
 const keyOf = (winner: Winner) => `${winner.square}:${winner.row}`
 
 function stamps(table: Table, name: string, bits: number, optional = false): number[] {
@@ -41,17 +42,25 @@ export async function enrichIndustrialFacilities(
   if (!reset.size || [...reset].some(id => SOURCES_BY_ID.get(id)?.layer !== 'industrial')) {
     throw new Error('industrial pass requires admitted industrial source identities')
   }
-  for (const f of facilities) {
+  function validateFacility(f: MatchFacility): void {
     if (!reset.has(f.id) || !Number.isInteger(f.nace4) || f.nace4 <= 0 || f.nace4 > 9999) {
       throw new Error('industrial facility has no admitted source or valid NACE')
     }
+  }
+  let searchRadiusM = 0
+  for (const f of facilities) {
+    validateFacility(f)
+    const radius = f.searchRadiusM ?? SEARCH_RADIUS_M
+    if (!Number.isFinite(radius) || radius <= 0) throw new Error('invalid industrial search radius')
+    searchRadiusM = Math.max(searchRadiusM, radius)
   }
   const squares = listPreparedSquares(preparedDirectory, [-90, -180, 90, 180], 'industrial.arrow')
   if (!squares.length) throw new Error(`${preparedDirectory}: no industrial Arrow scope`)
   const identities = new Map<string, BigIntStats>()
   const grid = buildOneHundredthDegreePointGrid(facilities.map((facility, index) =>
     ({ latitude: facility.lat, longitude: facility.lon, index })))
-  const best = new Map<number, Winner>()
+  const best = new Map<number, Winner & { edge: number }>()
+  const rowClassifications = new Map<string, Winner>()
   const incumbents = new Map<string, OverlapWinner & { country: string }>()
   const previousOwned = new Map<string, OverlapWinner & { country: string }>()
   const result = { squares: squares.length, rows: 0, facilities: facilities.length, winners: 0,
@@ -83,10 +92,16 @@ export async function enrichIndustrialFacilities(
         target.set(key, { ...polygon, key, country, id: source.id,
           rank: PROVENANCE_RANK[source.provenance], year: source.year ?? 0 })
       }
-      for (const { index } of pointGridCandidates(polygon.lat, polygon.lon, SEARCH_RADIUS_M, grid)) {
+      const classification = ownership?.rowClassification?.(country, polygon)
+      if (classification) {
+        validateFacility(classification)
+        rowClassifications.set(`${square}:${row}`, { country, facility: classification, square, row, polygon,
+          existingSourceId: sourceIds[row] })
+      }
+      for (const { index } of pointGridCandidates(polygon.lat, polygon.lon, searchRadiusM, grid)) {
         if (ownership && ownership.facilityCountries[index] !== country) continue
         const facility = facilities[index]
-        const edge = candidateEdgeM(facility, polygon, SEARCH_RADIUS_M)
+        const edge = candidateEdgeM(facility, polygon, facility.searchRadiusM ?? SEARCH_RADIUS_M)
         if (edge === null) continue
         const previous = best.get(index)
         if (!previous || edge < previous.edge) best.set(index, { country, facility, square, row, edge, polygon, existingSourceId: sourceIds[row] })
@@ -101,6 +116,9 @@ export async function enrichIndustrialFacilities(
     if (!current || contestBeats({ ...winner.facility, edge: winner.edge },
       { ...current.facility, edge: current.edge })) contested.set(keyOf(winner), winner)
   }
+  // The original containment tier follows point matching. Its final authority
+  // enters the same priority and duplicate election, without a fabricated edge.
+  for (const [key, classification] of rowClassifications) contested.set(key, classification)
   // Only published classifications participate: rejected global candidates cannot
   // lend their authority to an incumbent. Its actual source owns that decision.
   const applicable = new Map<string, Winner>()
