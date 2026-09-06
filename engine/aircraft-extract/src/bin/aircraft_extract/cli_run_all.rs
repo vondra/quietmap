@@ -32,7 +32,12 @@ pub fn run_all(
     ga_segments_dir: Option<PathBuf>,
     ga_adsb_cache: Option<PathBuf>,
     fail_on_ga_cruise: bool,
+    primary_segments_dirs: Vec<PathBuf>,
 ) -> Result<()> {
+    anyhow::ensure!(
+        primary_segments_dirs.is_empty() || from_stage >= FromStage::Shuffle,
+        "--segments-dir reuses completed inputs; choose --from-stage shuffle or later"
+    );
     crate::source_cache::validate_ga_merge(
         &ga_segments_dir.iter().cloned().collect::<Vec<_>>(),
         ga_adsb_cache.as_deref(),
@@ -100,6 +105,12 @@ pub fn run_all(
     }
     let flights_dir = work_dir.join("flights");
     let segments_dir = work_dir.join("segments");
+    let external_segments = !primary_segments_dirs.is_empty();
+    let primary_segments_dirs = if external_segments {
+        primary_segments_dirs
+    } else {
+        vec![segments_dir.clone()]
+    };
     let by_square_dir = work_dir.join("segments_by_square");
     if from_stage > FromStage::Shuffle && !read_window_days(&by_square_dir, "ga_days")?.is_empty() {
         anyhow::ensure!(
@@ -121,11 +132,11 @@ pub fn run_all(
         }
         Some(dir) => {
             require_input_dir_exists("--ga-segments-dir", dir)?;
-            if dir
-                .canonicalize()
-                .ok()
-                .is_some_and(|ga| segments_dir.canonicalize().ok() == Some(ga))
-            {
+            if dir.canonicalize().ok().is_some_and(|ga| {
+                primary_segments_dirs
+                    .iter()
+                    .any(|dir| dir.canonicalize().ok().as_ref() == Some(&ga))
+            }) {
                 anyhow::bail!(
                     "--ga-segments-dir {} is the airline segments dir itself; \
                      point it at the GA pass's work dir (e.g. <ga-work>/segments)",
@@ -168,19 +179,29 @@ pub fn run_all(
 
     let rasters = RealRasters::new(&prepared_dir);
 
-    let ok_paths = compute_ok_paths(
-        &days,
-        &adsb_cache,
-        &work_dir,
-        &flights_dir,
-        &segments_dir,
-        &rasters,
-        from_stage,
-        until_stage,
-        feed,
-        class_filter,
-        &runs,
-    )?;
+    let ok_paths = if external_segments {
+        reuse_segments_from_directories(
+            &primary_segments_dirs,
+            &days,
+            class_filter,
+            feed,
+            &adsb_cache,
+        )?
+    } else {
+        compute_ok_paths(
+            &days,
+            &adsb_cache,
+            &work_dir,
+            &flights_dir,
+            &segments_dir,
+            &rasters,
+            from_stage,
+            until_stage,
+            feed,
+            class_filter,
+            &runs,
+        )?
+    };
 
     if until_stage <= FromStage::Stage1 {
         eprintln!(

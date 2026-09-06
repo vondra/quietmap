@@ -56,6 +56,7 @@ fn main() -> Result<()> {
             prepared_year_dir,
             prepared_dir,
             work_dir,
+            segments_dir,
             days,
             scope_bbox,
             from_stage,
@@ -79,6 +80,7 @@ fn main() -> Result<()> {
             ga_segments_dir,
             ga_adsb_cache,
             fail_on_ga_cruise,
+            segments_dir,
         )?,
     }
     Ok(())

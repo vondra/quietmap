@@ -109,6 +109,9 @@ pub enum Cmd {
         prepared_dir: PathBuf,
         #[arg(long)]
         work_dir: PathBuf,
+        /// Reuse primary day shards in place; allowed only from shuffle onward.
+        #[arg(long)]
+        segments_dir: Vec<PathBuf>,
         #[arg(long, value_delimiter = ',')]
         days: Vec<String>,
         #[arg(long)]

@@ -253,6 +253,37 @@ pub fn validate_segments(
     Ok(())
 }
 
+/// Validate one exact primary window while preserving each source work directory.
+pub fn reuse_segments_from_directories(
+    dirs: &[PathBuf],
+    days: &[String],
+    filter: ClassFilterArg,
+    feed: Feed,
+    adsb_cache: &Path,
+) -> Result<Vec<PathBuf>> {
+    let paths = list_segments_day_paths_multi(dirs)?;
+    let expected = validated_days(days.iter().cloned(), false)?;
+    let present: BTreeSet<_> = paths
+        .iter()
+        .map(|path| path.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    anyhow::ensure!(
+        present == expected,
+        "segment day set mismatch: missing {:?}, unexpected {:?}",
+        expected.difference(&present).collect::<Vec<_>>(),
+        present.difference(&expected).collect::<Vec<_>>()
+    );
+    for dir in dirs {
+        let selected: Vec<_> = paths
+            .iter()
+            .filter(|path| path.parent() == Some(dir.as_path()))
+            .map(|path| path.file_stem().unwrap().to_string_lossy().into_owned())
+            .collect();
+        validate_segments(dir, &selected, filter, feed, adsb_cache)?;
+    }
+    Ok(paths)
+}
+
 pub fn parse_scope(s: Option<&str>) -> Result<Option<ScopeBbox>> {
     s.map(ScopeBbox::parse)
         .transpose()

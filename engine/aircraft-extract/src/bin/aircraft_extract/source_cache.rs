@@ -173,6 +173,7 @@ mod tests {
                 None,
                 None,
                 false,
+                Vec::new(),
             )
         };
         run(FromStage::Stage0, FromStage::Stage0).unwrap();
@@ -250,6 +251,7 @@ mod tests {
                 None,
                 None,
                 false,
+                Vec::new(),
             )
         };
         let append = |work: &Path, day: &str, until| {
@@ -379,6 +381,7 @@ mod tests {
             None,
             None,
             false,
+            Vec::new(),
         )
         .unwrap();
         assert!(
@@ -461,6 +464,7 @@ mod tests {
                 None,
                 None,
                 false,
+                Vec::new(),
             )
         };
         run(control).unwrap();
