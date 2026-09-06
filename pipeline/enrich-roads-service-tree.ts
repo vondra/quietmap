@@ -74,7 +74,7 @@ export async function enrichServiceTreeSquare(directory: string) {
       }
     }
     const applied = applyRoadAadt(table, roadsPath, (_row, index) => aadt.get(index) ?? null,
-      undefined, undefined, { sourceId: SOURCE_ID_SERVICE_TREE_HEURISTIC, when: (_row, index) => !buildings.length || graph.eligible[index] === 0 })
+      undefined, undefined, { sourceIds: [SOURCE_ID_SERVICE_TREE_HEURISTIC], when: (_row, index) => !buildings.length || graph.eligible[index] === 0 })
     counts = { ...counts, ...applied.result, unknownCountryRows }
     return applied.table
   })

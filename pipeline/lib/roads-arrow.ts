@@ -47,7 +47,7 @@ export interface RoadRow extends SegmentGeometry {
 }
 
 export interface RoadRetract {
-  sourceId: number
+  sourceIds: readonly number[]
   when: (row: RoadRow, index: number) => boolean
 }
 
@@ -160,7 +160,7 @@ export function applyRoadAadt(
     }
     return expected
   }
-  const retractCountryCode = retract ? expectedCountryCode(retract.sourceId) : null
+  const retractCountries = new Map(retract?.sourceIds.map(id => [id, expectedCountryCode(id)]))
   let changed = false
 
   for (let index = 0; index < table.numRows; index++) {
@@ -174,15 +174,18 @@ export function applyRoadAadt(
     }
 
     // Retraction precedes every eligibility gate so stale out-of-scope rows heal.
+    const owned = retractCountries.has(source[index])
+    const retractCountryCode = retractCountries.get(source[index]) ?? null
     const retractsForeignNationalStamp = retractCountryCode !== null &&
       countries!.codeAt(index) !== retractCountryCode
-    if (retract && source[index] === retract.sourceId &&
+    if (retract && owned &&
         (retractsForeignNationalStamp || retract.when(row, index))) {
       light[index] = 0
       medium[index] = 0
       heavy[index] = 0
       moto[index] = 0
       source[index] = 0
+      row.existingSourceId = 0
       setTaper(index, 0)
       result.retracted++
       changed = true

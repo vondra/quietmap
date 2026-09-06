@@ -57,7 +57,7 @@ test('overwrite and retract clear a taper unless the accepted write restates it'
     (_row, index) => index === 0
       ? { light: 450, medium: 9, heavy: 18, moto: 4, sourceId: TAPER_ID, speedTaper: 68 }
       : null,
-    undefined, undefined, { sourceId: TAPER_ID, when: (_row, index) => index !== 0 },
+    undefined, undefined, { sourceIds: [TAPER_ID], when: (_row, index) => index !== 0 },
   )
   let table = tableFromIPC(bytes(path))
   assert.deepEqual([table.getChild('speed_taper')!.get(0), table.getChild('speed_taper')!.get(1)], [68, 0])

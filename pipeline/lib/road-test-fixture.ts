@@ -8,7 +8,7 @@ import {
   Int32, Int64, RecordBatch, Schema, Table, Uint8, Uint16, Utf8,
   tableToIPC, vectorFromArray,
 } from 'apache-arrow'
-import { iso2Code } from './prepared-grid.js'
+import { gridToLonLat, iso2Code } from './prepared-grid.js'
 
 const WEB_MERCATOR_RADIUS_M = 6_378_137
 const GRID_QUANTUM_M = 0.037_322_767_717_044_72
@@ -24,6 +24,7 @@ function lonLatToGrid(lon: number, lat: number): [number, number] {
 }
 
 export interface RoadFixtureOptions {
+  origin?: readonly [longitude: number, latitude: number]
   speeds?: number[]
   countryCodes?: number[]
   refs?: Array<string | null>
@@ -34,8 +35,13 @@ export interface RoadFixtureOptions {
 
 export function writeRoadsFixture(name: string, classes: number[], options: RoadFixtureOptions = {}): string {
   const indices = [...classes.keys()]
-  const starts = indices.map(index => lonLatToGrid(14 + index * 0.001, 50 + index * 0.001))
-  const ends = indices.map(index => lonLatToGrid(14.0005 + index * 0.001, 50.0005 + index * 0.001))
+  const [longitude, latitude] = options.origin ?? [14, 50]
+  const starts = indices.map(index => lonLatToGrid(longitude + index * 0.001, latitude + index * 0.001))
+  const ends = indices.map(index => lonLatToGrid(longitude + 0.0005 + index * 0.001, latitude + 0.0005 + index * 0.001))
+  const bounds = [...starts, ...ends].map(([gx, gy]) => gridToLonLat(gx, gy))
+    .reduce(([south, west, north, east], { lat, lon }) => [
+      Math.min(south, lat), Math.min(west, lon), Math.max(north, lat), Math.max(east, lon),
+    ], [90, 180, -90, -180])
   const table = new Table({
     osm_id: vectorFromArray(indices.map(index => BigInt(10_000 + index)), new Int64()),
     ref: vectorFromArray(options.refs ?? indices.map(index => `R${index}`), new Utf8()),
@@ -57,7 +63,7 @@ export function writeRoadsFixture(name: string, classes: number[], options: Road
   })
   const metadata = new Map<string, string>([
     ['grid', 'z30'],
-    ['qm_batch_bboxes', '[[50,14,50.1,14.1]]'],
+    ['qm_batch_bboxes', JSON.stringify(indices.length ? [bounds] : [])],
     ...(!options.omitCountryContract ? [['roads_contract', 'country_baked_v1'] as const] : []),
   ])
   const schema = new Schema(table.schema.fields, metadata)

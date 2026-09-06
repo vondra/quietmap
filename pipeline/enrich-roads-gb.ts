@@ -226,7 +226,7 @@ export async function enrichGreatBritainRoads(
       },
       undefined,
       undefined,
-      { sourceId: SOURCE_ID, when: row => matchDftPoint(row, pointsByRef) === null },
+      { sourceIds: [SOURCE_ID], when: row => matchDftPoint(row, pointsByRef) === null },
     )
     result.rows += write.rows
     result.matched += write.matched

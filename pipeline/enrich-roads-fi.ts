@@ -206,7 +206,7 @@ export async function enrichFinnishRoads(
       },
       undefined,
       COVERED_ROAD_CLASSES,
-      { sourceId: SOURCE_ID, when: row => match(row) === null },
+      { sourceIds: [SOURCE_ID], when: row => match(row) === null },
     )
     result.rows += write.rows
     result.matched += write.matched

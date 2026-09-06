@@ -77,7 +77,7 @@ test('retract disowns owned rows before coverage without touching another source
   await writeRoadAadt(path, (_row, index) => ({ ...payload(index === 2 ? 12 : STAMP_ID), light: 111 }))
   const result = await writeRoadAadt(
     path, () => null, undefined, MAJOR_CLASSES,
-    { sourceId: STAMP_ID, when: row => osmRoadClassRank(row.roadClass) > 4 },
+    { sourceIds: [STAMP_ID], when: row => osmRoadClassRank(row.roadClass) > 4 },
   )
   assert.equal(result.retracted, 1)
   const table = tableFromIPC(bytes(path))
@@ -90,7 +90,7 @@ test('a retracted row can be reclaimed in the same pass', async () => {
   await writeRoadAadt(path, () => ({ ...payload(), light: 111 }))
   const result = await writeRoadAadt(
     path, () => ({ light: 500, medium: 10, heavy: 5, moto: 2, sourceId: STAMP_ID }),
-    undefined, MAJOR_CLASSES, { sourceId: STAMP_ID, when: () => true },
+    undefined, MAJOR_CLASSES, { sourceIds: [STAMP_ID], when: () => true },
   )
   assert.deepEqual({ retracted: result.retracted, matched: result.matched }, { retracted: 1, matched: 1 })
   assert.equal(tableFromIPC(bytes(path)).getChild('aadt_light')!.get(0), 500)
@@ -122,7 +122,7 @@ test('a national rerun retracts its stale foreign stamp even when its matcher st
     () => payload(20),
     undefined,
     MAJOR_CLASSES,
-    { sourceId: 20, when: () => false },
+    { sourceIds: [20], when: () => false },
   )
   assert.deepEqual(
     { matched: result.matched, retracted: result.retracted, skippedForeign: result.skippedForeign },

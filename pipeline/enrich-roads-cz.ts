@@ -160,7 +160,7 @@ export async function enrichCzechRoads(
       },
       undefined,
       COVERED_ROAD_CLASSES,
-      { sourceId: SOURCE_ID, when: row => matchCensusSection(row, censusByRef) === null },
+      { sourceIds: [SOURCE_ID], when: row => matchCensusSection(row, censusByRef) === null },
     )
     result.rows += write.rows
     result.matched += write.matched
