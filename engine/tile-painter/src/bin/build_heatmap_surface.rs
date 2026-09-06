@@ -1,7 +1,7 @@
 //! Build surface HM3 heatmap tiles — the GROUND family: road/rail line sources,
 //! industrial/building point sources, and airport ground-ops, all sharing ONE
 //! terrain halo per batch. `--source ground` builds all five in a single pass:
-//! the 10 km halo is built ONCE per batch and every layer scatters onto the hot
+//! the 11 km halo is built ONCE per batch and every layer scatters onto the hot
 //! `Arc<FusedGrid>`, emitting five separate `{layer}/` trees. A single
 //! `--source road|rail|industrial|building|aircraft-ground` keeps the per-layer
 //! path (parity checks).
@@ -116,7 +116,7 @@ struct Args {
     #[arg(long)]
     n_days: Option<u16>,
     /// Max regions building concurrently (axis-2 region parallelism). 0 = the
-    /// RAM-derived default. Each concurrent region holds one shared ~10 km halo
+    /// RAM-derived default. Each concurrent region holds one shared ~11 km halo
     /// (~10s–100s MB), so this caps peak halo memory; the inner 16×16 receiver
     /// blocks still steal across the whole rayon pool. Force `1` for an A/B
     /// byte-diff against the old sequential build.
@@ -496,7 +496,7 @@ fn main() -> Result<()> {
     }
 
     // Concrete layers to build; `ground` fans out to all five. The shared halo
-    // is the MAX reach among them (road 10 km in ground mode), built ONCE per
+    // is the MAX reach among them (rail 11 km in ground mode), built ONCE per
     // batch and reused by every layer's scatter — instead of one halo build per
     // layer-process today.
     let layers: Vec<Source> = match args.source {
@@ -518,9 +518,11 @@ fn main() -> Result<()> {
     if layers.is_empty() {
         bail!("all requested layers were excluded");
     }
-    // Shared halo = the widest reach among the requested layers (road 10 km in
-    // ground mode); a shorter-reach layer only ray-marches its own inner disk,
-    // so the wider halo leaves its output unchanged.
+    // Shared halo = the widest reach among the requested layers (rail 11 km in
+    // ground mode). A shorter-reach layer never marches past its own
+    // `max_distance_m`, so the wider halo hands it no further source; it does
+    // move the shared grid's origin, so its bytes can still shift in the last
+    // bits (`surface_region`'s per-layer halo table says the same).
     let halo_m = layers
         .iter()
         .map(|&s| layer_meta(s).1)

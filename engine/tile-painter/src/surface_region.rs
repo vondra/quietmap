@@ -7,7 +7,7 @@
 //! Factored out of `bin/build_heatmap_surface.rs` so the binary stays a thin
 //! CLI + orchestration shell and the regions run on an outer rayon over a
 //! Morton curve (axis 2), exactly like the aircraft `region_runner`. Unlike
-//! aircraft, surface holds a real 10 km halo per region, so the binary caps
+//! aircraft, surface holds a real 11 km halo per region, so the binary caps
 //! how many regions build at once (see its `region_concurrency`).
 //!
 //! Equivalence to the old sequential per-region build: a tile is owned by its
@@ -49,21 +49,55 @@ use crate::wire_hm3::{
 use crate::{ground_ops, scatter_line, scatter_point};
 use noise_compute::admin;
 use noise_compute::constants::{
-    GROUND_OPS_RUNWAY_MAX_RADIUS, INDUSTRIAL_MAX_RADIUS, RAILWAY_REACH_CEILING,
+    GROUND_OPS_RUNWAY_MAX_RADIUS, INDUSTRIAL_MAX_RADIUS, RAILWAY_REACH_CEILING, ROAD_MAX_RADIUS,
 };
 use noise_compute::propagation::obstacle_index::ObstacleSet;
 
 /// Per-layer halo: covers the source→receiver ray at the layer's max reach.
-/// Road = motorway-class cap (10 km); rail + industrial reference the single
-/// reach the loader gates on; building is capped at 2 km by
-/// `prepare_building_points`. In `--source ground` the shared halo is the MAX
-/// of the requested layers (= road 10 km); a shorter-reach layer only
-/// ray-marches its own inner disk, so a larger halo leaves its output unchanged.
-const ROAD_HALO_M: f64 = 10_000.0;
+/// Every one is read from the reach itself, never hand-written: road takes the
+/// widest class of `ROAD_MAX_RADIUS` (motorway, 10 km), rail + industrial the
+/// single reach the loader gates on, and building the 2 km cap of
+/// `prepare_building_points`. A pass that paints several layers shares the MAX
+/// of theirs. A shorter-reach layer never marches past its own
+/// `max_distance_m`, so a wider halo hands it no further source; it does move
+/// the shared grid's origin along the 1/3600° lattice, and every layer's
+/// terrain samples — and with them its HM3 bytes — can shift in the last bits.
+const ROAD_HALO_M: f64 = widest_halo(&ROAD_MAX_RADIUS);
 const RAIL_HALO_M: f64 = RAILWAY_REACH_CEILING;
 const INDUSTRIAL_HALO_M: f64 = INDUSTRIAL_MAX_RADIUS;
 const BUILDING_HALO_M: f64 = 2_000.0;
 const GROUNDOPS_HALO_M: f64 = GROUND_OPS_RUNWAY_MAX_RADIUS;
+
+/// The halo a painter of ALL five ground layers must build: the widest of the
+/// five above, whichever layer that is (rail today, at 11 km). Taken from the
+/// same table `layer_meta` answers from, so the GPU painter and the CPU
+/// builder cannot drift apart on it, nor either of them from the reach.
+///
+/// The GPU painter builds this halo for every cell, including one whose seed
+/// arrows give it only some of the five: a layer's bytes then never depend on
+/// which siblings happened to be painted beside it, which is what lets the
+/// ledger reuse a cell's tiles. The CPU builder sizes its own from the layers
+/// asked of it, so a single-layer parity run holds a narrower halo than the
+/// card does — the two are scored on the accuracy rungs, never byte for byte.
+pub const WIDEST_GROUND_HALO_M: f64 = widest_halo(&[
+    ROAD_HALO_M,
+    RAIL_HALO_M,
+    INDUSTRIAL_HALO_M,
+    BUILDING_HALO_M,
+    GROUNDOPS_HALO_M,
+]);
+
+const fn widest_halo(halos: &[f64]) -> f64 {
+    let mut widest = 0.0;
+    let mut index = 0;
+    while index < halos.len() {
+        if halos[index] > widest {
+            widest = halos[index];
+        }
+        index += 1;
+    }
+    widest
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
 pub enum Source {
@@ -409,8 +443,9 @@ pub fn process_surface_region(
             .push((x, y));
     }
     for ((bx, by), batch_tiles) in &batches {
-        // ONE halo per grid-aligned block (10 km in ground mode), shared by
-        // every layer; a block only ever holds this region's own tiles.
+        // ONE halo per grid-aligned block (`ctx.halo_m`, 11 km in ground
+        // mode), shared by every layer; a block only ever holds this
+        // region's own tiles.
         let (base_x, base_y) =
             crate::region_runner::block_batch_origin(*bx, *by, ctx.batch_n, ctx.zoom);
         let t_r = Instant::now();

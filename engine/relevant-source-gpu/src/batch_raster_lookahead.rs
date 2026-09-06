@@ -34,8 +34,8 @@ use crate::tile_source_incidence::{no_source_reaches_tiles, TileMetricLattice};
 /// and the host never carries more than `BUILDER_THREADS + 1` batches — the
 /// one being painted included.
 ///
-/// A 4x4 z13 batch with the surface painter's 10 km line halo is 77.3 MB at the
-/// latitude of the world's dense cells and 110.2 MB at its worst — z13 row
+/// A 4x4 z13 batch with the surface painter's 11 km line halo is 79.1 MB at the
+/// latitude of the world's dense cells and 119.1 MB at its worst — z13 row
 /// 8188, the southernmost row any `gpu-surface` cell of this run owns, where a
 /// degree of longitude is a tenth of its equatorial width and the shared halo
 /// is that much wider (measured with `TileBatch::estimate_heap_bytes`, which is
