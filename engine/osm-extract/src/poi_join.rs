@@ -1,25 +1,14 @@
 //! POI-in-footprint spatial join for settlement source classification.
-//!
-//! Standalone `amenity=`/`shop=`/`tourism=`/`healthcare=` NODES that fall inside
-//! a `building=yes` footprint carry the building's real function. The extractor
-//! spills these as `poi_<bucket>.tsv` (`sq, gx, gy, class`); finalize loads the
-//! bucket's POIs, indexes them by square, and reclassifies the footprint when
-//! a POI sits inside it. Containment runs on snapped grid rings ([`grid`]).
-//!
-//! A POI never downgrades an explicitly typed building — only
-//! the residential default (`building_type == 0`) is eligible. Among multiple
-//! interior POIs the highest [`poi_priority`] wins.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ids;
 use crate::spill::spill_key;
+use grid::poly::PreparedRing;
 use grid::Square;
 
-/// Per-square POI points `(gx, gy, class)`, keyed by the numeric square id the
-/// POI hashed to (same square as any building it sits inside, so the join is
-/// within-square).
+/// Per-square POI points `(gx, gy, class)`, keyed by their spill square id.
 #[derive(Default)]
 pub struct PoiIndex {
     by_square: HashMap<u32, Vec<(i32, i32, u8)>>,
@@ -90,11 +79,11 @@ impl JoinStats {
 }
 
 /// The building class after the POI join. `current` is the building's own-tag
-/// class; `ring` its snapped footprint. Returns the reclassified class (or
-/// `current` unchanged). Only the residential default (class 0) is eligible.
-pub fn joined_building_type(
+/// class; `footprint` is requested only for an eligible building with POIs.
+/// Only the residential default (class 0) is eligible.
+pub fn joined_building_type<'a>(
     current: u8,
-    ring: &[(i32, i32)],
+    footprint: impl FnOnce() -> Option<&'a PreparedRing>,
     square: Square,
     index: &PoiIndex,
     stats: &JoinStats,
@@ -104,13 +93,16 @@ pub fn joined_building_type(
         return current;
     }
     let pois = index.square_pois(square);
-    if pois.is_empty() || ring.len() < 3 {
+    if pois.is_empty() {
         return current;
     }
+    let Some(footprint) = footprint() else {
+        return current;
+    };
     stats.buildings_checked.fetch_add(1, Ordering::Relaxed);
     let mut best: Option<(u8, u8)> = None; // (priority, class)
     for &(gx, gy, class) in pois {
-        if !grid::poly::ring_contains(ring, gx, gy) {
+        if !footprint.contains(gx, gy) {
             continue;
         }
         let pri = poi_priority(class);
@@ -131,6 +123,7 @@ pub fn joined_building_type(
 mod tests {
     use super::*;
     use grid::lonlat_to_grid;
+    use std::cell::{Cell, LazyCell};
 
     // ~100×100 m square at Prague as a snapped ring.
     fn square_ring() -> Vec<(i32, i32)> {
@@ -163,7 +156,8 @@ mod tests {
             .into_iter(),
         );
         let stats = JoinStats::default();
-        let out = joined_building_type(0, &square_ring(), sq, &idx, &stats);
+        let footprint = LazyCell::new(|| PreparedRing::new(&square_ring()));
+        let out = joined_building_type(0, || footprint.as_ref(), sq, &idx, &stats);
         assert_eq!(out, ids::SETTLEMENT_FOOD_RETAIL);
         assert_eq!(stats.report(), (1, 1));
     }
@@ -175,7 +169,11 @@ mod tests {
             [poi_line(sq.y as u32 * 512 + sq.x as u32, 14.5, 50.5, 4)].into_iter(),
         );
         let stats = JoinStats::default();
-        assert_eq!(joined_building_type(0, &square_ring(), sq, &idx, &stats), 0);
+        let footprint = LazyCell::new(|| PreparedRing::new(&square_ring()));
+        assert_eq!(
+            joined_building_type(0, || footprint.as_ref(), sq, &idx, &stats),
+            0
+        );
         assert_eq!(stats.report().1, 0);
     }
 
@@ -193,7 +191,27 @@ mod tests {
         );
         let stats = JoinStats::default();
         // building=hospital (4) with a cafe POI inside must stay 4.
-        assert_eq!(joined_building_type(4, &square_ring(), sq, &idx, &stats), 4);
+        assert_eq!(
+            joined_building_type(
+                4,
+                || panic!("typed building needs no footprint"),
+                sq,
+                &idx,
+                &stats
+            ),
+            4
+        );
+        assert_eq!(
+            joined_building_type(
+                0,
+                || panic!("empty POI index needs no footprint"),
+                sq,
+                &PoiIndex::default(),
+                &stats
+            ),
+            0
+        );
+        assert_eq!(stats.report(), (0, 0));
     }
 
     #[test]
@@ -208,6 +226,16 @@ mod tests {
             .into_iter(),
         );
         let stats = JoinStats::default();
-        assert_eq!(joined_building_type(0, &square_ring(), sq, &idx, &stats), 3);
+        let preparations = Cell::new(0);
+        let footprint = LazyCell::new(|| {
+            preparations.set(preparations.get() + 1);
+            PreparedRing::new(&square_ring())
+        });
+        assert_eq!(
+            joined_building_type(0, || footprint.as_ref(), sq, &idx, &stats),
+            3
+        );
+        assert_eq!(preparations.get(), 1);
+        assert_eq!(stats.report(), (1, 1));
     }
 }

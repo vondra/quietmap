@@ -1,11 +1,10 @@
-//! `buildings.arrow` writer: one row per building footprint with the
-//! POI-footprint join applied and area pre-computed on the SNAPPED ring.
-//! Stamps the `buildings_v3` per-file contract. See `finalize` for dispatch.
+//! Building Arrow writer with overlap suppression and POI-footprint classification.
 
 use anyhow::Result;
 use arrow::array::*;
 use arrow::datatypes::*;
-use grid::poly::{encode_grid_poly, ring_area_m2};
+use grid::poly::{encode_grid_poly, ring_area_m2, PreparedRing};
+use std::cell::LazyCell;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -89,36 +88,34 @@ pub(super) fn write_buildings(
     // tag, area_source=0). A functional-AREA source that geometrically contains
     // one of these is suppressed below. A clean area with no buildings inside
     // survives as the only source.
-    let real_centroids: Vec<(i32, i32)> = rows
-        .iter()
-        .filter(|r| r.len() >= 13 && r[12].as_str() == "0")
+    let eligible_rows = rows.iter().filter(|row| row.len() >= 14);
+    let real_centroids: Vec<(i32, i32)> = eligible_rows
+        .clone()
+        .filter(|r| r[12] == "0")
         .filter_map(|r| Some((r[2].parse().ok()?, r[3].parse().ok()?)))
         .collect();
 
-    for row in rows {
+    for row in eligible_rows {
         // TSV: sq(0) osm_id(1) c_gx(2) c_gy(3) btype(4) buse(5) height(6) floors(7)
         //      name(8) street(9) housenumber(10) opening_hours(11) area_source(12) ring(13)
-        if row.len() < 14 {
-            continue;
-        }
-        let ring = decode_tsv_ring(row.get(13).map(|s| s.as_str()).unwrap_or(""));
+        let ring = decode_tsv_ring(&row[13]);
+        // Overlap and POI queries share one preparation, only if either needs it.
+        let footprint = LazyCell::new(|| ring.as_deref().and_then(PreparedRing::new));
         // Overlap suppression: a functional-area source wrapping real buildings.
-        if row[12].as_str() == "1" {
-            if let Some(ref ring) = ring {
-                if real_centroids
-                    .iter()
-                    .any(|&(gx, gy)| grid::poly::ring_contains(ring, gx, gy))
-                {
-                    continue;
-                }
-            }
+        if row[12] == "1"
+            && !real_centroids.is_empty()
+            && footprint
+                .as_ref()
+                .is_some_and(|ring| real_centroids.iter().any(|&(gx, gy)| ring.contains(gx, gy)))
+        {
+            continue;
         }
         let area_opt = ring.as_ref().and_then(|r| ring_area_m2(r));
         // POI footprint join: reclassify `building=yes` when a function POI
         // sits inside it.
         let bt = joined_building_type(
             row[4].parse().unwrap_or(0),
-            ring.as_deref().unwrap_or(&[]),
+            || footprint.as_ref(),
             square,
             poi_index,
             join_stats,
@@ -139,17 +136,17 @@ pub(super) fn write_buildings(
             height.append_null();
         }
         floors.append_value(row[7].parse().unwrap_or(0));
-        name.append_value(row.get(8).unwrap_or(&String::new()));
-        street.append_value(row.get(9).unwrap_or(&String::new()));
-        housenumber.append_value(row.get(10).unwrap_or(&String::new()));
+        name.append_value(&row[8]);
+        street.append_value(&row[9]);
+        housenumber.append_value(&row[10]);
         opening.append_value(row[11].parse().unwrap_or(0));
-        match ring {
+        match ring.as_ref() {
             Some(ring) => {
                 match area_opt {
                     Some(a) => area_m2.append_value(a as f32),
                     None => area_m2.append_null(),
                 }
-                geom.append_value(encode_grid_poly(&ring));
+                geom.append_value(encode_grid_poly(ring));
             }
             None => {
                 geom.append_null();

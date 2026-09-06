@@ -128,38 +128,56 @@ pub fn ring_area_m2(ring: &[(i32, i32)]) -> Option<f64> {
     Some(((shoelace / 2.0).abs() * cos_lat * cos_lat).max(MIN_FOOTPRINT_AREA_M2))
 }
 
+/// Metre vertices and envelope shared by repeated containment queries.
+pub struct PreparedRing {
+    points: Vec<(f64, f64)>,
+    bbox: [f64; 4],
+}
+
+impl PreparedRing {
+    pub fn new(ring: &[(i32, i32)]) -> Option<Self> {
+        if ring.len() < 3 {
+            return None;
+        }
+        let points = ring_meters(ring);
+        let (mut min_x, mut max_x) = (f64::MAX, f64::MIN);
+        let (mut min_y, mut max_y) = (f64::MAX, f64::MIN);
+        for &(x, y) in &points {
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+        Some(Self {
+            points,
+            bbox: [min_x, min_y, max_x, max_y],
+        })
+    }
+
+    pub fn contains(&self, gx: i32, gy: i32) -> bool {
+        let (px, py) = grid_to_meters(gx, gy);
+        let [min_x, min_y, max_x, max_y] = self.bbox;
+        if px < min_x || px > max_x || py < min_y || py > max_y {
+            return false;
+        }
+        let mut inside = false;
+        let mut j = self.points.len() - 1;
+        for i in 0..self.points.len() {
+            let (xi, yi) = self.points[i];
+            let (xj, yj) = self.points[j];
+            if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+                inside = !inside;
+            }
+            j = i;
+        }
+        inside
+    }
+}
+
 /// True if the grid cell is inside the ring (outer ring; the extract stores
 /// no holes — relation assembly keeps outers only, as before).
 pub fn ring_contains(ring: &[(i32, i32)], gx: i32, gy: i32) -> bool {
-    if ring.len() < 3 {
-        return false;
-    }
-    let (px, py) = grid_to_meters(gx, gy);
-    let pts = ring_meters(ring);
-    let n = pts.len();
-    // Cheap metre-bbox reject before the ray cast.
-    let (mut min_x, mut max_x) = (f64::MAX, f64::MIN);
-    let (mut min_y, mut max_y) = (f64::MAX, f64::MIN);
-    for &(x, y) in &pts {
-        min_x = min_x.min(x);
-        max_x = max_x.max(x);
-        min_y = min_y.min(y);
-        max_y = max_y.max(y);
-    }
-    if px < min_x || px > max_x || py < min_y || py > max_y {
-        return false;
-    }
-    let mut inside = false;
-    let mut j = n - 1;
-    for i in 0..n {
-        let (xi, yi) = pts[i];
-        let (xj, yj) = pts[j];
-        if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
+    PreparedRing::new(ring).is_some_and(|ring| ring.contains(gx, gy))
 }
 
 /// Ring envelope as `[min_lat, min_lon, max_lat, max_lon]` degrees for the
@@ -249,6 +267,43 @@ mod tests {
         assert!(ring_contains(&ring, ix, iy));
         let (ox, oy) = lonlat_to_grid(14.005, 50.005);
         assert!(!ring_contains(&ring, ox, oy));
+    }
+
+    #[test]
+    fn containment_preserves_edges_and_concavity() {
+        let origin = 500_000_000;
+        let corners = [(0, 0), (100, 0), (100, 40), (40, 40), (40, 100), (0, 100)];
+        let ring: GridRing = corners
+            .iter()
+            .map(|&(x, y)| (origin + x, origin + y))
+            .collect();
+        for closed in [false, true] {
+            for reversed in [false, true] {
+                let mut ring = ring.clone();
+                if closed {
+                    ring.push(ring[0]);
+                }
+                if reversed {
+                    ring.reverse();
+                }
+                for (x, y, expected) in [
+                    (20, 80, true),
+                    (80, 80, false),
+                    (0, 20, true),
+                    (100, 20, false),
+                    (20, 0, true),
+                    (20, 100, false),
+                    (-1, 20, false),
+                    (101, 20, false),
+                ] {
+                    assert_eq!(
+                        ring_contains(&ring, origin + x, origin + y),
+                        expected,
+                        "({x}, {y}), closed={closed}, reversed={reversed}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -86,6 +86,61 @@ fn roads_writer_roundtrips_grid_columns() {
 const QM_BATCH_KEY: &str = arrow_batching::QM_BATCH_BBOXES_KEY;
 
 #[test]
+fn only_emittable_buildings_suppress_functional_areas() {
+    let dir = scratch_dir("building-eligibility");
+    let square = grid::square_of(50.0005, 14.0005);
+    let key = crate::spill::spill_key(square);
+    let (gx, gy) = grid::lonlat_to_grid(14.0005, 50.0005);
+    let ring = prague_ring_text();
+    let real = format!("{key}\t1\t{gx}\t{gy}\t0\t0\t0\t0\tReal\t\t\t0\t0");
+    let area = format!("{key}\t2\t{gx}\t{gy}\t0\t0\t0\t0\tArea\t\t\t0\t1\t{ring}");
+    let food_retail = crate::ids::SETTLEMENT_FOOD_RETAIL;
+    for (geometry_column, expected) in [("", (2_i64, food_retail)), ("\t", (1, 0))] {
+        let spill = dir.join(format!("spill-{}", geometry_column.len()));
+        let output = dir.join(format!("prepared-{}", geometry_column.len()));
+        std::fs::create_dir_all(&spill).unwrap();
+        std::fs::write(
+            spill.join("buildings_000.tsv"),
+            format!("{real}{geometry_column}\n{area}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            spill.join("poi_000.tsv"),
+            format!("{key}\t{gx}\t{gy}\t{food_retail}\n"),
+        )
+        .unwrap();
+        assert_eq!(finalize(&spill, &output, 1).unwrap(), 1);
+        let (_, batches) = read_ipc(
+            &output
+                .join(grid::square_name(square))
+                .join("buildings.arrow"),
+        );
+        let mut emitted = Vec::new();
+        for batch in batches {
+            let ids = batch
+                .column_by_name("osm_id")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<arrow::array::Int64Array>()
+                .unwrap();
+            let classes = batch
+                .column_by_name("building_type")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<arrow::array::UInt8Array>()
+                .unwrap();
+            emitted.extend((0..batch.num_rows()).map(|i| (ids.value(i), classes.value(i))));
+        }
+        assert_eq!(
+            emitted,
+            vec![expected],
+            "geometry column {geometry_column:?}"
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn buildings_writer_roundtrips_geom_and_contract() {
     let dir = scratch_dir("buildings");
     let path = dir.join("buildings.arrow");
