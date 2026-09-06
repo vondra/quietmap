@@ -320,6 +320,11 @@ fn paint_batch_tiles(
     measurement: &mut CellMeasurement,
 ) -> Result<()> {
     let zoom = configuration.zoom;
+    assert_eq!(
+        layers.len(),
+        ready.reached_layers.len(),
+        "a batch's reach flags must cover exactly the cell's painted layers"
+    );
     let rastered = match &ready.rasters {
         Some(batch) => Some((batch, BatchDeviceRaster::upload(frame, &batch.tiles[0])?)),
         None => None,

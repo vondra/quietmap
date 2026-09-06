@@ -601,6 +601,10 @@ fn low_profile_lookup(batches: &[RecordBatch]) -> LowProfileLookup {
 /// mutates, keeps its own crossing scratch, and writes one pixel of its own row,
 /// so the bake is the same function of the same inputs whatever order the rows
 /// run in.
+///
+/// The field is sized first, because `zip` would quietly stop at the shorter
+/// side and leave the rest of a short `rx_refl_db` at its neutral 0 dB, where
+/// the indexed loop this replaced panicked.
 pub fn bake_tile_vector_rx_refl(
     tile: &mut raster_reader::fused_tile_z13::FusedTileZ13,
     set: &ObstacleSet,
@@ -609,6 +613,11 @@ pub fn bake_tile_vector_rx_refl(
     use noise_compute::propagation::obstacle_index::enclosure_db;
     use raster_reader::fused_tile_z13::TILE_PX;
     use rayon::prelude::*;
+    assert_eq!(
+        tile.rx_refl_db.len(),
+        TILE_PX * TILE_PX,
+        "the reflection field must hold every pixel of the {TILE_PX}x{TILE_PX} receiver lattice"
+    );
     let longitudes = &tile.rx_lon;
     tile.rx_refl_db
         .par_chunks_mut(TILE_PX)
