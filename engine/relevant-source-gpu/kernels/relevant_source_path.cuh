@@ -106,6 +106,18 @@ __device__ __forceinline__ void append_profile_t(PathProfile& profile, float val
     }
 }
 
+/// One ray's chainages: a near probe at each end and the raster cadence between them,
+/// coarsening away from both ends.
+///
+/// They come out ASCENDING, which is what lets `profile_elevation_at` start its walk at a
+/// bracket its caller offers instead of at sample 1. Each ladder below only ever advances,
+/// and the near probe is the one sample that could overtake the first cadence chainage —
+/// it cannot while it falls inside a single raster cell, which is what this pins.
+static_assert(QUIETMAP_NEAR_SAMPLE_M > 0.0f
+                  && QUIETMAP_NEAR_SAMPLE_M < QUIETMAP_RASTER_CELL_M,
+              "the near probe must land before the first raster-cadence chainage, or the "
+              "chainages stop ascending and profile_elevation_at may start past `t`");
+
 __device__ __forceinline__ void fill_profile_chainages(
     PathProfile& profile,
     float distance_m
