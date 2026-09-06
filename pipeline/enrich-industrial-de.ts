@@ -13,11 +13,16 @@ import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 
 import { resolve } from 'node:path'
 import { tableFromIPC, tableToIPC, makeTable, makeVector } from 'apache-arrow'
 import { cellToLatLng } from 'h3-js'
-import { haversineM } from './lib/spatial.js'
+import { buildRegistryGrid, findNearestRegistryRecord, fillMissingTurbineSpecs } from './lib/wind-registry-match.js'
 import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
 const CACHE_DIR = resolve(import.meta.dirname, `../data/enrichment/${YEAR}/de`)
 const CACHE_CSV = resolve(CACHE_DIR, 'mastr-wind.csv')
+
+/** How far an OSM wind turbine may sit from its MaStR record. The register
+ *  publishes the mast position, so node and record land within a rotor's
+ *  reach of each other. */
+const REGISTRY_MATCH_RADIUS_M = 200
 
 interface MastrTurbine {
   lat: number
@@ -47,17 +52,6 @@ function loadTurbines(): MastrTurbine[] {
   return turbines
 }
 
-function buildGrid(turbines: MastrTurbine[]): Map<string, MastrTurbine[]> {
-  const grid = new Map<string, MastrTurbine[]>()
-  for (const t of turbines) {
-    const key = `${Math.floor(t.lat * 100)},${Math.floor(t.lon * 100)}`
-    const list = grid.get(key) || []
-    list.push(t)
-    grid.set(key, list)
-  }
-  return grid
-}
-
 async function main() {
   console.log(`=== DE Wind Turbine Enrichment (MaStR) ===\n`)
 
@@ -66,7 +60,7 @@ async function main() {
   console.log(`  With hub height: ${turbines.filter(t => t.hub_height_m > 0).length}`)
   console.log(`  Mean power: ${Math.round(turbines.reduce((s, t) => s + t.rated_power_kw, 0) / turbines.length)} kW`)
 
-  const grid = buildGrid(turbines)
+  const grid = buildRegistryGrid(turbines)
   console.log(`  Grid cells: ${grid.size}`)
 
   // Pre-filter German hexes
@@ -82,7 +76,7 @@ async function main() {
   }
   console.log(`  German hexes with industrial.arrow: ${hexDirs.length}\n`)
 
-  let totalTurbines = 0, matched = 0, hexesUpdated = 0
+  let totalTurbines = 0, filled = 0, hexesUpdated = 0
   const startTime = Date.now()
 
   for (let hi = 0; hi < hexDirs.length; hi++) {
@@ -102,7 +96,7 @@ async function main() {
 
     const hubHeights = new Float32Array(numRows)
     const ratedPowers = new Float32Array(numRows)
-    let hexMatched = 0
+    let hexFilled = 0
 
     // Copy existing values
     for (let i = 0; i < numRows; i++) {
@@ -122,33 +116,14 @@ async function main() {
       const lon = lons.get(i) ?? 0
       if (lat === 0 || lon === 0) continue
 
-      // Find nearest MaStR turbine within 200m
-      const gy = Math.floor(lat * 100)
-      const gx = Math.floor(lon * 100)
-      let best: MastrTurbine | null = null
-      let bestDist = 200 // max 200m
-
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const key = `${gy + dy},${gx + dx}`
-          const candidates = grid.get(key)
-          if (!candidates) continue
-          for (const c of candidates) {
-            const dist = haversineM(lat, lon, c.lat, c.lon)
-            if (dist < bestDist) { bestDist = dist; best = c }
-          }
-        }
-      }
-
-      if (best) {
-        hubHeights[i] = best.hub_height_m
-        ratedPowers[i] = best.rated_power_kw
-        hexMatched++
-        matched++
+      const best = findNearestRegistryRecord(grid, lat, lon, REGISTRY_MATCH_RADIUS_M)
+      if (best && fillMissingTurbineSpecs(hubHeights, ratedPowers, i, best.hub_height_m, best.rated_power_kw)) {
+        hexFilled++
+        filled++
       }
     }
 
-    if (hexMatched > 0) {
+    if (hexFilled > 0) {
       const columns: Record<string, any> = {}
       for (const field of table.schema.fields) {
         if (field.name === 'hub_height' || field.name === 'rated_power_kw') continue
@@ -162,13 +137,13 @@ async function main() {
     }
 
     if (hi % 50 === 0) {
-      console.log(`  [${Math.round((Date.now() - startTime) / 1000)}s] ${hi + 1}/${hexDirs.length} hexes, ${matched} turbines matched`)
+      console.log(`  [${Math.round((Date.now() - startTime) / 1000)}s] ${hi + 1}/${hexDirs.length} hexes, ${filled} turbines filled`)
     }
   }
 
   console.log(`\n=== Results ===`)
   console.log(`  OSM wind turbines in DE: ${totalTurbines}`)
-  console.log(`  Matched to MaStR: ${matched} (${(100 * matched / Math.max(totalTurbines, 1)).toFixed(1)}%)`)
+  console.log(`  Specs filled from MaStR: ${filled} (${(100 * filled / Math.max(totalTurbines, 1)).toFixed(1)}%)`)
   console.log(`  Hexes updated: ${hexesUpdated}`)
   console.log(`\n=== Done ===`)
 }

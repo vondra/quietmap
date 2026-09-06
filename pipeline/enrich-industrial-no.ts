@@ -20,12 +20,17 @@ import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 
 import { resolve } from 'node:path'
 import { tableFromIPC, tableToIPC, makeTable, makeVector } from 'apache-arrow'
 import { cellToLatLng } from 'h3-js'
-import { haversineM } from './lib/spatial.js'
+import { buildRegistryGrid, findNearestRegistryRecord, fillMissingTurbineSpecs } from './lib/wind-registry-match.js'
 import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
 const CACHE_DIR = resolve(import.meta.dirname, `../data/enrichment/${YEAR}/no`)
 const CACHE_TURBINES = resolve(CACHE_DIR, 'nve-vindturbiner.json')
 const CACHE_PARKS = resolve(CACHE_DIR, 'nve-vindkraftverk.json')
+
+/** How far an OSM wind turbine may sit from its NVE record. Norwegian wind
+ *  farms sit in mountainous terrain where the OSM node is often the pad
+ *  rather than the surveyed mast — wider than the 200 m registers. */
+const REGISTRY_MATCH_RADIUS_M = 500
 
 const forceDownload = process.argv.includes('--force-download')
 const enrichOnly = process.argv.includes('--enrich-only')
@@ -78,16 +83,6 @@ async function fetchAllPaged(layerId: number, label: string, cache: string): Pro
   return all
 }
 
-function buildGrid(turbines: TurbineRecord[]): Map<string, TurbineRecord[]> {
-  const grid = new Map<string, TurbineRecord[]>()
-  for (const t of turbines) {
-    const key = `${Math.floor(t.lat * 100)},${Math.floor(t.lon * 100)}`
-    if (!grid.has(key)) grid.set(key, [])
-    grid.get(key)!.push(t)
-  }
-  return grid
-}
-
 async function main() {
   console.log(`=== NO Wind Turbine Enrichment — NVE Vindkraft2 ArcGIS ===\n`)
   console.log(`  H3R4 dir: ${H3R4_DIR}`)
@@ -137,7 +132,9 @@ async function main() {
   }
   console.log(`  Operational turbines: ${turbines.length}`)
 
-  const grid = buildGrid(turbines)
+  // Only a turbine whose park is known can fill a spec; indexing just those is
+  // the same "nearest turbine that has a park" the match loop used to compute.
+  const grid = buildRegistryGrid(turbines.filter((t) => parkMap.has(t.anleggsNr)))
 
   // Pre-filter NO hexes
   const allHexes = readdirSync(H3R4_DIR).filter(d => d.length === 15 && d.endsWith('ffffffff'))
@@ -152,7 +149,7 @@ async function main() {
   }
   console.log(`  Norwegian hexes with industrial.arrow: ${hexDirs.length}\n`)
 
-  let totalTurbines = 0, matched = 0, hexesUpdated = 0
+  let totalTurbines = 0, filled = 0, hexesUpdated = 0
   const startTime = Date.now()
 
   for (let hi = 0; hi < hexDirs.length; hi++) {
@@ -178,7 +175,7 @@ async function main() {
       ratedPowers[i] = (existingPower?.get(i) as number) ?? 0
     }
 
-    let hexMatched = 0
+    let hexFilled = 0
     for (let i = 0; i < numRows; i++) {
       const st = sourceTypes.get(i) as number ?? 0
       if (st !== 10) continue
@@ -189,34 +186,16 @@ async function main() {
       const lon = lons.get(i) as number ?? 0
       if (lat === 0 || lon === 0) continue
 
-      const gy = Math.floor(lat * 100)
-      const gx = Math.floor(lon * 100)
-      let bestPark: ParkRecord | null = null
-      let bestDist = 500 // Norwegian wind farms in mountainous terrain — wider tolerance
-
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const cell = grid.get(`${gy + dy},${gx + dx}`)
-          if (!cell) continue
-          for (const t of cell) {
-            const d = haversineM(lat, lon, t.lat, t.lon)
-            if (d < bestDist) {
-              const park = parkMap.get(t.anleggsNr)
-              if (park) { bestDist = d; bestPark = park }
-            }
-          }
-        }
-      }
-
-      if (bestPark) {
-        ratedPowers[i] = bestPark.per_turbine_kw
-        // No hub height in NVE — leave as default
-        hexMatched++
-        matched++
+      const nearest = findNearestRegistryRecord(grid, lat, lon, REGISTRY_MATCH_RADIUS_M)
+      const park = nearest ? parkMap.get(nearest.anleggsNr) : undefined
+      // NVE publishes no hub height — 0 leaves the row's own value alone.
+      if (park && fillMissingTurbineSpecs(hubHeights, ratedPowers, i, 0, park.per_turbine_kw)) {
+        hexFilled++
+        filled++
       }
     }
 
-    if (hexMatched > 0) {
+    if (hexFilled > 0) {
       const columns: Record<string, any> = {}
       for (const field of table.schema.fields) {
         if (field.name === 'hub_height' || field.name === 'rated_power_kw') continue
@@ -231,13 +210,13 @@ async function main() {
 
     if (hi % 50 === 0 || hi === hexDirs.length - 1) {
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(0)
-      console.log(`  [${elapsed}s] ${hi + 1}/${hexDirs.length} hexes, ${hexesUpdated} updated, ${matched} matched`)
+      console.log(`  [${elapsed}s] ${hi + 1}/${hexDirs.length} hexes, ${hexesUpdated} updated, ${filled} filled`)
     }
   }
 
   console.log(`\n=== Results ===`)
   console.log(`  OSM wind turbines in NO hexes: ${totalTurbines}`)
-  console.log(`  Matched to NVE: ${matched} (${(100 * matched / Math.max(totalTurbines, 1)).toFixed(1)}%)`)
+  console.log(`  Specs filled from NVE: ${filled} (${(100 * filled / Math.max(totalTurbines, 1)).toFixed(1)}%)`)
   console.log(`  Hexes updated: ${hexesUpdated}`)
   console.log(`\n=== Done ===`)
 }

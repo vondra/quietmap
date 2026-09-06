@@ -22,7 +22,7 @@ import { execSync } from 'node:child_process'
 import { parse } from 'csv-parse/sync'
 import { tableFromIPC, tableToIPC, makeTable, makeVector } from 'apache-arrow'
 import { latLngToCell } from 'h3-js'
-import { flatDist, M_PER_DEG_LAT, M_PER_DEG_LON_EQ } from './lib/spatial.js'
+import { buildRegistryGrid, findNearestRegistryRecord, fillMissingTurbineSpecs } from './lib/wind-registry-match.js'
 import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
 const CACHE_DIR = resolve(import.meta.dirname, '../data/enrichment/global')
@@ -38,8 +38,6 @@ const enrichOnly = process.argv.includes('--enrich-only')
  *  pass reached sit 276-423 m from their record — among them OSM
  *  11798022164, which gains an 84 m hub and 4,200 kW. */
 const USWTDB_MATCH_RADIUS_M = 500
-/** Turbine grid cell — ~1.1 km of latitude, less of longitude further north. */
-const GRID_CELL_DEG = 0.01
 
 // USWTDB download — ZIP containing CSV
 const USWTDB_ZIP_URL = 'https://energy.usgs.gov/uswtdb/assets/data/uswtdbCSV.zip'
@@ -184,8 +182,7 @@ function enrichHexes(turbines: Turbine[]): void {
 
   let totalWindTurbines = 0
   let totalMatched = 0
-  let hubHeightUpdated = 0
-  let ratedPowerUpdated = 0
+  let specsFilled = 0
   let hexesUpdated = 0
   let hexesScanned = 0
   const startTime = Date.now()
@@ -223,15 +220,8 @@ function enrichHexes(turbines: Turbine[]): void {
       newRatedPower[i] = existingRatedPower ? (existingRatedPower.get(i) as number ?? NaN) : NaN
     }
 
-    let hexMatched = 0
-
-    // Build the spatial grid for this hex's USWTDB turbines.
-    const grid = new Map<string, Turbine[]>()
-    for (const t of hexTurbines) {
-      const key = `${Math.floor(t.lat / GRID_CELL_DEG)}_${Math.floor(t.lon / GRID_CELL_DEG)}`
-      if (!grid.has(key)) grid.set(key, [])
-      grid.get(key)!.push(t)
-    }
+    let hexFilled = 0
+    const grid = buildRegistryGrid(hexTurbines)
 
     for (let i = 0; i < n; i++) {
       const st = sourceType.get(i) as number
@@ -241,51 +231,17 @@ function enrichHexes(turbines: Turbine[]): void {
       const lat = clat.get(i) as number
       const lon = clon.get(i) as number
 
-      let bestDist = USWTDB_MATCH_RADIUS_M
-      let bestTurbine: Turbine | null = null
-
-      // Block derived from the radius, not a fixed 3x3: 0.01 deg of longitude
-      // is 353 m at Alaska's 71.5 deg, so a fixed ring cannot reach 500 m.
-      const cellY = Math.floor(lat / GRID_CELL_DEG)
-      const cellX = Math.floor(lon / GRID_CELL_DEG)
-      const blockY = Math.ceil(USWTDB_MATCH_RADIUS_M / (M_PER_DEG_LAT * GRID_CELL_DEG))
-      const blockX = Math.ceil(USWTDB_MATCH_RADIUS_M / (M_PER_DEG_LON_EQ * Math.max(Math.cos(lat * Math.PI / 180), 0.01) * GRID_CELL_DEG))
-      for (let dy = -blockY; dy <= blockY; dy++) {
-        for (let dx = -blockX; dx <= blockX; dx++) {
-          const cell = grid.get(`${cellY + dy}_${cellX + dx}`)
-          if (!cell) continue
-          for (const t of cell) {
-            const d = flatDist(lat, lon, t.lat, t.lon)
-            if (d < bestDist) { bestDist = d; bestTurbine = t }
-          }
-        }
-      }
-
+      const bestTurbine = findNearestRegistryRecord(grid, lat, lon, USWTDB_MATCH_RADIUS_M)
       if (!bestTurbine) continue
-
-      hexMatched++
       totalMatched++
 
-      // Update hub_height if USWTDB has data and current is missing/zero
-      if (bestTurbine.hubHeight > 0) {
-        const curHub = existingHubHeight ? (existingHubHeight.get(i) as number) : null
-        if (!curHub || curHub <= 0 || isNaN(curHub)) {
-          newHubHeight[i] = bestTurbine.hubHeight
-          hubHeightUpdated++
-        }
-      }
-
-      // Update rated_power_kw if USWTDB has data and current is missing/zero
-      if (bestTurbine.ratedPowerKw > 0) {
-        const curPower = existingRatedPower ? (existingRatedPower.get(i) as number) : null
-        if (!curPower || curPower <= 0 || isNaN(curPower)) {
-          newRatedPower[i] = bestTurbine.ratedPowerKw
-          ratedPowerUpdated++
-        }
+      if (fillMissingTurbineSpecs(newHubHeight, newRatedPower, i, bestTurbine.hubHeight, bestTurbine.ratedPowerKw)) {
+        hexFilled++
+        specsFilled++
       }
     }
 
-    if (hexMatched === 0) continue
+    if (hexFilled === 0) continue
 
     // Zero is the "unknown" sentinel: the columns carry no Arrow null bitmap,
     // and the Rust reader treats 0 (or NaN) as unknown and falls back to its
@@ -323,8 +279,7 @@ function enrichHexes(turbines: Turbine[]): void {
   console.log(`\n=== Results ===`)
   console.log(`  OSM wind turbines in matched hexes: ${totalWindTurbines}`)
   console.log(`  Matched to USWTDB: ${totalMatched} (${totalWindTurbines > 0 ? (totalMatched / totalWindTurbines * 100).toFixed(1) : 0}%)`)
-  console.log(`  hub_height updated: ${hubHeightUpdated}`)
-  console.log(`  rated_power_kw updated: ${ratedPowerUpdated}`)
+  console.log(`  Rows whose specs were filled: ${specsFilled}`)
   console.log(`  Hexes updated: ${hexesUpdated}`)
 }
 

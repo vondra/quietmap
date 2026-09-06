@@ -20,11 +20,16 @@ import { resolve } from 'node:path'
 import { tableFromIPC, tableToIPC, makeTable, makeVector } from 'apache-arrow'
 import { cellToLatLng } from 'h3-js'
 import * as XLSX from 'xlsx'
-import { haversineM } from './lib/spatial.js'
+import { buildRegistryGrid, findNearestRegistryRecord, fillMissingTurbineSpecs } from './lib/wind-registry-match.js'
 import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
 const CACHE_DIR = resolve(import.meta.dirname, `../data/enrichment/${YEAR}/ca`)
 const CACHE_XLSX = resolve(CACHE_DIR, 'wind-turbines-en.xlsx')
+
+/** How far an OSM wind turbine may sit from its NRCan record. Canadian wind
+ *  farms sit in remote terrain where the OSM node is often the pad rather
+ *  than the surveyed mast — wider than the European registers' 200 m. */
+const REGISTRY_MATCH_RADIUS_M = 500
 
 const forceDownload = process.argv.includes('--force-download')
 const enrichOnly = process.argv.includes('--enrich-only')
@@ -107,16 +112,6 @@ async function downloadXlsx(): Promise<Turbine[]> {
   return turbines
 }
 
-function buildGrid(turbines: Turbine[]): Map<string, Turbine[]> {
-  const grid = new Map<string, Turbine[]>()
-  for (const t of turbines) {
-    const key = `${Math.floor(t.lat * 100)},${Math.floor(t.lon * 100)}`
-    if (!grid.has(key)) grid.set(key, [])
-    grid.get(key)!.push(t)
-  }
-  return grid
-}
-
 async function main() {
   console.log(`=== CA Wind Turbine Enrichment — NRCan ===\n`)
   console.log(`  H3R4 dir: ${H3R4_DIR}`)
@@ -128,7 +123,7 @@ async function main() {
   console.log(`  Mean rated power: ${meanCap} kW`)
   console.log(`  With hub height: ${withHub}`)
 
-  const grid = buildGrid(turbines)
+  const grid = buildRegistryGrid(turbines)
   console.log(`  Grid cells: ${grid.size}`)
 
   const allHexes = readdirSync(H3R4_DIR).filter(d => d.length === 15 && d.endsWith('ffffffff'))
@@ -143,7 +138,7 @@ async function main() {
   }
   console.log(`  CA hexes with industrial.arrow: ${hexDirs.length}\n`)
 
-  let totalTurbines = 0, matched = 0, hexesUpdated = 0
+  let totalTurbines = 0, filled = 0, hexesUpdated = 0
   const startTime = Date.now()
 
   for (let hi = 0; hi < hexDirs.length; hi++) {
@@ -169,7 +164,7 @@ async function main() {
       ratedPowers[i] = (existingPower?.get(i) as number) ?? 0
     }
 
-    let hexMatched = 0
+    let hexFilled = 0
     for (let i = 0; i < numRows; i++) {
       const st = sourceTypes.get(i) as number ?? 0
       if (st !== 10) continue
@@ -180,31 +175,14 @@ async function main() {
       const lon = lons.get(i) as number ?? 0
       if (lat === 0 || lon === 0) continue
 
-      const gy = Math.floor(lat * 100)
-      const gx = Math.floor(lon * 100)
-      let best: Turbine | null = null
-      let bestDist = 500 // CA wind farms in remote terrain — wider tolerance
-
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const cell = grid.get(`${gy + dy},${gx + dx}`)
-          if (!cell) continue
-          for (const t of cell) {
-            const d = haversineM(lat, lon, t.lat, t.lon)
-            if (d < bestDist) { bestDist = d; best = t }
-          }
-        }
-      }
-
-      if (best) {
-        hubHeights[i] = best.hub_height_m
-        ratedPowers[i] = best.rated_power_kw
-        hexMatched++
-        matched++
+      const best = findNearestRegistryRecord(grid, lat, lon, REGISTRY_MATCH_RADIUS_M)
+      if (best && fillMissingTurbineSpecs(hubHeights, ratedPowers, i, best.hub_height_m, best.rated_power_kw)) {
+        hexFilled++
+        filled++
       }
     }
 
-    if (hexMatched > 0) {
+    if (hexFilled > 0) {
       const columns: Record<string, any> = {}
       for (const field of table.schema.fields) {
         if (field.name === 'hub_height' || field.name === 'rated_power_kw') continue
@@ -219,13 +197,13 @@ async function main() {
 
     if (hi % 100 === 0 || hi === hexDirs.length - 1) {
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(0)
-      console.log(`  [${elapsed}s] ${hi + 1}/${hexDirs.length} hexes, ${hexesUpdated} updated, ${matched} matched`)
+      console.log(`  [${elapsed}s] ${hi + 1}/${hexDirs.length} hexes, ${hexesUpdated} updated, ${filled} filled`)
     }
   }
 
   console.log(`\n=== Results ===`)
   console.log(`  OSM wind turbines in CA hexes: ${totalTurbines}`)
-  console.log(`  Matched to NRCan: ${matched} (${(100 * matched / Math.max(totalTurbines, 1)).toFixed(1)}%)`)
+  console.log(`  Specs filled from NRCan: ${filled} (${(100 * filled / Math.max(totalTurbines, 1)).toFixed(1)}%)`)
   console.log(`  Hexes updated: ${hexesUpdated}`)
   console.log(`\n=== Done ===`)
 }
