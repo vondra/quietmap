@@ -184,10 +184,7 @@ pub fn source_init(prepared_dir: String) -> napi::Result<String> {
 
     // NACE codes are baked into industrial.arrow — no global JSON needed
 
-    // Admin for the defaults cascade (plan v5 §F.3): each queried square's own
-    // `<prepared>/2026/admin/<square_id>/admin.bin`, read on first use. A square
-    // without one simply leaves the cascade in its WORLD arm.
-    noise_compute::admin::set_admin_square_directory(&year_path.join("admin"));
+    noise_compute::admin::set_admin_prepared_directory(year_path);
 
     Ok(format!(
         "source-reader initialized: {prepared_dir} (DEM: {})",

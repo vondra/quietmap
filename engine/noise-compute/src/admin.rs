@@ -1,52 +1,17 @@
-//! z9-square → (continent, country, city) lookup, one record per prepared square.
-//!
-//! Every prepared square carries its own admin record beside its arrows, at
-//! `<squares>/<square>/admin.bin`, so a paint task reads admin for exactly
-//! the squares in its read ring and nothing world-wide has to travel with it.
-//!
-//! `square` is the square's Morton z-order id (see [`square_id`]): interleaved
-//! x/y bits of the z9 tile, `0..262144`. The directory name is the decimal id.
-//!
-//! Record (13 bytes, little-endian):
-//!
-//! ```text
-//! [u64 square_id, u8 continent, u8 iso0, u8 iso1, u16 city]
-//! ```
-//!
-//! `square_id` repeats the directory name on purpose: the path anchors the
-//! identity and the record proves the file was not copied in from another
-//! square.
-//!
-//! Policy: admin assignment uses the z9 square **centroid** point-in-polygon
-//! against the global CGAZ ADM0 boundaries, with interior sampling for
-//! sea-centroid squares and hand-curated metro polygons. At ~78 km square
-//! resolution (z9 at the equator):
-//!
-//!   - Interior squares fall cleanly inside one country.
-//!   - Border squares pick up whichever polygon claims the centroid —
-//!     acceptable approximation at z9 granularity.
-//!   - Micro-states (Vatican, Monaco, ...) are absorbed into the
-//!     surrounding country's polygon.
-//!   - Metros tag only squares whose centroid falls inside the bounding
-//!     polygon — suburbs outside the polygon correctly fall back to the
-//!     country-level default.
-//!
+//! Strict country/city defaults from each prepared `z9/x/y/admin.bin`.
 
+use grid::{square_from_id, square_id};
 use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, RwLock};
 
-/// `[u64 square_id, u8 continent, u8 iso0, u8 iso1, u16 city]`.
+/// Little-endian `[u64 Morton square_id, u8 continent, u8 iso0, u8 iso1, u16 city]`.
 pub const RECORD_SIZE: usize = 8 + 1 + 2 + 2;
 
-/// The admin record's file name inside `<squares>/<square>/`.
+/// The admin record's file name beside one z9 unit's Arrow files.
 pub const ADMIN_FILE_NAME: &str = "admin.bin";
-
-/// Integer square ids live in one place ([`grid::square_id`]); re-exported
-/// here so `admin::` paths keep working.
-pub use grid::{square_from_id, square_id, MAX_SQUARE_ID};
 
 /// Six major continents. Hand-coded ids must match the admin build script.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -121,19 +86,25 @@ impl Admin {
     }
 }
 
-/// The path of one square's admin record inside a prepared squares tree.
-pub fn cell_admin_path(square_directory: &Path, square: i64) -> PathBuf {
-    square_directory
-        .join(format!("{square}"))
-        .join(ADMIN_FILE_NAME)
+/// The path of one square's admin record inside a prepared year.
+pub fn cell_admin_path(prepared_directory: &Path, square: i64) -> io::Result<PathBuf> {
+    let square = square_from_id(square).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid z9 square id {square}"),
+        )
+    })?;
+    Ok(prepared_directory
+        .join(grid::square_name(square))
+        .join(ADMIN_FILE_NAME))
 }
 
 /// Read one square's admin record. `io::ErrorKind::NotFound` means the square
 /// is outside the prepared world (no square directory at all); every other
 /// error is a real fault: a prepared square directory without its record, a
 /// truncated record, or one copied in from another square.
-pub fn read_cell_admin(square_directory: &Path, square: i64) -> io::Result<Admin> {
-    let path = cell_admin_path(square_directory, square);
+pub fn read_cell_admin(prepared_directory: &Path, square: i64) -> io::Result<Admin> {
+    let path = cell_admin_path(prepared_directory, square)?;
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -166,6 +137,7 @@ pub fn read_cell_admin(square_directory: &Path, square: i64) -> io::Result<Admin
             ),
         ));
     }
+    // The independently derived z9 path anchors identity; copied records fail.
     let stored = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
     if stored != square as u64 {
         return Err(io::Error::new(
@@ -180,25 +152,11 @@ pub fn read_cell_admin(square_directory: &Path, square: i64) -> io::Result<Admin
     })
 }
 
-// ─── Process-wide per-square cache ─────────────────────────────────────
-///
-/// tile-painter, source-reader and point-debug all benefit from the defaults
-/// cascade. Rather than plumb admin by reference through the ~6-deep call
-/// chain (entry point → compute_at_point → compute_roads →
-/// normalize_road_segment), the process records its squares tree once at
-/// startup and each square's record is read on first use and then kept.
-///
-/// A process that never records a tree — lib tests, point-debug — resolves
-/// `Admin::UNKNOWN` everywhere and keeps the WORLD defaults arm, so lib tests
-/// may assume no admin is ever visible to them. That assumption is why the
-/// wiring test lives in its own integration binary
-/// (`tests/admin_process_directory.rs`): filling this cache inside the lib test
-/// binary flipped `none_channel_is_receiver_path_bit_identical` between the
-/// WORLD and the country arm depending on when the fill landed.
-
+// Keep cache-initializing tests in their integration binary: setting this
+// process-wide geography changes the defaults seen by unrelated lib tests.
 #[derive(Default)]
 struct AdminCache {
-    square_directory: Option<PathBuf>,
+    prepared_directory: Option<PathBuf>,
     by_square: HashMap<i64, Admin>,
 }
 
@@ -209,12 +167,12 @@ const POISONED: &str = "a thread panicked while holding the admin cache";
 /// Point the process at the prepared squares tree admin is read from.
 /// Switching trees drops every cached record, so a re-initialised
 /// source-reader can never answer from the tree it just left.
-pub fn set_admin_square_directory(square_directory: &Path) {
+pub fn set_admin_prepared_directory(prepared_directory: &Path) {
     let mut cache = ADMIN_CACHE.write().expect(POISONED);
-    if cache.square_directory.as_deref() == Some(square_directory) {
+    if cache.prepared_directory.as_deref() == Some(prepared_directory) {
         return;
     }
-    cache.square_directory = Some(square_directory.to_path_buf());
+    cache.prepared_directory = Some(prepared_directory.to_path_buf());
     cache.by_square.clear();
 }
 
@@ -227,15 +185,15 @@ pub fn admin_for_square(square: i64) -> Admin {
         if let Some(admin) = cache.by_square.get(&square) {
             return *admin;
         }
-        if cache.square_directory.is_none() {
+        if cache.prepared_directory.is_none() {
             return Admin::UNKNOWN;
         }
     }
     let mut cache = ADMIN_CACHE.write().expect(POISONED);
-    let Some(square_directory) = cache.square_directory.clone() else {
+    let Some(prepared_directory) = cache.prepared_directory.clone() else {
         return Admin::UNKNOWN;
     };
-    let admin = match read_cell_admin(&square_directory, square) {
+    let admin = match read_cell_admin(&prepared_directory, square) {
         Ok(admin) => admin,
         // A square outside the prepared world has no directory at all: that is
         // the ocean answer, not a fault. A record that exists but does not
@@ -263,22 +221,20 @@ mod tests {
     /// defaults.
     #[test]
     fn missing_record_in_an_existing_square_directory_is_a_fault() {
-        let root = std::env::temp_dir().join(format!("admin-missing-{}", std::process::id()));
+        let tree = tempfile::tempdir().unwrap();
+        let root = tree.path();
         let square = square_id(grid::Square { x: 276, y: 173 });
-        fs::create_dir_all(root.join(format!("{square}"))).unwrap();
-        let error = read_cell_admin(&root, square).unwrap_err();
+        fs::create_dir_all(root.join("z9/276/173")).unwrap();
+        let old_directory = root.join("admin").join(square.to_string());
+        fs::create_dir_all(&old_directory).unwrap();
+        fs::write(old_directory.join(ADMIN_FILE_NAME), [0; RECORD_SIZE]).unwrap();
+        let error = read_cell_admin(root, square).unwrap_err();
         assert_ne!(error.kind(), io::ErrorKind::NotFound, "{error}");
-        let outside = square_id(grid::Square { x: 0, y: 0 });
-        assert_eq!(
-            read_cell_admin(&root, outside).unwrap_err().kind(),
-            io::ErrorKind::NotFound
-        );
-        fs::remove_dir_all(&root).unwrap();
     }
 
     /// Write one square's admin record into a squares tree.
-    fn write_cell_admin(square_directory: &Path, square: i64, iso: &[u8; 2], city: u16) {
-        let path = cell_admin_path(square_directory, square);
+    fn write_cell_admin(prepared_directory: &Path, square: i64, iso: &[u8; 2], city: u16) {
+        let path = cell_admin_path(prepared_directory, square).unwrap();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let mut record = Vec::with_capacity(RECORD_SIZE);
         record.extend_from_slice(&(square as u64).to_le_bytes());
@@ -337,10 +293,10 @@ mod tests {
         let dobris = square_id(grid::square_of(49.78, 14.17));
         let neighbour = square_id(grid::Square { x: 0, y: 0 });
         write_cell_admin(tree.path(), dobris, b"CZ", 0);
-        fs::create_dir_all(tree.path().join(format!("{neighbour}"))).unwrap();
+        fs::create_dir_all(tree.path().join("z9/0/0")).unwrap();
         fs::copy(
-            cell_admin_path(tree.path(), dobris),
-            cell_admin_path(tree.path(), neighbour),
+            cell_admin_path(tree.path(), dobris).unwrap(),
+            cell_admin_path(tree.path(), neighbour).unwrap(),
         )
         .unwrap();
         let error = read_cell_admin(tree.path(), neighbour).unwrap_err();
@@ -353,6 +309,28 @@ mod tests {
         let error =
             read_cell_admin(tree.path(), square_id(grid::square_of(49.78, 14.17))).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn read_cell_admin_rejects_invalid_ids_and_truncated_records() {
+        let tree = tempfile::tempdir().unwrap();
+        for square in [-1, grid::MAX_SQUARE_ID + 1] {
+            assert_eq!(
+                read_cell_admin(tree.path(), square).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+        let square = square_id(grid::Square { x: 276, y: 173 });
+        write_cell_admin(tree.path(), square, b"CZ", 0);
+        fs::write(
+            cell_admin_path(tree.path(), square).unwrap(),
+            [0; RECORD_SIZE - 1],
+        )
+        .unwrap();
+        assert_eq!(
+            read_cell_admin(tree.path(), square).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     // The process-wide wiring test lives in tests/admin_process_directory.rs —

@@ -17,7 +17,11 @@ explicit disputed-area mappings, a uniquely attributable 2 km coastal buffer,
 polar handling, and country-gated metro defaults. Shapely supplies the shared
 spatial index and polygon operations; no custom ray-casting index is needed.
 Country, city and continent are baked at each road/rail segment midpoint.
-Partition admin records supply the receiver fallback in the existing runtime.
+Each `z9/x/y/admin.bin` supplies the receiver fallback beside its Arrow files.
+Its 13-byte record embeds the Morton identity, which the reader checks against
+the z9 path. An existing z9 directory without its record fails the lookup;
+an absent z9 directory resolves to unknown. A copied z9 unit needs no global
+admin tree.
 
 The bake preserves row order, record-batch boundaries and all original metadata,
 including the spatial batch index. Files are verified before atomic replacement;

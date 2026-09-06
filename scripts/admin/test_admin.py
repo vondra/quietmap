@@ -29,6 +29,17 @@ def segment_batch(points):
     return pa.record_batch(columns)
 
 
+def write_prepared_admin_roundtrip(directory):
+    feature = country_feature("CZE", 14, 49, 15, 51)
+    geography = {"countries": {"CZE": ["CZ", 1]}, "metros": [
+        {"id": 31, "country": "CZ", "polygon": feature["geometry"]["coordinates"][0]}
+    ]}
+    resolver = AdminResolver([feature], geography)
+    square_directory = Path(directory) / "z9/276/174"
+    square_directory.mkdir(parents=True)
+    write_admin_record(square_directory, square_admin(resolver, 276, 174))
+
+
 class CountryBakeTests(unittest.TestCase):
     def setUp(self):
         self.resolver = AdminResolver([country_feature("CZE", 14, 49, 15, 51),
@@ -83,13 +94,15 @@ class CountryBakeTests(unittest.TestCase):
 
     def test_record_matches_rust_morton_and_binary_layout(self):
         self.assertEqual(square_id(276, 173), 100786)
-        identity, record = square_admin(self.resolver, 276, 173)
+        record = square_admin(self.resolver, 276, 173)
         self.assertEqual(len(record), 13)
         stored, continent, country, _ = struct.unpack("<QBHH", record)
-        self.assertEqual((stored, continent, country), (identity, 1, int.from_bytes(b"CZ", "little")))
+        self.assertEqual((stored, continent, country), (100786, 1, int.from_bytes(b"CZ", "little")))
         with tempfile.TemporaryDirectory() as directory:
-            write_admin_record(Path(directory), identity, record)
-            self.assertEqual((Path(directory) / "admin" / str(identity) / "admin.bin").read_bytes(), record)
+            square_directory = Path(directory) / "z9/276/173"
+            square_directory.mkdir(parents=True)
+            write_admin_record(square_directory, record)
+            self.assertEqual((square_directory / "admin.bin").read_bytes(), record)
 
     def test_unmapped_disputed_land_never_inherits_a_neighbour(self):
         resolver = AdminResolver([country_feature("CZE", 14, 49, 15, 51),

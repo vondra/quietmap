@@ -84,11 +84,13 @@ speeds/AADT/defaults fall back to WORLD values. New-per-year inputs live
 behind each enricher (GTFS feeds, city tables); the chain prints
 `QM_COMPLETENESS` floors — a short feed fails a full-world run by design.
 
-## 5. Admin + aircraft — TODO
+## 5. Admin + aircraft
 
-- `admin.bin` writer (per-square country/city → `<prep>/admin/<id>/admin.bin`):
-  no writer exists; the reader (`noise-compute/src/admin.rs`) serves WORLD
-  defaults until then.
+- Run `scripts/admin/build_admin.py --prepared-dir <work>/prepared/2026
+  --boundaries <source-boundaries.geojson>` after extraction and before
+  country-dependent enrichment. It bakes each road/rail segment's geography
+  and writes receiver defaults to `z9/x/y/admin.bin`, beside the unit's arrows.
+  See `scripts/admin/README.md` for source validation and scoped builds.
 - Aircraft arrows (`airborne/cruise/airport_traffic.arrow`): port dev1
   `engine/aircraft-extract` to z9, run HYBRID two-window (airline pass over
   the 12 adsbexchange days with `--class-filter non-ga`, GA pass over the

@@ -134,13 +134,11 @@ def square_admin(resolver, x, y):
             # City belongs to the centroid under its resolved country.
             result["city_id"] = resolver.city_ids([lat], [lon], result["country_iso"])
     square = square_id(x, y)
-    return square, struct.pack("<QBHH", square, int(result["continent"][0]),
-                               int(result["country_iso"][0]), int(result["city_id"][0]))
+    return struct.pack("<QBHH", square, int(result["continent"][0]),
+                       int(result["country_iso"][0]), int(result["city_id"][0]))
 
 
-def write_admin_record(prepared, square, record):
-    directory = prepared / "admin" / str(square)
-    directory.mkdir(parents=True, exist_ok=True)
+def write_admin_record(directory, record):
     path = directory / "admin.bin"
     if path.exists() and path.read_bytes() == record:
         return
@@ -181,8 +179,7 @@ def main():
                     totals[layer + "_rows"] += rows
                     totals["files_changed"] += changed
             assert square is not None
-            identity, record = square_admin(resolver, *square)
-            write_admin_record(prepared, identity, record)
+            write_admin_record(prepared / name, square_admin(resolver, *square))
             totals["squares"] += 1
             print(json.dumps({"square": name, **totals}), flush=True)
 
