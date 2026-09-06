@@ -71,6 +71,35 @@ class CountryBakeTests(unittest.TestCase):
             self.assertEqual(bake_file(path, self.resolver), (2, False))
             self.assertEqual(path.read_bytes(), before)
 
+    def test_industrial_ownership_is_strict_land_with_holes_and_unchanged_road_coastal_policy(self):
+        feature = country_feature("CZE", 14, 49, 15, 51)
+        feature["geometry"]["coordinates"].append([[14.4, 49.4], [14.6, 49.4],
+                                                   [14.6, 49.6], [14.4, 49.6], [14.4, 49.4]])
+        resolver = AdminResolver([feature])
+        points = [(50, 14.5), (50, 15.001), (49.5, 14.5)]
+        grid = [lonlat_to_grid(lon, lat) for lat, lon in points]
+        batch = pa.record_batch({"centroid_gx": pa.array([p[0] for p in grid], type=pa.int32()),
+                                 "centroid_gy": pa.array([p[1] for p in grid], type=pa.int32()),
+                                 "source_id": pa.array([330, 330, 330], type=pa.uint16())})
+        batch = batch.replace_schema_metadata({b"grid": b"z30", b"native": b"retain"})
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "industrial.arrow"
+            with pa.ipc.new_file(path, batch.schema) as writer:
+                writer.write_batch(batch.slice(0, 1)); writer.write_batch(batch.slice(1))
+            self.assertEqual(bake_file(path, resolver), (3, True))
+            with pa.ipc.open_file(path) as reader:
+                self.assertEqual(reader.num_record_batches, 2)
+                self.assertEqual(reader.schema.metadata[b"industrial_contract"], b"country_land_baked_v1")
+                result = reader.read_all()
+                self.assertEqual(result.column("country_iso").to_pylist(), [int.from_bytes(b"CZ", "little"), 0, 0])
+                for name in batch.schema.names:
+                    self.assertEqual(result.column(name).to_pylist(), batch.column(name).to_pylist())
+            old = path.read_bytes(), path.stat()
+            self.assertEqual(bake_file(path, resolver), (3, False))
+            self.assertEqual(path.read_bytes(), old[0]); self.assertEqual(path.stat(), old[1])
+        road = baked_batch(segment_batch(points), resolver, b"roads_contract")
+        self.assertEqual(road.column("country_iso")[1].as_py(), int.from_bytes(b"CZ", "little"))
+
     def test_partial_country_columns_leave_original_file_untouched(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "railways.arrow"
@@ -109,6 +138,9 @@ class CountryBakeTests(unittest.TestCase):
                                   country_feature("999", 15, 49, 16, 51)])
         result = resolver.resolve([50, 50, np.nan], [15.001, 15.5, 14.5])
         self.assertEqual(result["country_iso"].tolist(), [0, 0, 0])
+        disputed = AdminResolver([country_feature("111", 14, 49, 15, 51)])
+        self.assertEqual(disputed.resolve([50], [14.5])["country_iso"].tolist(), [int.from_bytes(b"SD", "little")])
+        self.assertEqual(disputed.resolve_land([50], [14.5])["country_iso"].tolist(), [0])
         with self.assertRaisesRegex(ValueError, "Unmapped CGAZ"):
             AdminResolver([country_feature("ZZZ", 14, 49, 15, 51)])
 

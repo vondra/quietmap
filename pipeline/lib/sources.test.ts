@@ -14,7 +14,7 @@ import {
   shouldOverwrite,
   type Source,
   provenanceFromEntry,
-  countryIsoForNationalSource,
+  countryIsoForNationalSource, countryOwnershipIsos, countryIsosForNationalSource,
 } from './sources.js'
 import { DATASETS } from './enrichment-datasets.js'
 
@@ -44,6 +44,9 @@ test('country ownership comes from the registry key, including legacy city keys'
   assert.strictEqual(countryIsoForNationalSource(9004), 'AT')
   assert.strictEqual(countryIsoForNationalSource(9005), 'CZ')
   assert.strictEqual(countryIsoForNationalSource(10), null)
+  assert.deepEqual(countryOwnershipIsos('MA'), ['MA', 'EH'])
+  assert.deepEqual(countryOwnershipIsos('BF'), ['BF'])
+  assert.equal(countryIsosForNationalSource(330), null)
   for (const source of SOURCES.filter(candidate => candidate.nationallyOwned)) {
     assert.match(countryIsoForNationalSource(source.id)!, /^[A-Z]{2}$/, source.key)
   }

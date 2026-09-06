@@ -24,8 +24,14 @@ export interface SegmentGeometry {
   midLon: number
 }
 
+export interface SegmentEndpointKeys {
+  startKey: string
+  endKey: string
+}
+
 export interface SegmentGeometryReader {
   row(index: number): SegmentGeometry
+  endpointKeys(index: number): SegmentEndpointKeys
 }
 
 function requiredVector(table: Table, name: string): Vector {
@@ -78,6 +84,11 @@ export function segmentGeometryReader(table: Table): SegmentGeometryReader {
   const endGx = requiredInt32(table, 'end_gx')
   const endGy = requiredInt32(table, 'end_gy')
   return {
+    endpointKeys(index): SegmentEndpointKeys {
+      assertRow(index, table.numRows)
+      return { startKey: `${startGx.get(index)}_${startGy.get(index)}`,
+        endKey: `${endGx.get(index)}_${endGy.get(index)}` }
+    },
     row(index): SegmentGeometry {
       assertRow(index, table.numRows)
       const start = gridToLonLat(startGx.get(index) as number, startGy.get(index) as number)
@@ -100,14 +111,17 @@ export function iso2Code(iso: string): number {
   return iso.charCodeAt(0) | (iso.charCodeAt(1) << 8)
 }
 
-/** Fail-closed access to road ownership baked by scripts/admin/build_admin.py. */
-export function bakedRoadCountryReader(table: Table): { codeAt(index: number): number } {
-  if (table.schema.metadata.get('roads_contract') !== COUNTRY_BAKED_CONTRACT) {
-    throw new Error(`roads Arrow contract must be '${COUNTRY_BAKED_CONTRACT}' before national enrichment`)
+function bakedCountryReader(
+  table: Table,
+  layer: 'roads' | 'railways' | 'industrial',
+): { codeAt(index: number): number } {
+  const contract = layer === 'industrial' ? 'country_land_baked_v1' : COUNTRY_BAKED_CONTRACT
+  if (table.schema.metadata.get(`${layer}_contract`) !== contract) {
+    throw new Error(`${layer} Arrow contract must be '${contract}' before national enrichment`)
   }
   const vector = requiredVector(table, 'country_iso')
   if (!DataType.isInt(vector.type) || vector.type.isSigned || vector.type.bitWidth !== 16 || vector.nullCount !== 0) {
-    throw new Error("roads Arrow 'country_iso' must be non-null Uint16")
+    throw new Error(`${layer} Arrow 'country_iso' must be non-null Uint16`)
   }
   return {
     codeAt(index: number): number {
@@ -115,6 +129,21 @@ export function bakedRoadCountryReader(table: Table): { codeAt(index: number): n
       return vector.get(index) as number
     },
   }
+}
+
+/** Fail-closed access to road ownership baked by scripts/admin/build_admin.py. */
+export function bakedRoadCountryReader(table: Table): { codeAt(index: number): number } {
+  return bakedCountryReader(table, 'roads')
+}
+
+/** Fail-closed access to railway ownership baked by scripts/admin/build_admin.py. */
+export function bakedRailwayCountryReader(table: Table): { codeAt(index: number): number } {
+  return bakedCountryReader(table, 'railways')
+}
+
+/** Strict land ownership for industrial centroids; coastal road attribution is not admissible. */
+export function bakedIndustrialCountryReader(table: Table): { codeAt(index: number): number } {
+  return bakedCountryReader(table, 'industrial')
 }
 
 export type PreparedBbox = readonly [south: number, west: number, north: number, east: number]

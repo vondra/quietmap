@@ -3,12 +3,11 @@
 const METRES_PER_DEGREE_LATITUDE = 110_540
 const METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR = 111_320
 
-/** Stable ~1 metre endpoint identity shared by road topology passes. */
-export function nodeKey(latitude: number, longitude: number): string {
-  return `${latitude.toFixed(5)}_${longitude.toFixed(5)}`
-}
+/** Shared projection constants for callers that need a parameter or heading. */
+export const M_PER_DEG_LAT = METRES_PER_DEGREE_LATITUDE
+export const M_PER_DEG_LON_EQ = METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR
 
-function wrappedLongitudeDelta(deltaDegrees: number): number {
+export function wrapLonDeltaDeg(deltaDegrees: number): number {
   if (deltaDegrees > 180) return deltaDegrees - 360
   if (deltaDegrees < -180) return deltaDegrees + 360
   return deltaDegrees
@@ -22,7 +21,7 @@ export function flatDist(
   secondLongitude: number,
 ): number {
   const cosineLatitude = Math.cos((firstLatitude + secondLatitude) / 2 * Math.PI / 180)
-  const x = wrappedLongitudeDelta(secondLongitude - firstLongitude) *
+  const x = wrapLonDeltaDeg(secondLongitude - firstLongitude) *
     METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR * cosineLatitude
   const y = (secondLatitude - firstLatitude) * METRES_PER_DEGREE_LATITUDE
   return Math.hypot(x, y)
@@ -55,10 +54,10 @@ export function pointToSegmentDist(
   endLongitude: number,
 ): number {
   const cosineLatitude = Math.cos(pointLatitude * Math.PI / 180)
-  const pointX = wrappedLongitudeDelta(pointLongitude - startLongitude) *
+  const pointX = wrapLonDeltaDeg(pointLongitude - startLongitude) *
     METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR * cosineLatitude
   const pointY = (pointLatitude - startLatitude) * METRES_PER_DEGREE_LATITUDE
-  const endX = wrappedLongitudeDelta(endLongitude - startLongitude) *
+  const endX = wrapLonDeltaDeg(endLongitude - startLongitude) *
     METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR * cosineLatitude
   const endY = (endLatitude - startLatitude) * METRES_PER_DEGREE_LATITUDE
   const lengthSquared = endX * endX + endY * endY

@@ -9,7 +9,7 @@ import {
   Float64, Int32, RecordBatch, Schema, Table, Uint16, makeTable, vectorFromArray,
 } from 'apache-arrow'
 import {
-  bakedRoadCountryReader, gridToLonLat, iso2Code, listPreparedSquares,
+  bakedRailwayCountryReader, bakedRoadCountryReader, gridToLonLat, iso2Code, listPreparedSquares,
   segmentGeometryReader,
 } from './prepared-grid.js'
 
@@ -69,6 +69,15 @@ test('baked road ownership is little-endian ISO2 and fail-closed', () => {
   const noContract = withMetadata(table, { grid: 'z30' })
   assert.throws(() => bakedRoadCountryReader(noContract), /country_baked_v1/)
   assert.throws(() => bakedRoadCountryReader(segmentTable({ country: false })), /country_iso/)
+})
+
+test('railway ownership uses its own admin-bake contract key', () => {
+  const table = withMetadata(segmentTable(), {
+    grid: 'z30',
+    railways_contract: 'country_baked_v1',
+  })
+  assert.equal(bakedRailwayCountryReader(table).codeAt(0), iso2Code('CZ'))
+  assert.throws(() => bakedRailwayCountryReader(segmentTable()), /railways Arrow contract/)
 })
 
 function addSquare(x: string, y: string): void {

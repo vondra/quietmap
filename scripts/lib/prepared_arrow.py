@@ -19,21 +19,22 @@ def replace_atomically(temporary, path):
         os.close(descriptor)
 
 
-def segment_midpoints(batch):
-    coordinates = {}
-    for name in ("start_gx", "start_gy", "end_gx", "end_gy"):
+def grid_points(batch, prefix):
+    coordinates = []
+    for axis in ("gx", "gy"):
+        name = prefix + "_" + axis
         index = batch.schema.get_field_index(name)
         if index < 0 or batch.column(index).type != pa.int32() or batch.column(index).null_count:
             raise ValueError(f"{name} must be a non-null Int32 grid column")
-        coordinates[name] = batch.column(index).to_numpy().astype(np.float64)
-    def lonlat(prefix):
-        x = (coordinates[prefix + "_gx"] - (1 << 29)) * QUANTUM_M
-        y = (coordinates[prefix + "_gy"] - (1 << 29)) * QUANTUM_M
-        return np.degrees(x / RADIUS_M), np.degrees(2 * np.arctan(np.exp(y / RADIUS_M)) - np.pi / 2)
-    start_lon, start_lat = lonlat("start")
-    end_lon, end_lat = lonlat("end")
-    longitude = wrapped_longitude_midpoint(start_lon, end_lon)
-    return (start_lat + end_lat) / 2, longitude
+        coordinates.append((batch.column(index).to_numpy().astype(np.float64) - (1 << 29)) * QUANTUM_M)
+    x, y = coordinates
+    return np.degrees(2 * np.arctan(np.exp(y / RADIUS_M)) - np.pi / 2), np.degrees(x / RADIUS_M)
+
+
+def segment_midpoints(batch):
+    start_lat, start_lon = grid_points(batch, "start")
+    end_lat, end_lon = grid_points(batch, "end")
+    return (start_lat + end_lat) / 2, wrapped_longitude_midpoint(start_lon, end_lon)
 
 
 def rewrite_arrow_batches(path, transform):

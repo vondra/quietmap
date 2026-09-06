@@ -48,7 +48,7 @@ export function readServiceRoads(table: Table): { roads: ServiceRoad[]; fleets: 
     const roadClass = table.getChild('road_class')!.get(index) as number
     const metres = length.get(index) as number
     if (roadClass > 12 || !Number.isFinite(metres) || metres < 0) throw new Error(`invalid service-tree road ${index}`)
-    return { ...geometry.row(index), roadClass, length: metres, sourceId: table.getChild('source_id')!.get(index) as number,
+    return { ...geometry.row(index), ...geometry.endpointKeys(index), roadClass, length: metres, sourceId: table.getChild('source_id')!.get(index) as number,
       access: table.getChild('access')!.get(index) as number, tunnel: tunnel.get(index) as boolean }
   })
   return { roads, fleets, unknownCountryRows }

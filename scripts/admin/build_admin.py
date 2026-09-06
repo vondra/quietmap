@@ -17,7 +17,7 @@ from admin_at import AdminResolver
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from qmgrid import parse_square_name, square_id, square_lonlat_span  # noqa: E402
-from prepared_arrow import replace_atomically, rewrite_arrow_batches, segment_midpoints  # noqa: E402
+from prepared_arrow import replace_atomically, rewrite_arrow_batches, segment_midpoints, grid_points  # noqa: E402
 
 ADMIN_COLUMNS = {"country_iso": pa.uint16(), "city_id": pa.uint16(), "continent": pa.uint8()}
 COUNTRY_CONTRACT = b"country_baked_v1"
@@ -27,7 +27,11 @@ def baked_batch(batch, resolver, contract_key):
     present = [name for name in ADMIN_COLUMNS if name in batch.schema.names]
     if present and len(present) != len(ADMIN_COLUMNS):
         raise ValueError("Partial country bake; country_iso/city_id/continent must be all-or-none")
-    values = resolver.resolve(*segment_midpoints(batch))
+    industrial = contract_key == b"industrial_contract"
+    if industrial and (batch.schema.metadata or {}).get(b"grid") != b"z30":
+        raise ValueError("industrial Arrow requires the z30 grid contract")
+    values = (resolver.resolve_land(*grid_points(batch, "centroid")) if industrial
+              else resolver.resolve(*segment_midpoints(batch)))
     result = batch
     for name, arrow_type in ADMIN_COLUMNS.items():
         array = pa.array(values[name], type=arrow_type)
@@ -39,7 +43,7 @@ def baked_batch(batch, resolver, contract_key):
         else:
             result = result.append_column(pa.field(name, arrow_type, nullable=False), array)
     metadata = dict(batch.schema.metadata or {})
-    metadata[contract_key] = COUNTRY_CONTRACT
+    metadata[contract_key] = b"country_land_baked_v1" if industrial else COUNTRY_CONTRACT
     return result.replace_schema_metadata(metadata)
 
 
@@ -105,7 +109,7 @@ def main():
     with (prepared / ".admin-build.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         for name, square in squares:
-            for layer in ("roads", "railways"):
+            for layer in ("roads", "railways", "industrial"):
                 path = prepared / name / f"{layer}.arrow"
                 if path.is_file():
                     rows, changed = bake_file(path, resolver)

@@ -161,6 +161,11 @@ const COUNTRY_BY_NONSTANDARD_SOURCE = new Map<string, string>([
   ['global-uswtdb', 'US'],
 ])
 
+/** Extra ISO territories legitimately covered by a country's national network. */
+const NATIONAL_SOURCE_TERRITORY_EXTENSIONS = new Map<string, readonly string[]>([
+  ['MA', ['EH']],
+])
+
 /** ISO2 owner for a single-country source, or null for a world/continental source.
  * A newly registered single-country source without an owner fails loudly here;
  * enrichment must never guess that it may write across a border. */
@@ -170,6 +175,19 @@ export function countryIsoForNationalSource(id: number): string | null {
   const country = COUNTRY_BY_NONSTANDARD_SOURCE.get(source.key) ?? /^([a-z]{2})-/.exec(source.key)?.[1]?.toUpperCase()
   if (!country) throw new Error(`nationally owned source '${source.key}' has no ISO2 owner`)
   return country
+}
+
+/** ISO territories owned by one country's national inputs. */
+export function countryOwnershipIsos(country: string): readonly string[] {
+  return [country, ...(NATIONAL_SOURCE_TERRITORY_EXTENSIONS.get(country) ?? [])]
+}
+
+/** Baked ISO owners accepted for a single-country source, including declared territories. */
+export function countryIsosForNationalSource(id: number): readonly string[] | null {
+  const country = countryIsoForNationalSource(id)
+  return country === null
+    ? null
+    : countryOwnershipIsos(country)
 }
 
 /** The sentinel "unspecified" entry (always id = 0). */

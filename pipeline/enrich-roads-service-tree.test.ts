@@ -11,10 +11,10 @@ import { assignBuildingsGlobally } from './lib/service-tree-buildings.js'
 import { iso2Code } from './lib/prepared-grid.js'
 import { fleetForIso, WORLD_FLEET } from './lib/country-fleet.js'
 import { SOURCE_ID_SERVICE_TREE_HEURISTIC as SELF } from './lib/source-ids.generated.js'
-import { enrichServiceTreeSquare, splitAADT, SERVICE_TREE_CAP_PER_CLASS } from './enrich-roads-service-tree.js'
+import { enrichServiceTreeSquare, readServiceRoads, splitAADT, SERVICE_TREE_CAP_PER_CLASS } from './enrich-roads-service-tree.js'
 
 function road(a: number, b: number, roadClass = 5, sourceId = 0): ServiceRoad {
-  return { startLat: 50, endLat: 50, midLat: 50, startLon: 14 + a * 0.001,
+  return { startKey: String(a), endKey: String(b), startLat: 50, endLat: 50, midLat: 50, startLon: 14 + a * 0.001,
     endLon: 14 + b * 0.001, midLon: 14 + (a + b) * 0.0005,
     length: Math.abs(b - a) * 71, roadClass, sourceId, tunnel: false, access: 0 }
 }
@@ -147,5 +147,20 @@ test('valid empty buildings produce no new traffic; missing admin bake fails bef
     const unbaked = readFileSync(path)
     await assert.rejects(enrichServiceTreeSquare(work), /country_baked_v1/)
     assert.deepEqual(readFileSync(path), unbaked)
+  } finally { rmSync(work, { recursive: true, force: true }) }
+})
+
+
+test('nearby distinct native endpoints do not create a motor exit for a disconnected service road', () => {
+  const work = mkdtempSync(resolve(tmpdir(), 'service-tree-native-gap-'))
+  try {
+    const local = road(0, 1), exit = road(1, 2, 4, 10)
+    exit.startLon += 0.000001
+    fixture(work, [local, exit])
+    const { roads } = readServiceRoads(tableFromIPC(readFileSync(resolve(work, 'roads.arrow'))))
+    const graph = buildGraph(roads), components = findComponents(graph)
+    assert.equal(components.length, 1)
+    assert.equal(components[0].rootNodes.size, 0)
+    assert.notEqual(graph.segNodeIds[1], graph.segNodeIds[2])
   } finally { rmSync(work, { recursive: true, force: true }) }
 })

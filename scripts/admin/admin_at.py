@@ -108,7 +108,7 @@ class AdminResolver:
                 found[point].add(self.coastal_groups[edge])
         return [next(iter(groups)) if len(groups) == 1 else "" for groups in found]
 
-    def resolve(self, latitudes, longitudes):
+    def _land_groups(self, latitudes, longitudes):
         latitudes = np.asarray(latitudes, dtype=float)
         with np.errstate(invalid="ignore"):
             longitudes = (np.asarray(longitudes, dtype=float) + 180) % 360 - 180
@@ -125,9 +125,24 @@ class AdminResolver:
             coordinates = polar_coordinates(np.column_stack((longitudes[candidates], latitudes[candidates])), south)
             inside = shapely.contains_xy(polygon, coordinates[:, 0], coordinates[:, 1])
             groups[candidates[inside]] = group
+        return latitudes, longitudes, valid, groups
+
+    def resolve_land(self, latitudes, longitudes):
+        """Strict original-centroid ownership; no coastal attribution."""
+        latitudes, longitudes, _, groups = self._land_groups(latitudes, longitudes)
+        # National industrial gates use the canonical ISO feature only; numeric
+        # disputed features may have a broader road/admin attribution (e.g. 111).
+        groups[np.fromiter((str(group).isdecimal() for group in groups), dtype=bool)] = ""
+        return self._geography_at(latitudes, longitudes, groups)
+
+    def resolve(self, latitudes, longitudes):
+        latitudes, longitudes, valid, groups = self._land_groups(latitudes, longitudes)
         offshore = np.flatnonzero(valid & (groups == ""))
         if len(offshore):
             groups[offshore] = self._coast_groups(latitudes[offshore], longitudes[offshore])
+        return self._geography_at(latitudes, longitudes, groups)
+
+    def _geography_at(self, latitudes, longitudes, groups):
         result = {"country_iso": np.zeros(len(groups), dtype=np.uint16),
                   "city_id": np.zeros(len(groups), dtype=np.uint16),
                   "continent": np.zeros(len(groups), dtype=np.uint8)}
