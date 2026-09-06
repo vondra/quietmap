@@ -27,6 +27,24 @@ pub const CORNER_COUNT: usize = CORNERS_PER_TILE_SIDE * CORNERS_PER_TILE_SIDE;
 pub const PERIOD_COUNT: usize = 3;
 pub const BAND_COUNT: usize = 8;
 
+/// The longest source→receiver ray the CUDA cadence still charts inside
+/// `QUIETMAP_MAXIMUM_PROFILE_POINTS` chainages (`kernels/relevant_source_path.cuh`).
+///
+/// Running that cadence on the reference card over 20 million distances from
+/// 0.01 m to 20 km in 1 mm steps, a ray first needs a 65th chainage at
+/// 11,872.35 m. A dropped chainage moves painted bytes with no other sign, so the
+/// cap is held here, at the exact distance it was measured for, rather than
+/// through the reach and segment-length premises it was derived from: the world
+/// sits far inside it — the widest reach any source carries is rail's 11 km
+/// ceiling and `osm-extract` splits every way at a hard 250 m (the longest
+/// `length_m` in all 121,790 prepared cells of the 2026 world), an 11,250 m ray.
+///
+/// This refusal is the cheap one, before a bad source ever reaches the card and
+/// with a message that names it. The guarantee is the card's own
+/// `quietmap_profile_overflow`, which `RelevantSourceCuda::take_profile_overflow`
+/// reads after every paint.
+pub const MAXIMUM_PROFILE_RAY_M: f32 = 11_872.0;
+
 /// One source encoded once in the metric frame shared by a region's tiles and CUDA
 /// scene: a line segment, or a point (`SOURCE_FLAG_POINT`) with start == end.
 #[derive(Clone, Copy, Debug, Default)]
@@ -42,6 +60,24 @@ pub struct DeviceLineSource {
     pub source_height_m: f32,
     pub flags: u32,
     pub emission_linear: [f32; PERIOD_COUNT * BAND_COUNT],
+}
+
+impl DeviceLineSource {
+    /// The longest ray any receiver can make the kernel profile for this source.
+    ///
+    /// The reach bounds the distance to the CLOSEST point of the segment; the fan
+    /// and arc passes then profile points along the segment itself
+    /// (`segment_point_at_azimuth` clamps to it), which the triangle inequality
+    /// puts at most one segment further away. A point source has start == end and
+    /// so adds nothing.
+    pub fn longest_profile_ray_m(&self) -> f32 {
+        self.max_distance_m + (self.end_x_m - self.start_x_m).hypot(self.end_y_m - self.start_y_m)
+    }
+
+    /// True when no receiver can make this source outrun the profile cadence.
+    pub fn fits_the_profile_cadence(&self) -> bool {
+        self.longest_profile_ray_m() <= MAXIMUM_PROFILE_RAY_M
+    }
 }
 
 /// A stable local metric frame whose f32 coordinates retain centimetre-scale resolution.
@@ -173,5 +209,39 @@ mod tests {
     #[test]
     fn device_source_layout_is_the_expected_four_cache_lines() {
         assert_eq!(std::mem::size_of::<DeviceLineSource>(), 128);
+    }
+
+    /// The rule the profile cap rests on: a receiver at the reach of the segment's
+    /// closest point can still be a whole segment away from the far end, and the
+    /// fan profiles that ray too. The world's widest case — an 11 km rail reach on
+    /// a 250 m microsegment — must fit, and one segment longer than the cadence
+    /// can chart must not.
+    #[test]
+    fn a_source_outruns_the_profile_cadence_only_past_its_measured_reach() {
+        let widest_in_the_world = DeviceLineSource {
+            start_x_m: 0.0,
+            start_y_m: 0.0,
+            end_x_m: 250.0,
+            end_y_m: 0.0,
+            max_distance_m: 11_000.0,
+            ..DeviceLineSource::default()
+        };
+        assert_eq!(widest_in_the_world.longest_profile_ray_m(), 11_250.0);
+        assert!(widest_in_the_world.fits_the_profile_cadence());
+
+        let point = DeviceLineSource {
+            max_distance_m: MAXIMUM_PROFILE_RAY_M,
+            flags: SOURCE_FLAG_POINT,
+            ..DeviceLineSource::default()
+        };
+        assert!(point.fits_the_profile_cadence(), "a point adds no segment");
+
+        let too_long = DeviceLineSource {
+            end_x_m: 1_000.0,
+            max_distance_m: 11_000.0,
+            ..DeviceLineSource::default()
+        };
+        assert_eq!(too_long.longest_profile_ray_m(), 12_000.0);
+        assert!(!too_long.fits_the_profile_cadence());
     }
 }

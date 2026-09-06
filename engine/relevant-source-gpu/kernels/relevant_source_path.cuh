@@ -9,19 +9,22 @@
 
 /// Chainages one ray's profile holds; `append_profile_t` drops the rest.
 ///
-/// The longest ray this kernel ever profiles is 11,250 m. The widest reach any
-/// source carries is the rail ceiling (`RAILWAY_REACH_CLAMP_MAX`, 11 km), and
-/// the characteristic ray is no longer than that; the fan and arc passes profile
+/// Running this exact cadence over 20 million distances from 0.01 m to 20 km in
+/// 1 mm steps on the reference card, an 11,000 m ray needs 61 chainages, an
+/// 11,250 m ray 62, and the cadence first needs a 65th at 11,872.35 m. The world
+/// stays far inside that: the widest reach any source carries is the rail
+/// ceiling (`RAILWAY_REACH_CLAMP_MAX`, 11 km), and the fan and arc passes profile
 /// points that lie on the segment itself, which the triangle inequality puts at
-/// most one microsegment further than its closest point, and osm-extract splits
-/// every way at a hard 250 m — also the longest `length_m` in all 121,790
-/// prepared cells of the 2026 world. Running this exact cadence over 20 million
-/// distances from 0.01 m to 20 km on the reference card, an 11,000 m ray needs
-/// 61 chainages, an 11,250 m ray 62, and the cadence first needs a 65th at
-/// 11,872 m.
+/// most one microsegment further than its closest point — osm-extract splits
+/// every way at a hard 250 m, also the longest `length_m` in all 121,790
+/// prepared cells of the 2026 world.
+///
+/// Neither half of that is left to a comment. The host refuses any source that
+/// could make a longer ray before it uploads one
+/// (`source_frame::MAXIMUM_PROFILE_RAY_M`), and `append_profile_t` raises
+/// `quietmap_profile_overflow` if a ray beats the cap anyway, which fails the
+/// cell instead of painting a truncated profile's bytes.
 constexpr int QUIETMAP_MAXIMUM_PROFILE_POINTS = 64;
-static_assert(QUIETMAP_RAILWAY_REACH_CEILING_M <= 11000.0f,
-              "the profile cap was measured for rays out to 11,872 m; re-measure it");
 
 struct PathProfile {
     int count;
@@ -86,12 +89,20 @@ __device__ __forceinline__ void finish_plane_fit(
     intercept = sums.reference_z + (sums.sum_z - slope * sums.sum_x) / sums.count;
 }
 
+/// Set by any thread that had to drop a chainage; the host takes and clears it
+/// after every paint and fails the cell rather than write a truncated profile's
+/// bytes. Plain, not atomic: every writer stores the same 1, and the launch is
+/// already synchronised before the host reads it.
+__device__ int quietmap_profile_overflow = 0;
+
 __device__ __forceinline__ void append_profile_t(PathProfile& profile, float value) {
     if (profile.count > 0 && fabsf(profile.t[profile.count - 1] - value) < 1.0e-8f) {
         return;
     }
     if (profile.count < QUIETMAP_MAXIMUM_PROFILE_POINTS) {
         profile.t[profile.count++] = value;
+    } else {
+        quietmap_profile_overflow = 1;
     }
 }
 

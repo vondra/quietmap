@@ -14,6 +14,7 @@ use crate::source_frame::{DeviceLineSource, CORNER_COUNT, PERIOD_COUNT, TILE_PIX
 unsafe extern "C" {
     fn relevant_source_cuda_error_string(status: c_int) -> *const c_char;
     fn relevant_source_cuda_initialize(compute_capability: *mut c_int) -> c_int;
+    fn relevant_source_cuda_take_profile_overflow(overflowed: *mut c_int) -> c_int;
     fn relevant_source_cuda_allocate(pointer: *mut *mut c_void, bytes: usize) -> c_int;
     fn relevant_source_cuda_free(pointer: *mut c_void) -> c_int;
     fn relevant_source_cuda_copy_to_device(
@@ -237,6 +238,20 @@ impl RelevantSourceCuda {
             )
         })?;
         Ok((output.copy_to_vec()?, elapsed_milliseconds))
+    }
+
+    /// Whether any thread since the last call had to drop a profile chainage,
+    /// clearing the flag as it reads.
+    ///
+    /// `QUIETMAP_MAXIMUM_PROFILE_POINTS` is sized for the longest ray the world's
+    /// reaches and microsegments can make, and `MAXIMUM_PROFILE_RAY_M` refuses a
+    /// source that could beat it — but that is a derivation, and this is the
+    /// device saying what actually happened. A truncated profile changes painted
+    /// bytes and shows no other sign, so the caller must fail the cell.
+    pub fn take_profile_overflow(&self) -> Result<bool> {
+        let mut overflowed: c_int = 0;
+        check_cuda(unsafe { relevant_source_cuda_take_profile_overflow(&mut overflowed) })?;
+        Ok(overflowed != 0)
     }
 }
 

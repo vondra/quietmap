@@ -118,6 +118,16 @@ extern "C" int relevant_source_cuda_initialize(int* compute_capability) {
     return cudaSuccess;
 }
 
+// Read the profile-overflow flag and clear it, so each paint reports only its own.
+extern "C" int relevant_source_cuda_take_profile_overflow(int* overflowed) {
+    cudaError_t status = cudaMemcpyFromSymbol(overflowed, quietmap_profile_overflow, sizeof(int));
+    if (status != cudaSuccess) {
+        return status;
+    }
+    const int cleared = 0;
+    return cudaMemcpyToSymbol(quietmap_profile_overflow, &cleared, sizeof(int));
+}
+
 extern "C" int relevant_source_cuda_allocate(void** pointer, size_t bytes) {
     return cudaMalloc(pointer, bytes > 0 ? bytes : 1);
 }

@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use h3o::CellIndex;
 use noise_compute::admin;
 use noise_compute::constants::ground_ops_max_radius;
@@ -26,8 +26,8 @@ use crate::obstacle_transfer::FlattenedObstacleGeometry;
 use crate::relevant_source_runner::RelevantSourceRunConfiguration;
 use crate::relevant_source_tile::{RegionDeviceLineSources, RegionDeviceObstacles};
 use crate::source_frame::{
-    DeviceLineSource, RegionMetricFrame, BAND_COUNT, PERIOD_COUNT, SOURCE_FLAG_GROUND_OPS_AIRCRAFT,
-    SOURCE_FLAG_GROUND_OPS_GSE,
+    DeviceLineSource, RegionMetricFrame, BAND_COUNT, MAXIMUM_PROFILE_RAY_M, PERIOD_COUNT,
+    SOURCE_FLAG_GROUND_OPS_AIRCRAFT, SOURCE_FLAG_GROUND_OPS_GSE,
 };
 use crate::surface_layers::{BUILDING_LAYER, GROUND_OPS_LAYER, LAYER_NAMES, LAYER_SOURCE_IDS};
 
@@ -170,7 +170,23 @@ pub fn prepare_region(
     })
 }
 
+/// Put one layer's sources on the card, refusing any the CUDA profile cadence
+/// cannot chart: past [`MAXIMUM_PROFILE_RAY_M`] the kernel drops chainages in
+/// silence and paints subtly different bytes, so a source that long ends its
+/// cell with a `fail` line instead.
 fn encode_layer(layer: usize, sources: Vec<DeviceLineSource>) -> Result<EncodedLineLayer> {
+    if let Some(source) = sources
+        .iter()
+        .find(|source| !source.fits_the_profile_cadence())
+    {
+        bail!(
+            "a {} source reaching {:.1} m over a {:.1} m segment makes a {:.1} m ray, past the              {MAXIMUM_PROFILE_RAY_M} m the CUDA profile cadence charts without dropping chainages",
+            LAYER_NAMES[layer],
+            source.max_distance_m,
+            (source.end_x_m - source.start_x_m).hypot(source.end_y_m - source.start_y_m),
+            source.longest_profile_ray_m(),
+        );
+    }
     let device_sources = RegionDeviceLineSources::upload(&sources)?;
     Ok(EncodedLineLayer {
         layer,

@@ -263,14 +263,6 @@ fn generated_physics_header() -> String {
         "QUIETMAP_NEAR_SAMPLE_M",
         canonical_f64(PATH_PROFILE_SOURCE, "NEAR_OFFSET_M"),
     );
-    // Read only by the static_assert that guards QUIETMAP_MAXIMUM_PROFILE_POINTS: the cap
-    // was measured for the longest ray this ceiling allows, so raising the ceiling must
-    // fail the build instead of silently truncating a profile.
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_RAILWAY_REACH_CEILING_M",
-        canonical_f64(NOISE_CONSTANTS_SOURCE, "RAILWAY_REACH_CLAMP_MAX"),
-    );
     write_cuda_float(
         &mut header,
         "QUIETMAP_MINIMUM_FOREST_RUN_M",

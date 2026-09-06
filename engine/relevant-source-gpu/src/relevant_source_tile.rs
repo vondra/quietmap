@@ -9,7 +9,7 @@ use crate::source_frame::{
     DeviceLineSource, RegionMetricFrame, BLOCK_COUNT, CORNER_COUNT, PERIOD_COUNT, TILE_PIXEL_SIDE,
 };
 use crate::tile_source_incidence::{build_tile_source_incidence, TileMetricLattice};
-use anyhow::Result;
+use anyhow::{bail, Result};
 use noise_compute::constants::ENCLOSURE_RADIUS_M;
 use noise_compute::propagation::obstacle_index::{enclosure_db, ObstacleSet};
 use raster_reader::fused_tile_z13::{tile_pixel_size_m, FusedTileZ13};
@@ -191,6 +191,12 @@ pub fn partition_and_paint_tile(
         &receivers.receiver_altitude_m,
         &receivers.receiver_reflection_db,
     )?;
+    if cuda.take_profile_overflow()? {
+        bail!(
+            "the card dropped a path-profile chainage: a ray outran the profile cadence \
+             (kernels/relevant_source_path.cuh) and this tile's bytes would be wrong"
+        );
+    }
     let relevant_source_references = partition.relevant_source_indices.len() as u64;
     let block_source_counts = partition
         .block_offsets
