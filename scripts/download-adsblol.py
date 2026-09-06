@@ -2,6 +2,8 @@
 """Acquire publisher-identified daily ADSB.lol exports without overwriting retained archives."""
 
 import argparse
+import bisect
+from contextlib import ExitStack, closing
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import date, datetime, timezone
 import hashlib
@@ -15,6 +17,7 @@ import sqlite3
 import stat
 import sys
 import tempfile
+import tarfile
 import time
 import urllib.request
 
@@ -218,6 +221,197 @@ def acquire(asset, output, reserve_bytes):
     raise RuntimeError('unreachable download retry state')
 
 
+def resolved_assets(database, assets):
+    resolved = []
+    for asset in sorted(assets):
+        path = verified_asset(database, asset)
+        if path is None:
+            raise ValueError(f'missing publisher-verified selected asset: {asset[0]} {asset[1]}')
+        resolved.append((asset, path, identity(Path(path))))
+    return resolved
+
+
+def input_signature(selected):
+    return repr(selected)
+
+
+def archive_checks(database):
+    if not database.execute("SELECT 1 FROM sqlite_master WHERE name='archive_checks'").fetchone():
+        return {}
+    return {tag: (inputs, error) for tag, inputs, error in database.execute('SELECT * FROM archive_checks')}
+
+
+def alternative_exports(day, preferred, releases):
+    tags = {release['tag_name']: release for release, _ in releases.values()}
+    for tag, release in sorted(tags.items()):
+        if tag.startswith('v' + day.replace('-', '.') + '-planes-readsb-') and tag != preferred and 'mlatonly' not in tag:
+            yield release_assets(day, [a['browser_download_url'] for a in release['assets']], releases)
+
+
+def effective_assets(database, preferred, releases, requested):
+    """Published preference changes only after identity-bound proof of broken TAR continuity."""
+    checks = archive_checks(database)
+    selected = []
+    for day in sorted(requested):
+        assets = sorted(release_assets(day, preferred[day], releases))
+        tag = assets[0][5]
+        if tag in checks:
+            inputs, error = checks[tag]
+            if inputs != input_signature(resolved_assets(database, assets)):
+                raise ValueError(f'{day}: changed archive inspection inputs: {tag}')
+            if error:
+                candidates = []
+                for alternative in alternative_exports(day, tag, releases):
+                    checked = checks.get(alternative[0][5])
+                    if checked is None:
+                        continue
+                    if checked[0] != input_signature(resolved_assets(database, alternative)):
+                        raise ValueError(f'{day}: changed alternative inspection inputs')
+                    if not checked[1]:
+                        candidates.append(alternative)
+                if len(candidates) != 1:
+                    raise ValueError(f'{day}: require one verified complete alternative, found {len(candidates)}')
+                assets = candidates[0]
+                print(f'GA source recovery: day={day} rejected={tag} reason={error} selected={assets[0][5]}', file=sys.stderr)
+        selected.extend(assets)
+    return sorted(selected)
+
+
+class StrictTarInfo(tarfile.TarInfo):
+    @classmethod
+    def fromtarfile(cls, archive):
+        try:
+            return super().fromtarfile(archive)
+        except (tarfile.InvalidHeaderError, tarfile.TruncatedHeaderError, tarfile.SubsequentHeaderError) as error:
+            # ignore_zeros accepts concatenated TAR streams, but must never skip bad headers.
+            raise tarfile.ReadError(f'offset {archive.offset}: {error}') from error
+
+
+class ArchiveParts:
+    def __init__(self, files):
+        self.files, self.offsets, self.position = files, [0], 0
+        for source in files:
+            self.offsets.append(self.offsets[-1] + os.fstat(source.fileno()).st_size)
+
+    def tell(self):
+        return self.position
+
+    def seek(self, offset, whence=0):
+        self.position = offset + (self.position if whence == 1 else self.offsets[-1] if whence == 2 else 0)
+        return self.position
+
+    def read(self, size):
+        # Only extension headers are read in bulk; ordinary payloads are seek-skipped.
+        # Refuse unreasonable metadata without labelling it corrupt or selecting a fallback.
+        if size > 1024 * 1024:
+            raise ValueError('TAR inspection metadata exceeds 1 MiB')
+        chunks = []
+        while size and self.position < self.offsets[-1]:
+            index = bisect.bisect_right(self.offsets, self.position) - 1
+            source = self.files[index]
+            source.seek(self.position - self.offsets[index])
+            chunk = source.read(min(size, self.offsets[index + 1] - self.position))
+            if not chunk:
+                raise OSError('source changed during TAR inspection')
+            chunks.append(chunk)
+            self.position += len(chunk)
+            size -= len(chunk)
+        return b''.join(chunks)
+
+
+def check_archive_continuity(selected):
+    """Bounded GNU/PAX-aware structural walk; native Stage0 still owns gzip/JSON validation."""
+    split = [path for asset, path, _ in selected if not asset[1].endswith('.tar')]
+    streams = ([split] if split else []) + [[path] for asset, path, _ in selected if asset[1].endswith('.tar')]
+    for paths in streams:
+        with ExitStack() as stack:
+            source = ArchiveParts([stack.enter_context(Path(path).open('rb')) for path in paths])
+            total = source.offsets[-1]
+            if total < 1024 or total % 512:
+                raise tarfile.ReadError('incomplete TAR byte length')
+            source.seek(-1024, 2)
+            if source.read(1024) != bytes(1024):
+                raise tarfile.ReadError('missing TAR end marker')
+            source.seek(0)
+            with tarfile.open(fileobj=source, mode='r:', ignore_zeros=True, tarinfo=StrictTarInfo) as archive:
+                for _ in archive:
+                    archive.members.clear()
+    if any(identity(Path(path)) != before for _, path, before in selected):
+        raise OSError('source changed during TAR inspection')
+
+
+def preserved_catalog(database):
+    days = {date.fromisoformat(row[0]) for row in database.execute('SELECT day FROM window')}
+    def preserved_response(url):
+        row = database.execute('SELECT body FROM responses WHERE url=?', (url,)).fetchone()
+        if row is None:
+            raise ValueError(f'missing preserved publisher response: {url}')
+        return row[0]
+    preferred, releases = preferred_releases(database, days, preserved_response)
+    assets = sorted(asset for day, urls in preferred.items() for asset in release_assets(day, urls, releases))
+    if assets != database.execute('SELECT day,name,url,size,sha256,tag FROM assets ORDER BY day,name').fetchall():
+        raise ValueError('catalog asset rows differ from preserved official responses')
+    return preferred, releases
+
+
+def recover_sources(root, requested, reserve_bytes):
+    """Acquire verified alternatives for proven broken TARs, then atomically admit their inspections."""
+    if reserve_bytes < 0:
+        raise ValueError('recovery requires a nonnegative free-space reserve')
+    with closing(sqlite3.connect(f'{(root / "catalog.sqlite").resolve().as_uri()}?mode=rw', uri=True)) as database:
+        preferred, releases = preserved_catalog(database)
+        if not requested or not requested <= preferred.keys():
+            raise ValueError('recovery dates are empty or outside the selected source catalog')
+        inspected = []
+        for day in sorted(requested):
+            assets = release_assets(day, preferred[day], releases)
+            tag = assets[0][5]
+            if 'mlatonly' in tag:
+                raise ValueError(f'{day}: MLAT-only coverage cannot be recovered as a complete day')
+            selected = resolved_assets(database, assets)
+            try:
+                check_archive_continuity(selected)
+            except tarfile.ReadError as failure:
+                inspected.append((tag, input_signature(selected), str(failure), selected))
+            else:
+                raise ValueError(f'{day}: preferred TAR is structurally readable; no recovery admitted')
+            alternatives = list(alternative_exports(day, tag, releases))
+            # A separate native parent contains exactly this export's selected TAR streams.
+            pending = [asset for candidate in alternatives for asset in candidate
+                       if verified_asset(database, asset) is None]
+            needed = sum(asset[3] for asset in pending
+                         if not asset_target_path(asset, root / 'recovery' / asset[5]).exists())
+            if shutil.disk_usage(root).free < needed + reserve_bytes:
+                raise ValueError('insufficient disk space for recovery bytes plus reserve')
+            for asset in pending:
+                result = acquire(asset, root / 'recovery' / asset[5], reserve_bytes)
+                with database:
+                    database.execute('INSERT OR REPLACE INTO verified VALUES (?,?,?,?,?,?,?)', result)
+                log(f'ACQUIRED recovery bytes={result[4]} sha256={result[1]} path={result[0]}')
+            valid = 0
+            for candidate in alternatives:
+                selected = resolved_assets(database, candidate)
+                try:
+                    check_archive_continuity(selected)
+                    error = ''
+                except tarfile.ReadError as failure:
+                    error = str(failure)
+                valid += int(not error)
+                inspected.append((candidate[0][5], input_signature(selected), error, selected))
+            if valid != 1:
+                raise ValueError(f'{day}: require one verified complete alternative, found {valid}')
+        with database:
+            database.execute('BEGIN IMMEDIATE')
+            if preserved_catalog(database) != (preferred, releases):
+                raise ValueError('publisher catalog changed during recovery')
+            for _, signature, _, selected in inspected:
+                if input_signature(resolved_assets(database, [asset for asset, _, _ in selected])) != signature:
+                    raise ValueError('archive inputs changed during recovery')
+            database.execute('CREATE TABLE IF NOT EXISTS archive_checks (tag TEXT PRIMARY KEY, inputs TEXT NOT NULL, error TEXT NOT NULL)')
+            database.executemany('INSERT OR REPLACE INTO archive_checks VALUES (?,?,?)', [row[:3] for row in inspected])
+            return effective_assets(database, preferred, releases, requested)
+
+
 def validate_selected_sources(root, requested):
     """Resolve only requested days against preserved publisher authority; never fetch or write."""
     database = sqlite3.connect(f'{(root / "catalog.sqlite").resolve().as_uri()}?mode=ro', uri=True)
@@ -226,28 +420,13 @@ def validate_selected_sources(root, requested):
         days = tuple(date.fromisoformat(row[0]) for row in database.execute('SELECT day FROM window ORDER BY day'))
         if not days or not requested or not requested <= {day.isoformat() for day in days}:
             raise ValueError('requested days are empty or outside the selected source catalog')
-        # A read-only connection alone would still allow a network request before
-        # response() tried to INSERT. A missing pinned response must fail first.
-        def preserved_response(url):
-            row = database.execute('SELECT body FROM responses WHERE url=?', (url,)).fetchone()
-            if row is None:
-                raise ValueError(f'missing preserved publisher response: {url}')
-            return row[0]
-        preferred, releases = preferred_releases(database, set(days), preserved_response)
-        assets = sorted(asset for day, urls in preferred.items() for asset in release_assets(day, urls, releases))
-        if assets != database.execute('SELECT day,name,url,size,sha256,tag FROM assets ORDER BY day,name').fetchall():
-            raise ValueError('catalog asset rows differ from preserved official responses')
-        selected = [asset for asset in assets if asset[0] in requested]
+        preferred, releases = preserved_catalog(database)
+        selected = effective_assets(database, preferred, releases, requested)
         insufficient = sorted({a[0] for a in selected if 'mlatonly' in a[5]})
         selected = [asset for asset in selected if 'mlatonly' not in asset[5]]
         if not selected:
             raise ValueError(f'no complete source days; omitted MLAT-only dates: {insufficient}')
-        resolved = []
-        for asset in selected:
-            path = verified_asset(database, asset)
-            if path is None:
-                raise ValueError(f'missing publisher-verified selected asset: {asset[0]} {asset[1]}')
-            resolved.append((asset, path, identity(Path(path))))
+        resolved = resolved_assets(database, selected)
         if insufficient:
             print(f'GA source coverage: calendar_dates={len(requested)} sampled_days={len({asset[0] for asset in selected})} omitted_mlatonly_days={insufficient}', file=sys.stderr)
         return resolved
@@ -284,7 +463,7 @@ def source_receipt(work, selected, stage, class_filter, action):
                         receipt = database.execute('SELECT * FROM artifacts WHERE day=? AND stage=?', (day, prerequisite)).fetchone()
                         if receipt != actual:
                             raise ValueError(f'{day}: missing or changed completed {prerequisite} receipt')
-                inputs = repr([(asset, source, before) for asset, source, before in selected if asset[0] == day])
+                inputs = input_signature([(asset, source, before) for asset, source, before in selected if asset[0] == day])
                 if stage == 'segments':
                     inputs += repr(identity(work / 'flights' / f'{day}.arrow'))
                 if action == 'begin':
@@ -358,7 +537,8 @@ def main():
             raise ValueError('require in-window acquisition dates, 1..8 workers and nonnegative reserve')
         with open_catalog(args.out, days) as database:
             import_verified(database, args.verified_local)
-            assets = database.execute('SELECT day,name,url,size,sha256,tag FROM assets ORDER BY day,name').fetchall()
+            preferred, releases = preserved_catalog(database)
+            assets = effective_assets(database, preferred, releases, preferred.keys())
             unavailable = sorted({a[0] for a in assets if 'mlatonly' in a[5]})
             pending = [a for a in assets if a[0] in selected and 'mlatonly' not in a[5] and not verified_asset(database, a)]
             needed = sum(a[3] for a in pending if not asset_target_path(a, args.out).exists())
@@ -387,7 +567,18 @@ def main():
 
 
 if __name__ == '__main__':
-    if len(sys.argv) > 1 and sys.argv[1] == 'validate':
+    if len(sys.argv) > 1 and sys.argv[1] == 'recover':
+        parser = argparse.ArgumentParser(description='Acquire and admit publisher-verified complete alternatives for structurally corrupt preferred exports; retain all inspected originals unchanged')
+        parser.add_argument('--source-root', type=Path, required=True)
+        parser.add_argument('--days', required=True)
+        parser.add_argument('--reserve-bytes', type=int, required=True)
+        args = parser.parse_args(sys.argv[2:])
+        try:
+            requested = {date.fromisoformat(day).isoformat() for day in args.days.split(',')}
+            recover_sources(args.source_root, requested, args.reserve_bytes)
+        except (ValueError, OSError, KeyError, sqlite3.Error, tarfile.TarError) as error:
+            parser.exit(1, f'source recovery failed: {error}\n')
+    elif len(sys.argv) > 1 and sys.argv[1] == 'validate':
         validate_main(sys.argv[2:])
     else:
         main()

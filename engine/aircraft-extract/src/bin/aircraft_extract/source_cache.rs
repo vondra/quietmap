@@ -429,6 +429,108 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_preferred_day_retries_from_verified_original_without_changing_completed_work() {
+        use std::os::unix::fs::MetadataExt;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("source");
+        let work = temp.path().join("work");
+        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let output = Command::new("python3")
+            .current_dir(&project)
+            .args(["-B", "-c", "import runpy,sys; sys.path.insert(0,'scripts'); runpy.run_path('scripts/test_download_adsblol.py')['create_recovery_catalog'](sys.argv[1])"])
+            .arg(&root).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let control = "2026-04-16";
+        let failed = "2026-04-17";
+        let run = |day: &str| {
+            crate::cli_run_all::run_all(
+                root.clone(),
+                temp.path().join("prepared-year"),
+                temp.path().join("prepared"),
+                work.clone(),
+                vec![day.to_owned()],
+                None,
+                FromStage::Stage0,
+                FromStage::Stage0,
+                Feed::Adsblol,
+                ClassFilterArg::Ga,
+                None,
+                None,
+                false,
+            )
+        };
+        run(control).unwrap();
+        let original = || {
+            let path = work.join("flights").join(format!("{control}.arrow"));
+            let metadata = std::fs::metadata(&path).unwrap();
+            let receipts = Command::new("python3")
+                .args(["-B", "-c", "import sqlite3,sys; db=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); print([(t,db.execute('SELECT * FROM '+t+' WHERE day=? ORDER BY 1,2',(sys.argv[2],)).fetchall()) for t in ('sources','pending','artifacts')])"])
+                .arg(work.join("source-receipts.sqlite")).arg(control).output().unwrap();
+            assert!(receipts.status.success());
+            (
+                path.clone(),
+                std::fs::read(path).unwrap(),
+                metadata.dev(),
+                metadata.ino(),
+                metadata.mtime(),
+                metadata.mtime_nsec(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+                receipts.stdout,
+            )
+        };
+        let before = original();
+        assert!(
+            run(failed)
+                .unwrap_err()
+                .to_string()
+                .contains("incomplete extraction")
+        );
+        let failed_path = work.join("flights").join(format!("{failed}.arrow"));
+        assert!(!failed_path.exists());
+        let cache = SourceCache::new(&root, &work, ClassFilterArg::Ga);
+        assert!(
+            cache
+                .validate(Some(&[failed.into()]), Some("flights"))
+                .is_err()
+        );
+        let output = Command::new("python3")
+            .arg(project.join("scripts/download-adsblol.py"))
+            .args(["recover", "--source-root"])
+            .arg(&root)
+            .args(["--days", failed, "--reserve-bytes", "0"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains("GA source recovery:"));
+        run(failed).unwrap();
+        cache
+            .validate(Some(&[control.into(), failed.into()]), Some("flights"))
+            .unwrap();
+        let selected = cache.validate(Some(&[failed.into()]), None).unwrap();
+        assert!(
+            selected[failed]
+                .iter()
+                .all(|path| path.to_string_lossy().contains("-prod-"))
+        );
+        assert_eq!(
+            aircraft_extract::stage_1::read_flights(&failed_path)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(original(), before);
+    }
+
+    #[test]
     fn selected_catalog_paths_cannot_silently_include_another_native_tar_export() {
         use aircraft_extract::source::FlightSource;
         let temp = tempfile::tempdir().unwrap();

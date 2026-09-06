@@ -296,5 +296,182 @@ class SelectedSourceReuse(unittest.TestCase):
                 receipt('flights', 'complete', chosen=changed_stat)
 
 
+def create_recovery_catalog(output, day='2026-04-17', control='2026-04-16', preferred_kind='staging'):
+    """Authenticated broken split preferred plus intact original alternate and completed-day control."""
+    import gzip
+    import tarfile
+    output = Path(output)
+    releases, exports, preferred = [], [], []
+    alternate_kind = 'prod' if preferred_kind == 'staging' else 'staging'
+    for current, kind in [(control, 'staging'), (day, preferred_kind), (day, alternate_kind)]:
+        archive = io.BytesIO()
+        timestamp = (date.fromisoformat(current) - date(1970, 1, 1)).days * 86400
+        with tarfile.open(fileobj=archive, mode='w') as writer:
+            for icao in ('a12345', 'b12345'):
+                body = gzip.compress(json.dumps({'icao': icao, 't': 'C172', 'timestamp': timestamp,
+                    'trace': [[10, 50.0, 14.0, 1000, 100, 90, 0, 0], [20, 50.001, 14.001, 1100, 100, 90, 0, 0]]}).encode())
+                header = tarfile.TarInfo('traces/45/trace_full_' + icao + '.json')
+                header.size = len(body)
+                writer.addfile(header, io.BytesIO(body))
+        raw = archive.getvalue()
+        corrupt = current == day and kind == preferred_kind
+        bodies = [raw[:768], b'X' * 1024 + raw[1792:]] if corrupt else [raw]
+        urls, records = release_fixture(current, suffixes=('.aa', '.ab') if corrupt else ('',), kind=kind)
+        release = records[urls[0]][0]
+        for asset, body in zip(release['assets'], bodies):
+            asset['size'] = len(body)
+            asset['digest'] = 'sha256:' + hashlib.sha256(body).hexdigest()
+            folder = output / ('retained' if current == day and kind == alternate_kind else current) / release['tag_name']
+            target = folder / asset['name']
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(body)
+            exports.append((target, asset['digest'][7:]))
+        releases.append(release)
+        if current == control or kind == preferred_kind:
+            preferred.append(','.join(urls))
+    responses = {
+        MODULE.API + '2026/commits/main': json.dumps({'sha': 'a' * 40}).encode(),
+        MODULE.RAW + '2026/' + 'a' * 40 + '/PREFERRED_RELEASES.txt': '\n'.join(preferred).encode(),
+        MODULE.API + '2026/releases?per_page=100&page=1': json.dumps(releases).encode(),
+    }
+    with patch.object(MODULE, 'request', side_effect=lambda url: io.BytesIO(responses[url])):
+        with MODULE.open_catalog(output, tuple(sorted(map(date.fromisoformat, (control, day))))) as database:
+            database.executemany('INSERT INTO verified VALUES (?,?,?,?,?,?,?)', [(str(path), digest, *MODULE.identity(path)) for path, digest in exports])
+    return day, control
+
+
+class StructuralRecovery(unittest.TestCase):
+    def test_recovery_is_bound_to_original_inputs_and_never_scans_on_reuse(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            day, control = create_recovery_catalog(root)
+            selected = MODULE.validate_selected_sources(root, {day})
+            with self.assertRaises(MODULE.tarfile.ReadError):
+                MODULE.check_archive_continuity(selected)
+            before = {path: (MODULE.identity(Path(path)), Path(path).read_bytes()) for _, path, _ in selected}
+            with self.assertRaisesRegex(ValueError, 'structurally readable'):
+                MODULE.recover_sources(root, {day, control}, 0)
+            self.assertEqual(selected, MODULE.validate_selected_sources(root, {day}))
+            MODULE.recover_sources(root, {day}, 0)
+            with patch.object(MODULE, 'check_archive_continuity', side_effect=AssertionError('hot validation must not scan')), \
+                    patch.object(MODULE, 'request', side_effect=AssertionError('recovery stays offline')):
+                recovered = MODULE.validate_selected_sources(root, {day, control})
+            self.assertEqual(len({asset[0] for asset, _, _ in recovered}), 2)
+            self.assertTrue(all('prod' in asset[5] for asset, _, _ in recovered if asset[0] == day))
+            self.assertTrue(all('staging' in asset[5] for asset, _, _ in recovered if asset[0] == control))
+            self.assertEqual(before, {path: (MODULE.identity(Path(path)), Path(path).read_bytes()) for path in before})
+            for asset, path, _ in recovered:
+                if asset[0] == day:
+                    Path(path).write_bytes(b'changed original')
+                    break
+            with self.assertRaisesRegex(ValueError, 'changed verified'):
+                MODULE.validate_selected_sources(root, {day})
+
+    def test_recovery_acquires_only_authenticated_alternatives_in_separate_native_parents(self):
+        for preferred_kind in ('staging', 'prod'):
+            with self.subTest(preferred_kind=preferred_kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                day, control = create_recovery_catalog(root, preferred_kind=preferred_kind)
+                original = MODULE.validate_selected_sources(root, {day, control})
+                before = {path: (MODULE.identity(Path(path)), Path(path).read_bytes()) for _, path, _ in original}
+                with sqlite3.connect(root / 'catalog.sqlite') as database:
+                    preferred, releases = MODULE.preserved_catalog(database)
+                    alternative = next(MODULE.alternative_exports(day, original[-1][0][5], releases))
+                    bodies = {asset[2]: Path(MODULE.verified_asset(database, asset)).read_bytes() for asset in alternative}
+                    database.execute("DELETE FROM verified WHERE path LIKE '%/retained/%'")
+                with patch.object(MODULE, 'request', side_effect=lambda url: io.BytesIO(bodies[url])) as remote:
+                    MODULE.recover_sources(root, {day}, 0)
+                self.assertEqual(remote.call_count, len(alternative))
+                selected = MODULE.validate_selected_sources(root, {day, control})
+                for asset, path, _ in selected:
+                    if asset[0] == day:
+                        self.assertEqual(Path(path), MODULE.asset_target_path(asset, root / 'recovery' / asset[5]))
+                        self.assertNotIn(Path(path).parent, {Path(old).parent for old in before})
+                self.assertEqual(before, {path: (MODULE.identity(Path(path)), Path(path).read_bytes()) for path in before})
+                self.assertEqual([row for row in original if row[0][0] == control],
+                                 [row for row in selected if row[0][0] == control])
+                with patch.object(MODULE, 'request', side_effect=AssertionError('readable preferred cannot acquire')):
+                    with self.assertRaisesRegex(ValueError, 'structurally readable'):
+                        MODULE.recover_sources(root, {control}, 0)
+
+    def test_admission_excludes_a_real_concurrent_catalog_writer(self):
+        import threading
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            day, _ = create_recovery_catalog(root)
+            real = MODULE.preserved_catalog
+            calls, result = 0, []
+            def inspected(database):
+                nonlocal calls
+                value = real(database)
+                calls += 1
+                if calls == 2:
+                    def write():
+                        try:
+                            with sqlite3.connect(root / 'catalog.sqlite', timeout=0.1) as other:
+                                other.execute('UPDATE assets SET size=size+1 WHERE day=?', (day,))
+                            result.append('committed')
+                        except sqlite3.OperationalError as error:
+                            result.append(str(error))
+                    writer = threading.Thread(target=write)
+                    writer.start()
+                    writer.join(2)
+                    self.assertFalse(writer.is_alive())
+                return value
+            with patch.object(MODULE, 'preserved_catalog', side_effect=inspected):
+                MODULE.recover_sources(root, {day}, 0)
+            self.assertEqual(result, ['database is locked'])
+            self.assertTrue(MODULE.validate_selected_sources(root, {day}))
+
+    def test_strict_walk_preserves_gnu_pax_and_mixed_streams_but_rejects_bad_headers(self):
+        import tarfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            streams = []
+            for fmt in (tarfile.GNU_FORMAT, tarfile.PAX_FORMAT):
+                raw = io.BytesIO()
+                with tarfile.open(fileobj=raw, mode='w', format=fmt) as archive:
+                    member = tarfile.TarInfo('long/' * 30 + 'trace.json')
+                    member.size = 7
+                    archive.addfile(member, io.BytesIO(b'payload'))
+                streams.append(raw.getvalue())
+            bodies = [('test.tar', streams[0]), ('test.tar.aa', streams[1][:1234]), ('test.tar.ab', streams[1][1234:])]
+            selected = []
+            for name, body in bodies:
+                path = root / name
+                path.write_bytes(body)
+                selected.append((('2026-04-17', name), str(path), MODULE.identity(path)))
+            MODULE.check_archive_continuity(selected)
+            # A malformed later header must not be treated as EOF or skipped like zero padding.
+            path = root / 'test.tar'
+            body = streams[0][:-1024] + b'X' * 512 + bytes(1024)
+            path.write_bytes(body)
+            with self.assertRaises(tarfile.ReadError):
+                MODULE.check_archive_continuity([(selected[0][0], str(path), MODULE.identity(path))])
+
+    def test_missing_alternate_and_changed_inspection_cannot_activate_recovery(self):
+        for failure in ('unverified', 'changed_during_check'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                day, _ = create_recovery_catalog(root)
+                preferred = MODULE.validate_selected_sources(root, {day})
+                if failure == 'unverified':
+                    with sqlite3.connect(root / 'catalog.sqlite') as database:
+                        database.execute("DELETE FROM verified WHERE path LIKE '%/retained/%'")
+                    with patch.object(MODULE, 'request', side_effect=ValueError('publisher unavailable')):
+                        with self.assertRaisesRegex(ValueError, 'publisher unavailable'):
+                            MODULE.recover_sources(root, {day}, 0)
+                else:
+                    real = MODULE.check_archive_continuity
+                    def changed(selected):
+                        result = real(selected)
+                        Path(selected[0][1]).touch()
+                        return result
+                    with patch.object(MODULE, 'check_archive_continuity', side_effect=changed):
+                        with self.assertRaisesRegex(ValueError, 'changed verified'):
+                            MODULE.recover_sources(root, {day}, 0)
+                self.assertEqual(preferred, MODULE.validate_selected_sources(root, {day}))
+
+
 if __name__ == '__main__':
     unittest.main()
