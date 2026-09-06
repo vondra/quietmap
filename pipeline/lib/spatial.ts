@@ -40,6 +40,14 @@ export const M_PER_DEG_LON_EQ = 111_320
  * that chains segments by endpoints (service-tree, continuity-fill, R7 taper)
  * — the passes must agree on node identity or their topologies silently
  * diverge.
+ *
+ * `toFixed(5)` is a GRID SNAP, not a proximity rule: it buckets into ~1.1 m x
+ * 0.7 m cells, so two endpoints merge when they land in the same cell and stay
+ * apart when they straddle a boundary however close they are. That is
+ * deliberate (91f034424) and load-bearing — on CZ rail it is the only link for
+ * 34 crossovers, which exact-coordinate identity would sever. Measured on CZ
+ * rail: it merges 129 of 366,919 coordinates, and of the 506 near pairs inside
+ * one cell diagonal it merges 132 and splits 374.
  */
 export function nodeKey(lat: number, lon: number): string {
   return `${lat.toFixed(5)}_${lon.toFixed(5)}`
