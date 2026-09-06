@@ -553,6 +553,43 @@ mod tests {
     }
 
     #[test]
+    fn built_up_selects_cz_legal_speed_below_explicit_tags_and_taper() {
+        let cz = Admin {
+            country_iso: *b"CZ",
+            continent: crate::admin::Continent::Europe,
+            city_id: 0,
+        };
+        for (road_class, built_up, speed_limit, speed_taper, expected) in [
+            (3, 1, 0, 0, 90.0),
+            (3, 2, 0, 0, 50.0),
+            (3, 0, 0, 0, 50.0),
+            (3, 2, 70, 40, 70.0),
+            (3, 1, 0, 40, 40.0),
+            (5, 2, 0, 0, 30.0),
+            (7, 1, 0, 0, 20.0),
+        ] {
+            let input = RawRoadInput {
+                road_class,
+                built_up,
+                speed_limit,
+                speed_taper,
+                surface_type: 0,
+                oneway: false,
+                lanes: 0,
+                aadt_light: 0,
+                aadt_medium: 0,
+                aadt_heavy: 0,
+                aadt_moto: 0,
+                provenance: Provenance::None,
+                tunnel: false,
+                access: 0,
+                junction: 0,
+            };
+            assert_eq!(normalize_road(input, cz).unwrap().speed_kmh, expected);
+        }
+    }
+
+    #[test]
     fn ramp_defaults_are_15_percent_of_mainline() {
         // motorway_link (10) = 15 % of motorway (0)
         let (l0, m0, h0, x0) = resolve_traffic_default(0, Admin::UNKNOWN);
