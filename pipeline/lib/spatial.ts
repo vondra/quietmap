@@ -208,3 +208,29 @@ export function pointInRing(lon: number, lat: number, ring: readonly (readonly [
   }
   return inside
 }
+
+/** Timetable station-pair identity; unrelated to native graph endpoint identity. */
+export function coordKey4dp(latitude: number, longitude: number): string {
+  return `${latitude.toFixed(4)},${longitude.toFixed(4)}`
+}
+
+/** Clamped projected position of a point along a segment (0=start, 1=end). */
+export function pointToSegmentParamT(
+  pointLatitude: number,
+  pointLongitude: number,
+  startLatitude: number,
+  startLongitude: number,
+  endLatitude: number,
+  endLongitude: number,
+): number {
+  const cosineLatitude = Math.cos(pointLatitude * Math.PI / 180)
+  const pointX = wrapLonDeltaDeg(pointLongitude - startLongitude) *
+    METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR * cosineLatitude
+  const pointY = (pointLatitude - startLatitude) * METRES_PER_DEGREE_LATITUDE
+  const endX = wrapLonDeltaDeg(endLongitude - startLongitude) *
+    METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR * cosineLatitude
+  const endY = (endLatitude - startLatitude) * METRES_PER_DEGREE_LATITUDE
+  const lengthSquared = endX * endX + endY * endY
+  if (lengthSquared < 1e-6) return 0
+  return Math.max(0, Math.min(1, (pointX * endX + pointY * endY) / lengthSquared))
+}
