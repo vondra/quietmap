@@ -1,18 +1,4 @@
-//! Tile uploads, shared-corner partition construction, exact pixel paint, and the
-//! HM3 collapse-and-write handed to the region's writer thread.
-
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use anyhow::Result;
-use noise_compute::constants::ENCLOSURE_RADIUS_M;
-use noise_compute::propagation::obstacle_index::{enclosure_db, ObstacleSet};
-use raster_reader::fused_tile_z13::{tile_pixel_size_m, FusedTileZ13};
-use tile_painter::accumulator::TileAccumulator;
-use tile_painter::source_loader_structure::InteriorEstimate;
-use tile_painter::wire_hm3::{
-    collapse_lden_surface_u8, collapse_lden_u8, fill_area_median, write_tile, AREA_FILL_RADIUS_PX,
-};
+//! Tile uploads, shared-corner partition construction and the exact pixel paint.
 
 use crate::cuda_bridge::{DeviceBuffer, DeviceScenePointers, RelevantSourceCuda};
 use crate::obstacle_transfer::{
@@ -23,6 +9,10 @@ use crate::source_frame::{
     DeviceLineSource, RegionMetricFrame, BLOCK_COUNT, CORNER_COUNT, PERIOD_COUNT, TILE_PIXEL_SIDE,
 };
 use crate::tile_source_incidence::{build_tile_source_incidence, TileMetricLattice};
+use anyhow::Result;
+use noise_compute::constants::ENCLOSURE_RADIUS_M;
+use noise_compute::propagation::obstacle_index::{enclosure_db, ObstacleSet};
+use raster_reader::fused_tile_z13::{tile_pixel_size_m, FusedTileZ13};
 
 /// Device-resident vector obstacle geometry shared across both line layers and all region tiles.
 pub struct RegionDeviceObstacles {
@@ -91,43 +81,6 @@ pub struct TilePaintMeasurement {
     pub block_source_counts: Vec<u32>,
     pub corner_gpu_milliseconds: f64,
     pub paint_gpu_milliseconds: f64,
-}
-
-/// One painted tile's period energies waiting for the writer thread: collapse to
-/// the Lden byte, smooth an area source's point-grid ripple into its footprint,
-/// fill enclosed pixels from their facade donors, brotli, write (the CPU
-/// surface_region order).
-pub struct PendingTileWrite {
-    pub energy: Vec<f32>,
-    pub interior: Arc<InteriorEstimate>,
-    /// Index into the runner's layer list, for the per-layer byte total.
-    pub layer: usize,
-    /// Industrial and building discretise areas into point grids that the
-    /// median fill turns into solid footprints; lines are continuous already.
-    pub area_source: bool,
-    /// Airport ground ops accumulate EVENT energy over this many days; the
-    /// surface layers (None) are steady power.
-    pub event_days: Option<f64>,
-    pub source_id: u8,
-    pub output_path: PathBuf,
-}
-
-impl PendingTileWrite {
-    /// Bytes written.
-    pub fn write(self) -> Result<u64> {
-        let accumulator = TileAccumulator {
-            energy: self.energy,
-        };
-        let mut cells = match self.event_days {
-            Some(n_days) => collapse_lden_u8(&accumulator, n_days),
-            None => collapse_lden_surface_u8(&accumulator),
-        };
-        if self.area_source {
-            fill_area_median(&mut cells, AREA_FILL_RADIUS_PX);
-        }
-        self.interior.apply(&mut cells);
-        Ok(write_tile(&self.output_path, &cells, self.source_id, false)? as u64)
-    }
 }
 
 /// Tile coordinates and receiver fields uploaded once, independent of the line layer.

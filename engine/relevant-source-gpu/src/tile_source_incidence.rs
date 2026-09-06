@@ -82,6 +82,17 @@ impl TileMetricLattice {
         [self.block_x_edges_m[column], self.block_y_edges_m[row]]
     }
 
+    /// The rectangle that holds every corner of this tile and every one of its
+    /// block neighbourhoods: the tile grown by one block on each side.
+    pub fn outer_neighbourhood_rectangle(&self) -> [f32; 4] {
+        [
+            self.neighbourhood_west_m,
+            self.neighbourhood_south_m,
+            self.neighbourhood_east_m,
+            self.neighbourhood_north_m,
+        ]
+    }
+
     fn neighbourhood_rectangle(&self, row: usize, column: usize) -> [f32; 4] {
         let minimum_x = if column == 0 {
             self.neighbourhood_west_m
@@ -114,6 +125,43 @@ const INCIDENCE_CHUNK_SOURCES: usize = 16_384;
 
 /// One chunk's `(per-corner candidates, per-block local sources)`.
 type IncidenceChunk = (Vec<Vec<u32>>, Vec<Vec<u32>>);
+
+/// True when not one of these sources can reach any of these tiles, so
+/// [`build_tile_source_incidence`] would return an empty incidence for every
+/// one of them.
+///
+/// A corner candidate needs `distance(corner, segment) <= max_distance_m`, and
+/// every corner of a tile lies inside that tile's
+/// [`TileMetricLattice::outer_neighbourhood_rectangle`]; a local block entry
+/// needs the segment itself to cross one of the tile's block neighbourhoods,
+/// which the same rectangle contains. A source whose segment box grown by its
+/// own reach misses the union of those rectangles can therefore appear in no
+/// list of any of these tiles. The converse does not hold — a box test admits
+/// sources the exact tests reject — which is the safe direction: the caller
+/// only ever skips work the card would have found nothing to do.
+pub fn no_source_reaches_tiles(
+    sources: &[DeviceLineSource],
+    lattices: &[TileMetricLattice],
+) -> bool {
+    let mut left = f32::INFINITY;
+    let mut bottom = f32::INFINITY;
+    let mut right = f32::NEG_INFINITY;
+    let mut top = f32::NEG_INFINITY;
+    for lattice in lattices {
+        let [tile_left, tile_bottom, tile_right, tile_top] =
+            lattice.outer_neighbourhood_rectangle();
+        left = left.min(tile_left);
+        bottom = bottom.min(tile_bottom);
+        right = right.max(tile_right);
+        top = top.max(tile_top);
+    }
+    !sources.par_iter().any(|source| {
+        source.start_x_m.max(source.end_x_m) + source.max_distance_m >= left
+            && source.start_x_m.min(source.end_x_m) - source.max_distance_m <= right
+            && source.start_y_m.max(source.end_y_m) + source.max_distance_m >= bottom
+            && source.start_y_m.min(source.end_y_m) - source.max_distance_m <= top
+    })
+}
 
 pub fn build_tile_source_incidence(
     sources: &[DeviceLineSource],
@@ -196,12 +244,8 @@ fn add_source_local_blocks(
     let source_maximum_x = source.start_x_m.max(source.end_x_m);
     let source_minimum_y = source.start_y_m.min(source.end_y_m);
     let source_maximum_y = source.start_y_m.max(source.end_y_m);
-    let outer_left = lattice.neighbourhood_rectangle(0, 0)[0];
-    let outer_top = lattice.neighbourhood_rectangle(0, 0)[3];
-    let outer_right =
-        lattice.neighbourhood_rectangle(BLOCKS_PER_TILE_SIDE - 1, BLOCKS_PER_TILE_SIDE - 1)[2];
-    let outer_bottom =
-        lattice.neighbourhood_rectangle(BLOCKS_PER_TILE_SIDE - 1, BLOCKS_PER_TILE_SIDE - 1)[1];
+    let [outer_left, outer_bottom, outer_right, outer_top] =
+        lattice.outer_neighbourhood_rectangle();
     if source_maximum_x < outer_left
         || source_minimum_x > outer_right
         || source_maximum_y < outer_bottom
@@ -304,6 +348,52 @@ mod tests {
                 south_lat: 0.0,
             },
         )
+    }
+
+    /// The batch screen may only ever be conservative: wherever it says no
+    /// source reaches the tile, the exact incidence must be empty, or the
+    /// painter would skip a tile the card had something to draw on. Swept over
+    /// segments laid all around the tile at reaches that straddle its
+    /// neighbourhood edge, which is the only place the two rules can disagree.
+    #[test]
+    fn a_screened_out_source_reaches_nothing_in_the_exact_incidence() {
+        let lattice = fixture_lattice();
+        let span = lattice.block_x_edges_m[BLOCKS_PER_TILE_SIDE] - lattice.block_x_edges_m[0];
+        let mut screened = 0;
+        for step_x in -12..=12 {
+            for step_y in -12..=12 {
+                for reach_tenths in [0, 1, 3, 8, 12] {
+                    let x = lattice.block_x_edges_m[0] + span * step_x as f32 / 8.0;
+                    let y = lattice.block_y_edges_m[0] - span * step_y as f32 / 8.0;
+                    let source = DeviceLineSource {
+                        start_x_m: x,
+                        start_y_m: y,
+                        end_x_m: x + span / 8.0,
+                        end_y_m: y - span / 16.0,
+                        max_distance_m: span * reach_tenths as f32 / 10.0,
+                        ..DeviceLineSource::default()
+                    };
+                    if !no_source_reaches_tiles(&[source], &[fixture_lattice()]) {
+                        continue;
+                    }
+                    screened += 1;
+                    let incidence = build_tile_source_incidence(&[source], &lattice);
+                    assert!(
+                        incidence.corner_source_indices.is_empty()
+                            && incidence
+                                .local_source_indices_by_block
+                                .iter()
+                                .all(Vec::is_empty),
+                        "screened out at ({step_x}, {step_y}) reach {reach_tenths}/10 \
+                         yet the exact incidence admits it"
+                    );
+                }
+            }
+        }
+        assert!(
+            screened > 100,
+            "the sweep screened out only {screened} sources"
+        );
     }
 
     #[test]

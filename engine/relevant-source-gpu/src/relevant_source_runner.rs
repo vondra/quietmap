@@ -16,21 +16,21 @@ use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use noise_compute::admin;
-use raster_reader::fused_tile_z13::TileBatch;
 use raster_reader::RealRasters;
 use tile_painter::region_runner::{batch_slot, group_tiles_into_batches};
 use tile_painter::source_loader_structure::StructureData;
 
-use crate::batch_raster_lookahead::{spawn_batch_raster_builders, BatchRequest};
+use crate::batch_raster_lookahead::{spawn_batch_raster_builders, BatchRequest, ReadyBatch};
 use crate::cell_measurement::CellMeasurement;
 use crate::cell_preparation::{prepare_region, EncodedLineLayer, PreparedRegion};
 use crate::cell_stream::{report_cell_done, report_cell_failed, report_cell_started, CellRequest};
 use crate::cuda_bridge::RelevantSourceCuda;
+use crate::pending_tile_write::PendingTileWrite;
 use crate::relevant_source_tile::{
-    partition_and_paint_tile, BatchDeviceRaster, PendingTileWrite, RegionDeviceObstacles,
-    TileDeviceReceivers,
+    partition_and_paint_tile, BatchDeviceRaster, RegionDeviceObstacles, TileDeviceReceivers,
+    TilePaintMeasurement,
 };
-use crate::source_frame::RegionMetricFrame;
+use crate::source_frame::{DeviceLineSource, RegionMetricFrame};
 use crate::surface_layers::{
     LAYER_AREA_SOURCE, LAYER_COUNT, LAYER_EVENT_ENERGY, LAYER_LDEN_WEIGHTS,
 };
@@ -249,13 +249,17 @@ fn paint_region(
         .into_iter()
         .collect();
     let obstacle_set = structure_data.set();
+    let layer_sources: Vec<&[DeviceLineSource]> = layers
+        .iter()
+        .map(|encoded| encoded.sources.as_slice())
+        .collect();
     let (write_sender, write_receiver) = sync_channel::<PendingTileWrite>(PENDING_WRITES);
     let writer = thread::Builder::new().name("tile-writer".into());
     let output_bytes = thread::scope(|scope| -> Result<[u64; LAYER_COUNT]> {
         let writer = writer.spawn_scoped(scope, move || -> Result<[u64; LAYER_COUNT]> {
             let mut bytes = [0_u64; LAYER_COUNT];
             for pending in write_receiver {
-                let layer = pending.layer;
+                let layer = pending.layer();
                 bytes[layer] += pending.write()?;
             }
             Ok(bytes)
@@ -266,6 +270,8 @@ fn paint_region(
             zoom,
             REGION_TILE_BATCH_SIDE,
             LINE_HALO_M,
+            &frame,
+            &layer_sources,
             rasters,
             obstacle_set,
         )?;
@@ -274,16 +280,13 @@ fn paint_region(
                 .recv()
                 .context("a batch raster builder ended before its batches did")?;
             measurement.raster_prepare_seconds += ready.prepare_seconds;
-            let batch_raster = BatchDeviceRaster::upload(&frame, &ready.batch.tiles[0])?;
             paint_batch_tiles(
                 configuration,
-                &ready.batch,
-                &ready.requested_tiles,
+                &ready,
                 &frame,
                 &layers,
                 &structure_data,
                 &device_obstacles,
-                &batch_raster,
                 cuda,
                 &write_sender,
                 n_days,
@@ -300,29 +303,40 @@ fn paint_region(
     Ok(measurement)
 }
 
+/// Paint one delivered batch: every requested tile in every layer a source
+/// reaches, and the all-`NO_DATA` tile in every layer none reaches. A batch no
+/// layer reaches arrives without rasters and never touches the card.
 #[allow(clippy::too_many_arguments)]
 fn paint_batch_tiles(
     configuration: &RelevantSourceRunConfiguration,
-    batch: &TileBatch,
-    requested_tiles: &[(u32, u32)],
+    ready: &ReadyBatch,
     frame: &RegionMetricFrame,
     layers: &[EncodedLineLayer],
     structure_data: &StructureData,
     device_obstacles: &RegionDeviceObstacles,
-    batch_raster: &BatchDeviceRaster,
     cuda: &RelevantSourceCuda,
     write_sender: &SyncSender<PendingTileWrite>,
     n_days: f64,
     measurement: &mut CellMeasurement,
 ) -> Result<()> {
     let zoom = configuration.zoom;
-    for &(x, y) in requested_tiles {
-        let tile = &batch.tiles[batch_slot(batch, x, y)];
+    let rastered = match &ready.rasters {
+        Some(batch) => Some((batch, BatchDeviceRaster::upload(frame, &batch.tiles[0])?)),
+        None => None,
+    };
+    for &(x, y) in &ready.requested_tiles {
         let receiver_started = Instant::now();
-        let receivers = TileDeviceReceivers::upload(frame, tile, structure_data.set())?;
-        let interior = Arc::new(structure_data.interior_estimate(tile));
+        let painted = match &rastered {
+            Some((batch, batch_raster)) => {
+                let tile = &batch.tiles[batch_slot(batch, x, y)];
+                let receivers = TileDeviceReceivers::upload(frame, tile, structure_data.set())?;
+                let interior = Arc::new(structure_data.interior_estimate(tile));
+                Some((receivers, interior, batch_raster))
+            }
+            None => None,
+        };
         measurement.receiver_seconds += receiver_started.elapsed().as_secs_f64();
-        for encoded in layers {
+        for (encoded, reached) in layers.iter().zip(&ready.reached_layers) {
             let layer = encoded.layer;
             let output_path = output_tile_path(
                 &configuration.output_directory,
@@ -331,6 +345,18 @@ fn paint_batch_tiles(
                 x,
                 y,
             );
+            let Some((receivers, interior, batch_raster)) = painted.as_ref().filter(|_| *reached)
+            else {
+                write_sender
+                    .send(PendingTileWrite::Silent {
+                        layer,
+                        source_id: encoded.source_id,
+                        output_path,
+                    })
+                    .context("the tile writer thread is gone")?;
+                measurement.layers[layer].add_tile(TilePaintMeasurement::default());
+                continue;
+            };
             let tile_started = Instant::now();
             let (tile_measurement, energy) = partition_and_paint_tile(
                 cuda,
@@ -338,13 +364,13 @@ fn paint_batch_tiles(
                 &encoded.device_sources,
                 device_obstacles,
                 batch_raster,
-                &receivers,
+                receivers,
                 LAYER_LDEN_WEIGHTS[layer],
             )?;
             write_sender
-                .send(PendingTileWrite {
+                .send(PendingTileWrite::Painted {
                     energy,
-                    interior: Arc::clone(&interior),
+                    interior: Arc::clone(interior),
                     layer,
                     area_source: LAYER_AREA_SOURCE[layer],
                     event_days: LAYER_EVENT_ENERGY[layer].then_some(n_days),
