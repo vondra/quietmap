@@ -12,7 +12,7 @@ pub fn wipe_stale_arrows_for_scope(
     anyhow::ensure!(
         matches!(
             filename,
-            "airborne.arrow" | "cruise.arrow" | "airport_traffic.arrow"
+            "airborne.arrow" | "cruise.arrow" | "airport_traffic.arrow" | "airport_summary.arrow"
         ),
         "only a derived aircraft basename may be removed: {filename:?}"
     );

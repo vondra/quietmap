@@ -1,11 +1,4 @@
-//! `airport_summary.arrow` — global single-row-per-airport with truly
-//! unique counts UNIONed across all z9s. Produced by Stage 2C v5
-//! reduce phase from per-airport per-z9 `airport_summary_parts/`
-//! dumps. Loaded once at popup query time.
-//!
-//! `airport_summary_part.arrow` is the per-z9 intermediate carrying
-//! raw fid sets that the reduce phase UNIONs to produce the global
-//! `airport_summary.arrow`.
+//! Globally unique airport counts published into traffic-owner cells, and raw identity parts for reduction.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -30,8 +23,7 @@ use super::{read_all_batches, write_record_batches};
 /// (`airport_unique_ga_*`); the popup divides `non_ga / n_days +
 /// ga / ga_n_days`. GSE is
 /// airline-pass only (unsplit).
-#[derive(Clone)]
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AirportSummaryRow {
     pub airport_key: String,
     pub airport_unique_arr_count: u32,

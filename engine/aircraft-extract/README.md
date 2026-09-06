@@ -7,8 +7,8 @@ Observed ADS-B flights become the three popup aircraft artifacts under
 2. Sample the DEM once, classify phases, and emit bounded segment batches.
 3. Shuffle airborne/ground by z9 and discover unmapped airstrips.
 4. Write airborne flight geometry, fine z15 cruise aggregates, and ground energy.
-5. Union ground movement identities globally into
-   `PREPARED_YEAR_DIR/aircraft/airport_summary.arrow`.
+5. Union ground movement identities globally, then copy each airport's summary
+   into `airport_summary.arrow` beside every cell owning its ground traffic.
 
 Airborne and ground geometry uses exact Int32 z30 coordinates; airborne heights
 use Int16 metres. Cruise rows carry explicit Float64 centroids. The producer and

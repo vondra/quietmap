@@ -146,6 +146,7 @@ pub struct SquareData {
     pub aircraft_airborne: LazyArrow,
     pub aircraft_cruise: LazyArrow,
     pub aircraft_airport_traffic: LazyArrow,
+    pub aircraft_airport_summary: LazyArrow,
     /// OSM aeroway microsegments (`airport_lines.arrow`).
     pub airport_lines: LazyArrow,
 }
@@ -187,6 +188,7 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
         aircraft_airborne: LazyArrow::open(&dir.join("airborne.arrow"))?,
         aircraft_cruise: LazyArrow::open(&dir.join("cruise.arrow"))?,
         aircraft_airport_traffic: LazyArrow::open(&dir.join("airport_traffic.arrow"))?,
+        aircraft_airport_summary: LazyArrow::open(&dir.join("airport_summary.arrow"))?,
         airport_lines: LazyArrow::open(&dir.join("airport_lines.arrow"))?,
     })
 }

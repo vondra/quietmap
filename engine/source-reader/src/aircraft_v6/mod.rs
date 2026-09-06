@@ -6,8 +6,6 @@ mod airport_traffic_view;
 mod columns;
 mod cruise_view;
 
-use std::path::Path;
-
 use arrow::record_batch::RecordBatch;
 use noise_compute::compute::aircraft_v6::{
     airport_traffic as compute_airport_traffic, compute_aircraft_v6,
@@ -18,7 +16,7 @@ use noise_compute::types::{
 };
 
 use airborne_view::AirborneRowAccum;
-use airport_summary_view::load_airport_summary_cached;
+use airport_summary_view::AirportSummaryAccum;
 use airport_traffic_view::AirportTrafficRowAccum;
 use cruise_view::CruiseRowAccum;
 use std::collections::HashMap;
@@ -94,8 +92,7 @@ fn build_class_weights(
 }
 
 /// Add observed aircraft noise after the non-aircraft point computation.
-/// Traffic batches require the global summary sidecar; missing or incompatible
-/// data returns an actionable error instead of zero movement counts.
+/// Traffic requires complete cell-local summaries of the global movement unions.
 #[allow(clippy::too_many_arguments)]
 pub fn add_v6_aircraft_to_result(
     result: &mut NoiseResult,
@@ -105,7 +102,7 @@ pub fn add_v6_aircraft_to_result(
     cruise_batches: &[RecordBatch],
     airport_traffic_batches: &[RecordBatch],
     airport_lines_batches: &[RecordBatch],
-    airport_summary_path: Option<&Path>,
+    airport_summary: &AirportSummaryAccum,
     rasters: &dyn RasterSampler,
     // Vector obstacles feed airborne building diffraction and ground-ops
     // screening. Cruise remains structurally exempt.
@@ -126,37 +123,7 @@ pub fn add_v6_aircraft_to_result(
     let airborne_rows = AirborneRowAccum::new(airborne_batches)?;
     let cruise_rows = CruiseRowAccum::new(cruise_batches)?;
     let traffic_rows = AirportTrafficRowAccum::new(airport_traffic_batches)?;
-    // Rural clicks need no global summary decode. Traffic clicks require it:
-    // summing per-microsegment counts would count the same movement repeatedly.
-    let has_traffic_rows = !airport_traffic_batches.is_empty();
-    let airport_summary_accum = if !has_traffic_rows {
-        None
-    } else {
-        let p = airport_summary_path.ok_or_else(|| {
-            eprintln!(
-                "ERROR: airport_traffic.arrow rows present but airport_summary_path is None \
-                 — caller must wire the sidecar location whenever traffic rows are loaded."
-            );
-            "airport_summary_path = None with airport_traffic.arrow rows present \
-             — wire `<prepared>/aircraft/airport_summary.arrow`"
-                .to_string()
-        })?;
-        let loaded = load_airport_summary_cached(p)?;
-        if loaded.is_none() {
-            eprintln!(
-                "ERROR: airport_traffic.arrow rows present but airport_summary.arrow \
-                 missing at {} — Stage 2C reduce phase did not run, or scope changed \
-                 between extract and popup. Re-extract or copy the sidecar.",
-                p.display()
-            );
-            return Err(format!(
-                "airport_summary.arrow missing at {} (required when airport_traffic.arrow present) \
-                 — re-run Stage 2C reduce phase",
-                p.display()
-            ));
-        }
-        loaded
-    };
+    airport_summary.require_traffic(airport_traffic_batches)?;
 
     let airborne_views = airborne_rows.views();
     let cruise_view_slices = cruise_rows.views();
@@ -223,8 +190,6 @@ pub fn add_v6_aircraft_to_result(
         // "LKPR RWY 06/24" instead of generic "LKPR runway-roll". Rows
         // without a matching OSM ref fall through to the generic label.
         let osm_ref_lookup = build_osm_ref_lookup(airport_lines_batches);
-        // Borrow of the process-cached map — no per-query rebuild.
-        let airport_summary_lookup = airport_summary_accum.as_ref().map(|a| a.lookup());
         let traffic_contribs = compute_airport_traffic::run(
             receiver,
             &traffic_views,
@@ -233,7 +198,7 @@ pub fn add_v6_aircraft_to_result(
             rasters,
             obstacles,
             &osm_ref_lookup,
-            airport_summary_lookup,
+            Some(airport_summary.lookup()),
             Some(traces),
         );
         if !traffic_contribs.is_empty() {
@@ -452,6 +417,8 @@ pub(super) fn assert_cruise_contract(label: &str, batches: &[RecordBatch]) -> Re
     )
 }
 
+#[cfg(test)]
+mod airport_summary_tests;
 #[cfg(test)]
 mod producer_roundtrip_tests;
 #[cfg(test)]

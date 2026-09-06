@@ -340,24 +340,12 @@ struct AirportAcc {
     sum_energy_25m: f64,
 }
 
-/// HashMap keyed by `airport_key` → global UNION counts across all
-/// R4s. Source-reader builds this from `airport_summary.arrow` ONCE per
-/// process (it lives inside the mtime-keyed `AirportSummaryAccum` cache)
-/// and hands a borrow to [`run`]. **Missing entry** (or missing summary
-/// file) → popup MUST refuse to compute airport arr/dep counts (returns
-/// `None`); there is no fallback to per-row sums.
-///
-/// Owned `String` keys rather than `&str` borrowed from a parallel
-/// `Vec<String>`: the borrowed form forced the map to be rebuilt on every
-/// query because it could not outlive a single call, and the global
-/// sidecar carries ~50 k airports — measured at tens of ms per click, for
-/// a table whose contents never change between clicks. Lookups still take
-/// `&str` (`String: Borrow<str>`), so call sites are unchanged.
+/// Global movement unions for airports in the loaded cells; replicated rows are never summed.
 pub type AirportSummaryLookup = std::collections::HashMap<String, AirportSummaryEntry>;
 
 /// One row of `airport_summary.arrow`. Mirrors the popup's read-side
 /// view but owned for the duration of the popup query.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AirportSummaryEntry {
     /// NON-GA-class window counts (airline 12-day). v9 split.
     pub arr_count: u32,

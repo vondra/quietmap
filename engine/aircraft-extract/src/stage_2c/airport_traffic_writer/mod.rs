@@ -102,6 +102,11 @@ pub fn run_airport_traffic(
 ) -> Result<usize> {
     let plan = routing::ground_work_plan(segments_by_square_dir, prepared_year_dir, scope)?;
     crate::wipe::wipe_stale_arrows_for_scope(prepared_year_dir, "airport_traffic.arrow", scope)?;
+    crate::wipe::wipe_stale_arrows_for_scope(
+        prepared_year_dir,
+        super::AIRPORT_SUMMARY_FILENAME,
+        scope,
+    )?;
     let parts_root = prepared_year_dir.join("airport_summary_parts");
     if parts_root.exists() {
         std::fs::remove_dir_all(&parts_root)?;

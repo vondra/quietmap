@@ -1,4 +1,4 @@
-//! Union raw per-z9 movement sets into one global airport summary.
+//! Union movement identities globally and publish each airport into every traffic-owning z9 cell.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -9,19 +9,16 @@ use noise_compute::emission::gse::NUM_GSE_CLASSES;
 use crate::arrow_io::{read_airport_summary_part, write_airport_summary, AirportSummaryRow};
 use crate::progress::{finished, started, Milestone};
 
-/// Read every canonical z9/x/y/part.arrow and union identities per airport.
-pub fn run_airport_summary_reduce(parts_root: &Path, output_path: &Path) -> Result<usize> {
-    if !parts_root.exists() {
-        eprintln!(
-            "{} [stage2c/reduce] no airport_summary_parts/ at {} — writing empty summary",
-            crate::progress::ts(),
-            parts_root.display()
-        );
-        write_airport_summary(output_path, &[])?;
-        return Ok(0);
-    }
+/// Counts remain global unions; copying them into owner cells never sums local counts.
+pub fn run_airport_summary_reduce(parts_root: &Path, prepared_year: &Path) -> Result<usize> {
+    anyhow::ensure!(
+        parts_root.is_dir(),
+        "airport summary parts directory missing: {}",
+        parts_root.display()
+    );
 
     let mut by_airport: HashMap<String, GlobalAggregate> = HashMap::new();
+    let mut airport_owners = Vec::new();
 
     let part_counter = Milestone::new("stage2c/reduce", "z9 parts", 50);
     let mut n_parts = 0usize;
@@ -32,10 +29,14 @@ pub fn run_airport_summary_reduce(parts_root: &Path, output_path: &Path) -> Resu
     );
 
     // Walk every z9 subdir and absorb its part.arrow.
-    for (_, path) in square_entries {
+    for (owner, path) in square_entries {
         let part_path = path.join("part.arrow");
         let rows = read_airport_summary_part(&part_path)
             .with_context(|| format!("read airport_summary_parts at {}", part_path.display()))?;
+        let mut keys: Vec<_> = rows.iter().map(|row| row.airport_key.clone()).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        airport_owners.push((owner, keys));
         for row in rows {
             let entry = by_airport.entry(row.airport_key.clone()).or_default();
             for fid in row.arr_fids {
@@ -94,15 +95,27 @@ pub fn run_airport_summary_reduce(parts_root: &Path, output_path: &Path) -> Resu
     // Deterministic on-disk order.
     rows.sort_by(|a, b| a.airport_key.cmp(&b.airport_key));
     let n = rows.len();
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent)?;
+    let by_key: HashMap<_, _> = rows
+        .iter()
+        .map(|row| (row.airport_key.as_str(), row))
+        .collect();
+    for (owner, keys) in airport_owners {
+        let summaries: Vec<_> = keys
+            .iter()
+            .map(|key| (*by_key[key.as_str()]).clone())
+            .collect();
+        write_airport_summary(
+            &prepared_year
+                .join(crate::spatial::square_path(owner))
+                .join(super::AIRPORT_SUMMARY_FILENAME),
+            &summaries,
+        )?;
     }
-    write_airport_summary(output_path, &rows)?;
     finished(
         "stage2c/reduce",
         &format!(
             "{n} airports from {n_parts} z9 parts → {}",
-            output_path.display()
+            prepared_year.display()
         ),
     );
     Ok(n)
@@ -168,10 +181,14 @@ mod tests {
         )
         .unwrap();
 
-        let out = dir.path().join("airport_summary.arrow");
+        let out = dir.path().join("prepared");
         let n = run_airport_summary_reduce(&parts, &out).unwrap();
         assert_eq!(n, 1);
-        let rows = read_airport_summary(&out).unwrap();
+        let rows = read_airport_summary(&out.join("z9/276/173/airport_summary.arrow")).unwrap();
+        assert_eq!(
+            rows,
+            read_airport_summary(&out.join("z9/277/173/airport_summary.arrow")).unwrap()
+        );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].airport_key, "LKPR");
         // Arr union: {10, 11, 12} ∪ {12, 13} = 4 fids (12 dedupes).
@@ -192,14 +209,15 @@ mod tests {
     }
 
     #[test]
-    fn reduce_missing_parts_dir_writes_empty_summary() {
+    fn reduce_distinguishes_missing_parts_from_a_complete_empty_run() {
         let dir = tempdir().unwrap();
         let parts = dir.path().join("missing");
-        let out = dir.path().join("airport_summary.arrow");
+        let out = dir.path().join("prepared");
+        assert!(run_airport_summary_reduce(&parts, &out).is_err());
+        std::fs::create_dir_all(&parts).unwrap();
         let n = run_airport_summary_reduce(&parts, &out).unwrap();
         assert_eq!(n, 0);
-        let rows = read_airport_summary(&out).unwrap();
-        assert!(rows.is_empty());
+        assert!(!out.exists());
     }
 
     #[test]
@@ -234,10 +252,10 @@ mod tests {
             ],
         )
         .unwrap();
-        let out = dir.path().join("airport_summary.arrow");
+        let out = dir.path().join("prepared");
         let n = run_airport_summary_reduce(&parts, &out).unwrap();
         assert_eq!(n, 2);
-        let rows = read_airport_summary(&out).unwrap();
+        let rows = read_airport_summary(&out.join("z9/276/173/airport_summary.arrow")).unwrap();
         // Deterministic sort: LKKB < LKPR.
         assert_eq!(rows[0].airport_key, "LKKB");
         assert_eq!(rows[0].airport_unique_arr_count, 1);

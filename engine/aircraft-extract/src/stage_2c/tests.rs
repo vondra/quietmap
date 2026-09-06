@@ -87,11 +87,7 @@ fn run_stage_2c_produces_airport_summary_arrow() {
     .unwrap();
     assert!(n > 0);
 
-    // airport_summary.arrow must exist at
-    // <YEAR>/aircraft/airport_summary.arrow.
-    let summary_path = prepared_year_dir
-        .join("aircraft")
-        .join(AIRPORT_SUMMARY_FILENAME);
+    let summary_path = square_prepared_year_dir.join(AIRPORT_SUMMARY_FILENAME);
     assert!(
         summary_path.exists(),
         "airport_summary.arrow must exist at {}",
@@ -107,6 +103,7 @@ fn run_stage_2c_produces_airport_summary_arrow() {
     assert_eq!(lktest.airport_unique_dep_count, 0);
     // Runway ops_kind = index 0.
     assert_eq!(lktest.airport_unique_ops_count_per_kind[0], 1);
+    assert!(!prepared_year_dir.join("aircraft").exists());
 
     // airport_summary_parts scratch dir must be cleaned up.
     let parts = prepared_year_dir.join("airport_summary_parts");
@@ -135,6 +132,8 @@ fn run_stage_2c_wipes_in_scope_stale_airport_traffic() {
     std::fs::create_dir_all(&square_dir).unwrap();
     let stale = square_dir.join("airport_traffic.arrow");
     std::fs::write(&stale, b"stale-prev-run").unwrap();
+    let stale_summary = square_dir.join(AIRPORT_SUMMARY_FILENAME);
+    std::fs::write(&stale_summary, b"stale-summary").unwrap();
     std::fs::create_dir_all(&by_square_dir).unwrap();
     // Praha scope.
     let scope = ScopeBbox::parse("48.65,12.00,51.55,16.90").unwrap();
@@ -144,6 +143,7 @@ fn run_stage_2c_wipes_in_scope_stale_airport_traffic() {
         !stale.exists(),
         "stale airport_traffic.arrow must be wiped from in-scope z9"
     );
+    assert!(!stale_summary.exists());
 }
 
 /// Regression for the wipe-before-error fragility: when
@@ -196,9 +196,7 @@ fn scoped_run_rejects_existing_global_traffic_before_replacing_summary() {
     std::fs::write(&stale, b"stale-prev-run").unwrap();
     std::fs::create_dir_all(&by_square_dir).unwrap();
     let praha = ScopeBbox::parse("48.65,12.00,51.55,16.90").unwrap();
-    let summary = prepared_year_dir
-        .join("aircraft")
-        .join(AIRPORT_SUMMARY_FILENAME);
+    let summary = square_dir.join(AIRPORT_SUMMARY_FILENAME);
     std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
     std::fs::write(&summary, b"prior-global-summary").unwrap();
     let error =

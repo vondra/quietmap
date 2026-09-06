@@ -3,7 +3,7 @@
 //! Rev 2: drops the per-row `flight_ids: List<UInt64>` payload. Each
 //! row now carries scalar `unique_*_count` counters plus row-replicated
 //! `microseg_unique_*` UNIONs. Airport-level UNION across z9s lives
-//! in the global `airport_summary.arrow` sidecar.
+//! in the same cell's `airport_summary.arrow`, with identical counts in other owner cells.
 
 use std::path::Path;
 use std::sync::Arc;

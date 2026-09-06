@@ -467,13 +467,6 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         })
         .collect();
 
-    // Resolve airport_summary.arrow path: sibling of the squares tree under
-    // `aircraft/` (Stage 2C v5 reduce output). Missing file means
-    // the popup returns zero airport-level counts.
-    let airport_summary_pathbuf = std::path::Path::new(&store.prepared_dir)
-        .join("aircraft")
-        .join("airport_summary.arrow");
-
     let t_load = t_start.elapsed();
     let sources = collect_from_square_data(&square_refs, facade_lat, facade_lng)
         .map_err(|error| Error::new(Status::GenericFailure, error))?;
@@ -558,7 +551,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         &sources.aircraft_cruise_batches,
         &sources.aircraft_airport_traffic_batches,
         &sources.airport_lines_batches,
-        Some(airport_summary_pathbuf.as_path()),
+        &sources.airport_summary,
         rasters,
         &obstacle_set,
         sources.n_days,

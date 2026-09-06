@@ -171,9 +171,8 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
         }],
     )
     .unwrap();
-    let accum = airport_summary_view::load_airport_summary(&summary)
-        .unwrap()
-        .unwrap();
+    let (_, batches) = read_record_batches(&summary).unwrap();
+    let accum = AirportSummaryAccum::new(&batches).unwrap();
     let row = &accum.lookup()["LKTEST"];
     assert_eq!(
         (

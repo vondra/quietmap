@@ -90,6 +90,9 @@ fn partitioned_run(lat: f64, lon: f64, split: bool) -> Vec<AirportTrafficRow> {
         if !path.exists() {
             continue;
         }
+        let summary = read_airport_summary(&dir.join(AIRPORT_SUMMARY_FILENAME)).unwrap();
+        assert_eq!(summary.len(), 1);
+        assert_eq!(summary[0].airport_unique_ops_count_per_kind[1], 1);
         for row in read_airport_traffic(&path).unwrap() {
             if split {
                 assert_eq!(owner, if row.osm_id == 1 { left } else { right });
@@ -104,10 +107,7 @@ fn partitioned_run(lat: f64, lon: f64, split: bool) -> Vec<AirportTrafficRow> {
         assert_eq!(row.microseg_unique_count, 1);
         assert!(row.band_energy_lin.iter().any(|energy| *energy > 0.0));
     }
-    let summary =
-        read_airport_summary(&prepared.join("aircraft").join(AIRPORT_SUMMARY_FILENAME)).unwrap();
-    assert_eq!(summary.len(), 1);
-    assert_eq!(summary[0].airport_unique_ops_count_per_kind[1], 1);
+    assert!(!prepared.join("aircraft").exists());
     rows
 }
 

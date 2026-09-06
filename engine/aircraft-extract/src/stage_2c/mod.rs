@@ -1,4 +1,4 @@
-//! Ground operations: per-owner traffic and one global airport movement summary.
+//! Ground operations: traffic and globally deduplicated airport summaries in their owner cells.
 use crate::scope::ScopeBbox;
 use anyhow::Result;
 use noise_compute::types::AirportArea;
@@ -30,10 +30,7 @@ pub fn run_stage_2c(
         scope,
     )?;
     let parts = prepared_year_dir.join("airport_summary_parts");
-    let summary = prepared_year_dir
-        .join("aircraft")
-        .join(AIRPORT_SUMMARY_FILENAME);
-    airport_summary_reduce::run_airport_summary_reduce(&parts, &summary)?;
+    airport_summary_reduce::run_airport_summary_reduce(&parts, prepared_year_dir)?;
     std::fs::remove_dir_all(&parts)?;
     Ok(count)
 }

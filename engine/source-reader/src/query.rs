@@ -45,6 +45,7 @@ pub struct PointQueryData {
     pub aircraft_cruise_batches: Vec<arrow::record_batch::RecordBatch>,
     /// `airport_traffic.arrow` per-microsegment sparse counters.
     pub aircraft_airport_traffic_batches: Vec<arrow::record_batch::RecordBatch>,
+    pub airport_summary: crate::aircraft_v6::airport_summary_view::AirportSummaryAccum,
     /// `airport_lines.arrow` OSM ids and refs used to label runway and
     /// taxiway segment traces.
     pub airport_lines_batches: Vec<arrow::record_batch::RecordBatch>,
@@ -130,6 +131,8 @@ pub fn collect_from_square_data(
     let mut all_airborne_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
     let mut all_cruise_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
     let mut all_airport_traffic_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
+    let mut airport_summary =
+        crate::aircraft_v6::airport_summary_view::AirportSummaryAccum::default();
     let receiver_square = grid::square_of(lat, lng);
     let mut n_days_from_metadata: Option<u16> = None;
     // Prune aircraft batches per square ONCE; the collection below consumes the
@@ -208,6 +211,10 @@ pub fn collect_from_square_data(
     for ((_, data), (airborne_batches, cruise_batches, airport_traffic_batches)) in
         square_data.iter().zip(per_square_aircraft)
     {
+        if !airport_traffic_batches.is_empty() {
+            airport_summary
+                .merge_square(&data.aircraft_airport_summary, &airport_traffic_batches)?;
+        }
         // The batch gate must cover the configured railway ceiling; each row's
         // exact reach is applied downstream after its emission is known.
         let railway_batches = data.railways.batches_within(
@@ -531,6 +538,7 @@ pub fn collect_from_square_data(
         aircraft_airborne_batches: all_airborne_batches,
         aircraft_cruise_batches: all_cruise_batches,
         aircraft_airport_traffic_batches: all_airport_traffic_batches,
+        airport_summary,
         airport_lines_batches: all_airport_lines_batches,
         n_days,
     })
