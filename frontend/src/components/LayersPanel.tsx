@@ -32,10 +32,14 @@ export default function LayersPanel({ open, onClose, ...body }: LayersPanelProps
 
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!dragRef.current.isDragging) return
-    e.preventDefault()
-    e.stopPropagation()
     const deltaY = e.changedTouches[0].clientY - dragRef.current.startY
     dragRef.current.isDragging = false
+    // Only a real drag cancels the synthesized click — a tap on the handle
+    // must still reach onClick (audit 2026-09-06: it never did on touch).
+    if (Math.abs(deltaY) >= 10) {
+      e.preventDefault()
+      e.stopPropagation()
+    }
     if (deltaY > 80) {
       handleDismiss()
     } else {
@@ -52,9 +56,14 @@ export default function LayersPanel({ open, onClose, ...body }: LayersPanelProps
       : undefined
   const transition = dragRef.current.isDragging ? 'none' : 'transform 0.3s ease-out'
 
+  // Only the body scrolls, in an inner div — never the fixed + transformed
+  // sheet itself: once that sheet's content overflowed (stay filters open),
+  // Chrome stopped painting the WebGL map behind it — a white map until the
+  // layer was switched off (audit 2026-09-06, reproduced on production). The
+  // handle stays pinned above the scroller, like ControlCard's header.
   return (
     <div
-      className="fixed z-[1002] bg-background shadow-xl border border-border bottom-0 left-0 right-0 max-h-[60vh] rounded-t-xl px-4 pb-3 overflow-y-auto"
+      className="fixed z-[1002] bg-background shadow-xl border border-border bottom-0 left-0 right-0 rounded-t-xl"
       style={{ transform, transition }}
     >
       <div
@@ -70,7 +79,9 @@ export default function LayersPanel({ open, onClose, ...body }: LayersPanelProps
         <div className="w-10 h-1 bg-muted-foreground/30 rounded-full" />
       </div>
 
-      <LayerControlsBody {...body} dividerSpacing="comfortable" />
+      <div className="max-h-[60vh] overflow-y-auto px-4 pb-3">
+        <LayerControlsBody {...body} dividerSpacing="comfortable" />
+      </div>
     </div>
   )
 }

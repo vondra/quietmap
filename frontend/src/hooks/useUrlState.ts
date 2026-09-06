@@ -58,7 +58,7 @@ function parseQuietThreshold(raw: string | null): number {
   return Number.isFinite(n) ? Math.min(QUIET_THRESHOLD_MAX, Math.max(QUIET_THRESHOLD_MIN, n)) : QUIET_THRESHOLD_DEFAULT
 }
 
-function parseHash(): UrlState {
+export function parseHash(): UrlState {
   const hash = window.location.hash.slice(1)
   // First visit (no shared link) — and the missing-coordinate fallback for a
   // partial hash like `#val=1`: approximate the visitor's country from

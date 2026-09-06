@@ -14,7 +14,7 @@ import HoverTooltip from './HoverTooltip'
 import CellInspectorLayer from './CellInspectorLayer'
 import MapStateSync from './MapStateSync'
 import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
-import { QUIET_THRESHOLD_DEFAULT } from '../hooks/useUrlState'
+import { QUIET_THRESHOLD_DEFAULT, type UrlState } from '../hooks/useUrlState'
 import type { SelectedLocation } from './FlyToLocation'
 import type { NoiseComputeData } from '../types/noise'
 import 'maplibre-gl/dist/maplibre-gl.css'
@@ -25,6 +25,7 @@ interface MapViewProps {
   initialZoom?: number
   basemap?: BasemapId
   onViewChange?: (lat: number, lng: number, zoom: number) => void
+  onHashState?: (next: UrlState) => void
   onDetailData?: (data: NoiseComputeData | null) => void
   onDetailPositionChange?: (pos: { lat: number; lng: number } | null) => void
   onDetailError?: (message: string | null) => void
@@ -53,7 +54,7 @@ interface MapViewProps {
 
 export default function MapView({
   selectedLocation, initialCenter, initialZoom,
-  basemap, onViewChange, onDetailData, onDetailPositionChange, onDetailError, detailPosition,
+  basemap, onViewChange, onHashState, onDetailData, onDetailPositionChange, onDetailError, detailPosition,
   quietClustersEnabled, quietThreshold, highlightGeometry, isochronGeojson, realEstateFilters, onPropertySelect, stayFilters, onStaySelect, rasterOverlays,
   validationEnabled, validationPayload, onValidationSelect,
   registerGeolocateTrigger, onGeolocateActiveChange, onGeolocateReadyChange,
@@ -181,7 +182,7 @@ export default function MapView({
         onDetailPositionChange={onDetailPositionChange}
         onDetailError={onDetailError}
       />
-      {onViewChange && <MapStateSync onViewChange={onViewChange} />}
+      {onViewChange && <MapStateSync onViewChange={onViewChange} onHashState={onHashState} />}
     </Map>
   )
 }

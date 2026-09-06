@@ -4,25 +4,25 @@ import { EXPENSIVE_ROUTE_RATE_LIMIT } from '../rate-limit.js'
 // Live proxy to Stay22's Direct Travel API (bookable hotels + vacation
 // rentals with affiliate links). Their terms forbid cold-storing listing
 // data, so results live only in a short in-memory cache (55 min, their
-// recommended TTL). The keyless demo tier allows 5 requests/min — viewport
-// queries are snapped to a coarse grid so panning reuses cache entries, and
-// a global token bucket throttles upstream calls; when the budget is spent
-// a bucket serves its stale copy rather than erroring.
+// recommended TTL). Viewport queries are snapped to a coarse grid so panning
+// reuses cache entries, and a global sliding window throttles upstream calls;
+// when the budget is spent a bucket serves its stale copy rather than erroring.
 const STAY22_URL = 'https://api.stay22.com/v2/accommodations'
-// Affiliate id + API key come from the environment; without a key the route
-// degrades to the keyless demo tier (aid=stay22, 5 req/min, no payouts).
+// Stay22 retired its keyless tier (401 INVALID_API_KEY since 2026-09-06), so
+// STAY22_API_KEY is required; aid stays the platform id until the owner's own
+// affiliate id exists. Read per request so tests and late-configured slots
+// see the environment they run in.
 const AID = process.env.STAY22_AID || 'stay22'
-const API_KEY = process.env.STAY22_API_KEY || null
+const apiKey = () => process.env.STAY22_API_KEY
 const CACHE_TTL_MS = 55 * 60 * 1000
 // Expired entries may still be served when the upstream budget is spent or
 // the upstream is down — but a quote older than this is worse than an empty
 // map (prices drift, listings close).
 const STALE_MAX_MS = 6 * 60 * 60 * 1000
 const CACHE_MAX = 300
-// Authenticated tier publishes no hard number — 30/min is conservative and
-// an order below anything a map UI needs; keyless demo is 5/min, keep one
-// in reserve. Fixed sliding window, no burst.
-const UPSTREAM_PER_MIN = API_KEY ? 30 : 4
+// Stay22 publishes no hard number — 30/min is conservative and an order
+// below anything a map UI needs. Fixed sliding window, no burst.
+const UPSTREAM_PER_MIN = 30
 // Server-side snap normalizes stray clients; honest clients pre-snap to a
 // zoom-tiered grid (0.01/0.05/0.5 — see StayLayer). All tiers are multiples
 // of this finest step, so re-snapping their values is an identity.
@@ -219,10 +219,13 @@ export async function stayRoutes(app: FastifyInstance): Promise<void> {
       ? { ...hit.payload, meta: { ...hit.payload.meta, stale: true } }
       : null
 
+    const API_KEY = apiKey()
+    if (!API_KEY) return reply.code(502).send({ error: 'stay not configured' })
+
     let pending = inflight.get(key)
     if (!pending) {
       if (!takeToken()) {
-        // Out of demo budget: a stale copy beats an error, an empty map beats a 500.
+        // Out of upstream budget: a stale copy beats an error, an empty map beats a 500.
         if (stale) return sendOk(stale)
         return reply.code(429).header('Retry-After', '15').send({ error: 'rate limited' })
       }
@@ -272,7 +275,7 @@ export async function stayRoutes(app: FastifyInstance): Promise<void> {
             p.set('page', String(page))
             const res = await fetch(`${STAY22_URL}?${p}`, {
               signal: AbortSignal.timeout(12_000),
-              headers: API_KEY ? { 'X-API-KEY': API_KEY } : undefined,
+              headers: { 'X-API-KEY': API_KEY },
             })
             if (!res.ok) throw new Error(`stay22 ${res.status}`)
             const data: any = await res.json()

@@ -3,6 +3,9 @@ import test, { mock } from 'node:test'
 import Fastify from 'fastify'
 import { stayRoutes, snap, pickPrecision, slim, resetUpstreamWindowForTests } from './stay.js'
 
+// The route refuses to call upstream without a key (the keyless tier is gone).
+process.env.STAY22_API_KEY = 'test-key'
+
 test('snap keeps grid-boundary values in place', () => {
   // Regression: floor(50.05/0.05) is 1000.999… without the epsilon, snapping
   // a whole cell too far and doubling the requested box (grid is 0.01 now,
@@ -209,4 +212,21 @@ test('GET /api/stay serves the second hit from cache', async (t) => {
   const second = await app.inject(`/api/stay?${qs}`)
   assert.equal(second.statusCode, 200)
   assert.equal(fetchMock.mock.callCount(), 1)
+})
+
+test('GET /api/stay answers 502 without STAY22_API_KEY and never calls upstream', async (t) => {
+  const saved = process.env.STAY22_API_KEY
+  delete process.env.STAY22_API_KEY
+  t.after(() => { process.env.STAY22_API_KEY = saved })
+  const fetchMock = mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 200 }))
+  t.after(() => fetchMock.mock.restore())
+
+  const app = Fastify()
+  await app.register(stayRoutes)
+  t.after(async () => app.close())
+
+  // A bucket no other test has cached — a fresh hit is served before the key guard.
+  const response = await app.inject('/api/stay?swlat=49.30&swlng=16.60&nelat=49.32&nelng=16.62')
+  assert.equal(response.statusCode, 502)
+  assert.equal(fetchMock.mock.callCount(), 0)
 })

@@ -12,7 +12,7 @@ import PropertyCard from './components/PropertyCard'
 import StayCard from './components/StayCard'
 import FloatingCard from './components/FloatingCard'
 import ValidationCard, { ValidationStatusCard } from './components/ValidationCard'
-import { useUrlState, EMPTY_RASTER_OVERLAYS, QUIET_THRESHOLD_DEFAULT } from './hooks/useUrlState'
+import { useUrlState, EMPTY_RASTER_OVERLAYS, QUIET_THRESHOLD_DEFAULT, type UrlState } from './hooks/useUrlState'
 import type { SelectedLocation } from './components/FlyToLocation'
 import type { RealEstateFilters, Property } from './components/RealEstateLayer'
 import type { StayFilters, Stay } from './components/StayLayer'
@@ -21,6 +21,16 @@ function localStayDate(offsetDays: number): string {
   const d = new Date()
   d.setDate(d.getDate() + offsetDays)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** The `stay` URL token → filters over `base` (null = layer off; both families on unless narrowed). */
+function stayFiltersForToken(token: UrlState['stay'], base: StayFilters): StayFilters {
+  return {
+    ...base,
+    enabled: token != null,
+    hotels: token == null || token === 'all' || token === 'hotel',
+    rentals: token == null || token === 'all' || token === 'rental',
+  }
 }
 
 /** StayFilters → the `stay` URL token (null = layer off, omitted from the hash). */
@@ -106,14 +116,11 @@ function MapApp() {
     enabled: false, propertyType: 'all', listingType: 'all', maxNoise: 60,
   })
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null)
-  // Bookable-stays overlay (Stay22 pilot): no panel UI yet — enabled only via
-  // Bookable-stays overlay: the panel toggle drives it; a shared link's
+  // Bookable-stays overlay (Stay22): the panel toggle drives it; a shared link's
   // `stay=1|hotel|rental|none` URL param preselects it. Both families are on
   // by default so enabling the layer shows everything.
-  const [stayFilters, setStayFilters] = useState<StayFilters>(() => ({
-    enabled: initial.stay != null,
-    hotels: initial.stay == null || initial.stay === 'all' || initial.stay === 'hotel',
-    rentals: initial.stay == null || initial.stay === 'all' || initial.stay === 'rental',
+  const [stayFilters, setStayFilters] = useState<StayFilters>(() => stayFiltersForToken(initial.stay, {
+    enabled: false, hotels: true, rentals: true,
     // Prefilled stay window (owner 2026-07-29, Booking/Google convention:
     // an empty date field reads as broken): today + 2 nights, local calendar.
     checkin: localStayDate(0),
@@ -140,13 +147,18 @@ function MapApp() {
   // Validation-anchor overlay (owner/QA tool): enabled only via `val=1` in
   // the URL; a clicked anchor renders its card in the right column while the
   // ordinary noise popup opens for the same spot underneath.
-  const validationEnabled = initial.validation
+  const [validationEnabled, setValidationEnabled] = useState(initial.validation)
+  const validationRef = useRef(validationEnabled)
   const [validationSelection, setValidationSelection] = useState<ValidationSelection | null>(null)
   const validationPayload = useValidationPayload(validationEnabled)
   const rasterOverlaysRef = useRef(rasterOverlays)
   rasterOverlaysRef.current = rasterOverlays
 
   const mapViewRef = useRef({ lat: initial.lat, lng: initial.lng, zoom: initial.zoom })
+  // Mirrors `detailPosition` for syncUrl: a pan must keep `d=` in the shared
+  // URL while the card is open (audit 2026-09-06: the first moveend dropped it).
+  const detailPositionRef = useRef(detailPosition)
+  detailPositionRef.current = detailPosition
   const quietClustersRef = useRef(quietClustersEnabled)
   const quietThresholdRef = useRef(quietThreshold)
   const basemapRef = useRef(basemap)
@@ -197,20 +209,20 @@ function MapApp() {
     // Never serialize the pre-resolution language fallback (see
     // initialViewPendingRef above) — first visits carry no hash anyway.
     if (initialViewPendingRef.current) return
-    const v = mapViewRef.current
+    // Refs are the post-event truth; an override carries a value the state
+    // has not committed yet (an explicit null included).
     updateUrl({
-      lat: overrides?.lat ?? v.lat,
-      lng: overrides?.lng ?? v.lng,
-      zoom: overrides?.zoom ?? v.zoom,
-      quietClusters: overrides?.quietClusters ?? quietClustersRef.current,
-      quietThreshold: overrides?.quietThreshold ?? quietThresholdRef.current,
-      detailPosition: overrides?.detailPosition ?? null,
-      basemap: overrides?.basemap ?? basemapRef.current,
-      rasterOverlays: overrides?.rasterOverlays ?? rasterOverlaysRef.current,
-      validation: validationEnabled,
-      stay: overrides?.stay !== undefined ? overrides.stay : stayParam(stayFiltersRef.current),
+      ...mapViewRef.current,
+      quietClusters: quietClustersRef.current,
+      quietThreshold: quietThresholdRef.current,
+      detailPosition: detailPositionRef.current,
+      basemap: basemapRef.current,
+      rasterOverlays: rasterOverlaysRef.current,
+      validation: validationRef.current,
+      stay: stayParam(stayFiltersRef.current),
+      ...overrides,
     })
-  }, [updateUrl, validationEnabled])
+  }, [updateUrl])
 
   const handleRasterOverlaysChange = useCallback((next: Record<string, boolean>) => {
     setRasterOverlays(next)
@@ -328,6 +340,27 @@ function MapApp() {
     syncUrl({ basemap: id })
   }, [syncUrl])
 
+  // A hash change in the open tab (pasted link, history step): MapStateSync
+  // moves the map and hands over the parsed hash; every other token is
+  // applied here through the same handlers a click would use. The detail is
+  // re-fetched only when its point changed (a ~1.5 s compute).
+  const handleHashState = useCallback((next: UrlState) => {
+    handleQuietClustersChange(next.quietClusters)
+    handleQuietThresholdChange(next.quietThreshold)
+    handleRasterOverlaysChange(next.rasterOverlays)
+    handleBasemapChange(next.basemap)
+    validationRef.current = next.validation
+    setValidationEnabled(next.validation)
+    // Only a changed stay token: the change handler also closes an open pin card.
+    if (next.stay !== stayParam(stayFiltersRef.current)) handleStayChange(stayFiltersForToken(next.stay, stayFiltersRef.current))
+    const cur = detailPositionRef.current
+    const same = cur === next.detailPosition
+      || (cur != null && next.detailPosition != null && cur.lat.toFixed(4) === next.detailPosition.lat.toFixed(4) && cur.lng.toFixed(4) === next.detailPosition.lng.toFixed(4))
+    if (same) return
+    if (next.detailPosition) handleDetailPositionChange(next.detailPosition)
+    else handleNoiseClose()
+  }, [handleQuietClustersChange, handleQuietThresholdChange, handleRasterOverlaysChange, handleBasemapChange, handleStayChange, handleDetailPositionChange, handleNoiseClose])
+
   return (
     <Tooltip.Provider>
     <div className="relative h-screen w-screen overflow-hidden">
@@ -348,23 +381,24 @@ function MapApp() {
       {/* UI overlays */}
       <div className="absolute inset-0 z-[1002] pointer-events-none">
         {/* bottom-14 + clip: the card column must never run under the About
-            footer chip (owner report 2026-07-10); DetailCard scrolls its own
-            content, anything beyond the cap is clipped, not overlaid. */}
-        <div className="hidden md:flex absolute top-3 right-3 bottom-14 flex-col gap-2 w-[320px] overflow-hidden">
-          <div className="pointer-events-auto">
-            <ControlCard
-              quietClustersEnabled={quietClustersEnabled}
-              onQuietClustersChange={handleQuietClustersChange}
-              quietThreshold={quietThreshold}
-              onQuietThresholdChange={handleQuietThresholdChange}
-              realEstateFilters={realEstateFilters}
-              onRealEstateChange={setRealEstateFilters}
-              stayFilters={stayFilters}
-              onStayChange={handleStayChange}
-              rasterOverlays={rasterOverlays}
-              onRasterOverlayChange={handleRasterOverlaysChange}
-            />
-          </div>
+            footer chip (owner report 2026-07-10). The layers card and the
+            detail card are shrinkable flex items (min-h-0) that scroll their
+            own content, so on a short viewport (phone landscape, tablet with
+            the stay filters open — audit 2026-09-06) both stay reachable
+            instead of the detail card being clipped away. */}
+        <div className="hidden md:flex absolute top-3 right-(--map-gutter) bottom-14 flex-col gap-2 w-(--map-card-column) overflow-hidden">
+          <ControlCard
+            quietClustersEnabled={quietClustersEnabled}
+            onQuietClustersChange={handleQuietClustersChange}
+            quietThreshold={quietThreshold}
+            onQuietThresholdChange={handleQuietThresholdChange}
+            realEstateFilters={realEstateFilters}
+            onRealEstateChange={setRealEstateFilters}
+            stayFilters={stayFilters}
+            onStayChange={handleStayChange}
+            rasterOverlays={rasterOverlays}
+            onRasterOverlayChange={handleRasterOverlaysChange}
+          />
           {validationEnabled && (
             <div className="pointer-events-auto">
               <ValidationStatusCard payload={validationPayload} />
@@ -378,15 +412,13 @@ function MapApp() {
               />
             </div>
           )}
-          <div className="pointer-events-auto">
-            <DetailCard
-              noiseData={noiseDetailData}
-              position={detailPosition}
-              error={noiseDetailError}
-              onNoiseClose={handleNoiseClose}
-              onHighlight={setHighlightGeometry}
-            />
-          </div>
+          <DetailCard
+            noiseData={noiseDetailData}
+            position={detailPosition}
+            error={noiseDetailError}
+            onNoiseClose={handleNoiseClose}
+            onHighlight={setHighlightGeometry}
+          />
           {selectedProperty && (
             <div className="pointer-events-auto">
               <FloatingCard>
@@ -432,6 +464,7 @@ function MapApp() {
         onViewChange={handleViewChange}
         onDetailData={handleDetailData}
         onDetailPositionChange={handleDetailPositionChange}
+        onHashState={handleHashState}
         onDetailError={handleDetailError}
         detailPosition={detailPosition}
         quietClustersEnabled={quietClustersEnabled}

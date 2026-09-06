@@ -52,10 +52,14 @@ export default function MobileDetailSheet({ data, position, error, onClose, onHi
 
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!dragRef.current.isDragging) return
-    e.preventDefault()
-    e.stopPropagation()
     const deltaY = e.changedTouches[0].clientY - dragRef.current.startY
     dragRef.current.isDragging = false
+    // Only a real drag cancels the synthesized click — the expand/collapse
+    // tap on the handle must reach onClick (audit 2026-09-06).
+    if (Math.abs(deltaY) >= 10) {
+      e.preventDefault()
+      e.stopPropagation()
+    }
     if (deltaY > 80) {
       setDismissing(true)
       setDragOffset(0)

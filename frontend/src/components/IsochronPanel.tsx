@@ -43,11 +43,7 @@ export default function IsochronPanel({ location, onGo, active }: IsochronPanelP
   if (!active) return null
 
   return (
-    <div className="
-      fixed z-[1003] bg-background rounded-lg shadow-xl border border-border px-3 py-2.5
-      left-[calc(50%-50vw+0.75rem)] right-[calc(50%-50vw+0.75rem)] top-[58px]
-      md:left-1/2 md:-translate-x-1/2 md:right-auto md:top-[58px] md:w-[calc(100%-1.5rem)] md:max-w-md
-    ">
+    <div className="map-top-bar top-[58px] z-[1003] bg-background rounded-lg shadow-xl border border-border px-3 py-2.5">
       <div className="flex flex-wrap min-[360px]:flex-nowrap items-center gap-1 sm:gap-1.5 text-sm">
         <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
           <span className="text-foreground whitespace-nowrap">Reachable in</span>

@@ -10,7 +10,7 @@ export default function ControlCard(props: ControlCardProps) {
 
   if (collapsed) {
     return (
-      <div className="hidden md:flex justify-end">
+      <div className="flex justify-end pointer-events-auto">
         <button
           onClick={() => setCollapsed(false)}
           title="Show layers"
@@ -23,7 +23,7 @@ export default function ControlCard(props: ControlCardProps) {
   }
 
   return (
-    <FloatingCard className="hidden md:block p-2.5">
+    <FloatingCard className="p-2.5 pointer-events-auto min-h-0 flex flex-col">
       <button
         onClick={() => setCollapsed(true)}
         title="Hide layers"
@@ -33,7 +33,11 @@ export default function ControlCard(props: ControlCardProps) {
         <ChevronUp className="size-3.5" />
       </button>
 
-      <LayerControlsBody {...props} dividerSpacing="compact" />
+      {/* Only the body scrolls, so the collapse header stays reachable when
+          the column squeezes the card (short viewports). */}
+      <div className="min-h-0 overflow-y-auto">
+        <LayerControlsBody {...props} dividerSpacing="compact" />
+      </div>
     </FloatingCard>
   )
 }
