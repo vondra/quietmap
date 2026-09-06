@@ -43,6 +43,10 @@ __device__ __forceinline__ float maximum_cell_candidate_delta(
             profile, source_altitude_m, receiver_altitude_m, top_m, reflection_t));
 }
 
+/// Every obstacle crossing of one ray, keeping the one with the largest delta.
+///
+/// `must_exceed_m` is the delta a crossing has to beat for the caller to read it at all;
+/// a cell whose own bound cannot reach it is never opened.
 __device__ __forceinline__ void scan_obstacle_grid(
     const DeviceScenePointers& scene,
     const DeviceObstacleGrid& grid,
@@ -53,6 +57,7 @@ __device__ __forceinline__ void scan_obstacle_grid(
     float source_altitude_m,
     float receiver_altitude_m,
     float exclusion_radius_m,
+    float must_exceed_m,
     const PathProfile& profile,
     DiffractionEdge& best
 ) {
@@ -110,10 +115,23 @@ __device__ __forceinline__ void scan_obstacle_grid(
             const float top_bound_m = terrain_maximum_m
                 + scene.obstacle_cell_maximum_heights[
                     grid.cell_maximum_height_offset + cell];
-            if (maximum_cell_candidate_delta(
-                    profile, source_altitude_m, receiver_altitude_m, top_bound_m,
-                    cell_minimum_t, cell_maximum_t)
-                >= QUIETMAP_PENUMBRA_DELTA_FLOOR_M) {
+            // The loop below is where a dense metro ray spends nearly all of its GPU
+            // seconds — on the kbench downtown window, skipping it takes the paint from 84
+            // to 5 GPU seconds — so the cell bound gates on both floors it can.
+            // `maximum_cell_candidate_delta` bounds the delta of every crossing this cell
+            // holds from above: the delta rises with the obstacle top, and `top_bound_m` is
+            // the cell's tallest edge over the highest terrain the ray meets inside it;
+            // the detour is convex in `t`, so over the cell's own stretch of the ray its
+            // extremes are the two ends and the reflection point, the three the bound
+            // evaluates. A cell that cannot reach the penumbra floor diffracts nothing in
+            // any band, and a cell that cannot out-diffract the terrain edge produces
+            // nothing the caller reads: `ray_terrain_and_screening_bands` takes the
+            // obstacle edge only where it beats the terrain one.
+            const float cell_bound_m = maximum_cell_candidate_delta(
+                profile, source_altitude_m, receiver_altitude_m, top_bound_m,
+                cell_minimum_t, cell_maximum_t);
+            if (cell_bound_m >= QUIETMAP_PENUMBRA_DELTA_FLOOR_M
+                && cell_bound_m > must_exceed_m) {
                 for (uint32_t position = first; position < end; ++position) {
                     const uint32_t local_edge = scene.obstacle_edge_references[
                         grid.edge_references_offset + position];

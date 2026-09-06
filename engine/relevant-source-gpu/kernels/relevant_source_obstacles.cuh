@@ -159,10 +159,15 @@ __device__ __forceinline__ void ray_terrain_and_screening_bands(
         return;
     }
     DiffractionEdge obstacle = {};
+    // The obstacle edge is read only where it out-diffracts the terrain edge, so the
+    // terrain's own delta is the floor every crossing has to clear; the scan takes it as
+    // the bound its cells must beat before it opens them.
+    const float must_exceed_m = terrain.present ? terrain.delta_m : -CUDART_INF_F;
     for (uint32_t grid_index = 0; grid_index < scene.obstacle_grid_count; ++grid_index) {
         scan_obstacle_grid(scene, scene.obstacle_grids[grid_index], source_x_m, source_y_m,
                            receiver_x_m, receiver_y_m, source_altitude_m,
-                           receiver_altitude_m, exclusion_radius_m, profile, obstacle);
+                           receiver_altitude_m, exclusion_radius_m, must_exceed_m, profile,
+                           obstacle);
     }
     if (obstacle.present && (!terrain.present || obstacle.delta_m > terrain.delta_m)) {
         complete_explicit_edge_geometry(
