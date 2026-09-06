@@ -1,6 +1,8 @@
 //! Receiver selection and horizons shared by the CPU and GPU airborne painters.
 
-use noise_compute::emission::aircraft::{BuildingHorizon, ReceiverHorizon};
+use noise_compute::emission::aircraft::{
+    build_receiver_horizon_row, BuildingHorizon, ReceiverHorizon,
+};
 use noise_compute::envelope::EnvelopeClass;
 use noise_compute::propagation::obstacle_index::{CrossingScratch, ObstacleSet};
 use noise_compute::types::RasterSampler;
@@ -10,6 +12,17 @@ use rayon::prelude::*;
 use crate::accumulator::{CoarseLattice, COARSE_LEVELS_N};
 use crate::grid::TILE_PX;
 use crate::source_loader_structure::InteriorEstimate;
+
+/// Buffers for one row of [`ReceiverScreeningGrid::build`], one per Rayon job and
+/// reused across the rows that job takes, so the row batching adds no allocator
+/// traffic to the DEM march it replaces.
+#[derive(Default)]
+struct RowScratch {
+    crossings: CrossingScratch,
+    columns: Vec<usize>,
+    marched: Vec<(f64, f64)>,
+    horizons: Vec<ReceiverHorizon>,
+}
 
 struct ReceiverScreening {
     terrain: ReceiverHorizon,
@@ -28,34 +41,74 @@ impl ReceiverScreeningGrid {
         exact_receiver_path: bool,
     ) -> Self {
         let coarse_axis = coarse_receiver_axis();
-        let receivers = (0..TILE_PX * TILE_PX)
+        // Row-batched: every selected receiver in a pixel row shares its
+        // latitude, so one `build_receiver_horizon_row` call marches the DEM
+        // once per (sector, sample) across the whole row instead of once per
+        // receiver. The horizons are bit-identical; only the DEM access order
+        // changes. Filled in place — a per-row `Vec<Option<ReceiverScreening>>`
+        // would allocate and then move ~0.8 KB per receiver on top of the
+        // march it is meant to make cheaper.
+        // Parallel init: the grid is ~0.2 GB of `Option<ReceiverScreening>`
+        // per tile, and first-touching it on one thread costs more than the
+        // march this batching saves.
+        let mut receivers: Vec<Option<ReceiverScreening>> = (0..TILE_PX * TILE_PX)
             .into_par_iter()
-            .map_init(CrossingScratch::default, |crossings, pixel| {
-                let py = pixel / TILE_PX;
-                let px = pixel % TILE_PX;
-                if !pixel_is_selected(pixel, exact_receiver_path, &coarse_axis) {
-                    return None;
+            .map(|_| None)
+            .collect();
+        receivers.par_chunks_mut(TILE_PX).enumerate().for_each_init(
+            RowScratch::default,
+            |scratch, (py, row)| {
+                scratch.columns.clear();
+                scratch.columns.extend((0..TILE_PX).filter(|&px| {
+                    pixel_is_selected(py * TILE_PX + px, exact_receiver_path, &coarse_axis)
+                }));
+                if scratch.columns.is_empty() {
+                    return;
                 }
                 let rx_lat = tile.rx_lat[py];
-                let rx_lon = tile.rx_lon[px];
-                let rx_alt = tile.rx_alt_m[pixel] as f64;
-                let terrain = ReceiverHorizon::build(
+                scratch.marched.clear();
+                scratch.marched.extend(
+                    scratch
+                        .columns
+                        .iter()
+                        .map(|&px| (tile.rx_lon[px], tile.rx_alt_m[py * TILE_PX + px] as f64)),
+                );
+                scratch.horizons.clear();
+                scratch
+                    .horizons
+                    .resize(scratch.columns.len(), ReceiverHorizon::EMPTY);
+                build_receiver_horizon_row(
                     |lat, lon| tile.elevation(lat, lon),
                     rx_lat,
-                    rx_lon,
-                    rx_alt,
+                    &scratch.marched,
+                    &mut scratch.horizons,
                 );
-                let building_enabled =
-                    EnvelopeClass::from_u8(interior.classes()[pixel]) == EnvelopeClass::Outdoor;
-                let buildings = building_enabled
-                    .then(|| {
-                        BuildingHorizon::build(obstacles, tile, rx_lat, rx_lon, rx_alt, crossings)
-                    })
-                    .filter(|horizon| !horizon.is_empty())
-                    .map(Box::new);
-                Some(ReceiverScreening { terrain, buildings })
-            })
-            .collect();
+                for ((&px, &(rx_lon, rx_alt)), &terrain) in scratch
+                    .columns
+                    .iter()
+                    .zip(&scratch.marched)
+                    .zip(&scratch.horizons)
+                {
+                    let building_enabled =
+                        EnvelopeClass::from_u8(interior.classes()[py * TILE_PX + px])
+                            == EnvelopeClass::Outdoor;
+                    let buildings = building_enabled
+                        .then(|| {
+                            BuildingHorizon::build(
+                                obstacles,
+                                tile,
+                                rx_lat,
+                                rx_lon,
+                                rx_alt,
+                                &mut scratch.crossings,
+                            )
+                        })
+                        .filter(|horizon| !horizon.is_empty())
+                        .map(Box::new);
+                    row[px] = Some(ReceiverScreening { terrain, buildings });
+                }
+            },
+        );
         Self(receivers)
     }
 

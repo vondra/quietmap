@@ -129,6 +129,7 @@ pub const RECEIVER_HORIZON_ENTRY_COUNT: usize = HORIZON_SECTORS * RECEIVER_HORIZ
 /// radial bands of (quantized horizon tangent, edge distance of the
 /// band's maximum). Built once per popup receiver or selected heatmap
 /// receiver node and queried inside `segment_energy_kernel`.
+#[derive(Clone, Copy)]
 pub struct ReceiverHorizon {
     /// `[sector][band] = (tan_q, r_q)`; `tan_q` = horizon tangent ×
     /// `RECEIVER_HORIZON_TANGENT_SCALE` (i16, signed — see above), `r_q` = ceil(edge distance ×
@@ -153,62 +154,22 @@ impl ReceiverHorizon {
     /// The radial geometry uses the kernel's receiver-local
     /// equirectangular projection (`M_PER_DEG_LAT`, cos at receiver
     /// latitude) so horizon-space distances match kernel `lateral`.
+    /// All-unsampled horizon: every band `(0, 0)` (skipped at query) and
+    /// `max_sin_sq = 0` (the kernel precheck then never consults a sector).
+    pub const EMPTY: ReceiverHorizon = ReceiverHorizon {
+        sectors: [[(0i16, 0u16); RECEIVER_HORIZON_BANDS]; HORIZON_SECTORS],
+        max_sin_sq: 0.0,
+    };
+
     pub fn build(
         sampler: impl Fn(f64, f64) -> f64,
         lat: f64,
         lon: f64,
         receiver_alt_m: f64,
     ) -> Self {
-        let cos_lat = lat.to_radians().cos().max(0.2);
-        let m_per_deg_lon = M_PER_DEG_LAT * cos_lat;
-        let mut sectors = [[(0i16, 0u16); RECEIVER_HORIZON_BANDS]; HORIZON_SECTORS];
-        let mut max_tan_q = i16::MIN;
-        for (samples, buckets) in receiver_horizon_samples().iter().zip(&mut sectors) {
-            let mut best = [(f64::NEG_INFINITY, 0.0_f64); RECEIVER_HORIZON_BANDS];
-            for sample in samples {
-                // Antimeridian wrap + pole clamp keep the DEM SAMPLING
-                // valid near ±180°/the poles. NOTE: the kernel-side
-                // aircraft projections (segment_sel) are dateline-naive
-                // (pre-existing — dateline-crossing pairs never reach
-                // the kernel; their raw lon delta fails every bbox
-                // prefilter), so this wrap is about sane sampling, not
-                // end-to-end dateline support.
-                let sample_lat = (lat + sample.north_m / M_PER_DEG_LAT).clamp(-90.0, 90.0);
-                let sample_lon =
-                    (lon + sample.east_m / m_per_deg_lon + 540.0).rem_euclid(360.0) - 180.0;
-                let tangent = (sampler(sample_lat, sample_lon) - receiver_alt_m) / sample.range_m;
-                if tangent > best[sample.band].0 {
-                    best[sample.band] = (tangent, sample.range_m);
-                }
-            }
-            for (b, &(tan, r_edge)) in best.iter().enumerate() {
-                if r_edge == 0.0 {
-                    continue; // band never sampled — stays (0, 0), skipped at query
-                }
-                let tan_q = (tan * RECEIVER_HORIZON_TANGENT_SCALE)
-                    .round()
-                    .clamp(i16::MIN as f64, i16::MAX as f64) as i16;
-                let range_q = (r_edge * RECEIVER_HORIZON_RANGE_SCALE)
-                    .ceil()
-                    .min(u16::MAX as f64) as u16;
-                buckets[b] = (tan_q, range_q);
-                max_tan_q = max_tan_q.max(tan_q);
-            }
-        }
-
-        let max_tan = max_tan_q as f64 / RECEIVER_HORIZON_TANGENT_SCALE;
-        let max_sin_sq = if max_tan > 0.0 {
-            (max_tan * max_tan) / (1.0 + max_tan * max_tan)
-        } else {
-            // All horizons at/below horizontal: no positive-rel_alt pair
-            // can ever be blocked → precheck skips them all; negative
-            // rel_alt still routes through the explicit `<= 0` arm.
-            0.0
-        };
-        ReceiverHorizon {
-            sectors,
-            max_sin_sq,
-        }
+        let mut one = [ReceiverHorizon::EMPTY];
+        build_receiver_horizon_row(sampler, lat, &[(lon, receiver_alt_m)], &mut one);
+        one[0]
     }
 
     /// Screening insertion loss (dB ≥ 0) for an aircraft whose CPA foot
@@ -278,6 +239,91 @@ impl ReceiverHorizon {
             best_dz = best_dz.max(edge_dz);
         }
         best_dz
+    }
+}
+
+/// March the DEM for a whole ROW of receivers sharing one latitude, writing
+/// one horizon per entry of `receivers` (`(lon, receiver_alt_m)`) into `out`.
+///
+/// Same arithmetic and the same per-(receiver, sector, band) reduction order
+/// as a per-receiver march, so the horizons are bit-identical — only the loop
+/// order changes. The march offsets are receiver-independent, so one
+/// (sector, sample) step lands on ONE DEM row for the whole receiver row and
+/// the receivers' longitudes walk that row with a fixed stride. A
+/// per-receiver march instead scatters its 1 536 samples over the whole 8 km
+/// halo, and at the halo's 1 arcsec lattice (~30 m, five times coarser than a
+/// z13 receiver pixel) neighbouring receivers each re-fetched the same cells.
+///
+/// Per-sector band maxima are held band-major (`RECEIVER_HORIZON_BANDS ×
+/// receivers`) so one sample step — whose band is fixed — writes a contiguous
+/// run.
+pub fn build_receiver_horizon_row(
+    sampler: impl Fn(f64, f64) -> f64,
+    lat: f64,
+    receivers: &[(f64, f64)],
+    out: &mut [ReceiverHorizon],
+) {
+    assert_eq!(receivers.len(), out.len(), "one horizon per receiver");
+    let n = receivers.len();
+    let cos_lat = lat.to_radians().cos().max(0.2);
+    let m_per_deg_lon = M_PER_DEG_LAT * cos_lat;
+    let mut max_tan_q = vec![i16::MIN; n];
+    let mut best_tan = vec![f64::NEG_INFINITY; RECEIVER_HORIZON_BANDS * n];
+    let mut best_range = vec![0.0_f64; RECEIVER_HORIZON_BANDS * n];
+    out.fill(ReceiverHorizon::EMPTY);
+
+    for (sector, samples) in receiver_horizon_samples().iter().enumerate() {
+        best_tan.fill(f64::NEG_INFINITY);
+        best_range.fill(0.0);
+        for sample in samples {
+            // Antimeridian wrap + pole clamp keep the DEM SAMPLING valid near
+            // ±180°/the poles. NOTE: the kernel-side aircraft projections
+            // (segment_sel) are dateline-naive (pre-existing —
+            // dateline-crossing pairs never reach the kernel; their raw lon
+            // delta fails every bbox prefilter), so this wrap is about sane
+            // sampling, not end-to-end dateline support.
+            let sample_lat = (lat + sample.north_m / M_PER_DEG_LAT).clamp(-90.0, 90.0);
+            let east_deg = sample.east_m / m_per_deg_lon;
+            let band = sample.band * n;
+            let tans = &mut best_tan[band..band + n];
+            let ranges = &mut best_range[band..band + n];
+            for (i, &(lon, receiver_alt_m)) in receivers.iter().enumerate() {
+                let sample_lon = (lon + east_deg + 540.0).rem_euclid(360.0) - 180.0;
+                let tangent = (sampler(sample_lat, sample_lon) - receiver_alt_m) / sample.range_m;
+                if tangent > tans[i] {
+                    tans[i] = tangent;
+                    ranges[i] = sample.range_m;
+                }
+            }
+        }
+        for b in 0..RECEIVER_HORIZON_BANDS {
+            for i in 0..n {
+                let r_edge = best_range[b * n + i];
+                if r_edge == 0.0 {
+                    continue; // band never sampled — stays (0, 0), skipped at query
+                }
+                let tan_q = (best_tan[b * n + i] * RECEIVER_HORIZON_TANGENT_SCALE)
+                    .round()
+                    .clamp(i16::MIN as f64, i16::MAX as f64) as i16;
+                let range_q = (r_edge * RECEIVER_HORIZON_RANGE_SCALE)
+                    .ceil()
+                    .min(u16::MAX as f64) as u16;
+                out[i].sectors[sector][b] = (tan_q, range_q);
+                max_tan_q[i] = max_tan_q[i].max(tan_q);
+            }
+        }
+    }
+
+    for (horizon, &tan_q) in out.iter_mut().zip(&max_tan_q) {
+        let max_tan = tan_q as f64 / RECEIVER_HORIZON_TANGENT_SCALE;
+        // All horizons at/below horizontal: no positive-rel_alt pair can ever
+        // be blocked → precheck skips them all; negative rel_alt still routes
+        // through the explicit `<= 0` arm.
+        horizon.max_sin_sq = if max_tan > 0.0 {
+            (max_tan * max_tan) / (1.0 + max_tan * max_tan)
+        } else {
+            0.0
+        };
     }
 }
 
