@@ -21,7 +21,7 @@ import { pathToFileURL } from 'node:url'
 import { execSync } from 'node:child_process'
 import { parse } from 'csv-parse/sync'
 import { tableFromIPC, tableToIPC, makeTable, makeVector } from 'apache-arrow'
-import { latLngToCell } from 'h3-js'
+import { gridDisk, latLngToCell } from 'h3-js'
 import { buildRegistryGrid, findNearestRegistryRecord, fillMissingTurbineSpecs } from './lib/wind-registry-match.js'
 import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
@@ -42,7 +42,7 @@ const USWTDB_MATCH_RADIUS_M = 500
 // USWTDB download — ZIP containing CSV
 const USWTDB_ZIP_URL = 'https://energy.usgs.gov/uswtdb/assets/data/uswtdbCSV.zip'
 
-interface Turbine {
+export interface Turbine {
   lat: number
   lon: number
   hubHeight: number   // meters (t_hh)
@@ -168,6 +168,13 @@ export function parseUswtdbCsv(text: string): Turbine[] {
 
 // ── Step 2: Enrich industrial.arrow ──
 
+/** The registry records a hex's rows may match: its own and its six neighbours',
+ *  so a turbine within the radius of a hex edge still finds a record that the
+ *  registry files under the hex next door. */
+export function registryRecordsAround(turbinesByHex: Map<string, Turbine[]>, hexId: string): Turbine[] {
+  return gridDisk(hexId, 1).flatMap((hex) => turbinesByHex.get(hex) ?? [])
+}
+
 function enrichHexes(turbines: Turbine[]): void {
   // Group turbines by H3R4 hex for fast lookup
   const turbinesByHex = new Map<string, Turbine[]>()
@@ -188,9 +195,8 @@ function enrichHexes(turbines: Turbine[]): void {
   const startTime = Date.now()
 
   for (const hexId of hexDirs) {
-    // Only process hexes that have USWTDB turbines
-    const hexTurbines = turbinesByHex.get(hexId)
-    if (!hexTurbines) continue
+    const hexTurbines = registryRecordsAround(turbinesByHex, hexId)
+    if (hexTurbines.length === 0) continue
 
     const indPath = resolve(H3R4_DIR, hexId, 'industrial.arrow')
     if (!existsSync(indPath)) continue

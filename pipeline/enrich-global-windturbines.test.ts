@@ -7,7 +7,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseUswtdbCsv } from './enrich-global-windturbines.js'
+import { cellToLatLng, gridDisk } from 'h3-js'
+import { parseUswtdbCsv, registryRecordsAround, type Turbine } from './enrich-global-windturbines.js'
 
 const HEADER = 'case_id,faa_ors,p_name,t_manu,t_model,t_cap,t_hh,t_rd,xlong,ylat'
 
@@ -30,3 +31,18 @@ test('a quoted comma in p_name keeps every later column in its own place', () =>
     ],
   )
 })
+
+test('a hex sees the registry records of its neighbours, so the radius works across hex edges', () => {
+  // A 500 m radius reaches past an R4 hex edge; the registry files a record
+  // under the hex that holds it, which is not always the hex of the OSM row.
+  const home = '8426297ffffffff'
+  const neighbour = gridDisk(home, 1).find((hex) => hex !== home)!
+  const far = gridDisk(home, 2).find((hex) => !gridDisk(home, 1).includes(hex))!
+  const record = (hex: string): Turbine => {
+    const [lat, lon] = cellToLatLng(hex)
+    return { lat, lon, hubHeight: 84, ratedPowerKw: 4200, rotorDiam: 0, name: hex, model: '', manu: '', h3r4: hex }
+  }
+  const byHex = new Map([[neighbour, [record(neighbour)]], [far, [record(far)]]])
+  assert.deepEqual(registryRecordsAround(byHex, home).map((t) => t.name), [neighbour])
+})
+
