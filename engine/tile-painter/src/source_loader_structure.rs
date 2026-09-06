@@ -595,6 +595,12 @@ fn low_profile_lookup(batches: &[RecordBatch]) -> LowProfileLookup {
 /// enclosure (`noise_compute::…::enclosure_db`; SPEC §4.9). The single bake shared by
 /// the CPU builder, the GPU runner, and the independent parity fixture (gg review 2026-07-28:
 /// three hand-copies drift).
+///
+/// A row at a time on the rayon pool: each of the 262,144 probes reads only the
+/// tile's receiver lattice and the region's obstacle set, which nothing here
+/// mutates, keeps its own crossing scratch, and writes one pixel of its own row,
+/// so the bake is the same function of the same inputs whatever order the rows
+/// run in.
 pub fn bake_tile_vector_rx_refl(
     tile: &mut raster_reader::fused_tile_z13::FusedTileZ13,
     set: &ObstacleSet,
@@ -602,13 +608,16 @@ pub fn bake_tile_vector_rx_refl(
     use noise_compute::constants::ENCLOSURE_RADIUS_M;
     use noise_compute::propagation::obstacle_index::enclosure_db;
     use raster_reader::fused_tile_z13::TILE_PX;
-    for py in 0..TILE_PX {
-        let lat = tile.rx_lat[py];
-        for px in 0..TILE_PX {
-            tile.rx_refl_db[py * TILE_PX + px] =
-                enclosure_db(set, lat, tile.rx_lon[px], ENCLOSURE_RADIUS_M) as f32;
-        }
-    }
+    use rayon::prelude::*;
+    let longitudes = &tile.rx_lon;
+    tile.rx_refl_db
+        .par_chunks_mut(TILE_PX)
+        .zip(tile.rx_lat.par_iter())
+        .for_each(|(row, &lat)| {
+            for (reflection_db, &lon) in row.iter_mut().zip(longitudes.iter()) {
+                *reflection_db = enclosure_db(set, lat, lon, ENCLOSURE_RADIUS_M) as f32;
+            }
+        });
 }
 
 /// Minimum footprint height whose interior masks a receiver. `0.0` means
