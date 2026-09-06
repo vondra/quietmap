@@ -87,144 +87,157 @@ export async function writeRoadAadt(
   coverage?: ReadonlySet<number>,
   retract?: RoadRetract,
 ): Promise<WriteRoadResult> {
+  let result!: WriteRoadResult
+  await withArrowWrite(arrowPath, table => {
+    const applied = applyRoadAadt(table, arrowPath, match, onApplied, coverage, retract)
+    result = applied.result
+    return applied.table
+  })
+  return result
+}
+
+/** Apply the same traffic/priority/taper rules to a caller's already locked table. */
+export function applyRoadAadt(
+  table: Table,
+  arrowPath: string,
+  match: (row: RoadRow, index: number) => RoadAadt | null,
+  onApplied?: (row: RoadRow, index: number, applied: RoadAadt) => void,
+  coverage?: ReadonlySet<number>,
+  retract?: RoadRetract,
+): { table: Table; result: WriteRoadResult } {
   const result: WriteRoadResult = {
     rows: 0, matched: 0, updated: false, skipped: 0, skippedForeign: 0, retracted: 0,
   }
+  result.rows = table.numRows
+  const geometry = segmentGeometryReader(table)
+  if (table.numRows === 0) return { table, result }
 
-  await withArrowWrite(arrowPath, (table: Table): Table => {
-    result.rows = table.numRows
-    const geometry = segmentGeometryReader(table)
-    if (table.numRows === 0) return table
+  const ref = table.getChild('ref')
+  const name = table.getChild('name')
+  const osmId = table.getChild('osm_id')
+  const roadClass = table.getChild('road_class')
+  const existingLight = table.getChild('aadt_light')
+  const existingMedium = table.getChild('aadt_medium')
+  const existingHeavy = table.getChild('aadt_heavy')
+  const existingMoto = table.getChild('aadt_moto')
+  const existingSource = table.getChild('source_id')
+  const existingTaper = table.getChild('speed_taper')
 
-    const ref = table.getChild('ref')
-    const name = table.getChild('name')
-    const osmId = table.getChild('osm_id')
-    const roadClass = table.getChild('road_class')
-    const existingLight = table.getChild('aadt_light')
-    const existingMedium = table.getChild('aadt_medium')
-    const existingHeavy = table.getChild('aadt_heavy')
-    const existingMoto = table.getChild('aadt_moto')
-    const existingSource = table.getChild('source_id')
-    const existingTaper = table.getChild('speed_taper')
+  const light = new Int32Array(table.numRows)
+  const medium = new Int32Array(table.numRows)
+  const heavy = new Int32Array(table.numRows)
+  const moto = new Int32Array(table.numRows)
+  const source = new Uint16Array(table.numRows)
+  for (let index = 0; index < table.numRows; index++) {
+    light[index] = (existingLight?.get(index) as number) ?? 0
+    medium[index] = (existingMedium?.get(index) as number) ?? 0
+    heavy[index] = (existingHeavy?.get(index) as number) ?? 0
+    moto[index] = (existingMoto?.get(index) as number) ?? 0
+    source[index] = (existingSource?.get(index) as number) ?? 0
+  }
 
-    const light = new Int32Array(table.numRows)
-    const medium = new Int32Array(table.numRows)
-    const heavy = new Int32Array(table.numRows)
-    const moto = new Int32Array(table.numRows)
-    const source = new Uint16Array(table.numRows)
-    for (let index = 0; index < table.numRows; index++) {
-      light[index] = (existingLight?.get(index) as number) ?? 0
-      medium[index] = (existingMedium?.get(index) as number) ?? 0
-      heavy[index] = (existingHeavy?.get(index) as number) ?? 0
-      moto[index] = (existingMoto?.get(index) as number) ?? 0
-      source[index] = (existingSource?.get(index) as number) ?? 0
+  let taper: Uint8Array | null = null
+  const taperAt = (index: number) => taper?.[index] ?? ((existingTaper?.get(index) as number) ?? 0)
+  const setTaper = (index: number, value: number): void => {
+    if (taperAt(index) === value) return
+    if (!taper) {
+      taper = new Uint8Array(table.numRows)
+      for (let i = 0; i < table.numRows; i++) taper[i] = (existingTaper?.get(i) as number) ?? 0
+    }
+    taper[index] = value
+  }
+
+  let countries: ReturnType<typeof bakedRoadCountryReader> | null = null
+  const countryCodes = new Map<number, number>()
+  const expectedCountryCode = (sourceId: number): number | null => {
+    const countryIso = countryIsoForNationalSource(sourceId)
+    if (countryIso === null) return null
+    countries ??= bakedRoadCountryReader(table)
+    let expected = countryCodes.get(sourceId)
+    if (expected === undefined) {
+      expected = iso2Code(countryIso)
+      countryCodes.set(sourceId, expected)
+    }
+    return expected
+  }
+  const retractCountryCode = retract ? expectedCountryCode(retract.sourceId) : null
+  let changed = false
+
+  for (let index = 0; index < table.numRows; index++) {
+    const row: RoadRow = {
+      ...geometry.row(index),
+      ref: (ref?.get(index) as string | null) ?? null,
+      name: (name?.get(index) as string | null) ?? null,
+      osmId: osmId ? Number(osmId.get(index)) : null,
+      roadClass: (roadClass?.get(index) as number) ?? 5,
+      existingSourceId: source[index],
     }
 
-    let taper: Uint8Array | null = null
-    const taperAt = (index: number) => taper?.[index] ?? ((existingTaper?.get(index) as number) ?? 0)
-    const setTaper = (index: number, value: number): void => {
-      if (taperAt(index) === value) return
-      if (!taper) {
-        taper = new Uint8Array(table.numRows)
-        for (let i = 0; i < table.numRows; i++) taper[i] = (existingTaper?.get(i) as number) ?? 0
-      }
-      taper[index] = value
+    // Retraction precedes every eligibility gate so stale out-of-scope rows heal.
+    const retractsForeignNationalStamp = retractCountryCode !== null &&
+      countries!.codeAt(index) !== retractCountryCode
+    if (retract && source[index] === retract.sourceId &&
+        (retractsForeignNationalStamp || retract.when(row, index))) {
+      light[index] = 0
+      medium[index] = 0
+      heavy[index] = 0
+      moto[index] = 0
+      source[index] = 0
+      setTaper(index, 0)
+      result.retracted++
+      changed = true
     }
 
-    let countries: ReturnType<typeof bakedRoadCountryReader> | null = null
-    const countryCodes = new Map<number, number>()
-    const expectedCountryCode = (sourceId: number): number | null => {
-      const countryIso = countryIsoForNationalSource(sourceId)
-      if (countryIso === null) return null
-      countries ??= bakedRoadCountryReader(table)
-      let expected = countryCodes.get(sourceId)
-      if (expected === undefined) {
-        expected = iso2Code(countryIso)
-        countryCodes.set(sourceId, expected)
-      }
-      return expected
+    if (coverage && !coverage.has(row.roadClass)) {
+      result.skipped++
+      continue
     }
-    const retractCountryCode = retract ? expectedCountryCode(retract.sourceId) : null
-    let changed = false
+    const candidate = match(row, index)
+    if (!candidate) continue
+    assertMatch(candidate, index, arrowPath)
 
-    for (let index = 0; index < table.numRows; index++) {
-      const row: RoadRow = {
-        ...geometry.row(index),
-        ref: (ref?.get(index) as string | null) ?? null,
-        name: (name?.get(index) as string | null) ?? null,
-        osmId: osmId ? Number(osmId.get(index)) : null,
-        roadClass: (roadClass?.get(index) as number) ?? 5,
-        existingSourceId: source[index],
-      }
-
-      // Retraction precedes every eligibility gate so stale out-of-scope rows heal.
-      const retractsForeignNationalStamp = retractCountryCode !== null &&
-        countries!.codeAt(index) !== retractCountryCode
-      if (retract && source[index] === retract.sourceId &&
-          (retractsForeignNationalStamp || retract.when(row, index))) {
-        light[index] = 0
-        medium[index] = 0
-        heavy[index] = 0
-        moto[index] = 0
-        source[index] = 0
-        setTaper(index, 0)
-        result.retracted++
-        changed = true
-      }
-
-      if (coverage && !coverage.has(row.roadClass)) {
-        result.skipped++
+    const expectedCode = expectedCountryCode(candidate.sourceId)
+    if (expectedCode !== null) {
+      if (countries!.codeAt(index) !== expectedCode) {
+        result.skippedForeign++
         continue
       }
-      const candidate = match(row, index)
-      if (!candidate) continue
-      assertMatch(candidate, index, arrowPath)
-
-      const expectedCode = expectedCountryCode(candidate.sourceId)
-      if (expectedCode !== null) {
-        if (countries!.codeAt(index) !== expectedCode) {
-          result.skippedForeign++
-          continue
-        }
-      }
-
-      if (candidate.light === 0 && candidate.medium === 0 && candidate.heavy === 0 &&
-          candidate.moto === 0 && isMeasured(candidate.sourceId)) {
-        throw new Error(`writeRoadAadt: all-zero AADT from measured source at row ${index} in ${arrowPath}: ${JSON.stringify(candidate)}`)
-      }
-      if (!shouldOverwrite(source[index], candidate.sourceId)) continue
-
-      const nextTaper = candidate.speedTaper ?? 0
-      const valueChanged = light[index] !== candidate.light || medium[index] !== candidate.medium ||
-        heavy[index] !== candidate.heavy || moto[index] !== candidate.moto ||
-        source[index] !== candidate.sourceId || taperAt(index) !== nextTaper
-      light[index] = candidate.light
-      medium[index] = candidate.medium
-      heavy[index] = candidate.heavy
-      moto[index] = candidate.moto
-      source[index] = candidate.sourceId
-      setTaper(index, nextTaper)
-      result.matched++
-      changed ||= valueChanged
-      onApplied?.(row, index, candidate)
     }
 
-    if (!changed) return table
-    result.updated = true
-    const rebuilt = new Set(['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'source_id'])
-    if (taper) rebuilt.add('speed_taper')
-    const columns: Record<string, unknown> = {}
-    for (const field of table.schema.fields) {
-      if (!rebuilt.has(field.name)) columns[field.name] = table.getChild(field.name)!
+    if (candidate.light === 0 && candidate.medium === 0 && candidate.heavy === 0 &&
+        candidate.moto === 0 && isMeasured(candidate.sourceId)) {
+      throw new Error(`writeRoadAadt: all-zero AADT from measured source at row ${index} in ${arrowPath}: ${JSON.stringify(candidate)}`)
     }
-    columns.aadt_light = makeVector(light)
-    columns.aadt_medium = makeVector(medium)
-    columns.aadt_heavy = makeVector(heavy)
-    columns.aadt_moto = makeVector(moto)
-    columns.source_id = makeVector(source)
-    if (taper) columns.speed_taper = makeVector(taper)
-    return makeTable(columns as never) as unknown as Table
-  })
+    if (!shouldOverwrite(source[index], candidate.sourceId)) continue
 
-  return result
+    const nextTaper = candidate.speedTaper ?? 0
+    const valueChanged = light[index] !== candidate.light || medium[index] !== candidate.medium ||
+      heavy[index] !== candidate.heavy || moto[index] !== candidate.moto ||
+      source[index] !== candidate.sourceId || taperAt(index) !== nextTaper
+    light[index] = candidate.light
+    medium[index] = candidate.medium
+    heavy[index] = candidate.heavy
+    moto[index] = candidate.moto
+    source[index] = candidate.sourceId
+    setTaper(index, nextTaper)
+    result.matched++
+    changed ||= valueChanged
+    onApplied?.(row, index, candidate)
+  }
+
+  if (!changed) return { table, result }
+  result.updated = true
+  const rebuilt = new Set(['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'source_id'])
+  if (taper) rebuilt.add('speed_taper')
+  const columns: Record<string, unknown> = {}
+  for (const field of table.schema.fields) {
+    if (!rebuilt.has(field.name)) columns[field.name] = table.getChild(field.name)!
+  }
+  columns.aadt_light = makeVector(light)
+  columns.aadt_medium = makeVector(medium)
+  columns.aadt_heavy = makeVector(heavy)
+  columns.aadt_moto = makeVector(moto)
+  columns.source_id = makeVector(source)
+  if (taper) columns.speed_taper = makeVector(taper)
+  return { table: makeTable(columns as never) as unknown as Table, result }
 }

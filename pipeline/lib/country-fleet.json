@@ -1,0 +1,1631 @@
+{
+  "_doc": {
+    "purpose": "Per-country local-road fleet and dwelling-trip priors; country-fleet.ts derives the service-tree model directly from this one cited table.",
+    "quantities": {
+      "moto_fleet_share": "powered 2-/3-wheelers as share of total REGISTERED vehicles (ownership). A PRIOR only — a motorcycle drives fewer daily km than a truck, so ownership share overstates traffic share.",
+      "moto_traffic_share": "share of powered 2-/3-wheelers in daily vehicle FLOW on local roads (what splitAADT writes into aadt_moto). Derived by country-fleet.ts as factor(continent) x moto_fleet_share clamped to [0.01, 0.45] (Asia 0.40, Europe/NA/Oceania 0.15, SA 0.20 — usage intensity differs; Africa never derives, registration misses informal fleets), unless moto_traffic_share_override is set.",
+      "moto_traffic_share_override": "traffic-calibrated value taken from a national enricher's split tables (population-weighted blend of its regional tiers) — always wins over the derived prior.",
+      "vehicle_trips_per_occupied_dwelling": "motor-vehicle trips per OCCUPIED dwelling (household) per day, both directions, annual average, all vehicle classes incl. motorcycles — entered in the surveys' native unit. country-fleet.ts multiplies by 0.92 stock occupancy (OECD HM1-1) because the trip model counts GFA-estimated STOCK dwellings; the generated field is tripsPerDwelling (per stock dwelling). WORLD 3.68 already folds the factor in (4.0 base x 0.92) and is exempt."
+    },
+    "refresh": "Review updates to the cited source observations and calibrated overrides here; country-fleet.ts derives runtime values without a second generated table."
+  },
+  "world": {
+    "moto_traffic_share": 0.01,
+    "medium_share": 0.01,
+    "heavy_share": 0.02,
+    "vehicle_trips_per_occupied_dwelling": 3.68,
+    "source": "pre-2026-07 service-tree constants (SPLIT_MEDIUM/HEAVY/MOTO + TRIPS_PER_DWELLING) — bit-preserved terminal of the cascade"
+  },
+  "continents": {
+    "Asia": {
+      "moto_traffic_share": 0.15,
+      "vehicle_trips_per_occupied_dwelling": 2.5,
+      "confidence": "band",
+      "source": "regional EOD/JICA household-survey band; moto band from calibrated TH/IN/VN neighbours"
+    },
+    "Africa": {
+      "moto_traffic_share": 0.1,
+      "vehicle_trips_per_occupied_dwelling": 1.5,
+      "confidence": "band",
+      "source": "boda-boda/okada informal-transport band from calibrated KE/NG enrichers; tpd low-motorization band"
+    },
+    "Europe": {
+      "moto_traffic_share": 0.02,
+      "vehicle_trips_per_occupied_dwelling": 3.7,
+      "confidence": "band",
+      "source": "DE MiD 2017 (3.9) + UK NTS band; moto from DE/CZ measured censuses"
+    },
+    "North America": {
+      "moto_traffic_share": 0.01,
+      "vehicle_trips_per_occupied_dwelling": 3.5,
+      "confidence": "band",
+      "source": "FHWA NHTS 2022 Summary of Travel Trends band"
+    },
+    "South America": {
+      "moto_traffic_share": 0.06,
+      "vehicle_trips_per_occupied_dwelling": 2.2,
+      "confidence": "band",
+      "source": "Bogota/Santiago/Lima EOD midpoint (carried over from pre-2026-07 service-tree comment)"
+    },
+    "Oceania": {
+      "moto_traffic_share": 0.01,
+      "vehicle_trips_per_occupied_dwelling": 3.7,
+      "confidence": "band",
+      "source": "AU/NZ censuses use ~1% moto fallbacks (enrich-roads-nz.ts)"
+    }
+  },
+  "countries": {
+    "TH": {
+      "moto_traffic_share_override": 0.2,
+      "override_source": "enrich-roads-th.ts thaiClassSplit — Bangkok 0.25 / rural 0.15, population-weighted blend",
+      "vehicle_trips_per_occupied_dwelling": 2.5,
+      "tpd_source": "SE-Asia motorized household-trip band (JICA/EOD studies); confidence low",
+      "name": "Thailand",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.5167,
+        "total_registered": 42313968,
+        "powered_2_3_wheelers": 21864326,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-tha.pdf)"
+      }
+    },
+    "IN": {
+      "moto_traffic_share_override": 0.3,
+      "override_source": "enrich-roads-in.ts splitVehicles — urban 0.40 / rural 0.20 blend",
+      "vehicle_trips_per_occupied_dwelling": 1,
+      "tpd_source": "IITM Delhi household survey (~0.5 car trips/dwelling) + moto trips; floored by gen clamp",
+      "name": "India",
+      "continent": "Asia"
+    },
+    "NG": {
+      "moto_traffic_share_override": 0.3,
+      "override_source": "enrich-roads-ng.ts — tier-1/2 0.35, freight corridors lower; blend",
+      "vehicle_trips_per_occupied_dwelling": 1.5,
+      "tpd_source": "Africa continent band",
+      "name": "Nigeria",
+      "continent": "Africa"
+    },
+    "EG": {
+      "moto_traffic_share_override": 0.18,
+      "override_source": "enrich-roads-eg.ts SPLITS — tier1 0.27 / tier2 0.20 / delta 0.14 / desert 0.10, blend",
+      "vehicle_trips_per_occupied_dwelling": 2,
+      "tpd_source": "Africa/Middle-East band",
+      "name": "Egypt",
+      "continent": "Africa",
+      "fleet": {
+        "moto_fleet_share": 0.3263,
+        "total_registered": 10909456,
+        "powered_2_3_wheelers": 3559632,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-egy.pdf)"
+      }
+    },
+    "KE": {
+      "moto_traffic_share_override": 0.2,
+      "override_source": "enrich-roads-ke.ts SPLITS — tier1 0.25 / tier2 0.23 / rural 0.15, blend",
+      "vehicle_trips_per_occupied_dwelling": 1.5,
+      "tpd_source": "Africa continent band",
+      "name": "Kenya",
+      "continent": "Africa"
+    },
+    "US": {
+      "vehicle_trips_per_occupied_dwelling": 3.5,
+      "tpd_source": "FHWA NHTS 2022 Summary of Travel Trends tab. 2-8 — 3.46 vehicle trips/household/day (the often-quoted 5.9 is the 2017-vintage ORNL number; /gg verified 2022)",
+      "name": "United States of America",
+      "continent": "North America",
+      "fleet": {
+        "moto_fleet_share": 0.0303,
+        "total_registered": 275936367,
+        "powered_2_3_wheelers": 8347435,
+        "year": 2020,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-usa.pdf)"
+      }
+    },
+    "JP": {
+      "moto_traffic_share_override": 0.02,
+      "override_source": "car-dominant East Asia: MLIT road statistics put motorcycles at ~2 % of vehicle-km; the Asia band (SE-Asia calibrated) would be 7x off",
+      "vehicle_trips_per_occupied_dwelling": 2.5,
+      "tpd_source": "MLIT PT survey 2015 (vehicle trips/household) — carried from SPEC research-archive table",
+      "name": "Japan",
+      "continent": "Asia"
+    },
+    "KR": {
+      "name": "South Korea",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.0816,
+        "total_registered": 27124938,
+        "powered_2_3_wheelers": 2213837,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-kor.pdf)"
+      },
+      "moto_traffic_share_override": 0.03,
+      "override_source": "car-dominant East Asia (delivery moto niche); Asia band would be 5x off",
+      "vehicle_trips_per_occupied_dwelling": 2.9,
+      "tpd_source": "KTDB 2022 national travel survey (car trips/household) — carried from SPEC research-archive table"
+    },
+    "CN": {
+      "name": "China",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.203,
+        "total_registered": 395264200,
+        "powered_2_3_wheelers": 80257700,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-chn.pdf)"
+      },
+      "moto_traffic_share_override": 0.05,
+      "override_source": "motorcycle bans in most tier-1/2 city centres; e-bikes dominate two-wheeler traffic but are not CNOSSOS cat-4 motorcycles",
+      "vehicle_trips_per_occupied_dwelling": 1.5,
+      "tpd_source": "low car ownership outside metros; conservative band"
+    },
+    "TW": {
+      "moto_traffic_share_override": 0.35,
+      "override_source": "scooter-dominant: ~14 M registered scooters vs ~8 M cars (MOTC); WHO has no Taiwan profile so the Asia band would halve it",
+      "vehicle_trips_per_occupied_dwelling": 2.5,
+      "tpd_source": "East-Asia PT-survey band",
+      "name": "Taiwan",
+      "continent": "Asia"
+    },
+    "KH": {
+      "moto_traffic_share_override": 0.3,
+      "override_source": "moto-dominant SE Asia without a parseable WHO breakdown — conservative neighbour analogy (VN 0.37 derived, TH 0.20 calibrated)",
+      "vehicle_trips_per_occupied_dwelling": 2.5,
+      "tpd_source": "SE-Asia band",
+      "name": "Cambodia",
+      "continent": "Asia"
+    },
+    "LA": {
+      "moto_traffic_share_override": 0.3,
+      "override_source": "moto-dominant SE Asia without a parseable WHO breakdown — conservative neighbour analogy (VN/TH)",
+      "vehicle_trips_per_occupied_dwelling": 2.5,
+      "tpd_source": "SE-Asia band",
+      "name": "Laos",
+      "continent": "Asia"
+    },
+    "MM": {
+      "name": "Myanmar",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.8255,
+        "total_registered": 7562508,
+        "powered_2_3_wheelers": 6243041,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-mmr.pdf)"
+      },
+      "moto_traffic_share_override": 0.3,
+      "override_source": "moto-dominant SE Asia without a parseable WHO breakdown — conservative neighbour analogy (VN/TH); Yangon moto ban lowers the blend",
+      "vehicle_trips_per_occupied_dwelling": 2.5,
+      "tpd_source": "SE-Asia band"
+    },
+    "DE": {
+      "vehicle_trips_per_occupied_dwelling": 3.9,
+      "tpd_source": "MiD 2017 (Mobilitaet in Deutschland) household vehicle trips/day",
+      "name": "Germany",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0772,
+        "total_registered": 59020091,
+        "powered_2_3_wheelers": 4555800,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-deu.pdf)"
+      }
+    },
+    "AE": {
+      "name": "United Arab Emirates",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.0264,
+        "total_registered": 3881228,
+        "powered_2_3_wheelers": 102389,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-are.pdf)"
+      }
+    },
+    "AG": {
+      "name": "Antigua and Barb.",
+      "continent": "North America",
+      "fleet": {
+        "moto_fleet_share": 0.0188,
+        "total_registered": 46722,
+        "powered_2_3_wheelers": 878,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-atg.pdf)"
+      }
+    },
+    "AL": {
+      "name": "Albania",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0605,
+        "total_registered": 740669,
+        "powered_2_3_wheelers": 44788,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-alb.pdf)"
+      }
+    },
+    "AR": {
+      "name": "Argentina",
+      "continent": "South America",
+      "fleet": {
+        "moto_fleet_share": 0.3476,
+        "total_registered": 26413085,
+        "powered_2_3_wheelers": 9181655,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-arg.pdf)"
+      }
+    },
+    "AU": {
+      "name": "Australia",
+      "continent": "Oceania",
+      "fleet": {
+        "moto_fleet_share": 0.0454,
+        "total_registered": 20142942,
+        "powered_2_3_wheelers": 913803,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-aus.pdf)"
+      }
+    },
+    "AZ": {
+      "name": "Azerbaijan",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.0033,
+        "total_registered": 1591786,
+        "powered_2_3_wheelers": 5284,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-aze.pdf)"
+      }
+    },
+    "BA": {
+      "name": "Bosnia and Herz.",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0165,
+        "total_registered": 1152743,
+        "powered_2_3_wheelers": 19054,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-bih.pdf)"
+      }
+    },
+    "BD": {
+      "name": "Bangladesh",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.7624,
+        "total_registered": 5013908,
+        "powered_2_3_wheelers": 3822446,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-bgd.pdf)"
+      }
+    },
+    "BE": {
+      "name": "Belgium",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0678,
+        "total_registered": 7751422,
+        "powered_2_3_wheelers": 525348,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-bel.pdf)"
+      }
+    },
+    "BG": {
+      "name": "Bulgaria",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0597,
+        "total_registered": 3571571,
+        "powered_2_3_wheelers": 213379,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-bgr.pdf)"
+      }
+    },
+    "BH": {
+      "name": "Bahrain",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.0318,
+        "total_registered": 737510,
+        "powered_2_3_wheelers": 23457,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-bhr.pdf)"
+      }
+    },
+    "BO": {
+      "name": "Bolivia",
+      "continent": "South America",
+      "fleet": {
+        "moto_fleet_share": 0.2954,
+        "total_registered": 2226662,
+        "powered_2_3_wheelers": 657718,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-bol.pdf)"
+      }
+    },
+    "BR": {
+      "name": "Brazil",
+      "continent": "South America",
+      "fleet": {
+        "moto_fleet_share": 0.2714,
+        "total_registered": 111446870,
+        "powered_2_3_wheelers": 30252020,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-bra.pdf)"
+      }
+    },
+    "BW": {
+      "name": "Botswana",
+      "continent": "Africa",
+      "fleet": {
+        "moto_fleet_share": 0.0056,
+        "total_registered": 914730,
+        "powered_2_3_wheelers": 5128,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-bwa.pdf)"
+      }
+    },
+    "CA": {
+      "name": "Canada",
+      "continent": "North America",
+      "fleet": {
+        "moto_fleet_share": 0.0311,
+        "total_registered": 26223000,
+        "powered_2_3_wheelers": 816000,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-can.pdf)"
+      }
+    },
+    "CG": {
+      "name": "Congo",
+      "continent": "Africa",
+      "fleet": {
+        "moto_fleet_share": 0.1475,
+        "total_registered": 25227,
+        "powered_2_3_wheelers": 3721,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-cog.pdf)"
+      }
+    },
+    "CH": {
+      "name": "Switzerland",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.1221,
+        "total_registered": 6312055,
+        "powered_2_3_wheelers": 770873,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-che.pdf)"
+      }
+    },
+    "CK": {
+      "name": "Cook Is.",
+      "continent": "Oceania"
+    },
+    "CL": {
+      "name": "Chile",
+      "continent": "South America",
+      "fleet": {
+        "moto_fleet_share": 0.0391,
+        "total_registered": 5980693,
+        "powered_2_3_wheelers": 234020,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-chl.pdf)"
+      }
+    },
+    "CO": {
+      "name": "Colombia",
+      "continent": "South America",
+      "fleet": {
+        "moto_fleet_share": 0.6097,
+        "total_registered": 16780651,
+        "powered_2_3_wheelers": 10230589,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-col.pdf)"
+      }
+    },
+    "CR": {
+      "name": "Costa Rica",
+      "continent": "North America",
+      "fleet": {
+        "moto_fleet_share": 0.2874,
+        "total_registered": 2631200,
+        "powered_2_3_wheelers": 756234,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-cri.pdf)"
+      }
+    },
+    "CU": {
+      "name": "Cuba",
+      "continent": "North America",
+      "fleet": {
+        "moto_fleet_share": 0.3859,
+        "total_registered": 663898,
+        "powered_2_3_wheelers": 256216,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-cub.pdf)"
+      }
+    },
+    "CZ": {
+      "name": "Czechia",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.2,
+        "total_registered": 6088730,
+        "powered_2_3_wheelers": 1217894,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-cze.pdf)"
+      }
+    },
+    "DO": {
+      "name": "Dominican Rep.",
+      "continent": "North America",
+      "fleet": {
+        "moto_fleet_share": 0.5579,
+        "total_registered": 5152448,
+        "powered_2_3_wheelers": 2874590,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-dom.pdf)"
+      }
+    },
+    "DZ": {
+      "name": "Algeria",
+      "continent": "Africa",
+      "fleet": {
+        "moto_fleet_share": 0.0427,
+        "total_registered": 8720015,
+        "powered_2_3_wheelers": 371985,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-dza.pdf)"
+      }
+    },
+    "EC": {
+      "name": "Ecuador",
+      "continent": "South America",
+      "fleet": {
+        "moto_fleet_share": 0.2849,
+        "total_registered": 2535853,
+        "powered_2_3_wheelers": 722381,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-ecu.pdf)"
+      }
+    },
+    "ER": {
+      "name": "Eritrea",
+      "continent": "Africa",
+      "fleet": {
+        "moto_fleet_share": 0.0134,
+        "total_registered": 73583,
+        "powered_2_3_wheelers": 985,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-eri.pdf)"
+      }
+    },
+    "ES": {
+      "name": "Spain",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.157,
+        "total_registered": 36534364,
+        "powered_2_3_wheelers": 5734276,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-esp.pdf)"
+      }
+    },
+    "FI": {
+      "name": "Finland",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0626,
+        "total_registered": 4072570,
+        "powered_2_3_wheelers": 254768,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-fin.pdf)"
+      }
+    },
+    "FR": {
+      "name": "France",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0633,
+        "total_registered": 47555750,
+        "powered_2_3_wheelers": 3010000,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-fra.pdf)"
+      }
+    },
+    "GA": {
+      "name": "Gabon",
+      "continent": "Africa",
+      "fleet": {
+        "moto_fleet_share": 0.1231,
+        "total_registered": 7451,
+        "powered_2_3_wheelers": 917,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-gab.pdf)"
+      }
+    },
+    "GB": {
+      "name": "United Kingdom",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0337,
+        "total_registered": 39034266,
+        "powered_2_3_wheelers": 1315271,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-gbr.pdf)"
+      }
+    },
+    "GM": {
+      "name": "Gambia",
+      "continent": "Africa"
+    },
+    "GR": {
+      "name": "Greece",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.1907,
+        "total_registered": 8844803,
+        "powered_2_3_wheelers": 1686363,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-grc.pdf)"
+      }
+    },
+    "GT": {
+      "name": "Guatemala",
+      "continent": "North America",
+      "fleet": {
+        "moto_fleet_share": 0.4386,
+        "total_registered": 4472894,
+        "powered_2_3_wheelers": 1961880,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-gtm.pdf)"
+      }
+    },
+    "HR": {
+      "name": "Croatia",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0608,
+        "total_registered": 2437190,
+        "powered_2_3_wheelers": 148192,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-hrv.pdf)"
+      }
+    },
+    "HU": {
+      "name": "Hungary",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0415,
+        "total_registered": 4885598,
+        "powered_2_3_wheelers": 202521,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-hun.pdf)"
+      }
+    },
+    "ID": {
+      "name": "Indonesia",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.8266,
+        "total_registered": 147110303,
+        "powered_2_3_wheelers": 121602401,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-idn.pdf)"
+      }
+    },
+    "IL": {
+      "name": "Israel",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.0407,
+        "total_registered": 3840104,
+        "powered_2_3_wheelers": 156358,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-isr.pdf)"
+      }
+    },
+    "IS": {
+      "name": "Iceland",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0448,
+        "total_registered": 365195,
+        "powered_2_3_wheelers": 16375,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-isl.pdf)"
+      }
+    },
+    "IT": {
+      "name": "Italy",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.1873,
+        "total_registered": 55377612,
+        "powered_2_3_wheelers": 10372343,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-ita.pdf)"
+      }
+    },
+    "JO": {
+      "name": "Jordan",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.0079,
+        "total_registered": 1752104,
+        "powered_2_3_wheelers": 13756,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-jor.pdf)"
+      }
+    },
+    "KG": {
+      "name": "Kyrgyzstan",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.0064,
+        "total_registered": 1396462,
+        "powered_2_3_wheelers": 8911,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-kgz.pdf)"
+      }
+    },
+    "KW": {
+      "name": "Kuwait",
+      "continent": "Asia"
+    },
+    "LB": {
+      "name": "Lebanon",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.0803,
+        "total_registered": 2535914,
+        "powered_2_3_wheelers": 203724,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-lbn.pdf)"
+      }
+    },
+    "LK": {
+      "name": "Sri Lanka",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.7216,
+        "total_registered": 8331702,
+        "powered_2_3_wheelers": 6012039,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-lka.pdf)"
+      }
+    },
+    "LR": {
+      "name": "Liberia",
+      "continent": "Africa",
+      "fleet": {
+        "moto_fleet_share": 0.1561,
+        "total_registered": 59239,
+        "powered_2_3_wheelers": 9247,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-lbr.pdf)"
+      }
+    },
+    "LU": {
+      "name": "Luxembourg",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.1169,
+        "total_registered": 590241,
+        "powered_2_3_wheelers": 69000,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-lux.pdf)"
+      }
+    },
+    "LV": {
+      "name": "Latvia",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0324,
+        "total_registered": 1015480,
+        "powered_2_3_wheelers": 32879,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-lva.pdf)"
+      }
+    },
+    "LY": {
+      "name": "Libya",
+      "continent": "Africa"
+    },
+    "MA": {
+      "name": "Morocco",
+      "continent": "Africa",
+      "fleet": {
+        "moto_fleet_share": 0.3218,
+        "total_registered": 6574280,
+        "powered_2_3_wheelers": 2115896,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-mar.pdf)"
+      }
+    },
+    "MD": {
+      "name": "Moldova",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.2055,
+        "total_registered": 928832,
+        "powered_2_3_wheelers": 190850,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-mda.pdf)"
+      }
+    },
+    "ME": {
+      "name": "Montenegro",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0246,
+        "total_registered": 254409,
+        "powered_2_3_wheelers": 6261,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-mne.pdf)"
+      }
+    },
+    "MG": {
+      "name": "Madagascar",
+      "continent": "Africa"
+    },
+    "MK": {
+      "name": "North Macedonia",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0287,
+        "total_registered": 549653,
+        "powered_2_3_wheelers": 15786,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-mkd.pdf)"
+      }
+    },
+    "MN": {
+      "name": "Mongolia",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.0581,
+        "total_registered": 1234701,
+        "powered_2_3_wheelers": 71677,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-mng.pdf)"
+      }
+    },
+    "MU": {
+      "name": "Mauritius",
+      "continent": "Africa"
+    },
+    "MV": {
+      "name": "Maldives",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.8719,
+        "total_registered": 94210,
+        "powered_2_3_wheelers": 82140,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-mdv.pdf)"
+      }
+    },
+    "MX": {
+      "name": "Mexico",
+      "continent": "North America",
+      "fleet": {
+        "moto_fleet_share": 0.1118,
+        "total_registered": 53115396,
+        "powered_2_3_wheelers": 5939262,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-mex.pdf)"
+      }
+    },
+    "NA": {
+      "name": "Namibia",
+      "continent": "Africa",
+      "fleet": {
+        "moto_fleet_share": 0.0496,
+        "total_registered": 401476,
+        "powered_2_3_wheelers": 19899,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-nam.pdf)"
+      }
+    },
+    "NL": {
+      "name": "Netherlands",
+      "continent": "Europe"
+    },
+    "NO": {
+      "name": "Norway",
+      "continent": "Europe"
+    },
+    "NP": {
+      "name": "Nepal",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.7927,
+        "total_registered": 3987267,
+        "powered_2_3_wheelers": 3160623,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-npl.pdf)"
+      }
+    },
+    "NZ": {
+      "name": "New Zealand",
+      "continent": "Oceania",
+      "fleet": {
+        "moto_fleet_share": 0.0351,
+        "total_registered": 4435286,
+        "powered_2_3_wheelers": 155871,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-nzl.pdf)"
+      }
+    },
+    "OM": {
+      "name": "Oman",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.0045,
+        "total_registered": 1552665,
+        "powered_2_3_wheelers": 6957,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-omn.pdf)"
+      }
+    },
+    "PE": {
+      "name": "Peru",
+      "continent": "South America",
+      "fleet": {
+        "moto_fleet_share": 0.5855,
+        "total_registered": 7688373,
+        "powered_2_3_wheelers": 4501643,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-per.pdf)"
+      }
+    },
+    "PK": {
+      "name": "Pakistan",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.7957,
+        "total_registered": 34301159,
+        "powered_2_3_wheelers": 27293287,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-pak.pdf)"
+      }
+    },
+    "PL": {
+      "name": "Poland",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0931,
+        "total_registered": 34030267,
+        "powered_2_3_wheelers": 3169014,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-pol.pdf)"
+      }
+    },
+    "PS": {
+      "name": "Palestine",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.0092,
+        "total_registered": 435584,
+        "powered_2_3_wheelers": 4003,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-pse.pdf)"
+      }
+    },
+    "PT": {
+      "name": "Portugal",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0707,
+        "total_registered": 7370801,
+        "powered_2_3_wheelers": 521000,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-prt.pdf)"
+      }
+    },
+    "PY": {
+      "name": "Paraguay",
+      "continent": "South America",
+      "fleet": {
+        "moto_fleet_share": 0.362,
+        "total_registered": 2684358,
+        "powered_2_3_wheelers": 971762,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-pry.pdf)"
+      }
+    },
+    "RS": {
+      "name": "Serbia",
+      "continent": "Europe"
+    },
+    "RU": {
+      "name": "Russia",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0387,
+        "total_registered": 60141889,
+        "powered_2_3_wheelers": 2329852,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-rus.pdf)"
+      }
+    },
+    "SE": {
+      "name": "Sweden",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0631,
+        "total_registered": 6584881,
+        "powered_2_3_wheelers": 415288,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-swe.pdf)"
+      }
+    },
+    "SG": {
+      "name": "Singapore",
+      "continent": "Asia"
+    },
+    "SI": {
+      "name": "Slovenia",
+      "continent": "Europe",
+      "fleet": {
+        "moto_fleet_share": 0.0827,
+        "total_registered": 1652951,
+        "powered_2_3_wheelers": 136708,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-svn.pdf)"
+      }
+    },
+    "SO": {
+      "name": "Somalia",
+      "continent": "Africa",
+      "fleet": {
+        "moto_fleet_share": 0.076,
+        "total_registered": 131523,
+        "powered_2_3_wheelers": 10000,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-som.pdf)"
+      }
+    },
+    "SR": {
+      "name": "Suriname",
+      "continent": "South America"
+    },
+    "SV": {
+      "name": "El Salvador",
+      "continent": "North America",
+      "fleet": {
+        "moto_fleet_share": 0.2925,
+        "total_registered": 1477912,
+        "powered_2_3_wheelers": 432218,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-slv.pdf)"
+      }
+    },
+    "SZ": {
+      "name": "eSwatini",
+      "continent": "Africa",
+      "fleet": {
+        "moto_fleet_share": 0.0465,
+        "total_registered": 16230,
+        "powered_2_3_wheelers": 755,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-swz.pdf)"
+      }
+    },
+    "TG": {
+      "name": "Togo",
+      "continent": "Africa",
+      "fleet": {
+        "moto_fleet_share": 0.6958,
+        "total_registered": 93944,
+        "powered_2_3_wheelers": 65363,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-tgo.pdf)"
+      }
+    },
+    "TL": {
+      "name": "Timor-Leste",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.7739,
+        "total_registered": 232012,
+        "powered_2_3_wheelers": 179543,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-tls.pdf)"
+      }
+    },
+    "TN": {
+      "name": "Tunisia",
+      "continent": "Africa",
+      "fleet": {
+        "moto_fleet_share": 0.0097,
+        "total_registered": 2327348,
+        "powered_2_3_wheelers": 22559,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-tun.pdf)"
+      }
+    },
+    "TR": {
+      "name": "Turkey",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.1483,
+        "total_registered": 25249119,
+        "powered_2_3_wheelers": 3744370,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-tur.pdf)"
+      }
+    },
+    "TZ": {
+      "name": "Tanzania",
+      "continent": "Africa"
+    },
+    "VN": {
+      "name": "Vietnam",
+      "continent": "Asia",
+      "fleet": {
+        "moto_fleet_share": 0.9305,
+        "total_registered": 75353485,
+        "powered_2_3_wheelers": 70113559,
+        "year": 2021,
+        "source": "WHO GSRRS 2023 country profile (road-safety-2023-vnm.pdf)"
+      }
+    },
+    "WS": {
+      "name": "Samoa",
+      "continent": "Oceania"
+    },
+    "ZA": {
+      "name": "South Africa",
+      "continent": "Africa"
+    },
+    "ZM": {
+      "name": "Zambia",
+      "continent": "Africa"
+    },
+    "AD": {
+      "name": "Andorra",
+      "continent": "Europe"
+    },
+    "AF": {
+      "name": "Afghanistan",
+      "continent": "Asia"
+    },
+    "AI": {
+      "name": "Anguilla",
+      "continent": "North America"
+    },
+    "AM": {
+      "name": "Armenia",
+      "continent": "Asia"
+    },
+    "AO": {
+      "name": "Angola",
+      "continent": "Africa"
+    },
+    "AQ": {
+      "name": "Antarctica",
+      "continent": "Antarctica"
+    },
+    "AS": {
+      "name": "American Samoa",
+      "continent": "Oceania"
+    },
+    "AT": {
+      "name": "Austria",
+      "continent": "Europe"
+    },
+    "AW": {
+      "name": "Aruba",
+      "continent": "North America"
+    },
+    "AX": {
+      "name": "Åland",
+      "continent": "Europe"
+    },
+    "BB": {
+      "name": "Barbados",
+      "continent": "North America"
+    },
+    "BF": {
+      "name": "Burkina Faso",
+      "continent": "Africa"
+    },
+    "BI": {
+      "name": "Burundi",
+      "continent": "Africa"
+    },
+    "BJ": {
+      "name": "Benin",
+      "continent": "Africa"
+    },
+    "BL": {
+      "name": "St-Barthélemy",
+      "continent": "North America"
+    },
+    "BM": {
+      "name": "Bermuda",
+      "continent": "North America"
+    },
+    "BN": {
+      "name": "Brunei",
+      "continent": "Asia"
+    },
+    "BS": {
+      "name": "Bahamas",
+      "continent": "North America"
+    },
+    "BT": {
+      "name": "Bhutan",
+      "continent": "Asia"
+    },
+    "BY": {
+      "name": "Belarus",
+      "continent": "Europe"
+    },
+    "BZ": {
+      "name": "Belize",
+      "continent": "North America"
+    },
+    "CD": {
+      "name": "Dem. Rep. Congo",
+      "continent": "Africa"
+    },
+    "CF": {
+      "name": "Central African Rep.",
+      "continent": "Africa"
+    },
+    "CI": {
+      "name": "Côte d'Ivoire",
+      "continent": "Africa"
+    },
+    "CM": {
+      "name": "Cameroon",
+      "continent": "Africa"
+    },
+    "CV": {
+      "name": "Cabo Verde",
+      "continent": "Africa"
+    },
+    "CW": {
+      "name": "Curaçao",
+      "continent": "North America"
+    },
+    "CY": {
+      "name": "Cyprus",
+      "continent": "Asia"
+    },
+    "DJ": {
+      "name": "Djibouti",
+      "continent": "Africa"
+    },
+    "DK": {
+      "name": "Denmark",
+      "continent": "Europe"
+    },
+    "DM": {
+      "name": "Dominica",
+      "continent": "North America"
+    },
+    "EE": {
+      "name": "Estonia",
+      "continent": "Europe"
+    },
+    "EH": {
+      "name": "W. Sahara",
+      "continent": "Africa"
+    },
+    "ET": {
+      "name": "Ethiopia",
+      "continent": "Africa"
+    },
+    "FJ": {
+      "name": "Fiji",
+      "continent": "Oceania"
+    },
+    "FK": {
+      "name": "Falkland Is.",
+      "continent": "South America"
+    },
+    "FM": {
+      "name": "Micronesia",
+      "continent": "Oceania"
+    },
+    "FO": {
+      "name": "Faeroe Is.",
+      "continent": "Europe"
+    },
+    "GD": {
+      "name": "Grenada",
+      "continent": "North America"
+    },
+    "GE": {
+      "name": "Georgia",
+      "continent": "Asia"
+    },
+    "GG": {
+      "name": "Guernsey",
+      "continent": "Europe"
+    },
+    "GH": {
+      "name": "Ghana",
+      "continent": "Africa"
+    },
+    "GI": {
+      "name": "Gibraltar",
+      "continent": "Europe"
+    },
+    "GL": {
+      "name": "Greenland",
+      "continent": "North America"
+    },
+    "GN": {
+      "name": "Guinea",
+      "continent": "Africa"
+    },
+    "GQ": {
+      "name": "Eq. Guinea",
+      "continent": "Africa"
+    },
+    "GS": {
+      "name": "S. Geo. and the Is.",
+      "continent": "Seven seas (open ocean)"
+    },
+    "GU": {
+      "name": "Guam",
+      "continent": "Oceania"
+    },
+    "GW": {
+      "name": "Guinea-Bissau",
+      "continent": "Africa"
+    },
+    "GY": {
+      "name": "Guyana",
+      "continent": "South America"
+    },
+    "HK": {
+      "name": "Hong Kong",
+      "continent": "Asia"
+    },
+    "HM": {
+      "name": "Heard I. and McDonald Is.",
+      "continent": "Seven seas (open ocean)"
+    },
+    "HN": {
+      "name": "Honduras",
+      "continent": "North America"
+    },
+    "HT": {
+      "name": "Haiti",
+      "continent": "North America"
+    },
+    "IE": {
+      "name": "Ireland",
+      "continent": "Europe"
+    },
+    "IM": {
+      "name": "Isle of Man",
+      "continent": "Europe"
+    },
+    "IO": {
+      "name": "Br. Indian Ocean Ter.",
+      "continent": "Asia"
+    },
+    "IQ": {
+      "name": "Iraq",
+      "continent": "Asia"
+    },
+    "IR": {
+      "name": "Iran",
+      "continent": "Asia"
+    },
+    "JE": {
+      "name": "Jersey",
+      "continent": "Europe"
+    },
+    "JM": {
+      "name": "Jamaica",
+      "continent": "North America"
+    },
+    "KI": {
+      "name": "Kiribati",
+      "continent": "Oceania"
+    },
+    "KM": {
+      "name": "Comoros",
+      "continent": "Africa"
+    },
+    "KN": {
+      "name": "St. Kitts and Nevis",
+      "continent": "North America"
+    },
+    "KP": {
+      "name": "North Korea",
+      "continent": "Asia"
+    },
+    "KY": {
+      "name": "Cayman Is.",
+      "continent": "North America"
+    },
+    "KZ": {
+      "name": "Kazakhstan",
+      "continent": "Asia"
+    },
+    "LC": {
+      "name": "Saint Lucia",
+      "continent": "North America"
+    },
+    "LI": {
+      "name": "Liechtenstein",
+      "continent": "Europe"
+    },
+    "LS": {
+      "name": "Lesotho",
+      "continent": "Africa"
+    },
+    "LT": {
+      "name": "Lithuania",
+      "continent": "Europe"
+    },
+    "MC": {
+      "name": "Monaco",
+      "continent": "Europe"
+    },
+    "MF": {
+      "name": "St-Martin",
+      "continent": "North America"
+    },
+    "MH": {
+      "name": "Marshall Is.",
+      "continent": "Oceania"
+    },
+    "ML": {
+      "name": "Mali",
+      "continent": "Africa"
+    },
+    "MO": {
+      "name": "Macao",
+      "continent": "Asia"
+    },
+    "MP": {
+      "name": "N. Mariana Is.",
+      "continent": "Oceania"
+    },
+    "MR": {
+      "name": "Mauritania",
+      "continent": "Africa"
+    },
+    "MS": {
+      "name": "Montserrat",
+      "continent": "North America"
+    },
+    "MT": {
+      "name": "Malta",
+      "continent": "Europe"
+    },
+    "MW": {
+      "name": "Malawi",
+      "continent": "Africa"
+    },
+    "MY": {
+      "name": "Malaysia",
+      "continent": "Asia"
+    },
+    "MZ": {
+      "name": "Mozambique",
+      "continent": "Africa"
+    },
+    "NC": {
+      "name": "New Caledonia",
+      "continent": "Oceania"
+    },
+    "NE": {
+      "name": "Niger",
+      "continent": "Africa"
+    },
+    "NF": {
+      "name": "Norfolk Island",
+      "continent": "Oceania"
+    },
+    "NI": {
+      "name": "Nicaragua",
+      "continent": "North America"
+    },
+    "NR": {
+      "name": "Nauru",
+      "continent": "Oceania"
+    },
+    "NU": {
+      "name": "Niue",
+      "continent": "Oceania"
+    },
+    "PA": {
+      "name": "Panama",
+      "continent": "North America"
+    },
+    "PF": {
+      "name": "Fr. Polynesia",
+      "continent": "Oceania"
+    },
+    "PG": {
+      "name": "Papua New Guinea",
+      "continent": "Oceania"
+    },
+    "PH": {
+      "name": "Philippines",
+      "continent": "Asia"
+    },
+    "PM": {
+      "name": "St. Pierre and Miquelon",
+      "continent": "North America"
+    },
+    "PN": {
+      "name": "Pitcairn Is.",
+      "continent": "Oceania"
+    },
+    "PR": {
+      "name": "Puerto Rico",
+      "continent": "North America"
+    },
+    "PW": {
+      "name": "Palau",
+      "continent": "Oceania"
+    },
+    "QA": {
+      "name": "Qatar",
+      "continent": "Asia"
+    },
+    "RO": {
+      "name": "Romania",
+      "continent": "Europe"
+    },
+    "RW": {
+      "name": "Rwanda",
+      "continent": "Africa"
+    },
+    "SA": {
+      "name": "Saudi Arabia",
+      "continent": "Asia"
+    },
+    "SB": {
+      "name": "Solomon Is.",
+      "continent": "Oceania"
+    },
+    "SC": {
+      "name": "Seychelles",
+      "continent": "Africa"
+    },
+    "SD": {
+      "name": "Sudan",
+      "continent": "Africa"
+    },
+    "SH": {
+      "name": "Saint Helena",
+      "continent": "Africa"
+    },
+    "SK": {
+      "name": "Slovakia",
+      "continent": "Europe"
+    },
+    "SL": {
+      "name": "Sierra Leone",
+      "continent": "Africa"
+    },
+    "SM": {
+      "name": "San Marino",
+      "continent": "Europe"
+    },
+    "SN": {
+      "name": "Senegal",
+      "continent": "Africa"
+    },
+    "SS": {
+      "name": "S. Sudan",
+      "continent": "Africa"
+    },
+    "ST": {
+      "name": "São Tomé and Principe",
+      "continent": "Africa"
+    },
+    "SX": {
+      "name": "Sint Maarten",
+      "continent": "North America"
+    },
+    "SY": {
+      "name": "Syria",
+      "continent": "Asia"
+    },
+    "TC": {
+      "name": "Turks and Caicos Is.",
+      "continent": "North America"
+    },
+    "TD": {
+      "name": "Chad",
+      "continent": "Africa"
+    },
+    "TF": {
+      "name": "Fr. S. Antarctic Lands",
+      "continent": "Africa"
+    },
+    "TJ": {
+      "name": "Tajikistan",
+      "continent": "Asia"
+    },
+    "TM": {
+      "name": "Turkmenistan",
+      "continent": "Asia"
+    },
+    "TO": {
+      "name": "Tonga",
+      "continent": "Oceania"
+    },
+    "TT": {
+      "name": "Trinidad and Tobago",
+      "continent": "North America"
+    },
+    "TV": {
+      "name": "Tuvalu",
+      "continent": "Oceania"
+    },
+    "UA": {
+      "name": "Ukraine",
+      "continent": "Europe"
+    },
+    "UG": {
+      "name": "Uganda",
+      "continent": "Africa"
+    },
+    "UM": {
+      "name": "U.S. Minor Outlying Is.",
+      "continent": "North America"
+    },
+    "UY": {
+      "name": "Uruguay",
+      "continent": "South America"
+    },
+    "UZ": {
+      "name": "Uzbekistan",
+      "continent": "Asia"
+    },
+    "VA": {
+      "name": "Vatican",
+      "continent": "Europe"
+    },
+    "VC": {
+      "name": "St. Vin. and Gren.",
+      "continent": "North America"
+    },
+    "VE": {
+      "name": "Venezuela",
+      "continent": "South America"
+    },
+    "VG": {
+      "name": "British Virgin Is.",
+      "continent": "North America"
+    },
+    "VI": {
+      "name": "U.S. Virgin Is.",
+      "continent": "North America"
+    },
+    "VU": {
+      "name": "Vanuatu",
+      "continent": "Oceania"
+    },
+    "WF": {
+      "name": "Wallis and Futuna Is.",
+      "continent": "Oceania"
+    },
+    "YE": {
+      "name": "Yemen",
+      "continent": "Asia"
+    },
+    "ZW": {
+      "name": "Zimbabwe",
+      "continent": "Africa"
+    }
+  },
+  "fleet_fetched_at": "2026-07-17T07:32:19.771Z"
+}
