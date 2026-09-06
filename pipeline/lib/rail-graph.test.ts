@@ -71,6 +71,27 @@ test('T-junction healing: no split when nothing touches the segment body', () =>
   assert.notEqual(componentOfSegment(g, 'a'), componentOfSegment(g, 'b'))
 })
 
+test('T-junction healing: every sub-edge carries its own span, keeping the parent original outer ends', () => {
+  // Two branches touch the trunk at 1/4 and 3/4 of its length, so the middle
+  // sub-edge shares NEITHER of the parent's ends. Copying the parent geometry
+  // put all three sub-edges' midpoints on the trunk's overall midpoint, which
+  // is what the twin gate and the GTFS shape filter then measured.
+  const trunk = seg({ key: 'trunk', startLat: 50, startLon: 14.000, endLat: 50, endLon: 14.020 })
+  const west = seg({ key: 'west', startLat: 50, startLon: 14.005, endLat: 50.005, endLon: 14.005 })
+  const east = seg({ key: 'east', startLat: 50, startLon: 14.015, endLat: 50.005, endLon: 14.015 })
+
+  const subEdges = buildRailGraph([trunk, west, east]).edges.filter((e) => e.parentKey === 'trunk')
+  assert.equal(subEdges.length, 3)
+  assert.deepEqual(subEdges.map((e) => [e.startLon, e.endLon]), [[14.000, 14.005], [14.005, 14.015], [14.015, 14.020]])
+  assert.deepEqual(subEdges.map((e) => ((e.startLon + e.endLon) / 2).toFixed(6)), ['14.002500', '14.010000', '14.017500'])
+
+  // The outer ends stay the parent's own, so `collectSegmentGeometry`
+  // (rail-graph-metrics.ts) still reconstructs the full span from the first and
+  // last sub-edge.
+  assert.deepEqual([subEdges[0].startLat, subEdges[0].startLon], [trunk.startLat, trunk.startLon])
+  assert.deepEqual([subEdges[2].endLat, subEdges[2].endLon], [trunk.endLat, trunk.endLon])
+})
+
 test('snapToNearestRailGraphNode: within radius resolves to the nearest node, beyond radius fails (-1)', () => {
   const g = buildRailGraph([seg({ key: 'a', startLat: 50, startLon: 14, endLat: 50, endLon: 14.01 })])
   const nodeAId = 0 // trunk start interned first

@@ -50,6 +50,36 @@ test('walk: a path crossing a healed T-junction stamps the parent key once, not 
   assert.equal(result.stampsBySegmentKey.has('branch'), false, 'branch was never on this path')
 })
 
+test('walk: a healed sibling track is measured on its own span, so the twin gate walks the pair', () => {
+  // Best track A(0,0)->B(50,0) with a sibling 4 m to the north drawn as ONE
+  // 250 m OSM microsegment from x=-190 to x=+60; two 4 m jogs tie the sibling
+  // to A and B, so healing splits it at t=0.76 and t=0.96. With the sub-edges
+  // carrying the PARENT's geometry the twin gate read a median lateral spread
+  // of 65.1 m (the parent midpoint sits at x=-65), failed the pair 'ambiguous'
+  // and quarantined all four segments; measured on their own spans the
+  // sibling is 4 m away, so the pair walks and stamps the best track.
+  const LAT0 = 50.0, LON0 = 14.5
+  const mPerDegLon = 111_320 * Math.cos(LAT0 * Math.PI / 180)
+  const at = (xM: number, yM: number): [number, number] => [LAT0 + yM / 110_540, LON0 + xM / mPerDegLon]
+  const [aLat, aLon] = at(0, 0), [bLat, bLon] = at(50, 0)
+  const [q1Lat, q1Lon] = at(0, 4), [q2Lat, q2Lon] = at(50, 4)
+  const [rLat, rLon] = at(-190, 4), [sLat, sLon] = at(60, 4)
+
+  const g = buildRailGraph([
+    seg({ key: 'best', startLat: aLat, startLon: aLon, endLat: bLat, endLon: bLon }),
+    seg({ key: 'jogA', startLat: aLat, startLon: aLon, endLat: q1Lat, endLon: q1Lon }),
+    seg({ key: 'jogB', startLat: q2Lat, startLon: q2Lon, endLat: bLat, endLon: bLon }),
+    seg({ key: 'sibling', startLat: rLat, startLon: rLon, endLat: sLat, endLon: sLon }),
+  ])
+  assert.equal(g.edges.filter((e) => e.parentKey === 'sibling').length, 3, 'fixture sanity: the sibling heals into 3 sub-edges')
+
+  const result = walkRailStationPairs(g, [{ fromLat: aLat, fromLon: aLon, toLat: bLat, toLon: bLon, pax: 100, frt: 0 }])
+  assert.equal(result.failures.ambiguous, 0)
+  assert.equal(result.pairsWalked, 1)
+  assert.deepEqual(result.stampsBySegmentKey.get('best'), { pax: 100, frt: 0, divisor: 2 }, 'divisor 2: the sibling is a parallel twin')
+  assert.deepEqual([...result.quarantinedSegmentKeys], [])
+})
+
 // ── Traversal-only crossover: connects, never stamped ───────────────────────
 
 test('walk: a traversal-only crossover carries the route but never appears in stampsBySegmentKey', () => {

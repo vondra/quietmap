@@ -347,10 +347,25 @@ function healTJunctions(nodes: RailGraphNode[], workEdges: WorkEdge[]): RailGrap
     }
     chain.push({ nodeId: e.nodeB, t: 1 })
     for (let i = 0; i < chain.length - 1; i++) {
+      // A sub-edge carries ITS OWN span, not the parent's: every consumer that
+      // asks "where does this edge run" reads startLat..endLon — the twin gate's
+      // per-edge midpoint, the ambiguous-pair diagnostic and the GTFS shape
+      // filter. Copying the parent's outer coordinates put those midpoints up to
+      // 123.6 m off the sub-edge's own track (13,659 CZ sub-edges, 827 km, p50
+      // 29.8 m), which reads a healed sibling track as far from the best path
+      // and fails the pair 'ambiguous'. The OUTER ends keep the parent's
+      // original coordinates so `collectSegmentGeometry` still reconstructs the
+      // parent span from the first and last sub-edge.
+      const isFirst = i === 0
+      const isLast = i === chain.length - 2
       finalEdges.push({
         ...e,
         nodeA: chain[i].nodeId,
         nodeB: chain[i + 1].nodeId,
+        startLat: isFirst ? e.startLat : nodes[chain[i].nodeId].lat,
+        startLon: isFirst ? e.startLon : nodes[chain[i].nodeId].lon,
+        endLat: isLast ? e.endLat : nodes[chain[i + 1].nodeId].lat,
+        endLon: isLast ? e.endLon : nodes[chain[i + 1].nodeId].lon,
         lengthM: e.lengthM * (chain[i + 1].t - chain[i].t),
       })
     }
