@@ -136,7 +136,7 @@ const ROADS_CACHED_DOWNLOAD: Record<string, string[]> = {
   dk: [`${YEAR}/dk/mastra-page-0.json`],
   es: [`${YEAR}/es/mitma-tramos-parsed-v2.json`, `${YEAR}/es/mitma-tramos-2022.js`],
   fi: [`${YEAR}/fi/liikennemaarat-page-0.json`],
-  fr: [`${YEAR}/fr/tmja-census-v2.json`, `${YEAR}/fr/tmja-2024.csv`],
+  fr: [`${YEAR}/fr/tmja-census-v3.json`, `${YEAR}/fr/tmja-2024.csv`],
   gb: [`${YEAR}/gb/dft-aadf.json`, `${YEAR}/gb/dft-aadf.zip`],
   ie: [`${YEAR}/ie/tii-parsed-aadt.json`, `${YEAR}/ie/tii-tmu-sites.json`],
   it: [`${YEAR}/it/tgm-roads.geojson`],
