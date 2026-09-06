@@ -93,9 +93,12 @@ export function pointToPolylineDist(
   return closest
 }
 
-export interface RankedPoint {
+export interface PointCoordinates {
   latitude: number
   longitude: number
+}
+
+export interface RankedPoint extends PointCoordinates {
   /** Null means the source does not publish a compatible functional class. */
   rank: number | null
 }
@@ -117,8 +120,8 @@ function wrappedLongitudeCell(cell: number): number {
 const pointGridKey = (latitudeCell: number, longitudeCellValue: number): string =>
   `${latitudeCell}_${longitudeCellValue}`
 
-/** Index the shared DK/FI/NO/NZ 200 metre ranked-point matching model. */
-export function buildOneHundredthDegreePointGrid<T extends RankedPoint>(
+/** Index point observations once for the road loaders' bounded proximity queries. */
+export function buildOneHundredthDegreePointGrid<T extends PointCoordinates>(
   points: readonly T[],
 ): ReadonlyMap<string, readonly T[]> {
   const grid = new Map<string, T[]>()
@@ -139,6 +142,34 @@ export function buildOneHundredthDegreePointGrid<T extends RankedPoint>(
   return grid
 }
 
+/** Degree reaches enclosing both shared distance models, including polar queries. */
+export function pointSearchReach(latitude: number, radiusMetres: number): [number, number] {
+  const latitudeReach = radiusMetres / METRES_PER_DEGREE_LATITUDE
+  const edgeLatitude = Math.min(90, Math.abs(latitude) + latitudeReach)
+  return [latitudeReach, Math.min(180, latitudeReach / Math.cos(edgeLatitude * Math.PI / 180))]
+}
+
+/** Conservative cell candidates; callers retain their exact distance and class gates. */
+export function* pointGridCandidates<T extends PointCoordinates>(
+  latitude: number,
+  longitude: number,
+  radiusMetres: number,
+  grid: ReadonlyMap<string, readonly T[]>,
+): Iterable<T> {
+  // The smaller latitude scale safely bounds both flatDist and haversineM.
+  const [latitudeReach, longitudeReach] = pointSearchReach(latitude, radiusMetres)
+  const west = Math.floor((longitude - longitudeReach) * POINT_GRID_SCALE)
+  const east = Math.min(west + LONGITUDE_CELL_COUNT - 1,
+    Math.floor((longitude + longitudeReach) * POINT_GRID_SCALE))
+  for (let y = Math.floor((latitude - latitudeReach) * POINT_GRID_SCALE);
+    y <= Math.floor((latitude + latitudeReach) * POINT_GRID_SCALE); y++) {
+    for (let x = west; x <= east; x++) {
+      const bucket = grid.get(pointGridKey(y, wrappedLongitudeCell(x)))
+      if (bucket) yield* bucket
+    }
+  }
+}
+
 /** Find the nearest class-compatible point under the proven strict 200 m cap. */
 export function nearestCompatiblePointWithin200Metres<T extends RankedPoint>(
   latitude: number,
@@ -147,25 +178,14 @@ export function nearestCompatiblePointWithin200Metres<T extends RankedPoint>(
   rankTolerance: number,
   grid: ReadonlyMap<string, readonly T[]>,
 ): T | null {
-  const latitudeCell = Math.floor(latitude * POINT_GRID_SCALE)
-  const baseLongitudeCell = longitudeCell(longitude)
   let closest: T | null = null
   let closestDistance = 200
-  for (let latitudeOffset = -1; latitudeOffset <= 1; latitudeOffset++) {
-    for (let longitudeOffset = -1; longitudeOffset <= 1; longitudeOffset++) {
-      const bucket = grid.get(pointGridKey(
-        latitudeCell + latitudeOffset,
-        wrappedLongitudeCell(baseLongitudeCell + longitudeOffset),
-      ))
-      if (!bucket) continue
-      for (const point of bucket) {
-        if (point.rank !== null && Math.abs(point.rank - roadRank) > rankTolerance) continue
-        const distance = haversineM(latitude, longitude, point.latitude, point.longitude)
-        if (distance < closestDistance) {
-          closest = point
-          closestDistance = distance
-        }
-      }
+  for (const point of pointGridCandidates(latitude, longitude, closestDistance, grid)) {
+    if (point.rank !== null && Math.abs(point.rank - roadRank) > rankTolerance) continue
+    const distance = haversineM(latitude, longitude, point.latitude, point.longitude)
+    if (distance < closestDistance) {
+      closest = point
+      closestDistance = distance
     }
   }
   return closest
