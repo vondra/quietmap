@@ -1,22 +1,11 @@
 #!/usr/bin/env python3
-"""Download Overture building parquets for 1x1-degree tiles in ONE process: the theme's
-parquet footers are read once, then every tile scans only the row groups whose bbox
-statistics intersect it, so an empty tile costs a statistics check instead of the
-~1-2 GB of footers `overturemaps download` fetched per tile (2026-09-03: 5 tiles/min,
-55 MB/s, for the mostly empty polar list).
-
-    download-overture-tiles.py TILE_LIST PARQUET_DIR
-
-Writes PARQUET_DIR/<tile>.parquet (same rows and columns as the CLI wrote: rows whose bbox
-intersects the tile's degree square); skips tiles already cached — the cache on disk is
-the only resume truth. Tiles of one
-latitude row are scanned as one strip of up to BATCH_TILES and split in memory, so the
-per-scan cost (a statistics pass over every row group) is paid once per strip."""
+"""Stream bbox-selected Overture buildings into resumable one-degree source Parquets."""
 import ctypes
 import os
 import sys
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextlib import ExitStack
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -28,13 +17,12 @@ import pyarrow.parquet as pq
 # disagree; a release bump is a full refetch, never a mix.
 RELEASE = "2026-08-19.0"
 DATASET_PATH = f"overturemaps-us-west-2/release/{RELEASE}/theme=buildings/type=building/"
-# Strip width: a dense tile is hundreds of MB in Arrow (three strips of ten reached 16 GiB after
-# 123 tiles on 2026-09-04); four tiles per strip keep three strips in flight under a few GB
-# while an empty polar row still amortises the statistics pass fourfold.
+# Four adjacent tiles share a footer-statistics scan without retaining a full strip.
 BATCH_TILES = 4
-# One strip waits on S3 round trips per row group: measured 2026-09-03 at 21 MB/s of a 55 MB/s
-# link and 61 % of one core; three strips in flight fill the link.
-STRIP_WORKERS = 3
+# Coalesce small scan pieces; each tile retains less than 64 MiB plus its incoming piece.
+TILE_BUFFER_BYTES = 64 << 20
+# Five independent streams overlap S3 latency; each disables speculative buffering.
+STRIP_WORKERS = 5
 # Arrow's default (jemalloc) pool kept strip buffers: 26 GB RSS after 800 tiles (measured), so
 # the process uses the system allocator and trims it after every strip. Past this size the run
 # still ends with exit 3 and the caller starts a fresh process; cached tiles are skipped.
@@ -60,8 +48,9 @@ def bbox_filter(xmin, ymin, xmax, ymax):
 def strips(tiles):
     """Consecutive tiles of one latitude row, at most BATCH_TILES per strip."""
     strip = []
-    for tile in sorted(tiles):
-        if strip and (tile[:3] != strip[0][:3] or len(strip) == BATCH_TILES):
+    for tile in sorted(set(tiles), key=lambda name: (name[:3], tile_bbox(name)[0])):
+        if strip and (tile[:3] != strip[0][:3] or len(strip) == BATCH_TILES
+                      or tile_bbox(tile)[0] != tile_bbox(strip[-1])[2]):
             yield strip
             strip = []
         strip.append(tile)
@@ -69,8 +58,57 @@ def strips(tiles):
         yield strip
 
 
+def fetch_strip(indexed, strip, parquet_dir):
+    """Publish each complete tile only after its streaming scan and writers finish."""
+    boxes = [tile_bbox(tile) for tile in strip]
+    outputs = [f"{parquet_dir}/{tile}.parquet" for tile in strip]
+    counts = [0] * len(strip)
+    try:
+        scanner = indexed.scanner(
+            columns=COLUMNS, filter=bbox_filter(boxes[0][0], boxes[0][1],
+                                               boxes[-1][2], boxes[-1][3]),
+            batch_readahead=0, fragment_readahead=1,
+            fragment_scan_options=ds.ParquetFragmentScanOptions(
+                pre_buffer=False, use_buffered_stream=True),
+        )
+        with ExitStack() as opened:
+            writers = [opened.enter_context(pq.ParquetWriter(out + ".dl", scanner.projected_schema))
+                       for out in outputs]
+            buffered_tables = [[] for _ in outputs]
+            buffered_bytes = [0] * len(outputs)
+
+            def flush_tile(index):
+                if buffered_tables[index]:
+                    writers[index].write_table(pa.concat_tables(buffered_tables[index]))
+                    buffered_tables[index].clear()
+                    buffered_bytes[index] = 0
+
+            for batch in scanner.to_batches():
+                indexed_batch = ds.dataset(batch)
+                for index, box in enumerate(boxes):
+                    table = indexed_batch.to_table(filter=bbox_filter(*box))
+                    if table.num_rows:
+                        buffered_tables[index].append(table)
+                        buffered_bytes[index] += table.nbytes
+                        counts[index] += table.num_rows
+                        if buffered_bytes[index] >= TILE_BUFFER_BYTES:
+                            flush_tile(index)
+            for index in range(len(outputs)):
+                flush_tile(index)
+        for tile, out, count in zip(strip, outputs, counts):
+            os.replace(out + ".dl", out)
+            print(f"[overture-tiles] {tile} ({count} rows, "
+                  f"{os.path.getsize(out) // 1024} KiB)", flush=True)
+        return 0
+    except Exception as error:  # Incomplete .dl files are never accepted as cached tiles.
+        print(f"[overture-tiles] {strip[0]}..{strip[-1]} FAILED: {error}",
+              file=sys.stderr, flush=True)
+        return len(strip)
+
+
 def main(list_path, parquet_dir):
-    tiles = [line.strip() for line in open(list_path) if line.strip()]
+    with open(list_path) as selected:
+        tiles = [line.strip() for line in selected if line.strip()]
     todo = [t for t in tiles
             if not (os.path.exists(f"{parquet_dir}/{t}.parquet")
                     and os.path.getsize(f"{parquet_dir}/{t}.parquet") > 0)]
@@ -87,28 +125,10 @@ def main(list_path, parquet_dir):
     print(f"[overture-tiles] footers of {len(fragments)} files read in "
           f"{time.time() - started:.0f} s", flush=True)
     indexed = ds.FileSystemDataset(fragments, dataset.schema, dataset.format, s3)
-    def fetch_strip(strip):
-        boxes = [tile_bbox(t) for t in strip]
-        try:
-            rows = indexed.to_table(columns=COLUMNS, filter=bbox_filter(
-                min(b[0] for b in boxes), min(b[1] for b in boxes),
-                max(b[2] for b in boxes), max(b[3] for b in boxes)))
-        except Exception as error:  # one strip must not end the pass; the next run retries
-            print(f"[overture-tiles] {strip[0]}..{strip[-1]} FAILED: {error}",
-                  file=sys.stderr, flush=True)
-            return len(strip)
-        for tile, box in zip(strip, boxes):
-            out = f"{parquet_dir}/{tile}.parquet"
-            tmp = out + ".dl"
-            table = ds.dataset(rows).to_table(filter=bbox_filter(*box))
-            pq.write_table(table, tmp)
-            os.replace(tmp, out)
-            print(f"[overture-tiles] {tile} ({table.num_rows} rows, "
-                  f"{os.path.getsize(out) // 1024} KiB)", flush=True)
-        return 0
 
     def rss_bytes():
-        return int(open("/proc/self/statm").read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+        with open("/proc/self/statm") as status:
+            return int(status.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
 
     failed = 0
     pending = list(strips(todo))
@@ -117,7 +137,7 @@ def main(list_path, parquet_dir):
         inflight = set()
         while inflight or (pending and not restart):
             while pending and not restart and len(inflight) < STRIP_WORKERS:
-                inflight.add(executor.submit(fetch_strip, pending.pop(0)))
+                inflight.add(executor.submit(fetch_strip, indexed, pending.pop(0), parquet_dir))
             done, inflight = wait(inflight, return_when=FIRST_COMPLETED)
             failed += sum(future.result() for future in done)
             pa.default_memory_pool().release_unused()
@@ -137,5 +157,5 @@ def main(list_path, parquet_dir):
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        sys.exit(__doc__)
+        sys.exit("usage: download-overture-tiles.py TILE_LIST PARQUET_DIR")
     sys.exit(main(*sys.argv[1:]))
