@@ -219,3 +219,64 @@ pub fn partition_and_paint_tile(
 const BLOCK_PIXEL_COUNT: usize = TILE_PIXEL_SIDE * TILE_PIXEL_SIDE / BLOCK_COUNT;
 const _: () = assert!(TILE_PIXEL_SIDE.is_multiple_of(crate::source_frame::BLOCK_PIXEL_SIDE));
 const _: () = assert!(PERIOD_COUNT == 3);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::obstacle_transfer::FlattenedObstacleGeometry;
+    use crate::surface_layers::LAYER_LDEN_WEIGHTS;
+    use raster_reader::fused_tile_z13::TileBatch;
+    use raster_reader::RealRasters;
+    use std::path::Path;
+
+    /// The card's half of the silent tile. `PendingTileWrite::Silent` writes the
+    /// all-NO_DATA tile on the claim that this is what the paint returns when no
+    /// source of the layer reaches it; this asks the card. With no sources the
+    /// incidence is empty, the partition admits nothing and leaves every block's
+    /// background at zero, so both kernels must leave every pixel of every period
+    /// at zero — over a real halo and a real receiver lattice, which the paint
+    /// reads only through the sources it does not have.
+    ///
+    /// It opens a CUDA context, so it is not in the default set: the nvcc role
+    /// gate must stay runnable on a host that has the toolkit and no card. Run it
+    /// where a card is — the release build host — with
+    /// `cargo test --manifest-path engine/relevant-source-gpu/Cargo.toml
+    /// --features gpu -- --ignored`.
+    #[test]
+    #[ignore = "opens a CUDA context; run on a box with a card"]
+    fn a_tile_no_source_reaches_comes_back_from_the_card_at_zero() {
+        let cuda = RelevantSourceCuda::initialize().expect("a CUDA device");
+        let rasters = RealRasters::new(Path::new("/nonexistent-prepared-root"));
+        let frame = RegionMetricFrame::for_latitude_longitude(49.78, 14.17);
+        let batch = TileBatch::build_opt_rx_refl(13, 4412, 2784, 1, 30.0, &rasters);
+        let obstacles = ObstacleSet::empty();
+        let device_obstacles =
+            RegionDeviceObstacles::upload(&FlattenedObstacleGeometry::from_set(&frame, &obstacles))
+                .expect("an empty obstacle set uploads");
+        let device_sources = RegionDeviceLineSources::upload(&[]).expect("no sources upload");
+        let batch_raster =
+            BatchDeviceRaster::upload(&frame, &batch.tiles[0]).expect("the halo uploads");
+        let receivers = TileDeviceReceivers::upload(&frame, &batch.tiles[0], &obstacles)
+            .expect("the receiver lattice uploads");
+        let (measurement, energy) = partition_and_paint_tile(
+            &cuda,
+            &[],
+            &device_sources,
+            &device_obstacles,
+            &batch_raster,
+            &receivers,
+            LAYER_LDEN_WEIGHTS[0],
+        )
+        .expect("the card paints the tile");
+        assert_eq!(measurement.corner_pairs, 0);
+        assert_eq!(measurement.relevant_source_references, 0);
+        assert_eq!(
+            energy.len(),
+            TILE_PIXEL_SIDE * TILE_PIXEL_SIDE * PERIOD_COUNT
+        );
+        assert!(
+            energy.iter().all(|&value| value == 0.0),
+            "the card returned energy for a tile no source reaches"
+        );
+    }
+}
