@@ -263,8 +263,22 @@ __device__ __forceinline__ void build_path_profile(
     profile.forest_depth_m = forest_total;
 }
 
-__device__ __forceinline__ float profile_elevation_at(const PathProfile& profile, float t) {
-    int upper = 1;
+/// The terrain of one built profile at chainage `t`, interpolated between the two samples
+/// that bracket it.
+///
+/// The walk stops at the first sample whose chainage is not below `t`, so starting it at
+/// `first_candidate_index` finds the same sample whenever that index's predecessor is
+/// still below `t`: chainages increase, so every sample the walk would have stepped over
+/// is below `t` too. `first_candidate_index` is a sample index of this profile; a caller
+/// with no bracket to offer passes 1 and walks it whole, which is what every caller used
+/// to do — on the kbench window that walk was half of what the paint kernel had left.
+__device__ __forceinline__ float profile_elevation_at(
+    const PathProfile& profile,
+    float t,
+    int first_candidate_index
+) {
+    int upper = first_candidate_index > 1 && profile.t[first_candidate_index - 1] < t
+        ? first_candidate_index : 1;
     while (upper < profile.count - 1 && profile.t[upper] < t) {
         ++upper;
     }

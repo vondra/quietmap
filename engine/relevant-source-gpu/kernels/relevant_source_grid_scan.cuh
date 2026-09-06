@@ -146,9 +146,13 @@ __device__ __forceinline__ void scan_obstacle_grid(
                             values[2], values[3], crossing_t)
                         && (scene.obstacle_edge_is_building[edge] == 0u
                             || crossing_t * profile.distance_m >= exclusion_radius_m)) {
+                        // The cell's own window already brackets `crossing_t` whenever the
+                        // crossing lies inside the cell, which is where the walk finds
+                        // nearly all of them; a crossing further along the edge than the
+                        // cell simply falls back on the whole profile.
                         consider_crossing_candidate(
                             profile, source_altitude_m, receiver_altitude_m,
-                            crossing_t, values[4], best);
+                            crossing_t, values[4], profile_window_start, best);
                     }
                 }
             }

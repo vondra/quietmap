@@ -60,9 +60,10 @@ __device__ __forceinline__ void consider_crossing_candidate(
     float receiver_altitude_m,
     float t,
     float obstacle_height_m,
+    int first_candidate_index,
     DiffractionEdge& best
 ) {
-    const float terrain_m = profile_elevation_at(profile, t);
+    const float terrain_m = profile_elevation_at(profile, t, first_candidate_index);
     const float top_m = terrain_m + obstacle_height_m;
     const float delta_m = signed_candidate_delta(
         profile, source_altitude_m, receiver_altitude_m, t, top_m);

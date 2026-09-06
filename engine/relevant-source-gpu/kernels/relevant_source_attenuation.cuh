@@ -66,7 +66,7 @@ __device__ __forceinline__ float edge_delta_star(
     float receiver_slope;
     float receiver_intercept;
     const float bare_top = edge.explicit_obstacle
-        ? profile_elevation_at(profile, edge.t)
+        ? profile_elevation_at(profile, edge.t, 1)
         : profile.elevation_m[edge.terrain_sample_index];
     if (edge.explicit_obstacle) {
         int lower_end = 0;
