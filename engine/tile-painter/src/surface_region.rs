@@ -56,14 +56,37 @@ use noise_compute::propagation::obstacle_index::ObstacleSet;
 /// Per-layer halo: covers the source→receiver ray at the layer's max reach.
 /// Road = motorway-class cap (10 km); rail + industrial reference the single
 /// reach the loader gates on; building is capped at 2 km by
-/// `prepare_building_points`. In `--source ground` the shared halo is the MAX
-/// of the requested layers (= road 10 km); a shorter-reach layer only
-/// ray-marches its own inner disk, so a larger halo leaves its output unchanged.
+/// `prepare_building_points`. A pass that paints several layers shares the MAX
+/// of theirs; a shorter-reach layer only ray-marches its own inner disk, so a
+/// larger halo leaves its output unchanged.
 const ROAD_HALO_M: f64 = 10_000.0;
 const RAIL_HALO_M: f64 = RAILWAY_REACH_CEILING;
 const INDUSTRIAL_HALO_M: f64 = INDUSTRIAL_MAX_RADIUS;
 const BUILDING_HALO_M: f64 = 2_000.0;
 const GROUNDOPS_HALO_M: f64 = GROUND_OPS_RUNWAY_MAX_RADIUS;
+
+/// The halo a painter of ALL five ground layers must build: the widest of them,
+/// rail's `RAILWAY_REACH_CEILING`. Read from the same table `layer_meta` answers
+/// from, so the two painters cannot drift apart on it.
+pub const WIDEST_GROUND_HALO_M: f64 = widest_halo(&[
+    ROAD_HALO_M,
+    RAIL_HALO_M,
+    INDUSTRIAL_HALO_M,
+    BUILDING_HALO_M,
+    GROUNDOPS_HALO_M,
+]);
+
+const fn widest_halo(halos: &[f64]) -> f64 {
+    let mut widest = 0.0;
+    let mut index = 0;
+    while index < halos.len() {
+        if halos[index] > widest {
+            widest = halos[index];
+        }
+        index += 1;
+    }
+    widest
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
 pub enum Source {

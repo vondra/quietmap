@@ -36,7 +36,13 @@ use crate::surface_layers::{
 };
 
 const REGION_TILE_BATCH_SIDE: u32 = 4;
-const LINE_HALO_M: f64 = 10_000.0;
+/// The shared terrain halo of a batch: the widest reach any of the five painted
+/// layers can carry, from the one per-layer table the CPU builder sizes its own
+/// halo with. A hand-written 10 km used to sit here while rail's per-row reach
+/// is solved up to RAILWAY_REACH_CEILING = 11 km, so the last kilometre of a
+/// long rail row's terrain and obstacles was sampled from the clamped halo edge
+/// (`sample_scene_raster` clamps row and column into the grid).
+const LINE_HALO_M: f64 = tile_painter::surface_region::WIDEST_GROUND_HALO_M;
 /// Cells resident on the card at once: the one painting and the next one.
 const RESIDENT_CELLS: usize = 2;
 /// Painted tiles waiting for the writer before the painter blocks (3 MB each).

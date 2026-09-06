@@ -518,7 +518,7 @@ fn main() -> Result<()> {
     if layers.is_empty() {
         bail!("all requested layers were excluded");
     }
-    // Shared halo = the widest reach among the requested layers (road 10 km in
+    // Shared halo = the widest reach among the requested layers (rail 11 km in
     // ground mode); a shorter-reach layer only ray-marches its own inner disk,
     // so the wider halo leaves its output unchanged.
     let halo_m = layers
