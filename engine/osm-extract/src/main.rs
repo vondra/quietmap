@@ -1,7 +1,7 @@
 //! osm-extract: Extract noise-relevant features from OSM PBF into z9-partitioned Arrow IPC.
 //!
 //! Pipeline:
-//!   Pass 0: Scan relations → manifest of multipolygon members
+//!   Pass 0: Scan relations + way references → multipolygon members and protected junctions
 //!   Pass 1: Stream nodes → mmap'd coordinate cache
 //!   Pass 2: Stream ways + relations → classify, resolve, microsegment, assemble multipolygons
 //!   Spill to `--num-buckets` square-disjoint buckets, then finalize → per-square Arrow IPC
@@ -12,6 +12,7 @@
 mod classify;
 mod finalize;
 mod ids;
+mod junctions;
 mod microsegment;
 mod node_cache;
 mod poi_join;
@@ -72,7 +73,7 @@ fn main() -> Result<()> {
 
     // ── Pass 0: Scan relations ──
     eprintln!("\n── Pass 0: Scan relations ──");
-    let manifest = relations::scan_relations(&cli.input)?;
+    let (manifest, junctions) = relations::scan_relations_and_junctions(&cli.input)?;
     eprintln!("  {:.1}s", t0.elapsed().as_secs_f64());
 
     // ── Pass 1: Node coordinate cache ──
@@ -118,7 +119,11 @@ fn main() -> Result<()> {
                 }
 
                 // Resolve coordinates
-                let coords: Vec<[f64; 2]> = way.refs().filter_map(|nid| cache.get(nid)).collect();
+                let resolved_nodes: Vec<_> = way.refs().map(|id| (id, cache.get(id))).collect();
+                let coords: Vec<_> = resolved_nodes
+                    .iter()
+                    .filter_map(|(_, coords)| *coords)
+                    .collect();
 
                 // Check if this way is a member of any multipolygon relation
                 let is_relation_member = manifest.way_to_relations.contains_key(&way.id());
@@ -291,7 +296,17 @@ fn main() -> Result<()> {
 
                     if ftype.is_linear() {
                         let max_len = 250.0;
-                        let segs = microsegment::split(&coords, max_len);
+                        let segs = microsegment::split_at_junctions(
+                            resolved_nodes
+                                .iter()
+                                .map(|(id, coords)| (*coords, junctions.contains(*id))),
+                            max_len,
+                        );
+                        assert!(
+                            segs.len() <= i16::MAX as usize + 1,
+                            "way {} exceeds nonnegative Int16 segment identities",
+                            way.id(),
+                        );
                         for (idx, seg) in segs.iter().enumerate() {
                             let mid_lat = (seg.0[0] + seg.1[0]) / 2.0;
                             let mid_lon = grid::geo::wrapped_longitude_midpoint(seg.0[1], seg.1[1]);
@@ -400,6 +415,8 @@ fn main() -> Result<()> {
 
     // Finalize opens its own readers and writers; close all spill writers first.
     drop(spiller);
+
+    drop(junctions);
 
     // Free node cache before finalize (saves ~64 GB disk for planet)
     drop(cache);

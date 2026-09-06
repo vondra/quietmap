@@ -11,7 +11,7 @@ pub fn classify_way(way: &Way) -> Option<FeatureType> {
     scope_keeps(&ft).then_some(ft)
 }
 
-fn classify_way_unscoped(way: &Way) -> Option<FeatureType> {
+pub(crate) fn classify_way_unscoped(way: &Way) -> Option<FeatureType> {
     let tags = way.tags().collect::<Vec<_>>();
     let tag = |k: &str| tags.iter().find(|(key, _)| *key == k).map(|(_, v)| *v);
 

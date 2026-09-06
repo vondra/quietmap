@@ -44,8 +44,7 @@ pub fn bearing_deg(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f32 {
 
 /// Maximum perpendicular distance an intermediate vertex may stray from
 /// the chord before the walker emits and restarts. 1 m matches OSM
-/// surveyor digitisation noise and is well below the current base heatmap
-/// pixel size (~19.1 m at the equator, ~12.3 m at 50° N).
+/// surveyor digitisation noise; shared source nodes are protected separately.
 const CHORD_EPS_M: f64 = 1.0;
 
 /// Perpendicular distance from `p` to the chord `(a, b)` in metres.
@@ -68,6 +67,32 @@ fn perp_distance_to_chord(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     let foot_x = t * bx;
     let foot_y = t * by;
     ((px - foot_x).powi(2) + (py - foot_y).powi(2)).sqrt()
+}
+
+/// End a simplification range at each shared source node or missing coordinate.
+pub fn split_at_junctions(
+    nodes: impl IntoIterator<Item = (Option<[f64; 2]>, bool)>,
+    max_length_m: f64,
+) -> Vec<([f64; 2], [f64; 2], f32)> {
+    let mut segments = Vec::new();
+    let mut range = Vec::new();
+    for (coords, junction) in nodes {
+        if let Some(coords) = coords {
+            if range.last() != Some(&coords) {
+                range.push(coords);
+            }
+            if junction {
+                segments.extend(split(&range, max_length_m));
+                range.clear();
+                range.push(coords);
+            }
+        } else {
+            segments.extend(split(&range, max_length_m));
+            range.clear();
+        }
+    }
+    segments.extend(split(&range, max_length_m));
+    segments
 }
 
 /// Split a linestring into microsegments, merging consecutive
@@ -148,22 +173,95 @@ fn interpolate_pair(
     for j in 0..n {
         let t0 = j as f64 / n as f64;
         let t1 = (j + 1) as f64 / n as f64;
-        let p0 = [
-            a[0] + (b[0] - a[0]) * t0,
-            normalize_longitude(a[1] + dlon * t0),
-        ];
-        let p1 = [
-            a[0] + (b[0] - a[0]) * t1,
-            normalize_longitude(a[1] + dlon * t1),
-        ];
+        let p0 = if j == 0 {
+            a
+        } else {
+            [
+                a[0] + (b[0] - a[0]) * t0,
+                normalize_longitude(a[1] + dlon * t0),
+            ]
+        };
+        let p1 = if j + 1 == n {
+            b
+        } else {
+            [
+                a[0] + (b[0] - a[0]) * t1,
+                normalize_longitude(a[1] + dlon * t1),
+            ]
+        };
         segments.push((p0, p1, seg_len as f32));
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{bearing_deg, split};
+    use super::{bearing_deg, split, split_at_junctions};
     use grid::geo::flat_dist;
+
+    #[test]
+    fn protected_collinear_source_node_remains_an_exact_segment_endpoint() {
+        let coords = [[50.0, 14.0], [50.0, 14.0005], [50.0, 14.001]];
+        let merged = split_at_junctions(coords.map(|point| (Some(point), false)), 250.0);
+        assert_eq!(merged.len(), 1);
+        let protected = split_at_junctions(
+            coords
+                .into_iter()
+                .enumerate()
+                .map(|(index, point)| (Some(point), index == 1)),
+            250.0,
+        );
+        assert_eq!(protected.len(), 2);
+        assert_eq!((protected[0].0, protected[0].1), (coords[0], coords[1]));
+        assert_eq!((protected[1].0, protected[1].1), (coords[1], coords[2]));
+    }
+
+    #[test]
+    fn repeated_adjacent_source_node_cannot_emit_a_graph_self_loop() {
+        let a = [50.0, 14.0];
+        let junction = [50.0, 14.0005];
+        let b = [50.0, 14.001];
+        let segments = split_at_junctions(
+            [
+                (Some(a), false),
+                (Some(junction), true),
+                (Some(junction), true),
+                (Some(b), false),
+            ],
+            250.0,
+        );
+        assert_eq!(segments.len(), 2);
+        assert_eq!((segments[0].0, segments[0].1), (a, junction));
+        assert_eq!((segments[1].0, segments[1].1), (junction, b));
+        assert!(segments.iter().all(|segment| segment.2 > 0.0));
+    }
+
+    #[test]
+    fn missing_source_node_ends_the_connected_range_without_a_bridge() {
+        let a = [50.0, 14.0];
+        let b = [50.0002, 14.0];
+        let c = [50.0004, 14.0];
+        let d = [50.0006, 14.0];
+        let segments = split_at_junctions(
+            [Some(a), Some(b), None, Some(c), Some(d)].map(|point| (point, false)),
+            250.0,
+        );
+        assert_eq!(
+            segments
+                .iter()
+                .map(|segment| (segment.0, segment.1))
+                .collect::<Vec<_>>(),
+            vec![(a, b), (c, d)]
+        );
+    }
+
+    #[test]
+    fn interpolation_preserves_source_endpoint_bits_before_grid_quantization() {
+        let coords = [[0.1234567, 179.99], [0.1245678, 180.0]];
+        let segments = split(&coords, 250.0);
+        assert!(segments.len() > 1);
+        assert_eq!(segments.first().unwrap().0, coords[0]);
+        assert_eq!(segments.last().unwrap().1, coords[1]);
+    }
 
     fn near(a: f32, b: f32) -> bool {
         let diff = (a - b).abs();

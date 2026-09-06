@@ -1,6 +1,6 @@
 //! Multipolygon relation assembly.
 //!
-//! Pass 0: Scan relations → build manifest of which ways belong to which relations.
+//! Pass 0: Collect multipolygon membership and repeated linear-way node identities.
 //! Pass 1: As ways are processed, cache geometries for relation members.
 //!         When all members of a relation are collected, assemble the polygon.
 
@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::classify::{FeatureType, Tags};
+use crate::junctions::{JunctionCensus, NodeIdBitmap};
 
 /// Info about a relation we care about.
 #[derive(Clone)]
@@ -27,12 +28,13 @@ pub struct RelationManifest {
     pub relations: HashMap<i64, RelationInfo>,
 }
 
-/// Pass 0: Scan PBF for multipolygon relations containing buildings/industrial/airports.
+/// Scan multipolygon relations and linear-way node references in one PBF pass.
 ///
 /// Parallel via `osmpbf::par_map_reduce` — decodes PBF blocks across all
 /// rayon worker threads, each produces a partial manifest, then merged
 /// into a single one. ~4-6× faster than single-threaded on a 24-core box.
-pub fn scan_relations(pbf_path: &Path) -> Result<RelationManifest> {
+pub fn scan_relations_and_junctions(pbf_path: &Path) -> Result<(RelationManifest, NodeIdBitmap)> {
+    let junctions = JunctionCensus::new()?;
     let reader = ElementReader::from_path(pbf_path)?;
 
     let manifest = reader.par_map_reduce(
@@ -41,6 +43,15 @@ pub fn scan_relations(pbf_path: &Path) -> Result<RelationManifest> {
                 way_to_relations: HashMap::new(),
                 relations: HashMap::new(),
             };
+            if let Element::Way(ref way) = element {
+                // Census is independent of output scope: retained families must
+                // have the same segmentation in scoped and full extractions.
+                if crate::classify::classify_way_unscoped(way).is_some_and(|ft| ft.is_linear()) {
+                    for node_id in way.refs() {
+                        junctions.record(node_id);
+                    }
+                }
+            }
             if let Element::Relation(rel) = element {
                 // QM_OSM_ONLY scope: skip out-of-scope multipolygons here so
                 // their members never enter the assembly manifest at all.
@@ -103,7 +114,8 @@ pub fn scan_relations(pbf_path: &Path) -> Result<RelationManifest> {
         manifest.way_to_relations.len()
     );
 
-    Ok(manifest)
+    eprintln!("  Pass 0: {} protected linear-way nodes", junctions.count());
+    Ok((manifest, junctions.finish()))
 }
 
 /// Decide whether a relation is one of the multipolygon flavours we track.
