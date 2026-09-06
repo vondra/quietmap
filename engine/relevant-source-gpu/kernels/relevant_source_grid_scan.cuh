@@ -55,8 +55,9 @@ __device__ __forceinline__ float maximum_cell_candidate_delta(
 
 /// Every obstacle crossing of one ray, keeping the one with the largest delta.
 ///
-/// `must_exceed_m` is the delta a crossing has to beat for the caller to read it at all;
-/// a cell whose own bound cannot reach it is never opened.
+/// `must_exceed_m` is the delta a crossing has to beat for the caller to read it at all,
+/// already lowered by the arithmetic's own error; a cell whose own bound cannot reach it is
+/// never opened.
 __device__ __forceinline__ void scan_obstacle_grid(
     const DeviceScenePointers& scene,
     const DeviceObstacleGrid& grid,
