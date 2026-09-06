@@ -19,6 +19,16 @@ __device__ __forceinline__ float signed_delta_for_bounded_top(
     return top_m >= sight_m ? detour_m : -detour_m;
 }
 
+/// Upper bound on the signed delta of every crossing between `minimum_t` and `maximum_t`
+/// whose top is at most `top_m`.
+///
+/// The delta rises with the top, so a cell's tallest possible top bounds every candidate in
+/// it. In `t` the detour is convex for a fixed top, so above the sight line
+/// (delta = +detour) the maximum sits at an end of the window, and below it
+/// (delta = -detour, concave) at the detour's stationary point — the reflection point,
+/// clamped to the window. The three points evaluated here therefore attain the true maximum
+/// of both branches. `CellPrune::max_delta` in noise-compute's `obstacle_index.rs` owns the
+/// derivation and this mirrors it.
 __device__ __forceinline__ float maximum_cell_candidate_delta(
     const PathProfile& profile,
     float source_altitude_m,
@@ -115,18 +125,12 @@ __device__ __forceinline__ void scan_obstacle_grid(
             const float top_bound_m = terrain_maximum_m
                 + scene.obstacle_cell_maximum_heights[
                     grid.cell_maximum_height_offset + cell];
-            // The loop below is where a dense metro ray spends nearly all of its GPU
-            // seconds — on the kbench downtown window, skipping it takes the paint from 84
-            // to 5 GPU seconds — so the cell bound gates on both floors it can.
-            // `maximum_cell_candidate_delta` bounds the delta of every crossing this cell
-            // holds from above: the delta rises with the obstacle top, and `top_bound_m` is
-            // the cell's tallest edge over the highest terrain the ray meets inside it;
-            // the detour is convex in `t`, so over the cell's own stretch of the ray its
-            // extremes are the two ends and the reflection point, the three the bound
-            // evaluates. A cell that cannot reach the penumbra floor diffracts nothing in
-            // any band, and a cell that cannot out-diffract the terrain edge produces
-            // nothing the caller reads: `ray_terrain_and_screening_bands` takes the
-            // obstacle edge only where it beats the terrain one.
+            // `top_bound_m` is the cell's tallest edge over the highest terrain the ray
+            // meets inside it, so the bound below answers for every crossing the cell
+            // holds. A cell that cannot reach the penumbra floor diffracts nothing in any
+            // band, and a cell that cannot out-diffract the terrain edge produces nothing
+            // the caller reads: `ray_terrain_and_screening_bands` takes the obstacle edge
+            // only where it beats the terrain one.
             const float cell_bound_m = maximum_cell_candidate_delta(
                 profile, source_altitude_m, receiver_altitude_m, top_bound_m,
                 cell_minimum_t, cell_maximum_t);
@@ -146,10 +150,12 @@ __device__ __forceinline__ void scan_obstacle_grid(
                             values[2], values[3], crossing_t)
                         && (scene.obstacle_edge_is_building[edge] == 0u
                             || crossing_t * profile.distance_m >= exclusion_radius_m)) {
-                        // The cell's own window already brackets `crossing_t` whenever the
-                        // crossing lies inside the cell, which is where the walk finds
-                        // nearly all of them; a crossing further along the edge than the
-                        // cell simply falls back on the whole profile.
+                        // The window starts at the last chainage at or before the cell,
+                        // so it brackets every crossing from `cell_minimum_t` onwards —
+                        // the cell's own stretch of the ray and anything further along the
+                        // edge. A crossing BEFORE the window is the one case the offered
+                        // start does not bracket, and `profile_elevation_at` answers it by
+                        // walking the profile whole.
                         consider_crossing_candidate(
                             profile, source_altitude_m, receiver_altitude_m,
                             crossing_t, values[4], profile_window_start, best);
