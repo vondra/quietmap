@@ -8,7 +8,8 @@ use std::time::Instant;
 
 use h3o::CellIndex;
 use rayon::prelude::*;
-use source_reader::structure_store::{check_index_cache_volume, warm_cell_index};
+use source_reader::index_cache::check_index_cache_volume;
+use source_reader::structure_store::warm_cell_index;
 
 /// A dense metro cell's build holds its whole Arrow table plus the builder in
 /// memory — multi-GB transients — so builds run a few at a time to bound the

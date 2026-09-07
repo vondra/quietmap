@@ -73,23 +73,6 @@ const CELL_CACHE_CAP: usize = 8;
 /// anyone naming the constants here.
 const CACHE_CODE_VER: u64 = fnv1a64(BUILDER_CODE_VER, include_bytes!("structure_store.rs"));
 
-/// Disk budget for the cached indexes: the whole prepared world, so no popup
-/// ever pays a cold build (Paris 19 s, London 12 s of builds on 2026-09-06).
-/// 2026 world: 121 790 cells, 503 GB of `structures.arrow`, indexes at 1.08×
-/// their Arrow (measured over 789 cached cells) ≈ 545 GB; the rest is headroom
-/// for the files other checkouts on another engine version write into the same
-/// root (a data refresh overwrites in place — the file name carries the engine
-/// version, the header the data version). `obstacle-index-warm` fills it from
-/// production; past it the least-recently-USED file is dropped.
-const CACHE_BUDGET_BYTES: u64 = 640 << 30;
-
-const CACHE_FILE_EXT: &str = "qoix";
-
-/// A `.tmp` older than this is an orphan from a killed process, not a write in
-/// flight — [`evict_to_budget`] reaps it. Generous by two orders: writing one
-/// index is a few hundred MB of sequential IO.
-const TMP_ORPHAN_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
-
 /// Mapped cache file. The mapping's address and contents are fixed for its
 /// life, which is what [`IndexBlob`] requires.
 struct MappedIndexFile(memmap2::Mmap);
@@ -101,26 +84,6 @@ unsafe impl IndexBlob for MappedIndexFile {
     fn as_bytes(&self) -> &[u8] {
         &self.0
     }
-}
-
-/// `QM_OBSTACLE_INDEX_CACHE=0` turns the disk cache off — the A/B lever for
-/// measuring what it is worth, and the bisection escape hatch, from ONE binary.
-fn index_cache_enabled() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| !std::env::var("QM_OBSTACLE_INDEX_CACHE").is_ok_and(|v| v == "0"))
-}
-
-/// Where cached indexes live: beside the other derived, year-independent
-/// prepared artifacts (`prepared/dem`, `prepared/rasters`).
-/// `QM_OBSTACLE_INDEX_DIR` moves them to another volume.
-fn index_cache_root(data_dir: &Path) -> Option<PathBuf> {
-    if !index_cache_enabled() {
-        return None;
-    }
-    if let Ok(dir) = std::env::var("QM_OBSTACLE_INDEX_DIR") {
-        return Some(PathBuf::from(dir));
-    }
-    Some(data_dir.join("obstacle-index"))
 }
 
 /// The FULL identity of one cell's index — everything that decides its bytes,
@@ -175,7 +138,10 @@ fn cell_data_ver(cell: CellIndex, structures_arrow: &Path) -> Option<u64> {
 /// and rebuilding the other's file forever. Superseded versions are ordinary
 /// cache files and age out through the LRU budget.
 fn cache_file_path(root: &Path, cell: CellIndex) -> PathBuf {
-    root.join(format!("{cell}.{CACHE_CODE_VER:016x}.{CACHE_FILE_EXT}"))
+    root.join(format!(
+        "{cell}.{CACHE_CODE_VER:016x}.{}",
+        crate::index_cache::CACHE_FILE_EXT
+    ))
 }
 
 /// Map a cached index, or `None` for any reason at all — absent, stale,
@@ -196,121 +162,6 @@ fn load_cached_index(path: &Path, data_ver: u64) -> Option<ObstacleIndex> {
     }
 }
 
-/// Drop least-recently-used cache files until `incoming` more bytes fit in
-/// [`CACHE_BUDGET_BYTES`]. Best effort throughout — a cache that cannot be
-/// pruned must not break a popup.
-///
-/// Safe to run while another process (or another checkout's server) has one of
-/// these files mapped: unlinking keeps the inode alive until the last mapping
-/// drops, and a rebuild lands on a NEW inode through the rename, so no live
-/// query ever sees its index change underneath it.
-///
-/// Also the only reaper of ORPHANED `.tmp` files. [`store_cached_index`] removes
-/// its own on a write error, but a process killed between `create` and `rename`
-/// cannot — and those bytes were invisible to this budget (the filter took
-/// `.qoix` alone), so a crash loop could fill the disk with files nothing would
-/// ever look at again. Anything older than [`TMP_ORPHAN_AGE`] is not a write in
-/// flight: one index is a few hundred MB, seconds of IO.
-/// Cache bytes as last counted, and when. With the world cached the directory
-/// holds ~120 k files, so a full count per store would cost more than the
-/// store; between counts the total is advanced by the bytes written.
-static CACHE_BYTES: Mutex<Option<(u64, std::time::Instant)>> = Mutex::new(None);
-const CACHE_RECOUNT: std::time::Duration = std::time::Duration::from_secs(60);
-
-fn evict_to_budget(root: &Path, incoming: u64) {
-    let mut counted = CACHE_BYTES.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((total, at)) = *counted {
-        if at.elapsed() < CACHE_RECOUNT && total + incoming <= CACHE_BUDGET_BYTES {
-            *counted = Some((total + incoming, at));
-            return;
-        }
-    }
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    let now = std::time::SystemTime::now();
-    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
-        .flatten()
-        .filter_map(|e| {
-            let path = e.path();
-            let meta = e.metadata().ok()?;
-            let mtime = meta.modified().ok()?;
-            match path.extension()?.to_str()? {
-                CACHE_FILE_EXT => Some((mtime, meta.len(), path)),
-                "tmp" => {
-                    // Old enough to be a corpse: unlink now and leave it out of
-                    // the budget. A young one stays counted but untouched, so a
-                    // concurrent writer's bytes still push the eviction.
-                    if now.duration_since(mtime).is_ok_and(|d| d > TMP_ORPHAN_AGE) {
-                        let _ = std::fs::remove_file(&path);
-                        None
-                    } else {
-                        Some((mtime, meta.len(), path))
-                    }
-                }
-                _ => None,
-            }
-        })
-        .collect();
-    // Young `.tmp` bytes COUNT (they are about to become cache) but are never
-    // EVICTED: unlinking one would make its writer's rename land on a path this
-    // loop had already reclaimed.
-    let mut total: u64 = files.iter().map(|(_, len, _)| len).sum();
-    if total + incoming > CACHE_BUDGET_BYTES {
-        files.retain(|(_, _, p)| p.extension().is_some_and(|x| x == CACHE_FILE_EXT));
-        files.sort_by_key(|(mtime, _, _)| *mtime);
-        for (_, len, path) in files {
-            if total + incoming <= CACHE_BUDGET_BYTES {
-                break;
-            }
-            if std::fs::remove_file(&path).is_ok() {
-                total = total.saturating_sub(len);
-            }
-        }
-    }
-    *counted = Some((total + incoming, std::time::Instant::now()));
-}
-
-/// Refuse a world sweep onto a volume that cannot hold it: the budget is
-/// enforced against itself, never against free space, so a cache root left
-/// on the nearly full data volume would be filled to the brim. `Ok` carries
-/// (cached bytes, free bytes) for the sweep's summary.
-pub fn check_index_cache_volume(data_dir: &Path) -> Result<(u64, u64), String> {
-    let root = index_cache_root(data_dir)
-        .ok_or("the index cache is disabled (QM_OBSTACLE_INDEX_CACHE=0)")?;
-    std::fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
-    let cached: u64 = std::fs::read_dir(&root)
-        .map_err(|e| format!("read {}: {e}", root.display()))?
-        .flatten()
-        .filter(|e| e.path().extension().is_some_and(|x| x == CACHE_FILE_EXT))
-        .filter_map(|e| e.metadata().ok().map(|m| m.len()))
-        .sum();
-    let c_root = std::ffi::CString::new(root.as_os_str().as_encoded_bytes())
-        .map_err(|e| format!("{}: {e}", root.display()))?;
-    // SAFETY: `st` is a plain C struct the call fills in; the path is a valid
-    // NUL-terminated string for the duration of the call.
-    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(c_root.as_ptr(), &mut st) } != 0 {
-        return Err(format!(
-            "statvfs {}: {}",
-            root.display(),
-            std::io::Error::last_os_error()
-        ));
-    }
-    let free = st.f_bavail as u64 * st.f_frsize as u64;
-    if cached + free < CACHE_BUDGET_BYTES {
-        return Err(format!(
-            "{} holds {:.0} GB with {:.0} GB free on its volume; the world needs the \
-             {:.0} GB budget — point the cache root at a larger volume first",
-            root.display(),
-            cached as f64 / 1e9,
-            free as f64 / 1e9,
-            CACHE_BUDGET_BYTES as f64 / 1e9,
-        ));
-    }
-    Ok((cached, free))
-}
-
 /// Persist a freshly built index. The popup swallows a failure (the cache is
 /// an accelerator, never a dependency); the warm sweep counts it.
 fn store_cached_index(
@@ -323,7 +174,7 @@ fn store_cached_index(
     let total = parts.total_len() as u64;
     std::fs::create_dir_all(root)
         .map_err(|e| format!("no index cache at {}: {e}", root.display()))?;
-    evict_to_budget(root, total);
+    crate::index_cache::evict_to_budget(root, total);
     let final_path = cache_file_path(root, cell);
     // Same-directory tmp + rename: a reader either maps the whole previous
     // file or the whole new one, never a half-written index. Two NAPI worker
@@ -564,7 +415,7 @@ fn cell_index(
         if let Some(idx) = memo_get(cell, ver) {
             return Ok(idx);
         }
-        if let Some(root) = index_cache_root(data_dir) {
+        if let Some(root) = crate::index_cache::index_cache_root(data_dir) {
             let path = cache_file_path(&root, cell);
             if let Some(idx) = load_cached_index(&path, ver) {
                 // LRU by USE, not by write: without this the city visited every
@@ -588,7 +439,7 @@ fn cell_index(
     // No fingerprint ⇒ no memo and no file. An index whose inputs could not be
     // pinned is used for THIS query and forgotten.
     if let Some(ver) = ver {
-        if let Some(root) = index_cache_root(data_dir) {
+        if let Some(root) = crate::index_cache::index_cache_root(data_dir) {
             if let Err(e) = store_cached_index(&root, cell, &built, ver) {
                 eprintln!("structure_store: {e}");
             }
@@ -608,7 +459,7 @@ pub fn warm_cell_index(h3r4_dir: &Path, data_dir: &Path, cell: CellIndex) -> Res
     let Some(structures_arrow) = locate_cell_structures(h3r4_dir, cell)? else {
         return Ok(false);
     };
-    let root = index_cache_root(data_dir)
+    let root = crate::index_cache::index_cache_root(data_dir)
         .ok_or("the index cache is disabled (QM_OBSTACLE_INDEX_CACHE=0)")?;
     let ver = cell_data_ver(cell, &structures_arrow).ok_or_else(|| {
         format!(

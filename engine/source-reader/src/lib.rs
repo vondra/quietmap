@@ -12,6 +12,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 pub mod aircraft_v6;
 pub mod geo;
 pub mod hex_store;
+pub mod index_cache;
 pub mod popup;
 pub mod query;
 #[cfg(feature = "node")]
