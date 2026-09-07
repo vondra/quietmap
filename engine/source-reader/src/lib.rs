@@ -13,6 +13,8 @@ pub mod aircraft_v6;
 pub mod geo;
 pub mod hex_store;
 pub mod query;
+#[cfg(feature = "node")]
+mod result_cache;
 pub mod structure_store;
 #[cfg(test)]
 mod structure_test_fixture;
@@ -35,15 +37,13 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 #[cfg(feature = "node")]
-use hex_store::HexData;
-#[cfg(feature = "node")]
-use hex_store::{
-    load_hex, query_barriers_from_batches, query_buildings_from_batches, query_roads_from_batches,
-};
+use hex_store::{load_hex, HexData};
 
+/// Loaded hexes, shared by every pool worker (one library instance per
+/// process); filled once per data dir, never invalidated inside a process.
 #[cfg(feature = "node")]
-static STORE: std::sync::LazyLock<RwLock<HexStore>> =
-    std::sync::LazyLock::new(|| RwLock::new(HexStore::new()));
+static STORE: std::sync::LazyLock<RwLock<HashMap<String, std::sync::Arc<HexData>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 
 #[cfg(feature = "node")]
 static RASTERS: std::sync::OnceLock<raster_reader::RealRasters> = std::sync::OnceLock::new();
@@ -69,12 +69,6 @@ fn h3r4_dir() -> napi::Result<&'static std::path::Path> {
 // NACE codes are now baked into industrial.arrow (nace_4digit UInt16 column).
 // No global lookup needed at runtime.
 
-#[cfg(feature = "node")]
-struct HexStore {
-    hexes: HashMap<String, HexData>,
-    h3r4_dir: String,
-}
-
 /// RAII clearer for the M4/M5 per-row admin channels: a plain
 /// clear-after-compute pair lets a kernel unwind leave a stale vec on the
 /// surviving napi worker thread (the next query of equal row count would
@@ -91,16 +85,6 @@ impl Drop for RowAdminGuard {
     }
 }
 
-#[cfg(feature = "node")]
-impl HexStore {
-    fn new() -> Self {
-        HexStore {
-            hexes: HashMap::new(),
-            h3r4_dir: String::new(),
-        }
-    }
-}
-
 /// Make every hex in `hex_ids` resident, loading the missing ones IN
 /// PARALLEL and OUTSIDE the store lock. Cold loads used to run
 /// sequentially (7 hexes × ~12 files) under a held write lock — the whole
@@ -109,24 +93,24 @@ impl HexStore {
 /// nor block everyone else's warm queries. First insert wins on a race —
 /// the duplicate load is dropped, which is rare and harmless.
 #[cfg(feature = "node")]
-fn ensure_hexes_parallel(hex_ids: &[String]) {
+fn ensure_hexes_parallel(hex_ids: &[String]) -> napi::Result<()> {
     let missing: Vec<String> = {
         let store = STORE.read().expect("hex store poisoned");
         hex_ids
             .iter()
-            .filter(|id| !store.hexes.contains_key(id.as_str()))
+            .filter(|id| !store.contains_key(id.as_str()))
             .cloned()
             .collect()
     };
     if missing.is_empty() {
-        return;
+        return Ok(());
     }
-    let h3r4_dir = STORE.read().expect("hex store poisoned").h3r4_dir.clone();
+    let h3r4_dir = h3r4_dir()?;
     let loaded: Vec<(String, HexData)> = std::thread::scope(|scope| {
         let handles: Vec<_> = missing
             .iter()
             .map(|hex_id| {
-                let dir = format!("{h3r4_dir}/{hex_id}");
+                let dir = format!("{}/{hex_id}", h3r4_dir.display());
                 scope.spawn(move || match load_hex(&dir) {
                     Ok(data) => data,
                     Err(e) => {
@@ -148,31 +132,40 @@ fn ensure_hexes_parallel(hex_ids: &[String]) {
     });
     let mut store = STORE.write().expect("hex store poisoned");
     for (id, data) in loaded {
-        store.hexes.entry(id).or_insert(data);
+        store.entry(id).or_insert_with(|| std::sync::Arc::new(data));
     }
+    Ok(())
 }
 
 #[cfg(feature = "node")]
 #[napi]
 pub fn source_init(h3r4_dir: String) -> napi::Result<String> {
-    let mut store = STORE
+    // The write lock serializes concurrent inits from pool workers.
+    let store = STORE
         .write()
         .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
+    let h3r4_path = std::path::Path::new(&h3r4_dir);
     // The pool workers share ONE library instance (single addon path since
     // 2026-07-10), so every worker spawn/recycle calls source_init on the
-    // SAME store — re-init with an unchanged dir must keep the shared cache,
-    // not clear it out from under the other workers.
-    if store.h3r4_dir == h3r4_dir {
+    // SAME store — re-init with an unchanged dir keeps the shared cache;
+    // another dir in the same process has no data path and is refused.
+    if let Some(current) = H3R4_DIR.get() {
+        if current != h3r4_path {
+            return Err(Error::new(
+                Status::GenericFailure,
+                format!(
+                    "source-reader already initialized with {}, not {h3r4_dir}",
+                    current.display()
+                ),
+            ));
+        }
         return Ok(format!(
             "source-reader already initialized: {h3r4_dir} ({} hexes cached, shared store)",
-            store.hexes.len()
+            store.len()
         ));
     }
-    store.h3r4_dir = h3r4_dir.clone();
-    store.hexes.clear();
 
     // Rasters are at data/prepared/{dem,rasters}/ — two levels up from data/prepared/{year}/h3r4/
-    let h3r4_path = std::path::Path::new(&h3r4_dir);
     let data_dir = h3r4_path
         .parent()
         .and_then(|p| p.parent())
@@ -210,50 +203,6 @@ pub fn source_validate_reference(h3r4_dir: String, hex_id: String) -> napi::Resu
             format!("reference roads row count exceeds u32: {rows}"),
         )
     })
-}
-
-#[cfg(feature = "node")]
-#[napi]
-pub fn query_roads(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String> {
-    let hex_ids = geo::grid_disk_r4(lat, lng);
-    ensure_hexes_parallel(&hex_ids);
-    let store = STORE
-        .read()
-        .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
-
-    let mut all_results = Vec::new();
-    for hex_id in &hex_ids {
-        let Some(data) = store.hexes.get(hex_id.as_str()) else {
-            continue;
-        };
-        let road_batches = data.roads.batches_within(lat, lng, max_radius_m);
-        let mut results = query_roads_from_batches(&road_batches, lat, lng, max_radius_m);
-        all_results.append(&mut results);
-    }
-
-    Ok(serde_json::to_string(&all_results).unwrap())
-}
-
-#[cfg(feature = "node")]
-#[napi]
-pub fn query_buildings(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String> {
-    let hex_ids = geo::grid_disk_r4(lat, lng);
-    ensure_hexes_parallel(&hex_ids);
-    let store = STORE
-        .read()
-        .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
-
-    let mut all_results = Vec::new();
-    for hex_id in &hex_ids {
-        let Some(data) = store.hexes.get(hex_id.as_str()) else {
-            continue;
-        };
-        let building_batches = data.structures.batches_within(lat, lng, max_radius_m);
-        let mut results = query_buildings_from_batches(&building_batches, lat, lng, max_radius_m);
-        all_results.append(&mut results);
-    }
-
-    Ok(serde_json::to_string(&all_results).unwrap())
 }
 
 #[cfg(feature = "node")]
@@ -361,66 +310,75 @@ mod building_type_tests {
     }
 }
 
-#[cfg(feature = "node")]
-#[napi]
-pub fn query_barriers(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String> {
-    let hex_ids = geo::grid_disk_r4(lat, lng);
-    ensure_hexes_parallel(&hex_ids);
-    let store = STORE
-        .read()
-        .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
-
-    let mut all_results = Vec::new();
-    for hex_id in &hex_ids {
-        let Some(data) = store.hexes.get(hex_id.as_str()) else {
-            continue;
-        };
-        let barrier_batches = data.structures.batches_within(lat, lng, max_radius_m);
-        let mut results = query_barriers_from_batches(&barrier_batches, lat, lng, max_radius_m)
-            .map_err(|error| Error::new(Status::GenericFailure, error))?;
-        all_results.append(&mut results);
-    }
-
-    let all_results = hex_store::canonicalize_barrier_results(all_results)
-        .map_err(|error| Error::new(Status::GenericFailure, error))?;
-
-    Ok(serde_json::to_string(&all_results).unwrap())
-}
-
-#[cfg(feature = "node")]
-#[napi]
-pub fn reload_hexes(hex_ids: Vec<String>) -> napi::Result<u32> {
-    let mut store = STORE
-        .write()
-        .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
-    let mut n = 0u32;
-    for hex_id in &hex_ids {
-        store.hexes.remove(hex_id);
-        n += 1;
-    }
-    Ok(n)
-}
-
-/// Compute full noise at a point using noise-compute engine.
-/// Returns JSON with total Lden, per-source breakdown, top contributors.
+/// The popup's default answer for a point: total Lden, per-source breakdown,
+/// top contributors and the segment summary — without the segment list,
+/// which is 97 % of the bytes (3.8 of 3.95 MB in Prague) and which the
+/// Segments tab fetches through `query_noise_segments`.
 #[cfg(feature = "node")]
 #[napi]
 pub fn query_noise_at_point(lat: f64, lng: f64) -> napi::Result<String> {
-    query_noise_impl(lat, lng, SEGMENT_TOP_K_PER_KIND)
+    cached_point(lat, lng, false)
 }
 
-/// Variant of `query_noise_at_point` with a much higher per-kind segment cap
-/// (1000 instead of 150). Called from the popup's "Show all" button — the
-/// fully-unfiltered airborne set at an airport is millions of segments, far
-/// beyond what a browser can parse or what NAPI's string return can carry.
+/// The same result with its segment list (top 150 per kind).
+#[cfg(feature = "node")]
+#[napi]
+pub fn query_noise_segments(lat: f64, lng: f64) -> napi::Result<String> {
+    cached_point(lat, lng, true)
+}
+
+/// The popup's "Show all": a fresh compute with a much higher per-kind cap
+/// (1000 instead of 150), pressed once per click and not cached — at 18 MB
+/// a result it would crowd out the default answers. The fully-unfiltered
+/// airborne set at an airport is millions of segments, far beyond what a
+/// browser can parse or what NAPI's string return can carry.
 #[cfg(feature = "node")]
 #[napi]
 pub fn query_noise_at_point_unfiltered(lat: f64, lng: f64) -> napi::Result<String> {
-    query_noise_impl(lat, lng, SEGMENT_TOP_K_PER_KIND_FULL)
+    let result = compute_point(lat, lng, SEGMENT_TOP_K_PER_KIND_FULL)?;
+    Ok(serde_json::to_string(&result).unwrap())
 }
 
+/// Recent default-cap results, shared by every pool worker. Hex data never
+/// changes inside a process (the store fills once per data dir), so a hit is
+/// what a recompute would return. Measured 2026-09-07 on dev3: 32 cached
+/// Prague points add 277 MB of anonymous RSS (8.7 MB each; their JSON is
+/// 3.95 MB) — the bound for one process.
 #[cfg(feature = "node")]
-fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<String> {
+static RESULT_CACHE: result_cache::ResultCache<wire::WireResult> =
+    result_cache::ResultCache::new(32);
+
+/// One click asks the same point twice (card, then Segments tab) and repeat
+/// clicks land on the same coordinates: compute once, serialize per request.
+#[cfg(feature = "node")]
+fn cached_point(lat: f64, lng: f64, with_segments: bool) -> napi::Result<String> {
+    let key = (lat.to_bits(), lng.to_bits());
+    if let Some(json) = RESULT_CACHE.get_with(key, |r| serialize_view(r, with_segments)) {
+        return Ok(json);
+    }
+    let mut result = compute_point(lat, lng, SEGMENT_TOP_K_PER_KIND)?;
+    let json = serialize_view(&mut result, with_segments);
+    RESULT_CACHE.put(key, result);
+    Ok(json)
+}
+
+/// The result with or without its segment list; the segment summary stays
+/// in both (serde skips an empty list).
+#[cfg(feature = "node")]
+fn serialize_view(result: &mut wire::WireResult, with_segments: bool) -> String {
+    if with_segments {
+        return serde_json::to_string(result).unwrap();
+    }
+    let segments = std::mem::take(&mut result.segments);
+    let json = serde_json::to_string(result).unwrap();
+    result.segments = segments;
+    json
+}
+
+/// Compute full noise at a point with the noise-compute engine: load the
+/// R4 ring, collect its sources, run every kernel, build the wire shape.
+#[cfg(feature = "node")]
+fn compute_point(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<wire::WireResult> {
     // Per-stage timing probes (env-gated: `POPUP_TIMING=1` to enable). Inline
     // `Instant::now()` is cheaper and less destructive than perf/flamegraph
     // for popup-scale work, and lets us watch one number per stage land in
@@ -430,21 +388,25 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
 
     let hex_ids = geo::grid_disk_r4(lat, lng);
     // Load missing hexes in parallel WITHOUT holding the store lock, then
-    // collect under a read lock — concurrent popups on other workers keep
-    // running against the shared cache during a cold load.
-    ensure_hexes_parallel(&hex_ids);
-    let store = STORE
-        .read()
-        .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
-    let hex_refs: Vec<&hex_store::HexData> = hex_ids
-        .iter()
-        .filter_map(|id| store.hexes.get(id.as_str()))
-        .collect();
-
-    // Resolve airport_summary.arrow path: sibling of h3r4_dir under
-    // `aircraft/` (Stage 2C v5 reduce output). Missing file means
-    // the popup returns zero airport-level counts.
-    let airport_summary_pathbuf = std::path::Path::new(&store.h3r4_dir)
+    // take the ring's hexes out under a read lock held for microseconds,
+    // not across collect: the lock prefers writers, so a reader that held
+    // it through a seconds-long collect made every other popup queue behind
+    // the next cold load's insert (Sahara 3.5 s in an 8-way run vs 12 ms
+    // alone, 2026-09-06).
+    ensure_hexes_parallel(&hex_ids)?;
+    let hex_arcs: Vec<std::sync::Arc<HexData>> = {
+        let store = STORE
+            .read()
+            .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
+        hex_ids
+            .iter()
+            .filter_map(|id| store.get(id.as_str()).cloned())
+            .collect()
+    };
+    let hex_refs: Vec<&HexData> = hex_arcs.iter().map(|a| a.as_ref()).collect();
+    // Sibling of the h3r4 dir under `aircraft/` (Stage 2C v5 reduce output);
+    // a missing file means zero airport-level counts in the popup.
+    let airport_summary_pathbuf = h3r4_dir()?
         .parent()
         .map(|p| p.join("aircraft").join("airport_summary.arrow"));
 
@@ -462,7 +424,6 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     let sources = collect_from_hex_data(&hex_refs, lat, lng)
         .map_err(|error| Error::new(Status::GenericFailure, error))?;
     let t_collect = t_start.elapsed() - t_load;
-    drop(store);
 
     let config = noise_compute::types::ComputeConfig {
         n_days: sources.n_days,
@@ -612,31 +573,26 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         &mut result,
         indoor.map(|(_, delta)| delta),
     );
-    let wire_result = wire::build_wire_result(
-        result,
-        lat,
-        lng,
-        elevation,
-        indoor.map(|(class, delta)| (class, delta, facade_lden)),
-    );
-    let json = serde_json::to_string(&wire_result).unwrap();
-    let t_total = t_start.elapsed();
-
     if timing_on {
         eprintln!(
-            "popup-timing total={:.0}ms load={:.0}ms collect={:.0}ms compute={:.0}ms json={:.0}ms (rd={} rl={} ac={})",
-            t_total.as_secs_f64() * 1000.0,
+            "popup-timing total={:.0}ms load={:.0}ms collect={:.0}ms compute={:.0}ms (rd={} rl={} ac={})",
+            t_start.elapsed().as_secs_f64() * 1000.0,
             t_load.as_secs_f64() * 1000.0,
             t_collect.as_secs_f64() * 1000.0,
             t_compute.as_secs_f64() * 1000.0,
-            (t_total - t_load - t_collect - t_compute).as_secs_f64() * 1000.0,
             n_roads,
             n_railways,
             n_aircraft,
         );
     }
 
-    Ok(json)
+    Ok(wire::build_wire_result(
+        result,
+        lat,
+        lng,
+        elevation,
+        indoor.map(|(class, delta)| (class, delta, facade_lden)),
+    ))
 }
 
 #[cfg(feature = "node")]

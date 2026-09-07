@@ -411,10 +411,9 @@ export interface NoiseComputeData {
   compute_time_ms: number
   segments?: SegmentTrace[]
   segments_meta?: SegmentTracesSummary | null
-  /** Per-layer wall-clock breakdown (ms). Always present in popup
-   * responses; pipeline-internal callers may omit. JSON serialization
-   * cost is NOT measured here — the frontend can derive it from XHR
-   * wall time minus the sum of these. */
+  /** Per-layer wall-clock breakdown (ms) of the compute that produced this
+   * result; a result-cache hit repeats the original click's numbers.
+   * Pipeline-internal callers may omit. */
   timings?: PopupTimings | null
 }
 

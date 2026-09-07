@@ -7,7 +7,15 @@ export type NoiseOnflyWorkerReply = {
   error?: string
 }
 
-export type NoiseOnflyOp = 'point' | 'unfiltered' | 'ready' | 'footprints' | 'building-at'
+/** How much of the popup's answer a request wants: the card's summary, the
+ *  summary with the segment list (top 150 per kind), or the 1000-per-kind
+ *  list behind "Show all". */
+export const NOISE_DETAILS = ['summary', 'segments', 'all'] as const
+export type NoiseDetail = (typeof NOISE_DETAILS)[number]
+export const isNoiseDetail = (value: string): value is NoiseDetail =>
+  (NOISE_DETAILS as readonly string[]).includes(value)
+
+export type NoiseOnflyOp = NoiseDetail | 'ready' | 'footprints' | 'building-at'
 
 export interface NoiseOnflyWorker {
   postMessage(message: { id: number; lat: number; lng: number; lat2?: number; lng2?: number; op?: NoiseOnflyOp }): void
@@ -151,12 +159,8 @@ export class NoiseOnflySupervisor {
     }))
   }
 
-  async queryNoiseAtPoint(lat: number, lng: number, signal?: AbortSignal): Promise<string> {
-    return this.enqueue(lat, lng, 'point', signal)
-  }
-
-  async queryNoiseAtPointUnfiltered(lat: number, lng: number, signal?: AbortSignal): Promise<string> {
-    return this.enqueue(lat, lng, 'unfiltered', signal)
+  async queryNoise(lat: number, lng: number, detail: NoiseDetail, signal?: AbortSignal): Promise<string> {
+    return this.enqueue(lat, lng, detail, signal)
   }
 
   /** Obstacle footprints (as-used heights) in a bbox — the building-height

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { ldenToColor } from '../utils/noise-colors'
 import { DataPoint } from './noise/noise-tooltips'
 import { HoverText } from './ui/info-tip'
@@ -58,42 +58,36 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
     : ''
 
   const [tab, setTab] = useState<PopupTab>('sources')
-  // Mount the (up to 8000-row) Segments list only after its tab is first
-  // visited — opening the popup on Sources must not pay to build it. Once
-  // mounted it stays (display toggle) so per-row expanded state survives.
-  const [segmentsMounted, setSegmentsMounted] = useState(false)
-  const [fullSegments, setFullSegments] = useState<{
+  // The popup arrives without its segment list; the Segments tab fetches it
+  // on first visit and "Show all" fetches the wider cap, both for the point
+  // the card was computed for (h3_center echoes the query, so the server
+  // answers from its result cache). A new click remounts this component —
+  // the card shows its skeleton until the next point computes — so nothing
+  // needs a reset and a late response cannot land on another point.
+  const [segmentData, setSegmentData] = useState<{
     segments: NoiseComputeData['segments']
     meta: NoiseComputeData['segments_meta']
   } | null>(null)
-  const [loadingFull, setLoadingFull] = useState(false)
-  // Reset augmented data whenever the user clicks a new point.
-  useEffect(() => {
-    setFullSegments(null)
-    setLoadingFull(false)
-  }, [centerLat, centerLng])
+  const [segmentLoad, setSegmentLoad] = useState<'idle' | 'loading' | 'failed'>('idle')
+  const loadSegments = async (detail: 'segments' | 'all') => {
+    if (segmentLoad === 'loading') return
+    setSegmentLoad('loading')
+    try {
+      const r = await fetch(`/api/noise-onfly-v2?lat=${centerLat}&lng=${centerLng}&detail=${detail}`)
+      if (!r.ok) throw new Error(`fetch failed: ${r.status}`)
+      const next = (await r.json()) as NoiseComputeData
+      setSegmentData({ segments: next.segments ?? [], meta: next.segments_meta ?? null })
+      setSegmentLoad('idle')
+    } catch {
+      setSegmentLoad('failed')
+    }
+  }
 
-  const displaySegments = fullSegments?.segments ?? data.segments ?? []
-  const displayMeta = fullSegments?.meta ?? data.segments_meta ?? null
+  const displaySegments = segmentData?.segments ?? []
+  const displayMeta = segmentData?.meta ?? data.segments_meta ?? null
   const segmentsTotal = displayMeta?.total_count ?? displaySegments.length
   const hasSegmentsTab = segmentsTotal > 0
   const showSegments = tab === 'segments' && hasSegmentsTab
-
-  const handleShowAll = async () => {
-    if (loadingFull) return
-    setLoadingFull(true)
-    try {
-      const r = await fetch(`/api/noise-onfly-v2?lat=${centerLat}&lng=${centerLng}&full=1`)
-      if (!r.ok) throw new Error(`fetch failed: ${r.status}`)
-      const next = (await r.json()) as NoiseComputeData
-      setFullSegments({
-        segments: next.segments ?? [],
-        meta: next.segments_meta ?? null,
-      })
-    } finally {
-      setLoadingFull(false)
-    }
-  }
 
   return (
     <div data-testid="detail-popup" role="dialog" className="px-2.5 pt-1 pb-2" onClick={(e) => e.stopPropagation()}>
@@ -124,7 +118,7 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
               active={tab}
               sourceCount={audibleContributors.length}
               segmentCount={segmentsTotal}
-              onChange={(t) => { setTab(t); if (t === 'segments') setSegmentsMounted(true) }}
+              onChange={(t) => { setTab(t); if (t === 'segments' && !segmentData) void loadSegments('segments') }}
             />
           ) : (
             <div className="border-b border-border pb-0.5 mb-0.5">
@@ -156,15 +150,29 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
                 </div>
               )}
             </div>
-            {hasSegmentsTab && segmentsMounted && (
+            {/* Stays mounted (display toggle) once loaded so per-row expanded
+                state survives tab switches. */}
+            {(showSegments || segmentData !== null) && (
               <div style={{ display: showSegments ? 'block' : 'none' }}>
-                <SegmentList
-                  segments={displaySegments}
-                  meta={displayMeta}
-                  onHighlight={onHighlight}
-                  onShowAll={handleShowAll}
-                  loadingFull={loadingFull}
-                />
+                {segmentData ? (
+                  <SegmentList
+                    segments={displaySegments}
+                    meta={displayMeta}
+                    onHighlight={onHighlight}
+                    onShowAll={() => loadSegments('all')}
+                    loadingFull={segmentLoad === 'loading'}
+                  />
+                ) : segmentLoad === 'failed' ? (
+                  <button
+                    type="button"
+                    onClick={() => void loadSegments('segments')}
+                    className="text-xs text-muted-foreground py-2 underline"
+                  >
+                    Segments failed to load — retry
+                  </button>
+                ) : (
+                  <div className="text-xs text-muted-foreground py-2">Loading segments…</div>
+                )}
               </div>
             )}
           </div>

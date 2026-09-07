@@ -5,6 +5,8 @@
 import type { FastifyInstance } from 'fastify'
 import { Worker } from 'node:worker_threads'
 import {
+  isNoiseDetail,
+  NOISE_DETAILS,
   NoiseOnflyRequestError,
   NoiseOnflySupervisor,
 } from '../engine/noise-onfly-supervisor.js'
@@ -113,7 +115,7 @@ export async function noiseOnflyV2Routes(
     },
   )
 
-  app.get<{ Querystring: { lat?: string; lng?: string; full?: string } }>(
+  app.get<{ Querystring: { lat?: string; lng?: string; detail?: string } }>(
     '/api/noise-onfly-v2',
     // The popup compute is the most expensive public surface (one worker
     // thread per query) — rate-limited per client (owner directive 2026-07-15).
@@ -124,7 +126,13 @@ export async function noiseOnflyV2Routes(
       if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
         return reply.status(400).send({ error: 'valid lat and lng required' })
       }
-      const full = request.query.full === '1' || request.query.full === 'true'
+      // Default: the card's answer without the segment list; the Segments
+      // tab asks `detail=segments` (served from the engine's result cache
+      // after the click's compute), its "Show all" `detail=all`.
+      const detail = request.query.detail ?? 'summary'
+      if (!isNoiseDetail(detail)) {
+        return reply.status(400).send({ error: `detail must be one of ${NOISE_DETAILS.join(', ')}` })
+      }
 
       const t0 = Date.now()
       const abortController = new AbortController()
@@ -134,9 +142,7 @@ export async function noiseOnflyV2Routes(
       request.raw.once('close', onClose)
 
       try {
-        const resultJson = full
-          ? await supervisor.queryNoiseAtPointUnfiltered(lat, lng, abortController.signal)
-          : await supervisor.queryNoiseAtPoint(lat, lng, abortController.signal)
+        const resultJson = await supervisor.queryNoise(lat, lng, detail, abortController.signal)
         const elapsed = Date.now() - t0
 
         // Rust builds the final wire shape directly (engine/source-reader/

@@ -57,12 +57,12 @@ test('queue cap rejects instead of spawning extra work', async (t) => {
     await supervisor.close()
   })
 
-  const first = supervisor.queryNoiseAtPoint(50.1, 14.4)
+  const first = supervisor.queryNoise(50.1, 14.4, 'summary')
   await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
 
-  const second = supervisor.queryNoiseAtPoint(50.2, 14.5)
+  const second = supervisor.queryNoise(50.2, 14.5, 'summary')
   await assert.rejects(
-    supervisor.queryNoiseAtPoint(50.3, 14.6),
+    supervisor.queryNoise(50.3, 14.6, 'summary'),
     (error: unknown) =>
       error instanceof NoiseOnflyRequestError &&
       error.statusCode === 503 &&
@@ -94,15 +94,15 @@ test('aborting a queued request frees its slot', async (t) => {
     await supervisor.close()
   })
 
-  const first = supervisor.queryNoiseAtPoint(50.1, 14.4)
+  const first = supervisor.queryNoise(50.1, 14.4, 'summary')
   await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
 
   const queuedAbort = new AbortController()
-  const second = supervisor.queryNoiseAtPoint(50.2, 14.5, queuedAbort.signal)
+  const second = supervisor.queryNoise(50.2, 14.5, 'summary', queuedAbort.signal)
   queuedAbort.abort()
   await assert.rejects(second, (error: unknown) => error instanceof Error && error.name === 'AbortError')
 
-  const third = supervisor.queryNoiseAtPoint(50.3, 14.6)
+  const third = supervisor.queryNoise(50.3, 14.6, 'summary')
 
   workers[0].replyAt(0, '{"first":true}')
   assert.equal(await first, '{"first":true}')
@@ -128,10 +128,10 @@ test('a work timeout answers 504, never terminates the worker, and reuses it aft
     await supervisor.close()
   })
 
-  const first = supervisor.queryNoiseAtPoint(50.1, 14.4)
+  const first = supervisor.queryNoise(50.1, 14.4, 'summary')
   await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
 
-  const second = supervisor.queryNoiseAtPoint(50.2, 14.5)
+  const second = supervisor.queryNoise(50.2, 14.5, 'summary')
 
   await assert.rejects(
     first,
@@ -174,9 +174,9 @@ test('aborting an active request keeps its slot busy until the late reply', asyn
   })
 
   const abort = new AbortController()
-  const first = supervisor.queryNoiseAtPoint(50.1, 14.4, abort.signal)
+  const first = supervisor.queryNoise(50.1, 14.4, 'summary', abort.signal)
   await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
-  const second = supervisor.queryNoiseAtPoint(50.2, 14.5)
+  const second = supervisor.queryNoise(50.2, 14.5, 'summary')
 
   abort.abort()
   await assert.rejects(first, (error: unknown) => error instanceof Error && error.name === 'AbortError')
@@ -209,9 +209,9 @@ test('a worker that dies while parked after a 504 frees its slot and is replaced
     await supervisor.close()
   })
 
-  const first = supervisor.queryNoiseAtPoint(50.1, 14.4)
+  const first = supervisor.queryNoise(50.1, 14.4, 'summary')
   await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
-  const second = supervisor.queryNoiseAtPoint(50.2, 14.5)
+  const second = supervisor.queryNoise(50.2, 14.5, 'summary')
   await assert.rejects(first, (error: unknown) => error instanceof NoiseOnflyRequestError && error.statusCode === 504)
 
   workers[0].emit('exit', 1)

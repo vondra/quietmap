@@ -47,6 +47,12 @@ if (existsSync(h3r4Dir)) {
   const msg = sourceModule.sourceInit(h3r4Dir)
   console.log(`noise-onfly-worker: ${msg}`)
 }
+// The popup's three answers, by the supervisor's `NoiseDetail` op.
+const noiseQueries = {
+  summary: sourceModule.queryNoiseAtPoint,
+  segments: sourceModule.queryNoiseSegments,
+  all: sourceModule.queryNoiseAtPointUnfiltered,
+}
 
 parentPort?.on('message', ({ id, lat, lng, lat2, lng2, op }) => {
   try {
@@ -75,10 +81,9 @@ parentPort?.on('message', ({ id, lat, lng, lat2, lng2, op }) => {
       parentPort?.postMessage({ id, ok: true, resultJson })
       return
     }
-    const fn = op === 'unfiltered'
-      ? sourceModule.queryNoiseAtPointUnfiltered
-      : sourceModule.queryNoiseAtPoint
-    const resultJson = fn(lat, lng)
+    const query = noiseQueries[op]
+    if (!query) throw new Error(`unknown noise-onfly op: ${op}`)
+    const resultJson = query(lat, lng)
     parentPort?.postMessage({ id, ok: true, resultJson })
   } catch (err) {
     parentPort?.postMessage({
