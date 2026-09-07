@@ -9,11 +9,10 @@
  *   DATA_YEAR=2026 npx tsx pipeline/enrich-industrial-de.ts --enrich-only
  */
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs'
+import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { tableFromIPC, tableToIPC, makeTable, makeVector } from 'apache-arrow'
 import { cellToLatLng } from 'h3-js'
-import { buildRegistryGrid, findNearestRegistryRecord, fillMissingTurbineSpecs } from './lib/wind-registry-match.js'
+import { buildRegistryGrid, writeTurbineSpecsFromGrid } from './lib/wind-registry-match.js'
 import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
 const CACHE_DIR = resolve(import.meta.dirname, `../data/enrichment/${YEAR}/de`)
@@ -82,59 +81,10 @@ async function main() {
   for (let hi = 0; hi < hexDirs.length; hi++) {
     const hex = hexDirs[hi]
     const arrowPath = resolve(H3R4_DIR, hex, 'industrial.arrow')
-    const buf = readFileSync(arrowPath)
-    const table = tableFromIPC(buf)
-    const numRows = table.numRows
-
-    const sourceTypes = table.getChild('source_type')
-    const lats = table.getChild('centroid_lat')
-    const lons = table.getChild('centroid_lon')
-    const existingHub = table.getChild('hub_height')
-    const existingPower = table.getChild('rated_power_kw')
-
-    if (!sourceTypes || !lats || !lons) continue
-
-    const hubHeights = new Float32Array(numRows)
-    const ratedPowers = new Float32Array(numRows)
-    let hexFilled = 0
-
-    // Copy existing values
-    for (let i = 0; i < numRows; i++) {
-      hubHeights[i] = existingHub?.get(i) ?? 0
-      ratedPowers[i] = existingPower?.get(i) ?? 0
-    }
-
-    for (let i = 0; i < numRows; i++) {
-      const st = sourceTypes.get(i) ?? 0
-      if (st !== 10) continue // Only wind turbines
-      totalTurbines++
-
-      // Skip if already enriched with non-zero values
-      if (hubHeights[i] > 0 && ratedPowers[i] > 0) continue
-
-      const lat = lats.get(i) ?? 0
-      const lon = lons.get(i) ?? 0
-      if (lat === 0 || lon === 0) continue
-
-      const best = findNearestRegistryRecord(grid, lat, lon, REGISTRY_MATCH_RADIUS_M)
-      if (best && fillMissingTurbineSpecs(hubHeights, ratedPowers, i, best.hub_height_m, best.rated_power_kw)) {
-        hexFilled++
-        filled++
-      }
-    }
-
-    if (hexFilled > 0) {
-      const columns: Record<string, any> = {}
-      for (const field of table.schema.fields) {
-        if (field.name === 'hub_height' || field.name === 'rated_power_kw') continue
-        columns[field.name] = table.getChild(field.name)!
-      }
-      columns['hub_height'] = makeVector(hubHeights)
-      columns['rated_power_kw'] = makeVector(ratedPowers)
-      const enriched = makeTable(columns)
-      writeFileSync(arrowPath, tableToIPC(enriched, 'file'))
-      hexesUpdated++
-    }
+    const { turbineRows, filled: hexFilled } = await writeTurbineSpecsFromGrid(arrowPath, grid, REGISTRY_MATCH_RADIUS_M)
+    totalTurbines += turbineRows
+    filled += hexFilled
+    if (hexFilled > 0) hexesUpdated++
 
     if (hi % 50 === 0) {
       console.log(`  [${Math.round((Date.now() - startTime) / 1000)}s] ${hi + 1}/${hexDirs.length} hexes, ${filled} turbines filled`)

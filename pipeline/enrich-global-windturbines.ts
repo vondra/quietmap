@@ -20,9 +20,8 @@ import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { execSync } from 'node:child_process'
 import { parse } from 'csv-parse/sync'
-import { tableFromIPC, tableToIPC, makeTable, makeVector } from 'apache-arrow'
 import { gridDisk, latLngToCell } from 'h3-js'
-import { buildRegistryGrid, findNearestRegistryRecord, fillMissingTurbineSpecs } from './lib/wind-registry-match.js'
+import { buildRegistryGrid, findNearestRegistryRecord, writeTurbineSpecs } from './lib/wind-registry-match.js'
 import { DATA_YEAR as YEAR, H3R4_DIR } from './lib/data-year.js'
 
 const CACHE_DIR = resolve(import.meta.dirname, '../data/enrichment/global')
@@ -175,7 +174,7 @@ export function registryRecordsAround(turbinesByHex: Map<string, Turbine[]>, hex
   return gridDisk(hexId, 1).flatMap((hex) => turbinesByHex.get(hex) ?? [])
 }
 
-function enrichHexes(turbines: Turbine[]): void {
+async function enrichHexes(turbines: Turbine[]): Promise<void> {
   // Group turbines by H3R4 hex for fast lookup
   const turbinesByHex = new Map<string, Turbine[]>()
   for (const t of turbines) {
@@ -202,78 +201,15 @@ function enrichHexes(turbines: Turbine[]): void {
     if (!existsSync(indPath)) continue
 
     hexesScanned++
-    const buf = readFileSync(indPath)
-    const table = tableFromIPC(buf)
-    const n = table.numRows
-    if (n === 0) continue
-
-    const clat = table.getChild('centroid_lat')
-    const clon = table.getChild('centroid_lon')
-    const sourceType = table.getChild('source_type')
-    if (!clat || !clon || !sourceType) continue
-
-    const existingHubHeight = table.getChild('hub_height')
-    const existingRatedPower = table.getChild('rated_power_kw')
-
-    // Build new Float32 arrays for hub_height and rated_power_kw
-    // NaN marks unknown here; it is written as the 0 sentinel below.
-    const newHubHeight = new Float32Array(n)
-    const newRatedPower = new Float32Array(n)
-
-    // Copy existing values
-    for (let i = 0; i < n; i++) {
-      newHubHeight[i] = existingHubHeight ? (existingHubHeight.get(i) as number ?? NaN) : NaN
-      newRatedPower[i] = existingRatedPower ? (existingRatedPower.get(i) as number ?? NaN) : NaN
-    }
-
-    let hexFilled = 0
     const grid = buildRegistryGrid(hexTurbines)
-
-    for (let i = 0; i < n; i++) {
-      const st = sourceType.get(i) as number
-      if (st !== 10) continue // Only wind turbines
-      totalWindTurbines++
-
-      const lat = clat.get(i) as number
-      const lon = clon.get(i) as number
-
-      const bestTurbine = findNearestRegistryRecord(grid, lat, lon, USWTDB_MATCH_RADIUS_M)
-      if (!bestTurbine) continue
-      totalMatched++
-
-      if (fillMissingTurbineSpecs(newHubHeight, newRatedPower, i, bestTurbine.hubHeight, bestTurbine.ratedPowerKw)) {
-        hexFilled++
-        specsFilled++
-      }
-    }
-
-    if (hexFilled === 0) continue
-
-    // Zero is the "unknown" sentinel: the columns carry no Arrow null bitmap,
-    // and the Rust reader treats 0 (or NaN) as unknown and falls back to its
-    // defaults (80 m hub, 2000 kW). Only positive values are kept.
-    const cleanHubHeight = new Float32Array(n)
-    const cleanRatedPower = new Float32Array(n)
-    for (let i = 0; i < n; i++) {
-      if (newHubHeight[i] > 0) cleanHubHeight[i] = newHubHeight[i]
-      if (newRatedPower[i] > 0) cleanRatedPower[i] = newRatedPower[i]
-    }
-
-    // Copy ALL existing columns by iterating schema (don't hardcode column list)
-    const columns: Record<string, any> = {}
-    for (const field of table.schema.fields) {
-      if (field.name === 'hub_height') continue
-      if (field.name === 'rated_power_kw') continue
-      columns[field.name] = table.getChild(field.name)!
-    }
-
-    columns['hub_height'] = makeVector(cleanHubHeight)
-    columns['rated_power_kw'] = makeVector(cleanRatedPower)
-
-    const newTable = makeTable(columns)
-    // MUST use 'file' format — Rust FileReader requires ARROW1 magic bytes.
-    writeFileSync(indPath, Buffer.from(tableToIPC(newTable, 'file')))
-    hexesUpdated++
+    const { turbineRows, matched, filled } = await writeTurbineSpecs(indPath, (lat, lon) => {
+      const best = findNearestRegistryRecord(grid, lat, lon, USWTDB_MATCH_RADIUS_M)
+      return best ? { hubHeightM: best.hubHeight, ratedPowerKw: best.ratedPowerKw } : null
+    })
+    totalWindTurbines += turbineRows
+    totalMatched += matched
+    specsFilled += filled
+    if (filled > 0) hexesUpdated++
 
     // Progress every 10s
     const elapsed = Date.now() - startTime
@@ -307,7 +243,7 @@ async function main() {
 
   console.log(`\nStep 2: Enrich industrial.arrow files...`)
   console.log(`  USWTDB turbines: ${turbines.length.toLocaleString()}`)
-  enrichHexes(turbines)
+  await enrichHexes(turbines)
 
   console.log(`\n=== Done ===`)
 }
