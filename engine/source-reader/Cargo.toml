@@ -14,6 +14,10 @@ standalone = []
 name = "obstacle-index-warm"
 required-features = ["standalone"]
 
+[[bin]]
+name = "popup-profile"
+required-features = ["standalone"]
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 

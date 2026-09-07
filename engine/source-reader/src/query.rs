@@ -502,7 +502,6 @@ pub fn collect_from_hex_data(
     })
 }
 
-#[cfg(feature = "node")]
 pub(crate) fn apply_segment_top_k_with_cap(
     traces: &mut noise_compute::types::TraceCollector,
     per_kind_cap: usize,
