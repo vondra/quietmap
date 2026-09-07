@@ -49,8 +49,25 @@ pub struct DeviceObstacleGrid {
     pub rows: u32,
     pub cell_starts_offset: u32,
     pub edge_references_offset: u32,
-    pub edge_values_offset: u32,
+    /// First edge of this grid in the region's edge arrays, in edges.
+    pub edge_index_offset: u32,
     pub cell_maximum_height_offset: u32,
+}
+
+/// One obstacle edge's endpoints, `(start_x_m, start_y_m)` to `(end_x_m, end_y_m)`,
+/// in its grid's query frame.
+///
+/// Sixteen bytes, the kernel's `float4`: the obstacle scan tests every edge of
+/// every cell it opens against the ray, which is the painter's hottest load, so
+/// the record is sized to land inside one memory sector however scattered the
+/// edge index is.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct DeviceObstacleEdgeEndpoints {
+    pub start_x_m: f32,
+    pub start_y_m: f32,
+    pub end_x_m: f32,
+    pub end_y_m: f32,
 }
 
 /// All obstacle-grid arrays concatenated once for a region.
@@ -59,14 +76,13 @@ pub struct FlattenedObstacleGeometry {
     pub grids: Vec<DeviceObstacleGrid>,
     pub cell_starts: Vec<u32>,
     pub edge_references: Vec<u32>,
-    /// Edge endpoints as `x0, y0, x1, y1`, four floats per edge so that the
-    /// scan's hot load is one 16-byte aligned fetch. The five-float record this
-    /// replaces put every other edge's endpoints across two sectors, and the
-    /// height it carried is read only for an edge the ray actually crosses.
-    pub edge_endpoints_xyxy: Vec<f32>,
-    /// Edge height per edge, in `edge_values_offset` units like the endpoints.
+    /// One record per edge. The five-float record this replaces put every other
+    /// edge's endpoints across two memory sectors, and the height it carried is
+    /// read only for an edge the ray actually crosses.
+    pub edge_endpoints: Vec<DeviceObstacleEdgeEndpoints>,
+    /// Edge height, one per edge, under the same `edge_index_offset`.
     pub edge_height_m: Vec<f32>,
-    /// Building flag per edge, indexed by the same `edge_values_offset`.
+    /// Building flag, one per edge, under the same `edge_index_offset`.
     pub edge_is_building: Vec<u8>,
     pub cell_maximum_heights: Vec<f32>,
 }
@@ -89,18 +105,38 @@ impl FlattenedObstacleGeometry {
                 rows: view.rows as u32,
                 cell_starts_offset: flattened.cell_starts.len() as u32,
                 edge_references_offset: flattened.edge_references.len() as u32,
-                edge_values_offset: flattened.edge_height_m.len() as u32,
+                edge_index_offset: flattened.edge_height_m.len() as u32,
                 cell_maximum_height_offset: flattened.cell_maximum_heights.len() as u32,
             };
             flattened.grids.push(grid);
             flattened.cell_starts.extend_from_slice(view.cell_starts);
             flattened.edge_references.extend_from_slice(view.edge_refs);
+            // `gpu_view` materialises the edge arrays in one pass over the same
+            // edge slice, so they concatenate in the same order and answer to the
+            // same edge index. A view that disagreed would slide every later edge's
+            // endpoints under another edge's height and paint the result with no
+            // other sign, so it ends the process here instead.
+            assert_eq!(
+                view.edges_xyxyh.len() % 5,
+                0,
+                "an obstacle view's xyxyh array is not whole edges"
+            );
+            let edge_count = view.edges_xyxyh.len() / 5;
+            assert_eq!(
+                view.edge_is_building.len(),
+                edge_count,
+                "an obstacle view carries {} building flags for {edge_count} edges",
+                view.edge_is_building.len()
+            );
             for edge in view.edges_xyxyh.chunks_exact(5) {
-                flattened.edge_endpoints_xyxy.extend_from_slice(&edge[..4]);
+                flattened.edge_endpoints.push(DeviceObstacleEdgeEndpoints {
+                    start_x_m: edge[0],
+                    start_y_m: edge[1],
+                    end_x_m: edge[2],
+                    end_y_m: edge[3],
+                });
                 flattened.edge_height_m.push(edge[4]);
             }
-            // gpu_view materialises edges_xyxyh and edge_is_building in one pass
-            // over the same edge slice, so both concatenate in the same order.
             flattened
                 .edge_is_building
                 .extend_from_slice(&view.edge_is_building);
@@ -120,6 +156,7 @@ mod tests {
     fn cuda_transfer_layouts_are_fixed() {
         assert_eq!(std::mem::size_of::<DeviceRasterGeometry>(), 24);
         assert_eq!(std::mem::size_of::<DeviceObstacleGrid>(), 48);
+        assert_eq!(std::mem::size_of::<DeviceObstacleEdgeEndpoints>(), 16);
     }
 
     /// Host replica of `relevant_source_grid_scan.cuh`'s `scan_obstacle_grid`:
@@ -185,11 +222,17 @@ mod tests {
                 for position in first..end {
                     let local_edge = flattened.edge_references
                         [(grid.edge_references_offset + position) as usize];
-                    let edge = grid.edge_values_offset + local_edge;
-                    let ends =
-                        &flattened.edge_endpoints_xyxy[edge as usize * 4..edge as usize * 4 + 4];
+                    let edge = grid.edge_index_offset + local_edge;
+                    let ends = flattened.edge_endpoints[edge as usize];
                     if let Some(crossing_t) = segment_crossing_fraction(
-                        start_x, start_y, dx, dy, ends[0], ends[1], ends[2], ends[3],
+                        start_x,
+                        start_y,
+                        dx,
+                        dy,
+                        ends.start_x_m,
+                        ends.start_y_m,
+                        ends.end_x_m,
+                        ends.end_y_m,
                     ) {
                         let is_building = flattened.edge_is_building[edge as usize] != 0;
                         if !is_building || crossing_t * distance_m >= exclusion_radius_m {
@@ -351,8 +394,8 @@ mod tests {
         let frame = RegionMetricFrame::for_latitude_longitude(origin.0, origin.1);
         let flattened = FlattenedObstacleGeometry::from_set(&frame, &set);
         assert_eq!(
-            flattened.edge_is_building.len() * 4,
-            flattened.edge_endpoints_xyxy.len()
+            flattened.edge_is_building.len(),
+            flattened.edge_endpoints.len()
         );
         let source = frame.encode(source_lat, source_lon);
         let receiver = frame.encode(receiver_lat, receiver_lon);

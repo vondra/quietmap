@@ -166,9 +166,8 @@ __device__ __forceinline__ void scan_obstacle_grid(
                 for (uint32_t position = first; position < end; ++position) {
                     const uint32_t local_edge = scene.obstacle_edge_references[
                         grid.edge_references_offset + position];
-                    const uint32_t edge = grid.edge_values_offset + local_edge;
-                    const float4 ends = reinterpret_cast<const float4* __restrict__>(
-                        scene.obstacle_edge_endpoints_xyxy)[edge];
+                    const uint32_t edge = grid.edge_index_offset + local_edge;
+                    const float4 ends = load_obstacle_edge_endpoints(scene, edge);
                     float crossing_t;
                     // The exclusion radius shields only the source's own BUILDING
                     // footprint; a barrier edge is an explicit wall and always

@@ -226,7 +226,7 @@ __device__ void gather_blocked_mask(
                 for (uint32_t position = first; position < end; ++position) {
                     const uint32_t local_edge = scene.obstacle_edge_references[
                         grid.edge_references_offset + position];
-                    const uint32_t edge = grid.edge_values_offset + local_edge;
+                    const uint32_t edge = grid.edge_index_offset + local_edge;
                     // A wall under the sight line blocks nothing, and the cell's
                     // tallest edge does not answer for it (CPU
                     // `skyline_arcs_within`, third prune).
@@ -234,8 +234,7 @@ __device__ void gather_blocked_mask(
                         && scene.obstacle_edge_height_m[edge] <= sight_line_floor_m) {
                         continue;
                     }
-                    const float4 ends = reinterpret_cast<const float4* __restrict__>(
-                        scene.obstacle_edge_endpoints_xyxy)[edge];
+                    const float4 ends = load_obstacle_edge_endpoints(scene, edge);
                     admit_skyline_arc(
                         source, receiver_x_m, receiver_y_m,
                         (ends.x - receiver_grid_x) * inverse_scale, ends.y - receiver_grid_y,

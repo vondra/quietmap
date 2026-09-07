@@ -125,6 +125,10 @@ pub fn build_relevant_source_partition(
                 }
             }
             relevant_sources.sort_unstable();
+            debug_assert!(
+                relevant_sources.windows(2).all(|pair| pair[0] < pair[1]),
+                "the merge walk below needs the admitted list strictly ascending"
+            );
 
             let mut block_background = [[0.0_f32; PERIOD_COUNT]; 4];
             for (block_corner, corner) in corners.into_iter().enumerate() {
@@ -134,6 +138,11 @@ pub fn build_relevant_source_partition(
                 // nothing is what skipping it does.
                 let range = corner_pair_range(incidence, corner);
                 let candidates = &incidence.corner_source_indices[range.clone()];
+                debug_assert!(
+                    candidates.windows(2).all(|pair| pair[0] < pair[1]),
+                    "the merge walk needs the corner's candidates strictly ascending, \
+                     which validate_incidence refused this incidence without"
+                );
                 let mut dropped = corner_total_energy[corner];
                 let mut candidate = 0;
                 for &source_index in &relevant_sources {

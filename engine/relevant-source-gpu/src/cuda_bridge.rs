@@ -8,7 +8,9 @@ use std::ptr::NonNull;
 use anyhow::{bail, Result};
 use raster_reader::FusedPixel;
 
-use crate::obstacle_transfer::{DeviceObstacleGrid, DeviceRasterGeometry};
+use crate::obstacle_transfer::{
+    DeviceObstacleEdgeEndpoints, DeviceObstacleGrid, DeviceRasterGeometry,
+};
 use crate::source_frame::{DeviceLineSource, CORNER_COUNT, PERIOD_COUNT, TILE_PIXEL_SIDE};
 
 unsafe extern "C" {
@@ -60,7 +62,7 @@ pub struct DeviceScenePointers {
     pub obstacle_grids: *const DeviceObstacleGrid,
     pub obstacle_cell_starts: *const u32,
     pub obstacle_edge_references: *const u32,
-    pub obstacle_edge_endpoints_xyxy: *const f32,
+    pub obstacle_edge_endpoints: *const DeviceObstacleEdgeEndpoints,
     pub obstacle_edge_height_m: *const f32,
     pub obstacle_cell_maximum_heights: *const f32,
     pub obstacle_edge_is_building: *const u8,
@@ -275,8 +277,19 @@ fn check_cuda(status: c_int) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// Two pointers of one size trade places without changing the struct's size,
+    /// so the two the obstacle scan reads are pinned by offset as well; the
+    /// matching `static_assert`s sit beside the CUDA declaration.
     #[test]
     fn scene_pointer_layout_matches_cuda() {
         assert_eq!(size_of::<DeviceScenePointers>(), 112);
+        assert_eq!(
+            std::mem::offset_of!(DeviceScenePointers, obstacle_edge_endpoints),
+            40
+        );
+        assert_eq!(
+            std::mem::offset_of!(DeviceScenePointers, obstacle_edge_height_m),
+            48
+        );
     }
 }

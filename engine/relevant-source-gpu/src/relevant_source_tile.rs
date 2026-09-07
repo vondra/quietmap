@@ -2,7 +2,8 @@
 
 use crate::cuda_bridge::{DeviceBuffer, DeviceScenePointers, RelevantSourceCuda};
 use crate::obstacle_transfer::{
-    DeviceObstacleGrid, DeviceRasterGeometry, FlattenedObstacleGeometry,
+    DeviceObstacleEdgeEndpoints, DeviceObstacleGrid, DeviceRasterGeometry,
+    FlattenedObstacleGeometry,
 };
 use crate::relevance_partition::build_relevant_source_partition;
 use crate::source_frame::{
@@ -19,7 +20,7 @@ pub struct RegionDeviceObstacles {
     obstacle_grids: DeviceBuffer<DeviceObstacleGrid>,
     obstacle_cell_starts: DeviceBuffer<u32>,
     obstacle_edge_references: DeviceBuffer<u32>,
-    obstacle_edge_endpoints: DeviceBuffer<f32>,
+    obstacle_edge_endpoints: DeviceBuffer<DeviceObstacleEdgeEndpoints>,
     obstacle_edge_height: DeviceBuffer<f32>,
     obstacle_edge_is_building: DeviceBuffer<u8>,
     obstacle_cell_maximum_heights: DeviceBuffer<f32>,
@@ -32,7 +33,7 @@ impl RegionDeviceObstacles {
             obstacle_grids: DeviceBuffer::from_slice(&obstacles.grids)?,
             obstacle_cell_starts: DeviceBuffer::from_slice(&obstacles.cell_starts)?,
             obstacle_edge_references: DeviceBuffer::from_slice(&obstacles.edge_references)?,
-            obstacle_edge_endpoints: DeviceBuffer::from_slice(&obstacles.edge_endpoints_xyxy)?,
+            obstacle_edge_endpoints: DeviceBuffer::from_slice(&obstacles.edge_endpoints)?,
             obstacle_edge_height: DeviceBuffer::from_slice(&obstacles.edge_height_m)?,
             obstacle_edge_is_building: DeviceBuffer::from_slice(&obstacles.edge_is_building)?,
             obstacle_cell_maximum_heights: DeviceBuffer::from_slice(
@@ -158,7 +159,7 @@ pub fn partition_and_paint_tile(
         obstacle_grids: device_obstacles.obstacle_grids.as_ptr(),
         obstacle_cell_starts: device_obstacles.obstacle_cell_starts.as_ptr(),
         obstacle_edge_references: device_obstacles.obstacle_edge_references.as_ptr(),
-        obstacle_edge_endpoints_xyxy: device_obstacles.obstacle_edge_endpoints.as_ptr(),
+        obstacle_edge_endpoints: device_obstacles.obstacle_edge_endpoints.as_ptr(),
         obstacle_edge_height_m: device_obstacles.obstacle_edge_height.as_ptr(),
         obstacle_cell_maximum_heights: device_obstacles.obstacle_cell_maximum_heights.as_ptr(),
         obstacle_edge_is_building: device_obstacles.obstacle_edge_is_building.as_ptr(),

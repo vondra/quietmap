@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <math_constants.h>
 
@@ -81,7 +82,8 @@ struct DeviceObstacleGrid {
     uint32_t rows;
     uint32_t cell_starts_offset;
     uint32_t edge_references_offset;
-    uint32_t edge_values_offset;
+    /// First edge of this grid in the region's edge arrays, in edges.
+    uint32_t edge_index_offset;
     uint32_t cell_maximum_height_offset;
 };
 
@@ -96,7 +98,7 @@ struct DeviceScenePointers {
     const DeviceObstacleGrid* __restrict__ obstacle_grids;
     const uint32_t* __restrict__ obstacle_cell_starts;
     const uint32_t* __restrict__ obstacle_edge_references;
-    const float* __restrict__ obstacle_edge_endpoints_xyxy;
+    const float4* __restrict__ obstacle_edge_endpoints;
     const float* __restrict__ obstacle_edge_height_m;
     const float* __restrict__ obstacle_cell_maximum_heights;
     const uint8_t* __restrict__ obstacle_edge_is_building;
@@ -128,7 +130,28 @@ static_assert(sizeof(DeviceLineSource) == 128, "source ABI");
 static_assert(sizeof(FusedPixel) == 8, "raster pixel ABI");
 static_assert(sizeof(DeviceRasterGeometry) == 24, "raster geometry ABI");
 static_assert(sizeof(DeviceObstacleGrid) == 48, "obstacle grid ABI");
+// Four floats is the shape `DeviceObstacleEdgeEndpoints` carries on the host,
+// whose own size assertion holds the other half of this record.
+static_assert(sizeof(float4) == 4 * sizeof(float), "obstacle edge endpoint record");
 static_assert(sizeof(DeviceScenePointers) == 112, "scene ABI");
+// Two pointers of one size trade places without changing the struct's size, so the
+// two the obstacle scan reads are pinned by offset as well; `cuda_bridge`'s
+// `scene_pointer_layout_matches_cuda` holds the other side of the same claim.
+static_assert(offsetof(DeviceScenePointers, obstacle_edge_endpoints) == 40, "scene ABI");
+static_assert(offsetof(DeviceScenePointers, obstacle_edge_height_m) == 48, "scene ABI");
+
+/// One obstacle edge's endpoints, `(x, y)` to `(z, w)`, in its grid's query frame.
+///
+/// Sixteen bytes on a cudaMalloc base, so however scattered the edge index is the
+/// fetch lands inside one memory sector -- and it is the painter's hottest load:
+/// the scan tests every edge of every cell it opens. Both readers, the scan and
+/// the skyline gather, come through here so the record's shape is stated once.
+__device__ __forceinline__ float4 load_obstacle_edge_endpoints(
+    const DeviceScenePointers& scene,
+    uint32_t edge
+) {
+    return scene.obstacle_edge_endpoints[edge];
+}
 
 __device__ __forceinline__ float quietmap_clamp(float value, float minimum, float maximum) {
     return fminf(fmaxf(value, minimum), maximum);
