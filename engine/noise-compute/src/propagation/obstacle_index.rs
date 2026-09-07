@@ -342,8 +342,8 @@ pub struct ObstacleIndex {
     pub(super) origin_lat: f64,
     pub(super) origin_lon: f64,
     pub(super) m_per_deg_lon: f64,
-    /// Grid cell size (m). ~2× the raster cell keeps cells-per-ray low while
-    /// average edges-per-cell stays small in cities.
+    /// Grid cell size (m) — [`obstacle_grid_cell_m`] owns the pitch and why it
+    /// is where it is.
     pub(super) cell_m: f64,
     pub(super) min_x: f64,
     pub(super) min_y: f64,
@@ -368,8 +368,46 @@ pub struct ObstacleIndex {
     pub(super) max_footprint_w: f64,
 }
 
-/// Default grid pitch (m) — coarse enough that a 10 km ray walks ~160 cells.
-pub const OBSTACLE_GRID_CELL_M: f64 = 64.0;
+/// Edges a grid cell should hold ON AVERAGE over the stock's bounding box, which is what
+/// fixes the pitch — no single pitch serves both a metro and a desert.
+///
+/// One ray costs `A * (cells it walks) + B * (edges it tests)`, and over a stock of `rho`
+/// edges per m² at pitch `h` those are `L / h` and `rho * L * (h + mean edge length)`. The
+/// sum is minimised at `h = sqrt(A / (B * rho))` — a fixed MEAN occupancy, wherever the
+/// ray is — which is what this names. A mean is all it is: inside one index the cells
+/// still run from empty parkland to a packed downtown block, and this only keeps the
+/// index as a whole from being gridded for a region it is not in.
+///
+/// `A / B` is read off the measured pitch ladder on the kbench metro tile (10.2 M edges
+/// over 52 x 50 km, 3,917 per km², best of four matched alternations on an RTX 5070):
+/// 64 m 10.94 GPU s, 32 m 9.15, 24 m 9.14, 16 m 10.53. `3.917e-3 * 32²` is 4.0.
+const OBSTACLE_GRID_EDGES_PER_CELL: f64 = 4.0;
+
+/// Pitch floor (m). 24 m TIED 32 m on the ladder above, so this is not a second optimum —
+/// it is headroom over the pitch where the per-cell arrays (`cell_starts` and
+/// `cell_max_h`, four bytes per cell each) outgrow a card's L2 and every DDA step starts
+/// missing: at 16 m the GPU painter is slower on that tile than it is at 64 m.
+const OBSTACLE_GRID_CELL_MIN_M: f64 = 32.0;
+
+/// The pitch for one stock of edges: fine where they stand thick, coarse where they do
+/// not, so that a ray meets about the same number of edges per cell wherever it is.
+///
+/// An empty stock arrives as the inverted bounding box, whose negative spans floor to a
+/// unit area and hand back the pitch floor — the empty index's grid is one cell either
+/// way, so it needs no arm of its own.
+///
+/// Measured on the 2026 world's own cells, the three the etalon and kbench windows paint:
+/// the Los Angeles cell (10.2 M edges, 3,917 per km²) grids at the 32 m floor with 4.8
+/// edge references per cell, the Dobříš cell (868 k edges, 366 per km²) at 104 m with
+/// 4.3, and a Sahara cell (1,664 edges, 1 per km²) at 2,409 m with 3.8. At one flat 32 m
+/// that Sahara index would carry 2.36 million cells for its 1,664 edges, and every DDA
+/// step of every ray would walk them.
+fn obstacle_grid_cell_m(span_x_m: f64, span_y_m: f64, edge_count: usize) -> f64 {
+    let area_m2 = span_x_m.max(1.0) * span_y_m.max(1.0);
+    (area_m2 * OBSTACLE_GRID_EDGES_PER_CELL / edge_count.max(1) as f64)
+        .sqrt()
+        .max(OBSTACLE_GRID_CELL_MIN_M)
+}
 
 /// Flat per-index CSR view for GPU upload — see [`ObstacleIndex::gpu_view`].
 pub struct GpuGridView<'a> {
@@ -1713,8 +1751,19 @@ impl Builder {
 
     /// Freeze into the CSR grid index. Empty builder yields an index whose
     /// `crossings` is a no-op (the rural fast path).
-    pub fn build(mut self) -> ObstacleIndex {
-        let cell_m = OBSTACLE_GRID_CELL_M;
+    pub fn build(self) -> ObstacleIndex {
+        let bounds = self.edge_bounds();
+        let (min_x, min_y, max_x, max_y) = bounds;
+        let cell_m = obstacle_grid_cell_m(max_x - min_x, max_y - min_y, self.edges.len());
+        self.build_at_pitch_m(bounds, cell_m)
+    }
+
+    /// The edges' bounding box, `(min_x, min_y, max_x, max_y)`, in the index's local
+    /// metric frame. Bounding the stock is one pass over every edge, so it is done once
+    /// and handed to both the pitch and the grid it sizes. An empty builder yields the
+    /// inverted box, which [`obstacle_grid_cell_m`] answers with the pitch floor and
+    /// [`Self::build_at_pitch_m`] never reads.
+    fn edge_bounds(&self) -> (f64, f64, f64, f64) {
         let (mut min_x, mut min_y) = (f64::MAX, f64::MAX);
         let (mut max_x, mut max_y) = (f64::MIN, f64::MIN);
         for e in &self.edges {
@@ -1723,6 +1772,14 @@ impl Builder {
             max_x = max_x.max(e.x0 as f64).max(e.x1 as f64);
             max_y = max_y.max(e.y0 as f64).max(e.y1 as f64);
         }
+        (min_x, min_y, max_x, max_y)
+    }
+
+    /// Freeze into the CSR grid at a pitch and a bounding box the caller names —
+    /// [`Self::build`] derives both from the stock, and the boundary sweep pins the pitch
+    /// so its fixtures can sit exactly on cell edges.
+    fn build_at_pitch_m(mut self, bounds: (f64, f64, f64, f64), cell_m: f64) -> ObstacleIndex {
+        let (min_x, min_y, max_x, max_y) = bounds;
         if self.edges.is_empty() {
             return ObstacleIndex {
                 origin_lat: self.origin_lat,
@@ -2355,6 +2412,7 @@ mod tests {
     /// loses ~17 %.
     #[test]
     fn screen_never_loses_a_crossing_over_a_swept_population() {
+        const PITCH_M: f64 = 64.0;
         let mut state = 0xC85E_ED01_u64;
         let mut next = |lo: f64, hi: f64| {
             state = state
@@ -2366,20 +2424,25 @@ mod tests {
         for trial in 0..200 {
             let mut builder = ObstacleIndex::builder(OLAT, OLON);
             for id in 0..12 {
-                // Half the trials snap corners onto the 64 m grid pitch, so
-                // crossings sit exactly ON cell boundaries by construction.
+                // Half the trials snap corners onto the grid pitch, so crossings sit
+                // exactly ON cell boundaries by construction. The pitch is pinned
+                // below rather than derived from the stock: what this sweeps is the
+                // last-ulp meeting of the edge supercover and the query DDA, which is
+                // the same property at every pitch, and fixtures cannot be snapped to
+                // a pitch their own extent decides.
                 let (cx, cy, half) = if trial % 2 == 0 {
                     (
-                        (next(-6.0, 6.0) as i64) as f64 * OBSTACLE_GRID_CELL_M,
-                        (next(-6.0, 6.0) as i64) as f64 * OBSTACLE_GRID_CELL_M,
-                        OBSTACLE_GRID_CELL_M / 2.0,
+                        (next(-6.0, 6.0) as i64) as f64 * PITCH_M,
+                        (next(-6.0, 6.0) as i64) as f64 * PITCH_M,
+                        PITCH_M / 2.0,
                     )
                 } else {
                     (next(-450.0, 450.0), next(-450.0, 450.0), next(4.0, 30.0))
                 };
                 builder.add_ring(&square(cx, cy, half), 10.0, ObstacleKind::Building, id);
             }
-            let idx = builder.build();
+            let bounds = builder.edge_bounds();
+            let idx = builder.build_at_pitch_m(bounds, PITCH_M);
             for k in 0..120 {
                 let off = -500.0 + k as f64 * 8.4;
                 for &(from, to) in &[

@@ -3194,25 +3194,37 @@ mod wedge_tests {
 
     /// Buildings scattered all round the receiver, so a disk gather collects
     /// far more than any one span can read.
+    ///
+    /// Eleven blocks deep on each ring, because the pitch now follows the density and a
+    /// thin fixture would measure that rule instead of this gather. One block deep is
+    /// 576 edges over a 1.97 km square, 148 per km², which grids at 151.5 m — cells
+    /// three times the width the wedge subtends at the 1,200 m gather radius, and the
+    /// wedge then collects 162 arcs of the disk's 576, under the 8x this test demands.
+    /// Eleven deep is 6,336 edges, 1,670 per km², gridded at 48.7 m with 5.4 references
+    /// per cell, and the wedge collects 382 of 6,336 — a village block rather than
+    /// downtown, and enough that what is measured is the bookkeeping.
     fn ring_city() -> ObstacleSet {
         let mut b = ObstacleIndex::builder(OLAT, OLON);
         let mut id = 0u32;
         for k in 0..48 {
             let a = k as f64 * std::f64::consts::TAU / 48.0;
-            for r in [180.0f64, 420.0, 900.0] {
-                let (cx, cy) = (r * a.cos(), r * a.sin());
-                b.add_ring(
-                    &[
-                        ll(cx - 9.0, cy - 9.0),
-                        ll(cx + 9.0, cy - 9.0),
-                        ll(cx + 9.0, cy + 9.0),
-                        ll(cx - 9.0, cy + 9.0),
-                    ],
-                    10.0,
-                    ObstacleKind::Building,
-                    id,
-                );
-                id += 1;
+            for depth in 0..11 {
+                let inset = 6.0 * depth as f64;
+                for r in [180.0f64 + inset, 420.0 + inset, 900.0 + inset] {
+                    let (cx, cy) = (r * a.cos(), r * a.sin());
+                    b.add_ring(
+                        &[
+                            ll(cx - 9.0, cy - 9.0),
+                            ll(cx + 9.0, cy - 9.0),
+                            ll(cx + 9.0, cy + 9.0),
+                            ll(cx - 9.0, cy + 9.0),
+                        ],
+                        10.0,
+                        ObstacleKind::Building,
+                        id,
+                    );
+                    id += 1;
+                }
             }
         }
         ObstacleSet {
