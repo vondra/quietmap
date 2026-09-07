@@ -4,10 +4,12 @@
 //! The receiver's skyline is the set of obstacle edges and noise walls standing in
 //! front of the sub-segment; their azimuth arcs, clipped to the bucket's span, are
 //! unioned into a fixed-resolution blocked mask over the span (its bins are never
-//! wider than the CPU's own ARC_QUADRATURE_MIN_RAD coalescing floor for a bucket).
-//! Every blocked run and every clear gap is evaluated by one ray per part of at
-//! most ESCALATE_SPAN_RAD, energy-averaged on max(A_ground, A_terrain + A_screen),
-//! and handed back as the non-negative increment over the bucket ray's terrain.
+//! wider than the CPU's own ARC_QUADRATURE_MIN_RAD coalescing floor for a bucket),
+//! and each arc's two ends are recorded in a second mask of the same bins. A
+//! blocked run is then cut at those ends and a clear gap taken whole; every window
+//! is evaluated by one ray per part of at most ESCALATE_SPAN_RAD, energy-averaged
+//! on max(A_ground, A_terrain + A_screen), and handed back as the non-negative
+//! increment over the bucket ray's terrain.
 
 #pragma once
 
@@ -22,9 +24,17 @@ static_assert(
         >= CUDART_PI_F / QUIETMAP_LINE_DIRECTION_COUNT,
     "arc mask bins coarser than the CPU quadrature floor");
 
+/// `blocked` is the union of the clipped skyline arcs; `boundary` marks the bin
+/// each arc starts in and the bin after the one it ends in — the cut set the CPU
+/// splits its blocked intervals on, which the union alone cannot carry.
 struct ArcMask {
-    uint32_t bits[QUIETMAP_ARC_MASK_WORDS];
+    uint32_t blocked[QUIETMAP_ARC_MASK_WORDS];
+    uint32_t boundary[QUIETMAP_ARC_MASK_WORDS];
 };
+
+__device__ __forceinline__ bool arc_mask_bit(const uint32_t bits[QUIETMAP_ARC_MASK_WORDS], int bin) {
+    return ((bits[bin >> 5] >> (bin & 31)) & 1u) != 0u;
+}
 
 __device__ __forceinline__ float wrap_to_pi(float angle) {
     while (angle > CUDART_PI_F) {
@@ -79,7 +89,8 @@ __device__ __forceinline__ float origin_to_segment_distance(
     return hypotf(fmaf(t, edge_x, x0), fmaf(t, edge_y, y0));
 }
 
-/// Mark the bins of `[piece_lo, piece_hi]` (absolute azimuths inside the span).
+/// Mark the bins of `[piece_lo, piece_hi]` (absolute azimuths inside the span)
+/// blocked, and both of its ends as cuts.
 __device__ __forceinline__ void mark_arc_bins(
     ArcMask& mask,
     float span_lo,
@@ -92,7 +103,11 @@ __device__ __forceinline__ void mark_arc_bins(
     first = max(first, 0);
     last = min(max(last, first), QUIETMAP_ARC_MASK_BINS - 1);
     for (int bin = first; bin <= last; ++bin) {
-        mask.bits[bin >> 5] |= 1u << (bin & 31);
+        mask.blocked[bin >> 5] |= 1u << (bin & 31);
+    }
+    mask.boundary[first >> 5] |= 1u << (first & 31);
+    if (last + 1 < QUIETMAP_ARC_MASK_BINS) {
+        mask.boundary[(last + 1) >> 5] |= 1u << ((last + 1) & 31);
     }
 }
 
@@ -162,7 +177,8 @@ __device__ void gather_blocked_mask(
     ArcMask& mask
 ) {
     for (int word = 0; word < QUIETMAP_ARC_MASK_WORDS; ++word) {
-        mask.bits[word] = 0u;
+        mask.blocked[word] = 0u;
+        mask.boundary[word] = 0u;
     }
     const float low_x = cosf(span_lo);
     const float low_y = sinf(span_lo);
@@ -298,6 +314,77 @@ __device__ __forceinline__ int fan_part_count(float width) {
                QUIETMAP_ARC_ESCALATE_MAX_PARTS);
 }
 
+/// One window of the fan — a blocked boundary window or a whole clear gap — split
+/// into parts of at most ESCALATE_SPAN_RAD, each part evaluated on its own ray and
+/// added to `energy` by its share of the span (CPU `arc_screened_eval` step 2 and
+/// `accumulate_clear`, which use the same part rule).
+__device__ __forceinline__ void accumulate_fan_window(
+    const DeviceScenePointers& scene,
+    const DeviceLineSource& source,
+    float receiver_x_m,
+    float receiver_y_m,
+    float receiver_altitude_m,
+    float window_lo,
+    float window_hi,
+    float span,
+    float cp_azimuth,
+    bool window_blocked,
+    const float ground_db[QUIETMAP_BAND_COUNT],
+    const float centre_terrain_db[QUIETMAP_BAND_COUNT],
+    const float centre_screening_db[QUIETMAP_BAND_COUNT],
+    PathProfile& profile,
+    float& covered,
+    float energy[QUIETMAP_BAND_COUNT]
+) {
+    const float zero_db[QUIETMAP_BAND_COUNT] = {};
+    float terrain_db[QUIETMAP_BAND_COUNT];
+    float part_screening_db[QUIETMAP_BAND_COUNT];
+    const float width = window_hi - window_lo;
+    const int parts = fan_part_count(width);
+    const float step = width / static_cast<float>(parts);
+    for (int part = 0; part < parts; ++part) {
+        const float part_lo = fmaf(static_cast<float>(part), step, window_lo);
+        const float part_hi = part_lo + step;
+        const float fraction = step / span;
+        covered += fraction;
+        if (window_blocked
+            && cp_azimuth >= part_lo - QUIETMAP_ARC_CP_AZIMUTH_EPS
+            && cp_azimuth <= part_hi + QUIETMAP_ARC_CP_AZIMUTH_EPS) {
+            accumulate_fan_part(ground_db, centre_terrain_db, centre_screening_db, fraction, energy);
+            continue;
+        }
+        if (azimuth_ray_bands(scene, source, receiver_x_m, receiver_y_m, receiver_altitude_m,
+                              0.5f * (part_lo + part_hi), window_blocked, profile,
+                              terrain_db, part_screening_db)) {
+            accumulate_fan_part(ground_db, terrain_db,
+                                window_blocked ? part_screening_db : zero_db, fraction, energy);
+        } else {
+            accumulate_fan_part(ground_db, centre_terrain_db,
+                                window_blocked ? centre_screening_db : zero_db, fraction, energy);
+        }
+    }
+}
+
+/// The bin one past the window that starts at `window`: the next recorded arc cut
+/// inside the run, skipped over while the window is still narrower than the CPU's
+/// quadrature floor. This is the CPU's boundary split followed by its forward
+/// coalesce of the sub-floor windows, on the mask's bin grid.
+__device__ __forceinline__ int blocked_window_end(
+    const ArcMask& mask,
+    int window,
+    int run_end,
+    float bin_width
+) {
+    int window_end = window + 1;
+    while (window_end < run_end
+           && (!arc_mask_bit(mask.boundary, window_end)
+               || static_cast<float>(window_end - window) * bin_width
+                      < QUIETMAP_ARC_QUADRATURE_MIN_RAD)) {
+        ++window_end;
+    }
+    return window_end;
+}
+
 /// The arc-clipped screening increment of one bucket over the terrain of its
 /// centre ray, or the centre ray's own increment when the sub-span is degenerate,
 /// under the 3 degree gate, or nothing blocks it (CPU `arc_screened_eval`).
@@ -333,7 +420,7 @@ __device__ void arc_screened_bucket_increment(
                         fmaxf(source.source_height_m, 0.0f), span_lo, span_hi, bin_width, mask);
     bool blocked = false;
     for (int word = 0; word < QUIETMAP_ARC_MASK_WORDS; ++word) {
-        blocked |= mask.bits[word] != 0u;
+        blocked |= mask.blocked[word] != 0u;
     }
     if (!blocked) {
         return;
@@ -354,45 +441,33 @@ __device__ void arc_screened_bucket_increment(
     for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
         centre_screening_db[band] = screening_db[band];
     }
-    const float zero_db[QUIETMAP_BAND_COUNT] = {};
     float energy[QUIETMAP_BAND_COUNT] = {};
     float covered = 0.0f;
-    float terrain_db[QUIETMAP_BAND_COUNT];
-    float part_screening_db[QUIETMAP_BAND_COUNT];
     int bin = 0;
     while (bin < QUIETMAP_ARC_MASK_BINS) {
-        const bool run_blocked = (mask.bits[bin >> 5] >> (bin & 31)) & 1u;
+        const bool run_blocked = arc_mask_bit(mask.blocked, bin);
         int run_end = bin;
         while (run_end < QUIETMAP_ARC_MASK_BINS
-               && (((mask.bits[run_end >> 5] >> (run_end & 31)) & 1u) != 0u) == run_blocked) {
+               && arc_mask_bit(mask.blocked, run_end) == run_blocked) {
             ++run_end;
         }
-        const float run_lo = fmaf(static_cast<float>(bin), bin_width, span_lo);
-        const float run_hi = run_end == QUIETMAP_ARC_MASK_BINS
-            ? span_hi : fmaf(static_cast<float>(run_end), bin_width, span_lo);
-        const float width = run_hi - run_lo;
-        const int parts = fan_part_count(width);
-        const float step = width / static_cast<float>(parts);
-        for (int part = 0; part < parts; ++part) {
-            const float part_lo = fmaf(static_cast<float>(part), step, run_lo);
-            const float part_hi = part_lo + step;
-            const float fraction = step / span;
-            covered += fraction;
-            if (run_blocked
-                && cp_azimuth >= part_lo - QUIETMAP_ARC_CP_AZIMUTH_EPS
-                && cp_azimuth <= part_hi + QUIETMAP_ARC_CP_AZIMUTH_EPS) {
-                accumulate_fan_part(ground_db, centre_terrain_db, centre_screening_db, fraction, energy);
-                continue;
-            }
-            if (azimuth_ray_bands(scene, source, receiver_x_m, receiver_y_m, receiver_altitude_m,
-                                  0.5f * (part_lo + part_hi), run_blocked, profile,
-                                  terrain_db, part_screening_db)) {
-                accumulate_fan_part(ground_db, terrain_db,
-                                    run_blocked ? part_screening_db : zero_db, fraction, energy);
-            } else {
-                accumulate_fan_part(ground_db, centre_terrain_db,
-                                    run_blocked ? centre_screening_db : zero_db, fraction, energy);
-            }
+        // A clear gap carries no obstacle to rank, so it is one window; a blocked
+        // run is cut at every arc end it holds, because unioning arcs of different
+        // range and height into one window evaluates them all on whichever ray its
+        // centre happens to hit (CPU `arc_screened_eval`, "SPLIT at every arc
+        // boundary": measured 3.04 dB on fixture scene G).
+        int window = bin;
+        while (window < run_end) {
+            const int window_end = run_blocked
+                ? blocked_window_end(mask, window, run_end, bin_width) : run_end;
+            accumulate_fan_window(
+                scene, source, receiver_x_m, receiver_y_m, receiver_altitude_m,
+                fmaf(static_cast<float>(window), bin_width, span_lo),
+                window_end == QUIETMAP_ARC_MASK_BINS
+                    ? span_hi : fmaf(static_cast<float>(window_end), bin_width, span_lo),
+                span, cp_azimuth, run_blocked, ground_db, centre_terrain_db,
+                centre_screening_db, profile, covered, energy);
+            window = window_end;
         }
         bin = run_end;
     }
