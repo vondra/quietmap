@@ -7,16 +7,6 @@ import {
   type NoiseOnflyWorker,
 } from './noise-onfly-supervisor.js'
 
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void
-  let reject!: (reason?: unknown) => void
-  const promise = new Promise<T>((innerResolve, innerReject) => {
-    resolve = innerResolve
-    reject = innerReject
-  })
-  return { promise, resolve, reject }
-}
-
 async function waitFor(predicate: () => boolean, timeoutMs = 250): Promise<void> {
   const startedAt = Date.now()
   while (!predicate()) {
@@ -29,27 +19,15 @@ async function waitFor(predicate: () => boolean, timeoutMs = 250): Promise<void>
 
 class FakeWorker extends EventEmitter implements NoiseOnflyWorker {
   readonly postMessages: Array<{ id: number; lat: number; lng: number; op?: string }> = []
-  private terminatePromise: Promise<number> = Promise.resolve(0)
-  private terminateResolve: ((value: number) => void) | null = null
+  terminateCalls = 0
 
   postMessage(message: { id: number; lat: number; lng: number; op?: string }): void {
     this.postMessages.push(message)
   }
 
   terminate(): Promise<number> {
-    return this.terminatePromise
-  }
-
-  holdTerminate(): void {
-    const pending = deferred<number>()
-    this.terminatePromise = pending.promise
-    this.terminateResolve = pending.resolve
-  }
-
-  releaseTerminate(code = 0): void {
-    this.terminateResolve?.(code)
-    this.terminateResolve = null
-    this.terminatePromise = Promise.resolve(code)
+    this.terminateCalls += 1
+    return Promise.resolve(0)
   }
 
   replyAt(index: number, resultJson = '{}'): void {
@@ -134,7 +112,7 @@ test('aborting a queued request frees its slot', async (t) => {
   assert.equal(await third, '{"third":true}')
 })
 
-test('worker timeout waits for terminate before dispatching the next request', async (t) => {
+test('a work timeout answers 504, never terminates the worker, and reuses it after the late reply', async (t) => {
   const workers: FakeWorker[] = []
   const supervisor = new NoiseOnflySupervisor({
     createWorker: () => {
@@ -147,15 +125,11 @@ test('worker timeout waits for terminate before dispatching the next request', a
     workTimeoutMs: 25,
   })
   t.after(async () => {
-    for (const worker of workers) {
-      worker.releaseTerminate()
-    }
     await supervisor.close()
   })
 
   const first = supervisor.queryNoiseAtPoint(50.1, 14.4)
   await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
-  workers[0].holdTerminate()
 
   const second = supervisor.queryNoiseAtPoint(50.2, 14.5)
 
@@ -167,13 +141,82 @@ test('worker timeout waits for terminate before dispatching the next request', a
       error.code === 'NOISE_ONFLY_TIMEOUT',
   )
 
+  // The slot stays busy while the native call runs: nothing else is dispatched
+  // and no worker is spawned or terminated.
   await new Promise((resolve) => setTimeout(resolve, 40))
   assert.equal(workers.length, 1)
   assert.equal(workers[0].postMessages.length, 1)
+  assert.equal(workers[0].terminateCalls, 0)
 
-  workers[0].releaseTerminate(1)
+  // The late reply frees the slot; the next request runs on the same worker.
+  workers[0].replyAt(0, '{"late":true}')
+  await waitFor(() => workers[0].postMessages.length === 2)
+  workers[0].replyAt(1, '{"second":true}')
+  assert.equal(await second, '{"second":true}')
+  assert.equal(workers.length, 1)
+  assert.equal(workers[0].terminateCalls, 0)
+})
+
+test('aborting an active request keeps its slot busy until the late reply', async (t) => {
+  const workers: FakeWorker[] = []
+  const supervisor = new NoiseOnflySupervisor({
+    createWorker: () => {
+      const worker = new FakeWorker()
+      workers.push(worker)
+      return worker
+    },
+    maxQueue: 4,
+    queueTimeoutMs: 1000,
+    workTimeoutMs: 25,
+  })
+  t.after(async () => {
+    await supervisor.close()
+  })
+
+  const abort = new AbortController()
+  const first = supervisor.queryNoiseAtPoint(50.1, 14.4, abort.signal)
+  await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
+  const second = supervisor.queryNoiseAtPoint(50.2, 14.5)
+
+  abort.abort()
+  await assert.rejects(first, (error: unknown) => error instanceof Error && error.name === 'AbortError')
+
+  // No second dispatch onto the worker still inside the native call, and no
+  // work-timeout firing on the already settled request.
+  await new Promise((resolve) => setTimeout(resolve, 40))
+  assert.equal(workers[0].postMessages.length, 1)
+  assert.equal(workers[0].terminateCalls, 0)
+
+  workers[0].replyAt(0, '{"late":true}')
+  await waitFor(() => workers[0].postMessages.length === 2)
+  workers[0].replyAt(1, '{"second":true}')
+  assert.equal(await second, '{"second":true}')
+})
+
+test('a worker that dies while parked after a 504 frees its slot and is replaced', async (t) => {
+  const workers: FakeWorker[] = []
+  const supervisor = new NoiseOnflySupervisor({
+    createWorker: () => {
+      const worker = new FakeWorker()
+      workers.push(worker)
+      return worker
+    },
+    maxQueue: 4,
+    queueTimeoutMs: 1000,
+    workTimeoutMs: 25,
+  })
+  t.after(async () => {
+    await supervisor.close()
+  })
+
+  const first = supervisor.queryNoiseAtPoint(50.1, 14.4)
+  await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
+  const second = supervisor.queryNoiseAtPoint(50.2, 14.5)
+  await assert.rejects(first, (error: unknown) => error instanceof NoiseOnflyRequestError && error.statusCode === 504)
+
+  workers[0].emit('exit', 1)
   await waitFor(() => workers.length === 2 && workers[1].postMessages.length === 1)
-
+  assert.equal(workers[0].terminateCalls, 0)
   workers[1].replyAt(0, '{"second":true}')
   assert.equal(await second, '{"second":true}')
 })

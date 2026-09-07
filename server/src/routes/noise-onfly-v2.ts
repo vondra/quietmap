@@ -8,7 +8,7 @@ import {
   NoiseOnflyRequestError,
   NoiseOnflySupervisor,
 } from '../engine/noise-onfly-supervisor.js'
-import { prepareSourceReaderAddon } from '../engine/source-reader-addon.js'
+import { pinSourceReaderAddonOnMainThread, prepareSourceReaderAddon } from '../engine/source-reader-addon.js'
 import { BUILDING_LOOKUP_RATE_LIMIT, EXPENSIVE_ROUTE_RATE_LIMIT } from '../rate-limit.js'
 import { H3R4_DIR, SOURCE_READER_PATH } from '../runtime-paths.js'
 
@@ -47,8 +47,10 @@ export async function noiseOnflyV2Routes(
   const supervisor = new NoiseOnflySupervisor({
     createWorker: () => {
       // Cheap when current, and self-heals if an operator removed the stable
-      // copy while this process was alive.
+      // copy while this process was alive. Pinned here, on the first spawn,
+      // so a checkout without the addon still registers the route.
       const sourceReaderNodePath = prepareSourceReaderAddon(SOURCE_READER_PATH)
+      pinSourceReaderAddonOnMainThread(sourceReaderNodePath)
       return new Worker(WORKER_URL, {
         workerData: {
           sourceReaderNodePath,

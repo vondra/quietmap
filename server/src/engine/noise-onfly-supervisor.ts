@@ -191,7 +191,7 @@ export class NoiseOnflySupervisor {
     if (this.queue.length >= this.maxQueue) {
       this.log('warn', 'noise-onfly queue full', {
         queue_length: this.queue.length,
-        active_requests: this.activeRequestIds(),
+        busy_slot_request_ids: this.busySlotRequestIds(),
       })
       throw queueFullError()
     }
@@ -307,7 +307,7 @@ export class NoiseOnflySupervisor {
 
     entry.worker = worker
     entry.workTimer = setTimeout(() => {
-      void this.handleWorkTimeout(slot, entry.id)
+      this.handleWorkTimeout(slot, entry.id)
     }, this.workTimeoutMs)
     slot.active = entry
 
@@ -378,6 +378,12 @@ export class NoiseOnflySupervisor {
     }
 
     this.finishActiveSlot(slot, active)
+    if (active.clientSettled) {
+      this.log('info', 'noise-onfly late reply after timeout or abort', {
+        request_id: active.id,
+        slot: slot.index,
+      })
+    }
     if (message.ok && message.resultJson !== undefined) {
       this.resolveClient(active, message.resultJson)
     } else {
@@ -450,25 +456,26 @@ export class NoiseOnflySupervisor {
     await this.recycleWorker(slot, current, 'worker_exit', { skipTerminate: true })
   }
 
-  private async handleWorkTimeout(slot: Slot, requestId: number): Promise<void> {
+  /**
+   * The client gets its 504, the slot stays busy and the worker lives on:
+   * terminating a worker mid-native-call let Node dlclose the addon while its
+   * Rust threads were alive, and the next spawn's re-map crashed the server
+   * (SIGSEGV twice on 2026-09-06). The late reply frees the slot like any
+   * other reply; a worker that really dies still goes through the exit path.
+   */
+  private handleWorkTimeout(slot: Slot, requestId: number): void {
     const active = slot.active
     if (!active || active.id !== requestId) {
       return
     }
-    const current = active.worker
-    if (!current) {
-      return
-    }
 
-    this.log('warn', 'noise-onfly request timed out', {
+    this.log('warn', 'noise-onfly request timed out; slot waits for the native call', {
       request_id: active.id,
       slot: slot.index,
       queue_length: this.queue.length,
     })
 
-    this.finishActiveSlot(slot, active)
     this.rejectClient(active, workTimeoutError(this.workTimeoutMs))
-    await this.recycleWorker(slot, current, 'request_timeout')
   }
 
   private handleQueueTimeout(requestId: number): void {
@@ -491,6 +498,9 @@ export class NoiseOnflySupervisor {
     if (entry.worker) {
       const slot = this.slotForActiveWorker(entry.worker)
       if (slot && slot.active?.id === entry.id) {
+        // Same rule as a timeout: the slot stays busy until the native call
+        // returns; the work timer has nothing left to settle.
+        this.clearWorkTimer(entry)
         this.detachAbortListener(entry)
         this.rejectClient(entry, abortError())
         this.log('info', 'noise-onfly active request aborted', {
@@ -611,7 +621,8 @@ export class NoiseOnflySupervisor {
     entry.reject(err)
   }
 
-  private activeRequestIds(): number[] {
+  /** Requests holding a slot — live ones and calls parked after their 504. */
+  private busySlotRequestIds(): number[] {
     const ids: number[] = []
     for (const slot of this.slots) {
       if (slot.active) ids.push(slot.active.id)

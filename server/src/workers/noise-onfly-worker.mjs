@@ -4,7 +4,7 @@
 // path before it creates any pool Worker. Never use per-thread paths: every
 // DISTINCT PATH dlopen'd into the server process consumes glibc's fixed
 // static-TLS surplus and worker terminate does NOT give it back —
-// per-threadId copies made every recycle (request timeout, worker error)
+// per-threadId copies made every recycle (worker error or exit)
 // exhausted it after a few dozen recycles, after which EVERY worker spawn
 // failed with "cannot allocate memory in static TLS block" and the popup
 // 503'd until process restart (hit live in production 2026-07-09). With a stable
@@ -12,7 +12,7 @@
 // handle — no TLS growth, and also NO new code until process restart (the
 // name match wins over the fresh inode — verified empirically 2026-07-09:
 // unlink+copy then dlopen same path does NOT re-run constructors, 60×; the
-// distinct-path variant is what exhausted TLS live in production). The size/mtime
+// distinct-path variant is what exhausted TLS live in production). The
 // parent-side size/mtime check keeps that copy current for the NEXT server
 // process without racing pool startup.
 
