@@ -227,10 +227,9 @@ pub(crate) fn compute_roads(
                     propagation::PathProfile::new(),
                     ArcScreeningScratch::new(),
                     Vec::new(),
-                    Vec::new(),
                 )
             },
-            |(path_profile, arc_scratch, cand_scratch, hist_scratch), (seg_i, p)| {
+            |(path_profile, arc_scratch, cand_scratch), (seg_i, p)| {
                 let seg = &roads[*seg_i];
                 let norm = &p.norm;
                 let (src_alt, d_slant) = (p.src_alt, p.d_slant);
@@ -435,12 +434,11 @@ pub(crate) fn compute_roads(
                 // Group-level obstacle histogram — the popup's "N of M
                 // segments had obstacles on path", from the exact footprint
                 // crossings.
-                let (seg_max_bh, _) = obstacles.max_height_crossed(
+                let seg_max_bh = obstacles.max_height_crossed(
                     seg.cp_lat,
                     seg.cp_lon,
                     receiver.lat,
                     receiver.lon,
-                    hist_scratch,
                 );
 
                 // Popup trace, built here so the allocation-heavy part runs in

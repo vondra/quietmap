@@ -151,6 +151,19 @@ impl SeenEdges {
     }
 }
 
+/// What lets the ray walk skip a whole grid cell.
+#[derive(Clone, Copy)]
+enum CellGate<'a> {
+    /// Every crossing is wanted.
+    All,
+    /// The screening race's δ bound — see [`CellPrune`].
+    Delta(&'a CellPrune<'a>),
+    /// Only the tallest building crossed matters: a cell whose tallest edge is
+    /// no taller than the best building crossed so far cannot change it, and
+    /// no candidate is kept — the answer is `CrossingScratch::tallest_building_m`.
+    TallestBuilding,
+}
+
 /// Branch-and-bound context for [`ObstacleIndex::crossings_pruned`]: everything
 /// needed to bound, per grid cell, the best path difference any edge in it could
 /// produce — so a cell that cannot beat the floor is skipped without touching an
@@ -190,6 +203,9 @@ pub struct CellPrune<'a> {
 pub struct CrossingScratch {
     recent: [u64; 64],
     epoch: u32,
+    /// Tallest building crossed so far in a [`CellGate::TallestBuilding`]
+    /// walk — kept here so it carries across an [`ObstacleSet`]'s indexes.
+    tallest_building_m: f32,
 }
 
 impl Default for CrossingScratch {
@@ -197,6 +213,7 @@ impl Default for CrossingScratch {
         Self {
             recent: [0; 64],
             epoch: 0,
+            tallest_building_m: 0.0,
         }
     }
 }
@@ -812,19 +829,7 @@ impl ObstacleIndex {
         rcv_lon: f64,
         out: &mut Vec<CrossingCandidate>,
     ) {
-        out.clear();
-        if self.edges.is_empty() {
-            return;
-        }
-        self.append_crossings(
-            src_lat,
-            src_lon,
-            rcv_lat,
-            rcv_lon,
-            None,
-            &mut CrossingScratch::default(),
-            out,
-        );
+        self.walk(src_lat, src_lon, rcv_lat, rcv_lon, CellGate::All, out);
     }
 
     /// [`Self::crossings`] with the per-cell branch-and-bound prune.
@@ -852,55 +857,49 @@ impl ObstacleIndex {
         prune: &CellPrune<'_>,
         out: &mut Vec<CrossingCandidate>,
     ) {
-        out.clear();
-        if self.edges.is_empty() {
-            return;
-        }
-        self.append_crossings(
+        self.walk(
             src_lat,
             src_lon,
             rcv_lat,
             rcv_lon,
-            Some(prune),
-            &mut CrossingScratch::default(),
+            CellGate::Delta(prune),
             out,
         );
     }
 
-    /// [`Self::crossings`] without the clear: appends this index's hits and
-    /// sort+dedups ONLY the appended tail, so [`ObstacleSet`] can chain
-    /// per-cell indexes into one buffer with zero per-ray allocation (the
-    /// hot scatter loop runs this per receiver ray).
-    /// Test-only view of the unpruned per-index walk (the slab bench's OFF lane).
-    pub fn append_crossings_pub(
+    /// This index's crossings of the ray under `gate`, t-sorted into `out`.
+    fn walk(
         &self,
         src_lat: f64,
         src_lon: f64,
         rcv_lat: f64,
         rcv_lon: f64,
+        gate: CellGate<'_>,
         out: &mut Vec<CrossingCandidate>,
     ) {
-        if self.edges.is_empty() {
-            return;
-        }
+        out.clear();
         self.append_crossings(
             src_lat,
             src_lon,
             rcv_lat,
             rcv_lon,
-            None,
+            gate,
             &mut CrossingScratch::default(),
             out,
         );
     }
 
+    /// [`Self::crossings`] without the clear: appends this index's hits under
+    /// `gate` and sort+dedups ONLY the appended tail, so [`ObstacleSet`] can
+    /// chain per-cell indexes into one buffer with zero per-ray allocation
+    /// (the hot scatter loop runs this per receiver ray).
     fn append_crossings(
         &self,
         src_lat: f64,
         src_lon: f64,
         rcv_lat: f64,
         rcv_lon: f64,
-        prune: Option<&CellPrune<'_>>,
+        gate: CellGate<'_>,
         scratch: &mut CrossingScratch,
         out: &mut Vec<CrossingCandidate>,
     ) {
@@ -976,19 +975,29 @@ impl ObstacleIndex {
                 // padded before it filters the authoritative exact predicate.
                 let t_exit = t_max_x.min(t_max_y).min(1.0);
                 let (cell_t_lo, cell_t_hi) = (t_enter.clamp(0.0, 1.0), t_exit.clamp(0.0, 1.0));
-                if let Some(p) = prune {
-                    while win_lo + 1 < p.t.len() && p.t[win_lo + 1] <= cell_t_lo {
-                        win_lo += 1;
+                match gate {
+                    CellGate::All => {}
+                    CellGate::Delta(p) => {
+                        while win_lo + 1 < p.t.len() && p.t[win_lo + 1] <= cell_t_lo {
+                            win_lo += 1;
+                        }
+                        let mut terr_win = p.elevation_m[win_lo] as f64;
+                        let mut k = win_lo;
+                        while k + 1 < p.t.len() && p.t[k] < cell_t_hi {
+                            k += 1;
+                            terr_win = terr_win.max(p.elevation_m[k] as f64);
+                        }
+                        let top_bound = self.cell_top_bound(cell, terr_win);
+                        if p.max_delta(top_bound, cell_t_lo, cell_t_hi) < p.floor_m {
+                            lo = hi; // no edge here can reach the consumer's floor
+                        }
                     }
-                    let mut terr_win = p.elevation_m[win_lo] as f64;
-                    let mut k = win_lo;
-                    while k + 1 < p.t.len() && p.t[k] < cell_t_hi {
-                        k += 1;
-                        terr_win = terr_win.max(p.elevation_m[k] as f64);
-                    }
-                    let top_bound = self.cell_top_bound(cell, terr_win);
-                    if p.max_delta(top_bound, cell_t_lo, cell_t_hi) < p.floor_m {
-                        lo = hi; // no edge here can reach the consumer's floor
+                    CellGate::TallestBuilding => {
+                        // The cell maximum counts walls too, so the skip is
+                        // conservative: no building here can top the best.
+                        if self.cell_max_h[cell] <= scratch.tallest_building_m {
+                            lo = hi;
+                        }
                     }
                 }
                 if lo < hi {
@@ -1017,6 +1026,13 @@ impl ObstacleIndex {
                             e.x1 as f64,
                             e.y1 as f64,
                         ) {
+                            if let CellGate::TallestBuilding = gate {
+                                if e.kind() == ObstacleKind::Building {
+                                    scratch.tallest_building_m =
+                                        scratch.tallest_building_m.max(e.height_m);
+                                }
+                                continue;
+                            }
                             out.push(CrossingCandidate {
                                 t,
                                 height_m: e.height_m,
@@ -1086,13 +1102,15 @@ impl ObstacleSet {
         self.indexes.iter().map(|i| i.edge_count()).sum()
     }
 
-    /// Tallest BUILDING footprint crossed by the straight path
-    /// `src → rcv`, as `(height_m, t_of_max)` — the vector twin of the raster
+    /// Tallest BUILDING footprint crossed by the straight path `src → rcv`
+    /// (m) — the vector twin of the raster
     /// `RasterSampler::max_building_along_path` group-histogram probe. Used
     /// ONLY for the popup's "N of M segments had obstacles" transparency and
     /// its trace; no dB anywhere reads it. Exact edge crossings replace the
     /// raster's 30–184 m cadence walk, so a footprint between cadence samples
-    /// — invisible to the raster probe — is counted here. Walls
+    /// — invisible to the raster probe — is counted here; the walk skips
+    /// every cell that cannot top the tallest building found so far and
+    /// keeps no candidate. Walls
     /// (`ObstacleKind::Barrier`) are excluded to keep parity with what the
     /// raster building channel answered.
     pub fn max_height_crossed(
@@ -1101,16 +1119,18 @@ impl ObstacleSet {
         src_lon: f64,
         rcv_lat: f64,
         rcv_lon: f64,
-        scratch: &mut Vec<CrossingCandidate>,
-    ) -> (f64, f64) {
-        self.crossings(src_lat, src_lon, rcv_lat, rcv_lon, scratch);
-        let mut best = (0.0_f64, 0.0_f64);
-        for c in scratch.iter() {
-            if c.kind == ObstacleKind::Building && c.height_m as f64 > best.0 {
-                best = (c.height_m as f64, c.t);
-            }
-        }
-        best
+    ) -> f64 {
+        let mut scratch = CrossingScratch::default();
+        self.walk(
+            src_lat,
+            src_lon,
+            rcv_lat,
+            rcv_lon,
+            CellGate::TallestBuilding,
+            &mut scratch,
+            &mut Vec::new(),
+        );
+        f64::from(scratch.tallest_building_m)
     }
 
     /// Exact crossings of the ray across every cell index, t-sorted.
@@ -1122,21 +1142,36 @@ impl ObstacleSet {
         rcv_lon: f64,
         out: &mut Vec<CrossingCandidate>,
     ) {
+        self.walk(
+            src_lat,
+            src_lon,
+            rcv_lat,
+            rcv_lon,
+            CellGate::All,
+            &mut CrossingScratch::default(),
+            out,
+        );
+    }
+
+    /// The ray across every cell index under `gate`, t-sorted into `out`; a
+    /// [`CellGate::TallestBuilding`] bound carries across the indexes.
+    fn walk(
+        &self,
+        src_lat: f64,
+        src_lon: f64,
+        rcv_lat: f64,
+        rcv_lon: f64,
+        gate: CellGate<'_>,
+        scratch: &mut CrossingScratch,
+        out: &mut Vec<CrossingCandidate>,
+    ) {
         out.clear();
-        let mut scratch = None;
+        scratch.tallest_building_m = 0.0;
         for idx in &self.indexes {
-            if idx.edge_count() == 0 || !idx.segment_may_hit(src_lat, src_lon, rcv_lat, rcv_lon) {
+            if !idx.segment_may_hit(src_lat, src_lon, rcv_lat, rcv_lon) {
                 continue;
             }
-            idx.append_crossings(
-                src_lat,
-                src_lon,
-                rcv_lat,
-                rcv_lon,
-                None,
-                scratch.get_or_insert_with(CrossingScratch::default),
-                out,
-            );
+            idx.append_crossings(src_lat, src_lon, rcv_lat, rcv_lon, gate, scratch, out);
         }
         out.sort_unstable_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
     }
@@ -1152,23 +1187,15 @@ impl ObstacleSet {
         prune: &CellPrune<'_>,
         out: &mut Vec<CrossingCandidate>,
     ) {
-        out.clear();
-        let mut scratch = None;
-        for idx in &self.indexes {
-            if idx.edge_count() == 0 || !idx.segment_may_hit(src_lat, src_lon, rcv_lat, rcv_lon) {
-                continue;
-            }
-            idx.append_crossings(
-                src_lat,
-                src_lon,
-                rcv_lat,
-                rcv_lon,
-                Some(prune),
-                scratch.get_or_insert_with(CrossingScratch::default),
-                out,
-            );
-        }
-        out.sort_unstable_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+        self.crossings_pruned_with_scratch(
+            src_lat,
+            src_lon,
+            rcv_lat,
+            rcv_lon,
+            prune,
+            &mut CrossingScratch::default(),
+            out,
+        );
     }
 
     /// [`Self::crossings_pruned`] with a reused per-worker edge-dedup table.
@@ -1184,22 +1211,15 @@ impl ObstacleSet {
         scratch: &mut CrossingScratch,
         out: &mut Vec<CrossingCandidate>,
     ) {
-        out.clear();
-        for idx in &self.indexes {
-            if !idx.segment_may_hit(src_lat, src_lon, rcv_lat, rcv_lon) {
-                continue;
-            }
-            idx.append_crossings(
-                src_lat,
-                src_lon,
-                rcv_lat,
-                rcv_lon,
-                Some(prune),
-                scratch,
-                out,
-            );
-        }
-        out.sort_unstable_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+        self.walk(
+            src_lat,
+            src_lon,
+            rcv_lat,
+            rcv_lon,
+            CellGate::Delta(prune),
+            scratch,
+            out,
+        );
     }
 
     /// Exact building intersections for every ray in one fixed direction
@@ -2802,19 +2822,27 @@ mod tests {
             indexes: vec![std::sync::Arc::new(b.build())],
         };
         let mut scratch = Vec::new();
+        // The gated walk must agree with the tallest building among the
+        // unpruned crossings: a skipped cell never holds the answer.
+        let mut probe = |rcv_lat: f64, rcv_lon: f64| {
+            let h = set.max_height_crossed(OLAT, OLON, rcv_lat, rcv_lon);
+            set.crossings(OLAT, OLON, rcv_lat, rcv_lon, &mut scratch);
+            let unpruned = scratch
+                .iter()
+                .filter(|c| c.kind == ObstacleKind::Building)
+                .map(|c| c.height_m as f64)
+                .fold(0.0, f64::max);
+            assert_eq!(h, unpruned, "gated walk vs every crossing");
+            h
+        };
         // Ray east from the origin: crosses the 12 m block at ~t=0.27.
-        let (h, t) = set.max_height_crossed(OLAT, OLON, OLAT, OLON + 0.02, &mut scratch);
-        assert_eq!(h, 12.0);
-        assert!((0.05..0.5).contains(&t), "crossing t {t} not mid-path");
+        assert_eq!(probe(OLAT, OLON + 0.02), 12.0);
         // Ray west: the 8 m block; the 20 m wall stands aside, not on it.
-        let (h, _) = set.max_height_crossed(OLAT, OLON, OLAT, OLON - 0.02, &mut scratch);
-        assert_eq!(h, 8.0);
+        assert_eq!(probe(OLAT, OLON - 0.02), 8.0);
         // Ray north: only the wall (a Barrier) is there — buildings say 0.
-        let (h, _) = set.max_height_crossed(OLAT, OLON, OLAT + 0.02, OLON, &mut scratch);
-        assert_eq!(h, 0.0);
+        assert_eq!(probe(OLAT + 0.02, OLON), 0.0);
         // Clear path: nothing.
-        let (h, _) = set.max_height_crossed(OLAT, OLON, OLAT - 0.02, OLON, &mut scratch);
-        assert_eq!(h, 0.0);
+        assert_eq!(probe(OLAT - 0.02, OLON), 0.0);
     }
 
     /// 1.4b wrapper: `building_enclosure` answers from the store, every
@@ -2937,7 +2965,7 @@ mod slab_reject_tests {
                         src.1,
                         rcv.0,
                         rcv.1,
-                        None,
+                        CellGate::All,
                         &mut CrossingScratch::default(),
                         &mut without,
                     );

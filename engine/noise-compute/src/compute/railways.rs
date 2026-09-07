@@ -398,10 +398,9 @@ pub(crate) fn compute_railways(
                     propagation::PathProfile::new(),
                     ArcScreeningScratch::new(),
                     Vec::new(),
-                    Vec::new(),
                 )
             },
-            |(path_profile, arc_scratch, cand_scratch, hist_scratch), (seg_i, p)| {
+            |(path_profile, arc_scratch, cand_scratch), (seg_i, p)| {
                 let seg = &railways[*seg_i];
                 let (rail_type, speed, q_pax, q_frt) = (p.rail_type, p.speed, p.q_pax, p.q_frt);
                 let (src_alt, d_slant) = (p.src_alt, p.d_slant);
@@ -552,12 +551,11 @@ pub(crate) fn compute_railways(
                 // Group-level obstacle histogram probe — vector crossings in
                 // vector mode, raster walk only on the fallback path (twin of
                 // the roads histogram; popup transparency only, no dB).
-                let (seg_max_bh, _) = obstacles.max_height_crossed(
+                let seg_max_bh = obstacles.max_height_crossed(
                     seg.cp_lat,
                     seg.cp_lon,
                     receiver.lat,
                     receiver.lon,
-                    hist_scratch,
                 );
 
                 // Popup trace, built here so the allocation-heavy part runs in
