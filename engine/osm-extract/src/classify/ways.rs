@@ -180,30 +180,39 @@ pub(super) fn is_leisure_area(tags: &[(&str, &str)]) -> bool {
     }
 }
 
+/// Road tags that survive extraction. `old_ref` is kept for the
+/// spill-level road-ref fallback (renumbered motorways keep matching
+/// old-numbering census sections); `int_ref` stays dropped (census sections
+/// are cut against national numbering, not E-roads).
+fn keep_road_tag(k: &str) -> bool {
+    matches!(
+        k,
+        "highway"
+            | "name"
+            | "ref"
+            | "old_ref"
+            | "maxspeed"
+            | "surface"
+            | "oneway"
+            | "lanes"
+            | "bridge"
+            | "tunnel"
+            | "toll"
+            | "lit"
+            | "junction"
+            | "access"
+            | "motor_vehicle"
+            | "vehicle"
+    )
+}
+
 /// Extract relevant tags from a way.
 pub fn extract_way_tags(way: &Way, ftype: &FeatureType) -> Tags {
     let mut t = Tags::new();
     for (k, v) in way.tags() {
         match ftype {
             FeatureType::Road => {
-                if matches!(
-                    k,
-                    "highway"
-                        | "name"
-                        | "ref"
-                        | "maxspeed"
-                        | "surface"
-                        | "oneway"
-                        | "lanes"
-                        | "bridge"
-                        | "tunnel"
-                        | "toll"
-                        | "lit"
-                        | "junction"
-                        | "access"
-                        | "motor_vehicle"
-                        | "vehicle"
-                ) {
+                if keep_road_tag(k) {
                     t.insert(k.to_string(), v.to_string());
                 }
             }
@@ -325,4 +334,17 @@ pub fn extract_way_tags(way: &Way, ftype: &FeatureType) -> Tags {
         }
     }
     t
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keep_road_tag;
+
+    #[test]
+    fn road_keep_list_carries_old_ref_for_the_fallback() {
+        assert!(keep_road_tag("ref"));
+        assert!(keep_road_tag("old_ref"));
+        assert!(!keep_road_tag("int_ref"));
+        assert!(!keep_road_tag("tiger:reviewed"));
+    }
 }
