@@ -114,6 +114,14 @@
       "binary": "build-heatmap-aircraft",
       "flags": "--stream --source cruise --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}/aircraft-cruise"
     },
+    "cpu-airborne": {
+      "_doc": "The airborne group's CPU painter beside gpu-airborne: the same layer from the same seed, on cores instead of a card. It exists so an idle CPU worker can take an airborne cell while every card is busy; a card is still far faster per cell, so productionWorkerType keeps preferring gpu-airborne and the planner keeps queueing airborne for it.",
+      "group": "airborne",
+      "gpu": false,
+      "artifact_family": "aircraft-cpu-production",
+      "binary": "build-heatmap-aircraft",
+      "flags": "--stream --source airborne --seed-regions {SEED} --h3r4-dir {H3R4} --prepared-dir {PREP} --zoom {ZOOM} --output {OUTPUT}/aircraft-airborne"
+    },
     "gpu-airborne": {
       "group": "airborne",
       "gpu": true,
