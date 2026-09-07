@@ -426,6 +426,7 @@ impl ObstacleIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::propagation::obstacle_index::SeenEdges;
     use crate::propagation::obstacle_index::{CrossingCandidate, ObstacleKind};
 
     /// Flatten `file_parts` the way a writer would.
@@ -527,12 +528,32 @@ mod tests {
 
         let mut skyline_a = Vec::new();
         let mut skyline_b = Vec::new();
-        built.skyline_arcs_within(0, OLAT, OLON, 0.0, 2_000.0, 0.0, 0.0, None, &mut |arc| {
-            skyline_a.push((arc.source_id.bits(), arc.lo.to_bits(), arc.hi.to_bits()))
-        });
-        mapped.skyline_arcs_within(0, OLAT, OLON, 0.0, 2_000.0, 0.0, 0.0, None, &mut |arc| {
-            skyline_b.push((arc.source_id.bits(), arc.lo.to_bits(), arc.hi.to_bits()))
-        });
+        let mut seen_a = SeenEdges::default();
+        let mut seen_b = SeenEdges::default();
+        built.skyline_arcs_within(
+            0,
+            OLAT,
+            OLON,
+            0.0,
+            2_000.0,
+            0.0,
+            0.0,
+            None,
+            Some(&mut seen_a),
+            &mut |arc| skyline_a.push((arc.source_id.bits(), arc.lo.to_bits(), arc.hi.to_bits())),
+        );
+        mapped.skyline_arcs_within(
+            0,
+            OLAT,
+            OLON,
+            0.0,
+            2_000.0,
+            0.0,
+            0.0,
+            None,
+            Some(&mut seen_b),
+            &mut |arc| skyline_b.push((arc.source_id.bits(), arc.lo.to_bits(), arc.hi.to_bits())),
+        );
         assert_eq!(skyline_a, skyline_b, "derived source IDs survive mmap");
     }
 

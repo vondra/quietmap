@@ -99,13 +99,56 @@ pub struct CrossingCandidate {
 /// the source" test, which replaces a second ray query per candidate.
 #[derive(Clone, Copy, Debug)]
 pub struct SkylineArc {
-    /// Stable flattened edge identity; repeated cell emissions keep this ID.
+    /// Stable flattened edge identity — the ordinal [`SeenEdges`] dedupes on.
     pub source_id: ScreeningSourceId,
     pub lo: f64,
     pub hi: f64,
     pub near_m: f32,
     /// Edge height above its own local ground (m).
     pub height_m: f32,
+}
+
+/// The edges already merged into one receiver's skyline, one bit per flattened
+/// edge ordinal of its obstacle set. The grid walk visits an edge once per cell
+/// it spans, per overlapping sector wedge and per ladder rung whose boundary
+/// cells it sits in — a Prague click walked 4.5 M raw arcs and Paris 15 M for
+/// well under a tenth that many distinct edges (2026-09-07) — and a repeat is an
+/// exact no-op in the merge (the arc it would add already lies inside the
+/// merged arc that absorbed it), so it is skipped before the bearing math.
+/// A bit per edge rather than [`CrossingScratch`]'s lossy 64-slot tag table or
+/// an epoch per edge: a skyline lives per worker and outlasts many receivers,
+/// and clearing touches only the words a receiver set.
+#[derive(Default)]
+pub struct SeenEdges {
+    bits: Vec<u64>,
+    dirty_words: Vec<u32>,
+}
+
+impl SeenEdges {
+    /// Marks `ordinal`; `false` when it was already marked.
+    fn insert(&mut self, ordinal: u64) -> bool {
+        let word = (ordinal / 64) as usize;
+        if word >= self.bits.len() {
+            self.bits.resize(word + 1, 0);
+        }
+        let bit = 1_u64 << (ordinal % 64);
+        let w = &mut self.bits[word];
+        if *w & bit != 0 {
+            return false;
+        }
+        if *w == 0 {
+            self.dirty_words.push(word as u32);
+        }
+        *w |= bit;
+        true
+    }
+
+    pub fn clear(&mut self) {
+        for &word in &self.dirty_words {
+            self.bits[word as usize] = 0;
+        }
+        self.dirty_words.clear();
+    }
 }
 
 /// Branch-and-bound context for [`ObstacleIndex::crossings_pruned`]: everything
@@ -501,10 +544,10 @@ impl ObstacleIndex {
     ///   under the sight line blocks nothing, and it is admitted or not on its
     ///   own height, never on the tallest edge sharing its cell.
     ///
-    /// An edge listed in several cells is visited several times; the caller's
-    /// merge is idempotent on repeats (identical arcs union to themselves), so
-    /// no dedup pass is needed — the reason this walk emits arcs directly
-    /// instead of materialising an edge list.
+    /// An edge listed in several cells is visited several times; `seen` lets
+    /// each edge through once per skyline (see [`SeenEdges`]) — `None` for a
+    /// capped merge, whose cross-stratum last resort can drop the record a
+    /// repeat would restore.
     #[allow(clippy::too_many_arguments)]
     pub fn skyline_arcs_within(
         &self,
@@ -516,6 +559,7 @@ impl ObstacleIndex {
         los_floor_m: f64,
         delta_min_m: f64,
         wedge: Option<(f64, f64)>,
+        mut seen: Option<&mut SeenEdges>,
         visit: &mut impl FnMut(SkylineArc),
     ) {
         if self.edges.is_empty() {
@@ -614,6 +658,15 @@ impl ObstacleIndex {
                     if near_m > radius_m || near_m < 1e-6 {
                         continue; // out of range, or the origin sits ON the edge
                     }
+                    let ordinal = edge_ordinal_base
+                        .checked_add(u64::from(eref))
+                        .expect("flattened obstacle edge ordinal overflow");
+                    if seen
+                        .as_deref_mut()
+                        .is_some_and(|seen| !seen.insert(ordinal))
+                    {
+                        continue;
+                    }
                     let a0 = ey0.atan2(ex0);
                     let a1 = ey1.atan2(ex1);
                     // The SHORT arc between the endpoints: the set of directions
@@ -622,12 +675,8 @@ impl ObstacleIndex {
                     // origin hits a closed ring iff it hits one of its edges.
                     let r1 = a0 + wrap_pi(a1 - a0);
                     visit(SkylineArc {
-                        source_id: ScreeningSourceId::obstacle(
-                            edge_ordinal_base
-                                .checked_add(u64::from(eref))
-                                .expect("flattened obstacle edge ordinal overflow"),
-                        )
-                        .expect("flattened obstacle edge ordinal entered wall namespace"),
+                        source_id: ScreeningSourceId::obstacle(ordinal)
+                            .expect("flattened obstacle edge ordinal entered wall namespace"),
                         lo: a0.min(r1),
                         hi: a0.max(r1),
                         near_m: near_m as f32,
@@ -1193,6 +1242,7 @@ impl ObstacleSet {
         los_floor_m: f64,
         delta_min_m: f64,
         wedge: Option<(f64, f64)>,
+        mut seen: Option<&mut SeenEdges>,
         visit: &mut impl FnMut(SkylineArc),
     ) {
         let mut edge_ordinal_base = 0_u64;
@@ -1206,6 +1256,7 @@ impl ObstacleSet {
                 los_floor_m,
                 delta_min_m,
                 wedge,
+                seen.as_deref_mut(),
                 visit,
             );
             edge_ordinal_base = edge_ordinal_base
@@ -1867,9 +1918,19 @@ mod tests {
         let idx = b.build();
         let mut arcs = Vec::new();
         let o = ll(0.0, 0.0);
-        idx.skyline_arcs_within(0, o.0, o.1, 0.0, 500.0, 0.0, 0.0, None, &mut |a| {
-            arcs.push(a)
-        });
+        let mut seen = SeenEdges::default();
+        idx.skyline_arcs_within(
+            0,
+            o.0,
+            o.1,
+            0.0,
+            500.0,
+            0.0,
+            0.0,
+            None,
+            Some(&mut seen),
+            &mut |a| arcs.push(a),
+        );
         assert_eq!(arcs.len(), 4, "one ring in range, four edges: {arcs:?}");
         for a in &arcs {
             assert!(a.hi - a.lo < std::f64::consts::PI, "short arc: {a:?}");
@@ -1882,9 +1943,18 @@ mod tests {
         }
         // A radius that reaches neither box.
         arcs.clear();
-        idx.skyline_arcs_within(0, o.0, o.1, 0.0, 100.0, 0.0, 0.0, None, &mut |a| {
-            arcs.push(a)
-        });
+        idx.skyline_arcs_within(
+            0,
+            o.0,
+            o.1,
+            0.0,
+            100.0,
+            0.0,
+            0.0,
+            None,
+            Some(&mut SeenEdges::default()),
+            &mut |a| arcs.push(a),
+        );
         assert!(arcs.is_empty());
     }
 
@@ -1899,9 +1969,18 @@ mod tests {
         let o = ll(0.0, 0.0);
         let count = |delta_min: f64| {
             let mut n = 0;
-            idx.skyline_arcs_within(0, o.0, o.1, 0.0, 500.0, 4.0, delta_min, None, &mut |_| {
-                n += 1
-            });
+            idx.skyline_arcs_within(
+                0,
+                o.0,
+                o.1,
+                0.0,
+                500.0,
+                4.0,
+                delta_min,
+                None,
+                Some(&mut SeenEdges::default()),
+                &mut |_| n += 1,
+            );
             n
         };
         assert_eq!(count(0.02), 4, "δ_min below the box's 0.04 m: kept");
@@ -1911,7 +1990,18 @@ mod tests {
         b.add_ring(&square(200.0, 0.0, 15.0), 3.0, ObstacleKind::Building, 0);
         let low = b.build();
         let mut n = 0;
-        low.skyline_arcs_within(0, o.0, o.1, 0.0, 500.0, 4.0, 0.0, None, &mut |_| n += 1);
+        low.skyline_arcs_within(
+            0,
+            o.0,
+            o.1,
+            0.0,
+            500.0,
+            4.0,
+            0.0,
+            None,
+            Some(&mut SeenEdges::default()),
+            &mut |_| n += 1,
+        );
         assert_eq!(n, 0, "top below the 4 m sight line");
     }
 
@@ -1936,9 +2026,18 @@ mod tests {
         let o = ll(0.0, 0.0);
         let tops = |los_floor_m: f64| {
             let mut heights = Vec::new();
-            idx.skyline_arcs_within(0, o.0, o.1, 0.0, 500.0, los_floor_m, 0.0, None, &mut |a| {
-                heights.push(a.height_m)
-            });
+            idx.skyline_arcs_within(
+                0,
+                o.0,
+                o.1,
+                0.0,
+                500.0,
+                los_floor_m,
+                0.0,
+                None,
+                Some(&mut SeenEdges::default()),
+                &mut |a| heights.push(a.height_m),
+            );
             heights.sort_by(f32::total_cmp);
             heights.dedup();
             heights
@@ -1965,9 +2064,18 @@ mod tests {
         let idx = b.build();
         let o = ll(0.0, 0.0);
         let mut arcs = Vec::new();
-        idx.skyline_arcs_within(0, o.0, o.1, 0.0, 1000.0, 0.0, 0.0, None, &mut |a| {
-            arcs.push(a)
-        });
+        idx.skyline_arcs_within(
+            0,
+            o.0,
+            o.1,
+            0.0,
+            1000.0,
+            0.0,
+            0.0,
+            None,
+            Some(&mut SeenEdges::default()),
+            &mut |a| arcs.push(a),
+        );
         assert!(!arcs.is_empty());
         assert!(
             arcs.iter().all(|a| a.lo == arcs[0].lo
@@ -1994,7 +2102,17 @@ mod tests {
         };
         let o = ll(0.0, 0.0);
         let mut arcs = Vec::new();
-        set.skyline_arcs_within(o.0, o.1, 0.0, 500.0, 0.0, 0.0, None, &mut |a| arcs.push(a));
+        set.skyline_arcs_within(
+            o.0,
+            o.1,
+            0.0,
+            500.0,
+            0.0,
+            0.0,
+            None,
+            Some(&mut SeenEdges::default()),
+            &mut |a| arcs.push(a),
+        );
         assert_eq!(arcs.len(), 8);
         let first_ids: std::collections::BTreeSet<_> = arcs
             .iter()

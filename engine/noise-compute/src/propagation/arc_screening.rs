@@ -176,7 +176,9 @@
 
 use super::geo;
 use super::iso9613::ground_or_barrier_db;
-use super::obstacle_index::{wrap_pi, CellPrune, CrossingCandidate, ObstacleSet, SkylineArc};
+use super::obstacle_index::{
+    wrap_pi, CellPrune, CrossingCandidate, ObstacleSet, SeenEdges, SkylineArc,
+};
 use super::path_effects::{
     screening_attenuation, screening_attenuation_with_meta, terrain_attenuation, ObstacleInput,
 };
@@ -566,9 +568,11 @@ pub struct ArcSkyline {
     built: bool,
     arcs: Vec<MergedArc>,
     /// Slots [`insert_merged`] absorbed on the current call. Lives here only so
-    /// the walk does not allocate once per raw arc (~10⁶ per dense receiver);
-    /// it carries no state between calls.
+    /// the walk does not allocate once per raw arc (a dense receiver merges
+    /// up to ~10⁶ distinct edges); it carries no state between calls.
     fuse_scratch: Vec<u32>,
+    /// Edges already merged into `arcs`; the walk skips their repeats.
+    seen: SeenEdges,
     /// Times the arc capacity forced a smallest-gap merge while building this
     /// skyline — 0 on every receiver of a normal cell; a non-zero total is the
     /// signal that a capped lane's [`ArcBounds::max_arcs`] is too small here.
@@ -587,6 +591,7 @@ impl Default for ArcSkyline {
             built: false,
             arcs: Vec::new(),
             fuse_scratch: Vec::new(),
+            seen: SeenEdges::default(),
             overflows: 0,
             need_max_m: 0.0,
         }
@@ -845,6 +850,14 @@ impl ArcSkyline {
         );
     }
 
+    /// The arcs and the edges behind them go together: an arc list emptied
+    /// without its `seen` set would drop every once-seen edge from the next
+    /// gather.
+    fn clear_arcs(&mut self) {
+        self.arcs.clear();
+        self.seen.clear();
+    }
+
     /// Freeze the current merged-arc list for read-only parallel evaluation.
     pub fn snapshot(&self) -> SkylineSnapshot {
         SkylineSnapshot {
@@ -865,7 +878,7 @@ impl ArcSkyline {
         }
         self.built = false;
         self.built_radius_m = [0.0; SECTORS];
-        self.arcs.clear();
+        self.clear_arcs();
         self.overflows = 0;
         self.need_max_m = 0.0;
     }
@@ -927,7 +940,7 @@ impl ArcSkyline {
             self.lon = lon;
             self.built = true;
             self.built_radius_m = [0.0; SECTORS];
-            self.arcs.clear();
+            self.clear_arcs();
             self.overflows = 0;
         }
         // Sectors this span touches. The span is under a full turn, so the
@@ -955,6 +968,9 @@ impl ArcSkyline {
         let cap = bounds.max_arcs;
         let arcs = &mut self.arcs;
         let fuse = &mut self.fuse_scratch;
+        // Skipping an edge's repeats is exact for the uncapped merge every
+        // CPU lane runs; a capped parity lane keeps every repeat.
+        let seen = (cap == usize::MAX).then_some(&mut self.seen);
         let mut overflows = self.overflows;
         // Gather the WHOLE of every sector this call is about to mark walked,
         // not just the caller's span. `built_radius_m` carries one radius per
@@ -984,6 +1000,7 @@ impl ArcSkyline {
             los_floor_m,
             bounds.delta_min_m,
             wedge,
+            seen,
             &mut |a: SkylineArc| overflows += insert_merged(arcs, cap, a, fuse),
         );
 
@@ -1037,11 +1054,11 @@ fn insert_merged(
     // only MARKS the slots it absorbs and closes the gaps once, at the end.
     // `remove` shifts the whole TAIL per absorption and the closing `insert`
     // shifts it once more; a dense receiver's skyline is ~10³ arcs and its walk
-    // offers ~10⁶ raw ones (an edge is re-emitted for every grid cell it
-    // spans), and nearly every one of those absorbs EXACTLY ONE existing arc —
-    // leaving the list the same length, so all that tail traffic put the bytes
-    // back where they already were. Measured at 32 % of a São Paulo popup.
-    // That case now writes a single slot and touches nothing beyond it.
+    // offers up to ~10⁶ distinct edges (`SeenEdges` skips their repeats), and
+    // most of those absorb EXACTLY ONE existing arc — leaving the list the
+    // same length, so all that tail traffic put the bytes back where they
+    // already were (32 % of a São Paulo popup before the mark-and-close
+    // rewrite). That case writes a single slot and touches nothing beyond it.
     absorbed.clear();
     let mut i = v.partition_point(|x| (x.key, x.lo) < (m.key, m.lo));
     // At most ONE arc of this stratum can overlap `m.lo`, and it is the one
@@ -2550,6 +2567,7 @@ mod tests {
                 key: fuse_key(100.0, 8.0),
             }],
             fuse_scratch: Vec::new(),
+            seen: SeenEdges::default(),
             overflows: 0,
             need_max_m: 0.0,
         };
@@ -3217,12 +3235,23 @@ mod wedge_tests {
                 let hi = lo + width;
                 let collect = |wedge: Option<(f64, f64)>| {
                     let mut v: Vec<(i64, i64)> = Vec::new();
-                    set.skyline_arcs_within(rlat, rlon, 0.0, 1200.0, 0.05, 0.0, wedge, &mut |a| {
-                        // Only arcs that MEET the span can matter to it.
-                        if a.hi >= lo && a.lo <= hi {
-                            v.push(((a.lo * 1e9) as i64, (a.hi * 1e9) as i64));
-                        }
-                    });
+                    let mut seen = SeenEdges::default();
+                    set.skyline_arcs_within(
+                        rlat,
+                        rlon,
+                        0.0,
+                        1200.0,
+                        0.05,
+                        0.0,
+                        wedge,
+                        Some(&mut seen),
+                        &mut |a| {
+                            // Only arcs that MEET the span can matter to it.
+                            if a.hi >= lo && a.lo <= hi {
+                                v.push(((a.lo * 1e9) as i64, (a.hi * 1e9) as i64));
+                            }
+                        },
+                    );
                     v.sort_unstable();
                     v.dedup();
                     v
@@ -3316,7 +3345,18 @@ mod wedge_tests {
         let (rlat, rlon) = ll(0.0, 0.0);
         let count = |wedge: Option<(f64, f64)>| {
             let mut n = 0usize;
-            set.skyline_arcs_within(rlat, rlon, 0.0, 1200.0, 0.05, 0.0, wedge, &mut |_| n += 1);
+            let mut seen = SeenEdges::default();
+            set.skyline_arcs_within(
+                rlat,
+                rlon,
+                0.0,
+                1200.0,
+                0.05,
+                0.0,
+                wedge,
+                Some(&mut seen),
+                &mut |_| n += 1,
+            );
             n
         };
         let disk = count(None);
