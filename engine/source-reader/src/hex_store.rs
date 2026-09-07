@@ -508,24 +508,26 @@ pub fn query_roads_from_batches(
         };
 
         for i in 0..n {
-            // Cheap bbox reject FIRST, before the per-row normalize cascade.
-            // ~99% of rows are far from the popup point (popup hits ~1-2 k of
-            // ~900 k road segments per R4 ring); running normalize_road on all
-            // of them was the dominant cost in collect_from_hex_data
-            // (~160 ms warm). max_radius is the upper bound — final accept
-            // uses effective_radius after normalize.
+            // Cheap bbox reject FIRST, against the row's OWN class reach —
+            // the `max_distance_m` normalize would hand back — before the
+            // per-row normalize cascade: a Prague ring scans 1.1 M road rows
+            // for ~4 k kept, and the motorway reach (10 km) as the only bound
+            // let most of them through to the cascade (~100 ms per click).
+            let road_class = rclass.map(|a| a.value(i)).unwrap_or(0);
+            let effective_radius =
+                max_radius.min(noise_compute::normalize::road_max_distance_m(road_class));
             let s_lat = slat.value(i);
             let e_lat = elat.value(i);
             let mid_lat = (s_lat + e_lat) * 0.5;
             let dlat = (lat - mid_lat).abs() * 110_540.0;
-            if dlat > max_radius * 1.5 {
+            if dlat > effective_radius * 1.5 {
                 continue;
             }
             let s_lon = slon.value(i);
             let e_lon = elon.value(i);
             let mid_lon = (s_lon + e_lon) * 0.5;
             let dlon = (lon - mid_lon).abs() * 111_320.0 * mid_lat.to_radians().cos();
-            if dlon > max_radius * 1.5 {
+            if dlon > effective_radius * 1.5 {
                 continue;
             }
 
@@ -540,7 +542,7 @@ pub fn query_roads_from_batches(
                 )
             });
             let raw = noise_compute::normalize::RawRoadInput {
-                road_class: rclass.map(|a| a.value(i)).unwrap_or(0),
+                road_class,
                 speed_limit: speed.map(|a| a.value(i)).unwrap_or(0),
                 speed_taper: speed_taper_col.map(|a| a.value(i)).unwrap_or(0),
                 surface_type: surface.map(|a| a.value(i)).unwrap_or(0),
@@ -556,18 +558,12 @@ pub fn query_roads_from_batches(
                 junction: junction_col.map(|a| a.value(i)).unwrap_or(0),
                 built_up: built_up_col.map(|a| a.value(i)).unwrap_or(0),
             };
-            let Some(norm) =
-                noise_compute::normalize::normalize_road(raw, row_admin.unwrap_or(admin))
-            else {
-                continue;
-            };
-            let effective_radius = max_radius.min(norm.max_distance_m);
-
-            // Tighter bbox reject using effective_radius (per-class).
-            if dlat > effective_radius * 1.5 || dlon > effective_radius * 1.5 {
+            // The cascade's own drops (tunnels; closed access unless a
+            // measured count contradicts the tag); the kernel normalizes the
+            // kept rows again for their emission.
+            if noise_compute::normalize::normalize_road(raw, row_admin.unwrap_or(admin)).is_none() {
                 continue;
             }
-
             // Exact closest point on segment
             let cp = crate::geo::closest_point_on_segment(lat, lon, s_lat, s_lon, e_lat, e_lon);
             if cp.dist_m > effective_radius {
@@ -1380,6 +1376,34 @@ mod baked_admin_tests {
             ],
             triplet,
         )
+    }
+
+    /// The scan rejects a row by ITS class reach before the normalize cascade;
+    /// that reject must equal the cascade's own `max_distance_m`: a row past
+    /// its class reach but inside the motorway reach goes, its motorway twin
+    /// at the same distance stays.
+    #[test]
+    fn far_row_is_rejected_by_its_own_class_reach() {
+        use noise_compute::constants::ROAD_MAX_RADIUS;
+        let between = (ROAD_MAX_RADIUS[5] + ROAD_MAX_RADIUS[0]) / 2.0;
+        let lat = 50.0 + between / 110_540.0;
+        let batch = append_triplet(
+            vec![
+                ("osm_id", Arc::new(Int64Array::from(vec![1i64, 2]))),
+                ("start_lat", Arc::new(Float64Array::from(vec![lat, lat]))),
+                ("start_lon", Arc::new(Float64Array::from(vec![14.0, 14.0]))),
+                ("end_lat", Arc::new(Float64Array::from(vec![lat, lat]))),
+                (
+                    "end_lon",
+                    Arc::new(Float64Array::from(vec![14.002, 14.002])),
+                ),
+                ("road_class", Arc::new(UInt8Array::from(vec![0u8, 5]))),
+                ("speed_limit", Arc::new(UInt8Array::from(vec![50u8, 50]))),
+            ],
+            None,
+        );
+        let kept = query_roads_from_batches(&[batch], 50.0, 14.0, ROAD_MAX_RADIUS[0]);
+        assert_eq!(kept.iter().map(|r| r.osm_id).collect::<Vec<_>>(), vec![1]);
     }
 
     #[test]
