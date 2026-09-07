@@ -73,11 +73,15 @@ const CELL_CACHE_CAP: usize = 8;
 /// anyone naming the constants here.
 const CACHE_CODE_VER: u64 = fnv1a64(BUILDER_CODE_VER, include_bytes!("structure_store.rs"));
 
-/// Disk budget for the cached indexes. One dense metro cell is a few hundred
-/// MB, so this holds tens of cities' worth — far more than a popup session
-/// visits — while keeping a nearly-full data volume out of danger. Past it the
-/// least-recently-USED file is dropped and its next cold start pays one rebuild.
-const CACHE_BUDGET_BYTES: u64 = 24 << 30;
+/// Disk budget for the cached indexes: the whole prepared world, so no popup
+/// ever pays a cold build (Paris 19 s, London 12 s of builds on 2026-09-06).
+/// 2026 world: 121 790 cells, 503 GB of `structures.arrow`, indexes at 1.08×
+/// their Arrow (measured over 789 cached cells) ≈ 545 GB; the rest is headroom
+/// for the files other checkouts on another engine version write into the same
+/// root (a data refresh overwrites in place — the file name carries the engine
+/// version, the header the data version). `obstacle-index-warm` fills it from
+/// production; past it the least-recently-USED file is dropped.
+const CACHE_BUDGET_BYTES: u64 = 640 << 30;
 
 const CACHE_FILE_EXT: &str = "qoix";
 
@@ -126,10 +130,14 @@ fn index_cache_root(data_dir: &Path) -> Option<PathBuf> {
 /// * [`CACHE_CODE_VER`] — the builder, the grid, this loader's own rules;
 /// * the CELL, whose centre is the index's metric origin (and which is the
 ///   only thing the file name would otherwise bind);
-/// * the cell's `structures.arrow` as (path, length, mtime) — the path because
-///   two prepared TREES (a moved mount, a second checkout's data node) hold
-///   different structures for the same cell. The low-profile cap reads the
-///   SAME file, so it needs no fold of its own.
+/// * the cell's `structures.arrow` as (canonical path, length, mtime) — the
+///   path because two prepared TREES (a moved mount, a second checkout's data
+///   node) hold different structures for the same cell; CANONICAL because
+///   every checkout reaches the one shared node through its own symlink, and
+///   with the spelling in the key prod and dev3 fingerprinted the same bytes
+///   differently and deleted each other's files (28 times in a week,
+///   2026-09-06). The low-profile cap reads the SAME file, so it needs no
+///   fold of its own.
 ///
 /// That list is closed by construction: `build_cell_index` reads its cell and
 /// that one table, and nothing else — no env, no clock, no map iteration order
@@ -149,9 +157,9 @@ fn index_cache_root(data_dir: &Path) -> Option<PathBuf> {
 fn cell_data_ver(cell: CellIndex, structures_arrow: &Path) -> Option<u64> {
     let mut h = fnv1a64(CACHE_CODE_VER, b"structure-index-inputs-v1");
     h = fnv1a64(h, &u64::from(cell).to_le_bytes());
-    h = fnv1a64(h, structures_arrow.as_os_str().as_encoded_bytes());
-    h = fnv1a64(h, &[1]); // present: the locator handed us an existing file
-    let meta = std::fs::metadata(structures_arrow).ok()?;
+    let canonical = std::fs::canonicalize(structures_arrow).ok()?;
+    h = fnv1a64(h, canonical.as_os_str().as_encoded_bytes());
+    let meta = std::fs::metadata(&canonical).ok()?;
     h = fnv1a64(h, &meta.len().to_le_bytes());
     let mtime = meta.modified().ok()?;
     let since_epoch = mtime
@@ -179,13 +187,7 @@ fn load_cached_index(path: &Path, data_ver: u64) -> Option<ObstacleIndex> {
     let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
     let blob: Arc<dyn IndexBlob> = Arc::new(MappedIndexFile(mmap));
     match ObstacleIndex::from_blob(blob, CACHE_CODE_VER, data_ver) {
-        Ok(idx) => {
-            // LRU by USE, not by write: without this the city visited every day
-            // is evicted before one indexed once and never opened again.
-            let now = std::time::SystemTime::now();
-            let _ = file.set_times(std::fs::FileTimes::new().set_modified(now));
-            Some(idx)
-        }
+        Ok(idx) => Some(idx),
         Err(e) => {
             eprintln!("structure_store: ignoring cached {}: {e}", path.display());
             let _ = std::fs::remove_file(path);
@@ -209,7 +211,20 @@ fn load_cached_index(path: &Path, data_ver: u64) -> Option<ObstacleIndex> {
 /// `.qoix` alone), so a crash loop could fill the disk with files nothing would
 /// ever look at again. Anything older than [`TMP_ORPHAN_AGE`] is not a write in
 /// flight: one index is a few hundred MB, seconds of IO.
+/// Cache bytes as last counted, and when. With the world cached the directory
+/// holds ~120 k files, so a full count per store would cost more than the
+/// store; between counts the total is advanced by the bytes written.
+static CACHE_BYTES: Mutex<Option<(u64, std::time::Instant)>> = Mutex::new(None);
+const CACHE_RECOUNT: std::time::Duration = std::time::Duration::from_secs(60);
+
 fn evict_to_budget(root: &Path, incoming: u64) {
+    let mut counted = CACHE_BYTES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((total, at)) = *counted {
+        if at.elapsed() < CACHE_RECOUNT && total + incoming <= CACHE_BUDGET_BYTES {
+            *counted = Some((total + incoming, at));
+            return;
+        }
+    }
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
@@ -241,30 +256,73 @@ fn evict_to_budget(root: &Path, incoming: u64) {
     // EVICTED: unlinking one would make its writer's rename land on a path this
     // loop had already reclaimed.
     let mut total: u64 = files.iter().map(|(_, len, _)| len).sum();
-    if total + incoming <= CACHE_BUDGET_BYTES {
-        return;
-    }
-    files.retain(|(_, _, p)| p.extension().is_some_and(|x| x == CACHE_FILE_EXT));
-    files.sort_by_key(|(mtime, _, _)| *mtime);
-    for (_, len, path) in files {
-        if total + incoming <= CACHE_BUDGET_BYTES {
-            break;
+    if total + incoming > CACHE_BUDGET_BYTES {
+        files.retain(|(_, _, p)| p.extension().is_some_and(|x| x == CACHE_FILE_EXT));
+        files.sort_by_key(|(mtime, _, _)| *mtime);
+        for (_, len, path) in files {
+            if total + incoming <= CACHE_BUDGET_BYTES {
+                break;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                total = total.saturating_sub(len);
+            }
         }
-        if std::fs::remove_file(&path).is_ok() {
-            total = total.saturating_sub(len);
-        }
     }
+    *counted = Some((total + incoming, std::time::Instant::now()));
 }
 
-/// Persist a freshly built index. Failures are reported and swallowed: the
-/// cache is an accelerator, never a dependency.
-fn store_cached_index(root: &Path, cell: CellIndex, index: &ObstacleIndex, data_ver: u64) {
+/// Refuse a world sweep onto a volume that cannot hold it: the budget is
+/// enforced against itself, never against free space, so a cache root left
+/// on the nearly full data volume would be filled to the brim. `Ok` carries
+/// (cached bytes, free bytes) for the sweep's summary.
+pub fn check_index_cache_volume(data_dir: &Path) -> Result<(u64, u64), String> {
+    let root = index_cache_root(data_dir)
+        .ok_or("the index cache is disabled (QM_OBSTACLE_INDEX_CACHE=0)")?;
+    std::fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
+    let cached: u64 = std::fs::read_dir(&root)
+        .map_err(|e| format!("read {}: {e}", root.display()))?
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == CACHE_FILE_EXT))
+        .filter_map(|e| e.metadata().ok().map(|m| m.len()))
+        .sum();
+    let c_root = std::ffi::CString::new(root.as_os_str().as_encoded_bytes())
+        .map_err(|e| format!("{}: {e}", root.display()))?;
+    // SAFETY: `st` is a plain C struct the call fills in; the path is a valid
+    // NUL-terminated string for the duration of the call.
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c_root.as_ptr(), &mut st) } != 0 {
+        return Err(format!(
+            "statvfs {}: {}",
+            root.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    let free = st.f_bavail as u64 * st.f_frsize as u64;
+    if cached + free < CACHE_BUDGET_BYTES {
+        return Err(format!(
+            "{} holds {:.0} GB with {:.0} GB free on its volume; the world needs the \
+             {:.0} GB budget — point the cache root at a larger volume first",
+            root.display(),
+            cached as f64 / 1e9,
+            free as f64 / 1e9,
+            CACHE_BUDGET_BYTES as f64 / 1e9,
+        ));
+    }
+    Ok((cached, free))
+}
+
+/// Persist a freshly built index. The popup swallows a failure (the cache is
+/// an accelerator, never a dependency); the warm sweep counts it.
+fn store_cached_index(
+    root: &Path,
+    cell: CellIndex,
+    index: &ObstacleIndex,
+    data_ver: u64,
+) -> Result<(), String> {
     let parts = index.file_parts(CACHE_CODE_VER, data_ver);
     let total = parts.total_len() as u64;
-    if let Err(e) = std::fs::create_dir_all(root) {
-        eprintln!("structure_store: no index cache at {}: {e}", root.display());
-        return;
-    }
+    std::fs::create_dir_all(root)
+        .map_err(|e| format!("no index cache at {}: {e}", root.display()))?;
     evict_to_budget(root, total);
     let final_path = cache_file_path(root, cell);
     // Same-directory tmp + rename: a reader either maps the whole previous
@@ -285,13 +343,10 @@ fn store_cached_index(root: &Path, cell: CellIndex, index: &ObstacleIndex, data_
         drop(f);
         std::fs::rename(&tmp, &final_path)
     };
-    if let Err(e) = write() {
-        eprintln!(
-            "structure_store: could not cache index {}: {e}",
-            final_path.display()
-        );
+    write().map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
-    }
+        format!("could not cache index {}: {e}", final_path.display())
+    })
 }
 
 /// Process-local memo of built indexes, keyed on the SAME identity the disk
@@ -495,9 +550,9 @@ pub fn point_inside_footprint(
 ///
 /// The inputs are fingerprinted BEFORE either cache is consulted: both are
 /// keyed on that fingerprint, so a hit is only ever the index this process
-/// would have built from these very files. Two `stat`s per cell per query —
-/// three orders below the rebuild they guard, and the price of a cache that
-/// answers the question it was asked.
+/// would have built from these very files. A path resolution and a `stat` per
+/// cell per query — three orders below the rebuild they guard, and the price
+/// of a cache that answers the question it was asked.
 fn cell_index(
     cell: CellIndex,
     structures_arrow: &Path,
@@ -510,7 +565,17 @@ fn cell_index(
             return Ok(idx);
         }
         if let Some(root) = index_cache_root(data_dir) {
-            if let Some(idx) = load_cached_index(&cache_file_path(&root, cell), ver) {
+            let path = cache_file_path(&root, cell);
+            if let Some(idx) = load_cached_index(&path, ver) {
+                // LRU by USE, not by write: without this the city visited every
+                // day is evicted before one indexed once and never opened again.
+                // The touch lives HERE, not in the loader: the warm sweep opens
+                // every file to check it, and touching there would stamp the
+                // whole world with one mtime and flatten the order the eviction
+                // reads.
+                let now = std::time::SystemTime::now();
+                let _ = std::fs::File::open(&path)
+                    .and_then(|f| f.set_times(std::fs::FileTimes::new().set_modified(now)));
                 let idx = Arc::new(idx);
                 log_cell_load(cell, "mapped", idx.edge_count(), t0);
                 memo_put(cell, ver, &idx);
@@ -524,12 +589,39 @@ fn cell_index(
     // pinned is used for THIS query and forgotten.
     if let Some(ver) = ver {
         if let Some(root) = index_cache_root(data_dir) {
-            store_cached_index(&root, cell, &built, ver);
+            if let Err(e) = store_cached_index(&root, cell, &built, ver) {
+                eprintln!("structure_store: {e}");
+            }
         }
         memo_put(cell, ver, &built);
     }
     log_cell_load(cell, "built", built.edge_count(), t0);
     Ok(built)
+}
+
+/// Pre-build one cell's index into the disk cache — the warm sweep's unit of
+/// work (`obstacle-index-warm`), deliberately outside the process memo so a
+/// world sweep's RSS stays flat. `Ok(true)` when it built and stored,
+/// `Ok(false)` when the cache already holds the current index or the cell
+/// lies outside the prepared world.
+pub fn warm_cell_index(h3r4_dir: &Path, data_dir: &Path, cell: CellIndex) -> Result<bool, String> {
+    let Some(structures_arrow) = locate_cell_structures(h3r4_dir, cell)? else {
+        return Ok(false);
+    };
+    let root = index_cache_root(data_dir)
+        .ok_or("the index cache is disabled (QM_OBSTACLE_INDEX_CACHE=0)")?;
+    let ver = cell_data_ver(cell, &structures_arrow).ok_or_else(|| {
+        format!(
+            "{}: inputs cannot be fingerprinted",
+            structures_arrow.display()
+        )
+    })?;
+    if load_cached_index(&cache_file_path(&root, cell), ver).is_some() {
+        return Ok(false);
+    }
+    let built = build_cell_index(cell, &structures_arrow)?;
+    store_cached_index(&root, cell, &built, ver)?;
+    Ok(true)
 }
 
 /// Per-cell provenance under `POPUP_TIMING=1` — the same lever
@@ -996,6 +1088,50 @@ mod tests {
         );
     }
 
+    /// The identity is the file, not its spelling: two roots that are one
+    /// directory through a symlink fingerprint a cell identically — the
+    /// prod/dev cache war of 2026-09-06 was two spellings of one file.
+    #[test]
+    fn cache_identity_ignores_the_symlink_a_checkout_reaches_the_tree_through() {
+        let tmp = TempDir::new().expect("temp dir");
+        let real = tmp.path().join("real");
+        let h3r4 = real.join("h3r4");
+        let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
+        let direct = write_structure_table(&h3r4, cell, &[(50.08, 14.43)]);
+        let view = tmp.path().join("checkout-view");
+        std::os::unix::fs::symlink(&real, &view).expect("symlink");
+        let through_link = view
+            .join("h3r4")
+            .join(cell.to_string())
+            .join("structures.arrow");
+        assert_ne!(direct, through_link);
+        assert_eq!(
+            cell_data_ver(cell, &direct),
+            cell_data_ver(cell, &through_link)
+        );
+        assert!(cell_data_ver(cell, &direct).is_some());
+    }
+
+    /// The warm sweep's contract: build and store once, then report the cache
+    /// hit; a cell the extract never produced is skipped, not failed.
+    #[test]
+    fn warm_cell_index_builds_once_then_hits_the_cache() {
+        let tmp = TempDir::new().expect("temp dir");
+        let h3r4 = tmp.path().join("prepared").join("2026").join("h3r4");
+        let data_dir = tmp.path().join("prepared");
+        let index_dir = TempDir::new().expect("temp index dir");
+        let _env = EnvGuard::set(&[("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir)))]);
+        let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
+        write_structure_table(&h3r4, cell, &[(50.08, 14.43)]);
+
+        assert_eq!(warm_cell_index(&h3r4, &data_dir, cell), Ok(true));
+        assert!(cache_file_path(index_dir.path(), cell).is_file());
+        assert_eq!(warm_cell_index(&h3r4, &data_dir, cell), Ok(false));
+
+        let unprepared = LatLng::new(-20.0, 30.0).unwrap().to_cell(Resolution::Four);
+        assert_eq!(warm_cell_index(&h3r4, &data_dir, unprepared), Ok(false));
+    }
+
     /// Fix 4 popup half, on synthetic footprints so it runs everywhere: a
     /// 100 m block with a 30 m courtyard plus a low 3 m garage beside it.
     /// * block interior → inside, reporting the footprint's height;
@@ -1170,7 +1306,7 @@ mod tests {
 
         let data_ver = cell_data_ver(cell, &table).expect("input fingerprint");
         let built = build_cell_index(cell, &table).unwrap();
-        store_cached_index(&root, cell, &built, data_ver);
+        store_cached_index(&root, cell, &built, data_ver).expect("store index");
 
         let path = cache_file_path(&root, cell);
         assert!(path.is_file(), "the cache file must exist at {path:?}");
@@ -1245,7 +1381,7 @@ mod tests {
         // also pass on a key that is simply always wrong.
         let built = build_cell_index(cell, &table).unwrap();
         let path = cache_file_path(&root, cell);
-        store_cached_index(&root, cell, &built, base);
+        store_cached_index(&root, cell, &built, base).expect("store index");
         assert!(
             load_cached_index(&path, base).is_some(),
             "the unchanged identity must still map its own file"
@@ -1256,7 +1392,7 @@ mod tests {
         // re-written before every case.
         let refuses = |ver: u64, what: &str| {
             assert_ne!(ver, base, "{what} must rotate the index identity");
-            store_cached_index(&root, cell, &built, base);
+            store_cached_index(&root, cell, &built, base).expect("store index");
             assert!(
                 load_cached_index(&path, ver).is_none(),
                 "{what}: a file written under the old identity was served"

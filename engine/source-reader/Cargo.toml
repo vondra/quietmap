@@ -6,6 +6,13 @@ edition = "2021"
 [features]
 default = ["node"]
 node = ["dep:napi", "dep:napi-derive"]
+# The warm sweep links the library without the N-API surface (a standalone
+# process has no Node to resolve those symbols); start.sh builds it separately.
+standalone = []
+
+[[bin]]
+name = "obstacle-index-warm"
+required-features = ["standalone"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -22,6 +29,7 @@ noise-compute = { path = "../noise-compute" }
 arrow-batching = { path = "../arrow-batching" }
 raster-reader = { path = "../raster-reader" }
 rayon = "1"
+libc = "0.2"
 mimalloc = { version = "0.1", default-features = false }
 
 [dev-dependencies]

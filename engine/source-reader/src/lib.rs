@@ -6,7 +6,6 @@
 // — Microsoft Research benchmarks ~2× speedup for similar workloads.
 // At LKPR the per-popup drop cascade (~6 k traces × ~10 inner allocs)
 // is the hot spot remaining in apply_segment_top_k_with_cap.
-#[cfg(feature = "node")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -37,6 +36,7 @@ use std::sync::RwLock;
 
 #[cfg(feature = "node")]
 use hex_store::HexData;
+#[cfg(feature = "node")]
 use hex_store::{
     load_hex, query_barriers_from_batches, query_buildings_from_batches, query_roads_from_batches,
 };
@@ -49,9 +49,11 @@ static STORE: std::sync::LazyLock<RwLock<HexStore>> =
 static RASTERS: std::sync::OnceLock<raster_reader::RealRasters> = std::sync::OnceLock::new();
 /// Data root (`…/data/prepared`) captured at `source_init` — the vector
 /// obstacle loader keeps its on-disk index cache under it (geodata-v2 1.4).
+#[cfg(feature = "node")]
 static DATA_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 /// The live `…/prepared/{year}/h3r4` dir — the structure root: every prepared
 /// cell carries its own `structures.arrow` beside its other arrows.
+#[cfg(feature = "node")]
 static H3R4_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 /// The obstacle root, or the one error that explains an unset one. Buildings
@@ -287,6 +289,7 @@ pub fn query_obstacle_footprints(
 /// Map the engine's envelope class to the small plain-language vocabulary
 /// used by the building hover tooltip. Kept outside `structure_store.rs` so
 /// changing display wording does not rotate its disk-index cache version.
+#[cfg(feature = "node")]
 fn building_type_from_envelope(class: noise_compute::envelope::EnvelopeClass) -> &'static str {
     match class {
         noise_compute::envelope::EnvelopeClass::Outdoor => "carport/roof structure",
@@ -324,7 +327,7 @@ pub fn query_building_at(lat: f64, lng: f64) -> napi::Result<String> {
     Ok(serde_json::to_string(&result).unwrap())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "node"))]
 mod building_type_tests {
     use super::building_type_from_envelope;
     use noise_compute::envelope::EnvelopeClass;

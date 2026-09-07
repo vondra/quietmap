@@ -44,6 +44,10 @@ if [ "$HALF" != "node" ]; then
     (cd engine && cargo clippy --locked -p "$crate" --all-targets -- -D warnings \
       && cargo test --locked -p "$crate" --all-targets)
   done
+  # The warm sweep is the crate without its N-API surface; cargo skips that
+  # binary under default features, so it gets its own lint.
+  (cd engine && cargo clippy --locked -p source-reader --no-default-features \
+    --features standalone --all-targets -- -D warnings)
 
   # The ground hoist must stay bit-exact under release optimisation; the debug
   # all-targets run above cannot detect compiler/libm constant-folding drift.

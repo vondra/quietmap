@@ -6,7 +6,12 @@ cd "$(dirname "$0")"
 
 PORT="${PORT:-8520}"
 
-echo "==> engine (source-reader native addon)"
+echo "==> engine (the obstacle-index warm sweep, then the source-reader native addon)"
+# The standalone sweep first, the addon last: the sweep's build leaves the
+# addon artifact untouched (verified 2026-09-07), and building the addon last
+# keeps the file Fastify dlopens the one with the N-API surface either way.
+cargo build --release --manifest-path engine/source-reader/Cargo.toml \
+  --no-default-features --features standalone --bin obstacle-index-warm
 cargo build --release --manifest-path engine/source-reader/Cargo.toml
 
 echo "==> frontend"
