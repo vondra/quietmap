@@ -1,26 +1,4 @@
-//! Compute configuration types — `ComputeConfig` toggles (terrain/screening/
-//! vegetation/top-N) and the `RasterSampler` trait popup + pipeline implement.
-/// Computation toggles.
-#[derive(Debug, Clone)]
-pub struct ComputeConfig {
-    pub terrain: bool,    // terrain diffraction
-    pub screening: bool,  // building screening + urban reflection
-    pub vegetation: bool, // forest attenuation
-    pub top_n: usize,     // full propagation for top-N candidates (rest = free-field)
-    pub n_days: u16,      // number of days in aircraft dataset (for period normalization)
-}
-
-impl Default for ComputeConfig {
-    fn default() -> Self {
-        ComputeConfig {
-            terrain: true,
-            screening: true,
-            vegetation: true,
-            top_n: 100,
-            n_days: 365,
-        }
-    }
-}
+//! The `RasterSampler` trait the popup and the pipeline implement.
 
 /// Trait for raster lookups — implemented differently by popup (SRTM tiles) and pipeline (hex clips).
 ///

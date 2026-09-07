@@ -336,41 +336,6 @@ pub fn baked_admin(country_iso: u16, city_id: u16, continent: u8) -> Admin {
     }
 }
 
-thread_local! {
-    /// Per-row road admins for the popup kernel, aligned by index with the
-    /// `&[RoadSegment]` slice handed to `compute_at_point*`. `RoadSegment`
-    /// (`types/inputs.rs`) is shared by every layer and cannot grow a field, so the
-    /// admins ride this thread-local: source-reader installs them right
-    /// before the compute call and clears them right after; every other
-    /// caller (parity bins, tests) leaves the channel unset and gets today's
-    /// receiver-admin behaviour bit-for-bit. `None` entries mark rows whose
-    /// batch carried no baked columns (receiver fallback); `Some(Admin::
-    /// UNKNOWN)` is a baked `\0\0` — WORLD defaults, no fallback.
-    static ROAD_ROW_ADMINS: std::cell::RefCell<Option<Vec<Option<Admin>>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Install (`Some`) or clear (`None`) the per-row road-admin channel for the
-/// next `compute_roads` call on THIS thread. Popup-only — see above.
-pub fn set_road_row_admins(admins: Option<Vec<Option<Admin>>>) {
-    ROAD_ROW_ADMINS.with(|c| *c.borrow_mut() = admins);
-}
-
-/// Row `i`'s baked admin, or `None` for the receiver-admin fallback. Also
-/// `None` when the channel is unset or its length disagrees with `len`
-/// (defensive: a mis-aligned channel must not mis-assign countries — the
-/// tolerant rollout falls back, never guesses).
-pub(crate) fn road_row_admin(i: usize, len: usize) -> Option<Admin> {
-    ROAD_ROW_ADMINS.with(|c| {
-        let guard = c.borrow();
-        let v = guard.as_ref()?;
-        if v.len() != len {
-            return None;
-        }
-        v[i]
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,22 +646,5 @@ mod tests {
         // City id rides along (Bangkok metro, gated by the resolved country).
         let bkk = baked_admin(u16::from_le_bytes(*b"TH"), CITY_BANGKOK, 4);
         assert_eq!(bkk.city_id, CITY_BANGKOK);
-    }
-
-    #[test]
-    fn road_row_admin_channel_alignment_and_fallback() {
-        // Unset channel → every row falls back (receiver admin at the caller).
-        assert_eq!(road_row_admin(0, 1), None);
-        set_road_row_admins(Some(vec![None, Some(Admin::UNKNOWN)]));
-        assert_eq!(road_row_admin(0, 2), None, "no baked columns → fallback");
-        assert_eq!(
-            road_row_admin(1, 2),
-            Some(Admin::UNKNOWN),
-            "baked \\0\\0 → UNKNOWN, no fallback"
-        );
-        // A mis-aligned channel must not mis-assign countries — fall back.
-        assert_eq!(road_row_admin(0, 3), None, "length mismatch → fallback");
-        set_road_row_admins(None);
-        assert_eq!(road_row_admin(1, 2), None, "cleared channel → fallback");
     }
 }

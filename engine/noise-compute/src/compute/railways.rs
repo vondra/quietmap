@@ -20,8 +20,9 @@ type ReachKey = (u8, [u8; 2], u16, u8, u64, u64, u64);
 thread_local! {
     /// Exact-key memo for `rail_reach_m` — see the comment at the call site.
     /// Keyed on raw f64 bits (no quantization semantics to reason about) plus the
-    /// admin code (C1's per-region split changes the solved reach). Per-thread keeps
-    /// the popup single-threaded-per-request contract.
+    /// admin code (C1's per-region split changes the solved reach). Per-thread:
+    /// no lock, and a pure function of its key, so whichever thread runs the
+    /// kernel fills its own.
     static REACH_CACHE: std::cell::RefCell<std::collections::HashMap<ReachKey, f64>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
@@ -227,15 +228,13 @@ pub(crate) fn compute_railways(
     // segments. Drives the C1 per-region day/evening/night split (EU freight
     // runs ~55 % at night vs ~33 % world), shared with the heatmap loader + the
     // reach solver via `railway::rail_time_dist` (exact mirror of compute_roads).
-    // M5: when source-reader installed the per-row channel (baked M3 columns),
-    // each segment's OWN admin overrides this per segment below.
+    // M5: a row's own baked admin overrides this per segment below.
     let receiver_admin = crate::admin::admin_for_latlng(receiver.lat, receiver.lon);
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
 
     // ── Pass 1: admission gates + the skyline growth chain (sequential) ──
     //
-    // Order-sensitive (the ensure chain) or thread-pinned (the row-admin
-    // channel and REACH_CACHE are thread_locals) — see `compute_roads`.
+    // Order-sensitive (the ensure chain) — see `compute_roads`.
     struct RailPre {
         rail_type: RailType,
         speed: f64,
@@ -268,10 +267,9 @@ pub(crate) fn compute_railways(
         if q_pax + q_frt <= 0.0 {
             continue;
         }
-        // The segment's own baked admin when present (plan M5); `None` — no
-        // channel, no columns on the row's batch, or a mis-aligned channel —
-        // falls back to the receiver admin (pre-bake behaviour, unchanged).
-        let admin = railway::rail_row_admin(seg_i, railways.len()).unwrap_or(receiver_admin);
+        // The row's own baked admin (plan M5) when its batch carried one,
+        // else the receiver admin (pre-bake behaviour, unchanged).
+        let admin = seg.admin.unwrap_or(receiver_admin);
         // Per-row audibility reach: this segment's own 25 dB Lden crossing,
         // clamped [2 km, 10 km]. The heatmap loader sets the identical value on
         // each `LineRow` from the SAME `rail_reach_m` solver (the popup's
@@ -937,6 +935,7 @@ mod tests {
     fn mainline_segment() -> RailSegment {
         RailSegment {
             osm_id: 1,
+            admin: None,
             segment_idx: 0,
             start_lat: 50.0,
             start_lon: 14.0,
@@ -1124,12 +1123,14 @@ mod tests {
     /// baked ISO, not the receiver's admin.
     #[test]
     fn baked_iso_drives_eu_split() {
-        let seg = mainline_segment();
-        crate::emission::railway::set_rail_row_admins(Some(vec![Some(CZ)]));
-        let eu = periods_for(std::slice::from_ref(&seg));
-        crate::emission::railway::set_rail_row_admins(Some(vec![Some(TH)]));
-        let world = periods_for(std::slice::from_ref(&seg));
-        crate::emission::railway::set_rail_row_admins(None);
+        let baked = |admin| {
+            [RailSegment {
+                admin: Some(admin),
+                ..mainline_segment()
+            }]
+        };
+        let eu = periods_for(&baked(CZ));
+        let world = periods_for(&baked(TH));
         assert!(
             eu.ln_db > eu.ld_db,
             "baked CZ: EU freight night {:.2} must exceed day {:.2}",
@@ -1142,21 +1143,6 @@ mod tests {
             world.ld_db,
             world.ln_db
         );
-    }
-
-    /// Gate (b) popup rail: a channel of `None` entries ≡ no channel — the
-    /// receiver path is bit-identical to the pre-bake kernel.
-    #[test]
-    fn none_channel_is_receiver_path_bit_identical() {
-        let segs = vec![mainline_segment()];
-        let plain = periods_for(&segs);
-        crate::emission::railway::set_rail_row_admins(Some(vec![None]));
-        let channeled = periods_for(&segs);
-        crate::emission::railway::set_rail_row_admins(None);
-        assert_eq!(plain.ld_db, channeled.ld_db);
-        assert_eq!(plain.le_db, channeled.le_db);
-        assert_eq!(plain.ln_db, channeled.ln_db);
-        assert_eq!(plain.lden_db, channeled.lden_db);
     }
 
     /// Six ways across one tram street stay one visitor-facing source row.

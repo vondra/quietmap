@@ -506,7 +506,7 @@ pub struct CruiseHexTopFlight {
     pub class_name: String,
 }
 
-/// Optional collector passed into `compute_at_point_with_traces` when the
+/// Optional collector passed into `compute_at_point` when the
 /// popup wants per-segment traces. Callers allocate once, pass `Some(&mut)`,
 /// and inspect the filled Vec after the call. Pipeline callers pass `None`
 /// and the branch predictor elides the push-site overhead.

@@ -111,18 +111,15 @@ pub(crate) fn compute_roads(
     // constant across segments. Uses the process-wide admin table
     // (see admin::init_admin_table at tile-painter/source-reader init).
     // Falls back to Admin::UNKNOWN → WORLD_DEFAULT when uninitialised.
-    // M4: when source-reader installed the per-row channel (baked M3
-    // columns), each segment's OWN admin overrides this per segment below.
+    // M4: a row's own baked admin overrides this per segment below.
     let receiver_admin = crate::admin::admin_for_latlng(receiver.lat, receiver.lon);
 
     // ── Pass 1: admission gates + the skyline growth chain (sequential) ──
     //
-    // Everything here is either order-sensitive — the ensure chain, where a
-    // later segment reads what earlier segments grew — or pinned to THIS
-    // thread (the row-admin channel is a thread_local a rayon worker would
-    // read as unset, silently flipping segments to the receiver admin).
-    // `needs_growth` elides the ensures that are provably no-ops, which is
-    // most of them: the ladder snap lands neighbouring segments on one rung.
+    // Everything here is order-sensitive: the ensure chain, where a later
+    // segment reads what earlier segments grew. `needs_growth` elides the
+    // ensures that are provably no-ops, which is most of them: the ladder
+    // snap lands neighbouring segments on one rung.
     struct RoadPre {
         norm: normalize::NormalizedRoad,
         admin: crate::admin::Admin,
@@ -139,10 +136,9 @@ pub(crate) fn compute_roads(
     let mut epoch_snap: Option<SkylineSnapshot> = None;
     let mut pre: Vec<(usize, RoadPre)> = Vec::with_capacity(roads.len());
     for (seg_i, seg) in roads.iter().enumerate() {
-        // The segment's own baked admin when present (plan M4); `None` — no
-        // channel, no columns on the row's batch, or a mis-aligned channel —
-        // falls back to the receiver admin (pre-bake behaviour, unchanged).
-        let admin = defaults::road_row_admin(seg_i, roads.len()).unwrap_or(receiver_admin);
+        // The row's own baked admin (plan M4) when its batch carried one,
+        // else the receiver admin (pre-bake behaviour, unchanged).
+        let admin = seg.admin.unwrap_or(receiver_admin);
         let Some(norm) = normalize::normalize_road_segment(seg, admin) else {
             continue;
         };
@@ -926,6 +922,7 @@ mod tests {
     fn secondary_segment() -> RoadSegment {
         RoadSegment {
             osm_id: 1,
+            admin: None,
             segment_idx: 0,
             start_lat: 50.0,
             start_lon: 14.0,
@@ -985,9 +982,10 @@ mod tests {
     fn baked_row_admin_wins_over_receiver() {
         let seg = secondary_segment();
         let world = one_road_meta(std::slice::from_ref(&seg));
-        defaults::set_road_row_admins(Some(vec![Some(TH)]));
-        let baked = one_road_meta(std::slice::from_ref(&seg));
-        defaults::set_road_row_admins(None);
+        let baked = one_road_meta(&[RoadSegment {
+            admin: Some(TH),
+            ..seg.clone()
+        }]);
         assert_eq!(
             world.aadt_light_effective, 2640.0,
             "receiver UNKNOWN → WORLD"
@@ -1000,35 +998,6 @@ mod tests {
         // row admin (nominal_road_aadt call inside the segment loop).
         assert_eq!(baked.aadt_light_nominal, 3720.0);
         assert_eq!(world.aadt_light_nominal, 2640.0);
-    }
-
-    /// Gate (b) popup: a channel of `None` entries ≡ no channel — the
-    /// receiver path is bit-identical to the pre-bake kernel.
-    #[test]
-    fn none_channel_is_receiver_path_bit_identical() {
-        let roads = vec![secondary_segment()];
-        let plain = compute_roads(
-            &receiver(),
-            &roads,
-            &ObstacleSet::empty(),
-            &FlatRasters,
-            None,
-        )
-        .0;
-        defaults::set_road_row_admins(Some(vec![None]));
-        let channeled = compute_roads(
-            &receiver(),
-            &roads,
-            &ObstacleSet::empty(),
-            &FlatRasters,
-            None,
-        )
-        .0;
-        defaults::set_road_row_admins(None);
-        assert_eq!(plain.ld_db, channeled.ld_db);
-        assert_eq!(plain.le_db, channeled.le_db);
-        assert_eq!(plain.ln_db, channeled.ln_db);
-        assert_eq!(plain.lden_db, channeled.lden_db);
     }
 
     /// Stripe regression (fix-pack Fix 1): a 30 m building straddling the cp
@@ -1180,10 +1149,11 @@ mod tests {
     /// with a KNOWN region is pinned at the loader level).
     #[test]
     fn baked_zero_is_world_arm() {
-        let seg = secondary_segment();
-        defaults::set_road_row_admins(Some(vec![Some(Admin::UNKNOWN)]));
+        let seg = RoadSegment {
+            admin: Some(Admin::UNKNOWN),
+            ..secondary_segment()
+        };
         let baked0 = one_road_meta(std::slice::from_ref(&seg));
-        defaults::set_road_row_admins(None);
         assert_eq!(baked0.aadt_light_effective, 2640.0);
     }
 

@@ -29,7 +29,7 @@ pub struct NoiseResult {
     pub segments: Vec<SegmentTrace>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub segments_meta: Option<SegmentTracesSummary>,
-    /// Per-layer compute timings (ms). Populated by `compute_at_point_inner`
+    /// Per-layer compute timings (ms). Populated by `compute_at_point`
     /// (road / rail / building / industrial) and by source-reader for the
     /// aircraft layers + outer load/collect/json. Always emitted so the
     /// popup can show a per-component breakdown.
@@ -49,8 +49,9 @@ pub struct LayerTimings {
     pub load_ms: f64,
     /// `collect_from_hex_data` Arrow → typed view conversion.
     pub collect_ms: f64,
-    /// Per-layer compute (wrapping `compute_roads` etc. inside
-    /// `compute_at_point_inner`). 0 when the layer is empty.
+    /// Per-layer compute wall inside `compute_at_point`; road and rail run
+    /// concurrently, so those two overlap and are not additive. 0 when the
+    /// layer is empty.
     pub road_ms: f64,
     pub rail_ms: f64,
     pub building_ms: f64,

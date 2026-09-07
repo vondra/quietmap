@@ -69,22 +69,6 @@ fn h3r4_dir() -> napi::Result<&'static std::path::Path> {
 // NACE codes are now baked into industrial.arrow (nace_4digit UInt16 column).
 // No global lookup needed at runtime.
 
-/// RAII clearer for the M4/M5 per-row admin channels: a plain
-/// clear-after-compute pair lets a kernel unwind leave a stale vec on the
-/// surviving napi worker thread (the next query of equal row count would
-/// silently inherit the previous query's countries). The guard clears on
-/// scope exit either way.
-#[cfg(feature = "node")]
-struct RowAdminGuard;
-
-#[cfg(feature = "node")]
-impl Drop for RowAdminGuard {
-    fn drop(&mut self) {
-        noise_compute::defaults::set_road_row_admins(None);
-        noise_compute::emission::railway::set_rail_row_admins(None);
-    }
-}
-
 /// Make every hex in `hex_ids` resident, loading the missing ones IN
 /// PARALLEL and OUTSIDE the store lock. Cold loads used to run
 /// sequentially (7 hexes × ~12 files) under a held write lock — the whole
@@ -425,11 +409,6 @@ fn compute_point(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<wire
         .map_err(|error| Error::new(Status::GenericFailure, error))?;
     let t_collect = t_start.elapsed() - t_load;
 
-    let config = noise_compute::types::ComputeConfig {
-        n_days: sources.n_days,
-        ..Default::default()
-    };
-
     let n_airborne = sources
         .aircraft_airborne_batches
         .iter()
@@ -512,16 +491,7 @@ fn compute_point(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<wire
     );
 
     let mut traces = noise_compute::types::TraceCollector::new();
-    // M4/M5: hand the per-row baked admins to the kernels through their
-    // thread-local channels (RoadSegment/RailSegment are shared by every layer and
-    // cannot carry the field). The guard clears on scope exit INCLUDING a
-    // kernel unwind — napi-rs turns a caught panic into a JS throw, and a
-    // stale vec on the surviving worker thread would paint the previous
-    // click's countries onto the next query's segments.
-    noise_compute::defaults::set_road_row_admins(Some(sources.road_admins));
-    noise_compute::emission::railway::set_rail_row_admins(Some(sources.rail_admins));
-    let _row_admin_guard = RowAdminGuard;
-    let mut result = noise_compute::compute_at_point_with_traces(
+    let mut result = noise_compute::compute_at_point(
         &receiver,
         &sources.roads,
         &sources.railways,
@@ -529,10 +499,8 @@ fn compute_point(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<wire
         &sources.industrial,
         &obstacle_set,
         rasters,
-        &config,
         Some(&mut traces),
     );
-    drop(_row_admin_guard);
     aircraft_v6::add_v6_aircraft_to_result(
         &mut result,
         &mut traces,

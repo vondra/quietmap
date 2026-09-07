@@ -323,7 +323,9 @@ Popup traces expose this incremental screen; composited maps use
 A_terrain + A_screen exactly once.
 
 Road line sources use sequential skyline admissions and then parallel profile/arc
-evaluation with deterministic accumulation. The complete vector skyline is a
+evaluation with deterministic accumulation. The road and railway chains are
+independent (own skyline); popup traces are appended in layer order, roads then
+railways. The complete vector skyline is a
 candidate/admission hint; every evaluated bucket recomputes exact ray crossings and
 the terrain profile. The shipped arc-bounds policy has a 12 km safety radius, no
 delta prune, and no output-dependent candidate cap. Segment buckets apply the

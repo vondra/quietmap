@@ -20,13 +20,6 @@ const INDUSTRIAL_QUERY_RADIUS_M: f64 = 5_000.0;
 pub struct PointQueryData {
     pub roads: Vec<noise_compute::types::RoadSegment>,
     pub railways: Vec<noise_compute::types::RailSegment>,
-    /// M4/M5 per-row baked admins, aligned by index with `roads`/`railways`
-    /// (`None` entries = pre-bake rows → receiver fallback). Installed into
-    /// the kernels' thread-local channels around `compute_at_point*` (see
-    /// `lib.rs::query_noise_impl`) — the segment structs are shared by every layer
-    /// and cannot carry the field.
-    pub road_admins: Vec<Option<noise_compute::admin::Admin>>,
-    pub rail_admins: Vec<Option<noise_compute::admin::Admin>>,
     pub buildings: Vec<noise_compute::types::PointSource>,
     pub industrial: Vec<noise_compute::types::PointSource>,
     /// v6 aircraft popup arrows. Rows are consumed via typed views in
@@ -69,8 +62,6 @@ pub fn collect_from_hex_data(
 ) -> Result<PointQueryData, String> {
     let mut all_roads = Vec::new();
     let mut all_railways = Vec::new();
-    let mut all_road_admins = Vec::new();
-    let mut all_rail_admins = Vec::new();
     let mut all_buildings = Vec::new();
     let mut all_industrial = Vec::new();
     let mut all_airborne_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
@@ -213,6 +204,7 @@ pub fn collect_from_hex_data(
 
             all_railways.push(noise_compute::types::RailSegment {
                 osm_id: r.osm_id,
+                admin: r.admin,
                 segment_idx: r.segment_idx,
                 start_lat: r.start_lat,
                 start_lon: r.start_lon,
@@ -242,7 +234,6 @@ pub fn collect_from_hex_data(
                 cp_lon: r.cp_lon,
                 fraction: r.fraction,
             });
-            all_rail_admins.push(r.admin);
         }
 
         let road_batches =
@@ -257,6 +248,7 @@ pub fn collect_from_hex_data(
         for r in roads {
             all_roads.push(noise_compute::types::RoadSegment {
                 osm_id: r.osm_id,
+                admin: r.admin,
                 segment_idx: r.segment_idx,
                 start_lat: r.start_lat,
                 start_lon: r.start_lon,
@@ -286,7 +278,6 @@ pub fn collect_from_hex_data(
                 cp_lon: r.cp_lon,
                 fraction: r.fraction,
             });
-            all_road_admins.push(r.admin);
         }
 
         let building_batches = data
@@ -501,8 +492,6 @@ pub fn collect_from_hex_data(
     Ok(PointQueryData {
         roads: all_roads,
         railways: all_railways,
-        road_admins: all_road_admins,
-        rail_admins: all_rail_admins,
         buildings: all_buildings,
         industrial: all_industrial,
         aircraft_airborne_batches: all_airborne_batches,

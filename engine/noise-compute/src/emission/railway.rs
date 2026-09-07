@@ -175,40 +175,6 @@ pub fn baked_admin(country_iso: u16, city_id: u16, continent: u8) -> Admin {
     }
 }
 
-thread_local! {
-    /// Per-row rail admins for the popup kernel, aligned by index with the
-    /// `&[RailSegment]` slice handed to `compute_at_point*`. `RailSegment`
-    /// (`types/inputs.rs`) is shared by every layer and cannot grow a field, so the
-    /// admins ride this thread-local: source-reader installs them right
-    /// before the compute call and clears them right after; every other
-    /// caller (parity bins, tests) leaves the channel unset and gets today's
-    /// receiver-admin behaviour bit-for-bit. Entry semantics mirror the road
-    /// channel (`defaults::ROAD_ROW_ADMINS`).
-    static RAIL_ROW_ADMINS: std::cell::RefCell<Option<Vec<Option<Admin>>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Install (`Some`) or clear (`None`) the per-row rail-admin channel for the
-/// next `compute_railways` call on THIS thread. Popup-only — see above.
-pub fn set_rail_row_admins(admins: Option<Vec<Option<Admin>>>) {
-    RAIL_ROW_ADMINS.with(|c| *c.borrow_mut() = admins);
-}
-
-/// Row `i`'s baked admin, or `None` for the receiver-admin fallback. Also
-/// `None` when the channel is unset or its length disagrees with `len`
-/// (defensive: a mis-aligned channel must not mis-assign countries — the
-/// tolerant rollout falls back, never guesses).
-pub(crate) fn rail_row_admin(i: usize, len: usize) -> Option<Admin> {
-    RAIL_ROW_ADMINS.with(|c| {
-        let guard = c.borrow();
-        let v = guard.as_ref()?;
-        if v.len() != len {
-            return None;
-        }
-        v[i]
-    })
-}
-
 struct RailVehicleCoeffs {
     a_rolling: [f64; NUM_BANDS],
     a_traction: [f64; NUM_BANDS],

@@ -438,9 +438,8 @@ pub struct RoadResult {
     pub cp_lon: f64,
     pub fraction: f64,
     /// M4: the row's own baked admin when its batch carried the M3 triplet
-    /// (`None` = no columns → receiver-admin fallback in the kernel). Engine
-    /// side-channel — never on the wire (`RoadSegment` is shared by every layer and
-    /// cannot carry it, so `query.rs` aligns these with the segment vec).
+    /// (`None` = no columns → receiver-admin fallback in the kernel); copied
+    /// onto the segment, never on the wire.
     #[serde(skip_serializing)]
     pub admin: Option<noise_compute::admin::Admin>,
 }

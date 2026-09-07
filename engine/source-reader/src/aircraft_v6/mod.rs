@@ -1,5 +1,5 @@
 //! Run `compute_aircraft_v6` over the popup arrows and merge its output
-//! into the `NoiseResult` returned by `compute_at_point_with_traces`.
+//! into the `NoiseResult` returned by `compute_at_point`.
 //!
 //! Lifetime story: `RecordBatch` arrays are `Arc<dyn Array>`-backed, so
 //! source-reader's hex store can clone the batches cheaply and drop its
@@ -116,7 +116,7 @@ fn build_class_weights(
 
 /// Run `compute_aircraft_v6` over the popup arrows and merge its output
 /// into an existing `NoiseResult`. Caller is expected to have invoked
-/// `compute_at_point_with_traces` first.
+/// `compute_at_point` first.
 ///
 /// `airport_summary_path` points at the global `airport_summary.arrow`
 /// sidecar (typically `<prepared>/aircraft/airport_summary.arrow`).
