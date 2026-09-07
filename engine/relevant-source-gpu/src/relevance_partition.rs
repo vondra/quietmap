@@ -25,19 +25,33 @@ use crate::tile_source_incidence::TileSourceIncidence;
 /// whole answer at the quiet one.
 ///
 /// THIS IS THE SPEED DIAL. It trades painted accuracy for GPU seconds and nothing
-/// else does so as directly; the owner chose 0.15 on 2026-09-02 because it is the
-/// only measured value that meets the whole accuracy contract. Measured on r9950
-/// (RTX 5070), the four wbench-orig cells, five surface layers in one process,
-/// seconds and drift from the same run:
+/// else does so as directly. The owner chose 0.15 on 2026-09-02 against the >3 dB
+/// rung, where it still passes; RE-MEASURED 2026-09-07 against every rung it does
+/// NOT meet the accuracy contract — rail's >6 dB rung reads 194 cells against 138
+/// allowed, and this rule is the whole of that tail.
 ///
-///   fraction   W2 GPU s   W2 wall   rail >3 dB cells (limit 1379)   industrial (921)
-///   0.15       293.8      331.0     1101  passes                       48  passes
-///   0.20       257.1      294.8     1738  1.3x over                    73  passes
-///   0.30       209.7      247.1     3150  2.3x over                   187  passes
+/// Etalon v3 window (2,450 z13 tiles), five surface layers in one process on
+/// r9950 (RTX 5070) against the exact-CPU reference, seconds from a matched
+/// re-run of the same three binaries on an otherwise idle card:
 ///
-/// Every other rung of every layer passes at all three. The rule's own effect at
-/// 0.15 was rail 4994 -> 1101 and industrial 1984 -> 48 for
-/// +23.7 % of the wave's GPU seconds against the per-corner budget it replaced.
+///   fraction  GPU s  wall s   rail >3 (1377)  rail >6 (138)  road >6 (341)  ind >6 (92)
+///   0.15      136.6   153.7             1119     194  OVER             36            8
+///   0.10      216.3   237.0              596      52  passes            7            5
+///   0.05      266.8   288.8              171       6  passes            3            2
+///
+/// Building's 7 cells over 6 dB (limit 14) do not move with the dial and are a
+/// different question. Both lanes were instrumented per pair at eight of the
+/// failing rail cells (tiles 4413/2781, 4414/2781, 4415/2779, 4416/2779,
+/// 4420/2780): every source the card evaluates EXACTLY agrees with the CPU's
+/// ground-or-barrier term to 0.008 dB over 161 matched pairs, while 82-93 % of
+/// the card's painted energy there comes from `background_corner_energy`. The
+/// receiver in each case stands 0.1-6 m from a building that screens every
+/// direction to the railway by 15-20 dB, and no corner of its block stands
+/// behind that wall. Window-wide, a rail cell over 6 dB sits a median 18.0 dB
+/// below the loudest of its own block's four corners (98.6 % of them more than
+/// 6 dB below) against 1.0 dB for a painted cell picked at random — so the tail
+/// is exactly the population this rule cannot represent, and lowering the
+/// fraction is the only lever measured to move it.
 pub const DROP_BUDGET_FRACTION: f64 = 0.15;
 
 /// The complete reusable source partition for one fixed geographic tile.
