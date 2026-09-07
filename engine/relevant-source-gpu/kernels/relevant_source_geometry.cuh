@@ -85,15 +85,20 @@ struct DeviceObstacleGrid {
     uint32_t cell_maximum_height_offset;
 };
 
+// Every scene array is read-only for the whole launch and none of them aliases
+// the one buffer a kernel writes, which `__restrict__` is what tells the
+// compiler: it then reads the terrain halo, the obstacle cells and the edge
+// endpoints through the read-only data cache, whose scattered-load latency is
+// what the obstacle scan spends its time on.
 struct DeviceScenePointers {
-    const DeviceLineSource* sources;
-    const FusedPixel* raster_pixels;
-    const DeviceObstacleGrid* obstacle_grids;
-    const uint32_t* obstacle_cell_starts;
-    const uint32_t* obstacle_edge_references;
-    const float* obstacle_edge_values_xyxyh;
-    const float* obstacle_cell_maximum_heights;
-    const uint8_t* obstacle_edge_is_building;
+    const DeviceLineSource* __restrict__ sources;
+    const FusedPixel* __restrict__ raster_pixels;
+    const DeviceObstacleGrid* __restrict__ obstacle_grids;
+    const uint32_t* __restrict__ obstacle_cell_starts;
+    const uint32_t* __restrict__ obstacle_edge_references;
+    const float* __restrict__ obstacle_edge_values_xyxyh;
+    const float* __restrict__ obstacle_cell_maximum_heights;
+    const uint8_t* __restrict__ obstacle_edge_is_building;
     uint32_t source_count;
     uint32_t obstacle_grid_count;
     /// Half a pixel of this tile in metres: the ground-ops divergence floor.

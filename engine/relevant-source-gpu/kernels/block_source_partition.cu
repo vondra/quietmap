@@ -6,12 +6,12 @@
 
 __global__ void evaluate_corner_source_pairs_kernel(
     DeviceScenePointers scene,
-    const uint32_t* corner_offsets,
-    const uint32_t* corner_source_indices,
-    const float* corner_x_m,
-    const float* corner_y_m,
-    const float* corner_reflection_db,
-    float* pair_period_energy
+    const uint32_t* __restrict__ corner_offsets,
+    const uint32_t* __restrict__ corner_source_indices,
+    const float* __restrict__ corner_x_m,
+    const float* __restrict__ corner_y_m,
+    const float* __restrict__ corner_reflection_db,
+    float* __restrict__ pair_period_energy
 ) {
     const uint32_t corner = blockIdx.x;
     const float receiver_x = corner_x_m[corner];
@@ -33,14 +33,14 @@ __global__ void evaluate_corner_source_pairs_kernel(
 
 __global__ void paint_relevant_sources_kernel(
     DeviceScenePointers scene,
-    const uint32_t* block_offsets,
-    const uint32_t* relevant_source_indices,
-    const float* background_energy,
-    const float* receiver_x_m,
-    const float* receiver_y_m,
-    const float* receiver_altitude_m,
-    const float* receiver_reflection_db,
-    float* output_period_energy
+    const uint32_t* __restrict__ block_offsets,
+    const uint32_t* __restrict__ relevant_source_indices,
+    const float* __restrict__ background_energy,
+    const float* __restrict__ receiver_x_m,
+    const float* __restrict__ receiver_y_m,
+    const float* __restrict__ receiver_altitude_m,
+    const float* __restrict__ receiver_reflection_db,
+    float* __restrict__ output_period_energy
 ) {
     const uint32_t block = blockIdx.x;
     const uint32_t block_row = block / QUIETMAP_BLOCKS_PER_TILE_SIDE;
