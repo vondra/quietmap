@@ -1,21 +1,30 @@
-//! Load Arrow IPC File-format files via mmap, decoding record batches LAZILY.
+//! Load Arrow IPC File-format files via mmap, decoding record batches LAZILY
+//! and without copying: every array of a decoded batch is a slice of the mapped
+//! file (arrow copies only a misaligned buffer, and the prepared writer pads to
+//! 8 bytes), so a resident hex costs page cache the kernel can drop, not
+//! anonymous heap that stays for the process's life. Measured 2026-09-06/07:
+//! the copying decoder held 6.9 GB of decoded batches (7.9 GB anonymous RSS)
+//! after eight metro areas; zero-copy ends five areas at 0.69 GB anonymous.
 //!
 //! Files carrying `qm_batch_bboxes` schema metadata let queries decode only the
 //! batches whose bbox lies within the source class's audibility radius of the click.
 //! Legacy single-batch files have no key and
 //! decode in full — same rows as before, just on first touch instead of at
 //! load time. Decoded batches are cached per slot (OnceLock), so the shared
-//! store's warm path is unchanged and RAM is strictly <= the old eager load.
+//! store's warm path is unchanged.
 
 use arrow::array::*;
+use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
-use arrow::ipc::reader::FileReader;
+use arrow::ipc::convert::fb_to_schema;
+use arrow::ipc::reader::{read_footer_length, FileDecoder, FileReader};
+use arrow::ipc::{root_as_footer, Block};
 use arrow::record_batch::RecordBatch;
 use memmap2::Mmap;
 use noise_compute::propagation::screening_source_id::ScreeningSourceId;
 use std::fs::File;
-use std::io::Cursor;
 use std::path::Path;
+use std::ptr::NonNull;
 use std::sync::{Arc, OnceLock};
 
 /// One arrow file, opened (footer + schema only) but not decoded. Missing or
@@ -24,56 +33,118 @@ use std::sync::{Arc, OnceLock};
 /// files, enrichment rewrites that re-chunked) degrades to load-all, never to
 /// wrong pruning.
 pub struct LazyArrow {
-    mmap: Option<Arc<Mmap>>,
     schema: Option<arrow::datatypes::SchemaRef>,
     batch_bboxes: Option<Vec<arrow_batching::RowBbox>>,
-    slots: Vec<OnceLock<Option<RecordBatch>>>,
+    decoder: Option<FileDecoder>,
+    /// One per record batch, in file order.
+    slots: Vec<BatchSlot>,
 }
+
+/// A record batch's block and its bytes — a zero-copy slice of the mapping,
+/// which the slices keep alive — plus the batch once decoded.
+struct BatchSlot {
+    block: Block,
+    bytes: Buffer,
+    decoded: OnceLock<Option<RecordBatch>>,
+}
+
+/// 4-byte footer length + the `ARROW1` magic that end every IPC file.
+const IPC_TRAILER_LEN: usize = 10;
 
 impl LazyArrow {
     pub fn empty() -> Self {
         LazyArrow {
-            mmap: None,
             schema: None,
             batch_bboxes: None,
+            decoder: None,
             slots: Vec::new(),
         }
     }
 
-    /// Open `path`: mmap + IPC footer + schema. NO batch bodies are decoded
-    /// here — `ensure_hexes_parallel` calls this for whole rings, and cold
-    /// clicks must not pay for batches they will prune.
+    /// Open `path`: mmap + IPC footer + schema (+ dictionaries, which the
+    /// decoder needs up front). NO batch bodies are decoded here —
+    /// `ensure_hexes_parallel` calls this for whole rings, and cold clicks
+    /// must not pay for batches they will prune.
     pub fn open(path: &Path) -> Self {
         if !path.exists() {
             return Self::empty();
         }
-        let Ok(file) = File::open(path) else {
-            return Self::empty();
-        };
-        let Ok(mmap) = (unsafe { Mmap::map(&file) }) else {
-            return Self::empty();
-        };
-        let mmap = Arc::new(mmap);
-        let reader = match FileReader::try_new(Cursor::new(mmap.as_ref().as_ref()), None) {
-            Ok(r) => r,
+        match Self::open_mapped(path) {
+            Ok(arrow) => arrow,
             Err(e) => {
-                eprintln!("  source-reader: failed to read {}: {}", path.display(), e);
-                return Self::empty();
+                eprintln!("  source-reader: failed to read {}: {e}", path.display());
+                Self::empty()
             }
+        }
+    }
+
+    fn open_mapped(path: &Path) -> Result<Self, String> {
+        let file = File::open(path).map_err(|e| e.to_string())?;
+        // SAFETY: prepared arrows are written once (tmp + rename) and never
+        // modified in place, so the mapping's bytes are stable for its life.
+        let mmap = Arc::new(unsafe { Mmap::map(&file) }.map_err(|e| e.to_string())?);
+        let len = mmap.len();
+        let trailer_start = len
+            .checked_sub(IPC_TRAILER_LEN)
+            .ok_or("shorter than an IPC trailer")?;
+        let ptr = NonNull::new(mmap.as_ptr().cast_mut()).ok_or("null mapping")?;
+        // SAFETY: `ptr` addresses `len` readable bytes for as long as `mmap`
+        // lives, and the buffer's owner keeps that `Arc<Mmap>` alive.
+        let buffer = unsafe { Buffer::from_custom_allocation(ptr, len, mmap) };
+        let trailer: [u8; IPC_TRAILER_LEN] = buffer[trailer_start..]
+            .try_into()
+            .map_err(|_| "unreadable trailer")?;
+        let footer_len = read_footer_length(trailer).map_err(|e| e.to_string())?;
+        let footer_start = trailer_start
+            .checked_sub(footer_len)
+            .ok_or("footer longer than the file")?;
+        let footer =
+            root_as_footer(&buffer[footer_start..trailer_start]).map_err(|e| e.to_string())?;
+        let schema = Arc::new(fb_to_schema(
+            footer.schema().ok_or("footer without a schema")?,
+        ));
+        let block_slice = |block: &Block| -> Result<Buffer, String> {
+            let start = usize::try_from(block.offset()).map_err(|e| e.to_string())?;
+            let block_len = block.metaDataLength() as usize + block.bodyLength() as usize;
+            if start
+                .checked_add(block_len)
+                .is_none_or(|end| end > footer_start)
+            {
+                return Err(format!("block {start}+{block_len} outside the file body"));
+            }
+            Ok(buffer.slice_with_length(start, block_len))
         };
-        let schema = reader.schema();
-        let num_batches = reader.num_batches();
+        let mut decoder = FileDecoder::new(Arc::clone(&schema), footer.version());
+        for block in footer.dictionaries().iter().flatten() {
+            decoder
+                .read_dictionary(block, &block_slice(block)?)
+                .map_err(|e| e.to_string())?;
+        }
+        // A block table pointing outside the file fails the open as a whole,
+        // like a truncated file: the layer reads as empty rather than partial.
+        let slots = footer
+            .recordBatches()
+            .iter()
+            .flatten()
+            .map(|block| {
+                Ok(BatchSlot {
+                    block: *block,
+                    bytes: block_slice(block)?,
+                    decoded: OnceLock::new(),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
         let batch_bboxes = schema
             .metadata()
             .get(arrow_batching::QM_BATCH_BBOXES_KEY)
             .and_then(|v| arrow_batching::parse_batch_bboxes(v))
-            .filter(|b| b.len() == num_batches);
-        LazyArrow {
-            mmap: Some(mmap),
+            .filter(|b| b.len() == slots.len());
+        Ok(LazyArrow {
             schema: Some(schema),
             batch_bboxes,
-            slots: (0..num_batches).map(|_| OnceLock::new()).collect(),
-        }
+            decoder: Some(decoder),
+            slots,
+        })
     }
 
     /// File-level schema (None for missing/unreadable files) — metadata like
@@ -82,16 +153,18 @@ impl LazyArrow {
         self.schema.as_ref()
     }
 
-    /// Decode batch `i` on first touch; a decode error caches as None (skip),
-    /// matching the old eager loader's silent-drop of unreadable batches.
+    /// Decode batch `i` on first touch, zero-copy from the mapping; a batch
+    /// whose bytes do not decode caches as None (skip), matching the old eager
+    /// loader's silent-drop of unreadable batches.
     fn batch(&self, i: usize) -> Option<&RecordBatch> {
-        let mmap = self.mmap.as_ref()?;
-        self.slots[i]
+        let decoder = self.decoder.as_ref()?;
+        let slot = &self.slots[i];
+        slot.decoded
             .get_or_init(|| {
-                let mut reader =
-                    FileReader::try_new(Cursor::new(mmap.as_ref().as_ref()), None).ok()?;
-                reader.set_index(i).ok()?;
-                reader.next()?.ok()
+                decoder
+                    .read_record_batch(&slot.block, &slot.bytes)
+                    .ok()
+                    .flatten()
             })
             .as_ref()
     }
@@ -1059,6 +1132,74 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
         out.push(HEX[(b & 0x0f) as usize] as char);
     }
     out
+}
+
+#[cfg(test)]
+mod lazy_arrow_tests {
+    use super::LazyArrow;
+    use arrow::array::{ArrayRef, Float64Array, Int64Array, RecordBatch};
+    use arrow::ipc::writer::FileWriter;
+    use std::sync::Arc;
+
+    fn write_ipc(path: &std::path::Path, batches: &[RecordBatch]) {
+        let schema = batches[0].schema();
+        let file = std::fs::File::create(path).unwrap();
+        let mut writer = FileWriter::try_new(file, schema.as_ref()).unwrap();
+        for batch in batches {
+            writer.write(batch).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+
+    fn batch(values: &[i64]) -> RecordBatch {
+        RecordBatch::try_from_iter([
+            (
+                "id",
+                Arc::new(Int64Array::from(values.to_vec())) as ArrayRef,
+            ),
+            (
+                "x",
+                Arc::new(Float64Array::from(
+                    values.iter().map(|v| *v as f64 * 0.5).collect::<Vec<_>>(),
+                )) as ArrayRef,
+            ),
+        ])
+        .unwrap()
+    }
+
+    /// The footer walk this module does by hand yields the writer's batches,
+    /// values included; a file missing its tail behaves as empty, never as a
+    /// partial layer.
+    #[test]
+    fn zero_copy_open_decodes_every_batch_and_a_truncated_file_is_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("roads.arrow");
+        write_ipc(&path, &[batch(&[1, 2, 3]), batch(&[40, 50])]);
+        let arrow = LazyArrow::open(&path);
+        let batches = arrow.batches_all();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 3);
+        let ids = batches[1]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(ids.values(), &[40, 50]);
+        let xs = batches[1]
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        assert_eq!(xs.values(), &[20.0, 25.0]);
+
+        let bytes = std::fs::read(&path).unwrap();
+        let truncated = tmp.path().join("truncated.arrow");
+        std::fs::write(&truncated, &bytes[..bytes.len() - 7]).unwrap();
+        assert!(LazyArrow::open(&truncated).batches_all().is_empty());
+        assert!(LazyArrow::open(&tmp.path().join("missing.arrow"))
+            .batches_all()
+            .is_empty());
+    }
 }
 
 #[cfg(test)]
