@@ -21,7 +21,6 @@ use arrow::ipc::reader::{read_footer_length, FileDecoder, FileReader};
 use arrow::ipc::{root_as_footer, Block};
 use arrow::record_batch::RecordBatch;
 use memmap2::Mmap;
-use noise_compute::propagation::screening_source_id::ScreeningSourceId;
 use std::fs::File;
 use std::path::Path;
 use std::ptr::NonNull;
@@ -216,7 +215,7 @@ pub struct HexData {
     pub railways: LazyArrow,
     /// The merged per-cell structure table (`structures.arrow`,
     /// `scripts/structures/build-structures.py`): kind=0 building rows feed
-    /// the emission read, kind=1 wall microsegments the popup's wall listing.
+    /// the emission read; walls (kind=1) screen through the obstacle index.
     pub structures: LazyArrow,
     pub industrial: LazyArrow,
     /// Leisure AREA sources (`leisure.arrow`, settlement v2 phase 2) — sports
@@ -957,137 +956,6 @@ pub fn query_leisure_from_batches(
     results
 }
 
-/// One wall microsegment (`structures.arrow` kind=1 row) for the popup lane:
-/// the wall's geometry (both endpoints — what the obstacle index screens with)
-/// plus its midpoint (the row's `centroid_*`), which is the point `dist_m` is
-/// measured to. The response fields are the old barriers.arrow row's, so the
-/// visitor's popup JSON keeps its shape.
-#[derive(Debug, serde::Serialize)]
-pub struct BarrierResult {
-    pub osm_id: i64,
-    #[serde(skip_serializing)]
-    pub segment_idx: i16,
-    pub height: f32,
-    /// Segment midpoint (`dist_m`'s reference point).
-    pub lat: f64,
-    pub lon: f64,
-    pub start_lat: f64,
-    pub start_lon: f64,
-    pub end_lat: f64,
-    pub end_lon: f64,
-    pub dist_m: f64,
-}
-
-pub fn query_barriers_from_batches(
-    batches: &[RecordBatch],
-    lat: f64,
-    lon: f64,
-    max_radius: f64,
-) -> Result<Vec<BarrierResult>, String> {
-    let mut results = Vec::new();
-    for batch in batches {
-        let n = batch.num_rows();
-        let kind = col_u8(batch, "kind")
-            .ok_or_else(|| "structures.arrow missing required kind column".to_string())?;
-        let osm_id = col_i64(batch, "osm_id")
-            .ok_or_else(|| "structures.arrow missing required osm_id column".to_string())?;
-        let segment_idx = col_i16(batch, "segment_idx")
-            .ok_or_else(|| "structures.arrow missing required segment_idx column".to_string())?;
-        let height = col_f32(batch, "height_m")
-            .ok_or_else(|| "structures.arrow missing required height_m column".to_string())?;
-        let geometry = col_binary(batch, "geometry_wkb")
-            .ok_or_else(|| "structures.arrow missing required geometry_wkb column".to_string())?;
-        let clat = col_f64(batch, "centroid_lat")
-            .ok_or_else(|| "structures.arrow missing required centroid_lat column".to_string())?;
-        let clon = col_f64(batch, "centroid_lon")
-            .ok_or_else(|| "structures.arrow missing required centroid_lon column".to_string())?;
-
-        for i in 0..n {
-            if kind.value(i) != STRUCTURE_KIND_BARRIER {
-                continue;
-            }
-            // A wall without its provenance or shape cannot be listed: nulls
-            // here are a broken extract, and `value(i)` on a null slot would
-            // silently read the identity of wall (0, 0).
-            if osm_id.is_null(i) || segment_idx.is_null(i) || geometry.is_null(i) {
-                return Err(format!(
-                    "structures.arrow barrier row {i} lacks osm_id, segment_idx or geometry_wkb"
-                ));
-            }
-            ScreeningSourceId::wall(osm_id.value(i), segment_idx.value(i)).map_err(|error| {
-                format!(
-                    "invalid structures.arrow provenience ({}, {}): {error:?}",
-                    osm_id.value(i),
-                    segment_idx.value(i)
-                )
-            })?;
-            let mid_lat = clat.value(i);
-            let mid_lon = clon.value(i);
-            let dist = crate::geo::flat_dist(lat, lon, mid_lat, mid_lon);
-            if dist > max_radius {
-                continue;
-            }
-            let points = noise_compute::wkb::parse_wkb_linestring_bytes(geometry.value(i));
-            if points.len() < 2 {
-                return Err(format!(
-                    "structures.arrow barrier row {i}: geometry_wkb is not a wall microsegment"
-                ));
-            }
-            let (start_lat, start_lon) = points[0];
-            let (end_lat, end_lon) = points[points.len() - 1];
-
-            results.push(BarrierResult {
-                osm_id: osm_id.value(i),
-                segment_idx: segment_idx.value(i),
-                height: height.value(i),
-                lat: mid_lat,
-                lon: mid_lon,
-                start_lat,
-                start_lon,
-                end_lat,
-                end_lon,
-                dist_m: dist,
-            });
-        }
-    }
-
-    canonicalize_barrier_results(results)
-}
-
-/// Stable-dedupe exact repeated emissions and reject one ID naming two shapes.
-pub fn canonicalize_barrier_results(
-    results: Vec<BarrierResult>,
-) -> Result<Vec<BarrierResult>, String> {
-    let mut seen = std::collections::BTreeMap::new();
-    let mut unique = Vec::with_capacity(results.len());
-    for result in results {
-        let source_id = ScreeningSourceId::wall(result.osm_id, result.segment_idx)
-            .map_err(|error| format!("invalid barrier provenience: {error:?}"))?;
-        let geometry_bits = [
-            result.start_lat.to_bits(),
-            result.start_lon.to_bits(),
-            result.end_lat.to_bits(),
-            result.end_lon.to_bits(),
-            u64::from(result.height.to_bits()),
-        ];
-        match seen.entry(source_id) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(geometry_bits);
-                unique.push(result);
-            }
-            std::collections::btree_map::Entry::Occupied(entry)
-                if *entry.get() == geometry_bits => {}
-            std::collections::btree_map::Entry::Occupied(_) => {
-                return Err(format!(
-                    "barrier provenience ({}, {}) names different geometry",
-                    result.osm_id, result.segment_idx
-                ));
-            }
-        }
-    }
-    Ok(unique)
-}
-
 pub fn col_i64<'a>(b: &'a RecordBatch, name: &str) -> Option<&'a Int64Array> {
     b.column_by_name(name)?.as_any().downcast_ref()
 }
@@ -1198,123 +1066,6 @@ mod lazy_arrow_tests {
         assert!(LazyArrow::open(&tmp.path().join("missing.arrow"))
             .batches_all()
             .is_empty());
-    }
-}
-
-#[cfg(test)]
-mod barrier_provenance_tests {
-    use super::*;
-    use crate::structure_test_fixture::{structure_batch, wall_linestring_wkb, StructureRow};
-
-    /// One wall row per (osm_id, segment_idx, start_lat): a ~110 m microsegment
-    /// running NE from (start_lat, 14.0). `dist_m` is measured to its centroid
-    /// (the midpoint the builder writes).
-    fn batch(
-        osm_ids: Vec<i64>,
-        segment_indices: Vec<i16>,
-        start_latitudes: Vec<f64>,
-    ) -> RecordBatch {
-        let rows: Vec<StructureRow> = osm_ids
-            .into_iter()
-            .zip(segment_indices)
-            .zip(start_latitudes)
-            .map(|((osm_id, segment_idx), start_lat)| {
-                let end = (start_lat + 0.001, 14.001);
-                StructureRow {
-                    kind: STRUCTURE_KIND_BARRIER,
-                    geometry_wkb: Some(wall_linestring_wkb((start_lat, 14.0), end)),
-                    height_m: 3.0,
-                    centroid_lat: (start_lat + end.0) / 2.0,
-                    centroid_lon: (14.0 + end.1) / 2.0,
-                    osm_id: Some(osm_id),
-                    segment_idx: Some(segment_idx),
-                    ..Default::default()
-                }
-            })
-            .collect();
-        structure_batch(&rows)
-    }
-
-    #[test]
-    fn barrier_loaders_preserve_osm_id_and_segment_idx() {
-        let results = query_barriers_from_batches(
-            &[batch(vec![7, 7], vec![-3, 4], vec![50.0, 50.0])],
-            50.0,
-            14.0,
-            1_000.0,
-        )
-        .unwrap();
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].segment_idx, -3);
-        assert_eq!(results[1].segment_idx, 4);
-    }
-
-    #[test]
-    fn barrier_authority_dedupes_identical_and_rejects_conflicting_provenience() {
-        let identical = query_barriers_from_batches(
-            &[batch(vec![7, 7], vec![-3, -3], vec![50.0, 50.0])],
-            50.0,
-            14.0,
-            1_000.0,
-        )
-        .unwrap();
-        assert_eq!(identical.len(), 1);
-
-        let conflicting = query_barriers_from_batches(
-            &[batch(vec![7, 7], vec![-3, -3], vec![50.0, 50.5])],
-            50.0,
-            14.0,
-            100_000.0,
-        )
-        .unwrap_err();
-        assert!(conflicting.contains("names different geometry"));
-    }
-
-    #[test]
-    fn missing_barrier_segment_idx_fails_closed() {
-        let mut missing = batch(vec![7], vec![-3], vec![50.0]);
-        missing.remove_column(missing.schema().index_of("segment_idx").unwrap());
-        let error = query_barriers_from_batches(&[missing], 50.0, 14.0, 1_000.0).unwrap_err();
-        assert!(error.contains("missing required segment_idx"));
-    }
-
-    /// The wall listing reads kind=1 rows out of the merged table: building
-    /// rows of the same batch never list as walls, and the wire fields come
-    /// from the LineString, `height_m`, and the row centroid.
-    #[test]
-    fn wall_listing_reads_barrier_rows_of_the_merged_table() {
-        let wall = StructureRow {
-            kind: STRUCTURE_KIND_BARRIER,
-            geometry_wkb: Some(wall_linestring_wkb((50.0, 14.0), (50.001, 14.001))),
-            height_m: 4.5,
-            centroid_lat: 50.0005,
-            centroid_lon: 14.0005,
-            osm_id: Some(9),
-            segment_idx: Some(2),
-            ..Default::default()
-        };
-        let building = StructureRow {
-            kind: STRUCTURE_KIND_BUILDING,
-            geometry_wkb: Some(crate::structure_test_fixture::square_polygon_wkb(
-                50.0, 14.0,
-            )),
-            height_m: 12.0,
-            centroid_lat: 50.0001,
-            centroid_lon: 14.00015,
-            osm_id: Some(42),
-            ..Default::default()
-        };
-        let results =
-            query_barriers_from_batches(&[structure_batch(&[wall, building])], 50.0, 14.0, 1_000.0)
-                .unwrap();
-        assert_eq!(results.len(), 1, "building rows must not list as walls");
-        let w = &results[0];
-        assert_eq!(w.osm_id, 9);
-        assert_eq!(w.segment_idx, 2);
-        assert_eq!(w.height, 4.5);
-        assert_eq!((w.lat, w.lon), (50.0005, 14.0005));
-        assert_eq!((w.start_lat, w.start_lon), (50.0, 14.0));
-        assert_eq!((w.end_lat, w.end_lon), (50.001, 14.001));
     }
 }
 
