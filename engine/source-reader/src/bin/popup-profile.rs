@@ -73,7 +73,6 @@ fn main() -> Result<(), String> {
             lng,
             source_reader::popup::SEGMENT_TOP_K_PER_KIND,
             &h3r4_dir,
-            data_dir,
             &rasters,
         )?;
         eprintln!(

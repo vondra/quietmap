@@ -33,7 +33,6 @@ noise-compute = { path = "../noise-compute" }
 arrow-batching = { path = "../arrow-batching" }
 raster-reader = { path = "../raster-reader" }
 rayon = "1"
-libc = "0.2"
 mimalloc = { version = "0.1", default-features = false }
 
 [dev-dependencies]

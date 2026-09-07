@@ -17,15 +17,13 @@ pub const SEGMENT_TOP_K_PER_KIND_FULL: usize = 1000;
 
 /// Full noise at a point from the ring's hexes: collect the sources, build
 /// the exact obstacle set, move an indoor click to its façade, run every
-/// kernel, cap the traces and build the wire shape. `data_dir` is the
-/// prepared root (`…/data/prepared`) that holds the obstacle-index cache.
+/// kernel, cap the traces and build the wire shape.
 pub fn compute_point(
     hexes: &[&HexData],
     lat: f64,
     lng: f64,
     top_k_per_kind: usize,
     h3r4_dir: &Path,
-    data_dir: &Path,
     rasters: &dyn noise_compute::types::RasterSampler,
 ) -> Result<wire::WireResult, String> {
     // Per-stage timing probes (env-gated: `POPUP_TIMING=1` to enable). Inline
@@ -69,7 +67,7 @@ pub fn compute_point(
     // Vector obstacles: the exact building crossings screening runs on, built
     // per query from the ring-1 obstacle shards. There is no other building
     // representation, so a store that will not load fails the query.
-    let obstacle_set = structure_store::load_obstacle_set(h3r4_dir, data_dir, lat, lng)?;
+    let obstacle_set = structure_store::load_obstacle_set(h3r4_dir, lat, lng)?;
     // Select the enclosed footprint winner once; it supplies the effective
     // envelope delta for the aggregate indoor estimate while traces stay at
     // façade values.

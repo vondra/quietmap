@@ -1818,7 +1818,6 @@ dependencies = [
  "arrow",
  "arrow-batching",
  "h3o",
- "libc",
  "memmap2 0.9.11",
  "mimalloc",
  "napi",

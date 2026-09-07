@@ -1,14 +1,13 @@
-//! Pre-build every prepared cell's obstacle index into the popup's disk cache,
-//! so no click pays a cold build. Idempotent and resumable: a cell whose current
-//! index is cached is skipped, so a nightly run only follows data or engine
-//! changes. Standalone binary.
-use std::path::{Path, PathBuf};
+//! Write every prepared cell's edge table (`structures.edges`) beside its
+//! `structures.arrow` — the world build's last step, and the promote step
+//! after a kernel change — so no popup pays a cold WKB parse. Idempotent and
+//! resumable: a cell whose file is current is skipped. Standalone binary.
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use h3o::CellIndex;
 use rayon::prelude::*;
-use source_reader::index_cache::check_index_cache_volume;
 use source_reader::structure_store::warm_cell_index;
 
 /// A dense metro cell's build holds its whole Arrow table plus the builder in
@@ -29,19 +28,6 @@ fn main() -> Result<(), String> {
         usage();
     }
     let h3r4_dir = PathBuf::from(&args[1]);
-    // Rasters and the index cache live two levels up (`data/prepared/…`) — the
-    // same derivation `source_init` makes for the popup.
-    let data_dir = h3r4_dir
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| format!("{} has no prepared root", h3r4_dir.display()))?
-        .to_path_buf();
-    let (cached_bytes, free_bytes) = check_index_cache_volume(&data_dir)?;
-    println!(
-        "obstacle-index-warm: cache holds {:.0} GB, {:.0} GB free on its volume",
-        cached_bytes as f64 / 1e9,
-        free_bytes as f64 / 1e9,
-    );
 
     // Largest first: those are the cold clicks that hurt, and a long build
     // started early leaves the pool packed with small ones instead of idling.
@@ -58,7 +44,7 @@ fn main() -> Result<(), String> {
 
     let started = Instant::now();
     let built = AtomicUsize::new(0);
-    let cached = AtomicUsize::new(0);
+    let current = AtomicUsize::new(0);
     let failed = AtomicUsize::new(0);
     let built_bytes = AtomicU64::new(0);
     let pool = rayon::ThreadPoolBuilder::new()
@@ -68,7 +54,7 @@ fn main() -> Result<(), String> {
     pool.install(|| {
         cells.par_iter().for_each(|(arrow_bytes, cell)| {
             let t0 = Instant::now();
-            match warm_cell_index(&h3r4_dir, &data_dir, *cell) {
+            match warm_cell_index(&h3r4_dir, *cell) {
                 Ok(true) => {
                     let n = built.fetch_add(1, Ordering::Relaxed) + 1;
                     built_bytes.fetch_add(*arrow_bytes, Ordering::Relaxed);
@@ -81,7 +67,7 @@ fn main() -> Result<(), String> {
                     }
                 }
                 Ok(false) => {
-                    cached.fetch_add(1, Ordering::Relaxed);
+                    current.fetch_add(1, Ordering::Relaxed);
                 }
                 Err(e) => {
                     failed.fetch_add(1, Ordering::Relaxed);
@@ -93,11 +79,11 @@ fn main() -> Result<(), String> {
 
     let failed = failed.load(Ordering::Relaxed);
     println!(
-        "obstacle-index-warm: {} cells, built {} ({:.1} GB of Arrow), cached {}, failed {failed}, {:.0} s",
+        "obstacle-index-warm: {} cells, built {} ({:.1} GB of Arrow), current {}, failed {failed}, {:.0} s",
         cells.len(),
         built.load(Ordering::Relaxed),
         built_bytes.load(Ordering::Relaxed) as f64 / 1e9,
-        cached.load(Ordering::Relaxed),
+        current.load(Ordering::Relaxed),
         started.elapsed().as_secs_f64(),
     );
     if failed > 0 {

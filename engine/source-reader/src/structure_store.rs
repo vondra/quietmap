@@ -10,8 +10,8 @@
 //! input of the low-profile height cap's lookup. One table, one read.
 //!
 //! Two hard rules:
-//! - **Bounded cost.** Per-cell indexes are built ONCE per process and
-//!   LRU-cached (`CELL_CACHE_CAP`); a query only Arc-clones ≤7 of them.
+//! - **Bounded cost.** Per-cell indexes are built ONCE per process and kept in
+//!   an LRU memo (`CELL_MEMO_CAP`); a query only Arc-clones ≤7 of them.
 //!   The naive per-query rebuild measured 448 MB RSS / 0.47 s per popup.
 //! - **All-or-error.** Any read/parse error, and any ring-1 cell of the
 //!   prepared world whose `structures.arrow` is missing, aborts the whole load.
@@ -20,21 +20,23 @@
 //!   (`noise_compute::propagation::structure_cell_file` carries the rule and the
 //!   third case, a cell outside the prepared world).
 //!
-//! Built indexes are also kept ON DISK (`noise_compute::propagation::obstacle_index_file`)
-//! and mapped back on the next cold start — a São Paulo popup indexes 40 M
-//! edges from ~1 GB of Arrow, which cost ~6 s of the FIRST click and was then
-//! thrown away with the process. The cached file is the in-memory layout, so a
-//! reload is an `mmap` plus a header check and the kernel faults in only the
-//! grid cells the rays walk.
+//! The cost worth keeping across processes is the WKB parse: a São Paulo cell's
+//! 18.4 M edges take 9.5 s to parse and 0.5 s to index from the mapped file
+//! (2026-09-07). So the
+//! world build writes each cell's parsed edges beside its table
+//! (`structures.edges`, `noise_compute::propagation::obstacle_index_file`); a
+//! load maps them and derives the grid into the memo, and a web server never
+//! writes into the prepared tree — a missing or stale file is parsed in memory
+//! for this process alone, at the cold cost above.
 //!
-//! **Both caches key on [`cell_data_ver`], the full identity of the index** —
-//! never on the cell. The memo in front of the disk cache once keyed on the
-//! cell alone and so answered a query about one obstacle tree with an index
-//! built from another (2026-08-05); the popup is the project's acoustic
-//! reference, and a cache that returns the answer to a different question is
-//! worse than no cache. The ring is deliberately NOT in that key: it decides
-//! which cells are assembled into a set, per query, in [`load_obstacle_set`],
-//! while a cache entry is one cell's index built from that cell's own file.
+//! **Both the memo and the file key on [`cell_data_ver`], the full identity of
+//! the index** — never on the cell. The memo once keyed on the cell alone and
+//! so answered a query about one obstacle tree with an index built from another
+//! (2026-08-05); the popup is the project's acoustic reference, and a memo that
+//! returns the answer to a different question is worse than none. The ring is
+//! deliberately NOT in that key: it decides which cells are assembled into a
+//! set, per query, in [`load_obstacle_set`], while a memo entry is one cell's
+//! index built from that cell's own file.
 
 use std::collections::HashMap;
 use std::io::{Cursor, Write};
@@ -49,17 +51,22 @@ use h3o::{CellIndex, LatLng, Resolution};
 use noise_compute::envelope::{effective_envelope_class, EnvelopeClass};
 use noise_compute::low_profile::LowProfileLookup;
 use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind, ObstacleSet};
-use noise_compute::propagation::obstacle_index_file::{fnv1a64, IndexBlob, BUILDER_CODE_VER};
-use noise_compute::propagation::structure_cell_file::locate_cell_structures;
+use noise_compute::propagation::obstacle_index_file::{
+    fnv1a64, IndexBlob, BUILDER_CODE_VER, HEADER_BYTES,
+};
+use noise_compute::propagation::structure_cell_file::{
+    locate_cell_structures, CELL_EDGE_TABLE_FILENAME,
+};
+use rayon::prelude::*;
 
 use crate::hex_store::{STRUCTURE_KIND_BARRIER, STRUCTURE_KIND_BUILDING};
 
-/// Per-cell index cache capacity. A dense metro cell's index runs to low
+/// Per-cell index memo capacity. A dense metro cell's index runs to low
 /// hundreds of MB; popups cluster spatially, so a small LRU covers the
 /// active area while bounding worst-case RSS.
-const CELL_CACHE_CAP: usize = 8;
+const CELL_MEMO_CAP: usize = 8;
 
-/// Everything that decides a cached index's BYTES: the engine's builder and
+/// Everything that decides an edge file's BYTES: the engine's builder and
 /// grid (`BUILDER_CODE_VER`) folded with THIS file, which owns the loader's own
 /// decisions — the obstacle id ordering (dense, by file order), and which rows
 /// are offered to the height cap. Editing either side rotates the version and every file written by the
@@ -71,28 +78,28 @@ const CELL_CACHE_CAP: usize = 8;
 /// `noise_compute::low_profile`, which [`BUILDER_CODE_VER`] hashes — so a change
 /// to its class list, its match geometry or its cap rotates this version without
 /// anyone naming the constants here.
-const CACHE_CODE_VER: u64 = fnv1a64(BUILDER_CODE_VER, include_bytes!("structure_store.rs"));
+const EDGE_FILE_CODE_VER: u64 = fnv1a64(BUILDER_CODE_VER, include_bytes!("structure_store.rs"));
 
-/// Mapped cache file. The mapping's address and contents are fixed for its
+/// Mapped edge file. The mapping's address and contents are fixed for its
 /// life, which is what [`IndexBlob`] requires.
-struct MappedIndexFile(memmap2::Mmap);
+struct MappedEdgeFile(memmap2::Mmap);
 
 // SAFETY: `Mmap` derefs to a fixed address/length for its whole life and this
 // wrapper never exposes a `&mut`, so every `as_bytes` returns the same
 // immutable bytes — the `IndexBlob` contract.
-unsafe impl IndexBlob for MappedIndexFile {
+unsafe impl IndexBlob for MappedEdgeFile {
     fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 }
 
 /// The FULL identity of one cell's index — everything that decides its bytes,
-/// in one u64. Both caches (the process memo and the file on disk) key on it,
+/// in one u64. Both the process memo and the file on disk key on it,
 /// and nothing may be served under a key that does not carry all of:
 ///
-/// * [`CACHE_CODE_VER`] — the builder, the grid, this loader's own rules;
+/// * [`EDGE_FILE_CODE_VER`] — the builder, the grid, this loader's own rules;
 /// * the CELL, whose centre is the index's metric origin (and which is the
-///   only thing the file name would otherwise bind);
+///   metric frame the edge table is written in);
 /// * the cell's `structures.arrow` as (canonical path, length, mtime) — the
 ///   path because two prepared TREES (a moved mount, a second checkout's data
 ///   node) hold different structures for the same cell; CANONICAL because
@@ -106,7 +113,7 @@ unsafe impl IndexBlob for MappedIndexFile {
 /// that one table, and nothing else — no env, no clock, no map iteration order
 /// (`ObstacleIndex::build` is a Vec walk). Whatever a future edit adds to it
 /// lands in THIS file, and this file's content is already in
-/// `CACHE_CODE_VER`, so an unfingerprinted input cannot be introduced without
+/// `EDGE_FILE_CODE_VER`, so an unfingerprinted input cannot be introduced without
 /// also rotating the version.
 ///
 /// (length, mtime) rather than a content hash is the shape of
@@ -114,11 +121,11 @@ unsafe impl IndexBlob for MappedIndexFile {
 /// arrows' mtimes; re-hashing a gigabyte per click would cost more than the
 /// rebuild it guards.
 ///
-/// `None` ⇒ some input's metadata is unreadable, so nothing may be cached at
+/// `None` ⇒ some input's metadata is unreadable, so nothing may be memoised or written at
 /// all: an index whose provenance cannot be pinned must never outlive the
 /// query, let alone the process.
 fn cell_data_ver(cell: CellIndex, structures_arrow: &Path) -> Option<u64> {
-    let mut h = fnv1a64(CACHE_CODE_VER, b"structure-index-inputs-v1");
+    let mut h = fnv1a64(EDGE_FILE_CODE_VER, b"structure-index-inputs-v1");
     h = fnv1a64(h, &u64::from(cell).to_le_bytes());
     let canonical = std::fs::canonicalize(structures_arrow).ok()?;
     h = fnv1a64(h, canonical.as_os_str().as_encoded_bytes());
@@ -132,58 +139,44 @@ fn cell_data_ver(cell: CellIndex, structures_arrow: &Path) -> Option<u64> {
     Some(h)
 }
 
-/// `<cell>.<code_ver>.qoix`. The builder version is in the NAME, not just the
-/// header, because prod and dev1-3 share one `prepared/` node: two checkouts on
-/// different engine versions would otherwise fight over one path, each deleting
-/// and rebuilding the other's file forever. Superseded versions are ordinary
-/// cache files and age out through the LRU budget.
-fn cache_file_path(root: &Path, cell: CellIndex) -> PathBuf {
-    root.join(format!(
-        "{cell}.{CACHE_CODE_VER:016x}.{}",
-        crate::index_cache::CACHE_FILE_EXT
-    ))
+/// A cell's edge table lives beside its source, `<cell>/structures.edges`:
+/// the kernel-frame edges parsed out of `structures.arrow`, mapped on load
+/// with the grid derived in memory (the file's module doc has the numbers).
+/// The engine and data versions are in the header, so a file another engine
+/// wrote is refused, never trusted. Only the world build writes here — the
+/// `obstacle-index-warm` sweep, its last step and the promote step after a
+/// kernel change; a web server never writes into the prepared tree, and a
+/// missing or stale file is built in memory for that process alone.
+fn index_file_path(structures_arrow: &Path) -> PathBuf {
+    structures_arrow.with_file_name(CELL_EDGE_TABLE_FILENAME)
 }
 
-/// Map a cached index, or `None` for any reason at all — absent, stale,
+/// Map an edge file into an index, or `None` for any reason at all — absent, stale,
 /// truncated, unreadable. Every `None` simply means "rebuild".
-fn load_cached_index(path: &Path, data_ver: u64) -> Option<ObstacleIndex> {
+fn load_edge_file(path: &Path, data_ver: u64) -> Option<ObstacleIndex> {
     let file = std::fs::File::open(path).ok()?;
     // SAFETY: the store is written atomically (tmp + rename) and never mutated
     // in place, so no other writer can change these bytes under the mapping.
     let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
-    let blob: Arc<dyn IndexBlob> = Arc::new(MappedIndexFile(mmap));
-    match ObstacleIndex::from_blob(blob, CACHE_CODE_VER, data_ver) {
+    let blob: Arc<dyn IndexBlob> = Arc::new(MappedEdgeFile(mmap));
+    match ObstacleIndex::from_blob(blob, EDGE_FILE_CODE_VER, data_ver) {
         Ok(idx) => Some(idx),
         Err(e) => {
-            eprintln!("structure_store: ignoring cached {}: {e}", path.display());
-            let _ = std::fs::remove_file(path);
+            eprintln!("structure_store: not using {}: {e}", path.display());
             None
         }
     }
 }
 
-/// Persist a freshly built index. The popup swallows a failure (the cache is
-/// an accelerator, never a dependency); the warm sweep counts it.
-fn store_cached_index(
-    root: &Path,
-    cell: CellIndex,
-    index: &ObstacleIndex,
-    data_ver: u64,
-) -> Result<(), String> {
-    let parts = index.file_parts(CACHE_CODE_VER, data_ver);
-    let total = parts.total_len() as u64;
-    std::fs::create_dir_all(root)
-        .map_err(|e| format!("no index cache at {}: {e}", root.display()))?;
-    crate::index_cache::evict_to_budget(root, total);
-    let final_path = cache_file_path(root, cell);
+/// Write a freshly built index's edge table beside its source; the warm sweep
+/// counts a failure.
+fn store_edge_file(path: &Path, index: &ObstacleIndex, data_ver: u64) -> Result<(), String> {
+    let parts = index.file_parts(EDGE_FILE_CODE_VER, data_ver);
     // Same-directory tmp + rename: a reader either maps the whole previous
-    // file or the whole new one, never a half-written index. Two NAPI worker
-    // threads can miss the process LRU on the SAME cell at the same time, so
-    // the temp name carries a per-write sequence — sharing one `<pid>.tmp`
-    // would let them interleave into a file that then passes the header check.
-    static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = root.join(format!("{cell}.{}.{seq}.tmp", std::process::id()));
+    // file or the whole new one, never a half-written table. One writer (the
+    // sweep, one task per cell), so one fixed tmp name: `create` truncates
+    // whatever a killed sweep left behind.
+    let tmp = path.with_file_name(format!("{CELL_EDGE_TABLE_FILENAME}.tmp"));
     let write = || -> std::io::Result<()> {
         let mut f = std::fs::File::create(&tmp)?;
         f.write_all(&parts.header)?;
@@ -192,11 +185,11 @@ fn store_cached_index(
         }
         f.flush()?;
         drop(f);
-        std::fs::rename(&tmp, &final_path)
+        std::fs::rename(&tmp, path)
     };
     write().map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
-        format!("could not cache index {}: {e}", final_path.display())
+        format!("could not write {}: {e}", path.display())
     })
 }
 
@@ -206,22 +199,22 @@ fn store_cached_index(
 /// Keying it on the cell alone was a live defect (2026-08-05): the second
 /// query for a cell got the first query's index no matter which obstacle tree
 /// it asked about, so a run against a second prepared root screened the popup
-/// against obstacles that are not there. The disk cache never had this hole —
+/// against obstacles that are not there. The edge file never had this hole —
 /// its header carries the fingerprint — which is exactly why the memo in front
 /// of it had to grow one.
-struct CellCache {
-    /// (cell, identity) → (index, LRU stamp). Failed builds are NOT cached —
+struct CellMemo {
+    /// (cell, identity) → (index, LRU stamp). Failed builds are NOT memoised —
     /// transient IO must stay retryable; missing cells stay a per-query
     /// decision.
     map: HashMap<(CellIndex, u64), (Arc<ObstacleIndex>, u64)>,
     stamp: u64,
 }
 
-static CELL_CACHE: OnceLock<Mutex<CellCache>> = OnceLock::new();
+static CELL_MEMO: OnceLock<Mutex<CellMemo>> = OnceLock::new();
 
-fn memo() -> &'static Mutex<CellCache> {
-    CELL_CACHE.get_or_init(|| {
-        Mutex::new(CellCache {
+fn memo() -> &'static Mutex<CellMemo> {
+    CELL_MEMO.get_or_init(|| {
+        Mutex::new(CellMemo {
             map: HashMap::new(),
             stamp: 0,
         })
@@ -241,7 +234,7 @@ fn memo_put(cell: CellIndex, ver: u64, idx: &Arc<ObstacleIndex>) {
     let mut c = memo().lock().unwrap_or_else(|e| e.into_inner());
     c.stamp += 1;
     let stamp = c.stamp;
-    if c.map.len() >= CELL_CACHE_CAP {
+    if c.map.len() >= CELL_MEMO_CAP {
         if let Some((&evict, _)) = c.map.iter().min_by_key(|(_, (_, t))| *t) {
             c.map.remove(&evict);
         }
@@ -251,32 +244,35 @@ fn memo_put(cell: CellIndex, ver: u64, idx: &Arc<ObstacleIndex>) {
 
 /// Assemble the query's [`ObstacleSet`], or fail when vector coverage cannot
 /// be proved complete.
-pub fn load_obstacle_set(
-    h3r4_dir: &Path,
-    data_dir: &Path,
-    lat: f64,
-    lon: f64,
-) -> Result<ObstacleSet, String> {
+pub fn load_obstacle_set(h3r4_dir: &Path, lat: f64, lon: f64) -> Result<ObstacleSet, String> {
     let cell = LatLng::new(lat, lon)
         .map_err(|e| format!("structure_store: {lat},{lon} is not a point on earth: {e}"))?
         .to_cell(Resolution::Four);
-    let mut indexes = Vec::new();
-    for c in cell.grid_disk::<Vec<_>>(1) {
-        let located = locate_cell_structures(h3r4_dir, c).map_err(|e| {
-            format!(
-                "structure_store: {e} — buildings are vector-only, so this query cannot be answered"
-            )
-        })?;
-        let Some(structures_arrow) = located else {
+    // The ring's cells load in parallel — a cold metro click derives up to
+    // seven grids (Paris ring: 2.1 s in sequence, 2026-09-07) — in ring order:
+    // the set's order decides the merge's arc order and so its last bits.
+    let ring = cell.grid_disk::<Vec<_>>(1);
+    let indexes: Vec<Arc<ObstacleIndex>> = ring
+        .par_iter()
+        .map(|&c| -> Result<Option<Arc<ObstacleIndex>>, String> {
+            let located = locate_cell_structures(h3r4_dir, c).map_err(|e| {
+                format!(
+                    "structure_store: {e} — buildings are vector-only, so this query cannot be answered"
+                )
+            })?;
             // Outside the prepared world: no cell directory at all, so it holds
             // no structures for the same reason it holds no roads.
-            continue;
-        };
-        match cell_index(c, &structures_arrow, data_dir) {
-            Ok(idx) => indexes.push(idx),
-            Err(e) => return Err(format!("structure_store: {e}")),
-        }
-    }
+            let Some(structures_arrow) = located else {
+                return Ok(None);
+            };
+            cell_index(c, &structures_arrow)
+                .map(Some)
+                .map_err(|e| format!("structure_store: {e}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect();
     // Zero edges is a legitimate answer: a 0-row table is the finished sweep
     // saying there is nothing here. A file that exists HAS been asked and HAS
     // answered; treating its emptiness as a fault would take whole countries
@@ -395,89 +391,82 @@ pub fn point_inside_footprint(
 }
 
 /// One cell's index, from the nearest source that still holds it: the process
-/// memo, then the on-disk index cache, then a rebuild from the cell's Arrow
-/// table (which is also written back). Build errors are not cached; successful
-/// builds are immutable and shared.
+/// memo, then the edge file beside the cell's table, then a parse of the table
+/// itself — kept in the memo, never written to disk by a web server. Build
+/// errors are not memoised; successful builds are immutable and shared.
 ///
-/// The inputs are fingerprinted BEFORE either cache is consulted: both are
-/// keyed on that fingerprint, so a hit is only ever the index this process
+/// The inputs are fingerprinted BEFORE the memo or the file is consulted: both
+/// are keyed on that fingerprint, so a hit is only ever the index this process
 /// would have built from these very files. A path resolution and a `stat` per
 /// cell per query — three orders below the rebuild they guard, and the price
-/// of a cache that answers the question it was asked.
-fn cell_index(
-    cell: CellIndex,
-    structures_arrow: &Path,
-    data_dir: &Path,
-) -> Result<Arc<ObstacleIndex>, String> {
+/// of a memo that answers the question it was asked.
+fn cell_index(cell: CellIndex, structures_arrow: &Path) -> Result<Arc<ObstacleIndex>, String> {
     let ver = cell_data_ver(cell, structures_arrow);
     let t0 = std::time::Instant::now();
     if let Some(ver) = ver {
         if let Some(idx) = memo_get(cell, ver) {
             return Ok(idx);
         }
-        if let Some(root) = crate::index_cache::index_cache_root(data_dir) {
-            let path = cache_file_path(&root, cell);
-            if let Some(idx) = load_cached_index(&path, ver) {
-                // LRU by USE, not by write: without this the city visited every
-                // day is evicted before one indexed once and never opened again.
-                // The touch lives HERE, not in the loader: the warm sweep opens
-                // every file to check it, and touching there would stamp the
-                // whole world with one mtime and flatten the order the eviction
-                // reads.
-                let now = std::time::SystemTime::now();
-                let _ = std::fs::File::open(&path)
-                    .and_then(|f| f.set_times(std::fs::FileTimes::new().set_modified(now)));
-                let idx = Arc::new(idx);
-                log_cell_load(cell, "mapped", idx.edge_count(), t0);
-                memo_put(cell, ver, &idx);
-                return Ok(idx);
-            }
+        if let Some(idx) = load_edge_file(&index_file_path(structures_arrow), ver) {
+            let idx = Arc::new(idx);
+            log_cell_load(cell, "mapped", idx.edge_count(), t0);
+            memo_put(cell, ver, &idx);
+            return Ok(idx);
         }
     }
 
     let built = Arc::new(build_cell_index(cell, structures_arrow)?);
-    // No fingerprint ⇒ no memo and no file. An index whose inputs could not be
-    // pinned is used for THIS query and forgotten.
+    // No fingerprint ⇒ no memo. An index whose inputs could not be pinned is
+    // used for THIS query and forgotten.
     if let Some(ver) = ver {
-        if let Some(root) = crate::index_cache::index_cache_root(data_dir) {
-            if let Err(e) = store_cached_index(&root, cell, &built, ver) {
-                eprintln!("structure_store: {e}");
-            }
-        }
         memo_put(cell, ver, &built);
     }
     log_cell_load(cell, "built", built.edge_count(), t0);
     Ok(built)
 }
 
-/// Pre-build one cell's index into the disk cache — the warm sweep's unit of
-/// work (`obstacle-index-warm`), deliberately outside the process memo so a
-/// world sweep's RSS stays flat. `Ok(true)` when it built and stored,
-/// `Ok(false)` when the cache already holds the current index or the cell
-/// lies outside the prepared world.
-pub fn warm_cell_index(h3r4_dir: &Path, data_dir: &Path, cell: CellIndex) -> Result<bool, String> {
+/// Build one cell's index beside its source — the warm sweep's unit of work
+/// (`obstacle-index-warm`), deliberately outside the process memo so a world
+/// sweep's RSS stays flat. `Ok(true)` when it built and wrote, `Ok(false)`
+/// when the file beside the source is already current or the cell lies
+/// outside the prepared world.
+pub fn warm_cell_index(h3r4_dir: &Path, cell: CellIndex) -> Result<bool, String> {
     let Some(structures_arrow) = locate_cell_structures(h3r4_dir, cell)? else {
         return Ok(false);
     };
-    let root = crate::index_cache::index_cache_root(data_dir)
-        .ok_or("the index cache is disabled (QM_OBSTACLE_INDEX_CACHE=0)")?;
     let ver = cell_data_ver(cell, &structures_arrow).ok_or_else(|| {
         format!(
             "{}: inputs cannot be fingerprinted",
             structures_arrow.display()
         )
     })?;
-    if load_cached_index(&cache_file_path(&root, cell), ver).is_some() {
+    let path = index_file_path(&structures_arrow);
+    if index_file_is_current(&path, ver) {
         return Ok(false);
     }
     let built = build_cell_index(cell, &structures_arrow)?;
-    store_cached_index(&root, cell, &built, ver)?;
+    store_edge_file(&path, &built, ver)?;
     Ok(true)
+}
+
+/// The sweep's skip test: the loader's header judgement on one small read,
+/// without mapping the file or deriving its grid.
+fn index_file_is_current(path: &Path, data_ver: u64) -> bool {
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let Ok(len) = file.metadata().map(|m| m.len() as usize) else {
+        return false;
+    };
+    let mut header = [0u8; HEADER_BYTES];
+    file.read_exact(&mut header).is_ok()
+        && ObstacleIndex::file_is_current(&header, len, EDGE_FILE_CODE_VER, data_ver)
 }
 
 /// Per-cell provenance under `POPUP_TIMING=1` — the same lever
 /// `query_noise_impl` uses for its stage timings. `mapped` vs `built` is the
-/// entire difference this cache makes, so it belongs in one log line instead of
+/// entire difference the edge file makes, so it belongs in one log line instead of
 /// being inferred from a wall clock that also carries the Arrow hex load.
 fn log_cell_load(cell: CellIndex, how: &str, edges: usize, t0: std::time::Instant) {
     if std::env::var("POPUP_TIMING").as_deref() == Ok("1") {
@@ -499,7 +488,7 @@ fn log_cell_load(cell: CellIndex, how: &str, edges: usize, t0: std::time::Instan
 /// cap against, so an empty lookup is the right answer — a correction layer
 /// that cannot be applied is not an error. A parse failure of the in-memory
 /// bytes IS an error: swallowing it would cap NOTHING and [`cell_index`] would
-/// write that uncapped index to disk AND to the memo under the NORMAL
+/// memoise that uncapped index (and the sweep write it to disk) under the NORMAL
 /// fingerprint, so every later query reports garages at 8 m instead of 3 m
 /// until the file's mtime happens to move (2026-08-08 review; the tile
 /// painter's twin has always failed loud here, and popup ≠ tiles at every capped
@@ -563,11 +552,11 @@ fn low_profile_from_structures(bytes: &[u8], label: &Path) -> Result<LowProfileL
 }
 
 /// Build one cell's index from its structure table. The index origin is the
-/// CELL CENTRE (not the query point) so the cache entry is query-independent;
+/// CELL CENTRE (not the query point) so the memo entry is query-independent;
 /// crossings project the ray per call, so mixed origins across a set are fine.
 ///
 /// `structures_arrow` is the path the caller fingerprinted, not a fresh lookup:
-/// the same file must decide the cache identity AND the obstacle ordinals.
+/// the same file must decide the index identity AND the obstacle ordinals.
 /// Ids are dense in file order, one per geometry-carrying row, buildings and
 /// walls sharing the one counter.
 fn build_cell_index(cell: CellIndex, structures_arrow: &Path) -> Result<ObstacleIndex, String> {
@@ -834,51 +823,6 @@ mod tests {
     use crate::structure_test_fixture::{square_polygon_wkb, wall_linestring_wkb, StructureRow};
     use tempfile::TempDir;
 
-    /// Environment variables are PROCESS-global and `cargo test` runs tests in
-    /// parallel threads, so two tests setting `QM_OBSTACLE_INDEX_DIR` read each
-    /// other's value. Every test below that touches the environment takes this
-    /// lock and restores what it found, and every one of them points the index
-    /// cache at its OWN temp dir — the suite's answer must not depend on its
-    /// order (2026-08-05: it did, in both directions).
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Holds [`ENV_LOCK`] and the previous values of the vars it pinned.
-    struct EnvGuard {
-        _lock: std::sync::MutexGuard<'static, ()>,
-        saved: Vec<(&'static str, Option<String>)>,
-    }
-
-    impl EnvGuard {
-        /// Pin `vars` (`None` = unset) for the rest of the test body.
-        fn set(vars: &[(&'static str, Option<&str>)]) -> Self {
-            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            let mut saved = Vec::new();
-            for (k, v) in vars {
-                saved.push((*k, std::env::var(k).ok()));
-                match v {
-                    Some(v) => std::env::set_var(k, v),
-                    None => std::env::remove_var(k),
-                }
-            }
-            EnvGuard { _lock: lock, saved }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (k, v) in &self.saved {
-                match v {
-                    Some(v) => std::env::set_var(k, v),
-                    None => std::env::remove_var(k),
-                }
-            }
-        }
-    }
-
-    fn path_str(dir: &TempDir) -> String {
-        dir.path().to_str().expect("utf-8 temp path").to_string()
-    }
-
     /// The newest `…/data/prepared/<year>/h3r4` on this box, or `None` on a
     /// hermetic checkout. The year is the product's own pin
     /// (`scripts/dataset-year.json`), so it is read off the disk rather than
@@ -900,19 +844,14 @@ mod tests {
 
     /// Runs only where the world obstacle store exists (dev boxes with the
     /// prepared tree); hermetic CI skips silently. Asserts the real scale and
-    /// that the second load is a cache hit, not a rebuild.
+    /// that the second load is a memo hit, not a rebuild.
     #[test]
-    fn loads_praha_set_and_caches_cells() {
+    fn loads_praha_set_and_memoises_cells() {
         let Some(h3r4) = live_h3r4_dir() else {
             return;
         };
-        let data_dir = Path::new("../../data/prepared");
-        // Its own index dir: this test must exercise the COLD build, and it
-        // must not read (or evict) the box's production cache.
-        let index_dir = TempDir::new().expect("temp index dir");
-        let _env = EnvGuard::set(&[("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir)))]);
         let t0 = std::time::Instant::now();
-        let Ok(set) = load_obstacle_set(&h3r4, data_dir, 50.08, 14.43) else {
+        let Ok(set) = load_obstacle_set(&h3r4, 50.08, 14.43) else {
             return; // this box's ring is not materialized yet — skip
         };
         let cold = t0.elapsed();
@@ -930,20 +869,20 @@ mod tests {
         assert!(out.windows(2).all(|w| w[0].t <= w[1].t));
 
         let t1 = std::time::Instant::now();
-        let set2 = load_obstacle_set(&h3r4, data_dir, 50.08, 14.43).expect("cached reload");
+        let set2 = load_obstacle_set(&h3r4, 50.08, 14.43).expect("memo reload");
         let warm = t1.elapsed();
         assert_eq!(set2.edge_count(), set.edge_count());
         assert!(
             warm < cold / 5,
-            "second load must be a cache hit: cold {cold:?}, warm {warm:?}"
+            "second load must be a memo hit: cold {cold:?}, warm {warm:?}"
         );
     }
 
     /// The identity is the file, not its spelling: two roots that are one
     /// directory through a symlink fingerprint a cell identically — the
-    /// prod/dev cache war of 2026-09-06 was two spellings of one file.
+    /// prod/dev index war of 2026-09-06 was two spellings of one file.
     #[test]
-    fn cache_identity_ignores_the_symlink_a_checkout_reaches_the_tree_through() {
+    fn identity_ignores_the_symlink_a_checkout_reaches_the_tree_through() {
         let tmp = TempDir::new().expect("temp dir");
         let real = tmp.path().join("real");
         let h3r4 = real.join("h3r4");
@@ -963,24 +902,22 @@ mod tests {
         assert!(cell_data_ver(cell, &direct).is_some());
     }
 
-    /// The warm sweep's contract: build and store once, then report the cache
-    /// hit; a cell the extract never produced is skipped, not failed.
+    /// The warm sweep's contract: build and write beside the source once, then
+    /// report the file current; a cell the extract never produced is skipped,
+    /// not failed.
     #[test]
-    fn warm_cell_index_builds_once_then_hits_the_cache() {
+    fn warm_cell_index_builds_once_then_finds_its_file() {
         let tmp = TempDir::new().expect("temp dir");
         let h3r4 = tmp.path().join("prepared").join("2026").join("h3r4");
-        let data_dir = tmp.path().join("prepared");
-        let index_dir = TempDir::new().expect("temp index dir");
-        let _env = EnvGuard::set(&[("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir)))]);
         let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
-        write_structure_table(&h3r4, cell, &[(50.08, 14.43)]);
+        let table = write_structure_table(&h3r4, cell, &[(50.08, 14.43)]);
 
-        assert_eq!(warm_cell_index(&h3r4, &data_dir, cell), Ok(true));
-        assert!(cache_file_path(index_dir.path(), cell).is_file());
-        assert_eq!(warm_cell_index(&h3r4, &data_dir, cell), Ok(false));
+        assert_eq!(warm_cell_index(&h3r4, cell), Ok(true));
+        assert!(index_file_path(&table).is_file());
+        assert_eq!(warm_cell_index(&h3r4, cell), Ok(false));
 
         let unprepared = LatLng::new(-20.0, 30.0).unwrap().to_cell(Resolution::Four);
-        assert_eq!(warm_cell_index(&h3r4, &data_dir, unprepared), Ok(false));
+        assert_eq!(warm_cell_index(&h3r4, unprepared), Ok(false));
     }
 
     /// Fix 4 popup half, on synthetic footprints so it runs everywhere: a
@@ -1143,25 +1080,24 @@ mod tests {
         crate::structure_test_fixture::write_structure_table(h3r4_dir, cell, &rows)
     }
 
-    /// The disk cache must give back exactly the index that was built, and must
+    /// The edge file must give back exactly the index that was built, and must
     /// refuse it the moment its inputs move. Exercised on the real functions
     /// the query path calls — the process LRU would hide the disk hop if this
     /// went through `load_obstacle_set`.
     #[test]
-    fn disk_cache_round_trips_and_follows_its_inputs() {
+    fn edge_file_round_trips_and_follows_its_inputs() {
         let tmp = TempDir::new().expect("temp dir");
         let tmp = tmp.path();
         let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
         let table = write_structure_table(tmp, cell, &[(50.08, 14.43)]);
-        let root = tmp.join("index-cache");
 
         let data_ver = cell_data_ver(cell, &table).expect("input fingerprint");
         let built = build_cell_index(cell, &table).unwrap();
-        store_cached_index(&root, cell, &built, data_ver).expect("store index");
+        let path = index_file_path(&table);
+        store_edge_file(&path, &built, data_ver).expect("store index");
 
-        let path = cache_file_path(&root, cell);
-        assert!(path.is_file(), "the cache file must exist at {path:?}");
-        let mapped = load_cached_index(&path, data_ver).expect("maps back");
+        assert!(path.is_file(), "the index file must exist at {path:?}");
+        let mapped = load_edge_file(&path, data_ver).expect("maps back");
         assert_eq!(mapped.edge_count(), built.edge_count());
         let ray = |idx: &ObstacleIndex| {
             let mut out = Vec::new();
@@ -1177,8 +1113,8 @@ mod tests {
             assert_eq!(x.id, y.id);
         }
 
-        // A table that moved under us must not be served from cache — and the
-        // refused file is dropped so it cannot sit in the budget forever.
+        // A table that moved under us must not be served from the file — and the
+        // refused file is left in place: a web server never mutates the prepared tree.
         let touched = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
         std::fs::File::options()
             .write(true)
@@ -1191,8 +1127,11 @@ mod tests {
             moved, data_ver,
             "an input mtime must rotate the fingerprint"
         );
-        assert!(load_cached_index(&path, moved).is_none(), "stale file used");
-        assert!(!path.exists(), "a refused cache file must be removed");
+        assert!(load_edge_file(&path, moved).is_none(), "stale file used");
+        assert!(
+            path.exists(),
+            "a refused file is the sweep's to replace, not the reader's"
+        );
 
         // A second footprint is a different table, hence a different index.
         write_structure_table(tmp, cell, &[(50.08, 14.43), (50.081, 14.431)]);
@@ -1202,12 +1141,12 @@ mod tests {
     /// EVERY input that shapes a cell's index must move its identity, and a
     /// file written under the old one must then be refused.
     ///
-    /// This is the regression guard for 2026-08-05, when a cache served the
+    /// This is the regression guard for 2026-08-05, when a memo served the
     /// answer to a different question. It is written as an ENUMERATION rather
     /// than one case on purpose: the defect class is "the key forgot
     /// something", so the test walks the closed list [`cell_data_ver`] actually
     /// folds — cell, structure TREE, the table's LENGTH and mtime, and
-    /// [`CACHE_CODE_VER`]. The low-profile cap reads the same `structures.arrow`,
+    /// [`EDGE_FILE_CODE_VER`]. The low-profile cap reads the same `structures.arrow`,
     /// so it needs no fold of its own.
     /// Adding an input to `build_cell_index` without a case here leaves the same
     /// hole, so the list is the review surface.
@@ -1216,36 +1155,35 @@ mod tests {
     /// same length while forcing the same mtime keeps the identity — that is the
     /// `world-stamps.py` staleness contract (mtime is the change signal), not an
     /// oversight, and hashing hundreds of MB per cell per query to close it would
-    /// cost more than the rebuild the cache exists to avoid.
+    /// cost more than the rebuild the edge file exists to avoid.
     #[test]
-    fn cache_identity_moves_with_everything_that_shapes_the_index() {
+    fn identity_moves_with_everything_that_shapes_the_index() {
         let tmp = TempDir::new().expect("temp dir");
         let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
         let other_cell = LatLng::new(-23.5505, -46.6333)
             .unwrap()
             .to_cell(Resolution::Four);
         let table = write_structure_table(tmp.path(), cell, &[(50.08, 14.43)]);
-        let root = tmp.path().join("index-cache");
+
         let base = cell_data_ver(cell, &table).expect("input fingerprint");
 
         // Positive control FIRST: without it every `is_none()` below would
         // also pass on a key that is simply always wrong.
         let built = build_cell_index(cell, &table).unwrap();
-        let path = cache_file_path(&root, cell);
-        store_cached_index(&root, cell, &built, base).expect("store index");
+        let path = index_file_path(&table);
+        store_edge_file(&path, &built, base).expect("store index");
         assert!(
-            load_cached_index(&path, base).is_some(),
+            load_edge_file(&path, base).is_some(),
             "the unchanged identity must still map its own file"
         );
 
         // Each mutation must rotate the identity AND make the stored file
-        // unusable. `load_cached_index` deletes what it refuses, so the file is
-        // re-written before every case.
+        // unusable.
         let refuses = |ver: u64, what: &str| {
             assert_ne!(ver, base, "{what} must rotate the index identity");
-            store_cached_index(&root, cell, &built, base).expect("store index");
+            store_edge_file(&path, &built, base).expect("store index");
             assert!(
-                load_cached_index(&path, ver).is_none(),
+                load_edge_file(&path, ver).is_none(),
                 "{what}: a file written under the old identity was served"
             );
         };
@@ -1300,16 +1238,16 @@ mod tests {
         //    which is what carries the low-profile rule now that it lives in
         //    `noise_compute::low_profile`.
         assert_eq!(
-            CACHE_CODE_VER,
+            EDGE_FILE_CODE_VER,
             fnv1a64(BUILDER_CODE_VER, include_bytes!("structure_store.rs"))
         );
         assert_ne!(
-            CACHE_CODE_VER, BUILDER_CODE_VER,
+            EDGE_FILE_CODE_VER, BUILDER_CODE_VER,
             "the loader's own source must be in the version, not just the builder's"
         );
     }
 
-    /// The process memo in front of the disk cache must key on the same
+    /// The process memo in front of the edge file must key on the same
     /// identity the file does — 2026-08-05's live defect, where it keyed on the
     /// CELL alone and handed the second query the first query's index no matter
     /// which obstacle tree it asked about.
@@ -1319,8 +1257,6 @@ mod tests {
     /// its fingerprint and would have refused these.
     #[test]
     fn process_memo_never_answers_for_another_obstacle_tree() {
-        let index_dir = TempDir::new().expect("temp index dir");
-        let _env = EnvGuard::set(&[("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir)))]);
         let one = TempDir::new().expect("temp dir");
         let two = TempDir::new().expect("temp dir");
         let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
@@ -1329,9 +1265,8 @@ mod tests {
         let table_a = write_structure_table(one.path(), cell, &[(50.08, 14.43)]);
         let table_b = write_structure_table(two.path(), cell, &[(50.08, 14.43), (50.081, 14.431)]);
 
-        let data_dir = one.path().join("prepared");
         let edges = |table: &Path| {
-            cell_index(cell, table, &data_dir)
+            cell_index(cell, table)
                 .expect("test table builds")
                 .edge_count()
         };
@@ -1358,10 +1293,7 @@ mod tests {
     #[test]
     fn empty_table_answers_nothing_stands_here_and_a_missing_one_is_an_error() {
         let tmp = TempDir::new().expect("temp dir");
-        let index_dir = TempDir::new().expect("temp index dir");
-        let _env = EnvGuard::set(&[("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir)))]);
         let h3r4 = tmp.path().join("h3r4");
-        let data_dir = tmp.path().join("prepared");
         let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
         let ring: Vec<CellIndex> = cell.grid_disk(1);
 
@@ -1369,7 +1301,7 @@ mod tests {
         for &neighbour in ring.iter().filter(|&&c| c != cell) {
             write_structure_table(&h3r4, neighbour, &[]);
         }
-        let set = load_obstacle_set(&h3r4, &data_dir, 50.08, 14.43)
+        let set = load_obstacle_set(&h3r4, 50.08, 14.43)
             .expect("empty neighbours are an answer, not a gap");
         assert_eq!(set.indexes.len(), ring.len());
         assert_eq!(set.edge_count(), 4, "only the query cell holds a footprint");
@@ -1378,14 +1310,14 @@ mod tests {
         let victim = *ring.iter().find(|&&c| c != cell).unwrap();
         std::fs::remove_file(h3r4.join(victim.to_string()).join("structures.arrow")).unwrap();
         assert!(
-            load_obstacle_set(&h3r4, &data_dir, 50.08, 14.43).is_err(),
+            load_obstacle_set(&h3r4, 50.08, 14.43).is_err(),
             "a ring cell without its structure table is missing data, not empty"
         );
 
         // A cell the extract never produced has no directory: outside the
         // world, contributing nothing, exactly as it contributes no roads.
         std::fs::remove_dir_all(h3r4.join(victim.to_string())).unwrap();
-        let partial = load_obstacle_set(&h3r4, &data_dir, 50.08, 14.43)
+        let partial = load_obstacle_set(&h3r4, 50.08, 14.43)
             .expect("a cell outside the prepared world is not an error");
         assert_eq!(partial.indexes.len(), ring.len() - 1);
         assert_eq!(partial.edge_count(), 4);
@@ -1394,7 +1326,7 @@ mod tests {
         // no answer to give.
         std::fs::remove_file(h3r4.join(cell.to_string()).join("structures.arrow")).unwrap();
         assert!(
-            load_obstacle_set(&h3r4, &data_dir, 50.08, 14.43).is_err(),
+            load_obstacle_set(&h3r4, 50.08, 14.43).is_err(),
             "the query cell's own table cannot be optional"
         );
     }
@@ -1406,10 +1338,7 @@ mod tests {
     #[test]
     fn build_applies_low_profile_cap_from_the_same_table() {
         let tmp = TempDir::new().expect("temp dir");
-        let index_dir = TempDir::new().expect("temp index dir");
-        let _env = EnvGuard::set(&[("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir)))]);
         let h3r4 = tmp.path().join("h3r4");
-        let data_dir = tmp.path().join("prepared");
         let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
         let square_area = noise_compute::wkb::outer_ring_area_m2(&square_polygon_wkb(50.08, 14.43));
 
@@ -1451,7 +1380,7 @@ mod tests {
             cell,
             &[garage, defaulted, mapped],
         );
-        let set = load_obstacle_set(&h3r4, &data_dir, 50.08, 14.43).expect("set loads");
+        let set = load_obstacle_set(&h3r4, 50.08, 14.43).expect("set loads");
 
         let capped = point_inside_obstacle(&set, 50.0801, 14.43015).expect("inside the twin pair");
         assert!(
@@ -1471,10 +1400,7 @@ mod tests {
     #[test]
     fn walls_index_as_uncapped_barrier_edges() {
         let tmp = TempDir::new().expect("temp dir");
-        let index_dir = TempDir::new().expect("temp index dir");
-        let _env = EnvGuard::set(&[("QM_OBSTACLE_INDEX_DIR", Some(&path_str(&index_dir)))]);
         let h3r4 = tmp.path().join("h3r4");
-        let data_dir = tmp.path().join("prepared");
         let cell = LatLng::new(50.08, 14.43).unwrap().to_cell(Resolution::Four);
 
         let garage = StructureRow {
@@ -1503,7 +1429,7 @@ mod tests {
             ..Default::default()
         };
         crate::structure_test_fixture::write_structure_table(&h3r4, cell, &[garage, wall]);
-        let set = load_obstacle_set(&h3r4, &data_dir, 50.08, 14.43).expect("set loads");
+        let set = load_obstacle_set(&h3r4, 50.08, 14.43).expect("set loads");
 
         let mut out = Vec::new();
         set.crossings(50.0801, 14.4295, 50.0801, 14.4310, &mut out);

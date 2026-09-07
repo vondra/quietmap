@@ -12,7 +12,6 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 pub mod aircraft_v6;
 pub mod geo;
 pub mod hex_store;
-pub mod index_cache;
 pub mod popup;
 pub mod query;
 #[cfg(feature = "node")]
@@ -48,10 +47,6 @@ static STORE: std::sync::LazyLock<RwLock<HashMap<String, std::sync::Arc<HexData>
 
 #[cfg(feature = "node")]
 static RASTERS: std::sync::OnceLock<raster_reader::RealRasters> = std::sync::OnceLock::new();
-/// Data root (`…/data/prepared`) captured at `source_init` — the vector
-/// obstacle loader keeps its on-disk index cache under it (geodata-v2 1.4).
-#[cfg(feature = "node")]
-static DATA_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 /// The live `…/prepared/{year}/h3r4` dir — the structure root: every prepared
 /// cell carries its own `structures.arrow` beside its other arrows.
 #[cfg(feature = "node")]
@@ -158,7 +153,6 @@ pub fn source_init(h3r4_dir: String) -> napi::Result<String> {
     let rasters = raster_reader::RealRasters::new(data_dir);
     let has_dem = rasters.has_data();
     RASTERS.set(rasters).ok();
-    DATA_DIR.set(data_dir.to_path_buf()).ok();
     H3R4_DIR.set(h3r4_path.to_path_buf()).ok();
 
     // NACE codes are baked into industrial.arrow — no global JSON needed
@@ -242,14 +236,10 @@ fn building_type_from_envelope(class: noise_compute::envelope::EnvelopeClass) ->
 #[cfg(feature = "node")]
 #[napi]
 pub fn query_building_at(lat: f64, lng: f64) -> napi::Result<String> {
-    let data_dir = DATA_DIR
-        .get()
-        .map(|p| p.as_path())
-        .unwrap_or_else(|| std::path::Path::new("."));
     // A missing obstacle store is an error, not an empty answer. It used to
     // return {"status":"unavailable"} inside an HTTP 200, which reads to a
     // visitor exactly like "there is no building here".
-    let set = structure_store::load_obstacle_set(h3r4_dir()?, data_dir, lat, lng)
+    let set = structure_store::load_obstacle_set(h3r4_dir()?, lat, lng)
         .map_err(|e| Error::new(Status::GenericFailure, e))?;
     let result = match structure_store::point_inside_footprint(&set, lat, lng) {
         None => serde_json::Value::Null,
@@ -388,20 +378,10 @@ fn compute_point(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<wire
         Some(r) => r,
         None => &stub,
     };
-    let data_dir = DATA_DIR
-        .get()
-        .ok_or_else(|| Error::new(Status::GenericFailure, "source_init was never called"))?;
     let load_ms = t_start.elapsed().as_secs_f64() * 1000.0;
-    let mut result = popup::compute_point(
-        &hex_refs,
-        lat,
-        lng,
-        top_k_per_kind,
-        h3r4_dir()?,
-        data_dir,
-        rasters,
-    )
-    .map_err(|e| Error::new(Status::GenericFailure, e))?;
+    let mut result =
+        popup::compute_point(&hex_refs, lat, lng, top_k_per_kind, h3r4_dir()?, rasters)
+            .map_err(|e| Error::new(Status::GenericFailure, e))?;
     if let Some(t) = result.timings.as_mut() {
         t.load_ms = load_ms;
     }

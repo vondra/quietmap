@@ -334,10 +334,11 @@ impl CellPrune<'_> {
 /// (or per popup query), then run many rays against it. CSR layout: cell →
 /// slice of edge refs.
 ///
-/// The four arrays are [`IndexArray`]s, not `Vec`s: an index built from the
-/// Arrow shards owns its heap, one loaded from the cache
-/// ([`super::obstacle_index_file`]) reads straight out of a mapped file. Both
-/// deref to the same slices, so every query below is written once.
+/// The edge and class tables are [`IndexArray`]s, not `Vec`s: an index parsed
+/// from Arrow owns its heap, one loaded from the cell's edge file
+/// ([`super::obstacle_index_file`]) reads straight out of the mapping. Both
+/// deref to the same slices, so every query below is written once. The grid
+/// arrays are derived from the edges on every construction and always owned.
 pub struct ObstacleIndex {
     pub(super) origin_lat: f64,
     pub(super) origin_lon: f64,
@@ -349,18 +350,18 @@ pub struct ObstacleIndex {
     pub(super) min_y: f64,
     pub(super) cols: usize,
     pub(super) rows: usize,
-    pub(super) cell_starts: IndexArray<u32>,
-    pub(super) edge_refs: IndexArray<u32>,
+    pub(super) cell_starts: Vec<u32>,
+    pub(super) edge_refs: Vec<u32>,
     pub(super) edges: IndexArray<ObstacleEdge>,
     /// Per grid cell: the tallest edge binned into it (0 for empty cells). The
     /// O(1) input to every branch-and-bound prune over this grid — the CUDA
     /// ray walk's exact δ bound (`obstacle_best_candidate`) and the skyline
     /// walk's grazing prune ([`ObstacleIndex::skyline_arcs_within`]).
-    pub(super) cell_max_h: IndexArray<f32>,
+    pub(super) cell_max_h: Vec<f32>,
     /// Per-footprint (id-indexed) min local x over all its rings — the
     /// containment walk skips footprints whose bbox lies strictly east of the
     /// probe. Requires DENSE ids (the loaders' sequential ordinals).
-    pub(super) footprint_xmin: IndexArray<f32>,
+    pub(super) footprint_xmin: Vec<f32>,
     /// Overture envelope class, indexed by the same dense footprint ordinal.
     pub(super) footprint_class: IndexArray<u8>,
     /// Max per-footprint bbox width (m) — bounds the containment walk: a
@@ -453,6 +454,7 @@ impl ObstacleIndex {
             origin_lon,
             m_per_deg_lon: m_per_deg_lon(origin_lat.to_radians()),
             edges: Vec::new(),
+            max_id: None,
             footprint_class: Vec::new(),
         }
     }
@@ -1645,6 +1647,8 @@ pub struct Builder {
     origin_lon: f64,
     m_per_deg_lon: f64,
     edges: Vec<ObstacleEdge>,
+    /// Largest id pushed so far — the class table is sized to it at `build`.
+    max_id: Option<u32>,
     pub(super) footprint_class: Vec<u8>,
 }
 
@@ -1687,7 +1691,7 @@ impl Builder {
             }
             let (x0, y0) = self.to_local(lat0, lon0);
             let (x1, y1) = self.to_local(lat1, lon1);
-            self.edges.push(ObstacleEdge {
+            self.push_edge(ObstacleEdge {
                 x0: x0 as f32,
                 y0: y0 as f32,
                 x1: x1 as f32,
@@ -1737,7 +1741,7 @@ impl Builder {
         for w in pts.windows(2) {
             let (x0, y0) = self.to_local(w[0].0, w[0].1);
             let (x1, y1) = self.to_local(w[1].0, w[1].1);
-            self.edges.push(ObstacleEdge {
+            self.push_edge(ObstacleEdge {
                 x0: x0 as f32,
                 y0: y0 as f32,
                 x1: x1 as f32,
@@ -1749,75 +1753,162 @@ impl Builder {
         }
     }
 
+    #[inline]
+    fn push_edge(&mut self, e: ObstacleEdge) {
+        self.max_id = Some(self.max_id.map_or(e.id, |m| m.max(e.id)));
+        self.edges.push(e);
+    }
+
     /// Freeze into the CSR grid index. Empty builder yields an index whose
     /// `crossings` is a no-op (the rural fast path).
     pub fn build(self) -> ObstacleIndex {
-        let bounds = self.edge_bounds();
-        let (min_x, min_y, max_x, max_y) = bounds;
-        let cell_m = obstacle_grid_cell_m(max_x - min_x, max_y - min_y, self.edges.len());
-        self.build_at_pitch_m(bounds, cell_m)
+        let (origin_lat, origin_lon, m_per_deg_lon, edges, classes) = self.into_tables();
+        ObstacleIndex::from_edges(origin_lat, origin_lon, m_per_deg_lon, edges, classes)
+            .expect("the builder sized the class table to its id space")
     }
 
-    /// The edges' bounding box, `(min_x, min_y, max_x, max_y)`, in the index's local
-    /// metric frame. Bounding the stock is one pass over every edge, so it is done once
-    /// and handed to both the pitch and the grid it sizes. An empty builder yields the
-    /// inverted box, which [`obstacle_grid_cell_m`] answers with the pitch floor and
-    /// [`Self::build_at_pitch_m`] never reads.
-    fn edge_bounds(&self) -> (f64, f64, f64, f64) {
-        let (mut min_x, mut min_y) = (f64::MAX, f64::MAX);
-        let (mut max_x, mut max_y) = (f64::MIN, f64::MIN);
-        for e in &self.edges {
-            min_x = min_x.min(e.x0 as f64).min(e.x1 as f64);
-            min_y = min_y.min(e.y0 as f64).min(e.y1 as f64);
-            max_x = max_x.max(e.x0 as f64).max(e.x1 as f64);
-            max_y = max_y.max(e.y0 as f64).max(e.y1 as f64);
+    /// The boundary sweep pins the pitch so its fixtures can sit exactly on
+    /// cell edges; [`Self::build`] derives it from the stock.
+    #[cfg(test)]
+    fn build_at_pitch_m(self, cell_m: f64) -> ObstacleIndex {
+        let (origin_lat, origin_lon, m_per_deg_lon, edges, classes) = self.into_tables();
+        let (bounds, _, max_id) = edge_extent(&edges);
+        ObstacleIndex::from_edges_at_pitch(
+            origin_lat,
+            origin_lon,
+            m_per_deg_lon,
+            edges,
+            classes,
+            bounds,
+            cell_m,
+            max_id,
+        )
+        .expect("the builder sized the class table to its id space")
+    }
+
+    /// The two tables an index is made of, the class table sized to the id
+    /// space — the dense-id contract: the loaders assign sequential ordinals
+    /// (`from_edges_at_pitch` refuses anything else).
+    fn into_tables(mut self) -> (f64, f64, f64, IndexArray<ObstacleEdge>, IndexArray<u8>) {
+        match self.max_id {
+            Some(max_id) => self
+                .footprint_class
+                .resize(max_id as usize + 1, EnvelopeClass::Default as u8),
+            None => self.footprint_class.clear(),
         }
-        (min_x, min_y, max_x, max_y)
+        (
+            self.origin_lat,
+            self.origin_lon,
+            self.m_per_deg_lon,
+            self.edges.into(),
+            self.footprint_class.into(),
+        )
+    }
+}
+
+/// One pass over a stock of edges: its bounding box, the grid pitch read off
+/// that box ([`obstacle_grid_cell_m`]), and the largest id. An empty stock
+/// yields the inverted box, which the pitch answers with its floor and the
+/// grid never reads.
+fn edge_extent(edges: &[ObstacleEdge]) -> ((f64, f64, f64, f64), f64, Option<usize>) {
+    let (mut min_x, mut min_y) = (f64::MAX, f64::MAX);
+    let (mut max_x, mut max_y) = (f64::MIN, f64::MIN);
+    let mut max_id = None;
+    for e in edges {
+        min_x = min_x.min(e.x0 as f64).min(e.x1 as f64);
+        min_y = min_y.min(e.y0 as f64).min(e.y1 as f64);
+        max_x = max_x.max(e.x0 as f64).max(e.x1 as f64);
+        max_y = max_y.max(e.y0 as f64).max(e.y1 as f64);
+        max_id = Some(max_id.map_or(e.id, |m: u32| m.max(e.id)));
+    }
+    let cell_m = obstacle_grid_cell_m(max_x - min_x, max_y - min_y, edges.len());
+    (
+        (min_x, min_y, max_x, max_y),
+        cell_m,
+        max_id.map(|m| m as usize),
+    )
+}
+
+impl ObstacleIndex {
+    /// The index over a finished edge table — the builder's stock just parsed, or a
+    /// cell's edge file mapped from disk. Only the edges and the per-footprint classes
+    /// are ever stored; the CSR grid is derived here on every load: 96 ms for Prague's
+    /// 3.2 M edges, 522 ms for São Paulo's 18.4 M from the mapped file (one thread,
+    /// 2026-09-07), against the 310 GB the world's grids took on disk, 45 % of it
+    /// empty cells.
+    pub(super) fn from_edges(
+        origin_lat: f64,
+        origin_lon: f64,
+        m_per_deg_lon: f64,
+        edges: IndexArray<ObstacleEdge>,
+        footprint_class: IndexArray<u8>,
+    ) -> Result<ObstacleIndex, String> {
+        let (bounds, cell_m, max_id) = edge_extent(&edges);
+        Self::from_edges_at_pitch(
+            origin_lat,
+            origin_lon,
+            m_per_deg_lon,
+            edges,
+            footprint_class,
+            bounds,
+            cell_m,
+            max_id,
+        )
     }
 
-    /// Freeze into the CSR grid at a pitch and a bounding box the caller names —
-    /// [`Self::build`] derives both from the stock, and the boundary sweep pins the pitch
-    /// so its fixtures can sit exactly on cell edges.
-    fn build_at_pitch_m(mut self, bounds: (f64, f64, f64, f64), cell_m: f64) -> ObstacleIndex {
+    #[allow(clippy::too_many_arguments)]
+    fn from_edges_at_pitch(
+        origin_lat: f64,
+        origin_lon: f64,
+        m_per_deg_lon: f64,
+        edges: IndexArray<ObstacleEdge>,
+        footprint_class: IndexArray<u8>,
+        bounds: (f64, f64, f64, f64),
+        cell_m: f64,
+        max_id: Option<usize>,
+    ) -> Result<ObstacleIndex, String> {
         let (min_x, min_y, max_x, max_y) = bounds;
-        if self.edges.is_empty() {
-            return ObstacleIndex {
-                origin_lat: self.origin_lat,
-                origin_lon: self.origin_lon,
-                m_per_deg_lon: self.m_per_deg_lon,
+        let Some(max_id) = max_id else {
+            return Ok(ObstacleIndex {
+                origin_lat,
+                origin_lon,
+                m_per_deg_lon,
                 cell_m,
                 min_x: 0.0,
                 min_y: 0.0,
                 cols: 1,
                 rows: 1,
-                cell_starts: vec![0, 0].into(),
-                edge_refs: Vec::new().into(),
-                edges: Vec::new().into(),
-                cell_max_h: vec![0.0].into(),
-                footprint_xmin: Vec::new().into(),
-                footprint_class: Vec::new().into(),
+                cell_starts: vec![0, 0],
+                edge_refs: Vec::new(),
+                edges,
+                cell_max_h: vec![0.0],
+                footprint_xmin: Vec::new(),
+                footprint_class,
                 max_footprint_w: 0.0,
-            };
-        }
+            });
+        };
         // Per-footprint bboxes for the containment walk (edges carry every
         // ring vertex, so the per-id min/max over edge endpoints IS the
         // union bbox of that id's rings). Dense-id contract: the loaders
         // assign sequential ordinals; each footprint has ≥ 3 edges, so a
-        // sparse id space signals a broken caller, not big data.
-        let max_id = self.edges.iter().map(|e| e.id).max().unwrap() as usize;
-        if self.footprint_class.len() <= max_id {
-            self.footprint_class
-                .resize(max_id + 1, EnvelopeClass::Default as u8);
+        // sparse id space, or a class table of another length, signals a
+        // broken caller or a foreign file, not big data.
+        if max_id >= edges.len().saturating_mul(4) + 1024 {
+            return Err(format!(
+                "obstacle ids must be dense loader ordinals (max id {max_id}, {} edges)",
+                edges.len()
+            ));
         }
-        self.footprint_class.truncate(max_id + 1);
-        assert!(
-            max_id < self.edges.len().saturating_mul(4) + 1024,
-            "obstacle ids must be dense loader ordinals (max id {max_id}, {} edges)",
-            self.edges.len()
-        );
+        if footprint_class.len() != max_id + 1 {
+            return Err(format!(
+                "{} footprint classes for an id space of {}",
+                footprint_class.len(),
+                max_id + 1
+            ));
+        }
         let mut footprint_xmin = vec![f32::INFINITY; max_id + 1];
         let mut footprint_xmax = vec![f32::NEG_INFINITY; max_id + 1];
-        for e in &self.edges {
+        for e in edges.iter() {
             let i = e.id as usize;
             footprint_xmin[i] = footprint_xmin[i].min(e.x0).min(e.x1);
             footprint_xmax[i] = footprint_xmax[i].max(e.x0).max(e.x1);
@@ -1830,55 +1921,60 @@ impl Builder {
             + cell_m; // one-cell slack so the owner cell of the last crossing is walked
         let cols = (((max_x - min_x) / cell_m).floor() as usize + 1).max(1);
         let rows = (((max_y - min_y) / cell_m).floor() as usize + 1).max(1);
+        let cells = cols * rows;
 
         // Two-pass CSR fill: count per-cell refs, prefix-sum, then place.
         // Edges are binned by SUPERCOVER (the cells the segment actually
         // passes through, Amanatides & Woo — same traversal the query ray
         // uses), not by bbox: a 10 km diagonal barrier touches ~313 cells,
         // its bbox ~25k (gg review 2026-07-28).
-        let mut counts = vec![0u32; cols * rows + 1];
-        for e in &self.edges {
+        let mut cell_starts = vec![0u32; cells + 1];
+        for e in edges.iter() {
             for_each_segment_cell(e, min_x, min_y, cell_m, cols, rows, |c| {
-                counts[c + 1] += 1;
+                cell_starts[c + 1] += 1;
             });
         }
-        for i in 1..counts.len() {
-            counts[i] += counts[i - 1];
+        for i in 1..=cells {
+            cell_starts[i] += cell_starts[i - 1];
         }
-        let total = *counts.last().unwrap() as usize;
-        assert!(
-            u32::try_from(total).is_ok() && total < u32::MAX as usize,
-            "obstacle CSR overflow: {total} refs"
-        );
-        let cell_starts = counts.clone();
-        let mut cursor: Vec<u32> = cell_starts[..cols * rows].to_vec();
+        let total = cell_starts[cells] as usize;
+        if total >= u32::MAX as usize {
+            return Err(format!("obstacle CSR overflow: {total} refs"));
+        }
+        // The starts double as the placement cursors: after the fill each
+        // `cell_starts[c]` has advanced to the start of cell `c + 1`, so one
+        // shift right restores the starts without a second `cells`-sized array.
         let mut edge_refs = vec![0u32; total];
-        let mut cell_max_h = vec![0.0f32; cols * rows];
-        for (i, e) in self.edges.iter().enumerate() {
+        let mut cell_max_h = vec![0.0f32; cells];
+        for (i, e) in edges.iter().enumerate() {
             for_each_segment_cell(e, min_x, min_y, cell_m, cols, rows, |c| {
-                edge_refs[cursor[c] as usize] = i as u32;
-                cursor[c] += 1;
+                edge_refs[cell_starts[c] as usize] = i as u32;
+                cell_starts[c] += 1;
                 cell_max_h[c] = cell_max_h[c].max(e.height_m);
             });
         }
+        for c in (1..=cells).rev() {
+            cell_starts[c] = cell_starts[c - 1];
+        }
+        cell_starts[0] = 0;
 
-        ObstacleIndex {
-            origin_lat: self.origin_lat,
-            origin_lon: self.origin_lon,
-            m_per_deg_lon: self.m_per_deg_lon,
+        Ok(ObstacleIndex {
+            origin_lat,
+            origin_lon,
+            m_per_deg_lon,
             cell_m,
             min_x,
             min_y,
             cols,
             rows,
-            cell_starts: cell_starts.into(),
-            edge_refs: edge_refs.into(),
-            edges: self.edges.into(),
-            cell_max_h: cell_max_h.into(),
-            footprint_xmin: footprint_xmin.into(),
-            footprint_class: self.footprint_class.into(),
+            cell_starts,
+            edge_refs,
+            edges,
+            cell_max_h,
+            footprint_xmin,
+            footprint_class,
             max_footprint_w,
-        }
+        })
     }
 }
 
@@ -2441,8 +2537,7 @@ mod tests {
                 };
                 builder.add_ring(&square(cx, cy, half), 10.0, ObstacleKind::Building, id);
             }
-            let bounds = builder.edge_bounds();
-            let idx = builder.build_at_pitch_m(bounds, PITCH_M);
+            let idx = builder.build_at_pitch_m(PITCH_M);
             for k in 0..120 {
                 let off = -500.0 + k as f64 * 8.4;
                 for &(from, to) in &[

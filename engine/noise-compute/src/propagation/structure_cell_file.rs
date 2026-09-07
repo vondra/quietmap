@@ -27,6 +27,9 @@ use h3o::CellIndex;
 
 /// The one structure file a prepared cell carries.
 pub const CELL_STRUCTURE_FILENAME: &str = "structures.arrow";
+/// Its kernel-frame edge table beside it, written by the world build
+/// (`obstacle_index_file`); read by the popup, never written by a web server.
+pub const CELL_EDGE_TABLE_FILENAME: &str = "structures.edges";
 
 /// `Ok(Some(path))`: read this file. `Ok(None)`: the cell is outside the
 /// prepared world and contributes nothing. `Err`: the cell is in the world and

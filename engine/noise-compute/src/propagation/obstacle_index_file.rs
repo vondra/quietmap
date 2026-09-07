@@ -1,12 +1,14 @@
-//! On-disk (mmap-able) form of [`ObstacleIndex`] — build the grid once, map it
-//! on every later cold start instead of re-deriving it from the Arrow shards.
+//! On-disk (mmap-able) edge table of one cell's [`ObstacleIndex`] — the kernel-frame
+//! edges parsed once from the cell's `structures.arrow`, mapped on every later load.
 //!
-//! A São Paulo popup indexes ~40 M edges: ~6 s and ~1.1 GB of CSR arrays that
-//! the process then throws away. Those arrays are already flat and immutable,
-//! so the file IS the in-memory layout — a load is `mmap` plus a header check,
-//! and the kernel faults in only the cells a ray actually walks. Nothing is
-//! copied into the heap, which is the whole point: a 1.1 GB deserialize would
-//! move the cost, not remove it.
+//! Parsing a metro cell's WKB rings is the cost worth storing: 5.0 s for Paris's
+//! 10.7 M edges, 9.5 s for São Paulo's 18.4 M (one thread, 2026-09-07). The CSR grid
+//! over those edges is not: deriving it from the mapped file costs 96 ms for Prague's
+//! 3.2 M edges, 476 ms for Paris, 522 ms for São Paulo, while storing every cell's grid
+//! took 310 GB of the world's 687 GB, 45 % of it empty grid cells. So the file holds
+//! the edges and the per-footprint classes, nothing else: [`ObstacleIndex::from_blob`]
+//! maps them, reads every edge once to derive the grid in memory (~4 B per edge
+//! reference), and the kernel then reads the edges straight out of the mapping.
 //!
 //! **The crate stays file-free** (see `Cargo.toml`): this module defines the
 //! BYTES and validates them. Opening, mapping and writing files is the caller's
@@ -20,7 +22,7 @@
 //!   `world-stamps.py`'s `_data_ver` mtime set-hash).
 //!
 //! Both must match exactly or [`ObstacleIndex::from_blob`] refuses the file and
-//! the caller rebuilds. A wasted rebuild costs a minute; a stale index is a
+//! the caller rebuilds. A wasted rebuild costs seconds; a stale edge table is a
 //! silent hole in the map.
 
 use std::sync::Arc;
@@ -48,8 +50,8 @@ unsafe impl IndexBlob for Vec<u8> {
     }
 }
 
-/// One CSR array of an [`ObstacleIndex`]: heap-owned when the index was just
-/// built, a window into a mapped file when it was loaded.
+/// The edge table or the class table of an [`ObstacleIndex`]: heap-owned when
+/// just parsed from Arrow, a window into the mapped file when loaded.
 ///
 /// Derefs to `&[T]` so every query site reads `self.edges[i]` /
 /// `&self.edge_refs[lo..hi]` exactly as it did when these were `Vec`s. The
@@ -162,9 +164,10 @@ pub const fn fnv1a64(seed: u64, bytes: &[u8]) -> u64 {
 /// FNV-1a offset basis — the seed for a fresh chain.
 pub const FNV1A64_SEED: u64 = 0xcbf2_9ce4_8422_2325;
 
-/// Content hash of every source file that decides an index's BYTES: the
-/// builder and its grid pitch, this file's layout, the WKB ring parser, the
-/// low-profile height cap and the metric-frame constants. Editing any of them
+/// Content hash of every source file that decides an edge table's BYTES: the
+/// builder (its grid pitch too — same file, so a pitch change over-invalidates),
+/// this file's layout, the WKB ring parser, the low-profile height cap and the
+/// metric-frame constants. Editing any of them
 /// rotates the version, so every cached file written by the old code is refused
 /// on the next start — the same safe-over-invalidation rule
 /// a cached artifact needs, enforced by the compiler instead
@@ -172,7 +175,7 @@ pub const FNV1A64_SEED: u64 = 0xcbf2_9ce4_8422_2325;
 ///
 /// Callers that add decisions of their OWN on top (id ordering, shard order)
 /// must fold their source in too — see `source-reader`'s
-/// `obstacle_store::CACHE_CODE_VER`.
+/// `structure_store::EDGE_FILE_CODE_VER`.
 pub const BUILDER_CODE_VER: u64 = {
     let h = fnv1a64(FNV1A64_SEED, include_bytes!("obstacle_index.rs"));
     let h = fnv1a64(h, include_bytes!("obstacle_index_file.rs"));
@@ -181,246 +184,170 @@ pub const BUILDER_CODE_VER: u64 = {
     fnv1a64(h, include_bytes!("../constants.rs"))
 };
 
-/// "Quiet Obstacle IndeX" — a stray file identifies itself, like the tile
-/// store's `QTSI`/`QTSD`.
-const MAGIC: &[u8; 4] = b"QOIX";
-/// Bumped only for a layout change the content hash cannot see (it can see
-/// every one of ours, so this exists for forensics, not for gating).
-const VERSION: u8 = 2;
-const HEADER_BYTES: usize = 128;
-/// Every section starts on this boundary, so the mapping's page alignment
-/// carries through to each typed view (`u32`/`f32`/[`ObstacleEdge`] all want 4).
-const SECTION_ALIGN: usize = 64;
+/// "Quiet EDGes" — a stray file identifies itself, like the tile store's
+/// `QTSI`/`QTSD`. A layout change is an edit to this file, which
+/// [`BUILDER_CODE_VER`] hashes, so no format version is needed beside it.
+const MAGIC: &[u8; 4] = b"QEDG";
+/// The header: magic, then u64 fields at the offsets below; the edge table
+/// follows at [`HEADER_BYTES`] (64-aligned, so the mapping's page alignment
+/// carries through to the 4-aligned edges) and the class table right after it.
+pub const HEADER_BYTES: usize = 128;
+const AT_CODE_VER: usize = 8;
+const AT_DATA_VER: usize = 16;
+const AT_ORIGIN_LAT: usize = 24;
+const AT_ORIGIN_LON: usize = 32;
+const AT_M_PER_DEG_LON: usize = 40;
+const AT_N_EDGES: usize = 48;
+const AT_N_FP: usize = 56;
+const AT_TOTAL: usize = 64;
+const EDGE_BYTES: usize = std::mem::size_of::<ObstacleEdge>();
 
-/// Byte offset and length of each section, derived from the header counts —
-/// the writer and the reader compute them with this one function, so they
-/// cannot disagree.
-struct Layout {
-    cell_starts: (usize, usize),
-    edge_refs: (usize, usize),
-    edges: (usize, usize),
-    cell_max_h: (usize, usize),
-    footprint_xmin: (usize, usize),
-    footprint_class: (usize, usize),
-    total: usize,
-}
-
-const fn align_up(n: usize) -> usize {
-    n.div_ceil(SECTION_ALIGN) * SECTION_ALIGN
-}
-
-impl Layout {
-    fn new(cells: usize, n_edge_refs: usize, n_edges: usize, n_fp: usize) -> Option<Self> {
-        let mut at = HEADER_BYTES;
-        let mut section = |elems: usize, elem_bytes: usize| -> Option<(usize, usize)> {
-            let bytes = elems.checked_mul(elem_bytes)?;
-            let start = at;
-            at = align_up(start.checked_add(bytes)?);
-            Some((start, bytes))
-        };
-        let cell_starts = section(cells.checked_add(1)?, 4)?;
-        let edge_refs = section(n_edge_refs, 4)?;
-        let edges = section(n_edges, std::mem::size_of::<ObstacleEdge>())?;
-        let cell_max_h = section(cells, 4)?;
-        let footprint_xmin = section(n_fp, 4)?;
-        let footprint_class = section(n_fp, 1)?;
-        Some(Layout {
-            cell_starts,
-            edge_refs,
-            edges,
-            cell_max_h,
-            footprint_xmin,
-            footprint_class,
-            total: at,
-        })
-    }
+/// Where the two tables sit and how long the file is, from the counts alone —
+/// the writer and the reader compute them with this one function.
+fn layout(n_edges: usize, n_fp: usize) -> Option<(usize, usize, usize)> {
+    let classes_at = HEADER_BYTES.checked_add(n_edges.checked_mul(EDGE_BYTES)?)?;
+    let total = classes_at.checked_add(n_fp)?;
+    Some((HEADER_BYTES, classes_at, total))
 }
 
 /// The index as bytes to write, in order: [`FileParts::header`] first, then
-/// every slice of [`FileParts::sections`] (data and inter-section padding
-/// already interleaved). Concatenating them IS the file — no intermediate
-/// buffer, so writing a 1.1 GB index costs no extra RAM.
+/// every slice of [`FileParts::sections`]. Concatenating them IS the file — no
+/// intermediate buffer, so writing a 500 MB edge table costs no extra RAM.
 pub struct FileParts<'a> {
     pub header: [u8; HEADER_BYTES],
     pub sections: Vec<&'a [u8]>,
 }
 
-impl FileParts<'_> {
-    /// Total bytes the writer will emit.
-    pub fn total_len(&self) -> usize {
-        HEADER_BYTES + self.sections.iter().map(|s| s.len()).sum::<usize>()
-    }
-}
-
 /// Reinterpret a slice of POD values as its raw bytes.
 fn as_bytes<T: Copy>(v: &[T]) -> &[u8] {
-    // SAFETY: `T` is one of `u32`/`f32`/`ObstacleEdge` — all `#[repr(C)]` POD
-    // with no padding and no pointers — and the result borrows the same memory
-    // for the same lifetime, read-only.
+    // SAFETY: `T` is `u8` or `ObstacleEdge` — `#[repr(C)]` POD with no padding
+    // and no pointers — and the result borrows the same memory for the same
+    // lifetime, read-only.
     unsafe { std::slice::from_raw_parts(v.as_ptr().cast::<u8>(), std::mem::size_of_val(v)) }
 }
-
-static ZERO_PAD: [u8; SECTION_ALIGN] = [0; SECTION_ALIGN];
 
 impl ObstacleIndex {
     /// Serialize for [`ObstacleIndex::from_blob`]. `data_ver` is the caller's
     /// fingerprint of the input files this index was built from; it is stored
     /// verbatim and compared on load.
     pub fn file_parts(&self, code_ver: u64, data_ver: u64) -> FileParts<'_> {
-        let cells = self.cols * self.rows;
-        let layout = Layout::new(
-            cells,
-            self.edge_refs.len(),
-            self.edges.len(),
-            self.footprint_xmin.len(),
-        )
-        .expect("obstacle index layout overflows usize");
-
+        let (_, _, total) = layout(self.edges.len(), self.footprint_class.len())
+            .expect("obstacle edge table overflows usize");
         let mut header = [0u8; HEADER_BYTES];
         header[0..4].copy_from_slice(MAGIC);
-        header[4] = VERSION;
         let mut put = |at: usize, v: u64| header[at..at + 8].copy_from_slice(&v.to_le_bytes());
-        put(8, code_ver);
-        put(16, data_ver);
-        put(24, self.origin_lat.to_bits());
-        put(32, self.origin_lon.to_bits());
-        put(40, self.m_per_deg_lon.to_bits());
-        put(48, self.cell_m.to_bits());
-        put(56, self.min_x.to_bits());
-        put(64, self.min_y.to_bits());
-        put(72, self.max_footprint_w.to_bits());
-        put(80, self.cols as u64);
-        put(88, self.rows as u64);
-        put(96, self.edge_refs.len() as u64);
-        put(104, self.edges.len() as u64);
-        put(112, self.footprint_xmin.len() as u64);
-        put(120, layout.total as u64);
-
-        let mut sections = Vec::with_capacity(12);
-        let mut at = HEADER_BYTES;
-        for bytes in [
-            as_bytes(&self.cell_starts),
-            as_bytes(&self.edge_refs),
-            as_bytes(&self.edges),
-            as_bytes(&self.cell_max_h),
-            as_bytes(&self.footprint_xmin),
-            as_bytes(&self.footprint_class),
-        ] {
-            sections.push(bytes);
-            at += bytes.len();
-            let pad = align_up(at) - at;
-            if pad > 0 {
-                sections.push(&ZERO_PAD[..pad]);
-                at += pad;
-            }
+        put(AT_CODE_VER, code_ver);
+        put(AT_DATA_VER, data_ver);
+        put(AT_ORIGIN_LAT, self.origin_lat.to_bits());
+        put(AT_ORIGIN_LON, self.origin_lon.to_bits());
+        put(AT_M_PER_DEG_LON, self.m_per_deg_lon.to_bits());
+        put(AT_N_EDGES, self.edges.len() as u64);
+        put(AT_N_FP, self.footprint_class.len() as u64);
+        put(AT_TOTAL, total as u64);
+        FileParts {
+            header,
+            sections: vec![as_bytes(&self.edges), as_bytes(&self.footprint_class)],
         }
-        debug_assert_eq!(at, layout.total);
-        FileParts { header, sections }
     }
 
-    /// Map a previously written index, or explain why the file cannot be used.
+    /// Whether a file with this header (its first [`HEADER_BYTES`]) and length is
+    /// the current edge table for `expect_code_ver` / `expect_data_ver` — the same
+    /// judgement [`Self::from_blob`] makes before mapping, without the map and the
+    /// grid, so a world sweep can skip a current cell on one small read.
+    pub fn file_is_current(
+        header: &[u8],
+        file_len: usize,
+        expect_code_ver: u64,
+        expect_data_ver: u64,
+    ) -> bool {
+        validate(header, file_len, expect_code_ver, expect_data_ver).is_ok()
+    }
+
+    /// Map a cell's edge table and derive its grid, or explain why the file
+    /// cannot be used.
     ///
     /// Refuses anything whose `code_ver` or `data_ver` differs from the
     /// caller's — a mismatch means the builder or its inputs moved, and the
-    /// only safe answer is to rebuild. Nothing is copied: the returned index
-    /// reads straight out of `blob`, so a 1.1 GB file costs one `mmap` and the
-    /// pages a query actually touches.
+    /// only safe answer is to rebuild. The edges are not copied: the returned
+    /// index reads them straight out of `blob`; only the grid is built, in
+    /// memory.
     pub fn from_blob(
         blob: Arc<dyn IndexBlob>,
         expect_code_ver: u64,
         expect_data_ver: u64,
     ) -> Result<ObstacleIndex, String> {
         let bytes = blob.as_bytes();
-        if bytes.len() < HEADER_BYTES {
-            return Err(format!("truncated header ({} bytes)", bytes.len()));
-        }
-        if &bytes[0..4] != MAGIC {
-            return Err(format!("bad magic {:?} (want {MAGIC:?})", &bytes[0..4]));
-        }
-        if bytes[4] != VERSION {
-            return Err(format!("format version {} ≠ {VERSION}", bytes[4]));
-        }
-        let get = |at: usize| -> u64 {
-            let mut b = [0u8; 8];
-            b.copy_from_slice(&bytes[at..at + 8]);
-            u64::from_le_bytes(b)
-        };
-        let (code_ver, data_ver) = (get(8), get(16));
-        if code_ver != expect_code_ver {
-            return Err(format!("code_ver {code_ver:016x} ≠ {expect_code_ver:016x}"));
-        }
-        if data_ver != expect_data_ver {
-            return Err(format!("data_ver {data_ver:016x} ≠ {expect_data_ver:016x}"));
-        }
-        let usz = |v: u64| usize::try_from(v).map_err(|_| format!("count {v} exceeds usize"));
-        let cols = usz(get(80))?;
-        let rows = usz(get(88))?;
-        let n_edge_refs = usz(get(96))?;
-        let n_edges = usz(get(104))?;
-        let n_fp = usz(get(112))?;
-        let total = usz(get(120))?;
-        if cols == 0 || rows == 0 {
-            return Err(format!("empty grid {cols}×{rows}"));
-        }
-        let cells = cols
-            .checked_mul(rows)
-            .ok_or_else(|| format!("grid {cols}×{rows} overflows usize"))?;
-        let layout = Layout::new(cells, n_edge_refs, n_edges, n_fp)
-            .ok_or_else(|| "section layout overflows usize".to_string())?;
-        if layout.total != total || bytes.len() < total {
-            return Err(format!(
-                "size mismatch: header says {total}, layout {}, file {}",
-                layout.total,
-                bytes.len()
-            ));
-        }
-
-        fn map<T: Copy + 'static>(
-            blob: &Arc<dyn IndexBlob>,
-            (off, _len): (usize, usize),
-            n: usize,
-            what: &str,
-        ) -> Result<IndexArray<T>, String> {
-            IndexArray::from_blob(blob, off, n).ok_or_else(|| format!("{what} window invalid"))
-        }
-        let cell_starts: IndexArray<u32> =
-            map(&blob, layout.cell_starts, cells + 1, "cell_starts")?;
-        let edge_refs: IndexArray<u32> = map(&blob, layout.edge_refs, n_edge_refs, "edge_refs")?;
-        let edges: IndexArray<ObstacleEdge> = map(&blob, layout.edges, n_edges, "edges")?;
-        let cell_max_h: IndexArray<f32> = map(&blob, layout.cell_max_h, cells, "cell_max_h")?;
-        let footprint_xmin: IndexArray<f32> =
-            map(&blob, layout.footprint_xmin, n_fp, "footprint_xmin")?;
-        let footprint_class: IndexArray<u8> =
-            map(&blob, layout.footprint_class, n_fp, "footprint_class")?;
-
-        // O(1) structural check: the CSR's own invariant. Catches a truncated
-        // or half-written file without touching (and paging in) a single edge —
-        // scanning 40 M edges here would undo the reason this file exists.
-        if cell_starts[0] != 0 || cell_starts[cells] as usize != n_edge_refs {
-            return Err(format!(
-                "CSR bounds broken: starts[0]={}, starts[{cells}]={} ≠ {n_edge_refs}",
-                cell_starts[0], cell_starts[cells]
-            ));
-        }
-
-        Ok(ObstacleIndex {
-            origin_lat: f64::from_bits(get(24)),
-            origin_lon: f64::from_bits(get(32)),
-            m_per_deg_lon: f64::from_bits(get(40)),
-            cell_m: f64::from_bits(get(48)),
-            min_x: f64::from_bits(get(56)),
-            min_y: f64::from_bits(get(64)),
-            cols,
-            rows,
-            cell_starts,
-            edge_refs,
+        let header = validate(bytes, bytes.len(), expect_code_ver, expect_data_ver)?;
+        let (edges_at, classes_at, _) = layout(header.n_edges, header.n_fp)
+            .ok_or_else(|| "edge table overflows usize".to_string())?;
+        let edges = IndexArray::from_blob(&blob, edges_at, header.n_edges)
+            .ok_or_else(|| "edges window invalid".to_string())?;
+        let footprint_class = IndexArray::from_blob(&blob, classes_at, header.n_fp)
+            .ok_or_else(|| "footprint_class window invalid".to_string())?;
+        ObstacleIndex::from_edges(
+            header.origin_lat,
+            header.origin_lon,
+            header.m_per_deg_lon,
             edges,
-            cell_max_h,
-            footprint_xmin,
             footprint_class,
-            max_footprint_w: f64::from_bits(get(72)),
-        })
+        )
     }
+}
+
+/// The header fields a reader needs after the checks.
+struct Header {
+    origin_lat: f64,
+    origin_lon: f64,
+    m_per_deg_lon: f64,
+    n_edges: usize,
+    n_fp: usize,
+}
+
+/// Every rejection in one place: foreign or truncated header, another builder
+/// (`code_ver`), other inputs (`data_ver`), counts the layout cannot hold, and a
+/// file shorter than the layout its header announces.
+fn validate(
+    header: &[u8],
+    file_len: usize,
+    expect_code_ver: u64,
+    expect_data_ver: u64,
+) -> Result<Header, String> {
+    if header.len() < HEADER_BYTES {
+        return Err(format!("truncated header ({} bytes)", header.len()));
+    }
+    if &header[0..4] != MAGIC {
+        return Err(format!("bad magic {:?} (want {MAGIC:?})", &header[0..4]));
+    }
+    let get = |at: usize| -> u64 {
+        let mut b = [0u8; 8];
+        b.copy_from_slice(&header[at..at + 8]);
+        u64::from_le_bytes(b)
+    };
+    let (code_ver, data_ver) = (get(AT_CODE_VER), get(AT_DATA_VER));
+    if code_ver != expect_code_ver {
+        return Err(format!("code_ver {code_ver:016x} ≠ {expect_code_ver:016x}"));
+    }
+    if data_ver != expect_data_ver {
+        return Err(format!("data_ver {data_ver:016x} ≠ {expect_data_ver:016x}"));
+    }
+    let usz = |v: u64| usize::try_from(v).map_err(|_| format!("count {v} exceeds usize"));
+    let n_edges = usz(get(AT_N_EDGES))?;
+    let n_fp = usz(get(AT_N_FP))?;
+    let total = usz(get(AT_TOTAL))?;
+    let (_, _, layout_total) =
+        layout(n_edges, n_fp).ok_or_else(|| "edge table overflows usize".to_string())?;
+    if layout_total != total || file_len < total {
+        return Err(format!(
+            "size mismatch: header says {total}, layout {layout_total}, file {file_len}"
+        ));
+    }
+    Ok(Header {
+        origin_lat: f64::from_bits(get(AT_ORIGIN_LAT)),
+        origin_lon: f64::from_bits(get(AT_ORIGIN_LON)),
+        m_per_deg_lon: f64::from_bits(get(AT_M_PER_DEG_LON)),
+        n_edges,
+        n_fp,
+    })
 }
 
 #[cfg(test)]
@@ -432,12 +359,11 @@ mod tests {
     /// Flatten `file_parts` the way a writer would.
     fn to_file_bytes(idx: &ObstacleIndex, code_ver: u64, data_ver: u64) -> Vec<u8> {
         let parts = idx.file_parts(code_ver, data_ver);
-        let mut out = Vec::with_capacity(parts.total_len());
+        let mut out = Vec::new();
         out.extend_from_slice(&parts.header);
         for s in &parts.sections {
             out.extend_from_slice(s);
         }
-        assert_eq!(out.len(), parts.total_len());
         out
     }
 
@@ -589,17 +515,34 @@ mod tests {
         foreign[0] = b'X';
         refuses(foreign, 0xabc, 0xdef, "magic");
 
-        let mut old = bytes.clone();
-        old[4] = VERSION + 1;
-        refuses(old, 0xabc, 0xdef, "version");
-
         refuses(
-            bytes[..bytes.len() - SECTION_ALIGN].to_vec(),
+            bytes[..bytes.len() - 1].to_vec(),
             0xabc,
             0xdef,
             "size mismatch",
         );
         refuses(vec![0u8; 8], 0xabc, 0xdef, "truncated");
+
+        // The sweep's skip judgement is the loader's, minus the map.
+        let header = &bytes[..HEADER_BYTES];
+        assert!(ObstacleIndex::file_is_current(
+            header,
+            bytes.len(),
+            0xabc,
+            0xdef
+        ));
+        assert!(!ObstacleIndex::file_is_current(
+            header,
+            bytes.len() - 1,
+            0xabc,
+            0xdef
+        ));
+        assert!(!ObstacleIndex::file_is_current(
+            header,
+            bytes.len(),
+            0xabc,
+            0xde0
+        ));
     }
 
     /// The content hash must actually cover the builder's sources — a constant
