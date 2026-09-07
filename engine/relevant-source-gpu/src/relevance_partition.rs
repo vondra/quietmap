@@ -128,18 +128,30 @@ pub fn build_relevant_source_partition(
 
             let mut block_background = [[0.0_f32; PERIOD_COUNT]; 4];
             for (block_corner, corner) in corners.into_iter().enumerate() {
-                for period in 0..PERIOD_COUNT {
-                    let mut dropped_energy = corner_total_energy[corner][period];
-                    for &source_index in &relevant_sources {
-                        dropped_energy -= lookup_pair_energy(
-                            incidence,
-                            corner_pair_energy,
-                            corner,
-                            source_index,
-                            period,
-                        ) as f64;
+                // Both lists ascend, so one merge walk finds every admitted
+                // source's pair for all three periods at once. A source the
+                // corner does not carry subtracts nothing, and subtracting
+                // nothing is what skipping it does.
+                let range = corner_pair_range(incidence, corner);
+                let candidates = &incidence.corner_source_indices[range.clone()];
+                let mut dropped = corner_total_energy[corner];
+                let mut candidate = 0;
+                for &source_index in &relevant_sources {
+                    while candidate < candidates.len() && candidates[candidate] < source_index {
+                        candidate += 1;
                     }
-                    block_background[block_corner][period] = dropped_energy.max(0.0) as f32;
+                    if candidate == candidates.len() {
+                        break;
+                    }
+                    if candidates[candidate] == source_index {
+                        let pair = &corner_pair_energy[range.start + candidate];
+                        for period in 0..PERIOD_COUNT {
+                            dropped[period] -= f64::from(pair[period]);
+                        }
+                    }
+                }
+                for period in 0..PERIOD_COUNT {
+                    block_background[block_corner][period] = dropped[period].max(0.0) as f32;
                 }
             }
             (relevant_sources, block_background)
@@ -208,20 +220,6 @@ fn sum_corner_energy(
             totals
         })
         .collect()
-}
-
-fn lookup_pair_energy(
-    incidence: &TileSourceIncidence,
-    pair_energy: &[[f32; PERIOD_COUNT]],
-    corner: usize,
-    source_index: u32,
-    period: usize,
-) -> f32 {
-    let range = corner_pair_range(incidence, corner);
-    match incidence.corner_source_indices[range.clone()].binary_search(&source_index) {
-        Ok(relative_pair) => pair_energy[range.start + relative_pair][period],
-        Err(_) => 0.0,
-    }
 }
 
 fn block_corner_indices(block: usize) -> [usize; 4] {
