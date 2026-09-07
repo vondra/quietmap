@@ -96,7 +96,8 @@ struct DeviceScenePointers {
     const DeviceObstacleGrid* __restrict__ obstacle_grids;
     const uint32_t* __restrict__ obstacle_cell_starts;
     const uint32_t* __restrict__ obstacle_edge_references;
-    const float* __restrict__ obstacle_edge_values_xyxyh;
+    const float* __restrict__ obstacle_edge_endpoints_xyxy;
+    const float* __restrict__ obstacle_edge_height_m;
     const float* __restrict__ obstacle_cell_maximum_heights;
     const uint8_t* __restrict__ obstacle_edge_is_building;
     uint32_t source_count;
@@ -127,7 +128,7 @@ static_assert(sizeof(DeviceLineSource) == 128, "source ABI");
 static_assert(sizeof(FusedPixel) == 8, "raster pixel ABI");
 static_assert(sizeof(DeviceRasterGeometry) == 24, "raster geometry ABI");
 static_assert(sizeof(DeviceObstacleGrid) == 48, "obstacle grid ABI");
-static_assert(sizeof(DeviceScenePointers) == 104, "scene ABI");
+static_assert(sizeof(DeviceScenePointers) == 112, "scene ABI");
 
 __device__ __forceinline__ float quietmap_clamp(float value, float minimum, float maximum) {
     return fminf(fmaxf(value, minimum), maximum);

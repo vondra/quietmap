@@ -60,7 +60,8 @@ pub struct DeviceScenePointers {
     pub obstacle_grids: *const DeviceObstacleGrid,
     pub obstacle_cell_starts: *const u32,
     pub obstacle_edge_references: *const u32,
-    pub obstacle_edge_values_xyxyh: *const f32,
+    pub obstacle_edge_endpoints_xyxy: *const f32,
+    pub obstacle_edge_height_m: *const f32,
     pub obstacle_cell_maximum_heights: *const f32,
     pub obstacle_edge_is_building: *const u8,
     pub source_count: u32,
@@ -276,6 +277,6 @@ mod tests {
 
     #[test]
     fn scene_pointer_layout_matches_cuda() {
-        assert_eq!(size_of::<DeviceScenePointers>(), 104);
+        assert_eq!(size_of::<DeviceScenePointers>(), 112);
     }
 }

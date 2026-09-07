@@ -59,9 +59,14 @@ pub struct FlattenedObstacleGeometry {
     pub grids: Vec<DeviceObstacleGrid>,
     pub cell_starts: Vec<u32>,
     pub edge_references: Vec<u32>,
-    pub edge_values_xyxyh: Vec<f32>,
-    /// Building flag per edge, indexed by the same `edge_values_offset` as
-    /// `edge_values_xyxyh` (one byte where the xyxyh stride is five).
+    /// Edge endpoints as `x0, y0, x1, y1`, four floats per edge so that the
+    /// scan's hot load is one 16-byte aligned fetch. The five-float record this
+    /// replaces put every other edge's endpoints across two sectors, and the
+    /// height it carried is read only for an edge the ray actually crosses.
+    pub edge_endpoints_xyxy: Vec<f32>,
+    /// Edge height per edge, in `edge_values_offset` units like the endpoints.
+    pub edge_height_m: Vec<f32>,
+    /// Building flag per edge, indexed by the same `edge_values_offset`.
     pub edge_is_building: Vec<u8>,
     pub cell_maximum_heights: Vec<f32>,
 }
@@ -84,15 +89,16 @@ impl FlattenedObstacleGeometry {
                 rows: view.rows as u32,
                 cell_starts_offset: flattened.cell_starts.len() as u32,
                 edge_references_offset: flattened.edge_references.len() as u32,
-                edge_values_offset: (flattened.edge_values_xyxyh.len() / 5) as u32,
+                edge_values_offset: flattened.edge_height_m.len() as u32,
                 cell_maximum_height_offset: flattened.cell_maximum_heights.len() as u32,
             };
             flattened.grids.push(grid);
             flattened.cell_starts.extend_from_slice(view.cell_starts);
             flattened.edge_references.extend_from_slice(view.edge_refs);
-            flattened
-                .edge_values_xyxyh
-                .extend_from_slice(&view.edges_xyxyh);
+            for edge in view.edges_xyxyh.chunks_exact(5) {
+                flattened.edge_endpoints_xyxy.extend_from_slice(&edge[..4]);
+                flattened.edge_height_m.push(edge[4]);
+            }
             // gpu_view materialises edges_xyxyh and edge_is_building in one pass
             // over the same edge slice, so both concatenate in the same order.
             flattened
@@ -180,10 +186,10 @@ mod tests {
                     let local_edge = flattened.edge_references
                         [(grid.edge_references_offset + position) as usize];
                     let edge = grid.edge_values_offset + local_edge;
-                    let values =
-                        &flattened.edge_values_xyxyh[edge as usize * 5..edge as usize * 5 + 5];
+                    let ends =
+                        &flattened.edge_endpoints_xyxy[edge as usize * 4..edge as usize * 4 + 4];
                     if let Some(crossing_t) = segment_crossing_fraction(
-                        start_x, start_y, dx, dy, values[0], values[1], values[2], values[3],
+                        start_x, start_y, dx, dy, ends[0], ends[1], ends[2], ends[3],
                     ) {
                         let is_building = flattened.edge_is_building[edge as usize] != 0;
                         if !is_building || crossing_t * distance_m >= exclusion_radius_m {
@@ -345,8 +351,8 @@ mod tests {
         let frame = RegionMetricFrame::for_latitude_longitude(origin.0, origin.1);
         let flattened = FlattenedObstacleGeometry::from_set(&frame, &set);
         assert_eq!(
-            flattened.edge_is_building.len() * 5,
-            flattened.edge_values_xyxyh.len()
+            flattened.edge_is_building.len() * 4,
+            flattened.edge_endpoints_xyxy.len()
         );
         let source = frame.encode(source_lat, source_lon);
         let receiver = frame.encode(receiver_lat, receiver_lon);

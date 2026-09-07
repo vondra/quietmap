@@ -167,14 +167,15 @@ __device__ __forceinline__ void scan_obstacle_grid(
                     const uint32_t local_edge = scene.obstacle_edge_references[
                         grid.edge_references_offset + position];
                     const uint32_t edge = grid.edge_values_offset + local_edge;
-                    const float* values = scene.obstacle_edge_values_xyxyh + edge * 5;
+                    const float4 ends = reinterpret_cast<const float4* __restrict__>(
+                        scene.obstacle_edge_endpoints_xyxy)[edge];
                     float crossing_t;
                     // The exclusion radius shields only the source's own BUILDING
                     // footprint; a barrier edge is an explicit wall and always
                     // admits (CPU path_effects.rs §5b kind rule).
                     if (segment_crossing_fraction(
-                            start_x, start_y, dx, dy, values[0], values[1],
-                            values[2], values[3], crossing_t)
+                            start_x, start_y, dx, dy, ends.x, ends.y,
+                            ends.z, ends.w, crossing_t)
                         && (scene.obstacle_edge_is_building[edge] == 0u
                             || crossing_t * profile.distance_m >= exclusion_radius_m)) {
                         // The window starts at the last chainage at or before the cell,
@@ -185,7 +186,8 @@ __device__ __forceinline__ void scan_obstacle_grid(
                         // walking the profile whole.
                         consider_crossing_candidate(
                             profile, source_altitude_m, receiver_altitude_m,
-                            crossing_t, values[4], profile_window_start, best);
+                            crossing_t, scene.obstacle_edge_height_m[edge],
+                            profile_window_start, best);
                     }
                 }
             }

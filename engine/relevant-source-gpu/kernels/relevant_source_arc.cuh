@@ -227,18 +227,19 @@ __device__ void gather_blocked_mask(
                     const uint32_t local_edge = scene.obstacle_edge_references[
                         grid.edge_references_offset + position];
                     const uint32_t edge = grid.edge_values_offset + local_edge;
-                    const float* values = scene.obstacle_edge_values_xyxyh + edge * 5;
                     // A wall under the sight line blocks nothing, and the cell's
                     // tallest edge does not answer for it (CPU
                     // `skyline_arcs_within`, third prune).
                     if (scene.obstacle_edge_is_building[edge] == 0u
-                        && values[4] <= sight_line_floor_m) {
+                        && scene.obstacle_edge_height_m[edge] <= sight_line_floor_m) {
                         continue;
                     }
+                    const float4 ends = reinterpret_cast<const float4* __restrict__>(
+                        scene.obstacle_edge_endpoints_xyxy)[edge];
                     admit_skyline_arc(
                         source, receiver_x_m, receiver_y_m,
-                        (values[0] - receiver_grid_x) * inverse_scale, values[1] - receiver_grid_y,
-                        (values[2] - receiver_grid_x) * inverse_scale, values[3] - receiver_grid_y,
+                        (ends.x - receiver_grid_x) * inverse_scale, ends.y - receiver_grid_y,
+                        (ends.z - receiver_grid_x) * inverse_scale, ends.w - receiver_grid_y,
                         need_radius_m, span_lo, span_hi, bin_width, mask);
                 }
             }
