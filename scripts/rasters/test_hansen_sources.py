@@ -46,6 +46,7 @@ class HansenSourceTests(unittest.TestCase):
                 "FOREST_DST": directory,
                 "EXPECTED_BYTES": "9",
                 "GRID": "3",
+                "FORCE": "0",
                 "TCD_VRT": str(root / "absent.vrt"),
                 "TC_VRT": "unused.vrt",
                 "LY_VRT": "unused.vrt",
@@ -69,6 +70,27 @@ class HansenSourceTests(unittest.TestCase):
             self.assertEqual(resumed.returncode, 0, resumed.stderr)
             self.assertEqual(output.read_bytes(), b"completed")
             self.assertEqual(unrelated.read_bytes(), b"keep")
+            environment["FORCE"] = "1"
+            forced_failure = subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", command],
+                env=environment, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(forced_failure.returncode, 42, forced_failure.stderr)
+            self.assertEqual(output.read_bytes(), b"completed")
+            self.assertEqual(set(root.iterdir()), {output, unrelated})
+            environment["QM_VENV_PYTHON"] = "write_fixture"
+            success_command = command.replace(
+                "gdalwarp() { return 42; };",
+                'gdalwarp() { return 0; }; write_fixture() { printf corrected > "$3"; };',
+            )
+            forced_success = subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", success_command],
+                env=environment, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(forced_success.returncode, 0, forced_success.stderr)
+            self.assertEqual(output.read_bytes(), b"corrected")
+            self.assertEqual(unrelated.read_bytes(), b"keep")
+            self.assertEqual(set(root.iterdir()), {output, unrelated})
 
     def test_only_matching_no_such_key_is_expected_missing_lossyear(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

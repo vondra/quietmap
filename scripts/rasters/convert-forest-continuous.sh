@@ -11,6 +11,7 @@
 # Required env: TCD_DIR (may be empty dir), HANSEN_DIR, FOREST_DST (release
 # rasters/forest), TILE_LIST (for --all). A tile becomes visible only after its
 # exact-size output has been flushed and atomically renamed into place.
+# FORCE=1 replaces complete outputs atomically; JOBS bounds parallel tile work.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 source scripts/rasters/node-extent.sh
@@ -32,6 +33,19 @@ if ls "$TCD_DIR"/*.tif &> /dev/null; then
     # -vrtnodata 255: tiles not (yet) downloaded must read as NODATA in the
     # mosaic gaps, never as 0 % canopy — 0 is a real value inside coverage.
     gdalbuildvrt -q -overwrite -vrtnodata 255 -srcnodata 255 "$TCD_VRT" "$TCD_DIR"/*.tif
+    # Density values are measurements; the display palette cannot accompany Float32 averages.
+    "$QM_VENV_PYTHON" - "$TCD_VRT" << 'PYEOF'
+import sys
+import xml.etree.ElementTree as ElementTree
+
+vrt = ElementTree.parse(sys.argv[1])
+for band in vrt.findall("VRTRasterBand"):
+    for palette in band.findall("ColorTable"):
+        band.remove(palette)
+    for interpretation in band.findall("ColorInterp"):
+        interpretation.text = "Gray"
+vrt.write(sys.argv[1])
+PYEOF
 fi
 TC_VRT="$VRT_DIR/hansen-treecover.vrt"
 LY_VRT="$VRT_DIR/hansen-lossyear.vrt"
@@ -52,7 +66,7 @@ convert_one() (
         return 2
     fi
     local out="$FOREST_DST/$tile.raw"
-    if [ -f "$out" ]; then
+    if [ -f "$out" ] && [ "${FORCE:-0}" != 1 ]; then
         local current_bytes
         current_bytes=$(stat -c%s "$out")
         [ "$current_bytes" -eq "$EXPECTED_BYTES" ] && return 0
@@ -75,12 +89,12 @@ convert_one() (
     # EU lane: TCD where the mosaic has coverage for this tile.
     if [ -s "$TCD_VRT" ]; then
         gdalwarp -q -overwrite -t_srs EPSG:4326 -te "${tile_extent[@]}" -ts "$GRID" "$GRID" \
-            -r average -ovr NONE -ot Byte -srcnodata 255 -dstnodata 255 \
+            -r average -ovr NONE -ot Float32 -srcnodata 255 -dstnodata 255 \
             "$TCD_VRT" "$tmp/tcd.tif"
     fi
 
     # ROW lane: Hansen treecover2000 with post-2000 loss zeroed.
-    gdalwarp -q -overwrite -te "${tile_extent[@]}" -ts "$GRID" "$GRID" -r average -ot Byte \
+    gdalwarp -q -overwrite -te "${tile_extent[@]}" -ts "$GRID" "$GRID" -r average -ot Float32 \
         "$TC_VRT" "$tmp/tc.tif"
     gdalwarp -q -overwrite -te "${tile_extent[@]}" -ts "$GRID" "$GRID" -r max -ot Byte \
         "$LY_VRT" "$tmp/ly.tif"
@@ -105,7 +119,7 @@ def band(path, *, required):
         values = dataset.read(1)
     if values.shape != expected_shape:
         raise RuntimeError(f"wrong warped raster shape for {path}: {values.shape}")
-    return values.astype(np.uint8, copy=False)
+    return values
 
 tc = band(f"{tmp}/tc.tif", required=True)
 ly = band(f"{tmp}/ly.tif", required=True)
@@ -120,7 +134,8 @@ if tcd is not None:
 else:
     merged = hansen
 with open(out, "wb") as destination:
-    merged.astype(np.uint8, copy=False).tofile(destination)
+    # Float32 averages remove sub-ULP warp noise at exact halves; quantize once, half up.
+    np.floor(merged + 0.5).astype(np.uint8).tofile(destination)
     destination.flush()
     os.fsync(destination.fileno())
 PYEOF
@@ -145,7 +160,7 @@ run_list() {
     echo "[forest-cont] converting $total tiles"
     # The quoted $1 must expand inside each child shell, not in this owner.
     # shellcheck disable=SC2016
-    xargs -r -P "$(nproc --ignore=8)" -I{} \
+    xargs -r -P "${JOBS:-$(nproc --ignore=8)}" -I{} \
         bash -euo pipefail -c 'convert_one "$1"' _ {} < "$list"
     echo "[forest-cont] finished: $(find "$FOREST_DST" -maxdepth 1 -name '*.raw' | wc -l) staged ($total requested)"
 }

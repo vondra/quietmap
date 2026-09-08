@@ -39,13 +39,14 @@ forest run in parallel; IMD overlay runs after WorldCover:
 DEM_SRC=<src>/dem/copernicus-glo30 DEM_DST=<work>/rasters/dem JOBS=12 \
   scripts/rasters/convert-dem-copernicus.sh
 WC_SRC=<src>/vegetation/worldcover-2021 \
-  FOREST_DST=<work>/rasters/forest-fallback IMD_DST=<work>/rasters/imd JOBS=8 \
+  FOREST_DST=<work>/rasters/forest-fallback IMD_DST=<work>/rasters/imd-worldcover JOBS=8 \
   scripts/rasters/convert-worldcover.sh
 TCD_DIR=<src>/forest-sources/tcd/2023 \
   HANSEN_DIR=<src>/forest-sources/hansen/GFC-2024-v1.12 \
-  FOREST_DST=<work>/rasters/forest \
-  scripts/rasters/convert-forest-continuous.sh --all   # needs TILE_LIST=land tiles
-IMD_SRC_ROOT=<src>/imd IMD_DST=<work>/rasters/imd \
+  FOREST_DST=<work>/rasters/forest TILE_LIST=<work>/forest-all.txt \
+  scripts/rasters/convert-forest-continuous.sh --all
+IMD_SRC_ROOT=<src>/imd IMD_BASE=<work>/rasters/imd-worldcover \
+  IMD_DST=<work>/rasters/imd \
   scripts/rasters/convert-imd-overlay.sh
 ```
 
@@ -100,8 +101,10 @@ behind each enricher (GTFS feeds, city tables); the chain prints
 
 ## 6. Promote + validate + serve
 
-Bulk-copy the finished `<work>/prepared/2026` and `<work>/rasters` to
-`<prep>/` (keep the mixeduse copies as backup). Validate: reference-square
+Bulk-copy the finished `<work>/prepared/2026` and only the final raster
+subdirectories `<work>/rasters/{dem,forest,imd}` to `<prep>/`. Keep the
+work copies as backup; `imd-worldcover` and `forest-fallback` are build inputs,
+not served layers. Validate: reference-square
 roads schema (`square-store`), popup parity vs dev1 on reference squares,
 then point the server at `<prep>` and deploy.
 
