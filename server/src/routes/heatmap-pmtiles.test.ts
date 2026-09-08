@@ -1,15 +1,12 @@
-// Contract test for the versioned tile route's MISS path — load-bearing for
-// CDN caching: a miss must be 200 + EMPTY body (Cloudflare doesn't cache 204s
-// by default), a year of immutable cache, CORS + Timing-Allow-Origin, and no
-// Content-Encoding (an empty stream is not valid Brotli).
-// Run: cd server && npx tsx --test src/routes/heatmap-pmtiles.test.ts
+// Versioned tile serving: wire responses, safe archive reads, descriptor lifetime and recovery.
 
 import assert from 'node:assert/strict'
-import test from 'node:test'
-import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
+import test, { after } from 'node:test'
+import { mkdtempSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { gzipSync } from 'node:zlib'
+import { brotliCompressSync, gzipSync } from 'node:zlib'
+import { zxyToTileId } from 'pmtiles'
 
 /** Minimal valid pmtiles v3 archive with ZERO tile entries — every getZxy
  *  misses. Layout: 127-byte header, gzip root directory, gzip '{}' metadata.
@@ -36,6 +33,7 @@ function emptyArchive(): Buffer {
 // PMTILES_BASE is captured from the env when heatmap-shared loads — point it
 // at the fixture dir BEFORE importing the route module.
 const dir = mkdtempSync(join(tmpdir(), 'pmtiles-route-test-'))
+after(() => rmSync(dir, { recursive: true, force: true }))
 process.env.PMTILES_DIR = dir
 writeFileSync(join(dir, 'road.b0.pmtiles'), emptyArchive())
 
@@ -75,7 +73,55 @@ test('symlinked archive leaf fails closed before PMTiles open', async () => {
   const app = await buildApp()
   const res = await app.inject({ url: '/api/tiles/b1/road/6/33/21.bin' })
   assert.equal(res.statusCode, 500)
-  assert.equal(res.body, 'archive open failed')
+  assert.equal(res.body, 'archive read failed')
   assert.equal(res.headers['cache-control'], 'no-store')
   await app.close()
+})
+
+test('completed concurrent tile requests do not retain a deleted archive on disk', { skip: process.platform !== 'linux' }, async (t) => {
+  const path = join(dir, 'road.b2.pmtiles')
+  writeFileSync(path, emptyArchive())
+  const app = await buildApp()
+  t.after(() => app.close())
+  const responses = await Promise.all(Array.from({ length: 8 }, () =>
+    app.inject({ url: '/api/tiles/b2/road/6/33/21.bin' })))
+  for (const response of responses) assert.equal(response.statusCode, 200)
+  unlinkSync(path)
+  const held = readdirSync('/proc/self/fd').some(fd => {
+    try { return readlinkSync(`/proc/self/fd/${fd}`) === `${path} (deleted)` } catch { return false }
+  })
+  assert.ok(!held, 'the archive cache pins deleted disk space')
+})
+
+test('a failed leaf-directory read retries after the archive becomes readable again', async (t) => {
+  const tile = brotliCompressSync(Buffer.from('tile bytes'))
+  const ids = [zxyToTileId(2, 0, 0), zxyToTileId(2, 0, 1)]
+  // These low-zoom IDs and lengths all fit one-byte PMTiles varints. Each root
+  // entry points at a separate leaf beyond the initial 16 KiB header read.
+  const leaves = ids.map(id => gzipSync(Buffer.from([1, id, 1, tile.length, 1])))
+  const root = gzipSync(Buffer.from([2, ids[0], ids[1] - ids[0], 0, 0,
+    leaves[0].length, leaves[1].length, 1, leaves[0].length + 1]))
+  const header = Buffer.from(emptyArchive().subarray(0, 127))
+  header.writeBigUInt64LE(BigInt(root.length), 16)
+  header.writeBigUInt64LE(BigInt(127 + root.length), 24)
+  header.writeBigUInt64LE(0n, 32)
+  header.writeBigUInt64LE(16384n, 40)
+  header.writeBigUInt64LE(BigInt(leaves[0].length + leaves[1].length), 48)
+  header.writeBigUInt64LE(BigInt(16384 + leaves[0].length + leaves[1].length), 56)
+  header.writeBigUInt64LE(BigInt(tile.length), 64)
+  const path = join(dir, 'road.b3.pmtiles')
+  writeFileSync(path, Buffer.concat([header, root,
+    Buffer.alloc(16384 - 127 - root.length), ...leaves, tile]))
+  const app = await buildApp()
+  t.after(() => app.close())
+  const first = await app.inject({ url: '/api/tiles/b3/road/2/0/0.bin' })
+  assert.equal(first.statusCode, 200)
+  assert.deepEqual(first.rawPayload, tile)
+  renameSync(path, `${path}.held`)
+  const unavailable = await app.inject({ url: '/api/tiles/b3/road/2/0/1.bin' })
+  assert.equal(unavailable.statusCode, 404)
+  renameSync(`${path}.held`, path)
+  const recovered = await app.inject({ url: '/api/tiles/b3/road/2/0/1.bin' })
+  assert.equal(recovered.statusCode, 200)
+  assert.deepEqual(recovered.rawPayload, tile)
 })

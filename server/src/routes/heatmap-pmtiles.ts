@@ -4,7 +4,7 @@
 // generation, so both hits and misses are cached hard by the browser.
 
 import { constants } from 'node:fs'
-import { open, type FileHandle } from 'node:fs/promises'
+import { open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { gunzip } from 'node:zlib'
@@ -26,39 +26,39 @@ const gunzipAsync = promisify(gunzip)
 
 const BUILD_ID = /^b\d+$/
 
-// ~4 generations x 8 layers. Beyond this the oldest archive's file handle is
-// closed — old builds stop being requested minutes after a manifest flip, so
-// in practice this never evicts a hot entry.
+// Retain parsed directories for up to four generations of the eight layers.
 const ARCHIVE_CACHE_MAX = 32
 
-/**
- * pmtiles `Source` over a positional-read `FileHandle` (pread — safe under the
- * concurrent header/directory/tile reads one PMTiles instance issues). The npm
- * lib ships only browser-side sources (FetchSource over HTTP, FileSource over
- * the File API), so the Node file-backed source lives here.
- */
-class FileHandleSource implements Source {
-  constructor(private readonly handle: FileHandle, private readonly path: string) {}
+/** Cache parsed directories, but retain an archive descriptor only during a range read:
+ * an idle cached descriptor would pin hundreds of GB after publication GC unlinks it. */
+class FileRangeSource implements Source {
+  constructor(private readonly path: string) {}
 
   getKey(): string {
     return this.path
   }
 
   async getBytes(offset: number, length: number): Promise<RangeResponse> {
-    // Loop to `length` or EOF: a positional read MAY legally return fewer
-    // bytes than asked even mid-file, and a short directory/tile read would
-    // otherwise become a spurious parse failure. EOF clamp stays: the lib's
-    // initial header probe asks for 16 KiB unconditionally, which overshoots
-    // on a near-empty archive.
-    const data = new ArrayBuffer(length)
-    const view = new Uint8Array(data)
-    let filled = 0
-    while (filled < length) {
-      const { bytesRead } = await this.handle.read(view, filled, length - filled, offset + filled)
-      if (bytesRead === 0) break // EOF
-      filled += bytesRead
+    const handle = await open(
+      this.path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    )
+    try {
+      if (!(await handle.stat()).isFile()) throw new Error(`${this.path} is not a regular file`)
+      // Positional reads may be short; only EOF ends the range early. The initial
+      // header probe asks for 16 KiB even when an empty archive is smaller.
+      const data = new ArrayBuffer(length)
+      const view = new Uint8Array(data)
+      let filled = 0
+      while (filled < length) {
+        const { bytesRead } = await handle.read(view, filled, length - filled, offset + filled)
+        if (bytesRead === 0) break
+        filled += bytesRead
+      }
+      return filled === length ? { data } : { data: data.slice(0, filled) }
+    } finally {
+      await handle.close()
     }
-    return filled === length ? { data } : { data: data.slice(0, filled) }
   }
 }
 
@@ -87,72 +87,47 @@ async function gunzipDirectoriesPassthroughTiles(
   return buf // None | Unknown | Brotli → verbatim
 }
 
-type OpenArchive = { pmtiles: PMTiles; handle: FileHandle }
+// One PMTiles instance per (build, layer) retains parsed headers and directories.
+const archiveCache = new Map<string, Promise<PMTiles>>()
 
-// One PMTiles instance per (build, layer): its SharedPromiseCache keeps the
-// parsed header + directories in memory, so a tile request costs one pread.
-const archiveCache = new Map<string, Promise<OpenArchive>>()
-
-async function openHeatmapArchive(path: string): Promise<OpenArchive> {
-  let handle: FileHandle | undefined
-  try {
-    handle = await open(
-      path,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    )
-    const info = await handle.stat({ bigint: true })
-    if (!info.isFile()) throw new Error(`${path} is not a regular file`)
-    const pmtiles = new PMTiles(
-      new FileHandleSource(handle, path),
-      new SharedPromiseCache(100, true, gunzipDirectoriesPassthroughTiles),
-      gunzipDirectoriesPassthroughTiles,
-    )
-    const header = await pmtiles.getHeader()
-    // Fail loud at open (500 + log) rather than serve corrupt bytes: verbatim
-    // Brotli shipping is only correct while the packer keeps gzip directories
-    // and Brotli (or undeclared) tile entries.
-    if (header.internalCompression !== Compression.Gzip
-      && header.internalCompression !== Compression.None) {
-      throw new Error(`unsupported internal compression ${header.internalCompression}`)
-    }
-    // Strictly Brotli — the packer always declares it, and this route ships
-    // bytes with `Content-Encoding: br` unconditionally. Anything else in the
-    // header means packer drift; fail loud rather than serve corrupt bytes.
-    if (header.tileCompression !== Compression.Brotli) {
-      throw new Error(`tile compression ${header.tileCompression} contradicts verbatim-Brotli serving`)
-    }
-    return { pmtiles, handle }
-  } catch (e) {
-    await handle?.close().catch(() => {})
-    throw e
+async function openHeatmapArchive(path: string): Promise<PMTiles> {
+  const pmtiles = new PMTiles(
+    new FileRangeSource(path),
+    new SharedPromiseCache(100, true, gunzipDirectoriesPassthroughTiles),
+    gunzipDirectoriesPassthroughTiles,
+  )
+  const header = await pmtiles.getHeader()
+  if (header.internalCompression !== Compression.Gzip
+    && header.internalCompression !== Compression.None) {
+    throw new Error(`unsupported internal compression ${header.internalCompression}`)
   }
+  // The route declares Brotli without re-encoding, so a different header is unsafe.
+  if (header.tileCompression !== Compression.Brotli) {
+    throw new Error(`tile compression ${header.tileCompression} contradicts verbatim-Brotli serving`)
+  }
+  return pmtiles
 }
 
-function getHeatmapArchive(build: string, layer: string): Promise<OpenArchive> {
+async function readHeatmapTile(
+  build: string, layer: string, z: number, x: number, y: number,
+): Promise<RangeResponse | undefined> {
   const key = `${build}/${layer}`
-  const cached = archiveCache.get(key)
-  if (cached) return cached
-  const entry = openHeatmapArchive(join(PMTILES_BASE, `${layer}.${build}.pmtiles`))
-  archiveCache.set(key, entry)
-  // A failed open is not cached: the archive may simply not be packed yet.
-  entry.catch(() => archiveCache.delete(key))
-  if (archiveCache.size > ARCHIVE_CACHE_MAX) {
-    const oldestKey = archiveCache.keys().next().value // Map iterates in insertion order
-    if (oldestKey !== undefined && oldestKey !== key) {
-      const evicted = archiveCache.get(oldestKey)
-      archiveCache.delete(oldestKey)
-      // Close on a grace delay, not immediately: a request that grabbed this
-      // OpenArchive microseconds before eviction may still be mid-getZxy on
-      // the FileHandle. In-flight reads finish in milliseconds; 60 s is a
-      // comfortable bound, and the fd of a deleted old build holds its disk
-      // space until closed — so close we must, just not under the reader.
-      const evictedAt = setTimeout(() => {
-        evicted?.then((a) => a.handle.close()).catch(() => {})
-      }, 60_000)
-      evictedAt.unref?.()
+  let entry = archiveCache.get(key)
+  if (!entry) {
+    entry = openHeatmapArchive(join(PMTILES_BASE, `${layer}.${build}.pmtiles`))
+    archiveCache.set(key, entry)
+    if (archiveCache.size > ARCHIVE_CACHE_MAX) {
+      const oldestKey = archiveCache.keys().next().value
+      if (oldestKey !== undefined) archiveCache.delete(oldestKey)
     }
   }
-  return entry
+  try {
+    return await (await entry).getZxy(z, x, y)
+  } catch (error) {
+    // SharedPromiseCache retains rejected leaf reads; retry with a fresh instance.
+    if (archiveCache.get(key) === entry) archiveCache.delete(key)
+    throw error
+  }
 }
 
 /**
@@ -192,28 +167,16 @@ export async function heatmapPmtilesRoutes(app: FastifyInstance): Promise<void> 
       const { build } = req.params
       const { layer, z, x, y } = parsed
 
-      let archive: OpenArchive
+      let tile: RangeResponse | undefined
       try {
-        archive = await getHeatmapArchive(build, layer)
+        tile = await readHeatmapTile(build, layer, z, x, y)
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
           return reply.code(404).send('no such archive')
         }
-        reply.header('Cache-Control', 'no-store') // don't cache a transient failure
-        app.log?.error?.(`heatmap-pmtiles open ${layer}.${build}: ${(e as Error).message}`)
-        return reply.code(500).send('archive open failed')
-      }
-
-      let tile: RangeResponse | undefined
-      try {
-        // getZxy maps (z,x,y) → the archive's Hilbert tileId and walks the
-        // root/leaf directories; undefined = no entry for this build. Bytes
-        // come back verbatim (see gunzipDirectoriesPassthroughTiles).
-        tile = await archive.pmtiles.getZxy(z, x, y)
-      } catch (e) {
         reply.header('Cache-Control', 'no-store')
         app.log?.error?.(`heatmap-pmtiles read ${layer}.${build}/${z}/${x}/${y}: ${(e as Error).message}`)
-        return reply.code(500).send('read failed')
+        return reply.code(500).send('archive read failed')
       }
 
       // Published generations are immutable → cache the miss as hard as the hit.
@@ -272,8 +235,7 @@ export async function heatmapPmtilesRoutes(app: FastifyInstance): Promise<void> 
       const build = entryBuild ?? /\.(b\d+)\.pmtiles$/.exec(entryFile)?.[1]
       if (!build) { failures.push(`${layer}: no manifest entry`); continue }
       try {
-        const archive = await getHeatmapArchive(build, layer)
-        const tile = await archive.pmtiles.getZxy(z, x, y)
+        const tile = await readHeatmapTile(build, layer, z, x, y)
         const bytes = tile?.data ? Buffer.from(tile.data).length : 0
         if (bytes > 0) checks.push({ layer, build, bytes })
         else failures.push(`${layer}@${build}: reference tile ${z}/${x}/${y} empty/missing`)
