@@ -3,6 +3,7 @@ import { AIRCRAFT_SUBTYPE, type SegmentTrace } from '../../types/noise'
 import { HoverText } from '../ui/info-tip'
 import { ldenToColor } from '../../utils/noise-colors'
 import { SegmentExpanded } from './SegmentExpanded'
+import { segmentFanHighlight } from './fanGeometry'
 import { SOURCE_LABELS, flipLatLon, formatDist, lineStringFromLatLon, subtypeLabel } from './shared'
 
 function segmentName(t: SegmentTrace): string {
@@ -13,6 +14,13 @@ function segmentName(t: SegmentTrace): string {
 function highlightGeometry(t: SegmentTrace) {
   if (t.kind === 'building' || t.kind === 'industrial') {
     return { type: 'Point', coordinates: [t.start_lon, t.start_lat] }
+  }
+  // Road/railway segments with an engine screening fan: draw the fan itself
+  // (per-slice triangles + characteristic ray) instead of the bare segment —
+  // the dB number averages the fan, so the map should show the fan.
+  if (t.kind === 'road' || t.kind === 'railway') {
+    const fan = segmentFanHighlight(t)
+    if (fan) return fan
   }
   // Aircraft sub-types carry their own geometry shape:
   //   GROUND = polyline → MultiLineString
@@ -103,7 +111,7 @@ function SegmentRowImpl({
               className="font-medium shrink-0 w-14 text-right tabular-nums inline-block"
               style={{ color: ldenToColor(lden) }}
             >
-              {lden.toFixed(1)} dB
+              {lden.toFixed(1)}{'\u00A0'}dB
             </span>
           </HoverText>
           <span className="text-[10px] text-muted-foreground/40 shrink-0">

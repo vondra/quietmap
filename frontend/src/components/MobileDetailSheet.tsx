@@ -101,7 +101,7 @@ export default function MobileDetailSheet({ data, position, error, onClose, onHi
           <div className="w-10 h-1 bg-muted-foreground/30 rounded-full" />
         </div>
 
-        <div className={`pb-1 ${expanded ? 'overflow-y-auto' : ''}`} style={expanded ? { maxHeight: 'calc(50vh - 16px)' } : undefined}>
+        <div className={`pb-1 ${expanded ? 'overflow-y-auto overflow-x-clip' : ''}`} style={expanded ? { maxHeight: 'calc(50vh - 16px)' } : undefined}>
           {showSkeleton
             ? <DetailSkeleton position={position} error={error} />
             : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>

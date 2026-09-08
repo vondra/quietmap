@@ -136,7 +136,7 @@ export function Section5Lden({ trace }: { trace: SegmentTrace }) {
                   PERIOD_TOOLTIP
                 }
               >
-                {trace.received_lden.full.toFixed(1)} dB
+                {trace.received_lden.full.toFixed(1)}{'\u00A0'}dB
               </HoverText>
             </td>
           </tr>

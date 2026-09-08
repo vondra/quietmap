@@ -10,6 +10,7 @@
     "preview:check": "vite preview --outDir dist.check --host 127.0.0.1 --port 4173 --strictPort",
     "e2e": "npm run build:check && playwright test e2e/hermetic.spec.ts e2e/visitor.spec.ts",
     "e2e:real": "E2E_MODE=real playwright test e2e/real-data.spec.ts",
+    "parity:popup": "node scripts/popup-parity-browser.mjs",
     "lint": "eslint .",
     "test": "node --experimental-strip-types --test test/*.test.mjs"
   },

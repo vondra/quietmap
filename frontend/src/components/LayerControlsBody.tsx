@@ -1,4 +1,5 @@
 import OverlayControls from './OverlayControls'
+import SourceToggles from './SourceToggles'
 import AdvancedSection from './AdvancedSection'
 import type { RealEstateFilters } from './RealEstateLayer'
 import type { StayFilters } from './StayLayer'
@@ -36,6 +37,13 @@ export default function LayerControlsBody({
 
   return (
     <>
+      <SourceToggles
+        rasterOverlays={rasterOverlays}
+        onRasterOverlayChange={onRasterOverlayChange}
+      />
+
+      <div className={divClass} />
+
       <OverlayControls
         quietClustersEnabled={quietClustersEnabled}
         onQuietClustersChange={onQuietClustersChange}

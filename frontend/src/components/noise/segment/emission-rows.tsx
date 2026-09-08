@@ -145,11 +145,11 @@ export function emissionInputRows(t: SegmentTrace): [React.ReactNode, React.Reac
           'anchored from EASA ANP v2.3) plus its energy share at this',
         )
         tooltipLines.push('microsegment.')
-        // No whitespace-nowrap — long mixes ("Average NPD 42% · B738 28%
-        // · A320 13%") overflow the 320 px side panel otherwise. Allow
-        // the row to wrap into a second line inside the 1fr value cell.
+        // InlineTable values are whitespace-nowrap (dB numbers must not
+        // split from their unit) — this long mix opts back out so it can
+        // wrap into a second line instead of overflowing the 320 px panel.
         const headline = (
-          <span>
+          <span className="whitespace-normal">
             {e.class_mix.slice(0, 3).map((c, i) => (
               <span key={c.rep_typecode}>
                 {i > 0 && ' · '}

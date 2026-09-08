@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import Map, { NavigationControl, GeolocateControl } from 'react-map-gl/maplibre'
 import type { StyleSpecification, GeolocateControl as GeolocateControlInstance } from 'maplibre-gl'
 import FlyToLocation from './FlyToLocation'
@@ -9,6 +9,7 @@ import StayLayer from './StayLayer'
 import ValidationLayer, { type ValidationPayload, type ValidationSelection } from './ValidationLayer'
 import IsochronLayer from './IsochronLayer'
 import RasterOverlayLayer from './RasterOverlayLayer'
+import HeatmapOverlay, { HEATMAP_LAYERS } from './HeatmapOverlay'
 import HighlightLayer from './HighlightLayer'
 import CellInspectorLayer from './CellInspectorLayer'
 import MapStateSync from './MapStateSync'
@@ -80,6 +81,13 @@ export default function MapView({
     onGeolocateReadyChange?.(instance !== null && 'geolocation' in navigator)
   }, [onGeolocateReadyChange])
 
+  const activeHeatmapSources = useMemo(() => {
+    const active = HEATMAP_LAYERS.filter(s => !!rasterOverlays?.[s])
+    // All seven on → fetch the single precomputed `total` tile (one fetch, no
+    // client-side sum); any subset → fetch + energy-sum those layers.
+    return active.length === HEATMAP_LAYERS.length ? (['total'] as const) : active
+  }, [rasterOverlays])
+
   useEffect(() => {
     let cancelled = false
     void loadBasemapStyle(bm).then((style) => {
@@ -144,6 +152,11 @@ export default function MapView({
         onError={() => onGeolocateActiveChange?.(false)}
       />
       <RasterOverlayLayer visibleLayers={rasterOverlays ?? {}} />
+      {/* Noise heatmap (HM3 tiles out of the pmtiles archives, decoded +
+          energy-summed + palette-mapped in the browser) below the labels,
+          above the basemap. Rides its own interleaved deck.gl canvas so the
+          contributor highlight keeps drawing above the HM3 tiles. */}
+      <HeatmapOverlay sources={activeHeatmapSources} />
       {/* Contributor highlight (clicked noise-source geometry) on its own
           deck.gl canvas so it always draws above the basemap. */}
       <HighlightLayer geometry={highlightGeometry ?? null} />

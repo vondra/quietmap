@@ -31,6 +31,12 @@ export function SegmentExpanded({ trace }: { trace: SegmentTrace }) {
   // what-if variants (Section6) stay because their numbers ARE
   // per-microsegment and useful.
   const isGroundOps = trace.kind === 'aircraft' && trace.aircraft_subtype === 1
+  // Only road/railway segments with an engine screening fan get the fan
+  // highlight on the map (SegmentRow) — point sources and fan-less spans
+  // must not claim a white fan line or fan-averaged levels.
+  const hasFan =
+    trace.propagation.model === 'cnossos' &&
+    (trace.propagation.screening?.fan?.intervals.length ?? 0) > 0
   return (
     <div className="ml-2 mr-4 pb-2 text-[11px] leading-relaxed font-mono text-muted-foreground">
       <Section1Source trace={trace} />
@@ -43,6 +49,11 @@ export function SegmentExpanded({ trace }: { trace: SegmentTrace }) {
           />
           <HoverText
             title={
+              (hasFan
+                ? 'This is the characteristic ray (the white line in the map fan),\n' +
+                  'not the whole fan — the dB number averages all fan intervals.\n\n'
+                : 'This is the single source→receiver ray the levels below are\n' +
+                  'computed on — no angular fan applies to this source.\n\n') +
               'Bilateral cadence: one 10 m near-probe at each end (berm catch),\n' +
               'then three samples at 30 m / 60 m / 120 m, then 240 m through the\n' +
               'middle. step_m_med is the median inter-sample gap the engine saw\n' +
@@ -50,7 +61,7 @@ export function SegmentExpanded({ trace }: { trace: SegmentTrace }) {
             }
           >
             <div className="mt-0.5 text-[10px] text-muted-foreground italic">
-              Profile: {trace.propagation.path_profile.t.length} samples · median step{' '}
+              Profile: {trace.propagation.path_profile.t.length} samples · med. step{' '}
               {trace.propagation.path_profile.step_m_med.toFixed(1)} m
             </div>
           </HoverText>
