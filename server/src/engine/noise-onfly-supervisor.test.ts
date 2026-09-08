@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import test from 'node:test'
+import test, { type TestContext } from 'node:test'
 import {
   NoiseOnflyRequestError,
   NoiseOnflySupervisor,
@@ -220,4 +220,108 @@ test('building lookup dispatches containment-only worker operation', async (t) =
   assert.equal(workers[0].postMessages[0].op, 'building-at')
   workers[0].replyAt(0, '{"height_m":3,"building_type":"building"}')
   assert.equal(await lookup, '{"height_m":3,"building_type":"building"}')
+})
+
+function pointSupervisor(t: TestContext) {
+  const workers: FakeWorker[] = []
+  const supervisor = new NoiseOnflySupervisor({
+    createWorker: () => {
+      const worker = new FakeWorker()
+      workers.push(worker)
+      return worker
+    },
+    maxQueue: 8,
+    queueTimeoutMs: 1000,
+    workTimeoutMs: 1000,
+  })
+  t.after(async () => supervisor.close())
+  return { workers, supervisor }
+}
+
+const FULL = '{"total_lden":70.3,"segments":[{"a":1}],"segments_meta":{"n":1},"compute_time_ms":"__QM_COMPUTE_TIME_MS__"}'
+
+test('second identical point query is a cache hit (no second dispatch)', async (t) => {
+  const { workers, supervisor } = pointSupervisor(t)
+  const first = supervisor.queryNoiseAtPoint(50.0, 14.0)
+  await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
+  workers[0].replyAt(0, FULL)
+  assert.equal(await first, FULL)
+  assert.equal(await supervisor.queryNoiseAtPoint(50.0, 14.0), FULL)
+  assert.equal(workers[0].postMessages.length, 1)
+})
+
+test('summary view drops segments but keeps everything else', async (t) => {
+  const { workers, supervisor } = pointSupervisor(t)
+  const first = supervisor.queryNoiseAtPoint(50.0, 14.0)
+  await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
+  workers[0].replyAt(0, FULL)
+  await first
+  const summary = supervisor.cachedSummary(50.0, 14.0)
+  assert.ok(summary)
+  assert.ok(!summary.includes('"segments"'))
+  const parsed = JSON.parse(summary)
+  assert.equal(parsed.total_lden, 70.3)
+  assert.deepEqual(parsed.segments_meta, { n: 1 })
+  assert.equal(supervisor.cachedFull(50.0, 14.0), FULL)
+})
+
+test('concurrent identical queries share one worker dispatch', async (t) => {
+  const { workers, supervisor } = pointSupervisor(t)
+  const a = supervisor.queryNoiseAtPoint(50.0, 14.0)
+  const b = supervisor.queryNoiseAtPoint(50.0, 14.0)
+  await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
+  workers[0].replyAt(0, FULL)
+  assert.equal(await a, FULL)
+  assert.equal(await b, FULL)
+  assert.equal(workers[0].postMessages.length, 1)
+})
+
+test('one waiter aborting does not fail the other waiter on the same point', async (t) => {
+  const { workers, supervisor } = pointSupervisor(t)
+  const controllerA = new AbortController()
+  const a = supervisor.queryNoiseAtPoint(50.0, 14.0, controllerA.signal)
+  const b = supervisor.queryNoiseAtPoint(50.0, 14.0)
+  await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
+  controllerA.abort()
+  await assert.rejects(a, /aborted/)
+  workers[0].replyAt(0, FULL)
+  assert.equal(await b, FULL)
+  assert.equal(workers[0].postMessages.length, 1)
+})
+
+test('answer without a segment list is cached and served as its own summary', async (t) => {
+  const { workers, supervisor } = pointSupervisor(t)
+  const empty = '{"total_lden":22.1,"sources":[],"compute_time_ms":"__QM_COMPUTE_TIME_MS__"}'
+  const first = supervisor.queryNoiseAtPoint(51.0, 15.0)
+  await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
+  workers[0].replyAt(0, empty)
+  assert.equal(await first, empty)
+  // Served from cache (no second dispatch), summary === full here.
+  assert.equal(supervisor.cachedSummary(51.0, 15.0), empty)
+  assert.equal(await supervisor.queryNoiseAtPoint(51.0, 15.0), empty)
+  assert.equal(workers[0].postMessages.length, 1)
+})
+
+test('already-aborted request fails even on a cached point', async (t) => {
+  const { workers, supervisor } = pointSupervisor(t)
+  const first = supervisor.queryNoiseAtPoint(50.0, 14.0)
+  await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
+  workers[0].replyAt(0, FULL)
+  await first
+  const controller = new AbortController()
+  controller.abort()
+  await assert.rejects(supervisor.queryNoiseAtPoint(50.0, 14.0, controller.signal), /aborted/)
+})
+
+test('aborted client still populates the cache for the next query', async (t) => {
+  const { workers, supervisor } = pointSupervisor(t)
+  const controller = new AbortController()
+  const first = supervisor.queryNoiseAtPoint(50.0, 14.0, controller.signal)
+  await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
+  controller.abort()
+  await assert.rejects(first, /aborted/)
+  workers[0].replyAt(0, FULL)
+  await waitFor(() => supervisor.cachedSummary(50.0, 14.0) !== null)
+  assert.equal(await supervisor.queryNoiseAtPoint(50.0, 14.0), FULL)
+  assert.equal(workers[0].postMessages.length, 1)
 })

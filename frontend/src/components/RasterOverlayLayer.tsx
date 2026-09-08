@@ -8,12 +8,12 @@ interface RasterOverlayLayerProps {
 /// `url` overrides the default `/api/raster/{id}/{z}/{x}/{y}.png` when
 /// non-empty. Noise levels come from the point compute popup, not a raster.
 const LAYERS = [
-  { id: 'dem', minzoom: 6, url: '' },
+  { id: 'dem', minzoom: 6, url: '/api/raster/dem/{z}/{x}/{y}.png' },
   // Overlay key `building-height` (both share the flat rasterOverlays dict);
   // the tile path stays /api/raster/building/.
   { id: 'building-height', minzoom: 10, url: '/api/raster/building/{z}/{x}/{y}.png' },
-  { id: 'forest', minzoom: 8, url: '' },
-  { id: 'barriers', minzoom: 12, url: '' },
+  { id: 'forest', minzoom: 8, url: '/api/raster/forest/{z}/{x}/{y}.png' },
+  { id: 'imd', minzoom: 10, url: '/api/raster/imd/{z}/{x}/{y}.png' },
 ] as const
 
 export default function RasterOverlayLayer({ visibleLayers }: RasterOverlayLayerProps) {
@@ -66,7 +66,7 @@ export default function RasterOverlayLayer({ visibleLayers }: RasterOverlayLayer
             key={`${id}-${styleState.epoch}`}
             id={`raster-${id}`}
             type="raster"
-            tiles={[url || `/api/raster/${id}/{z}/{x}/{y}.png`]}
+            tiles={[url]}
             tileSize={256}
             minzoom={minzoom}
             maxzoom={16}

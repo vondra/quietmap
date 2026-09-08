@@ -5,6 +5,8 @@ export type NoiseOnflyWorkerReply = {
   ok: boolean
   resultJson?: string
   error?: string
+  /** Native call wall time measured inside the worker (excludes postMessage). */
+  nativeMs?: number
 }
 
 export type NoiseOnflyOp = 'point' | 'unfiltered' | 'ready' | 'footprints' | 'building-at'
@@ -41,6 +43,18 @@ export class NoiseOnflyRequestError extends Error {
   }
 }
 
+export type NoiseOnflyTiming = {
+  op: NoiseOnflyOp
+  /** Enqueue → dispatch (pool contention). */
+  queueMs: number
+  /** Dispatch → worker reply (native + postMessage). */
+  workMs: number
+  /** Native call only, as reported by the worker. */
+  nativeMs?: number
+  /** resultJson bytes. */
+  bytes: number
+}
+
 type RequestEntry = {
   id: number
   lat: number
@@ -49,6 +63,18 @@ type RequestEntry = {
   lat2?: number
   lng2?: number
   op: NoiseOnflyOp
+  enqueuedAt: number
+  dispatchedAt: number
+  /**
+   * Entry-owned abort: fires only when EVERY waiter is gone (or the entry
+   * itself times out). Individual client signals are waiter registrations
+   * (see addWaiter) — one client's abort must never kill a shared compute
+   * other clients still await (gg finding 1).
+   */
+  ctrl: AbortController
+  waiterTokens: Set<symbol>
+  /** A signal-less waiter pins the entry: it never auto-aborts. */
+  pinned: boolean
   resolve: (resultJson: string) => void
   reject: (err: Error) => void
   queueTimer: NodeJS.Timeout | null
@@ -72,6 +98,30 @@ type Slot = {
   recycling: Promise<void> | null
 }
 
+/**
+ * Result cache: one entry holds the full worker string (raw, WITH the
+ * `compute_time_ms` sentinel — the route stamps it per serve) plus the
+ * once-derived summary string, so a summary hit never re-parses megabytes.
+ * Point ops only: bbox ops (`footprints`) need lat2/lng2 in the key and are
+ * deliberately uncached. Immutable data per deploy ⇒ restart invalidates.
+ */
+type CacheEntry = {
+  full: string
+  summary: string
+  bytes: number
+}
+
+/** Point-op cache key. `String(f64)` is unique per double except -0/0
+ * (the same place — harmless). Exact keys only: a quantized key would
+ * serve one point's numbers to another. Bbox ops (`footprints`) are never
+ * keyed here — they need lat2/lng2 and stay uncached. */
+function pointCacheKey(op: 'point' | 'unfiltered', lat: number, lng: number): string {
+  return `${op}|${lat}|${lng}`
+}
+
+const RESULT_CACHE_MAX_ENTRIES = 32
+const RESULT_CACHE_MAX_BYTES = 150 * 1024 * 1024
+
 export type NoiseOnflySupervisorConfig = {
   createWorker: NoiseOnflyWorkerFactory
   maxQueue: number
@@ -87,6 +137,8 @@ export type NoiseOnflySupervisorConfig = {
    */
   poolSize?: number
   logger?: SupervisorLogger
+  /** Per-request timing tap (phase A0 measurement; cheap, one call per reply). */
+  onTiming?: (timing: NoiseOnflyTiming) => void
 }
 
 function toError(value: unknown): Error {
@@ -129,11 +181,16 @@ export class NoiseOnflySupervisor {
   private readonly queueTimeoutMs: number
   private readonly workTimeoutMs: number
   private readonly logger?: SupervisorLogger
+  private readonly onTiming?: (timing: NoiseOnflyTiming) => void
   private readonly slots: Slot[]
 
   private readonly queue: RequestEntry[] = []
   private nextRequestId = 1
   private closed = false
+
+  private readonly resultCache = new Map<string, CacheEntry>()
+  private resultCacheBytes = 0
+  private readonly inflight = new Map<string, { promise: Promise<string>; entryId: number }>()
 
   constructor(config: NoiseOnflySupervisorConfig) {
     this.createWorker = config.createWorker
@@ -141,6 +198,7 @@ export class NoiseOnflySupervisor {
     this.queueTimeoutMs = Math.max(1, config.queueTimeoutMs)
     this.workTimeoutMs = Math.max(1, config.workTimeoutMs)
     this.logger = config.logger
+    this.onTiming = config.onTiming
     const poolSize = Math.max(1, config.poolSize ?? 1)
     this.slots = Array.from({ length: poolSize }, (_, index) => ({
       index,
@@ -152,11 +210,185 @@ export class NoiseOnflySupervisor {
   }
 
   async queryNoiseAtPoint(lat: number, lng: number, signal?: AbortSignal): Promise<string> {
-    return this.enqueue(lat, lng, 'point', signal)
+    return this.queryPointCached('point', lat, lng, signal)
   }
 
   async queryNoiseAtPointUnfiltered(lat: number, lng: number, signal?: AbortSignal): Promise<string> {
-    return this.enqueue(lat, lng, 'unfiltered', signal)
+    return this.queryPointCached('unfiltered', lat, lng, signal)
+  }
+
+  /**
+   * Point query with result cache + in-flight dedup. The shared computation
+   * carries NO client signal: one client's abort must never fail the other
+   * clients waiting on the same point (gg finding 1). Each waiter races the
+   * shared compute against its own signal instead. The abort check still
+   * runs BEFORE the lookup so an already-aborted request fails exactly
+   * like an uncached one.
+   */
+  private async queryPointCached(
+    op: 'point' | 'unfiltered', lat: number, lng: number, signal?: AbortSignal,
+  ): Promise<string> {
+    if (signal?.aborted) {
+      throw abortError()
+    }
+    const key = pointCacheKey(op, lat, lng)
+    const hit = this.resultCache.get(key)
+    if (hit) {
+      this.resultCache.delete(key)
+      this.resultCache.set(key, hit)
+      return hit.full
+    }
+    const pending = this.inflight.get(key)
+    if (pending) {
+      const entry = this.findEntry(pending.entryId)
+      if (entry) {
+        this.addWaiter(entry, signal)
+        return this.withSignal(pending.promise, signal)
+      }
+      // The entry settled between lookup and join: its result is cached
+      // by now, or the compute failed and a fresh one is due.
+      const late = this.resultCache.get(key)
+      if (late) {
+        this.resultCache.delete(key)
+        this.resultCache.set(key, late)
+        return late.full
+      }
+      this.inflight.delete(key)
+    }
+    const entryRef: { id?: number } = {}
+    // The client signal travels into enqueue as the FIRST waiter (registered
+    // there); later joiners register via addWaiter above. Never both.
+    const run = this.enqueue(lat, lng, op, signal, undefined, undefined, entryRef)
+    const entry = entryRef.id === undefined ? undefined : this.findEntry(entryRef.id)
+    if (!entry) {
+      // Rejected before queuing (closed/queue-full): nothing to share.
+      return run
+    }
+    const tracked = run.finally(() => {
+      const current = this.inflight.get(key)
+      if (current?.promise === tracked) this.inflight.delete(key)
+    })
+    this.inflight.set(key, { promise: tracked, entryId: entry.id })
+    return this.withSignal(tracked, signal)
+  }
+
+  private findEntry(id: number): RequestEntry | undefined {
+    return (
+      this.queue.find((entry) => entry.id === id)
+      ?? this.slots.map((slot) => slot.active).find((active) => active?.id === id)
+      ?? undefined
+    )
+  }
+
+  /**
+   * Register one client's interest in a shared entry. A signal-less waiter
+   * pins the entry (internal callers never abort); otherwise the waiter
+   * leaves when its own signal fires, and the LAST waiter out aborts the
+   * entry-owned controller — freeing a queued slot while an active worker
+   * keeps computing for the cache.
+   */
+  private addWaiter(entry: RequestEntry, signal?: AbortSignal): void {
+    if (!signal) {
+      entry.pinned = true
+      return
+    }
+    const token: symbol = Symbol('waiter')
+    entry.waiterTokens.add(token)
+    signal.addEventListener(
+      'abort',
+      () => {
+        entry.waiterTokens.delete(token)
+        if (!entry.pinned && entry.waiterTokens.size === 0) {
+          entry.ctrl.abort()
+        }
+      },
+      { once: true },
+    )
+  }
+
+  /** Race a shared compute against one client's own abort signal. */
+  private async withSignal(shared: Promise<string>, signal?: AbortSignal): Promise<string> {
+    if (!signal || signal.aborted) {
+      if (signal?.aborted) throw abortError()
+      return shared
+    }
+    let onAbort!: () => void
+    try {
+      return await Promise.race([
+        shared,
+        new Promise<never>((_, reject) => {
+          onAbort = () => reject(abortError())
+          signal.addEventListener('abort', onAbort, { once: true })
+        }),
+      ])
+    } finally {
+      signal.removeEventListener('abort', onAbort)
+    }
+  }
+
+  /**
+   * Summary projection: the full answer minus the one `segments` key.
+   * Key-deleting (not reshaping), so a Rust field rename cannot silently
+   * diverge it. Answers without a segment list (empty areas) project to
+   * themselves and ARE cached — an uncacheable valid answer would make
+   * the route recompute or fall through to `all` (gg finding 3).
+   */
+  static deriveSummary(full: string): string | null {
+    let parsed: { segments?: unknown }
+    try {
+      parsed = JSON.parse(full) as { segments?: unknown }
+    } catch {
+      return null
+    }
+    if (parsed.segments !== undefined && !Array.isArray(parsed.segments)) return null
+    delete parsed.segments
+    return JSON.stringify(parsed)
+  }
+
+  /** Cache write on EVERY successful worker reply — including replies whose
+   * client already left (their compute is still a valid future hit).
+   * `unfiltered` ("show all") is deliberately never stored: 18 MB entries
+   * would crowd out the point cache, and nothing reads that key. */
+  private writePointCache(op: NoiseOnflyOp, lat: number, lng: number, full: string): void {
+    if (op !== 'point') return
+    const key = pointCacheKey(op, lat, lng)
+    const summary = NoiseOnflySupervisor.deriveSummary(full)
+    if (summary === null) return
+    const bytes = Buffer.byteLength(full) + Buffer.byteLength(summary)
+    const old = this.resultCache.get(key)
+    if (old) this.resultCacheBytes -= old.bytes
+    this.resultCache.delete(key)
+    this.resultCache.set(key, { full, summary, bytes })
+    this.resultCacheBytes += bytes
+    while (
+      (this.resultCache.size > RESULT_CACHE_MAX_ENTRIES
+        || this.resultCacheBytes > RESULT_CACHE_MAX_BYTES)
+      && this.resultCache.size > 0
+    ) {
+      const oldest = this.resultCache.keys().next().value!
+      this.resultCacheBytes -= this.resultCache.get(oldest)!.bytes
+      this.resultCache.delete(oldest)
+    }
+  }
+
+  /** Summary view of a cached point answer, or null on miss. */
+  cachedSummary(lat: number, lng: number): string | null {
+    return this.cachedView(lat, lng, 'summary')
+  }
+
+  /** Full view of a cached point answer, or null on miss. */
+  cachedFull(lat: number, lng: number): string | null {
+    return this.cachedView(lat, lng, 'full')
+  }
+
+  private cachedView(lat: number, lng: number, view: 'summary' | 'full'): string | null {
+    // Point-only: `unfiltered` answers are never stored, so no op key needed.
+    const key = pointCacheKey('point', lat, lng)
+    const hit = this.resultCache.get(key)
+    if (!hit) return null
+    this.resultCache.delete(key)
+    this.resultCache.set(key, hit)
+    return view === 'summary' ? hit.summary : hit.full
   }
 
   /** Obstacle footprints (as-used heights) in a bbox — the building-height
@@ -184,7 +416,15 @@ export class NoiseOnflySupervisor {
     }
   }
 
-  private async enqueue(lat: number, lng: number, op: NoiseOnflyOp, signal?: AbortSignal, lat2?: number, lng2?: number): Promise<string> {
+  private async enqueue(
+    lat: number,
+    lng: number,
+    op: NoiseOnflyOp,
+    signal?: AbortSignal,
+    lat2?: number,
+    lng2?: number,
+    entryRef?: { id?: number },
+  ): Promise<string> {
     if (this.closed) {
       throw unavailableError('noise-onfly supervisor is shutting down')
     }
@@ -204,24 +444,30 @@ export class NoiseOnflySupervisor {
         lat2,
         lng2,
         op,
+        enqueuedAt: Date.now(),
+        dispatchedAt: 0,
         resolve,
         reject,
         queueTimer: null,
         workTimer: null,
         worker: null,
-        signal,
+        signal: undefined as unknown as AbortSignal,
         clientSettled: false,
+        ctrl: new AbortController(),
+        waiterTokens: new Set(),
+        pinned: false,
       }
+      entry.signal = entry.ctrl.signal
 
       if (signal?.aborted) {
         this.rejectClient(entry, abortError())
         return
       }
 
-      if (signal) {
-        entry.abortHandler = () => this.handleAbort(entry)
-        signal.addEventListener('abort', entry.abortHandler, { once: true })
-      }
+      entry.abortHandler = () => this.handleAbort(entry)
+      entry.signal.addEventListener('abort', entry.abortHandler, { once: true })
+      this.addWaiter(entry, signal)
+      if (entryRef) entryRef.id = entry.id
 
       entry.queueTimer = setTimeout(() => {
         this.handleQueueTimeout(entry.id)
@@ -306,6 +552,7 @@ export class NoiseOnflySupervisor {
     }
 
     entry.worker = worker
+    entry.dispatchedAt = Date.now()
     entry.workTimer = setTimeout(() => {
       void this.handleWorkTimeout(slot, entry.id)
     }, this.workTimeoutMs)
@@ -379,6 +626,18 @@ export class NoiseOnflySupervisor {
 
     this.finishActiveSlot(slot, active)
     if (message.ok && message.resultJson !== undefined) {
+      const now = Date.now()
+      this.onTiming?.({
+        op: active.op,
+        queueMs: active.dispatchedAt - active.enqueuedAt,
+        workMs: now - active.dispatchedAt,
+        nativeMs: message.nativeMs,
+        bytes: message.resultJson.length,
+      })
+      // Cache on every successful reply — even when the client already
+      // left (resolveClient below is then a no-op, but the compute stays
+      // a valid future hit).
+      this.writePointCache(active.op, active.lat, active.lng, message.resultJson)
       this.resolveClient(active, message.resultJson)
     } else {
       this.rejectClient(

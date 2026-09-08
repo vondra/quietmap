@@ -68,20 +68,23 @@ parentPort?.on('message', ({ id, lat, lng, lat2, lng2, op }) => {
     }
     if (op === 'footprints') {
       // bbox: lat/lng = south-west, lat2/lng2 = north-east (supervisor contract).
+      const t0 = Date.now()
       const resultJson = sourceModule.queryObstacleFootprints(lat, lng, lat2, lng2)
-      parentPort?.postMessage({ id, ok: true, resultJson })
+      parentPort?.postMessage({ id, ok: true, resultJson, nativeMs: Date.now() - t0 })
       return
     }
     if (op === 'building-at') {
+      const t0 = Date.now()
       const resultJson = sourceModule.queryBuildingAt(lat, lng)
-      parentPort?.postMessage({ id, ok: true, resultJson })
+      parentPort?.postMessage({ id, ok: true, resultJson, nativeMs: Date.now() - t0 })
       return
     }
     const fn = op === 'unfiltered'
       ? sourceModule.queryNoiseAtPointUnfiltered
       : sourceModule.queryNoiseAtPoint
+    const t0 = Date.now()
     const resultJson = fn(lat, lng)
-    parentPort?.postMessage({ id, ok: true, resultJson })
+    parentPort?.postMessage({ id, ok: true, resultJson, nativeMs: Date.now() - t0 })
   } catch (err) {
     parentPort?.postMessage({
       id,

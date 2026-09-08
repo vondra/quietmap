@@ -1,12 +1,15 @@
 import { useState } from 'react'
-import { ChevronDown, Mountain, Building, TreePine, Shield } from 'lucide-react'
+import { ChevronDown, Mountain, Building, TreePine, Factory } from 'lucide-react'
 import { Switch } from './ui/switch'
 
+// Only overlays the server actually serves (`/api/raster/{dem,building,
+// forest,imd}/`). A switch whose renderer is missing 404s every tile, so
+// nothing unserved may be listed here.
 const OVERLAYS = [
-  { id: 'dem', label: 'Elevation', tooltip: 'DEM terrain elevation — hills, valleys, ridges (30m)', icon: <Mountain className="size-3.5" /> },
-  { id: 'building-height', label: 'Building heights', tooltip: 'Exact building footprints + heights the noise model screens with (vector obstacle store)', icon: <Building className="size-3.5" /> },
-  { id: 'forest', label: 'Forest', tooltip: 'Forest cover from ESA WorldCover (30m)', icon: <TreePine className="size-3.5" /> },
-  { id: 'barriers', label: 'Noise barriers', tooltip: 'Noise barriers from OSM (walls blocking sound propagation)', icon: <Shield className="size-3.5" /> },
+  { id: 'dem', label: 'Elevation', tooltip: 'DEM terrain elevation — green lowlands to white peaks', icon: <Mountain className="size-3.5" /> },
+  { id: 'building-height', label: 'Building heights', tooltip: 'Exact building footprints + heights the noise model screens with, colored by height', icon: <Building className="size-3.5" /> },
+  { id: 'forest', label: 'Forest', tooltip: 'Forest cover — denser green means denser canopy', icon: <TreePine className="size-3.5" /> },
+  { id: 'imd', label: 'Sealed surface', tooltip: 'Imperviousness — yellow to red sealed ground', icon: <Factory className="size-3.5" /> },
 ]
 
 interface AdvancedSectionProps {

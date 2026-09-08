@@ -83,7 +83,7 @@ export async function renderBuildingVectorTile(
   return encodePNG(width, pixels)
 }
 
-function encodePNG(width: number, rgba: Buffer): Buffer {
+export function encodePNG(width: number, rgba: Buffer): Buffer {
   const filtered = Buffer.alloc(width * (1 + width * 4))
   for (let y = 0; y < width; y++) {
     rgba.copy(filtered, y * (1 + width * 4) + 1, y * width * 4, (y + 1) * width * 4)
@@ -111,6 +111,6 @@ function pngChunk(type: string, data: Buffer): Buffer {
 }
 
 let emptyPng: Buffer | null = null
-function getEmptyPng(): Buffer {
+export function getEmptyPng(): Buffer {
   return emptyPng ??= encodePNG(256, Buffer.alloc(256 * 256 * 4))
 }

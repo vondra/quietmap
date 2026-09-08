@@ -89,7 +89,7 @@ test('multipart courtyards subtract only their own polygon in either winding and
   const rectangle = (left: number, top: number, right: number, bottom: number) =>
     [[left, top], [right, top], [right, bottom], [left, bottom]].map(([px, py]) => point(px, py))
   for (const reverse of [false, true]) {
-    const ring = (coordinates: number[][]) => reverse ? coordinates.toReversed() : coordinates
+    const ring = (coordinates: number[][]) => reverse ? [...coordinates].reverse() : coordinates
     const block = { p: [
       [ring(rectangle(10, 10, 110, 110)), ring(rectangle(30, 30, 90, 90))],
       [ring(rectangle(150, 10, 200, 110))],

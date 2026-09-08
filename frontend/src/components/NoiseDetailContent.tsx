@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ldenToColor } from '../utils/noise-colors'
 import { DataPoint } from './noise/noise-tooltips'
 import { HoverText } from './ui/info-tip'
@@ -67,11 +67,24 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
     meta: NoiseComputeData['segments_meta']
   } | null>(null)
   const [loadingFull, setLoadingFull] = useState(false)
-  // Reset augmented data whenever the user clicks a new point.
+  const [segmentsError, setSegmentsError] = useState<string | null>(null)
+  const showAllController = useRef<AbortController | null>(null)
+  // Identity of the point the visible segments belong to. Compared by ref,
+  // not by closure values (a closure comparison can never see a new point).
+  const livePoint = useRef(`${centerLat},${centerLng}`)
+  // Reset augmented data whenever the user clicks a new point, aborting any
+  // in-flight "show all" so it can neither overwrite nor leak into the new one.
   useEffect(() => {
+    showAllController.current?.abort()
+    showAllController.current = null
+    livePoint.current = `${centerLat},${centerLng}`
     setFullSegments(null)
     setLoadingFull(false)
+    setSegmentsError(null)
   }, [centerLat, centerLng])
+  // Unmount aborts the in-flight "show all": the request must not outlive
+  // the dialog (gg finding 6).
+  useEffect(() => () => showAllController.current?.abort(), [])
 
   const displaySegments = fullSegments?.segments ?? data.segments ?? []
   const displayMeta = fullSegments?.meta ?? data.segments_meta ?? null
@@ -79,17 +92,61 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
   const hasSegmentsTab = segmentsTotal > 0
   const showSegments = tab === 'segments' && hasSegmentsTab
 
+  // The click fetches the summary (no segment list). Opening the Segments
+  // tab pulls `detail=segments` (served from the server's result cache);
+  // "Show all" pulls `detail=all` (fresh unfiltered compute, uncached).
+  // Both abort when the point changes so a late `all` can never overwrite
+  // a newer point's segments.
+  useEffect(() => {
+    if (!showSegments || fullSegments || data.segments) return
+    const controller = new AbortController()
+    setLoadingFull(true)
+    setSegmentsError(null)
+    void (async () => {
+      try {
+        const r = await fetch(
+          `/api/noise-onfly-v2?lat=${centerLat}&lng=${centerLng}&detail=segments`,
+          { signal: controller.signal },
+        )
+        if (!r.ok) throw new Error(`fetch failed: ${r.status}`)
+        const next = (await r.json()) as NoiseComputeData
+        setFullSegments({
+          segments: next.segments ?? [],
+          meta: next.segments_meta ?? null,
+        })
+      } catch (err) {
+        // Aborted by point change: silent. A real failure surfaces with a
+        // retry (independent of truncation — Show all may not exist).
+        if (!controller.signal.aborted) {
+          setSegmentsError(err instanceof Error ? err.message : 'fetch failed')
+        }
+      } finally {
+        if (!controller.signal.aborted) setLoadingFull(false)
+      }
+    })()
+    return () => controller.abort()
+  }, [showSegments, fullSegments, data.segments, centerLat, centerLng])
+
   const handleShowAll = async () => {
     if (loadingFull) return
     setLoadingFull(true)
+    const controller = new AbortController()
+    showAllController.current = controller
+    const point = `${centerLat},${centerLng}`
     try {
-      const r = await fetch(`/api/noise-onfly-v2?lat=${centerLat}&lng=${centerLng}&full=1`)
+      const r = await fetch(`/api/noise-onfly-v2?lat=${centerLat}&lng=${centerLng}&detail=all`, {
+        signal: controller.signal,
+      })
       if (!r.ok) throw new Error(`fetch failed: ${r.status}`)
       const next = (await r.json()) as NoiseComputeData
+      // A late arrival for an older point must not overwrite the current one.
+      if (point !== livePoint.current) return
       setFullSegments({
         segments: next.segments ?? [],
         meta: next.segments_meta ?? null,
       })
+    } catch {
+      // Aborted or failed — loading state resets below for retry.
     } finally {
       setLoadingFull(false)
     }
@@ -102,7 +159,7 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
           <div className="flex items-center justify-between mb-1">
             <span
               data-testid="noise-badge"
-              className="text-2xl font-bold leading-none shrink-0"
+              className="text-2xl font-bold leading-none shrink-0 whitespace-nowrap"
               style={{ color: ldenToColor(data.total_lden) }}
             >
               <DataPoint title="Total Lden — energy sum across all sources" text={totalLdenText}>
@@ -133,7 +190,7 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
               </span>
             </div>
           )}
-          <div className="overflow-y-auto" style={{ maxHeight: 'max(100dvh - 400px, 160px)' }}>
+          <div className="overflow-y-auto overflow-x-clip" style={{ maxHeight: 'max(100dvh - 400px, 160px)' }}>
             {/* Sources is always mounted; Segments mounts lazily (below) on first
                 visit. Once mounted, both toggle via display so expanded-row state
                 survives tab switches. */}
@@ -158,13 +215,29 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
             </div>
             {hasSegmentsTab && segmentsMounted && (
               <div style={{ display: showSegments ? 'block' : 'none' }}>
-                <SegmentList
-                  segments={displaySegments}
-                  meta={displayMeta}
-                  onHighlight={onHighlight}
-                  onShowAll={handleShowAll}
-                  loadingFull={loadingFull}
-                />
+                {segmentsError && displaySegments.length === 0 ? (
+                  <div role="alert" className="text-xs text-destructive py-2">
+                    Segments failed to load ({segmentsError}).{' '}
+                    <button
+                      type="button"
+                      className="underline"
+                      onClick={() => {
+                        setSegmentsError(null)
+                        setFullSegments(null)
+                      }}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : (
+                  <SegmentList
+                    segments={displaySegments}
+                    meta={displayMeta}
+                    onHighlight={onHighlight}
+                    onShowAll={handleShowAll}
+                    loadingFull={loadingFull}
+                  />
+                )}
               </div>
             )}
           </div>

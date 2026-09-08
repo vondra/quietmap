@@ -9,11 +9,24 @@ export const QUIET_THRESHOLD_MIN = 20
 export const QUIET_THRESHOLD_MAX = 45
 export const QUIET_THRESHOLD_DEFAULT = 35
 export const QUIET_THRESHOLD_STEP = 0.5
+const HEATMAP_OVERLAY_IDS = [
+  'road',
+  'rail',
+  'industrial',
+  'building',
+  'aircraft-ground',
+  'aircraft-airborne',
+  'aircraft-cruise',
+]
+// Exactly the overlays the UI can enable (AdvancedSection + RasterOverlayLayer).
+// `barriers` has no renderer (gg finding 8: an unlisted `imd` would neither
+// serialize nor parse, while a listed-but-unserved id would 404 on share).
 const ALL_RASTER_OVERLAY_IDS = [
+  ...HEATMAP_OVERLAY_IDS,
   'dem',
   'building-height',
   'forest',
-  'barriers',
+  'imd',
 ]
 
 export interface UrlState {
@@ -39,10 +52,12 @@ export const EMPTY_RASTER_OVERLAYS: Record<string, boolean> = Object.fromEntries
   ALL_RASTER_OVERLAY_IDS.map(id => [id, false]),
 )
 
-// Default view: advanced rasters off. Noise levels come from the point
-// compute popup (`/api/noise-onfly-v2`) — there is no raster heatmap.
+// Default view: the noise heatmap on (all seven layers → the precomputed
+// `total` tile), advanced rasters off. The point compute popup
+// (`/api/noise-onfly-v2`) stays the exact-level source; the heatmap is the map.
 const DEFAULT_RASTER_OVERLAYS: Record<string, boolean> = {
   ...EMPTY_RASTER_OVERLAYS,
+  ...Object.fromEntries(HEATMAP_OVERLAY_IDS.map(id => [id, true])),
 }
 
 // Quiet-zone threshold, clamped to the slider's range. parseFloat (not parseInt)
