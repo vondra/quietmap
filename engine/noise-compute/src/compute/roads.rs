@@ -31,9 +31,17 @@ pub(crate) fn compute_roads(
     rasters: &dyn RasterSampler,
     mut traces: Option<&mut TraceCollector>,
 ) -> (NoisePeriods, Vec<Contributor>) {
-    use propagation::arc_screening::{ArcBounds, ArcScreeningScratch, ArcSkyline, SkylineSnapshot};
+    use propagation::arc_screening::{
+        ArcBounds, ArcScreeningScratch, ArcSkyline, SkylineSnapshot, enter_emission_session,
+    };
     use rayon::prelude::*;
 
+    // One emission-memo session for the whole kernel call: the pass-1 growth
+    // chain re-walks the same obstacle cells dozens of visits apart, and the
+    // memo replays bit-identical emission geometry for repeat edges.
+    let _emission_session = enter_emission_session();
+    let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
+    let t_road_start = std::time::Instant::now();
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
     let rcv_alt = receiver.altitude_m();
     let bounds = ArcBounds::shipped();
@@ -138,7 +146,10 @@ pub(crate) fn compute_roads(
     // invalidated by each growth, cloned lazily on first use.
     let mut epoch_snap: Option<SkylineSnapshot> = None;
     let mut pre: Vec<(usize, RoadPre)> = Vec::with_capacity(roads.len());
+    let mut t_road_arc = std::time::Duration::ZERO;
+    let mut t_road_gates_accum = std::time::Duration::ZERO;
     for (seg_i, seg) in roads.iter().enumerate() {
+        let t_iter = t_road_start.elapsed();
         // The segment's own baked admin when present (plan M4); `None` — no
         // channel, no columns on the row's batch, or a mis-aligned channel —
         // falls back to the receiver admin (pre-bake behaviour, unchanged).
@@ -175,6 +186,7 @@ pub(crate) fn compute_roads(
             }
         }
 
+        let t_road_gate_end = t_road_start.elapsed();
         // Arc pre-gate + growth-chain replay: growth ORDER is part of the
         // answer (SPEC §4.7 reproducibility), so the ensure its sequential
         // twin would run happens right here, on this thread, in segment order
@@ -193,6 +205,8 @@ pub(crate) fn compute_roads(
             norm.source_height_m,
             bounds,
         );
+        t_road_arc += t_road_start.elapsed() - t_road_gate_end;
+        t_road_gates_accum += t_road_gate_end - t_iter;
 
         pre.push((
             seg_i,
@@ -206,6 +220,7 @@ pub(crate) fn compute_roads(
         ));
     }
 
+    let t_road_pass1 = t_road_start.elapsed();
     // ── Pass 2: per-segment evaluation (parallel, bit-deterministic) ──
     struct RoadSegOut {
         seg_variants: [PropagationVariants; 3],
@@ -490,6 +505,26 @@ pub(crate) fn compute_roads(
             },
         )
         .collect();
+
+    let t_road_pass2 = t_road_start.elapsed() - t_road_pass1;
+    if timing_on {
+        let (steps, growths, sectors, growth_ms, raw_arcs, memo_hits, memo_miss) = crate::propagation::arc_screening::take_growth_census();
+        eprintln!(
+            "popup-stage road pass1={:.0}ms (gates={:.0}ms arc={:.0}ms) pass2={:.0}ms kept={} steps={} growths={} sectors={} growth_ms={:.0} rawarcs={} memohit={} memomiss={}",
+            t_road_pass1.as_secs_f64() * 1000.0,
+            t_road_gates_accum.as_secs_f64() * 1000.0,
+            t_road_arc.as_secs_f64() * 1000.0,
+            t_road_pass2.as_secs_f64() * 1000.0,
+            pre.len(),
+            steps,
+            growths,
+            sectors,
+            growth_ms,
+            raw_arcs,
+            memo_hits,
+            memo_miss,
+        );
+    }
 
     // ── Pass 3: accumulation, in segment order (sequential) ──
     //

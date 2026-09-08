@@ -544,6 +544,245 @@ impl ArcScreeningScratch {
     }
 }
 
+// Popup growth census (POPUP_TIMING=1): (chain steps, growths that walked,
+// sectors scanned by the range-minimum). Thread-local because the popup
+// kernels drive the chain per worker thread.
+thread_local! {
+    static GROWTH_CENSUS: std::cell::RefCell<(u64, u64, u64, f64, u64, u64, u64)> =
+        const { std::cell::RefCell::new((0, 0, 0, 0.0, 0, 0, 0)) };
+}
+
+/// `POPUP_TIMING=1` once per process: the census below is popup
+/// telemetry, and lanes that never opt in (tiles, batch) must not pay its
+/// thread-local reads on every edge visit (gg review N2).
+fn census_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("POPUP_TIMING").as_deref() == Ok("1"))
+}
+
+/// Memo hit (replayed geometry, gates re-run by the caller) vs miss.
+pub(crate) fn note_memo_hit() {
+    if census_on() {
+        GROWTH_CENSUS.with(|c| c.borrow_mut().5 += 1);
+    }
+}
+
+/// Memo miss (computed).
+pub(crate) fn note_memo_miss() {
+    if census_on() {
+        GROWTH_CENSUS.with(|c| c.borrow_mut().6 += 1);
+    }
+}
+
+// Per-edge emission memo, session-tagged (goal B): one obstacle edge lives
+// in every grid cell it crosses, and overlapping growths re-walk the same
+// cells — so a dense kernel emits each edge dozens of visits apart with
+// bit-identical angles (2× atan2 + segment distance each). The memo replays
+// the computed geometry while the caller re-runs its radius/floor gates, so
+// the visit sequence is unchanged and only repeated transcendental work is
+// skipped. One session per kernel call (roads, railways): entries never
+// cross kernels, receivers or prepared sets. Direct-mapped by edge ordinal;
+// a tag mismatch recomputes, never lies. Lazily allocated per thread, so
+// lanes that never opt in (tiles, tests) pay nothing.
+const EMISSION_MEMO_BITS: u32 = 20;
+
+/// Global edge ordinal within one gather set (slab base + edge ref), kept
+/// under 32 bits so the session tag stays collision-free in practice.
+#[derive(Clone, Copy)]
+struct EmissionMemoSlot {
+    tag: u64,
+    lo: f64,
+    hi: f64,
+    /// f64 like the first pass: the radius gate must replay bit-exactly.
+    near_m: f64,
+    height_m: f32,
+    barrier: bool,
+}
+
+/// Replayable emission geometry for one edge (gates re-run by the caller).
+pub(crate) struct EmissionReplay {
+    /// Global edge ordinal (`edge_ordinal_base + eref`); values ≥ 2³² − 1
+    /// bypass the memo and flow through unmemoized.
+    pub ordinal: u64,
+    pub lo: f64,
+    pub hi: f64,
+    pub near_m: f64,
+    pub height_m: f32,
+    pub barrier: bool,
+}
+
+thread_local! {
+    static EMISSION_MEMO: std::cell::RefCell<Vec<EmissionMemoSlot>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// Tag generation, MONOTONIC per thread: it must never go back, or a new
+    /// kernel call would match the previous receiver's entries (gg review:
+    /// two independent reviewers caught `Drop` resetting this to 0, which
+    /// pinned every call to session 1 and replayed stale geometry across
+    /// clicks on one thread).
+    static EMISSION_GEN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Live session depth. Separate from the generation: `Drop` only ends
+    /// the session (tiles, tests and session-less callers bypass), it must
+    /// not touch the generation.
+    static EMISSION_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// RAII emission-memo session: one per kernel call. Drop (or panic) ends it.
+pub(crate) struct EmissionSessionGuard;
+
+impl Drop for EmissionSessionGuard {
+    fn drop(&mut self) {
+        EMISSION_DEPTH.with(|d| {
+            d.set(
+                d.get()
+                    .checked_sub(1)
+                    .expect("emission session guard dropped without a live session"),
+            );
+        });
+    }
+}
+
+/// Begin one kernel call's session. A new generation every call, so entries
+/// never cross kernels, receivers or prepared sets even when one thread
+/// serves many clicks; depth 0 means "no session" and bypasses the memo.
+pub(crate) fn enter_emission_session() -> EmissionSessionGuard {
+    EMISSION_GEN.with(|gen| {
+        let next = gen.get().wrapping_add(1);
+        if next == 0 {
+            EMISSION_MEMO.with(|memo| {
+                for slot in memo.borrow_mut().iter_mut() {
+                    slot.tag = u64::MAX;
+                }
+            });
+            gen.set(1);
+        } else {
+            gen.set(next);
+        }
+    });
+    // Sessions never nest today (the two kernel entries never call each other):
+    // a nested enter would orphan the outer call's entries under a newer
+    // generation and, worse, let the outer call match the inner's entries
+    // after it drops — the B1 failure mode through a different door. Fail
+    // loud here so a future caller nests deliberately, not silently.
+    EMISSION_DEPTH.with(|d| {
+        assert_eq!(
+            d.get(),
+            0,
+            "nested emission sessions are not supported: parent and child would share one generation"
+        );
+        d.set(1);
+    });
+    EmissionSessionGuard
+}
+
+/// Live session generation, if a kernel call holds one on this thread.
+fn emission_session() -> Option<u32> {
+    EMISSION_DEPTH.with(|d| {
+        if d.get() == 0 {
+            None
+        } else {
+            Some(EMISSION_GEN.with(|g| g.get()))
+        }
+    })
+}
+
+fn emission_memo_table_len() -> usize {
+    1 << EMISSION_MEMO_BITS
+}
+
+/// Replay one edge's geometry under the live session, if present. The
+/// caller re-runs its radius/floor gates on the replayed values, so entries
+/// stay valid across growths with different needs.
+pub(crate) fn emission_memo_lookup(ordinal: u64) -> Option<EmissionReplay> {
+    // `u32::MAX` is the empty-slot sentinel: an entry carrying it would be
+    // indistinguishable from "never stored", so that one ordinal bypasses.
+    let session = emission_session()?;
+    if ordinal >= 0xFFFF_FFFF {
+        return None;
+    }
+    let tag = (u64::from(session) << 32) | ordinal;
+    EMISSION_MEMO.with(|memo| {
+        let memo = memo.borrow();
+        if memo.is_empty() {
+            return None;
+        }
+        let slot = &memo[ordinal as usize & (memo.len() - 1)];
+        if slot.tag == tag {
+            note_memo_hit();
+            Some(EmissionReplay {
+                ordinal,
+                lo: slot.lo,
+                hi: slot.hi,
+                near_m: slot.near_m,
+                height_m: slot.height_m,
+                barrier: slot.barrier,
+            })
+        } else {
+            None
+        }
+    })
+}
+
+/// Store one edge's computed geometry under the live session (no-op without).
+pub(crate) fn emission_memo_store(replay: &EmissionReplay) {
+    let Some(session) = emission_session() else {
+        return;
+    };
+    if replay.ordinal >= 0xFFFF_FFFF {
+        return;
+    }
+    EMISSION_MEMO.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        if memo.is_empty() {
+            memo.resize(
+                emission_memo_table_len(),
+                EmissionMemoSlot {
+                    tag: u64::MAX,
+                    lo: 0.0,
+                    hi: 0.0,
+                    near_m: 0.0,
+                    height_m: 0.0,
+                    barrier: false,
+                },
+            );
+        }
+        let len = memo.len();
+        let slot = &mut memo[replay.ordinal as usize & (len - 1)];
+        slot.tag = (u64::from(session) << 32) | replay.ordinal;
+        slot.lo = replay.lo;
+        slot.hi = replay.hi;
+        slot.near_m = replay.near_m;
+        slot.height_m = replay.height_m;
+        slot.barrier = replay.barrier;
+    })
+}
+
+/// Add one growth's walked milliseconds (only called when `grew`).
+pub(crate) fn note_growth_time(ms: f64) {
+    if census_on() {
+        GROWTH_CENSUS.with(|c| c.borrow_mut().3 += ms);
+    }
+}
+
+/// Add one chain step; `grew` = this step walked new cells.
+pub(crate) fn note_growth_step(grew: bool) {
+    if !census_on() {
+        return;
+    }
+    GROWTH_CENSUS.with(|c| {
+        let mut census = c.borrow_mut();
+        census.0 += 1;
+        if grew {
+            census.1 += 1;
+        }
+    });
+}
+
+/// Read and reset the growth census (one kernel call's steps, growths,
+/// scanned sectors and growth milliseconds).
+pub(crate) fn take_growth_census() -> (u64, u64, u64, f64, u64, u64, u64) {
+    GROWTH_CENSUS.with(|c| std::mem::take(&mut *c.borrow_mut()))
+}
+
 /// The merged azimuth arcs of everything standing around ONE receiver: what a
 /// 360° panorama would show, reduced to "in these directions something blocks,
 /// at this range, with this top". Built once per receiver and clipped by every
@@ -800,6 +1039,9 @@ impl ArcSkyline {
     /// the annulus walk and the short-circuit input of [`Self::needs_growth`].
     #[inline]
     fn min_built_in(&self, s0: i64, s1: i64) -> f64 {
+        if census_on() {
+            GROWTH_CENSUS.with(|c| c.borrow_mut().2 += (s1 - s0 + 1).max(0) as u64);
+        }
         (s0..=s1)
             .map(|k| self.built_radius_m[k.rem_euclid(SECTORS as i64) as usize] as f64)
             .fold(f64::INFINITY, f64::min)
@@ -957,6 +1199,7 @@ impl ArcSkyline {
         let arcs = &mut self.arcs;
         let fuse = &mut self.fuse_scratch;
         let mut overflows = self.overflows;
+        let mut raw_arcs: u64 = 0;
         // Gather the WHOLE of every sector this call is about to mark walked,
         // not just the caller's span. `built_radius_m` carries one radius per
         // SECTOR, so a narrower gather claims coverage it never collected: the
@@ -985,8 +1228,14 @@ impl ArcSkyline {
             los_floor_m,
             bounds.delta_min_m,
             wedge,
-            &mut |a: SkylineArc| overflows += insert_merged(arcs, cap, a, fuse),
+            &mut |a: SkylineArc| {
+                raw_arcs += 1;
+                overflows += insert_merged(arcs, cap, a, fuse)
+            },
         );
+        if census_on() {
+            GROWTH_CENSUS.with(|c| c.borrow_mut().4 += raw_arcs);
+        }
 
         self.overflows = overflows;
         for k in s0..=s1 {

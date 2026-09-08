@@ -551,10 +551,14 @@ pub(crate) fn arc_growth_chain_step(
         seg_length_m,
         bounds,
     )?;
-    if skyline.needs_growth(receiver.lat, receiver.lon, &p, bounds) {
+    let grew = skyline.needs_growth(receiver.lat, receiver.lon, &p, bounds);
+    if grew {
         *epoch_snap = None;
+        let t_grow = std::time::Instant::now();
         skyline.ensure_planned(receiver.lat, receiver.lon, &p, set, source_height_m, bounds);
+        propagation::arc_screening::note_growth_time(t_grow.elapsed().as_secs_f64() * 1000.0);
     }
+    propagation::arc_screening::note_growth_step(grew);
     Some(epoch_snap.get_or_insert_with(|| skyline.snapshot()).clone())
 }
 

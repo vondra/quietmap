@@ -164,10 +164,16 @@ pub(crate) fn compute_railways(
     mut traces: Option<&mut TraceCollector>,
 ) -> (NoisePeriods, Vec<Contributor>) {
     use emission::railway::{self, RailType};
-    use propagation::arc_screening::{ArcBounds, ArcScreeningScratch, ArcSkyline, SkylineSnapshot};
+    use propagation::arc_screening::{
+        ArcBounds, ArcScreeningScratch, ArcSkyline, SkylineSnapshot, enter_emission_session,
+    };
     use rayon::prelude::*;
     use std::collections::HashMap;
 
+    // One emission-memo session for the whole kernel call (see compute_roads).
+    let _emission_session = enter_emission_session();
+    let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
+    let t_rail_start = std::time::Instant::now();
     let rcv_alt = receiver.altitude_m();
     let bounds = ArcBounds::shipped();
     // The set the arc rule clips against.
@@ -253,7 +259,10 @@ pub(crate) fn compute_railways(
     let mut skyline = ArcSkyline::default();
     let mut epoch_snap: Option<SkylineSnapshot> = None;
     let mut pre: Vec<(usize, RailPre)> = Vec::with_capacity(railways.len());
+    let mut t_rail_arc = std::time::Duration::ZERO;
+    let mut t_rail_gates = std::time::Duration::ZERO;
     for (seg_i, seg) in railways.iter().enumerate() {
+        let t_iter = t_rail_start.elapsed();
         if seg.tunnel {
             continue;
         }
@@ -348,6 +357,7 @@ pub(crate) fn compute_railways(
             }
         }
 
+        let t_rail_gate_start = t_rail_start.elapsed();
         // Arc pre-gate + growth-chain replay (shared step — see
         // `crate::arc_growth_chain_step`). Rail segments are the longest in
         // the extract (p90 182 m vs roads' 106 m), so this is where the
@@ -366,6 +376,8 @@ pub(crate) fn compute_railways(
             SOURCE_HEIGHT_RAIL,
             bounds,
         );
+        t_rail_arc += t_rail_start.elapsed() - t_rail_gate_start;
+        t_rail_gates += t_rail_gate_start - t_iter;
 
         pre.push((
             seg_i,
@@ -382,6 +394,7 @@ pub(crate) fn compute_railways(
         ));
     }
 
+    let t_rail_pass1 = t_rail_start.elapsed();
     // ── Pass 2: per-segment evaluation (parallel, bit-deterministic) ──
     struct RailSegOut {
         seg_variants: [PropagationVariants; 3],
@@ -598,6 +611,26 @@ pub(crate) fn compute_railways(
             },
         )
         .collect();
+
+    let t_rail_pass2 = t_rail_start.elapsed() - t_rail_pass1;
+    if timing_on {
+        let (steps, growths, sectors, growth_ms, raw_arcs, memo_hits, memo_miss) = crate::propagation::arc_screening::take_growth_census();
+        eprintln!(
+            "popup-stage rail pass1={:.0}ms (gates={:.0}ms arc={:.0}ms) pass2={:.0}ms kept={} steps={} growths={} sectors={} growth_ms={:.0} rawarcs={} memohit={} memomiss={}",
+            t_rail_pass1.as_secs_f64() * 1000.0,
+            t_rail_gates.as_secs_f64() * 1000.0,
+            t_rail_arc.as_secs_f64() * 1000.0,
+            t_rail_pass2.as_secs_f64() * 1000.0,
+            pre.len(),
+            steps,
+            growths,
+            sectors,
+            growth_ms,
+            raw_arcs,
+            memo_hits,
+            memo_miss,
+        );
+    }
 
     let unnamed_cluster_ids =
         unnamed_track_cluster_ids(pre.iter().map(|(seg_i, _)| &railways[*seg_i]));

@@ -523,6 +523,15 @@ impl ObstacleIndex {
         if self.edges.is_empty() {
             return;
         }
+        // Per-edge emission memo (goal B, session table in arc_screening):
+        // one edge lives in every grid cell it crosses, and overlapping
+        // growths re-walk the same cells — so a dense kernel emits each
+        // edge dozens of visits apart with bit-identical angles (2× atan2
+        // + segment distance each). Hit or miss, the gates below run once
+        // on this edge's true geometry. Repeat visits of an admitted edge
+        // still reach the fused list: its merge unions identical arcs to
+        // themselves.
+        use crate::propagation::arc_screening as arc_census;
         let (ox, oy) = self.to_local(lat, lon);
         let inv_cell = 1.0 / self.cell_m;
         let cell_range = |lo: f64, hi: f64, base: f64, n: usize| -> Option<(usize, usize)> {
@@ -599,7 +608,44 @@ impl ObstacleIndex {
                     continue; // grazing: zero dB in every band, whatever the edge
                 }
                 for &eref in &self.edge_refs[lo..hi] {
-                    let e = self.edges[eref as usize];
+                    let ordinal = edge_ordinal_base
+                        .checked_add(u64::from(eref))
+                        .expect("flattened obstacle edge ordinal overflow");
+                    // Memo hit, or compute + store: EITHER way `replay` holds
+                    // this edge's true geometry, and the gates below run ONCE
+                    // on it — a replay visits exactly when a fresh compute
+                    // would, under THIS growth's floor and radius (a later
+                    // growth may admit what this visit prunes, so pruned
+                    // edges store full values, never placeholders).
+                    let replay = if let Some(replay) =
+                        arc_census::emission_memo_lookup(ordinal)
+                    {
+                        replay
+                    } else {
+                        arc_census::note_memo_miss();
+                        let e = self.edges[eref as usize];
+                        let (ex0, ey0) = (e.x0 as f64 - ox, e.y0 as f64 - oy);
+                        let (ex1, ey1) = (e.x1 as f64 - ox, e.y1 as f64 - oy);
+                        let near_m = origin_to_segment_dist(ex0, ey0, ex1, ey1);
+                        let a0 = ey0.atan2(ex0);
+                        let a1 = ey1.atan2(ex1);
+                        // The SHORT arc between the endpoints: the set of
+                        // directions that hit this edge. Taking it per EDGE
+                        // (not a per-footprint hull) is exact for concave
+                        // outlines too — a ray leaving the origin hits a
+                        // closed ring iff it hits one of its edges.
+                        let r1 = a0 + wrap_pi(a1 - a0);
+                        let replay = arc_census::EmissionReplay {
+                            ordinal,
+                            lo: a0.min(r1),
+                            hi: a0.max(r1),
+                            near_m,
+                            height_m: e.height_m,
+                            barrier: e.kind() == ObstacleKind::Barrier,
+                        };
+                        arc_census::emission_memo_store(&replay);
+                        replay
+                    };
                     // A WALL is pruned on its OWN height, a building only on the
                     // cell's tallest edge. The wall slice this index replaced
                     // tested every wall against the sight-line floor, and the
@@ -607,33 +653,19 @@ impl ObstacleIndex {
                     // with a 20 m building would start blocking directions it
                     // cannot reach. Buildings keep the cell prune alone — the
                     // bound their footprints have always been screened by.
-                    if e.kind() == ObstacleKind::Barrier && f64::from(e.height_m) <= los_floor_m {
+                    if replay.barrier && f64::from(replay.height_m) <= los_floor_m {
                         continue;
                     }
-                    let (ex0, ey0) = (e.x0 as f64 - ox, e.y0 as f64 - oy);
-                    let (ex1, ey1) = (e.x1 as f64 - ox, e.y1 as f64 - oy);
-                    let near_m = origin_to_segment_dist(ex0, ey0, ex1, ey1);
-                    if near_m > radius_m || near_m < 1e-6 {
+                    if replay.near_m > radius_m || replay.near_m < 1e-6 {
                         continue; // out of range, or the origin sits ON the edge
                     }
-                    let a0 = ey0.atan2(ex0);
-                    let a1 = ey1.atan2(ex1);
-                    // The SHORT arc between the endpoints: the set of directions
-                    // that hit this edge. Taking it per EDGE (not a per-footprint
-                    // hull) is exact for concave outlines too — a ray leaving the
-                    // origin hits a closed ring iff it hits one of its edges.
-                    let r1 = a0 + wrap_pi(a1 - a0);
                     visit(SkylineArc {
-                        source_id: ScreeningSourceId::obstacle(
-                            edge_ordinal_base
-                                .checked_add(u64::from(eref))
-                                .expect("flattened obstacle edge ordinal overflow"),
-                        )
-                        .expect("flattened obstacle edge ordinal entered wall namespace"),
-                        lo: a0.min(r1),
-                        hi: a0.max(r1),
-                        near_m: near_m as f32,
-                        height_m: e.height_m,
+                        source_id: ScreeningSourceId::obstacle(ordinal)
+                            .expect("flattened obstacle edge ordinal entered wall namespace"),
+                        lo: replay.lo,
+                        hi: replay.hi,
+                        near_m: replay.near_m as f32,
+                        height_m: replay.height_m,
                     });
                 }
             }
