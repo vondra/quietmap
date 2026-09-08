@@ -34,8 +34,13 @@ export function windParameterMatcher(registers: readonly WindRegister[]) {
           (register.country === 'NO' ? (power ?? 0) > 0 : (hub ?? 0) > 0 && (power ?? 0) > 0)) continue
       const best = nearest(lat, lon, register.radiusM, register.grid, haversineM)
       if (!best) continue
-      if (register.country !== 'NO' && best.hub > 0) hub = best.hub
-      if (best.power > 0) power = best.power
+      // Fill each absent field separately, like the global pass above: the
+      // nearest registry record is a neighbour, not the same turbine, so its
+      // surveyed hub must never overwrite a measured row hub (a neighbour's
+      // value overwrote an OSM 45 kW that way and the engine fell back to its
+      // 2000 kW default, +7 dB) — and symmetrically for power.
+      if (!(hub != null && hub > 0) && register.country !== 'NO' && best.hub > 0) hub = best.hub
+      if (!(power != null && power > 0) && best.power > 0) power = best.power
     }
     return { hub: hub === null ? null : Math.fround(hub), power: power === null ? null : Math.fround(power) }
   }

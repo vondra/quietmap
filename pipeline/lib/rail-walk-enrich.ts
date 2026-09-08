@@ -72,6 +72,8 @@ export interface Z9RailWalkOptions {
   countryIso: string
   silentResidual?: Pick<RailwayTraffic, 'sourceId' | 'passenger' | 'freight'>
   extraMatch?: (row: RailwayRow, index: number, square: string) => RailwayTraffic | null
+  /** Only a complete current feed snapshot may disown earlier stamps. */
+  retractSafe: boolean
 }
 
 export interface Z9RailWalkResult {
@@ -172,14 +174,14 @@ export async function enrichZ9RailwaysByGraphWalk(
       },
       {
         allowedCountryIsos: [options.countryIso],
-        retract: {
+        retract: options.retractSafe ? {
             sourceIds: ownSourceIds,
             when: (_row, index) => {
               const key = segmentKey(square, index)
               return !walk.stampsBySegmentKey.has(key) &&
                 !walk.quarantinedSegmentKeys.has(key)
             },
-          },
+          } : undefined,
       },
     )
     result.rows += write.rows

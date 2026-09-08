@@ -1,4 +1,8 @@
-/** Binary min-heap for graph shortest-path searches. */
+/**
+ * Binary min-heap for Dijkstra's algorithm — extracted 2026-07-16 from
+ * `enrich-roads-service-tree.ts` and `rail-graph-metrics.ts`, which carried
+ * byte-identical copies of the same (dist, node) priority queue.
+ */
 
 export class MinHeap {
   private data: { dist: number; node: number }[] = []
@@ -35,3 +39,4 @@ export class MinHeap {
 
   get size() { return this.data.length }
 }
+

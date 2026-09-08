@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util'
 import { DataType, tableFromIPC, type Table, type Vector } from 'apache-arrow'
 import { DATASETS } from './lib/enrichment-datasets.js'
 import {
-  listPreparedSquares, segmentGeometryReader, type PreparedBbox, type SegmentEndpointKeys, type SegmentGeometry,
+  listPreparedSquares, segmentGeometryReader, type PreparedBbox, type SegmentGeometry, type SegmentEndpointKeys,
 } from './lib/prepared-grid.js'
 import { writeRailParallelDivisor } from './lib/railways-arrow.js'
 import {

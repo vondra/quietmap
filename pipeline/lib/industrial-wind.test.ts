@@ -40,7 +40,7 @@ test('original US global then national priority, nullable payload, exact rerun a
     const match = windParameterMatcher(registers)
     assert.equal((await enrichWindSquare(path, match)).changed, 4)
     const output = tableFromIPC(readFileSync(path))
-    assert.deepEqual([...output.getChild('hub_height')!], [100, 70, 70, 100, null])
+    assert.deepEqual([...output.getChild('hub_height')!], [70, 70, 70, 70, null])
     assert.deepEqual([...output.getChild('rated_power_kw')!], [3500, 3500, 3500, 3500, null])
     assert.deepEqual(output.schema, tableFromIPC(bytes).schema)
     assert.deepEqual(output.batches.map(b => b.numRows), [2, 3])
@@ -53,6 +53,17 @@ test('original US global then national priority, nullable payload, exact rerun a
     await enrichWindSquare(path, windParameterMatcher(registers.map(r => ({ ...r, observations: [] }))))
     assert.deepEqual(readFileSync(path), after)
   } finally { rmSync(work, { recursive: true, force: true }) }
+})
+
+test('national registry records fill only fields the row lacks, never overwrite a measurement', () => {
+  // The nearest registry record is a neighbour, not the same turbine: a DE
+  // record {hub 90, power 1500} at the row's own coordinates must fill a
+  // missing field yet leave a measured one alone in both directions.
+  const registers = (hub: number, power: number) => WIND_COUNTRIES.map(policy => ({ ...policy,
+    observations: policy.country === 'DE' ? [{ latitude: 50, longitude: 10, hub, power }] : [] }))
+  assert.deepEqual(windParameterMatcher(registers(90, 1500))(50, 10, 80, null), { hub: 80, power: 1500 })
+  assert.deepEqual(windParameterMatcher(registers(90, 0))(50, 10, null, 1400), { hub: 90, power: 1400 })
+  assert.deepEqual(windParameterMatcher(registers(90, 1500))(50, 10, null, null), { hub: 90, power: 1500 })
 })
 
 test('original workbook decommissioning and operational park-power join do not invent measurements', () => {

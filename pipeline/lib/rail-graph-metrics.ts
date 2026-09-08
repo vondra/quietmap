@@ -1,16 +1,55 @@
-/** Bounded railway routing, ambiguity quarantine and parallel-track traffic conservation. */
+/**
+ * Rail graph-walk routing + parallel-track spread + the R15/R16 continuity
+ * detectors — split out of `rail-graph.ts` to keep that file near the
+ * ~300-line target. Imports ALL shared types/constants from there; no
+ * topology-building logic is duplicated here (Dijkstra and the detectors
+ * read `RailGraph`'s internals, they never recompute them).
+ *
+ * `walkRailStationPairs` is the matcher's core: canonical-pair accumulation,
+ * bounded shortest-path search (optionally shape-constrained), an ambiguity
+ * probe, then a PER-SEGMENT parallel-track spread. The spread's lateral
+ * point-to-body metric and per-segment divisor replace the round-1
+ * transitive-cluster/clique grouping (2026-07-15 review round 2): the
+ * midpoint-distance metric was stagger-blind — microsegments are cut
+ * independently per OSM way, so parallel tracks carry arbitrary 0-250 m
+ * longitudinal midpoint offsets — and with any correct lateral metric,
+ * transitive clusters chain A1-B1-A2-B2... down the whole corridor, after
+ * which the clique test always fails. See `applyParallelSpread`.
+ *
+ * `findRailFlowJumps` (R15) and `findRailContinuityGaps` (R16) are the rail
+ * twins of the road auditor's R5 flow-jump / R13 continuity-gap
+ * (`audit-enrichment-invariants.ts`), reworked to compare EFFECTIVE traffic
+ * (`effectiveRailTraffic`) across source ids instead of raw AADT within one
+ * source — a raw 16+0 vs 2+1 misses the >=20/day floor entirely, but the
+ * engine actually renders 36 vs 3 once zero-defaulting applies.
+ *
+ * Two Step-B refinements (2026-07-16), both verified against a live CZ
+ * Step-A run (2 461 pairs, 150 failed): `altPathIsParallelTwin` exempts an
+ * 'ambiguous' verdict when the alt path found by the penalized re-run is
+ * merely the best path's own parallel twin — this killed 113 of the 150
+ * failed pairs, all Czech double-track lines the ambiguity probe mistook for
+ * a genuine second corridor. `quarantineAmbiguousPathUnion` /
+ * `quarantineGraphlessPair` / `quarantineChordVicinity` use per-pair evidence shapes
+ * (`RailWalkResult.quarantinedSegmentKeys`: candidate-path union for
+ * ambiguous; chord band + capped graph fingers for the graphless kinds) —
+ * per-component granularity had
+ * withheld retract/silent across the ENTIRE national network on 9 failed
+ * components, because rail is one connected component nationwide; the
+ * admissible-path ellipse (both ends snapped) is strictly tighter evidence,
+ * and the ball/chord shapes cover the ends the graph could not localize.
+ */
 
-import { haversineM, flatDist, pointToSegmentDist, pointToPolylineDist, coordKey4dp, wrapLonDeltaDeg, M_PER_DEG_LAT, M_PER_DEG_LON_EQ } from './spatial.js'
+import { nodeKey, haversineM, flatDist, pointToSegmentDist, pointToPolylineDist, coordKey4dp, wrapLonDeltaDeg, M_PER_DEG_LAT, M_PER_DEG_LON_EQ } from './spatial.js'
 import { MinHeap } from './min-heap.js'
 import {
   type RailGraph, type RailGraphEdge, type RailStationPairCount, type RailWalkResult, type RailFailedPairRecord,
-
-  snapToNearestRailGraphNode, snapToNearestFamilyNode, nearestRailGraphNodeDistanceM,
+  type RailStopsIndex, type RailEndpointRow, type RailContinuityViolation,
+  effectiveRailTraffic, snapToNearestRailGraphNode, snapToNearestFamilyNode, nearestRailGraphNodeDistanceM,
   isWalkableRailType, walkFamilyBit, WALK_FAMILY_MASKS,
   WALK_DETOUR_RATIO, WALK_DETOUR_SLACK_M, WALK_AMBIGUITY_LENGTH_RATIO, WALK_AMBIGUITY_SHARED_EDGE_FRACTION,
   WALK_TWIN_MEDIAN_LATERAL_M, WALK_TWIN_P75_LATERAL_M, WALK_TWIN_FAR_LATERAL_M, WALK_TWIN_FAR_LENGTH_FRACTION, UNLOCALIZED_PAIR_QUARANTINE_RADIUS_M,
-  SHAPE_CORRIDOR_TOLERANCE_M, PARALLEL_SPREAD_RADIUS_M,
-
+  SHAPE_CORRIDOR_TOLERANCE_M, PARALLEL_SPREAD_RADIUS_M, RAIL_JUMP_RATIO, RAIL_MIN_EFFECTIVE_TRAINS_PER_DAY,
+  RAIL_STOP_EXEMPT_RADIUS_M,
 } from './rail-graph.js'
 
 // ── Bounded shortest path ────────────────────────────────────────────────────
@@ -336,14 +375,18 @@ const PARALLEL_GRID_CELL_DEG = 0.001
  *  sibling must still be reached or it falls to the engine class default):
  *  1. siblings(i) = ONE representative per OTHER osmId — the laterally
  *     nearest segment passing `parallelSiblingLateralM` at i's midpoint.
- *  2. No siblings -> row untouched (stamps stay
+ *  2. No siblings -> row untouched (stamps AND divisorBySegmentKey stay
  *     absent for i).
- *  3. A row with N siblings uses divisor N+1.
+ *  3. divisor_i = 1 + number of distinct sibling osmIds — recorded into
+ *     `divisorBySegmentKey` for EVERY i with >=1 sibling, INDEPENDENT of
+ *     whether i or its siblings carry any traffic (a silent-residual stamp
+ *     landing later on an unwalked-but-sibling-bearing row still needs the
+ *     right divisor, not an implicit 1 — 2026-07-16 /gg review item 2).
  *  4. value_i = preSpread(i) + sum of preSpread(representative_j), ALL read
  *     from a FROZEN pre-spread snapshot — never post-spread values, so a
  *     spread result can never feed a second spread (no double counting).
  *  5. value 0 (fully unstamped neighbourhood) stays absent from `stamps`
- *     because GTFS supplies no traffic evidence there.
+ *     even though `divisorBySegmentKey` still records the divisor (step 3).
  *
  *  CONSERVATION (typical case): at any corridor cross-section with N tracks
  *  and pre-spread stamps T_1..T_N (some 0), every track sees the other N-1 as
@@ -378,10 +421,11 @@ const PARALLEL_GRID_CELL_DEG = 0.001
  *  unlocalized-pair chord-vicinity quarantine — one reconstruction per walk,
  *  not two. */
 function applyParallelSpread(
+  graph: RailGraph,
   stamps: Map<string, { pax: number; frt: number; divisor: number }>,
+  divisorBySegmentKey: Map<string, number>,
   geomByKey: Map<string, SegGeom>,
-): Map<string, number> {
-  const divisorBySegmentKey = new Map<string, number>()
+): void {
   const stampableGeomByKey = new Map<string, SegGeom>()
   const bodyGrid = new Map<string, string[]>() // cell -> keys of segments whose body bbox covers the cell
   for (const [k, g] of geomByKey) {
@@ -434,7 +478,10 @@ function applyParallelSpread(
     }
     if (nearestSiblingByOsmId.size === 0) continue // no siblings — row untouched
     const divisor = 1 + nearestSiblingByOsmId.size
+    // Recorded for EVERY sibling-bearing segment regardless of traffic (step 3
+    // above) — independent of whether `stamps` itself ends up touched below.
     divisorBySegmentKey.set(key, divisor)
+
     const own = preSpread.get(key)
     let pax = own?.pax ?? 0
     let frt = own?.frt ?? 0
@@ -445,7 +492,6 @@ function applyParallelSpread(
     if (pax === 0 && frt === 0) continue // fully unstamped neighbourhood stays absent
     stamps.set(key, { pax, frt, divisor })
   }
-  return divisorBySegmentKey
 }
 
 // ── Twin-track ambiguity exemption ──────────────────────────────────────────
@@ -921,6 +967,7 @@ function shapeEdgeFilter(shapePolyline: Array<[number, number]>): (edge: RailGra
 
 export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCount[]): RailWalkResult {
   const stampsBySegmentKey = new Map<string, { pax: number; frt: number; divisor: number }>()
+  const divisorBySegmentKey = new Map<string, number>()
   const failures = { snapFailed: 0, disconnected: 0, detourRejected: 0, ambiguous: 0 }
   const failedPairChords: RailWalkResult['failedPairChords'] = []
   const quarantinedSegmentKeys = new Set<string>()
@@ -1137,10 +1184,162 @@ export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCou
     }
   }
 
-  const divisorBySegmentKey = applyParallelSpread(stampsBySegmentKey, geomByKey)
+  applyParallelSpread(graph, stampsBySegmentKey, divisorBySegmentKey, geomByKey)
 
   return {
     stampsBySegmentKey, divisorBySegmentKey, failures, failedPairChords,
     quarantinedSegmentKeys, unlocalizedPairs, pairsWalked, pairsTotal,
   }
 }
+
+// ── R15/R16: cross-source continuity detectors ──────────────────────────────
+
+/** Shared endpoint bookkeeping for both detectors, built in ONE pass over
+ *  `rows` and memoized per-rows-array-identity: `touchCount` counts EVERY
+ *  heavy-rail non-service touch at a node (junction exemption — >=3 such
+ *  touches means a real junction, since the pair itself already accounts for
+ *  2); `r15ByEndpoint`/`r16ByEndpoint` collect the rows each detector's own
+ *  candidate filter wants paired up (R15: usage<=1 && sourceId>0; R16:
+ *  usage<=1). Both real call sites (audit-enrichment-invariants.ts,
+ *  enrichment-status.ts) invoke `findRailFlowJumps` immediately followed by
+ *  `findRailContinuityGaps` on the SAME rows array — without this memo,
+ *  `touchCount` (byte-identical either way) would be rebuilt from scratch a
+ *  second time over what can be millions of rows. A WeakMap keyed on the
+ *  array itself needs no cache-invalidation logic: it can never outlive the
+ *  array, and a caller building a fresh rows array for a re-run gets a fresh
+ *  entry for free. */
+interface EndpointCandidates {
+  touchCount: Map<string, number>
+  r15ByEndpoint: Map<string, RailEndpointRow[]>
+  r16ByEndpoint: Map<string, RailEndpointRow[]>
+}
+
+const endpointCandidatesMemo = new WeakMap<readonly RailEndpointRow[], EndpointCandidates>()
+
+function endpointCandidatesFor(rows: readonly RailEndpointRow[]): EndpointCandidates {
+  const cached = endpointCandidatesMemo.get(rows)
+  if (cached) return cached
+
+  const touchCount = new Map<string, number>()
+  const r15ByEndpoint = new Map<string, RailEndpointRow[]>()
+  const r16ByEndpoint = new Map<string, RailEndpointRow[]>()
+  for (const r of rows) {
+    // Heavy rail ONLY — deliberately NOT isWalkableRailType (2026-07-16
+    // Codex review, both passes): the production collector
+    // (rail-endpoint-rows.ts) ships heavy-only rows, and a family-blind
+    // endpoint index would pair heavy+narrow rows at joint nodes into false
+    // continuity jumps (or let a narrow branch inflate touchCount and mask
+    // a real heavy seam). Auditing narrow lines needs family-keyed
+    // endpoints — deferred until a narrow R15 census is actually wanted.
+    if (r.railType !== 0 || r.service !== 0) continue
+    const isR15Candidate = r.usage <= 1 && r.sourceId > 0
+    const isR16Candidate = r.usage <= 1
+    for (const [lat, lon] of [[r.startLat, r.startLon], [r.endLat, r.endLon]] as const) {
+      const k = nodeKey(lat, lon)
+      touchCount.set(k, (touchCount.get(k) ?? 0) + 1)
+      if (isR15Candidate) {
+        const arr = r15ByEndpoint.get(k)
+        if (arr) arr.push(r); else r15ByEndpoint.set(k, [r])
+      }
+      if (isR16Candidate) {
+        const arr = r16ByEndpoint.get(k)
+        if (arr) arr.push(r); else r16ByEndpoint.set(k, [r])
+      }
+    }
+  }
+  const built: EndpointCandidates = { touchCount, r15ByEndpoint, r16ByEndpoint }
+  endpointCandidatesMemo.set(rows, built)
+  return built
+}
+
+function isExemptEndpoint(k: string, touchCount: Map<string, number>, stopsIndex: RailStopsIndex | null): boolean {
+  if ((touchCount.get(k) ?? 0) >= 3) return true // junction: a 3rd heavy-rail branch explains the jump
+  if (!stopsIndex) return false
+  const [lat, lon] = k.split('_').map(Number)
+  return stopsIndex.queryWithinRadius(lat, lon, RAIL_STOP_EXEMPT_RADIUS_M)
+}
+
+function ratioOf(a: number, b: number): number {
+  return Math.max(a, b) / Math.max(1, Math.min(a, b))
+}
+
+function endpointLatLon(k: string): [number, number] {
+  const [lat, lon] = k.split('_').map(Number)
+  return [lat, lon]
+}
+
+/** R15 rail-flow-jump: at a degree-2 heavy-rail non-service node (usage<=1,
+ *  both sides sourceId>0), EFFECTIVE traffic must not jump more than
+ *  RAIL_JUMP_RATIO in pax, frt OR total. Compares ACROSS source boundaries as
+ *  well as WITHIN one source (the trať 200 shape is cross-source: 110 ->
+ *  9863; two adjacent rows sharing one id can band just as badly, e.g. a
+ *  single feed's own chord-match miss). RAIL_MIN_EFFECTIVE_TRAINS_PER_DAY is
+ *  a PER-COLUMN floor (2026-07-16 /gg review item 5): a column only competes
+ *  once ITS OWN max(effA, effB) clears the floor — a busy total must never
+ *  license firing on a quiet column's ratio noise (pax 2 vs 7 must not fire
+ *  merely because freight happens to be busy enough on its own). One
+ *  violation per endpoint. */
+export function findRailFlowJumps(rows: RailEndpointRow[], stopsIndex: RailStopsIndex | null): RailContinuityViolation[] {
+  const { r15ByEndpoint: byEndpoint, touchCount } = endpointCandidatesFor(rows)
+  const violations: RailContinuityViolation[] = []
+  for (const [k, list] of byEndpoint) {
+    if (list.length !== 2) continue // degree-2 candidate nodes only
+    if (isExemptEndpoint(k, touchCount, stopsIndex)) continue
+    const [A, B] = list
+    const effA = effectiveRailTraffic(A.pax, A.frt, A.railType, A.usage, A.parallelDivisor)
+    const effB = effectiveRailTraffic(B.pax, B.frt, B.railType, B.usage, B.parallelDivisor)
+
+    let column: 'pax' | 'frt' | 'total' | null = null
+    let ratio = 0
+    for (const [col, rA, rB] of [
+      ['pax', effA.pax, effB.pax],
+      ['frt', effA.frt, effB.frt],
+      ['total', effA.total, effB.total],
+    ] as const) {
+      // Floor gates THIS column alone — since pax<=total and frt<=total
+      // always, a column that clears the floor on its own is a superset of
+      // the old (buggy) total-only gate, and a column that DOESN'T is
+      // correctly ignored even when the total happens to be busy.
+      if (Math.max(rA, rB) < RAIL_MIN_EFFECTIVE_TRAINS_PER_DAY) continue
+      const r = ratioOf(rA, rB)
+      if (r > RAIL_JUMP_RATIO && r > ratio) { column = col; ratio = r }
+    }
+    if (!column) continue
+
+    const [lat, lon] = endpointLatLon(k)
+    violations.push({ endpointLat: lat, endpointLon: lon, aKey: A.key, bKey: B.key, aSourceId: A.sourceId, bSourceId: B.sourceId, ratio, effA, effB, column })
+  }
+  return violations
+}
+
+/** R16 rail-continuity-gap: same candidate nodes, but exactly one side is
+ *  measured (sourceId>0) and the other is source_id==0 — the unmeasured side
+ *  resolves to the engine's PURE class defaults through `effectiveRailTraffic`
+ *  (pax=frt=0 in, both columns default out). Fires on the TOTAL ratio only
+ *  (there is no "measured vs measured" per-column comparison here — the gap
+ *  side has no real per-column signal to compare). */
+export function findRailContinuityGaps(rows: RailEndpointRow[], stopsIndex: RailStopsIndex | null): RailContinuityViolation[] {
+  const { r16ByEndpoint: byEndpoint, touchCount } = endpointCandidatesFor(rows)
+  const violations: RailContinuityViolation[] = []
+  for (const [k, list] of byEndpoint) {
+    if (list.length !== 2) continue
+    const [A, B] = list
+    const aMeasured = A.sourceId > 0
+    const bMeasured = B.sourceId > 0
+    if (aMeasured === bMeasured) continue // need exactly one measured, one gap
+    if (isExemptEndpoint(k, touchCount, stopsIndex)) continue
+    const measured = aMeasured ? A : B
+    const gap = aMeasured ? B : A
+    const effMeasured = effectiveRailTraffic(measured.pax, measured.frt, measured.railType, measured.usage, measured.parallelDivisor)
+    const effGap = effectiveRailTraffic(gap.pax, gap.frt, gap.railType, gap.usage, gap.parallelDivisor)
+    const ratio = ratioOf(effMeasured.total, effGap.total)
+    if (ratio <= RAIL_JUMP_RATIO) continue
+    const [lat, lon] = endpointLatLon(k)
+    violations.push({
+      endpointLat: lat, endpointLon: lon, aKey: measured.key, bKey: gap.key,
+      aSourceId: measured.sourceId, bSourceId: gap.sourceId, ratio, effA: effMeasured, effB: effGap, column: 'total',
+    })
+  }
+  return violations
+}
+

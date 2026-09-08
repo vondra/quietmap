@@ -229,7 +229,6 @@ test('invalid prepared schema fails before replacing the source file', async () 
   assert.deepEqual(railwayBytes(path), before)
 })
 
-
 test('nearby distinct native endpoints remain separate parallel tracks', async () => {
   const path = writeRailwaysFixture('parallel-native-gap.arrow', [0, 1].map(index => ({
     osmId: 500 + index, ref: 'DISTINCT', ...northSouth(14 + index * 0.000001),

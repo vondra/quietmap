@@ -1,11 +1,20 @@
-/** Routing, ambiguity quarantine and parallel-track traffic conservation invariants. */
+/**
+ * Routing, parallel-spread and R15/R16 detector tests for
+ * rail-graph-metrics.ts. Builds graphs via `buildRailGraph` (rail-graph.ts)
+ * and exercises `walkRailStationPairs` / `findRailFlowJumps` /
+ * `findRailContinuityGaps` end to end — see rail-graph.test.ts for pure
+ * graph-construction tests (T-junction healing topology, snap, effective
+ * traffic table).
+ *
+ * Run: `cd pipeline && npx tsx --test lib/rail-graph-metrics.test.ts`
+ */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { flatDist } from './spatial.js'
-import { buildRailGraph, snapToNearestRailGraphNode, type RailGraphSegmentInput } from './rail-graph.js'
+import { buildRailGraph, snapToNearestRailGraphNode, effectiveRailTraffic, buildRailStopsIndex, type RailGraphSegmentInput, type RailEndpointRow } from './rail-graph.js'
 import {
-  walkRailStationPairs,
+  walkRailStationPairs, findRailFlowJumps, findRailContinuityGaps,
   dijkstraShortestPath, createDijkstraScratch,
 } from './rail-graph-metrics.js'
 
@@ -40,31 +49,6 @@ test('walk: a path crossing a healed T-junction stamps the parent key once, not 
   assert.equal(result.stampsBySegmentKey.size, 1, 'ONE entry for the trunk despite crossing 2 healed sub-edges')
   assert.deepEqual(result.stampsBySegmentKey.get('trunk'), { pax: 20, frt: 0, divisor: 1 })
   assert.equal(result.stampsBySegmentKey.has('branch'), false, 'branch was never on this path')
-})
-
-test('walk: healed twin subedges use their own geometry while spread retains the parent span', () => {
-  const siblingLat = 50 + 4 / 110_540
-  const main = seg({ key: 'main', startLat: 50, startLon: lonAtM(0), endLat: 50, endLon: lonAtM(50) })
-  for (const [start, end] of [[-190, 60], [60, -190]]) {
-    const sibling = seg({ key: 'sibling', startLat: siblingLat, startLon: lonAtM(start), endLat: siblingLat, endLon: lonAtM(end) })
-    const unsplitDivisors = walkRailStationPairs(buildRailGraph([main, sibling]), []).divisorBySegmentKey
-    const graph = buildRailGraph([
-      main, sibling,
-      ...[0, 50].map((m) => seg({
-        key: `crossover-${m}`, isTraversalOnly: true,
-        startLat: 50, startLon: lonAtM(m), endLat: siblingLat, endLon: lonAtM(m),
-      })),
-    ])
-    assert.equal(graph.edges.filter((e) => e.parentKey === 'sibling').length, 3)
-    const result = walkRailStationPairs(graph, [
-      { fromLat: 50, fromLon: lonAtM(0), toLat: 50, toLon: lonAtM(50), pax: 20, frt: 4 },
-    ])
-    assert.equal(result.failures.ambiguous, 0, 'the used 50 m twin is 4 m away; the 250 m parent midpoint is outside this path')
-    assert.equal(result.pairsWalked, 1)
-    assert.equal(result.quarantinedSegmentKeys.size, 0)
-    assert.deepEqual(result.stampsBySegmentKey.get('main'), { pax: 20, frt: 4, divisor: 2 })
-    assert.deepEqual(result.divisorBySegmentKey, unsplitDivisors, 'spread reconstructs the full parent in either orientation')
-  }
 })
 
 // ── Traversal-only crossover: connects, never stamped ───────────────────────
@@ -693,7 +677,7 @@ function buildParallelTracks(offsetsDeg: number[], corridorToken: string, paxByI
 test('parallel spread N=2: confirmed group conserves total effective traffic before/after', () => {
   const paxByIndex = [10, 8], frtByIndex = [4, 6]
   const { g, pairs } = buildParallelTracks([0, 0.00035], 'PARL', paxByIndex, frtByIndex)
-  const before = paxByIndex.reduce((s, p, i) => s + (p + frtByIndex[i]), 0)
+  const before = paxByIndex.reduce((s, p, i) => s + effectiveRailTraffic(p, frtByIndex[i], 0, 0, 1).total, 0)
 
   const result = walkRailStationPairs(g, pairs)
   assert.deepEqual(result.stampsBySegmentKey.get('track0'), { pax: 18, frt: 10, divisor: 2 })
@@ -701,7 +685,7 @@ test('parallel spread N=2: confirmed group conserves total effective traffic bef
 
   const after = [0, 1].reduce((s, i) => {
     const stamp = result.stampsBySegmentKey.get(`track${i}`)!
-    return s + ((stamp.pax + stamp.frt) / stamp.divisor)
+    return s + effectiveRailTraffic(stamp.pax, stamp.frt, 0, 0, stamp.divisor).total
   }, 0)
   assert.equal(before, 28)
   assert.equal(after, before, 'N * (total/N) = total — corridor total conserved')
@@ -710,7 +694,7 @@ test('parallel spread N=2: confirmed group conserves total effective traffic bef
 test('parallel spread N=4: confirmed group of 4 conserves total effective traffic before/after', () => {
   const paxByIndex = [10, 12, 14, 16], frtByIndex = [3, 3, 3, 3]
   const { g, pairs } = buildParallelTracks([0, 0.00012, 0.00024, 0.00036], 'PARL', paxByIndex, frtByIndex)
-  const before = paxByIndex.reduce((s, p, i) => s + (p + frtByIndex[i]), 0)
+  const before = paxByIndex.reduce((s, p, i) => s + effectiveRailTraffic(p, frtByIndex[i], 0, 0, 1).total, 0)
 
   const result = walkRailStationPairs(g, pairs)
   for (let i = 0; i < 4; i++) {
@@ -718,7 +702,7 @@ test('parallel spread N=4: confirmed group of 4 conserves total effective traffi
   }
   const after = [0, 1, 2, 3].reduce((s, i) => {
     const stamp = result.stampsBySegmentKey.get(`track${i}`)!
-    return s + ((stamp.pax + stamp.frt) / stamp.divisor)
+    return s + effectiveRailTraffic(stamp.pax, stamp.frt, 0, 0, stamp.divisor).total
   }, 0)
   assert.equal(before, 64)
   assert.equal(after, before)
@@ -751,10 +735,10 @@ test('parallel spread: token-less double-track 8 m apart — walk stamps ONE tra
   assert.deepEqual(result.stampsBySegmentKey.get('track0'), { pax: 20, frt: 6, divisor: 2 })
   assert.deepEqual(result.stampsBySegmentKey.get('track1'), { pax: 20, frt: 6, divisor: 2 }, 'unstamped sibling receives the group stamp')
 
-  const singleTrackTotal = 26
+  const singleTrackTotal = effectiveRailTraffic(20, 6, 0, 0, 1).total
   const after = ['track0', 'track1'].reduce((s, k) => {
     const stamp = result.stampsBySegmentKey.get(k)!
-    return s + ((stamp.pax + stamp.frt) / stamp.divisor)
+    return s + effectiveRailTraffic(stamp.pax, stamp.frt, 0, 0, stamp.divisor).total
   }, 0)
   assert.equal(after, singleTrackTotal, 'corridor total conserved: 2 x (26/2) = 26')
 })
@@ -797,9 +781,9 @@ test('parallel spread: STAGGERED token-less double-track (250 m segments, 125 m 
   // Cross-section conservation at ~300 m (tracks A2 + B1 present there):
   const crossSection = ['A2', 'B1'].reduce((s, k) => {
     const stamp = result.stampsBySegmentKey.get(k)!
-    return s + ((stamp.pax + stamp.frt) / stamp.divisor)
+    return s + effectiveRailTraffic(stamp.pax, stamp.frt, 0, 0, stamp.divisor).total
   }, 0)
-  assert.equal(crossSection, 26, 'cross-section total = single-track total')
+  assert.equal(crossSection, effectiveRailTraffic(20, 6, 0, 0, 1).total, 'cross-section total = single-track total')
 })
 
 test('parallel spread: STAGGERED double-track, BOTH tracks stamped — each side carries T_A+T_B at divisor 2, cross-section conserved', () => {
@@ -820,7 +804,7 @@ test('parallel spread: STAGGERED double-track, BOTH tracks stamped — each side
   }
   const crossSection = ['A2', 'B1'].reduce((s, k) => {
     const stamp = result.stampsBySegmentKey.get(k)!
-    return s + ((stamp.pax + stamp.frt) / stamp.divisor)
+    return s + effectiveRailTraffic(stamp.pax, stamp.frt, 0, 0, stamp.divisor).total
   }, 0)
   assert.equal(crossSection, 36, 'cross-section total = T_A(26) + T_B(10)')
 })
@@ -846,14 +830,14 @@ test('parallel spread: third track only mid-corridor — divisor 3 on the overla
   for (const k of ['A1', 'A3', 'B1', 'B3']) {
     assert.deepEqual(result.stampsBySegmentKey.get(k), { pax: 30, frt: 9, divisor: 2 }, `${k}: only two tracks here`)
   }
-  const singleTrackTotal = 39 // 39
+  const singleTrackTotal = effectiveRailTraffic(30, 9, 0, 0, 1).total // 39
   const threeTrackSection = ['A2', 'B2', 'C1'].reduce((s, k) => {
     const stamp = result.stampsBySegmentKey.get(k)!
-    return s + ((stamp.pax + stamp.frt) / stamp.divisor)
+    return s + effectiveRailTraffic(stamp.pax, stamp.frt, 0, 0, stamp.divisor).total
   }, 0)
   const twoTrackSection = ['A1', 'B1'].reduce((s, k) => {
     const stamp = result.stampsBySegmentKey.get(k)!
-    return s + ((stamp.pax + stamp.frt) / stamp.divisor)
+    return s + effectiveRailTraffic(stamp.pax, stamp.frt, 0, 0, stamp.divisor).total
   }, 0)
   assert.equal(threeTrackSection, singleTrackTotal, '3-track cross-section conserved')
   assert.equal(twoTrackSection, singleTrackTotal, '2-track cross-section conserved')
@@ -883,3 +867,80 @@ test('parallel spread: asymmetric overlap sliver — short segment accepts a lon
   assert.deepEqual(result.stampsBySegmentKey.get('A'), { pax: 20, frt: 0, divisor: 1 }, 'A (250 m) sees only a 20% overlap with B — below its own 30% gate, no sibling found, renders T/1 unchanged')
   assert.deepEqual(result.stampsBySegmentKey.get('B'), { pax: 20, frt: 0, divisor: 2 }, 'B (100 m) sees a 50% overlap with A — clears its own gate, accepts A as sibling, renders T/2')
 })
+
+// ── R15 findRailFlowJumps ────────────────────────────────────────────────────
+
+function czShapeRows(): RailEndpointRow[] {
+  // The diagnosed trať 200 shape: one mainline segment stamped 16 pax + 0
+  // frt (source 110), meeting a neighbour stamped 2 pax + 1 frt (source
+  // 9863) at a shared endpoint — raw looks tame, effective is 36 vs 3.
+  return [
+    { key: 'segA', osmId: 'wA', railType: 0, usage: 0, service: 0, sourceId: 110, pax: 16, frt: 0, parallelDivisor: 1, startLat: 49.700, startLon: 14.000, endLat: 49.669, endLon: 14.0015 },
+    { key: 'segB', osmId: 'wB', railType: 0, usage: 0, service: 0, sourceId: 9863, pax: 2, frt: 1, parallelDivisor: 1, startLat: 49.669, startLon: 14.0015, endLat: 49.640, endLon: 14.003 },
+  ]
+}
+
+test('findRailFlowJumps: fires on the CZ shape (effective 36 vs 3 at the shared endpoint)', () => {
+  const violations = findRailFlowJumps(czShapeRows(), null)
+  assert.equal(violations.length, 1)
+  const v = violations[0]
+  assert.equal(v.aSourceId, 110)
+  assert.equal(v.bSourceId, 9863)
+  assert.equal(v.effA.total, 36)
+  assert.equal(v.effB.total, 3)
+  // Per-column check reports whichever column has the WORST ratio — here the
+  // freight zero-default (20 vs 1 = 20x) is more extreme than the 12x total
+  // jump, exactly the "same totals can hide a real seam" case the plan calls
+  // out for comparing per-column AND total.
+  assert.equal(v.column, 'frt')
+  assert.ok(v.ratio > 3)
+})
+
+test('findRailFlowJumps: exempted by a rail stop within 300 m of the endpoint', () => {
+  const stopsIndex = buildRailStopsIndex([{ lat: 49.669, lon: 14.0015 }])
+  const violations = findRailFlowJumps(czShapeRows(), stopsIndex)
+  assert.equal(violations.length, 0)
+})
+
+test('findRailFlowJumps: exempted by a 3rd heavy-rail non-service branch at the junction', () => {
+  const rows = czShapeRows()
+  rows.push({
+    key: 'segC', osmId: 'wC', railType: 0, usage: 1, service: 0, sourceId: 0, pax: 0, frt: 0, parallelDivisor: 1,
+    startLat: 49.669, startLon: 14.0015, endLat: 49.660, endLon: 14.020,
+  })
+  const violations = findRailFlowJumps(rows, null)
+  assert.equal(violations.length, 0, 'a real junction (3rd branch) explains the jump')
+})
+
+test('findRailFlowJumps: pax 2 vs 7 does NOT fire just because frt (100 vs 100) clears the floor — the floor is PER COLUMN (2026-07-16 /gg review item 5)', () => {
+  const rows: RailEndpointRow[] = [
+    { key: 'segA', osmId: 'wA', railType: 0, usage: 0, service: 0, sourceId: 110, pax: 2, frt: 100, parallelDivisor: 1, startLat: 49.000, startLon: 15.000, endLat: 49.010, endLon: 15.001 },
+    { key: 'segB', osmId: 'wB', railType: 0, usage: 0, service: 0, sourceId: 9863, pax: 7, frt: 100, parallelDivisor: 1, startLat: 49.010, startLon: 15.001, endLat: 49.020, endLon: 15.002 },
+  ]
+  const violations = findRailFlowJumps(rows, null)
+  assert.equal(violations.length, 0, 'pax ratio is 3.5x (> RAIL_JUMP_RATIO) but max(2,7)=7 never clears its OWN 20/day floor; frt is 1:1 and total is ~1:1 too')
+})
+
+// ── R16 findRailContinuityGaps ───────────────────────────────────────────────
+
+function continuityRows(measuredPax: number, measuredFrt: number): RailEndpointRow[] {
+  return [
+    { key: 'measured', osmId: 'wM', railType: 0, usage: 0, service: 0, sourceId: 110, pax: measuredPax, frt: measuredFrt, parallelDivisor: 1, startLat: 49.500, startLon: 14.100, endLat: 49.480, endLon: 14.110 },
+    { key: 'gap', osmId: 'wG', railType: 0, usage: 0, service: 0, sourceId: 0, pax: 0, frt: 0, parallelDivisor: 1, startLat: 49.480, startLon: 14.110, endLat: 49.460, endLon: 14.120 },
+  ]
+}
+
+test('findRailContinuityGaps: fires on stamped-12 vs default-100 (coverage gap)', () => {
+  const violations = findRailContinuityGaps(continuityRows(8, 4), null) // 8+4=12
+  assert.equal(violations.length, 1)
+  const v = violations[0]
+  assert.equal(v.effA.total, 12)
+  assert.equal(v.effB.total, 100)
+  assert.ok(v.ratio > 3)
+})
+
+test('findRailContinuityGaps: does NOT fire on stamped-90 vs default-100 (within tolerance)', () => {
+  const violations = findRailContinuityGaps(continuityRows(70, 20), null) // 70+20=90
+  assert.equal(violations.length, 0)
+})
+

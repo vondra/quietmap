@@ -15,6 +15,7 @@ export async function enrichCzechRailways(sourceDirectory: string, preparedDirec
     countryIso: 'CZ', sourceId: SOURCE_ID_CZ_SZCD_GTFS, pairs,
     // Dev1's explicit CZ residual: no scheduled service is not measured freight or absolute silence.
     silentResidual: { sourceId: SOURCE_ID_CZ_TIMETABLE_SILENT, passenger: 2, freight: 1 },
+    retractSafe: true,
   })
   return { source: { ...source, stationPairs: pairs.length }, walk }
 }

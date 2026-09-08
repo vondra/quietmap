@@ -65,6 +65,7 @@ test('one pair walks across a z9 boundary, reruns byte-identically and retracts 
     }],
     sourceId: 100,
     countryIso: 'DE',
+    retractSafe: true,
   }
   const first = await enrichZ9RailwaysByGraphWalk(options)
   assert.deepEqual(

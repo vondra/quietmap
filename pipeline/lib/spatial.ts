@@ -7,6 +7,19 @@ const METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR = 111_320
 export const M_PER_DEG_LAT = METRES_PER_DEGREE_LATITUDE
 export const M_PER_DEG_LON_EQ = METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR
 
+/** Approximate ~1 metre endpoint identity for detector pairing (R15/R16) only.
+ *  Graph construction must use the exact grid-cell keys
+ *  (`SegmentEndpointKeys`): two native endpoints under a metre apart in
+ *  different z30 cells are distinct nodes, and rounding would merge them. */
+export function nodeKey(latitude: number, longitude: number): string {
+  return `${latitude.toFixed(5)}_${longitude.toFixed(5)}`
+}
+
+/** Stable ~11 metre station identity used by GTFS pair accumulation. */
+export function coordKey4dp(latitude: number, longitude: number): string {
+  return `${latitude.toFixed(4)},${longitude.toFixed(4)}`
+}
+
 export function wrapLonDeltaDeg(deltaDegrees: number): number {
   if (deltaDegrees > 180) return deltaDegrees - 360
   if (deltaDegrees < -180) return deltaDegrees + 360
@@ -66,6 +79,27 @@ export function pointToSegmentDist(
   }
   const parameter = Math.max(0, Math.min(1, (pointX * endX + pointY * endY) / lengthSquared))
   return Math.hypot(pointX - parameter * endX, pointY - parameter * endY)
+}
+
+/** Clamped projected position of a point along a segment (0=start, 1=end). */
+export function pointToSegmentParamT(
+  pointLatitude: number,
+  pointLongitude: number,
+  startLatitude: number,
+  startLongitude: number,
+  endLatitude: number,
+  endLongitude: number,
+): number {
+  const cosineLatitude = Math.cos(pointLatitude * Math.PI / 180)
+  const pointX = wrapLonDeltaDeg(pointLongitude - startLongitude) *
+    METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR * cosineLatitude
+  const pointY = (pointLatitude - startLatitude) * METRES_PER_DEGREE_LATITUDE
+  const endX = wrapLonDeltaDeg(endLongitude - startLongitude) *
+    METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR * cosineLatitude
+  const endY = (endLatitude - startLatitude) * METRES_PER_DEGREE_LATITUDE
+  const lengthSquared = endX * endX + endY * endY
+  if (lengthSquared < 1e-6) return 0
+  return Math.max(0, Math.min(1, (pointX * endX + pointY * endY) / lengthSquared))
 }
 
 /** Minimum distance from a point to a GeoJSON-order `[longitude, latitude]` polyline. */
@@ -207,30 +241,4 @@ export function pointInRing(lon: number, lat: number, ring: readonly (readonly [
     if (yi > lat !== yj > lat && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside
   }
   return inside
-}
-
-/** Timetable station-pair identity; unrelated to native graph endpoint identity. */
-export function coordKey4dp(latitude: number, longitude: number): string {
-  return `${latitude.toFixed(4)},${longitude.toFixed(4)}`
-}
-
-/** Clamped projected position of a point along a segment (0=start, 1=end). */
-export function pointToSegmentParamT(
-  pointLatitude: number,
-  pointLongitude: number,
-  startLatitude: number,
-  startLongitude: number,
-  endLatitude: number,
-  endLongitude: number,
-): number {
-  const cosineLatitude = Math.cos(pointLatitude * Math.PI / 180)
-  const pointX = wrapLonDeltaDeg(pointLongitude - startLongitude) *
-    METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR * cosineLatitude
-  const pointY = (pointLatitude - startLatitude) * METRES_PER_DEGREE_LATITUDE
-  const endX = wrapLonDeltaDeg(endLongitude - startLongitude) *
-    METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR * cosineLatitude
-  const endY = (endLatitude - startLatitude) * METRES_PER_DEGREE_LATITUDE
-  const lengthSquared = endX * endX + endY * endY
-  if (lengthSquared < 1e-6) return 0
-  return Math.max(0, Math.min(1, (pointX * endX + pointY * endY) / lengthSquared))
 }

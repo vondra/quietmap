@@ -150,7 +150,6 @@ test('valid empty buildings produce no new traffic; missing admin bake fails bef
   } finally { rmSync(work, { recursive: true, force: true }) }
 })
 
-
 test('nearby distinct native endpoints do not create a motor exit for a disconnected service road', () => {
   const work = mkdtempSync(resolve(tmpdir(), 'service-tree-native-gap-'))
   try {

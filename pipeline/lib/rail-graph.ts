@@ -1,11 +1,44 @@
-/** Railway topology, station snapping and graph-walk result contracts. */
+/**
+ * Rail-segment graph — the ONE topology SSOT for the rail graph-walk matcher,
+ * the R15/R16 continuity auditors and enrichment-status metrics.
+ * Pure, no file I/O — callers own reading Arrow/GTFS and writing stamps.
+ *
+ * `buildRailGraph` interns segment endpoints via the exact z30 grid-cell keys
+ *  (`SegmentEndpointKeys` from prepared-grid.ts) and
+ * then performs T-JUNCTION HEALING: the extractor's collinear-merge
+ * (`engine/osm-extract/src/microsegment.rs::split`) swallows junction
+ * vertices, so a branch's endpoint can land in the *middle* of another
+ * segment's body instead of exactly on it — an endpoint-only graph would
+ * leave that branch dangling, unreachable from the segment it physically
+ * meets. Healing finds those mid-body touches and splits the touched
+ * segment into sub-edges that share the branch's node, all still tagged
+ * with the ORIGINAL segment's `key` so a walked stamp maps back to one
+ * Arrow row regardless of how many sub-edges it now spans.
+ *
+ * Routing (`walkRailStationPairs`), the parallel-spread pass and the R15/R16
+ * detectors live in the sibling `rail-graph-metrics.ts` (kept out of this
+ * file to stay near the ~300-line target) — they import the types and
+ * `effectiveRailTraffic`/`buildRailGraph` from here; no logic is duplicated
+ * between the two files.
+ */
 
 import { flatDist, pointToSegmentDist, pointToSegmentParamT, M_PER_DEG_LAT, M_PER_DEG_LON_EQ } from './spatial.js'
 import type { SegmentEndpointKeys } from './prepared-grid.js'
 
 // ── Tunables (cited at each use site) ───────────────────────────────────────
 
-/** Standard heavy rail and narrow gauge route separately; tram/light rail uses the stop join. */
+/** Rail families the graph WALK routes and stamps: standard heavy rail (0)
+ *  and narrow gauge (3). Narrow gauge added 2026-07-16 (CH Step A: 826 snap
+ *  + 643 unlocalized failures = the metre-gauge networks — RhB/MGB/zb run
+ *  >100 trains/day yet the engine's narrow-gauge class default is 10/day,
+ *  so walking real GTFS counts onto them is a large accuracy win, not just
+ *  a snap fix; same class as CZ's Osoblaha). GTFS route_type=2 trains do
+ *  not distinguish gauge, and the shortest path virtually never crosses a
+ *  gauge break (physically separate tracks; the rare dual-gauge section is
+ *  genuinely shared). Trams/light rail (1/2) stay on the 500 m stop-join;
+ *  funicular (4) carries no timetable counts worth walking. Code list must
+ *  stay consistent with `defaultRailTraffic` below and the engine's
+ *  `RailType::from_u8` (emission/railway.rs) — three hand-synced tables. */
 export function isWalkableRailType(railType: number): boolean {
   return railType === 0 || railType === 3
 }
@@ -23,7 +56,7 @@ export function walkFamilyBit(railType: number): number {
 export const WALK_FAMILY_MASKS = [1, 2] as const
 
 /** A GTFS/CZPTT stop's GPS must resolve to a graph node within this radius or
- *  the pair is dropped (never a chord fallback). */
+ *  the pair is dropped (never a chord fallback — see plan Key decisions). */
 export const STATION_SNAP_RADIUS_M = 300
 /** Hard walk-length bound: `WALK_DETOUR_RATIO * greatCircle + WALK_DETOUR_SLACK_M`.
  *  Rejects a chord-vs-meander mismatch when the graph does not actually run
@@ -43,6 +76,15 @@ export const SHAPE_CORRIDOR_TOLERANCE_M = 250
  *  extractor's own vertex precision), so this never merges two genuinely
  *  distinct nearby tracks. */
 export const T_JUNCTION_TOLERANCE_M = 1.0
+/** A rail-flow jump at a node within this radius of a real stop is explained
+ *  by boardings/alightings, not a matching bug (R15/R16 exemption). */
+export const RAIL_STOP_EXEMPT_RADIUS_M = 300
+/** R15/R16 fire threshold: effective traffic must jump more than this
+ *  multiple across a degree-2 node with no junction/stop to explain it. */
+export const RAIL_JUMP_RATIO = 3
+/** R15/R16 floor: below this effective trains/day, ratio noise (2 vs 7) is
+ *  not worth flagging even past RAIL_JUMP_RATIO. */
+export const RAIL_MIN_EFFECTIVE_TRAINS_PER_DAY = 20
 /** Parallel-track sibling search radius (segment-midpoint distance, metres). */
 export const PARALLEL_SPREAD_RADIUS_M = 50
 /** Twin-track ambiguity exemption (2026-07-16 Step-B refinement; REDESIGNED
@@ -130,7 +172,7 @@ export const UNLOCALIZED_PAIR_QUARANTINE_RADIUS_M = 5000
  *  T-junction segment-body grid, the node snap grid and the rail-stops grid.
  *  ~1.1 km at the equator — far coarser than T_JUNCTION_TOLERANCE_M (so a
  *  handful of neighbour cells always cover it) and comfortably coarser than
- *  STATION_SNAP_RADIUS_M (300 m), so a
+ *  STATION_SNAP_RADIUS_M / RAIL_STOP_EXEMPT_RADIUS_M (both 300 m), so a
  *  ±1-cell neighbourhood already suffices in the common case; the snap/stop
  *  queries still compute the exact ring needed for the caller's radius.
  *
@@ -145,6 +187,9 @@ const SPATIAL_INDEX_CELL_DEG = 0.01
 
 // ── Segment input + graph shape ─────────────────────────────────────────────
 
+/** Graph input with exact native endpoint identity (z30 grid cells via
+ *  `SegmentEndpointKeys`): sub-metre distinct endpoints stay distinct nodes —
+ *  never the rounded `nodeKey()`, which is detector-pairing only. */
 export interface RailGraphSegmentInput extends SegmentEndpointKeys {
   /** Caller-stable id, e.g. `${square}:${rowIdx}` — stamps key off this, not
    *  off any graph-internal (post-healing) edge id. */
@@ -174,9 +219,7 @@ export interface RailGraphNode {
 
 /** One (post-healing) graph edge. May be a whole input segment (no T-junction
  *  touched it) or one sub-edge of a segment that was split — `parentKey`
- *  always identifies the ORIGINAL `RailGraphSegmentInput.key` either way.
- *  Coordinates describe this edge; ordered sub-edges retain the parent
- *  segment's original outer endpoints for whole-segment spread. */
+ *  always identifies the ORIGINAL `RailGraphSegmentInput.key` either way. */
 export interface RailGraphEdge {
   nodeA: number
   nodeB: number
@@ -197,7 +240,7 @@ export interface RailGraph {
   nodeCount: number
   edgeCount: number
   // Internal structure consumed by rail-graph-metrics.ts (routing, parallel
-  // spread). Plain fields, not hidden behind a
+  // spread, the R15/R16 detectors). Plain fields, not hidden behind a
   // private/symbol boundary, so the sibling module can build directly on top
   // of one graph instance instead of recomputing it.
   nodes: RailGraphNode[]
@@ -218,6 +261,22 @@ export interface RailGraph {
 }
 
 // ── Construction ─────────────────────────────────────────────────────────────
+
+interface WorkEdge {
+  nodeA: number
+  nodeB: number
+  lengthM: number
+  parentKey: string
+  osmId: string
+  railType: number
+  usage: number
+  isTraversalOnly: boolean
+  corridorToken: string
+  startLat: number
+  startLon: number
+  endLat: number
+  endLon: number
+}
 
 function gridCellsForBbox(minLat: number, minLon: number, maxLat: number, maxLon: number): string[] {
   const cells: string[] = []
@@ -242,7 +301,7 @@ function gridCellsForBbox(minLat: number, minLon: number, maxLat: number, maxLon
  *  a caller can reconstruct one segment's overall geometry by taking the
  *  first and last sub-edge with its `parentKey` (see rail-graph-metrics.ts's
  *  `collectSegmentGeometry`). */
-function healTJunctions(nodes: RailGraphNode[], workEdges: RailGraphEdge[]): RailGraphEdge[] {
+function healTJunctions(nodes: RailGraphNode[], workEdges: WorkEdge[]): RailGraphEdge[] {
   const segmentGrid = new Map<string, number[]>()
   workEdges.forEach((e, idx) => {
     const minLat = Math.min(e.startLat, e.endLat), maxLat = Math.max(e.startLat, e.endLat)
@@ -271,7 +330,7 @@ function healTJunctions(nodes: RailGraphNode[], workEdges: RailGraphEdge[]): Rai
       const d = pointToSegmentDist(lat, lon, e.startLat, e.startLon, e.endLat, e.endLon)
       if (d > T_JUNCTION_TOLERANCE_M) continue
       const t = pointToSegmentParamT(lat, lon, e.startLat, e.startLon, e.endLat, e.endLon)
-      if (t <= 1e-6 || t >= 1 - 1e-6) continue // endpoint identity is supplied by the native geometry, never proximity
+      if (t <= 1e-6 || t >= 1 - 1e-6) continue // projects onto an endpoint — grid-key interning already merged this one
       const arr = hits.get(idx) ?? []
       arr.push({ nodeId, t })
       hits.set(idx, arr)
@@ -293,14 +352,22 @@ function healTJunctions(nodes: RailGraphNode[], workEdges: RailGraphEdge[]): Rai
     }
     chain.push({ nodeId: e.nodeB, t: 1 })
     for (let i = 0; i < chain.length - 1; i++) {
+      // A sub-edge carries ITS OWN span, not the parent's: every consumer that
+      // asks "where does this edge run" reads startLat..endLon — the twin
+      // gate's per-edge midpoint, the ambiguous-pair diagnostic and the GTFS
+      // shape filter. The OUTER ends keep the parent's original coordinates so
+      // `collectSegmentGeometry` still reconstructs the parent span from the
+      // first and last sub-edge.
+      const isFirst = i === 0
+      const isLast = i === chain.length - 2
       finalEdges.push({
         ...e,
         nodeA: chain[i].nodeId,
         nodeB: chain[i + 1].nodeId,
-        startLat: i === 0 ? e.startLat : nodes[chain[i].nodeId].lat,
-        startLon: i === 0 ? e.startLon : nodes[chain[i].nodeId].lon,
-        endLat: i === chain.length - 2 ? e.endLat : nodes[chain[i + 1].nodeId].lat,
-        endLon: i === chain.length - 2 ? e.endLon : nodes[chain[i + 1].nodeId].lon,
+        startLat: isFirst ? e.startLat : nodes[chain[i].nodeId].lat,
+        startLon: isFirst ? e.startLon : nodes[chain[i].nodeId].lon,
+        endLat: isLast ? e.endLat : nodes[chain[i + 1].nodeId].lat,
+        endLon: isLast ? e.endLon : nodes[chain[i + 1].nodeId].lon,
         lengthM: e.lengthM * (chain[i + 1].t - chain[i].t),
       })
     }
@@ -360,7 +427,7 @@ export function buildRailGraph(segments: RailGraphSegmentInput[]): RailGraph {
     return id
   }
 
-  const workEdges: RailGraphEdge[] = segments.map((seg) => ({
+  const workEdges: WorkEdge[] = segments.map((seg) => ({
     nodeA: internNode(seg.startKey, seg.startLat, seg.startLon),
     nodeB: internNode(seg.endKey, seg.endLat, seg.endLon),
     lengthM: seg.lengthM,
@@ -513,6 +580,86 @@ export function nearestRailGraphNodeDistanceM(
   }
 }
 
+// ── Effective traffic (engine zero-defaulting mirror) ───────────────────────
+
+/** Per-column class default, TS mirror of
+ *  `engine/noise-compute/src/emission/railway.rs::default_traffic` — keep the
+ *  two tables in sync by hand; there is no codegen link between them.
+ *  `RailType::from_u8` maps ANY unrecognized code to `Rail`, so the `default`
+ *  arm below covers both railType 0 and an out-of-range value on purpose. */
+function defaultRailTraffic(railType: number, usage: number): [pax: number, frt: number] {
+  switch (railType) {
+    case 1: return [120, 0] // tram
+    case 2: return [80, 0]  // light_rail
+    case 3: return [10, 0]  // narrow_gauge
+    case 4: return [40, 0]  // funicular
+    default: // 0 = heavy rail, and the engine's from_u8 fallback for unknown codes
+      switch (usage) {
+        case 0: return [80, 20] // main
+        case 1: return [30, 5]  // branch
+        case 2: return [0, 15]  // industrial siding
+        default: return [40, 10] // unknown usage
+      }
+  }
+}
+
+/** TS mirror of `normalize_rail`'s zero-defaulting + parallel-divisor scale:
+ *  each of pax/frt independently falls back to its class default ONLY where
+ *  the column itself is 0 (a real 0 is indistinguishable from "unmeasured" —
+ *  this is the engine's own convention, not a choice made here), then both
+ *  are divided by `max(1, parallelDivisor)`. Used by the R15/R16 detectors so
+ *  they compare what the engine actually renders, not the raw stamped ints. */
+export function effectiveRailTraffic(
+  pax: number,
+  frt: number,
+  railType: number,
+  usage: number,
+  parallelDivisor: number,
+): { pax: number; frt: number; total: number } {
+  const [defPax, defFrt] = defaultRailTraffic(railType, usage)
+  const divisor = Math.max(1, parallelDivisor)
+  const effPax = (pax > 0 ? pax : defPax) / divisor
+  const effFrt = (frt > 0 ? frt : defFrt) / divisor
+  return { pax: effPax, frt: effFrt, total: effPax + effFrt }
+}
+
+// ── Rail-stops sidecar index (R15/R16 stop exemption) ───────────────────────
+
+export interface RailStopsIndex {
+  queryWithinRadius(lat: number, lon: number, radiusM: number): boolean
+}
+
+/** Grid-accelerated point-in-radius test over a rail-stops sidecar (station
+ *  platforms), same cell scheme as the node/segment grids above. */
+export function buildRailStopsIndex(stops: Array<{ lat: number; lon: number }>): RailStopsIndex {
+  const grid = new Map<string, Array<{ lat: number; lon: number }>>()
+  for (const s of stops) {
+    const key = `${Math.floor(s.lat / SPATIAL_INDEX_CELL_DEG)}_${Math.floor(s.lon / SPATIAL_INDEX_CELL_DEG)}`
+    const arr = grid.get(key)
+    if (arr) arr.push(s); else grid.set(key, [s])
+  }
+  return {
+    queryWithinRadius(lat: number, lon: number, radiusM: number): boolean {
+      const latSpanM = SPATIAL_INDEX_CELL_DEG * M_PER_DEG_LAT
+      const lonSpanM = SPATIAL_INDEX_CELL_DEG * M_PER_DEG_LON_EQ * Math.max(0.05, Math.cos(lat * Math.PI / 180))
+      const dyMax = Math.max(1, Math.ceil(radiusM / latSpanM))
+      const dxMax = Math.max(1, Math.ceil(radiusM / lonSpanM))
+      const gy = Math.floor(lat / SPATIAL_INDEX_CELL_DEG)
+      const gx = Math.floor(lon / SPATIAL_INDEX_CELL_DEG)
+      for (let dy = -dyMax; dy <= dyMax; dy++) {
+        for (let dx = -dxMax; dx <= dxMax; dx++) {
+          const arr = grid.get(`${gy + dy}_${gx + dx}`)
+          if (!arr) continue
+          for (const s of arr) {
+            if (flatDist(lat, lon, s.lat, s.lon) <= radiusM) return true
+          }
+        }
+      }
+      return false
+    },
+  }
+}
+
 // ── Types shared with rail-graph-metrics.ts (route/auditor inputs+outputs) ──
 
 export interface RailStationPairCount {
@@ -527,9 +674,15 @@ export interface RailStationPairCount {
 }
 
 export interface RailWalkResult {
-  /** Same spread election, including unwalked siblings used by the CZ silent residual. */
-  divisorBySegmentKey: Map<string, number>
   stampsBySegmentKey: Map<string, { pax: number; frt: number; divisor: number }>
+  /** Parallel-track divisor for EVERY stampable segment that has >=1 sibling
+   *  (`applyParallelSpread`'s sibling probe), INDEPENDENT of `stampsBySegmentKey`
+   *  — a segment can have a sibling and carry zero traffic from either side
+   *  (both unwalked) and still needs its divisor recorded, or a silent-residual
+   *  stamp landing there later would render at the wrong (undivided) count.
+   *  Absent key = no sibling found = divisor 1 (rail-walk-enrich.ts's silent
+   *  branch reads this with `?? 1`). */
+  divisorBySegmentKey: Map<string, number>
   failures: { snapFailed: number; disconnected: number; detourRejected: number; ambiguous: number }
   /** See `RailFailedPairRecord`'s doc for the reason-specific diagnostics
    *  each entry carries. */
@@ -550,7 +703,7 @@ export interface RailWalkResult {
    *  commuter line must not go silent at 2+1/day).
    *  NEITHER end snapped -> the chord band alone
    *  (`quarantineChordVicinity`, `UNLOCALIZED_PAIR_QUARANTINE_RADIUS_M`).
-   *  Retraction withholds on
+   *  Retract and the silent residual (rail-walk-enrich.ts) withhold on
    *  SEGMENT membership here, never on the segment's whole component. */
   quarantinedSegmentKeys: Set<string>
   /** Pairs where NEITHER endpoint snapped onto the graph (both ends failed
@@ -610,3 +763,58 @@ export interface RailFailedPairRecord {
    *  rack/spiral lines legitimately exceed 2.5x on short chords). */
   detourGeometry?: { bestPathM: number; boundM: number }
 }
+
+export interface RailEndpointRow {
+  key: string
+  osmId: string
+  railType: number
+  usage: number
+  service: number
+  sourceId: number
+  pax: number
+  frt: number
+  parallelDivisor: number
+  startLat: number
+  startLon: number
+  endLat: number
+  endLon: number
+}
+
+export interface RailContinuityViolation {
+  endpointLat: number
+  endpointLon: number
+  aKey: string
+  bKey: string
+  aSourceId: number
+  bSourceId: number
+  ratio: number
+  effA: { pax: number; frt: number; total: number }
+  effB: { pax: number; frt: number; total: number }
+  column: 'pax' | 'frt' | 'total'
+}
+
+/** The rail-stops sidecar on disk (`data/prepared/{year}/rail-stops/{scope}.json`)
+ *  — written by exactly one writer (`rail-walk-enrich.ts`'s
+ *  `writeStopsSidecarIfAny`) and read by exactly one reader
+ *  (`rail-endpoint-rows.ts`'s `loadRailStopsIndex`, the R15/R16 stop
+ *  exemption). Types live here (rail-graph.ts is the types home) so writer
+ *  and reader can never drift on the envelope shape. */
+export interface RailStopsSidecarV1 {
+  version: 1
+  year: string
+  scope: string
+  extractFingerprint: string
+  feeds: string[]
+  generatedAt: string
+  stops: Array<{ lat: number; lon: number }>
+  /** Every failed pair's chord + reason + diagnostics from THIS SAME walk
+   *  (DE Step A v2, 2026-07-16 failure analysis, fix 3) — additive field on
+   *  the ONE existing per-run JSON artifact a walk produces, so a v3
+   *  twin-gate tuning pass can inspect WHY pairs failed without re-running
+   *  the whole enrichment (no new file family). Optional: absent on a
+   *  sidecar written before this field existed; `loadRailStopsIndex`
+   *  (rail-endpoint-rows.ts, the R15/R16 stop exemption reader) never reads
+   *  it, so that reader's contract is unaffected either way. */
+  failedPairChords?: RailFailedPairRecord[]
+}
+

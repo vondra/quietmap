@@ -27,6 +27,7 @@ test('disconnected station pairs cannot retract existing own counts around eithe
     bbox: [55, 12, 56, 13],
     countryIso: 'DK', sourceId: SOURCE_ID_DK_NATIONAL_RAILWAY,
     pairs: [{ fromLat: 55.67, fromLon: 12.57, toLat: 55.721, toLon: 12.62, pax: 8, frt: 0 }],
+    retractSafe: true,
   })
   assert.equal(result.failures.disconnected, 1)
   assert.equal(result.failedPairs[0].reason, 'disconnected')
