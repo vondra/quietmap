@@ -5,6 +5,8 @@ import rateLimit from '@fastify/rate-limit'
 import { randomUUID } from 'node:crypto'
 import { isLoopbackClient, rateLimitClientKey } from './rate-limit.js'
 import { searchRoutes } from './routes/search.js'
+import { heatmapPmtilesRoutes } from './routes/heatmap-pmtiles.js'
+import { heatmapManifestRoutes } from './routes/heatmap-manifest.js'
 import { noiseOnflyV2Routes } from './routes/noise-onfly-v2.js'
 import { isochronRoutes } from './routes/isochron.js'
 import { docsRoutes } from './routes/docs.js'
@@ -106,6 +108,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(stayRoutes)
   await app.register(rasterTileRoutes, { queryObstacleFootprints: engine.queryObstacleFootprints })
   await app.register(aircraftRoutes)
+  await app.register(heatmapPmtilesRoutes)
+  await app.register(heatmapManifestRoutes)
   await app.register(initialViewRoutes)
   await app.register(validationViewRoutes)
   // Inbound-mail archive webhook (Cloudflare Email Worker → the ops mail host), ops-only:

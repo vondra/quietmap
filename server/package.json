@@ -8,6 +8,7 @@
     "build": "node scripts/build.mjs",
     "start": "node scripts/start.mjs",
     "test": "node --import tsx --test src/*.test.ts src/**/*.test.ts scripts/*.test.mjs",
+    "parity:popup": "node scripts/popup-parity.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
