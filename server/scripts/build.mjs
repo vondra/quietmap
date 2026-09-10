@@ -173,7 +173,6 @@ if (compiled.status !== 0) {
 }
 
 const runtimeAssets = [
-  ['src/generation-contract.mjs', 'generation-contract.mjs'],
   ['src/workers/noise-onfly-worker.mjs', 'workers/noise-onfly-worker.mjs'],
 ]
 for (const [sourceRelative, destinationRelative] of runtimeAssets) {

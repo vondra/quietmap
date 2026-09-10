@@ -4,14 +4,12 @@ use aircraft_extract::arrow_io::{write_flights, FlightRow};
 use aircraft_extract::stage_1::run_stage_1;
 use aircraft_extract::trace::TracePoint;
 use noise_compute::types::RasterSampler;
-use raster_reader::catalog::{begin_channel, record_square};
 use raster_reader::channel::Channel;
 use raster_reader::{CheckedRasters, RealRasters};
 use std::path::Path;
 
 fn rasters(root: &Path) -> RealRasters {
     for channel in Channel::ALL {
-        let database = begin_channel(root, channel, &"a".repeat(64)).unwrap();
         for y in 254..=256 {
             let square = grid::Square { x: 256, y };
             let window = grid::raster::RasterWindow::for_square(square);
@@ -33,13 +31,6 @@ fn rasters(root: &Path) -> RealRasters {
             let path = channel.path(root, square);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, &bytes).unwrap();
-            record_square(
-                &database,
-                channel,
-                square,
-                Some(raster_reader::catalog::content_digest(&bytes)),
-            )
-            .unwrap();
         }
     }
     RealRasters::new(root)

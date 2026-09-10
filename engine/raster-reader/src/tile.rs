@@ -1,12 +1,10 @@
-//! Strict native z9 mmap sampling with a byte-bounded cache and caller-retained hot tiles.
+//! Native z9 mmap sampling: a data file, a 0-byte ocean file, or an error; byte-bounded LRU cache.
 
-use crate::catalog::{self, Coverage, Digest};
 use crate::channel::Channel;
 use grid::{raster::RasterWindow, square_of, Square};
 use memmap2::Mmap;
 use std::collections::HashMap;
 use std::fs::File;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,73 +16,38 @@ pub enum Interp {
 }
 
 pub struct RawTile {
+    /// `None` is a coverage-verified absent square: every node is the channel's ocean value.
     pixels: Option<Mmap>,
     window: RasterWindow,
     channel: Channel,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct FileIdentity {
-    device: u64,
-    inode: u64,
-    length: u64,
-    modified: (i64, i64),
-    changed: (i64, i64),
-}
-
-impl FileIdentity {
-    fn read(file: &File) -> Result<Self, String> {
-        let metadata = file.metadata().map_err(|error| error.to_string())?;
-        Ok(Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            length: metadata.len(),
-            modified: (metadata.mtime(), metadata.mtime_nsec()),
-            changed: (metadata.ctime(), metadata.ctime_nsec()),
-        })
-    }
-}
-
 impl RawTile {
-    fn load(
-        root: &Path,
-        square: Square,
-        channel: Channel,
-        digest: Digest,
-        verified: Option<FileIdentity>,
-    ) -> Result<(Self, FileIdentity), String> {
+    /// A 0-byte file is declared absence; a missing file or any other length is an error,
+    /// so an undeclared square can never compute.
+    fn load(root: &Path, square: Square, channel: Channel) -> Result<Self, String> {
         let path = channel.path(root, square);
         let window = RasterWindow::for_square(square);
         let file = File::open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-        let identity = FileIdentity::read(&file)?;
-        if identity.length != channel.byte_len(window) as u64 {
+        let length = file
+            .metadata()
+            .map_err(|error| format!("{}: {error}", path.display()))?
+            .len();
+        let pixels = if length == 0 {
+            None
+        } else if length == channel.byte_len(window) as u64 {
+            Some(unsafe { Mmap::map(&file) }.map_err(|error| error.to_string())?)
+        } else {
             return Err(format!(
                 "{}: wrong native window byte length",
                 path.display()
             ));
-        }
-        let pixels = unsafe { Mmap::map(&file) }.map_err(|error| error.to_string())?;
-        if verified != Some(identity) {
-            #[cfg(test)]
-            tests::observe_full_hash(&file);
-            if catalog::content_digest(&pixels) != digest {
-                return Err(format!("{}: published checksum mismatch", path.display()));
-            }
-        }
-        if FileIdentity::read(&file)? != identity {
-            return Err(format!(
-                "{}: file changed during validation",
-                path.display()
-            ));
-        }
-        Ok((
-            Self {
-                pixels: Some(pixels),
-                window,
-                channel,
-            },
-            identity,
-        ))
+        };
+        Ok(Self {
+            pixels,
+            window,
+            channel,
+        })
     }
 
     fn read_pixel(&self, row: u32, column: u32) -> f64 {
@@ -127,6 +90,7 @@ impl RawTile {
 mod tests;
 
 struct CachedTile {
+    /// `None` records a refused square so a broken tree is not reopened per sample.
     tile: Option<Arc<RawTile>>,
     touched: u64,
     bytes: usize,
@@ -135,17 +99,12 @@ struct CachedTile {
 #[derive(Default)]
 struct Cache {
     tiles: HashMap<Square, CachedTile>,
-    // Published files are immutable. Receipts survive mmap eviction and detect ordinary
-    // writes/replacements on reload, not silent bitrot with unchanged identity metadata.
-    verified: HashMap<Square, FileIdentity>,
     bytes: usize,
 }
 
 pub struct TileStore {
     root: PathBuf,
     channel: Channel,
-    coverage: Result<Coverage, String>,
-    ocean: Arc<RawTile>,
     cache: Mutex<Cache>,
     use_counter: AtomicU64,
     max_bytes: usize,
@@ -156,54 +115,29 @@ impl TileStore {
         Self {
             root: root.to_path_buf(),
             channel,
-            coverage: catalog::read_channel(root, channel),
-            ocean: Arc::new(RawTile {
-                pixels: None,
-                window: RasterWindow::for_square(Square { x: 0, y: 0 }),
-                channel,
-            }),
             cache: Mutex::new(Cache::default()),
             use_counter: AtomicU64::new(0),
             max_bytes,
         }
     }
 
-    pub fn has_complete_coverage(&self) -> bool {
-        self.coverage
-            .as_ref()
-            .is_ok_and(|coverage| coverage.len() == 512 * 512)
-    }
-
     fn get_tile(&self, square: Square) -> Option<Arc<RawTile>> {
-        let coverage = self.coverage.as_ref().ok()?;
-        let digest = coverage.get(&square)?;
-        let Some(digest) = digest else {
-            // An undeclared leftover file cannot hide behind an ocean declaration.
-            return self
-                .channel
-                .file_is_absent(&self.root, square)
-                .ok()
-                .filter(|absent| *absent)
-                .map(|_| Arc::clone(&self.ocean));
-        };
         let touched = self.use_counter.fetch_add(1, Ordering::Relaxed);
-        let verified = {
+        {
             let mut cache = self.cache.lock().unwrap_or_else(|error| error.into_inner());
             if let Some(entry) = cache.tiles.get_mut(&square) {
                 entry.touched = touched;
                 return entry.tile.clone();
             }
-            cache.verified.get(&square).copied()
+        }
+        // File opens stay outside the shared lock: unrelated warm visitors keep moving.
+        let tile = match RawTile::load(&self.root, square, self.channel) {
+            Ok(tile) => Some(Arc::new(tile)),
+            Err(error) => {
+                eprintln!("raster-reader: REFUSED {error}");
+                None
+            }
         };
-        // File opens/checksums stay outside the shared lock: unrelated warm visitors keep moving.
-        let (tile, identity) =
-            match RawTile::load(&self.root, square, self.channel, *digest, verified) {
-                Ok((tile, identity)) => (Some(Arc::new(tile)), Some(identity)),
-                Err(error) => {
-                    eprintln!("raster-reader: REFUSED {error}");
-                    (None, None)
-                }
-            };
         let bytes = std::mem::size_of::<CachedTile>()
             + tile
                 .as_ref()
@@ -212,9 +146,6 @@ impl TileStore {
         let mut cache = self.cache.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(entry) = cache.tiles.get(&square) {
             return entry.tile.clone();
-        }
-        if let Some(identity) = identity {
-            cache.verified.insert(square, identity);
         }
         while cache.bytes.saturating_add(bytes) > self.max_bytes {
             let oldest = cache

@@ -57,7 +57,6 @@ impl PinnedFile {
 pub struct SurfaceCornerReader {
     root: PathBuf,
     sources: PinnedFile,
-    rasters: PinnedFile,
     receipt: GenerationReceipt,
 }
 #[derive(Serialize)]
@@ -78,27 +77,20 @@ impl SurfaceCornerReader {
     /// Prepared manifests and vectors remain immutable for the initialized process lifetime.
     pub fn open(prepared: &Path, corners: &Path) -> Option<Self> {
         let sources = PinnedFile::open(prepared.join("inputs.sqlite"))?;
-        let rasters = PinnedFile::open(prepared.join(raster_reader::catalog::CATALOG_FILE))?;
-        let receipt =
-            GenerationReceipt::read_compatible(corners, sources.digest, rasters.digest).ok()??;
+        let receipt = GenerationReceipt::read_compatible(corners, sources.digest).ok()??;
         Some(Self {
             root: corners.to_path_buf(),
             sources,
-            rasters,
             receipt,
         })
     }
     pub fn query(&self, latitude: f64, longitude: f64) -> Option<SurfaceCornerPreview> {
         let lattice = SurfaceCornerInterpolation::at(latitude, longitude)?;
-        if !self.sources.unchanged() || !self.rasters.unchanged() {
+        if !self.sources.unchanged() {
             return None;
         }
-        let receipt = GenerationReceipt::read_compatible(
-            &self.root,
-            self.sources.digest,
-            self.rasters.digest,
-        )
-        .ok()??;
+        let receipt =
+            GenerationReceipt::read_compatible(&self.root, self.sources.digest).ok()??;
         if receipt != self.receipt {
             return None;
         }

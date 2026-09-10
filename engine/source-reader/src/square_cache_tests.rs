@@ -167,7 +167,6 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
     scan_to_insert_interleaving_preserves_hits_and_active_pins();
     let tmp = tempfile::tempdir().unwrap();
     super::YEAR_DIR.set(tmp.path().to_path_buf()).unwrap();
-    super::DATA_DIR.set(tmp.path().to_path_buf()).unwrap();
     let (lat, lon) = (60.0, 20.0);
     let dir = fx::square_dir(tmp.path(), grid::square_of(lat, lon));
     std::fs::create_dir_all(&dir).unwrap();
@@ -188,7 +187,7 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
         "airport_lines",
     ] {
         if name != "structures" {
-            fx::write_structure_file(&dir.join("structures.arrow"), &[], true);
+            fx::write_square_structures(tmp.path(), grid::square_of(lat, lon), &[]);
         }
         let path = dir.join(format!("{name}.arrow"));
         std::fs::write(&path, b"not Arrow").unwrap();
@@ -237,18 +236,20 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
         assert!(pure.contains(&path.display().to_string()), "{pure}");
         assert!(pure.contains("batch 1"), "{pure}");
         reset_store(tmp.path());
+        // A rewritten structures table no longer pairs with the pipeline's
+        // index, so the popup is refused before it decodes one batch.
+        let (native_file, native_error) = if name == "structures" {
+            (dir.join("structures.qoix"), "obstacle-index-build")
+        } else {
+            (path.clone(), "batch 1")
+        };
         for _ in 0..2 {
             let native = super::query_noise_at_point(lat, lon).unwrap_err();
             assert!(
-                native.reason.contains(&path.display().to_string()),
+                native.reason.contains(&native_file.display().to_string()),
                 "{native}"
             );
-            let batch_error = if name == "structures" {
-                "arrow batch"
-            } else {
-                "batch 1"
-            };
-            assert!(native.reason.contains(batch_error), "{native}");
+            assert!(native.reason.contains(native_error), "{native}");
             let listing = match name {
                 "roads" => Some(super::query_roads(lat, lon, 1000.0)),
                 "structures" => Some(super::query_buildings(lat, lon, 1000.0)),

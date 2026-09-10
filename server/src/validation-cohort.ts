@@ -226,14 +226,9 @@ export function createValidationCohortProvider(options: ValidationCohortOptions 
     { label: 'runtime-dependency-lock', path: resolve(runtimeRoot, 'node_modules', '.package-lock.json') },
     { label: 'source-dependency-lock', path: resolve(runtimeRoot, '..', 'node_modules', '.package-lock.json') },
   ]
-  const yearRoot = preparedYearDir
-  // square-country-city.bin needs no entry of its own: it lives inside the prepared
-  // year tree, which the `squares` input already fingerprints file by file. Rasters
-  // ride along in the same tree; the explicit entry keeps their label stable across
-  // layout moves.
-  const preparedAuxiliaryInputs = options.preparedAuxiliaryInputs ?? [
-    { label: 'rasters', path: resolve(yearRoot, 'rasters') },
-  ]
+  // Rasters and square-country-city.bin need no entry of their own: they live inside
+  // the prepared year tree, which the `squares` input already fingerprints file by file.
+  const preparedAuxiliaryInputs = options.preparedAuxiliaryInputs ?? []
   let establishedCohortId: string | null = null
   let cached: CachedCohort | null = null
   let inFlight: Promise<ValidationCohort> | null = null

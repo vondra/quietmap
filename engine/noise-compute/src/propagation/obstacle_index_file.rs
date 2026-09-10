@@ -1,8 +1,8 @@
-//! On-disk (mmap-able) form of [`ObstacleIndex`] — build the grid once, map it
-//! on every later cold start instead of re-deriving it from the Arrow shards.
+//! On-disk (mmap-able) form of [`ObstacleIndex`] — `structures.qoix`, written
+//! by the pipeline beside every `structures.arrow` and mapped at query time.
 //!
 //! A São Paulo popup indexes ~40 M edges: ~6 s and ~1.1 GB of CSR arrays that
-//! the process then throws away. Those arrays are already flat and immutable,
+//! the process would throw away. Those arrays are already flat and immutable,
 //! so the file IS the in-memory layout — a load is `mmap` plus a header check,
 //! and the kernel faults in only the cells a ray actually walks. Nothing is
 //! copied into the heap, which is the whole point: a 1.1 GB deserialize would
@@ -12,16 +12,19 @@
 //! BYTES and validates them. Opening, mapping and writing files is the caller's
 //! (`source-reader`'s) job, handed in through [`IndexBlob`].
 //!
-//! Staleness is decided by two u64s in the header, never by a comment:
-//! * [`BUILDER_CODE_VER`] — a content hash of every source file that decides
-//!   the bytes (the Rust twin of `scripts/layer-codever.py`'s per-layer content
-//!   set-hash: over-invalidate rather than risk a stale artifact);
-//! * `data_ver` — the caller's fingerprint of the INPUT files (the twin of
-//!   `world-stamps.py`'s `_data_ver` mtime set-hash).
-//!
-//! Both must match exactly or [`ObstacleIndex::from_blob`] refuses the file and
-//! the caller rebuilds. A wasted rebuild costs a minute; a stale index is a
-//! silent hole in the map.
+//! Three u64s in the header carry the file's provenance, never a comment:
+//! * `code_ver` — a content hash of every source file that decides the bytes
+//!   (built on [`BUILDER_CODE_VER`]; the caller folds its own decisions in).
+//!   [`ObstacleIndex::from_blob`] refuses any other value: the builder moved,
+//!   so the pipeline step must run again.
+//! * `data_ver` — the builder's fingerprint of the INPUT table. The mapping
+//!   reader does not hold that table and does not check it; whoever does
+//!   (the pipeline step deciding whether a square is up to date, the painter
+//!   holding the manifest-verified Arrow bytes) reads it through
+//!   [`index_file_provenance`].
+//! * `data_len` — the byte length of that input table. A reader that holds
+//!   only the table's path compares it with one `metadata()` call: the cheap
+//!   backstop against a table rewritten after the step ran.
 
 use std::sync::Arc;
 
@@ -170,9 +173,9 @@ pub const FNV1A64_SEED: u64 = 0xcbf2_9ce4_8422_2325;
 /// `scripts/layer-codever.py` applies to tiles, enforced by the compiler instead
 /// of by remembering to bump a number.
 ///
-/// Callers that add decisions of their OWN on top (id ordering, shard order)
-/// must fold their source in too — see `source-reader`'s
-/// `obstacle_store::CACHE_CODE_VER`.
+/// Callers that add decisions of their OWN on top (id ordering, input
+/// fingerprint) must fold their source in too — see `source-reader`'s
+/// `square_obstacle_index::CACHE_CODE_VER`.
 pub const BUILDER_CODE_VER: u64 = {
     let h = fnv1a64(FNV1A64_SEED, include_bytes!("obstacle_index.rs"));
     let h = fnv1a64(h, include_bytes!("obstacle_index_file.rs"));
@@ -186,8 +189,11 @@ pub const BUILDER_CODE_VER: u64 = {
 const MAGIC: &[u8; 4] = b"QOIX";
 /// Bumped only for a layout change the content hash cannot see (it can see
 /// every one of ours, so this exists for forensics, not for gating).
-const VERSION: u8 = 2;
-const HEADER_BYTES: usize = 128;
+const VERSION: u8 = 3;
+/// Fixed header: magic, version, three provenance words, the grid frame, the
+/// section counts and the total length — 17 words, padded to [`SECTION_ALIGN`].
+/// A reader that only needs the provenance reads exactly this many bytes.
+pub const HEADER_BYTES: usize = 192;
 /// Every section starts on this boundary, so the mapping's page alignment
 /// carries through to each typed view (`u32`/`f32`/[`ObstacleEdge`] all want 4).
 const SECTION_ALIGN: usize = 64;
@@ -262,11 +268,40 @@ fn as_bytes<T: Copy>(v: &[T]) -> &[u8] {
 
 static ZERO_PAD: [u8; SECTION_ALIGN] = [0; SECTION_ALIGN];
 
+/// The three provenance words of an index file header (see the module doc).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IndexFileProvenance {
+    pub code_ver: u64,
+    pub data_ver: u64,
+    pub data_len: u64,
+}
+
+/// Read the header's provenance, or explain why `bytes` is not an index file
+/// at all (foreign magic, another layout version, truncated header). Only the
+/// first [`HEADER_BYTES`] are looked at.
+pub fn index_file_provenance(bytes: &[u8]) -> Result<IndexFileProvenance, String> {
+    if bytes.len() < HEADER_BYTES {
+        return Err(format!("truncated header ({} bytes)", bytes.len()));
+    }
+    if &bytes[0..4] != MAGIC {
+        return Err(format!("bad magic {:?} (want {MAGIC:?})", &bytes[0..4]));
+    }
+    if bytes[4] != VERSION {
+        return Err(format!("format version {} ≠ {VERSION}", bytes[4]));
+    }
+    let word = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().expect("8 bytes"));
+    Ok(IndexFileProvenance {
+        code_ver: word(8),
+        data_ver: word(16),
+        data_len: word(128),
+    })
+}
+
 impl ObstacleIndex {
-    /// Serialize for [`ObstacleIndex::from_blob`]. `data_ver` is the caller's
-    /// fingerprint of the input files this index was built from; it is stored
-    /// verbatim and compared on load.
-    pub fn file_parts(&self, code_ver: u64, data_ver: u64) -> FileParts<'_> {
+    /// Serialize for [`ObstacleIndex::from_blob`]. `provenance` is stored
+    /// verbatim and read back through [`index_file_provenance`]; its
+    /// `code_ver` must be the one the reader will later expect.
+    pub fn file_parts(&self, provenance: IndexFileProvenance) -> FileParts<'_> {
         let cells = self.cols * self.rows;
         let layout = Layout::new(
             cells,
@@ -280,8 +315,8 @@ impl ObstacleIndex {
         header[0..4].copy_from_slice(MAGIC);
         header[4] = VERSION;
         let mut put = |at: usize, v: u64| header[at..at + 8].copy_from_slice(&v.to_le_bytes());
-        put(8, code_ver);
-        put(16, data_ver);
+        put(8, provenance.code_ver);
+        put(16, provenance.data_ver);
         put(24, self.origin_lat.to_bits());
         put(32, self.origin_lon.to_bits());
         put(40, self.m_per_deg_lon.to_bits());
@@ -295,6 +330,7 @@ impl ObstacleIndex {
         put(104, self.edges.len() as u64);
         put(112, self.footprint_xmin.len() as u64);
         put(120, layout.total as u64);
+        put(128, provenance.data_len);
 
         let mut sections = Vec::with_capacity(12);
         let mut at = HEADER_BYTES;
@@ -320,38 +356,24 @@ impl ObstacleIndex {
 
     /// Map a previously written index, or explain why the file cannot be used.
     ///
-    /// Refuses anything whose `code_ver` or `data_ver` differs from the
-    /// caller's — a mismatch means the builder or its inputs moved, and the
-    /// only safe answer is to rebuild. Nothing is copied: the returned index
-    /// reads straight out of `blob`, so a 1.1 GB file costs one `mmap` and the
-    /// pages a query actually touches.
+    /// Refuses anything whose `code_ver` differs from the caller's — the
+    /// builder moved and the file must be rebuilt. Nothing is copied: the
+    /// returned index reads straight out of `blob`, so a 1.1 GB file costs one
+    /// `mmap` and the pages a query actually touches.
     pub fn from_blob(
         blob: Arc<dyn IndexBlob>,
         expect_code_ver: u64,
-        expect_data_ver: u64,
     ) -> Result<ObstacleIndex, String> {
         let bytes = blob.as_bytes();
-        if bytes.len() < HEADER_BYTES {
-            return Err(format!("truncated header ({} bytes)", bytes.len()));
-        }
-        if &bytes[0..4] != MAGIC {
-            return Err(format!("bad magic {:?} (want {MAGIC:?})", &bytes[0..4]));
-        }
-        if bytes[4] != VERSION {
-            return Err(format!("format version {} ≠ {VERSION}", bytes[4]));
+        let code_ver = index_file_provenance(bytes)?.code_ver;
+        if code_ver != expect_code_ver {
+            return Err(format!("code_ver {code_ver:016x} ≠ {expect_code_ver:016x}"));
         }
         let get = |at: usize| -> u64 {
             let mut b = [0u8; 8];
             b.copy_from_slice(&bytes[at..at + 8]);
             u64::from_le_bytes(b)
         };
-        let (code_ver, data_ver) = (get(8), get(16));
-        if code_ver != expect_code_ver {
-            return Err(format!("code_ver {code_ver:016x} ≠ {expect_code_ver:016x}"));
-        }
-        if data_ver != expect_data_ver {
-            return Err(format!("data_ver {data_ver:016x} ≠ {expect_data_ver:016x}"));
-        }
         let usz = |v: u64| usize::try_from(v).map_err(|_| format!("count {v} exceeds usize"));
         let cols = usz(get(80))?;
         let rows = usz(get(88))?;
@@ -430,7 +452,11 @@ mod tests {
 
     /// Flatten `file_parts` the way a writer would.
     fn to_file_bytes(idx: &ObstacleIndex, code_ver: u64, data_ver: u64) -> Vec<u8> {
-        let parts = idx.file_parts(code_ver, data_ver);
+        let parts = idx.file_parts(IndexFileProvenance {
+            code_ver,
+            data_ver,
+            data_len: 0x51,
+        });
         let mut out = Vec::with_capacity(parts.total_len());
         out.extend_from_slice(&parts.header);
         for s in &parts.sections {
@@ -491,7 +517,7 @@ mod tests {
     fn obstacle_source_ids_survive_built_and_mmap_views() {
         let built = sample_index();
         let bytes = to_file_bytes(&built, 0xabc, 0xdef);
-        let mapped = ObstacleIndex::from_blob(Arc::new(bytes), 0xabc, 0xdef).expect("loads");
+        let mapped = ObstacleIndex::from_blob(Arc::new(bytes), 0xabc).expect("loads");
 
         assert_eq!(mapped.edge_count(), built.edge_count());
         assert_eq!(mapped.footprint_class[5], 2, "envelope class survives mmap");
@@ -560,43 +586,54 @@ mod tests {
     fn empty_index_round_trips() {
         let empty = ObstacleIndex::builder(50.0, 14.0).build();
         let bytes = to_file_bytes(&empty, 1, 2);
-        let mapped = ObstacleIndex::from_blob(Arc::new(bytes), 1, 2).expect("loads");
+        let mapped = ObstacleIndex::from_blob(Arc::new(bytes), 1).expect("loads");
         assert_eq!(mapped.edge_count(), 0);
         assert!(crossings(&mapped).is_empty());
     }
 
-    /// Every rejection path: wrong builder version, wrong input fingerprint,
-    /// foreign file, truncation. A cached index must never be used on a maybe.
+    /// Every rejection path: wrong builder version, foreign file, truncation.
+    /// An index file must never be used on a maybe; the input fingerprint is
+    /// exposed for the callers that can check it.
     #[test]
     fn stale_or_damaged_files_are_refused() {
         // `ObstacleIndex` has no `Debug` (it would print 40 M edges), so
         // rejections are read back as the message they must carry.
-        fn refuses(bytes: Vec<u8>, cv: u64, dv: u64, want: &str) {
-            match ObstacleIndex::from_blob(Arc::new(bytes), cv, dv) {
+        fn refuses(bytes: Vec<u8>, cv: u64, want: &str) {
+            match ObstacleIndex::from_blob(Arc::new(bytes), cv) {
                 Ok(_) => panic!("must refuse ({want})"),
                 Err(e) => assert!(e.contains(want), "{e} does not mention {want}"),
             }
         }
         let bytes = to_file_bytes(&sample_index(), 0xabc, 0xdef);
+        assert_eq!(
+            index_file_provenance(&bytes).unwrap(),
+            IndexFileProvenance {
+                code_ver: 0xabc,
+                data_ver: 0xdef,
+                data_len: 0x51,
+            }
+        );
 
-        refuses(bytes.clone(), 0xabd, 0xdef, "code_ver");
-        refuses(bytes.clone(), 0xabc, 0xde0, "data_ver");
+        refuses(bytes.clone(), 0xabd, "code_ver");
 
         let mut foreign = bytes.clone();
         foreign[0] = b'X';
-        refuses(foreign, 0xabc, 0xdef, "magic");
+        refuses(foreign, 0xabc, "magic");
 
         let mut old = bytes.clone();
         old[4] = VERSION + 1;
-        refuses(old, 0xabc, 0xdef, "version");
+        refuses(old, 0xabc, "version");
 
         refuses(
             bytes[..bytes.len() - SECTION_ALIGN].to_vec(),
             0xabc,
-            0xdef,
             "size mismatch",
         );
-        refuses(vec![0u8; 8], 0xabc, 0xdef, "truncated");
+        refuses(vec![0u8; 8], 0xabc, "truncated");
+        assert!(index_file_provenance(&bytes[..HEADER_BYTES]).is_ok());
+        assert!(index_file_provenance(&bytes[..HEADER_BYTES - 1])
+            .unwrap_err()
+            .contains("truncated"));
     }
 
     /// The content hash must actually cover the builder's sources — a constant

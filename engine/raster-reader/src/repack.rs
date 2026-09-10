@@ -1,12 +1,9 @@
-//! Lossless native-byte window publication; source coverage, not file presence, permits ocean.
+//! Lossless native-byte window publication; source coverage, not file presence, permits a 0-byte ocean file.
 
-use crate::catalog::{record_square, Digest};
 use crate::channel::Channel;
 use grid::raster::{RasterWindow, NODES_PER_DEGREE, SOURCE_TILE_SIDE};
 use grid::Square;
 use memmap2::Mmap;
-use rusqlite::Connection;
-use sha2::{Digest as _, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
@@ -85,36 +82,6 @@ impl NativeSources {
             lon.unsigned_abs(),
             self.channel.source_extension()
         ))
-    }
-
-    /// Bind the complete native input bytes, not mtime or file presence, before publication.
-    pub fn source_identity(&self, authority: &[u8]) -> Result<String, String> {
-        use std::io::Read;
-        let mut hash = Sha256::new();
-        hash.update(authority);
-        let mut keys: Vec<_> = self.expected.iter().copied().collect();
-        keys.sort_unstable();
-        let mut buffer = vec![0; 1024 * 1024];
-        for (index, key) in keys.iter().enumerate() {
-            hash.update(key.0.to_be_bytes());
-            hash.update(key.1.to_be_bytes());
-            let mut file = File::open(self.path(*key)).map_err(|error| error.to_string())?;
-            loop {
-                let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
-                if count == 0 {
-                    break;
-                }
-                hash.update(&buffer[..count]);
-            }
-            if (index + 1) % 1000 == 0 {
-                eprintln!("source identity: {}/{}", index + 1, keys.len());
-            }
-        }
-        Ok(hash
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect())
     }
 
     fn source(&mut self, key: SourceKey) -> Result<Option<&Mmap>, String> {
@@ -208,13 +175,10 @@ impl NativeSources {
         Ok(())
     }
 
-    /// Streams one row at a time; only source tiles touching that row remain mapped.
-    pub fn publish_square(
-        &mut self,
-        database: &Connection,
-        root: &Path,
-        square: Square,
-    ) -> Result<Option<Digest>, String> {
+    /// Publishes the square's file and returns its byte length: 0 for a square outside
+    /// verified source coverage (the reader's ocean marker), the window length otherwise.
+    /// Re-running accepts an identical published file and refuses a different one.
+    pub fn publish_square(&mut self, root: &Path, square: Square) -> Result<u64, String> {
         let window = RasterWindow::for_square(square);
         if window_touches(window, &self.unknown) {
             return Err(format!(
@@ -225,60 +189,58 @@ impl NativeSources {
             ));
         }
         let path = self.channel.path(root, square);
+        let parent = path.parent().ok_or("raster path has no parent")?;
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        let absent = self
+            .channel
+            .file_is_absent(root, square)
+            .map_err(|error| error.to_string())?;
         if !window_touches(window, &self.expected) {
-            if !self
-                .channel
-                .file_is_absent(root, square)
+            // A 0-byte file needs no staging or fsync: after a crash it is either
+            // present or missing, and missing is an error, never silent ocean.
+            if absent {
+                File::create_new(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+            } else if std::fs::metadata(&path)
                 .map_err(|error| error.to_string())?
+                .len()
+                != 0
             {
                 return Err(format!(
                     "unexplained file in declared ocean: {}",
                     path.display()
                 ));
             }
-            record_square(database, self.channel, square, None)?;
-            return Ok(None);
+            return Ok(0);
         }
-        let parent = path.parent().ok_or("raster path has no parent")?;
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        // Streams one row at a time; only source tiles touching that row remain mapped.
         let mut staged =
             tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
-        let mut hash = Sha256::new();
         let mut row = vec![0; window.columns as usize * self.channel.bytes_per_node()];
         for index in 0..window.rows {
             self.row(window, window.north_node - index as i32, &mut row)?;
-            hash.update(&row);
             staged.write_all(&row).map_err(|error| error.to_string())?;
         }
         staged.flush().map_err(|error| error.to_string())?;
-        staged
-            .as_file()
-            .sync_all()
-            .map_err(|error| error.to_string())?;
-        let digest: Digest = hash.finalize().into();
-        if !self
-            .channel
-            .file_is_absent(root, square)
-            .map_err(|error| error.to_string())?
-        {
-            let file = File::open(&path).map_err(|error| error.to_string())?;
-            let existing = unsafe { Mmap::map(&file) }.map_err(|error| error.to_string())?;
-            let actual: Digest = Sha256::digest(&existing).into();
-            if existing.len() != self.channel.byte_len(window) || actual != digest {
-                return Err(format!(
-                    "refusing to replace different published raster {}",
-                    path.display()
-                ));
-            }
-        } else {
+        let length = self.channel.byte_len(window) as u64;
+        if absent {
+            staged
+                .as_file()
+                .sync_all()
+                .map_err(|error| error.to_string())?;
             staged
                 .persist_noclobber(&path)
                 .map_err(|error| error.to_string())?;
             File::open(parent)
                 .and_then(|directory| directory.sync_all())
                 .map_err(|error| error.to_string())?;
+        } else if std::fs::read(&path).map_err(|error| error.to_string())?
+            != std::fs::read(staged.path()).map_err(|error| error.to_string())?
+        {
+            return Err(format!(
+                "refusing to replace different published raster {}",
+                path.display()
+            ));
         }
-        record_square(database, self.channel, square, Some(digest))?;
-        Ok(Some(digest))
+        Ok(length)
     }
 }

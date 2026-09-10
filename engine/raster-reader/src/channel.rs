@@ -3,8 +3,6 @@
 use grid::{raster::RasterWindow, square_name, Square};
 use std::path::{Path, PathBuf};
 
-pub const CONTRACT: &str = "raster_z9_arcsec_v1";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Channel {
     Dem,

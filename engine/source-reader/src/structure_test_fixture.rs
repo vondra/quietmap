@@ -500,7 +500,8 @@ pub fn square_dir(year_dir: &Path, square: grid::Square) -> PathBuf {
         .join(square.y.to_string())
 }
 
-/// A square's `structures.arrow` under the prepared-tree layout.
+/// A square's `structures.arrow` under the prepared-tree layout, with the
+/// `structures.qoix` the pipeline step writes beside it.
 pub fn write_square_structures(
     year_dir: &Path,
     square: grid::Square,
@@ -510,5 +511,6 @@ pub fn write_square_structures(
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("structures.arrow");
     write_structure_file(&path, rows, true);
+    crate::square_obstacle_index::write_square_obstacle_index(&dir, square).unwrap();
     path
 }

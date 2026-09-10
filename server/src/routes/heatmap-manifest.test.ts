@@ -7,7 +7,6 @@ import test from 'node:test'
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { WORLD_BASE_ZOOM } from '../generation-contract.mjs'
 
 // PMTILES_BASE / MANIFEST_FILENAME are captured from the env when
 // heatmap-shared loads — point them at the fixture dir BEFORE importing.
@@ -16,7 +15,7 @@ process.env.TILES_PMTILES_DIR = dir
 process.env.TILES_MANIFEST_FILE = 'current.dev1.json'
 
 const { heatmapManifestRoutes } = await import('./heatmap-manifest.js')
-const { ALLOWED_LAYERS } = await import('./heatmap-shared.js')
+const { ALLOWED_LAYERS, WORLD_BASE_ZOOM } = await import('./heatmap-shared.js')
 const { default: Fastify } = await import('fastify')
 
 async function buildApp() {

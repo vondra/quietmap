@@ -163,40 +163,6 @@ pub fn source_platform_clamped(t_i: f64, dist_m: f64, e_i: f64, e0: f64) -> f64 
     }
 }
 
-/// Coarse-middle cadence config for the SURFACE HEATMAP path builder
-/// (`FusedGrid::build_path_profile_coarse_mid`). The popup path NEVER uses this
-/// — it stays on the exact [`fill_t_values`] cadence.
-///
-/// Diffraction is sharpest within ~200 m of EITHER end — berms 5-15 m off a
-/// road, a wall just before the receiver: a sharp shadow edge + strong
-/// near-barrier attenuation. Beyond that the single-edge δ is a smooth ramp.
-/// So this keeps the dense 10/30/60/120 m bilateral ramp only within
-/// `src_zone_m` / `rx_zone_m` of each end and coarse-fills the rest of the ray
-/// at `mid_stride × 240 m`. (The exact cadence runs the full ramp out to its
-/// natural ~1.4 km end on every ray — far more than diffraction needs in the
-/// smooth far field.)
-///
-/// `src_zone_m` / `rx_zone_m` are the TUNABLE full-res half-windows. Future 5 m
-/// terrain + exact OSM building shapes sharpen the field → grow them. The
-/// RECEIVER side is the bigger edge-tail driver (an obstacle right before the
-/// receiver dominates), so `rx_zone_m` may warrant a larger value than
-/// `src_zone_m`.
-///
-/// A very short ray (≤ ~300 m) hits the uniform-stepping branch unchanged; a ray
-/// shorter than `src_zone + rx_zone` keeps its full ramp and has no coarse middle.
-#[derive(Debug, Clone, Copy)]
-pub struct CoarseMid {
-    /// Full-res half-window from the SOURCE end (m). The dense ramp truncates
-    /// here; beyond it the ray is coarse-stepped. `INFINITY` ⇒ full ramp (exact).
-    pub src_zone_m: f64,
-    /// Full-res half-window from the RECEIVER end (m) — the dominant edge-tail
-    /// side. The dense ramp truncates here. `INFINITY` ⇒ full ramp (exact).
-    pub rx_zone_m: f64,
-    /// Integer multiplier on the coarse far-field step. `1` ⇒ no coarsening (=
-    /// exact). Default `2` ⇒ ~491 m far-field steps instead of ~245 m.
-    pub mid_stride: usize,
-}
-
 /// Bilateral adaptive t-values for a path of `dist_m` meters.
 ///
 /// Pattern (≥310 m paths): one near-probe per end (`NEAR_OFFSET_M`), three
@@ -214,18 +180,6 @@ pub struct CoarseMid {
 /// sampling strategy. Higher-resolution DEMs (USGS 3DEP 10 m, national
 /// lidars 1-5 m) are the only fix.
 pub fn fill_t_values(dist_m: f64, buf: &mut Vec<f64>) {
-    fill_t_values_inner(dist_m, buf, None);
-}
-
-/// [`fill_t_values`] with the SURFACE-HEATMAP coarse-middle subsampling applied
-/// (the two end zones stay full-res; only the smooth long-ray middle is
-/// strided). See [`CoarseMid`]. Rays with no real middle reduce to the exact
-/// [`fill_t_values`] output, byte-for-byte.
-pub fn fill_t_values_coarse_mid(dist_m: f64, buf: &mut Vec<f64>, cfg: CoarseMid) {
-    fill_t_values_inner(dist_m, buf, Some(cfg));
-}
-
-fn fill_t_values_inner(dist_m: f64, buf: &mut Vec<f64>, coarse_mid: Option<CoarseMid>) {
     buf.clear();
 
     // Near-endpoint probe at 10m — only emitted when there's room (≥3×NEAR_OFFSET
@@ -235,8 +189,7 @@ fn fill_t_values_inner(dist_m: f64, buf: &mut Vec<f64>, coarse_mid: Option<Coars
     let near_t = NEAR_OFFSET_M / dist_m;
 
     if dist_m <= CELL_M * 10.0 {
-        // Short path: uniform stepping + optional 10m probe at each end. No
-        // "middle" exists, so coarse_mid is a no-op here (the end zones cover it).
+        // Short path: uniform stepping + optional 10m probe at each end.
         let n = (dist_m / CELL_M).ceil().max(3.0) as usize;
         buf.push(0.0);
         if emit_near {
@@ -268,52 +221,29 @@ fn fill_t_values_inner(dist_m: f64, buf: &mut Vec<f64>, coarse_mid: Option<Coars
     let levels = [CELL_M, CELL_M * 2.0, CELL_M * 4.0, CELL_M * 8.0];
     let reps = 3usize;
 
-    // SURFACE-HEATMAP coarse-middle: the dense 10/30/60/120 m ramp is TRUNCATED
-    // at the full-res zone (`src_zone_m`/`rx_zone_m`, ~200 m by owner design) and
-    // the rest of the ray is coarse-filled at `mid_stride × 240 m`. Diffraction is
-    // sharpest within ~200 m of either end (berms, near-receiver walls); beyond
-    // that the single-edge δ is a smooth ramp the coarse step resolves. `None`
-    // (popup / exact) keeps the full ramp out to its natural ~1.4 km end.
-    let (src_zone_m, rx_zone_m, mid_stride) = match coarse_mid {
-        Some(cm) if cm.mid_stride > 1 => (cm.src_zone_m, cm.rx_zone_m, cm.mid_stride),
-        // stride ≤ 1 or no config ⇒ exact: no truncation, stride 1 (byte-identical).
-        _ => (f64::INFINITY, f64::INFINITY, 1usize),
-    };
-
     // Forward from source — ramp starts *after* the 10m near-probe so the
     // first ramp sample lands at 10 + 30 = 40m (vs. 30m before), which costs
-    // nothing: we already have a sample at 10m. Stops at the full-res zone.
-    // `last_fwd` tracks the last COMMITTED sample so the coarse fill bridges from
-    // it (not from `pos`, which over-steps by one increment on the breaking step —
-    // a zone-truncated ramp would otherwise leave a >coarse hole at the transition).
+    // nothing: we already have a sample at 10m.
     let mut pos = if emit_near { NEAR_OFFSET_M } else { 0.0 };
-    let mut last_fwd = pos;
     'fwd: for &step in &levels {
         for _ in 0..reps {
             pos += step;
-            if pos >= dist_m * 0.5 || pos > src_zone_m {
+            if pos >= dist_m * 0.5 {
                 break 'fwd;
             }
             buf.push(pos / dist_m);
-            last_fwd = pos;
         }
     }
-    // Exact (no truncation): `pos` reaches the midpoint clamp; coarse: `last_fwd`
-    // is the last pushed ramp sample. Both give a hole-free transition.
-    let fwd_end = if src_zone_m.is_finite() {
-        last_fwd / dist_m
-    } else {
-        pos.min(dist_m * 0.5) / dist_m
-    };
+    let fwd_end = pos.min(dist_m * 0.5) / dist_m;
 
-    // Fill the middle (everything past both end zones) at the strided coarse step.
-    let coarse = (levels[levels.len() - 1] * mid_stride as f64).min(dist_m * 0.25);
-    // Backward ramp start as a t fraction (so the coarse fill stops there).
+    // Fill the middle (everything past both ramps) at the coarsest step.
+    let coarse = levels[levels.len() - 1].min(dist_m * 0.25);
+    // Backward ramp start as a t fraction (so the middle fill stops there).
     let mut bpos = if emit_near { NEAR_OFFSET_M } else { 0.0 };
     'bw: for &step in &levels {
         for _ in 0..reps {
             let next = bpos + step;
-            if next >= dist_m * 0.5 || next > rx_zone_m {
+            if next >= dist_m * 0.5 {
                 break 'bw;
             }
             bpos = next;
@@ -328,13 +258,13 @@ fn fill_t_values_inner(dist_m: f64, buf: &mut Vec<f64>, coarse_mid: Option<Coars
         }
     }
 
-    // Backward from receiver (mirror of forward, reversed). Same zone truncation.
+    // Backward from receiver (mirror of forward, reversed).
     let mut back_count = 0usize;
     pos = if emit_near { NEAR_OFFSET_M } else { 0.0 };
     'back: for &step in &levels {
         for _ in 0..reps {
             pos += step;
-            if pos >= dist_m * 0.5 || pos > rx_zone_m {
+            if pos >= dist_m * 0.5 {
                 break 'back;
             }
             buf.push(1.0 - pos / dist_m);
@@ -474,143 +404,6 @@ pub fn vegetation_run_length(t: &[f64], forest: &[u8], dist_m: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Default surface-heatmap coarse-middle config: full-res within ~200 m of
-    /// each end (per owner design), coarse far-field step ×2.
-    fn default_coarse_mid() -> CoarseMid {
-        CoarseMid {
-            src_zone_m: 200.0,
-            rx_zone_m: 200.0,
-            mid_stride: 2,
-        }
-    }
-
-    /// stride=1 (with INFINITY zones, as the kernel sets when disabled) is a no-op
-    /// everywhere — the EXACT reference, byte-for-byte, on every distance.
-    #[test]
-    fn coarse_mid_stride_one_is_exact() {
-        for &d in &[200.0, 400.0, 1000.0, 3000.0, 7000.0, 10_000.0] {
-            let mut exact = Vec::new();
-            fill_t_values(d, &mut exact);
-            let mut coarse = Vec::new();
-            fill_t_values_coarse_mid(
-                d,
-                &mut coarse,
-                CoarseMid {
-                    src_zone_m: f64::INFINITY,
-                    rx_zone_m: f64::INFINITY,
-                    mid_stride: 1,
-                },
-            );
-            assert_eq!(exact, coarse, "d={d}: stride=1 must equal exact");
-        }
-    }
-
-    /// The very-short uniform-stepping branch (≤ ~307 m) is untouched by the
-    /// coarse-middle config — there is no ramp/middle to truncate.
-    #[test]
-    fn coarse_mid_short_uniform_branch_unchanged() {
-        for &d in &[50.0, 150.0, 300.0] {
-            let mut exact = Vec::new();
-            fill_t_values(d, &mut exact);
-            let mut coarse = Vec::new();
-            fill_t_values_coarse_mid(d, &mut coarse, default_coarse_mid());
-            assert_eq!(
-                exact, coarse,
-                "d={d}: short uniform branch must be unchanged"
-            );
-        }
-    }
-
-    /// The dense near-END samples WITHIN the full-res zone are preserved exactly
-    /// (the berm / near-receiver-wall capture the owner's design protects), and
-    /// the endpoints t=0/1 + 10 m near-probes are always present.
-    #[test]
-    fn coarse_mid_preserves_within_zone_samples() {
-        let d = 10_000.0;
-        let zone = 200.0;
-        let mut coarse = Vec::new();
-        fill_t_values_coarse_mid(
-            d,
-            &mut coarse,
-            CoarseMid {
-                src_zone_m: zone,
-                rx_zone_m: zone,
-                mid_stride: 2,
-            },
-        );
-        assert_eq!(coarse[0], 0.0, "starts at source");
-        assert!(
-            (coarse.last().unwrap() - 1.0).abs() < 1e-9,
-            "ends at receiver"
-        );
-        // 10 m near-probes at both ends.
-        assert!(
-            (coarse[1] * d - NEAR_OFFSET_M).abs() < 1.0,
-            "near-source 10 m probe"
-        );
-        let n = coarse.len();
-        assert!(
-            ((1.0 - coarse[n - 2]) * d - NEAR_OFFSET_M).abs() < 1.0,
-            "near-rx 10 m probe"
-        );
-        // The exact cadence's within-zone ramp samples (≤ zone m from source) all
-        // appear in the coarse output (the dense near-field is untouched).
-        let mut exact = Vec::new();
-        fill_t_values(d, &mut exact);
-        for &t in exact.iter().filter(|&&t| t * d <= zone) {
-            assert!(
-                coarse.iter().any(|&c| (c - t).abs() < 1e-9),
-                "within-zone exact sample t={t} ({:.0} m) dropped",
-                t * d
-            );
-        }
-    }
-
-    /// Far-field: monotone, every gap ≤ the strided coarse step, all in [0,1].
-    #[test]
-    fn coarse_mid_far_field_monotone_and_strided() {
-        let d = 10_000.0;
-        let mut coarse = Vec::new();
-        fill_t_values_coarse_mid(d, &mut coarse, default_coarse_mid());
-        let coarse_step_m = CELL_M * 8.0; // ~245 m
-        for w in coarse.windows(2) {
-            assert!(w[1] > w[0], "non-monotonic: {coarse:?}");
-            let gap_m = (w[1] - w[0]) * d;
-            assert!(
-                gap_m <= 2.0 * coarse_step_m + 1.0,
-                "gap {gap_m} m exceeds 2× coarse step"
-            );
-        }
-    }
-
-    /// Growing the full-res zone keeps MORE dense samples → MORE total samples;
-    /// the default (~200 m) is the leanest, the exact (∞ zone) the densest.
-    #[test]
-    fn coarse_mid_zone_growth_adds_samples() {
-        let d = 10_000.0;
-        let mut exact = Vec::new();
-        fill_t_values(d, &mut exact);
-        let mut narrow = Vec::new(); // 200 m zone → leanest
-        fill_t_values_coarse_mid(d, &mut narrow, default_coarse_mid());
-        let mut wide = Vec::new(); // 800 m zone → keeps more ramp
-        fill_t_values_coarse_mid(
-            d,
-            &mut wide,
-            CoarseMid {
-                src_zone_m: 800.0,
-                rx_zone_m: 800.0,
-                mid_stride: 2,
-            },
-        );
-        assert!(
-            narrow.len() < wide.len() && wide.len() < exact.len(),
-            "narrow={} wide={} exact={}",
-            narrow.len(),
-            wide.len(),
-            exact.len()
-        );
-    }
 
     #[test]
     fn fill_short_path_uniform() {

@@ -7,7 +7,7 @@ use crate::{
 use anyhow::{ensure, Context, Result};
 use grid::{bounds::BoundedSquares, Square};
 use noise_compute::propagation::obstacle_index::ObstacleSet;
-use raster_reader::{fused_tile_z13::TileBbox, FusedGrid, RealRasters};
+use raster_reader::{tile_bbox::TileBbox, FusedGrid, RealRasters};
 use std::path::Path;
 
 pub struct SurfaceScene {

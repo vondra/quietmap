@@ -12,6 +12,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub mod aircraft_v6;
 pub mod query;
+pub mod square_obstacle_index;
 pub mod structure_store;
 #[cfg(test)]
 mod structure_test_fixture;
@@ -43,13 +44,9 @@ static STORE: std::sync::LazyLock<RwLock<SquareStore>> =
 
 #[cfg(feature = "node")]
 static RASTERS: std::sync::OnceLock<raster_reader::RealRasters> = std::sync::OnceLock::new();
-/// Data root (`…/data/prepared`) captured at `source_init` — the vector
-/// obstacle loader keeps its on-disk index cache under it (geodata-v2 1.4).
-#[cfg(feature = "node")]
-static DATA_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 /// The live `…/prepared/2026` dir — the structure root: every prepared
-/// square carries its own `structures.arrow` under `z9/<x>/<y>/` beside its
-/// other arrows.
+/// square carries its own `structures.arrow` and `structures.qoix` under
+/// `z9/<x>/<y>/` beside its other arrows.
 #[cfg(feature = "node")]
 static YEAR_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
@@ -216,28 +213,17 @@ pub fn source_init(prepared_dir: String) -> napi::Result<String> {
     }
     store.prepared_dir = prepared_dir.clone();
 
-    // Native raster windows share `<prepared>/2026/z9/<x>/<y>/` with
-    // vector shards; their per-channel publication authority is rasters.sqlite.
+    // Native raster windows share `<prepared>/2026/z9/<x>/<y>/` with vector
+    // shards: a data file, a 0-byte ocean file, or an error at first use.
     let year_path = std::path::Path::new(&prepared_dir);
-    let data_dir = year_path.parent().unwrap_or(std::path::Path::new("."));
-    let rasters = raster_reader::RealRasters::new(year_path);
-    let has_dem = rasters.has_data();
-    RASTERS.set(rasters).ok();
-    DATA_DIR.set(data_dir.to_path_buf()).ok();
+    RASTERS.set(raster_reader::RealRasters::new(year_path)).ok();
     YEAR_DIR.set(year_path.to_path_buf()).ok();
 
     // NACE codes are baked into industrial.arrow — no global JSON needed
 
     noise_compute::square_country_city::set_square_country_city_prepared_directory(year_path);
 
-    Ok(format!(
-        "source-reader initialized: {prepared_dir} (DEM: {})",
-        if has_dem {
-            "published coverage"
-        } else {
-            "unavailable coverage"
-        },
-    ))
+    Ok(format!("source-reader initialized: {prepared_dir}"))
 }
 
 /// Strictly parse one known non-empty roads archive for runtime readiness.
@@ -352,14 +338,10 @@ fn building_type_from_envelope(class: noise_compute::envelope::EnvelopeClass) ->
 #[napi]
 pub fn query_building_at(lat: f64, lng: f64) -> napi::Result<String> {
     prune_source_cache(&[])?;
-    let data_dir = DATA_DIR
-        .get()
-        .map(|p| p.as_path())
-        .unwrap_or_else(|| std::path::Path::new("."));
     // A missing obstacle store is an error, not an empty answer. It used to
     // return {"status":"unavailable"} inside an HTTP 200, which reads to a
     // visitor exactly like "there is no building here".
-    let set = structure_store::load_obstacle_set(year_dir()?, data_dir, lat, lng)
+    let set = structure_store::load_obstacle_set(year_dir()?, lat, lng)
         .map_err(|e| Error::new(Status::GenericFailure, e))?;
     let result = match structure_store::point_inside_footprint(&set, lat, lng) {
         None => serde_json::Value::Null,
@@ -460,19 +442,15 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
     let t_start = std::time::Instant::now();
 
-    let data_dir = DATA_DIR
-        .get()
-        .ok_or_else(|| Error::new(Status::GenericFailure, "source_init was never called"))?;
     let initial_square_names = source_square_names(squares_within_reach(lat, lng))?;
     prune_source_cache(&initial_square_names)?;
-    let mut obstacle_set = structure_store::load_obstacle_set(year_dir()?, data_dir, lat, lng)
+    let mut obstacle_set = structure_store::load_obstacle_set(year_dir()?, lat, lng)
         .map_err(|error| Error::new(Status::GenericFailure, error))?;
     let (facade_lat, facade_lng, inside_envelope) =
         structure_store::locate_facade_receiver(&obstacle_set, lat, lng);
     if (facade_lat, facade_lng) != (lat, lng) {
-        obstacle_set =
-            structure_store::load_obstacle_set(year_dir()?, data_dir, facade_lat, facade_lng)
-                .map_err(|error| Error::new(Status::GenericFailure, error))?;
+        obstacle_set = structure_store::load_obstacle_set(year_dir()?, facade_lat, facade_lng)
+            .map_err(|error| Error::new(Status::GenericFailure, error))?;
     }
 
     let square_names = source_square_names(squares_within_reach(facade_lat, facade_lng))?;

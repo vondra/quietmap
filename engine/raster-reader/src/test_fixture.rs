@@ -1,6 +1,5 @@
-//! Shared actual z9 publication fixture for sampler tests, without a legacy reader path.
+//! Shared z9 file fixture for sampler tests: a data window or a 0-byte absence file.
 
-use crate::catalog::{begin_channel, content_digest, record_square};
 use crate::channel::Channel;
 use grid::raster::RasterWindow;
 use grid::Square;
@@ -24,9 +23,15 @@ pub fn write_square(
             bytes.extend_from_slice(&raw[2 - channel.bytes_per_node()..]);
         }
     }
+    write_file(root, channel, square, &bytes);
+}
+
+pub fn write_absent_square(root: &Path, channel: Channel, square: Square) {
+    write_file(root, channel, square, &[]);
+}
+
+fn write_file(root: &Path, channel: Channel, square: Square, bytes: &[u8]) {
     let path = channel.path(root, square);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, &bytes).unwrap();
-    let database = begin_channel(root, channel, &"a".repeat(64)).unwrap();
-    record_square(&database, channel, square, Some(content_digest(&bytes))).unwrap();
+    std::fs::write(path, bytes).unwrap();
 }

@@ -20,8 +20,7 @@ pub struct RealRasters {
 }
 
 impl RealRasters {
-    /// Open channel publication coverage; mmap data only on first access.
-    /// Missing channels stay unavailable, independently, until they are consumed.
+    /// Files are opened and mmap'd only on first access; every channel fails independently.
     pub fn new(data_dir: &Path) -> Self {
         // Byte bounds accommodate two 91 MB polar DEM windows without allowing
         // a global flight sweep to retain every visited mmap (768 MiB total).
@@ -46,11 +45,6 @@ impl RealRasters {
     /// and terrain AGL gates, but do not consume forest or IMD rasters.
     pub fn preload_dem_bbox(&self, lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) {
         self.dem.preload_bbox(lat_min, lat_max, lon_min, lon_max);
-    }
-
-    /// A complete DEM channel can serve worldwide aircraft preprocessing independently.
-    pub fn has_data(&self) -> bool {
-        self.dem.has_complete_coverage()
     }
 }
 
@@ -98,7 +92,7 @@ impl RasterSampler for RealRasters {
     fn ground_g(&self, lat: f64, lon: f64) -> f64 {
         // IMD 0=natural(soft), 100=impervious(hard)
         // G: 0=hard, 1=soft → G = 1.0 - IMD/100
-        // Only catalog-declared ocean is 100; unknown or corrupt data remains NaN.
+        // Only a 0-byte declared-ocean file is 100; a missing or corrupt file remains NaN.
         // WHY no conditional: IMD=0 means fully soft ground (forest, meadow) → G=1.0.
         // Old code returned 0.5 for IMD=0, halving ground attenuation in rural areas.
         let imd = self.imd.sample(lat, lon);

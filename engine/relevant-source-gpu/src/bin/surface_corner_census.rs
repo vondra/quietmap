@@ -21,8 +21,6 @@ struct Arguments {
     #[arg(long)]
     raster_root: PathBuf,
     #[arg(long)]
-    raster_catalog_sha256: String,
-    #[arg(long)]
     input_manifest: PathBuf,
     #[arg(long)]
     input_manifest_sha256: String,
@@ -60,14 +58,8 @@ fn main() -> Result<()> {
         &args.input_manifest,
         parse_digest(&args.input_manifest_sha256)?,
     )?;
-    let rasters_digest = file_digest(&args.raster_root.join(raster_reader::catalog::CATALOG_FILE))?;
-    ensure!(
-        rasters_digest == parse_digest(&args.raster_catalog_sha256)?,
-        "raster catalog digest mismatch"
-    );
     let receipt = GenerationReceipt {
         sources: manifest.digest,
-        rasters: rasters_digest,
         code: SURFACE_CODE_DIGEST,
         producer: file_digest(&std::env::current_exe()?)?,
     };

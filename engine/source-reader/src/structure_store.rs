@@ -1,42 +1,21 @@
 //! Vector structure loading for the popup.
 //!
-//! Each query assembles an
-//! [`ObstacleSet`] from per-square [`ObstacleIndex`]es covering the query
-//! source envelope, with centroid-assigned footprints from the structure builder.
-//! One `structures.arrow` per square carries BOTH screening stocks — buildings
-//! (kind 0, polygons) and noise walls (kind 1, polyline microsegments, indexed
-//! as [`ObstacleKind::Barrier`] edges) — and, in its OSM-attributed rows, the
-//! input of the low-profile height cap's lookup. One table, one read.
+//! Each query assembles an [`ObstacleSet`] from the prebuilt per-square
+//! indexes (`structures.qoix`, see `square_obstacle_index`) covering the query
+//! source envelope. One `structures.arrow` per square carries BOTH screening
+//! stocks — buildings (kind 0, polygons) and noise walls (kind 1, polyline
+//! microsegments, indexed as [`ObstacleKind::Barrier`] edges) — and, in its
+//! OSM-attributed rows, the input of the low-profile height cap's lookup. This
+//! file owns how that table becomes an index ([`build_obstacle_index_from_arrow_bytes`]:
+//! dense ids in `screening_ordinal` order, the capped heights) and the
+//! containment probes the popup runs on the assembled set.
 //!
-//! Two hard rules:
-//! - **Bounded cost.** Per-square indexes are built ONCE per process and
-//!   LRU-cached (`SQUARE_CACHE_CAP`); each query Arc-clones the selected indexes.
-//!   The naive per-query rebuild measured 448 MB RSS / 0.47 s per popup.
-//! - **All-or-error.** Any read/parse error, and any selected square of the
-//!   prepared world whose `structures.arrow` is missing, aborts the whole load.
-//!   A partial index would silently under-screen the path. Emptiness is not a
-//!   gap: a 0-row table is the answer "nothing stands here".
-//!
-//! Built indexes are also kept ON DISK (`noise_compute::propagation::obstacle_index_file`)
-//! and mapped back on the next cold start — a São Paulo popup indexes 40 M
-//! edges from ~1 GB of Arrow, which cost ~6 s of the FIRST click and was then
-//! thrown away with the process. The cached file is the in-memory layout, so a
-//! reload is an `mmap` plus a header check and the kernel faults in only the
-//! grid cells the rays walk.
-//!
-//! **Both caches key on [`square_data_ver`], the full identity of the index**
-//! — never on the square. The memo in front of the disk cache once keyed on the
-//! cell alone and so answered a query about one obstacle tree with an index
-//! built from another (2026-08-05); the popup is the project's acoustic
-//! reference, and a cache that returns the answer to a different question is
-//! worse than no cache. The ring is deliberately NOT in that key: it decides
-//! which squares are assembled into a set, per query, in [`load_obstacle_set`],
-//! while a cache entry is one square's index built from that square's own file.
+//! **All-or-error.** Any selected square whose index cannot be mapped aborts
+//! the whole load: a partial set would silently under-screen the path.
+//! Emptiness is not a gap: a 0-row table is the answer "nothing stands here".
 
-use std::collections::HashMap;
-use std::io::{Cursor, Write};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::io::Cursor;
+use std::path::Path;
 
 use arrow::array::{
     Array, BinaryArray, Float32Array, Int32Array, Int64Array, UInt32Array, UInt8Array,
@@ -46,7 +25,6 @@ use grid::Square;
 use noise_compute::envelope::{effective_envelope_class, EnvelopeClass};
 use noise_compute::low_profile::LowProfileLookup;
 use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind, ObstacleSet};
-use noise_compute::propagation::obstacle_index_file::{fnv1a64, IndexBlob, BUILDER_CODE_VER};
 
 use square_store::grid_cols::{
     col_binary, col_f32, col_i32, col_u8, decode_geom, polygons_wkb, ring_lonlat,
@@ -54,331 +32,29 @@ use square_store::grid_cols::{
 use square_store::store::{STRUCTURE_KIND_BARRIER, STRUCTURE_KIND_BUILDING};
 use square_store::structure_contract;
 
-/// Per-square index cache capacity. A dense metro square's index runs to low
-/// hundreds of MB; popups cluster spatially, so a small LRU covers the
-/// active area while bounding worst-case RSS.
-const SQUARE_CACHE_CAP: usize = 8;
+use crate::square_obstacle_index::{load_square_obstacle_index, STRUCTURES_ARROW};
 
-/// Everything that decides a cached index's BYTES: the engine's builder and
-/// grid (`BUILDER_CODE_VER`) folded with THIS file, which owns the loader's own
-/// decisions — the obstacle id ordering (dense, by file order), and which rows
-/// are offered to the height cap. Editing either side rotates the version and every file written by the
-/// old code is refused, exactly as `scripts/layer-codever.py` re-stales tiles on
-/// a source change. Over-invalidating costs a rebuild; under-invalidating puts a
-/// silently wrong screen in the map.
-///
-/// The low-profile cap needs no fold of its own: the rule lives in
-/// `noise_compute::low_profile`, which [`BUILDER_CODE_VER`] hashes — so a change
-/// to its class list, its match geometry or its cap rotates this version without
-/// anyone naming the constants here.
-const CACHE_CODE_VER: u64 = fnv1a64(BUILDER_CODE_VER, include_bytes!("structure_store.rs"));
-
-/// A `.tmp` older than this is an orphan from a killed process, not a write in
-/// flight — [`sweep_index_dir`] reaps it. Writing one index is seconds of IO.
-const TMP_ORPHAN_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
-
-/// Persistent index file extension; the code version sits in the name before it.
-const CACHE_FILE_EXT: &str = "qoix";
-
-/// Mapped cache file. The mapping's address and contents are fixed for its
-/// life, which is what [`IndexBlob`] requires.
-struct MappedIndexFile(memmap2::Mmap);
-
-// SAFETY: `Mmap` derefs to a fixed address/length for its whole life and this
-// wrapper never exposes a `&mut`, so every `as_bytes` returns the same
-// immutable bytes — the `IndexBlob` contract.
-unsafe impl IndexBlob for MappedIndexFile {
-    fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-/// `QM_OBSTACLE_INDEX_CACHE=0` turns the disk cache off — the A/B lever for
-/// measuring what it is worth, and the bisection escape hatch, from ONE binary.
-fn index_cache_enabled() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| !std::env::var("QM_OBSTACLE_INDEX_CACHE").is_ok_and(|v| v == "0"))
-}
-
-/// Where cached indexes live: beside the other derived, year-independent
-/// prepared artifacts (`prepared/dem`, `prepared/rasters`).
-/// `QM_OBSTACLE_INDEX_DIR` moves them to another volume.
-pub fn index_cache_root(data_dir: &Path) -> Option<PathBuf> {
-    if !index_cache_enabled() {
-        return None;
-    }
-    if let Ok(dir) = std::env::var("QM_OBSTACLE_INDEX_DIR") {
-        return Some(PathBuf::from(dir));
-    }
-    Some(data_dir.join("obstacle-index"))
-}
-
-/// Short stable file tag for a square: `z9_276_173`.
-fn square_tag(square: Square) -> String {
-    format!("z9_{}_{}", square.x, square.y)
-}
-
-/// The FULL identity of one square's index — everything that decides its bytes,
-/// in one u64. Both caches (the process memo and the file on disk) key on it,
-/// and nothing may be served under a key that does not carry all of:
-///
-/// * [`CACHE_CODE_VER`] — the builder, the grid, this loader's own rules;
-/// * the SQUARE, whose centre is the index's metric origin (and which is the
-///   only thing the file name would otherwise bind);
-/// * the square's `structures.arrow` as (path, length, mtime) — the path because
-///   two prepared TREES (a moved mount, a second checkout's data node) hold
-///   different structures for the same square. The low-profile cap reads the
-///   SAME file, so it needs no fold of its own.
-///
-/// That list is closed by construction: `build_square_index` reads its square and
-/// that one table, and nothing else — no env, no clock, no map iteration order
-/// (`ObstacleIndex::build` is a Vec walk). Whatever a future edit adds to it
-/// lands in THIS file, and this file's content is already in
-/// `CACHE_CODE_VER`, so an unfingerprinted input cannot be introduced without
-/// also rotating the version.
-///
-/// (length, mtime) rather than a content hash is the shape of
-/// `world-stamps.py`'s `_data_ver`, which decides tile staleness from the same
-/// arrows' mtimes; re-hashing a gigabyte per click would cost more than the
-/// rebuild it guards.
-///
-/// `None` ⇒ some input's metadata is unreadable, so nothing may be cached at
-/// all: an index whose provenance cannot be pinned must never outlive the
-/// query, let alone the process.
-fn square_data_ver(square: Square, structures_arrow: &Path) -> Option<u64> {
-    let mut h = fnv1a64(CACHE_CODE_VER, b"structure-index-inputs-v1");
-    h = fnv1a64(h, &square.x.to_le_bytes());
-    h = fnv1a64(h, &square.y.to_le_bytes());
-    // The canonical file, not the path the generation reaches it through:
-    // every generation links the same physical structures.arrow, and a
-    // path-spelled key would rebuild the world once per generation.
-    let canonical = std::fs::canonicalize(structures_arrow).ok()?;
-    h = fnv1a64(h, canonical.as_os_str().as_encoded_bytes());
-    let meta = std::fs::metadata(&canonical).ok()?;
-    h = fnv1a64(h, &meta.len().to_le_bytes());
-    let mtime = meta.modified().ok()?;
-    let since_epoch = mtime
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .ok()?;
-    h = fnv1a64(h, &since_epoch.as_nanos().to_le_bytes());
-    Some(h)
-}
-
-/// `<square>.<code_ver>.qoix`. The builder version is in the NAME, not just the
-/// header, because prod and dev checkouts share one `prepared/` node: two checkouts on
-/// different engine versions would otherwise fight over one path, each deleting
-/// and rebuilding the other's file forever. Superseded versions are ordinary
-/// cache files and age out through the LRU budget.
-fn cache_file_path(root: &Path, square: Square) -> PathBuf {
-    root.join(format!(
-        "{}.{CACHE_CODE_VER:016x}.{CACHE_FILE_EXT}",
-        square_tag(square)
-    ))
-}
-
-/// Map a cached index, or `None` for any reason at all — absent, stale,
-/// truncated, unreadable. Every `None` simply means "rebuild".
-fn load_cached_index(path: &Path, data_ver: u64) -> Option<ObstacleIndex> {
-    let file = std::fs::File::open(path).ok()?;
-    // SAFETY: the store is written atomically (tmp + rename) and never mutated
-    // in place, so no other writer can change these bytes under the mapping.
-    let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
-    let blob: Arc<dyn IndexBlob> = Arc::new(MappedIndexFile(mmap));
-    match ObstacleIndex::from_blob(blob, CACHE_CODE_VER, data_ver) {
-        Ok(idx) => {
-            // LRU by USE, not by write: without this the city visited every day
-            // is evicted before one indexed once and never opened again.
-            let now = std::time::SystemTime::now();
-            let _ = file.set_times(std::fs::FileTimes::new().set_modified(now));
-            Some(idx)
-        }
-        Err(e) => {
-            eprintln!("structure_store: ignoring cached {}: {e}", path.display());
-            let _ = std::fs::remove_file(path);
-            None
-        }
-    }
-}
-
-/// Keep the index directory at one file per square for THIS code version:
-/// remove superseded-version files and `.tmp` orphans older than
-/// [`TMP_ORPHAN_AGE`]. One pass per generation build, never per query, so the
-/// directory can hold the complete world. Returns (superseded, orphans) removed.
-pub fn sweep_index_dir(root: &Path) -> (usize, usize) {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return (0, 0);
-    };
-    let now = std::time::SystemTime::now();
-    let current = format!(".{CACHE_CODE_VER:016x}.{CACHE_FILE_EXT}");
-    let (mut superseded, mut orphans) = (0, 0);
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if name.ends_with(&format!(".{CACHE_FILE_EXT}")) && !name.ends_with(&current) {
-            superseded += usize::from(std::fs::remove_file(&path).is_ok());
-        } else if name.ends_with(".tmp") {
-            let old = entry
-                .metadata()
-                .and_then(|m| m.modified())
-                .is_ok_and(|mtime| now.duration_since(mtime).is_ok_and(|d| d > TMP_ORPHAN_AGE));
-            if old {
-                orphans += usize::from(std::fs::remove_file(&path).is_ok());
-            }
-        }
-    }
-    (superseded, orphans)
-}
-
-/// Persist a freshly built index and reopen its immutable mapped form. A
-/// successful caller can then drop the builder's heap arrays immediately.
-/// Failures are reported and swallowed: the cache is an accelerator, never a
-/// dependency.
-fn store_cached_index(
-    root: &Path,
-    square: Square,
-    index: &ObstacleIndex,
-    data_ver: u64,
-) -> Option<ObstacleIndex> {
-    let parts = index.file_parts(CACHE_CODE_VER, data_ver);
-    if let Err(e) = std::fs::create_dir_all(root) {
-        eprintln!("structure_store: no index cache at {}: {e}", root.display());
-        return None;
-    }
-    let final_path = cache_file_path(root, square);
-    // Same-directory tmp + rename: a reader either maps the whole previous
-    // file or the whole new one, never a half-written index. Two NAPI worker
-    // threads can miss the process LRU on the SAME square at the same time, so
-    // the temp name carries a per-write sequence — sharing one `<pid>.tmp`
-    // would let them interleave into a file that then passes the header check.
-    static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = root.join(format!(
-        "{}.{}.{seq}.tmp",
-        square_tag(square),
-        std::process::id()
-    ));
-    let write = || -> std::io::Result<()> {
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(&parts.header)?;
-        for section in &parts.sections {
-            f.write_all(section)?;
-        }
-        f.flush()?;
-        drop(f);
-        std::fs::rename(&tmp, &final_path)
-    };
-    if let Err(e) = write() {
-        eprintln!(
-            "structure_store: could not cache index {}: {e}",
-            final_path.display()
-        );
-        let _ = std::fs::remove_file(&tmp);
-        return None;
-    }
-    load_cached_index(&final_path, data_ver)
-}
-
-/// Process-local memo of built indexes, keyed on the SAME identity the disk
-/// file carries ([`square_data_ver`]) — not on the square.
-///
-/// Keying it on the square alone was a live defect (2026-08-05): the second
-/// query for a square got the first query's index no matter which obstacle tree
-/// it asked about, so a run against a second prepared root screened the popup
-/// against obstacles that are not there. The disk cache never had this hole —
-/// its header carries the fingerprint — which is exactly why the memo in front
-/// of it had to grow one.
-struct SquareCache {
-    /// (square, identity) → (index, LRU stamp). Failed builds are NOT cached —
-    /// transient IO must stay retryable; missing squares stay a per-query
-    /// decision.
-    map: HashMap<(Square, u64), (Arc<ObstacleIndex>, u64)>,
-    stamp: u64,
-}
-
-static SQUARE_CACHE: OnceLock<Mutex<SquareCache>> = OnceLock::new();
-
-fn memo() -> &'static Mutex<SquareCache> {
-    SQUARE_CACHE.get_or_init(|| {
-        Mutex::new(SquareCache {
-            map: HashMap::new(),
-            stamp: 0,
-        })
-    })
-}
-
-fn memo_get(square: Square, ver: u64) -> Option<Arc<ObstacleIndex>> {
-    let mut c = memo().lock().unwrap_or_else(|e| e.into_inner());
-    c.stamp += 1;
-    let stamp = c.stamp;
-    let (idx, touched) = c.map.get_mut(&(square, ver))?;
-    *touched = stamp;
-    Some(Arc::clone(idx))
-}
-
-fn memo_put(square: Square, ver: u64, idx: &Arc<ObstacleIndex>) {
-    let mut c = memo().lock().unwrap_or_else(|e| e.into_inner());
-    c.stamp += 1;
-    let stamp = c.stamp;
-    if c.map.len() >= SQUARE_CACHE_CAP {
-        if let Some((&evict, _)) = c.map.iter().min_by_key(|(_, (_, t))| *t) {
-            c.map.remove(&evict);
-        }
-    }
-    c.map.insert((square, ver), (Arc::clone(idx), stamp));
-}
-
-/// Locate one square's structure table. `None` = the square directory does not
-/// exist, i.e. outside the prepared world: it holds no structures for the same
-/// reason it holds no roads.
-fn locate_square_structures(prepared_year_dir: &Path, square: Square) -> Option<PathBuf> {
-    let dir = prepared_year_dir
-        .join("z9")
-        .join(square.x.to_string())
-        .join(square.y.to_string());
-    if !dir.exists() {
-        return None;
-    }
-    Some(dir.join("structures.arrow"))
-}
-
-/// Build (or verify) one square's persistent index; `Ok(None)` outside the
-/// prepared world. Used by the generation builder so no popup pays a cold build.
-pub fn ensure_square_index(
-    prepared_year_dir: &Path,
-    data_dir: &Path,
-    square: Square,
-) -> Result<Option<usize>, String> {
-    let Some(structures_arrow) = locate_square_structures(prepared_year_dir, square) else {
-        return Ok(None);
-    };
-    square_index(square, &structures_arrow, data_dir)
-        .map(|idx| Some(idx.edge_count()))
-        .map_err(|e| format!("structure_store: {e}"))
+fn square_dir(prepared_year_dir: &Path, square: Square) -> std::path::PathBuf {
+    prepared_year_dir.join(grid::square_name(square))
 }
 
 /// Assemble the query's [`ObstacleSet`], or fail when vector coverage cannot
 /// be proved complete.
 pub fn load_obstacle_set(
     prepared_year_dir: &Path,
-    data_dir: &Path,
     lat: f64,
     lon: f64,
 ) -> Result<ObstacleSet, String> {
     use rayon::prelude::*;
     // Obstacles screen surface propagation, so the surface reach selects them;
     // the wider cruise owner radius has no obstacles to offer. Independent
-    // squares build or map their indexes concurrently.
+    // squares map their indexes concurrently.
     let indexes = crate::query::surface_squares_within_reach(lat, lon)?
         .into_par_iter()
         .filter_map(|square| {
-            // Outside the prepared world: no square directory at all, so it holds
-            // no structures for the same reason it holds no roads.
-            locate_square_structures(prepared_year_dir, square).map(|path| (square, path))
-        })
-        .map(|(square, structures_arrow)| {
-            square_index(square, &structures_arrow, data_dir).map_err(|e| format!("structure_store: {e}"))
+            load_square_obstacle_index(&square_dir(prepared_year_dir, square), None)
+                .map_err(|e| format!("structure_store: {e}"))
+                .transpose()
         })
         .collect::<Result<Vec<_>, _>>()?;
     // Zero edges is a legitimate answer: a 0-row table is the finished sweep
@@ -531,69 +207,6 @@ pub fn point_inside_footprint(
         .map(|(class, height, _)| (class, height))
 }
 
-/// One square's index, from the nearest source that still holds it: the process
-/// memo, then the on-disk index cache, then a rebuild from the square's Arrow
-/// table (which is also written back). Build errors are not cached; successful
-/// builds are immutable and shared.
-///
-/// The inputs are fingerprinted BEFORE either cache is consulted: both are
-/// keyed on that fingerprint, so a hit is only ever the index this process
-/// would have built from these very files. Two `stat`s per square per query —
-/// three orders below the rebuild they guard, and the price of a cache that
-/// answers the question it was asked.
-fn square_index(
-    square: Square,
-    structures_arrow: &Path,
-    data_dir: &Path,
-) -> Result<Arc<ObstacleIndex>, String> {
-    let ver = square_data_ver(square, structures_arrow);
-    let t0 = std::time::Instant::now();
-    if let Some(ver) = ver {
-        if let Some(idx) = memo_get(square, ver) {
-            return Ok(idx);
-        }
-        if let Some(root) = index_cache_root(data_dir) {
-            if let Some(idx) = load_cached_index(&cache_file_path(&root, square), ver) {
-                let idx = Arc::new(idx);
-                log_square_load(square, "mapped", idx.edge_count(), t0);
-                memo_put(square, ver, &idx);
-                return Ok(idx);
-            }
-        }
-    }
-
-    let built = Arc::new(build_square_index(square, structures_arrow)?);
-    // No fingerprint ⇒ no memo and no file. An index whose inputs could not be
-    // pinned is used for THIS query and forgotten.
-    if let Some(ver) = ver {
-        if let Some(root) = index_cache_root(data_dir) {
-            if let Some(mapped) = store_cached_index(&root, square, &built, ver) {
-                let mapped = Arc::new(mapped);
-                memo_put(square, ver, &mapped);
-                log_square_load(square, "built+mapped", mapped.edge_count(), t0);
-                return Ok(mapped);
-            }
-        }
-        memo_put(square, ver, &built);
-    }
-    log_square_load(square, "built", built.edge_count(), t0);
-    Ok(built)
-}
-
-/// Per-square provenance under `POPUP_TIMING=1` — the same lever
-/// `query_noise_impl` uses for its stage timings. `mapped`, `built+mapped`, or
-/// uncached `built` names the retained representation explicitly instead of
-/// making operators infer it from a wall clock that also includes Arrow load.
-fn log_square_load(square: Square, how: &str, edges: usize, t0: std::time::Instant) {
-    if std::env::var("POPUP_TIMING").as_deref() == Ok("1") {
-        eprintln!(
-            "obstacle-index {how} square={} edges={edges} in {:.0} ms",
-            square_tag(square),
-            t0.elapsed().as_secs_f64() * 1000.0
-        );
-    }
-}
-
 /// The low-profile cap's lookup, read from the SAME structures.arrow the index
 /// is built from: kind=0 rows with a valid `osm_id` are the OSM building stock
 /// (the merge's emission rows — the old buildings.arrow subsequence), matched
@@ -677,19 +290,11 @@ fn square_center_latlon(square: Square) -> (f64, f64) {
     (lat, lon)
 }
 
-/// Build one square's index from its structure table.
+/// Build one square's index from its `structures.arrow` bytes — the pipeline
+/// step's builder (`square_obstacle_index::write_square_obstacle_index`).
 ///
-/// `structures_arrow` is the path the caller fingerprinted, not a fresh lookup:
-/// the same file must decide the cache identity AND the obstacle ordinals.
-/// Ids are dense in file order, one per geometry-carrying row, buildings and
-/// walls sharing the one counter.
-fn build_square_index(square: Square, structures_arrow: &Path) -> Result<ObstacleIndex, String> {
-    let bytes = std::fs::read(structures_arrow)
-        .map_err(|e| format!("read {}: {e}", structures_arrow.display()))?;
-    build_obstacle_index_from_arrow_bytes(square, &bytes, structures_arrow)
-}
-
-/// Build from the exact caller-verified bytes without file or cache lookups.
+/// Ids are dense in `screening_ordinal` order, one per geometry-carrying row,
+/// buildings and walls sharing the one counter.
 pub fn build_obstacle_index_from_arrow_bytes(
     square: Square,
     bytes: &[u8],
@@ -890,9 +495,10 @@ pub fn footprints_in_bbox(
     .ok_or_else(|| "invalid footprint query bounds".to_string())?;
     let mut out = Vec::new();
     for square in squares.iter() {
-        let Some(path) = locate_square_structures(prepared_year_dir, square) else {
-            continue; // outside the prepared world — nothing to draw here
-        };
+        let path = square_dir(prepared_year_dir, square).join(STRUCTURES_ARROW);
+        if !path.is_file() {
+            continue; // nothing built here — nothing to draw
+        }
         let bytes = std::fs::read(&path)
             .map_err(|e| format!("structure_store: {}: {e}", path.display()))?;
         // A square whose cap cannot be read must not contribute footprints at
@@ -900,7 +506,7 @@ pub fn footprints_in_bbox(
         let low_profile = low_profile_from_structures(&bytes, &path).map_err(|e| {
             format!(
                 "structure_store: low-profile cap for {}: {e}",
-                square_tag(square)
+                grid::square_name(square)
             )
         })?;
         let reader = FileReader::try_new(Cursor::new(&bytes), None)
@@ -981,14 +587,8 @@ mod producer_tests;
 mod tests {
     use super::*;
     use crate::structure_test_fixture as fx;
+    use std::sync::Arc;
     use tempfile::TempDir;
-
-    /// Environment variables are PROCESS-global and `cargo test` runs tests in
-    /// parallel threads, so every test below that touches the environment takes
-    /// this lock and restores what it found, and every one of them points the
-    /// index cache at its OWN temp dir — the suite's answer must not depend on
-    /// its order.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     const LAT: f64 = 50.0;
     const LON: f64 = 14.25;
@@ -1012,35 +612,12 @@ mod tests {
         }
     }
 
-    /// Query against a fixture tree without touching the shared disk cache.
     fn obstacle_set(year: &Path) -> ObstacleSet {
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("QM_OBSTACLE_INDEX_CACHE", "0");
-        let set = load_obstacle_set(year, year, LAT, LON).unwrap();
-        std::env::remove_var("QM_OBSTACLE_INDEX_CACHE");
-        set
+        load_obstacle_set(year, LAT, LON).unwrap()
     }
 
     #[test]
-    fn published_index_is_reopened_with_identical_query_bytes() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("structures.arrow");
-        fx::write_structure_file(&path, &[house_row()], true);
-        let square = prague();
-        let ver = square_data_ver(square, &path).unwrap();
-        let built = build_square_index(square, &path).unwrap();
-        let mapped = store_cached_index(&tmp.path().join("cache"), square, &built, ver)
-            .expect("a successful publication must return its mapped form");
-        let built_view = built.gpu_view();
-        let mapped_view = mapped.gpu_view();
-        assert_eq!(mapped_view.edges_xyxyh, built_view.edges_xyxyh);
-        assert_eq!(mapped_view.edge_ids, built_view.edge_ids);
-        assert_eq!(mapped_view.edge_is_building, built_view.edge_is_building);
-        assert_eq!(mapped_view.cell_max_h, built_view.cell_max_h);
-    }
-
-    #[test]
-    fn verified_structure_bytes_build_without_reopening_the_label_or_using_caches() {
+    fn verified_structure_bytes_build_without_reopening_the_label() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("structures.arrow");
         fx::write_structure_file(&path, &[house_row()], true);
@@ -1132,8 +709,7 @@ mod tests {
             }],
         );
 
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let set = load_obstacle_set(tmp.path(), tmp.path(), 0.0, 179.9).unwrap();
+        let set = load_obstacle_set(tmp.path(), 0.0, 179.9).unwrap();
         assert_eq!(set.edge_count(), 1);
         let view = set
             .indexes
@@ -1240,27 +816,22 @@ mod tests {
     #[test]
     fn missing_square_dir_is_empty_not_an_error() {
         let tmp = TempDir::new().unwrap();
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("QM_OBSTACLE_INDEX_CACHE", "0");
-        let set = load_obstacle_set(tmp.path(), tmp.path(), LAT, LON).unwrap();
-        std::env::remove_var("QM_OBSTACLE_INDEX_CACHE");
+        let set = load_obstacle_set(tmp.path(), LAT, LON).unwrap();
         assert!(set.indexes.is_empty());
     }
 
+    /// The contract gate sits in the pipeline step: an unstamped table gets no
+    /// index, so no popup can ever map one built from it.
     #[test]
-    fn unstamped_table_fails_the_query() {
+    fn unstamped_table_gets_no_index() {
         let tmp = TempDir::new().unwrap();
         let dir = fx::square_dir(tmp.path(), prague());
         std::fs::create_dir_all(&dir).unwrap();
         fx::write_structure_file(&dir.join("structures.arrow"), &[house_row()], false);
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("QM_OBSTACLE_INDEX_CACHE", "0");
-        let err = match load_obstacle_set(tmp.path(), tmp.path(), LAT, LON) {
-            Ok(_) => panic!("unstamped table must fail"),
-            Err(e) => e,
-        };
-        std::env::remove_var("QM_OBSTACLE_INDEX_CACHE");
+        let err =
+            crate::square_obstacle_index::write_square_obstacle_index(&dir, prague()).unwrap_err();
         assert!(err.contains("structures_contract mismatch"), "got: {err}");
+        assert!(!dir.join("structures.qoix").exists());
     }
 
     #[test]

@@ -22,13 +22,13 @@ export const SOURCE_READER_PATH = existsSync(bundledSourceReader) ? bundledSourc
   'engine/target/release/libsource_reader.so',
 )
 // One immutable prepared year: z9/x/y contains Arrows, structures, square-country-city.bin
-// and native DEM/forest/IMD files; rasters.sqlite and inputs.sqlite bind its generation.
+// and native DEM/forest/IMD files; inputs.sqlite binds its generation.
 export const PREPARED_YEAR_DIR = process.env.PREPARED_YEAR_DIR
   ? resolve(process.env.PREPARED_YEAR_DIR)
   : resolve(REPO_ROOT, 'data', 'prepared', DATA_YEAR)
 
 // Optional retained corner generation from an approved repaint. Native receipt
-// validation requires the same prepared sources, rasters and compiled physics.
+// validation requires the same prepared sources and compiled physics.
 export const SURFACE_CORNERS_DIR = process.env.SURFACE_CORNERS_DIR
   ? resolve(process.env.SURFACE_CORNERS_DIR)
   : null

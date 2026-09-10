@@ -97,9 +97,9 @@ convert_one() {
 
     # --imd-force regenerates IMD bytes (LUT change); the stale tile is NOT
     # deleted up front — it stays readable until the atomic replace below,
-    # because live popup readers default a missing IMD tile to hard ground
-    # and cache the miss (/gg 2026-06-11 CRITICAL). Forest never forced —
-    # it derives from class 10 alone.
+    # because a live reader treats a missing IMD tile as an error and caches
+    # the miss (/gg 2026-06-11 CRITICAL). Forest never forced — it derives
+    # from class 10 alone.
     local NEED_FOREST=0 NEED_IMD=0
     if grep -qx "$NAME" "$VRT_DIR/worldcover-tiles.txt" && [ ! -f "$FOREST_OUT" ]; then NEED_FOREST=1; fi
     if [ ! -f "$IMD_OUT" ] || [ "${IMD_FORCE:-0}" = "1" ]; then NEED_IMD=1; fi

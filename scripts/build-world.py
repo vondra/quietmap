@@ -83,6 +83,7 @@ def build_plan(config, output, scratch):
              '--prepared-dir', str(year), '--overture-parquet', str(sources['overture']),
              '--ghsl', str(sources['ghsl']), '--regional', str(sources['regional_heights']),
              '--census-log', str(output / 'structures.jsonl')), 3),
+        Step('obstacle-index', ('structures',), (str(REPO / 'engine/target/release/obstacle-index-build'), str(year))),
         layer('railways', ('square-country-city',)),
         layer('industrial', ('square-country-city',)),
         layer('roads', ('square-country-city', 'structures')),
@@ -135,6 +136,17 @@ def run_plan(steps, execute):
             if failure and not running:
                 raise failure
     return completed
+
+
+def require_obstacle_index_current(steps, environment):
+    """Rerun the idempotent obstacle-index step: a square it writes had its structures.arrow changed after the step."""
+    step = next(step for step in steps if step.name == 'obstacle-index')
+    rerun = subprocess.run(step.argv, cwd=REPO, env=dict(environment, **dict(step.environment)),
+                           stdout=subprocess.PIPE, stdin=subprocess.DEVNULL, check=True, text=True)
+    written = json.loads(rerun.stdout.splitlines()[-1])['written']
+    if written != 0:
+        raise ValueError(f'{written} structures.qoix rewritten by the {step.name} rerun: '
+                         'a structures.arrow changed after the step; all work retained')
 
 
 def code_inputs():
@@ -220,10 +232,11 @@ def main():
         try:
             roots = current_roots()
             pin_inputs(database, roots)
-            attach_rasters(sources['rasters'], year, database)
+            attach_rasters(sources['rasters'], year)
             # Build before parallel producers so their incremental builds share no changing code.
             subprocess.run(['cargo', 'build', '--release', '--manifest-path', str(REPO / 'engine/Cargo.toml'),
-                            '--bin', 'osm-extract', '--bin', 'aircraft-extract'], cwd=REPO, env=environment, check=True)
+                            '--bin', 'osm-extract', '--bin', 'aircraft-extract', '--bin', 'obstacle-index-build'],
+                           cwd=REPO, env=environment, check=True)
             def execute(step):
                 budget = (settings['memory_gib'] << 30) * step.slots // 4
                 command = ['systemd-run', '--user', '--scope', '--quiet', '-p', f'MemoryMax={budget}',
@@ -243,19 +256,17 @@ def main():
                 if result.returncode:
                     raise RuntimeError(f'{step.name} failed; inspect {output / (step.name + ".log")}; all work retained')
             run_plan(steps, execute)
+            require_obstacle_index_current(steps, environment)
             counts = audit_world(year)
             verify_prepared_raster_links(sources['rasters'], year)
             verify_inputs(database, current_roots())
             manifest = write_manifest(year, year / 'inputs.sqlite')
-            raster_digest = database.execute('SELECT sha256 FROM inputs WHERE path=?',
-                (str(sources['rasters'] / 'rasters.sqlite'),)).fetchone()[0].hex()
-            database.execute('CREATE TABLE output(manifest_sha256 TEXT NOT NULL, '
-                             'raster_catalog_sha256 TEXT NOT NULL, counts TEXT NOT NULL)')
-            database.execute('INSERT INTO output VALUES(?,?,?)',
-                             (manifest['sha256'], raster_digest, json.dumps(counts, sort_keys=True)))
+            database.execute('CREATE TABLE output(manifest_sha256 TEXT NOT NULL, counts TEXT NOT NULL)')
+            database.execute('INSERT INTO output VALUES(?,?)',
+                             (manifest['sha256'], json.dumps(counts, sort_keys=True)))
             database.execute("UPDATE build SET status='complete'")
             database.commit()
-            print(json.dumps(dict(status='complete', prepared=str(year), manifest=manifest, raster_catalog_sha256=raster_digest, rows=counts)), flush=True)
+            print(json.dumps(dict(status='complete', prepared=str(year), manifest=manifest, rows=counts)), flush=True)
         except BaseException:
             database.execute("UPDATE build SET status='failed'")
             database.commit()

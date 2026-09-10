@@ -1,178 +1,90 @@
-//! Actual native-file validation, eviction and concurrent-reader regression tests.
+//! The three file states (data, 0-byte ocean, missing), wrong lengths and byte-bounded eviction.
 
 use super::*;
-use crate::test_fixture::write_square;
-use std::cell::{Cell, RefCell};
-use std::fs::{FileTimes, OpenOptions};
-use std::io::Write;
-use std::os::unix::fs::{FileExt, MetadataExt};
-use std::rc::Rc;
-use std::sync::mpsc;
-use std::time::{Duration, SystemTime};
-
-type HashObserver = Box<dyn FnMut(&File)>;
-thread_local! {
-    static HASH_OBSERVER: RefCell<Option<HashObserver>> = const { RefCell::new(None) };
-}
-
-pub(super) fn observe_full_hash(file: &File) {
-    HASH_OBSERVER.with_borrow_mut(|observer| {
-        if let Some(observer) = observer {
-            observer(file);
-        }
-    });
-}
-
-struct ObserveHash;
-
-impl ObserveHash {
-    fn new(observer: impl FnMut(&File) + 'static) -> Self {
-        HASH_OBSERVER.with_borrow_mut(|slot| *slot = Some(Box::new(observer)));
-        Self
-    }
-}
-
-impl Drop for ObserveHash {
-    fn drop(&mut self) {
-        HASH_OBSERVER.with_borrow_mut(|slot| *slot = None);
-    }
-}
+use crate::test_fixture::{write_absent_square, write_square};
+use std::fs::OpenOptions;
 
 const A: Square = Square { x: 256, y: 200 };
 const B: Square = Square { x: 257, y: 200 };
 
-fn fixture(root: &Path) -> TileStore {
-    for square in [A, B] {
-        write_square(root, Channel::Dem, square, |_, _| 100);
-    }
+fn store_with_room_for_one_window(root: &Path, channel: Channel) -> TileStore {
     let capacity = [A, B]
-        .map(|square| Channel::Dem.byte_len(RasterWindow::for_square(square)))
+        .map(|square| channel.byte_len(RasterWindow::for_square(square)))
         .into_iter()
         .max()
         .unwrap()
         + std::mem::size_of::<CachedTile>();
-    TileStore::new(root, Channel::Dem, capacity)
+    TileStore::new(root, channel, capacity)
 }
 
-fn sample(tile: &RawTile) -> f64 {
+fn centre(tile: &RawTile) -> f64 {
     tile.read_pixel(tile.window.rows / 2, tile.window.columns / 2)
 }
 
 #[test]
-fn verification_survives_eviction_but_revalidates_file_changes() {
-    for (mutation, accepted, additional_hashes) in [
-        ("unchanged", true, 0),
-        ("rewrite", false, 1),
-        ("restore_mtime", false, 1),
-        ("replace_corrupt", false, 1),
-        ("replace_identical", true, 1),
-        ("truncate", false, 0),
+fn zero_byte_file_samples_the_channel_ocean_value() {
+    let root = tempfile::tempdir().unwrap();
+    for (channel, ocean) in [
+        (Channel::Dem, 0.0),
+        (Channel::Forest, 0.0),
+        (Channel::Imd, 100.0),
     ] {
-        let root = tempfile::tempdir().unwrap();
-        let store = fixture(root.path());
-        let hashes = Rc::new(Cell::new(0));
-        let observed = Rc::clone(&hashes);
-        let _observer = ObserveHash::new(move |_| observed.set(observed.get() + 1));
-        assert_eq!(sample(&store.get_tile(A).unwrap()), 100.0);
-        assert_eq!(sample(&store.get_tile(B).unwrap()), 100.0);
-        assert!(!store.cache.lock().unwrap().tiles.contains_key(&A));
-        assert_eq!(hashes.get(), 2);
-
-        let path = Channel::Dem.path(root.path(), A);
-        let before = std::fs::metadata(&path).unwrap();
-        match mutation {
-            "unchanged" => {}
-            "rewrite" | "restore_mtime" => {
-                let file = OpenOptions::new().write(true).open(&path).unwrap();
-                file.write_all_at(&77_i16.to_be_bytes(), 0).unwrap();
-                if mutation == "restore_mtime" {
-                    file.set_times(FileTimes::new().set_modified(before.modified().unwrap()))
-                        .unwrap();
-                    let after = file.metadata().unwrap();
-                    assert_eq!(after.modified().unwrap(), before.modified().unwrap());
-                    assert_ne!(
-                        (after.ctime(), after.ctime_nsec()),
-                        (before.ctime(), before.ctime_nsec())
-                    );
-                }
-            }
-            "replace_corrupt" | "replace_identical" => {
-                let mut bytes = std::fs::read(&path).unwrap();
-                if mutation == "replace_corrupt" {
-                    bytes[0] ^= 1;
-                }
-                let mut replacement =
-                    tempfile::NamedTempFile::new_in(path.parent().unwrap()).unwrap();
-                replacement.write_all(&bytes).unwrap();
-                replacement.persist(&path).unwrap();
-                assert_ne!(std::fs::metadata(&path).unwrap().ino(), before.ino());
-            }
-            "truncate" => OpenOptions::new()
-                .write(true)
-                .open(&path)
-                .unwrap()
-                .set_len(2)
-                .unwrap(),
-            _ => unreachable!(),
-        }
-
-        let tile = store.get_tile(A);
-        assert_eq!(tile.is_some(), accepted, "{mutation}");
-        if let Some(tile) = tile {
-            assert_eq!(sample(&tile), 100.0, "{mutation}");
-        }
-        assert_eq!(hashes.get(), 2 + additional_hashes, "{mutation}");
+        write_absent_square(root.path(), channel, A);
+        let store = TileStore::new(root.path(), channel, usize::MAX);
+        let tile = store.get_tile(A).unwrap();
+        assert_eq!(centre(&tile), ocean, "{channel:?}");
+        assert_eq!(
+            tile.sample(36.3, 0.35, Interp::Bilinear),
+            ocean,
+            "{channel:?}"
+        );
+        assert_eq!(
+            tile.sample(36.3, 0.35, Interp::Nearest),
+            ocean,
+            "{channel:?}"
+        );
     }
 }
 
 #[test]
-fn metadata_change_during_hash_cannot_install_verification() {
+fn missing_file_is_refused_not_ocean() {
     let root = tempfile::tempdir().unwrap();
-    let store = fixture(root.path());
-    let hashes = Rc::new(Cell::new(0));
-    let observed = Rc::clone(&hashes);
-    let _observer = ObserveHash::new(move |file| {
-        observed.set(observed.get() + 1);
-        if observed.get() == 1 {
-            file.set_times(FileTimes::new().set_modified(SystemTime::UNIX_EPOCH))
-                .unwrap();
-        }
-    });
+    write_absent_square(root.path(), Channel::Dem, B);
+    let store = TileStore::new(root.path(), Channel::Dem, usize::MAX);
     assert!(store.get_tile(A).is_none());
+    assert!(store.sample(36.3, 0.35).is_nan());
     assert!(store.get_tile(B).is_some());
-    assert!(!store.cache.lock().unwrap().tiles.contains_key(&A));
-    assert_eq!(sample(&store.get_tile(A).unwrap()), 100.0);
-    assert_eq!(hashes.get(), 3);
 }
 
 #[test]
-fn cold_validation_does_not_block_an_unrelated_warm_reader() {
+fn data_file_of_wrong_length_is_refused() {
     let root = tempfile::tempdir().unwrap();
-    let store = fixture(root.path());
-    assert!(store.get_tile(B).is_some());
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    let (warm_tx, warm_rx) = mpsc::channel();
-    std::thread::scope(|scope| {
-        let cold = scope.spawn(|| {
-            let _observer = ObserveHash::new(move |_| {
-                entered_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
-            });
-            store.get_tile(A).map(|tile| sample(&tile))
-        });
-        if let Err(error) = entered_rx.recv_timeout(Duration::from_secs(5)) {
-            drop(release_tx);
-            panic!("cold validation never reached the hash: {error}");
-        }
-        scope.spawn(|| {
-            warm_tx
-                .send(store.get_tile(B).map(|tile| sample(&tile)))
-                .unwrap()
-        });
-        let warm = warm_rx.recv_timeout(Duration::from_secs(5));
-        release_tx.send(()).unwrap();
-        assert_eq!(warm.unwrap(), Some(100.0));
-        assert_eq!(cold.join().unwrap(), Some(100.0));
-    });
+    write_square(root.path(), Channel::Dem, A, |_, _| 100);
+    let store = TileStore::new(root.path(), Channel::Dem, usize::MAX);
+    assert_eq!(centre(&store.get_tile(A).unwrap()), 100.0);
+    OpenOptions::new()
+        .write(true)
+        .open(Channel::Dem.path(root.path(), A))
+        .unwrap()
+        .set_len(2)
+        .unwrap();
+    let fresh = TileStore::new(root.path(), Channel::Dem, usize::MAX);
+    assert!(fresh.get_tile(A).is_none());
+}
+
+#[test]
+fn eviction_keeps_the_cache_within_its_byte_bound_and_reloads() {
+    let root = tempfile::tempdir().unwrap();
+    for square in [A, B] {
+        write_square(root.path(), Channel::Dem, square, |_, _| 100);
+    }
+    let store = store_with_room_for_one_window(root.path(), Channel::Dem);
+    assert_eq!(centre(&store.get_tile(A).unwrap()), 100.0);
+    assert_eq!(centre(&store.get_tile(B).unwrap()), 100.0);
+    let cache = store.cache.lock().unwrap();
+    assert!(!cache.tiles.contains_key(&A));
+    assert!(cache.tiles.contains_key(&B));
+    assert!(cache.bytes <= store.max_bytes);
+    drop(cache);
+    assert_eq!(centre(&store.get_tile(A).unwrap()), 100.0);
 }

@@ -27,7 +27,7 @@ fn tiles() -> Vec<EncodedHm3> {
 fn adjacent_tiles_restart_and_concurrent_producers_reuse_the_same_bytes() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("corners");
-    let generation = CornerGeneration::from_manifests([1; 32], [2; 32], [3; 32], [4; 32]);
+    let generation = CornerGeneration::from_manifests([1; 32], [3; 32], [4; 32]);
     let count = Arc::new(AtomicUsize::new(0));
     std::thread::scope(|scope| {
         for tile_x in [15, 16] {

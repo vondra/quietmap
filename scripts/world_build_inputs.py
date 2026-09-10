@@ -1,7 +1,6 @@
-"""Freeze world-build input identities and attach a complete native raster generation."""
+"""Freeze world-build input identities and attach a complete native raster year."""
 
 from pathlib import Path
-import sqlite3
 import struct
 import sys
 
@@ -42,19 +41,16 @@ def input_files(roots):
 
 
 def raster_inputs(source):
+    """Every channel file of every z9 square: window bytes or a 0-byte ocean file; missing is an error."""
     source = canonical_input(source)
-    yield source / 'rasters.sqlite'
-    with sqlite3.connect(f'{(source / "rasters.sqlite").as_uri()}?mode=ro', uri=True) as catalog:
-        for channel in ('dem', 'forest', 'imd'):
-            populated = {row[0] for row in catalog.execute(
-                'SELECT square FROM raster_squares WHERE channel=? AND sha256 IS NOT NULL', (channel,))}
-            if not populated <= set(range(qmgrid.Z9_AXIS ** 2)):
-                raise ValueError('invalid raster catalog square')
-            extension = '.i16be' if channel == 'dem' else '.u8'
-            for x in range(qmgrid.Z9_AXIS):
-                for y in range(qmgrid.Z9_AXIS):
-                    if qmgrid.square_id(x, y) in populated:
-                        yield source / qmgrid.square_name(x, y) / (channel + extension)
+    for channel in ('dem', 'forest', 'imd'):
+        extension = '.i16be' if channel == 'dem' else '.u8'
+        for x in range(qmgrid.Z9_AXIS):
+            for y in range(qmgrid.Z9_AXIS):
+                path = source / qmgrid.square_name(x, y) / (channel + extension)
+                if not path.is_file():
+                    raise ValueError(f'missing raster: {path}')
+                yield path
 
 
 def height_inputs(path, ancestors=frozenset()):
@@ -103,45 +99,13 @@ def verify_inputs(database, roots):
         raise ValueError('files added to frozen inputs during build')
 
 
-def attach_rasters(source, prepared, database):
+def attach_rasters(source, prepared):
     source = canonical_input(source)
-    # Native contracts remain owned by the Rust reader; import its literal pin.
-    channel_source = Path(__file__).parents[1] / 'engine/raster-reader/src/channel.rs'
-    import re
-    contract = re.search(r'pub const CONTRACT: &str = "([^"]+)";', channel_source.read_text()).group(1)
-    catalog = sqlite3.connect(f'{(source / "rasters.sqlite").as_uri()}?mode=ro', uri=True)
-    channel_rows = catalog.execute('SELECT channel,contract,source_identity FROM raster_channels').fetchall()
-    channels = {row[0]: row[1] for row in channel_rows}
-    if (len(channel_rows) != 3 or channels != {channel: contract for channel in ('dem', 'forest', 'imd')}
-            or any(not isinstance(identity, str) or not re.fullmatch(r'[0-9a-fA-F]{64}', identity)
-                   for _, _, identity in channel_rows)):
-        raise ValueError('native raster channel contract mismatch')
     for x in range(qmgrid.Z9_AXIS):
         for y in range(qmgrid.Z9_AXIS):
             (prepared / qmgrid.square_name(x, y)).mkdir(parents=True, exist_ok=True)
-    for channel in channels:
-        entries = catalog.execute('SELECT square,sha256 FROM raster_squares WHERE channel=?', (channel,)).fetchall()
-        rows = dict(entries)
-        if len(entries) != qmgrid.Z9_AXIS ** 2 or set(rows) != set(range(qmgrid.Z9_AXIS ** 2)):
-            raise ValueError(f'incomplete world raster coverage: {channel}')
-        filename = channel + ('.i16be' if channel == 'dem' else '.u8')
-        for x in range(qmgrid.Z9_AXIS):
-            for y in range(qmgrid.Z9_AXIS):
-                relative = Path(qmgrid.square_name(x, y)) / filename
-                path = source / relative
-                digest = rows[qmgrid.square_id(x, y)]
-                if digest is None:
-                    if path.exists() or path.is_symlink():
-                        raise ValueError(f'ocean declaration has a raster file: {path}')
-                    continue
-                pinned = database.execute('SELECT sha256 FROM inputs WHERE path=?',
-                                          (str(path),)).fetchone()
-                if not pinned or pinned[0] != digest:
-                    raise ValueError(f'raster bytes differ from catalog: {path}')
-                (prepared / relative).symlink_to(canonical_input(path))
-    catalog.close()
-    (prepared / 'rasters.sqlite').symlink_to(source / 'rasters.sqlite')
-
+    for path in raster_inputs(source):
+        (prepared / path.relative_to(source)).symlink_to(canonical_input(path))
 
 
 def verify_prepared_raster_links(source, prepared):
@@ -167,6 +131,10 @@ def audit_world(prepared):
             raise ValueError(f'invalid square-country-city identity: {square}')
         if not (square / 'structures.arrow').is_file():
             raise ValueError(f'unfinished structures: {square}')
+        # Pairing with structures.arrow is proven by build-world's zero-write rerun of
+        # obstacle-index (a table rewritten after the step makes the rerun write).
+        if not (square / 'structures.qoix').is_file():
+            raise ValueError(f'unfinished obstacle index: {square}')
         for path in sorted(square.glob('*.arrow')):
             with pa.memory_map(str(path), 'r') as source:
                 reader = pa.ipc.open_file(source)

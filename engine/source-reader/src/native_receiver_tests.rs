@@ -4,10 +4,7 @@ use aircraft_extract::{
     arrow_io,
     flight::{AirborneEvent, AirborneSubSegment},
 };
-use raster_reader::{
-    catalog::{begin_channel, record_square},
-    channel::Channel,
-};
+use raster_reader::channel::Channel;
 use serde_json::Value;
 use std::path::Path;
 
@@ -37,16 +34,17 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         ..Default::default()
     };
     fx::write_square_structures(root, click_square, &[house]);
-    let set = crate::structure_store::load_obstacle_set(root, root, lat, lon).unwrap();
+    let set = crate::structure_store::load_obstacle_set(root, lat, lon).unwrap();
     let (facade_lat, facade_lon, winner) =
         crate::structure_store::locate_facade_receiver(&set, lat, lon);
     assert!(winner.is_some());
     let facade_square = grid::square_of(facade_lat, facade_lon);
     assert_ne!(facade_square, click_square);
     for channel in Channel::ALL {
-        let database = begin_channel(root, channel, &"a".repeat(64)).unwrap();
         for square in crate::query::squares_within_reach(facade_lat, facade_lon).unwrap() {
-            record_square(&database, channel, square, None).unwrap();
+            let ocean = channel.path(root, square);
+            std::fs::create_dir_all(ocean.parent().unwrap()).unwrap();
+            std::fs::write(ocean, []).unwrap();
         }
     }
     assert!(crate::RASTERS
@@ -77,7 +75,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     };
     let facade_dir = fx::square_dir(root, facade_square);
     std::fs::create_dir_all(&facade_dir).unwrap();
-    fx::write_structure_file(&facade_dir.join("structures.arrow"), &[], true);
+    fx::write_square_structures(root, facade_square, &[]);
     let path = facade_dir.join("airborne.arrow");
     arrow_io::write_airborne(&path, std::slice::from_ref(&event), 12, 0).unwrap();
     let popup = |lat, lon| -> Value {

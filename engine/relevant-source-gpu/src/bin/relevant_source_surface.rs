@@ -23,9 +23,6 @@ struct Arguments {
     prepared_year: PathBuf,
     #[arg(long)]
     raster_root: PathBuf,
-    /// Independently published SHA256 of rasters.sqlite.
-    #[arg(long)]
-    raster_catalog_sha256: String,
     /// SQLite input_files(relative_path TEXT PRIMARY KEY, sha256 BLOB NOT NULL).
     #[arg(long)]
     input_manifest: PathBuf,
@@ -68,14 +65,8 @@ fn main() -> Result<()> {
         &args.input_manifest,
         parse_digest(&args.input_manifest_sha256)?,
     )?;
-    let raster_digest = file_digest(&args.raster_root.join(raster_reader::catalog::CATALOG_FILE))?;
-    ensure!(
-        raster_digest == parse_digest(&args.raster_catalog_sha256)?,
-        "raster catalog digest mismatch"
-    );
     let receipt = GenerationReceipt {
         sources: manifest.digest,
-        rasters: raster_digest,
         code: SURFACE_CODE_DIGEST,
         producer: file_digest(&std::env::current_exe()?)?,
     };

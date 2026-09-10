@@ -16,14 +16,8 @@ fn prepare(root: &Path) -> (PathBuf, PathBuf, GenerationReceipt) {
         b"vector manifest generation A",
     )
     .unwrap();
-    std::fs::write(
-        prepared.join("rasters.sqlite"),
-        b"raster catalog generation A",
-    )
-    .unwrap();
     let receipt = GenerationReceipt {
         sources: file_digest(&prepared.join("inputs.sqlite")).unwrap(),
-        rasters: file_digest(&prepared.join("rasters.sqlite")).unwrap(),
         code: SURFACE_CODE_DIGEST,
         producer: [4; 32],
     };

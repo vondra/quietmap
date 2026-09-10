@@ -4,11 +4,13 @@
 // two serving paths can never drift apart.
 
 import { resolve } from 'node:path'
-import { WORLD_BASE_ZOOM } from '../generation-contract.mjs'
 import { DATA_YEAR as YEAR } from '../data-year.js'
 
 // The world is painted once at WORLD_BASE_ZOOM (512-px tiles); every zoom
-// below it is a pyramid level of that same paint, down to z2.
+// below it is a pyramid level of that same paint, down to z2. Moving the base
+// zoom means repainting the whole world — an owner decision, never a
+// publication-time parameter.
+export const WORLD_BASE_ZOOM = 13
 export const MIN_ZOOM = 2
 export const MAX_ZOOM = WORLD_BASE_ZOOM
 

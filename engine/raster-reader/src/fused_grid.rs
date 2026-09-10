@@ -48,16 +48,6 @@ pub struct FusedGrid {
     imd_pyramid: ImdMaxPyramid,
 }
 
-/// Contiguous DEM view for device-side receiver-horizon construction.
-pub struct PackedElevationGrid {
-    pub lat_min: f64,
-    pub lon_min: f64,
-    pub inv_cell_deg: f64,
-    pub cols: usize,
-    pub rows: usize,
-    pub elevation_m: Vec<f32>,
-}
-
 impl Clone for FusedGrid {
     fn clone(&self) -> Self {
         Self {
@@ -155,20 +145,6 @@ thread_local! {
 }
 
 impl FusedGrid {
-    /// Copy the interleaved fused grid's DEM channel into a device-friendly
-    /// plane. Region airborne batches share one halo, so this happens once per
-    /// cell rather than once per tile.
-    pub fn packed_elevation_grid(&self) -> PackedElevationGrid {
-        PackedElevationGrid {
-            lat_min: self.lat_min,
-            lon_min: self.lon_min,
-            inv_cell_deg: self.inv_cell_deg,
-            cols: self.cols,
-            rows: self.rows,
-            elevation_m: self.data.iter().map(|pixel| pixel.elevation).collect(),
-        }
-    }
-
     #[inline]
     fn pixel_quad(&self, base: usize) -> [FusedPixel; 4] {
         WORKER_PIXEL_QUAD_CACHE.with(|cache| {
@@ -179,25 +155,7 @@ impl FusedGrid {
         })
     }
 
-    pub(crate) fn empty() -> Self {
-        let data = vec![FusedPixel::default(); 4];
-        let imd_pyramid = ImdMaxPyramid::from_imd_plane(&data, 2, 2);
-        FusedGrid {
-            data,
-            grid_id: next_grid_id(),
-            lat_min: 0.0,
-            lon_min: 0.0,
-            inv_cell_deg: 3600.0,
-            cols: 2,
-            rows: 2,
-            imd_pyramid,
-        }
-    }
-
-    /// Exact grid dimensions `build` will allocate for this bbox — the ONE
-    /// sizing computation, shared with byte-budget estimation (noise-gpu's
-    /// pipeline gate reserves a block's bytes BEFORE building it; an estimate
-    /// derived anywhere else would drift from the real allocation).
+    /// Grid dimensions and origin `build` allocates for this bbox.
     ///
     /// Longitude bounds describe the short arc, including west > east at E180.
     /// Snap origin to the 1/3600° DEM pixel lattice (integer-lattice
@@ -207,7 +165,7 @@ impl FusedGrid {
     ///
     /// Keep a conservative eight-cell sampling margin around the requested
     /// bbox so endpoint interpolation stays inside the cropped grid.
-    pub fn grid_dims(
+    fn grid_dims(
         lat_min: f64,
         lat_max: f64,
         lon_min: f64,
@@ -229,11 +187,6 @@ impl FusedGrid {
             lat_lo_i as f64 * cell_deg,
             lon_lo_i as f64 * cell_deg,
         )
-    }
-
-    /// Heap bytes owned by this grid (the `FusedPixel` buffer).
-    pub fn heap_bytes(&self) -> u64 {
-        (self.data.capacity() * std::mem::size_of::<FusedPixel>()) as u64
     }
 
     /// Build from RealRasters, cropping to the requested local bbox.
@@ -259,23 +212,6 @@ impl FusedGrid {
                 imd: imd as u8,
                 _pad: 0,
             }
-        })
-    }
-
-    /// Build the same globally aligned grid with only its DEM channel.
-    /// Aircraft terrain and roof horizons read elevation exclusively, so
-    /// sampling forest/IMD and retaining their real values would be wasted
-    /// work. The zero channels must not be used for surface propagation.
-    pub fn build_elevation_only(
-        rasters: &RealRasters,
-        lat_min: f64,
-        lat_max: f64,
-        lon_min: f64,
-        lon_max: f64,
-    ) -> Self {
-        Self::build_with_pixel_sampler(lat_min, lat_max, lon_min, lon_max, |lat, lon| FusedPixel {
-            elevation: rasters.dem.sample(lat, lon) as f32,
-            ..FusedPixel::default()
         })
     }
 
@@ -390,29 +326,8 @@ impl noise_compute::types::RasterSampler for FusedGrid {
 }
 
 impl FusedGrid {
-    /// [`RasterSampler::build_path_profile`] with the SURFACE-HEATMAP
-    /// coarse-middle cadence ([`CoarseMid`]): full-res near both ends (where
-    /// obstacles diffract sound most severely), the smooth long-ray middle
-    /// subsampled. Rays with no real middle reduce to the exact cadence
-    /// byte-for-byte. Heatmap line/point/ground-ops kernels only — the POPUP
-    /// stays on the exact [`RasterSampler::build_path_profile`].
-    pub fn build_path_profile_coarse_mid(
-        &self,
-        src_lat: f64,
-        src_lon: f64,
-        rcv_lat: f64,
-        rcv_lon: f64,
-        dist_m: f64,
-        cfg: noise_compute::propagation::path_profile::CoarseMid,
-        out: &mut noise_compute::propagation::PathProfile,
-    ) {
-        noise_compute::propagation::path_profile::fill_t_values_coarse_mid(dist_m, &mut out.t, cfg);
-        self.fill_profile_rasters(src_lat, src_lon, rcv_lat, rcv_lon, dist_m, out);
-    }
-
     /// Sample the three surface rasters at the t-values already in `out.t`,
-    /// populating the profile. Shared by the exact + coarse-middle cadences
-    /// (only the `out.t` fill differs); keeps the ray-march loop in one place.
+    /// populating the profile.
     fn fill_profile_rasters(
         &self,
         src_lat: f64,
@@ -592,9 +507,10 @@ mod tests {
     use noise_compute::types::RasterSampler;
     use std::path::Path;
 
+    /// A 0-byte file is the channel's ocean value (IMD 100, others 0); a missing file is NaN.
     #[test]
     fn missing_surface_channel_cannot_be_cast_to_a_valid_quiet_pixel() {
-        use crate::{catalog, channel::Channel};
+        use crate::{channel::Channel, test_fixture::write_absent_square};
         let square = grid::square_of(50.0, 14.0);
         for missing in [
             None,
@@ -604,10 +520,8 @@ mod tests {
         ] {
             let temp = tempfile::tempdir().unwrap();
             for channel in Channel::ALL {
-                let database =
-                    catalog::begin_channel(temp.path(), channel, &"1".repeat(64)).unwrap();
                 if Some(channel) != missing {
-                    catalog::record_square(&database, channel, square, None).unwrap();
+                    write_absent_square(temp.path(), channel, square);
                 }
             }
             let rasters = RealRasters::new(temp.path());
@@ -616,6 +530,12 @@ mod tests {
                 .pixels()
                 .iter()
                 .all(|pixel| pixel.elevation.is_finite() == missing.is_none()));
+            if missing.is_none() {
+                assert!(fused
+                    .pixels()
+                    .iter()
+                    .all(|pixel| (pixel.elevation, pixel.forest, pixel.imd) == (0.0, 0, 100)));
+            }
         }
     }
 
@@ -623,11 +543,13 @@ mod tests {
         RealRasters::new(Path::new("../../data/prepared/2026"))
     }
 
-    /// Optional real-data tests require published native z9 coverage.
+    /// Optional real-data tests need the three published Brno windows.
     fn prepared_available() -> bool {
+        let brno = grid::square_of(49.195, 16.608);
         crate::channel::Channel::ALL.into_iter().all(|channel| {
-            crate::catalog::read_channel(Path::new("../../data/prepared/2026"), channel)
-                .is_ok_and(|coverage| coverage.len() == 512 * 512)
+            channel
+                .path(Path::new("../../data/prepared/2026"), brno)
+                .is_file()
         })
     }
 
@@ -726,37 +648,6 @@ mod tests {
                 lon
             );
         }
-    }
-
-    #[test]
-    fn elevation_only_grid_preserves_the_full_grid_dem_plane() {
-        if !prepared_available() {
-            return;
-        }
-        let rasters = test_rasters();
-        let full = FusedGrid::build(&rasters, 49.18, 49.22, 16.58, 16.63);
-        let elevation_only = FusedGrid::build_elevation_only(&rasters, 49.18, 49.22, 16.58, 16.63);
-        assert_eq!(elevation_only.rows, full.rows);
-        assert_eq!(elevation_only.cols, full.cols);
-        assert_eq!(elevation_only.lat_min.to_bits(), full.lat_min.to_bits());
-        assert_eq!(elevation_only.lon_min.to_bits(), full.lon_min.to_bits());
-        for (index, (elevation_pixel, full_pixel)) in
-            elevation_only.data.iter().zip(&full.data).enumerate()
-        {
-            assert_eq!(
-                elevation_pixel.elevation.to_bits(),
-                full_pixel.elevation.to_bits(),
-                "DEM plane changed at grid cell {index}"
-            );
-            assert_eq!((elevation_pixel.forest, elevation_pixel.imd), (0, 0));
-        }
-        let packed = elevation_only.packed_elevation_grid();
-        assert_eq!(packed.elevation_m.len(), packed.rows * packed.cols);
-        assert!(packed
-            .elevation_m
-            .iter()
-            .zip(&elevation_only.data)
-            .all(|(&packed, pixel)| packed.to_bits() == pixel.elevation.to_bits()));
     }
 
     #[test]

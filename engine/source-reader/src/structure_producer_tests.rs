@@ -31,11 +31,9 @@ fn empty_files_do_not_bypass_any_screening_height_reader() {
             .finish()
             .unwrap();
         assert!(square_store::store::load_square(&dir).is_err());
-        assert!(crate::structure_store::load_obstacle_set(
-            output.path(),
-            output.path(),
-            49.78,
-            14.17
+        assert!(crate::square_obstacle_index::write_square_obstacle_index(
+            &dir,
+            grid::Square { x: 276, y: 174 }
         )
         .is_err());
         assert!(crate::structure_store::footprints_in_bbox(
@@ -83,9 +81,12 @@ fn python_structure_producer_preserves_screening_and_emission_contracts() {
     let mut heights: Vec<_> = footprints.iter().map(|row| row.height_m).collect();
     heights.sort_by(f32::total_cmp);
     assert_eq!(heights, [5.0, 13.0]);
-    let obstacles =
-        crate::structure_store::load_obstacle_set(output.path(), output.path(), 49.78, 14.17)
-            .unwrap();
+    crate::square_obstacle_index::write_square_obstacle_index(
+        &output.path().join("z9/276/174"),
+        grid::Square { x: 276, y: 174 },
+    )
+    .unwrap();
+    let obstacles = crate::structure_store::load_obstacle_set(output.path(), 49.78, 14.17).unwrap();
     let (_, height) =
         crate::structure_store::point_inside_footprint(&obstacles, 49.78008, 14.17010).unwrap();
     assert_eq!(height, 5.0);
@@ -118,11 +119,13 @@ fn real_parts_and_courtyards_reach_native_json_and_png() {
     for case in cases {
         let root = Path::new(case["root"].as_str().unwrap());
         let (lat, lon) = (case["lat"].as_f64().unwrap(), case["lon"].as_f64().unwrap());
-        let index = super::build_square_index(
+        let arrow = root
+            .join(case["square"].as_str().unwrap())
+            .join("structures.arrow");
+        let index = super::build_obstacle_index_from_arrow_bytes(
             grid::square_of(lat, lon),
-            &root
-                .join(case["square"].as_str().unwrap())
-                .join("structures.arrow"),
+            &std::fs::read(&arrow).unwrap(),
+            &arrow,
         )
         .unwrap();
         let obstacles = noise_compute::propagation::obstacle_index::ObstacleSet {

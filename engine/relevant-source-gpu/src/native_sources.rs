@@ -6,7 +6,7 @@ use grid::Square;
 use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_compute::{normalize::*, square_country_city::SquareCountryCity};
 use square_store::grid_cols::*;
-use std::{io::Cursor, path::Path, sync::Arc};
+use std::{io::Cursor, path::Path};
 use tile_painter::corner_store::SourceIdentity;
 
 #[path = "native_points.rs"]
@@ -47,13 +47,15 @@ pub fn load_sources(
             has_surface_arrow = true;
             if name == "structures" {
                 has_structures = true;
-                let index = source_reader::structure_store::build_obstacle_index_from_arrow_bytes(
-                    *square,
-                    &bytes,
-                    Path::new(&relative),
+                // The same `structures.qoix` the popup maps, checked against
+                // these manifest-verified Arrow bytes.
+                let index = source_reader::square_obstacle_index::load_square_obstacle_index(
+                    &root.join(grid::square_name(*square)),
+                    Some(source_reader::square_obstacle_index::structures_fingerprint(&bytes)),
                 )
-                .map_err(anyhow::Error::msg)?;
-                indexes.push(Arc::new(index));
+                .map_err(anyhow::Error::msg)?
+                .with_context(|| format!("{relative} vanished while loading"))?;
+                indexes.push(index);
             }
             let reader = FileReader::try_new(Cursor::new(bytes), None)?;
             if name == "structures" {

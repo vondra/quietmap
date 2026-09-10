@@ -48,43 +48,46 @@ pub fn seal(store: &mut CornerStore, epoch: u64, receipt: GenerationReceipt) -> 
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS edge_bundle(
         id INTEGER PRIMARY KEY CHECK(id=1),epoch INTEGER NOT NULL CHECK(epoch>=0),
-        sources BLOB NOT NULL,rasters BLOB NOT NULL,code BLOB NOT NULL,producer BLOB NOT NULL);",
+        sources BLOB NOT NULL,code BLOB NOT NULL,producer BLOB NOT NULL);",
     )?;
     tx.execute(
-        "INSERT OR IGNORE INTO edge_bundle VALUES(1,?1,?2,?3,?4,?5)",
+        "INSERT OR IGNORE INTO edge_bundle VALUES(1,?1,?2,?3,?4)",
         rusqlite::params![
             epoch,
             receipt.sources.as_slice(),
-            receipt.rasters.as_slice(),
             receipt.code.as_slice(),
             receipt.producer.as_slice()
         ],
     )?;
-    let stored: (u64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) = tx.query_row(
-        "SELECT epoch,sources,rasters,code,producer FROM edge_bundle WHERE id=1",
-        [],
-        |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-            ))
-        },
-    )?;
     ensure!(
-        stored.0 == epoch
-            && stored.1 == receipt.sources
-            && stored.2 == receipt.rasters
-            && stored.3 == receipt.code
-            && stored.4 == receipt.producer,
+        read_stored_receipt(&tx)? == (epoch, receipt),
         "edge bundle belongs to another coordinator epoch or generation receipt"
     );
     tx.commit()?;
     File::open(&store.path)?.sync_all()?;
     durable_directory::sync_directory(store.path.parent().context("edge bundle has no parent")?)?;
     Ok(())
+}
+
+fn read_stored_receipt(connection: &Connection) -> Result<(u64, GenerationReceipt)> {
+    let (epoch, sources, code, producer): (u64, Vec<u8>, Vec<u8>, Vec<u8>) = connection.query_row(
+        "SELECT epoch,sources,code,producer FROM edge_bundle WHERE id=1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    let digest = |bytes: Vec<u8>, name: &str| -> Result<[u8; 32]> {
+        bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid {name} digest"))
+    };
+    Ok((
+        epoch,
+        GenerationReceipt {
+            sources: digest(sources, "source")?,
+            code: digest(code, "code")?,
+            producer: digest(producer, "producer")?,
+        },
+    ))
 }
 
 pub fn read_receipt(
@@ -95,42 +98,12 @@ pub fn read_receipt(
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("open edge receipt {}", path.display()))?;
     super::corner_store::verify_generation(&connection, generation, owner)?;
-    let stored: (u64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) = connection.query_row(
-        "SELECT epoch,sources,rasters,code,producer FROM edge_bundle WHERE id=1",
-        [],
-        |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-            ))
-        },
-    )?;
-    let receipt = GenerationReceipt {
-        sources: stored
-            .1
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid source digest"))?,
-        rasters: stored
-            .2
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid raster digest"))?,
-        code: stored
-            .3
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid code digest"))?,
-        producer: stored
-            .4
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid producer digest"))?,
-    };
+    let (epoch, receipt) = read_stored_receipt(&connection)?;
     ensure!(
         receipt.generation() == generation && receipt.code == SURFACE_CODE_DIGEST,
         "edge bundle generation receipt mismatch"
     );
-    Ok((stored.0, receipt))
+    Ok((epoch, receipt))
 }
 
 pub fn read(path: &Path, generation: CornerGeneration) -> Result<EdgeBundle> {
@@ -146,42 +119,11 @@ pub fn read(path: &Path, generation: CornerGeneration) -> Result<EdgeBundle> {
         y: owner_y,
     };
     super::corner_store::verify_generation(&connection, generation, owner)?;
-    let stored: (u64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) = connection.query_row(
-        "SELECT epoch,sources,rasters,code,producer FROM edge_bundle WHERE id=1",
-        [],
-        |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-            ))
-        },
-    )?;
-    let receipt = GenerationReceipt {
-        sources: stored
-            .1
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid source digest"))?,
-        rasters: stored
-            .2
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid raster digest"))?,
-        code: stored
-            .3
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid code digest"))?,
-        producer: stored
-            .4
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid producer digest"))?,
-    };
+    let (epoch, receipt) = read_stored_receipt(&connection)?;
     ensure!(
         receipt.generation() == generation && receipt.code == SURFACE_CODE_DIGEST,
         "edge bundle generation receipt mismatch"
     );
-    let epoch = stored.0;
     let expected = owner_edge_corners(owner);
     ensure!(
         stored_coordinates(&connection)? == expected,
@@ -352,7 +294,6 @@ mod tests {
         let owner = Square { x: 276, y: 173 };
         let receipt = GenerationReceipt {
             sources: [1; 32],
-            rasters: [2; 32],
             code: SURFACE_CODE_DIGEST,
             producer: [4; 32],
         };
@@ -462,7 +403,6 @@ mod tests {
         let owner = Square { x: 0, y: 0 };
         let receipt = GenerationReceipt {
             sources: [3; 32],
-            rasters: [4; 32],
             code: SURFACE_CODE_DIGEST,
             producer: [6; 32],
         };

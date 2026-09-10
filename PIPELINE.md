@@ -45,14 +45,18 @@ This controller does not repaint heatmaps or change a served generation.
 ## Base rasters and OSM
 
 The geophysical channels are DEM, forest and IMD. Their runtime files are
-`z9/x/y/dem.i16be`, `forest.u8`, `imd.u8`; `rasters.sqlite` is the publication
-authority. Each channel covers all 262144 z9 coordinates. A catalog entry with
-no digest declares an empty square; it does not require an empty raster file.
+`z9/x/y/dem.i16be`, `forest.u8`, `imd.u8`, one per square and channel for all
+262144 z9 coordinates. A file has three states: the whole native window bytes;
+a 0-byte file, which declares coverage-verified absence and samples as the
+channel's ocean value (DEM 0, forest 0, IMD 100); and missing, which is an error,
+so an undeclared square never computes. There is no raster catalog or generation
+id: identity is the release name and the code version.
 
-The source converters live in `scripts/rasters/`; their geographic intermediate
-rasters must be repacked using the native z9 raster writer before consumption.
-Keep the catalog with its native files. A legacy `<year>/rasters/` directory
-alone is not a complete native prepared year.
+The source converters live in `scripts/rasters/`; `scripts/rasters/repack-native-z9.py`
+derives coverage from the official source catalogs and runs `raster-repack`, which
+writes every square of a channel (window bytes or 0-byte) and refuses land outside
+verified coverage. A legacy `<year>/rasters/` directory alone is not a complete
+native prepared year.
 
 `scripts/osm-extract.sh` writes roads, railways, buildings, industrial, leisure,
 barriers, airport areas and airport lines into the same z9 layout. Absent OSM
@@ -70,6 +74,13 @@ view. Preserve the regional IPR input for the two Prague reference squares.
 If structures were built into a separate tree, validate their schema and grid before
 joining them into the prepared year. Reconcile every pending square after the builder
 finishes. Preserve existing files and producer completion receipts.
+
+Right after structures, `engine/target/release/obstacle-index-build YEAR` writes
+`structures.qoix` beside every `structures.arrow` (the screening edge grid, mapped by
+the popup and the painter). The step is parallel over squares and idempotent: a file
+whose header names the current engine and the current Arrow bytes is kept. A
+`structures.arrow` without a current `structures.qoix` is a query error naming this
+step; rerun it after any structures refresh.
 
 Run `scripts/square-country-city/build_square_country_city.py --prepared-dir YEAR
 --boundaries CGAZ --jobs N` after extraction. It writes `square-country-city.bin`
@@ -112,8 +123,8 @@ National buildings writes only existing `buildings.arrow` rows.
 
 After national building refinement, refresh affected `structures.arrow` files with
 the original GHSL/regional inputs. Both emission attributes and screening heights
-are embedded in structures; enrichment alone cannot update them. Refresh downstream
-obstacle indexes after this step. Do not reuse a stale index as a final artifact.
+are embedded in structures; enrichment alone cannot update them. Rerun
+`obstacle-index-build` after this step.
 
 National road coverage is limited to actual manifest adapters. Compare used
 `source_id` distributions with the reference generation before claiming equal quality. Missing adapters
@@ -152,9 +163,10 @@ Validate all seven noise layers: road, rail, building, industrial, aircraft airb
 aircraft cruise and aircraft ground. Validate absence through producer coverage and
 receipts, not by requiring an Arrow file for an empty layer in every ocean square.
 
-After the final Arrow/structures generation, refresh obstacle indexes. Any persistent
-popup acceleration output must identify its input generation and preserve the exact
-kernel as its correctness reference.
+After the final Arrow/structures generation, rerun `obstacle-index-build`.
+`build-world.py` reruns the step itself before the audit and fails when the rerun
+writes anything (a `structures.arrow` changed after the step); the audit refuses a
+square whose `structures.qoix` is missing.
 
 Compare actual popup levels, source provenance, counts and screening against the reference generation
 on city, airport, quiet, coast, border and polar cases. Include adjacent clicks in

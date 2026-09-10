@@ -2,11 +2,13 @@
 // Run: cd server && node --import tsx --test src/engine/raster-grid-renderer.test.ts
 
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
 import test from 'node:test'
 import { demColor, forestColor, imdColor, renderGridTile } from './raster-grid-renderer.js'
 
-// Prague 12-cell snapshot: squares 275-276/172-173 carry dem/forest/imd.
-const PRAGUE_PREPARED = '/data/mixeduse1/r260904/work/prague-regional-12cell-20260906/prepared/2026'
+// The published native raster year; the real-file tests skip until it exists.
+const PRAGUE_PREPARED = '/data/mixeduse2/r260910/rasters/2026'
+const PRAGUE_RASTERS = { skip: !existsSync(`${PRAGUE_PREPARED}/z9/276/173/dem.i16be`) }
 
 test('dem palette: lowlands green, peaks white, water dark', () => {
   assert.deepEqual(demColor(-5), [0x2d, 0x6a, 0x4f, 160])
@@ -31,7 +33,7 @@ test('imd palette: transparent when open, red when sealed', () => {
   assert.ok(sealed[0] > sealed[1] && sealed[3] > 150)
 })
 
-test('square window matches the stored file size (geometry cross-check)', async () => {
+test('square window matches the stored file size (geometry cross-check)', PRAGUE_RASTERS, async () => {
   // engine/grid/src/raster.rs: byte_len = rows * columns * bytesPerNode.
   // A wrong edge formula still passes bounds checks but reads garbage —
   // this pins the ported geometry to the real files.
@@ -49,7 +51,7 @@ test('square window matches the stored file size (geometry cross-check)', async 
   }
 })
 
-test('renders a real dem tile over Prague', async () => {
+test('renders a real dem tile over Prague', PRAGUE_RASTERS, async () => {
   // z10 tile covering Vaclavak (50.0755N, 14.4378E).
   const z = 10
   const x = Math.floor(((14.4378 + 180) / 360) * 2 ** z)
@@ -65,7 +67,7 @@ test('renders a real dem tile over Prague', async () => {
   assert.ok(png3.length > 500)
 })
 
-test('ocean tile outside prepared data is transparent', async () => {
+test('ocean tile outside prepared data is transparent', PRAGUE_RASTERS, async () => {
   const png = await renderGridTile(PRAGUE_PREPARED, 'dem', 6, 20, 20)
   assert.ok(png.length > 100 && png.length < 2000)
 })

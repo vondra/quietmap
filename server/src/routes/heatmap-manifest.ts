@@ -11,8 +11,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import { WORLD_BASE_ZOOM } from '../generation-contract.mjs'
-import { ALLOWED_LAYERS, MANIFEST_FILENAME, MIN_ZOOM, PMTILES_BASE } from './heatmap-shared.js'
+import { ALLOWED_LAYERS, MANIFEST_FILENAME, MIN_ZOOM, PMTILES_BASE, WORLD_BASE_ZOOM } from './heatmap-shared.js'
 
 const BUILD_ID = /^b\d+$/
 const SHA256 = /^[a-f0-9]{64}$/

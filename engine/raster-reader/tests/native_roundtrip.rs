@@ -1,9 +1,8 @@
-//! Actual three-channel native-byte repack and strict z9 mmap sampling, including seams and poles.
+//! Actual three-channel native-byte repack (data and 0-byte ocean files) and strict z9 mmap sampling, including seams and poles.
 
 use grid::raster::{RasterWindow, SOURCE_TILE_SIDE};
 use grid::{square_of, Square};
 use noise_compute::types::RasterSampler;
-use raster_reader::catalog::{begin_channel, read_channel};
 use raster_reader::channel::Channel;
 use raster_reader::repack::{NativeSources, SourceKey};
 use raster_reader::{CheckedRasters, RealRasters};
@@ -110,18 +109,35 @@ fn all_three_channels_repack_exact_nodes_and_preserve_sampling_or_report_missing
         write_sources(&source, channel, &keys);
         let mut sources =
             NativeSources::new(&source, channel, keys.clone(), HashSet::new()).unwrap();
-        let database = begin_channel(&prepared, channel, &"a".repeat(64)).unwrap();
         for square in squares {
-            assert!(sources
-                .publish_square(&database, &prepared, square)
-                .unwrap()
-                .is_some());
+            assert_eq!(
+                sources.publish_square(&prepared, square).unwrap(),
+                channel.byte_len(RasterWindow::for_square(square)) as u64
+            );
         }
+        // Re-running the publisher accepts identical bytes and refuses different ones.
+        let published = channel.path(&prepared, squares[0]);
+        let original = std::fs::read(&published).unwrap();
         assert_eq!(
-            sources.publish_square(&database, &prepared, ocean).unwrap(),
-            None
+            sources.publish_square(&prepared, squares[0]).unwrap(),
+            original.len() as u64
         );
-        assert_eq!(read_channel(&prepared, channel).unwrap().len(), 7);
+        let mut altered = original.clone();
+        altered[0] ^= 1;
+        std::fs::write(&published, &altered).unwrap();
+        assert!(sources
+            .publish_square(&prepared, squares[0])
+            .unwrap_err()
+            .contains("refusing to replace different published raster"));
+        std::fs::write(&published, &original).unwrap();
+        assert_eq!(sources.publish_square(&prepared, ocean).unwrap(), 0);
+        assert_eq!(
+            std::fs::metadata(channel.path(&prepared, ocean))
+                .unwrap()
+                .len(),
+            0,
+            "coverage-verified absence is a 0-byte file"
+        );
         let mut missing = keys.clone();
         missing.insert((1, 0));
         assert!(NativeSources::new(&source, channel, missing, HashSet::new()).is_err());
@@ -133,9 +149,9 @@ fn all_three_channels_repack_exact_nodes_and_preserve_sampling_or_report_missing
         )
         .unwrap();
         assert!(unknown
-            .publish_square(&database, &prepared, square_of(1.25, 0.25))
+            .publish_square(&prepared, square_of(1.25, 0.25))
             .is_err());
-        assert_eq!(read_channel(&prepared, channel).unwrap().len(), 7);
+        assert!(!channel.path(&prepared, square_of(1.25, 0.25)).exists());
     }
     let rasters = RealRasters::new(&prepared);
     let mut key = (i32::MIN, i32::MIN);
@@ -207,27 +223,22 @@ fn all_three_channels_repack_exact_nodes_and_preserve_sampling_or_report_missing
                 );
             }
         }
-        let mut altered = bytes.clone();
-        altered[0] ^= 1;
-        for corrupt in [b"broken".as_slice(), altered.as_slice()] {
-            std::fs::write(channel.path(&prepared, square), corrupt).unwrap();
-            let broken = RealRasters::new(&prepared);
-            let checked = CheckedRasters::new(&broken);
-            let mut profile = noise_compute::propagation::PathProfile::default();
-            checked.build_path_profile(0.25, 0.25, 0.2501, 0.2501, 15.0, &mut profile);
-            assert!(
-                checked.ensure_valid().is_err(),
-                "{channel:?} cannot publish a falsely empty profile"
-            );
-            assert!(profile.elevation_m.iter().any(|value| value.is_nan()));
-            if channel == Channel::Imd {
-                assert!(checked.ground_g(0.25, 0.25).is_nan());
-            }
+        // A data file of the wrong length is neither data nor a 0-byte ocean declaration.
+        std::fs::write(channel.path(&prepared, square), b"broken").unwrap();
+        let broken = RealRasters::new(&prepared);
+        let checked = CheckedRasters::new(&broken);
+        let mut profile = noise_compute::propagation::PathProfile::default();
+        checked.build_path_profile(0.25, 0.25, 0.2501, 0.2501, 15.0, &mut profile);
+        assert!(
+            checked.ensure_valid().is_err(),
+            "{channel:?} cannot publish a falsely empty profile"
+        );
+        assert!(profile.elevation_m.iter().any(|value| value.is_nan()));
+        if channel == Channel::Imd {
+            assert!(checked.ground_g(0.25, 0.25).is_nan());
         }
         std::fs::write(channel.path(&prepared, square), &bytes).unwrap();
     }
-    assert!(begin_channel(&prepared, Channel::Dem, &"b".repeat(64)).is_err());
-
     // The real CLI completes only its own channel; Stage1 can consume DEM
     // without pretending the unpublished forest/IMD channels are available.
     let cli_source = work.path().join("cli-source");
@@ -253,7 +264,7 @@ fn all_three_channels_repack_exact_nodes_and_preserve_sampling_or_report_missing
         .stdin
         .take()
         .unwrap()
-        .write_all(br#"{"channel":"dem","tiles":[[0,0]],"unknown":[],"authority":"fixture"}"#)
+        .write_all(br#"{"channel":"dem","tiles":[[0,0]],"unknown":[]}"#)
         .unwrap();
     let result = command.wait_with_output().unwrap();
     assert!(
@@ -261,12 +272,28 @@ fn all_three_channels_repack_exact_nodes_and_preserve_sampling_or_report_missing
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
-    assert_eq!(
-        read_channel(&cli_output, Channel::Dem).unwrap().len(),
-        512 * 512
-    );
+    let mut ocean_files = 0;
+    let mut data_files = 0;
+    for x in 0..512 {
+        for y in 0..512 {
+            let square = Square { x, y };
+            let length = std::fs::metadata(Channel::Dem.path(&cli_output, square))
+                .expect("every square has a DEM file")
+                .len();
+            if length == 0 {
+                ocean_files += 1;
+            } else {
+                assert_eq!(
+                    length,
+                    Channel::Dem.byte_len(RasterWindow::for_square(square)) as u64
+                );
+                data_files += 1;
+            }
+        }
+    }
+    assert_eq!(ocean_files + data_files, 512 * 512);
+    assert!(data_files > 0 && ocean_files > data_files);
     let dem_only = RealRasters::new(&cli_output);
-    assert!(dem_only.has_data());
     let checked = CheckedRasters::new(&dem_only);
     assert_eq!(
         checked.elevation(0.25, 0.25),
@@ -276,7 +303,7 @@ fn all_three_channels_repack_exact_nodes_and_preserve_sampling_or_report_missing
     assert!(checked.ground_g(0.25, 0.25).is_nan());
     assert!(checked.ensure_valid().is_err());
 
-    // A source disagreement cannot publish a partial file or a trusted SQLite row.
+    // A source disagreement cannot publish a partial file.
     use std::io::{Seek, SeekFrom, Write};
     let source = work.path().join("dem");
     let mut file = std::fs::OpenOptions::new()
@@ -288,11 +315,7 @@ fn all_three_channels_repack_exact_nodes_and_preserve_sampling_or_report_missing
     file.write_all(&32700_i16.to_be_bytes()).unwrap();
     drop(file);
     let failed = work.path().join("failed");
-    let database = begin_channel(&failed, Channel::Dem, &"a".repeat(64)).unwrap();
     let mut sources = NativeSources::new(&source, Channel::Dem, keys, HashSet::new()).unwrap();
-    assert!(sources
-        .publish_square(&database, &failed, squares[1])
-        .is_err());
+    assert!(sources.publish_square(&failed, squares[1]).is_err());
     assert!(!Channel::Dem.path(&failed, squares[1]).exists());
-    assert!(read_channel(&failed, Channel::Dem).unwrap().is_empty());
 }

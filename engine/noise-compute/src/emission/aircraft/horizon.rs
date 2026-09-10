@@ -18,7 +18,7 @@
 //! Input is the DEM terrain surface (DSM-biased: GLO-30 includes canopy
 //! and buildings), NOT bare-earth — forested ridges screen slightly
 //! high. `build` is sampler-agnostic so the popup (`RealRasters` bilinear)
-//! and heatmap receiver grids (`FusedTileZ13`) share one implementation.
+//! and the painters' `FusedGrid` share one implementation.
 
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use std::sync::OnceLock;

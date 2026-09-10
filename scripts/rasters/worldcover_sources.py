@@ -170,8 +170,8 @@ def categorical_imd(worldcover: np.ndarray, cci: np.ndarray | None = None) -> np
     return result
 
 
-def complete_imd_coverage(root: Path, land: set[tuple[int, int]]) -> tuple[set, set, str]:
-    digest = validate_cci_source(root)
+def complete_imd_coverage(root: Path, land: set[tuple[int, int]]) -> tuple[set, set]:
+    validate_cci_source(root)
     inventory = read_catalog(root)
     tiles = land | set().union(*(native_tiles(key) for key in inventory))
     unknown = set()
@@ -183,4 +183,4 @@ def complete_imd_coverage(root: Path, land: set[tuple[int, int]]) -> tuple[set, 
             classes = cci_tile_classes(source, tile, grid=361)
             if not np.all(np.isin(classes, tuple(CCI_WORLDCOVER))):
                 unknown.add(tile)
-    return tiles - unknown, unknown, digest
+    return tiles - unknown, unknown

@@ -20,15 +20,11 @@ use std::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CornerGeneration(pub [u8; 32]);
 impl CornerGeneration {
-    pub fn from_manifests(
-        sources: [u8; 32],
-        rasters: [u8; 32],
-        code: [u8; 32],
-        producer: [u8; 32],
-    ) -> Self {
+    /// Rasters carry no pin of their own: their identity is the release name and the code.
+    pub fn from_manifests(sources: [u8; 32], code: [u8; 32], producer: [u8; 32]) -> Self {
         let mut hash = Sha256::new();
-        hash.update(b"surface-corners-z18-v3");
-        for digest in [sources, rasters, code, producer] {
+        hash.update(b"surface-corners-z18-v4");
+        for digest in [sources, code, producer] {
             hash.update(digest);
         }
         Self(hash.finalize().into())

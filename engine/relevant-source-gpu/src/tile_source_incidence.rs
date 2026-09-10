@@ -1,6 +1,6 @@
 //! Metric tile lattice and clipped source incidence for corners and neighbouring blocks.
 
-use raster_reader::fused_tile_z13::TileBbox;
+use raster_reader::tile_bbox::TileBbox;
 use rayon::prelude::*;
 
 use crate::source_frame::{
