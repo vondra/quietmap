@@ -25,6 +25,27 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     init_rayon_pool(cli.max_threads)?;
     match cli.cmd {
+        Cmd::CruiseFinishPlan {
+            spill_dir,
+            producer_executable,
+            producer_sha256,
+            output,
+        } => {
+            aircraft_extract::stage_2b::plan_cruise_finish(
+                &spill_dir,
+                &producer_executable,
+                &producer_sha256,
+                &output,
+            )?;
+        }
+
+        Cmd::CruiseCensus {
+            segments_dir,
+            output,
+        } => {
+            let paths = cli_validate::list_segments_day_paths_multi(&segments_dir)?;
+            aircraft_extract::stage_2b::census_cruise_inputs(&paths, &output)?;
+        }
         Cmd::ValidateSegments {
             adsb_cache,
             segments_dir,
@@ -66,6 +87,8 @@ fn main() -> Result<()> {
             ga_segments_dir,
             ga_adsb_cache,
             fail_on_ga_cruise,
+            cruise_phase,
+            cruise_spill_disk_budget_bytes,
         } => cli_run_all::run_all(
             adsb_cache,
             prepared_year_dir,
@@ -81,6 +104,8 @@ fn main() -> Result<()> {
             ga_adsb_cache,
             fail_on_ga_cruise,
             segments_dir,
+            cruise_phase,
+            cruise_spill_disk_budget_bytes,
         )?,
     }
     Ok(())

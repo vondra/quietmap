@@ -339,3 +339,39 @@ fn merge_by_square(
     }
     a
 }
+
+#[test]
+fn retained_spill_checks_input_window_inventory_and_refuses_partial_fold_resume() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("2025-01-01.arrow");
+    crate::arrow_io::write_segments(&input, &[cruise(42, 50.1, 14.2, 50.1, 14.20001)]).unwrap();
+    let prepared = directory.path().join("prepared");
+    let paths = [input];
+    run_stage_2b_phase(&paths, &prepared, 1, None, false, CruisePhase::Spill).unwrap();
+    assert!(!prepared.exists());
+    let spill = directory.path().join("spill_cruise");
+    let identities = receipt::input_identities(&paths).unwrap();
+    assert!(receipt::verify(&spill, &identities, 2, None, false).is_err());
+    let mut changed = identities.clone();
+    changed[0].1.push_str("changed");
+    assert!(receipt::verify(&spill, &changed, 1, None, false).is_err());
+    let parts: Vec<_> = (0..SPILL_HASH_BUCKETS)
+        .flat_map(|bucket| list_spill_parts(&spill_bucket_dir(&spill, bucket)).unwrap())
+        .collect();
+    assert!(!parts.is_empty());
+    let hidden = parts[0].with_extension("hidden");
+    std::fs::rename(&parts[0], &hidden).unwrap();
+    assert!(receipt::verify(&spill, &identities, 1, None, false).is_err());
+    std::fs::rename(&hidden, &parts[0]).unwrap();
+    // Recreate the receipt because rename changed the recorded inode ctime.
+    std::fs::remove_file(spill.join("state.sqlite")).unwrap();
+    receipt::create(&spill, &identities, 1, None, 0).unwrap();
+    receipt::verify(&spill, &identities, 1, None, false).unwrap();
+    receipt::begin_fold(&spill).unwrap();
+    assert!(receipt::begin_fold(&spill).is_err());
+    let error =
+        run_stage_2b_phase(&paths, &prepared, 1, None, false, CruisePhase::Finish).unwrap_err();
+    assert!(error.to_string().contains("partial-fold resume"));
+    assert!(parts[0].exists());
+    assert!(!prepared.exists());
+}

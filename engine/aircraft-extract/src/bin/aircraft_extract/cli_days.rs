@@ -1,6 +1,6 @@
 //! RAM-bounded day extraction preserves successful work but fails if any requested day is missing.
 
-use crate::{ClassFilterArg, Feed, FromStage, cli_validate::*};
+use crate::{cli_validate::*, ClassFilterArg, Feed, FromStage};
 use aircraft_extract::memory::max_concurrent_days;
 use aircraft_extract::{
     progress::ts, source::FlightSource, source_adsb_tar::AdsbTarSource, stage_0::run_stage_0,

@@ -15,28 +15,47 @@ use arrow::record_batch::RecordBatch;
 use crate::arrow_schemas;
 use crate::flight::FlightSegment;
 
-use super::{for_each_batch, required_column, write_record_batches};
+use super::{for_each_batch, required_column, write_record_batch_stream};
 
 /// Rows per record batch. A whole-day Stage 1 shard is ~100M segments; a
 /// single batch would be ~8 GB resident on read, which Stage 2B's
 /// batch-streaming reader can't bound (it streams whole batches). ~1M rows
 /// ≈ 80 MB decoded keeps the per-batch read small. See [`for_each_batch`].
-const WRITE_CHUNK_ROWS: usize = 1_000_000;
+pub(crate) const SEGMENT_WRITE_CHUNK_ROWS: usize = 1_000_000;
 
 pub fn write_segments(path: &Path, rows: &[FlightSegment]) -> Result<()> {
-    write_segments_chunked(path, rows, WRITE_CHUNK_ROWS)
+    write_segments_chunked(path, rows, SEGMENT_WRITE_CHUNK_ROWS)
 }
 
 fn write_segments_chunked(path: &Path, rows: &[FlightSegment], chunk_rows: usize) -> Result<()> {
-    let schema = arrow_schemas::segments_schema();
+    let mut metadata = arrow_schemas::segments_schema().metadata().clone();
+    let (mut runs, mut callsign_bytes, mut previous) = (0_u64, 0_u64, None);
+    for row in rows {
+        if previous != Some(row.flight_id) {
+            runs += 1;
+            callsign_bytes += row.callsign.len() as u64;
+            previous = Some(row.flight_id);
+        }
+    }
+    // Runs upper-bound distinct events without a second world-sized hash set.
+    metadata.insert("flight_runs".into(), runs.to_string());
+    metadata.insert(
+        "flight_run_callsign_bytes".into(),
+        callsign_bytes.to_string(),
+    );
+    let schema = Arc::new(
+        arrow_schemas::segments_schema()
+            .as_ref()
+            .clone()
+            .with_metadata(metadata),
+    );
     let batches = rows
         .chunks(chunk_rows.max(1))
-        .map(|chunk| build_segments_batch(chunk, &schema))
-        .collect::<Result<Vec<_>>>()?;
-    write_record_batches(path, &schema, &batches)
+        .map(|chunk| build_segments_batch(chunk, &schema));
+    write_record_batch_stream(path, &schema, batches)
 }
 
-/// Build one segments record batch from up to `WRITE_CHUNK_ROWS` rows.
+/// Build one segments record batch from up to `SEGMENT_WRITE_CHUNK_ROWS` rows.
 fn build_segments_batch(rows: &[FlightSegment], schema: &Arc<Schema>) -> Result<RecordBatch> {
     let n = rows.len();
     let mut flight_id = UInt64Builder::with_capacity(n);
@@ -215,15 +234,15 @@ fn segments_from_batch(b: &RecordBatch) -> Result<Vec<FlightSegment>> {
 /// Decode a record batch at most this many rows at a time. A legacy
 /// single-batch day shard holds ~100M rows in ONE batch; decoding it whole
 /// would materialise ~8 GB of `FlightSegment`s at once (on top of the ~8 GB
-/// arrow batch), so slice it. Newer shards are written in `WRITE_CHUNK_ROWS`
+/// arrow batch), so slice it. Newer shards are written in `SEGMENT_WRITE_CHUNK_ROWS`
 /// batches and decode in one slice. ~256k rows ≈ 20 MB decoded.
-const READ_CHUNK_ROWS: usize = 262_144;
+pub(crate) const SEGMENT_READ_CHUNK_ROWS: usize = 262_144;
 
 pub(crate) fn for_each_segment_batch(
     path: &Path,
     f: impl FnMut(Vec<FlightSegment>) -> Result<()>,
 ) -> Result<()> {
-    for_each_segment_slice(path, READ_CHUNK_ROWS, f)
+    for_each_segment_slice(path, SEGMENT_READ_CHUNK_ROWS, f)
 }
 
 fn for_each_segment_slice(

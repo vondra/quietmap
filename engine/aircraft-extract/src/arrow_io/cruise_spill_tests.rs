@@ -57,3 +57,44 @@ fn empty_rows_writes_valid_arrow() {
     let back = read_cruise_spill(&path).unwrap();
     assert!(back.is_empty());
 }
+
+#[test]
+fn counted_spill_keeps_all_flights_and_stream_callback_failure_is_propagated() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("spill.arrow");
+    let mut rows = vec![row(1, 500), row(2, 2)];
+    rows[0].top_candidates[0].callsign = "A".repeat(8192);
+    write_cruise_spill(&path, &rows).unwrap();
+    let counts = CruiseSpillCounts::read(&path).unwrap();
+    assert_eq!((counts.rows, counts.fids, counts.candidates), (2, 502, 52));
+    assert_eq!(
+        counts.callsign_bytes,
+        rows.iter()
+            .flat_map(|row| &row.top_candidates)
+            .map(|candidate| candidate.callsign.len())
+            .sum::<usize>()
+    );
+    let mut consumed = 0;
+    let error = for_each_cruise_spill(&path, |_| {
+        consumed += 1;
+        anyhow::bail!("consumer stopped")
+    })
+    .unwrap_err();
+    assert_eq!(consumed, 1);
+    assert!(error.to_string().contains("consumer stopped"));
+    assert_eq!(read_cruise_spill(&path).unwrap().len(), 2);
+}
+
+#[test]
+fn ipc_byte_bound_covers_alignment_and_count_metadata_growth() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("spill.arrow");
+    let overhead = spill_file_overhead_bound().unwrap();
+    for (rows, fids) in [(0, 0), (1, 1), (17, 51), (1000, 200)] {
+        let rows: Vec<_> = (0..rows).map(|index| row(index, fids)).collect();
+        let counts = CruiseSpillCounts::from_rows(&rows);
+        let payload = counts.encoded_buffers_bytes();
+        write_cruise_spill(&path, &rows).unwrap();
+        assert!(path.metadata().unwrap().len() <= payload as u64 + overhead, "rows={} fids={} candidates={} strings={} actual={} payload={payload} overhead={overhead}", counts.rows, counts.fids, counts.candidates, counts.callsign_bytes, path.metadata().unwrap().len());
+    }
+}

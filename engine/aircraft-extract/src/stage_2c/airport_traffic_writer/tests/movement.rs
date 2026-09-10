@@ -100,6 +100,7 @@ fn flight_ids_touch_every_intersected_microseg() {
         &by_square_dir,
         std::slice::from_ref(&aerodrome),
         &prepared_year_dir,
+        &prepared_year_dir,
         1,
         365,
         None,

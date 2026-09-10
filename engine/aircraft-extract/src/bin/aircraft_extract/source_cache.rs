@@ -89,7 +89,7 @@ impl SourceCache {
             .collect::<Vec<_>>();
         anyhow::ensure!(fields.len() % 2 == 0, "invalid source path transport");
         let mut selected = BTreeMap::<String, Vec<PathBuf>>::new();
-        for pair in fields.chunks_exact(2) {
+        for pair in fields.as_chunks::<2>().0 {
             let day = std::str::from_utf8(pair[0])?;
             aircraft_extract::period::parse_date_id(day)?;
             let path = PathBuf::from(std::str::from_utf8(pair[1])?);
@@ -134,6 +134,81 @@ pub fn validate_ga_merge(dirs: &[PathBuf], root: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+/// Validate retained publisher receipts, without opening retired day intermediates.
+pub fn validate_shuffled_sources(
+    shuffled: &Path,
+    ga_root: Option<&Path>,
+    primary_root: &Path,
+    feed: crate::Feed,
+    primary_filter: ClassFilterArg,
+) -> Result<()> {
+    let receipts = aircraft_extract::shuffle::completion::source_receipts(shuffled)?;
+    for (window, root, filter) in [
+        (
+            "days",
+            matches!(feed, crate::Feed::Adsblol).then_some(primary_root),
+            primary_filter,
+        ),
+        ("ga_days", ga_root, ClassFilterArg::Ga),
+    ] {
+        let expected = crate::cli_validate::read_window_days(shuffled, window)?;
+        if window == "ga_days" {
+            anyhow::ensure!(
+                expected.is_empty() == root.is_none(),
+                "hybrid shuffle reuse requires its canonical --ga-adsb-cache"
+            );
+        }
+        let Some(root) = root else {
+            anyhow::ensure!(
+                !receipts.iter().any(|(name, _, _)| name == window),
+                "shuffled source receipts require their original feed and source cache"
+            );
+            continue;
+        };
+        if window == "ga_days" {
+            let selected = SourceCache::new(root, Path::new("."), filter).validate(None, None)?;
+            anyhow::ensure!(
+                selected
+                    .keys()
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    == expected,
+                "GA source sampling window differs from completed shuffle"
+            );
+        }
+        let mut covered = std::collections::BTreeSet::new();
+        for (_, receipt, _) in receipts.iter().filter(|(name, _, _)| name == window) {
+            let db = rusqlite::Connection::open_with_flags(
+                receipt,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )?;
+            let days = db
+                .prepare("SELECT DISTINCT day FROM sources ORDER BY day")?
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let days: Vec<_> = days.into_iter().filter(|d| expected.contains(d)).collect();
+            anyhow::ensure!(!days.is_empty(), "shuffle has an unrelated source receipt");
+            for day in &days {
+                anyhow::ensure!(
+                    covered.insert(day.clone()),
+                    "duplicate shuffled source receipt for {day}"
+                );
+            }
+            SourceCache::new(
+                root,
+                receipt.parent().context("missing source receipt parent")?,
+                filter,
+            )
+            .validate(Some(&days), Some("sources"))?;
+        }
+        anyhow::ensure!(
+            covered == expected,
+            "missing source receipts for shuffled sampling window"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +249,8 @@ mod tests {
                 None,
                 false,
                 Vec::new(),
+                aircraft_extract::stage_2b::CruisePhase::All,
+                None,
             )
         };
         run(FromStage::Stage0, FromStage::Stage0).unwrap();
@@ -213,16 +290,14 @@ mod tests {
             unreceipted.join("segments/2026-06-06.arrow"),
         )
         .unwrap();
-        assert!(
-            crate::cli_validate::validate_segments(
-                &unreceipted.join("segments"),
-                std::slice::from_ref(&day),
-                ClassFilterArg::Ga,
-                Feed::Adsblol,
-                &root
-            )
-            .is_err()
-        );
+        assert!(crate::cli_validate::validate_segments(
+            &unreceipted.join("segments"),
+            std::slice::from_ref(&day),
+            ClassFilterArg::Ga,
+            Feed::Adsblol,
+            &root
+        )
+        .is_err());
         std::fs::write(work.join("flights/2026-06-06.arrow"), b"changed parent").unwrap();
         assert!(run(FromStage::Stage1, FromStage::Stage1).is_err());
         assert!(validate_ga_merge(&[segments], Some(&root)).is_err());
@@ -252,6 +327,8 @@ mod tests {
                 None,
                 false,
                 Vec::new(),
+                aircraft_extract::stage_2b::CruisePhase::All,
+                None,
             )
         };
         let append = |work: &Path, day: &str, until| {
@@ -302,29 +379,23 @@ mod tests {
         validate_ga_merge(&[work.join("segments")], Some(&root)).unwrap();
         assert_eq!(first_identity(), original);
         assert_eq!(first_receipts(), receipts);
-        assert!(
-            append(&work, days[0], FromStage::Stage0)
-                .unwrap_err()
-                .to_string()
-                .contains("already exists")
-        );
+        assert!(append(&work, days[0], FromStage::Stage0)
+            .unwrap_err()
+            .to_string()
+            .contains("already exists"));
         let next = "2026-06-08";
-        assert!(
-            append(&work, next, FromStage::Shuffle)
-                .unwrap_err()
-                .to_string()
-                .contains("cannot append")
-        );
-        assert!(
-            run(
-                &work,
-                next,
-                FromStage::Stage0,
-                FromStage::Stage0,
-                ClassFilterArg::NonGa
-            )
-            .is_err()
-        );
+        assert!(append(&work, next, FromStage::Shuffle)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot append"));
+        assert!(run(
+            &work,
+            next,
+            FromStage::Stage0,
+            FromStage::Stage0,
+            ClassFilterArg::NonGa
+        )
+        .is_err());
         let legacy = temp.path().join("legacy");
         std::fs::create_dir_all(legacy.join("flights")).unwrap();
         std::fs::copy(
@@ -341,20 +412,16 @@ mod tests {
             &[],
         )
         .unwrap();
-        assert!(
-            append(&collision, days[1], FromStage::Stage0)
-                .unwrap_err()
-                .to_string()
-                .contains("already exists")
-        );
+        assert!(append(&collision, days[1], FromStage::Stage0)
+            .unwrap_err()
+            .to_string()
+            .contains("already exists"));
         std::fs::create_dir_all(work.join("segments_by_square")).unwrap();
         std::fs::write(work.join("segments_by_square/days"), days.join("\n")).unwrap();
-        assert!(
-            append(&work, next, FromStage::Stage0)
-                .unwrap_err()
-                .to_string()
-                .contains("cannot append")
-        );
+        assert!(append(&work, next, FromStage::Stage0)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot append"));
         assert!(!work.join("flights").join(format!("{next}.arrow")).exists());
         assert_eq!(first_identity(), original);
         assert_eq!(first_receipts(), receipts);
@@ -382,14 +449,14 @@ mod tests {
             None,
             false,
             Vec::new(),
+            aircraft_extract::stage_2b::CruisePhase::All,
+            None,
         )
         .unwrap();
-        assert!(
-            !work
-                .join("flights")
-                .join(format!("{}.arrow", days[1]))
-                .exists()
-        );
+        assert!(!work
+            .join("flights")
+            .join(format!("{}.arrow", days[1]))
+            .exists());
         let segments = work.join("segments");
         crate::cli_validate::validate_segments(
             &segments,
@@ -465,6 +532,8 @@ mod tests {
                 None,
                 false,
                 Vec::new(),
+                aircraft_extract::stage_2b::CruisePhase::All,
+                None,
             )
         };
         run(control).unwrap();
@@ -488,20 +557,16 @@ mod tests {
             )
         };
         let before = original();
-        assert!(
-            run(failed)
-                .unwrap_err()
-                .to_string()
-                .contains("incomplete extraction")
-        );
+        assert!(run(failed)
+            .unwrap_err()
+            .to_string()
+            .contains("incomplete extraction"));
         let failed_path = work.join("flights").join(format!("{failed}.arrow"));
         assert!(!failed_path.exists());
         let cache = SourceCache::new(&root, &work, ClassFilterArg::Ga);
-        assert!(
-            cache
-                .validate(Some(&[failed.into()]), Some("flights"))
-                .is_err()
-        );
+        assert!(cache
+            .validate(Some(&[failed.into()]), Some("flights"))
+            .is_err());
         let output = Command::new("python3")
             .arg(project.join("scripts/download-adsblol.py"))
             .args(["recover", "--source-root"])
@@ -520,11 +585,9 @@ mod tests {
             .validate(Some(&[control.into(), failed.into()]), Some("flights"))
             .unwrap();
         let selected = cache.validate(Some(&[failed.into()]), None).unwrap();
-        assert!(
-            selected[failed]
-                .iter()
-                .all(|path| path.to_string_lossy().contains("-prod-"))
-        );
+        assert!(selected[failed]
+            .iter()
+            .all(|path| path.to_string_lossy().contains("-prod-")));
         assert_eq!(
             aircraft_extract::stage_1::read_flights(&failed_path)
                 .unwrap()
@@ -545,13 +608,69 @@ mod tests {
         std::fs::write(parent.join("unselected.tar"), [0; 1024]).unwrap();
         let source = aircraft_extract::source_adsb_tar::AdsbTarSource::new("")
             .with_selected_archives(selected);
+        assert!(source
+            .read_day("2026-06-06")
+            .err()
+            .expect("unselected archive must fail")
+            .to_string()
+            .contains("native archive set differs"));
+    }
+    #[test]
+    fn shuffled_ga_sources_survive_intermediate_retirement_but_reject_other_exports() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("source");
+        catalog(&root, "staging", &["2026-06-06"], &[]);
+        let work = temp.path().join("work");
+        let run = |from, until| {
+            crate::cli_run_all::run_all(
+                root.clone(),
+                temp.path().join("prepared/2026"),
+                temp.path().join("rasters"),
+                work.clone(),
+                vec!["2026-06-06".into()],
+                None,
+                from,
+                until,
+                Feed::Adsblol,
+                ClassFilterArg::Ga,
+                None,
+                None,
+                false,
+                Vec::new(),
+                aircraft_extract::stage_2b::CruisePhase::All,
+                None,
+            )
+        };
+        run(FromStage::Stage0, FromStage::Shuffle).unwrap();
+        let receipt = work.join("source-receipts.sqlite");
+        let before = std::fs::read(&receipt).unwrap();
+        std::fs::remove_dir_all(work.join("flights")).unwrap();
+        std::fs::remove_dir_all(work.join("segments")).unwrap();
+        run(FromStage::Stage2a, FromStage::Stage2a).unwrap();
+        assert_eq!(std::fs::read(&receipt).unwrap(), before);
+        let other = temp.path().join("other");
+        catalog(&other, "prod", &["2026-06-06"], &[]);
+        assert!(validate_shuffled_sources(
+            &work.join("segments_by_square"),
+            None,
+            &other,
+            Feed::Adsblol,
+            ClassFilterArg::Ga
+        )
+        .is_err());
         assert!(
-            source
-                .read_day("2026-06-06")
-                .err()
-                .expect("unselected archive must fail")
-                .to_string()
-                .contains("native archive set differs")
+            validate_shuffled_sources(
+                &work.join("segments_by_square"),
+                None,
+                &root,
+                Feed::Adsbexchange,
+                ClassFilterArg::Ga
+            )
+            .is_err(),
+            "changing the feed cannot bypass source receipt validation"
         );
+        let db = rusqlite::Connection::open(&receipt).unwrap();
+        db.execute("UPDATE sources SET source_id=9", []).unwrap();
+        assert!(run(FromStage::Stage2a, FromStage::Stage2a).is_err());
     }
 }

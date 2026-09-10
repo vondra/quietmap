@@ -1,6 +1,6 @@
 //! Observed aircraft data processing on the canonical square grid.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::geo::{flat_dist, M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR};
 
@@ -67,12 +67,16 @@ fn dbscan_2d(
     let mut labels: Vec<Option<usize>> = vec![None; n];
     let mut visited = vec![false; n];
     let mut in_queue = vec![false; n];
+    let mut tested_coordinates = HashSet::new();
     let mut cluster_id: usize = 0;
     for i in 0..n {
         if visited[i] {
             continue;
         }
         visited[i] = true;
+        if !tested_coordinates.insert((vertices[i].0.to_bits(), vertices[i].1.to_bits())) {
+            continue;
+        }
         let neighbors = grid.region_query(vertices, i, eps_m);
         if neighbors.len() < min_samples {
             // Noise (may be reassigned to a cluster as a border point
@@ -91,12 +95,16 @@ fn dbscan_2d(
             head += 1;
             if !visited[j] {
                 visited[j] = true;
-                let inner = grid.region_query(vertices, j, eps_m);
-                if inner.len() >= min_samples {
-                    for k in inner {
-                        if !in_queue[k] {
-                            in_queue[k] = true;
-                            queue.push(k);
+                // Exact duplicate coordinates have the same complete neighborhood;
+                // retain every original member and its first-cluster border label.
+                if tested_coordinates.insert((vertices[j].0.to_bits(), vertices[j].1.to_bits())) {
+                    let inner = grid.region_query(vertices, j, eps_m);
+                    if inner.len() >= min_samples {
+                        for k in inner {
+                            if !in_queue[k] {
+                                in_queue[k] = true;
+                                queue.push(k);
+                            }
                         }
                     }
                 }
@@ -146,8 +154,10 @@ impl SpatialGrid {
         let mut coords_m: Vec<(f32, f32)> = Vec::with_capacity(n);
         let (mut min_x, mut min_y) = (f32::INFINITY, f32::INFINITY);
         for &(lat, lon) in vertices {
-            let x = lon * m_per_deg_lon;
-            let y = lat * M_PER_DEG_LAT;
+            let x = grid::geo::wrapped_longitude_delta(f64::from(vertices[0].1), f64::from(lon))
+                as f32
+                * m_per_deg_lon;
+            let y = (lat - vertices[0].0) * M_PER_DEG_LAT;
             coords_m.push((x, y));
             if x < min_x {
                 min_x = x;
@@ -206,8 +216,15 @@ impl SpatialGrid {
 /// primary axis (runway-like), centroid, spread, and bearing.
 fn fit_strip(members: &[(f32, f32)]) -> DiscoveredStrip {
     let n = members.len() as f32;
-    let mean_lat = members.iter().map(|v| v.0).sum::<f32>() / n;
-    let mean_lon = members.iter().map(|v| v.1).sum::<f32>() / n;
+    let mean_lat =
+        (members.iter().map(|v| f64::from(v.0)).sum::<f64>() / members.len() as f64) as f32;
+    let anchor_lon = f64::from(members[0].1);
+    let mean_lon = anchor_lon
+        + members
+            .iter()
+            .map(|v| grid::geo::wrapped_longitude_delta(anchor_lon, f64::from(v.1)))
+            .sum::<f64>()
+            / members.len() as f64;
 
     // Convert each (lat, lon) into local meters around the centroid
     // for stable PCA. cos(mid_lat) scaling matters at any latitude
@@ -219,7 +236,7 @@ fn fit_strip(members: &[(f32, f32)]) -> DiscoveredStrip {
         .iter()
         .map(|&(lat, lon)| {
             (
-                (lon - mean_lon) * m_per_deg_lon,
+                grid::geo::wrapped_longitude_delta(mean_lon, f64::from(lon)) as f32 * m_per_deg_lon,
                 (lat - mean_lat) * M_PER_DEG_LAT,
             )
         })
@@ -287,7 +304,7 @@ fn fit_strip(members: &[(f32, f32)]) -> DiscoveredStrip {
 
     DiscoveredStrip {
         center_lat: mean_lat,
-        center_lon: mean_lon,
+        center_lon: grid::geo::normalize_longitude(mean_lon) as f32,
         length_m,
         heading_deg,
         width_m,

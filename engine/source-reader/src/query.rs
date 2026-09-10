@@ -1312,6 +1312,61 @@ mod square_query_tests {
     }
 
     #[test]
+    fn road_and_rail_radius_preserves_all_bearings_at_high_latitudes() {
+        for lat in [0.0_f64, 50.0, 70.0, 82.0, -82.0] {
+            for bearing in 0..8 {
+                let angle = (f64::from(bearing) * 45.0).to_radians();
+                let source_lat = lat + 990.0 * angle.sin() / grid::geo::M_PER_DEG_LAT;
+                let source_lon =
+                    990.0 * angle.cos() / grid::geo::m_per_deg_lon(source_lat.to_radians());
+                let tmp = tempfile::TempDir::new().unwrap();
+                let dir = fx::square_dir(tmp.path(), grid::square_of(source_lat, source_lon));
+                std::fs::create_dir_all(&dir).unwrap();
+                fx::write_roads_file(
+                    &dir.join("roads.arrow"),
+                    &[fx::FixtureRoad {
+                        osm_id: 1,
+                        start: (source_lon, source_lat),
+                        end: (source_lon + 0.00001, source_lat),
+                        road_class: 0,
+                        speed_limit: 100,
+                        lanes: 2,
+                        name: String::new(),
+                    }],
+                );
+                fx::write_railways_file(
+                    &dir.join("railways.arrow"),
+                    &[fx::FixtureRail {
+                        osm_id: 2,
+                        start: (source_lon, source_lat),
+                        end: (source_lon + 0.00001, source_lat),
+                        rail_type: 0,
+                        maxspeed: 160,
+                    }],
+                );
+                let square = load_square(&dir).unwrap();
+                let roads = query_roads_from_batches(
+                    &square.roads.batches_all().unwrap(),
+                    lat,
+                    0.0,
+                    1000.0,
+                );
+                let rails = query_railways_from_batches(
+                    &square.railways.batches_all().unwrap(),
+                    lat,
+                    0.0,
+                    1000.0,
+                );
+                assert_eq!(
+                    (roads.len(), rails.len()),
+                    (1, 1),
+                    "lat={lat} bearing={bearing}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn square_dir_layout_is_z9_x_y() {
         let year = std::path::Path::new("/prepared/2026");
         assert_eq!(

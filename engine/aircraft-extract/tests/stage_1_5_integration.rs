@@ -13,7 +13,7 @@ use arrow::record_batch::RecordBatch;
 use aircraft_extract::airport_index::AerodromeIndex;
 use aircraft_extract::arrow_io::read_airport_traffic;
 use aircraft_extract::flight::{FlightSegment, Phase};
-use aircraft_extract::stage_2c::airport_traffic_writer::run_airport_traffic;
+use aircraft_extract::stage_2c::run_stage_2c;
 use aircraft_extract::stage_airport_discover_runner::run_stage_airport_discover;
 
 const TEST_LAT: f32 = 30.0;
@@ -194,8 +194,7 @@ fn stage_1_5_then_stage_2c_round_trips_synth_airport_key() {
     // coverage) and the synth file (covers the test strip), and
     // emits airport_traffic.arrow with rows under the synth key.
     let n_days = 1u16;
-    let r2c =
-        run_airport_traffic(&by_square_dir, &areas, prepared_year_dir, n_days, 0, None).unwrap();
+    let r2c = run_stage_2c(&by_square_dir, &areas, prepared_year_dir, n_days, 0, None).unwrap();
     assert_eq!(
         r2c, 1,
         "Stage 2C should write airport_traffic.arrow for one z9"

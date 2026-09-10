@@ -20,7 +20,7 @@
 //! local reader.
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -35,6 +35,7 @@ use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::FileWriter;
 use arrow::record_batch::RecordBatch;
 
+use super::cruise_spill_counts::CruiseSpillCounts;
 use crate::flight::CruiseTopCandidate;
 
 /// One spilled `(z9, CruiseKey, CruiseAccum)` triple. Field order
@@ -108,7 +109,24 @@ pub(crate) fn write_cruise_spill(path: &Path, rows: &[CruiseSpillRow]) -> Result
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let schema = spill_schema();
+    let file = super::disk::DiskCheckedFile::new(
+        File::create(path).with_context(|| format!("create spill {}", path.display()))?,
+    )?;
+    write_spill_to(BufWriter::new(file), rows)?
+        .0
+        .into_inner()
+        .map_err(|error| error.into_error())?
+        .sync_all()?;
+    Ok(())
+}
+
+fn write_spill_to<W: Write>(writer: W, rows: &[CruiseSpillRow]) -> Result<(W, usize)> {
+    let mut metadata = std::collections::HashMap::new();
+    let counts = CruiseSpillCounts::from_rows(rows);
+    for (name, value) in counts.fields() {
+        metadata.insert(name.to_owned(), value.to_string());
+    }
+    let schema = Arc::new(spill_schema().as_ref().clone().with_metadata(metadata));
     let n = rows.len();
     let mut square = UInt64Builder::with_capacity(n);
     let mut cruise_cell = UInt64Builder::with_capacity(n);
@@ -222,21 +240,73 @@ pub(crate) fn write_cruise_spill(path: &Path, rows: &[CruiseSpillRow]) -> Result
         ],
     )?;
 
-    let f = File::create(path).with_context(|| format!("create spill {}", path.display()))?;
-    // BufWriter coalesces FileWriter's many small writes into one
-    // syscall per ~8 KB — meaningful at 1024 small files per flush.
-    let mut w = FileWriter::try_new(BufWriter::new(f), &schema)?;
-    if batch.num_rows() > 0 {
-        w.write(&batch)?;
+    fn buffers(data: &arrow::array::ArrayData) -> usize {
+        1 + data.buffers().len() + data.child_data().iter().map(buffers).sum::<usize>()
     }
-    w.finish()?;
-    Ok(())
+    let buffer_count = batch
+        .columns()
+        .iter()
+        .map(|array| buffers(&array.to_data()))
+        .sum();
+    let mut writer = FileWriter::try_new(writer, &schema)?;
+    if batch.num_rows() > 0 {
+        writer.write(&batch)?;
+    }
+    writer.finish()?;
+    Ok((writer.into_inner()?, buffer_count))
 }
 
-pub(crate) fn read_cruise_spill(path: &Path) -> Result<Vec<CruiseSpillRow>> {
+/// Bound schema/footer growth and worst buffer padding using this writer's actual layout.
+pub(crate) fn spill_file_overhead_bound() -> Result<u64> {
+    let row = CruiseSpillRow {
+        square: 0,
+        cruise_cell_id: 0,
+        class: 0,
+        fl_bin: 0,
+        period: 0,
+        rep_profile_idx: 0,
+        source_id: 0,
+        origin: 0,
+        sum_length_m: 0.0,
+        weight: 0.0,
+        rep_alt_m: 0.0,
+        rep_speed_kt: 0.0,
+        rep_len_m: 0.0,
+        rep_len_w: 0.0,
+        fid_set: vec![1],
+        top_candidates: vec![CruiseTopCandidate {
+            flight_id: 1,
+            callsign: "A".into(),
+            aircraft_type: *b"A320",
+            peak_lmax_25m_db: 0.0,
+            altitude_m: 0.0,
+        }],
+    };
+    let (bytes, buffers) = write_spill_to(Vec::new(), &[row])?;
+    let count_fields = CruiseSpillCounts::default().fields().len();
+    // IPC permits alignment up to 64; count strings occur in schema and footer.
+    Ok(
+        (bytes.len() + (buffers + 2) * 63 + count_fields * 2 * (usize::MAX.to_string().len() + 4))
+            as u64,
+    )
+}
+
+#[cfg(test)]
+fn read_cruise_spill(path: &Path) -> Result<Vec<CruiseSpillRow>> {
+    let mut rows = Vec::new();
+    for_each_cruise_spill(path, |row| {
+        rows.push(row);
+        Ok(())
+    })?;
+    Ok(rows)
+}
+
+pub(crate) fn for_each_cruise_spill(
+    path: &Path,
+    mut consume: impl FnMut(CruiseSpillRow) -> Result<()>,
+) -> Result<()> {
     let f = File::open(path).with_context(|| format!("open spill {}", path.display()))?;
     let r = FileReader::try_new(BufReader::new(f), None)?;
-    let mut out: Vec<CruiseSpillRow> = Vec::new();
     for batch in r {
         let batch = batch?;
         let square = downcast::<UInt64Array>(&batch, 0)?;
@@ -287,7 +357,6 @@ pub(crate) fn read_cruise_spill(path: &Path) -> Result<Vec<CruiseSpillRow>> {
             .ok_or_else(|| anyhow::anyhow!("spill: top.altitude_m"))?;
 
         let n_rows = batch.num_rows();
-        out.reserve(n_rows);
         let fid_offsets = fid_list.value_offsets();
         let top_offsets = top_list.value_offsets();
         for i in 0..n_rows {
@@ -312,7 +381,7 @@ pub(crate) fn read_cruise_spill(path: &Path) -> Result<Vec<CruiseSpillRow>> {
                     altitude_m: top_alt.value(j),
                 });
             }
-            out.push(CruiseSpillRow {
+            consume(CruiseSpillRow {
                 square: square.value(i),
                 cruise_cell_id: cruise_cell.value(i),
                 class: class.value(i),
@@ -329,10 +398,10 @@ pub(crate) fn read_cruise_spill(path: &Path) -> Result<Vec<CruiseSpillRow>> {
                 rep_len_w: rep_len_w.value(i),
                 fid_set,
                 top_candidates,
-            });
+            })?;
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 fn downcast<T: Array + 'static>(batch: &RecordBatch, col: usize) -> Result<&T> {

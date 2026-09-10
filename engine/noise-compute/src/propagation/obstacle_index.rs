@@ -617,9 +617,7 @@ impl ObstacleIndex {
                     // would, under THIS growth's floor and radius (a later
                     // growth may admit what this visit prunes, so pruned
                     // edges store full values, never placeholders).
-                    let replay = if let Some(replay) =
-                        arc_census::emission_memo_lookup(ordinal)
-                    {
+                    let replay = if let Some(replay) = arc_census::emission_memo_lookup(ordinal) {
                         replay
                     } else {
                         arc_census::note_memo_miss();

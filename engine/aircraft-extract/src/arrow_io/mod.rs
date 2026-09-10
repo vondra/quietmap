@@ -17,8 +17,19 @@ use crate::arrow_schemas;
 mod airborne;
 mod airport_summary;
 mod airport_traffic;
+mod allocation;
 mod cruise;
+mod cruise_allocation;
+pub(crate) use cruise_allocation::{cruise_buffers_bound, cruise_file_overhead_bound};
 mod cruise_spill;
+mod cruise_spill_counts;
+mod disk;
+mod disk_watermark;
+pub(crate) use disk::create_directory_all_synced;
+pub use disk_watermark::SpillDiskReservation;
+pub(crate) use disk_watermark::{
+    receipt_committed as spill_receipt_committed, receipt_watermark as spill_receipt_watermark,
+};
 mod flights;
 mod segments;
 
@@ -26,10 +37,16 @@ pub use airborne::write_airborne;
 pub use airport_summary::{read_airport_summary, write_airport_summary, AirportSummaryRow};
 pub(crate) use airport_summary::{read_airport_summary_part, write_airport_summary_part};
 pub use airport_traffic::{read_airport_traffic, write_airport_traffic, AirportTrafficRow};
+pub(crate) use allocation::inspect_ipc_allocation;
 pub use cruise::write_cruise;
-pub(crate) use cruise_spill::{read_cruise_spill, write_cruise_spill, CruiseSpillRow};
+pub(crate) use cruise_spill::{
+    for_each_cruise_spill, spill_file_overhead_bound, write_cruise_spill, CruiseSpillRow,
+};
+pub(crate) use cruise_spill_counts::CruiseSpillCounts;
 pub use flights::{write_flights, FlightRow};
-pub(crate) use segments::for_each_segment_batch;
+pub(crate) use segments::{
+    for_each_segment_batch, SEGMENT_READ_CHUNK_ROWS, SEGMENT_WRITE_CHUNK_ROWS,
+};
 pub use segments::{read_segments, write_segments};
 
 pub(crate) fn sibling_tmp_path(p: &Path) -> PathBuf {
@@ -46,21 +63,30 @@ pub(crate) fn write_record_batches(
     schema: &Schema,
     batches: &[RecordBatch],
 ) -> Result<()> {
+    write_record_batch_stream(path, schema, batches.iter().cloned().map(Ok))
+}
+
+pub(crate) fn write_record_batch_stream(
+    path: &Path,
+    schema: &Schema,
+    batches: impl IntoIterator<Item = Result<RecordBatch>>,
+) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        create_directory_all_synced(parent)?;
     }
     let tmp = sibling_tmp_path(path);
     {
-        let f = File::create(&tmp)?;
+        let f = disk::DiskCheckedFile::new(File::create(&tmp)?)?;
         // BufWriter coalesces FileWriter's many small writes (header,
         // schema, per-batch dictionaries, footer) into one syscall
         // per 8 KiB block. Without it, big arrow files on rotational
         // disk burn a measurable chunk of wall-time in write(2)
         // overhead. Mirrors the pattern in `cruise_spill.rs`.
         let mut w = FileWriter::try_new(BufWriter::new(f), schema)?;
-        for b in batches {
-            if b.num_rows() > 0 {
-                w.write(b)?;
+        for batch in batches {
+            let batch = batch?;
+            if batch.num_rows() > 0 {
+                w.write(&batch)?;
             }
         }
         w.finish()?;
@@ -69,6 +95,9 @@ pub(crate) fn write_record_batches(
         file.sync_all()?;
     }
     std::fs::rename(&tmp, path)?;
+    if let Some(parent) = path.parent() {
+        File::open(parent)?.sync_all()?;
+    }
     Ok(())
 }
 
@@ -86,7 +115,7 @@ pub(crate) fn read_all_batches(path: &Path) -> Result<(Schema, Vec<RecordBatch>)
 
 /// Stream record batches one at a time (schema-checked) instead of
 /// collecting them all like [`read_all_batches`]. Peak is one batch: small
-/// for chunk-written shards (`WRITE_CHUNK_ROWS`), but a legacy single-batch
+/// for chunk-written shards (`SEGMENT_WRITE_CHUNK_ROWS`), but a legacy single-batch
 /// shard is one big batch — so a caller bounding a 100M-row legacy day
 /// (Stage 2B) also slices the decode (`for_each_segment_batch`) and caps
 /// concurrency (the arrow batch itself still resides per worker).

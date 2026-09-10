@@ -1,11 +1,4 @@
-//! Build-once grid index over the global OSM aerodrome set so Stage 1.5's
-//! per-ground-segment "inside any aerodrome" gate runs in O(few-nearby)
-//! instead of O(45443). A pure candidate-pruner: the final `flat_dist` +
-//! `aerodrome_radius_m` test is byte-identical to the naive loop, so the
-//! airports discovered / rejected / re-attributed are unchanged (proven by
-//! the property test below). A mega-hub z9's gate drops from ~30 min to
-//! seconds. (Stage 2C's `nearest_aerodrome_within` resolver is the same
-//! O(45443) shape and the obvious next caller to migrate.)
+//! Shared aerodrome candidate index preserving source order and nearest-airport ties.
 
 use std::collections::HashMap;
 
@@ -91,6 +84,36 @@ impl<'a> AerodromeIndex<'a> {
         Self { cells, areas }
     }
 
+    pub(crate) fn maximum_airport_key_bytes(&self) -> usize {
+        self.areas
+            .iter()
+            .map(|area| area.airport_key.len())
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn allocation_allowance(&self) -> u64 {
+        let table =
+            2 * self.cells.capacity() * (std::mem::size_of::<((i32, i32), Vec<(u32, f64)>)>() + 1);
+        let indices = self
+            .cells
+            .values()
+            .map(|ids| ids.capacity() * std::mem::size_of::<(u32, f64)>())
+            .sum::<usize>();
+        let areas = 2 * self.areas.len() * std::mem::size_of::<AirportArea>()
+            + self
+                .areas
+                .iter()
+                .map(|a| {
+                    a.name.capacity()
+                        + a.airport_key.capacity()
+                        + a.polygon_grid.capacity() * std::mem::size_of::<(i32, i32)>()
+                })
+                .sum::<usize>();
+        // Include allocator bookkeeping in addition to the measured containers.
+        (2 * (table + indices + areas)) as u64
+    }
+
     /// Identical result to the naive `point_in_any_aerodrome` oracle: true iff
     /// the point is within ANY aerodrome's centroid-radius. First-hit
     /// short-circuit (the boolean OR is order-independent).
@@ -104,7 +127,7 @@ impl<'a> AerodromeIndex<'a> {
         })
     }
 
-    /// Identical result to `airport_io::nearest_aerodrome_within`, including the
+    /// Identical result to the original linear nearest-airport resolver, including the
     /// empty-key/empty-name skip and the strict-`<` closest-wins tie-break (cell
     /// vecs hold candidates in ascending original index, so ties keep the first).
     pub fn nearest(&self, lat: f64, lon: f64) -> Option<&AirportArea> {
@@ -130,7 +153,26 @@ impl<'a> AerodromeIndex<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::airport_io::nearest_aerodrome_within;
+    fn nearest_aerodrome_within(lat: f64, lon: f64, areas: &[AirportArea]) -> Option<&AirportArea> {
+        let mut best: Option<(&AirportArea, f64)> = None;
+        for area in areas {
+            if area.aeroway_type != AERODROME_AEROWAY_TYPE {
+                continue;
+            }
+            if area.airport_key.is_empty() && area.name.is_empty() {
+                continue;
+            }
+            let radius = aerodrome_radius_m(area);
+            let dist = flat_dist(lat, lon, area.centroid_lat, area.centroid_lon);
+            if dist > radius {
+                continue;
+            }
+            if best.map(|(_, d)| dist < d).unwrap_or(true) {
+                best = Some((area, dist));
+            }
+        }
+        best.map(|(a, _)| a)
+    }
 
     fn area(osm_id: i64, lat: f64, lon: f64, area_m2: f32, ty: u8, key: &str) -> AirportArea {
         AirportArea {

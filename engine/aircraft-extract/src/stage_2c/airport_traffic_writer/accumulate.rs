@@ -3,25 +3,22 @@ use super::*;
 
 pub(super) fn accumulate_segment(
     seg: &FlightSegment,
-    owner: u64,
+    (owner, line_index): (u64, &mut AirportLineIndex<'_>),
     cache: &SquareCache,
     counters: &mut HashMap<CounterKey, CounterAcc>,
-    micro_accs: &mut HashMap<(u64, u16), MicrosegAcc>,
-    airport_aggs: &mut HashMap<String, AirportAggregateAcc>,
-) {
+    micro_accs: &mut HashMap<(u64, u16), MovementUnion>,
+    airport_aggs: &mut HashMap<String, MovementUnion>,
+    budget: &mut AllocationBudget,
+) -> Result<()> {
     if cache.lines.is_empty() {
-        return;
+        return Ok(());
     }
-    let intersections = project_leg_onto_airport_lines(
-        seg.start_lat,
-        seg.start_lon,
-        seg.end_lat,
-        seg.end_lon,
-        &cache.lines,
+    let (intersections, _) = line_index.project(
+        [seg.start_lat, seg.start_lon, seg.end_lat, seg.end_lon],
         AIRPORT_LINE_SNAP_BUFFER_M,
     );
     if intersections.is_empty() {
-        return;
+        return Ok(());
     }
     let class_idx = if seg.veh_kind == 1 {
         seg.gse_class
@@ -89,6 +86,18 @@ pub(super) fn accumulate_segment(
             class_idx,
             period: seg.period,
         };
+        if !counters.contains_key(&key) {
+            budget.reserve_hash_entry::<CounterKey, CounterAcc>(counters.len())?;
+            // Sorted counter tuples, output rows, spatial batching and Arrow
+            // construction coexist with the accumulator tables.
+            budget.reserve(
+                4 * (std::mem::size_of::<(CounterKey, CounterAcc)>()
+                    + 2 * std::mem::size_of::<AirportTrafficRow>()
+                    + airport_key.len()
+                    + std::mem::size_of::<[f64; 4]>()
+                    + 4 * std::mem::size_of::<usize>()) as u64,
+            )?;
+        }
         let entry = counters.entry(key).or_insert_with(|| CounterAcc {
             start_gx: line.grid.0 .0,
             start_gy: line.grid.0 .1,
@@ -97,85 +106,79 @@ pub(super) fn accumulate_segment(
             length_m: line.length_m,
             ..Default::default()
         });
-        entry.fid_set.insert(seg.flight_id);
+        if !entry.fid_set.contains(&seg.flight_id) {
+            anyhow::ensure!(
+                entry.fid_set.len() < u32::MAX as usize,
+                "ground counter exceeds UInt32"
+            );
+            budget.reserve_hash_entry::<u64, ()>(entry.fid_set.len())?;
+            entry.fid_set.insert(seg.flight_id);
+        }
         for (acc, &band) in entry.band_energy_lin.iter_mut().zip(&bands) {
             *acc += band as f64;
         }
 
-        let micro_entry = micro_accs
-            .entry((line.osm_id, line.segment_idx))
-            .or_default();
-        if is_ga {
-            micro_entry.fid_set_ga.insert(seg.flight_id);
-        } else {
-            micro_entry.fid_set.insert(seg.flight_id);
+        let identity = (line.osm_id, line.segment_idx);
+        if !micro_accs.contains_key(&identity) {
+            budget.reserve_hash_entry::<(u64, u16), MovementUnion>(micro_accs.len())?;
         }
-        let airport_entry = airport_aggs.entry(airport_key.clone()).or_default();
-        if seg.veh_kind == 0 {
-            if ops_kind == GROUND_OPS_KIND_RUNWAY_ROLL {
-                if is_dep == 1 {
-                    entry.fid_set_dep.insert(seg.flight_id);
-                    if is_ga {
-                        micro_entry.fid_set_ga_dep.insert(seg.flight_id);
-                        airport_entry.ga_dep.insert(seg.flight_id);
-                    } else {
-                        micro_entry.fid_set_dep.insert(seg.flight_id);
-                        airport_entry.dep.insert(seg.flight_id);
-                    }
-                } else {
-                    entry.fid_set_arr.insert(seg.flight_id);
-                    if is_ga {
-                        micro_entry.fid_set_ga_arr.insert(seg.flight_id);
-                        airport_entry.ga_arr.insert(seg.flight_id);
-                    } else {
-                        micro_entry.fid_set_arr.insert(seg.flight_id);
-                        airport_entry.arr.insert(seg.flight_id);
-                    }
-                }
-            }
-            let ops_idx = match ops_kind {
-                GROUND_OPS_KIND_RUNWAY_ROLL => 0,
-                GROUND_OPS_KIND_TAXI => 1,
-                GROUND_OPS_KIND_APRON_MOVEMENT => 2,
-                _ => continue,
-            };
-            if is_ga {
-                airport_entry.ga_ops_per_kind[ops_idx].insert(seg.flight_id);
-            } else {
-                airport_entry.ops_per_kind[ops_idx].insert(seg.flight_id);
-            }
-        } else if seg.veh_kind == 1 {
-            let ci = class_idx as usize;
-            if ci < NUM_GSE_CLASSES {
-                entry.fid_set_gse_per_class[ci].insert(seg.flight_id);
-                micro_entry.fid_set_gse_per_class[ci].insert(seg.flight_id);
-                airport_entry.gse_per_class[ci].insert(seg.flight_id);
-            }
+        if !airport_aggs.contains_key(airport_key) {
+            budget.reserve_hash_entry::<String, MovementUnion>(airport_aggs.len())?;
+            budget.reserve(
+                4 * (airport_key.len() + std::mem::size_of::<AirportSummaryPartRow>()) as u64,
+            )?;
         }
+        let flags = movements::hit_flags(is_ga, seg.veh_kind, class_idx, ops_kind, is_dep == 1);
+        micro_accs.entry(identity).or_default().insert(
+            seg.flight_id,
+            flags & movements::MICRO_FLAGS,
+            budget,
+        )?;
+        airport_aggs
+            .entry(airport_key.clone())
+            .or_default()
+            .insert(seg.flight_id, flags & movements::AIRPORT_FLAGS, budget)?;
     }
+    Ok(())
 }
 
 pub(super) fn counters_to_rows(
     counters: HashMap<CounterKey, CounterAcc>,
-    micro_accs: &HashMap<(u64, u16), MicrosegAcc>,
+    micro_accs: &HashMap<(u64, u16), MovementUnion>,
 ) -> Vec<AirportTrafficRow> {
+    let mut counters: Vec<_> = counters.into_iter().collect();
+    counters.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     let mut rows = Vec::with_capacity(counters.len());
     for (key, acc) in counters {
         let bands_lin: [f32; NUM_BANDS] = std::array::from_fn(|i| acc.band_energy_lin[i] as f32);
         let unique_movement_count = acc.fid_set.len() as u32;
-        let unique_arr_count = acc.fid_set_arr.len() as u32;
-        let unique_dep_count = acc.fid_set_dep.len() as u32;
-        let unique_gse_count_per_class: [u32; NUM_GSE_CLASSES] =
-            std::array::from_fn(|i| acc.fid_set_gse_per_class[i].len() as u32);
+        let runway = key.veh_kind == 0 && key.ops_kind == GROUND_OPS_KIND_RUNWAY_ROLL;
+        let unique_arr_count = if runway && key.is_departure == 0 {
+            unique_movement_count
+        } else {
+            0
+        };
+        let unique_dep_count = if runway && key.is_departure == 1 {
+            unique_movement_count
+        } else {
+            0
+        };
+        let unique_gse_count_per_class = std::array::from_fn(|i| {
+            if key.veh_kind == 1 && i == usize::from(key.class_idx) {
+                unique_movement_count
+            } else {
+                0
+            }
+        });
         let micro = micro_accs.get(&(key.osm_id, key.segment_idx));
-        let microseg_unique_count = micro.map_or(0, |m| m.fid_set.len() as u32);
-        let microseg_unique_arr_count = micro.map_or(0, |m| m.fid_set_arr.len() as u32);
-        let microseg_unique_dep_count = micro.map_or(0, |m| m.fid_set_dep.len() as u32);
-        let microseg_unique_gse_count_per_class: [u32; NUM_GSE_CLASSES] =
-            std::array::from_fn(|i| micro.map_or(0, |m| m.fid_set_gse_per_class[i].len() as u32));
-        let microseg_unique_ga_count = micro.map_or(0, |m| m.fid_set_ga.len() as u32);
-        let microseg_unique_ga_arr_count = micro.map_or(0, |m| m.fid_set_ga_arr.len() as u32);
-        let microseg_unique_ga_dep_count = micro.map_or(0, |m| m.fid_set_ga_dep.len() as u32);
+        let count = |flag| micro.map_or(0, |m| m.count(flag));
+        let microseg_unique_count = count(movements::NON_GA);
+        let microseg_unique_arr_count = count(movements::ARRIVAL);
+        let microseg_unique_dep_count = count(movements::DEPARTURE);
+        let microseg_unique_gse_count_per_class = std::array::from_fn(|i| count(movements::GSE[i]));
+        let microseg_unique_ga_count = count(movements::GA);
+        let microseg_unique_ga_arr_count = count(movements::GA_ARRIVAL);
+        let microseg_unique_ga_dep_count = count(movements::GA_DEPARTURE);
         rows.push(AirportTrafficRow {
             airport_key: key.airport_key,
             osm_id: key.osm_id,

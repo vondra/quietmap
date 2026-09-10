@@ -3,7 +3,7 @@
 use super::archive::ConcatReader;
 use super::typecode_probe::*;
 use super::*;
-use flate2::{Compression, write::GzEncoder};
+use flate2::{write::GzEncoder, Compression};
 use std::io::BufReader;
 use std::io::Write;
 use std::path::Path;

@@ -1,7 +1,10 @@
 //! Observed aircraft data processing on the canonical square grid.
 
+mod admission;
 mod geometry;
+mod planning;
 use geometry::*;
+pub use planning::{plan_ground_discovery, GroundDiscoveryInput};
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -22,8 +25,8 @@ use crate::stage_2c::airport_traffic::{
 };
 use crate::stage_airport_discover::{discover_strips, DiscoveredStrip};
 use crate::synth_airport_io::{
-    synth_airport_key_for, synth_display_name, synth_osm_id_for, write_synth_airport_areas,
-    write_synth_airport_lines, SynthAirportAreaRow, SynthAirportLineRow, AIRSTRIP_AEROWAY_TYPE,
+    synth_airport_key_for, synth_osm_id_for, write_synth_airport_areas, write_synth_airport_lines,
+    SynthAirportAreaRow, SynthAirportLineRow, AIRSTRIP_AEROWAY_TYPE, DISCOVERED_AIRSTRIP_NAME,
     SYNTH_AERODROME_AEROWAY_TYPE, SYNTH_AREAS_FILE, SYNTH_LINES_FILE,
 };
 
@@ -49,11 +52,8 @@ const DBSCAN_MIN_SAMPLES: usize = 5;
 /// across multiple aircraft trajectories.
 const CLUSTER_MAX_LENGTH_M: f32 = 4000.0;
 
-/// Reject clusters whose vertex_count over the extraction window
-/// implies > ~700 ground visits/day. The busiest microsegments at
-/// LKPR see ~50-100 movements/day; a count an order of magnitude
-/// higher means the cluster captured non-ground vertices (typically
-/// dense ATC waypoints on the STAR/SID corridor).
+/// Reject unusually dense candidate clusters that may be misclassified approach
+/// corridors. This counts candidate vertices, not distinct flights or visits.
 const CLUSTER_MAX_VERTICES: u32 = 20_000;
 
 const REAL_LINE_NEAR_BUFFER_M: f64 = 300.0;
@@ -76,22 +76,7 @@ enum ClusterDisposition<'a> {
     SynthAirport,
 }
 
-/// Drive Stage 1.5 over the Stage 1 multi-day segment set. Returns
-/// the total number of z9s that received at least one synthetic /
-/// re-attributed line row.
-///
-/// `airport_areas_global` is the union of every z9's
-/// `airport_areas.arrow` (the same global set Stage 2C consumes for
-/// `nearest_aerodrome_within`). The runner uses it for both the
-/// re-attribution check (cluster inside a real aerodrome → use its
-/// key) and the implicit "new airfield" path (no nearby real area).
-///
-/// `airport_lines_global` is the union of every z9's
-/// `airport_lines.arrow`. Inside an aerodrome's polygon buffer the
-/// runner cross-checks each cluster against this set: clusters that
-/// sit on or right next to a real OSM aeroway line are folded into
-/// the airport's key; clusters that pass the polygon test but sit
-/// far from every real line are rejected as DBSCAN false positives.
+/// Validate ground shards, discover unmapped strips and replace both synthetic sidecars.
 pub fn run_stage_airport_discover(
     segments_by_square_dir: &Path,
     aerodrome_index: &AerodromeIndex,
@@ -99,33 +84,48 @@ pub fn run_stage_airport_discover(
     prepared_year_dir: &Path,
     scope: Option<&ScopeBbox>,
 ) -> Result<usize> {
-    let active: BTreeMap<u64, std::path::PathBuf> =
-        crate::shuffle::list_square_shards(segments_by_square_dir, "ground.arrow", scope)?
-            .into_iter()
-            .collect();
-    // Union with z9s holding stale synth sidecars on disk so a
-    // previously-populated z9 with no ground signal this run gets its
-    // sidecars cleared (run_one_square with empty segments writes empty
-    // arrows); otherwise Stage 2C reads zombie airport areas.
-    let stale = stale_synth_sidecar_squares(prepared_year_dir, scope, &active)?;
-    if active.is_empty() && stale.is_empty() {
+    let inputs = plan_ground_discovery(
+        segments_by_square_dir,
+        aerodrome_index,
+        airport_lines_global,
+        scope,
+    )?;
+    // Current shards and stale sidecars share one rewrite pass, including empty results.
+    let stale = stale_synth_sidecar_squares(prepared_year_dir, scope, &inputs)?;
+    if inputs.is_empty() && stale.is_empty() {
         return Ok(0);
     }
-    // Validate all source shards before replacing any generation's sidecars.
-    for shard in active.values() {
-        crate::arrow_io::for_each_segment_batch(shard, |_| Ok(()))
-            .with_context(|| format!("validate {}", shard.display()))?;
-    }
-    let mut square_keys: Vec<u64> = active.keys().copied().collect();
+    let largest_allocation = match inputs.values().map(|input| input.allocation_bytes).max() {
+        Some(bytes) => bytes,
+        None => admission::working_set_allowance(
+            0,
+            0,
+            0,
+            admission::shared_allocation_allowance(aerodrome_index, airport_lines_global)?,
+        )?,
+    };
+    let workers =
+        crate::memory::max_concurrent_tasks(rayon::current_num_threads(), largest_allocation)?;
+    let raw = prepared_year_dir.join(".ground_discovery_raw");
+    let canonical = prepared_year_dir.join(".ground_discovery_canonical");
+    anyhow::ensure!(
+        !raw.exists() && !canonical.exists(),
+        "incomplete discovery generation requires inspection before rerun"
+    );
+    crate::arrow_io::create_directory_all_synced(&raw)?;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()?;
+    let mut square_keys: Vec<u64> = inputs.keys().copied().collect();
     square_keys.extend(stale);
     square_keys.sort_unstable();
     started(
         "stage1.5",
         &format!(
-            "{} z9 cells ({} active, {} stale-only)",
+            "{} z9 cells ({} active, {} stale-only); {workers} workers; {largest_allocation} B allocation allowance each",
             square_keys.len(),
-            active.len(),
-            square_keys.len() - active.len()
+            inputs.len(),
+            square_keys.len() - inputs.len()
         ),
     );
     let stage_start = std::time::Instant::now();
@@ -136,51 +136,82 @@ pub fn run_stage_airport_discover(
     // hub z9s without further configuration.
     const PER_SQUARE_SLOW_LOG_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(5);
 
-    let results: Vec<Result<bool>> = square_keys
-        .par_iter()
-        .map(|square| {
-            let square_start = std::time::Instant::now();
-            let segments = match active.get(square) {
-                Some(shard) => crate::arrow_io::read_segments(shard)
-                    .with_context(|| format!("read {}", shard.display()))?,
-                None => Vec::new(),
-            };
-            let n_segs = segments.len();
-            let out = run_one_square(
-                *square,
-                &segments,
-                aerodrome_index,
-                airport_lines_global,
-                prepared_year_dir,
-            )
-            .with_context(|| format!("z9 {square:015x}"))?;
-            let elapsed = square_start.elapsed();
-            if elapsed >= PER_SQUARE_SLOW_LOG_THRESHOLD {
-                eprintln!(
-                    "{} [stage1.5] z9 {} done in {:?} ({} ground segs, populated={})",
-                    crate::progress::ts(),
-                    square_path(*square),
-                    elapsed,
-                    n_segs,
-                    out,
-                );
-            }
-            square_counter.add(1);
-            Ok(out)
-        })
-        .collect();
+    let results: Vec<Result<bool>> = pool.install(|| {
+        square_keys
+            .par_iter()
+            .map(|square| {
+                let square_start = std::time::Instant::now();
+                let (extent, n_segs, candidate_bound) = inputs
+                    .get(square)
+                    .map(|input| {
+                        (
+                            input.extent,
+                            input.rows,
+                            input.candidate_vertices_upper_bound,
+                        )
+                    })
+                    .unwrap_or((Extent::empty(*square), 0, 0));
+                let lines = nearby_airport_lines(*square, extent, airport_lines_global);
+                let mut candidates = Vec::with_capacity(candidate_bound);
+                if let Some(input) = inputs.get(square) {
+                    let shard = &input.path;
+                    crate::arrow_io::for_each_segment_batch(shard, |segments| {
+                        collect_miss_snap_vertices(
+                            &segments,
+                            &lines,
+                            aerodrome_index,
+                            &mut candidates,
+                        );
+                        anyhow::ensure!(
+                            candidates.len() <= candidate_bound,
+                            "ground candidates changed after validation"
+                        );
+                        Ok(())
+                    })
+                    .with_context(|| format!("read {}", shard.display()))?;
+                }
+                let out = run_one_square(*square, &candidates, aerodrome_index, &lines, &raw)
+                    .with_context(|| format!("z9 {square:015x}"))?;
+                let elapsed = square_start.elapsed();
+                if elapsed >= PER_SQUARE_SLOW_LOG_THRESHOLD {
+                    eprintln!(
+                        "{} [stage1.5] z9 {} done in {:?} ({} ground segs, populated={})",
+                        crate::progress::ts(),
+                        square_path(*square),
+                        elapsed,
+                        n_segs,
+                        out,
+                    );
+                }
+                square_counter.add(1);
+                Ok(out)
+            })
+            .collect()
+    });
 
-    let mut populated = 0usize;
-    for r in results {
-        if r? {
-            populated += 1;
-        }
+    for result in results {
+        result?;
     }
+    let square_count = square_keys.len();
+    drop(inputs);
+    drop(square_keys);
+    drop(pool);
+    let retained_bytes =
+        admission::shared_allocation_allowance(aerodrome_index, airport_lines_global)?;
+    let populated = crate::ground_discovery_finalize::finalize_ground_discovery(
+        &raw,
+        &canonical,
+        scope,
+        retained_bytes,
+    )?;
+    crate::ground_discovery_finalize::promote_ground_discovery(&canonical, prepared_year_dir)?;
+    std::fs::remove_dir_all(&raw)?;
+    std::fs::remove_dir_all(&canonical)?;
+    std::fs::File::open(prepared_year_dir)?.sync_all()?;
     finished(
         "stage1.5",
         &format!(
-            "{populated} of {} z9s populated with synth airport_lines in {:?}",
-            square_keys.len(),
+            "{populated} canonical z9s populated from {square_count} source z9s in {:?}",
             stage_start.elapsed()
         ),
     );
@@ -192,62 +223,57 @@ pub fn run_stage_airport_discover(
 /// that this run finds nothing in is monotonically cleared.
 fn run_one_square(
     square: u64,
-    segments: &[FlightSegment],
+    candidates: &[(f32, f32)],
     aerodrome_index: &AerodromeIndex,
-    airport_lines_global: &[AirportLineRow],
+    lines: &[AirportLineSegment],
     prepared_year_dir: &Path,
 ) -> Result<bool> {
     let square_dir = prepared_year_dir.join(square_path(square));
-    let lines = nearby_airport_lines(square, segments, airport_lines_global);
-
-    let candidates = collect_miss_snap_vertices(segments, &lines, aerodrome_index);
     let strips = if candidates.len() >= DBSCAN_MIN_SAMPLES {
-        discover_strips(&candidates, DBSCAN_EPS_M, DBSCAN_MIN_SAMPLES)
+        discover_strips(candidates, DBSCAN_EPS_M, DBSCAN_MIN_SAMPLES)
     } else {
         Vec::new()
     };
 
-    let mut line_rows = Vec::new();
-    let mut area_rows = Vec::new();
-    for strip in &strips {
-        match classify_cluster(strip, aerodrome_index, airport_lines_global) {
-            ClusterDisposition::Reject => continue,
-            ClusterDisposition::Reattribute(real_area) => {
-                emit_lines_for_strip(strip, real_area.airport_key.clone(), &mut line_rows);
-                // Do NOT emit a synth area — the real aerodrome
-                // polygon already exists in `airport_areas.arrow`.
+    let classified: Vec<_> = strips
+        .into_iter()
+        .filter_map(
+            |strip| match classify_cluster(&strip, aerodrome_index, lines) {
+                ClusterDisposition::Reject => None,
+                ClusterDisposition::Reattribute(area) => Some((strip, Some(area))),
+                ClusterDisposition::SynthAirport => Some((strip, None)),
+            },
+        )
+        .collect();
+    let line_rows = classified.iter().flat_map(|(strip, area)| {
+        let key = area.map_or_else(
+            || synth_airport_key_for(f64::from(strip.center_lat), f64::from(strip.center_lon)),
+            |area| area.airport_key.clone(),
+        );
+        let mut rows = Vec::new();
+        emit_lines_for_strip(strip, key, &mut rows);
+        rows
+    });
+    write_synth_airport_lines(&square_dir.join(SYNTH_LINES_FILE), line_rows)?;
+    let area_rows = classified
+        .iter()
+        .filter(|(_, area)| area.is_none())
+        .map(|(strip, _)| {
+            let centroid_lat = f64::from(strip.center_lat);
+            let centroid_lon = f64::from(strip.center_lon);
+            SynthAirportAreaRow {
+                osm_id: synth_osm_id_for(centroid_lat, centroid_lon),
+                airport_key: synth_airport_key_for(centroid_lat, centroid_lon),
+                name: DISCOVERED_AIRSTRIP_NAME.into(),
+                aeroway_type: SYNTH_AERODROME_AEROWAY_TYPE,
+                centroid_lat,
+                centroid_lon,
+                area_m2: strip.length_m * strip.width_m,
             }
-            ClusterDisposition::SynthAirport => {
-                let centroid_lat = strip.center_lat as f64;
-                let centroid_lon = strip.center_lon as f64;
-                let key = synth_airport_key_for(centroid_lat, centroid_lon);
-                emit_lines_for_strip(strip, key.clone(), &mut line_rows);
-                area_rows.push(SynthAirportAreaRow {
-                    osm_id: synth_osm_id_for(centroid_lat, centroid_lon),
-                    airport_key: key,
-                    name: synth_display_name(
-                        centroid_lat,
-                        centroid_lon,
-                        strip.length_m,
-                        strip.vertex_count,
-                    ),
-                    aeroway_type: SYNTH_AERODROME_AEROWAY_TYPE,
-                    centroid_lat,
-                    centroid_lon,
-                    area_m2: strip.length_m * strip.width_m,
-                });
-            }
-        }
-    }
-
-    // Idempotency: always rewrite even when both vecs are empty.
-    // `write_synth_airport_*` truncate-and-replaces via
-    // `arrow_io::write_record_batches`, so a previously-populated z9
-    // that this run finds nothing in is cleared on disk.
-    write_synth_airport_lines(&square_dir.join(SYNTH_LINES_FILE), &line_rows)?;
-    write_synth_airport_areas(&square_dir.join(SYNTH_AREAS_FILE), &area_rows)?;
-
-    Ok(!line_rows.is_empty())
+        });
+    // Empty streams also atomically replace stale sidecars.
+    write_synth_airport_areas(&square_dir.join(SYNTH_AREAS_FILE), area_rows)?;
+    Ok(!classified.is_empty())
 }
 
 /// In-scope z9 subdirs holding a synth sidecar on disk but absent
@@ -257,7 +283,7 @@ fn run_one_square(
 fn stale_synth_sidecar_squares(
     prepared_year_dir: &Path,
     scope: Option<&ScopeBbox>,
-    already_known: &BTreeMap<u64, std::path::PathBuf>,
+    already_known: &BTreeMap<u64, GroundDiscoveryInput>,
 ) -> Result<Vec<u64>> {
     let mut out = Vec::new();
     for (id, path) in crate::spatial::square_directories(prepared_year_dir)? {
@@ -274,15 +300,11 @@ fn stale_synth_sidecar_squares(
 
 fn nearby_airport_lines(
     square: u64,
-    segments: &[FlightSegment],
+    extent: Extent,
     lines: &[AirportLineRow],
 ) -> Vec<AirportLineSegment> {
-    let mut extent = Extent::empty(square);
-    for segment in segments {
-        extent.include(segment.start_lat, segment.start_lon);
-        extent.include(segment.end_lat, segment.end_lon);
-    }
-    let extent = extent.padded(AIRPORT_LINE_SNAP_BUFFER_M);
+    // Classification uses a wider radius than the unchanged 50 m snap gate.
+    let extent = extent.padded(REAL_LINE_NEAR_BUFFER_M as f32);
     lines
         .iter()
         .filter_map(|line| {
@@ -304,63 +326,28 @@ fn nearby_airport_lines(
         .collect()
 }
 
-/// One ground segment becomes 0 or 2 miss-snap vertices, depending on
-/// two gates applied in order:
-///
-/// 1. **Known-aerodrome polygon gate** — drop the whole segment when
-///    EITHER endpoint sits inside any OSM aerodrome's centroid-radius
-///    window. Stage 1.5 is for OSM-MISSING airfields, so a leg with
-///    one foot at a known aerodrome can never seed an unmapped strip:
-///    the exterior endpoint is either a takeoff climb / final-approach
-///    point (en-route ADS-B noise) or a cross-country waypoint, not a
-///    strip vertex. Skipping the segment entirely also skips the
-///    expensive line-snap kernel below — at hub z9s this is the
-///    decisive win because takeoff / landing transitions
-///    (one foot at the aerodrome, the other 6-10 km out) make up the
-///    bulk of ground-tagged segments and they all flowed through the
-///    O(M_lines) kernel under the BOTH-inside rule.
-/// 2. **OSM aeroway line gate** — for segments fully outside every
-///    aerodrome polygon, drop the segment when the leg projects onto
-///    any local OSM aeroway microsegment within
-///    [`AIRPORT_LINE_SNAP_BUFFER_M`]. Catches isolated taxi /
-///    runway segments at airports whose polygon coverage in OSM is
-///    incomplete (only `aeroway=runway` line, no `aerodrome`
-///    polygon — common for small fields).
-///
-/// Both endpoints flow into DBSCAN as cluster seeds. Mid-leg emission
-/// is intentionally not used; cluster geometry should capture the
-/// actual ADS-B trajectory shape, and the leg-pair is what shapes
-/// the synth runway centreline downstream.
+fn outside_known_aerodromes(seg: &FlightSegment, index: &AerodromeIndex) -> bool {
+    seg.phase == Phase::Ground
+        && seg.veh_kind == 0
+        && seg.start_lat.is_finite()
+        && seg.start_lon.is_finite()
+        && seg.end_lat.is_finite()
+        && seg.end_lon.is_finite()
+        && !index.contains(f64::from(seg.start_lat), f64::from(seg.start_lon))
+        && !index.contains(f64::from(seg.end_lat), f64::from(seg.end_lon))
+}
+
+/// Keep endpoints in source order only when both lie outside known aerodromes
+/// and the leg misses every local line's unchanged 50 m snap corridor. A leg
+/// with one endpoint at a known airport cannot seed an unmapped airfield.
 fn collect_miss_snap_vertices(
     segments: &[FlightSegment],
     lines: &[AirportLineSegment],
     index: &AerodromeIndex,
-) -> Vec<(f32, f32)> {
-    let mut out = Vec::with_capacity(segments.len() * 2);
+    out: &mut Vec<(f32, f32)>,
+) {
     for seg in segments {
-        // Stage 1.5 only clusters aircraft ground vertices — GSE
-        // service-road clusters can look line-like but don't represent
-        // runway activity. Shuffle merged both veh_kinds into
-        // ground.arrow; filter here.
-        if seg.phase != Phase::Ground || seg.veh_kind != 0 {
-            continue;
-        }
-        // Stage 1's classifier shouldn't produce non-finite endpoints,
-        // but a downstream rayon panic would be harder to diagnose
-        // than a silent skip.
-        if !seg.start_lat.is_finite()
-            || !seg.start_lon.is_finite()
-            || !seg.end_lat.is_finite()
-            || !seg.end_lon.is_finite()
-        {
-            continue;
-        }
-        // Polygon gate — bool check, no per-line allocation. EITHER
-        // endpoint inside any known aerodrome → drop the whole leg
-        // (see docstring for the takeoff/landing transition rationale).
-        if index.contains(seg.start_lat as f64, seg.start_lon as f64)
-            || index.contains(seg.end_lat as f64, seg.end_lon as f64)
-        {
+        if !outside_known_aerodromes(seg, index) {
             continue;
         }
         // Line gate — only fully-exterior legs reach here, so the
@@ -380,13 +367,12 @@ fn collect_miss_snap_vertices(
         out.push((seg.start_lat, seg.start_lon));
         out.push((seg.end_lat, seg.end_lon));
     }
-    out
 }
 
 fn classify_cluster<'a>(
     strip: &DiscoveredStrip,
     aerodrome_index: &'a AerodromeIndex<'_>,
-    airport_lines_global: &[AirportLineRow],
+    airport_lines_global: &[AirportLineSegment],
 ) -> ClusterDisposition<'a> {
     if !strip.is_line {
         // Commits 1-4 ship line clusters only — apron-equivalent
@@ -406,31 +392,11 @@ fn classify_cluster<'a>(
     if strip.vertex_count > CLUSTER_MAX_VERTICES {
         return ClusterDisposition::Reject;
     }
-    // `nearest_aerodrome_within` admits name-only entries (key may
-    // still be empty if the OSM extract carried a `name=` tag with
-    // no ICAO `ref=`). Re-attribution requires a non-empty key
-    // because that's what flows into airport_traffic.arrow rows.
+    // A name-only aerodrome remains eligible for proximity, but cannot supply
+    // a traffic key. Distant-from-line clusters retain synthetic identity.
     let nearby_aerodrome = aerodrome_index
         .nearest(strip.center_lat as f64, strip.center_lon as f64)
         .filter(|a| !a.airport_key.is_empty());
-    // Inside a real aerodrome's polygon buffer the cluster must ALSO
-    // sit within `REAL_LINE_NEAR_BUFFER_M` of at least one real OSM
-    // aeroway microsegment. Otherwise it's a DBSCAN false positive
-    // (ADS-B vertices from cars on access roads, GSE in parking
-    // lots) that previously slipped through and got mis-labeled with
-    // the airport's key. Far-from-any-aerodrome clusters still flow
-    // through the existing `auto-<z20>` path — the line gate is
-    // intentionally gated inside the polygon arm so genuinely-new
-    // airfields with zero OSM coverage still get auto-discovered.
-    // Three-way disposition driven by observability: never silently
-    // drop a cluster, only relabel. A cluster in an aerodrome's
-    // polygon buffer AND near a real OSM line → fold into that
-    // airport. A cluster in the buffer but FAR from any real line
-    // (typical false-positive: ADS-B noise from access-road cars,
-    // approach-corridor mis-classifications) → relabel as a
-    // synthetic `auto-<z20>` airfield so it stays visible in the
-    // popup with full provenance, not erased. A cluster far from
-    // every aerodrome → auto-* as before.
     match nearby_aerodrome {
         Some(area)
             if cluster_near_real_aeroway_line(
@@ -453,15 +419,10 @@ fn classify_cluster<'a>(
 /// whose midpoint is >300 m from the cluster but whose body passes
 /// within 300 m still counts as "near".
 ///
-/// Linear `.any()` scan with short-circuit. For CZ scope `airport_
-/// lines_global` is ~10-15 k microsegs; global OSM aeroway coverage
-/// is in the low millions. Worst-case per cluster ~10 µs (CZ) to a
-/// few ms (global); ~dozens of clusters per z9 makes this a single-
-/// digit ms contribution to Stage 1.5 versus the DBSCAN itself.
 fn cluster_near_real_aeroway_line(
     cluster_lat: f64,
     cluster_lon: f64,
-    airport_lines_global: &[AirportLineRow],
+    airport_lines_global: &[AirportLineSegment],
 ) -> bool {
     use noise_compute::propagation::geo::point_to_segment;
     airport_lines_global.iter().any(|line| {

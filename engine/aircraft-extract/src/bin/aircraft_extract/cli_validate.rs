@@ -1,6 +1,6 @@
 //! Exact day sets, typed segment validation, and prerequisites for aircraft stage reuse.
 
-use crate::{ClassFilterArg, Feed, FromStage, source_cache::SourceCache};
+use crate::{source_cache::SourceCache, ClassFilterArg, Feed, FromStage};
 use aircraft_extract::{arrow_schemas, period::parse_date_id, scope::ScopeBbox};
 use anyhow::{Context, Result};
 use arrow::{
@@ -140,14 +140,11 @@ pub fn read_ga_n_days(dir: &Path) -> Result<u16> {
     Ok(u16::try_from(read_window_days(dir, "ga_days")?.len())?)
 }
 
-pub fn require_matching_window_days(dir: &Path, paths: &[PathBuf]) -> Result<()> {
-    let supplied: BTreeSet<_> = paths
-        .iter()
-        .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
-        .collect();
+pub fn require_matching_window_days(dir: &Path, days: &[String]) -> Result<()> {
+    let supplied: BTreeSet<_> = days.iter().cloned().collect();
     anyhow::ensure!(
         supplied == read_window_days(dir, "days")?,
-        "cruise days differ from shuffled days; rerun shuffle for the requested day set"
+        "requested days differ from shuffled days; rerun shuffle for the requested day set"
     );
     Ok(())
 }
@@ -318,13 +315,11 @@ mod tests {
         .unwrap();
         assert_eq!(read_window_n_days(temp.path()).unwrap(), 2);
         assert_eq!(read_ga_n_days(temp.path()).unwrap(), 3);
-        assert!(
-            require_matching_window_days(
-                temp.path(),
-                &["2025-01-01.arrow".into(), "2025-03-01.arrow".into()]
-            )
-            .is_err()
-        );
+        assert!(require_matching_window_days(
+            temp.path(),
+            &["2025-01-01".into(), "2025-03-01".into()]
+        )
+        .is_err());
         std::fs::write(temp.path().join("ga_days"), "").unwrap();
         assert_eq!(read_ga_n_days(temp.path()).unwrap(), 0);
         for invalid in ["2025-01-01\n2025-01-01\n", "2025-02-30\n", ""] {
@@ -338,46 +333,38 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let day = temp.path().join("2025-01-01.arrow");
         aircraft_extract::arrow_io::write_segments(&day, &[]).unwrap();
-        assert!(
-            validate_segments(
-                temp.path(),
-                &["2025-01-01".into()],
-                ClassFilterArg::Ga,
-                Feed::Adsbexchange,
-                temp.path()
-            )
-            .is_ok()
-        );
-        assert!(
-            validate_segments(
-                temp.path(),
-                &["2025-02-01".into()],
-                ClassFilterArg::Ga,
-                Feed::Adsbexchange,
-                temp.path()
-            )
-            .is_err()
-        );
-        assert!(
-            validate_segments(
-                temp.path(),
-                &["2025-01-01".into(), "2025-02-01".into()],
-                ClassFilterArg::Ga,
-                Feed::Adsbexchange,
-                temp.path()
-            )
-            .is_err()
-        );
+        assert!(validate_segments(
+            temp.path(),
+            &["2025-01-01".into()],
+            ClassFilterArg::Ga,
+            Feed::Adsbexchange,
+            temp.path()
+        )
+        .is_ok());
+        assert!(validate_segments(
+            temp.path(),
+            &["2025-02-01".into()],
+            ClassFilterArg::Ga,
+            Feed::Adsbexchange,
+            temp.path()
+        )
+        .is_err());
+        assert!(validate_segments(
+            temp.path(),
+            &["2025-01-01".into(), "2025-02-01".into()],
+            ClassFilterArg::Ga,
+            Feed::Adsbexchange,
+            temp.path()
+        )
+        .is_err());
         std::fs::write(day, "broken Arrow").unwrap();
-        assert!(
-            validate_segments(
-                temp.path(),
-                &["2025-01-01".into()],
-                ClassFilterArg::Ga,
-                Feed::Adsbexchange,
-                temp.path()
-            )
-            .is_err()
-        );
+        assert!(validate_segments(
+            temp.path(),
+            &["2025-01-01".into()],
+            ClassFilterArg::Ga,
+            Feed::Adsbexchange,
+            temp.path()
+        )
+        .is_err());
     }
 }

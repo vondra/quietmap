@@ -272,26 +272,31 @@ mod tests {
         let mut sub_store = Vec::with_capacity(N_FLIGHTS);
         for i in 0..N_FLIGHTS {
             let off = 0.018 + jitter(i, 11);
+            let grid_point =
+                |lat: f32, lon: f32| grid::lonlat_to_grid(f64::from(lon), f64::from(lat));
+            let a = grid_point(49.98 + off, 13.98 + off);
+            let b = grid_point(49.99 + off, 13.99 + off);
+            let c = grid_point(50.01 + off, 14.01 + off);
             sub_store.push((
-                vec![49.98 + off, 49.99 + off],
-                vec![13.98 + off, 13.99 + off],
+                vec![a.1, b.1],
+                vec![a.0, b.0],
                 vec![
-                    900.0 + jitter(i, 23) * 9_000.0,
-                    950.0 + jitter(i, 29) * 9_000.0,
+                    (900.0 + jitter(i, 23) * 9_000.0).round() as i16,
+                    (950.0 + jitter(i, 29) * 9_000.0).round() as i16,
                 ],
-                vec![49.99 + off, 50.01 + off],
-                vec![13.99 + off, 14.01 + off],
+                vec![b.1, c.1],
+                vec![b.0, c.0],
                 vec![
-                    950.0 + jitter(i, 31) * 9_000.0,
-                    1000.0 + jitter(i, 37) * 9_000.0,
+                    (950.0 + jitter(i, 31) * 9_000.0).round() as i16,
+                    (1000.0 + jitter(i, 37) * 9_000.0).round() as i16,
                 ],
                 vec![220.0f32, 220.0],
                 vec![1500.0f32, 1500.0],
                 vec![(i % 3) as u8, ((i + 1) % 3) as u8],
                 vec![10i16, 10],
                 vec![1u8, 1],
-                vec![300.0f32, 300.0],
-                vec![300.0f32, 300.0],
+                vec![300i16, 300],
+                vec![300i16, 300],
             ));
         }
         let callsigns: Vec<String> = (0..N_FLIGHTS).map(|i| format!("CSA{i:04}")).collect();
@@ -312,11 +317,11 @@ mod tests {
                     source_id: 0,
                     origin: 0,
                     sub_segments: SubSegmentSlice {
-                        start_lat: &s.0,
-                        start_lon: &s.1,
+                        start_gy: &s.0,
+                        start_gx: &s.1,
                         start_alt_m: &s.2,
-                        end_lat: &s.3,
-                        end_lon: &s.4,
+                        end_gy: &s.3,
+                        end_gx: &s.4,
                         end_alt_m: &s.5,
                         speed_kt: &s.6,
                         length_m: &s.7,

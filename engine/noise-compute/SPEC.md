@@ -44,6 +44,11 @@ it does not copy every flight to the dateline. This corrects the former seam
 selection bypass and false negatives; it is not universal output parity with
 that bypass. Cruise retains its separate representative-length centroid gate.
 
+Ground-operation line divergence uses half a canonical surface pixel at receiver
+latitude: the z13 tile has 512 pixels. Popup and GPU use the same grid-derived
+floor. This corrects the retired z12 floor, which was twice the current half
+pixel and reduced the near-line contribution by approximately 3 dB.
+
 ## 4.7 Vector screening
 
 One source-to-receiver ray shares its bare-earth raster profile between terrain

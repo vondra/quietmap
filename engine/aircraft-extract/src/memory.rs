@@ -26,6 +26,17 @@ pub fn max_concurrent_days(num_days: usize, peak_per_day_gb: f64) -> usize {
     k.clamp(1, num_days.max(1))
 }
 
+/// Refuse an individually oversized task, then bound concurrent actual working sets.
+pub fn max_concurrent_tasks(num_tasks: usize, peak_bytes: u64) -> anyhow::Result<usize> {
+    let available = available_memory_bytes();
+    anyhow::ensure!(peak_bytes <= available,
+        "one aircraft task requires {peak_bytes} B allocation allowance, memory limit is {available} B");
+    Ok(max_concurrent_days(
+        num_tasks,
+        peak_bytes.max(1) as f64 / 1_000_000_000.0,
+    ))
+}
+
 /// Total physical RAM in bytes from `/proc/meminfo` (Linux). Falls back to a
 /// conservative 16 GB if it can't be read, so the cap stays safe off-Linux.
 fn host_ram_bytes() -> u64 {
@@ -55,7 +66,7 @@ fn cgroup_memory_limit_bytes() -> Option<u64> {
 /// Memory budget for concurrency sizing: the smaller of host RAM and this
 /// process's cgroup limit, so the day-concurrency cap is OOM-safe in
 /// containers and `systemd-run -p MemoryMax=…` scopes, not just on bare metal.
-fn available_memory_bytes() -> u64 {
+pub fn available_memory_bytes() -> u64 {
     let host = host_ram_bytes();
     cgroup_memory_limit_bytes().map_or(host, |lim| host.min(lim))
 }

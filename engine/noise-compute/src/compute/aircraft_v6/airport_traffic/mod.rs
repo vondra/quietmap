@@ -82,23 +82,11 @@ const PROFILE_MIX_TOP_N: usize = 3;
 // `///` — this block is module-level prose, not a docstring for the next
 // `popup_pixel_floor_m` item.)
 
-/// Half a base-level Mercator pixel at `lat`, in metres. The HM3 ground
-/// heatmap is rendered from the base tiles (z12 with 512-px tiles since
-/// the 2026-07 shift — the same physical lattice as the old z13@256),
-/// and its kernel floors `d_perp` / `d_endpoint` at this value to
-/// anti-alias the line-source `1/d` singularity
-/// (`ground_ops.rs::scatter_tile`). The popup uses the same floor so the
-/// numbers it shows match the HM3 pixel under the cursor on near-line
-/// receivers.
-fn popup_pixel_floor_m(lat: f64) -> f64 {
-    // 78_271.516… is the WGS84 equatorial metres-per-pixel at z=0 with
-    // 512-px tiles; /4096 = the z12 base. Mirror of
-    // `raster_reader::fused_tile_z13::tile_pixel_size_m(12, lat)`, inlined
-    // to avoid a cross-crate dep for one constant. The VALUE is identical
-    // to the pre-shift 156_543.033…/8192 form — the physical finest pixel
-    // (~19.1 m equatorial) did not change, so popup numbers are invariant.
-    const BASE_EQUATORIAL_HALF_PX_M: f64 = 78_271.516_964_020_5 / 4096.0 * 0.5;
-    BASE_EQUATORIAL_HALF_PX_M * lat.to_radians().cos()
+/// Half of the canonical surface painter pixel, shared by popup and GPU ground operations.
+pub fn popup_pixel_floor_m(lat: f64) -> f64 {
+    use grid::surface_corner::{BLOCK_PIXEL_SIDE, WORLD_BLOCK_SIDE};
+    let world_pixels = f64::from(WORLD_BLOCK_SIDE) * BLOCK_PIXEL_SIDE as f64;
+    grid::EARTH_CIRCUMFERENCE_M / world_pixels * 0.5 * lat.to_radians().cos()
 }
 
 /// `10^(A_WEIGHTING[i] / 10)` for each of the eight bands. Precomputing

@@ -1,6 +1,7 @@
 //! Validated real and synthetic airport lines with explicit prepared-square ownership.
 use super::*;
-use crate::airport_io::{nearest_aerodrome_within, read_airport_lines};
+use crate::airport_index::AerodromeIndex;
+use crate::airport_io::read_airport_lines;
 use crate::geo::midpoint;
 use crate::synth_airport_io::{is_synthetic_osm_id, read_synth_airport_lines, SYNTH_LINES_FILE};
 
@@ -13,11 +14,11 @@ pub(super) struct SquareCache {
 }
 
 impl SquareCache {
-    pub(super) fn load(root: &Path, owner: u64, areas: &[AirportArea]) -> Result<Self> {
-        Self::load_many(root, &[owner], areas)
+    pub(super) fn load(root: &Path, owner: u64, index: &AerodromeIndex) -> Result<Self> {
+        Self::load_many(root, &[owner], index)
     }
 
-    pub(super) fn load_many(root: &Path, owners: &[u64], areas: &[AirportArea]) -> Result<Self> {
+    pub(super) fn load_many(root: &Path, owners: &[u64], index: &AerodromeIndex) -> Result<Self> {
         let mut cache = Self::default();
         for &owner in owners {
             let dir = root.join(square_path(owner));
@@ -43,7 +44,8 @@ impl SquareCache {
                 };
                 let (lat, lon) =
                     midpoint(line.start_lat, line.start_lon, line.end_lat, line.end_lon);
-                let key = nearest_aerodrome_within(lat as f64, lon as f64, areas)
+                let key = index
+                    .nearest(lat as f64, lon as f64)
                     .filter(|area| !area.airport_key.is_empty())
                     .map(|area| area.airport_key.clone())
                     .unwrap_or_else(|| {

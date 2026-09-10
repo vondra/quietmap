@@ -12,6 +12,7 @@ pub mod cruise;
 pub mod geo;
 pub mod poly;
 pub mod raster;
+pub mod surface_corner;
 
 use std::f64::consts::PI;
 

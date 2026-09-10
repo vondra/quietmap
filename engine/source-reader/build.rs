@@ -1,6 +1,6 @@
-//! Build script for the source-reader NAPI addon — runs `napi_build::setup()`
-//! so the Node `.node` binding (popup engine) links correctly.
-extern crate napi_build;
+//! Configure Node addon linkage only for an explicitly requested Node build.
 fn main() {
-    napi_build::setup();
+    if std::env::var_os("CARGO_FEATURE_NODE").is_some() {
+        napi_build::setup();
+    }
 }

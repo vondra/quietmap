@@ -67,6 +67,25 @@ impl ClassFilterArg {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Plan world fold/support/gather from completed spill without modifying it.
+    CruiseFinishPlan {
+        #[arg(long)]
+        spill_dir: PathBuf,
+        #[arg(long)]
+        producer_executable: PathBuf,
+        /// Independently pinned digest from the admitted spill launch receipt.
+        #[arg(long)]
+        producer_sha256: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Count primary cruise transits without producing spill or prepared outputs.
+    CruiseCensus {
+        #[arg(long, required = true)]
+        segments_dir: Vec<PathBuf>,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Check complete expected day files, class routing, provenance, and IPC payloads.
     ValidateSegments {
         #[arg(long)]
@@ -130,5 +149,11 @@ pub enum Cmd {
         ga_adsb_cache: Option<PathBuf>,
         #[arg(long, default_value_t = false)]
         fail_on_ga_cruise: bool,
+        /// Retain completed raw spill for separately admitted fold/gather work.
+        #[arg(long, value_enum, default_value_t = aircraft_extract::stage_2b::CruisePhase::All)]
+        cruise_phase: aircraft_extract::stage_2b::CruisePhase,
+        /// Reserved net filesystem growth for spill-only work, including its receipt.
+        #[arg(long)]
+        cruise_spill_disk_budget_bytes: Option<u64>,
     },
 }

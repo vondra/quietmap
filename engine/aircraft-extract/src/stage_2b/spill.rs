@@ -20,29 +20,6 @@ pub(super) fn list_spill_parts(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
     Ok(out)
 }
 
-/// Rough byte estimate for a worker's thread-local accumulator —
-/// per-bucket and per-fid overheads dominate; HashMap fill-factor
-/// constant absorbed into the per-bucket multiplier. Checked at
-/// SIZE_CHECK_INTERVAL so per-call cost amortises.
-pub(super) fn estimate_worker_bytes(
-    by_square: &HashMap<u64, HashMap<CruiseKey, CruiseAccum>>,
-) -> usize {
-    let mut n_buckets = 0usize;
-    let mut n_fids = 0usize;
-    let mut n_top_entries = 0usize;
-    for inner in by_square.values() {
-        n_buckets += inner.len();
-        for accum in inner.values() {
-            n_fids += accum.fid_set.len();
-            n_top_entries += accum.top.len();
-        }
-    }
-    // 200 B per (z9, CruiseKey) bucket = CruiseAccum + 2× HashMap entries
-    // (outer + inner). 24 B per fid (HashSet<u64> entry: 8 B u64 + 16 B
-    // hash table overhead). TOP_ENTRY_BYTES per top entry (capped at K).
-    n_buckets * 200 + n_fids * 24 + n_top_entries * TOP_ENTRY_BYTES
-}
-
 /// Consume the worker's accumulator into spill files. Takes `&mut` and
 /// drains via `std::mem::take` so callsign Strings move (no per-fid
 /// clone — ~10–100 fids per bucket × millions of buckets at global

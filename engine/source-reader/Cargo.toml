@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["node"]
+default = []
 node = ["dep:napi", "dep:napi-derive"]
 
 [lib]
@@ -19,6 +19,7 @@ memmap2 = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 grid = { path = "../grid" }
+tile-painter = { path = "../tile-painter" }
 noise-compute = { path = "../noise-compute" }
 arrow-batching = { path = "../arrow-batching" }
 raster-reader = { path = "../raster-reader" }

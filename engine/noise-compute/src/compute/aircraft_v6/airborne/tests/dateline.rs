@@ -3,8 +3,8 @@
 use super::*;
 use grid::geo::{normalize_longitude, wrapped_longitude_delta};
 
-// Binary fractions survive the runtime f32 view exactly, even beside ±180°.
-const STEP_DEG: f64 = 1.0 / 1024.0;
+// This z18 longitude step is exact on both the prepared grid and f32 at ±180°.
+const STEP_DEG: f64 = 360.0 / 262144.0;
 
 fn scene(receiver_lat: f64, receiver_lon: f64, eastbound: bool, side: f64) -> [f64; 8] {
     let receiver = Receiver::new(receiver_lat, receiver_lon, 0.0);
@@ -15,11 +15,24 @@ fn scene(receiver_lat: f64, receiver_lon: f64, eastbound: bool, side: f64) -> [f
         (side * 2.0, -4.0, side * 2.0, 4.0)
     };
     let mut columns = one_subseg("B738");
-    columns.start_lon = [normalize_longitude(receiver_lon + start_x * STEP_DEG) as f32];
-    columns.end_lon = [normalize_longitude(receiver_lon + end_x * STEP_DEG) as f32];
-    columns.start_lat = [(receiver_lat + start_y * STEP_DEG) as f32];
-    columns.end_lat = [(receiver_lat + end_y * STEP_DEG) as f32];
-    columns.alt = [20.0];
+    let start = grid::lonlat_to_grid(
+        f64::from(normalize_longitude(receiver_lon + start_x * STEP_DEG) as f32),
+        f64::from((receiver_lat + start_y * STEP_DEG) as f32),
+    );
+    let end = grid::lonlat_to_grid(
+        f64::from(normalize_longitude(receiver_lon + end_x * STEP_DEG) as f32),
+        f64::from((receiver_lat + end_y * STEP_DEG) as f32),
+    );
+    // Translate stored grid vertices exactly; projection floor rounding is
+    // independently covered by the producer roundtrip selection tests.
+    let grid_x = |lon: f64| ((lon / 360.0 * (1u64 << 30) as f64).round() as i64 + (1 << 29)) as i32;
+    columns.start_gx = [grid_x(normalize_longitude(
+        receiver_lon + start_x * STEP_DEG,
+    ))];
+    columns.start_gy = [start.1];
+    columns.end_gx = [grid_x(normalize_longitude(receiver_lon + end_x * STEP_DEG))];
+    columns.end_gy = [end.1];
+    columns.alt = [20];
     columns.flags = [1];
     columns.length = [(8.0
         * STEP_DEG
@@ -62,8 +75,10 @@ fn scene(receiver_lat: f64, receiver_lon: f64, eastbound: bool, side: f64) -> [f
     ));
     assert!(
         flight.free_period_energy[0] > flight.period_energy[0],
-        "ridge must screen"
+        "ridge must screen: lat={receiver_lat} lon={receiver_lon} eastbound={eastbound} side={side}"
     );
+    let start = row.sub_segments.start_lat_lon(0);
+    let end = row.sub_segments.end_lat_lon(0);
     let segment = AircraftSegment {
         flight_id: 1,
         profile_idx: row.profile_idx,
@@ -71,12 +86,12 @@ fn scene(receiver_lat: f64, receiver_lon: f64, eastbound: bool, side: f64) -> [f
         on_ground: false,
         period: 0,
         date_id: 0,
-        start_lat: columns.start_lat[0] as f64,
-        start_lon: columns.start_lon[0] as f64,
-        start_alt_m: columns.alt[0],
-        end_lat: columns.end_lat[0] as f64,
-        end_lon: columns.end_lon[0] as f64,
-        end_alt_m: columns.alt[0],
+        start_lat: start[0] as f64,
+        start_lon: start[1] as f64,
+        start_alt_m: f32::from(columns.alt[0]),
+        end_lat: end[0] as f64,
+        end_lon: end[1] as f64,
+        end_alt_m: f32::from(columns.alt[0]),
         speed_kt: columns.speed[0],
         segment_length_m: columns.length[0],
         count_weight: 1.0,

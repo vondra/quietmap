@@ -9,13 +9,19 @@ use rayon::prelude::*;
 use crate::arrow_io::{for_each_segment_batch, read_segments, write_segments};
 use crate::flight::{FlightSegment, Phase};
 use crate::geo::{midpoint, square_path};
-use crate::progress::{Milestone, finished, human, started};
+use crate::progress::{finished, human, started, Milestone};
 use crate::scope::ScopeBbox;
 use crate::spatial::{square_directories, square_id};
 
 /// Partition destination cells across 256 gather tasks; each worker writes
 /// one file at a time, independently of the number of supported cells.
 const SHUFFLE_HASH_BUCKETS: u64 = 256;
+
+#[path = "shuffle_completion.rs"]
+pub mod completion;
+#[path = "shuffle_memory.rs"]
+mod memory;
+use memory::DestinationCounts;
 
 fn shuffle_bucket(square: u64) -> u64 {
     let mut x = square;
@@ -79,7 +85,8 @@ fn pass_a_bucket_dir(temp_dir: &Path, phase: &str, hash: u64) -> PathBuf {
 ///
 /// `scope` filters destination cells in both passes, including support cells
 /// reached from an original segment whose midpoint is outside the scope.
-/// The next run removes temporary parts left by an interrupted gather.
+/// Completed destination phases release their scatter parts. An interrupted run
+/// restarts from retained day inputs; sampling manifests appear only after gather.
 pub fn shuffle_per_square(
     day_paths: &[PathBuf],
     ga_day_paths: &[PathBuf],
@@ -88,6 +95,7 @@ pub fn shuffle_per_square(
 ) -> Result<()> {
     require_unique_day_stems("airline", day_paths)?;
     require_unique_day_stems("GA", ga_day_paths)?;
+    let source_receipts = completion::input_receipts(day_paths, ga_day_paths)?;
     let temp_dir = out_dir
         .parent()
         .ok_or_else(|| anyhow::anyhow!("out_dir has no parent for temp_shuffle sibling"))?
@@ -112,6 +120,7 @@ pub fn shuffle_per_square(
     );
     let pass_a_start = std::time::Instant::now();
     let counter = Milestone::new("shuffle/passA", "segments", 1_000_000);
+    let mut destinations = DestinationCounts::new();
     pass_a(
         day_paths,
         "air",
@@ -119,8 +128,17 @@ pub fn shuffle_per_square(
         &temp_dir,
         scope,
         &counter,
+        &mut destinations,
     )?;
-    pass_a(ga_day_paths, "ga", true, &temp_dir, scope, &counter)?;
+    pass_a(
+        ga_day_paths,
+        "ga",
+        true,
+        &temp_dir,
+        scope,
+        &counter,
+        &mut destinations,
+    )?;
     let pass_a_total = counter.total();
     finished(
         "shuffle/passA",
@@ -144,7 +162,7 @@ pub fn shuffle_per_square(
         &format!("{} hash buckets", SHUFFLE_HASH_BUCKETS),
     );
     let pass_b_start = std::time::Instant::now();
-    let pass_b_shards = pass_b(&temp_dir, out_dir, scope)?;
+    let pass_b_shards = pass_b(&temp_dir, out_dir, scope, &destinations)?;
     finished(
         "shuffle/passB",
         &format!(
@@ -154,17 +172,16 @@ pub fn shuffle_per_square(
         ),
     );
 
-    let _ = std::fs::remove_dir_all(&temp_dir);
-
-    for (name, paths) in [("days", day_paths), ("ga_days", ga_day_paths)] {
-        let mut days: Vec<_> = paths
-            .iter()
-            .map(|path| path.file_stem().unwrap().to_str().unwrap())
-            .collect();
-        days.sort_unstable();
-        std::fs::write(out_dir.join(name), days.join("\n"))
-            .with_context(|| format!("write {name} in {}", out_dir.display()))?;
-    }
+    std::fs::remove_dir_all(&temp_dir)?;
+    completion::publish(
+        out_dir,
+        day_paths,
+        ga_day_paths,
+        scope,
+        &source_receipts,
+        pass_b_shards,
+        |phase, square| destinations.rows(phase, square),
+    )?;
     Ok(())
 }
 
@@ -203,6 +220,7 @@ fn pass_a(
     temp_dir: &Path,
     scope: Option<&ScopeBbox>,
     counter: &Milestone,
+    destinations: &mut DestinationCounts,
 ) -> Result<()> {
     let mut largest_input_bytes = 0;
     for path in day_paths {
@@ -217,17 +235,18 @@ fn pass_a(
         day_paths.len(),
         peak_per_day_gb,
     )) {
-        chunk.par_iter().try_for_each(|day_path| -> Result<()> {
-            counter.add(scatter_day(
-                day_path,
-                pass,
-                hybrid,
-                temp_dir,
-                scope,
-                PASS_A_SPILL_BYTES,
-            )?);
-            Ok(())
-        })?;
+        let completed = chunk
+            .par_iter()
+            .map(|day_path| -> Result<DestinationCounts> {
+                let counts =
+                    scatter_day(day_path, pass, hybrid, temp_dir, scope, PASS_A_SPILL_BYTES)?;
+                counter.add(counts.scattered_rows);
+                Ok(counts)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for counts in completed {
+            destinations.merge(counts);
+        }
     }
     Ok(())
 }
@@ -239,7 +258,7 @@ fn scatter_day(
     temp_dir: &Path,
     scope: Option<&ScopeBbox>,
     spill_bytes: usize,
-) -> Result<u64> {
+) -> Result<DestinationCounts> {
     let day_stem = day_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -248,7 +267,7 @@ fn scatter_day(
     let mut buckets = HashMap::new();
     let mut buffered_bytes = 0;
     let mut part = 0;
-    let mut kept = 0;
+    let mut counts = DestinationCounts::new();
     for_each_segment_batch(day_path, |segments| {
         for seg in segments {
             anyhow::ensure!(
@@ -271,13 +290,14 @@ fn scatter_day(
             // Gather expands each hash copy to its cells exactly once.
             let mut hashes = [false; SHUFFLE_HASH_BUCKETS as usize];
             for square in destination_squares(&seg, scope)? {
+                counts.add(seg.phase, square, seg.callsign.len());
                 let hash = shuffle_bucket(square);
                 if !std::mem::replace(&mut hashes[hash as usize], true) {
                     buckets
                         .entry((phase, hash))
                         .or_insert_with(Vec::new)
                         .push(seg.clone());
-                    kept += 1;
+                    counts.scattered_rows += 1;
                     buffered_bytes += row_bytes;
                     if buffered_bytes >= spill_bytes {
                         flush_pass_a(&mut buckets, temp_dir, pass, day_stem, &mut part)?;
@@ -290,7 +310,7 @@ fn scatter_day(
     })
     .with_context(|| format!("scatter {}", day_path.display()))?;
     flush_pass_a(&mut buckets, temp_dir, pass, day_stem, &mut part)?;
-    Ok(kept)
+    Ok(counts)
 }
 
 /// Pass-A temp shard key carries a pass discriminator (`air_` / `ga_`)
@@ -313,41 +333,20 @@ fn flush_pass_a(
     Ok(())
 }
 
-/// How many hash buckets Pass B regroups in RAM concurrently. Each worker
-/// loads its WHOLE bucket into a `HashMap<z9, Vec<FlightSegment>>`, so the
-/// working set is `concurrency × bucket_ram`. Hash bucketing spreads z9s
-/// uniformly, so buckets are near-equal — but at world scale (6.9 B segments,
-/// 2026-06-12) a full-width pool meant 24 × ~6.4 GB ≈ 150 GB on a 94 GB host:
-/// 63 GB of swap, ~2 shards/min, a de-facto deadlock. Same policy as Pass A:
-/// size to 60 % of min(host, cgroup) RAM, est. RAM = 2× the on-disk part
-/// bytes of the LARGEST bucket (arrow → Vec expansion, conservative).
-fn pass_b_concurrency(temp_dir: &Path) -> Result<usize> {
-    let mut max_bucket_bytes: u64 = 0;
-    for phase in ["airborne", "ground"] {
-        for hash in 0..SHUFFLE_HASH_BUCKETS {
-            let mut bytes = 0;
-            for path in list_pass_a_parts(&pass_a_bucket_dir(temp_dir, phase, hash))? {
-                bytes += std::fs::metadata(&path)?.len();
-            }
-            max_bucket_bytes = max_bucket_bytes.max(bytes);
-        }
-    }
-    let est_ram_per_bucket_gb = (max_bucket_bytes as f64 * 2.0) / 1_000_000_000.0;
-    if est_ram_per_bucket_gb < 0.1 {
-        return Ok(rayon::current_num_threads());
-    }
-    Ok(crate::memory::max_concurrent_days(
-        rayon::current_num_threads(),
-        est_ram_per_bucket_gb,
-    ))
-}
-
-fn pass_b(temp_dir: &Path, out_dir: &Path, scope: Option<&ScopeBbox>) -> Result<u64> {
-    let phases = ["airborne", "ground"];
-    let workers = pass_b_concurrency(temp_dir)?;
+fn pass_b(
+    temp_dir: &Path,
+    out_dir: &Path,
+    scope: Option<&ScopeBbox>,
+    destinations: &DestinationCounts,
+) -> Result<u64> {
+    let phases = [("airborne", Phase::Airborne), ("ground", Phase::Ground)];
+    let allocation = destinations.largest_gather_allocation();
+    let workers =
+        crate::memory::max_concurrent_tasks(rayon::current_num_threads(), allocation as u64)?;
+    let expected_squares = destinations.square_counts_by_bucket();
     started(
         "shuffle/passB",
-        &format!("{workers} concurrent buckets (RAM-bounded)"),
+        &format!("{workers} concurrent buckets; {allocation} B allocation allowance per bucket"),
     );
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
@@ -360,9 +359,12 @@ fn pass_b(temp_dir: &Path, out_dir: &Path, scope: Option<&ScopeBbox>) -> Result<
             .into_par_iter()
             .try_for_each(|hash| -> Result<()> {
                 let mut shards_this_bucket = 0u64;
-                for phase in phases {
+                for (phase, phase_kind) in phases {
                     let parts = list_pass_a_parts(&pass_a_bucket_dir(temp_dir, phase, hash))?;
+                    let expected = expected_squares[phase_kind.as_u8() as usize][hash as usize];
                     if parts.is_empty() {
+                        anyhow::ensure!(expected == 0,
+                            "gather lost {expected} destination squares in {phase}/hash_{hash:03x}");
                         continue;
                     }
                     let mut by_square: HashMap<u64, Vec<FlightSegment>> = HashMap::new();
@@ -372,16 +374,36 @@ fn pass_b(temp_dir: &Path, out_dir: &Path, scope: Option<&ScopeBbox>) -> Result<
                         for seg in segs {
                             for square in destination_squares(&seg, scope)? {
                                 if shuffle_bucket(square) == hash {
-                                    by_square.entry(square).or_default().push(seg.clone());
+                                    by_square
+                                        .entry(square)
+                                        .or_insert_with(|| {
+                                            Vec::with_capacity(
+                                                destinations.rows(phase_kind, square),
+                                            )
+                                        })
+                                        .push(seg.clone());
                                 }
                             }
                         }
                     }
+                    anyhow::ensure!(by_square.len() == expected,
+                        "gather destination square count differs from scatter for {phase}/hash_{hash:03x}");
                     for (square, segs) in by_square {
+                        anyhow::ensure!(
+                            segs.len() == destinations.rows(phase_kind, square),
+                            "gather row count differs from scatter for {phase}/{}",
+                            square_path(square)
+                        );
                         let square_dir = out_dir.join(square_path(square));
                         std::fs::create_dir_all(&square_dir)?;
                         write_segments(&square_dir.join(format!("{phase}.arrow")), &segs)?;
                         shards_this_bucket += 1;
+                    }
+                    // Every destination in this phase has been synced, closed and renamed.
+                    // No other hash owns these parts; retain them if any write failed.
+                    for part in parts {
+                        std::fs::remove_file(&part)
+                            .with_context(|| format!("release gathered {}", part.display()))?;
                     }
                 }
                 bucket_counter.add(1);

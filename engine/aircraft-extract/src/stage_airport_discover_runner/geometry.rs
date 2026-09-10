@@ -10,12 +10,6 @@ pub(super) fn emit_lines_for_strip(
     let centroid_lat = strip.center_lat as f64;
     let centroid_lon = strip.center_lon as f64;
     let osm_id = synth_osm_id_for(centroid_lat, centroid_lon);
-    let name = synth_display_name(
-        centroid_lat,
-        centroid_lon,
-        strip.length_m,
-        strip.vertex_count,
-    );
     for ms in microsegment_strip(strip) {
         out.push(SynthAirportLineRow {
             osm_id,
@@ -28,7 +22,7 @@ pub(super) fn emit_lines_for_strip(
             length_m: ms.length_m,
             heading_deg: strip.heading_deg,
             aeroway_type: AIRSTRIP_AEROWAY_TYPE,
-            name: name.clone(),
+            name: DISCOVERED_AIRSTRIP_NAME.into(),
         });
     }
 }

@@ -436,6 +436,8 @@ def validate_selected_sources(root, requested):
 
 def source_receipt(work, selected, stage, class_filter, action):
     """A successful native write anchors output stats to the selected publisher assets."""
+    if stage == 'sources' and action != 'check':
+        raise ValueError('sources-only receipt validation is read-only')
     path = work / 'source-receipts.sqlite'
     record = action == 'complete'
     if action != 'check':
@@ -455,7 +457,7 @@ def source_receipt(work, selected, stage, class_filter, action):
                 if action == 'check' or stage == 'segments':
                     if stored != expected:
                         raise ValueError(f'{day}: selected source/feed/class differs from completed Stage0 receipt')
-                stages = ['flights', 'segments'] if stage == 'segments' and action == 'check' else ['flights']
+                stages = [] if stage == 'sources' else (['flights', 'segments'] if stage == 'segments' and action == 'check' else ['flights'])
                 if action == 'check' or stage == 'segments':
                     for prerequisite in stages:
                         artifact = work / prerequisite / f'{day}.arrow'
@@ -492,7 +494,7 @@ def validate_main(arguments):
     parser.add_argument('--source-root', type=Path, required=True)
     parser.add_argument('--days', help='Requested dates; absent means the complete catalog calendar')
     parser.add_argument('--work-dir', type=Path)
-    parser.add_argument('--stage', choices=['flights', 'segments'])
+    parser.add_argument('--stage', choices=['sources', 'flights', 'segments'])
     parser.add_argument('--class-filter', choices=['all', 'ga', 'non-ga'], default='ga')
     parser.add_argument('--action', choices=['check', 'begin', 'complete'], default='check')
     args = parser.parse_args(arguments)

@@ -14,11 +14,11 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 use crate::filters;
-use crate::flight::{Flight, origin, source_id};
+use crate::flight::{origin, source_id, Flight};
 use crate::profile;
 use crate::segment::split_flights;
 use crate::source::FlightSource;
-use crate::trace::{AircraftTrace, TracePoint, read_day_traces, read_day_traces_filtered};
+use crate::trace::{read_day_traces, read_day_traces_filtered, AircraftTrace, TracePoint};
 
 /// Stage-0 class-window routing for the hybrid GA/airline sampling. The GA
 /// pass observes only full-year-sampled classes (PROP_C172 + HELICOPTER);

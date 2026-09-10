@@ -425,7 +425,13 @@ pub fn vegetation_attenuation_path(profile: &PathProfile) -> [f64; NUM_BANDS] {
 /// Trapezoidal weighting — endpoints not oversampled.
 pub fn ground_g_from_profile(profile: &PathProfile) -> f64 {
     let avg_imd = path_integral_u8(&profile.t, &profile.imd_u8, profile.dist_m);
-    (1.0 - avg_imd / 100.0).clamp(0.0, 1.0)
+    // Summation can put an all-hard mean just below100 and select a different
+    // CNOSSOS branch. The positive mean preserves empty/degenerate semantics.
+    if avg_imd > 0.0 && profile.imd_u8.iter().all(|&imd| imd >= 100) {
+        0.0
+    } else {
+        (1.0 - avg_imd / 100.0).clamp(0.0, 1.0)
+    }
 }
 
 /// Direct CNOSSOS ground input for a sampled ray.
@@ -520,6 +526,37 @@ mod tests {
         assert_eq!(trace.delta_m, 0.0, "flat profile should not diffract");
         assert!(trace.edges.is_empty());
         assert!(trace.attenuation_bands.iter().all(|&a| a == 0.0));
+    }
+
+    #[test]
+    fn hard_ground_cadence_keeps_exact_zero_without_clipping_mixed_ground() {
+        let mut profile = build_flat_profile(f64::from(999.9_f32), 0.0);
+        profile.imd_u8.fill(100);
+        let rounded_mean = path_integral_u8(&profile.t, &profile.imd_u8, profile.dist_m);
+        assert!(
+            rounded_mean < 100.0,
+            "fixture must exercise the summation residue"
+        );
+        assert_eq!(ground_g_from_profile(&profile), 0.0);
+        let path = cnossos_ground_path_from_profile(&mut profile, 4.0, 4.0, false);
+        assert_eq!(
+            super::super::iso9613::ground_atten_bands(path),
+            [-3.0; NUM_BANDS]
+        );
+
+        let middle = profile.imd_u8.len() / 2;
+        profile.imd_u8[middle] = 99;
+        let expected = 1.0 - path_integral_u8(&profile.t, &profile.imd_u8, profile.dist_m) / 100.0;
+        assert!(expected > 0.0 && expected < 0.01);
+        assert_eq!(ground_g_from_profile(&profile), expected);
+        profile.imd_u8.fill(255);
+        assert_eq!(ground_g_from_profile(&profile), 0.0);
+        profile.imd_u8.fill(0);
+        assert_eq!(ground_g_from_profile(&profile), 1.0);
+        assert_eq!(ground_g_from_profile(&PathProfile::new()), 1.0);
+        profile.dist_m = 0.0;
+        profile.imd_u8.fill(100);
+        assert_eq!(ground_g_from_profile(&profile), 1.0);
     }
 
     #[test]

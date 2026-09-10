@@ -1,0 +1,41 @@
+[package]
+name = "relevant-source-gpu"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[features]
+default = []
+gpu = []
+
+[dependencies]
+anyhow = "1"
+grid = { path = "../grid" }
+noise-compute = { path = "../noise-compute" }
+raster-reader = { path = "../raster-reader" }
+rayon = "1"
+tile-painter = { path = "../tile-painter" }
+arrow = { version = "54", default-features = false, features = ["ipc"] }
+source-reader = { path = "../source-reader", default-features = false }
+square-store = { path = "../square-store" }
+sha2 = "0.11"
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+
+[[bin]]
+name = "relevant-source-surface"
+path = "src/bin/relevant_source_surface.rs"
+required-features = ["gpu"]
+
+[[bin]]
+name = "surface-cuda-check"
+path = "src/bin/surface_cuda_check.rs"
+required-features = ["gpu"]
+
+[[bin]]
+name = "surface-corner-census"
+path = "src/bin/surface_corner_census.rs"
+required-features = ["gpu"]
+
+[dev-dependencies]
+tempfile = "3"

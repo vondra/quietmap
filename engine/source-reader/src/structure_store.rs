@@ -266,14 +266,21 @@ fn evict_to_budget(root: &Path, incoming: u64) {
     }
 }
 
-/// Persist a freshly built index. Failures are reported and swallowed: the
-/// cache is an accelerator, never a dependency.
-fn store_cached_index(root: &Path, square: Square, index: &ObstacleIndex, data_ver: u64) {
+/// Persist a freshly built index and reopen its immutable mapped form. A
+/// successful caller can then drop the builder's heap arrays immediately.
+/// Failures are reported and swallowed: the cache is an accelerator, never a
+/// dependency.
+fn store_cached_index(
+    root: &Path,
+    square: Square,
+    index: &ObstacleIndex,
+    data_ver: u64,
+) -> Option<ObstacleIndex> {
     let parts = index.file_parts(CACHE_CODE_VER, data_ver);
     let total = parts.total_len() as u64;
     if let Err(e) = std::fs::create_dir_all(root) {
         eprintln!("structure_store: no index cache at {}: {e}", root.display());
-        return;
+        return None;
     }
     evict_to_budget(root, total);
     let final_path = cache_file_path(root, square);
@@ -305,7 +312,9 @@ fn store_cached_index(root: &Path, square: Square, index: &ObstacleIndex, data_v
             final_path.display()
         );
         let _ = std::fs::remove_file(&tmp);
+        return None;
     }
+    load_cached_index(&final_path, data_ver)
 }
 
 /// Process-local memo of built indexes, keyed on the SAME identity the disk
@@ -577,7 +586,12 @@ fn square_index(
     // pinned is used for THIS query and forgotten.
     if let Some(ver) = ver {
         if let Some(root) = index_cache_root(data_dir) {
-            store_cached_index(&root, square, &built, ver);
+            if let Some(mapped) = store_cached_index(&root, square, &built, ver) {
+                let mapped = Arc::new(mapped);
+                memo_put(square, ver, &mapped);
+                log_square_load(square, "built+mapped", mapped.edge_count(), t0);
+                return Ok(mapped);
+            }
         }
         memo_put(square, ver, &built);
     }
@@ -586,9 +600,9 @@ fn square_index(
 }
 
 /// Per-square provenance under `POPUP_TIMING=1` — the same lever
-/// `query_noise_impl` uses for its stage timings. `mapped` vs `built` is the
-/// entire difference this cache makes, so it belongs in one log line instead of
-/// being inferred from a wall clock that also carries the Arrow square load.
+/// `query_noise_impl` uses for its stage timings. `mapped`, `built+mapped`, or
+/// uncached `built` names the retained representation explicitly instead of
+/// making operators infer it from a wall clock that also includes Arrow load.
 fn log_square_load(square: Square, how: &str, edges: usize, t0: std::time::Instant) {
     if std::env::var("POPUP_TIMING").as_deref() == Ok("1") {
         eprintln!(
@@ -689,16 +703,25 @@ fn square_center_latlon(square: Square) -> (f64, f64) {
 /// Ids are dense in file order, one per geometry-carrying row, buildings and
 /// walls sharing the one counter.
 fn build_square_index(square: Square, structures_arrow: &Path) -> Result<ObstacleIndex, String> {
-    let (origin_lat, origin_lon) = square_center_latlon(square);
-    let mut builder = ObstacleIndex::builder(origin_lat, origin_lon);
     let bytes = std::fs::read(structures_arrow)
         .map_err(|e| format!("read {}: {e}", structures_arrow.display()))?;
+    build_obstacle_index_from_arrow_bytes(square, &bytes, structures_arrow)
+}
+
+/// Build from the exact caller-verified bytes without file or cache lookups.
+pub fn build_obstacle_index_from_arrow_bytes(
+    square: Square,
+    bytes: &[u8],
+    structures_arrow: &Path,
+) -> Result<ObstacleIndex, String> {
+    let (origin_lat, origin_lon) = square_center_latlon(square);
+    let mut builder = ObstacleIndex::builder(origin_lat, origin_lon);
     // The cap lookup must be complete before ANY row is capped: the match is
     // spatial, so a first-rows-only lookup would miss neighbours further down
     // the file. Two streaming passes over the one in-memory read keep the old
     // loader's memory shape (a dense metro square's table runs to ~1 GB).
-    let low_profile = low_profile_from_structures(&bytes, structures_arrow)?;
-    let reader = FileReader::try_new(Cursor::new(&bytes), None)
+    let low_profile = low_profile_from_structures(bytes, structures_arrow)?;
+    let reader = FileReader::try_new(Cursor::new(bytes), None)
         .map_err(|e| format!("arrow open {}: {e}", structures_arrow.display()))?;
     let mut batches = Vec::new();
     for batch in reader {
@@ -1015,6 +1038,40 @@ mod tests {
         let set = load_obstacle_set(year, year, LAT, LON).unwrap();
         std::env::remove_var("QM_OBSTACLE_INDEX_CACHE");
         set
+    }
+
+    #[test]
+    fn published_index_is_reopened_with_identical_query_bytes() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("structures.arrow");
+        fx::write_structure_file(&path, &[house_row()], true);
+        let square = prague();
+        let ver = square_data_ver(square, &path).unwrap();
+        let built = build_square_index(square, &path).unwrap();
+        let mapped = store_cached_index(&tmp.path().join("cache"), square, &built, ver)
+            .expect("a successful publication must return its mapped form");
+        let built_view = built.gpu_view();
+        let mapped_view = mapped.gpu_view();
+        assert_eq!(mapped_view.edges_xyxyh, built_view.edges_xyxyh);
+        assert_eq!(mapped_view.edge_ids, built_view.edge_ids);
+        assert_eq!(mapped_view.edge_is_building, built_view.edge_is_building);
+        assert_eq!(mapped_view.cell_max_h, built_view.cell_max_h);
+    }
+
+    #[test]
+    fn verified_structure_bytes_build_without_reopening_the_label_or_using_caches() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("structures.arrow");
+        fx::write_structure_file(&path, &[house_row()], true);
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let index = build_obstacle_index_from_arrow_bytes(prague(), &bytes, &path).unwrap();
+        let set = ObstacleSet {
+            indexes: vec![Arc::new(index)],
+        };
+        let winner = point_inside_enclosed(&set, LAT + 0.0001, LON + 0.0001).unwrap();
+        assert_eq!(winner.stored_class, EnvelopeClass::Residential);
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
     }
 
     #[test]

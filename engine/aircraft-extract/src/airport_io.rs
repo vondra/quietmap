@@ -3,7 +3,7 @@
 use crate::spatial::square_directories;
 use anyhow::{Context, Result};
 use arrow::{array::*, ipc::reader::FileReader, record_batch::RecordBatch};
-use noise_compute::{propagation::geo::flat_dist, types::AirportArea};
+use noise_compute::types::AirportArea;
 use std::{fs::File, io::BufReader, path::Path};
 
 /// `airport_areas.arrow` aeroway_type for an `aeroway = aerodrome`
@@ -18,31 +18,6 @@ pub(crate) const NEAREST_AERODROME_FLOOR_M: f64 = 6000.0;
 /// nearest-aerodrome snap window. 1.5 gives a small buffer past the
 /// painted polygon for taxiway / runway approach segments.
 pub(crate) const NEAREST_AERODROME_RADIUS_MULT: f64 = 1.5;
-
-pub(crate) fn nearest_aerodrome_within(
-    lat: f64,
-    lon: f64,
-    areas: &[AirportArea],
-) -> Option<&AirportArea> {
-    let mut best: Option<(&AirportArea, f64)> = None;
-    for area in areas {
-        if area.aeroway_type != AERODROME_AEROWAY_TYPE {
-            continue;
-        }
-        if area.airport_key.is_empty() && area.name.is_empty() {
-            continue;
-        }
-        let radius = aerodrome_radius_m(area);
-        let dist = flat_dist(lat, lon, area.centroid_lat, area.centroid_lon);
-        if dist > radius {
-            continue;
-        }
-        if best.map(|(_, d)| dist < d).unwrap_or(true) {
-            best = Some((area, dist));
-        }
-    }
-    best.map(|(a, _)| a)
-}
 
 /// Centroid-radius used by the aerodrome gates: `max(6 km floor, √(area/π) × 1.5)`,
 /// with a 500 m fallback when `area_m2` is unknown. The single source of this
@@ -198,6 +173,7 @@ pub fn read_global_airports(root: &Path) -> Result<Vec<AirportArea>> {
     }
     areas.sort_by_key(|area| area.osm_id);
     areas.dedup_by_key(|area| area.osm_id);
+    areas.shrink_to_fit();
     Ok(areas)
 }
 
@@ -208,5 +184,6 @@ pub fn read_global_airport_lines(root: &Path) -> Result<Vec<AirportLineRow>> {
     }
     lines.sort_by_key(|line| (line.osm_id, line.segment_idx));
     lines.dedup_by_key(|line| (line.osm_id, line.segment_idx));
+    lines.shrink_to_fit();
     Ok(lines)
 }

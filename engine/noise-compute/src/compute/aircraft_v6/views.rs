@@ -12,24 +12,66 @@
 /// stores no intermediate terrain elevations.
 #[derive(Clone, Copy, Debug)]
 pub struct SubSegmentSlice<'a> {
-    pub start_lat: &'a [f32],
-    pub start_lon: &'a [f32],
-    pub start_alt_m: &'a [f32],
-    pub end_lat: &'a [f32],
-    pub end_lon: &'a [f32],
-    pub end_alt_m: &'a [f32],
+    pub start_gy: &'a [i32],
+    pub start_gx: &'a [i32],
+    pub start_alt_m: &'a [i16],
+    pub end_gy: &'a [i32],
+    pub end_gx: &'a [i32],
+    pub end_alt_m: &'a [i16],
     pub speed_kt: &'a [f32],
     pub length_m: &'a [f32],
     pub period: &'a [u8],
     pub date_id: &'a [i16],
     pub flags: &'a [u8],
-    pub terrain_start_elev_m: &'a [f32],
-    pub terrain_end_elev_m: &'a [f32],
+    pub terrain_start_elev_m: &'a [i16],
+    pub terrain_end_elev_m: &'a [i16],
 }
 
 impl SubSegmentSlice<'_> {
     pub fn len(&self) -> usize {
-        self.start_lat.len()
+        self.start_gx.len()
+    }
+
+    pub fn start_lat_lon(&self, index: usize) -> [f32; 2] {
+        Self::lat_lon(self.start_gx[index], self.start_gy[index])
+    }
+
+    pub fn end_lat_lon(&self, index: usize) -> [f32; 2] {
+        Self::lat_lon(self.end_gx[index], self.end_gy[index])
+    }
+
+    fn lat_lon(gx: i32, gy: i32) -> [f32; 2] {
+        let (x, y) = grid::grid_to_meters(gx, gy);
+        let (lon, lat) = grid::poly::meters_to_lonlat(x, y);
+        // Preserve the prepared popup's f32 geometry before the f64 kernel.
+        [lat as f32, lon as f32]
+    }
+
+    pub fn bbox(&self) -> BBox {
+        let mut min_x = i32::MAX;
+        let mut max_x = i32::MIN;
+        let mut min_y = i32::MAX;
+        let mut max_y = i32::MIN;
+        for (&gx, &gy) in self
+            .start_gx
+            .iter()
+            .zip(self.start_gy)
+            .chain(self.end_gx.iter().zip(self.end_gy))
+        {
+            min_x = min_x.min(gx);
+            max_x = max_x.max(gx);
+            min_y = min_y.min(gy);
+            max_y = max_y.max(gy);
+        }
+        // Mercator inverse is monotone; extrema need only two conversions.
+        let [min_lat, min_lon] = Self::lat_lon(min_x, min_y);
+        let [max_lat, max_lon] = Self::lat_lon(max_x, max_y);
+        BBox {
+            min_lat,
+            max_lat,
+            min_lon,
+            max_lon,
+        }
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0

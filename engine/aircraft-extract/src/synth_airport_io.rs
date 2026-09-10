@@ -10,7 +10,7 @@ use arrow::array::{
 };
 use arrow::record_batch::RecordBatch;
 
-use crate::arrow_io::{read_all_batches, write_record_batches};
+use crate::arrow_io::{read_all_batches, write_record_batch_stream};
 use crate::arrow_schemas::{synth_airport_areas_schema, synth_airport_lines_schema};
 
 /// True iff `osm_id` carries the [`SYNTHETIC_OSM_ID_BIT`] marker —
@@ -55,12 +55,7 @@ pub(crate) fn synth_osm_id_for(lat: f64, lon: f64) -> u64 {
 }
 
 pub(crate) fn synth_airport_key_for(lat: f64, lon: f64) -> String {
-    let cell = synth_cell(lat, lon);
-    let (gx, gy) = (
-        ((cell >> 20) << 10) as i32 + 512,
-        ((cell & ((1 << 20) - 1)) << 10) as i32 + 512,
-    );
-    let (lon, lat) = square_store::grid_cols::grid_cell_lonlat(gx, gy);
+    let (lon, lat) = synth_cell_center(synth_cell(lat, lon));
     format!(
         "auto-{}-{}",
         (lon * 1e5).round() as i32,
@@ -68,20 +63,30 @@ pub(crate) fn synth_airport_key_for(lat: f64, lon: f64) -> String {
     )
 }
 
-/// Display name surfaced in the popup as
-/// `"Aircraft - <name> ground ops"`. Format:
-/// `"Auto airfield <lat>,<lon> (<length_m> m, <visits> visits)"`.
-/// Concrete enough that a user recognises it as a strip and can
-/// visually locate it on the map via the coordinate prefix.
-pub(crate) fn synth_display_name(lat: f64, lon: f64, length_m: f32, visits: u32) -> String {
-    format!("Auto airfield {lat:.2},{lon:.2} ({length_m:.0} m, {visits} visits)")
+fn synth_cell_center(cell: u64) -> (f64, f64) {
+    square_store::grid_cols::grid_cell_lonlat(
+        (((cell >> 20) << 10) + 512) as i32,
+        (((cell & ((1 << 20) - 1)) << 10) + 512) as i32,
+    )
 }
+
+pub(crate) fn synth_owner_for_id(id: u64) -> Result<u64> {
+    anyhow::ensure!(
+        id >> 63 == 1 && id & !(SYNTHETIC_OSM_ID_BIT | ((1u64 << 40) - 1)) == 0,
+        "invalid discovered location identity"
+    );
+    let (lon, lat) = synth_cell_center(id & ((1u64 << 40) - 1));
+    Ok(grid::square_id(grid::square_of(lat, lon)) as u64)
+}
+
+/// Discovery identifies geometry; candidate vertices are not observed flight counts.
+pub const DISCOVERED_AIRSTRIP_NAME: &str = "Discovered airstrip";
 
 /// One row of `synth_airport_lines.arrow`. Carries an explicit
 /// `airport_key` because synthetic clusters have no icao/iata/name
 /// to derive identity from (unlike real OSM aerodromes).
 #[derive(Debug, Clone)]
-pub(crate) struct SynthAirportLineRow {
+pub struct SynthAirportLineRow {
     pub osm_id: u64,
     pub segment_idx: u16,
     pub airport_key: String,
@@ -110,14 +115,47 @@ pub(crate) struct SynthAirportAreaRow {
     pub area_m2: f32,
 }
 
-/// Truncate-and-rewrite `synth_airport_lines.arrow` at `path`.
-/// Routes through [`crate::arrow_io::write_record_batches`] for the
-/// sibling-`.tmp` + rename atomicity guarantee and the
-/// `create_dir_all` on the parent — so a missing z9 directory at
-/// the destination is created on first emission.
-pub(crate) fn write_synth_airport_lines(path: &Path, rows: &[SynthAirportLineRow]) -> Result<()> {
+// Bound decoded rows, string builders and IPC buffers independently of airport count.
+pub(crate) const SYNTH_WRITE_BATCH_ROWS: usize = 4096;
+
+pub(crate) fn writer_allocation_allowance(max_airport_key_bytes: usize) -> u64 {
+    // Real names are not copied, only their airport keys.
+    let key = max_airport_key_bytes.max(synth_airport_key_for(-90.0, -180.0).len());
+    let row =
+        std::mem::size_of::<SynthAirportLineRow>().max(std::mem::size_of::<SynthAirportAreaRow>());
+    // Rows + string growth, Arrow builders and serialized IPC coexist. Four
+    // row-sized fixed parts overbound every field/offset/validity buffer.
+    (4 * SYNTH_WRITE_BATCH_ROWS * (row + 2 * key.max(24) + 2 * DISCOVERED_AIRSTRIP_NAME.len()))
+        as u64
+}
+
+fn write_synth_rows<T>(
+    path: &Path,
+    schema: Arc<arrow::datatypes::Schema>,
+    rows: impl IntoIterator<Item = T>,
+    batch: impl Fn(&Arc<arrow::datatypes::Schema>, &[T]) -> Result<RecordBatch>,
+) -> Result<()> {
+    let mut rows = rows.into_iter();
+    let batches = std::iter::from_fn(|| {
+        let chunk: Vec<_> = rows.by_ref().take(SYNTH_WRITE_BATCH_ROWS).collect();
+        (!chunk.is_empty()).then(|| batch(&schema, &chunk))
+    });
+    write_record_batch_stream(path, &schema, batches)
+}
+
+/// Atomically replace synthetic lines in source order, including an empty stream.
+pub(crate) fn write_synth_airport_lines(
+    path: &Path,
+    rows: impl IntoIterator<Item = SynthAirportLineRow>,
+) -> Result<()> {
+    write_synth_rows(path, synth_airport_lines_schema(), rows, lines_batch)
+}
+
+fn lines_batch(
+    schema: &Arc<arrow::datatypes::Schema>,
+    rows: &[SynthAirportLineRow],
+) -> Result<RecordBatch> {
     let n = rows.len();
-    let schema = synth_airport_lines_schema();
 
     let mut osm_id = UInt64Builder::with_capacity(n);
     let mut seg_idx = UInt16Builder::with_capacity(n);
@@ -129,7 +167,7 @@ pub(crate) fn write_synth_airport_lines(path: &Path, rows: &[SynthAirportLineRow
     let mut len = Float32Builder::with_capacity(n);
     let mut heading = Float32Builder::with_capacity(n);
     let mut atype = UInt8Builder::with_capacity(n);
-    let mut name = StringBuilder::with_capacity(n, n * 48);
+    let mut name = StringBuilder::with_capacity(n, n * DISCOVERED_AIRSTRIP_NAME.len());
 
     for r in rows {
         osm_id.append_value(r.osm_id);
@@ -147,7 +185,7 @@ pub(crate) fn write_synth_airport_lines(path: &Path, rows: &[SynthAirportLineRow
         name.append_value(&r.name);
     }
 
-    let batch = RecordBatch::try_new(
+    Ok(RecordBatch::try_new(
         schema.clone(),
         vec![
             Arc::new(osm_id.finish()),
@@ -162,20 +200,26 @@ pub(crate) fn write_synth_airport_lines(path: &Path, rows: &[SynthAirportLineRow
             Arc::new(atype.finish()),
             Arc::new(name.finish()),
         ],
-    )?;
-
-    write_record_batches(path, &schema, &[batch])
+    )?)
 }
 
-/// Truncate-and-rewrite `synth_airport_areas.arrow` at `path`. Same
-/// atomic + parent-create behaviour as [`write_synth_airport_lines`].
-pub(crate) fn write_synth_airport_areas(path: &Path, rows: &[SynthAirportAreaRow]) -> Result<()> {
+/// Atomically replace synthetic areas in source order, including an empty stream.
+pub(crate) fn write_synth_airport_areas(
+    path: &Path,
+    rows: impl IntoIterator<Item = SynthAirportAreaRow>,
+) -> Result<()> {
+    write_synth_rows(path, synth_airport_areas_schema(), rows, areas_batch)
+}
+
+fn areas_batch(
+    schema: &Arc<arrow::datatypes::Schema>,
+    rows: &[SynthAirportAreaRow],
+) -> Result<RecordBatch> {
     let n = rows.len();
-    let schema = synth_airport_areas_schema();
 
     let mut osm_id = UInt64Builder::with_capacity(n);
     let mut airport_key = StringBuilder::with_capacity(n, n * 24);
-    let mut name = StringBuilder::with_capacity(n, n * 48);
+    let mut name = StringBuilder::with_capacity(n, n * DISCOVERED_AIRSTRIP_NAME.len());
     let mut atype = UInt8Builder::with_capacity(n);
     let mut clat = Int32Builder::with_capacity(n);
     let mut clon = Int32Builder::with_capacity(n);
@@ -192,7 +236,7 @@ pub(crate) fn write_synth_airport_areas(path: &Path, rows: &[SynthAirportAreaRow
         area.append_value(r.area_m2);
     }
 
-    let batch = RecordBatch::try_new(
+    Ok(RecordBatch::try_new(
         schema.clone(),
         vec![
             Arc::new(osm_id.finish()),
@@ -203,9 +247,7 @@ pub(crate) fn write_synth_airport_areas(path: &Path, rows: &[SynthAirportAreaRow
             Arc::new(clon.finish()),
             Arc::new(area.finish()),
         ],
-    )?;
-
-    write_record_batches(path, &schema, &[batch])
+    )?)
 }
 
 fn col_u64<'a>(b: &'a RecordBatch, n: &str) -> Option<&'a UInt64Array> {
@@ -232,7 +274,7 @@ fn col_f32<'a>(b: &'a RecordBatch, n: &str) -> Option<&'a Float32Array> {
 /// Routes through [`crate::arrow_io::read_all_batches`] for the
 /// `schema_version` guard — stale files raise loudly instead of
 /// silently decoding as zero rows.
-pub(crate) fn read_synth_airport_lines(path: &Path) -> Result<Vec<SynthAirportLineRow>> {
+pub fn read_synth_airport_lines(path: &Path) -> Result<Vec<SynthAirportLineRow>> {
     match std::fs::metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error.into()),

@@ -83,8 +83,7 @@ pub struct FusedPixel {
 }
 
 /// The C7.1 locality receipt measured 77.7775% exact hits at this capacity.
-/// At 36 bytes per entry it is 288 KiB per worker, so two SMT siblings fit in
-/// msas2's 1 MiB private L2 with room for profile state; 16K would not.
+/// At 36 bytes per entry it is 288 KiB per worker, retaining room for profile state.
 const PROFILE_QUAD_CACHE_ENTRIES: usize = 8192;
 const _: () = assert!(PROFILE_QUAD_CACHE_ENTRIES.is_power_of_two());
 
@@ -245,11 +244,21 @@ impl FusedGrid {
         lon_min: f64,
         lon_max: f64,
     ) -> Self {
-        Self::build_with_pixel_sampler(lat_min, lat_max, lon_min, lon_max, |lat, lon| FusedPixel {
-            elevation: rasters.dem.sample(lat, lon) as f32,
-            forest: rasters.forest.sample(lat, lon) as u8,
-            imd: rasters.imd.sample(lat, lon) as u8,
-            _pad: 0,
+        Self::build_with_pixel_sampler(lat_min, lat_max, lon_min, lon_max, |lat, lon| {
+            let elevation = rasters.dem.sample(lat, lon);
+            let forest = rasters.forest.sample(lat, lon);
+            let imd = rasters.imd.sample(lat, lon);
+            // Integer channel casts must not turn unavailable surface data into silence.
+            FusedPixel {
+                elevation: if [elevation, forest, imd].iter().all(|v| v.is_finite()) {
+                    elevation as f32
+                } else {
+                    f32::NAN
+                },
+                forest: forest as u8,
+                imd: imd as u8,
+                _pad: 0,
+            }
         })
     }
 
@@ -582,6 +591,33 @@ mod tests {
     use super::*;
     use noise_compute::types::RasterSampler;
     use std::path::Path;
+
+    #[test]
+    fn missing_surface_channel_cannot_be_cast_to_a_valid_quiet_pixel() {
+        use crate::{catalog, channel::Channel};
+        let square = grid::square_of(50.0, 14.0);
+        for missing in [
+            None,
+            Some(Channel::Dem),
+            Some(Channel::Forest),
+            Some(Channel::Imd),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            for channel in Channel::ALL {
+                let database =
+                    catalog::begin_channel(temp.path(), channel, &"1".repeat(64)).unwrap();
+                if Some(channel) != missing {
+                    catalog::record_square(&database, channel, square, None).unwrap();
+                }
+            }
+            let rasters = RealRasters::new(temp.path());
+            let fused = FusedGrid::build(&rasters, 49.9999, 50.0001, 13.9999, 14.0001);
+            assert!(fused
+                .pixels()
+                .iter()
+                .all(|pixel| pixel.elevation.is_finite() == missing.is_none()));
+        }
+    }
 
     fn test_rasters() -> RealRasters {
         RealRasters::new(Path::new("../../data/prepared/2026"))

@@ -165,7 +165,7 @@ pub(crate) fn compute_railways(
 ) -> (NoisePeriods, Vec<Contributor>) {
     use emission::railway::{self, RailType};
     use propagation::arc_screening::{
-        ArcBounds, ArcScreeningScratch, ArcSkyline, SkylineSnapshot, enter_emission_session,
+        enter_emission_session, ArcBounds, ArcScreeningScratch, ArcSkyline, SkylineSnapshot,
     };
     use rayon::prelude::*;
     use std::collections::HashMap;
@@ -614,7 +614,8 @@ pub(crate) fn compute_railways(
 
     let t_rail_pass2 = t_rail_start.elapsed() - t_rail_pass1;
     if timing_on {
-        let (steps, growths, sectors, growth_ms, raw_arcs, memo_hits, memo_miss) = crate::propagation::arc_screening::take_growth_census();
+        let (steps, growths, sectors, growth_ms, raw_arcs, memo_hits, memo_miss) =
+            crate::propagation::arc_screening::take_growth_census();
         eprintln!(
             "popup-stage rail pass1={:.0}ms (gates={:.0}ms arc={:.0}ms) pass2={:.0}ms kept={} steps={} growths={} sectors={} growth_ms={:.0} rawarcs={} memohit={} memomiss={}",
             t_rail_pass1.as_secs_f64() * 1000.0,

@@ -167,6 +167,18 @@ pub(super) fn write_airport_lines(rows: &[Vec<String>], path: &Path) -> Result<(
         let s_gy = parse_grid_cell(&row[4]);
         let e_gx = parse_grid_cell(&row[5]);
         let e_gy = parse_grid_cell(&row[6]);
+        let length_m: f32 = row[7].parse()?;
+        let same_endpoint = (s_gx, s_gy) == (e_gx, e_gy);
+        // Sub-grid source legs can collapse to one point and round to zero in spill.
+        if length_m == 0.0 && same_endpoint {
+            continue;
+        }
+        anyhow::ensure!(
+            length_m.is_finite() && length_m > 0.0 && !same_endpoint,
+            "invalid airport microsegment {}:{}",
+            row[1],
+            row[2]
+        );
         row_bboxes.push(segment_row_bbox(s_gx, s_gy, e_gx, e_gy));
         osm_id.append_value(row[1].parse().unwrap_or(0));
         seg_idx.append_value(row[2].parse().unwrap_or(0));
@@ -174,7 +186,7 @@ pub(super) fn write_airport_lines(rows: &[Vec<String>], path: &Path) -> Result<(
         sgy.append_value(s_gy);
         egx.append_value(e_gx);
         egy.append_value(e_gy);
-        len.append_value(row[7].parse().unwrap_or(0.0));
+        len.append_value(length_m);
         heading.append_value(row[8].parse().unwrap_or(0.0));
         // 255 = "other" sentinel matching airport_areas convention
         // (see classify::aeroway_type docstring).

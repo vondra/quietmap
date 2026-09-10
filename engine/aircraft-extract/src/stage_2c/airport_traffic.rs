@@ -48,9 +48,8 @@ pub struct LegIntersection {
 }
 
 /// Project one leg onto all candidate airport-line microsegments,
-/// returning the per-segment overlap length. Candidates are typically
-/// pre-filtered upstream by a measured z9 bounding-box index so this loop
-/// runs over O(10-100) segments per leg, not the global airport list.
+/// returning the per-segment overlap length in input order. The indexed
+/// writer uses the same frame, clipping and normalization functions.
 ///
 /// **Energy conservation:** when two OSM segments are within
 /// `2 * max_perp_m` of each other (parallel taxiways close together),
@@ -70,18 +69,33 @@ pub fn project_leg_onto_airport_lines(
     candidates: &[AirportLineSegment],
     max_perp_m: f32,
 ) -> Vec<LegIntersection> {
-    let leg_len_m = flat_dist(leg_start_lat, leg_start_lon, leg_end_lat, leg_end_lon);
-    let mut out = Vec::with_capacity(candidates.len().min(8));
-    let mut total: f32 = 0.0;
-    for seg in candidates {
-        let overlap = clipped_overlap_m(
-            leg_start_lat,
-            leg_start_lon,
-            leg_end_lat,
-            leg_end_lon,
-            seg,
-            max_perp_m,
-        );
+    collect_intersections(
+        flat_dist(leg_start_lat, leg_start_lon, leg_end_lat, leg_end_lon),
+        candidates.len(),
+        candidates.iter().map(|seg| {
+            (
+                seg,
+                clipped_overlap_m(
+                    leg_start_lat,
+                    leg_start_lon,
+                    leg_end_lat,
+                    leg_end_lon,
+                    seg,
+                    max_perp_m,
+                ),
+            )
+        }),
+    )
+}
+
+pub(super) fn collect_intersections<'a>(
+    leg_len_m: f32,
+    candidate_count: usize,
+    overlaps: impl Iterator<Item = (&'a AirportLineSegment, f32)>,
+) -> Vec<LegIntersection> {
+    let mut out = Vec::with_capacity(candidate_count.min(8));
+    let mut total = 0.0f32;
+    for (seg, overlap) in overlaps {
         if overlap > 0.0 {
             total += overlap;
             out.push(LegIntersection {
@@ -98,6 +112,59 @@ pub fn project_leg_onto_airport_lines(
         }
     }
     out
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct LineFrame {
+    pub mid_lat: f32,
+    pub mid_lon: f64,
+    pub m_per_deg_lon: f32,
+    pub s_half: f32,
+    pub u_e: f32,
+    pub u_n: f32,
+}
+
+impl LineFrame {
+    pub fn new(seg: &AirportLineSegment) -> Option<Self> {
+        let mid_lat = (seg.start_lat + seg.end_lat) * 0.5;
+        let delta_lon = wrapped_longitude_delta(f64::from(seg.start_lon), f64::from(seg.end_lon));
+        let mid_lon = f64::from(seg.start_lon) + delta_lon * 0.5;
+        let cos_lat = (mid_lat as f64).to_radians().cos() as f32;
+        let m_per_deg_lon = M_PER_DEG_LON_EQUATOR * cos_lat;
+
+        // Segment vector in (east_m, north_m).
+        let seg_dx_m = delta_lon as f32 * m_per_deg_lon;
+        let seg_dy_m = (seg.end_lat - seg.start_lat) * M_PER_DEG_LAT;
+        let seg_len_m = (seg_dx_m * seg_dx_m + seg_dy_m * seg_dy_m).sqrt();
+        // Guard against NaN/inf coordinates and sub-millimeter degenerate
+        // segments — both would propagate to garbage clipping results.
+        if !seg_len_m.is_finite() || seg_len_m < 1e-3 {
+            return None;
+        }
+        let s_half = seg_len_m * 0.5;
+        let inv_len = 1.0 / seg_len_m;
+        // u = unit vector along the segment (east_m, north_m components).
+        // v = perpendicular, 90° CCW from u in the east-north plane.
+        let u_e = seg_dx_m * inv_len;
+        let u_n = seg_dy_m * inv_len;
+
+        Some(Self {
+            mid_lat,
+            mid_lon,
+            m_per_deg_lon,
+            s_half,
+            u_e,
+            u_n,
+        })
+    }
+    fn to_local(self, lat: f32, lon: f32) -> (f32, f32) {
+        let dlon_m =
+            wrapped_longitude_delta(self.mid_lon, f64::from(lon)) as f32 * self.m_per_deg_lon;
+        let dlat_m = (lat - self.mid_lat) * M_PER_DEG_LAT;
+        let x = dlon_m * self.u_e + dlat_m * self.u_n;
+        let y = dlon_m * -self.u_n + dlat_m * self.u_e;
+        (x, y)
+    }
 }
 
 /// Length of the leg `L1→L2` lying within the `max_perp_m` buffer of
@@ -118,40 +185,23 @@ fn clipped_overlap_m(
     seg: &AirportLineSegment,
     max_perp_m: f32,
 ) -> f32 {
-    let mid_lat = (seg.start_lat + seg.end_lat) * 0.5;
-    let delta_lon = wrapped_longitude_delta(f64::from(seg.start_lon), f64::from(seg.end_lon));
-    let mid_lon = f64::from(seg.start_lon) + delta_lon * 0.5;
-    let cos_lat = (mid_lat as f64).to_radians().cos() as f32;
-    let m_per_deg_lon = M_PER_DEG_LON_EQUATOR * cos_lat;
-
-    // Segment vector in (east_m, north_m).
-    let seg_dx_m = delta_lon as f32 * m_per_deg_lon;
-    let seg_dy_m = (seg.end_lat - seg.start_lat) * M_PER_DEG_LAT;
-    let seg_len_m = (seg_dx_m * seg_dx_m + seg_dy_m * seg_dy_m).sqrt();
-    // Guard against NaN/inf coordinates and sub-millimeter degenerate
-    // segments — both would propagate to garbage clipping results.
-    if !seg_len_m.is_finite() || seg_len_m < 1e-3 {
+    let Some(frame) = LineFrame::new(seg) else {
         return 0.0;
-    }
-    let s_half = seg_len_m * 0.5;
-    let inv_len = 1.0 / seg_len_m;
-    // u = unit vector along the segment (east_m, north_m components).
-    // v = perpendicular, 90° CCW from u in the east-north plane.
-    let u_e = seg_dx_m * inv_len;
-    let u_n = seg_dy_m * inv_len;
-    let v_e = -u_n;
-    let v_n = u_e;
-
-    let to_local = |lat: f32, lon: f32| -> (f32, f32) {
-        let dlon_m = wrapped_longitude_delta(mid_lon, f64::from(lon)) as f32 * m_per_deg_lon;
-        let dlat_m = (lat - mid_lat) * M_PER_DEG_LAT;
-        let x = dlon_m * u_e + dlat_m * u_n;
-        let y = dlon_m * v_e + dlat_m * v_n;
-        (x, y)
     };
+    clipped_overlap_in_frame(l1_lat, l1_lon, l2_lat, l2_lon, frame, max_perp_m)
+}
 
-    let (l1x, l1y) = to_local(l1_lat, l1_lon);
-    let (l2x, l2y) = to_local(l2_lat, l2_lon);
+pub(super) fn clipped_overlap_in_frame(
+    l1_lat: f32,
+    l1_lon: f32,
+    l2_lat: f32,
+    l2_lon: f32,
+    frame: LineFrame,
+    max_perp_m: f32,
+) -> f32 {
+    let s_half = frame.s_half;
+    let (l1x, l1y) = frame.to_local(l1_lat, l1_lon);
+    let (l2x, l2y) = frame.to_local(l2_lat, l2_lon);
     let leg_dx = l2x - l1x;
     let leg_dy = l2y - l1y;
     let leg_len_m = (leg_dx * leg_dx + leg_dy * leg_dy).sqrt();

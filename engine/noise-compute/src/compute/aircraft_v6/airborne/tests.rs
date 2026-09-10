@@ -263,7 +263,22 @@ fn build_top_flights_synth_cruise_fid_is_marked_synthetic() {
 /// AGL, for the given ICAO typecode. Used by the mixed-window GA
 /// hybrid scatter test.
 fn one_subseg_row<'a>(fid: u64, typecode: &str, cols: &'a OneSubSeg) -> AirborneRowView<'a> {
-    use crate::compute::aircraft_v6::views::{BBox, SubSegmentSlice};
+    use crate::compute::aircraft_v6::views::SubSegmentSlice;
+    let sub_segments = SubSegmentSlice {
+        start_gy: &cols.start_gy,
+        start_gx: &cols.start_gx,
+        start_alt_m: &cols.alt,
+        end_gy: &cols.end_gy,
+        end_gx: &cols.end_gx,
+        end_alt_m: &cols.alt,
+        speed_kt: &cols.speed,
+        length_m: &cols.length,
+        period: &cols.period,
+        date_id: &cols.date_id,
+        flags: &cols.flags,
+        terrain_start_elev_m: &cols.elev,
+        terrain_end_elev_m: &cols.elev,
+    };
     AirborneRowView {
         flight_id: fid,
         callsign: "",
@@ -271,63 +286,46 @@ fn one_subseg_row<'a>(fid: u64, typecode: &str, cols: &'a OneSubSeg) -> Airborne
         profile_idx: aircraft::profile_idx(typecode),
         source_id: 0,
         origin: 0,
-        sub_segments: SubSegmentSlice {
-            start_lat: &cols.start_lat,
-            start_lon: &cols.start_lon,
-            start_alt_m: &cols.alt,
-            end_lat: &cols.end_lat,
-            end_lon: &cols.end_lon,
-            end_alt_m: &cols.alt,
-            speed_kt: &cols.speed,
-            length_m: &cols.length,
-            period: &cols.period,
-            date_id: &cols.date_id,
-            flags: &cols.flags,
-            terrain_start_elev_m: &cols.elev,
-            terrain_end_elev_m: &cols.elev,
-        },
-        bbox: BBox {
-            min_lat: cols.start_lat[0].min(cols.end_lat[0]),
-            max_lat: cols.start_lat[0].max(cols.end_lat[0]),
-            min_lon: cols.start_lon[0].min(cols.end_lon[0]),
-            max_lon: cols.start_lon[0].max(cols.end_lon[0]),
-        },
+        sub_segments,
+        bbox: sub_segments.bbox(),
     }
 }
 
 struct OneSubSeg {
     typebuf: [u8; 4],
-    start_lat: [f32; 1],
-    start_lon: [f32; 1],
-    end_lat: [f32; 1],
-    end_lon: [f32; 1],
-    alt: [f32; 1],
+    start_gy: [i32; 1],
+    start_gx: [i32; 1],
+    end_gy: [i32; 1],
+    end_gx: [i32; 1],
+    alt: [i16; 1],
     speed: [f32; 1],
     length: [f32; 1],
     period: [u8; 1],
     date_id: [i16; 1],
     flags: [u8; 1],
-    elev: [f32; 1],
+    elev: [i16; 1],
 }
 
 fn one_subseg(typecode: &str) -> OneSubSeg {
     let mut typebuf = [0u8; 4];
     let b = typecode.as_bytes();
     typebuf[..b.len()].copy_from_slice(b);
+    let start = grid::lonlat_to_grid(f64::from(14.2480_f32), f64::from(50.1015_f32));
+    let end = grid::lonlat_to_grid(f64::from(14.2520_f32), f64::from(50.1015_f32));
     OneSubSeg {
         typebuf,
         // ~250 m E-W track abeam a receiver at 14.250 / 50.100.
-        start_lat: [50.1015],
-        start_lon: [14.2480],
-        end_lat: [50.1015],
-        end_lon: [14.2520],
-        alt: [150.0],
+        start_gy: [start.1],
+        start_gx: [start.0],
+        end_gy: [end.1],
+        end_gx: [end.0],
+        alt: [150],
         speed: [120.0],
         length: [285.0],
         period: [0],
         date_id: [0],
         flags: [0], // arrival
-        elev: [0.0],
+        elev: [0],
     }
 }
 

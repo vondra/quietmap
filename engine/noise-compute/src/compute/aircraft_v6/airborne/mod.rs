@@ -167,10 +167,8 @@ pub fn scatter(
         for i in 0..n {
             // Unlike aggregate min/max bounds, these endpoints identify the
             // short arc used by the kernel and by publication support.
-            let s_lat_f = sub.start_lat[i];
-            let e_lat_f = sub.end_lat[i];
-            let s_lon_f = sub.start_lon[i];
-            let e_lon_f = sub.end_lon[i];
+            let [s_lat_f, s_lon_f] = sub.start_lat_lon(i);
+            let [e_lat_f, e_lon_f] = sub.end_lat_lon(i);
             if !envelope.intersects_segment([s_lat_f, s_lon_f], [e_lat_f, e_lon_f]) {
                 continue;
             }
@@ -216,12 +214,12 @@ pub fn scatter(
                 on_ground: false,
                 period: sub.period[i],
                 date_id: sub.date_id[i],
-                start_lat: sub.start_lat[i] as f64,
-                start_lon: sub.start_lon[i] as f64,
-                start_alt_m: sub.start_alt_m[i],
-                end_lat: sub.end_lat[i] as f64,
-                end_lon: sub.end_lon[i] as f64,
-                end_alt_m: sub.end_alt_m[i],
+                start_lat: s_lat_f as f64,
+                start_lon: s_lon_f as f64,
+                start_alt_m: f32::from(sub.start_alt_m[i]),
+                end_lat: e_lat_f as f64,
+                end_lon: e_lon_f as f64,
+                end_alt_m: f32::from(sub.end_alt_m[i]),
                 speed_kt: sub.speed_kt[i],
                 segment_length_m: sub.length_m[i],
                 count_weight: 1.0,

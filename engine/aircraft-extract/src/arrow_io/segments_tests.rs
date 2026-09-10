@@ -169,3 +169,18 @@ fn single_batch_decodes_in_ordered_slices() {
     assert_eq!(slices, 3, "one 5-row batch / slice 2 → 3 decode slices");
     assert_eq!(ids, vec![0, 1, 2, 3, 4]);
 }
+
+#[test]
+fn event_upper_bounds_include_repeated_runs_across_arrow_batches() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("segments.arrow");
+    let mut rows: Vec<_> = [1, 1, 2, 1, 1].into_iter().map(seg_with_id).collect();
+    for row in &mut rows {
+        row.callsign = format!("FL{}", row.flight_id);
+    }
+    write_segments_chunked(&path, &rows, 2).unwrap();
+    let (schema, _) = super::super::read_record_batches(&path).unwrap();
+    assert_eq!(schema.metadata()["flight_runs"], "3");
+    assert_eq!(schema.metadata()["flight_run_callsign_bytes"], "9");
+    assert_eq!(read_segments(&path).unwrap().len(), 5);
+}

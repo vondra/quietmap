@@ -1,0 +1,212 @@
+//! Height-bounded obstacle-cell traversal for one full-physics source/receiver ray.
+
+#pragma once
+
+__device__ __forceinline__ float signed_delta_for_bounded_top(
+    const PathProfile& profile,
+    float source_altitude_m,
+    float receiver_altitude_m,
+    float top_m,
+    float t
+) {
+    const float sight_m = fmaf(t, receiver_altitude_m - source_altitude_m,
+                               source_altitude_m);
+    const float direct_m = hypotf(profile.distance_m,
+                                  receiver_altitude_m - source_altitude_m);
+    const float detour_m = hypotf(t * profile.distance_m, top_m - source_altitude_m)
+        + hypotf((1.0f - t) * profile.distance_m, top_m - receiver_altitude_m)
+        - direct_m;
+    return top_m >= sight_m ? detour_m : -detour_m;
+}
+
+/// Upper bound on the signed delta of every crossing between `minimum_t` and `maximum_t`
+/// whose top is at most `top_m`.
+///
+/// The delta rises with the top, so a cell's tallest possible top bounds every candidate in
+/// it. In `t` the detour is convex for a fixed top, so above the sight line
+/// (delta = +detour) the maximum sits at an end of the window, and below it
+/// (delta = -detour, concave) at the detour's stationary point — the reflection point,
+/// clamped to the window. The three points evaluated here therefore attain the true maximum
+/// of both branches. `CellPrune::max_delta` in noise-compute's `obstacle_index.rs` owns the
+/// derivation and this mirrors it.
+__device__ __forceinline__ float maximum_cell_candidate_delta(
+    const PathProfile& profile,
+    float source_altitude_m,
+    float receiver_altitude_m,
+    float top_m,
+    float minimum_t,
+    float maximum_t
+) {
+    const float source_height_difference = fabsf(top_m - source_altitude_m);
+    const float receiver_height_difference = fabsf(top_m - receiver_altitude_m);
+    const float height_sum = source_height_difference + receiver_height_difference;
+    const float reflection_t = height_sum > 0.0f
+        ? quietmap_clamp(source_height_difference / height_sum, minimum_t, maximum_t)
+        : minimum_t;
+    return fmaxf(
+        fmaxf(
+            signed_delta_for_bounded_top(
+                profile, source_altitude_m, receiver_altitude_m, top_m, minimum_t),
+            signed_delta_for_bounded_top(
+                profile, source_altitude_m, receiver_altitude_m, top_m, maximum_t)),
+        signed_delta_for_bounded_top(
+            profile, source_altitude_m, receiver_altitude_m, top_m, reflection_t));
+}
+
+/// Every obstacle crossing of one ray, keeping the one with the largest delta.
+///
+/// `must_exceed_m` is the delta a crossing has to beat for the caller to read it at all; the
+/// scan lowers it by the delta arithmetic's own error, raises it to the best delta it has
+/// already found, and a cell whose own bound cannot beat the floor is never opened.
+__device__ __forceinline__ void scan_obstacle_grid(
+    const DeviceScenePointers& scene,
+    const DeviceObstacleGrid& grid,
+    float source_x_m,
+    float source_y_m,
+    float receiver_x_m,
+    float receiver_y_m,
+    float source_altitude_m,
+    float receiver_altitude_m,
+    float exclusion_radius_m,
+    float must_exceed_m,
+    const PathProfile& profile,
+    DiffractionEdge& best
+) {
+    const float start_x = fmaf(source_x_m, grid.query_x_scale, grid.query_x_offset_m);
+    const float start_y = source_y_m + grid.query_y_offset_m;
+    const float end_x = fmaf(receiver_x_m, grid.query_x_scale, grid.query_x_offset_m);
+    const float end_y = receiver_y_m + grid.query_y_offset_m;
+    if (!ray_may_enter_grid(start_x, start_y, end_x, end_y, grid)) {
+        return;
+    }
+    const float dx = end_x - start_x;
+    const float dy = end_y - start_y;
+    const float inverse_cell = 1.0f / grid.cell_m;
+    int cell_x = max(0, min(static_cast<int>(floorf((start_x - grid.minimum_x_m) * inverse_cell)),
+                            static_cast<int>(grid.columns) - 1));
+    int cell_y = max(0, min(static_cast<int>(floorf((start_y - grid.minimum_y_m) * inverse_cell)),
+                            static_cast<int>(grid.rows) - 1));
+    const int end_cell_x = max(0, min(
+        static_cast<int>(floorf((end_x - grid.minimum_x_m) * inverse_cell)),
+        static_cast<int>(grid.columns) - 1));
+    const int end_cell_y = max(0, min(
+        static_cast<int>(floorf((end_y - grid.minimum_y_m) * inverse_cell)),
+        static_cast<int>(grid.rows) - 1));
+    const int step_x = dx >= 0.0f ? 1 : -1;
+    const int step_y = dy >= 0.0f ? 1 : -1;
+    const float delta_t_x = dx != 0.0f ? fabsf(grid.cell_m / dx) : CUDART_INF_F;
+    const float delta_t_y = dy != 0.0f ? fabsf(grid.cell_m / dy) : CUDART_INF_F;
+    const float next_x = grid.minimum_x_m + (cell_x + (dx >= 0.0f ? 1 : 0)) * grid.cell_m;
+    const float next_y = grid.minimum_y_m + (cell_y + (dy >= 0.0f ? 1 : 0)) * grid.cell_m;
+    float maximum_t_x = dx != 0.0f ? fabsf((next_x - start_x) / dx) : CUDART_INF_F;
+    float maximum_t_y = dy != 0.0f ? fabsf((next_y - start_y) / dy) : CUDART_INF_F;
+    // Both floors below are lowered by what the delta itself cannot resolve. A delta is
+    // `d_sb + d_br - d_SR`, the difference of two ray-length hypotenuses, so it carries a few
+    // ulps of the ray's own length however exactly the geometry is bounded — a millimetre on
+    // a 8.75 km ray. A cell bound and the crossing it answers for land that cancellation at
+    // different `t` and different tops, so a bound that dominates in real arithmetic can come
+    // out one ulp below the crossing in f32, and the cell holding a grazing edge is closed
+    // against it. Eight ulps of the ray covers that, given that the bound and the candidate
+    // share their altitude basis: the bound reads the raw endpoint altitudes, the candidate the
+    // height-floored ones, and a floored endpoint only lowers a delta, so the raw bound stays
+    // the conservative side.
+    const float delta_tolerance_m = 8.0f * FLT_EPSILON * profile.distance_m;
+    const float caller_floor_m = must_exceed_m - delta_tolerance_m;
+    int guard = static_cast<int>(grid.columns + grid.rows) + 4;
+    float entry_t = 0.0f;
+    int profile_window_start = 0;
+    while (guard-- > 0) {
+        const uint32_t cell = static_cast<uint32_t>(cell_y) * grid.columns + cell_x;
+        const uint32_t first = scene.obstacle_cell_starts[grid.cell_starts_offset + cell];
+        const uint32_t end = scene.obstacle_cell_starts[grid.cell_starts_offset + cell + 1];
+        if (end > first) {
+            const float exit_t = fminf(fminf(maximum_t_x, maximum_t_y), 1.0f);
+            const float cell_minimum_t = quietmap_clamp(entry_t, 0.0f, 1.0f);
+            const float cell_maximum_t = quietmap_clamp(exit_t, 0.0f, 1.0f);
+            while (profile_window_start + 1 < profile.count
+                   && profile.t[profile_window_start + 1] <= cell_minimum_t) {
+                ++profile_window_start;
+            }
+            float terrain_maximum_m = profile.elevation_m[profile_window_start];
+            int profile_window_end = profile_window_start;
+            while (profile_window_end + 1 < profile.count
+                   && profile.t[profile_window_end] < cell_maximum_t) {
+                ++profile_window_end;
+                terrain_maximum_m = fmaxf(
+                    terrain_maximum_m, profile.elevation_m[profile_window_end]);
+            }
+            const float top_bound_m = terrain_maximum_m
+                + scene.obstacle_cell_maximum_heights[
+                    grid.cell_maximum_height_offset + cell];
+            // `top_bound_m` is the cell's tallest edge over the highest terrain the ray
+            // meets inside it, so the bound below answers for every crossing the cell
+            // holds. A cell that cannot reach the penumbra floor diffracts nothing in any
+            // band, and a cell that cannot out-diffract the terrain edge produces nothing
+            // the caller reads: `ray_terrain_and_screening_bands` takes the obstacle edge
+            // only where it beats the terrain one.
+            //
+            // The best delta the ray already holds raises that floor further, and it is the
+            // floor that pays for this scan: a dense metro ray finds its winning crossing
+            // early and then walks cell after cell of edges that cannot beat it. This is a
+            // bound, not a containment rule, so it is NOT byte-exact. The bound answers for
+            // the crossings that lie inside the cell, and the cell that does contain a
+            // crossing lists its edge too and is walked too, so no winner is lost in real
+            // arithmetic; but an edge is listed in every cell its segment crosses and is
+            // tested there against the whole ray, so one crossing is reached through
+            // several cells with different bounds, and which of two equal deltas is kept
+            // depends on which of those cells stayed open. The commit message carries the
+            // drift measured against the exact-CPU etalon.
+            const float cell_bound_m = maximum_cell_candidate_delta(
+                profile, source_altitude_m, receiver_altitude_m, top_bound_m,
+                cell_minimum_t, cell_maximum_t);
+            const float exceed_m = best.present
+                ? fmaxf(caller_floor_m, best.delta_m - delta_tolerance_m)
+                : caller_floor_m;
+            if (cell_bound_m >= QUIETMAP_PENUMBRA_DELTA_FLOOR_M && cell_bound_m > exceed_m) {
+                for (uint32_t position = first; position < end; ++position) {
+                    const uint32_t local_edge = scene.obstacle_edge_references[
+                        grid.edge_references_offset + position];
+                    const uint32_t edge = grid.edge_index_offset + local_edge;
+                    const float4 ends = load_obstacle_edge_endpoints(scene, edge);
+                    float crossing_t;
+                    // The exclusion radius shields only the source's own BUILDING
+                    // footprint; a barrier edge is an explicit wall and always
+                    // admits (CPU path_effects.rs §5b kind rule).
+                    if (segment_crossing_fraction(
+                            start_x, start_y, dx, dy, ends.x, ends.y,
+                            ends.z, ends.w, crossing_t)
+                        && (scene.obstacle_edge_is_building[edge] == 0u
+                            || crossing_t * profile.distance_m >= exclusion_radius_m)) {
+                        // The window starts at the last chainage at or before the cell,
+                        // so it brackets every crossing from `cell_minimum_t` onwards —
+                        // the cell's own stretch of the ray and anything further along the
+                        // edge. A crossing BEFORE the window is the one case the offered
+                        // start does not bracket, and `profile_elevation_at` answers it by
+                        // walking the profile whole.
+                        consider_crossing_candidate(
+                            profile, source_altitude_m, receiver_altitude_m,
+                            crossing_t, scene.obstacle_edge_height_m[edge],
+                            profile_window_start, best);
+                    }
+                }
+            }
+        }
+        if (cell_x == end_cell_x && cell_y == end_cell_y) {
+            break;
+        }
+        if (maximum_t_x < maximum_t_y) {
+            entry_t = maximum_t_x;
+            maximum_t_x += delta_t_x;
+            cell_x += step_x;
+        } else {
+            entry_t = maximum_t_y;
+            maximum_t_y += delta_t_y;
+            cell_y += step_y;
+        }
+        if (cell_x < 0 || cell_y < 0
+            || cell_x >= static_cast<int>(grid.columns)
+            || cell_y >= static_cast<int>(grid.rows)) {
+            break;
+        }
+    }
+}

@@ -1010,3 +1010,19 @@ fn non_auto_keys_pass_through_verbatim() {
     assert_eq!(synth_airport_display_name("auto-abc"), "auto-abc");
     assert_eq!(synth_airport_display_name("auto-1426000"), "auto-1426000");
 }
+
+#[test]
+fn ground_divergence_floor_tracks_the_actual_surface_pixel_spacing() {
+    use grid::surface_corner::{SurfaceCorner, BLOCK_PIXEL_SIDE};
+    let first = SurfaceCorner::for_tile(4000, 4096, 0, 0)
+        .unwrap()
+        .latitude_longitude();
+    let next = SurfaceCorner::for_tile(4000, 4096, 1, 0)
+        .unwrap()
+        .latitude_longitude();
+    let block_metres =
+        (next[1] - first[1]) / 360.0 * grid::EARTH_CIRCUMFERENCE_M * first[0].to_radians().cos();
+    assert!(
+        (popup_pixel_floor_m(first[0]) * 2.0 * BLOCK_PIXEL_SIDE as f64 - block_metres).abs() < 1e-8
+    );
+}

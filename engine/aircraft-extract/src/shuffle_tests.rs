@@ -15,7 +15,7 @@ fn write_segments(path: &Path, rows: &[FlightSegment]) -> Result<()> {
 fn seg(flight_id: u64, phase: Phase, lat: f32, lon: f32) -> FlightSegment {
     FlightSegment {
         callsign: format!("FL{flight_id:04}"),
-        aircraft_type: [b'A', b'3', b'2', b'0'],
+        aircraft_type: *b"A320",
         flight_id,
         profile_idx: 0,
         source_id: 0,
@@ -275,7 +275,7 @@ fn streamed_parts_preserve_order_and_fields_across_flushes_and_input_batches() {
     let rows = read_segments(&day).unwrap();
     let temp = tmp.path().join("parts");
     let payload_limit = std::mem::size_of::<FlightSegment>() + rows[0].callsign.len();
-    let copies = scatter_day(&day, "air", false, &temp, None, payload_limit).unwrap();
+    let counts = scatter_day(&day, "air", false, &temp, None, payload_limit).unwrap();
     let mut scattered_rows = 0;
     let mut largest_part_count = 0;
     for phase in ["airborne", "ground"] {
@@ -297,9 +297,9 @@ fn streamed_parts_preserve_order_and_fields_across_flushes_and_input_batches() {
         largest_part_count >= 3,
         "later batches must add parts instead of overwriting"
     );
-    assert_eq!(copies, scattered_rows);
+    assert_eq!(counts.scattered_rows, scattered_rows);
     let gathered = tmp.path().join("gathered");
-    pass_b(&temp, &gathered, None).unwrap();
+    pass_b(&temp, &gathered, None, &counts).unwrap();
     let mut expected: HashMap<(&str, u64), Vec<FlightSegment>> = HashMap::new();
     for row in rows {
         for square in destination_squares(&row, None).unwrap() {
@@ -331,4 +331,144 @@ fn streamed_parts_preserve_order_and_fields_across_flushes_and_input_batches() {
             square_path(square)
         );
     }
+}
+
+#[test]
+fn failed_gather_reclaims_only_completed_phases_and_restarts_from_original_days() {
+    let tmp = tempfile::tempdir().unwrap();
+    let day = tmp.path().join("2025-07-01.arrow");
+    let airborne = seg(42, Phase::Airborne, 50.1, 14.26);
+    let ground = seg(99, Phase::Ground, 50.1, 14.26);
+    write_segments(&day, &[airborne, ground.clone()]).unwrap();
+    let original_bytes = std::fs::read(&day).unwrap();
+    let temporary = tmp.path().join("temp_shuffle");
+    let counts = scatter_day(&day, "air", false, &temporary, None, PASS_A_SPILL_BYTES).unwrap();
+    let owner = square_of_midpoint(&ground).unwrap();
+    let hash = shuffle_bucket(owner);
+    let airborne_parts =
+        list_pass_a_parts(&pass_a_bucket_dir(&temporary, "airborne", hash)).unwrap();
+    let ground_parts = list_pass_a_parts(&pass_a_bucket_dir(&temporary, "ground", hash)).unwrap();
+    assert!(!airborne_parts.is_empty() && !ground_parts.is_empty());
+    let output = tmp.path().join("segments_by_square");
+    let owner_dir = output.join(square_path(owner));
+    // A directory at the final filename fails rename after the preceding phase succeeds.
+    std::fs::create_dir_all(owner_dir.join("ground.arrow")).unwrap();
+    assert!(pass_b(&temporary, &output, None, &counts).is_err());
+    assert!(airborne_parts.iter().all(|part| !part.exists()));
+    assert!(ground_parts.iter().all(|part| part.is_file()));
+    assert_eq!(
+        read_segments(&owner_dir.join("airborne.arrow")).unwrap()[0].flight_id,
+        42
+    );
+    assert!(!output.join("days").exists() && !output.join("ga_days").exists());
+    assert_eq!(std::fs::read(&day).unwrap(), original_bytes);
+
+    shuffle_per_square(std::slice::from_ref(&day), &[], &output, None).unwrap();
+    assert!(!temporary.exists());
+    assert_eq!(std::fs::read(&day).unwrap(), original_bytes);
+    assert_eq!(
+        read_segments(&owner_dir.join("ground.arrow")).unwrap()[0].flight_id,
+        99
+    );
+    assert_eq!(
+        std::fs::read_to_string(output.join("days")).unwrap(),
+        "2025-07-01"
+    );
+}
+
+/// A single stored hash copy expands to several destination vectors at gather.
+#[test]
+fn gather_budget_counts_support_copies_and_reserves_each_destination() {
+    let tmp = tempfile::tempdir().unwrap();
+    let day = tmp.path().join("2025-07-01.arrow");
+    let mut row = seg(7, Phase::Airborne, 82.0, 0.0);
+    row.end_lat = 80.0;
+    row.end_lon = 0.0;
+    let destinations: Vec<_> = destination_squares(&row, None).unwrap().collect();
+    write_segments(&day, &vec![row.clone(); 17]).unwrap();
+    let counts = scatter_day(
+        &day,
+        "air",
+        false,
+        &tmp.path().join("parts"),
+        None,
+        PASS_A_SPILL_BYTES,
+    )
+    .unwrap();
+    assert!(counts.scattered_rows < 17 * destinations.len() as u64);
+    for square in destinations {
+        assert_eq!(counts.rows(Phase::Airborne, square), 17);
+        assert_eq!(counts.rows(Phase::Ground, square), 0);
+    }
+    // The budget must cover more than the compact on-disk hash rows; it also
+    // retains destination copies, their strings, and the active Arrow writer.
+    assert!(counts.largest_gather_allocation() > 5 * PASS_A_SPILL_BYTES);
+}
+
+/// A whole missing phase or destination must fail, even if all surviving rows match.
+#[test]
+fn gather_rejects_missing_destination_parts() {
+    for with_survivor in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let day = tmp.path().join("2025-07-01.arrow");
+        let row = seg(1, Phase::Ground, 50.10, 14.26);
+        let owner = square_of_midpoint(&row).unwrap();
+        let hash = shuffle_bucket(owner);
+        let missing = (0..=grid::MAX_SQUARE_ID as u64)
+            .find(|&square| square != owner && shuffle_bucket(square) == hash)
+            .unwrap();
+        let temporary = tmp.path().join("parts");
+        let mut counts = DestinationCounts::new();
+        if with_survivor {
+            write_segments(&day, &[row]).unwrap();
+            counts = scatter_day(&day, "air", false, &temporary, None, PASS_A_SPILL_BYTES).unwrap();
+        }
+        // Simulate a counted destination whose complete temporary part vanished.
+        counts.add(Phase::Ground, missing, 0);
+        let error = pass_b(&temporary, &tmp.path().join("output"), None, &counts).unwrap_err();
+        assert!(
+            error.to_string().contains("destination square"),
+            "{error:#}"
+        );
+        if with_survivor {
+            assert!(
+                !list_pass_a_parts(&pass_a_bucket_dir(&temporary, "ground", hash))
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+}
+
+#[test]
+fn completed_shuffle_inventory_rejects_partial_changed_and_missing_successors() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("segments/2025-01-01.arrow");
+    write_segments(&source, &[seg(1, Phase::Ground, 50.0, 14.0)]).unwrap();
+    let root = temp.path().join("segments_by_square");
+    shuffle_per_square(std::slice::from_ref(&source), &[], &root, None).unwrap();
+    completion::validate(&root, None).unwrap();
+    std::fs::remove_file(source).unwrap();
+    completion::validate(&root, None).unwrap();
+    std::fs::create_dir(temp.path().join("temp_shuffle")).unwrap();
+    assert!(completion::validate(&root, None).is_err());
+    std::fs::remove_dir(temp.path().join("temp_shuffle")).unwrap();
+    assert!(completion::validate(&root, Some(&ScopeBbox::parse("49,13,51,15").unwrap())).is_err());
+    let days = root.join("days");
+    std::fs::write(&days, "2025-01-02").unwrap();
+    assert!(completion::validate(&root, None).is_err());
+    std::fs::write(days, "2025-01-01").unwrap();
+    completion::validate(&root, None).unwrap();
+    let (_, file) = list_square_shards(&root, "ground.arrow", None)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let original = std::fs::read(&file).unwrap();
+    std::fs::write(&file, &original).unwrap();
+    assert!(
+        completion::validate(&root, None).is_err(),
+        "same bytes with changed identity require verification"
+    );
+    std::fs::remove_file(file).unwrap();
+    assert!(completion::validate(&root, None).is_err());
 }

@@ -31,6 +31,9 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         height_m: 12,
         height_tier: 0,
         envelope_class: 1,
+        osm_id: Some(901),
+        building_type: Some(1),
+        area_m2: Some(1000.0),
         ..Default::default()
     };
     fx::write_square_structures(root, click_square, &[house]);
@@ -90,6 +93,22 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     assert_eq!(inside["envelope_class"], "residential");
     let outdoor_total = outside["total_lden"].as_f64().unwrap();
     assert_eq!(inside["facade_lden"], (outdoor_total * 10.0).round() / 10.0);
+    let building_distance = |value: &Value| {
+        value["top_contributors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|source| source["source_type"] == "building" && source["osm_id"] == 901)
+            .unwrap()["distance_m"]
+            .as_i64()
+            .unwrap()
+    };
+    assert!(building_distance(&outside) > 0);
+    assert_eq!(
+        building_distance(&inside),
+        building_distance(&outside),
+        "moving an indoor receiver must update source distances before screening"
+    );
     let airborne = |value: &Value| {
         value["sources"]
             .as_array()
@@ -119,6 +138,27 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     assert!(
         (increase - 2.0_f64.log10() * 10.0).abs() < 1e-9,
         "duplicate observation increase: {increase}"
+    );
+    // Neighboring receivers share a halo but select different owner-cell flights.
+    let south = (-0.005, lon);
+    let north = (0.005, lon);
+    let mut south_squares = crate::query::squares_within_reach(south.0, south.1).unwrap();
+    let mut north_squares = crate::query::squares_within_reach(north.0, north.1).unwrap();
+    south_squares.sort_by_key(|square| (square.x, square.y));
+    north_squares.sort_by_key(|square| (square.x, square.y));
+    assert_eq!(south_squares, north_squares);
+    let expected_north = popup(north.0, north.1);
+    let south_popup = popup(south.0, south.1);
+    assert_ne!(
+        airborne(&south_popup)["segment_count"],
+        airborne(&expected_north)["segment_count"]
+    );
+    let mut warm_north: Value =
+        serde_json::from_str(&crate::query_noise_at_point(north.0, north.1).unwrap()).unwrap();
+    warm_north.as_object_mut().unwrap().remove("timings");
+    assert_eq!(
+        warm_north, expected_north,
+        "previous click must not change aircraft sources"
     );
 }
 

@@ -1,7 +1,7 @@
 //! Multiple validated primary roots reach shuffle and cruise without copying completed input.
 
 use aircraft_extract::arrow_io::{read_record_batches, write_segments};
-use aircraft_extract::flight::{FlightSegment, Phase, source_id};
+use aircraft_extract::flight::{source_id, FlightSegment, Phase};
 use aircraft_extract::spatial::square_directories;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -130,12 +130,29 @@ fn split_primary_roots_match_single_root_through_shuffle_and_cruise_and_fail_clo
             std::fs::read_to_string(work.join("segments_by_square/days")).unwrap(),
             days.join("\n")
         );
-        assert!(
-            std::fs::read(work.join("segments_by_square/ga_days"))
-                .unwrap()
-                .is_empty()
-        );
+        assert!(std::fs::read(work.join("segments_by_square/ga_days"))
+            .unwrap()
+            .is_empty());
     }
+    let independent_work = root.join("independent-cruise");
+    let independent_output = root.join("independent-output/2026");
+    let output = run(
+        &independent_work,
+        &independent_output,
+        &split,
+        &selected,
+        "stage2b",
+        "stage2b",
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !independent_work.exists(),
+        "cruise needs no shuffled scratch or manifests"
+    );
     let expected_squares = square_directories(&reference).unwrap();
     assert!(!expected_squares.is_empty());
     assert_eq!(
@@ -168,6 +185,18 @@ fn split_primary_roots_match_single_root_through_shuffle_and_cruise_and_fail_clo
             )
             .unwrap(),
             expected
+        );
+    }
+    for (id, path) in square_directories(&reference).unwrap() {
+        assert_eq!(
+            read_record_batches(
+                &independent_output
+                    .join(aircraft_extract::geo::square_path(id))
+                    .join("cruise.arrow")
+            )
+            .unwrap(),
+            read_record_batches(&path.join("cruise.arrow")).unwrap(),
+            "independent cruise must retain the same values and sampling window",
         );
     }
     assert!(!split_work.join("segments").exists());
@@ -240,9 +269,244 @@ fn split_primary_roots_match_single_root_through_shuffle_and_cruise_and_fail_clo
         "stage2b",
     );
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("cruise days differ"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("requested days differ"));
     assert!(!rejected_output.exists());
     for (path, before) in originals {
         assert_eq!(identity(&path), before);
     }
+}
+
+#[test]
+fn cruise_spill_and_finish_are_real_separate_cli_phases() {
+    let temp = tempfile::tempdir().unwrap();
+    let inputs = temp.path().join("segments");
+    write_segments(&inputs.join("2025-01-01.arrow"), &segments("2025-01-01", 1)).unwrap();
+    let prepared = temp.path().join("result/2026");
+    let run = |phase| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_aircraft-extract"));
+        command
+            .args([
+                "--max-threads",
+                "1",
+                "run-all",
+                "--feed",
+                "adsbexchange",
+                "--class-filter",
+                "non-ga",
+                "--days",
+                "2025-01-01",
+                "--from-stage",
+                "stage2b",
+                "--until-stage",
+                "stage2b",
+                "--cruise-phase",
+                phase,
+                "--fail-on-ga-cruise",
+            ])
+            .arg("--segments-dir")
+            .arg(&inputs)
+            .arg("--prepared-year-dir")
+            .arg(&prepared)
+            .arg("--prepared-dir")
+            .arg(temp.path().join("unused-rasters"))
+            .arg("--adsb-cache")
+            .arg(temp.path().join("unused-cache"))
+            .arg("--work-dir")
+            .arg(temp.path().join("unused-work"));
+        if phase == "spill" {
+            command.args(["--cruise-spill-disk-budget-bytes", "1000000000"]);
+        }
+        command.output().unwrap()
+    };
+    let spill = run("spill");
+    assert!(
+        spill.status.success(),
+        "{}",
+        String::from_utf8_lossy(&spill.stderr)
+    );
+    assert!(!prepared.exists());
+    assert!(temp
+        .path()
+        .join("result/spill_cruise/state.sqlite")
+        .exists());
+    let db =
+        rusqlite::Connection::open(temp.path().join("result/spill_cruise/state.sqlite")).unwrap();
+    let budget: u64 = db
+        .query_row(
+            "SELECT start_free_bytes-minimum_free_bytes FROM disk_reservation",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(budget, 1_000_000_000);
+    drop(db);
+    let duplicate = run("spill");
+    assert!(!duplicate.status.success());
+    assert!(temp
+        .path()
+        .join("result/spill_cruise/state.sqlite")
+        .exists());
+    let spill_directory = temp.path().join("result/spill_cruise");
+    let mut retained = vec![(
+        spill_directory.join("state.sqlite"),
+        identity(&spill_directory.join("state.sqlite")),
+    )];
+    for hash in std::fs::read_dir(&spill_directory).unwrap() {
+        let hash = hash.unwrap().path();
+        if !hash.is_dir() {
+            continue;
+        }
+        for file in std::fs::read_dir(hash).unwrap() {
+            let file = file.unwrap().path();
+            retained.push((file.clone(), identity(&file)));
+        }
+    }
+    use sha2::{Digest, Sha256};
+    let binary = env!("CARGO_BIN_EXE_aircraft-extract");
+    let digest = format!("{:x}", Sha256::digest(std::fs::read(binary).unwrap()));
+    let plan = temp.path().join("finish-plan.sqlite");
+    let plan_run = |digest: &str| {
+        Command::new(binary)
+            .args([
+                "cruise-finish-plan",
+                "--spill-dir",
+                spill_directory.to_str().unwrap(),
+                "--producer-executable",
+                binary,
+                "--producer-sha256",
+                digest,
+                "--output",
+                plan.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap()
+    };
+    assert!(!plan_run("wrong").status.success());
+    assert!(!plan.exists());
+    let planned = plan_run(&digest);
+    assert!(
+        planned.status.success(),
+        "{}",
+        String::from_utf8_lossy(&planned.stderr)
+    );
+    assert!(
+        !prepared.exists(),
+        "planning produces no prepared or support files"
+    );
+    assert!(!spill_directory.join("support").exists());
+    for (path, before) in &retained {
+        assert_eq!(&identity(path), before);
+    }
+    let plan_db = rusqlite::Connection::open(&plan).unwrap();
+    let phase: String = plan_db
+        .query_row("SELECT phase FROM state", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(phase, "complete");
+    let predicted: Vec<(u64, u64, u64)> = plan_db
+        .prepare("SELECT square,rows,final_bytes_bound FROM destinations")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(!predicted.is_empty());
+    let finish = run("finish");
+    assert!(
+        finish.status.success(),
+        "{}",
+        String::from_utf8_lossy(&finish.stderr)
+    );
+    assert!(!square_directories(&prepared).unwrap().is_empty());
+    assert!(!temp.path().join("result/spill_cruise").exists());
+    assert!(!temp.path().join("unused-work").exists());
+    for (square, rows, bytes_bound) in predicted {
+        let path = prepared
+            .join(aircraft_extract::geo::square_path(square))
+            .join("cruise.arrow");
+        assert_eq!(
+            read_record_batches(&path)
+                .unwrap()
+                .1
+                .iter()
+                .map(|b| b.num_rows() as u64)
+                .sum::<u64>(),
+            rows
+        );
+        assert!(path.metadata().unwrap().len() <= bytes_bound);
+    }
+}
+
+#[test]
+fn downstream_airborne_reuses_verified_shuffle_after_day_inputs_are_retired() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    let input = work.join("segments/2025-01-01.arrow");
+    write_segments(&input, &segments("2025-01-01", 1)).unwrap();
+    let run = |stage: &str, output: &Path, day: &str| {
+        Command::new(env!("CARGO_BIN_EXE_aircraft-extract"))
+            .args([
+                "--max-threads",
+                "1",
+                "run-all",
+                "--feed",
+                "adsbexchange",
+                "--class-filter",
+                "non-ga",
+                "--days",
+                day,
+                "--from-stage",
+                stage,
+                "--until-stage",
+                stage,
+            ])
+            .arg("--adsb-cache")
+            .arg(temp.path().join("unused-source"))
+            .arg("--prepared-dir")
+            .arg(temp.path().join("unused-rasters"))
+            .arg("--prepared-year-dir")
+            .arg(output)
+            .arg("--work-dir")
+            .arg(&work)
+            .output()
+            .unwrap()
+    };
+    let reference = temp.path().join("reference/2026");
+    for stage in ["shuffle", "stage2a"] {
+        let result = run(stage, &reference, "2025-01-01");
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    std::fs::remove_file(input).unwrap();
+    let actual = temp.path().join("actual/2026");
+    let result = run("stage2a", &actual, "2025-01-01");
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let squares = square_directories(&reference).unwrap();
+    assert!(!squares.is_empty());
+    for (square, directory) in squares {
+        let expected = read_record_batches(&directory.join("airborne.arrow")).unwrap();
+        assert_eq!(expected.0.metadata()["n_days"], "1");
+        assert!(expected.1.iter().any(|batch| batch.num_rows() > 0));
+        assert_eq!(
+            read_record_batches(
+                &actual
+                    .join(aircraft_extract::geo::square_path(square))
+                    .join("airborne.arrow")
+            )
+            .unwrap(),
+            expected
+        );
+    }
+    let rejected = temp.path().join("rejected/2026");
+    assert!(!run("stage2a", &rejected, "2025-02-01").status.success());
+    assert!(!rejected.exists());
+    std::fs::remove_file(work.join("segments_by_square/complete.sqlite")).unwrap();
+    assert!(!run("stage2a", &rejected, "2025-01-01").status.success());
+    assert!(!rejected.exists());
 }

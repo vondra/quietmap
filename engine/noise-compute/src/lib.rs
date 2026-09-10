@@ -983,11 +983,11 @@ mod tests {
         let subs_per_flight = 3usize;
         let total_subs = total_flights as usize * subs_per_flight;
 
-        let mut start_lat = Vec::with_capacity(total_subs);
-        let mut start_lon = Vec::with_capacity(total_subs);
+        let mut start_gy = Vec::with_capacity(total_subs);
+        let mut start_gx = Vec::with_capacity(total_subs);
         let mut start_alt_m = Vec::with_capacity(total_subs);
-        let mut end_lat = Vec::with_capacity(total_subs);
-        let mut end_lon = Vec::with_capacity(total_subs);
+        let mut end_gy = Vec::with_capacity(total_subs);
+        let mut end_gx = Vec::with_capacity(total_subs);
         let mut end_alt_m = Vec::with_capacity(total_subs);
         let mut speed_kt = Vec::with_capacity(total_subs);
         let mut length_m = Vec::with_capacity(total_subs);
@@ -1009,19 +1009,27 @@ mod tests {
             };
             let date_id = (flight / 5) as i16;
             for s in 0..subs_per_flight {
-                start_lat.push(50.08_f32 + 0.003 * s as f32);
-                start_lon.push(14.43_f32);
-                start_alt_m.push(500.0 - 50.0 * s as f32);
-                end_lat.push(50.08_f32 + 0.003 * (s + 1) as f32);
-                end_lon.push(14.43_f32);
-                end_alt_m.push(500.0 - 50.0 * (s + 1) as f32);
+                let (gx, gy) = grid::lonlat_to_grid(
+                    f64::from(14.43_f32),
+                    f64::from(50.08_f32 + 0.003 * s as f32),
+                );
+                start_gx.push(gx);
+                start_gy.push(gy);
+                start_alt_m.push(500 - 50 * s as i16);
+                let (gx, gy) = grid::lonlat_to_grid(
+                    f64::from(14.43_f32),
+                    f64::from(50.08_f32 + 0.003 * (s + 1) as f32),
+                );
+                end_gx.push(gx);
+                end_gy.push(gy);
+                end_alt_m.push(500 - 50 * (s + 1) as i16);
                 speed_kt.push(150.0);
                 length_m.push(330.0);
                 period_col.push(period);
                 date_id_col.push(date_id);
                 flags_col.push(0);
-                terrain_start.push(0.0_f32);
-                terrain_end.push(0.0_f32);
+                terrain_start.push(0i16);
+                terrain_end.push(0i16);
             }
         }
 
@@ -1038,11 +1046,11 @@ mod tests {
                 source_id: AIRCRAFT_ADSB_SOURCE_ID as u8,
                 origin: 0,
                 sub_segments: SubSegmentSlice {
-                    start_lat: &start_lat[lo..hi],
-                    start_lon: &start_lon[lo..hi],
+                    start_gy: &start_gy[lo..hi],
+                    start_gx: &start_gx[lo..hi],
                     start_alt_m: &start_alt_m[lo..hi],
-                    end_lat: &end_lat[lo..hi],
-                    end_lon: &end_lon[lo..hi],
+                    end_gy: &end_gy[lo..hi],
+                    end_gx: &end_gx[lo..hi],
                     end_alt_m: &end_alt_m[lo..hi],
                     speed_kt: &speed_kt[lo..hi],
                     length_m: &length_m[lo..hi],

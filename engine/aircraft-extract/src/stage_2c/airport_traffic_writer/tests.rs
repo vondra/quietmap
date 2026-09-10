@@ -20,7 +20,8 @@ fn run_airport_traffic_empty_segments_writes_nothing() {
     let prepared_year = tmp.path().join("prepared_year");
     std::fs::create_dir_all(&by_square).unwrap();
     std::fs::create_dir_all(&prepared_year).unwrap();
-    let n = run_airport_traffic(&by_square, &[], &prepared_year, 14, 0, None).unwrap();
+    let n =
+        run_airport_traffic(&by_square, &[], &prepared_year, &prepared_year, 14, 0, None).unwrap();
     assert_eq!(n, 0);
 }
 
@@ -50,7 +51,7 @@ fn squarecache_load_concatenates_real_and_synth_lines() {
         name: "Auto airfield".to_string(),
     };
     let synth_path = square_dir.join(SYNTH_LINES_FILE);
-    write_synth_airport_lines(&synth_path, std::slice::from_ref(&synth)).unwrap();
+    write_synth_airport_lines(&synth_path, [synth.clone()]).unwrap();
     assert!(
         synth_path.exists(),
         "test setup: synth file must exist at {}",
@@ -68,7 +69,12 @@ fn squarecache_load_concatenates_real_and_synth_lines() {
         1_000_000.0,
     );
 
-    let cache = SquareCache::load(dir.path(), square, &[red_herring]).unwrap();
+    let cache = SquareCache::load(
+        dir.path(),
+        square,
+        &crate::airport_index::AerodromeIndex::build(&[red_herring]),
+    )
+    .unwrap();
     assert_eq!(cache.lines.len(), 1, "synth line should be loaded");
     assert_eq!(
         cache.airport_keys[0], synth_key,
@@ -120,7 +126,7 @@ fn squarecache_load_no_collisions_between_real_and_synth() {
     );
     write_synth_airport_lines(
         &square_dir.join(SYNTH_LINES_FILE),
-        &[SynthAirportLineRow {
+        [SynthAirportLineRow {
             osm_id: synth_osm_id,
             segment_idx: 0,
             airport_key: "auto-x".to_string(),
@@ -136,7 +142,12 @@ fn squarecache_load_no_collisions_between_real_and_synth() {
     )
     .unwrap();
 
-    let cache = SquareCache::load(dir.path(), square, &[]).unwrap();
+    let cache = SquareCache::load(
+        dir.path(),
+        square,
+        &crate::airport_index::AerodromeIndex::build(&[]),
+    )
+    .unwrap();
     assert_eq!(cache.lines.len(), 2, "real + synth both loaded");
     assert!(cache.line_index.contains_key(&(real_low_bits, 0u16)));
     assert!(cache.line_index.contains_key(&(synth_osm_id, 0u16)));
@@ -169,7 +180,7 @@ fn squarecache_load_unions_real_and_synth_with_correct_keys() {
     let synth_osm_id = synth_osm_id_for(50.5, 14.0);
     write_synth_airport_lines(
         &square_dir.join(SYNTH_LINES_FILE),
-        &[SynthAirportLineRow {
+        [SynthAirportLineRow {
             osm_id: synth_osm_id,
             segment_idx: 0,
             airport_key: "auto-synthetic".to_string(),
@@ -196,7 +207,12 @@ fn squarecache_load_unions_real_and_synth_with_correct_keys() {
         10_000_000.0,
     );
 
-    let cache = SquareCache::load(dir.path(), square, &[lkpr]).unwrap();
+    let cache = SquareCache::load(
+        dir.path(),
+        square,
+        &crate::airport_index::AerodromeIndex::build(&[lkpr]),
+    )
+    .unwrap();
     assert_eq!(cache.lines.len(), 2, "real + synth both loaded");
     assert_eq!(cache.airport_keys[0], "LKPR");
     assert_eq!(cache.airport_keys[1], "auto-synthetic");
@@ -209,3 +225,109 @@ pub(crate) use fixtures::{write_real_airport_lines_arrow, FakeRealLine};
 
 mod boundary;
 mod movement;
+
+#[test]
+fn counter_row_order_uses_every_identity_field_independently_of_hash_order() {
+    let base = CounterKey {
+        airport_key: "A".into(),
+        osm_id: 1,
+        segment_idx: 0,
+        ops_kind: 0,
+        is_departure: 0,
+        veh_kind: 0,
+        class_idx: 0,
+        period: 0,
+    };
+    let mut keys = vec![base.clone()];
+    for field in 0..8 {
+        let mut key = base.clone();
+        match field {
+            0 => key.airport_key = "B".into(),
+            1 => key.osm_id += 1,
+            2 => key.segment_idx += 1,
+            3 => key.ops_kind += 1,
+            4 => key.is_departure += 1,
+            5 => key.veh_kind += 1,
+            6 => key.class_idx += 1,
+            _ => key.period += 1,
+        }
+        keys.push(key);
+    }
+    keys.sort();
+    let projection = |row: &AirportTrafficRow| CounterKey {
+        airport_key: row.airport_key.clone(),
+        osm_id: row.osm_id,
+        segment_idx: row.segment_idx,
+        ops_kind: row.ops_kind,
+        is_departure: row.is_departure,
+        veh_kind: row.veh_kind,
+        class_idx: row.class_idx,
+        period: row.period,
+    };
+    for reverse in [false, true] {
+        let mut insertion = keys.clone();
+        if reverse {
+            insertion.reverse();
+        }
+        let counters = insertion
+            .into_iter()
+            .map(|key| {
+                (
+                    key,
+                    CounterAcc {
+                        band_energy_lin: [3.0; NUM_BANDS],
+                        fid_set: HashSet::from([42, 99]),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let rows = counters_to_rows(counters, &HashMap::new());
+        assert!(rows.iter().map(projection).eq(keys.iter().cloned()));
+        assert!(rows
+            .iter()
+            .all(|r| r.band_energy_lin == [3.0; NUM_BANDS] && r.unique_movement_count == 2));
+    }
+}
+
+#[test]
+fn indexed_real_line_identity_preserves_ties_name_only_and_empty_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let owner = crate::spatial::square_id(0.0, 179.999).unwrap();
+    let path = dir
+        .path()
+        .join(square_path(owner))
+        .join("airport_lines.arrow");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    write_real_airport_lines_arrow(
+        &path,
+        &[FakeRealLine {
+            osm_id: 1,
+            segment_idx: 0,
+            start_lat: 0.0,
+            end_lat: 0.0,
+            start_lon: 179.999,
+            end_lon: -179.999,
+            length_m: 220.0,
+            aeroway_type: 0,
+        }],
+    );
+    let area = |key: &str, name: &str| {
+        AirportArea::new(1, 5, name.into(), key.into(), 0.0, 180.0, Vec::new(), 0.0)
+    };
+    for (areas, expected) in [
+        (vec![area("FIRST", ""), area("SECOND", "")], Some("FIRST")),
+        (vec![area("SECOND", ""), area("FIRST", "")], Some("SECOND")),
+        (vec![area("", ""), area("KEY", "")], Some("KEY")),
+        (vec![area("", "Named"), area("KEY", "")], None),
+        (Vec::new(), None),
+    ] {
+        let index = crate::airport_index::AerodromeIndex::build(&areas);
+        let cache = SquareCache::load(dir.path(), owner, &index).unwrap();
+        assert_eq!(cache.airport_keys.len(), 1);
+        match expected {
+            Some(key) => assert_eq!(cache.airport_keys[0], key),
+            None => assert!(cache.airport_keys[0].starts_with("strip:z15:")),
+        }
+    }
+}

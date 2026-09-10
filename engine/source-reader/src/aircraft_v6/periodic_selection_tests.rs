@@ -120,8 +120,8 @@ fn periodic_producer_batches_preserve_positive_seam_flights_and_row_identity() {
         );
         for index in 0..rows[0].sub_segments.len() {
             let sub = rows[0].sub_segments;
-            let start = [sub.start_lat[index], sub.start_lon[index]];
-            let end = [sub.end_lat[index], sub.end_lon[index]];
+            let start = sub.start_lat_lon(index);
+            let end = sub.end_lat_lon(index);
             if aircraft::AirborneEnvelope::new(receiver.lat, receiver.lon)
                 .intersects_segment(start, end)
             {

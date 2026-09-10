@@ -270,3 +270,53 @@ fn multiline_osm_tags_survive_spill_and_arrow_for_every_source() {
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn airport_writer_removes_only_proven_empty_segments_and_preserves_identity() {
+    let dir = scratch_dir("airport-degenerate");
+    let path = dir.join("airport_lines.arrow");
+    let row = |id: u64, index: u16, end: i32, length: &str| {
+        format!("100\t{id}\t{index}\t1000\t2000\t{end}\t2000\t{length}\t90\t1\t\t\t")
+            .split('\t')
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    write_airport_lines(
+        &[
+            row(1056661322, 0, 1000, "0"),
+            row(866803531, 22, 1000, "0"),
+            row(866803531, 23, 1100, "3.7"),
+        ],
+        &path,
+    )
+    .unwrap();
+    let (_, batches) = read_ipc(&path);
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+    let batch = &batches[0];
+    assert_eq!(
+        batch
+            .column_by_name("segment_idx")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::Int16Array>()
+            .unwrap()
+            .value(0),
+        23
+    );
+    assert_eq!(
+        batch
+            .column_by_name("osm_id")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>()
+            .unwrap()
+            .value(0),
+        866803531
+    );
+    for (end, length) in [(1100, "0"), (1000, "1"), (1100, "NaN"), (1100, "-1")] {
+        let rejected = dir.join(format!("rejected-{end}-{length}.arrow"));
+        assert!(write_airport_lines(&[row(1, 0, end, length)], &rejected).is_err());
+        assert!(!rejected.exists());
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -1,18 +1,18 @@
 //! Ordered aircraft orchestration refuses partial day sets before downstream publication.
 
 use crate::{
-    ClassFilterArg, Feed, FromStage, cli_days::compute_ok_paths, cli_validate::*, from_stage_name,
+    cli_days::compute_ok_paths, cli_validate::*, from_stage_name, ClassFilterArg, Feed, FromStage,
 };
 use aircraft_extract::{
     airport_index::AerodromeIndex,
-    airport_io::{AirportLineRow, read_global_airport_lines, read_global_airports},
+    airport_io::{read_global_airport_lines, read_global_airports, AirportLineRow},
     progress::ts,
     stage_2a::run_stage_2a,
-    stage_2b::run_stage_2b,
+    stage_2b::{run_stage_2b_phase, CruisePhase},
     stage_2c::run_stage_2c,
     stage_airport_discover_runner::run_stage_airport_discover,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use noise_compute::types::AirportArea;
 use raster_reader::RealRasters;
 use std::path::{Path, PathBuf};
@@ -33,15 +33,13 @@ pub fn run_all(
     ga_adsb_cache: Option<PathBuf>,
     fail_on_ga_cruise: bool,
     primary_segments_dirs: Vec<PathBuf>,
+    cruise_phase: CruisePhase,
+    cruise_spill_disk_budget_bytes: Option<u64>,
 ) -> Result<()> {
     anyhow::ensure!(
         primary_segments_dirs.is_empty() || from_stage >= FromStage::Shuffle,
         "--segments-dir reuses completed inputs; choose --from-stage shuffle or later"
     );
-    crate::source_cache::validate_ga_merge(
-        &ga_segments_dir.iter().cloned().collect::<Vec<_>>(),
-        ga_adsb_cache.as_deref(),
-    )?;
     let scope = parse_scope(scope_bbox.as_deref())?;
     require_scope_for_subset_cache(&adsb_cache, scope.as_ref())?;
     if until_stage < from_stage {
@@ -52,6 +50,17 @@ pub fn run_all(
         );
     }
     let runs = |stage: FromStage| from_stage <= stage && stage <= until_stage;
+    anyhow::ensure!(
+        cruise_phase == CruisePhase::All
+            || (from_stage == FromStage::Stage2b && until_stage == FromStage::Stage2b),
+        "--cruise-phase requires a stage2b-only window"
+    );
+    anyhow::ensure!(
+        cruise_spill_disk_budget_bytes.is_none() || cruise_phase == CruisePhase::Spill,
+        "--cruise-spill-disk-budget-bytes requires --cruise-phase spill"
+    );
+    let needs_shuffled =
+        runs(FromStage::Stage1_5) || runs(FromStage::Stage2a) || runs(FromStage::Stage2c);
     if days.is_empty() {
         anyhow::bail!(
             "--days is empty — refusing to start. Pass at least one day, \
@@ -112,24 +121,30 @@ pub fn run_all(
         vec![segments_dir.clone()]
     };
     let by_square_dir = work_dir.join("segments_by_square");
-    if from_stage > FromStage::Shuffle && !read_window_days(&by_square_dir, "ga_days")?.is_empty() {
+    if runs(FromStage::Shuffle) {
+        crate::source_cache::validate_ga_merge(
+            &ga_segments_dir.iter().cloned().collect::<Vec<_>>(),
+            ga_adsb_cache.as_deref(),
+        )?;
+    } else if needs_shuffled {
+        anyhow::ensure!(ga_segments_dir.is_none(), "--ga-segments-dir is consumed only by shuffle; downstream uses its saved source receipts");
+        aircraft_extract::shuffle::completion::validate(&by_square_dir, scope.as_ref())?;
+        crate::source_cache::validate_shuffled_sources(
+            &by_square_dir,
+            ga_adsb_cache.as_deref(),
+            &adsb_cache,
+            feed,
+            class_filter,
+        )?;
+    } else {
         anyhow::ensure!(
-            ga_adsb_cache.is_some(),
-            "hybrid stage reuse requires --ga-adsb-cache and --ga-segments-dir"
+            ga_segments_dir.is_none() && ga_adsb_cache.is_none(),
+            "GA merge inputs apply only to shuffle or its downstream stages"
         );
     }
 
     let ga_day_paths: Vec<PathBuf> = match &ga_segments_dir {
         None => Vec::new(),
-        Some(_) if !runs(FromStage::Shuffle) => {
-            eprintln!(
-                "{} [run-all] --ga-segments-dir ignored: shuffle is outside \
-                 the from/until window, segments_by_square + its manifests are \
-                 reused as-is",
-                ts()
-            );
-            Vec::new()
-        }
         Some(dir) => {
             require_input_dir_exists("--ga-segments-dir", dir)?;
             if dir.canonicalize().ok().is_some_and(|ga| {
@@ -179,7 +194,10 @@ pub fn run_all(
 
     let rasters = RealRasters::new(&prepared_dir);
 
-    let ok_paths = if external_segments {
+    let reads_day_segments = runs(FromStage::Shuffle) || runs(FromStage::Stage2b);
+    let ok_paths = if from_stage > FromStage::Stage1 && !reads_day_segments {
+        Vec::new()
+    } else if external_segments {
         reuse_segments_from_directories(
             &primary_segments_dirs,
             &days,
@@ -224,9 +242,9 @@ pub fn run_all(
             &by_square_dir,
             scope.as_ref(),
         )?;
-    } else {
+    } else if needs_shuffled {
         require_input_dir_exists(
-            "--work-dir/segments_by_square (required by Stage 1.5 / 2A / 2B / 2C)",
+            "--work-dir/segments_by_square (required by Stage 1.5 / 2A / 2C)",
             &by_square_dir,
         )?;
     }
@@ -239,8 +257,10 @@ pub fn run_all(
         return Ok(());
     }
 
-    if runs(FromStage::Stage2b) {
-        require_matching_window_days(&by_square_dir, &ok_paths)?;
+    // Cruise reads validated day inputs directly and may precede shuffle.
+    // Reusing an existing shuffled tree must still retain its exact day window.
+    if by_square_dir.try_exists()? {
+        require_matching_window_days(&by_square_dir, &days)?;
     }
 
     if runs(FromStage::Stage1_5) {
@@ -257,8 +277,12 @@ pub fn run_all(
         return Ok(());
     }
 
-    let window_n_days = read_window_n_days(&by_square_dir)?;
-    let ga_n_days = read_ga_n_days(&by_square_dir)?;
+    let window_n_days = u16::try_from(days.len())?;
+    let ga_n_days = if needs_shuffled {
+        read_ga_n_days(&by_square_dir)?
+    } else {
+        0
+    };
     if ga_n_days > 0 {
         eprintln!(
             "{} [run-all] hybrid windows: n_days={window_n_days} (airline) + \
@@ -282,12 +306,24 @@ pub fn run_all(
     }
 
     if runs(FromStage::Stage2b) {
-        run_stage_2b(
+        let _disk_reservation = cruise_spill_disk_budget_bytes
+            .map(|bytes| -> Result<_> {
+                Ok(aircraft_extract::arrow_io::SpillDiskReservation::new(
+                    prepared_year_dir
+                        .parent()
+                        .context("missing prepared parent")?,
+                    bytes,
+                    ok_paths.len(),
+                )?)
+            })
+            .transpose()?;
+        run_stage_2b_phase(
             &ok_paths,
             &prepared_year_dir,
             window_n_days,
             scope.as_ref(),
             fail_on_ga_cruise,
+            cruise_phase,
         )?;
     }
     if until_stage <= FromStage::Stage2b {

@@ -50,10 +50,10 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
         (42, "TEST42", *b"A320")
     );
     assert_eq!((row.source_id, row.profile_idx, row.origin), (2, 2, 0));
-    assert_eq!(row.sub_segments.start_alt_m, &[1000.0]);
-    assert_eq!(row.sub_segments.end_alt_m, &[1101.0]);
-    assert_eq!(row.sub_segments.terrain_start_elev_m, &[235.0]);
-    assert_eq!(row.sub_segments.terrain_end_elev_m, &[250.0]);
+    assert_eq!(row.sub_segments.start_alt_m, &[1000]);
+    assert_eq!(row.sub_segments.end_alt_m, &[1101]);
+    assert_eq!(row.sub_segments.terrain_start_elev_m, &[235]);
+    assert_eq!(row.sub_segments.terrain_end_elev_m, &[250]);
     assert_eq!(row.sub_segments.date_id, &[365]);
     assert_eq!(row.sub_segments.period, &[2]);
     assert_eq!(row.sub_segments.flags, &[1]);
@@ -61,8 +61,25 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
     assert_eq!(row.sub_segments.length_m, &[1200.0]);
     let (gx, gy) = grid::lonlat_to_grid(f64::from(14.26_f32), f64::from(50.1_f32));
     let (lon, lat) = square_store::grid_cols::grid_cell_lonlat(gx, gy);
-    assert_eq!(row.sub_segments.start_lat, &[lat as f32]);
-    assert_eq!(row.sub_segments.start_lon, &[lon as f32]);
+    assert_eq!(row.sub_segments.start_lat_lon(0), [lat as f32, lon as f32]);
+    let list = batches[0]
+        .column_by_name("sub_segments")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .unwrap();
+    let values = list
+        .values()
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .unwrap();
+    let xs = values
+        .column_by_name("start_gx")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap();
+    assert_eq!(row.sub_segments.start_gx.as_ptr(), xs.values().as_ptr());
 
     let cruise = dir.path().join("cruise.arrow");
     let id = grid::cruise::cruise_cell_id(50.1, 14.26);
@@ -338,4 +355,67 @@ fn cruise_popup_names_and_highlights_the_actual_producer_cell() {
         assert_eq!(polygon.first(), polygon.last());
         assert!(trace.received_lden.full.is_finite());
     }
+}
+
+#[test]
+fn borrowed_geometry_preserves_sliced_rows_and_eager_bounds() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("airborne.arrow");
+    let mut events = vec![flight(), flight(), flight()];
+    for (index, event) in events.iter_mut().enumerate() {
+        event.flight_id += index as u64;
+        event.sub_segments = [(-85.0, -179.99), (85.0, 179.99), (0.0, 0.0)]
+            .into_iter()
+            .map(|(lat, lon)| {
+                let mut segment = flight().sub_segments[0].clone();
+                segment.start_lat = lat;
+                segment.start_lon = lon;
+                segment.end_lat = -lat;
+                segment.end_lon = -lon;
+                segment
+            })
+            .collect();
+    }
+    write_airborne(&path, &events, 12, 365).unwrap();
+    let (_, batches) = read_record_batches(&path).unwrap();
+    let sliced = [batches[0].slice(1, 1)];
+    let accum = AirborneRowAccum::new(&sliced).unwrap();
+    let rows = accum.views();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].flight_id, 43);
+    let sub = rows[0].sub_segments;
+    let mut latitudes = Vec::new();
+    let mut longitudes = Vec::new();
+    for index in 0..sub.len() {
+        for (gx, gy, actual) in [
+            (
+                sub.start_gx[index],
+                sub.start_gy[index],
+                sub.start_lat_lon(index),
+            ),
+            (sub.end_gx[index], sub.end_gy[index], sub.end_lat_lon(index)),
+        ] {
+            let (lon, lat) = square_store::grid_cols::grid_cell_lonlat(gx, gy);
+            assert_eq!(actual, [lat as f32, lon as f32]);
+            latitudes.push(lat as f32);
+            longitudes.push(lon as f32);
+        }
+    }
+    let bbox = rows[0].bbox;
+    assert_eq!(
+        bbox.min_lat,
+        latitudes.iter().copied().fold(f32::INFINITY, f32::min)
+    );
+    assert_eq!(
+        bbox.max_lat,
+        latitudes.iter().copied().fold(f32::NEG_INFINITY, f32::max)
+    );
+    assert_eq!(
+        bbox.min_lon,
+        longitudes.iter().copied().fold(f32::INFINITY, f32::min)
+    );
+    assert_eq!(
+        bbox.max_lon,
+        longitudes.iter().copied().fold(f32::NEG_INFINITY, f32::max)
+    );
 }

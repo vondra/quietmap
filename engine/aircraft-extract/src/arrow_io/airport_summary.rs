@@ -5,10 +5,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use arrow::array::{
-    Array, ArrayRef, FixedSizeListArray, ListArray, StringArray, StringBuilder, UInt32Array,
-    UInt32Builder, UInt64Array, UInt64Builder,
+    Array, ArrayRef, FixedSizeListArray, ListArray, ListBuilder, StringArray, StringBuilder,
+    UInt16Array, UInt16Builder, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder,
 };
-use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 
@@ -160,244 +159,101 @@ fn column<'a, T: arrow::array::Array + 'static>(
         })
 }
 
-// ─── airport_summary_part: per-airport per-z9 raw fid sets for reduce ───
-
-/// Schema for `airport_summary_parts/<square>/part.arrow`. One row per
-/// airport_key carrying raw `List<UInt64>` fid sets per dimension. The
-/// reduce loops every z9 part for one airport, UNIONs the HashSets, and
-/// counts to produce the global summary row. v9 splits arr/dep/ops into
-/// non-GA + GA windows (`ga_*` columns).
+/// Internal scratch: one sorted flight identity and a union bitmask, without
+/// repeating the same identity in each arrival/departure/class/operation list.
 fn part_schema() -> Arc<Schema> {
-    let u64_list = DataType::List(Arc::new(Field::new("item", DataType::UInt64, false)));
-    let fixed_of =
-        |n: i32| DataType::FixedSizeList(Arc::new(Field::new("item", u64_list.clone(), false)), n);
     Arc::new(Schema::new(vec![
         Field::new("airport_key", DataType::Utf8, false),
-        Field::new("arr_fids", u64_list.clone(), false),
-        Field::new("dep_fids", u64_list.clone(), false),
         Field::new(
-            "gse_fids_per_class",
-            fixed_of(arrow_schemas::NUM_GSE_CLASSES),
+            "flight_ids",
+            DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
             false,
         ),
         Field::new(
-            "ops_fids_per_kind",
-            fixed_of(arrow_schemas::NUM_OPS_KINDS),
-            false,
-        ),
-        Field::new("ga_arr_fids", u64_list.clone(), false),
-        Field::new("ga_dep_fids", u64_list.clone(), false),
-        Field::new(
-            "ga_ops_fids_per_kind",
-            fixed_of(arrow_schemas::NUM_OPS_KINDS),
+            "membership_flags",
+            DataType::List(Arc::new(Field::new("item", DataType::UInt16, true))),
             false,
         ),
     ]))
-}
-
-/// Encode one `Vec<u64>`-per-row column as `List<UInt64>`.
-fn build_u64_list<'a>(rows: impl Iterator<Item = &'a [u64]>, n: usize) -> ListArray {
-    let mut off: Vec<i32> = Vec::with_capacity(n + 1);
-    off.push(0);
-    let mut vals = UInt64Builder::new();
-    let mut running = 0usize;
-    for fids in rows {
-        for &fid in fids {
-            vals.append_value(fid);
-        }
-        running += fids.len();
-        off.push(running as i32);
-    }
-    ListArray::new(
-        Arc::new(Field::new("item", DataType::UInt64, false)),
-        OffsetBuffer::new(arrow::buffer::ScalarBuffer::from(off)),
-        Arc::new(vals.finish()),
-        None,
-    )
-}
-
-/// Encode one `[Vec<u64>; K]`-per-row column as
-/// `FixedSizeList<List<UInt64>, K>`.
-fn build_fixed_list_of_u64_list<'a>(
-    rows: impl Iterator<Item = &'a [Vec<u64>]>,
-    n: usize,
-    k: i32,
-) -> FixedSizeListArray {
-    let mut off: Vec<i32> = Vec::with_capacity(n * k as usize + 1);
-    off.push(0);
-    let mut vals = UInt64Builder::new();
-    let mut running = 0usize;
-    for per_kind in rows {
-        for v in per_kind {
-            for &fid in v {
-                vals.append_value(fid);
-            }
-            running += v.len();
-            off.push(running as i32);
-        }
-    }
-    let inner = ListArray::new(
-        Arc::new(Field::new("item", DataType::UInt64, false)),
-        OffsetBuffer::new(arrow::buffer::ScalarBuffer::from(off)),
-        Arc::new(vals.finish()),
-        None,
-    );
-    let item = DataType::List(Arc::new(Field::new("item", DataType::UInt64, false)));
-    FixedSizeListArray::new(
-        Arc::new(Field::new("item", item, false)),
-        k,
-        Arc::new(inner),
-        None,
-    )
 }
 
 pub(crate) fn write_airport_summary_part(
     path: &Path,
     rows: &[AirportSummaryPartRow],
 ) -> Result<()> {
+    let total = rows
+        .iter()
+        .try_fold(0usize, |n, row| n.checked_add(row.members.len()))
+        .ok_or_else(|| anyhow::anyhow!("airport membership length overflow"))?;
+    anyhow::ensure!(
+        total <= i32::MAX as usize,
+        "airport membership list exceeds Int32 offsets"
+    );
+    let mut keys = StringBuilder::new();
+    let mut fids = ListBuilder::new(UInt64Builder::new());
+    let mut flags = ListBuilder::new(UInt16Builder::new());
+    for row in rows {
+        keys.append_value(&row.airport_key);
+        for &(fid, mask) in &row.members {
+            fids.values().append_value(fid);
+            flags.values().append_value(mask);
+        }
+        fids.append(true);
+        flags.append(true);
+    }
     let schema = part_schema();
-    let n = rows.len();
-    let mut airport_key = StringBuilder::with_capacity(n, 8 * n);
-    for r in rows {
-        airport_key.append_value(&r.airport_key);
-    }
-    let gse = arrow_schemas::NUM_GSE_CLASSES;
-    let ops = arrow_schemas::NUM_OPS_KINDS;
-    let columns: Vec<ArrayRef> = vec![
-        Arc::new(airport_key.finish()),
-        Arc::new(build_u64_list(
-            rows.iter().map(|r| r.arr_fids.as_slice()),
-            n,
-        )),
-        Arc::new(build_u64_list(
-            rows.iter().map(|r| r.dep_fids.as_slice()),
-            n,
-        )),
-        Arc::new(build_fixed_list_of_u64_list(
-            rows.iter().map(|r| r.gse_fids_per_class.as_slice()),
-            n,
-            gse,
-        )),
-        Arc::new(build_fixed_list_of_u64_list(
-            rows.iter().map(|r| r.ops_fids_per_kind.as_slice()),
-            n,
-            ops,
-        )),
-        Arc::new(build_u64_list(
-            rows.iter().map(|r| r.ga_arr_fids.as_slice()),
-            n,
-        )),
-        Arc::new(build_u64_list(
-            rows.iter().map(|r| r.ga_dep_fids.as_slice()),
-            n,
-        )),
-        Arc::new(build_fixed_list_of_u64_list(
-            rows.iter().map(|r| r.ga_ops_fids_per_kind.as_slice()),
-            n,
-            ops,
-        )),
-    ];
-    let batch = RecordBatch::try_new(schema.clone(), columns)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    // No schema-version stamp on parts — they're intra-process scratch
-    // (analogous to `cruise_spill.rs`). Bypass the version-asserting
-    // `write_record_batches` to avoid needing the
-    // arrow_schemas::base_metadata header.
-    use arrow::ipc::writer::FileWriter;
-    use std::fs::File;
-    use std::io::BufWriter;
-    let f = File::create(path)?;
-    let mut w = FileWriter::try_new(BufWriter::new(f), &schema)?;
-    if batch.num_rows() > 0 {
-        w.write(&batch)?;
-    }
-    w.finish()?;
-    Ok(())
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(keys.finish()),
+            Arc::new(fids.finish()),
+            Arc::new(flags.finish()),
+        ],
+    )?;
+    write_record_batches(path, &schema, &[batch])
 }
 
-/// Decode a `List<UInt64>` column into per-row `Vec<u64>`.
-fn read_u64_list(list: &ListArray) -> Result<Vec<Vec<u64>>> {
-    let vals = list
-        .values()
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .ok_or_else(|| anyhow::anyhow!("List<UInt64> inner type"))?;
-    let off = list.value_offsets();
-    Ok((0..list.len())
-        .map(|i| vals.values()[off[i] as usize..off[i + 1] as usize].to_vec())
-        .collect())
-}
-
-/// Decode a `FixedSizeList<List<UInt64>, K>` column into per-row
-/// `[Vec<u64>; K]`.
-fn read_fixed_list_of_u64_list<const K: usize>(
-    outer: &FixedSizeListArray,
-) -> Result<Vec<[Vec<u64>; K]>> {
-    let inner = outer
-        .values()
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .ok_or_else(|| anyhow::anyhow!("FixedSizeList inner List"))?;
-    let vals = inner
-        .values()
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .ok_or_else(|| anyhow::anyhow!("FixedSizeList inner UInt64"))?;
-    let off = inner.value_offsets();
-    Ok((0..outer.len())
-        .map(|i| {
-            std::array::from_fn(|k| {
-                let outer_idx = i * K + k;
-                vals.values()[off[outer_idx] as usize..off[outer_idx + 1] as usize].to_vec()
-            })
-        })
-        .collect())
-}
-
-/// Reads one Stage 2C `part.arrow` shard back into rows; the reduce phase
-/// (`stage_2c::airport_summary_reduce`) absorbs every z9 subdir's part.
-/// Kept in lockstep with the writer so the round-trip test catches schema
-/// drift early.
 pub(crate) fn read_airport_summary_part(path: &Path) -> Result<Vec<AirportSummaryPartRow>> {
-    use arrow::ipc::reader::FileReader;
-    use std::fs::File;
-    use std::io::BufReader;
-    const GSE: usize = arrow_schemas::NUM_GSE_CLASSES as usize;
-    const OPS: usize = arrow_schemas::NUM_OPS_KINDS as usize;
-    let f = File::open(path)?;
-    let r = FileReader::try_new(BufReader::new(f), None)?;
+    let file = std::fs::File::open(path)?;
+    let reader = arrow::ipc::reader::FileReader::try_new(std::io::BufReader::new(file), None)?;
     let mut out = Vec::new();
-    for batch in r {
+    for batch in reader {
         let batch = batch?;
-        let airport_key = column::<StringArray>(&batch, "airport_key")?;
-        let arr = read_u64_list(column::<ListArray>(&batch, "arr_fids")?)?;
-        let dep = read_u64_list(column::<ListArray>(&batch, "dep_fids")?)?;
-        let gse = read_fixed_list_of_u64_list::<GSE>(column::<FixedSizeListArray>(
-            &batch,
-            "gse_fids_per_class",
-        )?)?;
-        let ops = read_fixed_list_of_u64_list::<OPS>(column::<FixedSizeListArray>(
-            &batch,
-            "ops_fids_per_kind",
-        )?)?;
-        let ga_arr = read_u64_list(column::<ListArray>(&batch, "ga_arr_fids")?)?;
-        let ga_dep = read_u64_list(column::<ListArray>(&batch, "ga_dep_fids")?)?;
-        let ga_ops = read_fixed_list_of_u64_list::<OPS>(column::<FixedSizeListArray>(
-            &batch,
-            "ga_ops_fids_per_kind",
-        )?)?;
+        let keys = super::required_column::<StringArray>(&batch, "airport_key")?;
+        let fids = super::required_column::<ListArray>(&batch, "flight_ids")?;
+        let masks = super::required_column::<ListArray>(&batch, "membership_flags")?;
+        anyhow::ensure!(
+            fids.value_offsets() == masks.value_offsets(),
+            "airport identity and mask offsets differ"
+        );
+        let ids = fids
+            .values()
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| anyhow::anyhow!("airport flight identity type"))?;
+        let flags = masks
+            .values()
+            .as_any()
+            .downcast_ref::<UInt16Array>()
+            .ok_or_else(|| anyhow::anyhow!("airport membership type"))?;
+        anyhow::ensure!(
+            ids.null_count() == 0 && flags.null_count() == 0,
+            "null airport membership"
+        );
         for i in 0..batch.num_rows() {
+            anyhow::ensure!(!keys.value(i).is_empty(), "empty airport membership key");
+            let from = fids.value_offsets()[i] as usize;
+            let to = fids.value_offsets()[i + 1] as usize;
+            let members: Vec<_> = (from..to).map(|j| (ids.value(j), flags.value(j))).collect();
+            anyhow::ensure!(
+                members.iter().all(|&(fid, mask)| fid != 0
+                    && mask != 0
+                    && mask & !crate::stage_2c::movements::AIRPORT_FLAGS == 0),
+                "invalid airport flight identity or flags"
+            );
             out.push(AirportSummaryPartRow {
-                airport_key: airport_key.value(i).to_string(),
-                arr_fids: arr[i].clone(),
-                dep_fids: dep[i].clone(),
-                gse_fids_per_class: gse[i].clone(),
-                ops_fids_per_kind: ops[i].clone(),
-                ga_arr_fids: ga_arr[i].clone(),
-                ga_dep_fids: ga_dep[i].clone(),
-                ga_ops_fids_per_kind: ga_ops[i].clone(),
+                airport_key: keys.value(i).to_string(),
+                members,
             });
         }
     }

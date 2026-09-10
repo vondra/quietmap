@@ -104,6 +104,8 @@ fn support_contains_actual_kernel_receivers_and_rounded_bbox_edges() {
         ([0.0, -0.001], [0.0, 0.001], [0.0, 180.0]),
     ] {
         let support = airborne_support_cells(start, end).unwrap();
+        let start_grid = grid::lonlat_to_grid(f64::from(start[1]), f64::from(start[0]));
+        let end_grid = grid::lonlat_to_grid(f64::from(end[1]), f64::from(end[0]));
         let row = AirborneRowView {
             flight_id: 42,
             callsign: "SUPPORT42",
@@ -118,19 +120,19 @@ fn support_contains_actual_kernel_receivers_and_rounded_bbox_edges() {
                 max_lon: start[1].max(end[1]),
             },
             sub_segments: SubSegmentSlice {
-                start_lat: &[start[0]],
-                start_lon: &[start[1]],
-                start_alt_m: &[1000.0],
-                end_lat: &[end[0]],
-                end_lon: &[end[1]],
-                end_alt_m: &[1000.0],
+                start_gy: &[start_grid.1],
+                start_gx: &[start_grid.0],
+                start_alt_m: &[1000],
+                end_gy: &[end_grid.1],
+                end_gx: &[end_grid.0],
+                end_alt_m: &[1000],
                 speed_kt: &[450.0],
                 length_m: &[221080.0],
                 period: &[0],
                 date_id: &[0],
                 flags: &[1],
-                terrain_start_elev_m: &[0.0],
-                terrain_end_elev_m: &[0.0],
+                terrain_start_elev_m: &[0],
+                terrain_end_elev_m: &[0],
             },
         };
         let receiver = Receiver::new(receiver[0], receiver[1], 0.0);

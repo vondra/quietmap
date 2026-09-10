@@ -208,3 +208,24 @@ fn scoped_run_rejects_existing_global_traffic_before_replacing_summary() {
         "out-of-scope z9 file must survive a scoped reextract"
     );
 }
+
+#[test]
+fn an_incomplete_ground_generation_is_never_adopted_or_allowed_to_replace_prior_data() {
+    let temp = tempfile::tempdir().unwrap();
+    let prepared = temp.path().join("prepared");
+    let inputs = temp.path().join("inputs");
+    std::fs::create_dir(&inputs).unwrap();
+    let prior = prepared.join("z9/276/173/airport_traffic.arrow");
+    std::fs::create_dir_all(prior.parent().unwrap()).unwrap();
+    std::fs::write(&prior, b"prior-good-traffic").unwrap();
+    let pending = prepared.join(".airport_traffic_pending");
+    std::fs::create_dir(&pending).unwrap();
+    let partial = pending.join("diagnostic");
+    std::fs::write(&partial, b"interrupted-generation").unwrap();
+    assert!(run_stage_2c(&inputs, &[], &prepared, 12, 365, None)
+        .unwrap_err()
+        .to_string()
+        .contains("incomplete ground output"));
+    assert_eq!(std::fs::read(prior).unwrap(), b"prior-good-traffic");
+    assert_eq!(std::fs::read(partial).unwrap(), b"interrupted-generation");
+}

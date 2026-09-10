@@ -32,7 +32,7 @@ pub(crate) fn compute_roads(
     mut traces: Option<&mut TraceCollector>,
 ) -> (NoisePeriods, Vec<Contributor>) {
     use propagation::arc_screening::{
-        ArcBounds, ArcScreeningScratch, ArcSkyline, SkylineSnapshot, enter_emission_session,
+        enter_emission_session, ArcBounds, ArcScreeningScratch, ArcSkyline, SkylineSnapshot,
     };
     use rayon::prelude::*;
 
@@ -508,7 +508,8 @@ pub(crate) fn compute_roads(
 
     let t_road_pass2 = t_road_start.elapsed() - t_road_pass1;
     if timing_on {
-        let (steps, growths, sectors, growth_ms, raw_arcs, memo_hits, memo_miss) = crate::propagation::arc_screening::take_growth_census();
+        let (steps, growths, sectors, growth_ms, raw_arcs, memo_hits, memo_miss) =
+            crate::propagation::arc_screening::take_growth_census();
         eprintln!(
             "popup-stage road pass1={:.0}ms (gates={:.0}ms arc={:.0}ms) pass2={:.0}ms kept={} steps={} growths={} sectors={} growth_ms={:.0} rawarcs={} memohit={} memomiss={}",
             t_road_pass1.as_secs_f64() * 1000.0,

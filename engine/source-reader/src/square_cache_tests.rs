@@ -10,7 +10,7 @@ use arrow::ipc::{reader::FileReader, writer::FileWriter};
 use arrow::record_batch::RecordBatch;
 use square_store::store::load_square;
 
-use super::{ensure_squares_parallel, STORE};
+use super::{acquire_squares_parallel, STORE};
 use crate::structure_test_fixture as fx;
 
 #[path = "native_receiver_tests.rs"]
@@ -33,7 +33,7 @@ fn parallel_square_load_error_leaves_cache_unchanged() {
         store.squares.clear();
     }
 
-    let result = ensure_squares_parallel(&[valid_empty_name, invalid_name]);
+    let result = acquire_squares_parallel(&[valid_empty_name, invalid_name]);
     let cached_count = STORE.read().expect("square store poisoned").squares.len();
     {
         let mut store = STORE.write().expect("square store poisoned");
@@ -41,7 +41,10 @@ fn parallel_square_load_error_leaves_cache_unchanged() {
         store.squares.clear();
     }
 
-    let error = result.expect_err("invalid square must fail the whole load");
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("invalid square must fail the whole load"),
+    };
     let message = error.to_string();
     assert!(
         message.contains("failed to load square z9/0/1"),
@@ -103,10 +106,54 @@ fn reset_store(root: &Path) {
     store.prepared_dir = root.display().to_string();
 }
 
+fn scan_to_insert_interleaving_preserves_hits_and_active_pins() {
+    let tmp = tempfile::tempdir().unwrap();
+    reset_store(tmp.path());
+    let a = "z9/0/0".to_string();
+    let b = "z9/1/0".to_string();
+    let c = "z9/2/0".to_string();
+    let d = "z9/3/0".to_string();
+
+    let warmed_a = acquire_squares_parallel(std::slice::from_ref(&a)).unwrap();
+    drop(warmed_a);
+    let (scan_pins, missing) = STORE.read().unwrap().pin_cached(&[a.clone(), b.clone()]);
+    assert_eq!(missing.as_slice(), std::slice::from_ref(&b));
+
+    // Deterministically interleave a disjoint acquisition between the first
+    // request's cache scan and its final insertion. Its scan pin must keep A
+    // discoverable while B is being loaded outside the lock.
+    let pinned_c = acquire_squares_parallel(std::slice::from_ref(&c)).unwrap();
+    {
+        let store = STORE.read().unwrap();
+        assert!(store.squares.contains_key(&a));
+        assert!(store.squares.contains_key(&c));
+    }
+    let mixed = acquire_squares_parallel(&[a.clone(), b.clone()]).unwrap();
+    assert!(Arc::ptr_eq(&scan_pins[0], &mixed[0]));
+    {
+        let store = STORE.read().unwrap();
+        assert!(store.squares.contains_key(&a));
+        assert!(store.squares.contains_key(&b));
+        assert!(store.squares.contains_key(&c));
+    }
+
+    drop(scan_pins);
+    drop(mixed);
+    drop(pinned_c);
+    let pinned_d = acquire_squares_parallel(std::slice::from_ref(&d)).unwrap();
+    let store = STORE.read().unwrap();
+    assert_eq!(store.squares.len(), 1);
+    assert!(Arc::ptr_eq(&pinned_d[0], store.squares.get(&d).unwrap()));
+    drop(store);
+    drop(pinned_d);
+    reset_store(Path::new(""));
+}
+
 #[test]
 fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
     // One test owns STORE; no competing process-wide cache fixture.
     parallel_square_load_error_leaves_cache_unchanged();
+    scan_to_insert_interleaving_preserves_hits_and_active_pins();
     let tmp = tempfile::tempdir().unwrap();
     super::YEAR_DIR.set(tmp.path().to_path_buf()).unwrap();
     super::DATA_DIR.set(tmp.path().to_path_buf()).unwrap();
@@ -239,7 +286,31 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
     fx::write_roads_file(&dir.join("roads.arrow"), &[]);
     reset_store(tmp.path());
     assert_eq!(super::query_roads(lat, lon, 1000.0).unwrap(), "[]");
-    native_receiver_tests::facade_popup_preserves_aircraft_and_observation_multiplicity(tmp.path());
     native_receiver_tests::native_listings_honor_requested_radius(tmp.path());
+    native_receiver_tests::facade_popup_preserves_aircraft_and_observation_multiplicity(tmp.path());
+    let initialized = tmp.path().display().to_string();
+    let cached = STORE.read().unwrap().squares.len();
+    assert!(super::source_init(initialized.clone())
+        .unwrap()
+        .contains("already initialized"));
+    assert!(super::source_init(initialized.clone())
+        .unwrap()
+        .contains("already initialized"));
+    assert!(
+        super::source_init(tmp.path().join("different").display().to_string())
+            .unwrap_err()
+            .reason
+            .contains("cannot change within one native process")
+    );
+    assert!(super::source_init(String::new())
+        .unwrap_err()
+        .reason
+        .contains("cannot be empty"));
+    assert!(super::source_init(initialized.clone())
+        .unwrap()
+        .contains("already initialized"));
+    assert_eq!(STORE.read().unwrap().prepared_dir, initialized);
+    assert_eq!(STORE.read().unwrap().squares.len(), cached);
+    assert_eq!(super::year_dir().unwrap(), tmp.path());
     reset_store(Path::new(""));
 }

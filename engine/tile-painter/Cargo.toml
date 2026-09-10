@@ -1,0 +1,24 @@
+[package]
+name = "tile-painter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+grid = { path = "../grid" }
+rusqlite = { version = "0.37", features = ["bundled"] }
+sha2 = "0.11"
+
+noise-compute = { path = "../noise-compute" }
+brotli = "8"
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+sha2 = "0.11"
+
+[[bin]]
+name = "corner-artifact-check"
+path = "src/bin/corner_artifact_check.rs"

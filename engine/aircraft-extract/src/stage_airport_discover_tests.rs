@@ -126,3 +126,95 @@ fn width_clamped_to_floor() {
         "tight 2m spread should clamp up to 10"
     );
 }
+
+#[test]
+fn translating_strip_across_dateline_preserves_membership_geometry_and_airport() {
+    let vertices = |anchor: f64| {
+        (0..60)
+            .map(|i| {
+                (
+                    0.0,
+                    grid::geo::normalize_longitude(anchor + f64::from(i - 30) / 65536.0) as f32,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let baseline = discover_strips(&vertices(0.0), 10.0, 3);
+    assert_eq!(baseline.len(), 1);
+    for anchor in [-180.0, 180.0] {
+        let shifted = discover_strips(&vertices(anchor), 10.0, 3);
+        assert_eq!(shifted.len(), 1, "dateline split one physical strip");
+        assert_eq!(shifted[0].vertex_count, baseline[0].vertex_count);
+        assert_eq!(shifted[0].length_m, baseline[0].length_m);
+        assert_eq!(shifted[0].width_m, baseline[0].width_m);
+        assert_eq!(shifted[0].heading_deg, baseline[0].heading_deg);
+        assert_eq!(shifted[0].is_line, baseline[0].is_line);
+        let areas = [noise_compute::types::AirportArea::new(
+            1,
+            5,
+            "Dateline".into(),
+            "SAME".into(),
+            0.0,
+            anchor,
+            Vec::new(),
+            0.0,
+        )];
+        let index = crate::airport_index::AerodromeIndex::build(&areas);
+        assert_eq!(
+            index
+                .nearest(
+                    f64::from(shifted[0].center_lat),
+                    f64::from(shifted[0].center_lon)
+                )
+                .map(|a| a.airport_key.as_str()),
+            Some("SAME")
+        );
+    }
+}
+
+#[test]
+fn dense_strip_keeps_its_exact_shared_latitude() {
+    let members: Vec<_> = (0..20_000)
+        .map(|i| (50.1_f32, 14.0 + (i % 60) as f32 / 65536.0))
+        .collect();
+    let old_mean = members.iter().map(|v| v.0).sum::<f32>() / members.len() as f32;
+    assert!((old_mean - members[0].0).abs() > 0.009);
+    let strip = fit_strip(&members);
+    assert_eq!(strip.center_lat, members[0].0);
+    assert_eq!(strip.width_m, 10.0);
+    assert!(strip.is_line);
+}
+
+#[test]
+fn repeated_coordinates_preserve_every_member_without_repeated_neighborhood_scans() {
+    let vertices: Vec<_> = (0..273_604)
+        .map(|i| {
+            (
+                89.509_8_f32,
+                if i % 2 == 0 {
+                    -86.108_78_f32
+                } else {
+                    -86.174_7_f32
+                },
+            )
+        })
+        .collect();
+    let (labels, clusters) = dbscan_2d(&vertices, 200.0, 5);
+    assert_eq!(clusters, 1);
+    assert!(labels.iter().all(|label| *label == Some(0)));
+    assert_eq!(
+        discover_strips(&vertices, 200.0, 5),
+        vec![fit_strip(&vertices)]
+    );
+}
+
+#[test]
+fn duplicate_initial_noise_keeps_first_reachable_cluster_border_label() {
+    let vertices: Vec<_> = [0.0, 0.0, -15.0, -15.0, -15.0, -9.0, 15.0, 15.0, 15.0, 9.0]
+        .into_iter()
+        .map(|east| local_at_50n(east, 0.0))
+        .collect();
+    let (labels, clusters) = dbscan_2d(&vertices, 10.0, 5);
+    assert_eq!(clusters, 2);
+    assert_eq!(labels, [vec![Some(0); 6], vec![Some(1); 4]].concat());
+}

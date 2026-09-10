@@ -8,7 +8,7 @@ mod archive;
 pub(crate) use archive::archive_parts;
 mod selection;
 mod typecode_probe;
-pub use archive::{TypecodeProbeStats, read_day_traces, read_day_traces_filtered};
+pub use archive::{read_day_traces, read_day_traces_filtered, TypecodeProbeStats};
 
 /// Trace-point bit 0 — `on_ground` set by the adsb.lol bitfield.
 pub const FLAG_ON_GROUND_RAW: u8 = 1 << 0;

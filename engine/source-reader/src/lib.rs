@@ -1,5 +1,5 @@
-//! source-reader: mmap'd Arrow IPC reader for noise popup.
-//! Zero-copy: data stays in mmap'd pages, queries iterate directly over Arrow columns.
+//! source-reader: lazy Arrow IPC reader for noise popup.
+//! Decoded batches are retained only for the current and concurrently active areas.
 
 // mimalloc handles popup's many small short-lived allocs (SegmentTrace
 // + Box<PropagationBreakdown> + inner Vec<f32>) faster than glibc malloc
@@ -15,6 +15,7 @@ pub mod query;
 pub mod structure_store;
 #[cfg(test)]
 mod structure_test_fixture;
+pub mod surface_corner_preview;
 #[cfg(feature = "node")]
 pub mod wire;
 
@@ -29,9 +30,9 @@ use napi::{Error, Status};
 #[cfg(feature = "node")]
 use napi_derive::napi;
 #[cfg(feature = "node")]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 #[cfg(feature = "node")]
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 #[cfg(feature = "node")]
 use square_store::store::SquareData;
@@ -44,10 +45,12 @@ static STORE: std::sync::LazyLock<RwLock<SquareStore>> =
 static RASTERS: std::sync::OnceLock<raster_reader::RealRasters> = std::sync::OnceLock::new();
 /// Data root (`…/data/prepared`) captured at `source_init` — the vector
 /// obstacle loader keeps its on-disk index cache under it (geodata-v2 1.4).
+#[cfg(feature = "node")]
 static DATA_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 /// The live `…/prepared/2026` dir — the structure root: every prepared
 /// square carries its own `structures.arrow` under `z9/<x>/<y>/` beside its
 /// other arrows.
+#[cfg(feature = "node")]
 static YEAR_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 /// The square root, or the one error that explains an unset one. Buildings
@@ -65,7 +68,7 @@ fn year_dir() -> napi::Result<&'static std::path::Path> {
 
 #[cfg(feature = "node")]
 struct SquareStore {
-    squares: HashMap<String, SquareData>,
+    squares: HashMap<String, Arc<SquareData>>,
     prepared_dir: String,
 }
 
@@ -93,30 +96,63 @@ impl SquareStore {
             prepared_dir: String::new(),
         }
     }
+
+    /// Pin cache hits while the caller loads misses outside the global lock.
+    /// These Arcs close the scan-to-insert race: a disjoint acquisition sees
+    /// their strong counts and cannot evict a hit before this caller returns.
+    fn pin_cached(&self, square_names: &[String]) -> (Vec<Arc<SquareData>>, Vec<String>) {
+        let mut pinned = Vec::new();
+        let mut missing = Vec::new();
+        for id in square_names {
+            match self.squares.get(id.as_str()) {
+                Some(data) => pinned.push(Arc::clone(data)),
+                None => missing.push(id.clone()),
+            }
+        }
+        (pinned, missing)
+    }
+
+    /// Keep the requested working set plus every concurrently pinned square.
+    fn retain_working_set(&mut self, square_names: &[String]) {
+        let requested: HashSet<&str> = square_names.iter().map(String::as_str).collect();
+        self.squares
+            .retain(|id, data| requested.contains(id.as_str()) || Arc::strong_count(data) > 1);
+    }
+
+    /// Clone every requested square before evicting anything. The returned
+    /// Arcs keep the query valid without holding the global lock.
+    fn pin_working_set(&mut self, square_names: &[String]) -> Vec<Arc<SquareData>> {
+        let acquired: Vec<_> =
+            square_names
+                .iter()
+                .map(|id| {
+                    Arc::clone(self.squares.get(id.as_str()).expect(
+                        "a successful working-set load must contain every requested square",
+                    ))
+                })
+                .collect();
+        self.retain_working_set(square_names);
+        acquired
+    }
 }
 
-/// Load outside the store lock so a cold query does not block warm readers.
-/// CPU-bounded workers also cover arbitrary listing radii without spawning
-/// one OS thread per square. First insert wins on a race; the requested set
-/// is one cache transaction: a load error fails the query and inserts none.
+/// Load outside the store lock, then atomically pin the complete requested set.
+/// Successful acquisition drops old areas that no active query has pinned, so
+/// decoded Arrow bodies grow with concurrent working sets rather than process
+/// history. First insert wins on a race; a load error changes nothing.
 #[cfg(feature = "node")]
-fn ensure_squares_parallel(square_names: &[String]) -> napi::Result<()> {
-    let missing: Vec<String> = {
+fn acquire_squares_parallel(square_names: &[String]) -> napi::Result<Vec<Arc<SquareData>>> {
+    let (cached_pins, missing, prepared_dir) = {
         let store = STORE.read().expect("square store poisoned");
-        square_names
-            .iter()
-            .filter(|id| !store.squares.contains_key(id.as_str()))
-            .cloned()
-            .collect()
+        let (cached_pins, missing) = store.pin_cached(square_names);
+        (cached_pins, missing, store.prepared_dir.clone())
     };
     if missing.is_empty() {
-        return Ok(());
+        let mut store = STORE.write().expect("square store poisoned");
+        let acquired = store.pin_working_set(square_names);
+        drop(cached_pins);
+        return Ok(acquired);
     }
-    let prepared_dir = STORE
-        .read()
-        .expect("square store poisoned")
-        .prepared_dir
-        .clone();
     let workers = std::thread::available_parallelism().map_or(1, usize::from);
     let loaded: Result<Vec<(String, SquareData)>, String> = std::thread::scope(|scope| {
         let handles: Vec<_> = missing
@@ -145,8 +181,21 @@ fn ensure_squares_parallel(square_names: &[String]) -> napi::Result<()> {
     let loaded = loaded.map_err(|error| Error::new(Status::GenericFailure, error))?;
     let mut store = STORE.write().expect("square store poisoned");
     for (id, data) in loaded {
-        store.squares.entry(id).or_insert(data);
+        store.squares.entry(id).or_insert_with(|| Arc::new(data));
     }
+    let acquired = store.pin_working_set(square_names);
+    drop(cached_pins);
+    Ok(acquired)
+}
+
+/// Drop decoded source batches from completed, unrelated queries. Active
+/// callers remain pinned, and the next exact acquire still owns correctness.
+#[cfg(feature = "node")]
+fn prune_source_cache(square_names: &[String]) -> napi::Result<()> {
+    let mut store = STORE
+        .write()
+        .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
+    store.retain_working_set(square_names);
     Ok(())
 }
 
@@ -156,6 +205,12 @@ mod square_cache_tests;
 #[cfg(feature = "node")]
 #[napi]
 pub fn source_init(prepared_dir: String) -> napi::Result<String> {
+    if prepared_dir.is_empty() {
+        return Err(Error::new(
+            Status::InvalidArg,
+            "prepared directory cannot be empty",
+        ));
+    }
     let mut store = STORE
         .write()
         .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
@@ -169,8 +224,13 @@ pub fn source_init(prepared_dir: String) -> napi::Result<String> {
             store.squares.len()
         ));
     }
+    if !store.prepared_dir.is_empty() {
+        return Err(Error::new(
+            Status::InvalidArg,
+            "prepared directory cannot change within one native process; start a new process",
+        ));
+    }
     store.prepared_dir = prepared_dir.clone();
-    store.squares.clear();
 
     // Native raster windows share `<prepared>/2026/z9/<x>/<y>/` with
     // vector shards; their per-channel publication authority is rasters.sqlite.
@@ -230,16 +290,10 @@ pub fn query_roads(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String
         lng,
         max_radius_m * LINE_MIDPOINT_REACH_FACTOR,
     ))?;
-    ensure_squares_parallel(&square_names)?;
-    let store = STORE
-        .read()
-        .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
+    let squares = acquire_squares_parallel(&square_names)?;
 
     let mut all_results = Vec::new();
-    for name in &square_names {
-        let Some(data) = store.squares.get(name.as_str()) else {
-            continue;
-        };
+    for data in &squares {
         let road_batches = data
             .roads
             .batches_within(lat, lng, max_radius_m)
@@ -255,16 +309,10 @@ pub fn query_roads(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String
 #[napi]
 pub fn query_buildings(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String> {
     let square_names = source_square_names(squares_within_radius(lat, lng, max_radius_m))?;
-    ensure_squares_parallel(&square_names)?;
-    let store = STORE
-        .read()
-        .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
+    let squares = acquire_squares_parallel(&square_names)?;
 
     let mut all_results = Vec::new();
-    for name in &square_names {
-        let Some(data) = store.squares.get(name.as_str()) else {
-            continue;
-        };
+    for data in &squares {
         let building_batches = data
             .structures
             .batches_within(lat, lng, max_radius_m)
@@ -291,6 +339,7 @@ pub fn query_obstacle_footprints(
     north: f64,
     east: f64,
 ) -> napi::Result<String> {
+    prune_source_cache(&[])?;
     let fps = structure_store::footprints_in_bbox(year_dir()?, south, west, north, east)
         .map_err(|e| Error::new(Status::GenericFailure, e))?;
     Ok(serde_json::to_string(&fps).unwrap())
@@ -299,6 +348,7 @@ pub fn query_obstacle_footprints(
 /// Map the engine's envelope class to the small plain-language vocabulary
 /// used by the building hover tooltip. Kept outside `structure_store.rs` so
 /// changing display wording does not rotate its disk-index cache version.
+#[cfg(any(feature = "node", test))]
 fn building_type_from_envelope(class: noise_compute::envelope::EnvelopeClass) -> &'static str {
     match class {
         noise_compute::envelope::EnvelopeClass::Outdoor => "carport/roof structure",
@@ -317,6 +367,7 @@ fn building_type_from_envelope(class: noise_compute::envelope::EnvelopeClass) ->
 #[cfg(feature = "node")]
 #[napi]
 pub fn query_building_at(lat: f64, lng: f64) -> napi::Result<String> {
+    prune_source_cache(&[])?;
     let data_dir = DATA_DIR
         .get()
         .map(|p| p.as_path())
@@ -374,16 +425,10 @@ mod building_type_tests {
 #[napi]
 pub fn query_barriers(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String> {
     let square_names = source_square_names(squares_within_radius(lat, lng, max_radius_m))?;
-    ensure_squares_parallel(&square_names)?;
-    let store = STORE
-        .read()
-        .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
+    let squares = acquire_squares_parallel(&square_names)?;
 
     let mut all_results = Vec::new();
-    for name in &square_names {
-        let Some(data) = store.squares.get(name.as_str()) else {
-            continue;
-        };
+    for data in &squares {
         let barrier_batches = data
             .structures
             .batches_within(lat, lng, max_radius_m)
@@ -434,6 +479,8 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     let data_dir = DATA_DIR
         .get()
         .ok_or_else(|| Error::new(Status::GenericFailure, "source_init was never called"))?;
+    let initial_square_names = source_square_names(squares_within_reach(lat, lng))?;
+    prune_source_cache(&initial_square_names)?;
     let mut obstacle_set = structure_store::load_obstacle_set(year_dir()?, data_dir, lat, lng)
         .map_err(|error| Error::new(Status::GenericFailure, error))?;
     let (facade_lat, facade_lng, inside_envelope) =
@@ -445,22 +492,18 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     }
 
     let square_names = source_square_names(squares_within_reach(facade_lat, facade_lng))?;
-    // Load missing squares in parallel WITHOUT holding the store lock, then
-    // collect under a read lock — concurrent popups on other workers keep
-    // running against the shared cache during a cold load.
-    ensure_squares_parallel(&square_names)?;
-    let store = STORE
-        .read()
-        .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
+    // The returned Arcs pin this whole query without holding the global lock.
+    // Concurrent popups can load or reuse their own working sets while this
+    // one decodes batches and computes.
+    let squares = acquire_squares_parallel(&square_names)?;
     let square_refs: Vec<_> = square_names
         .iter()
-        .filter_map(|id| {
-            store.squares.get(id.as_str()).map(|data| {
-                (
-                    grid::parse_square_name(id).expect("canonical square name"),
-                    data,
-                )
-            })
+        .zip(&squares)
+        .map(|(id, data)| {
+            (
+                grid::parse_square_name(id).expect("canonical square name"),
+                data.as_ref(),
+            )
         })
         .collect();
 
@@ -468,7 +511,6 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     let sources = collect_from_square_data(&square_refs, facade_lat, facade_lng)
         .map_err(|error| Error::new(Status::GenericFailure, error))?;
     let t_collect = t_start.elapsed() - t_load;
-    drop(store);
 
     let real_rasters = RASTERS
         .get()
@@ -540,6 +582,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         Some(&mut traces),
     );
     drop(_row_admin_guard);
+    let t_ground = t_start.elapsed() - t_load - t_collect;
     aircraft_v6::add_v6_aircraft_to_result(
         &mut result,
         &mut traces,
@@ -595,11 +638,13 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
 
     if timing_on {
         eprintln!(
-            "popup-timing total={:.0}ms load={:.0}ms collect={:.0}ms compute={:.0}ms json={:.0}ms (rd={} rl={} ac={})",
+            "popup-timing total={:.0}ms load={:.0}ms collect={:.0}ms compute={:.0}ms (ground={:.0}ms air={:.0}ms) json={:.0}ms (rd={} rl={} ac={})",
             t_total.as_secs_f64() * 1000.0,
             t_load.as_secs_f64() * 1000.0,
             t_collect.as_secs_f64() * 1000.0,
             t_compute.as_secs_f64() * 1000.0,
+            t_ground.as_secs_f64() * 1000.0,
+            (t_compute - t_ground).as_secs_f64() * 1000.0,
             (t_total - t_load - t_collect - t_compute).as_secs_f64() * 1000.0,
             n_roads,
             n_railways,

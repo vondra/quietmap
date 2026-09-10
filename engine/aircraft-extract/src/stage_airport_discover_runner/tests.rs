@@ -9,6 +9,16 @@ use crate::airport_io::AERODROME_AEROWAY_TYPE;
 use crate::flight::Phase;
 use crate::synth_airport_io::{read_synth_airport_areas, read_synth_airport_lines};
 
+fn collect_miss_snap_vertices(
+    segments: &[FlightSegment],
+    lines: &[AirportLineSegment],
+    index: &AerodromeIndex,
+) -> Vec<(f32, f32)> {
+    let mut vertices = Vec::new();
+    super::collect_miss_snap_vertices(segments, lines, index, &mut vertices);
+    vertices
+}
+
 fn ground_segment_at(start_lat: f32, start_lon: f32, end_lat: f32, end_lon: f32) -> FlightSegment {
     FlightSegment {
         flight_id: 1,
@@ -84,8 +94,8 @@ fn offset_latlon_wraps_across_antimeridian() {
 /// One AirportLineRow with midpoint at `(lat, lon)` — used by
 /// the new near-real-line gate tests. Length 49 m matches the OSM
 /// extract step so the midpoint check is the dominant signal.
-fn line_at(lat: f64, lon: f64) -> AirportLineRow {
-    AirportLineRow {
+fn line_at(lat: f64, lon: f64) -> AirportLineSegment {
+    AirportLineSegment {
         grid: (
             grid::lonlat_to_grid(lon, lat),
             grid::lonlat_to_grid(lon, lat),
@@ -431,10 +441,12 @@ fn end_to_end_emits_synth_arrows_for_an_unmapped_strip() {
     let areas = read_synth_airport_areas(&dir.join(SYNTH_AREAS_FILE)).unwrap();
     assert!(!lines.is_empty(), "synth_airport_lines must have rows");
     assert_eq!(areas.len(), 1, "one synth area per cluster");
+    assert_eq!(areas[0].name, "Discovered airstrip");
     let key = &areas[0].airport_key;
     assert!(key.starts_with("auto-"), "synth key, not re-attribution");
     for r in &lines {
         assert_eq!(&r.airport_key, key);
+        assert_eq!(r.name, areas[0].name);
     }
 }
 
@@ -517,7 +529,21 @@ fn known_runway_across_partition_edge_does_not_seed_a_false_airfield() {
         grid::lonlat_to_grid(-0.001, lat as f64),
         grid::lonlat_to_grid(0.001, lat as f64),
     );
-    let candidates = nearby_airport_lines(owner, std::slice::from_ref(&segment), &[line]);
+    let mut extent = Extent::empty(owner);
+    extent.include(segment.start_lat, segment.start_lon);
+    extent.include(segment.end_lat, segment.end_lon);
+    let row = AirportLineRow {
+        osm_id: line.osm_id,
+        segment_idx: line.segment_idx,
+        grid: line.grid,
+        start_lat: line.start_lat,
+        start_lon: line.start_lon,
+        end_lat: line.end_lat,
+        end_lon: line.end_lon,
+        length_m: line.length_m,
+        aeroway_type: line.aeroway_type,
+    };
+    let candidates = nearby_airport_lines(owner, extent, &[row]);
     assert_eq!(candidates.len(), 1);
     assert!(collect_miss_snap_vertices(&[segment], &candidates, &idx(&[])).is_empty());
 }
@@ -534,8 +560,8 @@ fn corrupt_ground_input_preserves_every_existing_sidecar() {
     let mut snapshots = Vec::new();
     for square in [active, corrupt] {
         let dir = prepared_year.join(square_path(square));
-        write_synth_airport_lines(&dir.join(SYNTH_LINES_FILE), &[]).unwrap();
-        write_synth_airport_areas(&dir.join(SYNTH_AREAS_FILE), &[]).unwrap();
+        write_synth_airport_lines(&dir.join(SYNTH_LINES_FILE), []).unwrap();
+        write_synth_airport_areas(&dir.join(SYNTH_AREAS_FILE), []).unwrap();
         for name in [SYNTH_LINES_FILE, SYNTH_AREAS_FILE] {
             let path = dir.join(name);
             snapshots.push((path.clone(), std::fs::read(path).unwrap()));
@@ -549,4 +575,98 @@ fn corrupt_ground_input_preserves_every_existing_sidecar() {
             path.display()
         );
     }
+}
+
+#[test]
+fn streamed_batches_preserve_candidate_order_and_the_wider_classification_gate() {
+    let tmp = tempfile::tempdir().unwrap();
+    let segments = unmapped_strip_segments();
+    let path = tmp.path().join("ground.arrow");
+    crate::arrow_io::write_segments(&path, &segments).unwrap();
+    let (schema, batches) = crate::arrow_io::read_record_batches(&path).unwrap();
+    let batch = &batches[0];
+    crate::arrow_io::write_record_batches(
+        &path,
+        &schema,
+        &[
+            batch.slice(0, 7),
+            batch.slice(7, 13),
+            batch.slice(20, segments.len() - 20),
+        ],
+    )
+    .unwrap();
+    let mut streamed = Vec::new();
+    let mut batches_seen = 0;
+    crate::arrow_io::for_each_segment_batch(&path, |batch| {
+        batches_seen += 1;
+        super::collect_miss_snap_vertices(&batch, &[], &idx(&[]), &mut streamed);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(batches_seen, 3);
+    assert_eq!(
+        streamed,
+        collect_miss_snap_vertices(&segments, &[], &idx(&[]))
+    );
+    for lon in [0.0, 179.9999] {
+        let owner = crate::spatial::square_id(0.0, lon).unwrap();
+        let mut extent = Extent::empty(owner);
+        extent.include(0.0, lon as f32);
+        let rows = [250.0, 350.0].map(|meters| AirportLineRow {
+            osm_id: meters as u64,
+            segment_idx: 0,
+            start_lat: meters / M_PER_DEG_LAT,
+            end_lat: meters / M_PER_DEG_LAT,
+            start_lon: lon as f32,
+            end_lon: lon as f32,
+            grid: ((0, 0), (0, 0)),
+            length_m: 49.0,
+            aeroway_type: 0,
+        });
+        let lines = nearby_airport_lines(owner, extent, &rows);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].osm_id, 250);
+        assert!(cluster_near_real_aeroway_line(0.0, lon, &lines));
+        let segment = ground_segment_at(0.0, lon as f32, 0.0, lon as f32);
+        assert_eq!(
+            collect_miss_snap_vertices(&[segment], &lines, &idx(&[])).len(),
+            2,
+            "300m broadphase must not widen the 50m snap gate"
+        );
+    }
+}
+
+#[test]
+fn read_only_plan_counts_the_same_polygon_candidates_and_decoded_callsigns() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("input");
+    let owner = crate::spatial::square_id(50.0, 14.0).unwrap();
+    let path = source.join(square_path(owner)).join("ground.arrow");
+    let mut outside = ground_segment_at(50.0, 14.0, 50.0, 14.001);
+    outside.callsign = "X".repeat(6000);
+    let inside = ground_segment_at(0.0, 0.0, 0.0, 0.001);
+    let mut vehicle = outside.clone();
+    vehicle.veh_kind = 1;
+    let mut airborne = outside.clone();
+    airborne.phase = Phase::Airborne;
+    crate::arrow_io::write_segments(&path, &[outside, inside, vehicle, airborne]).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let areas = [AirportArea::new(
+        1,
+        AERODROME_AEROWAY_TYPE,
+        "Known".into(),
+        "K".into(),
+        0.0,
+        0.0,
+        Vec::new(),
+        0.0,
+    )];
+    let plan = plan_ground_discovery(&source, &idx(&areas), &[], None).unwrap();
+    let input = &plan[&owner];
+    assert_eq!(input.rows, 4);
+    assert_eq!(input.candidate_vertices_upper_bound, 2);
+    assert!(input.decoded_batch_bytes >= 4 * std::mem::size_of::<FlightSegment>() + 18_000);
+    assert_eq!(input.input_bytes, before.len() as u64);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
 }

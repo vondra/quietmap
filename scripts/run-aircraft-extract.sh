@@ -94,6 +94,11 @@ selected_ga_days() {
         | python3 -c 'import sys; fields=sys.stdin.buffer.read().split(b"\0"); print(",".join(sorted({s.decode() for s in fields[:-1:2]})))'
 }
 if [ -n "$HYBRID" ]; then
+    FROM_STAGE="${FROM_STAGE:-shuffle}"
+    case "$FROM_STAGE" in
+        shuffle|stage1-5|stage2a|stage2b|stage2c) ;;
+        *) die "hybrid --from-stage must be shuffle, stage1-5, stage2a, stage2b or stage2c; omit it for a fresh extraction" ;;
+    esac
     [ -n "$AIRLINE_CACHE" ] || die "HYBRID=1 requires AIRLINE_CACHE= with an explicit cache directory"
     [ -n "$GA_CACHE" ] || die "HYBRID=1 requires GA_CACHE= with an explicit cache directory"
     [ -z "$DAYS$AIRLINE_DAYS$GA_DAYS" ] \
@@ -193,12 +198,17 @@ if [ -n "$HYBRID" ]; then
             2>&1 | stdbuf -oL -eL tee -a "$LOG_FILE"
     }
 
-    run_pass J "$AIRLINE_FEED" "$AIRLINE_CACHE" "$AIRLINE_DAYS" non-ga "$W_AIR"
-    run_pass G adsblol "$GA_CACHE" "$GA_DAYS" ga "$W_GA"
-
-    MERGE_ARGS=(--from-stage "${FROM_STAGE:-shuffle}" --ga-segments-dir "$W_GA/segments" --ga-adsb-cache "$GA_CACHE" --class-filter non-ga)
+    # Every earlier starting phase includes Stage 2B, which still reads primary days.
+    if [ "$FROM_STAGE" != stage2c ]; then
+        run_pass J "$AIRLINE_FEED" "$AIRLINE_CACHE" "$AIRLINE_DAYS" non-ga "$W_AIR"
+    fi
+    MERGE_ARGS=(--from-stage "$FROM_STAGE" --ga-adsb-cache "$GA_CACHE" --class-filter non-ga)
+    if [ "$FROM_STAGE" = shuffle ]; then
+        run_pass G adsblol "$GA_CACHE" "$GA_DAYS" ga "$W_GA"
+        MERGE_ARGS+=(--ga-segments-dir "$W_GA/segments")
+    fi
     [ -n "$FAIL_ON_GA_CRUISE" ] && MERGE_ARGS+=(--fail-on-ga-cruise)
-    log "merge: airline work-dir $W_AIR + GA segments $W_GA/segments (from-stage ${FROM_STAGE:-shuffle})"
+    log "hybrid downstream: work-dir $W_AIR (from-stage $FROM_STAGE)"
     "${GUARD[@]}" "$BIN" run-all \
         --adsb-cache "$AIRLINE_CACHE" \
         --prepared-year-dir "$PREPARED_YEAR_DIR" \

@@ -7,6 +7,8 @@ members = [
     "aircraft-extract",
     "arrow-batching",
     "grid",
+    "tile-painter",
+    "relevant-source-gpu",
     "noise-compute",
     "osm-extract",
     "raster-reader",

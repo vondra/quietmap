@@ -1,7 +1,7 @@
 //! TAR day validation and streaming archive traversal; corrupt or incomplete inputs fail loudly.
 
 use super::typecode_probe::probe_typecode_prefix;
-use super::{AircraftTrace, parse_trace};
+use super::{parse_trace, AircraftTrace};
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::fs::File;

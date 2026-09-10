@@ -17,7 +17,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 
-use crate::arrow_io::read_segments;
+use crate::arrow_io::for_each_segment_batch;
 use crate::flight::{segment_flags, AirborneEvent, AirborneSubSegment, FlightSegment, Phase};
 use crate::geo::square_path;
 use crate::progress::{finished, human, started, ts, Milestone};
@@ -39,11 +39,17 @@ pub fn run_stage_2a(
     ga_n_days: u16,
     scope: Option<&ScopeBbox>,
 ) -> Result<usize> {
-    // Wipe stale airborne.arrow from in-scope z9s before workers write
-    // fresh files. z9s with no airborne activity this run would otherwise
-    // retain a prior-run file (possibly older schema) and the popup
-    // reader would fatal-fail on schema_version mismatch. Symmetric to
-    // the Stage 2B/2C guards.
+    let square_inputs = list_square_shards(segments_by_square_dir, "airborne.arrow", scope)?;
+    let mut largest_allocation = 0;
+    for (_, path) in &square_inputs {
+        largest_allocation = largest_allocation.max(shard_allocation_allowance(path)?);
+    }
+    let workers =
+        crate::memory::max_concurrent_tasks(rayon::current_num_threads(), largest_allocation)?;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()?;
+    // Validate every input before replacing any prior output.
     let wiped =
         crate::wipe::wipe_stale_arrows_for_scope(prepared_year_dir, "airborne.arrow", scope)?;
     if wiped > 0 {
@@ -52,38 +58,43 @@ pub fn run_stage_2a(
             ts()
         );
     }
-    let square_inputs = list_square_shards(segments_by_square_dir, "airborne.arrow", scope)?;
     let n_square = square_inputs.len();
-    started("stage2a", &format!("{n_square} z9 cells"));
+    started("stage2a", &format!("{n_square} z9 cells; {workers} workers; {largest_allocation} B allocation allowance each"));
     let stage_start = std::time::Instant::now();
 
     let square_counter = Milestone::new("stage2a", "z9 cells", 100);
     let seg_counter = Milestone::new("stage2a", "segments in", 1_000_000);
     let evt_counter = Milestone::new("stage2a", "events out", 100_000);
     let written = std::sync::atomic::AtomicUsize::new(0);
-    square_inputs
-        .par_iter()
-        .try_for_each(|(square, shard_path)| -> Result<()> {
-            let segments = read_segments(shard_path)
+    pool.install(|| {
+        square_inputs
+            .par_iter()
+            .try_for_each(|(square, shard_path)| -> Result<()> {
+                let mut events = AirborneEvents::default();
+                for_each_segment_batch(shard_path, |segments| {
+                    seg_counter.add(segments.len() as u64);
+                    events.extend(&segments);
+                    Ok(())
+                })
                 .with_context(|| format!("read {}", shard_path.display()))?;
-            seg_counter.add(segments.len() as u64);
-            let events = aggregate_events_for_square(&segments);
-            square_counter.add(1);
-            if events.is_empty() {
-                return Ok(());
-            }
-            evt_counter.add(events.len() as u64);
-            let dir = prepared_year_dir.join(square_path(*square));
-            std::fs::create_dir_all(&dir)?;
-            crate::arrow_io::write_airborne(
-                &dir.join("airborne.arrow"),
-                &events,
-                n_days,
-                ga_n_days,
-            )?;
-            written.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Ok(())
-        })?;
+                let events = events.finish();
+                square_counter.add(1);
+                if events.is_empty() {
+                    return Ok(());
+                }
+                evt_counter.add(events.len() as u64);
+                let dir = prepared_year_dir.join(square_path(*square));
+                std::fs::create_dir_all(&dir)?;
+                crate::arrow_io::write_airborne(
+                    &dir.join("airborne.arrow"),
+                    &events,
+                    n_days,
+                    ga_n_days,
+                )?;
+                written.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(())
+            })
+    })?;
     let written = written.load(std::sync::atomic::Ordering::Relaxed);
     let empty = n_square.saturating_sub(written);
     finished(
@@ -99,25 +110,60 @@ pub fn run_stage_2a(
     Ok(written)
 }
 
-fn aggregate_events_for_square(segments: &[FlightSegment]) -> Vec<AirborneEvent> {
-    let mut by_flight: HashMap<u64, AirborneEventBuilder> = HashMap::new();
-    for seg in segments {
-        // Shuffle pre-filtered by Phase; veh_kind only filtered here
-        // because the schema can't distinguish aircraft from GSE at
-        // shuffle time (Phase::Ground covers both; Airborne should
-        // already be aircraft-only, but defense-in-depth is cheap).
-        if seg.phase != Phase::Airborne || seg.veh_kind != 0 {
-            continue;
+/// Raw IPC bytes cover both the growing subsegment vectors and their two Arrow
+/// representations during spatial sorting. Flight runs bound hash/event overhead;
+/// the source shard itself is released one decoded batch at a time.
+fn shard_allocation_allowance(path: &Path) -> Result<u64> {
+    let file = std::fs::File::open(path)?;
+    let bytes = file.metadata()?.len();
+    let reader = arrow::ipc::reader::FileReader::try_new(std::io::BufReader::new(file), None)?;
+    let schema = reader.schema();
+    crate::arrow_schemas::assert_schema_version(schema.metadata())?;
+    let count = |key: &str| -> Result<u64> {
+        schema
+            .metadata()
+            .get(key)
+            .with_context(|| {
+                format!(
+                    "{} lacks {key}; run shuffle with the current writer",
+                    path.display()
+                )
+            })?
+            .parse()
+            .with_context(|| format!("invalid {key} in {}", path.display()))
+    };
+    Ok(3 * bytes
+        + 768 * count("flight_runs")?
+        + 2 * count("flight_run_callsign_bytes")?
+        + (1 << 30))
+}
+
+#[derive(Default)]
+struct AirborneEvents(HashMap<u64, AirborneEventBuilder>);
+
+impl AirborneEvents {
+    fn extend(&mut self, segments: &[FlightSegment]) {
+        for seg in segments {
+            if seg.phase != Phase::Airborne || seg.veh_kind != 0 {
+                continue;
+            }
+            self.0
+                .entry(seg.flight_id)
+                .or_insert_with(|| AirborneEventBuilder::new(seg))
+                .push(seg);
         }
-        by_flight
-            .entry(seg.flight_id)
-            .or_insert_with(|| AirborneEventBuilder::new(seg))
-            .push(seg);
     }
-    by_flight
-        .into_values()
-        .map(AirborneEventBuilder::finish)
-        .collect()
+
+    fn finish(self) -> Vec<AirborneEvent> {
+        let mut events: Vec<_> = self
+            .0
+            .into_values()
+            .map(AirborneEventBuilder::finish)
+            .collect();
+        // Stable input order also stabilizes equal-key spatial batches and their bytes.
+        events.sort_unstable_by_key(|event| event.flight_id);
+        events
+    }
 }
 
 struct AirborneEventBuilder {
@@ -180,144 +226,5 @@ impl AirborneEventBuilder {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn seg(flight_id: u64, lat: f32, lon: f32) -> FlightSegment {
-        FlightSegment {
-            callsign: String::new(),
-            aircraft_type: [0u8; 4],
-            flight_id,
-            profile_idx: 0,
-            source_id: 0,
-            origin: 0,
-            veh_kind: 0,
-            gse_class: 0,
-            period: 0,
-            date_id: 0,
-            phase: Phase::Airborne,
-            flags: 0,
-            start_lat: lat,
-            start_lon: lon,
-            start_alt_m: 1000.0,
-            end_lat: lat + 0.001,
-            end_lon: lon + 0.001,
-            end_alt_m: 1100.0,
-            speed_kt: 250.0,
-            length_m: 200.0,
-            agl_avg_m: 500.0,
-            start_elev_m: 250.0,
-            end_elev_m: 260.0,
-        }
-    }
-
-    #[test]
-    fn aggregate_groups_per_flight() {
-        let s1 = seg(1, 50.10, 14.26);
-        let s2 = seg(1, 50.10, 14.27);
-        let s3 = seg(2, 50.10, 14.26);
-        let segs = vec![s1, s2, s3];
-        let events = aggregate_events_for_square(&segs);
-        assert_eq!(events.len(), 2);
-        let f1 = events.iter().find(|e| e.flight_id == 1).unwrap();
-        assert_eq!(f1.sub_segments.len(), 2);
-        let f2 = events.iter().find(|e| e.flight_id == 2).unwrap();
-        assert_eq!(f2.sub_segments.len(), 1);
-    }
-
-    #[test]
-    fn aggregate_filters_non_aircraft_and_non_airborne() {
-        let mut gse = seg(1, 50.10, 14.26);
-        gse.veh_kind = 1;
-        let mut ground = seg(2, 50.10, 14.26);
-        ground.phase = Phase::Ground;
-        let ok = seg(3, 50.10, 14.26);
-        let events = aggregate_events_for_square(&[gse, ground, ok]);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].flight_id, 3);
-    }
-
-    #[test]
-    fn aggregate_propagates_terrain_elevs_from_stage1() {
-        // Synthetic case: Stage 1 said start=250 m, end=260 m. Verify both
-        // endpoint elevations pass through unchanged.
-        let events = aggregate_events_for_square(&[seg(1, 50.10, 14.26)]);
-        assert_eq!(events.len(), 1);
-        let sub = &events[0].sub_segments[0];
-        assert!((sub.terrain_start_elev_m - 250.0).abs() < 1e-3);
-        assert!((sub.terrain_end_elev_m - 260.0).abs() < 1e-3);
-    }
-
-    /// Round trip: write a per-z9 airborne shard via the shuffle
-    /// schema, run Stage 2A, verify an airborne.arrow lands in prepared_year.
-    #[test]
-    fn run_stage_2a_consumes_per_square_shard() {
-        use crate::arrow_io::write_segments;
-        let tmp = tempfile::tempdir().unwrap();
-        let by_square = tmp.path().join("segments_by_square");
-        let prepared_year = tmp.path().join("prepared_year");
-        let square = { crate::spatial::square_id(50.10, 14.26).unwrap() };
-        let square_dir = by_square.join(square_path(square));
-        std::fs::create_dir_all(&square_dir).unwrap();
-        write_segments(
-            &square_dir.join("airborne.arrow"),
-            &[seg(1, 50.10, 14.26), seg(2, 50.10, 14.27)],
-        )
-        .unwrap();
-
-        let n = run_stage_2a(&by_square, &prepared_year, 1, 0, None).unwrap();
-        assert_eq!(n, 1);
-        let out = prepared_year
-            .join(square_path(square))
-            .join("airborne.arrow");
-        assert!(out.exists(), "Stage 2A must write airborne.arrow");
-    }
-
-    /// Regression for wipe-on-scope applied to airborne: a stale
-    /// `airborne.arrow` in an in-scope z9 must be wiped before
-    /// `run_stage_2a` returns, even if no airborne segments hit that
-    /// z9 this run. Symmetric to Stage 2B/2C tests.
-    #[test]
-    fn run_stage_2a_wipes_in_scope_stale_airborne() {
-        let tmp = tempfile::tempdir().unwrap();
-        let by_square = tmp.path().join("segments_by_square");
-        let prepared_year = tmp.path().join("prepared_year");
-        // Praha z9 — in-scope. No segments_by_square input → writer does
-        // not emit a fresh airborne.arrow for this run.
-        let square = crate::spatial::square_id(50.10, 14.26).unwrap();
-        let square_dir = prepared_year.join(square_path(square));
-        std::fs::create_dir_all(&square_dir).unwrap();
-        let stale = square_dir.join("airborne.arrow");
-        std::fs::write(&stale, b"stale-prev-run").unwrap();
-        std::fs::create_dir_all(&by_square).unwrap();
-        let scope = ScopeBbox::parse("48.65,12.00,51.55,16.90").unwrap();
-        let n = run_stage_2a(&by_square, &prepared_year, 1, 0, Some(&scope)).unwrap();
-        assert_eq!(n, 0, "no z9 shards → no z9 written");
-        assert!(
-            !stale.exists(),
-            "stale airborne.arrow must be wiped from in-scope z9"
-        );
-    }
-
-    /// Out-of-scope counterexample for the airborne wipe: a stale
-    /// `airborne.arrow` in an z9 OUTSIDE the scope bbox must survive.
-    #[test]
-    fn run_stage_2a_leaves_out_of_scope_stale_airborne() {
-        let tmp = tempfile::tempdir().unwrap();
-        let by_square = tmp.path().join("segments_by_square");
-        let prepared_year = tmp.path().join("prepared_year");
-        // Gran Canaria z9 — outside Praha scope.
-        let square = crate::spatial::square_id(27.93, -15.39).unwrap();
-        let square_dir = prepared_year.join(square_path(square));
-        std::fs::create_dir_all(&square_dir).unwrap();
-        let stale = square_dir.join("airborne.arrow");
-        std::fs::write(&stale, b"stale-prev-run").unwrap();
-        std::fs::create_dir_all(&by_square).unwrap();
-        let praha = ScopeBbox::parse("48.65,12.00,51.55,16.90").unwrap();
-        let _ = run_stage_2a(&by_square, &prepared_year, 1, 0, Some(&praha)).unwrap();
-        assert!(
-            stale.exists(),
-            "out-of-scope z9 airborne.arrow must survive a scoped reextract"
-        );
-    }
-}
+#[path = "stage_2a_tests.rs"]
+mod tests;

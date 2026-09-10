@@ -10,15 +10,6 @@ fn synthetic_identity_has_one_reversible_grid_key() {
     assert_ne!(id, synth_osm_id_for(50.5, 14.26));
 }
 
-#[test]
-fn display_name_includes_lat_lon_length_visits() {
-    let name = synth_display_name(50.1234, 14.2567, 820.0, 142);
-    assert!(name.contains("50.12"));
-    assert!(name.contains("14.26"));
-    assert!(name.contains("820"));
-    assert!(name.contains("142"));
-}
-
 fn sample_lines_row(seg_idx: u16) -> SynthAirportLineRow {
     SynthAirportLineRow {
         osm_id: synth_osm_id_for(50.1, 14.26),
@@ -31,7 +22,7 @@ fn sample_lines_row(seg_idx: u16) -> SynthAirportLineRow {
         length_m: 500.0,
         heading_deg: 60.0,
         aeroway_type: AIRSTRIP_AEROWAY_TYPE,
-        name: synth_display_name(50.1, 14.26, 500.0, 88),
+        name: DISCOVERED_AIRSTRIP_NAME.into(),
     }
 }
 
@@ -39,7 +30,7 @@ fn sample_areas_row() -> SynthAirportAreaRow {
     SynthAirportAreaRow {
         osm_id: synth_osm_id_for(50.1, 14.26),
         airport_key: synth_airport_key_for(50.1, 14.26),
-        name: synth_display_name(50.1, 14.26, 500.0, 88),
+        name: DISCOVERED_AIRSTRIP_NAME.into(),
         aeroway_type: SYNTH_AERODROME_AEROWAY_TYPE,
         centroid_lat: 50.1,
         centroid_lon: 14.26,
@@ -52,7 +43,7 @@ fn write_then_read_lines_roundtrip() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("synth_airport_lines.arrow");
     let rows = vec![sample_lines_row(0), sample_lines_row(1)];
-    write_synth_airport_lines(&path, &rows).unwrap();
+    write_synth_airport_lines(&path, rows.clone()).unwrap();
     let back = read_synth_airport_lines(&path).unwrap();
     assert_eq!(back.len(), 2);
     assert_eq!(back[0].osm_id, rows[0].osm_id);
@@ -67,7 +58,7 @@ fn write_then_read_areas_roundtrip() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("synth_airport_areas.arrow");
     let row = sample_areas_row();
-    write_synth_airport_areas(&path, std::slice::from_ref(&row)).unwrap();
+    write_synth_airport_areas(&path, [row.clone()]).unwrap();
     let back = read_synth_airport_areas(&path).unwrap();
     assert_eq!(back.len(), 1);
     assert_eq!(back[0].airport_key, row.airport_key);
@@ -94,7 +85,7 @@ fn write_overwrite_replaces_lines_does_not_append() {
     let path = tmp.path().join("synth_airport_lines.arrow");
     write_synth_airport_lines(
         &path,
-        &[
+        [
             sample_lines_row(0),
             sample_lines_row(1),
             sample_lines_row(2),
@@ -102,7 +93,7 @@ fn write_overwrite_replaces_lines_does_not_append() {
     )
     .unwrap();
     assert_eq!(read_synth_airport_lines(&path).unwrap().len(), 3);
-    write_synth_airport_lines(&path, &[sample_lines_row(0)]).unwrap();
+    write_synth_airport_lines(&path, [sample_lines_row(0)]).unwrap();
     assert_eq!(read_synth_airport_lines(&path).unwrap().len(), 1);
 }
 
@@ -112,9 +103,9 @@ fn write_overwrite_replaces_areas_does_not_append() {
     let path = tmp.path().join("synth_airport_areas.arrow");
     let one = sample_areas_row();
     let two = vec![sample_areas_row(), sample_areas_row()];
-    write_synth_airport_areas(&path, &two).unwrap();
+    write_synth_airport_areas(&path, two).unwrap();
     assert_eq!(read_synth_airport_areas(&path).unwrap().len(), 2);
-    write_synth_airport_areas(&path, std::slice::from_ref(&one)).unwrap();
+    write_synth_airport_areas(&path, [one.clone()]).unwrap();
     assert_eq!(read_synth_airport_areas(&path).unwrap().len(), 1);
 }
 
@@ -127,7 +118,7 @@ fn write_creates_missing_parent_dir() {
     let nested = tmp.path().join("84/1e3/5ff");
     write_synth_airport_lines(
         &nested.join("synth_airport_lines.arrow"),
-        &[sample_lines_row(0)],
+        [sample_lines_row(0)],
     )
     .unwrap();
     assert!(nested.join("synth_airport_lines.arrow").exists());
@@ -144,4 +135,28 @@ fn synthetic_high_bit_disjoint_from_real_osm_ids() {
         assert_eq!(r & SYNTHETIC_OSM_ID_BIT, 0);
         assert_ne!(synth, r);
     }
+}
+
+#[test]
+fn streaming_writer_keeps_row_order_across_bounded_batches_and_replaces_with_empty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("lines.arrow");
+    let count = 2 * SYNTH_WRITE_BATCH_ROWS + 1;
+    write_synth_airport_lines(&path, (0..count).map(|i| sample_lines_row(i as u16))).unwrap();
+    let (_, batches) = crate::arrow_io::read_record_batches(&path).unwrap();
+    assert_eq!(
+        batches
+            .iter()
+            .map(RecordBatch::num_rows)
+            .collect::<Vec<_>>(),
+        [SYNTH_WRITE_BATCH_ROWS, SYNTH_WRITE_BATCH_ROWS, 1]
+    );
+    let rows = read_synth_airport_lines(&path).unwrap();
+    assert_eq!(rows.len(), count);
+    assert!(rows
+        .iter()
+        .enumerate()
+        .all(|(i, row)| usize::from(row.segment_idx) == i));
+    write_synth_airport_lines(&path, []).unwrap();
+    assert!(read_synth_airport_lines(&path).unwrap().is_empty());
 }

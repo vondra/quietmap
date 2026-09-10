@@ -101,6 +101,25 @@ class AircraftWindowTests(unittest.TestCase):
             self.assertEqual(calls[2][calls[2].index("--ga-adsb-cache") + 1], environment["GA_CACHE"])
             self.assertEqual(calls[2][calls[2].index("--class-filter") + 1], "non-ga")
 
+    def test_downstream_runner_never_recreates_retired_ga_segments(self):
+        for stage in ["stage1-5", "stage2a", "stage2b", "stage2c"]:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                runner, environment = self.runner_fixture(root)
+                result = subprocess.run(["bash", str(runner), "--from-stage", stage],
+                                        env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
+                self.assertEqual([call[0] for call in calls],
+                                 ["run-all", "audit"] if stage == "stage2c" else ["run-all", "run-all", "audit"])
+                merge = calls[-2]
+                self.assertEqual(merge[merge.index("--from-stage") + 1], stage)
+                self.assertEqual(merge[merge.index("--ga-adsb-cache") + 1], environment["GA_CACHE"])
+                self.assertTrue(all("--ga-segments-dir" not in call for call in calls))
+                if stage != "stage2c":
+                    self.assertEqual(calls[0][calls[0].index("--until-stage") + 1], "stage1")
+                    self.assertEqual(calls[0][calls[0].index("--class-filter") + 1], "non-ga")
+
     def test_missing_ga_source_stops_before_build_or_either_pass(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

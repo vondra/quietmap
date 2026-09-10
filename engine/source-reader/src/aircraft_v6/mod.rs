@@ -376,10 +376,7 @@ pub(super) fn assert_schema_version(label: &str, batches: &[RecordBatch]) -> Res
 /// `airport_traffic_contract` metadata key, which encodes the
 /// quantity stored in `band_energy_lin` (see
 /// [`AIRPORT_TRAFFIC_CONTRACT`]).
-pub(super) fn assert_airport_traffic_contract(
-    label: &str,
-    batches: &[RecordBatch],
-) -> Result<(), String> {
+pub fn assert_airport_traffic_contract(label: &str, batches: &[RecordBatch]) -> Result<(), String> {
     // Enforce schema_version too: metadata corruption could leave only
     // one of the two stamps intact.
     assert_schema_version(label, batches)?;
@@ -420,6 +417,6 @@ pub(super) fn assert_cruise_contract(label: &str, batches: &[RecordBatch]) -> Re
 #[cfg(test)]
 mod airport_summary_tests;
 #[cfg(test)]
-mod producer_roundtrip_tests;
-#[cfg(test)]
 mod periodic_selection_tests;
+#[cfg(test)]
+mod producer_roundtrip_tests;

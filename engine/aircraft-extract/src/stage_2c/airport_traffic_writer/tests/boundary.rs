@@ -82,6 +82,21 @@ fn partitioned_run(lat: f64, lon: f64, split: bool) -> Vec<AirportTrafficRow> {
         Vec::new(),
         1e6,
     );
+    let index = crate::airport_index::AerodromeIndex::build(std::slice::from_ref(&area));
+    let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap();
+    assert_eq!(plan.len(), if split { 2 } else { 1 });
+    let input = inputs.join(square_path(right)).join("ground.arrow");
+    for work in &plan {
+        assert_eq!(work.inputs, vec![input.clone()]);
+        assert_eq!(work.input_rows, 1);
+        assert_eq!(work.input_bytes, input.metadata().unwrap().len());
+        assert_eq!(work.candidates.len(), if split { 2 } else { 1 });
+        assert_eq!(work.cached_lines, 2);
+        assert_eq!(work.owned_lines, if split { 1 } else { 2 });
+        assert_eq!(work.maximum_counter_rows, 54 * work.owned_lines);
+        assert!(work.maximum_airport_key_bytes >= "TEST".len());
+    }
+    assert!(!prepared.join(".airport_traffic_pending").exists());
     let n = run_stage_2c(&inputs, &[area], &prepared, 12, 365, None).unwrap();
     assert_eq!(n, if split { 2 } else { 1 });
     let mut rows = Vec::new();
@@ -161,4 +176,123 @@ fn all_corrupt_ground_or_line_inputs_fail_before_prior_output_is_removed() {
         assert!(run_stage_2c(&inputs, &[], &prepared, 12, 365, None).is_err());
         assert_eq!(std::fs::read(&prior).unwrap(), b"prior-good-output");
     }
+}
+
+#[test]
+fn inconsistent_classes_for_one_flight_keep_all_counter_and_union_dimensions() {
+    use noise_compute::emission::{
+        aircraft::is_ga_sampled_class, profiles_generated::CLASS_REP_PROFILE_IDX,
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let inputs = temp.path().join("input");
+    let prepared = temp.path().join("prepared");
+    let owner = crate::spatial::square_id(50.0, 14.0).unwrap();
+    let dir = prepared.join(square_path(owner));
+    let segment = leg(50.0, 14.0);
+    write_real_airport_lines_arrow(
+        &dir.join("airport_lines.arrow"),
+        &[FakeRealLine {
+            osm_id: 1,
+            segment_idx: 0,
+            start_lat: segment.start_lat as f64,
+            start_lon: segment.start_lon as f64,
+            end_lat: segment.end_lat as f64,
+            end_lon: segment.end_lon as f64,
+            length_m: segment.length_m,
+            aeroway_type: 0,
+        }],
+    );
+    let ga_class = (0..CLASS_REP_PROFILE_IDX.len())
+        .find(|&i| is_ga_sampled_class(i as u8))
+        .unwrap();
+    let mut segments = Vec::new();
+    for (profile, period) in [
+        (segment.profile_idx, 0),
+        (CLASS_REP_PROFILE_IDX[ga_class], 1),
+    ] {
+        for departure in [false, true] {
+            let mut row = segment.clone();
+            row.profile_idx = profile;
+            row.period = period;
+            row.flags = if departure {
+                crate::flight::segment_flags::IS_DEPARTURE
+            } else {
+                0
+            };
+            segments.push(row);
+        }
+    }
+    for class in 0..NUM_GSE_CLASSES {
+        let mut row = segment.clone();
+        row.veh_kind = 1;
+        row.gse_class = class as u8;
+        row.period = 2;
+        segments.push(row);
+    }
+    segments.extend(segments.clone());
+    write_segments(
+        &inputs.join(square_path(owner)).join("ground.arrow"),
+        &segments,
+    )
+    .unwrap();
+    let area = AirportArea::new(
+        1,
+        AERODROME_AEROWAY_TYPE,
+        "A".into(),
+        "A".into(),
+        50.0,
+        14.0,
+        Vec::new(),
+        0.0,
+    );
+    let index = crate::airport_index::AerodromeIndex::build(std::slice::from_ref(&area));
+    let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap();
+    assert_eq!(plan.len(), 1);
+    assert_eq!(plan[0].maximum_counter_rows, 99);
+    run_stage_2c(&inputs, &[area], &prepared, 12, 365, None).unwrap();
+    let rows = read_airport_traffic(&dir.join("airport_traffic.arrow")).unwrap();
+    assert_eq!(rows.len(), 7);
+    for row in rows {
+        assert_eq!(row.unique_movement_count, 1);
+        assert_eq!(
+            (row.microseg_unique_count, row.microseg_unique_ga_count),
+            (1, 1)
+        );
+        assert_eq!(
+            (row.microseg_unique_arr_count, row.microseg_unique_dep_count),
+            (1, 1)
+        );
+        assert_eq!(
+            (
+                row.microseg_unique_ga_arr_count,
+                row.microseg_unique_ga_dep_count
+            ),
+            (1, 1)
+        );
+        assert_eq!(row.microseg_unique_gse_count_per_class, [1, 1, 1]);
+        if row.veh_kind == 0 {
+            assert_eq!(row.unique_arr_count, u32::from(row.is_departure == 0));
+            assert_eq!(row.unique_dep_count, u32::from(row.is_departure == 1));
+        } else {
+            assert_eq!(row.unique_gse_count_per_class[row.class_idx as usize], 1);
+        }
+    }
+    let summary = read_airport_summary(&dir.join(AIRPORT_SUMMARY_FILENAME))
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        (
+            summary.airport_unique_arr_count,
+            summary.airport_unique_dep_count
+        ),
+        (1, 1)
+    );
+    assert_eq!(
+        (
+            summary.airport_unique_ga_arr_count,
+            summary.airport_unique_ga_dep_count
+        ),
+        (1, 1)
+    );
+    assert_eq!(summary.airport_unique_gse_count_per_class, [1, 1, 1]);
 }

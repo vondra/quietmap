@@ -22,6 +22,11 @@ use crate::flight::CruiseBucket;
 use super::write_record_batches;
 
 pub fn write_cruise(path: &Path, rows: &[CruiseBucket], n_days: u16) -> Result<()> {
+    let batch = cruise_record_batch(rows, n_days)?;
+    write_record_batches(path, batch.schema().as_ref(), std::slice::from_ref(&batch))
+}
+
+pub(super) fn cruise_record_batch(rows: &[CruiseBucket], n_days: u16) -> Result<RecordBatch> {
     let schema = arrow_schemas::with_n_days(arrow_schemas::cruise_schema(), n_days);
     let n = rows.len();
     let mut lon = Float64Builder::with_capacity(n);
@@ -115,8 +120,7 @@ pub fn write_cruise(path: &Path, rows: &[CruiseBucket], n_days: u16) -> Result<(
         Arc::new(source_id.finish()),
         Arc::new(origin.finish()),
     ];
-    let batch = RecordBatch::try_new(schema.clone(), columns)?;
-    write_record_batches(path, &schema, &[batch])
+    Ok(RecordBatch::try_new(schema, columns)?)
 }
 
 #[cfg(test)]
