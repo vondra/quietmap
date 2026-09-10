@@ -65,3 +65,17 @@ details in product files, including comments and docs.
 
 `data/` is gitignored and may be irreplaceable. Inspect contents before any
 `rm -rf`; compute numbers from data, never estimate them.
+
+## Where things are
+
+- Visitor UI and map: `frontend/src/`; HTTP endpoints: `server/src/`.
+- Shared acoustics: `engine/noise-compute/` and its `SPEC.md`; input loading:
+  `engine/source-reader/`; CPU painting: `engine/tile-painter/`; CUDA painting:
+  `engine/relevant-source-gpu/` and `engine/noise-gpu/`.
+- Layer topology and worker roles: `scripts/layer-spec.json`; dataset year:
+  `scripts/dataset-year.json`.
+- Extraction: `scripts/run-extraction.sh`; enrichment order and dependencies:
+  `pipeline/chain/manifest.ts`, executed by `pipeline/chain/run.ts`.
+  Country loaders use shared writers in `pipeline/lib/*-arrow.ts`.
+- Validation fixtures and source snapshots: `benchmarks/`; measurement adapters
+  and comparison logic: `pipeline/validation/`.

@@ -152,7 +152,7 @@ async function enrichArrows(sections: CensusSection[]) {
   console.log(`\n=== Enrichment Results ===`)
   console.log(`  Total segments: ${totalSeg}`)
   console.log(`  Preserved: ${preserved}`)
-  console.log(`  Newly matched: ${matched} (${(100 * matched / Math.max(totalSeg, 1)).toFixed(1)}%)`)
+  console.log(`  Accepted matches: ${matched} (${(100 * matched / Math.max(totalSeg, 1)).toFixed(1)}%)`)
   console.log(`  Hexes updated: ${hexesUpdated}`)
 
   const top = sections.sort((a, b) => b.tmja - a.tmja).slice(0, 10)

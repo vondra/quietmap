@@ -10,7 +10,7 @@
 
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
@@ -315,4 +315,25 @@ test('speedTaper is a derived annotation: any overwrite or retract clears it unl
   t = tableFromIPC(readFileSync(path))
   assert.equal(t.getChild('source_id')!.get(0), STAMP_ID, 'census owns the row now')
   assert.equal(t.getChild('speed_taper')!.get(0), 0, 'stale graded speed cannot hide behind the census stamp')
+})
+
+test('accepted matches with unchanged final values leave the file untouched, including retract/reclaim', async () => {
+  for (const speedTaper of [undefined, 73]) {
+    const path = writeRoadsFixture(`unchanged-${speedTaper}.arrow`, [2, 4])
+    const payload = { light: 500.9, medium: 10, heavy: 20, moto: 5, sourceId: STAMP_ID, speedTaper }
+    assert.equal((await writeRoadAadt(path, () => payload)).updated, true)
+    const before = readFileSync(path)
+    const stat = statSync(path, { bigint: true })
+    for (const retract of [undefined, { sourceId: STAMP_ID, when: () => true }]) {
+      let applied = 0
+      const result = await writeRoadAadt(path, () => payload, () => applied++, undefined, retract)
+      assert.equal(result.matched, 2)
+      assert.equal(applied, 2, 'accepted matches still reach the reporting callback')
+      assert.equal(result.retracted, retract ? 2 : 0)
+      assert.equal(result.updated, false, 'typed final values decide whether the file changed')
+      assert.deepEqual(readFileSync(path), before)
+      assert.equal(statSync(path, { bigint: true }).ino, stat.ino, 'no atomic replacement')
+      assert.equal(statSync(path, { bigint: true }).mtimeNs, stat.mtimeNs)
+    }
+  }
 })

@@ -1,14 +1,4 @@
-/**
- * The ONE place road AADT is written, and the ONE way road enrichers enumerate
- * hexes. Centralizes the plumbing every `enrich-roads-{cc}.ts` used to hand-roll
- * (and where three Q2-2026 bugs lived: IT forgot medium/heavy/moto, SA forgot
- * source_id, GB used `new table.constructor`). A per-country script supplies only
- * a `match` closure; it physically cannot forget a class column or the stamp.
- *
- * The per-country LOADER stays per-country (each national census is a different
- * source/API/CRS) — only this identical write+scan plumbing is shared. See
- * `.claude/skills/_shared/noise-enrichment-contract.md`.
- */
+/** Shared road scans and atomic AADT writes; country-specific loaders supply matching. */
 
 import { existsSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -119,7 +109,9 @@ export interface RoadRow {
 
 export interface WriteRoadResult {
   rows: number
+  /** Accepted matches, including those that leave stored values unchanged. */
   matched: number
+  /** True only when final stored values changed. Accepted matches are counted separately. */
   updated: boolean
   /** Rows whose `road_class` fell outside the source's `coverage` set — skipped
    *  before `match` ran, so a major-road dataset cannot stamp a minor road. */
@@ -152,7 +144,7 @@ export interface RoadRetract {
  * `shouldOverwrite` priority gate → rebuild the five columns (aadt_light/medium/
  * heavy/moto Int32 + source_id Uint16, all other columns copied verbatim) → atomic
  * 'file'-format write via `withArrowWrite`. Returns the original table unchanged
- * when nothing matched, so the file is left byte-identical.
+ * when final values are unchanged, including retract/reclaim, leaving the file untouched.
  *
  * `match(row, i)` is invoked for every row WITHIN `coverage` (return `null` = no
  * match) — count per-class totals there. Rows whose `road_class` is outside
@@ -232,7 +224,6 @@ export async function writeRoadAadt(
       taper[i] = v
     }
 
-    let any = false
     for (let i = 0; i < n; i++) {
       const startLat = sLat.get(i) as number
       const startLon = sLon.get(i) as number
@@ -262,7 +253,6 @@ export async function writeRoadAadt(
         src[i] = 0
         setTaper(i, 0) // a disowned row's taper refinement is void with it
         retracted++
-        any = true
         // NO `continue` — fall through so `match` may re-claim the row in this
         // SAME pass (mirrors writeRailTrains; /gg Codex+Gemini consensus on the
         // rail twin, re-confirmed by /gg #31 round 2 here): a real measurement
@@ -339,32 +329,28 @@ export async function writeRoadAadt(
       // strand a stale graded speed behind a fresh stamp.
       setTaper(i, m.speedTaper ?? 0)
       matched++
-      any = true
       onApplied?.(row, i, m)
     }
-    if (!any) return table // no change → withArrowWrite leaves bytes untouched
-    updated = true
-
-    // speed_taper is rebuilt only when some row's value actually changed
-    // (lazy materialization above) — untouched it passes through verbatim;
-    // a first-ever taper write ADDS the column to the schema (loaders read
-    // an absent column as all-zero, so old files need no migration).
-    const rebuilt = ['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'source_id']
-    if (taper) rebuilt.push('speed_taper')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- makeTable's typing
-    // is Record<string, TypedArray>, but we mix existing Vectors (getChild) with fresh
-    // makeVector columns — fine at runtime, so `any` bridges the too-narrow constraint.
-    const cols: Record<string, any> = {}
-    for (const f of table.schema.fields) {
-      if (rebuilt.includes(f.name)) continue
-      cols[f.name] = table.getChild(f.name)!
+    if (matched === 0 && retracted === 0) return table
+    const replacements: Record<string, Int32Array | Uint16Array | Uint8Array> = {
+      aadt_light: light, aadt_medium: medium, aadt_heavy: heavy, aadt_moto: moto,
+      source_id: src,
     }
-    cols['aadt_light'] = makeVector(light)
-    cols['aadt_medium'] = makeVector(medium)
-    cols['aadt_heavy'] = makeVector(heavy)
-    cols['aadt_moto'] = makeVector(moto)
-    cols['source_id'] = makeVector(src)
-    if (taper) cols['speed_taper'] = makeVector(taper)
+    if (taper) replacements.speed_taper = taper
+    // Compare the final typed values: retract/reclaim and integer coercion can
+    // accept a match without changing what the next painter will read.
+    updated = Object.entries(replacements).some(([name, values]) => {
+      const existing = table.getChild(name)
+      return values.some((value, i) => value !== (existing?.get(i) ?? 0))
+    })
+    if (!updated) return table
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Arrow mixes existing Vectors and typed columns.
+    const cols: Record<string, any> = {}
+    for (const field of table.schema.fields) {
+      if (!Object.hasOwn(replacements, field.name)) cols[field.name] = table.getChild(field.name)!
+    }
+    for (const [name, values] of Object.entries(replacements)) cols[name] = makeVector(values)
     return makeTable(cols)
   })
 
