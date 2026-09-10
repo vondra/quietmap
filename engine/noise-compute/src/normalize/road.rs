@@ -143,7 +143,7 @@ pub fn normalize_road_with_cache(
         return None;
     }
 
-    let class_idx = (input.road_class as usize).min(ROAD_CLASS_NAMES.len() - 1);
+    let class_idx = road_class_idx(input.road_class);
     let class_name = ROAD_CLASS_NAMES[class_idx];
     let oneway_factor = if input.oneway { 0.5 } else { 1.0 };
     let access_factor = access_factor(input.access, input.provenance, input.road_class);
@@ -157,8 +157,7 @@ pub fn normalize_road_with_cache(
                 input.aadt_moto as f64 * oneway_factor * access_factor,
             )
         } else {
-            let defaults =
-                defaults_cache[(input.road_class as usize).min(defaults_cache.len() - 1)];
+            let defaults = defaults_cache[class_idx];
             let factor =
                 oneway_factor * access_factor * lane_ratio(class_idx, input.lanes, input.oneway);
             (
@@ -199,7 +198,7 @@ pub fn normalize_road_with_cache(
     Some(NormalizedRoad {
         class_idx,
         class_name,
-        max_distance_m: ROAD_MAX_DIST[class_idx],
+        max_distance_m: road_max_distance_m(input.road_class),
         source_height_m: SOURCE_HEIGHT_ROAD,
         speed_kmh,
         base_speed_kmh,
@@ -368,6 +367,20 @@ const ROAD_CLASS_NAMES: [&str; 13] = [
 ];
 
 const ROAD_MAX_DIST: [f64; 13] = crate::constants::ROAD_MAX_RADIUS;
+
+/// The raw class clamped onto the 13 class tables (names, reaches, world
+/// defaults), which therefore must stay the same length.
+const _: () = assert!(ROAD_CLASS_NAMES.len() == WORLD_DEFAULT.len());
+fn road_class_idx(road_class: u8) -> usize {
+    (road_class as usize).min(ROAD_CLASS_NAMES.len() - 1)
+}
+
+/// How far a road of this raw class is audible — the row's `max_distance_m`
+/// after normalization, so a reader can reject a far row before the
+/// normalize cascade and keep exactly the rows the cascade would (dev1 ba6bd59e).
+pub fn road_max_distance_m(road_class: u8) -> f64 {
+    ROAD_MAX_DIST[road_class_idx(road_class)]
+}
 
 #[cfg(test)]
 mod tests {

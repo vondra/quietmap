@@ -20,7 +20,7 @@ pub use points::{
 pub use rail::{normalize_rail, normalize_rail_segment, NormalizedRail, RawRailInput};
 pub use road::{
     lane_ratio, nominal_road_aadt, normalize_road, normalize_road_segment,
-    normalize_road_with_cache, NormalizedRoad, RawRoadInput,
+    normalize_road_with_cache, road_max_distance_m, NormalizedRoad, RawRoadInput,
 };
 
 /// `speed_limit` sentinel for OSM `maxspeed=none` (derestricted, e.g.

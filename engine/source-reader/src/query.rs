@@ -658,21 +658,23 @@ pub fn query_roads_from_batches(
             // floats exactly as before.
             let (s_lon, s_lat) = grid_cell_lonlat(sgx.value(i), sgy.value(i));
             let (e_lon, e_lat) = grid_cell_lonlat(egx.value(i), egy.value(i));
-            // Cheap bbox reject FIRST, before the per-row normalize cascade.
-            // ~99% of rows are far from the popup point (popup hits ~1-2 k of
-            // ~900 k road segments per ring); running normalize_road on all
-            // of them was the dominant cost in collect_from_square_data
-            // (~160 ms warm). max_radius is the upper bound — final accept
-            // uses effective_radius after normalize.
+            // Cheap bbox reject FIRST, against the row's OWN class reach — the
+            // `max_distance_m` normalize would hand back — before the per-row
+            // normalize cascade: a Prague ring scans ~1 M road rows for ~4 k
+            // kept, and the motorway reach (10 km) as the only bound let most
+            // of them through to the cascade (~100 ms per click).
+            let road_class = rclass.map(|a| a.value(i)).unwrap_or(0);
+            let effective_radius =
+                max_radius.min(noise_compute::normalize::road_max_distance_m(road_class));
             let mid_lat = (s_lat + e_lat) * 0.5;
             let dlat = (lat - mid_lat).abs() * grid::geo::M_PER_DEG_LAT;
-            if dlat > max_radius * LINE_MIDPOINT_REACH_FACTOR {
+            if dlat > effective_radius * LINE_MIDPOINT_REACH_FACTOR {
                 continue;
             }
             let mid_lon = grid::geo::wrapped_longitude_midpoint(s_lon, e_lon);
             let dlon = grid::geo::wrapped_longitude_delta(mid_lon, lon).abs()
                 * grid::geo::m_per_deg_lon(mid_lat.to_radians());
-            if dlon > max_radius * LINE_MIDPOINT_REACH_FACTOR {
+            if dlon > effective_radius * LINE_MIDPOINT_REACH_FACTOR {
                 continue;
             }
 
@@ -687,7 +689,7 @@ pub fn query_roads_from_batches(
                 )
             });
             let raw = noise_compute::normalize::RawRoadInput {
-                road_class: rclass.map(|a| a.value(i)).unwrap_or(0),
+                road_class,
                 speed_limit: speed.map(|a| a.value(i)).unwrap_or(0),
                 speed_taper: speed_taper_col.map(|a| a.value(i)).unwrap_or(0),
                 surface_type: surface.map(|a| a.value(i)).unwrap_or(0),
@@ -703,19 +705,14 @@ pub fn query_roads_from_batches(
                 junction: junction_col.map(|a| a.value(i)).unwrap_or(0),
                 built_up: built_up_col.map(|a| a.value(i)).unwrap_or(0),
             };
+            // The cascade keeps only its drop decision (tunnel, closed access);
+            // its reach equals `effective_radius` by construction.
             let Some(norm) =
                 noise_compute::normalize::normalize_road(raw, row_admin.unwrap_or(admin))
             else {
                 continue;
             };
-            let effective_radius = max_radius.min(norm.max_distance_m);
-
-            // Tighter bbox reject using effective_radius (per-class).
-            if dlat > effective_radius * LINE_MIDPOINT_REACH_FACTOR
-                || dlon > effective_radius * LINE_MIDPOINT_REACH_FACTOR
-            {
-                continue;
-            }
+            debug_assert_eq!(effective_radius, max_radius.min(norm.max_distance_m));
 
             // Exact closest point on segment
             let cp = grid::geo::closest_point_on_segment(lat, lon, s_lat, s_lon, e_lat, e_lon);
@@ -1475,6 +1472,38 @@ mod square_query_tests {
         );
         let data = collect_sources_at_point(tmp.path(), LAT, LON).unwrap();
         assert!(data.roads.is_empty());
+    }
+
+    /// The scan rejects a row by ITS class reach before the normalize cascade;
+    /// that reject must equal the cascade's own `max_distance_m`: a row past
+    /// its class reach but inside the motorway reach goes, its motorway twin
+    /// at the same distance stays (dev1 ba6bd59e).
+    #[test]
+    fn far_row_is_rejected_by_its_own_class_reach() {
+        use noise_compute::constants::ROAD_MAX_RADIUS;
+        let between = (ROAD_MAX_RADIUS[5] + ROAD_MAX_RADIUS[0]) / 2.0;
+        let lat = LAT + between / grid::geo::M_PER_DEG_LAT;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = fx::square_dir(tmp.path(), prague());
+        std::fs::create_dir_all(&dir).unwrap();
+        let road = |osm_id, road_class| fx::FixtureRoad {
+            osm_id,
+            start: (LON, lat),
+            end: (LON + 0.002, lat),
+            road_class,
+            speed_limit: 50,
+            lanes: 2,
+            name: String::new(),
+        };
+        fx::write_roads_file(&dir.join("roads.arrow"), &[road(1, 0), road(2, 5)]);
+        let square = load_square(&dir).unwrap();
+        let kept = query_roads_from_batches(
+            &square.roads.batches_all().unwrap(),
+            LAT,
+            LON,
+            ROAD_MAX_RADIUS[0],
+        );
+        assert_eq!(kept.iter().map(|r| r.osm_id).collect::<Vec<_>>(), vec![1]);
     }
 
     #[test]
