@@ -837,11 +837,11 @@ fn chunked_scatter_matches_serial_within_rounding() {
 
     // Guard against a vacuous pass: the input must actually be split.
     assert!(
-        rows.len() > super::MIN_SCATTER_CHUNK_ROWS && rayon::current_num_threads() > 1,
+        rows.len() > super::SCATTER_CHUNK_ROWS,
         "input not chunked — parity test would be vacuous"
     );
 
-    let serial = super::scatter_chunk(&receiver, &rows, 7.0, &weights, &horizon, None, 0, false);
+    let serial = super::scatter_chunk(&receiver, &rows, 0, 7.0, &weights, &horizon, None, 0, false);
     let parallel = scatter(&receiver, &rows, 7.0, &weights, &horizon, None, 0, None);
 
     assert_eq!(serial.flights.len(), N_FLIGHTS, "every fid must accumulate");
@@ -937,7 +937,7 @@ fn chunked_scatter_keeps_the_same_top_k_traces() {
     let weights = aircraft::ClassWeights::uniform();
 
     let serial_chunk =
-        super::scatter_chunk(&receiver, &rows, 7.0, &weights, &horizon, None, CAP, true);
+        super::scatter_chunk(&receiver, &rows, 0, 7.0, &weights, &horizon, None, CAP, true);
     let mut parallel_traces = TraceCollector::new();
     scatter(
         &receiver,
@@ -960,17 +960,78 @@ fn chunked_scatter_keeps_the_same_top_k_traces() {
     );
     assert_eq!(parallel_traces.segments.len(), CAP);
 
-    let key = |t: &crate::types::SegmentTrace| t.received_lden.full.to_bits();
-    let mut want: Vec<u64> = serial_chunk
+    // Identity, not just level: the same sub-segment (callsign + geometry)
+    // must be kept, so a tie at the cap cannot swap one flight for another.
+    let key = |t: &crate::types::SegmentTrace| {
+        (
+            t.name.clone(),
+            t.start_lat.to_bits(),
+            t.start_lon.to_bits(),
+            t.end_lat.to_bits(),
+            t.end_lon.to_bits(),
+            t.received_lden.full.to_bits(),
+        )
+    };
+    let mut want: Vec<_> = serial_chunk
         .heap
         .into_vec()
         .into_iter()
         .map(|r| key(&r.0.trace))
         .collect();
-    let mut got: Vec<u64> = parallel_traces.segments.iter().map(key).collect();
+    let mut got: Vec<_> = parallel_traces.segments.iter().map(key).collect();
     want.sort_unstable();
     got.sort_unstable();
     assert_eq!(want, got, "chunked top-K kept a different set of traces");
+}
+
+/// Chunk boundaries are a constant of the input, so the bytes do not depend
+/// on the rayon pool: one thread and many threads agree exactly.
+#[test]
+fn chunked_scatter_bytes_do_not_depend_on_the_thread_pool() {
+    const N_ROWS: usize = 20_000;
+    const N_FLIGHTS: usize = 500;
+    const CAP: usize = 150;
+    let cols = synthetic_airborne_rows(N_ROWS, 2, 0x5EED_0042);
+    let rows = synthetic_views(&cols, N_FLIGHTS);
+    let (receiver, horizon) = synthetic_receiver_and_horizon();
+    let weights = aircraft::ClassWeights::uniform();
+    let run = |threads: usize| {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            let mut traces = TraceCollector::new();
+            let flights = scatter(
+                &receiver,
+                &rows,
+                7.0,
+                &weights,
+                &horizon,
+                None,
+                CAP,
+                Some(&mut traces),
+            );
+            let mut energies: Vec<(u64, [u64; 3], u64)> = flights
+                .iter()
+                .map(|(id, acc)| {
+                    (
+                        *id,
+                        acc.period_energy.map(f64::to_bits),
+                        acc.peak_lmax.to_bits(),
+                    )
+                })
+                .collect();
+            energies.sort_unstable();
+            let kept: Vec<(String, u64)> = traces
+                .segments
+                .iter()
+                .map(|t| (t.name.clone(), t.received_lden.full.to_bits()))
+                .collect();
+            (energies, kept)
+        })
+    };
+    assert_eq!(run(1), run(6));
 }
 
 /// `cargo test --release -p noise-compute -- --ignored --nocapture scatter_speedup`
@@ -988,7 +1049,7 @@ fn scatter_speedup_on_150k_rows() {
     let weights = aircraft::ClassWeights::uniform();
 
     let t0 = std::time::Instant::now();
-    let serial = super::scatter_chunk(&receiver, &rows, 7.0, &weights, &horizon, None, CAP, true);
+    let serial = super::scatter_chunk(&receiver, &rows, 0, 7.0, &weights, &horizon, None, CAP, true);
     let serial_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     let mut traces = TraceCollector::new();

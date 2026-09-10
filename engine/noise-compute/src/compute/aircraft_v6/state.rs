@@ -73,8 +73,8 @@ impl FlightAccum {
     /// * `peak_lmax` is a max and drags its whole companion record along —
     ///   sel / altitude / period / date / geometry describe the SAME
     ///   sub-segment and must never be mixed across chunks,
-    /// * `min_dist_m` is a min, `flight_weight` a max (it is row-constant
-    ///   per class, so every chunk carries the same value),
+    /// * `min_dist_m` is a min; `flight_weight` comes from the flight's first
+    ///   row, so the earlier chunk keeps it,
     /// * identity (`profile_idx`, `aircraft_type`, `callsign`, `is_cruise`)
     ///   comes from the row and is identical in every chunk — keep ours.
     ///
@@ -99,9 +99,8 @@ impl FlightAccum {
         if other.min_dist_m < self.min_dist_m {
             self.min_dist_m = other.min_dist_m;
         }
-        if other.flight_weight > self.flight_weight {
-            self.flight_weight = other.flight_weight;
-        }
+        // `flight_weight` is set by the flight's first row and never updated,
+        // so the earlier chunk's value stands.
     }
 }
 

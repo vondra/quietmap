@@ -65,12 +65,26 @@ const AIRBORNE_RANK_W: [f64; 3] = [
 /// NaN edge cases.
 struct ScoredTrace {
     rank_key: f64,
+    /// Input position (row, sub-segment): the earlier candidate outranks an
+    /// equal `rank_key`, so the kept set is a total order over the input and
+    /// identical for the serial walk and any chunking.
+    order: u64,
     trace: SegmentTrace,
+}
+
+impl ScoredTrace {
+    fn outranks(rank_key: f64, order: u64, weakest: &ScoredTrace) -> bool {
+        match rank_key.total_cmp(&weakest.rank_key) {
+            Ordering::Greater => true,
+            Ordering::Less => false,
+            Ordering::Equal => order < weakest.order,
+        }
+    }
 }
 
 impl PartialEq for ScoredTrace {
     fn eq(&self, other: &Self) -> bool {
-        self.rank_key.total_cmp(&other.rank_key).is_eq()
+        self.cmp(other).is_eq()
     }
 }
 impl Eq for ScoredTrace {}
@@ -81,7 +95,9 @@ impl PartialOrd for ScoredTrace {
 }
 impl Ord for ScoredTrace {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.rank_key.total_cmp(&other.rank_key)
+        self.rank_key
+            .total_cmp(&other.rank_key)
+            .then_with(|| other.order.cmp(&self.order))
     }
 }
 
@@ -102,7 +118,7 @@ impl Ord for ScoredTrace {
 /// is fixed by the input, so one click gives the same bytes every run;
 /// f64 addition is not associative, so the chunked sums differ from a
 /// single-threaded walk in the last bits. A popup with at most
-/// `MIN_SCATTER_CHUNK_ROWS` rows stays one chunk and keeps the serial
+/// `SCATTER_CHUNK_ROWS` rows stays one chunk and keeps the serial
 /// order exactly.
 pub fn scatter(
     receiver: &Receiver,
@@ -119,16 +135,14 @@ pub fn scatter(
     traces: Option<&mut TraceCollector>,
 ) -> HashMap<u64, FlightAccum> {
     let want_traces = traces.is_some();
-    let chunk_len = rows
-        .len()
-        .div_ceil(rayon::current_num_threads().max(1))
-        .max(MIN_SCATTER_CHUNK_ROWS);
     let chunks: Vec<ChunkScatter> = rows
-        .par_chunks(chunk_len)
-        .map(|chunk| {
+        .par_chunks(SCATTER_CHUNK_ROWS)
+        .enumerate()
+        .map(|(index, chunk)| {
             scatter_chunk(
                 receiver,
                 chunk,
+                index * SCATTER_CHUNK_ROWS,
                 n_days_f,
                 class_weights,
                 horizon,
@@ -141,18 +155,20 @@ pub fn scatter(
     merge_chunks(chunks, trace_cap, traces)
 }
 
-/// Smallest row slice worth its own rayon task: below this the per-chunk
-/// `HashMap` + heap allocation and the merge cost more than the split saves.
-const MIN_SCATTER_CHUNK_ROWS: usize = 2_000;
+/// Rows per rayon task. A constant, not a thread-count division, so chunk
+/// boundaries and therefore every f64 summation order are a pure function of
+/// the input: the same click gives the same bytes on any machine or pool.
+/// Below a few thousand rows the per-chunk `HashMap` + heap allocation and the
+/// merge cost more than the split saves.
+const SCATTER_CHUNK_ROWS: usize = 4_096;
 
 /// One chunk's private accumulators. Every field recombines associatively
 /// (sum / max / min / count), which is what makes the split legal.
 struct ChunkScatter {
     flights: HashMap<u64, FlightAccum>,
-    /// Bounded top-K heap over this chunk's rows only. A trace in the
-    /// global top-K is necessarily inside its own chunk's top-K (otherwise
-    /// `trace_cap` stronger traces already precede it in that chunk), so
-    /// merging the per-chunk heaps drops nothing the serial heap kept.
+    /// Bounded top-K heap over this chunk's rows only. Ranks form a total
+    /// order (rank, then input position), so a trace in the global top-K is
+    /// inside its own chunk's top-K and merging the heaps drops nothing.
     heap: BinaryHeap<Reverse<ScoredTrace>>,
     above_cutoff: u32,
 }
@@ -192,11 +208,11 @@ fn merge_chunks(
 
     if let Some(t) = traces {
         if scored.len() > trace_cap {
-            // Stable sort — equal rank keys keep chunk order, so the kept
-            // set is identical every run. `apply_segment_top_k_with_cap`
+            // The total order (rank, then input position) makes this the
+            // exact global top-K the serial heap keeps. `apply_segment_top_k_with_cap`
             // (source-reader) re-sorts by `received_lden.full` afterwards
             // because road / rail / cruise traces are mixed in.
-            scored.sort_by(|a, b| b.rank_key.total_cmp(&a.rank_key));
+            scored.sort_by(|a, b| b.cmp(a));
             scored.truncate(trace_cap);
         }
         t.airborne_above_cutoff = t.airborne_above_cutoff.saturating_add(above_cutoff);
@@ -211,6 +227,7 @@ fn merge_chunks(
 fn scatter_chunk(
     receiver: &Receiver,
     rows: &[AirborneRowView<'_>],
+    first_row: usize,
     n_days_f: f64,
     class_weights: &aircraft::ClassWeights,
     horizon: &aircraft::ReceiverHorizon,
@@ -250,7 +267,7 @@ fn scatter_chunk(
     let rx_m_per_lon = aircraft::M_PER_DEG_LAT * cos_lat;
     let rx_m_per_lat = aircraft::M_PER_DEG_LAT;
 
-    for row in rows {
+    for (row_index, row) in rows.iter().enumerate() {
         let bb = &row.bbox;
         if !envelope.intersects_bbox([
             f64::from(bb.min_lat),
@@ -450,8 +467,12 @@ fn scatter_chunk(
                     let rank_key = energy * AIRBORNE_RANK_W[period];
                     // Skip the trace builder unless this sub-seg can
                     // displace the weakest kept trace.
+                    let order = (((first_row + row_index) as u64) << 16) | i as u64;
                     let should_build = heap.len() < trace_cap
-                        || heap.peek().map(|w| rank_key > w.0.rank_key).unwrap_or(true);
+                        || heap
+                            .peek()
+                            .map(|w| ScoredTrace::outranks(rank_key, order, &w.0))
+                            .unwrap_or(true);
                     if should_build {
                         let mut period_energies = [0.0f64; 3];
                         period_energies[period] = energy;
@@ -513,7 +534,11 @@ fn scatter_chunk(
                                 doc29,
                             },
                         );
-                        let scored = ScoredTrace { rank_key, trace };
+                        let scored = ScoredTrace {
+                            rank_key,
+                            order,
+                            trace,
+                        };
                         if heap.len() < trace_cap {
                             heap.push(Reverse(scored));
                         } else {
