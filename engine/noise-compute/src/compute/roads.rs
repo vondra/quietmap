@@ -31,15 +31,9 @@ pub(crate) fn compute_roads(
     rasters: &dyn RasterSampler,
     mut traces: Option<&mut TraceCollector>,
 ) -> (NoisePeriods, Vec<Contributor>) {
-    use propagation::arc_screening::{
-        enter_emission_session, ArcBounds, ArcScreeningScratch, ArcSkyline, SkylineSnapshot,
-    };
+    use propagation::arc_screening::{ArcBounds, ArcScreeningScratch, ArcSkyline, SkylineSnapshot};
     use rayon::prelude::*;
 
-    // One emission-memo session for the whole kernel call: the pass-1 growth
-    // chain re-walks the same obstacle cells dozens of visits apart, and the
-    // memo replays bit-identical emission geometry for repeat edges.
-    let _emission_session = enter_emission_session();
     let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
     let t_road_start = std::time::Instant::now();
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
@@ -507,10 +501,10 @@ pub(crate) fn compute_roads(
 
     let t_road_pass2 = t_road_start.elapsed() - t_road_pass1;
     if timing_on {
-        let (steps, growths, sectors, growth_ms, raw_arcs, memo_hits, memo_miss) =
+        let (steps, growths, sectors, growth_ms, raw_arcs) =
             crate::propagation::arc_screening::take_growth_census();
         eprintln!(
-            "popup-stage road pass1={:.0}ms (gates={:.0}ms arc={:.0}ms) pass2={:.0}ms kept={} steps={} growths={} sectors={} growth_ms={:.0} rawarcs={} memohit={} memomiss={}",
+            "popup-stage road pass1={:.0}ms (gates={:.0}ms arc={:.0}ms) pass2={:.0}ms kept={} steps={} growths={} sectors={} growth_ms={:.0} arcs={}",
             t_road_pass1.as_secs_f64() * 1000.0,
             t_road_gates_accum.as_secs_f64() * 1000.0,
             t_road_arc.as_secs_f64() * 1000.0,
@@ -521,8 +515,6 @@ pub(crate) fn compute_roads(
             sectors,
             growth_ms,
             raw_arcs,
-            memo_hits,
-            memo_miss,
         );
     }
 

@@ -527,12 +527,30 @@ mod tests {
 
         let mut skyline_a = Vec::new();
         let mut skyline_b = Vec::new();
-        built.skyline_arcs_within(0, OLAT, OLON, 0.0, 2_000.0, 0.0, 0.0, None, &mut |arc| {
-            skyline_a.push((arc.source_id.bits(), arc.lo.to_bits(), arc.hi.to_bits()))
-        });
-        mapped.skyline_arcs_within(0, OLAT, OLON, 0.0, 2_000.0, 0.0, 0.0, None, &mut |arc| {
-            skyline_b.push((arc.source_id.bits(), arc.lo.to_bits(), arc.hi.to_bits()))
-        });
+        built.skyline_arcs_within(
+            0,
+            OLAT,
+            OLON,
+            0.0,
+            2_000.0,
+            0.0,
+            0.0,
+            None,
+            None,
+            &mut |arc| skyline_a.push((arc.source_id.bits(), arc.lo.to_bits(), arc.hi.to_bits())),
+        );
+        mapped.skyline_arcs_within(
+            0,
+            OLAT,
+            OLON,
+            0.0,
+            2_000.0,
+            0.0,
+            0.0,
+            None,
+            None,
+            &mut |arc| skyline_b.push((arc.source_id.bits(), arc.lo.to_bits(), arc.hi.to_bits())),
+        );
         assert_eq!(skyline_a, skyline_b, "derived source IDs survive mmap");
     }
 

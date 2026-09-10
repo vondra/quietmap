@@ -175,7 +175,9 @@
 //! bound, 132.5 s with no test, and the no-test arm is the more accurate one.
 
 use super::iso9613::ground_or_barrier_db;
-use super::obstacle_index::{wrap_pi, CellPrune, CrossingCandidate, ObstacleSet, SkylineArc};
+use super::obstacle_index::{
+    wrap_pi, CellPrune, CrossingCandidate, ObstacleSet, SeenEdges, SkylineArc,
+};
 use super::path_effects::{
     screening_attenuation, screening_attenuation_with_meta, terrain_attenuation, ObstacleInput,
 };
@@ -545,11 +547,12 @@ impl ArcScreeningScratch {
 }
 
 // Popup growth census (POPUP_TIMING=1): (chain steps, growths that walked,
-// sectors scanned by the range-minimum). Thread-local because the popup
-// kernels drive the chain per worker thread.
+// sectors scanned by the range-minimum, growth milliseconds, distinct arcs
+// merged — `SeenEdges` drops the repeats before they are counted).
+// Thread-local because the popup kernels drive the chain per worker thread.
 thread_local! {
-    static GROWTH_CENSUS: std::cell::RefCell<(u64, u64, u64, f64, u64, u64, u64)> =
-        const { std::cell::RefCell::new((0, 0, 0, 0.0, 0, 0, 0)) };
+    static GROWTH_CENSUS: std::cell::RefCell<(u64, u64, u64, f64, u64)> =
+        const { std::cell::RefCell::new((0, 0, 0, 0.0, 0)) };
 }
 
 /// `POPUP_TIMING=1` once per process: the census below is popup
@@ -558,202 +561,6 @@ thread_local! {
 fn census_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("POPUP_TIMING").as_deref() == Ok("1"))
-}
-
-/// Memo hit (replayed geometry, gates re-run by the caller) vs miss.
-pub(crate) fn note_memo_hit() {
-    if census_on() {
-        GROWTH_CENSUS.with(|c| c.borrow_mut().5 += 1);
-    }
-}
-
-/// Memo miss (computed).
-pub(crate) fn note_memo_miss() {
-    if census_on() {
-        GROWTH_CENSUS.with(|c| c.borrow_mut().6 += 1);
-    }
-}
-
-// Per-edge emission memo, session-tagged (goal B): one obstacle edge lives
-// in every grid cell it crosses, and overlapping growths re-walk the same
-// cells — so a dense kernel emits each edge dozens of visits apart with
-// bit-identical angles (2× atan2 + segment distance each). The memo replays
-// the computed geometry while the caller re-runs its radius/floor gates, so
-// the visit sequence is unchanged and only repeated transcendental work is
-// skipped. One session per kernel call (roads, railways): entries never
-// cross kernels, receivers or prepared sets. Direct-mapped by edge ordinal;
-// a tag mismatch recomputes, never lies. Lazily allocated per thread, so
-// lanes that never opt in (tiles, tests) pay nothing.
-const EMISSION_MEMO_BITS: u32 = 20;
-
-/// Global edge ordinal within one gather set (slab base + edge ref), kept
-/// under 32 bits so the session tag stays collision-free in practice.
-#[derive(Clone, Copy)]
-struct EmissionMemoSlot {
-    tag: u64,
-    lo: f64,
-    hi: f64,
-    /// f64 like the first pass: the radius gate must replay bit-exactly.
-    near_m: f64,
-    height_m: f32,
-    barrier: bool,
-}
-
-/// Replayable emission geometry for one edge (gates re-run by the caller).
-pub(crate) struct EmissionReplay {
-    /// Global edge ordinal (`edge_ordinal_base + eref`); values ≥ 2³² − 1
-    /// bypass the memo and flow through unmemoized.
-    pub ordinal: u64,
-    pub lo: f64,
-    pub hi: f64,
-    pub near_m: f64,
-    pub height_m: f32,
-    pub barrier: bool,
-}
-
-thread_local! {
-    static EMISSION_MEMO: std::cell::RefCell<Vec<EmissionMemoSlot>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-    /// Tag generation, MONOTONIC per thread: it must never go back, or a new
-    /// kernel call would match the previous receiver's entries (gg review:
-    /// two independent reviewers caught `Drop` resetting this to 0, which
-    /// pinned every call to session 1 and replayed stale geometry across
-    /// clicks on one thread).
-    static EMISSION_GEN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    /// Live session depth. Separate from the generation: `Drop` only ends
-    /// the session (tiles, tests and session-less callers bypass), it must
-    /// not touch the generation.
-    static EMISSION_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-/// RAII emission-memo session: one per kernel call. Drop (or panic) ends it.
-pub(crate) struct EmissionSessionGuard;
-
-impl Drop for EmissionSessionGuard {
-    fn drop(&mut self) {
-        EMISSION_DEPTH.with(|d| {
-            d.set(
-                d.get()
-                    .checked_sub(1)
-                    .expect("emission session guard dropped without a live session"),
-            );
-        });
-    }
-}
-
-/// Begin one kernel call's session. A new generation every call, so entries
-/// never cross kernels, receivers or prepared sets even when one thread
-/// serves many clicks; depth 0 means "no session" and bypasses the memo.
-pub(crate) fn enter_emission_session() -> EmissionSessionGuard {
-    EMISSION_GEN.with(|gen| {
-        let next = gen.get().wrapping_add(1);
-        if next == 0 {
-            EMISSION_MEMO.with(|memo| {
-                for slot in memo.borrow_mut().iter_mut() {
-                    slot.tag = u64::MAX;
-                }
-            });
-            gen.set(1);
-        } else {
-            gen.set(next);
-        }
-    });
-    // Sessions never nest today (the two kernel entries never call each other):
-    // a nested enter would orphan the outer call's entries under a newer
-    // generation and, worse, let the outer call match the inner's entries
-    // after it drops — the B1 failure mode through a different door. Fail
-    // loud here so a future caller nests deliberately, not silently.
-    EMISSION_DEPTH.with(|d| {
-        assert_eq!(
-            d.get(),
-            0,
-            "nested emission sessions are not supported: parent and child would share one generation"
-        );
-        d.set(1);
-    });
-    EmissionSessionGuard
-}
-
-/// Live session generation, if a kernel call holds one on this thread.
-fn emission_session() -> Option<u32> {
-    EMISSION_DEPTH.with(|d| {
-        if d.get() == 0 {
-            None
-        } else {
-            Some(EMISSION_GEN.with(|g| g.get()))
-        }
-    })
-}
-
-fn emission_memo_table_len() -> usize {
-    1 << EMISSION_MEMO_BITS
-}
-
-/// Replay one edge's geometry under the live session, if present. The
-/// caller re-runs its radius/floor gates on the replayed values, so entries
-/// stay valid across growths with different needs.
-pub(crate) fn emission_memo_lookup(ordinal: u64) -> Option<EmissionReplay> {
-    // `u32::MAX` is the empty-slot sentinel: an entry carrying it would be
-    // indistinguishable from "never stored", so that one ordinal bypasses.
-    let session = emission_session()?;
-    if ordinal >= 0xFFFF_FFFF {
-        return None;
-    }
-    let tag = (u64::from(session) << 32) | ordinal;
-    EMISSION_MEMO.with(|memo| {
-        let memo = memo.borrow();
-        if memo.is_empty() {
-            return None;
-        }
-        let slot = &memo[ordinal as usize & (memo.len() - 1)];
-        if slot.tag == tag {
-            note_memo_hit();
-            Some(EmissionReplay {
-                ordinal,
-                lo: slot.lo,
-                hi: slot.hi,
-                near_m: slot.near_m,
-                height_m: slot.height_m,
-                barrier: slot.barrier,
-            })
-        } else {
-            None
-        }
-    })
-}
-
-/// Store one edge's computed geometry under the live session (no-op without).
-pub(crate) fn emission_memo_store(replay: &EmissionReplay) {
-    let Some(session) = emission_session() else {
-        return;
-    };
-    if replay.ordinal >= 0xFFFF_FFFF {
-        return;
-    }
-    EMISSION_MEMO.with(|memo| {
-        let mut memo = memo.borrow_mut();
-        if memo.is_empty() {
-            memo.resize(
-                emission_memo_table_len(),
-                EmissionMemoSlot {
-                    tag: u64::MAX,
-                    lo: 0.0,
-                    hi: 0.0,
-                    near_m: 0.0,
-                    height_m: 0.0,
-                    barrier: false,
-                },
-            );
-        }
-        let len = memo.len();
-        let slot = &mut memo[replay.ordinal as usize & (len - 1)];
-        slot.tag = (u64::from(session) << 32) | replay.ordinal;
-        slot.lo = replay.lo;
-        slot.hi = replay.hi;
-        slot.near_m = replay.near_m;
-        slot.height_m = replay.height_m;
-        slot.barrier = replay.barrier;
-    })
 }
 
 /// Add one growth's walked milliseconds (only called when `grew`).
@@ -778,8 +585,8 @@ pub(crate) fn note_growth_step(grew: bool) {
 }
 
 /// Read and reset the growth census (one kernel call's steps, growths,
-/// scanned sectors and growth milliseconds).
-pub(crate) fn take_growth_census() -> (u64, u64, u64, f64, u64, u64, u64) {
+/// scanned sectors, growth milliseconds and distinct arcs merged).
+pub(crate) fn take_growth_census() -> (u64, u64, u64, f64, u64) {
     GROWTH_CENSUS.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
@@ -806,9 +613,11 @@ pub struct ArcSkyline {
     built: bool,
     arcs: Vec<MergedArc>,
     /// Slots [`insert_merged`] absorbed on the current call. Lives here only so
-    /// the walk does not allocate once per raw arc (~10⁶ per dense receiver);
-    /// it carries no state between calls.
+    /// the walk does not allocate once per raw arc (a dense receiver merges
+    /// up to ~10⁶ distinct edges); it carries no state between calls.
     fuse_scratch: Vec<u32>,
+    /// Edges already merged into `arcs`; the walk skips their repeats.
+    seen: SeenEdges,
     /// Times the arc capacity forced a smallest-gap merge while building this
     /// skyline — 0 on every receiver of a normal cell; a non-zero total is the
     /// signal that a capped lane's [`ArcBounds::max_arcs`] is too small here.
@@ -827,6 +636,7 @@ impl Default for ArcSkyline {
             built: false,
             arcs: Vec::new(),
             fuse_scratch: Vec::new(),
+            seen: SeenEdges::default(),
             overflows: 0,
             need_max_m: 0.0,
         }
@@ -1067,6 +877,13 @@ impl ArcSkyline {
 
     /// [`Self::ensure`] with a precomputed [`PlannedEnsure`] — the form the
     /// popup's segment scheduler drives the growth chain with.
+    ///
+    /// One skyline serves one obstacle set for its lifetime: `seen` holds the
+    /// ordinals of THAT set and is cleared on a receiver move, never on a set
+    /// change — growing one skyline against two sets would let a stale bit
+    /// suppress the second set's edge at a colliding ordinal.
+    /// Likewise one `ArcBounds` per lifetime: a capped gather in between can
+    /// replace a stratum record that only a kept repeat would restore.
     pub fn ensure_planned(
         &mut self,
         lat: f64,
@@ -1086,6 +903,14 @@ impl ArcSkyline {
             source_height_m,
             bounds,
         );
+    }
+
+    /// The arcs and the edges behind them go together: an arc list emptied
+    /// without its `seen` set would drop every once-seen edge from the next
+    /// gather.
+    fn clear_arcs(&mut self) {
+        self.arcs.clear();
+        self.seen.clear();
     }
 
     /// Freeze the current merged-arc list for read-only parallel evaluation.
@@ -1108,7 +933,7 @@ impl ArcSkyline {
         }
         self.built = false;
         self.built_radius_m = [0.0; SECTORS];
-        self.arcs.clear();
+        self.clear_arcs();
         self.overflows = 0;
         self.need_max_m = 0.0;
     }
@@ -1170,15 +995,15 @@ impl ArcSkyline {
             self.lon = lon;
             self.built = true;
             self.built_radius_m = [0.0; SECTORS];
-            self.arcs.clear();
+            self.clear_arcs();
             self.overflows = 0;
         }
         // Sectors this span touches. The span is under a full turn, so the
         // touched set is one contiguous run on the circle (possibly wrapping).
         let (s0, s1) = sector_span(span_lo, span_hi);
         // The annulus to walk is bounded by the LEAST-grown sector in the
-        // wedge; sectors already further out are re-visited, and `insert_merged`
-        // is idempotent on a repeat, so that costs time and never correctness.
+        // wedge; sectors already further out are re-visited, and `seen` skips
+        // every edge they already gave, so that costs time and never correctness.
         //
         // This gate and [`Self::needs_growth`] are the same computation through
         // the same helpers (`walked_to` carries the f32 bookkeeping round-trip)
@@ -1198,6 +1023,9 @@ impl ArcSkyline {
         let cap = bounds.max_arcs;
         let arcs = &mut self.arcs;
         let fuse = &mut self.fuse_scratch;
+        // Skipping an edge's repeats is exact for the uncapped merge every
+        // CPU lane runs; a capped parity lane keeps every repeat.
+        let seen = (cap == usize::MAX).then_some(&mut self.seen);
         let mut overflows = self.overflows;
         let mut raw_arcs: u64 = 0;
         // Gather the WHOLE of every sector this call is about to mark walked,
@@ -1228,6 +1056,7 @@ impl ArcSkyline {
             los_floor_m,
             bounds.delta_min_m,
             wedge,
+            seen,
             &mut |a: SkylineArc| {
                 raw_arcs += 1;
                 overflows += insert_merged(arcs, cap, a, fuse)
@@ -1287,11 +1116,11 @@ fn insert_merged(
     // only MARKS the slots it absorbs and closes the gaps once, at the end.
     // `remove` shifts the whole TAIL per absorption and the closing `insert`
     // shifts it once more; a dense receiver's skyline is ~10³ arcs and its walk
-    // offers ~10⁶ raw ones (an edge is re-emitted for every grid cell it
-    // spans), and nearly every one of those absorbs EXACTLY ONE existing arc —
-    // leaving the list the same length, so all that tail traffic put the bytes
-    // back where they already were. Measured at 32 % of a São Paulo popup.
-    // That case now writes a single slot and touches nothing beyond it.
+    // offers up to ~10⁶ distinct edges (`SeenEdges` skips their repeats), and
+    // most of those absorb EXACTLY ONE existing arc — leaving the list the
+    // same length, so all that tail traffic put the bytes back where they
+    // already were (32 % of a São Paulo popup before the mark-and-close
+    // rewrite). That case writes a single slot and touches nothing beyond it.
     absorbed.clear();
     let mut i = v.partition_point(|x| (x.key, x.lo) < (m.key, m.lo));
     // At most ONE arc of this stratum can overlap `m.lo`, and it is the one
@@ -2826,6 +2655,7 @@ mod tests {
                 key: fuse_key(100.0, 8.0),
             }],
             fuse_scratch: Vec::new(),
+            seen: SeenEdges::default(),
             overflows: 0,
             need_max_m: 0.0,
         };
@@ -3472,12 +3302,22 @@ mod wedge_tests {
                 let hi = lo + width;
                 let collect = |wedge: Option<(f64, f64)>| {
                     let mut v: Vec<(i64, i64)> = Vec::new();
-                    set.skyline_arcs_within(rlat, rlon, 0.0, 1200.0, 0.05, 0.0, wedge, &mut |a| {
-                        // Only arcs that MEET the span can matter to it.
-                        if a.hi >= lo && a.lo <= hi {
-                            v.push(((a.lo * 1e9) as i64, (a.hi * 1e9) as i64));
-                        }
-                    });
+                    set.skyline_arcs_within(
+                        rlat,
+                        rlon,
+                        0.0,
+                        1200.0,
+                        0.05,
+                        0.0,
+                        wedge,
+                        None,
+                        &mut |a| {
+                            // Only arcs that MEET the span can matter to it.
+                            if a.hi >= lo && a.lo <= hi {
+                                v.push(((a.lo * 1e9) as i64, (a.hi * 1e9) as i64));
+                            }
+                        },
+                    );
                     v.sort_unstable();
                     v.dedup();
                     v
@@ -3571,7 +3411,9 @@ mod wedge_tests {
         let (rlat, rlon) = ll(0.0, 0.0);
         let count = |wedge: Option<(f64, f64)>| {
             let mut n = 0usize;
-            set.skyline_arcs_within(rlat, rlon, 0.0, 1200.0, 0.05, 0.0, wedge, &mut |_| n += 1);
+            set.skyline_arcs_within(rlat, rlon, 0.0, 1200.0, 0.05, 0.0, wedge, None, &mut |_| {
+                n += 1
+            });
             n
         };
         let disk = count(None);
@@ -3581,5 +3423,114 @@ mod wedge_tests {
             "wedge gathered {narrow} of the disk's {disk} — not worth the bookkeeping"
         );
         println!("disk {disk} arcs vs wedge {narrow} arcs");
+    }
+
+    fn arc_bits(sky: &ArcSkyline) -> Vec<(i32, u64, u64, u32, u32)> {
+        sky.arcs
+            .iter()
+            .map(|m| {
+                (
+                    m.key,
+                    m.lo.to_bits(),
+                    m.hi.to_bits(),
+                    m.near_m.to_bits(),
+                    m.height_m.to_bits(),
+                )
+            })
+            .collect()
+    }
+
+    /// An edge is visited once per cell it spans, per overlapping wedge and per
+    /// ladder rung whose boundary cells hold it; `SeenEdges` lets it through
+    /// once and the merged skyline is the same to the bit as merging every
+    /// repeat. The repeat-keeping arm is a cap that never binds: `usize::MAX`
+    /// is the one value the skip is armed for.
+    #[test]
+    fn seen_edges_skip_repeats_and_keep_the_skyline_identical() {
+        let set = ring_city();
+        let (rlat, rlon) = ll(0.0, 0.0);
+        let walk = |seen: Option<&mut SeenEdges>| {
+            let mut ids = Vec::new();
+            set.skyline_arcs_within(rlat, rlon, 0.0, 1200.0, 0.05, 0.0, None, seen, &mut |a| {
+                ids.push(a.source_id.bits())
+            });
+            ids
+        };
+        let every = walk(None);
+        let once = walk(Some(&mut SeenEdges::default()));
+        let distinct: std::collections::BTreeSet<u64> = every.iter().copied().collect();
+        assert!(
+            every.len() > distinct.len(),
+            "the fixture must repeat edges across cells: {} visits of {} edges",
+            every.len(),
+            distinct.len()
+        );
+        assert_eq!(once.len(), distinct.len(), "one visit per edge");
+        let build = |bounds: ArcBounds| {
+            let mut sky = ArcSkyline::default();
+            // Two rungs, then a re-walk of an overlapping sector.
+            for (span, need) in [
+                ((0.3, 0.5), 600.0),
+                ((0.3, 0.5), 1200.0),
+                ((0.2, 0.4), 1200.0),
+            ] {
+                sky.ensure(rlat, rlon, span.0, span.1, need, &set, 0.05, bounds);
+            }
+            arc_bits(&sky)
+        };
+        let keep_repeats = ArcBounds {
+            max_arcs: usize::MAX - 1,
+            ..ARC_BOUNDS_DEFAULT
+        };
+        let skipped = build(ARC_BOUNDS_DEFAULT);
+        assert!(!skipped.is_empty());
+        assert_eq!(
+            skipped,
+            build(keep_repeats),
+            "skipping repeats changed the skyline"
+        );
+    }
+
+    /// An edge the small rung's radius pruned is not marked, so the larger
+    /// rung admits it: two rungs end where one direct gather ends.
+    #[test]
+    fn an_edge_pruned_by_a_small_rung_is_admitted_by_the_larger_one() {
+        let set = ring_city();
+        let (rlat, rlon) = ll(0.0, 0.0);
+        let mut ladder = ArcSkyline::default();
+        for need in [300.0, 1200.0] {
+            ladder.ensure(rlat, rlon, 0.3, 0.5, need, &set, 0.05, ARC_BOUNDS_DEFAULT);
+        }
+        let mut direct = ArcSkyline::default();
+        direct.ensure(rlat, rlon, 0.3, 0.5, 1200.0, &set, 0.05, ARC_BOUNDS_DEFAULT);
+        assert!(
+            direct.arcs.iter().any(|m| m.near_m > 800.0),
+            "the far ring must be in reach"
+        );
+        assert_eq!(arc_bits(&ladder), arc_bits(&direct));
+    }
+
+    /// `seen` is cleared WITH the arcs: a reset or a receiver switch that
+    /// emptied the arcs but kept the set would read an empty sky for every
+    /// edge the previous receiver had seen.
+    #[test]
+    fn a_skyline_forgets_seen_edges_with_its_arcs() {
+        let set = ring_city();
+        let grow = |sky: &mut ArcSkyline, (lat, lon): (f64, f64)| {
+            sky.ensure(lat, lon, 0.3, 0.5, 1200.0, &set, 0.05, ARC_BOUNDS_DEFAULT);
+        };
+        let mut sky = ArcSkyline::default();
+        grow(&mut sky, ll(0.0, 0.0));
+        let first = arc_bits(&sky);
+        assert!(!first.is_empty());
+        sky.reset();
+        grow(&mut sky, ll(0.0, 0.0));
+        assert_eq!(arc_bits(&sky), first, "after reset");
+        // The popup's mid-`ensure` receiver switch, no reset in between.
+        grow(&mut sky, ll(5.0, 0.0));
+        let mut fresh = ArcSkyline::default();
+        grow(&mut fresh, ll(5.0, 0.0));
+        assert!(!arc_bits(&fresh).is_empty());
+        assert_eq!(arc_bits(&sky), arc_bits(&fresh), "after a receiver switch");
     }
 }

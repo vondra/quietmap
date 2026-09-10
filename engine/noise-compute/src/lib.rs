@@ -163,8 +163,8 @@ pub fn compute_at_point(
 
     // The road and rail kernels run concurrently: each one's pass 1 (the
     // sequential skyline growth chain) is 80–85 % of its wall time and the
-    // two chains are independent — own skyline, own emission-memo session,
-    // own trace list. Traces are appended in the sequential order (roads,
+    // two chains are independent — own skyline, own seen-edge set, own
+    // trace list. Traces are appended in the sequential order (roads,
     // then railways), so the answer is the sequential composition bit for
     // bit. A scoped thread, not `rayon::join`: a multi-second non-yielding
     // chain must not sit on a pool worker that pass 2 of every concurrent
@@ -793,7 +793,7 @@ mod tests {
     /// The road and rail kernels run on two threads; the answer must be the
     /// The same invariant on a scene that exercises what actually moved
     /// threads: 24 road segments in several osm groups, a 20-building
-    /// obstacle set (skyline growth, emission-memo session, census) and six
+    /// obstacle set (skyline growth, seen-edge skip, census) and six
     /// railway segments at varied offsets, in both trace modes.
     #[test]
     fn joined_line_layers_match_the_sequential_composition_with_obstacles() {

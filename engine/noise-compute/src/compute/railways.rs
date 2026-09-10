@@ -165,14 +165,10 @@ pub(crate) fn compute_railways(
     mut traces: Option<&mut TraceCollector>,
 ) -> (NoisePeriods, Vec<Contributor>) {
     use emission::railway::{self, RailType};
-    use propagation::arc_screening::{
-        enter_emission_session, ArcBounds, ArcScreeningScratch, ArcSkyline, SkylineSnapshot,
-    };
+    use propagation::arc_screening::{ArcBounds, ArcScreeningScratch, ArcSkyline, SkylineSnapshot};
     use rayon::prelude::*;
     use std::collections::HashMap;
 
-    // One emission-memo session for the whole kernel call (see compute_roads).
-    let _emission_session = enter_emission_session();
     let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
     let t_rail_start = std::time::Instant::now();
     let rcv_alt = receiver.altitude_m();
@@ -615,10 +611,10 @@ pub(crate) fn compute_railways(
 
     let t_rail_pass2 = t_rail_start.elapsed() - t_rail_pass1;
     if timing_on {
-        let (steps, growths, sectors, growth_ms, raw_arcs, memo_hits, memo_miss) =
+        let (steps, growths, sectors, growth_ms, raw_arcs) =
             crate::propagation::arc_screening::take_growth_census();
         eprintln!(
-            "popup-stage rail pass1={:.0}ms (gates={:.0}ms arc={:.0}ms) pass2={:.0}ms kept={} steps={} growths={} sectors={} growth_ms={:.0} rawarcs={} memohit={} memomiss={}",
+            "popup-stage rail pass1={:.0}ms (gates={:.0}ms arc={:.0}ms) pass2={:.0}ms kept={} steps={} growths={} sectors={} growth_ms={:.0} arcs={}",
             t_rail_pass1.as_secs_f64() * 1000.0,
             t_rail_gates.as_secs_f64() * 1000.0,
             t_rail_arc.as_secs_f64() * 1000.0,
@@ -629,8 +625,6 @@ pub(crate) fn compute_railways(
             sectors,
             growth_ms,
             raw_arcs,
-            memo_hits,
-            memo_miss,
         );
     }
 

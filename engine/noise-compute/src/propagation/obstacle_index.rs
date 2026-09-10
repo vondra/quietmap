@@ -100,13 +100,56 @@ pub struct CrossingCandidate {
 /// the source" test, which replaces a second ray query per candidate.
 #[derive(Clone, Copy, Debug)]
 pub struct SkylineArc {
-    /// Stable flattened edge identity; repeated cell emissions keep this ID.
+    /// Stable flattened edge identity — the ordinal [`SeenEdges`] dedupes on.
     pub source_id: ScreeningSourceId,
     pub lo: f64,
     pub hi: f64,
     pub near_m: f32,
     /// Edge height above its own local ground (m).
     pub height_m: f32,
+}
+
+/// The edges already merged into one receiver's skyline, one bit per flattened
+/// edge ordinal of its obstacle set. The grid walk visits an edge once per cell
+/// it spans, per overlapping sector wedge and per ladder rung whose boundary
+/// cells hold it — a Prague click walked 4.5 M raw arcs and Paris 15 M for
+/// well under a tenth that many distinct edges (dev1 cf94bb70, 2026-09-07) —
+/// and a repeat is an exact no-op in the merge (the arc it would add already
+/// lies inside the merged arc that absorbed it), so it is skipped before the
+/// bearing math. A bit per edge rather than [`CrossingScratch`]'s lossy 64-slot
+/// tag table or an epoch per edge: a skyline lives per worker and outlasts
+/// many receivers, and clearing touches only the words a receiver set.
+#[derive(Default)]
+pub struct SeenEdges {
+    bits: Vec<u64>,
+    dirty_words: Vec<u32>,
+}
+
+impl SeenEdges {
+    /// Marks `ordinal`; `false` when it was already marked.
+    fn insert(&mut self, ordinal: u64) -> bool {
+        let word = (ordinal / 64) as usize;
+        if word >= self.bits.len() {
+            self.bits.resize(word + 1, 0);
+        }
+        let bit = 1_u64 << (ordinal % 64);
+        let w = &mut self.bits[word];
+        if *w & bit != 0 {
+            return false;
+        }
+        if *w == 0 {
+            self.dirty_words.push(word as u32);
+        }
+        *w |= bit;
+        true
+    }
+
+    pub fn clear(&mut self) {
+        for &word in &self.dirty_words {
+            self.bits[word as usize] = 0;
+        }
+        self.dirty_words.clear();
+    }
 }
 
 /// Branch-and-bound context for [`ObstacleIndex::crossings_pruned`]: everything
@@ -503,10 +546,10 @@ impl ObstacleIndex {
     ///   under the sight line blocks nothing, and it is admitted or not on its
     ///   own height, never on the tallest edge sharing its cell.
     ///
-    /// An edge listed in several cells is visited several times; the caller's
-    /// merge is idempotent on repeats (identical arcs union to themselves), so
-    /// no dedup pass is needed — the reason this walk emits arcs directly
-    /// instead of materialising an edge list.
+    /// An edge listed in several cells is visited several times; `seen` lets
+    /// each edge through once per skyline (see [`SeenEdges`]) — `None` for a
+    /// capped merge, whose cross-stratum last resort can drop the record a
+    /// repeat would restore.
     #[allow(clippy::too_many_arguments)]
     pub fn skyline_arcs_within(
         &self,
@@ -518,20 +561,12 @@ impl ObstacleIndex {
         los_floor_m: f64,
         delta_min_m: f64,
         wedge: Option<(f64, f64)>,
+        mut seen: Option<&mut SeenEdges>,
         visit: &mut impl FnMut(SkylineArc),
     ) {
         if self.edges.is_empty() {
             return;
         }
-        // Per-edge emission memo (goal B, session table in arc_screening):
-        // one edge lives in every grid cell it crosses, and overlapping
-        // growths re-walk the same cells — so a dense kernel emits each
-        // edge dozens of visits apart with bit-identical angles (2× atan2
-        // + segment distance each). Hit or miss, the gates below run once
-        // on this edge's true geometry. Repeat visits of an admitted edge
-        // still reach the fused list: its merge unions identical arcs to
-        // themselves.
-        use crate::propagation::arc_screening as arc_census;
         let (ox, oy) = self.to_local(lat, lon);
         let inv_cell = 1.0 / self.cell_m;
         let cell_range = |lo: f64, hi: f64, base: f64, n: usize| -> Option<(usize, usize)> {
@@ -608,42 +643,7 @@ impl ObstacleIndex {
                     continue; // grazing: zero dB in every band, whatever the edge
                 }
                 for &eref in &self.edge_refs[lo..hi] {
-                    let ordinal = edge_ordinal_base
-                        .checked_add(u64::from(eref))
-                        .expect("flattened obstacle edge ordinal overflow");
-                    // Memo hit, or compute + store: EITHER way `replay` holds
-                    // this edge's true geometry, and the gates below run ONCE
-                    // on it — a replay visits exactly when a fresh compute
-                    // would, under THIS growth's floor and radius (a later
-                    // growth may admit what this visit prunes, so pruned
-                    // edges store full values, never placeholders).
-                    let replay = if let Some(replay) = arc_census::emission_memo_lookup(ordinal) {
-                        replay
-                    } else {
-                        arc_census::note_memo_miss();
-                        let e = self.edges[eref as usize];
-                        let (ex0, ey0) = (e.x0 as f64 - ox, e.y0 as f64 - oy);
-                        let (ex1, ey1) = (e.x1 as f64 - ox, e.y1 as f64 - oy);
-                        let near_m = origin_to_segment_dist(ex0, ey0, ex1, ey1);
-                        let a0 = ey0.atan2(ex0);
-                        let a1 = ey1.atan2(ex1);
-                        // The SHORT arc between the endpoints: the set of
-                        // directions that hit this edge. Taking it per EDGE
-                        // (not a per-footprint hull) is exact for concave
-                        // outlines too — a ray leaving the origin hits a
-                        // closed ring iff it hits one of its edges.
-                        let r1 = a0 + wrap_pi(a1 - a0);
-                        let replay = arc_census::EmissionReplay {
-                            ordinal,
-                            lo: a0.min(r1),
-                            hi: a0.max(r1),
-                            near_m,
-                            height_m: e.height_m,
-                            barrier: e.kind() == ObstacleKind::Barrier,
-                        };
-                        arc_census::emission_memo_store(&replay);
-                        replay
-                    };
+                    let e = self.edges[eref as usize];
                     // A WALL is pruned on its OWN height, a building only on the
                     // cell's tallest edge. The wall slice this index replaced
                     // tested every wall against the sight-line floor, and the
@@ -651,19 +651,40 @@ impl ObstacleIndex {
                     // with a 20 m building would start blocking directions it
                     // cannot reach. Buildings keep the cell prune alone — the
                     // bound their footprints have always been screened by.
-                    if replay.barrier && f64::from(replay.height_m) <= los_floor_m {
+                    if e.kind() == ObstacleKind::Barrier && f64::from(e.height_m) <= los_floor_m {
                         continue;
                     }
-                    if replay.near_m > radius_m || replay.near_m < 1e-6 {
+                    let (ex0, ey0) = (e.x0 as f64 - ox, e.y0 as f64 - oy);
+                    let (ex1, ey1) = (e.x1 as f64 - ox, e.y1 as f64 - oy);
+                    let near_m = origin_to_segment_dist(ex0, ey0, ex1, ey1);
+                    if near_m > radius_m || near_m < 1e-6 {
                         continue; // out of range, or the origin sits ON the edge
                     }
+                    // Marked only once ADMITTED: an edge this growth's radius or
+                    // floor pruned must still get through on a later, larger one.
+                    let ordinal = edge_ordinal_base
+                        .checked_add(u64::from(eref))
+                        .expect("flattened obstacle edge ordinal overflow");
+                    if seen
+                        .as_deref_mut()
+                        .is_some_and(|seen| !seen.insert(ordinal))
+                    {
+                        continue;
+                    }
+                    let a0 = ey0.atan2(ex0);
+                    let a1 = ey1.atan2(ex1);
+                    // The SHORT arc between the endpoints: the set of directions
+                    // that hit this edge. Taking it per EDGE (not a per-footprint
+                    // hull) is exact for concave outlines too — a ray leaving the
+                    // origin hits a closed ring iff it hits one of its edges.
+                    let r1 = a0 + wrap_pi(a1 - a0);
                     visit(SkylineArc {
                         source_id: ScreeningSourceId::obstacle(ordinal)
                             .expect("flattened obstacle edge ordinal entered wall namespace"),
-                        lo: replay.lo,
-                        hi: replay.hi,
-                        near_m: replay.near_m as f32,
-                        height_m: replay.height_m,
+                        lo: a0.min(r1),
+                        hi: a0.max(r1),
+                        near_m: near_m as f32,
+                        height_m: e.height_m,
                     });
                 }
             }
@@ -1225,6 +1246,7 @@ impl ObstacleSet {
         los_floor_m: f64,
         delta_min_m: f64,
         wedge: Option<(f64, f64)>,
+        mut seen: Option<&mut SeenEdges>,
         visit: &mut impl FnMut(SkylineArc),
     ) {
         let mut edge_ordinal_base = 0_u64;
@@ -1238,6 +1260,7 @@ impl ObstacleSet {
                 los_floor_m,
                 delta_min_m,
                 wedge,
+                seen.as_deref_mut(),
                 visit,
             );
             edge_ordinal_base = edge_ordinal_base
@@ -1956,7 +1979,7 @@ mod tests {
         let idx = b.build();
         let mut arcs = Vec::new();
         let o = ll(0.0, 0.0);
-        idx.skyline_arcs_within(0, o.0, o.1, 0.0, 500.0, 0.0, 0.0, None, &mut |a| {
+        idx.skyline_arcs_within(0, o.0, o.1, 0.0, 500.0, 0.0, 0.0, None, None, &mut |a| {
             arcs.push(a)
         });
         assert_eq!(arcs.len(), 4, "one ring in range, four edges: {arcs:?}");
@@ -1971,7 +1994,7 @@ mod tests {
         }
         // A radius that reaches neither box.
         arcs.clear();
-        idx.skyline_arcs_within(0, o.0, o.1, 0.0, 100.0, 0.0, 0.0, None, &mut |a| {
+        idx.skyline_arcs_within(0, o.0, o.1, 0.0, 100.0, 0.0, 0.0, None, None, &mut |a| {
             arcs.push(a)
         });
         assert!(arcs.is_empty());
@@ -1988,9 +2011,18 @@ mod tests {
         let o = ll(0.0, 0.0);
         let count = |delta_min: f64| {
             let mut n = 0;
-            idx.skyline_arcs_within(0, o.0, o.1, 0.0, 500.0, 4.0, delta_min, None, &mut |_| {
-                n += 1
-            });
+            idx.skyline_arcs_within(
+                0,
+                o.0,
+                o.1,
+                0.0,
+                500.0,
+                4.0,
+                delta_min,
+                None,
+                None,
+                &mut |_| n += 1,
+            );
             n
         };
         assert_eq!(count(0.02), 4, "δ_min below the box's 0.04 m: kept");
@@ -2000,7 +2032,9 @@ mod tests {
         b.add_ring(&square(200.0, 0.0, 15.0), 3.0, ObstacleKind::Building, 0);
         let low = b.build();
         let mut n = 0;
-        low.skyline_arcs_within(0, o.0, o.1, 0.0, 500.0, 4.0, 0.0, None, &mut |_| n += 1);
+        low.skyline_arcs_within(0, o.0, o.1, 0.0, 500.0, 4.0, 0.0, None, None, &mut |_| {
+            n += 1
+        });
         assert_eq!(n, 0, "top below the 4 m sight line");
     }
 
@@ -2025,9 +2059,18 @@ mod tests {
         let o = ll(0.0, 0.0);
         let tops = |los_floor_m: f64| {
             let mut heights = Vec::new();
-            idx.skyline_arcs_within(0, o.0, o.1, 0.0, 500.0, los_floor_m, 0.0, None, &mut |a| {
-                heights.push(a.height_m)
-            });
+            idx.skyline_arcs_within(
+                0,
+                o.0,
+                o.1,
+                0.0,
+                500.0,
+                los_floor_m,
+                0.0,
+                None,
+                None,
+                &mut |a| heights.push(a.height_m),
+            );
             heights.sort_by(f32::total_cmp);
             heights.dedup();
             heights
@@ -2054,7 +2097,7 @@ mod tests {
         let idx = b.build();
         let o = ll(0.0, 0.0);
         let mut arcs = Vec::new();
-        idx.skyline_arcs_within(0, o.0, o.1, 0.0, 1000.0, 0.0, 0.0, None, &mut |a| {
+        idx.skyline_arcs_within(0, o.0, o.1, 0.0, 1000.0, 0.0, 0.0, None, None, &mut |a| {
             arcs.push(a)
         });
         assert!(!arcs.is_empty());
@@ -2083,7 +2126,9 @@ mod tests {
         };
         let o = ll(0.0, 0.0);
         let mut arcs = Vec::new();
-        set.skyline_arcs_within(o.0, o.1, 0.0, 500.0, 0.0, 0.0, None, &mut |a| arcs.push(a));
+        set.skyline_arcs_within(o.0, o.1, 0.0, 500.0, 0.0, 0.0, None, None, &mut |a| {
+            arcs.push(a)
+        });
         assert_eq!(arcs.len(), 8);
         let first_ids: std::collections::BTreeSet<_> = arcs
             .iter()
@@ -2100,6 +2145,38 @@ mod tests {
         assert!(first_ids.is_disjoint(&second_ids));
         assert!(arcs.iter().any(|a| a.hi < 0.0), "the southern box");
         assert!(arcs.iter().any(|a| a.lo > 0.0), "the northern box");
+    }
+
+    /// Two indexes in one set share one `SeenEdges`: the ordinal bases keep
+    /// their edges apart, so the skip lets every edge of both through once.
+    #[test]
+    fn seen_edges_span_the_set_without_colliding_across_indexes() {
+        let mut b0 = ObstacleIndex::builder(OLAT, OLON);
+        b0.add_ring(&square(200.0, -60.0, 10.0), 8.0, ObstacleKind::Building, 0);
+        let mut b1 = ObstacleIndex::builder(OLAT, OLON);
+        b1.add_ring(&square(200.0, 60.0, 10.0), 8.0, ObstacleKind::Building, 0);
+        let set = ObstacleSet {
+            indexes: vec![
+                std::sync::Arc::new(b0.build()),
+                std::sync::Arc::new(b1.build()),
+            ],
+        };
+        let o = ll(0.0, 0.0);
+        let mut seen = SeenEdges::default();
+        let mut ids = Vec::new();
+        set.skyline_arcs_within(
+            o.0,
+            o.1,
+            0.0,
+            500.0,
+            0.0,
+            0.0,
+            None,
+            Some(&mut seen),
+            &mut |a| ids.push(a.source_id.bits()),
+        );
+        ids.sort_unstable();
+        assert_eq!(ids, vec![0, 1, 2, 3, 4, 5, 6, 7]);
     }
 
     /// A ray straight through a square building enters and exits: exactly two
