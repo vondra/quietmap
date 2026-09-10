@@ -33,7 +33,9 @@ fn main() -> Result<(), String> {
         .parent()
         .ok_or("prepared year dir has no parent")?
         .to_path_buf();
-    let (superseded, orphans) = source_reader::structure_store::sweep_index_dir(&data_dir.join("obstacle-index"));
+    let root = source_reader::structure_store::index_cache_root(&data_dir)
+        .ok_or("obstacle index cache is disabled (QM_OBSTACLE_INDEX_CACHE=0)")?;
+    let (superseded, orphans) = source_reader::structure_store::sweep_index_dir(&root);
     let squares = squares(&prepared_year_dir).map_err(|e| e.to_string())?;
     let (indexed, edges, done) = (AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0));
     squares.par_iter().try_for_each(|square| -> Result<(), String> {
