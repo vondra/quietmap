@@ -172,8 +172,8 @@ pub fn compute_at_point(
     // REACH_CACHE memo it fills.
     let collecting = traces.is_some();
     let (road, rail) = std::thread::scope(|scope| {
-        let road = scope.spawn(|| {
-            (!roads.is_empty()).then(|| {
+        let road = (!roads.is_empty()).then(|| {
+            scope.spawn(|| {
                 run_line_layer(collecting, |t| {
                     compute_roads(receiver, roads, obstacles, rasters, t)
                 })
@@ -184,7 +184,13 @@ pub fn compute_at_point(
                 compute_railways(receiver, railways, obstacles, rasters, t)
             })
         });
-        (road.join().expect("road kernel panicked"), rail)
+        // A road-kernel panic keeps its own message on the caller thread.
+        let road = road.map(|handle| {
+            handle
+                .join()
+                .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+        });
+        (road, rail)
     });
     for (kind, segment_count, layer, wall_ms) in [
         (LayerKind::Road, roads.len(), road, &mut timings.road_ms),
@@ -785,6 +791,90 @@ mod tests {
     }
 
     /// The road and rail kernels run on two threads; the answer must be the
+    /// The same invariant on a scene that exercises what actually moved
+    /// threads: 24 road segments in several osm groups, a 20-building
+    /// obstacle set (skyline growth, emission-memo session, census) and six
+    /// railway segments at varied offsets, in both trace modes.
+    #[test]
+    fn joined_line_layers_match_the_sequential_composition_with_obstacles() {
+        use grid::geo::{m_per_deg_lon, M_PER_DEG_LAT};
+        let (roads, obstacles) = crate::compute::roads::tests::pool_gate_scene();
+        let receiver = Receiver::new(50.0, 14.0, 200.0);
+        let railways: Vec<RailSegment> = (0..6)
+            .map(|k| {
+                let mut rail = mainline_200m_north();
+                let north_m = 150.0 + 90.0 * k as f64;
+                let east_m = -120.0 + 40.0 * k as f64;
+                let dlat = north_m / M_PER_DEG_LAT;
+                let dlon = east_m / m_per_deg_lon(50.0_f64.to_radians());
+                let span = rail.end_lon - rail.start_lon;
+                rail.osm_id = 2 + k as i64 / 2;
+                rail.segment_idx = k as i16;
+                rail.start_lat = 50.0 + dlat;
+                rail.end_lat = 50.0 + dlat;
+                rail.start_lon = 14.0 + dlon - span / 2.0;
+                rail.end_lon = 14.0 + dlon + span / 2.0;
+                rail.cp_lat = 50.0 + dlat;
+                rail.cp_lon = 14.0 + dlon;
+                rail.dist_m = north_m.hypot(east_m);
+                rail
+            })
+            .collect();
+        let bits = |p: &NoisePeriods| [p.ld_db, p.le_db, p.ln_db, p.lden_db].map(f64::to_bits);
+        for with_traces in [true, false] {
+            let mut expected = TraceCollector::new();
+            let (road_periods, road_contribs) = compute_roads(
+                &receiver,
+                &roads,
+                &obstacles,
+                &MockRasters,
+                with_traces.then_some(&mut expected),
+            );
+            let (rail_periods, rail_contribs) = compute_railways(
+                &receiver,
+                &railways,
+                &obstacles,
+                &MockRasters,
+                with_traces.then_some(&mut expected),
+            );
+            let mut traces = TraceCollector::new();
+            let result = compute_at_point(
+                &receiver,
+                &roads,
+                &railways,
+                &[],
+                &[],
+                &obstacles,
+                &MockRasters,
+                with_traces.then_some(&mut traces),
+            );
+            assert_eq!(bits(&result.sources[0].periods), bits(&road_periods));
+            assert_eq!(bits(&result.sources[1].periods), bits(&rail_periods));
+            assert!(!road_contribs.is_empty() && !rail_contribs.is_empty());
+            // compute_at_point re-orders contributors for display; the set
+            // and every field must match the two isolated kernels.
+            let sorted = |items: Vec<Contributor>| {
+                let mut json: Vec<String> = items
+                    .iter()
+                    .map(|c| serde_json::to_string(c).unwrap())
+                    .collect();
+                json.sort();
+                json
+            };
+            assert_eq!(
+                sorted(result.contributors),
+                sorted(road_contribs.into_iter().chain(rail_contribs).collect())
+            );
+            if with_traces {
+                assert!(expected.segments.len() > 24, "scene must produce many traces");
+                assert_eq!(
+                    serde_json::to_string(&traces.segments).unwrap(),
+                    serde_json::to_string(&expected.segments).unwrap()
+                );
+            }
+        }
+    }
+
     /// sequential composition bit for bit — periods, and traces in layer
     /// order (roads, then railways).
     #[test]

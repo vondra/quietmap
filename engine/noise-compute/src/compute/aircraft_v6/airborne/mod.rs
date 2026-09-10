@@ -467,7 +467,7 @@ fn scatter_chunk(
                     let rank_key = energy * AIRBORNE_RANK_W[period];
                     // Skip the trace builder unless this sub-seg can
                     // displace the weakest kept trace.
-                    let order = (((first_row + row_index) as u64) << 16) | i as u64;
+                    let order = (((first_row + row_index) as u64) << 32) | i as u64;
                     let should_build = heap.len() < trace_cap
                         || heap
                             .peek()

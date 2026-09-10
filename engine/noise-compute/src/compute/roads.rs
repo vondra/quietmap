@@ -923,7 +923,7 @@ pub(crate) fn compute_roads(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::admin::{Admin, Continent};
 
@@ -1195,7 +1195,7 @@ mod tests {
     /// village of obstacle boxes, and one noise wall (a Barrier-kind polyline
     /// in the same index) — every branch of the three-pass kernel (cp verdict,
     /// arc snapshot, grouping, dominant, traces) gets traffic.
-    fn pool_gate_scene() -> (
+    pub(crate) fn pool_gate_scene() -> (
         Vec<RoadSegment>,
         crate::propagation::obstacle_index::ObstacleSet,
     ) {
