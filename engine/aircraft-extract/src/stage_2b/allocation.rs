@@ -49,7 +49,7 @@ pub(super) fn fold_inputs(spill_dir: &Path) -> Result<Vec<FoldBucket>> {
                 allocated_bytes += path.metadata()?.blocks() * 512;
                 largest_batch = largest_batch.max(ipc.largest_batch_bytes);
             }
-            // Remaining maps coexist with support copies and their Arrow/IPC buffers.
+            // Remaining maps coexist with the largest owner's Arrow builders and IPC buffers.
             let allocation_bytes = if parts.is_empty() {
                 0
             } else {

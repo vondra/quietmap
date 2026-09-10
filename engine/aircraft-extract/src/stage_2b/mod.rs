@@ -3,16 +3,12 @@
 mod accum;
 mod allocation;
 mod census;
-mod finish_plan;
-pub use finish_plan::plan_cruise_finish;
 mod receipt;
 pub use census::census_cruise_inputs;
 pub(crate) use receipt::receipt_page_limit as spill_receipt_page_limit;
 mod spill;
-mod support;
 use accum::*;
 use spill::*;
-use support::*;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -40,7 +36,7 @@ fn log_d_25m_ft() -> f64 {
     (25.0 * FT_PER_M).log10()
 }
 
-/// Accumulation target; allocation admission includes coexisting serialization buffers.
+/// Spill accumulation target; allocation admission includes coexisting serialization buffers.
 const SPILL_TRIGGER_BYTES: usize = 512 * 1024 * 1024;
 
 /// Partition routing; actual bucket counts determine concurrency.
@@ -231,14 +227,13 @@ pub fn run_stage_2b_phase(
         );
         receipt::create(&spill_dir, &identities, n_days, scope, ga_cruise)?;
     }
-    // Each canonical key belongs to one fold worker. Finalize once, then
-    // spill intact copies by destination; only gather writes prepared cells.
+    // Every key of one owner z9 hashes into the same bucket, so a fold worker
+    // publishes complete owner files; receivers read owner squares within reach.
     started(
         "stage2b/fold",
         &format!("{SPILL_HASH_BUCKETS} hash buckets"),
     );
-    let merge_start = std::time::Instant::now();
-    let support_dir = spill_dir.join("support");
+    let fold_start = std::time::Instant::now();
     let fold_bucket_counter = Milestone::new("stage2b/fold", "buckets", 10);
     let fold_row_counter = Milestone::new("stage2b/fold", "cruise rows", 100_000);
     let inputs = allocation::fold_inputs(&spill_dir)?;
@@ -265,6 +260,16 @@ pub fn run_stage_2b_phase(
         .num_threads(workers)
         .build()?;
     receipt::begin_fold(&spill_dir)?;
+    // A z9 without cruise activity this run would otherwise keep a prior-run
+    // file, possibly with an older schema the popup reader refuses.
+    let wiped = crate::wipe::wipe_stale_arrows_for_scope(prepared_year_dir, "cruise.arrow", scope)?;
+    if wiped > 0 {
+        eprintln!(
+            "{} [stage2b] wiped {wiped} stale cruise.arrow file(s) before write",
+            ts()
+        );
+    }
+    let squares_written = AtomicU64::new(0);
     pool.install(|| {
         inputs.par_iter().try_for_each(|input| -> Result<()> {
             let parts = &input.parts;
@@ -272,17 +277,25 @@ pub fn run_stage_2b_phase(
                 fold_bucket_counter.add(1);
                 return Ok(());
             }
-            let by_square = fold_raw_parts(parts)?;
-            let canonical_rows = scatter_finalized_cruise(
-                by_square
-                    .into_values()
-                    .flat_map(|map| map.into_iter().map(|(key, accum)| accum.finalize(key))),
-                &support_dir,
-                &part_id,
-                n_days,
-                scope,
-            )?;
-            // Support parts are synced before retiring their reconstructible raw input.
+            let mut canonical_rows = 0;
+            for (square, buckets) in fold_raw_parts(parts)? {
+                if scope.is_some_and(|scope| !scope.contains_square(square)) {
+                    continue;
+                }
+                let mut rows: Vec<CruiseBucket> = buckets
+                    .into_iter()
+                    .map(|(key, accum)| accum.finalize(key))
+                    .collect();
+                rows.sort_unstable_by_key(|r| (r.cruise_cell_id, r.class, r.fl_bin, r.period));
+                canonical_rows += rows.len() as u64;
+                write_cruise(
+                    &prepared_year_dir.join(square_path(square)).join("cruise.arrow"),
+                    &rows,
+                    n_days,
+                )?;
+                squares_written.fetch_add(1, Ordering::Relaxed);
+            }
+            // Published owner files are durable before their raw input retires.
             for path in parts {
                 std::fs::remove_file(path)?;
             }
@@ -291,16 +304,16 @@ pub fn run_stage_2b_phase(
             Ok(())
         })
     })?;
-    let (n, copied_rows) = gather_finalized_cruise(&support_dir, prepared_year_dir, scope)?;
-    let t_merge = merge_start.elapsed();
+    let n = squares_written.load(Ordering::Relaxed) as usize;
     // Completed output is durable; a failed cleanup leaves an explicitly non-resumable state.
     let _ = std::fs::remove_dir_all(&spill_dir);
 
     finished(
         "stage2b/fold",
         &format!(
-            "{n} destination z9s, {} canonical cruise rows → {copied_rows} support copies (merge {t_merge:?}, total {:?})",
+            "{n} owner z9s, {} canonical cruise rows (fold {:?}, total {:?})",
             human(fold_row_counter.total()),
+            fold_start.elapsed(),
             stage_start.elapsed()
         ),
     );

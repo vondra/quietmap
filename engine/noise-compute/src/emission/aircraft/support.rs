@@ -87,33 +87,5 @@ pub fn airborne_support_cells(start: [f32; 2], end: [f32; 2]) -> Option<BoundedS
     BoundedSquares::from_degrees(south, west, north, east)
 }
 
-/// Final stored bucket centroid/rep_len, not a raw flight or clipped z15 transit.
-pub fn cruise_support_cells(lat: f64, lon: f64, rep_len_m: f32) -> Option<BoundedSquares> {
-    if !lat.is_finite()
-        || !lon.is_finite()
-        || !rep_len_m.is_finite()
-        || !(-90.0..=90.0).contains(&lat)
-        || !(-180.0..=180.0).contains(&lon)
-    {
-        return None;
-    }
-    let radius = AIRCRAFT_MAX_HORIZONTAL_REACH_M
-        + f64::from(rep_len_m).max(crate::compute::aircraft_v6::cruise::SLANT_FLOOR_M) * 0.5;
-    let lat_pad = (radius / crate::constants::M_PER_DEG_LAT).next_up();
-    let south = (lat - lat_pad).next_down().max(-90.0);
-    let north = (lat + lat_pad).next_up().min(90.0);
-    // The centroid gate scales longitude at the RECEIVER latitude. Use its
-    // poleward extreme, including the same cosine floor, to enclose every disk.
-    let lon_pad = (radius
-        / crate::constants::m_per_deg_lon(south.abs().max(north.abs()).to_radians()))
-    .next_up();
-    BoundedSquares::from_degrees(
-        south,
-        (lon - lon_pad).next_down(),
-        north,
-        (lon + lon_pad).next_up(),
-    )
-}
-
 #[cfg(test)]
 mod tests;

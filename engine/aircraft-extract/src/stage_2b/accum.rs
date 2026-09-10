@@ -211,7 +211,8 @@ impl CruiseAccum {
             fl_bin: key.fl_bin,
             period: key.period,
             sum_length_m: self.sum_length_m,
-            rep_len_m: self.rep_len_m / lw,
+            rep_len_m: (self.rep_len_m / lw)
+                .min(noise_compute::emission::aircraft::CRUISE_MAX_REP_LEN_M),
             rep_alt_m: self.rep_alt_m / w,
             rep_speed_kt: self.rep_speed_kt / w,
             unique_count,

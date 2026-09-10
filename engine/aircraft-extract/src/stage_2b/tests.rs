@@ -142,7 +142,7 @@ fn merge_matches_sequential() {
     }
 }
 
-/// Finalized cruise rows reach their supported destinations and leave no spill scratch.
+/// Finalized cruise rows land in their owner z9 and leave no spill scratch.
 #[test]
 fn run_stage_2b_spill_and_merge_one_square() {
     use crate::arrow_io::write_segments;
@@ -338,6 +338,104 @@ fn merge_by_square(
         }
     }
     a
+}
+
+/// Each finalized bucket is published once, in its owner z9, sorted by key,
+/// with clamped rep_len, across long, polar and seam segments; a scope keeps
+/// owners inside its buffered bbox.
+#[test]
+fn fold_publishes_each_canonical_row_once_in_its_owner_square() {
+    use crate::arrow_io::read_record_batches;
+    for (start, end, scoped) in [
+        ([49.0, 14.25], [51.0, 14.25], false),
+        ([49.0, 14.25], [51.0, 14.25], true),
+        ([80.178_71, 0.0], [80.18, 0.002], false),
+        ([0.0, 179.99], [0.0, -179.99], false),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut first = cruise(42, start[0], start[1], end[0], end[1]);
+        first.callsign = "COPY42".into();
+        first.aircraft_type = *b"B738";
+        first.source_id = 2;
+        let mut second = first.clone();
+        second.flight_id = 43;
+        second.callsign = "COPY43".into();
+        let segments = [first.clone(), first, second];
+        let day = directory.path().join("segments.arrow");
+        crate::arrow_io::write_segments(&day, &segments).unwrap();
+        let scope = scoped.then(|| ScopeBbox::parse("50.3,14.0,50.5,14.5").unwrap());
+        let prepared = directory.path().join("prepared");
+        let written = run_stage_2b(&[day], &prepared, 12, scope.as_ref(), false).unwrap();
+        let mut canonical = HashMap::new();
+        for segment in &segments {
+            process_segment(segment, &mut canonical, NpdLuts::shared());
+        }
+        let mut expected: HashMap<u64, Vec<CruiseBucket>> = HashMap::new();
+        let mut canonical_length = 0.0f64;
+        for (owner, map) in canonical {
+            if scope.is_some_and(|scope| !scope.contains_square(owner)) {
+                continue;
+            }
+            for (key, accum) in map {
+                let bucket = accum.finalize(key);
+                assert_eq!(bucket.unique_count, 2);
+                assert_eq!(bucket.top_candidates.len(), 2);
+                assert_eq!(bucket.top_candidates[0].callsign, "COPY42");
+                assert!(
+                    bucket.rep_len_m <= noise_compute::emission::aircraft::CRUISE_MAX_REP_LEN_M
+                );
+                canonical_length += f64::from(bucket.sum_length_m);
+                expected.entry(owner).or_default().push(bucket);
+            }
+        }
+        if scoped {
+            let southern = crate::spatial::square_id(49.0, 14.25).unwrap();
+            assert!(
+                !expected.contains_key(&southern) && !expected.is_empty(),
+                "scope must drop owners beyond its 50 km buffer"
+            );
+        } else {
+            let original_length = segments.iter().map(|s| f64::from(s.length_m)).sum::<f64>();
+            assert!((canonical_length - original_length).abs() <= original_length * 1e-6);
+        }
+        assert_eq!(written, expected.len());
+        assert_eq!(
+            crate::spatial::square_directories(&prepared).unwrap().len(),
+            expected.len()
+        );
+        for (square, mut rows) in expected {
+            rows.sort_unstable_by_key(|r| (r.cruise_cell_id, r.class, r.fl_bin, r.period));
+            let reference = directory.path().join("reference.arrow");
+            write_cruise(&reference, &rows, 12).unwrap();
+            assert_eq!(
+                read_record_batches(&prepared.join(square_path(square)).join("cruise.arrow"))
+                    .unwrap(),
+                read_record_batches(&reference).unwrap(),
+                "all final columns and stamps at {}",
+                square_path(square)
+            );
+        }
+    }
+}
+
+/// A coverage-gap segment (200 km) is clamped to the query-radius contract.
+#[test]
+fn finalize_clamps_representative_length_to_query_contract() {
+    let seg = cruise(7, 50.0, 14.0, 51.8, 14.0);
+    assert!(seg.length_m > 190_000.0);
+    let mut by_square = HashMap::new();
+    process_segment(&seg, &mut by_square, NpdLuts::shared());
+    let (key, accum) = by_square
+        .into_values()
+        .next()
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    assert_eq!(
+        accum.finalize(key).rep_len_m,
+        noise_compute::emission::aircraft::CRUISE_MAX_REP_LEN_M
+    );
 }
 
 #[test]

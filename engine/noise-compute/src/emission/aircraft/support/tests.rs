@@ -1,25 +1,9 @@
 //! Actual popup kernels and floating-point envelope boundaries must fit publication support.
 
 use super::*;
-use crate::compute::aircraft_v6::{
-    airborne, cruise, AirborneRowView, BBox, CruiseRowView, SubSegmentSlice,
-};
+use crate::compute::aircraft_v6::{airborne, AirborneRowView, BBox, SubSegmentSlice};
 use crate::emission::aircraft::{ClassWeights, ReceiverHorizon};
-use crate::types::{RasterSampler, Receiver};
-use std::collections::HashMap;
-
-struct FlatGround;
-impl RasterSampler for FlatGround {
-    fn elevation(&self, _: f64, _: f64) -> f64 {
-        0.0
-    }
-    fn ground_g(&self, _: f64, _: f64) -> f64 {
-        1.0
-    }
-    fn building_enclosure(&self, _: f64, _: f64) -> f64 {
-        0.0
-    }
-}
+use crate::types::Receiver;
 
 #[test]
 fn periodic_selection_distinguishes_short_arcs_from_aggregate_bounds() {
@@ -187,62 +171,5 @@ fn support_contains_actual_kernel_receivers_and_rounded_bbox_edges() {
         "actual airborne positives: {airborne_positive}"
     );
 
-    let mut cruise_positive = 0;
-    for lat in [0.0, 50.0, 80.0, -80.0] {
-        for lon in [0.0, 179.99, -179.99] {
-            for rep_len_m in [5000.0_f32, 400000.0, 2778000.0] {
-                let row = CruiseRowView {
-                    lat,
-                    lon,
-                    class: 3,
-                    rep_profile_idx: profile,
-                    fl_bin: 4,
-                    period: 2,
-                    sum_length_m: 1000.0,
-                    rep_len_m,
-                    rep_alt_m: 11000.0,
-                    rep_speed_kt: 450.0,
-                    source_id: 2,
-                    origin: 0,
-                    unique_count: 1,
-                    top_candidates: &[],
-                };
-                let support = cruise_support_cells(lat, lon, rep_len_m).unwrap();
-                let (dy, dx) = cruise::cruise_synth_offsets(lat, f64::from(rep_len_m) / 2.0);
-                for fraction in [-1.05, -0.8, 0.0, 0.8, 1.05] {
-                    let rx_lat = lat + fraction * dy;
-                    if !(-90.0..=90.0).contains(&rx_lat) {
-                        continue;
-                    }
-                    let rx_lon = grid::geo::normalize_longitude(lon + fraction * dx);
-                    let receiver = Receiver::new(rx_lat, rx_lon, 0.0);
-                    let mut flights = HashMap::new();
-                    cruise::scatter(
-                        &receiver,
-                        std::slice::from_ref(&row),
-                        &FlatGround,
-                        12.0,
-                        &mut flights,
-                        &mut HashMap::new(),
-                        &mut HashMap::new(),
-                        None,
-                    );
-                    if !flights.is_empty() {
-                        cruise_positive += 1;
-                        assert!(
-                            support.contains(grid::square_of(rx_lat, rx_lon)),
-                            "{lat},{lon} len={rep_len_m} rx={rx_lat},{rx_lon}"
-                        );
-                    }
-                }
-            }
-        }
-    }
-    assert!(
-        cruise_positive >= 36,
-        "actual cruise positives: {cruise_positive}"
-    );
-    eprintln!(
-        "support actual-kernel proof: airborne={airborne_positive}, cruise={cruise_positive}"
-    );
+    eprintln!("support actual-kernel proof: airborne={airborne_positive}");
 }

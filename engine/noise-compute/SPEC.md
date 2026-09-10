@@ -17,9 +17,10 @@ the clicked position as before.
 
 Prepared airborne observations are copied once to each supported receiver cell;
 aircraft copies from neighboring cells are never added again. Equal original
-observations retain their multiplicity. Cruise aggregates canonical cells once,
-then copies complete final rows to their representative-length support cells.
-Ground sources retain their spatial owners. Surface owner selection enumerates
+observations retain their multiplicity. Cruise aggregates canonical cells once
+and publishes them only in the owner z9 (`cruise_owner_z9_v1`); the popup loads
+owner squares within `CRUISE_QUERY_RADIUS_M` and prunes batches by their
+synthetic-line envelope. Ground sources retain their spatial owners. Surface owner selection enumerates
 the existing midpoint-gate envelope, including wrapped longitude and high
 latitudes; listing requests use their own radius with unchanged per-row gates.
 Present aircraft schemas must carry a positive sampling-window stamp, including

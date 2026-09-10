@@ -85,12 +85,10 @@ pub fn scatter(
     // bucket centroid via the grid crate.
     let mut cell_accums: HashMap<(i32, i32), CellAccum> = HashMap::new();
 
-    // Centroid prefilter constants. rep_len_m is typically ~50 km
-    // (Stage 2B uses source-segment length, not clip length), so the
-    // cap dilates the 16 km horizontal reach to ~41 km worst case —
-    // still drops a meaningful share of the receiver disk's ~350 k
-    // cruise rows for praha-150km × 7 days. Detailed math at the
-    // call site below.
+    // Centroid prefilter constants. rep_len_m is the source-segment
+    // length (median ~4 km, clamped at CRUISE_MAX_REP_LEN_M), so the
+    // cap dilates the 16 km horizontal reach to CRUISE_QUERY_RADIUS_M
+    // at worst. Detailed math at the call site below.
     let m_per_lat = crate::constants::M_PER_DEG_LAT;
     let m_per_lon = crate::constants::m_per_deg_lon(receiver.lat.to_radians());
 

@@ -67,18 +67,6 @@ impl ClassFilterArg {
 
 #[derive(Subcommand)]
 pub enum Cmd {
-    /// Plan world fold/support/gather from completed spill without modifying it.
-    CruiseFinishPlan {
-        #[arg(long)]
-        spill_dir: PathBuf,
-        #[arg(long)]
-        producer_executable: PathBuf,
-        /// Independently pinned digest from the admitted spill launch receipt.
-        #[arg(long)]
-        producer_sha256: String,
-        #[arg(long)]
-        output: PathBuf,
-    },
     /// Count primary cruise transits without producing spill or prepared outputs.
     CruiseCensus {
         #[arg(long, required = true)]

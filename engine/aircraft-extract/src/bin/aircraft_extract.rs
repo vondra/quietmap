@@ -25,20 +25,6 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     init_rayon_pool(cli.max_threads)?;
     match cli.cmd {
-        Cmd::CruiseFinishPlan {
-            spill_dir,
-            producer_executable,
-            producer_sha256,
-            output,
-        } => {
-            aircraft_extract::stage_2b::plan_cruise_finish(
-                &spill_dir,
-                &producer_executable,
-                &producer_sha256,
-                &output,
-            )?;
-        }
-
         Cmd::CruiseCensus {
             segments_dir,
             output,

@@ -54,15 +54,21 @@ pub struct PointQueryData {
 
 // NACE codes are written directly into industrial.arrow by enrichment scripts.
 
-/// Select every owner in the existing surface-source midpoint gates.
-/// Airborne and cruise are support-copied and consumed only from the receiver cell.
+/// Select every owner in the existing surface-source midpoint gates and every
+/// cruise owner within reach. Airborne is support-copied and consumed only
+/// from the receiver cell.
 pub fn squares_within_reach(lat: f64, lng: f64) -> Result<Vec<grid::Square>, String> {
-    let radius = noise_compute::constants::RAILWAY_REACH_CEILING
+    let surface = noise_compute::constants::RAILWAY_REACH_CEILING
         .max(noise_compute::constants::ROAD_MAX_RADIUS[0])
         .max(noise_compute::constants::GROUND_OPS_RUNWAY_MAX_RADIUS)
         .max(BUILDING_QUERY_RADIUS_M)
         .max(INDUSTRIAL_QUERY_RADIUS_M);
-    squares_within_radius(lat, lng, radius * LINE_MIDPOINT_REACH_FACTOR)
+    squares_within_radius(
+        lat,
+        lng,
+        (surface * LINE_MIDPOINT_REACH_FACTOR)
+            .max(noise_compute::emission::aircraft::CRUISE_QUERY_RADIUS_M),
+    )
 }
 
 pub fn squares_within_radius(
@@ -136,9 +142,9 @@ pub fn collect_from_square_data(
     let receiver_square = grid::square_of(lat, lng);
     let mut n_days_from_metadata: Option<u16> = None;
     // Prune aircraft batches per square ONCE; the collection below consumes the
-    // result. Airborne shares the row/segment axis envelope. Cruise has a
-    // rep_len-dependent centroid radius, not the airborne envelope;
-    // airport traffic's row accept is a planar circle.
+    // result. Airborne shares the row/segment axis envelope. Cruise batches
+    // carry synthetic-line envelopes, so the horizontal reach gates them in
+    // every owner square; airport traffic's row accept is a planar circle.
     let airborne_gate = airborne_envelope_gate(lat, lng);
     let per_square_aircraft: Vec<(
         Vec<arrow::record_batch::RecordBatch>,
@@ -153,11 +159,11 @@ pub fn collect_from_square_data(
                 } else {
                     Vec::new()
                 },
-                if *square == receiver_square {
-                    data.aircraft_cruise.batches_all()?
-                } else {
-                    Vec::new()
-                },
+                data.aircraft_cruise.batches_within(
+                    lat,
+                    lng,
+                    noise_compute::emission::aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M,
+                )?,
                 data.aircraft_airport_traffic.batches_within(
                     lat,
                     lng,
@@ -181,12 +187,13 @@ pub fn collect_from_square_data(
     } else {
         Vec::new()
     };
-    // Support copies belong only to the receiver cell; ground rows retain their
-    // owner cells. The file stamp is the sampling window even when no row is near.
+    // Airborne support copies belong only to the receiver cell; cruise and
+    // ground rows retain their owner cells. The file stamp is the sampling
+    // window even when no row is near.
     for (square, data) in square_data {
         for arrow in [
             (*square == receiver_square).then_some(&data.aircraft_airborne),
-            (*square == receiver_square).then_some(&data.aircraft_cruise),
+            Some(&data.aircraft_cruise),
             Some(&data.aircraft_airport_traffic),
         ]
         .into_iter()
@@ -1282,6 +1289,52 @@ mod square_query_tests {
 
     fn prague() -> grid::Square {
         grid::square_of(LAT, LON)
+    }
+
+    /// Cruise buckets live once in their owner square; a receiver in the
+    /// neighbouring square within horizontal reach still collects them, and
+    /// one beyond the query radius does not load the owner at all.
+    #[test]
+    fn cruise_rows_are_read_from_neighbouring_owner_squares() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (owner_lat, owner_lon) = (50.0, 14.10);
+        let owner = grid::square_of(owner_lat, owner_lon);
+        let dir = fx::square_dir(tmp.path(), owner);
+        std::fs::create_dir_all(&dir).unwrap();
+        aircraft_extract::arrow_io::write_cruise(
+            &dir.join("cruise.arrow"),
+            &[aircraft_extract::flight::CruiseBucket {
+                cruise_cell_id: grid::cruise::cruise_cell_id(owner_lat, owner_lon),
+                class: 3,
+                rep_profile_idx: 2,
+                fl_bin: 4,
+                period: 0,
+                sum_length_m: 4000.0,
+                rep_len_m: 5000.0,
+                rep_alt_m: 11_000.0,
+                rep_speed_kt: 460.0,
+                unique_count: 1,
+                top_candidates: Vec::new(),
+                source_id: 2,
+                origin: 0,
+            }],
+            12,
+        )
+        .unwrap();
+        let near = grid::square_of(50.0, 14.0);
+        assert_ne!(near, owner);
+        let collected = collect_sources_at_point(tmp.path(), 50.0, 14.0).unwrap();
+        assert_eq!(
+            collected
+                .aircraft_cruise_batches
+                .iter()
+                .map(|b| b.num_rows())
+                .sum::<usize>(),
+            1
+        );
+        let far = collect_sources_at_point(tmp.path(), 50.0, 13.0).unwrap();
+        assert!(far.aircraft_cruise_batches.is_empty());
+        assert!(!squares_within_reach(50.0, 13.0).unwrap().contains(&owner));
     }
 
     #[test]

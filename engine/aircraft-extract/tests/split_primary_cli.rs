@@ -346,70 +346,6 @@ fn cruise_spill_and_finish_are_real_separate_cli_phases() {
         .path()
         .join("result/spill_cruise/state.sqlite")
         .exists());
-    let spill_directory = temp.path().join("result/spill_cruise");
-    let mut retained = vec![(
-        spill_directory.join("state.sqlite"),
-        identity(&spill_directory.join("state.sqlite")),
-    )];
-    for hash in std::fs::read_dir(&spill_directory).unwrap() {
-        let hash = hash.unwrap().path();
-        if !hash.is_dir() {
-            continue;
-        }
-        for file in std::fs::read_dir(hash).unwrap() {
-            let file = file.unwrap().path();
-            retained.push((file.clone(), identity(&file)));
-        }
-    }
-    use sha2::{Digest, Sha256};
-    let binary = env!("CARGO_BIN_EXE_aircraft-extract");
-    let digest = format!("{:x}", Sha256::digest(std::fs::read(binary).unwrap()));
-    let plan = temp.path().join("finish-plan.sqlite");
-    let plan_run = |digest: &str| {
-        Command::new(binary)
-            .args([
-                "cruise-finish-plan",
-                "--spill-dir",
-                spill_directory.to_str().unwrap(),
-                "--producer-executable",
-                binary,
-                "--producer-sha256",
-                digest,
-                "--output",
-                plan.to_str().unwrap(),
-            ])
-            .output()
-            .unwrap()
-    };
-    assert!(!plan_run("wrong").status.success());
-    assert!(!plan.exists());
-    let planned = plan_run(&digest);
-    assert!(
-        planned.status.success(),
-        "{}",
-        String::from_utf8_lossy(&planned.stderr)
-    );
-    assert!(
-        !prepared.exists(),
-        "planning produces no prepared or support files"
-    );
-    assert!(!spill_directory.join("support").exists());
-    for (path, before) in &retained {
-        assert_eq!(&identity(path), before);
-    }
-    let plan_db = rusqlite::Connection::open(&plan).unwrap();
-    let phase: String = plan_db
-        .query_row("SELECT phase FROM state", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(phase, "complete");
-    let predicted: Vec<(u64, u64, u64)> = plan_db
-        .prepare("SELECT square,rows,final_bytes_bound FROM destinations")
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    assert!(!predicted.is_empty());
     let finish = run("finish");
     assert!(
         finish.status.success(),
@@ -419,20 +355,12 @@ fn cruise_spill_and_finish_are_real_separate_cli_phases() {
     assert!(!square_directories(&prepared).unwrap().is_empty());
     assert!(!temp.path().join("result/spill_cruise").exists());
     assert!(!temp.path().join("unused-work").exists());
-    for (square, rows, bytes_bound) in predicted {
-        let path = prepared
-            .join(aircraft_extract::geo::square_path(square))
-            .join("cruise.arrow");
-        assert_eq!(
-            read_record_batches(&path)
-                .unwrap()
-                .1
-                .iter()
-                .map(|b| b.num_rows() as u64)
-                .sum::<u64>(),
-            rows
-        );
-        assert!(path.metadata().unwrap().len() <= bytes_bound);
+    for (_, directory) in square_directories(&prepared).unwrap() {
+        let (schema, batches) = read_record_batches(&directory.join("cruise.arrow")).unwrap();
+        assert!(batches.iter().map(|b| b.num_rows()).sum::<usize>() > 0);
+        assert!(schema
+            .metadata()
+            .contains_key(arrow_batching::QM_BATCH_BBOXES_KEY));
     }
 }
 

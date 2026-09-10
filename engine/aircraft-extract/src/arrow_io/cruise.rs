@@ -14,20 +14,49 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
-use arrow::record_batch::RecordBatch;
 
 use crate::arrow_schemas;
 use crate::flight::CruiseBucket;
 
 use super::write_record_batches;
 
+/// One owner z9's canonical buckets. Batches carry the synthetic cruise line
+/// envelopes so a receiver prunes them by distance like airborne batches.
 pub fn write_cruise(path: &Path, rows: &[CruiseBucket], n_days: u16) -> Result<()> {
-    let batch = cruise_record_batch(rows, n_days)?;
-    write_record_batches(path, batch.schema().as_ref(), std::slice::from_ref(&batch))
+    let (schema, columns, bboxes) = cruise_columns(rows, n_days)?;
+    let (schema, batches) = arrow_batching::spatially_batched(schema, columns, &bboxes)?;
+    write_record_batches(path, &schema, &batches)
 }
 
-pub(super) fn cruise_record_batch(rows: &[CruiseBucket], n_days: u16) -> Result<RecordBatch> {
+/// Envelope of the synthetic line the popup centres on the bucket.
+fn cruise_row_bbox(lat: f64, lon: f64, rep_len_m: f32) -> arrow_batching::RowBbox {
+    let (lat_off, lon_off) = noise_compute::compute::aircraft_v6::cruise::cruise_synth_offsets(
+        lat,
+        f64::from(rep_len_m.max(noise_compute::compute::aircraft_v6::cruise::SLANT_FLOOR_M as f32))
+            * 0.5,
+    );
+    let (west, east) = if lon - lon_off < -180.0 || lon + lon_off > 180.0 {
+        (-180.0, 180.0)
+    } else {
+        (lon - lon_off, lon + lon_off)
+    };
+    [
+        (lat - lat_off).max(-90.0),
+        west,
+        (lat + lat_off).min(90.0),
+        east,
+    ]
+}
+
+type CruiseColumns = (
+    arrow::datatypes::Schema,
+    Vec<ArrayRef>,
+    Vec<arrow_batching::RowBbox>,
+);
+
+fn cruise_columns(rows: &[CruiseBucket], n_days: u16) -> Result<CruiseColumns> {
     let schema = arrow_schemas::with_n_days(arrow_schemas::cruise_schema(), n_days);
+    let mut bboxes = Vec::with_capacity(rows.len());
     let n = rows.len();
     let mut lon = Float64Builder::with_capacity(n);
     let mut lat = Float64Builder::with_capacity(n);
@@ -56,7 +85,14 @@ pub(super) fn cruise_record_batch(rows: &[CruiseBucket], n_days: u16) -> Result<
     let mut running = 0usize;
 
     for r in rows {
+        anyhow::ensure!(
+            r.rep_len_m.is_finite()
+                && r.rep_len_m <= noise_compute::emission::aircraft::CRUISE_MAX_REP_LEN_M,
+            "cruise rep_len_m {} exceeds the query radius contract",
+            r.rep_len_m
+        );
         let center = grid::cruise::cruise_centroid(r.cruise_cell_id);
+        bboxes.push(cruise_row_bbox(center.1, center.0, r.rep_len_m));
         lon.append_value(center.0);
         lat.append_value(center.1);
         class.append_value(r.class);
@@ -120,7 +156,7 @@ pub(super) fn cruise_record_batch(rows: &[CruiseBucket], n_days: u16) -> Result<
         Arc::new(source_id.finish()),
         Arc::new(origin.finish()),
     ];
-    Ok(RecordBatch::try_new(schema, columns)?)
+    Ok((schema.as_ref().clone(), columns, bboxes))
 }
 
 #[cfg(test)]
@@ -178,6 +214,48 @@ mod tests {
         write_cruise(&p, &cs, 1).unwrap();
         let (_, batches) = read_record_batches(&p).unwrap();
         assert_eq!(batches[0].num_rows(), 1);
+    }
+
+    /// Batches carry synthetic-line envelopes, large owners split into
+    /// several batches, and a row beyond the query radius contract is refused.
+    #[test]
+    fn cruise_batches_carry_line_envelopes_and_reject_overlong_rows() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("cruise.arrow");
+        let rows: Vec<_> = (0..(arrow_batching::TARGET_ROWS_PER_BATCH + 1))
+            .map(|i| CruiseBucket {
+                cruise_cell_id: grid::cruise::cruise_cell_id(50.0 + i as f64 * 1e-4, 14.25),
+                rep_len_m: 50_000.0,
+                ..sample_bucket()
+            })
+            .collect();
+        write_cruise(&p, &rows, 12).unwrap();
+        let (schema, batches) = read_record_batches(&p).unwrap();
+        assert_eq!(batches.len(), 2);
+        let bboxes = arrow_batching::parse_batch_bboxes(
+            schema.metadata().get(arrow_batching::QM_BATCH_BBOXES_KEY).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bboxes.len(), 2);
+        // A 50 km NE–SW line spans 25 km / √2 ≈ 17.7 km ≈ 0.159° on each side.
+        for bb in &bboxes {
+            assert!(bb[2] - bb[0] >= 0.3 && bb[2] - bb[0] < 1.0, "{bb:?}");
+        }
+        assert_eq!(schema.metadata().get("n_days").map(String::as_str), Some("12"));
+        assert_eq!(
+            cruise_row_bbox(0.0, 179.999, 5_000.0),
+            [
+                cruise_row_bbox(0.0, 0.0, 5_000.0)[0],
+                -180.0,
+                cruise_row_bbox(0.0, 0.0, 5_000.0)[2],
+                180.0
+            ]
+        );
+        let overlong = CruiseBucket {
+            rep_len_m: 50_000.5,
+            ..sample_bucket()
+        };
+        assert!(write_cruise(&p, &[overlong], 12).is_err());
     }
 
     #[test]

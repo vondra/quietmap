@@ -62,7 +62,7 @@ fn hash_executable() -> Result<Vec<u8>> {
     hash_file(&std::env::current_exe()?)
 }
 
-pub(super) fn hash_file(path: &Path) -> Result<Vec<u8>> {
+fn hash_file(path: &Path) -> Result<Vec<u8>> {
     let mut file = std::fs::File::open(path)?;
     let mut digest = Sha256::new();
     let mut buffer = [0; 65536];
@@ -141,6 +141,8 @@ pub(super) fn create(
     Ok(())
 }
 
+/// The spill receipt binds inputs, window and scope; the finish executable may
+/// differ from the producer because the raw part schema is checked on read.
 pub(super) fn verify(
     directory: &Path,
     inputs: &[(String, String)],
@@ -148,49 +150,22 @@ pub(super) fn verify(
     scope: Option<&ScopeBbox>,
     fail_on_ga: bool,
 ) -> Result<()> {
-    verify_producer(
-        directory,
-        inputs,
-        days,
-        scope,
-        fail_on_ga,
-        &executable_digest()?,
-    )
-}
-
-pub(super) fn verify_producer(
-    directory: &Path,
-    inputs: &[(String, String)],
-    days: u16,
-    scope: Option<&ScopeBbox>,
-    fail_on_ga: bool,
-    producer_digest: &[u8],
-) -> Result<()> {
     let db = Connection::open_with_flags(
         directory.join("state.sqlite"),
         OpenFlags::SQLITE_OPEN_READ_ONLY,
     )?;
-    let (phase, digest, saved_days, saved_scope, ga): (String, Vec<u8>, u16, String, u64) = db
-        .query_row(
-            "SELECT phase,executable_sha256,n_days,scope,ga_cruise FROM state",
-            [],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            },
-        )?;
+    let (phase, saved_days, saved_scope, ga): (String, u16, String, u64) = db.query_row(
+        "SELECT phase,n_days,scope,ga_cruise FROM state",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
     anyhow::ensure!(
         phase == "spill-complete",
         "cruise spill is {phase}; partial-fold resume is not supported"
     );
     anyhow::ensure!(
-        digest == producer_digest && saved_days == days && saved_scope == scope_key(scope),
-        "cruise spill executable, sampling window or scope differs"
+        saved_days == days && saved_scope == scope_key(scope),
+        "cruise spill sampling window or scope differs"
     );
     anyhow::ensure!(
         !fail_on_ga || ga == 0,

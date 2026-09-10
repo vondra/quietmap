@@ -136,7 +136,10 @@ by receipts. Use the recorded day list and class normalization, not a hardcoded
 `--segments-dir` arguments. Keep the input paths and receipts in the execution record.
 
 After Stage 0/1: world shuffle, airport discovery, Stage 2A airborne, Stage 2B
-cruise, Stage 2C ground operations and local airport summaries. This work can overlap
+cruise, Stage 2C ground operations and local airport summaries. Stage 2B spills raw
+transits, then folds each owner z9 once into `cruise.arrow`; the popup reads owner
+squares within `CRUISE_QUERY_RADIUS_M` (16 km reach + half the 50 km representative
+length clamp), so no support copies exist for cruise. This work can overlap
 admin/enrichment because it writes separate artifact names. It requires complete
 rasters, airport inputs, verified windows, and a measured shuffle disk budget.
 Prague-only throughput is not a world completion forecast. New aircraft support

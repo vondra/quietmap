@@ -19,8 +19,6 @@ mod airport_summary;
 mod airport_traffic;
 mod allocation;
 mod cruise;
-mod cruise_allocation;
-pub(crate) use cruise_allocation::{cruise_buffers_bound, cruise_file_overhead_bound};
 mod cruise_spill;
 mod cruise_spill_counts;
 mod disk;
