@@ -3,15 +3,15 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { parseArgs } from 'node:util'
 import { DataType, tableFromIPC, type Table } from 'apache-arrow'
 import { withArrowWrite } from './lib/provenance.js'
 import { applyRoadAadt, type RoadAadt } from './lib/roads-arrow.js'
-import { bakedRoadCountryReader, listPreparedSquares, segmentGeometryReader } from './lib/prepared-grid.js'
+import {bakedRoadCountryReader, segmentGeometryReader} from './lib/prepared-grid.js'
 import { SOURCE_ID_SERVICE_TREE_HEURISTIC } from './lib/source-ids.generated.js'
 import { fleetForIso, LOCAL_MEDIUM_SHARE, LOCAL_HEAVY_SHARE, type CountryFleet } from './lib/country-fleet.js'
 import { buildGraph, findComponents, flowAccumulate, type ServiceRoad } from './lib/service-tree-flow.js'
 import { assignBuildingsGlobally, readServiceBuildings } from './lib/service-tree-buildings.js'
+import { runSquareSteps } from './lib/square-pool.js'
 
 // Historical empirical local-road caps; class 7's 400/day protects apartment
 // driveways from runaway routed flow. Tracks and highway links are not eligible.
@@ -82,12 +82,7 @@ export async function enrichServiceTreeSquare(directory: string) {
 }
 
 async function main(): Promise<void> {
-  const { values } = parseArgs({ options: { 'prepared-dir': { type: 'string' } } })
-  if (!values['prepared-dir']) throw new Error('usage: enrich-roads-service-tree.ts --prepared-dir PREPARED_YEAR_DIR')
-  const directory = resolve(values['prepared-dir'])
-  const squares = listPreparedSquares(directory, [-90, -180, 90, 180])
-  if (!squares.length) throw new Error(`${directory}: no prepared road scope`)
-  for (const square of squares) console.log(JSON.stringify({ square, ...await enrichServiceTreeSquare(resolve(directory, square)) }))
+  await runSquareSteps('usage: enrich-roads-service-tree.ts --prepared-dir PREPARED_YEAR_DIR', directory => enrichServiceTreeSquare(directory))
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

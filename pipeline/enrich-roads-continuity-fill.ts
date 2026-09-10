@@ -2,13 +2,12 @@
 
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { parseArgs } from 'node:util'
 import { withArrowWrite } from './lib/provenance.js'
 import { applyRoadAadt } from './lib/roads-arrow.js'
-import { listPreparedSquares } from './lib/prepared-grid.js'
 import { readPlanningRoads, restorePreTaperFacts } from './lib/road-planning-input.js'
 import { buildContinuityPlan, FILLABLE } from './lib/roads-continuity-plan.js'
 import { SOURCE_ID_ROAD_CONTINUITY_HEURISTIC } from './lib/source-ids.generated.js'
+import { runSquareSteps } from './lib/square-pool.js'
 
 export async function enrichContinuitySquare(path: string) {
   let counts = { rows: 0, matched: 0, retracted: 0, updated: false, anchors: 0, conflicts: 0 }
@@ -29,12 +28,7 @@ export async function enrichContinuitySquare(path: string) {
 }
 
 async function main(): Promise<void> {
-  const { values } = parseArgs({ options: { 'prepared-dir': { type: 'string' } } })
-  if (!values['prepared-dir']) throw new Error('usage: enrich-roads-continuity-fill.ts --prepared-dir PREPARED_YEAR_DIR')
-  const directory = resolve(values['prepared-dir']), squares = listPreparedSquares(directory, [-90, -180, 90, 180])
-  if (!squares.length) throw new Error(`${directory}: no prepared road scope`)
-  for (const square of squares) console.log(JSON.stringify({ square,
-    ...await enrichContinuitySquare(resolve(directory, square, 'roads.arrow')) }))
+  await runSquareSteps('usage: enrich-roads-continuity-fill.ts --prepared-dir PREPARED_YEAR_DIR', directory => enrichContinuitySquare(resolve(directory, 'roads.arrow')))
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
