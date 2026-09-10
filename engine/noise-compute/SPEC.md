@@ -20,7 +20,10 @@ aircraft copies from neighboring cells are never added again. Equal original
 observations retain their multiplicity. Cruise aggregates canonical cells once
 and publishes them only in the owner z9 (`cruise_owner_z9_v1`); the popup loads
 owner squares within `CRUISE_QUERY_RADIUS_M` and prunes batches by their
-synthetic-line envelope. Ground sources retain their spatial owners. Surface owner selection enumerates
+synthetic-line envelope. A bucket's representative length is clamped to
+`CRUISE_MAX_REP_LEN_M` (50 km): ADS-B coverage gaps up to 2 589 km stay local,
+their density rises accordingly (about +2 dB along such a gap track), and no
+bucket reaches beyond the query radius. Ground sources retain their spatial owners. Surface owner selection enumerates
 the existing midpoint-gate envelope, including wrapped longitude and high
 latitudes; listing requests use their own radius with unchanged per-row gates.
 Present aircraft schemas must carry a positive sampling-window stamp, including
