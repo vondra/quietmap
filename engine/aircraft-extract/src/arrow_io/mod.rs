@@ -15,7 +15,7 @@ use arrow::record_batch::RecordBatch;
 use crate::arrow_schemas;
 
 mod airborne;
-mod airport_summary;
+mod airport_summary_parts;
 mod airport_traffic;
 mod allocation;
 mod cruise;
@@ -32,9 +32,11 @@ mod flights;
 mod segments;
 
 pub use airborne::write_airborne;
-pub use airport_summary::{read_airport_summary, write_airport_summary, AirportSummaryRow};
-pub(crate) use airport_summary::{read_airport_summary_part, write_airport_summary_part};
-pub use airport_traffic::{read_airport_traffic, write_airport_traffic, AirportTrafficRow};
+pub(crate) use airport_summary_parts::{read_airport_summary_part, write_airport_summary_part};
+pub use airport_traffic::{
+    read_airport_summaries, read_airport_traffic, stamp_airport_summaries, write_airport_traffic,
+    AirportTrafficRow,
+};
 pub(crate) use allocation::inspect_ipc_allocation;
 pub use cruise::write_cruise;
 pub(crate) use cruise_spill::{
@@ -43,9 +45,10 @@ pub(crate) use cruise_spill::{
 pub(crate) use cruise_spill_counts::CruiseSpillCounts;
 pub use flights::{write_flights, FlightRow};
 pub(crate) use segments::{
-    for_each_segment_batch, SEGMENT_READ_CHUNK_ROWS, SEGMENT_WRITE_CHUNK_ROWS,
+    for_each_segment_batch, require_owner_shard, SEGMENT_READ_CHUNK_ROWS,
+    SEGMENT_WRITE_CHUNK_ROWS,
 };
-pub use segments::{read_segments, write_segments};
+pub use segments::{read_segments, write_owner_shard, write_segments};
 
 pub(crate) fn sibling_tmp_path(p: &Path) -> PathBuf {
     let mut name = p

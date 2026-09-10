@@ -1,4 +1,6 @@
-//! Per-sample segment geometry, phase gaps, and departure classification using dev1 physics.
+//! Per-sample segment geometry, phase gaps, departure classification and the airborne length cap.
+
+pub mod split;
 
 use crate::filters;
 use crate::flight::{segment_flags, FlightSegment, Phase};

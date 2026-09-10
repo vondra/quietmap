@@ -13,31 +13,21 @@ fn write_segments(path: &Path, rows: &[FlightSegment]) -> Result<()> {
 }
 
 fn seg(flight_id: u64, phase: Phase, lat: f32, lon: f32) -> FlightSegment {
-    FlightSegment {
-        callsign: format!("FL{flight_id:04}"),
-        aircraft_type: *b"A320",
-        flight_id,
-        profile_idx: 0,
-        source_id: 0,
-        origin: 0,
-        veh_kind: 0,
-        gse_class: 0,
-        period: 0,
-        date_id: 0,
-        phase,
-        flags: 0,
-        start_lat: lat,
-        start_lon: lon,
-        start_alt_m: 5000.0,
-        end_lat: lat + 0.001,
-        end_lon: lon + 0.001,
-        end_alt_m: 5100.0,
-        speed_kt: 300.0,
-        length_m: 200.0,
-        agl_avg_m: 1000.0,
-        start_elev_m: 0.0,
-        end_elev_m: 0.0,
-    }
+    let mut segment = FlightSegment::airborne_fixture(flight_id, lat, lon);
+    segment.phase = phase;
+    segment
+}
+
+/// The 221 km polar chord of the long-chord tests, split as the shuffle splits it.
+fn polar_chord_pieces(flight_id: u64) -> (FlightSegment, Vec<FlightSegment>) {
+    let mut chord = seg(flight_id, Phase::Airborne, 82.0, 0.0);
+    chord.end_lat = 80.0;
+    chord.end_lon = 0.0;
+    chord.length_m = crate::geo::flat_dist(82.0, 0.0, 80.0, 0.0);
+    let mut pieces = Vec::new();
+    split_airborne_segment(chord.clone(), &mut pieces);
+    assert_eq!(pieces.len(), 56, "221 km / 4 km cap");
+    (chord, pieces)
 }
 
 #[test]
@@ -68,22 +58,29 @@ fn round_trip_airborne_and_ground() {
         std::fs::read_to_string(out_dir.join("ga_days")).unwrap(),
         ""
     );
-    let airborne = list_square_shards(&out_dir, "airborne.arrow", None).unwrap();
-    let expected =
-        crate::support::airborne_segment_support(&seg(1, Phase::Airborne, 50.10, 14.26)).unwrap();
-    assert_eq!(airborne.len(), expected.cell_count());
-    for (square, path) in airborne {
-        assert!(expected.contains(grid::square_from_id(square as i64).unwrap()));
-        let rows = read_segments(&path).unwrap();
+    // Both phases: one shard, the owner of the segment's midpoint.
+    for (name, flight_id, phase) in [
+        ("airborne.arrow", 1, Phase::Airborne),
+        ("ground.arrow", 2, Phase::Ground),
+    ] {
+        let shards = list_square_shards(&out_dir, name, None).unwrap();
+        assert_eq!(shards.len(), 1);
+        assert_eq!(
+            shards[0].0,
+            owner_square(&seg(flight_id, phase, 50.10, 14.26), None).unwrap()
+        );
+        let rows = read_segments(&shards[0].1).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].flight_id, 1);
+        assert_eq!(rows[0].flight_id, flight_id);
+        crate::arrow_io::require_owner_shard(
+            crate::arrow_io::read_record_batches(&shards[0].1)
+                .unwrap()
+                .0
+                .metadata(),
+        )
+        .unwrap();
     }
     let ground = list_square_shards(&out_dir, "ground.arrow", None).unwrap();
-    assert_eq!(ground.len(), 1);
-    assert_eq!(
-        ground[0].0,
-        square_of_midpoint(&seg(2, Phase::Ground, 50.10, 14.26)).unwrap()
-    );
     let rows = read_segments(&ground[0].1).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].flight_id, 2);
@@ -183,7 +180,7 @@ fn hybrid_colliding_day_stems_merge_and_write_dual_manifests() {
         assert_eq!(
             fids,
             [1, 2],
-            "both sampling passes must survive in every support cell"
+            "both sampling passes must survive in the owner cell"
         );
     }
 }
@@ -229,28 +226,42 @@ fn hybrid_shuffle_rejects_class_or_date_window_leakage() {
     assert!(format!("{error:#}").contains("segment date"), "{error:#}");
 }
 
+/// A long chord is stored as pieces, each once, in the square owning its
+/// midpoint; identical original observations keep their multiplicity.
 #[test]
-fn airborne_destination_hash_collisions_do_not_multiply_original_rows() {
-    let mut original = seg(42, Phase::Airborne, 82.0, 0.0);
-    original.end_lat = 80.0;
-    original.end_lon = 0.0;
-    let destinations: Vec<_> = destination_squares(&original, None).unwrap().collect();
-    let hashes: std::collections::HashSet<_> =
-        destinations.iter().map(|&id| shuffle_bucket(id)).collect();
-    assert!(
-        hashes.len() < destinations.len(),
-        "fixture must exercise shared destination hashes"
-    );
+fn long_chord_pieces_are_owned_once_by_their_midpoint_squares() {
+    let (chord, pieces) = polar_chord_pieces(42);
+    let mut owners: Vec<u64> = pieces
+        .iter()
+        .map(|piece| owner_square(piece, None).unwrap())
+        .collect();
+    owners.sort_unstable();
+    owners.dedup();
+    assert!(owners.len() > 1, "fixture must span several owner squares");
     let tmp = tempfile::tempdir().unwrap();
     let day = tmp.path().join("2025-07-01.arrow");
-    write_segments(&day, &[original.clone(), original]).unwrap();
+    write_segments(&day, &[chord.clone(), chord]).unwrap();
     let out = tmp.path().join("shuffled");
     shuffle_per_square(&[day], &[], &out, None).unwrap();
     let shards = list_square_shards(&out, "airborne.arrow", None).unwrap();
-    assert_eq!(shards.len(), destinations.len());
-    for (_, path) in shards {
-        assert_eq!(read_segments(&path).unwrap().len(), 2);
+    assert_eq!(
+        shards.iter().map(|(square, _)| *square).collect::<Vec<_>>(),
+        owners
+    );
+    let mut stored = 0;
+    for (square, path) in shards {
+        let rows = read_segments(&path).unwrap();
+        assert!(rows.len() >= 2 && rows.len().is_multiple_of(2));
+        for row in &rows {
+            assert_eq!(owner_square(row, None), Some(square));
+            assert!(
+                row.length_m
+                    <= noise_compute::emission::aircraft::AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M
+            );
+        }
+        stored += rows.len();
     }
+    assert_eq!(stored, 2 * 56);
 }
 
 #[test]
@@ -258,9 +269,7 @@ fn streamed_parts_preserve_order_and_fields_across_flushes_and_input_batches() {
     use crate::arrow_io::{read_record_batches, write_record_batches};
     let tmp = tempfile::tempdir().unwrap();
     let day = tmp.path().join("2025-07-01.arrow");
-    let mut airborne = seg(42, Phase::Airborne, 82.0, 0.0);
-    airborne.end_lat = 80.0;
-    airborne.end_lon = 0.0;
+    let (airborne, _) = polar_chord_pieces(42);
     let ground = seg(99, Phase::Ground, 50.1, 14.26);
     let mut later = airborne.clone();
     later.flight_id = 43;
@@ -287,7 +296,7 @@ fn streamed_parts_preserve_order_and_fields_across_flushes_and_input_batches() {
                 assert_eq!(
                     part.len(),
                     1,
-                    "one-row budget must flush inside support expansion"
+                    "one-row budget must flush between the pieces of one chord"
                 );
                 scattered_rows += part.len() as u64;
             }
@@ -301,12 +310,13 @@ fn streamed_parts_preserve_order_and_fields_across_flushes_and_input_batches() {
     let gathered = tmp.path().join("gathered");
     pass_b(&temp, &gathered, None, &counts).unwrap();
     let mut expected: HashMap<(&str, u64), Vec<FlightSegment>> = HashMap::new();
+    let mut pieces = Vec::new();
     for row in rows {
-        for square in destination_squares(&row, None).unwrap() {
-            expected
-                .entry((phase_name(row.phase).unwrap(), square))
-                .or_default()
-                .push(row.clone());
+        let phase = phase_name(row.phase).unwrap();
+        split_airborne_segment(row, &mut pieces);
+        for piece in pieces.drain(..) {
+            let square = owner_square(&piece, None).unwrap();
+            expected.entry((phase, square)).or_default().push(piece);
         }
     }
     let mut actual_count = 0;
@@ -318,7 +328,7 @@ fn streamed_parts_preserve_order_and_fields_across_flushes_and_input_batches() {
     assert_eq!(actual_count, expected.len());
     for ((phase, square), rows) in expected {
         let reference = tmp.path().join("reference.arrow");
-        crate::arrow_io::write_segments(&reference, &rows).unwrap();
+        crate::arrow_io::write_owner_shard(&reference, &rows).unwrap();
         assert_eq!(
             read_record_batches(
                 &gathered
@@ -343,7 +353,7 @@ fn failed_gather_reclaims_only_completed_phases_and_restarts_from_original_days(
     let original_bytes = std::fs::read(&day).unwrap();
     let temporary = tmp.path().join("temp_shuffle");
     let counts = scatter_day(&day, "air", false, &temporary, None, PASS_A_SPILL_BYTES).unwrap();
-    let owner = square_of_midpoint(&ground).unwrap();
+    let owner = owner_square(&ground, None).unwrap();
     let hash = shuffle_bucket(owner);
     let airborne_parts =
         list_pass_a_parts(&pass_a_bucket_dir(&temporary, "airborne", hash)).unwrap();
@@ -376,16 +386,19 @@ fn failed_gather_reclaims_only_completed_phases_and_restarts_from_original_days(
     );
 }
 
-/// A single stored hash copy expands to several destination vectors at gather.
+/// Every piece is counted for its owner so gather can reserve each destination.
 #[test]
-fn gather_budget_counts_support_copies_and_reserves_each_destination() {
+fn gather_budget_counts_pieces_and_reserves_each_owner() {
     let tmp = tempfile::tempdir().unwrap();
     let day = tmp.path().join("2025-07-01.arrow");
-    let mut row = seg(7, Phase::Airborne, 82.0, 0.0);
-    row.end_lat = 80.0;
-    row.end_lon = 0.0;
-    let destinations: Vec<_> = destination_squares(&row, None).unwrap().collect();
-    write_segments(&day, &vec![row.clone(); 17]).unwrap();
+    let (chord, pieces) = polar_chord_pieces(7);
+    let mut per_owner: HashMap<u64, usize> = HashMap::new();
+    for piece in &pieces {
+        *per_owner
+            .entry(owner_square(piece, None).unwrap())
+            .or_default() += 1;
+    }
+    write_segments(&day, &vec![chord; 17]).unwrap();
     let counts = scatter_day(
         &day,
         "air",
@@ -395,13 +408,13 @@ fn gather_budget_counts_support_copies_and_reserves_each_destination() {
         PASS_A_SPILL_BYTES,
     )
     .unwrap();
-    assert!(counts.scattered_rows < 17 * destinations.len() as u64);
-    for square in destinations {
-        assert_eq!(counts.rows(Phase::Airborne, square), 17);
+    assert_eq!(counts.scattered_rows, 17 * pieces.len() as u64);
+    for (square, owned) in per_owner {
+        assert_eq!(counts.rows(Phase::Airborne, square), 17 * owned);
         assert_eq!(counts.rows(Phase::Ground, square), 0);
     }
     // The budget must cover more than the compact on-disk hash rows; it also
-    // retains destination copies, their strings, and the active Arrow writer.
+    // retains destination rows, their strings, and the active Arrow writer.
     assert!(counts.largest_gather_allocation() > 5 * PASS_A_SPILL_BYTES);
 }
 
@@ -412,7 +425,7 @@ fn gather_rejects_missing_destination_parts() {
         let tmp = tempfile::tempdir().unwrap();
         let day = tmp.path().join("2025-07-01.arrow");
         let row = seg(1, Phase::Ground, 50.10, 14.26);
-        let owner = square_of_midpoint(&row).unwrap();
+        let owner = owner_square(&row, None).unwrap();
         let hash = shuffle_bucket(owner);
         let missing = (0..=grid::MAX_SQUARE_ID as u64)
             .find(|&square| square != owner && shuffle_bucket(square) == hash)

@@ -29,7 +29,7 @@
 //!   emission kernel.
 //! * [`segment_sel`] — single-shot per-segment SEL wrappers (popup +
 //!   tests).
-//! * [`support`] — publication envelopes derived from the popup's geometric gates.
+//! * [`support`] — the periodic receiver envelope every airborne gate shares.
 
 mod doc29;
 mod ground_ops;

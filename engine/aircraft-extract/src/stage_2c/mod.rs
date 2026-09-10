@@ -1,4 +1,4 @@
-//! Ground operations: traffic and globally deduplicated airport summaries in their owner cells.
+//! Ground operations: traffic per owner cell, each file's footer carrying its airports' global unions.
 use crate::scope::ScopeBbox;
 use anyhow::Result;
 use noise_compute::types::AirportArea;
@@ -10,7 +10,7 @@ pub mod airport_traffic;
 pub mod airport_line_index;
 pub mod airport_traffic_writer;
 pub(crate) mod movements;
-pub const AIRPORT_SUMMARY_FILENAME: &str = "airport_summary.arrow";
+pub const AIRPORT_TRAFFIC_FILENAME: &str = "airport_traffic.arrow";
 
 pub fn run_stage_2c(
     segments_by_square_dir: &Path,
@@ -46,19 +46,15 @@ pub fn run_stage_2c(
     airport_summary_reduce::run_airport_summary_reduce(&parts, &pending)?;
     // No old prepared output is removed until all counter and global-union
     // admission and writes succeed. This is a fresh-run boundary, not resume.
-    for name in ["airport_traffic.arrow", AIRPORT_SUMMARY_FILENAME] {
-        crate::wipe::wipe_stale_arrows_for_scope(prepared_year_dir, name, scope)?;
-    }
+    crate::wipe::wipe_stale_arrows_for_scope(prepared_year_dir, AIRPORT_TRAFFIC_FILENAME, scope)?;
     for (_, directory) in crate::spatial::square_directories(&pending)? {
         let relative = directory.strip_prefix(&pending)?;
         let destination = prepared_year_dir.join(relative);
         crate::arrow_io::create_directory_all_synced(&destination)?;
-        for name in ["airport_traffic.arrow", AIRPORT_SUMMARY_FILENAME] {
-            let source = directory.join(name);
-            if source.try_exists()? {
-                std::fs::rename(&source, destination.join(name))?;
-                std::fs::File::open(&destination)?.sync_all()?;
-            }
+        let source = directory.join(AIRPORT_TRAFFIC_FILENAME);
+        if source.try_exists()? {
+            std::fs::rename(&source, destination.join(AIRPORT_TRAFFIC_FILENAME))?;
+            std::fs::File::open(&destination)?.sync_all()?;
         }
     }
     std::fs::remove_dir_all(&pending)?;

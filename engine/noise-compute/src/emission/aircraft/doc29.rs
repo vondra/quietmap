@@ -413,7 +413,7 @@ pub fn segment_energy_kernel<const WANT_CPA: bool>(
     horizon: Option<&ReceiverHorizon>,
     buildings: Option<&BuildingHorizon>,
 ) -> Option<AircraftKernelResult> {
-    segment_energy_kernel_inner::<WANT_CPA, false>(
+    segment_energy_kernel_inner::<WANT_CPA, false, true>(
         ax,
         ay,
         sdx,
@@ -446,7 +446,7 @@ pub fn segment_energy_kernel<const WANT_CPA: bool>(
 /// the caller can retain the pre-screen energy and report a real impact.
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) fn segment_energy_kernel_with_screening<const WANT_CPA: bool>(
+pub(crate) fn segment_energy_kernel_with_screening<const WANT_CPA: bool, const FLOOR: bool>(
     ax: f64,
     ay: f64,
     sdx: f64,
@@ -472,7 +472,7 @@ pub(crate) fn segment_energy_kernel_with_screening<const WANT_CPA: bool>(
     horizon: Option<&ReceiverHorizon>,
     buildings: Option<&BuildingHorizon>,
 ) -> Option<AircraftKernelResult> {
-    segment_energy_kernel_inner::<WANT_CPA, true>(
+    segment_energy_kernel_inner::<WANT_CPA, true, FLOOR>(
         ax,
         ay,
         sdx,
@@ -502,7 +502,13 @@ pub(crate) fn segment_energy_kernel_with_screening<const WANT_CPA: bool>(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-fn segment_energy_kernel_inner<const WANT_CPA: bool, const RETAIN_SCREENED: bool>(
+/// `FLOOR = false` returns a result below the 20 dB event floor: the popup
+/// applies the floor to a split chord's summed pieces instead.
+fn segment_energy_kernel_inner<
+    const WANT_CPA: bool,
+    const RETAIN_SCREENED: bool,
+    const FLOOR: bool,
+>(
     ax: f64,
     ay: f64,
     sdx: f64,
@@ -578,14 +584,14 @@ fn segment_energy_kernel_inner<const WANT_CPA: bool, const RETAIN_SCREENED: bool
         // g(α) = α/(1+α²) + atan(α) is monotone ⇒ g2 − g1 ∈ (0, π) ⇒ f ≤ 1).
         // So the fast-path sel ≤ sel_npd + seg_dv; if that ceiling is already
         // below the 20 dB floor the segment can never clear it — skip ΔF.
-        if sel_npd + seg_dv < 20.0 {
+        if FLOOR && sel_npd + seg_dv < 20.0 {
             return None;
         }
         let q_m = t * slen;
         let df = fast_delta_f(q_m, slen, d_bar_m);
         let free_sel = sel_npd + seg_dv + df;
         let mut sel = free_sel;
-        if sel < 20.0 {
+        if FLOOR && sel < 20.0 {
             return None;
         }
         // C2 terrain-horizon screening, CFFK arm. Precheck (delta 3):
@@ -623,7 +629,7 @@ fn segment_energy_kernel_inner<const WANT_CPA: bool, const RETAIN_SCREENED: bool
         // drops below 20 dB is inaudible and must be culled exactly like
         // an unscreened one (the pre-ΔF ceiling check above is an upper
         // bound that screening only tightens, so it stays valid).
-        if !RETAIN_SCREENED && sel < 20.0 {
+        if FLOOR && !RETAIN_SCREENED && sel < 20.0 {
             return None;
         }
         return Some(AircraftKernelResult {
@@ -681,7 +687,7 @@ fn segment_energy_kernel_inner<const WANT_CPA: bool, const RETAIN_SCREENED: bool
 
     let free_sel = sel_npd + seg_dv + di - lambda + df;
     let mut sel = free_sel;
-    if sel < 20.0 {
+    if FLOOR && sel < 20.0 {
         return None;
     }
     // C2 terrain-horizon screening, full arm (same delta-3 precheck as
@@ -712,7 +718,7 @@ fn segment_energy_kernel_inner<const WANT_CPA: bool, const RETAIN_SCREENED: bool
     let diffraction_db = terrain_dz.max(building_dz);
     sel -= (diffraction_db - lambda).max(0.0);
     // Post-screening floor, same rationale as the CFFK arm.
-    if !RETAIN_SCREENED && sel < 20.0 {
+    if FLOOR && !RETAIN_SCREENED && sel < 20.0 {
         return None;
     }
     // CPA-only — `beta_deg` never feeds `sel` (ΔI uses u² above). Skipped on the

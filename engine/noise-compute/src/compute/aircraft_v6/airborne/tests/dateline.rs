@@ -1,6 +1,7 @@
 //! The same physical flight and ridge must survive a longitude seam unchanged.
 
 use super::*;
+use crate::types::AircraftSegment;
 use grid::geo::{normalize_longitude, wrapped_longitude_delta};
 
 // This z18 longitude step is exact on both the prepared grid and f32 at ±180°.
@@ -14,7 +15,7 @@ fn scene(receiver_lat: f64, receiver_lon: f64, eastbound: bool, side: f64) -> [f
     } else {
         (side * 2.0, -4.0, side * 2.0, 4.0)
     };
-    let mut columns = one_subseg("B738");
+    let mut columns = one_subseg(1, "B738");
     let start = grid::lonlat_to_grid(
         f64::from(normalize_longitude(receiver_lon + start_x * STEP_DEG) as f32),
         f64::from((receiver_lat + start_y * STEP_DEG) as f32),
@@ -26,21 +27,20 @@ fn scene(receiver_lat: f64, receiver_lon: f64, eastbound: bool, side: f64) -> [f
     // Translate stored grid vertices exactly; projection floor rounding is
     // independently covered by the producer roundtrip selection tests.
     let grid_x = |lon: f64| ((lon / 360.0 * (1u64 << 30) as f64).round() as i64 + (1 << 29)) as i32;
-    columns.start_gx = [grid_x(normalize_longitude(
-        receiver_lon + start_x * STEP_DEG,
-    ))];
-    columns.start_gy = [start.1];
-    columns.end_gx = [grid_x(normalize_longitude(receiver_lon + end_x * STEP_DEG))];
-    columns.end_gy = [end.1];
-    columns.alt = [20];
-    columns.flags = [1];
-    columns.length = [(8.0
+    columns.start_gx[0] = grid_x(normalize_longitude(receiver_lon + start_x * STEP_DEG));
+    columns.start_gy[0] = start.1;
+    columns.end_gx[0] = grid_x(normalize_longitude(receiver_lon + end_x * STEP_DEG));
+    columns.end_gy[0] = end.1;
+    columns.start_alt[0] = 20;
+    columns.end_alt[0] = 20;
+    columns.flags[0] = 1;
+    columns.length[0] = (8.0
         * STEP_DEG
         * if eastbound {
             longitude_scale
         } else {
             aircraft::M_PER_DEG_LAT
-        }) as f32];
+        }) as f32;
     let horizon = aircraft::ReceiverHorizon::build(
         |lat, lon| {
             let offset = side
@@ -59,10 +59,11 @@ fn scene(receiver_lat: f64, receiver_lon: f64, eastbound: bool, side: f64) -> [f
         receiver_lon,
         receiver.altitude_m(),
     );
-    let row = one_subseg_row(1, "B738", &columns);
+    let batches = columns.batches(usize::MAX);
+    let row = &batches[0];
     let flights = scatter(
         &receiver,
-        &[row],
+        &batches,
         1.0,
         &aircraft::ClassWeights::uniform(),
         &horizon,
@@ -77,21 +78,21 @@ fn scene(receiver_lat: f64, receiver_lon: f64, eastbound: bool, side: f64) -> [f
         flight.free_period_energy[0] > flight.period_energy[0],
         "ridge must screen: lat={receiver_lat} lon={receiver_lon} eastbound={eastbound} side={side}"
     );
-    let start = row.sub_segments.start_lat_lon(0);
-    let end = row.sub_segments.end_lat_lon(0);
+    let start = row.start_lat_lon(0);
+    let end = row.end_lat_lon(0);
     let segment = AircraftSegment {
         flight_id: 1,
-        profile_idx: row.profile_idx,
+        profile_idx: columns.profile[0],
         is_departure: true,
         on_ground: false,
         period: 0,
         date_id: 0,
         start_lat: start[0] as f64,
         start_lon: start[1] as f64,
-        start_alt_m: f32::from(columns.alt[0]),
+        start_alt_m: f32::from(columns.start_alt[0]),
         end_lat: end[0] as f64,
         end_lon: end[1] as f64,
-        end_alt_m: f32::from(columns.alt[0]),
+        end_alt_m: f32::from(columns.end_alt[0]),
         speed_kt: columns.speed[0],
         segment_length_m: columns.length[0],
         count_weight: 1.0,

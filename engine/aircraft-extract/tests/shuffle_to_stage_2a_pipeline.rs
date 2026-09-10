@@ -1,12 +1,15 @@
-//! Actual shuffle and Stage2A IPC preserve support coverage, original multiplicity, and rerun cleanup.
+//! Actual shuffle and Stage 2A IPC store every sub-segment once, split long chords, and clean reruns.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use aircraft_extract::arrow_io::{read_record_batches, write_segments};
 use aircraft_extract::flight::{FlightSegment, Phase};
 use aircraft_extract::shuffle::shuffle_per_square;
-use aircraft_extract::spatial::{square_directories, square_id, square_path};
+use aircraft_extract::spatial::{square_directories, square_id};
 use aircraft_extract::stage_2a::run_stage_2a;
+use arrow::array::{Array, Float32Array, Int32Array, UInt64Array};
+use noise_compute::emission::aircraft::AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M;
 
 fn seg(flight_id: u64, phase: Phase, lat: f32, lon: f32) -> FlightSegment {
     FlightSegment {
@@ -36,16 +39,6 @@ fn seg(flight_id: u64, phase: Phase, lat: f32, lon: f32) -> FlightSegment {
     }
 }
 
-fn support_of(segment: &FlightSegment) -> Vec<u64> {
-    let mut ids: Vec<_> = aircraft_extract::support::airborne_segment_support(segment)
-        .unwrap()
-        .iter()
-        .map(|square| grid::square_id(square) as u64)
-        .collect();
-    ids.sort_unstable();
-    ids
-}
-
 fn write_day(segments_dir: &std::path::Path, day: &str, segs: &[FlightSegment]) -> PathBuf {
     let path = segments_dir.join(format!("{day}.arrow"));
     let mut segs = segs.to_vec();
@@ -64,58 +57,144 @@ fn list_square_dirs(root: &std::path::Path) -> Vec<u64> {
         .collect()
 }
 
+/// Every prepared airborne row under `prepared_year`, keyed by its decoded
+/// start point and flight: `(square, flight_id, length_m, start_lon, end_lon)`.
+fn prepared_rows(prepared_year: &std::path::Path) -> Vec<(u64, u64, f32, f64, f64)> {
+    let mut rows = Vec::new();
+    for (square, directory) in square_directories(prepared_year).unwrap() {
+        let (_, batches) = read_record_batches(&directory.join("airborne.arrow")).unwrap();
+        for batch in &batches {
+            let column = |name: &str| batch.column_by_name(name).unwrap();
+            let flight_id = column("flight_id")
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap();
+            let length = column("length_m")
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .unwrap();
+            let lon_of = |name: &str| {
+                let gx = column(name).as_any().downcast_ref::<Int32Array>().unwrap();
+                gx.values()
+                    .iter()
+                    .map(|&gx| square_store::grid_cols::grid_cell_lonlat(gx, 0).0)
+                    .collect::<Vec<_>>()
+            };
+            let (start_lon, end_lon) = (lon_of("start_gx"), lon_of("end_gx"));
+            for i in 0..batch.num_rows() {
+                rows.push((
+                    square,
+                    flight_id.value(i),
+                    length.value(i),
+                    start_lon[i],
+                    end_lon[i],
+                ));
+            }
+        }
+    }
+    rows
+}
+
 /// Happy path: 2 days of mixed-phase segments → shuffle → Stage 2A
-/// produces an airborne.arrow per z9 that the segments visited.
+/// produces one airborne.arrow per owner z9 with one row per sub-segment.
 #[test]
-fn shuffle_then_stage_2a_writes_per_square_outputs() {
+fn shuffle_then_stage_2a_writes_one_row_per_sub_segment_in_the_owner_square() {
     let tmp = tempfile::tempdir().unwrap();
     let segments_dir = tmp.path().join("segments");
     let by_square_dir = tmp.path().join("segments_by_square");
     let prepared_year_dir = tmp.path().join("prepared_year");
     std::fs::create_dir_all(&segments_dir).unwrap();
 
-    let cz_lat = 50.10;
-    let cz_lon = 14.26;
-    let nyc_lat = 40.71;
-    let nyc_lon = -74.00;
-
+    let (cz_lat, cz_lon) = (50.10, 14.26);
+    let (nyc_lat, nyc_lon) = (40.71, -74.00);
     let day1 = vec![
         seg(1, Phase::Airborne, cz_lat, cz_lon),
         seg(2, Phase::Ground, cz_lat, cz_lon),
         seg(3, Phase::Cruise, cz_lat, cz_lon), // dropped by shuffle
         seg(4, Phase::Airborne, nyc_lat, nyc_lon),
     ];
-    let day2 = vec![seg(5, Phase::Airborne, cz_lat, cz_lon)];
+    let day2 = vec![
+        seg(5, Phase::Airborne, cz_lat, cz_lon),
+        seg(5, Phase::Airborne, cz_lat + 0.002, cz_lon),
+    ];
     let day1_path = write_day(&segments_dir, "2025-01-21", &day1);
     let day2_path = write_day(&segments_dir, "2025-01-22", &day2);
-
     shuffle_per_square(&[day1_path, day2_path], &[], &by_square_dir, None).unwrap();
 
     let square_cz = square_id(cz_lat as f64, cz_lon as f64).unwrap();
     let square_nyc = square_id(nyc_lat as f64, nyc_lon as f64).unwrap();
-    let mut expected = support_of(&day1[0]);
-    expected.extend(support_of(&day1[3]));
+    let mut expected = vec![square_cz, square_nyc];
     expected.sort_unstable();
-    expected.dedup();
     assert_eq!(list_square_dirs(&by_square_dir), expected);
-    let n_square = run_stage_2a(&by_square_dir, &prepared_year_dir, 2, 0, None).unwrap();
-    assert_eq!(n_square, expected.len());
+    assert_eq!(
+        run_stage_2a(&by_square_dir, &prepared_year_dir, 2, 0, None).unwrap(),
+        2
+    );
+    let rows = prepared_rows(&prepared_year_dir);
+    let mut per_square: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+    for (square, flight_id, ..) in &rows {
+        per_square.entry(*square).or_default().push(*flight_id);
+    }
+    assert_eq!(
+        per_square[&square_cz],
+        [1, 5, 5],
+        "flight 5 has two rows in CZ"
+    );
+    assert_eq!(per_square[&square_nyc], [4]);
+}
 
-    let cz_airborne_path = prepared_year_dir
-        .join(square_path(square_cz))
-        .join("airborne.arrow");
-    let nyc_airborne_path = prepared_year_dir
-        .join(square_path(square_nyc))
-        .join("airborne.arrow");
-    assert!(cz_airborne_path.exists());
-    assert!(nyc_airborne_path.exists());
-    // CZ saw 2 airborne flights (fid=1, fid=5); NYC saw 1 (fid=4).
-    let (_, cz_batches) = read_record_batches(&cz_airborne_path).unwrap();
-    let (_, nyc_batches) = read_record_batches(&nyc_airborne_path).unwrap();
-    let cz_rows: usize = cz_batches.iter().map(|b| b.num_rows()).sum();
-    let nyc_rows: usize = nyc_batches.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(cz_rows, 2, "CZ airborne should have 2 flight rows");
-    assert_eq!(nyc_rows, 1, "NYC airborne should have 1 flight row");
+/// Canonical ownership: a sub-segment lives in exactly one square, and a
+/// chord longer than the cap is stored as `ceil(length / cap)` pieces of
+/// equal length whose geometry chains across the owner squares it crosses.
+#[test]
+fn long_chord_is_split_once_across_its_owner_squares() {
+    let tmp = tempfile::tempdir().unwrap();
+    let segments_dir = tmp.path().join("segments");
+    std::fs::create_dir_all(&segments_dir).unwrap();
+    // 18 km due east at 50 °N: crosses a z9 column boundary near 14.0625° E.
+    let mut chord = seg(42, Phase::Airborne, 50.0, 13.95);
+    chord.end_lat = 50.0;
+    chord.end_lon = 13.95 + 18_000.0 / (111_320.0 * 50.0_f32.to_radians().cos());
+    chord.length_m = aircraft_extract::geo::flat_dist(
+        chord.start_lat,
+        chord.start_lon,
+        chord.end_lat,
+        chord.end_lon,
+    );
+    let short = seg(7, Phase::Airborne, 50.0, 13.95);
+    let day = write_day(&segments_dir, "2025-07-01", &[chord.clone(), short]);
+    let by_square = tmp.path().join("shuffled");
+    shuffle_per_square(std::slice::from_ref(&day), &[], &by_square, None).unwrap();
+    let prepared = tmp.path().join("prepared");
+    assert_eq!(run_stage_2a(&by_square, &prepared, 12, 0, None).unwrap(), 2);
+
+    let mut rows = prepared_rows(&prepared);
+    rows.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let pieces: Vec<_> = rows.iter().filter(|row| row.1 == 42).collect();
+    assert_eq!(pieces.len(), 5, "ceil(18 km / 4 km)");
+    assert!(rows
+        .iter()
+        .all(|row| row.2 <= AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M));
+    assert!(pieces
+        .iter()
+        .all(|row| (row.2 - chord.length_m / 5.0).abs() < 0.05));
+    let mut owners: Vec<u64> = pieces.iter().map(|row| row.0).collect();
+    owners.dedup();
+    assert_eq!(
+        owners.len(),
+        2,
+        "pieces are owned by both squares the chord crosses"
+    );
+    // The pieces chain start-to-end with no gap and no overlap: one polyline
+    // of the chord's length, each vertex stored exactly once.
+    let mut by_start: Vec<(f64, f64)> = pieces.iter().map(|row| (row.3, row.4)).collect();
+    by_start.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    for pair in by_start.windows(2) {
+        assert_eq!(pair[0].1, pair[1].0, "piece ends where the next starts");
+    }
+    let unsplit: Vec<_> = rows.iter().filter(|row| row.1 == 7).collect();
+    assert_eq!(unsplit.len(), 1);
+    assert_eq!(unsplit[0].2, 200.0);
 }
 
 /// `shuffle_per_square` must wipe `out_dir` at start. Without this, a
@@ -130,10 +209,8 @@ fn second_shuffle_wipes_stale_square_shards() {
     std::fs::create_dir_all(&segments_dir).unwrap();
 
     // First run: two z9s touched.
-    let cz_lat = 50.10;
-    let cz_lon = 14.26;
-    let nyc_lat = 40.71;
-    let nyc_lon = -74.00;
+    let (cz_lat, cz_lon) = (50.10, 14.26);
+    let (nyc_lat, nyc_lon) = (40.71, -74.00);
     let day_path = write_day(
         &segments_dir,
         "2025-01-21",
@@ -151,11 +228,10 @@ fn second_shuffle_wipes_stale_square_shards() {
     let cz_only_path = write_day(&segments_dir, "2025-01-22", &cz_only);
     shuffle_per_square(&[cz_only_path], &[], &by_square_dir, None).unwrap();
 
-    let after = list_square_dirs(&by_square_dir);
     assert_eq!(
-        after,
-        support_of(&cz_only[0]),
-        "second shuffle must replace the complete airborne support footprint"
+        list_square_dirs(&by_square_dir),
+        [square_id(cz_lat as f64, cz_lon as f64).unwrap()],
+        "second shuffle must replace the complete owner footprint"
     );
 }
 
@@ -176,23 +252,17 @@ fn empty_input_pipeline_is_a_clean_noop() {
     assert_eq!(n, 0);
 }
 
+/// Owner rows keep their multiplicity and bytes at polar and seam
+/// midpoints, and a scope keeps only the pieces whose own midpoint is inside.
 #[test]
-fn intact_support_copies_preserve_ipc_and_multiplicity_at_long_polar_and_seam_receivers() {
-    use aircraft_extract::arrow_io::read_segments;
-    use aircraft_extract::scope::ScopeBbox;
-    use arrow::array::ListArray;
-    for (start, end, receiver, scoped) in [
-        ([52.001, 14.26], [50.001, 14.26], [50.001, 14.261], false),
-        ([52.001, 14.26], [50.001, 14.26], [50.001, 14.261], true),
-        (
-            [80.178_71, 0.0],
-            [80.178_71, 0.001],
-            [80.05804856215623, 0.0],
-            false,
-        ),
-        ([82.0, 0.0], [80.0, 0.0], [80.0, 0.001], false),
-        ([0.0, 179.99], [0.0, -179.99], [0.001, 180.0], false),
-        ([0.0, 0.0], [0.001, 0.001], [0.0, 0.0], false),
+fn owner_shards_preserve_multiplicity_at_polar_and_seam_midpoints_and_honour_scope() {
+    for (start, end, scoped) in [
+        ([52.001, 14.26], [50.001, 14.26], false),
+        ([52.001, 14.26], [50.001, 14.26], true),
+        ([80.178_71, 0.0], [80.178_71, 0.001], false),
+        ([82.0, 0.0], [80.0, 0.0], false),
+        ([0.0, 179.99], [0.0, -179.99], false),
+        ([0.0, 0.0], [0.001, 0.001], false),
     ] {
         let tmp = tempfile::tempdir().unwrap();
         let mut airborne = seg(42, Phase::Airborne, start[0], start[1]);
@@ -207,75 +277,41 @@ fn intact_support_copies_preserve_ipc_and_multiplicity_at_long_polar_and_seam_re
             "2025-07-01",
             &[airborne.clone(), airborne.clone(), ground],
         );
-        let scope = scoped.then(|| ScopeBbox::parse("50.001,14.261,50.001,14.261").unwrap());
+        let scope = scoped.then(|| {
+            aircraft_extract::scope::ScopeBbox::parse("50.001,14.261,50.001,14.261").unwrap()
+        });
         let by_square = tmp.path().join("shuffled");
         shuffle_per_square(std::slice::from_ref(&day), &[], &by_square, scope.as_ref()).unwrap();
-        let receiver_square = square_id(receiver[0], receiver[1]).unwrap();
-        let expected: Vec<_> = support_of(&airborne)
-            .into_iter()
-            .filter(|&id| scope.as_ref().is_none_or(|scope| scope.contains_square(id)))
-            .collect();
-        assert!(expected.contains(&receiver_square));
         let output = tmp.path().join("prepared");
-        assert_eq!(
-            run_stage_2a(&by_square, &output, 12, 0, scope.as_ref()).unwrap(),
-            expected.len()
-        );
-        let original = read_segments(&day).unwrap();
-        let reference_input = tmp.path().join("reference_input");
-        write_segments(
-            &reference_input
-                .join(square_path(receiver_square))
-                .join("airborne.arrow"),
-            &original[..2],
-        )
-        .unwrap();
-        let reference_output = tmp.path().join("reference_output");
-        run_stage_2a(&reference_input, &reference_output, 12, 0, None).unwrap();
-        let reference = read_record_batches(
-            &reference_output
-                .join(square_path(receiver_square))
-                .join("airborne.arrow"),
-        )
-        .unwrap();
-        let subs = reference.1[0]
-            .column_by_name("sub_segments")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap();
-        assert_eq!(
-            subs.value_length(0),
-            2,
-            "identical original observations both contribute"
-        );
-        for id in expected {
-            assert_eq!(
-                read_record_batches(&output.join(square_path(id)).join("airborne.arrow")).unwrap(),
-                reference
-            );
-        }
-        let (mid_lat, mid_lon) =
-            aircraft_extract::geo::midpoint(start[0], start[1], end[0], end[1]);
-        let ground_owner = square_id(f64::from(mid_lat), f64::from(mid_lon)).unwrap();
-        let ground_paths =
-            aircraft_extract::shuffle::list_square_shards(&by_square, "ground.arrow", None)
-                .unwrap();
+        let written = run_stage_2a(&by_square, &output, 12, 0, scope.as_ref()).unwrap();
+        let rows = prepared_rows(&output);
+        let pieces = (airborne.length_m / AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M)
+            .ceil()
+            .max(1.0);
         if scoped {
-            assert!(
-                !scope.unwrap().contains_square(ground_owner),
-                "source owner must be outside this destination scope"
-            );
-            assert!(ground_paths.is_empty());
+            // The scope is one point inside the southern square: only the
+            // pieces owned there survive, and they survive twice.
+            let scope = scope.unwrap();
+            assert!(written >= 1);
+            assert!(rows.iter().all(|row| scope.contains_square(row.0)));
+            assert!(!rows.is_empty() && rows.len().is_multiple_of(2));
         } else {
+            assert_eq!(rows.len(), 2 * pieces as usize, "{start:?}->{end:?}");
+            // Two identical original observations remain two rows per owner.
+            let mut per_square: BTreeMap<u64, usize> = BTreeMap::new();
+            for row in &rows {
+                *per_square.entry(row.0).or_default() += 1;
+            }
+            assert!(per_square.values().all(|count| count % 2 == 0));
+            assert_eq!(per_square.len(), written);
+            let (mid_lat, mid_lon) =
+                aircraft_extract::geo::midpoint(start[0], start[1], end[0], end[1]);
+            let ground_owner = square_id(f64::from(mid_lat), f64::from(mid_lon)).unwrap();
+            let ground_paths =
+                aircraft_extract::shuffle::list_square_shards(&by_square, "ground.arrow", None)
+                    .unwrap();
             assert_eq!(ground_paths.len(), 1);
             assert_eq!(ground_paths[0].0, ground_owner);
-            let ground_reference = tmp.path().join("ground_reference.arrow");
-            write_segments(&ground_reference, &original[2..]).unwrap();
-            assert_eq!(
-                read_record_batches(&ground_paths[0].1).unwrap(),
-                read_record_batches(&ground_reference).unwrap()
-            );
         }
     }
 }

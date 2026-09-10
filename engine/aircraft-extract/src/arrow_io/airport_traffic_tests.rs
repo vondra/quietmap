@@ -132,6 +132,7 @@ fn reader_rejects_wrong_contract() {
         "airport_traffic_v3",
         "airport_traffic_v4",
         "airport_traffic_v8",
+        "airport_traffic_z9_v1",
     ] {
         use crate::arrow_io::write_record_batches;
         use std::sync::Arc;
@@ -149,4 +150,50 @@ fn reader_rejects_wrong_contract() {
             "stale_contract={stale_contract}: expected contract-mismatch error, got: {err}"
         );
     }
+}
+
+#[test]
+fn footer_summaries_round_trip_and_an_unstamped_file_names_the_reduce_step() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("airport_traffic.arrow");
+    write_airport_traffic(&path, &[sample_row()], 12, 365).unwrap();
+    let error = read_airport_summaries(&path).unwrap_err().to_string();
+    assert!(
+        error.contains("qm_airport_summaries") && error.contains("Stage 2C"),
+        "{error}"
+    );
+    let mut summaries = std::collections::BTreeMap::new();
+    summaries.insert(
+        "LKPR".to_string(),
+        AirportSummaryEntry {
+            arr_count: 100,
+            dep_count: 105,
+            gse_count_per_class: [12, 34, 56],
+            ops_count_per_kind: [205, 1100, 800],
+            ga_arr_count: 7,
+            ga_dep_count: 8,
+            ga_ops_count_per_kind: [15, 4, 0],
+        },
+    );
+    summaries.insert("AAAA".to_string(), AirportSummaryEntry::default());
+    stamp_airport_summaries(&path, &summaries).unwrap();
+    let read = read_airport_summaries(&path).unwrap();
+    assert_eq!(read.len(), 2);
+    assert_eq!(read["LKPR"], summaries["LKPR"]);
+    assert_eq!(read["AAAA"], AirportSummaryEntry::default());
+    // Rows and their z14 blocks survive the rewrite untouched, and a second
+    // stamp over the same file replaces the first: batches, blocks and rows
+    // stay as they were, nothing is counted twice.
+    assert_eq!(read_airport_traffic(&path).unwrap(), vec![sample_row()]);
+    let (schema, batches) = crate::arrow_io::read_record_batches(&path).unwrap();
+    let blocks = schema.metadata()[arrow_batching::QM_BLOCKS_KEY].clone();
+    summaries.get_mut("LKPR").unwrap().arr_count = 101;
+    stamp_airport_summaries(&path, &summaries).unwrap();
+    let again = read_airport_summaries(&path).unwrap();
+    assert_eq!(again.len(), 2);
+    assert_eq!(again["LKPR"].arr_count, 101);
+    let (schema, batches_again) = crate::arrow_io::read_record_batches(&path).unwrap();
+    assert_eq!(schema.metadata()[arrow_batching::QM_BLOCKS_KEY], blocks);
+    assert_eq!(batches_again.len(), batches.len());
+    assert_eq!(read_airport_traffic(&path).unwrap(), vec![sample_row()]);
 }

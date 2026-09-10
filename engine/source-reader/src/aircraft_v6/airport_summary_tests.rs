@@ -1,4 +1,4 @@
-//! Real Stage 2C output must supply complete local airport counts across cell boundaries.
+//! Real Stage 2C output must supply complete footer airport counts across cell boundaries.
 
 use super::*;
 use aircraft_extract::{arrow_io::*, flight::*, stage_2c::run_stage_2c};
@@ -117,11 +117,11 @@ fn stage2c_cell_summaries_preserve_popup_unions_and_refuse_incomplete_neighbors(
             2
         );
         assert!(!prepared.join("aircraft").exists());
-        let summary_path = left.join("airport_summary.arrow");
-        let rows = read_airport_summary(&summary_path).unwrap();
+        let traffic_path = left.join("airport_traffic.arrow");
+        let rows = read_airport_summaries(&traffic_path).unwrap();
         assert_eq!(
             rows,
-            read_airport_summary(&right.join("airport_summary.arrow")).unwrap()
+            read_airport_summaries(&right.join("airport_traffic.arrow")).unwrap()
         );
         let sources = crate::collect_sources_at_point(&prepared, lat + 0.001, lon).unwrap();
         assert_eq!(sources.airport_summary.lookup().len(), 1);
@@ -178,28 +178,55 @@ fn stage2c_cell_summaries_preserve_popup_unions_and_refuse_incomplete_neighbors(
         assert!(!traces.segments.is_empty());
         serde_json::to_string(&result).unwrap();
 
-        let original = std::fs::read(&summary_path).unwrap();
-        for defect in ["missing", "empty", "conflict", "duplicate", "corrupt"] {
+        let original = std::fs::read(&traffic_path).unwrap();
+        let traffic_rows = read_airport_traffic(&traffic_path).unwrap();
+        let stamp = |summaries: &std::collections::BTreeMap<_, _>| {
+            write_airport_traffic(&traffic_path, &traffic_rows, 12, 365).unwrap();
+            stamp_airport_summaries(&traffic_path, summaries).unwrap();
+        };
+        for (defect, expected) in [
+            ("unstamped", "Stage 2C"),
+            ("empty", "missing airport"),
+            ("conflict", "disagrees across cells"),
+            ("stale", "re-extract"),
+            ("corrupt", "airport_traffic"),
+        ] {
             match defect {
-                "missing" => std::fs::remove_file(&summary_path).unwrap(),
-                "empty" => write_airport_summary(&summary_path, &[]).unwrap(),
+                "unstamped" => {
+                    write_airport_traffic(&traffic_path, &traffic_rows, 12, 365).unwrap()
+                }
+                "empty" => stamp(&Default::default()),
                 "conflict" => {
-                    let mut changed = rows.clone();
-                    changed[0].airport_unique_arr_count += 1;
-                    write_airport_summary(&summary_path, &changed).unwrap();
+                    let mut changed: std::collections::BTreeMap<_, _> =
+                        rows.iter().map(|(k, v)| (k.clone(), *v)).collect();
+                    changed.get_mut("TEST").unwrap().arr_count += 1;
+                    stamp(&changed);
                 }
-                "duplicate" => {
-                    write_airport_summary(&summary_path, &[rows[0].clone(), rows[0].clone()])
+                "stale" => {
+                    let schema = aircraft_extract::arrow_schemas::with_n_days_and_windows(
+                        aircraft_extract::arrow_schemas::airport_traffic_schema(),
+                        12,
+                        365,
+                    );
+                    let mut metadata = schema.metadata().clone();
+                    metadata.insert(
+                        "airport_traffic_contract".into(),
+                        "airport_traffic_z9_v1".into(),
+                    );
+                    let stale = schema.as_ref().clone().with_metadata(metadata);
+                    FileWriter::try_new(File::create(&traffic_path).unwrap(), &stale)
                         .unwrap()
+                        .finish()
+                        .unwrap();
                 }
-                "corrupt" => std::fs::write(&summary_path, b"broken").unwrap(),
+                "corrupt" => std::fs::write(&traffic_path, b"broken").unwrap(),
                 _ => unreachable!(),
             }
             let error = crate::collect_sources_at_point(&prepared, lat + 0.001, lon).unwrap_err();
-            assert!(error.contains("airport_summary"), "{defect}: {error}");
-            std::fs::write(&summary_path, &original).unwrap();
+            assert!(error.contains(expected), "{defect}: {error}");
+            std::fs::write(&traffic_path, &original).unwrap();
         }
         assert!(crate::collect_sources_at_point(&prepared, lat + 0.001, lon).is_ok());
-        eprintln!("airport z9 owner→union→reader→popup ({lat},{lon}): global counts, hybrid normalization, local missing/empty/conflict/duplicate/corrupt PASS");
+        eprintln!("airport z9 owner→union→reader→popup ({lat},{lon}): global counts, hybrid normalization, unstamped/empty/conflict/stale/corrupt PASS");
     }
 }

@@ -3,15 +3,59 @@
 //! zero arrow / IPC dependencies — source-reader extracts the slices
 //! from `Arc<RecordBatch>` clones and hands them off here.
 
-/// Per-row borrow over an airborne sub-segment list. All slices have
-/// the same length; sub-segment `i` is fully described by index `i`
-/// across every slice.
+/// Flight identity columns of one prepared `airborne.arrow` — the values of its
+/// `flight` dictionary column, decoded once per file; a row's `flight_key`
+/// indexes them. Strings stay the Arrow offsets/bytes pair, so joining the
+/// identity of a contributing flight allocates nothing until the accumulator
+/// copies its callsign.
+#[derive(Clone, Copy, Debug)]
+pub struct AirborneFlightTable<'a> {
+    pub callsign_offsets: &'a [i32],
+    pub callsign_bytes: &'a [u8],
+    /// Four `\0`-padded ICAO typecode bytes per flight.
+    pub aircraft_type: &'a [u8],
+    pub profile_idx: &'a [u8],
+    pub source_id: &'a [u8],
+    pub origin: &'a [u8],
+}
+
+impl AirborneFlightTable<'_> {
+    pub fn len(&self) -> usize {
+        self.profile_idx.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn callsign(&self, key: usize) -> &str {
+        let bytes = &self.callsign_bytes
+            [self.callsign_offsets[key] as usize..self.callsign_offsets[key + 1] as usize];
+        std::str::from_utf8(bytes).expect("Arrow validated the callsign column as UTF-8")
+    }
+
+    pub fn aircraft_type(&self, key: usize) -> [u8; 4] {
+        self.aircraft_type[key * 4..key * 4 + 4]
+            .try_into()
+            .expect("four typecode bytes per flight")
+    }
+}
+
+/// One decoded record batch of `airborne.arrow`: flattened sub-segment rows
+/// (every slice has `len()` entries; row `i` is fully described by index `i`)
+/// and the flight table of the file the batch came from. A sub-segment is
+/// stored once, in the square owning its midpoint, so a flight's rows can
+/// arrive from several squares and are accumulated by `flight_id`.
 ///
 /// `terrain_start_elev_m` and `terrain_end_elev_m` propagate Stage 1's
-/// endpoint samples. The airborne path uses them for endpoint checks and
-/// stores no intermediate terrain elevations.
+/// endpoint samples (linearly interpolated at split points); the airborne
+/// path uses them for endpoint checks and stores no intermediate terrain.
 #[derive(Clone, Copy, Debug)]
-pub struct SubSegmentSlice<'a> {
+pub struct AirborneSegmentBatch<'a> {
+    pub flight_id: &'a [u64],
+    /// Index into `flights`.
+    pub flight_key: &'a [i32],
+    pub flights: AirborneFlightTable<'a>,
     pub start_gy: &'a [i32],
     pub start_gx: &'a [i32],
     pub start_alt_m: &'a [i16],
@@ -27,9 +71,13 @@ pub struct SubSegmentSlice<'a> {
     pub terrain_end_elev_m: &'a [i16],
 }
 
-impl SubSegmentSlice<'_> {
+impl AirborneSegmentBatch<'_> {
     pub fn len(&self) -> usize {
-        self.start_gx.len()
+        self.flight_id.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn start_lat_lon(&self, index: usize) -> [f32; 2] {
@@ -46,47 +94,11 @@ impl SubSegmentSlice<'_> {
         // Preserve the prepared popup's f32 geometry before the f64 kernel.
         [lat as f32, lon as f32]
     }
-
-    pub fn bbox(&self) -> BBox {
-        let mut min_x = i32::MAX;
-        let mut max_x = i32::MIN;
-        let mut min_y = i32::MAX;
-        let mut max_y = i32::MIN;
-        for (&gx, &gy) in self
-            .start_gx
-            .iter()
-            .zip(self.start_gy)
-            .chain(self.end_gx.iter().zip(self.end_gy))
-        {
-            min_x = min_x.min(gx);
-            max_x = max_x.max(gx);
-            min_y = min_y.min(gy);
-            max_y = max_y.max(gy);
-        }
-        // Mercator inverse is monotone; extrema need only two conversions.
-        let [min_lat, min_lon] = Self::lat_lon(min_x, min_y);
-        let [max_lat, max_lon] = Self::lat_lon(max_x, max_y);
-        BBox {
-            min_lat,
-            max_lat,
-            min_lon,
-            max_lon,
-        }
-    }
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
 }
 
-/// Axis-aligned lat/lon bbox over a row's sub-segments. Pre-stored so
-/// the popup can prune airborne rows whose envelope is outside the
-/// receiver's reach radius without expanding sub-segment columns.
-#[derive(Clone, Copy, Debug)]
-pub struct BBox {
-    pub min_lat: f32,
-    pub max_lat: f32,
-    pub min_lon: f32,
-    pub max_lon: f32,
+/// Sub-segment rows across every loaded batch.
+pub fn airborne_row_count(batches: &[AirborneSegmentBatch<'_>]) -> usize {
+    batches.iter().map(AirborneSegmentBatch::len).sum()
 }
 
 /// Number of GSE noise classes (LIGHT / MEDIUM / HEAVY). Mirrored
@@ -115,8 +127,8 @@ pub const NUM_GSE_CLASSES: usize = 3;
 ///
 /// Scalar `unique_*_count` counters plus row-replicated per-microsegment
 /// UNION `microseg_unique_*` counts remain unchanged from v6.
-/// Airport-level UNION counts live in the separate `airport_summary
-/// .arrow` sidecar (consumed via
+/// Airport-level UNION counts live in the traffic file's footer metadata
+/// (`qm_airport_summaries`, decoded into
 /// [`crate::compute::aircraft_v6::airport_traffic::AirportSummaryEntry`]).
 #[derive(Clone, Copy, Debug)]
 pub struct AirportTrafficRowView<'a> {
@@ -160,29 +172,6 @@ pub struct AirportTrafficRowView<'a> {
     pub microseg_unique_ga_count: u32,
     pub microseg_unique_ga_arr_count: u32,
     pub microseg_unique_ga_dep_count: u32,
-}
-
-/// One row of `airborne.arrow`. `flight_id` is the real ADS-B identity
-/// (or a synth id from `flight_id::pack_synth` for TIS-B / anonymous);
-/// the popup uses it for per-flight stats dedup. `callsign` and
-/// `aircraft_type` give the popup display the real flight number /
-/// ICAO typecode (M1) instead of a profile-anchor placeholder.
-///
-/// `aircraft_type` is held by value (`[u8; 4]`, 4 bytes) rather than
-/// `&'a [u8; 4]`: the source-reader / heatmap loaders read it via
-/// `FixedSizeBinaryArray::value(i)` (which yields `&[u8]` without
-/// fixed-size typing), so storing inline avoids a self-borrowing
-/// `Vec<[u8; 4]>` shim in the accumulator.
-#[derive(Clone, Copy, Debug)]
-pub struct AirborneRowView<'a> {
-    pub flight_id: u64,
-    pub callsign: &'a str,
-    pub aircraft_type: [u8; 4],
-    pub profile_idx: u8,
-    pub source_id: u8,
-    pub origin: u8,
-    pub sub_segments: SubSegmentSlice<'a>,
-    pub bbox: BBox,
 }
 
 /// One entry of `top_candidates` (v14). Identity + ranking dimension

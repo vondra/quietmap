@@ -130,13 +130,14 @@ pub fn add_v6_aircraft_to_result(
     let cruise_views = cruise_view_slices.as_row_views();
     let traffic_views = traffic_rows.views();
 
-    let total_rows = airborne_views.len() + cruise_views.len() + traffic_views.len();
+    let n_airborne_rows = noise_compute::compute::aircraft_v6::airborne_row_count(airborne_views);
+    let total_rows = n_airborne_rows + cruise_views.len() + traffic_views.len();
     if total_rows == 0 {
         return Ok(());
     }
 
     // Airborne screens against one receiver horizon; cruise is exempt.
-    let horizon = if airborne_views.is_empty() {
+    let horizon = if n_airborne_rows == 0 {
         None
     } else {
         Some(noise_compute::emission::aircraft::ReceiverHorizon::build(
@@ -151,7 +152,7 @@ pub fn add_v6_aircraft_to_result(
     let receiver_is_enclosed =
         crate::structure_store::point_inside_enclosed(obstacles, receiver.lat, receiver.lon)
             .is_some();
-    let building_horizon = (!airborne_views.is_empty() && !receiver_is_enclosed)
+    let building_horizon = (n_airborne_rows > 0 && !receiver_is_enclosed)
         .then(|| {
             noise_compute::emission::aircraft::BuildingHorizon::build(
                 obstacles,
@@ -166,7 +167,7 @@ pub fn add_v6_aircraft_to_result(
 
     let (mut air_periods, mut air_contribs, band_data) = compute_aircraft_v6(
         receiver,
-        &airborne_views,
+        airborne_views,
         &cruise_views,
         rasters,
         horizon.as_ref(),
@@ -414,6 +415,8 @@ pub(super) fn assert_cruise_contract(label: &str, batches: &[RecordBatch]) -> Re
     )
 }
 
+#[cfg(test)]
+mod airborne_owner_parity_tests;
 #[cfg(test)]
 mod airport_summary_tests;
 #[cfg(test)]

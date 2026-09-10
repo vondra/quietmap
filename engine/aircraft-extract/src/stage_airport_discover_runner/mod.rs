@@ -25,9 +25,8 @@ use crate::stage_2c::airport_traffic::{
 };
 use crate::stage_airport_discover::{discover_strips, DiscoveredStrip};
 use crate::synth_airport_io::{
-    synth_airport_key_for, synth_osm_id_for, write_synth_airport_areas, write_synth_airport_lines,
-    SynthAirportAreaRow, SynthAirportLineRow, AIRSTRIP_AEROWAY_TYPE, DISCOVERED_AIRSTRIP_NAME,
-    SYNTH_AERODROME_AEROWAY_TYPE, SYNTH_AREAS_FILE, SYNTH_LINES_FILE,
+    synth_airport_key_for, synth_osm_id_for, write_synth_airport_lines, SynthAirportLineRow,
+    AIRSTRIP_AEROWAY_TYPE, DISCOVERED_AIRSTRIP_NAME, SYNTH_LINES_FILE,
 };
 
 /// DBSCAN cluster radius. 200 m bridges adjacent ADS-B fixes along
@@ -76,7 +75,7 @@ enum ClusterDisposition<'a> {
     SynthAirport,
 }
 
-/// Validate ground shards, discover unmapped strips and replace both synthetic sidecars.
+/// Validate ground shards, discover unmapped strips and replace the synthetic line file.
 pub fn run_stage_airport_discover(
     segments_by_square_dir: &Path,
     aerodrome_index: &AerodromeIndex,
@@ -219,8 +218,8 @@ pub fn run_stage_airport_discover(
 }
 
 /// Process one z9: build candidate set, cluster, classify, emit. Always
-/// rewrites both sidecars (even empty) so a previously-populated z9
-/// that this run finds nothing in is monotonically cleared.
+/// rewrites `synth_airport_lines.arrow` (even empty) so a previously-populated
+/// z9 that this run finds nothing in is monotonically cleared.
 fn run_one_square(
     square: u64,
     candidates: &[(f32, f32)],
@@ -254,25 +253,8 @@ fn run_one_square(
         emit_lines_for_strip(strip, key, &mut rows);
         rows
     });
-    write_synth_airport_lines(&square_dir.join(SYNTH_LINES_FILE), line_rows)?;
-    let area_rows = classified
-        .iter()
-        .filter(|(_, area)| area.is_none())
-        .map(|(strip, _)| {
-            let centroid_lat = f64::from(strip.center_lat);
-            let centroid_lon = f64::from(strip.center_lon);
-            SynthAirportAreaRow {
-                osm_id: synth_osm_id_for(centroid_lat, centroid_lon),
-                airport_key: synth_airport_key_for(centroid_lat, centroid_lon),
-                name: DISCOVERED_AIRSTRIP_NAME.into(),
-                aeroway_type: SYNTH_AERODROME_AEROWAY_TYPE,
-                centroid_lat,
-                centroid_lon,
-                area_m2: strip.length_m * strip.width_m,
-            }
-        });
     // Empty streams also atomically replace stale sidecars.
-    write_synth_airport_areas(&square_dir.join(SYNTH_AREAS_FILE), area_rows)?;
+    write_synth_airport_lines(&square_dir.join(SYNTH_LINES_FILE), line_rows)?;
     Ok(!classified.is_empty())
 }
 
@@ -291,7 +273,7 @@ fn stale_synth_sidecar_squares(
         {
             continue;
         }
-        if path.join(SYNTH_LINES_FILE).exists() || path.join(SYNTH_AREAS_FILE).exists() {
+        if path.join(SYNTH_LINES_FILE).exists() {
             out.push(id);
         }
     }

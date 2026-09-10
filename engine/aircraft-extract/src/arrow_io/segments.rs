@@ -24,11 +24,45 @@ use super::{for_each_batch, required_column, write_record_batch_stream};
 pub(crate) const SEGMENT_WRITE_CHUNK_ROWS: usize = 1_000_000;
 
 pub fn write_segments(path: &Path, rows: &[FlightSegment]) -> Result<()> {
-    write_segments_chunked(path, rows, SEGMENT_WRITE_CHUNK_ROWS)
+    write_segments_chunked(path, rows, SEGMENT_WRITE_CHUNK_ROWS, None)
 }
 
-fn write_segments_chunked(path: &Path, rows: &[FlightSegment], chunk_rows: usize) -> Result<()> {
+/// Stamp of a shuffle output shard: every row is owned by this square (its
+/// midpoint) and no airborne row is longer than the length cap. A day file or
+/// a support-copy shard of the retired layout lacks it, so Stage 2A cannot
+/// flatten either into duplicated or unsplit rows.
+const OWNER_SHARD_STAMP: (&str, &str) = ("shuffle_shard", "midpoint_owner_pieces_v1");
+
+/// `write_segments` for the shuffle's per-square output, carrying [`OWNER_SHARD_STAMP`].
+pub fn write_owner_shard(path: &Path, rows: &[FlightSegment]) -> Result<()> {
+    write_segments_chunked(
+        path,
+        rows,
+        SEGMENT_WRITE_CHUNK_ROWS,
+        Some(OWNER_SHARD_STAMP),
+    )
+}
+
+pub fn require_owner_shard(metadata: &std::collections::HashMap<String, String>) -> Result<()> {
+    anyhow::ensure!(
+        metadata.get(OWNER_SHARD_STAMP.0).map(String::as_str) == Some(OWNER_SHARD_STAMP.1),
+        "not a midpoint-owned shuffle shard ({} = {:?}); rerun shuffle with the current writer",
+        OWNER_SHARD_STAMP.0,
+        metadata.get(OWNER_SHARD_STAMP.0)
+    );
+    Ok(())
+}
+
+fn write_segments_chunked(
+    path: &Path,
+    rows: &[FlightSegment],
+    chunk_rows: usize,
+    stamp: Option<(&str, &str)>,
+) -> Result<()> {
     let mut metadata = arrow_schemas::segments_schema().metadata().clone();
+    if let Some((key, value)) = stamp {
+        metadata.insert(key.into(), value.into());
+    }
     let (mut runs, mut callsign_bytes, mut previous) = (0_u64, 0_u64, None);
     for row in rows {
         if previous != Some(row.flight_id) {

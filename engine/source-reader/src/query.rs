@@ -48,13 +48,17 @@ pub struct PointQueryData {
 // NACE codes are written directly into industrial.arrow by enrichment scripts.
 
 /// Select every owner in the existing surface-source midpoint gates and every
-/// cruise owner within reach. Airborne is support-copied and consumed only
-/// from the receiver cell.
+/// cruise and airborne owner within reach. Airborne rows are owned by their
+/// midpoint square and reach at most `AIRBORNE_QUERY_RADIUS_M` (16 km + half
+/// the length cap); the radius box, the envelope and the cap share one
+/// metre-per-degree metric, so an accepted arc's owner is always loaded.
 pub fn squares_within_reach(lat: f64, lng: f64) -> Result<Vec<grid::Square>, String> {
     squares_within_radius(
         lat,
         lng,
-        surface_reach_m().max(noise_compute::emission::aircraft::CRUISE_QUERY_RADIUS_M),
+        surface_reach_m()
+            .max(noise_compute::emission::aircraft::CRUISE_QUERY_RADIUS_M)
+            .max(noise_compute::emission::aircraft::AIRBORNE_QUERY_RADIUS_M),
     )
 }
 
@@ -138,10 +142,10 @@ pub fn collect_from_square_data(
     let mut all_airport_traffic_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
     let mut airport_summary =
         crate::aircraft_v6::airport_summary_view::AirportSummaryAccum::default();
-    let receiver_square = grid::square_of(lat, lng);
     let mut n_days_from_metadata: Option<u16> = None;
     // Prune aircraft batches per square ONCE; the collection below consumes the
-    // result. Airborne shares the row/segment axis envelope. Cruise batches
+    // result. Airborne blocks carry their rows' full-geometry envelope, so the
+    // kernel's axis envelope gates them in every owner square. Cruise batches
     // carry synthetic-line envelopes, so the horizontal reach gates them in
     // every owner square; airport traffic's row accept is a planar circle.
     let airborne_gate = airborne_envelope_gate(lat, lng);
@@ -151,13 +155,9 @@ pub fn collect_from_square_data(
         Vec<arrow::record_batch::RecordBatch>,
     )> = square_data
         .iter()
-        .map(|(square, data)| {
+        .map(|(_, data)| {
             Ok((
-                if *square == receiver_square {
-                    data.aircraft_airborne.batches_where(&airborne_gate)?
-                } else {
-                    Vec::new()
-                },
+                data.aircraft_airborne.batches_where(&airborne_gate)?,
                 data.aircraft_cruise.batches_within(
                     lat,
                     lng,
@@ -186,18 +186,14 @@ pub fn collect_from_square_data(
     } else {
         Vec::new()
     };
-    // Airborne support copies belong only to the receiver cell; cruise and
-    // ground rows retain their owner cells. The file stamp is the sampling
-    // window even when no row is near.
-    for (square, data) in square_data {
+    // Every aircraft file is read from its owner cell. The file stamp is the
+    // sampling window even when no row is near.
+    for (_, data) in square_data {
         for arrow in [
-            (*square == receiver_square).then_some(&data.aircraft_airborne),
-            Some(&data.aircraft_cruise),
-            Some(&data.aircraft_airport_traffic),
-        ]
-        .into_iter()
-        .flatten()
-        {
+            &data.aircraft_airborne,
+            &data.aircraft_cruise,
+            &data.aircraft_airport_traffic,
+        ] {
             if let Some(schema) = arrow.schema() {
                 let days = schema
                     .metadata()
@@ -217,9 +213,10 @@ pub fn collect_from_square_data(
     for ((_, data), (airborne_batches, cruise_batches, airport_traffic_batches)) in
         square_data.iter().zip(per_square_aircraft)
     {
-        if !airport_traffic_batches.is_empty() {
-            airport_summary
-                .merge_square(&data.aircraft_airport_summary, &airport_traffic_batches)?;
+        // Footer-only: every opened traffic file must carry current summaries,
+        // whether or not its rows are near the click.
+        if let Some(schema) = data.aircraft_airport_traffic.schema() {
+            airport_summary.merge_square(schema, &airport_traffic_batches)?;
         }
         // The batch gate must cover the configured railway ceiling; each row's
         // exact reach is applied downstream after its emission is known.

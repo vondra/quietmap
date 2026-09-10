@@ -17,12 +17,13 @@ const GRID_QUANTUM_M = 0.037_322_767_717_044_72
 const GRID_ORIGIN = 2 ** 29
 const Z14_AXIS = 1 << 14
 const QM_BLOCKS_VERSION = 1
-const QM_BLOCK_RECORD_LEN = 2 + 2 + 4 * 8
+const QM_BLOCK_RECORD_LEN = 2 + 2 + 4 * 8 + 2 * 4
 
 /** `[south, west, north, east]` degrees: envelope of one batch's complete geometries. */
 export type QmEnvelope = readonly [number, number, number, number]
-/** One `qm_blocks` record as engine/arrow-batching `Block` defines it. */
-export interface QmBlock { cellX: number, cellY: number, bbox: QmEnvelope }
+/** One `qm_blocks` record as engine/arrow-batching `Block` defines it; `altM` is
+ *  the batch altitude range airborne writes and every surface layer stamps as `[0, 0]`. */
+export interface QmBlock { cellX: number, cellY: number, bbox: QmEnvelope, altM: readonly [number, number] }
 
 /** Global z14 cell of a point, the row-major block key of engine/arrow-batching. */
 export function z14CellOf(lat: number, lon: number): [number, number] {
@@ -34,8 +35,9 @@ export function z14CellOf(lat: number, lon: number): [number, number] {
 }
 
 /** The `qm_blocks` value for batches with these envelopes: version byte, then per
- *  batch little-endian `u16 x, u16 y, f64 south, west, north, east` (cell of the
- *  envelope midpoint), base64 — byte-identical to the Rust encoder. */
+ *  batch little-endian `u16 x, u16 y, f64 south, west, north, east, f32 0, 0` (cell
+ *  of the envelope midpoint; surface layers have no altitude range), base64 —
+ *  byte-identical to the Rust encoder. */
 export function encodeQmBlocks(envelopes: readonly QmEnvelope[]): string {
   const bytes = Buffer.alloc(1 + QM_BLOCK_RECORD_LEN * envelopes.length)
   bytes[0] = QM_BLOCKS_VERSION
@@ -45,6 +47,8 @@ export function encodeQmBlocks(envelopes: readonly QmEnvelope[]): string {
     bytes.writeUInt16LE(cellX, at)
     bytes.writeUInt16LE(cellY, at + 2)
     envelope.forEach((value, axis) => bytes.writeDoubleLE(value, at + 4 + 8 * axis))
+    bytes.writeFloatLE(0, at + 36)
+    bytes.writeFloatLE(0, at + 40)
   })
   return bytes.toString('base64')
 }
@@ -55,7 +59,8 @@ export function decodeQmBlocks(value: string): QmBlock[] {
   return Array.from({ length: (bytes.length - 1) / QM_BLOCK_RECORD_LEN }, (_, index) => {
     const at = 1 + QM_BLOCK_RECORD_LEN * index
     const bbox = [0, 1, 2, 3].map(axis => bytes.readDoubleLE(at + 4 + 8 * axis)) as [number, number, number, number]
-    return { cellX: bytes.readUInt16LE(at), cellY: bytes.readUInt16LE(at + 2), bbox }
+    const altM: [number, number] = [bytes.readFloatLE(at + 36), bytes.readFloatLE(at + 40)]
+    return { cellX: bytes.readUInt16LE(at), cellY: bytes.readUInt16LE(at + 2), bbox, altM }
   })
 }
 

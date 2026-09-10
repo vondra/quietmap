@@ -1,9 +1,9 @@
-//! `airport_traffic.arrow` writer + reader (v5).
+//! `airport_traffic.arrow` writer + reader.
 //!
-//! Rev 2: drops the per-row `flight_ids: List<UInt64>` payload. Each
-//! row now carries scalar `unique_*_count` counters plus row-replicated
-//! `microseg_unique_*` UNIONs. Airport-level UNION across z9s lives
-//! in the same cell's `airport_summary.arrow`, with identical counts in other owner cells.
+//! Each row carries scalar `unique_*_count` counters plus row-replicated
+//! `microseg_unique_*` UNIONs. The airport-level UNION across z9s is the
+//! `qm_airport_summaries` footer value that Stage 2C stamps after its world
+//! reduce ([`stamp_airport_summaries`]); every owner cell carries identical counts.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -17,8 +17,13 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
 
+use noise_compute::compute::aircraft_v6::airport_traffic::{
+    decode_airport_summaries, encode_airport_summaries, AirportSummaryEntry,
+    AirportSummaryLookup,
+};
 use noise_compute::emission::gse::NUM_GSE_CLASSES;
 use noise_compute::types::NUM_BANDS;
+use square_store::aircraft_contract::AIRPORT_SUMMARIES_KEY;
 
 use crate::arrow_schemas;
 
@@ -237,6 +242,45 @@ pub fn write_airport_traffic(
     let (schema, batches) =
         arrow_batching::blocked_by_z14_cell(schema.as_ref().clone(), columns, &row_bboxes)?;
     write_record_batches(path, &schema, &batches)
+}
+
+/// Rewrite one traffic file with its airports' global unions in the footer.
+/// Every batch is copied unchanged (same z14 blocks), so the file stays a
+/// plain Arrow IPC file the popup opens footer-first.
+pub fn stamp_airport_summaries(
+    path: &Path,
+    summaries: &std::collections::BTreeMap<String, AirportSummaryEntry>,
+) -> Result<()> {
+    let (schema, batches) = read_all_batches(path)?;
+    arrow_schemas::assert_airport_traffic_contract(schema.metadata())?;
+    let mut metadata = schema.metadata().clone();
+    metadata.insert(
+        AIRPORT_SUMMARIES_KEY.to_string(),
+        encode_airport_summaries(summaries),
+    );
+    let schema = Arc::new(schema.with_metadata(metadata));
+    let batches = batches
+        .into_iter()
+        .map(|batch| RecordBatch::try_new(schema.clone(), batch.columns().to_vec()))
+        .collect::<Result<Vec<_>, _>>()?;
+    write_record_batches(path, &schema, &batches)
+}
+
+/// Footer-only read of the stamped summaries; an unstamped file is an
+/// incomplete Stage 2C output.
+pub fn read_airport_summaries(path: &Path) -> Result<AirportSummaryLookup> {
+    let file = std::fs::File::open(path)?;
+    let reader = arrow::ipc::reader::FileReader::try_new(std::io::BufReader::new(file), None)?;
+    let metadata = reader.schema();
+    let metadata = metadata.metadata();
+    arrow_schemas::assert_airport_traffic_contract(metadata)?;
+    let json = metadata.get(AIRPORT_SUMMARIES_KEY).ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} has no {AIRPORT_SUMMARIES_KEY}: the Stage 2C reduce did not stamp it; re-run Stage 2C",
+            path.display()
+        )
+    })?;
+    decode_airport_summaries(json).map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))
 }
 
 pub fn read_airport_traffic(path: &Path) -> Result<Vec<AirportTrafficRow>> {

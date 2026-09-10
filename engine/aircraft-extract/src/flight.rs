@@ -1,9 +1,9 @@
 //! Core in-memory types crossing the stage boundaries.
 //!
 //! `Flight` (Stage 0 output) carries the raw point list per aircraft.
-//! `FlightSegment` (Stage 1 output) carries one classified segment.
-//! `AirborneEvent` / `CruiseBucket` are the per-z9 aggregates produced
-//! by Stage 2A / 2B and serialised into the per-z9 Arrow files. Stage
+//! `FlightSegment` (Stage 1 output) carries one classified segment; Stage 2A
+//! writes its airborne rows straight into the per-z9 `airborne.arrow`.
+//! `CruiseBucket` is the per-z9 aggregate produced by Stage 2B. Stage
 //! 2C's own aggregate lives in `stage_2c::airport_traffic` — it writes
 //! per-microsegment airport ground ops, not a per-flight path.
 
@@ -32,11 +32,18 @@ impl Phase {
 }
 
 /// Per-segment bitfield flags. Bit 0 = is_departure, bit 1 = on_ground
-/// (composite, post-ground-inference), bit 2 = synthetic identity.
+/// (composite, post-ground-inference), bit 2 = synthetic identity. Bits
+/// 3–5 mark the pieces of a split airborne chord (`segment::split`): every
+/// piece carries `SPLIT_PIECE`, the first also `CHORD_START`, the last also
+/// `CHORD_END`; consecutive pieces share their stored endpoint exactly, so
+/// the popup chains them back into one chord.
 pub mod segment_flags {
     pub const IS_DEPARTURE: u8 = 1 << 0;
     pub const ON_GROUND: u8 = 1 << 1;
     pub const SYNTHETIC: u8 = 1 << 2;
+    pub const SPLIT_PIECE: u8 = 1 << 3;
+    pub const CHORD_START: u8 = 1 << 4;
+    pub const CHORD_END: u8 = 1 << 5;
 }
 
 /// Pack a variable-width ICAO typecode (`"A320"`, `"B738"`, `"PC12"`,
@@ -149,42 +156,36 @@ impl FlightSegment {
     }
 }
 
-/// Stage 2A row — one per (flight, z9) crossing. The vector of sub
-/// segments is what gets serialised as a `List<Struct>` in the airborne
-/// arrow file.
-#[derive(Clone)]
-pub struct AirborneEvent {
-    pub flight_id: u64,
-    pub callsign: String,
-    pub aircraft_type: [u8; 4],
-    pub profile_idx: u8,
-    pub source_id: u8,
-    pub origin: u8,
-    pub sub_segments: Vec<AirborneSubSegment>,
-}
-
-/// One sub-segment inside an [`AirborneEvent`]. Period and date are
-/// stored per sub-segment so a long airborne crossing that spans the
-/// 19:00 evening boundary still gets the correct Lden weighting.
-///
-/// `terrain_start_elev_m` and `terrain_end_elev_m` propagate Stage 1's
-/// endpoint samples. Popup and heatmap use them for the stale-ground gate
-/// and Filter D cuts; this row stores no intermediate terrain samples.
-#[derive(Clone)]
-pub struct AirborneSubSegment {
-    pub start_lat: f32,
-    pub start_lon: f32,
-    pub start_alt_m: f32,
-    pub end_lat: f32,
-    pub end_lon: f32,
-    pub end_alt_m: f32,
-    pub speed_kt: f32,
-    pub length_m: f32,
-    pub period: u8,
-    pub date_id: i16,
-    pub flags: u8,
-    pub terrain_start_elev_m: f32,
-    pub terrain_end_elev_m: f32,
+#[cfg(test)]
+impl FlightSegment {
+    /// A 200 m airborne A320 chord starting at `lat`/`lon` — the unit tests' shared row.
+    pub(crate) fn airborne_fixture(flight_id: u64, lat: f32, lon: f32) -> Self {
+        FlightSegment {
+            flight_id,
+            callsign: format!("FL{flight_id:04}"),
+            aircraft_type: *b"A320",
+            profile_idx: 0,
+            source_id: 0,
+            origin: 0,
+            veh_kind: 0,
+            gse_class: 0,
+            period: 0,
+            date_id: 0,
+            phase: Phase::Airborne,
+            flags: 0,
+            start_lat: lat,
+            start_lon: lon,
+            start_alt_m: 1000.0,
+            end_lat: lat + 0.001,
+            end_lon: lon + 0.001,
+            end_alt_m: 1100.0,
+            speed_kt: 250.0,
+            length_m: 200.0,
+            agl_avg_m: 500.0,
+            start_elev_m: 250.0,
+            end_elev_m: 260.0,
+        }
+    }
 }
 
 /// One entry in a cruise row's `top_candidates` list (v14).

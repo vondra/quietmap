@@ -1,13 +1,13 @@
 //! Per-airport `AircraftGroundOpsDetail` popup payload builder — folds the
-//! airport ground-ops accumulator + `airport_summary.arrow` counts into the popup struct.
+//! airport ground-ops accumulator + footer airport summary counts into the popup struct.
 use super::*;
 
 /// Build the per-airport `AircraftGroundOpsDetail` payload from the
 /// accumulator. Caller passes the already-computed `NoisePeriods` so
 /// the per-period Leqs don't get recomputed.
 ///
-/// `summary_entry` is the `airport_summary.arrow` UNION counts for
-/// this airport (v5). When `None`, the popup MUST NOT silently fall
+/// `summary_entry` is the traffic footer's global UNION counts for
+/// this airport. When `None`, the popup MUST NOT silently fall
 /// back to per-row sum — per-row sum would over-count rotations
 /// crossing N microsegments by ~N×. Return zeros so the frontend
 /// renders "—" or hides the row.
@@ -20,9 +20,8 @@ pub(super) fn build_ground_ops_metadata(
     ga_n_days_f: f64,
     summary_entry: Option<AirportSummaryEntry>,
 ) -> AircraftGroundOpsDetail {
-    // v5: arr/dep/gse/observed counts come from the global
-    // `airport_summary.arrow` sidecar (UNION across all R4s).
-    // Missing summary = popup refuses to display arr/dep — see
+    // arr/dep/gse/observed counts come from the global union in the
+    // traffic footer. Missing summary = popup refuses to display arr/dep — see
     // function docstring. v9: each split count = `non_ga / n_days +
     // ga / ga_n_days` so a one-off GA rotation reads at its true
     // full-year frequency.
@@ -52,7 +51,7 @@ pub(super) fn build_ground_ops_metadata(
         let apron = split(entry.ops_count_per_kind[2], entry.ga_ops_count_per_kind[2]);
         (arr, dep, gse, observed, runway, taxi, apron)
     } else {
-        // No sidecar → return zeros. The FE renders `arrivals_per_day
+        // No summary → return zeros. The FE renders `arrivals_per_day
         // == 0` as a hidden row, matching the "no ADS-B data" state.
         (0.0, 0.0, [0.0; NUM_GSE_CLASSES], 0.0, 0.0, 0.0, 0.0)
     };
@@ -176,9 +175,9 @@ pub(super) fn build_ground_ops_metadata(
         distance_m,
         emission_db,
         received_bands: [0.0; NUM_BANDS],
-        // Per-ops-kind unique movements come from the airport_summary
-        // sidecar UNION (v5). When the sidecar is missing they're
-        // zero — matches the arr/dep behaviour above.
+        // Per-ops-kind unique movements come from the footer summary
+        // UNION. When the summary is missing they're zero — matches the
+        // arr/dep behaviour above.
         runway_roll: AircraftGroundOpsClassDetail {
             periods: class_periods(acc.runway_period_energy),
             observed_movements_per_day: runway_ops,

@@ -15,9 +15,33 @@ for source selection and propagation. Project the facade result to the indoor
 estimate only after computation. If that search finds no exterior point, retain
 the clicked position as before.
 
-Prepared airborne observations are copied once to each supported receiver cell;
-aircraft copies from neighboring cells are never added again. Equal original
-observations retain their multiplicity. Cruise aggregates canonical cells once
+Prepared airborne sub-segments are stored once, as rows of the z9 square that
+owns the midpoint of their stored geometry (`airborne_segments_z9_v2`); the
+popup loads owner squares within `AIRBORNE_QUERY_RADIUS_M` (16 km reach + half
+the length cap), prunes batches by their full-geometry envelope and
+accumulates a flight across squares by `flight_id`. The shuffle splits a chord
+whose stored (z30-quantized, Mercator-clamped) geometry is longer than
+`AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M` (4 km) into the fewest equal pieces that
+fit the cap — linear in latitude, longitude, altitude and the two endpoint
+terrain samples, same period and date, flagged `SPLIT_PIECE` with
+`CHORD_START`/`CHORD_END` at the ends — so the reader pad never depends on the
+longest chord in a file, at the poles included. The popup chains the pieces it
+evaluated back into one chord through their shared endpoints: the chord takes
+the kernel's free-field and the received 20 dB floors on its summed SEL (an
+unsplit sub-segment takes them inside the kernel), holds one Noise Segments
+slot ranked by its summed energy, and is drawn as one polyline of its pieces.
+Pieces whose geometry lies beyond the 16 km envelope or the class reach are
+dropped like any sub-segment there: each such piece is on its own below the
+40 dB reach threshold, and the energy lost is the dropped pieces' own energy,
+those under the kernel's 20 dB floor bounded by that floor (pinned by
+`pieces_beyond_reach_are_dropped_and_the_loss_is_their_own_level`: an 18 km
+chord 14–32 km east of the receiver, 33.6 dB whole, keeps its 30.9 dB first
+piece). Splitting
+otherwise changes only the Doc 29 finite-segment terms: per layer and period
+the energy of an unsplit chord is unchanged, a split chord within reach moves
+Lden by at most 0.01 dB, keeps the same top flights and draws the same total
+length. Equal original observations retain their multiplicity. Cruise
+aggregates canonical cells once
 and publishes them only in the owner z9 (`cruise_owner_z9_v1`); the popup loads
 owner squares within `CRUISE_QUERY_RADIUS_M` and prunes batches by their
 synthetic-line envelope. A bucket's representative length is clamped to
@@ -40,13 +64,12 @@ samples use the same canonical longitude interval. Moving a flight and its ridge
 across ±180° must preserve the received SEL, screening and displayed CPA.
 
 Airborne selection uses the periodic 16 km axis envelope, with the same f32
-receiver-bound rounding at batch, row and segment gates. A raw aggregate bbox
+receiver-bound rounding at the batch and segment gates. A raw aggregate bbox
 at least 180° wide cannot identify its contained short arcs, so it retains the
-latitude gate but defers longitude pruning to individual segments. Publication
-support encloses those decoded segment arcs and the receiver rounding bins;
-it does not copy every flight to the dateline. This corrects the former seam
-selection bypass and false negatives; it is not universal output parity with
-that bypass. Cruise retains its separate representative-length centroid gate.
+latitude gate but defers longitude pruning to individual segments. Owner
+squares are selected in the same metre-per-degree metric that bounds a row's
+length, so a decoded arc the envelope accepts always lies in a loaded square.
+Cruise retains its separate representative-length centroid gate.
 
 Ground-operation line divergence uses half a canonical surface pixel at receiver
 latitude: the z13 tile has 512 pixels. Popup and GPU use the same grid-derived

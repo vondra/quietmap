@@ -1,9 +1,6 @@
-//! Actual native popup keeps clicked metadata and reads aircraft exactly once at its facade.
+//! Actual native popup keeps clicked metadata and accumulates airborne rows from every owner square.
 
-use aircraft_extract::{
-    arrow_io,
-    flight::{AirborneEvent, AirborneSubSegment},
-};
+use aircraft_extract::{arrow_io, flight::FlightSegment};
 use raster_reader::channel::Channel;
 use serde_json::Value;
 use std::path::Path;
@@ -50,34 +47,36 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     assert!(crate::RASTERS
         .set(raster_reader::RealRasters::new(root))
         .is_ok());
-    let event = AirborneEvent {
+    let row = FlightSegment {
         flight_id: 42,
         callsign: "FACADE42".into(),
         aircraft_type: *b"B738",
         profile_idx: noise_compute::emission::profiles_generated::profile_idx("B738"),
         source_id: 2,
         origin: 0,
-        sub_segments: vec![AirborneSubSegment {
-            start_lat: 0.001,
-            end_lat: 0.001,
-            start_lon: 0.349,
-            end_lon: 0.351,
-            start_alt_m: 1000.0,
-            end_alt_m: 1000.0,
-            speed_kt: 450.0,
-            length_m: grid::geo::flat_dist(0.001, 0.349, 0.001, 0.351) as f32,
-            period: 0,
-            date_id: 0,
-            flags: 1,
-            terrain_start_elev_m: 0.0,
-            terrain_end_elev_m: 0.0,
-        }],
+        veh_kind: 0,
+        gse_class: 0,
+        period: 0,
+        date_id: 0,
+        phase: aircraft_extract::flight::Phase::Airborne,
+        flags: 1,
+        start_lat: 0.001,
+        start_lon: 0.349,
+        start_alt_m: 1000.0,
+        end_lat: 0.001,
+        end_lon: 0.351,
+        end_alt_m: 1000.0,
+        speed_kt: 450.0,
+        length_m: grid::geo::flat_dist(0.001, 0.349, 0.001, 0.351) as f32,
+        agl_avg_m: 1000.0,
+        start_elev_m: 0.0,
+        end_elev_m: 0.0,
     };
     let facade_dir = fx::square_dir(root, facade_square);
     std::fs::create_dir_all(&facade_dir).unwrap();
     fx::write_square_structures(root, facade_square, &[]);
     let path = facade_dir.join("airborne.arrow");
-    arrow_io::write_airborne(&path, std::slice::from_ref(&event), 12, 0).unwrap();
+    arrow_io::write_airborne(&path, std::slice::from_ref(&row), 12, 0).unwrap();
     let popup = |lat, lon| -> Value {
         super::reset_store(root);
         let mut value: Value =
@@ -118,26 +117,35 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     };
     let first = airborne(&outside);
     assert!(first["lden"].as_f64().unwrap() > 0.0);
-    assert!(first["segment_count"].as_u64().unwrap() > 0);
+    assert_eq!(first["segment_count"].as_u64().unwrap(), 1);
     assert_eq!(airborne(&inside)["segment_count"], first["segment_count"]);
-    // A second spatial copy is invisible to this receiver, including all wire fields.
+    // Rows are owned by their square: a row stored in the neighbouring square
+    // is a second observation for this receiver, not a copy to ignore.
     arrow_io::write_airborne(
         &fx::square_dir(root, click_square).join("airborne.arrow"),
-        std::slice::from_ref(&event),
+        std::slice::from_ref(&row),
         12,
         0,
     )
     .unwrap();
-    assert_eq!(popup(lat, lon), inside);
-    // Two original observations remain two energy contributions, even when identical.
-    arrow_io::write_airborne(&path, &[event.clone(), event], 12, 0).unwrap();
-    let doubled = airborne(&popup(facade_lat, facade_lon));
-    let increase = doubled["lden"].as_f64().unwrap() - first["lden"].as_f64().unwrap();
+    let neighbours = airborne(&popup(facade_lat, facade_lon));
+    assert_eq!(neighbours["segment_count"].as_u64().unwrap(), 2);
+    let increase = neighbours["lden"].as_f64().unwrap() - first["lden"].as_f64().unwrap();
     assert!(
         (increase - 2.0_f64.log10() * 10.0).abs() < 1e-9,
+        "second owner square increase: {increase}"
+    );
+    // Two original observations remain two energy contributions, even when identical.
+    arrow_io::write_airborne(&path, &[row.clone(), row], 12, 0).unwrap();
+    let tripled = airborne(&popup(facade_lat, facade_lon));
+    assert_eq!(tripled["segment_count"].as_u64().unwrap(), 3);
+    let increase = tripled["lden"].as_f64().unwrap() - first["lden"].as_f64().unwrap();
+    assert!(
+        (increase - 3.0_f64.log10() * 10.0).abs() < 1e-9,
         "duplicate observation increase: {increase}"
     );
-    // Neighboring receivers share a halo but select different owner-cell flights.
+    // Neighbouring receivers share the owner squares and the selected rows,
+    // and a warm cache returns the previous click's exact answer.
     let south = (-0.005, lon);
     let north = (0.005, lon);
     let mut south_squares = crate::query::squares_within_reach(south.0, south.1).unwrap();
@@ -147,9 +155,13 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     assert_eq!(south_squares, north_squares);
     let expected_north = popup(north.0, north.1);
     let south_popup = popup(south.0, south.1);
-    assert_ne!(
+    assert_eq!(
         airborne(&south_popup)["segment_count"],
         airborne(&expected_north)["segment_count"]
+    );
+    assert_ne!(
+        airborne(&south_popup)["lden"],
+        airborne(&expected_north)["lden"]
     );
     let mut warm_north: Value =
         serde_json::from_str(&crate::query_noise_at_point(north.0, north.1).unwrap()).unwrap();

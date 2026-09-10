@@ -42,7 +42,23 @@ pub const AIRCRAFT_MAX_HORIZONTAL_REACH_M: f64 = 16_000.0;
 pub const CRUISE_MAX_REP_LEN_M: f32 = 50_000.0;
 
 /// Horizontal radius within which a finalized cruise bucket can reach a receiver.
-pub const CRUISE_QUERY_RADIUS_M: f64 = AIRCRAFT_MAX_HORIZONTAL_REACH_M + CRUISE_MAX_REP_LEN_M as f64 / 2.0;
+pub const CRUISE_QUERY_RADIUS_M: f64 =
+    AIRCRAFT_MAX_HORIZONTAL_REACH_M + CRUISE_MAX_REP_LEN_M as f64 / 2.0;
+
+/// Longest airborne sub-segment row a prepared `airborne.arrow` may hold. The
+/// shuffle splits a longer chord (a 120 s coverage gap yields 18 km) into
+/// `ceil(length / cap)` equal pieces, each owned by its midpoint square, so the
+/// popup's owner-square pad is this constant and never the longest chord in a
+/// file. Splitting only changes the Doc 29 finite-segment terms (|ΔLden| ≤
+/// 0.01 dB per layer on the reference points) and draws one polyline instead
+/// of one line.
+pub const AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M: f32 = 4_000.0;
+
+/// Horizontal radius within which a stored airborne sub-segment can reach a
+/// receiver: a row is owned by its midpoint square and extends at most half
+/// the length cap from that midpoint.
+pub const AIRBORNE_QUERY_RADIUS_M: f64 =
+    AIRCRAFT_MAX_HORIZONTAL_REACH_M + AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M as f64 / 2.0;
 
 /// Slant threshold above which `segment_sel_with_overrides` (the one kernel
 /// every popup and tile call funnels through) switches to the closed-form far-field kernel

@@ -2,14 +2,10 @@
 mod batches;
 use crate::{
     scope::ScopeBbox,
-    synth_airport_io::{DISCOVERED_AIRSTRIP_NAME, SYNTH_AREAS_FILE, SYNTH_LINES_FILE},
+    synth_airport_io::{DISCOVERED_AIRSTRIP_NAME, SYNTH_LINES_FILE},
 };
 use anyhow::{ensure, Context, Result};
-use arrow::{
-    array::UInt32Array,
-    compute::{concat_batches, take_record_batch},
-    record_batch::RecordBatch,
-};
+use arrow::{array::UInt32Array, compute::take_record_batch, record_batch::RecordBatch};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{collections::BTreeMap, fs::File, path::Path};
 
@@ -18,7 +14,6 @@ struct Group {
     id: u64,
     start: usize,
     count: usize,
-    area: Option<usize>,
 }
 
 fn owner(id: u64) -> Result<u64> {
@@ -34,7 +29,6 @@ fn read_group(row: &rusqlite::Row<'_>) -> rusqlite::Result<(u64, Group)> {
             id: row.get::<_, i64>(1)? as u64,
             start: row.get(2)?,
             count: row.get(3)?,
-            area: row.get(4)?,
         },
     ))
 }
@@ -77,7 +71,7 @@ pub fn finalize_ground_discovery(
         "unexpected discovery index page size"
     );
     database.execute_batch("PRAGMA synchronous=FULL; PRAGMA cache_size=-16384; PRAGMA temp_store=MEMORY;
-        CREATE TABLE strips(id INTEGER PRIMARY KEY, owner INTEGER NOT NULL, source INTEGER NOT NULL, start INTEGER NOT NULL, count INTEGER NOT NULL, area INTEGER);
+        CREATE TABLE strips(id INTEGER PRIMARY KEY, owner INTEGER NOT NULL, source INTEGER NOT NULL, start INTEGER NOT NULL, count INTEGER NOT NULL);
         CREATE INDEX destination ON strips(owner,source,start);
         CREATE TABLE owners(id INTEGER PRIMARY KEY);
         CREATE TABLE state(complete INTEGER NOT NULL);")?;
@@ -93,7 +87,7 @@ pub fn finalize_ground_discovery(
         for group in batches::groups(&current)? {
             let existing = transaction
                 .query_row(
-                    "SELECT source,id,start,count,area FROM strips WHERE id=?",
+                    "SELECT source,id,start,count FROM strips WHERE id=?",
                     [group.id as i64],
                     read_group,
                 )
@@ -108,14 +102,13 @@ pub fn finalize_ground_discovery(
             } else {
                 let target = owner(group.id)?;
                 transaction.execute(
-                    "INSERT INTO strips VALUES(?,?,?,?,?,?)",
+                    "INSERT INTO strips VALUES(?,?,?,?,?)",
                     params![
                         group.id as i64,
                         target as i64,
                         *source_owner as i64,
                         group.start,
-                        group.count,
-                        group.area
+                        group.count
                     ],
                 )?;
                 transaction.execute("INSERT OR IGNORE INTO owners VALUES(?)", [target as i64])?;
@@ -146,14 +139,13 @@ pub fn finalize_ground_discovery(
             continue;
         }
         let mut selected = database.prepare(
-            "SELECT source,id,start,count,area FROM strips WHERE owner=? ORDER BY source,start",
+            "SELECT source,id,start,count FROM strips WHERE owner=? ORDER BY source,start",
         )?;
         let selected: Vec<_> = selected
             .query_map([destination as i64], read_group)?
             .collect::<rusqlite::Result<_>>()?;
         populated += usize::from(!selected.is_empty());
         let mut line_batches = Vec::new();
-        let mut area_batches = Vec::new();
         let mut start = 0;
         while start < selected.len() {
             let source_owner = selected[start].0;
@@ -167,31 +159,18 @@ pub fn finalize_ground_discovery(
                 .flat_map(|(_, group)| group.start..group.start + group.count)
                 .map(u32::try_from)
                 .collect::<std::result::Result<_, _>>()?;
-            let areas: Vec<u32> = selected[start..end]
-                .iter()
-                .filter_map(|(_, group)| group.area)
-                .map(u32::try_from)
-                .collect::<std::result::Result<_, _>>()?;
-            line_batches.push(take_record_batch(&source.lines, &UInt32Array::from(lines))?);
-            area_batches.push(take_record_batch(&source.areas, &UInt32Array::from(areas))?);
+            line_batches.push(take_record_batch(&source, &UInt32Array::from(lines))?);
             start = end;
         }
-        let directory = output.join(crate::spatial::square_path(destination));
-        for (name, schema, batches) in [
-            (
-                SYNTH_LINES_FILE,
-                crate::arrow_schemas::synth_airport_lines_schema(),
-                line_batches,
-            ),
-            (
-                SYNTH_AREAS_FILE,
-                crate::arrow_schemas::synth_airport_areas_schema(),
-                area_batches,
-            ),
-        ] {
-            let batch = concat_batches(&schema, &batches)?;
-            crate::arrow_io::write_record_batches(&directory.join(name), &schema, &[batch])?;
-        }
+        let schema = crate::arrow_schemas::synth_airport_lines_schema();
+        let batch = arrow::compute::concat_batches(&schema, &line_batches)?;
+        crate::arrow_io::write_record_batches(
+            &output
+                .join(crate::spatial::square_path(destination))
+                .join(SYNTH_LINES_FILE),
+            &schema,
+            &[batch],
+        )?;
     }
     database.execute("INSERT INTO state VALUES(1)", [])?;
     database.close().map_err(|(_, error)| error)?;
@@ -228,9 +207,10 @@ pub(crate) fn promote_ground_discovery(source: &Path, output: &Path) -> Result<(
         let relative = directory.strip_prefix(source)?;
         let target = output.join(relative);
         crate::arrow_io::create_directory_all_synced(&target)?;
-        for name in [SYNTH_LINES_FILE, SYNTH_AREAS_FILE] {
-            std::fs::rename(directory.join(name), target.join(name))?;
-        }
+        std::fs::rename(
+            directory.join(SYNTH_LINES_FILE),
+            target.join(SYNTH_LINES_FILE),
+        )?;
         File::open(&target)?.sync_all()?;
         File::open(&directory)?.sync_all()?;
     }

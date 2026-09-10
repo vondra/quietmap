@@ -3,7 +3,7 @@
 use crate::SCHEMA_VERSION;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 pub use square_store::aircraft_contract::{
-    AIRBORNE_CONTRACT, AIRPORT_SUMMARY_CONTRACT, AIRPORT_TRAFFIC_CONTRACT, CRUISE_CONTRACT,
+    AIRBORNE_CONTRACT, AIRPORT_TRAFFIC_CONTRACT, CRUISE_CONTRACT,
 };
 use std::{collections::HashMap, sync::Arc};
 mod airport;
@@ -97,13 +97,5 @@ pub fn assert_airport_traffic_contract(metadata: &HashMap<String, String>) -> an
         metadata,
         "airport_traffic_contract",
         AIRPORT_TRAFFIC_CONTRACT,
-    )
-}
-
-pub fn assert_airport_summary_contract(metadata: &HashMap<String, String>) -> anyhow::Result<()> {
-    assert_stamp(
-        metadata,
-        "airport_summary_contract",
-        AIRPORT_SUMMARY_CONTRACT,
     )
 }

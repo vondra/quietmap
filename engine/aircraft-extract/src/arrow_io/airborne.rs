@@ -1,27 +1,32 @@
-//! Stage 2A airborne writer.
+//! Stage 2A airborne writer: one sub-segment row per line, flight identity as one dictionary.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
 use arrow::array::{
-    Array, ArrayRef, FixedSizeBinaryBuilder, Float32Builder, Int16Builder, Int32Builder, ListArray,
+    ArrayRef, DictionaryArray, FixedSizeBinaryBuilder, Float32Builder, Int16Builder, Int32Builder,
     StringBuilder, StructArray, UInt64Builder, UInt8Builder,
 };
-use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::Int32Type;
+use noise_compute::emission::aircraft::AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M;
 
 use crate::arrow_schemas;
-use crate::flight::AirborneEvent;
+use crate::flight::{segment_flags, FlightSegment, Phase};
 
 use super::write_record_batches;
 
-/// `n_days` (airline window) + `ga_n_days` (GA-class window, 0 =
-/// single-window) stamp the GA hybrid metadata so the popup/heatmap
-/// weight GA rows at `1/ga_n_days`.
+/// Write the square's airborne sub-segments (`Phase::Airborne`, aircraft only,
+/// each no longer than `AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M` — the reader pad
+/// counts on it). `n_days` (airline window) + `ga_n_days` (GA-class window,
+/// 0 = single-window) stamp the GA hybrid metadata so the popup/heatmap weight
+/// GA rows at `1/ga_n_days`. The `flight` dictionary lists distinct flights in
+/// order of first appearance; arrow's file writer refuses a replaced
+/// dictionary, so it is built once for the whole file.
 pub fn write_airborne(
     path: &Path,
-    rows: &[AirborneEvent],
+    rows: &[FlightSegment],
     n_days: u16,
     ga_n_days: u16,
 ) -> Result<()> {
@@ -29,144 +34,134 @@ pub fn write_airborne(
         arrow_schemas::with_n_days_and_windows(arrow_schemas::airborne_schema(), n_days, ga_n_days);
     let n = rows.len();
     let mut flight_id = UInt64Builder::with_capacity(n);
-    let mut callsign = StringBuilder::with_capacity(n, 8 * n);
-    let mut aircraft_type = FixedSizeBinaryBuilder::with_capacity(n, 4);
-    let mut profile_idx = UInt8Builder::with_capacity(n);
-    let mut source_id = UInt8Builder::with_capacity(n);
-    let mut origin = UInt8Builder::with_capacity(n);
-    // Popup batch pruning: the per-event bbox is the block key and envelope;
-    // f32→f64 is exact, so the batch bbox bounds the f32 coordinates the
-    // reader tests against. A flight row spans its whole flight, so its
-    // midpoint cell may lie outside this square and a support-copy file can
-    // hold thousands of one-row blocks — the plan's per-square cell bound
-    // holds once rows are midpoint-owned sub-segments (prepared v2 wave 1).
+    let mut flight_key = Int32Builder::with_capacity(n);
+    let mut key_of_flight: HashMap<u64, i32> = HashMap::new();
+    let mut callsign = StringBuilder::new();
+    let mut aircraft_type = FixedSizeBinaryBuilder::new(4);
+    let mut profile_idx = UInt8Builder::new();
+    let mut source_id = UInt8Builder::new();
+    let mut origin = UInt8Builder::new();
+    let mut sgx = Int32Builder::with_capacity(n);
+    let mut sgy = Int32Builder::with_capacity(n);
+    let mut sal = Int16Builder::with_capacity(n);
+    let mut egx = Int32Builder::with_capacity(n);
+    let mut egy = Int32Builder::with_capacity(n);
+    let mut eal = Int16Builder::with_capacity(n);
+    let mut speed = Float32Builder::with_capacity(n);
+    let mut length = Float32Builder::with_capacity(n);
+    let mut period = UInt8Builder::with_capacity(n);
+    let mut date_id = Int16Builder::with_capacity(n);
+    let mut flags = UInt8Builder::with_capacity(n);
+    let mut t_start = Int16Builder::with_capacity(n);
+    let mut t_end = Int16Builder::with_capacity(n);
+    // Block pruning compares the batch envelope against the f32 endpoints the
+    // reader physics consumes; f32→f64 is exact, so bounding the decoded
+    // values bounds exactly what the reader tests.
     let mut row_bboxes = Vec::with_capacity(n);
-
-    let sub_struct_fields = match schema.field_with_name("sub_segments")?.data_type() {
-        DataType::List(item) => match item.data_type() {
-            DataType::Struct(f) => f.clone(),
-            other => anyhow::bail!("airborne sub_segments item not Struct ({other:?})"),
-        },
-        _ => unreachable!(),
-    };
-    let mut sub_off: Vec<i32> = Vec::with_capacity(n + 1);
-    sub_off.push(0);
-    let mut total_subs = 0usize;
+    let mut row_altitudes = Vec::with_capacity(n);
     for r in rows {
-        flight_id.append_value(r.flight_id);
-        callsign.append_value(&r.callsign);
-        aircraft_type.append_value(r.aircraft_type)?;
-        profile_idx.append_value(r.profile_idx);
-        source_id.append_value(r.source_id);
-        origin.append_value(r.origin);
         anyhow::ensure!(
-            !r.sub_segments.is_empty(),
-            "airborne event {} has no geometry",
+            r.phase == Phase::Airborne && r.veh_kind == 0,
+            "airborne.arrow takes aircraft airborne rows only (flight {})",
             r.flight_id
         );
+        // The pad bounds the stored geometry, not the source length: near
+        // the poles the Mercator clamp stretches a short chord.
+        anyhow::ensure!(
+            crate::support::airborne_stored_length_within_cap(r),
+            "airborne sub-segment of flight {} stores {:?} m of geometry, longer than the {} m cap the reader pad assumes; rerun shuffle",
+            r.flight_id,
+            crate::support::airborne_stored_length_m(r),
+            AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M
+        );
+        flight_id.append_value(r.flight_id);
+        let next_key = i32::try_from(key_of_flight.len())?;
+        let key = *key_of_flight.entry(r.flight_id).or_insert(next_key);
+        if key == next_key {
+            callsign.append_value(&r.callsign);
+            aircraft_type.append_value(r.aircraft_type)?;
+            profile_idx.append_value(r.profile_idx);
+            source_id.append_value(r.source_id);
+            origin.append_value(r.origin);
+        }
+        flight_key.append_value(key);
         let mut bounds = [
             f64::INFINITY,
             f64::INFINITY,
             f64::NEG_INFINITY,
             f64::NEG_INFINITY,
         ];
-        for segment in &r.sub_segments {
-            for (lat, lon) in [
-                (segment.start_lat, segment.start_lon),
-                (segment.end_lat, segment.end_lon),
-            ] {
-                // Reader physics consumes f32; prune against those exact decoded values.
-                let [lat, lon] = crate::support::airborne_decoded_endpoint(lat, lon)
-                    .ok_or_else(|| anyhow::anyhow!("invalid airborne endpoint"))?;
-                let (lat, lon) = (f64::from(lat), f64::from(lon));
-                bounds[0] = bounds[0].min(lat);
-                bounds[1] = bounds[1].min(lon);
-                bounds[2] = bounds[2].max(lat);
-                bounds[3] = bounds[3].max(lon);
-            }
+        for (lat, lon) in [(r.start_lat, r.start_lon), (r.end_lat, r.end_lon)] {
+            let [lat, lon] = crate::support::airborne_decoded_endpoint(lat, lon)
+                .ok_or_else(|| anyhow::anyhow!("invalid airborne endpoint"))?;
+            let (lat, lon) = (f64::from(lat), f64::from(lon));
+            bounds[0] = bounds[0].min(lat);
+            bounds[1] = bounds[1].min(lon);
+            bounds[2] = bounds[2].max(lat);
+            bounds[3] = bounds[3].max(lon);
         }
         row_bboxes.push(bounds);
-        total_subs += r.sub_segments.len();
-        sub_off.push(i32::try_from(total_subs)?);
+        row_altitudes.push([
+            r.start_alt_m.min(r.end_alt_m),
+            r.start_alt_m.max(r.end_alt_m),
+        ]);
+        let (gx, gy) = grid::lonlat_to_grid(r.start_lon as f64, r.start_lat as f64);
+        sgx.append_value(gx);
+        sgy.append_value(gy);
+        sal.append_value(super::height_meters(r.start_alt_m)?);
+        let (gx, gy) = grid::lonlat_to_grid(r.end_lon as f64, r.end_lat as f64);
+        egx.append_value(gx);
+        egy.append_value(gy);
+        eal.append_value(super::height_meters(r.end_alt_m)?);
+        speed.append_value(r.speed_kt);
+        length.append_value(r.length_m);
+        period.append_value(r.period);
+        date_id.append_value(r.date_id);
+        flags.append_value(
+            r.flags
+                & (segment_flags::IS_DEPARTURE
+                    | segment_flags::SPLIT_PIECE
+                    | segment_flags::CHORD_START
+                    | segment_flags::CHORD_END),
+        );
+        t_start.append_value(super::height_meters(r.start_elev_m)?);
+        t_end.append_value(super::height_meters(r.end_elev_m)?);
     }
-
-    let mut sla = Int32Builder::with_capacity(total_subs);
-    let mut slo = Int32Builder::with_capacity(total_subs);
-    let mut sal = Int16Builder::with_capacity(total_subs);
-    let mut ela = Int32Builder::with_capacity(total_subs);
-    let mut elo = Int32Builder::with_capacity(total_subs);
-    let mut eal = Int16Builder::with_capacity(total_subs);
-    let mut speed = Float32Builder::with_capacity(total_subs);
-    let mut length = Float32Builder::with_capacity(total_subs);
-    let mut period = UInt8Builder::with_capacity(total_subs);
-    let mut date_id = Int16Builder::with_capacity(total_subs);
-    let mut flags = UInt8Builder::with_capacity(total_subs);
-    let mut t_start = Int16Builder::with_capacity(total_subs);
-    let mut t_end = Int16Builder::with_capacity(total_subs);
-    for r in rows {
-        for s in &r.sub_segments {
-            let (gx, gy) = grid::lonlat_to_grid(s.start_lon as f64, s.start_lat as f64);
-            sla.append_value(gx);
-            slo.append_value(gy);
-            sal.append_value(super::height_meters(s.start_alt_m)?);
-            let (gx, gy) = grid::lonlat_to_grid(s.end_lon as f64, s.end_lat as f64);
-            ela.append_value(gx);
-            elo.append_value(gy);
-            eal.append_value(super::height_meters(s.end_alt_m)?);
-            speed.append_value(s.speed_kt);
-            length.append_value(s.length_m);
-            period.append_value(s.period);
-            date_id.append_value(s.date_id);
-            flags.append_value(s.flags);
-            t_start.append_value(super::height_meters(s.terrain_start_elev_m)?);
-            t_end.append_value(super::height_meters(s.terrain_end_elev_m)?);
-        }
-    }
-    let sub_struct = StructArray::new(
-        sub_struct_fields,
+    let flights = StructArray::new(
+        arrow_schemas::airborne_flight_fields(),
         vec![
-            Arc::new(sla.finish()) as ArrayRef,
-            Arc::new(slo.finish()),
-            Arc::new(sal.finish()),
-            Arc::new(ela.finish()),
-            Arc::new(elo.finish()),
-            Arc::new(eal.finish()),
-            Arc::new(speed.finish()),
-            Arc::new(length.finish()),
-            Arc::new(period.finish()),
-            Arc::new(date_id.finish()),
-            Arc::new(flags.finish()),
-            Arc::new(t_start.finish()),
-            Arc::new(t_end.finish()),
+            Arc::new(callsign.finish()) as ArrayRef,
+            Arc::new(aircraft_type.finish()),
+            Arc::new(profile_idx.finish()),
+            Arc::new(source_id.finish()),
+            Arc::new(origin.finish()),
         ],
         None,
     );
-    let item_field = match schema.field_with_name("sub_segments")?.data_type() {
-        DataType::List(item) => Arc::new(Field::new(
-            item.name(),
-            sub_struct.data_type().clone(),
-            item.is_nullable(),
-        )),
-        _ => unreachable!(),
-    };
-    let sub_list = ListArray::new(
-        item_field,
-        OffsetBuffer::new(arrow::buffer::ScalarBuffer::from(sub_off)),
-        Arc::new(sub_struct),
-        None,
-    );
-
+    let flight = DictionaryArray::<Int32Type>::try_new(flight_key.finish(), Arc::new(flights))?;
     let columns: Vec<ArrayRef> = vec![
         Arc::new(flight_id.finish()),
-        Arc::new(callsign.finish()),
-        Arc::new(aircraft_type.finish()),
-        Arc::new(profile_idx.finish()),
-        Arc::new(source_id.finish()),
-        Arc::new(origin.finish()),
-        Arc::new(sub_list),
+        Arc::new(flight),
+        Arc::new(sgx.finish()),
+        Arc::new(sgy.finish()),
+        Arc::new(sal.finish()),
+        Arc::new(egx.finish()),
+        Arc::new(egy.finish()),
+        Arc::new(eal.finish()),
+        Arc::new(speed.finish()),
+        Arc::new(length.finish()),
+        Arc::new(period.finish()),
+        Arc::new(date_id.finish()),
+        Arc::new(flags.finish()),
+        Arc::new(t_start.finish()),
+        Arc::new(t_end.finish()),
     ];
-    let (schema, batches) =
-        arrow_batching::blocked_by_z14_cell(schema.as_ref().clone(), columns, &row_bboxes)?;
+    let (schema, batches) = arrow_batching::blocked_by_z14_cell_with_altitude(
+        schema.as_ref().clone(),
+        columns,
+        &row_bboxes,
+        &row_altitudes,
+    )?;
     write_record_batches(path, &schema, &batches)
 }
 
@@ -174,94 +169,98 @@ pub fn write_airborne(
 mod tests {
     use super::*;
     use crate::arrow_io::read_record_batches;
-    use crate::flight::AirborneSubSegment;
+    use arrow::array::{Array, FixedSizeBinaryArray, Int16Array, StringArray, UInt8Array};
     use tempfile::tempdir;
 
+    /// Two rows of one flight and one of another: the identity is stored once
+    /// per flight and every field survives write → read.
     #[test]
-    fn airborne_round_trip() {
+    fn airborne_round_trip_stores_identity_once_per_flight() {
         let dir = tempdir().unwrap();
         let p = dir.path().join("airborne.arrow");
-        let evs = vec![AirborneEvent {
-            flight_id: 1,
-            callsign: "TVS100P".into(),
-            aircraft_type: *b"A320",
-            profile_idx: 0,
-            source_id: 0,
-            origin: 0,
-            sub_segments: vec![AirborneSubSegment {
-                start_lat: 50.0,
-                start_lon: 14.0,
-                start_alt_m: 1000.0,
-                end_lat: 50.001,
-                end_lon: 14.001,
-                end_alt_m: 1100.0,
-                speed_kt: 250.0,
-                length_m: 300.0,
-                period: 0,
-                date_id: 1,
-                flags: 0,
-                terrain_start_elev_m: 200.0,
-                terrain_end_elev_m: 220.0,
-            }],
-        }];
-        write_airborne(&p, &evs, 1, 0).unwrap();
+        let mut rows = vec![
+            FlightSegment::airborne_fixture(7, 50.0, 14.0),
+            FlightSegment::airborne_fixture(7, 50.01, 14.01),
+            FlightSegment::airborne_fixture(9, 50.02, 14.02),
+        ];
+        rows[0].callsign = "TVS100P".into();
+        rows[1].callsign = "TVS100P".into();
+        rows[2].callsign = "CSA1".into();
+        rows[2].aircraft_type = *b"B738";
+        rows[2].flags = segment_flags::IS_DEPARTURE | segment_flags::SYNTHETIC;
+        write_airborne(&p, &rows, 1, 0).unwrap();
         let (_, batches) = read_record_batches(&p).unwrap();
-        assert_eq!(batches[0].num_rows(), 1);
-        // Verify M1 columns survive write→read so a Stage 2A regression
-        // dropping callsign / aircraft_type can't slip through with the
-        // num_rows check still passing.
-        let cs = batches[0]
-            .column_by_name("callsign")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<arrow::array::StringArray>()
-            .unwrap();
-        let at = batches[0]
-            .column_by_name("aircraft_type")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<arrow::array::FixedSizeBinaryArray>()
-            .unwrap();
-        assert_eq!(cs.value(0), "TVS100P");
-        assert_eq!(at.value(0), b"A320");
-        // The current shape keeps only start/end terrain elevations; the
-        // removed q1/mid/q3 chord check is the SPEC §6.1 known gap.
-        let sub_list = batches[0]
-            .column_by_name("sub_segments")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .unwrap();
-        let sub_struct = sub_list
-            .values()
-            .as_any()
-            .downcast_ref::<arrow::array::StructArray>()
-            .unwrap();
-        let t_start = sub_struct
-            .column_by_name("terrain_start_elev_m")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<arrow::array::Int16Array>()
-            .unwrap();
-        let t_end = sub_struct
-            .column_by_name("terrain_end_elev_m")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<arrow::array::Int16Array>()
-            .unwrap();
-        assert_eq!(t_start.value(0), 200);
-        assert_eq!(t_end.value(0), 220);
-        assert!(
-            sub_struct.column_by_name("terrain_q1_elev_m").is_none(),
-            "v16 must NOT carry q1"
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+        let mut seen = Vec::new();
+        for batch in &batches {
+            let flight = batch
+                .column_by_name("flight")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<DictionaryArray<Int32Type>>()
+                .unwrap();
+            let identity = flight
+                .values()
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .unwrap();
+            assert_eq!(identity.len(), 2, "one dictionary entry per flight");
+            let callsigns = identity
+                .column_by_name("callsign")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let types = identity
+                .column_by_name("aircraft_type")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .unwrap();
+            let flags = batch
+                .column_by_name("flags")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UInt8Array>()
+                .unwrap();
+            let t_start = batch
+                .column_by_name("terrain_start_elev_m")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int16Array>()
+                .unwrap();
+            for i in 0..batch.num_rows() {
+                let key = flight.keys().value(i) as usize;
+                seen.push((
+                    callsigns.value(key).to_string(),
+                    types.value(key).to_vec(),
+                    flags.value(i),
+                    t_start.value(i),
+                ));
+            }
+        }
+        seen.sort();
+        assert_eq!(
+            seen,
+            [
+                ("CSA1".to_string(), b"B738".to_vec(), 1, 250),
+                ("TVS100P".to_string(), b"A320".to_vec(), 0, 250),
+                ("TVS100P".to_string(), b"A320".to_vec(), 0, 250),
+            ]
         );
-        assert!(
-            sub_struct.column_by_name("terrain_mid_elev_m").is_none(),
-            "v16 must NOT carry mid"
-        );
-        assert!(
-            sub_struct.column_by_name("terrain_q3_elev_m").is_none(),
-            "v16 must NOT carry q3"
-        );
+    }
+
+    #[test]
+    fn writer_refuses_rows_the_reader_pad_cannot_cover() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("airborne.arrow");
+        let mut long = FlightSegment::airborne_fixture(1, 50.0, 14.0);
+        long.end_lon = 14.0 + 4_001.0 / (111_320.0 * 50.0_f32.to_radians().cos());
+        let error = write_airborne(&p, &[long], 1, 0).unwrap_err();
+        assert!(error.to_string().contains("rerun shuffle"), "{error}");
+        let mut ground = FlightSegment::airborne_fixture(1, 50.0, 14.0);
+        ground.phase = Phase::Ground;
+        assert!(write_airborne(&p, &[ground], 1, 0).is_err());
+        assert!(!p.exists());
     }
 }

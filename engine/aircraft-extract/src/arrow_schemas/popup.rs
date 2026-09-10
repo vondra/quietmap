@@ -2,8 +2,30 @@
 
 use super::*;
 
+/// Values of the `flight` dictionary column: one entry per distinct
+/// `flight_id` of the file. Hex, start time and date derive from the id.
+pub fn airborne_flight_fields() -> Fields {
+    Fields::from(vec![
+        Field::new("callsign", DataType::Utf8, false),
+        Field::new("aircraft_type", DataType::FixedSizeBinary(4), false),
+        Field::new("profile_idx", DataType::UInt8, false),
+        Field::new("source_id", DataType::UInt8, false),
+        Field::new("origin", DataType::UInt8, false),
+    ])
+}
+
+/// One row per airborne sub-segment, owned by the square of its midpoint.
 pub fn airborne_schema() -> Arc<Schema> {
-    let sub_struct = DataType::Struct(Fields::from(vec![
+    let fields = vec![
+        Field::new("flight_id", DataType::UInt64, false),
+        Field::new(
+            "flight",
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Struct(airborne_flight_fields())),
+            ),
+            false,
+        ),
         Field::new("start_gx", DataType::Int32, false),
         Field::new("start_gy", DataType::Int32, false),
         Field::new("start_alt_m", DataType::Int16, false),
@@ -17,19 +39,6 @@ pub fn airborne_schema() -> Arc<Schema> {
         Field::new("flags", DataType::UInt8, false),
         Field::new("terrain_start_elev_m", DataType::Int16, false),
         Field::new("terrain_end_elev_m", DataType::Int16, false),
-    ]));
-    let fields = vec![
-        Field::new("flight_id", DataType::UInt64, false),
-        Field::new("callsign", DataType::Utf8, false),
-        Field::new("aircraft_type", DataType::FixedSizeBinary(4), false),
-        Field::new("profile_idx", DataType::UInt8, false),
-        Field::new("source_id", DataType::UInt8, false),
-        Field::new("origin", DataType::UInt8, false),
-        Field::new(
-            "sub_segments",
-            DataType::List(Arc::new(Field::new("item", sub_struct, false))),
-            false,
-        ),
     ];
     Arc::new(Schema::new(fields).with_metadata(base_metadata(&[
         ("kind", "airborne"),

@@ -1,6 +1,8 @@
 use super::*;
+use crate::compute::aircraft_v6::views::{AirborneFlightTable, AirborneSegmentBatch};
 use crate::flight_id;
 
+mod chords;
 mod dateline;
 
 /// `rank_key = energy * AIRBORNE_RANK_W[period]` must produce the same
@@ -259,74 +261,151 @@ fn build_top_flights_synth_cruise_fid_is_marked_synthetic() {
     assert!(out[0].start_unix.is_none());
 }
 
+/// Owned columns of flattened airborne rows over a small flight table —
+/// what a decoded `airborne.arrow` batch borrows.
+struct SynthColumns {
+    flight_id: Vec<u64>,
+    flight_key: Vec<i32>,
+    start_gy: Vec<i32>,
+    start_gx: Vec<i32>,
+    start_alt: Vec<i16>,
+    end_gy: Vec<i32>,
+    end_gx: Vec<i32>,
+    end_alt: Vec<i16>,
+    speed: Vec<f32>,
+    length: Vec<f32>,
+    period: Vec<u8>,
+    date_id: Vec<i16>,
+    flags: Vec<u8>,
+    elev: Vec<i16>,
+    callsign_offsets: Vec<i32>,
+    callsign_bytes: Vec<u8>,
+    aircraft_type: Vec<u8>,
+    profile: Vec<u8>,
+    source: Vec<u8>,
+    origin: Vec<u8>,
+}
+
+impl SynthColumns {
+    fn new() -> Self {
+        Self {
+            flight_id: Vec::new(),
+            flight_key: Vec::new(),
+            start_gy: Vec::new(),
+            start_gx: Vec::new(),
+            start_alt: Vec::new(),
+            end_gy: Vec::new(),
+            end_gx: Vec::new(),
+            end_alt: Vec::new(),
+            speed: Vec::new(),
+            length: Vec::new(),
+            period: Vec::new(),
+            date_id: Vec::new(),
+            flags: Vec::new(),
+            elev: Vec::new(),
+            callsign_offsets: vec![0],
+            callsign_bytes: Vec::new(),
+            aircraft_type: Vec::new(),
+            profile: Vec::new(),
+            source: Vec::new(),
+            origin: Vec::new(),
+        }
+    }
+
+    fn add_flight(&mut self, callsign: &str, typecode: &str, profile: u8) -> i32 {
+        self.callsign_bytes.extend_from_slice(callsign.as_bytes());
+        self.callsign_offsets.push(self.callsign_bytes.len() as i32);
+        let mut typebuf = [0u8; 4];
+        typebuf[..typecode.len()].copy_from_slice(typecode.as_bytes());
+        self.aircraft_type.extend_from_slice(&typebuf);
+        self.profile.push(profile);
+        self.source.push(0);
+        self.origin.push(0);
+        self.profile.len() as i32 - 1
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_row(
+        &mut self,
+        flight_id: u64,
+        key: i32,
+        start: (i32, i32),
+        end: (i32, i32),
+        alt: (i16, i16),
+        speed: f32,
+        length: f32,
+        period: u8,
+        flags: u8,
+        elev: i16,
+    ) {
+        self.flight_id.push(flight_id);
+        self.flight_key.push(key);
+        self.start_gx.push(start.0);
+        self.start_gy.push(start.1);
+        self.end_gx.push(end.0);
+        self.end_gy.push(end.1);
+        self.start_alt.push(alt.0);
+        self.end_alt.push(alt.1);
+        self.speed.push(speed);
+        self.length.push(length);
+        self.period.push(period);
+        self.date_id.push(10);
+        self.flags.push(flags);
+        self.elev.push(elev);
+    }
+
+    fn table(&self) -> AirborneFlightTable<'_> {
+        AirborneFlightTable {
+            callsign_offsets: &self.callsign_offsets,
+            callsign_bytes: &self.callsign_bytes,
+            aircraft_type: &self.aircraft_type,
+            profile_idx: &self.profile,
+            source_id: &self.source,
+            origin: &self.origin,
+        }
+    }
+
+    /// The rows cut into batches of `rows_per_batch`, as a file's z14 blocks would.
+    fn batches(&self, rows_per_batch: usize) -> Vec<AirborneSegmentBatch<'_>> {
+        let n = self.flight_id.len();
+        (0..n)
+            .step_by(rows_per_batch.max(1))
+            .map(|lo| {
+                let r = lo..(lo + rows_per_batch).min(n);
+                AirborneSegmentBatch {
+                    flight_id: &self.flight_id[r.clone()],
+                    flight_key: &self.flight_key[r.clone()],
+                    flights: self.table(),
+                    start_gy: &self.start_gy[r.clone()],
+                    start_gx: &self.start_gx[r.clone()],
+                    start_alt_m: &self.start_alt[r.clone()],
+                    end_gy: &self.end_gy[r.clone()],
+                    end_gx: &self.end_gx[r.clone()],
+                    end_alt_m: &self.end_alt[r.clone()],
+                    speed_kt: &self.speed[r.clone()],
+                    length_m: &self.length[r.clone()],
+                    period: &self.period[r.clone()],
+                    date_id: &self.date_id[r.clone()],
+                    flags: &self.flags[r.clone()],
+                    terrain_start_elev_m: &self.elev[r.clone()],
+                    terrain_end_elev_m: &self.elev[r],
+                }
+            })
+            .collect()
+    }
+}
+
 /// One airborne sub-seg passing ~250 m abeam the receiver at ~150 m
 /// AGL, for the given ICAO typecode. Used by the mixed-window GA
-/// hybrid scatter test.
-fn one_subseg_row<'a>(fid: u64, typecode: &str, cols: &'a OneSubSeg) -> AirborneRowView<'a> {
-    use crate::compute::aircraft_v6::views::SubSegmentSlice;
-    let sub_segments = SubSegmentSlice {
-        start_gy: &cols.start_gy,
-        start_gx: &cols.start_gx,
-        start_alt_m: &cols.alt,
-        end_gy: &cols.end_gy,
-        end_gx: &cols.end_gx,
-        end_alt_m: &cols.alt,
-        speed_kt: &cols.speed,
-        length_m: &cols.length,
-        period: &cols.period,
-        date_id: &cols.date_id,
-        flags: &cols.flags,
-        terrain_start_elev_m: &cols.elev,
-        terrain_end_elev_m: &cols.elev,
-    };
-    AirborneRowView {
-        flight_id: fid,
-        callsign: "",
-        aircraft_type: cols.typebuf,
-        profile_idx: aircraft::profile_idx(typecode),
-        source_id: 0,
-        origin: 0,
-        sub_segments,
-        bbox: sub_segments.bbox(),
-    }
-}
-
-struct OneSubSeg {
-    typebuf: [u8; 4],
-    start_gy: [i32; 1],
-    start_gx: [i32; 1],
-    end_gy: [i32; 1],
-    end_gx: [i32; 1],
-    alt: [i16; 1],
-    speed: [f32; 1],
-    length: [f32; 1],
-    period: [u8; 1],
-    date_id: [i16; 1],
-    flags: [u8; 1],
-    elev: [i16; 1],
-}
-
-fn one_subseg(typecode: &str) -> OneSubSeg {
-    let mut typebuf = [0u8; 4];
-    let b = typecode.as_bytes();
-    typebuf[..b.len()].copy_from_slice(b);
+/// hybrid scatter test and the dateline scene.
+fn one_subseg(fid: u64, typecode: &str) -> SynthColumns {
+    let mut cols = SynthColumns::new();
+    let key = cols.add_flight("", typecode, aircraft::profile_idx(typecode));
     let start = grid::lonlat_to_grid(f64::from(14.2480_f32), f64::from(50.1015_f32));
     let end = grid::lonlat_to_grid(f64::from(14.2520_f32), f64::from(50.1015_f32));
-    OneSubSeg {
-        typebuf,
-        // ~250 m E-W track abeam a receiver at 14.250 / 50.100.
-        start_gy: [start.1],
-        start_gx: [start.0],
-        end_gy: [end.1],
-        end_gx: [end.0],
-        alt: [150],
-        speed: [120.0],
-        length: [285.0],
-        period: [0],
-        date_id: [0],
-        flags: [0], // arrival
-        elev: [0],
-    }
+    // ~250 m E-W track abeam a receiver at 14.250 / 50.100; flags 0 = arrival.
+    cols.push_row(fid, key, start, end, (150, 150), 120.0, 285.0, 0, 0, 0);
+    cols
 }
 
 struct FlatGround;
@@ -371,12 +450,11 @@ fn mixed_window_ga_weighted_airline_unchanged() {
     let uniform = aircraft::ClassWeights::uniform();
 
     for (typecode, expect_ga) in [("C172", true), ("R44", true), ("B738", false)] {
-        let cols = one_subseg(typecode);
-        let row = [one_subseg_row(
+        let cols = one_subseg(
             flight_id::pack_real(0xABCD01, 1_700_000_000).unwrap(),
             typecode,
-            &cols,
-        )];
+        );
+        let row = cols.batches(usize::MAX);
         let uni = scatter(&receiver, &row, 12.0, &uniform, &horizon, None, 0, None);
         let hyb = scatter(&receiver, &row, 12.0, &hybrid, &horizon, None, 0, None);
         let e_uni: f64 = uni
@@ -414,12 +492,11 @@ fn mixed_window_ga_weighted_airline_unchanged() {
 fn ga_hybrid_drops_airborne_lden_by_14_8_db() {
     use crate::compute::aircraft_v6::compute_aircraft_v6;
     let receiver = Receiver::new(50.100, 14.250, 0.0);
-    let cols = one_subseg("R44");
-    let row = [one_subseg_row(
+    let cols = one_subseg(
         flight_id::pack_real(0xBEEF02, 1_700_000_000).unwrap(),
         "R44",
-        &cols,
-    )];
+    );
+    let row = cols.batches(usize::MAX);
     let vec: String = (0..aircraft::NUM_CLASSES)
         .map(|c| {
             if aircraft::is_ga_sampled_class(c as u8) {
@@ -483,15 +560,13 @@ fn blocked_popup_retains_free_field_above_received() {
         receiver.lon,
         receiver.altitude_m(),
     );
-    let cols = one_subseg("R44");
-    let row = [one_subseg_row(
+    let cols = one_subseg(
         flight_id::pack_real(0xBEEF03, 1_700_000_000).unwrap(),
         "R44",
-        &cols,
-    )];
+    );
     let flights = scatter(
         &receiver,
-        &row,
+        &cols.batches(usize::MAX),
         1.0,
         &aircraft::ClassWeights::uniform(),
         &horizon,
@@ -699,22 +774,6 @@ fn aircraft_detail_ignores_map_iteration_order() {
 // Chunked (rayon) scatter: parity with the serial reference + benchmark.
 // ---------------------------------------------------------------------
 
-/// Owned sub-segment columns for one synthetic airborne row.
-struct SynthRowCols {
-    start_gy: Vec<i32>,
-    start_gx: Vec<i32>,
-    start_alt: Vec<i16>,
-    end_gy: Vec<i32>,
-    end_gx: Vec<i32>,
-    end_alt: Vec<i16>,
-    speed: Vec<f32>,
-    length: Vec<f32>,
-    period: Vec<u8>,
-    date_id: Vec<i16>,
-    flags: Vec<u8>,
-    elev: Vec<i16>,
-}
-
 /// splitmix64 — three lines, no dev-dependency, and the same stream on
 /// every host, so a parity failure is reproducible from the seed alone.
 fn splitmix64(state: &mut u64) -> f64 {
@@ -726,88 +785,52 @@ fn splitmix64(state: &mut u64) -> f64 {
     (z >> 11) as f64 / (1u64 << 53) as f64
 }
 
-/// `n_rows` pseudo-random tracks of `subsegs_per_row` chained sub-segments,
-/// scattered inside a ~2 km box a couple of km from the receiver at
+/// `n_tracks` pseudo-random tracks of `subsegs_per_track` chained sub-segment
+/// rows, scattered inside a ~2 km box a couple of km from the receiver at
 /// 50.0 / 14.0 / 300 m so every one of them actually reaches the Doc 29
-/// kernel. `synthetic_views` then folds the rows onto few enough flight ids
-/// that the same accumulator is written from several chunks, so
-/// `FlightAccum::merge_chunk` really runs.
-fn synthetic_airborne_rows(n_rows: usize, subsegs_per_row: usize, seed: u64) -> Vec<SynthRowCols> {
+/// kernel. Tracks fold onto `n_flights` flight ids (one fixed start_unix:
+/// `pack_real` folds the timestamp into the id, so varying it would multiply
+/// the distinct fids), so the same accumulator is written from several
+/// batches and `FlightAccum::merge_chunk` really runs.
+fn synthetic_airborne_rows(
+    n_tracks: usize,
+    subsegs_per_track: usize,
+    n_flights: usize,
+    seed: u64,
+) -> SynthColumns {
     let mut state = seed;
-    (0..n_rows)
-        .map(|i| {
-            let lat = 49.988 + splitmix64(&mut state) * 0.02;
-            let lon = 13.988 + splitmix64(&mut state) * 0.02;
-            let step = (0.004 + splitmix64(&mut state) * 0.004) * 2.0 / subsegs_per_row as f64;
-            let mut cols = SynthRowCols {
-                start_gy: Vec::with_capacity(subsegs_per_row),
-                start_gx: Vec::with_capacity(subsegs_per_row),
-                start_alt: Vec::with_capacity(subsegs_per_row),
-                end_gy: Vec::with_capacity(subsegs_per_row),
-                end_gx: Vec::with_capacity(subsegs_per_row),
-                end_alt: Vec::with_capacity(subsegs_per_row),
-                speed: vec![220.0; subsegs_per_row],
-                length: vec![1500.0; subsegs_per_row],
-                period: Vec::with_capacity(subsegs_per_row),
-                date_id: vec![10; subsegs_per_row],
-                flags: vec![(i % 2) as u8; subsegs_per_row],
-                elev: vec![300; subsegs_per_row],
-            };
-            let point =
-                |k: usize| grid::lonlat_to_grid(lon + step * k as f64, lat + step * k as f64);
-            for k in 0..subsegs_per_row {
-                let (a, b) = (point(k), point(k + 1));
-                let alt = |base: f64, r: f64| (base + r * 400.0).round() as i16;
-                let (r0, r1) = (splitmix64(&mut state), splitmix64(&mut state));
-                cols.start_gx.push(a.0);
-                cols.start_gy.push(a.1);
-                cols.end_gx.push(b.0);
-                cols.end_gy.push(b.1);
-                cols.start_alt.push(alt(700.0 + 20.0 * k as f64, r0));
-                cols.end_alt.push(alt(800.0 + 20.0 * k as f64, r1));
-                cols.period.push(((i + k) % 3) as u8);
-            }
-            cols
-        })
-        .collect()
-}
-
-fn synthetic_views<'a>(cols: &'a [SynthRowCols], n_flights: usize) -> Vec<AirborneRowView<'a>> {
-    use crate::compute::aircraft_v6::views::SubSegmentSlice;
-    cols.iter()
-        .enumerate()
-        .map(|(i, c)| {
-            let sub_segments = SubSegmentSlice {
-                start_gy: &c.start_gy,
-                start_gx: &c.start_gx,
-                start_alt_m: &c.start_alt,
-                end_gy: &c.end_gy,
-                end_gx: &c.end_gx,
-                end_alt_m: &c.end_alt,
-                speed_kt: &c.speed,
-                length_m: &c.length,
-                period: &c.period,
-                date_id: &c.date_id,
-                flags: &c.flags,
-                terrain_start_elev_m: &c.elev,
-                terrain_end_elev_m: &c.elev,
-            };
-            AirborneRowView {
-                // One fixed start_unix: `pack_real` folds the timestamp into
-                // the id, so varying it here would multiply the distinct fids
-                // and stop several chunks from meeting on one accumulator.
-                flight_id: flight_id::pack_real(0x40_0000 + (i % n_flights) as u32, 1_750_000_000)
-                    .expect("test fid"),
-                callsign: "",
-                aircraft_type: *b"A320",
-                profile_idx: (i % 8) as u8,
-                source_id: 0,
-                origin: 0,
-                sub_segments,
-                bbox: sub_segments.bbox(),
-            }
-        })
-        .collect()
+    let mut cols = SynthColumns::new();
+    for flight in 0..n_flights {
+        cols.add_flight("", "A320", (flight % 8) as u8);
+    }
+    for i in 0..n_tracks {
+        let flight = i % n_flights;
+        let fid = flight_id::pack_real(0x40_0000 + flight as u32, 1_750_000_000).expect("test fid");
+        let lat = 49.988 + splitmix64(&mut state) * 0.02;
+        let lon = 13.988 + splitmix64(&mut state) * 0.02;
+        let step = (0.004 + splitmix64(&mut state) * 0.004) * 2.0 / subsegs_per_track as f64;
+        let point = |k: usize| grid::lonlat_to_grid(lon + step * k as f64, lat + step * k as f64);
+        for k in 0..subsegs_per_track {
+            let alt = |base: f64, r: f64| (base + r * 400.0).round() as i16;
+            let (r0, r1) = (splitmix64(&mut state), splitmix64(&mut state));
+            cols.push_row(
+                fid,
+                flight as i32,
+                point(k),
+                point(k + 1),
+                (
+                    alt(700.0 + 20.0 * k as f64, r0),
+                    alt(800.0 + 20.0 * k as f64, r1),
+                ),
+                220.0,
+                1500.0,
+                ((i + k) % 3) as u8,
+                (i % 2) as u8,
+                300,
+            );
+        }
+    }
+    cols
 }
 
 fn synthetic_receiver_and_horizon() -> (Receiver, aircraft::ReceiverHorizon) {
@@ -825,24 +848,31 @@ fn synthetic_receiver_and_horizon() -> (Receiver, aircraft::ReceiverHorizon) {
 /// max/min-derived field (`peak_*`, `min_dist_m`) is a single sub-segment's
 /// value picked by a strict comparison in row order, so chunking must leave
 /// it bit-identical — a mismatch there means the merge mixed two different
-/// sub-segments' fields, which is a visible wrong `top_flights` row.
+/// sub-segments' fields, which is a visible wrong `top_flights` row. Batches
+/// of 1 000 rows exercise the grouping of sparse blocks into one chunk.
 #[test]
 fn chunked_scatter_matches_serial_within_rounding() {
-    const N_ROWS: usize = 50_000;
+    const N_TRACKS: usize = 50_000;
     const N_FLIGHTS: usize = 1_000;
-    let cols = synthetic_airborne_rows(N_ROWS, 2, 0x5EED_1234);
-    let rows = synthetic_views(&cols, N_FLIGHTS);
+    let cols = synthetic_airborne_rows(N_TRACKS, 2, N_FLIGHTS, 0x5EED_1234);
+    let batches = cols.batches(1_000);
     let (receiver, horizon) = synthetic_receiver_and_horizon();
     let weights = aircraft::ClassWeights::uniform();
 
     // Guard against a vacuous pass: the input must actually be split.
+    let chunks = super::chunk_batches(&batches);
     assert!(
-        rows.len() > super::SCATTER_CHUNK_ROWS,
+        chunks.len() > 1,
         "input not chunked — parity test would be vacuous"
     );
+    assert!(
+        chunks.iter().all(|(range, _)| range.len() == 5) && chunks.len() == batches.len() / 5,
+        "five 1 000-row batches fill one 4 096-row chunk: {chunks:?}"
+    );
 
-    let serial = super::scatter_chunk(&receiver, &rows, 0, 7.0, &weights, &horizon, None, 0, false);
-    let parallel = scatter(&receiver, &rows, 7.0, &weights, &horizon, None, 0, None);
+    let ctx = super::ScatterContext::new(&receiver, 7.0, &weights, &horizon, None);
+    let serial = super::scatter_chunk(&ctx, &batches, 0, 0, 0, false);
+    let parallel = scatter(&receiver, &batches, 7.0, &weights, &horizon, None, 0, None);
 
     assert_eq!(serial.flights.len(), N_FLIGHTS, "every fid must accumulate");
     assert_eq!(serial.flights.len(), parallel.len());
@@ -928,20 +958,20 @@ fn chunked_scatter_matches_serial_within_rounding() {
 /// plain count that survives the split.
 #[test]
 fn chunked_scatter_keeps_the_same_top_k_traces() {
-    const N_ROWS: usize = 50_000;
+    const N_TRACKS: usize = 50_000;
     const N_FLIGHTS: usize = 1_000;
     const CAP: usize = 150;
-    let cols = synthetic_airborne_rows(N_ROWS, 2, 0xC0FF_EE01);
-    let rows = synthetic_views(&cols, N_FLIGHTS);
+    let cols = synthetic_airborne_rows(N_TRACKS, 2, N_FLIGHTS, 0xC0FF_EE01);
+    let batches = cols.batches(4_096);
     let (receiver, horizon) = synthetic_receiver_and_horizon();
     let weights = aircraft::ClassWeights::uniform();
 
-    let serial_chunk =
-        super::scatter_chunk(&receiver, &rows, 0, 7.0, &weights, &horizon, None, CAP, true);
+    let ctx = super::ScatterContext::new(&receiver, 7.0, &weights, &horizon, None);
+    let serial_chunk = super::scatter_chunk(&ctx, &batches, 0, 0, CAP, true);
     let mut parallel_traces = TraceCollector::new();
     scatter(
         &receiver,
-        &rows,
+        &batches,
         7.0,
         &weights,
         &horizon,
@@ -988,11 +1018,11 @@ fn chunked_scatter_keeps_the_same_top_k_traces() {
 /// on the rayon pool: one thread and many threads agree exactly.
 #[test]
 fn chunked_scatter_bytes_do_not_depend_on_the_thread_pool() {
-    const N_ROWS: usize = 20_000;
+    const N_TRACKS: usize = 20_000;
     const N_FLIGHTS: usize = 500;
     const CAP: usize = 150;
-    let cols = synthetic_airborne_rows(N_ROWS, 2, 0x5EED_0042);
-    let rows = synthetic_views(&cols, N_FLIGHTS);
+    let cols = synthetic_airborne_rows(N_TRACKS, 2, N_FLIGHTS, 0x5EED_0042);
+    let batches = cols.batches(4_096);
     let (receiver, horizon) = synthetic_receiver_and_horizon();
     let weights = aircraft::ClassWeights::uniform();
     let run = |threads: usize| {
@@ -1004,7 +1034,7 @@ fn chunked_scatter_bytes_do_not_depend_on_the_thread_pool() {
             let mut traces = TraceCollector::new();
             let flights = scatter(
                 &receiver,
-                &rows,
+                &batches,
                 7.0,
                 &weights,
                 &horizon,
@@ -1038,25 +1068,26 @@ fn chunked_scatter_bytes_do_not_depend_on_the_thread_pool() {
 #[test]
 #[ignore = "benchmark, not a gate — prints serial vs chunked scatter wall time"]
 fn scatter_speedup_on_150k_rows() {
-    const N_ROWS: usize = 150_000;
+    const N_TRACKS: usize = 150_000;
     const N_FLIGHTS: usize = 20_000;
     const CAP: usize = 150;
-    // New York's real popup shape: ~159 k rows / ~3.9 M sub-segments.
-    const SUBSEGS_PER_ROW: usize = 25;
-    let cols = synthetic_airborne_rows(N_ROWS, SUBSEGS_PER_ROW, 0xBE_1234);
-    let rows = synthetic_views(&cols, N_FLIGHTS);
+    // New York's real popup shape: ~3.9 M sub-segment rows.
+    const SUBSEGS_PER_TRACK: usize = 25;
+    let cols = synthetic_airborne_rows(N_TRACKS, SUBSEGS_PER_TRACK, N_FLIGHTS, 0xBE_1234);
+    let batches = cols.batches(4_096);
     let (receiver, horizon) = synthetic_receiver_and_horizon();
     let weights = aircraft::ClassWeights::uniform();
 
     let t0 = std::time::Instant::now();
-    let serial = super::scatter_chunk(&receiver, &rows, 0, 7.0, &weights, &horizon, None, CAP, true);
+    let ctx = super::ScatterContext::new(&receiver, 7.0, &weights, &horizon, None);
+    let serial = super::scatter_chunk(&ctx, &batches, 0, 0, CAP, true);
     let serial_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     let mut traces = TraceCollector::new();
     let t1 = std::time::Instant::now();
     let parallel = scatter(
         &receiver,
-        &rows,
+        &batches,
         7.0,
         &weights,
         &horizon,
@@ -1067,8 +1098,9 @@ fn scatter_speedup_on_150k_rows() {
     let parallel_ms = t1.elapsed().as_secs_f64() * 1000.0;
 
     eprintln!(
-        "airborne scatter {N_ROWS} rows / {} sub-segs above cutoff: serial {serial_ms:.0} ms, \
+        "airborne scatter {} rows / {} sub-segs above cutoff: serial {serial_ms:.0} ms, \
          chunked {parallel_ms:.0} ms on {} rayon threads = {:.2}x (flights {} / {})",
+        cols.flight_id.len(),
         traces.airborne_above_cutoff,
         rayon::current_num_threads(),
         serial_ms / parallel_ms,

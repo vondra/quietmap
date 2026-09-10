@@ -60,9 +60,10 @@ class CountryBakeTests(unittest.TestCase):
     def test_arrow_rewrite_preserves_spatial_batches_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "roads.arrow"
-            # Two engine/arrow-batching block records (version byte; u16 z14 x, y; f64 envelope).
-            blocks = base64.b64encode(b"\x01" + struct.pack("<HH4d", 8851, 5556, 49, 14, 51, 15)
-                                      + struct.pack("<HH4d", 8897, 5556, 49, 15, 51, 16))
+            # Two engine/arrow-batching block records (version byte; u16 z14 x, y; f64 envelope;
+            # f32 altitude range, 0 for surface layers).
+            blocks = base64.b64encode(b"\x01" + struct.pack("<HH4d2f", 8851, 5556, 49, 14, 51, 15, 0, 0)
+                                      + struct.pack("<HH4d2f", 8897, 5556, 49, 15, 51, 16, 0, 0))
             metadata = {b"qm_blocks": blocks, b"source": b"fixture"}
             batches = [segment_batch([(50, 14.8)]).replace_schema_metadata(metadata),
                        segment_batch([(50, 15.2)]).replace_schema_metadata(metadata)]

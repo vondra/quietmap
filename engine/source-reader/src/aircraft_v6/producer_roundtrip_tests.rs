@@ -4,33 +4,36 @@ use super::*;
 use aircraft_extract::{arrow_io::*, flight::*};
 use arrow::{
     array::*,
-    datatypes::{DataType, Field, Schema},
+    datatypes::{DataType, Field, Int32Type, Schema},
 };
+use noise_compute::compute::aircraft_v6::airport_traffic::AirportSummaryEntry;
 use std::sync::Arc;
 
-fn flight() -> AirborneEvent {
-    AirborneEvent {
+fn flight() -> FlightSegment {
+    FlightSegment {
         flight_id: 42,
         callsign: "TEST42".into(),
         aircraft_type: *b"A320",
         profile_idx: 2,
         source_id: 2,
         origin: 0,
-        sub_segments: vec![AirborneSubSegment {
-            start_lat: 50.1,
-            start_lon: 14.26,
-            start_alt_m: 1000.4,
-            end_lat: 50.11,
-            end_lon: 14.27,
-            end_alt_m: 1100.6,
-            speed_kt: 250.0,
-            length_m: 1200.0,
-            period: 2,
-            date_id: 365,
-            flags: 1,
-            terrain_start_elev_m: 234.6,
-            terrain_end_elev_m: 250.4,
-        }],
+        veh_kind: 0,
+        gse_class: 0,
+        period: 2,
+        date_id: 365,
+        phase: Phase::Airborne,
+        flags: 1,
+        start_lat: 50.1,
+        start_lon: 14.26,
+        start_alt_m: 1000.4,
+        end_lat: 50.11,
+        end_lon: 14.27,
+        end_alt_m: 1100.6,
+        speed_kt: 250.0,
+        length_m: 1200.0,
+        agl_avg_m: 800.0,
+        start_elev_m: 234.6,
+        end_elev_m: 250.4,
     }
 }
 
@@ -43,43 +46,61 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
     assert_airborne_contract("airborne.arrow", &batches).unwrap();
     build_class_weights(&batches, &[], 12).unwrap();
     let accum = AirborneRowAccum::new(&batches).unwrap();
-    let views = accum.views();
-    let row = &views[0];
+    let row = &accum.views()[0];
+    let key = row.flight_key[0] as usize;
     assert_eq!(
-        (row.flight_id, row.callsign, row.aircraft_type),
+        (
+            row.flight_id[0],
+            row.flights.callsign(key),
+            row.flights.aircraft_type(key)
+        ),
         (42, "TEST42", *b"A320")
     );
-    assert_eq!((row.source_id, row.profile_idx, row.origin), (2, 2, 0));
-    assert_eq!(row.sub_segments.start_alt_m, &[1000]);
-    assert_eq!(row.sub_segments.end_alt_m, &[1101]);
-    assert_eq!(row.sub_segments.terrain_start_elev_m, &[235]);
-    assert_eq!(row.sub_segments.terrain_end_elev_m, &[250]);
-    assert_eq!(row.sub_segments.date_id, &[365]);
-    assert_eq!(row.sub_segments.period, &[2]);
-    assert_eq!(row.sub_segments.flags, &[1]);
-    assert_eq!(row.sub_segments.speed_kt, &[250.0]);
-    assert_eq!(row.sub_segments.length_m, &[1200.0]);
+    assert_eq!(
+        (
+            row.flights.source_id[key],
+            row.flights.profile_idx[key],
+            row.flights.origin[key]
+        ),
+        (2, 2, 0)
+    );
+    assert_eq!(row.start_alt_m, &[1000]);
+    assert_eq!(row.end_alt_m, &[1101]);
+    assert_eq!(row.terrain_start_elev_m, &[235]);
+    assert_eq!(row.terrain_end_elev_m, &[250]);
+    assert_eq!(row.date_id, &[365]);
+    assert_eq!(row.period, &[2]);
+    assert_eq!(row.flags, &[1]);
+    assert_eq!(row.speed_kt, &[250.0]);
+    assert_eq!(row.length_m, &[1200.0]);
     let (gx, gy) = grid::lonlat_to_grid(f64::from(14.26_f32), f64::from(50.1_f32));
     let (lon, lat) = square_store::grid_cols::grid_cell_lonlat(gx, gy);
-    assert_eq!(row.sub_segments.start_lat_lon(0), [lat as f32, lon as f32]);
-    let list = batches[0]
-        .column_by_name("sub_segments")
-        .unwrap()
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .unwrap();
-    let values = list
-        .values()
-        .as_any()
-        .downcast_ref::<StructArray>()
-        .unwrap();
-    let xs = values
+    assert_eq!(row.start_lat_lon(0), [lat as f32, lon as f32]);
+    let xs = batches[0]
         .column_by_name("start_gx")
         .unwrap()
         .as_any()
         .downcast_ref::<Int32Array>()
         .unwrap();
-    assert_eq!(row.sub_segments.start_gx.as_ptr(), xs.values().as_ptr());
+    assert_eq!(row.start_gx.as_ptr(), xs.values().as_ptr());
+    let callsigns = batches[0]
+        .column_by_name("flight")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<DictionaryArray<Int32Type>>()
+        .unwrap()
+        .values()
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .unwrap()
+        .column_by_name("callsign")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap()
+        .value_data()
+        .as_ptr();
+    assert_eq!(row.flights.callsign_bytes.as_ptr(), callsigns);
 
     let cruise = dir.path().join("cruise.arrow");
     let id = grid::cruise::cruise_cell_id(50.1, 14.26);
@@ -173,35 +194,24 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
     assert_eq!(views[0].microseg_unique_ga_count, 2);
     assert_eq!(views[0].band_energy_lin, &[123.0; 8]);
 
-    let summary = dir.path().join("airport_summary.arrow");
-    write_airport_summary(
-        &summary,
-        &[AirportSummaryRow {
-            airport_key: "LKTEST".into(),
-            airport_unique_arr_count: 3,
-            airport_unique_dep_count: 4,
-            airport_unique_gse_count_per_class: [1, 2, 3],
-            airport_unique_ops_count_per_kind: [5, 6, 7],
-            airport_unique_ga_arr_count: 8,
-            airport_unique_ga_dep_count: 9,
-            airport_unique_ga_ops_count_per_kind: [10, 11, 12],
-        }],
-    )
-    .unwrap();
-    let (_, batches) = read_record_batches(&summary).unwrap();
-    let accum = AirportSummaryAccum::new(&batches).unwrap();
-    let row = &accum.lookup()["LKTEST"];
-    assert_eq!(
-        (
-            row.arr_count,
-            row.dep_count,
-            row.ga_arr_count,
-            row.ga_dep_count
-        ),
-        (3, 4, 8, 9)
+    let mut summaries = std::collections::BTreeMap::new();
+    summaries.insert(
+        "LKTEST".to_string(),
+        AirportSummaryEntry {
+            arr_count: 3,
+            dep_count: 4,
+            gse_count_per_class: [1, 2, 3],
+            ops_count_per_kind: [5, 6, 7],
+            ga_arr_count: 8,
+            ga_dep_count: 9,
+            ga_ops_count_per_kind: [10, 11, 12],
+        },
     );
-    assert_eq!(row.gse_count_per_class, [1, 2, 3]);
-    assert_eq!(row.ga_ops_count_per_kind, [10, 11, 12]);
+    stamp_airport_summaries(&traffic, &summaries).unwrap();
+    let (schema, batches) = read_record_batches(&traffic).unwrap();
+    let mut accum = AirportSummaryAccum::default();
+    accum.merge_square(&schema, &batches).unwrap();
+    assert_eq!(accum.lookup()["LKTEST"], summaries["LKTEST"]);
 }
 
 #[test]
@@ -216,7 +226,7 @@ fn current_stamps_never_turn_wrong_geometry_into_zero_rows() {
         .fields()
         .iter()
         .enumerate()
-        .filter(|(_, field)| field.name() != "sub_segments")
+        .filter(|(_, field)| field.name() != "flight")
         .map(|(index, field)| (field.as_ref().clone(), batch.column(index).clone()))
         .collect();
     let bad = RecordBatch::try_new(
@@ -233,7 +243,7 @@ fn current_stamps_never_turn_wrong_geometry_into_zero_rows() {
     assert!(AirborneRowAccum::new(&[bad])
         .err()
         .unwrap()
-        .contains("sub_segments"));
+        .contains("flight"));
     let old_geometry = RecordBatch::new_empty(Arc::new(Schema::new(vec![Field::new(
         "start_gx",
         DataType::Float32,
@@ -357,65 +367,74 @@ fn cruise_popup_names_and_highlights_the_actual_producer_cell() {
     }
 }
 
+/// A sliced batch keeps its dictionary and every decoded coordinate, so a
+/// block decoded from the middle of a file still joins the right flight.
 #[test]
-fn borrowed_geometry_preserves_sliced_rows_and_eager_bounds() {
+fn borrowed_geometry_preserves_sliced_rows_and_flight_keys() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("airborne.arrow");
-    let mut events = vec![flight(), flight(), flight()];
-    for (index, event) in events.iter_mut().enumerate() {
-        event.flight_id += index as u64;
-        event.sub_segments = [(-85.0, -179.99), (85.0, 179.99), (0.0, 0.0)]
-            .into_iter()
-            .map(|(lat, lon)| {
-                let mut segment = flight().sub_segments[0].clone();
-                segment.start_lat = lat;
-                segment.start_lon = lon;
-                segment.end_lat = -lat;
-                segment.end_lon = -lon;
-                segment
-            })
-            .collect();
+    let mut rows = Vec::new();
+    for (index, (lat, lon)) in [(-85.0, -179.99), (85.0, 179.99), (0.0, 0.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut row = flight();
+        row.flight_id += index as u64;
+        row.callsign = format!("SLICE{index}");
+        row.start_lat = lat;
+        row.start_lon = lon;
+        row.end_lat = lat;
+        row.end_lon = lon + 0.001;
+        rows.push(row);
     }
-    write_airborne(&path, &events, 12, 365).unwrap();
+    write_airborne(&path, &rows, 12, 365).unwrap();
     let (_, batches) = read_record_batches(&path).unwrap();
-    let sliced = [batches[0].slice(1, 1)];
+    // Three rows in three z14 cells: one batch each, one shared dictionary.
+    assert_eq!(batches.len(), 3);
+    let sliced = [batches[1].slice(0, 1)];
     let accum = AirborneRowAccum::new(&sliced).unwrap();
-    let rows = accum.views();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].flight_id, 43);
-    let sub = rows[0].sub_segments;
-    let mut latitudes = Vec::new();
-    let mut longitudes = Vec::new();
-    for index in 0..sub.len() {
-        for (gx, gy, actual) in [
-            (
-                sub.start_gx[index],
-                sub.start_gy[index],
-                sub.start_lat_lon(index),
-            ),
-            (sub.end_gx[index], sub.end_gy[index], sub.end_lat_lon(index)),
-        ] {
-            let (lon, lat) = square_store::grid_cols::grid_cell_lonlat(gx, gy);
-            assert_eq!(actual, [lat as f32, lon as f32]);
-            latitudes.push(lat as f32);
-            longitudes.push(lon as f32);
-        }
+    let batch = &accum.views()[0];
+    assert_eq!(batch.len(), 1);
+    let key = batch.flight_key[0] as usize;
+    assert_eq!(batch.flights.len(), 3);
+    assert_eq!(
+        batch.flights.callsign(key),
+        format!("SLICE{}", batch.flight_id[0] - 42)
+    );
+    for (gx, gy, actual) in [
+        (batch.start_gx[0], batch.start_gy[0], batch.start_lat_lon(0)),
+        (batch.end_gx[0], batch.end_gy[0], batch.end_lat_lon(0)),
+    ] {
+        let (lon, lat) = square_store::grid_cols::grid_cell_lonlat(gx, gy);
+        assert_eq!(actual, [lat as f32, lon as f32]);
     }
-    let bbox = rows[0].bbox;
-    assert_eq!(
-        bbox.min_lat,
-        latitudes.iter().copied().fold(f32::INFINITY, f32::min)
-    );
-    assert_eq!(
-        bbox.max_lat,
-        latitudes.iter().copied().fold(f32::NEG_INFINITY, f32::max)
-    );
-    assert_eq!(
-        bbox.min_lon,
-        longitudes.iter().copied().fold(f32::INFINITY, f32::min)
-    );
-    assert_eq!(
-        bbox.max_lon,
-        longitudes.iter().copied().fold(f32::NEG_INFINITY, f32::max)
-    );
+}
+
+/// A key beyond the dictionary is a corrupt file, never an out-of-bounds read.
+#[test]
+fn flight_keys_outside_the_dictionary_are_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("airborne.arrow");
+    write_airborne(&path, &[flight()], 12, 365).unwrap();
+    let (_, batches) = read_record_batches(&path).unwrap();
+    let batch = &batches[0];
+    let index = batch.schema().index_of("flight").unwrap();
+    let flight = batch
+        .column(index)
+        .as_any()
+        .downcast_ref::<DictionaryArray<Int32Type>>()
+        .unwrap();
+    let mut columns = batch.columns().to_vec();
+    // `try_new` refuses the key; a corrupt file would not have asked.
+    columns[index] = Arc::new(unsafe {
+        DictionaryArray::<Int32Type>::new_unchecked(
+            Int32Array::from(vec![5]),
+            flight.values().clone(),
+        )
+    });
+    let bad = RecordBatch::try_new(batch.schema(), columns).unwrap();
+    assert!(AirborneRowAccum::new(&[bad])
+        .err()
+        .unwrap()
+        .contains("flight key"));
 }

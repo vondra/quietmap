@@ -154,6 +154,7 @@ fn parse_blocks_rejects_malformed_and_round_trips_a_record() {
         cell_x: 8_823,
         cell_y: 5_593,
         bbox: [49.5, 13.9, 50.1, 14.6],
+        alt_m: [-12.5, 3_050.0],
     };
     let encoded = encode_blocks(&[block]);
     assert_eq!(parse_blocks(&encoded).unwrap(), vec![block]);
@@ -184,6 +185,38 @@ fn parse_blocks_rejects_malformed_and_round_trips_a_record() {
         parse_blocks(&encode_blocks(&[outside])).is_none(),
         "cell beyond the z14 axis"
     );
+    let inverted_altitude = Block {
+        alt_m: [3_050.0, -12.5],
+        ..block
+    };
+    assert!(
+        parse_blocks(&encode_blocks(&[inverted_altitude])).is_none(),
+        "min_alt > max_alt"
+    );
+}
+
+/// Surface writers stamp `0, 0`; the airborne writer's per-row ranges union per batch.
+#[test]
+fn block_altitude_range_is_the_union_of_its_rows_and_zero_for_surface_layers() {
+    let (schema, cols, bboxes) = synthetic(9_700, 0.00001);
+    let altitudes: Vec<RowAltitudeRange> = (0..9_700)
+        .map(|i| [100.0 + i as f32, 200.0 + i as f32])
+        .collect();
+    let (schema, batches) =
+        blocked_by_z14_cell_with_altitude(schema.clone(), cols.clone(), &bboxes, &altitudes)
+            .unwrap();
+    assert_eq!(
+        blocks_of(&schema)
+            .iter()
+            .map(|b| b.alt_m)
+            .collect::<Vec<_>>(),
+        [[100.0, 4_295.0], [4_196.0, 8_391.0], [8_292.0, 9_899.0]]
+    );
+    assert_eq!(batches.len(), 3);
+    let (schema, _) = blocked_by_z14_cell(schema.as_ref().clone(), cols, &bboxes).unwrap();
+    assert!(blocks_of(&schema).iter().all(|b| b.alt_m == [0.0, 0.0]));
+    let (schema, cols, bboxes) = synthetic(3, 0.01);
+    assert!(blocked_by_z14_cell_with_altitude(schema, cols, &bboxes, &[[0.0; 2]; 2]).is_err());
 }
 
 #[test]

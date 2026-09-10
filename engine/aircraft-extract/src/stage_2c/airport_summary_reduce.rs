@@ -1,9 +1,10 @@
-//! Union ground membership masks globally and publish identical summaries to every owner.
+//! Union ground membership masks globally and stamp identical summaries into every owner's traffic footer.
 use super::admission::AllocationBudget;
 use super::movements::{self, MovementUnion};
-use crate::arrow_io::{read_airport_summary_part, write_airport_summary, AirportSummaryRow};
+use crate::arrow_io::{read_airport_summary_part, stamp_airport_summaries};
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+use noise_compute::compute::aircraft_v6::airport_traffic::AirportSummaryEntry;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 pub fn run_airport_summary_reduce(parts_root: &Path, prepared_year: &Path) -> Result<usize> {
@@ -36,7 +37,7 @@ pub fn run_airport_summary_reduce(parts_root: &Path, prepared_year: &Path) -> Re
             budget.reserve(
                 8 * (row.airport_key.len()
                     + std::mem::size_of::<String>()
-                    + std::mem::size_of::<AirportSummaryRow>()) as u64,
+                    + std::mem::size_of::<AirportSummaryEntry>()) as u64,
             )?;
             keys.push(row.airport_key.clone());
             if !by_airport.contains_key(&row.airport_key) {
@@ -51,60 +52,52 @@ pub fn run_airport_summary_reduce(parts_root: &Path, prepared_year: &Path) -> Re
         keys.dedup();
         airport_owners.push((owner, keys));
     }
-    let mut rows: Vec<_> = by_airport
+    let summaries: BTreeMap<String, AirportSummaryEntry> = by_airport
         .into_iter()
-        .map(|(airport_key, union)| AirportSummaryRow {
-            airport_key,
-            airport_unique_arr_count: union.count(movements::ARRIVAL),
-            airport_unique_dep_count: union.count(movements::DEPARTURE),
-            airport_unique_gse_count_per_class: std::array::from_fn(|i| {
-                union.count(movements::GSE[i])
-            }),
-            airport_unique_ops_count_per_kind: std::array::from_fn(|i| {
-                union.count(movements::OPS[i])
-            }),
-            airport_unique_ga_arr_count: union.count(movements::GA_ARRIVAL),
-            airport_unique_ga_dep_count: union.count(movements::GA_DEPARTURE),
-            airport_unique_ga_ops_count_per_kind: std::array::from_fn(|i| {
-                union.count(movements::GA_OPS[i])
-            }),
+        .map(|(airport_key, union)| {
+            let entry = AirportSummaryEntry {
+                arr_count: union.count(movements::ARRIVAL),
+                dep_count: union.count(movements::DEPARTURE),
+                gse_count_per_class: std::array::from_fn(|i| union.count(movements::GSE[i])),
+                ops_count_per_kind: std::array::from_fn(|i| union.count(movements::OPS[i])),
+                ga_arr_count: union.count(movements::GA_ARRIVAL),
+                ga_dep_count: union.count(movements::GA_DEPARTURE),
+                ga_ops_count_per_kind: std::array::from_fn(|i| union.count(movements::GA_OPS[i])),
+            };
+            (airport_key, entry)
         })
         .collect();
-    rows.sort_unstable_by(|a, b| a.airport_key.cmp(&b.airport_key));
     for (owner, keys) in airport_owners {
-        let summaries: Vec<_> = keys
-            .iter()
+        let owned: BTreeMap<String, AirportSummaryEntry> = keys
+            .into_iter()
             .map(|key| {
-                rows[rows
-                    .binary_search_by(|row| row.airport_key.cmp(key))
-                    .expect("known airport key")]
-                .clone()
+                let entry = summaries[&key];
+                (key, entry)
             })
             .collect();
-        write_airport_summary(
-            &prepared_year
-                .join(crate::spatial::square_path(owner))
-                .join(super::AIRPORT_SUMMARY_FILENAME),
-            &summaries,
-        )?;
+        let path = prepared_year
+            .join(crate::spatial::square_path(owner))
+            .join(super::AIRPORT_TRAFFIC_FILENAME);
+        stamp_airport_summaries(&path, &owned)
+            .with_context(|| format!("stamp airport summaries into {}", path.display()))?;
     }
     eprintln!(
         "[stage2c/reduce] {} airports; {} B charged allocation allowance",
-        rows.len(),
+        summaries.len(),
         budget.reserved()
     );
-    Ok(rows.len())
+    Ok(summaries.len())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow_io::{read_airport_summary, write_airport_summary_part};
+    use crate::arrow_io::{read_airport_summaries, write_airport_summary_part, write_airport_traffic};
     use crate::stage_2c::airport_traffic_writer::AirportSummaryPartRow;
     use movements::*;
 
     #[test]
-    fn reducer_unions_every_flag_across_owners_and_keeps_airports_separate() {
+    fn reducer_unions_every_flag_across_owners_and_stamps_every_owner_identically() {
         let temp = tempfile::tempdir().unwrap();
         let parts = temp.path().join("parts");
         let out = temp.path().join("prepared");
@@ -136,31 +129,32 @@ mod tests {
                 ],
             )
             .unwrap();
+            write_airport_traffic(
+                &out.join(square).join(crate::stage_2c::AIRPORT_TRAFFIC_FILENAME),
+                &[],
+                1,
+                0,
+            )
+            .unwrap();
         }
         assert_eq!(run_airport_summary_reduce(&parts, &out).unwrap(), 2);
-        let rows = read_airport_summary(&out.join("z9/276/173/airport_summary.arrow")).unwrap();
+        let rows = read_airport_summaries(&out.join("z9/276/173/airport_traffic.arrow")).unwrap();
         assert_eq!(
             rows,
-            read_airport_summary(&out.join("z9/277/173/airport_summary.arrow")).unwrap()
+            read_airport_summaries(&out.join("z9/277/173/airport_traffic.arrow")).unwrap()
         );
-        assert_eq!(rows[0].airport_key, "A");
-        assert_eq!(rows[0].airport_unique_arr_count, 1);
-        let b = &rows[1];
-        assert_eq!(
-            (b.airport_unique_arr_count, b.airport_unique_dep_count),
-            (2, 2)
-        );
-        assert_eq!(b.airport_unique_gse_count_per_class, [2, 1, 1]);
-        assert_eq!(b.airport_unique_ops_count_per_kind, [2, 2, 1]);
-        assert_eq!(
-            (b.airport_unique_ga_arr_count, b.airport_unique_ga_dep_count),
-            (2, 2)
-        );
-        assert_eq!(b.airport_unique_ga_ops_count_per_kind, [2, 2, 1]);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows["A"].arr_count, 1);
+        let b = &rows["B"];
+        assert_eq!((b.arr_count, b.dep_count), (2, 2));
+        assert_eq!(b.gse_count_per_class, [2, 1, 1]);
+        assert_eq!(b.ops_count_per_kind, [2, 2, 1]);
+        assert_eq!((b.ga_arr_count, b.ga_dep_count), (2, 2));
+        assert_eq!(b.ga_ops_count_per_kind, [2, 2, 1]);
     }
 
     #[test]
-    fn missing_parts_are_not_a_complete_empty_run() {
+    fn missing_parts_or_an_owner_without_traffic_are_never_a_complete_run() {
         let temp = tempfile::tempdir().unwrap();
         let parts = temp.path().join("parts");
         let out = temp.path().join("prepared");
@@ -168,5 +162,17 @@ mod tests {
         std::fs::create_dir(&parts).unwrap();
         assert_eq!(run_airport_summary_reduce(&parts, &out).unwrap(), 0);
         assert!(!out.exists());
+        write_airport_summary_part(
+            &parts.join("z9/276/173/part.arrow"),
+            &[AirportSummaryPartRow {
+                airport_key: "A".into(),
+                members: vec![(1, ARRIVAL)],
+            }],
+        )
+        .unwrap();
+        assert!(run_airport_summary_reduce(&parts, &out)
+            .unwrap_err()
+            .to_string()
+            .contains("stamp airport summaries"));
     }
 }

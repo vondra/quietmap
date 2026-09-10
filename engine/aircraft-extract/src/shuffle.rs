@@ -1,4 +1,4 @@
-//! Two-pass destination shuffle: intact airborne support copies and midpoint-owned ground.
+//! Two-pass shuffle of Stage 1 day files into per-z9 shards, every row owned by its midpoint square.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -6,12 +6,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 
-use crate::arrow_io::{for_each_segment_batch, read_segments, write_segments};
+use crate::arrow_io::{for_each_segment_batch, read_segments, write_owner_shard, write_segments};
 use crate::flight::{FlightSegment, Phase};
 use crate::geo::{midpoint, square_path};
 use crate::progress::{finished, human, started, Milestone};
 use crate::scope::ScopeBbox;
+use crate::segment::split::split_airborne_segment;
 use crate::spatial::{square_directories, square_id};
+use crate::support::airborne_stored_endpoints;
 
 /// Partition destination cells across 256 gather tasks; each worker writes
 /// one file at a time, independently of the number of supported cells.
@@ -31,31 +33,16 @@ fn shuffle_bucket(square: u64) -> u64 {
     mixed % SHUFFLE_HASH_BUCKETS
 }
 
-fn square_of_midpoint(seg: &FlightSegment) -> Option<u64> {
-    let (mid_lat, mid_lon) = midpoint(seg.start_lat, seg.start_lon, seg.end_lat, seg.end_lon);
+/// The one square that stores a segment: the owner of the midpoint of its
+/// stored (z30-quantized, Mercator-clamped) geometry. Airborne pieces are
+/// already within the length cap on that geometry, so the popup finds every
+/// owner within `AIRBORNE_QUERY_RADIUS_M` of a receiver; ground rows feed
+/// Stage 2C.
+fn owner_square(segment: &FlightSegment, scope: Option<&ScopeBbox>) -> Option<u64> {
+    let (start, end) = airborne_stored_endpoints(segment)?;
+    let (mid_lat, mid_lon) = midpoint(start[0], start[1], end[0], end[1]);
     square_id(mid_lat as f64, mid_lon as f64)
-}
-
-fn destination_squares<'a>(
-    segment: &FlightSegment,
-    scope: Option<&'a ScopeBbox>,
-) -> Result<impl Iterator<Item = u64> + 'a> {
-    let airborne = if segment.phase == Phase::Airborne {
-        Some(
-            crate::support::airborne_segment_support(segment)
-                .context("invalid airborne support")?,
-        )
-    } else {
-        None
-    };
-    let ground = (segment.phase == Phase::Ground)
-        .then(|| square_of_midpoint(segment))
-        .flatten();
-    Ok(airborne
-        .into_iter()
-        .flat_map(|support| support.iter().map(|square| grid::square_id(square) as u64))
-        .chain(ground)
-        .filter(move |&square| scope.is_none_or(|scope| scope.contains_square(square))))
+        .filter(|&square| scope.is_none_or(|scope| scope.contains_square(square)))
 }
 
 fn phase_name(phase: Phase) -> Option<&'static str> {
@@ -83,10 +70,10 @@ fn pass_a_bucket_dir(temp_dir: &Path, phase: &str, hash: u64) -> PathBuf {
 /// The two windows merge here because this is the last per-day stage;
 /// Stage 2 consumers read one per-z9 pool and weight rows per class.
 ///
-/// `scope` filters destination cells in both passes, including support cells
-/// reached from an original segment whose midpoint is outside the scope.
-/// Completed destination phases release their scatter parts. An interrupted run
-/// restarts from retained day inputs; sampling manifests appear only after gather.
+/// `scope` filters owner cells in both passes; a piece of a long chord is kept
+/// when its own midpoint is in scope. Completed destination phases release
+/// their scatter parts. An interrupted run restarts from retained day inputs;
+/// sampling manifests appear only after gather.
 pub fn shuffle_per_square(
     day_paths: &[PathBuf],
     ga_day_paths: &[PathBuf],
@@ -185,8 +172,8 @@ pub fn shuffle_per_square(
     Ok(())
 }
 
-/// Bound routed row payload per scatter worker. Flush within a source row's
-/// support expansion so a long segment cannot multiply a whole decoded day.
+/// Bound routed row payload per scatter worker. Flush inside a decoded batch so
+/// the pieces of a day's long chords cannot multiply the retained payload.
 const PASS_A_SPILL_BYTES: usize = 512 * 1024 * 1024;
 
 /// Bail on duplicate day stems within one pass list: Pass A keys temp
@@ -268,6 +255,7 @@ fn scatter_day(
     let mut buffered_bytes = 0;
     let mut part = 0;
     let mut counts = DestinationCounts::new();
+    let mut pieces = Vec::new();
     for_each_segment_batch(day_path, |segments| {
         for seg in segments {
             anyhow::ensure!(
@@ -285,24 +273,22 @@ fn scatter_day(
             let Some(phase) = phase_name(seg.phase) else {
                 continue;
             };
-            let row_bytes = std::mem::size_of::<FlightSegment>() + seg.callsign.len();
-            // Keep this set across flushes inside one original observation.
-            // Gather expands each hash copy to its cells exactly once.
-            let mut hashes = [false; SHUFFLE_HASH_BUCKETS as usize];
-            for square in destination_squares(&seg, scope)? {
-                counts.add(seg.phase, square, seg.callsign.len());
-                let hash = shuffle_bucket(square);
-                if !std::mem::replace(&mut hashes[hash as usize], true) {
-                    buckets
-                        .entry((phase, hash))
-                        .or_insert_with(Vec::new)
-                        .push(seg.clone());
-                    counts.scattered_rows += 1;
-                    buffered_bytes += row_bytes;
-                    if buffered_bytes >= spill_bytes {
-                        flush_pass_a(&mut buckets, temp_dir, pass, day_stem, &mut part)?;
-                        buffered_bytes = 0;
-                    }
+            split_airborne_segment(seg, &mut pieces);
+            for piece in pieces.drain(..) {
+                let Some(square) = owner_square(&piece, scope) else {
+                    continue;
+                };
+                counts.add(piece.phase, square, piece.callsign.len());
+                let row_bytes = std::mem::size_of::<FlightSegment>() + piece.callsign.len();
+                buckets
+                    .entry((phase, shuffle_bucket(square)))
+                    .or_insert_with(Vec::new)
+                    .push(piece);
+                counts.scattered_rows += 1;
+                buffered_bytes += row_bytes;
+                if buffered_bytes >= spill_bytes {
+                    flush_pass_a(&mut buckets, temp_dir, pass, day_stem, &mut part)?;
+                    buffered_bytes = 0;
                 }
             }
         }
@@ -372,18 +358,18 @@ fn pass_b(
                         let segs = read_segments(part)
                             .with_context(|| format!("read {}", part.display()))?;
                         for seg in segs {
-                            for square in destination_squares(&seg, scope)? {
-                                if shuffle_bucket(square) == hash {
-                                    by_square
-                                        .entry(square)
-                                        .or_insert_with(|| {
-                                            Vec::with_capacity(
-                                                destinations.rows(phase_kind, square),
-                                            )
-                                        })
-                                        .push(seg.clone());
-                                }
-                            }
+                            let square = owner_square(&seg, scope)
+                                .context("scattered row lost its in-scope owner")?;
+                            anyhow::ensure!(
+                                shuffle_bucket(square) == hash,
+                                "scattered row filed under the wrong hash bucket"
+                            );
+                            by_square
+                                .entry(square)
+                                .or_insert_with(|| {
+                                    Vec::with_capacity(destinations.rows(phase_kind, square))
+                                })
+                                .push(seg);
                         }
                     }
                     anyhow::ensure!(by_square.len() == expected,
@@ -396,7 +382,7 @@ fn pass_b(
                         );
                         let square_dir = out_dir.join(square_path(square));
                         std::fs::create_dir_all(&square_dir)?;
-                        write_segments(&square_dir.join(format!("{phase}.arrow")), &segs)?;
+                        write_owner_shard(&square_dir.join(format!("{phase}.arrow")), &segs)?;
                         shards_this_bucket += 1;
                     }
                     // Every destination in this phase has been synced, closed and renamed.

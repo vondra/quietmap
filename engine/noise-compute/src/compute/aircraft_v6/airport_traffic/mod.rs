@@ -125,10 +125,8 @@ const A_WEIGHT_LIN: [f64; NUM_BANDS] = {
 ///   `auto-<lonE5>-<latE5>` key (integers = degrees × 1e5, either may
 ///   be negative). Parse the coordinates, format them so users see
 ///   something meaningful instead of an opaque key
-///   (e.g. "Auto airfield 50.04,14.26"). Stage 1.5 stores a
-///   richer name in `synth_airport_areas.arrow` (with length + visit
-///   count) but the popup doesn't currently load that sidecar; the
-///   coordinate prefix is the minimum useful surface.
+///   (e.g. "Auto airfield 50.04,14.26"); the coordinate prefix is the
+///   minimum useful surface.
 /// - Strip orphan fallback `strip:<z9-square-id>` is kept as-is (popup
 ///   already labels these "strip cluster").
 fn synth_airport_display_name(airport_key: &str) -> String {
@@ -331,9 +329,11 @@ struct AirportAcc {
 /// Global movement unions for airports in the loaded cells; replicated rows are never summed.
 pub type AirportSummaryLookup = std::collections::HashMap<String, AirportSummaryEntry>;
 
-/// One row of `airport_summary.arrow`. Mirrors the popup's read-side
-/// view but owned for the duration of the popup query.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// One airport's global movement union, stored once per traffic file in the
+/// `qm_airport_summaries` footer of `airport_traffic.arrow` (see
+/// [`encode_airport_summaries`]); replicated verbatim into every owner cell.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AirportSummaryEntry {
     /// NON-GA-class window counts (airline 12-day). v9 split.
     pub arr_count: u32,
@@ -349,13 +349,25 @@ pub struct AirportSummaryEntry {
     pub ga_ops_count_per_kind: [u32; 3],
 }
 
+/// Footer value: one JSON object `airport_key -> entry`; a sorted map keeps
+/// the bytes reproducible across runs.
+pub fn encode_airport_summaries(
+    summaries: &std::collections::BTreeMap<String, AirportSummaryEntry>,
+) -> String {
+    serde_json::to_string(summaries).expect("airport summaries serialize")
+}
+
+pub fn decode_airport_summaries(json: &str) -> Result<AirportSummaryLookup, String> {
+    serde_json::from_str(json).map_err(|error| format!("invalid airport summaries: {error}"))
+}
+
 /// Run the airport_traffic.arrow popup compute path. `n_days` flows
 /// from the arrow metadata via `source-reader/PointQueryData.n_days`
 /// and divides into the aggregated unique counts to yield the popup's
 /// `arrivals_per_day` / `departures_per_day` / `gse_per_day` counts.
 ///
-/// `airport_summary` is the global UNION lookup (v5 sidecar) keyed by
-/// `airport_key`. When `None` or when an airport is missing from the
+/// `airport_summary` is the global UNION lookup from the traffic footer keyed
+/// by `airport_key`. When `None` or when an airport is missing from the
 /// lookup, the popup returns `None` for that airport's arr/dep counts.
 /// Per-row sums are forbidden because they would
 /// over-count rotations crossing N microsegments by ~N×.

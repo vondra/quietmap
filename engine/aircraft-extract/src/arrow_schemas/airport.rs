@@ -1,4 +1,4 @@
-//! Ground energy, unique movement unions and discovered airport schemas.
+//! Ground energy and discovered airstrip schemas.
 
 use super::*;
 
@@ -67,39 +67,6 @@ pub fn airport_traffic_schema() -> Arc<Schema> {
     ])))
 }
 
-pub fn airport_summary_schema() -> Arc<Schema> {
-    let gse_per_class = DataType::FixedSizeList(
-        Arc::new(Field::new("item", DataType::UInt32, false)),
-        NUM_GSE_CLASSES,
-    );
-    let ops_per_kind = || {
-        DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::UInt32, false)),
-            NUM_OPS_KINDS,
-        )
-    };
-    let fields = vec![
-        Field::new("airport_key", DataType::Utf8, false),
-        // Non-GA-class window.
-        Field::new("airport_unique_arr_count", DataType::UInt32, false),
-        Field::new("airport_unique_dep_count", DataType::UInt32, false),
-        Field::new("airport_unique_gse_count_per_class", gse_per_class, false),
-        Field::new("airport_unique_ops_count_per_kind", ops_per_kind(), false),
-        // GA-class full-year window.
-        Field::new("airport_unique_ga_arr_count", DataType::UInt32, false),
-        Field::new("airport_unique_ga_dep_count", DataType::UInt32, false),
-        Field::new(
-            "airport_unique_ga_ops_count_per_kind",
-            ops_per_kind(),
-            false,
-        ),
-    ];
-    Arc::new(Schema::new(fields).with_metadata(base_metadata(&[
-        ("kind", "airport_summary"),
-        ("airport_summary_contract", AIRPORT_SUMMARY_CONTRACT),
-    ])))
-}
-
 pub fn synth_airport_lines_schema() -> Arc<Schema> {
     let fields = vec![
         Field::new("osm_id", DataType::UInt64, false),
@@ -119,25 +86,6 @@ pub fn synth_airport_lines_schema() -> Arc<Schema> {
         (
             "synth_airport_lines_contract",
             square_store::aircraft_contract::SYNTH_AIRPORT_LINES_CONTRACT,
-        ),
-    ])))
-}
-
-pub fn synth_airport_areas_schema() -> Arc<Schema> {
-    let fields = vec![
-        Field::new("osm_id", DataType::UInt64, false),
-        Field::new("airport_key", DataType::Utf8, false),
-        Field::new("name", DataType::Utf8, false),
-        Field::new("aeroway_type", DataType::UInt8, false),
-        Field::new("centroid_gx", DataType::Int32, false),
-        Field::new("centroid_gy", DataType::Int32, false),
-        Field::new("area_m2", DataType::Float32, false),
-    ];
-    Arc::new(Schema::new(fields).with_metadata(base_metadata(&[
-        ("kind", "synth_airport_areas"),
-        (
-            "synth_airport_areas_contract",
-            square_store::aircraft_contract::SYNTH_AIRPORT_AREAS_CONTRACT,
         ),
     ])))
 }

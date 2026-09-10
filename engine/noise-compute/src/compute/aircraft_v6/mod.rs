@@ -29,8 +29,8 @@ pub mod state;
 pub mod views;
 
 pub use views::{
-    AirborneRowView, AirportTrafficRowView, BBox, CruiseRowView, CruiseTopCandidateView,
-    SubSegmentSlice, NUM_GSE_CLASSES,
+    airborne_row_count, AirborneFlightTable, AirborneSegmentBatch, AirportTrafficRowView,
+    CruiseRowView, CruiseTopCandidateView, NUM_GSE_CLASSES,
 };
 
 const NUM_BANDS: usize = 8;
@@ -41,7 +41,7 @@ const NUM_BANDS: usize = 8;
 #[allow(clippy::too_many_arguments)]
 pub fn compute_aircraft_v6(
     receiver: &Receiver,
-    airborne_rows: &[AirborneRowView<'_>],
+    airborne_rows: &[AirborneSegmentBatch<'_>],
     cruise_rows: &[CruiseRowView<'_>],
     rasters: &dyn RasterSampler,
     // Production airborne screening, built once for this receiver. `None` is
@@ -72,7 +72,7 @@ pub fn compute_aircraft_v6(
     let t_start = std::time::Instant::now();
 
     let mut traces = traces;
-    let flights = if airborne_rows.is_empty() {
+    let flights = if airborne_row_count(airborne_rows) == 0 {
         HashMap::new()
     } else {
         let horizon = horizon.expect("non-empty airborne rows require a receiver terrain horizon");
@@ -136,7 +136,7 @@ pub fn compute_aircraft_v6(
             ms(t_airborne_scatter),
             ms(t_cruise_scatter),
             ms(t_airborne_detail),
-            airborne_rows.len(),
+            airborne_row_count(airborne_rows),
             cruise_rows.len(),
         );
     }
@@ -248,7 +248,9 @@ mod tests {
     /// them end to end against real prepared data.
     #[test]
     fn repeated_identical_clicks_are_bit_identical() {
-        use crate::compute::aircraft_v6::views::{BBox, CruiseTopCandidateView, SubSegmentSlice};
+        use crate::compute::aircraft_v6::views::{
+            AirborneFlightTable, AirborneSegmentBatch, CruiseTopCandidateView,
+        };
 
         const N_FLIGHTS: usize = 300;
         let receiver = Receiver::new(50.0, 14.0, 300.0);
@@ -260,7 +262,7 @@ mod tests {
             receiver.altitude_m(),
         );
 
-        // Airborne: one two-sub-segment flight per row. The flights must
+        // Airborne: two sub-segment rows per flight. The flights must
         // land at COMPARABLE energies with differing low bits — a wide
         // spread would be order-independent for the opposite reason (a
         // term below `max * 2^-53` is a no-op wherever it is added). So
@@ -269,7 +271,12 @@ mod tests {
         let jitter = |i: usize, salt: u64| -> f32 {
             ((i as u64).wrapping_mul(2_654_435_761).wrapping_add(salt) % 997) as f32 * 1.0e-5
         };
-        let mut sub_store = Vec::with_capacity(N_FLIGHTS);
+        let mut flight_id = Vec::new();
+        let mut flight_key = Vec::new();
+        let (mut start_gy, mut start_gx, mut start_alt) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut end_gy, mut end_gx, mut end_alt) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut period, mut callsign_offsets, mut callsign_bytes) =
+            (Vec::new(), vec![0], Vec::new());
         for i in 0..N_FLIGHTS {
             let off = 0.018 + jitter(i, 11);
             let grid_point =
@@ -277,69 +284,60 @@ mod tests {
             let a = grid_point(49.98 + off, 13.98 + off);
             let b = grid_point(49.99 + off, 13.99 + off);
             let c = grid_point(50.01 + off, 14.01 + off);
-            sub_store.push((
-                vec![a.1, b.1],
-                vec![a.0, b.0],
-                vec![
-                    (900.0 + jitter(i, 23) * 9_000.0).round() as i16,
-                    (950.0 + jitter(i, 29) * 9_000.0).round() as i16,
-                ],
-                vec![b.1, c.1],
-                vec![b.0, c.0],
-                vec![
-                    (950.0 + jitter(i, 31) * 9_000.0).round() as i16,
-                    (1000.0 + jitter(i, 37) * 9_000.0).round() as i16,
-                ],
-                vec![220.0f32, 220.0],
-                vec![1500.0f32, 1500.0],
-                vec![(i % 3) as u8, ((i + 1) % 3) as u8],
-                vec![10i16, 10],
-                vec![1u8, 1],
-                vec![300i16, 300],
-                vec![300i16, 300],
-            ));
+            // Real (non-synthetic) fids carrying a start_unix, so
+            // `energy_by_day` and `top_flights` both populate.
+            let fid = crate::flight_id::pack_real(
+                0x40_0000 + i as u32,
+                1_750_000_000 + (i as u32 % 7) * 86_400,
+            )
+            .expect("test fid");
+            flight_id.extend([fid, fid]);
+            flight_key.extend([i as i32, i as i32]);
+            start_gy.extend([a.1, b.1]);
+            start_gx.extend([a.0, b.0]);
+            start_alt.extend([
+                (900.0 + jitter(i, 23) * 9_000.0).round() as i16,
+                (950.0 + jitter(i, 29) * 9_000.0).round() as i16,
+            ]);
+            end_gy.extend([b.1, c.1]);
+            end_gx.extend([b.0, c.0]);
+            end_alt.extend([
+                (950.0 + jitter(i, 31) * 9_000.0).round() as i16,
+                (1000.0 + jitter(i, 37) * 9_000.0).round() as i16,
+            ]);
+            period.extend([(i % 3) as u8, ((i + 1) % 3) as u8]);
+            callsign_bytes.extend_from_slice(format!("CSA{i:04}").as_bytes());
+            callsign_offsets.push(callsign_bytes.len() as i32);
         }
-        let callsigns: Vec<String> = (0..N_FLIGHTS).map(|i| format!("CSA{i:04}")).collect();
-        let airborne: Vec<AirborneRowView<'_>> = (0..N_FLIGHTS)
-            .map(|i| {
-                let s = &sub_store[i];
-                AirborneRowView {
-                    // Real (non-synthetic) fids carrying a start_unix, so
-                    // `energy_by_day` and `top_flights` both populate.
-                    flight_id: crate::flight_id::pack_real(
-                        0x40_0000 + i as u32,
-                        1_750_000_000 + (i as u32 % 7) * 86_400,
-                    )
-                    .expect("test fid"),
-                    callsign: callsigns[i].as_str(),
-                    aircraft_type: *b"A320",
-                    profile_idx: (i % 8) as u8,
-                    source_id: 0,
-                    origin: 0,
-                    sub_segments: SubSegmentSlice {
-                        start_gy: &s.0,
-                        start_gx: &s.1,
-                        start_alt_m: &s.2,
-                        end_gy: &s.3,
-                        end_gx: &s.4,
-                        end_alt_m: &s.5,
-                        speed_kt: &s.6,
-                        length_m: &s.7,
-                        period: &s.8,
-                        date_id: &s.9,
-                        flags: &s.10,
-                        terrain_start_elev_m: &s.11,
-                        terrain_end_elev_m: &s.12,
-                    },
-                    bbox: BBox {
-                        min_lat: 49.9,
-                        max_lat: 50.1,
-                        min_lon: 13.9,
-                        max_lon: 14.1,
-                    },
-                }
-            })
-            .collect();
+        let n_rows = flight_id.len();
+        let aircraft_type: Vec<u8> = b"A320".repeat(N_FLIGHTS);
+        let profile: Vec<u8> = (0..N_FLIGHTS).map(|i| (i % 8) as u8).collect();
+        let zero_u8 = vec![0u8; N_FLIGHTS];
+        let airborne = [AirborneSegmentBatch {
+            flight_id: &flight_id,
+            flight_key: &flight_key,
+            flights: AirborneFlightTable {
+                callsign_offsets: &callsign_offsets,
+                callsign_bytes: &callsign_bytes,
+                aircraft_type: &aircraft_type,
+                profile_idx: &profile,
+                source_id: &zero_u8,
+                origin: &zero_u8,
+            },
+            start_gy: &start_gy,
+            start_gx: &start_gx,
+            start_alt_m: &start_alt,
+            end_gy: &end_gy,
+            end_gx: &end_gx,
+            end_alt_m: &end_alt,
+            speed_kt: &vec![220.0f32; n_rows],
+            length_m: &vec![1500.0f32; n_rows],
+            period: &period,
+            date_id: &vec![10i16; n_rows],
+            flags: &vec![1u8; n_rows],
+            terrain_start_elev_m: &vec![300i16; n_rows],
+            terrain_end_elev_m: &vec![300i16; n_rows],
+        }];
 
         // Cruise: grid-cell buckets around the receiver, each with its own
         // top-candidate identity so `cruise_flight_stats` and

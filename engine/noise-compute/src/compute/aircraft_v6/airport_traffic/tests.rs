@@ -175,15 +175,14 @@ fn metadata_populated_with_arr_dep_split_and_profile_mix() {
     assert!(!detail.apron_movement.periods.lden_db.is_finite());
 }
 
-/// v5 internal contract: when the `airport_summary` lookup is
-/// `None` here, the compute kernel returns zero arr/dep — it
-/// must NOT silently fall back to per-row sum, which would over-
-/// count rotations by 4-8×. The source-reader
-/// layer above is the gatekeeper that turns "airport_traffic.arrow
-/// rows present but sidecar missing" into a loud Err; this test
-/// only pins the compute kernel's contract when the caller
-/// explicitly passes None (e.g. heatmap validate_vs_popup
-/// validator which has no sidecar dep).
+/// Internal contract: when the airport summary lookup is `None` here, the
+/// compute kernel returns zero arr/dep — it must NOT silently fall back to
+/// a per-row sum, which would over-count rotations by 4-8×. The
+/// source-reader layer above is the gatekeeper that turns "airport_traffic
+/// rows present but the file's `qm_airport_summaries` footer missing" into
+/// a loud Err; this test only pins the compute kernel's contract when the
+/// caller explicitly passes None (e.g. the heatmap validate_vs_popup
+/// validator, which reads no footer).
 #[test]
 fn metadata_missing_summary_zeros_arr_dep_counts() {
     let bands: [f32; 8] = [1e6, 2e6, 3e6, 4e6, 5e6, 6e6, 7e6, 8e6];

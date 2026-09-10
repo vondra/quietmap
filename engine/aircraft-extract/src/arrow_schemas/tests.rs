@@ -10,9 +10,7 @@ fn all_schemas_carry_current_version_metadata() {
         airborne_schema(),
         cruise_schema(),
         airport_traffic_schema(),
-        airport_summary_schema(),
         synth_airport_lines_schema(),
-        synth_airport_areas_schema(),
     ] {
         let md = s.metadata();
         assert_eq!(
@@ -24,7 +22,7 @@ fn all_schemas_carry_current_version_metadata() {
 }
 
 #[test]
-fn synth_airport_schemas_carry_required_columns() {
+fn synth_airport_lines_schema_carries_required_columns() {
     let lines = synth_airport_lines_schema();
     for required in [
         "osm_id",
@@ -42,21 +40,6 @@ fn synth_airport_schemas_carry_required_columns() {
         assert!(
             lines.field_with_name(required).is_ok(),
             "synth_airport_lines schema must carry {required}"
-        );
-    }
-    let areas = synth_airport_areas_schema();
-    for required in [
-        "osm_id",
-        "airport_key",
-        "name",
-        "aeroway_type",
-        "centroid_gx",
-        "centroid_gy",
-        "area_m2",
-    ] {
-        assert!(
-            areas.field_with_name(required).is_ok(),
-            "synth_airport_areas schema must carry {required}"
         );
     }
 }
@@ -162,31 +145,6 @@ fn cruise_schema_v16_required_columns() {
             "cruise v14 schema must NOT carry the v13 {dropped} column"
         );
     }
-}
-
-#[test]
-fn airport_summary_schema_carries_contract_metadata() {
-    let s = airport_summary_schema();
-    assert_eq!(
-        s.metadata()
-            .get("airport_summary_contract")
-            .map(String::as_str),
-        Some(AIRPORT_SUMMARY_CONTRACT)
-    );
-}
-
-#[test]
-fn assert_airport_summary_contract_round_trip() {
-    let s = airport_summary_schema();
-    assert!(assert_airport_summary_contract(s.metadata()).is_ok());
-    let mut bogus = s.metadata().clone();
-    bogus.insert(
-        "airport_summary_contract".into(),
-        "airport_summary_vBOGUS".into(),
-    );
-    assert!(assert_airport_summary_contract(&bogus).is_err());
-    bogus.remove("airport_summary_contract");
-    assert!(assert_airport_summary_contract(&bogus).is_err());
 }
 
 #[test]

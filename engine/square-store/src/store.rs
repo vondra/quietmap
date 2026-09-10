@@ -295,7 +295,6 @@ pub struct SquareData {
     pub aircraft_airborne: LazyArrow,
     pub aircraft_cruise: LazyArrow,
     pub aircraft_airport_traffic: LazyArrow,
-    pub aircraft_airport_summary: LazyArrow,
     /// OSM aeroway microsegments (`airport_lines.arrow`).
     pub airport_lines: LazyArrow,
 }
@@ -313,6 +312,7 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
         "leisure_contract",
         LEISURE_CONTRACT_V2,
         "leisure.arrow",
+        "re-extract the source store",
     )?;
     // Every extract-written file pins its coordinate grid; readers that do
     // not know integer grids must refuse the file, never misread it.
@@ -320,8 +320,24 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
         (&structures, "structures.arrow"),
         (&leisure, "leisure.arrow"),
     ] {
-        check_contract(arrow, "grid", GRID_CONTRACT_Z30, label)?;
+        check_contract(
+            arrow,
+            "grid",
+            GRID_CONTRACT_Z30,
+            label,
+            "re-extract the source store",
+        )?;
     }
+    // The nested one-row-per-flight layout decodes as valid Arrow; only the
+    // stamp tells it from the flattened owner rows this reader computes on.
+    let aircraft_airborne = LazyArrow::open(&dir.join("airborne.arrow"))?;
+    check_contract(
+        &aircraft_airborne,
+        "airborne_contract",
+        crate::aircraft_contract::AIRBORNE_CONTRACT,
+        "airborne.arrow",
+        "re-extract aircraft Stage 2A (shuffle + airborne flatten)",
+    )?;
 
     let railways = LazyArrow::open(&dir.join("railways.arrow"))?;
     check_column_type(&railways, "maxspeed", DataType::UInt16, "railways.arrow")?;
@@ -334,10 +350,9 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
         structures,
         industrial: LazyArrow::open(&dir.join("industrial.arrow"))?,
         leisure,
-        aircraft_airborne: LazyArrow::open(&dir.join("airborne.arrow"))?,
+        aircraft_airborne,
         aircraft_cruise: LazyArrow::open(&dir.join("cruise.arrow"))?,
         aircraft_airport_traffic: LazyArrow::open(&dir.join("airport_traffic.arrow"))?,
-        aircraft_airport_summary: LazyArrow::open(&dir.join("airport_summary.arrow"))?,
         airport_lines: LazyArrow::open(&dir.join("airport_lines.arrow"))?,
     })
 }
@@ -354,16 +369,21 @@ pub const LEISURE_CONTRACT_V2: &str = "leisure_v2";
 pub const GRID_CONTRACT_Z30: &str = "z30";
 
 /// Verify a source arrow's schema carries the expected stamp. Missing file
-/// passes. Fails loud on mismatch.
-fn check_contract(arrow: &LazyArrow, key: &str, expected: &str, label: &str) -> Result<(), String> {
+/// passes. Fails loud on mismatch, naming the build step that rewrites it.
+fn check_contract(
+    arrow: &LazyArrow,
+    key: &str,
+    expected: &str,
+    label: &str,
+    recovery: &str,
+) -> Result<(), String> {
     let Some(schema) = arrow.schema() else {
         return Ok(());
     };
     let c = schema.metadata().get(key).map(String::as_str);
     if c != Some(expected) {
         return Err(format!(
-            "{label} {key} mismatch (expected {expected}, got {c:?}) — \
-             re-extract the source store"
+            "{label} {key} mismatch (expected {expected}, got {c:?}) — {recovery}"
         ));
     }
     Ok(())
@@ -460,8 +480,10 @@ pub fn validate_reference_square(prepared_root: &Path, name: &str) -> Result<usi
 #[cfg(test)]
 mod lazy_arrow_tests {
     use super::*;
-    use arrow::array::{ArrayRef, DictionaryArray, Int32Array, StringArray};
-    use arrow::datatypes::Int32Type;
+    use arrow::array::{
+        ArrayRef, DictionaryArray, Int32Array, StringArray, StructArray, UInt8Array,
+    };
+    use arrow::datatypes::{Field, Int32Type};
     use arrow::ipc::writer::FileWriter;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -476,6 +498,18 @@ mod lazy_arrow_tests {
     }
 
     fn write_dictionary_file(path: &Path) {
+        // `flights` mirrors airborne.arrow's identity column: one struct
+        // dictionary shared by every row of the file.
+        let flights = StructArray::from(vec![
+            (
+                Arc::new(Field::new("callsign", DataType::Utf8, false)),
+                Arc::new(StringArray::from(vec!["CSA1", "TVS100P"])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("profile_idx", DataType::UInt8, false)),
+                Arc::new(UInt8Array::from(vec![3u8, 7])) as ArrayRef,
+            ),
+        ]);
         let batch = RecordBatch::try_from_iter([
             (
                 "numbers",
@@ -489,6 +523,16 @@ mod lazy_arrow_tests {
                     Some("beta"),
                 ])) as ArrayRef,
             ),
+            (
+                "flights",
+                Arc::new(
+                    DictionaryArray::<Int32Type>::try_new(
+                        Int32Array::from(vec![1, 0, 1]),
+                        Arc::new(flights),
+                    )
+                    .unwrap(),
+                ) as ArrayRef,
+            ),
         ])
         .unwrap();
         let mut file = File::create(path).unwrap();
@@ -498,7 +542,7 @@ mod lazy_arrow_tests {
     }
 
     #[test]
-    fn decoded_buffers_are_mmap_backed_and_survive_lazy_arrow_drop() {
+    fn decoded_buffers_including_struct_dictionaries_are_mmap_backed_and_survive_lazy_arrow_drop() {
         let path = test_path("zero-copy");
         write_dictionary_file(&path);
         let lazy = LazyArrow::open(&path).unwrap();
@@ -532,10 +576,50 @@ mod lazy_arrow_tests {
         assert!(labels_start >= mapped_start);
         assert!(labels_start + label_values.value_data().len() <= mapped_end);
 
+        let flights = batch
+            .column_by_name("flights")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        let identity = flights
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let callsigns = identity
+            .column_by_name("callsign")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let profiles = identity
+            .column_by_name("profile_idx")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .unwrap();
+        for (start, len) in [
+            (
+                callsigns.value_data().as_ptr() as usize,
+                callsigns.value_data().len(),
+            ),
+            (
+                flights.keys().values().as_ptr() as usize,
+                3 * size_of::<i32>(),
+            ),
+            (profiles.values().as_ptr() as usize, 2),
+        ] {
+            assert!(start >= mapped_start && start + len <= mapped_end);
+        }
+
         drop(lazy);
         assert_eq!(numbers.values(), &[11, 22, 33]);
         assert_eq!(label_values.value(0), "alpha");
         assert_eq!(label_values.value(1), "beta");
+        assert_eq!(flights.keys().values(), &[1, 0, 1]);
+        assert_eq!(callsigns.value(1), "TVS100P");
+        assert_eq!(profiles.values(), &[3, 7]);
         std::fs::remove_file(path).unwrap();
     }
 

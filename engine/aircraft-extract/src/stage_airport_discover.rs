@@ -14,8 +14,6 @@ pub struct DiscoveredStrip {
     pub length_m: f32,
     /// Bearing of the primary axis in degrees [0, 360).
     pub heading_deg: f32,
-    /// Perpendicular spread clamped to [10, 60] m.
-    pub width_m: f32,
     /// Number of vertices in this cluster — population sanity check.
     pub vertex_count: u32,
     /// `true` when PCA's primary/secondary variance ratio > 5 (a
@@ -273,19 +271,14 @@ fn fit_strip(members: &[(f32, f32)]) -> DiscoveredStrip {
     // Project points onto primary axis to get length spread.
     let mut min_proj = f32::INFINITY;
     let mut max_proj = f32::NEG_INFINITY;
-    let mut perp_max = 0.0f32;
     for &(x, y) in &pts_m {
         let proj = x * vx + y * vy;
-        let perp = (x * (-vy) + y * vx).abs();
         min_proj = min_proj.min(proj);
         max_proj = max_proj.max(proj);
-        perp_max = perp_max.max(perp);
     }
     // max_proj >= min_proj by construction (same loop, ≥1 member from
-    // caller's min_samples gate). perp_max is the max |signed perp|
-    // → full width is 2× that, clamped to the runway band.
+    // caller's min_samples gate).
     let length_m = max_proj - min_proj;
-    let width_m = (perp_max * 2.0).clamp(10.0, 60.0);
 
     // Bearing of primary axis (east, north) → compass degrees.
     let heading_deg = {
@@ -307,7 +300,6 @@ fn fit_strip(members: &[(f32, f32)]) -> DiscoveredStrip {
         center_lon: grid::geo::normalize_longitude(mean_lon) as f32,
         length_m,
         heading_deg,
-        width_m,
         vertex_count: members.len() as u32,
         is_line,
     }

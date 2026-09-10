@@ -26,18 +26,6 @@ fn sample_lines_row(seg_idx: u16) -> SynthAirportLineRow {
     }
 }
 
-fn sample_areas_row() -> SynthAirportAreaRow {
-    SynthAirportAreaRow {
-        osm_id: synth_osm_id_for(50.1, 14.26),
-        airport_key: synth_airport_key_for(50.1, 14.26),
-        name: DISCOVERED_AIRSTRIP_NAME.into(),
-        aeroway_type: SYNTH_AERODROME_AEROWAY_TYPE,
-        centroid_lat: 50.1,
-        centroid_lon: 14.26,
-        area_m2: 25000.0,
-    }
-}
-
 #[test]
 fn write_then_read_lines_roundtrip() {
     let tmp = tempfile::tempdir().unwrap();
@@ -54,25 +42,10 @@ fn write_then_read_lines_roundtrip() {
 }
 
 #[test]
-fn write_then_read_areas_roundtrip() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("synth_airport_areas.arrow");
-    let row = sample_areas_row();
-    write_synth_airport_areas(&path, [row.clone()]).unwrap();
-    let back = read_synth_airport_areas(&path).unwrap();
-    assert_eq!(back.len(), 1);
-    assert_eq!(back[0].airport_key, row.airport_key);
-    assert_eq!(back[0].area_m2, row.area_m2);
-    assert_eq!(back[0].aeroway_type, SYNTH_AERODROME_AEROWAY_TYPE);
-}
-
-#[test]
 fn read_missing_file_returns_empty_vec() {
     let tmp = tempfile::tempdir().unwrap();
     let lines = read_synth_airport_lines(&tmp.path().join("absent.arrow")).unwrap();
-    let areas = read_synth_airport_areas(&tmp.path().join("absent.arrow")).unwrap();
     assert!(lines.is_empty());
-    assert!(areas.is_empty());
 }
 
 #[test]
@@ -95,18 +68,6 @@ fn write_overwrite_replaces_lines_does_not_append() {
     assert_eq!(read_synth_airport_lines(&path).unwrap().len(), 3);
     write_synth_airport_lines(&path, [sample_lines_row(0)]).unwrap();
     assert_eq!(read_synth_airport_lines(&path).unwrap().len(), 1);
-}
-
-#[test]
-fn write_overwrite_replaces_areas_does_not_append() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("synth_airport_areas.arrow");
-    let one = sample_areas_row();
-    let two = vec![sample_areas_row(), sample_areas_row()];
-    write_synth_airport_areas(&path, two).unwrap();
-    assert_eq!(read_synth_airport_areas(&path).unwrap().len(), 2);
-    write_synth_airport_areas(&path, [one.clone()]).unwrap();
-    assert_eq!(read_synth_airport_areas(&path).unwrap().len(), 1);
 }
 
 #[test]

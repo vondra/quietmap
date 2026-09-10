@@ -866,7 +866,10 @@ mod tests {
                 sorted(road_contribs.into_iter().chain(rail_contribs).collect())
             );
             if with_traces {
-                assert!(expected.segments.len() > 24, "scene must produce many traces");
+                assert!(
+                    expected.segments.len() > 24,
+                    "scene must produce many traces"
+                );
                 assert_eq!(
                     serde_json::to_string(&traces.segments).unwrap(),
                     serde_json::to_string(&expected.segments).unwrap()
@@ -1013,10 +1016,10 @@ mod tests {
     fn test_aircraft_end_to_end() {
         // Aircraft path went via compute_aircraft_v6 in C2/C4 — the
         // legacy compute_aircraft was deleted. Reconstruct the same
-        // 5 flights/day × 365 d B738 approach traffic as
-        // `AirborneRowView`s and assert Lden via the v6 entry point.
+        // 5 flights/day × 365 d B738 approach traffic as one flattened
+        // `AirborneSegmentBatch` and assert Lden via the v6 entry point.
         use crate::compute::aircraft_v6::{
-            compute_aircraft_v6, AirborneRowView, BBox, SubSegmentSlice,
+            compute_aircraft_v6, AirborneFlightTable, AirborneSegmentBatch,
         };
 
         let receiver = Receiver::new(50.08, 14.42, 200.0);
@@ -1024,22 +1027,17 @@ mod tests {
         let subs_per_flight = 3usize;
         let total_subs = total_flights as usize * subs_per_flight;
 
+        let mut flight_id = Vec::with_capacity(total_subs);
+        let mut flight_key = Vec::with_capacity(total_subs);
         let mut start_gy = Vec::with_capacity(total_subs);
         let mut start_gx = Vec::with_capacity(total_subs);
         let mut start_alt_m = Vec::with_capacity(total_subs);
         let mut end_gy = Vec::with_capacity(total_subs);
         let mut end_gx = Vec::with_capacity(total_subs);
         let mut end_alt_m = Vec::with_capacity(total_subs);
-        let mut speed_kt = Vec::with_capacity(total_subs);
-        let mut length_m = Vec::with_capacity(total_subs);
         let mut period_col = Vec::with_capacity(total_subs);
         let mut date_id_col = Vec::with_capacity(total_subs);
-        let mut flags_col = Vec::with_capacity(total_subs);
-        let mut terrain_start = Vec::with_capacity(total_subs);
-        let mut terrain_end = Vec::with_capacity(total_subs);
 
-        // Column buffers above stay alive for the whole compute call —
-        // the row views borrow into them via slice indices.
         for flight in 0..total_flights {
             let period = if flight % 100 < 65 {
                 0u8
@@ -1050,6 +1048,8 @@ mod tests {
             };
             let date_id = (flight / 5) as i16;
             for s in 0..subs_per_flight {
+                flight_id.push(flight);
+                flight_key.push(flight as i32);
                 let (gx, gy) = grid::lonlat_to_grid(
                     f64::from(14.43_f32),
                     f64::from(50.08_f32 + 0.003 * s as f32),
@@ -1064,51 +1064,36 @@ mod tests {
                 end_gx.push(gx);
                 end_gy.push(gy);
                 end_alt_m.push(500 - 50 * (s + 1) as i16);
-                speed_kt.push(150.0);
-                length_m.push(330.0);
                 period_col.push(period);
                 date_id_col.push(date_id);
-                flags_col.push(0);
-                terrain_start.push(0i16);
-                terrain_end.push(0i16);
             }
         }
-
-        // Build per-flight row views by slicing the shared buffers.
-        let mut row_views: Vec<AirborneRowView<'_>> = Vec::with_capacity(total_flights as usize);
-        for flight in 0..total_flights {
-            let lo = flight as usize * subs_per_flight;
-            let hi = lo + subs_per_flight;
-            row_views.push(AirborneRowView {
-                flight_id: flight,
-                callsign: "",
-                aircraft_type: [0u8; 4],
-                profile_idx: 0,
-                source_id: AIRCRAFT_ADSB_SOURCE_ID as u8,
-                origin: 0,
-                sub_segments: SubSegmentSlice {
-                    start_gy: &start_gy[lo..hi],
-                    start_gx: &start_gx[lo..hi],
-                    start_alt_m: &start_alt_m[lo..hi],
-                    end_gy: &end_gy[lo..hi],
-                    end_gx: &end_gx[lo..hi],
-                    end_alt_m: &end_alt_m[lo..hi],
-                    speed_kt: &speed_kt[lo..hi],
-                    length_m: &length_m[lo..hi],
-                    period: &period_col[lo..hi],
-                    date_id: &date_id_col[lo..hi],
-                    flags: &flags_col[lo..hi],
-                    terrain_start_elev_m: &terrain_start[lo..hi],
-                    terrain_end_elev_m: &terrain_end[lo..hi],
-                },
-                bbox: BBox {
-                    min_lat: 50.08,
-                    max_lat: 50.10,
-                    min_lon: 14.43,
-                    max_lon: 14.44,
-                },
-            });
-        }
+        let n_flights = total_flights as usize;
+        let row_views = [AirborneSegmentBatch {
+            flight_id: &flight_id,
+            flight_key: &flight_key,
+            flights: AirborneFlightTable {
+                callsign_offsets: &vec![0i32; n_flights + 1],
+                callsign_bytes: &[],
+                aircraft_type: &vec![0u8; 4 * n_flights],
+                profile_idx: &vec![0u8; n_flights],
+                source_id: &vec![AIRCRAFT_ADSB_SOURCE_ID as u8; n_flights],
+                origin: &vec![0u8; n_flights],
+            },
+            start_gy: &start_gy,
+            start_gx: &start_gx,
+            start_alt_m: &start_alt_m,
+            end_gy: &end_gy,
+            end_gx: &end_gx,
+            end_alt_m: &end_alt_m,
+            speed_kt: &vec![150.0f32; total_subs],
+            length_m: &vec![330.0f32; total_subs],
+            period: &period_col,
+            date_id: &date_id_col,
+            flags: &vec![0u8; total_subs],
+            terrain_start_elev_m: &vec![0i16; total_subs],
+            terrain_end_elev_m: &vec![0i16; total_subs],
+        }];
         let horizon = emission::aircraft::ReceiverHorizon::build(
             |lat, lon| MockRasters.elevation(lat, lon),
             receiver.lat,

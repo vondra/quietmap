@@ -303,7 +303,7 @@ fn segment_sel_with_overrides<const WANT_CPA: bool>(
     horizon: Option<&ReceiverHorizon>,
     buildings: Option<&super::BuildingHorizon>,
 ) -> Option<(f64, CpaResult)> {
-    let kernel = segment_kernel_with_overrides::<WANT_CPA, false>(
+    let kernel = segment_kernel_with_overrides::<WANT_CPA, false, true>(
         seg,
         rx_lat,
         rx_lon,
@@ -335,7 +335,7 @@ fn segment_sel_with_overrides<const WANT_CPA: bool>(
 /// below the 20 dB display floor so the caller can keep its pre-screen energy;
 /// production wrappers still reject that segment before exposing it.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn segment_kernel_with_cuts(
+pub(crate) fn segment_kernel_with_cuts<const FLOOR: bool>(
     seg: &AircraftSegment,
     rx_lat: f64,
     rx_lon: f64,
@@ -346,7 +346,7 @@ pub(crate) fn segment_kernel_with_cuts(
     horizon: &ReceiverHorizon,
     buildings: Option<&super::BuildingHorizon>,
 ) -> Option<AircraftKernelResult> {
-    segment_kernel_with_overrides::<true, true>(
+    segment_kernel_with_overrides::<true, true, FLOOR>(
         seg,
         rx_lat,
         rx_lon,
@@ -363,7 +363,11 @@ pub(crate) fn segment_kernel_with_cuts(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn segment_kernel_with_overrides<const WANT_CPA: bool, const RETAIN_SCREENED: bool>(
+fn segment_kernel_with_overrides<
+    const WANT_CPA: bool,
+    const RETAIN_SCREENED: bool,
+    const FLOOR: bool,
+>(
     seg: &AircraftSegment,
     rx_lat: f64,
     rx_lon: f64,
@@ -409,7 +413,7 @@ fn segment_kernel_with_overrides<const WANT_CPA: bool, const RETAIN_SCREENED: bo
     let reach_sq = REACH_SQ_TABLE[class_idx][seg.is_departure as usize];
 
     if RETAIN_SCREENED {
-        segment_energy_kernel_with_screening::<WANT_CPA>(
+        segment_energy_kernel_with_screening::<WANT_CPA, FLOOR>(
             ax,
             ay,
             sdx,

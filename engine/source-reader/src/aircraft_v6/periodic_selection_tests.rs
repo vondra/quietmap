@@ -17,25 +17,37 @@ impl RasterSampler for FlatGround {
     }
 }
 
-fn segment(start_lon: f32, end_lon: f32) -> AirborneSubSegment {
-    AirborneSubSegment {
-        start_lat: 0.0,
-        start_lon,
-        end_lat: 0.0,
-        end_lon,
-        start_alt_m: 1000.0,
-        end_alt_m: 1000.0,
-        speed_kt: 450.0,
-        length_m: 221080.0,
+/// A 1 km chord at the equator between the two longitudes: the periodic
+/// selection is about the arc, not its stored length.
+fn segment(start_lon: f32, end_lon: f32) -> FlightSegment {
+    FlightSegment {
+        flight_id: 42,
+        callsign: "PERIODIC42".into(),
+        aircraft_type: *b"B738",
+        profile_idx: noise_compute::emission::profiles_generated::profile_idx("B738"),
+        source_id: 2,
+        origin: 0,
+        veh_kind: 0,
+        gse_class: 0,
         period: 0,
         date_id: 0,
+        phase: Phase::Airborne,
         flags: 1,
-        terrain_start_elev_m: 0.0,
-        terrain_end_elev_m: 0.0,
+        start_lat: 0.0,
+        start_lon,
+        start_alt_m: 1000.0,
+        end_lat: 0.0,
+        end_lon,
+        end_alt_m: 1000.0,
+        speed_kt: 450.0,
+        length_m: 1000.0,
+        agl_avg_m: 1000.0,
+        start_elev_m: 0.0,
+        end_elev_m: 0.0,
     }
 }
 
-fn output(receiver: &Receiver, rows: &[AirborneRowView<'_>]) -> serde_json::Value {
+fn output(receiver: &Receiver, rows: &[AirborneSegmentBatch<'_>]) -> serde_json::Value {
     let horizon = aircraft::ReceiverHorizon::build(
         |_, _| 0.0,
         receiver.lat,
@@ -77,27 +89,25 @@ fn periodic_producer_batches_preserve_positive_seam_flights_and_row_identity() {
     ] {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("airborne.arrow");
-        arrow_io::write_airborne(
-            &path,
-            &[AirborneEvent {
-                flight_id: 42,
-                callsign: "PERIODIC42".into(),
-                aircraft_type: *b"B738",
-                profile_idx: noise_compute::emission::profiles_generated::profile_idx("B738"),
-                source_id: 2,
-                origin: 0,
-                sub_segments: segments.clone(),
-            }],
-            12,
-            0,
-        )
-        .unwrap();
+        // Stored as the shuffle stores it: the 222 km chords become pieces,
+        // one of which crosses the seam with a wide envelope of its own.
+        let mut pieces = Vec::new();
+        for segment in &segments {
+            aircraft_extract::segment::split::split_airborne_segment(segment.clone(), &mut pieces);
+        }
+        arrow_io::write_airborne(&path, &pieces, 12, 0).unwrap();
         let (_, batches) = arrow_io::read_record_batches(&path).unwrap();
         let all = AirborneRowAccum::new(&batches).unwrap();
         let rows = all.views();
-        assert_eq!(rows.len(), 1);
-        assert_eq!((rows[0].flight_id, rows[0].callsign), (42, "PERIODIC42"));
-        assert_eq!(rows[0].sub_segments.len(), segments.len());
+        assert_eq!(airborne_row_count(rows), pieces.len());
+        let first = &rows[0];
+        assert_eq!(
+            (
+                first.flight_id[0],
+                first.flights.callsign(first.flight_key[0] as usize)
+            ),
+            (42, "PERIODIC42")
+        );
         let receiver = Receiver::new(0.001, receiver_lon, 0.0);
         let square = square_store::store::load_square(directory.path()).unwrap();
         let collected = crate::query::collect_from_square_data(
@@ -107,28 +117,17 @@ fn periodic_producer_batches_preserve_positive_seam_flights_and_row_identity() {
         )
         .unwrap();
         assert_eq!(
-            collected.aircraft_airborne_batches.len(),
-            usize::from(selected)
+            !collected.aircraft_airborne_batches.is_empty(),
+            selected,
+            "receiver={receiver_lon}"
         );
         let filtered = AirborneRowAccum::new(&collected.aircraft_airborne_batches).unwrap();
-        let actual = output(&receiver, &filtered.views());
-        assert_eq!(actual, output(&receiver, &rows));
+        let actual = output(&receiver, filtered.views());
+        assert_eq!(actual, output(&receiver, rows));
         assert_eq!(
             actual["periods"]["lden_db"].is_number(),
             positive,
             "receiver={receiver_lon}, output={actual}"
         );
-        for index in 0..rows[0].sub_segments.len() {
-            let sub = rows[0].sub_segments;
-            let start = sub.start_lat_lon(index);
-            let end = sub.end_lat_lon(index);
-            if aircraft::AirborneEnvelope::new(receiver.lat, receiver.lon)
-                .intersects_segment(start, end)
-            {
-                assert!(aircraft::airborne_support_cells(start, end)
-                    .unwrap()
-                    .contains(grid::square_of(receiver.lat, receiver.lon)));
-            }
-        }
     }
 }

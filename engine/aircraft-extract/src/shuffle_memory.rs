@@ -1,4 +1,4 @@
-//! Count actual destination copies during scatter to size and reserve gather allocations.
+//! Count owned rows per square during scatter to size and reserve gather allocations.
 
 use super::{shuffle_bucket, PASS_A_SPILL_BYTES, SHUFFLE_HASH_BUCKETS};
 use crate::arrow_io::SEGMENT_WRITE_CHUNK_ROWS;

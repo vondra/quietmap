@@ -1,14 +1,13 @@
 //! Stage 2C destination and fail-before-wipe regressions.
 use super::*;
-use crate::arrow_io::read_airport_summary;
+use crate::arrow_io::read_airport_summaries;
 use crate::flight::{FlightSegment, Phase};
 
-/// End-to-end Stage 2C pipeline: writer + reduce → loadable
-/// airport_summary.arrow. Uses a single arrival rotation crossing
-/// one runway microsegment; asserts the global UNION carries the
-/// arrival count = 1.
+/// End-to-end Stage 2C pipeline: writer + reduce → traffic file whose
+/// footer carries the global UNION. Uses a single arrival rotation
+/// crossing one runway microsegment; asserts the arrival count = 1.
 #[test]
-fn run_stage_2c_produces_airport_summary_arrow() {
+fn run_stage_2c_stamps_airport_summaries_into_traffic() {
     use crate::airport_io::AERODROME_AEROWAY_TYPE;
     use crate::arrow_io::write_segments;
     use crate::geo::square_path;
@@ -87,22 +86,14 @@ fn run_stage_2c_produces_airport_summary_arrow() {
     .unwrap();
     assert!(n > 0);
 
-    let summary_path = square_prepared_year_dir.join(AIRPORT_SUMMARY_FILENAME);
-    assert!(
-        summary_path.exists(),
-        "airport_summary.arrow must exist at {}",
-        summary_path.display()
-    );
-    let rows = read_airport_summary(&summary_path).unwrap();
+    let rows =
+        read_airport_summaries(&square_prepared_year_dir.join(AIRPORT_TRAFFIC_FILENAME)).unwrap();
     // One airport, one arrival fid → UNION count = 1.
-    let lktest = rows
-        .iter()
-        .find(|r| r.airport_key == "LKTEST")
-        .expect("LKTEST row");
-    assert_eq!(lktest.airport_unique_arr_count, 1);
-    assert_eq!(lktest.airport_unique_dep_count, 0);
+    let lktest = rows["LKTEST"];
+    assert_eq!(lktest.arr_count, 1);
+    assert_eq!(lktest.dep_count, 0);
     // Runway ops_kind = index 0.
-    assert_eq!(lktest.airport_unique_ops_count_per_kind[0], 1);
+    assert_eq!(lktest.ops_count_per_kind[0], 1);
     assert!(!prepared_year_dir.join("aircraft").exists());
 
     // airport_summary_parts scratch dir must be cleaned up.
@@ -132,8 +123,6 @@ fn run_stage_2c_wipes_in_scope_stale_airport_traffic() {
     std::fs::create_dir_all(&square_dir).unwrap();
     let stale = square_dir.join("airport_traffic.arrow");
     std::fs::write(&stale, b"stale-prev-run").unwrap();
-    let stale_summary = square_dir.join(AIRPORT_SUMMARY_FILENAME);
-    std::fs::write(&stale_summary, b"stale-summary").unwrap();
     std::fs::create_dir_all(&by_square_dir).unwrap();
     // Praha scope.
     let scope = ScopeBbox::parse("48.65,12.00,51.55,16.90").unwrap();
@@ -143,7 +132,6 @@ fn run_stage_2c_wipes_in_scope_stale_airport_traffic() {
         !stale.exists(),
         "stale airport_traffic.arrow must be wiped from in-scope z9"
     );
-    assert!(!stale_summary.exists());
 }
 
 /// Regression for the wipe-before-error fragility: when
@@ -182,7 +170,7 @@ fn run_stage_2c_aborts_on_stale_input_before_wipe() {
 /// inside an OUT-OF-scope z9 must survive. Partial reextracts
 /// must not touch other regions' data.
 #[test]
-fn scoped_run_rejects_existing_global_traffic_before_replacing_summary() {
+fn scoped_run_rejects_existing_global_traffic_before_replacing_it() {
     use crate::geo::square_path;
     use crate::scope::ScopeBbox;
     let tmp = tempfile::tempdir().unwrap();
@@ -196,17 +184,10 @@ fn scoped_run_rejects_existing_global_traffic_before_replacing_summary() {
     std::fs::write(&stale, b"stale-prev-run").unwrap();
     std::fs::create_dir_all(&by_square_dir).unwrap();
     let praha = ScopeBbox::parse("48.65,12.00,51.55,16.90").unwrap();
-    let summary = square_dir.join(AIRPORT_SUMMARY_FILENAME);
-    std::fs::create_dir_all(summary.parent().unwrap()).unwrap();
-    std::fs::write(&summary, b"prior-global-summary").unwrap();
     let error =
         run_stage_2c(&by_square_dir, &[], &prepared_year_dir, 1, 0, Some(&praha)).unwrap_err();
     assert!(error.to_string().contains("global movement union"));
-    assert_eq!(std::fs::read(summary).unwrap(), b"prior-global-summary");
-    assert!(
-        stale.exists(),
-        "out-of-scope z9 file must survive a scoped reextract"
-    );
+    assert_eq!(std::fs::read(&stale).unwrap(), b"stale-prev-run");
 }
 
 #[test]

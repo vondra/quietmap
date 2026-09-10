@@ -11,7 +11,7 @@ use arrow::array::{
 use arrow::record_batch::RecordBatch;
 
 use crate::arrow_io::{read_all_batches, write_record_batch_stream};
-use crate::arrow_schemas::{synth_airport_areas_schema, synth_airport_lines_schema};
+use crate::arrow_schemas::synth_airport_lines_schema;
 
 /// True iff `osm_id` carries the [`SYNTHETIC_OSM_ID_BIT`] marker —
 /// emitted by Stage 1.5 DBSCAN, not by real OSM. Cheaper to read at
@@ -27,18 +27,10 @@ pub(crate) const SYNTHETIC_OSM_ID_BIT: u64 = 1u64 << 63;
 /// airstrip lines for that z9 (empty arrow when nothing clustered).
 pub(crate) const SYNTH_LINES_FILE: &str = "synth_airport_lines.arrow";
 
-pub(crate) const SYNTH_AREAS_FILE: &str = "synth_airport_areas.arrow";
-
 /// Aeroway-type sentinel for synthetic airstrip lines. Mirrors the
 /// real OSM convention (`osm-extract/classify.rs::aeroway_type` —
 /// 0=runway, 1=taxiway, 6=stopway, 7=airstrip).
 pub(crate) const AIRSTRIP_AEROWAY_TYPE: u8 = 7;
-
-/// Aeroway-type sentinel for the synthetic airport area row.
-/// Same value as `airport_io::AERODROME_AEROWAY_TYPE` — re-stating
-/// here keeps the synth module self-contained for callers that
-/// don't pull `airport_io` in.
-pub(crate) const SYNTH_AERODROME_AEROWAY_TYPE: u8 = crate::airport_io::AERODROME_AEROWAY_TYPE;
 
 /// z20 location bins retain a stable airport key at approximately 38 m resolution.
 fn synth_cell(lat: f64, lon: f64) -> u64 {
@@ -100,29 +92,13 @@ pub struct SynthAirportLineRow {
     pub name: String,
 }
 
-/// One row of `synth_airport_areas.arrow`. Mirrors the relevant
-/// columns of the real `airport_areas.arrow` (sans icao/iata/wkb)
-/// so the rest of the pipeline can chain real + synth areas in
-/// one iterator.
-#[derive(Debug, Clone)]
-pub(crate) struct SynthAirportAreaRow {
-    pub osm_id: u64,
-    pub airport_key: String,
-    pub name: String,
-    pub aeroway_type: u8,
-    pub centroid_lat: f64,
-    pub centroid_lon: f64,
-    pub area_m2: f32,
-}
-
 // Bound decoded rows, string builders and IPC buffers independently of airport count.
 pub(crate) const SYNTH_WRITE_BATCH_ROWS: usize = 4096;
 
 pub(crate) fn writer_allocation_allowance(max_airport_key_bytes: usize) -> u64 {
     // Real names are not copied, only their airport keys.
     let key = max_airport_key_bytes.max(synth_airport_key_for(-90.0, -180.0).len());
-    let row =
-        std::mem::size_of::<SynthAirportLineRow>().max(std::mem::size_of::<SynthAirportAreaRow>());
+    let row = std::mem::size_of::<SynthAirportLineRow>();
     // Rows + string growth, Arrow builders and serialized IPC coexist. Four
     // row-sized fixed parts overbound every field/offset/validity buffer.
     (4 * SYNTH_WRITE_BATCH_ROWS * (row + 2 * key.max(24) + 2 * DISCOVERED_AIRSTRIP_NAME.len()))
@@ -199,53 +175,6 @@ fn lines_batch(
             Arc::new(heading.finish()),
             Arc::new(atype.finish()),
             Arc::new(name.finish()),
-        ],
-    )?)
-}
-
-/// Atomically replace synthetic areas in source order, including an empty stream.
-pub(crate) fn write_synth_airport_areas(
-    path: &Path,
-    rows: impl IntoIterator<Item = SynthAirportAreaRow>,
-) -> Result<()> {
-    write_synth_rows(path, synth_airport_areas_schema(), rows, areas_batch)
-}
-
-fn areas_batch(
-    schema: &Arc<arrow::datatypes::Schema>,
-    rows: &[SynthAirportAreaRow],
-) -> Result<RecordBatch> {
-    let n = rows.len();
-
-    let mut osm_id = UInt64Builder::with_capacity(n);
-    let mut airport_key = StringBuilder::with_capacity(n, n * 24);
-    let mut name = StringBuilder::with_capacity(n, n * DISCOVERED_AIRSTRIP_NAME.len());
-    let mut atype = UInt8Builder::with_capacity(n);
-    let mut clat = Int32Builder::with_capacity(n);
-    let mut clon = Int32Builder::with_capacity(n);
-    let mut area = Float32Builder::with_capacity(n);
-
-    for r in rows {
-        osm_id.append_value(r.osm_id);
-        airport_key.append_value(&r.airport_key);
-        name.append_value(&r.name);
-        atype.append_value(r.aeroway_type);
-        let (gx, gy) = grid::lonlat_to_grid(r.centroid_lon, r.centroid_lat);
-        clat.append_value(gx);
-        clon.append_value(gy);
-        area.append_value(r.area_m2);
-    }
-
-    Ok(RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(osm_id.finish()),
-            Arc::new(airport_key.finish()),
-            Arc::new(name.finish()),
-            Arc::new(atype.finish()),
-            Arc::new(clat.finish()),
-            Arc::new(clon.finish()),
-            Arc::new(area.finish()),
         ],
     )?)
 }
@@ -341,68 +270,6 @@ pub fn read_synth_airport_lines(path: &Path) -> Result<Vec<SynthAirportLineRow>>
                 heading_deg: hd.value(i),
                 aeroway_type: at.value(i),
                 name: name.value(i).to_string(),
-            });
-        }
-    }
-    Ok(out)
-}
-
-/// Read `synth_airport_areas.arrow`. Missing file → empty vec.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn read_synth_airport_areas(path: &Path) -> Result<Vec<SynthAirportAreaRow>> {
-    match std::fs::metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error.into()),
-        Ok(_) => {}
-    }
-    let mut out = Vec::new();
-    let (schema, batches) = read_all_batches(path)?;
-    let expected = synth_airport_areas_schema();
-    anyhow::ensure!(
-        schema.fields() == expected.fields()
-            && schema.metadata().get("synth_airport_areas_contract")
-                == expected.metadata().get("synth_airport_areas_contract"),
-        "invalid synth_airport_areas contract at {}",
-        path.display()
-    );
-    for batch in batches {
-        anyhow::ensure!(
-            batch.columns().iter().all(|array| array.null_count() == 0),
-            "null synthetic airport column"
-        );
-        let n = batch.num_rows();
-        let (Some(osm_id), Some(key), Some(name), Some(at), Some(clat), Some(clon), Some(area)) = (
-            col_u64(&batch, "osm_id"),
-            col_str(&batch, "airport_key"),
-            col_str(&batch, "name"),
-            col_u8(&batch, "aeroway_type"),
-            col_i32(&batch, "centroid_gx"),
-            col_i32(&batch, "centroid_gy"),
-            col_f32(&batch, "area_m2"),
-        ) else {
-            anyhow::bail!(
-                "synth_airport_areas.arrow at {} is missing required columns; \
-                 re-extract the aircraft pipeline",
-                path.display()
-            );
-        };
-        for i in 0..n {
-            out.push(SynthAirportAreaRow {
-                osm_id: osm_id.value(i),
-                airport_key: key.value(i).to_string(),
-                name: name.value(i).to_string(),
-                aeroway_type: at.value(i),
-                centroid_lat: square_store::grid_cols::grid_cell_lonlat(
-                    clat.value(i),
-                    clon.value(i),
-                )
-                .1,
-                centroid_lon: square_store::grid_cols::grid_cell_lonlat(
-                    clat.value(i),
-                    clon.value(i),
-                )
-                .0,
-                area_m2: area.value(i),
             });
         }
     }

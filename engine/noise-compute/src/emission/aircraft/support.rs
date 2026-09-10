@@ -1,7 +1,6 @@
-//! Periodic airborne selection and conservative publication support for popup geometry.
+//! Periodic 16 km receiver envelope shared by the airborne batch, row and segment gates.
 
 use super::{meters_to_lat_deg, meters_to_lon_deg, AIRCRAFT_MAX_HORIZONTAL_REACH_M};
-use grid::bounds::BoundedSquares;
 
 #[derive(Clone, Copy, Debug)]
 pub struct AirborneEnvelope {
@@ -58,33 +57,6 @@ fn airborne_longitude_interval(start: f32, end: f32) -> [f64; 2] {
     let start = f64::from(start);
     let end = start + grid::geo::wrapped_longitude_delta(start, f64::from(end));
     [start.min(end), start.max(end)]
-}
-
-/// Inputs are the exact decoded f32 endpoints used by airborne::scatter.
-pub fn airborne_support_cells(start: [f32; 2], end: [f32; 2]) -> Option<BoundedSquares> {
-    if [start, end].into_iter().any(|[lat, lon]| {
-        !lat.is_finite()
-            || !lon.is_finite()
-            || !(-90.0..=90.0).contains(&lat)
-            || !(-180.0..=180.0).contains(&lon)
-    }) {
-        return None;
-    }
-    let reach = AIRCRAFT_MAX_HORIZONTAL_REACH_M;
-    let lat_pad = meters_to_lat_deg(reach);
-    // The receiver envelope is cast to f32 before comparison. Adjacent f32
-    // values conservatively enclose its rounding bin, without an epsilon.
-    let south = (f64::from(start[0].min(end[0]).next_down()) - lat_pad)
-        .next_down()
-        .max(-90.0);
-    let north = (f64::from(start[0].max(end[0]).next_up()) + lat_pad)
-        .next_up()
-        .min(90.0);
-    let lon_pad = meters_to_lon_deg(south.abs().max(north.abs()), reach).next_up();
-    let [west, east] = airborne_longitude_interval(start[1], end[1]);
-    let west = (f64::from((west as f32).next_down()) - lon_pad).next_down();
-    let east = (f64::from((east as f32).next_up()) + lon_pad).next_up();
-    BoundedSquares::from_degrees(south, west, north, east)
 }
 
 #[cfg(test)]

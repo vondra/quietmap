@@ -1,9 +1,9 @@
 //! Ground ownership, cross-border normalization, and input integrity regressions.
 use super::*;
 use crate::arrow_io::{
-    read_airport_summary, read_airport_traffic, write_segments, AirportTrafficRow,
+    read_airport_summaries, read_airport_traffic, write_segments, AirportTrafficRow,
 };
-use crate::stage_2c::{run_stage_2c, AIRPORT_SUMMARY_FILENAME};
+use crate::stage_2c::run_stage_2c;
 
 fn leg(lat: f32, lon: f32) -> FlightSegment {
     FlightSegment {
@@ -105,9 +105,9 @@ fn partitioned_run(lat: f64, lon: f64, split: bool) -> Vec<AirportTrafficRow> {
         if !path.exists() {
             continue;
         }
-        let summary = read_airport_summary(&dir.join(AIRPORT_SUMMARY_FILENAME)).unwrap();
+        let summary = read_airport_summaries(&path).unwrap();
         assert_eq!(summary.len(), 1);
-        assert_eq!(summary[0].airport_unique_ops_count_per_kind[1], 1);
+        assert_eq!(summary["TEST"].ops_count_per_kind[1], 1);
         for row in read_airport_traffic(&path).unwrap() {
             if split {
                 assert_eq!(owner, if row.osm_id == 1 { left } else { right });
@@ -277,22 +277,8 @@ fn inconsistent_classes_for_one_flight_keep_all_counter_and_union_dimensions() {
             assert_eq!(row.unique_gse_count_per_class[row.class_idx as usize], 1);
         }
     }
-    let summary = read_airport_summary(&dir.join(AIRPORT_SUMMARY_FILENAME))
-        .unwrap()
-        .remove(0);
-    assert_eq!(
-        (
-            summary.airport_unique_arr_count,
-            summary.airport_unique_dep_count
-        ),
-        (1, 1)
-    );
-    assert_eq!(
-        (
-            summary.airport_unique_ga_arr_count,
-            summary.airport_unique_ga_dep_count
-        ),
-        (1, 1)
-    );
-    assert_eq!(summary.airport_unique_gse_count_per_class, [1, 1, 1]);
+    let summary = read_airport_summaries(&dir.join("airport_traffic.arrow")).unwrap()["A"];
+    assert_eq!((summary.arr_count, summary.dep_count), (1, 1));
+    assert_eq!((summary.ga_arr_count, summary.ga_dep_count), (1, 1));
+    assert_eq!(summary.gse_count_per_class, [1, 1, 1]);
 }

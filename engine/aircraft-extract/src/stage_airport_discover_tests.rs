@@ -94,40 +94,6 @@ fn two_distant_clusters_distinguished() {
 }
 
 #[test]
-fn width_clamped_to_band() {
-    // 60 points with 80 m perp spread → should clamp to upper 60 m.
-    let pts: Vec<_> = (0..60)
-        .map(|i| {
-            let along = i as f32 * 1000.0 / 60.0 - 500.0;
-            let perp = if i % 2 == 0 { 40.0 } else { -40.0 };
-            local_at_50n(along, perp)
-        })
-        .collect();
-    let out = discover_strips(&pts, 100.0, 5);
-    assert!(!out.is_empty());
-    assert_eq!(out[0].width_m, 60.0, "perp 80m should clamp to 60");
-}
-
-#[test]
-fn width_clamped_to_floor() {
-    // 60 points strung along a 1000 m line with ~1 m perp jitter
-    // → raw width ~2 m should clamp UP to the 10 m floor.
-    let pts: Vec<_> = (0..60)
-        .map(|i| {
-            let along = i as f32 * 1000.0 / 60.0 - 500.0;
-            let perp = if i % 2 == 0 { 1.0 } else { -1.0 };
-            local_at_50n(along, perp)
-        })
-        .collect();
-    let out = discover_strips(&pts, 50.0, 5);
-    assert!(!out.is_empty());
-    assert_eq!(
-        out[0].width_m, 10.0,
-        "tight 2m spread should clamp up to 10"
-    );
-}
-
-#[test]
 fn translating_strip_across_dateline_preserves_membership_geometry_and_airport() {
     let vertices = |anchor: f64| {
         (0..60)
@@ -146,7 +112,6 @@ fn translating_strip_across_dateline_preserves_membership_geometry_and_airport()
         assert_eq!(shifted.len(), 1, "dateline split one physical strip");
         assert_eq!(shifted[0].vertex_count, baseline[0].vertex_count);
         assert_eq!(shifted[0].length_m, baseline[0].length_m);
-        assert_eq!(shifted[0].width_m, baseline[0].width_m);
         assert_eq!(shifted[0].heading_deg, baseline[0].heading_deg);
         assert_eq!(shifted[0].is_line, baseline[0].is_line);
         let areas = [noise_compute::types::AirportArea::new(
@@ -181,7 +146,6 @@ fn dense_strip_keeps_its_exact_shared_latitude() {
     assert!((old_mean - members[0].0).abs() > 0.009);
     let strip = fit_strip(&members);
     assert_eq!(strip.center_lat, members[0].0);
-    assert_eq!(strip.width_m, 10.0);
     assert!(strip.is_line);
 }
 

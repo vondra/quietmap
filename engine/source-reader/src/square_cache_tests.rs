@@ -69,6 +69,12 @@ fn two_batches_with_broken_second_message(path: &Path) {
         square_store::store::LEISURE_CONTRACT_V2.into(),
     );
     metadata.insert("n_days".into(), "12".into());
+    // The one generic fixture serves every layer name; the airborne file is
+    // contract-checked at open, so it carries the stamp too.
+    metadata.insert(
+        "airborne_contract".into(),
+        square_store::aircraft_contract::AIRBORNE_CONTRACT.into(),
+    );
     metadata.insert(
         arrow_batching::QM_BLOCKS_KEY.into(),
         arrow_batching::encode_blocks(&[
@@ -76,11 +82,13 @@ fn two_batches_with_broken_second_message(path: &Path) {
                 cell_x: 8_840,
                 cell_y: 5_556,
                 bbox: [50.0, 14.25, 50.0, 14.25],
+                alt_m: [0.0, 0.0],
             },
             arrow_batching::Block {
                 cell_x: 9_102,
                 cell_y: 4_757,
                 bbox: [60.0, 20.0, 60.0, 20.0],
+                alt_m: [0.0, 0.0],
             },
         ]),
     );

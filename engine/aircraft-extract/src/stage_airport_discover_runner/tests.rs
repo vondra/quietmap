@@ -7,7 +7,7 @@ fn idx(areas: &[AirportArea]) -> AerodromeIndex<'_> {
 }
 use crate::airport_io::AERODROME_AEROWAY_TYPE;
 use crate::flight::Phase;
-use crate::synth_airport_io::{read_synth_airport_areas, read_synth_airport_lines};
+use crate::synth_airport_io::read_synth_airport_lines;
 
 fn collect_miss_snap_vertices(
     segments: &[FlightSegment],
@@ -53,7 +53,6 @@ fn strip(length_m: f32, vertex_count: u32, is_line: bool) -> DiscoveredStrip {
         center_lon: 14.0,
         length_m,
         heading_deg: 90.0,
-        width_m: 30.0,
         vertex_count,
         is_line,
     }
@@ -412,17 +411,15 @@ fn only_square_dir(root: &Path) -> std::path::PathBuf {
 
 fn assert_sidecars_empty(dir: &Path) {
     let lines = read_synth_airport_lines(&dir.join(SYNTH_LINES_FILE)).unwrap();
-    let areas = read_synth_airport_areas(&dir.join(SYNTH_AREAS_FILE)).unwrap();
     assert!(
         lines.is_empty(),
         "stale synth_airport_lines must clear, got {} rows",
         lines.len()
     );
-    assert!(areas.is_empty(), "stale synth_airport_areas must clear");
 }
 
-/// Drive Stage 1.5 on a remote synthetic strip and assert both
-/// sidecars receive the expected row content + key shape.
+/// Drive Stage 1.5 on a remote synthetic strip and assert the line
+/// sidecar receives the expected row content + key shape.
 #[test]
 fn end_to_end_emits_synth_arrows_for_an_unmapped_strip() {
     let tmp = tempfile::tempdir().unwrap();
@@ -438,21 +435,18 @@ fn end_to_end_emits_synth_arrows_for_an_unmapped_strip() {
     assert_eq!(n, 1, "expected exactly one z9 to receive synth rows");
     let dir = only_square_dir(&prepared_year);
     let lines = read_synth_airport_lines(&dir.join(SYNTH_LINES_FILE)).unwrap();
-    let areas = read_synth_airport_areas(&dir.join(SYNTH_AREAS_FILE)).unwrap();
     assert!(!lines.is_empty(), "synth_airport_lines must have rows");
-    assert_eq!(areas.len(), 1, "one synth area per cluster");
-    assert_eq!(areas[0].name, "Discovered airstrip");
-    let key = &areas[0].airport_key;
+    let key = &lines[0].airport_key;
     assert!(key.starts_with("auto-"), "synth key, not re-attribution");
     for r in &lines {
         assert_eq!(&r.airport_key, key);
-        assert_eq!(r.name, areas[0].name);
+        assert_eq!(r.name, "Discovered airstrip");
     }
 }
 
 /// z9 drops out of the current run's ground-segment set entirely.
-/// The on-disk scan must rediscover it and clear the stale sidecars
-/// — otherwise Stage 2C consumes zombie airport areas.
+/// The on-disk scan must rediscover it and clear the stale synthetic
+/// line file — otherwise Stage 2C consumes zombie airport lines.
 #[test]
 fn rerun_clears_stale_synth_files_when_square_drops_out() {
     let tmp = tempfile::tempdir().unwrap();
@@ -560,12 +554,9 @@ fn corrupt_ground_input_preserves_every_existing_sidecar() {
     let mut snapshots = Vec::new();
     for square in [active, corrupt] {
         let dir = prepared_year.join(square_path(square));
-        write_synth_airport_lines(&dir.join(SYNTH_LINES_FILE), []).unwrap();
-        write_synth_airport_areas(&dir.join(SYNTH_AREAS_FILE), []).unwrap();
-        for name in [SYNTH_LINES_FILE, SYNTH_AREAS_FILE] {
-            let path = dir.join(name);
-            snapshots.push((path.clone(), std::fs::read(path).unwrap()));
-        }
+        let path = dir.join(SYNTH_LINES_FILE);
+        write_synth_airport_lines(&path, []).unwrap();
+        snapshots.push((path.clone(), std::fs::read(path).unwrap()));
     }
     assert!(run_stage_airport_discover(&by_square, &idx(&[]), &[], &prepared_year, None).is_err());
     for (path, bytes) in snapshots {

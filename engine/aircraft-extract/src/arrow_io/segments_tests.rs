@@ -110,7 +110,7 @@ fn write_chunks_into_streamable_batches() {
     let dir = tempdir().unwrap();
     let p = dir.path().join("seg.arrow");
     let segs: Vec<FlightSegment> = (0..5u64).map(seg_with_id).collect();
-    write_segments_chunked(&p, &segs, 2).unwrap(); // 5 rows / chunk 2 → 3 batches
+    write_segments_chunked(&p, &segs, 2, None).unwrap(); // 5 rows / chunk 2 → 3 batches
 
     let mut nbatch = 0;
     for_each_batch(&p, |_| {
@@ -148,7 +148,7 @@ fn single_batch_decodes_in_ordered_slices() {
     let dir = tempdir().unwrap();
     let p = dir.path().join("seg.arrow");
     let segs: Vec<FlightSegment> = (0..5u64).map(seg_with_id).collect();
-    write_segments_chunked(&p, &segs, 1000).unwrap(); // one batch of 5 rows
+    write_segments_chunked(&p, &segs, 1000, None).unwrap(); // one batch of 5 rows
 
     let mut nbatch = 0;
     for_each_batch(&p, |_| {
@@ -178,7 +178,7 @@ fn event_upper_bounds_include_repeated_runs_across_arrow_batches() {
     for row in &mut rows {
         row.callsign = format!("FL{}", row.flight_id);
     }
-    write_segments_chunked(&path, &rows, 2).unwrap();
+    write_segments_chunked(&path, &rows, 2, None).unwrap();
     let (schema, _) = super::super::read_record_batches(&path).unwrap();
     assert_eq!(schema.metadata()["flight_runs"], "3");
     assert_eq!(schema.metadata()["flight_run_callsign_bytes"], "9");
