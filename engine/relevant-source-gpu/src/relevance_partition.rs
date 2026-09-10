@@ -10,9 +10,20 @@ use crate::source_frame::{
 };
 use crate::tile_source_incidence::TileSourceIncidence;
 
-/// The 0.05 residual budget passed the reference rail screening-tail comparison;
-/// corner interpolation is still an approximation, not an interior error bound.
-pub const DROP_BUDGET_FRACTION: f64 = 0.05;
+/// Fraction of a block's quietest-corner Lden energy that may stay un-admitted
+/// (interpolated as background). This is the repaint speed dial; corner
+/// interpolation is an approximation, not an interior error bound. dev1 etalon
+/// v3 (2 450 z13 tiles, five surface layers, RTX 5070, exact-CPU reference):
+///
+///   fraction  GPU s   rail >3 dB (limit 1377)  rail >6 dB (138)  road >6 dB (341)
+///   0.15      136.6                     1119         194 OVER               36
+///   0.10      216.3                      596          52                     7
+///   0.05      266.8                      171           6                     3
+///
+/// The rail tail is receivers 0.1–6 m behind a building that screens the line
+/// while no corner of their block does. The owner chose 0.15 (2026-09-02, kept
+/// 2026-09-10 for dev4 so the world repaint costs the same as dev1's).
+pub const DROP_BUDGET_FRACTION: f64 = 0.15;
 
 /// The complete reusable source partition for one fixed geographic tile.
 #[derive(Clone, Debug, PartialEq)]
@@ -284,17 +295,19 @@ mod tests {
             ],
         )
         .unwrap();
+        // Energies 1..=34 per corner, total 595: admission from the loudest down
+        // stops once the rest is within 0.15 × 595 = 89.25, leaving 1+…+12 = 78.
         assert_eq!(
             partition.source_indices_for_block(0),
-            &(7..TEST_SOURCE_COUNT).collect::<Vec<_>>()
+            &(12..TEST_SOURCE_COUNT).collect::<Vec<_>>()
         );
         assert_eq!(
             partition.background_corner_energy[0],
-            [[28.0; PERIOD_COUNT]; 4]
+            [[78.0; PERIOD_COUNT]; 4]
         );
         assert_eq!(
             partition.source_indices_for_block(1),
-            &(7..TEST_SOURCE_COUNT).collect::<Vec<_>>()
+            &(12..TEST_SOURCE_COUNT).collect::<Vec<_>>()
         );
     }
 
@@ -330,7 +343,7 @@ mod tests {
         );
         assert_eq!(
             partition.source_indices_for_block(1),
-            &(7..TEST_SOURCE_COUNT).collect::<Vec<_>>()
+            &(12..TEST_SOURCE_COUNT).collect::<Vec<_>>()
         );
     }
     #[test]
