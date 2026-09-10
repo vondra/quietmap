@@ -1,51 +1,21 @@
-//! Road AADT continuity fill by flow-redistribution.
-//!
-//! Where a MEASURED AADT covers only part of a road network, the unmeasured
-//! segments fall to the engine's class default — often a physically-impossible
-//! jump, because cars don't vanish at a junction, they REDISTRIBUTE. Live case:
-//! ref 0033 "K Šeberovu" measured at 15620; at the junction with the small road
-//! 10114 the continuation dropped to the tertiary default 800 — i.e. ~14000 cars
-//! "disappeared" with only a minor side road to absorb them.
-//!
-//! Instead of copying-and-stopping, this propagates a measured value as a vehicle
-//! VECTOR and at each junction redistributes it (Ondra's rule, 2026-06-24):
-//!   • a continuation of the SAME road number keeps the flow MINUS what the side
-//!     branches draw off (each branch draws its measured value, or its class
-//!     default if unmeasured);
-//!   • if the road splits into DIFFERENT numbers, the flow divides in proportion
-//!     to the branches' class defaults.
-//! The value never INCREASES away from the anchor (so it can't inflate a distant
-//! network); conservation is attempted at each node, clamped to ≥0 when the side
-//! branches' estimated draw exceeds the inflow. NOT a traffic-assignment solver —
-//! just enough conservation to replace a worse class-default jump.
-//!
-//! The stop threshold uses the WORLD class default; the engine itself applies a
-//! city/country/continent cascade, so in a few up-scaled metros (Bangkok, BR) a
-//! fill could in theory land below the engine's local default. Acceptable: those
-//! metros carry their own city census, and this is a heuristic the engine
-//! down-weights via access_factor anyway (/gg Codex, deferred).
-//!
-//! Stamped heuristic (id 12) → any real measurement still wins; engine re-applies
-//! access_factor. Runs AFTER measured national/city enrichers (needs their
-//! anchors), independent of service-tree (local classes 5-9). Per-hex,
-//! self-contained → SHARD=i/n parallelizes it like service-tree.
-//!
-//! Usage:
-//!   DATA_YEAR=2026 npx tsx pipeline/enrich-roads-continuity-fill.ts
-//!   DATA_YEAR=2026 npx tsx pipeline/enrich-roads-continuity-fill.ts --bbox 49.7,13.9,50.4,15.0
-//!   DATA_YEAR=2026 npx tsx pipeline/enrich-roads-continuity-fill.ts --prefix 841e355
-//!   SHARD=0/96 DATA_YEAR=2026 node_modules/.bin/tsx pipeline/enrich-roads-continuity-fill.ts
+//! Recompute road continuity from measured anchors, retracting fills those anchors no longer support.
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { tableFromIPC } from 'apache-arrow'
 import { SOURCE_ID_ROAD_CONTINUITY_HEURISTIC } from './lib/source-ids.generated.js'
-import { isMeasured } from './lib/sources.js'
+import { isMeasured, shouldOverwrite } from './lib/sources.js'
+import { DATASETS } from './lib/enrichment-datasets.js'
 import { classDefaultTotal } from './lib/road-class-defaults.js'
 import { writeRoadAadt, iterateCountryHexes } from './lib/roads-arrow.js'
 import { nodeKey } from './lib/spatial.js'
 import { H3R4_DIR } from './lib/data-year.js'
 
+// Flow redistribution (owner rule, 2026-06-24): junction draws and proportional
+// splits never increase flow away from its measured anchor.
+// Standalone: tsx pipeline/enrich-roads-continuity-fill.ts [--bbox S,W,N,E] [--prefix H3]
+// Disjoint per-cell work also supports SHARD=i/n after all measured enrichers.
 const MY_SOURCE_ID = SOURCE_ID_ROAD_CONTINUITY_HEURISTIC
 
 const PREFIX = process.argv.includes('--prefix') ? process.argv[process.argv.indexOf('--prefix') + 1] : ''
@@ -69,8 +39,8 @@ const CONFLICT_RATIO = 3
 /** Classes the fill may WRITE — major roads + links. Local roads (5-9) are the
  *  service-tree's job, track/path never. A local road still DRAWS its share at a
  *  junction (so the main road loses that flow), it just never receives a fill.
- *  Mirrors `roadCoverage` on the dataset + the `coverage` set to writeRoadAadt. */
-const FILLABLE = new Set([0, 1, 2, 3, 4, 10, 11, 12])
+ *  Shared with the registry coverage checked by the invariant audit. */
+const FILLABLE: ReadonlySet<number> = new Set(DATASETS.find(d => d.id === MY_SOURCE_ID)!.roadCoverage!)
 
 /** Canonical ref token for same-road matching: trim + uppercase + collapse
  *  whitespace. NO leading-zero / prefix stripping ("0033" stays "0033") — the
@@ -125,10 +95,10 @@ function drawEstimate(s: Seg): number {
 /** One hex: read roads.arrow, build the endpoint graph, redistribute each measured
  *  anchor's flow through the network, write via the shared provenance-gated
  *  writer. Returns counts for the run summary. */
-async function processHex(arrowPath: string): Promise<{ filled: number; conflicts: number }> {
+export async function fillRoadContinuity(arrowPath: string): Promise<{ filled: number; conflicts: number; updated: boolean; retracted: number }> {
   const table = tableFromIPC(readFileSync(arrowPath))
   const n = table.numRows
-  if (n === 0) return { filled: 0, conflicts: 0 }
+  if (n === 0) return { filled: 0, conflicts: 0, updated: false, retracted: 0 }
 
   const refC = table.getChild('ref')
   const clsC = table.getChild('road_class')
@@ -141,7 +111,7 @@ async function processHex(arrowPath: string): Promise<{ filled: number; conflict
   const mC = table.getChild('aadt_medium')
   const hC = table.getChild('aadt_heavy')
   const moC = table.getChild('aadt_moto')
-  if (!sLatC || !sLonC || !clsC) return { filled: 0, conflicts: 0 } // malformed hex
+  if (!sLatC || !sLonC || !clsC) return { filled: 0, conflicts: 0, updated: false, retracted: 0 } // malformed hex
 
   const segs: Seg[] = []
   const endpoint = new Map<string, number[]>() // endpoint node → seg indices touching it
@@ -235,11 +205,12 @@ async function processHex(arrowPath: string): Promise<{ filled: number; conflict
         for (const { seg: t, total: tTotal } of targets) {
           if (seen.has(t)) continue
           const o = segs[t]
-          // Only fillable, unmeasured (or our own) segments receive + carry flow.
+          // Use the writer priority here too: a baseline taper cannot block a returning anchor.
           // Measured = boundary (its own truth); local = sink (drew its share above).
-          if (!FILLABLE.has(o.cls) || (o.source !== 0 && o.source !== MY_SOURCE_ID)) continue
+          if (!FILLABLE.has(o.cls) || !shouldOverwrite(o.source, MY_SOURCE_ID)) continue
           // Stop once the flow has fallen to the segment's own class default — the
-          // engine default already covers it, and propagating less is meaningless.
+          // stop uses WORLD defaults; the engine may choose a higher local default.
+          // This accepted heuristic approximation must not be mistaken for a census.
           if (tTotal <= classDefaultTotal(o.cls)) continue
           seen.add(t)
           const vt = scaleFlow(v, tTotal, v.anchor)
@@ -251,7 +222,9 @@ async function processHex(arrowPath: string): Promise<{ filled: number; conflict
     }
   }
 
-  if (fill.size === 0) return { filled: 0, conflicts }
+  if (fill.size === 0 && !segs.some(s => s.source === MY_SOURCE_ID)) {
+    return { filled: 0, conflicts, updated: false, retracted: 0 }
+  }
 
   // Write via the shared provenance-gated writer. It re-reads the file, but row
   // index `i` is stable (same file, same order), so the precomputed `fill` Map
@@ -272,8 +245,10 @@ async function processHex(arrowPath: string): Promise<{ filled: number; conflict
     },
     undefined,
     FILLABLE,
+    // A lowered or removed anchor invalidates old fills even when no new fill remains.
+    { sourceId: MY_SOURCE_ID, when: (_row, i) => !fill.has(i) },
   )
-  return { filled: res.matched, conflicts }
+  return { filled: res.matched, conflicts, updated: res.updated, retracted: res.retracted }
 }
 
 async function main() {
@@ -305,22 +280,26 @@ async function main() {
 
   let totalFilled = 0
   let totalConflicts = 0
+  let totalRetracted = 0
   let hexesUpdated = 0
   for (const hexId of hexDirs) {
     const arrowPath = resolve(H3R4_DIR, hexId, 'roads.arrow')
     if (!existsSync(arrowPath)) continue
-    const { filled, conflicts } = await processHex(arrowPath)
+    const { filled, conflicts, updated, retracted } = await fillRoadContinuity(arrowPath)
     totalFilled += filled
     totalConflicts += conflicts
-    if (filled > 0) hexesUpdated++
+    totalRetracted += retracted
+    if (updated) hexesUpdated++
   }
 
   console.log(`\n=== Results ===`)
-  console.log(`  ${totalFilled} segments filled across ${hexesUpdated} hexes`)
+  console.log(`  ${totalFilled} accepted fills, ${totalRetracted} obsolete fills retracted; ${hexesUpdated} files changed`)
   console.log(`  ${totalConflicts} segments skipped (conflicting anchors >${CONFLICT_RATIO}x)`)
 }
 
-main().catch((err) => {
-  console.error('Error:', err)
-  process.exit(1)
-})
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error('Error:', err)
+    process.exit(1)
+  })
+}

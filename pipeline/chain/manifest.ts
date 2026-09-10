@@ -6,7 +6,7 @@
 //! against the per-country spec tables below; a file this manifest cannot
 //! classify THROWS at plan time — a new enricher cannot silently stay outside
 //! the chain. Non-`enrich-*` diagnostics (enrichment-status, audit-map-
-//! discontinuities, calibrate-lane-ratios, bench/*) are
+//! discontinuities, calibrate-lane-ratios) are
 //! deliberately not steps; `write_industrial.rs` emits site_subtype at extract
 //! time, so no backfill step is needed.
 //!
@@ -650,7 +650,7 @@ export function buildPlan(scope: ResolvedScope): { steps: PlanStep[]; excludedBy
       country: city.iso2,
       args: ['--city', city.slug, '--enrich-only'],
       notes:
-        'municipal counters (city-measured rank 90) — polygon-gated, outranks national INSIDE the ADM2 boundary only. Sequential after national by design: the driver is named outside the enrich-roads-* glob so bench parallel runs cannot race it over the same hex locks.',
+        'municipal counters (city-measured rank 90) — polygon-gated, outranks national INSIDE the ADM2 boundary only. Sequential after national to avoid competing for the same hex locks.',
       skipReason: city.enabled ? null : 'disabled in lib/city-datasets.ts',
     })
   }
@@ -677,7 +677,7 @@ export function buildPlan(scope: ResolvedScope): { steps: PlanStep[]; excludedBy
       layer: 'roads',
       country: null,
       notes:
-        'flow-redistribution from MEASURED anchors across junction gaps (majors 0-4 + links) — REQUIRES every national + city anchor stamped first (rerun-measured Phase 4 contract). Anchors are isMeasured() only, so it can never chain off its own output.',
+        'flow-redistribution from MEASURED anchors across junction gaps (majors 0-4 + links) — REQUIRES every national + city anchor stamped first. Anchors are isMeasured() only, so it can never chain off its own output. Retracts its own fills no longer supported by current anchors; unchanged final values leave files untouched.',
       skipReason: null,
     },
     (b) => (b ? ['--bbox', serializeBbox(b)] : []),

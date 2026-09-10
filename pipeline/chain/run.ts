@@ -137,7 +137,7 @@ function scrubbedChildEnv(stepEnv: Readonly<Record<string, string>> | undefined)
     ...env,
     DATA_YEAR: YEAR,
     // ES Catastro (~30M buildings) and other national caches OOM at the
-    // default heap — same lift as pipeline/bench/rerun-measured.sh.
+    // default heap.
     NODE_OPTIONS: process.env.NODE_OPTIONS ?? '--max-old-space-size=8192',
     ...stepEnv,
   }

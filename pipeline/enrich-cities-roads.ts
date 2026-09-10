@@ -2,11 +2,8 @@
  * City traffic enrichment driver — stamps municipal counter AADT onto road
  * arrows for every enabled city in `lib/city-datasets.ts`.
  *
- * NAMED OUTSIDE the `enrich-roads-*.ts` glob on purpose: `pipeline/bench/
- * rerun-measured.sh` launches that glob CONCURRENTLY (xargs -P) and a city
- * driver racing national enrichers over the same hex arrows would fight the
- * per-hex lock — this driver runs as the runner's sequential Phase 3
- * instead.
+ * The canonical chain runs city enrichers after national enrichers so they
+ * do not compete for the same per-hex locks.
  *
  * Per city: adapter loads normalized per-street records (cached download) →
  * rows inside the municipal ADM2 polygon (`makeCityGate` — real boundary,
