@@ -149,9 +149,12 @@ fn square_data_ver(square: Square, structures_arrow: &Path) -> Option<u64> {
     let mut h = fnv1a64(CACHE_CODE_VER, b"structure-index-inputs-v1");
     h = fnv1a64(h, &square.x.to_le_bytes());
     h = fnv1a64(h, &square.y.to_le_bytes());
-    h = fnv1a64(h, structures_arrow.as_os_str().as_encoded_bytes());
-    h = fnv1a64(h, &[1]); // present: the locator handed us an existing file
-    let meta = std::fs::metadata(structures_arrow).ok()?;
+    // The canonical file, not the path the generation reaches it through:
+    // every generation links the same physical structures.arrow, and a
+    // path-spelled key would rebuild the world once per generation.
+    let canonical = std::fs::canonicalize(structures_arrow).ok()?;
+    h = fnv1a64(h, canonical.as_os_str().as_encoded_bytes());
+    let meta = std::fs::metadata(&canonical).ok()?;
     h = fnv1a64(h, &meta.len().to_le_bytes());
     let mtime = meta.modified().ok()?;
     let since_epoch = mtime
