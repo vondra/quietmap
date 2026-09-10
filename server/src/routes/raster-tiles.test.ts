@@ -4,6 +4,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import Fastify from 'fastify'
 import { buildApp } from '../app.js'
+
+// buildApp registers the stay route, which requires Stay22 credentials.
+process.env.STAY22_AID ??= 'test-aid'
+process.env.STAY22_API_KEY ??= 'test-key'
 import { NoiseOnflySupervisor } from '../engine/noise-onfly-supervisor.js'
 import { rasterTileRoutes } from './raster-tiles.js'
 

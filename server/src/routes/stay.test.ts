@@ -3,6 +3,19 @@ import test, { mock } from 'node:test'
 import Fastify from 'fastify'
 import { stayRoutes, snap, pickPrecision, slim, resetUpstreamWindowForTests } from './stay.js'
 
+// The route registers only with credentials (Stay22 retired its keyless tier).
+process.env.STAY22_AID = 'test-aid'
+process.env.STAY22_API_KEY = 'test-key'
+
+test('stayRoutes refuses to register without STAY22_AID and STAY22_API_KEY', async (t) => {
+  const saved = process.env.STAY22_API_KEY
+  delete process.env.STAY22_API_KEY
+  t.after(() => { process.env.STAY22_API_KEY = saved })
+  const app = Fastify()
+  t.after(async () => app.close())
+  await assert.rejects(async () => app.register(stayRoutes), /STAY22_AID and STAY22_API_KEY are required/)
+})
+
 test('snap keeps grid-boundary values in place', () => {
   // Regression: floor(50.05/0.05) is 1000.999… without the epsilon, snapping
   // a whole cell too far and doubling the requested box (grid is 0.01 now,
@@ -175,6 +188,8 @@ test('GET /api/stay forwards owner filters and prices per real night', async (t)
   const response = await app.inject(`/api/stay?${qs}`)
   assert.equal(response.statusCode, 200)
   const upstream = urls[0]
+  assert.ok(upstream.includes('aid=test-aid'))
+  assert.deepEqual(fetchMock.mock.calls[0]?.arguments[1]?.headers, { 'X-API-KEY': 'test-key' })
   for (const frag of [`checkin=${day(10)}`, `checkout=${day(13)}`, 'adults=3', 'max=120', 'minstarrating=4', 'minguestrating=8']) {
     assert.ok(upstream.includes(frag), `upstream missing ${frag}`)
   }

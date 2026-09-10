@@ -88,7 +88,36 @@ html, body {
   }
 }
 
+/* Search bar and isochron panel: one horizontal placement. Below md a
+   gutter-wide bar capped at 28rem, centered. From md up the bar stays
+   centered while that leaves the card column untouched, otherwise slides left
+   to sit one gutter before the column, and narrows once even that no longer
+   fits (clamp with min > max resolves to min). Audit 2026-09-06: the centered
+   bar covered the Layers header between 768 and 1112 px. */
+.map-top-bar {
+  position: fixed;
+  left: 50%;
+  translate: -50% 0;
+  width: calc(100% - 2 * var(--map-gutter));
+  max-width: 28rem;
+}
+@media (width >= theme(--breakpoint-md)) {
+  .map-top-bar {
+    --bar: min(28rem, calc(100% - var(--map-card-column) - 3 * var(--map-gutter)));
+    width: var(--bar);
+    left: clamp(
+      calc(var(--map-gutter) + var(--bar) / 2),
+      50%,
+      calc(100% - var(--map-card-column) - 2 * var(--map-gutter) - var(--bar) / 2)
+    );
+  }
+}
+
 :root {
+  /* The right-hand card column (App.tsx) and the gutter every floating
+     control keeps from the viewport edge; .map-top-bar is placed against them. */
+  --map-card-column: 320px;
+  --map-gutter: 0.75rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);

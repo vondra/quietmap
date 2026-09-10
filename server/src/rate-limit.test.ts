@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { buildApp } from './app.js'
+
+// buildApp registers the stay route, which requires Stay22 credentials.
+process.env.STAY22_AID ??= 'test-aid'
+process.env.STAY22_API_KEY ??= 'test-key'
 import { rateLimitClientKey } from './rate-limit.js'
 
 const ready = async () => ({ ready: true as const, failed: [], errors: {} })

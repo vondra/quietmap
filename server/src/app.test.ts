@@ -4,6 +4,10 @@ import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { buildApp, clusterRoutesEnabled } from './app.js'
 
+// buildApp registers the stay route, which requires Stay22 credentials.
+process.env.STAY22_AID ??= 'test-aid'
+process.env.STAY22_API_KEY ??= 'test-key'
+
 const ready = async () => ({ ready: true as const, failed: [], errors: {} })
 
 // Tests run from src (.ts) against a tree that may (private) or may not (public

@@ -14,7 +14,7 @@ import HighlightLayer from './HighlightLayer'
 import CellInspectorLayer from './CellInspectorLayer'
 import MapStateSync from './MapStateSync'
 import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
-import { QUIET_THRESHOLD_DEFAULT } from '../hooks/useUrlState'
+import { QUIET_THRESHOLD_DEFAULT, type UrlState } from '../hooks/useUrlState'
 import type { SelectedLocation } from './FlyToLocation'
 import type { NoiseComputeData } from '../types/noise'
 import type { SurfacePreview } from '../lib/fetch-noise-detail'
@@ -27,6 +27,7 @@ interface MapViewProps {
   initialZoom?: number
   basemap?: BasemapId
   onViewChange?: (lat: number, lng: number, zoom: number) => void
+  onHashState?: (next: UrlState) => void
   onDetailData?: (data: NoiseComputeData | null) => void
   onDetailPreview?: (preview: SurfacePreview | null) => void
   onDetailPositionChange?: (pos: { lat: number; lng: number } | null) => void
@@ -56,7 +57,7 @@ interface MapViewProps {
 
 export default function MapView({
   isCurrentDetailPosition, selectedLocation, initialCenter, initialZoom,
-  basemap, onViewChange, onDetailData, onDetailPreview, onDetailPositionChange, onDetailError, detailPosition,
+  basemap, onViewChange, onHashState, onDetailData, onDetailPreview, onDetailPositionChange, onDetailError, detailPosition,
   quietClustersEnabled, quietThreshold, highlightGeometry, isochronGeojson, realEstateFilters, onPropertySelect, stayFilters, onStaySelect, rasterOverlays,
   validationEnabled, validationPayload, onValidationSelect,
   registerGeolocateTrigger, onGeolocateActiveChange, onGeolocateReadyChange,
@@ -183,7 +184,7 @@ export default function MapView({
         onDetailPositionChange={onDetailPositionChange}
         onDetailError={onDetailError}
       />
-      {onViewChange && <MapStateSync onViewChange={onViewChange} />}
+      {onViewChange && onHashState && <MapStateSync onViewChange={onViewChange} onHashState={onHashState} />}
     </Map>
   )
 }

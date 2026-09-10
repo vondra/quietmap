@@ -4,6 +4,10 @@ import test from 'node:test'
 import { isochronRoutes } from './isochron.js'
 import { buildApp } from '../app.js'
 
+// buildApp registers the stay route, which requires Stay22 credentials.
+process.env.STAY22_AID ??= 'test-aid'
+process.env.STAY22_API_KEY ??= 'test-key'
+
 const ready = async () => ({ ready: true as const, failed: [], errors: {} })
 
 function valhallaStub(bodyHandler?: (body: string) => [number, unknown]) {
