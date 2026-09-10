@@ -6,7 +6,6 @@
 //! Single-receiver entry point: `compute_at_point` (the popup passes a
 //! `TraceCollector`).
 
-pub mod admin;
 pub mod city_consts_generated;
 pub mod compute;
 pub mod confidence;
@@ -24,6 +23,7 @@ pub mod present;
 pub mod propagation;
 pub mod region_defaults_generated;
 pub mod source_names;
+pub mod square_country_city;
 pub(crate) use source_names::*;
 pub mod sources;
 pub mod traces;
@@ -642,7 +642,7 @@ mod tests {
         let receiver = Receiver::new(50.08, 14.42, 200.0);
         let roads = vec![RoadSegment {
             osm_id: 1,
-            admin: None,
+            square_country_city: None,
             segment_idx: 0,
             // 500 m due north of the receiver, running east-west: the
             // declared dist_m/cp/fraction must AGREE with the geometry —
@@ -722,7 +722,7 @@ mod tests {
     fn residential_100m_north() -> RoadSegment {
         RoadSegment {
             osm_id: 1,
-            admin: None,
+            square_country_city: None,
             segment_idx: 0,
             start_lat: 50.080905,
             start_lon: 14.418460,
@@ -758,7 +758,7 @@ mod tests {
     fn mainline_200m_north() -> RailSegment {
         RailSegment {
             osm_id: 2,
-            admin: None,
+            square_country_city: None,
             segment_idx: 0,
             start_lat: 50.081809,
             start_lon: 14.416920,
@@ -963,7 +963,7 @@ mod tests {
         let receiver = Receiver::new(50.08, 14.42, 200.0);
         let roads = vec![RoadSegment {
             osm_id: 2,
-            admin: None,
+            square_country_city: None,
             segment_idx: 0,
             start_lat: 50.0801,
             start_lon: 14.42,
@@ -1147,7 +1147,7 @@ mod tests {
         let receiver = Receiver::new(50.08, 14.42, 200.0);
         let roads = vec![RoadSegment {
             osm_id: 1,
-            admin: None,
+            square_country_city: None,
             segment_idx: 0,
             start_lat: 50.081,
             start_lon: 14.42,
@@ -1179,7 +1179,7 @@ mod tests {
         }];
         let railways = vec![RailSegment {
             osm_id: 2,
-            admin: None,
+            square_country_city: None,
             segment_idx: 0,
             start_lat: 50.082,
             start_lon: 14.42,

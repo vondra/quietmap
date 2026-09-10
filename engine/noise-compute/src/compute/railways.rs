@@ -15,13 +15,13 @@ use crate::*;
 /// clustering from 58.208 ms to 8.125 ms.
 const RAIL_TRACK_LINK_M: f64 = 150.0;
 
-/// Memo key for `REACH_CACHE`: `(rail_type, admin ISO, city_id, continent, speed bits, pax bits, frt bits)`.
+/// Memo key for `REACH_CACHE`: `(rail_type, country ISO, city_id, continent, speed bits, pax bits, frt bits)`.
 type ReachKey = (u8, [u8; 2], u16, u8, u64, u64, u64);
 
 thread_local! {
     /// Exact-key memo for `rail_reach_m` — see the comment at the call site.
     /// Keyed on raw f64 bits (no quantization semantics to reason about) plus the
-    /// admin code (C1's per-region split changes the solved reach). Per-thread:
+    /// country code (C1's per-region split changes the solved reach). Per-thread:
     /// no lock, and a pure function of its key, so whichever thread runs the
     /// kernel fills its own.
     static REACH_CACHE: std::cell::RefCell<std::collections::HashMap<ReachKey, f64>> =
@@ -231,12 +231,13 @@ pub(crate) fn compute_railways(
     }
     let mut rails_by_key: HashMap<(String, String, u8, Option<i64>), RailAccum> = HashMap::new();
 
-    // Admin resolved once per call — the receiver position is constant across
+    // SquareCountryCity resolved once per call — the receiver position is constant across
     // segments. Drives the C1 per-region day/evening/night split (EU freight
     // runs ~55 % at night vs ~33 % world), shared with the heatmap loader + the
     // reach solver via `railway::rail_time_dist` (exact mirror of compute_roads).
-    // M5: a row's own baked admin overrides this per segment below.
-    let receiver_admin = crate::admin::admin_for_latlng(receiver.lat, receiver.lon);
+    // M5: a row's own baked SquareCountryCity overrides this per segment below.
+    let receiver_square_country_city =
+        crate::square_country_city::square_country_city_for_latlng(receiver.lat, receiver.lon);
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
 
     // ── Pass 1: admission gates + the skyline growth chain (sequential) ──
@@ -248,7 +249,7 @@ pub(crate) fn compute_railways(
         q_pax: f64,
         q_frt: f64,
         /// C1 per-region (pax_pct, frt_pct, hours) triplets, resolved from the
-        /// segment's admin on the scheduler thread.
+        /// segment's square_country_city on the scheduler thread.
         periods: [(f64, f64, f64); 3],
         src_alt: f64,
         d_slant: f64,
@@ -277,9 +278,11 @@ pub(crate) fn compute_railways(
         if q_pax + q_frt <= 0.0 {
             continue;
         }
-        // The row's own baked admin (plan M5) when its batch carried one,
-        // else the receiver admin (pre-bake behaviour, unchanged).
-        let admin = seg.admin.unwrap_or(receiver_admin);
+        // The row's own baked SquareCountryCity (plan M5) when its batch carried one,
+        // else the receiver SquareCountryCity (pre-bake behaviour, unchanged).
+        let square_country_city = seg
+            .square_country_city
+            .unwrap_or(receiver_square_country_city);
         // Per-row audibility reach: this segment's own 25 dB Lden crossing,
         // clamped [2 km, 10 km]. The heatmap loader sets the identical value on
         // each `LineRow` from the SAME `rail_reach_m` solver (the popup's
@@ -293,22 +296,22 @@ pub(crate) fn compute_railways(
         // (type, speed, counts) tuples collapse onto a handful of defaults,
         // so an exact-key cache hits ~99%.
         let reach_m = REACH_CACHE.with(|c| {
-            // Full admin triplet in the key: rail reach is ISO-only today, but
+            // Full square_country_city triplet in the key: rail reach is ISO-only today, but
             // the moment a per-country override keyed on anything else lands,
             // an ISO-only key would serve a stale reach with no test failing
             // (/gg M4/M5 #5). A tuple of Copy primitives costs nothing extra.
             let key = (
                 seg.rail_type,
-                admin.country_iso,
-                admin.city_id,
-                admin.continent as u8,
+                square_country_city.country_iso,
+                square_country_city.city_id,
+                square_country_city.continent as u8,
                 speed.to_bits(),
                 q_pax.to_bits(),
                 q_frt.to_bits(),
             );
-            *c.borrow_mut()
-                .entry(key)
-                .or_insert_with(|| railway::rail_reach_m(admin, rail_type, speed, q_pax, q_frt))
+            *c.borrow_mut().entry(key).or_insert_with(|| {
+                railway::rail_reach_m(square_country_city, rail_type, speed, q_pax, q_frt)
+            })
         });
         if seg.dist_m > reach_m {
             continue;
@@ -325,7 +328,7 @@ pub(crate) fn compute_railways(
         // type (trams take the urban pax curve; only RailType::Rail in an EU
         // region gets the night-heavy freight share). Same table the heatmap
         // loader + reach solver consume → popup-vs-heatmap parity by construction.
-        let td = railway::rail_time_dist(admin, rail_type);
+        let td = railway::rail_time_dist(square_country_city, rail_type);
         let periods = td.periods();
 
         // Early exit: skip only if the LOUDEST period's free-field is below
@@ -935,7 +938,7 @@ pub(crate) fn compute_railways(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::admin::{Admin, Continent};
+    use crate::square_country_city::{Continent, SquareCountryCity};
 
     /// Flat-ground rasters (200 m, G=0.5) mirroring lib.rs' MockRasters.
     struct FlatRasters;
@@ -951,12 +954,12 @@ mod tests {
         }
     }
 
-    const CZ: Admin = Admin {
+    const CZ: SquareCountryCity = SquareCountryCity {
         continent: Continent::Europe,
         country_iso: *b"CZ",
         city_id: 0,
     };
-    const TH: Admin = Admin {
+    const TH: SquareCountryCity = SquareCountryCity {
         continent: Continent::Asia,
         country_iso: *b"TH",
         city_id: 0,
@@ -964,12 +967,12 @@ mod tests {
 
     /// Freight-heavy mainline (100 pax + 40 freight @ 120 km/h) 500 m from
     /// the receiver — the shape the loader tests prove flips night/day under
-    /// the EU split. Tests never init the admin table → receiver UNKNOWN →
+    /// the EU split. Tests never point the square-country-city cache at a tree → receiver UNKNOWN →
     /// world split when the channel is unset.
     fn mainline_segment() -> RailSegment {
         RailSegment {
             osm_id: 1,
-            admin: None,
+            square_country_city: None,
             segment_idx: 0,
             start_lat: 50.0,
             start_lon: 14.0,
@@ -1154,12 +1157,12 @@ mod tests {
     }
 
     /// Gate (d) popup: the EU vs world period split follows the SEGMENT's
-    /// baked ISO, not the receiver's admin.
+    /// baked ISO, not the receiver's SquareCountryCity.
     #[test]
     fn baked_iso_drives_eu_split() {
-        let baked = |admin| {
+        let baked = |square_country_city| {
             [RailSegment {
-                admin: Some(admin),
+                square_country_city: Some(square_country_city),
                 ..mainline_segment()
             }]
         };

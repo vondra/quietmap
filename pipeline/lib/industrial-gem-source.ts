@@ -43,7 +43,7 @@ export function gemFuelNace(fuel: string): number | null {
 
 export function strictGemCountries(points: readonly { lat: number; lon: number }[], boundaries: string): number[] {
   const root = fileURLToPath(new URL('../..', import.meta.url))
-  const run = spawnSync(resolve(root, '.venv/bin/python'), [resolve(root, 'scripts/admin/industrial_countries.py'), boundaries], {
+  const run = spawnSync(resolve(root, '.venv/bin/python'), [resolve(root, 'scripts/square-country-city/industrial_countries.py'), boundaries], {
     input: JSON.stringify(points.map(({ lat, lon }) => [lat, lon])), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
   })
   if (run.error || run.status !== 0) throw new Error(`GEM strict CGAZ lookup failed: ${run.error?.message ?? run.stderr}`)

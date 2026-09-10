@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { test } from 'node:test'
 import { ROAD_NATIONAL, ROAD_NATIONAL_NETWORKS, ROAD_NATIONAL_POLICIES, buildPlan, parseScope } from './manifest.ts'
-import { adminPreflight, commandFor, runChain, spawnStep } from './run.ts'
+import { squareCountryCityPreflight, commandFor, runChain, spawnStep } from './run.ts'
 
 test('world plan keeps national roads, GTFS, proxies and world-covering heuristics', () => {
   const ids = buildPlan({ kind: 'world' }).map(step => step.id)
@@ -82,11 +82,11 @@ test('command argv never imports enrichers and uses enrich-only on national road
   assert.deepEqual(spatial.argv.slice(-2), ['--country', 'CN'])
 })
 
-test('admin preflight refuses a tree with squares but no admin.bin', () => {
-  const work = mkdtempSync(resolve(tmpdir(), 'qm-chain-admin-'))
+test('square-country-city preflight refuses a tree with squares but no square-country-city.bin', () => {
+  const work = mkdtempSync(resolve(tmpdir(), 'qm-chain-square-country-city-'))
   mkdirSync(resolve(work, 'z9/276/173'), { recursive: true })
   writeFileSync(resolve(work, 'z9/276/173/roads.arrow'), '')
-  assert.match(adminPreflight(work) ?? '', /admin\.bin 0\/1/)
+  assert.match(squareCountryCityPreflight(work) ?? '', /square-country-city\.bin 0\/1/)
   rmSync(work, { recursive: true, force: true })
 })
 
@@ -98,7 +98,7 @@ test('dry-run world does not spawn and prints every planned id', async () => {
     '--boundaries', '/tmp/cgaz.geojson',
     '--as-of-date', '20260909',
     '--dry-run',
-    '--skip-admin-check',
+    '--skip-square-country-city-check',
   ])
   assert.equal(code, 0)
 })
@@ -120,10 +120,10 @@ test('full and railway chains require an explicit generation date', async () => 
   assert.equal(await runChain([...base, '--layer', 'buildings']), 0)
 })
 
-test('active admin blocks geography-dependent layers but permits independent building refinement', async () => {
+test('active square-country-city bake blocks geography-dependent layers but permits independent building refinement', async () => {
   const work = mkdtempSync(resolve(tmpdir(), 'qm-chain-lock-'))
   const marker = resolve(work, 'enricher-ran')
-  const holder = spawn('flock', ['--exclusive', resolve(work, '.admin-build.lock'),
+  const holder = spawn('flock', ['--exclusive', resolve(work, '.square-country-city-build.lock'),
     process.execPath, '-e', 'process.stdout.write("ready"); process.stdin.resume()'])
   await once(holder.stdout!, 'data')
   try {

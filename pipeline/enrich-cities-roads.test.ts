@@ -85,7 +85,7 @@ test('city/native priorities, hole and foreign ownership preserve IPC geometry, 
   assert.equal((await enrichMunicipalRoads(root, [selected]))[0].updated, 0)
   assert.deepEqual(readFileSync(path), before)
   assert.equal(statSync(path, { bigint: true }).mtimeNs, stat.mtimeNs)
-  const corrupt = writeRoadsFixture('missing-admin-city.arrow', [2], { origin: [14.43, 50.08], omitCountryContract: true })
+  const corrupt = writeRoadsFixture('missing-square-country-city.arrow', [2], { origin: [14.43, 50.08], omitCountryContract: true })
   const badPath = resolve(root, 'z9/277/173/roads.arrow'); mkdirSync(resolve(badPath, '..'), { recursive: true }); copyFileSync(corrupt, badPath)
   await assert.rejects(enrichMunicipalRoads(root, [selected]), /country_baked_v1/)
   assert.deepEqual(readFileSync(path), before)

@@ -156,15 +156,15 @@ def audit_world(prepared):
     import pyarrow as pa
     sys.path.insert(0, str(Path(__file__).parent / 'structures'))
     from structure_contract import CONTRACT_KEY, CONTRACT_VERSION
-    sys.path.insert(0, str(Path(__file__).parent / 'admin'))
-    from build_admin import expected_contract
+    sys.path.insert(0, str(Path(__file__).parent / 'square-country-city'))
+    from build_square_country_city import expected_contract
     counts = {}
     squares = 0
     for square in square_directories(prepared):
         x, y = int(square.parent.name), int(square.name)
-        record = (square / 'admin.bin').read_bytes()
+        record = (square / 'square-country-city.bin').read_bytes()
         if len(record) != 13 or struct.unpack('<Q', record[:8])[0] != qmgrid.square_id(x, y):
-            raise ValueError(f'invalid admin identity: {square}')
+            raise ValueError(f'invalid square-country-city identity: {square}')
         if not (square / 'structures.arrow').is_file():
             raise ValueError(f'unfinished structures: {square}')
         for path in sorted(square.glob('*.arrow')):

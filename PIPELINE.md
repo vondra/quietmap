@@ -30,7 +30,7 @@ Download and validate new source versions before freezing these inputs.
 
 The controller records source/code SHA-256 and execution receipts in `build.sqlite`,
 including resolved height-raster dependencies. It prepares the complete z9 directory
-set before parallel writers, then runs OSM, admin, national buildings, structures,
+set before parallel writers, then runs OSM, square-country-city, national buildings, structures,
 ordered road/rail/industry chains and the pinned hybrid aircraft window. Buildings
 precede structures; both precede service-tree and built-up road inference. Disjoint
 writers can overlap within the configured cgroup memory budget. Source cache changes
@@ -71,10 +71,11 @@ If structures were built into a separate tree, validate their schema and grid be
 joining them into the prepared year. Reconcile every pending square after the builder
 finishes. Preserve existing files and producer completion receipts.
 
-Run `scripts/admin/build_admin.py --prepared-dir YEAR --boundaries CGAZ --jobs N`
-after extraction. It writes `admin.bin` and embedded road/rail/industrial country
-columns. It holds `YEAR/.admin-build.lock` exclusively. Do not overlap a writer
-that ignores this lock with admin.
+Run `scripts/square-country-city/build_square_country_city.py --prepared-dir YEAR
+--boundaries CGAZ --jobs N` after extraction. It writes `square-country-city.bin`
+(continent, country ISO, metro id per z9 square) and embedded road/rail/industrial
+country columns. It holds `YEAR/.square-country-city-build.lock` exclusively. Do not
+overlap a writer that ignores this lock with the square-country-city bake.
 
 ## Enrichment and parallel work
 
@@ -96,13 +97,13 @@ The old `--scope country:CZ` was unsafe: global writers still changed the whole
 input tree. It is rejected.
 
 `--layer buildings|roads|railways|industrial` selects an independent output family.
-National buildings can run during admin: they use their source coordinates and only
-write buildings. After admin finishes, railways and industrial may run in parallel.
+National buildings can run during the square-country-city bake: they use their source coordinates and only
+write buildings. After the square-country-city bake finishes, railways and industrial may run in parallel.
 Finish national buildings before starting the roads chain: service-tree derives
 traffic demand from their attributes. Finish structures footprints before built-up.
 Within each layer keep manifest order; do not run two writers of one layer together.
 Each child exclusively locks its output family. Roads, railways and industrial also
-hold the admin lock shared, excluding the admin writer for their lifetime. Step exit and elapsed seconds
+hold the square-country-city lock shared, excluding its writer for their lifetime. Step exit and elapsed seconds
 are emitted as JSON. `--from STEP` resumes within the selected family.
 
 Service-tree visits every road square, including those without buildings. Empty
@@ -140,10 +141,10 @@ cruise, Stage 2C ground operations and local airport summaries. Stage 2B spills 
 transits, then folds each owner z9 once into `cruise.arrow`; the popup reads owner
 squares within `CRUISE_QUERY_RADIUS_M` (16 km reach + half the 50 km representative
 length clamp), so no support copies exist for cruise. This work can overlap
-admin/enrichment because it writes separate artifact names. It requires complete
+square-country-city/enrichment because it writes separate artifact names. It requires complete
 rasters, airport inputs, verified windows, and a measured shuffle disk budget.
 Prague-only throughput is not a world completion forecast. New aircraft support
-squares require final structures/admin coverage before serving.
+squares require final structures/square-country-city coverage before serving.
 
 ## Final derived artifacts and serving
 

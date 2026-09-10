@@ -234,12 +234,13 @@ pub fn collect_from_square_data(
             lng,
             noise_compute::constants::RAILWAY_REACH_CEILING,
         );
-        // Receiver-square admin for the C1 per-region period model. Only the scaled
+        // Receiver-square SquareCountryCity for the C1 per-region period model. Only the scaled
         // counts / speed of `norm` feed `RailSegment` here; `compute_railways`
-        // re-resolves the same admin for emission + reach, so this is for
+        // re-resolves the same SquareCountryCity for emission + reach, so this is for
         // signature consistency (and harmless if the table is uninitialised).
-        // M5: a row with baked columns overrides this with its own admin.
-        let rail_admin = noise_compute::admin::admin_for_latlng(lat, lng);
+        // M5: a row with baked columns overrides this with its own SquareCountryCity.
+        let rail_square_country_city =
+            noise_compute::square_country_city::square_country_city_for_latlng(lat, lng);
         for r in railways {
             let norm = noise_compute::normalize::normalize_rail(
                 noise_compute::normalize::RawRailInput {
@@ -252,7 +253,7 @@ pub fn collect_from_square_data(
                     trains_freight: r.trains_freight,
                     parallel_divisor: r.parallel_divisor,
                 },
-                r.admin.unwrap_or(rail_admin),
+                r.square_country_city.unwrap_or(rail_square_country_city),
             );
             let trains_passenger_source: u8 = if r.trains_passenger > 0 { 0 } else { 1 };
             let trains_freight_source: u8 = if r.trains_freight > 0 { 0 } else { 1 };
@@ -266,7 +267,7 @@ pub fn collect_from_square_data(
 
             all_railways.push(noise_compute::types::RailSegment {
                 osm_id: r.osm_id,
-                admin: r.admin,
+                square_country_city: r.square_country_city,
                 segment_idx: r.segment_idx,
                 start_lat: r.start_lat,
                 start_lon: r.start_lon,
@@ -310,7 +311,7 @@ pub fn collect_from_square_data(
         for r in roads {
             all_roads.push(noise_compute::types::RoadSegment {
                 osm_id: r.osm_id,
-                admin: r.admin,
+                square_country_city: r.square_country_city,
                 segment_idx: r.segment_idx,
                 start_lat: r.start_lat,
                 start_lon: r.start_lon,
@@ -582,11 +583,11 @@ pub struct RoadResult {
     pub cp_lat: f64,
     pub cp_lon: f64,
     pub fraction: f64,
-    /// M4: the row's own baked admin when its batch carried the M3 triplet
-    /// (`None` = no columns → receiver-admin fallback in the kernel); copied
+    /// M4: the row's own baked SquareCountryCity when its batch carried the M3 triplet
+    /// (`None` = no columns → receiver square-country-city fallback in the kernel); copied
     /// onto the segment, never on the wire.
     #[serde(skip_serializing)]
-    pub admin: Option<noise_compute::admin::Admin>,
+    pub square_country_city: Option<noise_compute::square_country_city::SquareCountryCity>,
 }
 
 /// Scan road batches, filter by distance, return results.
@@ -598,9 +599,10 @@ pub fn query_roads_from_batches(
 ) -> Vec<RoadResult> {
     let mut results = Vec::new();
 
-    // Admin resolved once per popup call — lat/lng is the query centre.
+    // SquareCountryCity resolved once per popup call — lat/lng is the query centre.
     // Falls back to UNKNOWN → WORLD_DEFAULT when the table isn't loaded.
-    let admin = noise_compute::admin::admin_for_latlng(lat, lon);
+    let square_country_city =
+        noise_compute::square_country_city::square_country_city_for_latlng(lat, lon);
 
     for batch in batches {
         let n = batch.num_rows();
@@ -637,10 +639,10 @@ pub fn query_roads_from_batches(
         // Single `source_id` column; provenance via
         // `noise_compute::sources::provenance_of(source_id)`.
         let source_id_col = col_u16(batch, "source_id");
-        // M3 baked admin triplet (all-or-none at bake time). The `country_iso`
+        // M3 baked SquareCountryCity triplet (all-or-none at bake time). The `country_iso`
         // column's PRESENCE is the fallback switch: a present 0 bakes
-        // `Admin::UNKNOWN` (WORLD defaults, NO receiver fallback); only an
-        // ABSENT column takes the receiver admin. Tolerant reads — a
+        // `SquareCountryCity::UNKNOWN` (WORLD defaults, NO receiver fallback); only an
+        // ABSENT column takes the receiver SquareCountryCity. Tolerant reads — a
         // wrong-typed column reads as absent (the bake hard-fails instead).
         let country_iso_col = col_u16(batch, "country_iso");
         let city_id_col = col_u16(batch, "city_id");
@@ -679,10 +681,10 @@ pub fn query_roads_from_batches(
             }
 
             let source_id = source_id_col.map(|a| a.value(i)).unwrap_or(0);
-            // The row's own baked admin when the column is present (M4), else
-            // `None` → the receiver admin (pre-bake behaviour, unchanged).
-            let row_admin = country_iso_col.map(|iso| {
-                noise_compute::defaults::baked_admin(
+            // The row's own baked SquareCountryCity when the column is present (M4), else
+            // `None` → the receiver SquareCountryCity (pre-bake behaviour, unchanged).
+            let row_square_country_city = country_iso_col.map(|iso| {
+                noise_compute::defaults::baked_square_country_city(
                     iso.value(i),
                     city_id_col.map(|c| c.value(i)).unwrap_or(0),
                     continent_col.map(|c| c.value(i)).unwrap_or(0),
@@ -707,9 +709,10 @@ pub fn query_roads_from_batches(
             };
             // The cascade keeps only its drop decision (tunnel, closed access);
             // its reach equals `effective_radius` by construction.
-            let Some(norm) =
-                noise_compute::normalize::normalize_road(raw, row_admin.unwrap_or(admin))
-            else {
+            let Some(norm) = noise_compute::normalize::normalize_road(
+                raw,
+                row_square_country_city.unwrap_or(square_country_city),
+            ) else {
                 continue;
             };
             debug_assert_eq!(effective_radius, max_radius.min(norm.max_distance_m));
@@ -763,7 +766,7 @@ pub fn query_roads_from_batches(
                 cp_lat: cp.lat,
                 cp_lon: cp.lon,
                 fraction: cp.fraction,
-                admin: row_admin,
+                square_country_city: row_square_country_city,
             });
         }
     }
@@ -819,11 +822,11 @@ pub struct RailResult {
     pub cp_lat: f64,
     pub cp_lon: f64,
     pub fraction: f64,
-    /// M5: the row's own baked admin when its batch carried the M3 triplet
-    /// (`None` = no columns → receiver-admin fallback in the kernel); copied
+    /// M5: the row's own baked SquareCountryCity when its batch carried the M3 triplet
+    /// (`None` = no columns → receiver square-country-city fallback in the kernel); copied
     /// onto the segment, never on the wire.
     #[serde(skip_serializing)]
-    pub admin: Option<noise_compute::admin::Admin>,
+    pub square_country_city: Option<noise_compute::square_country_city::SquareCountryCity>,
 }
 
 pub fn query_railways_from_batches(
@@ -863,7 +866,7 @@ pub fn query_railways_from_batches(
         let trains_frt = col_i32(batch, "trains_freight");
         let par_div = col_u8(batch, "parallel_divisor");
         let source_id_col = col_u16(batch, "source_id");
-        // M3 baked admin triplet — the rail mirror of the road reads above
+        // M3 baked SquareCountryCity triplet — the rail mirror of the road reads above
         // (M5: the row's own ISO drives the kernel's EU/world split).
         let country_iso_col = col_u16(batch, "country_iso");
         let city_id_col = col_u16(batch, "city_id");
@@ -928,8 +931,8 @@ pub fn query_railways_from_batches(
                 cp_lat: cp.lat,
                 cp_lon: cp.lon,
                 fraction: cp.fraction,
-                admin: country_iso_col.map(|iso| {
-                    noise_compute::emission::railway::baked_admin(
+                square_country_city: country_iso_col.map(|iso| {
+                    noise_compute::emission::railway::baked_square_country_city(
                         iso.value(i),
                         city_id_col.map(|c| c.value(i)).unwrap_or(0),
                         continent_col.map(|c| c.value(i)).unwrap_or(0),
@@ -1450,7 +1453,10 @@ mod square_query_tests {
         assert_eq!(r.name, "Test Street");
         assert!((r.start_lon - LON).abs() < 0.001, "slon={}", r.start_lon);
         assert!((r.start_lat - LAT).abs() < 0.001, "slat={}", r.start_lat);
-        assert_eq!(r.admin, None, "no baked columns → receiver fallback");
+        assert_eq!(
+            r.square_country_city, None,
+            "no baked columns → receiver fallback"
+        );
     }
 
     #[test]

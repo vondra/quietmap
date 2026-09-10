@@ -115,12 +115,13 @@ pub(crate) fn compute_roads(
     // tracks, by contrast, merge per type — see compute/railways.rs).
     let mut roads_by_key: HashMap<(String, String, u8), RoadAccum> = HashMap::new();
 
-    // Admin resolved once per compute_roads call — receiver position is
-    // constant across segments. Uses the process-wide admin table
-    // (see admin::init_admin_table at tile-painter/source-reader init).
-    // Falls back to Admin::UNKNOWN → WORLD_DEFAULT when uninitialised.
-    // M4: a row's own baked admin overrides this per segment below.
-    let receiver_admin = crate::admin::admin_for_latlng(receiver.lat, receiver.lon);
+    // SquareCountryCity resolved once per compute_roads call — receiver position is
+    // constant across segments. Uses the process-wide square-country-city cache
+    // (see square_country_city::set_square_country_city_prepared_directory at source-reader init).
+    // Falls back to SquareCountryCity::UNKNOWN → WORLD_DEFAULT when uninitialised.
+    // M4: a row's own baked SquareCountryCity overrides this per segment below.
+    let receiver_square_country_city =
+        crate::square_country_city::square_country_city_for_latlng(receiver.lat, receiver.lon);
 
     // ── Pass 1: admission gates + the skyline growth chain (sequential) ──
     //
@@ -130,7 +131,7 @@ pub(crate) fn compute_roads(
     // snap lands neighbouring segments on one rung.
     struct RoadPre {
         norm: normalize::NormalizedRoad,
-        admin: crate::admin::Admin,
+        square_country_city: crate::square_country_city::SquareCountryCity,
         src_alt: f64,
         d_slant: f64,
         /// `Some` = arc-screened, against exactly this frozen growth state.
@@ -147,10 +148,12 @@ pub(crate) fn compute_roads(
     let mut t_road_gates_accum = std::time::Duration::ZERO;
     for (seg_i, seg) in roads.iter().enumerate() {
         let t_iter = t_road_start.elapsed();
-        // The row's own baked admin (plan M4) when its batch carried one,
-        // else the receiver admin (pre-bake behaviour, unchanged).
-        let admin = seg.admin.unwrap_or(receiver_admin);
-        let Some(norm) = normalize::normalize_road_segment(seg, admin) else {
+        // The row's own baked SquareCountryCity (plan M4) when its batch carried one,
+        // else the receiver SquareCountryCity (pre-bake behaviour, unchanged).
+        let square_country_city = seg
+            .square_country_city
+            .unwrap_or(receiver_square_country_city);
+        let Some(norm) = normalize::normalize_road_segment(seg, square_country_city) else {
             continue;
         };
         if seg.dist_m > norm.max_distance_m {
@@ -208,7 +211,7 @@ pub(crate) fn compute_roads(
             seg_i,
             RoadPre {
                 norm,
-                admin,
+                square_country_city,
                 src_alt,
                 d_slant,
                 snapshot,
@@ -541,7 +544,7 @@ pub(crate) fn compute_roads(
             p.norm.heavy_aadt,
             p.norm.moto_aadt,
         );
-        let (admin, src_alt, d_slant) = (p.admin, p.src_alt, p.d_slant);
+        let (square_country_city, src_alt, d_slant) = (p.square_country_city, p.src_alt, p.d_slant);
         let (seg_variants, ground_g) = (out.seg_variants, out.ground_g);
         let effective_ref = std::mem::take(&mut out.effective_ref);
 
@@ -728,7 +731,7 @@ pub(crate) fn compute_roads(
                 seg.aadt_medium,
                 seg.aadt_heavy,
                 seg.aadt_moto,
-                admin,
+                square_country_city,
             );
             acc.dominant_aadt_light_nominal = nom_l;
             acc.dominant_aadt_medium_nominal = nom_m;
@@ -762,8 +765,12 @@ pub(crate) fn compute_roads(
                 // dedicated label keeps the popup honest ("osm_posted" here
                 // would claim a sign that does not exist).
                 "graded_transition"
-            } else if crate::defaults::resolve_speed_default(seg.road_class, admin, seg.built_up)
-                .is_some()
+            } else if crate::defaults::resolve_speed_default(
+                seg.road_class,
+                square_country_city,
+                seg.built_up,
+            )
+            .is_some()
             {
                 // Untagged, resolved from the country's legal implicit limit (task #15).
                 "country_legal_default"
@@ -925,7 +932,7 @@ pub(crate) fn compute_roads(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::admin::{Admin, Continent};
+    use crate::square_country_city::{Continent, SquareCountryCity};
 
     /// Flat-ground rasters (200 m, G=0.5) mirroring lib.rs' MockRasters.
     struct FlatRasters;
@@ -941,23 +948,23 @@ pub(crate) mod tests {
         }
     }
 
-    /// TH admin (M6.3 measured DRR secondary arm 899.7/62.4/44.2/912.1 vs
+    /// TH square-country-city (M6.3 measured DRR secondary arm 899.7/62.4/44.2/912.1 vs
     /// WORLD 2640/120/180/60 — the override is unambiguous on the fixture
     /// below).
-    const TH: Admin = Admin {
+    const TH: SquareCountryCity = SquareCountryCity {
         continent: Continent::Asia,
         country_iso: *b"TH",
         city_id: 0,
     };
 
     /// One unenriched secondary (class 3) segment 200 m from the receiver:
-    /// tagged speed 50, so the admin affects ONLY the AADT cascade. Tests
-    /// never init the process-wide admin table, so the receiver admin is
+    /// tagged speed 50, so the country affects ONLY the AADT cascade. Tests
+    /// never point the process-wide square-country-city cache at a tree, so the receiver value is
     /// UNKNOWN → WORLD — exactly the "oceanic receiver" shape of gate (a).
     fn secondary_segment() -> RoadSegment {
         RoadSegment {
             osm_id: 1,
-            admin: None,
+            square_country_city: None,
             segment_idx: 0,
             start_lat: 50.0,
             start_lon: 14.0,
@@ -1011,14 +1018,14 @@ pub(crate) mod tests {
         }
     }
 
-    /// Gate (a) popup: a row whose baked admin is TH gets TH defaults even
+    /// Gate (a) popup: a row whose baked SquareCountryCity is TH gets TH defaults even
     /// though the receiver resolves UNKNOWN — the segment's own country wins.
     #[test]
-    fn baked_row_admin_wins_over_receiver() {
+    fn baked_row_square_country_city_wins_over_receiver() {
         let seg = secondary_segment();
         let world = one_road_meta(std::slice::from_ref(&seg));
         let baked = one_road_meta(&[RoadSegment {
-            admin: Some(TH),
+            square_country_city: Some(TH),
             ..seg.clone()
         }]);
         assert_eq!(
@@ -1030,7 +1037,7 @@ pub(crate) mod tests {
             "baked TH → the hand-tuned TH rural arm (measured arm parked, /gg M6 Codex)"
         );
         // The popup's nominal (pre-factor) display surface follows the same
-        // row admin (nominal_road_aadt call inside the segment loop).
+        // row square_country_city (nominal_road_aadt call inside the segment loop).
         assert_eq!(baked.aadt_light_nominal, 3720.0);
         assert_eq!(world.aadt_light_nominal, 2640.0);
     }
@@ -1177,13 +1184,13 @@ pub(crate) mod tests {
     }
 
     /// Gate (c) popup: a baked `\0\0` row is WORLD defaults — `Some(UNKNOWN)`
-    /// never falls back to the receiver admin (indistinguishable here only
+    /// never falls back to the receiver SquareCountryCity (indistinguishable here only
     /// because the test receiver is also UNKNOWN; the no-fallback contrast
     /// with a KNOWN region is pinned at the loader level).
     #[test]
     fn baked_zero_is_world_arm() {
         let seg = RoadSegment {
-            admin: Some(Admin::UNKNOWN),
+            square_country_city: Some(SquareCountryCity::UNKNOWN),
             ..secondary_segment()
         };
         let baked0 = one_road_meta(std::slice::from_ref(&seg));

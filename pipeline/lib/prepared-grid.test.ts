@@ -71,7 +71,7 @@ test('baked road ownership is little-endian ISO2 and fail-closed', () => {
   assert.throws(() => bakedRoadCountryReader(segmentTable({ country: false })), /country_iso/)
 })
 
-test('railway ownership uses its own admin-bake contract key', () => {
+test('railway ownership uses its own square-country-city-bake contract key', () => {
   const table = withMetadata(segmentTable(), {
     grid: 'z30',
     railways_contract: 'country_baked_v1',

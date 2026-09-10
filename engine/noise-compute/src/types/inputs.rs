@@ -94,9 +94,9 @@ pub struct RoadSegment {
     pub cp_lat: f64, // closest point on segment
     pub cp_lon: f64,
     pub fraction: f64, // 0-1 position along segment
-    /// The row's own baked admin (plan M3 columns); `None` when its batch
-    /// carried none — the kernel then takes the receiver's admin.
-    pub admin: Option<crate::admin::Admin>,
+    /// The row's own baked SquareCountryCity (plan M3 columns); `None` when its batch
+    /// carried none — the kernel then takes the receiver's SquareCountryCity.
+    pub square_country_city: Option<crate::square_country_city::SquareCountryCity>,
 }
 
 /// Railway microsegment (≤250m) with pre-joined traffic.
@@ -135,9 +135,9 @@ pub struct RailSegment {
     pub cp_lat: f64,
     pub cp_lon: f64,
     pub fraction: f64,
-    /// The row's own baked admin (plan M3 columns); `None` when its batch
-    /// carried none — the kernel then takes the receiver's admin.
-    pub admin: Option<crate::admin::Admin>,
+    /// The row's own baked SquareCountryCity (plan M3 columns); `None` when its batch
+    /// carried none — the kernel then takes the receiver's SquareCountryCity.
+    pub square_country_city: Option<crate::square_country_city::SquareCountryCity>,
 }
 
 /// Pre-discretized point source (building facade point, industrial grid point, wind turbine).

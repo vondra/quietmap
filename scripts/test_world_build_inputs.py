@@ -86,7 +86,7 @@ class WorldBuildInputsTest(unittest.TestCase):
                 for y in range(2):
                     tile = root / inputs.qmgrid.square_name(x, y)
                     tile.mkdir(parents=True)
-                    (tile / 'admin.bin').write_bytes(struct.pack('<QBHH', inputs.qmgrid.square_id(x, y), 0, 0, 0))
+                    (tile / 'square-country-city.bin').write_bytes(struct.pack('<QBHH', inputs.qmgrid.square_id(x, y), 0, 0, 0))
                     # Import the producer-owned contracts used by the audit.
                     import sys
                     sys.path.insert(0, str(Path(__file__).parent / 'structures'))
@@ -98,8 +98,8 @@ class WorldBuildInputsTest(unittest.TestCase):
             # layer. A finalized generation does not retain that intermediate.
             for layer in ('roads', 'railways', 'industrial', 'airborne', 'cruise', 'airport_traffic'):
                 import sys
-                sys.path.insert(0, str(Path(__file__).parent / 'admin'))
-                from build_admin import expected_contract
+                sys.path.insert(0, str(Path(__file__).parent / 'square-country-city'))
+                from build_square_country_city import expected_contract
                 path = root / 'z9/0/0' / f'{layer}.arrow'
                 metadata = dict([expected_contract(path)]) if layer in ('roads', 'railways', 'industrial') else None
                 table = pa.table({'value': [37]}).replace_schema_metadata(metadata)

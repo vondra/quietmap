@@ -112,7 +112,7 @@ const SQUARE_BITS_PER_AXIS: u32 = 9;
 pub const MAX_SQUARE_ID: i64 = (1 << (2 * SQUARE_BITS_PER_AXIS)) - 1;
 
 /// Morton z-order id of a z9 square: bit `i` of `x` goes to bit `2i`, bit `i`
-/// of `y` to bit `2i + 1`. Embedded admin identities use this code.
+/// of `y` to bit `2i + 1`. The square-country-city record embeds this code as its square identity.
 /// (Spill/sort partitioning inside osm-extract is a different,
 /// row-major transient key and must not share this name.)
 pub fn square_id(square: Square) -> i64 {

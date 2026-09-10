@@ -227,10 +227,10 @@ export function createValidationCohortProvider(options: ValidationCohortOptions 
     { label: 'source-dependency-lock', path: resolve(runtimeRoot, '..', 'node_modules', '.package-lock.json') },
   ]
   const yearRoot = preparedYearDir
-  // Admin needs no entry of its own: each square's admin.bin lives inside the
-  // prepared year tree, which the `squares` input already fingerprints file by
-  // file. Rasters ride along in the same tree; the explicit entry keeps their
-  // label stable across layout moves.
+  // square-country-city.bin needs no entry of its own: it lives inside the prepared
+  // year tree, which the `squares` input already fingerprints file by file. Rasters
+  // ride along in the same tree; the explicit entry keeps their label stable across
+  // layout moves.
   const preparedAuxiliaryInputs = options.preparedAuxiliaryInputs ?? [
     { label: 'rasters', path: resolve(yearRoot, 'rasters') },
   ]
@@ -249,7 +249,7 @@ export function createValidationCohortProvider(options: ValidationCohortOptions 
         fingerprintRuntime(runtimeRoot, sourceReaderPath, runtimeIdentityInputs),
         fingerprintPreparedInputs(preparedYearDir, preparedAuxiliaryInputs),
       ])
-      // source-reader keeps decoded squares, rasters and admin data in
+      // source-reader keeps decoded squares, rasters and square-country-city data in
       // process-wide caches. A disk change cannot become a new valid cohort
       // in that same process: some queried squares may still be old. Fail closed
       // until restart instead of labelling cached results with the new hash.

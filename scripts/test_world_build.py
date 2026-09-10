@@ -116,9 +116,9 @@ class WorldBuildTest(unittest.TestCase):
             peak = 0
             indexed = {step.name: step for step in plan}
             self.assertEqual(indexed['structures'].dependencies, ('buildings',))
-            self.assertEqual(set(indexed['roads'].dependencies), {'admin', 'structures'})
-            self.assertEqual(indexed['industrial'].dependencies, ('admin',))
-            self.assertEqual(indexed['railways'].dependencies, ('admin',))
+            self.assertEqual(set(indexed['roads'].dependencies), {'square-country-city', 'structures'})
+            self.assertEqual(indexed['industrial'].dependencies, ('square-country-city',))
+            self.assertEqual(indexed['railways'].dependencies, ('square-country-city',))
             self.assertNotIn('repaint', indexed)
             def execute(step):
                 nonlocal peak

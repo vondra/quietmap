@@ -7,7 +7,7 @@
 //! [`structure_contract`] validates the prepared screening-height boundary.
 //!
 //! Query kernels (roads/buildings/…) transfer with `noise-compute` — they
-//! need normalize/admin/envelope. This crate only opens files and decodes
+//! need normalize/square_country_city/envelope. This crate only opens files and decodes
 //! what is on disk.
 
 pub mod aircraft_contract;

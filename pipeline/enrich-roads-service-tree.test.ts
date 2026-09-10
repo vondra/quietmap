@@ -126,7 +126,7 @@ test('real IPC preserves measured roads, all other columns and batches; retracti
 })
 
 
-test('valid empty buildings produce no new traffic; missing admin bake fails before a write', async () => {
+test('valid empty buildings produce no new traffic; missing square-country-city bake fails before a write', async () => {
   const work = mkdtempSync(resolve(tmpdir(), 'service-tree-admission-'))
   try {
     fixture(work, [road(0, 1, 5, SELF), road(1, 2, 5, 10), road(2, 3)], true)

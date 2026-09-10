@@ -1,4 +1,4 @@
-"""Bake per-segment geography and per-z9 admin records without changing Arrow geometry."""
+"""Bake per-segment geography and per-z9 square-country-city records without changing Arrow geometry."""
 
 import argparse
 from collections import Counter
@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from qmgrid import parse_square_name, square_id, square_lonlat_span  # noqa: E402
 from prepared_arrow import replace_atomically, rewrite_arrow_batches, segment_midpoints, grid_points  # noqa: E402
 
-ADMIN_COLUMNS = {"country_iso": pa.uint16(), "city_id": pa.uint16(), "continent": pa.uint8()}
+COUNTRY_CITY_COLUMNS = {"country_iso": pa.uint16(), "city_id": pa.uint16(), "continent": pa.uint8()}
 COUNTRY_CONTRACT = b"country_baked_v1"
 LAND_CONTRACT = b"country_land_baked_v1"
 _PREPARED = None
@@ -29,8 +29,8 @@ _RESOLVER = None
 
 
 def baked_batch(batch, resolver, contract_key):
-    present = [name for name in ADMIN_COLUMNS if name in batch.schema.names]
-    if present and len(present) != len(ADMIN_COLUMNS):
+    present = [name for name in COUNTRY_CITY_COLUMNS if name in batch.schema.names]
+    if present and len(present) != len(COUNTRY_CITY_COLUMNS):
         raise ValueError("Partial country bake; country_iso/city_id/continent must be all-or-none")
     industrial = contract_key == b"industrial_contract"
     if industrial and (batch.schema.metadata or {}).get(b"grid") != b"z30":
@@ -38,7 +38,7 @@ def baked_batch(batch, resolver, contract_key):
     values = (resolver.resolve_land(*grid_points(batch, "centroid")) if industrial
               else resolver.resolve(*segment_midpoints(batch)))
     result = batch
-    for name, arrow_type in ADMIN_COLUMNS.items():
+    for name, arrow_type in COUNTRY_CITY_COLUMNS.items():
         array = pa.array(values[name], type=arrow_type)
         index = result.schema.get_field_index(name)
         if index >= 0:
@@ -83,12 +83,12 @@ def process_square(prepared, resolver, name):
         counts["files_changed"] += int(changed)
     square = parse_square_name(name)
     assert square is not None
-    write_admin_record(prepared / name, square_admin(resolver, *square))
+    write_square_country_city_record(prepared / name, square_country_city_record(resolver, *square))
     counts["squares"] += 1
     return {"square": name, **counts}
 
 
-def square_admin(resolver, x, y):
+def square_country_city_record(resolver, x, y):
     west, north, east, south = square_lonlat_span(x, y)
     lat, lon = (north + south) / 2, (west + east) / 2
     result = resolver.resolve([lat], [lon])
@@ -111,11 +111,11 @@ def square_admin(resolver, x, y):
                        int(result["country_iso"][0]), int(result["city_id"][0]))
 
 
-def write_admin_record(directory, record):
-    path = directory / "admin.bin"
+def write_square_country_city_record(directory, record):
+    path = directory / "square-country-city.bin"
     if path.exists() and path.read_bytes() == record:
         return
-    descriptor, name = tempfile.mkstemp(prefix=".admin.", dir=directory)
+    descriptor, name = tempfile.mkstemp(prefix=".square-country-city.", dir=directory)
     try:
         with os.fdopen(descriptor, "wb") as output:
             os.fchmod(output.fileno(), 0o644)
@@ -159,7 +159,7 @@ def main():
     if any(square is None or not (prepared / name).is_dir() for name, square in squares):
         raise ValueError("Every selected square must be an existing z9/x/y directory")
     totals = Counter()
-    with (prepared / ".admin-build.lock").open("a") as lock:
+    with (prepared / ".square-country-city-build.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if args.jobs == 1:
             resolver = AdminResolver.from_file(args.boundaries)

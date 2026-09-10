@@ -21,7 +21,7 @@ export const SOURCE_READER_PATH = existsSync(bundledSourceReader) ? bundledSourc
   REPO_ROOT,
   'engine/target/release/libsource_reader.so',
 )
-// One immutable prepared year: z9/x/y contains Arrows, structures, admin.bin
+// One immutable prepared year: z9/x/y contains Arrows, structures, square-country-city.bin
 // and native DEM/forest/IMD files; rasters.sqlite and inputs.sqlite bind its generation.
 export const PREPARED_YEAR_DIR = process.env.PREPARED_YEAR_DIR
   ? resolve(process.env.PREPARED_YEAR_DIR)

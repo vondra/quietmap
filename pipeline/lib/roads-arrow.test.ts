@@ -143,7 +143,7 @@ test('a national rerun retracts its stale foreign stamp even when its matcher st
   assert.equal(table.getChild('aadt_light')!.get(0), 0)
 })
 
-test('national enrichment fails closed without the complete admin bake', async () => {
+test('national enrichment fails closed without the complete square-country-city bake', async () => {
   for (const [name, options] of [
     ['no-country-contract.arrow', { omitCountryContract: true }],
     ['no-country-column.arrow', { omitCountryColumn: true }],

@@ -45,7 +45,7 @@
 //!   node scripts/gen-country-defaults-rs.mjs
 //!   # commit all three JSONs + this file
 
-use crate::admin::Continent;
+use crate::square_country_city::Continent;
 
 /// Per-country scale factor vs WORLD_DEFAULT motorway. 242 entries
 /// (160 from Wikipedia vehicles_per_km, 82 from WB density fallback).

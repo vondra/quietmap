@@ -105,7 +105,7 @@ export function segmentGeometryReader(table: Table): SegmentGeometryReader {
   }
 }
 
-/** Numeric little-endian ISO2 form used by the committed admin bake. */
+/** Numeric little-endian ISO2 form used by the committed square-country-city bake. */
 export function iso2Code(iso: string): number {
   if (!/^[A-Z]{2}$/.test(iso)) throw new Error(`invalid ISO2 '${iso}'`)
   return iso.charCodeAt(0) | (iso.charCodeAt(1) << 8)
@@ -131,12 +131,12 @@ function bakedCountryReader(
   }
 }
 
-/** Fail-closed access to road ownership baked by scripts/admin/build_admin.py. */
+/** Fail-closed access to road ownership baked by scripts/square-country-city/build_square_country_city.py. */
 export function bakedRoadCountryReader(table: Table): { codeAt(index: number): number } {
   return bakedCountryReader(table, 'roads')
 }
 
-/** Fail-closed access to railway ownership baked by scripts/admin/build_admin.py. */
+/** Fail-closed access to railway ownership baked by scripts/square-country-city/build_square_country_city.py. */
 export function bakedRailwayCountryReader(table: Table): { codeAt(index: number): number } {
   return bakedCountryReader(table, 'railways')
 }

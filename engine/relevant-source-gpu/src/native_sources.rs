@@ -4,7 +4,7 @@ use anyhow::{ensure, Context, Result};
 use arrow::{array::Array, ipc::reader::FileReader, record_batch::RecordBatch};
 use grid::Square;
 use noise_compute::propagation::obstacle_index::ObstacleSet;
-use noise_compute::{admin::Admin, normalize::*};
+use noise_compute::{normalize::*, square_country_city::SquareCountryCity};
 use square_store::grid_cols::*;
 use std::{io::Cursor, path::Path, sync::Arc};
 use tile_painter::corner_store::SourceIdentity;
@@ -178,12 +178,12 @@ fn float(batch: &RecordBatch, name: &str, row: usize) -> Option<f32> {
         .filter(|c| !c.is_null(row))
         .map(|c| c.value(row))
 }
-fn row_admin(batch: &RecordBatch, row: usize) -> Result<Admin> {
+fn row_square_country_city(batch: &RecordBatch, row: usize) -> Result<SquareCountryCity> {
     ensure!(
         col_u16(batch, "country_iso").is_some(),
         "surface rows require baked country identity"
     );
-    Ok(noise_compute::defaults::baked_admin(
+    Ok(noise_compute::defaults::baked_square_country_city(
         short(batch, "country_iso", row),
         short(batch, "city_id", row),
         byte(batch, "continent", row),
@@ -201,7 +201,7 @@ fn line(
 ) -> Result<Option<DeviceLineSource>> {
     let start = position(batch, row, "start")?;
     let end = position(batch, row, "end")?;
-    let admin = row_admin(batch, row)?;
+    let square_country_city = row_square_country_city(batch, row)?;
     let (emission, max_distance_m, source_height_m) = if rail {
         if boolean(batch, "tunnel", row) {
             return Ok(None);
@@ -217,7 +217,7 @@ fn line(
                 trains_freight: integer(batch, "trains_freight", row),
                 parallel_divisor: byte(batch, "parallel_divisor", row),
             },
-            admin,
+            square_country_city,
         );
         (
             norm.period_emissions(),
@@ -243,7 +243,7 @@ fn line(
                 junction: byte(batch, "junction", row),
                 built_up: byte(batch, "built_up", row),
             },
-            admin,
+            square_country_city,
         ) else {
             return Ok(None);
         };

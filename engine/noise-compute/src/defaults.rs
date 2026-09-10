@@ -20,7 +20,7 @@
 //! ```
 //!
 //! `WORLD_DEFAULT` reproduces the legacy `normalize.rs::default_road_traffic`
-//! table bit-for-bit so today's non-admin call sites see no behavior change.
+//! table bit-for-bit so today's call sites without a SquareCountryCity see no behavior change.
 //! The measured region arm is generated from census data only
 //! (`scripts/gen-region-defaults-rs.mjs`) and SUPERSEDES a country's
 //! hand-tuned arm once its class attribution is proven — the TH DRR attempt
@@ -35,14 +35,14 @@
 //! fleet composition (e.g. TH has ~25 % motorcycles in Bangkok, BR has
 //! higher heavy-vehicle share on rural freight corridors).
 
-use crate::admin::{Admin, Continent};
+use crate::square_country_city::{Continent, SquareCountryCity};
 
 /// Vehicle-class AADT tuple: (light, medium, heavy, moto), veh/day
 /// both-directions total.
 pub type Aadt = (f64, f64, f64, f64);
 
 // Exact copy of the pre-redesign `normalize.rs::default_road_traffic` table.
-// Must match bit-for-bit so non-admin call sites (the legacy
+// Must match bit-for-bit so call sites without a SquareCountryCity (the legacy
 // `default_road_traffic(class)` wrapper) see zero behavior change.
 
 pub const WORLD_DEFAULT: [Aadt; 13] = [
@@ -73,30 +73,32 @@ pub use crate::city_consts_generated::*;
 /// segment with no spatial / ref / service-tree data. Cascades most-specific
 /// → least-specific: city → country → continent → world. `class` clamps to
 /// the WORLD_DEFAULT array bounds.
-pub fn resolve_traffic_default(class: u8, admin: Admin) -> Aadt {
-    if admin.city_id != 0 {
-        if let Some(v) = city_default(admin.city_id, class) {
+pub fn resolve_traffic_default(class: u8, square_country_city: SquareCountryCity) -> Aadt {
+    if square_country_city.city_id != 0 {
+        if let Some(v) = city_default(square_country_city.city_id, class) {
             return v;
         }
     }
-    if let Some(v) = country_default(&admin.country_iso, class) {
+    if let Some(v) = country_default(&square_country_city.country_iso, class) {
         return v;
     }
-    if let Some(v) = continent_default(admin.continent, class) {
+    if let Some(v) = continent_default(square_country_city.continent, class) {
         return v;
     }
     let idx = (class as usize).min(WORLD_DEFAULT.len() - 1);
     WORLD_DEFAULT[idx]
 }
 
-/// Materialise the per-class cascade once for a fixed admin so hot loops
+/// Materialise the per-class cascade once for a fixed SquareCountryCity so hot loops
 /// can index by `road_class` instead of paying for a city/country/
 /// continent lookup per segment. Build at the top of any code path that
-/// processes many segments under a stable admin (e.g. a per-square batch
+/// processes many segments under a stable SquareCountryCity (e.g. a per-square batch
 /// in the batch road loader or a popup-time receiver
 /// query in `source-reader`).
-pub fn build_traffic_default_cache(admin: Admin) -> [Aadt; WORLD_DEFAULT.len()] {
-    std::array::from_fn(|c| resolve_traffic_default(c as u8, admin))
+pub fn build_traffic_default_cache(
+    square_country_city: SquareCountryCity,
+) -> [Aadt; WORLD_DEFAULT.len()] {
+    std::array::from_fn(|c| resolve_traffic_default(c as u8, square_country_city))
 }
 
 // One arm per (city_id, class). Values reflect each metro's published or
@@ -280,13 +282,17 @@ pub const BUILT_UP_RURAL: u8 = 1;
 pub const BUILT_UP_URBAN: u8 = 2;
 
 /// The country's LEGAL implicit speed for an untagged road, or None → caller uses the
-/// legacy `default_road_speed` world table. The admin is the SEGMENT's own when the
-/// M3 baked columns are present (see [`baked_admin`]); on pre-bake data it is the
+/// legacy `default_road_speed` world table. The SquareCountryCity is the SEGMENT's own when the
+/// M3 baked columns are present (see [`baked_square_country_city`]); on pre-bake data it is the
 /// receiver's/region's — the accepted border approximation the AADT cascade above
 /// also makes.
-pub fn resolve_speed_default(class: u8, admin: Admin, built_up: u8) -> Option<f64> {
+pub fn resolve_speed_default(
+    class: u8,
+    square_country_city: SquareCountryCity,
+    built_up: u8,
+) -> Option<f64> {
     let row = COUNTRY_SPEEDS
-        .binary_search_by(|(iso, _)| iso[..].cmp(&admin.country_iso[..]))
+        .binary_search_by(|(iso, _)| iso[..].cmp(&square_country_city.country_iso[..]))
         .ok()
         .map(|i| COUNTRY_SPEEDS[i].1)?;
     let [urban, rural, motorway, motorroad] = row;
@@ -310,26 +316,30 @@ pub fn resolve_speed_default(class: u8, admin: Admin, built_up: u8) -> Option<f6
     (v > 0).then_some(v as f64)
 }
 
-// ── Per-segment admin (plan M4, 2026-07-28) ─────────────────────────────────
+// ── Per-segment SquareCountryCity (plan M4, 2026-07-28) ─────────────────────────────────
 //
 // The M3 bake (`pipeline/enrich-roads-country.ts`) stamps three all-or-none
 // columns into every `roads.arrow` / `railways.arrow`: `country_iso` (UInt16,
 // two ASCII bytes packed `iso0 | iso1<<8`, 0 = `\0\0`), `city_id` (UInt16),
-// `continent` (UInt8, mirroring `admin.rs::Continent`). When a row carries
+// `continent` (UInt8, mirroring `square_country_city.rs::Continent`). When a row carries
 // them, its OWN country/city/continent drives the defaults cascade; when the
 // `country_iso` COLUMN is absent (pre-bake data) the caller falls back to
-// today's receiver/region admin. A PRESENT 0 bakes `Admin::UNKNOWN` → WORLD
+// today's receiver/region SquareCountryCity. A PRESENT 0 bakes `SquareCountryCity::UNKNOWN` → WORLD
 // defaults with NO receiver fallback.
 
-/// Decode one row's baked admin triplet. The `country_iso` column's PRESENCE
+/// Decode one row's baked SquareCountryCity triplet. The `country_iso` column's PRESENCE
 /// is the fallback switch (handled by callers); this only decodes a present
 /// row value. Rail keeps an exact copy in `emission::railway` — the two live
 /// in separate layer-codever buckets, so neither may import from the other.
-pub fn baked_admin(country_iso: u16, city_id: u16, continent: u8) -> Admin {
+pub fn baked_square_country_city(
+    country_iso: u16,
+    city_id: u16,
+    continent: u8,
+) -> SquareCountryCity {
     if country_iso == 0 {
-        return Admin::UNKNOWN;
+        return SquareCountryCity::UNKNOWN;
     }
-    Admin {
+    SquareCountryCity {
         continent: Continent::from_u8(continent),
         country_iso: country_iso.to_le_bytes(),
         city_id,
@@ -340,8 +350,12 @@ pub fn baked_admin(country_iso: u16, city_id: u16, continent: u8) -> Admin {
 mod tests {
     use super::*;
 
-    fn admin_for(iso: &[u8; 2], city: u16, continent: Continent) -> Admin {
-        Admin {
+    fn square_country_city_for(
+        iso: &[u8; 2],
+        city: u16,
+        continent: Continent,
+    ) -> SquareCountryCity {
+        SquareCountryCity {
             continent,
             country_iso: *iso,
             city_id: city,
@@ -350,15 +364,18 @@ mod tests {
 
     #[test]
     fn world_default_matches_legacy_motorway() {
-        // Baseline check: cascade with Admin::UNKNOWN = WORLD_DEFAULT.
-        assert_eq!(resolve_traffic_default(0, Admin::UNKNOWN), WORLD_DEFAULT[0]);
+        // Baseline check: cascade with SquareCountryCity::UNKNOWN = WORLD_DEFAULT.
+        assert_eq!(
+            resolve_traffic_default(0, SquareCountryCity::UNKNOWN),
+            WORLD_DEFAULT[0]
+        );
     }
 
     #[test]
     fn us_scales_close_to_world_via_wiki_vpk() {
         // US vehicles_per_km ≈ 60.2 (Wikipedia 2024) ≈ DE's 63.5 → scale ≈ 0.98
         // → motorway ≈ 29k. (I.3 refined, wiki-sourced.)
-        let a = admin_for(b"US", 0, Continent::NorthAmerica);
+        let a = square_country_city_for(b"US", 0, Continent::NorthAmerica);
         let (l, m, h, x) = resolve_traffic_default(0, a);
         let total = l + m + h + x;
         assert!(
@@ -370,7 +387,7 @@ mod tests {
 
     #[test]
     fn brazil_rural_motorway_is_50k() {
-        let a = admin_for(b"BR", 0, Continent::SouthAmerica);
+        let a = square_country_city_for(b"BR", 0, Continent::SouthAmerica);
         let (l, m, h, x) = resolve_traffic_default(0, a);
         let total = l + m + h + x;
         assert!(
@@ -382,7 +399,7 @@ mod tests {
 
     #[test]
     fn sao_paulo_tier1_motorway_is_100k() {
-        let a = admin_for(b"BR", CITY_SAO_PAULO, Continent::SouthAmerica);
+        let a = square_country_city_for(b"BR", CITY_SAO_PAULO, Continent::SouthAmerica);
         let (l, m, h, x) = resolve_traffic_default(0, a);
         let total = l + m + h + x;
         assert!(
@@ -394,7 +411,7 @@ mod tests {
 
     #[test]
     fn bangkok_motorway_is_90k_with_heavy_moto_share() {
-        let a = admin_for(b"TH", CITY_BANGKOK, Continent::Asia);
+        let a = square_country_city_for(b"TH", CITY_BANGKOK, Continent::Asia);
         let (l, m, h, x) = resolve_traffic_default(0, a);
         let total = l + m + h + x;
         assert!(
@@ -418,7 +435,7 @@ mod tests {
         // (REGION_DEFAULTS is empty) and TH falls back to the hand-tuned
         // rural arm ×62/10/13/15 for every class until class attribution
         // lands via exact-ref joins.
-        let a = admin_for(b"TH", 0, Continent::Asia);
+        let a = square_country_city_for(b"TH", 0, Continent::Asia);
         assert_eq!(resolve_traffic_default(3, a), (3720.0, 600.0, 780.0, 900.0));
         assert_eq!(resolve_traffic_default(4, a), (1550.0, 250.0, 325.0, 375.0));
         assert_eq!(
@@ -430,9 +447,9 @@ mod tests {
 
     #[test]
     fn city_overrides_country() {
-        // If admin.city_id matches, city wins over country default.
-        let sp = admin_for(b"BR", CITY_SAO_PAULO, Continent::SouthAmerica);
-        let br_rural = admin_for(b"BR", 0, Continent::SouthAmerica);
+        // If square_country_city.city_id matches, city wins over country default.
+        let sp = square_country_city_for(b"BR", CITY_SAO_PAULO, Continent::SouthAmerica);
+        let br_rural = square_country_city_for(b"BR", 0, Continent::SouthAmerica);
         let sp_motorway = resolve_traffic_default(0, sp).0;
         let br_motorway = resolve_traffic_default(0, br_rural).0;
         assert!(sp_motorway > br_motorway, "SP tier-1 > BR rural");
@@ -441,7 +458,7 @@ mod tests {
     #[test]
     fn unknown_city_falls_through_to_country() {
         // Brazilian square with no metro match (city_id=0) gets BR country default.
-        let a = admin_for(b"BR", 0, Continent::SouthAmerica);
+        let a = square_country_city_for(b"BR", 0, Continent::SouthAmerica);
         assert_eq!(
             resolve_traffic_default(0, a),
             (30000.0, 5000.0, 12500.0, 2500.0)
@@ -453,7 +470,7 @@ mod tests {
         // Algeria vehicles_per_km ≈ 66.1 (Wikipedia) ≈ DE → scale ≈ 1.02
         // → motorway ≈ 30.5k. (I.3 refined, wiki-sourced — replaces
         // the old density-only heuristic which under-ranked Algeria.)
-        let a = admin_for(b"DZ", 0, Continent::Africa);
+        let a = square_country_city_for(b"DZ", 0, Continent::Africa);
         let (l, m, h, x) = resolve_traffic_default(0, a);
         let total = l + m + h + x;
         assert!(
@@ -466,7 +483,7 @@ mod tests {
     #[test]
     fn class_out_of_range_clamps() {
         // Classes ≥ 13 clamp to primary_link (class 12) as deterministic fallback.
-        let v = resolve_traffic_default(200, Admin::UNKNOWN);
+        let v = resolve_traffic_default(200, SquareCountryCity::UNKNOWN);
         assert_eq!(v, WORLD_DEFAULT[12]);
     }
 
@@ -475,7 +492,7 @@ mod tests {
     fn de_reference_country_at_world_default() {
         // DE vehicles_per_km = 63.5 = reference → scale = 1.0 → motorway ≈ 30k.
         // (I.3 refined: DE is the calibration reference for wiki scale.)
-        let a = admin_for(b"DE", 0, Continent::Europe);
+        let a = square_country_city_for(b"DE", 0, Continent::Europe);
         let (l, m, h, x) = resolve_traffic_default(0, a);
         let total = l + m + h + x;
         assert!(
@@ -489,7 +506,7 @@ mod tests {
     fn sg_hits_upper_clamp() {
         // SG vehicles_per_km ≈ 285 (Wikipedia) → tanh hits 1.3 clamp
         // → motorway ≈ 39k. City-state with short dense network.
-        let a = admin_for(b"SG", 0, Continent::Asia);
+        let a = square_country_city_for(b"SG", 0, Continent::Asia);
         let (l, m, h, x) = resolve_traffic_default(0, a);
         let total = l + m + h + x;
         assert!(
@@ -503,7 +520,7 @@ mod tests {
     fn no_norway_scales_down_via_wiki_vpk() {
         // NO vehicles_per_km ≈ 35.5 (Wikipedia) → log2(35.5/63.5) ≈ -0.84
         // → scale ≈ 0.79 → motorway ≈ 24k. Sparse network, moderate fleet.
-        let a = admin_for(b"NO", 0, Continent::Europe);
+        let a = square_country_city_for(b"NO", 0, Continent::Europe);
         let (l, m, h, x) = resolve_traffic_default(0, a);
         let total = l + m + h + x;
         assert!(
@@ -517,7 +534,7 @@ mod tests {
     fn et_hits_lower_clamp_via_wiki_vpk() {
         // ET (Ethiopia) vehicles_per_km ≈ 10 (Wikipedia) → hits 0.7 clamp
         // → motorway ≈ 21k. One of the lowest-motorization countries.
-        let a = admin_for(b"ET", 0, Continent::Africa);
+        let a = square_country_city_for(b"ET", 0, Continent::Africa);
         let (l, m, h, x) = resolve_traffic_default(0, a);
         let total = l + m + h + x;
         assert!(
@@ -531,7 +548,7 @@ mod tests {
     fn ng_hits_upper_clamp_via_wiki_vpk() {
         // NG vehicles_per_km ≈ 225 (Wikipedia: 13.5M vehicles, 60k paved)
         // → scale 1.285 → motorway ≈ 38.5k.
-        let a = admin_for(b"NG", 0, Continent::Africa);
+        let a = square_country_city_for(b"NG", 0, Continent::Africa);
         let (l, m, h, x) = resolve_traffic_default(0, a);
         let total = l + m + h + x;
         assert!(
@@ -546,7 +563,7 @@ mod tests {
         // Kuwait is in wiki, Angola isn't (vehicles_per_km=null). Angola
         // should fall back to density-based scale from WB.
         // AO density ≈ 28.6/km² → scale ≈ 0.76 → motorway ≈ 23k.
-        let a = admin_for(b"AO", 0, Continent::Africa);
+        let a = square_country_city_for(b"AO", 0, Continent::Africa);
         let (l, m, h, x) = resolve_traffic_default(0, a);
         let total = l + m + h + x;
         assert!(
@@ -561,7 +578,7 @@ mod tests {
         // Classes ≥ 3 never scale by GDP — they go straight to WORLD.
         for iso in [b"NG", b"IN", b"LU", b"DE"] {
             for class in [3u8, 4, 5, 6, 7, 8, 9] {
-                let a = admin_for(iso, 0, Continent::Unknown);
+                let a = square_country_city_for(iso, 0, Continent::Unknown);
                 assert_eq!(
                     resolve_traffic_default(class, a),
                     WORLD_DEFAULT[class as usize],
@@ -577,7 +594,7 @@ mod tests {
     fn unknown_country_falls_through_to_continent_or_world() {
         // ZZ is an invalid ISO — the country_scale table returns None.
         // Continent::Unknown → cascade lands on WORLD.
-        let a = admin_for(b"ZZ", 0, Continent::Unknown);
+        let a = square_country_city_for(b"ZZ", 0, Continent::Unknown);
         assert_eq!(resolve_traffic_default(0, a), WORLD_DEFAULT[0]);
     }
 
@@ -585,7 +602,7 @@ mod tests {
     fn continent_arm_applies_scale() {
         // Unknown ISO in Africa continent → Africa pop-weighted mean scale.
         // Africa mean ≈ 1.057 (wiki+density blend) → motorway ≈ 31.7k.
-        let a = admin_for(b"ZZ", 0, Continent::Africa);
+        let a = square_country_city_for(b"ZZ", 0, Continent::Africa);
         let (l, m, h, x) = resolve_traffic_default(0, a);
         let total = l + m + h + x;
         assert!(
@@ -598,7 +615,7 @@ mod tests {
     #[test]
     fn speed_default_gb_matrix() {
         // GB legal: urban 48 (30 mph), rural 97 (60 mph), motorway 113 (70 mph).
-        let gb = admin_for(b"GB", 0, Continent::Europe);
+        let gb = square_country_city_for(b"GB", 0, Continent::Europe);
         assert_eq!(resolve_speed_default(4, gb, BUILT_UP_RURAL), Some(97.0));
         assert_eq!(resolve_speed_default(4, gb, BUILT_UP_URBAN), Some(48.0));
         // unknown built-up → None → caller's legacy table (never guess rural)
@@ -610,7 +627,7 @@ mod tests {
 
     #[test]
     fn speed_default_scope_and_fallbacks() {
-        let cz = admin_for(b"CZ", 0, Continent::Europe);
+        let cz = square_country_city_for(b"CZ", 0, Continent::Europe);
         // residential/living/service/track + links stay on the legacy table by design
         for class in [5u8, 6, 7, 8, 10, 11, 12] {
             assert_eq!(resolve_speed_default(class, cz, BUILT_UP_URBAN), None);
@@ -619,7 +636,7 @@ mod tests {
         assert_eq!(resolve_speed_default(1, cz, BUILT_UP_UNKNOWN), Some(110.0)); // CZ motorroad
         assert_eq!(resolve_speed_default(3, cz, BUILT_UP_RURAL), Some(90.0));
         // country without a table row → None (legacy behavior everywhere)
-        let zz = admin_for(b"ZZ", 0, Continent::Unknown);
+        let zz = square_country_city_for(b"ZZ", 0, Continent::Unknown);
         assert_eq!(resolve_speed_default(4, zz, BUILT_UP_RURAL), None);
     }
 
@@ -627,24 +644,27 @@ mod tests {
     fn explicit_br_takes_priority_over_gdp_scale() {
         // BR is in WB dataset (would give ~15k motorway from sqrt(17k/69k) × 30k ≈ 15k),
         // but the explicit arm is 50k — that must win.
-        let a = admin_for(b"BR", 0, Continent::SouthAmerica);
+        let a = square_country_city_for(b"BR", 0, Continent::SouthAmerica);
         let (l, m, h, x) = resolve_traffic_default(0, a);
         assert!((l + m + h + x - 50000.0).abs() < 1.0);
     }
 
     #[test]
-    fn baked_admin_decodes_m3_triplet() {
+    fn baked_square_country_city_decodes_m3_triplet() {
         // Schema authority: pipeline/enrich-roads-country.ts — `iso0 | iso1<<8`,
-        // continent ids mirror admin.rs::Continent (4 = Asia).
-        let th = baked_admin(u16::from_le_bytes(*b"TH"), 0, 4);
+        // continent ids mirror square_country_city.rs::Continent (4 = Asia).
+        let th = baked_square_country_city(u16::from_le_bytes(*b"TH"), 0, 4);
         assert_eq!(th.country_code(), Some("TH"));
         assert_eq!(th.continent, Continent::Asia);
         assert_eq!(th.city_id, 0);
-        // A present 0 (`\0\0`) is Admin::UNKNOWN — WORLD defaults, NO receiver
+        // A present 0 (`\0\0`) is SquareCountryCity::UNKNOWN — WORLD defaults, NO receiver
         // fallback (column absence is the switch).
-        assert_eq!(baked_admin(0, 0, 0), Admin::UNKNOWN);
+        assert_eq!(
+            baked_square_country_city(0, 0, 0),
+            SquareCountryCity::UNKNOWN
+        );
         // City id rides along (Bangkok metro, gated by the resolved country).
-        let bkk = baked_admin(u16::from_le_bytes(*b"TH"), CITY_BANGKOK, 4);
+        let bkk = baked_square_country_city(u16::from_le_bytes(*b"TH"), CITY_BANGKOK, 4);
         assert_eq!(bkk.city_id, CITY_BANGKOK);
     }
 }

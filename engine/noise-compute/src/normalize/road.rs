@@ -2,7 +2,6 @@
 //! values (`NormalizedRoad`), plus the class-default cascade, lane/access
 //! scaling, and the nominal-AADT surface the popup reports.
 
-use crate::admin::Admin;
 use crate::constants::{SOURCE_HEIGHT_ROAD, SURFACE_CORR};
 use crate::defaults::{
     build_traffic_default_cache, resolve_speed_default, resolve_traffic_default, Aadt,
@@ -10,6 +9,7 @@ use crate::defaults::{
 };
 use crate::emission::road;
 use crate::sources::{provenance_of, Provenance};
+use crate::square_country_city::SquareCountryCity;
 use crate::types::{RoadSegment, NUM_BANDS};
 
 use super::{bands_to_f32, has_enriched_traffic, DERESTRICTED_SPEED_KMH, SPEED_LIMIT_DERESTRICTED};
@@ -94,30 +94,33 @@ impl NormalizedRoad {
 
 /// Normalise a raw road input into per-band emission-ready values.
 ///
-/// `admin` drives the class-default cascade (city → country → continent →
+/// `square_country_city` drives the class-default cascade (city → country → continent →
 /// world) when the row lacks enriched traffic. Callers that do not have
-/// an admin context yet — or that legitimately want the world arm — pass
-/// [`Admin::UNKNOWN`]; the cascade collapses to `WORLD_DEFAULT` in that
+/// a SquareCountryCity yet — or that legitimately want the world arm — pass
+/// [`SquareCountryCity::UNKNOWN`]; the cascade collapses to `WORLD_DEFAULT` in that
 /// case, matching the pre-Phase-0.5 behaviour bit-for-bit.
 ///
 /// Tight loops should prefer [`normalize_road_with_cache`] together with
 /// [`build_traffic_default_cache`] so the city → country → continent →
-/// world cascade only runs 13 times per (admin, batch) instead of once
+/// world cascade only runs 13 times per (square_country_city, batch) instead of once
 /// per `source_id == 0` segment. This wrapper builds a fresh cache on
-/// every call — cheap (13 tuples) but wasteful when the same `admin`
+/// every call — cheap (13 tuples) but wasteful when the same `square_country_city`
 /// is reused.
-pub fn normalize_road(input: RawRoadInput, admin: Admin) -> Option<NormalizedRoad> {
-    let cache = build_traffic_default_cache(admin);
-    normalize_road_with_cache(input, admin, &cache)
+pub fn normalize_road(
+    input: RawRoadInput,
+    square_country_city: SquareCountryCity,
+) -> Option<NormalizedRoad> {
+    let cache = build_traffic_default_cache(square_country_city);
+    normalize_road_with_cache(input, square_country_city, &cache)
 }
 
 /// Cache-aware variant of [`normalize_road`]. The 13-entry slice is
-/// produced once per (admin, batch) by [`build_traffic_default_cache`],
+/// produced once per (square_country_city, batch) by [`build_traffic_default_cache`],
 /// after which class-default lookup is a single array index instead of
 /// up to four hash-map / binary-search hops through the cascade.
 pub fn normalize_road_with_cache(
     input: RawRoadInput,
-    admin: Admin,
+    square_country_city: SquareCountryCity,
     defaults_cache: &[Aadt; WORLD_DEFAULT.len()],
 ) -> Option<NormalizedRoad> {
     // access=no / motor_vehicle=no drops a segment ONLY when no MEASUREMENT
@@ -182,7 +185,7 @@ pub fn normalize_road_with_cache(
         // density, beats the global class default. A tagged/untagged boundary
         // mid-road otherwise painted a ±5–6 dB colour seam (Wetherby, task #15).
         // Unknown country or density uses the class default.
-        resolve_speed_default(input.road_class, admin, input.built_up)
+        resolve_speed_default(input.road_class, square_country_city, input.built_up)
             .unwrap_or_else(|| default_road_speed(class_idx))
     };
     let speed_kmh = if input.junction == 1 {
@@ -210,7 +213,10 @@ pub fn normalize_road_with_cache(
     })
 }
 
-pub fn normalize_road_segment(seg: &RoadSegment, admin: Admin) -> Option<NormalizedRoad> {
+pub fn normalize_road_segment(
+    seg: &RoadSegment,
+    square_country_city: SquareCountryCity,
+) -> Option<NormalizedRoad> {
     normalize_road(
         RawRoadInput {
             road_class: seg.road_class,
@@ -229,7 +235,7 @@ pub fn normalize_road_segment(seg: &RoadSegment, admin: Admin) -> Option<Normali
             junction: seg.junction,
             built_up: seg.built_up,
         },
-        admin,
+        square_country_city,
     )
 }
 
@@ -304,11 +310,11 @@ fn access_factor(access: u8, provenance: Provenance, road_class: u8) -> f64 {
 
 /// Nominal (pre-factor) AADT for a segment — the arrow's raw number if
 /// traffic is enriched (any provenance except `None`, `aadt_light > 0`),
-/// otherwise the class default resolved through the admin cascade. This
+/// otherwise the class default resolved through the SquareCountryCity cascade. This
 /// is the "road total, both directions" number the popup surfaces,
 /// independent of per-OSM-way oneway halving and per-segment access /
-/// lane-ratio factors. `admin` should be the receiver-square admin already
-/// computed by the caller; `Admin::UNKNOWN` falls through to WORLD which
+/// lane-ratio factors. `square_country_city` should be the receiver square's SquareCountryCity already
+/// computed by the caller; `SquareCountryCity::UNKNOWN` falls through to WORLD which
 /// silently under-reports for places like Bangkok / São Paulo where the
 /// city or country tier is meaningfully higher.
 pub fn nominal_road_aadt(
@@ -318,7 +324,7 @@ pub fn nominal_road_aadt(
     aadt_medium: i32,
     aadt_heavy: i32,
     aadt_moto: i32,
-    admin: Admin,
+    square_country_city: SquareCountryCity,
 ) -> (f64, f64, f64, f64) {
     if has_enriched_traffic(provenance, aadt_light) {
         (
@@ -328,7 +334,7 @@ pub fn nominal_road_aadt(
             aadt_moto as f64,
         )
     } else {
-        resolve_traffic_default(road_class, admin)
+        resolve_traffic_default(road_class, square_country_city)
     }
 }
 
@@ -435,7 +441,7 @@ mod tests {
             built_up: 0,
         };
         assert!(
-            normalize_road(base, Admin::UNKNOWN).is_none(),
+            normalize_road(base, SquareCountryCity::UNKNOWN).is_none(),
             "unmeasured access=no drops"
         );
 
@@ -446,7 +452,8 @@ mod tests {
             provenance: Provenance::NationalMeasured,
             ..base
         };
-        let road = normalize_road(measured, Admin::UNKNOWN).expect("measured access=no emits");
+        let road =
+            normalize_road(measured, SquareCountryCity::UNKNOWN).expect("measured access=no emits");
         assert!(
             (road.light_aadt - 8824.0).abs() < 1e-9,
             "census AADT passes through"
@@ -458,7 +465,7 @@ mod tests {
             ..base
         };
         assert!(
-            normalize_road(heuristic, Admin::UNKNOWN).is_none(),
+            normalize_road(heuristic, SquareCountryCity::UNKNOWN).is_none(),
             "a heuristic guess must not resurrect a closed road"
         );
         let proxy = RawRoadInput {
@@ -467,7 +474,7 @@ mod tests {
             ..base
         };
         assert!(
-            normalize_road(proxy, Admin::UNKNOWN).is_none(),
+            normalize_road(proxy, SquareCountryCity::UNKNOWN).is_none(),
             "a national proxy estimate must not resurrect a closed road"
         );
 
@@ -481,7 +488,7 @@ mod tests {
             ..base
         };
         assert!(
-            normalize_road(heavy_only, Admin::UNKNOWN).is_none(),
+            normalize_road(heavy_only, SquareCountryCity::UNKNOWN).is_none(),
             "measured heavy-only with zero light traffic stays dropped (fail closed)"
         );
 
@@ -491,7 +498,7 @@ mod tests {
             ..measured
         };
         assert!(
-            normalize_road(mvno, Admin::UNKNOWN).is_some(),
+            normalize_road(mvno, SquareCountryCity::UNKNOWN).is_some(),
             "code 4 + measured emits"
         );
 
@@ -500,7 +507,7 @@ mod tests {
             ..measured
         };
         assert!(
-            normalize_road(tunnel, Admin::UNKNOWN).is_none(),
+            normalize_road(tunnel, SquareCountryCity::UNKNOWN).is_none(),
             "tunnels stay dropped"
         );
     }
@@ -525,7 +532,7 @@ mod tests {
                 junction: 0,
                 built_up: 0,
             },
-            Admin::UNKNOWN,
+            SquareCountryCity::UNKNOWN,
         )
         .unwrap();
         assert_eq!(road.class_name, "tertiary");
@@ -558,7 +565,7 @@ mod tests {
                 junction: 0,
                 built_up: 0,
             },
-            Admin::UNKNOWN,
+            SquareCountryCity::UNKNOWN,
         )
         .unwrap();
         assert_eq!(road.base_speed_kmh, DERESTRICTED_SPEED_KMH);
@@ -567,9 +574,9 @@ mod tests {
 
     #[test]
     fn built_up_selects_cz_legal_speed_below_explicit_tags_and_taper() {
-        let cz = Admin {
+        let cz = SquareCountryCity {
             country_iso: *b"CZ",
-            continent: crate::admin::Continent::Europe,
+            continent: crate::square_country_city::Continent::Europe,
             city_id: 0,
         };
         for (road_class, built_up, speed_limit, speed_taper, expected) in [
@@ -605,23 +612,23 @@ mod tests {
     #[test]
     fn ramp_defaults_are_15_percent_of_mainline() {
         // motorway_link (10) = 15 % of motorway (0)
-        let (l0, m0, h0, x0) = resolve_traffic_default(0, Admin::UNKNOWN);
-        let (l10, m10, h10, x10) = resolve_traffic_default(10, Admin::UNKNOWN);
+        let (l0, m0, h0, x0) = resolve_traffic_default(0, SquareCountryCity::UNKNOWN);
+        let (l10, m10, h10, x10) = resolve_traffic_default(10, SquareCountryCity::UNKNOWN);
         assert!((l10 - l0 * 0.15).abs() < 1e-6);
         assert!((m10 - m0 * 0.15).abs() < 1e-6);
         assert!((h10 - h0 * 0.15).abs() < 1e-6);
         assert!((x10 - x0 * 0.15).abs() < 1e-6);
 
         // trunk_link (11) = 15 % of trunk (1)
-        let (l1, m1, h1, _) = resolve_traffic_default(1, Admin::UNKNOWN);
-        let (l11, m11, h11, _) = resolve_traffic_default(11, Admin::UNKNOWN);
+        let (l1, m1, h1, _) = resolve_traffic_default(1, SquareCountryCity::UNKNOWN);
+        let (l11, m11, h11, _) = resolve_traffic_default(11, SquareCountryCity::UNKNOWN);
         assert!((l11 - l1 * 0.15).abs() < 1e-6);
         assert!((m11 - m1 * 0.15).abs() < 1e-6);
         assert!((h11 - h1 * 0.15).abs() < 1e-6);
 
         // primary_link (12) = 15 % of primary (2)
-        let (l2, m2, h2, _) = resolve_traffic_default(2, Admin::UNKNOWN);
-        let (l12, m12, h12, _) = resolve_traffic_default(12, Admin::UNKNOWN);
+        let (l2, m2, h2, _) = resolve_traffic_default(2, SquareCountryCity::UNKNOWN);
+        let (l12, m12, h12, _) = resolve_traffic_default(12, SquareCountryCity::UNKNOWN);
         assert!((l12 - l2 * 0.15).abs() < 1e-6);
         assert!((m12 - m2 * 0.15).abs() < 1e-6);
         assert!((h12 - h2 * 0.15).abs() < 1e-6);

@@ -1,10 +1,10 @@
 //! Rail source normalization: raw OSM railway inputs → per-band
-//! emission-ready values (`NormalizedRail`), threading the admin region so
+//! emission-ready values (`NormalizedRail`), threading the SquareCountryCity so
 //! the period split + audibility reach match the popup kernel and reach
 //! solver by construction.
 
-use crate::admin::Admin;
 use crate::constants::SOURCE_HEIGHT_RAIL;
+use crate::square_country_city::SquareCountryCity;
 use crate::types::{RailSegment, NUM_BANDS};
 
 use super::bands_to_f32;
@@ -24,11 +24,11 @@ pub struct RawRailInput {
 
 #[derive(Debug, Clone)]
 pub struct NormalizedRail {
-    /// Admin region of the segment, threaded so `period_emissions` and the reach
+    /// SquareCountryCity of the segment, threaded so `period_emissions` and the reach
     /// solver pick the SAME per-region day/evening/night split as the popup
     /// kernel (C1, plan delta 4). The heatmap loader resolves it once per region;
-    /// `Admin::UNKNOWN` (tests / un-init) deterministically takes the world split.
-    pub admin: Admin,
+    /// `SquareCountryCity::UNKNOWN` (tests / un-init) deterministically takes the world split.
+    pub square_country_city: SquareCountryCity,
     pub rail_type: crate::emission::railway::RailType,
     pub source_height_m: f64,
     pub speed_kmh: f64,
@@ -53,11 +53,12 @@ impl NormalizedRail {
     }
 
     /// Per-period emission using the C1 per-region, per-category split resolved
-    /// from `self.admin` + `self.rail_type` (shared with the popup kernel + the
+    /// from `self.square_country_city` + `self.rail_type` (shared with the popup kernel + the
     /// reach solver via [`crate::emission::railway::rail_time_dist`]).
     pub fn period_emissions(&self) -> ([f32; NUM_BANDS], [f32; NUM_BANDS], [f32; NUM_BANDS]) {
         let [(pd, fd, hd), (pe, fe, he), (pn, fn_, hn)] =
-            crate::emission::railway::rail_time_dist(self.admin, self.rail_type).periods();
+            crate::emission::railway::rail_time_dist(self.square_country_city, self.rail_type)
+                .periods();
         (
             self.period_emission(pd, fd, hd),
             self.period_emission(pe, fe, he),
@@ -69,13 +70,13 @@ impl NormalizedRail {
     /// free-field Lden falls to the ~25 dB boundary, clamped to `[2 km, 10 km]`
     /// (`emission::railway::rail_reach_m`). Replaces the retired blanket
     /// `RAILWAY_MAX_RADIUS`; the popup gate (`compute_railways`) calls the same
-    /// solver on its `RailSegment` with the same `admin`, so the heatmap loader
+    /// solver on its `RailSegment` with the same `square_country_city`, so the heatmap loader
     /// and popup cull at an identical distance by construction. Uses the *scaled*
     /// (post service / divisor) counts, so a divided or service track shrinks its
     /// own reach.
     pub fn max_distance_m(&self) -> f64 {
         crate::emission::railway::rail_reach_m(
-            self.admin,
+            self.square_country_city,
             self.rail_type,
             self.speed_kmh,
             self.scaled_passenger_per_day,
@@ -84,7 +85,10 @@ impl NormalizedRail {
     }
 }
 
-pub fn normalize_rail(input: RawRailInput, admin: Admin) -> NormalizedRail {
+pub fn normalize_rail(
+    input: RawRailInput,
+    square_country_city: SquareCountryCity,
+) -> NormalizedRail {
     let rail_type = crate::emission::railway::RailType::from_u8(input.rail_type);
     let (def_pax, def_frt) = crate::emission::railway::default_traffic(rail_type, input.usage);
     let speed_kmh = if input.maxspeed > 0 {
@@ -110,7 +114,7 @@ pub fn normalize_rail(input: RawRailInput, admin: Admin) -> NormalizedRail {
     let scale_factor = service_factor / divisor;
 
     NormalizedRail {
-        admin,
+        square_country_city,
         rail_type,
         source_height_m: SOURCE_HEIGHT_RAIL,
         speed_kmh,
@@ -119,9 +123,12 @@ pub fn normalize_rail(input: RawRailInput, admin: Admin) -> NormalizedRail {
     }
 }
 
-pub fn normalize_rail_segment(seg: &RailSegment, admin: Admin) -> NormalizedRail {
+pub fn normalize_rail_segment(
+    seg: &RailSegment,
+    square_country_city: SquareCountryCity,
+) -> NormalizedRail {
     NormalizedRail {
-        admin,
+        square_country_city,
         rail_type: crate::emission::railway::RailType::from_u8(seg.rail_type),
         source_height_m: SOURCE_HEIGHT_RAIL,
         speed_kmh: if seg.speed_kmh > 0.0 {
@@ -157,7 +164,7 @@ mod tests {
                 trains_freight: 0,
                 parallel_divisor: 1,
             },
-            Admin::UNKNOWN,
+            SquareCountryCity::UNKNOWN,
         );
         assert_eq!(rail.speed_kmh, 300.0);
     }
@@ -175,7 +182,7 @@ mod tests {
                 trains_freight: 0,
                 parallel_divisor: 3,
             },
-            Admin::UNKNOWN,
+            SquareCountryCity::UNKNOWN,
         );
         assert!((rail.scaled_passenger_per_day - 14.0).abs() < 1e-9);
         assert!((rail.scaled_freight_per_day - (20.0 / 3.0)).abs() < 1e-9);
@@ -198,7 +205,7 @@ mod tests {
                 trains_freight: 0,
                 parallel_divisor: 1,
             },
-            Admin::UNKNOWN,
+            SquareCountryCity::UNKNOWN,
         );
         assert_eq!(
             rail.speed_kmh, 300.0,
@@ -216,8 +223,8 @@ mod tests {
     #[test]
     fn loader_period_emissions_match_shared_split() {
         use crate::emission::railway::{rail_time_dist, railway_emission, RailType};
-        let cz = Admin {
-            continent: crate::admin::Continent::Europe,
+        let cz = SquareCountryCity {
+            continent: crate::square_country_city::Continent::Europe,
             country_iso: *b"CZ",
             city_id: 0,
         };
@@ -278,7 +285,7 @@ mod tram_default_speed_tests {
             service: 0,
             parallel_divisor: 1,
         };
-        let norm = normalize_rail(raw, crate::admin::Admin::UNKNOWN);
+        let norm = normalize_rail(raw, crate::square_country_city::SquareCountryCity::UNKNOWN);
         assert_eq!(norm.speed_kmh, 25.0);
     }
 }

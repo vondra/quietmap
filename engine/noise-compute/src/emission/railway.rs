@@ -18,7 +18,7 @@
 //! / CNOSSOS), scaled so a typical mainline corridor matches EU END
 //! reference levels in the 0-5 km range.
 
-use crate::admin::Admin;
+use crate::square_country_city::SquareCountryCity;
 use crate::types::NUM_BANDS;
 
 const B_ROLLING: f64 = 30.0;
@@ -103,7 +103,7 @@ const TD_WORLD_TRAM: RailTimeDist = RailTimeDist {
 };
 
 /// ISO-3166 alpha-2 whitelist for the EU-derived freight table: EU27 plus CH,
-/// NO, UK. Keyed on the country code, NOT [`crate::admin::Continent::Europe`] —
+/// NO, UK. Keyed on the country code, NOT [`crate::square_country_city::Continent::Europe`] —
 /// that label is *geographic* Europe (it includes RU-west / UA / BY), and the
 /// EP/EBA freight curve is only sourced for the central/western EU corridor
 /// network. Geographic-Europe countries outside this list fall
@@ -116,22 +116,25 @@ const EU_ISO_WHITELIST: [&[u8; 2]; 30] = [
 ];
 
 #[inline]
-fn is_eu_rail_region(admin: Admin) -> bool {
-    EU_ISO_WHITELIST.contains(&&admin.country_iso)
+fn is_eu_rail_region(square_country_city: SquareCountryCity) -> bool {
+    EU_ISO_WHITELIST.contains(&&square_country_city.country_iso)
 }
 
-/// Resolve the day/evening/night split for a rail segment from its admin region
+/// Resolve the day/evening/night split for a rail segment from its SquareCountryCity
 /// and vehicle type. Trams / light-rail / narrow-gauge / funicular always take
 /// the urban passenger curve (no freight). [`RailType::Rail`] takes the EU vs
-/// world freight+passenger table on the [`EU_ISO_WHITELIST`]. `Admin::UNKNOWN`
+/// world freight+passenger table on the [`EU_ISO_WHITELIST`]. `SquareCountryCity::UNKNOWN`
 /// (oceanic / pre-build z9 squares / tests) is deterministically non-EU.
 ///
-/// Structured for per-country overrides (match `admin.country_code()` first,
+/// Structured for per-country overrides (match `square_country_city.country_code()` first,
 /// then the EU/world fork), but only the cited rows ship today: refining
 /// DE/CH/NL from EBA Lärmkartierung / BAV Emissionsplan / ProRail geluidregister
 /// per-section counts is the R2 follow-up (those feeds fix counts AND shares).
-pub fn rail_time_dist(admin: Admin, rail_type: RailType) -> &'static RailTimeDist {
-    let eu = is_eu_rail_region(admin);
+pub fn rail_time_dist(
+    square_country_city: SquareCountryCity,
+    rail_type: RailType,
+) -> &'static RailTimeDist {
+    let eu = is_eu_rail_region(square_country_city);
     match rail_type {
         RailType::Rail => {
             if eu {
@@ -150,26 +153,30 @@ pub fn rail_time_dist(admin: Admin, rail_type: RailType) -> &'static RailTimeDis
     }
 }
 
-// Per-segment admin
+// Per-segment SquareCountryCity
 //
 // The M3 bake (`pipeline/enrich-roads-country.ts`) stamps three all-or-none
 // columns into every `railways.arrow`: `country_iso` (UInt16, two ASCII bytes
 // packed `iso0 | iso1<<8`, 0 = `\0\0`), `city_id` (UInt16), `continent`
-// (UInt8, mirroring `admin.rs::Continent`). When a row carries them, its OWN
+// (UInt8, mirroring `square_country_city.rs::Continent`). When a row carries them, its OWN
 // ISO drives the EU/world split (and reach); when the `country_iso` COLUMN is
 // absent (pre-bake data) the caller falls back to today's receiver/region
-// admin. A PRESENT 0 bakes `Admin::UNKNOWN` → the world split with NO
+// square_country_city. A PRESENT 0 bakes `SquareCountryCity::UNKNOWN` → the world split with NO
 // receiver fallback.
 
-/// Decode one row's baked admin triplet — exact copy of
-/// `crate::defaults::baked_admin`. The two live in separate layer-codever
+/// Decode one row's baked SquareCountryCity triplet — exact copy of
+/// `crate::defaults::baked_square_country_city`. The two live in separate layer-codever
 /// buckets (road vs rail), so neither may import from the other.
-pub fn baked_admin(country_iso: u16, city_id: u16, continent: u8) -> Admin {
+pub fn baked_square_country_city(
+    country_iso: u16,
+    city_id: u16,
+    continent: u8,
+) -> SquareCountryCity {
     if country_iso == 0 {
-        return Admin::UNKNOWN;
+        return SquareCountryCity::UNKNOWN;
     }
-    Admin {
-        continent: crate::admin::Continent::from_u8(continent),
+    SquareCountryCity {
+        continent: crate::square_country_city::Continent::from_u8(continent),
         country_iso: country_iso.to_le_bytes(),
         city_id,
     }
@@ -352,7 +359,7 @@ pub fn default_speed(rail_type: RailType) -> f64 {
 /// (a blanket reach can't know the per-receiver geometry; the kernel still
 /// applies all of those per pixel inside the reach). Per-period emission uses
 /// the SAME per-region, per-category day/evening/night split as the kernel —
-/// resolved via [`rail_time_dist`] on `admin` and `rail_type`, so a freight-heavy
+/// resolved via [`rail_time_dist`] on `square_country_city` and `rail_type`, so a freight-heavy
 /// EU corridor reaches farther at night exactly as `compute_railways` hears it.
 /// The shares feed [`railway_emission`], then fold to Lden with the END +5/+10 dB
 /// penalties via [`crate::periods::compute_lden`].
@@ -361,7 +368,7 @@ pub fn default_speed(rail_type: RailType) -> f64 {
 /// parallel-divisor scaling — i.e. `NormalizedRail::scaled_*_per_day`), so a
 /// divided or service track shrinks its own reach.
 fn free_field_lden_at(
-    admin: Admin,
+    square_country_city: SquareCountryCity,
     rail_type: RailType,
     speed_kmh: f64,
     q_pax: f64,
@@ -393,7 +400,8 @@ fn free_field_lden_at(
         }
         a_weighted_total(&bands)
     };
-    let [(pd, fd, hd), (pe, fe, he), (pn, fn_, hn)] = rail_time_dist(admin, rail_type).periods();
+    let [(pd, fd, hd), (pe, fe, he), (pn, fn_, hn)] =
+        rail_time_dist(square_country_city, rail_type).periods();
     let ld = received(pd, fd, hd);
     let le = received(pe, fe, he);
     let ln = received(pn, fn_, hn);
@@ -416,12 +424,12 @@ fn free_field_lden_at(
 /// 100 m, the clamp catches it.
 ///
 /// `q_pax` / `q_frt` = effective whole-day counts (post service / divisor
-/// scaling). `admin` selects the per-region period split so the reach the loader
+/// scaling). `square_country_city` selects the per-region period split so the reach the loader
 /// bakes and the cutoff the popup gates on share ONE share model (the same model
 /// the kernel computes) — see [`free_field_lden_at`] for the propagation
 /// reference.
 pub fn rail_reach_m(
-    admin: Admin,
+    square_country_city: SquareCountryCity,
     rail_type: RailType,
     speed_kmh: f64,
     q_pax: f64,
@@ -436,7 +444,8 @@ pub fn rail_reach_m(
                                // 40 log-halvings: (ln(50000)-ln(100))/2^40 → sub-millimetre, ample margin.
     for _ in 0..40 {
         let mid = ((lo.ln() + hi.ln()) * 0.5).exp();
-        if free_field_lden_at(admin, rail_type, speed_kmh, q_pax, q_frt, mid) > target {
+        if free_field_lden_at(square_country_city, rail_type, speed_kmh, q_pax, q_frt, mid) > target
+        {
             lo = mid; // still loud → push the crossing outward
         } else {
             hi = mid;
@@ -510,18 +519,18 @@ mod tests {
     /// property. Verified by re-evaluating `free_field_lden_at` at the solved
     /// reach (skipped when the clamp fired, since then the crossing is outside
     /// `[min,max]` and the returned value is the clamp, not the root).
-    /// Uses `Admin::UNKNOWN` (world split) — the property holds under any split.
+    /// Uses `SquareCountryCity::UNKNOWN` (world split) — the property holds under any split.
     #[test]
     fn reach_lands_on_25_db_target() {
-        let admin = Admin::UNKNOWN;
+        let square_country_city = SquareCountryCity::UNKNOWN;
         let mut unclamped = 0;
         for (rt, sp, qp, qf) in [
             (RailType::Rail, 80.0, 80.0, 20.0),
             (RailType::Rail, 300.0, 80.0, 0.0),
             (RailType::Tram, 40.0, 120.0, 0.0),
         ] {
-            let r = rail_reach_m(admin, rt, sp, qp, qf);
-            let lden = free_field_lden_at(admin, rt, sp, qp, qf, r);
+            let r = rail_reach_m(square_country_city, rt, sp, qp, qf);
+            let lden = free_field_lden_at(square_country_city, rt, sp, qp, qf, r);
             if r >= 10_000.0 {
                 // Clamped: the crossing lies OUTSIDE the band, so the defining
                 // property cannot hold at `r`. What must hold is that the clamp
@@ -546,7 +555,7 @@ mod tests {
     }
 
     /// POST-C1 ANCHOR: a default mainline (80 pax + 20 freight @ 80 km/h) under
-    /// the WORLD split (`Admin::UNKNOWN`, freight 0.50/0.167/0.333) reaches
+    /// the WORLD split (`SquareCountryCity::UNKNOWN`, freight 0.50/0.167/0.333) reaches
     /// ≈9.2 km — PAST the retired blanket `RAILWAY_MAX_RADIUS = 7000` because
     /// even the uniform world split lifts the freight night share 0.15→0.333 vs
     /// the old flat split, whose crossing was 25.3 dB at 7 km. The dominant
@@ -562,7 +571,7 @@ mod tests {
     /// re-fitted.
     #[test]
     fn default_mainline_reach_post_c1() {
-        let r = rail_reach_m(Admin::UNKNOWN, RailType::Rail, 80.0, 80.0, 20.0);
+        let r = rail_reach_m(SquareCountryCity::UNKNOWN, RailType::Rail, 80.0, 80.0, 20.0);
         assert!(
             (8_900.0..=9_400.0).contains(&r),
             "world mainline reach {r:.0} m, want ≈9.2 km"
@@ -575,13 +584,13 @@ mod tests {
     /// is the whole point of C1; magnitude is bounded by the 10 km clamp.
     #[test]
     fn eu_mainline_reach_exceeds_world() {
-        let cz = Admin {
-            continent: crate::admin::Continent::Europe,
+        let cz = SquareCountryCity {
+            continent: crate::square_country_city::Continent::Europe,
             country_iso: *b"CZ",
             city_id: 0,
         };
         let eu = rail_reach_m(cz, RailType::Rail, 80.0, 80.0, 20.0);
-        let world = rail_reach_m(Admin::UNKNOWN, RailType::Rail, 80.0, 80.0, 20.0);
+        let world = rail_reach_m(SquareCountryCity::UNKNOWN, RailType::Rail, 80.0, 80.0, 20.0);
         assert!(
             eu > world,
             "EU mainline reach {eu:.0} must exceed world {world:.0}"
@@ -598,7 +607,7 @@ mod tests {
     /// solved acoustically again, between the old cap and the new ceiling.
     #[test]
     fn highspeed_reach_is_solved_below_the_ceiling() {
-        let r = rail_reach_m(Admin::UNKNOWN, RailType::Rail, 300.0, 80.0, 0.0);
+        let r = rail_reach_m(SquareCountryCity::UNKNOWN, RailType::Rail, 300.0, 80.0, 0.0);
         assert!(
             r > 10_000.0 && r < crate::constants::RAILWAY_REACH_CLAMP_MAX,
             "HS reach {r:.0} m, want (10 km, 11 km ceiling)"
@@ -606,13 +615,26 @@ mod tests {
         // …and the old 10 km cap really clipped it: the free-field Lden there is
         // still above the 25 dB target, while at the solved reach it has fallen
         // to the target.
-        let at_old_cap =
-            free_field_lden_at(Admin::UNKNOWN, RailType::Rail, 300.0, 80.0, 0.0, 10_000.0);
+        let at_old_cap = free_field_lden_at(
+            SquareCountryCity::UNKNOWN,
+            RailType::Rail,
+            300.0,
+            80.0,
+            0.0,
+            10_000.0,
+        );
         assert!(
             at_old_cap > crate::constants::RAILWAY_REACH_TARGET_LDEN_DB,
             "HS Lden at the old 10 km cap is {at_old_cap:.2} dB, must still exceed the 25 dB target"
         );
-        let at_reach = free_field_lden_at(Admin::UNKNOWN, RailType::Rail, 300.0, 80.0, 0.0, r);
+        let at_reach = free_field_lden_at(
+            SquareCountryCity::UNKNOWN,
+            RailType::Rail,
+            300.0,
+            80.0,
+            0.0,
+            r,
+        );
         assert!(
             (at_reach - crate::constants::RAILWAY_REACH_TARGET_LDEN_DB).abs() < 0.1,
             "HS Lden at its solved reach is {at_reach:.2} dB, want the 25 dB target"
@@ -628,13 +650,13 @@ mod tests {
     /// instead of 0 dB; recomputed, not re-fitted.
     #[test]
     fn tram_reach_shrinks_below_mainline() {
-        let admin = Admin::UNKNOWN;
-        let tram = rail_reach_m(admin, RailType::Tram, 40.0, 120.0, 0.0);
+        let square_country_city = SquareCountryCity::UNKNOWN;
+        let tram = rail_reach_m(square_country_city, RailType::Tram, 40.0, 120.0, 0.0);
         assert!(
             (4_300.0..=4_700.0).contains(&tram),
             "tram reach {tram:.0} m, want ≈4.3-4.7 km"
         );
-        let light = rail_reach_m(admin, RailType::LightRail, 60.0, 80.0, 0.0);
+        let light = rail_reach_m(square_country_city, RailType::LightRail, 60.0, 80.0, 0.0);
         assert!(
             light < tram,
             "light-rail {light:.0} should be < tram {tram:.0}"
@@ -651,13 +673,13 @@ mod tests {
     /// corridor solves past 11 km and must clamp DOWN to the halo budget.
     #[test]
     fn reach_clamps_at_floor_and_ceiling() {
-        let admin = Admin::UNKNOWN;
-        let stub = rail_reach_m(admin, RailType::Rail, 80.0, 1.0, 0.0);
+        let square_country_city = SquareCountryCity::UNKNOWN;
+        let stub = rail_reach_m(square_country_city, RailType::Rail, 80.0, 1.0, 0.0);
         assert_eq!(
             stub, 2_000.0,
             "degenerate-quiet row must clamp to the 2 km floor"
         );
-        let loud = rail_reach_m(admin, RailType::Rail, 250.0, 200.0, 80.0);
+        let loud = rail_reach_m(square_country_city, RailType::Rail, 250.0, 200.0, 80.0);
         assert_eq!(
             loud,
             crate::constants::RAILWAY_REACH_CLAMP_MAX,
@@ -739,15 +761,15 @@ mod tests {
             RailType::NarrowGauge,
             RailType::Funicular,
         ] {
-            for admin in [
-                Admin::UNKNOWN,
-                Admin {
-                    continent: crate::admin::Continent::Europe,
+            for square_country_city in [
+                SquareCountryCity::UNKNOWN,
+                SquareCountryCity {
+                    continent: crate::square_country_city::Continent::Europe,
                     country_iso: *b"DE",
                     city_id: 0,
                 },
             ] {
-                let td = rail_time_dist(admin, rt);
+                let td = rail_time_dist(square_country_city, rt);
                 assert_eq!(td.pax, td.frt, "{rt:?} must have frt == pax (no freight)");
             }
         }
@@ -759,12 +781,12 @@ mod tests {
     #[test]
     fn geographic_europe_outside_whitelist_is_world() {
         for iso in [*b"RU", *b"UA", *b"BY"] {
-            let admin = Admin {
-                continent: crate::admin::Continent::Europe,
+            let square_country_city = SquareCountryCity {
+                continent: crate::square_country_city::Continent::Europe,
                 country_iso: iso,
                 city_id: 0,
             };
-            let td = rail_time_dist(admin, RailType::Rail);
+            let td = rail_time_dist(square_country_city, RailType::Rail);
             assert_eq!(
                 td.frt,
                 TD_WORLD_RAIL.frt,
@@ -773,8 +795,8 @@ mod tests {
             );
         }
         // …while a whitelisted EU country (FR) takes the EU split.
-        let fr = Admin {
-            continent: crate::admin::Continent::Europe,
+        let fr = SquareCountryCity {
+            continent: crate::square_country_city::Continent::Europe,
             country_iso: *b"FR",
             city_id: 0,
         };
@@ -782,15 +804,15 @@ mod tests {
     }
 
     /// SOLVER-VS-KERNEL CONSISTENCY (task mandate): the reach solver and the
-    /// kernel must compute the same period Lden for the same row+admin. Since the
+    /// kernel must compute the same period Lden for the same row+square_country_city. Since the
     /// solver IS `free_field_lden_at` (which now consumes `rail_time_dist`), this
     /// pins that no second copy of the split exists — recompute the kernel's
     /// free-field Lden independently from `railway_emission` + the shared shares
     /// and require an exact match to `free_field_lden_at`.
     #[test]
     fn solver_period_model_matches_kernel_split() {
-        let cz = Admin {
-            continent: crate::admin::Continent::Europe,
+        let cz = SquareCountryCity {
+            continent: crate::square_country_city::Continent::Europe,
             country_iso: *b"CZ",
             city_id: 0,
         };
@@ -829,8 +851,8 @@ mod tests {
     /// energy exceed day — the physical point of the freight night split.
     #[test]
     fn eu_split_breaks_minus_7_91_identity_and_night_exceeds_day() {
-        let cz = Admin {
-            continent: crate::admin::Continent::Europe,
+        let cz = SquareCountryCity {
+            continent: crate::square_country_city::Continent::Europe,
             country_iso: *b"CZ",
             city_id: 0,
         };
@@ -870,8 +892,8 @@ mod tests {
     /// stays above it, so the segment survives the gate.
     #[test]
     fn early_gate_screens_on_loudest_period_not_day() {
-        let cz = Admin {
-            continent: crate::admin::Continent::Europe,
+        let cz = SquareCountryCity {
+            continent: crate::square_country_city::Continent::Europe,
             country_iso: *b"CZ",
             city_id: 0,
         };
@@ -913,8 +935,8 @@ mod tests {
     /// Computed against the retired flat 0.65/0.20/0.15 split.
     #[test]
     fn pax_only_lden_shift_vs_old_flat_split() {
-        let cz = Admin {
-            continent: crate::admin::Continent::Europe,
+        let cz = SquareCountryCity {
+            continent: crate::square_country_city::Continent::Europe,
             country_iso: *b"CZ",
             city_id: 0,
         };

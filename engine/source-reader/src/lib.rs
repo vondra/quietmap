@@ -228,7 +228,7 @@ pub fn source_init(prepared_dir: String) -> napi::Result<String> {
 
     // NACE codes are baked into industrial.arrow — no global JSON needed
 
-    noise_compute::admin::set_admin_prepared_directory(year_path);
+    noise_compute::square_country_city::set_square_country_city_prepared_directory(year_path);
 
     Ok(format!(
         "source-reader initialized: {prepared_dir} (DEM: {})",

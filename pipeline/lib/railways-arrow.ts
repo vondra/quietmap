@@ -32,7 +32,7 @@ export interface RailwayRetract {
 
 export interface RailwayWriteOptions {
   retract?: RailwayRetract
-  /** Baked admin owners this scoped run is allowed to mutate. */
+  /** Baked country owners this scoped run is allowed to mutate. */
   allowedCountryIsos?: readonly string[]
 }
 

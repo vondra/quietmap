@@ -91,25 +91,25 @@ export function commandFor(step: PlanStep, paths: ChainPaths): { argv: string[];
   }
 }
 
-function countAdminRecords(preparedDir: string): { dirs: number; admin: number } {
+function countSquareCountryCityRecords(preparedDir: string): { dirs: number; records: number } {
   const z9 = resolve(preparedDir, 'z9')
-  let dirs = 0, admin = 0
-  if (!existsSync(z9)) return { dirs, admin }
+  let dirs = 0, records = 0
+  if (!existsSync(z9)) return { dirs, records }
   for (const x of readdirSync(z9, { withFileTypes: true })) {
     if (!x.isDirectory()) continue
     for (const y of readdirSync(resolve(z9, x.name), { withFileTypes: true })) {
       if (!y.isDirectory()) continue
       dirs++
-      if (existsSync(resolve(z9, x.name, y.name, 'admin.bin'))) admin++
+      if (existsSync(resolve(z9, x.name, y.name, 'square-country-city.bin'))) records++
     }
   }
-  return { dirs, admin }
+  return { dirs, records }
 }
 
-export function adminPreflight(preparedDir: string): string | null {
-  const { dirs, admin } = countAdminRecords(preparedDir)
+export function squareCountryCityPreflight(preparedDir: string): string | null {
+  const { dirs, records } = countSquareCountryCityRecords(preparedDir)
   if (!dirs) return `${preparedDir}: no z9 squares`
-  if (admin < dirs) return `admin.bin ${admin}/${dirs} — country bake must finish before enrichment`
+  if (records < dirs) return `square-country-city.bin ${records}/${dirs} — country bake must finish before enrichment`
   return null
 }
 
@@ -130,7 +130,7 @@ function parseCli(argv: string[]) {
       python: { type: 'string' },
       from: { type: 'string' },
       'dry-run': { type: 'boolean', default: false },
-      'skip-admin-check': { type: 'boolean', default: false },
+      'skip-square-country-city-check': { type: 'boolean', default: false },
     },
   })
   if (!values.scope || !values['prepared-dir'] || !values['enrichment-dir'] || !values.boundaries) {
@@ -150,7 +150,7 @@ function parseCli(argv: string[]) {
     scope: parseScope(values.scope),
     layer: values.layer as Layer | undefined,
     dryRun: values['dry-run'] ?? false,
-    skipAdminCheck: values['skip-admin-check'] ?? false,
+    skipSquareCountryCityCheck: values['skip-square-country-city-check'] ?? false,
     from: values.from,
     paths: {
       preparedDir,
@@ -171,7 +171,7 @@ export function spawnStep(argv: string[], cwd: string, preparedDir: string, laye
   return new Promise((resolvePromise, reject) => {
     // Admin only touches roads, railways and industrial; buildings can run independently.
     const command = layer === 'buildings' ? argv
-      : ['flock', '--shared', '--nonblock', resolve(preparedDir, '.admin-build.lock'), ...argv]
+      : ['flock', '--shared', '--nonblock', resolve(preparedDir, '.square-country-city-build.lock'), ...argv]
     const child = spawn('flock', ['--exclusive', '--nonblock',
       resolve(preparedDir, `.enrichment-${layer}.lock`), ...command], { cwd, stdio: 'inherit' })
     child.on('error', reject)
@@ -185,8 +185,8 @@ export async function runChain(argv: string[]): Promise<number> {
   const start = cli.from ? plan.findIndex(step => step.id === cli.from) : 0
   if (cli.from && start < 0) throw new Error(`unknown --from step '${cli.from}'`)
   const selected = plan.slice(start)
-  if (!cli.skipAdminCheck && !cli.dryRun && selected.some(step => layerForStep(step) !== 'buildings')) {
-    const problem = adminPreflight(cli.paths.preparedDir)
+  if (!cli.skipSquareCountryCityCheck && !cli.dryRun && selected.some(step => layerForStep(step) !== 'buildings')) {
+    const problem = squareCountryCityPreflight(cli.paths.preparedDir)
     if (problem) {
       console.error(problem)
       return 2

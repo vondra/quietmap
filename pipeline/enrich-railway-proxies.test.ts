@@ -211,7 +211,7 @@ function z9Directory(prepared: string, latitude: number, longitude: number): str
   return join(prepared, 'z9', String(x), String(y))
 }
 
-test('country runner consumes a disposable admin-baked z9 source and reruns byte-identically', async () => {
+test('country runner consumes a disposable square-country-city-baked z9 source and reruns byte-identically', async () => {
   const prepared = join(TEST_DIRECTORY, 'prepared-country')
   const square = z9Directory(prepared, -5.82, 13.45)
   mkdirSync(square, { recursive: true })
