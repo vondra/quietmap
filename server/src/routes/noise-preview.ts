@@ -2,7 +2,7 @@
 import type { FastifyInstance } from 'fastify'
 import { Worker } from 'node:worker_threads'
 import { NoiseOnflySupervisor } from '../engine/noise-onfly-supervisor.js'
-import { prepareSourceReaderAddon } from '../engine/source-reader-addon.js'
+import { pinSourceReaderAddonOnMainThread, prepareSourceReaderAddon } from '../engine/source-reader-addon.js'
 import { EXPENSIVE_ROUTE_RATE_LIMIT } from '../rate-limit.js'
 import { PREPARED_YEAR_DIR, SOURCE_READER_PATH, SURFACE_CORNERS_DIR } from '../runtime-paths.js'
 
@@ -12,9 +12,13 @@ export async function noisePreviewRoutes(app: FastifyInstance, queryPreview?: Qu
   if (!queryPreview && SURFACE_CORNERS_DIR) {
     const supervisor = new NoiseOnflySupervisor({
       createWorker: () => {
+        // The preview pool spawns before the popup pool: pin the addon here
+        // too, or its first worker dlopens it unpinned (the dlclose SIGSEGV class).
+        const sourceReaderNodePath = prepareSourceReaderAddon(SOURCE_READER_PATH)
+        pinSourceReaderAddonOnMainThread(sourceReaderNodePath)
         const worker = new Worker(new URL('../workers/noise-onfly-worker.mjs', import.meta.url), {
           workerData: {
-            sourceReaderNodePath: prepareSourceReaderAddon(SOURCE_READER_PATH),
+            sourceReaderNodePath,
             preparedYearDir: PREPARED_YEAR_DIR,
             surfaceCornersRoot: SURFACE_CORNERS_DIR,
           },

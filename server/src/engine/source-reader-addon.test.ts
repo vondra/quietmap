@@ -3,7 +3,7 @@ import { lstat, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { prepareSourceReaderAddon } from './source-reader-addon.js'
+import { pinSourceReaderAddonOnMainThread, prepareSourceReaderAddon } from './source-reader-addon.js'
 
 test('source-reader addon is copied atomically to one stable non-symlink path', async (t) => {
   const root = await mkdtemp(join(tmpdir(), '0db-addon-'))
@@ -26,4 +26,19 @@ test('source-reader addon is copied atomically to one stable non-symlink path', 
   await writeFile(source, 'native-v2-expanded')
   assert.equal(prepareSourceReaderAddon(source), shared)
   assert.equal(await readFile(shared, 'utf8'), 'native-v2-expanded')
+})
+
+test('the addon is required once in the main thread and stays pinned for the process', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), '0db-addon-pin-'))
+  t.after(async () => rm(root, { recursive: true, force: true }))
+  // A CommonJS stand-in for the .node library: loading it is observable.
+  const first = join(root, 'first.cjs')
+  const second = join(root, 'second.cjs')
+  await writeFile(first, "globalThis.__addonPinLoads = (globalThis.__addonPinLoads ?? 0) + 1")
+  await writeFile(second, "globalThis.__addonPinLoads = (globalThis.__addonPinLoads ?? 0) + 100")
+
+  pinSourceReaderAddonOnMainThread(first)
+  pinSourceReaderAddonOnMainThread(first)
+  pinSourceReaderAddonOnMainThread(second)
+  assert.equal((globalThis as { __addonPinLoads?: number }).__addonPinLoads, 1)
 })

@@ -8,6 +8,7 @@ import {
   statSync,
   utimesSync,
 } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
 
 /**
@@ -57,4 +58,19 @@ export function prepareSourceReaderAddon(sourceReaderPath: string): string {
   }
 
   return nodePath
+}
+
+let pinnedOnMainThread = false
+
+/**
+ * Hold the addon in the main thread for the process lifetime. Workers load
+ * the same path; when the last worker holding it exited, Node dlclose'd the
+ * library while its Rust threads were alive and the next spawn's re-map
+ * crashed the server (SIGSEGV twice on 2026-09-06). Separate from
+ * prepareSourceReaderAddon: that one also serves plain-file tests.
+ */
+export function pinSourceReaderAddonOnMainThread(nodePath: string): void {
+  if (pinnedOnMainThread) return
+  createRequire(import.meta.url)(nodePath)
+  pinnedOnMainThread = true
 }
