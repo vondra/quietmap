@@ -3,6 +3,14 @@
 //! Spatial batch metadata prunes bodies outside the click's reach. Only absent
 //! optional files are empty; opening or decoding an existing file fails the
 //! query on error. Source contracts reject stale coordinate and layer semantics.
+//!
+//! Batches decode through `FileDecoder` over a `Buffer` that owns the mapping,
+//! so every decoded array is a slice of the file-backed pages the kernel can
+//! drop under pressure — not anonymous heap the cached batch holds for the
+//! process's life. `FileDecoder` keeps arrow's default `require_alignment =
+//! false`: a buffer the mapping happens to misalign is copied and realigned
+//! rather than dropped, because a dropped batch would silently hide sources
+//! while a copied one only costs memory.
 
 use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
@@ -526,6 +534,29 @@ mod lazy_arrow_tests {
         assert_eq!(numbers.values(), &[11, 22, 33]);
         assert_eq!(label_values.value(0), "alpha");
         assert_eq!(label_values.value(1), "beta");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// A block table that outlives the body it points at fails the open as a
+    /// whole: the layer reads as an error, never as the batches that still fit.
+    #[test]
+    fn a_block_table_pointing_past_the_body_fails_the_open() {
+        let path = test_path("short-body");
+        write_dictionary_file(&path);
+        let bytes = std::fs::read(&path).unwrap();
+        let trailer_start = bytes.len() - 10;
+        let footer_len =
+            i32::from_le_bytes(bytes[trailer_start..trailer_start + 4].try_into().unwrap())
+                as usize;
+        let footer_start = trailer_start - footer_len;
+        // Cut 16 bytes off the end of the body and keep footer and trailer
+        // intact: every block keeps its offset, so the last one now declares
+        // bytes the file no longer holds.
+        let mut short = bytes[..footer_start - 16].to_vec();
+        short.extend_from_slice(&bytes[footer_start..]);
+        std::fs::write(&path, short).unwrap();
+        let error = LazyArrow::open(&path).err().unwrap();
+        assert!(error.contains("outside file body"), "{error}");
         std::fs::remove_file(path).unwrap();
     }
 
