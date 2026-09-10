@@ -64,6 +64,45 @@ impl FlightAccum {
             is_cruise,
         }
     }
+
+    /// Fold another chunk's accumulator for the SAME flight into this one.
+    /// `airborne::scatter` splits the row slice into contiguous chunks with
+    /// private tables; this is the only place their fields recombine, so the
+    /// per-field semantics live here once:
+    /// * the four energy arrays are sums (chunk order fixes the f64 order),
+    /// * `peak_lmax` is a max and drags its whole companion record along —
+    ///   sel / altitude / period / date / geometry describe the SAME
+    ///   sub-segment and must never be mixed across chunks,
+    /// * `min_dist_m` is a min, `flight_weight` a max (it is row-constant
+    ///   per class, so every chunk carries the same value),
+    /// * identity (`profile_idx`, `aircraft_type`, `callsign`, `is_cruise`)
+    ///   comes from the row and is identical in every chunk — keep ours.
+    ///
+    /// Strict `>` / `<` mirror the in-loop comparisons, so the earlier chunk
+    /// wins a tie exactly as the earlier row does in the serial pass.
+    pub fn merge_chunk(&mut self, other: FlightAccum) {
+        for p in 0..3 {
+            self.period_energy[p] += other.period_energy[p];
+            self.free_period_energy[p] += other.free_period_energy[p];
+            self.no_terrain_period_energy[p] += other.no_terrain_period_energy[p];
+            self.no_screening_period_energy[p] += other.no_screening_period_energy[p];
+        }
+        if other.peak_lmax > self.peak_lmax {
+            self.peak_lmax = other.peak_lmax;
+            self.peak_sel = other.peak_sel;
+            self.peak_altitude_m = other.peak_altitude_m;
+            self.peak_period = other.peak_period;
+            self.peak_date_id = other.peak_date_id;
+            self.peak_seg_start = other.peak_seg_start;
+            self.peak_seg_end = other.peak_seg_end;
+        }
+        if other.min_dist_m < self.min_dist_m {
+            self.min_dist_m = other.min_dist_m;
+        }
+        if other.flight_weight > self.flight_weight {
+            self.flight_weight = other.flight_weight;
+        }
+    }
 }
 
 /// Per-band event count + altitude average + per-class histogram. Used

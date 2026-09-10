@@ -694,3 +694,324 @@ fn aircraft_detail_ignores_map_iteration_order() {
         }
     }
 }
+
+// ---------------------------------------------------------------------
+// Chunked (rayon) scatter: parity with the serial reference + benchmark.
+// ---------------------------------------------------------------------
+
+/// Owned sub-segment columns for one synthetic airborne row.
+struct SynthRowCols {
+    start_gy: Vec<i32>,
+    start_gx: Vec<i32>,
+    start_alt: Vec<i16>,
+    end_gy: Vec<i32>,
+    end_gx: Vec<i32>,
+    end_alt: Vec<i16>,
+    speed: Vec<f32>,
+    length: Vec<f32>,
+    period: Vec<u8>,
+    date_id: Vec<i16>,
+    flags: Vec<u8>,
+    elev: Vec<i16>,
+}
+
+/// splitmix64 — three lines, no dev-dependency, and the same stream on
+/// every host, so a parity failure is reproducible from the seed alone.
+fn splitmix64(state: &mut u64) -> f64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 11) as f64 / (1u64 << 53) as f64
+}
+
+/// `n_rows` pseudo-random tracks of `subsegs_per_row` chained sub-segments,
+/// scattered inside a ~2 km box a couple of km from the receiver at
+/// 50.0 / 14.0 / 300 m so every one of them actually reaches the Doc 29
+/// kernel. `synthetic_views` then folds the rows onto few enough flight ids
+/// that the same accumulator is written from several chunks, so
+/// `FlightAccum::merge_chunk` really runs.
+fn synthetic_airborne_rows(n_rows: usize, subsegs_per_row: usize, seed: u64) -> Vec<SynthRowCols> {
+    let mut state = seed;
+    (0..n_rows)
+        .map(|i| {
+            let lat = 49.988 + splitmix64(&mut state) * 0.02;
+            let lon = 13.988 + splitmix64(&mut state) * 0.02;
+            let step = (0.004 + splitmix64(&mut state) * 0.004) * 2.0 / subsegs_per_row as f64;
+            let mut cols = SynthRowCols {
+                start_gy: Vec::with_capacity(subsegs_per_row),
+                start_gx: Vec::with_capacity(subsegs_per_row),
+                start_alt: Vec::with_capacity(subsegs_per_row),
+                end_gy: Vec::with_capacity(subsegs_per_row),
+                end_gx: Vec::with_capacity(subsegs_per_row),
+                end_alt: Vec::with_capacity(subsegs_per_row),
+                speed: vec![220.0; subsegs_per_row],
+                length: vec![1500.0; subsegs_per_row],
+                period: Vec::with_capacity(subsegs_per_row),
+                date_id: vec![10; subsegs_per_row],
+                flags: vec![(i % 2) as u8; subsegs_per_row],
+                elev: vec![300; subsegs_per_row],
+            };
+            let point =
+                |k: usize| grid::lonlat_to_grid(lon + step * k as f64, lat + step * k as f64);
+            for k in 0..subsegs_per_row {
+                let (a, b) = (point(k), point(k + 1));
+                let alt = |base: f64, r: f64| (base + r * 400.0).round() as i16;
+                let (r0, r1) = (splitmix64(&mut state), splitmix64(&mut state));
+                cols.start_gx.push(a.0);
+                cols.start_gy.push(a.1);
+                cols.end_gx.push(b.0);
+                cols.end_gy.push(b.1);
+                cols.start_alt.push(alt(700.0 + 20.0 * k as f64, r0));
+                cols.end_alt.push(alt(800.0 + 20.0 * k as f64, r1));
+                cols.period.push(((i + k) % 3) as u8);
+            }
+            cols
+        })
+        .collect()
+}
+
+fn synthetic_views<'a>(cols: &'a [SynthRowCols], n_flights: usize) -> Vec<AirborneRowView<'a>> {
+    use crate::compute::aircraft_v6::views::SubSegmentSlice;
+    cols.iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let sub_segments = SubSegmentSlice {
+                start_gy: &c.start_gy,
+                start_gx: &c.start_gx,
+                start_alt_m: &c.start_alt,
+                end_gy: &c.end_gy,
+                end_gx: &c.end_gx,
+                end_alt_m: &c.end_alt,
+                speed_kt: &c.speed,
+                length_m: &c.length,
+                period: &c.period,
+                date_id: &c.date_id,
+                flags: &c.flags,
+                terrain_start_elev_m: &c.elev,
+                terrain_end_elev_m: &c.elev,
+            };
+            AirborneRowView {
+                // One fixed start_unix: `pack_real` folds the timestamp into
+                // the id, so varying it here would multiply the distinct fids
+                // and stop several chunks from meeting on one accumulator.
+                flight_id: flight_id::pack_real(0x40_0000 + (i % n_flights) as u32, 1_750_000_000)
+                    .expect("test fid"),
+                callsign: "",
+                aircraft_type: *b"A320",
+                profile_idx: (i % 8) as u8,
+                source_id: 0,
+                origin: 0,
+                sub_segments,
+                bbox: sub_segments.bbox(),
+            }
+        })
+        .collect()
+}
+
+fn synthetic_receiver_and_horizon() -> (Receiver, aircraft::ReceiverHorizon) {
+    let receiver = Receiver::new(50.0, 14.0, 300.0);
+    let horizon = aircraft::ReceiverHorizon::build(
+        |_, _| 300.0,
+        receiver.lat,
+        receiver.lon,
+        receiver.altitude_m(),
+    );
+    (receiver, horizon)
+}
+
+/// The rayon split may only move the last bits of the energy SUMS. Every
+/// max/min-derived field (`peak_*`, `min_dist_m`) is a single sub-segment's
+/// value picked by a strict comparison in row order, so chunking must leave
+/// it bit-identical — a mismatch there means the merge mixed two different
+/// sub-segments' fields, which is a visible wrong `top_flights` row.
+#[test]
+fn chunked_scatter_matches_serial_within_rounding() {
+    const N_ROWS: usize = 50_000;
+    const N_FLIGHTS: usize = 1_000;
+    let cols = synthetic_airborne_rows(N_ROWS, 2, 0x5EED_1234);
+    let rows = synthetic_views(&cols, N_FLIGHTS);
+    let (receiver, horizon) = synthetic_receiver_and_horizon();
+    let weights = aircraft::ClassWeights::uniform();
+
+    // Guard against a vacuous pass: the input must actually be split.
+    assert!(
+        rows.len() > super::MIN_SCATTER_CHUNK_ROWS && rayon::current_num_threads() > 1,
+        "input not chunked — parity test would be vacuous"
+    );
+
+    let serial = super::scatter_chunk(&receiver, &rows, 7.0, &weights, &horizon, None, 0, false);
+    let parallel = scatter(&receiver, &rows, 7.0, &weights, &horizon, None, 0, None);
+
+    assert_eq!(serial.flights.len(), N_FLIGHTS, "every fid must accumulate");
+    assert_eq!(serial.flights.len(), parallel.len());
+    for (fid, want) in &serial.flights {
+        let got = parallel
+            .get(fid)
+            .expect("flight lost by the chunked scatter");
+        for p in 0..3 {
+            for (name, w, g) in [
+                ("period_energy", want.period_energy[p], got.period_energy[p]),
+                (
+                    "free_period_energy",
+                    want.free_period_energy[p],
+                    got.free_period_energy[p],
+                ),
+                (
+                    "no_terrain_period_energy",
+                    want.no_terrain_period_energy[p],
+                    got.no_terrain_period_energy[p],
+                ),
+                (
+                    "no_screening_period_energy",
+                    want.no_screening_period_energy[p],
+                    got.no_screening_period_energy[p],
+                ),
+            ] {
+                let rel = if w == 0.0 {
+                    (g - w).abs()
+                } else {
+                    ((g - w) / w).abs()
+                };
+                assert!(
+                    rel <= 1e-9,
+                    "{name}[{p}] drifted beyond f64 re-association for fid {fid}: \
+                     serial={w:e} chunked={g:e} rel={rel:e}"
+                );
+            }
+        }
+        for (name, w, g) in [
+            ("peak_lmax", want.peak_lmax, got.peak_lmax),
+            ("peak_sel", want.peak_sel, got.peak_sel),
+            ("peak_altitude_m", want.peak_altitude_m, got.peak_altitude_m),
+            ("min_dist_m", want.min_dist_m, got.min_dist_m),
+            ("flight_weight", want.flight_weight, got.flight_weight),
+            (
+                "peak_seg_start_lon",
+                want.peak_seg_start[0],
+                got.peak_seg_start[0],
+            ),
+            (
+                "peak_seg_start_lat",
+                want.peak_seg_start[1],
+                got.peak_seg_start[1],
+            ),
+            (
+                "peak_seg_end_lon",
+                want.peak_seg_end[0],
+                got.peak_seg_end[0],
+            ),
+            (
+                "peak_seg_end_lat",
+                want.peak_seg_end[1],
+                got.peak_seg_end[1],
+            ),
+        ] {
+            assert_eq!(
+                w.to_bits(),
+                g.to_bits(),
+                "{name} must be bit-identical (single-sub-segment pick) for fid {fid}: \
+                 serial={w} chunked={g}"
+            );
+        }
+        assert_eq!(want.peak_period, got.peak_period, "fid {fid}");
+        assert_eq!(want.peak_date_id, got.peak_date_id, "fid {fid}");
+        assert_eq!(want.profile_idx, got.profile_idx, "fid {fid}");
+        assert_eq!(want.aircraft_type, got.aircraft_type, "fid {fid}");
+    }
+}
+
+/// The trace path runs on EVERY production popup (source-reader always
+/// passes `Some(traces)`), so the per-chunk heaps must reduce to the same
+/// top-K the serial heap kept, and the "N visible" denominator must be a
+/// plain count that survives the split.
+#[test]
+fn chunked_scatter_keeps_the_same_top_k_traces() {
+    const N_ROWS: usize = 50_000;
+    const N_FLIGHTS: usize = 1_000;
+    const CAP: usize = 150;
+    let cols = synthetic_airborne_rows(N_ROWS, 2, 0xC0FF_EE01);
+    let rows = synthetic_views(&cols, N_FLIGHTS);
+    let (receiver, horizon) = synthetic_receiver_and_horizon();
+    let weights = aircraft::ClassWeights::uniform();
+
+    let serial_chunk =
+        super::scatter_chunk(&receiver, &rows, 7.0, &weights, &horizon, None, CAP, true);
+    let mut parallel_traces = TraceCollector::new();
+    scatter(
+        &receiver,
+        &rows,
+        7.0,
+        &weights,
+        &horizon,
+        None,
+        CAP,
+        Some(&mut parallel_traces),
+    );
+
+    assert_eq!(
+        serial_chunk.above_cutoff, parallel_traces.airborne_above_cutoff,
+        "the 'shown / N' denominator is a count and must not depend on chunking"
+    );
+    assert!(
+        parallel_traces.airborne_above_cutoff as usize > CAP,
+        "cap must actually bind — otherwise the top-K merge is untested"
+    );
+    assert_eq!(parallel_traces.segments.len(), CAP);
+
+    let key = |t: &crate::types::SegmentTrace| t.received_lden.full.to_bits();
+    let mut want: Vec<u64> = serial_chunk
+        .heap
+        .into_vec()
+        .into_iter()
+        .map(|r| key(&r.0.trace))
+        .collect();
+    let mut got: Vec<u64> = parallel_traces.segments.iter().map(key).collect();
+    want.sort_unstable();
+    got.sort_unstable();
+    assert_eq!(want, got, "chunked top-K kept a different set of traces");
+}
+
+/// `cargo test --release -p noise-compute -- --ignored --nocapture scatter_speedup`
+#[test]
+#[ignore = "benchmark, not a gate — prints serial vs chunked scatter wall time"]
+fn scatter_speedup_on_150k_rows() {
+    const N_ROWS: usize = 150_000;
+    const N_FLIGHTS: usize = 20_000;
+    const CAP: usize = 150;
+    // New York's real popup shape: ~159 k rows / ~3.9 M sub-segments.
+    const SUBSEGS_PER_ROW: usize = 25;
+    let cols = synthetic_airborne_rows(N_ROWS, SUBSEGS_PER_ROW, 0xBE_1234);
+    let rows = synthetic_views(&cols, N_FLIGHTS);
+    let (receiver, horizon) = synthetic_receiver_and_horizon();
+    let weights = aircraft::ClassWeights::uniform();
+
+    let t0 = std::time::Instant::now();
+    let serial = super::scatter_chunk(&receiver, &rows, 7.0, &weights, &horizon, None, CAP, true);
+    let serial_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+    let mut traces = TraceCollector::new();
+    let t1 = std::time::Instant::now();
+    let parallel = scatter(
+        &receiver,
+        &rows,
+        7.0,
+        &weights,
+        &horizon,
+        None,
+        CAP,
+        Some(&mut traces),
+    );
+    let parallel_ms = t1.elapsed().as_secs_f64() * 1000.0;
+
+    eprintln!(
+        "airborne scatter {N_ROWS} rows / {} sub-segs above cutoff: serial {serial_ms:.0} ms, \
+         chunked {parallel_ms:.0} ms on {} rayon threads = {:.2}x (flights {} / {})",
+        traces.airborne_above_cutoff,
+        rayon::current_num_threads(),
+        serial_ms / parallel_ms,
+        serial.flights.len(),
+        parallel.len(),
+    );
+}

@@ -9,6 +9,8 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
 
+use rayon::prelude::*;
+
 use grid::geo::wrapped_longitude_delta;
 
 use crate::compute::aircraft_v6::state::{BandStats, FlightAccum, TopFlightCandidate};
@@ -93,6 +95,15 @@ impl Ord for ScoredTrace {
 /// Per-sub-segment `SegmentTrace`s land in `traces.segments` so the
 /// Noise Segments popup tab can render one row per Doc 29 SEL call
 /// instead of one row per flight (the popup's actual compute unit).
+///
+/// Rows are independent — a sub-segment only ever touches its own flight's
+/// accumulator — so the row slice is cut into contiguous chunks, one rayon
+/// task each, and the private tables are merged in CHUNK ORDER. That order
+/// is fixed by the input, so one click gives the same bytes every run;
+/// f64 addition is not associative, so the chunked sums differ from a
+/// single-threaded walk in the last bits. A popup with at most
+/// `MIN_SCATTER_CHUNK_ROWS` rows stays one chunk and keeps the serial
+/// order exactly.
 pub fn scatter(
     receiver: &Receiver,
     rows: &[AirborneRowView<'_>],
@@ -105,18 +116,119 @@ pub fn scatter(
     horizon: &aircraft::ReceiverHorizon,
     buildings: Option<&aircraft::BuildingHorizon>,
     trace_cap: usize,
-    mut traces: Option<&mut TraceCollector>,
+    traces: Option<&mut TraceCollector>,
 ) -> HashMap<u64, FlightAccum> {
+    let want_traces = traces.is_some();
+    let chunk_len = rows
+        .len()
+        .div_ceil(rayon::current_num_threads().max(1))
+        .max(MIN_SCATTER_CHUNK_ROWS);
+    let chunks: Vec<ChunkScatter> = rows
+        .par_chunks(chunk_len)
+        .map(|chunk| {
+            scatter_chunk(
+                receiver,
+                chunk,
+                n_days_f,
+                class_weights,
+                horizon,
+                buildings,
+                trace_cap,
+                want_traces,
+            )
+        })
+        .collect();
+    merge_chunks(chunks, trace_cap, traces)
+}
+
+/// Smallest row slice worth its own rayon task: below this the per-chunk
+/// `HashMap` + heap allocation and the merge cost more than the split saves.
+const MIN_SCATTER_CHUNK_ROWS: usize = 2_000;
+
+/// One chunk's private accumulators. Every field recombines associatively
+/// (sum / max / min / count), which is what makes the split legal.
+struct ChunkScatter {
+    flights: HashMap<u64, FlightAccum>,
+    /// Bounded top-K heap over this chunk's rows only. A trace in the
+    /// global top-K is necessarily inside its own chunk's top-K (otherwise
+    /// `trace_cap` stronger traces already precede it in that chunk), so
+    /// merging the per-chunk heaps drops nothing the serial heap kept.
+    heap: BinaryHeap<Reverse<ScoredTrace>>,
+    above_cutoff: u32,
+}
+
+/// Merge the chunk tables in chunk order and, when traces were requested,
+/// reduce the per-chunk heaps to one global top-`trace_cap` set.
+fn merge_chunks(
+    chunks: Vec<ChunkScatter>,
+    trace_cap: usize,
+    traces: Option<&mut TraceCollector>,
+) -> HashMap<u64, FlightAccum> {
+    use std::collections::hash_map::Entry;
+
+    let mut chunks = chunks.into_iter();
+    let Some(first) = chunks.next() else {
+        return HashMap::new();
+    };
+    let mut flights = first.flights;
+    let mut above_cutoff = first.above_cutoff;
+    // `into_vec` is the heap's backing array: arbitrary order, but a pure
+    // function of this chunk's insertion sequence, hence run-to-run stable.
+    let mut scored: Vec<ScoredTrace> = first.heap.into_vec().into_iter().map(|r| r.0).collect();
+    for chunk in chunks {
+        // The per-key f64 order is decided by chunk order, not by this
+        // walk: each chunk holds at most one accumulator per flight id.
+        for (flight_id, acc) in chunk.flights {
+            match flights.entry(flight_id) {
+                Entry::Occupied(mut e) => e.get_mut().merge_chunk(acc),
+                Entry::Vacant(e) => {
+                    e.insert(acc);
+                }
+            }
+        }
+        above_cutoff = above_cutoff.saturating_add(chunk.above_cutoff);
+        scored.extend(chunk.heap.into_vec().into_iter().map(|r| r.0));
+    }
+
+    if let Some(t) = traces {
+        if scored.len() > trace_cap {
+            // Stable sort — equal rank keys keep chunk order, so the kept
+            // set is identical every run. `apply_segment_top_k_with_cap`
+            // (source-reader) re-sorts by `received_lden.full` afterwards
+            // because road / rail / cruise traces are mixed in.
+            scored.sort_by(|a, b| b.rank_key.total_cmp(&a.rank_key));
+            scored.truncate(trace_cap);
+        }
+        t.airborne_above_cutoff = t.airborne_above_cutoff.saturating_add(above_cutoff);
+        t.segments.extend(scored.into_iter().map(|st| st.trace));
+    }
+    flights
+}
+
+/// The Doc 29 kernel loop over one contiguous row slice. Writes only
+/// chunk-private state; running it over the whole slice is the serial
+/// reference implementation the parity test compares against.
+fn scatter_chunk(
+    receiver: &Receiver,
+    rows: &[AirborneRowView<'_>],
+    n_days_f: f64,
+    class_weights: &aircraft::ClassWeights,
+    horizon: &aircraft::ReceiverHorizon,
+    buildings: Option<&aircraft::BuildingHorizon>,
+    trace_cap: usize,
+    want_traces: bool,
+) -> ChunkScatter {
     let rx_elev = receiver.altitude_m();
     let npd_luts = aircraft::NpdLuts::shared();
     let mut flights: HashMap<u64, FlightAccum> = HashMap::new();
+    let mut above_cutoff: u32 = 0;
     // Bounded top-K min-heap (size `trace_cap`). We rank by `rank_key`
     // (monotone with received_lden.full) and use `Reverse` so the heap
     // root is the *weakest* kept trace — pop+push replaces it when a
     // stronger candidate arrives. Avoids ~4.4 M `SegmentTrace`
     // allocations at LKPR (only ~150 + a few hundred replacements
     // actually allocate; the rest skip the trace builder entirely).
-    let mut heap: BinaryHeap<Reverse<ScoredTrace>> = if traces.is_some() && trace_cap > 0 {
+    let mut heap: BinaryHeap<Reverse<ScoredTrace>> = if want_traces && trace_cap > 0 {
         BinaryHeap::with_capacity(trace_cap)
     } else {
         BinaryHeap::new()
@@ -329,103 +441,95 @@ pub fn scatter(
                 acc.min_dist_m = disp_dist;
             }
 
-            if lmax >= AIRBORNE_TRACE_CUTOFF_DB {
-                if let Some(t) = traces.as_deref_mut() {
-                    // Maintain the "N visible" denominator regardless of
-                    // whether this sub-seg's trace survives the heap.
-                    t.airborne_above_cutoff = t.airborne_above_cutoff.saturating_add(1);
+            if want_traces && lmax >= AIRBORNE_TRACE_CUTOFF_DB {
+                // Maintain the "N visible" denominator regardless of
+                // whether this sub-seg's trace survives the heap.
+                above_cutoff = above_cutoff.saturating_add(1);
 
-                    if trace_cap > 0 {
-                        let rank_key = energy * AIRBORNE_RANK_W[period];
-                        // Skip the trace builder unless this sub-seg can
-                        // displace the weakest kept trace.
-                        let should_build = heap.len() < trace_cap
-                            || heap.peek().map(|w| rank_key > w.0.rank_key).unwrap_or(true);
-                        if should_build {
-                            let mut period_energies = [0.0f64; 3];
-                            period_energies[period] = energy;
-                            let mut free_period_energies = [0.0f64; 3];
-                            free_period_energies[period] = energy_for_sel(kernel.free_sel);
-                            let mut no_terrain_period_energies = [0.0f64; 3];
-                            no_terrain_period_energies[period] =
-                                energy_for_sel(kernel.sel_no_terrain);
-                            let mut no_screening_period_energies = [0.0f64; 3];
-                            no_screening_period_energies[period] =
-                                energy_for_sel(kernel.sel_no_screening);
-                            let (screening_kind, screening_db) =
-                                if kernel.terrain_dz <= 0.0 && kernel.building_dz <= 0.0 {
-                                    ("none", 0.0)
-                                } else if kernel.terrain_dz >= kernel.building_dz {
-                                    ("terrain", kernel.terrain_dz)
-                                } else {
-                                    ("building", kernel.building_dz)
-                                };
-                            let installation = match kernel.installation {
-                                aircraft::Installation::Wing => "wing",
-                                aircraft::Installation::Fuselage => "fuselage",
-                                aircraft::Installation::Propeller => "propeller",
-                            };
-                            let doc29 = crate::types::Doc29Breakdown {
-                                sel_npd_db: kernel.sel_npd_db,
-                                delta_v_db: kernel.delta_v_db,
-                                delta_i_db: kernel.delta_i_db,
-                                lambda_db: kernel.lambda_db,
-                                delta_f_db: kernel.delta_f_db,
-                                d_p_m: cpa.d_p_m,
-                                lateral_m: cpa.lateral_m,
-                                beta_deg: cpa.beta_deg,
-                                seg_len_m: seg.segment_length_m as f64,
-                                d_bar_m: kernel.d_bar_m,
-                                installation,
-                                cffk_fast_path: kernel.cffk_fast_path,
-                                screening_kind,
-                                screening_db,
-                            };
-                            let trace = crate::traces::build_aircraft_airborne_subsegment_trace(
-                                crate::traces::BuildAircraftAirborneSubSegmentTrace {
-                                    callsign: row.callsign,
-                                    aircraft_type: &row.aircraft_type,
-                                    class_name: aircraft::CLASS_NAMES[class_idx],
-                                    flight_id: row.flight_id,
-                                    start_lat: seg.start_lat,
-                                    start_lon: seg.start_lon,
-                                    end_lat: seg.end_lat,
-                                    end_lon: seg.end_lon,
-                                    cpa_distance_m: disp_dist,
-                                    altitude_m_at_cpa: disp_alt,
-                                    d_slant_m: disp_dist.max(1.0),
-                                    is_departure: seg.is_departure,
-                                    period_energies,
-                                    free_period_energies,
-                                    no_terrain_period_energies,
-                                    no_screening_period_energies,
-                                    n_days: n_days_f,
-                                    doc29,
-                                },
-                            );
-                            let scored = ScoredTrace { rank_key, trace };
-                            if heap.len() < trace_cap {
-                                heap.push(Reverse(scored));
+                if trace_cap > 0 {
+                    let rank_key = energy * AIRBORNE_RANK_W[period];
+                    // Skip the trace builder unless this sub-seg can
+                    // displace the weakest kept trace.
+                    let should_build = heap.len() < trace_cap
+                        || heap.peek().map(|w| rank_key > w.0.rank_key).unwrap_or(true);
+                    if should_build {
+                        let mut period_energies = [0.0f64; 3];
+                        period_energies[period] = energy;
+                        let mut free_period_energies = [0.0f64; 3];
+                        free_period_energies[period] = energy_for_sel(kernel.free_sel);
+                        let mut no_terrain_period_energies = [0.0f64; 3];
+                        no_terrain_period_energies[period] = energy_for_sel(kernel.sel_no_terrain);
+                        let mut no_screening_period_energies = [0.0f64; 3];
+                        no_screening_period_energies[period] =
+                            energy_for_sel(kernel.sel_no_screening);
+                        let (screening_kind, screening_db) =
+                            if kernel.terrain_dz <= 0.0 && kernel.building_dz <= 0.0 {
+                                ("none", 0.0)
+                            } else if kernel.terrain_dz >= kernel.building_dz {
+                                ("terrain", kernel.terrain_dz)
                             } else {
-                                heap.pop();
-                                heap.push(Reverse(scored));
-                            }
+                                ("building", kernel.building_dz)
+                            };
+                        let installation = match kernel.installation {
+                            aircraft::Installation::Wing => "wing",
+                            aircraft::Installation::Fuselage => "fuselage",
+                            aircraft::Installation::Propeller => "propeller",
+                        };
+                        let doc29 = crate::types::Doc29Breakdown {
+                            sel_npd_db: kernel.sel_npd_db,
+                            delta_v_db: kernel.delta_v_db,
+                            delta_i_db: kernel.delta_i_db,
+                            lambda_db: kernel.lambda_db,
+                            delta_f_db: kernel.delta_f_db,
+                            d_p_m: cpa.d_p_m,
+                            lateral_m: cpa.lateral_m,
+                            beta_deg: cpa.beta_deg,
+                            seg_len_m: seg.segment_length_m as f64,
+                            d_bar_m: kernel.d_bar_m,
+                            installation,
+                            cffk_fast_path: kernel.cffk_fast_path,
+                            screening_kind,
+                            screening_db,
+                        };
+                        let trace = crate::traces::build_aircraft_airborne_subsegment_trace(
+                            crate::traces::BuildAircraftAirborneSubSegmentTrace {
+                                callsign: row.callsign,
+                                aircraft_type: &row.aircraft_type,
+                                class_name: aircraft::CLASS_NAMES[class_idx],
+                                flight_id: row.flight_id,
+                                start_lat: seg.start_lat,
+                                start_lon: seg.start_lon,
+                                end_lat: seg.end_lat,
+                                end_lon: seg.end_lon,
+                                cpa_distance_m: disp_dist,
+                                altitude_m_at_cpa: disp_alt,
+                                d_slant_m: disp_dist.max(1.0),
+                                is_departure: seg.is_departure,
+                                period_energies,
+                                free_period_energies,
+                                no_terrain_period_energies,
+                                no_screening_period_energies,
+                                n_days: n_days_f,
+                                doc29,
+                            },
+                        );
+                        let scored = ScoredTrace { rank_key, trace };
+                        if heap.len() < trace_cap {
+                            heap.push(Reverse(scored));
+                        } else {
+                            heap.pop();
+                            heap.push(Reverse(scored));
                         }
                     }
                 }
             }
         }
     }
-    // Drain bounded top-K heap into `t.segments`. No sort needed:
-    // `apply_segment_top_k_with_cap` (source-reader) re-sorts the entire
-    // Vec by `received_lden.full` desc — it has to, because road / rail /
-    // cruise / ground traces are mixed in. An in-scatter sort would be
-    // redundant work.
-    if let Some(t) = traces {
-        t.segments
-            .extend(heap.into_iter().map(|Reverse(st)| st.trace));
+    ChunkScatter {
+        flights,
+        heap,
+        above_cutoff,
     }
-    flights
 }
 
 /// Build airborne-side `AircraftAirborneDetail` and the airborne-only
