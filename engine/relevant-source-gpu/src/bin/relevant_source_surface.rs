@@ -1,7 +1,9 @@
 //! Produce one generation-bound edge bundle or one complete z9 surface result.
 use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand};
-use grid::surface_corner::{owner_dependency_owners, owner_edge_corners, tile_corners};
+use grid::surface_corner::{
+    owner_dependency_owners, owner_edge_corners, tile_corners, SurfaceCorner,
+};
 use relevant_source_gpu::{
     cuda_bridge::RelevantSourceCuda,
     input_manifest::{file_digest, parse_digest, InputManifest},
@@ -12,9 +14,10 @@ use relevant_source_gpu::{
 use std::{collections::BTreeMap, path::PathBuf};
 use tile_painter::{
     corner_directory::CornerDirectory,
-    corner_store::CornerStore,
+    corner_store::{CornerEnergy, CornerStore},
     durable_directory, edge_bundle,
     generation_receipt::{GenerationReceipt, SURFACE_CODE_DIGEST},
+    hm3::silent_tiles,
 };
 
 #[derive(Parser)]
@@ -101,13 +104,29 @@ fn main() -> Result<()> {
     }
 }
 
+/// The card holds the scene only when a source exists; a source-less owner still
+/// loads and checks its rasters, then paints silence on the host.
 fn scene(
     owner: grid::Square,
     prepared_year: &std::path::Path,
     manifest: &InputManifest,
     rasters: &raster_reader::RealRasters,
-) -> Result<SurfaceGpu> {
-    SurfaceGpu::upload(SurfaceScene::load(owner, prepared_year, manifest, rasters)?)
+) -> Result<Option<SurfaceGpu>> {
+    let scene = SurfaceScene::load(owner, prepared_year, manifest, rasters)?;
+    (!scene.sources.is_empty())
+        .then(|| SurfaceGpu::upload(scene))
+        .transpose()
+}
+
+fn evaluate_corners(
+    scene: Option<&SurfaceGpu>,
+    cuda: &RelevantSourceCuda,
+    corners: &[SurfaceCorner],
+) -> Result<Vec<CornerEnergy>> {
+    match scene {
+        Some(scene) => scene.evaluate_corners(cuda, corners),
+        None => Ok(vec![CornerEnergy(Vec::new()); corners.len()]),
+    }
 }
 
 fn produce_edge(
@@ -127,7 +146,7 @@ fn produce_edge(
     for corners in vertices.chunks(grid::surface_corner::CORNER_COUNT) {
         store.resolve(corners, |canonical_owner, missing| {
             ensure!(canonical_owner == owner, "edge vertex owner changed");
-            scene.evaluate_corners(cuda, missing)
+            evaluate_corners(scene.as_ref(), cuda, missing)
         })?;
     }
     edge_bundle::seal(&mut store, epoch, receipt)?;
@@ -185,9 +204,17 @@ fn paint_owner(
             }
         }
     }
-    let scene = (!pending.is_empty())
-        .then(|| scene(owner, prepared_year, manifest, rasters))
-        .transpose()?;
+    let scene = if pending.is_empty() {
+        None
+    } else {
+        scene(owner, prepared_year, manifest, rasters)?
+    };
+    // One paint of nothing serves every silent tile of the owner.
+    let silence = if scene.is_none() {
+        Some(silent_tiles()?)
+    } else {
+        None
+    };
     let mut produced = 0usize;
     for (x, y) in pending {
         let vertices = tile_corners(x, y).expect("owned z13 tile");
@@ -196,11 +223,15 @@ fn paint_owner(
                 canonical_owner == owner,
                 "foreign edge bundle was not imported"
             );
-            let values = scene.as_ref().unwrap().evaluate_corners(cuda, missing)?;
+            let values = evaluate_corners(scene.as_ref(), cuda, missing)?;
             produced += missing.len();
             Ok(values)
         })?;
-        let tiles = paint_tile(cuda, scene.as_ref().unwrap(), x, y, &corners)?;
+        let tiles = match (&scene, &silence) {
+            (Some(scene), _) => paint_tile(cuda, scene, x, y, &corners)?,
+            (None, Some(silence)) => silence.clone(),
+            (None, None) => unreachable!("a source-less owner prepared its silence"),
+        };
         let committed = directory.write(x, y, &tiles)?;
         directory.release(committed)?;
         eprintln!(

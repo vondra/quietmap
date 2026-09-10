@@ -12,6 +12,17 @@ pub struct EncodedHm3 {
     pub(crate) bytes: Vec<u8>,
 }
 
+/// The five tiles a paint of nothing writes: every pixel NO_DATA (255), because zero
+/// energy in every period is -inf dB and stays -inf behind any facade. An owner or
+/// tile no source reaches gets these bytes without the card.
+pub fn silent_tiles() -> Result<Vec<EncodedHm3>> {
+    let pixels = TILE_PIXEL_SIDE * TILE_PIXEL_SIDE;
+    SURFACE_SOURCE_IDS
+        .into_iter()
+        .map(|source_id| encode_period_power(&vec![0.0; pixels * 3], source_id, &vec![0.0; pixels]))
+        .collect()
+}
+
 pub fn encode_period_power(
     energy: &[f32],
     source_id: u8,
@@ -62,4 +73,35 @@ pub fn encode_period_power(
         source_id,
         bytes: compressed,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A silent tile carries the bytes the encoder writes for zero energy, with or
+    /// without enclosed pixels, and every one of its pixels is NO_DATA.
+    #[test]
+    fn a_silent_tile_is_the_paint_of_zero_energy_behind_any_facade() {
+        let pixels = TILE_PIXEL_SIDE * TILE_PIXEL_SIDE;
+        let tiles = silent_tiles().unwrap();
+        assert_eq!(
+            tiles.iter().map(|tile| tile.source_id).collect::<Vec<_>>(),
+            SURFACE_SOURCE_IDS
+        );
+        for tile in &tiles {
+            let enclosed =
+                encode_period_power(&vec![0.0; pixels * 3], tile.source_id, &vec![30.0; pixels])
+                    .unwrap();
+            assert_eq!(enclosed.bytes, tile.bytes);
+            let mut raw = Vec::new();
+            brotli::BrotliDecompress(&mut Cursor::new(&tile.bytes), &mut raw).unwrap();
+            assert_eq!(
+                &raw[..6],
+                [b"HM3 \x03".as_slice(), &[tile.source_id]].concat()
+            );
+            assert_eq!(raw.len(), pixels + 6);
+            assert!(raw[6..].iter().all(|byte| *byte == 255));
+        }
+    }
 }

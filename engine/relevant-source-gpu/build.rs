@@ -433,7 +433,7 @@ fn main() {
     .expect("write generated relevant-source physics constants");
     fs::write(output_directory.join("nvcc-defines.txt"), "")
         .expect("write the empty relevant-source nvcc define receipt");
-    let archs = cuda_archs::cuda_archs();
+    let archs = cuda_archs::cuda_archs(env::var("NOISE_GPU_ARCH").ok());
     println!(
         "cargo:rustc-env=RELEVANT_SOURCE_CUDA_ARCHS={}",
         archs.join(",")

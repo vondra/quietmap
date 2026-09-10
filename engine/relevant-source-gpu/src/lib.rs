@@ -1,4 +1,8 @@
 //! Bounded z9 surface GPU scenes, canonical corner production and z13 painting.
+/// The build-time arch list, compiled here only so its fleet default is tested without nvcc.
+#[cfg(test)]
+#[path = "../cuda_archs.rs"]
+mod cuda_archs;
 #[cfg(feature = "gpu")]
 pub mod cuda_bridge;
 pub mod input_manifest;

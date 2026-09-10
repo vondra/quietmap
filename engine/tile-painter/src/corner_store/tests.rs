@@ -16,11 +16,7 @@ fn value() -> CornerEnergy {
 }
 
 fn tiles() -> Vec<EncodedHm3> {
-    let pixels = grid::surface_corner::TILE_PIXEL_SIDE.pow(2);
-    hm3::SURFACE_SOURCE_IDS
-        .into_iter()
-        .map(|id| hm3::encode_period_power(&vec![0.0; pixels * 3], id, &vec![0.0; pixels]).unwrap())
-        .collect()
+    hm3::silent_tiles().unwrap()
 }
 
 #[test]

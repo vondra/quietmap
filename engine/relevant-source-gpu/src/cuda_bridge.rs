@@ -175,7 +175,8 @@ impl RelevantSourceCuda {
         if !COMPILED_CUDA_ARCHS.split(',').any(|arch| arch == card_arch) {
             bail!(
                 "relevant-source-cuda: this card is {card_arch}, but the SASS fatbin embeds \
-                 {COMPILED_CUDA_ARCHS}; build with NOISE_GPU_ARCH={card_arch}"
+                 {COMPILED_CUDA_ARCHS}; add it to FLEET_CUDA_ARCHS in cuda_archs.rs or build \
+                 with NOISE_GPU_ARCH={card_arch}"
             );
         }
         Ok(Self)
