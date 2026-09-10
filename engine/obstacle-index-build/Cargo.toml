@@ -1,0 +1,10 @@
+[package]
+name = "obstacle-index-build"
+version = "0.1.0"
+edition = "2021"
+
+# Separate crate: an executable cannot link source-reader's `node` feature.
+[dependencies]
+grid = { path = "../grid" }
+rayon = "1"
+source-reader = { path = "../source-reader" }

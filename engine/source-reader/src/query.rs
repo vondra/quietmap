@@ -58,17 +58,25 @@ pub struct PointQueryData {
 /// cruise owner within reach. Airborne is support-copied and consumed only
 /// from the receiver cell.
 pub fn squares_within_reach(lat: f64, lng: f64) -> Result<Vec<grid::Square>, String> {
-    let surface = noise_compute::constants::RAILWAY_REACH_CEILING
-        .max(noise_compute::constants::ROAD_MAX_RADIUS[0])
-        .max(noise_compute::constants::GROUND_OPS_RUNWAY_MAX_RADIUS)
-        .max(BUILDING_QUERY_RADIUS_M)
-        .max(INDUSTRIAL_QUERY_RADIUS_M);
     squares_within_radius(
         lat,
         lng,
-        (surface * LINE_MIDPOINT_REACH_FACTOR)
-            .max(noise_compute::emission::aircraft::CRUISE_QUERY_RADIUS_M),
+        surface_reach_m().max(noise_compute::emission::aircraft::CRUISE_QUERY_RADIUS_M),
     )
+}
+
+/// Owners that can hold a surface source or an obstacle screening the receiver.
+pub fn surface_squares_within_reach(lat: f64, lng: f64) -> Result<Vec<grid::Square>, String> {
+    squares_within_radius(lat, lng, surface_reach_m())
+}
+
+fn surface_reach_m() -> f64 {
+    noise_compute::constants::RAILWAY_REACH_CEILING
+        .max(noise_compute::constants::ROAD_MAX_RADIUS[0])
+        .max(noise_compute::constants::GROUND_OPS_RUNWAY_MAX_RADIUS)
+        .max(BUILDING_QUERY_RADIUS_M)
+        .max(INDUSTRIAL_QUERY_RADIUS_M)
+        * LINE_MIDPOINT_REACH_FACTOR
 }
 
 pub fn squares_within_radius(

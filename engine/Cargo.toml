@@ -10,6 +10,7 @@ members = [
     "tile-painter",
     "relevant-source-gpu",
     "noise-compute",
+    "obstacle-index-build",
     "osm-extract",
     "raster-reader",
     "source-reader",

@@ -48,7 +48,6 @@ use noise_compute::low_profile::LowProfileLookup;
 use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind, ObstacleSet};
 use noise_compute::propagation::obstacle_index_file::{fnv1a64, IndexBlob, BUILDER_CODE_VER};
 
-use crate::query::squares_within_reach;
 use square_store::grid_cols::{
     col_binary, col_f32, col_i32, col_u8, decode_geom, polygons_wkb, ring_lonlat,
 };
@@ -74,18 +73,12 @@ const SQUARE_CACHE_CAP: usize = 8;
 /// anyone naming the constants here.
 const CACHE_CODE_VER: u64 = fnv1a64(BUILDER_CODE_VER, include_bytes!("structure_store.rs"));
 
-/// Disk budget for the cached indexes. One dense metro square is a few hundred
-/// MB, so this holds tens of cities' worth — far more than a popup session
-/// visits — while keeping a nearly-full data volume out of danger. Past it the
-/// least-recently-USED file is dropped and its next cold start pays one rebuild.
-const CACHE_BUDGET_BYTES: u64 = 24 << 30;
-
-const CACHE_FILE_EXT: &str = "qoix";
-
 /// A `.tmp` older than this is an orphan from a killed process, not a write in
-/// flight — [`evict_to_budget`] reaps it. Generous by two orders: writing one
-/// index is a few hundred MB of sequential IO.
+/// flight — [`sweep_index_dir`] reaps it. Writing one index is seconds of IO.
 const TMP_ORPHAN_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// Persistent index file extension; the code version sits in the name before it.
+const CACHE_FILE_EXT: &str = "qoix";
 
 /// Mapped cache file. The mapping's address and contents are fixed for its
 /// life, which is what [`IndexBlob`] requires.
@@ -204,66 +197,35 @@ fn load_cached_index(path: &Path, data_ver: u64) -> Option<ObstacleIndex> {
     }
 }
 
-/// Drop least-recently-used cache files until `incoming` more bytes fit in
-/// [`CACHE_BUDGET_BYTES`]. Best effort throughout — a cache that cannot be
-/// pruned must not break a popup.
-///
-/// Safe to run while another process (or another checkout's server) has one of
-/// these files mapped: unlinking keeps the inode alive until the last mapping
-/// drops, and a rebuild lands on a NEW inode through the rename, so no live
-/// query ever sees its index change underneath it.
-///
-/// Also the only reaper of ORPHANED `.tmp` files. [`store_cached_index`] removes
-/// its own on a write error, but a process killed between `create` and `rename`
-/// cannot — and those bytes were invisible to this budget (the filter took
-/// `.qoix` alone), so a crash loop could fill the disk with files nothing would
-/// ever look at again. Anything older than [`TMP_ORPHAN_AGE`] is not a write in
-/// flight: one index is a few hundred MB, seconds of IO.
-fn evict_to_budget(root: &Path, incoming: u64) {
+/// Keep the index directory at one file per square for THIS code version:
+/// remove superseded-version files and `.tmp` orphans older than
+/// [`TMP_ORPHAN_AGE`]. One pass per generation build, never per query, so the
+/// directory can hold the complete world. Returns (superseded, orphans) removed.
+pub fn sweep_index_dir(root: &Path) -> (usize, usize) {
     let Ok(entries) = std::fs::read_dir(root) else {
-        return;
+        return (0, 0);
     };
     let now = std::time::SystemTime::now();
-    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
-        .flatten()
-        .filter_map(|e| {
-            let path = e.path();
-            let meta = e.metadata().ok()?;
-            let mtime = meta.modified().ok()?;
-            match path.extension()?.to_str()? {
-                CACHE_FILE_EXT => Some((mtime, meta.len(), path)),
-                "tmp" => {
-                    // Old enough to be a corpse: unlink now and leave it out of
-                    // the budget. A young one stays counted but untouched, so a
-                    // concurrent writer's bytes still push the eviction.
-                    if now.duration_since(mtime).is_ok_and(|d| d > TMP_ORPHAN_AGE) {
-                        let _ = std::fs::remove_file(&path);
-                        None
-                    } else {
-                        Some((mtime, meta.len(), path))
-                    }
-                }
-                _ => None,
+    let current = format!(".{CACHE_CODE_VER:016x}.{CACHE_FILE_EXT}");
+    let (mut superseded, mut orphans) = (0, 0);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name.ends_with(&format!(".{CACHE_FILE_EXT}")) && !name.ends_with(&current) {
+            superseded += usize::from(std::fs::remove_file(&path).is_ok());
+        } else if name.ends_with(".tmp") {
+            let old = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|mtime| now.duration_since(mtime).is_ok_and(|d| d > TMP_ORPHAN_AGE));
+            if old {
+                orphans += usize::from(std::fs::remove_file(&path).is_ok());
             }
-        })
-        .collect();
-    // Young `.tmp` bytes COUNT (they are about to become cache) but are never
-    // EVICTED: unlinking one would make its writer's rename land on a path this
-    // loop had already reclaimed.
-    let mut total: u64 = files.iter().map(|(_, len, _)| len).sum();
-    if total + incoming <= CACHE_BUDGET_BYTES {
-        return;
-    }
-    files.retain(|(_, _, p)| p.extension().is_some_and(|x| x == CACHE_FILE_EXT));
-    files.sort_by_key(|(mtime, _, _)| *mtime);
-    for (_, len, path) in files {
-        if total + incoming <= CACHE_BUDGET_BYTES {
-            break;
-        }
-        if std::fs::remove_file(&path).is_ok() {
-            total = total.saturating_sub(len);
         }
     }
+    (superseded, orphans)
 }
 
 /// Persist a freshly built index and reopen its immutable mapped form. A
@@ -277,12 +239,10 @@ fn store_cached_index(
     data_ver: u64,
 ) -> Option<ObstacleIndex> {
     let parts = index.file_parts(CACHE_CODE_VER, data_ver);
-    let total = parts.total_len() as u64;
     if let Err(e) = std::fs::create_dir_all(root) {
         eprintln!("structure_store: no index cache at {}: {e}", root.display());
         return None;
     }
-    evict_to_budget(root, total);
     let final_path = cache_file_path(root, square);
     // Same-directory tmp + rename: a reader either maps the whole previous
     // file or the whole new one, never a half-written index. Two NAPI worker
@@ -380,6 +340,21 @@ fn locate_square_structures(prepared_year_dir: &Path, square: Square) -> Option<
     Some(dir.join("structures.arrow"))
 }
 
+/// Build (or verify) one square's persistent index; `Ok(None)` outside the
+/// prepared world. Used by the generation builder so no popup pays a cold build.
+pub fn ensure_square_index(
+    prepared_year_dir: &Path,
+    data_dir: &Path,
+    square: Square,
+) -> Result<Option<usize>, String> {
+    let Some(structures_arrow) = locate_square_structures(prepared_year_dir, square) else {
+        return Ok(None);
+    };
+    square_index(square, &structures_arrow, data_dir)
+        .map(|idx| Some(idx.edge_count()))
+        .map_err(|e| format!("structure_store: {e}"))
+}
+
 /// Assemble the query's [`ObstacleSet`], or fail when vector coverage cannot
 /// be proved complete.
 pub fn load_obstacle_set(
@@ -388,18 +363,21 @@ pub fn load_obstacle_set(
     lat: f64,
     lon: f64,
 ) -> Result<ObstacleSet, String> {
-    let mut indexes = Vec::new();
-    for square in squares_within_reach(lat, lon)? {
-        let Some(structures_arrow) = locate_square_structures(prepared_year_dir, square) else {
+    use rayon::prelude::*;
+    // Obstacles screen surface propagation, so the surface reach selects them;
+    // the wider cruise owner radius has no obstacles to offer. Independent
+    // squares build or map their indexes concurrently.
+    let indexes = crate::query::surface_squares_within_reach(lat, lon)?
+        .into_par_iter()
+        .filter_map(|square| {
             // Outside the prepared world: no square directory at all, so it holds
             // no structures for the same reason it holds no roads.
-            continue;
-        };
-        match square_index(square, &structures_arrow, data_dir) {
-            Ok(idx) => indexes.push(idx),
-            Err(e) => return Err(format!("structure_store: {e}")),
-        }
-    }
+            locate_square_structures(prepared_year_dir, square).map(|path| (square, path))
+        })
+        .map(|(square, structures_arrow)| {
+            square_index(square, &structures_arrow, data_dir).map_err(|e| format!("structure_store: {e}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     // Zero edges is a legitimate answer: a 0-row table is the finished sweep
     // saying there is nothing here. A file that exists HAS been asked and HAS
     // answered; treating its emptiness as a fault would take whole countries
