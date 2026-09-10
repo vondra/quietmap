@@ -132,7 +132,7 @@ def audit_world(prepared):
         if not (square / 'structures.arrow').is_file():
             raise ValueError(f'unfinished structures: {square}')
         # Pairing with structures.arrow is proven by build-world's zero-write rerun of
-        # obstacle-index (a table rewritten after the step makes the rerun write).
+        # structures-finalize (a table rewritten after the step makes the rerun write).
         if not (square / 'structures.qoix').is_file():
             raise ValueError(f'unfinished obstacle index: {square}')
         for path in sorted(square.glob('*.arrow')):
@@ -145,10 +145,16 @@ def audit_world(prepared):
                     key, value = expected_contract(path)
                     if metadata.get(key) != value:
                         raise ValueError(f'unbaked geography: {path}')
+                rows = 0
                 for index in range(reader.num_record_batches):
                     batch = reader.get_batch(index)
                     batch.validate(full=True)
-                    counts[path.stem] = counts.get(path.stem, 0) + batch.num_rows
+                    rows += batch.num_rows
+                # The merge's plain chunks carry no z14 envelope; the popup would read
+                # the whole table. A 0-row table has nothing to prune and no key.
+                if path.stem == 'structures' and rows and b'qm_blocks' not in metadata:
+                    raise ValueError(f'unfinished structures blocks: {path}')
+                counts[path.stem] = counts.get(path.stem, 0) + rows
         squares += 1
     if squares != qmgrid.Z9_AXIS ** 2:
         raise ValueError(f'incomplete world: {squares} structure squares')

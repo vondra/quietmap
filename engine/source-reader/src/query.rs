@@ -945,8 +945,8 @@ pub fn query_railways_from_batches(
 }
 
 /// Building emission rows of the merged structure table: kind=0 rows with a
-/// valid `osm_id`, in file order — the old buildings.arrow subsequence with
-/// the same values. The emission position is `emission_centroid_*` where the
+/// valid `osm_id`, in the table's z14-blocked order, with the values the old
+/// buildings.arrow carried. The emission position is `emission_centroid_*` where the
 /// merge kept the OSM centroid (matched rows screen at the Overture one), else
 /// `centroid_*`; emission_geom always contains the original OSM ring or null.
 pub fn query_buildings_from_batches(

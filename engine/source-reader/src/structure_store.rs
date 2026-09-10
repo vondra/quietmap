@@ -290,8 +290,8 @@ fn square_center_latlon(square: Square) -> (f64, f64) {
     (lat, lon)
 }
 
-/// Build one square's index from its `structures.arrow` bytes — the pipeline
-/// step's builder (`square_obstacle_index::write_square_obstacle_index`).
+/// Build one square's index from its final `structures.arrow` bytes — the
+/// pipeline step's builder (`square_obstacle_index::write_square_obstacle_index`).
 ///
 /// Ids are dense in `screening_ordinal` order, one per geometry-carrying row,
 /// buildings and walls sharing the one counter.
@@ -820,18 +820,20 @@ mod tests {
         assert!(set.indexes.is_empty());
     }
 
-    /// The contract gate sits in the pipeline step: an unstamped table gets no
-    /// index, so no popup can ever map one built from it.
+    /// The contract gate sits in the pipeline step: an unstamped table is
+    /// neither blocked nor indexed, so no popup can ever map one built from it.
     #[test]
     fn unstamped_table_gets_no_index() {
         let tmp = TempDir::new().unwrap();
         let dir = fx::square_dir(tmp.path(), prague());
         std::fs::create_dir_all(&dir).unwrap();
         fx::write_structure_file(&dir.join("structures.arrow"), &[house_row()], false);
+        let unstamped = std::fs::read(dir.join("structures.arrow")).unwrap();
         let err =
-            crate::square_obstacle_index::write_square_obstacle_index(&dir, prague()).unwrap_err();
+            crate::structures_finalize::finalize_square_structures(&dir, prague()).unwrap_err();
         assert!(err.contains("structures_contract mismatch"), "got: {err}");
         assert!(!dir.join("structures.qoix").exists());
+        assert_eq!(std::fs::read(dir.join("structures.arrow")).unwrap(), unstamped);
     }
 
     #[test]

@@ -101,16 +101,18 @@ class WorldBuildTest(unittest.TestCase):
         self.assertEqual(started, {'rail', 'industry'})
         self.assertEqual(completed, {'rail'})
 
-    def test_structures_rewritten_after_the_obstacle_index_step_fail_the_build(self):
+    def test_structures_rewritten_after_the_finalize_step_fail_the_build(self):
         with tempfile.TemporaryDirectory() as directory:
-            engine = Path(directory) / 'obstacle-index-build'
-            engine.write_text('#!/bin/sh\necho "obstacle-index: 1/1 squares" >&2\n'
-                              'echo "{\\"squares\\":1,\\"indexed\\":1,\\"written\\":$WRITTEN,\\"edges\\":4}"\n')
+            engine = Path(directory) / 'structures-finalize'
+            engine.write_text('#!/bin/sh\necho "structures-finalize: 1/1 squares" >&2\n'
+                              'echo "{\\"squares\\":1,\\"indexed\\":1,\\"blocked\\":$BLOCKED,\\"written\\":$WRITTEN,\\"edges\\":4}"\n')
             engine.chmod(0o755)
-            steps = [world.Step('obstacle-index', ('structures',), (str(engine), '/prepared/2026'))]
-            world.require_obstacle_index_current(steps, {'WRITTEN': '0'})
-            with self.assertRaisesRegex(ValueError, '1 structures.qoix rewritten by the obstacle-index rerun'):
-                world.require_obstacle_index_current(steps, {'WRITTEN': '1'})
+            steps = [world.Step('structures-finalize', ('structures',), (str(engine), '/prepared/2026'))]
+            world.require_structures_final(steps, {'BLOCKED': '0', 'WRITTEN': '0'})
+            with self.assertRaisesRegex(ValueError, '0 structures.arrow re-batched and 1 structures.qoix rewritten by the structures-finalize rerun'):
+                world.require_structures_final(steps, {'BLOCKED': '0', 'WRITTEN': '1'})
+            with self.assertRaisesRegex(ValueError, '1 structures.arrow re-batched and 1 structures.qoix rewritten'):
+                world.require_structures_final(steps, {'BLOCKED': '1', 'WRITTEN': '1'})
 
     def test_whole_plan_waits_for_building_attributes_and_structures_and_bounds_parallel_memory(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -127,8 +129,8 @@ class WorldBuildTest(unittest.TestCase):
             peak = 0
             indexed = {step.name: step for step in plan}
             self.assertEqual(indexed['structures'].dependencies, ('buildings',))
-            self.assertEqual(indexed['obstacle-index'].dependencies, ('structures',))
-            self.assertTrue(indexed['obstacle-index'].argv[0].endswith('engine/target/release/obstacle-index-build'))
+            self.assertEqual(indexed['structures-finalize'].dependencies, ('structures',))
+            self.assertTrue(indexed['structures-finalize'].argv[0].endswith('engine/target/release/structures-finalize'))
             self.assertEqual(set(indexed['roads'].dependencies), {'square-country-city', 'structures'})
             self.assertEqual(indexed['industrial'].dependencies, ('square-country-city',))
             self.assertEqual(indexed['railways'].dependencies, ('square-country-city',))

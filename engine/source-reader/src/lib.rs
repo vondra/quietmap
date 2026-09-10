@@ -14,6 +14,7 @@ pub mod aircraft_v6;
 pub mod query;
 pub mod square_obstacle_index;
 pub mod structure_store;
+pub mod structures_finalize;
 #[cfg(test)]
 mod structure_test_fixture;
 pub mod surface_corner_preview;

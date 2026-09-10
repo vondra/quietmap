@@ -239,7 +239,7 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
         // A rewritten structures table no longer pairs with the pipeline's
         // index, so the popup is refused before it decodes one batch.
         let (native_file, native_error) = if name == "structures" {
-            (dir.join("structures.qoix"), "obstacle-index-build")
+            (dir.join("structures.qoix"), "structures-finalize")
         } else {
             (path.clone(), "batch 1")
         };

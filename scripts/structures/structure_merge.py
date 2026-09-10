@@ -262,8 +262,10 @@ def build_square(name, prepared_dir, overture_rows, overture_inputs, ghsl, regio
     os.makedirs(square_dir, exist_ok=True)
     tmp = f"{out_path}.tmp.{os.getpid()}"
     with ipc.new_file(tmp, schema) as w:
-        # Sequential 4096-row chunks, no spatial re-sort: the emission stream is
-        # the buildings.arrow subsequence and must not be reordered.
+        # Sequential 4096-row chunks in emission order, the shape validate_square
+        # proved above. The pipeline step structures-finalize (Rust) re-batches
+        # the file into z14 blocks with the qm_blocks envelope every layer
+        # carries; file order is not a contract of the finished file.
         for batch in table.to_batches(max_chunksize=4096):
             w.write_batch(batch)
     fd = os.open(tmp, os.O_RDONLY)

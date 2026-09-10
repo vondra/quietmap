@@ -1,8 +1,10 @@
-//! Pipeline step `obstacle-index`: write `structures.qoix` beside every
-//! `structures.arrow` of a prepared year directory, in parallel over squares.
+//! Pipeline step `structures-finalize`: z14-block every merged
+//! `structures.arrow` of a prepared year directory and write `structures.qoix`
+//! beside it, in parallel over squares. Prints one JSON line; a rerun that
+//! reports any `blocked` or `written` means a table changed after the step.
 
 use rayon::prelude::*;
-use source_reader::square_obstacle_index::write_square_obstacle_index;
+use source_reader::structures_finalize::finalize_square_structures;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -27,12 +29,13 @@ fn main() -> Result<(), String> {
     let prepared_year_dir = PathBuf::from(
         std::env::args()
             .nth(1)
-            .ok_or("usage: obstacle-index-build <prepared_year_dir>")?,
+            .ok_or("usage: structures-finalize <prepared_year_dir>")?,
     )
     .canonicalize()
     .map_err(|e| e.to_string())?;
     let squares = squares(&prepared_year_dir).map_err(|e| e.to_string())?;
-    let (indexed, written, edges, done) = (
+    let (indexed, blocked, written, edges, done) = (
+        AtomicUsize::new(0),
         AtomicUsize::new(0),
         AtomicUsize::new(0),
         AtomicUsize::new(0),
@@ -42,21 +45,23 @@ fn main() -> Result<(), String> {
         .par_iter()
         .try_for_each(|square| -> Result<(), String> {
             let dir = prepared_year_dir.join(grid::square_name(*square));
-            if let Some(receipt) = write_square_obstacle_index(&dir, *square)? {
+            if let Some(receipt) = finalize_square_structures(&dir, *square)? {
                 indexed.fetch_add(1, Ordering::Relaxed);
-                written.fetch_add(usize::from(receipt.written), Ordering::Relaxed);
-                edges.fetch_add(receipt.edge_count, Ordering::Relaxed);
+                blocked.fetch_add(usize::from(receipt.blocked), Ordering::Relaxed);
+                written.fetch_add(usize::from(receipt.index.written), Ordering::Relaxed);
+                edges.fetch_add(receipt.index.edge_count, Ordering::Relaxed);
             }
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n % 10_000 == 0 {
-                eprintln!("obstacle-index: {n}/{} squares", squares.len());
+                eprintln!("structures-finalize: {n}/{} squares", squares.len());
             }
             Ok(())
         })?;
     println!(
-        "{{\"squares\":{},\"indexed\":{},\"written\":{},\"edges\":{}}}",
+        "{{\"squares\":{},\"indexed\":{},\"blocked\":{},\"written\":{},\"edges\":{}}}",
         squares.len(),
         indexed.load(Ordering::Relaxed),
+        blocked.load(Ordering::Relaxed),
         written.load(Ordering::Relaxed),
         edges.load(Ordering::Relaxed)
     );

@@ -1,13 +1,13 @@
 //! `structures.qoix`: one square's prebuilt obstacle index, written by the
 //! pipeline beside `structures.arrow` and mapped by the popup and the painter.
 //!
-//! The pipeline step (`obstacle-index-build`, right after `structures`) calls
-//! [`write_square_obstacle_index`] per square; readers call
-//! [`load_square_obstacle_index`]. A square without `structures.arrow` has no
-//! index and no obstacles. A `structures.arrow` without a valid, current
-//! `structures.qoix` is an error naming the step to rerun — building at click
-//! time cost 0.4–18 s per first click and hid a broken pipeline behind a slow
-//! popup.
+//! The pipeline step (`structures-finalize`, right after `structures`; see
+//! `structures_finalize`) calls [`write_square_obstacle_index`] per square with
+//! the final table bytes; readers call [`load_square_obstacle_index`]. A square
+//! without `structures.arrow` has no index and no obstacles. A
+//! `structures.arrow` without a valid, current `structures.qoix` is an error
+//! naming the step to rerun — building at click time cost 0.4–18 s per first
+//! click and hid a broken pipeline behind a slow popup.
 //!
 //! Provenance lives in the file header (`obstacle_index_file`): `code_ver` must
 //! equal [`CACHE_CODE_VER`] (the index code moved ⇒ rebuild); `data_ver` and
@@ -19,7 +19,7 @@
 //! changed after the step is `build-world.py`'s zero-write rerun of the step.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -56,7 +56,7 @@ pub const STRUCTURES_QOIX: &str = "structures.qoix";
 
 /// The operator instruction every "no usable index" error carries.
 const REBUILD_HINT: &str =
-    "rerun the pipeline step obstacle-index (engine/target/release/obstacle-index-build <prepared_year_dir>)";
+    "rerun the pipeline step structures-finalize (engine/target/release/structures-finalize <prepared_year_dir>)";
 
 /// Process memo capacity. A dense metro square's index runs to low hundreds of
 /// MB; popups cluster spatially, so a small LRU keeps the active area's
@@ -213,25 +213,21 @@ pub struct ObstacleIndexReceipt {
     pub written: bool,
 }
 
-/// Write `structures.qoix` from the square's `structures.arrow`, atomically
-/// (same-directory tmp + rename + directory fsync) and idempotently: an
-/// existing file whose header names this engine and these Arrow bytes is kept
-/// after reading only its header. `Ok(None)` when the square has no
-/// `structures.arrow`. The written file is reopened through
-/// [`load_square_obstacle_index`], so a receipt proves the file is usable.
+/// Write `structures.qoix` from the square's final `structures.arrow` bytes,
+/// atomically (same-directory tmp + rename + directory fsync) and
+/// idempotently: an existing file whose header names this engine and these
+/// Arrow bytes is kept after reading only its header. The written file is
+/// reopened through [`load_square_obstacle_index`], so a receipt proves the
+/// file is usable.
 pub fn write_square_obstacle_index(
     square_dir: &Path,
     square: Square,
-) -> Result<Option<ObstacleIndexReceipt>, String> {
+    bytes: &[u8],
+) -> Result<ObstacleIndexReceipt, String> {
     let arrow_path = square_dir.join(STRUCTURES_ARROW);
-    if !arrow_path.is_file() {
-        return Ok(None);
-    }
-    let bytes =
-        std::fs::read(&arrow_path).map_err(|e| format!("read {}: {e}", arrow_path.display()))?;
     let provenance = IndexFileProvenance {
         code_ver: CACHE_CODE_VER,
-        data_ver: structures_fingerprint(&bytes),
+        data_ver: structures_fingerprint(bytes),
         data_len: bytes.len() as u64,
     };
     let path = square_dir.join(STRUCTURES_QOIX);
@@ -244,57 +240,28 @@ pub fn write_square_obstacle_index(
     if written {
         let index = crate::structure_store::build_obstacle_index_from_arrow_bytes(
             square,
-            &bytes,
+            bytes,
             &arrow_path,
         )?;
         let parts = index.file_parts(provenance);
-        remove_crash_leftovers(square_dir)?;
-        let tmp = square_dir.join(format!("{STRUCTURES_QOIX}.tmp.{}", std::process::id()));
-        let write = || -> std::io::Result<()> {
-            let mut f = std::fs::File::create(&tmp)?;
-            f.write_all(&parts.header)?;
-            for section in &parts.sections {
-                f.write_all(section)?;
-            }
-            f.sync_all()?;
-            drop(f);
-            std::fs::rename(&tmp, &path)?;
-            std::fs::File::open(square_dir)?.sync_all()
-        };
-        if let Err(e) = write() {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(format!("write {}: {e}", path.display()));
-        }
+        let sections: Vec<&[u8]> = std::iter::once(parts.header.as_slice())
+            .chain(parts.sections.iter().copied())
+            .collect();
+        crate::structures_finalize::write_file_atomically(square_dir, STRUCTURES_QOIX, &sections)?;
     }
     let index = load_square_obstacle_index(square_dir, Some(provenance.data_ver))?
         .ok_or_else(|| format!("{} vanished during the build", arrow_path.display()))?;
-    Ok(Some(ObstacleIndexReceipt {
+    Ok(ObstacleIndexReceipt {
         edge_count: index.edge_count(),
         written,
-    }))
-}
-
-/// The step is the only writer of `structures.qoix`, so any
-/// `structures.qoix.tmp.*` in the square is a crash leftover of an earlier run
-/// (another pid) — up to a metro square's 1.1 GB, never reclaimed otherwise.
-fn remove_crash_leftovers(square_dir: &Path) -> Result<(), String> {
-    let tmp_prefix = format!("{STRUCTURES_QOIX}.tmp.");
-    for entry in
-        std::fs::read_dir(square_dir).map_err(|e| format!("{}: {e}", square_dir.display()))?
-    {
-        let entry = entry.map_err(|e| format!("{}: {e}", square_dir.display()))?;
-        if entry.file_name().to_string_lossy().starts_with(&tmp_prefix) {
-            std::fs::remove_file(entry.path())
-                .map_err(|e| format!("remove {}: {e}", entry.path().display()))?;
-        }
-    }
-    Ok(())
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::structure_test_fixture as fx;
+    use crate::structures_finalize::finalize_square_structures;
     use square_store::store::STRUCTURE_KIND_BUILDING;
     use tempfile::TempDir;
 
@@ -315,29 +282,21 @@ mod tests {
         }
     }
 
-    /// The step writes beside the Arrow, reruns as a no-op, rewrites when the
-    /// table changes, sweeps a crashed run's tmp file, and the reopened file
-    /// answers with the builder's bytes.
+    /// The index pairs with the table: a changed table — even at the same
+    /// byte length — makes the step rewrite, and the reopened file answers
+    /// with the builder's bytes. (The rerun no-op and the crash-leftover sweep
+    /// are `structures_finalize`'s test.)
     #[test]
-    fn pipeline_step_writes_beside_the_arrow_once_per_table() {
+    fn pipeline_step_rewrites_the_index_when_the_table_changes() {
         let tmp = TempDir::new().unwrap();
         let square = grid::square_of(LAT, LON);
         let dir = fx::square_dir(tmp.path(), square);
         std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(write_square_obstacle_index(&dir, square).unwrap(), None);
         let arrow = dir.join(STRUCTURES_ARROW);
         fx::write_structure_file(&arrow, &[house(12)], true);
-        std::fs::write(dir.join(format!("{STRUCTURES_QOIX}.tmp.1")), b"crashed run").unwrap();
-        let first = write_square_obstacle_index(&dir, square).unwrap().unwrap();
+        let first = finalize_square_structures(&dir, square).unwrap().unwrap().index;
         assert!(first.written && first.edge_count == 4, "{first:?}");
         assert!(dir.join(STRUCTURES_QOIX).is_file());
-        assert_eq!(
-            std::fs::read_dir(&dir).unwrap().count(),
-            2,
-            "no tmp file left beside the pair"
-        );
-        let again = write_square_obstacle_index(&dir, square).unwrap().unwrap();
-        assert!(!again.written && again.edge_count == 4, "{again:?}");
 
         let built = crate::structure_store::build_obstacle_index_from_arrow_bytes(
             square,
@@ -350,14 +309,14 @@ mod tests {
         assert_eq!(mapped.gpu_view().edge_ids, built.gpu_view().edge_ids);
 
         fx::write_structure_file(&arrow, &[house(12), house(20)], true);
-        let rebuilt = write_square_obstacle_index(&dir, square).unwrap().unwrap();
+        let rebuilt = finalize_square_structures(&dir, square).unwrap().unwrap().index;
         assert!(rebuilt.written && rebuilt.edge_count == 8, "{rebuilt:?}");
         // A same-length rewrite (one height changed) still rotates the
         // fingerprint: the step rewrites, so the zero-write gate catches it.
         let length = std::fs::metadata(&arrow).unwrap().len();
         fx::write_structure_file(&arrow, &[house(12), house(21)], true);
+        let same_length = finalize_square_structures(&dir, square).unwrap().unwrap().index;
         assert_eq!(std::fs::metadata(&arrow).unwrap().len(), length);
-        let same_length = write_square_obstacle_index(&dir, square).unwrap().unwrap();
         assert!(same_length.written, "{same_length:?}");
     }
 
@@ -378,14 +337,14 @@ mod tests {
                 Ok(_) => panic!("must refuse ({want})"),
                 Err(err) => {
                     assert!(
-                        err.contains(want) && err.contains("obstacle-index-build"),
+                        err.contains(want) && err.contains("structures-finalize"),
                         "{err}"
                     )
                 }
             };
         refuses(None, "beside structures.arrow");
 
-        write_square_obstacle_index(&dir, square).unwrap();
+        finalize_square_structures(&dir, square).unwrap();
         let fingerprint = structures_fingerprint(&std::fs::read(&arrow).unwrap());
         assert!(load_square_obstacle_index(&dir, Some(fingerprint)).is_ok());
         refuses(Some(fingerprint ^ 1), "other structures.arrow bytes");
@@ -393,7 +352,7 @@ mod tests {
         assert!(load_square_obstacle_index(&dir, None).is_ok());
         fx::write_structure_file(&arrow, &[house(12), house(20)], true);
         refuses(None, "bytes ≠");
-        write_square_obstacle_index(&dir, square).unwrap();
+        finalize_square_structures(&dir, square).unwrap();
         assert!(load_square_obstacle_index(&dir, None).is_ok());
 
         // Another engine version: rewrite the header word only, in a copy the

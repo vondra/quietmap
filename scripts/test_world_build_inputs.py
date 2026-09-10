@@ -92,6 +92,12 @@ class WorldBuildInputsTest(unittest.TestCase):
             table = pa.table({'value': [37]}).replace_schema_metadata({CONTRACT_KEY: CONTRACT_VERSION})
             with pa.ipc.new_file(path, table.schema) as writer:
                 writer.write_table(table)
+            # The merge's plain chunks are not final: only structures-finalize stamps qm_blocks.
+            with self.assertRaisesRegex(ValueError, 'unfinished structures blocks'):
+                inputs.audit_world(root)
+            table = table.replace_schema_metadata({CONTRACT_KEY: CONTRACT_VERSION, 'qm_blocks': 'AQ=='})
+            with pa.ipc.new_file(path, table.schema) as writer:
+                writer.write_table(table)
             self.assertEqual(len(inputs.audit_world(root)), 7)
             structure = root / 'z9/1/1/structures.arrow'
             structure.unlink()

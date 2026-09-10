@@ -31,7 +31,7 @@ fn empty_files_do_not_bypass_any_screening_height_reader() {
             .finish()
             .unwrap();
         assert!(square_store::store::load_square(&dir).is_err());
-        assert!(crate::square_obstacle_index::write_square_obstacle_index(
+        assert!(crate::structures_finalize::finalize_square_structures(
             &dir,
             grid::Square { x: 276, y: 174 }
         )
@@ -81,7 +81,7 @@ fn python_structure_producer_preserves_screening_and_emission_contracts() {
     let mut heights: Vec<_> = footprints.iter().map(|row| row.height_m).collect();
     heights.sort_by(f32::total_cmp);
     assert_eq!(heights, [5.0, 13.0]);
-    crate::square_obstacle_index::write_square_obstacle_index(
+    crate::structures_finalize::finalize_square_structures(
         &output.path().join("z9/276/174"),
         grid::Square { x: 276, y: 174 },
     )

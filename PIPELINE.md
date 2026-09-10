@@ -75,12 +75,16 @@ If structures were built into a separate tree, validate their schema and grid be
 joining them into the prepared year. Reconcile every pending square after the builder
 finishes. Preserve existing files and producer completion receipts.
 
-Right after structures, `engine/target/release/obstacle-index-build YEAR` writes
-`structures.qoix` beside every `structures.arrow` (the screening edge grid, mapped by
-the popup and the painter). The step is parallel over squares and idempotent: a file
-whose header names the current engine and the current Arrow bytes is kept. A
-`structures.arrow` without a current `structures.qoix` is a query error naming this
-step; rerun it after any structures refresh.
+Right after structures, `engine/target/release/structures-finalize YEAR` finalizes
+every square: it re-batches the merge's plain 4 096-row chunks into z14 blocks with the
+`qm_blocks` envelope every other layer carries (the popup then decodes only the batches
+within reach; row order is not a contract, the index follows `screening_ordinal`), and
+writes `structures.qoix` from the final bytes (the screening edge grid, mapped by the
+popup and the painter). The step is parallel over squares and idempotent: a table that
+already carries `qm_blocks` (or has no rows) is left alone, and an index whose header
+names the current engine and the current Arrow bytes is kept. A `structures.arrow`
+without a current `structures.qoix` is a query error naming this step; rerun it after
+any structures refresh.
 
 Run `scripts/square-country-city/build_square_country_city.py --prepared-dir YEAR
 --boundaries CGAZ --jobs N` after extraction. It writes `square-country-city.bin`
@@ -124,7 +128,7 @@ National buildings writes only existing `buildings.arrow` rows.
 After national building refinement, refresh affected `structures.arrow` files with
 the original GHSL/regional inputs. Both emission attributes and screening heights
 are embedded in structures; enrichment alone cannot update them. Rerun
-`obstacle-index-build` after this step.
+`structures-finalize` after this step.
 
 National road coverage is limited to actual manifest adapters. Compare used
 `source_id` distributions with the reference generation before claiming equal quality. Missing adapters
@@ -163,10 +167,11 @@ Validate all seven noise layers: road, rail, building, industrial, aircraft airb
 aircraft cruise and aircraft ground. Validate absence through producer coverage and
 receipts, not by requiring an Arrow file for an empty layer in every ocean square.
 
-After the final Arrow/structures generation, rerun `obstacle-index-build`.
+After the final Arrow/structures generation, rerun `structures-finalize`.
 `build-world.py` reruns the step itself before the audit and fails when the rerun
-writes anything (a `structures.arrow` changed after the step); the audit refuses a
-square whose `structures.qoix` is missing.
+writes anything — a re-batch or an index (a `structures.arrow` changed after the
+step); the audit refuses a square whose `structures.qoix` is missing or whose
+non-empty `structures.arrow` carries no `qm_blocks`.
 
 Compare actual popup levels, source provenance, counts and screening against the reference generation
 on city, airport, quiet, coast, border and polar cases. Include adjacent clicks in

@@ -177,14 +177,14 @@ fn structure_columns(rows: &[StructureRow]) -> Vec<ArrayRef> {
     ]
 }
 
-/// One batch in the current layout — the readers' own batching is orthogonal to
-/// what the tests assert, so a single batch is the honest shape.
+/// One batch, as the merge's plain chunks before the finalize step blocks them.
 pub fn structure_batch(rows: &[StructureRow]) -> RecordBatch {
     RecordBatch::try_new(Arc::new(structure_schema(true)), structure_columns(rows)).unwrap()
 }
 
-/// A structures.arrow on disk; `with_contract: false` writes the same rows
-/// without the contract stamps (the `load_square` gate test's case).
+/// A merged (not yet finalized) structures.arrow on disk; `with_contract:
+/// false` writes the same rows without the contract stamps (the `load_square`
+/// gate test's case).
 pub fn write_structure_file(path: &Path, rows: &[StructureRow], with_contract: bool) {
     let schema = Arc::new(structure_schema(with_contract));
     let batch = RecordBatch::try_new(schema.clone(), structure_columns(rows)).unwrap();
@@ -500,8 +500,8 @@ pub fn square_dir(year_dir: &Path, square: grid::Square) -> PathBuf {
         .join(square.y.to_string())
 }
 
-/// A square's `structures.arrow` under the prepared-tree layout, with the
-/// `structures.qoix` the pipeline step writes beside it.
+/// A square's `structures.arrow` under the prepared-tree layout, finalized
+/// like the real files: z14-blocked, with `structures.qoix` beside it.
 pub fn write_square_structures(
     year_dir: &Path,
     square: grid::Square,
@@ -511,6 +511,6 @@ pub fn write_square_structures(
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("structures.arrow");
     write_structure_file(&path, rows, true);
-    crate::square_obstacle_index::write_square_obstacle_index(&dir, square).unwrap();
+    crate::structures_finalize::finalize_square_structures(&dir, square).unwrap();
     path
 }

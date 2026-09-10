@@ -1,5 +1,5 @@
 [package]
-name = "obstacle-index-build"
+name = "structures-finalize"
 version = "0.1.0"
 edition = "2021"
 
