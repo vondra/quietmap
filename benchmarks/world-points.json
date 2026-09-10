@@ -1,0 +1,939 @@
+[
+  {
+    "id": "road_cz_d1_8025",
+    "lat": 50.00839,
+    "lng": 14.55066,
+    "mode": "source:road",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "mot_free",
+      "near",
+      "count_measured",
+      "speed_posted",
+      "suburban",
+      "hard_ground_urban"
+    ]
+  },
+  {
+    "id": "road_cz_d4_axis",
+    "lat": 49.8189,
+    "lng": 14.2229,
+    "mode": "source:road",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "mot_free",
+      "near",
+      "count_measured",
+      "rural_open"
+    ]
+  },
+  {
+    "id": "road_cz_d4_115m",
+    "lat": 49.819,
+    "lng": 14.2245,
+    "mode": "source:road",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "mot_free",
+      "mid",
+      "count_measured",
+      "rural_open",
+      "soft_ground_field"
+    ]
+  },
+  {
+    "id": "road_cz_praha_legerova",
+    "lat": 50.0735,
+    "lng": 14.4304,
+    "mode": "source:road",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "primary_urban",
+      "near",
+      "count_osm_default",
+      "oneway_halving",
+      "street_canyon",
+      "hard_ground_urban",
+      "dense_urban"
+    ]
+  },
+  {
+    "id": "road_gb_m25_j17_onroad",
+    "lat": 51.64423,
+    "lng": -0.50124,
+    "mode": "source:road",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "mot_free",
+      "near",
+      "count_measured",
+      "suburban"
+    ]
+  },
+  {
+    "id": "road_gb_m25_j17_120m",
+    "lat": 51.6443,
+    "lng": -0.4995,
+    "mode": "source:road",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "mot_free",
+      "mid",
+      "count_measured",
+      "road_cutting",
+      "noise_wall",
+      "dem_limited_feature",
+      "suburban"
+    ]
+  },
+  {
+    "id": "road_de_halensee_onroad",
+    "lat": 52.49726,
+    "lng": 13.283,
+    "mode": "source:road",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "mot_free",
+      "near",
+      "count_measured",
+      "dense_urban",
+      "hard_ground_urban",
+      "commuter_peaks"
+    ]
+  },
+  {
+    "id": "road_de_halensee_150m",
+    "lat": 52.4972,
+    "lng": 13.2855,
+    "mode": "source:road",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "mot_free",
+      "mid",
+      "count_measured",
+      "dense_urban",
+      "building_row_shield"
+    ]
+  },
+  {
+    "id": "road_fr_paris_periph_sw",
+    "lat": 48.837,
+    "lng": 2.268,
+    "mode": "source:road",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "mot_congested",
+      "near",
+      "count_transferred",
+      "dense_urban",
+      "hard_ground_urban"
+    ]
+  },
+  {
+    "id": "road_nl_amsterdam_overtoom",
+    "lat": 52.3606,
+    "lng": 4.8669,
+    "mode": "source:road",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "primary_urban",
+      "near",
+      "count_transferred",
+      "dense_urban",
+      "street_canyon"
+    ]
+  },
+  {
+    "id": "road_cz_hlucinsko_ii466",
+    "lat": 49.98953,
+    "lng": 18.1288,
+    "mode": "source:road",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "secondary",
+      "near",
+      "count_measured",
+      "village"
+    ]
+  },
+  {
+    "id": "road_us_seattle_i5_olive",
+    "lat": 47.61625,
+    "lng": -122.32888,
+    "mode": "source:road",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "mot_free",
+      "near",
+      "count_osm_default",
+      "dense_urban",
+      "osm_sparse"
+    ]
+  },
+  {
+    "id": "rail_usti_zalezly",
+    "lat": 50.581,
+    "lng": 14.0418,
+    "mode": "source:railway",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "ic_corridor",
+      "freight_night",
+      "mid",
+      "gtfs_derived",
+      "village",
+      "inversion_prone_valley"
+    ]
+  },
+  {
+    "id": "rail_zabori",
+    "lat": 50.0284,
+    "lng": 15.3466,
+    "mode": "source:railway",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "ic_corridor",
+      "freight_night",
+      "mid",
+      "gtfs_derived",
+      "stock_mix_assumed",
+      "village"
+    ]
+  },
+  {
+    "id": "rail_revnice",
+    "lat": 49.9134,
+    "lng": 14.2403,
+    "mode": "source:railway",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "ic_corridor",
+      "regional_hourly",
+      "freight_night",
+      "mid",
+      "gtfs_derived",
+      "building_row_shield",
+      "forest_belt",
+      "suburban"
+    ]
+  },
+  {
+    "id": "ind_ostrava_kuncicky",
+    "lat": 49.824,
+    "lng": 18.301,
+    "mode": "source:industrial",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "plant_247",
+      "near",
+      "site_area_scaling",
+      "nace_match_confidence",
+      "heavy_vs_light_split",
+      "suburban"
+    ]
+  },
+  {
+    "id": "ind_tata_ijmuiden_velsen",
+    "lat": 52.474,
+    "lng": 4.633,
+    "mode": "source:industrial",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "plant_247",
+      "near",
+      "site_area_scaling",
+      "heavy_vs_light_split",
+      "suburban",
+      "coastal_windy"
+    ]
+  },
+  {
+    "id": "ind_thyssenkrupp_duisburg",
+    "lat": 51.48,
+    "lng": 6.71,
+    "mode": "source:industrial",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "plant_247",
+      "near",
+      "site_area_scaling",
+      "heavy_vs_light_split",
+      "dense_urban"
+    ]
+  },
+  {
+    "id": "ind_shell_pernis_botlek",
+    "lat": 51.881,
+    "lng": 4.404,
+    "mode": "source:industrial",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "plant_247",
+      "near",
+      "site_area_scaling",
+      "heavy_vs_light_split",
+      "port",
+      "suburban"
+    ]
+  },
+  {
+    "id": "ind_mrac_quarry",
+    "lat": 49.8285,
+    "lng": 14.701,
+    "mode": "source:industrial",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "quarry",
+      "mid",
+      "village",
+      "soft_ground_field",
+      "source_height_assumed"
+    ]
+  },
+  {
+    "id": "ind_temelin_npp",
+    "lat": 49.193,
+    "lng": 14.343,
+    "mode": "source:industrial",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "plant_247",
+      "far_3",
+      "village",
+      "masked_minor_source"
+    ]
+  },
+  {
+    "id": "ind_spolana_libis",
+    "lat": 50.2532,
+    "lng": 14.5055,
+    "mode": "source:industrial",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "plant_247",
+      "far_1",
+      "village"
+    ]
+  },
+  {
+    "id": "ind_pchery_wind_200m",
+    "lat": 50.194384,
+    "lng": 14.1288,
+    "mode": "source:industrial",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "wind_farm",
+      "mid",
+      "rural_open",
+      "soft_ground_field",
+      "source_height_assumed"
+    ]
+  },
+  {
+    "id": "ind_pchery_wind_500m",
+    "lat": 50.191688,
+    "lng": 14.1288,
+    "mode": "source:industrial",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "wind_farm",
+      "far_1",
+      "rural_open",
+      "soft_ground_field",
+      "source_height_assumed"
+    ]
+  },
+  {
+    "id": "ind_pchery_wind_1000m",
+    "lat": 50.187197,
+    "lng": 14.1288,
+    "mode": "source:industrial",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "wind_farm",
+      "far_1",
+      "rural_open",
+      "soft_ground_field",
+      "source_height_assumed"
+    ]
+  },
+  {
+    "id": "air_lkpr_rmt1_jenec",
+    "lat": 50.0889,
+    "lng": 14.2103,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "village"
+    ]
+  },
+  {
+    "id": "air_lkpr_rmt2_cerveny_ujezd",
+    "lat": 50.071,
+    "lng": 14.1646,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "village"
+    ]
+  },
+  {
+    "id": "air_lkpr_rmt3_unhost",
+    "lat": 50.0815,
+    "lng": 14.1292,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "suburban"
+    ]
+  },
+  {
+    "id": "air_lkpr_rmt4_pavlov",
+    "lat": 50.0952,
+    "lng": 14.1646,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "village"
+    ]
+  },
+  {
+    "id": "air_lkpr_rmt5_hostivice",
+    "lat": 50.0814,
+    "lng": 14.2347,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "suburban"
+    ]
+  },
+  {
+    "id": "air_lkpr_rmt6_dobroviz",
+    "lat": 50.1144,
+    "lng": 14.2207,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "village"
+    ]
+  },
+  {
+    "id": "air_lkpr_rmt7_knezeves",
+    "lat": 50.1199,
+    "lng": 14.2584,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "village",
+      "runway_use_mismatch"
+    ]
+  },
+  {
+    "id": "air_lkpr_rmt8_horomerice_stred",
+    "lat": 50.14,
+    "lng": 14.3341,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "suburban",
+      "heli_base"
+    ]
+  },
+  {
+    "id": "air_lkpr_rmt9_predni_kopanina",
+    "lat": 50.1172,
+    "lng": 14.3014,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "village",
+      "heli_base"
+    ]
+  },
+  {
+    "id": "air_lkpr_rmt10_horomerice_jv",
+    "lat": 50.1299,
+    "lng": 14.3439,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "suburban",
+      "heli_base"
+    ]
+  },
+  {
+    "id": "air_lkpr_rmt11_roztoky",
+    "lat": 50.1589,
+    "lng": 14.3946,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "suburban",
+      "heli_base"
+    ]
+  },
+  {
+    "id": "air_lkpr_rmt12_bila_hora",
+    "lat": 50.0711,
+    "lng": 14.3208,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "suburban",
+      "runway_use_mismatch"
+    ]
+  },
+  {
+    "id": "air_lkpr_rmt13_suchdol",
+    "lat": 50.1456,
+    "lng": 14.3787,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "suburban",
+      "heli_base"
+    ]
+  },
+  {
+    "id": "air_lkpr_rmt14_male_kysice",
+    "lat": 50.0588,
+    "lng": 14.082,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "village"
+    ]
+  },
+  {
+    "id": "air_zrh_nmt1_rumlang",
+    "lat": 47.4524,
+    "lng": 8.531,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "village"
+    ]
+  },
+  {
+    "id": "air_zrh_nmt3_oberglatt",
+    "lat": 47.4753,
+    "lng": 8.5052,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "village"
+    ]
+  },
+  {
+    "id": "air_zrh_nmt6_glattbrugg",
+    "lat": 47.4333,
+    "lng": 8.563,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "suburban"
+    ]
+  },
+  {
+    "id": "air_zrh_nmt10_nurensdorf",
+    "lat": 47.4467,
+    "lng": 8.6477,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "village"
+    ]
+  },
+  {
+    "id": "air_ams_ub045_nieuwveen",
+    "lat": 52.1905,
+    "lng": 4.7594,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "village"
+    ]
+  },
+  {
+    "id": "air_ams_ub106_leimuiden",
+    "lat": 52.2262,
+    "lng": 4.664,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "village"
+    ]
+  },
+  {
+    "id": "air_ams_ub022_lisse",
+    "lat": 52.255,
+    "lng": 4.5501,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "village"
+    ]
+  },
+  {
+    "id": "air_fra_mp06_raunheim",
+    "lat": 50.0114,
+    "lng": 8.4619,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "suburban"
+    ]
+  },
+  {
+    "id": "air_fra_mp11_floersheim",
+    "lat": 50.0174,
+    "lng": 8.4214,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "suburban"
+    ]
+  },
+  {
+    "id": "air_sfo_site12_foster_city",
+    "lat": 37.565,
+    "lng": -122.253,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "diagnostic",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "suburban"
+    ]
+  },
+  {
+    "id": "air_sfo_site19_pacifica",
+    "lat": 37.658,
+    "lng": -122.481,
+    "mode": "source:aircraft",
+    "anchor_type": "measurement",
+    "role": "regression",
+    "tags": [
+      "hub_approach",
+      "hub_departure",
+      "adsb_window",
+      "suburban",
+      "single_hill",
+      "coastal_windy"
+    ]
+  },
+  {
+    "id": "cruise_sumava",
+    "lat": 49.0228,
+    "lng": 13.4977,
+    "mode": "source:aircraft",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "cruise_remote",
+      "adsb_window",
+      "wilderness_quiet"
+    ]
+  },
+  {
+    "id": "cruise_zermatt",
+    "lat": 46.02,
+    "lng": 7.75,
+    "mode": "source:aircraft",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "cruise_remote",
+      "adsb_window",
+      "mountain_valley"
+    ]
+  },
+  {
+    "id": "cruise_highlands",
+    "lat": 57.1,
+    "lng": -4.7,
+    "mode": "source:aircraft",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "cruise_remote",
+      "adsb_window",
+      "wilderness_quiet"
+    ]
+  },
+  {
+    "id": "cruise_lapland",
+    "lat": 68.05,
+    "lng": 24.0,
+    "mode": "source:aircraft",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "cruise_remote",
+      "adsb_window",
+      "wilderness_quiet"
+    ]
+  },
+  {
+    "id": "cruise_extremadura",
+    "lat": 39.9,
+    "lng": -5.3,
+    "mode": "source:aircraft",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "cruise_remote",
+      "adsb_window",
+      "rural_open"
+    ]
+  },
+  {
+    "id": "rail_usti_zalezly_ln",
+    "lat": 50.581,
+    "lng": 14.0418,
+    "mode": "source:railway",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "ic_corridor",
+      "freight_night",
+      "mid",
+      "gtfs_derived",
+      "village",
+      "inversion_prone_valley"
+    ]
+  },
+  {
+    "id": "rail_zabori_ln",
+    "lat": 50.0284,
+    "lng": 15.3466,
+    "mode": "source:railway",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "ic_corridor",
+      "freight_night",
+      "mid",
+      "gtfs_derived",
+      "stock_mix_assumed",
+      "village"
+    ]
+  },
+  {
+    "id": "rail_revnice_ln",
+    "lat": 49.9134,
+    "lng": 14.2403,
+    "mode": "source:railway",
+    "anchor_type": "official_map",
+    "role": "regression",
+    "tags": [
+      "ic_corridor",
+      "regional_hourly",
+      "freight_night",
+      "mid",
+      "gtfs_derived",
+      "building_row_shield",
+      "forest_belt",
+      "suburban"
+    ]
+  },
+  {
+    "id": "bldg_chodov_mall_facade",
+    "lat": 50.031,
+    "lng": 14.491,
+    "mode": "source:building",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "mall_hvac",
+      "near",
+      "dense_urban"
+    ]
+  },
+  {
+    "id": "bldg_old_town_square",
+    "lat": 50.0875,
+    "lng": 14.4213,
+    "mode": "source:building",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "pedestrian_zone",
+      "outdoor_hospitality",
+      "building_default_vs_typed",
+      "dense_urban",
+      "near",
+      "unmodelled_dominates"
+    ]
+  },
+  {
+    "id": "road_th_hospitality_krabi",
+    "lat": 7.4978,
+    "lng": 99.0747,
+    "mode": "source:road",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "mid",
+      "village",
+      "count_osm_default",
+      "stock_mix_assumed",
+      "outdoor_hospitality"
+    ]
+  },
+  {
+    "id": "air_es_lapalma_quiet",
+    "lat": 28.705,
+    "lng": -17.9349,
+    "mode": "source:aircraft",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "regional_airport",
+      "rural_open",
+      "mountain_valley"
+    ]
+  },
+  {
+    "id": "air_ca_hudsonbay_remote",
+    "lat": 55.99,
+    "lng": -74.34,
+    "mode": "source:aircraft",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "cruise_remote"
+    ]
+  },
+  {
+    "id": "air_se_sweden_aptt",
+    "lat": 62.83,
+    "lng": 14.77,
+    "mode": "source:aircraft",
+    "anchor_type": "regression",
+    "role": "regression",
+    "tags": [
+      "regional_airport",
+      "rural_open"
+    ]
+  }
+]

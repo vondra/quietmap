@@ -33,6 +33,7 @@ function stayParam(f: StayFilters): 'all' | 'hotel' | 'rental' | 'none' | null {
 }
 import { useValidationPayload, type ValidationSelection } from './components/ValidationLayer'
 import type { NoiseComputeData } from './types/noise'
+import type { SurfacePreview } from './lib/fetch-noise-detail'
 import { DEFAULT_BASEMAP, type BasemapId } from './utils/basemaps'
 import { fetchIpCountry, resolveInitialView, type InitialView } from './utils/initial-view'
 import { setDocumentTitle } from './utils/page-title'
@@ -94,9 +95,13 @@ function MapApp() {
   const [isochronActive, setIsochronActive] = useState(false)
   const [isochronGeojson, setIsochronGeojson] = useState<GeoJSON.Feature | null>(null)
   const [detailPosition, setDetailPosition] = useState<{ lat: number; lng: number } | null>(initial.detailPosition)
+  const activeDetailPosition = useRef(detailPosition)
+  const isCurrentDetailPosition = useCallback((position: { lat: number; lng: number }) =>
+    activeDetailPosition.current === position, [])
   const [noiseDetailData, setNoiseDetailData] = useState<NoiseComputeData | null>(null)
   // MVP-0: card opens skeleton-immediate-on-click; error path keeps the
   // position so user sees the failure context instead of card vanishing.
+  const [noiseDetailPreview, setNoiseDetailPreview] = useState<SurfacePreview | null>(null)
   const [noiseDetailError, setNoiseDetailError] = useState<string | null>(null)
   const [highlightGeometry, setHighlightGeometry] = useState<any | null>(null)
   const [quietClustersEnabled, setQuietClustersEnabled] = useState(initial.quietClusters)
@@ -240,18 +245,20 @@ function MapApp() {
   // click once closed the card but left the highlight geometry behind).
   const closeNoiseDetail = useCallback(() => {
     setNoiseDetailData(null)
+    setNoiseDetailPreview(null)
     setNoiseDetailError(null)
     setHighlightGeometry(null)
   }, [])
 
   const handleDetailPositionChange = useCallback((pos: { lat: number; lng: number } | null) => {
+    activeDetailPosition.current = pos
     setDetailPosition(pos)
     // Fresh click: clear stale data + error so the new skeleton renders
     // for the new position (Codex /gg 2026-05-24 WARNING — position-match
     // gating in the card is the back-stop). The right column shows ONE card
     // at a time (owner 2026-07-29), so a noise popup also closes any pin card.
+    closeNoiseDetail()
     if (pos) {
-      closeNoiseDetail()
       setSelectedStay(null)
       setSelectedProperty(null)
     }
@@ -383,6 +390,7 @@ function MapApp() {
               noiseData={noiseDetailData}
               position={detailPosition}
               error={noiseDetailError}
+              preview={noiseDetailPreview}
               onNoiseClose={handleNoiseClose}
               onHighlight={setHighlightGeometry}
             />
@@ -424,6 +432,7 @@ function MapApp() {
         <div className="h-full w-full bg-[#fafaf8]" />
       ) : (
       <MapView
+        isCurrentDetailPosition={isCurrentDetailPosition}
         selectedLocation={selectedLocation}
         initialCenter={[initialView.lat, initialView.lng]}
         initialZoom={initialView.zoom}
@@ -431,6 +440,7 @@ function MapApp() {
         isochronGeojson={isochronGeojson}
         onViewChange={handleViewChange}
         onDetailData={handleDetailData}
+        onDetailPreview={setNoiseDetailPreview}
         onDetailPositionChange={handleDetailPositionChange}
         onDetailError={handleDetailError}
         detailPosition={detailPosition}
@@ -454,7 +464,7 @@ function MapApp() {
       {/* Mobile: layers toggle button */}
       {!layersOpen && (
         <button
-          onClick={() => { setLayersOpen(true); setNoiseDetailData(null); handleDetailPositionChange(null) }}
+          onClick={() => { setLayersOpen(true); handleNoiseClose() }}
           className="fixed bottom-[16px] right-[10px] z-[1003] flex h-11 w-11 items-center justify-center rounded-lg bg-white md:hidden"
           style={{ boxShadow: '0 0 0 2px rgba(0,0,0,.1)' }}
           aria-label="Toggle layers panel"
@@ -497,7 +507,8 @@ function MapApp() {
         data={noiseDetailData}
         position={detailPosition}
         error={noiseDetailError}
-        onClose={() => { setNoiseDetailData(null); setNoiseDetailError(null); handleDetailPositionChange(null) }}
+        preview={noiseDetailPreview}
+        onClose={handleNoiseClose}
         onHighlight={setHighlightGeometry}
       />
 

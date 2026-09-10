@@ -22,7 +22,7 @@ import { createRequire } from 'node:module'
 
 const req = createRequire(import.meta.url)
 
-const { sourceReaderNodePath, preparedYearDir } = workerData
+const { sourceReaderNodePath, preparedYearDir, surfaceCornersRoot } = workerData
 // Committed project reference square (Prague) — the readiness probe strictly
 // reads its roads.arrow without touching the query cache.
 const readinessReferenceSquare = 'z9/276/173'
@@ -50,6 +50,11 @@ if (existsSync(preparedYearDir)) {
   console.log(`noise-onfly-worker: ${msg}`)
 }
 
+if (surfaceCornersRoot) {
+  const available = sourceModule.sourceInitSurfaceCorners(surfaceCornersRoot)
+  parentPort?.postMessage({ initialized: true, available })
+}
+
 parentPort?.on('message', ({ id, lat, lng, lat2, lng2, op }) => {
   try {
     if (op === 'ready') {
@@ -64,6 +69,14 @@ parentPort?.on('message', ({ id, lat, lng, lat2, lng2, op }) => {
         throw new Error(`invalid readiness reference row count: ${referenceRows}`)
       }
       parentPort?.postMessage({ id, ok: true, resultJson: '{"ready":true}' })
+      return
+    }
+    if (op === 'surface-preview') {
+      const t0 = Date.now()
+      const resultJson = surfaceCornersRoot
+        ? sourceModule.querySurfaceCornerPreview(lat, lng)
+        : 'null'
+      parentPort?.postMessage({ id, ok: true, resultJson, nativeMs: Date.now() - t0 })
       return
     }
     if (op === 'footprints') {

@@ -8,6 +8,7 @@ import {
   NoiseOnflyRequestError,
   NoiseOnflySupervisor,
 } from '../engine/noise-onfly-supervisor.js'
+import { noisePreviewRoutes } from './noise-preview.js'
 import { prepareSourceReaderAddon } from '../engine/source-reader-addon.js'
 import { BUILDING_LOOKUP_RATE_LIMIT, EXPENSIVE_ROUTE_RATE_LIMIT } from '../rate-limit.js'
 import { PREPARED_YEAR_DIR, SOURCE_READER_PATH } from '../runtime-paths.js'
@@ -23,11 +24,9 @@ const WORKER_URL = new URL('../workers/noise-onfly-worker.mjs', import.meta.url)
 const NOISE_ONFLY_WORK_TIMEOUT_MS = Number(process.env.NOISE_ONFLY_WORK_TIMEOUT_MS || '30000')
 const NOISE_ONFLY_QUEUE_TIMEOUT_MS = Number(process.env.NOISE_ONFLY_QUEUE_TIMEOUT_MS || '10000')
 const NOISE_ONFLY_MAX_QUEUE = Number(process.env.NOISE_ONFLY_MAX_QUEUE || '8')
-// Pool of NAPI workers — one popup computes on ONE worker thread; the pool
-// size is the number of CONCURRENT visitors served without queueing. Each
-// worker keeps its own loaded-area cache (mmap-backed, so RSS is mostly
-// shared page cache). Default 8 (owner 2026-07-10, production sizing);
-// override per box with NOISE_ONFLY_POOL_SIZE.
+// One worker computes one popup. Workers share the native area's cache;
+// decoded Arrow batches occupy heap memory, while persisted obstacle indexes
+// are mapped. Set concurrency to the measured memory budget of the deployment.
 const NOISE_ONFLY_POOL_SIZE = Number(process.env.NOISE_ONFLY_POOL_SIZE || '8')
 
 export type NoiseOnflyEngine = {
@@ -44,6 +43,7 @@ export async function noiseOnflyV2Routes(
   app: FastifyInstance,
   options: NoiseOnflyV2RouteOptions = {},
 ): Promise<NoiseOnflyEngine> {
+  await noisePreviewRoutes(app)
   const supervisor = new NoiseOnflySupervisor({
     createWorker: () => {
       // Cheap when current, and self-heals if an operator removed the stable

@@ -21,13 +21,14 @@ export const SOURCE_READER_PATH = existsSync(bundledSourceReader) ? bundledSourc
   REPO_ROOT,
   'engine/target/release/libsource_reader.so',
 )
-// Prepared vectors for one dataset year: `<prepared-year>/z9/<x>/<y>/`
-// holds the per-square arrows (roads, railways, structures, industrial,
-// leisure, airborne, cruise, airport_traffic, airport_lines),
-// `<prepared-year>/admin/<square_id>/admin.bin` the admin records
-// (`square_id` = Morton z-order, `grid::square_id` — the only integer id), and
-// `<prepared-year>/rasters/` the DEM/land rasters. The source-reader native
-// addon is initialized against this directory (source_init). NO H3 anywhere.
+// One immutable prepared year: z9/x/y contains Arrows, structures, admin.bin
+// and native DEM/forest/IMD files; rasters.sqlite and inputs.sqlite bind its generation.
 export const PREPARED_YEAR_DIR = process.env.PREPARED_YEAR_DIR
   ? resolve(process.env.PREPARED_YEAR_DIR)
   : resolve(REPO_ROOT, 'data', 'prepared', DATA_YEAR)
+
+// Optional retained corner generation from an approved repaint. Native receipt
+// validation requires the same prepared sources, rasters and compiled physics.
+export const SURFACE_CORNERS_DIR = process.env.SURFACE_CORNERS_DIR
+  ? resolve(process.env.SURFACE_CORNERS_DIR)
+  : null

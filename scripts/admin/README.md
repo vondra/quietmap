@@ -4,7 +4,8 @@ Run after the OSM extract and before country-dependent enrichment:
 
 ```sh
 python scripts/admin/build_admin.py --prepared-dir <prepared-year> \
-  --boundaries <source>/geoBoundariesCGAZ_ADM0_s0005.geojson
+  --boundaries <source>/geoBoundariesCGAZ_ADM0_s0005.geojson \
+  --jobs 12
 ```
 
 Requires NumPy, Shapely 2 and PyArrow. Repeat `--square z9/x/y` for a subset.
@@ -25,8 +26,9 @@ admin tree.
 
 The bake preserves row order, record-batch boundaries and all original metadata,
 including the spatial batch index. Files are verified before atomic replacement;
-an unchanged rerun leaves their bytes untouched. Run it sequentially with other
-enrichers, which must not write the same Arrow files concurrently.
+an unchanged rerun leaves their bytes untouched (`--jobs` skips already-baked
+contracts and runs independent z9 squares in parallel). Run it sequentially with
+other enrichers, which must not write the same Arrow files concurrently.
 
 ```sh
 QM_ADMIN_BOUNDARIES=<source>/geoBoundariesCGAZ_ADM0_s0005.geojson \

@@ -1,14 +1,14 @@
-// Loading / error placeholder for the popup card. Renders the same
-// header structure as `NoiseDetailContent` (coordinate + dB badge slot)
-// so the skeleton → full upgrade reads as a value change, not a layout
-// swap. Pure presentational — no fetch, no map state.
+import type { SurfacePreview } from '../lib/fetch-noise-detail'
 
 interface DetailSkeletonProps {
   position: { lat: number; lng: number }
   error?: string | null
+  preview?: SurfacePreview | null
 }
 
-export default function DetailSkeleton({ position, error }: DetailSkeletonProps) {
+const LAYER_LABELS = { road: 'Roads', rail: 'Railways', industry: 'Industry', building: 'Buildings', ground_ops: 'Airport ground' }
+
+export default function DetailSkeleton({ position, error, preview }: DetailSkeletonProps) {
   return (
     <div className="px-2.5 pt-1 pb-2" data-testid="detail-popup-skeleton">
       <div className="flex items-center justify-between mb-1">
@@ -24,7 +24,22 @@ export default function DetailSkeleton({ position, error }: DetailSkeletonProps)
           </div>
         </div>
       </div>
-      {!error && (
+      {preview && (
+        <div className="mt-2 text-xs" data-testid="noise-surface-preview" aria-live="polite">
+          <div className="font-medium">Approximate outdoor levels · Lden</div>
+          <dl className="my-1 space-y-0.5">
+            {preview.layers.map(layer => (
+              <div key={layer.layer} className="flex justify-between gap-2">
+                <dt>{LAYER_LABELS[layer.layer]}</dt>
+                <dd className="font-mono tabular-nums">{layer.lden_db === null ? '—' : `≈ ${Math.round(layer.lden_db)} dB`}</dd>
+              </div>
+            ))}
+          </dl>
+          <p className="text-muted-foreground">Aircraft in flight are not yet included.
+            {!error && ' Calculating full results for this location…'}</p>
+        </div>
+      )}
+      {!error && !preview && (
         <div className="border-b border-border pb-0.5 mb-0.5">
           <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/40 animate-pulse">
             Loading noise sources…

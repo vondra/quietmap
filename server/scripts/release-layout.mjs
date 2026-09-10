@@ -2,7 +2,6 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  readdirSync,
   readlinkSync,
   realpathSync,
   renameSync,
@@ -86,32 +85,6 @@ export function resolveNamedRelease(name) {
   const release = validatedReleaseLink(linkPath)
   ensureRuntimeDependencies(release.real)
   return release.real
-}
-
-export function pruneUnusedReleases() {
-  const keep = new Set()
-  for (const linkPath of [distPath, nextPath, previousPath]) {
-    let linkInfo
-    try {
-      linkInfo = lstatSync(linkPath)
-    } catch (error) {
-      if (error?.code === 'ENOENT') continue
-      throw error
-    }
-    // An existing but corrupt/unreadable link aborts pruning. Treating it as
-    // absent could recursively delete the generation a live process uses.
-    keep.add(validatedReleaseLink(linkPath).real)
-  }
-  const staleStageBefore = Date.now() - 60 * 60 * 1_000
-  for (const entry of readdirSync(releaseRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue
-    const candidate = resolve(releaseRoot, entry.name)
-    if (entry.name.startsWith('release-') && !keep.has(candidate)) {
-      rmSync(candidate, { recursive: true, force: true })
-    } else if (entry.name.startsWith('.stage-') && statSync(candidate).mtimeMs < staleStageBefore) {
-      rmSync(candidate, { recursive: true, force: true })
-    }
-  }
 }
 
 export function activatePreparedRelease() {

@@ -2,8 +2,10 @@
 
 import argparse
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import fcntl
 import json
+import multiprocessing as mp
 import os
 from pathlib import Path
 import struct
@@ -21,6 +23,9 @@ from prepared_arrow import replace_atomically, rewrite_arrow_batches, segment_mi
 
 ADMIN_COLUMNS = {"country_iso": pa.uint16(), "city_id": pa.uint16(), "continent": pa.uint8()}
 COUNTRY_CONTRACT = b"country_baked_v1"
+LAND_CONTRACT = b"country_land_baked_v1"
+_PREPARED = None
+_RESOLVER = None
 
 
 def baked_batch(batch, resolver, contract_key):
@@ -43,13 +48,44 @@ def baked_batch(batch, resolver, contract_key):
         else:
             result = result.append_column(pa.field(name, arrow_type, nullable=False), array)
     metadata = dict(batch.schema.metadata or {})
-    metadata[contract_key] = b"country_land_baked_v1" if industrial else COUNTRY_CONTRACT
+    metadata[contract_key] = LAND_CONTRACT if industrial else COUNTRY_CONTRACT
     return result.replace_schema_metadata(metadata)
 
 
 def bake_file(path, resolver):
     contract_key = (path.stem + "_contract").encode()
     return rewrite_arrow_batches(path, lambda batch: baked_batch(batch, resolver, contract_key))
+
+
+def expected_contract(path):
+    if path.stem == "industrial":
+        return b"industrial_contract", LAND_CONTRACT
+    return (path.stem + "_contract").encode(), COUNTRY_CONTRACT
+
+
+def already_baked(path):
+    key, expected = expected_contract(path)
+    with pa.memory_map(str(path), "r") as source:
+        metadata = pa.ipc.open_file(source).schema.metadata or {}
+    return metadata.get(key) == expected
+
+
+def process_square(prepared, resolver, name):
+    counts = Counter(roads_rows=0, railways_rows=0, industrial_rows=0, files_changed=0, squares=0)
+    for layer in ("roads", "railways", "industrial"):
+        path = prepared / name / f"{layer}.arrow"
+        if not path.is_file():
+            continue
+        if already_baked(path):
+            continue
+        rows, changed = bake_file(path, resolver)
+        counts[layer + "_rows"] += rows
+        counts["files_changed"] += int(changed)
+    square = parse_square_name(name)
+    assert square is not None
+    write_admin_record(prepared / name, square_admin(resolver, *square))
+    counts["squares"] += 1
+    return {"square": name, **counts}
 
 
 def square_admin(resolver, x, y):
@@ -91,12 +127,30 @@ def write_admin_record(directory, record):
         Path(name).unlink(missing_ok=True)
 
 
+def _init_worker(prepared, boundaries):
+    global _PREPARED, _RESOLVER
+    _PREPARED = prepared
+    _RESOLVER = AdminResolver.from_file(boundaries)
+
+
+def _process_name(name):
+    return process_square(_PREPARED, _RESOLVER, name)
+
+
+def emit_square(row, totals):
+    totals.update({key: value for key, value in row.items() if key != "square"})
+    print(json.dumps({"square": row["square"], **totals}), flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prepared-dir", type=Path, required=True)
     parser.add_argument("--boundaries", type=Path, required=True)
     parser.add_argument("--square", action="append", help="Repeat to limit the build to selected z9/x/y units")
+    parser.add_argument("--jobs", type=int, default=1, help="Independent z9 workers (1 keeps the serial path)")
     args = parser.parse_args()
+    if args.jobs < 1:
+        raise ValueError("--jobs must be >= 1")
     prepared = args.prepared_dir.resolve(strict=True)
     names = args.square or sorted(str(path.relative_to(prepared)) for path in (prepared / "z9").glob("*/*") if path.is_dir())
     if not names:
@@ -104,21 +158,22 @@ def main():
     squares = [(name, parse_square_name(name)) for name in names]
     if any(square is None or not (prepared / name).is_dir() for name, square in squares):
         raise ValueError("Every selected square must be an existing z9/x/y directory")
-    resolver = AdminResolver.from_file(args.boundaries)
     totals = Counter()
     with (prepared / ".admin-build.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        for name, square in squares:
-            for layer in ("roads", "railways", "industrial"):
-                path = prepared / name / f"{layer}.arrow"
-                if path.is_file():
-                    rows, changed = bake_file(path, resolver)
-                    totals[layer + "_rows"] += rows
-                    totals["files_changed"] += changed
-            assert square is not None
-            write_admin_record(prepared / name, square_admin(resolver, *square))
-            totals["squares"] += 1
-            print(json.dumps({"square": name, **totals}), flush=True)
+        if args.jobs == 1:
+            resolver = AdminResolver.from_file(args.boundaries)
+            for name, _square in squares:
+                emit_square(process_square(prepared, resolver, name), totals)
+            return
+        context = mp.get_context("spawn")
+        with ProcessPoolExecutor(
+            max_workers=args.jobs, mp_context=context,
+            initializer=_init_worker, initargs=(prepared, args.boundaries.resolve(strict=True)),
+        ) as pool:
+            futures = [pool.submit(_process_name, name) for name, _square in squares]
+            for future in as_completed(futures):
+                emit_square(future.result(), totals)
 
 
 if __name__ == "__main__":

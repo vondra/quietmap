@@ -1,6 +1,7 @@
 import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react'
 import DetailSkeleton from './DetailSkeleton'
 import type { NoiseComputeData } from '../types/noise'
+import type { SurfacePreview } from '../lib/fetch-noise-detail'
 
 // Lazy popup body — see DetailCard; off first paint, pre-warmed by App on click.
 const NoiseDetailContent = lazy(() => import('./NoiseDetailContent'))
@@ -14,11 +15,12 @@ interface MobileDetailSheetProps {
   // (gg/Codex 2026-05-24 WARNING).
   position?: { lat: number; lng: number } | null
   error?: string | null
+  preview?: SurfacePreview | null
   onClose: () => void
   onHighlight?: (geometry: any | null) => void
 }
 
-export default function MobileDetailSheet({ data, position, error, onClose, onHighlight }: MobileDetailSheetProps) {
+export default function MobileDetailSheet({ data, position, error, preview, onClose, onHighlight }: MobileDetailSheetProps) {
   const [expanded, setExpanded] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   const [dragOffset, setDragOffset] = useState(0)
@@ -103,8 +105,8 @@ export default function MobileDetailSheet({ data, position, error, onClose, onHi
 
         <div className={`pb-1 ${expanded ? 'overflow-y-auto overflow-x-clip' : ''}`} style={expanded ? { maxHeight: 'calc(50vh - 16px)' } : undefined}>
           {showSkeleton
-            ? <DetailSkeleton position={position} error={error} />
-            : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>
+            ? <DetailSkeleton position={position} error={error} preview={preview} />
+            : <Suspense fallback={<DetailSkeleton position={position} error={error} preview={preview} />}>
                 <NoiseDetailContent data={data!} onHighlight={onHighlight} maxSources={9} />
               </Suspense>}
         </div>

@@ -7,3 +7,10 @@ node_modules/
 frontend/dist/
 server/dist/
 *.log
+
+.server-dist/
+.release.lock
+frontend/dist.*/
+server/dist
+server/tsconfig.tsbuildinfo
+/data/

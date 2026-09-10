@@ -37,7 +37,7 @@ export type BuildAppOptions = {
 /** Dev checkouts expose the loopback-gated dashboard by default; an explicit flag still wins. */
 export function clusterRoutesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.ENABLE_CLUSTER_ROUTES != null) return env.ENABLE_CLUSTER_ROUTES === '1'
-  return /^dev[123]$/.test(env.TILE_ENV ?? '')
+  return /^dev[1-4]$/.test(env.TILE_ENV ?? '')
 }
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInstance> {

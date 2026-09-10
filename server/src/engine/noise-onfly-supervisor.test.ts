@@ -325,3 +325,27 @@ test('aborted client still populates the cache for the next query', async (t) =>
   assert.equal(await supervisor.queryNoiseAtPoint(50.0, 14.0), FULL)
   assert.equal(workers[0].postMessages.length, 1)
 })
+
+
+test('slow preview initialization outlives expired requests without worker churn, then serves normally', async (t) => {
+  const initialized = deferred<void>()
+  const worker = Object.assign(new FakeWorker(), { ready: initialized.promise })
+  let spawned = 0
+  const supervisor = new NoiseOnflySupervisor({
+    createWorker: () => { spawned++; return worker },
+    maxQueue: 2, queueTimeoutMs: 30, workTimeoutMs: 10,
+  })
+  t.after(() => supervisor.close())
+  supervisor.warmWorkers()
+  assert.equal(spawned, 1)
+  await assert.rejects(supervisor.querySurfaceCornerPreview(50, 14),
+    (error: unknown) => error instanceof NoiseOnflyRequestError && error.code === 'NOISE_ONFLY_QUEUE_TIMEOUT')
+  assert.equal(worker.postMessages.length, 0)
+  assert.equal(spawned, 1)
+  initialized.resolve()
+  const query = supervisor.querySurfaceCornerPreview(50, 14)
+  await waitFor(() => worker.postMessages.length === 1)
+  worker.replyAt(0, 'null')
+  assert.equal(await query, 'null')
+  assert.equal(spawned, 1)
+})

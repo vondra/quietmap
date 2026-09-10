@@ -9,9 +9,11 @@ export type NoiseOnflyWorkerReply = {
   nativeMs?: number
 }
 
-export type NoiseOnflyOp = 'point' | 'unfiltered' | 'ready' | 'footprints' | 'building-at'
+export type NoiseOnflyOp = 'point' | 'unfiltered' | 'ready' | 'footprints' | 'building-at' | 'surface-preview'
 
 export interface NoiseOnflyWorker {
+  /** Optional one-time initialization, outside all visitor request deadlines. */
+  ready?: Promise<void>
   postMessage(message: { id: number; lat: number; lng: number; lat2?: number; lng2?: number; op?: NoiseOnflyOp }): void
   terminate(): Promise<number>
   on(event: 'message', listener: (message: NoiseOnflyWorkerReply) => void): this
@@ -94,6 +96,7 @@ type Slot = {
   index: number
   worker: NoiseOnflyWorker | null
   active: RequestEntry | null
+  initializing: boolean
   recyclingWorker: NoiseOnflyWorker | null
   recycling: Promise<void> | null
 }
@@ -128,12 +131,9 @@ export type NoiseOnflySupervisorConfig = {
   queueTimeoutMs: number
   workTimeoutMs: number
   /**
-   * Number of parallel NAPI workers. Default 1 (FIFO single-threaded —
-   * preserves legacy behaviour and unit-test expectations). Set > 1 in
-   * production to handle concurrent users without queueing — each worker
-   * holds its own ~150 MB Rust state (R-trees per loaded R4) so memory
-   * scales linearly with pool size; mmap'd Arrow + DEM rasters are
-   * shared via OS page cache and don't duplicate.
+   * Simultaneous native queries; defaults to one. Workers share native caches,
+   * while queries in different areas pin their own decoded data. Size the pool
+   * against measured concurrent memory demand and queue latency.
    */
   poolSize?: number
   logger?: SupervisorLogger
@@ -204,6 +204,7 @@ export class NoiseOnflySupervisor {
       index,
       worker: null,
       active: null,
+      initializing: false,
       recyclingWorker: null,
       recycling: null,
     }))
@@ -404,10 +405,15 @@ export class NoiseOnflySupervisor {
     return this.enqueue(lat, lng, 'building-at', signal)
   }
 
+  /** Read-only approximate outdoor layers; this op belongs to a separate small pool. */
+  async querySurfaceCornerPreview(lat: number, lng: number, signal?: AbortSignal): Promise<string> {
+    return this.enqueue(lat, lng, 'surface-preview', signal)
+  }
+
   /**
    * Spawn one real pool worker and verify that it loaded the N-API addon and
    * completed sourceInit. The worker deliberately does not query a point, so
-   * readiness cannot pre-cache mutable H3 cells during an enrichment repaint.
+   * readiness cannot pre-cache point results before the first visitor query.
    */
   async checkReady(): Promise<void> {
     const response = JSON.parse(await this.enqueue(0, 0, 'ready')) as { ready?: unknown }
@@ -482,6 +488,16 @@ export class NoiseOnflySupervisor {
     })
   }
 
+  warmWorkers(): void {
+    if (this.closed) return
+    for (const slot of this.slots) {
+      if (slot.recycling) continue
+      try { this.ensureWorker(slot) } catch (error) {
+        this.log('warn', 'noise-onfly worker warmup failed', { error: toError(error).message })
+      }
+    }
+  }
+
   async close(): Promise<void> {
     this.closed = true
 
@@ -522,10 +538,18 @@ export class NoiseOnflySupervisor {
       return
     }
     while (this.queue.length > 0) {
-      const slot = this.slots.find((s) => !s.active && !s.recycling)
+      const slot = this.slots.find((s) => !s.active && !s.recycling && !s.initializing)
       if (!slot) {
         return
       }
+
+      try { this.ensureWorker(slot) } catch (error) {
+        const failed = this.queue.shift()!
+        this.clearQueueTimer(failed)
+        this.rejectClient(failed, unavailableError(`noise-onfly worker spawn failed: ${toError(error).message}`))
+        continue
+      }
+      if (slot.initializing) continue
 
       const entry = this.queue.shift()
       if (!entry) {
@@ -542,14 +566,7 @@ export class NoiseOnflySupervisor {
   }
 
   private dispatchToSlot(slot: Slot, entry: RequestEntry): void {
-    let worker: NoiseOnflyWorker
-    try {
-      worker = this.ensureWorker(slot)
-    } catch (error) {
-      this.rejectClient(entry, unavailableError(`noise-onfly worker spawn failed: ${toError(error).message}`))
-      queueMicrotask(() => this.startNextIfPossible())
-      return
-    }
+    const worker = slot.worker!
 
     entry.worker = worker
     entry.dispatchedAt = Date.now()
@@ -580,6 +597,7 @@ export class NoiseOnflySupervisor {
 
     const current = this.createWorker(slot.index)
     current.on('message', (message) => {
+      if ('initialized' in message) return
       this.handleWorkerMessage(slot, current, message)
     })
     current.on('error', (err) => {
@@ -590,6 +608,14 @@ export class NoiseOnflySupervisor {
     })
 
     slot.worker = current
+    slot.initializing = Boolean(current.ready)
+    if (current.ready) {
+      void current.ready.then(() => {
+        if (this.closed || slot.worker !== current) return
+        slot.initializing = false
+        this.startNextIfPossible()
+      }).catch((error) => this.handleWorkerError(slot, current, toError(error)))
+    }
     this.log('info', 'noise-onfly worker spawned', { slot: slot.index })
     return current
   }
@@ -787,6 +813,7 @@ export class NoiseOnflySupervisor {
 
     if (slot.worker === current) {
       slot.worker = null
+      slot.initializing = false
     }
     slot.recyclingWorker = current
     this.log('warn', 'noise-onfly recycling worker', {

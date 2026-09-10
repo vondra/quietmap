@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import FloatingCard from './FloatingCard'
 import DetailSkeleton from './DetailSkeleton'
 import type { NoiseComputeData } from '../types/noise'
+import type { SurfacePreview } from '../lib/fetch-noise-detail'
 
 // Lazy: the popup body (+ the noise/ tree, ~3.8 kLoC) is a separate chunk, off
 // first paint. App pre-warms it on click (its detailPosition effect) so it
@@ -17,11 +18,12 @@ interface DetailCardProps {
   // (gg/Gemini/Codex 2026-05-24).
   position?: { lat: number; lng: number } | null
   error?: string | null
+  preview?: SurfacePreview | null
   onNoiseClose: () => void
   onHighlight: (geometry: any | null) => void
 }
 
-export default function DetailCard({ noiseData, position, error, onNoiseClose, onHighlight }: DetailCardProps) {
+export default function DetailCard({ noiseData, position, error, preview, onNoiseClose, onHighlight }: DetailCardProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -50,8 +52,8 @@ export default function DetailCard({ noiseData, position, error, onNoiseClose, o
         <X className="size-3.5" />
       </button>
       {showSkeleton
-        ? <DetailSkeleton position={position} error={error} />
-        : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>
+        ? <DetailSkeleton position={position} error={error} preview={preview} />
+        : <Suspense fallback={<DetailSkeleton position={position} error={error} preview={preview} />}>
             <NoiseDetailContent data={noiseData!} onHighlight={onHighlight} />
           </Suspense>}
     </FloatingCard>

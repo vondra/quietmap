@@ -9,7 +9,8 @@
     "start": "node scripts/start.mjs",
     "test": "node --import tsx --test src/*.test.ts src/**/*.test.ts scripts/*.test.mjs",
     "parity:popup": "node scripts/popup-parity.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "build:native": "cargo build --release --manifest-path ../engine/Cargo.toml -p source-reader --features node"
   },
   "dependencies": {
     "@fastify/compress": "^8.3.1",

@@ -49,6 +49,7 @@ test('cluster dashboard: absent unless enabled, else under the /a/ admin prefix 
 
 test('cluster dashboard defaults on for a named dev checkout and explicit configuration wins', () => {
   assert.equal(clusterRoutesEnabled({ TILE_ENV: 'dev2' }), true)
+  assert.equal(clusterRoutesEnabled({ TILE_ENV: 'dev4' }), true)
   assert.equal(clusterRoutesEnabled({ TILE_ENV: 'prod' }), false)
   assert.equal(clusterRoutesEnabled({ TILE_ENV: 'dev3', ENABLE_CLUSTER_ROUTES: '0' }), false)
   assert.equal(clusterRoutesEnabled({ TILE_ENV: 'prod', ENABLE_CLUSTER_ROUTES: '1' }), true)

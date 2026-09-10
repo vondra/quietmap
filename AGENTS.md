@@ -52,7 +52,9 @@ Ship the smallest complete design; never speculative scaffolding.
 
 After every `git pull` or source sync touching `engine/`, rebuild native
 crates before running them (`cargo build --release --manifest-path
-engine/Cargo.toml`; binaries land in `engine/target/release/`).
+engine/Cargo.toml`; binaries land in `engine/target/release/`). Before packaging the
+server, run `npm --prefix server run build:native`: its Node addon feature is
+explicit and is not enabled by the workspace build.
 
 ## Public-repo boundary
 

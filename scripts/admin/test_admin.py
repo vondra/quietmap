@@ -10,7 +10,10 @@ import numpy as np
 import pyarrow as pa
 
 from admin_at import AdminResolver
-from build_admin import bake_file, baked_batch, segment_midpoints, square_admin, write_admin_record
+from build_admin import (
+    already_baked, bake_file, baked_batch, process_square, segment_midpoints,
+    square_admin, write_admin_record,
+)
 from qmgrid import lonlat_to_grid, square_id
 
 
@@ -70,6 +73,16 @@ class CountryBakeTests(unittest.TestCase):
                 self.assertEqual(reader.schema.metadata[b"source"], b"fixture")
             self.assertEqual(bake_file(path, self.resolver), (2, False))
             self.assertEqual(path.read_bytes(), before)
+            self.assertTrue(already_baked(path))
+            square = Path(directory) / "z9/276/174"
+            square.mkdir(parents=True)
+            baked = square / "roads.arrow"
+            baked.write_bytes(path.read_bytes())
+            stat = baked.stat()
+            row = process_square(Path(directory), self.resolver, "z9/276/174")
+            self.assertEqual(row["files_changed"], 0)
+            self.assertEqual(baked.read_bytes(), path.read_bytes())
+            self.assertEqual(baked.stat(), stat)
 
     def test_industrial_ownership_is_strict_land_with_holes_and_unchanged_road_coastal_policy(self):
         feature = country_feature("CZE", 14, 49, 15, 51)

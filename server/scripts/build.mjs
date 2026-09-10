@@ -22,7 +22,6 @@ import { dirname, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   prepareRelease,
-  pruneUnusedReleases,
   releaseRoot,
   serverRoot,
 } from './release-layout.mjs'
@@ -199,6 +198,12 @@ if (existsSync(nativeSource) && statSync(nativeSource).isFile() && statSync(nati
   const nativeDestination = resolve(stage, 'native/libsource_reader.so')
   mkdirSync(dirname(nativeDestination), { recursive: true })
   cpSync(nativeSource, nativeDestination)
+  const loaded = spawnSync(process.execPath, [
+    '--eval', 'process.dlopen({ exports: {} }, process.argv[1])', nativeDestination,
+  ], { cwd: stage, stdio: 'inherit' })
+  if (loaded.status !== 0) {
+    throw new Error('native library is not a loadable Node addon; run npm run build:native')
+  }
 } else if (requireNative) {
   rmSync(stage, { recursive: true, force: true })
   throw new Error(`missing required native addon: ${nativeSource}`)
@@ -250,5 +255,4 @@ renameSync(stage, release)
 published = true
 prepareRelease(release)
 prepared = true
-pruneUnusedReleases()
 console.log(`prepared immutable server release ${release}`)

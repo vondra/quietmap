@@ -1,114 +1,163 @@
-# Data pipeline runbook (release r260904, world rebuild)
+# Data pipeline runbook
 
-## Vintage policy (owner 2026-09-04)
+Release `r260904` is a best-available snapshot, not a promise of full-calendar-2026 observations.
 
-`2026` is a release SERIES (`r260904…`), not a vintage promise. Each release
-is the best-available snapshot: planet dated ~Aug 31, ADS-B airline window
-Jul–Jun, rasters mixed fixed vintages (WorldCover 2021, Hansen loss→2024,
-TCD 2023, GHSL R2023A heights). A true "2026 as of Dec 31" (full-year
-aircraft, winter planet) rebuilds as a refresh in early 2027 — this runbook
-is written so an agent can rerun it unchanged.
+## Data layout
 
-Reproduce the whole world from fresh sources, in order. Every step reads
-finished sources off `readmostly1`, works on mixeduse (`/tmp` + spill on the
-`mixeduse1` disk, intermediates on `mixeduse2/r260904/work`), and promotes
-finished trees to `readmostly2` once, at the end (see `AGENTS.md` §Disks).
-`<src>` = `/data/readmostly1/r260904/source/2026`,
-`<work>` = `/data/mixeduse2/r260904/work`,
-`<prep>` = `/data/readmostly2/r260904/prepared/2026`.
+Pass the source root and working prepared year explicitly to each producer. Keep source
+inputs immutable and write intermediates into a separate working tree. Publish a complete,
+validated prepared generation together with its catalogs and source receipts.
 
-## 1. Sources
+Every consumer uses current-release sources. Retain any separate structures output while
+prepared squares link to it. Materialize links before removing a work tree or publishing a
+standalone copy. Never synthesize an empty structure file to cover an unfinished square.
 
-| source | fetch | refresh next year |
-|---|---|---|
-| OSM planet | `scripts/source/download-planet.sh YYMMDD` → `<src>/osm/` | new Monday dated file, rename release |
-| Overture buildings | `OVERTURE_PARQUET_DIR=<src>/overture/parquet scripts/overture/download-overture-world.sh` (resume-safe) | rerun, same dir |
-| Copernicus DEM GLO-30 | already in `<src>/dem/copernicus-glo30` (no fetch script yet — TODO: script the AWS `copernicus-dem-30m` sync) | re-sync COG tree |
-| WorldCover 2021 | `scripts/rasters/download-worldcover.py` → `<src>/vegetation/worldcover-2021` | fixed vintage 2021 unless ESA re-releases |
-| Hansen GFC + TCD + IMD | reflinked from frozen pre2609 (`cp --reflink=always`) → `<src>/forest-sources/`, `<src>/imd/` | Hansen: new GFC release; TCD: EEA CLMS; IMD: Copernicus CLMS |
-| GHSL heights | `scripts/rasters/download-ghsl.sh` → `<src>/buildings/ghsl` | fixed R2023A vintage unless GHSL re-releases |
-| ADS-B airlines | `scripts/download-adsbexchange.py` (port from dev1) → 12 first-of-month days, already in `/data/readmostly1/adsb` (33 GB) | rerun with new anchor for new days |
-| ADS-B full (GA+airlines) | already harvested: 882 prod days 2024–2026 (`vYYYY.MM.DD-planes-readsb-prod-0.tar.aa/ab`) on he84 `/storagebox/adsb` (2.2 TB, May-2026 harvest per scc archive); rsync read-only to `mixeduse2/r260904/source/adsb` (too big for readmostly free space — never written by the pipeline) | top up new days from `adsblol/globe_history_YYYY` GitHub releases |
+## One-command world build
 
-## 2. Rasters → `<work>/rasters/{dem,forest,imd}`
+`scripts/build-world.py --config WORLD.toml --output NEW_GENERATION --scratch NEW_SCRATCH`
+coordinates a fresh world through all seven Arrow layers. Add `--plan` to print its
+actual commands without starting producers. The two destinations must be empty and
+separate from sources. Existing partial work is retained on failure; the controller
+never adopts it implicitly. Use the recorded producer commands for a reviewed recovery.
 
-DEM (~1 h), WorldCover IMD proxy + fallback forest (~1 h), and continuous
-forest run in parallel; IMD overlay runs after WorldCover:
+The TOML file has `[build]` keys `as_of_date` (YYYYMMDD string), `aircraft_anchor`
+(YYYY-MM string), `memory_gib` and `threads` (positive integers). `[sources]` supplies
+absolute paths named `planet`, `rasters`, `enrichment`, `boundaries`, `city_boundaries`,
+`overture`, `ghsl`, `regional_heights`, `airline` and `general_aviation`.
+`rasters` is an already published native raster year, `city_boundaries` is the ADM2
+cache, and `regional_heights` retains the measured regional raster or VRT dependencies.
+Download and validate new source versions before freezing these inputs.
+
+The controller records source/code SHA-256 and execution receipts in `build.sqlite`,
+including resolved height-raster dependencies. It prepares the complete z9 directory
+set before parallel writers, then runs OSM, admin, national buildings, structures,
+ordered road/rail/industry chains and the pinned hybrid aircraft window. Buildings
+precede structures; both precede service-tree and built-up road inference. Disjoint
+writers can overlap within the configured cgroup memory budget. Source cache changes
+invalidate completion, including replaced symlink targets or newly added files.
+
+Only a successful all-layer audit writes the final `prepared/YEAR/inputs.sqlite`
+Arrow manifest and marks `build.sqlite` complete. Linked native rasters remain required
+for the generation's lifetime. Source pinning and the fixed sampling dates make the
+inputs reproducible; whole-world byte-identical output has not yet been demonstrated.
+This controller does not repaint heatmaps or change a served generation.
+
+## Base rasters and OSM
+
+The geophysical channels are DEM, forest and IMD. Their runtime files are
+`z9/x/y/dem.i16be`, `forest.u8`, `imd.u8`; `rasters.sqlite` is the publication
+authority. Each channel covers all 262144 z9 coordinates. A catalog entry with
+no digest declares an empty square; it does not require an empty raster file.
+
+The source converters live in `scripts/rasters/`; their geographic intermediate
+rasters must be repacked using the native z9 raster writer before consumption.
+Keep the catalog with its native files. A legacy `<year>/rasters/` directory
+alone is not a complete native prepared year.
+
+`scripts/osm-extract.sh` writes roads, railways, buildings, industrial, leisure,
+barriers, airport areas and airport lines into the same z9 layout. Absent OSM
+layer files mean no rows for that layer. A roads square need not contain buildings.
+Leisure contributes to the building noise layer; barriers provide screening.
+These are not seven independent raster inputs.
+
+## Structures and geography
+
+`scripts/structures/build-structures.py` joins OSM buildings/barriers with
+Overture footprints, GHSL heights, and regional height rasters where available.
+The builder writes even completed empty squares and validates the OSM emission
+view. Preserve the regional IPR input for the two Prague reference squares.
+
+If structures were built into a separate tree, validate their schema and grid before
+joining them into the prepared year. Reconcile every pending square after the builder
+finishes. Preserve existing files and producer completion receipts.
+
+Run `scripts/admin/build_admin.py --prepared-dir YEAR --boundaries CGAZ --jobs N`
+after extraction. It writes `admin.bin` and embedded road/rail/industrial country
+columns. It holds `YEAR/.admin-build.lock` exclusively. Do not overlap a writer
+that ignores this lock with admin.
+
+## Enrichment and parallel work
+
+The manifest in `pipeline/chain/manifest.ts` is the ordered list of ported writers.
+From `pipeline/`:
 
 ```bash
-DEM_SRC=<src>/dem/copernicus-glo30 DEM_DST=<work>/rasters/dem JOBS=12 \
-  scripts/rasters/convert-dem-copernicus.sh
-WC_SRC=<src>/vegetation/worldcover-2021 \
-  FOREST_DST=<work>/rasters/forest-fallback IMD_DST=<work>/rasters/imd-worldcover JOBS=8 \
-  scripts/rasters/convert-worldcover.sh
-TCD_DIR=<src>/forest-sources/tcd/2023 \
-  HANSEN_DIR=<src>/forest-sources/hansen/GFC-2024-v1.12 \
-  FOREST_DST=<work>/rasters/forest TILE_LIST=<work>/forest-all.txt \
-  scripts/rasters/convert-forest-continuous.sh --all
-IMD_SRC_ROOT=<src>/imd IMD_BASE=<work>/rasters/imd-worldcover \
-  IMD_DST=<work>/rasters/imd \
-  scripts/rasters/convert-imd-overlay.sh
+npx tsx chain/run.ts --scope world \
+  --prepared-dir "$PREPARED_YEAR_DIR" \
+  --enrichment-dir "$ENRICHMENT_DIR" \
+  --boundaries "$BOUNDARIES" \
+  --as-of-date 20260909 \
+  --dry-run
 ```
 
-`--all` needs `TILE_LIST` (one `N50E014` per line; r260904 used the DEM COG
-inventory at `<work>/forest-all.txt`). A `--list FILE` subset works for a
-region first. WorldCover forest goes to `forest-fallback` (gap filler only —
-`convert-forest-continuous` skips existing tiles, so the good forest must own
-`rasters/forest`). After all three, fill forest gaps poleward of Hansen
-coverage from the fallback dir, then promote the tree to `<prep>/rasters/`.
+Remove `--dry-run` only for an authorized run. A regional canary uses an isolated
+prepared tree with real copies of writable Arrows and a complete read-only halo.
+The old `--scope country:CZ` was unsafe: global writers still changed the whole
+input tree. It is rejected.
 
-## 3. OSM extract → `<work>/prepared/2026`
+`--layer buildings|roads|railways|industrial` selects an independent output family.
+National buildings can run during admin: they use their source coordinates and only
+write buildings. After admin finishes, railways and industrial may run in parallel.
+Finish national buildings before starting the roads chain: service-tree derives
+traffic demand from their attributes. Finish structures footprints before built-up.
+Within each layer keep manifest order; do not run two writers of one layer together.
+Each child exclusively locks its output family. Roads, railways and industrial also
+hold the admin lock shared, excluding the admin writer for their lifetime. Step exit and elapsed seconds
+are emitted as JSON. `--from STEP` resumes within the selected family.
 
-```bash
-PBF_FILE=<src>/osm/planet-YYMMDD.osm.pbf OUTPUT_DIR=<work>/prepared/2026 \
-  SCRATCH_ROOT=/data/mixeduse2/scratch scripts/osm-extract.sh
-```
+Service-tree visits every road square, including those without buildings. Empty
+building demand retracts its own stale estimates and preserves measured traffic.
+National buildings writes only existing `buildings.arrow` rows.
 
-Writes `z9/<x>/<y>/{roads,railways,buildings,industrial,barriers,leisure,
-airport_areas,airport_lines}.arrow` (3–6 h). Then structures, per square
-(or `--squares-file` for a region):
+After national building refinement, refresh affected `structures.arrow` files with
+the original GHSL/regional inputs. Both emission attributes and screening heights
+are embedded in structures; enrichment alone cannot update them. Refresh downstream
+obstacle indexes after this step. Do not reuse a stale index as a final artifact.
 
-```bash
-qm_venv_python scripts/structures/build-structures.py \
-  --prepared-dir <work>/prepared/2026 \
-  --overture-parquet <src>/overture/parquet \
-  --ghsl <src>/buildings/ghsl/<height-tif> --squares-file <work>/structures-squares.txt
-```
+National road coverage is limited to actual manifest adapters. Compare used
+`source_id` distributions with the reference generation before claiming equal quality. Missing adapters
+are a backlog, not evidence that global defaults are equivalent to measured censuses.
 
-## 4. Enrichment — NOT YET PORTED
+GTFS uses `lib/railway-gtfs-feeds.ts` for layout and validity. Verify all selected
+feeds before a long rail run. An expired feed must be refreshed from its real source;
+never alter calendar dates to bypass the gate. Download before enrichment, preserve
+the source archive and digest, then use `--enrich-only` for national roads.
 
-dev1 runs `pipeline/chain/run.ts` (manifest order: column-parents →
-global-priors → national per-country → city → heuristics incl.
-`roads-service-tree` → taper → `gate-invariants` audit → structures).
-Port the chain to the z9 arrows before claiming popup parity: without it,
-speeds/AADT/defaults fall back to WORLD values. New-per-year inputs live
-behind each enricher (GTFS feeds, city tables); the chain prints
-`QM_COMPLETENESS` floors — a short feed fails a full-world run by design.
+## Aircraft
 
-## 5. Admin + aircraft
+`engine/aircraft-extract` and `scripts/run-aircraft-extract.sh` are already ported
+to z9. Reuse validated Stage 0/1 segment files; do not re-extract them just because
+the world prepared tree has no aircraft output yet.
 
-- Run `scripts/admin/build_admin.py --prepared-dir <work>/prepared/2026
-  --boundaries <source-boundaries.geojson>` after extraction and before
-  country-dependent enrichment. It bakes each road/rail segment's geography
-  and writes receiver defaults to `z9/x/y/admin.bin`, beside the unit's arrows.
-  See `scripts/admin/README.md` for source validation and scoped builds.
-- Aircraft arrows (`airborne/cruise/airport_traffic.arrow`): port dev1
-  `engine/aircraft-extract` to z9, run HYBRID two-window (airline pass over
-  the 12 adsbexchange days with `--class-filter non-ga`, GA pass over the
-  adsb.lol cache with `--class-filter ga`, then merge) — dev1
-  `scripts/run-aircraft-extract.sh` documents the invocations. Without the
-  GA cache the merge runs airline-only and small airfields go quiet.
+The current primary window has 12 dates, 2025-10-01 through 2026-09-01. GA uses the
+2025-09-02 through 2026-09-01 source window with the absent 2026-05-06 day excluded
+by receipts. Use the recorded day list and class normalization, not a hardcoded
+365 divisor. Primary segments are split across two roots; the CLI accepts repeated
+`--segments-dir` arguments. Keep the input paths and receipts in the execution record.
 
-## 6. Promote + validate + serve
+After Stage 0/1: world shuffle, airport discovery, Stage 2A airborne, Stage 2B
+cruise, Stage 2C ground operations and local airport summaries. This work can overlap
+admin/enrichment because it writes separate artifact names. It requires complete
+rasters, airport inputs, verified windows, and a measured shuffle disk budget.
+Prague-only throughput is not a world completion forecast. New aircraft support
+squares require final structures/admin coverage before serving.
 
-Bulk-copy the finished `<work>/prepared/2026` and only the final raster
-subdirectories `<work>/rasters/{dem,forest,imd}` to `<prep>/`. Keep the
-work copies as backup; `imd-worldcover` and `forest-fallback` are build inputs,
-not served layers. Validate: reference-square
-roads schema (`square-store`), popup parity vs dev1 on reference squares,
-then point the server at `<prep>` and deploy.
+## Final derived artifacts and serving
 
-## 7. Heatmap repaint — LATER
+Validate all seven noise layers: road, rail, building, industrial, aircraft airborne,
+aircraft cruise and aircraft ground. Validate absence through producer coverage and
+receipts, not by requiring an Arrow file for an empty layer in every ocean square.
 
-`tile-painter` + tile serving are out of scope for the popup milestone.
-Repaint only after steps 1–6 are green and validated.
+After the final Arrow/structures generation, refresh obstacle indexes. Any persistent
+popup acceleration output must identify its input generation and preserve the exact
+kernel as its correctness reference.
+
+Compare actual popup levels, source provenance, counts and screening against the reference generation
+on city, airport, quiet, coast, border and polar cases. Include adjacent clicks in
+one process. A same-coordinate result-cache hit does not demonstrate nearby-click
+speed. Preserve the exact kernel as the reference.
+
+Publish only after validation, with all linked inputs materialized or retained for the
+lifetime of the generation. A future repaint consumes that validated generation. Imported
+PMTiles must match one pinned publisher manifest by size and digest; their presence does
+not prove that the popup inputs are complete.

@@ -17,15 +17,18 @@ import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/base
 import { QUIET_THRESHOLD_DEFAULT } from '../hooks/useUrlState'
 import type { SelectedLocation } from './FlyToLocation'
 import type { NoiseComputeData } from '../types/noise'
+import type { SurfacePreview } from '../lib/fetch-noise-detail'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 interface MapViewProps {
+  isCurrentDetailPosition: (position: { lat: number; lng: number }) => boolean
   selectedLocation?: SelectedLocation | null
   initialCenter?: [number, number]
   initialZoom?: number
   basemap?: BasemapId
   onViewChange?: (lat: number, lng: number, zoom: number) => void
   onDetailData?: (data: NoiseComputeData | null) => void
+  onDetailPreview?: (preview: SurfacePreview | null) => void
   onDetailPositionChange?: (pos: { lat: number; lng: number } | null) => void
   onDetailError?: (message: string | null) => void
   detailPosition?: { lat: number; lng: number } | null
@@ -52,8 +55,8 @@ interface MapViewProps {
 }
 
 export default function MapView({
-  selectedLocation, initialCenter, initialZoom,
-  basemap, onViewChange, onDetailData, onDetailPositionChange, onDetailError, detailPosition,
+  isCurrentDetailPosition, selectedLocation, initialCenter, initialZoom,
+  basemap, onViewChange, onDetailData, onDetailPreview, onDetailPositionChange, onDetailError, detailPosition,
   quietClustersEnabled, quietThreshold, highlightGeometry, isochronGeojson, realEstateFilters, onPropertySelect, stayFilters, onStaySelect, rasterOverlays,
   validationEnabled, validationPayload, onValidationSelect,
   registerGeolocateTrigger, onGeolocateActiveChange, onGeolocateReadyChange,
@@ -172,9 +175,11 @@ export default function MapView({
       <IsochronLayer geojson={isochronGeojson ?? null} />
       <FlyToLocation location={selectedLocation ?? null} onArrived={handleArrived} />
       <DetailPopup
+        isCurrentDetailPosition={isCurrentDetailPosition}
         detailPosition={detailPosition ?? null}
         triggerPosition={flyToPos}
         onDetailData={onDetailData}
+        onDetailPreview={onDetailPreview}
         onDetailPositionChange={onDetailPositionChange}
         onDetailError={onDetailError}
       />
