@@ -1,6 +1,7 @@
 import { buildApp } from './app.js'
 import { registerWeb } from './web.js'
 import { FRONTEND_DIST } from './runtime-paths.js'
+import { userUnitOwningPort } from './port-owner-unit.js'
 
 const app = await buildApp({ logger: true })
 
@@ -40,6 +41,10 @@ await registerWeb(app, FRONTEND_DIST)
 const portText = process.env.PORT ?? '8501'
 if (!/^[0-9]{1,5}$/.test(portText) || Number(portText) < 1 || Number(portText) > 65535) {
   throw new Error(`invalid PORT ${JSON.stringify(portText)} (expected 1-65535)`)
+}
+const owningUnit = userUnitOwningPort(portText)
+if (owningUnit) {
+  throw new Error(`port ${portText} belongs to user unit ${owningUnit}; run: systemctl --user restart ${owningUnit}`)
 }
 const port = Number(portText)
 const host = process.env.HOST || '0.0.0.0'
