@@ -360,7 +360,7 @@ fn cruise_spill_and_finish_are_real_separate_cli_phases() {
         assert!(batches.iter().map(|b| b.num_rows()).sum::<usize>() > 0);
         assert!(schema
             .metadata()
-            .contains_key(arrow_batching::QM_BATCH_BBOXES_KEY));
+            .contains_key(arrow_batching::QM_BLOCKS_KEY));
     }
 }
 

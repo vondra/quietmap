@@ -9,6 +9,7 @@ import { Bool, Field, makeTable, RecordBatch, Schema, Table, tableToIPC, tableFr
 import { buildGraph, findComponents, flowAccumulate, type ServiceRoad } from './lib/service-tree-flow.js'
 import { assignBuildingsGlobally } from './lib/service-tree-buildings.js'
 import { iso2Code } from './lib/prepared-grid.js'
+import { encodeQmBlocks } from './lib/road-test-fixture.js'
 import { fleetForIso, WORLD_FLEET } from './lib/country-fleet.js'
 import { SOURCE_ID_SERVICE_TREE_HEURISTIC as SELF } from './lib/source-ids.generated.js'
 import { enrichServiceTreeSquare, readServiceRoads, splitAADT, SERVICE_TREE_CAP_PER_CLASS } from './enrich-roads-service-tree.js'
@@ -85,7 +86,7 @@ function fixture(directory: string, roads: ServiceRoad[], emptyBuildings = false
     aadt_heavy: new Int32Array(roads.length), aadt_moto: new Int32Array(roads.length),
     speed_taper: Uint8Array.from(roads, () => 41), speed_limit: Uint8Array.from(roads, () => 50),
   } as never) as unknown as Table
-  store(resolve(directory, 'roads.arrow'), table, new Map([['grid', 'z30'], ['roads_contract', 'country_baked_v1'], ['qm_batch_bboxes', '[1,2]']]))
+  store(resolve(directory, 'roads.arrow'), table, new Map([['grid', 'z30'], ['roads_contract', 'country_baked_v1'], ['qm_blocks', encodeQmBlocks([[50, 14, 50.01, 14.01]])]]))
   const points = emptyBuildings ? [] : [grid(50.00001, 14.0015)]
   const buildings = makeTable({ centroid_gx: Int32Array.from(points, r => r[0]), centroid_gy: Int32Array.from(points, r => r[1]),
     building_type: new Uint8Array(points.length), floors: Uint8Array.from(points, () => 2), area_m2: Float32Array.from(points, () => 400) })

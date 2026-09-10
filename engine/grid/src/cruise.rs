@@ -8,14 +8,7 @@ const CRUISE_ZOOM: u32 = 15;
 pub const CRUISE_AXIS: u32 = 1 << CRUISE_ZOOM;
 
 pub fn cell_axes(lat: f64, lon: f64) -> (u32, u32) {
-    let lon = crate::geo::normalize_longitude(lon);
-    let x = ((lon + 180.0) / 360.0 * f64::from(CRUISE_AXIS)).floor();
-    let (_, northing) = crate::lonlat_to_meters(0.0, lat);
-    let y = ((0.5 - northing / EARTH_CIRCUMFERENCE_M) * f64::from(CRUISE_AXIS)).floor();
-    (
-        x.clamp(0.0, f64::from(CRUISE_AXIS - 1)) as u32,
-        y.clamp(0.0, f64::from(CRUISE_AXIS - 1)) as u32,
-    )
+    crate::web_mercator_cell_axes(lat, lon, CRUISE_ZOOM)
 }
 
 pub fn cruise_cell_id(lat: f64, lon: f64) -> u64 {

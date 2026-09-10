@@ -9,6 +9,7 @@ import { Binary, Field, makeTable, RecordBatch, Schema, Table, Utf8, vectorFromA
 import { GEM_COUNTRIES } from './industrial-gem-countries.js'
 import { gemIndustrialOwnership } from './industrial-gem-source.js'
 import { gridToLonLat, iso2Code } from './prepared-grid.js'
+import { encodeQmBlocks } from './road-test-fixture.js'
 import { PROVENANCE_RANK, SOURCES_BY_ID } from './sources.js'
 import { enrichIndustrialFacilities } from './industrial-arrow.js'
 import { type MatchFacility } from './facility-match.js'
@@ -30,7 +31,7 @@ function stored(path: string, rows: Row[]): Table {
   }
   const fields = table.schema.fields.map(f => new Field(f.name, f.type, f.name === 'geom', new Map([['field', f.name]])))
   const parts = rows.length > 1 ? [table.slice(0, 1), table.slice(1)] : [table]
-  const schema = new Schema(fields, new Map([['grid', 'z30'], ['qm_batch_bboxes', JSON.stringify(parts.map(() => [49, 13, 51, 16]))], ['native', 'preserve'], ...(rows.some(row => row.country !== undefined) ? [['industrial_contract', 'country_land_baked_v1'] as [string, string]] : [])]))
+  const schema = new Schema(fields, new Map([['grid', 'z30'], ['qm_blocks', encodeQmBlocks(parts.map(() => [49, 13, 51, 16]))], ['native', 'preserve'], ...(rows.some(row => row.country !== undefined) ? [['industrial_contract', 'country_land_baked_v1'] as [string, string]] : [])]))
   const result = new Table(schema, parts.flatMap(part => part.batches.map(batch => new RecordBatch(schema, batch.data))))
   mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, tableToIPC(result, 'file'))
   return tableFromIPC(readFileSync(path))

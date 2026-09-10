@@ -79,11 +79,9 @@ fn roads_writer_roundtrips_grid_columns() {
         schema.metadata().get(GRID_CONTRACT_KEY).map(String::as_str),
         Some(GRID_CONTRACT_Z30)
     );
-    assert!(schema.metadata().contains_key(QM_BATCH_KEY));
+    assert!(schema.metadata().contains_key(arrow_batching::QM_BLOCKS_KEY));
     std::fs::remove_dir_all(&dir).ok();
 }
-
-const QM_BATCH_KEY: &str = arrow_batching::QM_BATCH_BBOXES_KEY;
 
 #[test]
 fn only_emittable_buildings_suppress_functional_areas() {

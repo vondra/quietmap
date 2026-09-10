@@ -15,10 +15,12 @@ import { promises as fs } from 'node:fs'
 import { Field, RecordBatch, Schema, Table, tableFromIPC, tableToIPC } from 'apache-arrow'
 import { shouldOverwrite } from './sources.js'
 
-/** Schema-metadata key of the per-batch bbox list written by the extractors
- *  (engine/arrow-batching). Valid ONLY while batch boundaries and row count
- *  match what the extractor wrote — see preserveArrowShape. */
-const QM_BATCH_BBOXES_KEY = 'qm_batch_bboxes'
+/** Schema-metadata key of the per-batch z14 block records written by the
+ *  extractors (engine/arrow-batching: base64, one version byte, then per batch
+ *  `u16 x, u16 y, f64 min_lat, min_lon, max_lat, max_lon`). Copied verbatim;
+ *  valid ONLY while batch boundaries and row count match what the extractor
+ *  wrote — see preserveArrowShape. */
+const QM_BLOCKS_KEY = 'qm_blocks'
 
 // Overwrite decision (re-exported from sources.ts for a stable call site)
 
@@ -198,14 +200,14 @@ export async function withArrowWrite(
  * Callbacks rebuild tables via bare `makeTable()`, which silently drops schema
  * metadata (bricking contract-gated files: `buildings_contract` aborts the
  * heatmap loader) and collapses record batches (invalidating the extractors'
- * `qm_batch_bboxes` popup-pruning metadata). Centralized HERE so no enricher
- * can forget it — the same class of fix `buildings-arrow.ts` carries locally.
+ * `qm_blocks` popup-pruning metadata). Centralized HERE so no enricher
+ * can forget it.
  * A callback that deliberately sets metadata still wins (output keys override
  * input keys).
  *
- * `qm_batch_bboxes` is kept ONLY when row count AND final batch count match
- * the input — bboxes describe exact row/batch positions, so any reshape makes
- * them stale, and a stale value must be deleted, never carried (the reader's
+ * `qm_blocks` is kept ONLY when row count AND final batch count match the
+ * input — a block is the envelope of exactly one batch's rows, so any reshape
+ * makes them stale, and a stale value must be deleted, never carried (the reader's
  * count-guard would miss a same-count-different-rows lie).
  */
 function preserveArrowShape(input: Table, output: Table): Table {
@@ -221,7 +223,7 @@ function preserveArrowShape(input: Table, output: Table): Table {
   // (value-only patches keep row order, so the original chunking is exact).
   // Boundary equality must compare per-batch ROW COUNTS, not just the batch
   // count — same-count-different-boundaries would silently misalign the
-  // bbox↔batch mapping (Gemini /gg 2026-07-10).
+  // block↔batch mapping (Gemini /gg 2026-07-10).
   const boundariesMatch = (batches: readonly RecordBatch[]): boolean =>
     batches.length === input.batches.length &&
     input.batches.every((b, i) => b.numRows === batches[i].numRows)
@@ -240,7 +242,7 @@ function preserveArrowShape(input: Table, output: Table): Table {
   }
 
   const shapePreserved = output.numRows === input.numRows && boundariesMatch(batches)
-  if (!shapePreserved) metadata.delete(QM_BATCH_BBOXES_KEY)
+  if (!shapePreserved) metadata.delete(QM_BLOCKS_KEY)
 
   const schema = new Schema(fields, metadata)
   return new Table(schema, batches.map(b => new RecordBatch(schema, b.data)))

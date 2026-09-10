@@ -9,6 +9,7 @@ import { resolve } from 'node:path'
 import { test } from 'node:test'
 import { Binary, Field, makeTable, RecordBatch, Schema, Table, Utf8, vectorFromArray, tableFromIPC, tableToIPC } from 'apache-arrow'
 import { gridToLonLat } from './lib/prepared-grid.js'
+import { encodeQmBlocks } from './lib/road-test-fixture.js'
 import { writeBuildingEnrichment } from './lib/buildings-arrow.js'
 import { NATIONAL_BUILDING_SOURCES, indexNationalBuildings } from './lib/buildings-national-source.js'
 import { enrichNationalBuildings } from './enrich-buildings-national.js'
@@ -25,7 +26,7 @@ function buildingTable(gx: number[], gy: number[], floors: number[], types: numb
   } as never) as unknown as Table
   const fields = table.schema.fields.map(f => new Field(f.name, f.type, f.name === 'height', new Map([['field-note', f.name]])))
   const schema = new Schema(fields, new Map([
-    ['grid', 'z30'], ['buildings_contract', 'buildings_v3'], ['qm_batch_bboxes', '["batch-a","batch-b"]'], ['extra', 'preserve'],
+    ['grid', 'z30'], ['buildings_contract', 'buildings_v3'], ['qm_blocks', encodeQmBlocks([[50, 14, 50.01, 14.01], [50.01, 14.01, 50.02, 14.02]])], ['extra', 'preserve'],
   ]))
   const parts = n > 1 ? [table.slice(0, 2), table.slice(2)] : [table]
   return new Table(schema, parts.flatMap(part => part.batches.map(batch => new RecordBatch(schema, batch.data))))

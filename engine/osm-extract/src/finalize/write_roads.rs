@@ -7,7 +7,7 @@ use arrow::datatypes::*;
 use std::path::Path;
 use std::sync::Arc;
 
-use super::{parse_grid_cell, segment_row_bbox, write_arrow_spatially_batched};
+use super::{parse_grid_cell, segment_row_bbox, write_arrow_z14_blocked};
 
 pub(super) fn write_roads(rows: &[Vec<String>], path: &Path) -> Result<()> {
     let n = rows.len();
@@ -98,7 +98,7 @@ pub(super) fn write_roads(rows: &[Vec<String>], path: &Path) -> Result<()> {
         source_id.append_value(0);
     }
 
-    write_arrow_spatially_batched(
+    write_arrow_z14_blocked(
         path,
         schema,
         vec![

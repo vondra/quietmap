@@ -10,7 +10,7 @@ import { municipalRoadMatcher, cityRecordDistance } from './lib/city-roads-match
 import { MUNICIPAL_ROAD_SOURCES, type CityRoadRecord } from './lib/city-roads-source.js'
 import { municipalityFromGeoJson } from './lib/city-polygon.js'
 import { iso2Code } from './lib/prepared-grid.js'
-import { writeRoadsFixture } from './lib/road-test-fixture.js'
+import { encodeQmBlocks, writeRoadsFixture } from './lib/road-test-fixture.js'
 import type { RoadRow } from './lib/roads-arrow.js'
 import { enrichMunicipalRoads } from './enrich-cities-roads.js'
 
@@ -70,7 +70,7 @@ test('city/native priorities, hole and foreign ownership preserve IPC geometry, 
   mkdirSync(resolve(path, '..'), { recursive: true }); copyFileSync(original, path)
   const input = tableFromIPC(readFileSync(path)), columns = Object.fromEntries(input.schema.fields.map(f => [f.name, input.getChild(f.name)!]))
   const stock = new Table({ ...columns, built_up: vectorFromArray([1, 0, 1, 0, 1, 0], new Uint8()) })
-  const schema = new Schema(stock.schema.fields, new Map([...input.schema.metadata, ['test-preserve', 'municipal'], ['qm_batch_bboxes', '[[50.07,14.42,50.1,14.45],[50.07,14.42,50.1,14.45]]']]))
+  const schema = new Schema(stock.schema.fields, new Map([...input.schema.metadata, ['test-preserve', 'municipal'], ['qm_blocks', encodeQmBlocks([[50.07, 14.42, 50.1, 14.45], [50.07, 14.42, 50.1, 14.45]])]]))
   const split = new Table(schema, [stock.slice(0, 3), stock.slice(3, 6)].map(t => new RecordBatch(schema, t.batches[0].data)))
   writeFileSync(path, tableToIPC(split, 'file'))
   const selected = city(Array.from({ length: 5 }, (_, i) => record(`ROAD ${i}`)))

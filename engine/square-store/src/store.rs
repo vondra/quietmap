@@ -1,8 +1,9 @@
 //! One prepared z9 square's source files, opened lazily via mmap.
 //!
-//! Spatial batch metadata prunes bodies outside the click's reach. Only absent
-//! optional files are empty; opening or decoding an existing file fails the
-//! query on error. Source contracts reject stale coordinate and layer semantics.
+//! The `qm_blocks` batch envelopes prune bodies outside the click's reach.
+//! Only absent optional files are empty; opening or decoding an existing file
+//! fails the query on error. Source contracts reject stale coordinate and
+//! layer semantics.
 //!
 //! Batches decode through `FileDecoder` over a `Buffer` that owns the mapping,
 //! so every decoded array is a slice of the file-backed pages the kernel can
@@ -31,7 +32,7 @@ pub struct LazyArrow {
     buffer: Option<Buffer>,
     decoder: Option<FileDecoder>,
     schema: Option<arrow::datatypes::SchemaRef>,
-    batch_bboxes: Option<Vec<arrow_batching::RowBbox>>,
+    blocks: Option<Vec<arrow_batching::Block>>,
     batches: Vec<Block>,
     body_end: usize,
     slots: Vec<OnceLock<Result<RecordBatch, String>>>,
@@ -160,7 +161,7 @@ impl LazyArrow {
             buffer: None,
             decoder: None,
             schema: None,
-            batch_bboxes: None,
+            blocks: None,
             batches: Vec::new(),
             body_end: 0,
             slots: Vec::new(),
@@ -192,16 +193,16 @@ impl LazyArrow {
         let (schema, decoder, batches, body_end) = decode_file(&buffer)
             .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
         let num_batches = batches.len();
-        let batch_bboxes = schema
+        let blocks = schema
             .metadata()
-            .get(arrow_batching::QM_BATCH_BBOXES_KEY)
-            .and_then(|v| arrow_batching::parse_batch_bboxes(v))
+            .get(arrow_batching::QM_BLOCKS_KEY)
+            .and_then(|v| arrow_batching::parse_blocks(v))
             .filter(|b| b.len() == num_batches);
         Ok(LazyArrow {
             buffer: Some(buffer),
             decoder: Some(decoder),
             schema: Some(schema),
-            batch_bboxes,
+            blocks,
             batches,
             body_end,
             slots: (0..num_batches).map(|_| OnceLock::new()).collect(),
@@ -248,26 +249,27 @@ impl LazyArrow {
         self.batches_where(|_| true)
     }
 
-    /// Batches whose bbox passes `keep`. Files without valid bbox metadata
-    /// return everything. The predicate MUST be a superset of the row-level
-    /// accept, or pruning drops audible sources.
+    /// Batches whose block envelope passes `keep`. Files without valid
+    /// `qm_blocks` metadata return everything. The predicate MUST be a superset
+    /// of the row-level accept, or pruning drops audible sources.
     pub fn batches_where(
         &self,
         keep: impl Fn(&arrow_batching::RowBbox) -> bool,
     ) -> Result<Vec<RecordBatch>, String> {
         (0..self.slots.len())
             .filter(|&i| {
-                self.batch_bboxes
+                self.blocks
                     .as_ref()
-                    .is_none_or(|bboxes| keep(&bboxes[i]))
+                    .is_none_or(|blocks| keep(&blocks[i].bbox))
             })
             .map(|i| self.batch(i).cloned())
             .collect()
     }
 
-    /// Circular gate for planar distance ≤ radius. The 2% slack covers the
-    /// haversine-vs-planar metric mismatch plus f32 bbox rounding (proven
-    /// constant — over-admitting a borderline batch costs one decode).
+    /// Circular gate: great-circle distance from the click to the batch
+    /// envelope ≤ radius. The 2% slack covers the haversine-vs-flat-earth
+    /// mismatch of the row filters plus f32 bbox rounding (proven constant —
+    /// over-admitting a borderline batch costs one decode).
     pub fn batches_within(
         &self,
         lat: f64,

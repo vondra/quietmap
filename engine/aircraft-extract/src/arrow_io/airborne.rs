@@ -34,9 +34,12 @@ pub fn write_airborne(
     let mut profile_idx = UInt8Builder::with_capacity(n);
     let mut source_id = UInt8Builder::with_capacity(n);
     let mut origin = UInt8Builder::with_capacity(n);
-    // Popup batch pruning: the per-event bbox doubles as the spatial-sort key
-    // f32→f64 is exact, so the batch bbox
-    // bounds the f32 coordinates the reader tests against.
+    // Popup batch pruning: the per-event bbox is the block key and envelope;
+    // f32→f64 is exact, so the batch bbox bounds the f32 coordinates the
+    // reader tests against. A flight row spans its whole flight, so its
+    // midpoint cell may lie outside this square and a support-copy file can
+    // hold thousands of one-row blocks — the plan's per-square cell bound
+    // holds once rows are midpoint-owned sub-segments (prepared v2 wave 1).
     let mut row_bboxes = Vec::with_capacity(n);
 
     let sub_struct_fields = match schema.field_with_name("sub_segments")?.data_type() {
@@ -163,7 +166,7 @@ pub fn write_airborne(
         Arc::new(sub_list),
     ];
     let (schema, batches) =
-        arrow_batching::spatially_batched(schema.as_ref().clone(), columns, &row_bboxes)?;
+        arrow_batching::blocked_by_z14_cell(schema.as_ref().clone(), columns, &row_bboxes)?;
     write_record_batches(path, &schema, &batches)
 }
 

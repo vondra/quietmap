@@ -255,13 +255,12 @@ fn parse_grid_cell(s: &str) -> i32 {
     s.parse().unwrap_or(0)
 }
 
-/// The ONE arrow-write path for all 8 layer writers: rows are spatially
-/// sorted, chunked into record batches, and per-batch bboxes stamped into
-/// schema metadata so the popup reader can skip out-of-reach batches without
-/// decoding them. Every file also carries the `grid=z30` coordinate pin —
-/// a reader that does not know integer grids refuses the file instead of
-/// misreading it.
-pub(super) fn write_arrow_spatially_batched(
+/// The ONE arrow-write path for all 8 layer writers: rows are grouped into
+/// z14 blocks (record batches with a `qm_blocks` envelope record) so the popup
+/// reader can skip out-of-reach batches without decoding them. Every file
+/// also carries the `grid=z30` coordinate pin — a reader that does not know
+/// integer grids refuses the file instead of misreading it.
+pub(super) fn write_arrow_z14_blocked(
     path: &Path,
     schema: Schema,
     columns: Vec<ArrayRef>,
@@ -270,7 +269,7 @@ pub(super) fn write_arrow_spatially_batched(
     let mut md = schema.metadata().clone();
     md.insert(GRID_CONTRACT_KEY.to_string(), GRID_CONTRACT_Z30.to_string());
     let schema = Schema::new_with_metadata(schema.fields().clone(), md);
-    let (schema, batches) = arrow_batching::spatially_batched(schema, columns, row_bboxes)?;
+    let (schema, batches) = arrow_batching::blocked_by_z14_cell(schema, columns, row_bboxes)?;
     // Sibling-temp + rename: a re-extract runs while the server reads the OLD
     // files, and the popup's lazy reader keeps mmaps open long past load —
     // truncating the live inode would SIGBUS a later first-touch decode.

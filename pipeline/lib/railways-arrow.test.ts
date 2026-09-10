@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs'
 import { test } from 'node:test'
 import { tableFromIPC } from 'apache-arrow'
 import { iso2Code } from './prepared-grid.js'
-import { railwayBytes, writeRailwaysFixture } from './rail-test-fixture.js'
+import { RAIL_FIXTURE_QM_BLOCKS, railwayBytes, writeRailwaysFixture } from './rail-test-fixture.js'
 import { writeRailParallelDivisor, writeRailwayTraffic } from './railways-arrow.js'
 
 const CD_SOURCE_ID = 9181
@@ -39,7 +39,7 @@ test('service, baked-country and priority gates protect non-eligible railway row
   assert.deepEqual([...Array(4)].map((_, index) => table.getChild('source_id')!.get(index)), [CD_SOURCE_ID, 0, 0, 110])
   assert.deepEqual([...Array(4)].map((_, index) => table.getChild('trains_passenger')!.get(index)), [2, 11, 21, 31])
   assert.equal(table.schema.metadata.get('railways_contract'), 'country_baked_v1')
-  assert.equal(table.schema.metadata.get('qm_batch_bboxes'), '[[0,0,1,1]]')
+  assert.equal(table.schema.metadata.get('qm_blocks'), RAIL_FIXTURE_QM_BLOCKS)
 })
 
 test('Moroccan national ownership admits EH and rejects an unrelated baked country', async () => {
@@ -186,7 +186,7 @@ test('policy-free divisor writes only its column and exact reruns preserve bytes
   assert.deepEqual([...Array(2)].map((_, index) => after.getChild('trains_freight')!.get(index)), [2, 3])
   assert.deepEqual([...Array(2)].map((_, index) => after.getChild('source_id')!.get(index)), [CD_SOURCE_ID, CD_SOURCE_ID])
   assert.equal(after.schema.metadata.get('railways_contract'), 'country_baked_v1')
-  assert.equal(after.schema.metadata.get('qm_batch_bboxes'), '[[0,0,1,1]]')
+  assert.equal(after.schema.metadata.get('qm_blocks'), RAIL_FIXTURE_QM_BLOCKS)
 
   const exact = railwayBytes(path)
   assert.deepEqual(await writeRailParallelDivisor(path, index => index === 0 ? 2 : null), {

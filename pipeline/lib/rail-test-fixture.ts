@@ -9,6 +9,10 @@ import {
   tableToIPC, vectorFromArray,
 } from 'apache-arrow'
 import { iso2Code } from './prepared-grid.js'
+import { encodeQmBlocks } from './road-test-fixture.js'
+
+/** The fixture's single block; writers must copy it byte-for-byte. */
+export const RAIL_FIXTURE_QM_BLOCKS = encodeQmBlocks([[0, 0, 1, 1]])
 
 const WEB_MERCATOR_RADIUS_M = 6_378_137
 const GRID_QUANTUM_M = 0.037_322_767_717_044_72
@@ -98,7 +102,7 @@ export function writeRailwaysFixture(
   })
   const metadata = new Map<string, string>([
     ['grid', 'z30'],
-    ['qm_batch_bboxes', '[[0,0,1,1]]'],
+    ['qm_blocks', RAIL_FIXTURE_QM_BLOCKS],
     ...(!options.omitContract ? [['railways_contract', 'country_baked_v1'] as const] : []),
   ])
   const schema = new Schema(table.schema.fields, metadata)

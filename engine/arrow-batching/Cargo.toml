@@ -7,3 +7,5 @@ edition = "2021"
 # default-features off: a bare "54" would drag arrow-csv/arrow-json into
 # every dependent's lockfile.
 arrow = { version = "54", default-features = false }
+base64 = "0.22"
+grid = { path = "../grid" }

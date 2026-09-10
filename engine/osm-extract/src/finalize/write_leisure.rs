@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use super::{
     decode_tsv_ring, parse_grid_cell, polygon_row_bbox, schema_with_contract,
-    write_arrow_spatially_batched, LEISURE_CONTRACT_V2,
+    write_arrow_z14_blocked, LEISURE_CONTRACT_V2,
 };
 
 /// `leisure.arrow`: one row per leisure AREA source (sports pitch / playground
@@ -75,7 +75,7 @@ pub(super) fn write_leisure(rows: &[Vec<String>], path: &Path) -> Result<()> {
         }
     }
 
-    write_arrow_spatially_batched(
+    write_arrow_z14_blocked(
         path,
         schema,
         vec![

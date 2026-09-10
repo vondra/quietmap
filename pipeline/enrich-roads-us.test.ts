@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { tableFromIPC } from 'apache-arrow'
 import { enrichUsRoads, loadUsSegments, parseUsPage, runUsEnrichment } from './enrich-roads-us.js'
 import { iso2Code, listPreparedSquares } from './lib/prepared-grid.js'
-import { writeRoadsFixture } from './lib/road-test-fixture.js'
+import { decodeQmBlocks, writeRoadsFixture } from './lib/road-test-fixture.js'
 import type { RoadLoaderArguments } from './lib/road-loader-cli.js'
 
 const DIRECTORY = mkdtempSync(join(tmpdir(), 'enrich-roads-us-test-'))
@@ -197,7 +197,7 @@ test('actual US z9 Arrow matching protects road class, source priority and baked
   assert.equal(result.retracted, 2) // Out-of-coverage and foreign own stamps are obsolete.
   assert.equal(table.schema.metadata.get('roads_contract'), 'country_baked_v1')
   assert.equal(table.schema.metadata.get('grid'), 'z30')
-  const [[south, west, north, east]] = JSON.parse(table.schema.metadata.get('qm_batch_bboxes')!)
+  const [{ bbox: [south, west, north, east] }] = decodeQmBlocks(table.schema.metadata.get('qm_blocks')!)
   assert.ok(south <= 34.00025 && north >= 34.00625 && north < 35)
   assert.ok(west <= -83.99975 && east >= -83.99375 && east < -83)
   const before = readFileSync(target)

@@ -70,8 +70,19 @@ fn two_batches_with_broken_second_message(path: &Path) {
     );
     metadata.insert("n_days".into(), "12".into());
     metadata.insert(
-        arrow_batching::QM_BATCH_BBOXES_KEY.into(),
-        "[[50,14.25,50,14.25],[60,20,60,20]]".into(),
+        arrow_batching::QM_BLOCKS_KEY.into(),
+        arrow_batching::encode_blocks(&[
+            arrow_batching::Block {
+                cell_x: 8_840,
+                cell_y: 5_556,
+                bbox: [50.0, 14.25, 50.0, 14.25],
+            },
+            arrow_batching::Block {
+                cell_x: 9_102,
+                cell_y: 4_757,
+                bbox: [60.0, 20.0, 60.0, 20.0],
+            },
+        ]),
     );
     let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
     let mut columns = base.columns().to_vec();

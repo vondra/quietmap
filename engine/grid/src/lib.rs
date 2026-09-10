@@ -75,6 +75,21 @@ pub fn grid_to_meters(gx: i32, gy: i32) -> (f64, f64) {
     )
 }
 
+/// Slippy-tile cell `(x, y)` containing lon/lat at `zoom` (row-major from the
+/// north-west corner). Longitude wraps at the antimeridian; latitude clamps
+/// with the projection, so the poles land on the edge row.
+pub fn web_mercator_cell_axes(lat_deg: f64, lon_deg: f64, zoom: u32) -> (u32, u32) {
+    let axis = f64::from(1u32 << zoom);
+    let lon = geo::normalize_longitude(lon_deg);
+    let x = ((lon + 180.0) / 360.0 * axis).floor();
+    let (_, northing) = lonlat_to_meters(0.0, lat_deg);
+    let y = ((0.5 - northing / EARTH_CIRCUMFERENCE_M) * axis).floor();
+    (
+        x.clamp(0.0, axis - 1.0) as u32,
+        y.clamp(0.0, axis - 1.0) as u32,
+    )
+}
+
 /// z9 unit containing lon/lat. Longitude wraps at the antimeridian;
 /// latitude clamps with the projection.
 pub fn square_of(lat_deg: f64, lon_deg: f64) -> Square {

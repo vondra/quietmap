@@ -26,6 +26,7 @@ import {
   vectorFromArray,
 } from 'apache-arrow'
 import { updateRow, withArrowWrite } from './provenance.js'
+import { encodeQmBlocks } from './road-test-fixture.js'
 
 // ─── updateRow ──────────────────────────────────────────────────────────────
 
@@ -78,9 +79,11 @@ test('withArrowWrite round-trips a table and atomically replaces it', async () =
 // ─── withArrowWrite shape preservation (popup batch pruning) ────────────────
 // A bare-makeTable callback must not destroy
 // schema metadata (contract stamps) nor collapse the extractors' record-batch
-// boundaries; a stale qm_batch_bboxes must be DELETED when the shape changed.
+// boundaries; a stale qm_blocks must be DELETED when the shape changed.
 
-/** Two-batch fixture (rows 0..5 | 6..9) with contract + qm_batch_bboxes. */
+const TWO_BLOCKS = encodeQmBlocks([[50, 14, 50.05, 14.1], [50.05, 14.1, 50.1, 14.2]])
+
+/** Two-batch fixture (rows 0..5 | 6..9) with contract + qm_blocks. */
 async function writeTwoBatchFixture(arrowPath: string): Promise<void> {
   const schema = new Schema(
     [
@@ -89,7 +92,7 @@ async function writeTwoBatchFixture(arrowPath: string): Promise<void> {
     ],
     new Map([
       ['test_contract', 'v1'],
-      ['qm_batch_bboxes', '[[50,14,50.05,14.1],[50.05,14.1,50.1,14.2]]'],
+      ['qm_blocks', TWO_BLOCKS],
     ]),
   )
   const bare = makeTable({
@@ -126,18 +129,14 @@ test('withArrowWrite: bare-makeTable patch keeps metadata, batches, qm key', asy
     assert.strictEqual(out.batches.length, 2, 'batch boundaries restored')
     assert.strictEqual(out.batches[0].numRows, 6)
     assert.strictEqual(out.schema.metadata.get('test_contract'), 'v1', 'contract survived')
-    assert.strictEqual(
-      out.schema.metadata.get('qm_batch_bboxes'),
-      '[[50,14,50.05,14.1],[50.05,14.1,50.1,14.2]]',
-      'bboxes survived a shape-preserving patch',
-    )
+    assert.strictEqual(out.schema.metadata.get('qm_blocks'), TWO_BLOCKS, 'blocks survived a shape-preserving patch')
     assert.strictEqual(out.getChild('source_id')!.get(3), 7, 'patch applied')
   } finally {
     await fs.rm(tmpDir, { recursive: true })
   }
 })
 
-test('withArrowWrite: row-count change deletes stale qm_batch_bboxes, keeps contract', async () => {
+test('withArrowWrite: row-count change deletes stale qm_blocks, keeps contract', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'arrow-prov-'))
   const arrowPath = path.join(tmpDir, 'reshape.arrow')
   try {
@@ -154,11 +153,7 @@ test('withArrowWrite: row-count change deletes stale qm_batch_bboxes, keeps cont
     const out = tableFromIPC(await fs.readFile(arrowPath))
     assert.strictEqual(out.numRows, 9)
     assert.strictEqual(out.schema.metadata.get('test_contract'), 'v1')
-    assert.strictEqual(
-      out.schema.metadata.get('qm_batch_bboxes'),
-      undefined,
-      'stale bboxes deleted',
-    )
+    assert.strictEqual(out.schema.metadata.get('qm_blocks'), undefined, 'stale blocks deleted')
   } finally {
     await fs.rm(tmpDir, { recursive: true })
   }

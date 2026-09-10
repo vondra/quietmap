@@ -1,5 +1,6 @@
 """Regressions for dev1 geography semantics and lossless z9 Arrow country baking."""
 
+import base64
 import os
 from pathlib import Path
 import struct
@@ -59,7 +60,10 @@ class CountryBakeTests(unittest.TestCase):
     def test_arrow_rewrite_preserves_spatial_batches_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "roads.arrow"
-            metadata = {b"qm_batch_bboxes": b"[[49,14,51,15],[49,15,51,16]]", b"source": b"fixture"}
+            # Two engine/arrow-batching block records (version byte; u16 z14 x, y; f64 envelope).
+            blocks = base64.b64encode(b"\x01" + struct.pack("<HH4d", 8851, 5556, 49, 14, 51, 15)
+                                      + struct.pack("<HH4d", 8897, 5556, 49, 15, 51, 16))
+            metadata = {b"qm_blocks": blocks, b"source": b"fixture"}
             batches = [segment_batch([(50, 14.8)]).replace_schema_metadata(metadata),
                        segment_batch([(50, 15.2)]).replace_schema_metadata(metadata)]
             with pa.ipc.new_file(path, batches[0].schema) as writer:
@@ -69,7 +73,7 @@ class CountryBakeTests(unittest.TestCase):
             before = path.read_bytes()
             with pa.ipc.open_file(path) as reader:
                 self.assertEqual(reader.num_record_batches, 2)
-                self.assertEqual(reader.schema.metadata[b"qm_batch_bboxes"], metadata[b"qm_batch_bboxes"])
+                self.assertEqual(reader.schema.metadata[b"qm_blocks"], blocks)
                 self.assertEqual(reader.schema.metadata[b"source"], b"fixture")
             self.assertEqual(bake_file(path, self.resolver), (2, False))
             self.assertEqual(path.read_bytes(), before)

@@ -6,7 +6,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, w
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Int32, RecordBatch, Schema, Table, tableFromIPC, tableToIPC, vectorFromArray } from 'apache-arrow'
-import { writeRoadsFixture } from './lib/road-test-fixture.js'
+import { encodeQmBlocks, writeRoadsFixture } from './lib/road-test-fixture.js'
 import { segmentGeometryReader } from './lib/prepared-grid.js'
 import { parseEuropeanCityTraffic } from './lib/roads-europe-source.js'
 import { buildOneHundredthDegreePointGrid, flatDist, nearestCompatiblePointWithin200Metres } from './lib/spatial.js'
@@ -78,7 +78,7 @@ test('whole road rows across a z9 boundary receive four-class totals without cha
   const path = join(owner, 'roads.arrow')
   copyFileSync(inputPath, path)
   const schema = new Schema(original.schema.fields, new Map([...original.schema.metadata,
-    ['test_metadata', 'unchanged'], ['qm_batch_bboxes', '[[49,-1,51,1],[49,-1,51,1]]']]))
+    ['test_metadata', 'unchanged'], ['qm_blocks', encodeQmBlocks([[49, -1, 51, 1], [49, -1, 51, 1]])]]))
   const batches = [original.slice(0, 1).batches[0], original.slice(1, 4).batches[0]]
   const beforeTable = new Table(schema, batches.map(batch => new RecordBatch(schema, batch.data)))
   writeFileSync(path, Buffer.from(tableToIPC(beforeTable, 'file')))

@@ -9,7 +9,7 @@ use arrow::datatypes::*;
 use std::path::Path;
 use std::sync::Arc;
 
-use super::{parse_grid_cell, segment_row_bbox, write_arrow_spatially_batched};
+use super::{parse_grid_cell, segment_row_bbox, write_arrow_z14_blocked};
 
 pub(super) fn write_barriers(rows: &[Vec<String>], path: &Path) -> Result<()> {
     let n = rows.len();
@@ -61,7 +61,7 @@ pub(super) fn write_barriers(rows: &[Vec<String>], path: &Path) -> Result<()> {
         height_tier.append_value(row.get(10).and_then(|v| v.parse().ok()).unwrap_or(2));
     }
 
-    write_arrow_spatially_batched(
+    write_arrow_z14_blocked(
         path,
         schema,
         vec![

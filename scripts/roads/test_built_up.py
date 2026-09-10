@@ -1,8 +1,10 @@
 """Real-IPC regressions for density stock, cell coverage and lossless road enrichment."""
 
+import base64
 import math
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -19,6 +21,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "structures"))
 from structure_contract import SCHEMA  # noqa: E402
 
 STRUCTURES_SCHEMA = SCHEMA.with_metadata({b"grid": b"z30", b"structures_contract": b"structures_v4"})
+# Two engine/arrow-batching block records (version byte; u16 z14 x, y; f64 envelope),
+# an opaque value the enricher must copy byte-for-byte.
+QM_BLOCKS_TWO_BATCHES = base64.b64encode(
+    b"\x01" + struct.pack("<HH4d", 16361, 7734, 9, 179, 11, 180) + struct.pack("<HH4d", 8851, 5591, 49, 14, 50, 15))
 
 
 def ring(lat, lon, side):
@@ -173,7 +179,7 @@ class BuiltUpTests(unittest.TestCase):
         assert area is not None
         self.assertAlmostEqual(area, 10000, delta=15)
         metadata = {b"grid": b"z30", b"roads_contract": b"country_baked_v1",
-                    b"qm_batch_bboxes": b"[[9,179,11,180],[49,14,50,15]]", b"source": b"fixture"}
+                    b"qm_blocks": QM_BLOCKS_TWO_BATCHES, b"source": b"fixture"}
         first = road_batch([(10, 179.9999)], metadata)
         gx, _ = qmgrid.lonlat_to_grid(-179.9999, 10)
         index = first.schema.get_field_index("end_gx")

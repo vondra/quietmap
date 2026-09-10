@@ -8,6 +8,7 @@ import { test } from 'node:test'
 import { Field, makeTable, RecordBatch, Schema, Table, Utf8, vectorFromArray, tableFromIPC, tableToIPC } from 'apache-arrow'
 import { enrichIndustrialNames, industrialNameRule, koreanIndustrialNameRule } from './industrial-name.js'
 import { iso2Code } from './prepared-grid.js'
+import { encodeQmBlocks } from './road-test-fixture.js'
 
 interface Row { name: string | null; source?: number; nace?: number; wind?: boolean; suppressed?: number; lat?: number; lon?: number; country?: string }
 const gx = (longitude: number) => Math.round((longitude / 360 + .5) * 2 ** 30)
@@ -25,7 +26,7 @@ function store(path: string, rows: Row[], fresh = false) {
   if (!fresh) table = table.assign(makeTable({ nace_4digit: Uint16Array.from(rows, r => r.nace ?? 0) }))
   const parts = rows.length > 1 ? [table.slice(0, 1), table.slice(1)] : [table]
   const schema = new Schema(table.schema.fields.map(f => new Field(f.name, f.type, f.nullable, new Map([['original', f.name]]))),
-    new Map([['grid', 'z30'], ['industrial_contract', 'country_land_baked_v1'], ['native', 'preserve'], ['qm_batch_bboxes', JSON.stringify(parts.map(() => [49, 13, 51, 16]))]]))
+    new Map([['grid', 'z30'], ['industrial_contract', 'country_land_baked_v1'], ['native', 'preserve'], ['qm_blocks', encodeQmBlocks(parts.map(() => [49, 13, 51, 16]))]]))
   const result = new Table(schema, parts.flatMap(p => p.batches.map(b => new RecordBatch(schema, b.data))))
   mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, tableToIPC(result, 'file'))
   return tableFromIPC(readFileSync(path))

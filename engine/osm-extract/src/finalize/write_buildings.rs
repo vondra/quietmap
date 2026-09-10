@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use super::{
     decode_tsv_ring, parse_grid_cell, polygon_row_bbox, schema_with_contract,
-    write_arrow_spatially_batched, BUILDINGS_CONTRACT_V3,
+    write_arrow_z14_blocked, BUILDINGS_CONTRACT_V3,
 };
 use crate::poi_join::{joined_building_type, JoinStats, PoiIndex};
 use grid::Square;
@@ -156,7 +156,7 @@ pub(super) fn write_buildings(
         source_id.append_value(0);
     }
 
-    write_arrow_spatially_batched(
+    write_arrow_z14_blocked(
         path,
         schema,
         vec![

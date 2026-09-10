@@ -48,7 +48,7 @@ def rewrite_arrow_batches(path, transform):
             schema = reader.schema
             writer = None
             try:
-                # Batch boundaries belong to qm_batch_bboxes and cannot move.
+                # Batch boundaries belong to the qm_blocks records and cannot move.
                 batches = reader.num_record_batches
                 if not batches:
                     raise ValueError(f"{path}: no record batches; refusing an unverified bake")

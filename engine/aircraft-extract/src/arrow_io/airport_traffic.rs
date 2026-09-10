@@ -235,7 +235,7 @@ pub fn write_airport_traffic(
         Arc::new(microseg_unique_ga_dep.finish()),
     ];
     let (schema, batches) =
-        arrow_batching::spatially_batched(schema.as_ref().clone(), columns, &row_bboxes)?;
+        arrow_batching::blocked_by_z14_cell(schema.as_ref().clone(), columns, &row_bboxes)?;
     write_record_batches(path, &schema, &batches)
 }
 

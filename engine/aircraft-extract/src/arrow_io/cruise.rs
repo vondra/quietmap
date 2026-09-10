@@ -24,7 +24,7 @@ use super::write_record_batches;
 /// envelopes so a receiver prunes them by distance like airborne batches.
 pub fn write_cruise(path: &Path, rows: &[CruiseBucket], n_days: u16) -> Result<()> {
     let (schema, columns, bboxes) = cruise_columns(rows, n_days)?;
-    let (schema, batches) = arrow_batching::spatially_batched(schema, columns, &bboxes)?;
+    let (schema, batches) = arrow_batching::blocked_by_z14_cell(schema, columns, &bboxes)?;
     write_record_batches(path, &schema, &batches)
 }
 
@@ -216,13 +216,14 @@ mod tests {
         assert_eq!(batches[0].num_rows(), 1);
     }
 
-    /// Batches carry synthetic-line envelopes, large owners split into
-    /// several batches, and a row beyond the query radius contract is refused.
+    /// Blocks carry synthetic-line envelopes, an owner spanning several z14
+    /// cells splits into several batches, and a row beyond the query radius
+    /// contract is refused.
     #[test]
     fn cruise_batches_carry_line_envelopes_and_reject_overlong_rows() {
         let dir = tempdir().unwrap();
         let p = dir.path().join("cruise.arrow");
-        let rows: Vec<_> = (0..(arrow_batching::TARGET_ROWS_PER_BATCH + 1))
+        let rows: Vec<_> = (0..4_097)
             .map(|i| CruiseBucket {
                 cruise_cell_id: grid::cruise::cruise_cell_id(50.0 + i as f64 * 1e-4, 14.25),
                 rep_len_m: 50_000.0,
@@ -231,14 +232,14 @@ mod tests {
             .collect();
         write_cruise(&p, &rows, 12).unwrap();
         let (schema, batches) = read_record_batches(&p).unwrap();
-        assert_eq!(batches.len(), 2);
-        let bboxes = arrow_batching::parse_batch_bboxes(
-            schema.metadata().get(arrow_batching::QM_BATCH_BBOXES_KEY).unwrap(),
+        assert!(batches.len() > 1);
+        let blocks = arrow_batching::parse_blocks(
+            schema.metadata().get(arrow_batching::QM_BLOCKS_KEY).unwrap(),
         )
         .unwrap();
-        assert_eq!(bboxes.len(), 2);
+        assert_eq!(blocks.len(), batches.len());
         // A 50 km NE–SW line spans 25 km / √2 ≈ 17.7 km ≈ 0.159° on each side.
-        for bb in &bboxes {
+        for bb in blocks.iter().map(|b| b.bbox) {
             assert!(bb[2] - bb[0] >= 0.3 && bb[2] - bb[0] < 1.0, "{bb:?}");
         }
         assert_eq!(schema.metadata().get("n_days").map(String::as_str), Some("12"));
@@ -318,10 +319,12 @@ mod tests {
             ..sample_bucket()
         };
         write_cruise(&p, &[row_a, row_b], 1).unwrap();
-        let (_, batches) = read_record_batches(&p).unwrap();
-        assert_eq!(batches[0].num_rows(), 2);
+        let (schema, batches) = read_record_batches(&p).unwrap();
+        // The two buckets sit in different z14 cells, so they are two blocks.
+        assert_eq!(batches.len(), 2);
+        let table = arrow::compute::concat_batches(&Arc::new(schema), &batches).unwrap();
         use arrow::array::Array;
-        let unique = batches[0]
+        let unique = table
             .column_by_name("unique_count")
             .unwrap()
             .as_any()
@@ -329,7 +332,7 @@ mod tests {
             .unwrap();
         assert_eq!(unique.value(0), 2);
         assert_eq!(unique.value(1), 4);
-        let list = batches[0]
+        let list = table
             .column_by_name("top_candidates")
             .unwrap()
             .as_any()

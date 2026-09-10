@@ -1,4 +1,4 @@
-/** z9/z30 Arrow fixture shared by road-writer contract tests. */
+/** z9/z30 Arrow fixture shared by road-writer contract tests, and the test-side `qm_blocks` codec. */
 
 import { after } from 'node:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -11,8 +11,53 @@ import {
 import { gridToLonLat, iso2Code } from './prepared-grid.js'
 
 const WEB_MERCATOR_RADIUS_M = 6_378_137
+const EARTH_CIRCUMFERENCE_M = 40_075_016.685_578_49
+const MAX_MERCATOR_LAT_DEG = 85.051_128_78
 const GRID_QUANTUM_M = 0.037_322_767_717_044_72
 const GRID_ORIGIN = 2 ** 29
+const Z14_AXIS = 1 << 14
+const QM_BLOCKS_VERSION = 1
+const QM_BLOCK_RECORD_LEN = 2 + 2 + 4 * 8
+
+/** `[south, west, north, east]` degrees: envelope of one batch's complete geometries. */
+export type QmEnvelope = readonly [number, number, number, number]
+/** One `qm_blocks` record as engine/arrow-batching `Block` defines it. */
+export interface QmBlock { cellX: number, cellY: number, bbox: QmEnvelope }
+
+/** Global z14 cell of a point, the row-major block key of engine/arrow-batching. */
+export function z14CellOf(lat: number, lon: number): [number, number] {
+  const wrapped = lon >= -180 && lon < 180 ? lon : ((lon + 180) % 360 + 360) % 360 - 180
+  const clamped = Math.max(-MAX_MERCATOR_LAT_DEG, Math.min(MAX_MERCATOR_LAT_DEG, lat))
+  const northing = WEB_MERCATOR_RADIUS_M * Math.log(Math.tan(Math.PI / 4 + clamped * Math.PI / 360))
+  const cell = (value: number) => Math.min(Z14_AXIS - 1, Math.max(0, Math.floor(value)))
+  return [cell((wrapped + 180) / 360 * Z14_AXIS), cell((0.5 - northing / EARTH_CIRCUMFERENCE_M) * Z14_AXIS)]
+}
+
+/** The `qm_blocks` value for batches with these envelopes: version byte, then per
+ *  batch little-endian `u16 x, u16 y, f64 south, west, north, east` (cell of the
+ *  envelope midpoint), base64 — byte-identical to the Rust encoder. */
+export function encodeQmBlocks(envelopes: readonly QmEnvelope[]): string {
+  const bytes = Buffer.alloc(1 + QM_BLOCK_RECORD_LEN * envelopes.length)
+  bytes[0] = QM_BLOCKS_VERSION
+  envelopes.forEach((envelope, index) => {
+    const at = 1 + QM_BLOCK_RECORD_LEN * index
+    const [cellX, cellY] = z14CellOf((envelope[0] + envelope[2]) / 2, (envelope[1] + envelope[3]) / 2)
+    bytes.writeUInt16LE(cellX, at)
+    bytes.writeUInt16LE(cellY, at + 2)
+    envelope.forEach((value, axis) => bytes.writeDoubleLE(value, at + 4 + 8 * axis))
+  })
+  return bytes.toString('base64')
+}
+
+export function decodeQmBlocks(value: string): QmBlock[] {
+  const bytes = Buffer.from(value, 'base64')
+  if (bytes[0] !== QM_BLOCKS_VERSION || (bytes.length - 1) % QM_BLOCK_RECORD_LEN !== 0) throw new Error('malformed qm_blocks')
+  return Array.from({ length: (bytes.length - 1) / QM_BLOCK_RECORD_LEN }, (_, index) => {
+    const at = 1 + QM_BLOCK_RECORD_LEN * index
+    const bbox = [0, 1, 2, 3].map(axis => bytes.readDoubleLE(at + 4 + 8 * axis)) as [number, number, number, number]
+    return { cellX: bytes.readUInt16LE(at), cellY: bytes.readUInt16LE(at + 2), bbox }
+  })
+}
 
 export const ROAD_TEST_DIRECTORY = mkdtempSync(join(tmpdir(), 'roads-arrow-test-'))
 after(() => rmSync(ROAD_TEST_DIRECTORY, { recursive: true, force: true }))
@@ -39,7 +84,7 @@ export function writeRoadsFixture(name: string, classes: number[], options: Road
   const starts = indices.map(index => lonLatToGrid(longitude + index * 0.001, latitude + index * 0.001))
   const ends = indices.map(index => lonLatToGrid(longitude + 0.0005 + index * 0.001, latitude + 0.0005 + index * 0.001))
   const bounds = [...starts, ...ends].map(([gx, gy]) => gridToLonLat(gx, gy))
-    .reduce(([south, west, north, east], { lat, lon }) => [
+    .reduce<QmEnvelope>(([south, west, north, east], { lat, lon }) => [
       Math.min(south, lat), Math.min(west, lon), Math.max(north, lat), Math.max(east, lon),
     ], [90, 180, -90, -180])
   const table = new Table({
@@ -63,7 +108,7 @@ export function writeRoadsFixture(name: string, classes: number[], options: Road
   })
   const metadata = new Map<string, string>([
     ['grid', 'z30'],
-    ['qm_batch_bboxes', JSON.stringify(indices.length ? [bounds] : [])],
+    ...(indices.length ? [['qm_blocks', encodeQmBlocks([bounds])] as const] : []),
     ...(!options.omitCountryContract ? [['roads_contract', 'country_baked_v1'] as const] : []),
   ])
   const schema = new Schema(table.schema.fields, metadata)

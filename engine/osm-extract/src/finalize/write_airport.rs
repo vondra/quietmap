@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use super::{
     decode_tsv_ring, parse_grid_cell, polygon_row_bbox, segment_row_bbox,
-    write_arrow_spatially_batched,
+    write_arrow_z14_blocked,
 };
 
 pub(super) fn write_airport_areas(rows: &[Vec<String>], path: &Path) -> Result<()> {
@@ -94,7 +94,7 @@ pub(super) fn write_airport_areas(rows: &[Vec<String>], path: &Path) -> Result<(
         }
     }
 
-    write_arrow_spatially_batched(
+    write_arrow_z14_blocked(
         path,
         schema,
         vec![
@@ -209,7 +209,7 @@ pub(super) fn write_airport_lines(rows: &[Vec<String>], path: &Path) -> Result<(
         }
     }
 
-    write_arrow_spatially_batched(
+    write_arrow_z14_blocked(
         path,
         schema,
         vec![
