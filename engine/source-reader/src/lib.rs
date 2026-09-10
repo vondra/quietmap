@@ -72,22 +72,6 @@ struct SquareStore {
     prepared_dir: String,
 }
 
-/// RAII clearer for the M4/M5 per-row admin channels: a plain
-/// clear-after-compute pair lets a kernel unwind leave a stale vec on the
-/// surviving napi worker thread (the next query of equal row count would
-/// silently inherit the previous query's countries). The guard clears on
-/// scope exit either way.
-#[cfg(feature = "node")]
-struct RowAdminGuard;
-
-#[cfg(feature = "node")]
-impl Drop for RowAdminGuard {
-    fn drop(&mut self) {
-        noise_compute::defaults::set_road_row_admins(None);
-        noise_compute::emission::railway::set_rail_row_admins(None);
-    }
-}
-
 #[cfg(feature = "node")]
 impl SquareStore {
     fn new() -> Self {
@@ -522,11 +506,6 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         .ensure_valid()
         .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))?;
 
-    let config = noise_compute::types::ComputeConfig {
-        n_days: sources.n_days,
-        ..Default::default()
-    };
-
     let n_airborne = sources
         .aircraft_airborne_batches
         .iter()
@@ -561,16 +540,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     );
 
     let mut traces = noise_compute::types::TraceCollector::new();
-    // M4/M5: hand the per-row baked admins to the kernels through their
-    // thread-local channels (RoadSegment/RailSegment are codever-SHARED and
-    // cannot carry the field). The guard clears on scope exit INCLUDING a
-    // kernel unwind — napi-rs turns a caught panic into a JS throw, and a
-    // stale vec on the surviving worker thread would paint the previous
-    // click's countries onto the next query's segments.
-    noise_compute::defaults::set_road_row_admins(Some(sources.road_admins));
-    noise_compute::emission::railway::set_rail_row_admins(Some(sources.rail_admins));
-    let _row_admin_guard = RowAdminGuard;
-    let mut result = noise_compute::compute_at_point_with_traces(
+    let mut result = noise_compute::compute_at_point(
         &receiver,
         &sources.roads,
         &sources.railways,
@@ -578,10 +548,8 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         &sources.industrial,
         &obstacle_set,
         rasters,
-        &config,
         Some(&mut traces),
     );
-    drop(_row_admin_guard);
     let t_ground = t_start.elapsed() - t_load - t_collect;
     aircraft_v6::add_v6_aircraft_to_result(
         &mut result,

@@ -148,7 +148,7 @@ fn stage2c_cell_summaries_preserve_popup_unions_and_refuse_incomplete_neighbors(
             &[],
             &obstacles,
             &FlatGround,
-            &ComputeConfig::default(),
+            None,
         );
         let mut traces = TraceCollector::default();
         add_v6_aircraft_to_result(

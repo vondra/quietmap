@@ -3,8 +3,8 @@
 //! CNOSSOS-EU emission + ISO 9613-2 propagation + Doc 29 aircraft.
 //! No I/O, no files, no napi. Pure computation.
 //!
-//! Single-receiver entry points: `compute_at_point` and
-//! `compute_at_point_with_traces` (popup).
+//! Single-receiver entry point: `compute_at_point` (the popup passes a
+//! `TraceCollector`).
 
 pub mod admin;
 pub mod city_consts_generated;
@@ -119,6 +119,7 @@ fn wkb_to_geojson(hex: &str) -> Option<serde_json::Value> {
 /// Aircraft go through `compute::aircraft_v6::compute_aircraft_v6`,
 /// invoked separately by the popup (see
 /// `source-reader/src/aircraft_v6/mod.rs::add_v6_aircraft_to_result`).
+/// The popup passes a `TraceCollector` for its per-segment traces.
 #[allow(clippy::too_many_arguments)]
 pub fn compute_at_point(
     receiver: &Receiver,
@@ -128,43 +129,6 @@ pub fn compute_at_point(
     industrial: &[PointSource],
     obstacles: &ObstacleSet,
     rasters: &dyn RasterSampler,
-    config: &ComputeConfig,
-) -> NoiseResult {
-    compute_at_point_inner(
-        receiver, roads, railways, buildings, industrial, obstacles, rasters, config, None,
-    )
-}
-
-/// Variant that also takes a `TraceCollector` (popup uses this through
-/// the source-reader to collect noise-segments traces alongside the
-/// aggregate result).
-#[allow(clippy::too_many_arguments)]
-pub fn compute_at_point_with_traces(
-    receiver: &Receiver,
-    roads: &[RoadSegment],
-    railways: &[RailSegment],
-    buildings: &[PointSource],
-    industrial: &[PointSource],
-    obstacles: &ObstacleSet,
-    rasters: &dyn RasterSampler,
-    config: &ComputeConfig,
-    traces: Option<&mut TraceCollector>,
-) -> NoiseResult {
-    compute_at_point_inner(
-        receiver, roads, railways, buildings, industrial, obstacles, rasters, config, traces,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn compute_at_point_inner(
-    receiver: &Receiver,
-    roads: &[RoadSegment],
-    railways: &[RailSegment],
-    buildings: &[PointSource],
-    industrial: &[PointSource],
-    obstacles: &ObstacleSet,
-    rasters: &dyn RasterSampler,
-    _config: &ComputeConfig,
     mut traces: Option<&mut TraceCollector>,
 ) -> NoiseResult {
     let mut source_results = Vec::new();
@@ -177,90 +141,92 @@ fn compute_at_point_inner(
     // display threshold are dropped — comparable error to the existing
     // `other_sources_lden` accounting; never user-facing (wire field is the
     // new `lden_free`, previously always null).
-    let contrib_periods_free = |contribs: &[Contributor]| -> NoisePeriods {
-        periods::sum_periods(
-            &contribs
+    let mut push_layer = |kind: LayerKind,
+                          segment_count: usize,
+                          periods: NoisePeriods,
+                          contributors: Vec<Contributor>| {
+        let periods_free = periods::sum_periods(
+            &contributors
                 .iter()
                 .map(|c| c.periods_free.clone())
                 .collect::<Vec<_>>(),
-        )
+        );
+        source_results.push(SourceResult {
+            source_type: kind,
+            periods,
+            periods_free,
+            segment_count,
+            displayed_count: present::display_count(&contributors),
+        });
+        all_contributors.extend(contributors);
     };
 
-    if !roads.is_empty() {
-        let t = std::time::Instant::now();
-        let (road_periods, road_contributors) =
-            compute_roads(receiver, roads, obstacles, rasters, traces.as_deref_mut());
-        timings.road_ms = t.elapsed().as_secs_f64() * 1000.0;
-        source_results.push(SourceResult {
-            source_type: LayerKind::Road,
-            periods: road_periods.clone(),
-            periods_free: contrib_periods_free(&road_contributors),
-            segment_count: roads.len(),
-            displayed_count: present::display_count(&road_contributors),
+    // The road and rail kernels run concurrently: each one's pass 1 (the
+    // sequential skyline growth chain) is 80–85 % of its wall time and the
+    // two chains are independent — own skyline, own emission-memo session,
+    // own trace list. Traces are appended in the sequential order (roads,
+    // then railways), so the answer is the sequential composition bit for
+    // bit. A scoped thread, not `rayon::join`: a multi-second non-yielding
+    // chain must not sit on a pool worker that pass 2 of every concurrent
+    // popup wants to steal from. Rail stays on the calling thread, whose
+    // REACH_CACHE memo it fills.
+    let collecting = traces.is_some();
+    let (road, rail) = std::thread::scope(|scope| {
+        let road = scope.spawn(|| {
+            (!roads.is_empty()).then(|| {
+                run_line_layer(collecting, |t| {
+                    compute_roads(receiver, roads, obstacles, rasters, t)
+                })
+            })
         });
-        all_contributors.extend(road_contributors);
+        let rail = (!railways.is_empty()).then(|| {
+            run_line_layer(collecting, |t| {
+                compute_railways(receiver, railways, obstacles, rasters, t)
+            })
+        });
+        (road.join().expect("road kernel panicked"), rail)
+    });
+    for (kind, segment_count, layer, wall_ms) in [
+        (LayerKind::Road, roads.len(), road, &mut timings.road_ms),
+        (
+            LayerKind::Railway,
+            railways.len(),
+            rail,
+            &mut timings.rail_ms,
+        ),
+    ] {
+        let Some(layer) = layer else {
+            continue;
+        };
+        *wall_ms = layer.wall_ms;
+        if let Some(t) = traces.as_deref_mut() {
+            t.segments.extend(layer.traces);
+        }
+        push_layer(kind, segment_count, layer.periods, layer.contributors);
     }
 
-    if !railways.is_empty() {
-        let t = std::time::Instant::now();
-        let (rail_periods, rail_contributors) = compute_railways(
-            receiver,
-            railways,
-            obstacles,
-            rasters,
-            traces.as_deref_mut(),
-        );
-        timings.rail_ms = t.elapsed().as_secs_f64() * 1000.0;
-        source_results.push(SourceResult {
-            source_type: LayerKind::Railway,
-            periods: rail_periods,
-            periods_free: contrib_periods_free(&rail_contributors),
-            segment_count: railways.len(),
-            displayed_count: present::display_count(&rail_contributors),
-        });
-        all_contributors.extend(rail_contributors);
-    }
-
-    if !buildings.is_empty() {
-        let t = std::time::Instant::now();
-        let (bld_periods, bld_contributors) = compute_point_sources(
-            receiver,
-            buildings,
-            obstacles,
-            rasters,
-            LayerKind::Building,
-            traces.as_deref_mut(),
-        );
-        timings.building_ms = t.elapsed().as_secs_f64() * 1000.0;
-        source_results.push(SourceResult {
-            source_type: LayerKind::Building,
-            periods: bld_periods,
-            periods_free: contrib_periods_free(&bld_contributors),
-            segment_count: buildings.len(),
-            displayed_count: present::display_count(&bld_contributors),
-        });
-        all_contributors.extend(bld_contributors);
-    }
-
-    if !industrial.is_empty() {
-        let t = std::time::Instant::now();
-        let (ind_periods, ind_contributors) = compute_point_sources(
-            receiver,
-            industrial,
-            obstacles,
-            rasters,
+    for (kind, sources, wall_ms) in [
+        (LayerKind::Building, buildings, &mut timings.building_ms),
+        (
             LayerKind::Industrial,
-            traces,
+            industrial,
+            &mut timings.industrial_ms,
+        ),
+    ] {
+        if sources.is_empty() {
+            continue;
+        }
+        let t = std::time::Instant::now();
+        let (periods, contributors) = compute_point_sources(
+            receiver,
+            sources,
+            obstacles,
+            rasters,
+            kind,
+            traces.as_deref_mut(),
         );
-        timings.industrial_ms = t.elapsed().as_secs_f64() * 1000.0;
-        source_results.push(SourceResult {
-            source_type: LayerKind::Industrial,
-            periods: ind_periods,
-            periods_free: contrib_periods_free(&ind_contributors),
-            segment_count: industrial.len(),
-            displayed_count: present::display_count(&ind_contributors),
-        });
-        all_contributors.extend(ind_contributors);
+        *wall_ms = t.elapsed().as_secs_f64() * 1000.0;
+        push_layer(kind, sources.len(), periods, contributors);
     }
 
     // Aircraft are computed by `compute::aircraft_v6::compute_aircraft_v6`
@@ -313,76 +279,28 @@ fn compute_at_point_inner(
     }
 }
 
-/// Road [`NoisePeriods`] at a receiver — the popup road path without trace
-/// collection. Each segment's closest-point (`dist_m`/`cp_lat`/`cp_lon`/
-/// `fraction`) must already be filled for THIS receiver. Exposed so the
-/// surface-heatmap road parity validator can compare against the exact
-/// popup reference instead of re-implementing the physics.
-pub fn road_periods(
-    receiver: &Receiver,
-    obstacles: &ObstacleSet,
-    roads: &[RoadSegment],
-    rasters: &dyn RasterSampler,
-) -> NoisePeriods {
-    compute_roads(receiver, roads, obstacles, rasters, None).0
+/// One line layer's kernel run: its own trace list (the caller appends it in
+/// layer order) and wall time.
+struct LineLayerRun {
+    periods: NoisePeriods,
+    contributors: Vec<Contributor>,
+    traces: Vec<SegmentTrace>,
+    wall_ms: f64,
 }
 
-/// Railway [`NoisePeriods`] at a receiver — the popup rail path without trace
-/// collection. Each segment's closest-point (`dist_m`/`cp_lat`/`cp_lon`/
-/// `fraction`) and effective (post `service`/`parallel_divisor`) train counts
-/// must already be filled for THIS receiver. Exposed so the surface-heatmap
-/// rail parity validator compares against the exact popup reference.
-pub fn rail_periods(
-    receiver: &Receiver,
-    obstacles: &ObstacleSet,
-    railways: &[RailSegment],
-    rasters: &dyn RasterSampler,
-) -> NoisePeriods {
-    compute_railways(receiver, railways, obstacles, rasters, None).0
-}
-
-/// Industrial [`NoisePeriods`] at a receiver — the popup point-source path
-/// (`LayerKind::Industrial`) without trace collection. Each `PointSource`'s
-/// `dist_m` must already be filled for THIS receiver. Exposed so the
-/// surface-heatmap industrial parity validator compares against the exact
-/// popup reference.
-pub fn industrial_periods(
-    receiver: &Receiver,
-    obstacles: &ObstacleSet,
-    sources: &[PointSource],
-    rasters: &dyn RasterSampler,
-) -> NoisePeriods {
-    compute_point_sources(
-        receiver,
-        sources,
-        obstacles,
-        rasters,
-        LayerKind::Industrial,
-        None,
-    )
-    .0
-}
-
-/// Building [`NoisePeriods`] at a receiver — the popup point-source path
-/// (`LayerKind::Building`) without trace collection. Each `PointSource`'s
-/// `dist_m` must already be filled for THIS receiver. Exposed so the
-/// surface-heatmap building parity validator compares against the exact popup
-/// reference.
-pub fn building_periods(
-    receiver: &Receiver,
-    obstacles: &ObstacleSet,
-    sources: &[PointSource],
-    rasters: &dyn RasterSampler,
-) -> NoisePeriods {
-    compute_point_sources(
-        receiver,
-        sources,
-        obstacles,
-        rasters,
-        LayerKind::Building,
-        None,
-    )
-    .0
+fn run_line_layer(
+    collecting: bool,
+    kernel: impl FnOnce(Option<&mut TraceCollector>) -> (NoisePeriods, Vec<Contributor>),
+) -> LineLayerRun {
+    let t = std::time::Instant::now();
+    let mut traces = collecting.then(TraceCollector::new);
+    let (periods, contributors) = kernel(traces.as_mut());
+    LineLayerRun {
+        periods,
+        contributors,
+        traces: traces.map(|t| t.segments).unwrap_or_default(),
+        wall_ms: t.elapsed().as_secs_f64() * 1000.0,
+    }
 }
 
 /// Compute terrain/screening/vegetation path effects for one source-receiver pair.
@@ -718,6 +636,7 @@ mod tests {
         let receiver = Receiver::new(50.08, 14.42, 200.0);
         let roads = vec![RoadSegment {
             osm_id: 1,
+            admin: None,
             segment_idx: 0,
             // 500 m due north of the receiver, running east-west: the
             // declared dist_m/cp/fraction must AGREE with the geometry —
@@ -751,16 +670,7 @@ mod tests {
             built_up: 0,
         }];
 
-        let result = compute_at_point(
-            &receiver,
-            &roads,
-            &[],
-            &[],
-            &[],
-            &crate::propagation::obstacle_index::ObstacleSet::empty(),
-            &MockRasters,
-            &ComputeConfig::default(),
-        );
+        let result = popup(&receiver, &roads, &[]);
 
         // Motorway at 500m with 30K AADT should produce ~55-65 dB Lden
         assert!(
@@ -787,11 +697,26 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_multi_source() {
-        let receiver = Receiver::new(50.08, 14.42, 200.0);
-        let roads = vec![RoadSegment {
+    /// The popup's call for a road/rail scene: no point sources, no
+    /// obstacles, no traces.
+    fn popup(receiver: &Receiver, roads: &[RoadSegment], railways: &[RailSegment]) -> NoiseResult {
+        compute_at_point(
+            receiver,
+            roads,
+            railways,
+            &[],
+            &[],
+            &crate::propagation::obstacle_index::ObstacleSet::empty(),
+            &MockRasters,
+            None,
+        )
+    }
+
+    /// Residential street 100 m north of the popup's test receiver.
+    fn residential_100m_north() -> RoadSegment {
+        RoadSegment {
             osm_id: 1,
+            admin: None,
             segment_idx: 0,
             start_lat: 50.080905,
             start_lon: 14.418460,
@@ -820,9 +745,14 @@ mod tests {
             access: 0,
             junction: 0,
             built_up: 0,
-        }];
-        let railways = vec![RailSegment {
+        }
+    }
+
+    /// Mainline track 200 m north of the popup's test receiver.
+    fn mainline_200m_north() -> RailSegment {
+        RailSegment {
             osm_id: 2,
+            admin: None,
             segment_idx: 0,
             start_lat: 50.081809,
             start_lon: 14.416920,
@@ -851,18 +781,65 @@ mod tests {
             trains_passenger_source: 0,
             trains_freight_source: 0,
             source_id: 0,
-        }];
+        }
+    }
 
+    /// The road and rail kernels run on two threads; the answer must be the
+    /// sequential composition bit for bit — periods, and traces in layer
+    /// order (roads, then railways).
+    #[test]
+    fn joined_line_layers_match_the_sequential_composition() {
+        let receiver = Receiver::new(50.08, 14.42, 200.0);
+        let roads = vec![residential_100m_north()];
+        let railways = vec![mainline_200m_north()];
+        let obstacles = crate::propagation::obstacle_index::ObstacleSet::empty();
+        let bits = |p: &NoisePeriods| [p.ld_db, p.le_db, p.ln_db, p.lden_db].map(f64::to_bits);
+        let mut expected = TraceCollector::new();
+        let (road_periods, _) = compute_roads(
+            &receiver,
+            &roads,
+            &obstacles,
+            &MockRasters,
+            Some(&mut expected),
+        );
+        let (rail_periods, _) = compute_railways(
+            &receiver,
+            &railways,
+            &obstacles,
+            &MockRasters,
+            Some(&mut expected),
+        );
+        let mut traces = TraceCollector::new();
         let result = compute_at_point(
             &receiver,
             &roads,
             &railways,
             &[],
             &[],
-            &crate::propagation::obstacle_index::ObstacleSet::empty(),
+            &obstacles,
             &MockRasters,
-            &ComputeConfig::default(),
+            Some(&mut traces),
         );
+        assert_eq!(bits(&result.sources[0].periods), bits(&road_periods));
+        assert_eq!(bits(&result.sources[1].periods), bits(&rail_periods));
+        assert!(
+            !expected.segments.is_empty(),
+            "the scene must produce traces"
+        );
+        assert_eq!(
+            serde_json::to_string(&traces.segments).unwrap(),
+            serde_json::to_string(&expected.segments).unwrap(),
+            "traces in layer order"
+        );
+    }
+
+    #[test]
+    fn test_multi_source() {
+        let receiver = Receiver::new(50.08, 14.42, 200.0);
+        let roads = vec![residential_100m_north()];
+        let railways = vec![mainline_200m_north()];
+
+        let result = popup(&receiver, &roads, &railways);
 
         // Should have both road and railway sources
         assert_eq!(result.sources.len(), 2);
@@ -873,26 +850,8 @@ mod tests {
         );
 
         // Total should be louder than either source alone
-        let road_only = compute_at_point(
-            &receiver,
-            &roads,
-            &[],
-            &[],
-            &[],
-            &crate::propagation::obstacle_index::ObstacleSet::empty(),
-            &MockRasters,
-            &ComputeConfig::default(),
-        );
-        let rail_only = compute_at_point(
-            &receiver,
-            &[],
-            &railways,
-            &[],
-            &[],
-            &crate::propagation::obstacle_index::ObstacleSet::empty(),
-            &MockRasters,
-            &ComputeConfig::default(),
-        );
+        let road_only = popup(&receiver, &roads, &[]);
+        let rail_only = popup(&receiver, &[], &railways);
 
         assert!(
             result.total.lden_db > road_only.total.lden_db,
@@ -914,6 +873,7 @@ mod tests {
         let receiver = Receiver::new(50.08, 14.42, 200.0);
         let roads = vec![RoadSegment {
             osm_id: 2,
+            admin: None,
             segment_idx: 0,
             start_lat: 50.0801,
             start_lon: 14.42,
@@ -944,16 +904,7 @@ mod tests {
             built_up: 0,
         }];
 
-        let result = compute_at_point(
-            &receiver,
-            &roads,
-            &[],
-            &[],
-            &[],
-            &crate::propagation::obstacle_index::ObstacleSet::empty(),
-            &MockRasters,
-            &ComputeConfig::default(),
-        );
+        let result = popup(&receiver, &roads, &[]);
 
         // Residential at 15m with 500 AADT: ~40-55 dB
         assert!(
@@ -1106,6 +1057,7 @@ mod tests {
         let receiver = Receiver::new(50.08, 14.42, 200.0);
         let roads = vec![RoadSegment {
             osm_id: 1,
+            admin: None,
             segment_idx: 0,
             start_lat: 50.081,
             start_lon: 14.42,
@@ -1137,6 +1089,7 @@ mod tests {
         }];
         let railways = vec![RailSegment {
             osm_id: 2,
+            admin: None,
             segment_idx: 0,
             start_lat: 50.082,
             start_lon: 14.42,
@@ -1166,20 +1119,7 @@ mod tests {
             trains_freight_source: 0,
             source_id: 0,
         }];
-        let config = ComputeConfig {
-            n_days: 365,
-            ..Default::default()
-        };
-        let result = compute_at_point(
-            &receiver,
-            &roads,
-            &railways,
-            &[],
-            &[],
-            &crate::propagation::obstacle_index::ObstacleSet::empty(),
-            &MockRasters,
-            &config,
-        );
+        let result = popup(&receiver, &roads, &railways);
 
         // Should have road + railway
         assert!(

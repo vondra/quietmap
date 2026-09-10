@@ -310,7 +310,8 @@ function TimingsOverlay({ timings }: { timings: NoiseComputeData['timings'] }) {
     ['load', timings.load_ms],
     ['collect', timings.collect_ms],
   ]
-  const total = rows.reduce((s, [, ms]) => s + ms, 0)
+  // Road and rail kernels run concurrently, so their wall times overlap.
+  const total = rows.reduce((s, [, ms]) => s + ms, 0) - Math.min(timings.road_ms, timings.rail_ms)
   const sorted = rows.sort((a, b) => b[1] - a[1])
   return (
     <div className="mt-2 pt-1.5 border-t border-border/30 text-[10px] font-mono text-muted-foreground/70 leading-tight">

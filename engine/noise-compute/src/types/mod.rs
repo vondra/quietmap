@@ -42,17 +42,17 @@ pub const NUM_BANDS: usize = 8;
 pub const LEISURE_TYPE_BASE: u8 = 100;
 
 mod aircraft_detail;
-mod config;
 mod inputs;
 mod metadata;
 mod propagation;
+mod raster_sampler;
 mod result;
 mod trace_types;
 
 pub use aircraft_detail::*;
-pub use config::*;
 pub use inputs::*;
 pub use metadata::*;
 pub use propagation::*;
+pub use raster_sampler::*;
 pub use result::*;
 pub use trace_types::*;
