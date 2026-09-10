@@ -1,4 +1,4 @@
-/** Apply the admitted ten special-national sources to country-owned industrial rows. */
+/** Apply every admitted special-national source family to country-owned industrial rows. */
 
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'

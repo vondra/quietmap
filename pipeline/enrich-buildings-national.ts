@@ -1,6 +1,6 @@
 /** Refine CZ/ES OSM building floors and use before service-tree and final structures. */
 
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -11,21 +11,13 @@ import { writeBuildingEnrichment } from './lib/buildings-arrow.js'
 import { NATIONAL_BUILDING_SOURCES, indexNationalBuildings, type NationalBuildingIndex } from './lib/buildings-national-source.js'
 
 export async function enrichNationalBuildings(preparedDirectory: string, index: NationalBuildingIndex) {
-  const squares = new Set([
-    ...listPreparedSquares(preparedDirectory, index.source.bbox, 'buildings.arrow'),
-    ...listPreparedSquares(preparedDirectory, index.source.bbox, 'roads.arrow'),
-    ...listPreparedSquares(preparedDirectory, index.source.bbox, 'structures.arrow'),
-  ])
-  if (!squares.size) throw new Error(`${preparedDirectory}: no prepared building scope for ${index.source.country}`)
-  // A road/structure owner with a missing building table is not evidence of no buildings.
-  for (const square of squares) {
-    if (!existsSync(resolve(preparedDirectory, square, 'buildings.arrow'))) {
-      throw new Error(`${square}: missing buildings.arrow before national enrichment`)
-    }
-  }
+  // The OSM extractor omits empty layers. Overture-only structures are not
+  // OSM building rows and cannot receive these national refinements.
+  const squares = listPreparedSquares(preparedDirectory, index.source.bbox, 'buildings.arrow')
+  if (!squares.length) throw new Error(`${preparedDirectory}: no prepared building scope for ${index.source.country}`)
   const result = { country: index.source.country, rows: 0, matched: 0, floorsAdded: 0,
-    typesChanged: 0, typeDowngradesBlocked: 0, squares: squares.size, squaresUpdated: 0 }
-  for (const square of [...squares].sort()) {
+    typesChanged: 0, typeDowngradesBlocked: 0, squares: squares.length, squaresUpdated: 0 }
+  for (const square of squares) {
     const written = await writeBuildingEnrichment(resolve(preparedDirectory, square, 'buildings.arrow'), row => {
       if (!shouldOverwrite(row.existingSourceId, index.source.sourceId)) return null
       if (index.source.country === 'ES' && row.floors > 0) return null

@@ -1,31 +1,4 @@
-/**
- * Shared GTFS parsing core for the `enrich-railway-*.ts` country enrichers.
- *
- * One source of truth for the generic, country-agnostic GTFS helpers that were
- * previously copy-pasted byte-for-byte across the per-country railway enrichers:
- * CSV parsing, GTFS date math, the calendar-midpoint Wednesday service-day picker,
- * the route_type → family classification sets, and the two shared row shapes.
- *
- * Per-country code (feed URLs, bbox + exclusion zones, match/closure logic) stays in
- * each `enrich-railway-<cc>.ts` file — only the truly identical generics live here.
- * No-match rows return null (source_id stays 0): the ENGINE default table
- * (engine/noise-compute/src/emission/railway.rs::default_traffic) is the single
- * "we don't know" authority — per-country class-default stamping was purged 2026-07-10.
- *
- * `computeStopFrequenciesForFeed` is a thin composition over two lower-level helpers
- * also used by the station-pair parser (`gtfs-stop-pairs.ts`): `computeActiveTripFamiliesForFeed`
- * (routes + calendar + trips -> trip_id family map) and `loadStopsWithCoords` (stops +
- * parent-station index). Behavior is preserved from the pre-2026-07-15 byte-identical
- * copies EXCEPT one intentional fix: a calendar present but resolving to zero active
- * services on the target date now yields zero trips instead of silently counting every
- * trip — see the BUG FIX comment on `computeActiveTripFamiliesForFeed` below.
- *
- * `dedupeStopsByLocation` + `buildTramExtraMatch`, hoisted from
- * `enrich-railway-europe.ts`:
- * the tram/light-rail `nearestGridStop` join every national enricher wires in as
- * `enrichRailwaysByGraphWalk`'s `extraMatch` fallback arm — ONE implementation shared
- * by `enrich-railway-europe.ts` and every `enrich-railway-{cc}.ts`, never 17 copies.
- */
+/** Shared GTFS timetable selection, parsing and stop-to-track matching. */
 
 import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -158,6 +131,7 @@ export function buildTramExtraMatch<S extends {
       passenger: stop.trains_passenger,
       freight: stop.trains_freight,
       sourceId,
+      divisor: 1,
     } : null
   }
 }
@@ -222,6 +196,22 @@ export async function parseCsvStream(filePath: string): Promise<Record<string, s
   return results
 }
 
+/** Feed-declared dates bound timetable sampling even when recurring calendars span years. */
+export async function readGtfsFeedWindow(extractDir: string): Promise<{ firstServiceDate: string; lastServiceDate: string }> {
+  const path = resolve(extractDir, 'feed_info.txt')
+  const rows = existsSync(path) ? await parseCsvStream(path) : []
+  if (rows.length > 1) throw new Error(`${path}: expected at most one feed_info row`)
+  const firstServiceDate = rows[0]?.['feed_start_date'] ?? ''
+  const lastServiceDate = rows[0]?.['feed_end_date'] ?? ''
+  for (const date of [firstServiceDate, lastServiceDate]) {
+    if (date && !/^\d{8}$/.test(date)) throw new Error(`${path}: invalid service date '${date}'`)
+  }
+  if (firstServiceDate && lastServiceDate && firstServiceDate > lastServiceDate) {
+    throw new Error(`${path}: reversed service window`)
+  }
+  return { firstServiceDate, lastServiceDate }
+}
+
 // ── Date helpers ──
 
 export function parseGtfsDate(yyyymmdd: string): number {
@@ -251,11 +241,35 @@ export function parseTime(s: string): number {
   return parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseInt(m[3])
 }
 
+/** Daily multipliers for GTFS headway templates; absent trips run once. */
+export async function readGtfsTripDepartureMultipliers(
+  extractDir: string,
+  activeTripIds: ReadonlySet<string>,
+): Promise<Map<string, number>> {
+  const path = resolve(extractDir, 'frequencies.txt')
+  const multipliers = new Map<string, number>()
+  if (!existsSync(path)) return multipliers
+  for (const row of await parseCsvStream(path)) {
+    const tripId = row['trip_id']
+    if (!activeTripIds.has(tripId)) continue
+    const startSeconds = parseTime(row['start_time'] || '')
+    const endSeconds = parseTime(row['end_time'] || '')
+    const headwaySeconds = parseInt(row['headway_secs'] || '0', 10)
+    if (startSeconds < 0 || endSeconds < 0 || headwaySeconds <= 0) continue
+    if (endSeconds <= startSeconds) {
+      throw new Error(`frequencies.txt has non-positive interval for trip '${tripId}'`)
+    }
+    const departures = Math.max(1, Math.floor((endSeconds - startSeconds) / headwaySeconds))
+    multipliers.set(tripId, (multipliers.get(tripId) ?? 0) + departures)
+  }
+  return multipliers
+}
+
 /**
  * Pick a representative Wednesday via the calendar-midpoint heuristic: take the
  * midpoint of the overall calendar validity span (earliest start_date .. latest
- * end_date across all rows) and snap forward to the nearest Wednesday. Falls back
- * to the next upcoming Wednesday when no calendar dates are present.
+ * end_date across all rows) and snap forward to the nearest Wednesday. Returns
+ * an empty date when the feed supplies no usable calendar span.
  *
  * Note: this is the cheap midpoint variant. `findBusiestWednesday` below
  * preserves the continental producer's denser service-day sampling.
@@ -270,12 +284,7 @@ export function findTargetWednesday(calendarRows: Record<string, string>[]): str
     if (end && end > maxDate) maxDate = end
   }
 
-  if (minDate === '99999999') {
-    const now = new Date()
-    now.setUTCDate(now.getUTCDate() + 7)
-    while (now.getUTCDay() !== 3) now.setUTCDate(now.getUTCDate() + 1)
-    return formatUtcGtfsDate(now)
-  }
+  if (minDate === '99999999') return ''
 
   const startMs = parseGtfsDate(minDate)
   const endMs = parseGtfsDate(maxDate)
@@ -287,45 +296,51 @@ export function findTargetWednesday(calendarRows: Record<string, string>[]): str
   return formatUtcGtfsDate(mid)
 }
 
-/** Pick the Wednesday carrying the most declared services in a feed's span. */
-export function findBusiestWednesday(calendarRows: Record<string, string>[]): string {
-  const services = calendarRows
-    .map(row => ({
-      start: row['start_date'] || '',
-      end: row['end_date'] || '',
-      wednesday: row['wednesday'] === '1',
-    }))
-    .filter(service => service.start && service.end)
-  if (services.length === 0) return findTargetWednesday(calendarRows)
+const WEEKDAY_COLUMNS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const
+const DAY_MS = 86_400_000
 
-  let minDate = services[0].start
-  let end = parseGtfsDate(services[0].end)
-  for (const service of services) {
-    if (service.start < minDate) minDate = service.start
-    end = Math.max(end, parseGtfsDate(service.end))
+function busiestCalendarDateForWeekday(
+  calendarRows: readonly Record<string, string>[],
+  weekday: number,
+): { date: string; count: number } {
+  const events = new Map<number, number>()
+  for (const row of calendarRows) {
+    if (row[WEEKDAY_COLUMNS[weekday]] !== '1') continue
+    const startMs = parseGtfsDate(row['start_date'] || '')
+    const endMs = parseGtfsDate(row['end_date'] || '')
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) continue
+    const startDay = new Date(startMs).getUTCDay()
+    const firstMs = startMs + ((weekday - startDay + 7) % 7) * DAY_MS
+    if (firstMs > endMs) continue
+    const lastMs = firstMs + Math.floor((endMs - firstMs) / (7 * DAY_MS)) * 7 * DAY_MS
+    events.set(firstMs, (events.get(firstMs) ?? 0) + 1)
+    events.set(lastMs + 7 * DAY_MS, (events.get(lastMs + 7 * DAY_MS) ?? 0) - 1)
   }
-  const start = new Date(parseGtfsDate(minDate))
-  while (start.getUTCDay() !== 3) start.setUTCDate(start.getUTCDate() + 1)
-
-  let bestDate = ''
+  let active = 0
   let bestCount = 0
-  while (start.getTime() <= end) {
-    const date = formatUtcGtfsDate(start)
-    const count = services.filter(service =>
-      service.wednesday && date >= service.start && date <= service.end).length
-    if (count > bestCount) {
-      bestDate = date
-      bestCount = count
+  let bestMs = 0
+  for (const [dateMs, change] of [...events].sort((a, b) => a[0] - b[0])) {
+    active += change
+    if (active > bestCount) {
+      bestCount = active
+      bestMs = dateMs
     }
-    start.setUTCDate(start.getUTCDate() + 7)
   }
-  if (bestDate) return bestDate
+  return { date: bestCount > 0 ? formatUtcGtfsDate(new Date(bestMs)) : '', count: bestCount }
+}
 
-  const midpoint = new Date(
-    parseGtfsDate(minDate) + (end - parseGtfsDate(minDate)) / 2,
-  )
-  while (midpoint.getUTCDay() !== 3) midpoint.setUTCDate(midpoint.getUTCDate() + 1)
-  return formatUtcGtfsDate(midpoint)
+/** Prefer the busiest Wednesday; if none runs, use the busiest real service day. */
+export function findBusiestWednesday(calendarRows: Record<string, string>[]): string {
+  if (calendarRows.length === 0) return findTargetWednesday(calendarRows)
+  const wednesday = busiestCalendarDateForWeekday(calendarRows, 3)
+  if (wednesday.count > 0) return wednesday.date
+  let best = { date: '', count: 0 }
+  for (let weekday = 0; weekday < 7; weekday++) {
+    const candidate = busiestCalendarDateForWeekday(calendarRows, weekday)
+    if (candidate.count > best.count ||
+        (candidate.count === best.count && candidate.date && candidate.date < best.date)) best = candidate
+  }
+  return best.date || findTargetWednesday(calendarRows)
 }
 
 // ── Active trip families (routes.txt + calendar + trips.txt) ──
@@ -426,6 +441,16 @@ export function describeIncompleteFamilies(
   return parts.length === 0 ? '' : `${feedId}: ${parts.join('; ')}`
 }
 
+/** Reject a sampled service day that omits a family present in routes.txt. */
+export function describeInactiveFamilies<F extends string>(
+  feedId: string,
+  declared: ReadonlySet<F>,
+  active: ReadonlySet<F>,
+): string {
+  const missing = [...declared].filter(family => !active.has(family)).sort()
+  return missing.length === 0 ? '' : `${feedId}: no active ${missing.join('+')} trips on selected service day`
+}
+
 export async function computeActiveTripFamiliesForFeed<F extends string>(
   extractDir: string,
   familyOf: (routeType: number) => F | null,
@@ -444,6 +469,16 @@ export async function computeActiveTripFamiliesForFeed<F extends string>(
     return { tripFam: new Map(), targetDate: '', calendarPresent: false, activeServiceIds: new Set() }
   }
 
+  const tripsRaw = await parseCsvStream(resolve(extractDir, 'trips.txt'))
+  const eligibleTrips: Array<{ row: Record<string, string>; family: F }> = []
+  const eligibleServiceIds = new Set<string>()
+  for (const row of tripsRaw) {
+    const family = routeFam.get(row['route_id'])
+    if (!family) continue
+    eligibleTrips.push({ row, family })
+    eligibleServiceIds.add(row['service_id'])
+  }
+
   const calendarPath = resolve(extractDir, 'calendar.txt')
   const calendarDatesPath = resolve(extractDir, 'calendar_dates.txt')
   const activeServiceIds = new Set<string>()
@@ -458,56 +493,119 @@ export async function computeActiveTripFamiliesForFeed<F extends string>(
   // exception horizon (SL trams: 0 active services => "feed empty" => the completeness
   // gate blocked the world-wide legacy retract). Such a feed must take the
   // calendar_dates-only path below instead.
-  const calendarRaw = existsSync(calendarPath) ? await parseCsvStream(calendarPath) : null
+  const { firstServiceDate, lastServiceDate } = await readGtfsFeedWindow(extractDir)
+  const withinFeedWindow = (date: string) =>
+    (!firstServiceDate || date >= firstServiceDate) && (!lastServiceDate || date <= lastServiceDate)
+  const calendarRaw = existsSync(calendarPath) ? (await parseCsvStream(calendarPath))
+    .filter(row => eligibleServiceIds.has(row['service_id']))
+    .map((row): Record<string, string> => ({ ...row,
+      start_date: firstServiceDate && row['start_date'] < firstServiceDate ? firstServiceDate : row['start_date'],
+      end_date: lastServiceDate && row['end_date'] > lastServiceDate ? lastServiceDate : row['end_date'],
+    }))
+    .filter(row => row.start_date <= row.end_date) : null
+  const calDates = existsSync(calendarDatesPath) ? (await parseCsvStream(calendarDatesPath))
+    .filter(row => eligibleServiceIds.has(row['service_id']) && withinFeedWindow(row['date'])) : []
   const weekdayDriven = calendarRaw !== null && calendarRaw.some((r) =>
     ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].some((d) => r[d] === '1'))
 
+  const exceptionsByDate = new Map<string, Record<string, string>[]>()
+  for (const row of calDates) {
+    const rows = exceptionsByDate.get(row['date'])
+    if (rows) rows.push(row)
+    else exceptionsByDate.set(row['date'], [row])
+  }
+  const requiredFamilies = new Set(routeFam.values())
+  const tripCountsByService = new Map<string, Map<F, number>>()
+  for (const { row, family } of eligibleTrips) {
+    let counts = tripCountsByService.get(row['service_id'])
+    if (!counts) { counts = new Map<F, number>(); tripCountsByService.set(row['service_id'], counts) }
+    counts.set(family, (counts.get(family) ?? 0) + 1)
+  }
+  const activateDate = (date: string, recurring: boolean): void => {
+    activeServiceIds.clear()
+    if (recurring && calendarRaw !== null) {
+      const weekdayColumn = WEEKDAY_COLUMNS[new Date(parseGtfsDate(date)).getUTCDay()]
+      for (const row of calendarRaw) {
+        const start = row['start_date'] || ''
+        const end = row['end_date'] || ''
+        if (row[weekdayColumn] === '1' && date >= start && date <= end) activeServiceIds.add(row['service_id'])
+      }
+    }
+    for (const row of exceptionsByDate.get(date) ?? []) {
+      if (row['exception_type'] === '1') activeServiceIds.add(row['service_id'])
+      if (row['exception_type'] === '2') activeServiceIds.delete(row['service_id'])
+    }
+  }
+  const activeTripSummary = (): { complete: boolean; trips: number } => {
+    const families = new Set<F>()
+    let trips = 0
+    for (const serviceId of activeServiceIds) {
+      for (const [family, count] of tripCountsByService.get(serviceId) ?? []) {
+        families.add(family)
+        trips += count
+      }
+    }
+    return { complete: [...requiredFamilies].every(family => families.has(family)), trips }
+  }
+  const rangeDates = (first: string, last: string, wednesdayOnly: boolean): string[] => {
+    const firstMs = parseGtfsDate(first), lastMs = parseGtfsDate(last)
+    if (!first || !last || !Number.isFinite(firstMs) || !Number.isFinite(lastMs) || firstMs > lastMs) return []
+    const dates: string[] = []
+    for (let value = firstMs; value <= lastMs; value += DAY_MS) {
+      const date = new Date(value)
+      if (!wednesdayOnly || date.getUTCDay() === 3) dates.push(formatUtcGtfsDate(date))
+    }
+    return dates
+  }
+  const chooseCompleteDate = (
+    candidates: readonly string[], recurring: boolean, preferred: string, busiest: boolean,
+  ): string => {
+    let best = { date: '', trips: -1, distance: Number.POSITIVE_INFINITY }
+    const preferredMs = preferred ? parseGtfsDate(preferred) : 0
+    for (const date of candidates) {
+      activateDate(date, recurring)
+      const summary = activeTripSummary()
+      if (!summary.complete) continue
+      const distance = preferred ? Math.abs(parseGtfsDate(date) - preferredMs) : 0
+      if ((busiest && summary.trips > best.trips) ||
+          (!busiest && (distance < best.distance || (distance === best.distance && summary.trips > best.trips)))) {
+        best = { date, trips: summary.trips, distance }
+      }
+    }
+    return best.date
+  }
+
   if (calendarRaw !== null && weekdayDriven) {
-    targetDate = (dateSelection ?? findTargetWednesday)(calendarRaw)
-    for (const r of calendarRaw) {
-      const start = r['start_date'] || ''
-      const end = r['end_date'] || ''
-      if (r['wednesday'] === '1' && targetDate >= start && targetDate <= end) activeServiceIds.add(r['service_id'])
+    let first = firstServiceDate, last = lastServiceDate
+    for (const row of calendarRaw) {
+      if (!first || row['start_date'] < first) first = row['start_date']
+      if (!last || row['end_date'] > last) last = row['end_date']
     }
-    if (existsSync(calendarDatesPath)) {
-      const calDates = await parseCsvStream(calendarDatesPath)
-      for (const r of calDates) {
-        if (r['date'] !== targetDate) continue
-        if (r['exception_type'] === '1') activeServiceIds.add(r['service_id'])
-        if (r['exception_type'] === '2') activeServiceIds.delete(r['service_id'])
-      }
-    }
+    const preferred = (dateSelection ?? findTargetWednesday)(calendarRaw)
+    if (!withinFeedWindow(preferred)) throw new Error(`${extractDir}: selected service day ${preferred} outside feed_info window`)
+    const busiest = dateSelection === findBusiestWednesday
+    activateDate(preferred, true)
+    targetDate = activeTripSummary().complete ? preferred :
+      chooseCompleteDate(rangeDates(first, last, true), true, preferred, busiest) ||
+      chooseCompleteDate(rangeDates(first, last, false), true, preferred, busiest) || preferred
+    activateDate(targetDate, true)
   } else if (existsSync(calendarDatesPath)) {
-    const calDates = await parseCsvStream(calendarDatesPath)
-    const dateCounts = new Map<string, number>()
-    for (const r of calDates) {
-      if (r['exception_type'] === '1') dateCounts.set(r['date'] || '', (dateCounts.get(r['date'] || '') || 0) + 1)
-    }
-    const wednesdays = [...dateCounts.entries()]
-      .filter(([d]) => new Date(parseGtfsDate(d)).getUTCDay() === 3)
-      .sort((a, b) => b[1] - a[1])
-    if (wednesdays.length > 0) {
-      targetDate = wednesdays[0][0]
-      for (const r of calDates) {
-        if (r['date'] === targetDate && r['exception_type'] === '1') activeServiceIds.add(r['service_id'])
-      }
-    } else {
-      const best = [...dateCounts.entries()].sort((a, b) => b[1] - a[1])
-      if (best.length > 0) {
-        targetDate = best[0][0]
-        for (const r of calDates) {
-          if (r['date'] === targetDate && r['exception_type'] === '1') activeServiceIds.add(r['service_id'])
-        }
-      }
-    }
+    const dateCounts = [...exceptionsByDate]
+      .map(([date, rows]) => [date, rows.filter(row => row['exception_type'] === '1').length] as const)
+      .filter(([, count]) => count > 0)
+    const ranked = dateCounts.sort((a, b) => b[1] - a[1])
+    const rankedWednesdays = ranked.filter(([date]) => new Date(parseGtfsDate(date)).getUTCDay() === 3)
+    const preferred = (rankedWednesdays[0] ?? ranked[0])?.[0] ?? ''
+    if (preferred) activateDate(preferred, false)
+    targetDate = activeTripSummary().complete ? preferred :
+      chooseCompleteDate(rankedWednesdays.map(([date]) => date), false, preferred, true) ||
+      chooseCompleteDate(ranked.map(([date]) => date), false, preferred, true) || preferred
+    if (targetDate) activateDate(targetDate, false)
   }
   // else: no calendar files at all — calendarPresent is false, every rail/tram trip below counts.
 
-  const tripsRaw = await parseCsvStream(resolve(extractDir, 'trips.txt'))
   const tripFam = new Map<string, F>()
-  for (const r of tripsRaw) {
-    const fam = routeFam.get(r['route_id'])
-    if (!fam) continue
+  for (const { row: r, family: fam } of eligibleTrips) {
     // BUG FIX (2026-07-15): this used to gate on `activeServiceIds.size > 0`, so a
     // calendar.txt (or calendar_dates.txt) present but resolving to ZERO active services
     // on the target date — an expired or malformed feed, not a rare case — silently
@@ -520,30 +618,6 @@ export async function computeActiveTripFamiliesForFeed<F extends string>(
   }
 
   return { tripFam, targetDate, calendarPresent, activeServiceIds }
-}
-
-// ── Retract safety (CRITICAL-1b) ──
-// A retract may only run over a PROVABLY COMPLETE input snapshot: when a feed
-// silently fails to load (every downloadAllGtfs tolerates per-feed failure so
-// enrichment can still stamp from the rest), the retract's join corroboration
-// reads "no coverage" over that feed's region — an input artifact, not evidence —
-// and would disown REAL stamps. These helpers carry the completeness evidence.
-
-/** '' when every configured feed is in the loaded-non-empty list; otherwise the
- *  detail for the mandated "retract skipped — incomplete inputs (…)" log line. */
-export function describeIncompleteFeeds(
-  configuredFeedIds: readonly string[],
-  loadedNonEmptyFeedIds: readonly string[],
-): string {
-  const loaded = new Set(loadedNonEmptyFeedIds)
-  const missing = configuredFeedIds.filter(id => !loaded.has(id))
-  return missing.length === 0 ? '' : `feeds missing or parsed empty: ${missing.join(',')}`
-}
-
-/** The ONE loud line every enricher prints when it withholds `retract` from
- *  writeRailTrains — uniform wording so ops can grep a run log for it. */
-export function logRetractSkippedIncompleteInputs(detail: string): void {
-  console.error(`\n!!! retract skipped — incomplete inputs (${detail}) — legacy OLD_FALLBACK stamps stay in place this run`)
 }
 
 // ── Merged stop-frequency cache with feed provenance ──
@@ -566,13 +640,8 @@ export function writeMergedStopCache<T>(path: string, feedsLoadedNonEmpty: strin
   writeFileSync(path, JSON.stringify(payload))
 }
 
-/** `feedsLoadedNonEmpty === null` marks a legacy bare-array cache: its stops are
- *  fine for enrichment, but its completeness is unprovable, so callers must treat
- *  it as retract-unsafe. Refresh path: delete the cache file (feed extracts are
- *  cached separately, so the rebuild needs no network) or --force-download. */
 export function readMergedStopCache<T>(path: string): { stops: T[]; feedsLoadedNonEmpty: string[] | null } {
-  const parsed = JSON.parse(readFileSync(path, 'utf-8')) as T[] | MergedStopCacheV2<T>
-  if (Array.isArray(parsed)) return { stops: parsed, feedsLoadedNonEmpty: null }
+  const parsed = JSON.parse(readFileSync(path, 'utf-8')) as MergedStopCacheV2<T>
   return { stops: parsed.stops ?? [], feedsLoadedNonEmpty: parsed.feedsLoadedNonEmpty ?? [] }
 }
 
@@ -703,6 +772,8 @@ export async function computeStopFrequenciesForFeed(
     return []
   }
 
+  const tripDepartureMultipliers = await readGtfsTripDepartureMultipliers(extractDir, new Set(tripFam.keys()))
+
   // ── stop_times.txt (stream for large files) ──
   console.log(`  Reading stop_times.txt (streaming)...`)
   const stopDepartures = new Map<string, { rail: number; tram: number }>()
@@ -739,7 +810,7 @@ export async function computeStopFrequenciesForFeed(
     const stopId = fields[stopIdIdx]
     let counts = stopDepartures.get(stopId)
     if (!counts) { counts = { rail: 0, tram: 0 }; stopDepartures.set(stopId, counts) }
-    counts[fam]++
+    counts[fam] += tripDepartureMultipliers.get(tripId) ?? 1
     stMatched++
 
     if (Date.now() - lastProgressTime > 10_000) {
@@ -778,18 +849,7 @@ export async function computeStopFrequenciesForFeed(
     }
   }
 
-  // Deduplicate by coordinates + family
-  const dedupMap = new Map<string, StopTrainCount>()
-  for (const sc of results) {
-    const key = `${sc.lat.toFixed(4)}_${sc.lon.toFixed(4)}_${sc.family}`
-    const existing = dedupMap.get(key)
-    if (existing) {
-      existing.trains_passenger += sc.trains_passenger
-    } else {
-      dedupMap.set(key, { ...sc })
-    }
-  }
-  const deduped = [...dedupMap.values()]
+  const deduped = dedupeStopsByLocation(results)
 
   console.log(`  [${feed.id}] ${deduped.length} stops with train counts (${resolvedViaParent} resolved via parent station)`)
 

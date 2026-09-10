@@ -27,7 +27,7 @@ import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { coordKey4dp } from './spatial.js'
 import {
-  RAIL_TYPES, parseCsvLine, parseCsvStream, parseTime,
+  RAIL_TYPES, parseCsvLine, parseCsvStream, readGtfsTripDepartureMultipliers,
   computeActiveTripFamiliesForFeed, loadStopsWithCoords, resolveStopViaParent,
   writeMergedStopCache, readMergedStopCache,
   type GtfsStop,
@@ -195,7 +195,7 @@ const CACHE_VERSION_MARKER = 'pairs-v1'
  *  "non-empty" retract evidence for a broken fresh feed). */
 const FINGERPRINT_INPUT_FILES = [
   'routes.txt', 'trips.txt', 'stop_times.txt', 'stops.txt', 'shapes.txt',
-  'calendar.txt', 'calendar_dates.txt', 'frequencies.txt',
+  'calendar.txt', 'calendar_dates.txt', 'frequencies.txt', 'feed_info.txt',
 ] as const
 
 /** size+mtimeMs of every fingerprint input (absent files marked as such) —
@@ -276,23 +276,9 @@ export async function computeStopPairFrequenciesForFeed(
   // ── frequencies.txt expansion (opt-in by default when the file exists) ──
   const freqPath = resolve(extractDir, 'frequencies.txt')
   const frequenciesExpanded = opts.expandFrequencies ?? existsSync(freqPath)
-  const tripBoosts = new Map<string, number>()
-  if (frequenciesExpanded && existsSync(freqPath)) {
-    const freqs = await parseCsvStream(freqPath)
-    for (const f of freqs) {
-      const tripId = f['trip_id']
-      if (!tripFam.has(tripId)) continue
-      const startSec = parseTime(f['start_time'] || '')
-      const endSec = parseTime(f['end_time'] || '')
-      const headway = parseInt(f['headway_secs'] || '0', 10)
-      if (startSec < 0 || endSec < 0 || headway <= 0) continue
-      if (endSec <= startSec) {
-        throw new Error(`frequencies.txt has non-positive interval for trip '${tripId}'`)
-      }
-      const count = Math.max(1, Math.floor((endSec - startSec) / headway))
-      tripBoosts.set(tripId, (tripBoosts.get(tripId) || 0) + count)
-    }
-  }
+  const tripBoosts = frequenciesExpanded
+    ? await readGtfsTripDepartureMultipliers(extractDir, new Set(tripFam.keys()))
+    : new Map<string, number>()
   const boostFor = (tripId: string): number => tripBoosts.get(tripId) ?? 1
 
   // ── stop_times.txt (streamed), grouped per active trip ──

@@ -89,6 +89,7 @@ test('real GTFS files stamp heavy rail and tram through one z9 writer and rerun 
     preparedDirectory: prepared,
     cacheDirectory: join(TEMP, 'cache-valid'),
     country: 'gr',
+    asOfDate: '20260909',
   }
 
   const first = await enrichGlobalGtfsCountry(options)
@@ -139,6 +140,7 @@ test('an invalid feed fails before touching an existing prepared Arrow', async (
       preparedDirectory: prepared,
       cacheDirectory: join(TEMP, 'cache-invalid'),
       country: 'GR',
+      asOfDate: '20260909',
     }),
     /routes\.txt parse failure/,
   )

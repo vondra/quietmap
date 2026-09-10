@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { Float32, Field, makeTable, RecordBatch, Schema, Table, vectorFromArray, tableFromIPC, tableToIPC } from 'apache-arrow'
 import { gridToLonLat } from './prepared-grid.js'
-import { WIND_COUNTRIES, parseWindCsv, parseWindWorkbook, parseNorwegianWind, loadWindRegisters } from './industrial-wind-source.js'
+import { WIND_COUNTRIES, WIND_SOURCE_FILES, parseWindCsv, parseWindWorkbook, parseNorwegianWind, loadWindRegisters } from './industrial-wind-source.js'
 import { enrichWindSquare, windParameterMatcher } from './industrial-wind-arrow.js'
 
 function grid(lat: number, lon: number) {
@@ -82,6 +82,12 @@ test('missing one required family cache fails before any native writer is called
   const work = mkdtempSync(resolve(tmpdir(), 'wind-missing-'))
   try { await assert.rejects(loadWindRegisters(work), /ENOENT/) }
   finally { rmSync(work, { recursive: true, force: true }) }
+})
+
+test('wind source paths stay inside the canonical enrichment directory', () => {
+  const paths = Object.values(WIND_SOURCE_FILES).flat()
+  assert.equal(paths.length, 8)
+  assert.ok(paths.every(path => !path.startsWith('/') && !path.split('/').includes('..')))
 })
 
 test('the original 500 m match remains reachable beyond the old polar three-cell window', () => {

@@ -1,17 +1,4 @@
-/**
- * Unit tests for the CRITICAL-1b retract-safety helpers in gtfs-enrich-core.ts
- * (describeIncompleteFeeds — the completeness evidence every enricher gates its
- * writeRailTrains `retract` on — and the v2 merged-stop cache round-trip) plus
- * the shared route_type → family classification every GTFS rail enricher routes
- * stops through, and the shared `computeActiveTripFamiliesForFeed` calendar logic
- * (routes + calendar + trips -> trip_id family map) used by both the per-stop
- * frequency counter and the station-pair parser (gtfs-stop-pairs.ts). Also covers
- * `dedupeStopsByLocation` + `buildTramExtraMatch` (2026-07-16 Phase 4 hoist from
- * enrich-railway-europe.ts) — the ONE tram/light-rail join implementation every
- * national enrich-railway-{cc}.ts enricher shares.
- *
- * Run: `cd pipeline && npx tsx --test lib/gtfs-enrich-core.test.ts`
- */
+/** GTFS service selection and spatial matching regressions. */
 
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
@@ -19,8 +6,8 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
-  computeActiveTripFamiliesForFeed, describeIncompleteFeeds, findBusiestWednesday,
-  loadStopsWithCoords, parseGtfsDate, readMergedStopCache, routeFamily,
+  computeActiveTripFamiliesForFeed, computeStopFrequenciesForFeed, findBusiestWednesday,
+  findTargetWednesday, loadStopsWithCoords, parseGtfsDate, readMergedStopCache, routeFamily,
   writeMergedStopCache, dedupeStopsByLocation, buildTramExtraMatch,
   declaredRouteFamiliesForFeed, describeIncompleteFamilies, type StopTrainCount,
 } from './gtfs-enrich-core.js'
@@ -38,20 +25,6 @@ function writeGtfsFixture(dir: string, files: Record<string, string>): void {
   }
 }
 
-test('describeIncompleteFeeds: complete snapshot yields empty detail (retract-safe)', () => {
-  assert.equal(describeIncompleteFeeds(['a', 'b', 'c'], ['c', 'a', 'b']), '')
-})
-
-test('describeIncompleteFeeds: a missing or empty-parsed feed is named (retract-unsafe)', () => {
-  // 'b' never loaded, 'c' loaded but parsed empty (so the caller left it out of
-  // loadedNonEmptyFeedIds) — both must appear; extra unknown ids never mask a gap.
-  assert.equal(
-    describeIncompleteFeeds(['a', 'b', 'c'], ['a', 'x']),
-    'feeds missing or parsed empty: b,c',
-  )
-  assert.equal(describeIncompleteFeeds(['solo'], []), 'feeds missing or parsed empty: solo')
-})
-
 test('merged-stop cache v2 round-trip preserves stops AND feed provenance', () => {
   const path = join(TMP, 'v2.json')
   const stops = [{ stop_id: 's1', lat: 50.85, lon: 4.35, trains_passenger: 42 }]
@@ -59,10 +32,7 @@ test('merged-stop cache v2 round-trip preserves stops AND feed provenance', () =
   const cached = readMergedStopCache<(typeof stops)[number]>(path)
   assert.deepEqual(cached.stops, stops)
   assert.deepEqual(cached.feedsLoadedNonEmpty, ['stib-brussels', 'tec-wallonia'])
-  // The provenance closes the gate loop: only when every configured feed is in
-  // the recorded list may a cache-served run pass `retract` to writeRailTrains.
-  assert.equal(describeIncompleteFeeds(['stib-brussels', 'tec-wallonia'], cached.feedsLoadedNonEmpty!), '')
-  assert.notEqual(describeIncompleteFeeds(['stib-brussels', 'tec-wallonia', 'delijn-flanders'], cached.feedsLoadedNonEmpty!), '')
+
 })
 
 test('routeFamily: basic GTFS codes route rail vs tram/metro vs dropped (DE de_full profile)', () => {
@@ -90,15 +60,6 @@ test('routeFamily: TPEG extended codes keep the same family split', () => {
   assert.equal(routeFamily(715), null, 'bus subtype dropped')
 })
 
-test('legacy bare-array cache reads with null provenance (completeness unprovable)', () => {
-  const path = join(TMP, 'legacy.json')
-  const stops = [{ stop_id: 's1', lat: 51.2, lon: 4.4 }]
-  writeFileSync(path, JSON.stringify(stops))
-  const cached = readMergedStopCache<(typeof stops)[number]>(path)
-  assert.deepEqual(cached.stops, stops, 'legacy stops still served for enrichment')
-  assert.equal(cached.feedsLoadedNonEmpty, null, 'null = no provenance = retract-unsafe for multi-feed enrichers')
-})
-
 // ── computeActiveTripFamiliesForFeed ──
 // The shared routes+calendar+trips resolver used by both computeStopFrequenciesForFeed
 // (below) and the station-pair parser (gtfs-stop-pairs.ts).
@@ -108,21 +69,19 @@ const TRIPS_CSV = (serviceId: string) => `trip_id,route_id,service_id\nT1,R1,${s
 
 test('computeActiveTripFamiliesForFeed: calendar present + zero active services on target date = ZERO trips (2026-07-15 fix)', async () => {
   const dir = join(TMP, 'calendar-zero-active')
-  // wednesday=0 for every service_id defined here, so no matter which Wednesday
-  // findTargetWednesday's midpoint heuristic resolves to, activeServiceIds stays
-  // empty — calendar.txt exists (a real, non-broken date range) but genuinely
-  // serves nothing on a Wednesday (e.g. a weekend-only shuttle).
+  // An all-zero calendar row has no recurring service and no calendar_dates additions.
+  // calendar.txt still exists, so its empty active set remains authoritative.
   writeGtfsFixture(dir, {
     'routes.txt': RAIL_ROUTES_CSV,
     'calendar.txt':
       'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\n' +
-      'weekend_only,0,0,0,0,0,1,1,20260101,20261231\n',
-    'trips.txt': TRIPS_CSV('weekend_only'),
+      'inactive,0,0,0,0,0,0,0,20260101,20261231\n',
+    'trips.txt': TRIPS_CSV('inactive'),
   })
 
   const result = await computeActiveTripFamiliesForFeed(dir, routeFamily)
   assert.equal(result.calendarPresent, true, 'calendar.txt exists — this is the "we know the active set" branch')
-  assert.equal(result.activeServiceIds.size, 0, 'genuinely zero services run on the resolved Wednesday')
+  assert.equal(result.activeServiceIds.size, 0, 'the declared calendar has no active service day')
   assert.equal(
     result.tripFam.size, 0,
     'BUG FIX: calendar present + zero active services must yield ZERO trips, not "count everything" — ' +
@@ -200,6 +159,11 @@ test('computeActiveTripFamiliesForFeed: a custom dateSelection hook overrides th
   assert.equal(result.targetDate, forcedDate, 'europe-style busiest-Wednesday sampler (or any hook) wins over the default heuristic')
 })
 
+test('empty calendar selection is deterministic and does not consult the current date', () => {
+  assert.equal(findTargetWednesday([]), '')
+  assert.equal(findBusiestWednesday([]), '')
+})
+
 test('findBusiestWednesday preserves the continental producer service-density choice', () => {
   const rows = [
     { start_date: '20260101', end_date: '20261231', wednesday: '1' },
@@ -207,6 +171,40 @@ test('findBusiestWednesday preserves the continental producer service-density ch
     { start_date: '20260601', end_date: '20260731', wednesday: '1' },
   ]
   assert.equal(findBusiestWednesday(rows), '20260603')
+})
+
+test('service selection uses a real operating day when eligible rail has no Wednesday service', async () => {
+  const dir = join(TMP, 'no-wednesday-service')
+  writeGtfsFixture(dir, {
+    'routes.txt': RAIL_ROUTES_CSV,
+    'calendar.txt':
+      'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\n' +
+      'rail_thursday,0,0,0,1,0,0,0,20260901,20260930\n' +
+      'unrelated_bus_wednesday,0,0,1,0,0,0,0,20260901,20260930\n',
+    'trips.txt': 'trip_id,route_id,service_id\nT1,R1,rail_thursday\n',
+  })
+  const result = await computeActiveTripFamiliesForFeed(dir, routeFamily, findBusiestWednesday)
+  assert.equal(result.targetDate, '20260903')
+  assert.deepEqual([...result.tripFam.keys()], ['T1'])
+})
+
+test('busiest service selection applies exceptions and retains every declared family', async () => {
+  const dir = join(TMP, 'busiest-complete-family-day')
+  writeGtfsFixture(dir, {
+    'routes.txt': 'route_id,route_type\nrail,2\ntram,0\n',
+    'calendar.txt':
+      'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\n' +
+      'rail_peak,0,0,1,0,0,0,0,20260107,20260107\n' +
+      'rail_daily,0,0,1,0,0,0,0,20260107,20260128\n' +
+      'tram_daily,0,0,1,0,0,0,0,20260107,20260128\n',
+    'calendar_dates.txt':
+      'service_id,date,exception_type\ntram_daily,20260107,2\n',
+    'trips.txt':
+      'trip_id,route_id,service_id\npeak,rail,rail_peak\nrail,rail,rail_daily\ntram,tram,tram_daily\n',
+  })
+  const result = await computeActiveTripFamiliesForFeed(dir, routeFamily, findBusiestWednesday)
+  assert.equal(result.targetDate, '20260114', '20260107 has more scheduled rows but its tram is removed by an exception')
+  assert.deepEqual([...new Set(result.tripFam.values())].sort(), ['rail', 'tram'])
 })
 
 test('GTFS calendar arithmetic is UTC and independent of the host time zone', () => {
@@ -222,6 +220,22 @@ test('findBusiestWednesday scans a large calendar without argument-spread overfl
     start_date: '20260107', end_date: '20260107', wednesday: '1',
   }))
   assert.equal(findBusiestWednesday(rows), '20260107')
+})
+
+test('stop frequencies expand GTFS headway templates once per daily departure', async () => {
+  const dir = join(TMP, 'stop-headway-expansion')
+  writeGtfsFixture(dir, {
+    'routes.txt': 'route_id,route_type\nT,0\n',
+    'calendar.txt':
+      'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\n' +
+      'daily,1,1,1,1,1,1,1,20260901,20260930\n',
+    'trips.txt': 'trip_id,route_id,service_id\ntrip,T,daily\n',
+    'frequencies.txt': 'trip_id,start_time,end_time,headway_secs\ntrip,06:00:00,08:00:00,600\n',
+    'stop_times.txt': 'trip_id,stop_id,stop_sequence\ntrip,A,1\ntrip,B,2\n',
+    'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nA,Alpha,50,14\nB,Bravo,50.1,14.1\n',
+  })
+  const stops = await computeStopFrequenciesForFeed({ id: 'headway' }, dir, [49, 13, 51, 15])
+  assert.deepEqual(stops.map(stop => stop.trains_passenger), [12, 12])
 })
 
 test('GTFS stops accept the equator and prime meridian but reject invalid ranges', async () => {
@@ -275,9 +289,9 @@ test('dedupeStopsByLocation: sums same coord+family, keeps distinct coords and f
   assert.equal(out.find(s => s.family === 'tram')!.trains_passenger, 7)
 })
 
-const FAKE_RAIL_ROW = (railType: number): RailwayRow => ({
+const FAKE_RAIL_ROW = (railType: number, existingDivisor = 1): RailwayRow => ({
   railType, usage: 0, service: 0, existingSourceId: 0,
-  existingPassenger: 0, existingFreight: 0, existingDivisor: 1,
+  existingPassenger: 0, existingFreight: 0, existingDivisor,
   startLat: 50.0, startLon: 14.0, endLat: 50.0, endLon: 14.0, midLat: 50.0, midLon: 14.0, name: '',
 })
 
@@ -285,8 +299,8 @@ test('buildTramExtraMatch crosses z9 square boundaries because the stop index is
   const tramStops: StopTrainCount[] = [
     { stop_id: 'S1', lat: 50.0001, lon: 14.0001, name: 'Adjacent stop', family: 'tram', trains_passenger: 42, trains_freight: 1 },
   ]
-  const result = buildTramExtraMatch(tramStops, 12345)(FAKE_RAIL_ROW(2), 0, 'z9/275/173')
-  assert.deepEqual(result, { passenger: 42, freight: 1, sourceId: 12345 })
+  const result = buildTramExtraMatch(tramStops, 12345)(FAKE_RAIL_ROW(2, 3), 0, 'z9/275/173')
+  assert.deepEqual(result, { passenger: 42, freight: 1, sourceId: 12345, divisor: 1 })
 })
 
 test('buildTramExtraMatch never offers tram counts to heavy rail', () => {
@@ -353,4 +367,25 @@ test('describeIncompleteFamilies: BIDIRECTIONAL — each declared family indepen
   assert.equal(describeIncompleteFamilies('f', new Set(), 0, 0), '', 'bus-only feed: exempt from both — retract can finally activate over MX/PT')
   assert.equal(describeIncompleteFamilies('f', both, 100, null), '', 'tramStopCount null = merged-cache-served run; tram direction is vouched by the cache\'s own recorded provenance')
   assert.match(describeIncompleteFamilies('f', both, 0, null), /declares rail/, 'the rail/pairs direction is still enforced on cache-served runs (pairs are always fresh)')
+})
+
+
+test('feed_info bounds both recurring and exception-only service selection', async () => {
+  for (const exactDates of [false, true]) {
+    const dir = join(TMP, `feed-info-window-${exactDates}`)
+    writeGtfsFixture(dir, {
+      'routes.txt': RAIL_ROUTES_CSV,
+      'trips.txt': 'trip_id,route_id,service_id\nT1,R1,current\nT2,R1,old\nT3,R1,older\n',
+      'feed_info.txt': 'feed_start_date,feed_end_date\n20260901,20260930\n',
+      ...(exactDates ? {
+        'calendar_dates.txt': 'service_id,date,exception_type\nold,20260107,1\nolder,20260107,1\ncurrent,20260909,1\n',
+      } : {
+        'calendar.txt': 'service_id,wednesday,start_date,end_date\nold,1,20260101,20261231\nolder,1,20260101,20260131\ncurrent,1,20260901,20260930\n',
+      }),
+    })
+    const result = await computeActiveTripFamiliesForFeed(dir, routeFamily, findBusiestWednesday)
+    assert.ok(result.targetDate >= '20260901' && result.targetDate <= '20260930', result.targetDate)
+    assert.ok(result.tripFam.has('T1'))
+    assert.ok(!result.tripFam.has('T3'))
+  }
 })

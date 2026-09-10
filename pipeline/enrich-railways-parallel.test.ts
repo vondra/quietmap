@@ -13,6 +13,7 @@ import {
 } from './enrich-railways-parallel.js'
 import {
   SOURCE_ID_CZ_SZCD_GTFS, SOURCE_ID_CZ_TIMETABLE_SILENT, SOURCE_ID_GLOBAL_GTFS_TRANSIT,
+  SOURCE_ID_PL_NATIONAL_RAILWAY,
 } from './lib/source-ids.generated.js'
 import {
   RAIL_TEST_DIRECTORY, railwayBytes, writeRailwaysFixture, type RailwayFixtureRow,
@@ -120,22 +121,22 @@ test('the 50 metre radius holds for native Arrow segments, including both dateli
   }
 })
 
-test('only values of one are raised; stored divisors above one and dry-run bytes are preserved', async () => {
-  const path = writeRailwaysFixture('parallel-only-raise.arrow', [
+test('terminal pass recomputes owned divisors while dry-run preserves bytes', async () => {
+  const path = writeRailwaysFixture('parallel-recompute.arrow', [
     { osmId: 40, ref: 'M', divisor: 3, ...northSouth(14) },
     { osmId: 41, ref: 'M', divisor: 1, ...northSouth(14 + LON_STEP) },
   ], { includeDivisor: true })
   const dryBytes = railwayBytes(path)
   const dry = await enrichRailwayParallelSquare(path, { dryRun: true })
-  assert.deepEqual({ written: dry.writtenHist, changed: dry.changed }, { written: [0, 1, 0], changed: false })
+  assert.deepEqual({ written: dry.writtenHist, changed: dry.changed }, { written: [0, 2, 0], changed: false })
   assert.deepEqual(railwayBytes(path), dryBytes)
 
   const applied = await enrichRailwayParallelSquare(path)
   assert.deepEqual(
     { kept: applied.keptExistingAbove1, written: applied.writtenHist, changed: applied.changed },
-    { kept: 1, written: [0, 1, 0], changed: true },
+    { kept: 0, written: [0, 2, 0], changed: true },
   )
-  assert.deepEqual(readDivisors(path), [3, 2])
+  assert.deepEqual(readDivisors(path), [2, 2])
   const exact = railwayBytes(path)
   const rerun = await enrichRailwayParallelSquare(path)
   assert.deepEqual({ kept: rerun.keptExistingAbove1, written: rerun.writtenHist, changed: rerun.changed }, {
@@ -143,15 +144,15 @@ test('only values of one are raised; stored divisors above one and dry-run bytes
   })
   assert.deepEqual(railwayBytes(path), exact)
 
-  const protectedPath = writeRailwaysFixture('parallel-preserve-two.arrow', [0, 1, 2].map(index => ({
+  const raisedPath = writeRailwaysFixture('parallel-recompute-three.arrow', [0, 1, 2].map(index => ({
     osmId: 50 + index, ref: 'THREE', divisor: index === 0 ? 2 : 1,
     ...northSouth(14 + index * LON_STEP),
   })), { includeDivisor: true })
-  const protectedResult = await enrichRailwayParallelSquare(protectedPath)
-  assert.deepEqual(protectedResult.computedHist, [0, 0, 3])
-  assert.deepEqual(protectedResult.writtenHist, [0, 0, 2])
-  assert.equal(protectedResult.keptExistingAbove1, 1)
-  assert.deepEqual(readDivisors(protectedPath), [2, 3, 3])
+  const raisedResult = await enrichRailwayParallelSquare(raisedPath)
+  assert.deepEqual(raisedResult.computedHist, [0, 0, 3])
+  assert.deepEqual(raisedResult.writtenHist, [0, 0, 3])
+  assert.equal(raisedResult.keptExistingAbove1, 0)
+  assert.deepEqual(readDivisors(raisedPath), [3, 3, 3])
 })
 
 test('registry-owned graph-walk rows neither receive nor grant a divisor', async () => {
@@ -162,10 +163,12 @@ test('registry-owned graph-walk rows neither receive nor grant a divisor', async
     { osmId: 203, ref: 'S', sourceId: SOURCE_ID_CZ_TIMETABLE_SILENT, divisor: 1, ...northSouth(15 + LON_STEP) },
     { osmId: 204, ref: 'U', sourceId: SOURCE_ID_GLOBAL_GTFS_TRANSIT, divisor: 1, ...northSouth(16) },
     { osmId: 205, ref: 'U', sourceId: SOURCE_ID_GLOBAL_GTFS_TRANSIT, divisor: 1, ...northSouth(16 + LON_STEP) },
+    { osmId: 206, ref: 'N', sourceId: SOURCE_ID_PL_NATIONAL_RAILWAY, divisor: 3, ...northSouth(17) },
+    { osmId: 207, ref: 'N', sourceId: SOURCE_ID_PL_NATIONAL_RAILWAY, divisor: 1, ...northSouth(17 + LON_STEP) },
   ], { includeDivisor: true })
   const result = await enrichRailwayParallelSquare(path)
-  assert.equal(result.eligibleRows, 2)
-  assert.deepEqual(readDivisors(path), [1, 1, 1, 1, 2, 2])
+  assert.equal(result.eligibleRows, 0)
+  assert.deepEqual(readDivisors(path), [1, 1, 1, 1, 1, 1, 3, 1])
 })
 
 function installSquare(prepared: string, x: number, y: number, source: string): string {
@@ -181,7 +184,7 @@ test('adjacent z9 squares across E180 supply context while preserving counts and
   const east = installSquare(prepared, 511, 256, writeRailwaysFixture('parallel-e180-east.arrow', [{
     osmId: 300,
     ref: 'E180',
-    sourceId: SOURCE_ID_GLOBAL_GTFS_TRANSIT,
+    sourceId: 0,
     passenger: 7,
     freight: 2,
     latitude: 0,
@@ -192,7 +195,7 @@ test('adjacent z9 squares across E180 supply context while preserving counts and
   const west = installSquare(prepared, 0, 256, writeRailwaysFixture('parallel-e180-west.arrow', [{
     osmId: 301,
     ref: 'E180',
-    sourceId: SOURCE_ID_GLOBAL_GTFS_TRANSIT,
+    sourceId: 0,
     passenger: 9,
     freight: 3,
     latitude: 0,
@@ -211,7 +214,7 @@ test('adjacent z9 squares across E180 supply context while preserving counts and
     assert.equal(table.getChild('parallel_divisor')!.get(0), 2)
     assert.equal(table.getChild('trains_passenger')!.get(0), passenger)
     assert.equal(table.getChild('trains_freight')!.get(0), freight)
-    assert.equal(table.getChild('source_id')!.get(0), SOURCE_ID_GLOBAL_GTFS_TRANSIT)
+    assert.equal(table.getChild('source_id')!.get(0), 0)
     assert.equal(table.schema.metadata.get('railways_contract'), 'country_baked_v1')
   }
   const before = [railwayBytes(east), railwayBytes(west)]

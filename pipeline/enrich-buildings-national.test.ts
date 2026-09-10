@@ -1,4 +1,4 @@
-/** Actual IPC proof of national building refinements, unchanged shape, and missing input gates. */
+/** Actual IPC proof of national building refinements, unchanged shape, and sparse OSM layer coverage. */
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -70,8 +70,8 @@ test('CZ seam matches preserve specific types, existing floors, source rank and 
     for (const field of ['ino', 'size', 'mtimeNs', 'ctimeNs'] as const) assert.equal(later[field], before[field])
     const missing = resolve(work, 'z9/276/173/roads.arrow')
     store(missing, original)
-    await assert.rejects(enrichNationalBuildings(work, index), /missing buildings.arrow/)
-    assert.deepEqual(readFileSync(path), bytes, 'all expected building tables checked before writes')
+    assert.equal((await enrichNationalBuildings(work, index)).squaresUpdated, 0)
+    assert.deepEqual(readFileSync(path), bytes, 'a road-only square has no OSM buildings to refine')
   } finally { index.close(); rmSync(work, { recursive: true, force: true }) }
 })
 
@@ -90,6 +90,8 @@ test('ES fills floors only; current empty IPC is valid but missing/legacy/malfor
     assert.deepEqual([...after.getChild('floors')!], [5, 8, 5])
     assert.deepEqual([...after.getChild('source_id')!], [201, 0, 201])
     assertUntouched(original, after)
+    store(resolve(work, 'z9/253/194/structures.arrow'), original)
+    assert.equal((await enrichNationalBuildings(work, index)).squaresUpdated, 0, 'Overture-only square is valid')
     const empty = resolve(work, 'z9/252/194/buildings.arrow')
     store(empty, buildingTable([], [], [], [], []))
     const bytes = readFileSync(empty)

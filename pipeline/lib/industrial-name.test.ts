@@ -6,12 +6,17 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { test } from 'node:test'
 import { Field, makeTable, RecordBatch, Schema, Table, Utf8, vectorFromArray, tableFromIPC, tableToIPC } from 'apache-arrow'
-import { enrichIndustrialNames, industrialNameRule } from './industrial-name.js'
+import { enrichIndustrialNames, industrialNameRule, koreanIndustrialNameRule } from './industrial-name.js'
+import { iso2Code } from './prepared-grid.js'
 
-interface Row { name: string | null; source?: number; nace?: number; wind?: boolean; suppressed?: number }
+interface Row { name: string | null; source?: number; nace?: number; wind?: boolean; suppressed?: number; lat?: number; lon?: number; country?: string }
+const gx = (longitude: number) => Math.round((longitude / 360 + .5) * 2 ** 30)
+const gy = (latitude: number) => Math.round((Math.log(Math.tan(Math.PI / 4 + latitude * Math.PI / 360)) / (2 * Math.PI) + .5) * 2 ** 30)
 function store(path: string, rows: Row[], fresh = false) {
   let table = makeTable({ osm_id: BigInt64Array.from(rows, (_, i) => BigInt(i + 1)),
-    centroid_gx: Int32Array.from(rows, () => 578800000), centroid_gy: Int32Array.from(rows, () => 709600000),
+    centroid_gx: Int32Array.from(rows, row => gx(row.lon ?? 14)),
+    centroid_gy: Int32Array.from(rows, row => gy(row.lat ?? 50)),
+    country_iso: Uint16Array.from(rows, row => iso2Code(row.country ?? 'CZ')),
     source_id: Uint16Array.from(rows, r => r.source ?? 0), source_type: Uint8Array.from(rows, r => r.wind ? 10 : 0),
     suppressed: Uint8Array.from(rows, r => r.suppressed ?? 0),
     name: vectorFromArray(rows.map(r => r.name), new Utf8()),
@@ -20,7 +25,7 @@ function store(path: string, rows: Row[], fresh = false) {
   if (!fresh) table = table.assign(makeTable({ nace_4digit: Uint16Array.from(rows, r => r.nace ?? 0) }))
   const parts = rows.length > 1 ? [table.slice(0, 1), table.slice(1)] : [table]
   const schema = new Schema(table.schema.fields.map(f => new Field(f.name, f.type, f.nullable, new Map([['original', f.name]]))),
-    new Map([['grid', 'z30'], ['native', 'preserve'], ['qm_batch_bboxes', JSON.stringify(parts.map(() => [49, 13, 51, 16]))]]))
+    new Map([['grid', 'z30'], ['industrial_contract', 'country_land_baked_v1'], ['native', 'preserve'], ['qm_batch_bboxes', JSON.stringify(parts.map(() => [49, 13, 51, 16]))]]))
   const result = new Table(schema, parts.flatMap(p => p.batches.map(b => new RecordBatch(schema, b.data))))
   mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, tableToIPC(result, 'file'))
   return tableFromIPC(readFileSync(path))
@@ -44,6 +49,8 @@ test('ordered multilingual rules retain wind skip, solar precedence and all orig
     ['Wind turbine factory', 0], ['Unnamed industrial site', undefined],
   ]
   for (const [name, nace] of examples) assert.equal(industrialNameRule(name)?.nace4, nace, name)
+  assert.equal(koreanIndustrialNameRule('포항제철소')?.nace4, 2410)
+  assert.equal(koreanIndustrialNameRule('여수국가산업단지')?.nace4, 2011)
 })
 
 test('native names preserve authority and suppression while owned retirement, wind and re-extraction converge', async () => {
@@ -90,5 +97,25 @@ test('missing scope or malformed native columns fail; valid empty native IPC is 
     const bad = readFileSync(path)
     await assert.rejects(enrichIndustrialNames(root), /source_type.*Uint8/)
     assert.deepEqual(readFileSync(path), bad)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+
+test('Korean names use their national sector detail, exclude North Korea and converge after rename', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'industrial-name-kr-'))
+  try {
+    const path = resolve(root, 'z9/434/202/industrial.arrow')
+    store(path, [
+      { name: '포항제철소', lat: 36.03, lon: 129.38, country: 'KR' },
+      { name: 'Cement plant', lat: 35.2, lon: 129, country: 'KR' },
+      { name: '남포제련소', lat: 38.7, lon: 125.4, country: 'KP' },
+      { name: 'Logistics', lat: 36, lon: 128, country: 'KR', source: 9410, nace: 2410 },
+    ])
+    await enrichIndustrialNames(root)
+    assert.deepEqual(values(path, 'source_id'), [9410, 9410, 0, 9000])
+    assert.deepEqual(values(path, 'nace_4digit'), [2410, 2351, 0, 5200])
+    const bytes = readFileSync(path)
+    assert.equal((await enrichIndustrialNames(root)).squaresUpdated, 0)
+    assert.deepEqual(readFileSync(path), bytes)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

@@ -227,13 +227,13 @@ export async function enrichRailwayParallelSquare(
     if (divisor === null) continue
     stats.eligibleRows++
     stats.computedHist[divisor - 1]++
-    if (owner.divisors[index] > 1) {
-      stats.keptExistingAbove1++
-    } else if (divisor > 1) {
-      decisions[index] = divisor
-      stats.writtenHist[divisor - 1]++
-      needsWrite = true
+    if (owner.divisors[index] === divisor) {
+      if (divisor > 1) stats.keptExistingAbove1++
+      continue
     }
+    decisions[index] = divisor
+    stats.writtenHist[divisor - 1]++
+    needsWrite = true
   }
   if (needsWrite && !options.dryRun) {
     stats.changed = (await writeRailParallelDivisor(arrowPath, index => decisions[index] ?? null)).updated

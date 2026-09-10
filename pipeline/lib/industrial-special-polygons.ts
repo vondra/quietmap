@@ -1,12 +1,17 @@
-/** Ordered Colombian concession containment, preserving source holes and tier precedence. */
+/** Ordered national containment areas with source holes and tier precedence. */
 
 import { inBbox, pointInRing } from './spatial.js'
 import type { PreparedBbox } from './prepared-grid.js'
 import type { SpecialFeature } from './industrial-special-source.js'
-import { text } from './industrial-special-policy.js'
+import { text, type SpecialContainmentFeed } from './industrial-special-policy.js'
 
 type Ring = readonly (readonly [number, number])[]
 export interface IndustrialConcession { rings: readonly Ring[]; bbox: PreparedBbox; nace4: number }
+interface AreaPolicy {
+  active(properties: Record<string, unknown>): boolean
+  classify(properties: Record<string, unknown>): number
+}
+
 function mineralNace(mineral: string): number {
   const value = mineral.toUpperCase()
   if (/CARBÓN|CARBON|ANTRACITA|HULLA|LIGNITO|TURBA/.test(value)) return 500
@@ -15,27 +20,31 @@ function mineralNace(mineral: string): number {
   return 700 // Original ANM policy for other active mineral titles.
 }
 
-export function colombianConcessions(features: readonly SpecialFeature[], mining: boolean, countryBox: PreparedBbox) {
+export function industrialAreas(
+  features: readonly SpecialFeature[],
+  countryBox: PreparedBbox,
+  policy: AreaPolicy,
+) {
   const polygons: IndustrialConcession[] = []
   const counts = { raw: features.length, unlocated: 0, inactive: 0, outside: 0, admitted: 0, parts: 0, holes: 0 }
   for (const [index, feature] of features.entries()) {
     const geometry = feature.geometry, properties = feature.properties ?? {}
     if (!geometry || !['Polygon', 'MultiPolygon'].includes(geometry.type)) { counts.unlocated++; continue }
-    if (mining ? !/Explotaci|Construcci/i.test(text(properties.ETAPA)) : !text(properties.ESTAD_AREA).toUpperCase().includes('PRODUC')) {
-      counts.inactive++; continue
-    }
+    if (!policy.active(properties)) { counts.inactive++; continue }
     const parts = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates
-    if (!Array.isArray(parts) || !parts.length) throw new Error(`invalid concession polygon ${index}`)
+    if (!Array.isArray(parts) || !parts.length) throw new Error(`invalid industrial area ${index}`)
+    const nace4 = policy.classify(properties)
+    if (!Number.isInteger(nace4) || nace4 <= 0 || nace4 > 9999) throw new Error(`invalid industrial area NACE ${index}`)
     let admitted = 0
     for (const part of parts) {
-      if (!Array.isArray(part) || !part.length) throw new Error(`invalid concession rings ${index}`)
+      if (!Array.isArray(part) || !part.length) throw new Error(`invalid industrial area rings ${index}`)
       const bbox: [number, number, number, number] = [90, 180, -90, -180]
       for (const [ringIndex, ring] of part.entries()) {
-        if (!Array.isArray(ring) || ring.length < 4) throw new Error(`invalid concession ring ${index}`)
+        if (!Array.isArray(ring) || ring.length < 4) throw new Error(`invalid industrial area ring ${index}`)
         for (const point of ring) {
           if (!Array.isArray(point) || point.length < 2 || typeof point[0] !== 'number' || typeof point[1] !== 'number' ||
               !Number.isFinite(point[0]) || !Number.isFinite(point[1]) || Math.abs(point[0]) > 180 || Math.abs(point[1]) > 90) {
-            throw new Error(`invalid concession coordinate ${index}`)
+            throw new Error(`invalid industrial area coordinate ${index}`)
           }
           if (ringIndex === 0) {
             bbox[0] = Math.min(bbox[0], point[1]); bbox[1] = Math.min(bbox[1], point[0])
@@ -44,17 +53,35 @@ export function colombianConcessions(features: readonly SpecialFeature[], mining
         }
       }
       if (bbox[2] < countryBox[0] || bbox[0] > countryBox[2] || bbox[3] < countryBox[1] || bbox[1] > countryBox[3]) continue
-      polygons.push({ rings: part as Ring[], bbox, nace4: mining ? mineralNace(text(properties.MINERALES)) : 600 })
+      polygons.push({ rings: part as Ring[], bbox, nace4 })
       counts.parts++; counts.holes += part.length - 1; admitted++
     }
     if (admitted) counts.admitted++; else counts.outside++
   }
-  if (!polygons.length) throw new Error('empty admitted Colombian concession source; refusing a partial reset')
+  if (!polygons.length) throw new Error('empty admitted industrial area source; refusing a partial reset')
   return { polygons, counts }
 }
 
+export function colombianConcessions(features: readonly SpecialFeature[], mining: boolean, countryBox: PreparedBbox) {
+  return industrialAreas(features, countryBox, {
+    active: properties => mining ? /Explotaci|Construcci/i.test(text(properties.ETAPA))
+      : text(properties.ESTAD_AREA).toUpperCase().includes('PRODUC'),
+    classify: properties => mining ? mineralNace(text(properties.MINERALES)) : 600,
+  })
+}
+
+export function nationalContainmentAreas(
+  features: readonly SpecialFeature[],
+  feed: SpecialContainmentFeed,
+  countryBox: PreparedBbox,
+) {
+  return industrialAreas(features, countryBox, {
+    active: properties => feed.active?.(properties) ?? true,
+    classify: () => feed.nace4,
+  })
+}
+
 export function concessionClassifier(polygons: readonly IndustrialConcession[]) {
-  // Original half-degree bbox index, retaining source order within each cell.
   const grid = new Map<string, IndustrialConcession[]>()
   for (const polygon of polygons) {
     for (let y = Math.floor(polygon.bbox[0] * 2); y <= Math.floor(polygon.bbox[2] * 2); y++) {

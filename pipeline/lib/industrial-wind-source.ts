@@ -22,6 +22,15 @@ export const WIND_COUNTRIES = [
   { country: 'SE', bbox: [55.3, 10.9, 69.1, 24.2], radiusM: 200 },
   { country: 'US', bbox: [17.5, -180, 71.5, -65], radiusM: 500 },
 ] as const
+export const WIND_SOURCE_FILES = {
+  CA: 'ca/wind-turbines-en.xlsx',
+  DE: 'de/mastr-wind.csv',
+  DK: 'dk/ens-windturbines.xlsx',
+  ES: 'es/clm-aerogeneradores.csv',
+  NO: ['no/nve-vindkraftverk.json', 'no/nve-vindturbiner.json'],
+  SE: 'se/vindbrukskollen.zip',
+  US: 'global/uswtdb.csv',
+} as const
 
 function number(value: unknown): number {
   if (value == null || value === '') return 0
@@ -151,13 +160,13 @@ export async function loadWindRegisters(enrichmentDirectory: string) {
   const registers: WindRegister[] = []
   for (const policy of WIND_COUNTRIES) {
     const c = policy.country
-    const observations = c === 'CA' ? parseWindWorkbook(c, await readSheet(read('ca/wind-turbines-en.xlsx'), 'WTD'))
-      : c === 'DK' ? parseWindWorkbook(c, await readSheet(read('dk/ens-windturbines.xlsx'), 'Vindmølledata'))
-        : c === 'DE' ? parseWindCsv(c, read('de/mastr-wind.csv'))
-          : c === 'ES' ? parseWindCsv(c, read('es/clm-aerogeneradores.csv'))
-            : c === 'NO' ? parseNorwegianWind(JSON.parse(read('no/nve-vindkraftverk.json').toString()), JSON.parse(read('no/nve-vindturbiner.json').toString()))
-              : c === 'SE' ? await parseSwedishWind(read('se/vindbrukskollen.zip'))
-                : parseWindCsv(c, read('../global/uswtdb.csv'))
+    const observations = c === 'CA' ? parseWindWorkbook(c, await readSheet(read(WIND_SOURCE_FILES.CA), 'WTD'))
+      : c === 'DK' ? parseWindWorkbook(c, await readSheet(read(WIND_SOURCE_FILES.DK), 'Vindmølledata'))
+        : c === 'DE' ? parseWindCsv(c, read(WIND_SOURCE_FILES.DE))
+          : c === 'ES' ? parseWindCsv(c, read(WIND_SOURCE_FILES.ES))
+            : c === 'NO' ? parseNorwegianWind(JSON.parse(read(WIND_SOURCE_FILES.NO[0]).toString()), JSON.parse(read(WIND_SOURCE_FILES.NO[1]).toString()))
+              : c === 'SE' ? await parseSwedishWind(read(WIND_SOURCE_FILES.SE))
+                : parseWindCsv(c, read(WIND_SOURCE_FILES.US))
     registers.push({ ...policy, observations })
   }
   return { registers, receipts }

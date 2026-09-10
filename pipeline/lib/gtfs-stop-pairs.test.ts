@@ -220,8 +220,8 @@ test('calendar zero-active-services fix applies inside the pair parser too: zero
     'routes.txt': NO_CALENDAR_ROUTES,
     'calendar.txt':
       'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\n' +
-      'weekend_only,0,0,0,0,0,1,1,20260101,20261231\n',
-    'trips.txt': 'trip_id,route_id,service_id\nT1,R1,weekend_only\n',
+      'inactive,0,0,0,0,0,0,0,20260101,20261231\n',
+    'trips.txt': 'trip_id,route_id,service_id\nT1,R1,inactive\n',
     'stop_times.txt':
       'trip_id,stop_id,stop_sequence\n' +
       'T1,A,1\n' +
@@ -233,7 +233,7 @@ test('calendar zero-active-services fix applies inside the pair parser too: zero
   })
 
   const { pairs, provenance } = await computeStopPairFrequenciesForFeed(dir)
-  assert.equal(pairs.length, 0, 'calendar present + zero active services on the target Wednesday = zero pairs')
+  assert.equal(pairs.length, 0, 'calendar present + no active service dates = zero pairs')
   assert.equal(provenance.calendarPresent, true)
   assert.equal(provenance.activeTripCount, 0)
   assert.ok(!existsSync(join(dir, 'gtfs-rail-pairs-v1.json')), 'never-cache-empty: this zero-pair parse must not be cached')
@@ -386,6 +386,8 @@ test('input fingerprint invalidates the pair cache when coordinates or shapes ch
     join(dir, 'shapes.txt'),
     'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\nS,50.0,14.0,1\n',
   )
+  assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath })).provenance.fromCache, false)
+  writeFileSync(join(dir, 'feed_info.txt'), 'feed_start_date,feed_end_date\n20260901,20260930\n')
   assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath })).provenance.fromCache, false)
 })
 

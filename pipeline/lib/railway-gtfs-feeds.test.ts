@@ -2,11 +2,14 @@
 
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { path7za } from '7zip-bin'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
-  GLOBAL_GTFS_FEEDS, countryGtfsBbox, gtfsSourceDirectories, railFamilyFor,
+  GLOBAL_GTFS_FEEDS, NATIONAL_GTFS_FEEDS, countryGtfsBbox, gtfsDownloadUrls, gtfsSourceDirectories, gtfsTextSourceSha256, railFamilyFor,
   validateGtfsSourceFreshness,
 } from './railway-gtfs-feeds.js'
 
@@ -24,16 +27,15 @@ function writeRequiredGtfs(directory: string): void {
   )
 }
 
-test('registry is exactly the 23-feed, 21-country dev1 global aggregate', () => {
+test('global registry keeps the 22 productive feeds across 21 countries', () => {
   assert.deepEqual(GLOBAL_GTFS_FEEDS.map(feed => feed.id), [
     'de', 'ch', 'at', 'nl', 'se', 'no', 'fi', 'be', 'in', 'us', 'ca', 'fr',
-    'lu', 'gr', 'lv-pv', 'ee', 'bg-sofia', 'hr', 'hu', 'sk', 'fr-idf',
-    'au-vic', 'au-qld',
+    'lu', 'gr', 'lv-pv', 'ee', 'bg-sofia', 'hr', 'hu', 'sk', 'au-vic', 'au-qld',
   ])
   assert.equal(new Set(GLOBAL_GTFS_FEEDS.map(feed => feed.country)).size, 21)
   assert.deepEqual(
     GLOBAL_GTFS_FEEDS.filter(feed => feed.country === 'FR').map(feed => feed.id),
-    ['fr', 'fr-idf'],
+    ['fr'],
   )
   assert.deepEqual(
     GLOBAL_GTFS_FEEDS.filter(feed => feed.country === 'AU').map(feed => feed.id),
@@ -41,13 +43,40 @@ test('registry is exactly the 23-feed, 21-country dev1 global aggregate', () => 
   )
 })
 
-test('registry keeps the two deliberate family overrides', () => {
-  const franceTram = GLOBAL_GTFS_FEEDS.find(feed => feed.id === 'fr-idf')!
+test('registries retain only productive, explicit family overrides', () => {
   const victoria = GLOBAL_GTFS_FEEDS.find(feed => feed.id === 'au-vic')!
-  assert.equal(railFamilyFor(2, franceTram), null)
-  assert.equal(railFamilyFor(0, franceTram), 'tram')
+  const thailand = NATIONAL_GTFS_FEEDS.find(feed => feed.id === 'namtang')!
   assert.equal(railFamilyFor(400, victoria), 'rail')
   assert.equal(railFamilyFor(0, victoria), null)
+  assert.equal(railFamilyFor(1, thailand), null)
+})
+
+test('every immutable feed records its refresh URL and Greece no longer points at the 2019 archive', () => {
+  for (const feed of [...GLOBAL_GTFS_FEEDS, ...NATIONAL_GTFS_FEEDS]) {
+    assert.ok(gtfsDownloadUrls(feed).every(url => /^https?:\/\//.test(url)), feed.id)
+  }
+  assert.equal(
+    GLOBAL_GTFS_FEEDS.find(feed => feed.id === 'gr')!.url,
+    'https://jbb.ghsq.de/gtfs/gr-hellenic-train.gtfs.zip',
+  )
+  assert.deepEqual(
+    gtfsDownloadUrls(NATIONAL_GTFS_FEEDS.find(feed => feed.id === 'toscana-trenitalia')!),
+    ['https://dati.toscana.it/dataset/8bb8f8fe-fe7d-41d0-90dc-49f2456180d1/resource/4f85393b-357d-443d-8378-65de4198505f/download/trenitalia.gtfs'],
+  )
+})
+
+test('national registry consolidates 42 current and three pinned historical GTFS feeds in 17 countries', () => {
+  assert.equal(NATIONAL_GTFS_FEEDS.length, 45)
+  assert.equal(new Set(NATIONAL_GTFS_FEEDS.map(feed => feed.country)).size, 17)
+  assert.deepEqual(
+    [...new Set(NATIONAL_GTFS_FEEDS.map(feed => feed.country))].sort(),
+    ['AE', 'AR', 'AU', 'BE', 'CA', 'DE', 'DK', 'ES', 'FI', 'IE', 'IL', 'IT', 'MX', 'PL', 'PT', 'SE', 'TH'],
+  )
+  assert.equal(NATIONAL_GTFS_FEEDS.find(feed => feed.id === 'warsaw-ztm')!.includeRailPairs, false)
+  assert.equal(NATIONAL_GTFS_FEEDS.filter(feed => feed.acceptedHistoricalSource).length, 3)
+  for (const country of new Set(NATIONAL_GTFS_FEEDS.map(feed => feed.country))) {
+    assert.equal(new Set(NATIONAL_GTFS_FEEDS.filter(feed => feed.country === country).map(feed => feed.sourceId)).size, 1)
+  }
 })
 
 test('source discovery requires all three Victoria railway mode directories', () => {
@@ -66,6 +95,28 @@ test('source discovery requires all three Victoria railway mode directories', ()
   ])
   rmSync(join(TEMP, 'au-vic', '2'), { recursive: true })
   assert.deepEqual(gtfsSourceDirectories(TEMP, au), [])
+})
+
+test('identity-pinned archive extracts only into the derived cache', () => {
+  const source = join(TEMP, 'archive-source')
+  const input = join(TEMP, 'archive-input')
+  const cache = join(TEMP, 'archive-cache')
+  mkdirSync(source)
+  writeRequiredGtfs(input)
+  const archive = join(source, 'feed.zip')
+  const created = spawnSync(path7za, ['a', archive, '.'], { cwd: input, encoding: 'utf8' })
+  assert.equal(created.status, 0, created.stderr)
+  const archiveSha256 = createHash('sha256').update(readFileSync(archive)).digest('hex')
+  const base = GLOBAL_GTFS_FEEDS.find(feed => feed.id === 'de')!
+  const feed = { ...base, id: 'archive-test', sourcePath: 'missing', sourceArchive: {
+    relativePath: 'feed.zip', sha256: archiveSha256,
+  } }
+  const directories = gtfsSourceDirectories(source, feed, cache)
+  assert.equal(directories.length, 1)
+  assert.ok(directories[0].startsWith(cache))
+  assert.deepEqual(gtfsSourceDirectories(source, feed, cache), directories)
+  writeFileSync(archive, 'changed')
+  assert.throws(() => gtfsSourceDirectories(source, feed, cache), /archive identity mismatch/)
 })
 
 test('country bbox unions all feeds and pads the shared half-degree border', () => {
@@ -87,6 +138,13 @@ test('freshness rejects every expired source, including the historical Greece fi
     validateGtfsSourceFreshness(gr, stale, '20260905'),
     /GTFS feed gr expired 20240101/,
   )
+  const archived = { ...de, id: 'archived-test', acceptedHistoricalSource: {
+    gtfsTextSha256: gtfsTextSourceSha256(stale), lastServiceDate: '20240101', sourceYear: 2024,
+  } }
+  assert.deepEqual(await validateGtfsSourceFreshness(archived, stale, '20260905'),
+    { lastServiceDate: '20240101', historical: true })
+  writeFileSync(join(stale, 'routes.txt'), 'changed\n')
+  await assert.rejects(validateGtfsSourceFreshness(archived, stale, '20260905'), /historical source identity/)
 })
 
 test('freshness scans large exception calendars without argument-spread overflow', async () => {
@@ -118,4 +176,13 @@ test('freshness ignores calendar-date removals when finding the service horizon'
     validateGtfsSourceFreshness(de, directory, '20260905'),
     /expired 20240101/,
   )
+})
+
+
+test('freshness rejects a future feed instead of using its broad recurring calendar', async () => {
+  const directory = join(TEMP, 'future-feed')
+  writeRequiredGtfs(directory)
+  writeFileSync(join(directory, 'feed_info.txt'), 'feed_start_date,feed_end_date\n20260910,20260916\n')
+  const us = GLOBAL_GTFS_FEEDS.find(feed => feed.id === 'us')!
+  await assert.rejects(validateGtfsSourceFreshness(us, directory, '20260909'), /starts 20260910/)
 })

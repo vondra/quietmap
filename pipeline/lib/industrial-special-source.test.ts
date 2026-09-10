@@ -5,11 +5,11 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { test } from 'node:test'
-import { gemAreaContains } from './industrial-gem-countries.js'
+import { GEM_COUNTRIES, gemAreaContains } from './industrial-gem-countries.js'
 import { SPECIAL_COUNTRIES } from './industrial-special-countries.js'
 import { SPECIAL_FEEDS } from './industrial-special-policy.js'
 import { classifySpecialPoints, readSpecialFeatures, type SpecialFeature } from './industrial-special-source.js'
-import { colombianConcessions, concessionClassifier } from './industrial-special-polygons.js'
+import { colombianConcessions, concessionClassifier, nationalContainmentAreas } from './industrial-special-polygons.js'
 
 const point = (lat: number, lon: number, properties: Record<string, unknown>): SpecialFeature => ({ geometry: { type: 'Point', coordinates: [lon, lat] }, properties })
 
@@ -68,4 +68,62 @@ test('Colombian final tier respects holes and source order rather than assigning
   const combined = concessionClassifier([...admitted.polygons, ...oil.polygons])
   assert.equal(combined(5, -74), 600); assert.equal(combined(4.2, -74), 500)
   assert.throws(() => colombianConcessions([features[1]], true, [-4.3,-82,13.5,-66.8]), /empty admitted/)
+})
+
+
+test('four retained national families keep their source geometry, status, sector and containment semantics', () => {
+  assert.equal(SPECIAL_COUNTRIES.length, 14)
+  const specialCodes = SPECIAL_COUNTRIES.map(policy => policy.country).sort()
+  assert.deepEqual(Object.keys(SPECIAL_FEEDS).sort(), specialCodes)
+  assert.deepEqual(GEM_COUNTRIES.filter(policy => specialCodes.includes(policy.country)), [])
+  const country = (iso: string) => SPECIAL_COUNTRIES.find(policy => policy.country === iso)!
+  const clSeen = new Set<string>()
+  const clThermal = classifySpecialPoints([point(-30, -70, { ESTADO: 'OPERATIVA' })],
+    country('CL'), SPECIAL_FEEDS.CL[0], clSeen)
+  const clDuplicate = classifySpecialPoints([point(-30, -70, { Status: 'operating', Type: 'solar' })],
+    country('CL'), SPECIAL_FEEDS.CL[1], clSeen)
+  assert.equal(clThermal.facilities[0].nace4, 3511)
+  assert.equal(clDuplicate.counts.duplicate, 1)
+
+  const powerCases: Array<[string, number, Record<string, unknown>, number | null, boolean]> = [
+    ['CL', 1, { Status: 'operating', Type: 'solar' }, 3599, true],
+    ['CL', 1, { Status: 'operating', Type: 'hydropower' }, 3512, true],
+    ['CL', 1, { Status: 'operating', Type: 'wind' }, null, true],
+    ['CL', 1, { Status: 'retired', Type: 'coal' }, 3511, false],
+    ['PE', 0, { Status: 'operating', Type: 'solar' }, 3599, true],
+    ['PE', 0, { Status: 'operating', Type: 'wind' }, null, true],
+    ['PH', 0, { Status: 'operating', FuelType: 'hydropower' }, 3512, true],
+    ['PH', 0, { Status: 'retired', FuelType: 'coal' }, 3511, false],
+    ['IN', 1, { primary_fuel: 'Solar' }, 3599, true],
+    ['IN', 1, { primary_fuel: 'Hydro' }, 3512, true],
+    ['IN', 1, { primary_fuel: 'Wind' }, null, true],
+    ['IN', 1, { primary_fuel: 'Coal' }, 3511, true],
+  ]
+  for (const [iso, index, properties, nace, active] of powerCases) {
+    const feed = SPECIAL_FEEDS[iso][index]
+    assert.equal(feed.classify(properties), nace, `${iso} fuel`)
+    assert.equal(feed.active?.(properties) ?? true, active, `${iso} status`)
+  }
+
+  const indiaPark = classifySpecialPoints([point(20, 78, { pollution_cat: 'Orange' })],
+    country('IN'), SPECIAL_FEEDS.IN[2], new Set())
+  assert.equal(indiaPark.facilities[0].nace4, 2000)
+  const cement = classifySpecialPoints([{
+    geometry: { type: 'Polygon', coordinates: [[[77, 20], [79, 20], [79, 22], [77, 22], [77, 20]]] },
+    properties: {},
+  }], country('IN'), SPECIAL_FEEDS.IN[0], new Set())
+  assert.deepEqual([cement.facilities[0].lat, cement.facilities[0].lon, cement.facilities[0].nace4], [21, 78, 2300])
+
+  const peru = country('PE'), outer = [[-76,-12],[-74,-12],[-74,-10],[-76,-10],[-76,-12]]
+  const hole = [[-75.5,-11.5],[-74.5,-11.5],[-74.5,-10.5],[-75.5,-10.5],[-75.5,-11.5]]
+  const areas = nationalContainmentAreas([{
+    geometry: { type: 'Polygon', coordinates: [outer, hole] }, properties: {},
+  }], { file: 'mine', nace4: 700 }, peru.bbox)
+  const classify = concessionClassifier(areas.polygons)
+  assert.equal(classify(-11, -75), null)
+  assert.equal(classify(-11.8, -75), 700)
+
+  const philippines = classifySpecialPoints([point(14, 121, { Status: 'operating', Type: 'coal' })],
+    country('PH'), SPECIAL_FEEDS.PH[0], new Set())
+  assert.equal(philippines.facilities[0].nace4, 3511)
 })
