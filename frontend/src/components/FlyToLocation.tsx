@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useMap } from 'react-map-gl/maplibre'
+import { searchFlightArrived, SEARCH_FLIGHT_ZOOM } from '../lib/search-flight'
 
 export interface SelectedLocation {
   display_name: string
@@ -21,14 +22,19 @@ export default function FlyToLocation({ location, onArrived }: FlyToLocationProp
     const isMobile = window.innerWidth < 768
     map.flyTo({
       center: [location.lon, location.lat],
-      zoom: 14,
+      zoom: SEARCH_FLIGHT_ZOOM,
       duration: 1500,
       padding: { top: 120, bottom: isMobile ? 350 : 0, left: 0, right: 0 },
     })
 
+    // An interrupted flight (hash navigation, a drag) also ends in moveend;
+    // only a real arrival opens the popup — see searchFlightArrived.
     const onMoveEnd = () => {
       map.off('moveend', onMoveEnd)
-      onArrived?.({ lat: location.lat, lng: location.lon })
+      const c = map.getCenter()
+      if (searchFlightArrived({ lat: c.lat, lng: c.lng, zoom: map.getZoom() }, location)) {
+        onArrived?.({ lat: location.lat, lng: location.lon })
+      }
     }
 
     map.once('moveend', onMoveEnd)

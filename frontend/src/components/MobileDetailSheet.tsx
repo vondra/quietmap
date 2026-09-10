@@ -2,6 +2,7 @@ import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react'
 import DetailSkeleton from './DetailSkeleton'
 import type { NoiseComputeData } from '../types/noise'
 import type { SurfacePreview } from '../lib/fetch-noise-detail'
+import { resolveSheetTouchEnd } from '../lib/sheet-drag'
 
 // Lazy popup body — see DetailCard; off first paint, pre-warmed by App on click.
 const NoiseDetailContent = lazy(() => import('./NoiseDetailContent'))
@@ -54,15 +55,13 @@ export default function MobileDetailSheet({ data, position, error, preview, onCl
 
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!dragRef.current.isDragging) return
-    const deltaY = e.changedTouches[0].clientY - dragRef.current.startY
+    const { cancelClick, dismiss } = resolveSheetTouchEnd(e.changedTouches[0].clientY - dragRef.current.startY)
     dragRef.current.isDragging = false
-    // Only a real drag cancels the synthesized click — the expand/collapse
-    // tap on the handle must reach onClick (audit 2026-09-06).
-    if (Math.abs(deltaY) >= 10) {
+    if (cancelClick) {
       e.preventDefault()
       e.stopPropagation()
     }
-    if (deltaY > 80) {
+    if (dismiss) {
       setDismissing(true)
       setDragOffset(0)
       dismissTimeoutRef.current = setTimeout(() => {
@@ -92,7 +91,7 @@ export default function MobileDetailSheet({ data, position, error, preview, onCl
       <div
         data-testid="mobile-detail-sheet"
         className="bg-background rounded-t-xl shadow-2xl"
-        style={{ maxHeight: expanded ? '50vh' : 'auto', transform, transition }}
+        style={{ transform, transition }}
       >
         <div
           className="flex justify-center py-3 cursor-grab"
@@ -107,7 +106,10 @@ export default function MobileDetailSheet({ data, position, error, preview, onCl
           <div className="w-10 h-1 bg-muted-foreground/30 rounded-full" />
         </div>
 
-        <div className={`pb-1 ${expanded ? 'overflow-y-auto overflow-x-clip' : ''}`} style={expanded ? { maxHeight: 'calc(50vh - 16px)' } : undefined}>
+        {/* Collapsed = a peek at the top of the detail (place + level) under
+            a fixed cap; the tap now reaches onClick, so this state is real
+            (review 2026-09-10: `auto` let a tall detail grow on Collapse). */}
+        <div className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(50vh-16px)]' : 'overflow-hidden max-h-24'}`}>
           {showSkeleton
             ? <DetailSkeleton position={position} error={error} preview={preview} />
             : <Suspense fallback={<DetailSkeleton position={position} error={error} preview={preview} />}>

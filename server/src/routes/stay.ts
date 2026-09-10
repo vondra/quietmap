@@ -12,17 +12,13 @@ const STAY22_URL = 'https://api.stay22.com/v2/accommodations'
 /**
  * Stay22 retired its keyless tier (401 INVALID_API_KEY since 2026-09-06), so
  * the affiliate id and the API key are required at startup: a server without
- * them would register a stay layer that silently shows nothing. The systemd
- * unit loads both from quietmap-private/.env (EnvironmentFile=).
+ * them would register a stay layer that silently shows nothing.
  */
 function stay22CredentialsFromEnv(env: NodeJS.ProcessEnv): { aid: string; apiKey: string } {
   const aid = env.STAY22_AID
   const apiKey = env.STAY22_API_KEY
   if (!aid || !apiKey) {
-    throw new Error(
-      'STAY22_AID and STAY22_API_KEY are required (Stay22 retired its keyless tier on 2026-09-06); '
-      + 'set both in quietmap-private/.env, which the qm-web unit loads via EnvironmentFile',
-    )
+    throw new Error('STAY22_AID and STAY22_API_KEY are required (Stay22 retired its keyless tier on 2026-09-06)')
   }
   return { aid, apiKey }
 }

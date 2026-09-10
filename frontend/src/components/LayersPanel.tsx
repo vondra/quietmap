@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import LayerControlsBody, { type LayerControlsBodyProps } from './LayerControlsBody'
+import { resolveSheetTouchEnd } from '../lib/sheet-drag'
 
 interface LayersPanelProps extends LayerControlsBodyProps {
   open: boolean
@@ -32,15 +33,13 @@ export default function LayersPanel({ open, onClose, ...body }: LayersPanelProps
 
   const onTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!dragRef.current.isDragging) return
-    const deltaY = e.changedTouches[0].clientY - dragRef.current.startY
+    const { cancelClick, dismiss } = resolveSheetTouchEnd(e.changedTouches[0].clientY - dragRef.current.startY)
     dragRef.current.isDragging = false
-    // Only a real drag cancels the synthesized click — a tap on the handle
-    // must still reach onClick (audit 2026-09-06: it never did on touch).
-    if (Math.abs(deltaY) >= 10) {
+    if (cancelClick) {
       e.preventDefault()
       e.stopPropagation()
     }
-    if (deltaY > 80) {
+    if (dismiss) {
       handleDismiss()
     } else {
       setDragOffset(0)

@@ -122,6 +122,15 @@ function pointCacheKey(op: 'point' | 'unfiltered', lat: number, lng: number): st
   return `${op}|${lat}|${lng}`
 }
 
+/**
+ * A native call still running this many work timeouts after its client gave
+ * up is hung (30 s timeout → 5 min). The slot cannot be freed without
+ * dlclosing the addon under live Rust threads, so the whole process exits and
+ * the unit restarts (Restart=always) — bounded recovery instead of a pool
+ * that parks itself slot by slot.
+ */
+const STUCK_NATIVE_CALL_TIMEOUTS = 10
+
 const RESULT_CACHE_MAX_ENTRIES = 32
 const RESULT_CACHE_MAX_BYTES = 150 * 1024 * 1024
 
@@ -139,6 +148,8 @@ export type NoiseOnflySupervisorConfig = {
   logger?: SupervisorLogger
   /** Per-request timing tap (phase A0 measurement; cheap, one call per reply). */
   onTiming?: (timing: NoiseOnflyTiming) => void
+  /** Test seam for the hung-native-call exit; production exits the process. */
+  exitProcess?: () => void
 }
 
 function toError(value: unknown): Error {
@@ -182,6 +193,7 @@ export class NoiseOnflySupervisor {
   private readonly workTimeoutMs: number
   private readonly logger?: SupervisorLogger
   private readonly onTiming?: (timing: NoiseOnflyTiming) => void
+  private readonly exitProcess: () => void
   private readonly slots: Slot[]
 
   private readonly queue: RequestEntry[] = []
@@ -199,6 +211,7 @@ export class NoiseOnflySupervisor {
     this.workTimeoutMs = Math.max(1, config.workTimeoutMs)
     this.logger = config.logger
     this.onTiming = config.onTiming
+    this.exitProcess = config.exitProcess ?? (() => process.exit(1))
     const poolSize = Math.max(1, config.poolSize ?? 1)
     this.slots = Array.from({ length: poolSize }, (_, index) => ({
       index,
@@ -762,6 +775,28 @@ export class NoiseOnflySupervisor {
     })
 
     this.rejectClient(active, workTimeoutError(this.workTimeoutMs))
+    this.parkActiveEntry(slot, active)
+  }
+
+  /** The client is gone; the slot waits for the native call, bounded by the stuck-exit deadline. */
+  private parkActiveEntry(slot: Slot, entry: RequestEntry): void {
+    this.clearWorkTimer(entry)
+    entry.workTimer = setTimeout(() => {
+      this.handleStuckNativeCall(slot, entry.id)
+    }, this.workTimeoutMs * STUCK_NATIVE_CALL_TIMEOUTS)
+  }
+
+  private handleStuckNativeCall(slot: Slot, requestId: number): void {
+    const active = slot.active
+    if (!active || active.id !== requestId) {
+      return
+    }
+    this.log('error', 'noise-onfly native call never returned; exiting so the unit restarts without unloading the addon', {
+      request_id: active.id,
+      slot: slot.index,
+      parked_ms: Date.now() - active.dispatchedAt,
+    })
+    this.exitProcess()
   }
 
   private handleQueueTimeout(requestId: number): void {
@@ -785,10 +820,10 @@ export class NoiseOnflySupervisor {
       const slot = this.slotForActiveWorker(entry.worker)
       if (slot && slot.active?.id === entry.id) {
         // Same rule as a timeout: the slot stays busy until the native call
-        // returns; the work timer has nothing left to settle.
-        this.clearWorkTimer(entry)
+        // returns, bounded by the same stuck-exit deadline.
         this.detachAbortListener(entry)
         this.rejectClient(entry, abortError())
+        this.parkActiveEntry(slot, entry)
         this.log('info', 'noise-onfly active request aborted', {
           request_id: entry.id,
           slot: slot.index,

@@ -8,7 +8,9 @@ import { demColor, forestColor, imdColor, renderGridTile } from './raster-grid-r
 
 // The published native raster year; the real-file tests skip until it exists.
 const PRAGUE_PREPARED = '/data/mixeduse2/r260910/rasters/2026'
-const PRAGUE_RASTERS = { skip: !existsSync(`${PRAGUE_PREPARED}/z9/276/173/dem.i16be`) }
+const PRAGUE_RASTERS = {
+  skip: !['dem.i16be', 'forest.u8', 'imd.u8'].every((file) => existsSync(`${PRAGUE_PREPARED}/z9/276/173/${file}`)),
+}
 
 test('dem palette: lowlands green, peaks white, water dark', () => {
   assert.deepEqual(demColor(-5), [0x2d, 0x6a, 0x4f, 160])

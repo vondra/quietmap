@@ -209,6 +209,7 @@ function MapApp() {
     detailPosition: { lat: number; lng: number } | null
     basemap: BasemapId
     rasterOverlays: Record<string, boolean>
+    validation: boolean
     stay: 'all' | 'hotel' | 'rental' | 'none' | null
   }>) => {
     // Never serialize the pre-resolution language fallback (see
@@ -347,17 +348,25 @@ function MapApp() {
     syncUrl({ basemap: id })
   }, [syncUrl])
 
+  const handleValidationChange = useCallback((enabled: boolean) => {
+    setValidationEnabled(enabled)
+    validationRef.current = enabled
+    syncUrl({ validation: enabled })
+  }, [syncUrl])
+
   // A hash change in the open tab (pasted link, history step): MapStateSync
   // moves the map and hands over the parsed hash; every other token is
-  // applied here through the same handlers a click would use. The detail is
-  // re-fetched only when its point changed (a ~1.5 s compute).
+  // applied here through the same handlers a click would use. Each handler
+  // updates its ref before it calls syncUrl, so the last (debounced) URL write
+  // carries every token whatever the order — a token applied outside a
+  // handler would be written back stale (review 2026-09-10: `val=`). The
+  // detail is re-fetched only when its point changed (a ~1.5 s compute).
   const handleHashState = useCallback((next: UrlState) => {
     handleQuietClustersChange(next.quietClusters)
     handleQuietThresholdChange(next.quietThreshold)
     handleRasterOverlaysChange(next.rasterOverlays)
     handleBasemapChange(next.basemap)
-    validationRef.current = next.validation
-    setValidationEnabled(next.validation)
+    handleValidationChange(next.validation)
     // Only a changed stay token: the change handler also closes an open pin card.
     if (next.stay !== stayParam(stayFiltersRef.current)) handleStayChange(stayFiltersForToken(next.stay, stayFiltersRef.current))
     const cur = detailPositionRef.current
@@ -366,7 +375,7 @@ function MapApp() {
     if (same) return
     if (next.detailPosition) handleDetailPositionChange(next.detailPosition)
     else handleNoiseClose()
-  }, [handleQuietClustersChange, handleQuietThresholdChange, handleRasterOverlaysChange, handleBasemapChange, handleStayChange, handleDetailPositionChange, handleNoiseClose])
+  }, [handleQuietClustersChange, handleQuietThresholdChange, handleRasterOverlaysChange, handleBasemapChange, handleValidationChange, handleStayChange, handleDetailPositionChange, handleNoiseClose])
 
   return (
     <Tooltip.Provider>

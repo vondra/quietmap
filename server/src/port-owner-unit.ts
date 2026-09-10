@@ -17,16 +17,20 @@ const systemctlUser: SystemctlUser = (args) => {
  * process is that unit's own invocation. A manual server that grabs the port
  * while the unit is down (2026-09-04, dev2: 3 042 restarts on EADDRINUSE)
  * serves stale code, so the caller refuses to bind instead of fighting.
+ * Installed unit files count as well as loaded units: a stopped disabled unit
+ * leaves the manager's memory but still owns its port once started.
  */
 export function userUnitOwningPort(
   port: string,
   systemctl: SystemctlUser = systemctlUser,
   invocationId: string | undefined = process.env.INVOCATION_ID,
 ): string | null {
-  const units = systemctl(['list-units', '--all', '--plain', '--no-legend', 'qm-web-*'])
-    .split('\n')
-    .map((line) => line.trim().split(/\s+/)[0])
-    .filter((unit) => unit !== '')
+  const firstColumn = (listing: string) => listing.split('\n').map((line) => line.trim().split(/\s+/)[0])
+  const units = new Set([
+    ...firstColumn(systemctl(['list-units', '--all', '--plain', '--no-legend', 'qm-web-*'])),
+    ...firstColumn(systemctl(['list-unit-files', '--plain', '--no-legend', 'qm-web-*'])),
+  ])
+  units.delete('')
   for (const unit of units) {
     const shown = systemctl(['show', '-p', 'Environment', '-p', 'InvocationID', unit])
     const environment = /^Environment=(.*)$/m.exec(shown)?.[1] ?? ''
