@@ -26,6 +26,86 @@ export function wrapLonDeltaDeg(deltaDegrees: number): number {
   return deltaDegrees
 }
 
+interface AreaCentroid { longitude: number; latitude: number; area: number }
+
+function normalizedLongitude(longitude: number): number {
+  return ((longitude + 180) % 360 + 360) % 360 - 180
+}
+
+function ringAreaCentroid(value: unknown): AreaCentroid | null {
+  if (!Array.isArray(value) || value.length < 3) return null
+  const points: Array<readonly [number, number]> = []
+  let previousRawLongitude: number | null = null
+  let unwrappedLongitude = 0
+  for (const coordinate of value) {
+    if (!Array.isArray(coordinate) || typeof coordinate[0] !== 'number' ||
+        typeof coordinate[1] !== 'number' || !Number.isFinite(coordinate[0]) ||
+        !Number.isFinite(coordinate[1]) || Math.abs(coordinate[0]) > 180 ||
+        Math.abs(coordinate[1]) > 90) throw new Error('invalid GeoJSON polygon coordinate')
+    unwrappedLongitude = previousRawLongitude === null ? coordinate[0]
+      : unwrappedLongitude + wrapLonDeltaDeg(coordinate[0] - previousRawLongitude)
+    previousRawLongitude = coordinate[0]
+    points.push([unwrappedLongitude, coordinate[1]])
+  }
+  const originLongitude = points[0][0], originLatitude = points[0][1]
+  let twiceSignedArea = 0, longitudeNumerator = 0, latitudeNumerator = 0
+  for (let index = 0; index < points.length; index++) {
+    const current = points[index], next = points[(index + 1) % points.length]
+    const currentLongitude = current[0] - originLongitude
+    const currentLatitude = current[1] - originLatitude
+    const nextLongitude = next[0] - originLongitude
+    const nextLatitude = next[1] - originLatitude
+    const cross = currentLongitude * nextLatitude - nextLongitude * currentLatitude
+    twiceSignedArea += cross
+    longitudeNumerator += (currentLongitude + nextLongitude) * cross
+    latitudeNumerator += (currentLatitude + nextLatitude) * cross
+  }
+  if (Math.abs(twiceSignedArea) < 1e-12) return null
+  return {
+    longitude: originLongitude + longitudeNumerator / (3 * twiceSignedArea),
+    latitude: originLatitude + latitudeNumerator / (3 * twiceSignedArea),
+    area: Math.abs(twiceSignedArea) / 2,
+  }
+}
+
+function polygonAreaCentroid(value: unknown): AreaCentroid | null {
+  if (!Array.isArray(value) || value.length === 0) return null
+  const exterior = ringAreaCentroid(value[0])
+  if (!exterior) return null
+  let area = exterior.area
+  let weightedLongitude = exterior.longitude * area
+  let weightedLatitude = exterior.latitude * area
+  for (const ring of value.slice(1)) {
+    const hole = ringAreaCentroid(ring)
+    if (!hole) continue
+    const longitude = exterior.longitude + wrapLonDeltaDeg(hole.longitude - exterior.longitude)
+    area -= hole.area
+    weightedLongitude -= longitude * hole.area
+    weightedLatitude -= hole.latitude * hole.area
+  }
+  if (area <= 1e-12) return null
+  return { longitude: weightedLongitude / area, latitude: weightedLatitude / area, area }
+}
+
+/** Area-weighted representative point for GeoJSON polygon footprints. */
+export function geoJsonAreaCentroid(
+  coordinates: unknown,
+  type: 'Polygon' | 'MultiPolygon',
+): readonly [number, number] | null {
+  const values = type === 'Polygon' ? [coordinates] : Array.isArray(coordinates) ? coordinates : []
+  const parts = values.map(polygonAreaCentroid).filter((part): part is AreaCentroid => part !== null)
+  if (parts.length === 0) return null
+  const referenceLongitude = parts[0].longitude
+  let area = 0, weightedLongitude = 0, weightedLatitude = 0
+  for (const part of parts) {
+    const longitude = referenceLongitude + wrapLonDeltaDeg(part.longitude - referenceLongitude)
+    area += part.area
+    weightedLongitude += longitude * part.area
+    weightedLatitude += part.latitude * part.area
+  }
+  return [normalizedLongitude(weightedLongitude / area), weightedLatitude / area]
+}
+
 /** Flat-earth distance in metres, accurate for the local matching radii used here. */
 export function flatDist(
   firstLatitude: number,

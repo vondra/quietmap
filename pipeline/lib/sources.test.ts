@@ -72,6 +72,30 @@ test('priority 80 → national-measured', () => {
   assert.strictEqual(rsd.provenance, 'national-measured')
 })
 
+test('mixed national road sources split observations from classification fallbacks', () => {
+  const pairs = [
+    ['ar-national-roads', 'ar-road-classification-fallback'],
+    ['cl-national-roads', 'cl-road-classification-fallback'],
+    ['co-national-roads', 'co-road-classification-fallback'],
+    ['id-national-roads', 'id-road-classification-fallback'],
+    ['pe-national-roads', 'pe-road-classification-fallback'],
+    ['sa-national-roads', 'sa-road-classification-fallback'],
+    ['th-national-roads', 'th-road-classification-fallback'],
+  ] as const
+  for (const [measuredKey, proxyKey] of pairs) {
+    const measured = SOURCES_BY_KEY.get(measuredKey)
+    const proxy = SOURCES_BY_KEY.get(proxyKey)
+    assert.ok(measured, measuredKey)
+    assert.ok(proxy, proxyKey)
+    assert.strictEqual(measured.provenance, 'national-measured')
+    assert.strictEqual(proxy.provenance, 'national-proxy')
+    assert.strictEqual(countryIsoForNationalSource(measured.id), measuredKey.slice(0, 2).toUpperCase())
+    assert.strictEqual(countryIsoForNationalSource(proxy.id), measuredKey.slice(0, 2).toUpperCase())
+    assert.strictEqual(shouldOverwrite(proxy.id, measured.id), true)
+    assert.strictEqual(shouldOverwrite(measured.id, proxy.id), false)
+  }
+})
+
 test('priority 70 → continental-measured', () => {
   const euCity = SOURCES_BY_KEY.get('eu-city-traffic')
   assert.ok(euCity)
@@ -112,7 +136,8 @@ test('PROVENANCE_RANK ordering: measured > heuristic > baseline > none', () => {
   assert.ok(PROVENANCE_RANK['city-measured'] > PROVENANCE_RANK['national-measured'])
   assert.ok(PROVENANCE_RANK['national-measured'] > PROVENANCE_RANK['continental-measured'])
   assert.ok(PROVENANCE_RANK['continental-measured'] > PROVENANCE_RANK['global-measured'])
-  assert.ok(PROVENANCE_RANK['global-measured'] > PROVENANCE_RANK['heuristic'])
+  assert.ok(PROVENANCE_RANK['global-measured'] > PROVENANCE_RANK['national-proxy'])
+  assert.ok(PROVENANCE_RANK['national-proxy'] > PROVENANCE_RANK['heuristic'])
   assert.ok(PROVENANCE_RANK['heuristic'] > PROVENANCE_RANK['baseline'])
   assert.ok(PROVENANCE_RANK['baseline'] > PROVENANCE_RANK['none'])
 })

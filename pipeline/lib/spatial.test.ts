@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  buildOneHundredthDegreePointGrid, flatDist,
+  buildOneHundredthDegreePointGrid, flatDist, geoJsonAreaCentroid,
   nearestCompatiblePointWithin200Metres, pointToPolylineDist,
 } from './spatial.js'
 
@@ -28,4 +28,30 @@ test('ranked point grid enforces class, strict radius and antimeridian neighbors
   const grid = buildOneHundredthDegreePointGrid([incompatible, compatible])
   assert.equal(nearestCompatiblePointWithin200Metres(0, 180, 1, 1, grid), compatible)
   assert.equal(nearestCompatiblePointWithin200Metres(0.01, 180, 1, 1, grid), null)
+})
+
+
+test('polygon centroid is area-weighted across closing vertices, holes, parts and the dateline', () => {
+  const rectangle = [[[77, 20], [79, 20], [79, 22], [77, 22], [77, 20]]]
+  assert.deepEqual(geoJsonAreaCentroid(rectangle, 'Polygon'), [78, 21])
+  const small = [[[110, 30], [110.0001, 30], [110.0001, 30.0001], [110, 30.0001], [110, 30]]]
+  const smallCentroid = geoJsonAreaCentroid(small, 'Polygon')!
+  assert.ok(Math.abs(smallCentroid[0] - 110.00005) < 1e-10)
+  assert.ok(Math.abs(smallCentroid[1] - 30.00005) < 1e-10)
+  const withHole = [[[0, 0], [4, 0], [4, 4], [0, 4], [0, 0]],
+    [[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]
+  const holeCentroid = geoJsonAreaCentroid(withHole, 'Polygon')!
+  assert.ok(Math.abs(holeCentroid[0] - 2.1) < 1e-12)
+  assert.ok(Math.abs(holeCentroid[1] - 2.1) < 1e-12)
+  const multipart = [
+    [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]],
+    [[[10, 0], [14, 0], [14, 4], [10, 4], [10, 0]]],
+  ]
+  const multipartCentroid = geoJsonAreaCentroid(multipart, 'MultiPolygon')!
+  assert.ok(Math.abs(multipartCentroid[0] - 9.8) < 1e-12)
+  assert.ok(Math.abs(multipartCentroid[1] - 1.8) < 1e-12)
+  const seam = [[[179, 0], [-179, 0], [-179, 2], [179, 2], [179, 0]]]
+  const seamCentroid = geoJsonAreaCentroid(seam, 'Polygon')!
+  assert.ok(Math.abs(Math.abs(seamCentroid[0]) - 180) < 1e-12)
+  assert.equal(seamCentroid[1], 1)
 })

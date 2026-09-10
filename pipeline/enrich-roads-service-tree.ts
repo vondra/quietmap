@@ -56,11 +56,11 @@ export function readServiceRoads(table: Table): { roads: ServiceRoad[]; fleets: 
 
 export async function enrichServiceTreeSquare(directory: string) {
   const roadsPath = resolve(directory, 'roads.arrow'), buildingsPath = resolve(directory, 'buildings.arrow')
-  if (!existsSync(buildingsPath)) throw new Error(`${directory}: missing original OSM buildings.arrow`)
   let counts = { rows: 0, matched: 0, retracted: 0, updated: false, unknownCountryRows: 0 }
   await withArrowWrite(roadsPath, table => {
     const { roads, fleets, unknownCountryRows } = readServiceRoads(table)
-    const buildings = readServiceBuildings(tableFromIPC(readFileSync(buildingsPath)))
+    const buildings = existsSync(buildingsPath)
+      ? readServiceBuildings(tableFromIPC(readFileSync(buildingsPath))) : []
     const graph = buildGraph(roads), components = findComponents(graph)
     const eligible: number[] = []
     for (const component of components) for (const index of component.segments) eligible.push(index)
@@ -87,9 +87,6 @@ async function main(): Promise<void> {
   const directory = resolve(values['prepared-dir'])
   const squares = listPreparedSquares(directory, [-90, -180, 90, 180])
   if (!squares.length) throw new Error(`${directory}: no prepared road scope`)
-  for (const square of squares) {
-    if (!existsSync(resolve(directory, square, 'buildings.arrow'))) throw new Error(`${square}: missing original OSM buildings.arrow`)
-  }
   for (const square of squares) console.log(JSON.stringify({ square, ...await enrichServiceTreeSquare(resolve(directory, square)) }))
 }
 

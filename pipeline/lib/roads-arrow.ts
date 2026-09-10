@@ -3,7 +3,7 @@
 import { makeTable, makeVector, type Table } from 'apache-arrow'
 import { withArrowWrite } from './provenance.js'
 import {
-  SOURCES_BY_ID, countryIsoForNationalSource, isMeasured, shouldOverwrite,
+  SOURCES_BY_ID, countryIsosForNationalSource, isMeasured, shouldOverwrite,
 } from './sources.js'
 import {
   bakedRoadCountryReader, iso2Code, segmentGeometryReader, type SegmentGeometry,
@@ -148,19 +148,19 @@ export function applyRoadAadt(
   }
 
   let countries: ReturnType<typeof bakedRoadCountryReader> | null = null
-  const countryCodes = new Map<number, number>()
-  const expectedCountryCode = (sourceId: number): number | null => {
-    const countryIso = countryIsoForNationalSource(sourceId)
-    if (countryIso === null) return null
+  const countryCodes = new Map<number, ReadonlySet<number>>()
+  const expectedCountryCodes = (sourceId: number): ReadonlySet<number> | null => {
+    const countryIsos = countryIsosForNationalSource(sourceId)
+    if (countryIsos === null) return null
     countries ??= bakedRoadCountryReader(table)
     let expected = countryCodes.get(sourceId)
     if (expected === undefined) {
-      expected = iso2Code(countryIso)
+      expected = new Set(countryIsos.map(iso2Code))
       countryCodes.set(sourceId, expected)
     }
     return expected
   }
-  const retractCountries = new Map(retract?.sourceIds.map(id => [id, expectedCountryCode(id)]))
+  const retractCountries = new Map(retract?.sourceIds.map(id => [id, expectedCountryCodes(id)]))
   let changed = false
 
   for (let index = 0; index < table.numRows; index++) {
@@ -175,9 +175,9 @@ export function applyRoadAadt(
 
     // Retraction precedes every eligibility gate so stale out-of-scope rows heal.
     const owned = retractCountries.has(source[index])
-    const retractCountryCode = retractCountries.get(source[index]) ?? null
-    const retractsForeignNationalStamp = retractCountryCode !== null &&
-      countries!.codeAt(index) !== retractCountryCode
+    const retractCountryCodes = retractCountries.get(source[index]) ?? null
+    const retractsForeignNationalStamp = retractCountryCodes !== null &&
+      !retractCountryCodes.has(countries!.codeAt(index))
     if (retract && owned &&
         (retractsForeignNationalStamp || retract.when(row, index))) {
       light[index] = 0
@@ -199,9 +199,9 @@ export function applyRoadAadt(
     if (!candidate) continue
     assertMatch(candidate, index, arrowPath)
 
-    const expectedCode = expectedCountryCode(candidate.sourceId)
-    if (expectedCode !== null) {
-      if (countries!.codeAt(index) !== expectedCode) {
+    const expectedCodes = expectedCountryCodes(candidate.sourceId)
+    if (expectedCodes !== null) {
+      if (!expectedCodes.has(countries!.codeAt(index))) {
         result.skippedForeign++
         continue
       }

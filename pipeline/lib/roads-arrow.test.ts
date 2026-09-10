@@ -112,6 +112,16 @@ test('baked ownership admits domestic/global rows and refuses foreign or unknown
   assert.equal((await writeRoadAadt(global, () => payload(11))).matched, 1)
 })
 
+test('national ownership admits declared territory extensions and rejects unrelated countries', async () => {
+  const path = writeRoadsFixture('territory-extension.arrow', [1, 1, 1], {
+    countryCodes: [iso2Code('MA'), iso2Code('EH'), iso2Code('DZ')],
+  })
+  const result = await writeRoadAadt(path, () => payload(9504))
+  assert.deepEqual({ matched: result.matched, skippedForeign: result.skippedForeign },
+    { matched: 2, skippedForeign: 1 })
+  assert.deepEqual([...tableFromIPC(bytes(path)).getChild('source_id')!], [9504, 9504, 0])
+})
+
 test('a national rerun retracts its stale foreign stamp even when its matcher still claims the row', async () => {
   const path = writeRoadsFixture('foreign-retract.arrow', [1], {
     countryCodes: [iso2Code('RU')],

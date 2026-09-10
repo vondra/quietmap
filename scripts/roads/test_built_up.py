@@ -2,6 +2,7 @@
 
 import math
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -240,6 +241,42 @@ class BuiltUpTests(unittest.TestCase):
         self.assertEqual(built.returncode, 0, built.stderr)
         self.assertIn('"unknown": 1', built.stdout)
         self.assertIn('"rural": 1', built.stdout)
+
+    def test_parallel_cli_matches_single_worker_arrow_bytes(self):
+        source = self.root / "source"
+        points = [(lat, lon) for lat in (48.5, 49.5) for lon in (14.5, 15.5, 16.5, 17.5)]
+        squares = sorted({qmgrid.square_of(*point) for point in points})
+        self.assertEqual(len(squares), 8)
+        for point in points:
+            square = qmgrid.square_of(*point)
+            write_structures(source, square, [footprint(*point, side=80)])
+            write_roads(source / qmgrid.square_name(*square) / "roads.arrow",
+                        [road_batch([point, point])])
+        single = self.root / "single"
+        parallel = self.root / "parallel"
+        shutil.copytree(source, single)
+        shutil.copytree(source, parallel)
+        script = str(Path(__file__).with_name("build_built_up.py"))
+
+        def run(root, workers):
+            command = [sys.executable, script, "--prepared-dir", str(root),
+                       "--workers", str(workers)]
+            result = subprocess.run(command, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout
+
+        self.assertEqual(run(single, 1), run(parallel, 16))
+        for square in squares:
+            relative = Path(qmgrid.square_name(*square)) / "roads.arrow"
+            self.assertEqual((single / relative).read_bytes(), (parallel / relative).read_bytes())
+
+        rejected = subprocess.run(
+            [sys.executable, script, "--prepared-dir", str(source), "--workers", "17"],
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("--workers must be in 1..16", rejected.stderr)
 
 
 if __name__ == "__main__":

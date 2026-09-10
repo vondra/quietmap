@@ -4,9 +4,13 @@
   "type": "module",
   "scripts": {
     "test": "node scripts/test.mjs",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "chain": "tsx chain/run.ts",
+    "gen:sources": "tsx lib/gen-sources-rs.ts",
+    "check:sources": "tsx lib/gen-sources-rs.ts --check"
   },
   "dependencies": {
+    "7zip-bin": "5.2.0",
     "apache-arrow": "^21.1.0",
     "csv-parse": "^6.2.1",
     "proj4": "^2.20.8",

@@ -119,8 +119,9 @@ test('real IPC preserves measured roads, all other columns and batches; retracti
     assert.equal((await enrichServiceTreeSquare(stale)).retracted, 1)
     assert.equal((await enrichServiceTreeSquare(stale)).updated, false)
     rmSync(resolve(work, 'buildings.arrow'))
-    await assert.rejects(enrichServiceTreeSquare(work), /missing original OSM/)
-    assert.deepEqual(readFileSync(path), bytes)
+    assert.equal((await enrichServiceTreeSquare(work)).retracted, 1)
+    assert.deepEqual([...tableFromIPC(readFileSync(path)).getChild('source_id')!], [10, 0, 0])
+    assert.equal((await enrichServiceTreeSquare(work)).updated, false)
   } finally { rmSync(work, { recursive: true, force: true }) }
 })
 
