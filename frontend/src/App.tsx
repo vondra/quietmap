@@ -399,7 +399,7 @@ function MapApp() {
             rasterOverlays={rasterOverlays}
             onRasterOverlayChange={handleRasterOverlaysChange}
           />
-          {validationEnabled && (
+          {validationEnabled && !validationSelection && (
             <div className="pointer-events-auto">
               <ValidationStatusCard payload={validationPayload} />
             </div>
@@ -408,6 +408,7 @@ function MapApp() {
             <div className="pointer-events-auto">
               <ValidationCard
                 selection={validationSelection}
+                payload={validationPayload}
                 onClose={() => setValidationSelection(null)}
               />
             </div>
