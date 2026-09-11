@@ -120,3 +120,21 @@ export function energySumLdenDb(tiles: readonly (Uint8Array | null)[], cell: HM3
   }
   return anyData ? 10 * Math.log10(sumLinear) : null
 }
+
+/**
+ * Total Lden at each point from the precomputed `total` tile at tile zoom `z`
+ * — at the displayed zoom it is the cell the map paints when every layer is
+ * on (no fetch beyond the tiles the heatmap already loaded); at the base zoom
+ * it is the exact receiver cell. `null` where the world has no computed value.
+ */
+export function sampleTotalLdenAt(
+  build: TileBuilds,
+  z: number,
+  points: readonly { lat: number; lng: number }[],
+): Promise<(number | null)[]> {
+  return Promise.all(points.map(async ({ lat, lng }) => {
+    const cell = hm3CellAt(lng, lat, z)
+    if (!cell) return null
+    return energySumLdenDb([await tileCells(tileUrl(build, 'total', z, cell.tx, cell.ty))], cell)
+  }))
+}

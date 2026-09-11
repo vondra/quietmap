@@ -1,7 +1,11 @@
 // Detail card for a clicked stay pin: photo, price, rating, dB, book-out link.
+import { useEffect, useState } from 'react'
 import { X, Star } from 'lucide-react'
 import { ldenToColor } from '../utils/noise-colors'
-import { formatPerNight, type Stay } from './StayLayer'
+import { sampleTotalLdenAt } from '../lib/hm3-sample'
+import { useTileBuild } from '../lib/tile-urls'
+import type { Stay } from './StayLayer'
+import { formatPerNight } from '../lib/stay-price-pills'
 
 interface StayCardProps {
   stay: Stay
@@ -9,7 +13,19 @@ interface StayCardProps {
 }
 
 export default function StayCard({ stay: s, onClose }: StayCardProps) {
-  const noise = s.noise
+  const build = useTileBuild()
+  // The pin's colour follows the map's zoom; the card states the exact
+  // base-zoom value of this one point (one tile — cached at street zoom,
+  // one fetch from further out), so the number never depends on how far
+  // out the pin was clicked.
+  const [noise, setNoise] = useState<number | null>(null)
+  useEffect(() => {
+    setNoise(null)
+    if (!build) return
+    let cancelled = false
+    void sampleTotalLdenAt(build, build.zoom, [s]).then(([db]) => { if (!cancelled) setNoise(db) })
+    return () => { cancelled = true }
+  }, [s, build])
 
   return (
     <div className="p-3">
