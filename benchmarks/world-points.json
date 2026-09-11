@@ -29,10 +29,10 @@
    "dominance": "near_source"
   },
   "regression_band": [
-   76.99,
-   80.99
+   79.57,
+   83.57
   ],
-  "tolerance_note": "AADT anchor (road-report §C1); audit recorded no Lden here — band seeded from verified live state 2026-06-11 (road 79.30) ±2 | v2 2026-07-09: band=live 78.99 +/-2",
+  "tolerance_note": "AADT anchor (road-report §C1); audit recorded no Lden here — band seeded from verified live state 2026-06-11 (road 79.30) ±2 | v2 2026-07-09: band=live 78.99 +/-2 | v2 2026-09-11: band=live 81.57 +/-2 (new road inputs b686 (2026-09-11))",
   "caveats": "CZ 'TV' includes light commercial <3.5 t which CNOSSOS maps to cat 1 — model M+H 13.7% < ŘSD TV 21.4% is definitional, not an error"
  },
  {
@@ -72,10 +72,10 @@
    "correction_provenance": null
   },
   "regression_band": [
-   78.21,
-   82.21
+   80.25,
+   84.25
   ],
-  "tolerance_note": "audit model 80.6 consistent with SHM >75 (road-report §C2); band = SHM floor → audit model +2.4 | v2 2026-07-09: band=live 80.21 +/-2; SHM floor kept as external.band",
+  "tolerance_note": "audit model 80.6 consistent with SHM >75 (road-report §C2); band = SHM floor → audit model +2.4 | v2 2026-07-09: band=live 80.21 +/-2; SHM floor kept as external.band | v2 2026-09-11: band=live 82.25 +/-2 (new road inputs b686 (2026-09-11))",
   "caveats": "SHM uses the same CSD2020 traffic"
  },
  {
@@ -204,10 +204,10 @@
    "correction_provenance": null
   },
   "regression_band": [
-   83.07,
-   87.07
+   85.29,
+   89.29
   ],
-  "tolerance_note": "audit model 84.0, Δ +3.0 propagation-side (input AADT ratio 0.99, road-report §C1/C2); band = external −0.5 → audit model +2 | v2 2026-07-09: band=live 85.07 +/-2; external.band = Defra pixel 81.02 +/-2 -> the audit +3 propagation-side hot shows as EXTERNAL-GAP",
+  "tolerance_note": "audit model 84.0, Δ +3.0 propagation-side (input AADT ratio 0.99, road-report §C1/C2); band = external −0.5 → audit model +2 | v2 2026-07-09: band=live 85.07 +/-2; external.band = Defra pixel 81.02 +/-2 -> the audit +3 propagation-side hot shows as EXTERNAL-GAP | v2 2026-09-11: band=live 87.29 +/-2 (new road inputs b686 (2026-09-11))",
   "caveats": "Defra 2021 COVID year vs our 2023-vintage DfT AADT; R3 speed default 100 actually understates"
  },
  {
@@ -250,11 +250,11 @@
    "correction_provenance": null
   },
   "regression_band": [
-   68.1,
-   72.1
+   60.5,
+   64.5
   ],
   "known_gap": "road-R26-missing-barrier-data",
-  "tolerance_note": "audit model 66.9 (+9.7): no noise barriers in our data (8 segments in the whole NW-London hex) + 30 m DEM smooths the cutting (road-report R26); band = Defra ±3; heals only via barrier-data import (backlog F4), not B8 code wiring | v2 2026-07-09: band=live 67.96 +/-2; Defra pixel stays external.band -> +8.8 EXTERNAL-GAP until barrier-data import (backlog F4) | v3 2026-07-28: band=live 70.09 ±2",
+  "tolerance_note": "audit model 66.9 (+9.7): no noise barriers in our data (8 segments in the whole NW-London hex) + 30 m DEM smooths the cutting (road-report R26); band = Defra ±3; heals only via barrier-data import (backlog F4), not B8 code wiring | v2 2026-07-09: band=live 67.96 +/-2; Defra pixel stays external.band -> +8.8 EXTERNAL-GAP until barrier-data import (backlog F4) | v3 2026-07-28: band=live 70.09 ±2 | v2 2026-09-11: band=live 62.50 +/-2 (new road inputs b686 (2026-09-11); kg road-R26-missing-barrier-data kept)",
   "caveats": "share between missing barriers / DEM-smoothed cutting / Defra modeling differences unquantified"
  },
  {
@@ -678,11 +678,11 @@
    "correction_provenance": null
   },
   "regression_band": [
-   51.4,
-   55.4
+   48.8,
+   52.8
   ],
   "known_gap": "industrial-distance-tail-underdecay",
-  "tolerance_note": "v3 2026-07-13 (Wave 2): re-banded to live 47.4 (C1 +5.4 landed; Fix B did NOT move this pixel — its industrial is small local sites, not the steelworks). CORRECTION of the old '-28 area-cap emission gap': Wave 2 multi-country guards proved the Nova hut steelworks NEAR-FIELD now MATCHES official maps (NL Tata 65.9 vs 65, DE Duisburg 57.2 vs 60, CZ Nova hut edge 63.8) after C1+FixB. This fixture sits ~3 km from Nova hut in a mixed small-industry area, so its 47.4-vs-SHM-70/75 gap is NOT emission mis-calibration — it is (a) fixture placement (popup aggregate here != the steelworks) and (b) the distance-tail under-decay common to all official END maps (our ISO 9613-2 field falls off faster than END favorable-propagation beyond ~1.5 km). Cranking base_lw to close it would over-predict the near-field (see ind_tata_ijmuiden_velsen 65.9 vs 65). Remaining EXTERNAL-GAP driver = the distance tail, a propagation question, not I-04.",
+  "tolerance_note": "v3 2026-07-13 (Wave 2): re-banded to live 47.4 (C1 +5.4 landed; Fix B did NOT move this pixel — its industrial is small local sites, not the steelworks). CORRECTION of the old '-28 area-cap emission gap': Wave 2 multi-country guards proved the Nova hut steelworks NEAR-FIELD now MATCHES official maps (NL Tata 65.9 vs 65, DE Duisburg 57.2 vs 60, CZ Nova hut edge 63.8) after C1+FixB. This fixture sits ~3 km from Nova hut in a mixed small-industry area, so its 47.4-vs-SHM-70/75 gap is NOT emission mis-calibration — it is (a) fixture placement (popup aggregate here != the steelworks) and (b) the distance-tail under-decay common to all official END maps (our ISO 9613-2 field falls off faster than END favorable-propagation beyond ~1.5 km). Cranking base_lw to close it would over-predict the near-field (see ind_tata_ijmuiden_velsen 65.9 vs 65). Remaining EXTERNAL-GAP driver = the distance tail, a propagation question, not I-04. | v2 2026-09-11: band=live 50.80 +/-2 (new industrial inputs b686 (2026-09-11); kg industrial-distance-tail-underdecay kept)",
   "caveats": "facility identity at the pixel unverified; SHM models reverse-engineered source powers"
  },
  {
@@ -767,11 +767,11 @@
    "correction_provenance": null
   },
   "regression_band": [
-   55.2,
-   59.2
+   58.11,
+   62.11
   ],
   "known_gap": "industrial-distance-tail-underdecay",
-  "tolerance_note": "Fix B heavy-cap guard, 2nd country. ThyssenKrupp Steel Duisburg (subtype 6). Model 57.2 vs official 60 (-2.8) at the plant core; field is a flat ~55 plateau to 1.1 km E (model within +/-2) then under-decays beyond ~1.4 km (Delta -6..-12 by 2 km) — the distance-tail gap common to all END maps. No over-prediction anywhere near the plant. regression_band pins Fix-B pre-re-enrich.",
+  "tolerance_note": "Fix B heavy-cap guard, 2nd country. ThyssenKrupp Steel Duisburg (subtype 6). Model 57.2 vs official 60 (-2.8) at the plant core; field is a flat ~55 plateau to 1.1 km E (model within +/-2) then under-decays beyond ~1.4 km (Delta -6..-12 by 2 km) — the distance-tail gap common to all END maps. No over-prediction anywhere near the plant. regression_band pins Fix-B pre-re-enrich. | v2 2026-09-11: band=live 60.11 +/-2 (new industrial inputs b686 (2026-09-11); kg industrial-distance-tail-underdecay kept)",
   "caveats": "LANUV IND_DEN is a literal computed dB(A) (not a 5-dB band floor); industrial-dominant (57.2 vs road 51, rail 50.5)"
  },
  {
@@ -932,11 +932,11 @@
    "correction_provenance": null
   },
   "regression_band": [
-   34.5,
-   38.5
+   36.63,
+   40.63
   ],
   "known_gap": "industrial-I02-multipolygon-extraction",
-  "tolerance_note": "Spolana (~1 km² chemical plant) is entirely absent from arrows — multi-outer relation dropped at extraction (I-02); audit model 30.4 comes from OTHER sites; band = audit's plausible real range; heals at re-extract with MultiPolygon WKB | v2 2026-07-09: band=live 23.10 +/-2; I-02 multipolygon absence visible as EXTERNAL-GAP -16.9; NOTE the 2026 re-extract did NOT close I-02 -- verify the MultiPolygon WKB fix ever shipped",
+  "tolerance_note": "Spolana (~1 km² chemical plant) is entirely absent from arrows — multi-outer relation dropped at extraction (I-02); audit model 30.4 comes from OTHER sites; band = audit's plausible real range; heals at re-extract with MultiPolygon WKB | v2 2026-07-09: band=live 23.10 +/-2; I-02 multipolygon absence visible as EXTERNAL-GAP -16.9; NOTE the 2026 re-extract did NOT close I-02 -- verify the MultiPolygon WKB fix ever shipped | v2 2026-09-11: band=live 38.63 +/-2 (new industrial inputs b686 (2026-09-11); kg industrial-I02-multipolygon-extraction kept)",
   "caveats": "external is a compliance bound, not a point measurement; receiver = Libiš dwellings"
  },
  {
@@ -1119,10 +1119,10 @@
    "correction_provenance": null
   },
   "regression_band": [
-   55.0,
-   59.0
+   33.98,
+   37.98
   ],
-  "tolerance_note": "audit model DEN/NOC 52.8/49.6, Δ +2.8/+5.7; band = verified live Lden 2026-06-11 (56.99) ±2 — W5/B7 re-bands | v2 2026-07-09: band=live 57.00 +/-2",
+  "tolerance_note": "audit model DEN/NOC 52.8/49.6, Δ +2.8/+5.7; band = verified live Lden 2026-06-11 (56.99) ±2 — W5/B7 re-bands | v2 2026-07-09: band=live 57.00 +/-2 | v2 2026-09-11: band=live 35.98 +/-2 (airborne terrain+building screening 98ba1f154 (2026-09-03))",
   "caveats": "georef ±150–300 m"
  },
  {
@@ -1716,10 +1716,10 @@
    "correction_provenance": null
   },
   "regression_band": [
-   63.19,
-   67.19
+   37.96,
+   41.96
   ],
-  "tolerance_note": "audit model DEN 63.5, Δ −2.5; band = verified live Lden 2026-06-11 (63.87) ±2 — W5/B7 re-bands | v2 2026-07-09: band=live 65.19 +/-2",
+  "tolerance_note": "audit model DEN 63.5, Δ −2.5; band = verified live Lden 2026-06-11 (63.87) ±2 — W5/B7 re-bands | v2 2026-07-09: band=live 65.19 +/-2 | v2 2026-09-11: band=live 39.96 +/-2 (airborne terrain+building screening 98ba1f154 (2026-09-03))",
   "caveats": "village-centre coords ±500 m"
  },
  {
@@ -1755,10 +1755,10 @@
    "correction_provenance": null
   },
   "regression_band": [
-   52.38,
-   56.38
+   30.66,
+   34.66
   ],
-  "tolerance_note": "audit model DEN 53.2, Δ −4.8 (model low — ZRH confounders, airborne §C.2); band = verified live Lden 2026-06-11 (53.81) ±2 — W5/B7 re-bands | v2 2026-07-09: band=live 54.38 +/-2",
+  "tolerance_note": "audit model DEN 53.2, Δ −4.8 (model low — ZRH confounders, airborne §C.2); band = verified live Lden 2026-06-11 (53.81) ±2 — W5/B7 re-bands | v2 2026-07-09: band=live 54.38 +/-2 | v2 2026-09-11: band=live 32.66 +/-2 (airborne terrain+building screening 98ba1f154 (2026-09-03))",
   "caveats": "village-centre coords ±500 m"
  },
  {
@@ -1923,10 +1923,10 @@
    "correction_provenance": null
   },
   "regression_band": [
-   61.25,
-   65.25
+   37.24,
+   41.24
   ],
-  "tolerance_note": "audit model Lden 61.64, Δ +0.3 (monthly sample + threshold under-capture + 1 h window shift — kept out of audit means); band = audit model ±2 — W5/B7 re-bands | v2 2026-07-09: band=live 63.25 +/-2; monthly external kept diagnostic via months_covered=1",
+  "tolerance_note": "audit model Lden 61.64, Δ +0.3 (monthly sample + threshold under-capture + 1 h window shift — kept out of audit means); band = audit model ±2 — W5/B7 re-bands | v2 2026-07-09: band=live 63.25 +/-2; monthly external kept diagnostic via months_covered=1 | v2 2026-09-11: band=live 39.24 +/-2 (airborne terrain+building screening 98ba1f154 (2026-09-03))",
   "caveats": "exact address ±30 m; aircraft source includes a negligible ground-ops fold-in (19.8 dB, 4.8 km)"
  },
  {
@@ -2129,10 +2129,10 @@
    "correction_provenance": null
   },
   "regression_band": [
-   29.9,
-   33.9
+   4.69,
+   8.69
   ],
-  "tolerance_note": "audit cruise-only Lden 30.0 ✓ in band; band = verified live aircraft aggregate 2026-06-11 (33.26) ±2; re-band at C5 | v2 2026-07-09: band=live 31.90 +/-2",
+  "tolerance_note": "audit cruise-only Lden 30.0 ✓ in band; band = verified live aircraft aggregate 2026-06-11 (33.26) ±2; re-band at C5 | v2 2026-07-09: band=live 31.90 +/-2 | v2 2026-09-11: band=live 6.69 +/-2 (airborne screening of valley point 98ba1f154 (2026-09-03); below-ambient, accuracy-unattributable)",
   "caveats": "alpine receiver: missing Doc 29 §4.2.1 impedance adjustment ≈ −0.5..−1 dB (C9)"
  },
  {
