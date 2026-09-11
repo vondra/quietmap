@@ -77,7 +77,7 @@ def build_plan(config, output, scratch):
               ('SCRATCH_ROOT', str(scratch / 'osm')))),
         Step('square-country-city', ('osm',), (python, str(scripts / 'square-country-city/build_square_country_city.py'),
              '--prepared-dir', str(year), '--boundaries', str(sources['boundaries']),
-             '--jobs', str(settings['threads']))),
+             '--jobs', str(settings['threads'])), 3),
         layer('buildings', ('osm',)),
         Step('structures', ('buildings',), (python, str(scripts / 'structures/build-structures.py'),
              '--prepared-dir', str(year), '--overture-parquet', str(sources['overture']),
@@ -110,7 +110,8 @@ def run_plan(steps, execute, completed=()):
     pending = {step.name: step for step in steps if step.name not in completed}
     completed, running = set(completed), {}
     failure = None
-    # Three memory shares go to OSM/structures/aircraft, one to a layer writer.
+    # Three memory shares go to OSM/structures/aircraft/square-country-city (20 resolver
+    # processes need ~25 GiB), one to a layer writer.
     # Admission plus matching cgroup limits bounds their combined working sets.
     with ThreadPoolExecutor(max_workers=4) as pool:
         while pending or running:
