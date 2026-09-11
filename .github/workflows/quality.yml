@@ -1,0 +1,61 @@
+name: quality / Node
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/quality.yml
+      - frontend/**
+      - pipeline/**
+      - server/**
+      - scripts/**
+  push:
+    branches: [main, qm260904]
+    paths:
+      - .github/workflows/quality.yml
+      - frontend/**
+      - pipeline/**
+      - server/**
+      - scripts/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-node-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: Node, Python and shell gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            frontend/package-lock.json
+            pipeline/package-lock.json
+      - name: Install script system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends gdal-bin python3-gdal
+          ogr2ogr --version
+          # The raster, road, square and structure builders and their tests read
+          # GeoTIFFs, Arrow, Overture parquet and polygons; h3 stays on the same
+          # major as the fleet boxes. Ubuntu's python3-gdal 3.8 is built against
+          # the NumPy 1.x ABI (osgeo.gdal_array fails under NumPy 2), so numpy
+          # stays below 2 and rasterio on the 1.4 line that still allows it.
+          python3 -m pip install --quiet 'h3>=4,<5' 'numpy<2' 'rasterio<1.5' pyarrow shapely pyproj affine
+          python3 -c 'import h3, numpy, pyarrow, shapely, pyproj, rasterio, affine; from osgeo import gdal, gdal_array; print("h3", h3.__version__, "pyarrow", pyarrow.__version__, "rasterio", rasterio.__version__)'
+      - name: Check committed whitespace
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: git diff --check "$BASE_SHA" "$GITHUB_SHA"
+      - run: ./scripts/check-fast.sh node

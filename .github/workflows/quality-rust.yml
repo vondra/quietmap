@@ -1,0 +1,49 @@
+name: quality / Rust
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/quality-rust.yml
+      - clippy.toml
+      - engine/**
+      - rust-toolchain.toml
+      - scripts/check-fast.sh
+  push:
+    branches: [main, qm260904]
+    paths:
+      - .github/workflows/quality-rust.yml
+      - clippy.toml
+      - engine/**
+      - rust-toolchain.toml
+      - scripts/check-fast.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-rust-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Engine workspace (clippy + tests, CPU only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check committed whitespace
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: git diff --check "$BASE_SHA" "$GITHUB_SHA"
+      # rust-toolchain.toml pins rustc and clippy; the runner's rustup installs
+      # that exact toolchain on the first cargo invocation. The cache keys on
+      # Cargo.lock and keeps registry, git and target artifacts between runs.
+      - uses: Swatinem/rust-cache@f13886b937689c021905a6b90929199931d60db1 # v2.8.1
+        with:
+          workspaces: engine
+      - run: ./scripts/check-fast.sh rust
