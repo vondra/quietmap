@@ -17,7 +17,7 @@ const STATION_COLOR: Record<string, string> = {
 
 const fmt = (v: number | null | undefined, digits = 1) => (v == null ? '—' : v.toFixed(digits))
 const band = (b: [number | null, number | null] | null | undefined) =>
-  b ? `[${b[0] ?? '·'}, ${b[1] ?? '·'}]` : '—'
+  b ? `${b[0] ?? '?'}–${b[1] ?? '?'}` : '—'
 const safeUrl = (u: string | null | undefined) => (typeof u === 'string' && /^https?:\/\//i.test(u) ? u : null)
 const shortCohort = (id: string | null | undefined) => id ? id.slice(0, 12) : 'unavailable'
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
