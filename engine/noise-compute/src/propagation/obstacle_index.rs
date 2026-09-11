@@ -344,8 +344,7 @@ pub struct ObstacleIndex {
     pub(super) origin_lat: f64,
     pub(super) origin_lon: f64,
     pub(super) m_per_deg_lon: f64,
-    /// Grid cell size (m). ~2× the raster cell keeps cells-per-ray low while
-    /// average edges-per-cell stays small in cities.
+    /// Grid pitch (m) — [`obstacle_grid_cell_m`] derives it from the stock.
     pub(super) cell_m: f64,
     pub(super) min_x: f64,
     pub(super) min_y: f64,
@@ -370,8 +369,41 @@ pub struct ObstacleIndex {
     pub(super) max_footprint_w: f64,
 }
 
-/// Default grid pitch (m) — coarse enough that a 10 km ray walks ~160 cells.
-pub const OBSTACLE_GRID_CELL_M: f64 = 64.0;
+/// Edges one grid cell holds ON AVERAGE over the stock's bounding box — what
+/// fixes the pitch, since no single pitch serves a metro and a desert alike.
+///
+/// One ray costs `A * cells walked + B * edges tested`; over a stock of `rho`
+/// edges per m² at pitch `h` those are `L / h` and `rho * L * (h + mean edge
+/// length)`, minimised at `h = sqrt(A / (B * rho))` — a fixed mean occupancy
+/// wherever the ray runs. Inside one index the cells still range from empty
+/// parkland to a packed block; this only keeps the whole index from being
+/// gridded for a region it is not in. `A / B` is read off dev1's pitch ladder
+/// on its metro benchmark tile (10.2 M edges over 52 × 50 km, 3 917 per km²,
+/// RTX 5070, 2026-09-07): 64 m 10.94 GPU s, 32 m 9.15, 24 m 9.14, 16 m 10.53;
+/// `3.917e-3 × 32²` is 4.0.
+const OBSTACLE_GRID_EDGES_PER_CELL: f64 = 4.0;
+
+/// Pitch floor (m). 24 m tied 32 m on that ladder, and below it the per-cell
+/// arrays (`cell_starts` and `cell_max_h`, four bytes per cell each) outgrow
+/// a card's L2 and every DDA step misses: at 16 m the painter was slower
+/// than at 64 m.
+const OBSTACLE_GRID_CELL_MIN_M: f64 = 32.0;
+
+/// The pitch for one stock of edges: fine where they stand thick, coarse
+/// where they do not, so a ray meets about the same number of edges per cell
+/// wherever it is. An empty stock arrives as the inverted bounding box, whose
+/// negative spans floor to a unit area and yield the pitch floor. dev1
+/// measured its 2026 world: Los Angeles (10.2 M edges, 3 917 per km²) grids
+/// at the 32 m floor with 4.8 edge references per cell, Dobříš (868 k edges,
+/// 366 per km²) at 104 m with 4.3, a Sahara cell (1 664 edges, 0.7 per km²) at
+/// 2 409 m with 3.8 — which at a flat 32 m would carry 2.36 million cells for
+/// its 1 664 edges, walked by every DDA step of every ray.
+fn obstacle_grid_cell_m(span_x_m: f64, span_y_m: f64, edge_count: usize) -> f64 {
+    let area_m2 = span_x_m.max(1.0) * span_y_m.max(1.0);
+    (area_m2 * OBSTACLE_GRID_EDGES_PER_CELL / edge_count.max(1) as f64)
+        .sqrt()
+        .max(OBSTACLE_GRID_CELL_MIN_M)
+}
 
 /// Flat per-index CSR view for GPU upload — see [`ObstacleIndex::gpu_view`].
 pub struct GpuGridView<'a> {
@@ -1696,10 +1728,22 @@ impl Builder {
         }
     }
 
-    /// Freeze into the CSR grid index. Empty builder yields an index whose
-    /// `crossings` is a no-op (the rural fast path).
-    pub fn build(mut self) -> ObstacleIndex {
-        let cell_m = OBSTACLE_GRID_CELL_M;
+    /// Freeze into the CSR grid index at the pitch the stock's own edge
+    /// density asks for. Empty builder yields an index whose `crossings` is
+    /// a no-op (the rural fast path).
+    pub fn build(self) -> ObstacleIndex {
+        let bounds = self.edge_bounds();
+        let (min_x, min_y, max_x, max_y) = bounds;
+        let cell_m = obstacle_grid_cell_m(max_x - min_x, max_y - min_y, self.edges.len());
+        self.build_at_pitch_m(bounds, cell_m)
+    }
+
+    /// The edges' bounding box `(min_x, min_y, max_x, max_y)` in the index's
+    /// local metric frame — one pass over the stock, handed to both the pitch
+    /// and the grid it sizes. An empty builder yields the inverted box, which
+    /// [`obstacle_grid_cell_m`] answers with the pitch floor and
+    /// [`Self::build_at_pitch_m`] never reads.
+    fn edge_bounds(&self) -> (f64, f64, f64, f64) {
         let (mut min_x, mut min_y) = (f64::MAX, f64::MAX);
         let (mut max_x, mut max_y) = (f64::MIN, f64::MIN);
         for e in &self.edges {
@@ -1708,6 +1752,15 @@ impl Builder {
             max_x = max_x.max(e.x0 as f64).max(e.x1 as f64);
             max_y = max_y.max(e.y0 as f64).max(e.y1 as f64);
         }
+        (min_x, min_y, max_x, max_y)
+    }
+
+    /// Freeze into the CSR grid at a pitch and bounding box the caller names —
+    /// [`Self::build`] derives both from the stock; the boundary sweep test
+    /// pins the pitch so its fixtures sit exactly on cell edges.
+    fn build_at_pitch_m(mut self, bounds: (f64, f64, f64, f64), cell_m: f64) -> ObstacleIndex {
+        debug_assert!(cell_m.is_finite() && cell_m > 0.0, "grid pitch {cell_m}");
+        let (min_x, min_y, max_x, max_y) = bounds;
         if self.edges.is_empty() {
             return ObstacleIndex {
                 origin_lat: self.origin_lat,
@@ -1904,6 +1957,19 @@ mod tests {
         out
     }
 
+    /// The pitch rule's three regimes: an empty stock sits on the floor, a
+    /// stock at the mean occupancy grids at its own spacing, and a dense stock
+    /// stops at the floor.
+    #[test]
+    fn grid_pitch_follows_edge_density_down_to_the_floor() {
+        assert_eq!(
+            obstacle_grid_cell_m(f64::MIN - f64::MAX, f64::MIN - f64::MAX, 0),
+            32.0
+        );
+        assert_eq!(obstacle_grid_cell_m(640.0, 640.0, 400), 64.0);
+        assert_eq!(obstacle_grid_cell_m(640.0, 640.0, 40_000), 32.0);
+    }
+
     #[test]
     fn empty_index_yields_no_crossings() {
         let idx = ObstacleIndex::builder(OLAT, OLON).build();
@@ -2039,7 +2105,7 @@ mod tests {
     }
 
     /// A WALL is admitted on its OWN height, never on its cell neighbours'.
-    /// A 3 m wall and a 20 m building inside one 64 m grid cell: the cell's
+    /// A 3 m wall and a 20 m building sharing a grid cell: the cell's
     /// tallest edge clears a 4 m sight-line floor, so the cell is walked — and
     /// the wall standing entirely under that floor must still contribute
     /// nothing. The wall slice this index replaced tested every wall against the
@@ -2383,6 +2449,7 @@ mod tests {
     /// loses ~17 %.
     #[test]
     fn screen_never_loses_a_crossing_over_a_swept_population() {
+        const PITCH_M: f64 = 64.0;
         let mut state = 0xC85E_ED01_u64;
         let mut next = |lo: f64, hi: f64| {
             state = state
@@ -2394,20 +2461,26 @@ mod tests {
         for trial in 0..200 {
             let mut builder = ObstacleIndex::builder(OLAT, OLON);
             for id in 0..12 {
-                // Half the trials snap corners onto the 64 m grid pitch, so
+                // Half the trials snap corners onto the grid pitch, so
                 // crossings sit exactly ON cell boundaries by construction.
+                // The pitch is pinned below rather than derived from the
+                // stock: what this sweeps is the last-ulp meeting of the edge
+                // supercover and the query DDA, the same property at every
+                // pitch, and fixtures cannot be snapped to a pitch their own
+                // extent decides.
                 let (cx, cy, half) = if trial % 2 == 0 {
                     (
-                        (next(-6.0, 6.0) as i64) as f64 * OBSTACLE_GRID_CELL_M,
-                        (next(-6.0, 6.0) as i64) as f64 * OBSTACLE_GRID_CELL_M,
-                        OBSTACLE_GRID_CELL_M / 2.0,
+                        (next(-6.0, 6.0) as i64) as f64 * PITCH_M,
+                        (next(-6.0, 6.0) as i64) as f64 * PITCH_M,
+                        PITCH_M / 2.0,
                     )
                 } else {
                     (next(-450.0, 450.0), next(-450.0, 450.0), next(4.0, 30.0))
                 };
                 builder.add_ring(&square(cx, cy, half), 10.0, ObstacleKind::Building, id);
             }
-            let idx = builder.build();
+            let bounds = builder.edge_bounds();
+            let idx = builder.build_at_pitch_m(bounds, PITCH_M);
             for k in 0..120 {
                 let off = -500.0 + k as f64 * 8.4;
                 for &(from, to) in &[

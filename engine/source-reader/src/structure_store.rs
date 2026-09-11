@@ -722,10 +722,12 @@ mod tests {
             (wall_length_m - 222.64).abs() < 0.5,
             "wall length {wall_length_m} m"
         );
+        // The grid spans the wall (to the next cell edge), not the world: a
+        // seam wall read as world-spanning would grid 40 000 km.
+        let grid_span_m = view.cols as f64 * view.cell_m;
         assert!(
-            view.cols <= 4,
-            "short wall grew to {} grid columns",
-            view.cols
+            grid_span_m <= wall_length_m + view.cell_m,
+            "short wall's grid spans {grid_span_m} m"
         );
 
         for lon in [179.8, -179.8] {
