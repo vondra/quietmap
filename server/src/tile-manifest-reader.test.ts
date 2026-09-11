@@ -33,32 +33,26 @@ async function tmpPmtilesDir() {
   return mkdtemp(join(tmpdir(), 'tile-manifest-reader-test-'))
 }
 
-test('resolveManifestPath returns the per-env pointer path', async (t) => {
+test('all development checkouts share a pointer independent of production', async (t) => {
   const dir = await tmpPmtilesDir()
   t.after(async () => rm(dir, { recursive: true, force: true }))
   assert.equal(resolveManifestPath(dir, 'prod'), join(dir, 'current.prod.json'))
-  assert.equal(resolveManifestPath(dir, 'dev1'), join(dir, 'current.dev1.json'))
+  for (const env of ['dev1', 'dev2', 'dev3']) {
+    assert.equal(resolveManifestPath(dir, env), join(dir, 'current.dev1.json'))
+  }
 })
 
-test('resolveManifestPath on a genuinely fresh checkout (neither pin nor legacy manifest) does not throw', async (t) => {
-  const dir = await tmpPmtilesDir()
-  t.after(async () => rm(dir, { recursive: true, force: true }))
-  // Nothing on disk at all — this must return the (not-yet-existing) path so the CALLER's own
-  // read produces an ordinary ENOENT, not a loud configuration error.
-  assert.equal(resolveManifestPath(dir, 'dev1'), join(dir, 'current.dev1.json'))
-})
-
-test('resolveManifestPath fails closed when the per-env pointer is missing but a legacy current.json exists', async (t) => {
+test('resolveManifestPath fails closed when the served pointer is missing but a packer current.json exists', async (t) => {
   const dir = await tmpPmtilesDir()
   t.after(async () => rm(dir, { recursive: true, force: true }))
   await writeFile(join(dir, 'current.json'), JSON.stringify({ build: 'b1', layers: {} }))
   assert.throws(
     () => resolveManifestPath(dir, 'dev1'),
-    (err: unknown) => err instanceof Error && /legacy current\.json exists/.test(err.message) && /seed it/.test(err.message),
+    (err: unknown) => err instanceof Error && /packer merge head exists/.test(err.message),
   )
 })
 
-test('resolveManifestPath prefers an existing per-env pointer over a legacy current.json', async (t) => {
+test('resolveManifestPath prefers an existing served pointer over a packer current.json', async (t) => {
   const dir = await tmpPmtilesDir()
   t.after(async () => rm(dir, { recursive: true, force: true }))
   await writeFile(join(dir, 'current.json'), 'irrelevant-legacy-content')
@@ -73,11 +67,9 @@ test('resolveManifestPath propagates a bad TILE_ENV before ever touching the fil
   assert.throws(() => resolveManifestPath(dir, 'staging'), /TILE_ENV must be one of/)
 })
 
-test('resolveManifestPath keeps every environment fully isolated from every other', async (t) => {
+test('development never falls back to production', async (t) => {
   const dir = await tmpPmtilesDir()
   t.after(async () => rm(dir, { recursive: true, force: true }))
   await writeFile(join(dir, 'current.prod.json'), JSON.stringify({ build: 'b5' }))
-  // dev1 has no pointer of its own and no legacy current.json — must resolve to ITS OWN
-  // (not-yet-existing) path, never fall back to reading prod's.
   assert.equal(resolveManifestPath(dir, 'dev1'), join(dir, 'current.dev1.json'))
 })

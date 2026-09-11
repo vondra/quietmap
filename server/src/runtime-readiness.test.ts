@@ -19,11 +19,7 @@ import { ALLOWED_LAYERS } from './routes/heatmap-shared.js'
 import { createReadinessCheck } from './runtime-readiness.js'
 
 const REFERENCE_HEX = '841e309ffffffff'
-// This checkout's own env for the fixture — arbitrary but fixed, so every test that rewrites
-// the manifest writes to the SAME per-env pointer the readiness check under test also reads
-// (current.{TILE_ENV}.json, not the shared
-// current.json merge head).
-const TEST_TILE_ENV = 'dev2'
+const TEST_TILE_ENV = 'dev1'
 
 // The published quality profile of the z13 world, and the Wave-2 ladder it declares
 // (engine/tile-painter/src/accuracy_contract.rs).
@@ -716,8 +712,7 @@ test('readiness fails closed when this env pin is missing but a legacy current.j
   })()
   assert.equal(result.ready, false)
   assert.deepEqual(result.failed, ['pmtiles'])
-  assert.match(result.errors.pmtiles ?? '', /legacy current\.json exists/)
-  assert.match(result.errors.pmtiles ?? '', /seed it/)
+  assert.match(result.errors.pmtiles ?? '', /packer merge head exists/)
 })
 
 test('readiness treats a genuinely fresh checkout (neither pin nor legacy manifest) as ordinary not-ready', async (t) => {
@@ -751,19 +746,17 @@ test('readiness reads THIS environment pin, never the legacy current.json, when 
   assert.deepEqual(result, { ready: true, failed: [], errors: {} })
 })
 
-test('readiness is independent across two environments sharing one pmtiles dir', async (t) => {
+test('all development environments share the latest manifest while production stays separate', async (t) => {
   const fixture = await readinessFixture()
   t.after(async () => rm(fixture.root, { recursive: true, force: true }))
-  // A second environment pin, deliberately broken, must not affect THIS environment's result
-  // — each `current.{env}.json` is read in total isolation from every other one.
   await writeFile(join(fixture.pmtilesDir, 'current.prod.json'), '{ not json')
 
-  const thisEnv = await createReadinessCheck({
-    ...fixture,
-    engineProbe: async () => {},
-    filesystemCacheMs: 0,
-  })()
-  assert.deepEqual(thisEnv, { ready: true, failed: [], errors: {} })
+  for (const tileEnv of ['dev1', 'dev2', 'dev3'] as const) {
+    const result = await createReadinessCheck({
+      ...fixture, tileEnv, engineProbe: async () => {}, filesystemCacheMs: 0,
+    })()
+    assert.deepEqual(result, { ready: true, failed: [], errors: {} })
+  }
 
   const otherEnv = await createReadinessCheck({
     ...fixture,

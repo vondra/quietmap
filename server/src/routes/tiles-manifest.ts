@@ -1,4 +1,4 @@
-// GET /api/tiles-manifest — the currently published pmtiles generation FOR THIS ENVIRONMENT.
+// GET /api/tiles-manifest — the shared development or separately approved production tiles.
 
 import type { FastifyInstance } from 'fastify'
 import { PMTILES_BASE } from './heatmap-shared.js'
@@ -24,23 +24,9 @@ function publicManifest(manifest: PmtilesManifest) {
   return { build: manifest.build, zoom: manifestBaseZoom(manifest), layers }
 }
 
-/**
- * Serve `current.{TILE_ENV}.json` (the per-environment pmtiles pin resolved by
- * `tile-manifest-reader.ts`), which the Rust packer's fan-out /
- * `worldctl promote` write atomically. The shared boot-readiness validator rejects a torn,
- * malformed, or semantically invalid manifest with a 500; this route then projects only the
- * fields needed to fetch tiles. Internal generation, model-role, quality, scorer, hash, and
- * publisher-proof data never crosses the public boundary. `zoom` is derived from the
- * manifest itself: the zoom every archive was painted at, which is the deepest zoom the
- * frontend may request natively. ONE deployment field is added on top: `tile_base` (env
- * PUBLIC_TILE_BASE) tells the frontend which HOSTNAME serves the tiles — that is serving
- * topology, which the packer can't know and which must be changeable per checkout/host
- * without a frontend rebuild. Absent env = null = same-origin (devex, localhost, canaries).
- * `no-cache` so the frontend's 10-minute re-poll revalidates instead of pinning an old
- * generation; 404 = no build published yet for this pin (the frontend then renders no tile
- * layers); 500 = TILE_ENV misconfigured or this checkout was never seeded (see
- * `resolveManifestPath`'s error message — logged, never sent to the client).
- */
+/** Serve the shared development pin or the approved production pin, never the packer merge head.
+ * Validation stays server-side; the response contains only tile URLs and native zoom.
+ * PUBLIC_TILE_BASE selects the tile origin without a frontend rebuild. */
 export async function tilesManifestRoutes(app: FastifyInstance): Promise<void> {
   const tileBase = (process.env.PUBLIC_TILE_BASE || '').replace(/\/$/, '') || null
   app.get('/api/tiles-manifest', async (_req, reply) => {

@@ -1,50 +1,11 @@
-//! tile-store-gc — mark-and-sweep retention for the published pmtiles tree.
+//! Remove unreferenced PMTiles archives after their retirement grace.
 //!
-//! `tile-store-pack` no longer deletes anything (2026-07-16 rewrite): with per-environment
-//! pins (`current.{env}.json`) a prod pointer can legitimately lag dev by many publishes,
-//! so the old "keep new+previous" retention would 404 a still-live prod pin the moment two
-//! more publishes happened. This tool is the ONLY thing that ever removes a published
-//! `{layer}.{build}.pmtiles` archive, and it does so by PROVING an archive is unreferenced
-//! rather than guessing from build numbers.
-//!
-//! KEEP an archive iff its filename is referenced by ANY of:
-//!   (a) the packer's own merge-head `current.json` (what the NEXT publish merges over —
-//!       always required to exist and parse the moment any archive is on disk at all)
-//!   (b) every per-environment pointer `current.{env}.json` present in `<pmtiles-dir>` (env
-//!       names are DISCOVERED from the filesystem — whatever `current.*.json` files exist —
-//!       not hardcoded, so this tool and the server's `TILE_ENV` allowlist can never drift
-//!       apart into two different env lists)
-//!   (c) the newest `--history-keep` (default 5) manifests under `history/{env}/*.json` per
-//!       environment — bounded so protection doesn't grow forever; an env's oldest
-//!       promotions eventually age out and their archives become collectible
-//!
-//! FAIL-CLOSED: every manifest source above that this tool actually opens (history entries
-//! beyond the bounded window are never opened at all) must parse as a valid manifest with a
-//! `layers` object and safe `file` names — an unreadable or malformed one aborts the ENTIRE
-//! run with a non-zero exit BEFORE a single file is removed. A `.pmtiles` archive is a
-//! delete CANDIDATE only if it is (1) not in the keep set, AND (2) at least
-//! `--min-age-secs` (default 3600 = 1h) old by mtime — the frontend re-polls
-//! `/api/tiles-manifest` every 10 minutes and keeps its last snapshot on a fetch error
-//! (`frontend/src/lib/tile-urls.ts`), so a browser tab can still be requesting an archive for
-//! up to ~10-20 minutes after every manifest stops naming it; 1h is a comfortable margin.
-//!
-//! `--dry-run` is the DEFAULT (prints every delete candidate, deletes nothing); `--delete`
-//! performs the sweep. Holds the SAME `.pack.lock` `tile-store-pack` uses, exclusively, for
-//! its entire run: GC must never observe (or delete against) a manifest mid-write by a pack,
-//! nor race a `worldctl promote`/`--rollback` (which holds the same lock at the bash layer
-//! for its own validate→archive→rename bracket — see `worldctl`'s `promote)` case and
-//! `tile_store_pack.rs`'s own lock doc for why this is safe: this binary's self-lock and any
-//! OUTER bash-level hold of the same file never nest inside one process tree, so there is no
-//! flock self-deadlock).
-//!
-//! Wired into the publish flow (2026-07-21, owner-approved after the /data1 100%-full
-//! incident): `worldctl`'s `gc_published_pmtiles` runs this binary as
-//! `tile-store-gc <pmtiles-dir> --delete --history-keep 2 --min-age-secs 3600` at the END of
-//! every successful publish/promote/rollback, strictly AFTER the verb's own bash-level lock
-//! hold has ended (never nested inside it) — a missing binary or a failed sweep is a loud
-//! warning there, never a failed verb. Manual runs remain possible and dry-run by default.
-//!
-//! Usage: tile-store-gc <pmtiles-dir> [--delete] [--min-age-secs N] [--history-keep N]
+//! The packer merge head and every current environment pointer retain their archives.
+//! Historical manifests never retain files. Invalid current manifests abort the whole sweep.
+//! Pointer writers renew retired archives' mtimes before switching, giving open browser tabs
+//! an hour to refresh. The publication timer sweeps even when no repaint is running.
+//! The shared `.pack.lock` serializes packing, production transitions and this sweep.
+//! Dry-run is the default; `--delete` applies the sweep.
 
 use std::collections::HashSet;
 use std::fs;
@@ -57,7 +18,6 @@ use anyhow::{bail, Context, Result};
 use tile_painter::tile_store::manifest::manifest_files;
 
 const DEFAULT_MIN_AGE_SECS: u64 = 3600;
-const DEFAULT_HISTORY_KEEP: usize = 5;
 
 #[derive(Debug)]
 struct GcReport {
@@ -71,7 +31,6 @@ fn main() -> Result<()> {
     let mut positional: Vec<String> = Vec::new();
     let mut delete = false;
     let mut min_age_secs = DEFAULT_MIN_AGE_SECS;
-    let mut history_keep = DEFAULT_HISTORY_KEEP;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -84,29 +43,15 @@ fn main() -> Result<()> {
                     .parse()
                     .context("--min-age-secs must be a non-negative integer")?
             }
-            "--history-keep" => {
-                history_keep = args
-                    .next()
-                    .context("--history-keep needs a value")?
-                    .parse()
-                    .context("--history-keep must be a non-negative integer")?
-            }
             _ => positional.push(a),
         }
     }
     let [out_dir]: [String; 1] = positional.try_into().map_err(|_| {
-        anyhow::anyhow!(
-            "usage: tile-store-gc <pmtiles-dir> [--delete] [--min-age-secs N] [--history-keep N]"
-        )
+        anyhow::anyhow!("usage: tile-store-gc <pmtiles-dir> [--delete] [--min-age-secs N]")
     })?;
     let out_dir = PathBuf::from(out_dir);
 
-    let report = run_gc(
-        &out_dir,
-        delete,
-        Duration::from_secs(min_age_secs),
-        history_keep,
-    )?;
+    let report = run_gc(&out_dir, delete, Duration::from_secs(min_age_secs))?;
 
     if delete {
         for name in &report.deleted {
@@ -134,16 +79,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// The full mark-and-sweep, as a testable unit (mirrors `tile_store_fsck.rs`'s `fsck_one` /
-/// `tile_store_pack.rs`'s `pack_snapshots_transactionally` split: `main` only owns argv +
-/// printing). Acquires
-/// `.pack.lock` itself, for the whole call — see the module doc's locking note.
-fn run_gc(
-    out_dir: &Path,
-    delete: bool,
-    min_age: Duration,
-    history_keep: usize,
-) -> Result<GcReport> {
+/// Validate all current roots before deleting anything, under the packer/GC lock.
+fn run_gc(out_dir: &Path, delete: bool, min_age: Duration) -> Result<GcReport> {
     let _lock = {
         let lock = fs::File::create(out_dir.join(".pack.lock"))
             .with_context(|| format!("create {}/.pack.lock", out_dir.display()))?;
@@ -191,7 +128,6 @@ fn run_gc(
     // (b) Every per-environment pointer actually present. DISCOVERED, not hardcoded — see
     // module doc. Missing is fine (an env not seeded/promoted yet); present-but-corrupt
     // aborts the whole run.
-    let mut envs: Vec<String> = Vec::new();
     for entry in fs::read_dir(out_dir).with_context(|| format!("read_dir {}", out_dir.display()))? {
         let entry = entry?;
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
@@ -210,31 +146,6 @@ fn run_gc(
             &out_dir.join(&name),
             &format!("environment pointer {name}"),
         )?);
-        envs.push(env.to_string());
-    }
-
-    // (c) Bounded history: the newest `history_keep` manifests per discovered environment.
-    // Filenames are `<utc>-<sha8>.json` — an ISO-ish UTC prefix sorts chronologically, so a
-    // descending string sort gives newest-first without parsing timestamps.
-    let history_root = out_dir.join("history");
-    for env in &envs {
-        let dir = history_root.join(env);
-        let mut names: Vec<String> = match fs::read_dir(&dir) {
-            Ok(entries) => entries
-                .filter_map(|e| e.ok())
-                .filter_map(|e| e.file_name().to_str().map(str::to_owned))
-                .filter(|n| n.ends_with(".json"))
-                .collect(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue, // env never promoted
-            Err(e) => return Err(e).with_context(|| format!("read_dir {}", dir.display())),
-        };
-        names.sort_unstable_by(|a, b| b.cmp(a)); // newest first
-        for name in names.into_iter().take(history_keep) {
-            keep.extend(read_manifest_files(
-                &dir.join(&name),
-                &format!("history/{env}/{name}"),
-            )?);
-        }
     }
 
     let now = SystemTime::now();
@@ -335,8 +246,12 @@ mod tests {
         let dir = tmp.path();
         touch_old(dir, "road.b1.pmtiles");
         write_json(&dir.join("current.json"), &manifest("b1", &[]));
+        write_json(
+            &dir.join("history/prod/old.json"),
+            &manifest("b1", &[("road", "road.b1.pmtiles")]),
+        );
 
-        let report = run_gc(dir, false, Duration::from_secs(0), 5).unwrap();
+        let report = run_gc(dir, false, Duration::from_secs(0)).unwrap();
         assert_eq!(report.candidates, vec!["road.b1.pmtiles".to_string()]);
         assert!(report.deleted.is_empty());
         assert!(
@@ -355,7 +270,7 @@ mod tests {
             &manifest("b1", &[("road", "road.b1.pmtiles")]),
         );
 
-        let report = run_gc(dir, true, Duration::from_secs(0), 5).unwrap();
+        let report = run_gc(dir, true, Duration::from_secs(0)).unwrap();
         assert!(report.candidates.is_empty(), "merge head keeps it alive");
         assert!(dir.join("road.b1.pmtiles").exists());
     }
@@ -375,7 +290,7 @@ mod tests {
             &manifest("b1", &[("road", "road.b1.pmtiles")]),
         );
 
-        let report = run_gc(dir, true, Duration::from_secs(0), 5).unwrap();
+        let report = run_gc(dir, true, Duration::from_secs(0)).unwrap();
         assert!(
             report.candidates.is_empty(),
             "prod's pin must protect its archive even though the merge head moved on"
@@ -385,49 +300,13 @@ mod tests {
     }
 
     #[test]
-    fn bounded_history_protects_only_the_newest_n_entries() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-        touch_old(dir, "road.b1.pmtiles"); // only in the OLDEST history entry
-        touch_old(dir, "road.b2.pmtiles"); // in the newest history entry
-        write_json(&dir.join("current.json"), &manifest("b3", &[])); // moved on, protects neither
-                                                                     // current.prod.json exists (so "prod" is discovered as an environment at all) but its
-                                                                     // OWN layers no longer mention road — history is the only thing that can protect
-                                                                     // road.b1/b2 here, isolating the bounded-window behavior under test.
-        write_json(
-            &dir.join("current.prod.json"),
-            &manifest("b2", &[("rail", "rail.b3.pmtiles")]),
-        );
-        write_json(
-            &dir.join("history/prod/2020-01-01T00-00-00Z-aaaaaaaa.json"),
-            &manifest("b1", &[("road", "road.b1.pmtiles")]),
-        );
-        write_json(
-            &dir.join("history/prod/2020-01-02T00-00-00Z-bbbbbbbb.json"),
-            &manifest("b2", &[("road", "road.b2.pmtiles")]),
-        );
-
-        // history-keep=1: only the newest (b2) entry is even opened.
-        let report = run_gc(dir, true, Duration::from_secs(0), 1).unwrap();
-        assert_eq!(report.candidates, vec!["road.b1.pmtiles".to_string()]);
-        assert!(
-            !dir.join("road.b1.pmtiles").exists(),
-            "aged out of the bounded window"
-        );
-        assert!(
-            dir.join("road.b2.pmtiles").exists(),
-            "still within the bounded window"
-        );
-    }
-
-    #[test]
     fn age_grace_protects_a_young_unreferenced_archive() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         fs::write(dir.join("road.b1.pmtiles"), b"x").unwrap(); // fresh mtime, unreferenced
         write_json(&dir.join("current.json"), &manifest("b2", &[]));
 
-        let report = run_gc(dir, true, Duration::from_secs(3600), 5).unwrap();
+        let report = run_gc(dir, true, Duration::from_secs(3600)).unwrap();
         assert!(report.candidates.is_empty(), "too young to sweep yet");
         assert!(dir.join("road.b1.pmtiles").exists());
     }
@@ -440,7 +319,7 @@ mod tests {
         write_json(&dir.join("current.json"), &manifest("b1", &[]));
         fs::write(dir.join("current.dev1.json"), b"{ not json").unwrap();
 
-        let err = run_gc(dir, true, Duration::from_secs(0), 5).unwrap_err();
+        let err = run_gc(dir, true, Duration::from_secs(0)).unwrap_err();
         assert!(err.to_string().contains("dev1") || format!("{err:#}").contains("dev1"));
         assert!(
             dir.join("road.b1.pmtiles").exists(),
@@ -454,7 +333,7 @@ mod tests {
         let dir = tmp.path();
         touch_old(dir, "road.b1.pmtiles");
 
-        let err = run_gc(dir, true, Duration::from_secs(0), 5).unwrap_err();
+        let err = run_gc(dir, true, Duration::from_secs(0)).unwrap_err();
         assert!(format!("{err:#}").contains("current.json"));
         assert!(dir.join("road.b1.pmtiles").exists());
     }
@@ -462,7 +341,7 @@ mod tests {
     #[test]
     fn empty_out_dir_is_a_clean_no_op() {
         let tmp = tempfile::tempdir().unwrap();
-        let report = run_gc(tmp.path(), true, Duration::from_secs(0), 5).unwrap();
+        let report = run_gc(tmp.path(), true, Duration::from_secs(0)).unwrap();
         assert_eq!(report.checked, 0);
         assert!(report.candidates.is_empty());
     }
@@ -474,7 +353,7 @@ mod tests {
         touch_old(dir, "road.b1.pmtiles");
         write_json(&dir.join("current.json"), &manifest("b2", &[]));
 
-        let report = run_gc(dir, true, Duration::from_secs(0), 5).unwrap();
+        let report = run_gc(dir, true, Duration::from_secs(0)).unwrap();
         assert_eq!(report.deleted, vec!["road.b1.pmtiles".to_string()]);
         assert!(!dir.join("road.b1.pmtiles").exists());
     }
