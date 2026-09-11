@@ -34,6 +34,13 @@ class WorldBuildInputsTest(unittest.TestCase):
             inputs.attach_rasters(source, output)
             inputs.attach_rasters(source, output)  # a resumed build attaches again
             self.assertEqual((output / 'z9/0/0/dem.i16be').read_bytes(), raster.read_bytes())
+            foreign = output / 'z9/1/1/imd.u8'
+            foreign.unlink()
+            foreign.write_bytes(b'')
+            with self.assertRaisesRegex(ValueError, 'prepared raster replaced'):
+                inputs.attach_rasters(source, output)
+            foreign.unlink()
+            foreign.symlink_to(source / 'z9/1/1/imd.u8')
             self.assertEqual((output / 'z9/1/1/imd.u8').stat().st_size, 0)
             self.assertEqual(len(list(output.glob('z9/*/*/*'))), 12)
             inputs.verify_prepared_raster_links(source, output)

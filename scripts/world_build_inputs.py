@@ -107,9 +107,12 @@ def attach_rasters(source, prepared):
             (prepared / qmgrid.square_name(x, y)).mkdir(parents=True, exist_ok=True)
     for path in raster_inputs(source):
         attached, target = prepared / path.relative_to(source), canonical_input(path)
-        # A resumed build finds its own links in place.
-        if not (attached.is_symlink() and os.readlink(attached) == str(target)):
-            attached.symlink_to(target)
+        # A resumed build finds its own links in place; anything else at the path is foreign.
+        if attached.is_symlink() and os.readlink(attached) == str(target):
+            continue
+        if attached.exists() or attached.is_symlink():
+            raise ValueError(f'prepared raster replaced: {attached}')
+        attached.symlink_to(target)
 
 
 def verify_prepared_raster_links(source, prepared):

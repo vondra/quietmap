@@ -53,9 +53,10 @@ fn main() -> Result<()> {
 
     if cli.finalize_only {
         anyhow::ensure!(
-            spill::is_complete(&cli.spill_dir),
-            "spill {} is not complete; finalize needs a finished extract",
-            cli.spill_dir.display()
+            spill::is_complete(&cli.spill_dir, cli.num_buckets),
+            "spill {} is not a complete extract into {} buckets",
+            cli.spill_dir.display(),
+            cli.num_buckets
         );
         eprintln!("  Finalize-only mode (skipping extraction)");
         eprintln!("  Spill dir: {}", cli.spill_dir.display());
@@ -585,7 +586,7 @@ mod tests {
             assert_eq!(extracted, u64::from(kind_match));
             assert_eq!(written, u64::from(kind_match));
         }
-        spiller.flush_all().unwrap();
+        spiller.complete().unwrap();
         let row = std::fs::read_to_string(directory.join("industrial_000.tsv")).unwrap();
         assert_eq!(row.lines().count(), 1);
         assert!(row.contains("\t42\t"));

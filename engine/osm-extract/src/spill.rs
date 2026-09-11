@@ -466,29 +466,33 @@ impl Spiller {
         let _ = writeln!(w, "{}\t{}\t{}\t{}", spill_key(square), gx, gy, class);
     }
 
-    pub fn flush_all(&mut self) -> Result<()> {
-        for bf in self.writers.values_mut() {
-            bf.writer.flush()?;
-        }
-        Ok(())
-    }
-
     /// Flush every bucket and mark the spill complete, so a finalize that
     /// fails after a nine-hour extract can be rerun from the spill alone
-    /// (`--finalize-only`) instead of from the planet.
+    /// (`--finalize-only`) instead of from the planet. The marker names the
+    /// bucket count: finalize enumerates `0..num_buckets`, so another count
+    /// would silently drop buckets.
     pub fn complete(&mut self) -> Result<()> {
-        self.flush_all()?;
-        fs::write(self.dir.join(SPILL_COMPLETE_MARKER), b"")?;
+        for bf in self.writers.values_mut() {
+            bf.writer.flush()?;
+            bf.writer.get_ref().sync_all()?;
+        }
+        let mut marker = File::create(self.dir.join(SPILL_COMPLETE_MARKER))?;
+        writeln!(marker, "{}", self.num_buckets)?;
+        marker.sync_all()?;
         Ok(())
     }
 }
 
-/// Written last into the spill directory; its absence means a partial spill.
+/// Written last into the spill directory, holding the bucket count; its
+/// absence means a partial spill.
 pub const SPILL_COMPLETE_MARKER: &str = "complete";
 
-/// Whether every bucket of `dir` was flushed by a finished extract.
-pub fn is_complete(dir: &Path) -> bool {
-    dir.join(SPILL_COMPLETE_MARKER).is_file()
+/// Whether every bucket of `dir` was flushed by a finished extract that
+/// spilled into `num_buckets` buckets.
+pub fn is_complete(dir: &Path, num_buckets: usize) -> bool {
+    fs::read_to_string(dir.join(SPILL_COMPLETE_MARKER))
+        .map(|text| text.trim() == num_buckets.to_string())
+        .unwrap_or(false)
 }
 
 /// Classify building type from all relevant OSM tags, not just building=*.
@@ -965,16 +969,19 @@ mod settlement_class_tests {
         assert_eq!(tsv_road_ref(&empty_ref).to_string(), "D1");
     }
 
-    /// A spill is complete only after the extract said so; a fresh or
-    /// interrupted spill directory never finalizes.
+    /// A spill is complete only after the extract said so and only for the
+    /// bucket count it was spilled into; a fresh or interrupted spill
+    /// directory, or another count, never finalizes.
     #[test]
-    fn spill_is_complete_only_after_the_extract_marks_it() {
+    fn spill_is_complete_only_after_the_extract_marks_it_for_its_bucket_count() {
         let dir = std::env::temp_dir().join(format!("osm-extract-spill-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let mut spiller = Spiller::new(&dir, 4).unwrap();
-        assert!(!is_complete(&dir));
+        spiller.emit_poi(grid::square_of(50.0, 14.0), 50.0, 14.0, 1);
+        assert!(!is_complete(&dir, 4));
         spiller.complete().unwrap();
-        assert!(is_complete(&dir));
+        assert!(is_complete(&dir, 4));
+        assert!(!is_complete(&dir, 8));
         fs::remove_dir_all(dir).unwrap();
     }
 }

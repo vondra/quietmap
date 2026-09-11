@@ -58,7 +58,8 @@ if [ ! -f "$PBF_FILE" ]; then
     exit 1
 fi
 # A complete spill left by an extract whose finalize failed is finalized
-# again from the spill; the planet is read only for a partial or absent one.
+# again from the spill (the binary checks its bucket count); the planet stays
+# a pinned input of the step but is read only for a partial or absent spill.
 MODE_ARGS=()
 if [ -f "$SPILL_DIR/complete" ]; then
     log "complete spill found in $SPILL_DIR: finalizing from it, not from the planet"

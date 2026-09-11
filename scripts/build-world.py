@@ -5,7 +5,7 @@ import argparse
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from contextlib import ExitStack
-from datetime import datetime
+from datetime import datetime, timezone
 import fcntl
 import json
 import os
@@ -138,27 +138,46 @@ def run_plan(steps, execute, completed=()):
     return completed
 
 
-def resume_steps(database, config, code_files):
-    """Steps of a failed build in `database` that exited 0 and stay done; the rest rerun. Refuses another config or a complete build; reports code files that changed since the pin, then drops the pin for a fresh one."""
+def resume_steps(database, config, steps, code_files, roots):
+    """Resume a failed build of `config` in `database`: steps that exited 0 stay done, the rest rerun. Pins the inputs again and records what changed since the previous pin; a changed source (anything but a code file) refuses the resume, a live producer scope too."""
     (pinned_config, status), = database.execute('SELECT config, status FROM build')
-    if pinned_config != json.dumps(config, sort_keys=True) or status == 'complete':
-        raise ValueError(f'cannot resume a {status} build of another configuration; prior output retained')
+    if pinned_config != json.dumps(config, sort_keys=True):
+        raise ValueError('cannot resume: build.sqlite belongs to another configuration; prior output retained')
+    if status == 'complete':
+        raise ValueError('cannot resume a complete build; prior output retained')
+    live = [step.name for step in steps if subprocess.run(
+        ['systemctl', '--user', '--quiet', 'is-active', scope_unit(step)], check=False).returncode == 0]
+    if live:
+        raise ValueError(f'cannot resume while producers of the failed run are alive: {live}')
     completed = {name for name, in database.execute('SELECT name FROM steps WHERE exit = 0')}
     # A resume interrupted while pinning left no or an empty inputs table (the pin commits
     # once, at its end): the previous pin is unknown.
-    changed = 'unpinned'
+    previous = {}
     if database.execute("SELECT 1 FROM sqlite_master WHERE name = 'inputs'").fetchone():
-        pinned = {path: identity for path, *identity in database.execute(
-            'SELECT path,device,inode,bytes,mtime_ns,ctime_ns FROM inputs')}
-        if pinned:
-            changed = sorted(str(path) for path in code_files
-                             if pinned.get(str(path)) != list(file_identity(path)))
+        previous = dict(database.execute('SELECT path, sha256 FROM inputs'))
         database.execute('DROP TABLE inputs')
     database.execute('DELETE FROM steps WHERE exit IS NULL OR exit != 0')
+    database.commit()
+    pin_inputs(database, roots)
+    current = dict(database.execute('SELECT path, sha256 FROM inputs'))
+    changed = sorted(path for path in previous.keys() | current.keys() if previous.get(path) != current.get(path))
+    code = set(map(str, code_files))
+    if previous and any(path not in code for path in changed):
+        raise ValueError('cannot resume: a frozen source changed since the failed run: '
+                         f'{[path for path in changed if path not in code]}')
+    report = {'resume': sorted(completed), 'code_changed': changed if previous else 'unpinned'}
+    database.execute('CREATE TABLE IF NOT EXISTS resumes(at TEXT NOT NULL, report TEXT NOT NULL)')
+    database.execute('INSERT INTO resumes VALUES(?,?)', (datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                                                         json.dumps(report, sort_keys=True)))
     database.execute("UPDATE build SET status='running'")
     database.commit()
-    print(json.dumps({'resume': sorted(completed), 'code_changed': changed}), flush=True)
+    print(json.dumps(report), flush=True)
     return completed
+
+
+def scope_unit(step):
+    """The systemd scope a producer runs in: one fixed name per step, so a live producer is findable and a second start of the same step is refused by systemd."""
+    return f'world-build-{step.name}.scope'
 
 
 def require_structures_final(steps, environment):
@@ -246,7 +265,7 @@ def main():
         database = sqlite3.connect(output / 'build.sqlite')
         completed = set()
         if resuming:
-            completed = resume_steps(database, config, code_inputs())
+            completed = resume_steps(database, config, steps, code_inputs(), current_roots())
         else:
             database.execute('CREATE TABLE build(config TEXT NOT NULL, status TEXT NOT NULL)')
             database.execute('INSERT INTO build VALUES(?,?)', (json.dumps(config, sort_keys=True), 'running'))
@@ -260,8 +279,8 @@ def main():
                     *(canonical_input(environment[key]) for key in ('GDAL_DATA', 'PROJ_DATA', 'PROJ_LIB')
                       if key in environment)]
         try:
-            roots = current_roots()
-            pin_inputs(database, roots)
+            if not resuming:
+                pin_inputs(database, current_roots())
             attach_rasters(sources['rasters'], year)
             # Build before parallel producers so their incremental builds share no changing code.
             subprocess.run(['cargo', 'build', '--release', '--manifest-path', str(REPO / 'engine/Cargo.toml'),
@@ -269,14 +288,16 @@ def main():
                            cwd=REPO, env=environment, check=True)
             def execute(step):
                 budget = (settings['memory_gib'] << 30) * step.slots // 4
-                command = ['systemd-run', '--user', '--scope', '--quiet', '-p', f'MemoryMax={budget}',
-                           '-p', 'MemorySwapMax=0', *step.argv]
+                command = ['systemd-run', '--user', '--scope', '--quiet', '--unit', scope_unit(step),
+                           '-p', f'MemoryMax={budget}', '-p', 'MemorySwapMax=0', *step.argv]
                 started = time.time()
                 with sqlite3.connect(output / 'build.sqlite', timeout=60) as record:
                     record.execute('INSERT INTO steps(name,command,started) VALUES(?,?,?)',
                                    (step.name, json.dumps(command), started))
                 print(json.dumps({'step': step.name, 'status': 'running'}), flush=True)
                 with (output / f'{step.name}.log').open('ab') as log:
+                    if log.tell():
+                        log.write(f'=== resume {datetime.now(timezone.utc).isoformat(timespec="seconds")} ===\n'.encode())
                     result = subprocess.run(command, cwd=REPO, env=dict(environment, **dict(step.environment)),
                                             stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
                 with sqlite3.connect(output / 'build.sqlite', timeout=60) as record:

@@ -238,7 +238,7 @@ fn multiline_osm_tags_survive_spill_and_arrow_for_every_source() {
             spiller.emit_polygon(source, square, index as i64 + 1, 50.0, 14.0, &tags, None);
         }
     }
-    spiller.flush_all().unwrap();
+    spiller.complete().unwrap();
     drop(spiller);
     assert_eq!(finalize(&spill_dir, &output_dir, 1).unwrap(), 1);
     for source in sources {
