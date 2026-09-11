@@ -58,41 +58,77 @@ function Meta({ value }: { value: ValidationArtifactMeta }) {
   )
 }
 
-/** Always-visible provenance/warning summary for the single React QA map. */
+/** Always-visible provenance/warning summary for the single React QA map.
+ *  First line speaks to a first-time reader; machine detail hides in <details>. */
 export function ValidationStatusCard({ payload }: { payload: ValidationPayload | null }) {
   const deltas = payload?.networks.filter(network => network.delta_meta != null) ?? []
+  const counts: Record<string, number> = {}
+  for (const f of payload?.fixtures ?? []) counts[f.status ?? 'no-run'] = (counts[f.status ?? 'no-run'] ?? 0) + 1
+  const drift = (counts['DRIFT'] ?? 0) + (counts['ERROR'] ?? 0)
+  const ok = counts['OK'] ?? 0
+  const total = payload?.fixtures.length ?? 0
   return (
     <div className="rounded-lg bg-white p-3 text-[11px] shadow" style={{ boxShadow: '0 0 0 2px rgba(0,0,0,.06)' }}>
       <div className="font-semibold text-[13px]">Validation QA</div>
       {!payload ? <div className="text-muted-foreground">Loading catalogs…</div> : (
         <>
-          <div className="mt-1"><b>current model cohort:</b> {shortCohort(payload.model_cohort?.cohort_id)}</div>
-          <div><b>external truth:</b> {payload.networks.length} approved committed snapshots</div>
-          <div><b>world model run:</b> {payload.lastrun ? <Meta value={payload.lastrun} /> : 'not available'}</div>
-          <div><b>complete station-query artifacts:</b> {deltas.length}/{payload.networks.length}</div>
-          {deltas.map(network => (
-            <div key={`${network.network}:${network.year}`} className="pl-2 text-muted-foreground">
-              {network.network} {network.year}: <Meta value={network.delta_meta!} />
-            </div>
-          ))}
-          {payload.warnings.length > 0 && (
-            <ul className="mt-1 list-disc pl-4 text-amber-800">
-              {payload.warnings.map((warning, index) => <li key={`${index}:${warning}`}>{warning}</li>)}
-            </ul>
-          )}
+          <div className="mt-1 text-[12px]">
+            {payload.lastrun == null ? (
+              <>Modelová data chybí — body ukazují jen externí pravdu. Spusť <code>/check-world</code>.</>
+            ) : drift === 0 ? (
+              <>Mapa sedí s ověřeným stavem (OK {ok}/{total}). Stanice: modelová data u {deltas.length}/{payload.networks.length} sítí.</>
+            ) : (
+              <>Mapa sedí, kromě <b>{drift === 1 ? '1 bodu' : `${drift} bodů`}</b> k dořešení (OK {ok}/{total}). Stanice: modelová data u {deltas.length}/{payload.networks.length} sítí.</>
+            )}
+          </div>
+          <details className="mt-1 text-muted-foreground">
+            <summary className="cursor-pointer">Technické detaily</summary>
+            <div className="mt-1"><b>current model cohort:</b> {shortCohort(payload.model_cohort?.cohort_id)}</div>
+            <div><b>external truth:</b> {payload.networks.length} approved committed snapshots</div>
+            <div><b>world model run:</b> {payload.lastrun ? <Meta value={payload.lastrun} /> : 'not available'}</div>
+            <div><b>complete station-query artifacts:</b> {deltas.length}/{payload.networks.length}</div>
+            {deltas.map(network => (
+              <div key={`${network.network}:${network.year}`} className="pl-2">
+                {network.network} {network.year}: <Meta value={network.delta_meta!} />
+              </div>
+            ))}
+            {payload.warnings.length > 0 && (
+              <ul className="mt-1 list-disc pl-4 text-amber-800">
+                {payload.warnings.map((warning, index) => <li key={`${index}:${warning}`}>{warning}</li>)}
+              </ul>
+            )}
+          </details>
         </>
       )}
     </div>
   )
 }
 
+const STATUS_CZ: Record<string, string> = {
+  'OK': 'Model sedí s ověřeným stavem.',
+  'DRIFT': 'Model se pohnul mimo ověřený stav — šetří se.',
+  'ERROR': 'Měření selhalo — technický problém, ne chyba mapy.',
+  'EXTERNAL-GAP': 'Model je stabilní, ale liší se od externí pravdy — známá práce.',
+  'KNOWN-GAP': 'Známá zdokumentovaná odchylka.',
+  'PENDING': 'Nový bod, zatím bez ověřeného stavu.',
+  'SKIPPED': 'Bod bez pokrytí — neměřeno.',
+  'no-run': 'Modelová data chybí — spusť /check-world.',
+}
+
 function FixtureBody({ f }: { f: Extract<ValidationSelection, { kind: 'fixture' }>['fixture'] }) {
   const status = f.status ?? 'no-run'
   const url = safeUrl(f.external?.url)
   const c = f.commensurability as Record<string, string | number | undefined>
+  const extBand = f.external?.band
   return (
     <>
       <div className="font-semibold">{f.id}</div>
+      <div className="mb-1 text-[12px]">
+        Model <b>{fmt(f.model_value, 1)} dB</b>
+        {extBand?.[0] != null || extBand?.[1] != null ? <> · externí pravda <b>{band(extBand)} dB</b></> : null}
+        {' → '}<span className="font-semibold" style={{ color: FIXTURE_COLOR[status] ?? '#8d6e63' }}>{status}</span>
+      </div>
+      <div className="mb-1 text-[11px] text-muted-foreground">{STATUS_CZ[status] ?? ''}</div>
       <div className="mb-1 text-[11px] text-muted-foreground">
         validation fixture · {f.regime} · anchor {f.anchor_type} · role {f.role} · metric {f.metric_field}
       </div>
@@ -110,22 +146,25 @@ function FixtureBody({ f }: { f: Extract<ValidationSelection, { kind: 'fixture' 
             {f.external?.metric ?? ''} ({f.external?.year ?? '—'}, {f.external?.months_covered ?? '?'} mo)
             {url && <> · <a href={url} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">link</a></>}
           </Row>
-          <Row label="convention">
-            {c.metric_variant} · {c.dominance}
-            {c.receiver_convention ? ` · ${c.receiver_convention}` : ''}
-            {c.coord_uncertainty_m ? ` · ±${c.coord_uncertainty_m} m` : ''}
-          </Row>
           {f.known_gap && <Row label="known gap"><b>{f.known_gap}</b></Row>}
           {f.pair_id && <Row label="pair/ladder">{f.pair_id}</Row>}
         </tbody>
       </table>
-      <div className="mt-1">
-        {(f.tags ?? []).map((t) => (
-          <span key={t} className="mr-1 inline-block rounded bg-neutral-100 px-1 text-[11px]">{t}</span>
-        ))}
-      </div>
-      <div className="mt-1 whitespace-pre-wrap border-l-2 border-neutral-200 bg-neutral-50 p-1.5 text-[11px]">{f.tolerance_note}</div>
-      {f.caveats && <div className="mt-1 whitespace-pre-wrap border-l-2 border-neutral-200 bg-neutral-50 p-1.5 text-[11px]">{f.caveats}</div>}
+      <details className="mt-1 text-[11px] text-muted-foreground">
+        <summary className="cursor-pointer">Proč tomu věřit · historie bodu</summary>
+        <div className="mt-1">
+          {(f.tags ?? []).map((t) => (
+            <span key={t} className="mr-1 inline-block rounded bg-neutral-100 px-1 text-[11px]">{t}</span>
+          ))}
+        </div>
+        <div className="mt-1">
+          convention: {c.metric_variant} · {c.dominance}
+          {c.receiver_convention ? ` · ${c.receiver_convention}` : ''}
+          {c.coord_uncertainty_m ? ` · ±${c.coord_uncertainty_m} m` : ''}
+        </div>
+        <div className="mt-1 whitespace-pre-wrap border-l-2 border-neutral-200 bg-neutral-50 p-1.5">{f.tolerance_note}</div>
+        {f.caveats && <div className="mt-1 whitespace-pre-wrap border-l-2 border-neutral-200 bg-neutral-50 p-1.5">{f.caveats}</div>}
+      </details>
     </>
   )
 }
