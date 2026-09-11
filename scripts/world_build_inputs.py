@@ -1,6 +1,5 @@
 """Freeze world-build input identities and attach a complete native raster year."""
 
-import os
 from pathlib import Path
 import struct
 import sys
@@ -88,6 +87,20 @@ def pin_inputs(database, roots):
     database.commit()
 
 
+def repin_inputs(database, roots):
+    """Replace the pin of a resumed build and return the paths whose bytes differ from the previous pin (added, removed or rewritten), or None when the previous pin is unknown (a resume was interrupted while pinning; the pin commits once, at its end)."""
+    previous = {}
+    if database.execute("SELECT 1 FROM sqlite_master WHERE name = 'inputs'").fetchone():
+        previous = dict(database.execute('SELECT path, sha256 FROM inputs'))
+        database.execute('DROP TABLE inputs')
+        database.commit()
+    pin_inputs(database, roots)
+    if not previous:
+        return None
+    current = dict(database.execute('SELECT path, sha256 FROM inputs'))
+    return sorted(path for path in previous.keys() | current.keys() if previous.get(path) != current.get(path))
+
+
 def verify_inputs(database, roots):
     actual = set(map(str, input_files(roots)))
     count = 0
@@ -108,7 +121,7 @@ def attach_rasters(source, prepared):
     for path in raster_inputs(source):
         attached, target = prepared / path.relative_to(source), canonical_input(path)
         # A resumed build finds its own links in place; anything else at the path is foreign.
-        if attached.is_symlink() and os.readlink(attached) == str(target):
+        if attached.is_symlink() and attached.readlink() == target:
             continue
         if attached.exists() or attached.is_symlink():
             raise ValueError(f'prepared raster replaced: {attached}')

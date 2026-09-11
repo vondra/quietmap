@@ -106,7 +106,9 @@ class WorldBuildTest(unittest.TestCase):
         self.assertEqual(completed, {'rail'})
 
     def test_resume_keeps_finished_steps_reruns_the_rest_and_refuses_changed_sources_or_live_producers(self):
-        steps = [world.Step('rasters', (), ()), world.Step('osm', ('rasters',), ()), world.Step('aircraft', ('osm',), ())]
+        settings = {'memory_gib': 4, 'threads': 1}
+        steps = [world.Step('rasters', (), ('a',)), world.Step('osm', ('rasters',), ('b',)), world.Step('aircraft', ('osm',), ('c',))]
+        command = lambda step: json.dumps(world.producer_command(step, settings))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             code, planet = root / 'writer.rs', root / 'planet.pbf'
@@ -117,38 +119,45 @@ class WorldBuildTest(unittest.TestCase):
             database.execute("INSERT INTO build VALUES(?, 'failed')", (json.dumps({'a': 1}, sort_keys=True),))
             database.execute('CREATE TABLE steps(name TEXT PRIMARY KEY, command TEXT NOT NULL, started REAL NOT NULL, seconds REAL, exit INTEGER)')
             database.executemany('INSERT INTO steps VALUES(?,?,?,?,?)', [
-                ('rasters', '[]', 1.0, 2.0, 0), ('osm', '[]', 1.0, 3.0, 1), ('aircraft', '[]', 1.0, None, None)])
+                ('rasters', command(steps[0]), 1.0, 2.0, 0), ('osm', command(steps[1]), 1.0, 3.0, 1),
+                ('aircraft', command(steps[2]), 1.0, None, None), ('retired', '["old"]', 1.0, 1.0, 0)])
+            database.execute('CREATE TABLE output(manifest_sha256 TEXT NOT NULL, counts TEXT NOT NULL)')
             pin_inputs(database, [code, planet])
             idle = patch.object(world.subprocess, 'run', return_value=subprocess.CompletedProcess([], 3))
+            resume = lambda config, roots: world.resume_steps(database, config, steps, settings, [code], roots)
             with self.assertRaisesRegex(ValueError, 'another configuration'), idle:
-                world.resume_steps(database, {'a': 2}, steps, [code], [code, planet])
+                resume({'a': 2}, [code, planet])
             with self.assertRaisesRegex(ValueError, "alive: \\['osm'\\]"), patch.object(
                     world.subprocess, 'run', side_effect=lambda argv, **_: subprocess.CompletedProcess(
                         argv, 0 if argv[-1] == 'world-build-osm.scope' else 3)):
-                world.resume_steps(database, {'a': 1}, steps, [code], [code, planet])
+                resume({'a': 1}, [code, planet])
             code.write_text('fixed')
             with contextlib.redirect_stdout(io.StringIO()) as printed, idle:
-                completed = world.resume_steps(database, {'a': 1}, steps, [code], [code, planet])
-            self.assertEqual(completed, {'rasters'})
+                completed = resume({'a': 1}, [code, planet])
+            self.assertEqual(completed, {'rasters'})  # 'retired' is not in the plan any more
             self.assertEqual(json.loads(printed.getvalue()), {'resume': ['rasters'], 'code_changed': [str(code)]})
             self.assertEqual([name for name, in database.execute('SELECT name FROM steps')], ['rasters'])
             self.assertEqual(database.execute('SELECT status FROM build').fetchone(), ('running',))
+            self.assertFalse(database.execute("SELECT name FROM sqlite_master WHERE name = 'output'").fetchall())
             self.assertEqual(json.loads(database.execute('SELECT report FROM resumes').fetchone()[0])['code_changed'], [str(code)])
             self.assertEqual(database.execute('SELECT count(*) FROM inputs').fetchone(), (2,))
+            # A kept step whose planned command changed (memory share, argv) reruns.
+            with contextlib.redirect_stdout(io.StringIO()), idle:
+                self.assertEqual(world.resume_steps(database, {'a': 1}, steps, dict(settings, memory_gib=8), [code], [code, planet]), set())
             planet.write_text('another planet')
             with self.assertRaisesRegex(ValueError, f'frozen source changed.*{planet.name}'), idle:
-                world.resume_steps(database, {'a': 1}, steps, [code], [code, planet])
+                resume({'a': 1}, [code, planet])
             code.unlink()  # a deleted code file is reported, never stat-ed (the refused pin above kept the new planet)
             with contextlib.redirect_stdout(io.StringIO()) as printed, idle:
-                world.resume_steps(database, {'a': 1}, steps, [code], [planet])
+                resume({'a': 1}, [planet])
             self.assertEqual(json.loads(printed.getvalue())['code_changed'], [str(code)])
             database.execute('DROP TABLE inputs')  # interrupted while pinning: the previous pin is unknown
             with contextlib.redirect_stdout(io.StringIO()) as printed, idle:
-                world.resume_steps(database, {'a': 1}, steps, [code], [planet])
+                resume({'a': 1}, [planet])
             self.assertEqual(json.loads(printed.getvalue())['code_changed'], 'unpinned')
             database.execute("UPDATE build SET status='complete'")
             with self.assertRaisesRegex(ValueError, 'complete build'), idle:
-                world.resume_steps(database, {'a': 1}, steps, [code], [planet])
+                resume({'a': 1}, [planet])
         started = []
         world.run_plan(steps, lambda step: started.append(step.name), {'rasters'})
         self.assertEqual(started, ['osm', 'aircraft'])

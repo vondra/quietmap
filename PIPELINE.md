@@ -17,8 +17,13 @@ standalone copy. Never synthesize an empty structure file to cover an unfinished
 `scripts/build-world.py --config WORLD.toml --output NEW_GENERATION --scratch NEW_SCRATCH`
 coordinates a fresh world through all seven Arrow layers. Add `--plan` to print its
 actual commands without starting producers. The two destinations must be empty and
-separate from sources. Existing partial work is retained on failure; the controller
-never adopts it implicitly. Use the recorded producer commands for a reviewed recovery.
+separate from sources, or hold a failed build of the same configuration: then the
+controller resumes it in place — steps that exited 0 under the command the plan
+still names stay done, the rest rerun, the inputs are pinned again, a changed source
+refuses the resume and changed code files are recorded in `build.sqlite` (`resumes`)
+and printed. A resume is refused while a producer scope of the failed run is alive.
+The OSM step finalizes again from a spill its extract marked complete instead of
+reading the planet.
 
 The TOML file has `[build]` keys `as_of_date` (YYYYMMDD string), `aircraft_anchor`
 (YYYY-MM string), `memory_gib` and `threads` (positive integers). `[sources]` supplies

@@ -32,8 +32,8 @@ if __name__ == '__main__':
         os.execve(python, [python, '-B', str(Path(__file__).resolve()), *sys.argv[1:]], runtime_environment)
     sys.dont_write_bytecode = True
 
-from prepared_manifest import file_identity, write_manifest
-from world_build_inputs import attach_rasters, audit_world, canonical_input, pin_inputs, verify_inputs, raster_inputs, height_inputs, verify_prepared_raster_links
+from prepared_manifest import write_manifest
+from world_build_inputs import attach_rasters, audit_world, canonical_input, pin_inputs, repin_inputs, verify_inputs, raster_inputs, height_inputs, verify_prepared_raster_links
 
 
 @dataclass(frozen=True)
@@ -106,9 +106,9 @@ def producer_environment(threads):
                 PYTHONDONTWRITEBYTECODE='1')
 
 
-def run_plan(steps, execute, completed=()):
-    pending = {step.name: step for step in steps if step.name not in completed}
-    completed, running = set(completed), {}
+def run_plan(steps, execute, already_completed=()):
+    pending = {step.name: step for step in steps if step.name not in already_completed}
+    completed, running = set(already_completed), {}
     failure = None
     # Three memory shares go to OSM/structures/aircraft, one to a layer writer.
     # Admission plus matching cgroup limits bounds their combined working sets.
@@ -138,8 +138,8 @@ def run_plan(steps, execute, completed=()):
     return completed
 
 
-def resume_steps(database, config, steps, code_files, roots):
-    """Resume a failed build of `config` in `database`: steps that exited 0 stay done, the rest rerun. Pins the inputs again and records what changed since the previous pin; a changed source (anything but a code file) refuses the resume, a live producer scope too."""
+def resume_steps(database, config, steps, settings, code_files, roots):
+    """Resume a failed build of `config` in `database`: steps that exited 0 with the command the plan still names stay done, the rest rerun. Pins the inputs again and records what changed since the previous pin; a changed source (anything but a code file) refuses the resume, a live producer scope too."""
     (pinned_config, status), = database.execute('SELECT config, status FROM build')
     if pinned_config != json.dumps(config, sort_keys=True):
         raise ValueError('cannot resume: build.sqlite belongs to another configuration; prior output retained')
@@ -149,23 +149,19 @@ def resume_steps(database, config, steps, code_files, roots):
         ['systemctl', '--user', '--quiet', 'is-active', scope_unit(step)], check=False).returncode == 0]
     if live:
         raise ValueError(f'cannot resume while producers of the failed run are alive: {live}')
-    completed = {name for name, in database.execute('SELECT name FROM steps WHERE exit = 0')}
-    # A resume interrupted while pinning left no or an empty inputs table (the pin commits
-    # once, at its end): the previous pin is unknown.
-    previous = {}
-    if database.execute("SELECT 1 FROM sqlite_master WHERE name = 'inputs'").fetchone():
-        previous = dict(database.execute('SELECT path, sha256 FROM inputs'))
-        database.execute('DROP TABLE inputs')
-    database.execute('DELETE FROM steps WHERE exit IS NULL OR exit != 0')
+    planned = {step.name: json.dumps(producer_command(step, settings)) for step in steps}
+    completed = {name for name, command in database.execute('SELECT name, command FROM steps WHERE exit = 0')
+                 if planned.get(name) == command}
+    database.execute('DELETE FROM steps WHERE name NOT IN (%s)' % ','.join('?' * len(completed)), sorted(completed))
+    # An attempt that died after the manifest left a finished-looking output table.
+    database.execute('DROP TABLE IF EXISTS output')
     database.commit()
-    pin_inputs(database, roots)
-    current = dict(database.execute('SELECT path, sha256 FROM inputs'))
-    changed = sorted(path for path in previous.keys() | current.keys() if previous.get(path) != current.get(path))
+    changed = repin_inputs(database, roots)
     code = set(map(str, code_files))
-    if previous and any(path not in code for path in changed):
+    if changed is not None and any(path not in code for path in changed):
         raise ValueError('cannot resume: a frozen source changed since the failed run: '
                          f'{[path for path in changed if path not in code]}')
-    report = {'resume': sorted(completed), 'code_changed': changed if previous else 'unpinned'}
+    report = {'resume': sorted(completed), 'code_changed': 'unpinned' if changed is None else changed}
     database.execute('CREATE TABLE IF NOT EXISTS resumes(at TEXT NOT NULL, report TEXT NOT NULL)')
     database.execute('INSERT INTO resumes VALUES(?,?)', (datetime.now(timezone.utc).isoformat(timespec='seconds'),
                                                          json.dumps(report, sort_keys=True)))
@@ -173,6 +169,13 @@ def resume_steps(database, config, steps, code_files, roots):
     database.commit()
     print(json.dumps(report), flush=True)
     return completed
+
+
+def producer_command(step, settings):
+    """The exact command a producer runs under: its memory share of the build in a fixed-name scope."""
+    budget = (settings['memory_gib'] << 30) * step.slots // 4
+    return ['systemd-run', '--user', '--scope', '--quiet', '--unit', scope_unit(step),
+            '-p', f'MemoryMax={budget}', '-p', 'MemorySwapMax=0', *step.argv]
 
 
 def scope_unit(step):
@@ -265,7 +268,7 @@ def main():
         database = sqlite3.connect(output / 'build.sqlite')
         completed = set()
         if resuming:
-            completed = resume_steps(database, config, steps, code_inputs(), current_roots())
+            completed = resume_steps(database, config, steps, settings, code_inputs(), current_roots())
         else:
             database.execute('CREATE TABLE build(config TEXT NOT NULL, status TEXT NOT NULL)')
             database.execute('INSERT INTO build VALUES(?,?)', (json.dumps(config, sort_keys=True), 'running'))
@@ -287,9 +290,7 @@ def main():
                             '--bin', 'osm-extract', '--bin', 'aircraft-extract', '--bin', 'structures-finalize'],
                            cwd=REPO, env=environment, check=True)
             def execute(step):
-                budget = (settings['memory_gib'] << 30) * step.slots // 4
-                command = ['systemd-run', '--user', '--scope', '--quiet', '--unit', scope_unit(step),
-                           '-p', f'MemoryMax={budget}', '-p', 'MemorySwapMax=0', *step.argv]
+                command = producer_command(step, settings)
                 started = time.time()
                 with sqlite3.connect(output / 'build.sqlite', timeout=60) as record:
                     record.execute('INSERT INTO steps(name,command,started) VALUES(?,?,?)',
@@ -312,7 +313,7 @@ def main():
             verify_prepared_raster_links(sources['rasters'], year)
             verify_inputs(database, current_roots())
             manifest = write_manifest(year, year / 'inputs.sqlite')
-            database.execute('CREATE TABLE output(manifest_sha256 TEXT NOT NULL, counts TEXT NOT NULL)')
+            database.execute('CREATE TABLE IF NOT EXISTS output(manifest_sha256 TEXT NOT NULL, counts TEXT NOT NULL)')
             database.execute('INSERT INTO output VALUES(?,?)',
                              (manifest['sha256'], json.dumps(counts, sort_keys=True)))
             database.execute("UPDATE build SET status='complete'")
