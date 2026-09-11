@@ -1,5 +1,8 @@
 """World publication must respect data dependencies, memory admission and immutable inputs."""
 
+import contextlib
+import io
+import json
 import os
 from unittest.mock import patch
 import importlib.util
@@ -100,6 +103,36 @@ class WorldBuildTest(unittest.TestCase):
             world.run_plan(steps, execute)
         self.assertEqual(started, {'rail', 'industry'})
         self.assertEqual(completed, {'rail'})
+
+    def test_resume_keeps_finished_steps_reruns_the_rest_and_reports_changed_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            code = Path(directory) / 'writer.rs'
+            code.write_text('old')
+            database = sqlite3.connect(':memory:')
+            database.execute('CREATE TABLE build(config TEXT NOT NULL, status TEXT NOT NULL)')
+            database.execute("INSERT INTO build VALUES(?, 'failed')", (json.dumps({'a': 1}, sort_keys=True),))
+            database.execute('CREATE TABLE steps(name TEXT PRIMARY KEY, command TEXT NOT NULL, started REAL NOT NULL, seconds REAL, exit INTEGER)')
+            database.executemany('INSERT INTO steps VALUES(?,?,?,?,?)', [
+                ('rasters', '[]', 1.0, 2.0, 0), ('osm', '[]', 1.0, 3.0, 1), ('aircraft', '[]', 1.0, None, None)])
+            database.execute('CREATE TABLE inputs(path TEXT PRIMARY KEY, sha256 BLOB NOT NULL, device INTEGER, inode INTEGER, bytes INTEGER, mtime_ns INTEGER, ctime_ns INTEGER)')
+            database.execute('INSERT INTO inputs VALUES(?,?,?,?,?,?,?)', (str(code), b'x', *world.file_identity(code)))
+            with self.assertRaisesRegex(ValueError, 'another configuration'):
+                world.resume_steps(database, {'a': 2}, [code])
+            code.write_text('fixed')
+            with contextlib.redirect_stdout(io.StringIO()) as printed:
+                completed = world.resume_steps(database, {'a': 1}, [code])
+            self.assertEqual(completed, {'rasters'})
+            self.assertEqual(json.loads(printed.getvalue()), {'resume': ['rasters'], 'code_changed': [str(code)]})
+            self.assertEqual([name for name, in database.execute('SELECT name FROM steps')], ['rasters'])
+            self.assertEqual(database.execute("SELECT status FROM build").fetchone(), ('running',))
+            self.assertFalse(database.execute("SELECT name FROM sqlite_master WHERE name='inputs'").fetchall())
+            database.execute("UPDATE build SET status='complete'")
+            with self.assertRaisesRegex(ValueError, 'complete build'):
+                world.resume_steps(database, {'a': 1}, [code])
+        started = []
+        steps = [world.Step('rasters', (), ()), world.Step('osm', ('rasters',), ()), world.Step('aircraft', ('osm',), ())]
+        world.run_plan(steps, lambda step: started.append(step.name), {'rasters'})
+        self.assertEqual(started, ['osm', 'aircraft'])
 
     def test_structures_rewritten_after_the_finalize_step_fail_the_build(self):
         with tempfile.TemporaryDirectory() as directory:

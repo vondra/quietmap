@@ -1,5 +1,6 @@
 """Freeze world-build input identities and attach a complete native raster year."""
 
+import os
 from pathlib import Path
 import struct
 import sys
@@ -105,7 +106,10 @@ def attach_rasters(source, prepared):
         for y in range(qmgrid.Z9_AXIS):
             (prepared / qmgrid.square_name(x, y)).mkdir(parents=True, exist_ok=True)
     for path in raster_inputs(source):
-        (prepared / path.relative_to(source)).symlink_to(canonical_input(path))
+        attached, target = prepared / path.relative_to(source), canonical_input(path)
+        # A resumed build finds its own links in place.
+        if not (attached.is_symlink() and os.readlink(attached) == str(target)):
+            attached.symlink_to(target)
 
 
 def verify_prepared_raster_links(source, prepared):

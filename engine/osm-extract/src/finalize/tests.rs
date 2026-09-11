@@ -283,6 +283,8 @@ fn airport_writer_removes_only_proven_empty_segments_and_preserves_identity() {
         &[
             row(1056661322, 0, 1000, "0"),
             row(866803531, 22, 1000, "0"),
+            // One z30 unit long: under the spill's 0.1 m resolution, dropped.
+            row(23733611, 3, 1001, "0"),
             row(866803531, 23, 1100, "3.7"),
         ],
         &path,
@@ -311,7 +313,7 @@ fn airport_writer_removes_only_proven_empty_segments_and_preserves_identity() {
             .value(0),
         866803531
     );
-    for (end, length) in [(1100, "0"), (1000, "1"), (1100, "NaN"), (1100, "-1")] {
+    for (end, length) in [(1000, "1"), (1100, "NaN"), (1100, "-1")] {
         let rejected = dir.join(format!("rejected-{end}-{length}.arrow"));
         assert!(write_airport_lines(&[row(1, 0, end, length)], &rejected).is_err());
         assert!(!rejected.exists());

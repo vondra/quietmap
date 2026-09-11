@@ -32,7 +32,7 @@ if __name__ == '__main__':
         os.execve(python, [python, '-B', str(Path(__file__).resolve()), *sys.argv[1:]], runtime_environment)
     sys.dont_write_bytecode = True
 
-from prepared_manifest import write_manifest
+from prepared_manifest import file_identity, write_manifest
 from world_build_inputs import attach_rasters, audit_world, canonical_input, pin_inputs, verify_inputs, raster_inputs, height_inputs, verify_prepared_raster_links
 
 
@@ -106,9 +106,9 @@ def producer_environment(threads):
                 PYTHONDONTWRITEBYTECODE='1')
 
 
-def run_plan(steps, execute):
-    pending = {step.name: step for step in steps}
-    completed, running = set(), {}
+def run_plan(steps, execute, completed=()):
+    pending = {step.name: step for step in steps if step.name not in completed}
+    completed, running = set(completed), {}
     failure = None
     # Three memory shares go to OSM/structures/aircraft, one to a layer writer.
     # Admission plus matching cgroup limits bounds their combined working sets.
@@ -135,6 +135,24 @@ def run_plan(steps, execute):
                     failure = failure or error
             if failure and not running:
                 raise failure
+    return completed
+
+
+def resume_steps(database, config, code_files):
+    """Steps of a failed build in `database` that exited 0 and stay done; the rest rerun. Refuses another config or a complete build; reports code files that changed since the pin, then drops the pin for a fresh one."""
+    (pinned_config, status), = database.execute('SELECT config, status FROM build')
+    if pinned_config != json.dumps(config, sort_keys=True) or status == 'complete':
+        raise ValueError(f'cannot resume a {status} build of another configuration; prior output retained')
+    completed = {name for name, in database.execute('SELECT name FROM steps WHERE exit = 0')}
+    pinned = {path: identity for path, *identity in database.execute(
+        'SELECT path,device,inode,bytes,mtime_ns,ctime_ns FROM inputs')}
+    changed = sorted(str(path) for path in code_files
+                     if pinned.get(str(path)) != list(file_identity(path)))
+    database.execute('DELETE FROM steps WHERE exit IS NULL OR exit != 0')
+    database.execute('DROP TABLE inputs')
+    database.execute("UPDATE build SET status='running'")
+    database.commit()
+    print(json.dumps({'resume': sorted(completed), 'code_changed': changed}), flush=True)
     return completed
 
 
@@ -201,10 +219,13 @@ def main():
                               environment=dict(step.environment), memory_bytes=(settings['memory_gib'] << 30) * step.slots // 4)), flush=True)
     if args.plan:
         return
-    # Never adopt unrelated or partly written generations as successful upstream work.
-    for target in (output, scratch):
-        if target.exists() and any(target.iterdir()):
-            raise ValueError(f'requires a fresh directory; prior output retained: {target}')
+    # A failed build of this configuration resumes in place (`resume_steps`); never
+    # adopt unrelated or partly written generations as successful upstream work.
+    resuming = (output / 'build.sqlite').is_file()
+    if not resuming:
+        for target in (output, scratch):
+            if target.exists() and any(target.iterdir()):
+                raise ValueError(f'requires a fresh directory; prior output retained: {target}')
     output.mkdir(parents=True, exist_ok=True)
     scratch.mkdir(parents=True, exist_ok=True)
     environment = producer_environment(settings['threads'])
@@ -218,11 +239,15 @@ def main():
             lock = locks.enter_context((target / '.world-build.lock').open('a'))
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         database = sqlite3.connect(output / 'build.sqlite')
-        database.execute('CREATE TABLE build(config TEXT NOT NULL, status TEXT NOT NULL)')
-        database.execute('INSERT INTO build VALUES(?,?)', (json.dumps(config, sort_keys=True), 'running'))
-        database.execute('CREATE TABLE steps(name TEXT PRIMARY KEY, command TEXT NOT NULL, '
-                         'started REAL NOT NULL, seconds REAL, exit INTEGER)')
-        database.commit()
+        completed = set()
+        if resuming:
+            completed = resume_steps(database, config, code_inputs())
+        else:
+            database.execute('CREATE TABLE build(config TEXT NOT NULL, status TEXT NOT NULL)')
+            database.execute('INSERT INTO build VALUES(?,?)', (json.dumps(config, sort_keys=True), 'running'))
+            database.execute('CREATE TABLE steps(name TEXT PRIMARY KEY, command TEXT NOT NULL, '
+                             'started REAL NOT NULL, seconds REAL, exit INTEGER)')
+            database.commit()
         def current_roots():
             ordinary = [path for name, path in sources.items() if name not in ('rasters', 'ghsl', 'regional_heights')]
             return [*ordinary, *raster_inputs(sources['rasters']), *height_inputs(sources['ghsl']),
@@ -246,7 +271,7 @@ def main():
                     record.execute('INSERT INTO steps(name,command,started) VALUES(?,?,?)',
                                    (step.name, json.dumps(command), started))
                 print(json.dumps({'step': step.name, 'status': 'running'}), flush=True)
-                with (output / f'{step.name}.log').open('xb') as log:
+                with (output / f'{step.name}.log').open('ab') as log:
                     result = subprocess.run(command, cwd=REPO, env=dict(environment, **dict(step.environment)),
                                             stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
                 with sqlite3.connect(output / 'build.sqlite', timeout=60) as record:
@@ -255,7 +280,7 @@ def main():
                 print(json.dumps({'step': step.name, 'exit': result.returncode}), flush=True)
                 if result.returncode:
                     raise RuntimeError(f'{step.name} failed; inspect {output / (step.name + ".log")}; all work retained')
-            run_plan(steps, execute)
+            run_plan(steps, execute, completed)
             require_structures_final(steps, environment)
             counts = audit_world(year)
             verify_prepared_raster_links(sources['rasters'], year)

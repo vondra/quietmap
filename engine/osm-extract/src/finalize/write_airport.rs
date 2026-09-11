@@ -169,8 +169,11 @@ pub(super) fn write_airport_lines(rows: &[Vec<String>], path: &Path) -> Result<(
         let e_gy = parse_grid_cell(&row[6]);
         let length_m: f32 = row[7].parse()?;
         let same_endpoint = (s_gx, s_gy) == (e_gx, e_gy);
-        // Sub-grid source legs can collapse to one point and round to zero in spill.
-        if length_m == 0.0 && same_endpoint {
+        // The spill writes lengths at 0.1 m: a source leg under 5 cm rounds to
+        // zero whether it collapsed to one grid point or still spans a z30 unit
+        // (taxiway 23733611 leg 3, one unit apart, stopped the 2026-09-11 world
+        // finalize). Nothing that short is a noise source; drop it.
+        if length_m == 0.0 {
             continue;
         }
         anyhow::ensure!(

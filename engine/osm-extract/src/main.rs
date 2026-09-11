@@ -52,6 +52,11 @@ fn main() -> Result<()> {
     eprintln!("=== osm-extract ===");
 
     if cli.finalize_only {
+        anyhow::ensure!(
+            spill::is_complete(&cli.spill_dir),
+            "spill {} is not complete; finalize needs a finished extract",
+            cli.spill_dir.display()
+        );
         eprintln!("  Finalize-only mode (skipping extraction)");
         eprintln!("  Spill dir: {}", cli.spill_dir.display());
         eprintln!("  Output: {}", cli.output.display());
@@ -389,7 +394,7 @@ fn main() -> Result<()> {
         }
     })?;
 
-    spiller.flush_all()?;
+    spiller.complete()?;
     eprintln!(
         "  {:.1}M ways → {:.1}M features ({} multipolygon rels) in {:.1}s",
         ways_total as f64 / 1e6,

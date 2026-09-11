@@ -472,6 +472,23 @@ impl Spiller {
         }
         Ok(())
     }
+
+    /// Flush every bucket and mark the spill complete, so a finalize that
+    /// fails after a nine-hour extract can be rerun from the spill alone
+    /// (`--finalize-only`) instead of from the planet.
+    pub fn complete(&mut self) -> Result<()> {
+        self.flush_all()?;
+        fs::write(self.dir.join(SPILL_COMPLETE_MARKER), b"")?;
+        Ok(())
+    }
+}
+
+/// Written last into the spill directory; its absence means a partial spill.
+pub const SPILL_COMPLETE_MARKER: &str = "complete";
+
+/// Whether every bucket of `dir` was flushed by a finished extract.
+pub fn is_complete(dir: &Path) -> bool {
+    dir.join(SPILL_COMPLETE_MARKER).is_file()
 }
 
 /// Classify building type from all relevant OSM tags, not just building=*.
@@ -946,5 +963,18 @@ mod settlement_class_tests {
         empty_ref.insert("ref".into(), "".into());
         empty_ref.insert("old_ref".into(), "D1".into());
         assert_eq!(tsv_road_ref(&empty_ref).to_string(), "D1");
+    }
+
+    /// A spill is complete only after the extract said so; a fresh or
+    /// interrupted spill directory never finalizes.
+    #[test]
+    fn spill_is_complete_only_after_the_extract_marks_it() {
+        let dir = std::env::temp_dir().join(format!("osm-extract-spill-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut spiller = Spiller::new(&dir, 4).unwrap();
+        assert!(!is_complete(&dir));
+        spiller.complete().unwrap();
+        assert!(is_complete(&dir));
+        fs::remove_dir_all(dir).unwrap();
     }
 }

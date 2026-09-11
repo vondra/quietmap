@@ -57,6 +57,13 @@ if [ ! -f "$PBF_FILE" ]; then
     log "ERROR: Planet PBF not found: $PBF_FILE"
     exit 1
 fi
+# A complete spill left by an extract whose finalize failed is finalized
+# again from the spill; the planet is read only for a partial or absent one.
+MODE_ARGS=()
+if [ -f "$SPILL_DIR/complete" ]; then
+    log "complete spill found in $SPILL_DIR: finalizing from it, not from the planet"
+    MODE_ARGS=(--finalize-only)
+fi
 
 PBF_SIZE_HR=$(numfmt --to=iec-i --suffix=B "$(stat --printf='%s' "$PBF_FILE")")
 mkdir -p "$OUTPUT_DIR" "$(dirname "$NODE_CACHE")" "$SPILL_DIR"
@@ -91,6 +98,7 @@ MONITOR_PID=$!
     --node-cache "$NODE_CACHE" \
     --spill-dir "$SPILL_DIR" \
     --num-buckets "$NUM_BUCKETS" \
+    "${MODE_ARGS[@]}" \
     2>&1 | while IFS= read -r line; do log "  $line"; done
 
 stop_monitor
