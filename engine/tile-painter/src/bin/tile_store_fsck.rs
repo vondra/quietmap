@@ -1,4 +1,4 @@
-//! tile-store-fsck — read-only health check for one or more `(layer, zoom)`
+//! tile-store-fsck — health check and explicit unused-block reclamation for `(layer, zoom)`
 //! tile stores: decode-validates every present entry, and flags any pair of
 //! entries whose `[offset, offset+len)` byte ranges overlap in the data log.
 //!
@@ -26,7 +26,8 @@
 //! a destructive `TileStore::create` can change a pinned data-file inode while
 //! it is being checked.
 //!
-//! Usage: tile-store-fsck <store-root> [--layer L] [--zoom N]
+//! Default is read-only; --reclaim frees unreachable blocks after every selected store passes.
+//! Usage: tile-store-fsck <store-root> [--layer L] [--zoom N] [--reclaim]
 //!        Exit 0 = clean. Exit 1 = problems found.
 
 use std::path::Path;
@@ -61,9 +62,11 @@ fn main() -> Result<()> {
     let mut positional: Vec<String> = Vec::new();
     let mut only_layer: Option<String> = None;
     let mut only_zoom: Option<u8> = None;
+    let mut reclaim = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--reclaim" => reclaim = true,
             "--layer" => only_layer = Some(args.next().context("--layer needs a value")?),
             "--zoom" => {
                 only_zoom = Some(
@@ -77,7 +80,7 @@ fn main() -> Result<()> {
         }
     }
     let [store_root]: [String; 1] = positional.try_into().map_err(|_| {
-        anyhow::anyhow!("usage: tile-store-fsck <store-root> [--layer L] [--zoom N]")
+        anyhow::anyhow!("usage: tile-store-fsck <store-root> [--layer L] [--zoom N] [--reclaim]")
     })?;
     let store_root = Path::new(&store_root);
 
@@ -139,6 +142,17 @@ fn main() -> Result<()> {
     println!("{problems} problem(s) across {} store(s)", reports.len());
     if problems > 0 {
         std::process::exit(1);
+    }
+    if reclaim {
+        for snapshot in &locked.snapshots {
+            let bytes = snapshot
+                .store
+                .reclaim_unreferenced_blocks(&locked._snapshot_locks)?;
+            println!(
+                "{}/z{}: reclaimed {bytes} bytes",
+                snapshot.layer, snapshot.zoom
+            );
+        }
     }
     Ok(())
 }

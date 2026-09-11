@@ -1041,6 +1041,21 @@ fn with_store_snapshots_after_capture<T>(
         })
         .collect::<Result<Vec<_>>>()?;
     validate(&snapshots)?;
+    for layer in &snapshots {
+        for snapshot in &layer.stores {
+            match snapshot.store.reclaim_unreferenced_blocks(&_snapshot_locks) {
+                Ok(bytes) if bytes > 0 => eprintln!(
+                    "{}/z{}: reclaimed {bytes} working-store bytes",
+                    layer.layer, snapshot.zoom
+                ),
+                Ok(_) => {}
+                Err(error) => eprintln!(
+                    "{}/z{}: block reclamation failed; continuing validated pack: {error:#}",
+                    layer.layer, snapshot.zoom
+                ),
+            }
+        }
+    }
     if !only.is_empty() {
         snapshots.retain(|snapshot| only.iter().any(|layer| layer == &snapshot.layer));
     }
@@ -2663,6 +2678,38 @@ try {{
             99
         );
         Ok(())
+    }
+
+    #[test]
+    fn clean_store_packs_even_when_its_log_is_not_writable() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = pack_test_scratch()?;
+        let store_root = dir.path().join("tiles/2026/store");
+        let layer_dir = create_one_tile_road_store(&store_root, 42)?;
+        let writer = TileStore::open(&layer_dir, TEST_BASE_ZOOM, true)?;
+        let blob = writer.get_hm3(1, 1)?.unwrap();
+        writer.put_blob(1, 1, TileCodec::BrotliHm3, &[0; 8192])?;
+        writer.put_blob(1, 1, TileCodec::BrotliHm3, &blob)?;
+        writer.sync_all()?;
+        drop(writer);
+        release_test_store_extent_reservation(&layer_dir, TEST_BASE_ZOOM)?;
+        fs::set_permissions(
+            layer_dir.join(format!("z{TEST_BASE_ZOOM}.qtsd")),
+            fs::Permissions::from_mode(0o444),
+        )?;
+        let out_dir = dir.path().join("pmtiles");
+        fs::create_dir_all(&out_dir)?;
+        with_store_snapshots_after_capture(
+            &store_root,
+            &["road".to_string()],
+            Duration::from_secs(1),
+            validate_snapshots_common,
+            |mut snapshots| {
+                stage_layer(snapshots.pop().unwrap(), &out_dir, "b1")?;
+                Ok(())
+            },
+        )
     }
 
     #[test]

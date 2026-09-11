@@ -13,7 +13,8 @@
 //! Without it two writer processes can recover the same process-local tail and
 //! reserve identical offsets, overwriting each other's blobs. Read-only opens
 //! take no lock: they reserve nothing, so they neither block writers nor are
-//! blocked by them.
+//! blocked by them. A reader retaining index entries must hold the shared writer-domain
+//! locks through its last blob read: a rewritten entry's old bytes can be reclaimed.
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::FileExt;
@@ -27,6 +28,8 @@ use anyhow::{bail, Context, Result};
 use super::format::{Entry, Header, TileCodec, ENTRY_BYTES, HEADER_BYTES, MAGIC_DATA, MAGIC_INDEX};
 use super::locks::zoom_store_lock_path;
 use crate::wire_hm3;
+
+mod reclaim;
 
 /// Data-log preallocation step. Appends are sequential, but batching extent
 /// allocation keeps concurrent tail writes off the ext4 allocation lock.

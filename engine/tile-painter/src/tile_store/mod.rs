@@ -12,8 +12,8 @@
 //!            a blob is invisible until its entry lands (crash/failed push ⇒
 //!            garbage bytes at the data tail, never a visible partial tile).
 //! z13.qtsd   append-only blob log: 32 B header + blobs back-to-back. Space of
-//!            deleted/rewritten tiles is reclaimed at pack time (pmtiles pack =
-//!            the natural compaction pass), never in place.
+//!            deleted/rewritten tiles is reclaimed before packing: only unreachable
+//!            blocks of singly linked logs are punched out under the writer locks.
 //! ```
 //!
 //! Design constraints:
