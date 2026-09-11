@@ -2,7 +2,6 @@
 
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
-import { path7za } from '7zip-bin'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
@@ -10,6 +9,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
   GLOBAL_GTFS_FEEDS, NATIONAL_GTFS_FEEDS, countryGtfsBbox, gtfsDownloadUrls, gtfsSourceDirectories, gtfsTextSourceSha256, railFamilyFor,
+  sevenZipExecutable,
   validateGtfsSourceFreshness,
 } from './railway-gtfs-feeds.js'
 
@@ -104,7 +104,7 @@ test('identity-pinned archive extracts only into the derived cache', () => {
   mkdirSync(source)
   writeRequiredGtfs(input)
   const archive = join(source, 'feed.zip')
-  const created = spawnSync(path7za, ['a', archive, '.'], { cwd: input, encoding: 'utf8' })
+  const created = spawnSync(sevenZipExecutable(), ['a', archive, '.'], { cwd: input, encoding: 'utf8' })
   assert.equal(created.status, 0, created.stderr)
   const archiveSha256 = createHash('sha256').update(readFileSync(archive)).digest('hex')
   const base = GLOBAL_GTFS_FEEDS.find(feed => feed.id === 'de')!

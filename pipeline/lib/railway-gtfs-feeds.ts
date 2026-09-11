@@ -1,6 +1,6 @@
 /** Immutable GTFS source registries and source-validity contract. */
 
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
@@ -24,6 +24,12 @@ import type { PreparedBbox } from './prepared-grid.js'
 
 const ALL_RAIL_AND_TRAM = new Set([...RAIL_TYPES, ...TRAM_TYPES, ...METRO_TYPES])
 const RAIL_AND_TRAM_WITHOUT_METRO = new Set([...RAIL_TYPES, ...TRAM_TYPES])
+
+/** The 7zip-bin 5.2.0 tarball ships `7za` without the execute bit; npm keeps it that way. */
+export function sevenZipExecutable(): string {
+  chmodSync(path7za, 0o755)
+  return path7za
+}
 
 export type GtfsRegistry = 'global' | 'national'
 
@@ -284,7 +290,7 @@ function extractedArchiveSource(sourceRoot: string, cacheDirectory: string, feed
   mkdirSync(parent, { recursive: true })
   const staging = mkdtempSync(resolve(parent, '.incoming-'))
   try {
-    const extraction = spawnSync(path7za, ['x', '-y', `-o${staging}`, archive], { encoding: 'utf8' })
+    const extraction = spawnSync(sevenZipExecutable(), ['x', '-y', `-o${staging}`, archive], { encoding: 'utf8' })
     if (extraction.status !== 0) {
       throw new Error(`7za exited ${extraction.status}: ${extraction.stderr.trim()}`)
     }
