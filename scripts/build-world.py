@@ -144,12 +144,17 @@ def resume_steps(database, config, code_files):
     if pinned_config != json.dumps(config, sort_keys=True) or status == 'complete':
         raise ValueError(f'cannot resume a {status} build of another configuration; prior output retained')
     completed = {name for name, in database.execute('SELECT name FROM steps WHERE exit = 0')}
-    pinned = {path: identity for path, *identity in database.execute(
-        'SELECT path,device,inode,bytes,mtime_ns,ctime_ns FROM inputs')}
-    changed = sorted(str(path) for path in code_files
-                     if pinned.get(str(path)) != list(file_identity(path)))
+    # A resume interrupted while pinning left no or an empty inputs table (the pin commits
+    # once, at its end): the previous pin is unknown.
+    changed = 'unpinned'
+    if database.execute("SELECT 1 FROM sqlite_master WHERE name = 'inputs'").fetchone():
+        pinned = {path: identity for path, *identity in database.execute(
+            'SELECT path,device,inode,bytes,mtime_ns,ctime_ns FROM inputs')}
+        if pinned:
+            changed = sorted(str(path) for path in code_files
+                             if pinned.get(str(path)) != list(file_identity(path)))
+        database.execute('DROP TABLE inputs')
     database.execute('DELETE FROM steps WHERE exit IS NULL OR exit != 0')
-    database.execute('DROP TABLE inputs')
     database.execute("UPDATE build SET status='running'")
     database.commit()
     print(json.dumps({'resume': sorted(completed), 'code_changed': changed}), flush=True)

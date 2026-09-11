@@ -126,6 +126,9 @@ class WorldBuildTest(unittest.TestCase):
             self.assertEqual([name for name, in database.execute('SELECT name FROM steps')], ['rasters'])
             self.assertEqual(database.execute("SELECT status FROM build").fetchone(), ('running',))
             self.assertFalse(database.execute("SELECT name FROM sqlite_master WHERE name='inputs'").fetchall())
+            with contextlib.redirect_stdout(io.StringIO()) as printed:
+                world.resume_steps(database, {'a': 1}, [code])  # interrupted while pinning: no inputs table
+            self.assertEqual(json.loads(printed.getvalue())['code_changed'], 'unpinned')
             database.execute("UPDATE build SET status='complete'")
             with self.assertRaisesRegex(ValueError, 'complete build'):
                 world.resume_steps(database, {'a': 1}, [code])
