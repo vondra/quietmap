@@ -49,7 +49,7 @@ synthetic-line envelope. A bucket's representative length is clamped to
 their density rises accordingly (about +2 dB along such a gap track), and no
 bucket reaches beyond the query radius. Ground sources retain their spatial owners. Surface owner selection enumerates
 the existing midpoint-gate envelope, including wrapped longitude and high
-latitudes; listing requests use their own radius with unchanged per-row gates.
+latitudes.
 Present aircraft schemas must carry a positive sampling-window stamp, including
 empty files; selected rows cannot redefine the observation window.
 

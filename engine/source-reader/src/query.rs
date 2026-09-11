@@ -7,17 +7,15 @@
 //!
 //! Grid port: on-disk coordinates are z30 int32 grid cells (`start_gx` …,
 //! `centroid_gx/gy`, `geom` grid rings). They are converted to lon/lat floats
-//! at the read edge via `square_store::grid_cols`, exactly once per value.
-//! `normalize::prepare_*` takes the decoded grid rings directly; the debug
-//! `polygon_wkb` strings stay WKB-shaped (synthesized from the grid ring) so
-//! the `query_buildings` / `query_leisure` JSON keeps its contract.
+//! at the read edge via `square_store::grid_cols`, exactly once per value;
+//! `normalize::prepare_*` takes the decoded grid rings directly.
 
 use std::path::Path;
 
 use arrow::array::Array;
 use square_store::grid_cols::{
     col_binary, col_bool, col_f32, col_i16, col_i32, col_i64, col_str, col_u16, col_u8,
-    decode_geom, grid_cell_lonlat, ring_lonlat,
+    decode_geom, grid_cell_lonlat,
 };
 use square_store::store::{load_square, SquareData, STRUCTURE_KIND_BUILDING};
 
@@ -771,7 +769,6 @@ pub fn query_roads_from_batches(
     results
 }
 
-#[derive(serde::Serialize)]
 pub struct BuildingResult {
     pub osm_id: i64,
     pub centroid_lat: f64,
@@ -780,15 +777,10 @@ pub struct BuildingResult {
     pub floors: u8,
     pub area_m2: f32,
     pub building_type: u8,
-    pub building_use: u8,
     pub name: String,
     pub addr_street: String,
     pub addr_housenumber: String,
-    pub polygon_wkb: String,
-    pub dist_m: f64,
-    /// Original OSM grid ring (`emission_geom`); drives the emission
-    /// compute. Never on the wire.
-    #[serde(skip_serializing)]
+    /// Original OSM grid ring (`emission_geom`); drives the emission compute.
     pub polygon_grid: grid::poly::GridRing,
 }
 
@@ -971,7 +963,6 @@ pub fn query_buildings_from_batches(
         let floors = col_u8(batch, "floors");
         let area = col_f32(batch, "area_m2");
         let btype = col_u8(batch, "building_type");
-        let buse = col_u8(batch, "building_use");
         let name = col_str(batch, "name");
         let street = col_str(batch, "addr_street");
         let house = col_str(batch, "addr_housenumber");
@@ -997,7 +988,6 @@ pub fn query_buildings_from_batches(
                 .filter(|a| !a.is_null(i))
                 .and_then(|a| decode_geom(Some(a.value(i))))
                 .unwrap_or_default();
-            let polygon_wkb = hex_encode(&grid_ring_to_wkb_polygon(&ring_lonlat(&polygon_grid)));
 
             let opt_f32 = |col: Option<&arrow::array::Float32Array>| {
                 col.filter(|a| !a.is_null(i)).map(|a| a.value(i))
@@ -1018,12 +1008,9 @@ pub fn query_buildings_from_batches(
                 floors: opt_u8(floors).unwrap_or(0),
                 area_m2: opt_f32(area).unwrap_or(0.0),
                 building_type: opt_u8(btype).unwrap_or(0),
-                building_use: opt_u8(buse).unwrap_or(0),
                 name: opt_str(name),
                 addr_street: opt_str(street),
                 addr_housenumber: opt_str(house),
-                polygon_wkb,
-                dist_m: dist,
                 polygon_grid,
             });
         }
@@ -1033,7 +1020,6 @@ pub fn query_buildings_from_batches(
 }
 
 /// One `leisure.arrow` row near the receiver (settlement v2 phase 2).
-#[derive(serde::Serialize)]
 pub struct LeisureResult {
     pub osm_id: i64,
     pub centroid_lat: f64,
@@ -1042,10 +1028,7 @@ pub struct LeisureResult {
     pub sport: u8,
     pub area_m2: f32,
     pub name: String,
-    pub polygon_wkb: String,
-    pub dist_m: f64,
-    /// Decoded grid ring; drives the emission compute. Never on the wire.
-    #[serde(skip_serializing)]
+    /// Decoded grid ring; drives the emission compute.
     pub polygon_grid: grid::poly::GridRing,
 }
 
@@ -1087,44 +1070,11 @@ pub fn query_leisure_from_batches(
                 sport: sport.map(|a| a.value(i)).unwrap_or(0),
                 area_m2: area.map(|a| a.value(i)).unwrap_or(0.0),
                 name: name.map(|a| a.value(i).to_string()).unwrap_or_default(),
-                polygon_wkb: hex_encode(&grid_ring_to_wkb_polygon(&ring_lonlat(&polygon_grid))),
-                dist_m: dist,
                 polygon_grid,
             });
         }
     }
     results
-}
-
-/// Encode a lon/lat ring as little-endian WKB Polygon (single ring) so the
-/// debug `polygon_wkb` strings keep their contract while the compute path
-/// reads the grid ring directly.
-fn grid_ring_to_wkb_polygon(ring_lonlat: &[(f64, f64)]) -> Vec<u8> {
-    let mut wkb = Vec::with_capacity(9 + 4 + ring_lonlat.len() * 16 + 16);
-    wkb.push(1);
-    wkb.extend_from_slice(&3u32.to_le_bytes());
-    wkb.extend_from_slice(&1u32.to_le_bytes());
-    let closed = ring_lonlat.len() + 1;
-    wkb.extend_from_slice(&(closed as u32).to_le_bytes());
-    for &(lon, lat) in ring_lonlat {
-        wkb.extend_from_slice(&lon.to_le_bytes());
-        wkb.extend_from_slice(&lat.to_le_bytes());
-    }
-    if let Some(&(lon, lat)) = ring_lonlat.first() {
-        wkb.extend_from_slice(&lon.to_le_bytes());
-        wkb.extend_from_slice(&lat.to_le_bytes());
-    }
-    wkb
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
 }
 
 #[cfg(feature = "node")]
@@ -1616,6 +1566,21 @@ mod square_query_tests {
         assert_eq!(data.buildings[0].osm_id, 55);
     }
 
+    /// A building past the fixed building reach is not collected.
+    #[test]
+    fn far_building_is_outside_the_building_reach() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut far = building_row(57);
+        far.centroid_lonlat = Some((LON, LAT + 0.03));
+        far.ring_lonlat = Some(fx::square_ring_lonlat(LAT + 0.03, LON));
+        fx::write_square_structures(tmp.path(), prague(), &[building_row(55), far]);
+        let data = collect_sources_at_point(tmp.path(), LAT, LON).unwrap();
+        assert_eq!(
+            data.buildings.iter().map(|b| b.osm_id).collect::<Vec<_>>(),
+            vec![55]
+        );
+    }
+
     #[test]
     fn emission_overrides_win_over_screening_geometry() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -1687,55 +1652,6 @@ mod square_query_tests {
         assert!(data.roads.is_empty());
         assert!(data.buildings.is_empty());
         assert_eq!(data.n_days, 365);
-    }
-
-    fn wall_row(osm_id: i64, seg_idx: i16, lat: f64, lon: f64) -> fx::StructureRow {
-        fx::StructureRow {
-            kind: square_store::store::STRUCTURE_KIND_BARRIER,
-            ring_lonlat: Some(vec![(lon, lat), (lon + 0.001, lat + 0.001)]),
-            height_m: 3,
-            height_tier: 0,
-            envelope_class: 0,
-            centroid_lonlat: Some((lon + 0.0005, lat + 0.0005)),
-            osm_id: Some(osm_id),
-            segment_idx: Some(seg_idx),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn wall_listing_preserves_provenance_and_ignores_buildings() {
-        let batch = fx::structure_batch(&[
-            wall_row(7, -3, LAT, LON),
-            wall_row(7, 4, LAT + 0.01, LON + 0.01),
-            building_row(42),
-        ]);
-        let results =
-            square_store::barriers::query_barriers_from_batches(&[batch], LAT, LON, 200_000.0)
-                .unwrap();
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].segment_idx, -3);
-        assert_eq!(results[1].segment_idx, 4);
-        assert!((results[0].start_lon - LON).abs() < 0.001);
-    }
-
-    #[test]
-    fn identical_wall_dupes_merge() {
-        let batch = fx::structure_batch(&[wall_row(7, -3, LAT, LON), wall_row(7, -3, LAT, LON)]);
-        let results =
-            square_store::barriers::query_barriers_from_batches(&[batch], LAT, LON, 200_000.0)
-                .unwrap();
-        assert_eq!(results.len(), 1);
-    }
-
-    #[test]
-    fn wall_row_without_segment_idx_fails_closed() {
-        let mut row = wall_row(7, -3, LAT, LON);
-        row.segment_idx = None;
-        let batch = fx::structure_batch(&[row]);
-        let err = square_store::barriers::query_barriers_from_batches(&[batch], LAT, LON, 1_000.0)
-            .unwrap_err();
-        assert!(err.contains("segment_idx"), "got: {err}");
     }
 
     #[test]

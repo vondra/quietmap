@@ -171,30 +171,3 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         "previous click must not change aircraft sources"
     );
 }
-
-pub(super) fn native_listings_honor_requested_radius(root: &Path) {
-    let owner = grid::square_of(0.0, 2.5);
-    let directory = fx::square_dir(root, owner);
-    std::fs::create_dir_all(&directory).unwrap();
-    fx::write_structure_file(
-        &directory.join("structures.arrow"),
-        &[fx::StructureRow {
-            kind: square_store::store::STRUCTURE_KIND_BUILDING,
-            centroid_lonlat: Some((2.5, 0.0)),
-            osm_id: Some(901),
-            ring_lonlat: Some(fx::square_ring_lonlat(0.0, 2.5)),
-            height_m: 12,
-            building_type: Some(1),
-            ..Default::default()
-        }],
-        true,
-    );
-    super::reset_store(root);
-    let large: Value =
-        serde_json::from_str(&crate::query_buildings(0.0, 0.35, 250_000.0).unwrap()).unwrap();
-    assert_eq!(large.as_array().unwrap().len(), 1);
-    assert_eq!(large[0]["osm_id"], 901);
-    let small: Value =
-        serde_json::from_str(&crate::query_buildings(0.0, 0.35, 1000.0).unwrap()).unwrap();
-    assert!(small.as_array().unwrap().is_empty());
-}

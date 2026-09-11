@@ -177,19 +177,22 @@ fn structure_columns(rows: &[StructureRow]) -> Vec<ArrayRef> {
     ]
 }
 
-/// One batch, as the merge's plain chunks before the finalize step blocks them.
-pub fn structure_batch(rows: &[StructureRow]) -> RecordBatch {
-    RecordBatch::try_new(Arc::new(structure_schema(true)), structure_columns(rows)).unwrap()
+/// One batch, as the merge's plain chunks before the finalize step blocks
+/// them; `with_contract: false` carries the same rows without the contract
+/// stamps (the `load_square` gate test's case).
+pub fn structure_batch(rows: &[StructureRow], with_contract: bool) -> RecordBatch {
+    RecordBatch::try_new(
+        Arc::new(structure_schema(with_contract)),
+        structure_columns(rows),
+    )
+    .unwrap()
 }
 
-/// A merged (not yet finalized) structures.arrow on disk; `with_contract:
-/// false` writes the same rows without the contract stamps (the `load_square`
-/// gate test's case).
+/// A merged (not yet finalized) structures.arrow on disk.
 pub fn write_structure_file(path: &Path, rows: &[StructureRow], with_contract: bool) {
-    let schema = Arc::new(structure_schema(with_contract));
-    let batch = RecordBatch::try_new(schema.clone(), structure_columns(rows)).unwrap();
+    let batch = structure_batch(rows, with_contract);
     let file = std::fs::File::create(path).unwrap();
-    let mut w = FileWriter::try_new(file, &schema).unwrap();
+    let mut w = FileWriter::try_new(file, &batch.schema()).unwrap();
     w.write(&batch).unwrap();
     w.finish().unwrap();
 }

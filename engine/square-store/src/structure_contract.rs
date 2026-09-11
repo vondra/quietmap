@@ -1,4 +1,4 @@
-//! Current prepared screening heights, shared by popup listing, indexing and overlays.
+//! Current prepared screening heights, shared by the obstacle index, the finalize step and the footprint overlay.
 
 use arrow::array::{Array, Int16Array};
 use arrow::datatypes::{DataType, Schema};

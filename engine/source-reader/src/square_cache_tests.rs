@@ -59,7 +59,7 @@ fn parallel_square_load_error_leaves_cache_unchanged() {
 
 // Valid schema/footer and first batch, but the second IPC message is corrupt.
 fn two_batches_with_broken_second_message(path: &Path) {
-    let base = fx::structure_batch(&[fx::StructureRow::default()]);
+    let base = fx::structure_batch(&[fx::StructureRow::default()], true);
     let mut fields: Vec<_> = base.schema().fields().iter().cloned().collect();
     fields.push(Arc::new(Field::new("start_gx", DataType::Int32, false)));
     fields.push(Arc::new(Field::new("maxspeed", DataType::UInt16, false)));
@@ -179,7 +179,6 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
     let dir = fx::square_dir(tmp.path(), grid::square_of(lat, lon));
     std::fs::create_dir_all(&dir).unwrap();
     reset_store(tmp.path());
-    assert_eq!(super::query_roads(lat, lon, 1000.0).unwrap(), "[]");
     let empty = super::collect_sources_at_point(tmp.path(), lat, lon).unwrap();
     assert!(empty.roads.is_empty() && empty.aircraft_airborne_batches.is_empty());
 
@@ -198,13 +197,21 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
             fx::write_square_structures(tmp.path(), grid::square_of(lat, lon), &[]);
         }
         let path = dir.join(format!("{name}.arrow"));
+        // The popup names the broken file; a rewritten structures table no
+        // longer pairs with the pipeline's index, so the popup is refused on
+        // the index before it decodes one batch.
+        let (native_file, native_error) = if name == "structures" {
+            (dir.join("structures.qoix"), "structures-finalize")
+        } else {
+            (path.clone(), "batch 1")
+        };
         std::fs::write(&path, b"not Arrow").unwrap();
         reset_store(tmp.path());
         let pure = super::collect_sources_at_point(tmp.path(), lat, lon).unwrap_err();
-        let native = super::query_roads(lat, lon, 1000.0).unwrap_err();
+        let native = super::query_noise_at_point(lat, lon).unwrap_err();
         assert!(pure.contains(&path.display().to_string()), "{pure}");
         assert!(
-            native.reason.contains(&path.display().to_string()),
+            native.reason.contains(&native_file.display().to_string()),
             "{native}"
         );
         assert!(STORE.read().unwrap().squares.is_empty());
@@ -244,13 +251,6 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
         assert!(pure.contains(&path.display().to_string()), "{pure}");
         assert!(pure.contains("batch 1"), "{pure}");
         reset_store(tmp.path());
-        // A rewritten structures table no longer pairs with the pipeline's
-        // index, so the popup is refused before it decodes one batch.
-        let (native_file, native_error) = if name == "structures" {
-            (dir.join("structures.qoix"), "structures-finalize")
-        } else {
-            (path.clone(), "batch 1")
-        };
         for _ in 0..2 {
             let native = super::query_noise_at_point(lat, lon).unwrap_err();
             assert!(
@@ -258,20 +258,6 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
                 "{native}"
             );
             assert!(native.reason.contains(native_error), "{native}");
-            let listing = match name {
-                "roads" => Some(super::query_roads(lat, lon, 1000.0)),
-                "structures" => Some(super::query_buildings(lat, lon, 1000.0)),
-                _ => None,
-            };
-            if let Some(result) = listing {
-                assert!(result.unwrap_err().reason.contains("batch 1"));
-            }
-            if name == "structures" {
-                assert!(super::query_barriers(lat, lon, 1000.0)
-                    .unwrap_err()
-                    .reason
-                    .contains("batch 1"));
-            }
         }
         reset_store(tmp.path());
         drop(data);
@@ -305,8 +291,6 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
     }
     fx::write_roads_file(&dir.join("roads.arrow"), &[]);
     reset_store(tmp.path());
-    assert_eq!(super::query_roads(lat, lon, 1000.0).unwrap(), "[]");
-    native_receiver_tests::native_listings_honor_requested_radius(tmp.path());
     native_receiver_tests::facade_popup_preserves_aircraft_and_observation_multiplicity(tmp.path());
     let initialized = tmp.path().display().to_string();
     let cached = STORE.read().unwrap().squares.len();

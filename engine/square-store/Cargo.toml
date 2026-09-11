@@ -7,5 +7,4 @@ edition = "2021"
 arrow = { version = "54", default-features = false, features = ["ipc"] }
 arrow-batching = { path = "../arrow-batching" }
 memmap2 = "0.9"
-serde = { version = "1", features = ["derive"] }
 grid = { path = "../grid" }

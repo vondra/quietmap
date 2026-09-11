@@ -1,8 +1,8 @@
 //! Flat-earth geometry for propagation and popup math: distances, segment feet,
 //! audibility gates, finite-line corrections, reach boxes.
 //!
-//! The single home of this math — `noise-compute::propagation::geo` and
-//! `square-store::geo` re-export it.
+//! The single home of this math — `noise-compute::propagation::geo`
+//! re-exports it.
 
 /// Metres per degree latitude (WGS-84 mean).
 pub const M_PER_DEG_LAT: f64 = 110_540.0;
