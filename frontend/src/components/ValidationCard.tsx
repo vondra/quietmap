@@ -138,6 +138,7 @@ function FixtureBody({ f, runDay: day }: { f: Extract<ValidationSelection, { kin
           {f.known_gap && <Row label="known gap"><b>{f.known_gap}</b></Row>}
         </tbody>
       </table>
+      <div className="mb-1 text-[11px] text-muted-foreground">Source kind: {ANCHOR_EN[f.anchor_type] ?? f.anchor_type}</div>
       <details className="mt-1 text-[11px] text-muted-foreground">
         <summary className="cursor-pointer">evidence</summary>
         <div className="mt-1">{f.external?.value ?? ''}</div>
@@ -154,6 +155,12 @@ function FixtureBody({ f, runDay: day }: { f: Extract<ValidationSelection, { kin
       </details>
     </>
   )
+}
+
+const ANCHOR_EN: Record<string, string> = {
+  'measurement': 'physical measurement',
+  'official_map': 'official noise map',
+  'regression': 'model watchpoint \u2014 no physical measurement here',
 }
 
 const LEVEL_METRICS = ['lden', 'ld', 'le', 'ln', 'laeq_24h', 'laeq_tag_0622', 'laeq_nacht_2206'] as const
