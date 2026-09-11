@@ -173,7 +173,12 @@ export function spawnStep(argv: string[], cwd: string, preparedDir: string, laye
     const command = layer === 'buildings' ? argv
       : ['flock', '--shared', '--nonblock', resolve(preparedDir, '.square-country-city-build.lock'), ...argv]
     const child = spawn('flock', ['--exclusive', '--nonblock',
-      resolve(preparedDir, `.enrichment-${layer}.lock`), ...command], { cwd, stdio: 'inherit' })
+      resolve(preparedDir, `.enrichment-${layer}.lock`), ...command], {
+      cwd,
+      stdio: 'inherit',
+      // National GTFS parses (AU Sydney) exceed V8's 4 GiB default heap; the layer's cgroup caps at 20 GiB.
+      env: { ...process.env, NODE_OPTIONS: process.env.NODE_OPTIONS ?? '--max-old-space-size=8192' },
+    })
     child.on('error', reject)
     child.on('close', code => resolvePromise(code ?? 1))
   })

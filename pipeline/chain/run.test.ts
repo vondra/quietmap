@@ -155,3 +155,16 @@ test('two writers of the same output layer cannot overlap', async () => {
     rmSync(work, { recursive: true, force: true })
   }
 })
+
+
+test('chain steps run with an enlarged V8 heap: national GTFS parses exceed the 4 GiB default', async () => {
+  const work = mkdtempSync(resolve(tmpdir(), 'qm-chain-heap-'))
+  try {
+    const code = await spawnStep([process.execPath, '-e',
+      `process.exit((process.env.NODE_OPTIONS ?? '').includes('--max-old-space-size=8192') ? 0 : 1)`],
+      work, work, 'buildings')
+    assert.equal(code, 0)
+  } finally {
+    rmSync(work, { recursive: true, force: true })
+  }
+})
