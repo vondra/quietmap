@@ -29,14 +29,22 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   )
 }
 
-export default function ValidationCard({ selection, onClose }: {
+const runDay = (meta: ValidationArtifactMeta | null | undefined): string => {
+  const g = (meta as { generated_at?: string } | null)?.generated_at
+  return typeof g === 'string' ? g.slice(0, 10) : ''
+}
+
+export default function ValidationCard({ selection, payload, onClose }: {
   selection: ValidationSelection
+  payload: ValidationPayload | null
   onClose: () => void
 }) {
   return (
     <div className="rounded-lg bg-white p-3 text-[13px] shadow max-h-[52vh] overflow-y-auto" style={{ boxShadow: '0 0 0 2px rgba(0,0,0,.06)' }}>
       <button onClick={onClose} className="float-right text-muted-foreground hover:text-foreground" aria-label="Close validation card">×</button>
-      {selection.kind === 'fixture' ? <FixtureBody f={selection.fixture} /> : <StationBody s={selection.station} net={selection.network} />}
+      {selection.kind === 'fixture'
+        ? <FixtureBody f={selection.fixture} runDay={runDay(payload?.lastrun)} />
+        : <StationBody s={selection.station} net={selection.network} payload={payload} />}
     </div>
   )
 }
@@ -105,7 +113,7 @@ const STATUS_EN: Record<string, string> = {
   'no-run': 'No model data — run /check-world.',
 }
 
-function FixtureBody({ f }: { f: Extract<ValidationSelection, { kind: 'fixture' }>['fixture'] }) {
+function FixtureBody({ f, runDay: day }: { f: Extract<ValidationSelection, { kind: 'fixture' }>['fixture']; runDay: string }) {
   const status = f.status ?? 'no-run'
   const url = safeUrl(f.external?.url)
   const c = f.commensurability as Record<string, string | number | undefined>
@@ -114,7 +122,7 @@ function FixtureBody({ f }: { f: Extract<ValidationSelection, { kind: 'fixture' 
     <>
       <div className="font-semibold">{f.id}</div>
       <div className="mb-1 text-[12px]">
-        Model <b>{fmt(f.model_value, 1)} dB</b>
+        Model <b>{fmt(f.model_value, 1)} dB</b>{day ? ` (${day})` : ''}
         {extBand?.[0] != null || extBand?.[1] != null ? <> · external <b>{band(extBand)} dB</b></> : null}
         {' → '}<span className="font-semibold" style={{ color: FIXTURE_COLOR[status] ?? '#8d6e63' }}>{status}</span>
       </div>
@@ -152,19 +160,39 @@ function FixtureBody({ f }: { f: Extract<ValidationSelection, { kind: 'fixture' 
 const LEVEL_METRICS = ['lden', 'ld', 'le', 'ln', 'laeq_24h', 'laeq_tag_0622', 'laeq_nacht_2206'] as const
 const TRAFFIC_METRICS = ['trains_per_day', 'freight_trains_per_day', 'trains_night', 'mean_speed_kmh', 'mean_train_length_m'] as const
 
-function StationBody({ s, net }: {
+const VERDICT_EN: Record<string, string> = {
+  'within_bound': 'Matches the measurement.',
+  'above': 'Model louder than measured.',
+  'below': 'Model quieter than measured.',
+  'unattributable': 'Different conditions \u2014 not comparable.',
+  'trend_only': 'Trend anchor, no verdict.',
+  'error': 'Query failed.',
+  'no_probe': 'Station not found in model data.',
+  'no_model': 'No model value.',
+  'no-delta': 'No model data \u2014 regenerate the delta table.',
+}
+
+function StationBody({ s, net, payload }: {
   s: Extract<ValidationSelection, { kind: 'station' }>['station']
   net: Extract<ValidationSelection, { kind: 'station' }>['network']
+  payload: ValidationPayload | null
 }) {
   const verdict = s.verdict ?? 'no-delta'
   const srcUrl = safeUrl(net.source?.[0])
   const note = (net.commensurability as Record<string, string | undefined>).note
+  const meta = payload?.networks.find((n) => n.network === net.network && n.year === net.year)?.delta_meta
+  const day = runDay(meta as ValidationArtifactMeta | null)
   return (
     <>
       <div className="font-semibold">{s.name}</div>
-      <div className="mb-1 text-[11px] text-muted-foreground">
-        {net.network} {net.year} · station {s.station_id}{s.font ? ` · dominant on site: ${s.font}` : ''}
+      <div className="mb-1 text-[13px]">
+        Measured <b>{fmt(s.measured_value)} dB</b> ({s.months_covered ?? '?'} mo, {net.year})
+        {' \u00b7 '}model <b>{fmt(s.model_value)} dB</b>{day ? ` (${day})` : ''}
+        {' \u2192 '}<span className="font-semibold" style={{ color: STATION_COLOR[verdict] ?? '#8d6e63' }}>{verdict}</span>
       </div>
+      <div className="mb-1 text-[11px] text-muted-foreground">{VERDICT_EN[verdict] ?? ''}</div>
+      <details className="mt-1 text-[11px] text-muted-foreground">
+        <summary className="cursor-pointer">evidence</summary>
       <table className="w-full border-collapse">
         <tbody>
           {s.delta_db != null ? (
@@ -202,11 +230,12 @@ function StationBody({ s, net }: {
           {s.months_covered != null && <Row label="coverage">{s.months_covered} mo · {s.coverage_pct ?? '—'} %</Row>}
         </tbody>
       </table>
-      {note && <div className="mt-1 whitespace-pre-wrap border-l-2 border-neutral-200 bg-neutral-50 p-1.5 text-[11px]">{note}</div>}
-      <div className="mt-1 text-[11px] text-muted-foreground">
+      {note && <div className="mt-1 whitespace-pre-wrap border-l-2 border-neutral-200 bg-neutral-50 p-1.5">{note}</div>}
+      <div className="mt-1">
         {net.license}
-        {srcUrl && <> · <a href={srcUrl} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">source</a></>}
+        {srcUrl && (<> · <a href={srcUrl} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">source</a></>)}
       </div>
+      </details>
     </>
   )
 }
