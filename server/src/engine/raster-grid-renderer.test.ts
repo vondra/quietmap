@@ -69,7 +69,8 @@ test('renders a real dem tile over Prague', PRAGUE_RASTERS, async () => {
   assert.ok(png3.length > 500)
 })
 
-test('ocean tile outside prepared data is transparent', PRAGUE_RASTERS, async () => {
-  const png = await renderGridTile(PRAGUE_PREPARED, 'dem', 6, 20, 20)
+test('ocean tile over coverage-verified absence (0-byte squares) is transparent', PRAGUE_RASTERS, async () => {
+  // z6 8/40: South Pacific around 45°S 130°W; every z9 square there is a 0-byte file.
+  const png = await renderGridTile(PRAGUE_PREPARED, 'dem', 6, 8, 40)
   assert.ok(png.length > 100 && png.length < 2000)
 })
