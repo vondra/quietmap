@@ -138,13 +138,17 @@ class WorldBuildTest(unittest.TestCase):
             planet.write_text('another planet')
             with self.assertRaisesRegex(ValueError, f'frozen source changed.*{planet.name}'), idle:
                 world.resume_steps(database, {'a': 1}, steps, [code], [code, planet])
+            code.unlink()  # a deleted code file is reported, never stat-ed (the refused pin above kept the new planet)
+            with contextlib.redirect_stdout(io.StringIO()) as printed, idle:
+                world.resume_steps(database, {'a': 1}, steps, [code], [planet])
+            self.assertEqual(json.loads(printed.getvalue())['code_changed'], [str(code)])
             database.execute('DROP TABLE inputs')  # interrupted while pinning: the previous pin is unknown
             with contextlib.redirect_stdout(io.StringIO()) as printed, idle:
-                world.resume_steps(database, {'a': 1}, steps, [code], [code, planet])
+                world.resume_steps(database, {'a': 1}, steps, [code], [planet])
             self.assertEqual(json.loads(printed.getvalue())['code_changed'], 'unpinned')
             database.execute("UPDATE build SET status='complete'")
             with self.assertRaisesRegex(ValueError, 'complete build'), idle:
-                world.resume_steps(database, {'a': 1}, steps, [code], [code, planet])
+                world.resume_steps(database, {'a': 1}, steps, [code], [planet])
         started = []
         world.run_plan(steps, lambda step: started.append(step.name), {'rasters'})
         self.assertEqual(started, ['osm', 'aircraft'])
