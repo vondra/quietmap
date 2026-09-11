@@ -121,34 +121,33 @@ function FixtureBody({ f, runDay: day }: { f: Extract<ValidationSelection, { kin
   return (
     <>
       <div className="font-semibold">{f.id}</div>
-      <div className="mb-1 text-[12px]">
-        Model <b>{fmt(f.model_value, 1)} dB</b>{day ? ` (${day})` : ''}
-        {extBand?.[0] != null || extBand?.[1] != null ? <> · external <b>{band(extBand)} dB</b></> : null}
-        {' → '}<span className="font-semibold" style={{ color: FIXTURE_COLOR[status] ?? '#8d6e63' }}>{status}</span>
-      </div>
-      <div className="mb-1 text-[11px] text-muted-foreground">{STATUS_EN[status] ?? ''}</div>
+      <div className="mb-1 text-[11px] text-muted-foreground"><b>{status}</b> — {STATUS_EN[status] ?? ''}</div>
+      <table className="w-full border-collapse">
+        <tbody>
+          <Row label="Verification source">
+            {f.external?.metric ?? '\u2014'}
+            {url && (<> · <a href={url} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">link</a></>)}
+          </Row>
+          <Row label="Source date">
+            {f.external?.year ?? '\u2014'}{f.external?.months_covered != null ? ` (${f.external.months_covered} mo)` : ''}
+          </Row>
+          <Row label="Source Lden">{extBand?.[0] != null || extBand?.[1] != null ? `${band(extBand)} dB` : (f.external?.value ?? '\u2014')}</Row>
+          <Row label="QuietMap Lden"><b>{fmt(f.model_value, 1)} dB</b>{day ? ` (${day})` : ''}</Row>
+          <Row label="Lden difference">{f.ext ? <>Δ {f.ext.delta > 0 ? '+' : ''}{fmt(f.ext.delta)} dB ({f.ext.side})</> : (f.drift != null ? <>{f.drift > 0 ? '+' : ''}{fmt(f.drift, 2)} dB vs verified range</> : '\u2014')}</Row>
+          <Row label="Verified range">{band(f.regression_band)} dB</Row>
+          {f.known_gap && <Row label="known gap"><b>{f.known_gap}</b></Row>}
+        </tbody>
+      </table>
       <details className="mt-1 text-[11px] text-muted-foreground">
         <summary className="cursor-pointer">evidence</summary>
-        <table className="w-full border-collapse">
-          <tbody>
-            <Row label="band">{band(f.regression_band)} (drift {fmt(f.drift, 2)})</Row>
-            <Row label="external">{f.external?.value ?? '—'}</Row>
-            <Row label="source">
-              {f.external?.metric ?? ''} ({f.external?.year ?? '—'})
-              {url && (<>· <a href={url} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">link</a></>)}
-            </Row>
-            {f.known_gap && <Row label="known gap"><b>{f.known_gap}</b></Row>}
-          </tbody>
-        </table>
+        <div className="mt-1">{f.external?.value ?? ''}</div>
         <div className="mt-1">
           {(f.tags ?? []).map((t) => (
             <span key={t} className="mr-1 inline-block rounded bg-neutral-100 px-1 text-[11px]">{t}</span>
           ))}
         </div>
         <div className="mt-1">
-          convention: {c.metric_variant} · {c.dominance}
-          {c.receiver_convention ? ` · ${c.receiver_convention}` : ''}
-          {c.coord_uncertainty_m ? ` · ±${c.coord_uncertainty_m} m` : ''}
+          {f.regime} · {f.anchor_type} · {f.role} · {c.metric_variant} · {c.dominance}
         </div>
         <div className="mt-1 whitespace-pre-wrap border-l-2 border-neutral-200 bg-neutral-50 p-1.5">{f.tolerance_note}</div>
         {f.caveats && <div className="mt-1 whitespace-pre-wrap border-l-2 border-neutral-200 bg-neutral-50 p-1.5">{f.caveats}</div>}
