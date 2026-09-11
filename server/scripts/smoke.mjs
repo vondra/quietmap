@@ -1,5 +1,8 @@
 // Start the compiled production entrypoint, probe it over loopback, and shut
-// it down gracefully. Uses a temporary frontend and never needs project data.
+// it down gracefully. Uses a temporary frontend and never needs project data
+// or credentials: the server refuses to start without Stay22 credentials
+// (stay.ts), and the probes never call Stay22, so fixture values stand in
+// unless the environment carries real ones.
 import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
@@ -45,6 +48,8 @@ const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const child = spawn(npm, ['start'], {
   cwd: serverRoot,
   env: {
+    STAY22_AID: 'compiled-smoke',
+    STAY22_API_KEY: 'compiled-smoke',
     ...process.env,
     PORT: String(port),
     HOST: '127.0.0.1',
