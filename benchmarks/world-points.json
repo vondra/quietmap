@@ -2423,10 +2423,10 @@
    "correction_provenance": null
   },
   "regression_band": [
-   39.66,
-   43.66
+   14.31,
+   18.31
   ],
-  "tolerance_note": "settlement v2 phase 1 (2026-06-12) landed the building source INSIDE the BS4142 practice band: 45.0 day / 35.0 night (was 40.7 / ~25 with the -20 night cut). Band = the practice range itself, not live+/-2. | v2 2026-07-09: band=live 44.47 +/-2; practice envelope stays external.band | v2 2026-08-09: band=live 41.66 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal); settlement screening moved down — plausible but watch; still inside BS4142 [40,55]"
+  "tolerance_note": "settlement v2 phase 1 (2026-06-12) landed the building source INSIDE the BS4142 practice band: 45.0 day / 35.0 night (was 40.7 / ~25 with the -20 night cut). Band = the practice range itself, not live+/-2. | v2 2026-07-09: band=live 44.47 +/-2; practice envelope stays external.band | v2 2026-08-09: band=live 41.66 +/-2 — re-lock at the certified screening physics (9863d74 six-defect fixpack + 5efbdf0 δ-prefilter removal); settlement screening moved down — plausible but watch; still inside BS4142 [40,55] | v2 2026-09-11: band=live 16.31 +/-2 (indoor value since owner decision 2026-09-02 14ce86f4a; probe verified inside the 39,696 m2 mall footprint, type 1 commercial)"
  },
  {
   "id": "bldg_old_town_square",
