@@ -11,6 +11,7 @@ import IsochronLayer from './IsochronLayer'
 import RasterOverlayLayer from './RasterOverlayLayer'
 import HeatmapOverlay, { HEATMAP_LAYERS } from './HeatmapOverlay'
 import HighlightLayer from './HighlightLayer'
+import HoverTooltip from './HoverTooltip'
 import CellInspectorLayer from './CellInspectorLayer'
 import MapStateSync from './MapStateSync'
 import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
@@ -175,6 +176,7 @@ export default function MapView({
       <CellInspectorLayer rasterOverlays={rasterOverlays ?? {}} />
       <IsochronLayer geojson={isochronGeojson ?? null} />
       <FlyToLocation location={selectedLocation ?? null} onArrived={handleArrived} />
+      <HoverTooltip sources={activeHeatmapSources} />
       <DetailPopup
         isCurrentDetailPosition={isCurrentDetailPosition}
         detailPosition={detailPosition ?? null}

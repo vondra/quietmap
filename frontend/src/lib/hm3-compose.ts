@@ -5,12 +5,14 @@
 /// mapping — alpha-compositing pre-coloured layers would be physically wrong and
 /// would break popup↔heatmap parity (the popup energy-sums the same way).
 
-import { NO_DATA } from './hm3-decoder'
-import { PALETTE_LUT } from './heatmap-palette'
+import { NO_DATA } from './hm3-decoder.ts'
+import { PALETTE_LUT } from './heatmap-palette.ts'
 
-// Linear energy 10^(byte·0.5/10) per quantised dB byte (0..254), precomputed so
-// the per-cell sum is a table read instead of a Math.pow.
-const ENERGY = (() => {
+/** Linear energy 10^(byte·0.5/10) per quantised dB byte (0..254; HM3 encodes
+ *  dB × 2), precomputed so a per-cell sum is a table read instead of a
+ *  Math.pow. The one place the byte decoding lives — every readout of a
+ *  cell (renderer, hover, stay pins) sums through it. */
+export const HM3_BYTE_ENERGY = (() => {
   const t = new Float32Array(255)
   for (let b = 0; b < 255; b++) t[b] = 10 ** ((b * 0.5) / 10)
   return t
@@ -32,7 +34,7 @@ function sumEnergy(grids: Uint8Array[]): Uint8Array {
       const b = grid[i]
       if (b === NO_DATA) continue
       anyData = true
-      sumLin += ENERGY[b]
+      sumLin += HM3_BYTE_ENERGY[b]
     }
     if (!anyData) continue
     const q = Math.round(10 * Math.log10(sumLin) * 2)

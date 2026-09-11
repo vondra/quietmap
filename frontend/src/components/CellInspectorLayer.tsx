@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Source, Layer, useMap } from 'react-map-gl/maplibre'
 import { lngLatToTile, tileXToLng, tileYToLat } from '../lib/tile-math'
+import { useMapHover } from '../lib/use-map-hover'
+import MapHoverBox from './MapHoverBox'
 import {
   formatBuildingAt,
   parseBuildingAtResponse,
@@ -36,22 +38,14 @@ type BuildingLookupRequest = {
 
 /**
  * Hover tooltip that shows raster-cell values for terrain/forest and the
- * exact vector obstacle height/type for buildings under the cursor. Active
- * only while at least one Advanced overlay is on AND every noise-source layer
- * is off — otherwise the popup takes priority.
+ * exact vector obstacle height/type for buildings under the cursor, from
+ * zoom 14 while at least one Advanced overlay is on.
  */
 export default function CellInspectorLayer({
   rasterOverlays,
 }: CellInspectorLayerProps) {
   const { current: mapRef } = useMap()
   const tileCache = useRef<Map<string, TileEntry>>(new Map())
-  const [hover, setHover] = useState<{
-    lat: number
-    lng: number
-    clientX: number
-    clientY: number
-    zoom: number
-  } | null>(null)
   const [tileEpoch, setTileEpoch] = useState(0)
   const [buildingAt, setBuildingAt] = useState<BuildingAtState>({
     status: 'ready',
@@ -75,33 +69,8 @@ export default function CellInspectorLayer({
   const buildingOverlayActive = activeLayers.includes('building')
   const shouldRenderCellOutline = activeLayers.some(layer => layer !== 'building')
 
-  useEffect(() => {
-    if (!enabled || !mapRef) {
-      setHover(null)
-      return
-    }
-    const map = mapRef.getMap()
-    const onMove = (e: maplibregl.MapMouseEvent) => {
-      const zoom = map.getZoom()
-      if (zoom < MIN_ZOOM) { setHover(null); return }
-      setHover({
-        lat: e.lngLat.lat,
-        lng: e.lngLat.lng,
-        clientX: e.point.x,
-        clientY: e.point.y,
-        zoom,
-      })
-    }
-    const onLeave = () => setHover(null)
-    map.on('mousemove', onMove)
-    map.on('mouseout', onLeave)
-    map.on('dragstart', onLeave)
-    return () => {
-      map.off('mousemove', onMove)
-      map.off('mouseout', onLeave)
-      map.off('dragstart', onLeave)
-    }
-  }, [mapRef, enabled])
+  const pointer = useMapHover(mapRef, enabled)
+  const hover = pointer && pointer.zoom >= MIN_ZOOM ? pointer : null
 
   // Raster cells are centered on integer multiples of 1/3600° (the sample
   // grid positions), so `Math.round` snaps the hover point to the nearest
@@ -255,18 +224,9 @@ export default function CellInspectorLayer({
           />
         </Source>
       ) : null}
-      <div
-        style={{
-          position: 'fixed',
-          left: hover.clientX + 14,
-          top: hover.clientY + 14,
-          pointerEvents: 'none',
-          zIndex: 1002,
-        }}
-        className="rounded-md bg-zinc-900/95 text-zinc-50 border border-zinc-700/60 shadow-xl px-2 py-1 font-mono text-[11px] leading-snug"
-      >
+      <MapHoverBox hover={hover} placement="below">
         {renderLines(values, buildingOverlayActive ? buildingAt : null)}
-      </div>
+      </MapHoverBox>
     </>
   )
 }

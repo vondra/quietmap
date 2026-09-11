@@ -6,6 +6,7 @@ import { useMap } from 'react-map-gl/maplibre'
 
 import { TILE_PX } from '../lib/hm3-decoder'
 import { PREVIEW_DELTA } from '../lib/hm3-compose'
+import { hiDpiTileZoomOffset } from '../lib/hm3-sample'
 import { lngLatToTileFloat } from '../lib/tile-math'
 import { MIN_ZOOM, WORLD_EXTENT, buildKey, tileUrl, useTileBuild, type TileBuilds } from '../lib/tile-urls'
 import { loadTileProgressively, fetchAncestor, type HeatTile } from '../lib/progressive-tile-loader'
@@ -180,7 +181,7 @@ export default function HeatmapOverlay({ sources }: Props): null {
           textureParameters: { minFilter: 'linear', magFilter: 'linear' },
         }))
       } else {
-        const zoomOffset = dpr >= 1.5 ? 1 : 0
+        const zoomOffset = hiDpiTileZoomOffset(dpr)
         // Offset is part of the registry key AND the layer id: a DPR flip must
         // re-key the layer (deck won't recompute tile selection on an options
         // change alone) and start a fresh loaded/tails registry with it.
