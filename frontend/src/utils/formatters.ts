@@ -1,8 +1,8 @@
 // Small display helpers shared by DetailPopup. Kept pure — no React, no IO.
 
 /** Formats a signed dB value; always prefixes + for positive numbers. */
-export function fmt(v: number): string {
-  return v > 0 ? `+${v.toFixed(1)}` : v.toFixed(1)
+export function fmt(v: number, digits = 1): string {
+  return v > 0 ? `+${v.toFixed(digits)}` : v.toFixed(digits)
 }
 
 /**

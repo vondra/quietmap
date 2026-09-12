@@ -30,20 +30,25 @@ type Meta = {
 }
 
 const object = (value: unknown): value is Obj => value != null && typeof value === 'object' && !Array.isArray(value)
+const safeUrl = (value: unknown): string | null =>
+  typeof value === 'string' && /^https?:\/\//i.test(value) ? value : null
 const finite = (value: unknown): number | null => Number.isFinite(value) ? value as number : null
 const text = (value: unknown): string | null => typeof value === 'string' && value.length > 0 ? value : null
 
-function readJson(path: string, label: string, warnings: string[]): unknown | null {
-  try { return JSON.parse(readFileSync(path, 'utf8')) as unknown }
-  catch (error) {
+/** Parse a catalog and hash the SAME bytes — the artifact-identity checks
+ *  below compare that hash, so the two must never come from separate reads. */
+function readCatalog(path: string, label: string, warnings: string[]): { value: unknown; sha256: string | null } {
+  try {
+    const bytes = readFileSync(path)
+    return { value: JSON.parse(bytes.toString('utf8')) as unknown, sha256: createHash('sha256').update(bytes).digest('hex') }
+  } catch (error) {
     warnings.push(`${label} unreadable — ${error instanceof Error ? error.message : String(error)}`)
-    return null
+    return { value: null, sha256: null }
   }
 }
 
-function fileSha256(path: string): string | null {
-  try { return createHash('sha256').update(readFileSync(path)).digest('hex') }
-  catch { return null }
+function readJson(path: string, label: string, warnings: string[]): unknown | null {
+  return readCatalog(path, label, warnings).value
 }
 
 function metadata(value: Obj, time: 'timestamp' | 'generated_at'): Meta {
@@ -154,10 +159,13 @@ export async function validationViewRoutes(app: FastifyInstance, options: {
       warnings.push(`model cohort unavailable — model results hidden; ${error instanceof Error ? error.message : String(error)}`)
     }
     const pointPath = resolve(root, 'benchmarks/world-points.json')
-    const points = catalogRows(readJson(pointPath, 'world fixture catalog', warnings), 'id', 'world fixture', warnings,
-      row => Number.isFinite(row.lat) && Number.isFinite(row.lng) ? null : 'has non-finite coordinates')
+    const pointCatalog = readCatalog(pointPath, 'world fixture catalog', warnings)
+    const points = catalogRows(pointCatalog.value, 'id', 'world fixture', warnings,
+      row => !Number.isFinite(row.lat) || !Number.isFinite(row.lng) ? 'has non-finite coordinates'
+        : text(row.name) == null ? 'has no name'
+        : !object(row.external) ? 'has no external provenance' : null)
     const pointIds = new Set(points.map(point => point.id as string))
-    const fixturesSha256 = fileSha256(pointPath)
+    const fixturesSha256 = pointCatalog.sha256
 
     const runPath = resolve(root, 'data/validation/world-lastrun.json')
     let run: Obj | null = null
@@ -182,15 +190,17 @@ export async function validationViewRoutes(app: FastifyInstance, options: {
     const fixtures = points.map(point => {
       const result = runById.get(point.id as string)
       return {
-        kind: 'fixture', id: point.id, lat: point.lat, lng: point.lng,
-        regime: point.mode === 'total' ? point.regime : MODE_REGIME[point.mode as string],
+        id: point.id, name: point.name, lat: point.lat, lng: point.lng,
+        regime: point.mode === 'total' ? point.regime : MODE_REGIME[point.mode as string] ?? point.mode,
         mode: point.mode, metric_field: point.metric_field ?? 'lden', anchor_type: point.anchor_type,
         role: point.role, tags: point.tags, pair_id: point.pair_id ?? null,
-        external: point.external, commensurability: point.commensurability,
+        external: { ...(point.external as Obj), url: safeUrl((point.external as Obj).url) },
+        commensurability: point.commensurability,
         regression_band: point.regression_band ?? null, known_gap: point.known_gap ?? null,
         tolerance_note: point.tolerance_note, caveats: point.caveats ?? null,
         model_value: finite(result?.value), status: text(result?.status), drift: finite(result?.drift),
         ext: object(result?.ext) ? result.ext : null,
+        also_measured: [] as Obj[],
       }
     })
 
@@ -210,8 +220,7 @@ export async function validationViewRoutes(app: FastifyInstance, options: {
     for (const file of files) {
       const match = SNAPSHOT_FILE.exec(file)!
       const snapshotPath = resolve(root, 'benchmarks/validation/snapshots', file)
-      const snapshot = readJson(snapshotPath, file, warnings)
-      const snapshotSha256 = fileSha256(snapshotPath)
+      const { value: snapshot, sha256: snapshotSha256 } = readCatalog(snapshotPath, file, warnings)
       if (!object(snapshot) || snapshot.network !== match[1] || snapshot.year !== Number(match[2])
         || !Array.isArray(snapshot.stations) || !text(snapshot.measured_metric_field) || !text(snapshot.model_metric_field)) {
         if (snapshot !== null) warnings.push(`${file} has invalid catalog identity — omitted`)
@@ -253,7 +262,8 @@ export async function validationViewRoutes(app: FastifyInstance, options: {
         schema_version: snapshot.schema_version, network: snapshot.network, country_code: snapshot.country_code,
         year: snapshot.year, fetched_at: snapshot.fetched_at, mode: snapshot.mode,
         anchor_type: snapshot.anchor_type, regime: snapshot.regime, tags: snapshot.tags,
-        license: snapshot.license, source: snapshot.source, method: snapshot.method,
+        license: snapshot.license, method: snapshot.method,
+        source_url: Array.isArray(snapshot.source) ? safeUrl(snapshot.source[0]) : null,
         commensurability: snapshot.commensurability, comparison_mode: snapshot.comparison_mode,
         comparison_tolerance_db: snapshot.comparison_tolerance_db,
         comparison_tolerance_basis: snapshot.comparison_tolerance_basis,
@@ -268,7 +278,7 @@ export async function validationViewRoutes(app: FastifyInstance, options: {
             ? { delta: null, verdict: queryStatus === 'error' || queryStatus === 'no_coverage' ? queryStatus : null }
             : comparison(snapshot.comparison_mode, snapshot.comparison_tolerance_db, station[measuredField] as number, modelValue)
           return {
-            ...station, kind: 'station', network: snapshot.network, model,
+            ...station, network: snapshot.network, model,
             measured_metric_field: measuredField, model_metric_field: modelField,
             measured_value: station[measuredField], model_value: modelValue,
             delta_db: compared.delta,
@@ -277,6 +287,30 @@ export async function validationViewRoutes(app: FastifyInstance, options: {
         }),
       })
     }
+    // One dot per place. A station standing on a fixture's exact coordinates and
+    // comparing the same model metric is the same monitor carried twice — once
+    // as a gating anchor, once as a network measurement. Fold its reading into
+    // the fixture so the map draws it once and the card tells one story.
+    const fixtureByProbe = new Map(fixtures.map(fixture =>
+      [`${fixture.lat},${fixture.lng},${fixture.metric_field}`, fixture]))
+    for (const network of networks) {
+      for (const station of network.stations as Obj[]) {
+        const fixture = fixtureByProbe.get(`${station.lat},${station.lng},${network.model_metric_field}`)
+        if (!fixture || station.measured_value == null) continue
+        station.merged_into = fixture.id
+        // The anchor may already state this number from the same monitor (all
+        // four ZRH ones do) — fold the dot, not a second copy of the value.
+        const readings = (fixture.external as Obj).readings
+        if (Array.isArray(readings) && readings.some(reading =>
+          object(reading) && reading.value === station.measured_value)) continue
+        fixture.also_measured.push({
+          label: network.measured_metric_field, value: station.measured_value,
+          source: `${network.network} ${network.year}`,
+          url: network.source_url,
+        })
+      }
+    }
+
     return reply.send({
       model_cohort: currentCohort,
       lastrun: run ? metadata(run, 'timestamp') : null,

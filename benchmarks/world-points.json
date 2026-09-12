@@ -1,6 +1,7 @@
 [
  {
   "id": "road_cz_d1_8025",
+  "name": "D1 motorway, ŘSD section 1-8025",
   "lat": 50.00839,
   "lng": 14.55066,
   "mode": "source:road",
@@ -16,13 +17,25 @@
    "hard_ground_urban"
   ],
   "external": {
-   "value": "AADT 81,103 veh/day, TV 21.4% — model matched byte-exact (ratio 1.000)",
-   "metric": "ŘSD Celostátní sčítání dopravy 2020, section 1-8025 (counted 07/2020–06/2021)",
+   "source": "ŘSD Celostátní sčítání dopravy 2020, section 1-8025 (counted 07/2020–06/2021)",
    "year": 2020,
    "url": "https://geoportal.rsd.cz/arcgis/rest/services/ScitaniDopravy/MapServer/3/query",
    "months_covered": 12,
    "annualization_method": "ŘSD CSD 2020 annual section average (counted 07/2020-06/2021)",
-   "band": null
+   "readings": [
+    {
+     "label": "AADT",
+     "value": 81103,
+     "unit": "veh/day"
+    },
+    {
+     "label": "heavy share",
+     "value": 21.4,
+     "unit": "%"
+    }
+   ],
+   "band": null,
+   "note": "Model matched the section count byte-exact (ratio 1.000)."
   },
   "commensurability": {
    "metric_variant": "input_data",
@@ -37,6 +50,7 @@
  },
  {
   "id": "road_cz_d4_axis",
+  "name": "D4 expressway, on the carriageway",
   "lat": 49.8189,
   "lng": 14.2229,
   "mode": "source:road",
@@ -51,16 +65,17 @@
   ],
   "pair_id": "d4_sdc_distance_pair",
   "external": {
-   "value": "Ldvn >75",
-   "metric": "CZ SHM 2022 road raster",
+   "source": "CZ SHM 2022 road raster",
    "year": 2022,
    "url": "https://geoportal.mzcr.cz/server/rest/services/SHM2022",
    "months_covered": 12,
    "annualization_method": "official END annual model (CZ SHM 2022; traffic basis CSD 2020)",
+   "readings": null,
    "band": [
     75,
     null
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden_band",
@@ -80,6 +95,7 @@
  },
  {
   "id": "road_cz_d4_115m",
+  "name": "D4 expressway, 115 m from the road",
   "lat": 49.819,
   "lng": 14.2245,
   "mode": "source:road",
@@ -95,16 +111,17 @@
   ],
   "pair_id": "d4_sdc_distance_pair",
   "external": {
-   "value": "Ldvn 60–65",
-   "metric": "CZ SHM 2022 road raster",
+   "source": "CZ SHM 2022 road raster",
    "year": 2022,
    "url": "https://geoportal.mzcr.cz/server/rest/services/SHM2022",
    "months_covered": 12,
    "annualization_method": "official END annual model (CZ SHM 2022; traffic basis CSD 2020)",
+   "readings": null,
    "band": [
     60,
     65
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden_band",
@@ -124,6 +141,7 @@
  },
  {
   "id": "road_cz_praha_legerova",
+  "name": "Legerova street, Prague",
   "lat": 50.0735,
   "lng": 14.4304,
   "mode": "source:road",
@@ -140,16 +158,23 @@
    "dense_urban"
   ],
   "external": {
-   "value": "Ldvn 70–75 on-axis; TSK 2025 counted 45,500 veh/day on the street",
-   "metric": "CZ SHM 2022 road raster + TSK Praha traffic census 2025",
+   "source": "CZ SHM 2022 road raster + TSK Praha traffic census 2025",
    "year": 2022,
    "url": "https://geoportal.mzcr.cz/server/rest/services/SHM2022",
    "months_covered": 12,
    "annualization_method": "official END annual model (CZ SHM 2022; traffic basis CSD 2020); TSK 2025 census cited for AADT truth",
+   "readings": [
+    {
+     "label": "TSK Praha count 2025",
+     "value": 45500,
+     "unit": "veh/day"
+    }
+   ],
    "band": [
     70,
     75
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden_band",
@@ -169,6 +194,7 @@
  },
  {
   "id": "road_gb_m25_j17_onroad",
+  "name": "M25 junction 17, on the carriageway",
   "lat": 51.64423,
   "lng": -0.50124,
   "mode": "source:road",
@@ -183,16 +209,23 @@
   ],
   "pair_id": "m25_j17_wall_pair",
   "external": {
-   "value": "Lden 81.02 (exact pixel)",
-   "metric": "Defra England Round 4 strategic noise map Lden (LimA), data year 2021",
+   "source": "Defra England Round 4 strategic noise map Lden (LimA), data year 2021",
    "year": 2021,
    "url": "https://environment.data.gov.uk/spatialdata/road-noise-all-metrics-england-round-4/wms",
    "months_covered": 12,
    "annualization_method": "Defra Round 4 annual END model (LimA), data year 2021",
+   "readings": [
+    {
+     "label": "map pixel",
+     "value": 81.02,
+     "unit": "dB Lden"
+    }
+   ],
    "band": [
     79.0,
     83.0
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden",
@@ -212,6 +245,7 @@
  },
  {
   "id": "road_gb_m25_j17_120m",
+  "name": "M25 junction 17, 120 m from the road",
   "lat": 51.6443,
   "lng": -0.4995,
   "mode": "source:road",
@@ -229,16 +263,23 @@
   ],
   "pair_id": "m25_j17_wall_pair",
   "external": {
-   "value": "Lden 57.22 (exact pixel)",
-   "metric": "Defra England Round 4 strategic noise map Lden (LimA), data year 2021",
+   "source": "Defra England Round 4 strategic noise map Lden (LimA), data year 2021",
    "year": 2021,
    "url": "https://environment.data.gov.uk/spatialdata/road-noise-all-metrics-england-round-4/wms",
    "months_covered": 12,
    "annualization_method": "Defra Round 4 annual END model (LimA), data year 2021",
+   "readings": [
+    {
+     "label": "map pixel",
+     "value": 57.22,
+     "unit": "dB Lden"
+    }
+   ],
    "band": [
     55.2,
     59.2
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden",
@@ -259,6 +300,7 @@
  },
  {
   "id": "road_de_halensee_onroad",
+  "name": "A100 Halensee, Berlin — on the carriageway",
   "lat": 52.49726,
   "lng": 13.283,
   "mode": "source:road",
@@ -275,16 +317,17 @@
   ],
   "pair_id": "halensee_shield_pair",
   "external": {
-   "value": "Lden ≥75 (road layer)",
-   "metric": "Berlin Umweltatlas 2022 road Lden, 10 m grid, 4 m",
+   "source": "Berlin Umweltatlas 2022 road Lden, 10 m grid, 4 m",
    "year": 2022,
    "url": "https://gdi.berlin.de/services/wms/ua_stratlaerm_2022",
    "months_covered": 12,
    "annualization_method": "Berlin Umweltatlas 2022 END annual model, 10 m grid, 4 m",
+   "readings": null,
    "band": [
     75,
     null
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden_band",
@@ -304,6 +347,7 @@
  },
  {
   "id": "road_de_halensee_150m",
+  "name": "A100 Halensee, Berlin — 150 m from the road",
   "lat": 52.4972,
   "lng": 13.2855,
   "mode": "source:road",
@@ -319,16 +363,17 @@
   ],
   "pair_id": "halensee_shield_pair",
   "external": {
-   "value": "Lden 59–64 (road layer)",
-   "metric": "Berlin Umweltatlas 2022 road Lden, 10 m grid, 4 m",
+   "source": "Berlin Umweltatlas 2022 road Lden, 10 m grid, 4 m",
    "year": 2022,
    "url": "https://gdi.berlin.de/services/wms/ua_stratlaerm_2022",
    "months_covered": 12,
    "annualization_method": "Berlin Umweltatlas 2022 END annual model, 10 m grid, 4 m",
+   "readings": null,
    "band": [
     59,
     64
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden_band",
@@ -348,6 +393,7 @@
  },
  {
   "id": "road_fr_paris_periph_sw",
+  "name": "Périphérique, Paris south-west",
   "lat": 48.837,
   "lng": 2.268,
   "mode": "source:road",
@@ -362,16 +408,17 @@
    "hard_ground_urban"
   ],
   "external": {
-   "value": "Lden 70–75 (road)",
-   "metric": "Bruitparif Paris agglo strategic map (CSB 4th échéance), road Lden",
+   "source": "Bruitparif Paris agglo strategic map (CSB 4th échéance), road Lden",
    "year": null,
    "url": "https://raster.bruitparif.fr/mapproxy/service",
    "months_covered": 12,
    "annualization_method": "Bruitparif CSB 4th échéance END annual model",
+   "readings": null,
    "band": [
     70,
     75
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden_band",
@@ -392,6 +439,7 @@
  },
  {
   "id": "road_nl_amsterdam_overtoom",
+  "name": "Overtoom, Amsterdam",
   "lat": 52.3606,
   "lng": 4.8669,
   "mode": "source:road",
@@ -406,16 +454,23 @@
    "street_canyon"
   ],
   "external": {
-   "value": "Lden 71 wegverkeer (indicative)",
-   "metric": "RIVM 2020 road-traffic map (RMV2012)",
+   "source": "RIVM 2020 road-traffic map (RMV2012)",
    "year": 2020,
    "url": "https://data.rivm.nl/geo/alo/wms",
    "months_covered": 12,
    "annualization_method": "RIVM 2020 RMV2012 annual model (indicative)",
+   "readings": [
+    {
+     "label": "map value (indicative)",
+     "value": 71,
+     "unit": "dB Lden"
+    }
+   ],
    "band": [
     68,
     74
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden",
@@ -436,6 +491,7 @@
  },
  {
   "id": "road_cz_hlucinsko_ii466",
+  "name": "Road II/466, Hlučínsko",
   "lat": 49.98953,
   "lng": 18.1288,
   "mode": "source:road",
@@ -449,13 +505,35 @@
    "village"
   ],
   "external": {
-   "value": "ŘSD section on II/466: 850 light / 55 M / 17 H / 15 moto — replaced PL-bleed row 447/16/225/1873 (+4.9 dB emission, audit R2 natural A/B)",
-   "metric": "ŘSD CSD 2020 + road-report R2",
+   "source": "ŘSD CSD 2020 + road-report R2",
    "year": 2020,
    "url": "https://geoportal.rsd.cz/arcgis/rest/services/ScitaniDopravy/MapServer/3/query",
    "months_covered": 12,
    "annualization_method": "ŘSD CSD 2020 annual section average",
-   "band": null
+   "readings": [
+    {
+     "label": "light",
+     "value": 850,
+     "unit": "veh/day"
+    },
+    {
+     "label": "medium",
+     "value": 55,
+     "unit": "veh/day"
+    },
+    {
+     "label": "heavy",
+     "value": 17,
+     "unit": "veh/day"
+    },
+    {
+     "label": "motorcycles",
+     "value": 15,
+     "unit": "veh/day"
+    }
+   ],
+   "band": null,
+   "note": "Replaced a Polish-bleed row (447/16/225/1873) worth +4.9 dB of emission — audit R2 natural A/B."
   },
   "commensurability": {
    "metric_variant": "input_data",
@@ -469,6 +547,7 @@
  },
  {
   "id": "road_us_seattle_i5_olive",
+  "name": "I-5 at Olive Way, Seattle",
   "lat": 47.61625,
   "lng": -122.32888,
   "mode": "source:road",
@@ -483,13 +562,20 @@
    "osm_sparse"
   ],
   "external": {
-   "value": "WSDOT 2024 AADT 184,000 (milepost 166.20, Olive Way undercrossing); BTS 2022 24-h LAeq band 70.0–79.9 (≠Lden, 38 m/px)",
-   "metric": "WSDOT traffic REST ReportingYear 2024 + BTS National Transportation Noise Map 2022",
+   "source": "WSDOT traffic REST ReportingYear 2024 + BTS National Transportation Noise Map 2022",
    "year": 2024,
    "url": "https://data.wsdot.wa.gov/arcgis/rest/services/Shared/TrafficData/MapServer/0",
    "months_covered": 12,
    "annualization_method": "WSDOT 2024 annual AADT; BTS band is 24-h LAeq (not ingested as level anchor)",
-   "band": null
+   "readings": [
+    {
+     "label": "AADT",
+     "value": 184000,
+     "unit": "veh/day"
+    }
+   ],
+   "band": null,
+   "note": "WSDOT milepost 166.20, Olive Way undercrossing. The BTS 2022 noise map gives a 24-h LAeq class of 70.0–79.9 dB at 38 m/px — not Lden, so it is not used as a level anchor."
   },
   "commensurability": {
    "metric_variant": "input_data",
@@ -505,6 +591,7 @@
  },
  {
   "id": "rail_usti_zalezly",
+  "name": "Railway at Zálezly, Ústí nad Labem",
   "lat": 50.581,
   "lng": 14.0418,
   "mode": "source:railway",
@@ -520,16 +607,17 @@
    "inversion_prone_valley"
   ],
   "external": {
-   "value": "Lden 60–65 + Ln 60–65",
-   "metric": "SHM2022 rail raster (Zeleznice_Ldvn/Ln ImageServer identify)",
+   "source": "SHM2022 rail raster (Zeleznice_Ldvn/Ln ImageServer identify)",
    "year": 2022,
    "url": "https://geoportal.mzcr.cz/server/rest/services/SHM2022",
    "months_covered": 12,
    "annualization_method": "official END annual model (CZ SHM 2022; traffic basis CSD 2020); real SŽ counts incl. freight",
+   "readings": null,
    "band": [
     60,
     65
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden_band",
@@ -550,6 +638,7 @@
  },
  {
   "id": "rail_zabori",
+  "name": "Railway at Záboří nad Labem",
   "lat": 50.0284,
   "lng": 15.3466,
   "mode": "source:railway",
@@ -565,16 +654,17 @@
    "village"
   ],
   "external": {
-   "value": "Lden 65–70 + Ln 60–65",
-   "metric": "SHM2022 rail raster (Zeleznice_Ldvn/Ln ImageServer identify)",
+   "source": "SHM2022 rail raster (Zeleznice_Ldvn/Ln ImageServer identify)",
    "year": 2022,
    "url": "https://geoportal.mzcr.cz/server/rest/services/SHM2022",
    "months_covered": 12,
    "annualization_method": "official END annual model (CZ SHM 2022; traffic basis CSD 2020); real SŽ counts incl. freight",
+   "readings": null,
    "band": [
     65,
     70
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden_band",
@@ -595,6 +685,7 @@
  },
  {
   "id": "rail_revnice",
+  "name": "Railway at Řevnice",
   "lat": 49.9134,
   "lng": 14.2403,
   "mode": "source:railway",
@@ -612,16 +703,17 @@
    "suburban"
   ],
   "external": {
-   "value": "Lden <50 (NoData) + Ln 45–50",
-   "metric": "SHM2022 rail raster (Zeleznice_Ldvn/Ln ImageServer identify)",
+   "source": "SHM2022 rail raster (Zeleznice_Ldvn/Ln ImageServer identify)",
    "year": 2022,
    "url": "https://geoportal.mzcr.cz/server/rest/services/SHM2022",
    "months_covered": 12,
    "annualization_method": "official END annual model (CZ SHM 2022; traffic basis CSD 2020); real SŽ counts incl. freight",
+   "readings": null,
    "band": [
     null,
     50
-   ]
+   ],
+   "note": "Lden falls below the map's lowest class (NoData)."
   },
   "commensurability": {
    "metric_variant": "lden_band",
@@ -642,6 +734,7 @@
  },
  {
   "id": "ind_ostrava_kuncicky",
+  "name": "Steelworks, Ostrava-Kunčičky",
   "lat": 49.824,
   "lng": 18.301,
   "mode": "source:industrial",
@@ -657,16 +750,17 @@
    "suburban"
   ],
   "external": {
-   "value": "Ldvn 70–75 (identify pixel class 5; >75 core on premises)",
-   "metric": "CZ SHM 2022 industry raster",
+   "source": "CZ SHM 2022 industry raster",
    "year": 2022,
    "url": "https://geoportal.mzcr.cz/server/rest/services/SHM2022/Aglomerace_Prumysl_Ldvn/ImageServer",
    "months_covered": 12,
    "annualization_method": "official END annual model (CZ SHM 2022 industry raster)",
+   "readings": null,
    "band": [
     70,
     75
-   ]
+   ],
+   "note": "Identify pixel class 5; the >75 dB core sits on the premises."
   },
   "commensurability": {
    "metric_variant": "lden_band",
@@ -687,6 +781,7 @@
  },
  {
   "id": "ind_tata_ijmuiden_velsen",
+  "name": "Tata Steel IJmuiden, Velsen-Noord",
   "lat": 52.474,
   "lng": 4.633,
   "mode": "source:industrial",
@@ -702,16 +797,23 @@
    "coastal_windy"
   ],
   "external": {
-   "value": "Lden 65 (RIVM industrie Lden actueel, GRAY_INDEX continuous dB) at Velsen-Noord, adjacent to Tata Steel IJmuiden",
-   "metric": "NL RIVM 'Geluid lden industrie actueel' raster (END 4th round)",
+   "source": "NL RIVM 'Geluid lden industrie actueel' raster (END 4th round)",
    "year": 2021,
    "url": "https://data.rivm.nl/geo/alo/ows?LAYERS=rivm_Geluid_lden_industrie_actueel",
    "months_covered": 12,
    "annualization_method": "official END annual industry model (NL RIVM continuous-dB raster)",
+   "readings": [
+    {
+     "label": "raster at Velsen-Noord",
+     "value": 65,
+     "unit": "dB Lden"
+    }
+   ],
    "band": [
     63,
     67
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden_band",
@@ -732,6 +834,7 @@
  },
  {
   "id": "ind_thyssenkrupp_duisburg",
+  "name": "ThyssenKrupp Steel, Duisburg",
   "lat": 51.48,
   "lng": 6.71,
   "mode": "source:industrial",
@@ -746,16 +849,23 @@
    "dense_urban"
   ],
   "external": {
-   "value": "Lden 60 dB(A) (LANUV NRW IND_DEN, literal computed dB(A)) at ThyssenKrupp Steel Duisburg core",
-   "metric": "DE-NRW LANUV Umgebungslaerm Stufe 4 (2022) industry Lden raster",
+   "source": "DE-NRW LANUV Umgebungslaerm Stufe 4 (2022) industry Lden raster",
    "year": 2022,
    "url": "https://www.wms.nrw.de/umwelt/laerm_stufe4?LAYERS=IND_DEN",
    "months_covered": 12,
    "annualization_method": "official END annual industry model (LANUV NRW, literal dB(A))",
+   "readings": [
+    {
+     "label": "raster at the works core",
+     "value": 60,
+     "unit": "dB(A) Lden"
+    }
+   ],
    "band": [
     58,
     62
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden_band",
@@ -776,6 +886,7 @@
  },
  {
   "id": "ind_shell_pernis_botlek",
+  "name": "Shell Pernis refinery, Botlek",
   "lat": 51.881,
   "lng": 4.404,
   "mode": "source:industrial",
@@ -791,16 +902,23 @@
    "suburban"
   ],
   "external": {
-   "value": "Lden 56 (RIVM industrie Lden actueel, continuous dB) at Pernis village, beside the Shell Pernis / Botlek petrochemical complex",
-   "metric": "NL RIVM 'Geluid lden industrie actueel' raster (END 4th round)",
+   "source": "NL RIVM 'Geluid lden industrie actueel' raster (END 4th round)",
    "year": 2021,
    "url": "https://data.rivm.nl/geo/alo/ows?LAYERS=rivm_Geluid_lden_industrie_actueel",
    "months_covered": 12,
    "annualization_method": "official END annual industry model (NL RIVM continuous-dB raster)",
+   "readings": [
+    {
+     "label": "raster at Pernis village",
+     "value": 56,
+     "unit": "dB Lden"
+    }
+   ],
    "band": [
     54,
     58
-   ]
+   ],
+   "note": "Pernis village sits beside the Shell Pernis / Botlek petrochemical complex."
   },
   "commensurability": {
    "metric_variant": "lden_band",
@@ -821,6 +939,7 @@
  },
  {
   "id": "ind_mrac_quarry",
+  "name": "Mrač quarry",
   "lat": 49.8285,
   "lng": 14.701,
   "mode": "source:industrial",
@@ -835,16 +954,23 @@
    "source_height_assumed"
   ],
   "external": {
-   "value": "accredited LAeq,8h day 52.5 ± 1.8 dB at ~200 m (ZÚ protokol 104642/2022; limit 50 exceeded); machinery set LwA ≈ 120–122 dB",
-   "metric": "accredited measurement, TESO hluková studie 8/2024 (EIA STC2730)",
+   "source": "accredited measurement, TESO hluková studie 8/2024 (EIA STC2730)",
    "year": 2022,
    "url": "https://portal.cenia.cz/eiasea/download/RUlBX1NUQzI3MzBfcHJpbG9oYURva3VtZW50YWNlRE9DXzE3NzY3Njg4NjExMTEyNTQ4MDQucGRm/STC2730_prilohaDokumentaceDOC_6.pdf",
    "months_covered": 0,
    "annualization_method": "accredited LAeq,8h day 52.5 +/-1.8 -> Lden via audit quarry-profile offset -1.6 (industrial-report §G item 7)",
+   "readings": [
+    {
+     "label": "LAeq, 8 h day at ~200 m",
+     "value": 52.5,
+     "unit": "dB ±1.8"
+    }
+   ],
    "band": [
     48.9,
     52.9
-   ]
+   ],
+   "note": "Accredited measurement (ZÚ protokol 104642/2022); the 50 dB limit is exceeded. Machinery set LwA ≈ 120–122 dB. The band converts it to Lden with the quarry-profile offset −1.6 (industrial-report §G item 7)."
   },
   "commensurability": {
    "metric_variant": "laeq_spot_derived_lden",
@@ -865,6 +991,7 @@
  },
  {
   "id": "ind_temelin_npp",
+  "name": "Temelín nuclear power station",
   "lat": 49.193,
   "lng": 14.343,
   "mode": "source:industrial",
@@ -878,13 +1005,20 @@
    "masked_minor_source"
   ],
   "external": {
-   "value": "LAeq 33.9 ± 2.0 dB at Temelín village edge at full operation (35.2 at Kočín)",
-   "metric": "ETE SMR oznámení (Jacobs 10/2024), Tab. C.9",
+   "source": "ETE SMR oznámení (Jacobs 10/2024), Tab. C.9",
    "year": 2024,
    "url": "https://www.umweltbundesamt.at/fileadmin/site/themen/energie/kernenergie/verfahren/tschechien/ete_smr_uvp/scoping/cz_files/ete_smr_oznameni_zameru_smr_ete.pdf",
    "months_covered": 0,
    "annualization_method": "single campaign at full operation (Jacobs 10/2024 Tab C.9); no Lden derivation applied -- LAeq spot not band-comparable",
-   "band": null
+   "readings": [
+    {
+     "label": "LAeq at the village edge",
+     "value": 33.9,
+     "unit": "dB ±2.0"
+    }
+   ],
+   "band": null,
+   "note": "35.2 dB at Kočín. Single campaign at full operation; an LAeq spot value is not band-comparable to Lden."
   },
   "commensurability": {
    "metric_variant": "laeq_spot",
@@ -899,6 +1033,7 @@
  },
  {
   "id": "ind_spolana_libis",
+  "name": "Spolana chemical works, Libiš",
   "lat": 50.2532,
   "lng": 14.5055,
   "mode": "source:industrial",
@@ -911,16 +1046,17 @@
    "village"
   ],
   "external": {
-   "value": "operator EIA: hygiene limits 50/40 dB respected at dwellings 500–800 m → plausible real plant Lden ~40–50; 2024 posudek: local exceedances are road-dominated",
-   "metric": "EIA STC2140 oznámení + PECeN posudek OV1263",
+   "source": "EIA STC2140 oznámení + PECeN posudek OV1263",
    "year": 2024,
    "url": "https://portal.cenia.cz/eiasea/download/RUlBX1NUQzIxNDBfb3puYW1lbmlET0NfODEzMDk5NTg2NzcwNTAyMDA1LnBkZg/STC2140_oznameni.pdf",
    "months_covered": null,
    "annualization_method": "EIA compliance bound (hygiene limits respected at dwellings 500-800 m) -- an envelope, not a measurement",
+   "readings": null,
    "band": [
     40,
     50
-   ]
+   ],
+   "note": "Operator EIA: the 50/40 dB hygiene limits are respected at dwellings 500–800 m away, so a real plant Lden of 40–50 dB is plausible. The 2024 posudek finds local exceedances to be road-dominated."
   },
   "commensurability": {
    "metric_variant": "plausibility",
@@ -941,6 +1077,7 @@
  },
  {
   "id": "ind_pchery_wind_200m",
+  "name": "Pchery wind turbines, 200 m",
   "lat": 50.194384,
   "lng": 14.1288,
   "mode": "source:industrial",
@@ -956,13 +1093,23 @@
   ],
   "pair_id": "pchery_wind_ladder",
   "external": {
-   "value": "IEC-correct hand expectation ≈ 52–53 dB Lden at 200 m (audit §G.1); DK anchor: measured 40 dB(A) @6 m/s, 42–44 @8 m/s at neighbour dwellings",
-   "metric": "IEC 61400-11-based hand calc (industrial-report §G.1) + Miljøstyrelsen 2019 neighbour-measurement campaign",
+   "source": "IEC 61400-11-based hand calc (industrial-report §G.1) + Miljøstyrelsen 2019 neighbour-measurement campaign",
    "year": 2019,
    "url": "https://mst.dk/publikationer/2019/august/maaling-af-stoej-hos-vindmoellenaboer",
    "months_covered": null,
    "annualization_method": "IEC 61400-11 hand expectation (industrial-report §G.1); DK Miljøstyrelsen 2019 neighbour campaign as envelope",
-   "band": null
+   "readings": [
+    {
+     "label": "IEC hand expectation",
+     "value": [
+      52,
+      53
+     ],
+     "unit": "dB Lden"
+    }
+   ],
+   "band": null,
+   "note": "Danish anchor: neighbour dwellings measured 40 dB(A) at 6 m/s and 42–44 dB(A) at 8 m/s (Miljøstyrelsen 2019)."
   },
   "commensurability": {
    "metric_variant": "plausibility",
@@ -977,6 +1124,7 @@
  },
  {
   "id": "ind_pchery_wind_500m",
+  "name": "Pchery wind turbines, 500 m",
   "lat": 50.191688,
   "lng": 14.1288,
   "mode": "source:industrial",
@@ -992,13 +1140,23 @@
   ],
   "pair_id": "pchery_wind_ladder",
   "external": {
-   "value": "IEC-correct hand expectation ≈ 44–45 dB Lden at 500 m (audit §G.1)",
-   "metric": "IEC 61400-11-based hand calc (industrial-report §G.1) + Miljøstyrelsen 2019 neighbour-measurement campaign",
+   "source": "IEC 61400-11-based hand calc (industrial-report §G.1) + Miljøstyrelsen 2019 neighbour-measurement campaign",
    "year": 2019,
    "url": "https://mst.dk/publikationer/2019/august/maaling-af-stoej-hos-vindmoellenaboer",
    "months_covered": null,
    "annualization_method": "IEC 61400-11 hand expectation (industrial-report §G.1); DK Miljøstyrelsen 2019 neighbour campaign as envelope",
-   "band": null
+   "readings": [
+    {
+     "label": "IEC hand expectation",
+     "value": [
+      44,
+      45
+     ],
+     "unit": "dB Lden"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "plausibility",
@@ -1013,6 +1171,7 @@
  },
  {
   "id": "ind_pchery_wind_1000m",
+  "name": "Pchery wind turbines, 1000 m",
   "lat": 50.187197,
   "lng": 14.1288,
   "mode": "source:industrial",
@@ -1028,13 +1187,23 @@
   ],
   "pair_id": "pchery_wind_ladder",
   "external": {
-   "value": "IEC-correct hand expectation ≈ 38–39 dB Lden at 1000 m (audit §G.1)",
-   "metric": "IEC 61400-11-based hand calc (industrial-report §G.1) + Miljøstyrelsen 2019 neighbour-measurement campaign",
+   "source": "IEC 61400-11-based hand calc (industrial-report §G.1) + Miljøstyrelsen 2019 neighbour-measurement campaign",
    "year": 2019,
    "url": "https://mst.dk/publikationer/2019/august/maaling-af-stoej-hos-vindmoellenaboer",
    "months_covered": null,
    "annualization_method": "IEC 61400-11 hand expectation (industrial-report §G.1); DK Miljøstyrelsen 2019 neighbour campaign as envelope",
-   "band": null
+   "readings": [
+    {
+     "label": "IEC hand expectation",
+     "value": [
+      38,
+      39
+     ],
+     "unit": "dB Lden"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "plausibility",
@@ -1049,6 +1218,7 @@
  },
  {
   "id": "air_lkpr_rmt1_jenec",
+  "name": "Jeneč (LKPR monitor 1)",
   "lat": 50.0889,
   "lng": 14.2103,
   "mode": "source:aircraft",
@@ -1062,13 +1232,25 @@
    "village"
   ],
   "external": {
-   "value": "DEN 55.6 / NOC 49.1 (aircraft-specific NMT, 2025)",
-   "metric": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2 (TANOS/Topsonic, ČSN ISO 20906; ±2.5 dB stated)",
+   "source": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2 (TANOS/Topsonic, ČSN ISO 20906; ±2.5 dB stated)",
    "year": 2025,
    "url": "https://www.prg.aero/sites/default/files/obsah/O-letisti/zivotni-prostredi/Soubory/Zpravy%20o%20hlukove%20situaci/2025/Zpr%C3%A1va_hlk_2025_final.pdf",
    "months_covered": 12,
    "annualization_method": "annual NMT report year (Letiště Praha 2025)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 55.6,
+     "unit": "dB LAeq 06–22"
+    },
+    {
+     "label": "night",
+     "value": 49.1,
+     "unit": "dB LAeq 22–06"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1088,6 +1270,7 @@
  },
  {
   "id": "air_lkpr_rmt2_cerveny_ujezd",
+  "name": "Červený Újezd (LKPR monitor 2)",
   "lat": 50.071,
   "lng": 14.1646,
   "mode": "source:aircraft",
@@ -1101,13 +1284,25 @@
    "village"
   ],
   "external": {
-   "value": "DEN 50.0 / NOC 43.9",
-   "metric": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
+   "source": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
    "year": 2025,
    "url": "https://www.prg.aero/sites/default/files/obsah/O-letisti/zivotni-prostredi/Soubory/Zpravy%20o%20hlukove%20situaci/2025/Zpr%C3%A1va_hlk_2025_final.pdf",
    "months_covered": 12,
    "annualization_method": "annual NMT report year (Letiště Praha 2025)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 50.0,
+     "unit": "dB LAeq 06–22"
+    },
+    {
+     "label": "night",
+     "value": 43.9,
+     "unit": "dB LAeq 22–06"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1127,6 +1322,7 @@
  },
  {
   "id": "air_lkpr_rmt3_unhost",
+  "name": "Unhošť (LKPR monitor 3)",
   "lat": 50.0815,
   "lng": 14.1292,
   "mode": "source:aircraft",
@@ -1140,13 +1336,25 @@
    "suburban"
   ],
   "external": {
-   "value": "DEN 50.9 / NOC 45.1",
-   "metric": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
+   "source": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
    "year": 2025,
    "url": "https://www.prg.aero/sites/default/files/obsah/O-letisti/zivotni-prostredi/Soubory/Zpravy%20o%20hlukove%20situaci/2025/Zpr%C3%A1va_hlk_2025_final.pdf",
    "months_covered": 12,
    "annualization_method": "annual NMT report year (Letiště Praha 2025)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 50.9,
+     "unit": "dB LAeq 06–22"
+    },
+    {
+     "label": "night",
+     "value": 45.1,
+     "unit": "dB LAeq 22–06"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1166,6 +1374,7 @@
  },
  {
   "id": "air_lkpr_rmt4_pavlov",
+  "name": "Pavlov (LKPR monitor 4)",
   "lat": 50.0952,
   "lng": 14.1646,
   "mode": "source:aircraft",
@@ -1179,13 +1388,25 @@
    "village"
   ],
   "external": {
-   "value": "DEN 51.6 / NOC 45.6",
-   "metric": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
+   "source": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
    "year": 2025,
    "url": "https://www.prg.aero/sites/default/files/obsah/O-letisti/zivotni-prostredi/Soubory/Zpravy%20o%20hlukove%20situaci/2025/Zpr%C3%A1va_hlk_2025_final.pdf",
    "months_covered": 12,
    "annualization_method": "annual NMT report year (Letiště Praha 2025)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 51.6,
+     "unit": "dB LAeq 06–22"
+    },
+    {
+     "label": "night",
+     "value": 45.6,
+     "unit": "dB LAeq 22–06"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1205,6 +1426,7 @@
  },
  {
   "id": "air_lkpr_rmt5_hostivice",
+  "name": "Hostivice (LKPR monitor 5)",
   "lat": 50.0814,
   "lng": 14.2347,
   "mode": "source:aircraft",
@@ -1218,13 +1440,25 @@
    "suburban"
   ],
   "external": {
-   "value": "DEN 42.9 / NOC 35.6",
-   "metric": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
+   "source": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
    "year": 2025,
    "url": "https://www.prg.aero/sites/default/files/obsah/O-letisti/zivotni-prostredi/Soubory/Zpravy%20o%20hlukove%20situaci/2025/Zpr%C3%A1va_hlk_2025_final.pdf",
    "months_covered": 12,
    "annualization_method": "annual NMT report year (Letiště Praha 2025)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 42.9,
+     "unit": "dB LAeq 06–22"
+    },
+    {
+     "label": "night",
+     "value": 35.6,
+     "unit": "dB LAeq 22–06"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1244,6 +1478,7 @@
  },
  {
   "id": "air_lkpr_rmt6_dobroviz",
+  "name": "Dobrovíz (LKPR monitor 6)",
   "lat": 50.1144,
   "lng": 14.2207,
   "mode": "source:aircraft",
@@ -1257,13 +1492,25 @@
    "village"
   ],
   "external": {
-   "value": "DEN 58.4 / NOC 52.5",
-   "metric": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
+   "source": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
    "year": 2025,
    "url": "https://www.prg.aero/sites/default/files/obsah/O-letisti/zivotni-prostredi/Soubory/Zpravy%20o%20hlukove%20situaci/2025/Zpr%C3%A1va_hlk_2025_final.pdf",
    "months_covered": 12,
    "annualization_method": "annual NMT report year (Letiště Praha 2025)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 58.4,
+     "unit": "dB LAeq 06–22"
+    },
+    {
+     "label": "night",
+     "value": 52.5,
+     "unit": "dB LAeq 22–06"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1283,6 +1530,7 @@
  },
  {
   "id": "air_lkpr_rmt7_knezeves",
+  "name": "Kněževes (LKPR monitor 7)",
   "lat": 50.1199,
   "lng": 14.2584,
   "mode": "source:aircraft",
@@ -1297,13 +1545,25 @@
    "runway_use_mismatch"
   ],
   "external": {
-   "value": "DEN 55.1 / NOC 49.9",
-   "metric": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
+   "source": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
    "year": 2025,
    "url": "https://www.prg.aero/sites/default/files/obsah/O-letisti/zivotni-prostredi/Soubory/Zpravy%20o%20hlukove%20situaci/2025/Zpr%C3%A1va_hlk_2025_final.pdf",
    "months_covered": 12,
    "annualization_method": "annual NMT report year (Letiště Praha 2025)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 55.1,
+     "unit": "dB LAeq 06–22"
+    },
+    {
+     "label": "night",
+     "value": 49.9,
+     "unit": "dB LAeq 22–06"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1323,6 +1583,7 @@
  },
  {
   "id": "air_lkpr_rmt8_horomerice_stred",
+  "name": "Horoměřice střed (LKPR monitor 8)",
   "lat": 50.14,
   "lng": 14.3341,
   "mode": "source:aircraft",
@@ -1337,13 +1598,25 @@
    "heli_base"
   ],
   "external": {
-   "value": "DEN 51.5 / NOC 45.7",
-   "metric": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
+   "source": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
    "year": 2025,
    "url": "https://www.prg.aero/sites/default/files/obsah/O-letisti/zivotni-prostredi/Soubory/Zpravy%20o%20hlukove%20situaci/2025/Zpr%C3%A1va_hlk_2025_final.pdf",
    "months_covered": 12,
    "annualization_method": "annual NMT report year (Letiště Praha 2025)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 51.5,
+     "unit": "dB LAeq 06–22"
+    },
+    {
+     "label": "night",
+     "value": 45.7,
+     "unit": "dB LAeq 22–06"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1364,6 +1637,7 @@
  },
  {
   "id": "air_lkpr_rmt9_predni_kopanina",
+  "name": "Praha – Přední Kopanina (LKPR monitor 9)",
   "lat": 50.1172,
   "lng": 14.3014,
   "mode": "source:aircraft",
@@ -1378,13 +1652,25 @@
    "heli_base"
   ],
   "external": {
-   "value": "DEN 53.0 / NOC 46.1",
-   "metric": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
+   "source": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
    "year": 2025,
    "url": "https://www.prg.aero/sites/default/files/obsah/O-letisti/zivotni-prostredi/Soubory/Zpravy%20o%20hlukove%20situaci/2025/Zpr%C3%A1va_hlk_2025_final.pdf",
    "months_covered": 12,
    "annualization_method": "annual NMT report year (Letiště Praha 2025)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 53.0,
+     "unit": "dB LAeq 06–22"
+    },
+    {
+     "label": "night",
+     "value": 46.1,
+     "unit": "dB LAeq 22–06"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1405,6 +1691,7 @@
  },
  {
   "id": "air_lkpr_rmt10_horomerice_jv",
+  "name": "Horoměřice (LKPR monitor 10)",
   "lat": 50.1299,
   "lng": 14.3439,
   "mode": "source:aircraft",
@@ -1419,13 +1706,25 @@
    "heli_base"
   ],
   "external": {
-   "value": "DEN 49.6 / NOC 43.5",
-   "metric": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
+   "source": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
    "year": 2025,
    "url": "https://www.prg.aero/sites/default/files/obsah/O-letisti/zivotni-prostredi/Soubory/Zpravy%20o%20hlukove%20situaci/2025/Zpr%C3%A1va_hlk_2025_final.pdf",
    "months_covered": 12,
    "annualization_method": "annual NMT report year (Letiště Praha 2025)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 49.6,
+     "unit": "dB LAeq 06–22"
+    },
+    {
+     "label": "night",
+     "value": 43.5,
+     "unit": "dB LAeq 22–06"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1446,6 +1745,7 @@
  },
  {
   "id": "air_lkpr_rmt11_roztoky",
+  "name": "Roztoky (LKPR monitor 11)",
   "lat": 50.1589,
   "lng": 14.3946,
   "mode": "source:aircraft",
@@ -1460,13 +1760,25 @@
    "heli_base"
   ],
   "external": {
-   "value": "DEN 50.4 / NOC 44.9",
-   "metric": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
+   "source": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
    "year": 2025,
    "url": "https://www.prg.aero/sites/default/files/obsah/O-letisti/zivotni-prostredi/Soubory/Zpravy%20o%20hlukove%20situaci/2025/Zpr%C3%A1va_hlk_2025_final.pdf",
    "months_covered": 12,
    "annualization_method": "annual NMT report year (Letiště Praha 2025)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 50.4,
+     "unit": "dB LAeq 06–22"
+    },
+    {
+     "label": "night",
+     "value": 44.9,
+     "unit": "dB LAeq 22–06"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1487,6 +1799,7 @@
  },
  {
   "id": "air_lkpr_rmt12_bila_hora",
+  "name": "Praha 17 – Řepy (LKPR monitor 12)",
   "lat": 50.0711,
   "lng": 14.3208,
   "mode": "source:aircraft",
@@ -1501,13 +1814,25 @@
    "runway_use_mismatch"
   ],
   "external": {
-   "value": "DEN 58.8 / NOC 53.5",
-   "metric": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
+   "source": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
    "year": 2025,
    "url": "https://www.prg.aero/sites/default/files/obsah/O-letisti/zivotni-prostredi/Soubory/Zpravy%20o%20hlukove%20situaci/2025/Zpr%C3%A1va_hlk_2025_final.pdf",
    "months_covered": 12,
    "annualization_method": "annual NMT report year (Letiště Praha 2025)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 58.8,
+     "unit": "dB LAeq 06–22"
+    },
+    {
+     "label": "night",
+     "value": 53.5,
+     "unit": "dB LAeq 22–06"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1527,6 +1852,7 @@
  },
  {
   "id": "air_lkpr_rmt13_suchdol",
+  "name": "Suchdol (LKPR monitor 13)",
   "lat": 50.1456,
   "lng": 14.3787,
   "mode": "source:aircraft",
@@ -1541,13 +1867,25 @@
    "heli_base"
   ],
   "external": {
-   "value": "DEN 53.5 / NOC 48.3",
-   "metric": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
+   "source": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
    "year": 2025,
    "url": "https://www.prg.aero/sites/default/files/obsah/O-letisti/zivotni-prostredi/Soubory/Zpravy%20o%20hlukove%20situaci/2025/Zpr%C3%A1va_hlk_2025_final.pdf",
    "months_covered": 12,
    "annualization_method": "annual NMT report year (Letiště Praha 2025)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 53.5,
+     "unit": "dB LAeq 06–22"
+    },
+    {
+     "label": "night",
+     "value": 48.3,
+     "unit": "dB LAeq 22–06"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1568,6 +1906,7 @@
  },
  {
   "id": "air_lkpr_rmt14_male_kysice",
+  "name": "Malé Kyšice (LKPR monitor 14)",
   "lat": 50.0588,
   "lng": 14.082,
   "mode": "source:aircraft",
@@ -1581,13 +1920,25 @@
    "village"
   ],
   "external": {
-   "value": "DEN 50.9 / NOC 45.6",
-   "metric": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
+   "source": "Letiště Praha Zpráva o hlukové situaci 2025, Příloha 2",
    "year": 2025,
    "url": "https://www.prg.aero/sites/default/files/obsah/O-letisti/zivotni-prostredi/Soubory/Zpravy%20o%20hlukove%20situaci/2025/Zpr%C3%A1va_hlk_2025_final.pdf",
    "months_covered": 12,
    "annualization_method": "annual NMT report year (Letiště Praha 2025)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 50.9,
+     "unit": "dB LAeq 06–22"
+    },
+    {
+     "label": "night",
+     "value": 45.6,
+     "unit": "dB LAeq 22–06"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1607,6 +1958,7 @@
  },
  {
   "id": "air_zrh_nmt1_rumlang",
+  "name": "Rümlang (Zurich airport monitor 1)",
   "lat": 47.4524,
   "lng": 8.531,
   "mode": "source:aircraft",
@@ -1620,13 +1972,20 @@
    "village"
   ],
   "external": {
-   "value": "Tag (06–22) 66 dB, 2024 (stable 65–67 across the monthly Lärmbulletin year)",
-   "metric": "Flughafen Zürich AG annual report 2024, NMT daytime aircraft levels (integer dB)",
+   "source": "Flughafen Zürich AG annual report 2024, NMT daytime aircraft levels (integer dB)",
    "year": 2024,
    "url": "https://report.flughafen-zuerich.ch/2024/ar/en/laerm",
    "months_covered": 12,
    "annualization_method": "annual report NMT Tag levels (integer dB; Swiss Tag 06-22 window)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 66,
+     "unit": "dB LAeq 06–22"
+    }
+   ],
+   "band": null,
+   "note": "Stable at 65–67 dB across the monthly Lärmbulletin year."
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1646,6 +2005,7 @@
  },
  {
   "id": "air_zrh_nmt3_oberglatt",
+  "name": "Oberglatt (Zurich airport monitor 3)",
   "lat": 47.4753,
   "lng": 8.5052,
   "mode": "source:aircraft",
@@ -1659,13 +2019,20 @@
    "village"
   ],
   "external": {
-   "value": "Tag (06–22) 58 dB, 2024",
-   "metric": "Flughafen Zürich AG annual report 2024, NMT daytime aircraft levels",
+   "source": "Flughafen Zürich AG annual report 2024, NMT daytime aircraft levels",
    "year": 2024,
    "url": "https://report.flughafen-zuerich.ch/2024/ar/en/laerm",
    "months_covered": 12,
    "annualization_method": "annual report NMT Tag levels (integer dB; Swiss Tag 06-22 window)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 58,
+     "unit": "dB LAeq 06–22"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1685,6 +2052,7 @@
  },
  {
   "id": "air_zrh_nmt6_glattbrugg",
+  "name": "Glattbrugg (Zurich airport monitor 6)",
   "lat": 47.4333,
   "lng": 8.563,
   "mode": "source:aircraft",
@@ -1698,13 +2066,20 @@
    "suburban"
   ],
   "external": {
-   "value": "Tag (06–22) 66 dB, 2024",
-   "metric": "Flughafen Zürich AG annual report 2024, NMT daytime aircraft levels",
+   "source": "Flughafen Zürich AG annual report 2024, NMT daytime aircraft levels",
    "year": 2024,
    "url": "https://report.flughafen-zuerich.ch/2024/ar/en/laerm",
    "months_covered": 12,
    "annualization_method": "annual report NMT Tag levels (integer dB; Swiss Tag 06-22 window)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 66,
+     "unit": "dB LAeq 06–22"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1724,6 +2099,7 @@
  },
  {
   "id": "air_zrh_nmt10_nurensdorf",
+  "name": "Nürensdorf (Zurich airport monitor 10)",
   "lat": 47.4467,
   "lng": 8.6477,
   "mode": "source:aircraft",
@@ -1737,13 +2113,20 @@
    "village"
   ],
   "external": {
-   "value": "Tag (06–22) 58 dB, 2024",
-   "metric": "Flughafen Zürich AG annual report 2024, NMT daytime aircraft levels",
+   "source": "Flughafen Zürich AG annual report 2024, NMT daytime aircraft levels",
    "year": 2024,
    "url": "https://report.flughafen-zuerich.ch/2024/ar/en/laerm",
    "months_covered": 12,
    "annualization_method": "annual report NMT Tag levels (integer dB; Swiss Tag 06-22 window)",
-   "band": null
+   "readings": [
+    {
+     "label": "day",
+     "value": 58,
+     "unit": "dB LAeq 06–22"
+    }
+   ],
+   "band": null,
+   "note": null
   },
   "commensurability": {
    "metric_variant": "laeq_windows",
@@ -1763,6 +2146,7 @@
  },
  {
   "id": "air_ams_ub045_nieuwveen",
+  "name": "Nieuwveen (Schiphol monitor UB045)",
   "lat": 52.1905,
   "lng": 4.7594,
   "mode": "source:aircraft",
@@ -1776,16 +2160,28 @@
    "village"
   ],
   "external": {
-   "value": "aircraft Lden 54.2 / Lnight 43.5, gebruiksjaar 2024",
-   "metric": "ODWH Rapportage vliegtuiggeluid 2024 (Sensornet, flight-correlated; valid time 72–96%)",
+   "source": "ODWH Rapportage vliegtuiggeluid 2024 (Sensornet, flight-correlated; valid time 72–96%)",
    "year": 2024,
    "url": "https://www.odwh.nl/wp-content/uploads/Rapportage-vliegtuiggeluid-2024-.pdf",
    "months_covered": 12,
    "annualization_method": "gebruiksjaar 2024 annual (Nov 2023-Okt 2024), flight-correlated Sensornet",
+   "readings": [
+    {
+     "label": "aircraft Lden",
+     "value": 54.2,
+     "unit": "dB"
+    },
+    {
+     "label": "aircraft Lnight",
+     "value": 43.5,
+     "unit": "dB"
+    }
+   ],
    "band": [
     52.2,
     56.2
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden",
@@ -1805,6 +2201,7 @@
  },
  {
   "id": "air_ams_ub106_leimuiden",
+  "name": "Leimuiden (Schiphol monitor UB106)",
   "lat": 52.2262,
   "lng": 4.664,
   "mode": "source:aircraft",
@@ -1818,16 +2215,28 @@
    "village"
   ],
   "external": {
-   "value": "aircraft Lden 52.5 / Lnight 43.1, gebruiksjaar 2024",
-   "metric": "ODWH Rapportage vliegtuiggeluid 2024 (Sensornet, flight-correlated)",
+   "source": "ODWH Rapportage vliegtuiggeluid 2024 (Sensornet, flight-correlated)",
    "year": 2024,
    "url": "https://www.odwh.nl/wp-content/uploads/Rapportage-vliegtuiggeluid-2024-.pdf",
    "months_covered": 12,
    "annualization_method": "gebruiksjaar 2024 annual (Nov 2023-Okt 2024), flight-correlated Sensornet",
+   "readings": [
+    {
+     "label": "aircraft Lden",
+     "value": 52.5,
+     "unit": "dB"
+    },
+    {
+     "label": "aircraft Lnight",
+     "value": 43.1,
+     "unit": "dB"
+    }
+   ],
    "band": [
     50.5,
     54.5
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden",
@@ -1847,6 +2256,7 @@
  },
  {
   "id": "air_ams_ub022_lisse",
+  "name": "Lisse (Schiphol monitor UB022)",
   "lat": 52.255,
   "lng": 4.5501,
   "mode": "source:aircraft",
@@ -1860,16 +2270,28 @@
    "village"
   ],
   "external": {
-   "value": "aircraft Lden 50.7 / Lnight 38.1, gebruiksjaar 2024",
-   "metric": "ODWH Rapportage vliegtuiggeluid 2024 (Sensornet, flight-correlated)",
+   "source": "ODWH Rapportage vliegtuiggeluid 2024 (Sensornet, flight-correlated)",
    "year": 2024,
    "url": "https://www.odwh.nl/wp-content/uploads/Rapportage-vliegtuiggeluid-2024-.pdf",
    "months_covered": 12,
    "annualization_method": "gebruiksjaar 2024 annual (Nov 2023-Okt 2024), flight-correlated Sensornet",
+   "readings": [
+    {
+     "label": "aircraft Lden",
+     "value": 50.7,
+     "unit": "dB"
+    },
+    {
+     "label": "aircraft Lnight",
+     "value": 38.1,
+     "unit": "dB"
+    }
+   ],
    "band": [
     48.7,
     52.7
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "lden",
@@ -1889,6 +2311,7 @@
  },
  {
   "id": "air_fra_mp06_raunheim",
+  "name": "Raunheim (Frankfurt monitor MP06)",
   "lat": 50.0114,
   "lng": 8.4619,
   "mode": "source:aircraft",
@@ -1902,16 +2325,33 @@
    "suburban"
   ],
   "external": {
-   "value": "day/night/Lden 59.7/51.6/61.3 — June 2024 monthly (DIN 45643, 58 dB event threshold)",
-   "metric": "Fraport Messbericht über Fluggeräusche 06/2024",
+   "source": "Fraport Messbericht über Fluggeräusche 06/2024",
    "year": 2024,
    "url": "https://www.fraport.com/content/dam/fraport-company/images/umwelt/schallschutz/flugl%C3%A4rm/aktuell-gemessene-werte/messberichte/2024/06_2024%20Messberichte%20%C3%BCber%20Flugger%C3%A4usche.pdf/_jcr_content/renditions/original.media_file.download_attachment.file/06_2024%20Messberichte%20%C3%BCber%20Flugger%C3%A4usche.pdf",
    "months_covered": 1,
    "annualization_method": "June 2024 MONTHLY report (DIN 45643, event threshold) -- rule-1 short coverage, excluded from accuracy stats",
+   "readings": [
+    {
+     "label": "day",
+     "value": 59.7,
+     "unit": "dB"
+    },
+    {
+     "label": "night",
+     "value": 51.6,
+     "unit": "dB"
+    },
+    {
+     "label": "Lden",
+     "value": 61.3,
+     "unit": "dB"
+    }
+   ],
    "band": [
     59.3,
     63.3
-   ]
+   ],
+   "note": "June 2024 monthly report (DIN 45643, 58 dB event threshold)."
   },
   "commensurability": {
    "metric_variant": "lden",
@@ -1931,6 +2371,7 @@
  },
  {
   "id": "air_fra_mp11_floersheim",
+  "name": "Flörsheim (Frankfurt monitor MP11)",
   "lat": 50.0174,
   "lng": 8.4214,
   "mode": "source:aircraft",
@@ -1944,16 +2385,33 @@
    "suburban"
   ],
   "external": {
-   "value": "day/night/Lden 56.5/47.1/57.5 — June 2024 monthly (DIN 45643, 60 dB event threshold)",
-   "metric": "Fraport Messbericht über Fluggeräusche 06/2024",
+   "source": "Fraport Messbericht über Fluggeräusche 06/2024",
    "year": 2024,
    "url": "https://www.fraport.com/content/dam/fraport-company/images/umwelt/schallschutz/flugl%C3%A4rm/aktuell-gemessene-werte/messberichte/2024/06_2024%20Messberichte%20%C3%BCber%20Flugger%C3%A4usche.pdf/_jcr_content/renditions/original.media_file.download_attachment.file/06_2024%20Messberichte%20%C3%BCber%20Flugger%C3%A4usche.pdf",
    "months_covered": 1,
    "annualization_method": "June 2024 MONTHLY report (DIN 45643, event threshold) -- rule-1 short coverage, excluded from accuracy stats",
+   "readings": [
+    {
+     "label": "day",
+     "value": 56.5,
+     "unit": "dB"
+    },
+    {
+     "label": "night",
+     "value": 47.1,
+     "unit": "dB"
+    },
+    {
+     "label": "Lden",
+     "value": 57.5,
+     "unit": "dB"
+    }
+   ],
    "band": [
     55.5,
     59.5
-   ]
+   ],
+   "note": "June 2024 monthly report (DIN 45643, 60 dB event threshold)."
   },
   "commensurability": {
    "metric_variant": "lden",
@@ -1973,6 +2431,7 @@
  },
  {
   "id": "air_sfo_site12_foster_city",
+  "name": "Foster City (SFO monitor 12)",
   "lat": 37.565,
   "lng": -122.253,
   "mode": "source:aircraft",
@@ -1986,16 +2445,23 @@
    "suburban"
   ],
   "external": {
-   "value": "annual aircraft CNEL 61.8 (Jul 2022–Jun 2023)",
-   "metric": "SFO Title 21 Q2/2023 report Table 2; station coords from DataSF",
+   "source": "SFO Title 21 Q2/2023 report Table 2; station coords from DataSF",
    "year": 2023,
    "url": "https://noise.flysfo.com/wp-content/uploads/2023/09/SFO_2023Q2_Title21_Report.pdf",
    "months_covered": 12,
    "annualization_method": "annual CNEL (Jul 2022-Jun 2023), Title 21 quarterly report",
+   "readings": [
+    {
+     "label": "aircraft CNEL",
+     "value": 61.8,
+     "unit": "dB"
+    }
+   ],
    "band": [
     59.8,
     63.8
-   ]
+   ],
+   "note": "Annual CNEL, July 2022 – June 2023."
   },
   "commensurability": {
    "metric_variant": "cnel",
@@ -2011,6 +2477,7 @@
  },
  {
   "id": "air_sfo_site19_pacifica",
+  "name": "Pacifica (SFO monitor 19)",
   "lat": 37.658,
   "lng": -122.481,
   "mode": "source:aircraft",
@@ -2026,16 +2493,23 @@
    "coastal_windy"
   ],
   "external": {
-   "value": "annual aircraft CNEL 60.0 (Jul 2022–Jun 2023)",
-   "metric": "SFO Title 21 Q2/2023 report Table 2; station coords from DataSF",
+   "source": "SFO Title 21 Q2/2023 report Table 2; station coords from DataSF",
    "year": 2023,
    "url": "https://noise.flysfo.com/wp-content/uploads/2023/09/SFO_2023Q2_Title21_Report.pdf",
    "months_covered": 12,
    "annualization_method": "annual CNEL (Jul 2022-Jun 2023), Title 21 quarterly report",
+   "readings": [
+    {
+     "label": "aircraft CNEL",
+     "value": 60.0,
+     "unit": "dB"
+    }
+   ],
    "band": [
     58.0,
     62.0
-   ]
+   ],
+   "note": "Annual CNEL, July 2022 – June 2023."
   },
   "commensurability": {
    "metric_variant": "cnel",
@@ -2055,6 +2529,7 @@
  },
  {
   "id": "cruise_sumava",
+  "name": "Šumava — under the cruise corridor",
   "lat": 49.0228,
   "lng": 13.4977,
   "mode": "source:aircraft",
@@ -2067,16 +2542,17 @@
    "wilderness_quiet"
   ],
   "external": {
-   "value": "20–40 dB rural-under-corridor band; high-altitude jets audible <15% of time",
-   "metric": "NPS Report to Congress ch. 9 overflight reports",
+   "source": "NPS Report to Congress ch. 9 overflight reports",
    "year": null,
    "url": "https://www.nonoise.org/library/npreport/chapter9.htm",
    "months_covered": null,
    "annualization_method": "NPS land-type envelope (Report to Congress ch. 9) -- not a station",
+   "readings": null,
    "band": [
     20,
     40
-   ]
+   ],
+   "note": "High-altitude jets are audible less than 15 % of the time."
   },
   "commensurability": {
    "metric_variant": "plausibility",
@@ -2096,6 +2572,7 @@
  },
  {
   "id": "cruise_zermatt",
+  "name": "Zermatt — under the cruise corridor",
   "lat": 46.02,
   "lng": 7.75,
   "mode": "source:aircraft",
@@ -2108,16 +2585,17 @@
    "mountain_valley"
   ],
   "external": {
-   "value": "20–40 dB rural-under-corridor band",
-   "metric": "NPS Report to Congress ch. 9 overflight reports",
+   "source": "NPS Report to Congress ch. 9 overflight reports",
    "year": null,
    "url": "https://www.nonoise.org/library/npreport/chapter9.htm",
    "months_covered": null,
    "annualization_method": "NPS land-type envelope (Report to Congress ch. 9) -- not a station",
+   "readings": null,
    "band": [
     20,
     40
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "plausibility",
@@ -2137,6 +2615,7 @@
  },
  {
   "id": "cruise_highlands",
+  "name": "Scottish Highlands — under the cruise corridor",
   "lat": 57.1,
   "lng": -4.7,
   "mode": "source:aircraft",
@@ -2149,16 +2628,17 @@
    "wilderness_quiet"
   ],
   "external": {
-   "value": "20–40 dB band, lower density",
-   "metric": "NPS Report to Congress ch. 9 overflight reports",
+   "source": "NPS Report to Congress ch. 9 overflight reports",
    "year": null,
    "url": "https://www.nonoise.org/library/npreport/chapter9.htm",
    "months_covered": null,
    "annualization_method": "NPS land-type envelope (Report to Congress ch. 9) -- not a station",
+   "readings": null,
    "band": [
     20,
     40
-   ]
+   ],
+   "note": "Lower overflight density."
   },
   "commensurability": {
    "metric_variant": "plausibility",
@@ -2177,6 +2657,7 @@
  },
  {
   "id": "cruise_lapland",
+  "name": "Lapland — under the cruise corridor",
   "lat": 68.05,
   "lng": 24.0,
   "mode": "source:aircraft",
@@ -2189,13 +2670,14 @@
    "wilderness_quiet"
   ],
   "external": {
-   "value": "near-silence expected (polar routes rerouted south since 2022)",
-   "metric": "cruise-report §C plausibility anchor",
+   "source": "cruise-report §C plausibility anchor",
    "year": null,
    "url": "https://www.nonoise.org/library/npreport/chapter9.htm",
    "months_covered": null,
    "annualization_method": "NPS land-type envelope (Report to Congress ch. 9) -- not a station",
-   "band": null
+   "readings": null,
+   "band": null,
+   "note": "Near-silence expected: polar routes were rerouted south in 2022."
   },
   "commensurability": {
    "metric_variant": "plausibility",
@@ -2210,6 +2692,7 @@
  },
  {
   "id": "cruise_extremadura",
+  "name": "Extremadura — under the cruise corridor",
   "lat": 39.9,
   "lng": -5.3,
   "mode": "source:aircraft",
@@ -2222,16 +2705,17 @@
    "rural_open"
   ],
   "external": {
-   "value": "20–40 dB band; Madrid–Canaries/Americas corridors",
-   "metric": "NPS Report to Congress ch. 9 overflight reports",
+   "source": "NPS Report to Congress ch. 9 overflight reports",
    "year": null,
    "url": "https://www.nonoise.org/library/npreport/chapter9.htm",
    "months_covered": null,
    "annualization_method": "NPS land-type envelope (Report to Congress ch. 9) -- not a station",
+   "readings": null,
    "band": [
     20,
     40
-   ]
+   ],
+   "note": "Madrid–Canaries and Madrid–Americas corridors."
   },
   "commensurability": {
    "metric_variant": "plausibility",
@@ -2250,6 +2734,7 @@
  },
  {
   "id": "rail_usti_zalezly_ln",
+  "name": "Railway at Zálezly, Ústí nad Labem",
   "lat": 50.581,
   "lng": 14.0418,
   "mode": "source:railway",
@@ -2266,16 +2751,17 @@
    "inversion_prone_valley"
   ],
   "external": {
-   "value": "Lden 60–65 + Ln 60–65",
-   "metric": "SHM2022 rail raster (Zeleznice_Ldvn/Ln ImageServer identify)",
+   "source": "SHM2022 rail raster (Zeleznice_Ldvn/Ln ImageServer identify)",
    "year": 2022,
    "url": "https://geoportal.mzcr.cz/server/rest/services/SHM2022",
    "months_covered": 12,
    "annualization_method": "official END annual model (CZ SHM 2022; traffic basis CSD 2020); real SŽ counts incl. freight",
+   "readings": null,
    "band": [
     60,
     65
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "ln",
@@ -2296,6 +2782,7 @@
  },
  {
   "id": "rail_zabori_ln",
+  "name": "Railway at Záboří nad Labem",
   "lat": 50.0284,
   "lng": 15.3466,
   "mode": "source:railway",
@@ -2312,16 +2799,17 @@
    "village"
   ],
   "external": {
-   "value": "Lden 65–70 + Ln 60–65",
-   "metric": "SHM2022 rail raster (Zeleznice_Ldvn/Ln ImageServer identify)",
+   "source": "SHM2022 rail raster (Zeleznice_Ldvn/Ln ImageServer identify)",
    "year": 2022,
    "url": "https://geoportal.mzcr.cz/server/rest/services/SHM2022",
    "months_covered": 12,
    "annualization_method": "official END annual model (CZ SHM 2022; traffic basis CSD 2020); real SŽ counts incl. freight",
+   "readings": null,
    "band": [
     60,
     65
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "ln",
@@ -2342,6 +2830,7 @@
  },
  {
   "id": "rail_revnice_ln",
+  "name": "Railway at Řevnice",
   "lat": 49.9134,
   "lng": 14.2403,
   "mode": "source:railway",
@@ -2360,16 +2849,17 @@
    "suburban"
   ],
   "external": {
-   "value": "Lden <50 (NoData) + Ln 45–50",
-   "metric": "SHM2022 rail raster (Zeleznice_Ldvn/Ln ImageServer identify)",
+   "source": "SHM2022 rail raster (Zeleznice_Ldvn/Ln ImageServer identify)",
    "year": 2022,
    "url": "https://geoportal.mzcr.cz/server/rest/services/SHM2022",
    "months_covered": 12,
    "annualization_method": "official END annual model (CZ SHM 2022; traffic basis CSD 2020); real SŽ counts incl. freight",
+   "readings": null,
    "band": [
     45,
     50
-   ]
+   ],
+   "note": null
   },
   "commensurability": {
    "metric_variant": "ln",
@@ -2390,6 +2880,7 @@
  },
  {
   "id": "bldg_chodov_mall_facade",
+  "name": "Chodov shopping centre, Prague — facade",
   "lat": 50.031,
   "lng": 14.491,
   "mode": "source:building",
@@ -2402,16 +2893,17 @@
    "dense_urban"
   ],
   "external": {
-   "value": "plant noise at receptors near large retail typically rated 40-55 dB(A)",
-   "metric": "BS 4142 practice (ANC guide 2020; acoustic-ltd service class)",
+   "source": "BS 4142 practice (ANC guide 2020; acoustic-ltd service class)",
    "year": 2020,
    "url": "https://www.association-of-noise-consultants.co.uk/wp-content/uploads/2020/05/ANC-BS-4142-Guide-March-2020.pdf",
    "months_covered": null,
    "annualization_method": "BS 4142 practice class envelope (ANC guide 2020) -- literature, not a site measurement",
+   "readings": null,
    "band": [
     40,
     55
-   ]
+   ],
+   "note": "Literature envelope, not a site measurement: BS 4142 practice rates plant noise at receptors near large retail at 40–55 dB(A)."
   },
   "commensurability": {
    "metric_variant": "plausibility",
@@ -2430,6 +2922,7 @@
  },
  {
   "id": "bldg_old_town_square",
+  "name": "Old Town Square, Prague",
   "lat": 50.0875,
   "lng": 14.4213,
   "mode": "source:building",
@@ -2445,13 +2938,14 @@
    "unmodelled_dominates"
   ],
   "external": {
-   "value": "pedestrian-zone deliveries/HVAC in-scope; LAeq day 63-71 incl. crowds (out of scope)",
-   "metric": "Dalian pedestrian-street study PMC10102546 + audit building-report",
+   "source": "Dalian pedestrian-street study PMC10102546 + audit building-report",
    "year": 2023,
    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10102546/",
    "months_covered": null,
    "annualization_method": "literature LAeq incl. crowds (out of model scope) -- not band-comparable",
-   "band": null
+   "readings": null,
+   "band": null,
+   "note": "In scope here: deliveries into the pedestrian zone and building HVAC. The cited study measured LAeq 63–71 dB by day, but that is dominated by crowd noise, which QuietMap does not model — so the study's number is not comparable."
   },
   "commensurability": {
    "metric_variant": "plausibility",
@@ -2466,6 +2960,7 @@
  },
  {
   "id": "road_th_hospitality_krabi",
+  "name": "Hotel access road, Krabi",
   "lat": 7.4978,
   "lng": 99.0747,
   "mode": "source:road",
@@ -2480,13 +2975,20 @@
    "outdoor_hospitality"
   ],
   "external": {
-   "value": "owner field observation 2026-07-16: ~100 motorcycles/hour on the unclassified access road (hotels/restaurants/tourism); model 2026-07-17 after trip-rates+fleet wave: 381 veh/day incl. 76 moto (service-tree; most guesthouses untyped building=yes in OSM, through-traffic not modelled)",
-   "metric": "owner eyeball count, daytime peak — order-of-magnitude only, not band-commensurable",
+   "source": "owner eyeball count, daytime peak — order-of-magnitude only, not band-commensurable",
    "year": 2026,
    "url": null,
    "months_covered": null,
    "annualization_method": "none (spot observation)",
-   "band": null
+   "readings": [
+    {
+     "label": "owner count 2026-07-16, daytime peak",
+     "value": 100,
+     "unit": "motorcycles/hour"
+    }
+   ],
+   "band": null,
+   "note": "Order of magnitude only. After the trip-rates + fleet wave the model put 381 veh/day here on 2026-07-17, 76 of them motorcycles (service road; most guesthouses are untyped building=yes in OSM and through traffic is not modelled)."
   },
   "commensurability": {
    "metric_variant": "input_data",
@@ -2500,6 +3002,7 @@
  },
  {
   "id": "air_es_lapalma_quiet",
+  "name": "La Palma — quiet reference",
   "lat": 28.705,
   "lng": -17.9349,
   "mode": "source:aircraft",
@@ -2512,13 +3015,14 @@
    "mountain_valley"
   ],
   "external": {
-   "value": "owner field observation 2026-07: quietest place visited; popup 500 during the 2026-07-18→27 stale-shards incident (mixed sample_days_by_class)",
-   "metric": "stamp-consistency smoke anchor — an HTTP 500 here means mixed aircraft shards again",
+   "source": "stamp-consistency smoke anchor — an HTTP 500 here means mixed aircraft shards again",
    "year": 2026,
    "url": null,
    "months_covered": null,
    "annualization_method": "n/a (model-state pin, not an external measurement)",
-   "band": null
+   "readings": null,
+   "band": null,
+   "note": "Model-state pin, not a measurement: the quietest place the owner has visited. The popup returned HTTP 500 here during the 2026-07-18→27 stale-shard incident (mixed sample_days_by_class)."
   },
   "regression_band": [
    25.0,
@@ -2532,6 +3036,7 @@
  },
  {
   "id": "air_ca_hudsonbay_remote",
+  "name": "Hudson Bay — remote reference",
   "lat": 55.99,
   "lng": -74.34,
   "mode": "source:aircraft",
@@ -2542,13 +3047,14 @@
    "cruise_remote"
   ],
   "external": {
-   "value": "cell 840e093ffffffff was airborne-stale (365 vs 364) in the 2026-07-18 incident — its single stale row came from a corrupted old ingest track (N734CA) and was removed 2026-07-28",
-   "metric": "stamp-consistency smoke anchor — an HTTP 500 here means mixed aircraft shards again",
+   "source": "stamp-consistency smoke anchor — an HTTP 500 here means mixed aircraft shards again",
    "year": 2026,
    "url": null,
    "months_covered": null,
    "annualization_method": "n/a (model-state pin, not an external measurement)",
-   "band": null
+   "readings": null,
+   "band": null,
+   "note": "Model-state pin, not a measurement: cell 840e093ffffffff was airborne-stale (365 vs 364) in the 2026-07-18 incident; its single stale row came from a corrupted old ingest track (N734CA) and was removed on 2026-07-28."
   },
   "regression_band": [
    7.0,
@@ -2562,6 +3068,7 @@
  },
  {
   "id": "air_se_sweden_aptt",
+  "name": "Jämtland, Sweden — remote reference",
   "lat": 62.83,
   "lng": 14.77,
   "mode": "source:aircraft",
@@ -2573,13 +3080,14 @@
    "rural_open"
   ],
   "external": {
-   "value": "cell 8408137ffffffff was airport_traffic-stale (365 vs 364) in the 2026-07-18 incident; removed 2026-07-28",
-   "metric": "stamp-consistency smoke anchor — an HTTP 500 here means mixed aircraft shards again",
+   "source": "stamp-consistency smoke anchor — an HTTP 500 here means mixed aircraft shards again",
    "year": 2026,
    "url": null,
    "months_covered": null,
    "annualization_method": "n/a (model-state pin, not an external measurement)",
-   "band": null
+   "readings": null,
+   "band": null,
+   "note": "Model-state pin, not a measurement: cell 8408137ffffffff was airport_traffic-stale (365 vs 364) in the 2026-07-18 incident; removed on 2026-07-28."
   },
   "regression_band": [
    21.0,

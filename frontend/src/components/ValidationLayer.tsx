@@ -1,7 +1,9 @@
-// Validation-anchor overlay: every fixture (benchmarks/world-points.json ×
-// last gate run) and network station (committed snapshots × Δ tables) as
-// pickable dots over the noise heatmap — colour = gate status / Δ verdict,
-// size = |distance from external truth|. Data comes from
+// Validation-anchor overlay: every place (benchmarks/world-points.json × last
+// gate run) and network station (committed snapshots × Δ tables) as pickable
+// dots over the noise heatmap — colour = gate status / Δ verdict, size =
+// |distance from external truth|. ONE dot per place: anchors sharing a
+// coordinate are picked together, and a station already folded into an anchor
+// (`merged_into`) is not drawn twice. Data comes from
 // /api/validation/points (see server/src/routes/validation-view.ts); the
 // React map enabled by the `val=1` URL flag — an owner/QA tool, not a visitor
 // feature. A dot click ALSO lands a normal map click underneath, so
@@ -12,9 +14,17 @@ import { MapboxOverlay } from '@deck.gl/mapbox'
 import { ScatterplotLayer } from '@deck.gl/layers'
 import { useMap } from 'react-map-gl/maplibre'
 
+/** One number the source states, in the source's own unit; `value` may be a
+ *  [lo, hi] spread when the source states a range. */
+export interface ValidationReading {
+  label: string
+  value: number | [number, number]
+  unit: string
+}
+
 export interface ValidationFixture {
-  kind: 'fixture'
   id: string
+  name: string
   lat: number
   lng: number
   regime: string
@@ -24,9 +34,17 @@ export interface ValidationFixture {
   tags: string[]
   pair_id: string | null
   external: {
-    value?: string; metric?: string; year?: number | null; url?: string | null
-    months_covered?: number | null; band?: [number | null, number | null] | null
+    source: string
+    year: number | null
+    url: string | null
+    months_covered: number | null
+    annualization_method: string | null
+    readings: ValidationReading[] | null
+    band: [number | null, number | null] | null
+    note: string | null
   }
+  /** Network measurements standing on this exact probe, folded in by the API. */
+  also_measured: { label: string; value: number; source: string; url: string | null }[]
   commensurability: Record<string, unknown>
   regression_band: [number, number] | null
   known_gap: string | null
@@ -39,7 +57,6 @@ export interface ValidationFixture {
 }
 
 export interface ValidationStation {
-  kind: 'station'
   network: string
   station_id: string
   name: string
@@ -56,6 +73,8 @@ export interface ValidationStation {
   delta_db: number | null
   verdict: string | null
   dominant_source: string | null
+  /** Set when this station is the same monitor as a fixture at the same probe. */
+  merged_into?: string
   [metric: string]: unknown
 }
 
@@ -64,7 +83,7 @@ export interface ValidationNetwork {
   year: number
   mode: string
   license: string
-  source: string[]
+  source_url: string | null
   commensurability: Record<string, unknown>
   comparison_mode: 'two_sided' | 'upper_bound' | 'trend_only'
   comparison_tolerance_db: number | null
@@ -102,8 +121,19 @@ export interface ValidationPayload {
 }
 
 export type ValidationSelection =
-  | { kind: 'fixture'; fixture: ValidationFixture }
+  | { kind: 'place'; fixtures: ValidationFixture[] }
   | { kind: 'station'; station: ValidationStation; network: ValidationNetwork }
+
+/** Anchors at one coordinate are one place: one dot, one card, one title. */
+function groupPlaces(fixtures: ValidationFixture[]): ValidationFixture[][] {
+  const places = new Map<string, ValidationFixture[]>()
+  for (const fixture of fixtures) {
+    const key = `${fixture.lat},${fixture.lng}`
+    const place = places.get(key)
+    if (place) place.push(fixture); else places.set(key, [fixture])
+  }
+  return [...places.values()]
+}
 
 const FIXTURE_RGB: Record<string, [number, number, number]> = {
   'OK': [46, 125, 50], 'EXTERNAL-GAP': [239, 108, 0], 'KNOWN-GAP': [142, 36, 170],
@@ -170,7 +200,10 @@ export default function ValidationLayer({ payload, onSelect }: Props): null {
       overlay.setProps({ layers: [] })
       return
     }
-    const stations = payload.networks.flatMap((net) => net.stations.map((station) => ({ station, net })))
+    const stations = payload.networks.flatMap((net) => net.stations
+      .filter((station) => station.merged_into == null)
+      .map((station) => ({ station, net })))
+    const places = groupPlaces(payload.fixtures)
     overlay.setProps({
       layers: [
         new ScatterplotLayer<{ station: ValidationStation; net: ValidationNetwork }>({
@@ -189,20 +222,26 @@ export default function ValidationLayer({ payload, onSelect }: Props): null {
             if (info.object) onSelect?.({ kind: 'station', station: info.object.station, network: info.object.net })
           },
         }),
-        new ScatterplotLayer<ValidationFixture>({
+        new ScatterplotLayer<ValidationFixture[]>({
           id: 'validation-fixtures',
-          data: payload.fixtures,
+          data: places,
           pickable: true,
           radiusUnits: 'pixels',
-          getPosition: (d) => [d.lng, d.lat],
-          getRadius: (d) => 7 + Math.min(9, Math.abs(d.ext?.delta ?? 0) * 0.55),
-          getFillColor: (d) => [...(FIXTURE_RGB[d.status ?? ''] ?? FALLBACK_RGB), 225] as [number, number, number, number],
+          getPosition: (d) => [d[0].lng, d[0].lat],
+          getRadius: (d) => 7 + Math.min(9, Math.max(...d.map((f) => Math.abs(f.ext?.delta ?? 0))) * 0.55),
+          // A place is green only when every anchor on it is — and a drifting
+          // anchor must never hide behind a merely gap-flagged twin.
+          getFillColor: (d) => {
+            const worst = d.find((f) => f.status === 'DRIFT' || f.status === 'ERROR')
+              ?? d.find((f) => f.status !== 'OK') ?? d[0]
+            return [...(FIXTURE_RGB[worst.status ?? ''] ?? FALLBACK_RGB), 225] as [number, number, number, number]
+          },
           getLineColor: [255, 255, 255, 255],
           getLineWidth: 1.6,
           lineWidthUnits: 'pixels',
           stroked: true,
           onClick: (info) => {
-            if (info.object) onSelect?.({ kind: 'fixture', fixture: info.object })
+            if (info.object) onSelect?.({ kind: 'place', fixtures: info.object })
           },
         }),
       ],

@@ -26,8 +26,9 @@ test('QA route joins approved truth and optional model artifacts by ID', async (
     return createHash('sha256').update(bytes).digest('hex')
   }
   const fixturesSha256 = await writeJson('benchmarks/world-points.json', [{
-    id: 'fixture', lat: 50, lng: 14, mode: 'total', regime: 'road', external: {},
-    commensurability: {}, role: 'regression', tags: [], tolerance_note: 'fixture',
+    id: 'fixture', name: 'Fixture place', lat: 50, lng: 14, mode: 'total', regime: 'road',
+    external: { source: 'catalog' }, commensurability: {}, role: 'regression', tags: [],
+    tolerance_note: 'fixture',
   }])
   await writeJson('benchmarks/validation/approved-snapshots.v1.json', { version: 1, files: ['network.2025.json'] })
   const snapshotSha256 = await writeJson('benchmarks/validation/snapshots/network.2025.json', {
@@ -167,4 +168,71 @@ test('QA route fails closed when the live model cohort requires restart', async 
   assert.equal(points.json().model_cohort, null)
   assert.ok(points.json().warnings.some((warning: string) =>
     warning.includes('model cohort unavailable — model results hidden; restart required')))
+})
+
+test('QA route draws one dot per place and drops anchors without a name', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), '0db-validation-place-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const cohort = {
+    schema_version: 1 as const, cohort_id: 'c'.repeat(64), cache_ttl_ms: 30_000,
+    data_year: '2026', runtime_sha256: 'a'.repeat(64), prepared_sha256: 'b'.repeat(64),
+  }
+  const writeJson = async (relative: string, value: unknown) => {
+    const path = join(root, relative)
+    await mkdir(join(path, '..'), { recursive: true })
+    const bytes = JSON.stringify(value)
+    await writeFile(path, bytes)
+    return createHash('sha256').update(bytes).digest('hex')
+  }
+  await writeJson('benchmarks/world-points.json', [
+    {
+      id: 'day', name: 'Zálezly', lat: 50, lng: 14, mode: 'source:railway', metric_field: 'lden',
+      external: { source: 'map', readings: null }, commensurability: {}, role: 'regression',
+      tags: [], tolerance_note: 'day',
+    },
+    {
+      id: 'night', name: 'Zálezly', lat: 50, lng: 14, mode: 'source:railway', metric_field: 'ln',
+      external: { source: 'map', readings: [{ label: 'night', value: 61, unit: 'dB Ln' }] },
+      commensurability: {}, role: 'regression', tags: [], tolerance_note: 'night',
+    },
+    {
+      id: 'nameless', lat: 51, lng: 15, mode: 'total', regime: 'road',
+      external: { source: 'map' }, commensurability: {}, role: 'regression', tags: [], tolerance_note: 'nameless',
+    },
+    {
+      id: 'stated', name: 'Already stated', lat: 49, lng: 13, mode: 'source:aircraft', metric_field: 'lden',
+      external: { source: 'airport report', readings: [{ label: 'day', value: 55, unit: 'dB' }] },
+      commensurability: {}, role: 'regression', tags: [], tolerance_note: 'stated',
+    },
+  ])
+  await writeJson('benchmarks/validation/approved-snapshots.v1.json', { version: 1, files: ['network.2025.json'] })
+  await writeJson('benchmarks/validation/snapshots/network.2025.json', {
+    schema_version: 2, network: 'network', country_code: 'CZ', year: 2025,
+    measured_metric_field: 'lden', model_metric_field: 'lden', comparison_mode: 'trend_only',
+    comparison_tolerance_db: null, comparison_tolerance_basis: null, commensurability: {},
+    source: ['https://example.org/network'], license: 'CC-BY',
+    stations: [
+      { station_id: 'onsite', name: 'Zálezly monitor', lat: 50, lng: 14, lden: 61, months_covered: 12 },
+      { station_id: 'elsewhere', name: 'Elsewhere', lat: 48, lng: 12, lden: 55 },
+      { station_id: 'stated', name: 'Already stated monitor', lat: 49, lng: 13, lden: 55 },
+    ],
+  })
+
+  const app = Fastify()
+  t.after(() => app.close())
+  await app.register(validationViewRoutes, { repoRoot: root, cohortProvider: async () => cohort })
+  const body = (await app.inject('/api/validation/points')).json()
+
+  assert.deepEqual(body.fixtures.map((fixture: { id: string }) => fixture.id), ['day', 'night', 'stated'])
+  assert.ok(body.warnings.some((warning: string) => warning.includes('has no name')))
+
+  const [onsite, elsewhere, stated] = body.networks[0].stations
+  assert.equal(onsite.merged_into, 'day', 'a monitor on an anchor probe is the same monitor')
+  assert.equal(elsewhere.merged_into, undefined)
+  assert.deepEqual(body.fixtures[0].also_measured, [{
+    label: 'lden', value: 61, source: 'network 2025', url: 'https://example.org/network',
+  }])
+  assert.deepEqual(body.fixtures[1].also_measured, [], 'the Ln anchor compares another metric')
+  assert.equal(stated.merged_into, 'stated', 'still one dot')
+  assert.deepEqual(body.fixtures[2].also_measured, [], 'the anchor already states this number — no second copy')
 })

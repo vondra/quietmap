@@ -154,7 +154,7 @@
     "event_classified": "commensurability.dominance == event_classified"
   },
   "metric_variants": {
-    "$doc": "commensurability.metric_variant enum — the external anchor's native metric. `band_capable`: an external.band in the fixture's metric_field may be authored (metric honesty: never fake-converted). Non-band-capable variants keep external.band null; their Δ story lives in tolerance_note.",
+    "$doc": "commensurability.metric_variant enum — the external anchor's native metric. `band_capable`: an external.band in the fixture's metric_field may be authored (metric honesty: never fake-converted). Non-band-capable variants keep external.band null; the numbers their source states live in external.readings, the prose in external.note.",
     "lden": { "band_capable": true },
     "lden_band": { "band_capable": true, "note": "official-map class band (e.g. SHM 60–65)" },
     "period_split": { "band_capable": true, "note": "ld/le/ln published — band in the fixture's metric_field" },
