@@ -282,12 +282,13 @@ mod tests {
         }
     }
 
-    /// The index pairs with the table: a changed table — even at the same
-    /// byte length — makes the step rewrite, and the reopened file answers
-    /// with the builder's bytes. (The rerun no-op and the crash-leftover sweep
-    /// are `structures_finalize`'s test.)
+    /// The index pairs with the table and the engine: a changed table — even
+    /// at the same byte length — or an index from another engine version
+    /// makes the step rewrite, and the reopened file answers with the
+    /// builder's bytes. (The rerun no-op and the crash-leftover sweep are
+    /// `structures_finalize`'s test.)
     #[test]
-    fn pipeline_step_rewrites_the_index_when_the_table_changes() {
+    fn pipeline_step_rewrites_the_index_when_the_table_or_engine_changes() {
         let tmp = TempDir::new().unwrap();
         let square = grid::square_of(LAT, LON);
         let dir = fx::square_dir(tmp.path(), square);
@@ -318,6 +319,18 @@ mod tests {
         let same_length = finalize_square_structures(&dir, square).unwrap().unwrap().index;
         assert_eq!(std::fs::metadata(&arrow).unwrap().len(), length);
         assert!(same_length.written, "{same_length:?}");
+
+        // Another engine version (the grid pitch or the walk moved): the
+        // header word is rewritten in a copy the memo has not seen, and the
+        // step rewrites the index instead of refusing the square.
+        let mut bytes = std::fs::read(dir.join(STRUCTURES_QOIX)).unwrap();
+        bytes[8..16].copy_from_slice(&(CACHE_CODE_VER ^ 1).to_le_bytes());
+        std::fs::remove_file(dir.join(STRUCTURES_QOIX)).unwrap();
+        std::fs::write(dir.join(STRUCTURES_QOIX), bytes).unwrap();
+        let other_engine = finalize_square_structures(&dir, square).unwrap().unwrap().index;
+        assert!(other_engine.written, "{other_engine:?}");
+        let rerun = finalize_square_structures(&dir, square).unwrap().unwrap().index;
+        assert!(!rerun.written, "{rerun:?}");
     }
 
     /// A table without its index, or with an index from another engine or

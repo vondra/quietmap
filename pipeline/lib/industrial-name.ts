@@ -59,11 +59,14 @@ function integerColumn(table: Table, name: string, bits: number, signed: boolean
   return column
 }
 
-export async function enrichIndustrialNames(preparedDirectory: string) {
-  const squares = listPreparedSquares(preparedDirectory, [-90, -180, 90, 180], 'industrial.arrow')
-  if (!squares.length) throw new Error(`${preparedDirectory}: no industrial Arrow scope`)
-  const result = { squares: squares.length, rows: 0, named: 0, classified: 0, retired: 0, squaresUpdated: 0 }
-  for (const square of squares) {
+export async function enrichIndustrialNames(preparedDirectory: string, squares?: readonly string[]) {
+  const selected = squares ?? listPreparedSquares(preparedDirectory, [-90, -180, 90, 180], 'industrial.arrow')
+  if (!selected.length) {
+    if (squares) return { squares: 0, rows: 0, named: 0, classified: 0, retired: 0, squaresUpdated: 0 }
+    throw new Error(`${preparedDirectory}: no industrial Arrow scope`)
+  }
+  const result = { squares: selected.length, rows: 0, named: 0, classified: 0, retired: 0, squaresUpdated: 0 }
+  for (const square of selected) {
     await withArrowWrite(resolve(preparedDirectory, square, 'industrial.arrow'), table => {
       if (table.schema.metadata.get('grid') !== 'z30') throw new Error('industrial Arrow requires grid=z30')
       const names = table.getChild('name')

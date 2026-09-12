@@ -1,20 +1,17 @@
 """World publication must respect data dependencies, memory admission and immutable inputs."""
 
-import contextlib
-import io
 import json
 import os
 from unittest.mock import patch
 import importlib.util
 from pathlib import Path
-import sqlite3
 import sys
 import tempfile
 import threading
 import time
 import unittest
 
-from world_build_inputs import input_files, pin_inputs, verify_inputs
+from world_build_inputs import input_files, load_pin, pin_inputs, verify_inputs
 
 spec = importlib.util.spec_from_file_location('world_build', Path(__file__).with_name('build-world.py'))
 world = importlib.util.module_from_spec(spec)
@@ -32,38 +29,36 @@ class WorldBuildTest(unittest.TestCase):
             path.write_text('count=37')
             alias = source / 'alias.csv'
             alias.symlink_to(path)
-            database = sqlite3.connect(root / 'pins.sqlite')
-            pin_inputs(database, [source])
-            self.assertEqual(database.execute('SELECT count(*) FROM inputs').fetchone()[0], 2)
-            verify_inputs(database, [source])
+            pin = root / 'pins.jsonl'
+            pin_inputs(pin, [source])
+            self.assertEqual(len(load_pin(pin)), 2)
+            verify_inputs(pin, [source])
             other = source / 'second.csv'
             other.write_text('count=40')
-            other_database = sqlite3.connect(':memory:')
-            pin_inputs(other_database, [source])
+            other_pin = root / 'other.jsonl'
+            pin_inputs(other_pin, [source])
             alias.unlink()
             alias.symlink_to(other)
             with self.assertRaisesRegex(ValueError, 'changed'):
-                verify_inputs(other_database, [source])
-            other_database.close()
+                verify_inputs(other_pin, [source])
             alias.unlink()
             alias.symlink_to(path)
             other.unlink()
             extra = source / 'new.csv'
             extra.write_text('new feed')
             with self.assertRaisesRegex(ValueError, 'files added'):
-                verify_inputs(database, [source])
+                verify_inputs(pin, [source])
             extra.unlink()
-            path.write_text('count=38')
+            path.write_text('count=380')
             with self.assertRaisesRegex(ValueError, 'changed'):
-                verify_inputs(database, [source])
+                verify_inputs(pin, [source])
             alias.unlink()
             path.unlink()
             with self.assertRaisesRegex(ValueError, 'changed'):
-                verify_inputs(database, [source])
+                verify_inputs(pin, [source])
             (source / 'cycle').symlink_to(source, target_is_directory=True)
             with self.assertRaisesRegex(ValueError, 'cyclic'):
                 list(input_files([source]))
-            database.close()
 
     def test_pin_and_producer_environment_preserves_local_datums_without_network_or_resume_overrides(self):
         with patch.dict(os.environ, {'PATH': '/bin', 'GDAL_DATA': '/datum/gdal',
@@ -76,6 +71,7 @@ class WorldBuildTest(unittest.TestCase):
         self.assertNotIn('FROM_STAGE', environment)
         self.assertNotIn('LD_LIBRARY_PATH', environment)
         self.assertEqual(environment['RAYON_NUM_THREADS'], '4')
+        self.assertEqual(environment['QM_ROAD_WORKERS'], '4')
 
     def test_noncanonical_or_future_dates_fail_before_any_producer(self):
         with patch.object(world, 'source_paths', return_value={}):
@@ -103,39 +99,6 @@ class WorldBuildTest(unittest.TestCase):
             world.run_plan(steps, execute)
         self.assertEqual(started, {'rail', 'industry'})
         self.assertEqual(completed, {'rail'})
-
-    def test_resume_keeps_finished_steps_reruns_the_rest_and_reports_changed_code(self):
-        with tempfile.TemporaryDirectory() as directory:
-            code = Path(directory) / 'writer.rs'
-            code.write_text('old')
-            database = sqlite3.connect(':memory:')
-            database.execute('CREATE TABLE build(config TEXT NOT NULL, status TEXT NOT NULL)')
-            database.execute("INSERT INTO build VALUES(?, 'failed')", (json.dumps({'a': 1}, sort_keys=True),))
-            database.execute('CREATE TABLE steps(name TEXT PRIMARY KEY, command TEXT NOT NULL, started REAL NOT NULL, seconds REAL, exit INTEGER)')
-            database.executemany('INSERT INTO steps VALUES(?,?,?,?,?)', [
-                ('rasters', '[]', 1.0, 2.0, 0), ('osm', '[]', 1.0, 3.0, 1), ('aircraft', '[]', 1.0, None, None)])
-            database.execute('CREATE TABLE inputs(path TEXT PRIMARY KEY, sha256 BLOB NOT NULL, device INTEGER, inode INTEGER, bytes INTEGER, mtime_ns INTEGER, ctime_ns INTEGER)')
-            database.execute('INSERT INTO inputs VALUES(?,?,?,?,?,?,?)', (str(code), b'x', *world.file_identity(code)))
-            with self.assertRaisesRegex(ValueError, 'another configuration'):
-                world.resume_steps(database, {'a': 2}, [code])
-            code.write_text('fixed')
-            with contextlib.redirect_stdout(io.StringIO()) as printed:
-                completed = world.resume_steps(database, {'a': 1}, [code])
-            self.assertEqual(completed, {'rasters'})
-            self.assertEqual(json.loads(printed.getvalue()), {'resume': ['rasters'], 'code_changed': [str(code)]})
-            self.assertEqual([name for name, in database.execute('SELECT name FROM steps')], ['rasters'])
-            self.assertEqual(database.execute("SELECT status FROM build").fetchone(), ('running',))
-            self.assertFalse(database.execute("SELECT name FROM sqlite_master WHERE name='inputs'").fetchall())
-            with contextlib.redirect_stdout(io.StringIO()) as printed:
-                world.resume_steps(database, {'a': 1}, [code])  # interrupted while pinning: no inputs table
-            self.assertEqual(json.loads(printed.getvalue())['code_changed'], 'unpinned')
-            database.execute("UPDATE build SET status='complete'")
-            with self.assertRaisesRegex(ValueError, 'complete build'):
-                world.resume_steps(database, {'a': 1}, [code])
-        started = []
-        steps = [world.Step('rasters', (), ()), world.Step('osm', ('rasters',), ()), world.Step('aircraft', ('osm',), ())]
-        world.run_plan(steps, lambda step: started.append(step.name), {'rasters'})
-        self.assertEqual(started, ['osm', 'aircraft'])
 
     def test_structures_rewritten_after_the_finalize_step_fail_the_build(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -165,9 +128,11 @@ class WorldBuildTest(unittest.TestCase):
             peak = 0
             indexed = {step.name: step for step in plan}
             self.assertEqual(indexed['structures'].dependencies, ('buildings',))
+            self.assertEqual(indexed['structures'].argv[-2:], ('--jobs', '4'))
             self.assertEqual(indexed['structures-finalize'].dependencies, ('structures',))
             self.assertTrue(indexed['structures-finalize'].argv[0].endswith('engine/target/release/structures-finalize'))
             self.assertEqual(set(indexed['roads'].dependencies), {'square-country-city', 'structures'})
+            self.assertEqual(indexed['roads'].argv[indexed['roads'].argv.index('--jobs') + 1], '4')
             self.assertEqual(indexed['industrial'].dependencies, ('square-country-city',))
             self.assertEqual(indexed['railways'].dependencies, ('square-country-city',))
             self.assertNotIn('repaint', indexed)

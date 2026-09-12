@@ -20,6 +20,10 @@ from admin_at import AdminResolver
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from qmgrid import parse_square_name, square_id, square_lonlat_span  # noqa: E402
 from prepared_arrow import replace_atomically, rewrite_arrow_batches, segment_midpoints, grid_points  # noqa: E402
+from worker_jobs import available_memory_bytes, cpu_jobs, fit_jobs  # noqa: E402
+
+# 20 workers finished the 60 GiB world-build share of square-country-city.
+WORKER_BYTES = 2 << 30
 
 COUNTRY_CITY_COLUMNS = {"country_iso": pa.uint16(), "city_id": pa.uint16(), "continent": pa.uint8()}
 COUNTRY_CONTRACT = b"country_baked_v1"
@@ -147,9 +151,10 @@ def main():
     parser.add_argument("--prepared-dir", type=Path, required=True)
     parser.add_argument("--boundaries", type=Path, required=True)
     parser.add_argument("--square", action="append", help="Repeat to limit the build to selected z9/x/y units")
-    parser.add_argument("--jobs", type=int, default=1, help="Independent z9 workers (1 keeps the serial path)")
+    parser.add_argument("--jobs", type=int, default=None,
+                        help="Worker cap (default: all CPUs that fit memory; 1 keeps the serial path)")
     args = parser.parse_args()
-    if args.jobs < 1:
+    if args.jobs is not None and args.jobs < 1:
         raise ValueError("--jobs must be >= 1")
     prepared = args.prepared_dir.resolve(strict=True)
     names = args.square or sorted(str(path.relative_to(prepared)) for path in (prepared / "z9").glob("*/*") if path.is_dir())
@@ -161,14 +166,21 @@ def main():
     totals = Counter()
     with (prepared / ".square-country-city-build.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if args.jobs == 1:
+        requested = cpu_jobs() if args.jobs is None else args.jobs
+        jobs = min(len(squares), fit_jobs(requested, WORKER_BYTES))
+        print(
+            f"[square-country-city] jobs={jobs} requested={requested} "
+            f"memory_bytes={available_memory_bytes()} worker_bytes={WORKER_BYTES}",
+            flush=True,
+        )
+        if jobs == 1:
             resolver = AdminResolver.from_file(args.boundaries)
             for name, _square in squares:
                 emit_square(process_square(prepared, resolver, name), totals)
             return
         context = mp.get_context("spawn")
         with ProcessPoolExecutor(
-            max_workers=args.jobs, mp_context=context,
+            max_workers=jobs, mp_context=context,
             initializer=_init_worker, initargs=(prepared, args.boundaries.resolve(strict=True)),
         ) as pool:
             futures = [pool.submit(_process_name, name) for name, _square in squares]

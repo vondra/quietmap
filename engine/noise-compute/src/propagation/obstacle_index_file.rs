@@ -425,11 +425,18 @@ impl ObstacleIndex {
             ));
         }
 
+        // The pitch is data now, not a constant: a damaged word would clamp
+        // every DDA walk to one cell and under-screen silently.
+        let cell_m = f64::from_bits(get(48));
+        if !(cell_m.is_finite() && cell_m > 0.0) {
+            return Err(format!("grid pitch {cell_m} is not a positive length"));
+        }
+
         Ok(ObstacleIndex {
             origin_lat: f64::from_bits(get(24)),
             origin_lon: f64::from_bits(get(32)),
             m_per_deg_lon: f64::from_bits(get(40)),
-            cell_m: f64::from_bits(get(48)),
+            cell_m,
             min_x: f64::from_bits(get(56)),
             min_y: f64::from_bits(get(64)),
             cols,
@@ -623,6 +630,10 @@ mod tests {
         let mut old = bytes.clone();
         old[4] = VERSION + 1;
         refuses(old, 0xabc, "version");
+
+        let mut pitchless = bytes.clone();
+        pitchless[48..56].copy_from_slice(&f64::NAN.to_bits().to_le_bytes());
+        refuses(pitchless, 0xabc, "grid pitch");
 
         refuses(
             bytes[..bytes.len() - SECTION_ALIGN].to_vec(),

@@ -13,6 +13,7 @@ import { writeRailParallelDivisor } from './lib/railways-arrow.js'
 import {
   M_PER_DEG_LAT, M_PER_DEG_LON_EQ, pointToSegmentDist, wrapLonDeltaDeg,
 } from './lib/spatial.js'
+import { fanOutIfNeeded, parseShard, shardSquares } from './lib/square-pool.js'
 
 const PARALLEL_RADIUS_M = 50
 const DIVISOR_CAP = 3
@@ -264,11 +265,14 @@ function neighbouringRailwayPaths(preparedDirectory: string, square: string): st
 export async function enrichRailwayParallelDirectory(
   preparedDirectory: string,
   bbox: PreparedBbox,
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; squares?: readonly string[] } = {},
 ): Promise<RailwayParallelRunStats> {
   const prepared = resolve(preparedDirectory)
-  const squares = listPreparedSquares(prepared, bbox, 'railways.arrow')
-  if (squares.length === 0) throw new Error(`no railways.arrow source squares found under ${prepared}`)
+  const squares = [...(options.squares ?? listPreparedSquares(prepared, bbox, 'railways.arrow'))]
+  if (squares.length === 0) {
+    if (options.squares) return { ...emptyStats(), squares: 0, squaresUpdated: 0 }
+    throw new Error(`no railways.arrow source squares found under ${prepared}`)
+  }
   const total: RailwayParallelRunStats = { ...emptyStats(), squares: squares.length, squaresUpdated: 0 }
   for (const square of squares) {
     const stats = await enrichRailwayParallelSquare(resolve(prepared, square, 'railways.arrow'), {
@@ -290,7 +294,7 @@ export async function enrichRailwayParallelDirectory(
   return total
 }
 
-function parseCli(argv: readonly string[]): { prepared: string; bbox: PreparedBbox; dryRun: boolean } {
+function parseCli(argv: readonly string[]): { prepared: string; bbox: PreparedBbox; dryRun: boolean; shard?: string } {
   const { values } = parseArgs({
     args: [...argv],
     strict: true,
@@ -300,6 +304,7 @@ function parseCli(argv: readonly string[]): { prepared: string; bbox: PreparedBb
       bbox: { type: 'string' },
       world: { type: 'boolean' },
       'dry-run': { type: 'boolean' },
+      shard: { type: 'string' },
     },
   })
   if (!values['prepared-dir'] || Boolean(values.world) === Boolean(values.bbox)) {
@@ -309,12 +314,20 @@ function parseCli(argv: readonly string[]): { prepared: string; bbox: PreparedBb
   }
   const bbox = values.world ? WORLD_BBOX : values.bbox!.split(',').map(Number) as unknown as PreparedBbox
   if (bbox.length !== 4) throw new Error(`invalid bbox '${values.bbox}'`)
-  return { prepared: resolve(values['prepared-dir']), bbox, dryRun: values['dry-run'] ?? false }
+  return { prepared: resolve(values['prepared-dir']), bbox, dryRun: values['dry-run'] ?? false, shard: values.shard }
 }
 
 async function main(): Promise<void> {
   const options = parseCli(process.argv.slice(2))
-  console.log(JSON.stringify(await enrichRailwayParallelDirectory(options.prepared, options.bbox, options)))
+  if (!options.dryRun && await fanOutIfNeeded()) return
+  const squares = shardSquares(
+    listPreparedSquares(options.prepared, options.bbox, 'railways.arrow'),
+    parseShard(options.shard),
+  )
+  console.log(JSON.stringify(await enrichRailwayParallelDirectory(options.prepared, options.bbox, {
+    dryRun: options.dryRun,
+    squares,
+  })))
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

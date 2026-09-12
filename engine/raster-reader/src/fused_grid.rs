@@ -190,6 +190,13 @@ impl FusedGrid {
     }
 
     /// Build from RealRasters, cropping to the requested local bbox.
+    ///
+    /// One retained tile slot per raster, re-resolved only when the walk
+    /// crosses a z9 boundary: a plain `sample` bumps the store's `use_counter`
+    /// atomic, takes the cache mutex and clones the tile's `Arc` for every
+    /// one of the millions of pixels, on cache lines every concurrent halo
+    /// build shares — dev1 measured (2026-09-06) three tile batches built at
+    /// once costing 3.3× the CPU of one and finishing no sooner.
     pub fn build(
         rasters: &RealRasters,
         lat_min: f64,
@@ -197,42 +204,33 @@ impl FusedGrid {
         lon_min: f64,
         lon_max: f64,
     ) -> Self {
-        Self::build_with_pixel_sampler(lat_min, lat_max, lon_min, lon_max, |lat, lon| {
-            let elevation = rasters.dem.sample(lat, lon);
-            let forest = rasters.forest.sample(lat, lon);
-            let imd = rasters.imd.sample(lat, lon);
-            // Integer channel casts must not turn unavailable surface data into silence.
-            FusedPixel {
-                elevation: if [elevation, forest, imd].iter().all(|v| v.is_finite()) {
-                    elevation as f32
-                } else {
-                    f32::NAN
-                },
-                forest: forest as u8,
-                imd: imd as u8,
-                _pad: 0,
-            }
-        })
-    }
-
-    fn build_with_pixel_sampler(
-        lat_min: f64,
-        lat_max: f64,
-        lon_min: f64,
-        lon_max: f64,
-        mut sample: impl FnMut(f64, f64) -> FusedPixel,
-    ) -> Self {
         let cell_deg = 1.0 / 3600.0;
         let inv_cell_deg = 3600.0;
         let (rows, cols, lat_lo, lon_lo) = Self::grid_dims(lat_min, lat_max, lon_min, lon_max);
+        let (dem, forest, imd) = (&rasters.dem, &rasters.forest, &rasters.imd);
+        let (mut dem_key, mut dem_tile) = ((i32::MIN, i32::MIN), None);
+        let (mut forest_key, mut forest_tile) = ((i32::MIN, i32::MIN), None);
+        let (mut imd_key, mut imd_tile) = ((i32::MIN, i32::MIN), None);
 
         let mut data = vec![FusedPixel::default(); rows * cols];
-
         for r in 0..rows {
             let lat = lat_lo + r as f64 * cell_deg;
             for co in 0..cols {
                 let lon = lon_lo + co as f64 * cell_deg;
-                data[r * cols + co] = sample(lat, lon);
+                let elevation = dem.sample_cached(lat, lon, &mut dem_key, &mut dem_tile);
+                let forest = forest.sample_cached(lat, lon, &mut forest_key, &mut forest_tile);
+                let imd = imd.sample_cached(lat, lon, &mut imd_key, &mut imd_tile);
+                // Integer channel casts must not turn unavailable surface data into silence.
+                data[r * cols + co] = FusedPixel {
+                    elevation: if [elevation, forest, imd].iter().all(|v| v.is_finite()) {
+                        elevation as f32
+                    } else {
+                        f32::NAN
+                    },
+                    forest: forest as u8,
+                    imd: imd as u8,
+                    _pad: 0,
+                };
             }
         }
 
@@ -531,10 +529,11 @@ mod tests {
                 .iter()
                 .all(|pixel| pixel.elevation.is_finite() == missing.is_none()));
             if missing.is_none() {
-                assert!(fused
-                    .pixels()
-                    .iter()
-                    .all(|pixel| (pixel.elevation, pixel.forest, pixel.imd) == (0.0, 0, 100)));
+                assert!(fused.pixels().iter().all(|pixel| (
+                    pixel.elevation,
+                    pixel.forest,
+                    pixel.imd
+                ) == (0.0, 0, 100)));
             }
         }
     }

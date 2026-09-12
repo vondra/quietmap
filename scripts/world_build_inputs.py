@@ -1,11 +1,13 @@
 """Freeze world-build input identities and attach a complete native raster year."""
 
+import json
 import os
 from pathlib import Path
 import struct
 import sys
+import tempfile
 
-from prepared_manifest import file_identity, sha256, square_directories
+from prepared_manifest import file_identity, square_directories
 
 sys.path.insert(0, str(Path(__file__).parent / 'lib'))
 import qmgrid
@@ -74,27 +76,71 @@ def height_inputs(path, ancestors=frozenset()):
             yield Path(filename).absolute()
 
 
-def pin_inputs(database, roots):
-    database.execute('CREATE TABLE inputs(path TEXT PRIMARY KEY, sha256 BLOB NOT NULL, '
-                     'device INTEGER, inode INTEGER, bytes INTEGER, mtime_ns INTEGER, ctime_ns INTEGER)')
-    for index, path in enumerate(input_files(roots), 1):
-        before = file_identity(path)
-        digest = sha256(path)
-        if file_identity(path) != before:
-            raise ValueError(f'source changed while hashing: {path}')
-        database.execute('INSERT INTO inputs VALUES(?,?,?,?,?,?,?)', (str(path), digest, *before))
-        if index % 1000 == 0:
-            print(f'Pinned {index} input files', flush=True)
-    database.commit()
+def pin_inputs(path, roots):
+    """Record device identity of every frozen input. Bytes are not hashed: verify re-stats."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f'.{path.name}.', dir=path.parent)
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as output:
+            for index, source in enumerate(input_files(roots), 1):
+                device, inode, size, mtime_ns, ctime_ns = file_identity(source)
+                output.write(json.dumps({
+                    'path': str(source), 'device': device, 'inode': inode,
+                    'bytes': size, 'mtime_ns': mtime_ns, 'ctime_ns': ctime_ns,
+                }, sort_keys=True) + '\n')
+                if index % 1000 == 0:
+                    print(f'Pinned {index} input files', flush=True)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
-def verify_inputs(database, roots):
+def load_pin(path):
+    rows = []
+    with Path(path).open(encoding='utf-8') as source:
+        for line in source:
+            if line.strip():
+                rows.append(json.loads(line))
+    return rows
+
+
+def repin_inputs(path, roots, repo):
+    """Keep the old pin unless every changed input belongs to the code checkout."""
+    previous = {row['path']: row for row in load_pin(path)} if path.exists() else {}
+    if not previous:
+        raise ValueError('cannot resume without the previous input pin; retained work needs inspection')
+    candidate = path.with_name('.' + path.name + '.next')
+    try:
+        pin_inputs(candidate, roots)
+        current = {row['path']: row for row in load_pin(candidate)}
+        changed = sorted(name for name in previous.keys() | current.keys()
+                         if previous.get(name) != current.get(name))
+        def is_code(name):
+            relative = Path(name).relative_to(repo) if Path(name).is_relative_to(repo) else None
+            return relative is not None and (relative.parts[0] in ('engine', 'scripts')
+                or relative == Path('rust-toolchain.toml')
+                or (relative.parts[0] == 'pipeline' and 'node_modules' not in relative.parts))
+        sources = [name for name in changed if not is_code(name)]
+        if sources:
+            raise ValueError(f'cannot resume: {len(sources)} frozen sources changed; examples: {sources[:5]}')
+        os.replace(candidate, path)
+        return changed
+    finally:
+        candidate.unlink(missing_ok=True)
+
+
+def verify_inputs(path, roots):
     actual = set(map(str, input_files(roots)))
     count = 0
-    for path, device, inode, size, mtime, ctime in database.execute(
-            'SELECT path,device,inode,bytes,mtime_ns,ctime_ns FROM inputs'):
-        if path not in actual or file_identity(Path(path)) != (device, inode, size, mtime, ctime):
-            raise ValueError(f'frozen input changed during build: {path}')
+    for row in load_pin(path):
+        pinned = row['path']
+        identity = (row['device'], row['inode'], row['bytes'], row['mtime_ns'], row['ctime_ns'])
+        if pinned not in actual or file_identity(Path(pinned)) != identity:
+            raise ValueError(f'frozen input changed during build: {pinned}')
         count += 1
     if len(actual) != count:
         raise ValueError('files added to frozen inputs during build')
@@ -107,9 +153,11 @@ def attach_rasters(source, prepared):
             (prepared / qmgrid.square_name(x, y)).mkdir(parents=True, exist_ok=True)
     for path in raster_inputs(source):
         attached, target = prepared / path.relative_to(source), canonical_input(path)
-        # A resumed build finds its own links in place.
-        if not (attached.is_symlink() and os.readlink(attached) == str(target)):
-            attached.symlink_to(target)
+        if attached.is_symlink() and attached.readlink() == target:
+            continue
+        if attached.exists() or attached.is_symlink():
+            raise ValueError(f'prepared raster replaced: {attached}')
+        attached.symlink_to(target)
 
 
 def verify_prepared_raster_links(source, prepared):

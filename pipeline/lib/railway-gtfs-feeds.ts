@@ -27,7 +27,7 @@ const RAIL_AND_TRAM_WITHOUT_METRO = new Set([...RAIL_TYPES, ...TRAM_TYPES])
 
 /** The 7zip-bin 5.2.0 tarball ships `7za` without the execute bit; npm keeps it that way. */
 export function sevenZipExecutable(): string {
-  chmodSync(path7za, 0o755)
+  if (!(lstatSync(path7za).mode & 0o111)) chmodSync(path7za, 0o755)
   return path7za
 }
 

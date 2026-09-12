@@ -2,7 +2,6 @@
 
 import os
 from pathlib import Path
-import sqlite3
 import struct
 import tempfile
 import unittest
@@ -25,14 +24,22 @@ class WorldBuildInputsTest(unittest.TestCase):
                     square.mkdir(parents=True)
                     for name in ('dem.i16be', 'forest.u8', 'imd.u8'):
                         (square / name).write_bytes(b'\x00\x25' if square / name == raster else b'')
-            pins = sqlite3.connect(':memory:')
+            pins = root / 'pins.jsonl'
             selected = list(inputs.raster_inputs(source))
             self.assertEqual(len(selected), 12)
             self.assertIn(raster, selected)
             inputs.pin_inputs(pins, selected)
+            self.assertEqual(len(inputs.load_pin(pins)), 12)
             output = root / 'valid'
             inputs.attach_rasters(source, output)
             inputs.attach_rasters(source, output)  # a resumed build attaches again
+            foreign = output / 'z9/1/1/imd.u8'
+            foreign.unlink()
+            foreign.write_bytes(b'')
+            with self.assertRaisesRegex(ValueError, 'prepared raster replaced'):
+                inputs.attach_rasters(source, output)
+            foreign.unlink()
+            foreign.symlink_to(source / 'z9/1/1/imd.u8')
             self.assertEqual((output / 'z9/0/0/dem.i16be').read_bytes(), raster.read_bytes())
             self.assertEqual((output / 'z9/1/1/imd.u8').stat().st_size, 0)
             self.assertEqual(len(list(output.glob('z9/*/*/*'))), 12)
@@ -49,7 +56,6 @@ class WorldBuildInputsTest(unittest.TestCase):
                 list(inputs.raster_inputs(source))
             with self.assertRaisesRegex(ValueError, 'missing raster'):
                 inputs.attach_rasters(source, root / 'missing')
-            pins.close()
 
     def test_height_alias_cycle_is_rejected_before_gdal_opens_it(self):
         with tempfile.TemporaryDirectory() as directory:

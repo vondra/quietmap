@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
@@ -104,6 +104,10 @@ test('identity-pinned archive extracts only into the derived cache', () => {
   mkdirSync(source)
   writeRequiredGtfs(input)
   const archive = join(source, 'feed.zip')
+  const executable = sevenZipExecutable()
+  const identity = statSync(executable, { bigint: true })
+  assert.equal(sevenZipExecutable(), executable)
+  assert.equal(statSync(executable, { bigint: true }).ctimeNs, identity.ctimeNs)
   const created = spawnSync(sevenZipExecutable(), ['a', archive, '.'], { cwd: input, encoding: 'utf8' })
   assert.equal(created.status, 0, created.stderr)
   const archiveSha256 = createHash('sha256').update(readFileSync(archive)).digest('hex')

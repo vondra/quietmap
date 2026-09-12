@@ -41,9 +41,6 @@ struct Cli {
     /// parallelizes one rayon task per (source, bucket).
     #[arg(long, default_value_t = 256)]
     num_buckets: usize,
-    /// Skip extraction, only run finalize on existing spill data.
-    #[arg(long)]
-    finalize_only: bool,
 }
 
 fn main() -> Result<()> {
@@ -51,14 +48,14 @@ fn main() -> Result<()> {
     let t0 = Instant::now();
     eprintln!("=== osm-extract ===");
 
-    if cli.finalize_only {
-        anyhow::ensure!(
-            spill::is_complete(&cli.spill_dir),
-            "spill {} is not complete; finalize needs a finished extract",
-            cli.spill_dir.display()
+    // A complete spill left by an extract whose finalize failed is finalized
+    // again from the spill; the planet is read only for a partial or absent one.
+    if spill::is_complete(&cli.spill_dir, cli.num_buckets) {
+        eprintln!(
+            "  Complete spill in {} ({} buckets): finalizing from it, not from the planet",
+            cli.spill_dir.display(),
+            cli.num_buckets
         );
-        eprintln!("  Finalize-only mode (skipping extraction)");
-        eprintln!("  Spill dir: {}", cli.spill_dir.display());
         eprintln!("  Output: {}", cli.output.display());
 
         let t_fin = Instant::now();
@@ -96,8 +93,12 @@ fn main() -> Result<()> {
     let t2 = Instant::now();
     // Start from a clean spill dir: a stale partition from an earlier run (especially
     // a different num_buckets) would let finalize place the same square in two parallel
-    // units and race on its output file. (--finalize_only returns earlier, never here.)
-    std::fs::remove_dir_all(&cli.spill_dir).ok();
+    // units and race on its output file — and the completion marker would then bless it.
+    match std::fs::remove_dir_all(&cli.spill_dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => anyhow::bail!("cannot clear stale spill {}: {error}", cli.spill_dir.display()),
+    }
     let mut spiller = spill::Spiller::new(&cli.spill_dir, cli.num_buckets)?;
     let mut assembler = relations::RelationAssembler::new(&manifest);
 
@@ -585,7 +586,7 @@ mod tests {
             assert_eq!(extracted, u64::from(kind_match));
             assert_eq!(written, u64::from(kind_match));
         }
-        spiller.flush_all().unwrap();
+        spiller.complete().unwrap();
         let row = std::fs::read_to_string(directory.join("industrial_000.tsv")).unwrap();
         assert_eq!(row.lines().count(), 1);
         assert!(row.contains("\t42\t"));

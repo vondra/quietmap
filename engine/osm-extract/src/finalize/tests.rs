@@ -238,7 +238,7 @@ fn multiline_osm_tags_survive_spill_and_arrow_for_every_source() {
             spiller.emit_polygon(source, square, index as i64 + 1, 50.0, 14.0, &tags, None);
         }
     }
-    spiller.flush_all().unwrap();
+    spiller.complete().unwrap();
     drop(spiller);
     assert_eq!(finalize(&spill_dir, &output_dir, 1).unwrap(), 1);
     for source in sources {
@@ -270,7 +270,7 @@ fn multiline_osm_tags_survive_spill_and_arrow_for_every_source() {
 }
 
 #[test]
-fn airport_writer_removes_only_proven_empty_segments_and_preserves_identity() {
+fn airport_writer_drops_sub_decimetre_legs_and_preserves_identity() {
     let dir = scratch_dir("airport-degenerate");
     let path = dir.join("airport_lines.arrow");
     let row = |id: u64, index: u16, end: i32, length: &str| {
@@ -285,6 +285,8 @@ fn airport_writer_removes_only_proven_empty_segments_and_preserves_identity() {
             row(866803531, 22, 1000, "0"),
             // One z30 unit long: under the spill's 0.1 m resolution, dropped.
             row(23733611, 3, 1001, "0"),
+            // A decimetre inside one grid point (a diagonal near the equator): dropped.
+            row(23733611, 4, 1000, "0.1"),
             row(866803531, 23, 1100, "3.7"),
         ],
         &path,

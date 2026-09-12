@@ -6,7 +6,7 @@ Release `r260904` is a best-available snapshot, not a promise of full-calendar-2
 
 Pass the source root and working prepared year explicitly to each producer. Keep source
 inputs immutable and write intermediates into a separate working tree. Publish a complete,
-validated prepared generation together with its catalogs and source receipts.
+validated prepared generation. Identity is the release name plus the code version.
 
 Every consumer uses current-release sources. Retain any separate structures output while
 prepared squares link to it. Materialize links before removing a work tree or publishing a
@@ -16,9 +16,13 @@ standalone copy. Never synthesize an empty structure file to cover an unfinished
 
 `scripts/build-world.py --config WORLD.toml --output NEW_GENERATION --scratch NEW_SCRATCH`
 coordinates a fresh world through all seven Arrow layers. Add `--plan` to print its
-actual commands without starting producers. The two destinations must be empty and
-separate from sources. Existing partial work is retained on failure; the controller
-never adopts it implicitly. Use the recorded producer commands for a reviewed recovery.
+actual commands without starting producers. Destinations are empty or contain an interrupted
+build of the same configuration. Resume retains successful steps with unchanged producer
+arguments and completed dependencies. Worker caps and scope names do not change data identity.
+A changed source or a live producer refuses resume; code changes are recorded in `build.json`.
+The OSM extractor reuses a complete spill only when its bucket count matches.
+`--jobs` on a producer is an optional cap; omitting it uses every CPU that still
+fits the process memory limit so a forgotten flag does not fall back to one thread.
 
 The TOML file has `[build]` keys `as_of_date` (YYYYMMDD string), `aircraft_anchor`
 (YYYY-MM string), `memory_gib` and `threads` (positive integers). `[sources]` supplies
@@ -28,16 +32,19 @@ absolute paths named `planet`, `rasters`, `enrichment`, `boundaries`, `city_boun
 cache, and `regional_heights` retains the measured regional raster or VRT dependencies.
 Download and validate new source versions before freezing these inputs.
 
-The controller records source/code SHA-256 and execution receipts in `build.sqlite`,
-including resolved height-raster dependencies. It prepares the complete z9 directory
-set before parallel writers, then runs OSM, square-country-city, national buildings, structures,
+The controller records each frozen input's device identity in `input-identities.jsonl`
+(path, inode, size, mtimes — no SHA-256 of the world) and step receipts in `steps.jsonl`.
+`build.json` records configuration, status and resume history; filesystem locks exclude another controller. It prepares the complete z9 directory
+set before parallel writers, then runs OSM, square-country-city, national buildings, structures
+(`--jobs` workers, one square each; omit `--jobs` for all CPUs that fit memory),
 ordered road/rail/industry chains and the pinned hybrid aircraft window. Buildings
 precede structures; both precede service-tree and built-up road inference. Disjoint
 writers can overlap within the configured cgroup memory budget. Source cache changes
 invalidate completion, including replaced symlink targets or newly added files.
 
-Only a successful all-layer audit writes the final `prepared/YEAR/inputs.sqlite`
-Arrow manifest and marks `build.sqlite` complete. Linked native rasters remain required
+A successful all-layer audit marks `build.json` complete. There is no serving-path
+SQLite catalog: identity is the release name plus the code version, and the popup reads
+square files directly. Linked native rasters remain required
 for the generation's lifetime. Source pinning and the fixed sampling dates make the
 inputs reproducible; whole-world byte-identical output has not yet been demonstrated.
 This controller does not repaint heatmaps or change a served generation.
@@ -87,7 +94,7 @@ without a current `structures.qoix` is a query error naming this step; rerun it 
 any structures refresh.
 
 Run `scripts/square-country-city/build_square_country_city.py --prepared-dir YEAR
---boundaries CGAZ --jobs N` after extraction. It writes `square-country-city.bin`
+--boundaries CGAZ` after extraction (`--jobs N` caps workers; the default is all CPUs). It writes `square-country-city.bin`
 (continent, country ISO, metro id per z9 square) and embedded road/rail/industrial
 country columns. It holds `YEAR/.square-country-city-build.lock` exclusively. Do not
 overlap a writer that ignores this lock with the square-country-city bake.
@@ -120,6 +127,11 @@ Within each layer keep manifest order; do not run two writers of one layer toget
 Each child exclusively locks its output family. Roads, railways and industrial also
 hold the square-country-city lock shared, excluding its writer for their lifetime. Step exit and elapsed seconds
 are emitted as JSON. `--from STEP` resumes within the selected family.
+`--jobs` (default: every CPU) caps square workers; omitting it, or `QM_ROAD_WORKERS`,
+uses every CPU that still fits the process memory limit. Per-square world heuristics
+(service-tree, continuity, taper, railways-parallel, industrial wind/name, built-up)
+shard that way. Country adapters stay one process: they load a national dataset once.
+Industrial GEM/global/special stay one process because facility winners compete worldwide.
 
 Service-tree visits every road square, including those without buildings. Empty
 building demand retracts its own stale estimates and preserves measured traffic.

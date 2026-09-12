@@ -4,8 +4,7 @@ Run after the OSM extract and before country-dependent enrichment:
 
 ```sh
 python scripts/square-country-city/build_square_country_city.py --prepared-dir <prepared-year> \
-  --boundaries <source>/geoBoundariesCGAZ_ADM0_s0005.geojson \
-  --jobs 12
+  --boundaries <source>/geoBoundariesCGAZ_ADM0_s0005.geojson
 ```
 
 Requires NumPy, Shapely 2 and PyArrow. Repeat `--square z9/x/y` for a subset.

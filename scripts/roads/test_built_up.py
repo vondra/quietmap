@@ -270,7 +270,7 @@ class BuiltUpTests(unittest.TestCase):
                        "--workers", str(workers)]
             result = subprocess.run(command, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            return result.stdout
+            return '\n'.join(line for line in result.stdout.splitlines() if line.startswith('{'))
 
         self.assertEqual(run(single, 1), run(parallel, 16))
         for square in squares:
@@ -278,12 +278,12 @@ class BuiltUpTests(unittest.TestCase):
             self.assertEqual((single / relative).read_bytes(), (parallel / relative).read_bytes())
 
         rejected = subprocess.run(
-            [sys.executable, script, "--prepared-dir", str(source), "--workers", "17"],
+            [sys.executable, script, "--prepared-dir", str(source), "--workers", "0"],
             text=True,
             capture_output=True,
         )
         self.assertNotEqual(rejected.returncode, 0)
-        self.assertIn("--workers must be in 1..16", rejected.stderr)
+        self.assertIn("--workers must be >= 1", rejected.stderr)
 
 
 if __name__ == "__main__":

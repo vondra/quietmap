@@ -58,18 +58,15 @@ class GlobalPrior:
 
 
 class RegionalHeights:
-    """Regional relative-height raster held fully in RAM (zonal reads cluster)."""
+    """Regional relative-height raster. Windowed reads: the IPR mosaic is 4.2 GiB."""
 
     def __init__(self, path):
-        ds = rasterio.open(path)
-        self.gt = ds.transform
-        self.w, self.h = ds.width, ds.height
-        self.tr = Transformer.from_crs("EPSG:4326", ds.crs, always_xy=True)
-        self.input_identity = [file_identity(f) for f in sorted(ds.files)]
-        self.arr = ds.read(1).astype(np.float32, copy=False)
-        nodata = ds.nodata
-        if nodata is not None:
-            self.arr[self.arr == nodata] = np.nan
+        self.ds = rasterio.open(path)
+        self.gt = self.ds.transform
+        self.w, self.h = self.ds.width, self.ds.height
+        self.tr = Transformer.from_crs("EPSG:4326", self.ds.crs, always_xy=True)
+        self.input_identity = [file_identity(f) for f in sorted(self.ds.files)]
+        self.nodata = self.ds.nodata
 
     def covers(self, x, y):
         c = (x - self.gt.c) / self.gt.a
@@ -91,7 +88,9 @@ class RegionalHeights:
         # (gg pass 2) — no real building needs a 4x4 km window; abstain.
         if (c1 - c0) * (r1 - r0) > 16_000_000:
             return None
-        window = self.arr[r0:r1, c0:c1]
+        window = self.ds.read(1, window=((r0, r1), (c0, c1))).astype(np.float32, copy=False)
+        if self.nodata is not None:
+            window = np.where(window == self.nodata, np.nan, window)
         xs = self.gt.c + (np.arange(c0, c1) + 0.5) * self.gt.a
         ys = self.gt.f + (np.arange(r0, r1) + 0.5) * self.gt.e
         xx, yy = np.meshgrid(xs, ys)

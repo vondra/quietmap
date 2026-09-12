@@ -5,15 +5,15 @@ import argparse
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from contextlib import ExitStack
-from datetime import datetime
+from datetime import datetime, timezone
 import fcntl
 import json
 import os
 from pathlib import Path
-import sqlite3
 import shutil
 import sys
 import subprocess
+import threading
 import time
 import tomllib
 
@@ -32,8 +32,14 @@ if __name__ == '__main__':
         os.execve(python, [python, '-B', str(Path(__file__).resolve()), *sys.argv[1:]], runtime_environment)
     sys.dont_write_bytecode = True
 
-from prepared_manifest import file_identity, write_manifest
-from world_build_inputs import attach_rasters, audit_world, canonical_input, pin_inputs, verify_inputs, raster_inputs, height_inputs, verify_prepared_raster_links
+from world_build_inputs import (
+    attach_rasters, audit_world, canonical_input, height_inputs,
+    pin_inputs, raster_inputs, verify_inputs, verify_prepared_raster_links,
+)
+
+from world_build_state import (
+    STATE_NAME, PIN_NAME, producer_command, record_step, resume_steps, write_state,
+)
 
 
 @dataclass(frozen=True)
@@ -69,7 +75,8 @@ def build_plan(config, output, scratch):
     chain = [tsx, str(REPO / 'pipeline/chain/run.ts'), '--scope', 'world',
              '--prepared-dir', str(year), '--enrichment-dir', str(sources['enrichment']),
              '--boundaries', str(sources['boundaries']), '--boundaries-dir', str(sources['city_boundaries']),
-             '--as-of-date', settings['as_of_date'], '--gtfs-cache-dir', str(output / 'gtfs-cache')]
+             '--as-of-date', settings['as_of_date'], '--gtfs-cache-dir', str(output / 'gtfs-cache'),
+             '--jobs', str(settings['threads'])]
     layer = lambda name, dependencies: Step(name, dependencies, tuple(chain + ['--layer', name]))
     steps = [
         Step('osm', (), ('bash', str(scripts / 'osm-extract.sh')), 3,
@@ -82,7 +89,7 @@ def build_plan(config, output, scratch):
         Step('structures', ('buildings',), (python, str(scripts / 'structures/build-structures.py'),
              '--prepared-dir', str(year), '--overture-parquet', str(sources['overture']),
              '--ghsl', str(sources['ghsl']), '--regional', str(sources['regional_heights']),
-             '--census-log', str(output / 'structures.jsonl')), 3),
+             '--census-log', str(output / 'structures.jsonl'), '--jobs', str(settings['threads'])), 3),
         Step('structures-finalize', ('structures',), (str(REPO / 'engine/target/release/structures-finalize'), str(year))),
         layer('railways', ('square-country-city',)),
         layer('industrial', ('square-country-city',)),
@@ -103,6 +110,7 @@ def producer_environment(threads):
                  'GDAL_DATA', 'PROJ_DATA', 'PROJ_LIB') if key in os.environ}
     return dict(inherited, LC_ALL='C', TZ='UTC', PYTHONHASHSEED='0', PROJ_NETWORK='OFF',
                 OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', RAYON_NUM_THREADS=str(threads),
+                QM_ROAD_WORKERS=str(threads),
                 PYTHONDONTWRITEBYTECODE='1')
 
 
@@ -136,29 +144,6 @@ def run_plan(steps, execute, completed=()):
                     failure = failure or error
             if failure and not running:
                 raise failure
-    return completed
-
-
-def resume_steps(database, config, code_files):
-    """Steps of a failed build in `database` that exited 0 and stay done; the rest rerun. Refuses another config or a complete build; reports code files that changed since the pin, then drops the pin for a fresh one."""
-    (pinned_config, status), = database.execute('SELECT config, status FROM build')
-    if pinned_config != json.dumps(config, sort_keys=True) or status == 'complete':
-        raise ValueError(f'cannot resume a {status} build of another configuration; prior output retained')
-    completed = {name for name, in database.execute('SELECT name FROM steps WHERE exit = 0')}
-    # A resume interrupted while pinning left no or an empty inputs table (the pin commits
-    # once, at its end): the previous pin is unknown.
-    changed = 'unpinned'
-    if database.execute("SELECT 1 FROM sqlite_master WHERE name = 'inputs'").fetchone():
-        pinned = {path: identity for path, *identity in database.execute(
-            'SELECT path,device,inode,bytes,mtime_ns,ctime_ns FROM inputs')}
-        if pinned:
-            changed = sorted(str(path) for path in code_files
-                             if pinned.get(str(path)) != list(file_identity(path)))
-        database.execute('DROP TABLE inputs')
-    database.execute('DELETE FROM steps WHERE exit IS NULL OR exit != 0')
-    database.execute("UPDATE build SET status='running'")
-    database.commit()
-    print(json.dumps({'resume': sorted(completed), 'code_changed': changed}), flush=True)
     return completed
 
 
@@ -227,7 +212,7 @@ def main():
         return
     # A failed build of this configuration resumes in place (`resume_steps`); never
     # adopt unrelated or partly written generations as successful upstream work.
-    resuming = (output / 'build.sqlite').is_file()
+    resuming = (output / STATE_NAME).is_file()
     if not resuming:
         for target in (output, scratch):
             if target.exists() and any(target.iterdir()):
@@ -244,45 +229,41 @@ def main():
         for target in (output, scratch):
             lock = locks.enter_context((target / '.world-build.lock').open('a'))
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        database = sqlite3.connect(output / 'build.sqlite')
         completed = set()
-        if resuming:
-            completed = resume_steps(database, config, code_inputs())
-        else:
-            database.execute('CREATE TABLE build(config TEXT NOT NULL, status TEXT NOT NULL)')
-            database.execute('INSERT INTO build VALUES(?,?)', (json.dumps(config, sort_keys=True), 'running'))
-            database.execute('CREATE TABLE steps(name TEXT PRIMARY KEY, command TEXT NOT NULL, '
-                             'started REAL NOT NULL, seconds REAL, exit INTEGER)')
-            database.commit()
+        pin_path = output / PIN_NAME
+        receipts_lock = threading.Lock()
         def current_roots():
             ordinary = [path for name, path in sources.items() if name not in ('rasters', 'ghsl', 'regional_heights')]
             return [*ordinary, *raster_inputs(sources['rasters']), *height_inputs(sources['ghsl']),
                     *height_inputs(sources['regional_heights']), *code_inputs(), *runtime_inputs(),
                     *(canonical_input(environment[key]) for key in ('GDAL_DATA', 'PROJ_DATA', 'PROJ_LIB')
                       if key in environment)]
+        roots = current_roots()
+        if resuming:
+            completed = resume_steps(output, config, steps, roots, REPO)
+        else:
+            pin_inputs(pin_path, roots)
+            write_state(output, config, 'running')
         try:
-            roots = current_roots()
-            pin_inputs(database, roots)
             attach_rasters(sources['rasters'], year)
             # Build before parallel producers so their incremental builds share no changing code.
             subprocess.run(['cargo', 'build', '--release', '--manifest-path', str(REPO / 'engine/Cargo.toml'),
                             '--bin', 'osm-extract', '--bin', 'aircraft-extract', '--bin', 'structures-finalize'],
                            cwd=REPO, env=environment, check=True)
             def execute(step):
-                budget = (settings['memory_gib'] << 30) * step.slots // 4
-                command = ['systemd-run', '--user', '--scope', '--quiet', '-p', f'MemoryMax={budget}',
-                           '-p', 'MemorySwapMax=0', *step.argv]
+                command = producer_command(step, settings)
                 started = time.time()
-                with sqlite3.connect(output / 'build.sqlite', timeout=60) as record:
-                    record.execute('INSERT INTO steps(name,command,started) VALUES(?,?,?)',
-                                   (step.name, json.dumps(command), started))
                 print(json.dumps({'step': step.name, 'status': 'running'}), flush=True)
                 with (output / f'{step.name}.log').open('ab') as log:
+                    log.write(f'=== attempt {datetime.now(timezone.utc).isoformat()} ===\n'.encode())
+                    log.flush()
                     result = subprocess.run(command, cwd=REPO, env=dict(environment, **dict(step.environment)),
                                             stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
-                with sqlite3.connect(output / 'build.sqlite', timeout=60) as record:
-                    record.execute('UPDATE steps SET seconds=?,exit=? WHERE name=?',
-                                   (time.time() - started, result.returncode, step.name))
+                with receipts_lock:
+                    record_step(output, {
+                        'name': step.name, 'command': command, 'started': started,
+                        'seconds': time.time() - started, 'exit': result.returncode,
+                    })
                 print(json.dumps({'step': step.name, 'exit': result.returncode}), flush=True)
                 if result.returncode:
                     raise RuntimeError(f'{step.name} failed; inspect {output / (step.name + ".log")}; all work retained')
@@ -290,20 +271,12 @@ def main():
             require_structures_final(steps, environment)
             counts = audit_world(year)
             verify_prepared_raster_links(sources['rasters'], year)
-            verify_inputs(database, current_roots())
-            manifest = write_manifest(year, year / 'inputs.sqlite')
-            database.execute('CREATE TABLE output(manifest_sha256 TEXT NOT NULL, counts TEXT NOT NULL)')
-            database.execute('INSERT INTO output VALUES(?,?)',
-                             (manifest['sha256'], json.dumps(counts, sort_keys=True)))
-            database.execute("UPDATE build SET status='complete'")
-            database.commit()
-            print(json.dumps(dict(status='complete', prepared=str(year), manifest=manifest, rows=counts)), flush=True)
+            verify_inputs(pin_path, current_roots())
+            write_state(output, config, 'complete', rows=counts)
+            print(json.dumps(dict(status='complete', prepared=str(year), rows=counts)), flush=True)
         except BaseException:
-            database.execute("UPDATE build SET status='failed'")
-            database.commit()
+            write_state(output, config, 'failed')
             raise
-        finally:
-            database.close()
 
 
 if __name__ == '__main__':

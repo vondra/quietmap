@@ -255,48 +255,6 @@ fn source_square_names(squares: Result<Vec<grid::Square>, String>) -> napi::Resu
 
 #[cfg(feature = "node")]
 #[napi]
-pub fn query_roads(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String> {
-    let square_names = source_square_names(squares_within_radius(
-        lat,
-        lng,
-        max_radius_m * LINE_MIDPOINT_REACH_FACTOR,
-    ))?;
-    let squares = acquire_squares_parallel(&square_names)?;
-
-    let mut all_results = Vec::new();
-    for data in &squares {
-        let road_batches = data
-            .roads
-            .batches_within(lat, lng, max_radius_m)
-            .map_err(|error| Error::new(Status::GenericFailure, error))?;
-        let mut results = query_roads_from_batches(&road_batches, lat, lng, max_radius_m);
-        all_results.append(&mut results);
-    }
-
-    Ok(serde_json::to_string(&all_results).unwrap())
-}
-
-#[cfg(feature = "node")]
-#[napi]
-pub fn query_buildings(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String> {
-    let square_names = source_square_names(squares_within_radius(lat, lng, max_radius_m))?;
-    let squares = acquire_squares_parallel(&square_names)?;
-
-    let mut all_results = Vec::new();
-    for data in &squares {
-        let building_batches = data
-            .structures
-            .batches_within(lat, lng, max_radius_m)
-            .map_err(|error| Error::new(Status::GenericFailure, error))?;
-        let mut results = query_buildings_from_batches(&building_batches, lat, lng, max_radius_m);
-        all_results.append(&mut results);
-    }
-
-    Ok(serde_json::to_string(&all_results).unwrap())
-}
-
-#[cfg(feature = "node")]
-#[napi]
 /// Obstacle footprints intersecting a bbox with their AS-USED heights (after
 /// the low-profile cap) — the building-height debug overlay's data source,
 /// so the map shows exactly what the propagation model screens with. JSON:
@@ -386,34 +344,6 @@ mod building_type_tests {
             "building"
         );
     }
-}
-
-#[cfg(feature = "node")]
-#[napi]
-pub fn query_barriers(lat: f64, lng: f64, max_radius_m: f64) -> napi::Result<String> {
-    let square_names = source_square_names(squares_within_radius(lat, lng, max_radius_m))?;
-    let squares = acquire_squares_parallel(&square_names)?;
-
-    let mut all_results = Vec::new();
-    for data in &squares {
-        let barrier_batches = data
-            .structures
-            .batches_within(lat, lng, max_radius_m)
-            .map_err(|error| Error::new(Status::GenericFailure, error))?;
-        let mut results = square_store::barriers::query_barriers_from_batches(
-            &barrier_batches,
-            lat,
-            lng,
-            max_radius_m,
-        )
-        .map_err(|error| Error::new(Status::GenericFailure, error))?;
-        all_results.append(&mut results);
-    }
-
-    let all_results = square_store::barriers::canonicalize_barrier_results(all_results)
-        .map_err(|error| Error::new(Status::GenericFailure, error))?;
-
-    Ok(serde_json::to_string(&all_results).unwrap())
 }
 
 /// Compute full noise at a point using noise-compute engine.

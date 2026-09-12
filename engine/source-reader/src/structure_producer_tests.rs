@@ -71,10 +71,18 @@ fn python_structure_producer_preserves_screening_and_emission_contracts() {
     let buildings = crate::query::query_buildings_from_batches(&batches, 49.78, 14.17, 2000.0);
     assert_eq!(buildings.len(), 1);
     assert_eq!(buildings[0].height, 4.5);
-    let walls = square_store::barriers::query_barriers_from_batches(&batches, 49.78, 14.17, 2000.0)
-        .unwrap();
-    assert_eq!(walls.len(), 1);
-    assert_eq!(walls[0].height, 3.0);
+    let wall_heights: Vec<i16> = batches
+        .iter()
+        .flat_map(|batch| {
+            let kind = square_store::grid_cols::col_u8(batch, "kind").unwrap();
+            let heights = square_store::structure_contract::heights(batch).unwrap();
+            (0..batch.num_rows())
+                .filter(|&row| kind.value(row) == square_store::store::STRUCTURE_KIND_BARRIER)
+                .map(|row| heights.value(row))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(wall_heights, [3]);
     let footprints =
         crate::structure_store::footprints_in_bbox(output.path(), 49.77, 14.16, 49.80, 14.20)
             .unwrap();

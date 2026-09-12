@@ -40,6 +40,9 @@ def builder_version():
 
 
 BUILDER_VERSION = builder_version()
+# On-disk squares from the serial RAM-mosaic producer. Windowed zonal reads the
+# same IPR window, so those files stay fresh across the worker-pool cutover.
+SERIAL_BUILDER_VERSION = "4a5f9dbd74d3c216237204aebc2760d580754faf69916973468884c7865486a4"
 
 
 def structure_is_fresh(out_path, inputs):
@@ -47,8 +50,9 @@ def structure_is_fresh(out_path, inputs):
         return False
     with ipc.open_file(out_path) as output_file:
         metadata = output_file.schema.metadata or {}
+    version = metadata.get(b"builder_version")
     return (metadata.get(b"input_fingerprint") == inputs.encode()
-            and metadata.get(b"builder_version") == BUILDER_VERSION.encode()
+            and version in (BUILDER_VERSION.encode(), SERIAL_BUILDER_VERSION.encode())
             and metadata.get(CONTRACT_KEY.encode()) == CONTRACT_VERSION.encode()
             and metadata.get(b"grid") == b"z30")
 

@@ -56,6 +56,7 @@ test('command argv never imports enrichers and uses enrich-only on national road
     python: '/tmp/python',
     repoRoot: '/tmp/repo',
     tsx: '/tmp/tsx',
+    jobs: 20,
   }
   const cz = commandFor(buildPlan({ kind: 'world' }).find(step => step.id === 'roads-cz')!, paths)
   assert.ok(cz.argv.includes('--enrich-only'))
@@ -71,7 +72,7 @@ test('command argv never imports enrichers and uses enrich-only on national road
   const built = commandFor(buildPlan({ kind: 'world' }).find(step => step.id === 'roads-built-up')!, paths)
   assert.equal(built.argv[0], '/tmp/python')
   assert.ok(built.argv.some(arg => arg.endsWith('build_built_up.py')))
-  assert.deepEqual(built.argv.slice(-2), ['--workers', '3'])
+  assert.deepEqual(built.argv.slice(-2), ['--workers', '20'])
   const globalGtfs = commandFor(buildPlan({ kind: 'world' }).find(step => step.id === 'railways-gtfs-us')!, paths)
   assert.deepEqual(globalGtfs.argv.slice(-4), ['--registry', 'global', '--as-of-date', '20260909'])
   const nationalGtfs = commandFor(buildPlan({ kind: 'world' }).find(step => step.id === 'railways-national-gtfs-pl')!, paths)

@@ -1,7 +1,7 @@
 /** Download, validate and atomically admit immutable GTFS source snapshots. */
 
 import {
-  chmodSync, closeSync, cpSync, createReadStream, createWriteStream, existsSync, mkdirSync, mkdtempSync,
+  closeSync, cpSync, createReadStream, createWriteStream, existsSync, mkdirSync, mkdtempSync,
   openSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync,
 } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -11,14 +11,13 @@ import { pipeline } from 'node:stream/promises'
 import { basename, dirname, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { pathToFileURL } from 'node:url'
-import { path7za } from '7zip-bin'
 import {
   computeActiveTripFamiliesForFeed, declaredRouteFamiliesForFeed, describeInactiveFamilies, findBusiestWednesday,
   readGtfsFeedWindow,
 } from './lib/gtfs-enrich-core.js'
 import {
   feedsForRegistry, gtfsDownloadUrls, gtfsSourceDirectories, railFamilyFor,
-  validateGtfsSourceFreshness, type GlobalGtfsFeed, type GtfsRegistry,
+  sevenZipExecutable, validateGtfsSourceFreshness, type GlobalGtfsFeed, type GtfsRegistry,
 } from './lib/railway-gtfs-feeds.js'
 
 const REQUIRED_FILES = ['stops.txt', 'stop_times.txt', 'trips.txt', 'routes.txt'] as const
@@ -101,8 +100,7 @@ async function candidateFromUrl(
   const resolvedUrl = await download(url, archive)
   const extracted = resolve(staging, 'extracted')
   mkdirSync(extracted)
-  chmodSync(path7za, 0o755)
-  await run(path7za, ['x', '-y', `-o${extracted}`, archive])
+  await run(sevenZipExecutable(), ['x', '-y', `-o${extracted}`, archive])
   const directories = findGtfsDirectories(extracted)
   if (directories.length !== 1) {
     throw new Error(`archive contains ${directories.length} GTFS roots; expected exactly one`)

@@ -2,6 +2,7 @@
 
 import { existsSync, readdirSync } from 'node:fs'
 import { spawn } from 'node:child_process'
+import { availableParallelism } from 'node:os'
 import { resolve, dirname } from 'node:path'
 import { parseArgs } from 'node:util'
 import { pathToFileURL } from 'node:url'
@@ -18,6 +19,7 @@ export interface ChainPaths {
   python: string
   repoRoot: string
   tsx: string
+  jobs: number
 }
 
 const PIPELINE_DIR = resolve(import.meta.dirname, '..')
@@ -33,7 +35,8 @@ export function commandFor(step: PlanStep, paths: ChainPaths): { argv: string[];
   switch (step.kind) {
     case 'built-up':
       return {
-        argv: [paths.python, resolve(paths.repoRoot, 'scripts/roads/build_built_up.py'), ...prepared, '--workers', '3'],
+        argv: [paths.python, resolve(paths.repoRoot, 'scripts/roads/build_built_up.py'),
+               ...prepared, '--workers', String(paths.jobs)],
         cwd: paths.repoRoot,
       }
     case 'roads-europe':
@@ -129,6 +132,7 @@ function parseCli(argv: string[]) {
       'as-of-date': { type: 'string' },
       python: { type: 'string' },
       from: { type: 'string' },
+      jobs: { type: 'string' },
       'dry-run': { type: 'boolean', default: false },
       'skip-square-country-city-check': { type: 'boolean', default: false },
     },
@@ -139,6 +143,8 @@ function parseCli(argv: string[]) {
     )
   }
   if (values.layer && !LAYERS.includes(values.layer as Layer)) throw new Error(`unknown layer '${values.layer}'`)
+  const jobs = values.jobs === undefined ? availableParallelism() : Number(values.jobs)
+  if (!Number.isInteger(jobs) || jobs < 1) throw new Error('--jobs must be a positive integer')
   const requiresGtfsDate = !values.layer || values.layer === 'railways'
   if (requiresGtfsDate && (!values['as-of-date'] || !/^\d{8}$/.test(values['as-of-date']))) {
     throw new Error('--as-of-date YYYYMMDD is required for a full or railways chain')
@@ -163,11 +169,12 @@ function parseCli(argv: string[]) {
       python: values.python ?? resolve(REPO_ROOT, '.venv/bin/python'),
       repoRoot: REPO_ROOT,
       tsx: resolve(PIPELINE_DIR, 'node_modules/.bin/tsx'),
+      jobs,
     } satisfies ChainPaths,
   }
 }
 
-export function spawnStep(argv: string[], cwd: string, preparedDir: string, layer: Layer): Promise<number> {
+export function spawnStep(argv: string[], cwd: string, preparedDir: string, layer: Layer, jobs?: number): Promise<number> {
   return new Promise((resolvePromise, reject) => {
     // Admin only touches roads, railways and industrial; buildings can run independently.
     const command = layer === 'buildings' ? argv
@@ -177,7 +184,11 @@ export function spawnStep(argv: string[], cwd: string, preparedDir: string, laye
       cwd,
       stdio: 'inherit',
       // National GTFS parses (AU Sydney) exceed V8's 4 GiB default heap; the layer's cgroup caps at 20 GiB.
-      env: { ...process.env, NODE_OPTIONS: process.env.NODE_OPTIONS ?? '--max-old-space-size=8192' },
+      env: {
+        ...process.env,
+        NODE_OPTIONS: process.env.NODE_OPTIONS ?? '--max-old-space-size=8192',
+        ...(jobs === undefined ? {} : { QM_ROAD_WORKERS: String(jobs) }),
+      },
     })
     child.on('error', reject)
     child.on('close', code => resolvePromise(code ?? 1))
@@ -202,7 +213,7 @@ export async function runChain(argv: string[]): Promise<number> {
     console.log(JSON.stringify({ step: step.id, phase: step.phase, argv: command }))
     if (cli.dryRun) continue
     const started = Date.now()
-    const code = await spawnStep(command, cwd, cli.paths.preparedDir, layerForStep(step))
+    const code = await spawnStep(command, cwd, cli.paths.preparedDir, layerForStep(step), cli.paths.jobs)
     console.log(JSON.stringify({ step: step.id, exit: code, elapsedSeconds: (Date.now() - started) / 1000 }))
     if (code !== 0) {
       console.error(`chain stopped at ${step.id} (exit ${code}); resume with --from ${step.id}`)

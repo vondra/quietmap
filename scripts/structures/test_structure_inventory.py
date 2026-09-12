@@ -66,7 +66,8 @@ class StructureInventoryTests(unittest.TestCase):
             empty_ocean = GRID.square_name(*GRID.square_of(0.0, -140.0))
             args = ["build-structures.py", "--squares", ",".join([SQUARE, other, empty_ocean]),
                     "--prepared-dir", str(prepared),
-                    "--overture-parquet", str(parquet), "--ghsl", str(prior)]
+                    "--overture-parquet", str(parquet), "--ghsl", str(prior),
+                    "--jobs", "1"]
             with patch("sys.argv", args), patch("sys.stdout", new_callable=io.StringIO):
                 BUILDER.main()
             self.assertEqual(ipc.open_file(prepared / other / "structures.arrow")
