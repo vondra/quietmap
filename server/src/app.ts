@@ -137,13 +137,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     if (!clusterModule) {
       app.log.info('ops route module ./routes/cluster.js absent; cluster dashboard not registered')
     } else {
-      // Internal admin area under the /a/ prefix — cluster now (→ /a/cluster +
-      // /a/api/cluster/status), other admins later. TWO layers of access control, because
-      // it surfaces box IPs, telemetry, and $ costs: an authenticating reverse proxy in
-      // front (the password), AND requireLocalPeer here so a direct, proxy-bypassing
-      // connection can't reach it either. The proxy connects from loopback, so authed
-      // requests + the local TUI pass; the public map stays open.
-      // NOTE the prefix must match cluster-page.ts's poll URL and scripts/cluster-dash.py.
+      // Internal admin area under the /a/ prefix, served by the injected ops module.
+      // TWO layers of access control, because it surfaces box IPs, telemetry, and $
+      // costs: an authenticating reverse proxy in front (the password), AND
+      // requireLocalPeer here so a direct, proxy-bypassing connection can't reach it
+      // either. The proxy connects from loopback, so authed requests + the local TUI
+      // pass; the public map stays open.
       await app.register(async (adminApp) => {
         adminApp.addHook('onRequest', requireLocalPeer)
         await adminApp.register(clusterModule.clusterRoutes)
