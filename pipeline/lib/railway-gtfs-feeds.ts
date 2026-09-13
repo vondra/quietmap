@@ -5,8 +5,9 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import { path7za } from '7zip-bin'
+import { parseCsvStream } from './gtfs-csv.js'
 import {
-  GTFS_BORDER_MARGIN_DEG, METRO_TYPES, RAIL_TYPES, TRAM_TYPES, parseCsvStream,
+  GTFS_BORDER_MARGIN_DEG, METRO_TYPES, RAIL_TYPES, TRAM_TYPES,
   routeFamily, readGtfsFeedWindow,
 } from './gtfs-enrich-core.js'
 import {

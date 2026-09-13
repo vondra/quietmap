@@ -1,8 +1,8 @@
 /** Shared GTFS timetable selection, parsing and stop-to-track matching. */
 
-import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { createInterface } from 'node:readline'
+import { parseCsvStream, readCsvRows, readGtfsStopTimes } from './gtfs-csv.js'
 import { pointToSegmentDist } from './spatial.js'
 import type { RailwayRow, RailwayTraffic } from './railways-arrow.js'
 
@@ -134,72 +134,6 @@ export function buildTramExtraMatch<S extends {
       divisor: 1,
     } : null
   }
-}
-
-// ── CSV parsing ──
-
-/** Parse a single CSV line, handling quoted fields with commas. */
-export function parseCsvLine(line: string): string[] {
-  const fields: string[] = []
-  let current = ''
-  let inQuotes = false
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i]
-    if (inQuotes) {
-      if (ch === '"') {
-        if (i + 1 < line.length && line[i + 1] === '"') {
-          current += '"'
-          i++
-        } else {
-          inQuotes = false
-        }
-      } else {
-        current += ch
-      }
-    } else {
-      if (ch === '"') {
-        inQuotes = true
-      } else if (ch === ',') {
-        fields.push(current.trim())
-        current = ''
-      } else {
-        current += ch
-      }
-    }
-  }
-  fields.push(current.trim())
-  return fields
-}
-
-/** Read GTFS rows without retaining the source table in memory. */
-export async function* streamCsvRows(filePath: string): AsyncGenerator<Record<string, string>> {
-  const stream = createReadStream(filePath, { encoding: 'utf-8' })
-  const lines = createInterface({ input: stream, crlfDelay: Infinity })
-  try {
-    let headers: string[] | null = null
-    for await (const rawLine of lines) {
-      const line = headers === null ? rawLine.replace(/^\uFEFF/, '') : rawLine
-      if (line.trim() === '') continue
-      if (!headers) {
-        headers = parseCsvLine(line)
-        continue
-      }
-      const values = parseCsvLine(line)
-      const row: Record<string, string> = {}
-      for (let i = 0; i < headers.length; i++) row[headers[i]] = values[i] || ''
-      yield row
-    }
-  } finally {
-    lines.close()
-    stream.destroy()
-  }
-}
-
-/** Collect tables whose callers need all rows, using the same CSV reader. */
-export async function parseCsvStream(filePath: string): Promise<Record<string, string>[]> {
-  const rows: Record<string, string>[] = []
-  for await (const row of streamCsvRows(filePath)) rows.push(row)
-  return rows
 }
 
 /** Feed-declared dates bound timetable sampling even when recurring calendars span years. */
@@ -477,12 +411,12 @@ export async function computeActiveTripFamiliesForFeed<F extends string>(
 
   const eligibleTrips: Array<{ tripId: string; serviceId: string; family: F }> = []
   const eligibleServiceIds = new Set<string>()
-  for await (const row of streamCsvRows(resolve(extractDir, 'trips.txt'))) {
+  await readCsvRows(resolve(extractDir, 'trips.txt'), row => {
     const family = routeFam.get(row['route_id'])
-    if (!family) continue
+    if (!family) return
     eligibleTrips.push({ tripId: row['trip_id'], serviceId: row['service_id'], family })
     eligibleServiceIds.add(row['service_id'])
-  }
+  })
 
   const calendarPath = resolve(extractDir, 'calendar.txt')
   const calendarDatesPath = resolve(extractDir, 'calendar_dates.txt')
@@ -777,46 +711,19 @@ export async function computeStopFrequenciesForFeed(
   console.log(`  Reading stop_times.txt (streaming)...`)
   const stopDepartures = new Map<string, { rail: number; tram: number }>()
 
-  const stStream = createReadStream(resolve(extractDir, 'stop_times.txt'), { encoding: 'utf-8' })
-  const stRl = createInterface({ input: stStream, crlfDelay: Infinity })
-  let stHeaders: string[] | null = null
-  let stLines = 0
   let stMatched = 0
-  let tripIdIdx = -1
-  let stopIdIdx = -1
-  let lastProgressTime = Date.now()
-
-  for await (const rawLine of stRl) {
-    const line = stHeaders === null ? rawLine.replace(/^\uFEFF/, '') : rawLine
-    if (line.trim() === '') continue
-
-    if (!stHeaders) {
-      stHeaders = parseCsvLine(line)
-      tripIdIdx = stHeaders.indexOf('trip_id')
-      stopIdIdx = stHeaders.indexOf('stop_id')
-      if (tripIdIdx < 0 || stopIdIdx < 0) {
-        throw new Error(`stop_times.txt missing trip_id/stop_id. Found: ${stHeaders.join(', ')}`)
-      }
-      continue
+  const stLines = await readGtfsStopTimes(extractDir, tripFam, (headers, tripIdIdx) => {
+    const stopIdIdx = headers.indexOf('stop_id')
+    if (stopIdIdx < 0) throw new Error('stop_times.txt missing stop_id')
+    return fields => {
+      const tripId = fields[tripIdIdx], family = tripFam.get(tripId)!
+      const stopId = fields[stopIdIdx]
+      let counts = stopDepartures.get(stopId)
+      if (!counts) { counts = { rail: 0, tram: 0 }; stopDepartures.set(stopId, counts) }
+      counts[family] += tripDepartureMultipliers.get(tripId) ?? 1
+      stMatched++
     }
-
-    stLines++
-    const fields = parseCsvLine(line)
-    const tripId = fields[tripIdIdx]
-    const fam = tripFam.get(tripId)
-    if (!fam) continue
-
-    const stopId = fields[stopIdIdx]
-    let counts = stopDepartures.get(stopId)
-    if (!counts) { counts = { rail: 0, tram: 0 }; stopDepartures.set(stopId, counts) }
-    counts[fam] += tripDepartureMultipliers.get(tripId) ?? 1
-    stMatched++
-
-    if (Date.now() - lastProgressTime > 10_000) {
-      console.log(`    ... ${(stLines / 1e6).toFixed(1)}M lines, ${stMatched} rail stop-times`)
-      lastProgressTime = Date.now()
-    }
-  }
+  })
   console.log(`  ${stLines} stop_times lines, ${stMatched} rail stop-times, ${stopDepartures.size} unique stops`)
 
   // ── stops.txt + parent-station resolution ──

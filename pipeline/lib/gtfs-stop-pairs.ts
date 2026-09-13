@@ -1,12 +1,12 @@
 /** Parse active GTFS rail trips into station pairs for graph matching. */
 
-import { existsSync, createReadStream, statSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { createInterface } from 'node:readline'
 import { readGtfsPairCache, writeGtfsPairCache } from './gtfs-pair-cache.js'
+import { readGtfsStopTimes, readCsvRows } from './gtfs-csv.js'
 import { RailPairSearches } from './rail-pair-searches.js'
 import {
-  RAIL_TYPES, parseCsvLine, streamCsvRows, readGtfsTripDepartureMultipliers,
+  RAIL_TYPES, readGtfsTripDepartureMultipliers,
   computeActiveTripFamiliesForFeed, loadStopsWithCoords, resolveStopViaParent,
   type GtfsStop,
 } from './gtfs-enrich-core.js'
@@ -139,11 +139,11 @@ export async function computeStopPairFrequenciesForFeed(
 
   // ── trips.txt (2nd pass): shape_id per active trip ──
   const tripShapeId = new Map<string, string>()
-  for await (const r of streamCsvRows(resolve(extractDir, 'trips.txt'))) {
-    if (!tripFam.has(r['trip_id'])) continue
+  await readCsvRows(resolve(extractDir, 'trips.txt'), r => {
+    if (!tripFam.has(r['trip_id'])) return
     const shapeId = (r['shape_id'] || '').trim()
     if (shapeId) tripShapeId.set(r['trip_id'], shapeId)
-  }
+  })
 
   // ── shapes.txt (only if any active trip references one) ──
   const shapesById = new Map<string, Array<[number, number]>>()
@@ -151,17 +151,17 @@ export async function computeStopPairFrequenciesForFeed(
   if (tripShapeId.size > 0 && existsSync(shapesPath)) {
     const requiredShapeIds = new Set(tripShapeId.values())
     const bySeq = new Map<string, Array<{ seq: number; lat: number; lon: number }>>()
-    for await (const r of streamCsvRows(shapesPath)) {
+    await readCsvRows(shapesPath, r => {
       const id = r['shape_id']
-      if (!requiredShapeIds.has(id)) continue
+      if (!requiredShapeIds.has(id)) return
       const lat = parseFloat(r['shape_pt_lat'] || '')
       const lon = parseFloat(r['shape_pt_lon'] || '')
-      if (isNaN(lat) || isNaN(lon)) continue
+      if (isNaN(lat) || isNaN(lon)) return
       const seq = parseInt(r['shape_pt_sequence'] || '0', 10)
       let arr = bySeq.get(id)
       if (!arr) { arr = []; bySeq.set(id, arr) }
       arr.push({ seq: Number.isFinite(seq) ? seq : arr.length, lat, lon })
-    }
+    })
     for (const [id, pts] of bySeq) {
       pts.sort((a, b) => a.seq - b.seq)
       shapesById.set(id, pts.map(p => [p.lat, p.lon]))
@@ -178,33 +178,20 @@ export async function computeStopPairFrequenciesForFeed(
 
   // ── stop_times.txt (streamed), grouped per active trip ──
   const perTripRows = new Map<string, Array<{ seq: number; stopId: string }>>()
-  let stopTimesLines = 0
-  const stStream = createReadStream(resolve(extractDir, 'stop_times.txt'), { encoding: 'utf-8' })
-  const stRl = createInterface({ input: stStream, crlfDelay: Infinity })
-  let stHeaders: string[] | null = null
-  let tripIdIdx = -1, stopIdIdx = -1, seqIdx = -1
-  for await (const rawLine of stRl) {
-    const line = stHeaders === null ? rawLine.replace(/^\uFEFF/, '') : rawLine
-    if (line.trim() === '') continue
-    if (!stHeaders) {
-      stHeaders = parseCsvLine(line)
-      tripIdIdx = stHeaders.indexOf('trip_id')
-      stopIdIdx = stHeaders.indexOf('stop_id')
-      seqIdx = stHeaders.indexOf('stop_sequence')
-      if (tripIdIdx < 0 || stopIdIdx < 0 || seqIdx < 0) {
-        throw new Error(`stop_times.txt missing trip_id/stop_id/stop_sequence`)
-      }
-      continue
+  const stopTimesLines = await readGtfsStopTimes(extractDir, tripFam, (headers, tripIdIdx) => {
+    const stopIdIdx = headers.indexOf('stop_id')
+    const seqIdx = headers.indexOf('stop_sequence')
+    if (stopIdIdx < 0 || seqIdx < 0) {
+      throw new Error('stop_times.txt missing stop_id/stop_sequence')
     }
-    stopTimesLines++
-    const fields = parseCsvLine(line)
-    const tripId = fields[tripIdIdx]
-    if (!tripFam.has(tripId)) continue
-    let arr = perTripRows.get(tripId)
-    if (!arr) { arr = []; perTripRows.set(tripId, arr) }
-    const seq = parseInt(fields[seqIdx] || '', 10)
-    arr.push({ seq: Number.isFinite(seq) ? seq : arr.length, stopId: fields[stopIdIdx] })
-  }
+    return fields => {
+      const tripId = fields[tripIdIdx]
+      let rows = perTripRows.get(tripId)
+      if (!rows) { rows = []; perTripRows.set(tripId, rows) }
+      const seq = parseInt(fields[seqIdx] || '', 10)
+      rows.push({ seq: Number.isFinite(seq) ? seq : rows.length, stopId: fields[stopIdIdx] })
+    }
+  })
 
   const stops = await loadStopsWithCoords(extractDir, opts.bbox)
 
