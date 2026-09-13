@@ -108,7 +108,10 @@ def producer_environment(threads):
     inherited = {key: os.environ[key] for key in ('PATH', 'HOME', 'USER', 'LOGNAME', 'XDG_RUNTIME_DIR',
                  'DBUS_SESSION_BUS_ADDRESS', 'CARGO_HOME', 'RUSTUP_HOME',
                  'GDAL_DATA', 'PROJ_DATA', 'PROJ_LIB') if key in os.environ}
+    # A host-sized GDAL cache per spawned worker can exceed the whole producer cgroup.
+    # 256 MiB retains 1024 GHSL 256x256 float32 blocks and leaves memory for vector geometry.
     return dict(inherited, LC_ALL='C', TZ='UTC', PYTHONHASHSEED='0', PROJ_NETWORK='OFF',
+                GDAL_CACHEMAX='256',
                 OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', RAYON_NUM_THREADS=str(threads),
                 QM_ROAD_WORKERS=str(threads),
                 PYTHONDONTWRITEBYTECODE='1')

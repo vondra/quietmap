@@ -6,6 +6,7 @@ from unittest.mock import patch
 import importlib.util
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import threading
 import time
@@ -72,6 +73,15 @@ class WorldBuildTest(unittest.TestCase):
         self.assertNotIn('LD_LIBRARY_PATH', environment)
         self.assertEqual(environment['RAYON_NUM_THREADS'], '4')
         self.assertEqual(environment['QM_ROAD_WORKERS'], '4')
+
+    def test_spawned_worker_limits_gdal_cache_instead_of_using_host_memory(self):
+        with patch.dict(os.environ, {'GDAL_CACHEMAX': '8192'}):
+            environment = world.producer_environment(20)
+        cache_bytes = subprocess.check_output([
+            sys.executable, '-c',
+            'from rasterio.env import get_gdal_config; print(get_gdal_config("GDAL_CACHEMAX"))',
+        ], env=environment, text=True)
+        self.assertEqual(int(cache_bytes), 256 << 20)
 
     def test_noncanonical_or_future_dates_fail_before_any_producer(self):
         with patch.object(world, 'source_paths', return_value={}):
