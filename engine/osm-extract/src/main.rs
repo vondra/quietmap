@@ -417,7 +417,11 @@ fn main() -> Result<()> {
                         );
                     }
                 }
-                _ => {}
+                Element::Relation(relation) => {
+                    if classify::scope_keeps(&classify::FeatureType::Railway) {
+                        transport.write_train_route(&relation)?;
+                    }
+                }
             }
         }
     }

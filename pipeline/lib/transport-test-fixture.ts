@@ -35,7 +35,7 @@ export function writeTransportFixture(
   for (const piece of pieces) insertPiece.run(BigInt(piece.way), piece.segment, piece.square, ...piece.start, ...piece.end)
   const insertAlias = database.prepare('INSERT INTO node_aliases VALUES (?, ?, ?)')
   for (const [family, node, canonical] of aliases) insertAlias.run(family, BigInt(node), BigInt(canonical))
-  database.exec('PRAGMA user_version = 1')
+  database.exec('PRAGMA user_version = 2')
 }
 
 /** Existing Arrow-only test cases declare synthetic shared nodes at their matching fixture endpoints. */

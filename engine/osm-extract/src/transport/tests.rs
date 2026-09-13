@@ -191,6 +191,9 @@ fn is_complete_is_true_only_after_finish_commits() -> Result<()> {
     )?;
     writer.finish()?;
     assert!(TransportWriter::is_complete(spill.path()));
+    let previous_schema = Connection::open(spill.path().join("transport.sqlite"))?;
+    previous_schema.pragma_update(None, "user_version", 1)?;
+    assert!(!TransportWriter::is_complete(spill.path()));
     Ok(())
 }
 

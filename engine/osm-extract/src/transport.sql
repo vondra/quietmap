@@ -1,4 +1,4 @@
--- Original source chains, acoustic-piece intervals and exact zero-length source connections.
+-- Original source chains, ordered train-route members, acoustic-piece intervals and identity aliases.
 CREATE TABLE source_ways (
     osm_id INTEGER PRIMARY KEY,
     family TEXT NOT NULL,
@@ -21,3 +21,7 @@ CREATE TABLE node_aliases (
     canonical_node INTEGER NOT NULL,
     PRIMARY KEY (family, node_id)
 ) WITHOUT ROWID;
+CREATE TABLE source_train_routes (
+    osm_id INTEGER PRIMARY KEY,
+    members_json TEXT NOT NULL
+);

@@ -9,7 +9,10 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// String-table entries; index 0 is reserved, so indices are positions here.
-const STRINGS: [&str; 5] = ["", "railway", "rail", "highway", "trunk"];
+const STRINGS: [&str; 13] = [
+    "", "railway", "rail", "highway", "trunk", "route", "train", "bus", "stop", "forward",
+    "backward", "platform", "unusual",
+];
 
 /// All fixture nodes, ascending by id. Node 999 (referenced by way 15) is
 /// deliberately absent: the chain must record it as null.
@@ -158,6 +161,22 @@ fn write_fixture_pbf(path: &Path) {
         push_bytes_field(&mut ways_group, 3, &way); // PrimitiveGroup.ways
     }
     push_bytes_field(&mut block, 2, &ways_group);
+    let mut relations_group = Vec::new();
+    for (id, route_type) in [(1000, 6), (1001, 7)] {
+        let mut relation = Vec::new();
+        push_varint_field(&mut relation, 1, id);
+        push_packed_uint32(&mut relation, 2, &[5]); // route
+        push_packed_uint32(&mut relation, 3, &[route_type]); // train or bus
+        push_packed_uint32(&mut relation, 8, &[8, 9, 10, 0, 12, 11]); // roles
+        push_packed_sint64_deltas(
+            &mut relation,
+            9,
+            &[1, 10, 10, 9_007_199_254_740_993, 2000, 11],
+        );
+        push_packed_uint32(&mut relation, 10, &[0, 1, 1, 1, 2, 1]); // node, way, relation
+        push_bytes_field(&mut relations_group, 4, &relation);
+    }
+    push_bytes_field(&mut block, 2, &relations_group);
     write_pbf_blob(&mut pbf, "OSMData", &block);
 
     std::fs::write(path, pbf).expect("write fixture PBF");
@@ -262,6 +281,32 @@ fn hand_built_pbf_yields_exact_source_topology_and_matching_arrow_pieces() {
 
     let published = root.path().join("prepared.transport.sqlite");
     let connection = Connection::open(&published).expect("open published transport database");
+
+    let mut routes = connection
+        .prepare("SELECT osm_id, members_json FROM source_train_routes")
+        .unwrap();
+    let route_rows: Vec<(i64, String)> = routes
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        route_rows.len(),
+        1,
+        "non-train relation leaked into train routes"
+    );
+    assert_eq!(route_rows[0].0, 1000);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&route_rows[0].1).unwrap(),
+        serde_json::json!([
+            ["n", "1", "stop"],
+            ["w", "10", "forward"],
+            ["w", "10", "backward"],
+            ["w", "9007199254740993", ""],
+            ["r", "2000", "unusual"],
+            ["w", "11", "platform"]
+        ])
+    );
 
     // Original chains: every fixture way is retained, way 15 keeps the null
     // entry for the absent node 999, way 13 keeps its zero-length pair.

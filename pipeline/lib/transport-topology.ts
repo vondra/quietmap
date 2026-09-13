@@ -32,7 +32,7 @@ export class SourceTransportTopology implements Disposable {
   constructor(preparedDirectory: string) {
     this.database = new DatabaseSync(transportTopologyPath(preparedDirectory), { readOnly: true })
     try {
-      if (this.database.prepare('PRAGMA user_version').get()?.user_version !== 1) {
+      if (this.database.prepare('PRAGMA user_version').get()?.user_version !== 2) {
         throw new Error('source transport topology is incomplete or has an unsupported schema')
       }
       this.pieces = this.database.prepare(`
