@@ -1,6 +1,7 @@
 /** Railway routing, traffic allocation and continuity diagnostics on source-connected graphs. */
 
-import { nodeKey, haversineM, flatDist, pointToSegmentDist, pointToPolylineDist, coordKey4dp, wrapLonDeltaDeg, M_PER_DEG_LAT, M_PER_DEG_LON_EQ } from './spatial.js'
+import { nodeKey, haversineM, flatDist, pointToSegmentDist, pointToPolylineDist, wrapLonDeltaDeg, M_PER_DEG_LAT, M_PER_DEG_LON_EQ } from './spatial.js'
+import { RailPairSearches } from './rail-pair-searches.js'
 import { MinHeap } from './min-heap.js'
 import {
   type RailGraph, type RailGraphEdge, type RailStationPairCount, type RailWalkResult, type RailFailedPairRecord,
@@ -856,37 +857,6 @@ function quarantineChordVicinity(
   }
 }
 
-// ── Canonical pair accumulation + walk ────────────────────────────────────────
-
-interface CanonicalPair {
-  fromLat: number; fromLon: number; toLat: number; toLon: number
-  pax: number; frt: number
-  shapePolyline?: Array<[number, number]>
-}
-
-function accumulateCanonicalPairs(pairs: RailStationPairCount[]): Map<string, CanonicalPair> {
-  const byPair = new Map<string, CanonicalPair>()
-  for (const p of pairs) {
-    const kFrom = coordKey4dp(p.fromLat, p.fromLon)
-    const kTo = coordKey4dp(p.toLat, p.toLon)
-    const [kLo, kHi] = kFrom <= kTo ? [kFrom, kTo] : [kTo, kFrom]
-    const canonicalKey = `${kLo}|${kHi}`
-    let entry = byPair.get(canonicalKey)
-    if (!entry) {
-      const [fromLat, fromLon] = kLo.split(',').map(Number)
-      const [toLat, toLon] = kHi.split(',').map(Number)
-      entry = { fromLat, fromLon, toLat, toLon, pax: 0, frt: 0 }
-      byPair.set(canonicalKey, entry)
-    }
-    // Directions SUM (engine wants total trains/day, both directions add) and
-    // so do duplicate trips (express+local on the same OD pair).
-    entry.pax += p.pax
-    entry.frt += p.frt
-    if (!entry.shapePolyline && p.shapePolyline) entry.shapePolyline = p.shapePolyline
-  }
-  return byPair
-}
-
 function shapeEdgeFilter(shapePolyline: Array<[number, number]>): (edge: RailGraphEdge) => boolean {
   const lonLatCoords: Array<[number, number]> = shapePolyline.map(([lat, lon]) => [lon, lat])
   return (edge: RailGraphEdge) => {
@@ -907,20 +877,21 @@ export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCou
   // below instead of a global suppression flag.
   let unlocalizedPairs = 0
 
-  const canonicalPairs = accumulateCanonicalPairs(pairs)
-  const pairsTotal = canonicalPairs.size
+  const searches = new RailPairSearches()
+  for (const pair of pairs) searches.add(pair)
+  const pairsTotal = searches.size
   let pairsWalked = 0
 
   const geomByKey = collectSegmentGeometry(graph)
 
   // ONE scratch for every search over this graph (see DijkstraScratch doc) —
   // a country/world union graph runs up to two searches (best path + the
-  // ambiguity probe's penalized re-run) per canonical pair, plus now up to
+  // ambiguity probe's penalized re-run) per distinct search, plus now up to
   // two bounded quarantine floods per FAILED pair, and re-allocating
   // nodeCount-sized arrays that many times is the real scale blocker.
   const scratch = createDijkstraScratch(graph.nodeCount)
 
-  for (const cp of canonicalPairs.values()) {
+  for (const cp of searches.values()) {
     // DE Step A v2 diagnostics (2026-07-16 failure analysis, fix 3):
     // `diagnostics` carries the reason-specific fields (`RailFailedPairRecord`'s
     // doc) — `ambiguousGeometry` for 'ambiguous', `snapDistanceM` for

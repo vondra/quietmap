@@ -1,22 +1,16 @@
-/**
- * Unit tests for computeStopPairFrequenciesForFeed (pipeline/lib/gtfs-stop-pairs.ts) —
- * synthetic tmpdir GTFS fixtures, fully offline (no network, no real feed download).
- *
- * Each test gets its OWN extractDir (subdirectory of a shared tmpdir root) so the
- * caller-owned derived cache never leaks between unrelated test
- * cases; the dedicated cache-round-trip test is the only one that deliberately calls
- * the parser twice against the same extractDir.
- *
- * Run: `cd pipeline && npx tsx --test lib/gtfs-stop-pairs.test.ts`
- */
+/** GTFS source fixtures exercise parsing, cache invalidation and railway routing. */
 
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { computeStopPairFrequenciesForFeed, type RailStationPairCount } from './gtfs-stop-pairs.js'
+
+import { buildRailGraph, type RailGraphSegmentInput } from './rail-graph.js'
+import { walkRailStationPairs } from './rail-graph-metrics.js'
+import { flatDist } from './spatial.js'
 
 const TMP = mkdtempSync(join(tmpdir(), 'gtfs-stop-pairs-test-'))
 after(() => rmSync(TMP, { recursive: true, force: true }))
@@ -31,14 +25,8 @@ function writeGtfsFixture(dir: string, files: Record<string, string>): void {
   }
 }
 
-/** Find the accumulated pair whose endpoints match (a,b) in EITHER order — pairs are
- *  canonicalized, so tests shouldn't need to know which side won the from/to slot. */
 function findPair(pairs: RailStationPairCount[], a: [number, number], b: [number, number]): RailStationPairCount | undefined {
-  return pairs.find(p => {
-    const matchesForward = p.fromLat === a[0] && p.fromLon === a[1] && p.toLat === b[0] && p.toLon === b[1]
-    const matchesReverse = p.fromLat === b[0] && p.fromLon === b[1] && p.toLat === a[0] && p.toLon === a[1]
-    return matchesForward || matchesReverse
-  })
+  return pairs.find(p => p.fromLat === a[0] && p.fromLon === a[1] && p.toLat === b[0] && p.toLon === b[1])
 }
 
 const NO_CALENDAR_ROUTES = 'route_id,route_type\nR1,2\n' // rail-only route, no calendar files anywhere below
@@ -95,7 +83,7 @@ test('parent-station resolution happens BEFORE coordless stops are dropped', asy
   assert.equal(provenance.droppedUnresolvedStops, 0, 'the child stop was resolved via its parent, not dropped')
 })
 
-test('adjacent duplicate stations (same resolved coords, back-to-back) collapse to one node', async () => {
+test('only repeated resolved stop IDs collapse; nearby distinct stops remain', async () => {
   const dir = join(TMP, 'adjacent-dedup')
   writeGtfsFixture(dir, {
     'routes.txt': NO_CALENDAR_ROUTES,
@@ -112,13 +100,13 @@ test('adjacent duplicate stations (same resolved coords, back-to-back) collapse 
       'STATION1,Station One,50.1000,14.1000,\n' +
       'PLATFORM1,Platform 1,,,STATION1\n' +
       'PLATFORM2,Platform 2,,,STATION1\n' +
-      'C,Charlie,50.2000,14.2000,\n',
+      'C,Charlie,50.10001,14.10001,\n',
   })
 
   const { pairs, provenance } = await computeStopPairFrequenciesForFeed(dir)
   assert.equal(pairs.length, 2, 'A-STATION1 and STATION1-C only — no zero-length STATION1-STATION1 pair')
   assert.ok(findPair(pairs, [50.0, 14.0], [50.1, 14.1]))
-  assert.ok(findPair(pairs, [50.1, 14.1], [50.2, 14.2]))
+  assert.ok(findPair(pairs, [50.1, 14.1], [50.10001, 14.10001]))
   assert.equal(provenance.collapsedAdjacentDuplicates, 1, 'PLATFORM1/PLATFORM2 collapsed into one visit to STATION1')
 })
 
@@ -145,7 +133,7 @@ test('a truly unresolvable (coordless, no parent) stop is dropped and pairs brid
   assert.equal(provenance.droppedUnresolvedStops, 1)
 })
 
-test('direction SUM: A->B on one trip and B->A on another merge into ONE canonical pair with summed pax', async () => {
+test('opposite directions remain distinct until routed onto tracks', async () => {
   const dir = join(TMP, 'direction-sum')
   writeGtfsFixture(dir, {
     'routes.txt': NO_CALENDAR_ROUTES,
@@ -163,13 +151,14 @@ test('direction SUM: A->B on one trip and B->A on another merge into ONE canonic
   })
 
   const { pairs, provenance } = await computeStopPairFrequenciesForFeed(dir)
-  assert.equal(pairs.length, 1, 'A->B and B->A collapse onto the same canonical pair key')
+  assert.equal(pairs.length, 2)
+  assert.equal(findPair(pairs, [50.1, 14.1], [50.0, 14.0])?.pax, 1)
   const pair = findPair(pairs, [50.0, 14.0], [50.1, 14.1])
   assert.ok(pair)
-  assert.equal(pair!.pax, 2, 'both directions summed (1 + 1), not just one direction kept')
+  assert.equal(pair!.pax, 1)
   assert.equal(pair!.frt, 0, 'GTFS is passenger-only')
   assert.equal(provenance.pairEventsBeforeDedup, 2)
-  assert.equal(provenance.pairsAfterDedup, 1)
+  assert.equal(provenance.pairsAfterDedup, 2)
 })
 
 test('frequencies.txt expands a headway-defined trip into its daily repeat count (TH-multiplier style)', async () => {
@@ -317,38 +306,58 @@ test('cache round-trip uses an explicit path and leaves source inputs immutable 
   const second = await computeStopPairFrequenciesForFeed(dir, { cachePath })
   assert.equal(second.provenance.fromCache, true)
   assert.deepEqual(second.pairs, first.pairs)
+  const old = JSON.parse(readFileSync(cachePath, 'utf-8'))
+  old.feedsLoadedNonEmpty[0] = 'pairs-v1'
+  old.stops[0].pax = 999
+  writeFileSync(cachePath, JSON.stringify(old))
+  const rebuilt = await computeStopPairFrequenciesForFeed(dir, { cachePath })
+  assert.equal(rebuilt.provenance.fromCache, false)
+  assert.deepEqual(rebuilt.pairs, first.pairs)
 })
 
-test('shape conflict: a SECOND different shapeId reaching an already-shaped pair drops the polyline entirely (2026-07-16 /gg review item 11a — keeps the ambiguity probe alive)', async () => {
-  const dir = join(TMP, 'shape-conflict')
+test('distinct GTFS shapes retain their own counts through parsing, caching and graph routing', async () => {
+  const dir = join(TMP, 'shape-routes')
+  const north: Array<[number, number]> = [[50, 14], [50.01, 14.05], [50, 14.1]]
+  const south: Array<[number, number]> = [[50, 14], [49.99, 14.05], [50, 14.1]]
   writeGtfsFixture(dir, {
     'routes.txt': NO_CALENDAR_ROUTES,
-    'trips.txt': 'trip_id,route_id,service_id,shape_id\nT1,R1,svc,SHAPE1\nT2,R1,svc,SHAPE2\n',
-    'stop_times.txt':
-      'trip_id,stop_id,stop_sequence\n' +
-      'T1,A,1\n' +
-      'T1,B,2\n' +
-      'T2,A,1\n' +
-      'T2,B,2\n',
-    'stops.txt':
-      'stop_id,stop_name,stop_lat,stop_lon\n' +
-      'A,Alpha,50.0000,14.0000\n' +
-      'B,Bravo,50.1000,14.1000\n',
-    'shapes.txt':
-      'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n' +
-      'SHAPE1,50.0000,14.0000,0\n' +
-      'SHAPE1,50.1000,14.1000,1\n' +
-      'SHAPE2,50.0000,14.0000,0\n' +
-      'SHAPE2,50.0500,14.2000,1\n' + // a DIFFERENT corridor shape reaching the same A-B pair
-      'SHAPE2,50.1000,14.1000,2\n',
+    'trips.txt': 'trip_id,route_id,service_id,shape_id\nN1,R1,svc,N1\nN2,R1,svc,N2\nS,R1,svc,S\nU,R1,svc,\n',
+    'stop_times.txt': 'trip_id,stop_id,stop_sequence\n' +
+      ['N1', 'N2', 'S', 'U'].map(t => `${t},A,1\n${t},B,2\n`).join(''),
+    'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nA,Alpha,50,14\nB,Bravo,50,14.1\n',
+    'frequencies.txt': 'trip_id,start_time,end_time,headway_secs\n' +
+      'N1,00:00:00,00:40:00,600\nN2,00:00:00,01:00:00,600\nS,00:00:00,03:20:00,600\n',
+    'shapes.txt': 'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n' +
+      [['N1', north], ['N2', north], ['S', south]].flatMap(([id, points]) =>
+        (points as Array<[number, number]>).map(([lat, lon], i) => `${id},${lat},${lon},${i}\n`)).join(''),
   })
-
-  const { pairs, provenance } = await computeStopPairFrequenciesForFeed(dir)
-  assert.equal(pairs.length, 1, 'still one canonical A-B pair')
-  const pair = findPair(pairs, [50.0, 14.0], [50.1, 14.1])
-  assert.ok(pair)
-  assert.equal(pair!.shapePolyline, undefined, 'conflicting shapeIds drop the polyline entirely — the walk\'s ambiguity probe must run unconstrained, not pick one corridor arbitrarily')
-  assert.equal(provenance.tripsWithShape, 2, 'both trips DID carry a shape at the trip level — the conflict is detected at the PAIR merge, not trip parsing')
+  const segments: RailGraphSegmentInput[] = []
+  for (const [name, points] of [['north', north], ['south', south]] as const) {
+    for (let i = 0; i < points.length - 1; i++) {
+      const [startLat, startLon] = points[i], [endLat, endLon] = points[i + 1]
+      segments.push({ key: `${name}-${i}`, osmId: name, railType: 0, usage: 0,
+        isTraversalOnly: false, corridorToken: name, startKey: points[i].join(','), endKey: points[i + 1].join(','),
+        startLat, startLon, endLat, endLon, lengthM: flatDist(startLat, startLon, endLat, endLon) })
+    }
+  }
+  const graph = buildRailGraph(segments)
+  const cachePath = join(TMP, 'shape-routes.json')
+  for (const fromCache of [false, true]) {
+    const parsed = await computeStopPairFrequenciesForFeed(dir, { cachePath })
+    assert.equal(parsed.provenance.fromCache, fromCache)
+    assert.equal(parsed.pairs.length, 3, 'identical north geometry shares one search; south and shapeless remain separate')
+    for (const pairs of [parsed.pairs, [...parsed.pairs].reverse()]) {
+      const result = walkRailStationPairs(graph, pairs)
+      assert.equal(result.pairsTotal, 3)
+      assert.equal(result.pairsWalked, 2)
+      assert.equal(result.failures.ambiguous, 1, 'the shapeless trip must not borrow another trip’s route')
+      for (const [name, pax] of [['north', 10], ['south', 20]] as const) {
+        for (let i = 0; i < 2; i++) {
+          assert.deepEqual(result.stampsBySegmentKey.get(`${name}-${i}`), { pax, frt: 0, divisor: 1 })
+        }
+      }
+    }
+  }
 })
 
 test('optionsKey fingerprints an explicit derived cache', async () => {

@@ -87,15 +87,32 @@ test('walk: a meander well within the detour gate is fully stamped on every edge
 
 // ── Direction sum + express/local summation ─────────────────────────────────
 
-test('walk: A->B and B->A on the same OD SUM into one canonical pair (engine wants total trains/day)', () => {
+test('walk: opposite directions route separately and add their counts on a shared track', () => {
   const ab = seg({ key: 'ab', startLat: 50, startLon: 14.000, endLat: 50, endLon: 14.020 })
   const g = buildRailGraph([ab])
   const result = walkRailStationPairs(g, [
     { fromLat: 50, fromLon: 14.000, toLat: 50, toLon: 14.020, pax: 16, frt: 0 },
     { fromLat: 50, fromLon: 14.020, toLat: 50, toLon: 14.000, pax: 16, frt: 0 }, // reverse direction
   ])
-  assert.equal(result.pairsTotal, 1, 'both directions canonicalize into ONE pair')
+  assert.equal(result.pairsTotal, 2)
   assert.deepEqual(result.stampsBySegmentKey.get('ab'), { pax: 32, frt: 0, divisor: 1 })
+})
+
+test('walk: original coordinates distinguish stops inside the same rounded coordinate cell', () => {
+  const segments = [0.00003, 0.00004].map((offset, i) => seg({
+    key: `piece-${i}`, osmId: 'one-source-way', startLat: 50 + offset, startLon: 14 + offset,
+    endLat: 50.01 + offset, endLon: 14.01 + offset,
+  }))
+  const pairs = segments.map((s, i) => ({
+    fromLat: s.startLat, fromLon: s.startLon, toLat: s.endLat, toLon: s.endLon, pax: (i + 1) * 10, frt: 0,
+  }))
+  const original = structuredClone(pairs)
+  const result = walkRailStationPairs(buildRailGraph(segments), pairs)
+  assert.equal(result.pairsTotal, 2)
+  assert.equal(result.pairsWalked, 2)
+  assert.deepEqual(result.stampsBySegmentKey.get('piece-0'), { pax: 10, frt: 0, divisor: 1 })
+  assert.deepEqual(result.stampsBySegmentKey.get('piece-1'), { pax: 20, frt: 0, divisor: 1 })
+  assert.deepEqual(pairs, original)
 })
 
 test('walk: express + local pairs on a shared trunk edge SUM (different OD pairs, same track)', () => {
@@ -645,16 +662,7 @@ test('dijkstraShortestPath: a reused scratch run on the same pair twice, then a 
 
 // ── Parallel spread ──────────────────────────────────────────────────────────
 
-/** N parallel tracks, all pairwise < PARALLEL_SPREAD_RADIUS_M = 50 m,
- *  identical heading/longitude span, distinct osmId, no shared node. Offsets
- *  are chosen to ALSO stay clear of each other's canonical-pair 4-dp
- *  rounding bucket (~11 m) — otherwise two distinct station pairs would
- *  collapse into one canonical pair before routing even starts, which is
- *  the correct behaviour for real close-together station platforms but
- *  would defeat this fixture's goal of forcing each pair onto its own
- *  track. Each pair is snapped exactly onto its own track's endpoints
- *  (0 m away, closer than any neighbour track) so each walk is forced onto
- *  its own isolated track. */
+/** Isolated parallel tracks whose stop pairs sit exactly on their source endpoints. */
 function buildParallelTracks(offsetsDeg: number[], corridorToken: string, paxByIndex: number[], frtByIndex: number[]) {
   const segs: RailGraphSegmentInput[] = []
   const pairs: Array<{ fromLat: number; fromLon: number; toLat: number; toLon: number; pax: number; frt: number }> = []
@@ -713,7 +721,7 @@ test('parallel spread: token-less lines 30 m apart do NOT spread (beyond the str
 })
 
 test('parallel spread: token-less double-track 8 m apart — walk stamps ONE track, spread reaches the unstamped sibling', () => {
-  // A canonical pair is walked exactly once along ONE shortest path, so only
+  // A distinct search is walked exactly once along ONE shortest path, so only
   // track0 ever gets a walk stamp; without unstamped-sibling spread, track1
   // would render at the full engine class default next to its divided twin
   // (the DE +8..+17 dB double-count shape).

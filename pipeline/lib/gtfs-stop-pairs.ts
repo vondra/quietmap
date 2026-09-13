@@ -3,16 +3,13 @@
 import { existsSync, createReadStream, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
-import { coordKey4dp } from './spatial.js'
+import { RailPairSearches } from './rail-pair-searches.js'
 import {
   RAIL_TYPES, parseCsvLine, streamCsvRows, readGtfsTripDepartureMultipliers,
   computeActiveTripFamiliesForFeed, loadStopsWithCoords, resolveStopViaParent,
   writeMergedStopCache, readMergedStopCache,
   type GtfsStop,
 } from './gtfs-enrich-core.js'
-// RailStationPairCount's home is rail-graph.ts (the topology SSOT), imported
-// for local use and re-exported: gtfs-stop-pairs.test.ts still imports it
-// from this file.
 import type { RailStationPairCount } from './rail-graph.js'
 export type { RailStationPairCount }
 
@@ -60,9 +57,9 @@ export interface StopPairFrequenciesProvenance {
    *  malformed feed with trips that have no stop pattern). */
   tripsWithStopTimes: number
   stopTimesLines: number
-  /** Consecutive-pair occurrences emitted across all trips, before canonical merge. */
+  /** Consecutive-pair occurrences emitted across all trips, before identical-search summing. */
   pairEventsBeforeDedup: number
-  /** Final canonical station-pair count (after direction + cross-trip summing). */
+  /** Distinct directed coordinate/shape searches, with counts summed across identical inputs. */
   pairsAfterDedup: number
   droppedUnresolvedStops: number
   collapsedAdjacentDuplicates: number
@@ -103,14 +100,6 @@ function emptyProvenance(overrides: Partial<StopPairFrequenciesProvenance> = {})
   }
 }
 
-/** Station identity for pairing/collapsing: the shared 4dp key (spatial.ts)
- *  so two stop_ids at the same physical location (duplicate platform
- *  records, or a child resolved to its parent) count as ONE node — matches
- *  the canonical pair key's precision. */
-function stationKey(stop: GtfsStop): string {
-  return coordKey4dp(stop.lat, stop.lon)
-}
-
 /** Evenly-spaced downsample keeping the first and last point exactly. */
 function downsamplePolyline(points: Array<[number, number]>, maxPoints: number): Array<[number, number]> {
   if (points.length <= maxPoints || maxPoints < 2) return points
@@ -120,11 +109,9 @@ function downsamplePolyline(points: Array<[number, number]>, maxPoints: number):
   return out
 }
 
-type PairAccumulator = RailStationPairCount
-
 // The caller owns the cache path and fingerprints function-valued options.
 // Input identity is checked separately; empty parses are never persisted.
-const CACHE_VERSION_MARKER = 'pairs-v1'
+const CACHE_VERSION_MARKER = 'directed-shape-pairs'
 
 /** The GTFS inputs whose content this parser's result depends on. A change in
  *  ANY of them (a `--force-download` unzipping a fresh feed over the old
@@ -158,17 +145,11 @@ export async function computeStopPairFrequenciesForFeed(
   const cachePath = opts.cachePath
   if (cachePath && existsSync(cachePath)) {
     const cached = readMergedStopCache<RailStationPairCount>(cachePath)
-    // Hit requires BOTH the options combination AND the GTFS inputs to be the
-    // ones this cache was computed from — slot [1] carries optionsKey, slot
-    // [2] the inputs fingerprint (item 2). A cache written before the
-    // fingerprint existed simply recomputes once and is rewritten.
-    if (cached.feedsLoadedNonEmpty?.[1] === optionsFingerprint && cached.feedsLoadedNonEmpty?.[2] === inputsFingerprint) {
+    if (cached.feedsLoadedNonEmpty?.[0] === CACHE_VERSION_MARKER &&
+        cached.feedsLoadedNonEmpty[1] === optionsFingerprint &&
+        cached.feedsLoadedNonEmpty[2] === inputsFingerprint) {
       return { pairs: cached.stops, provenance: emptyProvenance({ pairsAfterDedup: cached.stops.length, fromCache: true }) }
     }
-    // Options OR inputs changed since this cache was written (or it predates
-    // either fingerprint) — fall through and recompute; the write below
-    // overwrites it with the CURRENT fingerprints rather than serving a
-    // mismatched/stale parse.
   }
 
   const familyOf = opts.familyOf ?? defaultFamilyOf
@@ -253,54 +234,11 @@ export async function computeStopPairFrequenciesForFeed(
   const stops = await loadStopsWithCoords(extractDir, opts.bbox)
 
   // ── Per trip: sort, resolve+bridge, collapse adjacent dups, emit + accumulate pairs ──
-  const pairMap = new Map<string, PairAccumulator>()
+  const searches = new RailPairSearches()
   let droppedUnresolvedStops = 0
   let collapsedAdjacentDuplicates = 0
   let pairEventsBeforeDedup = 0
   let tripsWithShape = 0
-
-  // Sentinel shapeId a real GTFS shape_id can never collide with (GTFS ids are
-  // caller-defined strings, but never contain NUL) — once a pair is marked
-  // CONFLICTED, every later trip through it (any shapeId, including a third
-  // DIFFERENT one) re-triggers the same "different from stored" branch below
-  // and stays dropped; the sentinel just needs to never equal a real shapeId.
-  const SHAPE_CONFLICT_MARKER = '\0conflict'
-  const shapeIdByPairKey = new Map<string, string>()
-
-  const addPair = (a: GtfsStop, b: GtfsStop, boost: number, shape: Array<[number, number]> | undefined, shapeId: string | undefined) => {
-    const ka = stationKey(a), kb = stationKey(b)
-    if (ka === kb) return // defensive: a non-adjacent revisit landing on the exact same 4dp cell
-    const swap = ka > kb
-    const key = swap ? `${kb}|${ka}` : `${ka}|${kb}`
-    const [from, to] = swap ? [b, a] : [a, b]
-    let acc = pairMap.get(key)
-    if (!acc) {
-      acc = { fromLat: from.lat, fromLon: from.lon, toLat: to.lat, toLon: to.lon, pax: 0, frt: 0 }
-      pairMap.set(key, acc)
-    }
-    acc.pax += boost
-    if (shape && shapeId) {
-      const existingShapeId = shapeIdByPairKey.get(key)
-      if (existingShapeId === undefined) {
-        // First trip to reach this canonical pair wins the shape attachment —
-        // deterministic (insertion order = first appearance in stop_times.txt),
-        // not merged/averaged.
-        acc.shapePolyline = shape
-        shapeIdByPairKey.set(key, shapeId)
-      } else if (existingShapeId !== shapeId) {
-        // A SECOND, DIFFERENT shapeId reaches the SAME canonical pair — two
-        // distinct corridors share this station couple (e.g. a junction where
-        // both branches happen to connect the same two stations). Attaching
-        // either shape would wrongly narrow the graph-walk's search to ONE of
-        // the two real corridors, so drop the polyline entirely and let the
-        // ambiguity probe run unconstrained (2026-07-16 /gg review item 11a)
-        // — "no shape" is exactly the case that probe exists for.
-        acc.shapePolyline = undefined
-        shapeIdByPairKey.set(key, SHAPE_CONFLICT_MARKER)
-      }
-    }
-    pairEventsBeforeDedup++
-  }
 
   for (const [tripId, rows] of perTripRows) {
     rows.sort((a, b) => a.seq - b.seq) // numeric stop_sequence sort — file order is not trustworthy
@@ -323,16 +261,19 @@ export async function computeStopPairFrequenciesForFeed(
     const sequence: GtfsStop[] = []
     for (const stop of resolved) {
       const prev = sequence[sequence.length - 1]
-      if (prev && stationKey(prev) === stationKey(stop)) { collapsedAdjacentDuplicates++; continue }
+      if (prev && prev.stop_id === stop.stop_id) { collapsedAdjacentDuplicates++; continue }
       sequence.push(stop)
     }
 
     for (let i = 0; i < sequence.length - 1; i++) {
-      addPair(sequence[i], sequence[i + 1], boost, shape, shapeId)
+      const from = sequence[i], to = sequence[i + 1]
+      searches.add({ fromLat: from.lat, fromLon: from.lon, toLat: to.lat, toLon: to.lon,
+        pax: boost, frt: 0, ...(shape ? { shapePolyline: shape } : {}) })
+      pairEventsBeforeDedup++
     }
   }
 
-  const pairs = [...pairMap.values()]
+  const pairs = [...searches.values()]
   const provenance = emptyProvenance({
     targetDate,
     calendarPresent,
@@ -347,11 +288,7 @@ export async function computeStopPairFrequenciesForFeed(
     tripsWithShape,
   })
 
-  // Never persist an empty parse — mirrors gtfs-enrich-core.ts's writeMergedStopCache
-  // callers: a poisoned/empty cache would silently starve every later cache-served run.
-  // Second slot carries the CURRENT optionsFingerprint, third the GTFS inputs
-  // fingerprint (see the module doc + item 2) so a later call under a different
-  // options shape OR a refreshed extract recomputes instead of reading this one.
+  // Empty parses must not certify a later source-admission check.
   if (pairs.length > 0 && cachePath) {
     writeMergedStopCache(cachePath, [CACHE_VERSION_MARKER, optionsFingerprint, inputsFingerprint], pairs)
   }
