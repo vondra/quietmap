@@ -1,6 +1,6 @@
 /** Load and match Peru's pinned MTC national and departmental road sources. */
 
-import { buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
+import { pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import type { RoadRow } from './roads-arrow.js'
 import { inBbox } from './spatial.js'
@@ -96,7 +96,7 @@ export function matchPeruRoad(row: RoadRow, source: PeruRoadSource) {
   const traffic = splitVehicles((observed || classifiedAadt(line)) * multiplier(tier), tier,
     peruRegion(row.midLat, row.midLon), tier === 0 && MINING_REGIONS.some(bbox => inBbox(row.midLat, row.midLon, bbox)))
   if (traffic.light + traffic.medium + traffic.heavy + traffic.moto === 0) return null
-  return { kind: observed > 0 ? 'imd' as const : 'network' as const, ...traffic }
+  return { ...pinnedRoadObservation(line, observed > 0 ? 'unknown' : 'both-directions'), kind: observed > 0 ? 'imd' as const : 'network' as const, ...traffic }
 }
 
 export const PERU_ROAD_BBOX: [number, number, number, number] = [-18.4, -82.0, 0, -68.5]

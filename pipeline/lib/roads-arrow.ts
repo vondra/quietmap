@@ -1,6 +1,7 @@
 /** The single atomic writer for road traffic enrichment on z9/z30 Arrow data. */
 
-import { makeTable, makeVector, type Table } from 'apache-arrow'
+import { DataType, RecordBatch, Schema, Table, Utf8, makeTable, makeVector, vectorFromArray } from 'apache-arrow'
+import { ROAD_COUNT_BASES, type RoadObservation } from './road-observation.js'
 import { withArrowWrite } from './provenance.js'
 import {
   SOURCES_BY_ID, countryIsosForNationalSource, isMeasured, shouldOverwrite,
@@ -28,7 +29,7 @@ export function disjointVehicleClassCountsFitPublishedTotal(
   return classCounts.reduce((sum, value) => sum + value, 0) <= total + maximumExcess
 }
 
-export interface RoadAadt {
+export interface RoadAadt extends RoadObservation {
   light: number
   medium: number
   heavy: number
@@ -36,6 +37,10 @@ export interface RoadAadt {
   sourceId: number
   /** Derived effective speed; any accepted write clears it unless restated. */
   speedTaper?: number
+  /** Bits light=1, medium=2, heavy=4, moto=8: estimated class counts. */
+  estimatedClasses?: number
+  /** Original dataset of a propagated observation; authored writes use sourceId. */
+  observationSourceId?: number
 }
 
 export interface RoadRow extends SegmentGeometry {
@@ -62,9 +67,18 @@ export interface WriteRoadResult {
 
 function assertMatch(match: RoadAadt, index: number, path: string): void {
   const aadtValues = [match.light, match.medium, match.heavy, match.moto]
-  if (aadtValues.some(value => !Number.isSafeInteger(value) || value < 0 || value > 2_147_483_647) ||
+  if (aadtValues.some(value => !Number.isFinite(value) || value < 0 ||
+      (match.countBasis !== 'allocated' && !Number.isSafeInteger(value))) ||
       !Number.isInteger(match.sourceId) || match.sourceId <= 0) {
     throw new Error(`writeRoadAadt: invalid match at row ${index} in ${path}: ${JSON.stringify(match)}`)
+  }
+  if (!ROAD_COUNT_BASES.includes(match.countBasis) || typeof match.observationId !== 'string' ||
+      (match.countBasis !== 'allocated' && !match.observationId)) {
+    throw new Error(`writeRoadAadt: invalid observation at row ${index} in ${path}`)
+  }
+  if (match.estimatedClasses !== undefined && (!Number.isInteger(match.estimatedClasses) ||
+      match.estimatedClasses < 0 || match.estimatedClasses > 15)) {
+    throw new Error(`writeRoadAadt: invalid class status at row ${index} in ${path}`)
   }
   if (match.speedTaper !== undefined &&
       (!Number.isInteger(match.speedTaper) || match.speedTaper < 1 || match.speedTaper > 254)) {
@@ -122,18 +136,50 @@ export function applyRoadAadt(
   const existingMoto = table.getChild('aadt_moto')
   const existingSource = table.getChild('source_id')
   const existingTaper = table.getChild('speed_taper')
+  if (table.schema.metadata.get('road_traffic_contract') === '1') {
+    throw new Error(`writeRoadAadt: rebuild raw inputs before enriching finalized traffic in ${arrowPath}`)
+  }
+  const existingEstimated = table.getChild('traffic_estimated')
+  const existingBasis = table.getChild('traffic_count_basis')
+  const existingObservation = table.getChild('traffic_observation_id')
+  const existingOrigin = table.getChild('traffic_observation_source')
+  if (existingEstimated) {
+    if (!existingEstimated || !DataType.isInt(existingEstimated.type) || existingEstimated.type.bitWidth !== 8 ||
+        existingEstimated.type.isSigned || existingEstimated.nullCount) {
+      throw new Error(`writeRoadAadt: invalid class status column in ${arrowPath}`)
+    }
+  }
+  if (existingBasis || existingObservation) {
+    if (!existingBasis || !DataType.isInt(existingBasis.type) || existingBasis.type.bitWidth !== 8 ||
+        existingBasis.type.isSigned || existingBasis.nullCount || !existingObservation ||
+        !DataType.isUtf8(existingObservation.type) || existingObservation.nullCount) {
+      throw new Error(`writeRoadAadt: invalid observation columns in ${arrowPath}`)
+    }
+  }
 
-  const light = new Int32Array(table.numRows)
-  const medium = new Int32Array(table.numRows)
-  const heavy = new Int32Array(table.numRows)
-  const moto = new Int32Array(table.numRows)
+  const light = new Float64Array(table.numRows)
+  const medium = new Float64Array(table.numRows)
+  const heavy = new Float64Array(table.numRows)
+  const moto = new Float64Array(table.numRows)
   const source = new Uint16Array(table.numRows)
+  const basis = new Uint8Array(table.numRows)
+  const estimated = new Uint8Array(table.numRows)
+  const origins = new Uint16Array(table.numRows)
+  const observations = new Array<string>(table.numRows)
   for (let index = 0; index < table.numRows; index++) {
     light[index] = (existingLight?.get(index) as number) ?? 0
     medium[index] = (existingMedium?.get(index) as number) ?? 0
     heavy[index] = (existingHeavy?.get(index) as number) ?? 0
     moto[index] = (existingMoto?.get(index) as number) ?? 0
     source[index] = (existingSource?.get(index) as number) ?? 0
+    basis[index] = (existingBasis?.get(index) as number) ?? 0
+    observations[index] = (existingObservation?.get(index) as string) ?? ''
+    estimated[index] = (existingEstimated?.get(index) as number) ?? 15
+    origins[index] = (existingOrigin?.get(index) as number) ?? source[index]
+    if (basis[index] >= ROAD_COUNT_BASES.length || estimated[index] > 15 ||
+        (source[index] !== 0 && basis[index] !== 3 && !observations[index])) {
+      throw new Error(`writeRoadAadt: missing or invalid source observation at row ${index} in ${arrowPath}`)
+    }
   }
 
   let taper: Uint8Array | null = null
@@ -185,6 +231,10 @@ export function applyRoadAadt(
       heavy[index] = 0
       moto[index] = 0
       source[index] = 0
+      basis[index] = 0
+      observations[index] = ''
+      estimated[index] = 15
+      origins[index] = 0
       row.existingSourceId = 0
       setTaper(index, 0)
       result.retracted++
@@ -207,21 +257,30 @@ export function applyRoadAadt(
       }
     }
 
-    if (candidate.light === 0 && candidate.medium === 0 && candidate.heavy === 0 &&
-        candidate.moto === 0 && isMeasured(candidate.sourceId)) {
-      throw new Error(`writeRoadAadt: all-zero AADT from measured source at row ${index} in ${arrowPath}: ${JSON.stringify(candidate)}`)
-    }
     if (!shouldOverwrite(source[index], candidate.sourceId)) continue
 
+    const nextOrigin = candidate.observationSourceId ?? candidate.sourceId
+    if (!Number.isInteger(nextOrigin) || SOURCES_BY_ID.get(nextOrigin)?.layer !== 'roads') {
+      throw new Error(`writeRoadAadt: invalid observation source ${nextOrigin}`)
+    }
+    const nextBasis = ROAD_COUNT_BASES.indexOf(candidate.countBasis)
+    const nextEstimated = candidate.estimatedClasses ??
+      (isMeasured(candidate.sourceId) && candidate.countBasis !== 'unknown' ? 0 : 15)
     const nextTaper = candidate.speedTaper ?? 0
     const valueChanged = light[index] !== candidate.light || medium[index] !== candidate.medium ||
       heavy[index] !== candidate.heavy || moto[index] !== candidate.moto ||
-      source[index] !== candidate.sourceId || taperAt(index) !== nextTaper
+      source[index] !== candidate.sourceId || taperAt(index) !== nextTaper ||
+      basis[index] !== nextBasis || estimated[index] !== nextEstimated || origins[index] !== nextOrigin ||
+      observations[index] !== candidate.observationId
     light[index] = candidate.light
     medium[index] = candidate.medium
     heavy[index] = candidate.heavy
     moto[index] = candidate.moto
     source[index] = candidate.sourceId
+    basis[index] = nextBasis
+    estimated[index] = nextEstimated
+    origins[index] = nextOrigin
+    observations[index] = candidate.observationId
     setTaper(index, nextTaper)
     result.matched++
     changed ||= valueChanged
@@ -230,7 +289,8 @@ export function applyRoadAadt(
 
   if (!changed) return { table, result }
   result.updated = true
-  const rebuilt = new Set(['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'source_id'])
+  const rebuilt = new Set(['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'source_id',
+    'traffic_count_basis', 'traffic_observation_id', 'traffic_observation_source', 'traffic_estimated'])
   if (taper) rebuilt.add('speed_taper')
   const columns: Record<string, unknown> = {}
   for (const field of table.schema.fields) {
@@ -241,6 +301,14 @@ export function applyRoadAadt(
   columns.aadt_heavy = makeVector(heavy)
   columns.aadt_moto = makeVector(moto)
   columns.source_id = makeVector(source)
+  columns.traffic_estimated = makeVector(estimated)
+  columns.traffic_observation_source = makeVector(origins)
+  columns.traffic_count_basis = makeVector(basis)
+  columns.traffic_observation_id = vectorFromArray(observations, new Utf8())
   if (taper) columns.speed_taper = makeVector(taper)
-  return { table: makeTable(columns as never) as unknown as Table, result }
+  const rebuiltTable = makeTable(columns as never) as unknown as Table
+  const metadata = new Map(table.schema.metadata)
+  metadata.set('road_traffic_contract', '0')
+  const schema = new Schema(rebuiltTable.schema.fields, metadata)
+  return { table: new Table(schema, rebuiltTable.batches.map(batch => new RecordBatch(schema, batch.data))), result }
 }

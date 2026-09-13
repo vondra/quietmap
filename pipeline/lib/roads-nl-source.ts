@@ -1,5 +1,7 @@
 /** Immutable Amsterdam 2025 AADT source loading and source-faithful parsing. */
 
+import { roadFeatureObservation } from './pinned-road-lines.js'
+import type { RoadObservation } from './road-observation.js'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -12,7 +14,7 @@ const SOURCE_URL = 'https://raw.githubusercontent.com/XavB64/traffic-volume-data
 const SOURCE_SHA256 = 'f4bab37574a2bb7cc4fab74f0f822cc32725c8fd6619897ec01b6cf4e1864df5'
 const MEDIUM_SHARE_OF_TOTAL = 0.02
 
-export interface AmsterdamTrafficRecord {
+export interface AmsterdamTrafficRecord extends RoadObservation {
   sourceRow: number
   latitude: number
   longitude: number
@@ -92,7 +94,7 @@ export function parseAmsterdamTrafficSource(raw: string): AmsterdamTrafficCensus
     const aadt_medium = Math.round(aadtTotal * MEDIUM_SHARE_OF_TOTAL)
     // Dev1 rounded both complements independently, making 99 real rows sum to AADT+1.
     const aadt_light = aadtTotal - aadt_medium
-    census.records.push({
+    census.records.push({ countBasis: 'unknown', observationId: `Amsterdam:2025:${roadFeatureObservation(feature as object, 'unknown').observationId}`,
       sourceRow,
       longitude: coordinate[0],
       latitude: coordinate[1],

@@ -107,6 +107,11 @@ export function writeRoadsFixture(name: string, classes: number[], options: Road
     aadt_heavy: vectorFromArray(indices.map(index => 3000 + index), new Int32()),
     aadt_moto: vectorFromArray(indices.map(index => 40 + index), new Int32()),
     source_id: vectorFromArray(options.sourceIds ?? indices.map(() => 0), new Uint16()),
+    traffic_count_basis: vectorFromArray(indices.map(() => 0), new Uint8()),
+    traffic_observation_source: vectorFromArray(options.sourceIds ?? indices.map(() => 0), new Uint16()),
+    traffic_estimated: vectorFromArray(indices.map(() => 15), new Uint8()),
+    traffic_observation_id: vectorFromArray(indices.map(index =>
+      options.sourceIds?.[index] ? `fixture:${index}` : ''), new Utf8()),
     ...(options.omitCountryColumn ? {} : {
       country_iso: vectorFromArray(options.countryCodes ?? indices.map(() => iso2Code('CZ')), new Uint16()),
     }),

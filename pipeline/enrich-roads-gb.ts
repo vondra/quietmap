@@ -1,5 +1,6 @@
 /** Enrich z9 road vectors with Great Britain DfT AADF count points. */
 
+import { roadObservation, type RoadObservation } from './lib/road-observation.js'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
@@ -23,7 +24,7 @@ const CACHE_ZIP = 'dft-aadf.zip'
 const EXTRACTED_CSV = 'dft_traffic_counts_aadf.csv'
 const DFT_URL = 'https://storage.googleapis.com/dft-statistics/road-traffic/downloads/data-gov-uk/dft_traffic_counts_aadf.zip'
 
-export interface DftCountPoint {
+export interface DftCountPoint extends RoadObservation {
   ref: string
   latitude: number
   longitude: number
@@ -65,7 +66,7 @@ function countPoint(row: CsvRow): DftCountPoint | null {
   if (!id || !Number.isSafeInteger(year) || !Number.isFinite(latitude) ||
       !Number.isFinite(longitude) || latitude < 49 || latitude > 61 ||
       longitude < -8.5 || longitude > 2.5) return null
-  const point: DftCountPoint = {
+  const point: DftCountPoint = { ...roadObservation(id, 'unknown'),
     ref: (row.road_name ?? '').replace(/\s+/g, ''),
     latitude,
     longitude,
@@ -111,15 +112,17 @@ function validateCachedPoints(value: unknown, path: string): DftCountPoint[] {
   return value.map((entry, index) => {
     if (!entry || typeof entry !== 'object') throw new Error(`invalid DfT cache row ${index}: ${path}`)
     const old = entry as Record<string, unknown>
-    const point: DftCountPoint = {
+    if (typeof old.observationId !== 'string' || !old.observationId || old.countBasis !== 'unknown') throw new Error(`DfT cache row ${index} lost its original observation identity: ${path}`)
+    const id = old.observationId
+    const point: DftCountPoint = { ...roadObservation(id, 'unknown'),
       ref: String(old.ref ?? ''),
-      latitude: Number(old.latitude ?? old.lat),
-      longitude: Number(old.longitude ?? old.lon),
-      roadCategory: String(old.roadCategory ?? old.road_category ?? ''),
-      light: Number(old.light ?? old.aadt_light),
-      medium: Number(old.medium ?? old.aadt_medium),
-      heavy: Number(old.heavy ?? old.aadt_heavy),
-      moto: Number(old.moto ?? old.aadt_moto),
+      latitude: Number(old.latitude),
+      longitude: Number(old.longitude),
+      roadCategory: String(old.roadCategory ?? ''),
+      light: Number(old.light),
+      medium: Number(old.medium),
+      heavy: Number(old.heavy),
+      moto: Number(old.moto),
       total: Number(old.total),
       year: Number(old.year),
     }
@@ -134,7 +137,7 @@ function validateCachedPoints(value: unknown, path: string): DftCountPoint[] {
 
 function isCanonicalCache(value: unknown): value is DftCountPoint[] {
   return Array.isArray(value) && (value.length === 0 ||
-    (value[0] !== null && typeof value[0] === 'object' && 'latitude' in value[0] && 'light' in value[0]))
+    (value[0] !== null && typeof value[0] === 'object' && 'latitude' in value[0] && 'light' in value[0] && 'observationId' in value[0]))
 }
 
 async function loadDftPoints(options: RoadLoaderArguments): Promise<DftCountPoint[]> {
@@ -219,7 +222,7 @@ export async function enrichGreatBritainRoads(
       (row) => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const point = matchDftPoint(row, pointsByRef)
-        return point ? {
+        return point ? { countBasis: point.countBasis, observationId: point.observationId,
           light: point.light, medium: point.medium, heavy: point.heavy,
           moto: point.moto, sourceId: SOURCE_ID,
         } : null

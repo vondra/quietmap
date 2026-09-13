@@ -74,7 +74,7 @@ export async function enrichItalianRoads(
       row => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const station = match(row)
-        return station ? { ...splitItalianTgm(station.total, row.roadClass), sourceId: SOURCE_ID } : null
+        return station ? { countBasis: station.countBasis, observationId: station.observationId, ...splitItalianTgm(station.total, row.roadClass), sourceId: SOURCE_ID } : null
       },
       undefined,
       undefined,

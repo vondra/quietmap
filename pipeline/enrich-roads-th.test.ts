@@ -1,5 +1,6 @@
 /** Thailand DRR class mapping and DOH fallback precedence tests. */
 
+import { roadObservation } from './lib/road-observation.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { matchThailandRoad } from './enrich-roads-th.js'
@@ -30,10 +31,10 @@ test('DRR parser maps buses to medium, articulated trucks to heavy and rejects u
 test('DRR exact ref wins before multi-ref motorway and Bangkok trunk policy', () => {
   const source = parseThailandDrrSource(`${HEADER}\n7;9,10,1,2,0,1,1,0,0,0,0,0,0,0\n`)
   assert.deepEqual(matchThailandRoad(road('7;9'), source),
-    { kind: 'drr', light: 2, medium: 1, heavy: 1, moto: 1 })
+    { ...roadObservation('7;9', 'unknown'), kind: 'drr', light: 2, medium: 1, heavy: 1, moto: 1 })
   assert.deepEqual(matchThailandRoad(road('x; 9'), source),
-    { kind: 'motorway', light: 62000, medium: 10000, heavy: 13000, moto: 15000 })
+    { ...roadObservation({ policy: 'motorway', token: '9', bangkok: false }, 'both-directions'), kind: 'motorway', light: 62000, medium: 10000, heavy: 13000, moto: 15000 })
   assert.deepEqual(matchThailandRoad(road('35', 13.8, 100.5), source),
-    { kind: 'trunk', light: 78000, medium: 10400, heavy: 9100, moto: 32500 })
+    { ...roadObservation({ policy: 'trunk', token: '35', bangkok: true }, 'both-directions'), kind: 'trunk', light: 78000, medium: 10400, heavy: 9100, moto: 32500 })
   assert.equal(matchThailandRoad(road('unknown'), source), null)
 })

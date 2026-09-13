@@ -1,5 +1,7 @@
 /** Enrich z9 US roads with class-compatible FHWA HPMS 2022 traffic measurements. */
 
+import { roadFeatureObservation } from './lib/pinned-road-lines.js'
+import type { RoadObservation } from './lib/road-observation.js'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -23,7 +25,7 @@ const HPMS_BASE = 'https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/serv
 // Preserve dev1's class split: the national view publishes total AADT, not classes.
 const HEAVY_SHARES = [0.12, 0.10, 0.08, 0.06, 0.05] as const
 
-export interface UsRoadSegment extends RankedPoint {
+export interface UsRoadSegment extends RankedPoint, RoadObservation {
   aadt: number
   light: number
   medium: number
@@ -96,7 +98,7 @@ export function parseUsPage(page: unknown): { segments: UsRoadSegment[]; feature
     const moto = Math.round(aadt * 0.01)
     const totalHeavy = Math.round(aadt * HEAVY_SHARES[rank])
     const medium = Math.round(totalHeavy * 0.20)
-    segments.push({
+    segments.push({ ...roadFeatureObservation(feature as object, 'unknown'),
       latitude, longitude, rank, aadt,
       light: aadt - totalHeavy - moto, medium, heavy: totalHeavy - medium, moto,
     })
@@ -159,7 +161,7 @@ export async function enrichUsRoads(preparedDirectory: string, segments: readonl
     const segment = nearestCompatiblePointWithin200Metres(
       row.midLat, row.midLon, osmRoadClassRank(row.roadClass), ROAD_CLASS_RANK_TOLERANCE, grid,
     )
-    return segment ? {
+    return segment ? { countBasis: segment.countBasis, observationId: segment.observationId,
       light: segment.light, medium: segment.medium, heavy: segment.heavy,
       moto: segment.moto, sourceId: SOURCE_ID,
     } : null

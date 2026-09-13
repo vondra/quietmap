@@ -1,13 +1,13 @@
-/**
- * Pure-core tests for the R7 transition taper (`buildTaperPlan`): boundary
- * detection (junction-free steps only), eligibility-driven anchoring, graded
- * ramps, and the never-touch invariants (tagged speed, census AADT, junctions).
- *
- * Run: `cd pipeline && npx tsx --test enrich-roads-taper.test.ts`
- */
+/** Speed-transition topology and raw/final traffic preservation regressions. */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { statSync, writeFileSync } from 'node:fs'
+import { Float32, Float64, Int16, Int32, RecordBatch, Schema, Table, Uint8, Uint16, tableFromIPC, tableToIPC, vectorFromArray } from 'apache-arrow'
+import { bytes, decodeQmBlocks, encodeQmBlocks, writeRoadsFixture } from './lib/road-test-fixture.js'
+import { withArrowWrite } from './lib/provenance.js'
+import { iso2Code } from './lib/prepared-grid.js'
+import { enrichTaperSquare } from './enrich-roads-taper.js'
 import { buildTaperPlan as buildPlanRaw, resolveSpeed, type CountrySpeeds, type Seg } from './lib/roads-taper-plan.js'
 import { CZ_SPEEDS } from './lib/road-planning-defaults.generated.js'
 
@@ -19,8 +19,8 @@ const buildTaperPlan = (segs: Seg[]) => buildPlanRaw(segs, CZ)
 /** Pure planner fixtures use opaque node labels; native readers supply z30 keys. */
 function seg(o: Partial<Seg> & { i: number; osmId: number; a: string; b: string }): Seg {
   return {
-    segIdx: 0, cls: 4, src: 0, speedTag: 0, builtUp: 1, access: 0,
-    roundabout: false, len: 60, aadt: [0, 0, 0, 0],
+    segIdx: 0, cls: 4, speedTag: 0, builtUp: 1, access: 0,
+    roundabout: false, len: 60,
     ...o,
   }
 }
@@ -47,28 +47,7 @@ test('speed-tag edge (DE shape): untagged side ramps from the tag toward its own
   // Untagged rows at dMid 30/90/150/210 m of the 250 m window ramp 100 → 50.
   const speeds = [1, 2, 3, 4].map((i) => plan.get(i)?.speed)
   assert.deepEqual(speeds, [94, 82, 70, 58])
-  for (const i of [1, 2, 3, 4]) assert.equal(plan.get(i)?.aadt, undefined, 'same-class defaults → no AADT ramp')
   assert.equal(plan.get(5)?.speed, undefined, 'past the window the own value wins (suppressed)')
-})
-
-test('census edge: default side ramps log-space from the census value; census row untouched', () => {
-  const census = way(1, 0, 0, 1, { src: 20, aadt: [5000, 100, 200, 50] })
-  const defaults = way(2, 1, 1, 6)
-  const { plan, stats } = buildTaperPlan([...census, ...defaults])
-  assert.equal(stats.boundaries, 1)
-  assert.equal(stats.kindCounts['census-edge'], 1)
-  assert.equal(plan.has(0), false, 'census row never planned')
-
-  const totals = [1, 2, 3, 4].map((i) => {
-    const a = plan.get(i)?.aadt
-    return a ? a[0] + a[1] + a[2] + a[3] : null
-  })
-  // Log-space descent from 5350 toward the tertiary default 800.
-  assert.ok(totals.every((t): t is number => t !== null))
-  for (let k = 0; k + 1 < totals.length; k++) assert.ok(totals[k]! > totals[k + 1]!, `monotone: ${totals}`)
-  assert.ok(totals[0]! < 5350 && totals[0]! > 3000, `first ramp row below the anchor: ${totals[0]}`)
-  assert.ok(totals[3]! > 800, `last ramp row above the default: ${totals[3]}`)
-  for (const i of [1, 2, 3, 4]) assert.equal(plan.get(i)?.speed, undefined, 'equal resolved speeds → no speed ramp')
 })
 
 test('built-up flip inside one way: both defaults ramp from the midpoint, W/2 each side', () => {
@@ -88,9 +67,9 @@ test('built-up flip inside one way: both defaults ramp from the midpoint, W/2 ea
 })
 
 test('a junction kills the boundary; a service driveway does not', () => {
-  const censusEdge = (extra: Seg[]) => {
+  const speedEdge = (extra: Seg[]) => {
     const segs = [
-      ...way(1, 0, 0, 1, { src: 20, aadt: [5000, 100, 200, 50] }),
+      ...way(1, 0, 0, 1, { speedTag: 50 }),
       ...way(2, 1, 1, 4),
       ...extra,
     ]
@@ -98,34 +77,34 @@ test('a junction kills the boundary; a service driveway does not', () => {
   }
   // A third THROUGH way at the shared node "50.1_14.0" → junction → no boundary.
   const side = seg({ i: 90, osmId: 9, cls: 5, a: '50.1_14.0', b: '50.1_14.9' })
-  assert.equal(censusEdge([side]), 0, 'through-class side road = junction')
+  assert.equal(speedEdge([side]), 0, 'through-class side road = junction')
   // A service driveway (class 7) at the same node is not a flow split.
   const driveway = seg({ i: 91, osmId: 9, cls: 7, a: '50.1_14.0', b: '50.1_14.9' })
-  assert.equal(censusEdge([driveway]), 1, 'service driveway ignored')
+  assert.equal(speedEdge([driveway]), 1, 'service driveway ignored')
 })
 
 test('a loop way meeting another way is physical degree 3 — junction, not continuation', () => {
-  // Way 9 loops n1→n2→n3→n1; way 1 (census) ends at n1. Only 2 distinct way
+  // Way 9 loops n1→n2→n3→n1; way 1 (tagged) ends at n1. Only 2 distinct way
   // ids at n1, but 3 segment endpoints — the edge-degree rule must refuse the
   // continuation link (a way-id set alone would walk straight through).
-  const census = way(1, 0, 0, 1, { src: 20, aadt: [5000, 100, 200, 50] })
+  const tagged = way(1, 0, 0, 1, { speedTag: 50 })
   const loop = [
     seg({ i: 10, osmId: 9, segIdx: 0, a: '50.1_14.0', b: '50.1_14.5' }),
     seg({ i: 11, osmId: 9, segIdx: 1, a: '50.1_14.5', b: '50.2_14.5' }),
     seg({ i: 12, osmId: 9, segIdx: 2, a: '50.2_14.5', b: '50.1_14.0' }),
   ]
-  const { plan, stats } = buildTaperPlan([...census, ...loop])
+  const { plan, stats } = buildTaperPlan([...tagged, ...loop])
   assert.equal(stats.boundaries, 0, 'no boundary across a degree-3 node')
   assert.equal(plan.size, 0)
 })
 
 test('never-touch invariants: restricted access and roundabouts are not planned', () => {
-  const censusRow = way(1, 0, 0, 1, { src: 20, aadt: [5000, 100, 200, 50] })
+  const taggedRow = way(1, 0, 0, 1, { speedTag: 50 })
   const restricted = way(2, 1, 1, 4, { access: 3 })
-  assert.equal(buildTaperPlan([...censusRow, ...restricted]).plan.size, 0, 'destination-access rows ineligible')
+  assert.equal(buildTaperPlan([...taggedRow, ...restricted]).plan.size, 0, 'destination-access rows ineligible')
 
   const roundabout = way(2, 1, 1, 4, { roundabout: true })
-  assert.equal(buildTaperPlan([...censusRow, ...roundabout]).plan.size, 0, 'roundabout rows ineligible')
+  assert.equal(buildTaperPlan([...taggedRow, ...roundabout]).plan.size, 0, 'roundabout rows ineligible')
 })
 
 test('resolveSpeed mirrors the engine cascade for the CZ row', () => {
@@ -138,4 +117,68 @@ test('resolveSpeed mirrors the engine cascade for the CZ row', () => {
   assert.equal(resolveSpeed(s({ cls: 5, builtUp: 1 }), CZ), 30, 'residential stays legacy (engine scope)')
   assert.equal(resolveSpeed(s({ cls: 0 }), CZ), 130, 'motorway')
   assert.equal(resolveSpeed(s({ cls: 1 }), CZ), 110, 'CZ motorroad trunk')
+})
+
+for (const contract of ['0', '1']) test(`speed-only IPC preserves contract${contract} traffic bytes and retracts only obsolete speeds`, async () => {
+  const path = writeRoadsFixture(`speed-only-contract${contract}.arrow`, [4, 4, 4, 4], {
+    speeds: [100, 0, 0, 0], sourceIds: [10, 12, 0, 20],
+    countryCodes: ['CZ', 'CZ', 'CZ', 'AT'].map(iso2Code),
+  })
+  await withArrowWrite(path, table => {
+    const columns = Object.fromEntries(table.schema.fields.map(field => [field.name, table.getChild(field.name)!]))
+    for (const axis of ['gx', 'gy']) {
+      const starts = [...table.getChild(`start_${axis}`)!].map(Number)
+      columns[`end_${axis}`] = vectorFromArray(starts.map((value, i) => starts[i + 1] ?? value + 1000), new Int32())
+    }
+    columns.segment_idx = vectorFromArray([0, 0, 0, 0], new Int16())
+    columns.length_m = vectorFromArray([60, 60, 60, 60], new Float32())
+    for (const name of ['access', 'junction']) columns[name] = vectorFromArray([0, 0, 0, 0], new Uint8())
+    columns.built_up = vectorFromArray([2, 2, 2, 2], new Uint8())
+    columns.traffic_estimated = vectorFromArray([0, 0, 15, 5], new Uint8())
+    if (contract === '0') columns.traffic_observation_source = vectorFromArray([10, 12, 0, 20], new Uint16())
+    else for (const name of ['traffic_count_basis', 'traffic_observation_id', 'traffic_observation_source']) delete columns[name]
+    columns.speed_taper = vectorFromArray([0, 0, 77, 44], new Uint8())
+    for (const [index, name] of ['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto'].entries()) {
+      columns[name] = vectorFromArray([0, 0.125 * (index + 1), 10.25 + index, 1234567.875], new Float64())
+    }
+    return new Table(columns)
+  })
+  const table = tableFromIPC(bytes(path))
+  const envelope = decodeQmBlocks(table.schema.metadata.get('qm_blocks')!)[0].bbox
+  const schema = new Schema(table.schema.fields, new Map([...table.schema.metadata,
+    ['qm_blocks', encodeQmBlocks([envelope, envelope])],
+    ['road_traffic_contract', contract], ['fixture', 'metadata must survive unchanged']]))
+  writeFileSync(path, tableToIPC(new Table(schema, [table.slice(0, 2), table.slice(2)]
+    .flatMap(part => part.batches.map(batch => new RecordBatch(schema, batch.data)))), 'file'))
+  const input = tableFromIPC(bytes(path))
+  assert.equal((await enrichTaperSquare(path)).updated, true)
+  let output = tableFromIPC(bytes(path))
+  assert.deepEqual([...output.getChild('speed_taper')!], [0, 94, 82, 44])
+  assert.deepEqual([...output.schema.metadata], [...input.schema.metadata])
+  assert.deepEqual(output.batches.map(batch => batch.numRows), input.batches.map(batch => batch.numRows))
+  for (const field of input.schema.fields.filter(field => field.name !== 'speed_taper')) {
+    assert.deepEqual(output.schema.fields.find(candidate => candidate.name === field.name), field)
+    const before = input.getChild(field.name)!, after = output.getChild(field.name)!
+    assert.deepEqual([...after], [...before], field.name)
+    if (field.name.startsWith('aadt_')) {
+      for (let index = 0; index < before.data.length; index++) {
+        const a = after.data[index].values, b = before.data[index].values
+        assert.deepEqual(Buffer.from(a.buffer, a.byteOffset, a.byteLength), Buffer.from(b.buffer, b.byteOffset, b.byteLength), field.name)
+      }
+    }
+  }
+  const stable = bytes(path), mtime = statSync(path).mtimeMs
+  assert.equal((await enrichTaperSquare(path)).updated, false)
+  assert.deepEqual(bytes(path), stable)
+  assert.equal(statSync(path).mtimeMs, mtime)
+
+  await withArrowWrite(path, current => current.setChild('speed_limit', vectorFromArray([0, 0, 0, 0], new Uint8())))
+  const retiredInput = tableFromIPC(bytes(path))
+  assert.equal((await enrichTaperSquare(path)).retracted, 2)
+  output = tableFromIPC(bytes(path))
+  assert.deepEqual([...output.getChild('speed_taper')!], [0, 0, 0, 44])
+  for (const field of retiredInput.schema.fields.filter(field => field.name !== 'speed_taper')) {
+    assert.deepEqual([...output.getChild(field.name)!], [...retiredInput.getChild(field.name)!], field.name)
+  }
+  assert.deepEqual([...output.schema.metadata], [...input.schema.metadata])
 })

@@ -130,17 +130,27 @@ class WorldBuildStateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'cannot adopt'):
             self.resume(review=self.review(['osm', 'roads']))
 
-    def test_environment_change_invalidates_dependents_but_worker_limits_do_not(self):
-        self.steps[0] = self.step('osm', environment=(('PBF_FILE', '/planet'), ('MAX_THREADS', '20')))
+    def test_environment_change_invalidates_dependents_but_worker_and_storage_placement_do_not(self):
+        original = {'PBF_FILE': '/planet', 'OUTPUT_DIR': '/prepared', 'MAX_THREADS': '20',
+                    'SCRATCH_ROOT': '/old', 'NODE_CACHE': '/old/nodes', 'SPILL_DIR': '/old/spill'}
+        self.steps[0] = self.step('osm', environment=tuple(original.items()))
         self.receipts(self.steps)
-        self.steps[0] = self.step('osm', environment=(('PBF_FILE', '/planet'), ('MAX_THREADS', '8')))
+        moved = {key: value for key, value in original.items() if key != 'SCRATCH_ROOT'}
+        moved.update(MAX_THREADS='8', NODE_CACHE='/new/nodes', SPILL_DIR='/other/spill')
+        self.steps[0] = self.step('osm', environment=tuple(moved.items()))
+        self.config['build'].update(osm_node_cache='/new/nodes', osm_spill_dir='/other/spill')
         self.assertEqual(self.resume(), {'osm', 'roads'})
-        self.steps[0] = self.step('osm', environment=(('PBF_FILE', '/another'), ('MAX_THREADS', '8')))
-        with self.assertRaisesRegex(ValueError, 'cannot adopt'):
-            self.resume(review=self.review(['osm', 'roads']))
+        self.code.write_text('reviewed equivalent producer with different scratch placement')
+        with self.assertRaisesRegex(ValueError, 'completed outputs need review'):
+            self.resume()
+        self.assertEqual(self.resume(review=self.review(['osm', 'roads'])), {'osm', 'roads'})
+        for key in ('PBF_FILE', 'OUTPUT_DIR'):
+            self.steps[0] = self.step('osm', environment=tuple(dict(moved, **{key: '/another'}).items()))
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'cannot adopt'):
+                self.resume(review=self.review(['osm', 'roads']))
         self.assertEqual(self.resume(review=self.review([])), set())
         # Once a producer is restarted, restoring its arguments cannot revive old consumers.
-        self.steps[0] = self.step('osm', environment=(('PBF_FILE', '/planet'), ('MAX_THREADS', '8')))
+        self.steps[0] = self.step('osm', environment=tuple(moved.items()))
         state.record_steps(self.output, [dict(name='osm', exit=0, **state.step_identity(
             self.steps[0], self.config['build'], pin_digest(self.output / state.PIN_NAME)))])
         self.assertEqual(self.resume(), {'osm'})

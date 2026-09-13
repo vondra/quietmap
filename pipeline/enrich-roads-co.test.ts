@@ -7,7 +7,7 @@ import { buildRoadLineVertexGrid, type PinnedRoadLine } from './lib/pinned-road-
 import type { RoadRow } from './lib/roads-arrow.js'
 
 const line = (properties: Record<string, unknown>): PinnedRoadLine => ({
-  coordinates: [[-74.1, 4.6], [-74.09, 4.6]], properties, relativePath: 'fixture',
+  observationId: 'fixture', coordinates: [[-74.1, 4.6], [-74.09, 4.6]], properties, relativePath: 'fixture',
 })
 const source = (network: PinnedRoadLine[], tpda: PinnedRoadLine[]): ColombiaRoadSource => ({
   network: buildRoadLineVertexGrid(network), tpda: buildRoadLineVertexGrid(tpda),
@@ -19,12 +19,12 @@ const road: RoadRow = { startLat: 4.6, startLon: -74.1, endLat: 4.6, endLon: -74
 test('Colombia prioritizes TPDA and preserves its observed vehicle percentages', () => {
   assert.deepEqual(matchColombiaRoad(road, source([line({ superficie: '1', administrador: '2', calzada: '2' })],
     [line({ conteo: 1000, au_p: 60, bu_p: 10, ca_p: 30 })])),
-  { kind: 'tpda', light: 1140, medium: 190, heavy: 570, moto: 100 })
+  { countBasis: 'unknown', observationId: 'fixture', kind: 'tpda', light: 1140, medium: 190, heavy: 570, moto: 100 })
 })
 
 test('Colombia uses Red Vial defaults only for major roads', () => {
   const network = source([line({ superficie: '1', administrador: '2', calzada: '2' })], [])
   assert.deepEqual(matchColombiaRoad(road, network),
-    { kind: 'network', light: 27500, medium: 2500, heavy: 5000, moto: 15000 })
+    { countBasis: 'both-directions', observationId: 'fixture', kind: 'network', light: 27500, medium: 2500, heavy: 5000, moto: 15000 })
   assert.equal(matchColombiaRoad({ ...road, roadClass: 3 }, network), null)
 })

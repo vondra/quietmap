@@ -12,6 +12,7 @@ members = [
     "noise-compute",
     "structures-finalize",
     "railways-finalize",
+    "roads-finalize",
     "osm-extract",
     "raster-reader",
     "source-reader",

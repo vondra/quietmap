@@ -1,34 +1,41 @@
-/** Apply final CZ-only transition ramps after every other road traffic writer. */
+/** Apply CZ speed transitions without changing traffic or its provenance. */
 
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { DataType, Table, makeVector } from 'apache-arrow'
 import { withArrowWrite } from './lib/provenance.js'
-import { applyRoadAadt } from './lib/roads-arrow.js'
-import {bakedRoadCountryReader, iso2Code} from './lib/prepared-grid.js'
-import { readPlanningRoads, restorePreTaperFacts } from './lib/road-planning-input.js'
-import { buildTaperPlan, TAPER_CLASSES } from './lib/roads-taper-plan.js'
+import { bakedRoadCountryReader, iso2Code } from './lib/prepared-grid.js'
+import { readPlanningRoads } from './lib/road-planning-input.js'
+import { buildTaperPlan } from './lib/roads-taper-plan.js'
 import { CZ_SPEEDS } from './lib/road-planning-defaults.generated.js'
-import { SOURCE_ID_OSM_TRANSITION_TAPER } from './lib/source-ids.generated.js'
 import { runSquareSteps } from './lib/square-pool.js'
 
 export async function enrichTaperSquare(path: string) {
-  let counts = { rows: 0, matched: 0, retracted: 0, updated: false, boundaries: 0, skippedUnscaled: 0, foreignRows: 0 }
+  const counts = { rows: 0, matched: 0, retracted: 0, updated: false, boundaries: 0, foreignRows: 0 }
   await withArrowWrite(path, table => {
     const countries = bakedRoadCountryReader(table), roads = readPlanningRoads(table)
     const cz = roads.filter(road => countries.codeAt(road.i) === iso2Code('CZ'))
-    // Reconstruct authored facts before planning; prior ramps are never anchors.
-    restorePreTaperFacts(cz)
     const { plan, stats } = buildTaperPlan(cz, CZ_SPEEDS)
-    const applied = applyRoadAadt(table, path, (_row, index) => {
-      const entry = plan.get(index)
-      if (!entry) return null
-      const [light, medium, heavy, moto] = entry.aadt ?? [0, 0, 0, 0]
-      return { light, medium, heavy, moto, sourceId: SOURCE_ID_OSM_TRANSITION_TAPER, speedTaper: entry.speed }
-    }, undefined, TAPER_CLASSES,
-    { sourceIds: [SOURCE_ID_OSM_TRANSITION_TAPER], when: (_row, index) => !plan.has(index) })
-    counts = { ...counts, ...applied.result, boundaries: stats.boundaries,
-      skippedUnscaled: stats.skippedUnscaled, foreignRows: roads.length - cz.length }
-    return applied.table
+    const existing = table.getChild('speed_taper')
+    if (existing && (!DataType.isInt(existing.type) || existing.type.bitWidth !== 8 || existing.type.isSigned || existing.nullCount)) {
+      throw new Error(`${path}: invalid speed_taper column`)
+    }
+    const speed = Uint8Array.from(roads, road => Number(existing?.get(road.i) ?? 0))
+    for (const road of cz) {
+      const next = plan.get(road.i)?.speed ?? 0
+      if (speed[road.i] !== next) {
+        if (speed[road.i] > 0 && next === 0) counts.retracted++
+        speed[road.i] = next
+        counts.updated = true
+      }
+    }
+    Object.assign(counts, { rows: roads.length, matched: plan.size,
+      boundaries: stats.boundaries, foreignRows: roads.length - cz.length })
+    if (!counts.updated) return table
+    return new Table({
+      ...Object.fromEntries(table.schema.fields.map(field => [field.name, table.getChild(field.name)!])),
+      speed_taper: makeVector(speed),
+    })
   })
   return counts
 }

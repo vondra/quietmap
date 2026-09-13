@@ -209,7 +209,7 @@ test('actual US z9 Arrow matching protects road class, source priority and baked
   const after = tableFromIPC(readFileSync(target))
   assert.deepEqual([...after.getChild('source_id')!], [0, 0, 0, 0, 0, 24, 0])
   for (const field of table.schema.fields) {
-    if (['source_id', 'aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto'].includes(field.name)) continue
+    if (['source_id', 'aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'traffic_count_basis', 'traffic_observation_id', 'traffic_observation_source', 'traffic_estimated'].includes(field.name)) continue
     assert.deepEqual(after.getChild(field.name)!.toArray(), table.getChild(field.name)!.toArray())
   }
   assert.deepEqual(after.schema.metadata, table.schema.metadata)

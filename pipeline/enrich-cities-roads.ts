@@ -35,7 +35,7 @@ export async function enrichMunicipalRoads(preparedDirectory: string, cities: re
   for (const plan of plans) {
     const unmatchableGeometry = plan.matcher.finish()
     const recordFor = (row: RoadRow): CityRoadRecord | null => plan.city.municipality.contains(row.midLat, row.midLon) ? plan.matcher.match(row) : null
-    const toAadt = (record: CityRoadRecord | null) => record ? { light: record.light, medium: record.medium, heavy: record.heavy, moto: record.moto, sourceId: plan.city.sourceId } : null
+    const toAadt = (record: CityRoadRecord | null) => record ? { countBasis: record.countBasis, observationId: record.observationId, light: record.light, medium: record.medium, heavy: record.heavy, moto: record.moto, sourceId: plan.city.sourceId } : null
     const candidateFor = (row: RoadRow) => toAadt(recordFor(row))
     const retract = { sourceIds: [plan.city.sourceId], when: (row: RoadRow) => !plan.city.coverage.has(row.roadClass) || recordFor(row) === null }
     let applicable = 0

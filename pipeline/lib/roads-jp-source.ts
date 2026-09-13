@@ -1,5 +1,6 @@
 /** Parse the complete 2021 MLIT road-traffic census for all 47 prefectures. */
 
+import { roadObservation, type RoadObservation } from './road-observation.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import { readPinnedRoadSource } from './pinned-road-source.js'
 
@@ -67,10 +68,10 @@ export interface JapaneseVehicleCounts {
 }
 
 export interface JapaneseRoadCensus {
-  nationalByRef: ReadonlyMap<string, JapaneseVehicleCounts>
-  expresswayByName: ReadonlyMap<string, JapaneseVehicleCounts>
+  nationalByRef: ReadonlyMap<string, JapaneseVehicleCounts & RoadObservation>
+  expresswayByName: ReadonlyMap<string, JapaneseVehicleCounts & RoadObservation>
   expresswayNames: readonly string[]
-  classMedian: ReadonlyMap<number, JapaneseVehicleCounts>
+  classMedian: ReadonlyMap<number, JapaneseVehicleCounts & RoadObservation>
   sourceRows: number
   admittedSections: number
   unsupportedTypeRows: number
@@ -142,7 +143,7 @@ export function parseJapaneseRoadCensus(rawFiles: readonly Uint8Array[]): Japane
         unavailableTrafficRows++
         continue
       }
-      const counts = { small, large }
+      const counts = { small, large, ...roadObservation({ prefecture: fileIndex + 1, fields }, 'unknown') }
       admittedSections++
       fileSections++
       for (const roadClass of classes) append(classRows, roadClass, counts)
@@ -159,9 +160,9 @@ export function parseJapaneseRoadCensus(rawFiles: readonly Uint8Array[]): Japane
   if (unusableFiles.length) {
     throw new Error(`Japanese census prefectures have no usable sections: ${unusableFiles.join(', ')}`)
   }
-  const nationalByRef = new Map([...refRows].map(([key, values]) => [key, medianCounts(values)]))
-  const expresswayByName = new Map([...nameRows].map(([key, values]) => [key, medianCounts(values)]))
-  const classMedian = new Map([...classRows].map(([key, values]) => [key, medianCounts(values)]))
+  const nationalByRef = new Map([...refRows].map(([key, values]) => [key, { ...medianCounts(values), ...roadObservation({ aggregate: 'route', key, values }, 'unknown') }]))
+  const expresswayByName = new Map([...nameRows].map(([key, values]) => [key, { ...medianCounts(values), ...roadObservation({ aggregate: 'expressway', key, values }, 'unknown') }]))
+  const classMedian = new Map([...classRows].map(([key, values]) => [key, { ...medianCounts(values), ...roadObservation({ aggregate: 'class-prior', key, values }, 'both-directions') }]))
   for (const [link, parent] of [[10, 0], [11, 1], [12, 2]] as const) {
     const counts = classMedian.get(parent)
     if (counts) classMedian.set(link, counts)

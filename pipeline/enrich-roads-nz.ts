@@ -30,7 +30,7 @@ export async function enrichNewZealandRoads(
     const write = await writeRoadAadt(resolve(preparedDirectory, square, 'roads.arrow'), row => {
       if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
       const observation = match(row)
-      return observation ? { light: observation.light, medium: observation.medium,
+      return observation ? { countBasis: observation.countBasis, observationId: observation.observationId, light: observation.light, medium: observation.medium,
         heavy: observation.heavy, moto: observation.moto, sourceId: SOURCE_ID } : null
     }, undefined, COVERED_ROAD_CLASSES,
     { sourceIds: [SOURCE_ID], when: row =>

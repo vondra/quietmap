@@ -60,19 +60,8 @@ pub(crate) fn compute_roads(
         dominant_energy: f64,
         dominant_segment_idx: i16,
         dominant_distance_m: f64,
-        dominant_aadt_light_raw: i32,
-        dominant_aadt_medium_raw: i32,
-        dominant_aadt_heavy_raw: i32,
-        dominant_aadt_moto_raw: i32,
-        dominant_aadt_light_nominal: f64,
-        dominant_aadt_medium_nominal: f64,
-        dominant_aadt_heavy_nominal: f64,
-        dominant_aadt_moto_nominal: f64,
-        dominant_aadt_light_effective: f64,
-        dominant_aadt_medium_effective: f64,
-        dominant_aadt_heavy_effective: f64,
-        dominant_aadt_moto_effective: f64,
-        dominant_traffic_source: &'static str, // "matched_external" | "estimated_service_tree" | "default_by_class"
+        /// Prepared traffic of the dominant segment (counts + estimated bitmask).
+        dominant_traffic: normalize::RoadTraffic,
         dominant_source_id: u16, // dataset identity from pipeline/lib/enrichment-datasets.ts
         dominant_speed_posted: u8,
         dominant_speed_used: f64,
@@ -468,10 +457,7 @@ pub(crate) fn compute_roads(
                         ground_g,
                         ground_bands,
                         reflection_boost_db: reflection,
-                        light,
-                        medium,
-                        heavy,
-                        moto,
+                        traffic: seg.traffic,
                         speed_kmh: speed,
                         surf_corr,
                         path_profile: std::mem::take(path_profile),
@@ -528,12 +514,6 @@ pub(crate) fn compute_roads(
         let speed = p.norm.speed_kmh;
         let base_speed = p.norm.base_speed_kmh;
         let surf_corr = p.norm.surf_corr_db;
-        let (light, medium, heavy, moto) = (
-            p.norm.light_aadt,
-            p.norm.medium_aadt,
-            p.norm.heavy_aadt,
-            p.norm.moto_aadt,
-        );
         let (square_country_city, src_alt, d_slant) = (p.square_country_city, p.src_alt, p.d_slant);
         let (seg_variants, ground_g) = (out.seg_variants, out.ground_g);
         let effective_ref = std::mem::take(&mut out.effective_ref);
@@ -597,19 +577,7 @@ pub(crate) fn compute_roads(
                 dominant_energy: 0.0,
                 dominant_segment_idx: 0,
                 dominant_distance_m: 0.0,
-                dominant_aadt_light_raw: 0,
-                dominant_aadt_medium_raw: 0,
-                dominant_aadt_heavy_raw: 0,
-                dominant_aadt_moto_raw: 0,
-                dominant_aadt_light_nominal: 0.0,
-                dominant_aadt_medium_nominal: 0.0,
-                dominant_aadt_heavy_nominal: 0.0,
-                dominant_aadt_moto_nominal: 0.0,
-                dominant_aadt_light_effective: 0.0,
-                dominant_aadt_medium_effective: 0.0,
-                dominant_aadt_heavy_effective: 0.0,
-                dominant_aadt_moto_effective: 0.0,
-                dominant_traffic_source: "default_by_class",
+                dominant_traffic: normalize::RoadTraffic::default(),
                 dominant_source_id: 0,
                 dominant_speed_posted: 0,
                 dominant_speed_used: 0.0,
@@ -710,33 +678,7 @@ pub(crate) fn compute_roads(
             acc.dominant_energy = seg_received_energy;
             acc.dominant_segment_idx = seg.segment_idx;
             acc.dominant_distance_m = seg.dist_m;
-            acc.dominant_aadt_light_raw = seg.aadt_light;
-            acc.dominant_aadt_medium_raw = seg.aadt_medium;
-            acc.dominant_aadt_heavy_raw = seg.aadt_heavy;
-            acc.dominant_aadt_moto_raw = seg.aadt_moto;
-            let provenance = sources::provenance_of(seg.source_id);
-            let (nom_l, nom_m, nom_h, nom_x) = normalize::nominal_road_aadt(
-                seg.road_class,
-                provenance,
-                seg.aadt_light,
-                seg.aadt_medium,
-                seg.aadt_heavy,
-                seg.aadt_moto,
-                square_country_city,
-            );
-            acc.dominant_aadt_light_nominal = nom_l;
-            acc.dominant_aadt_medium_nominal = nom_m;
-            acc.dominant_aadt_heavy_nominal = nom_h;
-            acc.dominant_aadt_moto_nominal = nom_x;
-            acc.dominant_aadt_light_effective = light;
-            acc.dominant_aadt_medium_effective = medium;
-            acc.dominant_aadt_heavy_effective = heavy;
-            acc.dominant_aadt_moto_effective = moto;
-            acc.dominant_traffic_source = if provenance.has_data() && seg.aadt_light > 0 {
-                provenance.legacy_traffic_source_str()
-            } else {
-                "default_by_class"
-            };
+            acc.dominant_traffic = seg.traffic;
             acc.dominant_source_id = seg.source_id;
             acc.dominant_speed_posted = seg.speed_limit;
             acc.dominant_speed_used = speed;
@@ -828,24 +770,16 @@ pub(crate) fn compute_roads(
         );
 
         let road_meta = RoadMetadata {
-            aadt_light_raw: acc.dominant_aadt_light_raw,
-            aadt_medium_raw: acc.dominant_aadt_medium_raw,
-            aadt_heavy_raw: acc.dominant_aadt_heavy_raw,
-            aadt_moto_raw: acc.dominant_aadt_moto_raw,
-            traffic_source: acc.dominant_traffic_source,
+            aadt_light: acc.dominant_traffic.light,
+            aadt_medium: acc.dominant_traffic.medium,
+            aadt_heavy: acc.dominant_traffic.heavy,
+            aadt_moto: acc.dominant_traffic.moto,
+            traffic_estimated: acc.dominant_traffic.estimated,
             dominant_source_id: acc.dominant_source_id,
             // Derestricted has no posted number — None keeps the popup from
             // rendering the 255 sentinel as "255 km/h" (/gg W4).
             speed_posted_kmh: (acc.dominant_speed_posted != normalize::SPEED_LIMIT_DERESTRICTED)
                 .then_some(acc.dominant_speed_posted),
-            aadt_light_nominal: acc.dominant_aadt_light_nominal,
-            aadt_medium_nominal: acc.dominant_aadt_medium_nominal,
-            aadt_heavy_nominal: acc.dominant_aadt_heavy_nominal,
-            aadt_moto_nominal: acc.dominant_aadt_moto_nominal,
-            aadt_light_effective: acc.dominant_aadt_light_effective,
-            aadt_medium_effective: acc.dominant_aadt_medium_effective,
-            aadt_heavy_effective: acc.dominant_aadt_heavy_effective,
-            aadt_moto_effective: acc.dominant_aadt_moto_effective,
             speed_kmh: acc.dominant_speed_used,
             speed_source: acc.dominant_speed_source,
             road_class: acc.class_name,
@@ -939,19 +873,16 @@ pub(crate) mod tests {
         }
     }
 
-    /// TH square-country-city (M6.3 measured DRR secondary arm 899.7/62.4/44.2/912.1 vs
-    /// WORLD 2640/120/180/60 — the override is unambiguous on the fixture
-    /// below).
+    /// TH square-country-city for the baked-row speed gate below.
     const TH: SquareCountryCity = SquareCountryCity {
         continent: Continent::Asia,
         country_iso: *b"TH",
         city_id: 0,
     };
 
-    /// One unenriched secondary (class 3) segment 200 m from the receiver:
-    /// tagged speed 50, so the country affects ONLY the AADT cascade. Tests
-    /// never point the process-wide square-country-city cache at a tree, so the receiver value is
-    /// UNKNOWN → WORLD — exactly the "oceanic receiver" shape of gate (a).
+    /// One prepared secondary (class 3) segment 200 m from the receiver:
+    /// tagged speed 50 and an all-estimated prior traffic block (the shape
+    /// roads-finalize publishes for an unobserved section).
     fn secondary_segment() -> RoadSegment {
         RoadSegment {
             osm_id: 1,
@@ -968,10 +899,13 @@ pub(crate) mod tests {
             surface_type: 0,
             oneway: false,
             lanes: 0,
-            aadt_light: 0,
-            aadt_medium: 0,
-            aadt_heavy: 0,
-            aadt_moto: 0,
+            traffic: crate::normalize::RoadTraffic {
+                light: 2640.0,
+                medium: 120.0,
+                heavy: 180.0,
+                moto: 60.0,
+                estimated: 15,
+            },
             source_id: 0,
             dist_m: 200.0,
             cp_lat: 50.0,
@@ -981,7 +915,6 @@ pub(crate) mod tests {
             road_ref: String::new(),
             bridge: false,
             tunnel: false,
-            access: 0,
             junction: 0,
             built_up: 0,
         }
@@ -1009,28 +942,42 @@ pub(crate) mod tests {
         }
     }
 
-    /// Gate (a) popup: a row whose baked SquareCountryCity is TH gets TH defaults even
-    /// though the receiver resolves UNKNOWN — the segment's own country wins.
+    /// Prepared traffic is location-independent: a row whose baked
+    /// SquareCountryCity is TH reports the SAME prepared counts as one under
+    /// an UNKNOWN receiver — the country cascade now lives in the producer.
+    /// The row country still drives the untagged SPEED default (gate below).
     #[test]
-    fn baked_row_square_country_city_wins_over_receiver() {
+    fn prepared_traffic_passes_through_regardless_of_square() {
         let seg = secondary_segment();
         let world = one_road_meta(std::slice::from_ref(&seg));
         let baked = one_road_meta(&[RoadSegment {
             square_country_city: Some(TH),
             ..seg.clone()
         }]);
-        assert_eq!(
-            world.aadt_light_effective, 2640.0,
-            "receiver UNKNOWN → WORLD"
+        for meta in [&world, &baked] {
+            assert_eq!(meta.aadt_light, 2640.0);
+            assert_eq!(meta.aadt_heavy, 180.0);
+            assert_eq!(meta.traffic_estimated, 15);
+        }
+        assert_eq!(world.speed_source, "osm_posted");
+    }
+
+    /// A prepared total zero is a TRUE zero: no contributor, no class-default
+    /// resurrection at runtime.
+    #[test]
+    fn prepared_true_zero_produces_no_contributor() {
+        let seg = RoadSegment {
+            traffic: crate::normalize::RoadTraffic::default(),
+            ..secondary_segment()
+        };
+        let (_periods, contribs) = compute_roads(
+            &receiver(),
+            std::slice::from_ref(&seg),
+            &ObstacleSet::empty(),
+            &FlatRasters,
+            None,
         );
-        assert_eq!(
-            baked.aadt_light_effective, 3720.0,
-            "baked TH → the hand-tuned TH rural arm (measured arm parked, /gg M6 Codex)"
-        );
-        // The popup's nominal (pre-factor) display surface follows the same
-        // row square_country_city (nominal_road_aadt call inside the segment loop).
-        assert_eq!(baked.aadt_light_nominal, 3720.0);
-        assert_eq!(world.aadt_light_nominal, 2640.0);
+        assert!(contribs.is_empty(), "true zero stays silent");
     }
 
     /// Stripe regression (fix-pack Fix 1): a 30 m building straddling the cp
@@ -1172,20 +1119,6 @@ pub(crate) mod tests {
             "flat-ground interval A_screen reconstructed {reconstructed:.12} dB, engine returned {:.12} dB",
             propagation.screening.attenuation_bands[band]
         );
-    }
-
-    /// Gate (c) popup: a baked `\0\0` row is WORLD defaults — `Some(UNKNOWN)`
-    /// never falls back to the receiver SquareCountryCity (indistinguishable here only
-    /// because the test receiver is also UNKNOWN; the no-fallback contrast
-    /// with a KNOWN region is pinned at the loader level).
-    #[test]
-    fn baked_zero_is_world_arm() {
-        let seg = RoadSegment {
-            square_country_city: Some(SquareCountryCity::UNKNOWN),
-            ..secondary_segment()
-        };
-        let baked0 = one_road_meta(std::slice::from_ref(&seg));
-        assert_eq!(baked0.aadt_light_effective, 2640.0);
     }
 
     /// A dense-ish scene for the pool-size gate: a fan of secondary segments

@@ -151,8 +151,7 @@ export const DIAGRAM_COLORS = {
 // Noise-sources and Noise-segments tabs so wording stays identical. Kept in a
 // pure TypeScript module so its trust-sensitive wording has dependency-free
 // unit tests.
-export { formatProv, railTrainSourceLine, railTrafficLabel, railTrafficDescription, roadSourceDescription } from './provenance'
-export type { RoadTrafficSource } from './provenance'
+export { formatProv, railTrainSourceLine, railTrafficLabel, railTrafficDescription, roadCategoryEstimated, roadCategoryLine, roadTrafficLabel, roadTrafficDescription, roadTrafficSourceLine } from './provenance'
 
 /**
  * GeoJSON LineString from two lat/lon pairs (input order [lat, lon]). Used to

@@ -19,7 +19,7 @@ function feature(properties: Record<string, unknown> = {}, coordinates: unknown 
   [[24, 60, 5], [24.02, 60.02, 6]],
 ]): unknown {
   return {
-    properties: { kvl: 1000, kvl_raskas: 100, alkusijainti_tie: 4, ...properties },
+    id: 'segment-1', properties: { kvl: 1000, kvl_raskas: 100, alkusijainti_tie: 4, ...properties },
     geometry: { type: 'MultiLineString', coordinates },
   }
 }
@@ -30,7 +30,7 @@ test('FI parser preserves current class split, centroid and road-number ranks', 
   assert.ok(Math.abs(parsed[0].latitude - 60.01) < 1e-12)
   assert.ok(Math.abs(parsed[0].longitude - 24.01) < 1e-12)
   assert.deepEqual({ ...parsed[0], latitude: 60.01, longitude: 24.01 }, {
-    roadNumber: 4, latitude: 60.01, longitude: 24.01, rank: 0,
+    countBasis: 'unknown', observationId: 'segment-1', roadNumber: 4, latitude: 60.01, longitude: 24.01, rank: 0,
     aadt: 1000, light: 890, medium: 0, heavy: 100, moto: 10,
   })
   assert.deepEqual([4, 101, 102, 100, 999, 1000].map(fiRoadNumberRank), [0, 0, 0, 2, 2, 4])
@@ -55,7 +55,7 @@ test('FI parser rejects published heavy counts above the exact total without cla
 
 function segment(overrides: Partial<FiRoadSegment>): FiRoadSegment {
   return {
-    roadNumber: 4, latitude: 50.00025, longitude: 14.00025, rank: 1,
+    countBasis: 'unknown', observationId: 'segment-1', roadNumber: 4, latitude: 50.00025, longitude: 14.00025, rank: 1,
     aadt: 1000, light: 890, medium: 0, heavy: 100, moto: 10,
     ...overrides,
   }

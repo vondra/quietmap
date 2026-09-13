@@ -1,5 +1,6 @@
 /** Enrich z9 Irish roads with TII counter class totals. */
 
+import { roadObservation } from './lib/road-observation.js'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { listPreparedSquares } from './lib/prepared-grid.js'
@@ -60,7 +61,7 @@ export async function enrichIrishRoads(
     const write = await writeRoadAadt(resolve(preparedDirectory, square, 'roads.arrow'), row => {
       if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
       const observation = match(row)
-      return observation ? { light: observation.light, medium: observation.medium,
+      return observation ? { ...roadObservation(observation.cosit, 'unknown'), light: observation.light, medium: observation.medium,
         heavy: observation.heavy, moto: observation.moto, sourceId: SOURCE_ID } : null
     }, undefined, undefined, { sourceIds: [SOURCE_ID], when: row => match(row) === null })
     result.rows += write.rows

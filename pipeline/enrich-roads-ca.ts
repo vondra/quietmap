@@ -68,7 +68,7 @@ export async function enrichCanadianRoads(
     const write = await writeRoadAadt(resolve(preparedDirectory, square, 'roads.arrow'), row => {
       if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
       const section = match(row)
-      return section ? { light: section.light, medium: section.medium, heavy: section.heavy,
+      return section ? { countBasis: section.countBasis, observationId: section.observationId, light: section.light, medium: section.medium, heavy: section.heavy,
         moto: section.moto, sourceId: SOURCE_ID } : null
     }, undefined, COVERED_ROAD_CLASSES,
     { sourceIds: [SOURCE_ID], when: row => match(row) === null })

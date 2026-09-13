@@ -1,18 +1,55 @@
-//! Road source normalization: raw OSM road inputs → per-band emission-ready
-//! values (`NormalizedRoad`), plus the class-default cascade, lane/access
-//! scaling, and the nominal-AADT surface the popup reports.
+//! Road source normalization: prepared road traffic → per-band emission-ready
+//! values (`NormalizedRoad`), plus the legal speed cascade and the surface
+//! correction. Traffic is FINAL at read time — `roads-finalize` resolved
+//! observations, priors and allocation before publication — so this module
+//! consumes the prepared counts verbatim and never substitutes, scales or
+//! re-gates them (SPEC §"Prepared road direction and traffic"). The
+//! class-default cascade and the access/lane/oneway estimate factors remain
+//! available here (`resolve_traffic_default`, `access_factor`, `lane_ratio`)
+//! for that producer to call at build time.
 
 use crate::constants::{SOURCE_HEIGHT_ROAD, SURFACE_CORR};
-use crate::defaults::{
-    build_traffic_default_cache, resolve_speed_default, resolve_traffic_default, Aadt,
-    WORLD_DEFAULT,
-};
+use crate::defaults::{resolve_speed_default, WORLD_DEFAULT};
 use crate::emission::road;
-use crate::sources::{provenance_of, Provenance};
+use crate::sources::Provenance;
 use crate::square_country_city::SquareCountryCity;
 use crate::types::{RoadSegment, NUM_BANDS};
 
 use super::{bands_to_f32, DERESTRICTED_SPEED_KMH, SPEED_LIMIT_DERESTRICTED};
+
+/// Bit in [`RoadTraffic::estimated`] marking the light category as estimated.
+pub const ROAD_ESTIMATED_LIGHT: u8 = 1;
+/// Bit in [`RoadTraffic::estimated`] marking the medium category as estimated.
+pub const ROAD_ESTIMATED_MEDIUM: u8 = 2;
+/// Bit in [`RoadTraffic::estimated`] marking the heavy category as estimated.
+pub const ROAD_ESTIMATED_HEAVY: u8 = 4;
+/// Bit in [`RoadTraffic::estimated`] marking the motorcycle category as estimated.
+pub const ROAD_ESTIMATED_MOTO: u8 = 8;
+
+/// Prepared road traffic: per-category effective vehicles/day plus the
+/// per-category estimated bitmask written by `roads-finalize`. Bit set means
+/// that category's value is an estimate or prior rather than an observed
+/// count; the value is consumed either way.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct RoadTraffic {
+    pub light: f64,
+    pub medium: f64,
+    pub heavy: f64,
+    pub moto: f64,
+    pub estimated: u8,
+}
+
+impl RoadTraffic {
+    pub fn total(&self) -> f64 {
+        self.light + self.medium + self.heavy + self.moto
+    }
+
+    /// A prepared total of exactly zero is a TRUE zero: the segment is
+    /// silent, and no runtime default may resurrect it.
+    pub fn is_silent(&self) -> bool {
+        self.total() == 0.0
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct RawRoadInput {
@@ -24,17 +61,9 @@ pub struct RawRoadInput {
     /// `speed_limit` is 0; ranks above the legal/class default it refines.
     pub speed_taper: u8,
     pub surface_type: u8,
-    pub oneway: bool,
-    pub lanes: u8,
-    pub aadt_light: i32,
-    pub aadt_medium: i32,
-    pub aadt_heavy: i32,
-    pub aadt_moto: i32,
-    /// Provenance of the AADT values — derived from the row's
-    /// dataset id via `sources::provenance_of()`.
-    pub provenance: Provenance,
+    /// Prepared effective traffic; consumed verbatim.
+    pub traffic: RoadTraffic,
     pub tunnel: bool,
-    pub access: u8,
     pub junction: u8,
     /// Vector-footprint density for the legal speed default of untagged roads:
     /// 0 unknown, 1 rural, 2 urban.
@@ -92,80 +121,22 @@ impl NormalizedRoad {
     }
 }
 
-/// Normalise a raw road input into per-band emission-ready values.
+/// Normalise a prepared road input into per-band emission-ready values.
 ///
-/// `square_country_city` drives the class-default cascade (city → country → continent →
-/// world) when the row lacks enriched traffic. Callers that do not have
-/// a SquareCountryCity yet — or that legitimately want the world arm — pass
-/// [`SquareCountryCity::UNKNOWN`]; the cascade collapses to `WORLD_DEFAULT` in that
-/// case, matching the pre-Phase-0.5 behaviour bit-for-bit.
-///
-/// Tight loops should prefer [`normalize_road_with_cache`] together with
-/// [`build_traffic_default_cache`] so the city → country → continent →
-/// world cascade only runs 13 times per (square_country_city, batch) instead of once
-/// per `source_id == 0` segment. This wrapper builds a fresh cache on
-/// every call — cheap (13 tuples) but wasteful when the same `square_country_city`
-/// is reused.
+/// `square_country_city` drives only the SPEED cascade (country legal
+/// implicit limit for untagged rows). Traffic arrives final from
+/// `roads-finalize`: a true total zero is silent (never a class default),
+/// tunnels never emit, and no tag or provenance scales an observation here.
 pub fn normalize_road(
     input: RawRoadInput,
     square_country_city: SquareCountryCity,
 ) -> Option<NormalizedRoad> {
-    let cache = build_traffic_default_cache(square_country_city);
-    normalize_road_with_cache(input, square_country_city, &cache)
-}
-
-/// Cache-aware variant of [`normalize_road`]. The 13-entry slice is
-/// produced once per (square_country_city, batch) by [`build_traffic_default_cache`],
-/// after which class-default lookup is a single array index instead of
-/// up to four hash-map / binary-search hops through the cascade.
-pub fn normalize_road_with_cache(
-    input: RawRoadInput,
-    square_country_city: SquareCountryCity,
-    defaults_cache: &[Aadt; WORLD_DEFAULT.len()],
-) -> Option<NormalizedRoad> {
-    // Positive measured traffic overrides an access tag, including heavy-only
-    // gates; the source priority tier still cannot establish a known zero.
-    let has_traffic = has_enriched_traffic(
-        input.provenance,
-        [
-            input.aadt_light,
-            input.aadt_medium,
-            input.aadt_heavy,
-            input.aadt_moto,
-        ],
-    );
-    if input.tunnel
-        || (matches!(input.access, 2 | 4) && !(input.provenance.is_measured() && has_traffic))
-    {
+    if input.tunnel || input.traffic.is_silent() {
         return None;
     }
 
     let class_idx = road_class_idx(input.road_class);
     let class_name = ROAD_CLASS_NAMES[class_idx];
-    let access_factor = access_factor(input.access, input.provenance, input.road_class);
-
-    // Stored traffic still lacks a source count basis. Preserve the legacy
-    // half-share estimate until adapters and preparation allocate explicitly;
-    // OSM oneway alone cannot establish the observation's directional scope.
-    let oneway_factor = if input.oneway { 0.5 } else { 1.0 };
-    let (light_aadt, medium_aadt, heavy_aadt, moto_aadt) = if has_traffic {
-        (
-            input.aadt_light as f64 * oneway_factor * access_factor,
-            input.aadt_medium as f64 * oneway_factor * access_factor,
-            input.aadt_heavy as f64 * oneway_factor * access_factor,
-            input.aadt_moto as f64 * oneway_factor * access_factor,
-        )
-    } else {
-        let defaults = defaults_cache[class_idx];
-        let factor =
-            oneway_factor * access_factor * lane_ratio(class_idx, input.lanes, input.oneway);
-        (
-            defaults.0 * factor,
-            defaults.1 * factor,
-            defaults.2 * factor,
-            defaults.3 * factor,
-        )
-    };
 
     let base_speed_kmh = if input.speed_limit == SPEED_LIMIT_DERESTRICTED {
         DERESTRICTED_SPEED_KMH
@@ -202,10 +173,10 @@ pub fn normalize_road_with_cache(
         speed_kmh,
         base_speed_kmh,
         surf_corr_db,
-        light_aadt,
-        medium_aadt,
-        heavy_aadt,
-        moto_aadt,
+        light_aadt: input.traffic.light,
+        medium_aadt: input.traffic.medium,
+        heavy_aadt: input.traffic.heavy,
+        moto_aadt: input.traffic.moto,
     })
 }
 
@@ -219,15 +190,8 @@ pub fn normalize_road_segment(
             speed_limit: seg.speed_limit,
             speed_taper: seg.speed_taper,
             surface_type: seg.surface_type,
-            oneway: seg.oneway,
-            lanes: seg.lanes,
-            aadt_light: seg.aadt_light,
-            aadt_medium: seg.aadt_medium,
-            aadt_heavy: seg.aadt_heavy,
-            aadt_moto: seg.aadt_moto,
-            provenance: provenance_of(seg.source_id),
+            traffic: seg.traffic,
             tunnel: seg.tunnel,
-            access: seg.access,
             junction: seg.junction,
             built_up: seg.built_up,
         },
@@ -235,7 +199,9 @@ pub fn normalize_road_segment(
     )
 }
 
-/// Lane-based AADT scaling ratio for un-enriched roads.
+/// Lane-based AADT scaling ratio for un-enriched roads. PRODUCER input
+/// (`roads-finalize` allocation) — runtime consumes prepared counts and never
+/// calls this.
 ///
 /// Source: CZ ŘSD Celostátní sčítání dopravy 2020. Median totals over
 /// 3 197 deduplicated census sections (one section ≈ many OSM ways)
@@ -245,8 +211,7 @@ pub fn normalize_road_segment(
 /// to regenerate the table. Only buckets with N ≥ 30 sections emit an
 /// arm, so trunk and tertiary stay at 1.0 (sample too thin). `min()`
 /// clamps saturate higher lane counts at the highest calibrated
-/// bucket. Enriched rows (Provenance::*Measured) bypass this whole
-/// path — they carry the observed AADT directly.
+/// bucket.
 pub fn lane_ratio(class_idx: usize, lanes: u8, oneway: bool) -> f64 {
     if lanes <= 2 || class_idx >= 5 {
         return 1.0;
@@ -269,9 +234,10 @@ pub fn lane_ratio(class_idx: usize, lanes: u8, oneway: bool) -> f64 {
     }
 }
 
-/// AADT multiplier per OSM access code. Measured provenance
-/// (national / continental / global) passes through unchanged — the
-/// observation already reflects the restriction.
+/// AADT multiplier per OSM access code. PRODUCER input (`roads-finalize`
+/// allocation) — runtime consumes prepared counts and never calls this.
+/// Measured provenance (national / continental / global) passes through
+/// unchanged — the observation already reflects the restriction.
 ///
 /// Codes 7/8 (agricultural/forestry) are not literature-backed — they're
 /// conservative heuristics reflecting that such tracks mostly carry single-digit
@@ -285,7 +251,7 @@ pub fn lane_ratio(class_idx: usize, lanes: u8, oneway: bool) -> f64 {
 /// leaving it at the full class-8 default. This drops effective traffic
 /// on untagged tracks to ~0.5/day — matches the reality at e.g. Kytín
 /// "alej loupežníka Babinského".
-fn access_factor(access: u8, provenance: Provenance, road_class: u8) -> f64 {
+pub fn access_factor(access: u8, provenance: Provenance, road_class: u8) -> f64 {
     if provenance.is_measured() {
         return 1.0;
     }
@@ -300,37 +266,8 @@ fn access_factor(access: u8, provenance: Provenance, road_class: u8) -> f64 {
         6 => 0.3,  // customers (shop/parking approach; short-trip traffic only)
         7 => 0.1,  // agricultural (tractor on field track; heuristic)
         8 => 0.08, // forestry (even fewer than agricultural; heuristic)
-        _ => 1.0,  // 0=yes/untagged; codes 2/4 already dropped in normalize_road
+        _ => 1.0,  // 0=yes/untagged; codes 2/4 are zeroed by the producer
     }
-}
-
-/// Stored pre-factor traffic when any enriched category is positive, otherwise
-/// the source location's class default. Storage currently has no count-basis
-/// declaration, so this value is not necessarily a published directional count.
-/// Popup traffic must use the normalized effective flows.
-pub fn nominal_road_aadt(
-    road_class: u8,
-    provenance: Provenance,
-    aadt_light: i32,
-    aadt_medium: i32,
-    aadt_heavy: i32,
-    aadt_moto: i32,
-    square_country_city: SquareCountryCity,
-) -> (f64, f64, f64, f64) {
-    if has_enriched_traffic(provenance, [aadt_light, aadt_medium, aadt_heavy, aadt_moto]) {
-        (
-            aadt_light as f64,
-            aadt_medium as f64,
-            aadt_heavy as f64,
-            aadt_moto as f64,
-        )
-    } else {
-        resolve_traffic_default(road_class, square_country_city)
-    }
-}
-
-fn has_enriched_traffic(provenance: Provenance, counts: [i32; 4]) -> bool {
-    provenance.has_data() && counts.into_iter().any(|count| count > 0)
 }
 
 fn default_road_speed(class_idx: usize) -> f64 {
@@ -413,205 +350,104 @@ mod tests {
         assert_eq!(access_factor(0, NationalMeasured, 8), 1.0); // measured track → pass-through
     }
 
-    /// access=no drops a defaults-only segment, but a MEASURED count proves
-    /// traffic exists (Neratovice case) — the segment must emit; heuristic
-    /// stamps must not resurrect it.
-    #[test]
-    fn access_no_yields_to_measured_traffic_only() {
-        let base = RawRoadInput {
+    /// Audible prepared traffic for the speed-path tests (any positive counts).
+    const AUDIBLE: RoadTraffic = RoadTraffic {
+        light: 1000.0,
+        medium: 100.0,
+        heavy: 100.0,
+        moto: 50.0,
+        estimated: 0,
+    };
+
+    fn prepared(traffic: RoadTraffic) -> RawRoadInput {
+        RawRoadInput {
             road_class: 2,
             speed_limit: 50,
             speed_taper: 0,
             surface_type: 0,
-            oneway: false,
-            lanes: 0,
-            aadt_light: 0,
-            aadt_medium: 0,
-            aadt_heavy: 0,
-            aadt_moto: 0,
-            provenance: Provenance::None,
+            traffic,
             tunnel: false,
-            access: 2,
             junction: 0,
             built_up: 0,
-        };
-        assert!(
-            normalize_road(base, SquareCountryCity::UNKNOWN).is_none(),
-            "unmeasured access=no drops"
-        );
+        }
+    }
 
-        let measured = RawRoadInput {
-            aadt_light: 8824,
-            aadt_medium: 516,
-            aadt_heavy: 1497,
-            provenance: Provenance::NationalMeasured,
-            ..base
+    /// A published directional 10 000 stays 10 000 into emission — the
+    /// producer already allocated scope, so runtime never applies a second
+    /// oneway half-share (and no longer has the tag to consult at all).
+    #[test]
+    fn prepared_directional_count_is_not_rescaled() {
+        let traffic = RoadTraffic {
+            light: 10_000.0,
+            ..Default::default()
         };
-        let road =
-            normalize_road(measured, SquareCountryCity::UNKNOWN).expect("measured access=no emits");
-        assert!(
-            (road.light_aadt - 8824.0).abs() < 1e-9,
-            "census AADT passes through"
-        );
-
-        let heuristic = RawRoadInput {
-            aadt_light: 500,
-            provenance: Provenance::Heuristic,
-            ..base
-        };
-        assert!(
-            normalize_road(heuristic, SquareCountryCity::UNKNOWN).is_none(),
-            "a heuristic guess must not resurrect a closed road"
-        );
-        let proxy = RawRoadInput {
-            aadt_light: 500,
-            provenance: Provenance::NationalProxy,
-            ..base
-        };
-        assert!(
-            normalize_road(proxy, SquareCountryCity::UNKNOWN).is_none(),
-            "a national proxy estimate must not resurrect a closed road"
-        );
-
-        let heavy_only = RawRoadInput {
-            aadt_light: 0,
-            aadt_heavy: 500,
-            provenance: Provenance::NationalMeasured,
-            ..base
-        };
-        let road = normalize_road(heavy_only, SquareCountryCity::UNKNOWN)
-            .expect("measured heavy-only traffic emits");
-        assert_eq!(road.light_aadt, 0.0);
-        assert_eq!(road.medium_aadt, 0.0);
-        assert_eq!(road.heavy_aadt, 500.0);
-        assert_eq!(road.moto_aadt, 0.0);
+        let road = normalize_road(prepared(traffic), SquareCountryCity::UNKNOWN).unwrap();
+        assert_eq!(road.light_aadt, 10_000.0);
         assert_eq!(
-            nominal_road_aadt(
-                2,
-                Provenance::NationalMeasured,
-                0,
-                0,
-                500,
-                0,
+            normalize_road_segment(
+                &crate::types::RoadSegment {
+                    oneway: true,
+                    traffic,
+                    ..secondary_segment()
+                },
                 SquareCountryCity::UNKNOWN
-            ),
+            )
+            .unwrap()
+            .light_aadt,
+            10_000.0
+        );
+    }
+
+    /// Heavy-only prepared traffic emits without inventing light vehicles; a
+    /// true total zero stays silent (never resurrected by class defaults);
+    /// tunnels still never emit.
+    #[test]
+    fn heavy_only_emits_true_zero_stays_silent_and_tunnels_drop() {
+        let heavy_only = RoadTraffic {
+            heavy: 500.0,
+            ..Default::default()
+        };
+        let road = normalize_road(prepared(heavy_only), SquareCountryCity::UNKNOWN)
+            .expect("prepared heavy-only traffic emits");
+        assert_eq!(
+            (road.light_aadt, road.medium_aadt, road.heavy_aadt, road.moto_aadt),
             (0.0, 0.0, 500.0, 0.0)
         );
-
-        // motor_vehicle=no (code 4) follows the same gate as access=no (2).
-        let mvno = RawRoadInput {
-            access: 4,
-            ..measured
-        };
         assert!(
-            normalize_road(mvno, SquareCountryCity::UNKNOWN).is_some(),
-            "code 4 + measured emits"
+            normalize_road(prepared(RoadTraffic::default()), SquareCountryCity::UNKNOWN).is_none(),
+            "a true total zero is silent"
         );
-
-        let tunnel = RawRoadInput {
-            tunnel: true,
-            ..measured
-        };
         assert!(
-            normalize_road(tunnel, SquareCountryCity::UNKNOWN).is_none(),
+            normalize_road(
+                RawRoadInput {
+                    tunnel: true,
+                    ..prepared(heavy_only)
+                },
+                SquareCountryCity::UNKNOWN
+            )
+            .is_none(),
             "tunnels stay dropped"
         );
     }
 
+    /// Prepared priors stamped source_id=0 are valid traffic: runtime holds no
+    /// provenance gate, so a prior consumes exactly like an observation. The
+    /// estimated bitmask rides along untouched for the popup.
     #[test]
-    fn stored_traffic_retains_legacy_share_and_eu_compensation() {
-        // Without a stored basis, 10 000 stored vehicles on a one-way row
-        // resolve to 5 000. EU directional records compensate before writing.
-        let stored = |oneway: bool, storage_factor: i32| RawRoadInput {
-            road_class: 2,
-            speed_limit: 50,
-            speed_taper: 0,
-            surface_type: 0,
-            oneway,
-            lanes: 0,
-            aadt_light: 8300 * storage_factor,
-            aadt_medium: 200 * storage_factor,
-            aadt_heavy: 1000 * storage_factor,
-            aadt_moto: 500 * storage_factor,
-            provenance: Provenance::CityMeasured,
-            tunnel: false,
-            access: 0,
-            junction: 0,
-            built_up: 0,
+    fn prepared_priors_consume_like_observations() {
+        let prior = RoadTraffic {
+            light: 2640.0,
+            medium: 120.0,
+            heavy: 180.0,
+            moto: 60.0,
+            estimated: ROAD_ESTIMATED_LIGHT
+                | ROAD_ESTIMATED_MEDIUM
+                | ROAD_ESTIMATED_HEAVY
+                | ROAD_ESTIMATED_MOTO,
         };
-        for (oneway, storage_factor, effective_factor) in
-            [(false, 1, 1.0), (true, 1, 0.5), (true, 2, 1.0)]
-        {
-            let road =
-                normalize_road(stored(oneway, storage_factor), SquareCountryCity::UNKNOWN).unwrap();
-            assert_eq!(road.light_aadt, 8300.0 * effective_factor);
-            assert_eq!(road.medium_aadt, 200.0 * effective_factor);
-            assert_eq!(road.heavy_aadt, 1000.0 * effective_factor);
-            assert_eq!(road.moto_aadt, 500.0 * effective_factor);
-        }
-    }
-
-    #[test]
-    fn unmeasured_oneway_keeps_legacy_half_share_prior() {
-        // The unobserved one-way prior keeps its existing estimated half-share.
-        let mut per_way = RawRoadInput {
-            road_class: 2,
-            speed_limit: 50,
-            speed_taper: 0,
-            surface_type: 0,
-            oneway: true,
-            lanes: 0,
-            aadt_light: 0,
-            aadt_medium: 0,
-            aadt_heavy: 0,
-            aadt_moto: 0,
-            provenance: Provenance::None,
-            tunnel: false,
-            access: 0,
-            junction: 0,
-            built_up: 0,
-        };
-        let one = normalize_road(per_way, SquareCountryCity::UNKNOWN).unwrap();
-        per_way.oneway = false;
-        let undivided = normalize_road(per_way, SquareCountryCity::UNKNOWN).unwrap();
-        let (dl, dm, dh, dx) =
-            crate::defaults::resolve_traffic_default(2, SquareCountryCity::UNKNOWN);
-        assert!((one.light_aadt - dl * 0.5).abs() < 1e-9);
-        assert!((one.medium_aadt - dm * 0.5).abs() < 1e-9);
-        assert!((one.heavy_aadt - dh * 0.5).abs() < 1e-9);
-        assert!((one.moto_aadt - dx * 0.5).abs() < 1e-9);
-        assert!((undivided.light_aadt - dl).abs() < 1e-9);
-    }
-
-    #[test]
-    fn road_defaults_match_tertiary_case() {
-        let road = normalize_road(
-            RawRoadInput {
-                road_class: 4,
-                speed_limit: 90,
-                speed_taper: 0,
-                surface_type: 0,
-                oneway: false,
-                lanes: 0,
-                aadt_light: 0,
-                aadt_medium: 0,
-                aadt_heavy: 0,
-                aadt_moto: 0,
-                provenance: Provenance::None,
-                tunnel: false,
-                access: 0,
-                junction: 0,
-                built_up: 0,
-            },
-            SquareCountryCity::UNKNOWN,
-        )
-        .unwrap();
-        assert_eq!(road.class_name, "tertiary");
-        assert!((road.light_aadt - 720.0).abs() < 1e-9);
-        assert!((road.medium_aadt - 26.0).abs() < 1e-9);
-        assert!((road.heavy_aadt - 38.0).abs() < 1e-9);
-        assert!((road.moto_aadt - 16.0).abs() < 1e-9);
-        assert!((road.speed_kmh - 90.0).abs() < 1e-9);
+        let road = normalize_road(prepared(prior), SquareCountryCity::UNKNOWN).unwrap();
+        assert_eq!(road.light_aadt, 2640.0);
+        assert_eq!(road.heavy_aadt, 180.0);
     }
 
     /// `maxspeed=none` sentinel (255) resolves to the derestricted model
@@ -622,19 +458,7 @@ mod tests {
             RawRoadInput {
                 road_class: 0,
                 speed_limit: SPEED_LIMIT_DERESTRICTED,
-                speed_taper: 0,
-                surface_type: 0,
-                oneway: false,
-                lanes: 0,
-                aadt_light: 0,
-                aadt_medium: 0,
-                aadt_heavy: 0,
-                aadt_moto: 0,
-                provenance: Provenance::None,
-                tunnel: false,
-                access: 0,
-                junction: 0,
-                built_up: 0,
+                ..prepared(AUDIBLE)
             },
             SquareCountryCity::UNKNOWN,
         )
@@ -664,17 +488,7 @@ mod tests {
                 built_up,
                 speed_limit,
                 speed_taper,
-                surface_type: 0,
-                oneway: false,
-                lanes: 0,
-                aadt_light: 0,
-                aadt_medium: 0,
-                aadt_heavy: 0,
-                aadt_moto: 0,
-                provenance: Provenance::None,
-                tunnel: false,
-                access: 0,
-                junction: 0,
+                ..prepared(AUDIBLE)
             };
             assert_eq!(normalize_road(input, cz).unwrap().speed_kmh, expected);
         }
@@ -682,24 +496,27 @@ mod tests {
 
     #[test]
     fn ramp_defaults_are_15_percent_of_mainline() {
-        // motorway_link (10) = 15 % of motorway (0)
-        let (l0, m0, h0, x0) = resolve_traffic_default(0, SquareCountryCity::UNKNOWN);
-        let (l10, m10, h10, x10) = resolve_traffic_default(10, SquareCountryCity::UNKNOWN);
+        // Producer-side default table invariant (resolve_traffic_default
+        // stays authoritative for roads-finalize).
+        let (l0, m0, h0, x0) =
+            crate::defaults::resolve_traffic_default(0, SquareCountryCity::UNKNOWN);
+        let (l10, m10, h10, x10) =
+            crate::defaults::resolve_traffic_default(10, SquareCountryCity::UNKNOWN);
         assert!((l10 - l0 * 0.15).abs() < 1e-6);
         assert!((m10 - m0 * 0.15).abs() < 1e-6);
         assert!((h10 - h0 * 0.15).abs() < 1e-6);
         assert!((x10 - x0 * 0.15).abs() < 1e-6);
 
-        // trunk_link (11) = 15 % of trunk (1)
-        let (l1, m1, h1, _) = resolve_traffic_default(1, SquareCountryCity::UNKNOWN);
-        let (l11, m11, h11, _) = resolve_traffic_default(11, SquareCountryCity::UNKNOWN);
+        let (l1, m1, h1, _) = crate::defaults::resolve_traffic_default(1, SquareCountryCity::UNKNOWN);
+        let (l11, m11, h11, _) =
+            crate::defaults::resolve_traffic_default(11, SquareCountryCity::UNKNOWN);
         assert!((l11 - l1 * 0.15).abs() < 1e-6);
         assert!((m11 - m1 * 0.15).abs() < 1e-6);
         assert!((h11 - h1 * 0.15).abs() < 1e-6);
 
-        // primary_link (12) = 15 % of primary (2)
-        let (l2, m2, h2, _) = resolve_traffic_default(2, SquareCountryCity::UNKNOWN);
-        let (l12, m12, h12, _) = resolve_traffic_default(12, SquareCountryCity::UNKNOWN);
+        let (l2, m2, h2, _) = crate::defaults::resolve_traffic_default(2, SquareCountryCity::UNKNOWN);
+        let (l12, m12, h12, _) =
+            crate::defaults::resolve_traffic_default(12, SquareCountryCity::UNKNOWN);
         assert!((l12 - l2 * 0.15).abs() < 1e-6);
         assert!((m12 - m2 * 0.15).abs() < 1e-6);
         assert!((h12 - h2 * 0.15).abs() < 1e-6);
@@ -733,5 +550,43 @@ mod tests {
         assert!(std::ptr::eq(make(11).time_dist(), motorway));
         // primary_link (12) falls under urban split (closer to urban flow).
         assert!(!std::ptr::eq(make(12).time_dist(), motorway));
+    }
+
+    /// Shared fixture for the segment-level flow: one prepared secondary.
+    fn secondary_segment() -> crate::types::RoadSegment {
+        crate::types::RoadSegment {
+            osm_id: 1,
+            square_country_city: None,
+            segment_idx: 0,
+            start_lat: 50.0,
+            start_lon: 14.0,
+            end_lat: 50.0,
+            end_lon: 14.003,
+            length_m: 220.0,
+            road_class: 3,
+            speed_limit: 50,
+            speed_taper: 0,
+            surface_type: 0,
+            oneway: false,
+            lanes: 0,
+            traffic: RoadTraffic {
+                light: 2640.0,
+                medium: 120.0,
+                heavy: 180.0,
+                moto: 60.0,
+                estimated: 15,
+            },
+            source_id: 0,
+            name: String::new(),
+            road_ref: String::new(),
+            bridge: false,
+            tunnel: false,
+            junction: 0,
+            built_up: 0,
+            dist_m: 200.0,
+            cp_lat: 50.0,
+            cp_lon: 14.0015,
+            fraction: 0.5,
+        }
     }
 }

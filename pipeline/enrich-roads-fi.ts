@@ -1,5 +1,7 @@
 /** Enrich z9 road vectors with Finnish Väylävirasto 2024 KVL measurements. */
 
+import { roadFeatureObservation } from './lib/pinned-road-lines.js'
+import type { RoadObservation } from './lib/road-observation.js'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -25,7 +27,7 @@ const PAGE_SIZE = 1000
 const PAGE_OFFSETS = [...Array(19).keys()].map(index => index * PAGE_SIZE)
 const WFS_BASE = 'https://avoinapi.vaylapilvi.fi/vaylatiedot/wfs'
 
-export interface FiRoadSegment extends RankedPoint {
+export interface FiRoadSegment extends RankedPoint, RoadObservation {
   roadNumber: number
   aadt: number
   light: number
@@ -137,7 +139,7 @@ export function parseFiPages(pages: readonly unknown[]): ParsedFiPages {
         inconsistentClassTotalsSkipped++
         continue
       }
-      segments.push({
+      segments.push({ ...roadFeatureObservation(feature as object, 'unknown'),
         roadNumber,
         latitude,
         longitude,
@@ -199,7 +201,7 @@ export async function enrichFinnishRoads(
       (row) => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const segment = match(row)
-        return segment ? {
+        return segment ? { countBasis: segment.countBasis, observationId: segment.observationId,
           light: segment.light, medium: segment.medium, heavy: segment.heavy,
           moto: segment.moto, sourceId: SOURCE_ID,
         } : null

@@ -1,6 +1,7 @@
 /** Load and match Chile's pinned TMDA stations and Red Vial classifications. */
 
-import { buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
+import { roadFeatureObservation, pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
+import type { RoadObservation } from './road-observation.js'
 import { readPinnedRoadSource } from './pinned-road-source.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import type { RoadRow } from './roads-arrow.js'
@@ -94,7 +95,7 @@ function splitVehicles(aadt: number, tier: 0 | 1 | 2, mining: boolean): { light:
   }
 }
 
-interface TmdaPoint extends PointCoordinates { aadt: number }
+interface TmdaPoint extends PointCoordinates, RoadObservation { aadt: number }
 export interface ChileRoadSource {
   network: ReturnType<typeof buildRoadLineVertexGrid>
   tmda: ReturnType<typeof buildOneHundredthDegreePointGrid<TmdaPoint>>
@@ -117,7 +118,7 @@ function tmdaPoint(value: unknown): TmdaPoint | null {
   const properties = feature.properties && typeof feature.properties === 'object' && !Array.isArray(feature.properties)
     ? feature.properties as Record<string, unknown> : {}
   const aadt = Math.max(...[1, 2, 3, 4].map(index => Number(properties[`TMDA_RAMA_${index}`]) || 0))
-  return aadt >= 50 ? { longitude: Number(point[0]), latitude: Number(point[1]), aadt } : null
+  return aadt >= 50 ? { ...roadFeatureObservation(value, 'unknown'), longitude: Number(point[0]), latitude: Number(point[1]), aadt } : null
 }
 
 export function loadChileRoadSource(options: RoadLoaderArguments): ChileRoadSource {
@@ -156,14 +157,16 @@ export function matchChileRoad(row: RoadRow, source: ChileRoadSource) {
   if (row.roadClass > 2) return null
   const tier = cityTier(row.midLat, row.midLon), multiplier = tierMultiplier(tier)
   const station = nearestTmda(row.midLat, row.midLon, source)
+  let observation: RoadObservation | null = station
   let total: number, kind: 'tmda' | 'network'
   if (station) { total = station.aadt * multiplier; kind = 'tmda' }
   else {
     const line = nearestRoadLine(row.midLat, row.midLon, source.network, 400)
     if (!line) return null
+    observation = pinnedRoadObservation(line, 'both-directions')
     total = networkAadt(line) * multiplier; kind = 'network'
   }
-  return { kind, ...splitVehicles(total, tier, inMiningRegion(row.midLat, row.midLon) && tier === 0) }
+  return { kind, countBasis: observation!.countBasis, observationId: observation!.observationId, ...splitVehicles(total, tier, inMiningRegion(row.midLat, row.midLon) && tier === 0) }
 }
 
 export const CHILE_ROAD_BBOX = CL_BBOX

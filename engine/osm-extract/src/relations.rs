@@ -8,9 +8,10 @@ use anyhow::Result;
 use osmpbf::{Element, ElementReader, RelMemberType};
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Instant;
 
 use crate::classify::{FeatureType, Tags};
-use crate::junctions::{JunctionCensus, NodeIdBitmap};
+use crate::junctions::{JunctionCensus, NodeIdBitmap, NodeIdSet};
 
 /// Info about a relation we care about.
 #[derive(Clone)]
@@ -28,13 +29,19 @@ pub struct RelationManifest {
     pub relations: HashMap<i64, RelationInfo>,
 }
 
-/// Scan multipolygon relations and linear-way node references in one PBF pass.
+/// Scan multipolygon relations, linear-way junctions, and selected-layer node IDs.
 ///
 /// Parallel via `osmpbf::par_map_reduce` — decodes PBF blocks across all
 /// rayon worker threads, each produces a partial manifest, then merged
-/// into a single one. ~4-6× faster than single-threaded on a 24-core box.
-pub fn scan_relations_and_junctions(pbf_path: &Path) -> Result<(RelationManifest, NodeIdBitmap)> {
+/// into a single one. Selected-way node IDs are recorded here so Pass 1 can
+/// omit the rest. Relation-member ways that
+/// did not themselves classify (typical untagged multipolygon outers) need a
+/// second full PBF read; it is skipped when the member set is empty.
+pub fn scan_relations_and_junctions(
+    pbf_path: &Path,
+) -> Result<(RelationManifest, NodeIdBitmap, NodeIdBitmap)> {
     let junctions = JunctionCensus::new()?;
+    let needed = NodeIdSet::new()?;
     let reader = ElementReader::from_path(pbf_path)?;
 
     let manifest = reader.par_map_reduce(
@@ -49,6 +56,12 @@ pub fn scan_relations_and_junctions(pbf_path: &Path) -> Result<(RelationManifest
                 if crate::classify::classify_way_unscoped(way).is_some_and(|ft| ft.is_linear()) {
                     for node_id in way.refs() {
                         junctions.record(node_id);
+                    }
+                }
+                // Scoped selected layers: only nodes Pass 2 will look up.
+                if crate::classify::classify_way(way).is_some() {
+                    for node_id in way.refs() {
+                        needed.insert(node_id);
                     }
                 }
             }
@@ -115,7 +128,49 @@ pub fn scan_relations_and_junctions(pbf_path: &Path) -> Result<(RelationManifest
     );
 
     eprintln!("  Pass 0: {} protected linear-way nodes", junctions.count());
-    Ok((manifest, junctions.finish()))
+    eprintln!(
+        "  Pass 0: {} selected-way nodes marked for the coordinate cache",
+        needed.count()
+    );
+
+    if !manifest.way_to_relations.is_empty() {
+        let before = needed.count();
+        let t_members = Instant::now();
+        mark_relation_member_way_nodes(pbf_path, &manifest.way_to_relations, &needed)?;
+        eprintln!(
+            "  Pass 0: {} relation-member nodes added to the cache filter in {:.1}s (second full PBF read)",
+            needed.count().saturating_sub(before),
+            t_members.elapsed().as_secs_f64()
+        );
+    }
+
+    Ok((manifest, junctions.finish(), needed.finish()))
+}
+
+/// Second PBF read used only when multipolygon members exist: untagged outer
+/// ways never classify, so the selected-way census above would omit their
+/// nodes and Pass 2 would drop the assembled ring. Cost is one extra decode
+/// of the file (node blobs included); quantified in the Pass 0 log.
+fn mark_relation_member_way_nodes(
+    pbf_path: &Path,
+    members: &HashMap<i64, Vec<(i64, String)>>,
+    needed: &NodeIdSet,
+) -> Result<()> {
+    let reader = ElementReader::from_path(pbf_path)?;
+    reader.par_map_reduce(
+        |element| {
+            if let Element::Way(way) = element {
+                if members.contains_key(&way.id()) {
+                    for node_id in way.refs() {
+                        needed.insert(node_id);
+                    }
+                }
+            }
+        },
+        || (),
+        |_, _| (),
+    )?;
+    Ok(())
 }
 
 /// Decide whether a relation is one of the multipolygon flavours we track.
@@ -155,6 +210,61 @@ fn classify_multipolygon(rel: &osmpbf::Relation) -> Option<(FeatureType, Vec<(St
         return None;
     };
     Some((ftype, tags))
+}
+
+/// Tags an assembled multipolygon carries into spill. Copied from relation
+/// tags (not member ways) so a hospital MP without `building=*` still classifies.
+pub fn spill_tags_for_assembled(ftype: &FeatureType, tags: &Tags) -> Tags {
+    let keys: &[&str] = match ftype {
+        FeatureType::Building => &[
+            "building",
+            "building:use",
+            "height",
+            "building:levels",
+            "name",
+            "addr:street",
+            "addr:housenumber",
+            "amenity",
+            "shop",
+            "healthcare",
+            "tourism",
+            "leisure",
+            "animal",
+            "livestock",
+            "opening_hours",
+        ],
+        FeatureType::Industrial => &[
+            "landuse",
+            "man_made",
+            "name",
+            "operator",
+            "product",
+            "industrial",
+        ],
+        FeatureType::AirportArea => &[
+            "aeroway",
+            "name",
+            "ref",
+            "local_ref",
+            "icao",
+            "iata",
+            "operator",
+            "surface",
+            "width",
+            "access",
+            "aerodrome",
+            "aerodrome:type",
+            "amenity",
+        ],
+        _ => return tags.clone(),
+    };
+    let mut extracted = Tags::new();
+    for (k, v) in tags {
+        if keys.contains(&k.as_str()) {
+            extracted.insert(k.clone(), v.clone());
+        }
+    }
+    extracted
 }
 
 /// Accumulates way geometries for relation assembly.

@@ -1,5 +1,6 @@
 /** Enrich z9 German roads with BASt SVZ 2021 measured vehicle classes. */
 
+import { roadObservation } from './lib/road-observation.js'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
@@ -128,6 +129,7 @@ export async function enrichGermanRoads(
         if (!section) return null
         const pickedSourceId = sourceId(section)
         return {
+          ...roadObservation(section.tkzst, 'unknown'),
           light: section.aadt_light,
           medium: section.aadt_medium,
           heavy: section.aadt_heavy,

@@ -3,12 +3,15 @@
 //! Stores lat/lon as i32 microdegrees (×1e7) in a sparse file indexed by node ID.
 //! File layout: node_id × 8 bytes → [lat_i32, lon_i32].
 //! Sparse file on NVMe — OS only allocates pages that are written.
+//! Presence is a side bitmap so a real 0°N 0°E node is not treated as missing.
 
 use anyhow::Result;
-use memmap2::MmapMut;
+use memmap2::{Mmap, MmapMut};
 use osmpbf::{Element, ElementReader};
 use std::fs::OpenOptions;
 use std::path::Path;
+
+use crate::junctions::NodeIdBitmap;
 
 /// Upper bound on OSM node IDs — the global id counter, ~13.7 B in our
 /// Apr-2026 CZ PBF and growing ~2 B/yr. Sized with years of headroom because
@@ -19,7 +22,8 @@ pub(crate) const MAX_NODE_ID: u64 = 25_000_000_000;
 const ENTRY_SIZE: u64 = 8; // 4 bytes lat + 4 bytes lon
 
 pub struct NodeCache {
-    mmap: MmapMut,
+    mmap: Mmap,
+    present: NodeIdBitmap,
     count: u64,
 }
 
@@ -76,6 +80,7 @@ impl MmapWriter {
 #[derive(Clone, Copy, Default)]
 struct Tally {
     written: u64,
+    skipped_unneeded: u64,
     dropped_over_cap: u64,
     dropped_oob: u64,
     max_id_seen: u64,
@@ -85,6 +90,7 @@ impl Tally {
     fn merge(self, other: Tally) -> Tally {
         Tally {
             written: self.written + other.written,
+            skipped_unneeded: self.skipped_unneeded + other.skipped_unneeded,
             dropped_over_cap: self.dropped_over_cap + other.dropped_over_cap,
             dropped_oob: self.dropped_oob + other.dropped_oob,
             max_id_seen: self.max_id_seen.max(other.max_id_seen),
@@ -93,13 +99,14 @@ impl Tally {
 }
 
 impl NodeCache {
-    /// Build the node cache by streaming all nodes from the PBF.
+    /// Build the node cache by streaming nodes from the PBF.
     ///
-    /// Uses `par_map_reduce` — each rayon worker decodes PBF blocks
-    /// independently and writes to the shared sparse mmap. Writes are
-    /// per-node-id (8 bytes at `node_id * 8` offset), so worker threads
+    /// Only needed node IDs are written — Pass 0's selected
+    /// way + relation-member census. Uses `par_map_reduce`: each rayon worker
+    /// decodes PBF blocks independently and writes to the shared sparse mmap.
+    /// Writes are per-node-id (8 bytes at `node_id * 8` offset), so workers
     /// never touch the same byte range.
-    pub fn build(pbf_path: &Path, cache_path: &Path) -> Result<Self> {
+    pub fn build(pbf_path: &Path, cache_path: &Path, needed: &NodeIdBitmap) -> Result<Self> {
         let file_size = MAX_NODE_ID * ENTRY_SIZE;
 
         let file = OpenOptions::new()
@@ -111,6 +118,7 @@ impl NodeCache {
         file.set_len(file_size)?;
 
         let mut mmap = unsafe { MmapMut::map_mut(&file)? };
+        let present = NodeIdBitmap::new()?;
 
         let writer = MmapWriter {
             ptr: mmap.as_mut_ptr(),
@@ -128,8 +136,19 @@ impl NodeCache {
                     max_id_seen: id,
                     ..Tally::default()
                 };
+                if id >= MAX_NODE_ID {
+                    t.dropped_over_cap = 1;
+                    return t;
+                }
+                if !needed.contains(id as i64) {
+                    t.skipped_unneeded = 1;
+                    return t;
+                }
                 match writer.write(id, lat, lon) {
-                    WriteOutcome::Written => t.written = 1,
+                    WriteOutcome::Written => {
+                        present.insert(id as i64);
+                        t.written = 1;
+                    }
                     WriteOutcome::OverCap => t.dropped_over_cap = 1,
                     WriteOutcome::Oob => t.dropped_oob = 1,
                 }
@@ -162,9 +181,11 @@ impl NodeCache {
         }
 
         mmap.flush()?;
+        let mmap = mmap.make_read_only()?;
         eprintln!(
-            "  Node cache: {} nodes written | highest id seen {} | cap {} | {}",
+            "  Node cache: {} nodes written | {} not needed for selected layers | highest id seen {} | cap {} | {}",
             tally.written,
+            tally.skipped_unneeded,
             tally.max_id_seen,
             MAX_NODE_ID,
             cache_path.display()
@@ -172,30 +193,77 @@ impl NodeCache {
 
         Ok(NodeCache {
             mmap,
+            present,
             count: tally.written,
         })
     }
 
     /// Look up coordinates for a node ID. Returns [lat, lon] as f64.
+    /// Absent IDs (never written, including referenced-but-missing source nodes)
+    /// return None. A present 0°N 0°E node is returned as `[0.0, 0.0]`.
     pub fn get(&self, node_id: i64) -> Option<[f64; 2]> {
-        let id = node_id as u64;
-        if id >= MAX_NODE_ID {
+        if !self.present.contains(node_id) {
             return None;
         }
 
+        let id = node_id as u64;
         let offset = (id * ENTRY_SIZE) as usize;
         let lat_i32 = i32::from_le_bytes(self.mmap[offset..offset + 4].try_into().ok()?);
         let lon_i32 = i32::from_le_bytes(self.mmap[offset + 4..offset + 8].try_into().ok()?);
-
-        // Skip unwritten entries (all zeros = 0°N 0°E = middle of ocean, treat as missing)
-        if lat_i32 == 0 && lon_i32 == 0 {
-            return None;
-        }
-
         Some([lat_i32 as f64 / 1e7, lon_i32 as f64 / 1e7])
     }
 
     pub fn count(&self) -> u64 {
         self.count
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MmapWriter, NodeCache, WriteOutcome, ENTRY_SIZE, MAX_NODE_ID};
+    use crate::junctions::NodeIdBitmap;
+    use std::fs::OpenOptions;
+
+    fn cache_from_entries(path: &std::path::Path, entries: &[(u64, f64, f64)]) -> NodeCache {
+        let file_size = MAX_NODE_ID * ENTRY_SIZE;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .unwrap();
+        file.set_len(file_size).unwrap();
+        let mut mmap = unsafe { memmap2::MmapMut::map_mut(&file).unwrap() };
+        let present = NodeIdBitmap::new().unwrap();
+        let writer = MmapWriter {
+            ptr: mmap.as_mut_ptr(),
+            len: mmap.len(),
+        };
+        for &(id, lat, lon) in entries {
+            assert!(matches!(writer.write(id, lat, lon), WriteOutcome::Written));
+            present.insert(id as i64);
+        }
+        mmap.flush().unwrap();
+        NodeCache {
+            mmap: mmap.make_read_only().unwrap(),
+            present,
+            count: entries.len() as u64,
+        }
+    }
+
+    #[test]
+    fn present_zero_zero_node_is_not_treated_as_missing() {
+        let directory =
+            std::env::temp_dir().join(format!("osm-cache-nullisland-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("nodes.cache");
+        let cache = cache_from_entries(&path, &[(1, 0.0, 0.0), (2, 50.0, 14.0)]);
+        assert_eq!(cache.get(1), Some([0.0, 0.0]));
+        assert_eq!(cache.get(2), Some([50.0, 14.0]));
+        assert_eq!(cache.get(3), None);
+        assert_eq!(cache.count(), 2);
+        drop(cache);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

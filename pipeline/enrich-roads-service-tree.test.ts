@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync }
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { test } from 'node:test'
-import { Bool, Field, makeTable, RecordBatch, Schema, Table, tableToIPC, tableFromIPC, vectorFromArray } from 'apache-arrow'
+import { Bool, Field, makeTable, RecordBatch, Schema, Table, Utf8, tableToIPC, tableFromIPC, vectorFromArray } from 'apache-arrow'
 import { buildGraph, findComponents, flowAccumulate, type ServiceRoad } from './lib/service-tree-flow.js'
 import { assignBuildingsGlobally } from './lib/service-tree-buildings.js'
 import { iso2Code } from './lib/prepared-grid.js'
@@ -82,11 +82,15 @@ function fixture(directory: string, roads: ServiceRoad[], emptyBuildings = false
     road_class: Uint8Array.from(roads, r => r.roadClass), source_id: Uint16Array.from(roads, r => r.sourceId),
     access: Uint8Array.from(roads, r => r.access), tunnel: vectorFromArray(roads.map(r => r.tunnel), new Bool()),
     length_m: Float32Array.from(roads, r => r.length), country_iso: Uint16Array.from(roads, () => iso2Code('CZ')),
-    aadt_light: Int32Array.from(roads, () => 100), aadt_medium: new Int32Array(roads.length),
-    aadt_heavy: new Int32Array(roads.length), aadt_moto: new Int32Array(roads.length),
+    aadt_light: Float64Array.from(roads, () => 100), aadt_medium: new Float64Array(roads.length),
+    aadt_heavy: new Float64Array(roads.length), aadt_moto: new Float64Array(roads.length),
+    traffic_count_basis: Uint8Array.from(roads, r => r.sourceId === SELF ? 3 : 0),
+    traffic_observation_id: vectorFromArray(roads.map((r, i) => r.sourceId && r.sourceId !== SELF ? `fixture:${i}` : ''), new Utf8()),
+    traffic_observation_source: Uint16Array.from(roads, r => r.sourceId),
+    traffic_estimated: Uint8Array.from(roads, () => 15),
     speed_taper: Uint8Array.from(roads, () => 41), speed_limit: Uint8Array.from(roads, () => 50),
   } as never) as unknown as Table
-  store(resolve(directory, 'roads.arrow'), table, new Map([['grid', 'z30'], ['roads_contract', 'country_baked_v1'], ['qm_blocks', encodeQmBlocks([[50, 14, 50.01, 14.01]])]]))
+  store(resolve(directory, 'roads.arrow'), table, new Map([['grid', 'z30'], ['roads_contract', 'country_baked_v1'], ['road_traffic_contract', '0'], ['qm_blocks', encodeQmBlocks([[50, 14, 50.01, 14.01]])]]))
   const points = emptyBuildings ? [] : [grid(50.00001, 14.0015)]
   const buildings = makeTable({ centroid_gx: Int32Array.from(points, r => r[0]), centroid_gy: Int32Array.from(points, r => r[1]),
     building_type: new Uint8Array(points.length), floors: Uint8Array.from(points, () => 2), area_m2: Float32Array.from(points, () => 400) })
@@ -109,7 +113,7 @@ test('real IPC preserves measured roads, all other columns and batches; retracti
     for (const field of before.schema.fields) assert.deepEqual(after.schema.fields.find(f => f.name === field.name), field)
     assert.deepEqual(after.batches.map(b => b.numRows), before.batches.map(b => b.numRows))
     for (const field of before.schema.fields) {
-      if (['source_id', 'aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'speed_taper'].includes(field.name)) continue
+      if (['source_id', 'aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'speed_taper', 'traffic_count_basis', 'traffic_observation_id', 'traffic_observation_source', 'traffic_estimated'].includes(field.name)) continue
       assert.deepEqual(after.getChild(field.name)!.toArray(), before.getChild(field.name)!.toArray())
     }
     const bytes = readFileSync(path), stat = statSync(path, { bigint: true })
@@ -139,7 +143,7 @@ test('valid empty buildings produce no new traffic; missing square-country-city 
     assert.deepEqual([...table.getChild('aadt_light')!], [0, 100, 100])
     assert.deepEqual([...table.getChild('speed_taper')!], [0, 41, 41])
     for (const field of before.schema.fields) {
-      if (['source_id', 'aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'speed_taper'].includes(field.name)) continue
+      if (['source_id', 'aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'speed_taper', 'traffic_count_basis', 'traffic_observation_id', 'traffic_observation_source', 'traffic_estimated'].includes(field.name)) continue
       assert.deepEqual(table.getChild(field.name)!.toArray(), before.getChild(field.name)!.toArray())
     }
     const bytes = readFileSync(path), stat = statSync(path, { bigint: true })

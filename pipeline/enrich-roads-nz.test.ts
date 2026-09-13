@@ -17,16 +17,16 @@ after(() => rmSync(DIRECTORY, { recursive: true, force: true }))
 
 const collection = (features: readonly unknown[]) => JSON.stringify({ type: 'FeatureCollection', features })
 const nzta = (overrides: Record<string, unknown> = {}) => ({
-  type: 'Feature', properties: { trafficADTEst: 1000, trafficADTCount: null,
+  type: 'Feature', id: 'station-1', properties: { trafficADTEst: 1000, trafficADTCount: null,
     loadingPcHeavy: 20, ONRC: 'Regional' },
   geometry: { type: 'LineString', coordinates: [[174.79, -36.9], [174.81, -36.9]] }, ...overrides,
 })
 const at = (overrides: Record<string, unknown> = {}) => ({
-  type: 'Feature', properties: { adt: 500, pcheavy: 10 },
+  type: 'Feature', id: 'station-1', properties: { adt: 500, pcheavy: 10 },
   geometry: { type: 'Point', coordinates: [174.8, -36.9] }, ...overrides,
 })
 const observation = (overrides: Partial<NewZealandRoadObservation> = {}): NewZealandRoadObservation => ({
-  source: 'nzta', sourceRow: 0, latitude: -36.9, longitude: 174.8, rank: 1,
+  countBasis: 'unknown', observationId: 'nzta:station-1', source: 'nzta', sourceRow: 0, latitude: -36.9, longitude: 174.8, rank: 1,
   total: 1000, heavyPercent: 20, light: 790, medium: 40, heavy: 160, moto: 10,
   ...overrides,
 })

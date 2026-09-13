@@ -1,5 +1,7 @@
 /** Parse admitted NZTA carriageway and Auckland Transport AADT sources. */
 
+import { roadFeatureObservation } from './pinned-road-lines.js'
+import type { RoadObservation } from './road-observation.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import { readPinnedRoadSource } from './pinned-road-source.js'
 
@@ -14,7 +16,7 @@ const NZTA_PAGES = [
 const AT_FILE = 'at-aadt.geojson'
 const AT_SHA256 = '5885d1c383bd2339a896812b802a9c4e4da7aa0795ba910d8b3db23b012226d9'
 
-export interface NewZealandRoadObservation {
+export interface NewZealandRoadObservation extends RoadObservation {
   source: 'nzta' | 'at'
   sourceRow: number
   latitude: number
@@ -130,7 +132,7 @@ export function parseNewZealandRoadSources(
       const rawHeavy = properties!.loadingPcHeavy
       const heavyPercent = typeof rawHeavy === 'number' && Number.isFinite(rawHeavy) &&
         rawHeavy >= 0 && rawHeavy <= 100 ? rawHeavy : 8
-      result.observations.push({ source: 'nzta', sourceRow: page * 2000 + sourceRow,
+      result.observations.push({ source: 'nzta', countBasis: 'unknown', observationId: `nzta:${roadFeatureObservation(feature as object, 'unknown').observationId}`, sourceRow: page * 2000 + sourceRow,
         latitude: point[0], longitude: point[1], rank, total, heavyPercent,
         ...split(total, heavyPercent) })
     }
@@ -153,7 +155,7 @@ export function parseNewZealandRoadSources(
     const rawHeavy = properties!.pcheavy
     const heavyPercent = typeof rawHeavy === 'number' && Number.isFinite(rawHeavy) &&
       rawHeavy >= 0 && rawHeavy <= 100 ? rawHeavy : 0
-    result.observations.push({ source: 'at', sourceRow, latitude: point[0], longitude: point[1],
+    result.observations.push({ source: 'at', countBasis: 'unknown', observationId: `at:${roadFeatureObservation(feature as object, 'unknown').observationId}`, sourceRow, latitude: point[0], longitude: point[1],
       rank: null, total, heavyPercent, ...split(total, heavyPercent) })
   }
   if (result.observations.length === 0) throw new Error('New Zealand road sources have no usable measurements')

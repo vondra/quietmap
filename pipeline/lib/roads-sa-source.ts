@@ -1,7 +1,8 @@
 /** Load and match Saudi Arabia's pinned MoT counts, Riyadh PMS and national atlas. */
 
+import { roadObservation } from './road-observation.js'
+import { pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
 import { parse } from 'csv-parse/sync'
-import { buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
 import { readPinnedRoadSource } from './pinned-road-source.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import { osmRoadClassRank, ROAD_CLASS_RANK_TOLERANCE, type RoadRow } from './roads-arrow.js'
@@ -91,17 +92,17 @@ export function matchSaudiRoad(row: RoadRow, source: SaudiRoadSource) {
   for (const token of String(row.ref ?? '').split(/[;,]/)) {
     const roadRef = token.trim().replace(/^[A-Za-z]+/, '')
     const aadt = source.refAadt.get(roadRef)
-    if (aadt !== undefined) return { kind: 'mot' as const, ...split(aadt) }
+    if (aadt !== undefined) return { ...roadObservation(`road-average:${roadRef}`, 'unknown'), kind: 'mot' as const, ...split(aadt) }
   }
   const rank = osmRoadClassRank(row.roadClass)
   if (inBbox(row.midLat, row.midLon, RIYADH_BBOX)) {
     const line = nearestRoadLine(row.midLat, row.midLon, source.riyadh, 200,
       candidate => compatible(rank, riyadhRank(candidate)))
-    if (line) return { kind: 'riyadh' as const, ...split(riyadhAadt(line)) }
+    if (line) return { ...pinnedRoadObservation(line, 'both-directions'), kind: 'riyadh' as const, ...split(riyadhAadt(line)) }
   }
   const line = nearestRoadLine(row.midLat, row.midLon, source.atlas, 250,
     candidate => compatible(rank, atlasRank(candidate)))
-  return line ? { kind: 'atlas' as const, ...split(atlasAadt(line)) } : null
+  return line ? { ...pinnedRoadObservation(line, 'both-directions'), kind: 'atlas' as const, ...split(atlasAadt(line)) } : null
 }
 
 export const SAUDI_ROAD_BBOX: [number, number, number, number] = [16.0, 34.5, 32.5, 51.0]

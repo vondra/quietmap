@@ -81,10 +81,16 @@ export type ProvenanceTier =
   | 'baseline'
   | 'none'
 
-export type RoadTrafficSource =
-  | 'matched_external'
-  | 'estimated_service_tree'
-  | 'default_by_class'
+/** Per-category prepared road traffic: effective vehicles/day plus the
+ *  estimated bitmask written by the producer (light 1, medium 2, heavy 4,
+ *  moto 8; bit set = estimate/prior, clear = observed count). */
+export interface RoadTrafficCounts {
+  aadt_light: number
+  aadt_medium: number
+  aadt_heavy: number
+  aadt_moto: number
+  traffic_estimated: number
+}
 
 export interface RailCategoryTraffic {
   periods: [number, number, number]
@@ -110,23 +116,16 @@ export interface DatasetProvenance {
 
 interface RoadMetadata {
   kind: 'road'
-  aadt_light_raw: number
-  aadt_medium_raw: number
-  aadt_heavy_raw: number
-  aadt_moto_raw: number
-  traffic_source: RoadTrafficSource
+  aadt_light: number
+  aadt_medium: number
+  aadt_heavy: number
+  aadt_moto: number
+  /** Bitmask: light 1, medium 2, heavy 4, moto 8 — set = estimated. */
+  traffic_estimated: number
   dominant_dataset_id?: number
   provenance?: DatasetProvenance | null
   /** Raw OSM maxspeed; null = derestricted (`maxspeed=none`) — no number exists. */
   speed_posted_kmh: number | null
-  aadt_light_nominal: number
-  aadt_medium_nominal: number
-  aadt_heavy_nominal: number
-  aadt_moto_nominal: number
-  aadt_light_effective: number
-  aadt_medium_effective: number
-  aadt_heavy_effective: number
-  aadt_moto_effective: number
   speed_kmh: number
   speed_source:
     | 'osm_posted'
@@ -560,10 +559,11 @@ type EmissionTrace =
       aadt_medium: number
       aadt_heavy: number
       aadt_moto: number
+      /** Bitmask: light 1, medium 2, heavy 4, moto 8 — set = estimated. */
+      traffic_estimated: number
       speed_kmh: number
       surface_corr_db: number
       surface: string
-      traffic_source: RoadTrafficSource
       dataset_id: number
       provenance?: DatasetProvenance | null
       road_class: string

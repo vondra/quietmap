@@ -1,5 +1,6 @@
 /** Enrich z9 Spanish roads with MITMA 2022 state-road traffic measurements. */
 
+import { roadObservation } from './lib/road-observation.js'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { SOURCE_ID_ES_NATIONAL_ROADS } from './lib/source-ids.generated.js'
@@ -78,7 +79,7 @@ export async function enrichSpanishRoads(
       (row) => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const section = match(row)
-        return section ? {
+        return section ? { ...roadObservation(section.featureId, 'unknown'),
           light: section.aadt_light,
           medium: section.aadt_medium,
           heavy: section.aadt_heavy,

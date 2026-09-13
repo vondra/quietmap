@@ -11,7 +11,8 @@ import {
 
 const STAMP_ID = 10 // measured continental road source
 const MAJOR_CLASSES = new Set([0, 1, 2, 3, 4, 10, 11, 12])
-const payload = (sourceId = STAMP_ID) => ({ light: 9999, medium: 888, heavy: 77, moto: 6, sourceId })
+const payload = (sourceId = STAMP_ID) => ({ light: 9999, medium: 888, heavy: 77, moto: 6, sourceId,
+  countBasis: 'unknown' as const, observationId: 'fixture-count' })
 
 test('coverage gate never offers or changes out-of-coverage road classes', async () => {
   const path = writeRoadsFixture('coverage.arrow', [0, 2, 5, 7, 9, 10])
@@ -44,9 +45,9 @@ test('disjoint class totals distinguish exact from independent integer rounding'
   assert.equal(disjointVehicleClassCountsFitPublishedTotal(99, counts, 'independently-rounded'), false)
 })
 
-test('AADT outside the on-disk non-negative Int32 domain aborts without typed-array coercion', async () => {
+test('AADT outside the on-disk non-negative safe numeric domain aborts without typed-array coercion', async () => {
   for (const [name, light] of [
-    ['nan', NaN], ['negative', -1], ['fractional', 1.5], ['overflow', 2 ** 31],
+    ['nan', NaN], ['negative', -1], ['fractional', 1.5], ['overflow', 2 ** 53],
   ] as const) {
     const path = writeRoadsFixture(`malformed-${name}.arrow`, [0, 2])
     const before = bytes(path)
@@ -89,7 +90,7 @@ test('a retracted row can be reclaimed in the same pass', async () => {
   const path = writeRoadsFixture('retract-reclaim.arrow', [2])
   await writeRoadAadt(path, () => ({ ...payload(), light: 111 }))
   const result = await writeRoadAadt(
-    path, () => ({ light: 500, medium: 10, heavy: 5, moto: 2, sourceId: STAMP_ID }),
+    path, () => ({ ...payload(), light: 500, medium: 10, heavy: 5, moto: 2 }),
     undefined, MAJOR_CLASSES, { sourceIds: [STAMP_ID], when: () => true },
   )
   assert.deepEqual({ retracted: result.retracted, matched: result.matched }, { retracted: 1, matched: 1 })
@@ -163,4 +164,22 @@ test('an exact accepted rerun reports its match but remains byte-identical', asy
   const second = await writeRoadAadt(path, () => payload())
   assert.deepEqual({ matched: second.matched, updated: second.updated }, { matched: 1, updated: false })
   assert.deepEqual(bytes(path), before)
+})
+
+
+test('source basis and identity survive writes, replace together and retract together', async () => {
+  const path = writeRoadsFixture('observation-identity.arrow', [2, 2])
+  await writeRoadAadt(path, (_row, index) => ({ ...payload(),
+    countBasis: index === 0 ? 'directional' : 'both-directions', observationId: `counter:${index}` }))
+  let table = tableFromIPC(bytes(path))
+  assert.deepEqual([...table.getChild('traffic_count_basis')!], [1, 2])
+  assert.deepEqual([...table.getChild('traffic_observation_id')!], ['counter:0', 'counter:1'])
+  const before = bytes(path)
+  await assert.rejects(writeRoadAadt(path, () => ({ ...payload(), observationId: '' })), /invalid observation/)
+  assert.deepEqual(bytes(path), before)
+  await writeRoadAadt(path, () => null, undefined, undefined,
+    { sourceIds: [STAMP_ID], when: (_row, index) => index === 0 })
+  table = tableFromIPC(bytes(path))
+  assert.deepEqual([...table.getChild('traffic_count_basis')!], [0, 2])
+  assert.deepEqual([...table.getChild('traffic_observation_id')!], ['', 'counter:1'])
 })

@@ -1,5 +1,6 @@
 /** Strict GeoJSON line admission and proximity index for national road sources. */
 
+import { roadObservation, type RoadObservation, type RoadCountBasis } from './road-observation.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import { readPinnedRoadSource } from './pinned-road-source.js'
 import { pointToPolylineDist } from './spatial.js'
@@ -13,11 +14,25 @@ export interface PinnedRoadLine {
   coordinates: readonly (readonly [number, number])[]
   properties: Readonly<Record<string, unknown>>
   relativePath: string
+  observationId: string
 }
 
 interface GeoJsonFeature {
+  id?: unknown
   geometry?: { type?: unknown; coordinates?: unknown }
   properties?: unknown
+}
+
+export function roadFeatureObservation(feature: object, basis: Exclude<RoadCountBasis, 'allocated'>): RoadObservation {
+  const record = feature as Record<string, unknown>
+  const properties = (record.properties ?? record.attributes) as Record<string, unknown> | undefined
+  const id = record.id ?? properties?.id ?? properties?.OBJECTID ?? properties?.ObjectId ?? properties?.internal_id
+  const hasId = typeof id === 'string' && id.length > 0 || typeof id === 'number' && Number.isFinite(id)
+  return roadObservation(hasId ? String(id) : feature, basis)
+}
+
+export function pinnedRoadObservation(line: PinnedRoadLine, basis: Exclude<RoadCountBasis, 'allocated'>): RoadObservation {
+  return roadObservation(line.observationId, basis)
 }
 
 function coordinatePair(value: unknown): readonly [number, number] | null {
@@ -57,6 +72,7 @@ export function loadPinnedRoadLines(
       const feature = value as GeoJsonFeature
       const properties = feature.properties && typeof feature.properties === 'object' && !Array.isArray(feature.properties)
         ? feature.properties as Record<string, unknown> : {}
+      const observation = roadFeatureObservation(feature, 'unknown')
       const parts = lineParts(feature)
       if (parts.length === 0) { invalidGeometrySkipped++; continue }
       let acceptedPart = false
@@ -64,7 +80,7 @@ export function loadPinnedRoadLines(
         const coordinates = rawPart.map(coordinatePair)
         if (coordinates.length < 2 || coordinates.some(point => point === null)) continue
         lines.push({ coordinates: coordinates as readonly (readonly [number, number])[], properties,
-          relativePath: file.relativePath })
+          relativePath: file.relativePath, observationId: `${file.relativePath}:${observation.observationId}` })
         acceptedPart = true
       }
       if (!acceptedPart) invalidGeometrySkipped++

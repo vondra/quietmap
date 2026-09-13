@@ -1,5 +1,6 @@
 /** Cerema RRN TMJA download and source-faithful CSV parsing. */
 
+import { roadObservation, type RoadObservation } from './road-observation.js'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parse } from 'csv-parse/sync'
@@ -17,7 +18,7 @@ const REQUIRED_COLUMNS = ['route', 'TMJA', 'ratio_PL', 'xD', 'yD', 'xF', 'yF'] a
 
 proj4.defs('EPSG:2154', '+proj=lcc +lat_0=46.5 +lon_0=3 +lat_1=49 +lat_2=44 +x_0=700000 +y_0=6600000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs')
 
-export interface CeremaCensusSection {
+export interface CeremaCensusSection extends RoadObservation {
   route: string
   ref: string
   lat: number
@@ -169,7 +170,7 @@ function parseFile(
       stats.invalidHeavyRatioSkipped++
       continue
     }
-    sections.push({
+    sections.push({ ...roadObservation({ year, row }, 'unknown'),
       route, ref, lat, lon, coords, tmja, ratio_pl: ratio,
       aadt_light, aadt_medium, aadt_heavy, aadt_moto,
     })

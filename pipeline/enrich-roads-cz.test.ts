@@ -27,7 +27,7 @@ function censusFeature(options: {
   const secondaryCount = options.zero ? 0 : 10
   return {
     attributes: {
-      PSILNICE: options.ref ?? '34', PKOD_R: options.category ?? '2',
+      OBJECTID: 12345, PSILNICE: options.ref ?? '34', PKOD_R: options.category ?? '2',
       O: count, LN: secondaryCount, SN: secondaryCount, A: secondaryCount,
       TR: secondaryCount, TRP: secondaryCount, TN: secondaryCount,
       TNP: secondaryCount, SNP: secondaryCount, NSN: secondaryCount,
@@ -82,11 +82,11 @@ test('matcher does not invent a bridge between disconnected ArcGIS paths', () =>
 })
 
 test('matcher filters incompatible road rank before choosing the nearest section', () => {
-  const incompatible: CensusSection = {
+  const incompatible: CensusSection = { countBasis: 'unknown', observationId: '1',
     ref: '34', rank: 4, light: 1, medium: 1, heavy: 1, moto: 1,
     paths: [[[14.0005, 50.0005]]],
   }
-  const compatible: CensusSection = {
+  const compatible: CensusSection = { countBasis: 'unknown', observationId: '2',
     ref: '34', rank: 1, light: 2, medium: 2, heavy: 2, moto: 2,
     paths: [[[14.001, 50.0005]]],
   }
@@ -105,6 +105,7 @@ test('z9 CZ pass writes domestic data and heals a matching foreign CZ stamp', as
   const target = join(square, 'roads.arrow')
   copyFileSync(source, target)
   const census = parseCensus([censusFeature()])
+  assert.equal(matchCensusSection(road({ osmId: 9999 }), census.byRef)?.observationId, '12345')
 
   const result = await enrichCzechRoads(prepared, census.byRef)
   assert.deepEqual(
@@ -115,4 +116,6 @@ test('z9 CZ pass writes domestic data and heals a matching foreign CZ stamp', as
   assert.deepEqual([...Array(2)].map((_, index) => table.getChild('source_id')!.get(index)), [20, 0])
   assert.deepEqual([...Array(2)].map((_, index) => table.getChild('aadt_light')!.get(index)), [110, 0])
   assert.equal(table.schema.metadata.get('roads_contract'), 'country_baked_v1')
+  assert.deepEqual([...table.getChild('traffic_observation_id')!], ['12345', ''])
+  assert.deepEqual([...table.getChild('traffic_count_basis')!], [0, 0])
 })

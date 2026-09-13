@@ -2,6 +2,7 @@
 """Acquire publisher-identified daily ADSB.lol exports without overwriting retained archives."""
 
 import argparse
+import ast
 import bisect
 from contextlib import ExitStack, closing
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -235,6 +236,13 @@ def input_signature(selected):
     return repr(selected)
 
 
+def archive_inputs_match(signature, selected):
+    # Moving a parent directory preserves the authenticated inode and timestamps.
+    recorded = ast.literal_eval(signature)
+    return [(asset, identity) for asset, _, identity in recorded] == [
+        (asset, identity) for asset, _, identity in selected]
+
+
 def archive_checks(database):
     if not database.execute("SELECT 1 FROM sqlite_master WHERE name='archive_checks'").fetchone():
         return {}
@@ -257,7 +265,7 @@ def effective_assets(database, preferred, releases, requested):
         tag = assets[0][5]
         if tag in checks:
             inputs, error = checks[tag]
-            if inputs != input_signature(resolved_assets(database, assets)):
+            if not archive_inputs_match(inputs, resolved_assets(database, assets)):
                 raise ValueError(f'{day}: changed archive inspection inputs: {tag}')
             if error:
                 candidates = []
@@ -265,7 +273,7 @@ def effective_assets(database, preferred, releases, requested):
                     checked = checks.get(alternative[0][5])
                     if checked is None:
                         continue
-                    if checked[0] != input_signature(resolved_assets(database, alternative)):
+                    if not archive_inputs_match(checked[0], resolved_assets(database, alternative)):
                         raise ValueError(f'{day}: changed alternative inspection inputs')
                     if not checked[1]:
                         candidates.append(alternative)

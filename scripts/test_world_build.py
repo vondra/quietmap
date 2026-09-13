@@ -39,7 +39,9 @@ class WorldBuildTest(unittest.TestCase):
             with patch.object(sys, 'argv', ['build-world.py', '--config', str(config),
                          '--output', str(output), '--scratch', str(scratch), '--resume-plan']), \
                     patch.object(world, 'source_paths', return_value={'planet': source}), \
-                    patch.object(world, 'build_plan', return_value=(output / 'prepared/2026', [])), \
+                    patch.object(world, 'build_plan', return_value=(output / 'prepared/2026', [
+                        world.Step('osm', (), (), environment=(('NODE_CACHE', str(scratch / 'nodes')),
+                                                               ('SPILL_DIR', str(output / 'spill'))))])), \
                     patch.object(world, 'code_inputs', return_value=[]), \
                     patch.object(world, 'runtime_inputs', return_value=[]), \
                     patch.object(world, 'raster_inputs', return_value=[]), \
@@ -63,15 +65,17 @@ class WorldBuildTest(unittest.TestCase):
                 digest.assert_not_called()
             self.assertEqual(state_path.read_text(), 'retained build state')
 
-    def test_partial_rail_finalization_does_not_restart_routing_on_split_geometry(self):
-        steps = [world.Step('railways', (), ('route',)),
-                 world.Step('railways-finalize', ('railways',), ('finalize',))]
-        started = []
-        def execute(step):
-            started.append(step.name)
-        self.assertEqual(world.run_plan(steps, execute, completed={'railways'}),
-                         {'railways', 'railways-finalize'})
-        self.assertEqual(started, ['railways-finalize'])
+    def test_partial_transport_finalization_does_not_restart_enrichment_on_split_geometry(self):
+        for layer in ('railways', 'roads'):
+            with self.subTest(layer=layer):
+                final = layer + '-finalize'
+                steps = [world.Step(layer, (), ('enrich',)),
+                         world.Step(final, (layer,), ('finalize',))]
+                started = []
+                def execute(step):
+                    started.append(step.name)
+                self.assertEqual(world.run_plan(steps, execute, completed={layer}), {layer, final})
+                self.assertEqual(started, [final])
 
     def test_changed_removed_added_and_cyclic_sources_cannot_validate_a_generation(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -189,12 +193,35 @@ class WorldBuildTest(unittest.TestCase):
             lock = threading.Lock()
             peak = 0
             indexed = {step.name: step for step in plan}
+            osm = dict(indexed['osm'].environment)
+            self.assertEqual(osm['NODE_CACHE'], str(root / 'scratch/osm/osm_nodes.cache'))
+            self.assertEqual(osm['SPILL_DIR'], str(root / 'out/osm-spill'))
+            overrides = dict(config['build'], osm_node_cache=str(root / 'cache/nodes'),
+                             osm_spill_dir=str(root / 'spill/features'))
+            _, overridden = world.build_plan(dict(config, build=overrides), root / 'out', root / 'scratch')
+            self.assertEqual(dict(overridden[0].environment)['NODE_CACHE'], overrides['osm_node_cache'])
+            self.assertEqual(dict(overridden[0].environment)['SPILL_DIR'], overrides['osm_spill_dir'])
+            self.assertNotEqual(world.step_identity(indexed['osm'], config['build'], 'pin'),
+                                world.step_identity(overridden[0], overrides, 'pin'))
+            for key in ('osm_node_cache', 'osm_spill_dir'):
+                for value in (False, 42, '', *sources.values(), str(root)):
+                    with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                        world.build_plan(dict(config, build=dict(config['build'], **{key: value})),
+                                         root / 'out', root / 'scratch')
+            alias = root / 'source-alias'
+            alias.symlink_to(root / 'enrichment')
+            with self.assertRaisesRegex(ValueError, 'overlaps frozen source'):
+                world.build_plan(dict(config, build=dict(config['build'], osm_spill_dir=str(alias))),
+                                 root / 'out', root / 'scratch')
+            with self.assertRaisesRegex(ValueError, 'overlaps frozen source'):
+                world.validate_osm_storage([root / 'external-vrt'], [root / 'external-vrt/tile.tif'])
             self.assertEqual(indexed['structures'].dependencies, ('buildings',))
             self.assertEqual(indexed['structures'].argv[-2:], ('--jobs', '4'))
             self.assertEqual(indexed['structures-finalize'].dependencies, ('structures',))
             self.assertTrue(indexed['structures-finalize'].argv[0].endswith('engine/target/release/structures-finalize'))
             self.assertEqual(set(indexed['roads'].dependencies), {'square-country-city', 'structures'})
             self.assertEqual(indexed['roads'].argv[indexed['roads'].argv.index('--jobs') + 1], '4')
+            self.assertEqual(indexed['roads-finalize'].dependencies, ('roads',))
             self.assertEqual(indexed['industrial'].dependencies, ('square-country-city',))
             self.assertEqual(indexed['railways'].dependencies, ('square-country-city',))
             self.assertEqual(indexed['railways-finalize'].dependencies, ('railways',))

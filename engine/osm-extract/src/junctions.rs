@@ -9,7 +9,7 @@ use crate::node_cache::MAX_NODE_ID;
 pub struct NodeIdBitmap(MmapRaw);
 
 impl NodeIdBitmap {
-    fn new() -> Result<Self> {
+    pub(crate) fn new() -> Result<Self> {
         // Anonymous zero pages allocate physical memory only for touched ID ranges.
         Ok(Self(MmapRaw::from(MmapMut::map_anon(
             MAX_NODE_ID.div_ceil(64) as usize * size_of::<u64>(),
@@ -26,7 +26,7 @@ impl NodeIdBitmap {
         Some((word, 1 << (id % 64)))
     }
 
-    fn insert(&self, node_id: i64) -> bool {
+    pub(crate) fn insert(&self, node_id: i64) -> bool {
         self.word(node_id)
             .is_some_and(|(word, mask)| word.fetch_or(mask, Ordering::Relaxed) & mask == 0)
     }
@@ -34,6 +34,35 @@ impl NodeIdBitmap {
     pub fn contains(&self, node_id: i64) -> bool {
         self.word(node_id)
             .is_some_and(|(word, mask)| word.load(Ordering::Relaxed) & mask != 0)
+    }
+}
+
+/// Unique node-id set shared across Pass 0 workers (selected-layer cache filter).
+pub struct NodeIdSet {
+    bits: NodeIdBitmap,
+    count: AtomicU64,
+}
+
+impl NodeIdSet {
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            bits: NodeIdBitmap::new()?,
+            count: AtomicU64::new(0),
+        })
+    }
+
+    pub fn insert(&self, node_id: i64) {
+        if self.bits.insert(node_id) {
+            self.count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn count(&self) -> u64 {
+        self.count.load(Ordering::Relaxed)
+    }
+
+    pub fn finish(self) -> NodeIdBitmap {
+        self.bits
     }
 }
 
@@ -93,5 +122,19 @@ mod tests {
         for id in [-1, 0, 1, 2, 3, 4, 5, 66, MAX_NODE_ID as i64] {
             assert!(!protected.contains(id));
         }
+    }
+
+    #[test]
+    fn node_id_set_counts_unique_ids_only() {
+        let set = super::NodeIdSet::new().unwrap();
+        set.insert(1);
+        set.insert(1);
+        set.insert(2);
+        set.insert(-1);
+        assert_eq!(set.count(), 2);
+        let bits = set.finish();
+        assert!(bits.contains(1));
+        assert!(bits.contains(2));
+        assert!(!bits.contains(-1));
     }
 }

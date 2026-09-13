@@ -265,14 +265,17 @@ pub struct Doc29Breakdown {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EmissionTrace {
     Road {
+        /// Prepared per-category AADT (effective vehicles/day) as consumed.
         aadt_light: f64,
         aadt_medium: f64,
         aadt_heavy: f64,
         aadt_moto: f64,
+        /// Per-category estimated bitmask (light 1, medium 2, heavy 4, moto 8):
+        /// bit set = estimate/prior, clear = observed count.
+        traffic_estimated: u8,
         speed_kmh: f64,
         surface_corr_db: f64,
         surface: &'static str, // "asphalt" | "paving" | "concrete" | "unpaved" | "gravel"
-        traffic_source: &'static str, // "matched_external" | "estimated_service_tree" | "default_by_class"
         source_id: u16,
         /// Dataset attribution for the popup display. Resolved from
         /// `source_id` in the Rust builders (was previously a Node-side

@@ -7,7 +7,7 @@ import { buildRoadLineVertexGrid, type PinnedRoadLine } from './lib/pinned-road-
 import type { RoadRow } from './lib/roads-arrow.js'
 
 const line = (properties: Record<string, unknown>, relativePath = 'ar/roads-national.geojson'): PinnedRoadLine => ({
-  coordinates: [[-58.5, -34.6], [-58.49, -34.6]], properties, relativePath,
+  observationId: 'fixture', coordinates: [[-58.5, -34.6], [-58.49, -34.6]], properties, relativePath,
 })
 const source = (dnv: PinnedRoadLine[], tmda: PinnedRoadLine[]): ArgentinaRoadSource => ({
   dnv: buildRoadLineVertexGrid(dnv), tmda: buildRoadLineVertexGrid(tmda),
@@ -19,11 +19,11 @@ const road: RoadRow = { startLat: -34.6, startLon: -58.5, endLat: -34.6, endLon:
 test('Argentina prioritizes observed TMDA and applies the Buenos Aires split', () => {
   assert.deepEqual(matchArgentinaRoad(road, source([line({ tipo_de_superficie_de_via: 'PAVIMENTO' })],
     [line({ valor: 1000 }, 'ar/tmda-2017-18.geojson')])),
-  { kind: 'tmda', light: 1500, medium: 200, heavy: 200, moto: 100 })
+  { countBasis: 'unknown', observationId: 'fixture', kind: 'tmda', light: 1500, medium: 200, heavy: 200, moto: 100 })
 })
 
 test('Argentina distinguishes national and provincial DNV fallbacks', () => {
   assert.deepEqual(matchArgentinaRoad(road, source([line({ tipo_de_superficie_de_via: 'PAVIMENTO' },
     'ar/roads-provincial.geojson')], [])),
-  { kind: 'dnv-provincial', light: 18000, medium: 2400, heavy: 2400, moto: 1200 })
+  { countBasis: 'both-directions', observationId: 'fixture', kind: 'dnv-provincial', light: 18000, medium: 2400, heavy: 2400, moto: 1200 })
 })

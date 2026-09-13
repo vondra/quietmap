@@ -1,35 +1,15 @@
 import type {
   DatasetProvenance,
-  ProvenanceTier,
   RailCategoryTraffic,
   RailTraffic,
-  RoadTrafficSource,
+  RoadTrafficCounts,
 } from '../../types/noise.ts'
 
-export type { RoadTrafficSource } from '../../types/noise.ts'
+export type { RoadTrafficCounts } from '../../types/noise.ts'
 
 // Pure provenance wording shared by the contributor and segment views. Keep
 // this module free of React/DOM imports so the strings can be tested with
 // Node's built-in test runner without adding a frontend test framework.
-
-const AUTHORITATIVE_TIERS: ReadonlySet<ProvenanceTier> = new Set([
-  'city-measured',
-  'national-measured',
-  'continental-measured',
-  'global-measured',
-] as const)
-
-type TierClass = 'authoritative' | 'estimate' | 'baseline' | 'unknown'
-
-function classifyTier(p: DatasetProvenance): TierClass {
-  if (p.tier != null && AUTHORITATIVE_TIERS.has(p.tier)) return 'authoritative'
-  if (p.tier === 'national-proxy' || p.tier === 'heuristic') return 'estimate'
-  if (p.tier === 'baseline') return 'baseline'
-  // A missing tier can occur briefly during a rolling frontend/backend deploy.
-  // Inconsistent legacy buckets must also fail conservatively: unknown input
-  // is neither proof of a measurement nor proof of a proxy estimate.
-  return 'unknown'
-}
 
 export function formatProv(p: DatasetProvenance | null | undefined): string {
   if (!p) return ''
@@ -39,62 +19,62 @@ export function formatProv(p: DatasetProvenance | null | undefined): string {
   return parts.join(' ')
 }
 
-/** Compact road-traffic source block with an optional URL and method hint. */
-export function roadSourceDescription(
-  trafficSource: RoadTrafficSource,
+/** Prepared road traffic: per-category value with counted/estimated status.
+ *
+ * Counts are FINAL at read time — the build resolved observations, priors and
+ * allocation — so the popup reports them verbatim with the producer's
+ * per-category estimated bit. There is no runtime default, oneway share or
+ * access factor to undo or explain. */
+export const ROAD_ESTIMATED_LIGHT = 1
+export const ROAD_ESTIMATED_MEDIUM = 2
+export const ROAD_ESTIMATED_HEAVY = 4
+export const ROAD_ESTIMATED_MOTO = 8
+
+const roadCount = (value: number): string =>
+  value.toLocaleString('en', { maximumFractionDigits: 0 })
+
+/** True when the category's prepared value is an estimate or prior. */
+export function roadCategoryEstimated(traffic: Pick<RoadTrafficCounts, 'traffic_estimated'>, bit: number): boolean {
+  return (traffic.traffic_estimated & bit) !== 0
+}
+
+/** One category line: value (vehicles/day) plus its counted/estimated status. */
+export function roadCategoryLine(label: string, value: number, estimated: boolean): string {
+  const status = estimated ? 'estimated' : value > 0 ? 'counted' : 'counted zero'
+  return `${label}: ${roadCount(value)}/day — ${status}`
+}
+
+/** Dataset attribution for the row; a model prior carries no dataset. */
+export function roadTrafficSourceLine(provenance: DatasetProvenance | null | undefined): string {
+  if (!provenance) return 'Source: class prior (no observation dataset)'
+  const url = provenance.url ? `\n  ${provenance.url}` : ''
+  return `Source: ${formatProv(provenance)}${url}`
+}
+
+export function roadTrafficLabel(traffic: RoadTrafficCounts): string {
+  const total =
+    traffic.aadt_light + traffic.aadt_medium + traffic.aadt_heavy + traffic.aadt_moto
+  return `${roadCount(total)}/day`
+}
+
+export function roadTrafficDescription(
+  traffic: RoadTrafficCounts,
   provenance: DatasetProvenance | null | undefined,
-  roadClass: string,
 ): string {
-  if (trafficSource === 'matched_external') {
-    if (!provenance) {
-      return (
-        'Source: external road-traffic input\n' +
-        '  (dataset metadata and measurement status unavailable)'
-      )
-    }
-    const url = provenance.url ? `\n  ${provenance.url}` : ''
-    const tierClass = classifyTier(provenance)
-    // A high-authority tier is not proof of a direct count: some city
-    // datasets contain working-day or interpolated values under a
-    // *-measured provenance rank. Until the wire carries the registry's
-    // counted/derived method, describe it neutrally as an external input.
-    const method = tierClass === 'authoritative'
-      ? 'external AADT input per OSM way'
-      : tierClass === 'estimate'
-        ? 'estimated AADT, not a direct measurement'
-        : tierClass === 'baseline'
-          ? 'model-derived AADT baseline, not an observed count'
-          : 'external AADT input; measurement status unavailable'
-    return `Source: ${formatProv(provenance)}${url}\n  (${method})`
-  }
-  if (trafficSource === 'estimated_service_tree') {
-    // The "heuristic" tier covers two datasets: the service-tree (local roads,
-    // trips accumulated from buildings) and the continuity-fill (major roads,
-    // a measured neighbour's AADT carried along the same road). Name whichever
-    // it actually is via the dataset; both are estimates, not measurements.
-    const name = provenance ? formatProv(provenance) : 'Service-tree heuristic'
-    return (
-      `Source: ${name} — ${roadClass} class\n` +
-      `  (estimated AADT, not a direct measurement)`
-    )
-  }
-  if (trafficSource === 'default_by_class' && provenance) {
-    const url = provenance.url ? `\n  ${provenance.url}` : ''
-    // `trafficSource` is authoritative for AADT. In particular, the taper can
-    // stamp baseline provenance for a speed-only adjustment while leaving raw
-    // AADT empty, in which case the engine still uses the class default.
-    const method = provenance.tier === 'baseline'
-      ? 'class-default traffic count; listed source may apply to speed only'
-      : 'class-default traffic count; source metadata does not establish AADT'
-    return (
-      `Source: ${formatProv(provenance)}${url} — ${roadClass} class\n` +
-      `  (${method})`
-    )
-  }
-  return (
-    `Source: CNOSSOS Annex II default — ${roadClass} class\n` +
-    `  (no enrichment data in this area)`
-  )
+  const categories: ReadonlyArray<readonly [string, number, number]> = [
+    ['Light', traffic.aadt_light, ROAD_ESTIMATED_LIGHT],
+    ['Medium', traffic.aadt_medium, ROAD_ESTIMATED_MEDIUM],
+    ['Heavy', traffic.aadt_heavy, ROAD_ESTIMATED_HEAVY],
+    ['Moto', traffic.aadt_moto, ROAD_ESTIMATED_MOTO],
+  ]
+  return [
+    roadTrafficSourceLine(provenance),
+    '',
+    'Prepared daily traffic, this road:',
+    ...categories.map(([label, value, bit]) =>
+      `  ${roadCategoryLine(label, value, roadCategoryEstimated(traffic, bit))}`,
+    ),
+  ].join('\n')
 }
 
 /** Category status is explicit; a numeric zero never proves absence of trains. */

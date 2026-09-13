@@ -1,7 +1,7 @@
 import type { Contributor } from '../../../types/noise'
 import { fmt, fmtFloat, fmtInt, fmtCompact, txtTable, type TableRow } from '../../../utils/formatters'
 import { MetricLabel, DataPoint } from '../noise-tooltips'
-import { formatProv, lineRow, railTrafficLabel, railTrafficDescription, roadSourceDescription, subtypeLabel } from '../shared'
+import { formatProv, lineRow, railTrafficLabel, railTrafficDescription, roadCategoryEstimated, roadTrafficLabel, roadTrafficSourceLine, subtypeLabel } from '../shared'
 
 // Road and rail source helpers are shared with the Noise segments tab
 // (SegmentExpanded), so both views use identical attribution wording. The
@@ -16,9 +16,7 @@ export function MetadataRows({ c }: { c: Contributor }) {
   if (!m) return null
 
   if (m.kind === 'road') {
-    const nomTotal = m.aadt_light_nominal + m.aadt_medium_nominal + m.aadt_heavy_nominal + m.aadt_moto_nominal
-    const effTotal = m.aadt_light_effective + m.aadt_medium_effective + m.aadt_heavy_effective + m.aadt_moto_effective
-    const isDefault = m.traffic_source === 'default_by_class'
+    const total = m.aadt_light + m.aadt_medium + m.aadt_heavy + m.aadt_moto
     const hasSpeedRange = m.speed_min_kmh < m.speed_max_kmh
     // Derestricted (maxspeed=none, e.g. German Autobahn): no number exists;
     // the engine models DERESTRICTED_SPEED_KMH and reports it in speed_kmh.
@@ -44,35 +42,21 @@ export function MetadataRows({ c }: { c: Contributor }) {
       'Values from the loudest segment.',
       ...(hasSpeedRange ? ['Speed varies across grouped segments.'] : []),
     ], 18, 12)
-    const adjustmentRatio = nomTotal > 0 ? effTotal / nomTotal : 1
-    const hasAdjustment = Math.abs(adjustmentRatio - 1) > 0.01
-    const sourceLines = roadSourceDescription(m.traffic_source, m.provenance, m.road_class).split('\n')
-    // A baseline provenance record can be speed-only; `default_by_class`
-    // remains the source of the traffic count in that case.
-    const defaultFootnote = m.provenance?.tier === 'baseline'
-      ? '* class default; listed source may apply to speed only'
-      : '* class default (no census match for this segment)'
     const trafficText = txtTable([
-      ...sourceLines,
+      roadTrafficSourceLine(m.provenance),
       '',
       'Traffic on this road segment:',
-      ...(m.aadt_light_effective > 0 ? [['  Light', fmtInt(Math.round(m.aadt_light_effective))] as [string, string]] : []),
-      ...(m.aadt_medium_effective > 0 ? [['  Medium', fmtInt(Math.round(m.aadt_medium_effective))] as [string, string]] : []),
-      ...(m.aadt_heavy_effective > 0 ? [['  Heavy', fmtInt(Math.round(m.aadt_heavy_effective))] as [string, string]] : []),
-      ...(m.aadt_moto_effective > 0 ? [['  Moto', fmtInt(Math.round(m.aadt_moto_effective))] as [string, string]] : []),
+      ...([['Light', m.aadt_light, 1], ['Medium', m.aadt_medium, 2], ['Heavy', m.aadt_heavy, 4], ['Moto', m.aadt_moto, 8]] as const)
+        .map(([label, value, bit]) =>
+          [label, roadCategoryEstimated(m, bit) ? `${fmtInt(Math.round(value))} (est.)` : `${fmtInt(Math.round(value))}`] as [string, string],
+        ),
       { sep: true },
-      ['  Total', `${fmtInt(Math.round(effTotal))}/day${isDefault ? '*' : ''}`] as [string, string],
-      ...(isDefault ? ['', defaultFootnote] : []),
-      ...(hasAdjustment
-        ? [
-            '',
-            'Adjustment for this segment:',
-            ['  Nominal', `${fmtInt(Math.round(nomTotal))}/day`] as [string, string],
-            ['  ', `× ${adjustmentRatio.toFixed(2)} combined adjustment`] as [string, string],
-            { sep: true },
-            ['  This segment', `${fmtInt(Math.round(effTotal))}/day`] as [string, string],
-          ]
-        : []),
+      ['Total', `${fmtInt(Math.round(total))}/day`] as [string, string],
+      '',
+      'Counts are prepared per vehicle class:',
+      'a counted value is an observation, an',
+      '"(est.)" value is an estimate or class',
+      'prior from the build.',
       '',
       `(dominant segment, ${Math.round(m.dominant_distance_m)} m away)`,
     ] as TableRow[], 18, 12)
@@ -108,7 +92,7 @@ export function MetadataRows({ c }: { c: Contributor }) {
         {lineRow(
           <MetricLabel term="aadt">Traffic</MetricLabel>,
           <DataPoint title="Daily traffic on this road segment" text={trafficText}>
-            {`${fmtCompact(Math.round(effTotal))}/day${isDefault ? '*' : ''}`}
+            {`${fmtCompact(Math.round(total))}/day`}
           </DataPoint>,
         )}
         {lineRow(

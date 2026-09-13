@@ -1,5 +1,7 @@
 /** Enrich z9 road vectors with Czech ŘSD traffic census measurements. */
 
+import { roadFeatureObservation } from './lib/pinned-road-lines.js'
+import type { RoadObservation } from './lib/road-observation.js'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -21,7 +23,7 @@ const RSD_QUERY_URL = 'https://geoportal.rsd.cz/arcgis/rest/services/ScitaniDopr
 const RSD_BBOX_SJTSK = { xmin: -900000, ymin: -1300000, xmax: -400000, ymax: -900000 }
 const PAGE_SIZE = 2000
 
-export interface CensusSection {
+export interface CensusSection extends RoadObservation {
   ref: string
   rank: number
   light: number
@@ -87,7 +89,7 @@ export function parseCensus(features: readonly unknown[]): ParsedCensus {
     const ref = normalizeRsdRef(psilnice, pkodR)
     const paths = geometryPaths(geometry?.paths)
     if (!ref || paths.length === 0) continue
-    const section: CensusSection = {
+    const section: CensusSection = { ...roadFeatureObservation(feature as object, 'unknown'),
       ref,
       rank: rsdRank(psilnice, pkodR),
       light: count(values, 'O') + count(values, 'LN'),
@@ -150,7 +152,7 @@ export async function enrichCzechRoads(
       (row) => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const section = matchCensusSection(row, censusByRef)
-        return section ? {
+        return section ? { countBasis: section.countBasis, observationId: section.observationId,
           light: section.light,
           medium: section.medium,
           heavy: section.heavy,

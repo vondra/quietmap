@@ -1,5 +1,6 @@
 /** Admit original Praha, Wien and Brno traffic observations without writing normalized source caches. */
 
+import { roadObservation, type RoadObservation } from './road-observation.js'
 import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -9,7 +10,7 @@ import { DATASETS } from './enrichment-datasets.js'
 import { SOURCE_ID_CITY_PRAHA_TSK, SOURCE_ID_CITY_WIEN_DAUERZAEHLSTELLEN, SOURCE_ID_CITY_BRNO_DETECTORS } from './sources.js'
 import { municipalityFromGeoJson, type CityCoordinate } from './city-polygon.js'
 
-export interface CityRoadRecord {
+export interface CityRoadRecord extends RoadObservation {
   street: string
   light: number
   medium: number
@@ -44,7 +45,7 @@ function coordinate(value: unknown): CityCoordinate {
   return value as unknown as CityCoordinate
 }
 export function parsePrahaRows(rows: readonly (readonly unknown[])[]) {
-  const streets = new Map<string, { length: number; light: number; medium: number; heavy: number }>()
+  const streets = new Map<string, { length: number; light: number; medium: number; heavy: number; sections: string[] }>()
   let sections = 0
   for (const row of rows) {
     const [start, end, street, , , length, cars, slow, , buses] = row
@@ -54,12 +55,14 @@ export function parsePrahaRows(rows: readonly (readonly unknown[])[]) {
     if (len === 0) throw new Error('zero Praha section length')
     const light = count(cars, 'Praha cars'), heavy = count(slow, 'Praha slow vehicles'), medium = count(buses, 'Praha buses')
     if (light + heavy + medium === 0) continue
-    const key = street.trim(), acc = streets.get(key) ?? { length: 0, light: 0, medium: 0, heavy: 0 }
+    const key = street.trim(), acc = streets.get(key) ?? { length: 0, light: 0, medium: 0, heavy: 0, sections: [] }
+    acc.sections.push(`${start}:${end}`)
     acc.length += len; acc.light += light * len; acc.medium += medium * len; acc.heavy += heavy * len
     streets.set(key, acc); sections++
   }
   if (sections < 500) throw new Error(`Praha source has only ${sections} positive sections; expected the monitored network`)
   return { sections, records: [...streets].map(([street, a]): CityRoadRecord => ({
+    ...roadObservation({ street, sections: a.sections.sort() }, 'unknown'),
     street: PRAHA_STREET_NAMES[street] ?? street, light: Math.round(a.light / a.length),
     medium: Math.round(a.medium / a.length), heavy: Math.round(a.heavy / a.length), moto: 0,
   })) }
@@ -87,7 +90,7 @@ export function parseBrno(text: string) {
     const heavy = Math.round(total * percent / 100)
     for (const part of parts) {
       if (!Array.isArray(part) || part.length < 2) throw new Error('Brno section has an empty line')
-      records.push({ street: `BKOM section ${f.properties.id ?? f.properties.ObjectId}`,
+      records.push({ ...roadObservation(f.properties.id != null || f.properties.ObjectId != null ? String(f.properties.id ?? f.properties.ObjectId) : f, 'unknown'), street: `BKOM section ${f.properties.id ?? f.properties.ObjectId}`,
         light: total - heavy, medium: 0, heavy, moto: 0, line: part.map(coordinate) })
     }
   }
@@ -145,7 +148,7 @@ export function parseWien(values: Buffer, locations: string) {
     }
     const total = totalSum / days, heavy = heavySum / days
     if (heavy > total) throw new Error(`Wien station ${id}: truck-like total exceeds all vehicles`)
-    records.push({ street: names.get(id) ?? `ZNR ${id}`, light: Math.round(total - heavy), medium: 0,
+    records.push({ ...roadObservation(`${id}:${year}`, 'both-directions'), street: names.get(id) ?? `ZNR ${id}`, light: Math.round(total - heavy), medium: 0,
       heavy: Math.round(heavy), moto: 0, line: [point] })
   }
   if (records.length < 50) throw new Error('Wien has fewer than50 stations after geometry join')

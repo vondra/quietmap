@@ -72,7 +72,9 @@ pub use crate::city_consts_generated::*;
 /// Returns the best-known default (light, medium, heavy, moto) AADT for a
 /// segment with no spatial / ref / service-tree data. Cascades most-specific
 /// → least-specific: city → country → continent → world. `class` clamps to
-/// the WORLD_DEFAULT array bounds.
+/// the WORLD_DEFAULT array bounds. AUTHORITATIVE for the native producer
+/// (`roads-finalize` allocation); runtime consumers read prepared counts and
+/// never call this.
 pub fn resolve_traffic_default(class: u8, square_country_city: SquareCountryCity) -> Aadt {
     if square_country_city.city_id != 0 {
         if let Some(v) = city_default(square_country_city.city_id, class) {
@@ -87,18 +89,6 @@ pub fn resolve_traffic_default(class: u8, square_country_city: SquareCountryCity
     }
     let idx = (class as usize).min(WORLD_DEFAULT.len() - 1);
     WORLD_DEFAULT[idx]
-}
-
-/// Materialise the per-class cascade once for a fixed SquareCountryCity so hot loops
-/// can index by `road_class` instead of paying for a city/country/
-/// continent lookup per segment. Build at the top of any code path that
-/// processes many segments under a stable SquareCountryCity (e.g. a per-square batch
-/// in the batch road loader or a popup-time receiver
-/// query in `source-reader`).
-pub fn build_traffic_default_cache(
-    square_country_city: SquareCountryCity,
-) -> [Aadt; WORLD_DEFAULT.len()] {
-    std::array::from_fn(|c| resolve_traffic_default(c as u8, square_country_city))
 }
 
 // One arm per (city_id, class). Values reflect each metro's published or

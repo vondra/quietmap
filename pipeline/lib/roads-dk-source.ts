@@ -1,5 +1,7 @@
 /** Parse admitted Vejdirektoratet Mastra traffic-count pages. */
 
+import { roadFeatureObservation } from './pinned-road-lines.js'
+import type { RoadObservation } from './road-observation.js'
 import proj4 from 'proj4'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import { readPinnedRoadSource } from './pinned-road-source.js'
@@ -18,7 +20,7 @@ const DENMARK_BBOX = [54.5, 8, 57.8, 13] as const
 
 proj4.defs('EPSG:25832', '+proj=utm +zone=32 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs')
 
-export interface DanishMastraObservation {
+export interface DanishMastraObservation extends RoadObservation {
   sourceRow: number
   roadNumber: number
   kilometre: number
@@ -108,7 +110,7 @@ export function parseDanishMastraPages(rawPages: readonly string[]): DanishMastr
         continue
       }
       const total = Math.round(totalValue)
-      const observation: DanishMastraObservation = { sourceRow, roadNumber, kilometre, year,
+      const observation: DanishMastraObservation = { sourceRow, ...roadFeatureObservation(feature as object, 'unknown'), roadNumber, kilometre, year,
         latitude, longitude, rank: String(properties?.VEJBESTYRER ?? '').trim() === '0' ? 1 : 4,
         total, ...splitDanishTraffic(total, publishedHeavy) }
       result.admittedRecords++

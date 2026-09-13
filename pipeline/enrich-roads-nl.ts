@@ -111,7 +111,7 @@ export async function enrichNetherlandsRoads(
       (row) => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const record = matchAmsterdamTrafficRecord(row, grid)
-        return record ? {
+        return record ? { countBasis: record.countBasis, observationId: record.observationId,
           light: record.aadt_light,
           medium: record.aadt_medium,
           heavy: record.aadt_heavy,

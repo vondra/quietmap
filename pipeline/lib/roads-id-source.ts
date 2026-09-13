@@ -1,6 +1,6 @@
 /** Load and match Indonesia's pinned Bina Marga network and observed LHRT values. */
 
-import { loadPinnedRoadLines, buildRoadLineVertexGrid, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
+import { pinnedRoadObservation, loadPinnedRoadLines, buildRoadLineVertexGrid, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import type { RoadRow } from './roads-arrow.js'
 import { inBbox } from './spatial.js'
@@ -130,12 +130,14 @@ export function matchIndonesiaRoad(row: RoadRow, source: IndonesiaRoadSource) {
   const multiplier = tierMultiplier(tier)
   let total = 0
   let kind: 'toll' | 'lhrt' | 'regional' | 'national'
-  if (nearestRoadLine(row.midLat, row.midLon, source.toll, 300)) {
+  let line = nearestRoadLine(row.midLat, row.midLon, source.toll, 300)
+  if (line) {
     total = 80_000 * multiplier
     kind = 'toll'
   } else {
     const regional = nearestRoadLine(row.midLat, row.midLon, source.regional, 200)
     if (regional) {
+      line = regional
       const rawLhrt = Number(regional.properties.LHRT ?? 0)
       const lhrt = Number.isFinite(rawLhrt) ? Math.min(Math.max(rawLhrt, 0), 200_000) : 0
       if (lhrt > 0) { total = lhrt; kind = 'lhrt' }
@@ -144,13 +146,13 @@ export function matchIndonesiaRoad(row: RoadRow, source: IndonesiaRoadSource) {
         total = (status.includes('kota') ? 12_000 : status.includes('provinsi') ? 8_000 : 5_000) * multiplier
         kind = 'regional'
       }
-    } else if (nearestRoadLine(row.midLat, row.midLon, source.national, 400)) {
+    } else if ((line = nearestRoadLine(row.midLat, row.midLon, source.national, 400))) {
       total = 30_000 * multiplier
       kind = 'national'
     } else return null
   }
   const traffic = splitVehicles(total, tier)
-  return Object.values(traffic).some(value => value > 0) ? { kind, ...traffic } : null
+  return Object.values(traffic).some(value => value > 0) ? { ...pinnedRoadObservation(line!, kind === 'lhrt' ? 'unknown' : 'both-directions'), kind, ...traffic } : null
 }
 
 export const INDONESIA_ROAD_BBOX = ID_SCAN_BBOX

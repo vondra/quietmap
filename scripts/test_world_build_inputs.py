@@ -93,10 +93,11 @@ class WorldBuildInputsTest(unittest.TestCase):
                 table = pa.table({'value': [37]}).replace_schema_metadata(metadata)
                 with pa.ipc.new_file(path, table.schema) as writer:
                     writer.write_table(table)
-                if layer == 'railways':
-                    with self.assertRaisesRegex(ValueError, 'unfinished railway traffic'):
+                if layer in ('roads', 'railways'):
+                    with self.assertRaisesRegex(ValueError, f'unfinished {layer} traffic'):
                         inputs.audit_world(root)
-                    table = table.replace_schema_metadata({**metadata, b'rail_traffic_contract': b'1', b'qm_blocks': b'AQ=='})
+                    contract = b'road_traffic_contract' if layer == 'roads' else b'rail_traffic_contract'
+                    table = table.replace_schema_metadata({**metadata, contract: b'1', b'qm_blocks': b'AQ=='})
                     with pa.ipc.new_file(path, table.schema) as writer:
                         writer.write_table(table)
             with self.assertRaisesRegex(ValueError, 'no world rows for structures'):

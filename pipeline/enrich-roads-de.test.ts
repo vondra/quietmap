@@ -153,7 +153,7 @@ test('z9 DE pass writes each true source id, updates an existing B stamp and ski
   const cleared = tableFromIPC(readFileSync(target))
   assert.deepEqual([...cleared.getChild('source_id')!], [0, 0, 0])
   for (const field of table.schema.fields) {
-    if (['source_id', 'aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto'].includes(field.name)) continue
+    if (['source_id', 'aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'traffic_count_basis', 'traffic_observation_id', 'traffic_observation_source', 'traffic_estimated'].includes(field.name)) continue
     assert.deepEqual(cleared.getChild(field.name)!.toArray(), table.getChild(field.name)!.toArray())
   }
   const bytes = readFileSync(target), inode = statSync(target).ino

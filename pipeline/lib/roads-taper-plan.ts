@@ -1,8 +1,8 @@
-/** Plan the inherited CZ transition ramps along junction-free road chains. */
+/** Plan CZ speed transitions along junction-free road chains, independently of traffic. */
 
 import { DATASETS } from './enrichment-datasets.js'
-import { classDefault, type PlanningRoad } from './road-planning-input.js'
-import { LEGACY_SPEED, GDP_SCALED_CLASSES, DERESTRICTED_SPEED_KMH } from './road-planning-defaults.generated.js'
+import type { PlanningRoad } from './road-planning-input.js'
+import { LEGACY_SPEED, DERESTRICTED_SPEED_KMH } from './road-planning-defaults.generated.js'
 
 export const TAPER_CLASSES: ReadonlySet<number> = new Set(
   DATASETS.find((d) => d.key === 'osm-transition-taper')!.roadCoverage!,
@@ -17,13 +17,10 @@ const W_ANCHORED_M = 250
 const W_DEFAULT_M = 125
 
 const MIN_SPEED_DIFF_KMH = 3
-const MIN_AADT_RATIO = 0.05
-
-const GDP_SCALED = new Set<number>(GDP_SCALED_CLASSES)
 
 export type CountrySpeeds = readonly [number, number, number, number]
 
-export type Seg = Omit<PlanningRoad, 'ref'>
+export type Seg = Omit<PlanningRoad, 'ref' | 'src' | 'aadt'>
 
 export function resolveSpeed(s: Seg, country: CountrySpeeds): number {
   if (s.speedTag === 255) return DERESTRICTED_SPEED_KMH
@@ -38,37 +35,19 @@ export function resolveSpeed(s: Seg, country: CountrySpeeds): number {
   return v > 0 ? v : (LEGACY_SPEED[s.cls] ?? 50)
 }
 
-const isEnriched = (s: Seg): boolean => s.src !== 0 && s.aadt[0] > 0
-
-export function resolveAadt(s: Seg): readonly [number, number, number, number] | null {
-  if (isEnriched(s)) return s.aadt
-  if (GDP_SCALED.has(s.cls)) return null
-  return classDefault(s.cls)
-}
-
-const total = (a: readonly [number, number, number, number]): number => a[0] + a[1] + a[2] + a[3]
-
 const eligible = (s: Seg): boolean =>
   TAPER_CLASSES.has(s.cls) &&
-  s.src === 0 &&
   s.speedTag === 0 &&
   (s.access === 0 || s.access === 5) &&
   !s.roundabout
 
 export interface PlanEntry {
-  aadt?: readonly [number, number, number, number]
-  speed?: number
-
+  speed: number
   dist: number
 }
 
 export interface TaperStats {
   boundaries: number
-  skippedUnscaled: number
-  speedOnly: number
-  aadtOnly: number
-  both: number
-
   kindCounts: Record<string, number>
 }
 
@@ -77,7 +56,7 @@ export function buildTaperPlan(
   country: CountrySpeeds,
 ): { plan: Map<number, PlanEntry>; stats: TaperStats } {
   const stats: TaperStats = {
-    boundaries: 0, skippedUnscaled: 0, speedOnly: 0, aadtOnly: 0, both: 0, kindCounts: {},
+    boundaries: 0, kindCounts: {},
   }
   const nodeWays = new Map<string, Set<number>>()
   const nodeEdges = new Map<string, number>()
@@ -134,8 +113,7 @@ export function buildTaperPlan(
     start: Seg,
     cameFrom: Seg,
     window: number,
-    anchorSpeed: number | null,
-    anchorAadt: readonly [number, number, number, number] | null,
+    anchorSpeed: number,
   ): void => {
     let prev = cameFrom
     let cur: Seg | null = start
@@ -144,27 +122,13 @@ export function buildTaperPlan(
       if (!eligible(cur)) return
       const dMid = dist + cur.len / 2
       const t = Math.min(1, dMid / window)
-      const entry: PlanEntry = { dist: dMid }
-      if (anchorSpeed !== null) {
-        const own = resolveSpeed(cur, country)
-        const v = Math.round(anchorSpeed + (own - anchorSpeed) * t)
-        if (Math.abs(v - own) >= MIN_SPEED_DIFF_KMH) entry.speed = Math.max(1, Math.min(254, v))
-      }
-      if (anchorAadt !== null) {
-        const own = resolveAadt(cur)
-        if (own) {
-          const graded = [0, 1, 2, 3].map((c) => {
-            const a = Math.max(1, anchorAadt[c])
-            const o = Math.max(1, own[c])
-            return Math.round(Math.exp(Math.log(a) + (Math.log(o) - Math.log(a)) * t))
-          }) as [number, number, number, number]
-          const ratio = Math.abs(total(graded) - total(own)) / Math.max(1, total(own))
-          if (ratio >= MIN_AADT_RATIO) entry.aadt = graded
-        }
-      }
-      if (entry.speed !== undefined || entry.aadt !== undefined) {
+      const own = resolveSpeed(cur, country)
+      const speed = Math.round(anchorSpeed + (own - anchorSpeed) * t)
+      if (Math.abs(speed - own) >= MIN_SPEED_DIFF_KMH) {
         const existing = plan.get(cur.i)
-        if (!existing || existing.dist > dMid) plan.set(cur.i, entry)
+        if (!existing || existing.dist > dMid) {
+          plan.set(cur.i, { dist: dMid, speed: Math.max(1, Math.min(254, speed)) })
+        }
       }
       dist += cur.len
       const next: Array<{ seg: Seg; via: string }> = (neighbours.get(cur.i) ?? []).filter(
@@ -175,22 +139,6 @@ export function buildTaperPlan(
       prev = cur
       cur = next[0].seg
     }
-  }
-  const planSide = (
-    self: Seg,
-    other: Seg,
-    otherEligible: boolean,
-    speedStep: boolean,
-    aadtStep: boolean,
-    otherSpeed: number,
-    midSpeed: number,
-    otherAadt: readonly [number, number, number, number],
-    midAadt: readonly [number, number, number, number],
-  ): void => {
-    const w = otherEligible ? W_DEFAULT_M : W_ANCHORED_M
-    const speedAnchor = speedStep ? (otherEligible ? midSpeed : otherSpeed) : null
-    const aadtAnchor = aadtStep ? (otherEligible ? midAadt : otherAadt) : null
-    if (speedAnchor !== null || aadtAnchor !== null) walk(self, other, w, speedAnchor, aadtAnchor)
   }
   const segByIdx = new Map(segs.map((s) => [s.i, s]))
   for (const [i, links] of neighbours) {
@@ -203,42 +151,21 @@ export function buildTaperPlan(
       const pE = eligible(p)
       const qE = eligible(q)
       if (!pE && !qE) continue
-      const aadtP = resolveAadt(p)
-      const aadtQ = resolveAadt(q)
-      if (!aadtP || !aadtQ) {
-        stats.skippedUnscaled++
-        continue
-      }
       const vP = resolveSpeed(p, country)
       const vQ = resolveSpeed(q, country)
-      const db =
-        Math.abs(10 * Math.log10(Math.max(1, total(aadtQ)) / Math.max(1, total(aadtP)))) +
-        Math.abs(30 * Math.log10(vQ / vP))
-      if (db < TRIGGER_DB) continue
+      if (Math.abs(vQ - vP) < MIN_SPEED_DIFF_KMH || Math.abs(30 * Math.log10(vQ / vP)) < TRIGGER_DB) continue
       stats.boundaries++
 
-      const speedStep = Math.abs(vQ - vP) >= MIN_SPEED_DIFF_KMH
-      const aadtStep =
-        Math.abs(total(aadtQ) - total(aadtP)) / Math.max(1, Math.min(total(aadtP), total(aadtQ))) >= MIN_AADT_RATIO
       const kind =
-        isEnriched(p) !== isEnriched(q) ? 'census-edge'
-        : (p.speedTag > 0) !== (q.speedTag > 0) ? 'speed-tag-edge'
+        (p.speedTag > 0) !== (q.speedTag > 0) ? 'speed-tag-edge'
         : p.cls !== q.cls ? 'class-flip' : 'built-up-flip'
       stats.kindCounts[kind] = (stats.kindCounts[kind] ?? 0) + 1
 
       const midSpeed = (vP + vQ) / 2
-      const midAadt = [0, 1, 2, 3].map((c) =>
-        Math.sqrt(Math.max(1, aadtP[c]) * Math.max(1, aadtQ[c])),
-      ) as [number, number, number, number]
-      if (pE) planSide(p, q, qE, speedStep, aadtStep, vQ, midSpeed, aadtQ, midAadt)
-      if (qE) planSide(q, p, pE, speedStep, aadtStep, vP, midSpeed, aadtP, midAadt)
+      if (pE) walk(p, q, qE ? W_DEFAULT_M : W_ANCHORED_M, qE ? midSpeed : vQ)
+      if (qE) walk(q, p, pE ? W_DEFAULT_M : W_ANCHORED_M, pE ? midSpeed : vP)
     }
   }
 
-  for (const e of plan.values()) {
-    if (e.speed !== undefined && e.aadt !== undefined) stats.both++
-    else if (e.speed !== undefined) stats.speedOnly++
-    else stats.aadtOnly++
-  }
   return { plan, stats }
 }

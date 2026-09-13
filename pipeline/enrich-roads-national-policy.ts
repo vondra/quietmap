@@ -1,5 +1,6 @@
 /** Apply one registered country policy to baked-country z9 roads. */
 
+import { roadObservation } from './lib/road-observation.js'
 import { resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { pathToFileURL } from 'node:url'
@@ -36,7 +37,7 @@ export async function enrichRoadsFromNationalPolicy(
   for (const square of squares) {
     const write = await writeRoadAadt(resolve(preparedDirectory, square, 'roads.arrow'), row => {
       const traffic = policy.traffic(row)
-      return traffic ? { ...traffic, sourceId } : null
+      return traffic ? { ...traffic, sourceId, ...roadObservation({ policy: policy.country, traffic }, 'both-directions') } : null
     }, undefined, policy.coverage, {
       sourceIds: [sourceId],
       when: row => policy.traffic(row) === null,

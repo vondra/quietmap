@@ -55,18 +55,33 @@ empty files; selected rows cannot redefine the observation window.
 
 ## Prepared road direction and traffic
 
-Road `oneway` is non-null UInt8: 0 two-way, 1 forward, 2 reverse. Popup and
-surface loaders reject missing, Boolean, null or out-of-domain direction data,
-including invalid schemas on empty files. Forward and reverse are both one-way
-for the current noise allocation. OSM direction does not establish count basis;
-the existing half-share and EU adapter compensation remain until preparation
-carries explicit source allocation.
+Final road Arrow carries `road_traffic_contract=1`, four non-null Float64
+`aadt_{light,medium,heavy,moto}` values (finite, nonnegative, EFFECTIVE
+vehicles/day for this row) and non-null UInt8 `traffic_estimated`, a bitmask
+0..15 where light=1, medium=2, heavy=4, moto=8 and a set bit marks that
+category's value as an estimate or prior rather than an observed count.
+Build-only source columns (`traffic_count_basis`, `traffic_observation_id`)
+are removed at finalization. Road `oneway` is non-null UInt8: 0 two-way,
+1 forward, 2 reverse. Popup and surface loaders share one strict reader
+(`source_reader::road_traffic::RoadTrafficColumns` plus the `oneway`
+validator) and reject missing contract metadata, wrong column types, nulls,
+non-finite or negative counts, out-of-domain bitmasks and out-of-domain
+direction data, including invalid schemas on empty files.
 
-Any positive enriched light, medium, heavy or motorcycle count prevents class
-traffic substitution. A measured-tier heavy-only count survives an access=no or
-motor_vehicle=no tag without inventing light traffic; tunnels still do not emit.
-Source priority alone does not establish a known zero or distinguish measured
-records from estimates within a mixed source.
+The producer (`roads-finalize`) resolves observations, priors, class defaults,
+directional allocation, lane and access factors before publication; the
+class-default cascade (`noise_compute::defaults::resolve_traffic_default`)
+and the estimate factors (`normalize::road::{access_factor, lane_ratio}`)
+remain authoritative for that build step. Serving consumes the prepared
+counts verbatim: no traffic default, oneway share, lane or access factor is
+re-applied at runtime, and a row stamped `source_id` 0 with positive counts
+is a valid prior. A heavy-only count emits without inventing other classes;
+a true total zero is silent and is never resurrected by a class default;
+tunnels still do not emit. OSM direction never scales a count. Effective
+speed retains the shared posted, taper, country-legal and class-default
+rules. Contributor and segment traces report the dominant segment's four
+class values, the estimated bitmask and the row dataset attribution;
+source and vehicles-per-day units are preserved end to end.
 
 ## Prepared railway traffic
 

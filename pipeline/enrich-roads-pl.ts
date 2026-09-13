@@ -1,5 +1,6 @@
 /** Enrich z9 Polish roads with GDDKiA GPR 2020/2021 measurements. */
 
+import { roadObservation } from './lib/road-observation.js'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { listPreparedSquares } from './lib/prepared-grid.js'
@@ -89,7 +90,7 @@ export async function enrichPolishRoads(
       row => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const segment = match(row)
-        return segment ? {
+        return segment ? { ...roadObservation(segment.sourceId, 'unknown'),
           light: segment.light, medium: segment.medium, heavy: segment.heavy,
           moto: segment.moto, sourceId: SOURCE_ID,
         } : null

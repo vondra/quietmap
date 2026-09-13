@@ -36,8 +36,8 @@ export const METRIC_DEFS: Record<string, MetricDef> = {
   aadt: {
     label: "Traffic",
     description:
-      "Annual Average Daily Traffic — vehicles per 24 h averaged over the year. Uses matched external traffic datasets where available, otherwise local service-road estimates or CNOSSOS road-class defaults.",
-    standard: "Matched traffic datasets / service-tree estimate / CNOSSOS defaults",
+      "Annual Average Daily Traffic — vehicles per 24 h averaged over the year, split into light / medium / heavy / motorcycle classes. Values are prepared at build time from matched traffic datasets, estimates or class priors; each class shows whether its value was counted or estimated.",
+    standard: "Prepared per-class AADT (matched datasets / estimates / class priors)",
   },
   trains: {
     label: "Trains/day",

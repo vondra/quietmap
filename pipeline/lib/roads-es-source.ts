@@ -1,5 +1,6 @@
 /** MITMA 2022 state-road census download and source-faithful parsing. */
 
+import { roadFeatureObservation } from './pinned-road-lines.js'
 import { existsSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
@@ -169,7 +170,7 @@ export function parseMitmaRoadSource(raw: string): MitmaRoadCensus {
     }
 
     census.sections.push({
-      featureId: isRecord(feature) ? String(feature.id ?? index) : String(index),
+      featureId: roadFeatureObservation(feature as object, 'unknown').observationId,
       province: typeof properties.provincia === 'string' ? properties.provincia : '',
       via, ref, lines,
       pkStart: finiteNumber(properties.pkinicio_t),

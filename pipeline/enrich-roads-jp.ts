@@ -1,5 +1,6 @@
 /** Enrich z9 Japanese roads with MLIT census route medians and class fallbacks. */
 
+import type { RoadObservation } from './lib/road-observation.js'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { listPreparedSquares } from './lib/prepared-grid.js'
@@ -14,18 +15,18 @@ const FALLBACK_SOURCE_ID = SOURCE_ID_JP_CLASS_MEDIAN_FALLBACK
 const JAPAN_BBOX = [24, 122, 46, 146] as const
 const COVERED_ROAD_CLASSES: ReadonlySet<number> = new Set([0, 1, 2, 3, 4, 10, 11, 12])
 
-function half(counts: JapaneseVehicleCounts): JapaneseVehicleCounts {
-  return { small: Math.round(counts.small / 2), large: Math.round(counts.large / 2) }
+function half(counts: JapaneseVehicleCounts & RoadObservation): JapaneseVehicleCounts & RoadObservation {
+  return { ...counts, small: Math.round(counts.small / 2), large: Math.round(counts.large / 2) }
 }
 
-function traffic(counts: JapaneseVehicleCounts, sourceId: number): RoadAadt {
+function traffic(counts: JapaneseVehicleCounts & RoadObservation, sourceId: number): RoadAadt {
   const medium = Math.round(counts.large * 0.25)
-  return { light: counts.small, medium, heavy: counts.large - medium, moto: 0, sourceId }
+  return { countBasis: counts.countBasis, observationId: counts.observationId, light: counts.small, medium, heavy: counts.large - medium, moto: 0, sourceId }
 }
 
 export function buildJapaneseRoadMatcher(census: JapaneseRoadCensus): (row: RoadRow) => RoadAadt | null {
-  const expresswayCache = new Map<string, JapaneseVehicleCounts | null>()
-  const expressway = (rawName: string): JapaneseVehicleCounts | null => {
+  const expresswayCache = new Map<string, (JapaneseVehicleCounts & RoadObservation) | null>()
+  const expressway = (rawName: string): (JapaneseVehicleCounts & RoadObservation) | null => {
     const name = normalizeJapaneseRoadIdentity(rawName)
     if (name.length < 4) return null
     if (expresswayCache.has(name)) return expresswayCache.get(name) ?? null
@@ -42,7 +43,7 @@ export function buildJapaneseRoadMatcher(census: JapaneseRoadCensus): (row: Road
     expresswayCache.set(name, counts)
     return counts
   }
-  const national = (row: RoadRow): JapaneseVehicleCounts | null => {
+  const national = (row: RoadRow): (JapaneseVehicleCounts & RoadObservation) | null => {
     if (row.roadClass === 1 || row.roadClass === 11) {
       for (const token of (row.ref ?? '').split(/[;,/]/)) {
         const ref = leadingJapaneseRoadDigits(token)

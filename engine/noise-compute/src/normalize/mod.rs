@@ -10,7 +10,7 @@ use crate::types::NUM_BANDS;
 
 mod points;
 mod rail;
-mod road;
+pub mod road;
 
 pub use points::{
     prepare_building_points, prepare_industrial_points, prepare_leisure_points, PreparedPoint,
@@ -18,8 +18,9 @@ pub use points::{
 };
 pub use rail::{normalize_rail, NormalizedRail, RailCategoryTraffic, RailTraffic, RawRailInput};
 pub use road::{
-    lane_ratio, nominal_road_aadt, normalize_road, normalize_road_segment,
-    normalize_road_with_cache, road_max_distance_m, NormalizedRoad, RawRoadInput,
+    normalize_road, normalize_road_segment, road_max_distance_m, NormalizedRoad, RawRoadInput,
+    RoadTraffic, ROAD_ESTIMATED_HEAVY, ROAD_ESTIMATED_LIGHT, ROAD_ESTIMATED_MEDIUM,
+    ROAD_ESTIMATED_MOTO,
 };
 
 /// `speed_limit` sentinel for OSM `maxspeed=none` (derestricted, e.g.

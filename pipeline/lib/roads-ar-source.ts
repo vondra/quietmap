@@ -1,6 +1,6 @@
 /** Load and match Argentina's pinned TMDA observations and DNV road classifications. */
 
-import { buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
+import { pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import type { RoadRow } from './roads-arrow.js'
 import { inBbox } from './spatial.js'
@@ -120,16 +120,18 @@ export function matchArgentinaRoad(row: RoadRow, source: ArgentinaRoadSource) {
   const tier = cityTier(row.midLat, row.midLon)
   const multiplier = tierMultiplier(tier)
   const observed = nearestRoadLine(row.midLat, row.midLon, source.tmda, 300)
+  let observation = observed ? pinnedRoadObservation(observed, 'unknown') : null
   let total: number, kind: 'tmda' | 'dnv-national' | 'dnv-provincial'
   if (observed) { total = tmdaAadt(observed) * multiplier; kind = 'tmda' }
   else {
     const classified = nearestRoadLine(row.midLat, row.midLon, source.dnv, 400)
     if (!classified) return null
+    observation = pinnedRoadObservation(classified, 'both-directions')
     const national = classified.relativePath.endsWith('roads-national.geojson')
     total = dnvAadt(classified, national) * multiplier
     kind = national ? 'dnv-national' : 'dnv-provincial'
   }
-  return { kind, ...splitVehicles(total, tier) }
+  return { kind, ...observation!, ...splitVehicles(total, tier) }
 }
 
 export const ARGENTINA_ROAD_BBOX = AR_BBOX

@@ -108,7 +108,7 @@ fn write_pbf_blob(out: &mut Vec<u8>, kind: &str, payload: &[u8]) {
 }
 
 /// Encode the fixture as an uncompressed OSM PBF (header + one data block).
-fn write_fixture_pbf(path: &Path) {
+fn write_fixture_pbf(path: &Path, nodes: &[(i64, f64, f64)]) {
     let mut pbf = Vec::new();
     let mut header_block = Vec::new();
     push_bytes_field(&mut header_block, 4, b"OsmSchema-V0.6"); // required_features
@@ -126,12 +126,12 @@ fn write_fixture_pbf(path: &Path) {
     push_packed_sint64_deltas(
         &mut dense,
         1,
-        &NODES.iter().map(|&(id, _, _)| id).collect::<Vec<_>>(),
+        &nodes.iter().map(|&(id, _, _)| id).collect::<Vec<_>>(),
     );
     push_packed_sint64_deltas(
         &mut dense,
         8,
-        &NODES
+        &nodes
             .iter()
             .map(|&(_, lat, _)| (lat * 1e7).round() as i64)
             .collect::<Vec<_>>(),
@@ -139,7 +139,7 @@ fn write_fixture_pbf(path: &Path) {
     push_packed_sint64_deltas(
         &mut dense,
         9,
-        &NODES
+        &nodes
             .iter()
             .map(|&(_, _, lon)| (lon * 1e7).round() as i64)
             .collect::<Vec<_>>(),
@@ -255,7 +255,7 @@ fn hand_built_pbf_yields_exact_source_topology_and_matching_arrow_pieces() {
     let root = TempDir::new("run");
     let input = root.path().join("fixture.osm.pbf");
     let output = root.path().join("prepared");
-    write_fixture_pbf(&input);
+    write_fixture_pbf(&input, NODES);
 
     let run = Command::new(env!("CARGO_BIN_EXE_osm-extract"))
         .arg("--input")
@@ -423,4 +423,33 @@ fn hand_built_pbf_yields_exact_source_topology_and_matching_arrow_pieces() {
             assert_eq!(arrow_keys, keys, "{family} rows in {square}");
         }
     }
+}
+
+#[test]
+fn node_cache_cap_is_checked_before_the_selected_node_filter() {
+    let root = TempDir::new("node-cap");
+    let input = root.path().join("fixture.osm.pbf");
+    let output = root.path().join("prepared");
+    let mut nodes = NODES.to_vec();
+    nodes.push((25_000_000_000, 50.0, 14.0));
+    write_fixture_pbf(&input, &nodes);
+    let run = Command::new(env!("CARGO_BIN_EXE_osm-extract"))
+        .arg("--input")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output)
+        .arg("--node-cache")
+        .arg(root.path().join("nodes.cache"))
+        .arg("--spill-dir")
+        .arg(root.path().join("spill"))
+        .arg("--num-buckets")
+        .arg("1")
+        .env("QM_OSM_ONLY", "roads,railways")
+        .env("RAYON_NUM_THREADS", "2")
+        .output()
+        .expect("spawn osm-extract");
+    assert!(!run.status.success());
+    assert!(String::from_utf8_lossy(&run.stderr).contains("MAX_NODE_ID"));
+    assert!(!output.exists());
+    assert!(!root.path().join("prepared.transport.sqlite").exists());
 }

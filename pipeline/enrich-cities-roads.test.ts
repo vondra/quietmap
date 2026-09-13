@@ -17,7 +17,7 @@ import { enrichMunicipalRoads } from './enrich-cities-roads.js'
 const directory = mkdtempSync(resolve(tmpdir(), 'municipal-road-tests-'))
 after(() => rmSync(directory, { recursive: true, force: true }))
 const coverage = new Set([1, 2, 3, 4, 5, 9, 11, 12])
-const record = (street: string, line?: CityRoadRecord['line']): CityRoadRecord => ({ street, light: 9000, medium: 10, heavy: 500, moto: 0, ...(line ? { line } : {}) })
+const record = (street: string, line?: CityRoadRecord['line']): CityRoadRecord => ({ countBasis: 'unknown', observationId: street, street, light: 9000, medium: 10, heavy: 500, moto: 0, ...(line ? { line } : {}) })
 function row(name: string, roadClass: number, offsetM: number, vertical = false): RoadRow {
   const lat = 48.2 + offsetM / 110540, lon = 16.37
   return { name, roadClass, startLat: lat, startLon: lon, endLat: vertical ? lat + 0.0008 : lat,
@@ -78,9 +78,9 @@ test('city/native priorities, hole and foreign ownership preserve IPC geometry, 
   assert.equal(result[0].matched, 1)
   const output = tableFromIPC(readFileSync(path))
   assert.deepEqual(output.getChild('source_id')!.toArray(), new Uint16Array([9003, 20, 20, 20, 9004, 0]))
-  assert.deepEqual(output.schema.metadata, split.schema.metadata)
+  assert.deepEqual(output.schema.metadata, new Map([...split.schema.metadata, ['road_traffic_contract', '0']]))
   assert.deepEqual(output.batches.map(b => b.numRows), [3, 3])
-  for (const field of split.schema.fields) if (!['source_id', 'aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto'].includes(field.name)) assert.deepEqual(output.getChild(field.name)!.toArray(), split.getChild(field.name)!.toArray())
+  for (const field of split.schema.fields) if (!['source_id', 'aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'traffic_count_basis', 'traffic_observation_id', 'traffic_observation_source', 'traffic_estimated'].includes(field.name)) assert.deepEqual(output.getChild(field.name)!.toArray(), split.getChild(field.name)!.toArray())
   const before = readFileSync(path), stat = statSync(path, { bigint: true })
   assert.equal((await enrichMunicipalRoads(root, [selected]))[0].updated, 0)
   assert.deepEqual(readFileSync(path), before)

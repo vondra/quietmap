@@ -23,7 +23,8 @@ export function splitAADT(trips: number, fleet: CountryFleet): RoadAadt {
   const total = Math.round(Math.max(trips, 20))
   const medium = Math.round(total * LOCAL_MEDIUM_SHARE), heavy = Math.round(total * LOCAL_HEAVY_SHARE)
   const moto = Math.round(total * fleet.motoTrafficShare)
-  return { light: total - medium - heavy - moto, medium, heavy, moto, sourceId: SOURCE_ID_SERVICE_TREE_HEURISTIC }
+  return { light: total - medium - heavy - moto, medium, heavy, moto, sourceId: SOURCE_ID_SERVICE_TREE_HEURISTIC,
+    countBasis: 'allocated', observationId: '' }
 }
 
 export function readServiceRoads(table: Table): { roads: ServiceRoad[]; fleets: CountryFleet[]; unknownCountryRows: number } {

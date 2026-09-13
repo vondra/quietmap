@@ -76,7 +76,7 @@ export async function enrichFrenchRoads(
       (row) => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const section = match(row)
-        return section ? {
+        return section ? { countBasis: section.countBasis, observationId: section.observationId,
           light: section.aadt_light,
           medium: section.aadt_medium,
           heavy: section.aadt_heavy,

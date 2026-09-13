@@ -1653,6 +1653,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "roads-finalize"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-batching",
+ "grid",
+ "noise-compute",
+ "rusqlite",
+]
+
+[[package]]
 name = "rtree_rs"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,5 +1,6 @@
 /** Enrich Thailand roads from pinned DRR counts and explicit DOH corridor policies. */
 
+import { roadObservation } from './lib/road-observation.js'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { listPreparedSquares } from './lib/prepared-grid.js'
@@ -36,15 +37,15 @@ export function matchThailandRoad(row: RoadRow, source: ThailandDrrSource) {
   const ref = row.ref?.trim()
   if (!ref) return null
   const direct = source.records.get(ref)
-  if (direct) return { kind: 'drr' as const, ...thailandDrrTraffic(direct) }
+  if (direct) return { ...roadObservation(direct.roadCode, 'unknown'), kind: 'drr' as const, ...thailandDrrTraffic(direct) }
   const bangkok = inBbox(row.midLat, row.midLon, BANGKOK_BBOX)
   for (const token of ref.split(/[;,]/).map(value => value.trim()).filter(Boolean)) {
     const motorway = MOTORWAY_AADT[token]
-    if (motorway) return { kind: 'motorway' as const, ...policyTraffic(motorway, bangkok) }
+    if (motorway) return { ...roadObservation({ policy: 'motorway', token, bangkok }, 'both-directions'), kind: 'motorway' as const, ...policyTraffic(motorway, bangkok) }
   }
   for (const token of ref.split(/[;,]/).map(value => value.trim()).filter(Boolean)) {
     const trunk = TRUNK_AADT[token]
-    if (trunk) return { kind: 'trunk' as const,
+    if (trunk) return { ...roadObservation({ policy: 'trunk', token, bangkok }, 'both-directions'), kind: 'trunk' as const,
       ...policyTraffic(bangkok ? trunk.bangkok : trunk.rural, bangkok) }
   }
   return null
@@ -59,7 +60,7 @@ export async function enrichThailandRoads(preparedDirectory: string, source: Tha
     const match = (row: RoadRow) => matchThailandRoad(row, source)
     const write = await writeRoadAadt(resolve(preparedDirectory, square, 'roads.arrow'), row => {
       const traffic = match(row)
-      return traffic ? { light: traffic.light, medium: traffic.medium, heavy: traffic.heavy,
+      return traffic ? { countBasis: traffic.countBasis, observationId: traffic.observationId, light: traffic.light, medium: traffic.medium, heavy: traffic.heavy,
         moto: traffic.moto, sourceId: traffic.kind === 'drr' ? SOURCE_ID_TH_NATIONAL_ROADS : SOURCE_ID_TH_ROAD_CLASSIFICATION_FALLBACK } : null
     }, (_row, _index, traffic) => {
       const kind = match(_row)?.kind

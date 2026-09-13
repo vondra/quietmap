@@ -5,7 +5,7 @@ import { after, test } from 'node:test'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Int32, RecordBatch, Schema, Table, tableFromIPC, tableToIPC, vectorFromArray } from 'apache-arrow'
+import { Int16, Int32, Int64, Uint8, RecordBatch, Schema, Table, tableFromIPC, tableToIPC, vectorFromArray } from 'apache-arrow'
 import { encodeQmBlocks, writeRoadsFixture } from './lib/road-test-fixture.js'
 import { segmentGeometryReader } from './lib/prepared-grid.js'
 import { parseEuropeanCityTraffic } from './lib/roads-europe-source.js'
@@ -86,17 +86,15 @@ test('whole road rows across a z9 boundary receive four-class totals without cha
   assert.equal(result.matched, 2)
   const after = tableFromIPC(readFileSync(path))
   assert.deepEqual(after.batches.map(batch => batch.numRows), [1, 3])
-  assert.deepEqual(after.schema.metadata, beforeTable.schema.metadata)
+  assert.deepEqual(after.schema.metadata, new Map([...beforeTable.schema.metadata, ['road_traffic_contract', '0']]))
   for (const field of beforeTable.schema.fields) {
-    if (['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'source_id'].includes(field.name)) continue
+    if (['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'source_id', 'traffic_count_basis', 'traffic_observation_id', 'traffic_observation_source', 'traffic_estimated'].includes(field.name)) continue
     assert.deepEqual(after.schema.fields.find(candidate => candidate.name === field.name), field)
     assert.deepEqual(after.getChild(field.name)!.toArray(), beforeTable.getChild(field.name)!.toArray())
   }
   for (const index of [2, 3]) {
-    // Legacy directional storage compensation remains paired with the
-    // normalizer's oneway half-share until source basis is stored explicitly.
     assert.deepEqual(['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'source_id']
-      .map(name => after.getChild(name)!.get(index)), [1660, 40, 200, 100, 10])
+      .map(name => after.getChild(name)!.get(index)), [830, 20, 100, 50, 10])
   }
   for (const index of [0, 1]) {
     for (const field of beforeTable.schema.fields) {
@@ -109,4 +107,63 @@ test('whole road rows across a z9 boundary receive four-class totals without cha
   assert.deepEqual(readFileSync(path), beforeRerun)
   assert.equal(statSync(path).ino, stat.ino)
   assert.equal(statSync(path).mtimeMs, stat.mtimeMs)
+})
+
+test('one directional observation chooses one current way across owners; two-way counts remain shared', async () => {
+  for (const scenario of [
+    { name: 'missing-id', sourceOsmId: null, directional: true, expected: [10, 10, 0] },
+    { name: 'stale-id', sourceOsmId: 999, directional: true, expected: [10, 10, 0] },
+    { name: 'retained-id', sourceOsmId: 200, directional: true, expected: [0, 0, 10] },
+    { name: 'both-directions', sourceOsmId: null, directional: false, expected: [10, 10, 10] },
+  ]) {
+    const prepared = join(temporary, scenario.name)
+    const input = writeRoadsFixture(`eu-${scenario.name}.arrow`, [3, 3, 3], { sourceIds: [0, 0, 0] })
+    let table = tableFromIPC(readFileSync(input))
+    const y = Number(table.getChild('start_gy')!.get(0))
+    for (const [name, values] of Object.entries({
+      start_gx: [2 ** 29 - 400, 2 ** 29 - 400, 2 ** 29 + 400],
+      end_gx: [2 ** 29 - 400, 2 ** 29 - 400, 2 ** 29 + 400],
+      start_gy: [y, y + 400, y + 800], end_gy: [y + 400, y + 800, y],
+    })) table = table.setChild(name, vectorFromArray(values, new Int32()))
+    table = table.setChild('osm_id', vectorFromArray([100n, 100n, 200n], new Int64()))
+    const columns = Object.fromEntries(table.schema.fields.map(field => [field.name, table.getChild(field.name)!]))
+    columns.segment_idx = vectorFromArray([0, 1, 0], new Int16())
+    columns.oneway = vectorFromArray([1, 1, 1], new Uint8())
+    const shape = new Table(columns)
+    table = new Table(new Schema(shape.schema.fields, table.schema.metadata), shape.batches)
+    const paths = ['z9/255/173', 'z9/256/173'].map(square => join(prepared, square, 'roads.arrow'))
+    for (const [index, path] of paths.entries()) {
+      mkdirSync(join(path, '..'), { recursive: true })
+      writeFileSync(path, tableToIPC(index === 0 ? table.slice(0, 2) : table.slice(2), 'file'))
+    }
+    const feature = traffic(segmentGeometryReader(table).row(0))
+    const observation = city({ ...feature, properties: { ...feature.properties,
+      AADT: 10000, TR_AADT: 1000, '2W_AADT': 500, raw_oneway: scenario.directional,
+      ...(scenario.sourceOsmId === null ? {} : { osmid: scenario.sourceOsmId }),
+    } })
+    if (scenario.name === 'missing-id') {
+      // A prior snapshot stamped both ways under a different observation identity.
+      const previous = city({ ...feature, properties: { ...feature.properties, raw_oneway: false } })
+      assert.equal((await enrichEuropeanRoads(prepared, [previous])).matched, 3)
+    }
+    assert.equal((await enrichEuropeanRoads(prepared, [observation])).squares, 2)
+    const output = paths.flatMap(path => {
+      const result = tableFromIPC(readFileSync(path))
+      return Array.from({ length: result.numRows }, (_, i) => ({
+        source: Number(result.getChild('source_id')!.get(i)),
+        id: result.getChild('traffic_observation_id')!.get(i),
+        basis: result.getChild('traffic_count_basis')!.get(i),
+        counts: ['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto'].map(name => result.getChild(name)!.get(i)),
+      }))
+    })
+    assert.deepEqual(output.map(row => row.source), scenario.expected, scenario.name)
+    for (const row of output.filter(row => row.source === 10)) {
+      assert.deepEqual(row.counts, [8300, 200, 1000, 500], scenario.name)
+      assert.equal(row.id, observation.records[0].observationId)
+      assert.equal(row.basis, scenario.directional ? 1 : 2)
+    }
+    const before = paths.map(path => readFileSync(path))
+    assert.equal((await enrichEuropeanRoads(prepared, [observation])).squaresUpdated, 0)
+    paths.forEach((path, index) => assert.deepEqual(readFileSync(path), before[index]))
+  }
 })

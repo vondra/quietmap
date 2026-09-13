@@ -367,6 +367,26 @@ class StructuralRecovery(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'changed verified'):
                 MODULE.validate_selected_sources(root, {day})
 
+    def test_recovered_source_directory_move_preserves_inspection_but_changed_file_does_not(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'work'
+            day, _ = create_recovery_catalog(root)
+            MODULE.recover_sources(root, {day}, 0)
+            destination = root.with_name('source')
+            root.rename(destination)
+            with sqlite3.connect(destination / 'catalog.sqlite') as database:
+                rows = database.execute('SELECT path FROM verified').fetchall()
+                for (old,) in rows:
+                    new = destination / Path(old).relative_to(root)
+                    database.execute('UPDATE verified SET path=? WHERE path=?', (str(new), old))
+            with patch.object(MODULE, 'check_archive_continuity', side_effect=AssertionError('unchanged files need no rescan')):
+                selected = MODULE.validate_selected_sources(destination, {day})
+            self.assertTrue(all('prod' in asset[5] for asset, _, _ in selected))
+            source = Path(selected[0][1])
+            source.write_bytes(source.read_bytes() + bytes(512))
+            with self.assertRaisesRegex(ValueError, 'changed verified'):
+                MODULE.validate_selected_sources(destination, {day})
+
     def test_recovery_acquires_only_authenticated_alternatives_in_separate_native_parents(self):
         for preferred_kind in ('staging', 'prod'):
             with self.subTest(preferred_kind=preferred_kind), tempfile.TemporaryDirectory() as directory:

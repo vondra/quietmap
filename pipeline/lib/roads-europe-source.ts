@@ -5,6 +5,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { SOURCE_ID_EU_CITY_TRAFFIC } from './source-ids.generated.js'
 import type { RoadAadt } from './roads-arrow.js'
+import { roadObservation } from './road-observation.js'
 
 export const EUROPEAN_TRAFFIC_CITIES = [
   'Vienna', 'Brno', 'Copenhagen', 'Helsinki', 'Paris', 'Grenoble', 'Toulouse',
@@ -17,7 +18,7 @@ export const EUROPEAN_TRAFFIC_CITIES = [
 export interface EuropeanTrafficRecord extends RoadAadt {
   latitude: number
   longitude: number
-  countBasis: 'directional' | 'both-directions' | 'unknown'
+  sourceOsmId: number | null
   rawOneway: unknown
   rawDirection: unknown
   osmOneway: unknown
@@ -105,15 +106,12 @@ export function parseEuropeanCityTraffic(city: string, path: string, bytes: Buff
       result.rejected.push({ feature: index, reason: 'components_exceed_total', total, truck, motorcycle })
       continue
     }
-    // Preserve the legacy compensation paired with normalize_road's half-share.
-    // Source/OSM disagreement remains unresolved until basis reaches the writer.
-    const factor = properties.raw_oneway === true ? 2 : 1
-    const storageTotal = Math.round(total) * factor
-    const heavy = Math.round(truck) * factor
-    const moto = Math.round(motorcycle) * factor
-    const mediumEstimate = Math.min(Math.max(0, storageTotal - heavy - moto), storageTotal * 0.02)
+    const roundedTotal = Math.round(total)
+    const heavy = Math.round(truck)
+    const moto = Math.round(motorcycle)
+    const mediumEstimate = Math.min(Math.max(0, roundedTotal - heavy - moto), roundedTotal * 0.02)
     const counts = {
-      light: Math.max(0, Math.round(storageTotal - heavy - moto - mediumEstimate)),
+      light: Math.max(0, Math.round(roundedTotal - heavy - moto - mediumEstimate)),
       medium: Math.max(0, Math.round(mediumEstimate)), heavy, moto,
     }
     if (Object.values(counts).some(count => !Number.isSafeInteger(count) || count > 2_147_483_647)) {
@@ -125,8 +123,14 @@ export function parseEuropeanCityTraffic(city: string, path: string, bytes: Buff
     }
     result.records.push({ latitude: point[1], longitude: point[0], ...counts,
       sourceId: SOURCE_ID_EU_CITY_TRAFFIC,
-      countBasis: properties.raw_oneway === true ? 'directional'
-        : properties.raw_oneway === false ? 'both-directions' : 'unknown',
+      ...roadObservation({ city, feature: index, observation: feature },
+        properties.raw_oneway === true ? 'directional'
+          : properties.raw_oneway === false ? 'both-directions' : 'unknown'),
+      sourceOsmId: typeof properties.osmid === 'number' && Number.isSafeInteger(properties.osmid)
+        && properties.osmid > 0 ? properties.osmid : null,
+      estimatedClasses: /estimat/i.test(String(properties.raw_techno ?? '')) ? 15
+        : 3 | (properties.TR_AADT == null && properties.TR_AAWT == null ? 4 : 0)
+          | (properties['2W_AADT'] == null && properties['2W_AAWT'] == null ? 8 : 0),
       rawOneway: properties.raw_oneway ?? null,
       rawDirection: properties.raw_direction ?? null,
       osmOneway: properties.osm_oneway ?? null,

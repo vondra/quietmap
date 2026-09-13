@@ -78,7 +78,7 @@ export class SourceTransportTopology implements Disposable {
   private readonly pieceById: StatementSync
   private readonly aliases = new Map<string, string>()
 
-  constructor(preparedDirectory: string) {
+  constructor(preparedDirectory: string, private readonly family: 'roads' | 'railways' = 'railways') {
     this.database = new DatabaseSync(transportTopologyPath(preparedDirectory), { readOnly: true })
     try {
       if (this.database.prepare('PRAGMA user_version').get()?.user_version !== 2) {
@@ -88,17 +88,17 @@ export class SourceTransportTopology implements Disposable {
         SELECT CAST(p.way_id AS TEXT) AS way_id, p.segment_idx,
                p.start_vertex, p.start_fraction, p.end_vertex, p.end_fraction
         FROM source_pieces p JOIN source_ways w ON w.osm_id = p.way_id
-        WHERE p.square = ? AND w.family = 'railways' ORDER BY p.way_id, p.segment_idx`)
+        WHERE p.square = ? AND w.family = ? ORDER BY p.way_id, p.segment_idx`)
       this.wayPieces = this.database.prepare(`
         SELECT segment_idx, square, start_vertex, start_fraction, end_vertex, end_fraction
         FROM source_pieces WHERE way_id = ? ORDER BY start_vertex, start_fraction`)
       this.pieceById = this.database.prepare(`
         SELECT square, start_vertex, start_fraction, end_vertex, end_fraction
         FROM source_pieces WHERE way_id = ? AND segment_idx = ?`)
-      this.way = this.database.prepare("SELECT nodes_json FROM source_ways WHERE osm_id = ? AND family = 'railways'")
+      this.way = this.database.prepare("SELECT nodes_json FROM source_ways WHERE osm_id = ? AND family = ?")
       for (const row of this.database.prepare(`
         SELECT CAST(node_id AS TEXT) AS node_id, CAST(canonical_node AS TEXT) AS canonical_node
-        FROM node_aliases WHERE family = 'railways'`).iterate()) {
+        FROM node_aliases WHERE family = ?`).iterate(this.family)) {
         this.aliases.set(row.node_id as string, row.canonical_node as string)
       }
     } catch (error) {
@@ -107,8 +107,8 @@ export class SourceTransportTopology implements Disposable {
     }
   }
 
-  private railWayNodes(id: string): SourceNode[] | undefined {
-    const row = this.way.get(id)
+  private wayNodes(id: string): SourceNode[] | undefined {
+    const row = this.way.get(id, this.family)
     if (!row) return undefined
     const nodes = JSON.parse(row.nodes_json as string) as SourceNode[]
     for (const node of nodes) node[0] = this.aliases.get(node[0]) ?? node[0]
@@ -137,7 +137,7 @@ export class SourceTransportTopology implements Disposable {
         unsupportedMembers.push([`${type}${wayId}`, role])
         continue
       }
-      const nodes = this.railWayNodes(wayId)
+      const nodes = this.wayNodes(wayId)
       if (!nodes || nodes.length < 2 || nodes.some(node => node[1] === null)) {
         missingWays.push(`w${wayId}`)
         continue
@@ -182,7 +182,7 @@ export class SourceTransportTopology implements Disposable {
   }
 
   passagePieces(passage: { way: string; from: number; to: number }): SourcePiecePassage[] {
-    const nodes = this.railWayNodes(passage.way)
+    const nodes = this.wayNodes(passage.way)
     if (!nodes) throw new Error(`source railway missing for passage ${passage.way}`)
     const distances = sourceNodeDistances(nodes)
     const lower = Math.min(passage.from, passage.to), upper = Math.max(passage.from, passage.to)
@@ -212,7 +212,7 @@ export class SourceTransportTopology implements Disposable {
   }
 
   pieceExtent(wayId: string, segmentIndex: number): { square: string; from: number; to: number } {
-    const nodes = this.railWayNodes(wayId)
+    const nodes = this.wayNodes(wayId)
     if (!nodes) throw new Error(`source railway missing for piece ${wayId}:${segmentIndex}`)
     const distances = sourceNodeDistances(nodes)
     const row = this.pieceById.get(wayId, segmentIndex) as
@@ -229,6 +229,12 @@ export class SourceTransportTopology implements Disposable {
     return { square: row.square, from, to }
   }
 
+  *squares(): Generator<string> {
+    for (const row of this.database.prepare(`
+      SELECT DISTINCT p.square FROM source_pieces p JOIN source_ways w ON w.osm_id=p.way_id
+      WHERE w.family=?`).iterate(this.family)) yield row.square as string
+  }
+
   squarePieces(square: string): Map<string, SegmentEndpointKeys> {
     const result = new Map<string, SegmentEndpointKeys>()
     let wayId = ''
@@ -238,11 +244,11 @@ export class SourceTransportTopology implements Disposable {
       if (fraction > 0) return `way:${wayId}:${vertex}+${fraction}`
       return `node:${nodes[vertex][0]}`
     }
-    for (const raw of this.pieces.iterate(square)) {
+    for (const raw of this.pieces.iterate(square, this.family)) {
       const piece = raw as unknown as SourcePiece
       if (piece.way_id !== wayId) {
         wayId = piece.way_id
-        nodes = this.railWayNodes(wayId)!
+        nodes = this.wayNodes(wayId)!
       }
       result.set(transportPieceKey(wayId, piece.segment_idx), {
         startKey: endpointKey(piece.start_vertex, piece.start_fraction),

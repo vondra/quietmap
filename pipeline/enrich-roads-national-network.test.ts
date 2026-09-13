@@ -13,7 +13,7 @@ const road = (latitude: number, longitude: number): RoadRow => ({
   osmId: 1, existingSourceId: 0,
 })
 const line = (properties: Record<string, unknown>): PinnedRoadLine => ({
-  coordinates: [[-46.7, -23.6], [-46.6, -23.5]], properties, relativePath: 'br/test',
+  observationId: 'fixture', coordinates: [[-46.7, -23.6], [-46.6, -23.5]], properties, relativePath: 'br/test',
 })
 
 test('network proxy registry coverage agrees with the source registry', () => {

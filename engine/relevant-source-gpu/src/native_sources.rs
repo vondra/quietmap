@@ -63,7 +63,9 @@ pub fn load_sources(
                     .map_err(anyhow::Error::msg)?;
             }
             if name == "roads" {
-                RoadDirections::read(&RecordBatch::new_empty(reader.schema()))
+                let empty = RecordBatch::new_empty(reader.schema());
+                RoadDirections::read(&empty).map_err(anyhow::Error::msg)?;
+                source_reader::road_traffic::RoadTrafficColumns::read(&empty)
                     .map_err(anyhow::Error::msg)?;
             }
             if name == "railways" {
@@ -78,8 +80,11 @@ pub fn load_sources(
             let mut row_base = 0_u64;
             for batch in reader {
                 let batch = batch?;
-                let road_directions = (name == "roads")
-                    .then(|| RoadDirections::read(&batch))
+                if name == "roads" {
+                    RoadDirections::read(&batch).map_err(anyhow::Error::msg)?;
+                }
+                let road_traffic = (name == "roads")
+                    .then(|| source_reader::road_traffic::RoadTrafficColumns::read(&batch))
                     .transpose()
                     .map_err(anyhow::Error::msg)?;
                 let rail_traffic = (name == "railways")
@@ -94,10 +99,8 @@ pub fn load_sources(
                             if let Some(device) = line(
                                 &batch,
                                 row,
-                                road_directions
-                                    .as_ref()
-                                    .is_some_and(|directions| directions.is_oneway(row)),
                                 rail_traffic.as_ref().map(|columns| columns.row(row)),
+                                road_traffic.as_ref().map(|columns| columns.row(row)),
                                 frame,
                             )? {
                                 sources.push(SurfaceSource {
@@ -191,11 +194,6 @@ fn short(batch: &RecordBatch, name: &str, row: usize) -> u16 {
         .filter(|c| !c.is_null(row))
         .map_or(0, |c| c.value(row))
 }
-fn integer(batch: &RecordBatch, name: &str, row: usize) -> i32 {
-    col_i32(batch, name)
-        .filter(|c| !c.is_null(row))
-        .map_or(0, |c| c.value(row))
-}
 fn boolean(batch: &RecordBatch, name: &str, row: usize) -> bool {
     col_bool(batch, name)
         .filter(|c| !c.is_null(row))
@@ -224,8 +222,8 @@ fn emission_linear(periods: ([f32; 8], [f32; 8], [f32; 8])) -> [f32; 24] {
 fn line(
     batch: &RecordBatch,
     row: usize,
-    oneway: bool,
     rail_traffic: Option<RailTraffic>,
+    road_traffic: Option<RoadTraffic>,
     frame: &RegionMetricFrame,
 ) -> Result<Option<DeviceLineSource>> {
     let start = position(batch, row, "start")?;
@@ -253,15 +251,8 @@ fn line(
                 speed_limit: byte(batch, "speed_limit", row),
                 speed_taper: byte(batch, "speed_taper", row),
                 surface_type: byte(batch, "surface_type", row),
-                oneway,
-                lanes: byte(batch, "lanes", row),
-                aadt_light: integer(batch, "aadt_light", row),
-                aadt_medium: integer(batch, "aadt_medium", row),
-                aadt_heavy: integer(batch, "aadt_heavy", row),
-                aadt_moto: integer(batch, "aadt_moto", row),
-                provenance: noise_compute::sources::provenance_of(short(batch, "source_id", row)),
+                traffic: road_traffic.context("road row without prepared traffic")?,
                 tunnel: boolean(batch, "tunnel", row),
-                access: byte(batch, "access", row),
                 junction: byte(batch, "junction", row),
                 built_up: byte(batch, "built_up", row),
             },
@@ -316,15 +307,27 @@ mod completeness_tests {
     #[test]
     fn native_road_direction_contract_rejects_invalid_data_and_matches_popup() {
         use arrow::array::{
-            ArrayRef, BooleanArray, Int32Array, Int64Array, UInt16Array, UInt8Array,
+            ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, UInt16Array,
+            UInt8Array,
         };
+        use arrow::datatypes::{Field, Schema};
         use std::sync::Arc;
         let batch = |direction: Option<ArrayRef>| {
             let mut columns: Vec<(&str, ArrayRef)> = vec![
                 ("osm_id", Arc::new(Int64Array::from(vec![1, 2, 3]))),
                 ("country_iso", Arc::new(UInt16Array::from(vec![0; 3]))),
                 ("source_id", Arc::new(UInt16Array::from(vec![10; 3]))),
-                ("aadt_light", Arc::new(Int32Array::from(vec![10000; 3]))),
+                (
+                    "aadt_light",
+                    Arc::new(Float64Array::from(vec![10_000.0; 3])),
+                ),
+                ("aadt_medium", Arc::new(Float64Array::from(vec![0.0; 3]))),
+                ("aadt_heavy", Arc::new(Float64Array::from(vec![0.0; 3]))),
+                ("aadt_moto", Arc::new(Float64Array::from(vec![0.0; 3]))),
+                (
+                    "traffic_estimated",
+                    Arc::new(UInt8Array::from(vec![1; 3])),
+                ),
                 ("road_class", Arc::new(UInt8Array::from(vec![2; 3]))),
                 ("speed_limit", Arc::new(UInt8Array::from(vec![50; 3]))),
             ];
@@ -339,7 +342,21 @@ mod completeness_tests {
             if let Some(column) = direction {
                 columns.push(("oneway", column));
             }
-            RecordBatch::try_from_iter(columns).unwrap()
+            let fields = columns
+                .iter()
+                .map(|(name, array)| {
+                    Field::new(*name, array.data_type().clone(), array.null_count() != 0)
+                })
+                .collect::<Vec<_>>();
+            let schema = Schema::new(fields).with_metadata(std::collections::HashMap::from([(
+                "road_traffic_contract".to_owned(),
+                "1".to_owned(),
+            )]));
+            RecordBatch::try_new(
+                Arc::new(schema),
+                columns.into_iter().map(|(_, column)| column).collect(),
+            )
+            .unwrap()
         };
         let invalid: Vec<Option<ArrayRef>> = vec![
             None,
@@ -354,7 +371,8 @@ mod completeness_tests {
             assert!(source_reader::query_roads_from_batches(&[invalid], 0.0, 0.0, 1000.0).is_err());
         }
         let batch = batch(Some(Arc::new(UInt8Array::from(vec![0, 1, 2]))));
-        let directions = RoadDirections::read(&batch).unwrap();
+        RoadDirections::read(&batch).unwrap();
+        let traffic = source_reader::road_traffic::RoadTrafficColumns::read(&batch).unwrap();
         let popup =
             source_reader::query_roads_from_batches(std::slice::from_ref(&batch), 0.0, 0.0, 1000.0)
                 .unwrap();
@@ -365,19 +383,38 @@ mod completeness_tests {
         let frame = RegionMetricFrame::for_latitude_longitude(0.0, 0.0);
         let devices: Vec<_> = (0..3)
             .map(|row| {
-                line(&batch, row, directions.is_oneway(row), None, &frame)
+                line(&batch, row, None, Some(traffic.row(row)), &frame)
                     .unwrap()
                     .unwrap()
             })
             .collect();
+        // Direction is strict identity, never a count factor: a published
+        // directional 10 000 stays 10 000 on two-way, forward and reverse rows.
+        assert_eq!(devices[0].emission_linear, devices[1].emission_linear);
         assert_eq!(devices[1].emission_linear, devices[2].emission_linear);
-        for (two_way, one_way) in devices[0]
-            .emission_linear
+        assert!(devices[0].emission_linear.iter().all(|value| *value > 0.0));
+        // The legacy build-stage Int32 traffic column is rejected by the same
+        // shared reader the popup uses.
+        let mut fields = batch.schema().fields().to_vec();
+        let position = fields
             .iter()
-            .zip(devices[1].emission_linear)
-        {
-            assert!(*two_way > one_way);
-        }
+            .position(|field| field.name() == "aadt_light")
+            .unwrap();
+        fields[position] = Arc::new(Field::new(
+            "aadt_light",
+            arrow::datatypes::DataType::Int32,
+            false,
+        ));
+        let mut columns = batch.columns().to_vec();
+        columns[position] = Arc::new(Int32Array::from(vec![10_000; 3]));
+        let legacy = RecordBatch::try_new(
+            Arc::new(
+                Schema::new(fields).with_metadata(batch.schema().metadata().clone()),
+            ),
+            columns,
+        )
+        .unwrap();
+        assert!(source_reader::road_traffic::RoadTrafficColumns::read(&legacy).is_err());
     }
 
     #[test]
@@ -466,7 +503,7 @@ mod completeness_tests {
         });
         let columns = source_reader::rail_traffic::RailTrafficColumns::read(&batch).unwrap();
         let frame = RegionMetricFrame::for_latitude_longitude(0.0, 0.0);
-        let device = line(&batch, 0, false, Some(columns.row(0)), &frame)
+        let device = line(&batch, 0, Some(columns.row(0)), None, &frame)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -478,7 +515,7 @@ mod completeness_tests {
             .all(|value| *value == 0.0));
         assert!(device.emission_linear[8..].iter().all(|value| *value > 0.0));
         assert_eq!(device.max_distance_m, normalized.max_distance_m() as f32);
-        assert!(line(&batch, 0, false, Some(RailTraffic::default()), &frame)
+        assert!(line(&batch, 0, Some(RailTraffic::default()), None, &frame)
             .unwrap()
             .is_none());
     }
@@ -492,11 +529,42 @@ mod completeness_tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let mut writer = arrow::ipc::writer::FileWriter::try_new(
             std::fs::File::create(&path).unwrap(),
-            &arrow::datatypes::Schema::new(vec![arrow::datatypes::Field::new(
-                "oneway",
-                arrow::datatypes::DataType::UInt8,
-                false,
-            )]),
+            &arrow::datatypes::Schema::new(vec![
+                arrow::datatypes::Field::new(
+                    "oneway",
+                    arrow::datatypes::DataType::UInt8,
+                    false,
+                ),
+                arrow::datatypes::Field::new(
+                    "aadt_light",
+                    arrow::datatypes::DataType::Float64,
+                    false,
+                ),
+                arrow::datatypes::Field::new(
+                    "aadt_medium",
+                    arrow::datatypes::DataType::Float64,
+                    false,
+                ),
+                arrow::datatypes::Field::new(
+                    "aadt_heavy",
+                    arrow::datatypes::DataType::Float64,
+                    false,
+                ),
+                arrow::datatypes::Field::new(
+                    "aadt_moto",
+                    arrow::datatypes::DataType::Float64,
+                    false,
+                ),
+                arrow::datatypes::Field::new(
+                    "traffic_estimated",
+                    arrow::datatypes::DataType::UInt8,
+                    false,
+                ),
+            ])
+            .with_metadata(std::collections::HashMap::from([(
+                "road_traffic_contract".to_owned(),
+                "1".to_owned(),
+            )])),
         )
         .unwrap();
         writer.finish().unwrap();

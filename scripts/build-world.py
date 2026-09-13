@@ -59,6 +59,14 @@ def source_paths(config):
     return {name: canonical_input(path) for name, path in config['sources'].items()}
 
 
+def validate_osm_storage(paths, sources):
+    for source in sources:
+        source = Path(source).resolve()
+        for target in paths:
+            if source == target or source in target.parents or target in source.parents:
+                raise ValueError(f'OSM cache/spill overlaps frozen source: {target} / {source}')
+
+
 def build_plan(config, output, scratch):
     sources = source_paths(config)
     settings = config['build']
@@ -68,6 +76,20 @@ def build_plan(config, output, scratch):
         raise ValueError('as_of_date must be YYYYMMDD and aircraft_anchor must be YYYY-MM')
     if anchor > as_of.replace(day=1):
         raise ValueError('aircraft anchor is after the source as-of date')
+    storage = []
+    for key, default in (('osm_node_cache', scratch / 'osm/osm_nodes.cache'),
+                         ('osm_spill_dir', output / 'osm-spill')):
+        value = settings.get(key, str(default))
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f'{key} must be a nonempty path string')
+        path = Path(value).resolve()
+        if 'pre2609' in Path(value).parts or 'pre2609' in path.parts:
+            raise ValueError(f'forbidden retired OSM scratch: {value}')
+        if path == REPO or path in REPO.parents or REPO in path.parents:
+            raise ValueError(f'{key} overlaps product checkout: {path}')
+        storage.append(path)
+    validate_osm_storage(storage, sources.values())
+    node_cache, spill_dir = storage
     year = output / 'prepared' / str(as_of.year)
     python = str(REPO / '.venv/bin/python')
     tsx = str(REPO / 'pipeline/node_modules/.bin/tsx')
@@ -81,7 +103,7 @@ def build_plan(config, output, scratch):
     steps = [
         Step('osm', (), ('bash', str(scripts / 'osm-extract.sh')), 3,
              (('PBF_FILE', str(sources['planet'])), ('OUTPUT_DIR', str(year)),
-              ('SCRATCH_ROOT', str(scratch / 'osm')))),
+              ('NODE_CACHE', str(node_cache)), ('SPILL_DIR', str(spill_dir)))),
         Step('square-country-city', ('osm',), (python, str(scripts / 'square-country-city/build_square_country_city.py'),
              '--prepared-dir', str(year), '--boundaries', str(sources['boundaries']),
              '--jobs', str(settings['threads'])), 3),
@@ -95,6 +117,7 @@ def build_plan(config, output, scratch):
         Step('railways-finalize', ('railways',), (str(REPO / 'engine/target/release/railways-finalize'), str(year))),
         layer('industrial', ('square-country-city',)),
         layer('roads', ('square-country-city', 'structures')),
+        Step('roads-finalize', ('roads',), (str(REPO / 'engine/target/release/roads-finalize'), str(year))),
         Step('aircraft', ('osm',), ('bash', str(scripts / 'run-aircraft-extract.sh')), 3,
              (('HYBRID', '1'), ('AIRLINE_FEED', 'adsbexchange'), ('AIRCRAFT_ANCHOR', settings['aircraft_anchor']),
               ('AIRLINE_CACHE', str(sources['airline'])), ('GA_CACHE', str(sources['general_aviation'])),
@@ -196,8 +219,10 @@ def main():
                         help='JSON with previous/current pin hashes, reuse steps, reason; optional osm_scope: [roads, railways]')
     args = parser.parse_args()
     config = tomllib.loads(args.config.read_text())
-    if set(config) != {'build', 'sources'} or set(config['build']) != {
-            'as_of_date', 'aircraft_anchor', 'memory_gib', 'threads'}:
+    required = {'as_of_date', 'aircraft_anchor', 'memory_gib', 'threads'}
+    optional = {'osm_node_cache', 'osm_spill_dir'}
+    if (set(config) != {'build', 'sources'} or not required <= set(config['build'])
+            or set(config['build']) - required - optional):
         raise ValueError('build requires as_of_date, aircraft_anchor, memory_gib and threads')
     settings = config['build']
     if any(type(settings[key]) is not int or settings[key] < 1 for key in ('memory_gib', 'threads')):
@@ -252,6 +277,8 @@ def main():
                     *(canonical_input(environment[key]) for key in ('GDAL_DATA', 'PROJ_DATA', 'PROJ_LIB')
                       if key in environment)]
         roots = current_roots()
+        osm_environment = dict(next(step for step in steps if step.name == 'osm').environment)
+        validate_osm_storage([Path(osm_environment[key]) for key in ('NODE_CACHE', 'SPILL_DIR')], roots)
         if resuming:
             completed = resume_steps(output, config, steps, roots, frozen_roots(),
                                      review=review, dry_run=args.resume_plan)
@@ -266,7 +293,7 @@ def main():
             # Build before parallel producers so their incremental builds share no changing code.
             subprocess.run(['cargo', 'build', '--release', '--manifest-path', str(REPO / 'engine/Cargo.toml'),
                             '--bin', 'osm-extract', '--bin', 'aircraft-extract', '--bin', 'structures-finalize',
-                            '--bin', 'railways-finalize'],
+                            '--bin', 'railways-finalize', '--bin', 'roads-finalize'],
                            cwd=REPO, env=environment, check=True)
             def execute(step):
                 command = producer_command(step, settings)

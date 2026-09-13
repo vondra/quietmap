@@ -6,16 +6,16 @@ mod ids;
 mod junctions;
 mod microsegment;
 mod node_cache;
+mod pass2;
 mod poi_join;
 mod relations;
 mod spill;
 mod transport;
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use clap::Parser;
-use osmpbf::{BlobDecode, BlobReader, Element};
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
 #[derive(Parser)]
@@ -36,7 +36,8 @@ struct Cli {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    validate_paths(&mut cli)?;
     let t0 = Instant::now();
     eprintln!("=== osm-extract ===");
 
@@ -52,38 +53,29 @@ fn main() -> Result<()> {
         );
         eprintln!("  Output: {}", cli.output.display());
 
-        let t_fin = Instant::now();
-        let square_count = finalize::finalize(&cli.spill_dir, &cli.output, cli.num_buckets)?;
-        transport::TransportWriter::publish(&cli.spill_dir, &cli.output)?;
-        eprintln!(
-            "  {} square dirs in {:.1}s",
-            square_count,
-            t_fin.elapsed().as_secs_f64()
-        );
+        finalize_and_cleanup(&cli)?;
 
-        // Don't clean up spill (user may want to re-run)
         eprintln!("\n=== Done: {:.1}s ===", t0.elapsed().as_secs_f64());
         return Ok(());
     }
 
     eprintln!("  Input:  {}", cli.input.display());
 
-    // ── Pass 0: Scan relations ──
     eprintln!("\n── Pass 0: Scan relations ──");
-    let (manifest, junctions) = relations::scan_relations_and_junctions(&cli.input)?;
+    let (manifest, junctions, needed_nodes) = relations::scan_relations_and_junctions(&cli.input)?;
     eprintln!("  {:.1}s", t0.elapsed().as_secs_f64());
 
-    // ── Pass 1: Node coordinate cache ──
     eprintln!("\n── Pass 1: Node cache ──");
     let t1 = Instant::now();
-    let cache = node_cache::NodeCache::build(&cli.input, &cli.node_cache)?;
+    std::fs::create_dir_all(cli.node_cache.parent().unwrap())?;
+    let cache = node_cache::NodeCache::build(&cli.input, &cli.node_cache, &needed_nodes)?;
     eprintln!(
         "  {} nodes in {:.1}s",
         cache.count(),
         t1.elapsed().as_secs_f64()
     );
+    drop(needed_nodes);
 
-    // ── Pass 2: Extract features ──
     eprintln!("\n── Pass 2: Extract → spill ──");
     let t2 = Instant::now();
     // Start from a clean spill dir: a stale partition from an earlier run (especially
@@ -99,345 +91,26 @@ fn main() -> Result<()> {
     }
     let mut spiller = spill::Spiller::new(&cli.spill_dir, cli.num_buckets)?;
     let mut transport = transport::TransportWriter::new(&cli.spill_dir)?;
-    let mut assembler = relations::RelationAssembler::new(&manifest);
 
-    let mut ways_total = 0u64;
-    let mut features_total = 0u64;
-    let mut rels_assembled = 0u64;
-    let mut antimeridian_rings_omitted = 0u64;
-    // Observability: noise-relevant ways that classified to None and vanished
-    // (a functional AREA with no building wrapper). Reported after Pass 2.
-    let mut fallthrough_tags: HashMap<String, u64> = HashMap::new();
-
-    for blob in BlobReader::from_path(&cli.input)? {
-        let blob = blob?;
-        let BlobDecode::OsmData(block) = blob.decode()? else {
-            continue;
-        };
-        for element in block.elements() {
-            match element {
-                Element::Way(way) => {
-                    ways_total += 1;
-                    if ways_total.is_multiple_of(2_000_000) {
-                        eprintln!(
-                            "  {:.1}M ways, {:.1}M features, {} rels assembled...",
-                            ways_total as f64 / 1e6,
-                            features_total as f64 / 1e6,
-                            rels_assembled
-                        );
-                    }
-
-                    let is_relation_member = manifest.way_to_relations.contains_key(&way.id());
-                    let way_class = classify::classify_way(&way);
-                    if way_class.is_none() && !is_relation_member {
-                        if let Some(reason) = classify::fallthrough_reason(&way) {
-                            *fallthrough_tags.entry(reason).or_insert(0) += 1;
-                        }
-                        continue;
-                    }
-
-                    let resolved_nodes: Vec<_> = way.refs().map(|id| (id, cache.get(id))).collect();
-                    let coords: Vec<_> = resolved_nodes
-                        .iter()
-                        .filter_map(|(_, coords)| *coords)
-                        .collect();
-
-                    if is_relation_member && !coords.is_empty() {
-                        // Cache geometry for relation assembly
-                        let completed = assembler.add_way(way.id(), coords.clone(), &manifest);
-                        for rel_id in completed {
-                            if let Some((ring, tags, ftype)) = assembler.assemble(rel_id, &manifest)
-                            {
-                                let extracted_tags = match ftype {
-                                    classify::FeatureType::Building => {
-                                        let mut t = classify::Tags::new();
-                                        for (k, v) in &tags {
-                                            // Copy amenity/shop/healthcare/tourism/leisure from relation tags.
-                                            // WHY: Large buildings (hospitals, schools, malls) are often multipolygon
-                                            // relations. Without these tags, building_type_from_tags() can't classify
-                                            // them correctly — a hospital gets type 0 (residential) instead of 4.
-                                            if matches!(
-                                                k.as_str(),
-                                                "building"
-                                                    | "building:use"
-                                                    | "height"
-                                                    | "building:levels"
-                                                    | "name"
-                                                    | "addr:street"
-                                                    | "addr:housenumber"
-                                                    | "amenity"
-                                                    | "shop"
-                                                    | "healthcare"
-                                                    | "tourism"
-                                                    | "leisure"
-                                                    | "animal"
-                                                    | "livestock"
-                                                    | "opening_hours"
-                                            ) {
-                                                t.insert(k.clone(), v.clone());
-                                            }
-                                        }
-                                        // NOTE: a relation with no `building` tag is a
-                                        // FUNCTIONAL AREA (shop=mall / amenity=hospital
-                                        // multipolygon). Leave the building tag ABSENT so
-                                        // `building_type_from_tags` classifies it by
-                                        // function (poi_class) and the spill flags it as an
-                                        // area-source for finalize overlap-suppression.
-                                        t
-                                    }
-                                    classify::FeatureType::Industrial => {
-                                        let mut t = classify::Tags::new();
-                                        for (k, v) in &tags {
-                                            // Copy operator/product/industrial from relation tags.
-                                            // WHY: Large industrial complexes are multipolygon relations.
-                                            // These tags enable NACE sector matching for emission profiles.
-                                            if matches!(
-                                                k.as_str(),
-                                                "landuse"
-                                                    | "man_made"
-                                                    | "name"
-                                                    | "operator"
-                                                    | "product"
-                                                    | "industrial"
-                                            ) {
-                                                t.insert(k.clone(), v.clone());
-                                            }
-                                        }
-                                        t
-                                    }
-                                    classify::FeatureType::AirportArea => {
-                                        let mut t = classify::Tags::new();
-                                        for (k, v) in &tags {
-                                            if matches!(
-                                                k.as_str(),
-                                                "aeroway"
-                                                    | "name"
-                                                    | "ref"
-                                                    | "local_ref"
-                                                    | "icao"
-                                                    | "iata"
-                                                    | "operator"
-                                                    | "surface"
-                                                    | "width"
-                                                    | "access"
-                                                    | "aerodrome"
-                                                    | "aerodrome:type"
-                                                    | "amenity"
-                                            ) {
-                                                t.insert(k.clone(), v.clone());
-                                            }
-                                        }
-                                        t
-                                    }
-                                    _ => tags.clone(),
-                                };
-
-                                let (clat, clon) = centroid(&ring);
-                                let square = grid::square_of(clat, clon);
-                                let safe_ring =
-                                    ring_for_spill(&ring, &mut antimeridian_rings_omitted);
-                                spiller.emit_polygon(
-                                    &ftype,
-                                    square,
-                                    rel_id,
-                                    clat,
-                                    clon,
-                                    &extracted_tags,
-                                    safe_ring,
-                                );
-                                features_total += 1;
-                                rels_assembled += 1;
-                            }
-                            assembler.cleanup(rel_id, &manifest);
-                        }
-                    }
-
-                    if let Some(mut ftype) = way_class {
-                        // Skip if this way is an outer member of a polygon relation;
-                        // the relation's assembled multipolygon already covers it.
-                        // AirportLine ways inside an aeroway=aerodrome multipolygon
-                        // would otherwise be re-emitted as perimeter fragments.
-                        if is_relation_member
-                            && matches!(
-                                ftype,
-                                classify::FeatureType::Building
-                                    | classify::FeatureType::Industrial
-                                    | classify::FeatureType::AirportArea
-                                    | classify::FeatureType::AirportLine
-                            )
-                        {
-                            continue;
-                        }
-
-                        // Closed-ring runway/airstrip ways are geometrically
-                        // polygons (a runway drawn as a perimeter way rather
-                        // than a multipolygon). Reroute to AirportArea for a
-                        // proper polygon source instead of perimeter fragments.
-                        //
-                        // taxiway/stopway closed-rings are typically turnaround
-                        // LOOPS where the ring itself is the taxi path; keeping
-                        // them as AirportLine preserves the downstream leg snap.
-                        if matches!(ftype, classify::FeatureType::AirportLine)
-                            && coords.len() >= 3
-                            && (coords[0][0] - coords.last().unwrap()[0]).abs() < 1e-7
-                            && (coords[0][1] - coords.last().unwrap()[1]).abs() < 1e-7
-                            && matches!(
-                                way.tags().find(|(k, _)| *k == "aeroway").map(|(_, v)| v),
-                                Some("runway") | Some("airstrip")
-                            )
-                        {
-                            ftype = classify::FeatureType::AirportArea;
-                        }
-
-                        let is_transport = matches!(
-                            ftype,
-                            classify::FeatureType::Road | classify::FeatureType::Railway
-                        );
-                        if is_transport {
-                            transport.write_way(way.id(), ftype.name(), &resolved_nodes)?;
-                        }
-                        if ftype.is_linear() && coords.len() < 2 {
-                            continue;
-                        }
-                        if coords.is_empty() {
-                            continue;
-                        }
-
-                        let tags = classify::extract_way_tags(&way, &ftype);
-
-                        if ftype.is_linear() {
-                            let max_len = 250.0;
-                            let segs = microsegment::split_at_junctions(
-                                resolved_nodes
-                                    .iter()
-                                    .map(|(id, coords)| (*coords, junctions.contains(*id))),
-                                max_len,
-                            );
-                            assert!(
-                                segs.len() <= i16::MAX as usize + 1,
-                                "way {} exceeds nonnegative Int16 segment identities",
-                                way.id(),
-                            );
-                            for (idx, interval) in segs.iter().enumerate() {
-                                let seg = interval.geometry(|index| {
-                                    resolved_nodes[index]
-                                        .1
-                                        .expect("source interval references a resolved node")
-                                });
-                                let mid_lat = (seg.0[0] + seg.1[0]) / 2.0;
-                                let mid_lon =
-                                    grid::geo::wrapped_longitude_midpoint(seg.0[1], seg.1[1]);
-                                let square = grid::square_of(mid_lat, mid_lon);
-                                spiller.emit_segment(
-                                    &ftype,
-                                    square,
-                                    way.id(),
-                                    idx as i16,
-                                    &seg,
-                                    &tags,
-                                );
-                                if is_transport {
-                                    transport.write_piece(
-                                        way.id(),
-                                        idx as i16,
-                                        &grid::square_name(square),
-                                        interval,
-                                    )?;
-                                }
-                                features_total += 1;
-                            }
-                        } else {
-                            let (clat, clon) = centroid(&coords);
-                            let square = grid::square_of(clat, clon);
-                            let ring = ring_for_spill(&coords, &mut antimeridian_rings_omitted);
-                            spiller.emit_polygon(&ftype, square, way.id(), clat, clon, &tags, ring);
-                            features_total += 1;
-                        }
-                    }
-                }
-                Element::Node(node) => {
-                    features_total += emit_node(
-                        &mut spiller,
-                        classify::is_wind_turbine_node(&node),
-                        || classify::extract_turbine_tags_node(&node),
-                        classify::FeatureType::WindTurbine,
-                        node.id(),
-                        node.lat(),
-                        node.lon(),
-                    );
-                    features_total += emit_node(
-                        &mut spiller,
-                        classify::is_airport_node(&node),
-                        || classify::extract_airport_tags_node(&node),
-                        classify::FeatureType::AirportArea,
-                        node.id(),
-                        node.lat(),
-                        node.lon(),
-                    );
-                    if let Some(kind) = classify::node_kind_node(&node) {
-                        let tags = classify::extract_node_settlement_tags_node(&node);
-                        features_total += emit_settlement_node(
-                            &mut spiller,
-                            kind,
-                            node.id(),
-                            node.lat(),
-                            node.lon(),
-                            &tags,
-                        );
-                    }
-                }
-                Element::DenseNode(node) => {
-                    features_total += emit_node(
-                        &mut spiller,
-                        classify::is_wind_turbine_dense(&node),
-                        || classify::extract_turbine_tags_dense(&node),
-                        classify::FeatureType::WindTurbine,
-                        node.id(),
-                        node.lat(),
-                        node.lon(),
-                    );
-                    features_total += emit_node(
-                        &mut spiller,
-                        classify::is_airport_dense(&node),
-                        || classify::extract_airport_tags_dense(&node),
-                        classify::FeatureType::AirportArea,
-                        node.id(),
-                        node.lat(),
-                        node.lon(),
-                    );
-                    if let Some(kind) = classify::node_kind_dense(&node) {
-                        let tags = classify::extract_node_settlement_tags_dense(&node);
-                        features_total += emit_settlement_node(
-                            &mut spiller,
-                            kind,
-                            node.id(),
-                            node.lat(),
-                            node.lon(),
-                            &tags,
-                        );
-                    }
-                }
-                Element::Relation(relation) => {
-                    if classify::scope_keeps(&classify::FeatureType::Railway) {
-                        transport.write_train_route(&relation)?;
-                    }
-                }
-            }
-        }
-    }
+    let pass2 = pass2::extract_features(
+        &cli.input,
+        &cache,
+        &manifest,
+        &junctions,
+        &mut spiller,
+        &mut transport,
+    )?;
 
     transport.finish()?;
     spiller.complete()?;
     eprintln!(
         "  {:.1}M ways → {:.1}M features ({} multipolygon rels) in {:.1}s",
-        ways_total as f64 / 1e6,
-        features_total as f64 / 1e6,
-        rels_assembled,
+        pass2.ways_total as f64 / 1e6,
+        pass2.features_total as f64 / 1e6,
+        pass2.rels_assembled,
         t2.elapsed().as_secs_f64()
     );
 
-    // Classification blind spots — the two SILENT failure modes made visible so a
-    // gap is never invisible (a new unmapped tag, a vanished functional area).
     eprintln!("\n  ── Classification blind spots ──");
     report_top(
         "  building=* → residential DEFAULT (unmapped tag)",
@@ -446,62 +119,112 @@ fn main() -> Result<()> {
     );
     report_top(
         "  functional AREA vanished (no building tag → routing fall-through)",
-        &fallthrough_tags,
+        &pass2.fallthrough_tags,
         12,
     );
-    eprintln!("  antimeridian polygon rings omitted (centroid-only): {antimeridian_rings_omitted}");
+    eprintln!(
+        "  antimeridian polygon rings omitted (centroid-only): {}",
+        pass2.antimeridian_rings_omitted
+    );
 
-    // Finalize opens its own readers and writers; close all spill writers first.
     drop(spiller);
-
     drop(junctions);
-
-    // Free node cache before finalize (saves ~64 GB disk for planet)
     drop(cache);
-    if cli.node_cache.exists() {
-        eprintln!("  Deleting node cache to free disk...");
-        std::fs::remove_file(&cli.node_cache).ok();
-    }
 
-    // ── Finalize ──
+    finalize_and_cleanup(&cli)?;
+    eprintln!("\n=== Done: {:.1}s ===", t0.elapsed().as_secs_f64());
+    Ok(())
+}
+
+fn finalize_and_cleanup(cli: &Cli) -> Result<()> {
+    match std::fs::remove_file(&cli.node_cache) {
+        Ok(()) => eprintln!("  Deleted node cache to free disk"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("remove node cache"),
+    }
     eprintln!("\n── Finalize ──");
-    let t3 = Instant::now();
+    let started = Instant::now();
     let square_count = finalize::finalize(&cli.spill_dir, &cli.output, cli.num_buckets)?;
     transport::TransportWriter::publish(&cli.spill_dir, &cli.output)?;
     eprintln!(
         "  {} square dirs in {:.1}s",
         square_count,
-        t3.elapsed().as_secs_f64()
+        started.elapsed().as_secs_f64()
     );
-
-    // node cache already deleted after Pass 2
-    std::fs::remove_dir_all(&cli.spill_dir).ok();
-    eprintln!("\n=== Done: {:.1}s ===", t0.elapsed().as_secs_f64());
+    std::fs::remove_dir_all(&cli.spill_dir).context("remove completed spill")?;
     Ok(())
 }
 
-/// Extract tags and spill only classified turbine/airport nodes, returning the count.
-fn emit_node(
-    spiller: &mut spill::Spiller,
-    kind_match: bool,
-    extract_tags: impl FnOnce() -> classify::Tags,
-    ftype: classify::FeatureType,
-    osm_id: i64,
-    lat: f64,
-    lon: f64,
-) -> u64 {
-    if !kind_match {
-        return 0;
+/// Resolve existing symlinks before processing `..`, including ancestors of new paths.
+fn resolved_path(path: &Path) -> Result<PathBuf> {
+    let absolute = std::env::current_dir()?.join(path);
+    let mut resolved = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            _ => {
+                resolved.push(component.as_os_str());
+                match resolved.canonicalize() {
+                    Ok(canonical) => resolved = canonical,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        // A dangling symlink is not a missing output component we may create.
+                        if std::fs::symlink_metadata(&resolved).is_ok() {
+                            return Err(error)
+                                .with_context(|| format!("resolve {}", resolved.display()));
+                        }
+                    }
+                    Err(error) => {
+                        return Err(error)
+                            .with_context(|| format!("resolve {}", resolved.display()))
+                    }
+                }
+            }
+        }
     }
-    let tags = extract_tags();
-    let square = grid::square_of(lat, lon);
-    spiller.emit_polygon(&ftype, square, osm_id, lat, lon, &tags, None);
-    1
+    Ok(resolved)
+}
+
+fn validate_paths(cli: &mut Cli) -> Result<()> {
+    cli.input = resolved_path(&cli.input)?;
+    cli.output = resolved_path(&cli.output)?;
+    cli.node_cache = resolved_path(&cli.node_cache)?;
+    cli.spill_dir = resolved_path(&cli.spill_dir)?;
+    let transport = resolved_path(&transport::output_path(&cli.output)?)?;
+    let mut copying = transport::output_path(&cli.output)?.into_os_string();
+    copying.push(".copying");
+    let copying = resolved_path(Path::new(&copying))?;
+    let paths = [
+        ("input", &cli.input),
+        ("output", &cli.output),
+        ("node cache", &cli.node_cache),
+        ("spill", &cli.spill_dir),
+        ("transport output", &transport),
+        ("transport staging", &copying),
+    ];
+    for (index, (left_role, left)) in paths.iter().enumerate() {
+        for (right_role, right) in &paths[index + 1..] {
+            let same_file = match (std::fs::metadata(left), std::fs::metadata(right)) {
+                (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+                _ => false,
+            };
+            if left.starts_with(right) || right.starts_with(left) || same_file {
+                bail!(
+                    "overlapping {left_role} and {right_role}: {} / {}",
+                    left.display(),
+                    right.display()
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Print the top-N entries of a blind-spot counter (descending), or nothing if
 /// empty. Single source for both classification-gap reports.
-fn report_top(label: &str, counts: &HashMap<String, u64>, top_n: usize) {
+fn report_top(label: &str, counts: &std::collections::HashMap<String, u64>, top_n: usize) {
     if counts.is_empty() {
         return;
     }
@@ -520,128 +243,66 @@ fn report_top(label: &str, counts: &HashMap<String, u64>, top_n: usize) {
     );
 }
 
-/// Spill one settlement NODE: a `Leisure` node becomes a point leisure source
-/// (centroid only, no ring → default area), a `Poi` node spills to the
-/// finalize footprint-join file. Returns 1 if a row was written, else 0 (e.g.
-/// a POI whose tags don't resolve to a class).
-fn emit_settlement_node(
-    spiller: &mut spill::Spiller,
-    kind: classify::FeatureType,
-    osm_id: i64,
-    lat: f64,
-    lon: f64,
-    tags: &classify::Tags,
-) -> u64 {
-    let square = grid::square_of(lat, lon);
-    match kind {
-        classify::FeatureType::Leisure => {
-            spiller.emit_polygon(&kind, square, osm_id, lat, lon, tags, None);
-            1
-        }
-        classify::FeatureType::Poi => match spill::poi_class_from_tags(tags) {
-            Some(class) => {
-                spiller.emit_poi(square, lat, lon, class);
-                1
-            }
-            None => 0,
-        },
-        _ => 0,
-    }
-}
-
-fn centroid(coords: &[[f64; 2]]) -> (f64, f64) {
-    let coords = if coords.len() > 1 && coords.first() == coords.last() {
-        &coords[..coords.len() - 1]
-    } else {
-        coords
-    };
-    let n = coords.len() as f64;
-    let reference_lon = coords[0][1];
-    (
-        coords.iter().map(|c| c[0]).sum::<f64>() / n,
-        grid::geo::normalize_longitude(
-            reference_lon
-                + coords
-                    .iter()
-                    .map(|c| grid::geo::wrapped_longitude_delta(reference_lon, c[1]))
-                    .sum::<f64>()
-                    / n,
-        ),
-    )
-}
-
-/// Canonical longitudes make a dateline-crossing ring look almost world-wide
-/// to current polygon consumers. Preserve its correct centroid but omit the
-/// unsafe ring until the shared polygon format can represent wrapped geometry.
-fn ring_for_spill<'a>(
-    coords: &'a [[f64; 2]],
-    antimeridian_rings_omitted: &mut u64,
-) -> Option<&'a [[f64; 2]]> {
-    if coords.len() < 3 {
-        return None;
-    }
-    let (min_lon, max_lon) = coords.iter().fold(
-        (f64::INFINITY, f64::NEG_INFINITY),
-        |(min_lon, max_lon), coord| (min_lon.min(coord[1]), max_lon.max(coord[1])),
-    );
-    if max_lon - min_lon > 180.0 {
-        *antimeridian_rings_omitted += 1;
-        None
-    } else {
-        Some(coords)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{centroid, classify, emit_node, ring_for_spill, spill};
+    use super::*;
+    use std::os::unix::fs::symlink;
 
     #[test]
-    fn point_source_tags_are_extracted_only_when_the_node_is_kept() {
-        let directory =
-            std::env::temp_dir().join(format!("osm-node-tag-laziness-{}", std::process::id()));
-        std::fs::create_dir(&directory).unwrap();
-        let mut spiller = spill::Spiller::new(&directory, 1).unwrap();
-        for kind_match in [false, true] {
-            let mut extracted = 0;
-            let written = emit_node(
-                &mut spiller,
-                kind_match,
-                || {
-                    extracted += 1;
-                    classify::Tags::from([("name".into(), "Kept turbine".into())])
-                },
-                classify::FeatureType::WindTurbine,
-                42,
-                50.0,
-                14.0,
-            );
-            assert_eq!(extracted, u64::from(kind_match));
-            assert_eq!(written, u64::from(kind_match));
+    fn input_and_scratch_roles_cannot_alias_or_contain_each_other() -> Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "osm-path-roles-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root)?;
+        let input = root.join("planet.pbf");
+        std::fs::write(&input, b"irreplaceable planet")?;
+        let make_cli = || Cli {
+            input: input.clone(),
+            output: root.join("new/output"),
+            node_cache: root.join("cache/nodes"),
+            spill_dir: root.join("spill"),
+            num_buckets: 1,
+        };
+        let mut valid = make_cli();
+        validate_paths(&mut valid)?;
+        assert!(!valid.output.exists());
+        let hardlink = root.join("hardlink");
+        std::fs::hard_link(&input, &hardlink)?;
+        let linked = root.join("linked");
+        symlink(&input, &linked)?;
+        for cache in [
+            input.clone(),
+            hardlink,
+            linked,
+            valid.spill_dir.join("nodes"),
+            valid.output.join("nodes"),
+            transport::output_path(&valid.output)?,
+        ] {
+            let mut cli = make_cli();
+            cli.node_cache = cache;
+            assert!(validate_paths(&mut cli).is_err());
         }
-        spiller.complete().unwrap();
-        let row = std::fs::read_to_string(directory.join("industrial_000.tsv")).unwrap();
-        assert_eq!(row.lines().count(), 1);
-        assert!(row.contains("\t42\t"));
-        assert!(row.contains("\tKept turbine\t"));
-        drop(spiller);
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn antimeridian_ring_keeps_its_centroid_but_not_unsafe_geometry() {
-        let ring = [
-            [10.0, 179.99],
-            [10.0, -179.99],
-            [10.01, -179.99],
-            [10.01, 179.99],
-            [10.0, 179.99],
-        ];
-        let (lat, lon) = centroid(&ring);
-        assert!((lat - 10.005).abs() < 1e-12);
-        assert!((lon + 180.0).abs() < 1e-12, "lon={lon}");
-        let mut omitted = 0;
-        assert!(ring_for_spill(&ring, &mut omitted).is_none());
-        assert_eq!(omitted, 1);
+        let alias = root.join("alias");
+        symlink(&root, &alias)?;
+        for (spill, output) in [
+            (root.clone(), valid.output.clone()),
+            (valid.spill_dir.clone(), valid.spill_dir.join("output")),
+            (valid.output.join("spill"), valid.output.clone()),
+            (root.join("future"), alias.join("future/output")),
+            (root.join("future"), alias.join("new/../future/output")),
+        ] {
+            let mut cli = make_cli();
+            cli.spill_dir = spill;
+            cli.output = output;
+            assert!(validate_paths(&mut cli).is_err());
+        }
+        assert_eq!(std::fs::read(&input)?, b"irreplaceable planet");
+        assert!(!valid.output.exists());
+        std::fs::remove_dir_all(root)?;
+        Ok(())
     }
 }

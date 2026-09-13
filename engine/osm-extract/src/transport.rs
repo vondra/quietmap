@@ -9,6 +9,41 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Owned train-route membership extracted while the PBF relation is still alive.
+pub struct TrainRouteRecord {
+    pub osm_id: i64,
+    pub members: Vec<(String, String, String)>,
+}
+
+impl TrainRouteRecord {
+    /// `None` when the relation is not `route=train`.
+    pub fn from_relation(relation: &osmpbf::Relation<'_>) -> Result<Option<Self>> {
+        if !relation
+            .tags()
+            .any(|(key, value)| key == "route" && value == "train")
+        {
+            return Ok(None);
+        }
+        let mut members = Vec::new();
+        for member in relation.members() {
+            let kind = match member.member_type {
+                osmpbf::RelMemberType::Node => "n",
+                osmpbf::RelMemberType::Way => "w",
+                osmpbf::RelMemberType::Relation => "r",
+            };
+            members.push((
+                kind.to_string(),
+                member.member_id.to_string(),
+                member.role()?.to_owned(),
+            ));
+        }
+        Ok(Some(Self {
+            osm_id: relation.id(),
+            members,
+        }))
+    }
+}
+
 /// PRAGMA user_version stamped when the single write transaction commits; readers gate on it.
 const SCHEMA_VERSION: i32 = 2;
 
@@ -67,32 +102,16 @@ impl TransportWriter {
     }
 
     /// Retains every train-route member in source order, including repeats and unresolved references.
-    pub fn write_train_route(&mut self, relation: &osmpbf::Relation<'_>) -> Result<()> {
-        if !relation
-            .tags()
-            .any(|(key, value)| key == "route" && value == "train")
-        {
-            return Ok(());
-        }
-        let mut members = Vec::new();
-        for member in relation.members() {
-            let kind = match member.member_type {
-                osmpbf::RelMemberType::Node => "n",
-                osmpbf::RelMemberType::Way => "w",
-                osmpbf::RelMemberType::Relation => "r",
-            };
-            members.push((
-                kind,
-                member.member_id.to_string(),
-                member.role()?.to_owned(),
-            ));
-        }
+    pub fn write_train_route(&mut self, route: &TrainRouteRecord) -> Result<()> {
         self.connection
             .prepare_cached(
                 "INSERT INTO source_train_routes(osm_id, members_json) VALUES (?1, ?2)",
             )?
-            .execute(params![relation.id(), serde_json::to_string(&members)?])
-            .with_context(|| format!("store train route {}", relation.id()))?;
+            .execute(params![
+                route.osm_id,
+                serde_json::to_string(&route.members)?
+            ])
+            .with_context(|| format!("store train route {}", route.osm_id))?;
         Ok(())
     }
 

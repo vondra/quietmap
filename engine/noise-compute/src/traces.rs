@@ -321,10 +321,8 @@ pub(crate) struct BuildRoadTrace<'a> {
     pub ground_g: f64,
     pub ground_bands: [f64; NUM_BANDS],
     pub reflection_boost_db: f64,
-    pub light: f64,
-    pub medium: f64,
-    pub heavy: f64,
-    pub moto: f64,
+    /// Prepared traffic as consumed (counts + estimated bitmask).
+    pub traffic: crate::normalize::RoadTraffic,
     pub speed_kmh: f64,
     pub surf_corr: f64,
     pub path_profile: PathProfile,
@@ -570,10 +568,7 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
         ground_g,
         ground_bands,
         reflection_boost_db,
-        light,
-        medium,
-        heavy,
-        moto,
+        traffic,
         speed_kmh,
         surf_corr,
         path_profile,
@@ -588,21 +583,15 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
 
     let seg_name = seg_name_from_tags(&seg.road_ref, &seg.name, class_name, seg.osm_id);
 
-    let provenance = crate::sources::provenance_of(seg.source_id);
-    let traffic_source = if provenance.has_data() && seg.aadt_light > 0 {
-        provenance.legacy_traffic_source_str()
-    } else {
-        "default_by_class"
-    };
     let emission = EmissionTrace::Road {
-        aadt_light: light,
-        aadt_medium: medium,
-        aadt_heavy: heavy,
-        aadt_moto: moto,
+        aadt_light: traffic.light,
+        aadt_medium: traffic.medium,
+        aadt_heavy: traffic.heavy,
+        aadt_moto: traffic.moto,
+        traffic_estimated: traffic.estimated,
         speed_kmh,
         surface_corr_db: surf_corr,
         surface: crate::surface_name(seg.surface_type),
-        traffic_source,
         source_id: seg.source_id,
         provenance: crate::sources::dataset_meta(seg.source_id),
         road_class: class_name,

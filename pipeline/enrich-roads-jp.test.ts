@@ -26,14 +26,14 @@ const csvRow = (roadType: string, route: string, name: string, small: string, la
   return fields.join(',')
 }
 const census = (): JapaneseRoadCensus => ({
-  nationalByRef: new Map([['1', { small: 1000, large: 200 }]]),
-  expresswayByName: new Map([['TestExpressway', { small: 2000, large: 400 }]]),
+  nationalByRef: new Map([['1', { countBasis: 'unknown' as const, observationId: 'fixture', small: 1000, large: 200 }]]),
+  expresswayByName: new Map([['TestExpressway', { countBasis: 'unknown' as const, observationId: 'fixture', small: 2000, large: 400 }]]),
   expresswayNames: ['TestExpressway'],
   classMedian: new Map([
-    [0, { small: 1800, large: 360 }], [1, { small: 900, large: 180 }],
-    [2, { small: 800, large: 160 }], [3, { small: 500, large: 100 }],
-    [4, { small: 300, large: 60 }], [10, { small: 1800, large: 360 }],
-    [11, { small: 900, large: 180 }], [12, { small: 800, large: 160 }],
+    [0, { countBasis: 'unknown' as const, observationId: 'fixture', small: 1800, large: 360 }], [1, { countBasis: 'unknown' as const, observationId: 'fixture', small: 900, large: 180 }],
+    [2, { countBasis: 'unknown' as const, observationId: 'fixture', small: 800, large: 160 }], [3, { countBasis: 'unknown' as const, observationId: 'fixture', small: 500, large: 100 }],
+    [4, { countBasis: 'unknown' as const, observationId: 'fixture', small: 300, large: 60 }], [10, { countBasis: 'unknown' as const, observationId: 'fixture', small: 1800, large: 360 }],
+    [11, { countBasis: 'unknown' as const, observationId: 'fixture', small: 900, large: 180 }], [12, { countBasis: 'unknown' as const, observationId: 'fixture', small: 800, large: 160 }],
   ]),
   sourceRows: 47, admittedSections: 47, unsupportedTypeRows: 0,
   unavailableTrafficRows: 0, invalidRows: 0,
@@ -56,21 +56,21 @@ test('Japanese parser hard-gates 47 prefectures and computes route and class med
     invalid: parsed.invalidRows },
   { rows: 49, admitted: 47, unsupported: 1, unavailable: 1, invalid: 0 })
   assert.equal(normalizeJapaneseRoadIdentity('国道 １２号'), '国道12号')
-  assert.deepEqual(parsed.nationalByRef.get('1'), { small: 1000, large: 200 })
-  assert.deepEqual(parsed.classMedian.get(1), { small: 1000, large: 200 })
-  assert.deepEqual(parsed.classMedian.get(11), { small: 1000, large: 200 })
+  assert.deepEqual([ parsed.nationalByRef.get('1')!.small, parsed.nationalByRef.get('1')!.large ], [1000, 200])
+  assert.deepEqual([ parsed.classMedian.get(1)!.small, parsed.classMedian.get(1)!.large ], [1000, 200])
+  assert.deepEqual([ parsed.classMedian.get(11)!.small, parsed.classMedian.get(11)!.large ], [1000, 200])
   assert.throws(() => parseJapaneseRoadCensus(files.slice(1)), /requires 47 prefectures/)
 })
 
 test('Japanese matcher distinguishes measured identity from census-derived fallback', () => {
   const match = buildJapaneseRoadMatcher(census())
-  assert.deepEqual(match(road()), { light: 1000, medium: 50, heavy: 150, moto: 0,
+  assert.deepEqual(match(road()), { countBasis: 'unknown', observationId: 'fixture', light: 1000, medium: 50, heavy: 150, moto: 0,
     sourceId: SOURCE_ID_JP_NATIONAL_ROADS })
   assert.deepEqual(match(road({ roadClass: 3, ref: null })),
-    { light: 500, medium: 25, heavy: 75, moto: 0,
+    { countBasis: 'unknown', observationId: 'fixture', light: 500, medium: 25, heavy: 75, moto: 0,
       sourceId: SOURCE_ID_JP_CLASS_MEDIAN_FALLBACK })
   assert.deepEqual(match(road({ roadClass: 10, ref: null, name: 'TestExpressway ramp' })),
-    { light: 1000, medium: 50, heavy: 150, moto: 0,
+    { countBasis: 'unknown', observationId: 'fixture', light: 1000, medium: 50, heavy: 150, moto: 0,
       sourceId: SOURCE_ID_JP_NATIONAL_ROADS })
   assert.equal(match(road({ roadClass: 7 })), null)
 })

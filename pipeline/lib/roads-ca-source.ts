@@ -1,12 +1,14 @@
 /** Parse the admitted Quebec MTQ DJMA line census. */
 
+import { roadFeatureObservation } from './pinned-road-lines.js'
+import type { RoadObservation } from './road-observation.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import { readPinnedRoadSource } from './pinned-road-source.js'
 
 const SOURCE_PATH = 'ca/qc-djma.geojson'
 const SOURCE_SHA256 = '702cf202250235c7d5f84729d857eb47d851a58947620bfe897853d4d58fcf4e'
 
-export interface QuebecDjmaSection {
+export interface QuebecDjmaSection extends RoadObservation {
   sourceRow: number
   route: number
   rank: number
@@ -114,7 +116,7 @@ export function parseQuebecDjmaSource(raw: string): QuebecDjmaSource {
       result.invalidGeometrySkipped++
       continue
     }
-    result.sections.push({ sourceRow, route, rank: quebecRouteRank(route),
+    result.sections.push({ sourceRow, ...roadFeatureObservation(feature as object, 'unknown'), route, rank: quebecRouteRank(route),
       latitude: centroid[0], longitude: centroid[1], ...traffic,
       ...splitQuebecDjma(traffic.total, traffic.truckPercent) })
   }

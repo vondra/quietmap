@@ -209,7 +209,10 @@ pub fn square_ring_lonlat(lat: f64, lon: f64) -> Vec<(f64, f64)> {
     ]
 }
 
-/// One road microsegment row: lon/lat endpoints + classification.
+/// One road microsegment row: lon/lat endpoints + classification. Defaults
+/// carry an audible all-estimated prior block (the shape `roads-finalize`
+/// publishes for an unobserved section), so `..Default::default()` rows are
+/// collected like real prepared traffic.
 pub struct FixtureRoad {
     pub osm_id: i64,
     pub start: (f64, f64),
@@ -218,6 +221,34 @@ pub struct FixtureRoad {
     pub speed_limit: u8,
     pub lanes: u8,
     pub name: String,
+    pub aadt_light: f64,
+    pub aadt_medium: f64,
+    pub aadt_heavy: f64,
+    pub aadt_moto: f64,
+    /// Per-category estimated bitmask (light 1, medium 2, heavy 4, moto 8).
+    pub traffic_estimated: u8,
+    /// Written but unread at runtime: the producer already resolved closures.
+    pub access: u8,
+}
+
+impl Default for FixtureRoad {
+    fn default() -> Self {
+        Self {
+            osm_id: 0,
+            start: (0.0, 0.0),
+            end: (0.0, 0.0),
+            road_class: 2,
+            speed_limit: 50,
+            lanes: 2,
+            name: String::new(),
+            aadt_light: 3_000.0,
+            aadt_medium: 200.0,
+            aadt_heavy: 400.0,
+            aadt_moto: 100.0,
+            traffic_estimated: 15,
+            access: 0,
+        }
+    }
 }
 
 fn roads_schema() -> Schema {
@@ -243,10 +274,20 @@ fn roads_schema() -> Schema {
         Field::new("junction", DataType::UInt8, false),
         Field::new("access", DataType::UInt8, false),
         Field::new("source_id", DataType::UInt16, false),
+        Field::new("aadt_light", DataType::Float64, false),
+        Field::new("aadt_medium", DataType::Float64, false),
+        Field::new("aadt_heavy", DataType::Float64, false),
+        Field::new("aadt_moto", DataType::Float64, false),
+        Field::new("traffic_estimated", DataType::UInt8, false),
     ])
+    .with_metadata(std::collections::HashMap::from([(
+        "road_traffic_contract".to_owned(),
+        "1".to_owned(),
+    )]))
 }
 
-/// A roads.arrow on disk in the osm-extract v2 (grid) layout.
+/// A final roads.arrow on disk: osm-extract grid layout plus the finalized
+/// traffic columns (`road_traffic_contract=1`).
 pub fn write_roads_file(path: &Path, rows: &[FixtureRoad]) {
     let schema = Arc::new(roads_schema());
     let starts: Vec<(i32, i32)> = rows.iter().map(|r| grid_of(r.start.0, r.start.1)).collect();
@@ -283,8 +324,25 @@ pub fn write_roads_file(path: &Path, rows: &[FixtureRoad]) {
             Arc::new(BooleanArray::from(vec![false; rows.len()])),
             Arc::new(UInt8Array::from_iter_values(rows.iter().map(|_| 0u8))),
             Arc::new(UInt8Array::from_iter_values(rows.iter().map(|_| 0u8))),
-            Arc::new(UInt8Array::from_iter_values(rows.iter().map(|_| 0u8))),
+            Arc::new(UInt8Array::from_iter_values(
+                rows.iter().map(|r| r.access),
+            )),
             Arc::new(UInt16Array::from_iter_values(rows.iter().map(|_| 0u16))),
+            Arc::new(Float64Array::from_iter_values(
+                rows.iter().map(|r| r.aadt_light),
+            )),
+            Arc::new(Float64Array::from_iter_values(
+                rows.iter().map(|r| r.aadt_medium),
+            )),
+            Arc::new(Float64Array::from_iter_values(
+                rows.iter().map(|r| r.aadt_heavy),
+            )),
+            Arc::new(Float64Array::from_iter_values(
+                rows.iter().map(|r| r.aadt_moto),
+            )),
+            Arc::new(UInt8Array::from_iter_values(
+                rows.iter().map(|r| r.traffic_estimated),
+            )),
         ],
     )
     .unwrap();

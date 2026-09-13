@@ -199,8 +199,9 @@ def audit_world(prepared):
                 metadata = reader.schema.metadata or {}
                 if path.stem == 'structures' and metadata.get(CONTRACT_KEY.encode()) != CONTRACT_VERSION.encode():
                     raise ValueError(f'invalid structure contract: {path}')
-                if path.stem == 'railways' and metadata.get(b'rail_traffic_contract') != b'1':
-                    raise ValueError(f'unfinished railway traffic: {path}')
+                traffic_contract = {'roads': b'road_traffic_contract', 'railways': b'rail_traffic_contract'}.get(path.stem)
+                if traffic_contract and metadata.get(traffic_contract) != b'1':
+                    raise ValueError(f'unfinished {path.stem} traffic: {path}')
                 if path.stem in ('roads', 'railways', 'industrial'):
                     key, value = expected_contract(path)
                     if metadata.get(key) != value:
@@ -212,7 +213,7 @@ def audit_world(prepared):
                     rows += batch.num_rows
                 # The merge's plain chunks carry no z14 envelope; the popup would read
                 # the whole table. A 0-row table has nothing to prune and no key.
-                if path.stem in ('structures', 'railways') and rows and b'qm_blocks' not in metadata:
+                if path.stem in ('structures', 'roads', 'railways') and rows and b'qm_blocks' not in metadata:
                     raise ValueError(f'unfinished {path.stem} blocks: {path}')
                 counts[path.stem] = counts.get(path.stem, 0) + rows
         squares += 1

@@ -21,7 +21,7 @@ export async function runArgentinaRoadEnrichment(options: RoadLoaderArguments) {
   for (const square of squares) {
     const write = await writeRoadAadt(resolve(options.preparedDirectory, square, 'roads.arrow'), row => {
       const traffic = match(row)
-      return traffic ? { light: traffic.light, medium: traffic.medium, heavy: traffic.heavy,
+      return traffic ? { countBasis: traffic.countBasis, observationId: traffic.observationId, light: traffic.light, medium: traffic.medium, heavy: traffic.heavy,
         moto: traffic.moto, sourceId: traffic.kind === 'tmda' ? SOURCE_ID_AR_NATIONAL_ROADS : SOURCE_ID_AR_ROAD_CLASSIFICATION_FALLBACK } : null
     }, row => { if (match(row)?.kind === 'tmda') result.matchedTmda++; else result.matchedDnv++ },
     ARGENTINA_ROAD_COVERAGE, { sourceIds: [SOURCE_ID_AR_NATIONAL_ROADS, SOURCE_ID_AR_ROAD_CLASSIFICATION_FALLBACK],

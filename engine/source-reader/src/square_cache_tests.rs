@@ -71,6 +71,7 @@ fn two_batches_with_broken_second_message(path: &Path) {
     );
     metadata.insert("n_days".into(), "12".into());
     metadata.insert("rail_traffic_contract".into(), "1".into());
+    metadata.insert("road_traffic_contract".into(), "1".into());
     // The one generic fixture serves every layer name; the airborne file is
     // contract-checked at open, so it carries the stamp too.
     metadata.insert(
@@ -98,6 +99,12 @@ fn two_batches_with_broken_second_message(path: &Path) {
     columns.push(Arc::new(Int32Array::from(vec![0])));
     columns.push(Arc::new(UInt16Array::from(vec![80])));
     columns.push(Arc::new(UInt8Array::from(vec![2])));
+    for name in ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto"] {
+        fields.push(Arc::new(Field::new(name, DataType::Float64, false)));
+        columns.push(Arc::new(Float64Array::from(vec![0.125])));
+    }
+    fields.push(Arc::new(Field::new("traffic_estimated", DataType::UInt8, false)));
+    columns.push(Arc::new(UInt8Array::from(vec![15])));
     for category in ["passenger", "freight"] {
         for period in ["day", "evening", "night"] {
             fields.push(Arc::new(Field::new(

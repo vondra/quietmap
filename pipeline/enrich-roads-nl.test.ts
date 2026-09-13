@@ -47,6 +47,7 @@ const source = (features: readonly unknown[]): string =>
 
 function record(overrides: Partial<AmsterdamTrafficRecord> = {}): AmsterdamTrafficRecord {
   return {
+    countBasis: 'unknown', observationId: '1',
     sourceRow: 0, latitude: 50, longitude: 14, aadtTotal: 1025,
     aadt_light: 1004, aadt_medium: 21, aadt_heavy: 0, aadt_moto: 0,
     ...overrides,

@@ -25,7 +25,7 @@ test('latest staged raw is deterministic and ignores stale normalized copies', (
   assert.throws(() => latestStagedCityFile('Paris', temporary), /missing staged/)
 })
 
-test('source rounding, aliases and line vertex preserve the legacy directional storage compensation', () => {
+test('source rounding, aliases and line vertex preserve published directional counts', () => {
   const source = parseEuropeanCityTraffic('sample', 'sample.geojson', bytes(
     feature({ AADT: 1000.4, AAWT: 2000, TR_AADT: 100.4, '2W_AADT': 50.4, raw_oneway: true }),
     feature({ AADT: null, AAWT: 1000, TR_AADT: null, TR_AAWT: 100, raw_oneway: 'true' },
@@ -33,11 +33,13 @@ test('source rounding, aliases and line vertex preserve the legacy directional s
   ))
   // Source direction remains separate from the matched OSM road direction.
   assert.deepEqual(source.records[0], {
-    latitude: 50, longitude: 14, light: 1660, medium: 40, heavy: 200, moto: 100, sourceId: 10,
+    latitude: 50, longitude: 14, light: 830, medium: 20, heavy: 100, moto: 50, sourceId: 10,
+    observationId: source.records[0].observationId, sourceOsmId: null, estimatedClasses: 3,
     countBasis: 'directional', rawOneway: true, rawDirection: null, osmOneway: null, rawTechnology: null,
   })
   assert.deepEqual(source.records[1], {
     latitude: 50.001, longitude: 14.001, light: 880, medium: 20, heavy: 100, moto: 0, sourceId: 10,
+    observationId: source.records[1].observationId, sourceOsmId: null, estimatedClasses: 11,
     countBasis: 'unknown', rawOneway: 'true', rawDirection: null, osmOneway: null, rawTechnology: null,
   })
   assert.equal(source.nonBooleanOneway, 1)
@@ -76,7 +78,7 @@ test('all 36 nonempty finite city inputs are required before a load can succeed 
   for (const invalid of [bytes(), bytes(feature({ AADT: -1 })),
     Buffer.from('{"type":"FeatureCollection","features":[{"properties":{"AADT":1e999}}]}'),
     bytes(feature({ AADT: 100 }, { type: 'LineString', coordinates: [] })),
-    bytes(feature({ AADT: 2 ** 31, raw_oneway: true }))]) {
+    bytes(feature({ AADT: 2 ** 32, raw_oneway: true }))]) {
     writeFileSync(last, invalid)
     assert.throws(() => loadEuropeanCityTraffic(directory), /Cardiff/)
   }
@@ -98,5 +100,5 @@ test('source basis survives OSM disagreement and heavy-only counts gain no inven
   assert.equal(source.records[1].countBasis, 'both-directions')
   assert.equal(source.records[1].osmOneway, 'True')
   assert.deepEqual(['light', 'medium', 'heavy', 'moto'].map(key =>
-    source.records[2][key as 'light' | 'medium' | 'heavy' | 'moto']), [0, 0, 1000, 0])
+    source.records[2][key as 'light' | 'medium' | 'heavy' | 'moto']), [0, 0, 500, 0])
 })

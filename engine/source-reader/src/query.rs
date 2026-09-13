@@ -280,7 +280,9 @@ pub fn collect_from_square_data(
         }
 
         if let Some(schema) = data.roads.schema() {
-            RoadDirections::read(&arrow::record_batch::RecordBatch::new_empty(schema.clone()))?;
+            let empty = arrow::record_batch::RecordBatch::new_empty(schema.clone());
+            square_store::grid_cols::RoadDirections::read(&empty)?;
+            crate::road_traffic::RoadTrafficColumns::read(&empty)?;
         }
         let road_batches =
             data.roads
@@ -307,16 +309,18 @@ pub fn collect_from_square_data(
                 surface_type: r.surface_type,
                 oneway: r.oneway,
                 lanes: r.lanes,
-                aadt_light: r.aadt_light,
-                aadt_medium: r.aadt_medium,
-                aadt_heavy: r.aadt_heavy,
-                aadt_moto: r.aadt_moto,
+                traffic: noise_compute::normalize::RoadTraffic {
+                    light: r.aadt_light,
+                    medium: r.aadt_medium,
+                    heavy: r.aadt_heavy,
+                    moto: r.aadt_moto,
+                    estimated: r.traffic_estimated,
+                },
                 source_id: r.source_id,
                 name: r.name.clone(),
                 road_ref: r.road_ref.clone(),
                 bridge: r.bridge,
                 tunnel: r.tunnel,
-                access: r.access,
                 junction: r.junction,
                 built_up: r.built_up,
                 dist_m: r.dist_m,
@@ -533,7 +537,7 @@ pub fn collect_from_square_data(
 }
 
 /// Road segment query result (references into mmap'd data, minimal copy).
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub struct RoadResult {
     pub osm_id: i64,
     pub segment_idx: i16,
@@ -554,13 +558,15 @@ pub struct RoadResult {
     pub road_ref: String,
     pub bridge: bool,
     pub tunnel: bool,
-    pub access: u8,
     pub junction: u8,
     pub built_up: u8,
-    pub aadt_light: i32,
-    pub aadt_medium: i32,
-    pub aadt_heavy: i32,
-    pub aadt_moto: i32,
+    /// Prepared per-category AADT (effective vehicles/day) — consumed verbatim.
+    pub aadt_light: f64,
+    pub aadt_medium: f64,
+    pub aadt_heavy: f64,
+    pub aadt_moto: f64,
+    /// Per-category estimated bitmask (light 1, medium 2, heavy 4, moto 8).
+    pub traffic_estimated: u8,
     pub source_id: u16,
     pub dist_m: f64,
     pub cp_lat: f64,
@@ -583,7 +589,8 @@ pub fn query_roads_from_batches(
     let mut results = Vec::new();
 
     // SquareCountryCity resolved once per popup call — lat/lng is the query centre.
-    // Falls back to UNKNOWN → WORLD_DEFAULT when the table isn't loaded.
+    // Drives only the untagged-speed default cascade now; traffic is final.
+    // Falls back to UNKNOWN → class-default speeds when the table isn't loaded.
     let square_country_city =
         noise_compute::square_country_city::square_country_city_for_latlng(lat, lon);
 
@@ -602,6 +609,7 @@ pub fn query_roads_from_batches(
         let speed_taper_col = col_u8(batch, "speed_taper");
         let surface = col_u8(batch, "surface_type");
         let directions = RoadDirections::read(batch)?;
+        let traffic_columns = crate::road_traffic::RoadTrafficColumns::read(batch)?;
         let lanes = col_u8(batch, "lanes");
         let name = col_str(batch, "name");
         let road_ref = col_str(batch, "ref");
@@ -611,16 +619,12 @@ pub fn query_roads_from_batches(
         let tunnel_col: Option<&arrow::array::BooleanArray> = batch
             .column_by_name("tunnel")
             .and_then(|c| c.as_any().downcast_ref());
-        let access_col = col_u8(batch, "access");
         let junction_col = col_u8(batch, "junction");
         // Absent on pre-migration arrows → 0 = unknown → the legacy speed table.
         let built_up_col = col_u8(batch, "built_up");
-        let aadt_l = col_i32(batch, "aadt_light");
-        let aadt_m = col_i32(batch, "aadt_medium");
-        let aadt_h = col_i32(batch, "aadt_heavy");
-        let aadt_mo = col_i32(batch, "aadt_moto");
-        // Single `source_id` column; provenance via
-        // `noise_compute::sources::provenance_of(source_id)`.
+        // Single `source_id` column; popup dataset attribution via
+        // `noise_compute::sources::dataset_meta(source_id)`. Traffic is final:
+        // a source_id of 0 with positive counts is a valid producer prior.
         let source_id_col = col_u16(batch, "source_id");
         // M3 baked SquareCountryCity triplet (all-or-none at bake time). The `country_iso`
         // column's PRESENCE is the fallback switch: a present 0 bakes
@@ -678,15 +682,8 @@ pub fn query_roads_from_batches(
                 speed_limit: speed.map(|a| a.value(i)).unwrap_or(0),
                 speed_taper: speed_taper_col.map(|a| a.value(i)).unwrap_or(0),
                 surface_type: surface.map(|a| a.value(i)).unwrap_or(0),
-                oneway: directions.is_oneway(i),
-                lanes: lanes.map(|a| a.value(i)).unwrap_or(0),
-                aadt_light: aadt_l.map(|a| a.value(i)).unwrap_or(0),
-                aadt_medium: aadt_m.map(|a| a.value(i)).unwrap_or(0),
-                aadt_heavy: aadt_h.map(|a| a.value(i)).unwrap_or(0),
-                aadt_moto: aadt_mo.map(|a| a.value(i)).unwrap_or(0),
-                provenance: noise_compute::sources::provenance_of(source_id),
+                traffic: traffic_columns.row(i),
                 tunnel: tunnel_col.map(|a| a.value(i)).unwrap_or(false),
-                access: access_col.map(|a| a.value(i)).unwrap_or(0),
                 junction: junction_col.map(|a| a.value(i)).unwrap_or(0),
                 built_up: built_up_col.map(|a| a.value(i)).unwrap_or(0),
             };
@@ -731,19 +728,19 @@ pub fn query_roads_from_batches(
                 speed_limit: raw.speed_limit,
                 speed_taper: raw.speed_taper,
                 surface_type: raw.surface_type,
-                oneway: raw.oneway,
-                lanes: raw.lanes,
+                oneway: directions.is_oneway(i),
+                lanes: lanes.map(|a| a.value(i)).unwrap_or(0),
                 name: name.map(|a| a.value(i).to_string()).unwrap_or_default(),
                 road_ref: road_ref.map(|a| a.value(i).to_string()).unwrap_or_default(),
                 bridge: bridge_col.map(|a| a.value(i)).unwrap_or(false),
                 tunnel: raw.tunnel,
-                access: raw.access,
                 junction: raw.junction,
                 built_up: raw.built_up,
-                aadt_light: raw.aadt_light,
-                aadt_medium: raw.aadt_medium,
-                aadt_heavy: raw.aadt_heavy,
-                aadt_moto: raw.aadt_moto,
+                aadt_light: raw.traffic.light,
+                aadt_medium: raw.traffic.medium,
+                aadt_heavy: raw.traffic.heavy,
+                aadt_moto: raw.traffic.moto,
+                traffic_estimated: raw.traffic.estimated,
                 source_id,
                 dist_m: cp.dist_m,
                 cp_lat: cp.lat,
@@ -1307,6 +1304,7 @@ mod square_query_tests {
                         speed_limit: 100,
                         lanes: 2,
                         name: String::new(),
+                        ..Default::default()
                     }],
                 );
                 fx::write_railways_file(
@@ -1366,6 +1364,7 @@ mod square_query_tests {
                 speed_limit: 50,
                 lanes: 2,
                 name: "Test Street".to_string(),
+                ..Default::default()
             }],
         );
         tmp
@@ -1402,6 +1401,7 @@ mod square_query_tests {
                 speed_limit: 50,
                 lanes: 2,
                 name: String::new(),
+                ..Default::default()
             }],
         );
         let data = collect_sources_at_point(tmp.path(), LAT, LON).unwrap();
@@ -1428,6 +1428,7 @@ mod square_query_tests {
             speed_limit: 50,
             lanes: 2,
             name: String::new(),
+            ..Default::default()
         };
         fx::write_roads_file(&dir.join("roads.arrow"), &[road(1, 0), road(2, 5)]);
         let square = load_square(&dir).unwrap();
@@ -1439,6 +1440,107 @@ mod square_query_tests {
         )
         .unwrap();
         assert_eq!(kept.iter().map(|r| r.osm_id).collect::<Vec<_>>(), vec![1]);
+    }
+
+    /// Prepared traffic is consumed verbatim: a heavy-only count on an
+    /// access=no row emits (the producer resolved closures), a true total zero
+    /// stays silent (never a runtime class default), and source_id=0 positive
+    /// priors are valid traffic whose estimated bitmask round-trips.
+    #[test]
+    fn prepared_traffic_is_consumed_verbatim() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = fx::square_dir(tmp.path(), prague());
+        std::fs::create_dir_all(&dir).unwrap();
+        fx::write_roads_file(
+            &dir.join("roads.arrow"),
+            &[
+                fx::FixtureRoad {
+                    osm_id: 11,
+                    start: (LON, LAT),
+                    end: (LON + 0.002, LAT),
+                    aadt_light: 0.0,
+                    aadt_medium: 0.0,
+                    aadt_heavy: 500.0,
+                    aadt_moto: 0.0,
+                    traffic_estimated: 0,
+                    access: 2,
+                    ..Default::default()
+                },
+                fx::FixtureRoad {
+                    osm_id: 12,
+                    start: (LON, LAT),
+                    end: (LON + 0.002, LAT),
+                    aadt_light: 0.0,
+                    aadt_medium: 0.0,
+                    aadt_heavy: 0.0,
+                    aadt_moto: 0.0,
+                    ..Default::default()
+                },
+                fx::FixtureRoad {
+                    osm_id: 13,
+                    start: (LON, LAT),
+                    end: (LON + 0.002, LAT),
+                    ..Default::default()
+                },
+            ],
+        );
+        let data = collect_sources_at_point(tmp.path(), LAT, LON).unwrap();
+        assert_eq!(
+            data.roads.iter().map(|r| r.osm_id).collect::<Vec<_>>(),
+            vec![11, 13],
+            "heavy-only on access=no emits; true zero stays silent"
+        );
+        let heavy = &data.roads[0];
+        assert_eq!(heavy.traffic.heavy, 500.0);
+        assert_eq!(heavy.traffic.light, 0.0);
+        assert_eq!(heavy.traffic.estimated, 0);
+        assert_eq!(heavy.source_id, 0, "source_id=0 prior is valid traffic");
+        let prior = &data.roads[1];
+        assert_eq!(prior.traffic.light, 3_000.0);
+        assert_eq!(prior.traffic.estimated, 15);
+    }
+
+    /// A final roads.arrow without the traffic contract, or with the legacy
+    /// build-stage Int32 traffic columns, is rejected loudly — the popup never
+    /// serves unstamped or pre-finalization traffic.
+    #[test]
+    fn unfinalized_road_arrow_is_rejected() {
+        use arrow::array::{ArrayRef, Int32Array, UInt8Array};
+        use std::sync::Arc;
+        let batch = |metadata: Option<&str>| {
+            let mut columns: Vec<(&str, ArrayRef)> = vec![
+                ("osm_id", Arc::new(arrow::array::Int64Array::from(vec![1]))),
+                ("road_class", Arc::new(UInt8Array::from(vec![2]))),
+                ("oneway", Arc::new(UInt8Array::from(vec![0]))),
+                ("aadt_light", Arc::new(Int32Array::from(vec![10_000]))),
+            ];
+            let fields = columns
+                .iter()
+                .map(|(name, array)| {
+                    arrow::datatypes::Field::new(*name, array.data_type().clone(), false)
+                })
+                .collect::<Vec<_>>();
+            let schema = arrow::datatypes::Schema::new(fields);
+            let schema = match metadata {
+                Some(value) => schema.with_metadata(std::collections::HashMap::from([(
+                    "road_traffic_contract".to_owned(),
+                    value.to_owned(),
+                )])),
+                None => schema,
+            };
+            arrow::record_batch::RecordBatch::try_new(
+                Arc::new(schema),
+                columns.iter_mut().map(|(_, array)| array.clone()).collect(),
+            )
+            .unwrap()
+        };
+        for metadata in [None, Some("1")] {
+            let err = query_roads_from_batches(&[batch(metadata)], LAT, LON, 1000.0).unwrap_err();
+            assert!(
+                err.contains("road_traffic_contract") || err.contains("road traffic column"),
+                "got: {err}"
+            );
+        }
     }
 
     #[test]
@@ -1478,6 +1580,7 @@ mod square_query_tests {
                 speed_limit: 50,
                 lanes: 2,
                 name: "Dateline Road".to_string(),
+                ..Default::default()
             }],
         );
         fx::write_railways_file(
@@ -1651,6 +1754,7 @@ mod square_query_tests {
                 speed_limit: 50,
                 lanes: 2,
                 name: String::new(),
+                ..Default::default()
             }],
         );
         let name = grid::square_name(prague());

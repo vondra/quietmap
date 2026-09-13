@@ -8,7 +8,7 @@ import {
   modelName,
 } from '../../../utils/aircraft-types'
 import { HoverText } from '../../ui/info-tip'
-import { roadSourceDescription, railTrafficLabel, railTrafficDescription } from '../shared'
+import { railTrafficLabel, railTrafficDescription, roadTrafficDescription } from '../shared'
 import { fmtDbSigned } from './display'
 
 export function emissionInputRows(t: SegmentTrace): [React.ReactNode, React.ReactNode][] {
@@ -17,14 +17,8 @@ export function emissionInputRows(t: SegmentTrace): [React.ReactNode, React.Reac
     case 'road': {
       const total = e.aadt_light + e.aadt_medium + e.aadt_heavy + e.aadt_moto
       const trafficText =
-        roadSourceDescription(e.traffic_source, e.provenance, e.road_class) +
-        `\n\n` +
-        `Daily traffic (per OSM way):\n` +
-        (e.aadt_light > 0 ? `  Light    ${Math.round(e.aadt_light)}\n` : '') +
-        (e.aadt_medium > 0 ? `  Medium   ${Math.round(e.aadt_medium)}\n` : '') +
-        (e.aadt_heavy > 0 ? `  Heavy    ${Math.round(e.aadt_heavy)}\n` : '') +
-        (e.aadt_moto > 0 ? `  Moto     ${Math.round(e.aadt_moto)}\n` : '') +
-        `  ──────────────\n  Total    ${Math.round(total)}/day`
+        roadTrafficDescription(e, e.provenance) +
+        `\n  ──────────────\n  Total    ${Math.round(total)}/day`
       const surfaceText =
         `Source: OSM surface=${e.surface}\n\n` +
         `CNOSSOS Annex II rolling-noise correction relative to the standard\n` +

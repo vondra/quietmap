@@ -7,7 +7,7 @@ import { buildRoadLineVertexGrid, type PinnedRoadLine } from './lib/pinned-road-
 import type { RoadRow } from './lib/roads-arrow.js'
 
 const line = (properties: Record<string, unknown>): PinnedRoadLine => ({
-  coordinates: [[46.7, 24.7], [46.71, 24.7]], properties, relativePath: 'fixture',
+  observationId: 'fixture', coordinates: [[46.7, 24.7], [46.71, 24.7]], properties, relativePath: 'fixture',
 })
 const source = (refAadt = new Map<string, number>(), riyadh: PinnedRoadLine[] = [], atlas: PinnedRoadLine[] = []): SaudiRoadSource => ({
   refAadt, riyadh: buildRoadLineVertexGrid(riyadh), atlas: buildRoadLineVertexGrid(atlas),
@@ -24,9 +24,9 @@ test('Saudi MoT parser averages valid stations by road reference', () => {
 
 test('Saudi MoT ref wins and Riyadh fallback enforces source-class compatibility', () => {
   assert.deepEqual(matchSaudiRoad(road, source(new Map([['40', 10_000]]), [line({ CLASS: 'B', NO_OF_LANE: 4 })])),
-    { kind: 'mot', light: 7800, medium: 1000, heavy: 1100, moto: 100 })
+    { countBasis: 'unknown', observationId: 'road-average:40', kind: 'mot', light: 7800, medium: 1000, heavy: 1100, moto: 100 })
   assert.deepEqual(matchSaudiRoad({ ...road, ref: null }, source(new Map(), [line({ CLASS: 'B', NO_OF_LANE: 4 })])),
-    { kind: 'riyadh', light: 14040, medium: 1800, heavy: 1980, moto: 180 })
+    { countBasis: 'both-directions', observationId: 'fixture', kind: 'riyadh', light: 14040, medium: 1800, heavy: 1980, moto: 180 })
   assert.equal(matchSaudiRoad({ ...road, ref: null, roadClass: 4 },
     source(new Map(), [line({ CLASS: 'A', NO_OF_LANE: 5 })])), null)
 })

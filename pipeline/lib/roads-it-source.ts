@@ -1,5 +1,7 @@
 /** Parse the admitted Anas TGM point census for Italian state roads. */
 
+import { roadFeatureObservation } from './pinned-road-lines.js'
+import type { RoadObservation } from './road-observation.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import { readPinnedRoadSource } from './pinned-road-source.js'
 
@@ -7,7 +9,7 @@ const SOURCE_PATH = 'it/tgm-roads.geojson'
 const SOURCE_SHA256 = '156bfe8936a4b595e453656e956080b2447be80e1b55bdd57e8f4af3f434bfea'
 const ITALY_BBOX = [35.5, 6.6, 47.1, 18.6] as const
 
-export interface ItalianTgmStation {
+export interface ItalianTgmStation extends RoadObservation {
   sourceRow: number
   ref: string
   latitude: number
@@ -91,7 +93,7 @@ export function parseItalianTgmSource(raw: string): ItalianTgmSource {
       result.invalidGeometrySkipped++
       continue
     }
-    result.stations.push({ sourceRow, ref, latitude, longitude, total: Math.round(total) })
+    result.stations.push({ sourceRow, ...roadFeatureObservation(feature as object, 'unknown'), ref, latitude, longitude, total: Math.round(total) })
   }
   if (result.stations.length === 0) throw new Error('Italian TGM source has no usable measurements')
   return result

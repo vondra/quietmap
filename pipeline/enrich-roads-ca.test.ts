@@ -17,12 +17,12 @@ const DIRECTORY = mkdtempSync(join(tmpdir(), 'enrich-roads-ca-test-'))
 after(() => rmSync(DIRECTORY, { recursive: true, force: true }))
 
 const feature = (overrides: Record<string, unknown> = {}) => ({
-  type: 'Feature', properties: { rtss_debut: '00138-01',
+  type: 'Feature', id: 'station-1', properties: { rtss_debut: '00138-01',
     annee_en_cours: '2024 DJMA:1000 / %cam:10' },
   geometry: { type: 'LineString', coordinates: [[-73.01, 46.8], [-72.99, 46.8]] }, ...overrides,
 })
 const section = (overrides: Partial<QuebecDjmaSection> = {}): QuebecDjmaSection => ({
-  sourceRow: 0, route: 138, rank: 1, latitude: 46.8, longitude: -73,
+  countBasis: 'unknown', observationId: 'station-1', sourceRow: 0, route: 138, rank: 1, latitude: 46.8, longitude: -73,
   total: 1000, truckPercent: 10, light: 890, medium: 20, heavy: 80, moto: 10,
   ...overrides,
 })

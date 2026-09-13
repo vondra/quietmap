@@ -3,7 +3,7 @@
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { nationalRoadProxySourceId } from './enrich-roads-national-policy.js'
-import { buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine } from './lib/pinned-road-lines.js'
+import { pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine } from './lib/pinned-road-lines.js'
 import { listPreparedSquares } from './lib/prepared-grid.js'
 import { NATIONAL_ROAD_NETWORK_POLICIES, type NationalRoadLinePolicy } from './lib/road-national-network-policies/index.js'
 import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
@@ -21,7 +21,9 @@ export async function runNationalRoadNetworkPolicy(
   const match = (row: Parameters<NationalRoadLinePolicy['traffic']>[0]) => {
     if (!policy.coverage.has(row.roadClass)) return null
     const line = nearestRoadLine(row.midLat, row.midLon, grid, policy.radiusMetres, policy.acceptLine)
-    return line ? policy.traffic(row, line) : null
+    if (!line) return null
+    const traffic = policy.traffic(row, line)
+    return traffic ? { ...traffic, ...pinnedRoadObservation(line, 'both-directions') } : null
   }
   const result = { country: policy.country, sourceId, sourceRows: loaded.sourceRows,
     sourceLines: loaded.lines.length, invalidGeometrySkipped: loaded.invalidGeometrySkipped,

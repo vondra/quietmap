@@ -20,7 +20,7 @@ export async function runPeruRoadEnrichment(options: RoadLoaderArguments) {
   for (const square of squares) {
     const write = await writeRoadAadt(resolve(options.preparedDirectory, square, 'roads.arrow'), row => {
       const traffic = match(row)
-      return traffic ? { light: traffic.light, medium: traffic.medium, heavy: traffic.heavy,
+      return traffic ? { countBasis: traffic.countBasis, observationId: traffic.observationId, light: traffic.light, medium: traffic.medium, heavy: traffic.heavy,
         moto: traffic.moto, sourceId: traffic.kind === 'imd' ? SOURCE_ID_PE_NATIONAL_ROADS : SOURCE_ID_PE_ROAD_CLASSIFICATION_FALLBACK } : null
     }, row => { if (match(row)?.kind === 'imd') result.matchedImd++; else result.matchedNetwork++ },
     PERU_ROAD_COVERAGE, { sourceIds: [SOURCE_ID_PE_NATIONAL_ROADS, SOURCE_ID_PE_ROAD_CLASSIFICATION_FALLBACK], when: row => { const traffic = match(row); return traffic === null ||

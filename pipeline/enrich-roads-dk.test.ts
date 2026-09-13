@@ -17,13 +17,13 @@ const DIRECTORY = mkdtempSync(join(tmpdir(), 'enrich-roads-dk-test-'))
 after(() => rmSync(DIRECTORY, { recursive: true, force: true }))
 
 const observation = (overrides: Partial<DanishMastraObservation> = {}): DanishMastraObservation => ({
-  sourceRow: 0, roadNumber: 10, kilometre: 1, year: 2025,
+  countBasis: 'unknown', observationId: 'station-1', sourceRow: 0, roadNumber: 10, kilometre: 1, year: 2025,
   latitude: 55.7, longitude: 12.5, rank: 1, total: 1000,
   light: 890, medium: 5, heavy: 95, moto: 10, ...overrides,
 })
 const feature = (properties: Record<string, unknown>, longitude = 12.5, latitude = 55.7) => {
   const [x, y] = proj4('WGS84', 'EPSG:25832', [longitude, latitude])
-  return { type: 'Feature', properties, geometry: { type: 'Point', coordinates: [x, y] } }
+  return { type: 'Feature', id: 'station-1', properties, geometry: { type: 'Point', coordinates: [x, y] } }
 }
 const collection = (features: readonly unknown[]) => JSON.stringify({ type: 'FeatureCollection', features })
 

@@ -92,7 +92,7 @@ export async function enrichMexicanRoads(
     const write = await writeRoadAadt(resolve(preparedDirectory, square, 'roads.arrow'), row => {
       if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
       const segment = match(row)
-      return segment ? { ...splitMexicanTdpa(segment.total, segment.fractions), sourceId: SOURCE_ID } : null
+      return segment ? { countBasis: segment.countBasis, observationId: segment.observationId, ...splitMexicanTdpa(segment.total, segment.fractions), sourceId: SOURCE_ID } : null
     }, undefined, COVERED_ROAD_CLASSES,
     { sourceIds: [SOURCE_ID], when: row => match(row) === null })
     result.rows += write.rows

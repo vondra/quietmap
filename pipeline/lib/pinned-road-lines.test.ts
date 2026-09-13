@@ -21,7 +21,7 @@ function writeSource(name: string, value: unknown) {
 
 test('line loader validates every feature and preserves multipart separation', () => {
   const file = writeSource('roads.geojson', { type: 'FeatureCollection', features: [
-    { type: 'Feature', properties: { class: 'A' }, geometry: { type: 'MultiLineString',
+    { type: 'Feature', id: 'publisher-section-42', properties: { class: 'A' }, geometry: { type: 'MultiLineString',
       coordinates: [[[1, 2], [1.01, 2]], [[9, 8], [9.01, 8]]] } },
     { type: 'Feature', geometry: { type: 'Point', coordinates: [1, 2] } },
     { type: 'Feature', geometry: { type: 'LineString', coordinates: [[1, 95], [2, 2]] } },
@@ -30,6 +30,8 @@ test('line loader validates every feature and preserves multipart separation', (
   assert.deepEqual({ rows: loaded.sourceRows, lines: loaded.lines.length,
     invalid: loaded.invalidGeometrySkipped }, { rows: 3, lines: 2, invalid: 2 })
   assert.equal(loaded.lines[0].properties.class, 'A')
+  assert.deepEqual(loaded.lines.map(line => line.observationId),
+    ['roads.geojson:publisher-section-42', 'roads.geojson:publisher-section-42'])
   const grid = buildRoadLineVertexGrid(loaded.lines)
   assert.equal(nearestRoadLine(2, 1.005, grid, 1000), loaded.lines[0])
   assert.equal(nearestRoadLine(5, 5, grid, 1000), null, 'multipart endpoints never form a phantom connector')

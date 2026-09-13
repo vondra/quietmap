@@ -79,9 +79,10 @@ def latest_receipts(path):
 
 
 def data_environment(environment):
-    # These values only limit admission or worker count; all other overrides bind data.
+    # Admission, worker count and temporary storage placement do not change produced data.
     return {key: value for key, value in environment.items()
-            if key not in ('MAX_THREADS', 'MEMMAX', 'RAYON_NUM_THREADS', 'QM_ROAD_WORKERS')}
+            if key not in ('MAX_THREADS', 'MEMMAX', 'RAYON_NUM_THREADS', 'QM_ROAD_WORKERS',
+                           'SCRATCH_ROOT', 'NODE_CACHE', 'SPILL_DIR')}
 
 
 def step_identity(step, settings, input_pin_sha256):
@@ -115,7 +116,7 @@ def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry
     state = json.loads((output / STATE_NAME).read_text())
     def data_configuration(value):
         return {**value, 'build': {key: item for key, item in value['build'].items()
-                                  if key not in ('threads', 'memory_gib')}}
+                                  if key not in ('threads', 'memory_gib', 'osm_node_cache', 'osm_spill_dir')}}
     if data_configuration(json.loads(state['config'])) != data_configuration(config):
         raise ValueError('cannot resume another configuration; prior output retained')
     if state['status'] == 'complete':

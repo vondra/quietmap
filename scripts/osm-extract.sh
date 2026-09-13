@@ -5,10 +5,16 @@
 #   barriers,leisure,airport_areas,airport_lines}.arrow (integer grid geometry)
 #
 # Required env: PBF_FILE (planet), OUTPUT_DIR (the release prepared dir).
-# Optional: SCRATCH_ROOT (node cache + spill, ~300 GB during the run),
-#   NUM_BUCKETS (spill partitions). A complete spill left in SCRATCH_ROOT by a
-#   failed finalize is finalized again without reading the planet (the binary
-#   decides; the planet stays a pinned input of the step).
+# Optional scratch (defaults keep both under SCRATCH_ROOT; override to put
+# the cache and spill on different disks — do not guess a striping layout):
+#   SCRATCH_ROOT  parent of the default cache + spill (~300 GB during the run)
+#   NODE_CACHE    Pass 1 sparse mmap write, then Pass 2 random coordinate reads
+#   SPILL_DIR     Pass 2 sequential feature writes and finalize sort temp
+#   NUM_BUCKETS   spill partitions
+# A complete spill left in SPILL_DIR by a failed finalize is finalized again
+# without reading the planet (the binary decides; the planet stays a pinned
+# input of the step). Cleanup deletes only NODE_CACHE and SPILL_DIR, never
+# PBF_FILE or other source trees.
 # Enrichment (structures, service-tree, country bake, …) runs as separate
 # steps after this; see the pipeline transfers.
 set -euo pipefail
@@ -18,6 +24,8 @@ log() { echo "[osm] $(date '+%H:%M:%S') $*"; }
 : "${PBF_FILE:?set PBF_FILE to the planet .osm.pbf}"
 : "${OUTPUT_DIR:?set OUTPUT_DIR to the release prepared dir}"
 SCRATCH_ROOT="${SCRATCH_ROOT:-${TMPDIR:-/tmp}/quietmap-osm}"
+NODE_CACHE="${NODE_CACHE:-$SCRATCH_ROOT/osm_nodes.cache}"
+SPILL_DIR="${SPILL_DIR:-$SCRATCH_ROOT/osm_spill}"
 NUM_BUCKETS="${NUM_BUCKETS:-256}"
 if ! [[ "$NUM_BUCKETS" =~ ^[1-9][0-9]*$ ]]; then
     log "ERROR: NUM_BUCKETS must be a positive integer, got: $NUM_BUCKETS"
@@ -38,8 +46,6 @@ if [ "$SOFT_OPEN_FILES" != "unlimited" ] && [ "$SOFT_OPEN_FILES" -lt "$REQUIRED_
     ulimit -Sn "$REQUIRED_OPEN_FILES"
 fi
 
-NODE_CACHE="$SCRATCH_ROOT/osm_nodes.cache"
-SPILL_DIR="$SCRATCH_ROOT/osm_spill"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BINARY="$REPO_ROOT/engine/target/release/osm-extract"
 
@@ -61,13 +67,12 @@ if [ ! -f "$PBF_FILE" ]; then
 fi
 
 PBF_SIZE_HR=$(numfmt --to=iec-i --suffix=B "$(stat --printf='%s' "$PBF_FILE")")
-mkdir -p "$OUTPUT_DIR" "$(dirname "$NODE_CACHE")" "$SPILL_DIR"
 
 log "=== OSM extraction ==="
 log "  Input:      $PBF_FILE ($PBF_SIZE_HR)"
 log "  Output:     $OUTPUT_DIR"
-log "  Scratch:    $SCRATCH_ROOT"
-log "  Disk free:  output $(df -h "$OUTPUT_DIR" --output=avail | tail -1 | xargs) | scratch $(df -h "$SCRATCH_ROOT" --output=avail | tail -1 | xargs)"
+log "  Node cache: $NODE_CACHE  (Pass 1 write, Pass 2 random reads)"
+log "  Spill:      $SPILL_DIR  (Pass 2 writes, finalize sort)"
 
 T_START=$(date +%s)
 
@@ -78,7 +83,7 @@ T_START=$(date +%s)
         NOW=$(date +%s)
         ELAPSED=$((NOW - T_START))
         ELAPSED_HR=$(printf '%dh%02dm' $((ELAPSED/3600)) $(((ELAPSED%3600)/60)))
-        SQ_COUNT=$(find "$OUTPUT_DIR/z9" -maxdepth 2 -mindepth 2 -type d 2>/dev/null | wc -l)
+        SQ_COUNT=$(find "$OUTPUT_DIR/z9" -maxdepth 2 -mindepth 2 -type d 2>/dev/null | wc -l) || SQ_COUNT=0
         CACHE_SIZE=0
         [ -f "$NODE_CACHE" ] && CACHE_SIZE=$(stat --printf='%s' "$NODE_CACHE" 2>/dev/null || echo 0)
         CACHE_HR=$(numfmt --to=iec-i --suffix=B "$CACHE_SIZE" 2>/dev/null || echo "?")
@@ -97,14 +102,8 @@ MONITOR_PID=$!
 
 stop_monitor
 
-# Reclaim scratch the moment the binary is done with it: the node cache and
-# the sort spill are useless after finalize.
-log "Cleaning up scratch (node cache + spill) ..."
-rm -f "$NODE_CACHE"
-rm -rf "$SPILL_DIR"
-
 T_ELAPSED=$(( $(date +%s) - T_START ))
-SQ_COUNT=$(find "$OUTPUT_DIR/z9" -maxdepth 2 -mindepth 2 -type d 2>/dev/null | wc -l)
+SQ_COUNT=$(find "$OUTPUT_DIR/z9" -maxdepth 2 -mindepth 2 -type d 2>/dev/null | wc -l) || SQ_COUNT=0
 OUTPUT_SIZE=$(du -sh "$OUTPUT_DIR" 2>/dev/null | cut -f1)
 
 log ""

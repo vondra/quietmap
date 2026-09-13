@@ -1,0 +1,12 @@
+# Resolve source observations and priors to physical road traffic before serving.
+[package]
+name = "roads-finalize"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arrow = { version = "54", default-features = false, features = ["ipc"] }
+arrow-batching = { path = "../arrow-batching" }
+grid = { path = "../grid" }
+noise-compute = { path = "../noise-compute" }
+rusqlite = { version = "0.37", features = ["bundled"] }

@@ -58,29 +58,19 @@ pub enum SourceMetadata {
 /// This ensures the popup shows what actually drives the noise result.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct RoadMetadata {
-    // Raw (from Arrow, pre-factor) — at dominant segment
-    pub aadt_light_raw: i32,
-    pub aadt_medium_raw: i32,
-    pub aadt_heavy_raw: i32,
-    pub aadt_moto_raw: i32,
-    pub traffic_source: &'static str, // "matched_external" | "estimated_service_tree" | "default_by_class"
-    pub dominant_source_id: u16, // dataset identity (single source of truth: pipeline/lib/sources.ts → engine/noise-compute/src/sources.rs; 0 = unspecified). Resolved into `provenance` field below.
+    // Prepared per-category AADT (effective vehicles/day, consumed verbatim)
+    // — at dominant segment. The producer resolved observations, priors and
+    // allocation; runtime holds no second "raw/nominal/effective" truth.
+    pub aadt_light: f64,
+    pub aadt_medium: f64,
+    pub aadt_heavy: f64,
+    pub aadt_moto: f64,
+    /// Per-category estimated bitmask (light 1, medium 2, heavy 4, moto 8):
+    /// bit set = that category's value is an estimate/prior, clear = observed.
+    pub traffic_estimated: u8,
+    pub dominant_source_id: u16, // dataset identity (single source of truth: pipeline/lib/sources.ts → engine/noise-compute/src/sources.rs; 0 = unspecified, incl. producer priors). Resolved into `provenance` field below.
     pub speed_posted_kmh: Option<u8>, // raw OSM maxspeed (Some(0) = untagged); None = derestricted (maxspeed=none) — no number exists to display
 
-    // Nominal ("road total, both directions") — arrow's raw number if
-    // enriched, else class default. Pre-factor (no oneway / access /
-    // lane_ratio applied). Frontend uses these as the authoritative
-    // display number so per-OSM-way mechanics never leak into the summary.
-    pub aadt_light_nominal: f64,
-    pub aadt_medium_nominal: f64,
-    pub aadt_heavy_nominal: f64,
-    pub aadt_moto_nominal: f64,
-
-    // Effective (what CNOSSOS consumed) — at dominant segment
-    pub aadt_light_effective: f64,
-    pub aadt_medium_effective: f64,
-    pub aadt_heavy_effective: f64,
-    pub aadt_moto_effective: f64,
     pub speed_kmh: f64,
     pub speed_source: &'static str, // "osm_posted" | "default_by_class" | "roundabout_cap" | "derestricted"
 

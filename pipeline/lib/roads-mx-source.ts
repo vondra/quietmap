@@ -1,5 +1,6 @@
 /** Parse admitted SICT/IMT Datos Viales 2025 U1 traffic and composition. */
 
+import { roadObservation, type RoadObservation } from './road-observation.js'
 import { parse } from 'csv-parse/sync'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import { readPinnedRoadSource } from './pinned-road-source.js'
@@ -10,7 +11,7 @@ const COMPOSITION_PATH = 'mx/sict-datosviales/u1_segmentos.csv'
 const COMPOSITION_SHA256 = '4ce7ac4f8729ddb6f8bbbba88fddc85fa2090632e46722b5e37b0e10a207452e'
 const NATIONAL_SPLIT = { light: 0.795, medium: 0.071, heavy: 0.082, moto: 0.052 }
 
-export interface MexicanSictSegment {
+export interface MexicanSictSegment extends RoadObservation {
   sourceRow: number
   lines: ReadonlyArray<ReadonlyArray<readonly [number, number]>>
   total: number
@@ -116,7 +117,7 @@ export function parseMexicanSictSource(segmentsRaw: string, compositionRaw: stri
     if (!compositionById.has(id)) result.missingCompositionRows++
     const fractions = compositionById.get(id) ?? null
     if (!fractions) result.fallbackCompositionRows++
-    result.segments.push({ sourceRow, lines: geometryLines, total: Math.round(totalValue),
+    result.segments.push({ sourceRow, ...roadObservation(id || feature as object, 'unknown'), lines: geometryLines, total: Math.round(totalValue),
       fractions: fractions ?? NATIONAL_SPLIT,
       allowedRoadClassMask: mexicanAllowedRoadClassMask(
         String(properties?.red_ok ?? ''), String(properties?.operacion ?? '')) })
