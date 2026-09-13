@@ -345,7 +345,8 @@ test('declaredRouteFamiliesForFeed: respects a narrowed classifier — a warsaw-
   assert.deepEqual([...declared], ['tram'], 'the excluded rail family is NOT declared — completeness will not require pairs from a feed whose pair contribution is deliberately zero')
 })
 
-test('malformed routes.txt throws from the shared reader (header-only / missing route_type) — computeActiveTripFamiliesForFeed rides the same reader (item 3)', async () => {
+test('unreadable or malformed routes.txt fails instead of declaring an empty feed', async () => {
+  await assert.rejects(() => declaredRouteFamiliesForFeed(join(TMP, 'missing-feed'), routeFamily), { code: 'ENOENT' })
   const headerOnly = join(TMP, 'declared-header-only')
   writeGtfsFixture(headerOnly, { 'routes.txt': 'route_id,route_type\n' })
   await assert.rejects(() => declaredRouteFamiliesForFeed(headerOnly, routeFamily), /header-only or empty/)

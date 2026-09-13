@@ -171,29 +171,35 @@ export function parseCsvLine(line: string): string[] {
   return fields
 }
 
-/** Stream-parse a large CSV file line by line. */
-export async function parseCsvStream(filePath: string): Promise<Record<string, string>[]> {
-  const results: Record<string, string>[] = []
+/** Read GTFS rows without retaining the source table in memory. */
+export async function* streamCsvRows(filePath: string): AsyncGenerator<Record<string, string>> {
   const stream = createReadStream(filePath, { encoding: 'utf-8' })
-  const rl = createInterface({ input: stream, crlfDelay: Infinity })
-
-  let headers: string[] | null = null
-  for await (const rawLine of rl) {
-    const line = headers === null ? rawLine.replace(/^\uFEFF/, '') : rawLine
-    if (line.trim() === '') continue
-
-    if (!headers) {
-      headers = parseCsvLine(line)
-      continue
+  const lines = createInterface({ input: stream, crlfDelay: Infinity })
+  try {
+    let headers: string[] | null = null
+    for await (const rawLine of lines) {
+      const line = headers === null ? rawLine.replace(/^\uFEFF/, '') : rawLine
+      if (line.trim() === '') continue
+      if (!headers) {
+        headers = parseCsvLine(line)
+        continue
+      }
+      const values = parseCsvLine(line)
+      const row: Record<string, string> = {}
+      for (let i = 0; i < headers.length; i++) row[headers[i]] = values[i] || ''
+      yield row
     }
-    const values = parseCsvLine(line)
-    const row: Record<string, string> = {}
-    for (let i = 0; i < headers.length; i++) {
-      row[headers[i]] = values[i] || ''
-    }
-    results.push(row)
+  } finally {
+    lines.close()
+    stream.destroy()
   }
-  return results
+}
+
+/** Collect tables whose callers need all rows, using the same CSV reader. */
+export async function parseCsvStream(filePath: string): Promise<Record<string, string>[]> {
+  const rows: Record<string, string>[] = []
+  for await (const row of streamCsvRows(filePath)) rows.push(row)
+  return rows
 }
 
 /** Feed-declared dates bound timetable sampling even when recurring calendars span years. */
@@ -469,13 +475,12 @@ export async function computeActiveTripFamiliesForFeed<F extends string>(
     return { tripFam: new Map(), targetDate: '', calendarPresent: false, activeServiceIds: new Set() }
   }
 
-  const tripsRaw = await parseCsvStream(resolve(extractDir, 'trips.txt'))
-  const eligibleTrips: Array<{ row: Record<string, string>; family: F }> = []
+  const eligibleTrips: Array<{ tripId: string; serviceId: string; family: F }> = []
   const eligibleServiceIds = new Set<string>()
-  for (const row of tripsRaw) {
+  for await (const row of streamCsvRows(resolve(extractDir, 'trips.txt'))) {
     const family = routeFam.get(row['route_id'])
     if (!family) continue
-    eligibleTrips.push({ row, family })
+    eligibleTrips.push({ tripId: row['trip_id'], serviceId: row['service_id'], family })
     eligibleServiceIds.add(row['service_id'])
   }
 
@@ -516,9 +521,9 @@ export async function computeActiveTripFamiliesForFeed<F extends string>(
   }
   const requiredFamilies = new Set(routeFam.values())
   const tripCountsByService = new Map<string, Map<F, number>>()
-  for (const { row, family } of eligibleTrips) {
-    let counts = tripCountsByService.get(row['service_id'])
-    if (!counts) { counts = new Map<F, number>(); tripCountsByService.set(row['service_id'], counts) }
+  for (const { serviceId, family } of eligibleTrips) {
+    let counts = tripCountsByService.get(serviceId)
+    if (!counts) { counts = new Map<F, number>(); tripCountsByService.set(serviceId, counts) }
     counts.set(family, (counts.get(family) ?? 0) + 1)
   }
   const activateDate = (date: string, recurring: boolean): void => {
@@ -605,16 +610,10 @@ export async function computeActiveTripFamiliesForFeed<F extends string>(
   // else: no calendar files at all — calendarPresent is false, every rail/tram trip below counts.
 
   const tripFam = new Map<string, F>()
-  for (const { row: r, family: fam } of eligibleTrips) {
-    // BUG FIX (2026-07-15): this used to gate on `activeServiceIds.size > 0`, so a
-    // calendar.txt (or calendar_dates.txt) present but resolving to ZERO active services
-    // on the target date — an expired or malformed feed, not a rare case — silently
-    // counted EVERY trip as running instead of none. Correct semantics: calendar data
-    // present means the (possibly empty) active set is authoritative; only when there is
-    // NO calendar data at all do we fall back to "count everything". Changes counts for
-    // broken feeds only — intentional.
-    if (calendarPresent && !activeServiceIds.has(r['service_id'])) continue
-    tripFam.set(r['trip_id'], fam)
+  for (const { tripId, serviceId, family } of eligibleTrips) {
+    // A present calendar's empty active set must not turn into all trips.
+    if (calendarPresent && !activeServiceIds.has(serviceId)) continue
+    tripFam.set(tripId, family)
   }
 
   return { tripFam, targetDate, calendarPresent, activeServiceIds }

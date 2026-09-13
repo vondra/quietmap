@@ -1,33 +1,11 @@
-/**
- * GTFS station-pair frequency parser — turns `stop_times.txt` into consecutive-stop
- * pairs per active rail trip, canonicalized (order-independent key) and summed across
- * trips AND directions, so the graph-walk matcher (`pipeline/lib/rail-graph.ts`, being
- * built in parallel per plan pro-e-sd-zaj-m-wobbly-liskov) has station-pair frequencies
- * to stamp along shortest paths instead of the current per-stop 500 m radius join.
- *
- * Built on the two generic helpers extracted from `gtfs-enrich-core.ts`:
- * `computeActiveTripFamiliesForFeed` (routes + calendar + trips -> trip_id family map,
- * with the 2026-07-15 calendar-zero-active fix) and `loadStopsWithCoords` /
- * `resolveStopViaParent` (stops + parent-station fallback). Wired into
- * `enrich-railway-europe.ts` (Phase 4, 2026-07-16) for the heavy-rail graph walk.
- *
- * Every feed contributes through this ONE shared pair accumulator. The
- * 2026-07-16 mirror-group/trip-fingerprint dedup that briefly lived here
- * (`tripFingerprint`/`mergeMirrorGroupTripBundles`/`emitTripFingerprints`) was
- * DELETED the same day on a data verdict: the FR national and Île-de-France
- * caches share only 7 of 3 537/6 193 coordinate keys, so cross-producer
- * fingerprints could never match and the dedup could never do its job — while
- * its bypass of the pair cache also skipped the shape-conflict drop and
- * false-merged within-feed duplicate trips. Cross-feed overlap policy now
- * lives in the europe registry instead (fr-idf is declared tram-only there).
- */
+/** Parse active GTFS rail trips into station pairs for graph matching. */
 
 import { existsSync, createReadStream, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { coordKey4dp } from './spatial.js'
 import {
-  RAIL_TYPES, parseCsvLine, parseCsvStream, readGtfsTripDepartureMultipliers,
+  RAIL_TYPES, parseCsvLine, streamCsvRows, readGtfsTripDepartureMultipliers,
   computeActiveTripFamiliesForFeed, loadStopsWithCoords, resolveStopViaParent,
   writeMergedStopCache, readMergedStopCache,
   type GtfsStop,
@@ -144,46 +122,8 @@ function downsamplePolyline(points: Array<[number, number]>, maxPoints: number):
 
 type PairAccumulator = RailStationPairCount
 
-/**
- * GTFS `stop_times.txt` -> consecutive station pairs for every active rail trip,
- * summed across trips and BOTH directions into one canonical pair per station couple.
- *
- * Mechanics (per plan pro-e-sd-zaj-m-wobbly-liskov, Phase 1 gtfs-stop-pairs paragraph):
- *  1. Determine active rail trips via `computeActiveTripFamiliesForFeed` (shares the
- *     calendar-fix + family-hook + dateSelection-hook with the per-stop counter).
- *  2. Stream stop_times.txt, keeping (stop_sequence, stop_id) per active trip only.
- *  3. Per trip: sort by NUMERIC stop_sequence (file order is not trustworthy), resolve
- *     each stop's coords WITH parent-station fallback BEFORE dropping coordless stops,
- *     drop truly unresolvable stops (pairs bridge the gap), collapse adjacent
- *     duplicates (same resolved station).
- *  4. Emit consecutive pairs; frequencies.txt (when present) expands a trip's pair
- *     contribution by its headway-derived daily repeat count, mirroring the TH
- *     multiplier approach.
- *  5. Canonicalize each pair by its sorted 4dp coordinate key so A->B and B->A (and
- *     every other trip through the same section) accumulate into ONE summed entry.
- *  6. Attach the trip's (downsampled) shape polyline to every pair it contributes to,
- *     when trips.txt has shape_id and shapes.txt exists (first trip wins; a SECOND,
- *     DIFFERENT shapeId reaching an already-shaped pair DROPS the polyline entirely —
- *     see `addPair`'s doc, 2026-07-16 /gg review item 11a).
- *
- * Caching: `cachePath` is caller-owned and must live outside the immutable source tree (`family-frequencies.json` in
- * enrich-railway-europe.ts, `gtfs-family-frequencies.json` in dk/th/...), so nested
- * PTV-style subfeeds (each with their own extractDir) never collide. Reuses the shared
- * v2 cache envelope helpers (`writeMergedStopCache`/`readMergedStopCache`) purely for
- * their versioned on-disk shape — `feedsLoadedNonEmpty` carries no multi-feed
- * completeness signal here (this cache always describes ONE extractDir's own single
- * parse, never a merge), so its first slot is a fixed version marker, its second
- * slot carries `opts.optionsKey` (2026-07-16 /gg review item 11b), and its third
- * slot carries `gtfsPairInputsFingerprint(extractDir)` (2026-07-16 review item 2):
- * a cache hit only counts when the stored key matches the CURRENT call's AND the
- * GTFS input files (size+mtimeMs) are unchanged — a caller whose
- * familyOf/dateSelection/expandFrequencies/maxShapePoints shape differs from an
- * earlier writer's, or whose extractDir was refreshed by --force-download,
- * recomputes and overwrites instead of silently serving a parse that would have
- * come out differently. Never persists an empty parse (mirrors
- * gtfs-enrich-core.ts's merged-stop-cache rule): a poisoned/empty cache would silently
- * starve every later cache-served call.
- */
+// The caller owns the cache path and fingerprints function-valued options.
+// Input identity is checked separately; empty parses are never persisted.
 const CACHE_VERSION_MARKER = 'pairs-v1'
 
 /** The GTFS inputs whose content this parser's result depends on. A change in
@@ -243,8 +183,7 @@ export async function computeStopPairFrequenciesForFeed(
 
   // ── trips.txt (2nd pass): shape_id per active trip ──
   const tripShapeId = new Map<string, string>()
-  const tripsRaw = await parseCsvStream(resolve(extractDir, 'trips.txt'))
-  for (const r of tripsRaw) {
+  for await (const r of streamCsvRows(resolve(extractDir, 'trips.txt'))) {
     if (!tripFam.has(r['trip_id'])) continue
     const shapeId = (r['shape_id'] || '').trim()
     if (shapeId) tripShapeId.set(r['trip_id'], shapeId)
@@ -254,11 +193,11 @@ export async function computeStopPairFrequenciesForFeed(
   const shapesById = new Map<string, Array<[number, number]>>()
   const shapesPath = resolve(extractDir, 'shapes.txt')
   if (tripShapeId.size > 0 && existsSync(shapesPath)) {
-    const shapesRaw = await parseCsvStream(shapesPath)
+    const requiredShapeIds = new Set(tripShapeId.values())
     const bySeq = new Map<string, Array<{ seq: number; lat: number; lon: number }>>()
-    for (const r of shapesRaw) {
+    for await (const r of streamCsvRows(shapesPath)) {
       const id = r['shape_id']
-      if (!id) continue
+      if (!requiredShapeIds.has(id)) continue
       const lat = parseFloat(r['shape_pt_lat'] || '')
       const lon = parseFloat(r['shape_pt_lon'] || '')
       if (isNaN(lat) || isNaN(lon)) continue

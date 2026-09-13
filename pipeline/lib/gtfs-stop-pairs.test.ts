@@ -12,9 +12,10 @@
 
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { spawnSync } from 'node:child_process'
 import { computeStopPairFrequenciesForFeed, type RailStationPairCount } from './gtfs-stop-pairs.js'
 
 const TMP = mkdtempSync(join(tmpdir(), 'gtfs-stop-pairs-test-'))
@@ -422,4 +423,30 @@ test('legitimately rail-less routes.txt (valid header, bus-only rows) still yiel
   const result = await computeStopPairFrequenciesForFeed(dir)
   assert.equal(result.pairs.length, 0, 'zero rail routes with a VALID header is a legitimate empty, not an error')
   assert.equal(result.provenance.fromCache, false)
+})
+
+test('unused shape rows do not exhaust the parser heap', () => {
+  const dir = join(TMP, 'unused-shape-memory')
+  writeGtfsFixture(dir, {
+    'routes.txt': NO_CALENDAR_ROUTES,
+    'trips.txt': 'trip_id,route_id,service_id,shape_id\nT1,R1,svc,ACTIVE\n',
+    'stop_times.txt': 'trip_id,stop_id,stop_sequence\nT1,A,1\nT1,B,2\n',
+    'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nA,Alpha,50,14\nB,Bravo,51,15\n',
+    'shapes.txt': '\uFEFFshape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\nACTIVE,51,15,2\n',
+  })
+  const shapes = join(dir, 'shapes.txt')
+  const unused = Array.from({ length: 1000 }, (_, i) => `UNUSED,0,0,${i}\n`).join('')
+  for (let i = 0; i < 2000; i++) appendFileSync(shapes, unused)
+  appendFileSync(shapes, 'ACTIVE,50,14,1\n')
+  const result = spawnSync(process.execPath, [
+    '--max-old-space-size=128', '--import', import.meta.resolve('tsx'),
+    '--input-type=module', '--eval',
+    `import { computeStopPairFrequenciesForFeed } from ${JSON.stringify(new URL('./gtfs-stop-pairs.js', import.meta.url).href)};
+     console.log(JSON.stringify(await computeStopPairFrequenciesForFeed(${JSON.stringify(dir)})));`,
+  ], { encoding: 'utf-8', timeout: 60_000 })
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr)
+  const parsed = JSON.parse(result.stdout)
+  assert.equal(parsed.provenance.tripsWithShape, 1)
+  assert.equal(parsed.pairs.length, 1)
+  assert.deepEqual(parsed.pairs[0].shapePolyline, [[50, 14], [51, 15]])
 })
