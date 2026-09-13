@@ -1,7 +1,7 @@
 /** Align a whole observed railway shape to ordered source-way occurrences, preserving estimated fractional passages. */
 
 import { flatDist, pointToSegmentParamT, wrapLonDeltaDeg } from './spatial.js'
-import type { OrientedSourceRailWay } from './transport-topology.js'
+import { sourceNodeDistances, type OrientedSourceRailWay } from './transport-topology.js'
 
 type Point = readonly [latitude: number, longitude: number]
 type Way = { id: string; points: Point[]; nodes: string[]; distances: number[]; length: number; direction: number }
@@ -49,15 +49,8 @@ export type RailServiceShapeAlignment = {
 const SHAPE_CANDIDATE_RADIUS_M = 250
 
 function sourceWayGeometry(way: OrientedSourceRailWay): Way {
-  const points = way.nodes.map(([, point]) => {
-    if (!point) throw new Error(`unresolved source coordinates for way ${way.id}`)
-    return point
-  })
-  if (points.length < 2) throw new Error(`source way ${way.id} has fewer than two nodes`)
-  const distances = [0]
-  for (let index = 1; index < points.length; index++) {
-    distances.push(distances.at(-1)! + flatDist(...points[index - 1], ...points[index]))
-  }
+  const distances = sourceNodeDistances(way.nodes)
+  const points = way.nodes.map(node => node[1]!)
   return { id: way.id, points, nodes: way.nodes.map(node => node[0]), distances,
     length: distances.at(-1)!, direction: way.reverse ? -1 : 1 }
 }

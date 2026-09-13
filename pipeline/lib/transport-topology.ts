@@ -3,6 +3,7 @@
 import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import type { SegmentEndpointKeys } from './prepared-grid.js'
+import { flatDist } from './spatial.js'
 
 export const transportTopologyPath = (preparedDirectory: string): string => {
   const directory = resolve(preparedDirectory)
@@ -13,6 +14,32 @@ export const transportPieceKey = (wayId: string, segmentIndex: number): string =
   `${wayId}:${segmentIndex}`
 
 export type SourceNode = [id: string, coordinates: [number, number] | null]
+
+export function sourceNodeDistances(nodes: readonly SourceNode[]): number[] {
+  if (nodes.length < 2 || nodes.some(node => node[1] === null)) {
+    throw new Error('source distances require a complete way with at least two nodes')
+  }
+  const distances = [0]
+  for (let index = 1; index < nodes.length; index++) {
+    distances.push(distances.at(-1)! + flatDist(...nodes[index - 1][1]!, ...nodes[index][1]!))
+  }
+  return distances
+}
+
+function assertSourcePosition(nodes: readonly SourceNode[], way: string, vertex: number, fraction: number): void {
+  if (!Number.isInteger(vertex) || vertex < 0 || !nodes[vertex]?.[1] ||
+      !Number.isFinite(fraction) || fraction < 0 || fraction >= 1 ||
+      (fraction > 0 && !nodes[vertex + 1]?.[1])) {
+    throw new Error(`invalid source position ${way}:${vertex}+${fraction}`)
+  }
+}
+
+export interface SourcePiecePassage {
+  segmentIndex: number
+  square: string
+  from: number
+  to: number
+}
 
 export interface OrientedSourceRailWay {
   id: string
@@ -47,6 +74,7 @@ export class SourceTransportTopology implements Disposable {
   private readonly database: DatabaseSync
   private readonly pieces: StatementSync
   private readonly way: StatementSync
+  private readonly wayPieces: StatementSync
   private readonly aliases = new Map<string, string>()
 
   constructor(preparedDirectory: string) {
@@ -60,6 +88,9 @@ export class SourceTransportTopology implements Disposable {
                p.start_vertex, p.start_fraction, p.end_vertex, p.end_fraction
         FROM source_pieces p JOIN source_ways w ON w.osm_id = p.way_id
         WHERE p.square = ? AND w.family = 'railways' ORDER BY p.way_id, p.segment_idx`)
+      this.wayPieces = this.database.prepare(`
+        SELECT segment_idx, square, start_vertex, start_fraction, end_vertex, end_fraction
+        FROM source_pieces WHERE way_id = ? ORDER BY start_vertex, start_fraction`)
       this.way = this.database.prepare("SELECT nodes_json FROM source_ways WHERE osm_id = ? AND family = 'railways'")
       for (const row of this.database.prepare(`
         SELECT CAST(node_id AS TEXT) AS node_id, CAST(canonical_node AS TEXT) AS canonical_node
@@ -146,16 +177,42 @@ export class SourceTransportTopology implements Disposable {
     return { id, status: 'complete', missingWays, unsupportedMembers, ways }
   }
 
+  passagePieces(passage: { way: string; from: number; to: number }): SourcePiecePassage[] {
+    const nodes = this.railWayNodes(passage.way)
+    if (!nodes) throw new Error(`source railway missing for passage ${passage.way}`)
+    const distances = sourceNodeDistances(nodes)
+    const lower = Math.min(passage.from, passage.to), upper = Math.max(passage.from, passage.to)
+    if (!Number.isFinite(lower) || !Number.isFinite(upper) || lower < 0 || upper > distances.at(-1)! || lower === upper) {
+      throw new Error(`invalid source passage ${passage.way}:${passage.from}..${passage.to}`)
+    }
+    const distanceAt = (vertex: number, fraction: number): number => {
+      assertSourcePosition(nodes, passage.way, vertex, fraction)
+      return fraction === 0 ? distances[vertex] :
+        distances[vertex] + fraction * (distances[vertex + 1] - distances[vertex])
+    }
+    const pieces: SourcePiecePassage[] = []
+    let coveredUntil = lower
+    for (const raw of this.wayPieces.iterate(passage.way)) {
+      const piece = raw as unknown as Omit<SourcePiece, 'way_id'> & { square: string }
+      const start = distanceAt(piece.start_vertex, piece.start_fraction)
+      const end = distanceAt(piece.end_vertex, piece.end_fraction)
+      if (end <= start) throw new Error(`invalid source piece interval ${passage.way}:${piece.segment_idx}`)
+      const from = Math.max(lower, start), to = Math.min(upper, end)
+      if (to <= from) continue
+      if (from !== coveredUntil) throw new Error(`source piece gap or overlap for passage ${passage.way} at ${coveredUntil}`)
+      pieces.push({ segmentIndex: piece.segment_idx, square: piece.square, from, to })
+      coveredUntil = to
+    }
+    if (coveredUntil !== upper) throw new Error(`source pieces do not cover passage ${passage.way} to ${upper}`)
+    return passage.from < passage.to ? pieces : pieces.reverse().map(piece => ({ ...piece, from: piece.to, to: piece.from }))
+  }
+
   squarePieces(square: string): Map<string, SegmentEndpointKeys> {
     const result = new Map<string, SegmentEndpointKeys>()
     let wayId = ''
     let nodes: SourceNode[] = []
     const endpointKey = (vertex: number, fraction: number): string => {
-      if (!Number.isInteger(vertex) || vertex < 0 || !nodes[vertex]?.[1] ||
-          !Number.isFinite(fraction) || fraction < 0 || fraction >= 1 ||
-          (fraction > 0 && !nodes[vertex + 1]?.[1])) {
-        throw new Error(`invalid source position ${wayId}:${vertex}+${fraction}`)
-      }
+      assertSourcePosition(nodes, wayId, vertex, fraction)
       if (fraction > 0) return `way:${wayId}:${vertex}+${fraction}`
       return `node:${nodes[vertex][0]}`
     }

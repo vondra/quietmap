@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { writeRailwaysFixture, type RailwayFixtureRow } from './rail-test-fixture.js'
 import { writeTransportFixture, type FixtureSourceWay, type FixtureSourcePiece } from './transport-test-fixture.js'
+import { M_PER_DEG_LON_EQ } from './spatial.js'
 import { SourceTransportTopology, transportTopologyPath } from './transport-topology.js'
 import { collectZ9RailGraphSegments, enrichZ9RailwaysByGraphWalk } from './rail-walk-enrich.js'
 
@@ -124,4 +125,39 @@ test('train routes preserve ordered occurrences and explicit aliases; unresolved
   }
   assert.equal(topology.trainRoute('999'), undefined)
   assert.deepEqual([...topology.trainRoutes()].map(route => route.id), ['1', '2', '3', '4', '5', '6', large])
+})
+
+test('physical passages clip acoustic pieces across squares and retain the ordered return', () => {
+  const prepared = join(TEMP, 'passage-pieces')
+  const id = '9007199254740993', neighbor = 'z9/276/173'
+  writeTransportFixture(prepared, [{ id, nodes: [['1', [0, 0]], ['2', [0, 600 / M_PER_DEG_LON_EQ]], ['3', [0, 1000 / M_PER_DEG_LON_EQ]]] }], [
+    { way: id, segment: 30, square: neighbor, start: [1, .5], end: [2, 0] },
+    { way: id, segment: 10, square, start: [0, 0], end: [1, 0] },
+    { way: id, segment: 20, square: neighbor, start: [1, 0], end: [1, .5] },
+  ])
+  using topology = new SourceTransportTopology(prepared)
+  const forward = topology.passagePieces({ way: id, from: 100, to: 900 })
+  assert.deepEqual(forward, [
+    { segmentIndex: 10, square, from: 100, to: 600 },
+    { segmentIndex: 20, square: neighbor, from: 600, to: 800 },
+    { segmentIndex: 30, square: neighbor, from: 800, to: 900 },
+  ])
+  assert.deepEqual(topology.passagePieces({ way: id, from: 900, to: 100 }),
+    [...forward].reverse().map(piece => ({ ...piece, from: piece.to, to: piece.from })))
+  const outward = topology.passagePieces({ way: id, from: 0, to: 600.25 })
+  const inward = topology.passagePieces({ way: id, from: 600.25, to: 0 })
+  assert.deepEqual(outward.map(piece => [piece.segmentIndex, piece.from, piece.to]), [[10, 0, 600], [20, 600, 600.25]])
+  assert.deepEqual(inward.map(piece => [piece.segmentIndex, piece.from, piece.to]), [[20, 600.25, 600], [10, 600, 0]])
+  assert.equal([...outward, ...inward].reduce((sum, piece) => sum + Math.abs(piece.to - piece.from), 0), 1200.5)
+  assert.throws(() => topology.passagePieces({ way: id, from: 0, to: 1001 }), /invalid source passage/)
+  {
+    using database = new DatabaseSync(transportTopologyPath(prepared))
+    database.exec('DELETE FROM source_pieces WHERE segment_idx = 20')
+  }
+  assert.throws(() => topology.passagePieces({ way: id, from: 100, to: 900 }), /gap or overlap/)
+  {
+    using database = new DatabaseSync(transportTopologyPath(prepared))
+    database.prepare('INSERT INTO source_pieces VALUES (?, 20, ?, 0, 0.5, 2, 0)').run(BigInt(id), neighbor)
+  }
+  assert.throws(() => topology.passagePieces({ way: id, from: 100, to: 900 }), /gap or overlap/)
 })
