@@ -30,7 +30,7 @@ interface LoadedFeed {
   sourceFreshness: readonly GtfsSourceFreshness[]
   pairs: RailStationPairCount[]
   tramStops: StopTrainCount[]
-  pairCacheHits: number
+  serviceCacheHits: number
 }
 
 export interface GlobalGtfsCountryResult {
@@ -61,7 +61,7 @@ function planCountryFeeds(
   })
 }
 
-function pairCachePath(
+function serviceCachePath(
   cacheDirectory: string,
   sourceDirectory: string,
   registry: GtfsRegistry,
@@ -75,7 +75,7 @@ function pairCachePath(
     .replace(/^-|-$/g, '') || 'root'
   const parent = resolve(cacheDirectory, registry, feed.id)
   mkdirSync(parent, { recursive: true })
-  return resolve(parent, `${label}.pairs.sqlite`)
+  return resolve(parent, `${label}.services.sqlite`)
 }
 
 async function loadFeed(
@@ -90,7 +90,7 @@ async function loadFeed(
   const sourceFreshness: GtfsSourceFreshness[] = []
   const pairs: RailStationPairCount[] = []
   const tramStops: StopTrainCount[] = []
-  let pairCacheHits = 0
+  let serviceCacheHits = 0
 
   for (const directory of directories) {
     const stopFamily = (routeType: number) => railFamilyFor(routeType, feed)
@@ -113,7 +113,7 @@ async function loadFeed(
           familyOf: pairFamily,
           dateSelection,
           optionsKey: `${registry}-complete-family-day-v2-${feed.serviceDay}-${feed.includeRailPairs === false ? 'tram-only' : 'rail'}`,
-          cachePath: pairCachePath(cacheDirectory, sourceDirectory, registry, feed, directory),
+          cachePath: serviceCachePath(cacheDirectory, sourceDirectory, registry, feed, directory),
         })
       : null
     const directoryPairs = pairResult?.pairs ?? []
@@ -126,7 +126,7 @@ async function loadFeed(
     if (incomplete) throw new Error(`incomplete GTFS input: ${incomplete}`)
     pairs.push(...directoryPairs)
     tramStops.push(...directoryTramStops)
-    if (pairResult?.provenance.fromCache) pairCacheHits++
+    if (pairResult?.provenance.fromCache) serviceCacheHits++
   }
 
   return {
@@ -136,7 +136,7 @@ async function loadFeed(
     sourceFreshness,
     pairs,
     tramStops: dedupeStopsByLocation(tramStops),
-    pairCacheHits,
+    serviceCacheHits,
   }
 }
 

@@ -2,7 +2,7 @@
 
 import type { RailStationPairCount } from './rail-graph.js'
 
-export class RailShapeIndex {
+class RailShapeIndex {
   private readonly ids = new Map<string, number>()
   private readonly references = new WeakMap<Array<[number, number]>, number>()
 
@@ -19,8 +19,6 @@ export class RailShapeIndex {
     }
     return id
   }
-
-  entries(): MapIterator<[string, number]> { return this.ids.entries() }
 }
 
 export class RailPairSearches {

@@ -120,7 +120,7 @@ test('real GTFS files stamp heavy rail and tram through one z9 writer and rerun 
   assert.deepEqual(values(path, 'source_id'), [100, 100])
   const before = readFileSync(path)
   const second = await enrichGlobalGtfsCountry(options)
-  assert.equal(second.feeds[0].pairCacheHits, 1)
+  assert.equal(second.feeds[0].serviceCacheHits, 1)
   assert.deepEqual(readFileSync(path), before)
 
   writeGreekGtfs(source, 'route_id,route_type\nbus,3\n')

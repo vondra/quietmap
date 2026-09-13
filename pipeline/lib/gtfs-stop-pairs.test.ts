@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
 import { spawnSync } from 'node:child_process'
 import { computeStopPairFrequenciesForFeed, type RailStationPairCount } from './gtfs-stop-pairs.js'
+import { openGtfsServices } from './gtfs-service-store.js'
 
 import { buildRailGraph, type RailGraphSegmentInput } from './rail-graph.js'
 import { walkRailStationPairs } from './rail-graph-metrics.js'
@@ -327,7 +328,7 @@ test('cache round-trip uses an explicit path and leaves source inputs immutable 
   assert.deepEqual(second.pairs, first.pairs)
   assert.deepEqual(second.provenance, { ...first.provenance, fromCache: true })
   const old = new DatabaseSync(cachePath)
-  old.exec('PRAGMA user_version = 1; UPDATE pairs SET pax = 999')
+  old.exec('PRAGMA user_version = 2')
   old.close()
   const rebuilt = await computeStopPairFrequenciesForFeed(dir, { cachePath })
   assert.equal(rebuilt.provenance.fromCache, false)
@@ -368,7 +369,7 @@ test('distinct GTFS shapes retain their own counts through parsing, caching and 
     assert.equal(parsed.provenance.fromCache, fromCache)
     assert.equal(parsed.provenance.activeTripCount, 4)
     const cache = new DatabaseSync(cachePath, { readOnly: true })
-    assert.equal(cache.prepare('SELECT count(*) AS count FROM shapes').get()!.count, 2)
+    assert.equal(cache.prepare('SELECT count(*) AS count FROM shapes').get()!.count, 3, 'source shape identities survive even when geometry is identical')
     cache.close()
     assert.equal(parsed.pairs.length, 3, 'identical north geometry shares one search; south and shapeless remain separate')
     for (const pairs of [parsed.pairs, [...parsed.pairs].reverse()]) {
@@ -385,7 +386,7 @@ test('distinct GTFS shapes retain their own counts through parsing, caching and 
   }
 })
 
-test('cache identity includes callback policy, geographic extent and frequency expansion', async () => {
+test('source cache identity includes callback policy; geographic bounds remain a consumer choice', async () => {
   const dir = join(TMP, 'options-fingerprint')
   writeGtfsFixture(dir, {
     'routes.txt': NO_CALENDAR_ROUTES,
@@ -400,15 +401,8 @@ test('cache identity includes callback policy, geographic extent and frequency e
   assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath })).provenance.fromCache, true)
 
   const outside = await computeStopPairFrequenciesForFeed(dir, { cachePath, bbox: [0, 0, 1, 1] })
-  assert.equal(outside.provenance.fromCache, false)
+  assert.equal(outside.provenance.fromCache, true)
   assert.deepEqual(outside.pairs, [], 'a different region must not reuse the full feed result')
-  const template = await computeStopPairFrequenciesForFeed(dir, { cachePath, expandFrequencies: false })
-  assert.equal(template.provenance.fromCache, false)
-  assert.equal(template.pairs[0].pax, 1, 'unexpanded service must not inherit six frequency departures')
-  assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath, expandFrequencies: false })).provenance.fromCache, true)
-  const expanded = await computeStopPairFrequenciesForFeed(dir, { cachePath })
-  assert.equal(expanded.provenance.fromCache, false)
-  assert.deepEqual(expanded.pairs, full.pairs)
 
   const policy = { cachePath, optionsKey: 'europe-busiest-wed' }
   assert.equal((await computeStopPairFrequenciesForFeed(dir, policy)).provenance.fromCache, false)
@@ -416,7 +410,7 @@ test('cache identity includes callback policy, geographic extent and frequency e
   assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath })).provenance.fromCache, false)
 })
 
-test('input fingerprint invalidates the pair cache when coordinates or shapes change', async () => {
+test('input fingerprint invalidates the source cache when coordinates or shapes change', async () => {
   const dir = join(TMP, 'inputs-fingerprint')
   writeGtfsFixture(dir, {
     'routes.txt': NO_CALENDAR_ROUTES,
@@ -475,7 +469,7 @@ test('legitimately rail-less routes.txt (valid header, bus-only rows) still yiel
   assert.equal(result.provenance.fromCache, false)
 })
 
-test('unused shape rows do not exhaust the parser heap', () => {
+test('active stop-time rows and unused shapes do not exhaust the parser heap', () => {
   const dir = join(TMP, 'unused-shape-memory')
   writeGtfsFixture(dir, {
     'routes.txt': NO_CALENDAR_ROUTES,
@@ -484,6 +478,11 @@ test('unused shape rows do not exhaust the parser heap', () => {
     'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nA,Alpha,50,14\nB,Bravo,51,15\n',
     'shapes.txt': '\uFEFFshape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\nACTIVE,51,15,2\n',
   })
+  for (let trip = 0; trip < 5000; trip++) {
+    appendFileSync(join(dir, 'trips.txt'), `REPEATED${trip},R1,svc,\n`)
+    appendFileSync(join(dir, 'stop_times.txt'), Array.from({ length: 1000 }, (_, sequence) =>
+      `REPEATED${trip},${sequence % 2 ? 'B' : 'A'},${sequence}\n`).join(''))
+  }
   const shapes = join(dir, 'shapes.txt')
   const unused = Array.from({ length: 1000 }, (_, i) => `UNUSED,0,0,${i}\n`).join('')
   for (let i = 0; i < 2000; i++) appendFileSync(shapes, unused)
@@ -497,6 +496,67 @@ test('unused shape rows do not exhaust the parser heap', () => {
   assert.equal(result.status, 0, result.error?.message ?? result.stderr)
   const parsed = JSON.parse(result.stdout)
   assert.equal(parsed.provenance.tripsWithShape, 1)
-  assert.equal(parsed.pairs.length, 1)
-  assert.deepEqual(parsed.pairs[0].shapePolyline, [[50, 14], [51, 15]])
+  assert.equal(parsed.provenance.stopTimesLines, 5_000_002)
+  assert.equal(parsed.pairs.length, 3)
+  assert.deepEqual(parsed.pairs.find((pair: RailStationPairCount) => pair.shapePolyline)?.shapePolyline,
+    [[50, 14], [51, 15]])
+  assert.equal(parsed.pairs.find((pair: RailStationPairCount) => !pair.shapePolyline && pair.fromLat === 50)?.pax, 2_500_000)
+  assert.equal(parsed.pairs.find((pair: RailStationPairCount) => !pair.shapePolyline && pair.fromLat === 51)?.pax, 2_495_000)
+})
+
+
+test('whole-service cache preserves repeated visits, source identities, times and shape distances', async () => {
+  const dir = join(TMP, 'whole-service')
+  writeGtfsFixture(dir, {
+    'routes.txt': NO_CALENDAR_ROUTES,
+    'trips.txt': 'trip_id,route_id,service_id,direction_id,shape_id\nT1,R1,svc,1,S\n',
+    'stop_times.txt': 'trip_id,stop_id,stop_sequence,arrival_time,departure_time,shape_dist_traveled\n' +
+      'T1,A,30,25:10:00,25:11:00,20\nT1,PLATFORM,10,23:55:00,23:56:00,0\nT1,B,20,24:30:00,,10\n',
+    'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon,parent_station\n' +
+      'A,Alpha,50,14,\nPLATFORM,Platform,,,A\nB,Bravo,51,15,\n',
+    'shapes.txt': 'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence,shape_dist_traveled\n' +
+      'S,50,14,30,20\nS,51,15,20,10\nS,50,14,10,0\n',
+  })
+  const cachePath = join(TMP, 'whole-service.sqlite')
+  for (const fromCache of [false, true]) {
+    using store = await openGtfsServices(dir, { cachePath })
+    assert.equal(store.sourceDirectory, dir)
+    assert.equal(store.provenance.fromCache, fromCache)
+    const service = store.service('T1')!
+    assert.deepEqual([...store.services()], [service])
+    assert.equal(store.service('absent'), undefined)
+    assert.deepEqual([service.tripId, service.routeId, service.serviceId, service.directionId, service.shapeId],
+      ['T1', 'R1', 'svc', '1', 'S'])
+    assert.deepEqual(service.stops.map(stop => [stop.sequence, stop.sourceStopId, stop.stopId,
+      stop.arrivalTime, stop.departureTime, stop.shapeDistance]), [
+      [10, 'PLATFORM', 'A', '23:55:00', '23:56:00', 0],
+      [20, 'B', 'B', '24:30:00', '', 10],
+      [30, 'A', 'A', '25:10:00', '25:11:00', 20],
+    ])
+    assert.deepEqual(service.shape, [
+      { sequence: 10, lat: 50, lon: 14, shapeDistance: 0 },
+      { sequence: 20, lat: 51, lon: 15, shapeDistance: 10 },
+      { sequence: 30, lat: 50, lon: 14, shapeDistance: 20 },
+    ])
+  }
+})
+
+test('malformed source order or shape cannot be silently repaired and cached', async () => {
+  for (const [label, stopTimes, shape] of [
+    ['invalid-sequence', 'T1,A,1oops\nT1,B,2\n', 'S,50,14,1\nS,51,15,2\n'],
+    ['duplicate-sequence', 'T1,A,1\nT1,B,1\n', 'S,50,14,1\nS,51,15,2\n'],
+    ['invalid-shape', 'T1,A,1\nT1,B,2\n', 'S,50,14,1\nS,NaN,15,2\nS,51,15,3\n'],
+    ['missing-shape', 'T1,A,1\nT1,B,2\n', 'UNUSED,50,14,1\n'],
+  ]) {
+    const dir = join(TMP, label), cachePath = join(TMP, `${label}.sqlite`)
+    writeGtfsFixture(dir, {
+      'routes.txt': NO_CALENDAR_ROUTES,
+      'trips.txt': 'trip_id,route_id,service_id,shape_id\nT1,R1,svc,S\n',
+      'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nA,Alpha,50,14\nB,Bravo,51,15\n',
+      'stop_times.txt': 'trip_id,stop_id,stop_sequence\n' + stopTimes,
+      'shapes.txt': 'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n' + shape,
+    })
+    await assert.rejects(openGtfsServices(dir, { cachePath }))
+    assert.equal(existsSync(cachePath), false)
+  }
 })
