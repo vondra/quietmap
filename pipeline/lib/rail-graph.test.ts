@@ -1,10 +1,10 @@
-/** Source-identity graph construction, station snapping and effective traffic tests. */
+/** Source-identity graph construction, station snapping tests. */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { flatDist } from './spatial.js'
 import {
-  buildRailGraph, snapToNearestRailGraphNode, nearestRailGraphNodeDistanceM, effectiveRailTraffic, buildRailStopsIndex,
+  buildRailGraph, snapToNearestRailGraphNode, nearestRailGraphNodeDistanceM,
   STATION_SNAP_RADIUS_M, type RailGraphSegmentInput,
 } from './rail-graph.js'
 
@@ -109,35 +109,3 @@ test('nearestRailGraphNodeDistanceM: a node in the 76.8-200 km band is found by 
   // walk maps this to the JSON-safe 'unreachable' sentinel).
   assert.equal(nearestRailGraphNodeDistanceM(g, 60, 14), Infinity, '~1100 km from the only node — unreachable within the 200 km ceiling')
 })
-
-test('effectiveRailTraffic: matches the engine default_traffic table with per-column zero-defaulting', () => {
-  // engine/noise-compute/src/emission/railway.rs::default_traffic
-  assert.deepEqual(effectiveRailTraffic(0, 0, 0, 0, 1), { pax: 80, frt: 20, total: 100 }, 'rail main')
-  assert.deepEqual(effectiveRailTraffic(0, 0, 0, 1, 1), { pax: 30, frt: 5, total: 35 }, 'rail branch')
-  assert.deepEqual(effectiveRailTraffic(0, 0, 0, 2, 1), { pax: 0, frt: 15, total: 15 }, 'rail industrial')
-  assert.deepEqual(effectiveRailTraffic(0, 0, 0, 9, 1), { pax: 40, frt: 10, total: 50 }, 'rail unknown usage')
-  assert.deepEqual(effectiveRailTraffic(0, 0, 1, 0, 1), { pax: 120, frt: 0, total: 120 }, 'tram')
-  assert.deepEqual(effectiveRailTraffic(0, 0, 2, 0, 1), { pax: 80, frt: 0, total: 80 }, 'light_rail')
-  assert.deepEqual(effectiveRailTraffic(0, 0, 3, 0, 1), { pax: 10, frt: 0, total: 10 }, 'narrow_gauge')
-  assert.deepEqual(effectiveRailTraffic(0, 0, 4, 0, 1), { pax: 40, frt: 0, total: 40 }, 'funicular')
-  // RailType::from_u8 maps ANY unrecognized code to Rail — an out-of-range
-  // railType must resolve through the usage-based Rail table, not a generic
-  // fallback of its own.
-  assert.deepEqual(effectiveRailTraffic(0, 0, 9, 0, 1), { pax: 80, frt: 20, total: 100 }, 'unrecognized railType falls back to Rail')
-
-  // Per-COLUMN defaulting: a real, nonzero pax leaves frt to default alone.
-  assert.deepEqual(effectiveRailTraffic(50, 0, 0, 0, 1), { pax: 50, frt: 20, total: 70 })
-  assert.deepEqual(effectiveRailTraffic(0, 40, 0, 0, 1), { pax: 80, frt: 40, total: 120 })
-
-  // Divisor scales both columns after defaulting.
-  assert.deepEqual(effectiveRailTraffic(100, 40, 0, 0, 2), { pax: 50, frt: 20, total: 70 })
-  // Divisor floors at 1 (0 or negative never means "less than one track").
-  assert.deepEqual(effectiveRailTraffic(100, 40, 0, 0, 0), { pax: 100, frt: 40, total: 140 })
-})
-
-test('buildRailStopsIndex: radius query true within range, false outside', () => {
-  const idx = buildRailStopsIndex([{ lat: 50, lon: 14 }])
-  assert.equal(idx.queryWithinRadius(50.001, 14.001, 300), true)
-  assert.equal(idx.queryWithinRadius(51, 14, 300), false)
-})
-

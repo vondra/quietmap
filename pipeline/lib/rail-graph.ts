@@ -5,18 +5,7 @@ import type { SegmentEndpointKeys } from './prepared-grid.js'
 
 // ── Tunables (cited at each use site) ───────────────────────────────────────
 
-/** Rail families the graph WALK routes and stamps: standard heavy rail (0)
- *  and narrow gauge (3). Narrow gauge added 2026-07-16 (CH Step A: 826 snap
- *  + 643 unlocalized failures = the metre-gauge networks — RhB/MGB/zb run
- *  >100 trains/day yet the engine's narrow-gauge class default is 10/day,
- *  so walking real GTFS counts onto them is a large accuracy win, not just
- *  a snap fix; same class as CZ's Osoblaha). GTFS route_type=2 trains do
- *  not distinguish gauge, and the shortest path virtually never crosses a
- *  gauge break (physically separate tracks; the rare dual-gauge section is
- *  genuinely shared). Trams/light rail (1/2) stay on the 500 m stop-join;
- *  funicular (4) carries no timetable counts worth walking. Code list must
- *  stay consistent with `defaultRailTraffic` below and the engine's
- *  `RailType::from_u8` (emission/railway.rs) — three hand-synced tables. */
+/** Heavy rail (0) and narrow gauge (3), using the engine's RailType codes. */
 export function isWalkableRailType(railType: number): boolean {
   return railType === 0 || railType === 3
 }
@@ -50,15 +39,6 @@ export const WALK_AMBIGUITY_SHARED_EDGE_FRACTION = 0.5
 /** Soft corridor constraint: with a GTFS `shapes.txt` polyline, edges farther
  *  than this from the shape are excluded from that pair's search entirely. */
 export const SHAPE_CORRIDOR_TOLERANCE_M = 250
-/** A rail-flow jump at a node within this radius of a real stop is explained
- *  by boardings/alightings, not a matching bug (R15/R16 exemption). */
-export const RAIL_STOP_EXEMPT_RADIUS_M = 300
-/** R15/R16 fire threshold: effective traffic must jump more than this
- *  multiple across a degree-2 node with no junction/stop to explain it. */
-export const RAIL_JUMP_RATIO = 3
-/** R15/R16 floor: below this effective trains/day, ratio noise (2 vs 7) is
- *  not worth flagging even past RAIL_JUMP_RATIO. */
-export const RAIL_MIN_EFFECTIVE_TRAINS_PER_DAY = 20
 /** Parallel-track sibling search radius (segment-midpoint distance, metres). */
 export const PARALLEL_SPREAD_RADIUS_M = 50
 /** Twin-track ambiguity exemption (2026-07-16 Step-B refinement; REDESIGNED
@@ -142,7 +122,7 @@ export const WALK_TWIN_FAR_LENGTH_FRACTION = 0.10
  *  entire run. */
 export const UNLOCALIZED_PAIR_QUARANTINE_RADIUS_M = 5000
 
-/** Snap/stop search grid; each query derives the required ring from its radius. */
+/** Snap search grid; each query derives the required ring from its radius. */
 const SPATIAL_INDEX_CELL_DEG = 0.01
 
 // ── Segment input + graph shape ─────────────────────────────────────────────
@@ -194,10 +174,6 @@ export interface RailGraphEdge {
 export interface RailGraph {
   nodeCount: number
   edgeCount: number
-  // Internal structure consumed by rail-graph-metrics.ts (routing, parallel
-  // spread, the R15/R16 detectors). Plain fields, not hidden behind a
-  // private/symbol boundary, so the sibling module can build directly on top
-  // of one graph instance instead of recomputing it.
   nodes: RailGraphNode[]
   edges: RailGraphEdge[]
   /** node id -> incident edge indices (both directions). */
@@ -420,88 +396,6 @@ export function nearestRailGraphNodeDistanceM(
   }
 }
 
-// ── Effective traffic (engine zero-defaulting mirror) ───────────────────────
-
-/** Per-column class default, TS mirror of
- *  `engine/noise-compute/src/emission/railway.rs::default_traffic` — keep the
- *  two tables in sync by hand; there is no codegen link between them.
- *  `RailType::from_u8` maps ANY unrecognized code to `Rail`, so the `default`
- *  arm below covers both railType 0 and an out-of-range value on purpose. */
-function defaultRailTraffic(railType: number, usage: number): [pax: number, frt: number] {
-  switch (railType) {
-    case 1: return [120, 0] // tram
-    case 2: return [80, 0]  // light_rail
-    case 3: return [10, 0]  // narrow_gauge
-    case 4: return [40, 0]  // funicular
-    default: // 0 = heavy rail, and the engine's from_u8 fallback for unknown codes
-      switch (usage) {
-        case 0: return [80, 20] // main
-        case 1: return [30, 5]  // branch
-        case 2: return [0, 15]  // industrial siding
-        default: return [40, 10] // unknown usage
-      }
-  }
-}
-
-/** TS mirror of `normalize_rail`'s zero-defaulting + parallel-divisor scale:
- *  each of pax/frt independently falls back to its class default ONLY where
- *  the column itself is 0 (a real 0 is indistinguishable from "unmeasured" —
- *  this is the engine's own convention, not a choice made here), then both
- *  are divided by `max(1, parallelDivisor)`. Used by the R15/R16 detectors so
- *  they compare what the engine actually renders, not the raw stamped ints. */
-export function effectiveRailTraffic(
-  pax: number,
-  frt: number,
-  railType: number,
-  usage: number,
-  parallelDivisor: number,
-): { pax: number; frt: number; total: number } {
-  const [defPax, defFrt] = defaultRailTraffic(railType, usage)
-  const divisor = Math.max(1, parallelDivisor)
-  const effPax = (pax > 0 ? pax : defPax) / divisor
-  const effFrt = (frt > 0 ? frt : defFrt) / divisor
-  return { pax: effPax, frt: effFrt, total: effPax + effFrt }
-}
-
-// ── Rail-stops sidecar index (R15/R16 stop exemption) ───────────────────────
-
-export interface RailStopsIndex {
-  queryWithinRadius(lat: number, lon: number, radiusM: number): boolean
-}
-
-/** Grid-accelerated point-in-radius test over a rail-stops sidecar (station
- *  platforms), same cell scheme as the node/segment grids above. */
-export function buildRailStopsIndex(stops: Array<{ lat: number; lon: number }>): RailStopsIndex {
-  const grid = new Map<string, Array<{ lat: number; lon: number }>>()
-  for (const s of stops) {
-    const key = `${Math.floor(s.lat / SPATIAL_INDEX_CELL_DEG)}_${Math.floor(s.lon / SPATIAL_INDEX_CELL_DEG)}`
-    const arr = grid.get(key)
-    if (arr) arr.push(s); else grid.set(key, [s])
-  }
-  return {
-    queryWithinRadius(lat: number, lon: number, radiusM: number): boolean {
-      const latSpanM = SPATIAL_INDEX_CELL_DEG * M_PER_DEG_LAT
-      const lonSpanM = SPATIAL_INDEX_CELL_DEG * M_PER_DEG_LON_EQ * Math.max(0.05, Math.cos(lat * Math.PI / 180))
-      const dyMax = Math.max(1, Math.ceil(radiusM / latSpanM))
-      const dxMax = Math.max(1, Math.ceil(radiusM / lonSpanM))
-      const gy = Math.floor(lat / SPATIAL_INDEX_CELL_DEG)
-      const gx = Math.floor(lon / SPATIAL_INDEX_CELL_DEG)
-      for (let dy = -dyMax; dy <= dyMax; dy++) {
-        for (let dx = -dxMax; dx <= dxMax; dx++) {
-          const arr = grid.get(`${gy + dy}_${gx + dx}`)
-          if (!arr) continue
-          for (const s of arr) {
-            if (flatDist(lat, lon, s.lat, s.lon) <= radiusM) return true
-          }
-        }
-      }
-      return false
-    },
-  }
-}
-
-// ── Types shared with rail-graph-metrics.ts (route/auditor inputs+outputs) ──
-
 export interface RailStationPairCount {
   fromLat: number
   fromLon: number
@@ -575,7 +469,7 @@ export interface RailWalkResult {
  *    Per endpoint: `null` = this end snapped fine (nothing to diagnose);
  *    a number = true metres to the nearest node; `'unreachable'` = nothing
  *    within that function's search ceiling. The string sentinel exists
- *    because these records are JSON-persisted (rail-stops sidecar) and
+ *    because these records are JSON-persisted in the walk result and
  *    `Infinity` serializes to `null` — which would silently re-label a
  *    totally-unreachable stop as "snapped fine" (Codex review item 3,
  *    2026-07-16).
@@ -603,58 +497,3 @@ export interface RailFailedPairRecord {
    *  rack/spiral lines legitimately exceed 2.5x on short chords). */
   detourGeometry?: { bestPathM: number; boundM: number }
 }
-
-export interface RailEndpointRow {
-  key: string
-  osmId: string
-  railType: number
-  usage: number
-  service: number
-  sourceId: number
-  pax: number
-  frt: number
-  parallelDivisor: number
-  startLat: number
-  startLon: number
-  endLat: number
-  endLon: number
-}
-
-export interface RailContinuityViolation {
-  endpointLat: number
-  endpointLon: number
-  aKey: string
-  bKey: string
-  aSourceId: number
-  bSourceId: number
-  ratio: number
-  effA: { pax: number; frt: number; total: number }
-  effB: { pax: number; frt: number; total: number }
-  column: 'pax' | 'frt' | 'total'
-}
-
-/** The rail-stops sidecar on disk (`data/prepared/{year}/rail-stops/{scope}.json`)
- *  — written by exactly one writer (`rail-walk-enrich.ts`'s
- *  `writeStopsSidecarIfAny`) and read by exactly one reader
- *  (`rail-endpoint-rows.ts`'s `loadRailStopsIndex`, the R15/R16 stop
- *  exemption). Types live here (rail-graph.ts is the types home) so writer
- *  and reader can never drift on the envelope shape. */
-export interface RailStopsSidecarV1 {
-  version: 1
-  year: string
-  scope: string
-  extractFingerprint: string
-  feeds: string[]
-  generatedAt: string
-  stops: Array<{ lat: number; lon: number }>
-  /** Every failed pair's chord + reason + diagnostics from THIS SAME walk
-   *  (DE Step A v2, 2026-07-16 failure analysis, fix 3) — additive field on
-   *  the ONE existing per-run JSON artifact a walk produces, so a v3
-   *  twin-gate tuning pass can inspect WHY pairs failed without re-running
-   *  the whole enrichment (no new file family). Optional: absent on a
-   *  sidecar written before this field existed; `loadRailStopsIndex`
-   *  (rail-endpoint-rows.ts, the R15/R16 stop exemption reader) never reads
-   *  it, so that reader's contract is unaffected either way. */
-  failedPairChords?: RailFailedPairRecord[]
-}
-

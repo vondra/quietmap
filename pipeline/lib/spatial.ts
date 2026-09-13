@@ -7,14 +7,6 @@ const METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR = 111_320
 export const M_PER_DEG_LAT = METRES_PER_DEGREE_LATITUDE
 export const M_PER_DEG_LON_EQ = METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR
 
-/** Approximate ~1 metre endpoint identity for detector pairing (R15/R16) only.
- *  Graph construction must use the exact grid-cell keys
- *  (`SegmentEndpointKeys`): two native endpoints under a metre apart in
- *  different z30 cells are distinct nodes, and rounding would merge them. */
-export function nodeKey(latitude: number, longitude: number): string {
-  return `${latitude.toFixed(5)}_${longitude.toFixed(5)}`
-}
-
 export function wrapLonDeltaDeg(deltaDegrees: number): number {
   if (deltaDegrees > 180) return deltaDegrees - 360
   if (deltaDegrees < -180) return deltaDegrees + 360
