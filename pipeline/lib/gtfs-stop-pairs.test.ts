@@ -369,19 +369,35 @@ test('distinct GTFS shapes retain their own counts through parsing, caching and 
   }
 })
 
-test('optionsKey fingerprints an explicit derived cache', async () => {
+test('cache identity includes callback policy, geographic extent and frequency expansion', async () => {
   const dir = join(TMP, 'options-fingerprint')
   writeGtfsFixture(dir, {
     'routes.txt': NO_CALENDAR_ROUTES,
     'trips.txt': 'trip_id,route_id,service_id\nT1,R1,svc\n',
     'stop_times.txt': 'trip_id,stop_id,stop_sequence\nT1,A,1\nT1,B,2\n',
     'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nA,Alpha,50.0,14.0\nB,Bravo,50.1,14.1\n',
+    'frequencies.txt': 'trip_id,start_time,end_time,headway_secs\nT1,06:00:00,07:00:00,600\n',
   })
   const cachePath = join(TMP, 'options-fingerprint.sqlite')
-  assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath, optionsKey: 'default' })).provenance.fromCache, false)
-  assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath, optionsKey: 'europe-busiest-wed' })).provenance.fromCache, false)
-  assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath, optionsKey: 'europe-busiest-wed' })).provenance.fromCache, true)
-  assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath, optionsKey: 'default' })).provenance.fromCache, false)
+  const full = await computeStopPairFrequenciesForFeed(dir, { cachePath })
+  assert.equal(full.pairs[0].pax, 6)
+  assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath })).provenance.fromCache, true)
+
+  const outside = await computeStopPairFrequenciesForFeed(dir, { cachePath, bbox: [0, 0, 1, 1] })
+  assert.equal(outside.provenance.fromCache, false)
+  assert.deepEqual(outside.pairs, [], 'a different region must not reuse the full feed result')
+  const template = await computeStopPairFrequenciesForFeed(dir, { cachePath, expandFrequencies: false })
+  assert.equal(template.provenance.fromCache, false)
+  assert.equal(template.pairs[0].pax, 1, 'unexpanded service must not inherit six frequency departures')
+  assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath, expandFrequencies: false })).provenance.fromCache, true)
+  const expanded = await computeStopPairFrequenciesForFeed(dir, { cachePath })
+  assert.equal(expanded.provenance.fromCache, false)
+  assert.deepEqual(expanded.pairs, full.pairs)
+
+  const policy = { cachePath, optionsKey: 'europe-busiest-wed' }
+  assert.equal((await computeStopPairFrequenciesForFeed(dir, policy)).provenance.fromCache, false)
+  assert.equal((await computeStopPairFrequenciesForFeed(dir, policy)).provenance.fromCache, true)
+  assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath })).provenance.fromCache, false)
 })
 
 test('input fingerprint invalidates the pair cache when coordinates or shapes change', async () => {

@@ -32,16 +32,8 @@ export interface StopPairFrequenciesOptions {
   expandFrequencies?: boolean
   /** Optional derived-cache path. Omit it to keep the source tree immutable. */
   cachePath?: string
-  /** Cache-relevant options fingerprint (2026-07-16 /gg review item 11b):
-   *  `familyOf`/`dateSelection` are functions and can't be hashed reliably, so
-   *  the CALLER supplies a stable string identifying its options combination
-   *  instead (e.g. `'europe-busiest-wed'`) — every caller whose
-   *  familyOf/dateSelection/expandFrequencies shape differs
-   *  from another caller's MUST pass a distinct key, or a cache written under
-   *  one combination could be silently served to a caller expecting another.
-   *  Defaults to `'default'` — fine as long as only ONE options shape ever
-   *  hits a given extractDir. A mismatch on cache read recomputes and
-   *  overwrites, never silently serves the stale parse. */
+  /** Caller identity for family/date callbacks, whose captured values cannot be derived.
+   *  Geographic bounds and frequency expansion are included automatically. */
   optionsKey?: string
 }
 
@@ -106,8 +98,7 @@ const FINGERPRINT_INPUT_FILES = [
   'calendar.txt', 'calendar_dates.txt', 'frequencies.txt', 'feed_info.txt',
 ] as const
 
-/** size+mtimeMs of every fingerprint input (absent files marked as such) —
- *  cheap (8 stat calls) and refresh-proof: unzip always rewrites mtime. */
+/** Source size and modification time, including explicit absent-file identities. */
 export function gtfsPairInputsFingerprint(extractDir: string): string {
   return FINGERPRINT_INPUT_FILES.map((f) => {
     const p = resolve(extractDir, f)
@@ -121,7 +112,10 @@ export async function computeStopPairFrequenciesForFeed(
   extractDir: string,
   opts: StopPairFrequenciesOptions = {},
 ): Promise<StopPairFrequenciesResult> {
-  const identity = { options: opts.optionsKey ?? 'default', inputs: gtfsPairInputsFingerprint(extractDir) }
+  const identity = {
+    options: JSON.stringify([opts.optionsKey ?? 'default', opts.bbox ?? null, opts.expandFrequencies ?? null]),
+    inputs: gtfsPairInputsFingerprint(extractDir),
+  }
   const cachePath = opts.cachePath
   if (cachePath) {
     const cached = readGtfsPairCache(cachePath, identity)
