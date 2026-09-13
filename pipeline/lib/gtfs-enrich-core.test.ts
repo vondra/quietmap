@@ -290,7 +290,7 @@ test('dedupeStopsByLocation: sums same coord+family, keeps distinct coords and f
 })
 
 const FAKE_RAIL_ROW = (railType: number, existingDivisor = 1): RailwayRow => ({
-  railType, usage: 0, service: 0, existingSourceId: 0,
+  osmId: '1', segmentIndex: 0, railType, usage: 0, service: 0, existingSourceId: 0,
   existingPassenger: 0, existingFreight: 0, existingDivisor,
   startLat: 50.0, startLon: 14.0, endLat: 50.0, endLon: 14.0, midLat: 50.0, midLon: 14.0, name: '',
 })

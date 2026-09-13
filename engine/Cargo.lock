@@ -1352,6 +1352,8 @@ dependencies = [
  "memmap2 0.9.11",
  "osmpbf",
  "rayon",
+ "rusqlite",
+ "serde_json",
 ]
 
 [[package]]

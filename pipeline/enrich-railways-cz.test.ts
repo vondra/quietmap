@@ -9,6 +9,7 @@ import { tableFromIPC } from 'apache-arrow'
 import { enrichCzechRailways } from './enrich-railways-cz.js'
 import { readCzpttSource, czpttSequencesToStationPairs } from './lib/railway-cz-source.js'
 import { writeRailwaysFixture } from './lib/rail-test-fixture.js'
+import { writeSyntheticRailTopology } from './lib/transport-test-fixture.js'
 import { collectZ9RailGraphSegments } from './lib/rail-walk-enrich.js'
 import { buildRailGraph } from './lib/rail-graph.js'
 
@@ -52,6 +53,7 @@ test('CZ whole source admits before writes; measured, silent and foreign rows co
     { latitude: 50.09, longitude: 14, country: 'CZ', sourceId: 100, passenger: 85 },
   ], { includeTraffic: true, includeDivisor: true })
   copyFileSync(fixture, path)
+  writeSyntheticRailTopology(prepared, ['z9/275/173'])
   const before = tableFromIPC(readFileSync(path))
   const result = await enrichCzechRailways(directory, prepared)
   assert.equal(result.walk.walkStamped, 1)
@@ -87,6 +89,7 @@ test('actual z30 IPC endpoints less than one metre apart stay distinct graph com
     { latitude: 50, longitude: 14, endLatitude: 50, endLongitude: 14.01, country: 'CZ' },
     { latitude: 50, longitude: 14.010004, endLatitude: 50, endLongitude: 14.02, country: 'CZ' },
   ]), join(prepared, square, 'railways.arrow'))
+  writeSyntheticRailTopology(prepared, [square])
   const segments = collectZ9RailGraphSegments(prepared, [square])
   assert.equal(segments[0].endLon.toFixed(5), segments[1].startLon.toFixed(5))
   assert.notEqual(segments[0].endKey, segments[1].startKey)

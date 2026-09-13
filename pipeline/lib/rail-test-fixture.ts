@@ -29,6 +29,7 @@ function lonLatToGrid(lon: number, lat: number): [number, number] {
 
 export interface RailwayFixtureRow {
   osmId?: number | bigint
+  segmentIndex?: number
   latitude: number
   longitude: number
   endLatitude?: number
@@ -64,10 +65,9 @@ export function writeRailwaysFixture(
     row.endLongitude ?? row.longitude + 0.0005,
     row.endLatitude ?? row.latitude + 0.0005,
   ))
-  const indices = [...rows.keys()]
   const table = new Table({
     osm_id: vectorFromArray(rows.map((row, index) => BigInt(row.osmId ?? 50_000 + index)), new Int64()),
-    segment_idx: vectorFromArray(indices, new Int16()),
+    segment_idx: vectorFromArray(rows.map((row, index) => row.segmentIndex ?? index), new Int16()),
     start_gx: vectorFromArray(starts.map(point => point[0]), new Int32()),
     start_gy: vectorFromArray(starts.map(point => point[1]), new Int32()),
     end_gx: vectorFromArray(ends.map(point => point[0]), new Int32()),

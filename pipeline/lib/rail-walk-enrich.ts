@@ -1,4 +1,4 @@
-/** z9 Arrow adapter for the proven pure railway graph-walk matcher. */
+/** Join acoustic railway rows to their original OSM connectivity before matching traffic. */
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -10,8 +10,7 @@ import {
 import { walkRailStationPairs } from './rail-graph-metrics.js'
 import { writeRailwayTraffic, type RailwayRow, type RailwayTraffic } from './railways-arrow.js'
 import { isNationallyOwnedSource } from './sources.js'
-
-const segmentKey = (square: string, index: number): string => `${square}:${index}`
+import { SourceTransportTopology, transportPieceKey } from './transport-topology.js'
 
 function requiredVector(table: Table, name: string): Vector {
   const vector = table.getChild(name)
@@ -25,6 +24,7 @@ export function collectZ9RailGraphSegments(
   squares: readonly string[],
 ): RailGraphSegmentInput[] {
   const segments: RailGraphSegmentInput[] = []
+  using topology = new SourceTransportTopology(preparedDirectory)
   for (const square of squares) {
     const path = resolve(preparedDirectory, square, 'railways.arrow')
     const table = tableFromIPC(readFileSync(path))
@@ -36,6 +36,8 @@ export function collectZ9RailGraphSegments(
     const name = requiredVector(table, 'name')
     const ref = requiredVector(table, 'ref')
     const osmId = requiredVector(table, 'osm_id')
+    const segmentIndex = requiredVector(table, 'segment_idx')
+    const identities = topology.squarePieces(square)
 
     for (let index = 0; index < table.numRows; index++) {
       const type = railType.get(index) as number
@@ -45,9 +47,13 @@ export function collectZ9RailGraphSegments(
       const row = geometry.row(index)
       const corridorRef = (ref.get(index) as string | null) ?? ''
       const corridorName = (name.get(index) as string | null) ?? ''
+      const key = transportPieceKey(String(osmId.get(index)), segmentIndex.get(index) as number)
+      const identity = identities.get(key)
+      if (!identity) throw new Error(`source topology missing or repeated railway piece ${key} in ${square}`)
+      identities.delete(key)
       segments.push({
-        ...geometry.endpointKeys(index),
-        key: segmentKey(square, index),
+        ...identity,
+        key,
         osmId: String(osmId.get(index)),
         railType: type,
         usage: usage.get(index) as number,
@@ -145,7 +151,7 @@ export async function enrichZ9RailwaysByGraphWalk(
     const write = await writeRailwayTraffic(
       resolve(prepared, square, 'railways.arrow'),
       (row, index) => {
-        const key = segmentKey(square, index)
+        const key = transportPieceKey(row.osmId, row.segmentIndex)
         const stamp = walk.stampsBySegmentKey.get(key)
         const silent = !stamp && options.silentResidual && isWalkableRailType(row.railType) &&
           !walk.quarantinedSegmentKeys.has(key)
@@ -176,8 +182,8 @@ export async function enrichZ9RailwaysByGraphWalk(
         allowedCountryIsos: [options.countryIso],
         retract: options.retractSafe ? {
             sourceIds: ownSourceIds,
-            when: (_row, index) => {
-              const key = segmentKey(square, index)
+            when: (row) => {
+              const key = transportPieceKey(row.osmId, row.segmentIndex)
               return !walk.stampsBySegmentKey.has(key) &&
                 !walk.quarantinedSegmentKeys.has(key)
             },

@@ -1,13 +1,4 @@
-//! osm-extract: Extract noise-relevant features from OSM PBF into z9-partitioned Arrow IPC.
-//!
-//! Pipeline:
-//!   Pass 0: Scan relations + way references → multipolygon members and protected junctions
-//!   Pass 1: Stream nodes → mmap'd coordinate cache
-//!   Pass 2: Stream ways + relations → classify, resolve, microsegment, assemble multipolygons
-//!   Spill to `--num-buckets` square-disjoint buckets, then finalize → per-square Arrow IPC
-//!
-//! Coordinates leave the spill already snapped to the global int32 z30 grid;
-//! the final arrows carry integer geometry (`*_gx/gy`, `geom` binaries).
+//! Extract OSM features into z9 Arrow files and retain original transport connectivity for enrichment.
 
 mod classify;
 mod finalize;
@@ -18,10 +9,11 @@ mod node_cache;
 mod poi_join;
 mod relations;
 mod spill;
+mod transport;
 
 use anyhow::Result;
 use clap::Parser;
-use osmpbf::{Element, ElementReader};
+use osmpbf::{BlobDecode, BlobReader, Element};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -50,7 +42,9 @@ fn main() -> Result<()> {
 
     // A complete spill left by an extract whose finalize failed is finalized
     // again from the spill; the planet is read only for a partial or absent one.
-    if spill::is_complete(&cli.spill_dir, cli.num_buckets) {
+    if spill::is_complete(&cli.spill_dir, cli.num_buckets)
+        && transport::TransportWriter::is_complete(&cli.spill_dir)
+    {
         eprintln!(
             "  Complete spill in {} ({} buckets): finalizing from it, not from the planet",
             cli.spill_dir.display(),
@@ -60,6 +54,7 @@ fn main() -> Result<()> {
 
         let t_fin = Instant::now();
         let square_count = finalize::finalize(&cli.spill_dir, &cli.output, cli.num_buckets)?;
+        transport::TransportWriter::publish(&cli.spill_dir, &cli.output)?;
         eprintln!(
             "  {} square dirs in {:.1}s",
             square_count,
@@ -97,12 +92,15 @@ fn main() -> Result<()> {
     match std::fs::remove_dir_all(&cli.spill_dir) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => anyhow::bail!("cannot clear stale spill {}: {error}", cli.spill_dir.display()),
+        Err(error) => anyhow::bail!(
+            "cannot clear stale spill {}: {error}",
+            cli.spill_dir.display()
+        ),
     }
     let mut spiller = spill::Spiller::new(&cli.spill_dir, cli.num_buckets)?;
+    let mut transport = transport::TransportWriter::new(&cli.spill_dir)?;
     let mut assembler = relations::RelationAssembler::new(&manifest);
 
-    let reader = ElementReader::from_path(&cli.input)?;
     let mut ways_total = 0u64;
     let mut features_total = 0u64;
     let mut rels_assembled = 0u64;
@@ -111,295 +109,320 @@ fn main() -> Result<()> {
     // (a functional AREA with no building wrapper). Reported after Pass 2.
     let mut fallthrough_tags: HashMap<String, u64> = HashMap::new();
 
-    reader.for_each(|element| {
-        match element {
-            Element::Way(way) => {
-                ways_total += 1;
-                if ways_total.is_multiple_of(2_000_000) {
-                    eprintln!(
-                        "  {:.1}M ways, {:.1}M features, {} rels assembled...",
-                        ways_total as f64 / 1e6,
-                        features_total as f64 / 1e6,
-                        rels_assembled
-                    );
-                }
+    for blob in BlobReader::from_path(&cli.input)? {
+        let blob = blob?;
+        let BlobDecode::OsmData(block) = blob.decode()? else {
+            continue;
+        };
+        for element in block.elements() {
+            match element {
+                Element::Way(way) => {
+                    ways_total += 1;
+                    if ways_total.is_multiple_of(2_000_000) {
+                        eprintln!(
+                            "  {:.1}M ways, {:.1}M features, {} rels assembled...",
+                            ways_total as f64 / 1e6,
+                            features_total as f64 / 1e6,
+                            rels_assembled
+                        );
+                    }
 
-                // Resolve coordinates
-                let resolved_nodes: Vec<_> = way.refs().map(|id| (id, cache.get(id))).collect();
-                let coords: Vec<_> = resolved_nodes
-                    .iter()
-                    .filter_map(|(_, coords)| *coords)
-                    .collect();
-
-                // Check if this way is a member of any multipolygon relation
-                let is_relation_member = manifest.way_to_relations.contains_key(&way.id());
-
-                if is_relation_member && !coords.is_empty() {
-                    // Cache geometry for relation assembly
-                    let completed = assembler.add_way(way.id(), coords.clone(), &manifest);
-                    for rel_id in completed {
-                        if let Some((ring, tags, ftype)) = assembler.assemble(rel_id, &manifest) {
-                            let extracted_tags = match ftype {
-                                classify::FeatureType::Building => {
-                                    let mut t = classify::Tags::new();
-                                    for (k, v) in &tags {
-                                        // Copy amenity/shop/healthcare/tourism/leisure from relation tags.
-                                        // WHY: Large buildings (hospitals, schools, malls) are often multipolygon
-                                        // relations. Without these tags, building_type_from_tags() can't classify
-                                        // them correctly — a hospital gets type 0 (residential) instead of 4.
-                                        if matches!(
-                                            k.as_str(),
-                                            "building"
-                                                | "building:use"
-                                                | "height"
-                                                | "building:levels"
-                                                | "name"
-                                                | "addr:street"
-                                                | "addr:housenumber"
-                                                | "amenity"
-                                                | "shop"
-                                                | "healthcare"
-                                                | "tourism"
-                                                | "leisure"
-                                                | "animal"
-                                                | "livestock"
-                                                | "opening_hours"
-                                        ) {
-                                            t.insert(k.clone(), v.clone());
-                                        }
-                                    }
-                                    // NOTE: a relation with no `building` tag is a
-                                    // FUNCTIONAL AREA (shop=mall / amenity=hospital
-                                    // multipolygon). Leave the building tag ABSENT so
-                                    // `building_type_from_tags` classifies it by
-                                    // function (poi_class) and the spill flags it as an
-                                    // area-source for finalize overlap-suppression.
-                                    t
-                                }
-                                classify::FeatureType::Industrial => {
-                                    let mut t = classify::Tags::new();
-                                    for (k, v) in &tags {
-                                        // Copy operator/product/industrial from relation tags.
-                                        // WHY: Large industrial complexes are multipolygon relations.
-                                        // These tags enable NACE sector matching for emission profiles.
-                                        if matches!(
-                                            k.as_str(),
-                                            "landuse"
-                                                | "man_made"
-                                                | "name"
-                                                | "operator"
-                                                | "product"
-                                                | "industrial"
-                                        ) {
-                                            t.insert(k.clone(), v.clone());
-                                        }
-                                    }
-                                    t
-                                }
-                                classify::FeatureType::AirportArea => {
-                                    let mut t = classify::Tags::new();
-                                    for (k, v) in &tags {
-                                        if matches!(
-                                            k.as_str(),
-                                            "aeroway"
-                                                | "name"
-                                                | "ref"
-                                                | "local_ref"
-                                                | "icao"
-                                                | "iata"
-                                                | "operator"
-                                                | "surface"
-                                                | "width"
-                                                | "access"
-                                                | "aerodrome"
-                                                | "aerodrome:type"
-                                                | "amenity"
-                                        ) {
-                                            t.insert(k.clone(), v.clone());
-                                        }
-                                    }
-                                    t
-                                }
-                                _ => tags.clone(),
-                            };
-
-                            let (clat, clon) = centroid(&ring);
-                            let square = grid::square_of(clat, clon);
-                            let safe_ring = ring_for_spill(&ring, &mut antimeridian_rings_omitted);
-                            spiller.emit_polygon(
-                                &ftype,
-                                square,
-                                rel_id,
-                                clat,
-                                clon,
-                                &extracted_tags,
-                                safe_ring,
-                            );
-                            features_total += 1;
-                            rels_assembled += 1;
+                    let is_relation_member = manifest.way_to_relations.contains_key(&way.id());
+                    let way_class = classify::classify_way(&way);
+                    if way_class.is_none() && !is_relation_member {
+                        if let Some(reason) = classify::fallthrough_reason(&way) {
+                            *fallthrough_tags.entry(reason).or_insert(0) += 1;
                         }
-                        assembler.cleanup(rel_id, &manifest);
+                        continue;
                     }
-                }
 
-                // Also process the way itself if it has its own relevant tags
-                // (a way can be both a relation member AND a standalone feature,
-                //  but usually relation members don't have building= tags themselves)
-                let way_class = classify::classify_way(&way);
-                // Observability: a standalone way that vanished (None) yet carried a
-                // noise-relevant functional tag (a mall / hospital / school AREA with
-                // no building wrapper) — record it so the gap is never silent.
-                if way_class.is_none() && !is_relation_member {
-                    if let Some(reason) = classify::fallthrough_reason(&way) {
-                        *fallthrough_tags.entry(reason).or_insert(0) += 1;
+                    let resolved_nodes: Vec<_> = way.refs().map(|id| (id, cache.get(id))).collect();
+                    let coords: Vec<_> = resolved_nodes
+                        .iter()
+                        .filter_map(|(_, coords)| *coords)
+                        .collect();
+
+                    if is_relation_member && !coords.is_empty() {
+                        // Cache geometry for relation assembly
+                        let completed = assembler.add_way(way.id(), coords.clone(), &manifest);
+                        for rel_id in completed {
+                            if let Some((ring, tags, ftype)) = assembler.assemble(rel_id, &manifest)
+                            {
+                                let extracted_tags = match ftype {
+                                    classify::FeatureType::Building => {
+                                        let mut t = classify::Tags::new();
+                                        for (k, v) in &tags {
+                                            // Copy amenity/shop/healthcare/tourism/leisure from relation tags.
+                                            // WHY: Large buildings (hospitals, schools, malls) are often multipolygon
+                                            // relations. Without these tags, building_type_from_tags() can't classify
+                                            // them correctly — a hospital gets type 0 (residential) instead of 4.
+                                            if matches!(
+                                                k.as_str(),
+                                                "building"
+                                                    | "building:use"
+                                                    | "height"
+                                                    | "building:levels"
+                                                    | "name"
+                                                    | "addr:street"
+                                                    | "addr:housenumber"
+                                                    | "amenity"
+                                                    | "shop"
+                                                    | "healthcare"
+                                                    | "tourism"
+                                                    | "leisure"
+                                                    | "animal"
+                                                    | "livestock"
+                                                    | "opening_hours"
+                                            ) {
+                                                t.insert(k.clone(), v.clone());
+                                            }
+                                        }
+                                        // NOTE: a relation with no `building` tag is a
+                                        // FUNCTIONAL AREA (shop=mall / amenity=hospital
+                                        // multipolygon). Leave the building tag ABSENT so
+                                        // `building_type_from_tags` classifies it by
+                                        // function (poi_class) and the spill flags it as an
+                                        // area-source for finalize overlap-suppression.
+                                        t
+                                    }
+                                    classify::FeatureType::Industrial => {
+                                        let mut t = classify::Tags::new();
+                                        for (k, v) in &tags {
+                                            // Copy operator/product/industrial from relation tags.
+                                            // WHY: Large industrial complexes are multipolygon relations.
+                                            // These tags enable NACE sector matching for emission profiles.
+                                            if matches!(
+                                                k.as_str(),
+                                                "landuse"
+                                                    | "man_made"
+                                                    | "name"
+                                                    | "operator"
+                                                    | "product"
+                                                    | "industrial"
+                                            ) {
+                                                t.insert(k.clone(), v.clone());
+                                            }
+                                        }
+                                        t
+                                    }
+                                    classify::FeatureType::AirportArea => {
+                                        let mut t = classify::Tags::new();
+                                        for (k, v) in &tags {
+                                            if matches!(
+                                                k.as_str(),
+                                                "aeroway"
+                                                    | "name"
+                                                    | "ref"
+                                                    | "local_ref"
+                                                    | "icao"
+                                                    | "iata"
+                                                    | "operator"
+                                                    | "surface"
+                                                    | "width"
+                                                    | "access"
+                                                    | "aerodrome"
+                                                    | "aerodrome:type"
+                                                    | "amenity"
+                                            ) {
+                                                t.insert(k.clone(), v.clone());
+                                            }
+                                        }
+                                        t
+                                    }
+                                    _ => tags.clone(),
+                                };
+
+                                let (clat, clon) = centroid(&ring);
+                                let square = grid::square_of(clat, clon);
+                                let safe_ring =
+                                    ring_for_spill(&ring, &mut antimeridian_rings_omitted);
+                                spiller.emit_polygon(
+                                    &ftype,
+                                    square,
+                                    rel_id,
+                                    clat,
+                                    clon,
+                                    &extracted_tags,
+                                    safe_ring,
+                                );
+                                features_total += 1;
+                                rels_assembled += 1;
+                            }
+                            assembler.cleanup(rel_id, &manifest);
+                        }
                     }
-                }
-                if let Some(mut ftype) = way_class {
-                    // Skip if this way is an outer member of a polygon relation;
-                    // the relation's assembled multipolygon already covers it.
-                    // AirportLine ways inside an aeroway=aerodrome multipolygon
-                    // would otherwise be re-emitted as perimeter fragments.
-                    if is_relation_member
-                        && matches!(
+
+                    if let Some(mut ftype) = way_class {
+                        // Skip if this way is an outer member of a polygon relation;
+                        // the relation's assembled multipolygon already covers it.
+                        // AirportLine ways inside an aeroway=aerodrome multipolygon
+                        // would otherwise be re-emitted as perimeter fragments.
+                        if is_relation_member
+                            && matches!(
+                                ftype,
+                                classify::FeatureType::Building
+                                    | classify::FeatureType::Industrial
+                                    | classify::FeatureType::AirportArea
+                                    | classify::FeatureType::AirportLine
+                            )
+                        {
+                            continue;
+                        }
+
+                        // Closed-ring runway/airstrip ways are geometrically
+                        // polygons (a runway drawn as a perimeter way rather
+                        // than a multipolygon). Reroute to AirportArea for a
+                        // proper polygon source instead of perimeter fragments.
+                        //
+                        // taxiway/stopway closed-rings are typically turnaround
+                        // LOOPS where the ring itself is the taxi path; keeping
+                        // them as AirportLine preserves the downstream leg snap.
+                        if matches!(ftype, classify::FeatureType::AirportLine)
+                            && coords.len() >= 3
+                            && (coords[0][0] - coords.last().unwrap()[0]).abs() < 1e-7
+                            && (coords[0][1] - coords.last().unwrap()[1]).abs() < 1e-7
+                            && matches!(
+                                way.tags().find(|(k, _)| *k == "aeroway").map(|(_, v)| v),
+                                Some("runway") | Some("airstrip")
+                            )
+                        {
+                            ftype = classify::FeatureType::AirportArea;
+                        }
+
+                        let is_transport = matches!(
                             ftype,
-                            classify::FeatureType::Building
-                                | classify::FeatureType::Industrial
-                                | classify::FeatureType::AirportArea
-                                | classify::FeatureType::AirportLine
-                        )
-                    {
-                        return;
-                    }
-
-                    // Closed-ring runway/airstrip ways are geometrically
-                    // polygons (a runway drawn as a perimeter way rather
-                    // than a multipolygon). Reroute to AirportArea for a
-                    // proper polygon source instead of perimeter fragments.
-                    //
-                    // taxiway/stopway closed-rings are typically turnaround
-                    // LOOPS where the ring itself is the taxi path; keeping
-                    // them as AirportLine preserves the downstream leg snap.
-                    if matches!(ftype, classify::FeatureType::AirportLine)
-                        && coords.len() >= 3
-                        && (coords[0][0] - coords.last().unwrap()[0]).abs() < 1e-7
-                        && (coords[0][1] - coords.last().unwrap()[1]).abs() < 1e-7
-                        && matches!(
-                            way.tags().find(|(k, _)| *k == "aeroway").map(|(_, v)| v),
-                            Some("runway") | Some("airstrip")
-                        )
-                    {
-                        ftype = classify::FeatureType::AirportArea;
-                    }
-
-                    if ftype.is_linear() && coords.len() < 2 {
-                        return;
-                    }
-                    if coords.is_empty() {
-                        return;
-                    }
-
-                    let tags = classify::extract_way_tags(&way, &ftype);
-
-                    if ftype.is_linear() {
-                        let max_len = 250.0;
-                        let segs = microsegment::split_at_junctions(
-                            resolved_nodes
-                                .iter()
-                                .map(|(id, coords)| (*coords, junctions.contains(*id))),
-                            max_len,
+                            classify::FeatureType::Road | classify::FeatureType::Railway
                         );
-                        assert!(
-                            segs.len() <= i16::MAX as usize + 1,
-                            "way {} exceeds nonnegative Int16 segment identities",
-                            way.id(),
-                        );
-                        for (idx, interval) in segs.iter().enumerate() {
-                            let seg = interval.geometry(|index| {
-                                resolved_nodes[index]
-                                    .1
-                                    .expect("source interval references a resolved node")
-                            });
-                            let mid_lat = (seg.0[0] + seg.1[0]) / 2.0;
-                            let mid_lon = grid::geo::wrapped_longitude_midpoint(seg.0[1], seg.1[1]);
-                            let square = grid::square_of(mid_lat, mid_lon);
-                            spiller.emit_segment(&ftype, square, way.id(), idx as i16, &seg, &tags);
+                        if is_transport {
+                            transport.write_way(way.id(), ftype.name(), &resolved_nodes)?;
+                        }
+                        if ftype.is_linear() && coords.len() < 2 {
+                            continue;
+                        }
+                        if coords.is_empty() {
+                            continue;
+                        }
+
+                        let tags = classify::extract_way_tags(&way, &ftype);
+
+                        if ftype.is_linear() {
+                            let max_len = 250.0;
+                            let segs = microsegment::split_at_junctions(
+                                resolved_nodes
+                                    .iter()
+                                    .map(|(id, coords)| (*coords, junctions.contains(*id))),
+                                max_len,
+                            );
+                            assert!(
+                                segs.len() <= i16::MAX as usize + 1,
+                                "way {} exceeds nonnegative Int16 segment identities",
+                                way.id(),
+                            );
+                            for (idx, interval) in segs.iter().enumerate() {
+                                let seg = interval.geometry(|index| {
+                                    resolved_nodes[index]
+                                        .1
+                                        .expect("source interval references a resolved node")
+                                });
+                                let mid_lat = (seg.0[0] + seg.1[0]) / 2.0;
+                                let mid_lon =
+                                    grid::geo::wrapped_longitude_midpoint(seg.0[1], seg.1[1]);
+                                let square = grid::square_of(mid_lat, mid_lon);
+                                spiller.emit_segment(
+                                    &ftype,
+                                    square,
+                                    way.id(),
+                                    idx as i16,
+                                    &seg,
+                                    &tags,
+                                );
+                                if is_transport {
+                                    transport.write_piece(
+                                        way.id(),
+                                        idx as i16,
+                                        &grid::square_name(square),
+                                        interval,
+                                    )?;
+                                }
+                                features_total += 1;
+                            }
+                        } else {
+                            let (clat, clon) = centroid(&coords);
+                            let square = grid::square_of(clat, clon);
+                            let ring = ring_for_spill(&coords, &mut antimeridian_rings_omitted);
+                            spiller.emit_polygon(&ftype, square, way.id(), clat, clon, &tags, ring);
                             features_total += 1;
                         }
-                    } else {
-                        let (clat, clon) = centroid(&coords);
-                        let square = grid::square_of(clat, clon);
-                        let ring = ring_for_spill(&coords, &mut antimeridian_rings_omitted);
-                        spiller.emit_polygon(&ftype, square, way.id(), clat, clon, &tags, ring);
-                        features_total += 1;
                     }
                 }
-            }
-            Element::Node(node) => {
-                features_total += emit_node(
-                    &mut spiller,
-                    classify::is_wind_turbine_node(&node),
-                    || classify::extract_turbine_tags_node(&node),
-                    classify::FeatureType::WindTurbine,
-                    node.id(),
-                    node.lat(),
-                    node.lon(),
-                );
-                features_total += emit_node(
-                    &mut spiller,
-                    classify::is_airport_node(&node),
-                    || classify::extract_airport_tags_node(&node),
-                    classify::FeatureType::AirportArea,
-                    node.id(),
-                    node.lat(),
-                    node.lon(),
-                );
-                if let Some(kind) = classify::node_kind_node(&node) {
-                    let tags = classify::extract_node_settlement_tags_node(&node);
-                    features_total += emit_settlement_node(
+                Element::Node(node) => {
+                    features_total += emit_node(
                         &mut spiller,
-                        kind,
+                        classify::is_wind_turbine_node(&node),
+                        || classify::extract_turbine_tags_node(&node),
+                        classify::FeatureType::WindTurbine,
                         node.id(),
                         node.lat(),
                         node.lon(),
-                        &tags,
                     );
-                }
-            }
-            Element::DenseNode(node) => {
-                features_total += emit_node(
-                    &mut spiller,
-                    classify::is_wind_turbine_dense(&node),
-                    || classify::extract_turbine_tags_dense(&node),
-                    classify::FeatureType::WindTurbine,
-                    node.id(),
-                    node.lat(),
-                    node.lon(),
-                );
-                features_total += emit_node(
-                    &mut spiller,
-                    classify::is_airport_dense(&node),
-                    || classify::extract_airport_tags_dense(&node),
-                    classify::FeatureType::AirportArea,
-                    node.id(),
-                    node.lat(),
-                    node.lon(),
-                );
-                if let Some(kind) = classify::node_kind_dense(&node) {
-                    let tags = classify::extract_node_settlement_tags_dense(&node);
-                    features_total += emit_settlement_node(
+                    features_total += emit_node(
                         &mut spiller,
-                        kind,
+                        classify::is_airport_node(&node),
+                        || classify::extract_airport_tags_node(&node),
+                        classify::FeatureType::AirportArea,
                         node.id(),
                         node.lat(),
                         node.lon(),
-                        &tags,
                     );
+                    if let Some(kind) = classify::node_kind_node(&node) {
+                        let tags = classify::extract_node_settlement_tags_node(&node);
+                        features_total += emit_settlement_node(
+                            &mut spiller,
+                            kind,
+                            node.id(),
+                            node.lat(),
+                            node.lon(),
+                            &tags,
+                        );
+                    }
                 }
+                Element::DenseNode(node) => {
+                    features_total += emit_node(
+                        &mut spiller,
+                        classify::is_wind_turbine_dense(&node),
+                        || classify::extract_turbine_tags_dense(&node),
+                        classify::FeatureType::WindTurbine,
+                        node.id(),
+                        node.lat(),
+                        node.lon(),
+                    );
+                    features_total += emit_node(
+                        &mut spiller,
+                        classify::is_airport_dense(&node),
+                        || classify::extract_airport_tags_dense(&node),
+                        classify::FeatureType::AirportArea,
+                        node.id(),
+                        node.lat(),
+                        node.lon(),
+                    );
+                    if let Some(kind) = classify::node_kind_dense(&node) {
+                        let tags = classify::extract_node_settlement_tags_dense(&node);
+                        features_total += emit_settlement_node(
+                            &mut spiller,
+                            kind,
+                            node.id(),
+                            node.lat(),
+                            node.lon(),
+                            &tags,
+                        );
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
-    })?;
+    }
 
+    transport.finish()?;
     spiller.complete()?;
     eprintln!(
         "  {:.1}M ways → {:.1}M features ({} multipolygon rels) in {:.1}s",
@@ -440,6 +463,7 @@ fn main() -> Result<()> {
     eprintln!("\n── Finalize ──");
     let t3 = Instant::now();
     let square_count = finalize::finalize(&cli.spill_dir, &cli.output, cli.num_buckets)?;
+    transport::TransportWriter::publish(&cli.spill_dir, &cli.output)?;
     eprintln!(
         "  {} square dirs in {:.1}s",
         square_count,

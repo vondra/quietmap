@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { tableFromIPC } from 'apache-arrow'
 import { writeRailwaysFixture } from './rail-test-fixture.js'
 import { enrichZ9RailwaysByGraphWalk } from './rail-walk-enrich.js'
+import { writeSyntheticRailTopology } from './transport-test-fixture.js'
 
 const TEMP = mkdtempSync(join(tmpdir(), 'rail-walk-z9-'))
 after(() => rmSync(TEMP, { recursive: true, force: true }))
@@ -44,6 +45,7 @@ test('one pair walks across a z9 boundary, reruns byte-identically and retracts 
     country: 'DE',
   }]), west)
   copyFileSync(writeRailwaysFixture('walk-east.arrow', [{
+    osmId: 50_001,
     latitude,
     longitude: boundary,
     endLatitude: latitude,
@@ -52,6 +54,7 @@ test('one pair walks across a z9 boundary, reruns byte-identically and retracts 
     country: 'DE',
   }]), east)
 
+  writeSyntheticRailTopology(prepared, [westDirectory.slice(prepared.length + 1), eastDirectory.slice(prepared.length + 1)])
   const options = {
     preparedDirectory: prepared,
     bbox: [49.99, 14.05, 50.01, 14.08] as const,

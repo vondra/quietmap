@@ -1,13 +1,4 @@
-/**
- * Routing, parallel-spread and R15/R16 detector tests for
- * rail-graph-metrics.ts. Builds graphs via `buildRailGraph` (rail-graph.ts)
- * and exercises `walkRailStationPairs` / `findRailFlowJumps` /
- * `findRailContinuityGaps` end to end — see rail-graph.test.ts for pure
- * graph-construction tests (T-junction healing topology, snap, effective
- * traffic table).
- *
- * Run: `cd pipeline && npx tsx --test lib/rail-graph-metrics.test.ts`
- */
+/** Railway routing, allocation and flow diagnostics through the graph matcher. */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -28,26 +19,27 @@ function seg(over: Partial<RailGraphSegmentInput> & Pick<RailGraphSegmentInput, 
 }
 
 function componentOfSegment(graph: ReturnType<typeof buildRailGraph>, key: string): number {
-  const edge = graph.edges.find((candidate) => candidate.parentKey === key)
+  const edge = graph.edges.find((candidate) => candidate.key === key)
   assert.ok(edge, `missing graph edge for segment ${key}`)
   return graph.componentOfNode[edge.nodeA]
 }
 
-// ── T-junction healing: stamps map back to the ORIGINAL parent key ─────────
+// ── Shared source node: each real piece is stamped once ─────────────────────
 
-test('walk: a path crossing a healed T-junction stamps the parent key once, not once per sub-edge', () => {
-  const trunk = seg({ key: 'trunk', startLat: 50, startLon: 14.000, endLat: 50, endLon: 14.010 })
+test('walk: a path across pieces that share a source node stamps each piece once', () => {
+  const west = seg({ key: 'west', startLat: 50, startLon: 14.000, endLat: 50, endLon: 14.005 })
+  const east = seg({ key: 'east', startLat: 50, startLon: 14.005, endLat: 50, endLon: 14.010 })
   const branch = seg({ key: 'branch', startLat: 50, startLon: 14.005, endLat: 50.005, endLon: 14.005 })
-  const g = buildRailGraph([trunk, branch])
-  assert.equal(g.edges.filter((e) => e.parentKey === 'trunk').length, 2, 'fixture sanity: trunk is healed into 2 sub-edges')
+  const g = buildRailGraph([west, east, branch])
+  assert.equal(g.edgeCount, 3, 'fixture sanity: one edge per real piece, joined at the shared source node')
 
   const result = walkRailStationPairs(g, [
     { fromLat: 50, fromLon: 14.000, toLat: 50, toLon: 14.010, pax: 20, frt: 0 },
   ])
   assert.equal(result.failures.snapFailed + result.failures.disconnected + result.failures.detourRejected + result.failures.ambiguous, 0)
   assert.equal(result.pairsWalked, 1)
-  assert.equal(result.stampsBySegmentKey.size, 1, 'ONE entry for the trunk despite crossing 2 healed sub-edges')
-  assert.deepEqual(result.stampsBySegmentKey.get('trunk'), { pax: 20, frt: 0, divisor: 1 })
+  assert.deepEqual(result.stampsBySegmentKey.get('west'), { pax: 20, frt: 0, divisor: 1 })
+  assert.deepEqual(result.stampsBySegmentKey.get('east'), { pax: 20, frt: 0, divisor: 1 })
   assert.equal(result.stampsBySegmentKey.has('branch'), false, 'branch was never on this path')
 })
 
@@ -621,9 +613,10 @@ test('quarantine: an unlocalized pair (neither end snaps) quarantines only stamp
 // pair, must match a fresh (no-scratch) call every time.
 
 test('dijkstraShortestPath: a reused scratch run on the same pair twice, then a different pair, matches fresh-allocation results', () => {
-  const trunk = seg({ key: 'trunk', startLat: 50, startLon: 14.000, endLat: 50, endLon: 14.030 })
+  const west = seg({ key: 'west', startLat: 50, startLon: 14.000, endLat: 50, endLon: 14.010 })
+  const east = seg({ key: 'east', startLat: 50, startLon: 14.010, endLat: 50, endLon: 14.030 })
   const spur = seg({ key: 'spur', startLat: 50, startLon: 14.010, endLat: 50.01, endLon: 14.010 })
-  const g = buildRailGraph([trunk, spur])
+  const g = buildRailGraph([west, east, spur])
   const fromNode = snapToNearestRailGraphNode(g, 50, 14.000)
   const toNode = snapToNearestRailGraphNode(g, 50, 14.030)
   const otherToNode = snapToNearestRailGraphNode(g, 50.01, 14.010)

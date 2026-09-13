@@ -1,13 +1,4 @@
-/**
- * Graph-construction tests for rail-graph.ts: node interning, T-junction
- * healing (the load-bearing fix for the extractor's collinear-merge
- * swallowing junction vertices — see `microsegment.rs::split`), snap
- * radius, `effectiveRailTraffic`'s engine-zero-defaulting mirror, and the
- * rail-stops index. Routing/parallel-spread/detector tests live in
- * rail-graph-metrics.test.ts (they build on `buildRailGraph` from here).
- *
- * Run: `cd pipeline && npx tsx --test lib/rail-graph.test.ts`
- */
+/** Source-identity graph construction, station snapping and effective traffic tests. */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -27,7 +18,7 @@ function seg(over: Partial<RailGraphSegmentInput> & Pick<RailGraphSegmentInput, 
 }
 
 function componentOfSegment(graph: ReturnType<typeof buildRailGraph>, key: string): number {
-  const edge = graph.edges.find((candidate) => candidate.parentKey === key)
+  const edge = graph.edges.find((candidate) => candidate.key === key)
   assert.ok(edge, `missing graph edge for segment ${key}`)
   return graph.componentOfNode[edge.nodeA]
 }
@@ -39,58 +30,19 @@ test('buildRailGraph: a single segment interns exactly two nodes and one edge', 
   assert.equal(componentOfSegment(g, 'a'), 0)
 })
 
-test('T-junction healing: a branch touching a trunk mid-chord splits the trunk and connects the components', () => {
-  // Trunk runs straight east-west at lat 50; its exact midpoint (50, 14.005)
-  // is NOT one of its own endpoints, so nodeKey() would otherwise intern the
-  // branch's foot as an isolated 3rd node with no edge to the trunk.
-  const trunk = seg({ key: 'trunk', startLat: 50, startLon: 14.000, endLat: 50, endLon: 14.010, corridorToken: 'TRUNK' })
-  const branch = seg({ key: 'branch', startLat: 50, startLon: 14.005, endLat: 50.005, endLon: 14.005, corridorToken: 'BRANCH' })
-  // Unrelated far-away segment: proves components stay SEPARATE where nothing touches.
-  const island = seg({ key: 'island', startLat: 60, startLon: 14.000, endLat: 60, endLon: 14.010 })
-
-  const g = buildRailGraph([trunk, branch, island])
-
-  assert.equal(g.nodeCount, 6, 'trunk start/end + junction + branch end, plus the island\'s own 2 nodes')
-  assert.equal(g.edgeCount, 4, 'trunk healed into 2 sub-edges + 1 branch edge + 1 island edge')
-
-  const trunkEdges = g.edges.filter((e) => e.parentKey === 'trunk')
-  assert.equal(trunkEdges.length, 2, 'trunk split into two sub-edges at the junction')
-  for (const e of trunkEdges) assert.equal(e.corridorToken, 'TRUNK', 'sub-edges keep the parent segment fields')
-
-  const trunkComp = componentOfSegment(g, 'trunk')
-  const branchComp = componentOfSegment(g, 'branch')
-  const islandComp = componentOfSegment(g, 'island')
-  assert.equal(trunkComp, branchComp, 'healing connects trunk and branch into ONE component')
-  assert.notEqual(trunkComp, islandComp, 'an untouched segment stays its own component')
-})
-
-test('T-junction healing: no split when nothing touches the segment body', () => {
-  const a = seg({ key: 'a', startLat: 50, startLon: 14.000, endLat: 50, endLon: 14.010 })
-  const b = seg({ key: 'b', startLat: 51, startLon: 14.000, endLat: 51, endLon: 14.010 }) // far away, no touch
-  const g = buildRailGraph([a, b])
-  assert.equal(g.edgeCount, 2, 'neither segment is split')
-  assert.notEqual(componentOfSegment(g, 'a'), componentOfSegment(g, 'b'))
-})
-
-test('T-junction healing: every sub-edge carries its own span, keeping the parent original outer ends', () => {
-  // Two branches touch the trunk at 1/4 and 3/4 of its length, so the middle
-  // sub-edge shares NEITHER of the parent's ends. Copying the parent geometry
-  // put all three sub-edges' midpoints on the trunk's overall midpoint, which
-  // is what the twin gate and the GTFS shape filter then measured.
-  const trunk = seg({ key: 'trunk', startLat: 50, startLon: 14.000, endLat: 50, endLon: 14.020 })
-  const west = seg({ key: 'west', startLat: 50, startLon: 14.005, endLat: 50.005, endLon: 14.005 })
-  const east = seg({ key: 'east', startLat: 50, startLon: 14.015, endLat: 50.005, endLon: 14.015 })
-
-  const subEdges = buildRailGraph([trunk, west, east]).edges.filter((e) => e.parentKey === 'trunk')
-  assert.equal(subEdges.length, 3)
-  assert.deepEqual(subEdges.map((e) => [e.startLon, e.endLon]), [[14.000, 14.005], [14.005, 14.015], [14.015, 14.020]])
-  assert.deepEqual(subEdges.map((e) => ((e.startLon + e.endLon) / 2).toFixed(6)), ['14.002500', '14.010000', '14.017500'])
-
-  // The outer ends stay the parent's own, so `collectSegmentGeometry`
-  // (rail-graph-metrics.ts) still reconstructs the full span from the first and
-  // last sub-edge.
-  assert.deepEqual([subEdges[0].startLat, subEdges[0].startLon], [trunk.startLat, trunk.startLon])
-  assert.deepEqual([subEdges[2].endLat, subEdges[2].endLon], [trunk.endLat, trunk.endLon])
+test('only shared source nodes connect; co-located nodes and mid-body touches remain separate', () => {
+  const trunkWest = seg({ key: 'west', startKey: 'node:1', endKey: 'node:2', startLat: 50, startLon: 14, endLat: 50, endLon: 14.005 })
+  const trunkEast = seg({ key: 'east', startKey: 'node:2', endKey: 'node:3', startLat: 50, startLon: 14.005, endLat: 50, endLon: 14.01 })
+  const connected = seg({ key: 'connected', startKey: 'node:2', endKey: 'node:4', startLat: 50, startLon: 14.005, endLat: 50.005, endLon: 14.005 })
+  const coLocated = seg({ key: 'co-located', startKey: 'node:5', endKey: 'node:6', startLat: 50, startLon: 14.005, endLat: 49.995, endLon: 14.005 })
+  const bodyTouch = seg({ key: 'body-touch', startKey: 'node:7', endKey: 'node:8', startLat: 50, startLon: 14.0025, endLat: 50.005, endLon: 14.0025 })
+  const graph = buildRailGraph([trunkWest, trunkEast, connected, coLocated, bodyTouch])
+  assert.equal(graph.nodeCount, 8)
+  assert.equal(graph.edgeCount, 5)
+  assert.equal(componentOfSegment(graph, 'west'), componentOfSegment(graph, 'east'))
+  assert.equal(componentOfSegment(graph, 'west'), componentOfSegment(graph, 'connected'))
+  assert.notEqual(componentOfSegment(graph, 'west'), componentOfSegment(graph, 'co-located'))
+  assert.notEqual(componentOfSegment(graph, 'west'), componentOfSegment(graph, 'body-touch'))
 })
 
 test('snapToNearestRailGraphNode: within radius resolves to the nearest node, beyond radius fails (-1)', () => {

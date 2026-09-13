@@ -5,10 +5,11 @@ import { after, test } from 'node:test'
 import {
   copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { tmpdir } from 'node:os'
 import { tableFromIPC } from 'apache-arrow'
 import { enrichGlobalGtfsCountry } from './enrich-railway-europe.js'
+import { writeSyntheticRailTopology } from './lib/transport-test-fixture.js'
 import { writeRailwaysFixture } from './lib/rail-test-fixture.js'
 
 const TEMP = mkdtempSync(join(tmpdir(), 'global-gtfs-z9-'))
@@ -72,6 +73,7 @@ function makePrepared(name: string): { prepared: string; path: string } {
       country: 'GR',
     },
   ]), path)
+  writeSyntheticRailTopology(prepared, [relative(prepared, directory)])
   return { prepared, path }
 }
 

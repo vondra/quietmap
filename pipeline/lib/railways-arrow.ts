@@ -15,6 +15,8 @@ export interface RailwayTraffic {
 }
 
 export interface RailwayRow extends SegmentGeometry {
+  osmId: string
+  segmentIndex: number
   railType: number
   usage: number
   service: number
@@ -124,6 +126,8 @@ export async function writeRailwayTraffic(
   await withArrowWrite(arrowPath, (table: Table): Table => {
     result.rows = table.numRows
     const geometry = segmentGeometryReader(table)
+    const osmId = requiredInteger(table, 'osm_id', true, 64)
+    const segmentIndex = requiredInteger(table, 'segment_idx', true, 16)
     const railType = requiredInteger(table, 'rail_type', false, 8)
     const usage = requiredInteger(table, 'usage', false, 8)
     const service = requiredInteger(table, 'service', false, 8)
@@ -164,6 +168,8 @@ export async function writeRailwayTraffic(
     for (let index = 0; index < table.numRows; index++) {
       const row: RailwayRow = {
         ...geometry.row(index),
+        osmId: String(osmId.get(index)),
+        segmentIndex: segmentIndex.get(index) as number,
         railType: railType.get(index) as number,
         usage: usage.get(index) as number,
         service: service.get(index) as number,

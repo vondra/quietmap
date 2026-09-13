@@ -1,43 +1,4 @@
-/**
- * Rail graph-walk routing + parallel-track spread + the R15/R16 continuity
- * detectors — split out of `rail-graph.ts` to keep that file near the
- * ~300-line target. Imports ALL shared types/constants from there; no
- * topology-building logic is duplicated here (Dijkstra and the detectors
- * read `RailGraph`'s internals, they never recompute them).
- *
- * `walkRailStationPairs` is the matcher's core: canonical-pair accumulation,
- * bounded shortest-path search (optionally shape-constrained), an ambiguity
- * probe, then a PER-SEGMENT parallel-track spread. The spread's lateral
- * point-to-body metric and per-segment divisor replace the round-1
- * transitive-cluster/clique grouping (2026-07-15 review round 2): the
- * midpoint-distance metric was stagger-blind — microsegments are cut
- * independently per OSM way, so parallel tracks carry arbitrary 0-250 m
- * longitudinal midpoint offsets — and with any correct lateral metric,
- * transitive clusters chain A1-B1-A2-B2... down the whole corridor, after
- * which the clique test always fails. See `applyParallelSpread`.
- *
- * `findRailFlowJumps` (R15) and `findRailContinuityGaps` (R16) are the rail
- * twins of the road auditor's R5 flow-jump / R13 continuity-gap
- * (`audit-enrichment-invariants.ts`), reworked to compare EFFECTIVE traffic
- * (`effectiveRailTraffic`) across source ids instead of raw AADT within one
- * source — a raw 16+0 vs 2+1 misses the >=20/day floor entirely, but the
- * engine actually renders 36 vs 3 once zero-defaulting applies.
- *
- * Two Step-B refinements (2026-07-16), both verified against a live CZ
- * Step-A run (2 461 pairs, 150 failed): `altPathIsParallelTwin` exempts an
- * 'ambiguous' verdict when the alt path found by the penalized re-run is
- * merely the best path's own parallel twin — this killed 113 of the 150
- * failed pairs, all Czech double-track lines the ambiguity probe mistook for
- * a genuine second corridor. `quarantineAmbiguousPathUnion` /
- * `quarantineGraphlessPair` / `quarantineChordVicinity` use per-pair evidence shapes
- * (`RailWalkResult.quarantinedSegmentKeys`: candidate-path union for
- * ambiguous; chord band + capped graph fingers for the graphless kinds) —
- * per-component granularity had
- * withheld retract/silent across the ENTIRE national network on 9 failed
- * components, because rail is one connected component nationwide; the
- * admissible-path ellipse (both ends snapped) is strictly tighter evidence,
- * and the ball/chord shapes cover the ends the graph could not localize.
- */
+/** Railway routing, traffic allocation and continuity diagnostics on source-connected graphs. */
 
 import { nodeKey, haversineM, flatDist, pointToSegmentDist, pointToPolylineDist, coordKey4dp, wrapLonDeltaDeg, M_PER_DEG_LAT, M_PER_DEG_LON_EQ } from './spatial.js'
 import { MinHeap } from './min-heap.js'
@@ -208,38 +169,11 @@ export const PARALLEL_SPREAD_MIN_OVERLAP_ABS_M = 30
 /** ...OR at least this fraction of `i`'s OWN length, whichever is larger. */
 export const PARALLEL_SPREAD_MIN_OVERLAP_FRACTION = 0.3
 
-interface SegGeom {
-  railType: number
-  usage: number
-  osmId: string
-  isTraversalOnly: boolean
-  corridorToken: string
-  startLat: number; startLon: number; endLat: number; endLon: number
-  nodeA: number; nodeB: number
-}
-
-/** Reconstructs one ORIGINAL segment's overall geometry from its (possibly
- *  many, post-healing) sub-edges. Relies on `healTJunctions` pushing an
- *  input segment's sub-edges contiguously in geometric order (see
- *  rail-graph.ts) — first-seen start + running end reproduce the full span
- *  without needing the original un-healed segment list. */
-function collectSegmentGeometry(graph: RailGraph): Map<string, SegGeom> {
-  const map = new Map<string, SegGeom>()
-  for (const e of graph.edges) {
-    let g = map.get(e.parentKey)
-    if (!g) {
-      g = {
-        railType: e.railType, usage: e.usage, osmId: e.osmId, isTraversalOnly: e.isTraversalOnly,
-        corridorToken: e.corridorToken,
-        startLat: e.startLat, startLon: e.startLon, endLat: e.endLat, endLon: e.endLon,
-        nodeA: e.nodeA, nodeB: e.nodeB,
-      }
-      map.set(e.parentKey, g)
-    }
-    g.endLat = e.endLat
-    g.endLon = e.endLon
-    g.nodeB = e.nodeB
-  }
+/** Indexes each source piece's edge by `key`. Construction emits
+ *  exactly one edge per input, so callers use the edge geometry as-is. */
+function collectSegmentGeometry(graph: RailGraph): Map<string, RailGraphEdge> {
+  const map = new Map<string, RailGraphEdge>()
+  for (const e of graph.edges) map.set(e.key, e)
   return map
 }
 
@@ -269,7 +203,7 @@ function headingDeltaMod180(h1: number, h2: number): number {
  *  against exact conservation). Two parallel-heading tracks that don't
  *  actually run alongside each other (one ends where the other starts) have
  *  zero overlap and are never siblings. */
-function longitudinalOverlapM(a: SegGeom, b: SegGeom): { overlapM: number; aSpanM: number } {
+function longitudinalOverlapM(a: RailGraphEdge, b: RailGraphEdge): { overlapM: number; aSpanM: number } {
   const midLat = (a.startLat + a.endLat + b.startLat + b.endLat) / 4
   const cosLat = Math.cos(midLat * Math.PI / 180)
   const headingRad = headingDeg(a.startLat, a.startLon, a.endLat, a.endLon) * Math.PI / 180
@@ -343,7 +277,7 @@ function lateralTwinGate(
   return lateralM
 }
 
-function parallelSiblingLateralM(a: SegGeom, aMidLat: number, aMidLon: number, b: SegGeom): number | null {
+function parallelSiblingLateralM(a: RailGraphEdge, aMidLat: number, aMidLon: number, b: RailGraphEdge): number | null {
   if (a.osmId === b.osmId) return null
   if (a.railType !== b.railType || a.usage !== b.usage) return null
   if (a.nodeA === b.nodeA || a.nodeA === b.nodeB || a.nodeB === b.nodeA || a.nodeB === b.nodeB) return null
@@ -415,18 +349,16 @@ const PARALLEL_GRID_CELL_DEG = 0.001
  *  corridor, and a <=250 m sliver at <=1.76 dB is not worth the row-splitting
  *  complexity to close.
  *
- *  `geomByKey` (2026-07-16 Step-B refinement): built ONCE by the caller
- *  (`walkRailStationPairs`, via `collectSegmentGeometry`) and passed in
- *  rather than recomputed here, since the same map is now also read for the
- *  unlocalized-pair chord-vicinity quarantine — one reconstruction per walk,
- *  not two. */
+ *  `geomByKey`: built once by the caller (`walkRailStationPairs`, via
+ *  `collectSegmentGeometry`) and shared with the unlocalized-pair
+ *  chord-vicinity quarantine. */
 function applyParallelSpread(
   graph: RailGraph,
   stamps: Map<string, { pax: number; frt: number; divisor: number }>,
   divisorBySegmentKey: Map<string, number>,
-  geomByKey: Map<string, SegGeom>,
+  geomByKey: Map<string, RailGraphEdge>,
 ): void {
-  const stampableGeomByKey = new Map<string, SegGeom>()
+  const stampableGeomByKey = new Map<string, RailGraphEdge>()
   const bodyGrid = new Map<string, string[]>() // cell -> keys of segments whose body bbox covers the cell
   for (const [k, g] of geomByKey) {
     if (!isStampableRailEdge(g)) continue // stampable universe only
@@ -787,7 +719,7 @@ const FINGER_FLOOD_CAP_M = 50_000
 
 function quarantineGraphlessPair(
   graph: RailGraph,
-  geomByKey: Map<string, SegGeom>,
+  geomByKey: Map<string, RailGraphEdge>,
   cp: { fromLat: number; fromLon: number; toLat: number; toLon: number },
   fromNode: number,
   toNode: number,
@@ -808,7 +740,7 @@ function quarantineGraphlessPair(
       if (d + flatDist(nu.lat, nu.lon, otherLat, otherLon) > boundM) continue
       for (const edgeIdx of graph.adjacency[u]) {
         const e = graph.edges[edgeIdx]
-        if (isStampableRailEdge(e)) quarantine.add(e.parentKey)
+        if (isStampableRailEdge(e)) quarantine.add(e.key)
       }
     }
   }
@@ -846,7 +778,7 @@ function quarantineAmbiguousPathUnion(
     for (const idx of p.edgeIndices) {
       usedEdges.add(idx)
       const e = graph.edges[idx]
-      if (isStampableRailEdge(e)) quarantine.add(e.parentKey)
+      if (isStampableRailEdge(e)) quarantine.add(e.key)
     }
   }
   addPath(best)
@@ -890,10 +822,9 @@ function quarantineAmbiguousPathUnion(
  *  Standalone shape for an UNLOCALIZED pair (no snapped node to flood from
  *  at all — proximity to the raw chord is the next-tightest evidence
  *  available), and the corridor-band half of `quarantineGraphlessPair`. `geomByKey` is the SAME map
- *  `applyParallelSpread` builds from (passed in by `walkRailStationPairs`,
- *  see its doc) — one reconstruction per walk. */
+ *  `applyParallelSpread` reads (passed in by `walkRailStationPairs`). */
 function quarantineChordVicinity(
-  geomByKey: Map<string, SegGeom>,
+  geomByKey: Map<string, RailGraphEdge>,
   cp: { fromLat: number; fromLon: number; toLat: number; toLon: number },
   boundM: number,
   quarantine: Set<string>,
@@ -980,10 +911,6 @@ export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCou
   const pairsTotal = canonicalPairs.size
   let pairsWalked = 0
 
-  // Built ONCE (2026-07-16 Step-B refinement): the unlocalized-pair chord
-  // quarantine needs every stampable segment's geometry, and
-  // applyParallelSpread needs the exact same map — share it instead of
-  // reconstructing twice.
   const geomByKey = collectSegmentGeometry(graph)
 
   // ONE scratch for every search over this graph (see DijkstraScratch doc) —
@@ -1166,21 +1093,13 @@ export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCou
     }
 
     pairsWalked++
-    const stampableKeysOnPath = new Set<string>()
     for (const edgeIdx of best.edgeIndices) {
       const e = graph.edges[edgeIdx]
       if (!isStampableRailEdge(e)) continue // crossovers/other families connect, never stamped
-      stampableKeysOnPath.add(e.parentKey)
-    }
-    // Dedup by ORIGINAL segment key before adding: a T-junction-healed
-    // segment can contribute two sub-edges to one path (straight through the
-    // junction) — without this de-dup the same original segment would be
-    // credited twice for one pair.
-    for (const key of stampableKeysOnPath) {
-      const existing = stampsBySegmentKey.get(key) ?? { pax: 0, frt: 0, divisor: 1 }
+      const existing = stampsBySegmentKey.get(e.key) ?? { pax: 0, frt: 0, divisor: 1 }
       existing.pax += cp.pax
       existing.frt += cp.frt
-      stampsBySegmentKey.set(key, existing)
+      stampsBySegmentKey.set(e.key, existing)
     }
   }
 

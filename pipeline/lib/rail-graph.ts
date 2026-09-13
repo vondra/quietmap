@@ -1,28 +1,6 @@
-/**
- * Rail-segment graph — the ONE topology SSOT for the rail graph-walk matcher,
- * the R15/R16 continuity auditors and enrichment-status metrics.
- * Pure, no file I/O — callers own reading Arrow/GTFS and writing stamps.
- *
- * `buildRailGraph` interns segment endpoints via the exact z30 grid-cell keys
- *  (`SegmentEndpointKeys` from prepared-grid.ts) and
- * then performs T-JUNCTION HEALING: the extractor's collinear-merge
- * (`engine/osm-extract/src/microsegment.rs::split`) swallows junction
- * vertices, so a branch's endpoint can land in the *middle* of another
- * segment's body instead of exactly on it — an endpoint-only graph would
- * leave that branch dangling, unreachable from the segment it physically
- * meets. Healing finds those mid-body touches and splits the touched
- * segment into sub-edges that share the branch's node, all still tagged
- * with the ORIGINAL segment's `key` so a walked stamp maps back to one
- * Arrow row regardless of how many sub-edges it now spans.
- *
- * Routing (`walkRailStationPairs`), the parallel-spread pass and the R15/R16
- * detectors live in the sibling `rail-graph-metrics.ts` (kept out of this
- * file to stay near the ~300-line target) — they import the types and
- * `effectiveRailTraffic`/`buildRailGraph` from here; no logic is duplicated
- * between the two files.
- */
+/** Railway graph joined only by caller-supplied source identities. */
 
-import { flatDist, pointToSegmentDist, pointToSegmentParamT, M_PER_DEG_LAT, M_PER_DEG_LON_EQ } from './spatial.js'
+import { flatDist, M_PER_DEG_LAT, M_PER_DEG_LON_EQ } from './spatial.js'
 import type { SegmentEndpointKeys } from './prepared-grid.js'
 
 // ── Tunables (cited at each use site) ───────────────────────────────────────
@@ -72,10 +50,6 @@ export const WALK_AMBIGUITY_SHARED_EDGE_FRACTION = 0.5
 /** Soft corridor constraint: with a GTFS `shapes.txt` polyline, edges farther
  *  than this from the shape are excluded from that pair's search entirely. */
 export const SHAPE_CORRIDOR_TOLERANCE_M = 250
-/** T-junction healing tolerance — see the module doc. Deliberately tight (the
- *  extractor's own vertex precision), so this never merges two genuinely
- *  distinct nearby tracks. */
-export const T_JUNCTION_TOLERANCE_M = 1.0
 /** A rail-flow jump at a node within this radius of a real stop is explained
  *  by boardings/alightings, not a matching bug (R15/R16 exemption). */
 export const RAIL_STOP_EXEMPT_RADIUS_M = 300
@@ -168,31 +142,14 @@ export const WALK_TWIN_FAR_LENGTH_FRACTION = 0.10
  *  entire run. */
 export const UNLOCALIZED_PAIR_QUARANTINE_RADIUS_M = 5000
 
-/** Grid cell size (degrees) for every proximity index in this module: the
- *  T-junction segment-body grid, the node snap grid and the rail-stops grid.
- *  ~1.1 km at the equator — far coarser than T_JUNCTION_TOLERANCE_M (so a
- *  handful of neighbour cells always cover it) and comfortably coarser than
- *  STATION_SNAP_RADIUS_M / RAIL_STOP_EXEMPT_RADIUS_M (both 300 m), so a
- *  ±1-cell neighbourhood already suffices in the common case; the snap/stop
- *  queries still compute the exact ring needed for the caller's radius.
- *
- *  UNWRAPPED at the antimeridian: every grid cell key below is derived from
- *  RAW lat/lon degrees (`Math.floor(lat/lon / SPATIAL_INDEX_CELL_DEG)`), with
- *  no ±180° wraparound — unlike spatial.ts's DISTANCE helpers
- *  (`flatDist`/`pointToSegmentDist`/`pointToSegmentParamT`), which do wrap. A
- *  segment/node/stop straddling ±180° would land in wildly different cells on
- *  each side and never find its true neighbours. No railway in the dataset
- *  crosses it; revisit if one ever does. */
+/** Snap/stop search grid; each query derives the required ring from its radius. */
 const SPATIAL_INDEX_CELL_DEG = 0.01
 
 // ── Segment input + graph shape ─────────────────────────────────────────────
 
-/** Graph input with exact native endpoint identity (z30 grid cells via
- *  `SegmentEndpointKeys`): sub-metre distinct endpoints stay distinct nodes —
- *  never the rounded `nodeKey()`, which is detector-pairing only. */
+/** Source node keys and way-local interpolated positions supplied by the loader. */
 export interface RailGraphSegmentInput extends SegmentEndpointKeys {
-  /** Caller-stable id, e.g. `${square}:${rowIdx}` — stamps key off this, not
-   *  off any graph-internal (post-healing) edge id. */
+  /** Source way/piece identity; independent of Arrow row order and partition. */
   key: string
   osmId: string
   /** Engine codes: 0 rail, 1 tram, 2 light_rail, 3 narrow, 4 funicular. */
@@ -217,14 +174,12 @@ export interface RailGraphNode {
   lon: number
 }
 
-/** One (post-healing) graph edge. May be a whole input segment (no T-junction
- *  touched it) or one sub-edge of a segment that was split — `parentKey`
- *  always identifies the ORIGINAL `RailGraphSegmentInput.key` either way. */
+/** One source-associated acoustic piece; construction never invents a connection. */
 export interface RailGraphEdge {
   nodeA: number
   nodeB: number
   lengthM: number
-  parentKey: string
+  key: string
   osmId: string
   railType: number
   usage: number
@@ -247,7 +202,7 @@ export interface RailGraph {
   edges: RailGraphEdge[]
   /** node id -> incident edge indices (both directions). */
   adjacency: number[][]
-  /** node id -> component id, computed over the FULL healed edge set
+  /** node id -> component id, computed over the FULL edge set
    *  (every railType, including traversal-only) — a topological fact about
    *  the physical network, independent of which edges a given walk may
    *  route through. */
@@ -261,119 +216,6 @@ export interface RailGraph {
 }
 
 // ── Construction ─────────────────────────────────────────────────────────────
-
-interface WorkEdge {
-  nodeA: number
-  nodeB: number
-  lengthM: number
-  parentKey: string
-  osmId: string
-  railType: number
-  usage: number
-  isTraversalOnly: boolean
-  corridorToken: string
-  startLat: number
-  startLon: number
-  endLat: number
-  endLon: number
-}
-
-function gridCellsForBbox(minLat: number, minLon: number, maxLat: number, maxLon: number): string[] {
-  const cells: string[] = []
-  const laMin = Math.floor(minLat / SPATIAL_INDEX_CELL_DEG)
-  const laMax = Math.floor(maxLat / SPATIAL_INDEX_CELL_DEG)
-  const loMin = Math.floor(minLon / SPATIAL_INDEX_CELL_DEG)
-  const loMax = Math.floor(maxLon / SPATIAL_INDEX_CELL_DEG)
-  for (let la = laMin; la <= laMax; la++) {
-    for (let lo = loMin; lo <= loMax; lo++) cells.push(`${la}_${lo}`)
-  }
-  return cells
-}
-
-/** T-junction healing (see module doc): grid-accelerated so a country-scale
- *  segment set doesn't pay an O(nodes * segments) scan. For every node, find
- *  segments whose body passes within T_JUNCTION_TOLERANCE_M and record the
- *  hit; once every node has been checked, split each touched segment at ALL
- *  its hits in one pass (collecting hits first, instead of splitting as we
- *  go, avoids the order-dependent bugs a live mutate-while-scanning approach
- *  would have — e.g. a second hit landing on a sub-edge created by the
- *  first). Sub-edges are pushed in geometric order (start -> ... -> end) so
- *  a caller can reconstruct one segment's overall geometry by taking the
- *  first and last sub-edge with its `parentKey` (see rail-graph-metrics.ts's
- *  `collectSegmentGeometry`). */
-function healTJunctions(nodes: RailGraphNode[], workEdges: WorkEdge[]): RailGraphEdge[] {
-  const segmentGrid = new Map<string, number[]>()
-  workEdges.forEach((e, idx) => {
-    const minLat = Math.min(e.startLat, e.endLat), maxLat = Math.max(e.startLat, e.endLat)
-    const minLon = Math.min(e.startLon, e.endLon), maxLon = Math.max(e.startLon, e.endLon)
-    for (const cell of gridCellsForBbox(minLat, minLon, maxLat, maxLon)) {
-      const arr = segmentGrid.get(cell)
-      if (arr) arr.push(idx); else segmentGrid.set(cell, [idx])
-    }
-  })
-
-  const hits = new Map<number, Array<{ nodeId: number; t: number }>>()
-  for (let nodeId = 0; nodeId < nodes.length; nodeId++) {
-    const { lat, lon } = nodes[nodeId]
-    const cy = Math.floor(lat / SPATIAL_INDEX_CELL_DEG)
-    const cx = Math.floor(lon / SPATIAL_INDEX_CELL_DEG)
-    const candidates = new Set<number>()
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        const arr = segmentGrid.get(`${cy + dy}_${cx + dx}`)
-        if (arr) for (const idx of arr) candidates.add(idx)
-      }
-    }
-    for (const idx of candidates) {
-      const e = workEdges[idx]
-      if (e.nodeA === nodeId || e.nodeB === nodeId) continue // already an endpoint, not a T-junction
-      const d = pointToSegmentDist(lat, lon, e.startLat, e.startLon, e.endLat, e.endLon)
-      if (d > T_JUNCTION_TOLERANCE_M) continue
-      const t = pointToSegmentParamT(lat, lon, e.startLat, e.startLon, e.endLat, e.endLon)
-      if (t <= 1e-6 || t >= 1 - 1e-6) continue // projects onto an endpoint — grid-key interning already merged this one
-      const arr = hits.get(idx) ?? []
-      arr.push({ nodeId, t })
-      hits.set(idx, arr)
-    }
-  }
-
-  const finalEdges: RailGraphEdge[] = []
-  workEdges.forEach((e, idx) => {
-    const hitList = hits.get(idx)
-    if (!hitList || hitList.length === 0) {
-      finalEdges.push({ ...e })
-      return
-    }
-    hitList.sort((a, b) => a.t - b.t)
-    const chain: Array<{ nodeId: number; t: number }> = [{ nodeId: e.nodeA, t: 0 }]
-    for (const h of hitList) {
-      if (Math.abs(h.t - chain[chain.length - 1].t) < 1e-9) continue // duplicate split point
-      chain.push(h)
-    }
-    chain.push({ nodeId: e.nodeB, t: 1 })
-    for (let i = 0; i < chain.length - 1; i++) {
-      // A sub-edge carries ITS OWN span, not the parent's: every consumer that
-      // asks "where does this edge run" reads startLat..endLon — the twin
-      // gate's per-edge midpoint, the ambiguous-pair diagnostic and the GTFS
-      // shape filter. The OUTER ends keep the parent's original coordinates so
-      // `collectSegmentGeometry` still reconstructs the parent span from the
-      // first and last sub-edge.
-      const isFirst = i === 0
-      const isLast = i === chain.length - 2
-      finalEdges.push({
-        ...e,
-        nodeA: chain[i].nodeId,
-        nodeB: chain[i + 1].nodeId,
-        startLat: isFirst ? e.startLat : nodes[chain[i].nodeId].lat,
-        startLon: isFirst ? e.startLon : nodes[chain[i].nodeId].lon,
-        endLat: isLast ? e.endLat : nodes[chain[i + 1].nodeId].lat,
-        endLon: isLast ? e.endLon : nodes[chain[i + 1].nodeId].lon,
-        lengthM: e.lengthM * (chain[i + 1].t - chain[i].t),
-      })
-    }
-  })
-  return finalEdges
-}
 
 /** BFS components over the FULL edge set (array-indexed queue — no
  *  `Array.shift()` per `enrich-roads-service-tree.ts::findComponents`'s
@@ -427,11 +269,11 @@ export function buildRailGraph(segments: RailGraphSegmentInput[]): RailGraph {
     return id
   }
 
-  const workEdges: WorkEdge[] = segments.map((seg) => ({
+  const edges: RailGraphEdge[] = segments.map((seg) => ({
     nodeA: internNode(seg.startKey, seg.startLat, seg.startLon),
     nodeB: internNode(seg.endKey, seg.endLat, seg.endLon),
     lengthM: seg.lengthM,
-    parentKey: seg.key,
+    key: seg.key,
     osmId: seg.osmId,
     railType: seg.railType,
     usage: seg.usage,
@@ -442,8 +284,6 @@ export function buildRailGraph(segments: RailGraphSegmentInput[]): RailGraph {
     endLat: seg.endLat,
     endLon: seg.endLon,
   }))
-
-  const edges = healTJunctions(nodes, workEdges)
 
   const adjacency: number[][] = Array.from({ length: nodes.length }, () => [])
   edges.forEach((e, idx) => {

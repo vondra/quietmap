@@ -24,6 +24,7 @@ function row(
   name = '',
 ): RailwayRow {
   return {
+    osmId: '1', segmentIndex: 0,
     startLat: latitude,
     startLon: longitude,
     endLat: latitude,
