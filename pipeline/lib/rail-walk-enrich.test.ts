@@ -5,7 +5,7 @@ import { after, test } from 'node:test'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { tableFromIPC } from 'apache-arrow'
+import { listRailIntervals } from './rail-traffic-store.js'
 import { writeRailwaysFixture } from './rail-test-fixture.js'
 import { enrichZ9RailwaysByGraphWalk } from './rail-walk-enrich.js'
 import { writeSyntheticRailTopology } from './transport-test-fixture.js'
@@ -18,11 +18,6 @@ function squareDirectory(prepared: string, latitude: number, longitude: number):
   const radians = latitude * Math.PI / 180
   const y = Math.floor((1 - Math.asinh(Math.tan(radians)) / Math.PI) / 2 * 512)
   return join(prepared, 'z9', String(x), String(y))
-}
-
-function values(path: string, column: string): unknown[] {
-  const table = tableFromIPC(readFileSync(path))
-  return [...Array(table.numRows)].map((_, index) => table.getChild(column)!.get(index))
 }
 
 test('one pair walks across a z9 boundary, reruns byte-identically and retracts atomically', async () => {
@@ -75,10 +70,10 @@ test('one pair walks across a z9 boundary, reruns byte-identically and retracts 
     { squares: first.squares, walked: first.pairsWalked, stamped: first.walkStamped },
     { squares: 2, walked: 1, stamped: 2 },
   )
-  assert.deepEqual(values(west, 'trains_passenger'), [8])
-  assert.deepEqual(values(east, 'trains_passenger'), [8])
-  assert.deepEqual(values(west, 'source_id'), [100])
-
+  const westSquare = westDirectory.slice(prepared.length + 1)
+  const eastSquare = eastDirectory.slice(prepared.length + 1)
+  assert.equal(listRailIntervals(prepared, westSquare)[0]?.passenger, 8)
+  assert.equal(listRailIntervals(prepared, eastSquare)[0]?.passenger, 8)
   const beforeWest = readFileSync(west)
   const beforeEast = readFileSync(east)
   await enrichZ9RailwaysByGraphWalk(options)
@@ -87,6 +82,6 @@ test('one pair walks across a z9 boundary, reruns byte-identically and retracts 
 
   const retract = await enrichZ9RailwaysByGraphWalk({ ...options, pairs: [] })
   assert.equal(retract.retracted, 2)
-  assert.deepEqual(values(west, 'trains_passenger'), [0])
-  assert.deepEqual(values(east, 'source_id'), [0])
+  assert.equal(listRailIntervals(prepared).length, 0)
+  assert.deepEqual(readFileSync(west), beforeWest)
 })

@@ -82,9 +82,11 @@ function emission(layer, currentCruise = false) {
       bridge: false, tunnel: false, oneway: false, lanes: 2,
     },
     railway: {
-      kind: 'railway', trains_passenger: 1, trains_freight: 0,
-      trains_passenger_source: 'arrow', trains_freight_source: 'default_by_type',
-      source_id: 0, speed_kmh: 80, bridge: false, highspeed: false,
+      kind: 'railway', traffic: {
+        passenger: { periods: [0, 0.125, 0], status: 2, source_id: 7, matching: 1 },
+        freight: { periods: [0, 0, 0], status: 0, source_id: 0, matching: 0 },
+      }, passenger_provenance: null, freight_provenance: null,
+      speed_kmh: 80, bridge: false, highspeed: false,
       rail_type: 'rail', service: false,
     },
     aircraft_ground: {

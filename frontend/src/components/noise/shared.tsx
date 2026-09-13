@@ -134,9 +134,9 @@ export const PERIOD_TOOLTIP =
   '  Evening  19:00–23:00 (+5 dB penalty)\n' +
   '  Night    23:00–07:00 (+10 dB penalty)\n\n' +
   'Aircraft: each segment is classified from its midpoint lat/lon\n' +
-  'via the IANA timezone at that coordinate (DST-aware). Road/rail\n' +
-  'periods come from CNOSSOS day/evening/night percentages of daily\n' +
-  'flow, not per-vehicle timestamps.'
+  'via the IANA timezone at that coordinate (DST-aware). Railway\n' +
+  'period counts are prepared with category evidence; daily-only sources\n' +
+  'use an explicitly estimated period split. Road periods use traffic shares.'
 
 /** Shared palette for source/receiver/obstacle markers across noise SVG diagrams. */
 export const DIAGRAM_COLORS = {
@@ -151,8 +151,8 @@ export const DIAGRAM_COLORS = {
 // Noise-sources and Noise-segments tabs so wording stays identical. Kept in a
 // pure TypeScript module so its trust-sensitive wording has dependency-free
 // unit tests.
-export { formatProv, railTrainSourceLine, roadSourceDescription } from './provenance'
-export type { RailTrainSource, RoadTrafficSource } from './provenance'
+export { formatProv, railTrainSourceLine, railTrafficLabel, railTrafficDescription, roadSourceDescription } from './provenance'
+export type { RoadTrafficSource } from './provenance'
 
 /**
  * GeoJSON LineString from two lat/lon pairs (input order [lat, lon]). Used to

@@ -12,11 +12,10 @@ import { basename, dirname, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { pathToFileURL } from 'node:url'
 import {
-  computeActiveTripFamiliesForFeed, declaredRouteFamiliesForFeed, describeInactiveFamilies, findBusiestWednesday,
-  readGtfsFeedWindow,
+  computeActiveTripFamiliesForFeed, declaredRouteFamiliesForFeed, describeInactiveFamilies,
 } from './lib/gtfs-enrich-core.js'
 import {
-  feedsForRegistry, gtfsDownloadUrls, gtfsSourceDirectories, railFamilyFor,
+  feedsForRegistry, gtfsDownloadUrls, gtfsSourceDirectories, railFamilyFor, serviceDaySelection,
   sevenZipExecutable, validateGtfsSourceFreshness, type GlobalGtfsFeed, type GtfsRegistry,
 } from './lib/railway-gtfs-feeds.js'
 
@@ -33,8 +32,9 @@ export interface GtfsRefreshReceipt {
   asOfDate: string
   archiveSha256: string
   archiveBytes: number
-  firstServiceDate: string | null
+  firstServiceDate: string
   lastServiceDate: string
+  /** The actual service day the admission sampled, chosen inside the window above. */
   targetDate: string
   activeTrips: number
   declaredFamilies: string[]
@@ -113,8 +113,11 @@ async function candidateFromUrl(
   }
   const familyOf = (routeType: number) => railFamilyFor(routeType, feed)
   const declaredFamilies = [...await declaredRouteFamiliesForFeed(candidate, familyOf)].sort()
-  const dateSelection = feed.serviceDay === 'busiest-wednesday' ? findBusiestWednesday : undefined
-  const active = await computeActiveTripFamiliesForFeed(candidate, familyOf, dateSelection)
+  // The freshness window is the ONLY date truth here: admission samples the same days the
+  // enrichment will, so a validated download can never select a different service day.
+  const active = await computeActiveTripFamiliesForFeed(
+    candidate, familyOf, serviceDaySelection(feed), freshness,
+  )
   const incomplete = describeInactiveFamilies(
     feed.id, new Set(declaredFamilies), new Set(active.tripFam.values()),
   )
@@ -126,7 +129,6 @@ async function candidateFromUrl(
   try { readSync(descriptor, magic, 0, magic.length, 0) } finally { closeSync(descriptor) }
   const extension = magic[0] === 0x37 && magic[1] === 0x7a ? '7z' : 'zip'
   cpSync(archive, resolve(sourceMetadata, `source.${extension}`))
-  const window = await readGtfsFeedWindow(candidate)
   const receipt = {
     feed: feed.id,
     country: feed.country,
@@ -137,7 +139,7 @@ async function candidateFromUrl(
     asOfDate,
     archiveSha256: await sha256(archive),
     archiveBytes: statSync(archive).size,
-    firstServiceDate: window.firstServiceDate,
+    firstServiceDate: freshness.firstServiceDate,
     lastServiceDate: freshness.lastServiceDate,
     targetDate: active.targetDate,
     activeTrips: active.tripFam.size,

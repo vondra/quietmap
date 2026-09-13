@@ -136,18 +136,49 @@ export function buildTramExtraMatch<S extends {
   }
 }
 
+/** Inclusive service window in YYYYMMDD; '' means that end is not declared. */
+export interface GtfsServiceWindow { firstServiceDate: string; lastServiceDate: string }
+
+export const isValidGtfsDate = (value: string): boolean => /^\d{8}$/.test(value)
+
 /** Feed-declared dates bound timetable sampling even when recurring calendars span years. */
-export async function readGtfsFeedWindow(extractDir: string): Promise<{ firstServiceDate: string; lastServiceDate: string }> {
+export async function readGtfsFeedWindow(extractDir: string): Promise<GtfsServiceWindow> {
   const path = resolve(extractDir, 'feed_info.txt')
   const rows = existsSync(path) ? await parseCsvStream(path) : []
   if (rows.length > 1) throw new Error(`${path}: expected at most one feed_info row`)
   const firstServiceDate = rows[0]?.['feed_start_date'] ?? ''
   const lastServiceDate = rows[0]?.['feed_end_date'] ?? ''
   for (const date of [firstServiceDate, lastServiceDate]) {
-    if (date && !/^\d{8}$/.test(date)) throw new Error(`${path}: invalid service date '${date}'`)
+    if (date && !isValidGtfsDate(date)) throw new Error(`${path}: invalid service date '${date}'`)
   }
   if (firstServiceDate && lastServiceDate && firstServiceDate > lastServiceDate) {
     throw new Error(`${path}: reversed service window`)
+  }
+  return { firstServiceDate, lastServiceDate }
+}
+
+/** Service horizon the calendars declare: recurring spans plus added exception dates.
+ *  Removals (exception_type 2) never extend it. A publisher that stamps `feed_info` with
+ *  the snapshot day instead of the horizon (ZTM GZM, verified 2026-09-13) has no usable
+ *  `feed_info` window, so its calendars own the truth — one derivation, shared by the
+ *  freshness gate and service-day selection. */
+export async function readGtfsCalendarWindow(extractDir: string): Promise<GtfsServiceWindow> {
+  let firstServiceDate = ''
+  let lastServiceDate = ''
+  const widen = (value: string): void => {
+    if (!isValidGtfsDate(value)) return
+    if (!firstServiceDate || value < firstServiceDate) firstServiceDate = value
+    if (value > lastServiceDate) lastServiceDate = value
+  }
+  const calendarPath = resolve(extractDir, 'calendar.txt')
+  const calendarDatesPath = resolve(extractDir, 'calendar_dates.txt')
+  if (existsSync(calendarPath)) {
+    for (const row of await parseCsvStream(calendarPath)) { widen(row['start_date'] || ''); widen(row['end_date'] || '') }
+  }
+  if (existsSync(calendarDatesPath)) {
+    for (const row of await parseCsvStream(calendarDatesPath)) {
+      if (row['exception_type'] === '1') widen(row['date'] || '')
+    }
   }
   return { firstServiceDate, lastServiceDate }
 }
@@ -173,7 +204,7 @@ export function formatDate(yyyymmdd: string): string {
 }
 
 /** GTFS `HH:MM:SS` (hour may exceed 23 for past-midnight trips) -> seconds since
- *  midnight, or -1 if unparseable. Shared by `gtfs-stop-pairs.ts` and
+ *  midnight, or -1 if unparseable. Shared by `gtfs-service-store.ts` and
  *  `enrich-railway-th.ts`'s `frequencies.txt` headway expansion. */
 export function parseTime(s: string): number {
   const m = /^(\d+):(\d+):(\d+)$/.exec(s.trim())
@@ -302,12 +333,16 @@ export interface ActiveTripFamiliesResult<F extends string> {
 /**
  * routes.txt + calendar(_dates).txt + trips.txt → the trip_id -> family map every GTFS
  * rail matcher needs, shared between the per-stop frequency counter below
- * (`computeStopFrequenciesForFeed`) and the station-pair parser (`gtfs-stop-pairs.ts`).
+ * (`computeStopFrequenciesForFeed`) and the whole-service store (`gtfs-service-store.ts`).
  * `familyOf` lets callers plug in their own route_type -> family classification (europe's
  * per-feed allow-list + metroAsRail override, the pair parser's rail-only filter);
  * `dateSelection` lets callers plug in their own service-day picker (europe's
  * busiest-Wednesday sampler) in place of the default midpoint-Wednesday heuristic
  * (`findTargetWednesday`).
+ *
+ * `serviceWindow` is the window the freshness gate already derived for this feed
+ * (`validateGtfsSourceFreshness`), so admission and selection sample the SAME dates; when a
+ * caller has no registry-derived window it is omitted and this feed's own `feed_info` is read.
  */
 /** routes.txt rows, failing LOUD on a malformed file (2026-07-16 review fix,
  *  item 3): an unreadable file (propagated stream error), a header-only/empty
@@ -376,7 +411,7 @@ export function describeIncompleteFamilies(
   tramStopCount: number | null,
 ): string {
   const parts: string[] = []
-  if (declared.has('rail') && pairCount === 0) parts.push('declares rail but 0 station pairs parsed')
+  if (declared.has('rail') && pairCount === 0) parts.push('declares rail but 0 rail services parsed')
   if (tramStopCount !== null && declared.has('tram') && tramStopCount === 0) parts.push('declares tram but 0 tram stops parsed')
   return parts.length === 0 ? '' : `${feedId}: ${parts.join('; ')}`
 }
@@ -395,6 +430,7 @@ export async function computeActiveTripFamiliesForFeed<F extends string>(
   extractDir: string,
   familyOf: (routeType: number) => F | null,
   dateSelection?: (calendarRows: Record<string, string>[]) => string,
+  serviceWindow?: GtfsServiceWindow,
 ): Promise<ActiveTripFamiliesResult<F>> {
   // Malformed routes.txt THROWS here (2026-07-16 review fix, item 3) — both the
   // pair parser and the per-stop counter ride this one reader, so neither can
@@ -432,7 +468,7 @@ export async function computeActiveTripFamiliesForFeed<F extends string>(
   // exception horizon (SL trams: 0 active services => "feed empty" => the completeness
   // gate blocked the world-wide legacy retract). Such a feed must take the
   // calendar_dates-only path below instead.
-  const { firstServiceDate, lastServiceDate } = await readGtfsFeedWindow(extractDir)
+  const { firstServiceDate, lastServiceDate } = serviceWindow ?? await readGtfsFeedWindow(extractDir)
   const withinFeedWindow = (date: string) =>
     (!firstServiceDate || date >= firstServiceDate) && (!lastServiceDate || date <= lastServiceDate)
   const calendarRaw = existsSync(calendarPath) ? (await parseCsvStream(calendarPath))
@@ -521,7 +557,7 @@ export async function computeActiveTripFamiliesForFeed<F extends string>(
       if (!last || row['end_date'] > last) last = row['end_date']
     }
     const preferred = (dateSelection ?? findTargetWednesday)(calendarRaw)
-    if (!withinFeedWindow(preferred)) throw new Error(`${extractDir}: selected service day ${preferred} outside feed_info window`)
+    if (!withinFeedWindow(preferred)) throw new Error(`${extractDir}: selected service day ${preferred} outside the declared service window`)
     const busiest = dateSelection === findBusiestWednesday
     activateDate(preferred, true)
     targetDate = activeTripSummary().complete ? preferred :
@@ -608,8 +644,8 @@ export interface StopsWithCoords {
 
 /**
  * stops.txt -> coordinate map + parent-station index, shared by the per-stop frequency
- * counter (`computeStopFrequenciesForFeed`) and the station-pair parser
- * (`gtfs-stop-pairs.ts`). `bbox` (padded by `GTFS_BORDER_MARGIN_DEG`, the SAME margin
+ * counter (`computeStopFrequenciesForFeed`) and the whole-service store
+ * (`gtfs-service-store.ts`). `bbox` (padded by `GTFS_BORDER_MARGIN_DEG`, the SAME margin
  * the rail-graph country bbox uses — see the constant's doc) drops stops far outside
  * the country the caller cares about; omit it to keep every stop with valid coordinates.
  */
@@ -684,15 +720,18 @@ export async function computeStopFrequenciesForFeed(
   // grouping would have silently revived those counts on the next rebuild.
   familyOf: (routeType: number) => 'rail' | 'tram' | null = routeFamily,
   dateSelection?: (calendarRows: Record<string, string>[]) => string,
+  serviceWindow?: GtfsServiceWindow,
 ): Promise<StopTrainCount[]> {
   console.log(`\n  [${feed.id}] Parsing GTFS files...`)
   const startTime = Date.now()
 
   console.log(`  Reading routes.txt, calendar, trips.txt...`)
   const { tripFam, targetDate, calendarPresent, activeServiceIds } =
-    await computeActiveTripFamiliesForFeed(extractDir, familyOf, dateSelection)
+    await computeActiveTripFamiliesForFeed(extractDir, familyOf, dateSelection, serviceWindow)
   if (calendarPresent) {
-    console.log(`  Target date: ${targetDate ? formatDate(targetDate) : '(unresolved)'}`)
+    // The ACTUAL sampled day, never a window average; the window only says where it was legal.
+    console.log(`  Selected service day: ${targetDate ? formatDate(targetDate) : '(unresolved)'}` +
+      (serviceWindow ? ` (within ${serviceWindow.firstServiceDate || '?'}..${serviceWindow.lastServiceDate || '?'})` : ''))
   } else {
     console.log(`  WARNING: No calendar files. Counting all trips.`)
   }

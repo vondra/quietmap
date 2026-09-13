@@ -1,7 +1,7 @@
 /** Faithful z9/z30 railways.arrow fixture shared by writer and loader tests. */
 
 import { after } from 'node:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
@@ -113,3 +113,17 @@ export function writeRailwaysFixture(
 }
 
 export const railwayBytes = (path: string): Buffer => readFileSync(path)
+
+export function writePreparedRailwaySquare(
+  prepared: string,
+  square: string,
+  name: string,
+  rows: readonly RailwayFixtureRow[],
+  options: RailwayFixtureOptions = {},
+): string {
+  const directory = join(prepared, square)
+  mkdirSync(directory, { recursive: true })
+  const path = join(directory, 'railways.arrow')
+  copyFileSync(writeRailwaysFixture(name, rows, options), path)
+  return path
+}

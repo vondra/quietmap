@@ -1,7 +1,7 @@
 //! End-to-end source spill and Arrow contract regressions.
 
 use super::*;
-use arrow::array::{BinaryArray, Int32Array, StringArray};
+use arrow::array::{BinaryArray, Int32Array, StringArray, UInt8Array};
 use arrow::ipc::reader::FileReader;
 
 fn prague_ring_text() -> String {
@@ -38,10 +38,10 @@ fn read_ipc(path: &Path) -> (Schema, Vec<arrow::record_batch::RecordBatch>) {
 fn roads_writer_roundtrips_grid_columns() {
     let dir = scratch_dir("roads");
     let path = dir.join("roads.arrow");
-    // TSV: sq osm seg s_gx s_gy e_gx e_gy len class speed surface oneway
+    // TSV: sq osm seg s_gx s_gy e_gx e_gy len class speed surface oneway_dir
     // lanes name ref bridge tunnel toll lit junction access
     let rows = vec![
-        "100\t11\t0\t1000\t2000\t3000\t4000\t12.5\t5\t50\t0\t0\t2\tMain\t\t0\t0\t0\t0\t0\t0"
+        "100\t11\t0\t1000\t2000\t3000\t4000\t12.5\t5\t50\t0\t2\t2\tMain\t\t0\t0\t0\t0\t0\t0"
             .split('\t')
             .map(str::to_string)
             .collect::<Vec<_>>(),
@@ -66,6 +66,15 @@ fn roads_writer_roundtrips_grid_columns() {
             .unwrap()
             .value(0),
         4000
+    );
+    // Direction code survives as u8 (2 = oneway reverse), not a flattened bool.
+    assert_eq!(
+        f("oneway")
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .unwrap()
+            .value(0),
+        2
     );
     assert_eq!(
         f("name")

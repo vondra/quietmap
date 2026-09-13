@@ -1,17 +1,27 @@
-/** Atomic traffic and policy-free divisor writers for z9/z30 railway Arrow data. */
+/** Whole-piece railway evidence writer for the final preparation sidecar. */
 
-import { DataType, makeTable, makeVector, type Table, type Vector } from 'apache-arrow'
-import { withArrowWrite } from './provenance.js'
-import { SOURCES_BY_ID, countryIsosForNationalSource, shouldOverwrite } from './sources.js'
+import { readFileSync } from 'node:fs'
+import { dirname, basename, resolve } from 'node:path'
+import { DataType, tableFromIPC, type Table, type Vector } from 'apache-arrow'
+import { SOURCES_BY_ID, countryIsosForNationalSource } from './sources.js'
 import {
   bakedRailwayCountryReader, iso2Code, segmentGeometryReader, type SegmentGeometry,
 } from './prepared-grid.js'
+import { SourceTransportTopology } from './transport-topology.js'
+import {
+  inferredRailStatus, insertRailInterval, openRailTrafficSidecar, railMatchingMask,
+  railStatusCode, retractRailSourceSquare,
+} from './rail-traffic-store.js'
+import type { RailTrafficStatus } from './rail-passage.js'
 
 export interface RailwayTraffic {
   passenger: number
   freight: number
   sourceId: number
   divisor?: number
+  passengerStatus?: RailTrafficStatus
+  freightStatus?: RailTrafficStatus
+  matching?: number
 }
 
 export interface RailwayRow extends SegmentGeometry {
@@ -34,8 +44,8 @@ export interface RailwayRetract {
 
 export interface RailwayWriteOptions {
   retract?: RailwayRetract
-  /** Baked country owners this scoped run is allowed to mutate. */
   allowedCountryIsos?: readonly string[]
+  countryIso?: string
 }
 
 export interface WriteRailwayResult {
@@ -44,14 +54,29 @@ export interface WriteRailwayResult {
   updated: boolean
   skippedService: number
   skippedForeign: number
-  skippedPriority: number
   retracted: number
 }
 
-export interface WriteRailParallelDivisorResult {
-  rows: number
-  changedRows: number
-  updated: boolean
+export function preparedDirectoryFromRailwayArrow(arrowPath: string): { preparedDirectory: string; square: string } {
+  const file = resolve(arrowPath)
+  if (basename(file) !== 'railways.arrow') {
+    throw new Error(`railway Arrow path is not z9/x/y/railways.arrow: ${arrowPath}`)
+  }
+  const y = dirname(file)
+  const x = dirname(y)
+  const z9 = dirname(x)
+  if (basename(z9) !== 'z9') throw new Error(`railway Arrow path is not z9/x/y/railways.arrow: ${arrowPath}`)
+  return { preparedDirectory: dirname(z9), square: `z9/${basename(x)}/${basename(y)}` }
+}
+
+const topologyCache: { prepared?: string; topology?: SourceTransportTopology } = {}
+
+function topologyFor(preparedDirectory: string): SourceTransportTopology {
+  if (topologyCache.prepared === preparedDirectory && topologyCache.topology) return topologyCache.topology
+  topologyCache.topology?.[Symbol.dispose]()
+  topologyCache.prepared = preparedDirectory
+  topologyCache.topology = new SourceTransportTopology(preparedDirectory)
+  return topologyCache.topology
 }
 
 function requiredInteger(table: Table, name: string, signed: boolean, bitWidth: number): Vector {
@@ -74,15 +99,12 @@ function optionalInteger(table: Table, name: string, signed: boolean, bitWidth: 
 }
 
 function assertTraffic(value: RailwayTraffic, index: number, path: string): void {
-  if (!Number.isSafeInteger(value.passenger) || value.passenger < 0 || value.passenger > 2_147_483_647 ||
-      !Number.isSafeInteger(value.freight) || value.freight < 0 || value.freight > 2_147_483_647 ||
+  if (!Number.isFinite(value.passenger) || value.passenger < 0 ||
+      !Number.isFinite(value.freight) || value.freight < 0 ||
       !Number.isInteger(value.sourceId) || value.sourceId <= 0 || value.sourceId > 0xffff ||
       (value.divisor !== undefined &&
         (!Number.isInteger(value.divisor) || value.divisor < 1 || value.divisor > 0xff))) {
     throw new Error(`writeRailwayTraffic: invalid match at row ${index} in ${path}: ${JSON.stringify(value)}`)
-  }
-  if (value.passenger === 0 && value.freight === 0) {
-    throw new Error(`writeRailwayTraffic: all-zero traffic at row ${index} in ${path}`)
   }
   if (SOURCES_BY_ID.get(value.sourceId)?.layer !== 'railways') {
     throw new Error(`writeRailwayTraffic: sourceId ${value.sourceId} is not a registered railways source`)
@@ -99,9 +121,15 @@ function validateRetract(retract: RailwayRetract | undefined): ReadonlySet<numbe
   return ids
 }
 
+function writerCountryIso(options: RailwayWriteOptions): string {
+  if (options.countryIso) return options.countryIso
+  if (options.allowedCountryIsos?.length === 1) return options.allowedCountryIsos[0]
+  throw new Error('writeRailwayTraffic: countryIso is required for sidecar evidence')
+}
+
 /**
- * Replace counts, provenance and an optional parallel divisor together.
- * A retract disowns only its declared sources and resets the whole payload.
+ * Persist whole-piece daily evidence in the rail-traffic sidecar.
+ * Does not mutate railways.arrow traffic columns.
  */
 export async function writeRailwayTraffic(
   arrowPath: string,
@@ -109,22 +137,23 @@ export async function writeRailwayTraffic(
   onApplied?: (row: RailwayRow, index: number, applied: RailwayTraffic) => void,
   options: RailwayWriteOptions = {},
 ): Promise<WriteRailwayResult> {
+  const { preparedDirectory, square } = preparedDirectoryFromRailwayArrow(arrowPath)
+  const countryIso = writerCountryIso(options)
   const result: WriteRailwayResult = {
-    rows: 0,
-    matched: 0,
-    updated: false,
-    skippedService: 0,
-    skippedForeign: 0,
-    skippedPriority: 0,
-    retracted: 0,
+    rows: 0, matched: 0, updated: false,
+    skippedService: 0, skippedForeign: 0, retracted: 0,
   }
   const retractIds = validateRetract(options.retract)
   const allowedCountryCodes = options.allowedCountryIsos
     ? new Set(options.allowedCountryIsos.map(iso2Code))
     : null
-
-  await withArrowWrite(arrowPath, (table: Table): Table => {
+  const database = openRailTrafficSidecar(preparedDirectory)
+  const topology = topologyFor(preparedDirectory)
+  try {
+    const table = tableFromIPC(readFileSync(arrowPath))
     result.rows = table.numRows
+    if (table.numRows === 0) return result
+
     const geometry = segmentGeometryReader(table)
     const osmId = requiredInteger(table, 'osm_id', true, 64)
     const segmentIndex = requiredInteger(table, 'segment_idx', true, 16)
@@ -137,32 +166,42 @@ export async function writeRailwayTraffic(
     const existingDivisor = optionalInteger(table, 'parallel_divisor', false, 8)
     const names = table.getChild('name')
     if (!names || !DataType.isUtf8(names.type)) throw new Error("railways Arrow 'name' must be Utf8")
-    if (table.numRows === 0) return table
-
-    const originalPassenger = new Int32Array(table.numRows)
-    const originalFreight = new Int32Array(table.numRows)
-    const originalSource = new Uint16Array(table.numRows)
-    const originalDivisor = new Uint8Array(table.numRows)
-    for (let index = 0; index < table.numRows; index++) {
-      originalPassenger[index] = (existingPassenger?.get(index) as number) ?? 0
-      originalFreight[index] = (existingFreight?.get(index) as number) ?? 0
-      originalSource[index] = existingSource.get(index) as number
-      originalDivisor[index] = (existingDivisor?.get(index) as number) ?? 1
-    }
-    const passenger = originalPassenger.slice()
-    const freight = originalFreight.slice()
-    const source = originalSource.slice()
-    const divisor = originalDivisor.slice()
+    const countries = bakedRailwayCountryReader(table)
 
     const acceptedCountryCodes = new Map<number, ReadonlySet<number> | null>()
-    let countries: ReturnType<typeof bakedRailwayCountryReader> | null =
-      allowedCountryCodes ? bakedRailwayCountryReader(table) : null
     const countryCodesFor = (sourceId: number): ReadonlySet<number> | null => {
       if (acceptedCountryCodes.has(sourceId)) return acceptedCountryCodes.get(sourceId)!
       const isos = countryIsosForNationalSource(sourceId)
       const codes = isos === null ? null : new Set(isos.map(iso2Code))
       acceptedCountryCodes.set(sourceId, codes)
       return codes
+    }
+
+    database.exec('BEGIN IMMEDIATE')
+    if (options.retract) {
+      for (let index = 0; index < table.numRows; index++) {
+        const rowSource = existingSource.get(index) as number
+        const inAllowedCountry = allowedCountryCodes === null || allowedCountryCodes.has(countries.codeAt(index))
+        const row: RailwayRow = {
+          ...geometry.row(index),
+          osmId: String(osmId.get(index)),
+          segmentIndex: segmentIndex.get(index) as number,
+          railType: railType.get(index) as number,
+          usage: usage.get(index) as number,
+          service: service.get(index) as number,
+          name: (names.get(index) as string | null) ?? '',
+          existingSourceId: rowSource,
+          existingPassenger: (existingPassenger?.get(index) as number) ?? 0,
+          existingFreight: (existingFreight?.get(index) as number) ?? 0,
+          existingDivisor: (existingDivisor?.get(index) as number) ?? 1,
+        }
+        if (inAllowedCountry && (row.service > 0 || options.retract.when(row, index))) {
+          result.retracted += retractRailSourceSquare(
+            database, [...retractIds], countryIso, square,
+            { osmId: Number(row.osmId), segmentIndex: row.segmentIndex },
+          )
+        }
+      }
     }
 
     for (let index = 0; index < table.numRows; index++) {
@@ -174,22 +213,12 @@ export async function writeRailwayTraffic(
         usage: usage.get(index) as number,
         service: service.get(index) as number,
         name: (names.get(index) as string | null) ?? '',
-        existingSourceId: originalSource[index],
-        existingPassenger: originalPassenger[index],
-        existingFreight: originalFreight[index],
-        existingDivisor: originalDivisor[index],
+        existingSourceId: existingSource.get(index) as number,
+        existingPassenger: (existingPassenger?.get(index) as number) ?? 0,
+        existingFreight: (existingFreight?.get(index) as number) ?? 0,
+        existingDivisor: (existingDivisor?.get(index) as number) ?? 1,
       }
-
-      const inAllowedCountry = allowedCountryCodes === null ||
-        allowedCountryCodes.has(countries!.codeAt(index))
-      if (inAllowedCountry && retractIds.has(source[index]) &&
-          (row.service > 0 || options.retract!.when(row, index))) {
-        passenger[index] = 0
-        freight[index] = 0
-        source[index] = 0
-        divisor[index] = 1
-        result.retracted++
-      }
+      const inAllowedCountry = allowedCountryCodes === null || allowedCountryCodes.has(countries.codeAt(index))
       if (row.service > 0) {
         result.skippedService++
         continue
@@ -198,105 +227,40 @@ export async function writeRailwayTraffic(
         result.skippedForeign++
         continue
       }
-
       const candidate = match(row, index)
       if (!candidate) continue
       assertTraffic(candidate, index, arrowPath)
-
       const expectedCountries = countryCodesFor(candidate.sourceId)
-      if (expectedCountries !== null) {
-        countries ??= bakedRailwayCountryReader(table)
-        if (!expectedCountries.has(countries.codeAt(index))) {
-          result.skippedForeign++
-          continue
-        }
-      }
-      if (!shouldOverwrite(source[index], candidate.sourceId)) {
-        result.skippedPriority++
+      if (expectedCountries !== null && !expectedCountries.has(countries.codeAt(index))) {
+        result.skippedForeign++
         continue
       }
-
-      passenger[index] = candidate.passenger
-      freight[index] = candidate.freight
-      source[index] = candidate.sourceId
-      if (candidate.divisor !== undefined) divisor[index] = candidate.divisor
+      const extent = topology.pieceExtent(row.osmId, row.segmentIndex)
+      const divisor = candidate.divisor && candidate.divisor > 0 ? candidate.divisor : 1
+      const passenger = candidate.passenger / divisor
+      const freight = candidate.freight / divisor
+      const passengerStatus = inferredRailStatus(passenger, candidate.passengerStatus)
+      const freightStatus = inferredRailStatus(freight, candidate.freightStatus)
+      if (passengerStatus === 'unknown' && freightStatus === 'unknown') continue
+      insertRailInterval(database, {
+        square, osmId: Number(row.osmId), segmentIndex: row.segmentIndex,
+        fromM: extent.from, toM: extent.to, occurrence: 0,
+        sourceId: candidate.sourceId, countryIso,
+        passenger, freight,
+        passengerStatus: railStatusCode(passengerStatus),
+        freightStatus: railStatusCode(freightStatus),
+        matching: candidate.matching ?? railMatchingMask(undefined),
+      })
       result.matched++
+      result.updated = true
       onApplied?.(row, index, candidate)
     }
-
-    let changed = false
-    let needsDivisor = existingDivisor !== null
-    for (let index = 0; index < table.numRows; index++) {
-      changed ||= passenger[index] !== originalPassenger[index] ||
-        freight[index] !== originalFreight[index] ||
-        source[index] !== originalSource[index] ||
-        divisor[index] !== originalDivisor[index]
-      needsDivisor ||= divisor[index] !== 1
-    }
-    if (!changed) return table
-    result.updated = true
-
-    const replacements = new Map<string, Vector>([
-      ['trains_passenger', makeVector(passenger)],
-      ['trains_freight', makeVector(freight)],
-      ['source_id', makeVector(source)],
-      ...(needsDivisor ? [['parallel_divisor', makeVector(divisor)] as const] : []),
-    ])
-    const columns: Record<string, unknown> = {}
-    for (const field of table.schema.fields) {
-      columns[field.name] = replacements.get(field.name) ?? table.getChild(field.name)!
-      replacements.delete(field.name)
-    }
-    for (const [name, vector] of replacements) columns[name] = vector
-    return makeTable(columns as never) as unknown as Table
-  })
-
-  return result
-}
-
-/**
- * Replace only `parallel_divisor`; every other column and its provenance rides
- * through unchanged. Policy belongs to the caller: null keeps the stored byte,
- * while zero is the one accepted shorthand for the physical floor of one.
- */
-export async function writeRailParallelDivisor(
-  arrowPath: string,
-  divisorForRow: (index: number) => number | null,
-): Promise<WriteRailParallelDivisorResult> {
-  const result: WriteRailParallelDivisorResult = { rows: 0, changedRows: 0, updated: false }
-
-  await withArrowWrite(arrowPath, (table: Table): Table => {
-    result.rows = table.numRows
-    if (table.numRows === 0) return table
-    const existingDivisor = optionalInteger(table, 'parallel_divisor', false, 8)
-    const divisor = new Uint8Array(table.numRows)
-    for (let index = 0; index < table.numRows; index++) {
-      const existing = (existingDivisor?.get(index) as number | null) ?? 1
-      const candidate = divisorForRow(index)
-      if (candidate === null) {
-        divisor[index] = existing
-        continue
-      }
-      if (!Number.isInteger(candidate) || candidate < 0 || candidate > 0xff) {
-        throw new Error(
-          `writeRailParallelDivisor: invalid divisor at row ${index} in ${arrowPath}: ${candidate}`,
-        )
-      }
-      divisor[index] = Math.max(1, candidate)
-      if (divisor[index] !== existing) result.changedRows++
-    }
-    if (result.changedRows === 0) return table
-    result.updated = true
-
-    const replacements = new Map<string, Vector>([['parallel_divisor', makeVector(divisor)]])
-    const columns: Record<string, unknown> = {}
-    for (const field of table.schema.fields) {
-      columns[field.name] = replacements.get(field.name) ?? table.getChild(field.name)!
-      replacements.delete(field.name)
-    }
-    for (const [name, vector] of replacements) columns[name] = vector
-    return makeTable(columns as never) as unknown as Table
-  })
-
+    database.exec('COMMIT')
+  } catch (error) {
+    try { database.exec('ROLLBACK') } catch { /* no transaction */ }
+    throw error
+  } finally {
+    database.close()
+  }
   return result
 }

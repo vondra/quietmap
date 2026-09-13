@@ -24,7 +24,10 @@ pub(super) fn write_roads(rows: &[Vec<String>], path: &Path) -> Result<()> {
         Field::new("road_class", DataType::UInt8, false),
         Field::new("speed_limit", DataType::UInt8, false),
         Field::new("surface_type", DataType::UInt8, false),
-        Field::new("oneway", DataType::Boolean, false),
+        // Travel direction: 0 = two-way, 1 = single-direction forward,
+        // 2 = single-direction reverse (`oneway=-1|reverse`). Direction is a
+        // mapped-carriageway fact, never a traffic-count basis.
+        Field::new("oneway", DataType::UInt8, false),
         Field::new("lanes", DataType::UInt8, false),
         Field::new("name", DataType::Utf8, true),
         Field::new("ref", DataType::Utf8, true),
@@ -50,7 +53,7 @@ pub(super) fn write_roads(rows: &[Vec<String>], path: &Path) -> Result<()> {
     let mut rclass = UInt8Builder::with_capacity(n);
     let mut speed = UInt8Builder::with_capacity(n);
     let mut surface = UInt8Builder::with_capacity(n);
-    let mut oneway = BooleanBuilder::with_capacity(n);
+    let mut oneway = UInt8Builder::with_capacity(n);
     let mut lanes = UInt8Builder::with_capacity(n);
     let mut name = StringBuilder::with_capacity(n, n * 10);
     let mut ref_col = StringBuilder::with_capacity(n, n * 5);
@@ -65,7 +68,7 @@ pub(super) fn write_roads(rows: &[Vec<String>], path: &Path) -> Result<()> {
 
     for row in rows {
         // TSV: sq(0) osm_id(1) seg_idx(2) s_gx(3) s_gy(4) e_gx(5) e_gy(6) len(7)
-        //      road_class(8) speed(9) surface(10) oneway(11) lanes(12) name(13) ref(14)
+        //      road_class(8) speed(9) surface(10) oneway_dir(11) lanes(12) name(13) ref(14)
         //      bridge(15) tunnel(16) toll(17) lit(18) junction(19) access(20)
         if row.len() < 21 {
             continue;
@@ -85,7 +88,7 @@ pub(super) fn write_roads(rows: &[Vec<String>], path: &Path) -> Result<()> {
         rclass.append_value(row[8].parse().unwrap_or(0));
         speed.append_value(row[9].parse().unwrap_or(0));
         surface.append_value(row[10].parse().unwrap_or(0));
-        oneway.append_value(row[11] == "1");
+        oneway.append_value(row[11].parse().unwrap_or(0));
         lanes.append_value(row[12].parse().unwrap_or(0));
         name.append_value(&row[13]);
         ref_col.append_value(row.get(14).map(|s| s.as_str()).unwrap_or(""));

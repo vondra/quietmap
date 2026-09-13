@@ -46,7 +46,6 @@ export type StepKind =
   | 'railways-national-gtfs'
   | 'railways-spatial'
   | 'railways-proxies'
-  | 'railways-parallel'
 
 export interface PlanStep {
   id: string
@@ -99,7 +98,6 @@ export function buildPlan(_scope: Scope, layer?: Layer): PlanStep[] {
     { id: 'roads-service-tree', phase: 'heuristics', kind: 'service-tree' },
     { id: 'roads-continuity', phase: 'heuristics', kind: 'continuity' },
     { id: 'industrial-name', phase: 'heuristics', kind: 'industrial-name' },
-    { id: 'railways-parallel', phase: 'heuristics', kind: 'railways-parallel' },
     { id: 'roads-taper', phase: 'taper', kind: 'taper' },
   ]
   return layer ? steps.filter(step => layerForStep(step) === layer) : steps

@@ -348,31 +348,11 @@ pub fn default_speed(rail_type: RailType) -> f64 {
     }
 }
 
-/// Free-field Lden [dB(A)] of one rail row at horizontal distance `d` metres.
-///
-/// **Reference propagation** (the per-row reach solver's spine, which
-/// reproduces the default mainline boundary at 7 km):
-/// ISO 9613-2 cylindrical line spreading `10·log10(2π·d)` + atmospheric
-/// absorption `α_atm·d/1000`, **best-case ground** (`G = 0`, hard reflective
-/// ground — the loudest the receiver can ever hear, so reach never under-shoots
-/// a soft-ground site), **no** terrain / screening / vegetation / finite-line
-/// (a blanket reach can't know the per-receiver geometry; the kernel still
-/// applies all of those per pixel inside the reach). Per-period emission uses
-/// the SAME per-region, per-category day/evening/night split as the kernel —
-/// resolved via [`rail_time_dist`] on `square_country_city` and `rail_type`, so a freight-heavy
-/// EU corridor reaches farther at night exactly as `compute_railways` hears it.
-/// The shares feed [`railway_emission`], then fold to Lden with the END +5/+10 dB
-/// penalties via [`crate::periods::compute_lden`].
-///
-/// `q_pax` / `q_frt` are the *effective* whole-day counts (post service /
-/// parallel-divisor scaling — i.e. `NormalizedRail::scaled_*_per_day`), so a
-/// divided or service track shrinks its own reach.
+/// Free-field Lden from the prepared passenger and freight counts in each period.
 fn free_field_lden_at(
-    square_country_city: SquareCountryCity,
     rail_type: RailType,
     speed_kmh: f64,
-    q_pax: f64,
-    q_frt: f64,
+    traffic: crate::normalize::RailTraffic,
     d: f64,
 ) -> f64 {
     use crate::constants::ALPHA_ATM;
@@ -381,14 +361,8 @@ fn free_field_lden_at(
     let d = d.max(1.0);
     let geo = 10.0 * (2.0 * std::f64::consts::PI * d).log10();
     let d_over_1000 = d / 1000.0;
-    let received = |pax_pct: f64, frt_pct: f64, period_hours: f64| -> f64 {
-        let em = railway_emission(
-            rail_type,
-            speed_kmh,
-            q_pax * pax_pct,
-            q_frt * frt_pct,
-            period_hours,
-        );
+    let received = |passenger: f64, freight: f64, period_hours: f64| -> f64 {
+        let em = railway_emission(rail_type, speed_kmh, passenger, freight, period_hours);
         let mut bands = [0.0f64; NUM_BANDS];
         for i in 0..NUM_BANDS {
             // G = 0 is the LOUDEST ground the path could have (A_ground is
@@ -400,40 +374,18 @@ fn free_field_lden_at(
         }
         a_weighted_total(&bands)
     };
-    let [(pd, fd, hd), (pe, fe, he), (pn, fn_, hn)] =
-        rail_time_dist(square_country_city, rail_type).periods();
+    let [(pd, fd, hd), (pe, fe, he), (pn, fn_, hn)] = traffic.periods();
     let ld = received(pd, fd, hd);
     let le = received(pe, fe, he);
     let ln = received(pn, fn_, hn);
     crate::periods::compute_lden(ld, le, ln)
 }
 
-/// Per-row rail audibility reach [m]: the distance at which this segment's own
-/// free-field Lden falls to [`crate::constants::RAILWAY_REACH_TARGET_LDEN_DB`]
-/// (~25 dB), clamped to `[RAILWAY_REACH_CLAMP_MIN, RAILWAY_REACH_CLAMP_MAX]`.
-/// Replaces the retired blanket `RAILWAY_MAX_RADIUS`; the heatmap loader and the
-/// popup distance gate BOTH call this, so their cutoff is identical by
-/// construction (no magic-number drift). Runs once per row at load — cost is
-/// irrelevant.
-///
-/// Solved by bisection over **log-distance** (`free_field_lden_at` is
-/// monotonically decreasing in `d`, dominated by the `10·log10(2π·d)` term, so
-/// the root is unique). 40 log-steps over `[100 m, 50 km]` converge to < 1 m —
-/// far tighter than the 30 m raster cadence the reach feeds. If the row is so
-/// loud it never crosses 25 dB inside 50 km, or so quiet it is already below at
-/// 100 m, the clamp catches it.
-///
-/// `q_pax` / `q_frt` = effective whole-day counts (post service / divisor
-/// scaling). `square_country_city` selects the per-region period split so the reach the loader
-/// bakes and the cutoff the popup gates on share ONE share model (the same model
-/// the kernel computes) — see [`free_field_lden_at`] for the propagation
-/// reference.
+/// Solve the prepared period emissions against the shared free-field audibility threshold.
 pub fn rail_reach_m(
-    square_country_city: SquareCountryCity,
     rail_type: RailType,
     speed_kmh: f64,
-    q_pax: f64,
-    q_frt: f64,
+    traffic: crate::normalize::RailTraffic,
 ) -> f64 {
     use crate::constants::{
         RAILWAY_REACH_CLAMP_MAX, RAILWAY_REACH_CLAMP_MIN, RAILWAY_REACH_TARGET_LDEN_DB,
@@ -444,8 +396,7 @@ pub fn rail_reach_m(
                                // 40 log-halvings: (ln(50000)-ln(100))/2^40 → sub-millimetre, ample margin.
     for _ in 0..40 {
         let mid = ((lo.ln() + hi.ln()) * 0.5).exp();
-        if free_field_lden_at(square_country_city, rail_type, speed_kmh, q_pax, q_frt, mid) > target
-        {
+        if free_field_lden_at(rail_type, speed_kmh, traffic, mid) > target {
             lo = mid; // still loud → push the crossing outward
         } else {
             hi = mid;
@@ -459,6 +410,58 @@ pub fn rail_reach_m(
 mod tests {
     use super::*;
     use crate::propagation::iso9613::a_weighted_total;
+
+    fn prepared_traffic(
+        country: SquareCountryCity,
+        kind: RailType,
+        passenger: f64,
+        freight: f64,
+    ) -> crate::normalize::RailTraffic {
+        use crate::normalize::{RailCategoryTraffic, RailTraffic};
+        let split = rail_time_dist(country, kind);
+        RailTraffic {
+            passenger: RailCategoryTraffic {
+                periods: split.pax.map(|share| passenger * share),
+                status: 2,
+                ..Default::default()
+            },
+            freight: RailCategoryTraffic {
+                periods: split.frt.map(|share| freight * share),
+                status: 2,
+                ..Default::default()
+            },
+        }
+    }
+
+    fn rail_reach_m(
+        country: SquareCountryCity,
+        kind: RailType,
+        speed: f64,
+        passenger: f64,
+        freight: f64,
+    ) -> f64 {
+        super::rail_reach_m(
+            kind,
+            speed,
+            prepared_traffic(country, kind, passenger, freight),
+        )
+    }
+
+    fn free_field_lden_at(
+        country: SquareCountryCity,
+        kind: RailType,
+        speed: f64,
+        passenger: f64,
+        freight: f64,
+        distance: f64,
+    ) -> f64 {
+        super::free_field_lden_at(
+            kind,
+            speed,
+            prepared_traffic(country, kind, passenger, freight),
+            distance,
+        )
+    }
 
     // 24h is used as "day-equivalent total" so old tests remain comparable.
     const DAY_H: f64 = 24.0;

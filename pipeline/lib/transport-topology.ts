@@ -75,6 +75,7 @@ export class SourceTransportTopology implements Disposable {
   private readonly pieces: StatementSync
   private readonly way: StatementSync
   private readonly wayPieces: StatementSync
+  private readonly pieceById: StatementSync
   private readonly aliases = new Map<string, string>()
 
   constructor(preparedDirectory: string) {
@@ -91,6 +92,9 @@ export class SourceTransportTopology implements Disposable {
       this.wayPieces = this.database.prepare(`
         SELECT segment_idx, square, start_vertex, start_fraction, end_vertex, end_fraction
         FROM source_pieces WHERE way_id = ? ORDER BY start_vertex, start_fraction`)
+      this.pieceById = this.database.prepare(`
+        SELECT square, start_vertex, start_fraction, end_vertex, end_fraction
+        FROM source_pieces WHERE way_id = ? AND segment_idx = ?`)
       this.way = this.database.prepare("SELECT nodes_json FROM source_ways WHERE osm_id = ? AND family = 'railways'")
       for (const row of this.database.prepare(`
         SELECT CAST(node_id AS TEXT) AS node_id, CAST(canonical_node AS TEXT) AS canonical_node
@@ -205,6 +209,24 @@ export class SourceTransportTopology implements Disposable {
     }
     if (coveredUntil !== upper) throw new Error(`source pieces do not cover passage ${passage.way} to ${upper}`)
     return passage.from < passage.to ? pieces : pieces.reverse().map(piece => ({ ...piece, from: piece.to, to: piece.from }))
+  }
+
+  pieceExtent(wayId: string, segmentIndex: number): { square: string; from: number; to: number } {
+    const nodes = this.railWayNodes(wayId)
+    if (!nodes) throw new Error(`source railway missing for piece ${wayId}:${segmentIndex}`)
+    const distances = sourceNodeDistances(nodes)
+    const row = this.pieceById.get(wayId, segmentIndex) as
+      { square: string; start_vertex: number; start_fraction: number; end_vertex: number; end_fraction: number } | undefined
+    if (!row) throw new Error(`source piece missing ${wayId}:${segmentIndex}`)
+    const distanceAt = (vertex: number, fraction: number): number => {
+      assertSourcePosition(nodes, wayId, vertex, fraction)
+      return fraction === 0 ? distances[vertex] :
+        distances[vertex] + fraction * (distances[vertex + 1] - distances[vertex])
+    }
+    const from = distanceAt(row.start_vertex, row.start_fraction)
+    const to = distanceAt(row.end_vertex, row.end_fraction)
+    if (to <= from) throw new Error(`invalid source piece interval ${wayId}:${segmentIndex}`)
+    return { square: row.square, from, to }
   }
 
   squarePieces(square: string): Map<string, SegmentEndpointKeys> {

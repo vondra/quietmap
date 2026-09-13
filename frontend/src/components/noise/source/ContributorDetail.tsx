@@ -3,7 +3,7 @@ import { fmt, fmtDbValue, fmtFloat, fmtInt, metersToKm, txtTable, type TableRow 
 import { aircraftTooltip, classToAnchorTypecode, displayTypecode } from '../../../utils/aircraft-types'
 import { MetricLabel, DataPoint } from '../noise-tooltips'
 import { HoverText } from '../../ui/info-tip'
-import { lineRow, subtypeLabel } from '../shared'
+import { lineRow, railTrafficLabel, subtypeLabel } from '../shared'
 import { TopFlightsTable } from './TopFlightsTable'
 import { MetadataRows } from './MetadataRows'
 
@@ -82,9 +82,9 @@ export function ContributorDetail({ c }: { c: Contributor }) {
         'Rolling + traction model',
         '',
         ['Speed', `${m.speed_kmh.toFixed(0)} km/h`],
-        ['Trains', `${fmtInt(m.trains_passenger_effective + m.trains_freight_effective)}/day`],
+        ['Trains', railTrafficLabel(m.traffic)],
         { sep: true },
-        ['Line source', `${c.emission_db.toFixed(1)} dB/m`],
+        ['Line source Lden', `${c.emission_db.toFixed(1)} dB/m`],
       ], 18, 14)
     }
     return txtTable([

@@ -62,7 +62,7 @@ test('routeFamily: TPEG extended codes keep the same family split', () => {
 
 // ── computeActiveTripFamiliesForFeed ──
 // The shared routes+calendar+trips resolver used by both computeStopFrequenciesForFeed
-// (below) and the station-pair parser (gtfs-stop-pairs.ts).
+// (below) and the whole-service store (gtfs-service-store.ts).
 
 const RAIL_ROUTES_CSV = 'route_id,route_type\nR1,2\n'
 const TRIPS_CSV = (serviceId: string) => `trip_id,route_id,service_id\nT1,R1,${serviceId}\n`
@@ -361,7 +361,7 @@ test('unreadable or malformed routes.txt fails instead of declaring an empty fee
 test('describeIncompleteFamilies: BIDIRECTIONAL — each declared family independently requires its parsed output non-empty (item 4)', () => {
   const both = new Set(['rail', 'tram'])
   assert.equal(describeIncompleteFamilies('f', both, 100, 50), '', 'both declared, both parsed — complete')
-  assert.match(describeIncompleteFamilies('f', both, 0, 50), /declares rail but 0 station pairs/, 'working tram must NOT mask empty rail (the original masking direction)')
+  assert.match(describeIncompleteFamilies('f', both, 0, 50), /declares rail but 0 rail services/, 'working tram must NOT mask empty rail (the original masking direction)')
   assert.match(describeIncompleteFamilies('f', both, 100, 0), /declares tram but 0 tram stops/, 'working rail must NOT mask empty tram (the direction the old any-family check missed)')
   assert.equal(describeIncompleteFamilies('f', new Set(['rail']), 5, 0), '', 'rail-only feed: empty tram is its normal state')
   assert.equal(describeIncompleteFamilies('f', new Set(['tram']), 0, 5), '', 'tram-only feed: empty pairs is its normal state')

@@ -53,6 +53,43 @@ latitudes.
 Present aircraft schemas must carry a positive sampling-window stamp, including
 empty files; selected rows cannot redefine the observation window.
 
+## Prepared road direction and traffic
+
+Road `oneway` is non-null UInt8: 0 two-way, 1 forward, 2 reverse. Popup and
+surface loaders reject missing, Boolean, null or out-of-domain direction data,
+including invalid schemas on empty files. Forward and reverse are both one-way
+for the current noise allocation. OSM direction does not establish count basis;
+the existing half-share and EU adapter compensation remain until preparation
+carries explicit source allocation.
+
+Any positive enriched light, medium, heavy or motorcycle count prevents class
+traffic substitution. A measured-tier heavy-only count survives an access=no or
+motor_vehicle=no tag without inventing light traffic; tunnels still do not emit.
+Source priority alone does not establish a known zero or distinguish measured
+records from estimates within a mixed source.
+
+## Prepared railway traffic
+
+Final railway Arrow carries `rail_traffic_contract=1`, six non-null Float64
+`trains_{passenger,freight}_{day,evening,night}` values, per-category UInt8
+`{passenger,freight}_status` (0 unknown, 1 known, 2 estimated), UInt16
+`{passenger,freight}_source_id`, and UInt8 `{passenger,freight}_matching`
+(0 other, 1 estimated relation alignment, 2 estimated graph alignment; bitwise OR).
+Counts are finite nonnegative expected passages per representative day in each
+period. The producer clips geometry and resolves counts, missing-traffic priors,
+service/parallel allocation and any estimated period split before publication.
+Daily-only timetable evidence receives an explicitly estimated period allocation.
+Unknown freight is not a known zero; a known numeric zero remains zero.
+
+Popup and surface loaders require this contract and use the same validator and
+normalization. Emission and audibility reach consume these period counts directly
+with 12/4/8-hour periods. Serving performs no traffic fallback, daily redistribution,
+parallel division or service discount. Effective speed retains the shared posted,
+high-speed and type-default rules. Contributor metadata follows the segment with
+the greatest received Lden energy, including night-only traffic, and reports both
+categories' status, source and matching evidence separately. Rail contributor
+emission headlines use the same Lden period weighting as received levels.
+
 ## Aircraft local geometry
 
 Doc 29 keeps its receiver-latitude scale and infinite-line CPA. Both the

@@ -4,13 +4,14 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { tableFromIPC, type Table, type Vector } from 'apache-arrow'
 import { listPreparedSquares, segmentGeometryReader, type PreparedBbox } from './prepared-grid.js'
-import {
-  buildRailGraph, isWalkableRailType, type RailGraphSegmentInput, type RailStationPairCount, type RailFailedPairRecord,
-} from './rail-graph.js'
+import { buildRailGraph, isWalkableRailType, type RailGraphSegmentInput, type RailStationPairCount, type RailFailedPairRecord } from './rail-graph.js'
 import { walkRailStationPairs } from './rail-graph-metrics.js'
 import { writeRailwayTraffic, type RailwayRow, type RailwayTraffic } from './railways-arrow.js'
+import { writeClippedRailPassages } from './rail-passage.js'
+import { routeRailServices } from './rail-service-route.js'
 import { isNationallyOwnedSource } from './sources.js'
 import { SourceTransportTopology, transportPieceKey } from './transport-topology.js'
+import type { GtfsService } from './gtfs-service-store.js'
 
 function requiredVector(table: Table, name: string): Vector {
   const vector = table.getChild(name)
@@ -22,52 +23,58 @@ function requiredVector(table: Table, name: string): Vector {
 export function collectZ9RailGraphSegments(
   preparedDirectory: string,
   squares: readonly string[],
+  topology?: SourceTransportTopology,
 ): RailGraphSegmentInput[] {
-  const segments: RailGraphSegmentInput[] = []
-  using topology = new SourceTransportTopology(preparedDirectory)
-  for (const square of squares) {
-    const path = resolve(preparedDirectory, square, 'railways.arrow')
-    const table = tableFromIPC(readFileSync(path))
-    const geometry = segmentGeometryReader(table)
-    const railType = requiredVector(table, 'rail_type')
-    const usage = requiredVector(table, 'usage')
-    const service = requiredVector(table, 'service')
-    const length = requiredVector(table, 'length_m')
-    const name = requiredVector(table, 'name')
-    const ref = requiredVector(table, 'ref')
-    const osmId = requiredVector(table, 'osm_id')
-    const segmentIndex = requiredVector(table, 'segment_idx')
-    const identities = topology.squarePieces(square)
+  const owned = topology ? undefined : new SourceTransportTopology(preparedDirectory)
+  const source = topology ?? owned!
+  try {
+    const segments: RailGraphSegmentInput[] = []
+    for (const square of squares) {
+      const path = resolve(preparedDirectory, square, 'railways.arrow')
+      const table = tableFromIPC(readFileSync(path))
+      const geometry = segmentGeometryReader(table)
+      const railType = requiredVector(table, 'rail_type')
+      const usage = requiredVector(table, 'usage')
+      const service = requiredVector(table, 'service')
+      const length = requiredVector(table, 'length_m')
+      const name = requiredVector(table, 'name')
+      const ref = requiredVector(table, 'ref')
+      const osmId = requiredVector(table, 'osm_id')
+      const segmentIndex = requiredVector(table, 'segment_idx')
+      const identities = source.squarePieces(square)
 
-    for (let index = 0; index < table.numRows; index++) {
-      const type = railType.get(index) as number
-      const serviceCode = service.get(index) as number
-      const isTraversalOnly = serviceCode === 4
-      if (!isTraversalOnly && !(isWalkableRailType(type) && serviceCode === 0)) continue
-      const row = geometry.row(index)
-      const corridorRef = (ref.get(index) as string | null) ?? ''
-      const corridorName = (name.get(index) as string | null) ?? ''
-      const key = transportPieceKey(String(osmId.get(index)), segmentIndex.get(index) as number)
-      const identity = identities.get(key)
-      if (!identity) throw new Error(`source topology missing or repeated railway piece ${key} in ${square}`)
-      identities.delete(key)
-      segments.push({
-        ...identity,
-        key,
-        osmId: String(osmId.get(index)),
-        railType: type,
-        usage: usage.get(index) as number,
-        isTraversalOnly,
-        corridorToken: corridorRef || corridorName,
-        startLat: row.startLat,
-        startLon: row.startLon,
-        endLat: row.endLat,
-        endLon: row.endLon,
-        lengthM: length.get(index) as number,
-      })
+      for (let index = 0; index < table.numRows; index++) {
+        const type = railType.get(index) as number
+        const serviceCode = service.get(index) as number
+        const isTraversalOnly = serviceCode === 4
+        if (!isTraversalOnly && !(isWalkableRailType(type) && serviceCode === 0)) continue
+        const row = geometry.row(index)
+        const corridorRef = (ref.get(index) as string | null) ?? ''
+        const corridorName = (name.get(index) as string | null) ?? ''
+        const key = transportPieceKey(String(osmId.get(index)), segmentIndex.get(index) as number)
+        const identity = identities.get(key)
+        if (!identity) throw new Error(`source topology missing or repeated railway piece ${key} in ${square}`)
+        identities.delete(key)
+        segments.push({
+          ...identity,
+          key,
+          osmId: String(osmId.get(index)),
+          railType: type,
+          usage: usage.get(index) as number,
+          isTraversalOnly,
+          corridorToken: corridorRef || corridorName,
+          startLat: row.startLat,
+          startLon: row.startLon,
+          endLat: row.endLat,
+          endLon: row.endLon,
+          lengthM: length.get(index) as number,
+        })
+      }
     }
+    return segments
+  } finally {
+    owned?.[Symbol.dispose]()
   }
-  return segments
 }
 
 export interface Z9RailWalkOptions {
@@ -91,10 +98,13 @@ export interface Z9RailWalkResult {
   retracted: number
   skippedService: number
   skippedForeign: number
-  skippedPriority: number
   skippedForeignNational: number
   pairsWalked: number
   pairsTotal: number
+  servicesTotal: number
+  servicesRelationEstimated: number
+  servicesGraphEstimated: number
+  servicesUnmatched: number
   failedPairs: RailFailedPairRecord[]
   unlocalizedPairs: number
   failures: {
@@ -127,10 +137,13 @@ export async function enrichZ9RailwaysByGraphWalk(
     retracted: 0,
     skippedService: 0,
     skippedForeign: 0,
-    skippedPriority: 0,
     skippedForeignNational: 0,
     pairsWalked: walk.pairsWalked,
     pairsTotal: walk.pairsTotal,
+    servicesTotal: 0,
+    servicesRelationEstimated: 0,
+    servicesGraphEstimated: 0,
+    servicesUnmatched: 0,
     failedPairs: walk.failedPairChords,
     unlocalizedPairs: walk.unlocalizedPairs,
     failures: walk.failures,
@@ -157,8 +170,8 @@ export async function enrichZ9RailwaysByGraphWalk(
           !walk.quarantinedSegmentKeys.has(key)
         const candidate = stamp
           ? {
-              passenger: Math.round(stamp.pax),
-              freight: Math.round(stamp.frt),
+              passenger: stamp.pax,
+              freight: stamp.frt,
               sourceId: options.sourceId,
               divisor: stamp.divisor,
             }
@@ -180,6 +193,7 @@ export async function enrichZ9RailwaysByGraphWalk(
       },
       {
         allowedCountryIsos: [options.countryIso],
+        countryIso: options.countryIso,
         retract: options.retractSafe ? {
             sourceIds: ownSourceIds,
             when: (row) => {
@@ -194,7 +208,62 @@ export async function enrichZ9RailwaysByGraphWalk(
     result.retracted += write.retracted
     result.skippedService += write.skippedService
     result.skippedForeign += write.skippedForeign
-    result.skippedPriority += write.skippedPriority
   }
   return result
+}
+
+export interface Z9RailServiceOptions {
+  preparedDirectory: string
+  bbox: PreparedBbox
+  services: Iterable<GtfsService>
+  sourceId: number
+  countryIso: string
+  silentResidual?: Pick<RailwayTraffic, 'sourceId' | 'passenger' | 'freight'>
+  extraMatch?: (row: RailwayRow, index: number, square: string) => RailwayTraffic | null
+  retractSafe: boolean
+}
+
+export async function enrichZ9RailwaysByServices(
+  options: Z9RailServiceOptions,
+): Promise<Z9RailWalkResult> {
+  const prepared = resolve(options.preparedDirectory)
+  const squares = listPreparedSquares(prepared, options.bbox, 'railways.arrow')
+  if (squares.length === 0) {
+    throw new Error(`no railways.arrow squares found for bbox ${options.bbox.join(',')}`)
+  }
+  using topology = new SourceTransportTopology(prepared)
+  const segments = collectZ9RailGraphSegments(prepared, squares, topology)
+  const routed = routeRailServices(options.services, topology, buildRailGraph(segments), options.sourceId)
+  let stampableKilometres = 0, quarantinedKilometres = 0
+  for (const segment of segments) {
+    if (segment.isTraversalOnly) continue
+    stampableKilometres += segment.lengthM / 1000
+    if (routed.quarantinedPieceKeys.has(segment.key)) quarantinedKilometres += segment.lengthM / 1000
+  }
+  const write = await writeClippedRailPassages({
+    preparedDirectory: prepared,
+    squares,
+    countryIso: options.countryIso,
+    sourceId: options.sourceId,
+    retractSafe: options.retractSafe,
+    services: routed.services,
+    quarantinedPieceKeys: routed.quarantinedPieceKeys,
+    silentResidual: options.silentResidual,
+    extraMatch: options.extraMatch,
+  })
+  return {
+    squares: squares.length,
+    ...write,
+    pairsWalked: routed.relationEstimated + routed.graphEstimated,
+    pairsTotal: routed.total,
+    servicesTotal: routed.total,
+    servicesRelationEstimated: routed.relationEstimated,
+    servicesGraphEstimated: routed.graphEstimated,
+    servicesUnmatched: routed.unmatched,
+    failedPairs: [],
+    unlocalizedPairs: 0,
+    failures: { snapFailed: 0, disconnected: 0, detourRejected: 0, ambiguous: routed.unmatched },
+    quarantinedKilometres,
+    stampableKilometres,
+  }
 }

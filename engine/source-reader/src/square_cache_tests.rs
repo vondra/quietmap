@@ -4,7 +4,7 @@ use std::io::Cursor;
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow::array::{Int32Array, UInt16Array};
+use arrow::array::{ArrayRef, Float64Array, Int32Array, UInt16Array, UInt8Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::{reader::FileReader, writer::FileWriter};
 use arrow::record_batch::RecordBatch;
@@ -63,12 +63,14 @@ fn two_batches_with_broken_second_message(path: &Path) {
     let mut fields: Vec<_> = base.schema().fields().iter().cloned().collect();
     fields.push(Arc::new(Field::new("start_gx", DataType::Int32, false)));
     fields.push(Arc::new(Field::new("maxspeed", DataType::UInt16, false)));
+    fields.push(Arc::new(Field::new("oneway", DataType::UInt8, false)));
     let mut metadata = base.schema().metadata().clone();
     metadata.insert(
         "leisure_contract".into(),
         square_store::store::LEISURE_CONTRACT_V2.into(),
     );
     metadata.insert("n_days".into(), "12".into());
+    metadata.insert("rail_traffic_contract".into(), "1".into());
     // The one generic fixture serves every layer name; the airborne file is
     // contract-checked at open, so it carries the stamp too.
     metadata.insert(
@@ -92,10 +94,36 @@ fn two_batches_with_broken_second_message(path: &Path) {
             },
         ]),
     );
-    let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
     let mut columns = base.columns().to_vec();
     columns.push(Arc::new(Int32Array::from(vec![0])));
     columns.push(Arc::new(UInt16Array::from(vec![80])));
+    columns.push(Arc::new(UInt8Array::from(vec![2])));
+    for category in ["passenger", "freight"] {
+        for period in ["day", "evening", "night"] {
+            fields.push(Arc::new(Field::new(
+                format!("trains_{category}_{period}"),
+                DataType::Float64,
+                false,
+            )));
+            columns.push(Arc::new(Float64Array::from(vec![0.125])));
+        }
+        for (suffix, column) in [
+            ("status", Arc::new(UInt8Array::from(vec![2])) as ArrayRef),
+            (
+                "source_id",
+                Arc::new(UInt16Array::from(vec![0])) as ArrayRef,
+            ),
+            ("matching", Arc::new(UInt8Array::from(vec![0])) as ArrayRef),
+        ] {
+            fields.push(Arc::new(Field::new(
+                format!("{category}_{suffix}"),
+                column.data_type().clone(),
+                false,
+            )));
+            columns.push(column);
+        }
+    }
+    let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
     let batch = RecordBatch::try_new(schema.clone(), columns).unwrap();
     let mut bytes = Vec::new();
     {

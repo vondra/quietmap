@@ -264,7 +264,7 @@ pub fn compute_at_point(
     let has_railway = !railways.is_empty()
         && railways
             .iter()
-            .any(|r| r.trains_passenger > 0.0 || r.trains_freight > 0.0);
+            .any(|r| !r.traffic.is_silent());
     // Aircraft visibility is downstream — `add_v6_aircraft_to_result`
     // sees the popup arrows and bumps confidence after merging.
     let has_aircraft = false;
@@ -768,8 +768,18 @@ mod tests {
             rail_type: 0,
             usage: 0,
             maxspeed: 100,
-            trains_passenger: 80.0,
-            trains_freight: 20.0,
+            traffic: crate::normalize::RailTraffic {
+                passenger: crate::normalize::RailCategoryTraffic {
+                    periods: [56.0, 16.0, 8.0],
+                    status: 2,
+                    ..Default::default()
+                },
+                freight: crate::normalize::RailCategoryTraffic {
+                    periods: [10.0, 3.3333333333333335, 6.666666666666667],
+                    status: 2,
+                    ..Default::default()
+                },
+            },
             speed_kmh: 100.0,
             track_count: 2,
             name: String::new(),
@@ -782,11 +792,7 @@ mod tests {
             tunnel: false,
             service: false,
             highspeed: false,
-            parallel_divisor: 1,
             speed_source: 0,
-            trains_passenger_source: 0,
-            trains_freight_source: 0,
-            source_id: 0,
         }
     }
 
@@ -1174,8 +1180,18 @@ mod tests {
             rail_type: 0,
             usage: 0,
             maxspeed: 100,
-            trains_passenger: 80.0,
-            trains_freight: 20.0,
+            traffic: crate::normalize::RailTraffic {
+                passenger: crate::normalize::RailCategoryTraffic {
+                    periods: [56.0, 16.0, 8.0],
+                    status: 2,
+                    ..Default::default()
+                },
+                freight: crate::normalize::RailCategoryTraffic {
+                    periods: [10.0, 3.3333333333333335, 6.666666666666667],
+                    status: 2,
+                    ..Default::default()
+                },
+            },
             speed_kmh: 100.0,
             track_count: 2,
             name: String::new(),
@@ -1188,11 +1204,7 @@ mod tests {
             tunnel: false,
             service: false,
             highspeed: false,
-            parallel_divisor: 1,
             speed_source: 0,
-            trains_passenger_source: 0,
-            trains_freight_source: 0,
-            source_id: 0,
         }];
         let result = popup(&receiver, &roads, &railways);
 

@@ -93,6 +93,8 @@ test('whole road rows across a z9 boundary receive four-class totals without cha
     assert.deepEqual(after.getChild(field.name)!.toArray(), beforeTable.getChild(field.name)!.toArray())
   }
   for (const index of [2, 3]) {
+    // Legacy directional storage compensation remains paired with the
+    // normalizer's oneway half-share until source basis is stored explicitly.
     assert.deepEqual(['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'source_id']
       .map(name => after.getChild(name)!.get(index)), [1660, 40, 200, 100, 10])
   }

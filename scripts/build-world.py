@@ -34,11 +34,11 @@ if __name__ == '__main__':
 
 from world_build_inputs import (
     attach_rasters, audit_world, canonical_input, height_inputs,
-    pin_inputs, raster_inputs, verify_inputs, verify_prepared_raster_links,
+    pin_digest, pin_inputs, raster_inputs, verify_inputs, verify_prepared_raster_links,
 )
 
 from world_build_state import (
-    STATE_NAME, PIN_NAME, producer_command, record_step, resume_steps, write_state,
+    STATE_NAME, PIN_NAME, producer_command, record_steps, resume_steps, step_identity, write_state,
 )
 
 
@@ -92,6 +92,7 @@ def build_plan(config, output, scratch):
              '--census-log', str(output / 'structures.jsonl'), '--jobs', str(settings['threads'])), 3),
         Step('structures-finalize', ('structures',), (str(REPO / 'engine/target/release/structures-finalize'), str(year))),
         layer('railways', ('square-country-city',)),
+        Step('railways-finalize', ('railways',), (str(REPO / 'engine/target/release/railways-finalize'), str(year))),
         layer('industrial', ('square-country-city',)),
         layer('roads', ('square-country-city', 'structures')),
         Step('aircraft', ('osm',), ('bash', str(scripts / 'run-aircraft-extract.sh')), 3,
@@ -189,6 +190,10 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--scratch', type=Path, required=True)
     parser.add_argument('--plan', action='store_true')
+    parser.add_argument('--resume-plan', action='store_true',
+                        help='report retained/rebuilt steps and exact review identities without changing build state')
+    parser.add_argument('--resume-review', type=Path,
+                        help='JSON with previous/current pin hashes, reuse steps, reason; optional osm_scope: [roads, railways]')
     args = parser.parse_args()
     config = tomllib.loads(args.config.read_text())
     if set(config) != {'build', 'sources'} or set(config['build']) != {
@@ -216,6 +221,9 @@ def main():
     # A failed build of this configuration resumes in place (`resume_steps`); never
     # adopt unrelated or partly written generations as successful upstream work.
     resuming = (output / STATE_NAME).is_file()
+    if (args.resume_plan or args.resume_review) and not resuming:
+        raise ValueError('resume options require an existing build')
+    review = json.loads(args.resume_review.read_text()) if args.resume_review else None
     if not resuming:
         for target in (output, scratch):
             if target.exists() and any(target.iterdir()):
@@ -235,27 +243,38 @@ def main():
         completed = set()
         pin_path = output / PIN_NAME
         receipts_lock = threading.Lock()
-        def current_roots():
+        def frozen_roots():
             ordinary = [path for name, path in sources.items() if name not in ('rasters', 'ghsl', 'regional_heights')]
             return [*ordinary, *raster_inputs(sources['rasters']), *height_inputs(sources['ghsl']),
-                    *height_inputs(sources['regional_heights']), *code_inputs(), *runtime_inputs(),
+                    *height_inputs(sources['regional_heights'])]
+        def current_roots():
+            return [*frozen_roots(), *code_inputs(), *runtime_inputs(),
                     *(canonical_input(environment[key]) for key in ('GDAL_DATA', 'PROJ_DATA', 'PROJ_LIB')
                       if key in environment)]
         roots = current_roots()
         if resuming:
-            completed = resume_steps(output, config, steps, roots, REPO)
+            completed = resume_steps(output, config, steps, roots, frozen_roots(),
+                                     review=review, dry_run=args.resume_plan)
+            if args.resume_plan:
+                return
         else:
             pin_inputs(pin_path, roots)
             write_state(output, config, 'running')
+        input_pin_sha256 = pin_digest(pin_path)
         try:
             attach_rasters(sources['rasters'], year)
             # Build before parallel producers so their incremental builds share no changing code.
             subprocess.run(['cargo', 'build', '--release', '--manifest-path', str(REPO / 'engine/Cargo.toml'),
-                            '--bin', 'osm-extract', '--bin', 'aircraft-extract', '--bin', 'structures-finalize'],
+                            '--bin', 'osm-extract', '--bin', 'aircraft-extract', '--bin', 'structures-finalize',
+                            '--bin', 'railways-finalize'],
                            cwd=REPO, env=environment, check=True)
             def execute(step):
                 command = producer_command(step, settings)
                 started = time.time()
+                receipt = dict(name=step.name, started=started,
+                               **step_identity(step, settings, input_pin_sha256))
+                with receipts_lock:
+                    record_steps(output, [dict(receipt, exit=None)])
                 print(json.dumps({'step': step.name, 'status': 'running'}), flush=True)
                 with (output / f'{step.name}.log').open('ab') as log:
                     log.write(f'=== attempt {datetime.now(timezone.utc).isoformat()} ===\n'.encode())
@@ -263,10 +282,10 @@ def main():
                     result = subprocess.run(command, cwd=REPO, env=dict(environment, **dict(step.environment)),
                                             stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
                 with receipts_lock:
-                    record_step(output, {
-                        'name': step.name, 'command': command, 'started': started,
+                    record_steps(output, [{
+                        **receipt,
                         'seconds': time.time() - started, 'exit': result.returncode,
-                    })
+                    }])
                 print(json.dumps({'step': step.name, 'exit': result.returncode}), flush=True)
                 if result.returncode:
                     raise RuntimeError(f'{step.name} failed; inspect {output / (step.name + ".log")}; all work retained')

@@ -5,10 +5,10 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import { path7za } from '7zip-bin'
-import { parseCsvStream } from './gtfs-csv.js'
 import {
   GTFS_BORDER_MARGIN_DEG, METRO_TYPES, RAIL_TYPES, TRAM_TYPES,
-  routeFamily, readGtfsFeedWindow,
+  findBusiestWednesday, isValidGtfsDate, readGtfsCalendarWindow, readGtfsFeedWindow,
+  routeFamily, type GtfsServiceWindow,
 } from './gtfs-enrich-core.js'
 import {
   SOURCE_ID_AE_NATIONAL_RAILWAY, SOURCE_ID_AR_NATIONAL_RAILWAY, SOURCE_ID_AU_NATIONAL_RAILWAY,
@@ -48,6 +48,9 @@ export interface GlobalGtfsFeed {
   includeRailPairs?: boolean
   requiredSubdirectories?: readonly string[]
   singleNestedDirectory?: boolean
+  /** The publisher stamps `feed_info` with the snapshot day instead of the service horizon,
+   *  so the calendars own this feed's validity window (ZTM GZM, verified 2026-09-13). */
+  serviceWindowFromCalendars?: true
   serviceDay: 'busiest-wednesday' | 'midpoint-wednesday'
   acceptedHistoricalSource?: { gtfsTextSha256: string; lastServiceDate: string; sourceYear: number }
   sourceArchive?: { relativePath: string; sha256: string }
@@ -186,7 +189,7 @@ const NATIONAL_GTFS_DOWNLOAD_URLS: Readonly<Record<string, readonly string[]>> =
 
 const nationalFeed = (
   country: string, sourceId: number, bbox: PreparedBbox, id: string, name: string,
-  options: Partial<Pick<GlobalGtfsFeed, 'routeTypes' | 'includeRailPairs' | 'singleNestedDirectory' | 'acceptedHistoricalSource' | 'sourceArchive'>> = {},
+  options: Partial<Pick<GlobalGtfsFeed, 'routeTypes' | 'includeRailPairs' | 'singleNestedDirectory' | 'serviceWindowFromCalendars' | 'acceptedHistoricalSource' | 'sourceArchive'>> = {},
 ): GlobalGtfsFeed => ({
   id, country, sourceId, bbox, name,
   url: NATIONAL_GTFS_DOWNLOAD_URLS[id]?.[0] ?? '',
@@ -218,7 +221,8 @@ export const NATIONAL_GTFS_FEEDS: readonly GlobalGtfsFeed[] = [
   ...['cdmx-semovi', 'toluca-movimex'].map(id => nationalFeed('MX', SOURCE_ID_MX_NATIONAL_RAILWAY, [14.5, -118.4, 32.7, -86.7], id, id)),
   nationalFeed('PL', SOURCE_ID_PL_NATIONAL_RAILWAY, [49, 14, 55, 24.5], 'polish-trains', 'Polish Trains'),
   nationalFeed('PL', SOURCE_ID_PL_NATIONAL_RAILWAY, [49, 14, 55, 24.5], 'warsaw-ztm', 'Warsaw ZTM', { includeRailPairs: false }),
-  ...['krakow-tram', 'silesia-gzm', 'wkd-warszawa'].map(id => nationalFeed('PL', SOURCE_ID_PL_NATIONAL_RAILWAY, [49, 14, 55, 24.5], id, id)),
+  ...['krakow-tram', 'wkd-warszawa'].map(id => nationalFeed('PL', SOURCE_ID_PL_NATIONAL_RAILWAY, [49, 14, 55, 24.5], id, id)),
+  nationalFeed('PL', SOURCE_ID_PL_NATIONAL_RAILWAY, [49, 14, 55, 24.5], 'silesia-gzm', 'silesia-gzm', { serviceWindowFromCalendars: true }),
   ...['cp-comboios', 'metro-porto', 'metro-sul-tejo', 'carris-metropolitana'].map(id => nationalFeed('PT', SOURCE_ID_PT_NATIONAL_RAILWAY, [36.5, -10, 42.5, -6], id, id)),
   nationalFeed('SE', SOURCE_ID_SE_NATIONAL_RAILWAY, [55.3, 10.9, 69.1, 24.2], 'gtfs-sverige-2', 'GTFS Sverige 2'),
   nationalFeed('TH', SOURCE_ID_TH_NATIONAL_RAILWAY, [5.5, 97.3, 20.5, 105.7], 'namtang', 'Namtang Thailand', { routeTypes: RAIL_AND_TRAM_WITHOUT_METRO }),
@@ -321,6 +325,15 @@ export function railFamilyFor(routeType: number, feed: GlobalGtfsFeed): 'rail' |
   return routeFamily(routeType)
 }
 
+/** The feed's declared service-day sampler. Refresh admission and enrichment must resolve it
+ *  through this one function, or a download can be validated against one day and enriched
+ *  from another. `undefined` keeps the shared midpoint-Wednesday heuristic. */
+export function serviceDaySelection(
+  feed: GlobalGtfsFeed,
+): ((calendarRows: Record<string, string>[]) => string) | undefined {
+  return feed.serviceDay === 'busiest-wednesday' ? findBusiestWednesday : undefined
+}
+
 export function countryGtfsBbox(country: string, feeds = GLOBAL_GTFS_FEEDS): PreparedBbox {
   const selected = feeds.filter(feed => feed.country === country)
   if (selected.length === 0) {
@@ -336,8 +349,9 @@ export function countryGtfsBbox(country: string, feeds = GLOBAL_GTFS_FEEDS): Pre
   ]
 }
 
-export interface GtfsSourceFreshness { lastServiceDate: string; historical?: true }
-const validGtfsDate = (value: string): boolean => /^\d{8}$/.test(value)
+/** The window this source is valid for, plus the historical-snapshot verdict. Callers pass it
+ *  straight to service-day selection so freshness and enrichment consume the SAME dates. */
+export interface GtfsSourceFreshness extends GtfsServiceWindow { historical?: true }
 
 export function gtfsTextSourceSha256(directory: string): string {
   const hash = createHash('sha256')
@@ -350,31 +364,19 @@ export function gtfsTextSourceSha256(directory: string): string {
   return hash.digest('hex')
 }
 
-function latestDate(rows: readonly Record<string, string>[], column: string, current = '', include: (row: Readonly<Record<string, string>>) => boolean = () => true): string {
-  let latest = current
-  for (const row of rows) {
-    if (!include(row)) continue
-    const value = row[column] || ''
-    if (validGtfsDate(value) && value > latest) latest = value
-  }
-  return latest
-}
-
 export async function validateGtfsSourceFreshness(feed: GlobalGtfsFeed, directory: string, asOfDate: string): Promise<GtfsSourceFreshness> {
-  if (!validGtfsDate(asOfDate)) throw new Error(`invalid GTFS as-of date '${asOfDate}'`)
-  const window = await readGtfsFeedWindow(directory)
-  if (window.firstServiceDate && window.firstServiceDate > asOfDate) {
-    throw new Error(`GTFS feed ${feed.id} starts ${window.firstServiceDate}; not valid for ${asOfDate} enrichment`)
+  if (!isValidGtfsDate(asOfDate)) throw new Error(`invalid GTFS as-of date '${asOfDate}'`)
+  const declared = await readGtfsFeedWindow(directory)
+  const calendars = feed.serviceWindowFromCalendars || !declared.lastServiceDate
+    ? await readGtfsCalendarWindow(directory)
+    : null
+  const firstServiceDate = feed.serviceWindowFromCalendars ? calendars!.firstServiceDate : declared.firstServiceDate
+  if (firstServiceDate && firstServiceDate > asOfDate) {
+    throw new Error(`GTFS feed ${feed.id} starts ${firstServiceDate}; not valid for ${asOfDate} enrichment`)
   }
-  let lastServiceDate = window.lastServiceDate
-  if (!lastServiceDate) {
-    const calendarPath = resolve(directory, 'calendar.txt')
-    const calendarDatesPath = resolve(directory, 'calendar_dates.txt')
-    if (existsSync(calendarPath)) lastServiceDate = latestDate(await parseCsvStream(calendarPath), 'end_date', lastServiceDate)
-    if (existsSync(calendarDatesPath)) {
-      lastServiceDate = latestDate(await parseCsvStream(calendarDatesPath), 'date', lastServiceDate, row => row['exception_type'] === '1')
-    }
-  }
+  // Without a declared end date the calendars are the only horizon; `declared.lastServiceDate`
+  // is empty there, so one expression serves both.
+  const lastServiceDate = calendars ? calendars.lastServiceDate : declared.lastServiceDate
   if (!lastServiceDate) throw new Error(`GTFS feed ${feed.id} has no service-validity date in ${directory}`)
   if (lastServiceDate < asOfDate) {
     const accepted = feed.acceptedHistoricalSource
@@ -385,7 +387,7 @@ export async function validateGtfsSourceFreshness(feed: GlobalGtfsFeed, director
     if (identity !== accepted.gtfsTextSha256) {
       throw new Error(`GTFS feed ${feed.id} historical source identity ${identity} does not match pinned ${accepted.gtfsTextSha256}`)
     }
-    return { lastServiceDate, historical: true }
+    return { firstServiceDate, lastServiceDate, historical: true }
   }
-  return { lastServiceDate }
+  return { firstServiceDate, lastServiceDate }
 }

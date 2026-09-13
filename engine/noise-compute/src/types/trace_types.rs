@@ -287,13 +287,9 @@ pub enum EmissionTrace {
         lanes: u8,
     },
     Railway {
-        trains_passenger: f64,
-        trains_freight: f64,
-        trains_passenger_source: &'static str, // "arrow" | "default_by_type"
-        trains_freight_source: &'static str,
-        source_id: u16,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        provenance: Option<crate::sources::DatasetMeta>,
+        traffic: crate::normalize::RailTraffic,
+        passenger_provenance: Option<crate::sources::DatasetMeta>,
+        freight_provenance: Option<crate::sources::DatasetMeta>,
         speed_kmh: f64,
         bridge: bool,
         highspeed: bool,

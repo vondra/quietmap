@@ -219,11 +219,11 @@ impl Spiller {
                         })
                         .unwrap_or(0),
                     classify::surface_type(surface),
-                    if tags.get("oneway").map(|s| s.as_str()) == Some("yes") {
-                        1
-                    } else {
-                        0
-                    },
+                    classify::oneway_direction(
+                        highway,
+                        tags.get("oneway").map(String::as_str),
+                        tags.get("junction").map(String::as_str),
+                    ),
                     tags.get("lanes")
                         .and_then(|s| s.parse::<u8>().ok())
                         .unwrap_or(0),

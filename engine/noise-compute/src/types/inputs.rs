@@ -112,8 +112,7 @@ pub struct RailSegment {
     pub rail_type: u8, // 0=rail, 1=tram, 2=light_rail, 3=narrow_gauge, 4=funicular
     pub usage: u8,     // 0=main, 1=branch, 2=industrial
     pub maxspeed: u16, // km/h (raw OSM value, 0 = none); u16 so 300+ km/h survives
-    pub trains_passenger: f64, // effective daily count (post service/divisor scaling)
-    pub trains_freight: f64, // effective daily count (post service/divisor scaling)
+    pub traffic: crate::normalize::RailTraffic,
     pub speed_kmh: f64, // effective speed used by emission (resolved); f64 not u8 — high-speed rail resolves to 300 km/h, which u8 saturated to 255 (~1.4 dB too quiet)
     pub track_count: u8,
     pub name: String,     // OSM name tag (line name)
@@ -121,13 +120,9 @@ pub struct RailSegment {
     pub bridge: bool,     // railway on bridge/viaduct → G=0
     pub tunnel: bool,     // railway in tunnel → skip (no outdoor noise)
     // Metadata preserved for popup display (normally zero/false for pipeline path):
-    pub service: bool,               // service/yard track (2% of main-line traffic)
-    pub highspeed: bool,             // high-speed rail flag
-    pub parallel_divisor: u8,        // >1 = track was mapped as parallel OSM ways, divide traffic
-    pub speed_source: u8,            // 0=osm_maxspeed, 1=highspeed_default, 2=type_default
-    pub trains_passenger_source: u8, // 0=arrow, 1=default_by_type
-    pub trains_freight_source: u8,   // 0=arrow, 1=default_by_type
-    pub source_id: u16,              // single source-of-truth stamp — see pipeline/lib/sources.ts
+    pub service: bool, // service/yard track; prepared counts already include its traffic
+    pub highspeed: bool, // high-speed rail flag
+    pub speed_source: u8, // 0=osm_maxspeed, 1=highspeed_default, 2=type_default
     // Pre-computed:
     /// Receiver-to-closest-point distance from `geo::point_to_segment_full` (longitude
     /// scaled at the segment's midpoint); the way-collapse in `compute::railways` ranks by it.

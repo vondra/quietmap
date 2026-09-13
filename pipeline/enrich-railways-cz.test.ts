@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { tableFromIPC } from 'apache-arrow'
 import { enrichCzechRailways } from './enrich-railways-cz.js'
 import { readCzpttSource, czpttSequencesToStationPairs } from './lib/railway-cz-source.js'
+import { listRailIntervals } from './lib/rail-traffic-store.js'
 import { writeRailwaysFixture } from './lib/rail-test-fixture.js'
 import { writeSyntheticRailTopology } from './lib/transport-test-fixture.js'
 import { collectZ9RailGraphSegments } from './lib/rail-walk-enrich.js'
@@ -57,18 +58,15 @@ test('CZ whole source admits before writes; measured, silent and foreign rows co
   const before = tableFromIPC(readFileSync(path))
   const result = await enrichCzechRailways(directory, prepared)
   assert.equal(result.walk.walkStamped, 1)
-  assert.equal(result.walk.silentStamped, 2)
+  assert.equal(result.walk.silentStamped, 3)
   const actual = tableFromIPC(readFileSync(path))
-  assert.deepEqual([...actual.getChild('source_id')!], [110, 9863, 9863, 9864, 0, 9864, 100])
-  assert.deepEqual([...actual.getChild('trains_passenger')!], [2, 2, 2, 80, 0, 95, 85])
-  assert.deepEqual([...actual.getChild('trains_freight')!], [0, 1, 1, 0, 0, 0, 0])
-  assert.deepEqual([...actual.getChild('parallel_divisor')!], [1, 2, 2, 1, 1, 1, 1])
   assert.deepEqual(actual.schema.metadata, before.schema.metadata)
   assert.deepEqual(actual.batches.map(batch => batch.numRows), before.batches.map(batch => batch.numRows))
   for (const field of before.schema.fields) {
-    if (['source_id', 'trains_passenger', 'trains_freight', 'parallel_divisor'].includes(field.name)) continue
     assert.deepEqual([...actual.getChild(field.name)!], [...before.getChild(field.name)!], field.name)
   }
+  const sidecar = listRailIntervals(prepared, 'z9/275/173')
+  assert.ok(sidecar.length >= 3)
   const expected = readFileSync(path)
   await enrichCzechRailways(directory, prepared); assert.deepEqual(readFileSync(path), expected)
   copyFileSync(fixture, path)

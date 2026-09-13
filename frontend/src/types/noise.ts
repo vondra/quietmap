@@ -86,7 +86,16 @@ export type RoadTrafficSource =
   | 'estimated_service_tree'
   | 'default_by_class'
 
-export type RailTrainSource = 'arrow' | 'default_by_type'
+export interface RailCategoryTraffic {
+  periods: [number, number, number]
+  status: 0 | 1 | 2
+  source_id: number
+  matching: 0 | 1 | 2 | 3
+}
+export interface RailTraffic {
+  passenger: RailCategoryTraffic
+  freight: RailCategoryTraffic
+}
 
 export interface DatasetProvenance {
   /** Authority tier from the shared dataset registry. It identifies explicit
@@ -151,22 +160,16 @@ interface RoadMetadata {
 
 interface RailMetadata {
   kind: 'rail'
-  trains_passenger_raw: number
-  trains_freight_raw: number
-  trains_passenger_source: RailTrainSource
-  trains_freight_source: RailTrainSource
-  dataset_id?: number
-  provenance?: DatasetProvenance | null
+  traffic: RailTraffic
+  passenger_provenance: DatasetProvenance | null
+  freight_provenance: DatasetProvenance | null
   maxspeed_posted_kmh: number
-  trains_passenger_effective: number
-  trains_freight_effective: number
   speed_kmh: number
   speed_source: 'osm_maxspeed' | 'highspeed_default' | 'type_default'
   rail_type: string
   usage: string
   service: boolean
   highspeed: boolean
-  parallel_divisor: number
   bridge: boolean
   /** Index + perpendicular distance of the dominant (loudest) segment in
    *  this rail group, plus the closest segment's distance. Mirrors the
@@ -571,12 +574,9 @@ type EmissionTrace =
     }
   | {
       kind: 'railway'
-      trains_passenger: number
-      trains_freight: number
-      trains_passenger_source: RailTrainSource
-      trains_freight_source: RailTrainSource
-      dataset_id: number
-      provenance?: DatasetProvenance | null
+      traffic: RailTraffic
+      passenger_provenance: DatasetProvenance | null
+      freight_provenance: DatasetProvenance | null
       speed_kmh: number
       bridge: boolean
       highspeed: boolean

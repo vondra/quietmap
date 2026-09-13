@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, BinaryArray, BooleanArray, Float32Array, Int16Array, Int32Array, Int64Array,
-    StringArray, UInt16Array, UInt32Array, UInt8Array,
+    ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, StringArray, UInt16Array, UInt32Array, UInt8Array,
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::FileWriter;
@@ -232,7 +232,7 @@ fn roads_schema() -> Schema {
         Field::new("road_class", DataType::UInt8, false),
         Field::new("speed_limit", DataType::UInt8, false),
         Field::new("surface_type", DataType::UInt8, false),
-        Field::new("oneway", DataType::Boolean, false),
+        Field::new("oneway", DataType::UInt8, false),
         Field::new("lanes", DataType::UInt8, false),
         Field::new("name", DataType::Utf8, true),
         Field::new("ref", DataType::Utf8, true),
@@ -272,7 +272,7 @@ pub fn write_roads_file(path: &Path, rows: &[FixtureRoad]) {
                 rows.iter().map(|r| r.speed_limit),
             )),
             Arc::new(UInt8Array::from_iter_values(rows.iter().map(|_| 0u8))),
-            Arc::new(BooleanArray::from(vec![false; rows.len()])),
+            Arc::new(UInt8Array::from(vec![0u8; rows.len()])),
             Arc::new(UInt8Array::from_iter_values(rows.iter().map(|r| r.lanes))),
             Arc::new(StringArray::from_iter_values(
                 rows.iter().map(|r| r.name.as_str()),
@@ -305,27 +305,44 @@ pub struct FixtureRail {
 
 /// A railways.arrow on disk in the osm-extract v2 (grid) layout.
 pub fn write_railways_file(path: &Path, rows: &[FixtureRail]) {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("osm_id", DataType::Int64, false),
-        Field::new("segment_idx", DataType::Int16, false),
-        Field::new("start_gx", DataType::Int32, false),
-        Field::new("start_gy", DataType::Int32, false),
-        Field::new("end_gx", DataType::Int32, false),
-        Field::new("end_gy", DataType::Int32, false),
-        Field::new("length_m", DataType::Float32, false),
-        Field::new("rail_type", DataType::UInt8, false),
-        Field::new("usage", DataType::UInt8, false),
-        Field::new("maxspeed", DataType::UInt16, false),
-        Field::new("name", DataType::Utf8, true),
-        Field::new("ref", DataType::Utf8, true),
-        Field::new("electrified", DataType::UInt8, false),
-        Field::new("gauge", DataType::UInt16, false),
-        Field::new("bridge", DataType::Boolean, false),
-        Field::new("tunnel", DataType::Boolean, false),
-        Field::new("highspeed", DataType::Boolean, false),
-        Field::new("service", DataType::UInt8, false),
-        Field::new("source_id", DataType::UInt16, false),
-    ]));
+    let schema = Arc::new(
+        Schema::new(vec![
+            Field::new("osm_id", DataType::Int64, false),
+            Field::new("segment_idx", DataType::Int16, false),
+            Field::new("start_gx", DataType::Int32, false),
+            Field::new("start_gy", DataType::Int32, false),
+            Field::new("end_gx", DataType::Int32, false),
+            Field::new("end_gy", DataType::Int32, false),
+            Field::new("length_m", DataType::Float32, false),
+            Field::new("rail_type", DataType::UInt8, false),
+            Field::new("usage", DataType::UInt8, false),
+            Field::new("maxspeed", DataType::UInt16, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("ref", DataType::Utf8, true),
+            Field::new("electrified", DataType::UInt8, false),
+            Field::new("gauge", DataType::UInt16, false),
+            Field::new("bridge", DataType::Boolean, false),
+            Field::new("tunnel", DataType::Boolean, false),
+            Field::new("highspeed", DataType::Boolean, false),
+            Field::new("service", DataType::UInt8, false),
+            Field::new("trains_passenger_day", DataType::Float64, false),
+            Field::new("trains_passenger_evening", DataType::Float64, false),
+            Field::new("trains_passenger_night", DataType::Float64, false),
+            Field::new("trains_freight_day", DataType::Float64, false),
+            Field::new("trains_freight_evening", DataType::Float64, false),
+            Field::new("trains_freight_night", DataType::Float64, false),
+            Field::new("passenger_status", DataType::UInt8, false),
+            Field::new("passenger_source_id", DataType::UInt16, false),
+            Field::new("passenger_matching", DataType::UInt8, false),
+            Field::new("freight_status", DataType::UInt8, false),
+            Field::new("freight_source_id", DataType::UInt16, false),
+            Field::new("freight_matching", DataType::UInt8, false),
+        ])
+        .with_metadata(std::collections::HashMap::from([(
+            "rail_traffic_contract".to_owned(),
+            "1".to_owned(),
+        )])),
+    );
     let starts: Vec<(i32, i32)> = rows.iter().map(|r| grid_of(r.start.0, r.start.1)).collect();
     let ends: Vec<(i32, i32)> = rows.iter().map(|r| grid_of(r.end.0, r.end.1)).collect();
     let batch = RecordBatch::try_new(
@@ -357,7 +374,18 @@ pub fn write_railways_file(path: &Path, rows: &[FixtureRail]) {
             Arc::new(BooleanArray::from(vec![false; rows.len()])),
             Arc::new(BooleanArray::from(vec![false; rows.len()])),
             Arc::new(UInt8Array::from_iter_values(rows.iter().map(|_| 0u8))),
-            Arc::new(UInt16Array::from_iter_values(rows.iter().map(|_| 0u16))),
+            Arc::new(Float64Array::from(vec![56.0; rows.len()])),
+            Arc::new(Float64Array::from(vec![16.0; rows.len()])),
+            Arc::new(Float64Array::from(vec![8.0; rows.len()])),
+            Arc::new(Float64Array::from(vec![10.0; rows.len()])),
+            Arc::new(Float64Array::from(vec![10.0 / 3.0; rows.len()])),
+            Arc::new(Float64Array::from(vec![20.0 / 3.0; rows.len()])),
+            Arc::new(UInt8Array::from(vec![2u8; rows.len()])),
+            Arc::new(UInt16Array::from(vec![0u16; rows.len()])),
+            Arc::new(UInt8Array::from(vec![0u8; rows.len()])),
+            Arc::new(UInt8Array::from(vec![2u8; rows.len()])),
+            Arc::new(UInt16Array::from(vec![0u16; rows.len()])),
+            Arc::new(UInt8Array::from(vec![0u8; rows.len()])),
         ],
     )
     .unwrap();

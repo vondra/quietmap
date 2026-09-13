@@ -1,11 +1,12 @@
 import type {
   DatasetProvenance,
   ProvenanceTier,
-  RailTrainSource,
+  RailCategoryTraffic,
+  RailTraffic,
   RoadTrafficSource,
 } from '../../types/noise.ts'
 
-export type { RailTrainSource, RoadTrafficSource } from '../../types/noise.ts'
+export type { RoadTrafficSource } from '../../types/noise.ts'
 
 // Pure provenance wording shared by the contributor and segment views. Keep
 // this module free of React/DOM imports so the strings can be tested with
@@ -96,35 +97,37 @@ export function roadSourceDescription(
   )
 }
 
-/** Compact rail train-count source block for one category. */
+/** Category status is explicit; a numeric zero never proves absence of trains. */
 export function railTrainSourceLine(
-  source: RailTrainSource,
+  category: RailCategoryTraffic,
   provenance: DatasetProvenance | null | undefined,
-  railType: string,
 ): string {
-  if (source === 'arrow') {
-    if (!provenance) {
-      return (
-        'External train-count input\n' +
-        '  (dataset metadata and measurement status unavailable)'
-      )
-    }
-    const url = provenance.url ? `\n  ${provenance.url}` : ''
-    const tierClass = classifyTier(provenance)
-    // Most authoritative rail inputs are schedules (GTFS/timetables), not
-    // observed pass-by counters. The provenance rank alone cannot distinguish
-    // those methods, so keep the wording neutral until method is wired.
-    const method = tierClass === 'authoritative'
-      ? 'external trains/day input per OSM way'
-      : tierClass === 'estimate'
-        ? 'estimated trains/day, not a direct measurement'
-        : tierClass === 'baseline'
-          ? 'model-derived trains/day baseline, not an observed count'
-          : 'external train-count input; measurement status unavailable'
-    return `${formatProv(provenance)}${url}\n  (${method})`
-  }
-  return (
-    `CNOSSOS Annex IV default — ${railType}\n` +
-    `  (no enrichment data)`
-  )
+  if (category.status === 0) return 'Unknown traffic; no count available'
+  const status = category.status === 1 ? 'Known count' : 'Estimated traffic'
+  const source = provenance ? `\n${formatProv(provenance)}${provenance.url ? `\n${provenance.url}` : ''}` : ''
+  const matching = [
+    ...(category.matching & 1 ? ['estimated relation alignment'] : []),
+    ...(category.matching & 2 ? ['estimated graph alignment'] : []),
+  ]
+  return `${status}${source}${matching.length ? `\n${matching.join('; ')}` : ''}`
+}
+
+const railCount = (value: number): string => value.toLocaleString('en', { maximumSignificantDigits: 3 })
+
+export function railTrafficLabel(traffic: RailTraffic): string {
+  const categories = [traffic.passenger, traffic.freight]
+  const count = categories.flatMap(category => category.periods).reduce((sum, value) => sum + value, 0)
+  return `${railCount(count)}/day${categories.some(category => category.status === 0) ? ' + unknown' : ''}`
+}
+
+export function railTrafficDescription(
+  traffic: RailTraffic,
+  passengerProvenance: DatasetProvenance | null,
+  freightProvenance: DatasetProvenance | null,
+): string {
+  return ([['Passenger', traffic.passenger, passengerProvenance],
+    ['Freight', traffic.freight, freightProvenance]] as const).map(([label, category, provenance]) => {
+    const periods = category.status === 0 ? '' : '\nDay / evening / night: ' + category.periods.map(railCount).join(' / ')
+    return `${label}: ${railTrainSourceLine(category, provenance)}${periods}`
+  }).join('\n\n')
 }

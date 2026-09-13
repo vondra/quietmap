@@ -20,12 +20,17 @@ export interface FixtureSourcePiece {
   start: [vertex: number, fraction: number]
   end: [vertex: number, fraction: number]
 }
+export interface FixtureTrainRoute {
+  id: string
+  members: ReadonlyArray<[type: string, id: string, role: string]>
+}
 
 export function writeTransportFixture(
   prepared: string,
   ways: FixtureSourceWay[],
   pieces: FixtureSourcePiece[],
   aliases: Array<[family: string, node: string, canonical: string]> = [],
+  trainRoutes: readonly FixtureTrainRoute[] = [],
 ): void {
   using database = new DatabaseSync(transportTopologyPath(prepared))
   database.exec(readFileSync(new URL('../../engine/osm-extract/src/transport.sql', import.meta.url), 'utf8'))
@@ -35,6 +40,8 @@ export function writeTransportFixture(
   for (const piece of pieces) insertPiece.run(BigInt(piece.way), piece.segment, piece.square, ...piece.start, ...piece.end)
   const insertAlias = database.prepare('INSERT INTO node_aliases VALUES (?, ?, ?)')
   for (const [family, node, canonical] of aliases) insertAlias.run(family, BigInt(node), BigInt(canonical))
+  const insertRoute = database.prepare('INSERT INTO source_train_routes VALUES (?, ?)')
+  for (const route of trainRoutes) insertRoute.run(BigInt(route.id), JSON.stringify(route.members))
   database.exec('PRAGMA user_version = 2')
 }
 

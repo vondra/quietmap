@@ -1,0 +1,16 @@
+# Native railways finalizer: split clipped sidecar evidence onto acoustic pieces
+# and write rail_traffic_contract=1. Separate crate so the executable does not
+# link source-reader's `node` feature.
+[package]
+name = "railways-finalize"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arrow = { version = "54", default-features = false, features = ["ipc"] }
+arrow-batching = { path = "../arrow-batching" }
+grid = { path = "../grid" }
+noise-compute = { path = "../noise-compute" }
+rayon = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde_json = "1"

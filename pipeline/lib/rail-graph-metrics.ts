@@ -38,6 +38,7 @@ function isStampableRailEdge(e: { railType: number; isTraversalOnly: boolean }):
 interface ShortestPathResult {
   lengthM: number
   edgeIndices: Set<number>
+  orderedEdges: number[]
 }
 
 /** Reusable Dijkstra scratch buffers, sized to ONE graph's `nodeCount`. REAL
@@ -134,17 +135,18 @@ export function dijkstraShortestPath(
 
   if (dist[toNode] === Infinity) return null
 
-  const edgeIndices = new Set<number>()
+  const orderedEdges: number[] = []
   let lengthM = 0
   let cur = toNode
   while (cur !== fromNode) {
     const edgeIdx = prevEdge[cur]
     if (edgeIdx === -1) return null // defensive: should be unreachable given dist[toNode] finite
-    edgeIndices.add(edgeIdx)
+    orderedEdges.push(edgeIdx)
     lengthM += graph.edges[edgeIdx].lengthM
     cur = prevNode[cur]
   }
-  return { lengthM, edgeIndices }
+  orderedEdges.reverse()
+  return { lengthM, edgeIndices: new Set(orderedEdges), orderedEdges }
 }
 
 // ── Parallel-track spread ────────────────────────────────────────────────────

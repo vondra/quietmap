@@ -26,7 +26,6 @@ export interface SpatialRailwayResult {
   retracted: number
   skippedService: number
   skippedForeign: number
-  skippedPriority: number
   squaresUpdated: number
 }
 
@@ -54,7 +53,6 @@ export async function enrichSpatialRailwayCountry(options: {
     retracted: 0,
     skippedService: 0,
     skippedForeign: 0,
-    skippedPriority: 0,
     squaresUpdated: 0,
   }
   for (const square of squares) {
@@ -69,6 +67,7 @@ export async function enrichSpatialRailwayCountry(options: {
       undefined,
       {
         allowedCountryIsos: [options.country],
+        countryIso: options.country,
         retract: { sourceIds: [profile.sourceId], when: () => true },
       },
     )
@@ -77,7 +76,6 @@ export async function enrichSpatialRailwayCountry(options: {
     result.retracted += write.retracted
     result.skippedService += write.skippedService
     result.skippedForeign += write.skippedForeign
-    result.skippedPriority += write.skippedPriority
     result.squaresUpdated += Number(write.updated)
   }
   return result

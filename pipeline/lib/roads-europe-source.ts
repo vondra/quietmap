@@ -17,6 +17,11 @@ export const EUROPEAN_TRAFFIC_CITIES = [
 export interface EuropeanTrafficRecord extends RoadAadt {
   latitude: number
   longitude: number
+  countBasis: 'directional' | 'both-directions' | 'unknown'
+  rawOneway: unknown
+  rawDirection: unknown
+  osmOneway: unknown
+  rawTechnology: unknown
 }
 
 export interface RejectedTrafficRecord {
@@ -100,14 +105,15 @@ export function parseEuropeanCityTraffic(city: string, path: string, bytes: Buff
       result.rejected.push({ feature: index, reason: 'components_exceed_total', total, truck, motorcycle })
       continue
     }
-    // Preserve dev1 rounding, directional totals and its 2% medium-vehicle estimate.
+    // Preserve the legacy compensation paired with normalize_road's half-share.
+    // Source/OSM disagreement remains unresolved until basis reaches the writer.
     const factor = properties.raw_oneway === true ? 2 : 1
-    const directionalTotal = Math.round(total) * factor
+    const storageTotal = Math.round(total) * factor
     const heavy = Math.round(truck) * factor
     const moto = Math.round(motorcycle) * factor
-    const mediumEstimate = directionalTotal * 0.02
+    const mediumEstimate = Math.min(Math.max(0, storageTotal - heavy - moto), storageTotal * 0.02)
     const counts = {
-      light: Math.max(0, Math.round(directionalTotal - heavy - moto - mediumEstimate)),
+      light: Math.max(0, Math.round(storageTotal - heavy - moto - mediumEstimate)),
       medium: Math.max(0, Math.round(mediumEstimate)), heavy, moto,
     }
     if (Object.values(counts).some(count => !Number.isSafeInteger(count) || count > 2_147_483_647)) {
@@ -117,7 +123,15 @@ export function parseEuropeanCityTraffic(city: string, path: string, bytes: Buff
       result.rejected.push({ feature: index, reason: 'rounds_to_zero', total, truck, motorcycle })
       continue
     }
-    result.records.push({ latitude: point[1], longitude: point[0], ...counts, sourceId: SOURCE_ID_EU_CITY_TRAFFIC })
+    result.records.push({ latitude: point[1], longitude: point[0], ...counts,
+      sourceId: SOURCE_ID_EU_CITY_TRAFFIC,
+      countBasis: properties.raw_oneway === true ? 'directional'
+        : properties.raw_oneway === false ? 'both-directions' : 'unknown',
+      rawOneway: properties.raw_oneway ?? null,
+      rawDirection: properties.raw_direction ?? null,
+      osmOneway: properties.osm_oneway ?? null,
+      rawTechnology: properties.raw_techno ?? null,
+    })
   }
   if (!result.records.length) throw new Error(`${city}: no usable traffic observations`)
   return result

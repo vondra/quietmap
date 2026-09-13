@@ -468,8 +468,6 @@ pub(crate) struct BuildRailTrace<'a> {
     pub ground_g: f64,
     pub ground_bands: [f64; NUM_BANDS],
     pub reflection_boost_db: f64,
-    pub q_pax: f64,
-    pub q_frt: f64,
     pub speed_kmh: f64,
     pub path_profile: PathProfile,
     pub terrain: TerrainTrace,
@@ -491,8 +489,6 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
         ground_g,
         ground_bands,
         reflection_boost_db,
-        q_pax,
-        q_frt,
         speed_kmh,
         path_profile,
         terrain,
@@ -526,20 +522,9 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
         bridge: seg.bridge,
         tunnel: seg.tunnel,
         emission: EmissionTrace::Railway {
-            trains_passenger: q_pax,
-            trains_freight: q_frt,
-            trains_passenger_source: if seg.trains_passenger_source == 0 {
-                "arrow"
-            } else {
-                "default_by_type"
-            },
-            trains_freight_source: if seg.trains_freight_source == 0 {
-                "arrow"
-            } else {
-                "default_by_type"
-            },
-            source_id: seg.source_id,
-            provenance: crate::sources::dataset_meta(seg.source_id),
+            traffic: seg.traffic,
+            passenger_provenance: crate::sources::dataset_meta(seg.traffic.passenger.source_id),
+            freight_provenance: crate::sources::dataset_meta(seg.traffic.freight.source_id),
             speed_kmh,
             bridge: seg.bridge,
             highspeed: seg.highspeed,

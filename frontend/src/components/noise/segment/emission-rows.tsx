@@ -8,7 +8,7 @@ import {
   modelName,
 } from '../../../utils/aircraft-types'
 import { HoverText } from '../../ui/info-tip'
-import { roadSourceDescription, railTrainSourceLine } from '../shared'
+import { roadSourceDescription, railTrafficLabel, railTrafficDescription } from '../shared'
 import { fmtDbSigned } from './display'
 
 export function emissionInputRows(t: SegmentTrace): [React.ReactNode, React.ReactNode][] {
@@ -54,30 +54,13 @@ export function emissionInputRows(t: SegmentTrace): [React.ReactNode, React.Reac
       ]
     }
     case 'railway': {
-      const total = e.trains_passenger + e.trains_freight
-      // Label on its own line so long dataset names can never collide with
-      // the prefix and trigger mid-word wraps.
-      const paxSrc = e.trains_passenger > 0
-        ? `Passenger source:\n  ${railTrainSourceLine(e.trains_passenger_source, e.provenance, e.rail_type).split('\n').join('\n  ')}\n\n`
-        : ''
-      const frtSrc = e.trains_freight > 0
-        ? `Freight source:\n  ${railTrainSourceLine(e.trains_freight_source, e.provenance, e.rail_type).split('\n').join('\n  ')}\n\n`
-        : ''
-      const countLines =
-        (e.trains_passenger > 0 ? `  Passenger  ${e.trains_passenger.toFixed(1).padStart(6)}\n` : '') +
-        (e.trains_freight > 0 ? `  Freight    ${e.trains_freight.toFixed(1).padStart(6)}\n` : '')
-      const trainsText =
-        paxSrc +
-        frtSrc +
-        `Daily trains (per track):\n` +
-        countLines +
-        `  ──────────────\n  Total      ${total.toFixed(1).padStart(6)}/day`
+      const trainsText = railTrafficDescription(e.traffic, e.passenger_provenance, e.freight_provenance)
       return [
         ['Speed', `${e.speed_kmh.toFixed(0)} km/h`],
         [
           'Trains',
           <HoverText title={trainsText}>
-            {total.toFixed(1)}/day
+            {railTrafficLabel(e.traffic)}
           </HoverText>,
         ],
         [

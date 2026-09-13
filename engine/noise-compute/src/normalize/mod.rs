@@ -3,10 +3,9 @@
 //! Per-domain submodules turn raw OSM rows into emission-ready values:
 //! [`road`] (line sources), [`rail`] (line sources), [`points`]
 //! (building / industrial / leisure AREA point sources). The small
-//! cross-domain helpers below ([`has_enriched_traffic`], [`bands_to_f32`],
-//! [`resolve_area_m2`]) stay here so each domain shares one definition.
+//! cross-domain helpers below ([`bands_to_f32`], [`resolve_area_m2`])
+//! stay here so each domain shares one definition.
 
-use crate::sources::Provenance;
 use crate::types::NUM_BANDS;
 
 mod points;
@@ -17,7 +16,7 @@ pub use points::{
     prepare_building_points, prepare_industrial_points, prepare_leisure_points, PreparedPoint,
     RawBuildingInput, RawIndustrialInput, RawLeisureInput,
 };
-pub use rail::{normalize_rail, normalize_rail_segment, NormalizedRail, RawRailInput};
+pub use rail::{normalize_rail, NormalizedRail, RailCategoryTraffic, RailTraffic, RawRailInput};
 pub use road::{
     lane_ratio, nominal_road_aadt, normalize_road, normalize_road_segment,
     normalize_road_with_cache, road_max_distance_m, NormalizedRoad, RawRoadInput,
@@ -34,14 +33,6 @@ pub const SPEED_LIMIT_DERESTRICTED: u8 = 255;
 /// CNOSSOS-EU road emission is only valid up to its 130 km/h clamp
 /// (see `road.rs`) — so model at the cap.
 pub const DERESTRICTED_SPEED_KMH: f64 = 130.0;
-
-/// Does this segment carry enriched traffic (any data from an enricher)
-/// rather than a class default? Shared by `normalize_road` and
-/// `nominal_road_aadt` so the "raw vs default" decision can't drift.
-#[inline]
-fn has_enriched_traffic(provenance: Provenance, aadt_light: i32) -> bool {
-    provenance.has_data() && aadt_light > 0
-}
 
 fn bands_to_f32(bands: [f64; NUM_BANDS]) -> [f32; NUM_BANDS] {
     std::array::from_fn(|i| bands[i] as f32)

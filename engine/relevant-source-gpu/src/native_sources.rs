@@ -62,18 +62,44 @@ pub fn load_sources(
                 square_store::structure_contract::validate_schema(&reader.schema())
                     .map_err(anyhow::Error::msg)?;
             }
+            if name == "roads" {
+                RoadDirections::read(&RecordBatch::new_empty(reader.schema()))
+                    .map_err(anyhow::Error::msg)?;
+            }
+            if name == "railways" {
+                source_reader::rail_traffic::RailTrafficColumns::read(&RecordBatch::new_empty(
+                    reader.schema(),
+                ))
+                .map_err(anyhow::Error::msg)?;
+            }
             let traffic_calendar = (name == "airport_traffic")
                 .then(|| traffic::TrafficCalendar::read(&RecordBatch::new_empty(reader.schema())))
                 .transpose()?;
             let mut row_base = 0_u64;
             for batch in reader {
                 let batch = batch?;
+                let road_directions = (name == "roads")
+                    .then(|| RoadDirections::read(&batch))
+                    .transpose()
+                    .map_err(anyhow::Error::msg)?;
+                let rail_traffic = (name == "railways")
+                    .then(|| source_reader::rail_traffic::RailTrafficColumns::read(&batch))
+                    .transpose()
+                    .map_err(anyhow::Error::msg)?;
                 for row in 0..batch.num_rows() {
                     let identity =
                         |part| SourceIdentity::arrow_row(digest, row_base + row as u64, part);
                     match name {
                         "roads" | "railways" => {
-                            if let Some(device) = line(&batch, row, name == "railways", frame)? {
+                            if let Some(device) = line(
+                                &batch,
+                                row,
+                                road_directions
+                                    .as_ref()
+                                    .is_some_and(|directions| directions.is_oneway(row)),
+                                rail_traffic.as_ref().map(|columns| columns.row(row)),
+                                frame,
+                            )? {
                                 sources.push(SurfaceSource {
                                     identity: identity(0),
                                     layer: u8::from(name == "railways"),
@@ -198,29 +224,23 @@ fn emission_linear(periods: ([f32; 8], [f32; 8], [f32; 8])) -> [f32; 24] {
 fn line(
     batch: &RecordBatch,
     row: usize,
-    rail: bool,
+    oneway: bool,
+    rail_traffic: Option<RailTraffic>,
     frame: &RegionMetricFrame,
 ) -> Result<Option<DeviceLineSource>> {
     let start = position(batch, row, "start")?;
     let end = position(batch, row, "end")?;
     let square_country_city = row_square_country_city(batch, row)?;
-    let (emission, max_distance_m, source_height_m) = if rail {
-        if boolean(batch, "tunnel", row) {
+    let (emission, max_distance_m, source_height_m) = if let Some(traffic) = rail_traffic {
+        if traffic.is_silent() || boolean(batch, "tunnel", row) {
             return Ok(None);
         }
-        let norm = normalize_rail(
-            RawRailInput {
-                rail_type: byte(batch, "rail_type", row),
-                usage: byte(batch, "usage", row),
-                maxspeed: short(batch, "maxspeed", row),
-                service: byte(batch, "service", row),
-                highspeed: boolean(batch, "highspeed", row),
-                trains_passenger: integer(batch, "trains_passenger", row),
-                trains_freight: integer(batch, "trains_freight", row),
-                parallel_divisor: byte(batch, "parallel_divisor", row),
-            },
-            square_country_city,
-        );
+        let norm = normalize_rail(RawRailInput {
+            rail_type: byte(batch, "rail_type", row),
+            maxspeed: short(batch, "maxspeed", row),
+            highspeed: boolean(batch, "highspeed", row),
+            traffic,
+        });
         (
             norm.period_emissions(),
             norm.max_distance_m(),
@@ -233,7 +253,7 @@ fn line(
                 speed_limit: byte(batch, "speed_limit", row),
                 speed_taper: byte(batch, "speed_taper", row),
                 surface_type: byte(batch, "surface_type", row),
-                oneway: boolean(batch, "oneway", row),
+                oneway,
                 lanes: byte(batch, "lanes", row),
                 aadt_light: integer(batch, "aadt_light", row),
                 aadt_medium: integer(batch, "aadt_medium", row),
@@ -294,6 +314,176 @@ fn point_device(frame: &RegionMetricFrame, point: &PreparedPoint) -> DeviceLineS
 mod completeness_tests {
     use super::*;
     #[test]
+    fn native_road_direction_contract_rejects_invalid_data_and_matches_popup() {
+        use arrow::array::{
+            ArrayRef, BooleanArray, Int32Array, Int64Array, UInt16Array, UInt8Array,
+        };
+        use std::sync::Arc;
+        let batch = |direction: Option<ArrayRef>| {
+            let mut columns: Vec<(&str, ArrayRef)> = vec![
+                ("osm_id", Arc::new(Int64Array::from(vec![1, 2, 3]))),
+                ("country_iso", Arc::new(UInt16Array::from(vec![0; 3]))),
+                ("source_id", Arc::new(UInt16Array::from(vec![10; 3]))),
+                ("aadt_light", Arc::new(Int32Array::from(vec![10000; 3]))),
+                ("road_class", Arc::new(UInt8Array::from(vec![2; 3]))),
+                ("speed_limit", Arc::new(UInt8Array::from(vec![50; 3]))),
+            ];
+            for (name, value) in [
+                ("start_gx", 1 << 29),
+                ("start_gy", 1 << 29),
+                ("end_gx", (1 << 29) + 100),
+                ("end_gy", 1 << 29),
+            ] {
+                columns.push((name, Arc::new(Int32Array::from(vec![value; 3]))));
+            }
+            if let Some(column) = direction {
+                columns.push(("oneway", column));
+            }
+            RecordBatch::try_from_iter(columns).unwrap()
+        };
+        let invalid: Vec<Option<ArrayRef>> = vec![
+            None,
+            Some(Arc::new(BooleanArray::from(vec![false; 3]))),
+            Some(Arc::new(UInt16Array::from(vec![0, 1, 2]))),
+            Some(Arc::new(UInt8Array::from(vec![Some(0), None, Some(2)]))),
+            Some(Arc::new(UInt8Array::from(vec![0, 1, 3]))),
+        ];
+        for column in invalid {
+            let invalid = batch(column);
+            assert!(RoadDirections::read(&invalid).is_err());
+            assert!(source_reader::query_roads_from_batches(&[invalid], 0.0, 0.0, 1000.0).is_err());
+        }
+        let batch = batch(Some(Arc::new(UInt8Array::from(vec![0, 1, 2]))));
+        let directions = RoadDirections::read(&batch).unwrap();
+        let popup =
+            source_reader::query_roads_from_batches(std::slice::from_ref(&batch), 0.0, 0.0, 1000.0)
+                .unwrap();
+        assert_eq!(
+            popup.iter().map(|row| row.oneway).collect::<Vec<_>>(),
+            [false, true, true]
+        );
+        let frame = RegionMetricFrame::for_latitude_longitude(0.0, 0.0);
+        let devices: Vec<_> = (0..3)
+            .map(|row| {
+                line(&batch, row, directions.is_oneway(row), None, &frame)
+                    .unwrap()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(devices[1].emission_linear, devices[2].emission_linear);
+        for (two_way, one_way) in devices[0]
+            .emission_linear
+            .iter()
+            .zip(devices[1].emission_linear)
+        {
+            assert!(*two_way > one_way);
+        }
+    }
+
+    #[test]
+    fn fractional_rail_periods_match_popup_and_device_emissions() {
+        use arrow::array::{
+            ArrayRef, Float64Array, Int16Array, Int32Array, Int64Array, UInt16Array, UInt8Array,
+        };
+        use arrow::datatypes::{Field, Schema};
+        use std::sync::Arc;
+        let mut columns: Vec<(String, ArrayRef)> = Vec::new();
+        for (name, value) in [
+            ("start_gx", 1 << 29),
+            ("start_gy", 1 << 29),
+            ("end_gx", (1 << 29) + 100),
+            ("end_gy", 1 << 29),
+        ] {
+            columns.push((name.to_owned(), Arc::new(Int32Array::from(vec![value]))));
+        }
+        columns.push(("osm_id".to_owned(), Arc::new(Int64Array::from(vec![7]))));
+        columns.push((
+            "segment_idx".to_owned(),
+            Arc::new(Int16Array::from(vec![0])),
+        ));
+        columns.push((
+            "maxspeed".to_owned(),
+            Arc::new(UInt16Array::from(vec![120])),
+        ));
+        for name in ["rail_type", "continent"] {
+            columns.push((name.to_owned(), Arc::new(UInt8Array::from(vec![0]))));
+        }
+        for name in ["country_iso", "city_id"] {
+            columns.push((name.to_owned(), Arc::new(UInt16Array::from(vec![0]))));
+        }
+        for (category, values) in [
+            ("passenger", [0.0, 0.125, 0.0]),
+            ("freight", [0.0, 0.0, 0.25]),
+        ] {
+            for (period, count) in ["day", "evening", "night"].into_iter().zip(values) {
+                columns.push((
+                    format!("trains_{category}_{period}"),
+                    Arc::new(Float64Array::from(vec![count])),
+                ));
+            }
+            columns.push((
+                format!("{category}_status"),
+                Arc::new(UInt8Array::from(vec![2])),
+            ));
+            columns.push((
+                format!("{category}_source_id"),
+                Arc::new(UInt16Array::from(vec![7])),
+            ));
+            columns.push((
+                format!("{category}_matching"),
+                Arc::new(UInt8Array::from(vec![1])),
+            ));
+        }
+        let schema = Schema::new(
+            columns
+                .iter()
+                .map(|(name, array)| Field::new(name, array.data_type().clone(), false))
+                .collect::<Vec<_>>(),
+        )
+        .with_metadata(std::collections::HashMap::from([(
+            "rail_traffic_contract".to_owned(),
+            "1".to_owned(),
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            columns.into_iter().map(|(_, column)| column).collect(),
+        )
+        .unwrap();
+        let popup = source_reader::query_railways_from_batches(
+            std::slice::from_ref(&batch),
+            0.0,
+            0.0,
+            1000.0,
+        )
+        .unwrap();
+        assert_eq!(popup.len(), 1);
+        let row = &popup[0];
+        let normalized = normalize_rail(RawRailInput {
+            rail_type: row.rail_type,
+            maxspeed: row.maxspeed,
+            highspeed: row.highspeed,
+            traffic: row.traffic,
+        });
+        let columns = source_reader::rail_traffic::RailTrafficColumns::read(&batch).unwrap();
+        let frame = RegionMetricFrame::for_latitude_longitude(0.0, 0.0);
+        let device = line(&batch, 0, false, Some(columns.row(0)), &frame)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            device.emission_linear,
+            emission_linear(normalized.period_emissions())
+        );
+        assert!(device.emission_linear[..8]
+            .iter()
+            .all(|value| *value == 0.0));
+        assert!(device.emission_linear[8..].iter().all(|value| *value > 0.0));
+        assert_eq!(device.max_distance_m, normalized.max_distance_m() as f32);
+        assert!(line(&batch, 0, false, Some(RailTraffic::default()), &frame)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
     fn manifested_surface_without_finished_structures_cannot_paint_unscreened() {
         let temp = tempfile::tempdir().unwrap();
         let square = Square { x: 1, y: 2 };
@@ -302,7 +492,11 @@ mod completeness_tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let mut writer = arrow::ipc::writer::FileWriter::try_new(
             std::fs::File::create(&path).unwrap(),
-            &arrow::datatypes::Schema::empty(),
+            &arrow::datatypes::Schema::new(vec![arrow::datatypes::Field::new(
+                "oneway",
+                arrow::datatypes::DataType::UInt8,
+                false,
+            )]),
         )
         .unwrap();
         writer.finish().unwrap();

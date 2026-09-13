@@ -78,13 +78,6 @@ export interface Dataset {
    *  (ID, PH, …) — the invariant scanner's moto-scramble rule (R2) would
    *  otherwise flag every row; it skips ids declaring this. */
   highMoto?: boolean
-  /** Divisors on rows stamped by this source are computed by the graph-walk's
-   *  lateral parallel-track spread (`rail-graph-metrics.ts::applyParallelSpread`,
-   *  driven by `rail-walk-enrich.ts`) — the generic token-grouped only-raise
-   *  pass (`enrich-railways-parallel.ts`) must never override them, including
-   *  raising a divisor the walk deliberately set to 1. Absent = the generic
-   *  pass owns this source's divisors as usual. */
-  railDivisorFromWalk?: true
   /** Single-country ownership for a source whose PROVENANCE TIER alone does
    *  not already say so (DE Step A v2 Codex review item 4, 2026-07-16):
    *  `cz-timetable-silent` is baseline-tier — a residual claim, not a
@@ -228,7 +221,6 @@ export const DATASETS: Dataset[] = [
     provenance: 'baseline',
     measurement: 'derived',
     railFamilies: ['rail'],
-    railDivisorFromWalk: true,
     // Baseline tier yet CZ-owned (see the field's doc): the rail-walk
     // foreign-national guard must protect these rows from a neighbour's
     // higher-rank walk (verified live: DE's widened Step A v2 scope reaches
@@ -367,7 +359,6 @@ export const DATASETS: Dataset[] = [
     url: null,
     priority: 70,
     railFamilies: ['rail', 'tram'], // family-aware Variant B (enrich-railway-europe.ts)
-    railDivisorFromWalk: true,
   },
 
   // ── Railways: national ──
@@ -381,7 +372,6 @@ export const DATASETS: Dataset[] = [
     url: 'https://www.spravazeleznic.cz/',
     priority: 80,
     railFamilies: ['rail'], // CZPTT is heavy-rail only; trams get class defaults
-    railDivisorFromWalk: true,
   },
 
   // ── Buildings: national ──
@@ -1138,7 +1128,6 @@ export const DATASETS: Dataset[] = [
     url: 'https://www.dubaipulse.gov.ae/',
     priority: 80,
     railFamilies: ['rail', 'tram'], // mirrors the match closure (/gg W5)
-    railDivisorFromWalk: true,
   },
   {
     id: 2004,
@@ -1149,7 +1138,6 @@ export const DATASETS: Dataset[] = [
     license: 'public-data',
     url: 'https://buenosaires.gob.ar/sites/gcaba/files/subte_gtfs.zip',
     railFamilies: ['tram'],
-    railDivisorFromWalk: true,
     priority: 80,
   },
   {
@@ -1162,7 +1150,6 @@ export const DATASETS: Dataset[] = [
     url: 'https://opendata.transport.nsw.gov.au/',
     priority: 80,
     railFamilies: ['rail', 'tram'],
-    railDivisorFromWalk: true,
   },
   {
     id: 2009,
@@ -1174,7 +1161,6 @@ export const DATASETS: Dataset[] = [
     url: 'https://stibmivb.opendatasoft.com/',
     priority: 80,
     railFamilies: ['tram'], // match claims tram/light_rail only (/gg W5),
-    railDivisorFromWalk: true,
   },
   {
     id: 2015,
@@ -1186,7 +1172,6 @@ export const DATASETS: Dataset[] = [
     url: 'https://www.viarail.ca/',
     priority: 80,
     railFamilies: ['rail', 'tram'],
-    railDivisorFromWalk: true,
   },
   {
     id: 2021,
@@ -1217,7 +1202,6 @@ export const DATASETS: Dataset[] = [
     priority: 80,
     measurement: 'counted',
     railFamilies: ['rail', 'tram'],
-    railDivisorFromWalk: true,
   },
   {
     id: 2024,
@@ -1229,7 +1213,6 @@ export const DATASETS: Dataset[] = [
     url: 'https://www.rejseplanen.info/labs/GTFS.zip',
     priority: 80,
     railFamilies: ['rail', 'tram'],
-    railDivisorFromWalk: true,
   },
   {
     id: 2028,
@@ -1241,7 +1224,6 @@ export const DATASETS: Dataset[] = [
     url: 'https://data.renfe.com/',
     priority: 80,
     railFamilies: ['rail'], // Renfe/FGC heavy/suburban only; street trams are separate operators
-    railDivisorFromWalk: true,
   },
   {
     id: 2030,
@@ -1253,7 +1235,6 @@ export const DATASETS: Dataset[] = [
     url: 'https://rata.digitraffic.fi/',
     priority: 80,
     railFamilies: ['rail', 'tram'],
-    railDivisorFromWalk: true,
   },
   {
     id: 2035,
@@ -1265,7 +1246,6 @@ export const DATASETS: Dataset[] = [
     url: 'https://www.transportforireland.ie/',
     priority: 80,
     railFamilies: ['rail', 'tram'],
-    railDivisorFromWalk: true,
   },
   {
     id: 2036,
@@ -1277,7 +1257,6 @@ export const DATASETS: Dataset[] = [
     url: 'https://www.gov.il/he/pages/gtfs_general_transit_feed_specifications',
     priority: 80,
     railFamilies: ['rail', 'tram'],
-    railDivisorFromWalk: true,
   },
   {
     id: 2037,
@@ -1301,7 +1280,6 @@ export const DATASETS: Dataset[] = [
     url: 'https://dati.toscana.it/',
     priority: 80,
     railFamilies: ['rail', 'tram'],
-    railDivisorFromWalk: true,
   },
   {
     id: 2044,
@@ -1324,7 +1302,6 @@ export const DATASETS: Dataset[] = [
     url: 'https://datos.cdmx.gob.mx/dataset/gtfs',
     priority: 80,
     railFamilies: ['rail', 'tram'],
-    railDivisorFromWalk: true,
   },
   {
     id: 2066,
@@ -1336,7 +1313,6 @@ export const DATASETS: Dataset[] = [
     url: 'https://mkuran.pl/gtfs/',
     priority: 80,
     railFamilies: ['rail', 'tram'],
-    railDivisorFromWalk: true,
   },
   {
     id: 2067,
@@ -1348,7 +1324,6 @@ export const DATASETS: Dataset[] = [
     url: 'https://publico.cp.pt/gtfs',
     priority: 80,
     railFamilies: ['rail', 'tram'],
-    railDivisorFromWalk: true,
   },
   {
     id: 2073,
@@ -1360,7 +1335,6 @@ export const DATASETS: Dataset[] = [
     url: 'https://www.trafiklab.se/',
     priority: 80,
     railFamilies: ['rail', 'tram'],
-    railDivisorFromWalk: true,
   },
   {
     id: 2075,
@@ -1372,7 +1346,6 @@ export const DATASETS: Dataset[] = [
     url: null,
     priority: 80,
     railFamilies: ['rail', 'tram'],
-    railDivisorFromWalk: true,
   },
   {
     // 9000 + ISO-3166 numeric (RU = 643) + 1 — roads took 9643, railway takes 9644.

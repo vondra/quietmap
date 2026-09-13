@@ -1,5 +1,7 @@
 """World publication must respect data dependencies, memory admission and immutable inputs."""
 
+import contextlib
+import io
 import json
 import os
 from unittest.mock import patch
@@ -21,6 +23,56 @@ spec.loader.exec_module(world)
 
 
 class WorldBuildTest(unittest.TestCase):
+    def test_resume_plan_never_starts_producers_or_rewrites_build_state(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()):
+            root = Path(directory)
+            output, scratch = root / 'output', root / 'scratch'
+            output.mkdir()
+            scratch.mkdir()
+            source = root / 'planet.pbf'
+            source.write_text('frozen')
+            config = root / 'build.toml'
+            config.write_text('[build]\nas_of_date="20260909"\naircraft_anchor="2026-09"\n'
+                              'memory_gib=80\nthreads=4\n[sources]\n')
+            state_path = output / world.STATE_NAME
+            state_path.write_text('retained build state')
+            with patch.object(sys, 'argv', ['build-world.py', '--config', str(config),
+                         '--output', str(output), '--scratch', str(scratch), '--resume-plan']), \
+                    patch.object(world, 'source_paths', return_value={'planet': source}), \
+                    patch.object(world, 'build_plan', return_value=(output / 'prepared/2026', [])), \
+                    patch.object(world, 'code_inputs', return_value=[]), \
+                    patch.object(world, 'runtime_inputs', return_value=[]), \
+                    patch.object(world, 'raster_inputs', return_value=[]), \
+                    patch.object(world, 'height_inputs', return_value=[]), \
+                    patch.object(world, 'resume_steps', return_value=set()) as resume, \
+                    patch.object(world, 'attach_rasters') as attach, \
+                    patch.object(world, 'pin_digest') as digest, \
+                    patch.object(world.subprocess, 'run') as run, \
+                    patch.dict(os.environ, {}, clear=True):
+                # main changes cwd for producers; restore it even though this plan executes none.
+                previous_cwd = Path.cwd()
+                try:
+                    # The source accessors are stubbed; source keys still describe the real CLI contract.
+                    world.source_paths.return_value.update(rasters=source, ghsl=source, regional_heights=source)
+                    world.main()
+                finally:
+                    os.chdir(previous_cwd)
+                self.assertTrue(resume.call_args.kwargs['dry_run'])
+                run.assert_not_called()
+                attach.assert_not_called()
+                digest.assert_not_called()
+            self.assertEqual(state_path.read_text(), 'retained build state')
+
+    def test_partial_rail_finalization_does_not_restart_routing_on_split_geometry(self):
+        steps = [world.Step('railways', (), ('route',)),
+                 world.Step('railways-finalize', ('railways',), ('finalize',))]
+        started = []
+        def execute(step):
+            started.append(step.name)
+        self.assertEqual(world.run_plan(steps, execute, completed={'railways'}),
+                         {'railways', 'railways-finalize'})
+        self.assertEqual(started, ['railways-finalize'])
+
     def test_changed_removed_added_and_cyclic_sources_cannot_validate_a_generation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -145,6 +197,8 @@ class WorldBuildTest(unittest.TestCase):
             self.assertEqual(indexed['roads'].argv[indexed['roads'].argv.index('--jobs') + 1], '4')
             self.assertEqual(indexed['industrial'].dependencies, ('square-country-city',))
             self.assertEqual(indexed['railways'].dependencies, ('square-country-city',))
+            self.assertEqual(indexed['railways-finalize'].dependencies, ('railways',))
+            self.assertTrue(indexed['railways-finalize'].argv[0].endswith('engine/target/release/railways-finalize'))
             self.assertNotIn('repaint', indexed)
             def execute(step):
                 nonlocal peak

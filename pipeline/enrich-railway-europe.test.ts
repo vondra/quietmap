@@ -9,6 +9,7 @@ import { join, relative } from 'node:path'
 import { tmpdir } from 'node:os'
 import { tableFromIPC } from 'apache-arrow'
 import { enrichGlobalGtfsCountry } from './enrich-railway-europe.js'
+import { listRailIntervals } from './lib/rail-traffic-store.js'
 import { writeSyntheticRailTopology } from './lib/transport-test-fixture.js'
 import { writeRailwaysFixture } from './lib/rail-test-fixture.js'
 
@@ -48,7 +49,7 @@ function writeGreekGtfs(source: string, routes: string): void {
   )
 }
 
-function makePrepared(name: string): { prepared: string; path: string } {
+function makePrepared(name: string): { prepared: string; path: string; square: string } {
   const prepared = join(TEMP, name)
   const directory = squareDirectory(prepared, 38, 23)
   mkdirSync(directory, { recursive: true })
@@ -74,18 +75,13 @@ function makePrepared(name: string): { prepared: string; path: string } {
     },
   ]), path)
   writeSyntheticRailTopology(prepared, [relative(prepared, directory)])
-  return { prepared, path }
-}
-
-function values(path: string, column: string): unknown[] {
-  const table = tableFromIPC(readFileSync(path))
-  return [...Array(table.numRows)].map((_, index) => table.getChild(column)!.get(index))
+  return { prepared, path, square: relative(prepared, directory) }
 }
 
 test('real GTFS files stamp heavy rail and tram through one z9 writer and rerun identically', async () => {
   const source = join(TEMP, 'source-valid')
   writeGreekGtfs(source, 'route_id,route_type\nrail,2\ntram,0\n')
-  const { prepared, path } = makePrepared('prepared-valid')
+  const { prepared, path, square } = makePrepared('prepared-valid')
   const options = {
     sourceDirectory: source,
     preparedDirectory: prepared,
@@ -99,25 +95,26 @@ test('real GTFS files stamp heavy rail and tram through one z9 writer and rerun 
     {
       country: first.country,
       feeds: first.feeds.map(feed => feed.id),
-      pairs: first.pairs,
+      services: first.services,
       tramStops: first.tramStops,
-      walked: first.walk.pairsWalked,
+      routed: first.walk.servicesGraphEstimated + first.walk.servicesRelationEstimated,
       walkStamped: first.walk.walkStamped,
       extraStamped: first.walk.extraStamped,
     },
     {
       country: 'GR',
       feeds: ['gr'],
-      pairs: 1,
+      services: 1,
       tramStops: 2,
-      walked: 1,
+      routed: 1,
       walkStamped: 1,
       extraStamped: 1,
     },
   )
-  assert.deepEqual(values(path, 'trains_passenger'), [1, 1])
-  assert.deepEqual(values(path, 'trains_freight'), [0, 0])
-  assert.deepEqual(values(path, 'source_id'), [100, 100])
+  const stamped = listRailIntervals(prepared, square)
+  assert.equal(stamped.length, 2)
+  assert.deepEqual(stamped.map(row => row.passenger).sort((a, b) => b - a), [1, 1])
+  assert.ok(stamped.every(row => row.freightStatus === 0))
   const before = readFileSync(path)
   const second = await enrichGlobalGtfsCountry(options)
   assert.equal(second.feeds[0].serviceCacheHits, 1)
@@ -126,8 +123,8 @@ test('real GTFS files stamp heavy rail and tram through one z9 writer and rerun 
   writeGreekGtfs(source, 'route_id,route_type\nbus,3\n')
   const retracted = await enrichGlobalGtfsCountry(options)
   assert.equal(retracted.walk.retracted, 2)
-  assert.deepEqual(values(path, 'trains_passenger'), [0, 0])
-  assert.deepEqual(values(path, 'source_id'), [0, 0])
+  assert.equal(listRailIntervals(prepared, square).length, 0)
+  assert.deepEqual(readFileSync(path), before)
   assert.equal(tableFromIPC(readFileSync(path)).getChild('parallel_divisor'), null)
 })
 

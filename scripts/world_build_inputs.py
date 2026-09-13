@@ -1,5 +1,7 @@
 """Freeze world-build input identities and attach a complete native raster year."""
 
+from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -108,8 +110,14 @@ def load_pin(path):
     return rows
 
 
-def repin_inputs(path, roots, repo):
-    """Keep the old pin unless every changed input belongs to the code checkout."""
+def pin_digest(path):
+    with Path(path).open('rb') as source:
+        return hashlib.file_digest(source, 'sha256').hexdigest()
+
+
+@contextmanager
+def repin_inputs(path, roots, frozen_roots):
+    """Prepare a source-checked pin; the caller publishes it after durable receipt invalidation."""
     previous = {row['path']: row for row in load_pin(path)} if path.exists() else {}
     if not previous:
         raise ValueError('cannot resume without the previous input pin; retained work needs inspection')
@@ -119,16 +127,14 @@ def repin_inputs(path, roots, repo):
         current = {row['path']: row for row in load_pin(candidate)}
         changed = sorted(name for name in previous.keys() | current.keys()
                          if previous.get(name) != current.get(name))
-        def is_code(name):
-            relative = Path(name).relative_to(repo) if Path(name).is_relative_to(repo) else None
-            return relative is not None and (relative.parts[0] in ('engine', 'scripts')
-                or relative == Path('rust-toolchain.toml')
-                or (relative.parts[0] == 'pipeline' and 'node_modules' not in relative.parts))
-        sources = [name for name in changed if not is_code(name)]
+        frozen = {Path(root).absolute() for root in frozen_roots}
+        # Source roots come from the unchanged build configuration; code and
+        # runtime upgrades instead invalidate receipts through the reviewed pin.
+        sources = [name for name in changed
+                   if any(parent in frozen for parent in (Path(name), *Path(name).parents))]
         if sources:
             raise ValueError(f'cannot resume: {len(sources)} frozen sources changed; examples: {sources[:5]}')
-        os.replace(candidate, path)
-        return changed
+        yield candidate, changed
     finally:
         candidate.unlink(missing_ok=True)
 
@@ -193,6 +199,8 @@ def audit_world(prepared):
                 metadata = reader.schema.metadata or {}
                 if path.stem == 'structures' and metadata.get(CONTRACT_KEY.encode()) != CONTRACT_VERSION.encode():
                     raise ValueError(f'invalid structure contract: {path}')
+                if path.stem == 'railways' and metadata.get(b'rail_traffic_contract') != b'1':
+                    raise ValueError(f'unfinished railway traffic: {path}')
                 if path.stem in ('roads', 'railways', 'industrial'):
                     key, value = expected_contract(path)
                     if metadata.get(key) != value:
@@ -204,8 +212,8 @@ def audit_world(prepared):
                     rows += batch.num_rows
                 # The merge's plain chunks carry no z14 envelope; the popup would read
                 # the whole table. A 0-row table has nothing to prune and no key.
-                if path.stem == 'structures' and rows and b'qm_blocks' not in metadata:
-                    raise ValueError(f'unfinished structures blocks: {path}')
+                if path.stem in ('structures', 'railways') and rows and b'qm_blocks' not in metadata:
+                    raise ValueError(f'unfinished {path.stem} blocks: {path}')
                 counts[path.stem] = counts.get(path.stem, 0) + rows
         squares += 1
     if squares != qmgrid.Z9_AXIS ** 2:

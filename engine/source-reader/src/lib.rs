@@ -12,6 +12,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub mod aircraft_v6;
 pub mod query;
+pub mod rail_traffic;
 pub mod square_obstacle_index;
 pub mod structure_store;
 pub mod structures_finalize;

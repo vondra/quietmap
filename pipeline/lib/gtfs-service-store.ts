@@ -6,11 +6,13 @@ import { dirname, join, resolve } from 'node:path'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { readCsvRows, readGtfsStopTimes } from './gtfs-csv.js'
 import { computeActiveTripFamiliesForFeed, loadStopsWithCoords, RAIL_TYPES,
-  readGtfsTripDepartureMultipliers, resolveStopViaParent } from './gtfs-enrich-core.js'
+  readGtfsTripDepartureMultipliers, resolveStopViaParent, type GtfsServiceWindow } from './gtfs-enrich-core.js'
 
 export interface GtfsServiceOptions {
   familyOf?: (routeType: number) => 'rail' | null
   dateSelection?: (calendarRows: Record<string, string>[]) => string
+  /** Window the freshness gate derived for this feed; bounds which service days are selectable. */
+  serviceWindow?: GtfsServiceWindow
   /** Identity of caller-supplied family/date policy, including captured values. */
   optionsKey?: string
   cachePath?: string
@@ -142,7 +144,8 @@ function shapeDistance(value: string): number | null {
 
 async function importServices(database: DatabaseSync, directory: string, options: GtfsServiceOptions): Promise<ServiceProvenance> {
   const selected = await computeActiveTripFamiliesForFeed(directory,
-    options.familyOf ?? (routeType => RAIL_TYPES.has(routeType) ? 'rail' : null), options.dateSelection)
+    options.familyOf ?? (routeType => RAIL_TYPES.has(routeType) ? 'rail' : null), options.dateSelection,
+    options.serviceWindow)
   const provenance: ServiceProvenance = { targetDate: selected.targetDate, calendarPresent: selected.calendarPresent,
     activeTripCount: selected.tripFam.size, tripsWithStopTimes: 0, stopTimesLines: 0, tripsWithShape: 0,
     frequenciesPresent: existsSync(join(directory, 'frequencies.txt')), fromCache: false }
@@ -212,7 +215,10 @@ async function importServices(database: DatabaseSync, directory: string, options
 }
 
 export async function openGtfsServices(extractDir: string, options: GtfsServiceOptions = {}): Promise<GtfsServiceStore> {
-  const directory = resolve(extractDir), inputs = inputIdentity(directory), policy = options.optionsKey ?? 'default'
+  const directory = resolve(extractDir), inputs = inputIdentity(directory)
+  // The window is part of the cache identity: a store built under an older, narrower window
+  // selected a different service day and must never be served as this window's answer.
+  const policy = JSON.stringify([options.optionsKey ?? 'default', options.serviceWindow ?? null])
   const cachePath = options.cachePath ? resolve(options.cachePath) : undefined
   if (cachePath) {
     const cached = cachedServices(cachePath, directory, inputs, policy)

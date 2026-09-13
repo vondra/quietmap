@@ -15,15 +15,9 @@ use crate::*;
 /// clustering from 58.208 ms to 8.125 ms.
 const RAIL_TRACK_LINK_M: f64 = 150.0;
 
-/// Memo key for `REACH_CACHE`: `(rail_type, country ISO, city_id, continent, speed bits, pax bits, frt bits)`.
-type ReachKey = (u8, [u8; 2], u16, u8, u64, u64, u64);
+type ReachKey = (u8, u64, [u64; 3], [u64; 3]);
 
 thread_local! {
-    /// Exact-key memo for `rail_reach_m` — see the comment at the call site.
-    /// Keyed on raw f64 bits (no quantization semantics to reason about) plus the
-    /// country code (C1's per-region split changes the solved reach). Per-thread:
-    /// no lock, and a pure function of its key, so whichever thread runs the
-    /// kernel fills its own.
     static REACH_CACHE: std::cell::RefCell<std::collections::HashMap<ReachKey, f64>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
@@ -197,19 +191,12 @@ pub(crate) fn compute_railways(
         // accumulator (kept harmless) but no longer feed `RailMetadata`.
         dominant_segment_idx: i16,
         dominant_distance_m: f64,
-        dominant_trains_passenger_raw: f64,
-        dominant_trains_freight_raw: f64,
-        dominant_trains_passenger_effective: f64,
-        dominant_trains_freight_effective: f64,
-        dominant_trains_passenger_source: &'static str,
-        dominant_trains_freight_source: &'static str,
-        dominant_source_id: u16,
+        dominant_traffic: crate::normalize::RailTraffic,
         dominant_maxspeed_posted: u16,
         dominant_speed_used: f64,
         dominant_speed_source: &'static str,
         dominant_service: bool,
         dominant_highspeed: bool,
-        dominant_parallel_divisor: u8,
         // Aggregation
         segment_count: u32,
         total_length_m: f64,
@@ -219,21 +206,14 @@ pub(crate) fn compute_railways(
         obstacle_max_height: f64,
         obstacle_max_segment_idx: i16,
         variants: [PropagationVariants; 3],
-        emission_energy: f64,
+        emission_energy: [f64; 3],
         line_coords: Vec<[[f64; 2]; 2]>,
         dominant_bridge: bool,
-        dominant_energy: f64,
+        dominant_lden_db: f64,
         dominant_trace_idx: Option<usize>,
     }
     let mut rails_by_key: HashMap<(String, String, u8, Option<i64>), RailAccum> = HashMap::new();
 
-    // SquareCountryCity resolved once per call — the receiver position is constant across
-    // segments. Drives the C1 per-region day/evening/night split (EU freight
-    // runs ~55 % at night vs ~33 % world), shared with the heatmap loader + the
-    // reach solver via `railway::rail_time_dist` (exact mirror of compute_roads).
-    // M5: a row's own baked SquareCountryCity overrides this per segment below.
-    let receiver_square_country_city =
-        crate::square_country_city::square_country_city_for_latlng(receiver.lat, receiver.lon);
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
 
     // ── Pass 1: admission gates + the skyline growth chain (sequential) ──
@@ -242,10 +222,6 @@ pub(crate) fn compute_railways(
     struct RailPre {
         rail_type: RailType,
         speed: f64,
-        q_pax: f64,
-        q_frt: f64,
-        /// C1 per-region (pax_pct, frt_pct, hours) triplets, resolved from the
-        /// segment's square_country_city on the scheduler thread.
         periods: [(f64, f64, f64); 3],
         src_alt: f64,
         d_slant: f64,
@@ -264,50 +240,21 @@ pub(crate) fn compute_railways(
         }
 
         let rail_type = RailType::from_u8(seg.rail_type);
-        let speed = if seg.speed_kmh > 0.0 {
-            seg.speed_kmh
-        } else {
-            80.0
-        };
-        let q_pax = seg.trains_passenger.max(0.0);
-        let q_frt = seg.trains_freight.max(0.0);
-        if q_pax + q_frt <= 0.0 {
+        let speed = seg.speed_kmh;
+        if seg.traffic.is_silent() {
             continue;
         }
-        // The row's own baked SquareCountryCity (plan M5) when its batch carried one,
-        // else the receiver SquareCountryCity (pre-bake behaviour, unchanged).
-        let square_country_city = seg
-            .square_country_city
-            .unwrap_or(receiver_square_country_city);
-        // Per-row audibility reach: this segment's own 25 dB Lden crossing,
-        // clamped [2 km, 10 km]. The heatmap loader sets the identical value on
-        // each `LineRow` from the SAME `rail_reach_m` solver (the popup's
-        // `RailSegment.trains_*` are already the effective post-scaling counts),
-        // so popup and heatmap cull at the same distance by construction — no
-        // blanket constant, no magic-number drift.
-        //
-        // Memoized per worker thread: segments materialize per QUERY, and the
-        // 40-step bisection (~µs) × thousands of in-ceiling segments would
-        // re-pay ~5-10 ms on every popup (Codex /gg on 48085647). Effective
-        // (type, speed, counts) tuples collapse onto a handful of defaults,
-        // so an exact-key cache hits ~99%.
-        let reach_m = REACH_CACHE.with(|c| {
-            // Full square_country_city triplet in the key: rail reach is ISO-only today, but
-            // the moment a per-country override keyed on anything else lands,
-            // an ISO-only key would serve a stale reach with no test failing
-            // (/gg M4/M5 #5). A tuple of Copy primitives costs nothing extra.
+        let reach_m = REACH_CACHE.with(|cache| {
             let key = (
                 seg.rail_type,
-                square_country_city.country_iso,
-                square_country_city.city_id,
-                square_country_city.continent as u8,
                 speed.to_bits(),
-                q_pax.to_bits(),
-                q_frt.to_bits(),
+                seg.traffic.passenger.periods.map(f64::to_bits),
+                seg.traffic.freight.periods.map(f64::to_bits),
             );
-            *c.borrow_mut().entry(key).or_insert_with(|| {
-                railway::rail_reach_m(square_country_city, rail_type, speed, q_pax, q_frt)
-            })
+            *cache
+                .borrow_mut()
+                .entry(key)
+                .or_insert_with(|| railway::rail_reach_m(rail_type, speed, seg.traffic))
         });
         if seg.dist_m > reach_m {
             continue;
@@ -320,12 +267,7 @@ pub(crate) fn compute_railways(
             continue;
         }
 
-        // C1 per-region, per-category day/evening/night split for THIS segment's
-        // type (trams take the urban pax curve; only RailType::Rail in an EU
-        // region gets the night-heavy freight share). Same table the heatmap
-        // loader + reach solver consume → popup-vs-heatmap parity by construction.
-        let td = railway::rail_time_dist(square_country_city, rail_type);
-        let periods = td.periods();
+        let periods = seg.traffic.periods();
 
         // Early exit: skip only if the LOUDEST period's free-field is below
         // threshold — a true upper bound, so no audible-in-any-period segment is
@@ -336,17 +278,11 @@ pub(crate) fn compute_railways(
         {
             let me = periods
                 .iter()
-                .map(|&(pax_pct, frt_pct, hours)| {
-                    railway::railway_emission(
-                        rail_type,
-                        speed,
-                        q_pax * pax_pct,
-                        q_frt * frt_pct,
-                        hours,
-                    )
-                    .iter()
-                    .cloned()
-                    .fold(f64::NEG_INFINITY, f64::max)
+                .map(|&(passenger, freight, hours)| {
+                    railway::railway_emission(rail_type, speed, passenger, freight, hours)
+                        .iter()
+                        .cloned()
+                        .fold(f64::NEG_INFINITY, f64::max)
                 })
                 .fold(f64::NEG_INFINITY, f64::max);
             if geo::below_free_field_threshold_line(me, seg.dist_m, 0.0) {
@@ -381,8 +317,6 @@ pub(crate) fn compute_railways(
             RailPre {
                 rail_type,
                 speed,
-                q_pax,
-                q_frt,
                 periods,
                 src_alt,
                 d_slant,
@@ -395,7 +329,7 @@ pub(crate) fn compute_railways(
     // ── Pass 2: per-segment evaluation (parallel, bit-deterministic) ──
     struct RailSegOut {
         seg_variants: [PropagationVariants; 3],
-        day_emission_energy: f64,
+        period_emission_energy: [f64; 3],
         ground_g: f64,
         /// Tallest vector obstacle on the characteristic-point path.
         seg_max_bh: f64,
@@ -415,7 +349,7 @@ pub(crate) fn compute_railways(
             },
             |(path_profile, arc_scratch, cand_scratch), (seg_i, p)| {
                 let seg = &railways[*seg_i];
-                let (rail_type, speed, q_pax, q_frt) = (p.rail_type, p.speed, p.q_pax, p.q_frt);
+                let (rail_type, speed) = (p.rail_type, p.speed);
                 let (src_alt, d_slant) = (p.src_alt, p.d_slant);
                 // Finite-line geometry runs on the perpendicular distance to
                 // the segment's INFINITE line paired with the signed foot
@@ -525,16 +459,11 @@ pub(crate) fn compute_railways(
                     PropagationVariants::default(),
                     PropagationVariants::default(),
                 ];
-                let mut day_emission_energy = 0.0f64;
+                let mut period_emission_energy = [0.0f64; 3];
                 let mut period_emissions: [[f64; NUM_BANDS]; 3] = [[0.0; NUM_BANDS]; 3];
-                for (pi, &(pax_pct, frt_pct, hours)) in p.periods.iter().enumerate() {
-                    let emission = railway::railway_emission(
-                        rail_type,
-                        speed,
-                        q_pax * pax_pct,
-                        q_frt * frt_pct,
-                        hours,
-                    );
+                for (pi, &(passenger, freight, hours)) in p.periods.iter().enumerate() {
+                    let emission =
+                        railway::railway_emission(rail_type, speed, passenger, freight, hours);
                     let v = iso9613::propagate_variants_cnossos_ground_full(
                         &emission,
                         d_slant,
@@ -547,15 +476,10 @@ pub(crate) fn compute_railways(
                         flc,
                     );
                     seg_variants[pi].add(&v);
-                    if pi == 0 {
-                        // Band energy sum (`j` indexes `emission`); f64 accumulation
-                        // order is part of popup byte parity — kept as an index loop.
-                        #[allow(clippy::needless_range_loop)]
-                        for j in 0..NUM_BANDS {
-                            day_emission_energy += crate::propagation::iso9613::fast_exp_f64(
-                                emission[j] * std::f64::consts::LN_10 * 0.1,
-                            );
-                        }
+                    for band in emission {
+                        period_emission_energy[pi] += crate::propagation::iso9613::fast_exp_f64(
+                            band * std::f64::consts::LN_10 * 0.1,
+                        );
                     }
                     period_emissions[pi] = emission;
                 }
@@ -582,8 +506,6 @@ pub(crate) fn compute_railways(
                         ground_g,
                         ground_bands,
                         reflection_boost_db: reflection,
-                        q_pax,
-                        q_frt,
                         speed_kmh: speed,
                         path_profile: std::mem::take(path_profile),
                         terrain,
@@ -598,7 +520,7 @@ pub(crate) fn compute_railways(
 
                 RailSegOut {
                     seg_variants,
-                    day_emission_energy,
+                    period_emission_energy,
                     ground_g,
                     seg_max_bh,
                     trace,
@@ -633,7 +555,7 @@ pub(crate) fn compute_railways(
     // ── Pass 3: accumulation, in segment order (sequential) ──
     for ((seg_i, p), mut out) in pre.iter().zip(outs) {
         let seg = &railways[*seg_i];
-        let (rail_type, speed, q_pax, q_frt) = (p.rail_type, p.speed, p.q_pax, p.q_frt);
+        let (rail_type, speed) = (p.rail_type, p.speed);
         let (src_alt, d_slant) = (p.src_alt, p.d_slant);
         let (seg_variants, ground_g) = (out.seg_variants, out.ground_g);
         add_segment_to_total(&mut total_energy, &seg_variants);
@@ -681,19 +603,12 @@ pub(crate) fn compute_railways(
             src_height: src_alt,
             dominant_segment_idx: 0,
             dominant_distance_m: 0.0,
-            dominant_trains_passenger_raw: 0.0,
-            dominant_trains_freight_raw: 0.0,
-            dominant_trains_passenger_effective: 0.0,
-            dominant_trains_freight_effective: 0.0,
-            dominant_trains_passenger_source: "default_by_type",
-            dominant_trains_freight_source: "default_by_type",
-            dominant_source_id: 0,
+            dominant_traffic: crate::normalize::RailTraffic::default(),
             dominant_maxspeed_posted: 0,
             dominant_speed_used: 0.0,
             dominant_speed_source: "type_default",
             dominant_service: false,
             dominant_highspeed: false,
-            dominant_parallel_divisor: 1,
             segment_count: 0,
             total_length_m: 0.0,
             obstacle_segment_count: 0,
@@ -705,10 +620,10 @@ pub(crate) fn compute_railways(
                 PropagationVariants::default(),
                 PropagationVariants::default(),
             ],
-            emission_energy: 0.0,
+            emission_energy: [0.0; 3],
             line_coords: Vec::new(),
             dominant_bridge: false,
-            dominant_energy: 0.0,
+            dominant_lden_db: f64::NEG_INFINITY,
             dominant_trace_idx: None,
         });
         // Aggregation
@@ -731,8 +646,8 @@ pub(crate) fn compute_railways(
         #[allow(clippy::needless_range_loop)]
         for pi in 0..3 {
             acc.variants[pi].add(&seg_variants[pi]);
+            acc.emission_energy[pi] += out.period_emission_energy[pi];
         }
-        acc.emission_energy += out.day_emission_energy;
         if seg.dist_m < acc.min_dist {
             acc.min_dist = seg.dist_m;
             acc.min_d_slant = d_slant;
@@ -745,30 +660,23 @@ pub(crate) fn compute_railways(
             .push([[seg.start_lon, seg.start_lat], [seg.end_lon, seg.end_lat]]);
 
         // Dominant segment — highest received energy drives the popup display
-        // metadata (speed, train counts, service, highspeed, parallel_divisor),
+        // metadata (speed, prepared traffic, service and highspeed),
         // mirroring the road pattern at line ~720. The gate runs OUTSIDE the
         // trace block so the metadata is correct even when traces aren't being
         // collected. `crosses_dominant` is reused inside the trace block to
         // tag the corresponding `dominant_trace_idx` without re-comparing.
-        let seg_energy: f64 = seg_variants[0].full_energy;
-        let crosses_dominant = seg_energy > acc.dominant_energy;
+        let segment_lden_db = PropagationVariants::lden_from_periods(
+            &seg_variants[0],
+            &seg_variants[1],
+            &seg_variants[2],
+            |v| v.full_energy,
+        );
+        let crosses_dominant = segment_lden_db > acc.dominant_lden_db;
         if crosses_dominant {
-            acc.dominant_energy = seg_energy;
+            acc.dominant_lden_db = segment_lden_db;
             acc.dominant_segment_idx = seg.segment_idx;
             acc.dominant_distance_m = seg.dist_m;
-            acc.dominant_trains_passenger_raw = seg.trains_passenger;
-            acc.dominant_trains_freight_raw = seg.trains_freight;
-            acc.dominant_trains_passenger_effective = q_pax;
-            acc.dominant_trains_freight_effective = q_frt;
-            acc.dominant_trains_passenger_source = match seg.trains_passenger_source {
-                0 => "arrow",
-                _ => "default_by_type",
-            };
-            acc.dominant_trains_freight_source = match seg.trains_freight_source {
-                0 => "arrow",
-                _ => "default_by_type",
-            };
-            acc.dominant_source_id = seg.source_id;
+            acc.dominant_traffic = seg.traffic;
             acc.dominant_maxspeed_posted = seg.maxspeed;
             acc.dominant_speed_used = speed;
             acc.dominant_speed_source = match seg.speed_source {
@@ -782,7 +690,6 @@ pub(crate) fn compute_railways(
             acc.dominant_osm_id = seg.osm_id;
             acc.dominant_usage_u8 = seg.usage;
             acc.dominant_bridge = seg.bridge;
-            acc.dominant_parallel_divisor = seg.parallel_divisor.max(1);
         }
 
         // Popup trace: push pass 2's prebuilt trace (segment order preserved)
@@ -849,21 +756,20 @@ pub(crate) fn compute_railways(
         // fields — closest mis-represented audible traffic whenever a busy
         // mainline sat farther than a quiet siding.
         let rail_meta = RailMetadata {
-            trains_passenger_raw: acc.dominant_trains_passenger_raw,
-            trains_freight_raw: acc.dominant_trains_freight_raw,
-            trains_passenger_source: acc.dominant_trains_passenger_source,
-            trains_freight_source: acc.dominant_trains_freight_source,
-            source_id: acc.dominant_source_id,
+            traffic: acc.dominant_traffic,
+            passenger_provenance: crate::sources::dataset_meta(
+                acc.dominant_traffic.passenger.source_id,
+            ),
+            freight_provenance: crate::sources::dataset_meta(
+                acc.dominant_traffic.freight.source_id,
+            ),
             maxspeed_posted_kmh: acc.dominant_maxspeed_posted,
-            trains_passenger_effective: acc.dominant_trains_passenger_effective,
-            trains_freight_effective: acc.dominant_trains_freight_effective,
             speed_kmh: acc.dominant_speed_used,
             speed_source: acc.dominant_speed_source,
             rail_type: rail_type_name(acc.rail_type_u8),
             usage: rail_usage_name(acc.dominant_usage_u8),
             service: acc.dominant_service,
             highspeed: acc.dominant_highspeed,
-            parallel_divisor: acc.dominant_parallel_divisor,
             dominant_segment_idx: acc.dominant_segment_idx,
             dominant_distance_m: acc.dominant_distance_m,
             closest_distance_m: acc.min_dist,
@@ -878,7 +784,6 @@ pub(crate) fn compute_railways(
             },
             obstacle_max_height_m: (acc.obstacle_max_height * 10.0).round() / 10.0,
             obstacle_max_segment_idx: acc.obstacle_max_segment_idx,
-            provenance: crate::sources::dataset_meta(acc.dominant_source_id),
         };
 
         contributors.push(Contributor {
@@ -901,7 +806,11 @@ pub(crate) fn compute_railways(
             distance_m: acc.min_dist,
             periods: rail_periods,
             periods_free: free_periods,
-            emission_db: 10.0 * acc.emission_energy.max(1e-12).log10(),
+            emission_db: periods::compute_lden(
+                PropagationVariants::to_db(acc.emission_energy[0]),
+                PropagationVariants::to_db(acc.emission_energy[1]),
+                PropagationVariants::to_db(acc.emission_energy[2]),
+            ),
             baseline: iso9613::compute_baseline(
                 acc.min_d_slant,
                 SourceGeometry::Line,
@@ -958,10 +867,7 @@ mod tests {
         city_id: 0,
     };
 
-    /// Freight-heavy mainline (100 pax + 40 freight @ 120 km/h) 500 m from
-    /// the receiver — the shape the loader tests prove flips night/day under
-    /// the EU split. Tests never point the square-country-city cache at a tree → receiver UNKNOWN →
-    /// world split when the channel is unset.
+    /// Prepared freight-heavy mainline, 500 m from the receiver.
     fn mainline_segment() -> RailSegment {
         RailSegment {
             osm_id: 1,
@@ -975,8 +881,18 @@ mod tests {
             rail_type: 0,
             usage: 0,
             maxspeed: 120,
-            trains_passenger: 100.0,
-            trains_freight: 40.0,
+            traffic: crate::normalize::RailTraffic {
+                passenger: crate::normalize::RailCategoryTraffic {
+                    periods: [70.0, 20.0, 10.0],
+                    status: 2,
+                    ..Default::default()
+                },
+                freight: crate::normalize::RailCategoryTraffic {
+                    periods: [20.0, 6.666666666666667, 13.333333333333334],
+                    status: 2,
+                    ..Default::default()
+                },
+            },
             speed_kmh: 120.0,
             track_count: 1,
             name: String::new(),
@@ -985,11 +901,7 @@ mod tests {
             tunnel: false,
             service: false,
             highspeed: false,
-            parallel_divisor: 1,
             speed_source: 0,
-            trains_passenger_source: 0,
-            trains_freight_source: 0,
-            source_id: 0,
             dist_m: 500.0,
             cp_lat: 50.0,
             cp_lon: 14.0035,
@@ -1149,30 +1061,25 @@ mod tests {
         assert_eq!(bits(clustered), bits(single_group));
     }
 
-    /// Gate (d) popup: the EU vs world period split follows the SEGMENT's
-    /// baked ISO, not the receiver's SquareCountryCity.
     #[test]
-    fn baked_iso_drives_eu_split() {
-        let baked = |square_country_city| {
-            [RailSegment {
-                square_country_city: Some(square_country_city),
-                ..mainline_segment()
-            }]
+    fn prepared_periods_ignore_query_country_and_night_only_keeps_metadata() {
+        let mut segment = mainline_segment();
+        segment.traffic.passenger.periods = [0.0, 0.0, 0.25];
+        segment.traffic.freight.periods = [0.0; 3];
+        segment.traffic.passenger.source_id = 7;
+        segment.square_country_city = Some(CZ);
+        let eu = periods_for(std::slice::from_ref(&segment));
+        segment.square_country_city = Some(TH);
+        let world = periods_for(std::slice::from_ref(&segment));
+        assert_eq!(eu.lden_db.to_bits(), world.lden_db.to_bits());
+        assert!(world.ln_db > world.ld_db);
+        let contributors = contributors_for(std::slice::from_ref(&segment));
+        assert!(contributors[0].emission_db > 0.0);
+        let Some(SourceMetadata::Rail(metadata)) = &contributors[0].metadata else {
+            panic!("missing rail metadata")
         };
-        let eu = periods_for(&baked(CZ));
-        let world = periods_for(&baked(TH));
-        assert!(
-            eu.ln_db > eu.ld_db,
-            "baked CZ: EU freight night {:.2} must exceed day {:.2}",
-            eu.ln_db,
-            eu.ld_db
-        );
-        assert!(
-            world.ld_db > world.ln_db,
-            "baked TH: world day {:.2} must exceed night {:.2}",
-            world.ld_db,
-            world.ln_db
-        );
+        assert_eq!(metadata.traffic, segment.traffic);
+        assert_eq!(metadata.speed_kmh, segment.speed_kmh);
     }
 
     /// Six ways across one tram street stay one visitor-facing source row.

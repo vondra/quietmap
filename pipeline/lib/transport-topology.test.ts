@@ -149,6 +149,7 @@ test('physical passages clip acoustic pieces across squares and retain the order
   assert.deepEqual(outward.map(piece => [piece.segmentIndex, piece.from, piece.to]), [[10, 0, 600], [20, 600, 600.25]])
   assert.deepEqual(inward.map(piece => [piece.segmentIndex, piece.from, piece.to]), [[20, 600.25, 600], [10, 600, 0]])
   assert.equal([...outward, ...inward].reduce((sum, piece) => sum + Math.abs(piece.to - piece.from), 0), 1200.5)
+  assert.deepEqual(topology.pieceExtent(id, 10), { square, from: 0, to: 600 })
   assert.throws(() => topology.passagePieces({ way: id, from: 0, to: 1001 }), /invalid source passage/)
   {
     using database = new DatabaseSync(transportTopologyPath(prepared))

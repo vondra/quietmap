@@ -86,13 +86,11 @@ export function validateMetadata(value, sourceType, path) {
         'bridge_count', 'obstacle_segment_count', 'obstacle_avg_height_m',
         'obstacle_max_height_m', 'obstacle_max_segment_idx'], ['provenance']],
     rail: [
-      ['kind', 'trains_passenger_raw', 'trains_freight_raw', 'trains_passenger_source',
-        'trains_freight_source', 'source_id', 'maxspeed_posted_kmh',
-        'trains_passenger_effective', 'trains_freight_effective', 'speed_kmh',
-        'speed_source', 'rail_type', 'usage', 'service', 'highspeed', 'parallel_divisor',
+      ['kind', 'traffic', 'passenger_provenance', 'freight_provenance', 'maxspeed_posted_kmh',
+        'speed_kmh', 'speed_source', 'rail_type', 'usage', 'service', 'highspeed',
         'bridge', 'dominant_segment_idx', 'dominant_distance_m', 'closest_distance_m',
         'segment_count', 'total_length_m', 'obstacle_segment_count',
-        'obstacle_avg_height_m', 'obstacle_max_height_m', 'obstacle_max_segment_idx'], ['provenance']],
+        'obstacle_avg_height_m', 'obstacle_max_height_m', 'obstacle_max_segment_idx'], []],
     building: [['kind', 'height_m', 'floors', 'area_m2', 'building_type', 'address'], []],
     industrial: [['kind', 'area_m2', 'source_type', 'nace', 'grid_point_count', 'source_id', 'provenance'], []],
   }
@@ -100,5 +98,22 @@ export function validateMetadata(value, sourceType, path) {
   const definition = definitions[expectedKind]
   if (!definition || value.kind !== expectedKind) fail(`${path}.kind`, `expected ${expectedKind}`)
   exactKeys(value, path, definition[0], definition[1])
+  if (expectedKind === 'rail') validateRailTraffic(value, path)
   if (Object.hasOwn(value, 'provenance')) validateProvenance(value.provenance, `${path}.provenance`)
+}
+
+export function validateRailTraffic(value, path) {
+  exactKeys(value.traffic, `${path}.traffic`, ['passenger', 'freight'])
+  for (const category of ['passenger', 'freight']) {
+    const traffic = value.traffic[category]
+    const at = `${path}.traffic.${category}`
+    exactKeys(traffic, at, ['periods', 'status', 'source_id', 'matching'])
+    array(traffic.periods, `${at}.periods`, 3)
+    traffic.periods.forEach((count, index) => { finite(count, `${at}.periods[${index}]`); if (count < 0) fail(at, 'negative traffic') })
+    integer(traffic.status, `${at}.status`, 0)
+    integer(traffic.source_id, `${at}.source_id`, 0)
+    integer(traffic.matching, `${at}.matching`, 0)
+    if (traffic.status > 2 || traffic.source_id > 65535 || traffic.matching > 3) fail(at, 'invalid traffic evidence')
+    validateProvenance(value[`${category}_provenance`], `${path}.${category}_provenance`)
+  }
 }

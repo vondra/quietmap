@@ -1,16 +1,17 @@
-/** Dev1 behavior parity and z9 integration tests for the shared railway proxy family. */
+/** Proxy classifications and topology-backed sidecar integration for the railway proxy family. */
 
 import assert from 'node:assert/strict'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { tmpdir } from 'node:os'
 import { after, test } from 'node:test'
-import { tableFromIPC } from 'apache-arrow'
 import {
   RAILWAY_PROXY_SPECS, enrichAllRailwayProxies, enrichRailwayProxyCountry,
   validateRailwayProxyCatalog,
 } from './enrich-railway-proxies.js'
 import { writeRailwaysFixture } from './lib/rail-test-fixture.js'
+import { writeSyntheticRailTopology } from './lib/transport-test-fixture.js'
+import { listRailIntervals } from './lib/rail-traffic-store.js'
 import type { RailwayRow } from './lib/railways-arrow.js'
 
 const TEST_DIRECTORY = mkdtempSync(join(tmpdir(), 'railway-proxies-test-'))
@@ -212,7 +213,7 @@ function z9Directory(prepared: string, latitude: number, longitude: number): str
   return join(prepared, 'z9', String(x), String(y))
 }
 
-test('country runner consumes a disposable square-country-city-baked z9 source and reruns byte-identically', async () => {
+test('country runner writes estimated sidecar claims and reruns without accumulating or changing Arrow', async () => {
   const prepared = join(TEST_DIRECTORY, 'prepared-country')
   const square = z9Directory(prepared, -5.82, 13.45)
   mkdirSync(square, { recursive: true })
@@ -222,6 +223,8 @@ test('country runner consumes a disposable square-country-city-baked z9 source a
   ])
   const target = join(square, 'railways.arrow')
   copyFileSync(source, target)
+  writeSyntheticRailTopology(prepared, [relative(prepared, square)])
+  const before = readFileSync(target)
 
   const first = await enrichRailwayProxyCountry(prepared, 'cd')
   assert.deepEqual({
@@ -232,11 +235,21 @@ test('country runner consumes a disposable square-country-city-baked z9 source a
     skippedForeign: first.skippedForeign,
     squaresUpdated: first.squaresUpdated,
   }, { rows: 2, matched: 1, passenger: 2, freight: 4, skippedForeign: 1, squaresUpdated: 1 })
-  const table = tableFromIPC(readFileSync(target))
-  assert.deepEqual([...Array(2)].map((_, index) => table.getChild('source_id')!.get(index)), [9181, 0])
-  const before = readFileSync(target)
+  const intervals = listRailIntervals(prepared)
+  assert.equal(intervals.length, 1)
+  const claim = intervals[0]
+  assert.deepEqual({ osmId: claim.osmId, sourceId: claim.sourceId, countryIso: claim.countryIso,
+    passenger: claim.passenger, freight: claim.freight,
+    passengerStatus: claim.passengerStatus, freightStatus: claim.freightStatus }, {
+    osmId: 50000, sourceId: 9181, countryIso: 'CD', passenger: 2, freight: 4,
+    passengerStatus: 2, freightStatus: 2,
+  })
+  assert.equal(claim.fromM, 0)
+  assert.ok(claim.toM > claim.fromM)
+  assert.deepEqual(readFileSync(target), before)
   const second = await enrichRailwayProxyCountry(prepared, 'CD')
-  assert.deepEqual({ matched: second.matched, squaresUpdated: second.squaresUpdated }, { matched: 1, squaresUpdated: 0 })
+  assert.equal(second.matched, 1)
+  assert.deepEqual(listRailIntervals(prepared), intervals)
   assert.deepEqual(readFileSync(target), before)
 })
 
@@ -248,12 +261,14 @@ test('country runner preserves dev1 row-bbox eligibility inside a boundary squar
   copyFileSync(writeRailwaysFixture('proxy-boundary-source.arrow', [
     { latitude: -13.51, longitude: 13.45, country: 'CD' },
   ]), target)
+  writeSyntheticRailTopology(prepared, [relative(prepared, square)])
   const before = readFileSync(target)
 
   const result = await enrichRailwayProxyCountry(prepared, 'CD')
   assert.deepEqual({ rows: result.rows, matched: result.matched, squaresUpdated: result.squaresUpdated }, {
     rows: 1, matched: 0, squaresUpdated: 0,
   })
+  assert.deepEqual(listRailIntervals(prepared), [])
   assert.deepEqual(readFileSync(target), before)
 })
 

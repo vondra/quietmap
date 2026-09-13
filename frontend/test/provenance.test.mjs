@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   railTrainSourceLine,
+  railTrafficLabel,
   roadSourceDescription,
 } from '../src/components/noise/provenance.ts'
 
@@ -46,39 +47,14 @@ test('national road proxy is clearly described as an estimate', () => {
   assert.doesNotMatch(description, /\bmeasured\b/i)
 })
 
-test('national rail proxy is clearly described as an estimate', () => {
-  const description = railTrainSourceLine(
-    'arrow',
-    dataset('national-proxy'),
-    'rail',
-  )
-  assert.equal(
-    description,
-    'Example dataset (2024) · CC-BY-4.0\n' +
-      '  (estimated trains/day, not a direct measurement)',
-  )
-  assert.doesNotMatch(description, /\bmeasured\b/i)
-})
-
-test('heuristic and baseline rail counts are explicitly model-derived', () => {
-  assert.equal(
-    railTrainSourceLine('arrow', dataset('heuristic'), 'rail'),
-    'Example dataset (2024) · CC-BY-4.0\n' +
-      '  (estimated trains/day, not a direct measurement)',
-  )
-  assert.equal(
-    railTrainSourceLine('arrow', dataset('baseline'), 'rail'),
-    'Example dataset (2024) · CC-BY-4.0\n' +
-      '  (model-derived trains/day baseline, not an observed count)',
-  )
-})
-
-test('authoritative rail input stays neutral about observed versus scheduled counts', () => {
-  assert.equal(
-    railTrainSourceLine('arrow', dataset('national-measured'), 'rail'),
-    'Example dataset (2024) · CC-BY-4.0\n' +
-      '  (external trains/day input per OSM way)',
-  )
+test('rail categories preserve unknown, known zero, fractional estimates and matching evidence', () => {
+  const passenger = { periods: [0, 0.125, 0], status: 2, source_id: 7, matching: 3 }
+  const freight = { periods: [0, 0, 0], status: 0, source_id: 0, matching: 0 }
+  assert.match(railTrainSourceLine(passenger, dataset('national-measured')), /Estimated traffic/)
+  assert.match(railTrainSourceLine(passenger, null), /relation alignment; estimated graph alignment/)
+  assert.equal(railTrainSourceLine(freight, null), 'Unknown traffic; no count available')
+  assert.equal(railTrainSourceLine({ ...freight, status: 1 }, null), 'Known count')
+  assert.equal(railTrafficLabel({ passenger, freight }), '0.125/day + unknown')
 })
 
 test('a missing tier fails conservatively during a rolling deploy', () => {
@@ -89,20 +65,13 @@ test('a missing tier fails conservatively during a rolling deploy', () => {
   assert.doesNotMatch(description, /estimated AADT/i)
 })
 
-test('an inconsistent none tier stays neutral', () => {
-  const description = railTrainSourceLine('arrow', dataset('none'), 'rail')
-  assert.match(description, /measurement status unavailable/)
-  assert.doesNotMatch(description, /\bmeasured\b/i)
-})
-
 test('missing dataset metadata never falls through to a CNOSSOS default label', () => {
   const road = roadSourceDescription('matched_external', null, 'primary')
-  const rail = railTrainSourceLine('arrow', null, 'rail')
+  const rail = railTrainSourceLine({ periods: [1, 0, 0], status: 2, source_id: 7, matching: 0 }, null)
   assert.match(road, /external road-traffic input/i)
   assert.match(road, /metadata and measurement status unavailable/i)
   assert.doesNotMatch(road, /CNOSSOS/i)
-  assert.match(rail, /external train-count input/i)
-  assert.match(rail, /metadata and measurement status unavailable/i)
+  assert.match(rail, /estimated traffic/i)
   assert.doesNotMatch(rail, /CNOSSOS/i)
 })
 
@@ -129,9 +98,5 @@ test('heuristic and CNOSSOS fallback wording remains explicit', () => {
     roadSourceDescription('estimated_service_tree', dataset('heuristic'), 'residential'),
     'Source: Example dataset (2024) · CC-BY-4.0 — residential class\n' +
       '  (estimated AADT, not a direct measurement)',
-  )
-  assert.equal(
-    railTrainSourceLine('default_by_type', null, 'tram'),
-    'CNOSSOS Annex IV default — tram\n  (no enrichment data)',
   )
 })

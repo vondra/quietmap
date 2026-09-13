@@ -11,6 +11,7 @@ members = [
     "relevant-source-gpu",
     "noise-compute",
     "structures-finalize",
+    "railways-finalize",
     "osm-extract",
     "raster-reader",
     "source-reader",

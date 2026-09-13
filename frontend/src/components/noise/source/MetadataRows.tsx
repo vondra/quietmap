@@ -1,7 +1,7 @@
 import type { Contributor } from '../../../types/noise'
 import { fmt, fmtFloat, fmtInt, fmtCompact, txtTable, type TableRow } from '../../../utils/formatters'
 import { MetricLabel, DataPoint } from '../noise-tooltips'
-import { formatProv, lineRow, railTrainSourceLine, roadSourceDescription, subtypeLabel } from '../shared'
+import { formatProv, lineRow, railTrafficLabel, railTrafficDescription, roadSourceDescription, subtypeLabel } from '../shared'
 
 // Road and rail source helpers are shared with the Noise segments tab
 // (SegmentExpanded), so both views use identical attribution wording. The
@@ -18,12 +18,6 @@ export function MetadataRows({ c }: { c: Contributor }) {
   if (m.kind === 'road') {
     const nomTotal = m.aadt_light_nominal + m.aadt_medium_nominal + m.aadt_heavy_nominal + m.aadt_moto_nominal
     const effTotal = m.aadt_light_effective + m.aadt_medium_effective + m.aadt_heavy_effective + m.aadt_moto_effective
-    // Whole-road total after access/lane coefficients but BEFORE the one-way
-    // split (which is a CNOSSOS per-line-source modeling artefact, not a real
-    // traffic reduction). For a two-way road it equals effective; for a
-    // dual-carriageway mapped as two OSM ways it sums both directions back.
-    const onewayFactor = m.oneway ? 0.5 : 1.0
-    const wholeRoadTotal = effTotal / onewayFactor
     const isDefault = m.traffic_source === 'default_by_class'
     const hasSpeedRange = m.speed_min_kmh < m.speed_max_kmh
     // Derestricted (maxspeed=none, e.g. German Autobahn): no number exists;
@@ -50,14 +44,8 @@ export function MetadataRows({ c }: { c: Contributor }) {
       'Values from the loudest segment.',
       ...(hasSpeedRange ? ['Speed varies across grouped segments.'] : []),
     ], 18, 12)
-    const nomToEff = nomTotal > 0 ? effTotal / nomTotal : 1
-    const accessLaneRatio = nomToEff / onewayFactor
-    const hasAccessLane = Math.abs(accessLaneRatio - 1) > 0.01
-    // Per-category whole-road (= effective / oneway_factor)
-    const wholeLight = m.aadt_light_effective / onewayFactor
-    const wholeMedium = m.aadt_medium_effective / onewayFactor
-    const wholeHeavy = m.aadt_heavy_effective / onewayFactor
-    const wholeMoto = m.aadt_moto_effective / onewayFactor
+    const adjustmentRatio = nomTotal > 0 ? effTotal / nomTotal : 1
+    const hasAdjustment = Math.abs(adjustmentRatio - 1) > 0.01
     const sourceLines = roadSourceDescription(m.traffic_source, m.provenance, m.road_class).split('\n')
     // A baseline provenance record can be speed-only; `default_by_class`
     // remains the source of the traffic count in that case.
@@ -67,28 +55,22 @@ export function MetadataRows({ c }: { c: Contributor }) {
     const trafficText = txtTable([
       ...sourceLines,
       '',
-      'Whole road (both directions):',
-      ...(wholeLight > 0 ? [['  Light', fmtInt(Math.round(wholeLight))] as [string, string]] : []),
-      ...(wholeMedium > 0 ? [['  Medium', fmtInt(Math.round(wholeMedium))] as [string, string]] : []),
-      ...(wholeHeavy > 0 ? [['  Heavy', fmtInt(Math.round(wholeHeavy))] as [string, string]] : []),
-      ...(wholeMoto > 0 ? [['  Moto', fmtInt(Math.round(wholeMoto))] as [string, string]] : []),
+      'Traffic on this road segment:',
+      ...(m.aadt_light_effective > 0 ? [['  Light', fmtInt(Math.round(m.aadt_light_effective))] as [string, string]] : []),
+      ...(m.aadt_medium_effective > 0 ? [['  Medium', fmtInt(Math.round(m.aadt_medium_effective))] as [string, string]] : []),
+      ...(m.aadt_heavy_effective > 0 ? [['  Heavy', fmtInt(Math.round(m.aadt_heavy_effective))] as [string, string]] : []),
+      ...(m.aadt_moto_effective > 0 ? [['  Moto', fmtInt(Math.round(m.aadt_moto_effective))] as [string, string]] : []),
       { sep: true },
-      ['  Total', `${fmtInt(Math.round(wholeRoadTotal))}/day${isDefault ? '*' : ''}`] as [string, string],
+      ['  Total', `${fmtInt(Math.round(effTotal))}/day${isDefault ? '*' : ''}`] as [string, string],
       ...(isDefault ? ['', defaultFootnote] : []),
-      ...(hasAccessLane
+      ...(hasAdjustment
         ? [
             '',
-            'Nominal → whole-road adjustments:',
+            'Adjustment for this segment:',
             ['  Nominal', `${fmtInt(Math.round(nomTotal))}/day`] as [string, string],
-            ['  ', `× ${accessLaneRatio.toFixed(2)} access / lanes`] as [string, string],
+            ['  ', `× ${adjustmentRatio.toFixed(2)} combined adjustment`] as [string, string],
             { sep: true },
-            ['  Whole road', `${fmtInt(Math.round(wholeRoadTotal))}/day`] as [string, string],
-          ]
-        : []),
-      ...(m.oneway
-        ? [
-            '',
-            `One-way ÷ 2 → Lw input per OSM way: ${fmtInt(Math.round(effTotal))}/day`,
+            ['  This segment', `${fmtInt(Math.round(effTotal))}/day`] as [string, string],
           ]
         : []),
       '',
@@ -125,8 +107,8 @@ export function MetadataRows({ c }: { c: Contributor }) {
         )}
         {lineRow(
           <MetricLabel term="aadt">Traffic</MetricLabel>,
-          <DataPoint title="Daily road traffic (both directions)" text={trafficText}>
-            {`${fmtCompact(Math.round(wholeRoadTotal))}/day${isDefault ? '*' : ''}`}
+          <DataPoint title="Daily traffic on this road segment" text={trafficText}>
+            {`${fmtCompact(Math.round(effTotal))}/day${isDefault ? '*' : ''}`}
           </DataPoint>,
         )}
         {lineRow(
@@ -146,16 +128,6 @@ export function MetadataRows({ c }: { c: Contributor }) {
   }
 
   if (m.kind === 'rail') {
-    const effTotal = m.trains_passenger_effective + m.trains_freight_effective
-    const rawTotal = m.trains_passenger_raw + m.trains_freight_raw
-    const nomTotal = rawTotal > 0 ? rawTotal : effTotal
-    // Whole-line trains (pre-parallel-divisor split). For single-track line
-    // equals effective; for a two-track line mapped as two parallel OSM ways
-    // sums both tracks back into the full-line figure.
-    const parallelDivisor = Math.max(1, m.parallel_divisor || 1)
-    const wholeLineTrains = effTotal * parallelDivisor
-    const isDefault = m.trains_passenger_source === 'default_by_type'
-      && m.trains_freight_source === 'default_by_type'
     const speedText = txtTable([
       ['Source', m.speed_source.replace(/_/g, ' ')],
       ['Posted maxspeed', m.maxspeed_posted_kmh > 0 ? `${m.maxspeed_posted_kmh} km/h` : '— (none)'],
@@ -165,47 +137,7 @@ export function MetadataRows({ c }: { c: Contributor }) {
       { sep: true },
       ['Effective', `${m.speed_kmh.toFixed(0)} km/h`],
     ], 18, 14)
-    const trackRatio = nomTotal > 0 ? effTotal / nomTotal : 1
-    const hasPerTrackDiscount = Math.abs(trackRatio - 1) > 0.01
-    const paxSrcLines = m.trains_passenger_raw > 0
-      ? [
-          'Passenger source:',
-          ...railTrainSourceLine(m.trains_passenger_source, m.provenance, m.rail_type).split('\n').map(l => '  ' + l),
-          '',
-        ]
-      : []
-    const frtSrcLines = m.trains_freight_raw > 0
-      ? [
-          'Freight source:',
-          ...railTrainSourceLine(m.trains_freight_source, m.provenance, m.rail_type).split('\n').map(l => '  ' + l),
-          '',
-        ]
-      : []
-    const paxEff = m.trains_passenger_effective
-    const frtEff = m.trains_freight_effective
-    const paxWhole = paxEff * parallelDivisor
-    const frtWhole = frtEff * parallelDivisor
-    const trainsText = txtTable([
-      ...paxSrcLines,
-      ...frtSrcLines,
-      'Whole line (both directions):',
-      ...(paxWhole > 0 ? [['  Passenger', fmtInt(Math.round(paxWhole))] as [string, string]] : []),
-      ...(frtWhole > 0 ? [['  Freight', fmtInt(Math.round(frtWhole))] as [string, string]] : []),
-      { sep: true },
-      ['  Total', `${fmtInt(Math.round(wholeLineTrains))}/day${isDefault ? '*' : ''}`],
-      ...(isDefault ? ['', '* class default (no timetable match)'] : []),
-      ...(hasPerTrackDiscount || m.service
-        ? [
-            '',
-            'Adjustments:',
-            ['  Nominal', `${fmtInt(Math.round(nomTotal))}/day`] as [string, string],
-            ...(m.service ? [['  ', '× 0.02 service track'] as [string, string]] : []),
-            ...(m.parallel_divisor > 1 ? [['  ', `÷ ${m.parallel_divisor} parallel tracks (Lw per track)`] as [string, string]] : []),
-            { sep: true },
-            ['  Per track (Lw input)', `${fmtInt(Math.round(effTotal))}/day`] as [string, string],
-          ]
-        : []),
-    ] as TableRow[], 18, 12)
+    const trainsText = railTrafficDescription(m.traffic, m.passenger_provenance, m.freight_provenance)
     const segmentsText = txtTable([
       ['Microsegments', String(m.segment_count)],
       ['Total length', `${(m.total_length_m / 1000).toFixed(2)} km`],
@@ -225,8 +157,8 @@ export function MetadataRows({ c }: { c: Contributor }) {
         )}
         {lineRow(
           <MetricLabel term="trains">Trains/day</MetricLabel>,
-          <DataPoint title="Daily train count at the energy-dominant (loudest) segment, scaled to a whole-line estimate via that segment's parallel-track divisor. Earlier this was the closest segment — misleading whenever a busy mainline sat farther than a quiet siding." text={trainsText}>
-            {`${fmtInt(Math.round(wholeLineTrains))}/day${isDefault ? '*' : ''}`}
+          <DataPoint title="Expected passages at the loudest segment, with passenger and freight evidence shown separately." text={trainsText}>
+            {railTrafficLabel(m.traffic)}
           </DataPoint>,
         )}
         {lineRow(

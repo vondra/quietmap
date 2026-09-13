@@ -1,5 +1,6 @@
 """Atomic world-build receipts and safe reuse of completed producer steps."""
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import os
@@ -7,7 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from world_build_inputs import repin_inputs
+from world_build_inputs import pin_digest, repin_inputs
 
 STATE_NAME = 'build.json'
 STEPS_NAME = 'steps.jsonl'
@@ -39,10 +40,10 @@ def write_state(output, config, status, **fields):
     write_atomic(path, json.dumps(state, sort_keys=True) + '\n')
 
 
-def record_step(output, receipt):
+def record_steps(output, receipts):
     path = output / STEPS_NAME
     previous = path.read_text() if path.exists() else ''
-    write_atomic(path, previous + json.dumps(receipt, sort_keys=True) + '\n')
+    write_atomic(path, previous + ''.join(json.dumps(row, sort_keys=True) + '\n' for row in receipts))
 
 
 def scope_unit(step):
@@ -67,20 +68,41 @@ def producer_arguments(command):
     return result
 
 
-def completed_steps(path, steps, settings):
+def latest_receipts(path):
     latest = {}
     if path.is_file():
         for line in path.read_text().splitlines():
             if line.strip():
                 row = json.loads(line)
                 latest[row['name']] = row
+    return latest
+
+
+def data_environment(environment):
+    # These values only limit admission or worker count; all other overrides bind data.
+    return {key: value for key, value in environment.items()
+            if key not in ('MAX_THREADS', 'MEMMAX', 'RAYON_NUM_THREADS', 'QM_ROAD_WORKERS')}
+
+
+def step_identity(step, settings, input_pin_sha256):
+    return {'command': producer_command(step, settings),
+            'environment': dict(step.environment), 'input_pin_sha256': input_pin_sha256}
+
+
+def completed_steps(latest, steps, settings, input_pin_sha256, reviewed=()):
     completed = set()
     for step in steps:
         row = latest.get(step.name)
-        if row and row.get('exit') == 0 and step.name != 'structures-finalize':
-            if producer_arguments(row['command']) == producer_arguments(producer_command(step, settings)):
+        if not row or row.get('exit') != 0 or step.name == 'structures-finalize':
+            continue
+        same_command = producer_arguments(row['command']) == producer_arguments(producer_command(step, settings))
+        same_environment = ('environment' in row and
+                            data_environment(row['environment']) == data_environment(dict(step.environment)))
+        reviewed_legacy_environment = step.name in reviewed and 'environment' not in row
+        if same_command and (same_environment or reviewed_legacy_environment):
+            if row.get('input_pin_sha256') == input_pin_sha256 or step.name in reviewed:
                 completed.add(step.name)
-    # Rebuilding an upstream table invalidates every completed consumer of it.
+    # A producer rerun invalidates every consumer, including explicitly reviewed reuse.
     while True:
         stale = {step.name for step in steps if step.name in completed
                  and not set(step.dependencies) <= completed}
@@ -89,7 +111,7 @@ def completed_steps(path, steps, settings):
         completed -= stale
 
 
-def resume_steps(output, config, steps, roots, repo):
+def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry_run=False):
     state = json.loads((output / STATE_NAME).read_text())
     def data_configuration(value):
         return {**value, 'build': {key: item for key, item in value['build'].items()
@@ -102,10 +124,68 @@ def resume_steps(output, config, steps, roots, repo):
         ['systemctl', '--user', '--quiet', 'is-active', scope_unit(step)], check=False).returncode == 0]
     if live:
         raise ValueError(f'cannot resume while producers are alive: {live}')
-    completed = completed_steps(output / STEPS_NAME, steps, config['build'])
-    changed = repin_inputs(output / PIN_NAME, roots, repo)
-    report = {'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
-              'resume': sorted(completed), 'code_changed': changed}
-    write_state(output, config, 'running', resumes=[*state.get('resumes', []), report])
-    print(json.dumps(report), flush=True)
-    return completed
+    pin_path = output / PIN_NAME
+    with repin_inputs(pin_path, roots, frozen_roots) as (candidate, changed):
+        previous_digest, current_digest = pin_digest(pin_path), pin_digest(candidate)
+        latest = latest_receipts(output / STEPS_NAME)
+        reviewed = set()
+        if review is not None:
+            if (not isinstance(review, dict)
+                    or not {'previous_pin_sha256', 'current_pin_sha256', 'reuse', 'reason'} <= set(review)
+                    or set(review) - {'previous_pin_sha256', 'current_pin_sha256', 'reuse', 'reason', 'osm_scope'}
+                    or review['previous_pin_sha256'] != previous_digest
+                    or review['current_pin_sha256'] != current_digest
+                    or not isinstance(review['reason'], str) or not review['reason'].strip()
+                    or not isinstance(review['reuse'], list)
+                    or any(not isinstance(name, str) for name in review['reuse'])):
+                raise ValueError('resume review must name the exact previous/current pins, reuse steps and a reason')
+            reviewed = set(review['reuse'])
+        persisted_scope = state.get('osm_scope', [])
+        osm_scope = review.get('osm_scope', persisted_scope) if review is not None else persisted_scope
+        if osm_scope != [] and osm_scope != ['roads', 'railways']:
+            raise ValueError('osm_scope must be exactly [roads, railways]')
+        if persisted_scope and osm_scope != persisted_scope:
+            raise ValueError('cannot change the persisted OSM resume scope')
+        original_steps = steps
+        if osm_scope:
+            osm = latest.get('osm', {})
+            if not persisted_scope and (osm.get('exit') != 0
+                    or osm.get('environment', {}).get('QM_OSM_ONLY')):
+                raise ValueError('transport resume requires a previously successful full osm extraction')
+            if 'osm' in reviewed and osm.get('environment', {}).get('QM_OSM_ONLY') != ','.join(osm_scope):
+                raise ValueError('cannot adopt full osm receipt for transport-only resume')
+            steps = [replace(step, environment=tuple(dict(step.environment,
+                         QM_OSM_ONLY=','.join(osm_scope)).items())) if step.name == 'osm' else step
+                     for step in steps]
+        completed = completed_steps(latest, steps, config['build'], current_digest, reviewed)
+        if reviewed - completed:
+            raise ValueError(f'cannot adopt unsuccessful, changed-command/environment or dependent steps: {sorted(reviewed - completed)}')
+        invalidated = sorted(step.name for step in steps if step.name not in completed
+                             and step.name != 'structures-finalize'
+                             and latest.get(step.name, {}).get('exit') == 0)
+        report = {'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                  'resume': sorted(completed), 'rebuild': [step.name for step in steps if step.name not in completed],
+                  'invalidated': invalidated, 'producer_inputs_changed': changed, 'osm_scope': osm_scope,
+                  'review': review or {'previous_pin_sha256': previous_digest,
+                      'current_pin_sha256': current_digest, 'reuse': [], 'reason': '',
+                      **({'osm_scope': osm_scope} if osm_scope else {})}}
+        print(json.dumps(report), flush=True)
+        if dry_run:
+            return completed
+        if invalidated and review is None:
+            raise ValueError('completed outputs need review before rebuilding; inspect --resume-plan and supply --resume-review JSON')
+        rows = [{'name': name, 'exit': None, 'invalidated': report['at']} for name in invalidated]
+        rows += [dict(latest[step.name], **step_identity(step, config['build'], current_digest),
+                      adopted=report['at'], review=review)
+                 for step in steps if step.name in reviewed]
+        # Publish all decisions before replacing the pin. A crash can discard reuse,
+        # but cannot resurrect a consumer after its producer was invalidated.
+        # Persist extraction scope first: interrupted receipt/pin publication must
+        # never turn an approved transport-only retry into a full Planet rewrite.
+        write_state(output, config, 'running', osm_scope=osm_scope,
+                    resumes=[*state.get('resumes', []), report])
+        if rows:
+            record_steps(output, rows)
+        os.replace(candidate, pin_path)
+        original_steps[:] = steps
+        return completed

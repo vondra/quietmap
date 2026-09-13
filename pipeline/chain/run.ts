@@ -89,8 +89,6 @@ export function commandFor(step: PlanStep, paths: ChainPaths): { argv: string[];
       ])
     case 'railways-proxies':
       return tsx('enrich-railway-proxies.ts', prepared)
-    case 'railways-parallel':
-      return tsx('enrich-railways-parallel.ts', [...prepared, '--world'])
   }
 }
 
@@ -187,7 +185,7 @@ export function spawnStep(argv: string[], cwd: string, preparedDir: string, laye
       env: {
         ...process.env,
         NODE_OPTIONS: process.env.NODE_OPTIONS ?? '--max-old-space-size=8192',
-        ...(jobs === undefined ? {} : { QM_ROAD_WORKERS: String(jobs) }),
+        ...(jobs === undefined ? {} : { QM_ROAD_WORKERS: String(jobs), RAYON_NUM_THREADS: String(jobs) }),
       },
     })
     child.on('error', reject)

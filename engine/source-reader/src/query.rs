@@ -15,7 +15,7 @@ use std::path::Path;
 use arrow::array::Array;
 use square_store::grid_cols::{
     col_binary, col_bool, col_f32, col_i16, col_i32, col_i64, col_str, col_u16, col_u8,
-    decode_geom, grid_cell_lonlat,
+    decode_geom, grid_cell_lonlat, RoadDirections,
 };
 use square_store::store::{load_square, SquareData, STRUCTURE_KIND_BUILDING};
 
@@ -216,6 +216,11 @@ pub fn collect_from_square_data(
         if let Some(schema) = data.aircraft_airport_traffic.schema() {
             airport_summary.merge_square(schema, &airport_traffic_batches)?;
         }
+        if let Some(schema) = data.railways.schema() {
+            crate::rail_traffic::RailTrafficColumns::read(
+                &arrow::record_batch::RecordBatch::new_empty(schema.clone()),
+            )?;
+        }
         // The batch gate must cover the configured railway ceiling; each row's
         // exact reach is applied downstream after its emission is known.
         let railway_batches = data.railways.batches_within(
@@ -228,30 +233,15 @@ pub fn collect_from_square_data(
             lat,
             lng,
             noise_compute::constants::RAILWAY_REACH_CEILING,
-        );
-        // Receiver-square SquareCountryCity for the C1 per-region period model. Only the scaled
-        // counts / speed of `norm` feed `RailSegment` here; `compute_railways`
-        // re-resolves the same SquareCountryCity for emission + reach, so this is for
-        // signature consistency (and harmless if the table is uninitialised).
-        // M5: a row with baked columns overrides this with its own SquareCountryCity.
-        let rail_square_country_city =
-            noise_compute::square_country_city::square_country_city_for_latlng(lat, lng);
+        )?;
         for r in railways {
-            let norm = noise_compute::normalize::normalize_rail(
-                noise_compute::normalize::RawRailInput {
+            let norm =
+                noise_compute::normalize::normalize_rail(noise_compute::normalize::RawRailInput {
                     rail_type: r.rail_type,
-                    usage: r.usage,
                     maxspeed: r.maxspeed,
-                    service: r.service,
                     highspeed: r.highspeed,
-                    trains_passenger: r.trains_passenger,
-                    trains_freight: r.trains_freight,
-                    parallel_divisor: r.parallel_divisor,
-                },
-                r.square_country_city.unwrap_or(rail_square_country_city),
-            );
-            let trains_passenger_source: u8 = if r.trains_passenger > 0 { 0 } else { 1 };
-            let trains_freight_source: u8 = if r.trains_freight > 0 { 0 } else { 1 };
+                    traffic: r.traffic,
+                });
             let speed_source: u8 = if r.maxspeed > 0 {
                 0
             } else if r.highspeed {
@@ -272,8 +262,7 @@ pub fn collect_from_square_data(
                 rail_type: r.rail_type,
                 usage: r.usage,
                 maxspeed: r.maxspeed,
-                trains_passenger: norm.scaled_passenger_per_day,
-                trains_freight: norm.scaled_freight_per_day,
+                traffic: r.traffic,
                 speed_kmh: norm.speed_kmh,
                 track_count: 1,
                 name: r.name.clone(),
@@ -282,11 +271,7 @@ pub fn collect_from_square_data(
                 tunnel: r.tunnel,
                 service: r.service > 0,
                 highspeed: r.highspeed,
-                parallel_divisor: r.parallel_divisor.max(1),
                 speed_source,
-                trains_passenger_source,
-                trains_freight_source,
-                source_id: r.source_id,
                 dist_m: r.dist_m,
                 cp_lat: r.cp_lat,
                 cp_lon: r.cp_lon,
@@ -294,6 +279,9 @@ pub fn collect_from_square_data(
             });
         }
 
+        if let Some(schema) = data.roads.schema() {
+            RoadDirections::read(&arrow::record_batch::RecordBatch::new_empty(schema.clone()))?;
+        }
         let road_batches =
             data.roads
                 .batches_within(lat, lng, noise_compute::constants::ROAD_MAX_RADIUS[0])?;
@@ -302,7 +290,7 @@ pub fn collect_from_square_data(
             lat,
             lng,
             noise_compute::constants::ROAD_MAX_RADIUS[0],
-        );
+        )?;
         for r in roads {
             all_roads.push(noise_compute::types::RoadSegment {
                 osm_id: r.osm_id,
@@ -591,7 +579,7 @@ pub fn query_roads_from_batches(
     lat: f64,
     lon: f64,
     max_radius: f64,
-) -> Vec<RoadResult> {
+) -> Result<Vec<RoadResult>, String> {
     let mut results = Vec::new();
 
     // SquareCountryCity resolved once per popup call — lat/lng is the query centre.
@@ -613,7 +601,7 @@ pub fn query_roads_from_batches(
         // Absent on pre-taper arrows → 0 = none (the taper step writes it).
         let speed_taper_col = col_u8(batch, "speed_taper");
         let surface = col_u8(batch, "surface_type");
-        let ow = col_bool(batch, "oneway");
+        let directions = RoadDirections::read(batch)?;
         let lanes = col_u8(batch, "lanes");
         let name = col_str(batch, "name");
         let road_ref = col_str(batch, "ref");
@@ -690,7 +678,7 @@ pub fn query_roads_from_batches(
                 speed_limit: speed.map(|a| a.value(i)).unwrap_or(0),
                 speed_taper: speed_taper_col.map(|a| a.value(i)).unwrap_or(0),
                 surface_type: surface.map(|a| a.value(i)).unwrap_or(0),
-                oneway: ow.map(|a| a.value(i)).unwrap_or(false),
+                oneway: directions.is_oneway(i),
                 lanes: lanes.map(|a| a.value(i)).unwrap_or(0),
                 aadt_light: aadt_l.map(|a| a.value(i)).unwrap_or(0),
                 aadt_medium: aadt_m.map(|a| a.value(i)).unwrap_or(0),
@@ -766,7 +754,7 @@ pub fn query_roads_from_batches(
         }
     }
 
-    results
+    Ok(results)
 }
 
 pub struct BuildingResult {
@@ -803,10 +791,7 @@ pub struct RailResult {
     pub tunnel: bool,
     pub service: u8,
     pub highspeed: bool,
-    pub trains_passenger: i32,
-    pub trains_freight: i32,
-    pub parallel_divisor: u8,
-    pub source_id: u16,
+    pub traffic: noise_compute::normalize::RailTraffic,
     pub dist_m: f64,
     pub cp_lat: f64,
     pub cp_lon: f64,
@@ -823,10 +808,11 @@ pub fn query_railways_from_batches(
     lat: f64,
     lon: f64,
     max_radius: f64,
-) -> Vec<RailResult> {
+) -> Result<Vec<RailResult>, String> {
     let mut results = Vec::new();
 
     for batch in batches {
+        let traffic = crate::rail_traffic::RailTrafficColumns::read(batch)?;
         let n = batch.num_rows();
         let osm_id = col_i64(batch, "osm_id");
         let sgx = col_i32(batch, "start_gx");
@@ -851,10 +837,6 @@ pub fn query_railways_from_batches(
         let tunnel_col = col_bool(batch, "tunnel");
         let service_col = col_u8(batch, "service");
         let highspeed_col = col_bool(batch, "highspeed");
-        let trains_pax = col_i32(batch, "trains_passenger");
-        let trains_frt = col_i32(batch, "trains_freight");
-        let par_div = col_u8(batch, "parallel_divisor");
-        let source_id_col = col_u16(batch, "source_id");
         // M3 baked SquareCountryCity triplet — the rail mirror of the road reads above
         // (M5: the row's own ISO drives the kernel's EU/world split).
         let country_iso_col = col_u16(batch, "country_iso");
@@ -912,10 +894,7 @@ pub fn query_railways_from_batches(
                 tunnel: tunnel_col.map(|a| a.value(i)).unwrap_or(false),
                 service: service_col.map(|a| a.value(i)).unwrap_or(0),
                 highspeed: highspeed_col.map(|a| a.value(i)).unwrap_or(false),
-                trains_passenger: trains_pax.map(|a| a.value(i)).unwrap_or(0),
-                trains_freight: trains_frt.map(|a| a.value(i)).unwrap_or(0),
-                parallel_divisor: par_div.map(|a| a.value(i)).unwrap_or(1),
-                source_id: source_id_col.map(|a| a.value(i)).unwrap_or(0),
+                traffic: traffic.row(i),
                 dist_m: cp.dist_m,
                 cp_lat: cp.lat,
                 cp_lon: cp.lon,
@@ -930,7 +909,7 @@ pub fn query_railways_from_batches(
             });
         }
     }
-    results
+    Ok(results)
 }
 
 /// Building emission rows of the merged structure table: kind=0 rows with a
@@ -1346,13 +1325,15 @@ mod square_query_tests {
                     lat,
                     0.0,
                     1000.0,
-                );
+                )
+                .unwrap();
                 let rails = query_railways_from_batches(
                     &square.railways.batches_all().unwrap(),
                     lat,
                     0.0,
                     1000.0,
-                );
+                )
+                .unwrap();
                 assert_eq!(
                     (roads.len(), rails.len()),
                     (1, 1),
@@ -1455,7 +1436,8 @@ mod square_query_tests {
             LAT,
             LON,
             ROAD_MAX_RADIUS[0],
-        );
+        )
+        .unwrap();
         assert_eq!(kept.iter().map(|r| r.osm_id).collect::<Vec<_>>(), vec![1]);
     }
 

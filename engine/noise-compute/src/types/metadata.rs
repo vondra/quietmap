@@ -123,24 +123,14 @@ pub struct RoadMetadata {
     pub provenance: Option<crate::sources::DatasetMeta>,
 }
 
-/// Railway contributor metadata — raw + effective train counts and speed.
+/// Railway contributor metadata — prepared category traffic and effective speed.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct RailMetadata {
-    // Effective at the energy-dominant (loudest) segment, post service ×
-    // parallel_divisor scaling. Stored as f64 so the popup shows the same value
-    // the emission used — the Arrow-side raw integer count is scaled by
-    // service/parallel factors before reaching the engine; truncating back to
-    // i32 here would reintroduce the precision loss Milník A fixed.
-    pub trains_passenger_raw: f64,
-    pub trains_freight_raw: f64,
-    pub trains_passenger_source: &'static str, // "arrow" | "default_by_type"
-    pub trains_freight_source: &'static str,
-    pub source_id: u16, // dataset identity (single source of truth: pipeline/lib/sources.ts → engine/noise-compute/src/sources.rs; 0 = unspecified). Resolved into `provenance` field below.
+    pub traffic: crate::normalize::RailTraffic,
+    pub passenger_provenance: Option<crate::sources::DatasetMeta>,
+    pub freight_provenance: Option<crate::sources::DatasetMeta>,
     pub maxspeed_posted_kmh: u16, // u16: 300+ km/h high-speed postings survive
 
-    // Effective (post service × parallel_divisor scaling)
-    pub trains_passenger_effective: f64,
-    pub trains_freight_effective: f64,
     pub speed_kmh: f64,
     pub speed_source: &'static str, // "osm_maxspeed" | "highspeed_default" | "type_default"
 
@@ -149,7 +139,6 @@ pub struct RailMetadata {
     pub usage: &'static str,     // "main" | "branch" | "industrial"
     pub service: bool,
     pub highspeed: bool,
-    pub parallel_divisor: u8,
     pub bridge: bool,
 
     // Geometry context: which segment the headline metadata is from (dominant
@@ -170,10 +159,6 @@ pub struct RailMetadata {
     pub obstacle_avg_height_m: f64,
     pub obstacle_max_height_m: f64,
     pub obstacle_max_segment_idx: i16,
-
-    /// Dataset attribution resolved from `source_id`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provenance: Option<crate::sources::DatasetMeta>,
 }
 
 /// Building contributor metadata.

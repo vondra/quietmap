@@ -25,7 +25,6 @@ export interface RailwayProxyResult {
   freightTrainsPerDay: number
   skippedService: number
   skippedForeign: number
-  skippedPriority: number
   squares: number
   squaresUpdated: number
 }
@@ -64,7 +63,6 @@ function noSourceResult(country: string): RailwayProxyResult {
     freightTrainsPerDay: 0,
     skippedService: 0,
     skippedForeign: 0,
-    skippedPriority: 0,
     squares: 0,
     squaresUpdated: 0,
   }
@@ -91,7 +89,6 @@ async function runPlan(preparedDirectory: string, plan: RailwayProxyPlan): Promi
     freightTrainsPerDay: 0,
     skippedService: 0,
     skippedForeign: 0,
-    skippedPriority: 0,
     squares: squares.length,
     squaresUpdated: 0,
   }
@@ -107,12 +104,12 @@ async function runPlan(preparedDirectory: string, plan: RailwayProxyPlan): Promi
         result.passengerTrainsPerDay += applied.passenger
         result.freightTrainsPerDay += applied.freight
       },
+      { countryIso: spec.iso2 },
     )
     result.rows += write.rows
     result.matched += write.matched
     result.skippedService += write.skippedService
     result.skippedForeign += write.skippedForeign
-    result.skippedPriority += write.skippedPriority
     if (write.updated) result.squaresUpdated++
   }
   return result

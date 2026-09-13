@@ -146,7 +146,7 @@ test('freshness rejects every expired source, including the historical Greece fi
     gtfsTextSha256: gtfsTextSourceSha256(stale), lastServiceDate: '20240101', sourceYear: 2024,
   } }
   assert.deepEqual(await validateGtfsSourceFreshness(archived, stale, '20260905'),
-    { lastServiceDate: '20240101', historical: true })
+    { firstServiceDate: '', lastServiceDate: '20240101', historical: true })
   writeFileSync(join(stale, 'routes.txt'), 'changed\n')
   await assert.rejects(validateGtfsSourceFreshness(archived, stale, '20260905'), /historical source identity/)
 })
@@ -182,6 +182,27 @@ test('freshness ignores calendar-date removals when finding the service horizon'
   )
 })
 
+
+test('freshness reads the horizon of a snapshot-stamped feed from its calendars', async () => {
+  const directory = join(TEMP, 'snapshot-stamp')
+  writeRequiredGtfs(directory)
+  rmSync(join(directory, 'calendar.txt'))
+  writeFileSync(join(directory, 'feed_info.txt'), 'feed_start_date,feed_end_date\n20260909,20260909\n')
+  writeFileSync(
+    join(directory, 'calendar_dates.txt'),
+    'service_id,date,exception_type\n11105:1,20260909,1\n11106:1,20260910,1\n11112:1,20261009,1\ncancelled,20261231,2\n',
+  )
+  const gzm = NATIONAL_GTFS_FEEDS.find(feed => feed.id === 'silesia-gzm')!
+  assert.deepEqual(
+    NATIONAL_GTFS_FEEDS.filter(feed => feed.serviceWindowFromCalendars).map(feed => feed.id),
+    ['silesia-gzm'],
+  )
+  assert.deepEqual(await validateGtfsSourceFreshness(gzm, directory, '20260910'),
+    { firstServiceDate: '20260909', lastServiceDate: '20261009' })
+  const de = GLOBAL_GTFS_FEEDS.find(feed => feed.id === 'de')!
+  await assert.rejects(validateGtfsSourceFreshness(de, directory, '20260910'), /expired 20260909/)
+  await assert.rejects(validateGtfsSourceFreshness(gzm, directory, '20260908'), /starts 20260909/)
+})
 
 test('freshness rejects a future feed instead of using its broad recurring calendar', async () => {
   const directory = join(TEMP, 'future-feed')
