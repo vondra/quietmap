@@ -75,7 +75,7 @@ function pairCachePath(
     .replace(/^-|-$/g, '') || 'root'
   const parent = resolve(cacheDirectory, registry, feed.id)
   mkdirSync(parent, { recursive: true })
-  return resolve(parent, `${label}.pairs.json`)
+  return resolve(parent, `${label}.pairs.sqlite`)
 }
 
 async function loadFeed(

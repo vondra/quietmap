@@ -2,9 +2,10 @@
 
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { DatabaseSync } from 'node:sqlite'
 import { spawnSync } from 'node:child_process'
 import { computeStopPairFrequenciesForFeed, type RailStationPairCount } from './gtfs-stop-pairs.js'
 
@@ -222,20 +223,20 @@ test('calendar zero-active-services fix applies inside the pair parser too: zero
       'B,Bravo,50.1000,14.1000\n',
   })
 
-  const { pairs, provenance } = await computeStopPairFrequenciesForFeed(dir)
+  const cachePath = join(TMP, 'empty-feed.sqlite')
+  const { pairs, provenance } = await computeStopPairFrequenciesForFeed(dir, { cachePath })
   assert.equal(pairs.length, 0, 'calendar present + no active service dates = zero pairs')
   assert.equal(provenance.calendarPresent, true)
   assert.equal(provenance.activeTripCount, 0)
-  assert.ok(!existsSync(join(dir, 'gtfs-rail-pairs-v1.json')), 'never-cache-empty: this zero-pair parse must not be cached')
+  assert.equal(existsSync(cachePath), false, 'an empty parse must not create a cache')
 })
 
-test('shape attachment downsamples to <= maxShapePoints and keeps first/last points exactly', async () => {
+test('shape attachment retains every source vertex, including a short excursion', async () => {
   const dir = join(TMP, 'shape-attach')
   const N = 700
   const shapeRows: string[] = []
   for (let i = 0; i < N; i++) {
-    // A simple straight line of N points from (50.0, 14.0) to (50.7, 14.7).
-    const lat = (50.0 + (i / (N - 1)) * 0.7).toFixed(6)
+    const lat = (i === 2 ? 50.5 : 50.0 + (i / (N - 1)) * 0.7).toFixed(6)
     const lon = (14.0 + (i / (N - 1)) * 0.7).toFixed(6)
     shapeRows.push(`SHAPE1,${lat},${lon},${i}`)
   }
@@ -257,7 +258,8 @@ test('shape attachment downsamples to <= maxShapePoints and keeps first/last poi
   const pair = findPair(pairs, [50.0, 14.0], [50.1, 14.1])
   assert.ok(pair)
   assert.ok(pair!.shapePolyline, 'trips.txt has shape_id and shapes.txt exists -> shape attached')
-  assert.ok(pair!.shapePolyline!.length <= 500, `downsampled to <= 500 points, got ${pair!.shapePolyline!.length}`)
+  assert.equal(pair!.shapePolyline!.length, N)
+  assert.deepEqual(pair!.shapePolyline![2], [50.5, 14.002003], 'the old uniform 500-point sampler omitted this excursion')
   assert.deepEqual(pair!.shapePolyline![0], [50.0, 14.0], 'first shape point preserved exactly')
   assert.deepEqual(pair!.shapePolyline![pair!.shapePolyline!.length - 1], [50.7, 14.7], 'last shape point preserved exactly')
   assert.equal(provenance.tripsWithShape, 1)
@@ -295,24 +297,27 @@ test('cache round-trip uses an explicit path and leaves source inputs immutable 
     'stop_times.txt': 'trip_id,stop_id,stop_sequence\nT1,A,1\nT1,B,2\n',
     'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nA,Alpha,50.0,14.0\nB,Bravo,50.1,14.1\n',
   })
+  const sourceFiles = readdirSync(dir).sort()
   const uncached = await computeStopPairFrequenciesForFeed(dir)
   assert.equal(uncached.provenance.fromCache, false)
-  assert.equal(existsSync(join(dir, 'gtfs-rail-pairs-v1.json')), false)
+  assert.deepEqual(readdirSync(dir).sort(), sourceFiles)
 
-  const cachePath = join(TMP, 'cache-round-trip.json')
+  const cachePath = join(TMP, 'cache-round-trip.sqlite')
   const first = await computeStopPairFrequenciesForFeed(dir, { cachePath })
   assert.equal(first.provenance.fromCache, false)
   assert.ok(existsSync(cachePath))
   const second = await computeStopPairFrequenciesForFeed(dir, { cachePath })
   assert.equal(second.provenance.fromCache, true)
   assert.deepEqual(second.pairs, first.pairs)
-  const old = JSON.parse(readFileSync(cachePath, 'utf-8'))
-  old.feedsLoadedNonEmpty[0] = 'pairs-v1'
-  old.stops[0].pax = 999
-  writeFileSync(cachePath, JSON.stringify(old))
+  assert.deepEqual(second.provenance, { ...first.provenance, fromCache: true })
+  const old = new DatabaseSync(cachePath)
+  old.exec('PRAGMA user_version = 0; UPDATE pairs SET pax = 999')
+  old.close()
   const rebuilt = await computeStopPairFrequenciesForFeed(dir, { cachePath })
   assert.equal(rebuilt.provenance.fromCache, false)
   assert.deepEqual(rebuilt.pairs, first.pairs)
+  writeFileSync(cachePath, JSON.stringify({ feedsLoadedNonEmpty: ['directed-shape-pairs'], stops: first.pairs }))
+  assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath })).provenance.fromCache, false)
 })
 
 test('distinct GTFS shapes retain their own counts through parsing, caching and graph routing', async () => {
@@ -341,10 +346,14 @@ test('distinct GTFS shapes retain their own counts through parsing, caching and 
     }
   }
   const graph = buildRailGraph(segments)
-  const cachePath = join(TMP, 'shape-routes.json')
+  const cachePath = join(TMP, 'shape-routes.sqlite')
   for (const fromCache of [false, true]) {
     const parsed = await computeStopPairFrequenciesForFeed(dir, { cachePath })
     assert.equal(parsed.provenance.fromCache, fromCache)
+    assert.equal(parsed.provenance.activeTripCount, 4)
+    const cache = new DatabaseSync(cachePath, { readOnly: true })
+    assert.equal(cache.prepare('SELECT count(*) AS count FROM shapes').get()!.count, 2)
+    cache.close()
     assert.equal(parsed.pairs.length, 3, 'identical north geometry shares one search; south and shapeless remain separate')
     for (const pairs of [parsed.pairs, [...parsed.pairs].reverse()]) {
       const result = walkRailStationPairs(graph, pairs)
@@ -368,7 +377,7 @@ test('optionsKey fingerprints an explicit derived cache', async () => {
     'stop_times.txt': 'trip_id,stop_id,stop_sequence\nT1,A,1\nT1,B,2\n',
     'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nA,Alpha,50.0,14.0\nB,Bravo,50.1,14.1\n',
   })
-  const cachePath = join(TMP, 'options-fingerprint.json')
+  const cachePath = join(TMP, 'options-fingerprint.sqlite')
   assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath, optionsKey: 'default' })).provenance.fromCache, false)
   assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath, optionsKey: 'europe-busiest-wed' })).provenance.fromCache, false)
   assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath, optionsKey: 'europe-busiest-wed' })).provenance.fromCache, true)
@@ -383,7 +392,7 @@ test('input fingerprint invalidates the pair cache when coordinates or shapes ch
     'stop_times.txt': 'trip_id,stop_id,stop_sequence\nT1,A,1\nT1,B,2\n',
     'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nA,Alpha,50.0,14.0\nB,Bravo,50.1,14.1\n',
   })
-  const cachePath = join(TMP, 'inputs-fingerprint.json')
+  const cachePath = join(TMP, 'inputs-fingerprint.sqlite')
   assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath })).provenance.fromCache, false)
   assert.equal((await computeStopPairFrequenciesForFeed(dir, { cachePath })).provenance.fromCache, true)
   writeFileSync(

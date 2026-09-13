@@ -3,11 +3,11 @@
 import { existsSync, createReadStream, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createInterface } from 'node:readline'
+import { readGtfsPairCache, writeGtfsPairCache } from './gtfs-pair-cache.js'
 import { RailPairSearches } from './rail-pair-searches.js'
 import {
   RAIL_TYPES, parseCsvLine, streamCsvRows, readGtfsTripDepartureMultipliers,
   computeActiveTripFamiliesForFeed, loadStopsWithCoords, resolveStopViaParent,
-  writeMergedStopCache, readMergedStopCache,
   type GtfsStop,
 } from './gtfs-enrich-core.js'
 import type { RailStationPairCount } from './rail-graph.js'
@@ -30,15 +30,13 @@ export interface StopPairFrequenciesOptions {
    *  style, `enrich-railway-th.ts`). Defaults to true iff frequencies.txt exists in
    *  extractDir; pass false to force-ignore it even when present. */
   expandFrequencies?: boolean
-  /** Max vertices kept per attached shape polyline (evenly downsampled, endpoints kept). */
-  maxShapePoints?: number
   /** Optional derived-cache path. Omit it to keep the source tree immutable. */
   cachePath?: string
   /** Cache-relevant options fingerprint (2026-07-16 /gg review item 11b):
    *  `familyOf`/`dateSelection` are functions and can't be hashed reliably, so
    *  the CALLER supplies a stable string identifying its options combination
    *  instead (e.g. `'europe-busiest-wed'`) — every caller whose
-   *  familyOf/dateSelection/expandFrequencies/maxShapePoints shape differs
+   *  familyOf/dateSelection/expandFrequencies shape differs
    *  from another caller's MUST pass a distinct key, or a cache written under
    *  one combination could be silently served to a caller expecting another.
    *  Defaults to `'default'` — fine as long as only ONE options shape ever
@@ -65,9 +63,7 @@ export interface StopPairFrequenciesProvenance {
   collapsedAdjacentDuplicates: number
   frequenciesExpanded: boolean
   tripsWithShape: number
-  /** True when this result was served from `gtfs-rail-pairs-v1.json` — in that case
-   *  every OTHER count above is 0/false (not recomputed; the cache stores pairs only,
-   *  see the caching note on `computeStopPairFrequenciesForFeed`). */
+  /** True on a cache hit; all source accounting is retained. */
   fromCache: boolean
 }
 
@@ -75,8 +71,6 @@ export interface StopPairFrequenciesResult {
   pairs: RailStationPairCount[]
   provenance: StopPairFrequenciesProvenance
 }
-
-const DEFAULT_MAX_SHAPE_POINTS = 500
 
 function defaultFamilyOf(routeType: number): 'rail' | null {
   return RAIL_TYPES.has(routeType) ? 'rail' : null
@@ -99,19 +93,6 @@ function emptyProvenance(overrides: Partial<StopPairFrequenciesProvenance> = {})
     ...overrides,
   }
 }
-
-/** Evenly-spaced downsample keeping the first and last point exactly. */
-function downsamplePolyline(points: Array<[number, number]>, maxPoints: number): Array<[number, number]> {
-  if (points.length <= maxPoints || maxPoints < 2) return points
-  const step = (points.length - 1) / (maxPoints - 1)
-  const out: Array<[number, number]> = []
-  for (let i = 0; i < maxPoints; i++) out.push(points[Math.round(i * step)])
-  return out
-}
-
-// The caller owns the cache path and fingerprints function-valued options.
-// Input identity is checked separately; empty parses are never persisted.
-const CACHE_VERSION_MARKER = 'directed-shape-pairs'
 
 /** The GTFS inputs whose content this parser's result depends on. A change in
  *  ANY of them (a `--force-download` unzipping a fresh feed over the old
@@ -140,20 +121,14 @@ export async function computeStopPairFrequenciesForFeed(
   extractDir: string,
   opts: StopPairFrequenciesOptions = {},
 ): Promise<StopPairFrequenciesResult> {
-  const optionsFingerprint = opts.optionsKey ?? 'default'
-  const inputsFingerprint = gtfsPairInputsFingerprint(extractDir)
+  const identity = { options: opts.optionsKey ?? 'default', inputs: gtfsPairInputsFingerprint(extractDir) }
   const cachePath = opts.cachePath
-  if (cachePath && existsSync(cachePath)) {
-    const cached = readMergedStopCache<RailStationPairCount>(cachePath)
-    if (cached.feedsLoadedNonEmpty?.[0] === CACHE_VERSION_MARKER &&
-        cached.feedsLoadedNonEmpty[1] === optionsFingerprint &&
-        cached.feedsLoadedNonEmpty[2] === inputsFingerprint) {
-      return { pairs: cached.stops, provenance: emptyProvenance({ pairsAfterDedup: cached.stops.length, fromCache: true }) }
-    }
+  if (cachePath) {
+    const cached = readGtfsPairCache(cachePath, identity)
+    if (cached) return cached
   }
 
   const familyOf = opts.familyOf ?? defaultFamilyOf
-  const maxShapePoints = opts.maxShapePoints ?? DEFAULT_MAX_SHAPE_POINTS
 
   const { tripFam, targetDate, calendarPresent } =
     await computeActiveTripFamiliesForFeed(extractDir, familyOf, opts.dateSelection)
@@ -189,7 +164,7 @@ export async function computeStopPairFrequenciesForFeed(
     }
     for (const [id, pts] of bySeq) {
       pts.sort((a, b) => a.seq - b.seq)
-      shapesById.set(id, downsamplePolyline(pts.map(p => [p.lat, p.lon] as [number, number]), maxShapePoints))
+      shapesById.set(id, pts.map(p => [p.lat, p.lon]))
     }
   }
 
@@ -290,7 +265,7 @@ export async function computeStopPairFrequenciesForFeed(
 
   // Empty parses must not certify a later source-admission check.
   if (pairs.length > 0 && cachePath) {
-    writeMergedStopCache(cachePath, [CACHE_VERSION_MARKER, optionsFingerprint, inputsFingerprint], pairs)
+    writeGtfsPairCache(cachePath, identity, { pairs, provenance })
   }
 
   return { pairs, provenance }

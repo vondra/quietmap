@@ -15,11 +15,6 @@ export function nodeKey(latitude: number, longitude: number): string {
   return `${latitude.toFixed(5)}_${longitude.toFixed(5)}`
 }
 
-/** Stable ~11 metre station identity used by GTFS pair accumulation. */
-export function coordKey4dp(latitude: number, longitude: number): string {
-  return `${latitude.toFixed(4)},${longitude.toFixed(4)}`
-}
-
 export function wrapLonDeltaDeg(deltaDegrees: number): number {
   if (deltaDegrees > 180) return deltaDegrees - 360
   if (deltaDegrees < -180) return deltaDegrees + 360
