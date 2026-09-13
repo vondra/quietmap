@@ -7,16 +7,15 @@ import { readGtfsStopTimes, readCsvRows } from './gtfs-csv.js'
 import { RailPairSearches } from './rail-pair-searches.js'
 import {
   RAIL_TYPES, readGtfsTripDepartureMultipliers,
-  computeActiveTripFamiliesForFeed, loadStopsWithCoords, resolveStopViaParent,
+  computeActiveTripFamiliesForFeed, gtfsStopWithinBounds, loadStopsWithCoords, resolveStopViaParent,
   type GtfsStop,
 } from './gtfs-enrich-core.js'
 import type { RailStationPairCount } from './rail-graph.js'
 export type { RailStationPairCount }
 
 export interface StopPairFrequenciesOptions {
-  /** Bounding box for stops.txt out-of-bounds pruning (`GTFS_BORDER_MARGIN_DEG`
-   *  margin), same convention as `loadStopsWithCoords`/
-   *  `computeStopFrequenciesForFeed`. Omit to keep every stop. */
+  /** Geographic extent for resolved observations, padded by GTFS_BORDER_MARGIN_DEG.
+   *  Clipping breaks adjacency; unresolved source stops fail independently of this extent. */
   bbox?: readonly [number, number, number, number]
   /** Route-type -> family classifier. Defaults to RAIL_TYPES-only (tram/metro excluded).
    *  Pass a metroAsRail-style override (e.g. europe's `railFamilyFor` narrowed to 'rail')
@@ -43,15 +42,15 @@ export interface StopPairFrequenciesProvenance {
   calendarPresent: boolean
   /** Active rail trips selected for `targetDate` — before stop_times is even read. */
   activeTripCount: number
-  /** Distinct trips actually found in stop_times.txt (can be < activeTripCount for a
-   *  malformed feed with trips that have no stop pattern). */
+  /** Distinct active trips found in stop_times.txt; missing active trips fail the parse. */
   tripsWithStopTimes: number
   stopTimesLines: number
   /** Consecutive-pair occurrences emitted across all trips, before identical-search summing. */
   pairEventsBeforeDedup: number
   /** Distinct directed coordinate/shape searches, with counts summed across identical inputs. */
   pairsAfterDedup: number
-  droppedUnresolvedStops: number
+  /** Resolved stop-time observations outside the requested geographic extent. */
+  clippedStopTimes: number
   collapsedAdjacentDuplicates: number
   frequenciesExpanded: boolean
   tripsWithShape: number
@@ -77,7 +76,7 @@ function emptyProvenance(overrides: Partial<StopPairFrequenciesProvenance> = {})
     stopTimesLines: 0,
     pairEventsBeforeDedup: 0,
     pairsAfterDedup: 0,
-    droppedUnresolvedStops: 0,
+    clippedStopTimes: 0,
     collapsedAdjacentDuplicates: 0,
     frequenciesExpanded: false,
     tripsWithShape: 0,
@@ -86,13 +85,7 @@ function emptyProvenance(overrides: Partial<StopPairFrequenciesProvenance> = {})
   }
 }
 
-/** The GTFS inputs whose content this parser's result depends on. A change in
- *  ANY of them (a `--force-download` unzipping a fresh feed over the old
- *  extractDir is the reference case) must invalidate the pair cache — the
- *  optionsKey alone cannot see it (2026-07-16 review fix, item 2: the cache
- *  used to keep serving the OLD timetable's pairs, target date and
- *  frequencies.txt expansion after a feed refresh, and could even vouch
- *  "non-empty" retract evidence for a broken fresh feed). */
+/** Every source file used by this parser participates in cache invalidation. */
 const FINGERPRINT_INPUT_FILES = [
   'routes.txt', 'trips.txt', 'stop_times.txt', 'stops.txt', 'shapes.txt',
   'calendar.txt', 'calendar_dates.txt', 'frequencies.txt', 'feed_info.txt',
@@ -187,11 +180,15 @@ export async function computeStopPairFrequenciesForFeed(
     }
   })
 
-  const stops = await loadStopsWithCoords(extractDir, opts.bbox)
+  for (const tripId of tripFam.keys()) {
+    if (!perTripRows.has(tripId)) {
+      throw new Error(`${extractDir}: active rail trip '${tripId}' has no stop_times`)
+    }
+  }
+  const stops = await loadStopsWithCoords(extractDir)
 
-  // ── Per trip: sort, resolve+bridge, collapse adjacent dups, emit + accumulate pairs ──
   const searches = new RailPairSearches()
-  let droppedUnresolvedStops = 0
+  let clippedStopTimes = 0
   let collapsedAdjacentDuplicates = 0
   let pairEventsBeforeDedup = 0
   let tripsWithShape = 0
@@ -203,29 +200,24 @@ export async function computeStopPairFrequenciesForFeed(
     const shape = shapeId ? shapesById.get(shapeId) : undefined
     if (shape) tripsWithShape++
 
-    // Resolve WITH parent-station fallback BEFORE dropping coordless stops.
-    const resolved: GtfsStop[] = []
+    let previous: GtfsStop | undefined
     for (const { stopId } of rows) {
       const { stop } = resolveStopViaParent(stops, stopId)
-      if (!stop) { droppedUnresolvedStops++; continue }
-      resolved.push(stop)
-    }
-
-    // Collapse adjacent duplicates (same resolved station) — dropped/bridged stops
-    // above already let pairs span the gap; this handles e.g. two child platforms of
-    // one parent visited back-to-back.
-    const sequence: GtfsStop[] = []
-    for (const stop of resolved) {
-      const prev = sequence[sequence.length - 1]
-      if (prev && prev.stop_id === stop.stop_id) { collapsedAdjacentDuplicates++; continue }
-      sequence.push(stop)
-    }
-
-    for (let i = 0; i < sequence.length - 1; i++) {
-      const from = sequence[i], to = sequence[i + 1]
-      searches.add({ fromLat: from.lat, fromLon: from.lon, toLat: to.lat, toLon: to.lon,
-        pax: boost, frt: 0, ...(shape ? { shapePolyline: shape } : {}) })
-      pairEventsBeforeDedup++
+      if (!stop) {
+        throw new Error(`${extractDir}: active rail trip '${tripId}' has unresolved stop '${stopId}'`)
+      }
+      if (!gtfsStopWithinBounds(stop, opts.bbox)) {
+        clippedStopTimes++
+        previous = undefined
+        continue
+      }
+      if (previous?.stop_id === stop.stop_id) { collapsedAdjacentDuplicates++; continue }
+      if (previous) {
+        searches.add({ fromLat: previous.lat, fromLon: previous.lon, toLat: stop.lat, toLon: stop.lon,
+          pax: boost, frt: 0, ...(shape ? { shapePolyline: shape } : {}) })
+        pairEventsBeforeDedup++
+      }
+      previous = stop
     }
   }
 
@@ -238,7 +230,7 @@ export async function computeStopPairFrequenciesForFeed(
     stopTimesLines,
     pairEventsBeforeDedup,
     pairsAfterDedup: pairs.length,
-    droppedUnresolvedStops,
+    clippedStopTimes,
     collapsedAdjacentDuplicates,
     frequenciesExpanded,
     tripsWithShape,

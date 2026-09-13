@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
 import {
-  copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
+  appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs'
 import { join, relative } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -129,6 +129,28 @@ test('real GTFS files stamp heavy rail and tram through one z9 writer and rerun 
   assert.deepEqual(values(path, 'trains_passenger'), [0, 0])
   assert.deepEqual(values(path, 'source_id'), [0, 0])
   assert.equal(tableFromIPC(readFileSync(path)).getChild('parallel_divisor'), null)
+})
+
+test('an incomplete rail snapshot cannot replace or retract previously prepared traffic', async () => {
+  for (const missing of ['stop coordinates', 'trip stop_times']) {
+    const source = join(TEMP, `source-missing-${missing}`)
+    writeGreekGtfs(source, 'route_id,route_type\nrail,2\ntram,0\n')
+    const { prepared, path } = makePrepared(`prepared-missing-${missing}`)
+    const options = { sourceDirectory: source, preparedDirectory: prepared,
+      cacheDirectory: join(TEMP, `cache-missing-${missing}`), country: 'GR', asOfDate: '20260909' }
+    await enrichGlobalGtfsCountry(options)
+    const before = readFileSync(path)
+    appendFileSync(join(source, 'gr', 'trips.txt'), 'rail,daily,incomplete-trip\n')
+    if (missing === 'stop coordinates') {
+      appendFileSync(join(source, 'gr', 'stop_times.txt'),
+        'incomplete-trip,a,1\nincomplete-trip,unknown,2\nincomplete-trip,b,3\n')
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await assert.rejects(enrichGlobalGtfsCountry(options),
+        /active rail trip 'incomplete-trip' has (unresolved stop 'unknown'|no stop_times)/)
+      assert.deepEqual(readFileSync(path), before, 'a non-empty surviving trip is not a complete source snapshot')
+    }
+  }
 })
 
 test('an invalid feed fails before touching an existing prepared Arrow', async () => {

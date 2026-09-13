@@ -580,17 +580,20 @@ export function readMergedStopCache<T>(path: string): { stops: T[]; feedsLoadedN
 
 // ── Stops with coordinates + parent-station resolution ──
 
-/** ONE border margin (degrees) for BOTH sides of the GTFS geometry envelope
- *  (2026-07-16 /gg fix batch item 6): the stops kept by `loadStopsWithCoords`
- *  AND the rail-graph country bbox (`enrich-railway-europe.ts`'s
- *  `countryBboxFor`) must pad by the SAME margin — the old mismatch (stops
- *  1°, graph 0.5°) let cross-border stops form pairs whose graph end was
- *  never loaded, so every such pair snap-failed and its endpoint-radius
- *  quarantine froze retract/silent around the border for no real reason.
- *  Tradeoff of 0.5° (~55 km): a genuinely cross-border line running farther
- *  out than that loses its foreign tail's pairs — accepted for now; revisit
- *  per-country in the dedicated cross-border sweep. */
+/** Country graph context extends 0.5 degrees beyond the declared bounds for cross-border stops. */
 export const GTFS_BORDER_MARGIN_DEG = 0.5
+
+/** Use the same geographic margin when selecting stops and loading their rail graph. */
+export function gtfsStopWithinBounds(
+  stop: Pick<GtfsStop, 'lat' | 'lon'>,
+  bbox?: readonly [number, number, number, number],
+): boolean {
+  if (!bbox) return true
+  const [minLat, minLon, maxLat, maxLon] = bbox
+  const margin = GTFS_BORDER_MARGIN_DEG
+  return stop.lat >= minLat - margin && stop.lat <= maxLat + margin &&
+    stop.lon >= minLon - margin && stop.lon <= maxLon + margin
+}
 
 export interface StopsWithCoords {
   /** stop_id -> parsed stop, valid-coords (and in-bounds, when `bbox` was given) only. */
@@ -628,13 +631,9 @@ export async function loadStopsWithCoords(
       continue
     }
 
-    if (bbox) {
-      const [minLat, minLon, maxLat, maxLon] = bbox
-      const m = GTFS_BORDER_MARGIN_DEG
-      if (lat < minLat - m || lat > maxLat + m || lon < minLon - m || lon > maxLon + m) {
-        skippedOutOfBounds++
-        continue
-      }
+    if (!gtfsStopWithinBounds({ lat, lon }, bbox)) {
+      skippedOutOfBounds++
+      continue
     }
 
     stopsMap.set(r['stop_id'], { stop_id: r['stop_id'], lat, lon, name: (r['stop_name'] || '').trim() })

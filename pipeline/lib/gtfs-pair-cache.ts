@@ -7,7 +7,7 @@ import { RailShapeIndex } from './rail-pair-searches.js'
 import type { RailStationPairCount } from './rail-graph.js'
 import type { StopPairFrequenciesResult } from './gtfs-stop-pairs.js'
 
-const CACHE_VERSION = 1
+const CACHE_VERSION = 2
 interface CacheIdentity { options: string; inputs: string }
 
 export function readGtfsPairCache(path: string, identity: CacheIdentity): StopPairFrequenciesResult | null {

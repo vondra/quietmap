@@ -81,7 +81,7 @@ test('parent-station resolution happens BEFORE coordless stops are dropped', asy
   const { pairs, provenance } = await computeStopPairFrequenciesForFeed(dir)
   assert.equal(pairs.length, 1)
   assert.ok(findPair(pairs, [50.0, 14.0], [50.1, 14.1]), 'PLATFORM1 resolved to STATION1 coords, paired with B')
-  assert.equal(provenance.droppedUnresolvedStops, 0, 'the child stop was resolved via its parent, not dropped')
+  assert.equal(provenance.clippedStopTimes, 0)
 })
 
 test('only repeated resolved stop IDs collapse; nearby distinct stops remain', async () => {
@@ -111,8 +111,8 @@ test('only repeated resolved stop IDs collapse; nearby distinct stops remain', a
   assert.equal(provenance.collapsedAdjacentDuplicates, 1, 'PLATFORM1/PLATFORM2 collapsed into one visit to STATION1')
 })
 
-test('a truly unresolvable (coordless, no parent) stop is dropped and pairs bridge across it', async () => {
-  const dir = join(TMP, 'coordless-bridge')
+test('source gaps fail while geographic clipping breaks adjacency without inventing pairs', async () => {
+  const dir = join(TMP, 'source-gap')
   writeGtfsFixture(dir, {
     'routes.txt': NO_CALENDAR_ROUTES,
     'trips.txt': 'trip_id,route_id,service_id\nT1,R1,svc\n',
@@ -120,18 +120,34 @@ test('a truly unresolvable (coordless, no parent) stop is dropped and pairs brid
       'trip_id,stop_id,stop_sequence\n' +
       'T1,A,1\n' +
       'T1,GHOST,2\n' + // no coords, no parent_station — genuinely unresolvable
-      'T1,B,3\n',
+      'T1,B,3\n' +
+      'T1,C,4\n',
     'stops.txt':
       'stop_id,stop_name,stop_lat,stop_lon\n' +
       'A,Alpha,50.0000,14.0000\n' +
       'GHOST,,,\n' +
-      'B,Bravo,50.1000,14.1000\n',
+      'B,Bravo,50.1000,14.1000\n' +
+      'C,Charlie,50.2000,14.2000\n',
   })
 
-  const { pairs, provenance } = await computeStopPairFrequenciesForFeed(dir)
-  assert.equal(pairs.length, 1, 'exactly one pair: A-B, spanning the dropped GHOST stop')
-  assert.ok(findPair(pairs, [50.0, 14.0], [50.1, 14.1]))
-  assert.equal(provenance.droppedUnresolvedStops, 1)
+  const cachePath = join(TMP, 'source-gap.sqlite')
+  const bbox = [49, 13, 51, 15] as const
+  await assert.rejects(computeStopPairFrequenciesForFeed(dir, { cachePath, bbox }),
+    /active rail trip 'T1' has unresolved stop 'GHOST'/)
+  assert.equal(existsSync(cachePath), false)
+
+  writeFileSync(join(dir, 'stops.txt'),
+    'stop_id,stop_name,stop_lat,stop_lon,parent_station\n' +
+    'A,Alpha,50,14,\nGHOST,Outside platform,,,PARENT\nPARENT,Outside station,55,25,\n' +
+    'B,Bravo,50.1,14.1,\nC,Charlie,50.2,14.2,\n')
+  for (const fromCache of [false, true]) {
+    const { pairs, provenance } = await computeStopPairFrequenciesForFeed(dir, { cachePath, bbox })
+    assert.equal(provenance.fromCache, fromCache)
+    assert.equal(provenance.clippedStopTimes, 1)
+    assert.equal(pairs.length, 1, 'only B-C is an observed consecutive pair within the extent')
+    assert.ok(findPair(pairs, [50.1, 14.1], [50.2, 14.2]))
+    assert.ok(!findPair(pairs, [50, 14], [50.1, 14.1]), 'clipping must not turn A-GHOST-B into A-B')
+  }
 })
 
 test('opposite directions remain distinct until routed onto tracks', async () => {
@@ -311,7 +327,7 @@ test('cache round-trip uses an explicit path and leaves source inputs immutable 
   assert.deepEqual(second.pairs, first.pairs)
   assert.deepEqual(second.provenance, { ...first.provenance, fromCache: true })
   const old = new DatabaseSync(cachePath)
-  old.exec('PRAGMA user_version = 0; UPDATE pairs SET pax = 999')
+  old.exec('PRAGMA user_version = 1; UPDATE pairs SET pax = 999')
   old.close()
   const rebuilt = await computeStopPairFrequenciesForFeed(dir, { cachePath })
   assert.equal(rebuilt.provenance.fromCache, false)
