@@ -1,23 +1,4 @@
-//! Split linestrings into microsegments of max_length_m, **merging
-//! consecutive near-collinear vertex pairs** so dense OSM polylines
-//! (taxiway segmented per ramp boundary, etc.) emit one microsegment
-//! per straight run instead of one per OSM vertex.
-//!
-//! Algorithm: cumulative-length walker (per Plan v2). From vertex `i`,
-//! greedy-extend the chord endpoint `j` while
-//!   - Σ length [i..j] ≤ `max_length_m` (hard cap, default 250 m)
-//!   - every intermediate vertex `k ∈ (i, j)` has perpendicular
-//!     distance ≤ `CHORD_EPS_M` (1.0 m) to the chord (i, j)
-//!
-//! On chord-tolerance violation, emit `(i, j-1)` and restart walker
-//! from `j-1`. When a single vertex pair already exceeds `max_length`,
-//! fall back to the legacy uniform interpolation for that pair.
-//!
-//! Acoustic invariance: aircraft / road / rail kernels apply
-//! `+ 10·log10(θ / d_perp)` over the actual `length_m`, so merging two
-//! collinear sub-segments into one is energy-conservative by Chasles
-//! (`Σ θᵢ = θ_total`). Row count typically drops 30-50 % on dense
-//! airport polylines (LKPR taxiway median was 5.3 m before merging).
+//! Split source lines into bounded acoustic chords while retaining their original vertex intervals.
 
 use grid::geo::{
     flat_dist, m_per_deg_lon, normalize_longitude, wrapped_longitude_delta, M_PER_DEG_LAT,
@@ -69,134 +50,208 @@ fn perp_distance_to_chord(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     ((px - foot_x).powi(2) + (py - foot_y).powi(2)).sqrt()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SourcePosition {
+    pub vertex_index: usize,
+    pub fraction_to_next: f64,
+}
+
+impl SourcePosition {
+    fn vertex(vertex_index: usize) -> Self {
+        Self {
+            vertex_index,
+            fraction_to_next: 0.0,
+        }
+    }
+
+    fn coordinates(self, node_coordinates: &impl Fn(usize) -> [f64; 2]) -> [f64; 2] {
+        let start = node_coordinates(self.vertex_index);
+        if self.fraction_to_next == 0.0 {
+            return start;
+        }
+        let end = node_coordinates(self.vertex_index + 1);
+        [
+            start[0] + (end[0] - start[0]) * self.fraction_to_next,
+            normalize_longitude(
+                start[1] + wrapped_longitude_delta(start[1], end[1]) * self.fraction_to_next,
+            ),
+        ]
+    }
+}
+
+#[derive(Debug)]
+pub struct SourceInterval {
+    pub start: SourcePosition,
+    pub end: SourcePosition,
+    pub length_m: f32,
+}
+
+impl SourceInterval {
+    pub fn geometry(
+        &self,
+        node_coordinates: impl Fn(usize) -> [f64; 2],
+    ) -> ([f64; 2], [f64; 2], f32) {
+        (
+            self.start.coordinates(&node_coordinates),
+            self.end.coordinates(&node_coordinates),
+            self.length_m,
+        )
+    }
+}
+
 /// End a simplification range at each shared source node or missing coordinate.
 pub fn split_at_junctions(
     nodes: impl IntoIterator<Item = (Option<[f64; 2]>, bool)>,
     max_length_m: f64,
-) -> Vec<([f64; 2], [f64; 2], f32)> {
+) -> Vec<SourceInterval> {
     let mut segments = Vec::new();
     let mut range = Vec::new();
-    for (coords, junction) in nodes {
+    for (index, (coords, junction)) in nodes.into_iter().enumerate() {
         if let Some(coords) = coords {
-            if range.last() != Some(&coords) {
-                range.push(coords);
+            if range.last().map(|&(_, point)| point) != Some(coords) {
+                range.push((index, coords));
             }
             if junction {
-                segments.extend(split(&range, max_length_m));
+                split_range(&range, max_length_m, &mut segments);
                 range.clear();
-                range.push(coords);
+                range.push((index, coords));
             }
         } else {
-            segments.extend(split(&range, max_length_m));
+            split_range(&range, max_length_m, &mut segments);
             range.clear();
         }
     }
-    segments.extend(split(&range, max_length_m));
+    split_range(&range, max_length_m, &mut segments);
     segments
 }
 
-/// Split a linestring into microsegments, merging consecutive
-/// near-collinear vertices. Returns `(start, end, length_m)` triples.
-/// See the module docstring for the walker contract.
-pub fn split(coords: &[[f64; 2]], max_length_m: f64) -> Vec<([f64; 2], [f64; 2], f32)> {
-    let mut segments = Vec::new();
-    if coords.len() < 2 {
-        return segments;
-    }
-    let mut i = 0usize;
-    while i + 1 < coords.len() {
-        let first_hop = flat_dist(
-            coords[i][0],
-            coords[i][1],
-            coords[i + 1][0],
-            coords[i + 1][1],
-        );
-
+fn split_range(
+    vertices: &[(usize, [f64; 2])],
+    max_length_m: f64,
+    segments: &mut Vec<SourceInterval>,
+) {
+    let mut i = 0;
+    while i + 1 < vertices.len() {
+        let (start_vertex, start) = vertices[i];
+        let (end_vertex, end) = vertices[i + 1];
+        let first_hop = flat_dist(start[0], start[1], end[0], end[1]);
         if first_hop > max_length_m {
-            // Single vertex pair already exceeds the cap — fall back
-            // to uniform interpolation for this pair.
-            interpolate_pair(
-                coords[i],
-                coords[i + 1],
-                first_hop,
-                max_length_m,
-                &mut segments,
-            );
+            let count = (first_hop / max_length_m).ceil() as usize;
+            let position = |part| match part {
+                0 => SourcePosition::vertex(start_vertex),
+                part if part == count => SourcePosition::vertex(end_vertex),
+                // Dedup may skip equal coordinates; interpolation belongs to the final original hop.
+                part => SourcePosition {
+                    vertex_index: end_vertex - 1,
+                    fraction_to_next: part as f64 / count as f64,
+                },
+            };
+            for part in 0..count {
+                segments.push(SourceInterval {
+                    start: position(part),
+                    end: position(part + 1),
+                    length_m: (first_hop / count as f64) as f32,
+                });
+            }
             i += 1;
             continue;
         }
 
-        // Walker: greedy-extend `j` while length stays under cap and
-        // every intermediate vertex stays within `CHORD_EPS_M` of the
-        // candidate chord `(i, j+1)`.
         let mut j = i + 1;
-        let mut cum_len = first_hop;
-        while j + 1 < coords.len() {
+        let mut cumulative_length = first_hop;
+        while j + 1 < vertices.len() {
             let next = j + 1;
-            let extra = flat_dist(coords[j][0], coords[j][1], coords[next][0], coords[next][1]);
-            let candidate_len = cum_len + extra;
-            if candidate_len > max_length_m {
-                break;
-            }
-            let mut chord_ok = true;
-            for k in (i + 1)..=j {
-                if perp_distance_to_chord(coords[k], coords[i], coords[next]) > CHORD_EPS_M {
-                    chord_ok = false;
-                    break;
-                }
-            }
-            if !chord_ok {
+            let current_coords = vertices[j].1;
+            let next_coords = vertices[next].1;
+            let candidate_length = cumulative_length
+                + flat_dist(
+                    current_coords[0],
+                    current_coords[1],
+                    next_coords[0],
+                    next_coords[1],
+                );
+            if candidate_length > max_length_m
+                || vertices[i + 1..=j].iter().any(|&(_, point)| {
+                    perp_distance_to_chord(point, start, next_coords) > CHORD_EPS_M
+                })
+            {
                 break;
             }
             j = next;
-            cum_len = candidate_len;
+            cumulative_length = candidate_length;
         }
-        segments.push((coords[i], coords[j], cum_len as f32));
+        segments.push(SourceInterval {
+            start: SourcePosition::vertex(start_vertex),
+            end: SourcePosition::vertex(vertices[j].0),
+            length_m: cumulative_length as f32,
+        });
         i = j;
-    }
-
-    segments
-}
-
-/// Uniform sub-segments between `a` and `b` when their gap exceeds
-/// `max_length_m`. Antimeridian-safe longitude delta.
-fn interpolate_pair(
-    a: [f64; 2],
-    b: [f64; 2],
-    dist: f64,
-    max_length_m: f64,
-    segments: &mut Vec<([f64; 2], [f64; 2], f32)>,
-) {
-    let n = (dist / max_length_m).ceil() as usize;
-    let dlon = wrapped_longitude_delta(a[1], b[1]);
-    let seg_len = dist / n as f64;
-    for j in 0..n {
-        let t0 = j as f64 / n as f64;
-        let t1 = (j + 1) as f64 / n as f64;
-        let p0 = if j == 0 {
-            a
-        } else {
-            [
-                a[0] + (b[0] - a[0]) * t0,
-                normalize_longitude(a[1] + dlon * t0),
-            ]
-        };
-        let p1 = if j + 1 == n {
-            b
-        } else {
-            [
-                a[0] + (b[0] - a[0]) * t1,
-                normalize_longitude(a[1] + dlon * t1),
-            ]
-        };
-        segments.push((p0, p1, seg_len as f32));
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{bearing_deg, split, split_at_junctions};
+    use super::{bearing_deg, SourcePosition};
     use grid::geo::flat_dist;
+
+    fn split_at_junctions(
+        nodes: impl IntoIterator<Item = (Option<[f64; 2]>, bool)>,
+        max_length_m: f64,
+    ) -> Vec<([f64; 2], [f64; 2], f32)> {
+        let nodes: Vec<_> = nodes.into_iter().collect();
+        super::split_at_junctions(nodes.iter().copied(), max_length_m)
+            .iter()
+            .map(|interval| interval.geometry(|index| nodes[index].0.unwrap()))
+            .collect()
+    }
+
+    fn split(coords: &[[f64; 2]], max_length_m: f64) -> Vec<([f64; 2], [f64; 2], f32)> {
+        split_at_junctions(
+            coords.iter().map(|&point| (Some(point), false)),
+            max_length_m,
+        )
+    }
+
+    #[test]
+    fn source_intervals_keep_original_indices_through_merging_splits_and_gaps() {
+        let nodes = [
+            (Some([0.0, 0.0]), false),
+            (Some([0.0, 0.0001]), false),
+            (Some([0.0, 0.0001]), false),
+            (Some([0.0, 0.0002]), true),
+            (Some([0.0, 0.0002]), false),
+            (Some([0.0, 0.0062]), false),
+            (None, false),
+            (Some([0.0, 0.007]), false),
+            (Some([0.0, 0.0071]), false),
+        ];
+        let segments = super::split_at_junctions(nodes, 250.0);
+        assert_eq!(segments.len(), 5);
+        let interpolated = |fraction_to_next| SourcePosition {
+            vertex_index: 4,
+            fraction_to_next,
+        };
+        let expected = [
+            (SourcePosition::vertex(0), SourcePosition::vertex(3)),
+            (SourcePosition::vertex(3), interpolated(1.0 / 3.0)),
+            (interpolated(1.0 / 3.0), interpolated(2.0 / 3.0)),
+            (interpolated(2.0 / 3.0), SourcePosition::vertex(5)),
+            (SourcePosition::vertex(7), SourcePosition::vertex(8)),
+        ];
+        assert_eq!(
+            segments
+                .iter()
+                .map(|s| (s.start, s.end))
+                .collect::<Vec<_>>(),
+            expected
+        );
+        for interval in segments {
+            let (start, end, length) = interval.geometry(|index| nodes[index].0.unwrap());
+            assert!(
+                (flat_dist(start[0], start[1], end[0], end[1]) - f64::from(length)).abs() < 1e-4
+            );
+        }
+    }
 
     #[test]
     fn protected_collinear_source_node_remains_an_exact_segment_endpoint() {
@@ -342,11 +397,8 @@ mod tests {
         );
     }
 
-    /// Long single hop past the max-length cap must still fall back to
-    /// the legacy uniform interpolation (no intermediate vertices to
-    /// merge over).
     #[test]
-    fn long_single_hop_uses_uniform_interpolation_fallback() {
+    fn long_single_hop_uses_uniform_interpolation() {
         let cos_lat = (50.0_f64.to_radians()).cos();
         let coords = vec![[50.0, 14.0], [50.0, 14.0 + 600.0 / (111_320.0 * cos_lat)]];
         let segs = split(&coords, 250.0);

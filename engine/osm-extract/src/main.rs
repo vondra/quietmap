@@ -313,11 +313,16 @@ fn main() -> Result<()> {
                             "way {} exceeds nonnegative Int16 segment identities",
                             way.id(),
                         );
-                        for (idx, seg) in segs.iter().enumerate() {
+                        for (idx, interval) in segs.iter().enumerate() {
+                            let seg = interval.geometry(|index| {
+                                resolved_nodes[index]
+                                    .1
+                                    .expect("source interval references a resolved node")
+                            });
                             let mid_lat = (seg.0[0] + seg.1[0]) / 2.0;
                             let mid_lon = grid::geo::wrapped_longitude_midpoint(seg.0[1], seg.1[1]);
                             let square = grid::square_of(mid_lat, mid_lon);
-                            spiller.emit_segment(&ftype, square, way.id(), idx as i16, seg, &tags);
+                            spiller.emit_segment(&ftype, square, way.id(), idx as i16, &seg, &tags);
                             features_total += 1;
                         }
                     } else {
