@@ -95,6 +95,9 @@ period. The producer clips geometry and resolves counts, missing-traffic priors,
 service/parallel allocation and any estimated period split before publication.
 Daily-only timetable evidence receives an explicitly estimated period allocation.
 Unknown freight is not a known zero; a known numeric zero remains zero.
+On non-service tracks (`service=0`), each unknown category receives its own
+labelled class prior, independently of evidence in the other category. Existing
+category values, including zero, are preserved; new priors are shared once.
 
 Popup and surface loaders require this contract and use the same validator and
 normalization. Emission and audibility reach consume these period counts directly

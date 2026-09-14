@@ -9,19 +9,9 @@ pub const STATUS_UNKNOWN: u8 = 0;
 pub const STATUS_KNOWN: u8 = 1;
 pub const STATUS_ESTIMATED: u8 = 2;
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct CategoryFlow {
-    pub periods: [f64; 3],
-    pub status: u8,
-    pub source_id: u16,
-    pub matching: u8,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RowTraffic {
-    pub passenger: CategoryFlow,
-    pub freight: CategoryFlow,
-}
+pub use noise_compute::normalize::{
+    RailCategoryTraffic as CategoryFlow, RailTraffic as RowTraffic,
+};
 
 #[derive(Clone, Copy)]
 struct Claim {
@@ -125,15 +115,29 @@ pub fn row_traffic(
         traffic.freight =
             estimated_flow(winner.trains, shares.frt, winner.source_id, winner.matching);
     }
-    if service == 0
-        && traffic.passenger.status == STATUS_UNKNOWN
-        && traffic.freight.status == STATUS_UNKNOWN
-    {
-        let (passenger, freight) = default_traffic(rail, usage);
+    fill_missing_priors(&mut traffic, rail_type, usage, service, square_country_city);
+    traffic
+}
+
+pub fn fill_missing_priors(
+    traffic: &mut RowTraffic,
+    rail_type: u8,
+    usage: u8,
+    service: u8,
+    square_country_city: SquareCountryCity,
+) {
+    if service != 0 {
+        return;
+    }
+    let rail = RailType::from_u8(rail_type);
+    let (passenger, freight) = default_traffic(rail, usage);
+    let shares = rail_time_dist(square_country_city, rail);
+    if traffic.passenger.status == STATUS_UNKNOWN {
         traffic.passenger = estimated_flow(passenger, shares.pax, 0, 0);
+    }
+    if traffic.freight.status == STATUS_UNKNOWN {
         traffic.freight = estimated_flow(freight, shares.frt, 0, 0);
     }
-    traffic
 }
 
 pub fn share_class_defaults(rows: &mut [RowTraffic], group_size: usize) {
@@ -182,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn repeats_sum_and_unknown_freight_does_not_claim() {
+    fn repeats_sum_and_only_unknown_categories_receive_shared_priors() {
         let intervals = [
             interval(10.0, 40.0, 2.0, 0.0, STATUS_UNKNOWN),
             interval(10.0, 40.0, 3.0, 9.0, STATUS_UNKNOWN),
@@ -192,11 +196,35 @@ mod tests {
             country_iso: *b"DE",
             city_id: 0,
         };
-        let traffic = row_traffic(&intervals, 10.0, 40.0, 0, 0, 0, cz);
+        let mut traffic = row_traffic(&intervals, 10.0, 40.0, 0, 0, 0, cz);
         let passenger_day = traffic.passenger.periods.iter().sum::<f64>();
         assert!((passenger_day - 5.0).abs() < 1e-9);
         assert_eq!(traffic.passenger.matching, 1);
-        assert_eq!(traffic.freight.status, STATUS_UNKNOWN);
+        assert_eq!(traffic.freight.status, STATUS_ESTIMATED);
+        assert!((traffic.freight.periods.iter().sum::<f64>() - 20.0).abs() < 1e-9);
+        share_class_defaults(std::slice::from_mut(&mut traffic), 2);
+        assert!((traffic.freight.periods.iter().sum::<f64>() - 10.0).abs() < 1e-9);
+        assert!((traffic.passenger.periods.iter().sum::<f64>() - 5.0).abs() < 1e-9);
+        let service = row_traffic(&intervals, 10.0, 40.0, 0, 0, 2, cz);
+        assert_eq!(service.freight.status, STATUS_UNKNOWN);
+        let zero = row_traffic(
+            &[interval(10.0, 40.0, 0.0, 0.0, STATUS_KNOWN)],
+            10.0,
+            40.0,
+            0,
+            0,
+            0,
+            cz,
+        );
+        assert_eq!(zero.passenger.periods, [0.0; 3]);
+        assert_eq!(zero.freight.periods, [0.0; 3]);
         assert_eq!(traffic.freight.source_id, 0);
+        let mut freight_only = interval(10.0, 40.0, 99.0, 7.0, STATUS_KNOWN);
+        freight_only.passenger_status = STATUS_UNKNOWN;
+        let traffic = row_traffic(&[freight_only], 10.0, 40.0, 0, 0, 0, cz);
+        assert!((traffic.passenger.periods.iter().sum::<f64>() - 80.0).abs() < 1e-9);
+        assert_eq!(traffic.passenger.source_id, 0);
+        assert!((traffic.freight.periods.iter().sum::<f64>() - 7.0).abs() < 1e-9);
+        assert_eq!(traffic.freight.source_id, 100);
     }
 }

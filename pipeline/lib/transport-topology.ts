@@ -239,9 +239,17 @@ export class SourceTransportTopology implements Disposable {
   }
 
   *squares(): Generator<string> {
+    // Seek each next owner instead of joining every acoustic piece just to deduplicate it.
     for (const row of this.database.prepare(`
-      SELECT DISTINCT p.square FROM source_pieces p JOIN source_ways w ON w.osm_id=p.way_id
-      WHERE w.family=?`).iterate(this.family)) yield row.square as string
+      WITH RECURSIVE owners(square) AS (
+        SELECT min(square) FROM source_pieces
+        UNION ALL
+        SELECT (SELECT min(square) FROM source_pieces WHERE square > owners.square)
+        FROM owners WHERE square IS NOT NULL
+      )
+      SELECT square FROM owners WHERE square IS NOT NULL AND EXISTS (
+        SELECT 1 FROM source_pieces p JOIN source_ways w ON w.osm_id=p.way_id
+        WHERE p.square=owners.square AND w.family=?)`).iterate(this.family)) yield row.square as string
   }
 
   squareWayPieces(square: string, wayIds: Iterable<string>): Map<string, SegmentEndpointKeys> {

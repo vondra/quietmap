@@ -12,6 +12,7 @@ test('shards partition squares without overlap and reject bad shapes', () => {
   assert.equal(workerCount({ QM_ROAD_WORKERS: '1' }), 1)
   assert.ok(workerCount({ QM_ROAD_WORKERS: '3' }) >= 1)
   assert.ok(workerCount({ QM_ROAD_WORKERS: '3' }) <= 3)
+  assert.equal(workerCount({ QM_ROAD_WORKERS: '3' }, Number.MAX_SAFE_INTEGER), 1)
   assert.ok(workerCount({}) >= 1)
   assert.throws(() => workerCount({ QM_ROAD_WORKERS: '0' }))
 })

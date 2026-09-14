@@ -11,7 +11,7 @@ import { withArrowWrite } from './lib/provenance.js'
 import { applyRoadAadt } from './lib/roads-arrow.js'
 import { readPlanningRoads } from './lib/road-planning-input.js'
 import { roadContinuityComponent, planContinuityComponent, FILLABLE, type ContinuityRoad } from './lib/roads-continuity-plan.js'
-import { SOURCE_ID_ROAD_CONTINUITY_HEURISTIC } from './lib/source-ids.generated.js'
+import { SOURCE_ID_ROAD_CONTINUITY_HEURISTIC, SOURCES, isMeasured } from './lib/sources.js'
 import { listPreparedSquares } from './lib/prepared-grid.js'
 import { SourceTransportTopology, transportPieceKey } from './lib/transport-topology.js'
 
@@ -69,7 +69,10 @@ export async function enrichContinuityDirectory(preparedDirectory: string) {
       rows += roads.length
       if ((position + 1) % 1000 === 0) console.log(JSON.stringify({ phase: 'continuity-inputs', squares: position + 1, rows }))
     }
-    const pending = `visited=0 AND cls IN (${[...FILLABLE].join(',')})`
+    const measuredSources = SOURCES.filter(source => isMeasured(source.id)).map(source => source.id)
+    // A component without an observation cannot produce a fill; retain all rows for branch degree.
+    const pending = `visited=0 AND cls IN (${[...FILLABLE].join(',')})
+      AND src IN (${measuredSources.join(',')}) AND observationId != ''`
     database.exec(`CREATE INDEX roads_a ON roads(a); CREATE INDEX roads_b ON roads(b);
       CREATE INDEX roads_pending ON roads(i) WHERE ${pending};`)
     const next = database.prepare(`SELECT * FROM roads WHERE ${pending} LIMIT 1`)

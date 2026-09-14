@@ -1,9 +1,10 @@
 //! Per-square Arrow rewrite: split, stamp `rail_traffic_contract=1`, z14-rebatch.
 
 use crate::encode::{encode_children, Expanded, CONTRACT_KEY};
+use crate::merge::{fill_missing_priors, RowTraffic, STATUS_UNKNOWN};
 use crate::sharing::apply_default_sharing;
 use crate::sidecar::{load_square_intervals, Interval};
-use crate::split::{split_parent, ChildGeom};
+use crate::split::{split_parent, ChildGeom, ChildRow};
 use crate::topology::load_square_pieces;
 use arrow::array::{
     Array, Float32Array, Int16Array, Int32Array, Int64Array, UInt16Array, UInt8Array,
@@ -40,12 +41,23 @@ pub fn finalize_square(
     let reader = FileReader::try_new(Cursor::new(&bytes), None)
         .map_err(|e| format!("arrow open {}: {e}", arrow_path.display()))?;
     let schema = reader.schema();
-    if schema.metadata().get(CONTRACT_KEY).map(String::as_str) == Some("1") {
+    let finalized = schema.metadata().get(CONTRACT_KEY).map(String::as_str) == Some("1");
+    let batches = reader
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("arrow batch {}: {e}", arrow_path.display()))?;
+    if finalized {
         crate::rail_traffic::RailTrafficColumns::read(&RecordBatch::new_empty(schema.clone()))?;
         let mut rows = 0;
-        for batch in reader {
-            let batch = batch.map_err(|e| format!("arrow batch {}: {e}", arrow_path.display()))?;
-            crate::rail_traffic::RailTrafficColumns::read(&batch)?;
+        let mut missing_priors = false;
+        for batch in &batches {
+            let traffic = crate::rail_traffic::RailTrafficColumns::read(batch)?;
+            let service = col_u8(batch, "service")?;
+            for row in 0..batch.num_rows() {
+                let current = traffic.row(row);
+                missing_priors |= service.value(row) == 0
+                    && (current.passenger.status == STATUS_UNKNOWN
+                        || current.freight.status == STATUS_UNKNOWN);
+            }
             if batch.num_rows() > 0
                 && !schema
                     .metadata()
@@ -58,21 +70,31 @@ pub fn finalize_square(
             }
             rows += batch.num_rows();
         }
-        return Ok(Some(SquareReceipt {
-            rewritten: false,
-            rows_in: rows,
-            rows_out: rows,
-        }));
+        if !missing_priors {
+            return Ok(Some(SquareReceipt {
+                rewritten: false,
+                rows_in: rows,
+                rows_out: rows,
+            }));
+        }
     }
-    let batches = reader
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("arrow batch {}: {e}", arrow_path.display()))?;
     let merged =
         concat_batches(&schema, &batches).map_err(|e| format!("{}: {e}", arrow_path.display()))?;
     let square_name = grid::square_name(square);
-    let intervals = load_square_intervals(sidecar, &square_name)?;
-    let pieces = load_square_pieces(topology, &square_name, col_i64(&merged, "osm_id")?.values())?;
-    let children = expand_rows(&merged, &intervals, &pieces)?;
+    let retained = finalized
+        .then(|| crate::rail_traffic::RailTrafficColumns::read(&merged))
+        .transpose()?;
+    let intervals = if finalized {
+        HashMap::new()
+    } else {
+        load_square_intervals(sidecar, &square_name)?
+    };
+    let pieces = if finalized {
+        HashMap::new()
+    } else {
+        load_square_pieces(topology, &square_name, col_i64(&merged, "osm_id")?.values())?
+    };
+    let children = expand_rows(&merged, &intervals, &pieces, retained.as_ref())?;
     let ipc = encode_children(&merged, &children)?;
     write_atomically(&dir, &ipc)?;
     Ok(Some(SquareReceipt {
@@ -141,6 +163,7 @@ fn expand_rows(
     merged: &RecordBatch,
     intervals: &HashMap<(i64, i16), Vec<Interval>>,
     pieces: &HashMap<(i64, i16), crate::topology::Piece>,
+    retained: Option<&crate::rail_traffic::RailTrafficColumns<'_>>,
 ) -> Result<Vec<Expanded>, String> {
     let osm_id = col_i64(merged, "osm_id")?;
     let segment_idx = col_i16(merged, "segment_idx")?;
@@ -163,20 +186,42 @@ fn expand_rows(
             end_gy: end_gy.value(row),
             length_m: length.value(row),
         };
-        let children = split_parent(
-            id,
-            idx,
-            original,
-            pieces.get(&(id, idx)),
-            intervals
-                .get(&(id, idx))
-                .map(Vec::as_slice)
-                .unwrap_or_default(),
-            rail_type.value(row),
-            usage.value(row),
-            service.value(row),
-            row_country(merged, row)?,
-        )?;
+        let children = if let Some(retained) = retained {
+            let current = retained.row(row);
+            let mut priors = RowTraffic::default();
+            fill_missing_priors(
+                &mut priors,
+                rail_type.value(row),
+                usage.value(row),
+                service.value(row),
+                row_country(merged, row)?,
+            );
+            if current.passenger.status != STATUS_UNKNOWN {
+                priors.passenger = Default::default();
+            }
+            if current.freight.status != STATUS_UNKNOWN {
+                priors.freight = Default::default();
+            }
+            vec![ChildRow {
+                geom: original,
+                traffic: priors,
+            }]
+        } else {
+            split_parent(
+                id,
+                idx,
+                original,
+                pieces.get(&(id, idx)),
+                intervals
+                    .get(&(id, idx))
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+                rail_type.value(row),
+                usage.value(row),
+                service.value(row),
+                row_country(merged, row)?,
+            )?
+        };
         let ref_token = utf8_at(merged, "ref", row);
         let name = utf8_at(merged, "name", row);
         let corridor = if ref_token.trim().is_empty() {
@@ -196,6 +241,17 @@ fn expand_rows(
         }
     }
     apply_default_sharing(&mut expanded);
+    if let Some(retained) = retained {
+        for row in &mut expanded {
+            let current = retained.row(row.parent as usize);
+            if current.passenger.status != STATUS_UNKNOWN {
+                row.child.traffic.passenger = current.passenger;
+            }
+            if current.freight.status != STATUS_UNKNOWN {
+                row.child.traffic.freight = current.freight;
+            }
+        }
+    }
     Ok(expanded)
 }
 

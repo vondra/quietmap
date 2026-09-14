@@ -167,3 +167,21 @@ test('physical passages clip acoustic pieces across squares and retain the order
   }
   assert.throws(() => topology.passagePieces({ way: id, from: 100, to: 900 }), /gap or overlap/)
 })
+
+
+test('owner inventory seeks distinct squares and retains the requested family, including empty input', () => {
+  const prepared = join(TEMP, 'owners')
+  writeTransportFixture(prepared, [
+    { id: '1', family: 'roads', nodes: [] }, { id: '2', family: 'railways', nodes: [] },
+  ], [])
+  using roads = new SourceTransportTopology(prepared, 'roads')
+  using railways = new SourceTransportTopology(prepared, 'railways')
+  assert.deepEqual([...roads.squares()], [])
+  using database = new DatabaseSync(transportTopologyPath(prepared))
+  database.exec(`INSERT INTO source_pieces VALUES
+    (1, 0, 'z9/1/1', 0, 0, 1, 0), (1, 1, 'z9/1/1', 1, 0, 2, 0),
+    (1, 2, 'z9/3/1', 2, 0, 3, 0), (2, 0, 'z9/2/1', 0, 0, 1, 0),
+    (2, 1, 'z9/3/1', 1, 0, 2, 0)`)
+  assert.deepEqual([...roads.squares()], ['z9/1/1', 'z9/3/1'])
+  assert.deepEqual([...railways.squares()], ['z9/2/1', 'z9/3/1'])
+})

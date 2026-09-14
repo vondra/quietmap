@@ -9,11 +9,11 @@ import { cpuJobs, fitJobs } from './worker-jobs.js'
 /** One Node square-heuristic process; a 20 GiB layer cgroup holds 20. */
 export const SQUARE_WORKER_BYTES = 1 << 30
 
-export function workerCount(env: NodeJS.ProcessEnv = process.env): number {
+export function workerCount(env: NodeJS.ProcessEnv = process.env, perWorkerBytes = SQUARE_WORKER_BYTES): number {
   const raw = env.QM_ROAD_WORKERS
   const requested = raw === undefined || raw === '' ? cpuJobs() : Number(raw)
   if (!Number.isInteger(requested) || requested < 1) throw new Error('QM_ROAD_WORKERS must be a positive integer')
-  return fitJobs(requested, SQUARE_WORKER_BYTES)
+  return fitJobs(requested, perWorkerBytes)
 }
 
 export function parseShard(shard: string | undefined): { index: number; count: number } {
@@ -39,9 +39,9 @@ export function argvHasShard(argv: readonly string[] = process.argv): boolean {
  * worker fits. Forwards the original argv so extra flags (`--world`, `--enrichment-dir`)
  * reach the children. Returns true in the parent after the children exit.
  */
-export async function fanOutIfNeeded(): Promise<boolean> {
+export async function fanOutIfNeeded(perWorkerBytes = SQUARE_WORKER_BYTES): Promise<boolean> {
   if (argvHasShard()) return false
-  const workers = workerCount()
+  const workers = workerCount(process.env, perWorkerBytes)
   if (workers <= 1) return false
   await Promise.all(Array.from({ length: workers }, (_, index) => new Promise<void>((done, fail) => {
     const child = spawn(process.execPath, [
