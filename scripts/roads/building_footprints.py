@@ -111,8 +111,12 @@ class BuildingFootprintSampler:
         for latitudes, longitudes, areas in cells:
             start = np.searchsorted(latitudes, lat - WINDOW_HALF_DEG, side="left")
             end = np.searchsorted(latitudes, lat + WINDOW_HALF_DEG, side="right")
-            inside = np.abs(qmgrid.wrapped_longitude_delta(lon, longitudes[start:end])) <= WINDOW_HALF_DEG
-            area += float(areas[start:end][inside].sum())
+            strip = longitudes[start:end]
+            distance = np.abs(strip - qmgrid.normalize_longitude(lon))
+            # A loose prefilter saves wrapping distant rows; exact wrapping still decides boundaries.
+            nearby = (distance <= 2 * WINDOW_HALF_DEG) | (distance >= 360 - 2 * WINDOW_HALF_DEG)
+            inside = np.abs(qmgrid.wrapped_longitude_delta(lon, strip[nearby])) <= WINDOW_HALF_DEG
+            area += float(areas[start:end][nearby][inside].sum())
         return area
 
     def classify(self, lat, lon):

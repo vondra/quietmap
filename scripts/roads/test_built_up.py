@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import numpy as np
 import pyarrow as pa
 
 from building_footprints import BuildingFootprintSampler, WINDOW_HALF_DEG
@@ -102,6 +103,23 @@ class BuiltUpTests(unittest.TestCase):
         area = self.sampler().window_area_m2(lat, lon)
         assert area is not None
         self.assertAlmostEqual(area, 1200, delta=5)
+
+    def test_longitude_prefilter_preserves_exact_wrapped_boundary_sums(self):
+        rng = np.random.default_rng(42)
+        for lon in (-540, -180, -179.9999, 0, 139.7, 179.9999, 180, 540):
+            edges = np.array([lon - WINDOW_HALF_DEG, lon + WINDOW_HALF_DEG])
+            longitudes = qmgrid.normalize_longitude(np.concatenate((
+                rng.uniform(-180, 180, 20_000), edges,
+                np.nextafter(edges, -np.inf), np.nextafter(edges, np.inf))))
+            areas = rng.uniform(1, 10000, len(longitudes))
+            cell = (np.full(len(longitudes), 35.6), longitudes, areas)
+            expected = float(areas[
+                np.abs(qmgrid.wrapped_longitude_delta(lon, longitudes)) <= WINDOW_HALF_DEG].sum())
+            sampler = self.sampler()
+            with self.subTest(longitude=lon), \
+                    patch("building_footprints.window_squares", return_value=[(0, 0)]), \
+                    patch.object(sampler, "cell_footprints", return_value=cell):
+                self.assertEqual(sampler.window_area_m2(35.6, lon), expected)
 
     def test_courtyards_and_multipart_area_cross_the_calibrated_threshold(self):
         lat, lon = self.point
