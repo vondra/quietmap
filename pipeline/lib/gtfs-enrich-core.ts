@@ -550,6 +550,7 @@ export async function computeActiveTripFamiliesForFeed<F extends string>(
     return best.date
   }
 
+  const busiest = dateSelection === findBusiestWednesday
   if (calendarRaw !== null && weekdayDriven) {
     let first = firstServiceDate, last = lastServiceDate
     for (const row of calendarRaw) {
@@ -558,9 +559,8 @@ export async function computeActiveTripFamiliesForFeed<F extends string>(
     }
     const preferred = (dateSelection ?? findTargetWednesday)(calendarRaw)
     if (!withinFeedWindow(preferred)) throw new Error(`${extractDir}: selected service day ${preferred} outside the declared service window`)
-    const busiest = dateSelection === findBusiestWednesday
     activateDate(preferred, true)
-    targetDate = activeTripSummary().complete ? preferred :
+    targetDate = !busiest && activeTripSummary().complete ? preferred :
       chooseCompleteDate(rangeDates(first, last, true), true, preferred, busiest) ||
       chooseCompleteDate(rangeDates(first, last, false), true, preferred, busiest) || preferred
     activateDate(targetDate, true)
@@ -572,7 +572,7 @@ export async function computeActiveTripFamiliesForFeed<F extends string>(
     const rankedWednesdays = ranked.filter(([date]) => new Date(parseGtfsDate(date)).getUTCDay() === 3)
     const preferred = (rankedWednesdays[0] ?? ranked[0])?.[0] ?? ''
     if (preferred) activateDate(preferred, false)
-    targetDate = activeTripSummary().complete ? preferred :
+    targetDate = !busiest && activeTripSummary().complete ? preferred :
       chooseCompleteDate(rankedWednesdays.map(([date]) => date), false, preferred, true) ||
       chooseCompleteDate(ranked.map(([date]) => date), false, preferred, true) || preferred
     if (targetDate) activateDate(targetDate, false)

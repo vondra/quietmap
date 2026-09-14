@@ -53,7 +53,7 @@ interface ServiceProvenance {
   fromCache: boolean
 }
 
-const CACHE_VERSION = 3
+const CACHE_VERSION = 4
 const INPUT_FILES = ['routes.txt', 'trips.txt', 'stop_times.txt', 'stops.txt', 'shapes.txt',
   'calendar.txt', 'calendar_dates.txt', 'frequencies.txt', 'feed_info.txt'] as const
 
@@ -207,10 +207,20 @@ async function importServices(database: DatabaseSync, directory: string, options
         fields[arrivalIndex] || '', fields[departureIndex] || '', shapeDistance(fields[distanceIndex] || ''))
     }
   })
-  const missing = database.prepare(`SELECT trip_id FROM services s WHERE NOT EXISTS
-    (SELECT 1 FROM stop_times t WHERE t.trip_id = s.trip_id) LIMIT 1`).get()
-  if (missing) throw new Error(`${directory}: active rail trip '${missing.trip_id}' has no stop_times`)
-  provenance.tripsWithStopTimes = selected.tripFam.size
+  let missingStopTimes = 0
+  const missing = database.prepare(`SELECT s.trip_id, h.points FROM services s
+    LEFT JOIN shapes h ON h.shape_id = s.shape_id WHERE NOT EXISTS
+    (SELECT 1 FROM stop_times t WHERE t.trip_id = s.trip_id)`)
+  for (const row of missing.iterate()) {
+    const shape = row.points ? JSON.parse(row.points as string) as GtfsShapePoint[] : []
+    if (!shape.some(point => point.lat !== shape[0].lat || point.lon !== shape[0].lon)) {
+      throw new Error(`${directory}: active rail trip '${row.trip_id}' has no stop_times or usable shape`)
+    }
+    // Keep the source trip and its weight: routing quarantines this geometry
+    // without inventing station visits or erasing earlier traffic on its route.
+    missingStopTimes++
+  }
+  provenance.tripsWithStopTimes = selected.tripFam.size - missingStopTimes
   return provenance
 }
 

@@ -390,3 +390,25 @@ test('feed_info bounds both recurring and exception-only service selection', asy
     assert.ok(!result.tripFam.has('T3'))
   }
 })
+
+
+test('busiest day counts trips after exceptions even when the preferred day has every family', async () => {
+  for (const exactDates of [false, true]) {
+    const dir = join(TMP, `nonempty-thin-day-${exactDates}`)
+    const columns = 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\n'
+    writeGtfsFixture(dir, {
+      'routes.txt': 'route_id,route_type\nrail,2\ntram,0\n',
+      'trips.txt': 'trip_id,route_id,service_id\nlow,rail,low\nremoved1,rail,removed1\nremoved2,rail,removed2\n' +
+        'peak1,rail,peak\npeak2,rail,peak\npeak3,rail,peak\npeak4,rail,peak\ntram,tram,tram\n',
+      ...(!exactDates ? { 'calendar.txt': columns +
+        ['low', 'removed1', 'removed2'].map(id => `${id},0,0,1,0,0,0,0,20260107,20260107\n`).join('') +
+        'peak,0,0,1,0,0,0,0,20260114,20260114\ntram,0,0,1,0,0,0,0,20260107,20260114\n' } : {}),
+      'calendar_dates.txt': 'service_id,date,exception_type\n' + (exactDates ?
+        'low,20260107,1\nremoved1,20260107,1\nremoved2,20260107,1\ntram,20260107,1\npeak,20260114,1\ntram,20260114,1\n' : '') +
+        'removed1,20260107,2\nremoved2,20260107,2\n',
+    })
+    const result = await computeActiveTripFamiliesForFeed(dir, routeFamily, findBusiestWednesday)
+    assert.equal(result.targetDate, '20260114')
+    assert.deepEqual([...result.tripFam.keys()], ['peak1', 'peak2', 'peak3', 'peak4', 'tram'])
+  }
+})

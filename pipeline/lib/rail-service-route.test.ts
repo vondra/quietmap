@@ -329,3 +329,39 @@ test('station-only shapes use shapeless routing while intermediate geometry rema
   assert.equal(aligned.dailyDepartures.graphEstimated, 7)
   assert.deepEqual(aligned.services[0].passages.map(passage => passage.wayId), ['1', '1'])
 })
+
+test('shapeless services accept parallel tracks but keep distinct corridors ambiguous', () => {
+  for (const spacingM of [8, 120]) {
+    const prepared = join(TEMP, `parallel-${spacingM}`)
+    const direct: Array<[string, [number, number]]> = Array.from({ length: 21 },
+      (_, index) => [String(index + 1), point(index * 250, 0)])
+    const parallel: typeof direct = direct.map((_, index) => [String(index + 101), point(index * 250, spacingM)])
+    const ways = [
+      { id: '10', nodes: direct }, { id: '20', nodes: parallel },
+      { id: '30', nodes: [direct[0], parallel[0]] },
+      { id: '40', nodes: [direct[20], parallel[20]] },
+    ]
+    const pieces = ways.flatMap(way => way.nodes.slice(1).map((_, index) => ({
+      way: way.id, segment: index, square,
+      start: [index, 0] as [number, number], end: [index + 1, 0] as [number, number],
+    })))
+    writeTransportFixture(prepared, ways, pieces)
+    using topology = new SourceTransportTopology(prepared)
+    const graph = buildRailGraph(ways.flatMap(way => way.nodes.slice(1).map((node, index) => ({
+      ...segment(way.id, way.nodes[index][1], node[1], way.nodes[index][0], node[0]),
+      key: `${way.id}:${index}`, isTraversalOnly: way.id === '30' || way.id === '40',
+    }))))
+    const trip = service('T', [stop('A', direct[0][1], 1), stop('B', direct[20][1], 2)], [], 20)
+    const result = routeRailServices([trip], topology, graph, 100)
+    const expected = spacingM === 8 ? 20 : 0
+    assert.equal(result.dailyDepartures.graphEstimated, expected, `${spacingM} m separation`)
+    assert.equal(result.dailyDepartures.failures.ambiguous, 20 - expected)
+    if (expected) {
+      assert.equal(result.services[0].evidence.matching, 'graph_estimated')
+      assert.equal(result.services[0].passages.length, 20)
+      for (const flow of passageFlow(result.services).values()) assert.equal(flow.passenger, 20)
+    } else {
+      assert.equal(result.services.length, 0)
+    }
+  }
+})

@@ -429,35 +429,10 @@ function applyParallelSpread(
 
 // ── Twin-track ambiguity exemption ──────────────────────────────────────────
 
-/** Length-weighted lateral-distance profile of `alt`'s NON-SHARED stampable
- *  edges versus `best` — the ONE metric both the twin GATE
- *  (`altPathIsParallelTwin`) and the failed-pair DIAGNOSTIC
- *  (`summarizeAmbiguousGeometry`'s `twinGate` field) read, so the tuning
- *  input and the tuned gate can never drift apart (2026-07-16 DE v3
- *  redesign — REPLACES the 0.8 length-fraction + contiguous non-twin-run
- *  bookkeeping; see WALK_TWIN_MEDIAN_LATERAL_M's provenance block for the
- *  DE numbers that motivated it).
- *
- *  For every stampable edge of `alt` not already shared with `best`: the
- *  lateral distance from that edge's own midpoint to the nearest STAMPABLE
- *  `best`-path edge's body, clamped at `WALK_TWIN_FAR_LATERAL_M` (beyond
- *  the clamp the exact value changes no verdict, and it bounds the grid
- *  ring search). NO heading filter, unlike the v2 per-edge boolean gate:
- *  aggregation over length already makes a crossing/diverging route read as
- *  far (only a few metres of its LENGTH sit near the crossing point), while
- *  a heading filter would misfile an excursion's transition ramps (20-35°
- *  for a few hundred metres) as FAR and re-fail exactly the German
- *  station/yard excursions the redesign exists to pass. Deliberately
- *  WITHOUT the sibling probe's osmId/usage/shared-node/longitudinal-overlap
- *  gates, which answer "is this my divisor-sharing sibling at this exact
- *  cross-section" (a different question); here only "does this alt edge run
- *  alongside the best path at all" matters. `best`'s own edges are
- *  grid-accelerated (a small, bounded set — the walk's own detour bound
- *  already caps it) so the probe never scans the whole graph.
- *
- *  Returns null when alt has no non-shared stampable length (it differs
- *  from best only via traversal-only crossovers — trivially the same
- *  route). */
+/** Length-weighted distance from non-shared alternative edges to the best
+ *  path. Classification and failure diagnostics share these metrics. Unlike
+ *  acoustic allocation, this permits station throats and short yard excursions.
+ *  Traversal-only differences have no stampable length and return null. */
 function twinGateMetrics(
   graph: RailGraph, best: ShortestPathResult, alt: ShortestPathResult,
 ): { medianLateralM: number; p75LateralM: number; farLengthFraction: number } | null {
@@ -543,16 +518,7 @@ function twinGateMetrics(
   return { medianLateralM, p75LateralM, farLengthFraction: farLenM / totalLenM }
 }
 
-/** Is `alt` merely the PARALLEL TWIN of `best` (the sibling track of a
- *  double/quad-track corridor the ambiguity probe would otherwise fail on),
- *  rather than a genuinely different corridor? Thresholds over the
- *  caller-computed `twinGateMetrics` result (computed ONCE per probe-flagged
- *  pair and threaded into the diagnostic too) — see
- *  WALK_TWIN_MEDIAN_LATERAL_M for the full reasoning + DE/CZ provenance.
- *  When the twin verdict holds, the parallel-spread pass
- *  (`applyParallelSpread`) unifies the tracks on its own once the best path
- *  is stamped normally; classification tolerance never leaks into the
- *  spread's stricter acoustic radii. */
+/** Classify the corridor independently of the stricter acoustic allocation radii. */
 function altPathIsParallelTwin(metrics: ReturnType<typeof twinGateMetrics>): boolean {
   if (metrics === null) return true // alt differs from best only via traversal-only crossovers — trivially the same route
   return metrics.medianLateralM <= WALK_TWIN_MEDIAN_LATERAL_M &&
@@ -560,26 +526,22 @@ function altPathIsParallelTwin(metrics: ReturnType<typeof twinGateMetrics>): boo
     metrics.farLengthFraction <= WALK_TWIN_FAR_LENGTH_FRACTION
 }
 
-/** DE Step A v2 diagnostics (2026-07-16 failure analysis, fix 3): summarizes
- *  how far apart (laterally) and how differently-oriented an 'ambiguous'
- *  pair's alt path runs from its best path — the v3 twin-gate tuning input
- *  `RailWalkResult.failedPairChords`'s `ambiguousGeometry` carries. Computed
- *  ONLY for a pair the walk already marked 'ambiguous' (never on the hot
- *  path); reuses the same lateral/heading primitives `altPathIsParallelTwin`
- *  gates on, but reports the full distribution (min/median/max across every
- *  non-shared stampable alt edge) instead of a single pass/fail — a pair
- *  that just barely missed the twin exemption (spread a few metres over
- *  WALK_TWIN_MEDIAN_LATERAL_M) looks very different from one whose alt path runs
- *  hundreds of metres away, even though both fail the same boolean gate.
- *  `headingDeltaDeg` reports the heading delta AT the edge with the SMALLEST
- *  lateral spread (the closest-matching local pair) — the single most
- *  informative number for "is the nearest candidate corridor even roughly
- *  parallel, or does it diverge immediately". No grid acceleration (unlike
- *  `altPathIsParallelTwin`'s `bestGrid`): both edge sets are already bounded
- *  by the pair's own detour bound, and this runs only for a rare failed
- *  pair, so an O(altEdges * bestEdges) scan is cheap in practice. Returns
- *  `undefined` when there is nothing stampable to compare (mirrors
- *  `altPathIsParallelTwin`'s own early return). */
+/** Find a comparably short alternative corridor, excluding the same line's parallel tracks. */
+export function findAmbiguousRailAlternative(
+  graph: RailGraph, fromNode: number, toNode: number, best: ShortestPathResult,
+  filter: ((edge: RailGraphEdge) => boolean) | null, scratch: DijkstraScratch,
+): { path: ShortestPathResult; twinGate: ReturnType<typeof twinGateMetrics> } | null {
+  const alt = dijkstraShortestPath(graph, fromNode, toNode, filter,
+    (index, edge) => edge.lengthM * (best.edgeIndices.has(index) ? PATH_REUSE_PENALTY : 1), scratch)
+  if (!alt || alt.lengthM > WALK_AMBIGUITY_LENGTH_RATIO * best.lengthM || best.edgeIndices.size === 0) return null
+  let shared = 0
+  for (const index of alt.edgeIndices) if (best.edgeIndices.has(index)) shared++
+  if (shared / best.edgeIndices.size >= WALK_AMBIGUITY_SHARED_EDGE_FRACTION) return null
+  const twinGate = twinGateMetrics(graph, best, alt)
+  return altPathIsParallelTwin(twinGate) ? null : { path: alt, twinGate }
+}
+
+/** Failure diagnostics reuse the corridor classification's metrics. */
 function summarizeAmbiguousGeometry(
   graph: RailGraph, best: ShortestPathResult, alt: ShortestPathResult,
   twinGate: ReturnType<typeof twinGateMetrics>,
@@ -1029,37 +991,14 @@ export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCou
     }
     const { fromNode, toNode, best, famFilter } = walked
 
-    // Ambiguity proxy (spec step 4): penalize the best path's own edges and
-    // re-run WITHIN the same family. If an alternate route still completes
-    // within 20% of the best path's TRUE length while reusing less than half
-    // its edges, the walk cannot tell which corridor should carry the count —
-    // UNLESS the alt path turns out to be the best path's own parallel twin
-    // (`altPathIsParallelTwin` — a double-track line's sibling track, not a
-    // genuinely different corridor). Skipped entirely when a shape polyline
-    // already constrained the search (the shape IS the disambiguation).
+    // A real shape already resolves the corridor; otherwise test alternatives.
     if (!cp.shapePolyline) {
-      const alt = dijkstraShortestPath(
-        graph, fromNode, toNode, famFilter,
-        (edgeIdx, e) => e.lengthM * (best.edgeIndices.has(edgeIdx) ? PATH_REUSE_PENALTY : 1),
-        scratch,
-      )
-      if (alt) {
-        let shared = 0
-        for (const idx of alt.edgeIndices) if (best.edgeIndices.has(idx)) shared++
-        const sharedFraction = best.edgeIndices.size === 0 ? 1 : shared / best.edgeIndices.size
-        const probeFlagged =
-          alt.lengthM <= WALK_AMBIGUITY_LENGTH_RATIO * best.lengthM && sharedFraction < WALK_AMBIGUITY_SHARED_EDGE_FRACTION
-        // Computed ONCE per probe-flagged pair — the twin verdict and the
-        // failed-pair diagnostic read the SAME object (simplify round,
-        // 2026-07-16: the diagnostic used to re-derive it from scratch).
-        const twinGate = probeFlagged ? twinGateMetrics(graph, best, alt) : null
-        if (probeFlagged && !altPathIsParallelTwin(twinGate)) {
-          quarantineAmbiguousPathUnion(graph, fromNode, toNode, best, alt, famFilter, scratch, quarantinedSegmentKeys)
-          // DE Step A v2 diagnostics (fix 3): the v3 twin-gate tuning input —
-          // see summarizeAmbiguousGeometry's doc.
-          fail('ambiguous', { ambiguousGeometry: summarizeAmbiguousGeometry(graph, best, alt, twinGate) })
-          continue
-        }
+      const alternative = findAmbiguousRailAlternative(graph, fromNode, toNode, best, famFilter, scratch)
+      if (alternative) {
+        const { path: alt, twinGate } = alternative
+        quarantineAmbiguousPathUnion(graph, fromNode, toNode, best, alt, famFilter, scratch, quarantinedSegmentKeys)
+        fail('ambiguous', { ambiguousGeometry: summarizeAmbiguousGeometry(graph, best, alt, twinGate) })
+        continue
       }
     }
 

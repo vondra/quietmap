@@ -167,3 +167,49 @@ test('an invalid feed fails before touching an existing prepared Arrow', async (
   )
   assert.deepEqual(readFileSync(path), before)
 })
+
+test('an orphan with a source shape preserves prior corridor counts while valid services elsewhere proceed', async () => {
+  const source = join(TEMP, 'source-localized-orphan')
+  writeGreekGtfs(source, 'route_id,route_type\nrail,2\n')
+  const prepared = join(TEMP, 'prepared-localized-orphan')
+  const directory = squareDirectory(prepared, 38, 23)
+  mkdirSync(directory, { recursive: true })
+  const path = join(directory, 'railways.arrow')
+  copyFileSync(writeRailwaysFixture('localized-orphan.arrow', [0, 0.2].map(offset => ({
+    latitude: 38 + offset, longitude: 23,
+    endLatitude: 38.005 + offset, endLongitude: 23.005,
+    lengthMetres: 708, railType: 0, country: 'GR',
+  }))), path)
+  const square = relative(prepared, directory)
+  writeSyntheticRailTopology(prepared, [square])
+  const options = { sourceDirectory: source, preparedDirectory: prepared,
+    cacheDirectory: join(TEMP, 'cache-localized-orphan'), country: 'GR', asOfDate: '20260909' }
+  await enrichGlobalGtfsCountry(options)
+  const prior = listRailIntervals(prepared, square)
+  assert.equal(prior.length, 1)
+  const before = readFileSync(path)
+  writeFileSync(join(source, 'gr', 'trips.txt'),
+    'route_id,service_id,trip_id,shape_id\nrail,daily,orphan,missing-stations\nrail,daily,new-trip,\n')
+  writeFileSync(join(source, 'gr', 'shapes.txt'),
+    'shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n' +
+    'missing-stations,38,23,1\nmissing-stations,38.005,23.005,2\n')
+  appendFileSync(join(source, 'gr', 'stops.txt'),
+    'e,New A,38.2,23\nf,New B,38.205,23.005\n')
+  writeFileSync(join(source, 'gr', 'stop_times.txt'),
+    'trip_id,stop_id,stop_sequence\nnew-trip,e,1\nnew-trip,f,2\n')
+  writeFileSync(join(source, 'gr', 'frequencies.txt'),
+    'trip_id,start_time,end_time,headway_secs\norphan,06:00:00,07:00:00,600\n')
+  for (const cacheHits of [0, 1]) {
+    const result = await enrichGlobalGtfsCountry(options)
+    assert.equal(result.feeds[0].serviceCacheHits, cacheHits)
+    assert.equal(result.feeds[0].railServicesWithoutStopTimes, 1)
+    assert.equal(result.walk.serviceDailyDepartures?.total, 7)
+    assert.equal(result.walk.serviceDailyDepartures?.failures.snapFailed, 6)
+    assert.equal(result.walk.serviceDailyDepartures?.graphEstimated, 1)
+    assert.ok(result.walk.quarantinedKilometres > 0)
+    const intervals = listRailIntervals(prepared, square)
+    assert.equal(intervals.length, 2)
+    assert.deepEqual(intervals.find(row => row.osmId === prior[0].osmId), prior[0])
+    assert.deepEqual(readFileSync(path), before)
+  }
+})

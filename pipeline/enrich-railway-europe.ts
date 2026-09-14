@@ -29,6 +29,7 @@ interface LoadedFeed {
   sourceFreshness: readonly GtfsSourceFreshness[]
   stores: GtfsServiceStore[]
   railServices: number
+  railServicesWithoutStopTimes: number
   tramStops: StopTrainCount[]
   serviceCacheHits: number
 }
@@ -92,6 +93,7 @@ async function loadFeed(
   const tramStops: StopTrainCount[] = []
   let serviceCacheHits = 0
   let railServices = 0
+  let railServicesWithoutStopTimes = 0
 
   try {
     for (const directory of directories) {
@@ -135,6 +137,7 @@ async function loadFeed(
       if (store) {
         stores.push(store)
         railServices += directoryServices
+        railServicesWithoutStopTimes += store.provenance.activeTripCount - directoryServices
         if (store.provenance.fromCache) serviceCacheHits++
       }
       tramStops.push(...directoryTramStops)
@@ -151,6 +154,7 @@ async function loadFeed(
     sourceFreshness,
     stores,
     railServices,
+    railServicesWithoutStopTimes,
     tramStops: dedupeStopsByLocation(tramStops),
     serviceCacheHits,
   }

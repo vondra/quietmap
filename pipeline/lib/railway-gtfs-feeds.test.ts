@@ -74,6 +74,7 @@ test('national registry consolidates 42 current and three pinned historical GTFS
   )
   assert.equal(NATIONAL_GTFS_FEEDS.find(feed => feed.id === 'warsaw-ztm')!.includeRailPairs, false)
   assert.equal(NATIONAL_GTFS_FEEDS.filter(feed => feed.acceptedHistoricalSource).length, 3)
+  assert.ok(NATIONAL_GTFS_FEEDS.every(feed => feed.serviceDay === 'busiest-wednesday'))
   for (const country of new Set(NATIONAL_GTFS_FEEDS.map(feed => feed.country))) {
     assert.equal(new Set(NATIONAL_GTFS_FEEDS.filter(feed => feed.country === country).map(feed => feed.sourceId)).size, 1)
   }

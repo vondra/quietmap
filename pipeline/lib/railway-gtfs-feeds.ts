@@ -195,7 +195,7 @@ const nationalFeed = (
   url: NATIONAL_GTFS_DOWNLOAD_URLS[id]?.[0] ?? '',
   downloadUrls: NATIONAL_GTFS_DOWNLOAD_URLS[id],
   sourcePath: `${country.toLowerCase()}/gtfs-${id}`,
-  routeTypes: ALL_RAIL_AND_TRAM, serviceDay: 'midpoint-wednesday', ...options,
+  routeTypes: ALL_RAIL_AND_TRAM, serviceDay: 'busiest-wednesday', ...options,
 })
 
 /** Dev1 national timetable coverage, expressed as data over the shared parser/writer. */

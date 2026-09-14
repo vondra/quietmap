@@ -5,7 +5,7 @@ import {
   STATION_SNAP_RADIUS_M, SHAPE_CORRIDOR_TOLERANCE_M, UNLOCALIZED_PAIR_QUARANTINE_RADIUS_M,
   isWalkableRailType, walkFamilyBit, type RailGraph, type RailGraphEdge,
 } from './rail-graph.js'
-import { createDijkstraScratch, dijkstraShortestPath, type DijkstraScratch } from './rail-graph-metrics.js'
+import { createDijkstraScratch, dijkstraShortestPath, findAmbiguousRailAlternative, type DijkstraScratch } from './rail-graph-metrics.js'
 import {
   CompleteTrainRouteIndex, type RailRelationAssociation,
 } from './rail-service-match.js'
@@ -340,19 +340,11 @@ function walkPair(
   }
   if (!winner) return 'disconnected'
   if (!corridor) {
-    // No GTFS shape decided this leg — the stop polyline must not silently
-    // pose as one. Probe whether a second comparably short route shares
-    // under half the winner's edges, and report ambiguity so the caller
-    // quarantines instead of stamping one of two plausible corridors.
-    const best = winner.path
-    const alt = dijkstraShortestPath(graph, winner.u, winner.v, familyFilter,
-      (index, edge) => edge.lengthM * (best.edgeIndices.has(index) ? 3 : 1), scratch)
-    if (alt && alt.lengthM <= 1.2 * best.lengthM) {
-      let shared = 0
-      for (const index of alt.edgeIndices) if (best.edgeIndices.has(index)) shared++
-      if (best.edgeIndices.size && shared / best.edgeIndices.size < 0.5) return 'ambiguous'
-    }
+    // A stop polyline does not resolve track geometry. Parallel tracks share
+    // one corridor; a genuinely distinct alternative remains ambiguous.
+    if (findAmbiguousRailAlternative(graph, winner.u, winner.v, winner.path, familyFilter, scratch)) return 'ambiguous'
   }
+
   const visits: DirectedVisit[] = []
   let node = winner.u
   for (const edgeIndex of winner.path.orderedEdges) {
@@ -444,11 +436,18 @@ function quarantineStops(
       keys.add(graph.edges[index].key)
     }
   }
+  const markLeg = (observations: ReadonlyArray<[number, number]>): void => {
+    for (const fraction of [0.25, 0.5, 0.75]) mark(pointAlongPolyline(observations, fraction))
+  }
+  if (stations.length === 0) {
+    // An orphan timetable row can localize uncertainty through its source shape.
+    for (const point of shape) mark(point)
+    for (let index = 1; index < shape.length; index++) markLeg([shape[index - 1], shape[index]])
+    return
+  }
   for (const stop of stations) mark([stop.lat, stop.lon])
   for (let index = 1; index < stations.length; index++) {
-    for (const fraction of [0.25, 0.5, 0.75]) {
-      mark(pointAlongPolyline(legObservations(shape, stations, anchors, index), fraction))
-    }
+    markLeg(legObservations(shape, stations, anchors, index))
   }
 }
 
