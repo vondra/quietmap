@@ -102,20 +102,32 @@ class AircraftWindowTests(unittest.TestCase):
             self.assertEqual(calls[2][calls[2].index("--class-filter") + 1], "non-ga")
 
     def test_downstream_runner_never_recreates_retired_ga_segments(self):
-        for stage in ["stage1-5", "stage2a", "stage2b", "stage2c"]:
-            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
+        cases = [(stage, True, stage) for stage in ["stage1-5", "stage2a", "stage2b", "stage2c", "shuffle"]]
+        cases += [(None, False, "shuffle"), (None, True, "stage1-5"), ("environment", True, "stage2a")]
+        for override, completed_shuffle, stage in cases:
+            with self.subTest(override=override, completed_shuffle=completed_shuffle), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 runner, environment = self.runner_fixture(root)
-                result = subprocess.run(["bash", str(runner), "--from-stage", stage],
-                                        env=environment, capture_output=True, text=True)
+                if completed_shuffle:
+                    checkpoint = root / "work/airline/segments_by_square/complete.sqlite"
+                    checkpoint.parent.mkdir(parents=True)
+                    checkpoint.touch()  # Native validation, not the shell, checks its contents.
+                arguments = ["bash", str(runner)]
+                if override == "environment":
+                    environment["FROM_STAGE"] = stage
+                elif override is not None:
+                    arguments += ["--from-stage", override]
+                result = subprocess.run(arguments, env=environment, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
-                self.assertEqual([call[0] for call in calls],
-                                 ["run-all", "audit"] if stage == "stage2c" else ["run-all", "run-all", "audit"])
+                run_count = 3 if stage == "shuffle" else 1 if stage == "stage2c" else 2
+                self.assertEqual([call[0] for call in calls], ["run-all"] * run_count + ["audit"])
                 merge = calls[-2]
                 self.assertEqual(merge[merge.index("--from-stage") + 1], stage)
                 self.assertEqual(merge[merge.index("--ga-adsb-cache") + 1], environment["GA_CACHE"])
-                self.assertTrue(all("--ga-segments-dir" not in call for call in calls))
+                self.assertEqual("--ga-segments-dir" in merge, stage == "shuffle")
+                if stage != "shuffle":
+                    self.assertTrue(all("--ga-segments-dir" not in call for call in calls))
                 if stage != "stage2c":
                     self.assertEqual(calls[0][calls[0].index("--until-stage") + 1], "stage1")
                     self.assertEqual(calls[0][calls[0].index("--class-filter") + 1], "non-ga")

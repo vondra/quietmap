@@ -128,14 +128,6 @@ pub fn run_all(
         )?;
     } else if needs_shuffled {
         anyhow::ensure!(ga_segments_dir.is_none(), "--ga-segments-dir is consumed only by shuffle; downstream uses its saved source receipts");
-        aircraft_extract::shuffle::completion::validate(&by_square_dir, scope.as_ref())?;
-        crate::source_cache::validate_shuffled_sources(
-            &by_square_dir,
-            ga_adsb_cache.as_deref(),
-            &adsb_cache,
-            feed,
-            class_filter,
-        )?;
     } else {
         anyhow::ensure!(
             ga_segments_dir.is_none() && ga_adsb_cache.is_none(),
@@ -248,6 +240,26 @@ pub fn run_all(
             &by_square_dir,
         )?;
     }
+    if runs(FromStage::Shuffle) || needs_shuffled {
+        aircraft_extract::shuffle::completion::validate(&by_square_dir, scope.as_ref())?;
+        crate::source_cache::validate_shuffled_sources(
+            &by_square_dir,
+            ga_adsb_cache.as_deref(),
+            &adsb_cache,
+            feed,
+            class_filter,
+        )?;
+        require_matching_window_days(&by_square_dir, &days)?;
+        if scope.is_none() && ga_adsb_cache.is_some() {
+            crate::source_cache::retire_validated_ga_intermediates(
+                &by_square_dir,
+                &primary_segments_dirs,
+            )?;
+        }
+    } else if by_square_dir.try_exists()? {
+        // Cruise can precede shuffle, but reusing one retains its exact day window.
+        require_matching_window_days(&by_square_dir, &days)?;
+    }
     if until_stage <= FromStage::Shuffle {
         eprintln!(
             "{} [run-all] stopped after shuffle (--until-stage): per-z9 shards in {}",
@@ -255,12 +267,6 @@ pub fn run_all(
             by_square_dir.display()
         );
         return Ok(());
-    }
-
-    // Cruise reads validated day inputs directly and may precede shuffle.
-    // Reusing an existing shuffled tree must still retain its exact day window.
-    if by_square_dir.try_exists()? {
-        require_matching_window_days(&by_square_dir, &days)?;
     }
 
     if runs(FromStage::Stage1_5) {

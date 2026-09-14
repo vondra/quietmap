@@ -34,7 +34,7 @@ fn scope_key(scope: Option<&ScopeBbox>) -> String {
         .unwrap_or_default()
 }
 
-fn identity(path: &Path) -> Result<[i64; 5]> {
+pub fn artifact_identity(path: &Path) -> Result<[i64; 5]> {
     let stat = std::fs::symlink_metadata(path)?;
     anyhow::ensure!(
         stat.is_file(),
@@ -137,7 +137,7 @@ pub(super) fn publish(
             "unexpected shuffle destination: {}",
             path.display()
         );
-        let [dev, ino, size, mtime, ctime] = identity(&path)?;
+        let [dev, ino, size, mtime, ctime] = artifact_identity(&path)?;
         tx.execute(
             "INSERT INTO files VALUES (?1,?2,?3,?4,?5,?6,?7)",
             params![
@@ -220,7 +220,7 @@ pub fn validate(root: &Path, scope: Option<&ScopeBbox>) -> Result<()> {
             |r| Ok([r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?]),
         )?;
         anyhow::ensure!(
-            identity(&path)? == saved,
+            artifact_identity(&path)? == saved,
             "shuffle shard changed: {}",
             path.display()
         );

@@ -94,7 +94,12 @@ selected_ga_days() {
         | python3 -c 'import sys; fields=sys.stdin.buffer.read().split(b"\0"); print(",".join(sorted({s.decode() for s in fields[:-1:2]})))'
 }
 if [ -n "$HYBRID" ]; then
-    FROM_STAGE="${FROM_STAGE:-shuffle}"
+    if [ -z "$FROM_STAGE" ]; then
+        FROM_STAGE=shuffle
+        if [ -f "$WORK_DIR/airline/segments_by_square/complete.sqlite" ]; then
+            FROM_STAGE=stage1-5
+        fi
+    fi
     case "$FROM_STAGE" in
         shuffle|stage1-5|stage2a|stage2b|stage2c) ;;
         *) die "hybrid --from-stage must be shuffle, stage1-5, stage2a, stage2b or stage2c; omit it for a fresh extraction" ;;
