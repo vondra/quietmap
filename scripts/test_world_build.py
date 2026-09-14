@@ -227,6 +227,7 @@ class WorldBuildTest(unittest.TestCase):
             self.assertEqual(indexed['railways-finalize'].dependencies, ('railways',))
             self.assertTrue(indexed['railways-finalize'].argv[0].endswith('engine/target/release/railways-finalize'))
             self.assertNotIn('repaint', indexed)
+            geography_running, aircraft_running = threading.Event(), threading.Event()
             def execute(step):
                 nonlocal peak
                 with lock:
@@ -235,6 +236,12 @@ class WorldBuildTest(unittest.TestCase):
                     occupied = sum(indexed[name].slots for name in running)
                     self.assertLessEqual(occupied, 4)
                     peak = max(peak, len(running))
+                if step.name == 'square-country-city':
+                    geography_running.set()
+                    self.assertTrue(aircraft_running.wait(2), "aircraft waited for geography")
+                elif step.name == 'aircraft':
+                    self.assertTrue(geography_running.wait(2))
+                    aircraft_running.set()
                 time.sleep(0.015)
                 with lock:
                     running.remove(step.name)

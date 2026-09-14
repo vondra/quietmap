@@ -106,19 +106,19 @@ def build_plan(config, output, scratch):
               ('NODE_CACHE', str(node_cache)), ('SPILL_DIR', str(spill_dir)))),
         Step('square-country-city', ('osm',), (python, str(scripts / 'square-country-city/build_square_country_city.py'),
              '--prepared-dir', str(year), '--boundaries', str(sources['boundaries']),
-             '--jobs', str(settings['threads'])), 3),
+             '--jobs', str(settings['threads'])), 2),
         layer('buildings', ('osm',)),
         Step('structures', ('buildings',), (python, str(scripts / 'structures/build-structures.py'),
              '--prepared-dir', str(year), '--overture-parquet', str(sources['overture']),
              '--ghsl', str(sources['ghsl']), '--regional', str(sources['regional_heights']),
-             '--census-log', str(output / 'structures.jsonl'), '--jobs', str(settings['threads'])), 3),
+             '--census-log', str(output / 'structures.jsonl'), '--jobs', str(settings['threads'])), 2),
         Step('structures-finalize', ('structures',), (str(REPO / 'engine/target/release/structures-finalize'), str(year))),
         layer('railways', ('square-country-city',)),
         Step('railways-finalize', ('railways',), (str(REPO / 'engine/target/release/railways-finalize'), str(year))),
         layer('industrial', ('square-country-city',)),
         layer('roads', ('square-country-city', 'structures')),
         Step('roads-finalize', ('roads',), (str(REPO / 'engine/target/release/roads-finalize'), str(year))),
-        Step('aircraft', ('osm',), ('bash', str(scripts / 'run-aircraft-extract.sh')), 3,
+        Step('aircraft', ('osm',), ('bash', str(scripts / 'run-aircraft-extract.sh')), 2,
              (('HYBRID', '1'), ('AIRLINE_FEED', 'adsbexchange'), ('AIRCRAFT_ANCHOR', settings['aircraft_anchor']),
               ('AIRLINE_CACHE', str(sources['airline'])), ('GA_CACHE', str(sources['general_aviation'])),
               ('PREPARED_YEAR_DIR', str(year)), ('PREPARED_DIR', str(year)),
@@ -145,9 +145,8 @@ def run_plan(steps, execute, completed=()):
     pending = {step.name: step for step in steps if step.name not in completed}
     completed, running = set(completed), {}
     failure = None
-    # Three memory shares go to OSM/structures/aircraft/square-country-city (20 resolver
-    # processes need ~25 GiB), one to a layer writer.
-    # Admission plus matching cgroup limits bounds their combined working sets.
+    # Independent heavy stages share the budget equally; their workers adapt to
+    # the cgroup cap. Admission and matching limits bound combined working sets.
     with ThreadPoolExecutor(max_workers=4) as pool:
         while pending or running:
             free = 4 - sum(step.slots for step in running.values())
