@@ -50,16 +50,19 @@ test('clipped visits stay separate, unknown freight is omitted, Arrow bytes are 
   assert.equal(rows[1].occurrence, 1)
 })
 
-test('retractSafe removes previous visits except quarantine', async () => {
+test('retractSafe removes previous visits except quarantine across square owners', async () => {
   const prepared = join(RAIL_TEST_DIRECTORY, 'passage-retract')
   writePreparedRailwaySquare(prepared, SQUARE, 'passage-retract.arrow', [
     { osmId: 50_000, segmentIndex: 0, latitude: 50, longitude: 14, country: 'DE' },
+  ])
+  const otherSquare = 'z9/277/173'
+  writePreparedRailwaySquare(prepared, otherSquare, 'passage-quarantine-other.arrow', [
     { osmId: 50_001, segmentIndex: 0, latitude: 50.01, longitude: 14, country: 'DE' },
   ])
-  writeSyntheticRailTopology(prepared, [SQUARE])
+  writeSyntheticRailTopology(prepared, [SQUARE, otherSquare])
   const request: WriteClippedRailPassagesRequest = {
     preparedDirectory: prepared,
-    squares: [SQUARE],
+    squares: [SQUARE, otherSquare],
     countryIso: 'DE',
     sourceId: SOURCE,
     retractSafe: true,
@@ -78,18 +81,18 @@ test('retractSafe removes previous visits except quarantine', async () => {
   await writeClippedRailPassages({ ...request, quarantinedPieceKeys: new Set(),
     services: [{ ...request.services[0], passages: [
       ...request.services[0].passages,
-      { ...request.services[0].passages[0], wayId: '50001' },
+      { ...request.services[0].passages[0], wayId: '50001', square: otherSquare },
     ] }],
   })
-  const preserved = listRailIntervals(prepared, SQUARE).filter(row => row.osmId === 50001)
+  const preserved = listRailIntervals(prepared).filter(row => row.osmId === 50001)
   await writeClippedRailPassages({ ...request,
     services: [{ evidence: { ...request.services[0].evidence, passenger: 999 },
-      passages: [{ ...request.services[0].passages[0], wayId: '50001' }] }],
+      passages: [{ ...request.services[0].passages[0], wayId: '50001', square: otherSquare }] }],
   })
-  assert.deepEqual(listRailIntervals(prepared, SQUARE), preserved)
+  assert.deepEqual(listRailIntervals(prepared), preserved)
   const empty = await writeClippedRailPassages({ ...request, services: [] })
   assert.equal(empty.retracted, 0)
-  assert.deepEqual(listRailIntervals(prepared, SQUARE), preserved)
+  assert.deepEqual(listRailIntervals(prepared), preserved)
 })
 
 test('different services sharing local visit zero sum, real returns repeat, and reruns replace', async () => {

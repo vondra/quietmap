@@ -120,21 +120,24 @@ export async function writeClippedRailPassages(
   const database = openRailTrafficSidecar(prepared)
   const topology = new SourceTransportTopology(prepared)
   try {
+    const quarantineBySquare = new Map<string, Array<{ osmId: number; segmentIndex: number }>>()
+    for (const key of request.quarantinedPieceKeys) {
+      const split = key.lastIndexOf(':')
+      const wayId = key.slice(0, split)
+      const segmentIndex = Number(key.slice(split + 1))
+      try {
+        const square = topology.pieceExtent(wayId, segmentIndex).square
+        if (!allowedSquares.has(square)) continue
+        const quarantined = quarantineBySquare.get(square) ?? []
+        quarantined.push({ osmId: parseOsmId(wayId), segmentIndex })
+        quarantineBySquare.set(square, quarantined)
+      } catch {
+        // Piece may sit outside this country's listed squares.
+      }
+    }
     database.exec('BEGIN IMMEDIATE')
     for (const square of request.squares) {
-      const quarantined: Array<{ osmId: number; segmentIndex: number }> = []
-      for (const key of request.quarantinedPieceKeys) {
-        const split = key.lastIndexOf(':')
-        const wayId = key.slice(0, split)
-        const segmentIndex = Number(key.slice(split + 1))
-        try {
-          if (topology.pieceExtent(wayId, segmentIndex).square === square) {
-            quarantined.push({ osmId: parseOsmId(wayId), segmentIndex })
-          }
-        } catch {
-          // Piece may sit outside this country's listed squares.
-        }
-      }
+      const quarantined = quarantineBySquare.get(square) ?? []
       replaceRailQuarantine(database, request.sourceId, request.countryIso, square, quarantined)
       if (request.silentResidual) {
         replaceRailQuarantine(

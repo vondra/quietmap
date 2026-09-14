@@ -5,6 +5,9 @@ import { sourceNodeDistances, type OrientedSourceRailWay } from './transport-top
 
 type Point = readonly [latitude: number, longitude: number]
 type Way = { id: string; points: Point[]; nodes: string[]; distances: number[]; length: number; direction: number }
+type Edge = { occurrence: number; a: Point; b: Point; latitudeDelta: number; longitudeDelta: number;
+  start: number; end: number; length: number; lowerFraction: number; upperFraction: number }
+type Visit = (occurrence: number, from: number, to: number) => void
 type Position = { occurrence: number; local: number; point: Point; error: number }
 type State = Position & { cost: number; previous: number }
 
@@ -55,6 +58,36 @@ function sourceWayGeometry(way: OrientedSourceRailWay): Way {
     length: distances.at(-1)!, direction: way.reverse ? -1 : 1 }
 }
 
+function travel(length: number, direction: number, occurrence: number, start: number, end: number, visit?: Visit): number {
+  const distance = (end - start) * direction
+  const nextLength = distance < 0 ? Infinity : length + distance
+  if (Number.isFinite(nextLength)) visit?.(occurrence, start, end)
+  return nextLength
+}
+
+function addPosition(positions: Map<string, Position>, point: Point, occurrence: number, local: number,
+  latitude: number, longitude: number): void {
+  const error = flatDist(point[0], point[1], latitude, longitude)
+  if (error <= SHAPE_CANDIDATE_RADIUS_M) {
+    positions.set(`${occurrence}:${local}`, { occurrence, local, point: [latitude, longitude], error })
+  }
+}
+
+function candidates(point: Point, previous: State[], edges: readonly Edge[]): Position[] {
+  const positions = new Map<string, Position>()
+  for (const edge of edges) {
+    const fraction = Math.max(edge.lowerFraction, Math.min(edge.upperFraction,
+      pointToSegmentParamT(point[0], point[1], edge.a[0], edge.a[1], edge.b[0], edge.b[1])))
+    const latitude = edge.a[0] + fraction * edge.latitudeDelta
+    const longitude = edge.a[1] + fraction * edge.longitudeDelta
+    const local = fraction === 1 ? edge.end : edge.start + fraction * edge.length
+    addPosition(positions, point, edge.occurrence, local, latitude, longitude)
+  }
+  // A noisy observation can leave progress unchanged instead of inventing a reverse movement.
+  for (const state of previous) addPosition(positions, point, state.occurrence, state.local, state.point[0], state.point[1])
+  return [...positions.values()]
+}
+
 export function alignRailServiceShape(
   shape: readonly Point[],
   itinerary: readonly OrientedSourceRailWay[],
@@ -84,53 +117,38 @@ export function alignRailServiceShape(
     return { status: 'unmatched', reason: 'source junctions conflict with direction' }
   }
 
-  function candidates(point: Point, previous: State[]): Position[] {
-    const positions = new Map<string, Position>()
-    const add = (occurrence: number, local: number, projected: Point) => {
-      const error = flatDist(...point, ...projected)
-      if (error <= SHAPE_CANDIDATE_RADIUS_M) positions.set(`${occurrence}:${local}`, { occurrence, local, point: projected, error })
+  const edges: Edge[] = []
+  for (let occurrence = 0; occurrence < ways.length; occurrence++) {
+    const way = ways[occurrence]
+    const lower = Math.min(entries[occurrence], exits[occurrence])
+    const upper = Math.max(entries[occurrence], exits[occurrence])
+    for (let vertex = 1; vertex < way.points.length; vertex++) {
+      const start = way.distances[vertex - 1], end = way.distances[vertex]
+      const length = end - start
+      if (end < lower || start > upper || !length) continue
+      const a = way.points[vertex - 1], b = way.points[vertex]
+      edges.push({ occurrence, a, b, latitudeDelta: b[0] - a[0], longitudeDelta: wrapLonDeltaDeg(b[1] - a[1]),
+        start, end, length, lowerFraction: Math.max(0, (lower - start) / length),
+        upperFraction: Math.min(1, (upper - start) / length) })
     }
-    for (let occurrence = 0; occurrence < ways.length; occurrence++) {
-      const way = ways[occurrence]
-      const lower = Math.min(entries[occurrence], exits[occurrence])
-      const upper = Math.max(entries[occurrence], exits[occurrence])
-      for (let vertex = 1; vertex < way.points.length; vertex++) {
-        if (way.distances[vertex] < lower || way.distances[vertex - 1] > upper) continue
-        const a = way.points[vertex - 1], b = way.points[vertex]
-        const edgeLength = way.distances[vertex] - way.distances[vertex - 1]
-        if (!edgeLength) continue
-        const fraction = Math.max(Math.max(0, (lower - way.distances[vertex - 1]) / edgeLength),
-          Math.min(Math.min(1, (upper - way.distances[vertex - 1]) / edgeLength), pointToSegmentParamT(...point, ...a, ...b)))
-        const projected: Point = [a[0] + fraction * (b[0] - a[0]), a[1] + fraction * wrapLonDeltaDeg(b[1] - a[1])]
-        const local = fraction === 1 ? way.distances[vertex] :
-          way.distances[vertex - 1] + fraction * (way.distances[vertex] - way.distances[vertex - 1])
-        add(occurrence, local, projected)
-      }
-    }
-    // A noisy observation can leave progress unchanged instead of inventing a reverse movement.
-    for (const state of previous) add(state.occurrence, state.local, state.point)
-    return [...positions.values()]
   }
 
-  function traversal(from: Position, to: Position, visit?: (occurrence: number, from: number, to: number) => void): number {
+  function traversal(from: Position, to: Position, visit?: Visit): number {
     if (to.occurrence < from.occurrence) return Infinity
     let length = 0
-    const travel = (occurrence: number, start: number, end: number) => {
-      const distance = (end - start) * ways[occurrence].direction
-      length = distance < 0 ? Infinity : length + distance
-      if (Number.isFinite(length)) visit?.(occurrence, start, end)
-    }
-    if (from.occurrence === to.occurrence) travel(from.occurrence, from.local, to.local)
+    if (from.occurrence === to.occurrence) length = travel(length, ways[from.occurrence].direction, from.occurrence, from.local, to.local, visit)
     else if (to.occurrence === from.occurrence + 1 && reversalBefore[to.occurrence]) {
       const turn = ways[from.occurrence].direction === 1 ? Math.max(from.local, to.local) : Math.min(from.local, to.local)
-      travel(from.occurrence, from.local, turn)
-      travel(to.occurrence, turn, to.local)
+      length = travel(length, ways[from.occurrence].direction, from.occurrence, from.local, turn, visit)
+      length = travel(length, ways[to.occurrence].direction, to.occurrence, turn, to.local, visit)
     } else {
       // Skipping a reversal leaves its fractional turning position unobserved.
       for (let index = from.occurrence + 1; index <= to.occurrence; index++) if (reversalBefore[index]) return Infinity
-      travel(from.occurrence, from.local, exits[from.occurrence])
-      for (let index = from.occurrence + 1; index < to.occurrence; index++) travel(index, entries[index], exits[index])
-      travel(to.occurrence, entries[to.occurrence], to.local)
+      length = travel(length, ways[from.occurrence].direction, from.occurrence, from.local, exits[from.occurrence], visit)
+      for (let index = from.occurrence + 1; index < to.occurrence; index++) {
+        length = travel(length, ways[index].direction, index, entries[index], exits[index], visit)
+      }
+      length = travel(length, ways[to.occurrence].direction, to.occurrence, entries[to.occurrence], to.local, visit)
     }
     return length
   }
@@ -141,7 +159,7 @@ export function alignRailServiceShape(
     const previous = layers.at(-1) ?? []
     const column: State[] = []
     const sourceDistance = vertex ? flatDist(...shape[vertex - 1], ...shape[vertex]) : 0
-    for (const position of candidates(shape[vertex], previous)) {
+    for (const position of candidates(shape[vertex], previous, edges)) {
       let bestCost = vertex ? Infinity : position.error ** 2, bestPrevious = -1
       for (let index = 0; index < previous.length; index++) {
         transitions++

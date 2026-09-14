@@ -21,11 +21,16 @@ const EDGE_CELL_DEG = 0.01
  *  consecutive runs that retrace the shared edges. */
 const SHAPE_REVERSAL_COS = -0.5
 
-export interface RailServiceRouteResult {
+export interface RailServiceRoutingCounts {
   total: number
   relationEstimated: number
   graphEstimated: number
   unmatched: number
+  failures: { snapFailed: number; disconnected: number; ambiguous: number }
+}
+
+export interface RailServiceRouteResult extends RailServiceRoutingCounts {
+  dailyDepartures: RailServiceRoutingCounts
   services: RailServicePassages[]
   quarantinedPieceKeys: Set<string>
 }
@@ -95,7 +100,7 @@ class RailEdgeIndex {
     if (bucket) bucket.push(index)
     else this.cells.set(key, [index])
   }
-  snap(latitude: number, longitude: number, radiusM: number, allow?: (edge: RailGraphEdge) => boolean): EdgeSnap | null {
+  snapsByComponent(latitude: number, longitude: number, radiusM: number, allow?: (edge: RailGraphEdge) => boolean): Map<number, EdgeSnap> {
     const latSpan = EDGE_CELL_DEG * M_PER_DEG_LAT
     const lonSpan = EDGE_CELL_DEG * M_PER_DEG_LON_EQ * Math.max(0.05, Math.cos(latitude * Math.PI / 180))
     const dyMax = Math.max(1, Math.ceil(radiusM / latSpan))
@@ -103,7 +108,7 @@ class RailEdgeIndex {
     const originY = Math.floor(latitude / EDGE_CELL_DEG)
     const originX = Math.floor(longitude / EDGE_CELL_DEG)
     const seen = new Set<number>()
-    let best: EdgeSnap | null = null
+    const bestByComponent = new Map<number, EdgeSnap>()
     for (let dy = -dyMax; dy <= dyMax; dy++) {
       for (let dx = -dxMax; dx <= dxMax; dx++) {
         for (const index of this.cells.get(`${originY + dy}_${originX + dx}`) ?? []) {
@@ -113,15 +118,17 @@ class RailEdgeIndex {
           if (allow && !allow(edge)) continue
           if (!edge.isTraversalOnly && !isWalkableRailType(edge.railType)) continue
           const distM = pointToSegmentDist(latitude, longitude, edge.startLat, edge.startLon, edge.endLat, edge.endLon)
+          const component = this.graph.componentOfNode[edge.nodeA]
+          const best = bestByComponent.get(component)
           if (distM > radiusM || (best && distM >= best.distM)) continue
-          best = {
+          bestByComponent.set(component, {
             edgeIndex: index, distM,
             parameter: pointToSegmentParamT(latitude, longitude, edge.startLat, edge.startLon, edge.endLat, edge.endLon),
-          }
+          })
         }
       }
     }
-    return best
+    return bestByComponent
   }
   nearby(latitude: number, longitude: number, radiusM: number): number[] {
     const latSpan = EDGE_CELL_DEG * M_PER_DEG_LAT
@@ -275,9 +282,19 @@ function walkPair(
   corridor: ((edge: RailGraphEdge) => boolean) | null,
   scratch: DijkstraScratch,
 ): DirectedVisit[] | 'snap' | 'disconnected' | 'ambiguous' {
-  const fromSnap = edges.snap(from[0], from[1], STATION_SNAP_RADIUS_M, corridor ?? undefined)
-  const toSnap = edges.snap(to[0], to[1], STATION_SNAP_RADIUS_M, corridor ?? undefined)
-  if (!fromSnap || !toSnap) return 'snap'
+  const fromCandidates = edges.snapsByComponent(from[0], from[1], STATION_SNAP_RADIUS_M, corridor ?? undefined)
+  const toCandidates = edges.snapsByComponent(to[0], to[1], STATION_SNAP_RADIUS_M, corridor ?? undefined)
+  if (!fromCandidates.size || !toCandidates.size) return 'snap'
+  // A nearer isolated platform track cannot carry a service to another component.
+  let pair: { from: EdgeSnap; to: EdgeSnap; distance: number } | null = null
+  for (const [component, fromCandidate] of fromCandidates) {
+    const toCandidate = toCandidates.get(component)
+    if (!toCandidate) continue
+    const distance = fromCandidate.distM + toCandidate.distM
+    if (!pair || distance < pair.distance) pair = { from: fromCandidate, to: toCandidate, distance }
+  }
+  if (!pair) return 'disconnected'
+  const fromSnap = pair.from, toSnap = pair.to
   const fromEdge = graph.edges[fromSnap.edgeIndex], toEdge = graph.edges[toSnap.edgeIndex]
   if (fromSnap.edgeIndex === toSnap.edgeIndex) {
     if (fromSnap.parameter === toSnap.parameter) return []
@@ -443,10 +460,15 @@ export function routeRailServices(
     else patterns.set(patternKey(service), { service, passenger: service.departureMultiplier })
   }
   const result: RailServiceRouteResult = {
-    total: 0, relationEstimated: 0, graphEstimated: 0, unmatched: 0, services: [], quarantinedPieceKeys: new Set(),
+    total: 0, relationEstimated: 0, graphEstimated: 0, unmatched: 0,
+    failures: { snapFailed: 0, disconnected: 0, ambiguous: 0 },
+    dailyDepartures: { total: 0, relationEstimated: 0, graphEstimated: 0, unmatched: 0,
+      failures: { snapFailed: 0, disconnected: 0, ambiguous: 0 } },
+    services: [], quarantinedPieceKeys: new Set(),
   }
   for (const pattern of patterns.values()) {
     result.total++
+    result.dailyDepartures.total += pattern.passenger
     const shape = gtfsShape(pattern.service)
     // Relation alignment and quarantine sampling may use stop positions as
     // observations when the feed ships no shape; corridor walking never does.
@@ -462,14 +484,21 @@ export function routeRailServices(
     if (!passages) {
       const walked = graphPassages(graph, topology, edges, pattern.service.stops, shape, scratch)
       if (Array.isArray(walked)) { passages = walked; matching = 'graph_estimated' }
+      else {
+        const reason = walked.unmatched === 'snap' ? 'snapFailed' : walked.unmatched
+        result.failures[reason]++
+        result.dailyDepartures.failures[reason] += pattern.passenger
+      }
     }
     if (!passages) {
       result.unmatched++
+      result.dailyDepartures.unmatched += pattern.passenger
       quarantineStops(graph, edges, pattern.service.stops, shape, result.quarantinedPieceKeys)
       continue
     }
-    if (matching === 'relation_estimated') result.relationEstimated++
-    else result.graphEstimated++
+    const category = matching === 'relation_estimated' ? 'relationEstimated' : 'graphEstimated'
+    result[category]++
+    result.dailyDepartures[category] += pattern.passenger
     result.services.push({
       evidence: {
         sourceId, passenger: pattern.passenger, freight: 0,

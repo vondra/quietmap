@@ -47,6 +47,9 @@ test('source identities preserve large IDs, fractional joins and explicit zero h
     { way: '12', segment: 0, square, start: [0, 0], end: [1, 0] },
   ]
   writeTransportFixture(prepared, ways, pieces, [['railways', '3', '2'], ['roads', '5', '2']])
+  using topology = new SourceTransportTopology(prepared)
+  assert.deepEqual(topology.squareWayPieces(square, [id, '11', '12', id]), topology.squarePieces(square))
+  assert.deepEqual([...topology.squareWayPieces(square, ['11']).keys()], ['11:0'])
   const first = collectZ9RailGraphSegments(prepared, [square])
   assert.deepEqual(first.map(({ key, startKey, endKey }) => [key, startKey, endKey]), [
     [`${id}:0`, 'node:1', `way:${id}:0+0.5`],
@@ -136,6 +139,8 @@ test('physical passages clip acoustic pieces across squares and retain the order
     { way: id, segment: 20, square: neighbor, start: [1, 0], end: [1, .5] },
   ])
   using topology = new SourceTransportTopology(prepared)
+  assert.deepEqual([...topology.squareWayPieces(square, [id]).keys()], [`${id}:10`])
+  assert.deepEqual(new Set(topology.squareWayPieces(neighbor, [id]).keys()), new Set([`${id}:20`, `${id}:30`]))
   const forward = topology.passagePieces({ way: id, from: 100, to: 900 })
   assert.deepEqual(forward, [
     { segmentIndex: 10, square, from: 100, to: 600 },

@@ -244,3 +244,55 @@ test('north and south shapes keep independent estimated counts', () => {
   assert.equal((flow.get('1:0')?.passenger ?? 0) + (flow.get('1:1')?.passenger ?? 0), 20)
   assert.equal((flow.get('2:0')?.passenger ?? 0) + (flow.get('2:1')?.passenger ?? 0), 40)
 })
+
+test('failed pattern summaries preserve the cause and sum daily departures across equal patterns', () => {
+  const a = point(0, 0), b = point(1000, 0), c = point(2000, 0), d = point(3000, 0)
+  const prepared = join(TEMP, 'failure-summary')
+  writeTransportFixture(prepared, [
+    { id: '1', nodes: [['a', a], ['b', b]] },
+    { id: '2', nodes: [['c', c], ['d', d]] },
+  ], [
+    { way: '1', segment: 0, square, start: [0, 0], end: [1, 0] },
+    { way: '2', segment: 0, square, start: [0, 0], end: [1, 0] },
+  ])
+  using topology = new SourceTransportTopology(prepared)
+  const graph = buildRailGraph([segment('1', a, b, 'a', 'b'), segment('2', c, d, 'c', 'd')])
+  const disconnected = [stop('A', a, 1), stop('D', d, 2)]
+  const far = point(10000, 10000)
+  const routed = routeRailServices([
+    service('D1', disconnected, [a, d], 2),
+    service('D2', disconnected, [a, d], 3.5),
+    service('S', [stop('A', a, 1), stop('F', far, 2)], [a, far], 7),
+    service('G', [stop('A', a, 1), stop('B', b, 2)], [a, b], 11),
+  ], topology, graph, 100)
+  assert.equal(routed.total, 3)
+  assert.equal(routed.unmatched, 2)
+  assert.deepEqual(routed.failures, { snapFailed: 1, disconnected: 1, ambiguous: 0 })
+  assert.deepEqual(routed.dailyDepartures, {
+    total: 23.5, relationEstimated: 0, graphEstimated: 11, unmatched: 12.5,
+    failures: { snapFailed: 7, disconnected: 5.5, ambiguous: 0 },
+  })
+})
+
+test('joint station snaps use the connected through track when both closest tracks are isolated', () => {
+  const a = point(0, 0), b = point(2000, 0), throughA = point(0, 20), throughB = point(2000, 20)
+  const leftEnd = point(100, 0), rightStart = point(1900, 0)
+  const prepared = join(TEMP, 'joint-station-snaps')
+  writeTransportFixture(prepared, [
+    { id: '1', nodes: [['a', a], ['l', leftEnd]] },
+    { id: '2', nodes: [['r', rightStart], ['b', b]] },
+    { id: '3', nodes: [['ta', throughA], ['tb', throughB]] },
+  ], [1, 2, 3].map(way => ({ way: String(way), segment: 0, square,
+    start: [0, 0] as [number, number], end: [1, 0] as [number, number] })))
+  using topology = new SourceTransportTopology(prepared)
+  const graph = buildRailGraph([
+    segment('1', a, leftEnd, 'a', 'l'), segment('2', rightStart, b, 'r', 'b'),
+    segment('3', throughA, throughB, 'ta', 'tb'),
+  ])
+  const routed = routeRailServices([service('T', [stop('A', a, 1), stop('B', b, 2)], [a, b], 7)], topology, graph, 100)
+  assert.equal(routed.graphEstimated, 1)
+  assert.equal(routed.unmatched, 0)
+  assert.deepEqual(routed.services[0].passages.map(passage => passage.wayId), ['3'])
+  assert.equal(routed.services[0].evidence.passenger, 7)
+  assert.equal(routed.services[0].evidence.matching, 'graph_estimated')
+})

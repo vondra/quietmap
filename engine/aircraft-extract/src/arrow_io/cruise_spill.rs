@@ -14,10 +14,8 @@
 //! unique-count tracking and a per-fid top-entry struct list carrying
 //! Lmax + altitude + identity.
 //!
-//! No `schema_version` metadata: spill files are intra-process scratch,
-//! never read by a different binary. Bypasses
-//! [`arrow_io::read_record_batches`] (which asserts the version) via a
-//! local reader.
+//! The sealed spill can resume in another binary; its local reader validates
+//! the raw schema separately from final popup data.
 
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
@@ -115,8 +113,8 @@ pub(crate) fn write_cruise_spill(path: &Path, rows: &[CruiseSpillRow]) -> Result
     write_spill_to(BufWriter::new(file), rows)?
         .0
         .into_inner()
-        .map_err(|error| error.into_error())?
-        .sync_all()?;
+        .map_err(|error| error.into_error())?;
+    // Scratch becomes durable as one filesystem checkpoint before its receipt.
     Ok(())
 }
 

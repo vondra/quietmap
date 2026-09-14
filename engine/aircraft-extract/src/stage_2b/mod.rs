@@ -108,6 +108,8 @@ pub fn run_stage_2b_phase(
         std::fs::create_dir(&spill_dir)
             .context("existing cruise spill requires finish or a new output directory")?;
         std::fs::File::open(spill_dir.parent().context("missing spill parent")?)?.sync_all()?;
+        // Open before writes so the final syncfs also observes intervening writeback errors.
+        let spill_filesystem = std::fs::File::open(&spill_dir)?;
         for b in 0..SPILL_HASH_BUCKETS {
             std::fs::create_dir_all(spill_bucket_dir(&spill_dir, b))?;
         }
@@ -159,8 +161,8 @@ pub fn run_stage_2b_phase(
             day_paths.par_iter().try_for_each(|day_path| -> Result<()> {
                 let mut local: HashMap<u64, HashMap<CruiseKey, CruiseAccum>> = HashMap::new();
                 let mut charged_bytes = 0usize;
-                let mut cruise_kept = 0u64;
                 crate::arrow_io::for_each_segment_batch(day_path, |segments| {
+                    let mut cruise_kept = 0u64;
                     for seg in &segments {
                         if seg.phase != Phase::Cruise || seg.veh_kind != 0 {
                             continue;
@@ -185,13 +187,13 @@ pub fn run_stage_2b_phase(
                         }
                         cruise_kept += 1;
                     }
+                    spill_seg_counter.add(cruise_kept);
                     Ok(())
                 })
                 .with_context(|| format!("stage2b spill day {}", day_path.display()))?;
                 if !local.is_empty() {
                     flush_to_spill(&mut local, &spill_dir, &part_id)?;
                 }
-                spill_seg_counter.add(cruise_kept);
                 Ok(())
             })
         })?;
@@ -225,7 +227,14 @@ pub fn run_stage_2b_phase(
             receipt::input_identities(day_paths)? == identities,
             "primary inputs changed during cruise spill"
         );
-        receipt::create(&spill_dir, &identities, n_days, scope, ga_cruise)?;
+        receipt::create(
+            &spill_dir,
+            &spill_filesystem,
+            &identities,
+            n_days,
+            scope,
+            ga_cruise,
+        )?;
     }
     // Every key of one owner z9 hashes into the same bucket, so a fold worker
     // publishes complete owner files; receivers read owner squares within reach.

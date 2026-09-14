@@ -8,7 +8,7 @@ import { buildRailGraph, isWalkableRailType, type RailGraphSegmentInput, type Ra
 import { walkRailStationPairs } from './rail-graph-metrics.js'
 import { writeRailwayTraffic, type RailwayRow, type RailwayTraffic } from './railways-arrow.js'
 import { writeClippedRailPassages } from './rail-passage.js'
-import { routeRailServices } from './rail-service-route.js'
+import { routeRailServices, type RailServiceRoutingCounts } from './rail-service-route.js'
 import { isNationallyOwnedSource } from './sources.js'
 import { SourceTransportTopology, transportPieceKey } from './transport-topology.js'
 import type { GtfsService } from './gtfs-service-store.js'
@@ -41,7 +41,7 @@ export function collectZ9RailGraphSegments(
       const ref = requiredVector(table, 'ref')
       const osmId = requiredVector(table, 'osm_id')
       const segmentIndex = requiredVector(table, 'segment_idx')
-      const identities = source.squarePieces(square)
+      const identities = source.squareWayPieces(square, Array.from(osmId, value => String(value)))
 
       for (let index = 0; index < table.numRows; index++) {
         const type = railType.get(index) as number
@@ -105,6 +105,7 @@ export interface Z9RailWalkResult {
   servicesRelationEstimated: number
   servicesGraphEstimated: number
   servicesUnmatched: number
+  serviceDailyDepartures: RailServiceRoutingCounts | null
   failedPairs: RailFailedPairRecord[]
   unlocalizedPairs: number
   failures: {
@@ -144,6 +145,7 @@ export async function enrichZ9RailwaysByGraphWalk(
     servicesRelationEstimated: 0,
     servicesGraphEstimated: 0,
     servicesUnmatched: 0,
+    serviceDailyDepartures: null,
     failedPairs: walk.failedPairChords,
     unlocalizedPairs: walk.unlocalizedPairs,
     failures: walk.failures,
@@ -260,9 +262,10 @@ export async function enrichZ9RailwaysByServices(
     servicesRelationEstimated: routed.relationEstimated,
     servicesGraphEstimated: routed.graphEstimated,
     servicesUnmatched: routed.unmatched,
+    serviceDailyDepartures: routed.dailyDepartures,
     failedPairs: [],
     unlocalizedPairs: 0,
-    failures: { snapFailed: 0, disconnected: 0, detourRejected: 0, ambiguous: routed.unmatched },
+    failures: { ...routed.failures, detourRejected: 0 },
     quarantinedKilometres,
     stampableKilometres,
   }

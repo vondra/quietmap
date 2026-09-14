@@ -70,6 +70,15 @@ interface SourcePiece {
   end_fraction: number
 }
 
+function sourcePieceIdentity(nodes: readonly SourceNode[], wayId: string, piece: SourcePiece): SegmentEndpointKeys {
+  const endpointKey = (vertex: number, fraction: number): string => {
+    assertSourcePosition(nodes, wayId, vertex, fraction)
+    return fraction > 0 ? `way:${wayId}:${vertex}+${fraction}` : `node:${nodes[vertex][0]}`
+  }
+  return { startKey: endpointKey(piece.start_vertex, piece.start_fraction),
+    endKey: endpointKey(piece.end_vertex, piece.end_fraction) }
+}
+
 export class SourceTransportTopology implements Disposable {
   private readonly database: DatabaseSync
   private readonly pieces: StatementSync
@@ -235,25 +244,31 @@ export class SourceTransportTopology implements Disposable {
       WHERE w.family=?`).iterate(this.family)) yield row.square as string
   }
 
+  squareWayPieces(square: string, wayIds: Iterable<string>): Map<string, SegmentEndpointKeys> {
+    const result = new Map<string, SegmentEndpointKeys>()
+    for (const wayId of new Set(wayIds)) {
+      const nodes = this.wayNodes(wayId)
+      if (!nodes) continue
+      for (const raw of this.wayPieces.iterate(wayId)) {
+        if (raw.square !== square) continue
+        const piece = raw as unknown as SourcePiece
+        result.set(transportPieceKey(wayId, piece.segment_idx), sourcePieceIdentity(nodes, wayId, piece))
+      }
+    }
+    return result
+  }
+
   squarePieces(square: string): Map<string, SegmentEndpointKeys> {
     const result = new Map<string, SegmentEndpointKeys>()
     let wayId = ''
     let nodes: SourceNode[] = []
-    const endpointKey = (vertex: number, fraction: number): string => {
-      assertSourcePosition(nodes, wayId, vertex, fraction)
-      if (fraction > 0) return `way:${wayId}:${vertex}+${fraction}`
-      return `node:${nodes[vertex][0]}`
-    }
     for (const raw of this.pieces.iterate(square, this.family)) {
       const piece = raw as unknown as SourcePiece
       if (piece.way_id !== wayId) {
         wayId = piece.way_id
         nodes = this.wayNodes(wayId)!
       }
-      result.set(transportPieceKey(wayId, piece.segment_idx), {
-        startKey: endpointKey(piece.start_vertex, piece.start_fraction),
-        endKey: endpointKey(piece.end_vertex, piece.end_fraction),
-      })
+      result.set(transportPieceKey(wayId, piece.segment_idx), sourcePieceIdentity(nodes, wayId, piece))
     }
     return result
   }

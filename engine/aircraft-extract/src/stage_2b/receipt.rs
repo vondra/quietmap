@@ -4,6 +4,7 @@ use super::*;
 use rusqlite::{params, Connection, OpenFlags};
 use sha2::{Digest, Sha256};
 use std::io::Read;
+use std::os::fd::AsRawFd;
 
 pub(super) fn input_identities(paths: &[PathBuf]) -> Result<Vec<(String, String)>> {
     let mut result = paths
@@ -89,11 +90,17 @@ fn scope_key(scope: Option<&ScopeBbox>) -> String {
 
 pub(super) fn create(
     directory: &Path,
+    spill_filesystem: &std::fs::File,
     inputs: &[(String, String)],
     days: u16,
     scope: Option<&ScopeBbox>,
     ga_cruise: u64,
 ) -> Result<()> {
+    // The descriptor predates the raw writes; syncfs persists their data and
+    // directory entries and reports writeback errors before any receipt exists.
+    if unsafe { libc::syncfs(spill_filesystem.as_raw_fd()) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("sync cruise spill filesystem");
+    }
     let watermark = crate::arrow_io::spill_receipt_watermark(directory)?;
     let mut db = Connection::open(directory.join("state.sqlite"))?;
     db.execute_batch("PRAGMA page_size=4096; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;
@@ -103,11 +110,6 @@ pub(super) fn create(
         CREATE TABLE disk_reservation(start_free_bytes INTEGER NOT NULL, minimum_free_bytes INTEGER NOT NULL);
         CREATE TABLE allocation_plan(phase TEXT PRIMARY KEY, allocation_bytes INTEGER NOT NULL, input_bytes INTEGER NOT NULL);")?;
     let parts = visit_raw_parts(directory, |_, _| Ok(()))?;
-    // Each raw file is synced by its writer; persist their directory entries
-    // before committing the completed-spill receipt.
-    for bucket in 0..SPILL_HASH_BUCKETS {
-        std::fs::File::open(spill_bucket_dir(directory, bucket))?.sync_all()?;
-    }
     let page_size: u64 = db.query_row("PRAGMA page_size", [], |row| row.get(0))?;
     db.pragma_update(
         None,

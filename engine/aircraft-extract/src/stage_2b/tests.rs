@@ -463,7 +463,19 @@ fn retained_spill_checks_input_window_inventory_and_refuses_partial_fold_resume(
     std::fs::rename(&hidden, &parts[0]).unwrap();
     // Recreate the receipt because rename changed the recorded inode ctime.
     std::fs::remove_file(spill.join("state.sqlite")).unwrap();
-    receipt::create(&spill, &identities, 1, None, 0).unwrap();
+    use std::os::unix::fs::OpenOptionsExt;
+    let invalid_filesystem = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_PATH)
+        .open(&spill)
+        .unwrap();
+    assert!(receipt::create(&spill, &invalid_filesystem, &identities, 1, None, 0).is_err());
+    assert!(
+        !spill.join("state.sqlite").exists(),
+        "failed durability cannot seal raw spill"
+    );
+    let filesystem = std::fs::File::open(&spill).unwrap();
+    receipt::create(&spill, &filesystem, &identities, 1, None, 0).unwrap();
     receipt::verify(&spill, &identities, 1, None, false).unwrap();
     receipt::begin_fold(&spill).unwrap();
     assert!(receipt::begin_fold(&spill).is_err());
