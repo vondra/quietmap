@@ -133,7 +133,7 @@ def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry
         if review is not None:
             if (not isinstance(review, dict)
                     or not {'previous_pin_sha256', 'current_pin_sha256', 'reuse', 'reason'} <= set(review)
-                    or set(review) - {'previous_pin_sha256', 'current_pin_sha256', 'reuse', 'reason', 'osm_scope'}
+                    or set(review) - {'previous_pin_sha256', 'current_pin_sha256', 'reuse', 'reason', 'osm_scope', 'aircraft_from_stage', 'roads_from_step'}
                     or review['previous_pin_sha256'] != previous_digest
                     or review['current_pin_sha256'] != current_digest
                     or not isinstance(review['reason'], str) or not review['reason'].strip()
@@ -148,6 +148,37 @@ def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry
         if persisted_scope and osm_scope != persisted_scope:
             raise ValueError('cannot change the persisted OSM resume scope')
         original_steps = steps
+        persisted_aircraft_stage = state.get('aircraft_from_stage')
+        aircraft_stage = review.get('aircraft_from_stage', persisted_aircraft_stage) if review is not None else persisted_aircraft_stage
+        if aircraft_stage not in (None, 'stage2c') or (review is not None
+                and 'aircraft_from_stage' in review and aircraft_stage is None):
+            raise ValueError('aircraft_from_stage must be stage2c')
+        if persisted_aircraft_stage and aircraft_stage != persisted_aircraft_stage:
+            raise ValueError('cannot change the persisted aircraft resume stage')
+        if aircraft_stage:
+            aircraft = latest.get('aircraft', {})
+            if not persisted_aircraft_stage and (not aircraft.get('command')
+                    or 'environment' not in aircraft or aircraft.get('exit') == 0
+                    or aircraft.get('input_pin_sha256') != previous_digest):
+                raise ValueError('aircraft stage resume requires an unsuccessful aircraft attempt at the previous pin')
+            steps = [replace(step, environment=tuple(dict(step.environment,
+                         FROM_STAGE=aircraft_stage).items())) if step.name == 'aircraft' else step
+                     for step in steps]
+        persisted_roads_step = state.get('roads_from_step')
+        roads_step = review.get('roads_from_step', persisted_roads_step) if review is not None else persisted_roads_step
+        if roads_step is not None and (not isinstance(roads_step, str) or not roads_step.strip()):
+            raise ValueError('roads_from_step must be a nonempty chain step name')
+        if review is not None and 'roads_from_step' in review and roads_step is None:
+            raise ValueError('roads_from_step must be a nonempty chain step name')
+        if roads_step:
+            roads = latest.get('roads', {})
+            if roads_step != persisted_roads_step and (not roads.get('command')
+                    or 'environment' not in roads or roads.get('exit') == 0
+                    or roads.get('input_pin_sha256') != previous_digest):
+                raise ValueError('roads step resume requires an unsuccessful roads attempt at the previous pin')
+            steps = [replace(step, argv=step.argv + ('--from', roads_step))
+                     if step.name == 'roads' and step.argv[-2:] != ('--from', roads_step) else step
+                     for step in steps]
         if osm_scope:
             osm = latest.get('osm', {})
             if not persisted_scope and (osm.get('exit') != 0
@@ -167,12 +198,20 @@ def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry
         report = {'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
                   'resume': sorted(completed), 'rebuild': [step.name for step in steps if step.name not in completed],
                   'invalidated': invalidated, 'producer_inputs_changed': changed, 'osm_scope': osm_scope,
+                  'aircraft_from_stage': aircraft_stage, 'roads_from_step': roads_step,
                   'review': review or {'previous_pin_sha256': previous_digest,
                       'current_pin_sha256': current_digest, 'reuse': [], 'reason': '',
-                      **({'osm_scope': osm_scope} if osm_scope else {})}}
+                      **({'osm_scope': osm_scope} if osm_scope else {}),
+                      **({'aircraft_from_stage': aircraft_stage} if aircraft_stage else {}),
+                      **({'roads_from_step': roads_step} if roads_step else {})}}
         print(json.dumps(report), flush=True)
         if dry_run:
             return completed
+        for name, boundary in (('aircraft', aircraft_stage), ('roads', roads_step)):
+            if boundary:
+                step = next(step for step in steps if step.name == name)
+                if not set(step.dependencies) <= completed:
+                    raise ValueError(f'{name} resume requires retained upstream outputs: {step.dependencies}')
         if invalidated and review is None:
             raise ValueError('completed outputs need review before rebuilding; inspect --resume-plan and supply --resume-review JSON')
         rows = [{'name': name, 'exit': None, 'invalidated': report['at']} for name in invalidated]
@@ -181,9 +220,10 @@ def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry
                  for step in steps if step.name in reviewed]
         # Publish all decisions before replacing the pin. A crash can discard reuse,
         # but cannot resurrect a consumer after its producer was invalidated.
-        # Persist extraction scope first: interrupted receipt/pin publication must
-        # never turn an approved transport-only retry into a full Planet rewrite.
+        # Persist resume boundaries first: interrupted receipt/pin publication must
+        # never restart an approved partial producer from its beginning.
         write_state(output, config, 'running', osm_scope=osm_scope,
+                    aircraft_from_stage=aircraft_stage, roads_from_step=roads_step,
                     resumes=[*state.get('resumes', []), report])
         if rows:
             record_steps(output, rows)

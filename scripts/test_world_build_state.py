@@ -218,6 +218,78 @@ class WorldBuildStateTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'successful full osm'):
                 self.resume(review=review)
 
+    def test_reviewed_aircraft_stage_preserves_successes_and_survives_interrupted_pin_publication(self):
+        aircraft = self.step('aircraft', ('osm',), environment=(('WORK_DIR', '/aircraft'),))
+        self.steps.append(aircraft)
+        with self.assertRaisesRegex(ValueError, 'unsuccessful aircraft attempt'):
+            self.resume(review=dict(self.review(['osm', 'roads']), aircraft_from_stage='stage2c'))
+        state.record_steps(self.output, [dict(name='aircraft', exit=1, **state.step_identity(
+            aircraft, self.config['build'], pin_digest(self.output / state.PIN_NAME)))])
+        self.code.write_text('fixed Stage2C admission without changing completed A/B')
+        review = dict(self.review(['osm', 'roads']), aircraft_from_stage='stage2c')
+        before = {name: (self.output / name).read_bytes()
+                  for name in (state.STATE_NAME, state.STEPS_NAME, state.PIN_NAME)}
+        self.assertEqual(self.resume(review=review, dry_run=True), {'osm', 'roads'})
+        self.assertNotIn('FROM_STAGE', dict(self.steps[-1].environment))
+        for name, content in before.items():
+            self.assertEqual((self.output / name).read_bytes(), content)
+        for stage in ('stage2b', 'audit', '', None, 2):
+            with self.subTest(stage=stage), self.assertRaisesRegex(ValueError, 'must be stage2c'):
+                self.resume(review=dict(review, aircraft_from_stage=stage))
+        with self.assertRaisesRegex(ValueError, 'retained upstream'):
+            self.resume(review=dict(review, reuse=[]))
+        with self.assertRaisesRegex(ValueError, 'cannot adopt'):
+            self.resume(review=dict(review, reuse=['osm', 'roads', 'aircraft']))
+        replace = state.os.replace
+        def interrupt_pin(source, target):
+            if Path(source).name == '.' + state.PIN_NAME + '.next':
+                raise OSError('interrupted pin publish')
+            return replace(source, target)
+        with patch.object(state.os, 'replace', side_effect=interrupt_pin):
+            with self.assertRaisesRegex(OSError, 'interrupted pin publish'):
+                self.resume(review=review)
+        self.assertEqual(json.loads((self.output / state.STATE_NAME).read_text())['aircraft_from_stage'], 'stage2c')
+        self.assertEqual(self.resume(review=review), {'osm', 'roads'})
+        self.assertEqual(dict(self.steps[-1].environment)['FROM_STAGE'], 'stage2c')
+        self.steps[-1] = aircraft
+        self.assertEqual(self.resume(), {'osm', 'roads'})
+        self.assertEqual(dict(self.steps[-1].environment)['FROM_STAGE'], 'stage2c')
+        state.record_steps(self.output, [dict(name='aircraft', exit=0, **state.step_identity(
+            self.steps[-1], self.config['build'], pin_digest(self.output / state.PIN_NAME)))])
+        self.assertEqual(self.resume(), {'osm', 'roads', 'aircraft'})
+        self.source.write_text('changed source')
+        with self.assertRaisesRegex(ValueError, 'frozen sources changed'):
+            self.resume()
+
+    def test_reviewed_road_boundary_uses_existing_chain_arguments_and_never_adopts_partial_success(self):
+        roads = self.steps[1]
+        with self.assertRaisesRegex(ValueError, 'unsuccessful roads attempt'):
+            self.resume(review=dict(self.review(['osm']), roads_from_step='roads-de'))
+        state.record_steps(self.output, [dict(name='roads', exit=None, **state.step_identity(
+            roads, self.config['build'], pin_digest(self.output / state.PIN_NAME)))])
+        self.code.write_text('reviewed code with unchanged completed road countries')
+        review = dict(self.review(['osm']), roads_from_step='roads-de')
+        for boundary in ('', ' ', None, 2, ['roads-de']):
+            with self.subTest(boundary=boundary), self.assertRaisesRegex(ValueError, 'nonempty chain step'):
+                self.resume(review=dict(review, roads_from_step=boundary))
+        with self.assertRaisesRegex(ValueError, 'retained upstream'):
+            self.resume(review=dict(review, reuse=[]))
+        with self.assertRaisesRegex(ValueError, 'cannot adopt'):
+            self.resume(review=dict(review, reuse=['osm', 'roads']))
+        self.assertEqual(self.resume(review=review), {'osm'})
+        self.assertEqual(self.steps[1].argv, roads.argv + ('--from', 'roads-de'))
+        self.assertEqual(json.loads((self.output / state.STATE_NAME).read_text())['roads_from_step'], 'roads-de')
+        self.steps[1] = roads
+        self.assertEqual(self.resume(), {'osm'})
+        self.assertEqual(self.steps[1].argv, roads.argv + ('--from', 'roads-de'))
+        self.assertEqual(self.resume(), {'osm'})
+        self.assertEqual(self.steps[1].argv.count('--from'), 1)
+        with self.assertRaisesRegex(ValueError, 'unsuccessful roads attempt'):
+            self.resume(review=dict(self.review([]), roads_from_step='roads-fr'))
+        state.record_steps(self.output, [dict(name='roads', exit=0, **state.step_identity(
+            self.steps[1], self.config['build'], pin_digest(self.output / state.PIN_NAME)))])
+        self.assertEqual(self.resume(), {'osm', 'roads'})
+
     def test_data_arguments_invalidate_dependents_but_scheduling_does_not(self):
         old = self.step('osm', argv=('osm',))
         self.receipts([old, self.steps[1]])

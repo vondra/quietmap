@@ -2,6 +2,24 @@
 use anyhow::{Context, Result};
 use std::mem::size_of;
 
+#[derive(Debug)]
+pub(crate) struct AllocationLimitExceeded {
+    reserved: u64,
+    limit: u64,
+}
+
+impl std::fmt::Display for AllocationLimitExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ground allocation admission: {} B reserved, {} B limit",
+            self.reserved, self.limit
+        )
+    }
+}
+
+impl std::error::Error for AllocationLimitExceeded {}
+
 pub(crate) struct AllocationBudget {
     limit: u64,
     reserved: u64,
@@ -19,11 +37,13 @@ impl AllocationBudget {
             .reserved
             .checked_add(bytes)
             .context("ground allocation overflow")?;
-        anyhow::ensure!(
-            total <= self.limit,
-            "ground allocation admission: {total} B reserved, {} B limit",
-            self.limit
-        );
+        if total > self.limit {
+            return Err(AllocationLimitExceeded {
+                reserved: total,
+                limit: self.limit,
+            }
+            .into());
+        }
         self.reserved = total;
         Ok(())
     }

@@ -282,3 +282,145 @@ fn inconsistent_classes_for_one_flight_keep_all_counter_and_union_dimensions() {
     assert_eq!((summary.ga_arr_count, summary.ga_dep_count), (1, 1));
     assert_eq!(summary.gse_count_per_class, [1, 1, 1]);
 }
+
+#[test]
+fn oversized_ground_owner_retries_alone_without_rewriting_successes_or_retrying_corruption() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let prepared = temp.path().join("prepared");
+    let inputs = temp.path().join("inputs");
+    let expected = temp.path().join("expected");
+    let output = temp.path().join("output");
+    let mut areas = Vec::new();
+    for (lon, flights) in [(14.0, 1), (16.0, 100)] {
+        let segment = leg(50.0, lon);
+        let owner = crate::spatial::square_id(50.0, f64::from(lon)).unwrap();
+        write_real_airport_lines_arrow(
+            &prepared
+                .join(square_path(owner))
+                .join("airport_lines.arrow"),
+            &[FakeRealLine {
+                osm_id: owner.try_into().unwrap(),
+                segment_idx: 0,
+                start_lat: segment.start_lat.into(),
+                start_lon: segment.start_lon.into(),
+                end_lat: segment.end_lat.into(),
+                end_lon: segment.end_lon.into(),
+                length_m: segment.length_m,
+                aeroway_type: 0,
+            }],
+        );
+        let rows: Vec<_> = (1..=flights)
+            .map(|flight_id| FlightSegment {
+                flight_id,
+                ..segment.clone()
+            })
+            .collect();
+        write_segments(&inputs.join(square_path(owner)).join("ground.arrow"), &rows).unwrap();
+        areas.push(AirportArea::new(
+            owner.try_into().unwrap(),
+            AERODROME_AEROWAY_TYPE,
+            "Test".into(),
+            owner.to_string(),
+            50.0,
+            lon.into(),
+            Vec::new(),
+            1e6,
+        ));
+    }
+    let index = crate::airport_index::AerodromeIndex::build(&areas);
+    let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap();
+    assert_eq!(plan.len(), 2);
+    let charges: Vec<_> = plan
+        .iter()
+        .map(|work| {
+            run_ground_traffic_work(work, &prepared, &expected, &index, (12, 365), u64::MAX)
+                .unwrap()
+                .charged_bytes
+        })
+        .collect();
+    let worker_limit = plan
+        .iter()
+        .map(|work| work.indexed_allocation().unwrap())
+        .max()
+        .unwrap()
+        .max(*charges.iter().min().unwrap());
+    let process_limit = 2 * worker_limit;
+    assert!(charges.iter().any(|&bytes| bytes > worker_limit));
+    assert!(charges.iter().all(|&bytes| bytes < process_limit));
+    let calls = Mutex::new(Vec::new());
+    let active = AtomicUsize::new(0);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap();
+    let count = pool
+        .install(|| {
+            run_with_serial_retry(&plan, worker_limit, process_limit, |work, limit| {
+                let concurrent = active.fetch_add(1, Ordering::SeqCst) + 1;
+                assert!(concurrent as u64 * limit <= process_limit);
+                calls.lock().unwrap().push((work.owner, limit));
+                let result =
+                    run_ground_traffic_work(work, &prepared, &output, &index, (12, 365), limit);
+                active.fetch_sub(1, Ordering::SeqCst);
+                result.map(|outcome| outcome.counter_rows > 0)
+            })
+        })
+        .unwrap();
+    assert_eq!(count, 2);
+    for (work, charged) in plan.iter().zip(charges) {
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(owner, _)| *owner == work.owner)
+                .count(),
+            if charged > worker_limit { 2 } else { 1 }
+        );
+        let relative = square_path(work.owner);
+        for path in [
+            format!("{relative}/airport_traffic.arrow"),
+            format!("airport_summary_parts/{relative}/part.arrow"),
+        ] {
+            let read = |path: &Path| {
+                let reader = arrow::ipc::reader::FileReader::try_new(
+                    std::fs::File::open(path).unwrap(),
+                    None,
+                )
+                .unwrap();
+                (
+                    reader.schema(),
+                    reader.collect::<std::result::Result<Vec<_>, _>>().unwrap(),
+                )
+            };
+            assert_eq!(read(&expected.join(&path)), read(&output.join(&path)));
+        }
+    }
+    // A full-process refusal stops after one retry, preserving the typed cause.
+    let work = &plan[..1];
+    let base = work[0].indexed_allocation().unwrap();
+    let attempts = AtomicUsize::new(0);
+    let refused = run_with_serial_retry(work, base, base + 1, |work, limit| {
+        attempts.fetch_add(1, Ordering::SeqCst);
+        run_ground_traffic_work(work, &prepared, &output, &index, (12, 365), limit)
+            .map(|outcome| outcome.counter_rows > 0)
+    })
+    .unwrap_err();
+    assert!(refused.is::<AllocationLimitExceeded>());
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    // Corruption after the routing precheck must not trigger the memory retry.
+    std::fs::write(&work[0].inputs[0], b"corrupt").unwrap();
+    attempts.store(0, Ordering::SeqCst);
+    let corrupt = run_with_serial_retry(work, worker_limit, process_limit, |work, limit| {
+        attempts.fetch_add(1, Ordering::SeqCst);
+        run_ground_traffic_work(work, &prepared, &output, &index, (12, 365), limit)
+            .map(|outcome| outcome.counter_rows > 0)
+    })
+    .unwrap_err();
+    assert!(!corrupt.is::<AllocationLimitExceeded>());
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}

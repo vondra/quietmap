@@ -27,7 +27,7 @@ mod cache;
 mod routing;
 pub use routing::{plan_ground_traffic, GroundTrafficWork};
 mod summary_parts;
-use super::admission::AllocationBudget;
+use super::admission::{AllocationBudget, AllocationLimitExceeded};
 use super::airport_line_index::AirportLineIndex;
 use super::movements::{self, MovementUnion};
 use accumulate::{accumulate_segment, counters_to_rows};
@@ -87,7 +87,8 @@ pub(crate) fn run_airport_traffic(
         work.indexed_allocation().map(|bytes| largest.max(bytes))
     })?;
     let workers = crate::memory::max_concurrent_tasks(rayon::current_num_threads(), largest)?;
-    let worker_limit = crate::memory::available_memory_bytes() / workers as u64;
+    let process_limit = crate::memory::available_memory_bytes();
+    let worker_limit = process_limit / workers as u64;
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()?;
@@ -98,27 +99,55 @@ pub(crate) fn run_airport_traffic(
         &format!("{} line-owner squares", plan.len()),
     );
     let counter = Milestone::new("stage2c/airport_traffic", "line-owner squares", 50);
-    let results: Vec<bool> = pool.install(|| {
-        plan.par_iter()
-            .map(|work| {
-                let outcome = run_ground_traffic_work(
-                    work,
-                    prepared_year_dir,
-                    output_year_dir,
-                    &aerodrome_index,
-                    (n_days, ga_n_days),
-                    worker_limit,
-                )?;
-                counter.add(1);
-                Ok(outcome.counter_rows > 0)
-            })
-            .collect::<Result<_>>()
+    let count = pool.install(|| {
+        run_with_serial_retry(&plan, worker_limit, process_limit, |work, limit| {
+            let outcome = run_ground_traffic_work(
+                work,
+                prepared_year_dir,
+                output_year_dir,
+                &aerodrome_index,
+                (n_days, ga_n_days),
+                limit,
+            )?;
+            counter.add(1);
+            Ok(outcome.counter_rows > 0)
+        })
     })?;
-    let count = results.into_iter().filter(|written| *written).count();
     finished(
         "stage2c/airport_traffic",
         &format!("{count} line-owner squares written"),
     );
+    Ok(count)
+}
+
+fn run_with_serial_retry(
+    plan: &[GroundTrafficWork],
+    worker_limit: u64,
+    process_limit: u64,
+    run: impl Fn(&GroundTrafficWork, u64) -> Result<bool> + Sync,
+) -> Result<usize> {
+    let results: Vec<Option<bool>> = plan
+        .par_iter()
+        .map(|work| match run(work, worker_limit) {
+            Ok(written) => Ok(Some(written)),
+            Err(error) if worker_limit < process_limit && error.is::<AllocationLimitExceeded>() => {
+                eprintln!(
+                    "[stage2c] {} deferred for serial retry: {error:#}",
+                    square_path(work.owner)
+                );
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        })
+        .collect::<Result<_>>()?;
+    // All parallel accumulators are gone. Admission failures precede output writes.
+    let mut count = 0;
+    for (work, result) in plan.iter().zip(results) {
+        count += usize::from(match result {
+            Some(written) => written,
+            None => run(work, process_limit)?,
+        });
+    }
     Ok(count)
 }
 
