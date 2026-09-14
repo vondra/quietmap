@@ -449,16 +449,16 @@ export function routeRailServices(
   graph: RailGraph,
   sourceId: number,
 ): RailServiceRouteResult {
-  const routes = new CompleteTrainRouteIndex()
-  for (const relation of topology.trainRoutes()) routes.add(relation)
-  const edges = new RailEdgeIndex(graph)
-  const scratch = createDijkstraScratch(graph.nodeCount)
   const patterns = new Map<string, { service: GtfsService; passenger: number }>()
   for (const service of services) {
     const existing = patterns.get(patternKey(service))
     if (existing) existing.passenger += service.departureMultiplier
     else patterns.set(patternKey(service), { service, passenger: service.departureMultiplier })
   }
+  const routes = new CompleteTrainRouteIndex([...patterns.values()].flatMap(pattern => pattern.service.stops))
+  for (const relation of topology.trainRoutes()) routes.add(relation)
+  const edges = new RailEdgeIndex(graph)
+  const scratch = createDijkstraScratch(graph.nodeCount)
   const result: RailServiceRouteResult = {
     total: 0, relationEstimated: 0, graphEstimated: 0, unmatched: 0,
     failures: { snapFailed: 0, disconnected: 0, ambiguous: 0 },

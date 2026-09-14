@@ -81,38 +81,45 @@ function cellKey(latitude: number, longitude: number): string {
   return `${Math.floor(latitude / RELATION_CELL_DEG)}_${Math.floor(longitude / RELATION_CELL_DEG)}`
 }
 
+function* nearbyCellKeys(stops: Iterable<Stop>): Generator<string> {
+  const span = Math.max(1, Math.ceil(STATION_SNAP_RADIUS_M / (RELATION_CELL_DEG * 111_000)))
+  for (const stop of stops) {
+    const originY = Math.floor(stop.lat / RELATION_CELL_DEG)
+    const originX = Math.floor(stop.lon / RELATION_CELL_DEG)
+    for (let dy = -span; dy <= span; dy++) {
+      for (let dx = -span; dx <= span; dx++) yield `${originY + dy}_${originX + dx}`
+    }
+  }
+}
+
 /** Complete OSM orders only; unique means unique among those candidates. */
 export class CompleteTrainRouteIndex {
   private readonly routes: SourceTrainRoute[] = []
   private readonly cells = new Map<string, number[]>()
 
+  constructor(stops: Iterable<Stop>) {
+    for (const key of nearbyCellKeys(stops)) this.cells.set(key, [])
+  }
+
   add(relation: SourceTrainRoute): void {
     if (relation.status !== 'complete' || relation.ways.length === 0) return
-    const index = this.routes.length
-    this.routes.push(relation)
     const seen = new Set<string>()
     for (const [latitude, longitude] of relationWayPoints(relation)) {
       const key = cellKey(latitude, longitude)
-      if (seen.has(key)) continue
-      seen.add(key)
-      const bucket = this.cells.get(key)
-      if (bucket) bucket.push(index)
-      else this.cells.set(key, [index])
+      if (this.cells.has(key)) seen.add(key)
     }
+    // Every future query is known: unrelated world itineraries never need to stay in memory.
+    if (!seen.size) return
+    const index = this.routes.length
+    this.routes.push(relation)
+    for (const key of seen) this.cells.get(key)!.push(index)
   }
 
   associate(stops: readonly Stop[]): RailRelationAssociation {
     if (stops.length < 2) return { status: 'unmatched' }
     const nearby = new Set<number>()
-    const span = Math.max(1, Math.ceil(STATION_SNAP_RADIUS_M / (RELATION_CELL_DEG * 111_000)))
-    for (const stop of stops) {
-      const originY = Math.floor(stop.lat / RELATION_CELL_DEG)
-      const originX = Math.floor(stop.lon / RELATION_CELL_DEG)
-      for (let dy = -span; dy <= span; dy++) {
-        for (let dx = -span; dx <= span; dx++) {
-          for (const index of this.cells.get(`${originY + dy}_${originX + dx}`) ?? []) nearby.add(index)
-        }
-      }
+    for (const key of nearbyCellKeys(stops)) {
+      for (const index of this.cells.get(key) ?? []) nearby.add(index)
     }
     const fits: Array<{ relation: SourceTrainRoute; maxStopDistanceM: number }> = []
     for (const index of nearby) {

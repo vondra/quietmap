@@ -215,7 +215,7 @@ def main():
     parser.add_argument('--resume-plan', action='store_true',
                         help='report retained/rebuilt steps and exact review identities without changing build state')
     parser.add_argument('--resume-review', type=Path,
-                        help='JSON with previous/current pin hashes, reuse steps, reason; optional osm_scope: [roads, railways], aircraft_from_stage: stage2c, roads_from_step: chain step')
+                        help='JSON with previous/current pin hashes, reuse steps, reason; optional osm_scope: [roads, railways], aircraft_from_stage: stage2c, roads_from_step/railways_from_step: chain step')
     args = parser.parse_args()
     config = tomllib.loads(args.config.read_text())
     required = {'as_of_date', 'aircraft_anchor', 'memory_gib', 'threads'}

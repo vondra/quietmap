@@ -290,6 +290,41 @@ class WorldBuildStateTests(unittest.TestCase):
             self.steps[1], self.config['build'], pin_digest(self.output / state.PIN_NAME)))])
         self.assertEqual(self.resume(), {'osm', 'roads'})
 
+    def test_railway_resume_preserves_the_existing_road_boundary_and_requires_its_own_failed_receipt(self):
+        self.steps[1] = self.step('roads', ('osm',), argv=('roads', '--from', 'roads-de'))
+        railway = self.step('railways', ('osm',))
+        self.steps.append(railway)
+        state.write_state(self.output, self.config, 'failed', roads_from_step='roads-de')
+        self.receipts(self.steps)
+        review = dict(self.review(['osm', 'roads']), railways_from_step='railways-gtfs-us')
+        with self.assertRaisesRegex(ValueError, 'unsuccessful railways attempt'):
+            self.resume(review=review)
+        receipt = dict(name='railways', exit=134, **state.step_identity(
+            railway, self.config['build'], pin_digest(self.output / state.PIN_NAME)))
+        state.record_steps(self.output, [dict(receipt, input_pin_sha256='another attempt')])
+        with self.assertRaisesRegex(ValueError, 'unsuccessful railways attempt'):
+            self.resume(review=review)
+        state.record_steps(self.output, [receipt])
+        self.code.write_text('fixed GTFS memory without changing completed railway countries')
+        review = dict(self.review(['osm', 'roads']), railways_from_step='railways-gtfs-us')
+        with self.assertRaisesRegex(ValueError, 'cannot adopt'):
+            self.resume(review=dict(review, reuse=['osm', 'roads', 'railways']))
+        with self.assertRaisesRegex(ValueError, 'retained upstream'):
+            self.resume(review=dict(review, reuse=[]))
+        self.assertEqual(self.resume(review=review, dry_run=True), {'osm', 'roads'})
+        self.assertNotIn('--from', self.steps[-1].argv)
+        self.assertEqual(self.resume(review=review), {'osm', 'roads'})
+        persisted = json.loads((self.output / state.STATE_NAME).read_text())
+        self.assertEqual((persisted['roads_from_step'], persisted['railways_from_step']),
+                         ('roads-de', 'railways-gtfs-us'))
+        self.steps[1] = self.step('roads', ('osm',))
+        self.steps[-1] = railway
+        self.assertEqual(self.resume(), {'osm', 'roads'})
+        self.assertEqual(self.steps[1].argv[-2:], ('--from', 'roads-de'))
+        self.assertEqual(self.steps[-1].argv[-2:], ('--from', 'railways-gtfs-us'))
+        self.assertEqual(self.resume(), {'osm', 'roads'})
+        self.assertEqual(self.steps[-1].argv.count('--from'), 1)
+
     def test_data_arguments_invalidate_dependents_but_scheduling_does_not(self):
         old = self.step('osm', argv=('osm',))
         self.receipts([old, self.steps[1]])
