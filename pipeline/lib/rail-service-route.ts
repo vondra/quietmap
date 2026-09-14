@@ -58,11 +58,20 @@ function patternKey(service: GtfsService): string {
   return `${service.directionId}\n${service.stops.map(stop => `${stop.sourceStopId}@${at(stop.lat, stop.lon)}`).join('\n')}\n${service.shape.map(point => at(point.lat, point.lon)).join('\n')}`
 }
 
-/** The feed's own shape only — an empty array stays empty so corridor
- *  walking and its shape-less ambiguity probe can tell "no GTFS shape"
- *  apart from any stop polyline. */
+function distinctConsecutiveCoordinates(points: readonly { lat: number; lon: number }[]): Array<{ lat: number; lon: number }> {
+  return points.filter((point, index) => index === 0 ||
+    point.lat !== points[index - 1].lat || point.lon !== points[index - 1].lon)
+}
+
+/** Some feeds supply only station-to-station lines as shapes. They carry no
+ *  track geometry and must retain the shape-less ambiguity check. */
 function gtfsShape(service: GtfsService): Array<[number, number]> {
-  return service.shape.length >= 2 ? service.shape.map(point => [point.lat, point.lon]) : []
+  if (service.shape.length < 2) return []
+  const shape = distinctConsecutiveCoordinates(service.shape)
+  const stops = distinctConsecutiveCoordinates(service.stops)
+  if (shape.length === stops.length && shape.every((point, index) =>
+    point.lat === stops[index].lat && point.lon === stops[index].lon)) return []
+  return service.shape.map(point => [point.lat, point.lon])
 }
 
 function stopPolyline(stops: readonly GtfsServiceStop[]): Array<[number, number]> {

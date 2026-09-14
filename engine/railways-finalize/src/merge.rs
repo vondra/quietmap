@@ -96,7 +96,6 @@ pub fn row_traffic(
     usage: u8,
     service: u8,
     square_country_city: SquareCountryCity,
-    allow_class_defaults: bool,
 ) -> RowTraffic {
     let row_iso = square_country_city.country_iso;
     let passenger_claims: Vec<Claim> = overlapping(intervals, from_m, to_m)
@@ -126,8 +125,7 @@ pub fn row_traffic(
         traffic.freight =
             estimated_flow(winner.trains, shares.frt, winner.source_id, winner.matching);
     }
-    if allow_class_defaults
-        && service == 0
+    if service == 0
         && traffic.passenger.status == STATUS_UNKNOWN
         && traffic.freight.status == STATUS_UNKNOWN
     {
@@ -194,7 +192,7 @@ mod tests {
             country_iso: *b"DE",
             city_id: 0,
         };
-        let traffic = row_traffic(&intervals, 10.0, 40.0, 0, 0, 0, cz, false);
+        let traffic = row_traffic(&intervals, 10.0, 40.0, 0, 0, 0, cz);
         let passenger_day = traffic.passenger.periods.iter().sum::<f64>();
         assert!((passenger_day - 5.0).abs() < 1e-9);
         assert_eq!(traffic.passenger.matching, 1);

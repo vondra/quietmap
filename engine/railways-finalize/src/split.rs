@@ -34,9 +34,8 @@ pub fn split_parent(
     service: u8,
     square_country_city: SquareCountryCity,
 ) -> Result<Vec<ChildRow>, String> {
-    let allow_defaults = intervals.is_empty();
     let Some(piece) = piece else {
-        if !allow_defaults {
+        if !intervals.is_empty() {
             return Err(format!(
                 "sidecar interval for {osm_id}:{segment_idx} has no source topology piece"
             ));
@@ -51,7 +50,6 @@ pub fn split_parent(
                 usage,
                 service,
                 square_country_city,
-                true,
             ),
         }]);
     };
@@ -103,7 +101,6 @@ pub fn split_parent(
                 usage,
                 service,
                 square_country_city,
-                allow_defaults,
             ),
         });
     }
@@ -118,64 +115,8 @@ pub fn split_parent(
                 usage,
                 service,
                 square_country_city,
-                allow_defaults,
             ),
         });
     }
     Ok(children)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::merge::STATUS_UNKNOWN;
-    use crate::sidecar::Interval;
-    use crate::topology::Piece;
-
-    fn piece() -> Piece {
-        Piece {
-            from_m: 0.0,
-            to_m: 100.0,
-            way: std::sync::Arc::new(
-                crate::topology::WayGeometry::new(vec![[50.0, 14.0], [50.0, 14.001]]).unwrap(),
-            ),
-        }
-    }
-
-    #[test]
-    fn interior_cut_emits_three_children_and_keeps_parent_index() {
-        let intervals = [Interval {
-            osm_id: 7,
-            segment_idx: 0,
-            from_m: 20.0,
-            to_m: 60.0,
-            source_id: 100,
-            passenger: 4.0,
-            freight: 0.0,
-            passenger_status: 2,
-            freight_status: STATUS_UNKNOWN,
-            matching: 2,
-        }];
-        let original = ChildGeom {
-            start_gx: 1,
-            start_gy: 2,
-            end_gx: 3,
-            end_gy: 4,
-            length_m: 100.0,
-        };
-        let cz = SquareCountryCity {
-            continent: noise_compute::square_country_city::Continent::Europe,
-            country_iso: *b"CZ",
-            city_id: 0,
-        };
-        let children =
-            split_parent(7, 0, original, Some(&piece()), &intervals, 0, 0, 0, cz).unwrap();
-        assert_eq!(children.len(), 3);
-        assert!((children[0].geom.length_m - 20.0).abs() < 1e-6);
-        assert!((children[1].geom.length_m - 40.0).abs() < 1e-6);
-        let middle = children[1].traffic.passenger.periods.iter().sum::<f64>();
-        let left = children[0].traffic.passenger.periods.iter().sum::<f64>();
-        assert!(middle > 3.9);
-        assert!(left < 0.01 || children[0].traffic.passenger.source_id == 0);
-    }
 }

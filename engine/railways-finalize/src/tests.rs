@@ -194,10 +194,9 @@ fn class_defaults_stamp_contract_and_skip_on_retry() {
 }
 
 #[test]
-fn sidecar_interval_splits_parent_and_does_not_smear() {
+fn partial_evidence_preserves_middle_counts_and_zero_with_class_priors_on_uncovered_ends() {
     let year = year_dir();
     let arrow = year.join("z9/276/173/railways.arrow");
-    write_parent_arrow(&arrow, None);
     let sidecar = sidecar_path(&year);
     let topology = topology_path(&year);
     let traffic = Connection::open(&sidecar).unwrap();
@@ -243,38 +242,73 @@ fn sidecar_interval_splits_parent_and_does_not_smear() {
         .unwrap();
     let pieces = crate::topology::load_square_pieces(&topology, "z9/276/173").unwrap();
     assert!(Arc::ptr_eq(&pieces[&(7, 0)].way, &pieces[&(7, 1)].way));
-    let receipt = finalize_square(&year, SQUARE, &sidecar, &topology)
-        .unwrap()
-        .unwrap();
-    assert_eq!(receipt.rows_in, 1);
-    assert_eq!(receipt.rows_out, 3);
-    let (_metadata, batch) = read_arrow(&arrow);
-    let idx = batch
-        .column_by_name("segment_idx")
-        .unwrap()
-        .as_any()
-        .downcast_ref::<Int16Array>()
-        .unwrap();
-    assert!(idx.iter().all(|value| value == Some(0)));
-    let passenger: Vec<f64> = (0..3)
-        .map(|row| {
-            [
-                "trains_passenger_day",
-                "trains_passenger_evening",
-                "trains_passenger_night",
-            ]
-            .iter()
-            .map(|name| f64_col(&batch, name)[row])
-            .sum()
-        })
-        .collect();
-    let matching = u8_col(&batch, "passenger_matching");
-    let stamped = passenger
-        .iter()
-        .zip(matching.iter())
-        .find(|(_count, mask)| **mask == 2)
-        .unwrap();
-    assert!((stamped.0 - 4.0).abs() < 1e-6);
-    assert_eq!(passenger.iter().filter(|count| **count < 0.01).count(), 2);
+    for (daily_passenger, evidence_status) in [(4.0, 2), (0.0, 1)] {
+        write_parent_arrow(&arrow, None);
+        traffic
+            .execute(
+                "UPDATE rail_interval SET passenger = ?, passenger_status = ?, freight_status = ?",
+                rusqlite::params![
+                    daily_passenger,
+                    evidence_status,
+                    if evidence_status == 1 { 1 } else { 0 }
+                ],
+            )
+            .unwrap();
+        let receipt = finalize_square(&year, SQUARE, &sidecar, &topology)
+            .unwrap()
+            .unwrap();
+        assert_eq!((receipt.rows_in, receipt.rows_out), (1, 3));
+        let (_metadata, batch) = read_arrow(&arrow);
+        let idx = batch
+            .column_by_name("segment_idx")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int16Array>()
+            .unwrap();
+        assert!(idx.iter().all(|value| value == Some(0)));
+        let lengths = batch
+            .column_by_name("length_m")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .unwrap();
+        let mut actual_lengths = lengths.values().to_vec();
+        let mut expected_lengths = [20.0, 40.0, (pieces[&(7, 0)].to_m - 60.0) as f32];
+        actual_lengths.sort_by(f32::total_cmp);
+        expected_lengths.sort_by(f32::total_cmp);
+        assert_eq!(actual_lengths, expected_lengths);
+        let columns = crate::rail_traffic::RailTrafficColumns::read(&batch).unwrap();
+        let mut observed = 0;
+        let mut defaults = 0;
+        for row in 0..batch.num_rows() {
+            let result = columns.row(row);
+            let passenger = result.passenger.periods.iter().sum::<f64>();
+            let freight = result.freight.periods.iter().sum::<f64>();
+            if result.passenger.matching == 2 {
+                observed += 1;
+                assert!((passenger - daily_passenger).abs() < 1e-9);
+                assert_eq!(freight, 0.0);
+                assert_eq!(result.passenger.source_id, 100);
+                assert_eq!(result.passenger.status, 2); // Daily evidence uses estimated period shares.
+                assert_eq!(
+                    result.freight.status,
+                    if evidence_status == 1 { 2 } else { 0 }
+                );
+                assert_eq!(result.is_silent(), daily_passenger == 0.0);
+            } else {
+                defaults += 1;
+                assert!((passenger - 80.0).abs() < 1e-9);
+                assert!((freight - 20.0).abs() < 1e-9);
+                for category in [result.passenger, result.freight] {
+                    assert_eq!(
+                        (category.status, category.source_id, category.matching),
+                        (2, 0, 0)
+                    );
+                }
+                assert!(!result.is_silent());
+            }
+        }
+        assert_eq!((observed, defaults), (1, 2));
+    }
     let _ = std::fs::remove_dir_all(year.parent().unwrap());
 }

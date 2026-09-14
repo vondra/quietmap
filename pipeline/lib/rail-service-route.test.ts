@@ -296,3 +296,36 @@ test('joint station snaps use the connected through track when both closest trac
   assert.equal(routed.services[0].evidence.passenger, 7)
   assert.equal(routed.services[0].evidence.matching, 'graph_estimated')
 })
+
+test('station-only shapes use shapeless routing while intermediate geometry remains authoritative', () => {
+  const a = point(0, 0), b = point(2000, 0), north = point(1000, 1000), south = point(1000, -1000)
+  const prepared = join(TEMP, 'station-only-shape')
+  writeTransportFixture(prepared, [
+    { id: '1', nodes: [['a', a], ['n', north], ['b', b]] },
+    { id: '2', nodes: [['a', a], ['s', south], ['b', b]] },
+  ], [1, 2].flatMap(way => [0, 1].map(index => ({
+    way: String(way), segment: index, square,
+    start: [index, 0] as [number, number], end: [index + 1, 0] as [number, number],
+  }))))
+  using topology = new SourceTransportTopology(prepared)
+  const northSegments = [segment('1', a, north, 'a', 'n'),
+    { ...segment('1', north, b, 'n', 'b'), key: '1:1' }]
+  const curvedGraph = buildRailGraph(northSegments)
+  const stops = [stop('A', a, 1), stop('A-platform', a, 2), stop('B', b, 3)]
+  const stationLine = service('station-line', stops, [a, a, b, b], 7)
+  const recovered = routeRailServices([stationLine], topology, curvedGraph, 100)
+  assert.equal(recovered.dailyDepartures.graphEstimated, 7)
+  assert.deepEqual(recovered.services[0].passages.map(passage => passage.wayId), ['1', '1'])
+
+  const endpoints = [stops[0], stops[2]]
+  const unsupportedShape = service('south-shape', endpoints, [a, south, b], 7)
+  assert.equal(routeRailServices([unsupportedShape], topology, curvedGraph, 100).unmatched, 1)
+
+  const bothCurves = buildRailGraph([...northSegments, segment('2', a, south, 'a', 's'),
+    { ...segment('2', south, b, 's', 'b'), key: '2:1' }])
+  assert.equal(routeRailServices([stationLine], topology, bothCurves, 100).failures.ambiguous, 1)
+  const genuineShape = service('north-shape', endpoints, [a, north, b], 7)
+  const aligned = routeRailServices([genuineShape], topology, bothCurves, 100)
+  assert.equal(aligned.dailyDepartures.graphEstimated, 7)
+  assert.deepEqual(aligned.services[0].passages.map(passage => passage.wayId), ['1', '1'])
+})
