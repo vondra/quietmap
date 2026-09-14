@@ -2,7 +2,7 @@
 
 use grid::geo::{flat_dist, interpolate_longitude_short_arc};
 use rusqlite::{Connection, OpenFlags};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -53,7 +53,11 @@ impl WayGeometry {
     }
 }
 
-pub fn load_square_pieces(path: &Path, square: &str) -> Result<HashMap<(i64, i16), Piece>, String> {
+pub fn load_square_pieces(
+    path: &Path,
+    square: &str,
+    way_ids: &[i64],
+) -> Result<HashMap<(i64, i16), Piece>, String> {
     if !path.is_file() {
         return Ok(HashMap::new());
     }
@@ -64,54 +68,56 @@ pub fn load_square_pieces(path: &Path, square: &str) -> Result<HashMap<(i64, i16
             "SELECT p.way_id, p.segment_idx, p.start_vertex, p.start_fraction,
                     p.end_vertex, p.end_fraction
              FROM source_pieces p JOIN source_ways w ON w.osm_id = p.way_id
-             WHERE p.square = ? AND w.family = 'railways'",
+             WHERE p.way_id = ?1 AND p.square = ?2 AND w.family = 'railways'",
         )
         .map_err(|e| e.to_string())?;
-    let rows = statement
-        .query_map([square], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i16>(1)?,
-                row.get::<_, usize>(2)?,
-                row.get::<_, f64>(3)?,
-                row.get::<_, usize>(4)?,
-                row.get::<_, f64>(5)?,
-            ))
-        })
-        .map_err(|e| e.to_string())?;
     let mut pieces = HashMap::new();
-    let mut ways = HashMap::new();
     let mut geometry = connection
         .prepare("SELECT nodes_json FROM source_ways WHERE osm_id = ?")
         .map_err(|e| e.to_string())?;
-    for row in rows {
-        let (osm_id, segment_idx, start_v, start_f, end_v, end_f) =
-            row.map_err(|e| e.to_string())?;
-        let way = match ways.entry(osm_id) {
-            std::collections::hash_map::Entry::Occupied(entry) => Arc::clone(entry.get()),
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let json: String = geometry
-                    .query_row([osm_id], |row| row.get(0))
-                    .map_err(|e| e.to_string())?;
-                Arc::clone(entry.insert(Arc::new(WayGeometry::new(parse_nodes(&json)?)?)))
+    for osm_id in way_ids.iter().copied().collect::<BTreeSet<_>>() {
+        let rows = statement
+            .query_map(rusqlite::params![osm_id, square], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i16>(1)?,
+                    row.get::<_, usize>(2)?,
+                    row.get::<_, f64>(3)?,
+                    row.get::<_, usize>(4)?,
+                    row.get::<_, f64>(5)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut way = None;
+        for row in rows {
+            let (osm_id, segment_idx, start_v, start_f, end_v, end_f) =
+                row.map_err(|e| e.to_string())?;
+            let way = match &way {
+                Some(geometry) => Arc::clone(geometry),
+                None => {
+                    let json: String = geometry
+                        .query_row([osm_id], |row| row.get(0))
+                        .map_err(|e| e.to_string())?;
+                    Arc::clone(way.insert(Arc::new(WayGeometry::new(parse_nodes(&json)?)?)))
+                }
+            };
+            let start = WayPosition {
+                vertex: start_v,
+                fraction: start_f,
+            };
+            let end = WayPosition {
+                vertex: end_v,
+                fraction: end_f,
+            };
+            let from_m = distance_at(&way.distances, start)?;
+            let to_m = distance_at(&way.distances, end)?;
+            if to_m <= from_m {
+                return Err(format!(
+                    "invalid source piece interval {osm_id}:{segment_idx}"
+                ));
             }
-        };
-        let start = WayPosition {
-            vertex: start_v,
-            fraction: start_f,
-        };
-        let end = WayPosition {
-            vertex: end_v,
-            fraction: end_f,
-        };
-        let from_m = distance_at(&way.distances, start)?;
-        let to_m = distance_at(&way.distances, end)?;
-        if to_m <= from_m {
-            return Err(format!(
-                "invalid source piece interval {osm_id}:{segment_idx}"
-            ));
+            pieces.insert((osm_id, segment_idx), Piece { from_m, to_m, way });
         }
-        pieces.insert((osm_id, segment_idx), Piece { from_m, to_m, way });
     }
     Ok(pieces)
 }

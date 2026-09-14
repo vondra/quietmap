@@ -225,7 +225,8 @@ fn partial_evidence_preserves_middle_counts_and_zero_with_class_priors_on_uncove
             way_id INTEGER, segment_idx INTEGER, square TEXT,
             start_vertex INTEGER, start_fraction REAL, end_vertex INTEGER, end_fraction REAL,
             PRIMARY KEY (way_id, segment_idx)
-         );",
+         ) WITHOUT ROWID;
+         CREATE INDEX source_pieces_square ON source_pieces(square);",
         )
         .unwrap();
     source
@@ -240,7 +241,16 @@ fn partial_evidence_preserves_middle_counts_and_zero_with_class_priors_on_uncove
             [],
         )
         .unwrap();
-    let pieces = crate::topology::load_square_pieces(&topology, "z9/276/173").unwrap();
+    source.execute_batch(
+        "INSERT INTO source_ways VALUES (8, 'roads', 'invalid'), (9, 'railways', 'invalid');
+         INSERT INTO source_pieces VALUES
+         (8, 0, 'z9/276/173', 0, 0, 1, 0),
+         (9, 0, 'z9/276/173', 0, 0, 1, 0),
+         (7, 2, 'z9/277/173', 2, 0, 3, 0);",
+    ).unwrap();
+    let pieces = crate::topology::load_square_pieces(&topology, "z9/276/173", &[7, 7, 8]).unwrap();
+    assert_eq!(pieces.len(), 2);
+    assert!(crate::topology::load_square_pieces(&topology, "z9/276/173", &[9]).is_err());
     assert!(Arc::ptr_eq(&pieces[&(7, 0)].way, &pieces[&(7, 1)].way));
     for (daily_passenger, evidence_status) in [(4.0, 2), (0.0, 1)] {
         write_parent_arrow(&arrow, None);

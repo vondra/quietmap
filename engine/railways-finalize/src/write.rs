@@ -71,7 +71,7 @@ pub fn finalize_square(
         concat_batches(&schema, &batches).map_err(|e| format!("{}: {e}", arrow_path.display()))?;
     let square_name = grid::square_name(square);
     let intervals = load_square_intervals(sidecar, &square_name)?;
-    let pieces = load_square_pieces(topology, &square_name)?;
+    let pieces = load_square_pieces(topology, &square_name, col_i64(&merged, "osm_id")?.values())?;
     let children = expand_rows(&merged, &intervals, &pieces)?;
     let ipc = encode_children(&merged, &children)?;
     write_atomically(&dir, &ipc)?;
