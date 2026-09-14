@@ -330,6 +330,25 @@ test('station-only shapes use shapeless routing while intermediate geometry rema
   assert.deepEqual(aligned.services[0].passages.map(passage => passage.wayId), ['1', '1'])
 })
 
+test('a closed shape anchors the first stop before its closer final occurrence', () => {
+  const a = point(0, 0), b = point(2000, 0), north = point(1000, 1000), south = point(1000, -1000)
+  const prepared = join(TEMP, 'closed-shape-anchors')
+  const nodes: Array<[string, [number, number]]> = [['a', a], ['n', north], ['b', b], ['s', south], ['a', a]]
+  writeTransportFixture(prepared, [{ id: '1', nodes }],
+    nodes.slice(1).map((_, index) => ({ way: '1', segment: index, square,
+      start: [index, 0] as [number, number], end: [index + 1, 0] as [number, number] })))
+  using topology = new SourceTransportTopology(prepared)
+  const graph = buildRailGraph(nodes.slice(1).map((node, index) => ({
+    ...segment('1', nodes[index][1], node[1], nodes[index][0], node[0]), key: `1:${index}`,
+  })))
+  const trip = service('ring', [stop('A', a, 1), stop('B', b, 2), stop('A', a, 3)],
+    [point(0, 20), north, b, south, a], 200)
+  const routed = routeRailServices([trip], topology, graph, 100)
+  assert.equal(routed.dailyDepartures.graphEstimated, 200)
+  assert.deepEqual(routed.services[0].passages.map(passage => passage.segmentIndex), [0, 1, 2, 3])
+  for (const flow of passageFlow(routed.services).values()) assert.equal(flow.passenger, 200)
+})
+
 test('shapeless services accept parallel tracks but keep distinct corridors ambiguous', () => {
   for (const spacingM of [8, 120]) {
     const prepared = join(TEMP, `parallel-${spacingM}`)

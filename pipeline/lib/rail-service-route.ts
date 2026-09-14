@@ -170,23 +170,35 @@ function shapeFilter(shape: Array<[number, number]>): (edge: RailGraphEdge) => b
   ) <= SHAPE_CORRIDOR_TOLERANCE_M
 }
 
-/** Shape-vertex anchor per station, searched forward from the previous
- *  station's anchor so a repeated stop anchors to its later occurrence — an
- *  out-and-back service keeps its return leg distinct. */
+/** Minimize total station-to-shape distance in order, so a close return
+ *  occurrence cannot consume the whole shape before the first departure. */
 function stationShapeAnchors(
   shape: ReadonlyArray<[number, number]>,
   stations: readonly GtfsServiceStop[],
 ): number[] {
-  const anchors: number[] = []
-  let cursor = 0
+  if (!shape.length || !stations.length) return []
+  let costs = new Float64Array(shape.length)
+  const predecessors: Int32Array[] = []
   for (const station of stations) {
-    let best = cursor, bestDistM = Infinity
-    for (let index = cursor; index < shape.length; index++) {
-      const distM = flatDist(station.lat, station.lon, shape[index][0], shape[index][1])
-      if (distM < bestDistM) { best = index; bestDistM = distM }
+    const nextCosts = new Float64Array(shape.length)
+    const previousVertices = new Int32Array(shape.length)
+    let bestPrevious = 0
+    for (let vertex = 0; vertex < shape.length; vertex++) {
+      if (costs[vertex] < costs[bestPrevious]) bestPrevious = vertex
+      nextCosts[vertex] = costs[bestPrevious] + flatDist(station.lat, station.lon, ...shape[vertex])
+      previousVertices[vertex] = bestPrevious
     }
-    anchors.push(best)
-    cursor = best
+    costs = nextCosts
+    predecessors.push(previousVertices)
+  }
+  let vertex = 0
+  for (let candidate = 1; candidate < shape.length; candidate++) {
+    if (costs[candidate] < costs[vertex]) vertex = candidate
+  }
+  const anchors = new Array<number>(stations.length)
+  for (let station = stations.length - 1; station >= 0; station--) {
+    anchors[station] = vertex
+    vertex = predecessors[station][vertex]
   }
   return anchors
 }
