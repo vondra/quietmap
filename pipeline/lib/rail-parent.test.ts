@@ -94,3 +94,35 @@ test('dateline children retain the source endpoints across the grid edge', () =>
   assert.deepEqual([restored.getChild('start_gx')!.get(0), restored.getChild('start_gy')!.get(0)], lonLatToGrid(179.8, 45.75))
   assert.deepEqual([restored.getChild('end_gx')!.get(0), restored.getChild('end_gy')!.get(0)], lonLatToGrid(-179.8, 45.75))
 })
+
+test('subpixel children must lie on the restored chain, while duplicate positive edges remain invalid', () => {
+  for (const location of ['start', 'middle', 'end', 'detached', 'overlap'] as const) {
+    const { prepared, path } = finalizedFixture(`parent-subpixel-${location}`)
+    const input = tableFromIPC(readFileSync(path))
+    const pointRow = location === 'end' ? 1 : 0
+    const pointPrefix = location === 'start' ? 'start' : 'end'
+    const gx = Number(input.getChild(`${pointPrefix}_gx`)!.get(pointRow)) + Number(location === 'detached')
+    const gy = Number(input.getChild(`${pointPrefix}_gy`)!.get(pointRow))
+    const columns = Object.fromEntries(input.schema.fields.map(field => {
+      const vector = input.getChild(field.name)!
+      const value = location === 'overlap' ? vector.get(0)
+        : ['start_gx', 'end_gx'].includes(field.name) ? gx
+        : ['start_gy', 'end_gy'].includes(field.name) ? gy
+        : field.name === 'length_m' ? 0.0053055002354085445 : vector.get(0)
+      return [field.name, vectorFromArray([vector.get(0), value, vector.get(1)], field.type)]
+    }))
+    const table = new Table(columns)
+    const schema = new Schema(table.schema.fields, input.schema.metadata)
+    writeFileSync(path, tableToIPC(new Table(schema,
+      table.batches.map(batch => new RecordBatch(schema, batch.data))), 'file'))
+    const before = readFileSync(path)
+    using topology = new SourceTransportTopology(prepared)
+    if (location === 'detached' || location === 'overlap') {
+      assert.throws(() => restoreRailwayParentsForEnrichment(path, prepared, SQUARE, topology),
+        location === 'detached' ? /children do not cover source parent/ : /overlapping railway children/)
+      assert.deepEqual(readFileSync(path), before)
+    } else {
+      assert.equal(restoreRailwayParentsForEnrichment(path, prepared, SQUARE, topology).numRows, 1)
+    }
+  }
+})

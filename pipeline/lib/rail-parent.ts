@@ -63,19 +63,25 @@ export function restoreRailwayParentsForEnrichment(
     const end = lonLatToGrid(parent.end[1], parent.end[0])
     const children = childRows.get(key)!
     const links = new Map<string, string>()
+    const collapsed = new Set<string>()
     for (const child of children) {
       const from = `${table.getChild('start_gx')!.get(child)},${table.getChild('start_gy')!.get(child)}`
       const to = `${table.getChild('end_gx')!.get(child)},${table.getChild('end_gy')!.get(child)}`
+      // Distinct metric cuts can quantize into the same z30 cell.
+      if (from === to) { collapsed.add(from); continue }
       if (links.has(from)) throw new Error(`overlapping railway children for ${key} in ${square}`)
       links.set(from, to)
     }
     let endpoint: string | undefined = start.join(',')
-    for (let visit = 0; visit < children.length; visit++) {
+    const edgeCount = links.size
+    for (let visit = 0; visit < edgeCount; visit++) {
+      collapsed.delete(endpoint!)
       const next: string | undefined = links.get(endpoint!)
       links.delete(endpoint!)
       endpoint = next
     }
-    if (endpoint !== end.join(',') || links.size !== 0) {
+    collapsed.delete(endpoint!)
+    if (endpoint !== end.join(',') || links.size !== 0 || collapsed.size !== 0) {
       throw new Error(`railway children do not cover source parent ${key} in ${square}`)
     }
     starts.push(start)
