@@ -3,12 +3,14 @@
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
 import {
-  appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
+  appendFileSync, cpSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs'
 import { join, relative } from 'node:path'
 import { tmpdir } from 'node:os'
 import { tableFromIPC } from 'apache-arrow'
 import { enrichGlobalGtfsCountry } from './enrich-railway-europe.js'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { listRailIntervals } from './lib/rail-traffic-store.js'
 import { writeSyntheticRailTopology } from './lib/transport-test-fixture.js'
 import { writeRailwaysFixture } from './lib/rail-test-fixture.js'
@@ -212,4 +214,53 @@ test('an orphan with a source shape preserves prior corridor counts while valid 
     assert.deepEqual(intervals.find(row => row.osmId === prior[0].osmId), prior[0])
     assert.deepEqual(readFileSync(path), before)
   }
+})
+
+test('parallel neighboring countries publish the same facts and a failed batch publishes nothing', async () => {
+  const source = join(TEMP, 'source-parallel')
+  writeGreekGtfs(source, 'route_id,route_type\nrail,2\ntram,0\n')
+  const stops = join(source, 'gr', 'stops.txt')
+  writeFileSync(stops, readFileSync(stops, 'utf8').replaceAll('38.', '42.').replaceAll('23.', '19.'))
+  cpSync(join(source, 'gr'), join(source, 'hr'), { recursive: true })
+  const outputs = ['serial', 'parallel'].map(name => {
+    const prepared = join(TEMP, `countries-${name}`)
+    const directory = squareDirectory(prepared, 42, 19)
+    mkdirSync(directory, { recursive: true })
+    const path = join(directory, 'railways.arrow')
+    copyFileSync(writeRailwaysFixture(`countries-${name}.arrow`, [
+      { latitude: 42, longitude: 19, endLatitude: 42.005, endLongitude: 19.005,
+        lengthMetres: 708, railType: 0, country: 'GR' },
+      { latitude: 42.001, longitude: 19.001, endLatitude: 42.0015, endLongitude: 19.0015,
+        lengthMetres: 71, railType: 1, country: 'HR' },
+    ]), path)
+    writeSyntheticRailTopology(prepared, [relative(prepared, directory)])
+    return { prepared, path }
+  })
+  const base = { sourceDirectory: source, cacheDirectory: join(TEMP, 'cache-parallel'), asOfDate: '20260909' }
+  for (const country of ['GR', 'HR']) {
+    await enrichGlobalGtfsCountry({ ...base, preparedDirectory: outputs[0].prepared, country })
+  }
+  const before = readFileSync(outputs[1].path)
+  // Bound tiny fixture heaps so this exercises two real workers on small CI runners too.
+  const run = () => spawnSync(process.execPath, [
+    ...process.execArgv, '--max-old-space-size=256', fileURLToPath(new URL('./enrich-railway-europe.ts', import.meta.url)),
+    '--source-dir', source, '--prepared-dir', outputs[1].prepared,
+    '--cache-dir', base.cacheDirectory, '--as-of-date', base.asOfDate, '--country', 'GR,HR',
+  ], { encoding: 'utf8', env: { ...process.env, QM_ROAD_WORKERS: '2' } })
+  const success = run()
+  assert.equal(success.status, 0, success.stderr)
+  assert.match(success.stdout, /"workers":2/)
+  const expected = listRailIntervals(outputs[0].prepared)
+  assert.ok(expected.length > 0)
+  assert.deepEqual(listRailIntervals(outputs[1].prepared), expected)
+  assert.deepEqual(readFileSync(outputs[1].path), before)
+  // The valid first country would now double its count, but the later input is broken.
+  appendFileSync(join(source, 'gr', 'trips.txt'), 'rail,daily,extra-trip\n')
+  appendFileSync(join(source, 'gr', 'stop_times.txt'), 'extra-trip,a,1\nextra-trip,b,2\n')
+  writeFileSync(join(source, 'hr', 'routes.txt'), 'route_id,route_name\nrail,broken\n')
+  const failed = run()
+  assert.equal(failed.status, 1)
+  assert.match(failed.stderr, /HR: railway worker exited/)
+  assert.deepEqual(listRailIntervals(outputs[1].prepared), expected)
+  assert.deepEqual(readFileSync(outputs[1].path), before)
 })

@@ -206,8 +206,14 @@ export async function runChain(argv: string[]): Promise<number> {
       return 2
     }
   }
-  for (const step of selected) {
+  for (let index = 0; index < selected.length; index++) {
+    const step = selected[index]
     const { argv: command, cwd } = commandFor(step, cli.paths)
+    if (!cli.dryRun && (step.kind === 'railways-gtfs' || step.kind === 'railways-national-gtfs')) {
+      const countries = [step.cc!]
+      while (selected[index + 1]?.kind === step.kind) countries.push(selected[++index].cc!)
+      command[command.indexOf('--country') + 1] = countries.join(',')
+    }
     console.log(JSON.stringify({ step: step.id, phase: step.phase, argv: command }))
     if (cli.dryRun) continue
     const started = Date.now()

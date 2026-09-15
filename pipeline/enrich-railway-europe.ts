@@ -1,6 +1,7 @@
 /** Country-scoped GTFS railway enrichment from immutable global or national inputs. */
 
 import { mkdirSync } from 'node:fs'
+import { runGtfsCountries, awaitCountryPublication } from './lib/rail-country-workers.js'
 import { basename, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -160,14 +161,17 @@ async function loadFeed(
   }
 }
 
-export async function enrichGlobalGtfsCountry(options: {
+export interface GlobalGtfsCountryOptions {
   sourceDirectory: string
   preparedDirectory: string
   cacheDirectory: string
   country: string
   registry?: GtfsRegistry
   asOfDate: string
-}): Promise<GlobalGtfsCountryResult> {
+  beforeWrite?: () => Promise<void>
+}
+
+export async function enrichGlobalGtfsCountry(options: GlobalGtfsCountryOptions): Promise<GlobalGtfsCountryResult> {
   const sourceDirectory = resolve(options.sourceDirectory)
   const preparedDirectory = resolve(options.preparedDirectory)
   const cacheDirectory = resolve(options.cacheDirectory)
@@ -205,6 +209,7 @@ export async function enrichGlobalGtfsCountry(options: {
       countryIso: country,
       extraMatch: buildTramExtraMatch(tramStops, sourceId),
       retractSafe: true,
+      beforeWrite: options.beforeWrite,
     })
     return {
       country,
@@ -264,7 +269,18 @@ function cliOptions(argv: readonly string[]): {
 }
 
 async function main(): Promise<void> {
-  console.log(JSON.stringify(await enrichGlobalGtfsCountry(cliOptions(process.argv.slice(2)))))
+  const disconnected = () => process.exit(1)
+  if (process.send) process.once('disconnect', disconnected)
+  try {
+    const options = cliOptions(process.argv.slice(2))
+    if (options.country.includes(',')) await runGtfsCountries(options)
+    else console.log(JSON.stringify(await enrichGlobalGtfsCountry({
+      ...options, beforeWrite: process.send ? awaitCountryPublication : undefined,
+    })))
+  } finally {
+    process.off('disconnect', disconnected)
+    if (process.connected) process.disconnect!()
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

@@ -224,6 +224,7 @@ export interface Z9RailServiceOptions {
   silentResidual?: Pick<RailwayTraffic, 'sourceId' | 'passenger' | 'freight'>
   extraMatch?: (row: RailwayRow, index: number, square: string) => RailwayTraffic | null
   retractSafe: boolean
+  beforeWrite?: () => Promise<void>
 }
 
 export async function enrichZ9RailwaysByServices(
@@ -243,6 +244,7 @@ export async function enrichZ9RailwaysByServices(
     stampableKilometres += segment.lengthM / 1000
     if (routed.quarantinedPieceKeys.has(segment.key)) quarantinedKilometres += segment.lengthM / 1000
   }
+  await options.beforeWrite?.()
   const write = await writeClippedRailPassages({
     preparedDirectory: prepared,
     squares,
