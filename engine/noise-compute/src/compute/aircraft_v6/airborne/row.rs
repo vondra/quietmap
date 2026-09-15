@@ -172,41 +172,10 @@ pub(super) fn evaluate_row<const FLOOR: bool>(
             return None;
         }
     }
-    // `ground_context = NONE` for every airborne sub-segment: Stage 1's
-    // ground inference already routes near-airport low-AGL points to the
-    // ground path (measured 2026-05-23, 0.000 dB on five reference receivers).
-    let seg = AircraftSegment {
-        flight_id: batch.flight_id[i],
-        profile_idx,
-        is_departure,
-        on_ground: false,
-        period: batch.period[i],
-        date_id: batch.date_id[i],
-        start_lat: s_lat_f as f64,
-        start_lon: s_lon_f as f64,
-        start_alt_m: f32::from(batch.start_alt_m[i]),
-        end_lat: e_lat_f as f64,
-        end_lon: e_lon_f as f64,
-        end_alt_m: f32::from(batch.end_alt_m[i]),
-        speed_kt: batch.speed_kt[i],
-        segment_length_m: batch.length_m[i],
-        count_weight: 1.0,
-        surface_model: false,
-        ground_context: aircraft::GROUND_CONTEXT_NONE,
-        ground_ops_kind: aircraft::GROUND_OPS_KIND_NONE,
-        source_id: identity.source_id[key] as u16,
-    };
-    // Only start/end terrain elevations are stored: the endpoint stale-ground
-    // gate and Filter D's receiver-dependent cuts run from them.
-    let start_elev = batch.terrain_start_elev_m[i] as f64;
-    let end_elev = batch.terrain_end_elev_m[i] as f64;
-    let terrain = aircraft::SegmentTerrain {
-        start_elev,
-        q1_elev: 0.0,
-        mid_elev: 0.0,
-        q3_elev: 0.0,
-        end_elev,
-    };
+    let seg = batch.segment_with_coordinates(i, [s_lat_f, s_lon_f], [e_lat_f, e_lon_f]);
+    let terrain = batch.terrain(i);
+    let start_elev = terrain.start_elev;
+    let end_elev = terrain.end_elev;
     if aircraft::is_ground_stale_with_terrain(&seg, &terrain) {
         return None;
     }

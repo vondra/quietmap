@@ -15,7 +15,7 @@ use noise_compute::types::{
     TraceCollector,
 };
 
-use airborne_view::AirborneRowAccum;
+pub use airborne_view::AirborneRowAccum;
 use airport_summary_view::AirportSummaryAccum;
 use airport_traffic_view::AirportTrafficRowAccum;
 pub use cruise_view::CruiseRowAccum;
@@ -391,7 +391,7 @@ pub fn assert_airport_traffic_contract(label: &str, batches: &[RecordBatch]) -> 
 }
 
 /// Geometry stamps distinguish z30/Int16 data from incompatible float artifacts.
-pub(super) fn assert_airborne_contract(label: &str, batches: &[RecordBatch]) -> Result<(), String> {
+pub fn assert_airborne_contract(label: &str, batches: &[RecordBatch]) -> Result<(), String> {
     assert_schema_version(label, batches)?;
     assert_metadata_value(
         label,

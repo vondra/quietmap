@@ -164,6 +164,54 @@ mod tests {
     }
 
     #[test]
+    fn sub_ulp_longitude_edges_keep_owner_and_native_sample_consistent() {
+        let lat = 52.48278034927766;
+        let lon = -4.333339242990064e-15;
+        assert_eq!(square_of(lat, lon).x, 255);
+        assert!(RasterWindow::for_square(square_of(lat, lon))
+            .sample_position(lat, lon)
+            .is_some());
+        for zoom in [9, 15] {
+            let axis = 1u32 << zoom;
+            for column in 1..axis {
+                let edge = f64::from(column) * 360.0 / f64::from(axis) - 180.0;
+                for (lon, expected) in [
+                    (edge.next_down(), column - 1),
+                    (edge, column),
+                    (edge.next_up(), column),
+                ] {
+                    assert_eq!(
+                        crate::web_mercator_cell_axes(lat, lon, zoom).0,
+                        expected,
+                        "z{zoom} lon={lon}"
+                    );
+                    assert!(
+                        RasterWindow::for_square(square_of(lat, lon))
+                            .sample_position(lat, lon)
+                            .is_some(),
+                        "lon={lon}"
+                    );
+                }
+            }
+        }
+        for lon in [
+            -180.0,
+            (-180.0_f64).next_up(),
+            180.0_f64.next_down(),
+            180.0,
+            540.0,
+            -540.0,
+        ] {
+            assert!(
+                RasterWindow::for_square(square_of(lat, lon))
+                    .sample_position(lat, lon)
+                    .is_some(),
+                "dateline lon={lon}"
+            );
+        }
+    }
+
+    #[test]
     fn sampling_preserves_source_fraction_bits_and_nearest_half_cell_choices() {
         for lat_degree in [-90, -51, -1, 0, 49, 89] {
             for lon_degree in [-180, -2, 0, 14, 179] {

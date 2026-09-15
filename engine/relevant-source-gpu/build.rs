@@ -1,5 +1,6 @@
 //! Build the CUDA bridge with constants extracted from canonical physics sources.
 
+mod airborne_build;
 #[path = "cuda_archs.rs"]
 mod cuda_archs;
 
@@ -403,6 +404,7 @@ fn assert_ptx_has_no_f64(output_directory: &std::path::Path, arch: &str) {
 fn main() {
     println!("cargo:rerun-if-env-changed=NOISE_GPU_ARCH");
     println!("cargo:rerun-if-changed=cuda_archs.rs");
+    println!("cargo:rerun-if-changed=airborne_build.rs");
     println!("cargo:rerun-if-changed=kernels/relevant_source_geometry.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_path.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_attenuation.cuh");
@@ -452,11 +454,13 @@ fn main() {
     for arch in &archs {
         assert_ptx_has_no_f64(&output_directory, arch);
     }
+    let airborne_object = airborne_build::compile(&output_directory, &nvcc_arguments(&archs));
     run_checked(
         Command::new("ar")
             .arg("crs")
             .arg(&archive_path)
-            .arg(&object_path),
+            .arg(&object_path)
+            .arg(&airborne_object),
         "relevant-source CUDA archive",
     );
 

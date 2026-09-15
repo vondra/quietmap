@@ -27,9 +27,12 @@ fn main() {
         "relevant-source-gpu",
     ] {
         collect(&root.join(package).join("src"), &mut files);
-        for name in ["Cargo.toml", "build.rs", "cuda_archs.rs"] {
-            let file = root.join(package).join(name);
-            if file.is_file() {
+        for entry in fs::read_dir(root.join(package)).expect("package directory") {
+            let file = entry.expect("package entry").path();
+            if file.is_file()
+                && (file.extension().is_some_and(|extension| extension == "rs")
+                    || file.file_name().is_some_and(|name| name == "Cargo.toml"))
+            {
                 files.push(file);
             }
         }

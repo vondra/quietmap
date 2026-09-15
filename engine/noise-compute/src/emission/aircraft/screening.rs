@@ -130,6 +130,17 @@ impl BuildingHorizon {
             .all(|&tangent| tangent == BUILDING_TANGENT_EMPTY)
     }
 
+    /// The canonical quantized edges consumed unchanged by the aircraft CUDA kernel.
+    pub fn packed_sectors(
+        &self,
+    ) -> &[[(u16, u16); BUILDING_LOCAL_HORIZON_BANDS]; BUILDING_LOCAL_HORIZON_SECTORS] {
+        &self.local
+    }
+
+    pub fn packed_sector_maxima(&self) -> &[u16; BUILDING_LOCAL_HORIZON_SECTORS] {
+        &self.local_max_tangent_bits
+    }
+
     /// Strongest roof-edge diffraction on the physical receiver-to-subsegment ray.
     #[inline]
     pub fn screening_dz(

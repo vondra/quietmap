@@ -22,3 +22,30 @@ fn periodic_selection_distinguishes_short_arcs_from_aggregate_bounds() {
     assert!(opposite.intersects_segment([0.0, 90.0], [0.0, -90.0]));
     assert!(!AirborneEnvelope::new(0.0, 180.0).intersects_segment([0.0, 90.0], [0.0, -90.0]));
 }
+
+#[test]
+fn receiver_union_keeps_quantized_edges_and_periodic_seam() {
+    for points in [
+        [[51.64423, -0.50124], [51.663719, -0.491731]],
+        [
+            [80.000_000_1, 179.999_999_9],
+            [79.999_999_9, -179.999_999_9],
+        ],
+    ] {
+        let union = AirborneEnvelope::covering_receivers(&points).unwrap();
+        for [lat, lon] in points {
+            let point = AirborneEnvelope::new(lat, lon);
+            for [west, east] in point.longitude_intervals {
+                for edge in [west, east] {
+                    for latitude in [point.south, point.north] {
+                        let vertex = [latitude, edge];
+                        if point.intersects_segment(vertex, vertex) {
+                            assert!(union.intersects_segment(vertex, vertex));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(AirborneEnvelope::covering_receivers(&[]).is_none());
+}

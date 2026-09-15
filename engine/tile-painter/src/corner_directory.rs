@@ -4,7 +4,7 @@ use crate::{
         take_requested_values, CommittedSurfaceTile, CornerEnergy, CornerGeneration, CornerStore,
     },
     corner_totals::SurfacePeriodTotals,
-    hm3::EncodedHm3,
+    hm3::{EncodedHm3, ALL_LAYERS},
 };
 use anyhow::{ensure, Context, Result};
 use grid::{
@@ -93,7 +93,7 @@ impl CornerDirectory {
         Ok(())
     }
 
-    /// Publish one complete five-layer z9 result without exposing a partial file.
+    /// Publish one complete eight-layer z9 result without exposing a partial file.
     pub fn publish_owner_result(&self, owner: Square, destination: &Path) -> Result<[u8; 32]> {
         let source = self.owner_path(owner);
         let source_digest = validate_owner_result(&source, self.generation, owner)?;
@@ -206,7 +206,7 @@ pub fn validate_owner_result(
         for x in x0..x1 {
             ensure!(
                 store.committed(x, y)?.is_some(),
-                "owner result lacks a five-layer tile"
+                "owner result lacks a complete HM3 tile"
             );
         }
     }
@@ -215,8 +215,8 @@ pub fn validate_owner_result(
             .connection
             .query_row("SELECT count(*) FROM surface_tiles", [], |row| row.get(0))?;
     ensure!(
-        tile_rows == 16 * 16 * 5,
-        "owner result has extra surface tiles"
+        tile_rows == u64::from((x1 - x0) * (y1 - y0)) * ALL_LAYERS.len() as u64,
+        "owner result has extra HM3 tiles"
     );
     drop(store);
     let digest = crate::generation_receipt::file_digest(path)?;

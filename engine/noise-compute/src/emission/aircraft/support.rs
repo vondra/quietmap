@@ -26,6 +26,26 @@ impl AirborneEnvelope {
         }
     }
 
+    /// Conservative union of the exact, already-quantized receiver envelopes.
+    pub fn covering_receivers(points: &[[f64; 2]]) -> Option<Self> {
+        let (&[lat, lon], rest) = points.split_first()?;
+        let mut bounds = Self::new(lat, lon);
+        for &[lat, lon] in rest {
+            let point = Self::new(lat, lon);
+            bounds.south = bounds.south.min(point.south);
+            bounds.north = bounds.north.max(point.north);
+            for (bounds, point) in bounds
+                .longitude_intervals
+                .iter_mut()
+                .zip(point.longitude_intervals)
+            {
+                bounds[0] = bounds[0].min(point[0]);
+                bounds[1] = bounds[1].max(point[1]);
+            }
+        }
+        Some(bounds)
+    }
+
     /// Raw aggregate [south, west, north, east], not a single short arc.
     pub fn intersects_bbox(&self, bbox: [f64; 4]) -> bool {
         self.intersects_latitude(bbox[0], bbox[2])

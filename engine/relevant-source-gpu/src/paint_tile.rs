@@ -1,4 +1,4 @@
-//! Reuse saved corner bytes by immutable source identity, then paint five surface layers.
+//! Reuse saved corners to produce five outdoor surface-power planes at shared receivers.
 use crate::{
     cuda_bridge::{DeviceBuffer, RelevantSourceCuda},
     relevance_partition::build_relevant_source_partition,
@@ -16,13 +16,18 @@ pub fn paint_tile(
     scene: &SurfaceGpu,
     x: u32,
     y: u32,
+    receivers: &TileReceivers,
     corners: &[CornerEnergy],
-) -> Result<Vec<tile_painter::hm3::EncodedHm3>> {
+) -> Result<[Vec<f32>; tile_painter::hm3::SURFACE_LAYERS.len()]> {
     ensure!(
         corners.len() == CORNER_COUNT,
         "incomplete saved tile corners"
     );
-    let receivers = TileReceivers::prepare(&scene.host, x, y)?;
+    if scene.host.sources.is_empty() {
+        return Ok(std::array::from_fn(|_| {
+            vec![0.0; receivers.x.len() * PERIOD_COUNT]
+        }));
+    }
     let device_sources: Vec<_> = scene
         .host
         .sources
@@ -44,11 +49,8 @@ pub fn paint_tile(
     let altitude = DeviceBuffer::from_slice(&receivers.altitude)?;
     let reflection = DeviceBuffer::from_slice(&receivers.reflection)?;
     let floor = DeviceBuffer::from_slice(&receivers.floor)?;
-    let mut tiles = Vec::new();
-    for (layer, output_layer) in tile_painter::hm3::SURFACE_LAYERS
-        .into_iter()
-        .enumerate()
-    {
+    let mut planes = std::array::from_fn(|_| Vec::new());
+    for (layer, plane) in planes.iter_mut().enumerate() {
         let mut incidence = TileSourceIncidence {
             corner_offsets: vec![0],
             corner_source_indices: Vec::new(),
@@ -105,11 +107,7 @@ pub fn paint_tile(
             &altitude,
             &reflection,
         )?;
-        tiles.push(tile_painter::hm3::encode_period_power(
-            &energy,
-            output_layer,
-            &receivers.indoor_attenuation,
-        )?);
+        *plane = energy;
     }
-    Ok(tiles)
+    Ok(planes)
 }

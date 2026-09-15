@@ -58,6 +58,17 @@ pub const SOURCE_LAYERS: [Hm3Layer; 7] = [
     Hm3Layer::AircraftCruise,
 ];
 
+pub const ALL_LAYERS: [Hm3Layer; 8] = [
+    SOURCE_LAYERS[0],
+    SOURCE_LAYERS[1],
+    SOURCE_LAYERS[2],
+    SOURCE_LAYERS[3],
+    SOURCE_LAYERS[4],
+    SOURCE_LAYERS[5],
+    SOURCE_LAYERS[6],
+    Hm3Layer::Total,
+];
+
 /// Complete validated HM3 payload; only the encoder can construct it.
 #[derive(Clone)]
 pub struct EncodedHm3 {
@@ -81,7 +92,7 @@ pub fn encode_all_period_powers(
     planes: [&[f32]; 7],
     indoor_attenuation: &[f32],
 ) -> Result<Vec<EncodedHm3>> {
-    let mut tiles = Vec::with_capacity(8);
+    let mut tiles = Vec::with_capacity(ALL_LAYERS.len());
     for (layer, plane) in SOURCE_LAYERS.into_iter().zip(planes) {
         tiles.push(encode_period_power(plane, layer, indoor_attenuation)?);
     }
@@ -98,12 +109,12 @@ pub fn encode_all_period_powers(
     Ok(tiles)
 }
 
-/// The five tiles a paint of nothing writes: every pixel NO_DATA (255), because zero
+/// The complete tiles a paint of nothing writes: every pixel NO_DATA (255), because zero
 /// energy in every period is -inf dB and stays -inf behind any facade. An owner or
 /// tile no source reaches gets these bytes without the card.
 pub fn silent_tiles() -> Result<Vec<EncodedHm3>> {
     let pixels = TILE_PIXEL_SIDE * TILE_PIXEL_SIDE;
-    SURFACE_LAYERS
+    ALL_LAYERS
         .into_iter()
         .map(|layer| encode_period_power(&vec![0.0; pixels * 3], layer, &vec![0.0; pixels]))
         .collect()
@@ -231,7 +242,7 @@ mod tests {
         let tiles = silent_tiles().unwrap();
         assert_eq!(
             tiles.iter().map(|tile| tile.layer).collect::<Vec<_>>(),
-            SURFACE_LAYERS
+            ALL_LAYERS
         );
         for tile in &tiles {
             let enclosed =

@@ -20,6 +20,7 @@ use crate::types::{
 };
 
 mod chords;
+pub use chords::SPLIT_PIECE;
 mod row;
 
 use chords::{ChordCandidate, PieceEval};

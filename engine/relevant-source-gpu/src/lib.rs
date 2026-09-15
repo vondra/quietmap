@@ -1,4 +1,6 @@
 //! Bounded z9 surface GPU scenes, canonical corner production and z13 painting.
+pub mod airborne_field;
+pub mod airborne_pack;
 pub mod cruise_field;
 /// The build-time arch list, compiled here only so its fleet default is tested without nvcc.
 #[cfg(test)]

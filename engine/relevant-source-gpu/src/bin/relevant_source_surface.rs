@@ -1,15 +1,18 @@
-//! Produce one generation-bound edge bundle or one complete z9 surface result.
+//! Produce canonical surface corners or one complete z9 seven-layer noise result.
 use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand};
 use grid::surface_corner::{
     owner_dependency_owners, owner_edge_corners, tile_corners, SurfaceCorner,
 };
 use relevant_source_gpu::{
+    airborne_field::AirborneScene,
+    cruise_field::CruiseField,
     cuda_bridge::RelevantSourceCuda,
     input_manifest::{file_digest, parse_digest, InputManifest},
     paint_tile::paint_tile,
     surface_gpu::SurfaceGpu,
     surface_scene::SurfaceScene,
+    tile_receivers::TileReceivers,
 };
 use std::{collections::BTreeMap, path::PathBuf};
 use tile_painter::{
@@ -17,7 +20,7 @@ use tile_painter::{
     corner_store::{CornerEnergy, CornerStore},
     durable_directory, edge_bundle,
     generation_receipt::{GenerationReceipt, SURFACE_CODE_DIGEST},
-    hm3::silent_tiles,
+    hm3::encode_all_period_powers,
 };
 
 #[derive(Parser)]
@@ -48,7 +51,7 @@ enum Phase {
         #[arg(long)]
         result: PathBuf,
     },
-    /// Import exact dependency bundles and publish all 256 five-layer tiles.
+    /// Import exact dependency bundles and publish all 256 tiles with seven layers and total.
     Owner {
         #[arg(long = "edge-bundle", required = true)]
         edge_bundles: Vec<PathBuf>,
@@ -124,8 +127,8 @@ fn evaluate_corners(
     corners: &[SurfaceCorner],
 ) -> Result<Vec<CornerEnergy>> {
     match scene {
-        Some(scene) => scene.evaluate_corners(cuda, corners),
-        None => Ok(vec![CornerEnergy(Vec::new()); corners.len()]),
+        Some(scene) if !scene.host.sources.is_empty() => scene.evaluate_corners(cuda, corners),
+        _ => Ok(vec![CornerEnergy(Vec::new()); corners.len()]),
     }
 }
 
@@ -204,40 +207,46 @@ fn paint_owner(
             }
         }
     }
-    let scene = if pending.is_empty() {
-        None
-    } else {
-        scene(owner, prepared_year, manifest, rasters)?
-    };
-    // One paint of nothing serves every silent tile of the owner.
-    let silence = if scene.is_none() {
-        Some(silent_tiles()?)
-    } else {
-        None
-    };
-    let mut produced = 0usize;
-    for (x, y) in pending {
-        let vertices = tile_corners(x, y).expect("owned z13 tile");
-        let corners = directory.resolve(&vertices, |canonical_owner, missing| {
-            ensure!(
-                canonical_owner == owner,
-                "foreign edge bundle was not imported"
+    if !pending.is_empty() {
+        let scene =
+            SurfaceGpu::upload(SurfaceScene::load(owner, prepared_year, manifest, rasters)?)?;
+        let airborne = AirborneScene::load(owner, prepared_year, manifest, rasters)?;
+        let cruise = CruiseField::load(owner, prepared_year, manifest, rasters)?;
+        let mut produced = 0usize;
+        for (x, y) in pending {
+            let vertices = tile_corners(x, y).expect("owned z13 tile");
+            let corners = directory.resolve(&vertices, |canonical_owner, missing| {
+                ensure!(
+                    canonical_owner == owner,
+                    "foreign edge bundle was not imported"
+                );
+                let values = evaluate_corners(Some(&scene), cuda, missing)?;
+                produced += missing.len();
+                Ok(values)
+            })?;
+            let receivers = TileReceivers::prepare(&scene.host, x, y)?;
+            let surface = paint_tile(cuda, &scene, x, y, &receivers, &corners)?;
+            let airborne_power = airborne.period_powers(&scene.host, &receivers)?;
+            let cruise_power = cruise.period_powers(&scene.host, &receivers)?;
+            let tiles = encode_all_period_powers(
+                [
+                    &surface[0],
+                    &surface[1],
+                    &surface[2],
+                    &surface[3],
+                    &surface[4],
+                    &airborne_power,
+                    &cruise_power,
+                ],
+                &receivers.indoor_attenuation,
+            )?;
+            let committed = directory.write(x, y, &tiles)?;
+            directory.release(committed)?;
+            eprintln!(
+                "{} painted_z13={x}/{y} canonical_corners_produced={produced}",
+                grid::square_name(owner)
             );
-            let values = evaluate_corners(scene.as_ref(), cuda, missing)?;
-            produced += missing.len();
-            Ok(values)
-        })?;
-        let tiles = match (&scene, &silence) {
-            (Some(scene), _) => paint_tile(cuda, scene, x, y, &corners)?,
-            (None, Some(silence)) => silence.clone(),
-            (None, None) => unreachable!("a source-less owner prepared its silence"),
-        };
-        let committed = directory.write(x, y, &tiles)?;
-        directory.release(committed)?;
-        eprintln!(
-            "{} painted_z13={x}/{y} canonical_corners_produced={produced}",
-            grid::square_name(owner)
-        );
+        }
     }
     directory.publish_owner_result(owner, result)?;
     eprintln!(

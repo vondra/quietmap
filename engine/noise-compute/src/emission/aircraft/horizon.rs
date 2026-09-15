@@ -148,6 +148,11 @@ pub struct ReceiverHorizon {
 }
 
 impl ReceiverHorizon {
+    /// Canonical quantized terrain edges for the aircraft CUDA transfer.
+    pub fn packed_sectors(&self) -> &[[(i16, u16); RECEIVER_HORIZON_BANDS]; HORIZON_SECTORS] {
+        &self.sectors
+    }
+
     /// March the DEM terrain surface (DSM-biased) outward from the
     /// receiver and record per-sector range-max horizons.
     /// `receiver_alt_m` must be the same datum the kernel's `rel_alt`

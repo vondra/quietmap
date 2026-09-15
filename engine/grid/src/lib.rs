@@ -81,26 +81,30 @@ pub fn grid_to_meters(gx: i32, gy: i32) -> (f64, f64) {
 pub fn web_mercator_cell_axes(lat_deg: f64, lon_deg: f64, zoom: u32) -> (u32, u32) {
     let axis = f64::from(1u32 << zoom);
     let lon = geo::normalize_longitude(lon_deg);
-    let x = ((lon + 180.0) / 360.0 * axis).floor();
+    let mut x = ((lon + 180.0) / 360.0 * axis)
+        .floor()
+        .clamp(0.0, axis - 1.0) as u32;
+    // Adding 180 can erase a sub-ULP offset from an exact cell edge.
+    // Compare against the dyadic geographic edges before assigning ownership.
+    let span = 360.0 / axis;
+    let west = f64::from(x) * span - 180.0;
+    if lon < west {
+        x = x.saturating_sub(1);
+    } else if lon >= west + span && f64::from(x + 1) < axis {
+        x += 1;
+    }
     let (_, northing) = lonlat_to_meters(0.0, lat_deg);
     let y = ((0.5 - northing / EARTH_CIRCUMFERENCE_M) * axis).floor();
-    (
-        x.clamp(0.0, axis - 1.0) as u32,
-        y.clamp(0.0, axis - 1.0) as u32,
-    )
+    (x, y.clamp(0.0, axis - 1.0) as u32)
 }
 
 /// z9 unit containing lon/lat. Longitude wraps at the antimeridian;
 /// latitude clamps with the projection.
 pub fn square_of(lat_deg: f64, lon_deg: f64) -> Square {
-    let wrapped = geo::normalize_longitude(lon_deg);
-    let x = ((wrapped + 180.0) / 360.0 * f64::from(Z9_TILES_PER_AXIS)) as u16;
-    let (_, y_m) = lonlat_to_meters(0.0, lat_deg);
-    let half = EARTH_CIRCUMFERENCE_M / 2.0;
-    let y = ((half - y_m) / EARTH_CIRCUMFERENCE_M * f64::from(Z9_TILES_PER_AXIS)) as u16;
+    let (x, y) = web_mercator_cell_axes(lat_deg, lon_deg, 9);
     Square {
-        x: x.min(Z9_TILES_PER_AXIS - 1),
-        y: y.min(Z9_TILES_PER_AXIS - 1),
+        x: x as u16,
+        y: y as u16,
     }
 }
 

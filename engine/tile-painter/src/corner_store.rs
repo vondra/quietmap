@@ -1,8 +1,8 @@
-//! One authoritative z9 transaction for canonical corners and five-layer HM3 tiles.
+//! One authoritative z9 transaction for canonical corners and complete HM3 tiles.
 use crate::{
     corner_codec::SourceDictionary,
     corner_totals::SurfacePeriodTotals,
-    hm3::{EncodedHm3, SURFACE_LAYERS},
+    hm3::{EncodedHm3, ALL_LAYERS},
 };
 use anyhow::{bail, ensure, Context, Result};
 use grid::{
@@ -58,13 +58,13 @@ pub struct CommittedSurfaceTile {
     x: u32,
     y: u32,
     generation: CornerGeneration,
-    layer_sha256: [[u8; 32]; 5],
+    layer_sha256: [[u8; 32]; ALL_LAYERS.len()],
 }
 impl CommittedSurfaceTile {
     pub fn coordinates(self) -> [u32; 2] {
         [self.x, self.y]
     }
-    pub fn layer_sha256(self) -> [[u8; 32]; 5] {
+    pub fn layer_sha256(self) -> [[u8; 32]; ALL_LAYERS.len()] {
         self.layer_sha256
     }
     pub(crate) fn generation(self) -> CornerGeneration {
@@ -113,11 +113,11 @@ impl CornerStore {
         }))?;
         connection.execute_batch("PRAGMA synchronous=FULL; PRAGMA auto_vacuum=INCREMENTAL;")?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute_batch("CREATE TABLE IF NOT EXISTS generation(id INTEGER PRIMARY KEY CHECK(id=1),digest BLOB NOT NULL CHECK(length(digest)=32),owner_x INTEGER NOT NULL,owner_y INTEGER NOT NULL);
+        tx.execute_batch(&format!("CREATE TABLE IF NOT EXISTS generation(id INTEGER PRIMARY KEY CHECK(id=1),digest BLOB NOT NULL CHECK(length(digest)=32),owner_x INTEGER NOT NULL,owner_y INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS sources(id INTEGER PRIMARY KEY CHECK(id BETWEEN 0 AND 4294967295),layer INTEGER NOT NULL CHECK(layer BETWEEN 0 AND 4),identity BLOB NOT NULL CHECK(length(identity)=32),UNIQUE(layer,identity));
             CREATE TABLE IF NOT EXISTS corners(x INTEGER NOT NULL,y INTEGER NOT NULL,totals BLOB NOT NULL CHECK(length(totals)=60),remaining INTEGER NOT NULL CHECK(remaining BETWEEN 0 AND 15),PRIMARY KEY(x,y)) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS staging(x INTEGER NOT NULL,y INTEGER NOT NULL,energy BLOB NOT NULL,PRIMARY KEY(x,y)) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS surface_tiles(x INTEGER NOT NULL,y INTEGER NOT NULL,layer INTEGER NOT NULL CHECK(layer BETWEEN 0 AND 4),hm3 BLOB NOT NULL,sha256 BLOB NOT NULL CHECK(length(sha256)=32),PRIMARY KEY(x,y,layer)) WITHOUT ROWID;")?;
+            CREATE TABLE IF NOT EXISTS surface_tiles(x INTEGER NOT NULL,y INTEGER NOT NULL,layer INTEGER NOT NULL CHECK(layer BETWEEN 0 AND {last_layer}),hm3 BLOB NOT NULL,sha256 BLOB NOT NULL CHECK(length(sha256)=32),PRIMARY KEY(x,y,layer)) WITHOUT ROWID;", last_layer = ALL_LAYERS.len() - 1))?;
         tx.execute(
             "INSERT OR IGNORE INTO generation VALUES(1,?1,?2,?3)",
             params![generation.0.as_slice(), owner.x, owner.y],
@@ -238,14 +238,14 @@ impl CornerStore {
     pub fn write(&mut self, x: u32, y: u32, tiles: &[EncodedHm3]) -> Result<CommittedSurfaceTile> {
         ensure_owner_tile(self.owner, x, y)?;
         ensure!(
-            tiles.len() == 5
+            tiles.len() == ALL_LAYERS.len()
                 && tiles
                     .iter()
-                    .zip(SURFACE_LAYERS)
+                    .zip(ALL_LAYERS)
                     .all(|(tile, layer)| tile.layer == layer),
             "incomplete tile or wrong layer order"
         );
-        let expected_hashes: [[u8; 32]; 5] =
+        let expected_hashes: [[u8; 32]; ALL_LAYERS.len()] =
             std::array::from_fn(|layer| Sha256::digest(&tiles[layer].bytes).into());
         let tx = self
             .connection
@@ -253,7 +253,7 @@ impl CornerStore {
         match read_committed(&tx, self.generation, self.owner, x, y)? {
             Some(receipt) => ensure!(
                 receipt.layer_sha256 == expected_hashes,
-                "committed surface tile is immutable"
+                "committed HM3 tile is immutable"
             ),
             None => {
                 for (layer, tile) in tiles.iter().enumerate() {
@@ -327,19 +327,22 @@ fn read_committed(
     if rows.is_empty() {
         return Ok(None);
     }
-    ensure!(rows.len() == 5, "incomplete published surface tile");
-    let mut hashes = [[0_u8; 32]; 5];
+    ensure!(
+        rows.len() == ALL_LAYERS.len(),
+        "incomplete published HM3 tile"
+    );
+    let mut hashes = [[0_u8; 32]; ALL_LAYERS.len()];
     for (expected_layer, (layer, hm3, digest)) in rows.into_iter().enumerate() {
         ensure!(
             layer as usize == expected_layer,
-            "invalid surface tile layer set"
+            "invalid HM3 tile layer set"
         );
         let digest: [u8; 32] = digest
             .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid surface tile digest"))?;
+            .map_err(|_| anyhow::anyhow!("invalid HM3 tile digest"))?;
         ensure!(
             <[u8; 32]>::from(Sha256::digest(&hm3)) == digest,
-            "surface tile digest mismatch"
+            "HM3 tile digest mismatch"
         );
         hashes[expected_layer] = digest;
     }

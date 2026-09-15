@@ -87,7 +87,7 @@ fn failed_or_invalid_owner_batch_publishes_nothing() {
 }
 
 #[test]
-fn five_hm3_hashes_and_local_corner_release_are_one_immutable_transaction() {
+fn all_hm3_hashes_and_local_corner_release_are_one_immutable_transaction() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("corners.sqlite");
     let owner = Square { x: 0, y: 0 };
@@ -133,7 +133,7 @@ fn five_hm3_hashes_and_local_corner_release_are_one_immutable_transaction() {
 }
 
 #[test]
-fn five_layer_contract_rejects_missing_or_reordered_tiles() {
+fn complete_layer_contract_rejects_missing_or_reordered_tiles() {
     let temp = tempfile::tempdir().unwrap();
     let owner = Square { x: 0, y: 0 };
     let generation = CornerGeneration([8; 32]);
@@ -143,9 +143,10 @@ fn five_layer_contract_rejects_missing_or_reordered_tiles() {
     store
         .resolve(&vertices, |_, missing| Ok(vec![value(); missing.len()]))
         .unwrap();
-    let mut incomplete = tiles();
-    incomplete.pop();
-    assert!(store.write(0, 0, &incomplete).is_err());
+    let complete = tiles();
+    for count in [5, 7] {
+        assert!(store.write(0, 0, &complete[..count]).is_err());
+    }
     let mut reordered = tiles();
     reordered.swap(0, 1);
     assert!(store.write(0, 0, &reordered).is_err());
@@ -204,7 +205,7 @@ fn missing_pending_staging_and_moved_owner_store_fail_closed() {
 }
 
 #[test]
-fn complete_owner_result_publishes_once_with_all_five_layer_hashes() {
+fn complete_owner_result_publishes_once_with_all_layer_hashes() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("corners");
     let result = temp.path().join("results/owner.sqlite");
@@ -230,6 +231,31 @@ fn complete_owner_result_publishes_once_with_all_five_layer_hashes() {
         }
     }
     tx.commit().unwrap();
+    assert!(store.committed(x0, y0).is_err());
+    assert!(directory.publish_owner_result(owner, &result).is_err());
+    assert!(!result.exists());
+    let tx = store.connection.unchecked_transaction().unwrap();
+    for y in y0..y1 {
+        for x in x0..x1 {
+            for layer in 5..ALL_LAYERS.len() {
+                tx.execute(
+                    "INSERT INTO surface_tiles VALUES(?1,?2,?3,?4,?5)",
+                    rusqlite::params![x, y, layer, bytes, digest.as_slice()],
+                )
+                .unwrap();
+            }
+        }
+    }
+    tx.commit().unwrap();
+    assert_eq!(
+        store
+            .committed(x0, y0)
+            .unwrap()
+            .unwrap()
+            .layer_sha256()
+            .len(),
+        ALL_LAYERS.len()
+    );
     drop(store);
     let published = directory.publish_owner_result(owner, &result).unwrap();
     assert_eq!(

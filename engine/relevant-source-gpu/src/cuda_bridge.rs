@@ -79,6 +79,9 @@ pub struct DeviceScenePointers {
 mod device_value {
     pub trait Sealed {}
     impl Sealed for u8 {}
+    impl Sealed for u16 {}
+    impl Sealed for crate::airborne_pack::DeviceAirborneSource {}
+    impl Sealed for crate::airborne_pack::DeviceAirborneReceiver {}
     impl Sealed for u32 {}
     impl Sealed for f32 {}
     impl Sealed for raster_reader::FusedPixel {}
@@ -299,7 +302,7 @@ impl RelevantSourceCuda {
     }
 }
 
-fn check_cuda(status: c_int) -> Result<()> {
+pub(crate) fn check_cuda(status: c_int) -> Result<()> {
     if status == 0 {
         return Ok(());
     }

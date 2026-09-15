@@ -88,6 +88,51 @@ impl AirborneSegmentBatch<'_> {
         Self::lat_lon(self.end_gx[index], self.end_gy[index])
     }
 
+    /// The same prepared geometry and identity feed popup and field kernels.
+    pub fn segment(&self, i: usize) -> crate::types::AircraftSegment {
+        self.segment_with_coordinates(i, self.start_lat_lon(i), self.end_lat_lon(i))
+    }
+
+    pub fn segment_with_coordinates(
+        &self,
+        i: usize,
+        [start_lat, start_lon]: [f32; 2],
+        [end_lat, end_lon]: [f32; 2],
+    ) -> crate::types::AircraftSegment {
+        let key = self.flight_key[i] as usize;
+        crate::types::AircraftSegment {
+            flight_id: self.flight_id[i],
+            profile_idx: self.flights.profile_idx[key],
+            is_departure: self.flags[i] & 1 != 0,
+            on_ground: false,
+            period: self.period[i],
+            date_id: self.date_id[i],
+            start_lat: f64::from(start_lat),
+            start_lon: f64::from(start_lon),
+            start_alt_m: f32::from(self.start_alt_m[i]),
+            end_lat: f64::from(end_lat),
+            end_lon: f64::from(end_lon),
+            end_alt_m: f32::from(self.end_alt_m[i]),
+            speed_kt: self.speed_kt[i],
+            segment_length_m: self.length_m[i],
+            count_weight: 1.0,
+            surface_model: false,
+            ground_context: crate::emission::aircraft::GROUND_CONTEXT_NONE,
+            ground_ops_kind: crate::emission::aircraft::GROUND_OPS_KIND_NONE,
+            source_id: u16::from(self.flights.source_id[key]),
+        }
+    }
+
+    pub fn terrain(&self, i: usize) -> crate::emission::aircraft::SegmentTerrain {
+        crate::emission::aircraft::SegmentTerrain {
+            start_elev: f64::from(self.terrain_start_elev_m[i]),
+            end_elev: f64::from(self.terrain_end_elev_m[i]),
+            q1_elev: 0.0,
+            mid_elev: 0.0,
+            q3_elev: 0.0,
+        }
+    }
+
     fn lat_lon(gx: i32, gy: i32) -> [f32; 2] {
         let (x, y) = grid::grid_to_meters(gx, gy);
         let (lon, lat) = grid::poly::meters_to_lonlat(x, y);
