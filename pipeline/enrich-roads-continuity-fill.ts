@@ -3,8 +3,9 @@
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
-import { pathToFileURL } from 'node:url'
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
+import { fork, type ChildProcess } from 'node:child_process'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { DataType, tableFromIPC } from 'apache-arrow'
 import { withArrowWrite } from './lib/provenance.js'
@@ -14,6 +15,7 @@ import { roadContinuityComponent, planContinuityComponent, FILLABLE, type Contin
 import { SOURCE_ID_ROAD_CONTINUITY_HEURISTIC, SOURCES, isMeasured } from './lib/sources.js'
 import { listPreparedSquares } from './lib/prepared-grid.js'
 import { SourceTransportTopology, transportPieceKey } from './lib/transport-topology.js'
+import { workerCount } from './lib/square-pool.js'
 
 interface StoredRoad extends Omit<ContinuityRoad, 'aadt' | 'roundabout'> {
   square: string; row_index: number; light: number; medium: number; heavy: number; moto: number; roundabout: number
@@ -21,6 +23,67 @@ interface StoredRoad extends Omit<ContinuityRoad, 'aadt' | 'roundabout'> {
 function decodeRoad(row: StoredRoad): ContinuityRoad & Pick<StoredRoad, 'square' | 'row_index'> {
   const { light, medium, heavy, moto, roundabout, ...road } = row
   return { ...road, roundabout: roundabout !== 0, aadt: [light, medium, heavy, moto] }
+}
+
+type StagedRoads = SQLInputValue[][]
+type SquareReply = { roads: StagedRoads; error?: never } | { error: string; roads?: never }
+
+function prepareSquare(prepared: string, square: string, topology: SourceTransportTopology): StagedRoads {
+  const table = tableFromIPC(readFileSync(resolve(prepared, square, 'roads.arrow')))
+  if (table.schema.metadata.get('road_traffic_contract') === '1') throw new Error('road continuity must precede final allocation')
+  const direction = table.getChild('oneway')
+  if (!direction || !DataType.isInt(direction.type) || direction.type.bitWidth !== 8 || direction.type.isSigned || direction.nullCount) {
+    throw new Error(`${square}: invalid oneway direction column`)
+  }
+  const identities = topology.squarePieces(square)
+  const roads = readPlanningRoads(table)
+  const staged: StagedRoads = []
+  for (const road of roads) {
+    const key = transportPieceKey(String(road.osmId), road.segIdx), identity = identities.get(key)
+    if (!identity) throw new Error(`${square}: source topology missing or repeated road piece ${key}`)
+    identities.delete(key)
+    const oneway = Number(direction.get(road.i))
+    if (oneway > 2) throw new Error(`${square}: invalid oneway direction ${oneway}`)
+    const { osmId, cls, src, ref, aadt, access, roundabout, countBasis, observationId, observationSourceId } = road
+    staged.push([square, road.i, identity.startKey, identity.endKey, osmId, cls, src, ref, ...aadt, access, Number(roundabout), oneway, countBasis, observationId, observationSourceId])
+  }
+  if (identities.size) throw new Error(`${square}: ${identities.size} source road pieces absent from Arrow`)
+  return staged
+}
+
+function requestSquare(worker: ChildProcess, square: string): Promise<SquareReply> {
+  return new Promise(resolve => {
+    const complete = (reply: SquareReply) => {
+      worker.off('message', message); worker.off('error', error); worker.off('exit', exit)
+      resolve(reply)
+    }
+    const message = (reply: unknown) => complete(reply as SquareReply)
+    const error = (failure: Error) => complete({ error: failure.message })
+    const exit = (code: number | null) => complete({ error: `continuity worker exited ${code} while preparing ${square}` })
+    worker.once('message', message); worker.once('error', error); worker.once('exit', exit)
+    try { worker.send(square, failure => { if (failure) error(failure) }) }
+    catch (failure) { error(failure instanceof Error ? failure : new Error(String(failure))) }
+  })
+}
+
+async function* preparedSquares(prepared: string, squares: string[]): AsyncGenerator<StagedRoads> {
+  // The measured 898k-row sample uses 1.3 GiB in its worker plus 0.9 GiB in the writer.
+  const count = Math.min(squares.length, workerCount(process.env, 4 * 1024 ** 3))
+  const workers = Array.from({ length: count }, () => fork(fileURLToPath(import.meta.url), [prepared], {
+    serialization: 'advanced', stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+  }))
+  try {
+    const pending = workers.map((worker, index) => requestSquare(worker, squares[index]))
+    for (let position = 0; position < squares.length; position++) {
+      const slot = position % count, reply = await pending[slot]
+      if (reply.error !== undefined) throw new Error(reply.error)
+      yield reply.roads
+      // A worker receives another square only after the writer consumed its previous result.
+      if (position + count < squares.length) pending[slot] = requestSquare(workers[slot], squares[position + count])
+    }
+  } finally {
+    for (const worker of workers) worker.kill()
+  }
 }
 
 export async function enrichContinuityDirectory(preparedDirectory: string) {
@@ -44,30 +107,14 @@ export async function enrichContinuityDirectory(preparedDirectory: string) {
                           PRIMARY KEY(square,row_index)) WITHOUT ROWID;`)
     const insert = database.prepare(`INSERT INTO roads(square,row_index,a,b,osmId,cls,src,ref,light,medium,heavy,moto,access,roundabout,direction,countBasis,observationId,observationSourceId)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    let rows = 0
-    for (const [position, square] of squares.entries()) {
-      const table = tableFromIPC(readFileSync(resolve(prepared, square, 'roads.arrow')))
-      if (table.schema.metadata.get('road_traffic_contract') === '1') throw new Error('road continuity must precede final allocation')
-      const direction = table.getChild('oneway')
-      if (!direction || !DataType.isInt(direction.type) || direction.type.bitWidth !== 8 || direction.type.isSigned || direction.nullCount) {
-        throw new Error(`${square}: invalid oneway direction column`)
-      }
-      const identities = topology.squarePieces(square)
-      const roads = readPlanningRoads(table)
+    let rows = 0, position = 0
+    for await (const roads of preparedSquares(prepared, squares)) {
       database.exec('BEGIN')
-      for (const road of roads) {
-        const key = transportPieceKey(String(road.osmId), road.segIdx), identity = identities.get(key)
-        if (!identity) throw new Error(`${square}: source topology missing or repeated road piece ${key}`)
-        identities.delete(key)
-        const oneway = Number(direction.get(road.i))
-        if (oneway > 2) throw new Error(`${square}: invalid oneway direction ${oneway}`)
-        const { osmId, cls, src, ref, aadt, access, roundabout, countBasis, observationId, observationSourceId } = road
-        insert.run(square, road.i, identity.startKey, identity.endKey, osmId, cls, src, ref, ...aadt, access, Number(roundabout), oneway, countBasis, observationId, observationSourceId)
-      }
-      if (identities.size) throw new Error(`${square}: ${identities.size} source road pieces absent from Arrow`)
+      for (const road of roads) insert.run(...road)
       database.exec('COMMIT')
       rows += roads.length
-      if ((position + 1) % 1000 === 0) console.log(JSON.stringify({ phase: 'continuity-inputs', squares: position + 1, rows }))
+      position++
+      if (position % 1000 === 0) console.log(JSON.stringify({ phase: 'continuity-inputs', squares: position, rows }))
     }
     const measuredSources = SOURCES.filter(source => isMeasured(source.id)).map(source => source.id)
     // A component without an observation cannot produce a fill; retain all rows for branch degree.
@@ -131,5 +178,14 @@ async function main(): Promise<void> {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main().catch((error: unknown) => { console.error(error); process.exitCode = 1 })
+  if (process.send) {
+    const topology = new SourceTransportTopology(process.argv[2], 'roads')
+    process.on('message', (square: string) => {
+      try { process.send!({ roads: prepareSquare(process.argv[2], square, topology) }) }
+      catch (error) { process.send!({ error: error instanceof Error ? error.message : String(error) }) }
+    })
+    process.once('disconnect', () => { topology[Symbol.dispose](); process.exit(0) })
+  } else {
+    main().catch((error: unknown) => { console.error(error); process.exitCode = 1 })
+  }
 }

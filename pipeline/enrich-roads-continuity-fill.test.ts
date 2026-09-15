@@ -179,7 +179,10 @@ test('planning defaults remain an exact derivation of the canonical engine table
   assert.equal(readFileSync(new URL('./lib/road-planning-defaults.generated.ts', import.meta.url), 'utf8'), generateRoadPlanningDefaults())
 })
 
-test('the production caller conserves road flow across owner and country partitions, and refuses a missing owner before writing', async () => {
+test('ordered preparation workers preserve cross-owner counts, exact bytes, retraction and missing-owner failures', async t => {
+  const originalWorkers = process.env.QM_ROAD_WORKERS
+  t.after(() => { if (originalWorkers === undefined) delete process.env.QM_ROAD_WORKERS; else process.env.QM_ROAD_WORKERS = originalWorkers })
+  const outputs = new Map<number, { result: Awaited<ReturnType<typeof enrichContinuityDirectory>>; bytes: Buffer[] }>()
   const sourcePath = await chain('partition-source.arrow', [4, 4, 4, 4, 4],
     ['CZ', 'CZ', 'AT', 'AT', 'AT'].map(iso2Code))
   await writeRoadAadt(sourcePath, (_row, index) => index === 0 ?
@@ -190,8 +193,9 @@ test('the production caller conserves road flow across owner and country partiti
     [['z9/275/173', 0, 5]],
     [['z9/275/173', 0, 1], ['z9/276/173', 1, 3], ['z9/277/173', 3, 5]],
   ] as const
-  for (const [number, layout] of layouts.entries()) {
-    const prepared = resolve(dirname(sourcePath), `../../../../partition-${number}`)
+  for (const [number, layout] of layouts.entries()) for (const workers of [1, 3]) {
+    process.env.QM_ROAD_WORKERS = String(workers)
+    const prepared = resolve(dirname(sourcePath), `../../../../partition-${number}-${workers}`)
     const squares = layout.map(([square]) => square)
     for (const [square, from, to] of layout) {
       const path = resolve(prepared, square, 'roads.arrow')
@@ -218,6 +222,9 @@ test('the production caller conserves road flow across owner and country partiti
       }
     }
     const stable = squares.map(square => bytes(resolve(prepared, square, 'roads.arrow')))
+    const previous = outputs.get(number)
+    if (previous) { assert.deepEqual(result, previous.result); assert.deepEqual(stable, previous.bytes) }
+    else outputs.set(number, { result, bytes: stable })
     assert.equal((await enrichContinuityDirectory(prepared)).updated, false)
     for (const [index, square] of squares.entries()) assert.deepEqual(bytes(resolve(prepared, square, 'roads.arrow')), stable[index])
     if (squares.length === 1) {
@@ -230,6 +237,13 @@ test('the production caller conserves road flow across owner and country partiti
       assert.equal(separated.matched, 0); assert.equal(separated.retracted, 4)
     }
     if (squares.length > 1) {
+      {
+        using database = new DatabaseSync(transportTopologyPath(prepared))
+        database.prepare('DELETE FROM source_pieces WHERE way_id=10002').run()
+      }
+      await assert.rejects(enrichContinuityDirectory(prepared), /source topology missing or repeated road piece/)
+      for (const [index, square] of squares.entries()) assert.deepEqual(bytes(resolve(prepared, square, 'roads.arrow')), stable[index])
+      writeRoadTopology(prepared, squares)
       rmSync(resolve(prepared, squares[1], 'roads.arrow'))
       await assert.rejects(enrichContinuityDirectory(prepared), /source topology road owner is missing/)
       assert.deepEqual(bytes(resolve(prepared, squares[0], 'roads.arrow')), stable[0])
