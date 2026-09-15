@@ -26,6 +26,48 @@ pub const ROAD_ESTIMATED_HEAVY: u8 = 4;
 /// Bit in [`RoadTraffic::estimated`] marking the motorcycle category as estimated.
 pub const ROAD_ESTIMATED_MOTO: u8 = 8;
 
+/// Observed per-vehicle-class share of the 24 h volume across the three legal
+/// periods (day 07–19, evening 19–23, night 23–07 local) — the measured
+/// counterpart of the class-default [`road::TimeDist`] splits. A class with no
+/// observations stays `None` and keeps the class default; classes with counts
+/// carry `[day, evening, night]` fractions summing to 1. One canonical
+/// validation lives here; every producer, reader and consumer defers to it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RoadTimeProfile {
+    pub light: Option<[f64; 3]>,
+    pub medium: Option<[f64; 3]>,
+    pub heavy: Option<[f64; 3]>,
+    pub moto: Option<[f64; 3]>,
+}
+
+impl RoadTimeProfile {
+    /// Shares must be finite, non-negative, and each observed class triple
+    /// sums to 1 (1e-9 tolerance for float aggregation rounding).
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, class) in
+            [("light", &self.light), ("medium", &self.medium), ("heavy", &self.heavy), ("moto", &self.moto)]
+        {
+            let Some(shares) = class else { continue };
+            if shares.iter().any(|v| !v.is_finite() || *v < 0.0)
+                || (shares[0] + shares[1] + shares[2] - 1.0).abs() > 1e-9
+            {
+                return Err(format!("invalid {name} period shares {:?}", shares));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn class_shares(&self, class: usize) -> Option<[f64; 3]> {
+        match class {
+            0 => self.light,
+            1 => self.medium,
+            2 => self.heavy,
+            3 => self.moto,
+            _ => None,
+        }
+    }
+}
+
 /// Prepared road traffic: per-category effective vehicles/day plus the
 /// per-category estimated bitmask written by `roads-finalize`. Bit set means
 /// that category's value is an estimate or prior rather than an observed
@@ -37,6 +79,10 @@ pub struct RoadTraffic {
     pub heavy: f64,
     pub moto: f64,
     pub estimated: u8,
+    /// Observed per-class period profile; `None` = no observed profile, the
+    /// class-default split applies (absence is genuinely unknown, never a
+    /// variant of the defaults).
+    pub time_profile: Option<RoadTimeProfile>,
 }
 
 impl RoadTraffic {
@@ -86,6 +132,9 @@ pub struct NormalizedRoad {
     pub medium_aadt: f64,
     pub heavy_aadt: f64,
     pub moto_aadt: f64,
+    /// Observed period profile carried from the prepared row; `None` keeps
+    /// the class-default [`Self::time_dist`] split.
+    pub traffic_profile: Option<RoadTimeProfile>,
 }
 
 impl NormalizedRoad {
@@ -98,25 +147,42 @@ impl NormalizedRoad {
         }
     }
 
-    pub fn period_emission(&self, period_pct: f64, period_hours: f64) -> [f32; NUM_BANDS] {
+    /// Per-class traffic shares for each period (outer index day/evening/night,
+    /// inner light/medium/heavy/moto): the observed profile where a class has
+    /// one, the class-default split otherwise. `build_period_flows` consumes
+    /// exactly these — there is no second day/night split anywhere.
+    pub fn period_pcts(&self) -> [[f64; 4]; 3] {
+        let default = self.time_dist();
+        let defaults = [default.day_pct, default.evening_pct, default.night_pct];
+        let profile = self.traffic_profile;
+        let class = |c: usize| {
+            let shares = profile.and_then(|p| p.class_shares(c));
+            [0, 1, 2].map(|p| shares.map_or(defaults[p], |s| s[p]))
+        };
+        let [light, medium, heavy, moto] = [class(0), class(1), class(2), class(3)];
+        let columns = [light, medium, heavy, moto];
+        std::array::from_fn(|p| std::array::from_fn(|c| columns[c][p]))
+    }
+
+    pub fn period_emission(&self, period_pcts: [f64; 4], period_hours: f64) -> [f32; NUM_BANDS] {
         let flows = road::build_period_flows(
             self.light_aadt,
             self.medium_aadt,
             self.heavy_aadt,
             self.moto_aadt,
             self.speed_kmh,
-            period_pct,
+            period_pcts,
             period_hours,
         );
         bands_to_f32(road::line_source_emission(&flows, self.surf_corr_db))
     }
 
     pub fn period_emissions(&self) -> ([f32; NUM_BANDS], [f32; NUM_BANDS], [f32; NUM_BANDS]) {
-        let td = self.time_dist();
+        let [day, evening, night] = self.period_pcts();
         (
-            self.period_emission(td.day_pct, 12.0),
-            self.period_emission(td.evening_pct, 4.0),
-            self.period_emission(td.night_pct, 8.0),
+            self.period_emission(day, 12.0),
+            self.period_emission(evening, 4.0),
+            self.period_emission(night, 8.0),
         )
     }
 }
@@ -177,6 +243,7 @@ pub fn normalize_road(
         medium_aadt: input.traffic.medium,
         heavy_aadt: input.traffic.heavy,
         moto_aadt: input.traffic.moto,
+        traffic_profile: input.traffic.time_profile,
     })
 }
 
@@ -357,6 +424,7 @@ mod tests {
         heavy: 100.0,
         moto: 50.0,
         estimated: 0,
+        time_profile: None,
     };
 
     fn prepared(traffic: RoadTraffic) -> RawRoadInput {
@@ -444,7 +512,8 @@ mod tests {
                 | ROAD_ESTIMATED_MEDIUM
                 | ROAD_ESTIMATED_HEAVY
                 | ROAD_ESTIMATED_MOTO,
-        };
+            time_profile: None,
+    };
         let road = normalize_road(prepared(prior), SquareCountryCity::UNKNOWN).unwrap();
         assert_eq!(road.light_aadt, 2640.0);
         assert_eq!(road.heavy_aadt, 180.0);
@@ -544,6 +613,7 @@ mod tests {
             medium_aadt: 0.0,
             heavy_aadt: 0.0,
             moto_aadt: 0.0,
+            traffic_profile: None,
         };
         let motorway = make(0).time_dist();
         assert!(std::ptr::eq(make(10).time_dist(), motorway));
@@ -575,6 +645,7 @@ mod tests {
                 heavy: 180.0,
                 moto: 60.0,
                 estimated: 15,
+                time_profile: None,
             },
             source_id: 0,
             name: String::new(),

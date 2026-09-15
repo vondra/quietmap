@@ -11,7 +11,8 @@ import { parseRoadLoaderArguments } from './lib/road-loader-cli.js'
 import {
   loadBastCensus, type BastCensusSection,
 } from './lib/roads-de-source.js'
-import { writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import { BW_HOURLY_SOURCE_URL, loadBwHourlyProfiles, type BwStationProfile } from './lib/roads-de-bw-hourly-source.js'
+import { writeRoadAadt, writeRoadTimeProfiles, type RoadRow, type RoadTimeProfileEntry } from './lib/roads-arrow.js'
 import { haversineM } from './lib/spatial.js'
 
 const GERMANY_BBOX = [46, 4, 56, 16] as const
@@ -157,10 +158,83 @@ export async function enrichGermanRoads(
   return result
 }
 
+const BW_BBOX = [47.4, 7.4, 50.0, 10.6] as const
+/** A station documents only the road it sits on: exact ref AND ≤200 m from the
+ * station point. No propagation beyond the shared actual observation — a 15 km
+ * radius would spread one counter across junctions and unrelated sections. */
+const BW_STATION_RADIUS_M = 200
+
+function bwProfileEntries(stations: readonly BwStationProfile[]): RoadTimeProfileEntry[] {
+  return stations.map(station => ({
+    station: station.svznr,
+    window: `${station.windowFrom}..${station.windowTo}`,
+    days: station.days,
+    status: `${station.status}; applied ≤200 m from station, class mapping (light=Pkw+Lfw+PmA, medium=Bus+LoA, heavy=LmA+Sat) is aggregated/estimated, not per-category measurement`,
+    profile: station.shares,
+  }))
+}
+
+function bwByRef(stations: readonly BwStationProfile[]): ReadonlyMap<string, BwStationProfile[]> {
+  const byRef = new Map<string, BwStationProfile[]>()
+  for (const station of stations) {
+    const refs = byRef.get(station.ref)
+    if (refs) refs.push(station)
+    else byRef.set(station.ref, [station])
+  }
+  return byRef
+}
+
+/** Exact normalized-ref match within 200 m — never a class fallback, so one
+ * station never speaks for a country or an unnumbered route. */
+export function matchBwStation(
+  row: RoadRow, byRef: ReadonlyMap<string, readonly BwStationProfile[]>,
+): BwStationProfile | null {
+  const normalizedRef = row.ref?.replace(/\s+/g, '') ?? ''
+  const candidates = normalizedRef ? byRef.get(normalizedRef) : undefined
+  if (!candidates) return null
+  let closest: BwStationProfile | null = null
+  let closestDistance = BW_STATION_RADIUS_M
+  for (const station of candidates) {
+    const distance = haversineM(row.midLat, row.midLon, station.lat, station.lon)
+    if (distance < closestDistance) { closest = station; closestDistance = distance }
+  }
+  return closest
+}
+
+/** Stamp observed BW period profiles next to (never onto) the AADT columns. */
+export async function enrichBwTimeProfiles(
+  preparedDirectory: string, stations: readonly BwStationProfile[],
+): Promise<DeEnrichmentResult> {
+  const squares = listPreparedSquares(preparedDirectory, BW_BBOX)
+  const byRef = bwByRef(stations)
+  const entries = bwProfileEntries(stations)
+  const indexOf = new Map(entries.map((entry, index) => [entry.station, index + 1]))
+  const result: DeEnrichmentResult = {
+    rows: 0, matched: 0, retracted: 0, matchedAutobahn: 0, matchedBundesstrasse: 0,
+    skippedForeign: 0, squares: squares.length, squaresUpdated: 0,
+  }
+  for (const square of squares) {
+    const write = await writeRoadTimeProfiles(
+      resolve(preparedDirectory, square, 'roads.arrow'),
+      BW_HOURLY_SOURCE_URL,
+      entries,
+      row => indexOf.get(matchBwStation(row, byRef)?.svznr ?? '') ?? 0,
+    )
+    result.rows += write.rows
+    result.matched += write.matched
+    if (write.updated) result.squaresUpdated++
+  }
+  return result
+}
+
 async function main(): Promise<void> {
   const options = parseRoadLoaderArguments(process.argv.slice(2), 'enrich-roads-de.ts')
   const census = await loadBastCensus(options)
   const result = await enrichGermanRoads(options.preparedDirectory, census.sections)
+  // Observed period profiles are a separate concern from AADT: absent dataset
+  // (not yet pinned) skips the step without touching anything.
+  const bw = await loadBwHourlyProfiles(options)
+  const bwResult = bw ? await enrichBwTimeProfiles(options.preparedDirectory, bw.stations) : null
   console.log(JSON.stringify({
     sourceRows: census.sourceRows,
     sections: census.sections.length,
@@ -168,6 +242,10 @@ async function main(): Promise<void> {
     zeroClassSplitsSkipped: census.zeroClassSplitsSkipped,
     inconsistentClassTotalsSkipped: census.inconsistentClassTotalsSkipped,
     ...result,
+    bwStations: bw?.stations.length ?? 0,
+    bwCompleteDays: bw?.completeDays ?? 0,
+    bwMatched: bwResult?.matched ?? 0,
+    bwSquaresUpdated: bwResult?.squaresUpdated ?? 0,
   }))
 }
 

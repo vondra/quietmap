@@ -825,13 +825,13 @@ fn motorway_emission() -> [[f64; NUM_BANDS]; 3] {
     let (light, medium, heavy, moto) = WORLD_DEFAULT[0];
     let time_dist = road::TIME_DIST_MOTORWAY;
     let mut out = [[0.0f64; NUM_BANDS]; 3];
-    for (slot, (pct, hours)) in out.iter_mut().zip([
-        (time_dist.day_pct, 12.0),
-        (time_dist.evening_pct, 4.0),
-        (time_dist.night_pct, 8.0),
+    for (slot, (pcts, hours)) in out.iter_mut().zip([
+        ([time_dist.day_pct; 4], 12.0),
+        ([time_dist.evening_pct; 4], 4.0),
+        ([time_dist.night_pct; 4], 8.0),
     ]) {
         let flows =
-            road::build_period_flows(light, medium, heavy, moto, MOTORWAY_SPEED_KMH, pct, hours);
+            road::build_period_flows(light, medium, heavy, moto, MOTORWAY_SPEED_KMH, pcts, hours);
         *slot = road::line_source_emission(&flows, 0.0);
     }
     out

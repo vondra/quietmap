@@ -158,7 +158,7 @@ pub(crate) fn compute_roads(
                 norm.heavy_aadt,
                 norm.moto_aadt,
                 norm.speed_kmh,
-                norm.time_dist().day_pct,
+                norm.period_pcts()[0],
                 12.0,
             );
             let ee = road::line_source_emission(&ef, norm.surf_corr_db);
@@ -241,7 +241,7 @@ pub(crate) fn compute_roads(
                 let moto = norm.moto_aadt;
                 let speed = norm.speed_kmh;
                 let surf_corr = norm.surf_corr_db;
-                let time_dist = norm.time_dist();
+                let period_pcts = norm.period_pcts();
                 // Finite-line geometry runs on the perpendicular distance to
                 // the segment's INFINITE line paired with the signed foot
                 // position, while divergence/atmosphere stay on `seg.dist_m`
@@ -360,16 +360,13 @@ pub(crate) fn compute_roads(
                 ];
                 let mut day_emission_energy = 0.0f64;
                 let mut period_emissions: [[f64; NUM_BANDS]; 3] = [[0.0; NUM_BANDS]; 3];
-                for (pi, (pct, hours)) in [
-                    (time_dist.day_pct, 12.0),
-                    (time_dist.evening_pct, 4.0),
-                    (time_dist.night_pct, 8.0),
-                ]
-                .iter()
-                .enumerate()
+                for (pi, (pcts, hours)) in period_pcts
+                    .iter()
+                    .zip([12.0, 4.0, 8.0])
+                    .enumerate()
                 {
                     let flows =
-                        road::build_period_flows(light, medium, heavy, moto, speed, *pct, *hours);
+                        road::build_period_flows(light, medium, heavy, moto, speed, *pcts, hours);
                     let emission = road::line_source_emission(&flows, surf_corr);
                     let v = iso9613::propagate_variants_cnossos_ground_full(
                         &emission,
@@ -905,6 +902,7 @@ pub(crate) mod tests {
                 heavy: 180.0,
                 moto: 60.0,
                 estimated: 15,
+                time_profile: None,
             },
             source_id: 0,
             dist_m: 200.0,

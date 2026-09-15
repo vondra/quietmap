@@ -160,35 +160,40 @@ pub fn line_source_emission(flows: &[CategoryFlow], surface_corr_db: f64) -> [f6
     total
 }
 
-/// Build flows from AADT + speed + period distribution.
+/// Build flows from AADT + speed + per-class period shares.
+///
+/// `period_pcts` carries one day/evening/night share per vehicle class
+/// (light, medium, heavy, moto): an observed profile splits classes
+/// differently, the class default splits them identically. Shares are
+/// fractions of the 24 h volume; `q = aadt × share / period_hours`.
 pub fn build_period_flows(
     aadt_light: f64,
     aadt_medium: f64,
     aadt_heavy: f64,
     aadt_moto: f64,
     speed_kmh: f64,
-    period_pct: f64,
+    period_pcts: [f64; 4],
     period_hours: f64,
 ) -> Vec<CategoryFlow> {
-    let q = period_pct / period_hours;
+    let q = |aadt: f64, class: usize| aadt * period_pcts[class] / period_hours;
     vec![
         CategoryFlow {
-            q_per_hour: aadt_light * q,
+            q_per_hour: q(aadt_light, 0),
             speed_kmh,
             category: VehicleCategory::Light,
         },
         CategoryFlow {
-            q_per_hour: aadt_medium * q,
+            q_per_hour: q(aadt_medium, 1),
             speed_kmh,
             category: VehicleCategory::Medium,
         },
         CategoryFlow {
-            q_per_hour: aadt_heavy * q,
+            q_per_hour: q(aadt_heavy, 2),
             speed_kmh,
             category: VehicleCategory::Heavy,
         },
         CategoryFlow {
-            q_per_hour: aadt_moto * q,
+            q_per_hour: q(aadt_moto, 3),
             speed_kmh,
             category: VehicleCategory::Motorcycle,
         },

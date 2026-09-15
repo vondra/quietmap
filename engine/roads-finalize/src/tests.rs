@@ -253,3 +253,74 @@ fn dense_owner_uses_its_own_batch_without_serializing_sparse_owners() {
     assert_eq!(crate::scheduling::batch_end(&growing_budget, first, 3, 16).unwrap(), 4);
     assert!(crate::scheduling::batch_end(&growing_budget, 4, 3, 3).is_err());
 }
+
+mod profile_retention {
+    use arrow::array::{ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, StringArray, UInt16Array, UInt8Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use std::sync::Arc;
+
+    /// A stamped observed period profile (`traffic_profile_id` + dictionary
+    /// metadata) survives allocation and z14 reblocking verbatim: children
+    /// inherit the parent's profile reference and the dictionary rides the
+    /// schema; the traffic columns' meaning is untouched.
+    #[test]
+    fn traffic_profile_reference_survives_reblocking() {
+        let columns: Vec<(&str, DataType, ArrayRef)> = vec![
+            ("osm_id", DataType::Int64, Arc::new(Int64Array::from(vec![1]))),
+            ("segment_idx", DataType::Int16, Arc::new(Int16Array::from(vec![0]))),
+            ("start_gx", DataType::Int32, Arc::new(Int32Array::from(vec![100_000_000]))),
+            ("start_gy", DataType::Int32, Arc::new(Int32Array::from(vec![100_000_000]))),
+            ("end_gx", DataType::Int32, Arc::new(Int32Array::from(vec![100_010_000]))),
+            ("end_gy", DataType::Int32, Arc::new(Int32Array::from(vec![100_000_000]))),
+            ("length_m", DataType::Float32, Arc::new(Float32Array::from(vec![500.0]))),
+            ("oneway", DataType::UInt8, Arc::new(UInt8Array::from(vec![1]))),
+            ("road_class", DataType::UInt8, Arc::new(UInt8Array::from(vec![2]))),
+            ("lanes", DataType::UInt8, Arc::new(UInt8Array::from(vec![2]))),
+            ("access", DataType::UInt8, Arc::new(UInt8Array::from(vec![0]))),
+            ("tunnel", DataType::Boolean, Arc::new(BooleanArray::from(vec![false]))),
+            ("country_iso", DataType::UInt16, Arc::new(UInt16Array::from(vec![0]))),
+            ("city_id", DataType::UInt16, Arc::new(UInt16Array::from(vec![0]))),
+            ("continent", DataType::UInt8, Arc::new(UInt8Array::from(vec![0]))),
+            ("source_id", DataType::UInt16, Arc::new(UInt16Array::from(vec![10]))),
+            ("ref", DataType::Utf8, Arc::new(StringArray::from(vec!["B 31"]))),
+            ("name", DataType::Utf8, Arc::new(StringArray::from(vec!["B 31"]))),
+            ("aadt_light", DataType::Float64, Arc::new(Float64Array::from(vec![9000.0]))),
+            ("aadt_medium", DataType::Float64, Arc::new(Float64Array::from(vec![0.0]))),
+            ("aadt_heavy", DataType::Float64, Arc::new(Float64Array::from(vec![1000.0]))),
+            ("aadt_moto", DataType::Float64, Arc::new(Float64Array::from(vec![0.0]))),
+            ("traffic_count_basis", DataType::UInt8, Arc::new(UInt8Array::from(vec![1]))),
+            ("traffic_observation_id", DataType::Utf8, Arc::new(StringArray::from(vec!["counter:A"]))),
+            ("traffic_observation_source", DataType::UInt16, Arc::new(UInt16Array::from(vec![10]))),
+            ("traffic_estimated", DataType::UInt8, Arc::new(UInt8Array::from(vec![0]))),
+            ("traffic_profile_id", DataType::UInt16, Arc::new(UInt16Array::from(vec![1]))),
+        ];
+        let dictionary = r#"{"source":"https://mobidata-bw.de/de/dataset/stundenwerte_dauerzaehlstellen","entries":[{"station":"1","window":"2025-01..2025-12","days":10,"status":"flags -/u only","profile":{"heavy":[0.55,0.18,0.27]}}]}"#;
+        let schema = Arc::new(
+            Schema::new(columns.iter().map(|(name, ty, _)| Field::new(*name, ty.clone(), false)).collect::<Vec<_>>())
+                .with_metadata(std::collections::HashMap::from([(
+                    "roads_time_profiles".to_owned(),
+                    dictionary.to_owned(),
+                )])),
+        );
+        let batch = RecordBatch::try_new(schema, columns.into_iter().map(|(_, _, values)| values).collect()).unwrap();
+        let staging = std::env::temp_dir().join(format!("roads-profile-retention-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&staging);
+        super::super::write::stage(&staging, &[batch], &super::super::spatial::RoadIndex::new(Vec::new())).unwrap();
+        let finalized = super::super::input::load(&staging).unwrap();
+        assert_eq!(
+            finalized[0].schema().metadata().get("roads_time_profiles"),
+            Some(&dictionary.to_owned())
+        );
+        assert_eq!(
+            finalized[0].schema().metadata().get(super::super::input::CONTRACT),
+            Some(&"1".to_owned())
+        );
+        let profile_ids = finalized[0]
+            .column_by_name("traffic_profile_id")
+            .and_then(|v| v.as_any().downcast_ref::<UInt16Array>())
+            .unwrap();
+        assert!(profile_ids.iter().all(|v| v == Some(1)), "every child keeps the parent's profile reference");
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+}

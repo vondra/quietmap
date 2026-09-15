@@ -19,7 +19,7 @@ pub use points::{
 pub use rail::{normalize_rail, NormalizedRail, RailCategoryTraffic, RailTraffic, RawRailInput};
 pub use road::{
     normalize_road, normalize_road_segment, road_max_distance_m, NormalizedRoad, RawRoadInput,
-    RoadTraffic, ROAD_ESTIMATED_HEAVY, ROAD_ESTIMATED_LIGHT, ROAD_ESTIMATED_MEDIUM,
+    RoadTimeProfile, RoadTraffic, ROAD_ESTIMATED_HEAVY, ROAD_ESTIMATED_LIGHT, ROAD_ESTIMATED_MEDIUM,
     ROAD_ESTIMATED_MOTO,
 };
 

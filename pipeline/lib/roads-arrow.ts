@@ -65,6 +65,151 @@ export interface WriteRoadResult {
   retracted: number
 }
 
+/** One observed period-profile dictionary entry: attribution is carried here,
+ * deliberately SEPARATE from the AADT observation columns — a profile never
+ * re-stamps counts, `source_id`, basis or estimated bits. */
+export interface RoadTimeProfileEntry {
+  /** Owning counter station (e.g. BW `svznr`); never an internal path. */
+  station: string
+  /** Observed window, e.g. `2025-01..2025-12`. */
+  window: string
+  /** Complete observed station-days behind the shares. */
+  days: number
+  /** Coverage/flags documentation (accepted quality flags, direction caveats). */
+  status: string
+  /** Per-class day/evening/night shares of 24 h volume; absent class = unknown. */
+  profile: { light?: [number, number, number]; medium?: [number, number, number];
+    heavy?: [number, number, number]; moto?: [number, number, number] }
+}
+
+export const ROADS_TIME_PROFILES_METADATA_KEY = 'roads_time_profiles'
+
+function assertTimeProfileEntry(entry: RoadTimeProfileEntry): void {
+  if (!entry.station || !entry.window || !entry.status || !Number.isInteger(entry.days) || entry.days <= 0) {
+    throw new Error(`writeRoadTimeProfiles: invalid dictionary entry ${JSON.stringify(entry)}`)
+  }
+  for (const [group, shares] of Object.entries(entry.profile)) {
+    if (shares.length !== 3 || shares.some(v => !Number.isFinite(v) || v < 0) ||
+        Math.abs(shares.reduce((a, b) => a + b, 0) - 1) > 1e-9) {
+      throw new Error(`writeRoadTimeProfiles: invalid ${group} shares at ${entry.station}`)
+    }
+  }
+  if (Object.keys(entry.profile).length === 0) {
+    throw new Error(`writeRoadTimeProfiles: entry ${entry.station} has no observed class`)
+  }
+}
+
+function decodeTimeProfileDictionary(raw: string | undefined): { source: string; entries: RoadTimeProfileEntry[] } {
+  if (!raw) return { source: '', entries: [] }
+  const value = JSON.parse(raw) as { source: string; entries: RoadTimeProfileEntry[] }
+  if (typeof value.source !== 'string' || !Array.isArray(value.entries)) {
+    throw new Error('writeRoadTimeProfiles: corrupt roads_time_profiles metadata')
+  }
+  for (const entry of value.entries) assertTimeProfileEntry(entry)
+  return value
+}
+
+/** Stamp sparse observed period profiles WITHOUT touching traffic: adds the
+ * `traffic_profile_id` u16 column (0 = none) and the `roads_time_profiles`
+ * schema-metadata dictionary restricted to referenced entries. Safe on both
+ * raw and finalized (`road_traffic_contract=1`) tables — traffic columns are
+ * never rewritten. Idempotent per source: rows this source stamped but no
+ * longer matches are retracted to 0; a different source's dictionary is an
+ * explicit error, never silently re-attributed. */
+export async function writeRoadTimeProfiles(
+  arrowPath: string,
+  sourceUrl: string,
+  entries: readonly RoadTimeProfileEntry[],
+  match: (row: RoadRow, index: number) => number,
+): Promise<WriteRoadResult> {
+  for (const entry of entries) assertTimeProfileEntry(entry)
+  let result!: WriteRoadResult
+  await withArrowWrite(arrowPath, table => {
+    const geometry = segmentGeometryReader(table)
+    const ref = table.getChild('ref')
+    const name = table.getChild('name')
+    const osmId = table.getChild('osm_id')
+    const roadClass = table.getChild('road_class')
+    const existingSource = table.getChild('source_id')
+    const existingIds = table.getChild('traffic_profile_id')
+    const rows = table.numRows
+    const ids = new Uint16Array(rows)
+    for (let index = 0; index < rows; index++) {
+      ids[index] = (existingIds?.get(index) as number) ?? 0
+    }
+    const dictionary = decodeTimeProfileDictionary(table.schema.metadata.get(ROADS_TIME_PROFILES_METADATA_KEY))
+    if (dictionary.source && dictionary.source !== sourceUrl) {
+      throw new Error(`writeRoadTimeProfiles: ${arrowPath} carries '${dictionary.source}' profiles; refusing to restamp as '${sourceUrl}'`)
+    }
+    // Merge: previously stamped references stay valid; a re-stamp of the same
+    // station (same window/days/status/profile) reuses its id instead of duplicating.
+    const merged = [...dictionary.entries]
+    const idOf = new Map<number, number>()
+    entries.forEach((entry, index) => {
+      const existing = merged.findIndex(stored =>
+        stored.station === entry.station && JSON.stringify(stored) === JSON.stringify(entry))
+      idOf.set(index + 1, existing >= 0 ? existing + 1 : merged.length + 1)
+      if (existing < 0) merged.push(entry)
+    })
+    if (merged.length > 65_535) {
+      throw new Error(`writeRoadTimeProfiles: ${merged.length} entries exceed the u16 id capacity`)
+    }
+    let matched = 0
+    let updated = false
+    for (let index = 0; index < rows; index++) {
+      const picked = match({
+        ...geometry.row(index),
+        ref: (ref?.get(index) as string | null) ?? null,
+        name: (name?.get(index) as string | null) ?? null,
+        osmId: osmId ? Number(osmId.get(index)) : null,
+        roadClass: (roadClass?.get(index) as number) ?? 5,
+        existingSourceId: (existingSource?.get(index) as number) ?? 0,
+      }, index)
+      if (!Number.isInteger(picked) || picked < 0 || picked > entries.length) {
+        throw new Error(`writeRoadTimeProfiles: match returned ${picked} out of range`)
+      }
+      if (picked > 0) {
+        const id = idOf.get(picked)!
+        matched++
+        if (ids[index] !== id) { ids[index] = id; updated = true }
+      } else if (ids[index] !== 0) {
+        // This source owns the whole dictionary (mismatched sources are
+        // rejected above): unmatched-but-stamped rows retract to 0 = unknown.
+        ids[index] = 0
+        updated = true
+      }
+    }
+    result = { rows, matched, updated, skipped: 0, skippedForeign: 0, retracted: 0 }
+    if (!updated) return table
+    const referenced = new Set([...ids])
+    const kept = merged.map((entry, index) => ({ entry, index: index + 1 }))
+      .filter(({ index }) => referenced.has(index))
+    const remap = new Map(kept.map(({ entry }, position) => [entry, position + 1]))
+    for (let index = 0; index < rows; index++) {
+      const entry = merged[ids[index] - 1]
+      if (ids[index] !== 0) ids[index] = remap.get(entry)!
+    }
+    const columns: Record<string, unknown> = {}
+    const rebuilt = new Set(['traffic_profile_id'])
+    for (const field of table.schema.fields) {
+      if (!rebuilt.has(field.name)) columns[field.name] = table.getChild(field.name)!
+    }
+    columns.traffic_profile_id = makeVector(ids)
+    const rebuiltTable = makeTable(columns as never) as unknown as Table
+    const metadata = new Map(table.schema.metadata)
+    // `withArrowWrite` re-imposes input metadata (output keys only override),
+    // so a full retraction keeps an explicit EMPTY dictionary — "this source
+    // stamped here and now covers nothing" — instead of a stale entry list.
+    metadata.set(ROADS_TIME_PROFILES_METADATA_KEY, JSON.stringify({
+      source: dictionary.source || sourceUrl,
+      entries: kept.map(({ entry }) => entry),
+    }))
+    const schema = new Schema(rebuiltTable.schema.fields, metadata)
+    return new Table(schema, rebuiltTable.batches.map(batch => new RecordBatch(schema, batch.data)))
+  })
+  return result
+}
+
 function assertMatch(match: RoadAadt, index: number, path: string): void {
   const aadtValues = [match.light, match.medium, match.heavy, match.moto]
   if (aadtValues.some(value => !Number.isFinite(value) || value < 0 ||

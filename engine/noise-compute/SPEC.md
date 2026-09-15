@@ -82,6 +82,23 @@ validator) and reject missing contract metadata, wrong column types, nulls,
 non-finite or negative counts, out-of-domain bitmasks and out-of-domain
 direction data, including invalid schemas on empty files.
 
+Rows with a measured period profile additionally carry non-null UInt16
+`traffic_profile_id` (0 = none: absence means genuinely unknown, the
+class-default split applies — never a compatibility variant) plus a
+`roads_time_profiles` schema-metadata dictionary `{source, entries:
+[{station, window, days, status, profile}]}`; ids are 1-based into entries,
+restricted to entries referenced by that file. A profile holds per-class
+day/evening/night shares of the 24 h volume (local periods 07–19/19–23/23–07);
+an absent class in an entry is unmeasured and keeps the class default.
+One canonical validation lives in `normalize::RoadTimeProfile::validate`.
+The reader rejects a wrong-typed/null column, an id past the dictionary,
+unknown class keys and malformed entries — malformed never degrades to
+absence. `write::stage` passes the column and dictionary through allocation
+and z14 reblocking verbatim (children inherit the parent's reference).
+Emission consumes per-class shares via `NormalizedRoad::period_pcts` into the
+single `build_period_flows` — there is no second day/night split. Unprofiled
+rows keep the class-default `TIME_DIST_{MOTORWAY,URBAN}` behaviour unchanged.
+
 The producer (`roads-finalize`) resolves observations, priors, class defaults,
 directional allocation, lane and access factors before publication; the
 class-default cascade (`noise_compute::defaults::resolve_traffic_default`)

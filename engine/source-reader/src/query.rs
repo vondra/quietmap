@@ -315,6 +315,7 @@ pub fn collect_from_square_data(
                     heavy: r.aadt_heavy,
                     moto: r.aadt_moto,
                     estimated: r.traffic_estimated,
+                    time_profile: r.time_profile,
                 },
                 source_id: r.source_id,
                 name: r.name.clone(),
@@ -567,6 +568,11 @@ pub struct RoadResult {
     pub aadt_moto: f64,
     /// Per-category estimated bitmask (light 1, medium 2, heavy 4, moto 8).
     pub traffic_estimated: u8,
+    /// Observed per-class period profile from the row's dictionary reference;
+    /// `None` = no observed profile (class-default split). Skipped on the wire:
+    /// it is emission input, not display data.
+    #[serde(skip_serializing)]
+    pub time_profile: Option<noise_compute::normalize::RoadTimeProfile>,
     pub source_id: u16,
     pub dist_m: f64,
     pub cp_lat: f64,
@@ -741,6 +747,7 @@ pub fn query_roads_from_batches(
                 aadt_heavy: raw.traffic.heavy,
                 aadt_moto: raw.traffic.moto,
                 traffic_estimated: raw.traffic.estimated,
+                time_profile: raw.traffic.time_profile,
                 source_id,
                 dist_m: cp.dist_m,
                 cp_lat: cp.lat,

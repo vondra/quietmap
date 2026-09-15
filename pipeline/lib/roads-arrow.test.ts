@@ -6,7 +6,8 @@ import { tableFromIPC } from 'apache-arrow'
 import { iso2Code } from './prepared-grid.js'
 import { bytes, writeRoadsFixture } from './road-test-fixture.js'
 import {
-  disjointVehicleClassCountsFitPublishedTotal, osmRoadClassRank, writeRoadAadt, type RoadRow,
+  disjointVehicleClassCountsFitPublishedTotal, osmRoadClassRank, writeRoadAadt,
+  writeRoadTimeProfiles, type RoadRow,
 } from './roads-arrow.js'
 
 const STAMP_ID = 10 // measured continental road source
@@ -182,4 +183,71 @@ test('source basis and identity survive writes, replace together and retract tog
   table = tableFromIPC(bytes(path))
   assert.deepEqual([...table.getChild('traffic_count_basis')!], [0, 2])
   assert.deepEqual([...table.getChild('traffic_observation_id')!], ['', 'counter:1'])
+})
+
+test('writeRoadTimeProfiles stamps only the sparse profile reference and dictionary', async () => {
+  const path = writeRoadsFixture('time-profiles.arrow', [0, 2])
+  const before = tableFromIPC(bytes(path))
+  const entry = {
+    station: '81191040', window: '2025-01..2025-12', days: 345,
+    status: 'flags -/u only; combined both-direction lanes',
+    profile: { light: [0.75, 0.18, 0.07] as [number, number, number], heavy: [0.55, 0.18, 0.27] as [number, number, number] },
+  }
+  const result = await writeRoadTimeProfiles(
+    path, 'https://mobidata-bw.de/de/dataset/stundenwerte_dauerzaehlstellen',
+    [entry], row => (row.roadClass === 0 ? 1 : 0))
+  assert.equal(result.matched, 1)
+  assert.ok(result.updated)
+  const stamped = tableFromIPC(bytes(path))
+  const ids = stamped.getChild('traffic_profile_id')!
+  assert.deepEqual([...ids], [1, 0])
+  const dictionary = JSON.parse(stamped.schema.metadata.get('roads_time_profiles')!)
+  assert.equal(dictionary.entries.length, 1)
+  assert.equal(dictionary.entries[0].station, '81191040')
+  assert.match(dictionary.source, /mobidata-bw\.de/)
+  // Traffic attribution is untouched: same counts, source, basis, estimated.
+  for (const column of ['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'source_id', 'traffic_estimated']) {
+    assert.deepEqual([...stamped.getChild(column)!], [...before.getChild(column)!], `${column} unchanged`)
+  }
+  // Re-running is a byte-stable no-op.
+  const rerun = await writeRoadTimeProfiles(
+    path, 'https://mobidata-bw.de/de/dataset/stundenwerte_dauerzaehlstellen',
+    [entry], row => (row.roadClass === 0 ? 1 : 0))
+  assert.equal(rerun.updated, false)
+  // Malformed shares are rejected before any write.
+  const zeroed = writeRoadsFixture('time-profiles-bad.arrow', [0])
+  await assert.rejects(writeRoadTimeProfiles(
+    zeroed, 'https://example.com', [{ ...entry, profile: { light: [0.5, 0.5, 0.5] } }],
+    () => 1), /invalid light shares/)
+})
+
+test('writeRoadTimeProfiles retracts this source on restamp and rejects foreign dictionaries', async () => {
+  const URL = 'https://mobidata-bw.de/de/dataset/stundenwerte_dauerzaehlstellen'
+  const entry = {
+    station: '62221200', window: '2025-01..2025-12', days: 300,
+    status: 'flags -/u only', profile: { light: [0.7, 0.2, 0.1] as [number, number, number] },
+  }
+  const path = writeRoadsFixture('time-profiles-restamp.arrow', [2, 5])
+  const stamp = (entries: typeof entry[], classes: number[]) => writeRoadTimeProfiles(
+    path, URL, entries, row => (entries.length > 0 && classes.includes(row.roadClass) ? 1 : 0))
+  let result = await stamp([entry], [2])
+  assert.equal(result.matched, 1)
+  // Full restamp with the station dropped from the dataset: the previously
+  // stamped row is retracted to 0 (absence = unknown), not left stale.
+  result = await stamp([], [2])
+  assert.equal(result.matched, 0)
+  assert.ok(result.updated)
+  const cleared = tableFromIPC(bytes(path))
+  assert.deepEqual([...cleared.getChild('traffic_profile_id')!], [0, 0])
+  // Full retraction keeps an explicit empty dictionary (never a stale entry).
+  assert.deepEqual(
+    JSON.parse(cleared.schema.metadata.get('roads_time_profiles')!).entries, [])
+  // Re-stamp both rows: zero-id roundtrip back to referenced ids.
+  result = await stamp([entry], [2, 5])
+  assert.equal(result.matched, 2)
+  assert.deepEqual([...tableFromIPC(bytes(path)).getChild('traffic_profile_id')!], [1, 1])
+  // A second source never silently re-attributes the first source's table.
+  await assert.rejects(writeRoadTimeProfiles(
+    path, 'https://other.example/dataset', [entry], () => 1), /refusing to restamp/)
+
 })
