@@ -39,7 +39,8 @@ pub fn load_square_intervals(
         .prepare(
             "SELECT osm_id, segment_idx, from_m, to_m, source_id,
                     passenger, freight, passenger_status, freight_status, matching
-             FROM rail_interval WHERE square = ?",
+             FROM rail_interval WHERE square = ?
+             ORDER BY osm_id, segment_idx, source_id, country_iso, from_m, to_m, occurrence",
         )
         .map_err(|e| e.to_string())?;
     let rows = statement

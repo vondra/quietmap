@@ -32,49 +32,55 @@ export function relationWayPoints(relation: SourceTrainRoute): Point[] {
   return points
 }
 
-export function matchStopOrder(stops: readonly Stop[], points: readonly Point[]): RailStopOrderFit | null {
-  if (!stops.length || points.length < 2) return null
-  const cumulative = [0]
-  for (let index = 1; index < points.length; index++) {
-    cumulative.push(cumulative[index - 1] + flatDist(...points[index - 1], ...points[index]))
-  }
-  const layers: Candidate[][] = []
-  for (const stop of stops) {
-    const at: Point = [stop.lat, stop.lon]
-    if (!at.every(Number.isFinite)) throw new Error('unresolved source stop')
-    const column: Candidate[] = []
+export class StopOrderGeometry {
+  private readonly cumulative = [0]
+
+  constructor(private readonly points: readonly Point[]) {
     for (let index = 1; index < points.length; index++) {
-      const error = pointToSegmentDist(...at, ...points[index - 1], ...points[index])
-      if (error > STATION_SNAP_RADIUS_M) continue
-      const fraction = pointToSegmentParamT(...at, ...points[index - 1], ...points[index])
-      column.push({
-        position: cumulative[index - 1] + fraction * (cumulative[index] - cumulative[index - 1]),
-        error, cost: Infinity, previous: -1,
-      })
+      this.cumulative.push(this.cumulative[index - 1] + flatDist(...points[index - 1], ...points[index]))
     }
-    column.sort((a, b) => a.position - b.position)
-    if (!column.length) return null
-    const previous = layers.at(-1)
-    let cursor = 0, best = -1
-    for (const candidate of column) {
-      if (!previous) { candidate.cost = candidate.error ** 2; continue }
-      while (cursor < previous.length && previous[cursor].position <= candidate.position) {
-        if (best < 0 || previous[cursor].cost < previous[best].cost) best = cursor
-        cursor++
+  }
+
+  match(stops: readonly Stop[]): RailStopOrderFit | null {
+    if (!stops.length || this.points.length < 2) return null
+    const layers: Candidate[][] = []
+    for (const stop of stops) {
+      const at: Point = [stop.lat, stop.lon]
+      if (!at.every(Number.isFinite)) throw new Error('unresolved source stop')
+      const column: Candidate[] = []
+      for (let index = 1; index < this.points.length; index++) {
+        const error = pointToSegmentDist(...at, ...this.points[index - 1], ...this.points[index])
+        if (error > STATION_SNAP_RADIUS_M) continue
+        const fraction = pointToSegmentParamT(...at, ...this.points[index - 1], ...this.points[index])
+        column.push({
+          position: this.cumulative[index - 1] + fraction * (this.cumulative[index] - this.cumulative[index - 1]),
+          error, cost: Infinity, previous: -1,
+        })
       }
-      if (best >= 0) { candidate.previous = best; candidate.cost = previous[best].cost + candidate.error ** 2 }
+      column.sort((a, b) => a.position - b.position)
+      if (!column.length) return null
+      const previous = layers.at(-1)
+      let cursor = 0, best = -1
+      for (const candidate of column) {
+        if (!previous) { candidate.cost = candidate.error ** 2; continue }
+        while (cursor < previous.length && previous[cursor].position <= candidate.position) {
+          if (best < 0 || previous[cursor].cost < previous[best].cost) best = cursor
+          cursor++
+        }
+        if (best >= 0) { candidate.previous = best; candidate.cost = previous[best].cost + candidate.error ** 2 }
+      }
+      if (!column.some(point => Number.isFinite(point.cost))) return null
+      layers.push(column)
     }
-    if (!column.some(point => Number.isFinite(point.cost))) return null
-    layers.push(column)
+    const last = layers.at(-1)!
+    let current = last.reduce((best, point, index) => point.cost < last[best].cost ? index : best, 0)
+    let maxStopDistanceM = 0
+    for (let index = layers.length - 1; index >= 0; index--) {
+      maxStopDistanceM = Math.max(maxStopDistanceM, layers[index][current].error)
+      current = layers[index][current].previous
+    }
+    return { relationId: '', stopCount: stops.length, maxStopDistanceM }
   }
-  const last = layers.at(-1)!
-  let current = last.reduce((best, point, index) => point.cost < last[best].cost ? index : best, 0)
-  let maxStopDistanceM = 0
-  for (let index = layers.length - 1; index >= 0; index--) {
-    maxStopDistanceM = Math.max(maxStopDistanceM, layers[index][current].error)
-    current = layers[index][current].previous
-  }
-  return { relationId: '', stopCount: stops.length, maxStopDistanceM }
 }
 
 function cellKey(latitude: number, longitude: number): string {
@@ -94,7 +100,7 @@ function* nearbyCellKeys(stops: Iterable<Stop>): Generator<string> {
 
 /** Complete OSM orders only; unique means unique among those candidates. */
 export class CompleteTrainRouteIndex {
-  private readonly routes: SourceTrainRoute[] = []
+  private readonly routes: Array<{ relation: SourceTrainRoute; geometry: StopOrderGeometry }> = []
   private readonly cells = new Map<string, number[]>()
 
   constructor(stops: Iterable<Stop>) {
@@ -103,15 +109,16 @@ export class CompleteTrainRouteIndex {
 
   add(relation: SourceTrainRoute): void {
     if (relation.status !== 'complete' || relation.ways.length === 0) return
+    const points = relationWayPoints(relation)
     const seen = new Set<string>()
-    for (const [latitude, longitude] of relationWayPoints(relation)) {
+    for (const [latitude, longitude] of points) {
       const key = cellKey(latitude, longitude)
       if (this.cells.has(key)) seen.add(key)
     }
     // Every future query is known: unrelated world itineraries never need to stay in memory.
     if (!seen.size) return
     const index = this.routes.length
-    this.routes.push(relation)
+    this.routes.push({ relation, geometry: new StopOrderGeometry(points) })
     for (const key of seen) this.cells.get(key)!.push(index)
   }
 
@@ -123,8 +130,8 @@ export class CompleteTrainRouteIndex {
     }
     const fits: Array<{ relation: SourceTrainRoute; maxStopDistanceM: number }> = []
     for (const index of nearby) {
-      const relation = this.routes[index]
-      const fit = matchStopOrder(stops, relationWayPoints(relation))
+      const { relation, geometry } = this.routes[index]
+      const fit = geometry.match(stops)
       if (fit) fits.push({ relation, maxStopDistanceM: fit.maxStopDistanceM })
     }
     if (fits.length === 1) {

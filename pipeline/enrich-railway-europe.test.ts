@@ -216,12 +216,13 @@ test('an orphan with a source shape preserves prior corridor counts while valid 
   }
 })
 
-test('parallel neighboring countries publish the same facts and a failed batch publishes nothing', async () => {
+test('ready countries release slots, replay serial facts, and persist before a later failure', async () => {
   const source = join(TEMP, 'source-parallel')
   writeGreekGtfs(source, 'route_id,route_type\nrail,2\ntram,0\n')
   const stops = join(source, 'gr', 'stops.txt')
   writeFileSync(stops, readFileSync(stops, 'utf8').replaceAll('38.', '42.').replaceAll('23.', '19.'))
-  cpSync(join(source, 'gr'), join(source, 'hr'), { recursive: true })
+  for (const country of ['hr', 'fi']) cpSync(join(source, 'gr'), join(source, country), { recursive: true })
+  writeFileSync(join(source, 'fi', 'routes.txt'), 'route_id,route_type\nrail,2\n')
   const outputs = ['serial', 'parallel'].map(name => {
     const prepared = join(TEMP, `countries-${name}`)
     const directory = squareDirectory(prepared, 42, 19)
@@ -233,34 +234,73 @@ test('parallel neighboring countries publish the same facts and a failed batch p
       { latitude: 42.001, longitude: 19.001, endLatitude: 42.0015, endLongitude: 19.0015,
         lengthMetres: 71, railType: 1, country: 'HR' },
     ]), path)
-    writeSyntheticRailTopology(prepared, [relative(prepared, directory)])
+    const finnish = squareDirectory(prepared, 60, 24)
+    mkdirSync(finnish, { recursive: true })
+    copyFileSync(writeRailwaysFixture(`countries-${name}-fi.arrow`, [
+      { osmId: 60_000, latitude: 60, longitude: 24, country: 'FI' },
+    ]), join(finnish, 'railways.arrow'))
+    writeSyntheticRailTopology(prepared, [directory, finnish].map(path => relative(prepared, path)))
     return { prepared, path }
   })
   const base = { sourceDirectory: source, cacheDirectory: join(TEMP, 'cache-parallel'), asOfDate: '20260909' }
-  for (const country of ['GR', 'HR']) {
+  for (const country of ['GR', 'HR', 'FI']) {
     await enrichGlobalGtfsCountry({ ...base, preparedDirectory: outputs[0].prepared, country })
   }
   const before = readFileSync(outputs[1].path)
+  // Hold GR until third-country FI is ready: a batch barrier would deadlock.
+  const readyMarker = join(TEMP, 'third-country-ready')
+  const preload = join(TEMP, 'country-ready-order.mjs')
+  writeFileSync(preload, `
+    import { existsSync, writeFileSync } from 'node:fs';
+    import { setTimeout } from 'node:timers/promises';
+    const country = process.argv[process.argv.indexOf('--country') + 1];
+    if (process.send) {
+      const send = process.send.bind(process);
+      process.send = (...args) => {
+        if (args[0] === 'ready' && country === 'FI') writeFileSync(${JSON.stringify(readyMarker)}, 'ready');
+        if (args[0] === 'ready' && country === 'GR') {
+          (async () => {
+            while (!existsSync(${JSON.stringify(readyMarker)})) await setTimeout(10);
+            send(...args);
+          })();
+          return true;
+        }
+        return send(...args);
+      };
+    }
+  `)
   // Bound tiny fixture heaps so this exercises two real workers on small CI runners too.
   const run = () => spawnSync(process.execPath, [
-    ...process.execArgv, '--max-old-space-size=256', fileURLToPath(new URL('./enrich-railway-europe.ts', import.meta.url)),
+    ...process.execArgv, '--max-old-space-size=256', '--import', preload, fileURLToPath(new URL('./enrich-railway-europe.ts', import.meta.url)),
     '--source-dir', source, '--prepared-dir', outputs[1].prepared,
-    '--cache-dir', base.cacheDirectory, '--as-of-date', base.asOfDate, '--country', 'GR,HR',
-  ], { encoding: 'utf8', env: { ...process.env, QM_ROAD_WORKERS: '2' } })
+    '--cache-dir', base.cacheDirectory, '--as-of-date', base.asOfDate, '--country', 'GR,HR,FI',
+  ], { encoding: 'utf8', timeout: 15_000, killSignal: 'SIGKILL', env: { ...process.env, QM_ROAD_WORKERS: '2' } })
   const success = run()
   assert.equal(success.status, 0, success.stderr)
   assert.match(success.stdout, /"workers":2/)
-  const expected = listRailIntervals(outputs[0].prepared)
+  const facts = (prepared: string) => listRailIntervals(prepared).map(row => JSON.stringify(row)).sort()
+  const expected = facts(outputs[0].prepared)
   assert.ok(expected.length > 0)
-  assert.deepEqual(listRailIntervals(outputs[1].prepared), expected)
+  assert.deepEqual(facts(outputs[1].prepared), expected)
   assert.deepEqual(readFileSync(outputs[1].path), before)
-  // The valid first country would now double its count, but the later input is broken.
-  appendFileSync(join(source, 'gr', 'trips.txt'), 'rail,daily,extra-trip\n')
-  appendFileSync(join(source, 'gr', 'stop_times.txt'), 'extra-trip,a,1\nextra-trip,b,2\n')
-  writeFileSync(join(source, 'hr', 'routes.txt'), 'route_id,route_name\nrail,broken\n')
+  const results = success.stdout.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line))
+  assert.equal(results.find(row => row.walk)?.country, 'HR', 'ready HR publishes while GR still routes')
+  assert.ok(results.findIndex(row => row.phase && row.country === 'FI') <
+    results.findIndex(row => row.walk && row.country === 'GR'), 'third country starts before first finishes')
+  // HR commits a changed snapshot before invalid FI starts; held GR cannot publish.
+  rmSync(readyMarker)
+  appendFileSync(join(source, 'hr', 'trips.txt'), 'rail,daily,extra-trip\n')
+  appendFileSync(join(source, 'hr', 'stop_times.txt'), 'extra-trip,a,1\nextra-trip,b,2\n')
+  writeFileSync(join(source, 'fi', 'routes.txt'), 'route_id,route_name\nrail,broken\n')
   const failed = run()
-  assert.equal(failed.status, 1)
-  assert.match(failed.stderr, /HR: railway worker exited/)
-  assert.deepEqual(listRailIntervals(outputs[1].prepared), expected)
+  assert.equal(failed.status, 1, failed.stderr)
+  assert.match(failed.stderr, /FI: railway worker exited/)
+  await enrichGlobalGtfsCountry({ ...base, preparedDirectory: outputs[0].prepared, country: 'HR' })
+  assert.notDeepEqual(facts(outputs[0].prepared), expected)
+  assert.deepEqual(facts(outputs[1].prepared), facts(outputs[0].prepared))
   assert.deepEqual(readFileSync(outputs[1].path), before)
+  writeFileSync(join(source, 'fi', 'routes.txt'), 'route_id,route_type\nrail,2\n')
+  const replay = run()
+  assert.equal(replay.status, 0, replay.stderr)
+  assert.deepEqual(facts(outputs[1].prepared), facts(outputs[0].prepared))
 })

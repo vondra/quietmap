@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { spawnSync } from 'node:child_process'
-import { CompleteTrainRouteIndex, matchStopOrder, relationWayPoints } from './rail-service-match.js'
+import { CompleteTrainRouteIndex, StopOrderGeometry, relationWayPoints } from './rail-service-match.js'
 import type { OrientedSourceRailWay, SourceTrainRoute } from './transport-topology.js'
 
 const points: Array<[number, number]> = [[0, 0], [0, 0.02], [0, 0.04]]
@@ -23,8 +23,8 @@ function way(id: string, geometry: Array<[number, number]>, reverse = false): Or
 }
 
 test('stop order rejects a reverse itinerary and treats duplicate complete fits as ambiguous', () => {
-  const forward = matchStopOrder(stops, points)
-  const backward = matchStopOrder(stops, [...points].reverse())
+  const forward = new StopOrderGeometry(points).match(stops)
+  const backward = new StopOrderGeometry([...points].reverse()).match(stops)
   assert.ok(forward)
   assert.equal(backward, null)
   const index = new CompleteTrainRouteIndex(stops)

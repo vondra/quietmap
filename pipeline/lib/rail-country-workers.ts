@@ -1,4 +1,4 @@
-/** Route GTFS countries concurrently, then publish whole snapshots in manifest order. */
+/** Route GTFS countries concurrently, publish ready snapshots through one writer. */
 
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -38,48 +38,56 @@ export async function runGtfsCountries(options: GlobalGtfsCountryOptions): Promi
       restoreRailwayParentsForEnrichment(resolve(prepared, square, 'railways.arrow'), prepared, square, topology)
     }
   }
-  for (let offset = 0; offset < countries.length;) {
-    // The builder releases sibling producers' memory between country batches.
-    const workers = Math.min(4, countries.length - offset,
-      workerCount(process.env, 2 * getHeapStatistics().heap_size_limit))
-    const batch = countries.slice(offset, offset + workers)
-    console.log(JSON.stringify({ phase: 'rail-country-routing', countries: batch, workers, squares: squares.size }))
-    let rejectFailure!: (error: Error) => void
-    const failed = new Promise<never>((_resolve, reject) => { rejectFailure = reject })
-    const children = batch.map(country => {
-      const child = fork(fileURLToPath(new URL('../enrich-railway-europe.ts', import.meta.url)), [
-        '--source-dir', options.sourceDirectory, '--prepared-dir', prepared,
-        '--cache-dir', options.cacheDirectory, '--country', country,
-        '--registry', options.registry ?? 'global', '--as-of-date', options.asOfDate,
-      ], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] })
-      let published = false
-      const ready = new Promise<void>(accept => {
-        child.once('message', message => {
-          if (message === 'ready') accept()
-          else rejectFailure(new Error(`${country}: invalid railway worker response`))
-        })
+  let failure: Error | undefined
+  let rejectFailure!: (error: Error) => void
+  const failed = new Promise<never>((_resolve, reject) => { rejectFailure = reject })
+  const fail = (error: Error) => { failure ??= error; rejectFailure(failure) }
+  const startCountry = (country: string) => {
+    const child = fork(fileURLToPath(new URL('../enrich-railway-europe.ts', import.meta.url)), [
+      '--source-dir', options.sourceDirectory, '--prepared-dir', prepared,
+      '--cache-dir', options.cacheDirectory, '--country', country,
+      '--registry', options.registry ?? 'global', '--as-of-date', options.asOfDate,
+    ], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] })
+    let published = false
+    const ready = new Promise<string>(accept => {
+      child.once('message', message => {
+        if (message === 'ready') accept(country)
+        else fail(new Error(`${country}: invalid railway worker response`))
       })
-      child.once('error', rejectFailure)
-      const completed = new Promise<void>(accept => child.once('close', (code, signal) => {
-        if (code !== 0 || !published) rejectFailure(new Error(`${country}: railway worker exited ${code ?? signal}`))
-        accept()
-      }))
-      return { child, ready, completed, publish: () => {
-        published = true
-        child.send('publish', error => { if (error) rejectFailure(error) })
-      } }
     })
-    try {
-      // A failed input in this batch cannot publish any of its siblings.
-      await Promise.race([Promise.all(children.map(worker => worker.ready)), failed])
-      for (const worker of children) {
-        worker.publish()
-        await Promise.race([worker.completed, failed])
+    child.once('error', fail)
+    const completed = new Promise<void>(accept => child.once('close', (code, signal) => {
+      if (code !== 0 || !published) fail(new Error(`${country}: railway worker exited ${code ?? signal}`))
+      accept()
+    }))
+    return { country, child, ready, completed, publish: () => {
+      published = true
+      child.send('publish', error => { if (error) fail(error) })
+    } }
+  }
+  const active: Array<ReturnType<typeof startCountry>> = []
+  let next = 0
+  try {
+    while (next < countries.length || active.length > 0) {
+      // Reconsider released memory whenever a completed country frees a slot.
+      const workers = Math.min(4, workerCount(process.env, 2 * getHeapStatistics().heap_size_limit))
+      while (!failure && next < countries.length && active.length < workers) {
+        const country = countries[next++]
+        active.push(startCountry(country))
+        console.log(JSON.stringify({ phase: 'rail-country-routing', country, workers, squares: squares.size }))
       }
-    } finally {
-      for (const worker of children) if (worker.child.exitCode === null) worker.child.kill()
-      await Promise.all(children.map(worker => worker.completed))
+      if (failure) throw failure
+      const country = await Promise.race([...active.map(worker => worker.ready), failed])
+      if (failure) throw failure
+      const worker = active.find(worker => worker.country === country)!
+      worker.publish()
+      await Promise.race([worker.completed, failed])
+      if (failure) throw failure
+      active.splice(active.indexOf(worker), 1)
     }
-    offset += workers
+  } finally {
+    // Completed countries persist on later failure, as in serial country replay.
+    for (const worker of active) if (worker.child.exitCode === null) worker.child.kill()
+    await Promise.all(active.map(worker => worker.completed))
   }
 }
