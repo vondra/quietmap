@@ -161,14 +161,18 @@ export async function enrichContinuityDirectory(preparedDirectory: string) {
       database.exec('COMMIT')
       rows += roads.length
       position++
-      if (position % 1000 === 0) console.log(JSON.stringify({ phase: 'continuity-inputs', squares: position, rows }))
+      if (position % 1000 === 0 || position === squares.length) console.log(JSON.stringify({ phase: 'continuity-inputs', squares: position, rows }))
     }
     const measuredSources = SOURCES.filter(source => isMeasured(source.id)).map(source => source.id)
     // A component without an observation cannot produce a fill; retain all rows for branch degree.
     const pending = `visited=0 AND cls IN (${[...FILLABLE].join(',')})
       AND src IN (${measuredSources.join(',')}) AND observationId != ''`
-    database.exec(`CREATE INDEX roads_a ON roads(a); CREATE INDEX roads_b ON roads(b);
+    const indexesStarted = Date.now()
+    console.log(JSON.stringify({ phase: 'continuity-indexes', status: 'started', rows }))
+    database.exec(`PRAGMA threads=${workerCount() - 1};
+      CREATE INDEX roads_a ON roads(a); CREATE INDEX roads_b ON roads(b);
       CREATE INDEX roads_pending ON roads(i) WHERE ${pending};`)
+    console.log(JSON.stringify({ phase: 'continuity-indexes', status: 'completed', rows, elapsedSeconds: (Date.now() - indexesStarted) / 1000 }))
     const next = database.prepare(`SELECT * FROM roads WHERE ${pending} LIMIT 1`)
     const incident = database.prepare('SELECT * FROM roads WHERE a=? OR b=? LIMIT 3')
     const visited = database.prepare('UPDATE roads SET visited=1 WHERE i=?')
