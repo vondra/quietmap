@@ -46,6 +46,11 @@ function prepareSquare(prepared: string, square: string, topology: SourceTranspo
     const oneway = Number(direction.get(road.i))
     if (oneway > 2) throw new Error(`${square}: invalid oneway direction ${oneway}`)
     const { osmId, cls, src, ref, aadt, access, roundabout, countBasis, observationId, observationSourceId } = road
+    // These pieces still contribute incidence, but compatibility rejects them before reading traffic.
+    if (!FILLABLE.has(cls)) {
+      staged.push([identity.startKey, identity.endKey, cls])
+      continue
+    }
     staged.push([square, road.i, identity.startKey, identity.endKey, osmId, cls, src, ref, ...aadt, access, Number(roundabout), oneway, countBasis, observationId, observationSourceId])
   }
   if (identities.size) throw new Error(`${square}: ${identities.size} source road pieces absent from Arrow`)
@@ -147,11 +152,12 @@ export async function enrichContinuityDirectory(preparedDirectory: string) {
                           PRIMARY KEY(square,row_index)) WITHOUT ROWID;`)
     const insert = database.prepare(`INSERT INTO roads(square,row_index,a,b,osmId,cls,src,ref,light,medium,heavy,moto,access,roundabout,direction,countBasis,observationId,observationSourceId)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    const compactInsert = database.prepare('INSERT INTO roads(a,b,cls) VALUES (?,?,?)')
     let rows = 0, position = 0
     for await (const { roads, hasOwned } of processedSquares<PreparedSquare>(prepared, squares)) {
       if (hasOwned) writeSquares.add(squares[position])
       database.exec('BEGIN')
-      for (const road of roads) insert.run(...road)
+      for (const road of roads) (road.length === 3 ? compactInsert : insert).run(...road)
       database.exec('COMMIT')
       rows += roads.length
       position++

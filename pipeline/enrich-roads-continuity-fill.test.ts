@@ -274,3 +274,27 @@ test('writeback child failures reject without replacing corrupt input or hiding 
   await assert.rejects(writeContinuitySquares(prepared, graphPath + '.absent', ['z9/275/173']), /worker exited/)
   assert.deepEqual(bytes(path), before)
 })
+
+test('compact nonfillable branches and selfloops keep incidence and retract their owned payload', async () => {
+  for (const selfloop of [false, true]) {
+    const path = await chain(`compact-incidence-${selfloop}.arrow`, [4, 4, 5])
+    await withArrowWrite(path, table => {
+      const columns = Object.fromEntries(table.schema.fields.map(field => [field.name, table.getChild(field.name)!]))
+      for (const axis of ['gx', 'gy']) {
+        const starts = [...table.getChild(`start_${axis}`)!.toArray()] as number[]
+        const ends = [...table.getChild(`end_${axis}`)!.toArray()] as number[]
+        starts[2] = starts[1]
+        if (selfloop) ends[2] = starts[1]
+        columns[`start_${axis}`] = vectorFromArray(starts, new Int32())
+        columns[`end_${axis}`] = vectorFromArray(ends, new Int32())
+      }
+      return new Table(columns)
+    })
+    await writeRoadAadt(path, (_row, i) => i === 0 ? traffic(100, 10) : i === 2 ? traffic(99, 12) : null)
+    const result = await enrichContinuitySquare(path)
+    assert.equal(result.anchors, 1); assert.equal(result.matched, 0); assert.equal(result.retracted, 1)
+    const output = tableFromIPC(bytes(path))
+    assert.deepEqual([...output.getChild('source_id')!.toArray()], [10, 0, 0])
+    assert.deepEqual([...output.getChild('aadt_light')!.toArray()], [100, 0, 0])
+  }
+})
