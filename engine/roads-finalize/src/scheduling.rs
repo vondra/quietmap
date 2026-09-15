@@ -38,15 +38,18 @@ pub(super) fn allowances(year: &Path, squares: &[Square]) -> Result<Vec<u64>, St
     }).collect())
 }
 
-pub(super) fn batch_end(allowances: &[u64], start: usize, workers: usize, budget: u64) -> usize {
+pub(super) fn batch_end(allowances: &[u64], start: usize, workers: usize, budget: u64) -> Result<usize, String> {
+    if allowances[start] > budget {
+        return Err(format!("road square requires {} B allocation allowance, memory limit is {budget} B", allowances[start]));
+    }
     let mut end = start;
     let mut reserved = 0_u64;
     while end < allowances.len() && end - start < workers {
         let next = reserved.saturating_add(allowances[end]);
         // An owner fitting the full process limit may use the reserve alone.
-        if end > start && next > budget { break; }
+        if end > start && next > budget * 3 / 4 { break; }
         reserved = next;
         end += 1;
     }
-    end
+    Ok(end)
 }

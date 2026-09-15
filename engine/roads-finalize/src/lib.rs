@@ -96,23 +96,20 @@ pub fn finalize_year(year: &Path) -> Result<usize, String> {
     if staging.exists() { std::fs::remove_dir_all(&staging).map_err(|e| e.to_string())?; }
     // Continuity already admits every source piece; taper changes only speed.
     let allowances = scheduling::allowances(year, &squares)?;
-    let budget = scheduling::memory_budget()?;
-    if let Some(needed) = allowances.iter().find(|&&needed| needed > budget) {
-        return Err(format!("road square requires {needed} B allocation allowance, memory limit is {budget} B"));
-    }
     let changed = AtomicUsize::new(0);
     let completed = AtomicUsize::new(0);
     let workers = rayon::current_num_threads();
-    eprintln!("roads-finalize: up to {workers} workers, {budget} B memory budget");
+    eprintln!("roads-finalize: up to {workers} workers");
     let mut start = 0;
     while start < squares.len() {
-        let end = scheduling::batch_end(&allowances, start, workers, budget * 3 / 4);
+        let budget = scheduling::memory_budget()?;
+        let end = scheduling::batch_end(&allowances, start, workers, budget)?;
         squares[start..end].par_iter().try_for_each(
             |square| -> Result<(), String> {
                 if stage_square(year, &staging, *square)? { changed.fetch_add(1, Ordering::Relaxed); }
                 let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
                 if done == 1 || done.is_multiple_of(1000) || done == squares.len() {
-                    eprintln!("roads-finalize: {done}/{} squares", squares.len());
+                    eprintln!("roads-finalize: {done}/{} squares, {budget} B memory budget", squares.len());
                 }
                 Ok(())
             },

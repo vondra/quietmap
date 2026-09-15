@@ -38,7 +38,7 @@ from world_build_inputs import (
 )
 
 from world_build_state import (
-    STATE_NAME, PIN_NAME, producer_command, record_steps, resume_steps, step_identity, write_state,
+    STATE_NAME, PIN_NAME, producer_command, record_steps, resume_steps, scope_unit, step_identity, write_state,
 )
 
 
@@ -141,11 +141,23 @@ def producer_environment(threads):
                 PYTHONDONTWRITEBYTECODE='1')
 
 
-def run_plan(steps, execute, completed=()):
+def give_remaining_memory(step, settings):
+    budget = settings['memory_gib'] << 30
+    result = subprocess.run(['systemctl', '--user', 'set-property', '--runtime',
+                             scope_unit(step), f'MemoryMax={budget}'], capture_output=True, text=True)
+    if result.returncode:
+        # The producer can finish between its sibling and this scope update.
+        if subprocess.run(['systemctl', '--user', '--quiet', 'is-active', scope_unit(step)]).returncode == 0:
+            print(json.dumps({'step': step.name, 'status': 'memory-expansion-failed', 'error': result.stderr.strip()}), flush=True)
+        return
+    print(json.dumps({'step': step.name, 'status': 'memory-expanded', 'memory_bytes': budget}), flush=True)
+
+
+def run_plan(steps, execute, completed=(), *, expand_memory=None):
     pending = {step.name: step for step in steps if step.name not in completed}
     completed, running = set(completed), {}
     failure = None
-    # Concurrent stages keep their memory shares; a sole runnable stage can use all of it.
+    # Expand only when no other producer can start before the remaining one finishes.
     with ThreadPoolExecutor(max_workers=4) as pool:
         while pending or running:
             free = 4 - sum(step.slots for step in running.values())
@@ -163,6 +175,11 @@ def run_plan(steps, execute, completed=()):
                 if failure:
                     raise failure
                 raise ValueError(f'unsatisfied world dependencies: {sorted(pending)}')
+            if (expand_memory is not None and len(running) == 1
+                    and not any(set(step.dependencies) <= completed for step in pending.values())):
+                remaining = next(iter(running.values()))
+                if remaining.slots < 4:
+                    expand_memory(remaining)
             done, _ = wait(running, return_when=FIRST_COMPLETED)
             for future in done:
                 step = running.pop(future)
@@ -318,7 +335,7 @@ def main():
                 print(json.dumps({'step': step.name, 'exit': result.returncode}), flush=True)
                 if result.returncode:
                     raise RuntimeError(f'{step.name} failed; inspect {output / (step.name + ".log")}; all work retained')
-            run_plan(steps, execute, completed)
+            run_plan(steps, execute, completed, expand_memory=lambda step: give_remaining_memory(step, settings))
             require_structures_final(steps, environment)
             counts = audit_world(year, settings['threads'])
             verify_prepared_raster_links(sources['rasters'], year)

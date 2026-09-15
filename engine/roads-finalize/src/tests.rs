@@ -240,11 +240,16 @@ fn dense_owner_uses_its_own_batch_without_serializing_sparse_owners() {
     let mut start = 0;
     let mut ranges = Vec::new();
     while start < allowances.len() {
-        let end = crate::scheduling::batch_end(&allowances, start, 3, 8);
+        let end = crate::scheduling::batch_end(&allowances, start, 3, 8).unwrap();
         assert!(end - start <= 3);
         assert!(allowances[start..end].iter().sum::<u64>() <= 8);
         ranges.push(start..end);
         start = end;
     }
     assert_eq!(ranges, [0..2, 2..3, 3..6]);
+    let growing_budget = [4; 6];
+    let first = crate::scheduling::batch_end(&growing_budget, 0, 3, 8).unwrap();
+    assert_eq!(first, 1);
+    assert_eq!(crate::scheduling::batch_end(&growing_budget, first, 3, 16).unwrap(), 4);
+    assert!(crate::scheduling::batch_end(&growing_budget, 4, 3, 3).is_err());
 }

@@ -78,6 +78,36 @@ class WorldBuildTest(unittest.TestCase):
                 self.assertEqual(world.run_plan(steps, execute, completed={layer}), {layer, final})
                 self.assertEqual(started, [final])
 
+    def test_last_running_producer_reclaims_memory_without_delaying_ready_work(self):
+        for ready_consumer in (False, True):
+            sibling_started, memory_expanded = threading.Event(), threading.Event()
+            expanded, finished = [], set()
+            steps = [world.Step('short', (), ()), world.Step('long', (), ())]
+            if ready_consumer:
+                steps.append(world.Step('consumer', ('short',), ()))
+            def execute(step):
+                if step.name == 'long':
+                    sibling_started.set()
+                    self.assertTrue(memory_expanded.wait(2))
+                else:
+                    self.assertTrue(sibling_started.wait(2))
+                finished.add(step.name)
+            def expand(step):
+                self.assertIn('short', finished)
+                if ready_consumer:
+                    self.assertIn('consumer', finished)
+                expanded.append(step.name)
+                memory_expanded.set()
+            self.assertEqual(world.run_plan(steps, execute, expand_memory=expand), {step.name for step in steps})
+            self.assertEqual(expanded, ['long'])
+        with patch.object(world.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+            world.give_remaining_memory(world.Step('roads-finalize', (), ()), {'memory_gib': 80})
+            self.assertEqual(run.call_args.args[0][-2:], ['world-build-roads-finalize.scope', f'MemoryMax={80 << 30}'])
+        for active in (0, 3):
+            with patch.object(world.subprocess, 'run', side_effect=[
+                    subprocess.CompletedProcess([], 1, stderr='scope update unavailable'), subprocess.CompletedProcess([], active)]):
+                world.give_remaining_memory(world.Step('retained', (), ()), {'memory_gib': 80})
+
     def test_changed_removed_added_and_cyclic_sources_cannot_validate_a_generation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
