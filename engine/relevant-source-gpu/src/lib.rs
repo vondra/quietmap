@@ -1,4 +1,5 @@
 //! Bounded z9 surface GPU scenes, canonical corner production and z13 painting.
+pub mod cruise_field;
 /// The build-time arch list, compiled here only so its fleet default is tested without nvcc.
 #[cfg(test)]
 #[path = "../cuda_archs.rs"]

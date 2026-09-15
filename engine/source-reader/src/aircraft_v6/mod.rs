@@ -18,7 +18,7 @@ use noise_compute::types::{
 use airborne_view::AirborneRowAccum;
 use airport_summary_view::AirportSummaryAccum;
 use airport_traffic_view::AirportTrafficRowAccum;
-use cruise_view::CruiseRowAccum;
+pub use cruise_view::CruiseRowAccum;
 use std::collections::HashMap;
 
 /// Build the per-popup `osm_id` → `ref` lookup from the
@@ -404,7 +404,7 @@ pub(super) fn assert_airborne_contract(label: &str, batches: &[RecordBatch]) -> 
 
 /// Guard the z9 `cruise.arrow` spatial contract. The z9 producer stores
 /// explicit `lon`/`lat`; dev1 contracts store a legacy cell id instead.
-pub(super) fn assert_cruise_contract(label: &str, batches: &[RecordBatch]) -> Result<(), String> {
+pub fn assert_cruise_contract(label: &str, batches: &[RecordBatch]) -> Result<(), String> {
     assert_schema_version(label, batches)?;
     assert_metadata_value(
         label,

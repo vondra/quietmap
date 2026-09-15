@@ -46,6 +46,56 @@ pub fn cruise_synth_offsets(lat: f64, half_len_m: f64) -> (f64, f64) {
     )
 }
 
+/// Build the representative segment and its fractional traffic weight once per bucket.
+/// Receiver admission and terrain checks remain caller-owned; geometry and density do not.
+pub fn cruise_segment(row: &CruiseRowView<'_>, index: usize) -> Option<(AircraftSegment, f64)> {
+    let (lat, lon) = (row.lat, row.lon);
+    if !lat.is_finite() || !lon.is_finite() {
+        return None;
+    }
+    let rep_len_m = (row.rep_len_m as f64).max(SLANT_FLOOR_M);
+    let half_len_m = rep_len_m * 0.5;
+    // Density = sum_length / rep_len: fractional weight of this
+    // representative segment carried by the bucket. Partial transits
+    // (sum_length < rep_len, e.g. 500 m of a 10 km segment clipped
+    // to one grid cell) keep their 0.05× weight — no `.max(1.0)`
+    // floor, which a /gg review caught as a multi-cell over-count.
+    let density = if row.rep_len_m > 0.0 {
+        (row.sum_length_m / row.rep_len_m) as f64
+    } else {
+        0.0
+    };
+    if density <= 0.0 {
+        return None;
+    }
+    let (lat_off, lon_off) = cruise_synth_offsets(lat, half_len_m);
+    let synth_fid = pack_synth(index as u64);
+    let seg = AircraftSegment {
+        flight_id: synth_fid,
+        profile_idx: row.rep_profile_idx,
+        // Doc 29 §A.3.2 — cruise NPD curves are taken from the
+        // departure family (en-route is closest to climb-out).
+        is_departure: true,
+        on_ground: false,
+        period: row.period,
+        date_id: 0,
+        start_lat: lat - lat_off,
+        start_lon: lon - lon_off,
+        start_alt_m: row.rep_alt_m,
+        end_lat: lat + lat_off,
+        end_lon: lon + lon_off,
+        end_alt_m: row.rep_alt_m,
+        speed_kt: row.rep_speed_kt,
+        segment_length_m: rep_len_m as f32,
+        count_weight: density as f32,
+        surface_model: false,
+        ground_context: aircraft::GROUND_CONTEXT_NONE,
+        ground_ops_kind: aircraft::GROUND_OPS_KIND_NONE,
+        source_id: row.source_id as u16,
+    };
+    Some((seg, density))
+}
+
 /// Per-cell top-flight tracker. Same fid can appear in multiple
 /// Stage 2B buckets within the same grid cell (e.g. crossing an FL boundary
 /// mid-cell), so dedup via HashMap with "max peak_lmax wins" merge — a
@@ -127,44 +177,10 @@ pub fn scatter(
             continue;
         }
 
-        // Density = sum_length / rep_len: fractional weight of this
-        // representative segment carried by the bucket. Partial transits
-        // (sum_length < rep_len, e.g. 500 m of a 10 km segment clipped
-        // to one grid cell) keep their 0.05× weight — no `.max(1.0)`
-        // floor, which a /gg review caught as a multi-cell over-count.
-        let density = if row.rep_len_m > 0.0 {
-            (row.sum_length_m / row.rep_len_m) as f64
-        } else {
-            0.0
-        };
-        if density <= 0.0 {
+        let Some((seg, density)) = cruise_segment(row, idx) else {
             continue;
-        }
-        let (lat_off, lon_off) = cruise_synth_offsets(lat, half_len_m);
-        let synth_fid = pack_synth(idx as u64);
-        let seg = AircraftSegment {
-            flight_id: synth_fid,
-            profile_idx: row.rep_profile_idx,
-            // Doc 29 §A.3.2 — cruise NPD curves are taken from the
-            // departure family (en-route is closest to climb-out).
-            is_departure: true,
-            on_ground: false,
-            period: row.period,
-            date_id: 0,
-            start_lat: lat - lat_off,
-            start_lon: lon - lon_off,
-            start_alt_m: row.rep_alt_m,
-            end_lat: lat + lat_off,
-            end_lon: lon + lon_off,
-            end_alt_m: row.rep_alt_m,
-            speed_kt: row.rep_speed_kt,
-            segment_length_m: rep_len_m as f32,
-            count_weight: density as f32,
-            surface_model: false,
-            ground_context: aircraft::GROUND_CONTEXT_NONE,
-            ground_ops_kind: aircraft::GROUND_OPS_KIND_NONE,
-            source_id: row.source_id as u16,
         };
+        let synth_fid = seg.flight_id;
         // Terrain first cost five DEM probes — each through the tile
         // cache's per-tile lock — for buckets the kernel then dropped on
         // distance alone. The kernel's own first gate is purely geometric,
