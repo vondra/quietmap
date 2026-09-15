@@ -3,7 +3,7 @@
 
 import argparse
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from contextlib import ExitStack
 from datetime import datetime, timezone
 import fcntl
@@ -145,12 +145,15 @@ def run_plan(steps, execute, completed=()):
     pending = {step.name: step for step in steps if step.name not in completed}
     completed, running = set(completed), {}
     failure = None
-    # Independent heavy stages share the budget equally; their workers adapt to
-    # the cgroup cap. Admission and matching limits bound combined working sets.
+    # Concurrent stages keep their memory shares; a sole runnable stage can use all of it.
     with ThreadPoolExecutor(max_workers=4) as pool:
         while pending or running:
             free = 4 - sum(step.slots for step in running.values())
             if failure is None:
+                ready = [step for step in pending.values() if set(step.dependencies) <= completed]
+                if not running and len(ready) == 1:
+                    step = ready[0]
+                    pending[step.name] = replace(step, slots=4)
                 for name, step in list(pending.items()):
                     if set(step.dependencies) <= completed and step.slots <= free:
                         running[pool.submit(execute, step)] = step

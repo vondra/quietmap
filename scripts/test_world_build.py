@@ -74,6 +74,7 @@ class WorldBuildTest(unittest.TestCase):
                 started = []
                 def execute(step):
                     started.append(step.name)
+                    self.assertEqual(step.slots, 4)
                 self.assertEqual(world.run_plan(steps, execute, completed={layer}), {layer, final})
                 self.assertEqual(started, [final])
 
@@ -189,7 +190,7 @@ class WorldBuildTest(unittest.TestCase):
             config = {'build': {'as_of_date': '20260909', 'aircraft_anchor': '2026-09',
                                'memory_gib': 80, 'threads': 4}, 'sources': sources}
             _, plan = world.build_plan(config, root / 'out', root / 'scratch')
-            running, done = set(), set()
+            running, done = {}, set()
             lock = threading.Lock()
             peak = 0
             indexed = {step.name: step for step in plan}
@@ -232,8 +233,8 @@ class WorldBuildTest(unittest.TestCase):
                 nonlocal peak
                 with lock:
                     self.assertTrue(set(step.dependencies) <= done)
-                    running.add(step.name)
-                    occupied = sum(indexed[name].slots for name in running)
+                    running[step.name] = step.slots
+                    occupied = sum(running.values())
                     self.assertLessEqual(occupied, 4)
                     peak = max(peak, len(running))
                 if step.name == 'square-country-city':
@@ -244,7 +245,7 @@ class WorldBuildTest(unittest.TestCase):
                     aircraft_running.set()
                 time.sleep(0.015)
                 with lock:
-                    running.remove(step.name)
+                    del running[step.name]
                     done.add(step.name)
             self.assertEqual(world.run_plan(plan, execute), set(indexed))
             self.assertGreaterEqual(peak, 2)
